@@ -13,13 +13,22 @@ import {
   summarizePosition,
   feeSavedSol,
   expectedTokens,
+  expectedSol,
   tradeProblem,
   type PositionResponse,
   type SacrificeView,
   type TradeCheck,
 } from "./proTrade";
 import { ownTokenAccounts, ownWrappedSolAccounts } from "./solanaPda";
-import { feeTotalSol, parseSol, parseTokens, shareOf, solText, unitsText } from "./components/TradePanel";
+import {
+  feeTotalSol,
+  parseSol,
+  parseTokens,
+  routeText,
+  shareOf,
+  solText,
+  unitsText,
+} from "./components/TradePanel";
 
 describe("parseSol", () => {
   it("reads a typed SOL amount as exact lamports", () => {
@@ -525,5 +534,29 @@ describe("expectedTokens", () => {
     expect(expectedTokens(1_000_000_000n, null, 0.0001)).toEqual({ tokens: 10_000, quoted: false });
     expect(expectedTokens(null, quote, 1)).toBeNull();
     expect(expectedTokens(1n, null, null)).toBeNull();
+  });
+});
+
+describe("expectedSol", () => {
+  const quote = { units: "1000000", outLamports: "250000000" };
+  it("takes the quote made on this sale, and scales one made on another until it is re-quoted", () => {
+    expect(expectedSol(1_000_000n, quote, null)).toEqual({ sol: 0.25, quoted: true });
+    expect(expectedSol(500_000n, quote, 9)).toEqual({ sol: 0.125, quoted: false });
+  });
+  it("falls back to the coins' share of the position's value, and says nothing for no amount", () => {
+    expect(expectedSol(5n, null, 0.4)).toEqual({ sol: 0.4, quoted: false });
+    expect(expectedSol(null, quote, 1)).toBeNull();
+    expect(expectedSol(5n, null, null)).toBeNull();
+  });
+});
+
+describe("routeText", () => {
+  const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const PUMP = "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn";
+  it("names a multi-hop route's tokens, or counts them when one isn't known", () => {
+    expect(routeText([USDC, PUMP])).toBe("SOL → USDC → PUMP → coin");
+    expect(routeText([USDC, "Abcd1234567890wxyz"])).toBe("through 2 tokens");
+    expect(routeText([])).toBeNull();
+    expect(routeText(undefined)).toBeNull();
   });
 });

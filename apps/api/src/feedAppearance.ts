@@ -189,6 +189,12 @@ export const feedAppearanceSchema = z
     hideLighthouseTab: z.boolean().default(false),
     /** Hide the safety screen's pill in the token view's header; the Safety section stays (user ask 2026-10-16). */
     hideSafetyPill: z.boolean().default(false),
+    /**
+     * The token window's layout on a wide (desktop) window: Pro, the terminal with the chart, bubble
+     * map and trading rail side by side, or Classic, the one scrolling page (user ask 2026-10-19). Pro by
+     * default; a phone always gets the Classic page.
+     */
+    tokenView: z.enum(["pro", "classic"]).default("pro"),
     /** The card outline's color before the alert resolves; null keeps the theme's neutral one. */
     outline: color.default(null),
     /**
@@ -292,6 +298,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   streamTab: false,
   hideLighthouseTab: false,
   hideSafetyPill: false,
+  tokenView: "pro",
   outline: null,
   outlineResult: false,
   hideBelowMcap: true,

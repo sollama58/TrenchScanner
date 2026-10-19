@@ -130,6 +130,16 @@ describe.skipIf(!dbAvailable)("GET /portfolio", () => {
     expect((await as(OTHER, "/portfolio")).statusCode).toBe(404);
   });
 
+  it("lists the tracked coins a Pro wallet holds, from the Trade panel's ledger with no chain to read", async () => {
+    const res = await as(ADMIN, "/portfolio/held");
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["cache-control"]).toContain("no-store");
+    // Still holding OPEN_MINT; SOLD_MINT sold out; UNTRACKED_MINT isn't a token the scanner has.
+    expect(res.json()).toEqual({ tokenIds: [tokenIds[0]], readAt: null });
+    expect((await as(OTHER, "/portfolio/held")).statusCode).toBe(404);
+    expect((await app.inject({ method: "GET", url: "/portfolio/held" })).statusCode).toBe(401);
+  });
+
   it("splits a Pro wallet's positions into open and closed, tracked coins only", async () => {
     const res = await as(ADMIN, "/pro/trades?view=portfolio");
     expect(res.statusCode).toBe(200);

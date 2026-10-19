@@ -58,6 +58,7 @@ export interface ManualTradeJupiter {
     outputMint: string;
     amount: bigint;
     slippageBps: number;
+    restrictIntermediateTokens?: boolean;
   }): Promise<SwapQuote>;
   swapInstructions(input: { quote: SwapQuote; userPublicKey: string }): Promise<{
     instructions: InstructionSpec[];
@@ -102,8 +103,14 @@ const PRIORITY_CAP_LAMPORTS: Record<SenderSpeed, bigint> = { eco: 50_000n, turbo
 export const MAX_CUSTOM_FEE_LAMPORTS = 10_000_000n;
 /** The price floor per compute unit, so a quiet network still sees a priority fee (Sender needs one). */
 const MIN_MICROLAMPORTS = 10_000n;
-/** Room under a buy for rent (the token and wrapped-SOL accounts) and base fees. */
-const BUY_MARGIN_LAMPORTS = 5_000_000n;
+/**
+ * Room under a buy for the rent of the accounts it opens, and base fees. A first buy through a
+ * coin quoted in another coin opens up to four: the token's account (~0.0015 SOL), one for each
+ * hop's coin (~0.0015 SOL each) and Pump's volume trackers (~0.0013 SOL each) - 0.0059 SOL on a
+ * 0.25 SOL buy refused on mainnet (2026-10-19) under the 0.005 this was. Still a hard ceiling:
+ * the route can't take more than this beyond the buy and its fees.
+ */
+const BUY_MARGIN_LAMPORTS = 10_000_000n;
 /** Room under a sale's minimum: base fee and rounding. */
 const SELL_MARGIN_LAMPORTS = 100_000n;
 /** Compute units for the curve's own trades (measured on mainnet), with room. */
@@ -170,7 +177,7 @@ export async function buildManualTrade(
   let quotedOut: bigint;
   let minOut: bigint;
   try {
-    const quote = await deps.jupiter.quote({
+    const quote = await quoteInSol(deps.jupiter, {
       inputMint: buy ? WSOL_MINT : req.mint,
       outputMint: buy ? req.mint : WSOL_MINT,
       amount: req.amount,
@@ -280,6 +287,37 @@ export async function buildManualTrade(
     tipLamports: tip.toString(),
     priorityFeeLamports: priorityFee.toString(),
   };
+}
+
+/**
+ * Jupiter's quote for a trade in SOL. A coin quoted in another coin (PUMP, USDC, another
+ * memecoin) is routed through it, SOL to the quote token to the coin and back on a sale, in one
+ * transaction: the trader only ever pays and receives SOL. The hops are held to Jupiter's liquid
+ * tokens first; a coin whose quote token isn't one of them is asked again with any hop allowed
+ * (the slippage floor and the guard still bound what the route delivers).
+ */
+export async function quoteInSol(
+  jupiter: Pick<ManualTradeJupiter, "quote">,
+  input: { inputMint: string; outputMint: string; amount: bigint; slippageBps: number },
+): Promise<SwapQuote> {
+  try {
+    return await jupiter.quote(input);
+  } catch (err) {
+    if (!(err instanceof NoRouteError)) throw err;
+    return jupiter.quote({ ...input, restrictIntermediateTokens: false });
+  }
+}
+
+/** The tokens a route passes through between SOL and the coin (its quote token, USDC...), in order. */
+export function routeHopMints(quote: SwapQuote, mint: string): string[] {
+  const plan = quote.routePlan;
+  if (!Array.isArray(plan)) return [];
+  const hops: string[] = [];
+  for (const step of plan as { swapInfo?: { inputMint?: unknown; outputMint?: unknown } }[]) {
+    for (const m of [step.swapInfo?.inputMint, step.swapInfo?.outputMint])
+      if (typeof m === "string" && m !== WSOL_MINT && m !== mint && !hops.includes(m)) hops.push(m);
+  }
+  return hops;
 }
 
 /**
@@ -453,8 +491,14 @@ export interface SwapCosts {
   venues: string[];
   /** Price impact of the reference buy, percent; null when unknown. */
   priceImpactPct: number | null;
-  /** Rent for the wallet's token account on its first buy (refunded when the account is closed); 0 when it has one. */
+  /**
+   * Rent for the wallet's token accounts a buy opens (refunded when they are closed): the coin's on
+   * a first buy, and one for each token the route hops through that the wallet has no account
+   * for yet. 0 when it has them all.
+   */
   accountRentLamports: bigint;
+  /** The tokens the route hops through between SOL and the coin (a non-SOL quote token, USDC...). */
+  routeVia: string[];
   /** The coins the reference buy would get, raw units, by the route's quote; null without one. */
   outAmount: bigint | null;
   /** The coin's decimals; null when unread. */
@@ -475,17 +519,32 @@ export async function estimateSwapCosts(
 ): Promise<SwapCosts> {
   const mintInfo = await deps.rpc.getMintInfo(input.mint);
   const program = mintInfo?.program ?? PROGRAM.token;
-  const [quote, accounts] = await Promise.all([
-    deps.jupiter
-      .quote({
-        inputMint: WSOL_MINT,
-        outputMint: input.mint,
-        amount: input.referenceLamports,
-        slippageBps: 500,
-      })
-      .catch(() => null),
-    deps.rpc.getAccountsData([associatedTokenAddress(input.wallet, input.mint, program)]).catch(() => null),
-  ]);
+  const quote = await quoteInSol(deps.jupiter, {
+    inputMint: WSOL_MINT,
+    outputMint: input.mint,
+    amount: input.referenceLamports,
+    slippageBps: 500,
+  }).catch(() => null);
+  const via = quote ? routeHopMints(quote, input.mint) : [];
+  const viaPrograms = await Promise.all(
+    via.map((m) =>
+      deps.rpc
+        .getMintInfo(m)
+        .then((i) => i?.program ?? null)
+        .catch(() => null),
+    ),
+  );
+  // The wallet's account for the coin, then for each hop under its token program (unread: classic).
+  const owned = [
+    { address: associatedTokenAddress(input.wallet, input.mint, program), program },
+    ...via.map((m, i) => {
+      const p = viaPrograms[i] ?? PROGRAM.token;
+      return { address: associatedTokenAddress(input.wallet, m, p), program: p };
+    }),
+  ];
+  const accounts = await deps.rpc.getAccountsData(owned.map((o) => o.address)).catch(() => null);
+  const rentOf = (p: string) =>
+    p === PROGRAM.token2022 ? TOKEN_2022_ACCOUNT_RENT_LAMPORTS : TOKEN_ACCOUNT_RENT_LAMPORTS;
   const route = quote ? routeFeeBps(quote) : null;
   const impact = quote ? Number(quote.priceImpactPct) * 100 : NaN;
   return {
@@ -493,13 +552,26 @@ export async function estimateSwapCosts(
     poolFeeBps: route?.bps ?? null,
     venues: route?.venues ?? [],
     priceImpactPct: Number.isFinite(impact) ? impact : null,
-    accountRentLamports:
-      accounts && accounts[0] === null
-        ? program === PROGRAM.token2022
-          ? TOKEN_2022_ACCOUNT_RENT_LAMPORTS
-          : TOKEN_ACCOUNT_RENT_LAMPORTS
-        : 0n,
+    accountRentLamports: accounts
+      ? owned.reduce((sum, o, i) => (accounts[i] === null ? sum + rentOf(o.program) : sum), 0n)
+      : 0n,
+    routeVia: via,
     outAmount: quote && /^\d+$/.test(String(quote.outAmount)) ? BigInt(quote.outAmount) : null,
     decimals: typeof mintInfo?.decimals === "number" ? mintInfo.decimals : null,
   };
+}
+
+/**
+ * The SOL a sale of `units` raw coins would get by the route Jupiter would take now, lamports,
+ * before slippage; null without a route. Quoted into SOL whatever the coin's pool trades against
+ * (a PUMP or USDC pair is routed on to SOL), so it reads like the Buy side's expected coins.
+ */
+export async function estimateSaleProceeds(
+  deps: { jupiter: Pick<ManualTradeJupiter, "quote"> },
+  input: { mint: string; units: bigint },
+): Promise<bigint | null> {
+  const quote = await deps.jupiter
+    .quote({ inputMint: input.mint, outputMint: WSOL_MINT, amount: input.units, slippageBps: 500 })
+    .catch(() => null);
+  return quote && /^\d+$/.test(String(quote.outAmount)) ? BigInt(quote.outAmount) : null;
 }

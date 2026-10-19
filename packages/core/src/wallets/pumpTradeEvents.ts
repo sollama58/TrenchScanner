@@ -80,6 +80,21 @@ export interface DecodedTrade {
   priceSol: number | null;
   /** A curve quoted in another coin: the trade in that coin's base units. */
   quote?: QuotedTrade;
+  /**
+   * A PumpSwap trade, in the pool's own base units: `sol` and `priceSol` read its quote as SOL and
+   * leave out the pool's virtual quote reserve, which the reader adds (pumpSwapPool.ts) and, for a
+   * pool quoted in another coin (PUMP), prices the quote in SOL with.
+   */
+  pool?: PoolTradeReserves;
+}
+
+export interface PoolTradeReserves {
+  /** The quote the user paid or received, base units of the pool's quote coin. */
+  amount: number;
+  /** The quote vault after the trade, base units (the virtual reserve not included). */
+  quoteReserve: number;
+  /** The base vault after the trade, the coin's base units. */
+  baseReserve: number;
 }
 
 export interface QuotedTrade {
@@ -215,7 +230,7 @@ function poolTrade(data: Buffer, pool: string | null): DecodedTrade | null {
   // The event's reserves are from before the swap: moved by what the vaults took and gave.
   const baseAfter = isBuy ? field(5) - base : field(5) + base;
   const quoteAfter = isBuy ? field(6) + vaulted : field(6) - vaulted;
-  return trade(
+  const out = trade(
     key(data, POOL_USER_OFFSET),
     isBuy ? "buy" : "sell",
     lamports,
@@ -224,6 +239,7 @@ function poolTrade(data: Buffer, pool: string | null): DecodedTrade | null {
     quoteAfter,
     baseAfter,
   );
+  return out && { ...out, pool: { amount: lamports, quoteReserve: quoteAfter, baseReserve: baseAfter } };
 }
 
 function trade(

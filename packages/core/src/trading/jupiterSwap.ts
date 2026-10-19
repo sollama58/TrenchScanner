@@ -281,14 +281,21 @@ export class JupiterSwapClient implements SwapClient {
     throw limited;
   }
 
-  async quote(input: { inputMint: string; outputMint: string; amount: bigint; slippageBps: number }) {
+  async quote(input: {
+    inputMint: string;
+    outputMint: string;
+    amount: bigint;
+    slippageBps: number;
+    /** False lets the route hop through any token, not just Jupiter's liquid ones (default true). */
+    restrictIntermediateTokens?: boolean;
+  }) {
     const params = new URLSearchParams({
       inputMint: input.inputMint,
       outputMint: input.outputMint,
       amount: input.amount.toString(),
       slippageBps: String(input.slippageBps),
       // Fewer hops through thin intermediate tokens: fewer ways for a memecoin route to fail.
-      restrictIntermediateTokens: "true",
+      restrictIntermediateTokens: String(input.restrictIntermediateTokens ?? true),
     });
     const res = await this.call(`/swap/v1/quote?${params}`, {}, "Jupiter quote");
     const quote = (await res.json()) as SwapQuote & { error?: string };

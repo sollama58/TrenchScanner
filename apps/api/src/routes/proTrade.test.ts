@@ -146,6 +146,10 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
     // Swap costs: Pro wallets only too, and a bad mint is refused before any quote.
     expect((await as(TRADER, "GET", `/pro/trade/costs?mint=${MINT}`)).statusCode).toBe(404);
     expect((await as(ADMIN, "GET", `/pro/trade/costs?mint=nope`)).statusCode).toBe(400);
+    // A sale's quote: the same gate, and an amount is needed.
+    expect((await as(TRADER, "GET", `/pro/trade/sale-quote?mint=${MINT}&units=5`)).statusCode).toBe(404);
+    expect((await as(ADMIN, "GET", `/pro/trade/sale-quote?mint=${MINT}&units=0`)).statusCode).toBe(400);
+    expect((await as(ADMIN, "GET", `/pro/trade/sale-quote?mint=nope&units=5`)).statusCode).toBe(400);
   });
 
   it("shows a Pro wallet the fees its confirmed trades here saved, and no one else", async () => {

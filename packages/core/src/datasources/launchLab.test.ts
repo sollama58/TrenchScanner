@@ -36,8 +36,8 @@ describe("cpmmVaultsFor", () => {
     ];
     const slice = new Uint8Array(160);
     [keys[0]!, keys[1]!, keys[0]!, coin, quote].forEach((k, i) => slice.set(bs58.decode(k), i * 32));
-    expect(cpmmVaultsFor(slice, coin, quote)).toEqual({ base: keys[0], quote: keys[1] });
-    expect(cpmmVaultsFor(slice, quote, coin)).toEqual({ base: keys[1], quote: keys[0] });
+    expect(cpmmVaultsFor(slice, coin, quote)).toEqual({ base: keys[0], quote: keys[1], virtualQuote: 0 });
+    expect(cpmmVaultsFor(slice, quote, coin)).toEqual({ base: keys[1], quote: keys[0], virtualQuote: 0 });
     expect(cpmmVaultsFor(slice, coin, "So11111111111111111111111111111111111111112")).toBeNull();
   });
 });

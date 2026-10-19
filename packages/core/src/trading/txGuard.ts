@@ -149,6 +149,8 @@ export interface InstructionTotals {
   swapInstructions: number;
   /** Who the System transfers to anyone but the wallet pay. */
   externalRecipients: Set<string>;
+  /** The wallet's own associated token accounts the transaction creates (the coin's, and a multi-hop route's). */
+  openedTokenAccounts: Set<string>;
 }
 
 /**
@@ -179,6 +181,15 @@ export function readJupiterRoute(
 /** The most SOL a sale may take from the wallet beyond its priority fee: base fees and rent. */
 const MAX_SALE_SOL_COST_LAMPORTS = 10_000_000n;
 
+/**
+ * A multi-hop route (SOL to the coin through its quote token, PUMP or USDC, and back) opens the
+ * wallet's token account for each hop it lacks: at most this many, each holding no more than a
+ * token account's rent. That rent stays the wallet's (closing the account refunds it), so it isn't
+ * counted against the trade's SOL.
+ */
+const MAX_ROUTE_ACCOUNTS = 3;
+const MAX_ROUTE_ACCOUNT_LAMPORTS = 3_000_000n;
+
 /** The compute-unit limit when none is set: the transaction maximum, so the fee bound is conservative. */
 const DEFAULT_COMPUTE_UNIT_LIMIT = 1_400_000n;
 
@@ -204,6 +215,7 @@ export function checkInstructions(
   let jupiterRoutesChecked = 0;
   let swapInstructions = 0;
   const externalRecipients = new Set<string>();
+  const openedTokenAccounts = new Set<string>();
   decoded.instructions.forEach((ix, n) => {
     if (ix.programIdIndex >= decoded.staticKeys.length)
       throw new GuardRefusal(`instruction ${n}: bad program index`);
@@ -275,7 +287,10 @@ export function checkInstructions(
     if (program === PROGRAM.ata) {
       const tag = d.length === 0 ? 0 : d[0];
       // Create / CreateIdempotent of the wallet's own account, paid by the wallet.
-      if ((tag === 0 || tag === 1) && acct(0) === wallet && acct(2) === wallet) return;
+      if ((tag === 0 || tag === 1) && acct(0) === wallet && acct(2) === wallet) {
+        openedTokenAccounts.add(acct(1));
+        return;
+      }
       throw new GuardRefusal(`instruction ${n}: associated-token instruction ${tag} is not allowed`);
     }
     throw new GuardRefusal(`instruction ${n}: program ${program} is not allowed`);
@@ -287,6 +302,7 @@ export function checkInstructions(
     jupiterRoutesChecked,
     swapInstructions,
     externalRecipients,
+    openedTokenAccounts,
   };
 }
 
@@ -348,7 +364,9 @@ export async function guardSwapTransaction(
   const tradedCandidates = [...TOKEN_PROGRAMS].map((p) => associatedTokenAddress(wallet, expect.mint, p));
   const wsolCandidates = [...TOKEN_PROGRAMS].map((p) => associatedTokenAddress(wallet, WSOL, p));
   const candidates = [...tradedCandidates, ...wsolCandidates].filter((a) => inTx.includes(a));
-  const watch = [wallet, ...new Set([...owned, ...candidates])];
+  // The wallet's token accounts the swap opens: a route's hops, watched so their rent is seen.
+  const opened = [...totals.openedTokenAccounts].filter((a) => inTx.includes(a));
+  const watch = [wallet, ...new Set([...owned, ...candidates, ...opened])];
   const [pre, sim] = await Promise.all([
     rpc.getParsedAccounts(watch),
     rpc.simulateParsed(Buffer.from(unsigned).toString("base64"), watch),
@@ -371,6 +389,8 @@ export async function guardSwapTransaction(
   // Which watched accounts hold the traded mint (they may change; nothing else may), and the
   // wallet's wrapped-SOL accounts (their lamports count as the wallet's SOL).
   const traded: number[] = [];
+  let routeRent = 0n;
+  let routeAccounts = 0;
   let wrappedPre = 0n;
   let wrappedPost = 0n;
   for (let i = 1; i < watch.length; i++) {
@@ -403,7 +423,24 @@ export async function guardSwapTransaction(
       if (after?.token?.owner === wallet) wrappedPost += after.lamports;
       continue;
     }
-    if (!before) continue; // not an account of the wallet's before the swap
+    if (!before) {
+      // Not an account of the wallet's before the swap. One the swap opens as the wallet's own (a
+      // route's hop through the coin's quote token) must stay the wallet's alone; its rent is
+      // the wallet's still, so it isn't counted as SOL spent.
+      if (after?.token && totals.openedTokenAccounts.has(watch[i]!)) {
+        if (
+          after.token.owner !== wallet ||
+          (after.token.delegate ?? null) !== null ||
+          (after.token.closeAuthority ?? null) !== null
+        )
+          throw new GuardRefusal(`the token account opened for ${after.token.mint} isn't the wallet's alone`);
+        if (after.lamports > MAX_ROUTE_ACCOUNT_LAMPORTS)
+          throw new GuardRefusal(`the token account opened for ${after.token.mint} holds more than its rent`);
+        routeRent += after.lamports;
+        routeAccounts++;
+      }
+      continue;
+    }
     if (!after) throw new GuardRefusal(`token account ${watch[i]} would be closed`);
     const b = before.token;
     const a = after.token;
@@ -417,7 +454,10 @@ export async function guardSwapTransaction(
       throw new GuardRefusal(`another token account's authority would change (${b.mint})`);
   }
 
-  const solDelta = walletPost.lamports + wrappedPost - (walletPre.lamports + wrappedPre);
+  if (routeAccounts > MAX_ROUTE_ACCOUNTS)
+    throw new GuardRefusal(`it would open ${routeAccounts} token accounts for the route`);
+  // The wallet's SOL, with the rent it moves into its own new route accounts still counted as its.
+  const solDelta = walletPost.lamports + wrappedPost + routeRent - (walletPre.lamports + wrappedPre);
   const tokenDelta = sum(post, traded) - sum(pre, traded);
   if (expect.kind === "buy") {
     if (-solDelta > expect.maxSolDrop)

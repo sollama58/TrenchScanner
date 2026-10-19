@@ -123,6 +123,11 @@ export interface TradeSettings {
   buyRows: 1 | 2;
   /** The quick-buy pill on alert and stream cards (off by default). */
   quickBuy: QuickBuySettings;
+  /**
+   * Live: a coin the wallet holds shows on Cards and Scope whatever the viewer's filters say (user
+   * ask 2026-10-19: on by default). heldTokens.ts.
+   */
+  alwaysShowHeld: boolean;
 }
 
 export interface QuickBuySettings {
@@ -166,6 +171,7 @@ export const DEFAULT_TRADE_SETTINGS: TradeSettings = {
   customTipSol: null,
   buyRows: 1,
   quickBuy: DEFAULT_QUICK_BUY,
+  alwaysShowHeld: true,
 };
 
 const SETTINGS_KEY = "ts-pro-trade-settings";
@@ -200,6 +206,7 @@ export function parseTradeSettings(raw: string | null): TradeSettings {
     const q = (s.quickBuy ?? {}) as Partial<QuickBuySettings>;
     return {
       buyRows,
+      alwaysShowHeld: s.alwaysShowHeld !== false,
       quickBuy: {
         enabled: q.enabled === true,
         amountSol:
@@ -391,8 +398,16 @@ export interface SwapCostEstimate {
   venues: string[];
   /** Price impact of the reference buy, percent. */
   priceImpactPct: number | null;
-  /** The token account's rent on a first buy, refunded when it is closed; "0" when the wallet has one. */
+  /**
+   * The rent of the token accounts a buy opens, refunded when they are closed: the coin's on a first
+   * buy, and each new one for a token the route hops through. "0" when the wallet has them all.
+   */
   accountRentLamports: string;
+  /**
+   * The tokens the route hops through between SOL and the coin (mints): a coin quoted in PUMP or
+   * USDC is bought with SOL through them in one swap. Absent from older API builds.
+   */
+  routeVia?: string[];
   /** The coins the reference buy would get, raw units, by the route's quote; null without one. Absent from older API builds. */
   outAmount?: string | null;
   /** The coin's decimals; null when unread. */
@@ -458,6 +473,64 @@ export function useSwapCosts(mint: string | null, refSol: number): SwapCostEstim
     };
   }, [mint, ref]);
   return costs;
+}
+
+/** GET /pro/trade/sale-quote: what a sale of `units` raw coins would get, lamports. */
+export interface SaleQuote {
+  units: string;
+  outLamports: string;
+}
+
+/**
+ * The route's quote for a sale of `units` raw coins of `mint` into SOL (GET /pro/trade/sale-quote),
+ * once the amount has settled, re-read every minute. The last quote is kept while a new amount
+ * waits, so the preview can scale it. Null `mint` or `units`: nothing is quoted.
+ */
+export function useSaleQuote(mint: string | null, units: bigint | null): SaleQuote | null {
+  const [quote, setQuote] = useState<SaleQuote | null>(null);
+  const wanted = units !== null && units > 0n ? units.toString() : null;
+  const [ref, setRef] = useState(wanted);
+  useEffect(() => {
+    if (wanted === ref) return;
+    const t = setTimeout(() => setRef(wanted), QUOTE_SETTLE_MS);
+    return () => clearTimeout(t);
+  }, [wanted, ref]);
+  useEffect(() => {
+    if (!mint || !ref) return;
+    let live = true;
+    const load = () =>
+      api<SaleQuote>(`/pro/trade/sale-quote?${new URLSearchParams({ mint, units: ref })}`)
+        .then((q) => live && setQuote(q))
+        .catch(() => undefined);
+    void load();
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, 60_000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [mint, ref]);
+  return quote;
+}
+
+/**
+ * The SOL a sale of `units` raw coins is expected to get: the route's quote when it was made on
+ * this amount; else that quote scaled to it, or (without one) `worthSol`, the coins' share of the
+ * position's value at today's price, while the amount waits to be quoted. Null when nothing is known.
+ */
+export function expectedSol(
+  units: bigint | null,
+  quote: SaleQuote | null,
+  worthSol: number | null,
+): { sol: number; quoted: boolean } | null {
+  if (units === null || units <= 0n) return null;
+  if (quote && BigInt(quote.units) > 0n && /^\d+$/.test(quote.outLamports)) {
+    const out = Number(BigInt(quote.outLamports)) / 1e9;
+    if (quote.units === units.toString()) return { sol: out, quoted: true };
+    return { sol: (Number(units) / Number(BigInt(quote.units))) * out, quoted: false };
+  }
+  return worthSol !== null && worthSol > 0 ? { sol: worthSol, quoted: false } : null;
 }
 
 /**

@@ -26,6 +26,7 @@ import {
   type SearchSort,
 } from "../tokenSearch";
 import { TokenImage } from "./TokenImage";
+import { QuickTrade } from "./QuickTrade";
 import {
   CheckIcon,
   ChefHatIcon,
@@ -245,8 +246,7 @@ function HitRow({
   onOpen,
   onHover,
   id,
-  price,
-  confirm,
+  external = false,
 }: {
   hit: TokenSearchHit;
   now: number;
@@ -255,10 +255,8 @@ function HitRow({
   onOpen: () => void;
   onHover: () => void;
   id: string;
-  /** An untracked coin: what opening it costs, in place of the alert figures. */
-  price?: string;
-  /** The lookup waiting for a yes: the price gives way to Look up and Cancel, in the row itself. */
-  confirm?: { onConfirm: () => void; onCancel: () => void };
+  /** An untracked coin: its market figures in place of the alert ones, and a Trade action. */
+  external?: boolean;
 }) {
   const label = hit.symbol ? `$${hit.symbol}` : (hit.name ?? shortAddress(hit.mint));
   return (
@@ -266,7 +264,7 @@ function HitRow({
       id={id}
       role="option"
       aria-selected={active}
-      className={`search-hit${active ? " active" : ""}${opening ? " opening" : ""}${price ? " external" : ""}`}
+      className={`search-hit${active ? " active" : ""}${opening ? " opening" : ""}${external ? " external" : ""}`}
       onClick={onOpen}
       onMouseMove={onHover}
     >
@@ -286,7 +284,7 @@ function HitRow({
         <div className="search-hit-sub">
           <span className="num">{shortAddress(hit.mint)}</span>
           <span>
-            {price ? "listed" : "launched"} {ago(hit.launchedAt, now)}
+            {external ? "listed" : "launched"} {ago(hit.launchedAt, now)}
           </span>
           {hit.yourAlertAt && (
             <span className="search-tag yours" title="One of your filters alerted on it">
@@ -313,7 +311,7 @@ function HitRow({
           <dt>Vol 24h</dt>
           <dd className="num">{usd(hit.volume24hUsd)}</dd>
         </div>
-        {price ? (
+        {external ? (
           <div className="search-fig-wide">
             <dt>Liquidity</dt>
             <dd className="num">{usd(hit.liquidityUsd)}</dd>
@@ -324,29 +322,11 @@ function HitRow({
             <dd className="num">{hit.holderCount?.toLocaleString() ?? "–"}</dd>
           </div>
         )}
-        {price ? (
+        {external ? (
           <div className="search-hit-price">
-            {confirm ? (
-              <span className="search-confirm" onClick={(e) => e.stopPropagation()}>
-                <button type="button" className="link small" onClick={confirm.onCancel} disabled={opening}>
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="primary small-btn"
-                  onClick={confirm.onConfirm}
-                  disabled={opening}
-                  title="Scans it and opens its chart, holders and TokenSage read"
-                  autoFocus
-                >
-                  {opening ? "Looking up…" : `Look up · ${price}`}
-                </button>
-              </span>
-            ) : (
-              <span className={`util-cost num${price.startsWith("Free") ? " util-cost-free" : ""}`}>
-                {price}
-              </span>
-            )}
+            <span className="util-cost util-cost-free" title="Opens it to trade, free">
+              Trade
+            </span>
           </div>
         ) : (
           <div>
@@ -366,22 +346,12 @@ function HitRow({
  * search box on top, chips and a sort to narrow and order the results, then two sections. Tracked
  * lists every token TrenchScanner tracks that matches; a result opens the token modal over the
  * window (free), and closing that comes back here. Not tracked lists what DexScreener's search
- * finds beyond those; opening one is the Utilities tab's coin lookup at its usual price, asked
- * for first, unless the reader already has it open or traded it. Arrow keys move through both
- * sections, Enter opens (or asks), Escape closes.
+ * finds beyond those; opening one opens it to trade (QuickTrade, free), which offers the Utilities
+ * tab's coin lookup at its usual price for the full view. A pasted address nothing tracked matches
+ * opens to trade by itself (user ask 2026-10-19). Arrow keys move through both sections, Enter
+ * opens, Escape closes.
  */
-export function SearchModal({
-  open,
-  onClose,
-  now,
-  scope = false,
-}: {
-  open: boolean;
-  onClose: () => void;
-  now: number;
-  /** Opened from Scope: results open in Scope's token page layout. */
-  scope?: boolean;
-}) {
+export function SearchModal({ open, onClose, now }: { open: boolean; onClose: () => void; now: number }) {
   const ref = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const [text, setText] = useState("");
@@ -393,9 +363,12 @@ export function SearchModal({
   const [active, setActive] = useState(0);
   const [opening, setOpening] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
-  // The untracked coin whose lookup is waiting for a yes, and the one whose paid view is open.
-  const [confirming, setConfirming] = useState<string | null>(null);
+  // The untracked coin open to trade (QuickTrade), the pasted address that opened it on its own
+  // (once: closing it leaves the search as it was), and the coin whose paid lookup view is open.
+  const [trading, setTrading] = useState<string | null>(null);
+  const [autoOpened, setAutoOpened] = useState<string | null>(null);
   const [lookedUp, setLookedUp] = useState<string | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
   // Coins looked up from here this visit: they open free again (the lookup's re-open window).
   const [paid, setPaid] = useState<ReadonlySet<string>>(new Set());
   const search = useSearchParam(text);
@@ -435,19 +408,30 @@ export function SearchModal({
   );
   const rows = useMemo(() => [...trackedRows, ...outsideRows], [trackedRows, outsideRows]);
   useEffect(() => setExpanded({ tracked: false, outside: false }), [search]);
-  // A new list starts at its top, with nothing waiting for a yes.
-  useEffect(() => {
-    setActive(0);
-    setConfirming(null);
-  }, [rows]);
+  // A new list starts at its top.
+  useEffect(() => setActive(0), [rows]);
 
-  const priceOf = (hit: ExternalSearchHit): string => {
-    if (paid.has(hit.mint)) return FREE_TEXT.open;
-    if (hit.free) return FREE_TEXT[hit.free];
+  // A pasted address TrenchScanner doesn't track opens to trade at once (user ask 2026-10-19):
+  // whoever pastes a CA most likely means to trade it. It opens on the tracked search's miss, not
+  // on DexScreener's answer, which a coin minutes old doesn't have yet; the figures fill in after.
+  const query = parseSearch(text);
+  const pastedMint = query.kind === "mint" ? query.mint : null;
+  useEffect(() => {
+    if (!open || !pastedMint || autoOpened === pastedMint) return;
+    if (found.state !== "done" || found.for !== search || found.answer.hits.length > 0) return;
+    setAutoOpened(pastedMint);
+    setScanError(null);
+    setTrading(pastedMint);
+  }, [open, pastedMint, autoOpened, found, search]);
+
+  /** What the full lookup of a coin costs this wallet. */
+  const priceOf = (mint: string): string => {
+    const hit = extraHits.find((h) => h.mint === mint);
+    if (paid.has(mint)) return FREE_TEXT.open;
+    if (hit?.free) return FREE_TEXT[hit.free];
     const cost = extra?.cost ?? 1;
     return `${cost} credit${cost === 1 ? "" : "s"}`;
   };
-  const freeToOpen = (hit: ExternalSearchHit) => paid.has(hit.mint) || hit.free !== null;
 
   const openTracked = async (hit: TokenSearchHit) => {
     if (opening) return;
@@ -455,7 +439,7 @@ export function SearchModal({
     setOpenError(null);
     try {
       const card = await api<Card>(`/tokens/${hit.mint}/card`);
-      openTokenModal(card, Date.now(), scope);
+      openTokenModal(card, Date.now());
     } catch (e) {
       setOpenError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -463,26 +447,27 @@ export function SearchModal({
     }
   };
 
-  // The Utilities tab's coin lookup: charged (or not) by the server, then its view opens here.
-  const lookUp = async (hit: ExternalSearchHit) => {
+  // The Utilities tab's coin lookup, from the trade view's Full scan: charged (or not) by the
+  // server, then its view opens here in the trade view's place.
+  const lookUp = async (mint: string) => {
     if (opening) return;
-    setOpening(hit.mint);
-    setOpenError(null);
+    setOpening(mint);
+    setScanError(null);
     try {
-      await post("/utilities/token", { mint: hit.mint });
-      setPaid((p) => new Set(p).add(hit.mint));
-      setConfirming(null);
-      setLookedUp(hit.mint);
+      await post("/utilities/token", { mint });
+      setPaid((p) => new Set(p).add(mint));
+      setTrading(null);
+      setLookedUp(mint);
     } catch (e) {
-      setOpenError(e instanceof Error ? e.message : String(e));
+      setScanError(e instanceof Error ? e.message : String(e));
     } finally {
       setOpening(null);
     }
   };
 
   const openExternal = (hit: ExternalSearchHit) => {
-    if (freeToOpen(hit)) void lookUp(hit);
-    else setConfirming((c) => (c === hit.mint ? null : hit.mint));
+    setScanError(null);
+    setTrading(hit.mint);
   };
 
   const openRow = (i: number) => {
@@ -492,9 +477,7 @@ export function SearchModal({
       return;
     }
     const hit = outsideRows[i - trackedRows.length];
-    if (!hit) return;
-    if (confirming === hit.mint) void lookUp(hit);
-    else openExternal(hit);
+    if (hit) openExternal(hit);
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -504,7 +487,6 @@ export function SearchModal({
       const step = e.key === "ArrowDown" ? 1 : -1;
       const next = (active + step + rows.length) % rows.length;
       setActive(next);
-      setConfirming(null);
       document.getElementById(`search-hit-${next}`)?.scrollIntoView({ block: "nearest" });
     } else if (e.key === "Enter") {
       e.preventDefault();
@@ -512,7 +494,6 @@ export function SearchModal({
     }
   };
 
-  const query = parseSearch(text);
   const subject =
     query.kind === "mint" ? shortAddress(query.mint) : query.kind === "text" ? `“${query.text}”` : "";
   const busy = found.state === "loading";
@@ -520,12 +501,7 @@ export function SearchModal({
   // Your alerts and Model calls are TrenchScanner's own: nothing untracked has either.
   const outsideApplies = filter === "all" || filter === "graduated";
 
-  const row = (
-    hit: TokenSearchHit,
-    i: number,
-    price?: string,
-    confirm?: { onConfirm: () => void; onCancel: () => void },
-  ) => (
+  const row = (hit: TokenSearchHit, i: number, external = false) => (
     <HitRow
       key={hit.mint}
       id={`search-hit-${i}`}
@@ -538,8 +514,7 @@ export function SearchModal({
         openRow(i);
       }}
       onHover={() => setActive(i)}
-      price={price}
-      confirm={confirm}
+      external={external}
     />
   );
 
@@ -761,23 +736,24 @@ export function SearchModal({
                         : "Searching DexScreener…"}
                   </span>
                 </li>
-                {outsideRows.map((hit, j) => {
-                  const i = trackedRows.length + j;
-                  return row(
-                    hit,
-                    i,
-                    priceOf(hit),
-                    confirming === hit.mint
-                      ? {
-                          onConfirm: () => void lookUp(hit),
-                          onCancel: () => {
-                            setConfirming(null);
-                            input.current?.focus();
-                          },
-                        }
-                      : undefined,
-                  );
-                })}
+                {outsideRows.map((hit, j) => row(hit, trackedRows.length + j, true))}
+                {pastedMint &&
+                  answer?.hits.length === 0 &&
+                  outside.state === "done" &&
+                  !extraHits.some((h) => h.mint === pastedMint) && (
+                    <li role="presentation" className="search-more">
+                      <button
+                        type="button"
+                        className="search-more-btn"
+                        onClick={() => {
+                          setScanError(null);
+                          setTrading(pastedMint);
+                        }}
+                      >
+                        Open {shortAddress(pastedMint)} to trade anyway
+                      </button>
+                    </li>
+                  )}
                 {extraShown.length > SECTION_LIMIT && (
                   <li role="presentation" className="search-more">
                     <button
@@ -795,6 +771,23 @@ export function SearchModal({
           </ul>
         </div>
       </div>
+      {trading && (
+        <QuickTrade
+          key={trading}
+          mint={trading}
+          hit={extraHits.find((h) => h.mint === trading) ?? null}
+          searching={outside.state === "loading" || (outside.state === "idle" && !!search)}
+          scanPrice={priceOf(trading)}
+          scanning={opening === trading}
+          scanError={scanError}
+          onScan={() => void lookUp(trading)}
+          onClose={() => {
+            setTrading(null);
+            input.current?.focus();
+          }}
+          now={now}
+        />
+      )}
       {lookedUp && (
         <Suspense fallback={null}>
           <UtilityTokenModal mint={lookedUp} onClose={() => setLookedUp(null)} />

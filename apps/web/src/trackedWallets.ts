@@ -102,6 +102,25 @@ export interface ImportResult {
   overCap: number;
   /** Entries whose name was empty once cleaned. */
   unnamed: number;
+  /** Entries left out because TrenchScanner already labels the wallet; they take no place under the cap. */
+  rejected: (KnownLabel & { name: string })[];
+}
+
+/** A wallet TrenchScanner already labels for everyone (apps/api/src/trackedWallets.ts platformLabels). */
+export interface KnownLabel {
+  wallet: string;
+  /** The name TrenchScanner shows it by; null for a marked bot. */
+  label: string | null;
+  kind: "kol" | "kol-side" | "exchange" | "launchpad" | "bot";
+}
+
+/** The most addresses one check before an import reads (the API's limit). */
+export const KNOWN_CHECK_MAX = 1000;
+
+/** Which of `wallets` TrenchScanner already labels: an import leaves them out. */
+export async function knownLabels(wallets: readonly string[]): Promise<KnownLabel[]> {
+  if (wallets.length === 0) return [];
+  return (await post<{ known: KnownLabel[] }>("/wallets/tracked/known", { wallets })).known;
 }
 
 /** Adds or renames many labels at once (a JSON list, see trackedImport.ts), then re-reads the list. */

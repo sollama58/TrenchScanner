@@ -21,8 +21,10 @@ import { tokenView, type UtilityTokenView } from "./utilities.js";
  * signed-in wallet, for its owner alone - every read is keyed on the session's own wallet, nothing takes an address
  * from the request, and the answer is never cached outside the owner's browser.
  *
- *   GET /portfolio   the account, the coins it holds that TrenchScanner tracks, its bot's open
- *                    positions, its trades in tracked coins, and its alerts
+ *   GET /portfolio        the account, the coins it holds that TrenchScanner tracks, its bot's open
+ *                         positions, its trades in tracked coins, and its alerts
+ *   GET /portfolio/held   just the tracked coins it holds, as token ids: what Live's "Always show
+ *                         coins you hold" keeps on Cards and Scope past the viewer's own filters
  *
  * Pro Mode trades are read from GET /pro/trades?view=portfolio (routes/proTrades.ts).
  *
@@ -237,6 +239,63 @@ export async function registerPortfolioRoutes(app: FastifyInstance, opts: { env:
       solUsd: sol ?? null,
       solUsdAt: sol ? solPrice.readAt() : null,
     };
+  });
+
+  /**
+   * The tracked coins the wallet holds (user ask 2026-10-19: Pro wallets see a coin they hold on
+   * Cards and Scope whatever their filters say). The same chain reading as GET /portfolio, so
+   * polling both costs one read per HOLDINGS_TTL_MS; dust under HOLDINGS_MIN_SOL at the coin's live
+   * price is left out (unpriced coins stay in: held is held). Trades from the Trade panel since that
+   * reading (ProTrade) count at once, so a coin just bought sticks and one just sold out lets go.
+   * With no chain to read, the Trade panel's ledger alone says what is held.
+   */
+  app.get("/held", async (request, reply) => {
+    const { walletAddress: wallet } = request.user!;
+    reply.header("Cache-Control", "private, no-store");
+    const pro = await proStatus(env, wallet);
+    if (!pro.pro) return reply.code(404).send({ error: "not found" });
+    const [r, sol] = await Promise.all([walletReading(wallet), solPrice.get()]);
+    const chain = r?.balances ?? null;
+    const since = chain ? new Date(r!.at) : null;
+    const [ledger, recent] = await Promise.all([
+      prisma.proTrade.groupBy({ by: ["mint"], where: { wallet }, _sum: { tokens: true } }),
+      since
+        ? prisma.proTrade.findMany({
+            where: { wallet, at: { gt: since } },
+            orderBy: { at: "asc" },
+            select: { mint: true, side: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const ledgerHeld = new Map(ledger.map((l) => [l.mint, (l._sum.tokens ?? 0n) > 0n]));
+    const mints = new Set<string>();
+    if (chain) {
+      for (const b of chain.slice(0, HOLDINGS_MINTS_MAX)) mints.add(b.mint);
+      // The newest panel trade in each coin since the reading decides it.
+      const last = new Map(recent.map((t) => [t.mint, t.side]));
+      for (const [mint, side] of last) {
+        if (side === "buy") mints.add(mint);
+        else if (!ledgerHeld.get(mint)) mints.delete(mint);
+      }
+    } else {
+      for (const [mint, held] of ledgerHeld) if (held) mints.add(mint);
+    }
+    const tokens = mints.size
+      ? await prisma.token.findMany({
+          where: { mintAddress: { in: [...mints] } },
+          select: { id: true, mintAddress: true, livePriceUsd: true },
+        })
+      : [];
+    const minUsd = sol ? HOLDINGS_MIN_SOL * sol : 0;
+    const balanceOf = new Map((chain ?? []).map((b) => [b.mint, b]));
+    const tokenIds = tokens
+      .filter((t) => {
+        const b = balanceOf.get(t.mintAddress);
+        if (!b || !t.livePriceUsd || minUsd === 0) return true;
+        return (Number(b.raw) / 10 ** b.decimals) * t.livePriceUsd >= minUsd;
+      })
+      .map((t) => t.id);
+    return { tokenIds, readAt: r && chain ? new Date(r.at) : null };
   });
 
   /** The coins held that the scanner tracks, valued from its own prices, and a count of the rest. */

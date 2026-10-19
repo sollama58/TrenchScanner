@@ -70,6 +70,10 @@ describe("parseFeedAppearance", () => {
     // The token view's safety pill shows unless switched off.
     expect(parseFeedAppearance({}).hideSafetyPill).toBe(false);
     expect(parseFeedAppearance({ hideSafetyPill: true }).hideSafetyPill).toBe(true);
+    // The token window opens in Pro on desktop unless Classic is picked (user ask 2026-10-19).
+    expect(parseFeedAppearance({}).tokenView).toBe("pro");
+    expect(parseFeedAppearance({ tokenView: "classic" }).tokenView).toBe("classic");
+    expect(parseFeedAppearance({ tokenView: "terminal" }).tokenView).toBe("pro");
     expect(parseFeedAppearance({ lighthouseTab: false })).not.toHaveProperty("lighthouseTab");
     expect(
       parseFeedAppearance({ reasons: true, quickLinks: ["gmgn", "padre", "gmgn", "axiom"] }),

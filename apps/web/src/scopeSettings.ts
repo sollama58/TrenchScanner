@@ -385,6 +385,16 @@ export function cardModelNames(card: Card): string[] {
 }
 
 /**
+ * Whether a card is within a column's "hide rows older than" cutoff: the one filter a coin the Pro
+ * wallet holds still answers to (heldTokens.ts).
+ */
+export function withinMaxAge(card: Card, f: ScopeColumnFilter, now: number): boolean {
+  if (f.maxAgeMin === null) return true;
+  const at = Date.parse(card.curated && card.kind !== "match" ? card.curated.alertedAt : card.matchedAt);
+  return !Number.isFinite(at) || (now - at) / 60_000 <= f.maxAgeMin;
+}
+
+/**
  * Whether a card gets through a column's filters at `now`. A reading the card doesn't have never
  * hides it: a filter only judges what is known.
  */
@@ -393,10 +403,7 @@ export function passesColumnFilter(card: Card, f: ScopeColumnFilter, col: ScopeC
   const nowMcap = nowReading(card) ?? alertMcap;
   if (f.mcapMin !== null && nowMcap < f.mcapMin) return false;
   if (f.mcapMax !== null && nowMcap > f.mcapMax) return false;
-  if (f.maxAgeMin !== null) {
-    const at = Date.parse(card.curated && card.kind !== "match" ? card.curated.alertedAt : card.matchedAt);
-    if (Number.isFinite(at) && (now - at) / 60_000 > f.maxAgeMin) return false;
-  }
+  if (!withinMaxAge(card, f, now)) return false;
   const t = newestStats(card);
   if (f.minHolders !== null && t.holders != null && t.holders < f.minHolders) return false;
   if (f.maxTop10Pct !== null && t.top10Pct != null && t.top10Pct > f.maxTop10Pct) return false;

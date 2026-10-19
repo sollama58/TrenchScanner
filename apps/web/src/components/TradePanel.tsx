@@ -12,6 +12,8 @@ import {
   useFeeEstimate,
   useSwapCosts,
   expectedTokens,
+  expectedSol,
+  useSaleQuote,
   runTrade,
   saveTradeSettings,
   TradeError,
@@ -44,6 +46,7 @@ import {
   ShieldIcon,
 } from "./Icons";
 import { ShareImageDialog } from "./ShareImageDialog";
+import { knownQuoteSymbol } from "../quoteToken";
 
 /**
  * Pro Mode's Trade panel under the token modal's chart (user ask 2026-10-17): buy and sell the
@@ -239,6 +242,17 @@ function WarnTriangle() {
   );
 }
 
+/**
+ * The route a swap takes when it hops through other tokens: "SOL → USDC → PUMP → coin", or how many
+ * when one isn't a token this knows by name. Null for a direct swap.
+ */
+export function routeText(via: string[] | undefined): string | null {
+  if (!via || via.length === 0) return null;
+  const names = via.map(knownQuoteSymbol);
+  if (names.every((n): n is string => n !== null)) return ["SOL", ...names, "coin"].join(" → ");
+  return `through ${via.length} token${via.length === 1 ? "" : "s"}`;
+}
+
 /** "1%", "0.25%", "3%": basis points as a percent. */
 function bpsText(bps: number): string {
   return `${Number((bps / 100).toFixed(2))}%`;
@@ -301,7 +315,9 @@ function FeeExplainer({
           ? [
               {
                 key: "rent",
-                label: "Token account rent (first buy, refundable)",
+                label: swap.routeVia?.length
+                  ? "Token account rent (first buy and the route's tokens, refundable)"
+                  : "Token account rent (first buy, refundable)",
                 sol: Number(swap.accountRentLamports) / LAMPORTS,
                 rate: "",
               },
@@ -420,6 +436,16 @@ function FeeExplainer({
                       <i className="tm-fee-dot none" aria-hidden="true" />
                       <span>Pool and LP fees</span>
                       <span className="num">in the quote</span>
+                    </li>
+                  )}
+                  {swap && routeText(swap.routeVia) && (
+                    <li
+                      className="tm-fee-none"
+                      title="One swap: you pay and receive SOL, the route trades through these"
+                    >
+                      <i className="tm-fee-dot none" aria-hidden="true" />
+                      <span>Route</span>
+                      <span className="num">{routeText(swap.routeVia)}</span>
                     </li>
                   )}
                   {!swap && (
@@ -740,6 +766,9 @@ export function TradePanel({
     sellUnits !== null && !sellTooMuch && summary?.valueSol != null && balance > 0n
       ? (summary.valueSol * Number(sellUnits)) / Number(balance)
       : null;
+  // The SOL the sale would get, by the route's quote into SOL whatever the coin's pair (PUMP, USDC).
+  const saleQuote = useSaleQuote(buyOnly ? null : mint, sellTooMuch ? null : sellUnits);
+  const expectedOut = sellTooMuch ? null : expectedSol(sellUnits, saleQuote, sellWorthSol);
   const sellCustom = () => {
     if (sellUnits === null || sellTooMuch || sellTokens === null) return;
     const all = sellUnits === balance;
@@ -1082,6 +1111,19 @@ export function TradePanel({
                 </button>
               </div>
               {sellTooMuch && <p className="small tm-amount-note">That&apos;s more than you hold.</p>}
+              {expectedOut && (
+                <p
+                  className="small muted num tm-expect"
+                  title={
+                    expectedOut.quoted
+                      ? "What this sale would get at the route's price now, before slippage"
+                      : "An estimate at the latest price; the exact quote follows in a moment"
+                  }
+                >
+                  ≈ {solText(expectedOut.sol)}
+                  {expectedOut.quoted ? "" : " (est.)"}
+                </p>
+              )}
             </div>
           )}
         </div>

@@ -35,6 +35,13 @@ describe("fillPage", () => {
     expect(ids(fillPage(buffer, { ...on, hideBelowMcap: false }, 1, undefined, 3).shown)).toEqual(["a", "b"]);
   });
 
+  it("never hides a coin the wallet holds", () => {
+    const buffer = [card("a", 9e3), card("b", 1e3), card("c", 8e3)];
+    const p = fillPage(buffer, on, 1, undefined, 3, new Set(["t-b"]));
+    expect(ids(p.shown)).toEqual(["a", "b", "c"]);
+    expect(p.hiddenHere).toBe(0);
+  });
+
   it("ticks the page's cards first, then the hidden ones among them", () => {
     const buffer = [card("a", 1e3), card("b", 9e3), card("c", 9e3)];
     expect(fillPage(buffer, on, 1, undefined, 2).tickTokenIds).toEqual(["t-b", "t-c", "t-a"]);
