@@ -214,8 +214,10 @@
           // not a guest: most likely a first visit, which lands on sign-in. Start its showcase alert
           // (ShowcaseAlert in src/components/SignIn.tsx) too; main.tsx then loads the sign-in code
           // without waiting for /auth/me.
+          // Its notices (free access, email sign-in) too, so they are in place for its first paint
+          // rather than arriving after it and pushing the buttons down.
           else if (!token && (localStorage.getItem("ts-cache-v1") || "").indexOf('"/auth/me"') < 0)
-            paths.push("/guest/best", "/guest/feed?page=1");
+            paths.push("/guest/best", "/guest/feed?page=1", "/config/free-access", "/auth/privy/config");
         } catch (e) {}
         paths.forEach(function (p) {
           boot[p] = fetch(api + p, { credentials: "include", headers: headers });
