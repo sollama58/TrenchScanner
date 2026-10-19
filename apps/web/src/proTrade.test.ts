@@ -419,7 +419,21 @@ describe("tradeProblem", () => {
   const usdcAccount = ownTokenAccounts(owner, USDC)[0]!;
   // The wallet's account for some other token it holds.
   const otherAccount = ownTokenAccounts(owner, STRANGER)[0]!;
-  const keys = [owner, STRANGER, TIP, own[0]!, SYSTEM, TOKEN, BUDGET, PUMP, JUP, usdcAccount, otherAccount];
+  const PUMP_SWAP = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
+  const keys = [
+    owner,
+    STRANGER,
+    TIP,
+    own[0]!,
+    SYSTEM,
+    TOKEN,
+    BUDGET,
+    PUMP,
+    JUP,
+    usdcAccount,
+    otherAccount,
+    PUMP_SWAP,
+  ];
   const k = (key: string) => keys.indexOf(key);
   const u32 = (n: number) => [n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255];
   const u64 = (n: bigint) => Array.from({ length: 8 }, (_, i) => Number((n >> BigInt(8 * i)) & 255n));
@@ -574,6 +588,101 @@ describe("tradeProblem", () => {
     expect(tradeProblem(tx([tip]), owner, hand)).toMatch(/exactly one swap/);
     // More SOL wrapped than the buy spends.
     expect(tradeProblem(tx([transfer(own[0]!, 2_000_000n), tip, buy]), owner, hand)).toMatch(/more SOL/);
+  });
+  it("checks a PumpSwap trade as it checks a curve's, and that it trades from and into the wallet's own accounts", () => {
+    // buy_exact_quote_in_v2 / sell_v2: pool, user, global config, the two mints, then the user's
+    // coin and wrapped-SOL accounts; spendable SOL (or tokens sold) and the minimum out.
+    const swap = (
+      side: "buy" | "sell",
+      amount: bigint,
+      min: bigint,
+      at: Partial<{ user: string; coin: string; wsol: string }> = {},
+    ) => ({
+      program: PUMP_SWAP,
+      accounts: [
+        k(STRANGER),
+        k(at.user ?? owner),
+        k(STRANGER),
+        k(STRANGER),
+        k(STRANGER),
+        k(at.coin ?? usdcAccount),
+        k(at.wsol ?? own[0]!),
+      ],
+      data: [
+        ...(side === "buy" ? [194, 171, 28, 70, 104, 77, 91, 47] : [93, 246, 130, 60, 231, 233, 64, 178]),
+        ...u64(amount),
+        ...u64(min),
+      ],
+    });
+    const coin: TradeCheck = { ...asked, amount: 1_000_000n, slippageBps: 500 };
+    const wrap = transfer(own[0]!, 1_000_000n);
+    expect(tradeProblem(tx([wrap, tip, swap("buy", 1_000_000n, 5n)]), owner, coin)).toBeNull();
+    expect(
+      tradeProblem(tx([tip, swap("sell", 1_000_000n, 5n)]), owner, { ...coin, side: "sell" }),
+    ).toBeNull();
+    // For another wallet, or from or into accounts that aren't the wallet's for this trade.
+    expect(
+      tradeProblem(tx([wrap, tip, swap("buy", 1_000_000n, 5n, { user: STRANGER })]), owner, coin),
+    ).toMatch(/isn't yours/);
+    expect(
+      tradeProblem(tx([wrap, tip, swap("buy", 1_000_000n, 5n, { coin: otherAccount })]), owner, coin),
+    ).toMatch(/land in your wallet/);
+    expect(
+      tradeProblem(tx([wrap, tip, swap("buy", 1_000_000n, 5n, { wsol: STRANGER })]), owner, coin),
+    ).toMatch(/land in your wallet/);
+    // Not the trade asked for.
+    expect(tradeProblem(tx([wrap, tip, swap("buy", 2_000_000n, 5n)]), owner, coin)).toMatch(/amount/);
+    expect(tradeProblem(tx([wrap, tip, swap("buy", 1_000_000n, 0n)]), owner, coin)).toMatch(/minimum/);
+    expect(tradeProblem(tx([tip, swap("sell", 1_000_000n, 5n)]), owner, coin)).toMatch(/different trade/);
+    expect(tradeProblem(tx([wrap, tip, swap("buy", 1_000_000n, 5n), buy]), owner, coin)).toMatch(
+      /exactly one/,
+    );
+    // Any other PumpSwap instruction (deposit, say).
+    const deposit = {
+      ...swap("buy", 1_000_000n, 5n),
+      data: [242, 35, 198, 137, 82, 225, 242, 182, ...u64(1n), ...u64(1n)],
+    };
+    expect(tradeProblem(tx([wrap, tip, deposit]), owner, coin)).toMatch(/PumpSwap step/);
+  });
+});
+
+describe("tradeProblem on a graduated coin's PumpSwap pool", () => {
+  // Real builds by the API's code from mainnet (2026-10-19), unsigned, each passing the server's
+  // guard and its simulation: 0.01 SOL of a coin on its PumpSwap pool, and a sale of another.
+  const read = (name: string) =>
+    Uint8Array.from(Buffer.from(readFileSync(new URL(name, import.meta.url), "utf8"), "base64"));
+  const swapBuy = read("./proTrade.pumpSwapBuy.fixture.b64.txt");
+  const swapSell = read("./proTrade.pumpSwapSell.fixture.b64.txt");
+  const BOUGHT = "7LSsEoJGhLeZzGvDofTdNg7M3JttxQqGWNLo6vWMpump";
+  const SOLD = "Ai66LHZG9MCzg1WKdawwqduVAXpNDUuV8M3uyq5ppump";
+  const buyer = "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9";
+  const seller = "7zos3sFP7LiH9cWMKA2HTkWkU4h8YYt4bZusYxLP2bza";
+  const check = (owner: string, mint: string, side: "buy" | "sell", amount: bigint): TradeCheck => ({
+    side,
+    amount,
+    slippageBps: 500,
+    ownWrappedSol: ownWrappedSolAccounts(owner),
+    ownCoinAccounts: ownTokenAccounts(owner, mint),
+  });
+
+  it("passes both real builds for their own wallets", () => {
+    expect(tradeProblem(swapBuy, buyer, check(buyer, BOUGHT, "buy", 10_000_000n))).toBeNull();
+    expect(tradeProblem(swapSell, seller, check(seller, SOLD, "sell", 1_000_000_000n))).toBeNull();
+    expect(tradeProblem(swapSell, seller, { ...check(seller, SOLD, "sell", 1n), all: true })).toBeNull();
+  });
+  it("refuses them as anything but the trade asked for", () => {
+    expect(tradeProblem(swapBuy, buyer, check(buyer, BOUGHT, "buy", 1n))).toMatch(/amount/);
+    expect(tradeProblem(swapBuy, buyer, check(buyer, BOUGHT, "sell", 10_000_000n))).toMatch(/different/);
+    expect(tradeProblem(swapBuy, buyer, check(buyer, SOLD, "buy", 10_000_000n))).toMatch(
+      /land in your wallet/,
+    );
+    expect(tradeProblem(swapSell, buyer, check(buyer, SOLD, "sell", 1_000_000_000n))).toMatch(
+      /isn't the one paying/,
+    );
+    // Through a quote coin it would be two swaps: a pool trade alone isn't that.
+    expect(
+      tradeProblem(swapBuy, buyer, { ...check(buyer, BOUGHT, "buy", 10_000_000n), ownViaAccounts: [] }),
+    ).not.toBeNull();
   });
 });
 

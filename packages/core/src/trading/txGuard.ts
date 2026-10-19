@@ -105,6 +105,12 @@ interface TradeLimits {
    * lose: the trade must not spend quote coin the wallet already held.
    */
   via?: string;
+  /**
+   * A PumpSwap trade built here (pumpSwap.ts), with the slippage the trader set: its one pool
+   * instruction must be on the traded coin's SOL pool, ask for at least the expectation's minimum
+   * on chain, and that minimum may sit no further under what the simulation delivers than this.
+   */
+  pumpSwapSlippageBps?: number;
 }
 
 export type TradeExpectation =
@@ -157,7 +163,49 @@ export interface InstructionTotals {
   externalRecipients: Set<string>;
   /** The wallet's own associated token accounts the transaction creates (the coin's, and a multi-hop route's). */
   openedTokenAccounts: Set<string>;
+  /** PumpSwap trade instructions, as read (their user accounts checked to be the wallet's own). */
+  pumpSwapTrades: PumpSwapTrade[];
 }
+
+/** A PumpSwap trade instruction's arguments, and the mints it trades. */
+export interface PumpSwapTrade {
+  name: string;
+  side: "buy" | "sell";
+  /** Spends exactly what it is given (buy_exact_quote_in, sell), its limit the least out. */
+  exactIn: boolean;
+  /**
+   * buy_exact_quote_in: SOL in (exact), and the least of the coin out. buy: the coin out (exact),
+   * and the most SOL in. sell: the coin in (exact), and the least SOL out.
+   */
+  amount: bigint;
+  limit: bigint;
+  baseMint: string;
+  quoteMint: string;
+}
+
+/**
+ * PumpSwap's trade instructions (Anchor discriminators, sha256("global:<name>")[..8]; the IDL in
+ * github.com/pump-fun/pump-public-docs, idl/pump_amm.json). All take two u64s and the same first
+ * seven accounts (pool, user, global_config, base_mint, quote_mint, user_base_token_account,
+ * user_quote_token_account); the token programs sit at 11 and 12 in v1, at 9 and 10 in v2.
+ */
+export const PUMP_SWAP_TRADES = new Map<
+  string,
+  { name: string; side: "buy" | "sell"; exactIn: boolean; tokenPrograms: [number, number] }
+>([
+  ["102,6,61,18,1,218,235,234", { name: "buy", side: "buy", exactIn: false, tokenPrograms: [11, 12] }],
+  ["51,230,133,164,1,127,131,173", { name: "sell", side: "sell", exactIn: true, tokenPrograms: [11, 12] }],
+  [
+    "198,46,21,82,180,217,232,112",
+    { name: "buy_exact_quote_in", side: "buy", exactIn: true, tokenPrograms: [11, 12] },
+  ],
+  ["184,23,238,97,103,197,211,61", { name: "buy_v2", side: "buy", exactIn: false, tokenPrograms: [9, 10] }],
+  ["93,246,130,60,231,233,64,178", { name: "sell_v2", side: "sell", exactIn: true, tokenPrograms: [9, 10] }],
+  [
+    "194,171,28,70,104,77,91,47",
+    { name: "buy_exact_quote_in_v2", side: "buy", exactIn: true, tokenPrograms: [9, 10] },
+  ],
+]);
 
 /**
  * Jupiter v6's route instructions (Anchor discriminators, sha256("global:<name>")[..8]). Each
@@ -264,6 +312,7 @@ export function checkInstructions(
   let swapInstructions = 0;
   const externalRecipients = new Set<string>();
   const openedTokenAccounts = new Set<string>();
+  const pumpSwapTrades: PumpSwapTrade[] = [];
   decoded.instructions.forEach((ix, n) => {
     if (ix.programIdIndex >= decoded.staticKeys.length)
       throw new GuardRefusal(`instruction ${n}: bad program index`);
@@ -307,6 +356,40 @@ export function checkInstructions(
           );
         jupiterRoutesChecked++;
       }
+      return;
+    }
+    if (program === PROGRAM.pumpSwap) {
+      // Only its trades, and only for the wallet's own accounts: the user the wallet itself, and
+      // the two token accounts the wallet's associated ones for the pool's mints. Nothing here
+      // lets a PumpSwap instruction move another account's tokens (the simulation sees that too).
+      const trade = PUMP_SWAP_TRADES.get([...d.subarray(0, 8)].join(","));
+      if (!trade || d.length < 24)
+        throw new GuardRefusal(`instruction ${n}: PumpSwap instruction is not a trade`);
+      const key = (i: number) => {
+        const k = keys[ix.accountIndexes[i] ?? -1];
+        if (k === undefined) throw new GuardRefusal(`instruction ${n}: missing account`);
+        return k;
+      };
+      const [baseProgram, quoteProgram] = trade.tokenPrograms.map(key) as [string, string];
+      const baseMint = key(3);
+      const quoteMint = key(4);
+      if (
+        acct(1) !== wallet ||
+        acct(5) !== associatedTokenAddress(wallet, baseMint, baseProgram) ||
+        acct(6) !== associatedTokenAddress(wallet, quoteMint, quoteProgram)
+      )
+        throw new GuardRefusal(
+          `instruction ${n}: PumpSwap ${trade.name} trades for accounts not the wallet's`,
+        );
+      pumpSwapTrades.push({
+        name: trade.name,
+        side: trade.side,
+        exactIn: trade.exactIn,
+        amount: u64(d, 8),
+        limit: u64(d, 16),
+        baseMint,
+        quoteMint,
+      });
       return;
     }
     if (SWAP_PROGRAMS.has(program)) return;
@@ -355,7 +438,59 @@ export function checkInstructions(
     swapInstructions,
     externalRecipients,
     openedTokenAccounts,
+    pumpSwapTrades,
   };
+}
+
+/** Room under a PumpSwap trade's slippage for the builder's own rounding, in bps. */
+const PUMP_SWAP_FLOOR_SLACK_BPS = 50n;
+
+/**
+ * A PumpSwap trade built here (`expect.pumpSwapSlippageBps`), before the simulation: exactly one
+ * swap, an exact-in trade on the traded coin's SOL pool, on the side expected, whose on-chain
+ * floor is at least the expectation's minimum. Returns the trade, for the floor's check against
+ * what the simulation delivers.
+ */
+function checkPumpSwapTrade(totals: InstructionTotals, expect: TradeExpectation): PumpSwapTrade {
+  const [trade, ...more] = totals.pumpSwapTrades;
+  if (!trade || more.length > 0 || totals.swapInstructions !== 1)
+    throw new GuardRefusal("it isn't exactly one PumpSwap trade");
+  if (!trade.exactIn) throw new GuardRefusal(`PumpSwap ${trade.name} isn't an exact-in trade`);
+  if (trade.baseMint !== expect.mint || trade.quoteMint !== WSOL)
+    throw new GuardRefusal("the PumpSwap trade isn't on this coin's SOL pool");
+  if (trade.side !== expect.kind) throw new GuardRefusal(`PumpSwap ${trade.name} is the other side`);
+  if (expect.kind === "buy") {
+    if (trade.amount > expect.maxSolDrop)
+      throw new GuardRefusal(
+        `PumpSwap ${trade.name} spends ${trade.amount}, over the ${expect.maxSolDrop} allowed`,
+      );
+    if (trade.limit < expect.minOut || trade.limit <= 0n)
+      throw new GuardRefusal(
+        `PumpSwap ${trade.name} asks for ${trade.limit} on chain, under ${expect.minOut}`,
+      );
+  } else {
+    if (trade.amount > expect.amount)
+      throw new GuardRefusal(`PumpSwap ${trade.name} sells ${trade.amount}, more than ${expect.amount}`);
+    if (trade.limit < expect.minSolOut || trade.limit <= 0n)
+      throw new GuardRefusal(
+        `PumpSwap ${trade.name} asks for ${trade.limit} on chain, under ${expect.minSolOut}`,
+      );
+  }
+  return trade;
+}
+
+/**
+ * The PumpSwap trade's on-chain floor against what the simulation shows it delivering now: no
+ * lower than the slippage the trader set allows (and the builder's rounding), so a floor of 1
+ * that would let the trade land at any price is refused even when the simulation looks fine.
+ * `delivered` is the coin a buy gets, or a lower bound on the SOL a sale gets.
+ */
+function checkPumpSwapFloor(trade: PumpSwapTrade, delivered: bigint, slippageBps: number): void {
+  const floor = (delivered * (10_000n - BigInt(slippageBps) - PUMP_SWAP_FLOOR_SLACK_BPS)) / 10_000n;
+  if (trade.limit < floor)
+    throw new GuardRefusal(
+      `PumpSwap ${trade.name} asks for ${trade.limit} on chain, under the slippage set (${floor} of ${delivered})`,
+    );
 }
 
 function sum(list: (ParsedAccountState | null)[], indexes: number[]): bigint {
@@ -388,6 +523,7 @@ export async function guardSwapTransaction(
   }
   const keys = resolveAccountKeys(decoded, tables);
   const totals = checkInstructions(decoded, keys, wallet, { maxSlippageBps: expect.maxSlippageBps });
+  const pumpSwap = expect.pumpSwapSlippageBps !== undefined ? checkPumpSwapTrade(totals, expect) : null;
   // A "swap" with no swap in it can only be paying fees and tips: never worth signing.
   if (totals.swapInstructions === 0) throw new GuardRefusal("it has no swap instruction");
   // SOL to anyone but the wallet only as a tip, to Jito's or Helius Sender's own fixed accounts: a
@@ -543,5 +679,12 @@ export async function guardSwapTransaction(
     if (solDelta < expect.minSolOut - expect.feeAllowance)
       throw new GuardRefusal(`it would return ${solDelta} lamports, under the minimum ${expect.minSolOut}`);
   }
+  // What the sale paid is at least the wallet's gain plus the tips it sent.
+  if (pumpSwap)
+    checkPumpSwapFloor(
+      pumpSwap,
+      expect.kind === "buy" ? tokenDelta : solDelta + totals.externalLamports,
+      expect.pumpSwapSlippageBps!,
+    );
   return totals;
 }
