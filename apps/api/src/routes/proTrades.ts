@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
   HeliusAccountStream,
+  JupiterSwapClient,
   prisma,
   TradingRpc,
   withApiFeature,
@@ -53,6 +54,10 @@ const ROWS_MAX = 2_000;
 const ANSWER_TTL_MS = 8_000;
 /** How long the first look waits on a due catch-up before answering with what is recorded. */
 const CATCH_UP_WAIT_MS = 2_500;
+/** A held coin's live price (Jupiter, DexScreener behind it) is reused this long. */
+const LIVE_PRICE_TTL_MS = 15_000;
+/** How long the cards wait on the live prices before answering with the stored ones. */
+const LIVE_PRICE_WAIT_MS = 2_500;
 /** A coin whose market data is this fresh needs no lookup for its scan: only the view stamp. */
 const FRESH_MARKET_MS = 2 * 60_000;
 /** Open coins are stamped as viewed (kept on the scan) only while the panel is open, at most this often. */
@@ -89,7 +94,13 @@ export interface TradeCoin {
 
 export async function registerProTradesRoutes(
   app: FastifyInstance,
-  opts: { env: Env; dexScreener: DexScreenerClient; viewStamps: ViewStampBuffer },
+  opts: {
+    env: Env;
+    dexScreener: DexScreenerClient;
+    viewStamps: ViewStampBuffer;
+    /** Coins' live USD prices; the default asks Jupiter, then DexScreener for what it can't price. */
+    livePricesUsd?: (mints: string[]) => Promise<Map<string, number>>;
+  },
 ) {
   const { env } = opts;
   const rpc = new TradingRpc({
@@ -99,6 +110,40 @@ export async function registerProTradesRoutes(
   });
   const solPrice = sharedSolPrice;
   const canRead = !!(env.HELIUS_API_KEY || env.SOLANA_RPC_URL);
+  const jupiter = new JupiterSwapClient({
+    apiKey: env.PRO_TRADING_JUPITER_API_KEY || undefined,
+    backupApiKey: env.JUPITER_API_KEY || undefined,
+  });
+  const askLivePrices = opts.livePricesUsd ?? ((mints: string[]) => jupiter.pricesUsd(mints));
+  const livePrices = new Map<string, { at: number; usd: number }>();
+  /**
+   * The held coins' prices now (user report 2026-10-19: the cards' Now and PnL were off). The
+   * stored price is a scan's or the last viewer's tick, which can be hours old for a coin nobody
+   * else watches; a held coin's card is priced from a live read instead, like the token page.
+   * Empty when nothing could be read in time (the stored prices stand in), and off in tests.
+   */
+  async function livePricesFor(mints: string[]): Promise<Map<string, number>> {
+    const now = Date.now();
+    const out = new Map<string, number>();
+    const due: string[] = [];
+    for (const m of mints) {
+      const hit = livePrices.get(m);
+      if (hit && now - hit.at < LIVE_PRICE_TTL_MS) out.set(m, hit.usd);
+      else due.push(m);
+    }
+    if (due.length === 0 || !(canRead || opts.livePricesUsd)) return out;
+    const read = await Promise.race([
+      askLivePrices(due).catch(() => null),
+      new Promise<null>((r) => setTimeout(() => r(null), LIVE_PRICE_WAIT_MS).unref?.()),
+    ]);
+    for (const [m, usd] of read ?? []) {
+      if (!(usd > 0)) continue;
+      out.set(m, usd);
+      livePrices.set(m, { at: now, usd });
+    }
+    if (livePrices.size > 5_000) livePrices.clear();
+    return out;
+  }
 
   /** The coin's scan, once per entry: a Utilities lookup without the credit. */
   async function scanEntry(_wallet: string, mint: string): Promise<void> {
@@ -298,6 +343,7 @@ export async function registerProTradesRoutes(
           name: true,
           imageUrl: true,
           livePriceUsd: true,
+          liveMarketCapUsd: true,
           liveDataAt: true,
         },
       }),
@@ -326,13 +372,24 @@ export async function registerProTradesRoutes(
       for (const c of list) if (c.createdAt <= at) last = c;
       return last;
     };
-    // The coin's price in SOL from its newest USD price, scan or live tick, whichever is later:
+    // A held coin's price is read live (livePricesFor). Otherwise, and when that read fails, the
+    // coin's price in SOL is from its newest stored USD price, scan or live tick, whichever is later:
     // the tick is written only while someone views the coin, so it freezes once nobody does while
     // the scans go on (as portfolio.ts and the feed already compare them).
-    const views = await Promise.all(
-      shown.map((p) => (tokenByMint.has(p.mint) ? tokenView(p.mint, p.entryAt) : null)),
-    );
-    const priceUsd = new Map<string, number>();
+    const held = shown.filter((p) => !p.closed && tokenByMint.has(p.mint)).map((p) => p.mint);
+    const [views, live] = await Promise.all([
+      Promise.all(shown.map((p) => (tokenByMint.has(p.mint) ? tokenView(p.mint, p.entryAt) : null))),
+      livePricesFor(held),
+    ]);
+    // The coin's supply, for turning a price into a market cap: a scan's market cap over its
+    // price, else the live tick's.
+    const supplyOf = (i: number): number | null => {
+      const snap = views[i]?.card.latestSnapshot as { priceUsd?: number; marketCapUsd?: number } | undefined;
+      if (snap?.priceUsd && snap.marketCapUsd) return snap.marketCapUsd / snap.priceUsd;
+      const t = tokenByMint.get(shown[i]!.mint);
+      return t?.livePriceUsd && t.liveMarketCapUsd ? t.liveMarketCapUsd / t.livePriceUsd : null;
+    };
+    const priceUsd = new Map<string, number>(live);
     shown.forEach((p, i) => {
       const card = views[i]?.card;
       const token = tokenByMint.get(p.mint);
@@ -342,7 +399,7 @@ export async function registerProTradesRoutes(
       const liveAt = token?.liveDataAt?.getTime() ?? 0;
       const snapAt = snapRow?.takenAt ? new Date(snapRow.takenAt).getTime() : 0;
       const usd = live !== null && (snap === null || liveAt >= snapAt) ? live : snap;
-      if (usd !== null) priceUsd.set(p.mint, usd);
+      if (usd !== null && !priceUsd.has(p.mint)) priceUsd.set(p.mint, usd);
     });
     for (const t of tokens)
       if (!priceUsd.has(t.mintAddress) && t.livePriceUsd) priceUsd.set(t.mintAddress, t.livePriceUsd);
@@ -358,12 +415,21 @@ export async function registerProTradesRoutes(
         return t ? [{ tokenId: t.id, mint: p.mint, at: p.entryAt }] : [];
       }),
     );
+    const readAt = new Date();
     shown.forEach((p, i) => {
-      const snap = views[i]?.card.latestSnapshot as { priceUsd?: number; marketCapUsd?: number } | undefined;
-      if (p.entryPriceSol === null || !sol || !snap?.priceUsd || !snap.marketCapUsd) return;
-      const supply = snap.marketCapUsd / snap.priceUsd;
-      const mcap = p.entryPriceSol * sol * supply;
-      if (Number.isFinite(mcap) && mcap > 0) entryMcaps.set(p.mint, mcap);
+      const supply = supplyOf(i);
+      if (supply === null || !(supply > 0)) return;
+      if (p.entryPriceSol !== null && sol) {
+        const mcap = p.entryPriceSol * sol * supply;
+        if (Number.isFinite(mcap) && mcap > 0) entryMcaps.set(p.mint, mcap);
+      }
+      // A held coin's Now is its live price too, so Now, the move and the PnL agree.
+      const usd = live.get(p.mint);
+      const card = views[i]?.card;
+      if (usd !== undefined && card) {
+        card.currentMarketCapUsd = usd * supply;
+        card.currentMarketCapAt = readAt;
+      }
     });
 
     const coins: TradeCoin[] = shown.map((p: Position, i) => {
