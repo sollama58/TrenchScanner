@@ -39,7 +39,8 @@ export interface FilledPage {
  * One page of the Live feed with the "hide below this market cap" cards taken out and later ones
  * moved up in their place, from the alerts read so far (`buffer`, newest first). A hidden card
  * that climbs back over the line (with MCAP_RESHOW_MARGIN to spare) takes its own place again,
- * pushing the rest back down. `wasHidden` is the last call's `hidden`.
+ * pushing the rest back down. `wasHidden` is the last call's `hidden`. A card whose token is in
+ * `keep` (coins the Pro wallet holds) is never hidden.
  */
 export function fillPage(
   buffer: readonly Card[],
@@ -47,6 +48,7 @@ export function fillPage(
   page: number,
   wasHidden: ReadonlySet<string> = new Set(),
   pageSize = FEED_PAGE_SIZE,
+  keep: ReadonlySet<string> = new Set(),
 ): FilledPage {
   const start = (page - 1) * pageSize;
   const end = page * pageSize;
@@ -57,7 +59,7 @@ export function fillPage(
   const hiddenNow = new Set<string>();
   let read = 0;
   for (const card of buffer) {
-    const hidden = belowMcapLine(card, look, wasHidden.has(card.id));
+    const hidden = !keep.has(card.tokenId) && belowMcapLine(card, look, wasHidden.has(card.id));
     if (hidden) hiddenNow.add(card.id);
     read++;
     if (!hidden) {

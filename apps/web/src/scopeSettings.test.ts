@@ -6,6 +6,7 @@ import {
   DEFAULT_SCOPE_SETTINGS,
   normalizeScopeSettings,
   passesColumnFilter,
+  withinMaxAge,
   type ScopeColumnFilter,
 } from "./scopeSettings";
 import { rowChips } from "./scopeChips";
@@ -78,6 +79,13 @@ describe("passesColumnFilter", () => {
     expect(passesColumnFilter(card({ mcap: 90_000 }), f({ mcapMax: 50_000 }), "filters", NOW)).toBe(false);
     expect(passesColumnFilter(card({ minutesAgo: 30 }), f({ maxAgeMin: 15 }), "filters", NOW)).toBe(false);
     expect(passesColumnFilter(card({ minutesAgo: 5 }), f({ maxAgeMin: 15 }), "filters", NOW)).toBe(true);
+  });
+
+  it("keeps the age cutoff on its own, for coins the wallet holds", () => {
+    const g = f({ maxAgeMin: 15, mcapMin: 10_000 });
+    expect(withinMaxAge(card({ minutesAgo: 5, mcap: 1_000 }), g, NOW)).toBe(true);
+    expect(withinMaxAge(card({ minutesAgo: 30, mcap: 90_000 }), g, NOW)).toBe(false);
+    expect(withinMaxAge(card({ minutesAgo: 600 }), DEFAULT_COLUMN_FILTER, NOW)).toBe(true);
   });
 
   it("judges only readings the card has", () => {

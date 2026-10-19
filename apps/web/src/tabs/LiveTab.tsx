@@ -28,6 +28,7 @@ import type { ScopeSettingsSection } from "../components/ScopeSettingsModal";
 import { HiddenTokensDialog } from "../components/HiddenTokensDialog";
 import { AsOf } from "../components/AsOf";
 import { dueToUnhide, hideToken, unhideTokens, useHiddenTokenIds, useHiddenTokens } from "../hiddenTokens";
+import { useHeldTokenIds } from "../heldTokens";
 
 /** Graded alerts below which the Stats button doesn't show a 2x rate (too early to mean much). */
 const MIN_TEASER = 10;
@@ -98,6 +99,8 @@ export function LiveTab({
   // Tokens the user hid from Cards and Scope (user ask 2026-10-19), and the list to bring them back.
   const hiddenTokens = useHiddenTokens();
   const hiddenTokenIds = useHiddenTokenIds();
+  // Pro: coins the wallet holds skip the filters below and Scope's (user ask 2026-10-19).
+  const heldTokenIds = useHeldTokenIds();
   const [hiddenOpen, setHiddenOpen] = useState(false);
   const scope = view === "scope";
   // Scope has its own settings window (user ask 2026-10-18): Customize opens it while in Scope.
@@ -161,10 +164,14 @@ export function LiveTab({
   // "Now" on each card, seconds old rather than as old as the last feed poll.
   const cards = useLiveMarketCaps(buffer, tickIds);
   // Hidden tokens come off the page like the low market caps below, older alerts moving up. With
-  // auto-unhide on, one that graduated or reached a new 2x, 4x or 10x comes back.
+  // auto-unhide on, one that graduated or reached a new 2x, 4x or 10x comes back. One the wallet
+  // holds stays.
   const unhiddenCards = useMemo(
-    () => (cards && hiddenTokenIds.size > 0 ? cards.filter((c) => !hiddenTokenIds.has(c.tokenId)) : cards),
-    [cards, hiddenTokenIds],
+    () =>
+      cards && hiddenTokenIds.size > 0
+        ? cards.filter((c) => !hiddenTokenIds.has(c.tokenId) || heldTokenIds.has(c.tokenId))
+        : cards,
+    [cards, hiddenTokenIds, heldTokenIds],
   );
   useEffect(() => {
     if (cards) unhideTokens(dueToUnhide(hiddenTokens, cards));
@@ -175,8 +182,9 @@ export function LiveTab({
   // place again. Which cards were hidden last time carries over for that margin.
   const wasHidden = useRef<ReadonlySet<string>>(new Set());
   const filled = useMemo(
-    () => (unhiddenCards ? fillPage(unhiddenCards, look, page, wasHidden.current) : null),
-    [unhiddenCards, look, page],
+    () =>
+      unhiddenCards ? fillPage(unhiddenCards, look, page, wasHidden.current, undefined, heldTokenIds) : null,
+    [unhiddenCards, look, page, heldTokenIds],
   );
   useEffect(() => {
     wasHidden.current = filled?.hidden ?? new Set();
@@ -391,6 +399,7 @@ export function LiveTab({
           <ScopeBoard
             feedPath={feedPath}
             modelsOn={modelsOn}
+            heldTokenIds={heldTokenIds}
             settingsSection={scopeSettings}
             onSettings={setScopeSettings}
           />

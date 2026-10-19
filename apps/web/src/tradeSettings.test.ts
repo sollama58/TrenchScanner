@@ -21,6 +21,12 @@ describe("trade settings", () => {
     });
   });
 
+  it("always shows held coins unless turned off", () => {
+    expect(DEFAULT_TRADE_SETTINGS.alwaysShowHeld).toBe(true);
+    expect(parse({ buyPresets: [1] }).alwaysShowHeld).toBe(true);
+    expect(parse({ alwaysShowHeld: false }).alwaysShowHeld).toBe(false);
+  });
+
   it("allows five buy buttons a row", () => {
     const ten = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     expect(parse({ buyRows: 2, buyPresets: ten }).buyPresets).toEqual(ten);
