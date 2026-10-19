@@ -266,7 +266,7 @@ export function LiveTab({
       </SectionBoundary>
       <AboutModal open={aboutOpen} onClose={closeAbout} targets={t} />
       <SectionBoundary label="The search window" resetKey={searchOpen} onClose={() => setSearchOpen(false)}>
-        <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} now={now} scope={scope} />
+        <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} now={now} />
       </SectionBoundary>
       <section className="panel feed">
         <header className="section-head">

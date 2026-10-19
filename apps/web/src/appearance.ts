@@ -78,6 +78,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   hideLighthouseTab: false,
   // The token view's safety pill shows by default; its Safety section always does (user ask 2026-10-16).
   hideSafetyPill: false,
+  // The token window opens in Pro, its terminal layout, on desktop (user ask 2026-10-19).
+  tokenView: "pro",
   outline: null,
   // Off by default (user ask 2026-10-14); an account that saved it on keeps it on.
   outlineResult: false,
@@ -318,6 +320,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     streamTab: typeof r.streamTab === "boolean" ? r.streamTab : d.streamTab,
     hideLighthouseTab: typeof r.hideLighthouseTab === "boolean" ? r.hideLighthouseTab : d.hideLighthouseTab,
     hideSafetyPill: typeof r.hideSafetyPill === "boolean" ? r.hideSafetyPill : d.hideSafetyPill,
+    tokenView: r.tokenView === "pro" || r.tokenView === "classic" ? r.tokenView : d.tokenView,
     outline: hex(r.outline),
     outlineResult: typeof r.outlineResult === "boolean" ? r.outlineResult : d.outlineResult,
     ...hideBelowMcapOf(r),
@@ -392,6 +395,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     streamTab,
     hideLighthouseTab,
     hideSafetyPill,
+    tokenView,
     hideBelowMcap,
     hideBelowMcapUsd,
     chartMarks,
@@ -421,6 +425,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     streamTab,
     hideLighthouseTab,
     hideSafetyPill,
+    tokenView,
     hideBelowMcap,
     hideBelowMcapUsd,
     chartMarks,
@@ -442,6 +447,7 @@ export function defaultLook(current: FeedAppearance): FeedAppearance {
     streamTab: current.streamTab,
     hideLighthouseTab: current.hideLighthouseTab,
     hideSafetyPill: current.hideSafetyPill,
+    tokenView: current.tokenView,
   };
 }
 

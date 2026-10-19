@@ -269,7 +269,6 @@ export function TokenModal({
   onClose,
   utility = null,
   opening,
-  scope = false,
 }: {
   /** Null while the view is still being fetched: `opening` then says for which coin. */
   card: Card | null;
@@ -277,13 +276,14 @@ export function TokenModal({
   onClose: () => void;
   utility?: UtilityMode | null;
   opening?: OpeningView;
-  /** Opened from the Scope board: a wide window gets the terminal layout (user ask 2026-10-18). */
-  scope?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
-  // Desktop only: a phone or a narrow window keeps the usual view whatever opened it.
+  // Desktop only: a phone or a narrow window keeps the usual view whatever opened it. Settings ›
+  // Token view picks Pro (the terminal, the default: user ask 2026-10-19) or Classic for wherever
+  // the window was opened from.
   const wide = useMatches(TERMINAL_QUERY);
-  const terminal = scope && !utility && wide && !!card;
+  const { tokenView } = useAppearance();
+  const terminal = tokenView === "pro" && !utility && wide && !!card;
   // Full window under the site's bar (user pick 2026-10-18), which stays in view above it.
   const [barH, setBarH] = useState(0);
   useEffect(() => {

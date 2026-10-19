@@ -1721,6 +1721,8 @@ export interface FeedAppearance {
   hideLighthouseTab: boolean;
   /** Hide the safety pill in the token view's header; the Safety section stays (absent from older API builds: shown). */
   hideSafetyPill: boolean;
+  /** The token window's desktop layout: Pro (the terminal) or Classic (absent from older API builds: Pro). */
+  tokenView: "pro" | "classic";
   /** The card outline's color before the alert resolves; null keeps the theme's neutral one. */
   outline: string | null;
   /** Graded cards are marked green on a pass and red on a fail (absent from older API builds: off). */

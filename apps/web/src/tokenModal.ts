@@ -7,8 +7,7 @@ import type { Card } from "./api";
  * it. The card keeps the modal's copy fresh while it's still on screen; once it's gone, the last
  * copy it sent stays up.
  */
-/** `scope`: opened from the Scope board, which gets the desktop terminal layout (user ask 2026-10-18). */
-export type OpenTokenModal = { card: Card; now: number; scope?: boolean };
+export type OpenTokenModal = { card: Card; now: number };
 
 let current: OpenTokenModal | null = null;
 const listeners = new Set<() => void>();
@@ -27,8 +26,8 @@ export function openTokenModalState(): OpenTokenModal | null {
 }
 
 /** Opens the modal on this card, replacing any other. */
-export function openTokenModal(card: Card, now: number, scope = false): void {
-  current = scope ? { card, now, scope } : { card, now };
+export function openTokenModal(card: Card, now: number): void {
+  current = { card, now };
   emit();
 }
 

@@ -14986,15 +14986,6 @@ dialog.search-modal::backdrop {
   min-width: 76px;
   justify-content: flex-end;
 }
-.search-confirm {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  white-space: nowrap;
-}
-.search-confirm .link {
-  color: var(--muted);
-}
 .search-skeleton {
   display: grid;
   gap: 2px;
@@ -15043,9 +15034,6 @@ dialog.search-modal::backdrop {
     padding: 9px 6px;
   }
   .search-fig-wide {
-    display: none;
-  }
-  .search-hit:has(.search-confirm) .search-hit-figs > div:not(.search-hit-price) {
     display: none;
   }
 }
@@ -21119,4 +21107,99 @@ dialog.tm-modal.tm-terminal::backdrop {
 .lh-as-of {
   margin: 0;
   text-align: right;
+}
+
+/* A coin TrenchScanner doesn't track, opened from the search window to trade it (QuickTrade.tsx). */
+.quick-trade-modal {
+  width: min(560px, calc(100vw - 32px));
+}
+.quick-trade {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.quick-trade-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.quick-trade-title {
+  flex: 1;
+  min-width: 0;
+}
+.quick-trade-title h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quick-trade-ca {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+}
+.quick-trade-figs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.quick-trade-figs > div {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.quick-trade-figs dt {
+  font-size: 11px;
+  color: var(--muted);
+}
+.quick-trade-figs dd {
+  margin: 2px 0 0;
+  font-weight: 600;
+}
+.quick-trade-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.quick-trade-link {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-3);
+  color: var(--ink-2);
+  text-decoration: none;
+}
+.quick-trade-link:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+.quick-trade-scan {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.quick-trade-scan p {
+  margin: 2px 0 0;
+}
+.quick-trade-scan button {
+  flex-shrink: 0;
+}
+@media (max-width: 640px) {
+  .quick-trade-figs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .quick-trade-scan {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
