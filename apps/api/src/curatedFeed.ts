@@ -758,7 +758,11 @@ export function serializeCuratedAlert(
   // Since calls are priced from a fresh Jupiter quote (label rule 4), the scan snapshot's
   // DexScreener price can be far from it (45-60 s stale): the snapshot's market cap under a Peak
   // counted from the anchor put a $11k call's 6x on a $47k alert, an ATH of $294k.
-  const snapshot = cardSnapshot({ ...stored, priceUsd: alert.anchorPriceUsd, marketCapUsd: alert.anchorMcapUsd });
+  const snapshot = cardSnapshot({
+    ...stored,
+    priceUsd: alert.anchorPriceUsd,
+    marketCapUsd: alert.anchorMcapUsd,
+  });
 
   // The peak the card's ATH section shows. Derived from the outcome watcher's peak rather than
   // the Match peak job (which only tracks matches): supply is fixed for these tokens, so a price
