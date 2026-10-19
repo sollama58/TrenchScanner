@@ -77,6 +77,7 @@ import { clientIp } from "./clientIp.js";
 import { RouteTimings } from "./routeTimings.js";
 import { fastifyLogger } from "./fastifyLogger.js";
 import { liveCurves, liveCurvesFor, setLiveCurves } from "./liveCurve.js";
+import { liveTrades, liveTradesFor, setLiveTrades } from "./liveTrades.js";
 import { QuotePrice, SolPrice } from "./solPrice.js";
 import { recordAdminActions } from "./adminActionLog.js";
 
@@ -627,10 +628,15 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // through the same client.
   const walletHelius = env.HELIUS_API_KEY ? new HeliusClient({ apiKey: env.HELIUS_API_KEY }) : null;
   // The token chart's live tail follows open charts' curves on its own Helius socket (liveCurve.ts).
+  const solPrice = new SolPrice();
   setLiveCurves(
-    liveCurvesFor(env.HELIUS_API_KEY, env.CHART_LIVE_CURVES, walletHelius, new SolPrice(), new QuotePrice()),
+    liveCurvesFor(env.HELIUS_API_KEY, env.CHART_LIVE_CURVES, walletHelius, solPrice, new QuotePrice()),
   );
   app.addHook("onClose", async () => liveCurves().stop());
+  // The token page's live trades follow open pages' coins' logs on another Helius socket
+  // (liveTrades.ts), behind the same switch as the chart's.
+  setLiveTrades(liveTradesFor(env.HELIUS_API_KEY, env.CHART_LIVE_CURVES, solPrice));
+  app.addHook("onClose", async () => liveTrades().stop());
   await app.register(registerTokenRoutes, { prefix: "/tokens", env, stonkFees: walletHelius });
   const walletLive = walletHelius ? new WalletLiveReader(walletHelius) : null;
   // Helius's name for it (exchanges, protocols, services): its identity API, on paid plans.
