@@ -20,7 +20,7 @@ import { ago, shortAddress, tokenLabel } from "../format";
 import { TokenImage } from "../components/TokenImage";
 import { onWalletsChanged } from "../wallet";
 import { openWallet } from "../walletModal";
-import { Skeleton } from "../components/Charts";
+import { Skeleton } from "../components/Skeleton";
 import { TokenModal } from "../components/TokenModal";
 import {
   ChartIcon,

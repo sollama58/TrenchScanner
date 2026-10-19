@@ -90,6 +90,7 @@ type FeedStatsResponse = ReturnType<typeof summarizeFeed> & {
 /** A grading row's columns the run peak reads, and the exit-plan return. */
 const RUN_PEAK_SELECT = {
   simReturnPct: true,
+  openReturnPct: true,
   peak24hReturnPct: true,
   peak24hPriceUsd: true,
   anchorPriceUsd: true,
@@ -880,6 +881,7 @@ export async function registerMatchRoutes(
         /** When the call was made. */
         at: Date;
         returnPct: number | null;
+        open: boolean;
         peakPct: number | null;
         passed: boolean;
         modelName: string;
@@ -893,7 +895,8 @@ export async function registerMatchRoutes(
         tokenId: m.tokenId,
         matchedAt: m.matchedAt,
         at: m.matchedAt,
-        returnPct: row?.simReturnPct ?? null,
+        returnPct: row?.simReturnPct ?? row?.openReturnPct ?? null,
+        open: row?.simReturnPct == null && row?.openReturnPct != null,
         // The card's Peak for a filter alert: its tracked ATH, else its grading row's run peak.
         peakPct: matchPeakPct(m, m.peak24hReturnPct ?? runPeakPct(row)),
         source: { filterId: m.filterId },
@@ -905,7 +908,10 @@ export async function registerMatchRoutes(
     const groups = groupSameTokenCalls(calls, CURATED_MATCH_LINK_WINDOW_MS);
     const callLive = await liveMarketCapPeaks(groups.map(({ lead }) => lead));
     const callCards: ReturnFeedCard[] = groups.map(({ lead }) => {
-      const returnPct = lead.simReturnPct ?? lead.candidateOutcome?.simReturnPct ?? null;
+      const settledPct = lead.simReturnPct ?? lead.candidateOutcome?.simReturnPct ?? null;
+      // Still riding its trailing share: at the latest reading, said to be open (user ask 2026-10-19).
+      const open = settledPct === null && lead.candidateOutcome?.openReturnPct != null;
+      const returnPct = settledPct ?? lead.candidateOutcome?.openReturnPct ?? null;
       const modelName = lead.modelName ?? lead.model ?? "Model";
       // The call's own run peak stops when its watch does (30 minutes for a call that didn't
       // double), so a token that ran later would read small. Its market-cap high since the call
@@ -923,10 +929,11 @@ export async function registerMatchRoutes(
         matchedAt: lead.createdAt,
         at: lead.createdAt,
         returnPct,
+        open,
         peakPct,
         source: { modelName },
         passed,
-        curated: { alertId: lead.id, at: lead.createdAt, returnPct, peakPct, passed, modelName },
+        curated: { alertId: lead.id, at: lead.createdAt, returnPct, open, peakPct, passed, modelName },
       };
     });
     type FoldedReturnCard = ReturnCard & {
@@ -951,6 +958,7 @@ export async function registerMatchRoutes(
           at: c.at,
           tokenId: c.tokenId,
           returnPct: c.curated.returnPct,
+          open: c.curated.open,
           peakPct: maxPct(c.peakPct, c.curated.peakPct),
           source: callWins ? { modelName: c.curated.modelName } : c.source,
           peakAt: callWins ? c.curated.at : c.at,

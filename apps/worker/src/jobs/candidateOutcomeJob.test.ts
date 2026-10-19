@@ -276,6 +276,8 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updated.extended24h).toBe(false);
     // A loss for the label, but the plan sold 35% at 2x and still holds the rest: not retired.
     expect(updated.simReturnPct).toBeNull();
+    // Meanwhile the reports read its current return: the rest priced at this tick.
+    expect(updated.openReturnPct).toBeCloseTo((0.35 * 2 + 0.65 * 2.2 - 1) * 100);
     expect(updated.finalized24hAt).toBeNull();
     expect(updated.nextCheckAt.getTime()).toBeGreaterThan(Date.now());
 
@@ -289,6 +291,7 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     const capped = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
     expect(capped.trailExitAt).toBeNull();
     expect(capped.simReturnPct).toBeCloseTo((0.35 * 2 + 0.65 * 2.4 - 1) * 100);
+    expect(capped.openReturnPct).toBeNull();
     expect(capped.finalized24hAt).not.toBeNull();
     expect(capped.peak24hReturnPct).toBeCloseTo(160);
   });

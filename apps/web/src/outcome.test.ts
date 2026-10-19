@@ -177,6 +177,11 @@ describe("cardOutcome", () => {
     expect(outcomeResult(cardOutcome(folded, now))).toBe("fail");
   });
 
+  it("gives a call with no grading data no verdict instead of throwing", () => {
+    const bare = { kind: "curated", matchedAt: at(44), curated: { ...call, outcome: null } } as Card;
+    expect(cardOutcome(bare, now)).toBeNull();
+  });
+
   it("grades a model call's own card by the call", () => {
     const curated = { kind: "curated", matchedAt: at(44), curated: call } as Card;
     expect(cardOutcome(curated, now)).toBe(callWon);

@@ -16,6 +16,7 @@ import { callPassed, topReturns } from "../feedStats.js";
 import { contestState, modelLabel, readerBoard } from "../contest.js";
 import {
   leaderboardDaysSchema,
+  learningQuerySchema,
   modelRunsRoute,
   modelWeightsRoute,
   reportDaysSchema,
@@ -77,6 +78,11 @@ export const GUEST_BEST_WINDOW_HOURS = 24;
 
 /** The showcase changes slowly (a Peak only climbs), so one read a minute serves every guest. */
 const BEST_CACHE_TTL_MS = 60_000;
+/**
+ * Served while the next read fills behind it, so a visitor (whose first paint now waits on this,
+ * index.html's boot) never waits on the fill: the answer is at most one fill older.
+ */
+const BEST_STALE_MS = 10 * 60_000;
 
 /** Just what grouping needs; only the page's lead calls are then loaded in full. */
 const CALL_SELECT = {
@@ -218,7 +224,7 @@ export async function registerGuestRoutes(
     let cache = bestCache.get(key);
     if (!cache) {
       bestCache.clear();
-      cache = new SharedCache(BEST_CACHE_TTL_MS);
+      cache = new SharedCache(BEST_CACHE_TTL_MS, { staleWhileRevalidateMs: BEST_STALE_MS });
       bestCache.set(key, cache);
     }
     const match = await cache.get(() => loadGuestBest(models));
@@ -270,6 +276,15 @@ export async function registerGuestRoutes(
     const { days } = parsed.data;
     const insights = await opts.reports.insights(days, false);
     return { ...insights, recentAiReviews: [] };
+  });
+
+  /** The Week chart's learning curve in the reader's zone: aggregates only, as in the report above. */
+  app.get("/insights/learning", { config: { rateLimit: GUEST_RATE_LIMIT } }, async (request, reply) => {
+    const parsed = learningQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    return opts.reports.learning(parsed.data.days, parsed.data.tz);
   });
 
   /**

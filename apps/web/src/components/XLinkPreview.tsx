@@ -76,18 +76,29 @@ export function isXLink(url: string | null | undefined): url is string {
 }
 
 /**
- * One read per link for the page's life, shared by every card that shows it. A failed read is
- * forgotten after a minute so a blip at X doesn't stick.
+ * One read per link, shared by every card that shows it, and read again once it is old: a failed
+ * read after a minute so a blip at X doesn't stick, a "not found" after ten (an account just made,
+ * or back from suspension), and a preview after fifteen so its counts don't freeze for the page's life.
  */
 const loads = new Map<string, Promise<Loaded>>();
+const FAILED_FOR_MS = 60_000;
+const MISSING_FOR_MS = 10 * 60_000;
+const PREVIEW_FOR_MS = 15 * 60_000;
 function loadPreview(url: string): Promise<Loaded> {
   let p = loads.get(url);
   if (!p) {
+    const forget = (ms: number) =>
+      setTimeout(() => {
+        if (loads.get(url) === p) loads.delete(url);
+      }, ms);
     p = api<XPreview>(`/x-preview?url=${encodeURIComponent(url)}`)
-      .then((preview): Loaded => ({ preview }))
+      .then((preview): Loaded => {
+        forget(PREVIEW_FOR_MS);
+        return { preview };
+      })
       .catch((e: unknown): Loaded => {
         const missing = e instanceof ApiError && (e.status === 404 || e.status === 400);
-        if (!missing) setTimeout(() => loads.delete(url), 60_000);
+        forget(missing ? MISSING_FOR_MS : FAILED_FOR_MS);
         return { error: missing ? "missing" : "unavailable" };
       });
     loads.set(url, p);

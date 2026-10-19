@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Card } from "../api";
-import { Skeleton } from "../components/Charts";
+import { Skeleton } from "../components/Skeleton";
 import {
   ChartIcon,
   CloseIcon,
@@ -13,7 +13,7 @@ import {
 import { TokenImage } from "../components/TokenImage";
 import { sol, StatsStrip, TradeCard, type TradeCoin, type TradeStats } from "../components/TradesDrawer";
 import { useNow, usePolling } from "../hooks";
-import { ago, shortAddress, usd } from "../format";
+import { ago, pricedAgeText, shortAddress, usd } from "../format";
 import { openTokenModal } from "../tokenModal";
 
 /** The API reads the wallet's holdings from the chain at most every 5 minutes; the rest is our own rows. */
@@ -102,6 +102,8 @@ interface PortfolioTrades {
   closedTotal: number;
   days: number;
   solUsd: number | null;
+  /** When solUsd was read (ISO). Absent from older API builds. */
+  solUsdAt?: string | null;
 }
 
 /** GET /pro/trade/fees (apps/api/src/tradeFees.ts). */
@@ -469,7 +471,7 @@ function TradesPanel({ now }: { now: number }) {
         <>
           {stats && (
             <div className="portfolio-stats">
-              <StatsStrip stats={stats} solUsd={data.solUsd} />
+              <StatsStrip stats={stats} solUsd={data.solUsd} solUsdAt={data.solUsdAt} />
             </div>
           )}
           <h3 className="portfolio-sub">
@@ -668,6 +670,9 @@ function BotPanel({ positions, now }: { positions: Portfolio["botPositions"]; no
                 <td className="num">{sol(p.gotSol)}</td>
                 <td className={`num${tone(p.lastMultiple === null ? null : p.lastMultiple - 1)}`}>
                   {p.lastMultiple === null ? "–" : `${p.lastMultiple.toFixed(2)}x`}
+                  {p.status === "open" && pricedAgeText(p.lastPricedAt, now) && (
+                    <div className="faint small">{pricedAgeText(p.lastPricedAt, now)}</div>
+                  )}
                 </td>
                 <td className="num">{p.highMultiple === null ? "–" : `${p.highMultiple.toFixed(2)}x`}</td>
                 <td className="faint">{p.openedAt ? ago(p.openedAt, now) : "–"}</td>

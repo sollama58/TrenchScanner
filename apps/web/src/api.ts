@@ -203,6 +203,11 @@ export interface Snapshot {
   buys24h: number | null;
   sells24h: number | null;
   holderCount: number | null;
+  /**
+   * When holderCount was read: the RugCheck report's own time, which top 10 and dev % come from
+   * too. Can be up to the report cache's age before takenAt. Absent or null when unknown.
+   */
+  holderCountAt?: string | null;
   /** Jupiter's holder count seconds before the decision (the "Min holders (live)" filter's); null without a quote. */
   liveHolderCount?: number | null;
   holderGrowthPct: number | null;
@@ -395,7 +400,8 @@ export interface CuratedMeta {
   calibratedPct?: number | null;
   reasons: string[];
   alertedAt: string;
-  outcome: Outcome;
+  /** Null when the call has no grading row (pruned, or not written yet). */
+  outcome: Outcome | null;
   /** The call's Peak, which only rises: its run peak or its market-cap high since (absent from older API builds). */
   peakPct?: number | null;
   /** That Peak as a market cap, null until it traded above the call (absent from older API builds). */
@@ -451,6 +457,21 @@ export interface TokenSearchAnswer {
   hits: TokenSearchHit[];
   /** More tokens held the text than came back: a longer search narrows it. */
   truncated: boolean;
+}
+
+/** A token TrenchScanner doesn't track, from the search window's outside search (GET /utilities/search). */
+export interface ExternalSearchHit extends TokenSearchHit {
+  /** Why opening it costs nothing for this reader, or null when it is a paid coin lookup. */
+  free: "tracked" | "traded" | "own" | "open" | null;
+}
+
+export interface ExternalSearchAnswer {
+  hits: ExternalSearchHit[];
+  /** A coin lookup's price in Burn Credits. */
+  cost: number;
+  balance: number | null;
+  /** A subscriber's free daily credits left; null without a subscription. */
+  freeLeft: number | null;
 }
 
 /** One feed card - a filter match or a curated alert, which the API serializes alike. */
@@ -541,11 +562,14 @@ export interface FeedReturns {
   windows: {
     hours: number;
     alerts: number;
+    /** Alerts with a return: landed, or `open` (the trailing share priced at the latest reading). */
     settled: number;
+    /** Of `settled`, the ones still open; absent from older API builds. */
+    open?: number;
     avgReturnPct: number | null;
     profitable: number;
     bucketMinutes: number;
-    buckets: { at: string; settled: number; avgReturnPct: number | null }[];
+    buckets: { at: string; settled: number; open?: number; avgReturnPct: number | null }[];
   }[];
   /** The week's three biggest runs (the cards' Peak), one per token, best first (absent from older API builds). */
   top?: {
@@ -576,6 +600,8 @@ export interface MatchPage {
 }
 
 export interface CuratedStats {
+  /** When the server computed this answer (SharedCache); absent from older API builds. Shown as "as of". */
+  computedAt?: string;
   curator: { active: string; phase: string; modelTrainedAt: string | null };
   training: { finalizedSamples: number; samples7d: number; winners: number; baseWinRatePct: number | null };
   feed: {
@@ -929,6 +955,10 @@ export interface LearningModel {
 /** Day-over-day: the feed's edge over the market, and each training run's exam against its base rate. */
 export interface LearningCurve {
   window: { since: string; until: string };
+  /** The zone whose calendar days `days` are; absent (UTC) from older API builds. */
+  timeZone?: string;
+  /** When the server computed it (/insights/learning only). */
+  computedAt?: string;
   days: LearningDay[];
   /** Each model's own curve; absent from an API older than the per-model view. */
   models?: LearningModel[];
@@ -940,6 +970,8 @@ export interface LearningCurve {
 }
 
 export interface ModelInsights {
+  /** When the server computed this answer (SharedCache); absent from older API builds. Shown as "as of". */
+  computedAt?: string;
   window: { days: number };
   targets: { hitRate2xPct: number; hitRate4xPct: number };
   rules: { win: string; goal: string; fill: string };
@@ -1402,6 +1434,8 @@ export interface EvolutionEvent {
 }
 
 export interface Leaderboard {
+  /** When the server computed this answer (SharedCache); absent from older API builds. Shown as "as of". */
+  computedAt?: string;
   window: { days: number; since: string };
   targets: { hitRate2xPct: number; hitRate4xPct: number };
   /** The random-pick baseline over the same window ("event" moments; absent from older API builds). */
@@ -1647,8 +1681,10 @@ export interface FeedAppearance {
   kolBundled: boolean;
   /** The Transferred tile (holder-to-holder transfers); off by default (absent from older API builds: off). */
   transferred: boolean;
-  /** The card footer's FEES badge; off by default (absent from older API builds: off). */
+  /** The card footer's FEES badge; on by default (absent from older API builds: on). */
   feesBadge: boolean;
+  /** Which default feesBadge it was saved against (appearance.ts FEES_BADGE_REV). */
+  feesBadgeRev: number;
   /** Bubble maps open with same-exchange ties drawn; off by default (absent from older API builds: off). */
   bubbleCexLinks: boolean;
   /** Bubble maps name the wallets that fund clusters on a label by their diamond; off by default (absent from older API builds: off). */
@@ -1872,6 +1908,8 @@ export interface LighthouseSums {
     tenXGraded: number;
     returnN: number;
     returnSum: number;
+    /** Of returnN, still open and priced at the latest reading; absent from older API builds. */
+    returnOpen?: number;
   };
   reads: {
     total: number;
@@ -1898,6 +1936,7 @@ export interface LighthouseSums {
     tenXGraded?: number;
     returnN: number;
     returnSum: number;
+    returnOpen?: number;
   };
 }
 export interface LighthouseLabelTally {
@@ -1911,6 +1950,8 @@ export interface LighthouseLabelTally {
   tenXGraded?: number;
 }
 export interface LighthouseHistory {
+  /** When the server computed this answer (SharedCache); absent from older API builds. Shown as "as of". */
+  computedAt?: string;
   window: {
     days: number;
     since: string | null;
@@ -1969,6 +2010,8 @@ export interface LighthouseTally {
   returnSum: number;
 }
 export interface MarketLighthouse {
+  /** When the server computed this answer (SharedCache); absent from older API builds. Shown as "as of". */
+  computedAt?: string;
   window: { days: number; since: string; bucketHours: number };
   tokenSage: { on: boolean; lastCycleAt: string | null };
   reads: {
@@ -2006,6 +2049,8 @@ export interface MarketLighthouse {
     tenXGraded: number;
     avgReturnPct: number | null;
     returnGraded: number;
+    /** Of returnGraded, calls still riding their trailing share, priced now; absent from older API builds. */
+    returnOpen?: number;
     exitPlan: string;
     byBucket: {
       at: string;

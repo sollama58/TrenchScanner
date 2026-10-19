@@ -83,7 +83,13 @@ export function minutesLeftAt(alertedAt: string, now: number): number {
  * has run out by the clock, a still-"watching" answer is stale: the card reads as grading (or as
  * a 2x hit awaiting its verdict) until the next poll brings the real result.
  */
-export function outcomeAt(outcome: Outcome, alertedAt: string, now: number): Outcome | null {
+export function outcomeAt(
+  outcome: Outcome | null | undefined,
+  alertedAt: string,
+  now: number,
+): Outcome | null {
+  // A call whose grading row is gone (or a card from a build that sends none) has no verdict yet.
+  if (!outcome) return null;
   if (outcome.status !== "watching") return outcome;
   const minutesLeft = minutesLeftAt(alertedAt, now);
   if (minutesLeft > 0) return { ...outcome, minutesLeft };
@@ -98,7 +104,7 @@ export function outcomeAt(outcome: Outcome, alertedAt: string, now: number): Out
  */
 export function cardOutcome(card: Card, now: number): Outcome | null {
   if (card.kind === "match") return matchOutcome(card, now);
-  return card.curated ? outcomeAt(card.curated.outcome, card.curated.alertedAt, now) : null;
+  return card.curated ? outcomeAt(card.curated.outcome ?? null, card.curated.alertedAt, now) : null;
 }
 
 /**

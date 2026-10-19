@@ -186,6 +186,7 @@ export async function registerPaperTradingRoutes(
             tokensHeld: p.tokensHeld,
             rungsTaken: p.rungsTaken,
             lastMultiple: p.lastMultiple,
+            lastPricedAt: p.lastPricedAt,
             peakMultiple: p.peakMultiple,
             openedAt: p.openedAt,
             closedAt: p.closedAt,

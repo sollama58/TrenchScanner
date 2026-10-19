@@ -1,4 +1,4 @@
-import { Prisma, prisma } from "@trenchscanner/core";
+import { deriveGraduated, Prisma, prisma, type CandidateToken } from "@trenchscanner/core";
 import { tokenTextWhere } from "./routes/matches.js";
 
 /**
@@ -172,4 +172,82 @@ export async function searchTrackedTokens(
     };
   });
   return { hits, truncated };
+}
+
+/** Untracked tokens answered from the outside search, at most. */
+export const EXTERNAL_SEARCH_SHOWN = 15;
+
+/** One outside search answers every reader asking the same thing for this long. */
+const EXTERNAL_CACHE_MS = 60_000;
+const EXTERNAL_CACHE_MAX = 300;
+const externalCache = new Map<string, { at: number; tokens: Promise<CandidateToken[]> }>();
+
+/** An untracked token the outside search found: the tracked hit's shape, with only market data. */
+export type ExternalSearchHit = TokenSearchHit;
+
+/**
+ * Stage 2 of the search window (user ask 2026-10-19): tokens TrenchScanner doesn't track, from
+ * DexScreener's search, which opening costs the usual coin lookup. Tracked mints are left out
+ * (they are in the Tracked section), as are pairs DexScreener matched only on their quote coin
+ * (a search for "sol" answers every coin paired with SOL). Best match first, then deepest pool.
+ */
+export async function searchUntrackedTokens(
+  search: (query: string) => Promise<CandidateToken[]>,
+  query: { mint: string } | { text: string },
+  now = Date.now(),
+): Promise<ExternalSearchHit[]> {
+  const key = "mint" in query ? query.mint : query.text.toLowerCase();
+  let entry = externalCache.get(key);
+  if (!entry || now - entry.at > EXTERNAL_CACHE_MS) {
+    entry = { at: now, tokens: search(key).catch(() => []) };
+    externalCache.delete(key);
+    externalCache.set(key, entry);
+    while (externalCache.size > EXTERNAL_CACHE_MAX) {
+      const oldest = externalCache.keys().next().value;
+      if (oldest === undefined) break;
+      externalCache.delete(oldest);
+    }
+  }
+  const text = "text" in query ? query.text.toLowerCase() : null;
+  const found = (await entry.tokens).filter((t) =>
+    text === null
+      ? t.mintAddress === key
+      : [t.symbol, t.name, t.mintAddress].some((v) => v?.toLowerCase().includes(text)),
+  );
+  if (found.length === 0) return [];
+  const tracked = await prisma.token.findMany({
+    where: { AND: [{ mintAddress: { in: found.map((t) => t.mintAddress) } }, TRACKED] },
+    select: { mintAddress: true },
+  });
+  const skip = new Set(tracked.map((t) => t.mintAddress));
+  return found
+    .filter((t) => !skip.has(t.mintAddress))
+    .map((t) => ({
+      t,
+      rank: text === null ? 0 : matchRank(text, t.symbol ?? null, t.name ?? null, t.mintAddress),
+    }))
+    .sort((a, b) => a.rank - b.rank || (b.t.liquidityUsd ?? 0) - (a.t.liquidityUsd ?? 0))
+    .slice(0, EXTERNAL_SEARCH_SHOWN)
+    .map(({ t }) => ({
+      mint: t.mintAddress,
+      symbol: t.symbol ?? null,
+      name: t.name ?? null,
+      imageUrl: t.imageUrl?.startsWith("https://") ? t.imageUrl : null,
+      marketCapUsd: t.marketCapUsd > 0 ? t.marketCapUsd : null,
+      marketCapAt: new Date(now),
+      volume24hUsd: t.volume24hUsd ?? null,
+      liquidityUsd: t.liquidityUsd ?? null,
+      holderCount: null,
+      graduated: deriveGraduated(t.dexId) ?? null,
+      launchedAt: t.pairCreatedAt ?? new Date(now),
+      yourAlertAt: null,
+      modelCalls: 0,
+      lastCallAt: null,
+      bestCallPeakPct: null,
+    }));
+}
+
+/** Clears the outside search's cache (tests). */
+export function clearExternalSearchCache(): void {
+  externalCache.clear();
 }

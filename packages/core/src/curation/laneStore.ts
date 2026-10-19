@@ -239,6 +239,8 @@ export interface MarketRow {
   hit10x: boolean | null;
   disqualified: boolean | null;
   simReturnPct: number | null;
+  /** While the trailing share is held: the return at the latest reading (CandidateOutcome.openReturnPct). */
+  openReturnPct?: number | null;
 }
 
 /** A clean double: hit2x and not stopped out first, as `"hit2xIn1h" AND NOT COALESCE("disqualified", false)`. */

@@ -113,14 +113,22 @@ export const RETURN_WINDOW_MAX_HOURS = 168;
 /** One card of the reader's feed for the returns panel: when it alerted, and its exit-plan return once settled. */
 export interface ReturnCard {
   at: Date;
-  /** The call's return under the fixed exit plan (curation/profitSim.ts), in percent; null until it settles. */
+  /**
+   * The call's return under the fixed exit plan (curation/profitSim.ts), in percent: settled, or
+   * while its trailing share is still held, at the latest reading (`open`). Null before either.
+   */
   returnPct: number | null;
+  /** returnPct is the still-held trailing share priced at the latest reading, not the final return. */
+  open?: boolean;
 }
 
 export interface ReturnBucket {
   /** The bucket's start. */
   at: string;
+  /** Cards with a return here, settled or open. */
   settled: number;
+  /** Of `settled`, the ones still open (priced at the latest reading). */
+  open: number;
   avgReturnPct: number | null;
 }
 
@@ -128,10 +136,15 @@ export interface FeedReturnWindow {
   hours: number;
   /** Cards alerted in the window. */
   alerts: number;
-  /** Of those, the ones whose exit-plan return has landed: the average is over these. */
+  /**
+   * Of those, the ones with a return: landed, or still riding the trailing share and priced at
+   * the latest reading (`open` of them). The average is over these, so it doesn't lean on the
+   * losers, which settle at 30 minutes, while the winners hold for up to three hours.
+   */
   settled: number;
+  open: number;
   avgReturnPct: number | null;
-  /** Settled cards that made money, and the share of settled cards they are. */
+  /** Cards with a return that made money, and the share of them they are. */
   profitable: number;
   bucketMinutes: number;
   /** Oldest first, ending now. */
@@ -140,8 +153,9 @@ export interface FeedReturnWindow {
 
 /**
  * The average exit-plan return of the reader's feed over each of RETURN_WINDOWS, by when each
- * card alerted. A card still holding (its return not yet written) counts as an alert but not in
- * the average, the way the hit rates leave a call in its window out.
+ * card alerted. A card still riding its trailing share counts at its current return (`open`);
+ * one with no return yet counts as an alert but not in the average, the way the hit rates leave
+ * a call in its window out.
  */
 export function summarizeReturns(cards: readonly ReturnCard[], now: number): FeedReturnWindow[] {
   const settledCards = cards.filter(
@@ -153,8 +167,9 @@ export function summarizeReturns(cards: readonly ReturnCard[], now: number): Fee
     const count = (hours * 60) / bucketMinutes;
     const start = now - hours * 3_600_000;
     const inWindow = (c: ReturnCard) => c.at.getTime() > start && c.at.getTime() <= now;
-    const sums = Array.from({ length: count }, () => ({ n: 0, sum: 0 }));
+    const sums = Array.from({ length: count }, () => ({ n: 0, open: 0, sum: 0 }));
     let n = 0;
+    let open = 0;
     let sum = 0;
     let profitable = 0;
     for (const c of settledCards) {
@@ -165,17 +180,23 @@ export function summarizeReturns(cards: readonly ReturnCard[], now: number): Fee
       const i = Math.min(count - 1, Math.floor((c.at.getTime() - start) / bucketMs));
       sums[i]!.n += 1;
       sums[i]!.sum += c.returnPct;
+      if (c.open) {
+        open += 1;
+        sums[i]!.open += 1;
+      }
     }
     return {
       hours,
       alerts: cards.filter(inWindow).length,
       settled: n,
+      open,
       avgReturnPct: avg(sum, n),
       profitable,
       bucketMinutes,
       buckets: sums.map((b, i) => ({
         at: new Date(start + i * bucketMs).toISOString(),
         settled: b.n,
+        open: b.open,
         avgReturnPct: avg(b.sum, b.n),
       })),
     };

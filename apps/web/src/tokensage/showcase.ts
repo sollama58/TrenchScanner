@@ -19,6 +19,8 @@ export interface ShowcaseCount {
 
 export interface TokenSageShowcase {
   generatedAt: string;
+  /** When the hourly rollup last summed these figures (absent from older API builds). */
+  summedAt?: string | null;
   since: string | null;
   totals: {
     reads: number;

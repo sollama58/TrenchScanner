@@ -5,7 +5,7 @@ import { ago, shortAddress, usd } from "../format";
 import { TokenImage } from "./TokenImage";
 import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, LockIcon, SageIcon } from "./Icons";
 import { XLinkPreview } from "./XLinkPreview";
-import { Skeleton } from "./Charts";
+import { Skeleton } from "./Skeleton";
 import { closeSage, SAGE_PARAM } from "../sage";
 import { useShowNarrativeNote } from "../narrativeNote";
 
@@ -129,6 +129,8 @@ export interface SageRead {
       name: string | null;
       followers: number | null;
       verified: string | null;
+      /** When TokenSage read the profile figures from X (absent before its x.author.as_of). */
+      asOf?: string | null;
     } | null;
     predatesTokenS: number | null;
     reuseCount: number | null;
@@ -140,6 +142,8 @@ export interface SageRead {
     fit: number | null;
     basis: string[];
   } | null;
+  /** When `trend` was matched: a recent decision-time refresh's, else the read's (absent from older API builds). */
+  trendAt?: string | null;
   trend: {
     matched: boolean;
     score: number | null;
@@ -670,6 +674,7 @@ function SageReadView({ read: r, view }: { read: SageRead; view: SageView }) {
           <h4>
             Lineage and crowd
             {lineage && <span className={`sage-tag tone-${lineage.tone}`}>{lineage.text}</span>}
+            <AtReadTime at={r.analyzedAt} />
           </h4>
           <LineageText read={r} />
           <CrowdChart read={r} />
@@ -678,7 +683,7 @@ function SageReadView({ read: r, view }: { read: SageRead; view: SageView }) {
 
       {r.creatorFee && <FeeCard fee={r.creatorFee} />}
 
-      {r.x && <XCard x={r.x} />}
+      {r.x && <XCard x={r.x} readAt={r.analyzedAt} />}
 
       {r.trend && (r.trend.matched || r.trend.terms.length > 0) && (
         <section className="sage-card">
@@ -687,6 +692,7 @@ function SageReadView({ read: r, view }: { read: SageRead; view: SageView }) {
             {r.trend.score !== null && (
               <span className="sage-tag tone-neutral">strength {pct0(r.trend.score)}</span>
             )}
+            <AtReadTime at={r.trendAt ?? r.analyzedAt} />
           </h4>
           <ul className="sage-terms">
             {r.trend.terms.map((t, i) => (
@@ -964,13 +970,35 @@ function CrowdBar({
   );
 }
 
-function XCard({ x }: { x: NonNullable<SageRead["x"]> }) {
+/** Past this, a read's time-relative figures (trends, launch counts, followers) get its age. */
+const READ_AGE_SHOWN_MS = 30 * 60_000;
+
+/**
+ * "as read 3h ago" on a card whose figures describe the moment of the read, not now: a deep read
+ * is kept for good once stored, so its trends and "last 1h" counts can be days old (audit
+ * 2026-10-19). Nothing while the read is recent.
+ */
+export function AtReadTime({ at, now = Date.now() }: { at: string | null; now?: number }) {
+  const t = at ? Date.parse(at) : NaN;
+  if (!Number.isFinite(t) || now - t < READ_AGE_SHOWN_MS) return null;
+  return (
+    <span
+      className="sage-tag tone-neutral"
+      title="These figures are from when TokenSage read the coin, not now"
+    >
+      as read {ago(at, now)}
+    </span>
+  );
+}
+
+function XCard({ x, readAt }: { x: NonNullable<SageRead["x"]>; readAt: string | null }) {
   const a = x.author;
   const verdict = x.verdict ? (VERDICT[x.verdict] ?? words(x.verdict)) : null;
   return (
     <section className="sage-card sage-x">
       <h4>
         X link
+        <AtReadTime at={x.author?.asOf ?? readAt} />
         {x.relation && (
           <span className="sage-tag tone-neutral">{RELATION[x.relation] ?? words(x.relation)}</span>
         )}

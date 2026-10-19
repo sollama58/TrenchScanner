@@ -1,5 +1,6 @@
 import {
   NARRATIVE_CONTESTANT,
+  NOW_FEATURE_MAX_AGE_MIN,
   TOKENSAGE_LOGO_MIN_SCORE,
   parseNarrativeRationale,
   tokenSageFlagSeverity,
@@ -163,6 +164,8 @@ export interface SageRead {
       name: string | null;
       followers: number | null;
       verified: string | null;
+      /** When TokenSage read the profile figures from X (absent before its x.author.as_of). */
+      asOf?: string | null;
     } | null;
     predatesTokenS: number | null;
     reuseCount: number | null;
@@ -174,6 +177,11 @@ export interface SageRead {
     fit: number | null;
     basis: string[];
   } | null;
+  /**
+   * When `trend` was matched: the decision-time refresh's time while that refresh is recent
+   * (under NOW_FEATURE_MAX_AGE_MIN), else the read's own (analyzedAt).
+   */
+  trendAt: string | null;
   trend: {
     matched: boolean;
     score: number | null;
@@ -370,7 +378,38 @@ export function sageLogo(labels: unknown): SageRead["logo"] {
 }
 
 /** The read itself, from the stored Analysis document; null when there is none to show. */
-export function sageRead(doc: TokenSageAnalysis | null | undefined, depth: string): SageRead | null {
+/** The trend block of a read or of a decision-time refresh, as the views show it. */
+function trendView(t: TokenSageAnalysis["trend"] | null | undefined): SageRead["trend"] {
+  return t
+    ? {
+        matched: t.matched === true,
+        score: num(t.score),
+        terms: (Array.isArray(t.terms) ? t.terms : [])
+          .filter((x) => typeof x?.term === "string" && typeof x.source === "string")
+          .slice(0, MAX_TERMS)
+          .map((x) => ({
+            term: clip(x.term, 80)!,
+            source: clip(x.source, 30)!,
+            score: num(x.score),
+            rank: num(x.rank),
+            headline: clip(x.headline, 200),
+          })),
+      }
+    : null;
+}
+
+/**
+ * A read as the views show it. `now`, the stored decision-time refresh (worker nowReads.ts,
+ * refreshed every few minutes while the coin is in the band), stands in for the read's trend
+ * block while it is under NOW_FEATURE_MAX_AGE_MIN old: the read's own is from the moment of the
+ * read, which can be days ago (audit 2026-10-19).
+ */
+export function sageRead(
+  doc: TokenSageAnalysis | null | undefined,
+  depth: string,
+  now?: { trend: unknown; at: Date | null } | null,
+  at = Date.now(),
+): SageRead | null {
   if (!doc || typeof doc !== "object") return null;
   const ref = doc.referent;
   const lin = doc.lineage;
@@ -406,9 +445,15 @@ export function sageRead(doc: TokenSageAnalysis | null | undefined, depth: strin
     .filter((e, i, all) => all.findIndex((o) => o.label === e.label && o.where === e.where) === i)
     .slice(0, MAX_EVIDENCE)
     .map((e) => ({ label: e.label!, weight: e.weight!, detail: clip(e.detail), where: clip(e.where, 40) }));
+  const analyzedAt = typeof doc.analyzed_at === "string" ? doc.analyzed_at : null;
+  const fresh =
+    !!now?.at &&
+    !!now.trend &&
+    typeof now.trend === "object" &&
+    at - now.at.getTime() < NOW_FEATURE_MAX_AGE_MIN * 60_000;
   return {
     depth,
-    analyzedAt: typeof doc.analyzed_at === "string" ? doc.analyzed_at : null,
+    analyzedAt,
     rulesVersion: clip(doc.versions?.rules, 20),
     launchpad: clip(doc.launchpad, 40),
     curveProgress: num(doc.market?.curve_progress),
@@ -474,6 +519,7 @@ export function sageRead(doc: TokenSageAnalysis | null | undefined, depth: strin
                   name: clip(x.author.name, 80),
                   followers: num(x.author.followers),
                   verified: clip(x.author.verified_type, 20),
+                  asOf: typeof x.author.as_of === "string" ? x.author.as_of : null,
                 }
               : null,
             predatesTokenS: num(x.predates_token_by_s),
@@ -487,22 +533,9 @@ export function sageRead(doc: TokenSageAnalysis | null | undefined, depth: strin
             basis: strings(x.match?.basis),
           }
         : null,
-    trend: doc.trend
-      ? {
-          matched: doc.trend.matched === true,
-          score: num(doc.trend.score),
-          terms: (Array.isArray(doc.trend.terms) ? doc.trend.terms : [])
-            .filter((t) => typeof t?.term === "string" && typeof t.source === "string")
-            .slice(0, MAX_TERMS)
-            .map((t) => ({
-              term: clip(t.term, 80)!,
-              source: clip(t.source, 30)!,
-              score: num(t.score),
-              rank: num(t.rank),
-              headline: clip(t.headline, 200),
-            })),
-        }
-      : null,
+    ...(fresh
+      ? { trendAt: now!.at!.toISOString(), trend: trendView(now!.trend as TokenSageAnalysis["trend"]) }
+      : { trendAt: analyzedAt, trend: trendView(doc.trend) }),
     flags: (Array.isArray(doc.flags) ? doc.flags : [])
       .filter((f) => typeof f?.code === "string")
       .slice(0, MAX_FLAGS)

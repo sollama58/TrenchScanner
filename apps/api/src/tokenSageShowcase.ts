@@ -116,6 +116,7 @@ export async function buildTokenSageShowcase(now = new Date()) {
     prisma.lighthouseHour.aggregate({
       where: { hour: { gte: last24, lt: to } },
       _sum: { readsTotal: true, readsDescribed: true, readsDeep: true },
+      _max: { computedAt: true },
     }),
     prisma.$queryRaw<
       { dimension: string; label: string; count: bigint; alerts: bigint; graded: bigint; won2x: bigint }[]
@@ -184,6 +185,11 @@ export async function buildTokenSageShowcase(now = new Date()) {
 
   return {
     generatedAt: now.toISOString(),
+    /**
+     * When the hourly rollup last summed the hours these figures come from: they are as fresh
+     * as that, not as the page's cache (audit 2026-10-19).
+     */
+    summedAt: recent._max.computedAt?.toISOString() ?? null,
     /** The first hour the rollup holds a read for: "reading since". */
     since: t?.oldest ?? null,
     totals: {

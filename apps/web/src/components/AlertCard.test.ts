@@ -52,6 +52,12 @@ function card(over: {
 }
 
 describe("recordedPeakOf", () => {
+  it("reads a call with no grading data (outcome null) without throwing", () => {
+    const c = card({ kind: "curated", alertMcap: 20_000, peakReturnPct: 50, curated: {} });
+    (c.curated as unknown as { outcome: null }).outcome = null;
+    expect(recordedPeakOf(c).pct).toBe(50);
+  });
+
   it("re-bases a folded call's high onto the filter alert's market cap", () => {
     // Called at $20k, caught by the filter at $60k, topped out at $200k.
     const peak = recordedPeakOf(
@@ -194,9 +200,14 @@ describe("reading ages", () => {
   const now = Date.parse("2026-10-16T12:30:00.000Z");
   const ago = (ms: number) => new Date(now - ms).toISOString();
 
-  it("labels a Now reading once it is two minutes old", () => {
-    expect(nowReadingAge({ currentMarketCapAt: ago(90_000) }, 1, now)).toBeNull();
-    expect(nowReadingAge({ currentMarketCapAt: ago(3 * 60_000) }, 1, now)).toBe("3m");
+  it("labels a Now reading once the market it shows is two minutes old", () => {
+    // DexScreener runs ~45 s behind when fetched; a curve reading is the market to the block.
+    expect(nowReadingAge({ currentMarketCapAt: ago(60_000) }, 1, now)).toBeNull();
+    expect(nowReadingAge({ currentMarketCapAt: ago(90_000) }, 1, now)).toBe("2m");
+    expect(
+      nowReadingAge({ currentMarketCapAt: ago(90_000), currentMarketCapSource: "curve" }, 1, now),
+    ).toBeNull();
+    expect(nowReadingAge({ currentMarketCapAt: ago(3 * 60_000) }, 1, now)).toBe("4m");
     expect(nowReadingAge({ currentMarketCapAt: ago(3 * 60_000) }, null, now)).toBeNull();
     expect(nowReadingAge({ currentMarketCapAt: null }, 1, now)).toBeNull();
   });

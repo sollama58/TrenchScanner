@@ -5,7 +5,8 @@ import { lighthousePath } from "../routes";
 import { ago, halfHour, pct, signedPct, usd } from "../format";
 import { narrativeBaseline, relativeScale, signedPts, type NarrativeBaseline } from "../lighthouseMetrics";
 import { intervalText, MIN_GRADED_FOR_RATE, RULE_NOTE_UNFILTERED, wilson } from "../rates";
-import { HBarChart, Skeleton } from "./Charts";
+import { HBarChart } from "./Charts";
+import { Skeleton } from "./Skeleton";
 import { InfoIcon, LighthouseIcon } from "./Icons";
 import { ExitPlanInfo } from "./ExitPlanInfo";
 import {
@@ -20,6 +21,7 @@ import {
 import { SafetyGauge } from "./SafetyGauge";
 import { ShareButton } from "./ShareImageDialog";
 import { WeatherGauge } from "./WeatherGauge";
+import { AsOf } from "./AsOf";
 import { PRICING_CHANGE_LABEL, pricingChangeSlot } from "../pricingChange";
 
 /**
@@ -90,6 +92,9 @@ function LighthouseWindow({ base, days }: { base: string; days: Days }) {
 
   return (
     <div className={`stack lh-content${q.stale ? " stale" : ""}`} aria-busy={q.stale}>
+      <p className="lh-as-of">
+        <AsOf computedAt={d.computedAt} />
+      </p>
       {d.safetyScreen && <SafetyGauge s={d.safetyScreen} span={span} days={days} />}
       <Screened s={d.screened} span={span} days={days} since={d.window.since} />
       <h3 className="lh-part">
@@ -864,6 +869,11 @@ function Screened({ s, span, days, since }: { s: ScreenedData; span: string; day
           </span>
           <span className="muted small">
             on the <ExitPlanInfo text="exit plan" /> · {s.returnGraded.toLocaleString()} graded
+            {s.returnOpen ? (
+              <span title="Still riding their trailing share: priced at the latest reading until they sell">
+                , {s.returnOpen.toLocaleString()} open
+              </span>
+            ) : null}
           </span>
         </div>
       </div>

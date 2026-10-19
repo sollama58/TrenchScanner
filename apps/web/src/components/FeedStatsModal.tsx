@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { FeedStats, Leaderboard } from "../api";
-import { RingGauge } from "./Charts";
+import { RingGauge } from "./RingGauge";
 import { FeedReturns } from "./FeedReturns";
 import { MIN_RUNNERS_FOR_COVERAGE } from "./CoverageMeter";
 import { BoltIcon, CheckIcon, CloseIcon, RadarIcon, TargetIcon, TrophyIcon } from "./Icons";

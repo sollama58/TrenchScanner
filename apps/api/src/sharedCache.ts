@@ -54,6 +54,23 @@ export interface CacheReportRow {
   servedStale: number;
 }
 
+/** A cached value with the time its fill finished: what a report shows as "as of". */
+export interface Stamped<T> {
+  data: T;
+  computedAt: Date;
+}
+
+/**
+ * Adds `computedAt` (ISO) to an object answer, so a view can say "as of" for figures that may be
+ * a stale-while-revalidate copy, or the last good one kept through failed fills (see fill()).
+ */
+export function withComputedAt<T extends object>({
+  data,
+  computedAt,
+}: Stamped<T>): T & { computedAt: string } {
+  return { ...data, computedAt: computedAt.toISOString() };
+}
+
 /** Every named cache in this process, for cacheReport(). Caches are created once per key and live as long as the process. */
 const named = new Set<SharedCache<unknown>>();
 
@@ -84,15 +101,14 @@ export function cacheReport(): CacheReportRow[] {
  * coordinating.
  */
 export class SharedCache<T> {
-  private value: { data: T; expiresAt: number } | undefined;
-  private inFlight: Promise<T> | undefined;
+  private value: { data: T; expiresAt: number; computedAt: Date } | undefined;
+  private inFlight: Promise<Stamped<T>> | undefined;
   /** Bumped by clear(): a fill that started before the bump must not store its (older) result. */
   private generation = 0;
   private readonly staleMs: number;
   private readonly maxStaleOnErrorMs: number | undefined;
   private readonly name: string | undefined;
   private readonly stats = { fills: 0, failed: 0, lastMs: 0, maxMs: 0, totalMs: 0, waited: 0, stale: 0 };
-  private filledAt = 0;
 
   constructor(
     private readonly ttlMs: number,
@@ -109,14 +125,19 @@ export class SharedCache<T> {
    * matter how many callers arrive together.
    */
   async get(produce: () => Promise<T>): Promise<T> {
+    return (await this.getStamped(produce)).data;
+  }
+
+  /** get(), with when the value served was computed: hours old, possibly, under the stale window. */
+  async getStamped(produce: () => Promise<T>): Promise<Stamped<T>> {
     const now = Date.now();
-    if (this.value && this.value.expiresAt > now) return this.value.data;
+    if (this.value && this.value.expiresAt > now) return this.stamped(this.value);
     if (this.value && this.staleMs > 0 && this.value.expiresAt + this.staleMs > now) {
       // Stale but usable: answer now, refresh once in the background. A failed refresh already
       // falls back to this same value inside fill(), so nothing here can reject.
       if (!this.inFlight) void this.fill(produce).catch(() => {});
       this.stats.stale += 1;
-      return this.value.data;
+      return this.stamped(this.value);
     }
     this.stats.waited += 1;
     if (this.inFlight) return this.inFlight;
@@ -142,23 +163,26 @@ export class SharedCache<T> {
     );
   }
 
-  private fill(produce: () => Promise<T>): Promise<T> {
+  private stamped(value: { data: T; computedAt: Date }): Stamped<T> {
+    return { data: value.data, computedAt: value.computedAt };
+  }
+
+  private fill(produce: () => Promise<T>): Promise<Stamped<T>> {
     const generation = this.generation;
     const started = performance.now();
-    const fill: Promise<T> = produce()
-      .then((data) => {
+    const fill: Promise<Stamped<T>> = produce()
+      .then((data): Stamped<T> => {
         const ms = performance.now() - started;
         this.stats.fills += 1;
         this.stats.lastMs = ms;
         this.stats.maxMs = Math.max(this.stats.maxMs, ms);
         this.stats.totalMs += ms;
-        if (generation === this.generation) {
-          this.value = { data, expiresAt: Date.now() + this.ttlMs };
-          this.filledAt = Date.now();
-        }
-        return data;
+        const computedAt = new Date();
+        if (generation === this.generation)
+          this.value = { data, expiresAt: Date.now() + this.ttlMs, computedAt };
+        return { data, computedAt };
       })
-      .catch((err: unknown) => {
+      .catch((err: unknown): Stamped<T> => {
         this.stats.failed += 1;
         // Serve a stale value over failing the page: a feed a few seconds old is a better answer
         // than an error, and the next request retries. Only a cold cache propagates the error.
@@ -167,7 +191,7 @@ export class SharedCache<T> {
           (this.maxStaleOnErrorMs === undefined || Date.now() - this.filledAt <= this.maxStaleOnErrorMs)
         ) {
           logger.warn("refresh failed, serving stale", { err: String(err) });
-          return this.value.data;
+          return this.stamped(this.value);
         }
         throw err;
       })
@@ -195,7 +219,7 @@ export class SharedCache<T> {
       name: this.name ?? "(unnamed)",
       ttlSeconds: Math.round(this.ttlMs / 1000),
       staleWhileRevalidateSeconds: Math.round(this.staleMs / 1000),
-      ageSeconds: this.value ? Math.round((Date.now() - this.filledAt) / 1000) : null,
+      ageSeconds: this.value ? Math.round((Date.now() - this.value.computedAt.getTime()) / 1000) : null,
       filling: this.inFlight !== undefined,
       fills: s.fills,
       failedFills: s.failed,

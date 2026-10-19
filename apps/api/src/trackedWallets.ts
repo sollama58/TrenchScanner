@@ -192,7 +192,8 @@ export function resetTrackedCache(): void {
 /**
  * The labels that apply to this reader now: theirs while they have Pro Mode, none otherwise (and
  * none without a signed-in reader). Cached a minute per account; any failure reads as none, so a
- * label can never break the read it is laid over.
+ * label can never break the read it is laid over, and isn't kept: the next read asks again rather
+ * than showing no labels for the rest of the minute.
  */
 export async function activeTracked(
   env: Env | undefined,
@@ -212,7 +213,10 @@ export async function activeTracked(
     if (rows.length === 0) return [];
     if (!(await proStatus(env, user.walletAddress)).pro) return [];
     return rows.map((r) => ({ wallet: r.wallet, name: r.name, category: categoryOf(r.category) }));
-  })().catch(() => [] as TrackedWallet[]);
+  })().catch(() => {
+    if (active.get(user.userId)?.value === value) active.delete(user.userId);
+    return [] as TrackedWallet[];
+  });
   if (active.size >= ACTIVE_MAX) active.clear();
   active.set(user.userId, { at: now, value });
   return value;

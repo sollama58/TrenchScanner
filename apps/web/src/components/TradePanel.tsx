@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ApiError } from "../api";
-import { signedPct, usd } from "../format";
+import { ago, signedPct, solUsdAgeText, usd } from "../format";
 import {
   graceLeftText,
   MAX_CUSTOM_FEE_SOL,
@@ -536,8 +536,10 @@ export function TradePanel({
   symbol,
   name = null,
   position,
+  positionStaleAt = null,
   summary,
   nowMcap = null,
+  nowMcapAt = null,
   onTraded,
   closeOnly = false,
   graceEndsAt = null,
@@ -551,9 +553,13 @@ export function TradePanel({
   symbol: string;
   name?: string | null;
   position: PositionResponse | null;
+  /** The last refresh of the position failed: when the one shown was read (ms). Null: it is current. */
+  positionStaleAt?: number | null;
   summary: PositionSummary | null;
   /** The coin's market cap now (USD), for the holdings and the share card. */
   nowMcap?: number | null;
+  /** When nowMcap was read (ms), for the share card's time. */
+  nowMcapAt?: number | null;
   onTraded: () => void;
   /** Pro Mode has ended: selling what it holds only (closing a position is always allowed). */
   closeOnly?: boolean;
@@ -585,6 +591,8 @@ export function TradePanel({
   const busy = status.kind === "busy";
   const balance = position ? BigInt(position.balance) : 0n;
   const solUsd = position?.solUsd ?? null;
+  // The SOL price is kept through failed reads: dollar figures say so once it is a while old.
+  const solPriceAge = solUsdAgeText(position?.solUsdAt);
 
   const update = (patch: Partial<TradeSettings>) => {
     saveTradeSettings({ ...settings, ...patch });
@@ -783,7 +791,7 @@ export function TradePanel({
       )}
 
       {!hidePosition && hasPosition && summary && (
-        <div className={`tm-hold ${tone}`}>
+        <div className={`tm-hold ${tone}${positionStaleAt !== null ? " stale" : ""}`}>
           <div className="tm-hold-hero">
             <div className="tm-hold-pnl">
               <span className="tm-hold-kicker">
@@ -852,6 +860,14 @@ export function TradePanel({
           </div>
           {position?.historyUnavailable && (
             <p className="small muted tm-hold-note">Trade history is unavailable just now.</p>
+          )}
+          {positionStaleAt !== null && (
+            <p className="small muted tm-hold-note">
+              Couldn&apos;t refresh your position, showing it as read {ago(new Date(positionStaleAt))}.
+            </p>
+          )}
+          {solPriceAge && (
+            <p className="small muted tm-hold-note">Dollar figures use a SOL price from {solPriceAge}.</p>
           )}
         </div>
       )}
@@ -1218,6 +1234,7 @@ export function TradePanel({
               solBack: summary.solOut + (summary.valueSol ?? 0),
               entryMcap: summary.entryMcap,
               nowMcap,
+              nowMcapAt,
               showAmounts: shareAmounts,
             })
           }

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { usePolling } from "../hooks";
 import { ago, pct, shortAddress, signedPct } from "../format";
 import { openWallet } from "../walletModal";
-import { Skeleton } from "./Charts";
+import { Skeleton } from "./Skeleton";
 import { ChevronDownIcon, WalletIcon } from "./Icons";
 
 /**

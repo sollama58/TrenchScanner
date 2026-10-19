@@ -104,7 +104,8 @@ export function QuickBuyPill({
         ? "Bought"
         : state.kind === "failed"
           ? "Failed"
-          : `${q.amountSol} SOL`;
+          : // Just the amount (user ask 2026-10-19): the bolt and the tooltip say it's a SOL buy.
+            String(q.amountSol);
   const title =
     state.kind === "failed"
       ? state.message

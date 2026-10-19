@@ -205,16 +205,40 @@ export class MatchStream {
       logger.info("listening for match + curated notifications", {
         channels: [MATCH_CHANNEL, CURATED_CHANNEL],
       });
-      // Whatever was NOTIFYed while the connection was down is gone, and the caches the curated
-      // listeners clear (feed pages, model-call reads, per-reader stats) may hold rows from before
-      // it. Clear them once on every reconnect, as a missed notification would have.
-      if (this.hasListened) this.runCuratedListeners();
+      if (this.hasListened) this.catchUp();
       this.hasListened = true;
     } catch (err) {
       logger.warn("failed to open listen connection", { error: String(err) });
       await client.end().catch(() => {});
       this.scheduleReconnect();
     }
+  }
+
+  /**
+   * Called on every reconnect after the first. Whatever was NOTIFYed while the connection was
+   * down is gone: the caches the listeners clear (feed pages, model-call reads, per-reader stats)
+   * may hold rows from before it, and the open streams never heard about it. Clears them as a
+   * missed notification would have, then nudges every open stream, so a tab (and its alert
+   * notifier, which stops its own fallback poll while the streams are up) refetches now instead
+   * of on its next slow poll. Public for the same reason as dispatch(): it is testable without a
+   * database.
+   */
+  catchUp(): void {
+    this.runCuratedListeners();
+    const users = new Set<string>();
+    for (const subscriber of this.subscribers) if (subscriber.kind === "match") users.add(subscriber.userId);
+    for (const userId of users) {
+      for (const listener of this.matchListeners) {
+        try {
+          listener(userId);
+        } catch (err) {
+          logger.warn("match notification listener failed", { error: String(err) });
+        }
+      }
+    }
+    // No id: the nudge says only "look again", which is all the client reads from any frame.
+    for (const subscriber of this.subscribers)
+      this.writeTo(subscriber, `event: ${subscriber.kind}\ndata: {}\n\n`);
   }
 
   /**

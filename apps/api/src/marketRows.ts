@@ -32,10 +32,12 @@ export async function readMarketRows(since: Date): Promise<MarketRow[]> {
       hit10x: boolean | null;
       dq: boolean | null;
       sim: number | null;
+      open: number | null;
     }[]
   >`
     SELECT "anchorAt" AS at, "tokenId" AS token, "hit2xIn1h" AS hit2x, "hit4xIn1h" AS hit4x,
-           "hit10xIn1h" AS hit10x, "disqualified" AS dq, "simReturnPct"::float8 AS sim
+           "hit10xIn1h" AS hit10x, "disqualified" AS dq, "simReturnPct"::float8 AS sim,
+           "openReturnPct"::float8 AS open
     FROM "CandidateOutcome"
     WHERE "sampleKind" = 'event' AND "anchorAt" >= ${since}
       AND "labelRule" >= ${REPORTED_LABEL_RULE}
@@ -48,6 +50,7 @@ export async function readMarketRows(since: Date): Promise<MarketRow[]> {
     hit10x: r.hit10x,
     disqualified: r.dq,
     simReturnPct: r.sim,
+    openReturnPct: r.open,
   }));
 }
 
@@ -89,6 +92,8 @@ export interface MarketCounts {
   doubled_after_stop: bigint;
   sim_calls: bigint;
   sim_sum: number | null;
+  /** Of sim_calls, the calls still open, counted at their latest reading. */
+  sim_open: bigint;
 }
 
 /**
@@ -106,6 +111,7 @@ export function marketCounts(rows: readonly MarketRow[]): MarketCounts {
   let stopped = 0;
   let simCalls = 0;
   let simSum = 0;
+  let simOpen = 0;
   for (const r of rows) {
     if (r.hit4x === true) won4x += 1;
     if (r.hit10x === true) won10x += 1;
@@ -115,9 +121,13 @@ export function marketCounts(rows: readonly MarketRow[]): MarketCounts {
     const clean = r.hit2x && r.disqualified !== true;
     if (clean) won2x += 1;
     if (r.hit10x !== null || !clean) tenXGraded += 1;
-    if (r.simReturnPct !== null) {
+    // A call still riding its trailing share counts at its latest reading, as the SQL's
+    // COALESCE("simReturnPct", "openReturnPct").
+    const ret = r.simReturnPct ?? r.openReturnPct ?? null;
+    if (ret !== null) {
       simCalls += 1;
-      simSum += r.simReturnPct;
+      simSum += ret;
+      if (r.simReturnPct === null) simOpen += 1;
     }
   }
   return {
@@ -130,5 +140,6 @@ export function marketCounts(rows: readonly MarketRow[]): MarketCounts {
     doubled_after_stop: BigInt(stopped),
     sim_calls: BigInt(simCalls),
     sim_sum: simCalls > 0 ? simSum : null,
+    sim_open: BigInt(simOpen),
   };
 }

@@ -1,5 +1,6 @@
 import type { Snapshot } from "./api";
 import type { WalletNames } from "./walletNames";
+import { LINKED_HOLDERS_READ, linkedCount, linkedCountText } from "./linkedCount";
 import {
   crossingCount,
   laneOffsets,
@@ -9,6 +10,8 @@ import {
   type LanePoint,
   type LaneRoute,
 } from "./linkLanes";
+
+export { linkedCount, linkedCountText };
 
 /**
  * The linked-wallets bubble map: a coin's top holders as bubbles sized by their share of supply,
@@ -170,6 +173,20 @@ export function fromAlertText(readAtMs: number, alertAtMs: number, what: string)
   if (abs < 5_000) return `at the ${what}`;
   const span = abs < 60_000 ? `${Math.round(abs / 1000)}s` : `${Math.round(abs / 60_000)}m`;
   return `${span} ${gap > 0 ? "after" : "before"} the ${what}`;
+}
+
+/**
+ * The coin's live top 50 to draw over `snapshot`, or null when it is too old for it: read more
+ * than HOLDER_STALE_MS before the scan, and the scan has its own holder list to draw. The wider
+ * read is saved only while the coin is scanned with funder lookups, so for a coin called days ago
+ * it can be days older than the scan it would stand in for.
+ */
+export function liveWideFor(
+  snapshot: Pick<Snapshot, "takenAt" | "linkedClusters" | "linkedHolders"> | null | undefined,
+  wide: WideMap | null,
+): WideMap | null {
+  if (!wide || !snapshot || !hasHolderList(snapshot)) return wide;
+  return Date.parse(snapshot.takenAt) - Date.parse(wide.readAt) > HOLDER_STALE_MS ? null : wide;
 }
 
 /**
@@ -2366,28 +2383,6 @@ export function clusterHalos(
   return out;
 }
 
-/** Holders the linked reading covered on scans that didn't keep the count: RugCheck's top 20. */
-const LINKED_HOLDERS_READ = 20;
-
-/**
- * Linked as a count (user ask 2026-10-13): how many top holders are in a linked cluster, of how
- * many were read, shown "N/25". Scans before the count was kept count the clusters' wallets. Null
- * when the reading isn't in.
- */
-export function linkedCount(
-  s: Pick<
-    Snapshot,
-    "linkedWalletPct" | "linkedWalletCount" | "linkedWalletsChecked" | "linkedClusters" | "linkedHolders"
-  >,
-): { linked: number; of: number } | null {
-  if (s.linkedWalletPct == null) return null;
-  if (s.linkedWalletCount != null) {
-    return { linked: s.linkedWalletCount, of: s.linkedWalletsChecked ?? LINKED_HOLDERS_READ };
-  }
-  const wallets = new Set((s.linkedClusters ?? []).flatMap((c) => (c?.wallets ?? []).map((w) => w.wallet)));
-  return { linked: wallets.size, of: s.linkedHolders?.length || LINKED_HOLDERS_READ };
-}
-
 /**
  * Same-minute funding as a count (user ask 2026-10-13): how many top holders sit in a same-minute
  * group, of how many were read, "N/25". Scans before the count was kept count the groups' wallets.
@@ -2442,22 +2437,17 @@ export function mapLinked(
   };
 }
 
-/** "4/20", or null without a reading. */
-export function linkedCountText(c: { linked: number; of: number } | null): string | null {
-  return c ? `${c.linked}/${c.of}` : null;
-}
-
 /**
- * The reading to draw: the newest with linked clusters, else the newest whose holder list came
- * with its funders read, else with a holder list, else any linked reading. A scan whose funder
- * lookups ran past the cycle keeps the holder list without the linked reading, so the newest list
- * alone would read "not checked yet" while an earlier scan of the coin had checked them.
+ * The reading to draw (`snapshots` newest first): the newest whose holder list came with its
+ * funders read (clusters or none), else with a holder list, else any linked reading. A scan whose
+ * funder lookups ran past the cycle keeps the holder list without the linked reading, so the newest
+ * list alone would read "not checked yet" while an earlier scan of the coin had checked them. An
+ * older scan's clusters never win over a newer checked list: the holders have moved on since.
  */
 export function pickReading<S extends Pick<Snapshot, "linkedWalletPct" | "linkedClusters" | "linkedHolders">>(
   snapshots: readonly S[],
 ): S | null {
   return (
-    snapshots.find((s) => s.linkedWalletPct != null && (s.linkedClusters?.length ?? 0) > 0) ??
     snapshots.find((s) => s.linkedWalletPct != null && hasHolderList(s)) ??
     snapshots.find(hasHolderList) ??
     snapshots.find((s) => s.linkedWalletPct != null) ??

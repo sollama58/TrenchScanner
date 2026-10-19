@@ -14,7 +14,7 @@ import {
   type NotificationState,
 } from "../alerts";
 import { mobilePlatform, runningInstalled } from "../installApp";
-import { Skeleton } from "./Charts";
+import { Skeleton } from "./Skeleton";
 import { BellIcon, VolumeIcon } from "./Icons";
 
 /**

@@ -1,9 +1,38 @@
 import { describe, expect, it, vi } from "vitest";
-import { cacheReport, SharedCache, SharedCacheMap } from "./sharedCache.js";
+import { cacheReport, SharedCache, SharedCacheMap, withComputedAt } from "./sharedCache.js";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("SharedCache", () => {
+  it("stamps each value with when its fill finished, and keeps that stamp while serving it stale", async () => {
+    vi.useFakeTimers();
+    try {
+      const start = Date.parse("2026-10-19T01:00:00Z");
+      vi.setSystemTime(start);
+      const cache = new SharedCache<{ n: number }>(1_000, { staleWhileRevalidateMs: 60_000 });
+      let runs = 0;
+      let fail = false;
+      const produce = async () => {
+        if (fail) throw new Error("db down");
+        return { n: ++runs };
+      };
+      const first = await cache.getStamped(produce);
+      expect(first).toEqual({ data: { n: 1 }, computedAt: new Date(start) });
+      expect(withComputedAt(first)).toEqual({ n: 1, computedAt: "2026-10-19T01:00:00.000Z" });
+
+      // Past the TTL, inside the stale window: the old value and its old stamp, answered at once.
+      fail = true;
+      vi.setSystemTime(start + 5_000);
+      expect((await cache.getStamped(produce)).computedAt).toEqual(new Date(start));
+      // Past the stale window the reader waits on a fill; it fails, so the last good value comes
+      // back still saying when it was computed.
+      vi.setSystemTime(start + 120_000);
+      expect(await cache.getStamped(produce)).toEqual({ data: { n: 1 }, computedAt: new Date(start) });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runs the producer once for a burst of concurrent callers", async () => {
     // The whole point: at 300 concurrent readers of one shared feed, 299 of them must not each
     // run the query.

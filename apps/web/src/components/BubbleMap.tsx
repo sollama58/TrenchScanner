@@ -3,7 +3,7 @@ import { LoadingNote, SkelValue } from "./Loading";
 import type { Snapshot, Token } from "../api";
 import { usePolling } from "../hooks";
 import { invalidate } from "../cache";
-import { pct, tokenLabel } from "../format";
+import { ago, pct, tokenLabel } from "../format";
 import {
   bubbleNameLines,
   showsPct,
@@ -27,6 +27,7 @@ import {
   sameTimeSlot,
   buildGraph,
   HOLDER_SCAN_MS,
+  liveWideFor,
   clusterHalos,
   HALO_PAD,
   graphBounds,
@@ -2226,7 +2227,7 @@ export function BubbleMapSection({
   column?: boolean;
 }) {
   const mint = token.mintAddress;
-  const liveWide = useWideMap(mint);
+  const liveWide = liveWideFor(snapshot, useWideMap(mint));
   const wide = chosenWide !== undefined ? chosenWide : liveWide;
   const { showTransfers, setTransfersOn } = useTransferToggle(snapshot);
   const { bubbleFunderLabels } = useAppearance();
@@ -2281,7 +2282,14 @@ export function BubbleMapSection({
       <h4>
         <BubblesIcon size={14} /> Bubble map
         {moment && (
-          <span className="sage-tag" title={moment.title}>
+          <span
+            className="sage-tag"
+            title={
+              chosenWide === undefined && wide
+                ? `${moment.title} The holders past the scan's top 25 were read ${ago(wide.readAt)}.`
+                : moment.title
+            }
+          >
             {moment.label}
           </span>
         )}

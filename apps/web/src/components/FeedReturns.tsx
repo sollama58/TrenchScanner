@@ -18,6 +18,16 @@ const TOP_BY: { id: TopBy; label: string }[] = [
 
 const tone = (v: number | null) => (v === null ? "" : v >= 0 ? "lh-up" : "lh-down");
 
+/**
+ * A tile's count: "12 of 20 settled", or with calls still riding their trailing share, priced at
+ * the latest reading, "9 settled, 3 open of 20". Open ones are in the average (user ask 2026-10-19).
+ */
+export function returnsCount(withReturn: number, open: number, alerts: number): string {
+  return open > 0
+    ? `${withReturn - open} settled, ${open} open of ${alerts}`
+    : `${withReturn} of ${alerts} settled`;
+}
+
 /** A bucket's start as the chart's axis reads it: a clock time inside a day, a weekday past it. */
 function bucketLabel(at: string, bucketMinutes: number): string {
   const d = new Date(at);
@@ -94,7 +104,9 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
             <span className={`returns-value num ${tone(w.avgReturnPct)}`}>
               {signedPct(w.avgReturnPct, 1)}
             </span>
-            <small className="faint">{data ? `${w.settled} of ${w.alerts} settled` : "Loading…"}</small>
+            <small className="faint">
+              {data ? returnsCount(w.settled, "open" in w ? (w.open ?? 0) : 0, w.alerts) : "Loading…"}
+            </small>
           </button>
         ))}
       </div>
@@ -106,12 +118,16 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
               <>
                 {bucketLabel(focus.at, win.bucketMinutes)}:{" "}
                 <span className={`num ${tone(focus.avgReturnPct)}`}>{signedPct(focus.avgReturnPct, 1)}</span>{" "}
-                over {focus.settled} settled
+                over {focus.settled}
+                {focus.open ? `, ${focus.open} still open` : " settled"}
               </>
             ) : win.settled > 0 ? (
               <>
-                {win.profitable} of {win.settled} settled alerts made money (
+                {win.profitable} of {win.settled} alerts made money (
                 {pct((win.profitable / win.settled) * 100, 0)})
+                {win.open
+                  ? `. ${win.open} still hold their trailing share, priced at the latest reading`
+                  : ""}
               </>
             ) : (
               "No settled alerts in this window yet"

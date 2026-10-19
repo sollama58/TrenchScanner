@@ -1385,13 +1385,16 @@ img.avatar {
   font-size: 11.5px;
 }
 /* "Now" from a reading minutes old: its age beside the label, the figure dimmed (AlertCard nowReadingAge). */
-.fig .fig-age {
+.fig .fig-age,
+.tm-fig .fig-age {
   text-transform: none;
   letter-spacing: 0;
   font-weight: 500;
 }
 .fig.stale > .num,
-.fig.stale .delta {
+.fig.stale .delta,
+.tm-fig.aged > .num,
+.tm-fig.aged .delta {
   opacity: 0.6;
 }
 .fig.peak.hot > span.num {
@@ -2525,7 +2528,8 @@ legend {
   display: grid;
   grid-template-columns: 1.25fr 1fr;
   gap: 48px;
-  align-items: center;
+  /* Top-aligned: centering moved both columns each time one grew as its data landed. */
+  align-items: start;
   max-width: 1100px;
   margin: 56px auto;
 }
@@ -2543,6 +2547,10 @@ legend {
 }
 .signin-cards {
   grid-template-columns: minmax(0, 1fr);
+}
+/* About the height the showcase card takes, held while it loads. */
+.signin-alerts-pending {
+  min-height: 560px;
 }
 .signin-box {
   padding: 28px;
@@ -14589,6 +14597,9 @@ dialog.search-modal::backdrop {
   text-transform: uppercase;
   color: var(--brand-ink);
 }
+.search-section-head > span:first-child {
+  white-space: nowrap;
+}
 .search-section-head .small {
   font-weight: 400;
   letter-spacing: 0;
@@ -14700,6 +14711,26 @@ dialog.search-modal::backdrop {
 .search-hit-figs dd.good {
   color: var(--good-ink);
 }
+.search-hits .search-section-head:not(:first-child) {
+  margin-top: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.search-hit-price {
+  display: flex;
+  align-items: center;
+  min-width: 76px;
+  justify-content: flex-end;
+}
+.search-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+.search-confirm .link {
+  color: var(--muted);
+}
 .search-skeleton {
   display: grid;
   gap: 2px;
@@ -14741,6 +14772,9 @@ dialog.search-modal::backdrop {
     padding: 9px 6px;
   }
   .search-fig-wide {
+    display: none;
+  }
+  .search-hit:has(.search-confirm) .search-hit-figs > div:not(.search-hit-price) {
     display: none;
   }
 }
@@ -20404,18 +20438,40 @@ dialog.tm-modal.tm-terminal::backdrop {
 }
 
 /* ---- Hidden tokens (user ask 2026-10-19): hide a token from Cards and Scope, and bring it back ---- */
-.card-head .card-hide {
-  flex: none;
-  align-self: flex-start;
-  margin: -4px -6px 0 -4px;
-  padding: 5px;
+/* A bare eye in the Alert square's top-right corner: quiet until pointed at. */
+.card-hide {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
   color: var(--muted);
-  opacity: 0.55;
-  transition: opacity 0.15s;
+  opacity: 0.7;
+  transition:
+    opacity 0.15s,
+    color 0.15s,
+    background-color 0.15s;
 }
-.card:hover .card-hide,
+.card-hide:hover,
 .card-hide:focus-visible {
   opacity: 1;
+  color: var(--ink);
+  background: var(--highlight);
+}
+.fig:has(> .card-hide) {
+  position: relative;
+}
+.fig > .card-hide {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+}
+.card-head > .card-hide {
+  flex: none;
+  align-self: flex-start;
 }
 .scope-hide {
   position: absolute;
@@ -20442,9 +20498,6 @@ dialog.tm-modal.tm-terminal::backdrop {
   color: var(--ink);
 }
 @media (hover: none) {
-  .card-head .card-hide {
-    opacity: 1;
-  }
   .scope-hide {
     opacity: 0.85;
   }
@@ -20510,4 +20563,13 @@ dialog.tm-modal.tm-terminal::backdrop {
 .scope-chip-copy {
   font-family: inherit;
   cursor: copy;
+}
+
+/* "as of 14:05" on a cached report (components/AsOf.tsx). */
+.as-of {
+  white-space: nowrap;
+}
+.lh-as-of {
+  margin: 0;
+  text-align: right;
 }

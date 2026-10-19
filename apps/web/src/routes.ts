@@ -46,8 +46,11 @@ export const loadSettingsTab = () => import("./tabs/SettingsTab").then((m) => (l
 export const loadAdminTab = () => import("./tabs/AdminTab").then((m) => (loaded.admin = m));
 export const loadSignIn = () => import("./components/SignIn");
 
-/** The browser's IANA zone, for the Lighthouse's hour-of-day chart; empty when it can't say (the API reads UTC). */
-function browserTimeZone() {
+/**
+ * The browser's IANA zone, for the reports that bucket by the reader's clock (the Lighthouse's
+ * hour-of-day chart, the Model tab's Week chart); empty when it can't say (the API reads UTC).
+ */
+export function browserTimeZone() {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
   } catch {
@@ -63,6 +66,12 @@ function browserTimeZone() {
 export const lighthousePath = (base: string, days: number) => {
   const tz = browserTimeZone();
   return `${base}/lighthouse?days=${days}${tz ? `&tz=${encodeURIComponent(tz)}` : ""}`;
+};
+
+/** The Model tab's Week chart: the learning curve with its days in the reader's zone. */
+export const learningPath = (base: string, days: number) => {
+  const tz = browserTimeZone();
+  return `${base}/insights/learning?days=${days}${tz ? `&tz=${encodeURIComponent(tz)}` : ""}`;
 };
 
 /**

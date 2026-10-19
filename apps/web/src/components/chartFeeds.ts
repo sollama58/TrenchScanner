@@ -26,7 +26,10 @@ export interface LiveTail {
   venue: "curve" | "pool";
   /** The newest moment the price is known current (ms). */
   readAt: number | null;
-  /** Nothing live prices the coin (not a Pump.fun coin, or no pool to follow): nothing more will come. */
+  /**
+   * Nothing live prices the coin (not a Pump.fun coin, or no pool to follow), as of the last
+   * answer. Asked again every DONE_RECHECK_MS, so a passing "complete" resumes.
+   */
   done: boolean;
 }
 
@@ -39,6 +42,8 @@ export const LIVE_POLL_MS = 2_000;
  */
 const HELD_GAP_MS = 750;
 const MAX_BACKOFF_MS = 30_000;
+/** How often a tail the API called complete asks again, in case that was passing. */
+const DONE_RECHECK_MS = 60_000;
 const MAX_TICKS = 6_000;
 
 /**
@@ -90,7 +95,15 @@ export function useLiveTail(base: string, enabled: boolean): LiveTail {
           readAt: a.readAt,
           done: a.complete,
         }));
-        if (!a.complete) next(a.held ? Math.max(0, HELD_GAP_MS - (Date.now() - sent)) : LIVE_POLL_MS);
+        // "Nothing live prices it" can pass (a coin between its curve and its pool, the stream
+        // reconnecting), so a done tail still asks again now and then and resumes if it has.
+        next(
+          a.complete
+            ? DONE_RECHECK_MS
+            : a.held
+              ? Math.max(0, HELD_GAP_MS - (Date.now() - sent))
+              : LIVE_POLL_MS,
+        );
       } catch {
         if (!stopped) next(Math.min(MAX_BACKOFF_MS, LIVE_POLL_MS * 2 ** ++failures));
       }
