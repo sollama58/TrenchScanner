@@ -76,7 +76,10 @@ describe.skipIf(!dbAvailable)("latestSnapshotsByToken and withCarriedHolderList:
     expect(latest.get(tokens.carried!)?.linkedHolders).toEqual(listB);
     expect(latest.get(tokens.carried!)?.linkedClusters).toEqual(clustersB);
     expect(latest.get(tokens.carried!)?.sameTimeClusters).toEqual(groupsB);
+    // When the carried list was written, for the holders' "Last updated".
+    expect(latest.get(tokens.carried!)?.holdersAt).toEqual(at(5));
     expect(latest.get(tokens.own!)?.takenAt).toEqual(at(1));
+    expect(latest.get(tokens.own!)?.holdersAt).toBeUndefined();
     expect(latest.get(tokens.own!)?.linkedHolders).toEqual(listB);
     expect(latest.get(tokens.own!)?.linkedClusters).toEqual(clustersB);
     expect(latest.get(tokens.stale!)?.takenAt).toEqual(at(150));
@@ -88,6 +91,7 @@ describe.skipIf(!dbAvailable)("latestSnapshotsByToken and withCarriedHolderList:
     expect(keys).not.toContain("carriedHolders");
     expect(keys).not.toContain("carriedClusters");
     expect(keys).not.toContain("carriedSameTime");
+    expect(keys).not.toContain("carriedAt");
   });
 
   it("does the same for one snapshot", async () => {
@@ -100,6 +104,7 @@ describe.skipIf(!dbAvailable)("latestSnapshotsByToken and withCarriedHolderList:
     expect(carried?.linkedHolders).toEqual(listB);
     expect(carried?.linkedClusters).toEqual(clustersB);
     expect(carried?.sameTimeClusters).toEqual(groupsB);
+    expect(carried?.holdersAt).toEqual(at(5));
     const own = await withCarriedHolderList(
       await prisma.tokenSnapshot.findFirst({ where: { tokenId: tokens.own! }, orderBy: { takenAt: "desc" } }),
     );
@@ -127,7 +132,9 @@ describe.skipIf(!dbAvailable)("latestSnapshotsByToken and withCarriedHolderList:
     expect(out[0]!.linkedHolders).toEqual(listB);
     expect(out[0]!.linkedClusters).toEqual(clustersB);
     expect(out[0]!.sameTimeClusters).toEqual(groupsB);
+    expect(out[0]!.holdersAt).toEqual(at(5));
     expect(out[1]!.linkedHolders).toEqual(listA);
+    expect(out[1]!.holdersAt).toBeUndefined();
     expect(out[2]!.linkedHolders).toBeNull();
   });
 });

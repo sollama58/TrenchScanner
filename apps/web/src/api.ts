@@ -248,6 +248,11 @@ export interface Token {
 
 export interface Snapshot {
   takenAt: string;
+  /**
+   * On a card's latest snapshot whose holder list rode from an earlier row (the API's
+   * withCarriedHolderList): when that list was written. Absent when the row carries its own.
+   */
+  holdersAt?: string;
   priceUsd: number;
   marketCapUsd: number;
   liquidityUsd: number | null;

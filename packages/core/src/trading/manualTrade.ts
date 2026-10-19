@@ -164,10 +164,22 @@ export const JUPITER_SET_TOKEN_LEDGER = [228, 85, 185, 112, 78, 79, 77, 2];
  */
 const HOP_SLIPPAGE_BPS = 50;
 /**
- * The most accounts Jupiter's half of such a trade may name: the curve's own instruction takes 17
- * and the transaction is 1,232 bytes at most.
+ * The most accounts Jupiter's half of such a trade may name, direct pool or not: the curve's own
+ * instruction takes 17 and the transaction is 1,232 bytes at most. Jupiter counts the accounts
+ * its lookup tables don't carry, so a tighter bound picks a pool they cover: SOL to ABNB built to
+ * 1,239 bytes at 30, and to 989 at 24 (mainnet, 2026-10-19).
  */
-const HOP_MAX_ACCOUNTS = 30;
+const HOP_MAX_ACCOUNTS = 24;
+
+/**
+ * Public address lookup tables holding the fixed accounts a curve trade names (Pump.fun's Global,
+ * fee config and event authority, Jupiter's event authority, the Memo program, wrapped SOL, USDC),
+ * which no route's own tables carry. Without them a curve coin quoted in another coin (ABNB, via a
+ * Jupiter hop) built to 1,270-1,308 bytes, over the 1,232 a transaction may weigh (trade canary,
+ * 2026-10-19). A table's entries never change once written, so what is read here is what the
+ * chain loads; one that has since been closed is skipped.
+ */
+export const SHARED_LOOKUP_TABLES = ["Hyif6eWb8x88RVrvjPfabsgRYnwkVnyByEXTVTXbUcyP"];
 
 /** Instructions the guard reads: their accounts stay out of lookup tables. */
 const STATIC_PROGRAMS = new Set<string>([
@@ -213,16 +225,7 @@ export async function buildManualTrade(
   const tipIx = systemTransferInstruction(req.wallet, pickSenderTipAccount(deps.random), tip);
 
   // Jupiter first; the curve's own instructions when Jupiter has no route (or is unreachable).
-  let route: ManualTrade["route"];
-  let swapIxs: InstructionSpec[];
-  let tables: string[] = [];
-  let units: number;
-  let quotedOut: bigint;
-  let minOut: bigint;
-  let via: string | undefined;
-  // Every coin the transaction passes through on the way: the guard lets the wallet's own account
-  // for each gain, never lose.
-  let hops: string[] = [];
+  let built: RouteBuild;
   try {
     const quote = await quoteInSol(
       deps.jupiter,
@@ -239,121 +242,58 @@ export async function buildManualTrade(
         return !curveRefusal(curve.curve) && !!curve.curve && !!curve.buyback;
       },
     );
-    const built = await deps.jupiter.swapInstructions({ quote, userPublicKey: req.wallet });
-    route = "jupiter";
-    swapIxs = built.instructions.filter((ix) => ix.programId !== PROGRAM.computeBudget);
-    tables = built.lookupTables;
-    const limit = Math.ceil((built.computeUnitLimit ?? DEFAULT_JUPITER_UNITS) * JUPITER_UNIT_SLACK);
-    units = Math.min(MAX_UNITS, Math.max(MIN_UNITS, limit + JUPITER_UNIT_EXTRA));
-    quotedOut = BigInt(quote.outAmount);
-    minOut = BigInt(quote.otherAmountThreshold);
+    const swap = await deps.jupiter.swapInstructions({ quote, userPublicKey: req.wallet });
+    const swapIxs = swap.instructions.filter((ix) => ix.programId !== PROGRAM.computeBudget);
+    const limit = Math.ceil((swap.computeUnitLimit ?? DEFAULT_JUPITER_UNITS) * JUPITER_UNIT_SLACK);
+    const quotedOut = BigInt(quote.outAmount);
+    const minOut = BigInt(quote.otherAmountThreshold);
     checkJupiterFloor(swapIxs, quotedOut, minOut, req.slippageBps);
-    hops = routeHopMints(quote, req.mint);
+    built = {
+      route: "jupiter",
+      swapIxs,
+      tables: swap.lookupTables,
+      units: Math.min(MAX_UNITS, Math.max(MIN_UNITS, limit + JUPITER_UNIT_EXTRA)),
+      quotedOut,
+      minOut,
+      hops: routeHopMints(quote, req.mint),
+    };
   } catch (err) {
     if (!(err instanceof NoRouteError || err instanceof RateLimitedError || err instanceof TransientError))
       throw err;
-    const curve = await readCurve(deps.rpc, req.mint, deps.random);
-    if (curve.curve?.complete && !curveQuoteToken(curve.curve)) {
-      // Graduated from a SOL curve: its PumpSwap pool's own instructions (pumpSwap.ts).
-      route = "pumpswap";
-      ({ swapIxs, units, quotedOut, minOut } = await buildPumpSwap(deps, req, mintInfo.program, err));
-    } else {
-      const refusal = curveRefusal(curve.curve, { quoteToken: true });
-      if (refusal || !curve.curve || !curve.buyback)
-        throw err instanceof NoRouteError
-          ? new TradeRejected(
-              `no route for this token (${refusal ?? "Pump.fun's fee recipients unreadable"})`,
-            )
-          : err;
-      route = "pump";
-      const quoteMint = curveQuoteToken(curve.curve);
-      if (quoteMint) {
-        // Quoted in another coin: SOL to it with Jupiter, then the curve, in one transaction.
-        const hop = await buildCurveHop(
-          deps,
-          req,
-          mintInfo.program,
-          curve.curve,
-          curve.recipients,
-          quoteMint,
-        );
-        via = quoteMint;
-        ({ swapIxs, tables, units, quotedOut, minOut } = hop);
-        hops = [quoteMint, ...hop.hops];
-      } else {
-        const accounts = {
-          wallet: req.wallet,
-          mint: req.mint,
-          tokenProgram: mintInfo.program,
-          curve: curve.curve,
-          buybackFeeRecipient: curve.buyback,
-        };
-        if (buy) {
-          const b = (() => {
-            try {
-              return pumpBuyInstructions({ ...accounts, solIn: req.amount, slippageBps: req.slippageBps });
-            } catch (err) {
-              // Too small a buy for the curve to give a token: the trader's input, not a build failure.
-              throw new TradeRejected(err instanceof Error ? err.message : String(err));
-            }
-          })();
-          swapIxs = b.instructions;
-          minOut = b.minTokens;
-          units = PUMP_BUY_UNITS;
-        } else {
-          const s = pumpSellInstructions({ ...accounts, tokens: req.amount, slippageBps: req.slippageBps });
-          swapIxs = s.instructions;
-          minOut = s.minSol;
-          units = PUMP_SELL_UNITS;
-        }
-        quotedOut = (minOut * 10_000n) / BigInt(10_000 - req.slippageBps);
-      }
-    }
+    built = await buildOwnRoute(deps, req, mintInfo.program, err);
   }
 
-  const writable = [
-    ...new Set(swapIxs.flatMap((ix) => ix.accounts.filter((a) => a.writable).map((a) => a.pubkey))),
-  ];
-  const [estimate, blockhash, tableData] = await Promise.all([
-    req.priorityFeeLamports !== undefined ? null : networkPrice(deps.rpc, writable, req.speed),
-    deps.rpc.getLatestBlockhash(),
-    tables.length > 0 ? deps.rpc.getAccountsData(tables) : Promise.resolve([]),
-  ]);
-  if (!blockhash) throw new TransientError("couldn't read a recent blockhash");
-  if (!tableData) throw new TransientError("couldn't read the route's lookup tables");
-  const resolved = new Map<string, string[]>();
-  tables.forEach((t, i) => {
-    const data = tableData[i];
-    if (!data) throw new TransientError(`lookup table ${t} not found`);
-    resolved.set(t, parseLookupTableAddresses(data));
-  });
-  const price = priorityPrice(units, req.speed, estimate, req.priorityFeeLamports);
-  const priorityFee = priorityFeeOf(units, price);
-
-  let tx: Uint8Array;
+  let assembled: Assembled;
   try {
-    tx = buildV0Transaction(
-      req.wallet,
-      blockhash.blockhash,
-      [...computeBudgetInstructions(units, price), ...swapIxs, tipIx],
-      resolved,
-      STATIC_PROGRAMS,
-    );
+    assembled = await assemble(deps.rpc, req, built, tipIx);
   } catch (err) {
-    // Two swaps in one transaction leave little room: Jupiter's pool for the quote coin can be one
-    // with too many accounts at times.
-    if (via && err instanceof Error && /too large/.test(err.message))
+    if (!(err instanceof Error && /too large/.test(err.message))) throw err;
+    if (built.route === "jupiter") {
+      // A Jupiter route naming more accounts than its lookup tables carry (a curve coin quoted in
+      // another coin, through both pools in one route): the coin's own route, which names fewer.
+      built = await buildOwnRoute(
+        deps,
+        req,
+        mintInfo.program,
+        new NoRouteError("Jupiter's route didn't fit in one transaction"),
+      );
+      assembled = await assemble(deps.rpc, req, built, tipIx);
+    } else if (built.via) {
+      // Two swaps in one transaction leave little room: Jupiter's pool for the quote coin can be
+      // one with too many accounts at times.
       throw new TransientError(
         "the swap through this coin's quote coin didn't fit in one transaction: try again",
       );
-    throw err;
+    } else throw err;
   }
+  const { route, via, hops, quotedOut, minOut } = built;
+  const { tx, blockhash, priorityFee } = assembled;
   const limits = {
     maxExternalLamports: tip,
     maxPriorityFeeLamports: priorityFee,
     ...(route === "jupiter" || via ? { maxSlippageBps: req.slippageBps } : {}),
     ...(route === "pumpswap" ? { pumpSwapSlippageBps: req.slippageBps } : {}),
-    ...(hops.length > 0 ? { via: hops } : {}),
+    ...(hops && hops.length > 0 ? { via: hops } : {}),
   };
   const expect: TradeExpectation = buy
     ? {
@@ -382,6 +322,142 @@ export async function buildManualTrade(
     tipLamports: tip.toString(),
     priorityFeeLamports: priorityFee.toString(),
   };
+}
+
+/** A route's instructions, before the compute budget and the tip go around them. */
+interface RouteBuild {
+  route: ManualTrade["route"];
+  swapIxs: InstructionSpec[];
+  tables: string[];
+  units: number;
+  quotedOut: bigint;
+  minOut: bigint;
+  via?: string;
+  /**
+   * Every coin the transaction passes through on the way (a curve's quote coin, a Jupiter route's
+   * USDC or PUMP): the guard lets the wallet's own account for each gain, never lose.
+   */
+  hops?: string[];
+}
+
+/**
+ * The trade without Jupiter (`jupiterErr` says why): a graduated coin's PumpSwap pool, else the
+ * coin's bonding curve, through a Jupiter hop when it is quoted in another coin.
+ */
+async function buildOwnRoute(
+  deps: { rpc: ManualTradeRpc; jupiter: ManualTradeJupiter; random?: () => number },
+  req: ManualTradeRequest,
+  tokenProgram: string,
+  jupiterErr: unknown,
+): Promise<RouteBuild> {
+  const curve = await readCurve(deps.rpc, req.mint, deps.random);
+  if (curve.curve?.complete && !curveQuoteToken(curve.curve)) {
+    // Graduated from a SOL curve: its PumpSwap pool's own instructions (pumpSwap.ts).
+    return { route: "pumpswap", tables: [], ...(await buildPumpSwap(deps, req, tokenProgram, jupiterErr)) };
+  }
+  const refusal = curveRefusal(curve.curve, { quoteToken: true });
+  if (refusal || !curve.curve || !curve.buyback)
+    throw jupiterErr instanceof NoRouteError
+      ? new TradeRejected(`no route for this token (${refusal ?? "Pump.fun's fee recipients unreadable"})`)
+      : jupiterErr;
+  const quoteMint = curveQuoteToken(curve.curve);
+  if (quoteMint) {
+    // Quoted in another coin: SOL to it with Jupiter, then the curve, in one transaction.
+    const hop = await buildCurveHop(deps, req, tokenProgram, curve.curve, curve.recipients, quoteMint);
+    return { route: "pump", via: quoteMint, ...hop, hops: [quoteMint, ...hop.hops] };
+  }
+  const accounts = {
+    wallet: req.wallet,
+    mint: req.mint,
+    tokenProgram,
+    curve: curve.curve,
+    buybackFeeRecipient: curve.buyback,
+  };
+  if (req.side === "buy") {
+    const b = (() => {
+      try {
+        return pumpBuyInstructions({ ...accounts, solIn: req.amount, slippageBps: req.slippageBps });
+      } catch (err) {
+        // Too small a buy for the curve to give a token: the trader's input, not a build failure.
+        throw new TradeRejected(err instanceof Error ? err.message : String(err));
+      }
+    })();
+    return {
+      route: "pump",
+      swapIxs: b.instructions,
+      tables: [],
+      units: PUMP_BUY_UNITS,
+      quotedOut: (b.minTokens * 10_000n) / BigInt(10_000 - req.slippageBps),
+      minOut: b.minTokens,
+    };
+  }
+  const s = pumpSellInstructions({ ...accounts, tokens: req.amount, slippageBps: req.slippageBps });
+  return {
+    route: "pump",
+    swapIxs: s.instructions,
+    tables: [],
+    units: PUMP_SELL_UNITS,
+    quotedOut: (s.minSol * 10_000n) / BigInt(10_000 - req.slippageBps),
+    minOut: s.minSol,
+  };
+}
+
+interface Assembled {
+  /** Unsigned. */
+  tx: Uint8Array;
+  blockhash: { blockhash: string; lastValidBlockHeight: number };
+  priorityFee: bigint;
+}
+
+/**
+ * A route's unsigned transaction: its lookup tables (and the shared ones) read, the priority fee
+ * priced, and the compute budget and the tip put around its instructions.
+ */
+async function assemble(
+  rpc: ManualTradeRpc,
+  req: ManualTradeRequest,
+  built: RouteBuild,
+  tipIx: InstructionSpec,
+): Promise<Assembled> {
+  const { swapIxs, tables, units } = built;
+  const writable = [
+    ...new Set(swapIxs.flatMap((ix) => ix.accounts.filter((a) => a.writable).map((a) => a.pubkey))),
+  ];
+  const shared = SHARED_LOOKUP_TABLES.filter((t) => !tables.includes(t));
+  const [estimate, blockhash, tableData] = await Promise.all([
+    req.priorityFeeLamports !== undefined ? null : networkPrice(rpc, writable, req.speed),
+    rpc.getLatestBlockhash(),
+    rpc.getAccountsData([...tables, ...shared]),
+  ]);
+  if (!blockhash) throw new TransientError("couldn't read a recent blockhash");
+  if (!tableData) throw new TransientError("couldn't read the route's lookup tables");
+  const resolved = new Map<string, string[]>();
+  tables.forEach((t, i) => {
+    const data = tableData[i];
+    if (!data) throw new TransientError(`lookup table ${t} not found`);
+    resolved.set(t, parseLookupTableAddresses(data));
+  });
+  // The shared tables only make the transaction smaller: one that is gone or unreadable is skipped.
+  shared.forEach((t, i) => {
+    const data = tableData[tables.length + i];
+    if (!data) return;
+    try {
+      resolved.set(t, parseLookupTableAddresses(data));
+    } catch {
+      // Not a lookup table: built without it.
+    }
+  });
+  const price = priorityPrice(units, req.speed, estimate, req.priorityFeeLamports);
+  const priorityFee = priorityFeeOf(units, price);
+
+  const tx = buildV0Transaction(
+    req.wallet,
+    blockhash.blockhash,
+    [...computeBudgetInstructions(units, price), ...swapIxs, tipIx],
+    resolved,
+    STATIC_PROGRAMS,
+  );
+  return { tx, blockhash, priorityFee };
 }
 
 /**
@@ -598,7 +674,8 @@ async function buildCurveHop(
   };
   const hopSlippage = Math.min(req.slippageBps, HOP_SLIPPAGE_BPS);
   // One pool between SOL and the quote coin when there is one (the fewest accounts: the curve's
-  // instruction needs room in the transaction too), else a short route.
+  // instruction needs room in the transaction too), else a short route, either within
+  // HOP_MAX_ACCOUNTS.
   const hopQuote = async (input: {
     inputMint: string;
     outputMint: string;
@@ -606,7 +683,7 @@ async function buildCurveHop(
     slippageBps: number;
   }) => {
     try {
-      return await deps.jupiter.quote({ ...input, onlyDirectRoutes: true });
+      return await deps.jupiter.quote({ ...input, onlyDirectRoutes: true, maxAccounts: HOP_MAX_ACCOUNTS });
     } catch (err) {
       if (!(err instanceof NoRouteError)) throw err;
       return quoteInSol(deps.jupiter, { ...input, maxAccounts: HOP_MAX_ACCOUNTS });

@@ -28,6 +28,9 @@ import {
   candleTimeframe,
   fillFlat,
   liveCandles,
+  lockedSpans,
+  autoTimeframe,
+  barOver,
   timeframeLabel,
   timeframeSlots,
 } from "./priceChart";
@@ -445,8 +448,8 @@ describe("candles", () => {
         { t: 0, v: 4 },
       ),
     ).toEqual([
-      { t: 0, w: 10, o: 4, h: 5, l: 4, c: 5, vol: 0 },
-      { t: 10, w: 10, o: 5, h: 5, l: 3, c: 3, vol: 0 },
+      { t: 0, w: 10, o: 4, h: 5, l: 4, c: 5, vol: 0, tick: true },
+      { t: 10, w: 10, o: 5, h: 5, l: 3, c: 3, vol: 0, tick: true },
     ]);
   });
 });
@@ -538,5 +541,69 @@ describe("openingSpanMs", () => {
 
   it("never opens under the narrowest zoom", () => {
     expect(openingSpanMs(1_000, 10)).toBe(30_000);
+  });
+});
+
+describe("candles wider than a slot (user ask 2026-10-19: candles assembled properly)", () => {
+  const S = 1_000;
+  it("draws a minute candle among 1-second slots across its own width, not squeezed into one", () => {
+    // 1-second slots over two minutes: a minute candle, then 1-second ones.
+    const bars = ohlcBars(
+      [
+        { t: 0, o: 10, h: 12, l: 9, c: 11, vol: 1 },
+        { t: M, w: S, o: 11, h: 13, l: 11, c: 12, vol: 1 },
+        { t: M + 5 * S, w: S, o: 12, h: 12, l: 10, c: 10, vol: 1 },
+      ],
+      0,
+      2 * M,
+      120,
+    );
+    expect(bars[0]).toMatchObject({ from: 0, to: M, o: 10, c: 11, span: 60 });
+    expect(bars.slice(1, 60).every((b) => b === null)).toBe(true);
+    expect(bars[60]).toMatchObject({ o: 11, c: 12 });
+    expect(bars[60]!.span).toBeUndefined();
+    const filled = fillFlat(bars, 0, S);
+    // Nothing is made up under the minute candle; the quiet seconds after the first 1s one are.
+    expect(filled.slice(1, 60).every((b) => b === null)).toBe(true);
+    expect(filled[61]).toMatchObject({ flat: true, c: 12 });
+    // Any slot under the minute candle reads as it.
+    expect(barOver(filled, 30)).toMatchObject({ at: 0, bar: { span: 60 } });
+    expect(barOver(filled, 60)).toMatchObject({ at: 60 });
+  });
+
+  it("sums a wide candle's volume into one bar across its slots", () => {
+    const vols = volumeBars([{ t: 0, o: 1, c: 2, vol: 7 }], 0, 2 * M, 120);
+    expect(vols[0]).toMatchObject({ usd: 7, span: 60 });
+  });
+
+  it("puts a live tick's move in the slot it happened in, not halfway along its step", () => {
+    // The newest candle ends at M; a tick 5s later, with 1s slots.
+    const out = liveCandles([{ t: 0, o: 10, c: 11, vol: 1 }], [{ t: M + 5 * S, v: 14 }]);
+    const bars = ohlcBars(out, M, M + 10 * S, 10);
+    expect(bars[5]).toMatchObject({ o: 11, c: 14 });
+    expect(bars.filter(Boolean)).toHaveLength(1);
+  });
+});
+
+describe("locked candle sizes (user ask 2026-10-19)", () => {
+  it("zooms a picked timeframe between fat candles and about a pixel each, inside the view", () => {
+    // 1s on a 768px plot: in to 16s (48px a candle), out to 768 candles.
+    expect(lockedSpans(1_000, 768, 3_600_000)).toEqual({ min: 16_000, max: 768_000 });
+    // Never under three candles, and never past the view.
+    expect(lockedSpans(60_000, 96, 3_600_000).min).toBe(180_000);
+    expect(lockedSpans(60_000, 768, 15 * M)).toEqual({ min: 15 * M, max: 15 * M });
+  });
+
+  it("keeps Auto's width while its candles stay readable, and picks afresh past that", () => {
+    const fresh = autoTimeframe(null, 1_000, 10 * M, 800, 8);
+    expect(fresh).toBe(10_000);
+    // Zoomed in to 4 minutes: 10s candles are 33px, still kept.
+    expect(autoTimeframe(fresh, 1_000, 4 * M, 800, 8)).toBe(10_000);
+    // Zoomed in to a minute: 133px a candle is too fat, so the finest that fits.
+    expect(autoTimeframe(fresh, 1_000, M, 800, 8)).toBe(1_000);
+    // Zoomed out to an hour: 2px is too thin, so a wider one.
+    expect(autoTimeframe(fresh, 1_000, 60 * M, 800, 8)).toBe(M);
+    // Data coarser than the kept width: never finer than the data.
+    expect(autoTimeframe(fresh, M, 10 * M, 800, 8)).toBe(M);
   });
 });
