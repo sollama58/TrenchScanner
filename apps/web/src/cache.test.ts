@@ -13,7 +13,7 @@ vi.mock("./api", () => ({
 // The module touches window and localStorage at load; neither exists under node, and the cache is
 // written to work without storage anyway.
 (globalThis as { window?: unknown }).window = globalThis;
-const { cachedGet, invalidate, peek, cacheSize, MAX_ENTRIES } = await import("./cache");
+const { cachedGet, invalidate, peek, cacheSize, MAX_ENTRIES, firstScreenLoaded } = await import("./cache");
 
 describe("cachedGet: sharing a request in flight", () => {
   beforeEach(() => {
@@ -128,5 +128,64 @@ describe("cachedGet: a long-open tab's cache stays bounded", () => {
     const sent = requests.length;
     expect(cachedGet("/tokens/slow/chart", 0)).toBe(pending);
     expect(requests).toHaveLength(sent);
+  });
+});
+
+describe("boot requests (window.__boot)", () => {
+  const w = globalThis as { __boot?: Record<string, Promise<Response> | undefined> };
+  beforeEach(() => {
+    requests.length = 0;
+    invalidate();
+  });
+  afterEach(() => {
+    delete w.__boot;
+  });
+
+  it("keeps the sign-in page's public reads when a 401 drops the account's", async () => {
+    // The first visit's session check comes back 401 and drops everything for the old account;
+    // the showcase and feed read the same for anyone, and asking again cost a second download.
+    w.__boot = {
+      "/auth/me": Promise.resolve(new Response("{}", { status: 401 })),
+      "/settings": Promise.resolve(new Response("{}")),
+      "/guest/best": Promise.resolve(new Response(JSON.stringify({ match: null }))),
+      "/config/free-access": Promise.resolve(new Response("{}")),
+      "/auth/privy/config": Promise.resolve(new Response("{}")),
+    };
+    invalidate();
+    expect(Object.keys(w.__boot).sort()).toEqual([
+      "/auth/privy/config",
+      "/config/free-access",
+      "/guest/best",
+    ]);
+    expect(await cachedGet("/guest/best")).toEqual({ match: null });
+    expect(requests).toHaveLength(0);
+  });
+
+  it("still drops a public read when its own prefix is invalidated", () => {
+    w.__boot = { "/guest/feed?page=1": Promise.resolve(new Response("{}")) };
+    invalidate("/guest/");
+    expect(w.__boot).toEqual({});
+  });
+
+  it("settles once every boot body is in, leaving the bodies for the app to read", async () => {
+    let finish!: (res: Response) => void;
+    w.__boot = { "/guest/feed?page=1": new Promise<Response>((r) => (finish = r)) };
+    let settled = false;
+    const done = firstScreenLoaded().then(() => (settled = true));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish(new Response(JSON.stringify({ matches: [1] })));
+    await done;
+    expect(await cachedGet("/guest/feed?page=1")).toEqual({ matches: [1] });
+  });
+
+  it("does not wait forever on a request that hangs", async () => {
+    vi.useFakeTimers();
+    w.__boot = { "/health/worker": new Promise<Response>(() => undefined) };
+    let settled = false;
+    void firstScreenLoaded().then(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(settled).toBe(true);
+    vi.useRealTimers();
   });
 });
