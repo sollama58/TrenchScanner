@@ -2189,6 +2189,11 @@ model ProHolder {
   /// the cut-off plus 10 (capped at 250), cleared by the first scan that finds it lower or out.
   /// A failed scan writes nothing, so stale scans keep every tier as it was.
   freeTierSince DateTime?
+  /// When its grace period started, set by the first scan that finds it out of the top 250: the
+  /// last scan it was in, or, when the scans had stopped before that one (PRO_HOLDER_STALE_MS),
+  /// that first fresh scan, so an outage doesn't use up the grace. Null while it is in the top 250
+  /// (and on rows from before this was kept: their grace runs from lastInTopAt).
+  graceFrom     DateTime?
 
   @@index([lastInTopAt])
 }
