@@ -5,6 +5,7 @@ import {
   buildManualTrade,
   estimateManualFees,
   estimateSwapCosts,
+  estimateSaleProceeds,
   type SwapCosts,
   decodeMessage,
   isSenderTipAccount,
@@ -117,6 +118,12 @@ const costsSchema = z.object({
     .string()
     .regex(/^\d{1,12}$/)
     .optional(),
+});
+
+const saleQuoteSchema = z.object({
+  mint: z.string().refine(looksLikeSolanaAddress, "not a token address"),
+  /** The coins the sale would sell, raw units (the amount the panel's sell is set to). */
+  units: z.string().regex(/^[1-9]\d{0,19}$/, "not an amount"),
 });
 
 const sendSchema = z.object({
@@ -240,6 +247,17 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     if (swapCosts.size >= MAX_CACHED_SWAP_COSTS) swapCosts.delete(swapCosts.keys().next().value!);
     swapCosts.set(key, { at: Date.now(), costs });
     return costs;
+  };
+  const saleQuotes = new Map<string, { at: number; lamports: bigint | null }>();
+  /** The SOL a sale of `units` of `mint` would get, cached like the swap costs; null without a route. */
+  const saleQuoteFor = async (mint: string, units: bigint): Promise<bigint | null> => {
+    const key = `${mint}:${units}`;
+    const hit = saleQuotes.get(key);
+    if (hit && Date.now() - hit.at < SWAP_COSTS_TTL_MS) return hit.lamports;
+    const lamports = await estimateSaleProceeds({ jupiter }, { mint, units }).catch(() => null);
+    if (saleQuotes.size >= MAX_CACHED_SWAP_COSTS) saleQuotes.delete(saleQuotes.keys().next().value!);
+    saleQuotes.set(key, { at: Date.now(), lamports });
+    return lamports;
   };
   const inFlight = new Map<string, InFlight>();
   // Trades the resend loop has stopped resending, kept a while so their status can still say
@@ -570,6 +588,18 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       platformFeeBps: charged(sacrifice) ? 20 : 0,
       sacrifice: sacrificeView(sacrifice),
     };
+  });
+
+  // What a sale would get, SOL by the route's quote: the Sell side's preview (user ask 2026-10-19).
+  app.get("/trade/sale-quote", { config: { rateLimit: READ_RATE_LIMIT } }, async (request, reply) => {
+    const who = await proWallet(request, reply, { access: accessMint(request.query) });
+    if (!who) return;
+    const parsed = saleQuoteSchema.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
+    const units = BigInt(parsed.data.units);
+    const lamports = await saleQuoteFor(parsed.data.mint, units);
+    if (lamports === null) return reply.code(503).send({ error: "Couldn't quote the sale just now." });
+    return { units: units.toString(), outLamports: lamports.toString() };
   });
 
   app.post("/trade/send", { config: { rateLimit: SEND_RATE_LIMIT } }, async (request, reply) => {
