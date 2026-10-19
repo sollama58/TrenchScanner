@@ -36,7 +36,16 @@ export const launchQuerySchema = z.object({
    * "All screened graduated" column (user ask 2026-10-18).
    */
   graduated: z.enum(["0", "1"]).optional(),
+  /**
+   * "1": the Stream's tokens still on their curve at LAUNCH_SOON_MCAP_USD or more now, biggest
+   * first - Scope's "About to graduate" column (bug report 2026-10-19: the newest Stream pages
+   * alone rarely held one).
+   */
+  soon: z.enum(["0", "1"]).optional(),
 });
+
+/** About to graduate from this market cap now (apps/web scope.ts SOON_MCAP_USD). */
+export const LAUNCH_SOON_MCAP_USD = 45_000;
 
 /** `text` as an ILIKE pattern that matches it anywhere, its own % and _ taken literally. */
 const containsPattern = (text: string) => `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
@@ -95,18 +104,24 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
   );
 
   /** Page `page` of the Stream (or, with `mint`, that token's card alone), and whether an older page has any. */
-  const readLaunches = async (page: number, mint: string | undefined, q?: string, graduated = false) => {
+  const readLaunches = async (
+    page: number,
+    mint: string | undefined,
+    q?: string,
+    graduated = false,
+    soon = false,
+  ) => {
     const since = new Date(Date.now() - LAUNCH_STREAM_HORIZON_MS);
     // A page deeper needs that many more passes, so it looks at that many more band entries. Fewer
     // entries graduate, and later than they enter the band, so graduated pages look further back.
-    const candidates = mint ? 1 : LAUNCH_STREAM_CANDIDATES * page * (graduated ? 3 : 1);
+    const candidates = mint ? 1 : LAUNCH_STREAM_CANDIDATES * page * (graduated || soon ? 3 : 1);
     const offset = mint ? 0 : (page - 1) * LAUNCH_STREAM_SIZE;
     // The newest band entries by Token(firstInBandAt), then each one's first passing in-band scan
     // snapshot down its own (tokenId, takenAt) index. One past the page says whether there is another.
     const entries = await prisma.$queryRaw<{ tokenId: string; snapshotId: string }[]>(Prisma.sql`
       SELECT t.id AS "tokenId", s.id AS "snapshotId"
       FROM (
-        SELECT id FROM "Token"
+        SELECT id, "liveMarketCapUsd", "liveDataAt" FROM "Token"
         WHERE "firstInBandAt" > ${since}
           ${mint ? Prisma.sql`AND "mintAddress" = ${mint}` : Prisma.empty}
           ${
@@ -129,7 +144,29 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
               ORDER BY "takenAt" DESC
               LIMIT 1
             ) g ON g."graduated"`
-          : Prisma.empty
+          : soon
+            ? // About to graduate: not graduated by its newest reading, and at the mark now - its
+              // live market cap, or its newest scan's when that is newer (currentMarketCap).
+              Prisma.sql`LEFT JOIN LATERAL (
+                SELECT "graduated" FROM "TokenSnapshot"
+                WHERE "tokenId" = t.id AND "graduated" IS NOT NULL
+                ORDER BY "takenAt" DESC
+                LIMIT 1
+              ) g ON true
+              JOIN LATERAL (
+                SELECT "marketCapUsd", "takenAt" FROM "TokenSnapshot"
+                WHERE "tokenId" = t.id
+                ORDER BY "takenAt" DESC
+                LIMIT 1
+              ) l ON true
+              CROSS JOIN LATERAL (
+                SELECT CASE
+                  WHEN t."liveMarketCapUsd" IS NOT NULL AND t."liveDataAt" >= l."takenAt"
+                    THEN t."liveMarketCapUsd"
+                  ELSE l."marketCapUsd"
+                END AS mcap
+              ) n`
+            : Prisma.empty
       }
       CROSS JOIN LATERAL (
         SELECT id, "takenAt" FROM "TokenSnapshot"
@@ -141,7 +178,8 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
         ORDER BY "takenAt" ASC
         LIMIT 1
       ) s
-      ORDER BY s."takenAt" DESC
+      ${soon ? Prisma.sql`WHERE g."graduated" IS NOT TRUE AND n.mcap >= ${LAUNCH_SOON_MCAP_USD}` : Prisma.empty}
+      ORDER BY ${soon ? Prisma.sql`n.mcap DESC` : Prisma.sql`s."takenAt" DESC`}
       OFFSET ${offset}
       LIMIT ${LAUNCH_STREAM_SIZE + 1}
     `);
@@ -202,15 +240,16 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
     }
     const { mint, q } = parsed.data;
     const graduated = parsed.data.graduated === "1";
+    const soon = !graduated && parsed.data.soon === "1";
     const page = mint ? 1 : parsed.data.page;
-    const g = graduated ? "grad:" : "";
+    const g = graduated ? "grad:" : soon ? "soon:" : "";
     // A typed search isn't cached: a run of keystrokes would push the Stream's own pages out.
     const answer =
       q && !mint
-        ? await readLaunches(page, undefined, q, graduated)
+        ? await readLaunches(page, undefined, q, graduated, soon)
         : await (graduated ? gradCache : cache)
             .for(`${g}${mint ? `mint:${mint}` : `page:${page}`}`)
-            .get(() => readLaunches(page, mint, undefined, graduated));
+            .get(() => readLaunches(page, mint, undefined, graduated, soon));
     return { ...answer, page };
   });
 }

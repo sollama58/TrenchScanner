@@ -1,5 +1,9 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { z } from "zod";
 import { allowLookupRead } from "../lookupGate.js";
+import { searchTrackedTokens, type TokenSearchAnswer } from "../tokenSearch.js";
+import { allowTextSearch, tokenSearchParam } from "./matches.js";
+import { tokenView } from "./utilities.js";
 import { keepFilterMoment, readBubbleMoments, type BubbleMomentView } from "../bubbleMoments.js";
 import { readKolRows } from "../kolRoster.js";
 import { loadPossibleSides } from "../possibleSides.js";
@@ -46,6 +50,11 @@ import {
 } from "../tokenSageView.js";
 
 const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+const searchQuerySchema = z.object({
+  mint: z.string().regex(MINT_RE, "mint must be a Solana address").optional(),
+  q: tokenSearchParam,
+});
 
 /** Market cap points drawn in the TokenSage view's chart (the newest scans). */
 const SAGE_CHART_POINTS = 120;
@@ -492,6 +501,31 @@ export async function registerTokenRoutes(
 ) {
   // Token detail is reached from the paid feed. Behind the paywall - see authenticateSubscriber in server.ts.
   app.addHook("preHandler", app.authenticateSubscriber);
+
+  /** The Live feed's search window: tracked tokens by ticker, name or address (tokenSearch.ts). */
+  app.get("/search", async (request, reply): Promise<TokenSearchAnswer | undefined> => {
+    const parsed = searchQuerySchema.safeParse(request.query);
+    if (!parsed.success)
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "bad search" });
+    const { mint, q } = parsed.data;
+    if (mint) return searchTrackedTokens(request.user!.userId, { mint });
+    if (!q) return reply.code(400).send({ error: "search by q or mint" });
+    // Shares the feed search's budget: the same uncached %text% read, from the same box.
+    if (!allowTextSearch(request.user!.userId)) {
+      return reply.code(429).send({ error: "Too many searches; wait a few seconds and try again." });
+    }
+    return searchTrackedTokens(request.user!.userId, { text: q });
+  });
+
+  /** A tracked token as a feed card (kind "stream"), for opening the token modal from a search result. */
+  app.get("/:mintAddress/card", async (request, reply) => {
+    const { mintAddress } = request.params as { mintAddress: string };
+    if (!MINT_RE.test(mintAddress)) return reply.code(400).send({ error: "not a valid mint" });
+    if (!(await allowLookupRead(request, reply, "token", mintAddress))) return reply;
+    const view = await tokenView(mintAddress, new Date());
+    if (!view) return reply.code(404).send({ error: "token not found" });
+    return { ...view.card, id: `search-${view.card.tokenId}` };
+  });
 
   app.get("/:mintAddress", async (request, reply) => {
     const { mintAddress } = request.params as { mintAddress: string };
