@@ -5,6 +5,7 @@ import { adminWalletSet, isPushEndpoint, prisma, resolveAccess, type Env } from 
 import { alertPrefsPatchSchema, applyAlertPrefsPatch, parseAlertPrefs } from "../alertPrefs.js";
 import { feedAppearanceSchema, parseFeedAppearance } from "../feedAppearance.js";
 import { hiddenTokensSchema, parseHiddenTokens } from "../hiddenTokens.js";
+import { parseScopeSettings, scopeSettingsSchema } from "../scopeSettings.js";
 
 /**
  * The Settings tab: how alerts reach this user, how their feed looks, and their account and access. Needs a session but
@@ -25,6 +26,7 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
           alertPrefs: true,
           feedAppearance: true,
           hiddenTokens: true,
+          scopeSettings: true,
           subscription: { select: { createdAt: true, expiresAt: true, source: true } },
           _count: { select: { burns: true } },
         },
@@ -47,6 +49,8 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
       // Predictive price pathing is admins-only (#721): never on for anyone else.
       appearance: withAdminOnly(parseFeedAppearance(user.feedAppearance), access.reason === "admin"),
       hiddenTokens: parseHiddenTokens(user.hiddenTokens),
+      // Null until Scope is first customized: the dashboard then uses its defaults.
+      scopeSettings: parseScopeSettings(user.scopeSettings),
       account: {
         walletAddress,
         memberSince: user.createdAt,
@@ -190,6 +194,23 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
     });
     if (count === 0) return reply.code(401).send({ error: "unauthenticated" });
     return { hiddenTokens: hidden };
+  });
+
+  /**
+   * Replaces the Scope view's settings. The dashboard sends them whole each time, as it does the
+   * appearance, so the last save wins.
+   */
+  app.put("/scope", async (request, reply) => {
+    const parsed = scopeSettingsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const { count } = await prisma.user.updateMany({
+      where: { id: request.user!.userId },
+      data: { scopeSettings: parsed.data as unknown as Prisma.InputJsonValue },
+    });
+    if (count === 0) return reply.code(401).send({ error: "unauthenticated" });
+    return { scopeSettings: parsed.data };
   });
 }
 

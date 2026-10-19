@@ -1805,6 +1805,8 @@ export interface Settings {
   appearance?: FeedAppearance;
   /** Tokens hidden from the Live feed (hiddenTokens.ts reads it); absent from API builds before it. */
   hiddenTokens?: unknown;
+  /** The Scope view's settings (scopeSettings.ts reads them), null before any; absent from older API builds. */
+  scopeSettings?: unknown;
   account: {
     walletAddress: string;
     memberSince: string;
