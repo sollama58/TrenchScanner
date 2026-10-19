@@ -224,12 +224,17 @@ export function buildV0Transaction(
     }
   }
   seen.delete(payer);
-  // Each key from the first table that has it, unless it must stay static.
+  // Each key from the first table that has it, unless it must stay static. A table costs its own
+  // 32-byte address and two counts, so one that would load a single key is left out (saving 32
+  // bytes for 35 is a loss) and its key is left for a later table or the static keys.
   const loaded = new Map<string, { table: string; index: number }>();
   for (const [table, entries] of tables) {
+    const mine = new Map<string, number>();
     entries.forEach((k, index) => {
-      if (seen.has(k) && !mustStatic.has(k) && !loaded.has(k)) loaded.set(k, { table, index });
+      if (seen.has(k) && !mustStatic.has(k) && !loaded.has(k) && !mine.has(k)) mine.set(k, index);
     });
+    if (mine.size < 2) continue;
+    for (const [k, index] of mine) loaded.set(k, { table, index });
   }
   const staticRest = [...seen].filter((k) => !loaded.has(k));
   const staticWritable = staticRest.filter((k) => writable.has(k));
