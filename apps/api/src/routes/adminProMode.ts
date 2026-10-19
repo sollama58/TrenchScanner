@@ -13,6 +13,7 @@ import {
   type Env,
   walletTag,
 } from "@trenchscanner/core";
+import { forgetProStatus } from "../proMode.js";
 
 /**
  * Admin > Access > Pro Mode: which wallets see the token modal's Trade panel (proMode.ts). The
@@ -101,6 +102,7 @@ export async function registerAdminProModeRoutes(app: FastifyInstance, opts: { e
       update: { ...fields, createdAt: new Date() },
       create: { walletAddress, ...fields },
     });
+    forgetProStatus(walletAddress);
     request.log.info(
       { wallet: walletTag(walletAddress), by: walletTag(request.user!.walletAddress), days: days ?? null },
       "granted Pro Mode",
@@ -111,6 +113,7 @@ export async function registerAdminProModeRoutes(app: FastifyInstance, opts: { e
   app.delete<{ Params: { walletAddress: string } }>("/pro-mode/:walletAddress", async (request) => {
     const { walletAddress } = request.params;
     const result = await prisma.proModeGrant.deleteMany({ where: { walletAddress } });
+    forgetProStatus(walletAddress);
     request.log.info(
       { wallet: walletTag(walletAddress), by: walletTag(request.user!.walletAddress) },
       "removed Pro Mode",

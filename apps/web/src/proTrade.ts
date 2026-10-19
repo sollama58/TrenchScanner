@@ -5,7 +5,7 @@ import type { WalletAccount } from "@wallet-standard/base";
 import bs58 from "bs58";
 import { ApiError, api, post } from "./api";
 import { burnWallet, readyBurnWallet } from "./burn";
-import { postWithTwoFactor } from "./twoFactor";
+import { withTwoFactor } from "./twoFactor";
 import { toBase64 } from "./burnTx";
 import { shortAddress } from "./format";
 import { onWalletsChanged, withTimeout } from "./wallet";
@@ -1227,6 +1227,83 @@ export function tradeCooldownLeft(owner: string, now = Date.now()): number {
 
 const STATUS_POLL_MS = 1_200;
 const CONFIRM_GIVE_UP_MS = 90_000;
+/**
+ * The longest the panel waits on a build (the API retries a busy chain or Jupiter itself) and on
+ * one status poll. Never on the send: a send that times out may still have gone out.
+ */
+export const BUILD_TIMEOUT_MS = 45_000;
+export const STATUS_TIMEOUT_MS = 8_000;
+/**
+ * A blockhash lives about 60-80 seconds from the build: a signature that took longer than this is
+ * built and signed afresh rather than sent to expire.
+ */
+export const SIGN_FRESH_MS = 40_000;
+
+/** The browser gave up waiting on the API (AbortSignal.timeout). */
+function timedOut(e: unknown): boolean {
+  return e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError");
+}
+
+/**
+ * POST /pro/trade/build, with two-factor when the API asks for it, and never longer than
+ * BUILD_TIMEOUT_MS a request: a build that hangs (an API restart) says so instead of spinning.
+ */
+async function buildTrade(input: {
+  mint: string;
+  side: "buy" | "sell";
+  amount: bigint;
+  all?: boolean;
+  settings: TradeSettings;
+  sacrificeNote?: string | null;
+}): Promise<BuiltTrade> {
+  const body = JSON.stringify({
+    mint: input.mint,
+    side: input.side,
+    amount: input.amount.toString(),
+    slippageBps: Math.round(input.settings.slippagePct * 100),
+    speed: input.settings.speed,
+    ...feeParams(input.settings),
+    ...(input.all ? { all: true } : {}),
+  });
+  try {
+    // Two-factor, when the user chose it for this side (or this size): the API asks, we prompt.
+    return await withTwoFactor(
+      (headers) =>
+        api<BuiltTrade>("/pro/trade/build", {
+          method: "POST",
+          headers,
+          body,
+          signal: AbortSignal.timeout(BUILD_TIMEOUT_MS),
+        }),
+      input.sacrificeNote ?? undefined,
+    );
+  } catch (e) {
+    if (timedOut(e))
+      throw new TradeError("The server took too long to build the trade. Nothing was sent; try again.");
+    throw e;
+  }
+}
+
+/**
+ * Whether a Privy signing failure is Privy being unreachable (offline, down, timing out) rather
+ * than a refusal or a cancel: those get their own message, this one says it's Privy's side.
+ */
+export function privyUnreachable(e: unknown): boolean {
+  for (let cause = e, depth = 0; cause && depth < 4; depth++) {
+    if (cause instanceof TypeError && /fetch|network|load failed/i.test(cause.message)) return true;
+    const { message, code, status } = cause as { message?: unknown; code?: unknown; status?: unknown };
+    if (typeof status === "number" && status >= 500) return true;
+    const text = `${typeof code === "string" ? code : ""} ${typeof message === "string" ? message : ""}`;
+    if (
+      /network|failed to fetch|load failed|fetch failed|unreachable|timed? ?out|service unavailable|bad gateway|ECONN|offline|\b50[234]\b/i.test(
+        text,
+      )
+    )
+      return true;
+    cause = (cause as { cause?: unknown }).cause;
+  }
+  return false;
+}
 
 /**
  * One trade, start to finish: build (the API checks it by simulation), sign in the wallet, send
@@ -1248,49 +1325,57 @@ export async function runTrade(
 ): Promise<string> {
   // The wallet first: if it isn't here there's no point building anything.
   const { account, sign, name } = await accountFor(input.owner);
-  onStage("building");
-  // Two-factor, when the user chose it for this side (or this size): the API asks, we prompt.
-  const built = await postWithTwoFactor<BuiltTrade>(
-    "/pro/trade/build",
-    {
-      mint: input.mint,
-      side: input.side,
-      amount: input.amount.toString(),
-      slippageBps: Math.round(input.settings.slippagePct * 100),
-      speed: input.settings.speed,
-      ...feeParams(input.settings),
-      ...(input.all ? { all: true } : {}),
-    },
-    input.sacrificeNote ?? undefined,
-  );
-  const unsigned = fromBase64(built.transaction);
   const { ownTokenAccounts, ownWrappedSolAccounts } = await import("./solanaPda");
-  const problem = tradeProblem(unsigned, input.owner, {
-    side: input.side,
-    amount: input.amount,
-    all: input.all,
-    slippageBps: Math.round(input.settings.slippagePct * 100),
-    ownWrappedSol: ownWrappedSolAccounts(input.owner),
-    ownCoinAccounts: ownTokenAccounts(input.owner, input.mint),
-    ...(built.via ? { ownViaAccounts: ownTokenAccounts(input.owner, built.via) } : {}),
-  });
-  if (problem) throw new TradeError(`The trade built for you looks wrong (${problem}), so it wasn't signed.`);
-  onStage("signing", built);
-  // Privy's confirm window shows for every trade but one the API marked quiet, and only after
-  // the check above passed: a coin the wallet holds, that passed the safety screen, or a model called.
-  const quiet = built.quietSign === true && name === PRIVY_WALLET_NAME;
-  const signedBytes = quiet
-    ? await withTimeout(
-        privyControls().then((privy) => privy.signQuietly(input.owner, unsigned)),
-        "sign",
-      )
-    : (
-        await withTimeout(
-          sign.signTransaction({ account, transaction: unsigned, chain: "solana:mainnet" }),
-          "sign",
-        )
-      )[0]?.signedTransaction;
-  if (!signedBytes) throw new TradeError(`${name} returned no signed transaction`);
+  // Built and signed again, once, when the wallet took so long that the blockhash is nearly spent:
+  // sent, it would only expire.
+  let built: BuiltTrade;
+  let signedBytes: Uint8Array | undefined;
+  for (let attempt = 0; ; attempt++) {
+    onStage("building");
+    built = await buildTrade(input);
+    const unsigned = fromBase64(built.transaction);
+    const problem = tradeProblem(unsigned, input.owner, {
+      side: input.side,
+      amount: input.amount,
+      all: input.all,
+      slippageBps: Math.round(input.settings.slippagePct * 100),
+      ownWrappedSol: ownWrappedSolAccounts(input.owner),
+      ownCoinAccounts: ownTokenAccounts(input.owner, input.mint),
+      ...(built.via ? { ownViaAccounts: ownTokenAccounts(input.owner, built.via) } : {}),
+    });
+    if (problem)
+      throw new TradeError(`The trade built for you looks wrong (${problem}), so it wasn't signed.`);
+    onStage("signing", built);
+    // Privy's confirm window shows for every trade but one the API marked quiet, and only after
+    // the check above passed: a coin the wallet holds, that passed the safety screen, or a model called.
+    const quiet = built.quietSign === true && name === PRIVY_WALLET_NAME;
+    const signingStarted = Date.now();
+    try {
+      signedBytes = quiet
+        ? await withTimeout(
+            privyControls().then((privy) => privy.signQuietly(input.owner, unsigned)),
+            "sign",
+          )
+        : (
+            await withTimeout(
+              sign.signTransaction({ account, transaction: unsigned, chain: "solana:mainnet" }),
+              "sign",
+            )
+          )[0]?.signedTransaction;
+    } catch (e) {
+      if (name === PRIVY_WALLET_NAME && privyUnreachable(e))
+        throw new TradeError(
+          "Privy is unreachable right now, so the trade couldn't be signed. Nothing was sent.",
+        );
+      throw e;
+    }
+    if (!signedBytes) throw new TradeError(`${name} returned no signed transaction`);
+    if (Date.now() - signingStarted <= SIGN_FRESH_MS) break;
+    if (attempt > 0)
+      throw new TradeError(
+        "That took too long to sign, so it would have expired. Nothing was sent; try again.",
+      );
+  }
   const bytes = Uint8Array.from(signedBytes);
   // Its signature, known from here on (one signer: the 64 bytes after the count), so anything
   // that goes wrong past this point can say which transaction to check before trading again.
@@ -1323,8 +1408,11 @@ export async function runTrade(
   const started = Date.now();
   for (;;) {
     await new Promise((r) => setTimeout(r, STATUS_POLL_MS));
+    // A poll that hangs (an API restart) is given up on and asked again, so the give-up below
+    // still comes on time.
     const s = await api<{ state: string; error?: string }>(
       `/pro/trade/status/${encodeURIComponent(sent.signature)}`,
+      { signal: AbortSignal.timeout(STATUS_TIMEOUT_MS) },
     ).catch(() => ({ state: "unknown" }) as { state: string; error?: string });
     if (s.state === "confirmed") return sent.signature;
     if (s.state === "failed")
