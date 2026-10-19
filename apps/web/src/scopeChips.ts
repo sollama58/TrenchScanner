@@ -12,6 +12,8 @@ import {
   SAFETY_REJECT_LINKED_COUNT,
   SAFETY_REJECT_SNIPER_WALLET_PCT,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
+  SAFETY_REJECT_CEX_FUNDED_COUNT,
+  cexCountText,
 } from "./components/AlertCard";
 import { change, minutes, pct, usd } from "./format";
 import { cardOutcome, outcomeBadge } from "./outcome";
@@ -54,7 +56,13 @@ export type ScopeChip =
   | "alertMcap"
   | "peak"
   | "ath"
-  | "result";
+  | "result"
+  | "move"
+  | "drawdown"
+  | "gradeLeft"
+  | "flagged"
+  | "buySell"
+  | "contract";
 
 export interface ChipReading {
   value: string;
@@ -216,15 +224,17 @@ export const SCOPE_CHIP_DEFS: {
     label: "Exchange-funded %",
     short: "CEX",
     group: "Wallets",
-    read: (_c, r) =>
-      r.cexPct == null
-        ? null
-        : {
-            value: pct(r.cexPct),
-            title: "Supply held by exchange-funded top holders",
-            tone: null,
-            risky: false,
-          },
+    read: (_c, r) => {
+      if (r.cexPct == null) return null;
+      // As the card's tile: the count of exchange-funded top holders, red at the screen's cut.
+      const cut = countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, r.cexHolders);
+      return {
+        value: cexCountText(r.cexCount, r.cexHolders) ?? pct(r.cexPct),
+        title: `Top holders opened from an exchange, ${pct(r.cexPct)} of supply. The safety screen rejects ${cut} or more.`,
+        tone: tileTone(r.cexCount, cut),
+        risky: r.cexCount !== null && r.cexCount >= cut,
+      };
+    },
   },
   {
     id: "kol",
@@ -255,6 +265,40 @@ export const SCOPE_CHIP_DEFS: {
             tone: tileTone(r.transferredPct, TILE_RED_TRANSFERRED_PCT),
             risky: false,
           },
+  },
+  {
+    id: "flagged",
+    label: "Flagged traders",
+    short: "Flag",
+    group: "Wallets",
+    read: (c) => {
+      const s = c.snapshot;
+      if (s.flaggedBuyers == null && s.flaggedSellers == null) return null;
+      const buyers = s.flaggedBuyers ?? 0;
+      const sellers = s.flaggedSellers ?? 0;
+      return {
+        value: `${buyers}B ${sellers}S`,
+        title: `Risky wallets and known dumpers in the trades before the call: ${buyers} buying (${(s.flaggedBuySol ?? 0).toFixed(1)} SOL), ${sellers} selling (${(s.flaggedSellSol ?? 0).toFixed(1)} SOL)`,
+        tone: null,
+        risky: buyers + sellers > 0,
+      };
+    },
+  },
+  {
+    id: "buySell",
+    label: "Buys / sells 24h",
+    short: "B/S",
+    group: "Market",
+    read: (c) => {
+      const s = c.latestSnapshot ?? c.snapshot;
+      if (s.buys24h == null || s.sells24h == null) return null;
+      return {
+        value: `${s.buys24h.toLocaleString()}/${s.sells24h.toLocaleString()}`,
+        title: `${s.buys24h.toLocaleString()} buys and ${s.sells24h.toLocaleString()} sells over 24 hours`,
+        tone: null,
+        risky: false,
+      };
+    },
   },
   {
     id: "vol5m",
@@ -329,6 +373,31 @@ export const SCOPE_CHIP_DEFS: {
     },
   },
   {
+    id: "contract",
+    label: "Contract check",
+    short: "Contract",
+    group: "Token",
+    read: (c) => {
+      const s = c.latestSnapshot ?? c.snapshot;
+      const issues = [
+        s.mintAuthorityActive === true && ["Mint", "mint authority still active"],
+        s.freezeAuthorityActive === true && ["Freeze", "freeze authority still active"],
+        s.lpBurned === false && ["LP", "LP not burned"],
+        s.isMayhemMode === true && ["Mayhem", "Mayhem Mode"],
+      ].filter((x): x is string[] => Array.isArray(x));
+      const read = [s.mintAuthorityActive, s.freezeAuthorityActive, s.lpBurned].some((x) => x != null);
+      if (!read && !s.isMayhemMode) return null;
+      return issues.length === 0
+        ? { value: "OK", title: "Mint and freeze authority renounced, LP burned", tone: null, risky: false }
+        : {
+            value: issues.map((i) => i[0]).join(" "),
+            title: `Contract: ${issues.map((i) => i[1]).join(", ")}`,
+            tone: null,
+            risky: true,
+          };
+    },
+  },
+  {
     id: "alertMcap",
     label: "Market cap at alert",
     short: "At",
@@ -378,6 +447,57 @@ export const SCOPE_CHIP_DEFS: {
       if (!outcome) return null;
       const badge = outcomeBadge(outcome);
       return { value: badge.text, title: badge.text, tone: null, risky: false };
+    },
+  },
+  {
+    id: "move",
+    label: "Move since alert",
+    short: "Move",
+    group: "Alert",
+    read: (c) => {
+      const move = change(c.snapshot.marketCapUsd, nowReading(c));
+      return move == null
+        ? null
+        : {
+            value: `${move >= 0 ? "▲" : "▼"}${pct(Math.abs(move))}`,
+            title: "Market cap now against the alert's",
+            tone: null,
+            risky: false,
+          };
+    },
+  },
+  {
+    id: "drawdown",
+    label: "Worst drop, first hour",
+    short: "DD",
+    group: "Alert",
+    read: (c) => {
+      const dd = c.outcome?.maxDrawdown1hPct;
+      return dd == null
+        ? null
+        : {
+            value: `-${pct(Math.abs(dd))}`,
+            title: "The deepest fall below the alert's market cap in its first hour",
+            tone: null,
+            risky: false,
+          };
+    },
+  },
+  {
+    id: "gradeLeft",
+    label: "Time left to grade",
+    short: "Left",
+    group: "Alert",
+    read: (c) => {
+      const left = c.outcome && !c.outcome.finalized ? c.outcome.minutesLeft : null;
+      return left == null || left <= 0
+        ? null
+        : {
+            value: `${Math.ceil(left)}m`,
+            title: "Minutes until the alert is graded",
+            tone: null,
+            risky: false,
+          };
     },
   },
   {

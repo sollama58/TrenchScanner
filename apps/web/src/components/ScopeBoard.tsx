@@ -15,7 +15,7 @@ import { usePolling, usePollingAll, useLiveMarketCaps, useNow, useNudgeStream } 
 import { joinPages } from "../feedFill";
 import { change, pct, tokenLabel, usd } from "../format";
 import { cardOutcome, outcomeBadge } from "../outcome";
-import { useAppearance } from "../appearance";
+import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { tileLook, tileMode, type TileMode } from "../tileTone";
 import { openTokenModal } from "../tokenModal";
 import {
@@ -33,7 +33,15 @@ import {
   type ScopeColumns,
   type ScopeFrame,
 } from "../scope";
-import { feeBadge, nowReading, nowReadingAge, QuotePill, recordedPeakOf, socialLinks } from "./AlertCard";
+import {
+  feeBadge,
+  LINKS,
+  nowReading,
+  nowReadingAge,
+  QuotePill,
+  recordedPeakOf,
+  socialLinks,
+} from "./AlertCard";
 import { QuickBuyPill } from "./QuickBuyPill";
 import { TokenImage } from "./TokenImage";
 import { FilterGlyph } from "./FilterBadge";
@@ -525,6 +533,10 @@ export function ScopeRow({
   const ageMs = now - Date.parse(card.kind === "match" ? card.matchedAt : alertedAt);
   const socials = d.showSocials ? socialLinks(card.token) : [];
   const fees = d.showFees ? feeBadge(card.token.creatorFee) : null;
+  const { quickLinks } = useAppearance();
+  const tradeLinks = d.showTradeLinks
+    ? [...QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id)), ...LINKS]
+    : [];
   const label = tokenLabel(card.token);
   const high = calls.some((c) => c.tier === "high") || curated?.tier === "high";
   const models =
@@ -653,6 +665,18 @@ export function ScopeRow({
             >
               <l.Icon size={11} />
             </XLinkPreview>
+          ))}
+          {tradeLinks.map((l) => (
+            <a
+              key={l.label}
+              className="scope-trade-link"
+              href={l.href(card.token.mintAddress)}
+              target="_blank"
+              rel="noreferrer noopener"
+              title={`Open ${label} on ${l.label}`}
+            >
+              {l.label}
+            </a>
           ))}
         </div>
       </div>

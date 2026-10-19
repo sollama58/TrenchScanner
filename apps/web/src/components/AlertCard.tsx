@@ -54,7 +54,8 @@ import { openTokenModal, refreshTokenModal } from "../tokenModal";
 /** Clicks on these inside a card do their own thing rather than open the token modal. */
 const OWN_CLICK = "a, button, input, select, textarea, label, summary, [role='button']";
 
-const LINKS = [
+/** The coin's Dex and Pump pages (the card footer's links; Scope's trade links too). */
+export const LINKS = [
   { label: "Dex", href: (m: string) => `https://dexscreener.com/solana/${m}` },
   { label: "Pump", href: pumpFunHref },
 ];
