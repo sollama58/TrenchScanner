@@ -367,6 +367,10 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
    */
   app.post("/leaderboard/:id/copy", async (request, reply) => {
     const { filterId: id, version } = parseEntryId((request.params as { id: string }).id);
+    // FilterVersion.version is an Int: a bigger one in the URL is no version at all, not a 500.
+    if (version !== null && version > MAX_INT32) {
+      return reply.code(404).send({ error: "That filter is no longer shared." });
+    }
     const userId = request.user!.userId;
     const result = await prisma.$transaction(async (tx) => {
       const source = await tx.userFilter.findUnique({ where: { id } });
@@ -423,6 +427,9 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       .send({ error: `You can save up to ${MAX_FILTERS_PER_USER} filters. Delete one to copy another.` });
   });
 }
+
+/** The largest value a Postgres integer column holds. */
+const MAX_INT32 = 2_147_483_647;
 
 /** "Copy of <name>", kept inside the 60-character name limit. */
 function copyName(name: string): string {

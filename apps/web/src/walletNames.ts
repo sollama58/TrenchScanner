@@ -53,7 +53,14 @@ const asking = new Set<string>();
  */
 export const UNREAD_RETRY_MS = 65_000;
 const UNREAD_RETRIES = 3;
+/**
+ * Past UNREAD_RETRIES, a wallet rests this long, then its count starts over and it is asked again:
+ * stopping for good left a list open for an hour without the names a busy minute had queued.
+ */
+export const UNREAD_COOLDOWN_MS = 5 * 60_000;
 const retries = new Map<string, number>();
+/** Wallets resting out UNREAD_COOLDOWN_MS, so a list asking meanwhile doesn't start a second wait. */
+const cooling = new Set<string>();
 const listeners = new Set<() => void>();
 let version = 0;
 /** Set once the API says this visitor can't read names (a guest), so lists stop asking. */
@@ -88,6 +95,18 @@ export async function loadWalletNames(wallets: readonly string[]): Promise<void>
     const again = [...unread].filter((w) => (retries.get(w) ?? 0) < UNREAD_RETRIES);
     for (const w of again) retries.set(w, (retries.get(w) ?? 0) + 1);
     if (again.length > 0) setTimeout(() => void loadWalletNames(again), UNREAD_RETRY_MS);
+    const rest = [...unread].filter((w) => (retries.get(w) ?? 0) >= UNREAD_RETRIES && !again.includes(w));
+    const resting = rest.filter((w) => !cooling.has(w));
+    for (const w of resting) cooling.add(w);
+    if (resting.length > 0) {
+      setTimeout(() => {
+        for (const w of resting) {
+          cooling.delete(w);
+          retries.delete(w);
+        }
+        void loadWalletNames(resting);
+      }, UNREAD_COOLDOWN_MS);
+    }
   } catch (err) {
     // A failed read is asked again next time the list opens; no access means never.
     if (err instanceof ApiError && (err.status === 401 || err.status === 402 || err.status === 403))
@@ -219,6 +238,7 @@ export function resetWalletNames() {
   known.clear();
   asking.clear();
   retries.clear();
+  cooling.clear();
   closed = false;
   notify();
 }

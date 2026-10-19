@@ -414,6 +414,46 @@ describe("tradeOf rent and wrapped SOL", () => {
       tokens: -500n,
     });
   });
+  it("doesn't count tokens sent away and their account closed as a sale", () => {
+    // The coin's account (index 1) sends everything to another wallet's account (index 2) and is
+    // closed: the wallet's SOL goes up by the rent back, less the fee, and no swap paid it.
+    const transferAndClose = {
+      blockTime: 1_700_000_000,
+      transaction: { message: { accountKeys: [WALLET, MINT_KEY, key(83)] } },
+      meta: {
+        err: null,
+        preBalances: [1e9, RENT, RENT],
+        postBalances: [1e9 + RENT - 5_000, 0, RENT],
+        preTokenBalances: [
+          { accountIndex: 1, owner: WALLET, mint: MINT, uiTokenAmount: { amount: "500" } },
+          { accountIndex: 2, owner: key(84), mint: MINT, uiTokenAmount: { amount: "0" } },
+        ],
+        postTokenBalances: [
+          { accountIndex: 2, owner: key(84), mint: MINT, uiTokenAmount: { amount: "500" } },
+        ],
+      },
+    } as unknown as RawTransaction;
+    expect(tradeOf("t", transferAndClose, WALLET, MINT)).toMatchObject({ side: "out", tokens: -500n });
+    // A dust sale that closes the account: the pool (index 3) paid out less than the fee, and that
+    // is what makes it a sale.
+    const dustSale = {
+      blockTime: 1_700_000_000,
+      transaction: { message: { accountKeys: [WALLET, MINT_KEY, key(83), key(85)] } },
+      meta: {
+        err: null,
+        preBalances: [1e9, RENT, RENT, 5e9],
+        postBalances: [1e9 + RENT - 5_000 + 1_000, 0, RENT, 5e9 - 1_000],
+        preTokenBalances: [
+          { accountIndex: 1, owner: WALLET, mint: MINT, uiTokenAmount: { amount: "500" } },
+          { accountIndex: 2, owner: key(85), mint: MINT, uiTokenAmount: { amount: "0" } },
+        ],
+        postTokenBalances: [
+          { accountIndex: 2, owner: key(85), mint: MINT, uiTokenAmount: { amount: "500" } },
+        ],
+      },
+    } as unknown as RawTransaction;
+    expect(tradeOf("u", dustSale, WALLET, MINT)?.side).toBe("sell");
+  });
 });
 
 describe("checkJupiterFloor", () => {

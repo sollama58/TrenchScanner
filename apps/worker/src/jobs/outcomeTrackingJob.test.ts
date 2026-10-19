@@ -3,6 +3,7 @@ import {
   readOutcomeCheckpoint,
   readRetryTokens,
   reconcileMatchOutcome,
+  retryState,
   type MatchOutcomeState,
 } from "./outcomeTrackingJob.js";
 
@@ -197,5 +198,36 @@ describe("readRetryTokens", () => {
     expect(readRetryTokens(null)).toBeNull();
     expect(readRetryTokens({ matchesChecked: 4 })).toBeNull();
     expect(readRetryTokens({ retryTokens: "" })).toBeNull();
+  });
+});
+
+describe("retryState", () => {
+  const retry = { ids: ["a", "b"], since: new Date("2026-10-17T04:00:00.000Z"), nights: 2 };
+
+  it("reads the earlier nights' list again in a run that hasn't yet", () => {
+    expect(retryState(retry, {})).toEqual({ read: retry, stillFailing: [] });
+    expect(retryState(null, {})).toEqual({ read: null, stillFailing: [] });
+  });
+
+  it("carries what still failed across a restart instead of dropping it", () => {
+    // The run read the list, found "b" still failing, and was cut short by a deploy.
+    expect(retryState(retry, { retryDone: true, retryFailing: "b" })).toEqual({
+      read: null,
+      stillFailing: ["b"],
+    });
+    expect(retryState(retry, { retryDone: true })).toEqual({ read: null, stillFailing: [] });
+  });
+
+  it("is saved and read back with the checkpoint", () => {
+    const saved = {
+      runStartedAt: "2026-10-18T05:36:00.000Z",
+      snapshotsSince: null,
+      stage: "curated-peaks",
+      retryDone: true,
+      retryFailing: "b,c",
+    };
+    const read = readOutcomeCheckpoint({ outcomeResume: saved }, Date.parse("2026-10-18T06:06:00.000Z"));
+    expect(read).toMatchObject({ retryDone: true, retryFailing: "b,c" });
+    expect(retryState(retry, read!).stillFailing).toEqual(["b", "c"]);
   });
 });

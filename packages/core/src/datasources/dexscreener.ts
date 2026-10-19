@@ -979,7 +979,10 @@ export class DexScreenerClient {
     }
   }
 
-  /** Free-text search, mainly useful for manual lookups / debugging rather than the scan loop. */
+  /**
+   * Free-text search (the search window's untracked coins). Throws when DexScreener can't be read:
+   * an empty answer means it lists nothing, which the search window says differently.
+   */
   async search(query: string): Promise<CandidateToken[]> {
     try {
       const data = await fetchJson<{ pairs?: DexScreenerPair[] }>(
@@ -988,7 +991,7 @@ export class DexScreenerClient {
       return this.selectCanonicalPairs((data.pairs ?? []).filter((p) => p.chainId === SOLANA_CHAIN_ID));
     } catch (err) {
       logger.warn("search failed", { query, error: String(err) });
-      return [];
+      throw err;
     }
   }
 

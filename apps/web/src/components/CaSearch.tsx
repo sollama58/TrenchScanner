@@ -197,9 +197,10 @@ function useSearchParam(input: string): string {
   return parseSearch(input).kind === "none" ? "" : searchParam(typed.kind === "mint" ? typed : settled);
 }
 
-/** GET `base`?search, kept up while the next search runs. */
-function useSearch<T>(base: string, search: string): Found<T> {
+/** GET `base`?search, kept up while the next search runs; and asking the same again. */
+function useSearch<T>(base: string, search: string): [Found<T>, () => void] {
   const [found, setFound] = useState<Found<T>>({ state: "idle" });
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!search) {
       setFound({ state: "idle" });
@@ -221,9 +222,9 @@ function useSearch<T>(base: string, search: string): Found<T> {
     return () => {
       live = false;
     };
-  }, [base, search]);
+  }, [base, search, attempt]);
   // Text too short to search answers nothing, whatever the last search found.
-  return search === "" ? { state: "idle" } : found;
+  return [search === "" ? { state: "idle" } : found, () => setAttempt((n) => n + 1)];
 }
 
 const answerOf = <T,>(found: Found<T>): T | null =>
@@ -372,8 +373,8 @@ export function SearchModal({ open, onClose, now }: { open: boolean; onClose: ()
   // Coins looked up from here this visit: they open free again (the lookup's re-open window).
   const [paid, setPaid] = useState<ReadonlySet<string>>(new Set());
   const search = useSearchParam(text);
-  const found = useSearch<TokenSearchAnswer>("/tokens/search", search);
-  const outside = useSearch<ExternalSearchAnswer>("/utilities/search", search);
+  const [found] = useSearch<TokenSearchAnswer>("/tokens/search", search);
+  const [outside, searchOutsideAgain] = useSearch<ExternalSearchAnswer>("/utilities/search", search);
 
   useEffect(() => {
     const dialog = ref.current;
@@ -777,6 +778,8 @@ export function SearchModal({ open, onClose, now }: { open: boolean; onClose: ()
           mint={trading}
           hit={extraHits.find((h) => h.mint === trading) ?? null}
           searching={outside.state === "loading" || (outside.state === "idle" && !!search)}
+          searchError={outside.state === "error" ? outside.message : null}
+          onSearchAgain={searchOutsideAgain}
           scanPrice={priceOf(trading)}
           scanning={opening === trading}
           scanError={scanError}

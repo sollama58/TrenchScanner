@@ -31,7 +31,7 @@ import {
   walletTag,
 } from "@trenchscanner/core";
 import { creatorFeesByMint, TOKEN_CARD_SELECT, withCarriedHolderList } from "../curatedFeed.js";
-import { searchUntrackedTokens, type ExternalSearchHit } from "../tokenSearch.js";
+import { ExternalSearchUnavailable, searchUntrackedTokens, type ExternalSearchHit } from "../tokenSearch.js";
 import { readKolRows } from "../kolRoster.js";
 import { loadKolLabelCounts, loadKolSideLabels, loadLabeledSides } from "../possibleSides.js";
 import {
@@ -343,11 +343,18 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     const [found, prices, balance, daily] = await Promise.all([
       withApiFeature("token-search", () =>
         searchUntrackedTokens((query) => opts.dexScreener.search(query), mint ? { mint } : { text: q! }),
-      ),
+      ).catch((err: unknown) => {
+        if (err instanceof ExternalSearchUnavailable) return null;
+        throw err;
+      }),
       burnCreditPrices(),
       creditBalance(wallet),
       dailyFreeFor(request) ? dailyFreeCredits(wallet) : null,
     ]);
+    // DexScreener didn't answer: say so, so the window offers a retry rather than "no market".
+    if (found === null) {
+      return reply.code(502).send({ error: "DexScreener couldn't be reached. Try again in a moment." });
+    }
     const hits = await Promise.all(
       found.map(async (hit): Promise<ExternalSearchHit & { free: FreeLookupReason | "open" | null }> => {
         const [free, open] = await Promise.all([
