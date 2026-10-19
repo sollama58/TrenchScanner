@@ -1,0 +1,135 @@
+import { useEffect, useState } from "react";
+
+/**
+ * The token chart's backup candles, read in the browser (user asks 2026-10-19: "can we change any
+ * of the calls to be client-side? especially for the chart", "can we have multiple data
+ * sources?"). When the API has no candles for a coin (Pump.fun down, rate limited, or over the
+ * API's call budget) or can't be reached at all, the chart reads GeckoTerminal's minute candles
+ * itself, on the reader's own connection and its own rate limit rather than the API's shared one.
+ * Pump.fun's own candle API refuses other sites' pages (CORS), so it can't be read from here.
+ *
+ * GeckoTerminal prices a pool's token, so the pool and the coin's supply come from DexScreener's
+ * pair (its market cap over its price), which both answer to any page.
+ */
+
+const DEXSCREENER = "https://api.dexscreener.com";
+const GECKOTERMINAL = "https://api.geckoterminal.com/api/v2";
+/** GeckoTerminal's free limit is 30 calls a minute per address: one coin's minute page each minute. */
+export const BACKUP_POLL_MS = 60_000;
+/** A failed round waits longer before the next, up to this. */
+const MAX_BACKOFF_MS = 5 * 60_000;
+const TIMEOUT_MS = 10_000;
+
+/** A minute candle as market cap in USD, as the API's own (apps/api/src/tokenChart.ts McapCandle). */
+export interface BackupCandle {
+  t: number;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  vol: number;
+}
+
+interface DexPair {
+  chainId?: string;
+  pairAddress?: string;
+  baseToken?: { address?: string };
+  priceUsd?: string;
+  marketCap?: number;
+  fdv?: number;
+  liquidity?: { usd?: number };
+}
+
+/**
+ * The coin's busiest Solana pool with it as the base, and its supply (market cap over price);
+ * null when DexScreener lists none.
+ */
+export function pickPool(mint: string, body: unknown): { pool: string; supply: number } | null {
+  const pairs = ((body as { pairs?: unknown } | null)?.pairs ?? []) as DexPair[];
+  if (!Array.isArray(pairs)) return null;
+  let best: { pool: string; supply: number; liq: number } | null = null;
+  for (const p of pairs) {
+    if (p?.chainId !== "solana" || p.baseToken?.address !== mint || !p.pairAddress) continue;
+    const price = Number(p.priceUsd);
+    const cap = p.marketCap ?? p.fdv;
+    if (!(price > 0) || !(typeof cap === "number" && cap > 0)) continue;
+    const liq = p.liquidity?.usd ?? 0;
+    if (!best || liq > best.liq) best = { pool: p.pairAddress, supply: cap / price, liq };
+  }
+  return best ? { pool: best.pool, supply: best.supply } : null;
+}
+
+/** GeckoTerminal's OHLCV page ([seconds, o, h, l, c, volume], newest first) as market-cap candles, oldest first. */
+export function parseOhlcv(body: unknown, supply: number): BackupCandle[] {
+  const list = (body as { data?: { attributes?: { ohlcv_list?: unknown } } } | null)?.data?.attributes
+    ?.ohlcv_list;
+  if (!Array.isArray(list) || !(supply > 0)) return [];
+  const out: BackupCandle[] = [];
+  for (const row of list) {
+    if (!Array.isArray(row) || row.length < 5) continue;
+    const [s, o, h, l, c, v] = row.map(Number) as number[];
+    if (![s, o, h, l, c].every((n) => Number.isFinite(n) && n! > 0)) continue;
+    out.push({
+      t: s! * 1_000,
+      o: o! * supply,
+      h: h! * supply,
+      l: l! * supply,
+      c: c! * supply,
+      vol: Number.isFinite(v) && v! > 0 ? v! : 0,
+    });
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+
+async function getJson(url: string): Promise<unknown> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/**
+ * The backup candles for `mint` while `enabled` (the API gave the chart none), read now and every
+ * BACKUP_POLL_MS while the tab is visible. Null until a read lands; the last good one stays up
+ * through a failed read.
+ */
+export function useBackupCandles(mint: string, enabled: boolean): BackupCandle[] | null {
+  const [held, setHeld] = useState<{ mint: string; candles: BackupCandle[] } | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let stopped = false;
+    let timer: number | undefined;
+    let pool: { pool: string; supply: number } | null = null;
+    let failures = 0;
+    const poll = async () => {
+      if (document.visibilityState === "visible") {
+        try {
+          pool ??= pickPool(
+            mint,
+            await getJson(`${DEXSCREENER}/latest/dex/tokens/${encodeURIComponent(mint)}`),
+          );
+          if (pool) {
+            const body = await getJson(
+              `${GECKOTERMINAL}/networks/solana/pools/${pool.pool}/ohlcv/minute?aggregate=1&limit=1000&currency=usd&token=${encodeURIComponent(mint)}`,
+            );
+            const candles = parseOhlcv(body, pool.supply);
+            if (!stopped && candles.length > 0) setHeld({ mint, candles });
+          }
+          failures = 0;
+        } catch {
+          failures++;
+        }
+      }
+      if (!stopped)
+        timer = window.setTimeout(
+          () => void poll(),
+          Math.min(MAX_BACKOFF_MS, BACKUP_POLL_MS * 2 ** failures),
+        );
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, [mint, enabled]);
+  return held && held.mint === mint ? held.candles : null;
+}

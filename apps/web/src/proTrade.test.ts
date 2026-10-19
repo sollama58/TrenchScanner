@@ -15,6 +15,8 @@ import {
   expectedTokens,
   expectedSol,
   tradeProblem,
+  TradeError,
+  TradeExpiredError,
   type PositionResponse,
   type SacrificeView,
   type TradeCheck,
@@ -454,6 +456,13 @@ describe("trade fees", () => {
       tipLamports: "1000000",
     });
     expect(feeParams({ ...DEFAULT_TRADE_SETTINGS, customTipSol: 0.0001 })).toEqual({ tipLamports: "100000" });
+  });
+
+  it("marks an expired trade apart, still a TradeError, for the panel's Retry at Turbo", () => {
+    const e = new TradeExpiredError("expired");
+    expect(e).toBeInstanceOf(TradeError);
+    expect(e.signature).toBeUndefined();
+    expect(new TradeError("failed")).not.toBeInstanceOf(TradeExpiredError);
   });
 
   it("adds up the network fee in SOL", () => {

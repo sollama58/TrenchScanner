@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from "react";
+import { reportClientError } from "../clientErrors";
 
 interface Props {
   /** What broke, in the reader's words ("This card", "The Models tab"). */
@@ -35,6 +36,7 @@ export class SectionBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error) {
     console.error(`[${this.props.label}]`, error);
+    reportClientError(this.props.label, error);
   }
 
   render() {

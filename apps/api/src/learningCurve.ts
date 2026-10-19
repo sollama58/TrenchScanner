@@ -36,8 +36,12 @@ export const MIN_GRADED_FOR_LIFT = 10;
 /** How many days each side of the trend verdict pools. */
 export const TREND_SPAN_DAYS = 7;
 
-/** A lift change smaller than this between the two trend spans reads as flat. */
+/** A 2x lift change smaller than this between the two trend spans reads as flat. */
 export const TREND_FLAT_BAND = 0.2;
+/** The same for the 4x lift - a rarer tier, so a noisier ratio. */
+export const TREND_FLAT_BAND_4X = 0.3;
+/** The same for the return edge (feed avg return minus the market's), in percentage points. */
+export const TREND_FLAT_BAND_RETURN_PTS = 2;
 
 /** Every run of a short window, one run a day (its last) of a longer one. */
 const EVERY_RUN_UP_TO_DAYS = 7;
@@ -123,14 +127,28 @@ export interface LearningRun {
   best: LearningRunModel | null;
 }
 
+export interface LearningTrendSpan {
+  from: string;
+  to: string;
+  feed: DayRates;
+  market: DayRates;
+  lift2x: number | null;
+  lift4x: number | null;
+  lift10x: number | null;
+  /** Feed avg simulated return minus the market's, in percentage points; null when either is unknown. */
+  returnEdgePts: number | null;
+}
+
 export interface LearningTrend {
   /** The newest TREND_SPAN_DAYS days with any graded feed calls, pooled. */
-  recent: { from: string; to: string; feed: DayRates; market: DayRates; lift2x: number | null };
+  recent: LearningTrendSpan;
   /** The TREND_SPAN_DAYS days before them, pooled. */
-  prior: { from: string; to: string; feed: DayRates; market: DayRates; lift2x: number | null } | null;
+  prior: LearningTrendSpan | null;
   /**
    * improving / flat / worsening when both spans hold MIN_GRADED_FOR_VERDICT graded feed calls and
-   * a lift; too-early otherwise.
+   * a 2x lift; too-early otherwise. The verdict weighs the whole scorecard, not the 2x lift alone:
+   * the 2x lift, the 4x lift and the return edge each vote up, down or flat (past their own band),
+   * and the sum decides. The 10x lift is reported but too thin to vote.
    */
   verdict: "improving" | "flat" | "worsening" | "too-early";
   reason: string;
@@ -341,7 +359,26 @@ export function buildLearningTrend(days: LearningDay[]): LearningTrend | null {
   const pool = (rows: LearningDay[], from: number, to: number) => {
     const feed = sumDays(rows.map((d) => d.feed));
     const market = sumDays(rows.map((d) => d.market));
-    return { from: toDay(from), to: toDay(to), feed, market, lift2x: liftOf(feed, market) };
+    const edge =
+      feed.avgReturnPct !== null && market.avgReturnPct !== null
+        ? Math.round((feed.avgReturnPct - market.avgReturnPct) * 10) / 10
+        : null;
+    return {
+      from: toDay(from),
+      to: toDay(to),
+      feed,
+      market,
+      lift2x: liftOf(feed, market),
+      lift4x: ratio(feed.won4x, feed.graded, market.won4x, market.graded, MIN_GRADED_FOR_LIFT),
+      lift10x: ratio(
+        feed.won10x ?? 0,
+        feed.tenXGraded ?? 0,
+        market.won10x ?? 0,
+        market.tenXGraded ?? 0,
+        MIN_GRADED_FOR_LIFT,
+      ),
+      returnEdgePts: edge,
+    };
   };
   const recent = pool(inSpan(recentFrom, toMs(lastDay)), recentFrom, toMs(lastDay));
   const priorRows = inSpan(priorFrom, recentFrom - dayMs);
@@ -354,9 +391,45 @@ export function buildLearningTrend(days: LearningDay[]): LearningTrend | null {
   } else if (!prior || prior.lift2x === null || prior.feed.graded < MIN_GRADED_FOR_VERDICT) {
     reason = `The last ${TREND_SPAN_DAYS} days hold a lift of ${recent.lift2x.toFixed(2)}x over the filtered market; the ${TREND_SPAN_DAYS} before them have too few graded alerts to compare.`;
   } else {
-    const delta = recent.lift2x - prior.lift2x;
-    verdict = delta > TREND_FLAT_BAND ? "improving" : delta < -TREND_FLAT_BAND ? "worsening" : "flat";
-    reason = `Lift over the filtered market went from ${prior.lift2x.toFixed(2)}x to ${recent.lift2x.toFixed(2)}x between the two ${TREND_SPAN_DAYS}-day spans (${
+    const lines: {
+      label: string;
+      before: number | null;
+      after: number | null;
+      band: number;
+      fmt: (v: number) => string;
+    }[] = [
+      {
+        label: "2x lift",
+        before: prior.lift2x,
+        after: recent.lift2x,
+        band: TREND_FLAT_BAND,
+        fmt: (v) => `${v.toFixed(2)}x`,
+      },
+      {
+        label: "4x lift",
+        before: prior.lift4x,
+        after: recent.lift4x,
+        band: TREND_FLAT_BAND_4X,
+        fmt: (v) => `${v.toFixed(2)}x`,
+      },
+      {
+        label: "return edge",
+        before: prior.returnEdgePts,
+        after: recent.returnEdgePts,
+        band: TREND_FLAT_BAND_RETURN_PTS,
+        fmt: (v) => `${v > 0 ? "+" : ""}${v.toFixed(1)} pts`,
+      },
+    ];
+    let votes = 0;
+    const said: string[] = [];
+    for (const l of lines) {
+      if (l.before === null || l.after === null) continue;
+      const delta = l.after - l.before;
+      votes += delta > l.band ? 1 : delta < -l.band ? -1 : 0;
+      said.push(`${l.label} ${l.fmt(l.before)} to ${l.fmt(l.after)}`);
+    }
+    verdict = votes > 0 ? "improving" : votes < 0 ? "worsening" : "flat";
+    reason = `Against the filtered market between the two ${TREND_SPAN_DAYS}-day spans: ${said.join(", ")} (${
       recent.feed.graded
     } graded alerts lately, ${prior.feed.graded} before).`;
   }

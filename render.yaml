@@ -165,6 +165,12 @@ services:
     # that fails typecheck or a test never reaches production. 2026-10-16 database audit.
     autoDeployTrigger: checksPass
     healthCheckPath: /health
+    # Seconds from SIGTERM to SIGKILL (Render's default is 30). A deploy no longer cuts off Pro
+    # trades in flight: the old instance keeps resending them until they land or expire, up to
+    # 75s (apps/api/src/routes/proTrade.ts, DRAIN_MAX_MS), under the api's own 85s
+    # SHUTDOWN_DEADLINE_MS (apps/api/src/index.ts). Raise those three together. A shutdown with no
+    # trade in flight still ends at once.
+    maxShutdownDelaySeconds: 90
     envVars:
       - fromGroup: trenchscanner-shared
       - key: DATABASE_URL
@@ -721,12 +727,14 @@ services:
     # both hosts (SAME_SITE_APIS in apps/web/src/api.ts and VITE_API_URL), plus Privy for email
     # sign-in (its API, its RPC, its funding bridge, and Solana's public RPC it reads with), from
     # Privy's CSP guide. Privy's window is a frame on auth.privy.io; its captcha is Cloudflare
-    # Turnstile (script and frame). No other site may be framed. Images (token art from any https host, IPFS,
-    # data: and blob: share images), styles (React style attributes) and fonts stay unrestricted.
+    # Turnstile (script and frame). DexScreener and GeckoTerminal are the token chart's backup
+    # candles, read by the browser when the API has none (apps/web/src/backupCandles.ts). No other
+    # site may be framed. Images (token art from any https host, IPFS, data: and blob: share
+    # images), styles (React style attributes) and fonts stay unrestricted.
     headers:
       - path: /*
         name: Content-Security-Policy
-        value: "script-src 'self' https://challenges.cloudflare.com 'sha256-5Z14paLArXMiYwxC/6ty5E5jlf45X+JMHFxkETVMbhE=' 'sha256-KYIyUYVTuGOUtwgz6C9xzns4oKDzv4LdZ6BVTGNVmlU=' 'sha256-aPP2zqXp+dhQL2Wt2SloBpBN689FOhli++WSSaLxVbY=' 'sha256-eO6WnxT1VOAqTBWNmFSlQhMN2SWrCT/WzqtXBsogR0k='; connect-src 'self' https://api.trenchscanner.app https://trenchscanner-api.onrender.com https://auth.privy.io https://*.rpc.privy.systems https://api.relay.link https://api.mainnet-beta.solana.com wss://api.mainnet-beta.solana.com; frame-src https://auth.privy.io https://challenges.cloudflare.com; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://holdex.live https://www.holdex.live"
+        value: "script-src 'self' https://challenges.cloudflare.com 'sha256-5Z14paLArXMiYwxC/6ty5E5jlf45X+JMHFxkETVMbhE=' 'sha256-KYIyUYVTuGOUtwgz6C9xzns4oKDzv4LdZ6BVTGNVmlU=' 'sha256-aPP2zqXp+dhQL2Wt2SloBpBN689FOhli++WSSaLxVbY=' 'sha256-eO6WnxT1VOAqTBWNmFSlQhMN2SWrCT/WzqtXBsogR0k='; connect-src 'self' https://api.trenchscanner.app https://trenchscanner-api.onrender.com https://auth.privy.io https://*.rpc.privy.systems https://api.relay.link https://api.mainnet-beta.solana.com wss://api.mainnet-beta.solana.com https://api.dexscreener.com https://api.geckoterminal.com; frame-src https://auth.privy.io https://challenges.cloudflare.com; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://holdex.live https://www.holdex.live"
       # HTTPS only from the first visit on. No includeSubDomains: only this host's own redirect is
       # certain here, and preload would lock that in for every subdomain.
       - path: /*
