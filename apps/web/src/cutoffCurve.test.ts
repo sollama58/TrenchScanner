@@ -19,12 +19,20 @@ describe("cutoffPoints", () => {
 });
 
 describe("shareAt", () => {
-  it("places shares on a log axis from 1% to 50%, clamped", () => {
-    expect(shareAt(1)).toBe(0);
+  it("places shares on a linear axis from 0% to 50% by default, clamped", () => {
+    expect(shareAt(0)).toBe(0);
+    expect(shareAt(25)).toBeCloseTo(0.5);
+    expect(shareAt(10)).toBeCloseTo(0.2);
     expect(shareAt(50)).toBe(1);
-    expect(shareAt(Math.sqrt(50))).toBeCloseTo(0.5);
-    expect(shareAt(0.2)).toBe(0);
     expect(shareAt(80)).toBe(1);
+  });
+
+  it("places shares on a log axis from 1% to 50% when asked, clamped", () => {
+    expect(shareAt(1, true)).toBe(0);
+    expect(shareAt(50, true)).toBe(1);
+    expect(shareAt(Math.sqrt(50), true)).toBeCloseTo(0.5);
+    expect(shareAt(0.2, true)).toBe(0);
+    expect(shareAt(80, true)).toBe(1);
   });
 });
 

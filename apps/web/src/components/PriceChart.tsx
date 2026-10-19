@@ -60,6 +60,26 @@ function readTimeframe(): number | null {
     return null;
   }
 }
+/**
+ * Whether the value axis is on a log scale: off (linear) unless the viewer turned it on, kept on
+ * this device (user ask 2026-10-19: linear by default everywhere, log as an opt-in).
+ */
+const LOG_SCALE_KEY = "ts.chartLogScale";
+function readLogScale(): boolean {
+  try {
+    return localStorage.getItem(LOG_SCALE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function keepLogScale(on: boolean): void {
+  try {
+    if (on) localStorage.setItem(LOG_SCALE_KEY, "1");
+    else localStorage.removeItem(LOG_SCALE_KEY);
+  } catch {
+    // Private windows: the pick holds for this view only.
+  }
+}
 function keepTimeframe(ms: number | null): void {
   try {
     if (ms === null) localStorage.removeItem(TIMEFRAME_KEY);
@@ -193,6 +213,7 @@ export function PriceChart({
   const [ownZoom, setOwnZoom] = useState<Zoom | null>(null);
   // Candle timeframes (user ask 2026-10-18): null draws as many candles as fit (Auto).
   const [timeframe, setTimeframe] = useState<number | null>(readTimeframe);
+  const [logScale, setLogScale] = useState(readLogScale);
   const zoom = onZoom ? (zoomProp ?? null) : ownZoom;
   const setZoom = onZoom ?? setOwnZoom;
   /** Phones dock the readout under the chart. */
@@ -293,7 +314,7 @@ export function PriceChart({
     const guessed = future ? path.map((s) => s.v) : [];
     const lo = Math.min(...values, ...wicks, ...extra, ...guessed);
     const hi = Math.max(...values, ...wicks, ...extra, ...guessed);
-    const axis = mcapAxis(lo, hi, PAD.t, height - PAD.b);
+    const axis = mcapAxis(lo, hi, PAD.t, height - PAD.b, 5, logScale);
     const hiIdx = pts.reduce((best, p, i) => (p.v > pts[best]!.v ? i : best), 0);
     return {
       t0,
@@ -332,6 +353,7 @@ export function PriceChart({
     candles,
     kind,
     timeframe,
+    logScale,
     origin,
     path,
     pathShown,
@@ -1077,6 +1099,29 @@ export function PriceChart({
             ))}
           </div>
         )}
+        <div className="segmented small" role="radiogroup" aria-label="Value scale">
+          {(
+            [
+              [false, "Linear"],
+              [true, "Log"],
+            ] as const
+          ).map(([on, text]) => (
+            <button
+              key={text}
+              type="button"
+              role="radio"
+              aria-checked={logScale === on}
+              className={logScale === on ? "on" : ""}
+              title={on ? "Log scale: a big run doesn't flatten what came before it" : "Linear scale"}
+              onClick={() => {
+                setLogScale(on);
+                keepLogScale(on);
+              }}
+            >
+              {text}
+            </button>
+          ))}
+        </div>
         {onKind && kind === "candles" && (
           <label className="pc-tf" title="Each candle's width. Zooms to fit; Auto draws as many as fit">
             <span className="sr-only">Candle timeframe</span>

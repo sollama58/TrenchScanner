@@ -196,8 +196,16 @@ describe("linePoints", () => {
 });
 
 describe("mcapAxis", () => {
-  it("goes log past a 4x move, with 1-2-5 ticks", () => {
+  it("stays linear past a 4x move by default, never below zero", () => {
     const a = mcapAxis(8_000, 400_000, 0, 100);
+    expect(a.log).toBe(false);
+    expect(a.ticks[0]).toBeGreaterThanOrEqual(0);
+    expect(a.y(200_000) - a.y(300_000)).toBeCloseTo(a.y(100_000) - a.y(200_000));
+    expect(a.y(8_000)).toBeLessThanOrEqual(100);
+  });
+
+  it("goes log past a 4x move when asked, with 1-2-5 ticks", () => {
+    const a = mcapAxis(8_000, 400_000, 0, 100, 5, true);
     expect(a.log).toBe(true);
     expect(a.ticks).toContain(10_000);
     expect(a.ticks).toContain(100_000);
@@ -207,7 +215,7 @@ describe("mcapAxis", () => {
   });
 
   it("stays linear on a calm coin, with round ticks inside the view", () => {
-    const a = mcapAxis(20_000, 30_000, 0, 100);
+    const a = mcapAxis(20_000, 30_000, 0, 100, 5, true);
     expect(a.log).toBe(false);
     for (const t of a.ticks) expect(t % 1000).toBe(0);
     expect(a.y(25_000)).toBeCloseTo(50);
