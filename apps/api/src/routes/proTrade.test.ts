@@ -2,9 +2,10 @@
 import "../bootstrap-env.js";
 import { generateKeyPairSync } from "node:crypto";
 import bs58 from "bs58";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   loadEnv,
+  pingSender,
   prisma,
   refreshProHolders,
   proHolderRank,
@@ -19,6 +20,12 @@ import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
 import { plainRefusal, quietSign, TradeCooldown } from "./proTrade.js";
+
+// The fee route pings Sender in the background: answered here, so no test reaches the network.
+vi.mock("@trenchscanner/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@trenchscanner/core")>()),
+  pingSender: vi.fn(async () => true),
+}));
 
 describe("plainRefusal", () => {
   it("says the common refusals in the trader's words", () => {
@@ -141,9 +148,10 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
       baseFeeLamports: "5000",
       platformFeeLamports: "0",
       sacrifice: expect.objectContaining({ mode: "off", pays: false, credits: null }),
-      // Sender's health (senderHealth.test.ts): its background ping depends on the network here.
-      senderDown: expect.any(Boolean),
+      // Sender's health (senderHealth.test.ts): the background ping is mocked to answer.
+      senderDown: false,
     });
+    expect(vi.mocked(pingSender)).toHaveBeenCalledTimes(1);
     expect((await as(ADMIN, "GET", `/pro/trade/fee?mint=nope&speed=eco`)).statusCode).toBe(400);
     // Swap costs: Pro wallets only too, and a bad mint is refused before any quote.
     expect((await as(TRADER, "GET", `/pro/trade/costs?mint=${MINT}`)).statusCode).toBe(404);
