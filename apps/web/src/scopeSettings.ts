@@ -61,6 +61,10 @@ export interface ScopeDisplay {
   showName: boolean;
   showSource: boolean;
   showSocials: boolean;
+  /** The cards' creator fee icon beside the age (user ask 2026-10-19: on by default). */
+  showFees: boolean;
+  /** Clicking the ticker copies the contract address instead of opening the coin (user ask 2026-10-19). */
+  tickerCopiesCa: boolean;
   showAt: boolean;
   showPeak: boolean;
   showResult: boolean;
@@ -111,6 +115,8 @@ export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
     showName: true,
     showSource: false,
     showSocials: true,
+    showFees: true,
+    tickerCopiesCa: true,
     showAt: false,
     showPeak: false,
     showResult: false,
@@ -183,6 +189,8 @@ export function normalizeScopeSettings(raw: unknown): ScopeSettings {
       showName: bool(disp.showName, d.showName),
       showSource: bool(disp.showSource, d.showSource),
       showSocials: bool(disp.showSocials, d.showSocials),
+      showFees: bool(disp.showFees, d.showFees),
+      tickerCopiesCa: bool(disp.tickerCopiesCa, d.tickerCopiesCa),
       showAt: bool(disp.showAt, d.showAt),
       showPeak: bool(disp.showPeak, d.showPeak),
       showResult: bool(disp.showResult, d.showResult),

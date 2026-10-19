@@ -179,7 +179,13 @@ function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: 
       <section className="scope-section">
         <h3>On each row</h3>
         {sw("showName", "Token name")}
+        {sw(
+          "tickerCopiesCa",
+          "Click the ticker to copy the CA",
+          "Off: the ticker opens the coin, like the rest of the row",
+        )}
         {sw("showAge", "Age")}
+        {sw("showFees", "Creator fee", "Where the fee goes, as on the cards")}
         {sw("showSocials", "X and website links")}
         {sw("showSource", "Where it came from", "Your filter's icon, the model's name, HC")}
         {sw("showAt", "Market cap at the alert")}
