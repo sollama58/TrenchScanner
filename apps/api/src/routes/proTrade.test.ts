@@ -206,9 +206,9 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
         Object.fromEntries(body.platforms.map((p: { id: string; savedSol: number }) => [p.id, p.savedSol])),
       ).toEqual({
         fomo: 0.03,
-        pumpfun: 0.014,
+        pumpfun: 0.027,
         terminal: 0.03,
-        axiom: 0.06,
+        axiom: 0.057,
       });
     } finally {
       await prisma.platformTrade.deleteMany({ where: { wallet: ADMIN } });

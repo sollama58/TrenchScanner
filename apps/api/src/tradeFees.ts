@@ -4,12 +4,17 @@
  *
  * Other platforms are compared on their platform fee alone, on the same trade's SOL value: every
  * one of them also pays the network (priority fee, tip, base fee), as we do, so that part is
- * shown as ours but never counted as saved. Rates as the user gave them (2026-10-18).
+ * shown as ours but never counted as saved. Rates checked against each platform's own fee page on
+ * 2026-10-19: Fomo 0.50% (help.fomo.family, orders of 190 USDC and up; smaller orders pay more);
+ * Pump.fun App 0.45% Platform Fee on every trade from 2026-10-17 (pump.fun/docs/fees, on top of the
+ * protocol fees every interface pays); Axiom 0.95% net, its entry tier after cashback
+ * (docs.axiom.trade, 1% gross). Terminal publishes no fee page: 0.50% is the user's figure, below the
+ * ~1% third-party guides report, so it understates rather than overstates the saving.
  *
  * Our own fee is the Sacrifice (ASDF fee plan): 0% for holders above the free cut-off, 0.2% in
  * burned credits for everyone else once it is on, recorded per trade as its SOL value in
- * platformFeeLamports. A saving can go negative (a paying wallet's buys against Pump.fun App's 0%
- * buy fee): it is reported as it is, never clamped to zero.
+ * platformFeeLamports. A saving can go negative (the Sacrifice against a lower fee elsewhere): it is
+ * reported as it is, never clamped to zero.
  */
 
 export interface PlatformFeeRate {
@@ -18,13 +23,38 @@ export interface PlatformFeeRate {
   /** The fee on each buy and each sale, in bps of the trade's SOL value. */
   buyBps: number;
   sellBps: number;
+  /** The platform's own fee page; absent for a platform that publishes none. */
+  sourceUrl?: string;
+  /** No published rate to check it against (user ask 2026-10-19: shown, labelled as an estimate). */
+  estimate?: boolean;
 }
 
+/** When the rates below were last checked against their sources; shown on the Portfolio page. */
+export const RATES_AS_OF = "2026-10-19";
+
 export const OTHER_PLATFORMS: readonly PlatformFeeRate[] = [
-  { id: "fomo", name: "Fomo", buyBps: 50, sellBps: 50 },
-  { id: "pumpfun", name: "Pump.fun App", buyBps: 0, sellBps: 35 },
-  { id: "terminal", name: "Terminal", buyBps: 50, sellBps: 50 },
-  { id: "axiom", name: "Axiom", buyBps: 100, sellBps: 100 },
+  {
+    id: "fomo",
+    name: "Fomo",
+    buyBps: 50,
+    sellBps: 50,
+    sourceUrl: "https://help.fomo.family/en/articles/14436214-trading-fees-on-fomo",
+  },
+  { id: "pumpfun", name: "Pump.fun App", buyBps: 45, sellBps: 45, sourceUrl: "https://pump.fun/docs/fees" },
+  {
+    id: "terminal",
+    name: "Terminal",
+    buyBps: 50,
+    sellBps: 50,
+    estimate: true,
+  },
+  {
+    id: "axiom",
+    name: "Axiom",
+    buyBps: 95,
+    sellBps: 95,
+    sourceUrl: "https://docs.axiom.trade/getting-started/fees/axiom-fees",
+  },
 ];
 
 export interface FeeTrade {
@@ -43,12 +73,16 @@ export interface FeeSummary {
   /** What we charged (our platform fee) and what the network took, SOL. */
   platformFeeSol: number;
   networkFeeSol: number;
+  /** When the platforms' rates were last checked (RATES_AS_OF). */
+  ratesAsOf: string;
   /** Each other platform's fee on the same trades, and what trading here saved against it. */
   platforms: {
     id: string;
     name: string;
     buyBps: number;
     sellBps: number;
+    sourceUrl?: string;
+    estimate?: boolean;
     feeSol: number;
     savedSol: number;
   }[];
@@ -82,6 +116,7 @@ export function feeSummary(trades: readonly FeeTrade[], platforms = OTHER_PLATFO
     volumeSol: toSol(buyLamports + sellLamports),
     platformFeeSol: toSol(platformFee),
     networkFeeSol: toSol(networkFee),
+    ratesAsOf: RATES_AS_OF,
     platforms: platforms.map((p) => {
       const fee = (buyLamports * BigInt(p.buyBps) + sellLamports * BigInt(p.sellBps)) / 10_000n;
       return { ...p, feeSol: toSol(fee), savedSol: toSol(fee - platformFee) };

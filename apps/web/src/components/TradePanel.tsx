@@ -541,7 +541,7 @@ function FeeExplainer({
         {savedSol > 0 && (
           <span
             className="tm-fee-saved"
-            title={`What this trade saves against a ${FEE_BASELINE_BPS / 100}% platform fee (Axiom's), after any fee taken here`}
+            title={`What this trade saves against a ${FEE_BASELINE_BPS / 100}% platform fee (Axiom's, net of its entry cashback), after any fee taken here`}
           >
             <span className="tm-fee-saved-label">Saves</span>
             <strong className="num">{solText(savedSol)}</strong>
