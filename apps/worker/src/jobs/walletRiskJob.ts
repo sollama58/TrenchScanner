@@ -7,6 +7,7 @@ import {
   walletLabels,
   walletScore,
   walletScoreMarket,
+  WALLET_SCORE_MARKET_FIGURES,
   MIN_WIN_SOL,
   OWN_MULTIPLE_MIN_SOL,
   MIN_BUY_SOL_PER_TOKEN,
@@ -210,8 +211,13 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
     ${tapeOutcomesJoinSql}
     WHERE ${traderSql}`;
   const appearances = Number(totals?.appearances ?? 0);
-  const marketDumpRate = appearances > 0 ? Number(totals!.dumps) / appearances : 0;
-  const marketWinRate = appearances > 0 ? Number(totals!.wins) / appearances : 0;
+  // Kept to the Wallet Score's significant figures (user decision 2026-10-19, performance audit):
+  // unrounded, every tape read nudged them, and the risk and win scores built on them, so the
+  // hourly rebuild rewrote ~60 k of ~136 k rows that hadn't really changed.
+  const marketRate = (k: number) =>
+    appearances > 0 ? Number((k / appearances).toPrecision(WALLET_SCORE_MARKET_FIGURES)) : 0;
+  const marketDumpRate = marketRate(Number(totals?.dumps ?? 0));
+  const marketWinRate = marketRate(Number(totals?.wins ?? 0));
   const scoreMarket = walletScoreMarket({
     appearances,
     dumps: Number(totals?.dumps ?? 0),
