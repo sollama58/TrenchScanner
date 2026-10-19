@@ -683,6 +683,17 @@ export class TokenSageClient {
 const MAX_HINT_URL_CHARS = 2048;
 
 /**
+ * The first `max` UTF-16 units of a hint, never ending on half of a surrogate pair. A plain slice
+ * through an emoji left a lone surrogate, which TokenSage refuses as not valid text (422): the coin
+ * was split out of its batch, set aside for 11 minutes and refused again, so it never got a read.
+ */
+function clipHint(text: string, max: number): string {
+  const out = text.slice(0, max);
+  const last = out.charCodeAt(out.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? out.slice(0, -1) : out;
+}
+
+/**
  * The hints for a mint from what discovery stored on its Token row; empty fields are left out.
  * created_at is the launch time only (launchedAt): firstSeenAt is when we first saw the mint,
  * which for a coin found late is far after its launch, and TokenSage keeps the hint for good
@@ -700,9 +711,9 @@ export function tokenSageHints(token: {
   const hints: TokenSageHints = {};
   const url = (value: string | null | undefined): value is string =>
     !!value && value.length <= MAX_HINT_URL_CHARS;
-  if (token.name) hints.name = token.name.slice(0, 200);
-  if (token.symbol) hints.symbol = token.symbol.slice(0, 50);
-  if (token.description) hints.description = token.description.slice(0, 2_000);
+  if (token.name) hints.name = clipHint(token.name, 200);
+  if (token.symbol) hints.symbol = clipHint(token.symbol, 50);
+  if (token.description) hints.description = clipHint(token.description, 2_000);
   if (url(token.imageUrl) && token.imageUrl.startsWith("https://")) hints.image_url = token.imageUrl;
   if (url(token.twitterUrl)) hints.twitter = token.twitterUrl;
   if (url(token.websiteUrl)) hints.website = token.websiteUrl;
