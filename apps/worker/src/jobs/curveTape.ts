@@ -277,6 +277,22 @@ export async function round(now = Date.now()): Promise<void> {
   }
 }
 
+/**
+ * Takes up the day's stream spend a previous process recorded (the scan heartbeat's
+ * curveTape.streamCreditsToday, written `at`), when it is from today (UTC) and above what this
+ * process has counted. The pace (overStreamPace) counted from zero after every deploy, so each one
+ * - several a day - handed the stream its whole share of the day again: past its pace and paused
+ * at 18:00, it resumed at once after an 18:05 deploy and could spend that share a second time.
+ */
+export function seedCurveStreamSpend(creditsToday: number, at: Date, now = Date.now()): void {
+  if (!(Number.isFinite(creditsToday) && creditsToday > 0)) return;
+  const today = new Date(now).toISOString().slice(0, 10);
+  if (at.toISOString().slice(0, 10) !== today || at.getTime() > now) return;
+  rollDay(now);
+  // streamCredits is 2 credits per 0.1 MB: back to the bytes it was figured from.
+  dayStreamBytes = Math.max(dayStreamBytes, (creditsToday / 2) * 100_000);
+}
+
 /** Visible for tests: forgets everything. */
 export function resetCurveTape(): void {
   for (const mint of [...followed.keys()]) tape.forget(mint);

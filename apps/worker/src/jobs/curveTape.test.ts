@@ -7,6 +7,7 @@ import {
   overStreamPace,
   resetCurveTape,
   round,
+  seedCurveStreamSpend,
   startCurveTape,
   takeCurveTapeStats,
 } from "./curveTape.js";
@@ -114,6 +115,25 @@ describe("curve tape", () => {
     expect(s.stream.watch).toHaveBeenCalledTimes(1);
     onCurveStreamUpdate(`curve:${MINT}`, Buffer.alloc(10).toString("base64"), 500, NOW + 6_000);
     expect(curvePathOf(MINT, NOW + 6_000).curveCoveredSec).toBeNull();
+  });
+
+  // A deploy used to start the day's count over, handing the stream its whole share again.
+  it("carries the day's stream spend a previous process recorded, from today only", async () => {
+    const s = setup(NOW - 1_000);
+    stop = s.stop;
+    followYoungCurves([young], NOW);
+    // Yesterday's figure, or one from the future, is not this day's.
+    seedCurveStreamSpend(70_000, new Date(NOW - 13 * 3_600_000), NOW);
+    seedCurveStreamSpend(70_000, new Date(NOW + 60_000), NOW);
+    expect(takeCurveTapeStats(NOW)?.streamCreditsToday).toBe(0);
+    // Today's: past the noon pace (60k), so the next round stops the stream.
+    seedCurveStreamSpend(70_000, new Date(NOW - 60_000), NOW);
+    await round(NOW);
+    expect(takeCurveTapeStats(NOW)).toMatchObject({ streamCreditsToday: 70_000, paused: 1 });
+    expect(s.stream.unwatch).toHaveBeenCalled();
+    // A lower figure never lowers what is counted.
+    seedCurveStreamSpend(10_000, new Date(NOW - 30_000), NOW);
+    expect(takeCurveTapeStats(NOW)?.streamCreditsToday).toBe(70_000);
   });
 
   it("paces the stream's spend through the day", () => {
