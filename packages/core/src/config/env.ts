@@ -374,9 +374,10 @@ const envSchema = z.object({
   // runs, so 30 (300 credits a minute, ~432k a day at most; user decision 2026-10-19, performance
   // audit). 0 leaves every coin to Pump.fun's API.
   TRADE_TAPE_HELIUS_PAGES_PER_RUN: z.coerce.number().int().nonnegative().default(30),
-  // Pump.fun trade API calls per run (free, spaced 12 s, but it answers 429 quickly): the backlog,
-  // coins Helius couldn't read, and a sample of uncalled coins. 0 turns it off.
-  TRADE_TAPE_PUMPFUN_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(4),
+  // Pump.fun trade API calls per run (free, spaced 8 s, but it answers 429 quickly): the backlog,
+  // coins Helius couldn't read, and a sample of uncalled coins. 0 turns it off. 6 (was 4, at 12 s):
+  // no 429 in 21 runs, and the busy backlog waits on this lane (audit 2026-10-19).
+  TRADE_TAPE_PUMPFUN_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(6),
   // The trade tape's closing read (tradeTapeClosing.ts, user ask 2026-10-16): once a taped coin is past
   // its 24-hour tracking window and still under LOW_CAP_MCAP_USD, the tape's wallets that sold since
   // the window are found from the coin's holders now, and their trades after it read from their own

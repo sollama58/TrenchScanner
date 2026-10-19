@@ -15,6 +15,7 @@ import {
   type PumpFunClient,
   type SolPriceLookup,
   type TapeTrade,
+  type ChainTx,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
 import {
@@ -50,7 +51,14 @@ const logger = createLogger("trade-tape");
  *    (TRADE_TAPE_PUMPFUN_CALLS_PER_RUN), paused for a minute on a 429. Coins Helius couldn't read,
  *    the oldest of the backlog (working from the other end), and one coin in SAMPLE_EVERY from the
  *    uncalled sample. Without Helius it takes every coin.
- * Each lane works one coin at a time and carries it over to the next run until it's read.
+ * Each lane works one coin at a time and carries it over to the next run until it's read, and a
+ * shutdown saves both lanes' reads (TradeTapeProgress) for the next process to finish.
+ *
+ * When no coin is left for Helius to read from the launch, its pages go to the busy coins (audit
+ * 2026-10-19: the lane sat idle in half its runs while ~580 busy coins waited on Pump.fun's few
+ * calls a minute and mostly aged out unread): newest first from the window's end, up to
+ * HELIUS_NEWEST_MAX_PAGES, stored as partial like Pump.fun's capped reads, or as a whole tape when
+ * the read meets the launch side the hand-off had already read.
  */
 
 /** Called coins this far back are read (the backlog goes to Pump.fun). */
@@ -75,12 +83,25 @@ export const HELIUS_MAX_PAGES_PER_COIN = 100;
 export const HELIUS_ESTIMATE_AFTER_PAGES = 10;
 const HELIUS_ESTIMATE_SPAN_PAGES = 5;
 export const HELIUS_BUSY_MARGIN = 2;
+/**
+ * Pages a newest-first Helius read of a busy coin takes before it is stored as partial: 3,000
+ * trades back from the window's end, 300 credits, half what Pump.fun's partial reads hold.
+ */
+export const HELIUS_NEWEST_MAX_PAGES = 30;
+/**
+ * Hand-offs whose launch-side pages are kept for the newest-first read to meet (a few hundred KB
+ * each). One that meets them makes a whole tape of the two halves.
+ */
+const MAX_KEPT_HANDOFFS = 20;
 /** Pump.fun calls on one coin before it is stored as partial (6,000 trades). */
 const PUMPFUN_MAX_CALLS_PER_COIN = 60;
-const PUMPFUN_SPACING_MS = 12_000;
+// 8 s: no 429 in 21 runs at 12 s (audit 2026-10-19), and the swap host's shared budget is 240 a minute.
+const PUMPFUN_SPACING_MS = 8_000;
 const PUMPFUN_PAUSE_ON_429_MS = 60_000;
 /** Of every this many coins the Pump.fun lane starts, one is an uncalled sample. */
 const SAMPLE_EVERY = 4;
+/** While more called coins than this wait, the Pump.fun lane takes no uncalled sample. */
+const SAMPLE_PAUSE_PENDING = 100;
 const RETRY_FAILED_MS = 30 * 60_000;
 const RETRY_UNKNOWN_COIN_MS = 24 * 3_600_000;
 /**
@@ -90,8 +111,18 @@ const RETRY_UNKNOWN_COIN_MS = 24 * 3_600_000;
  * went back to Helius, which read its pages from the launch again only to drop them again.
  */
 const BUSY_SOURCE = "helius:busy";
-/** Whether Helius has given up on a coin, for now ("helius") or for good (BUSY_SOURCE). */
-const heliusFailed = (c: TapeCoin) => c.failedSource === "helius" || c.failedSource === BUSY_SOURCE;
+/**
+ * The failed source of a coin Helius failed on twice: from the launch after a first "helius"
+ * failure, or newest first as a busy coin. Left to Pump.fun for good. A first failure is mostly a
+ * slow page, so it gets one more Helius read after RETRY_FAILED_MS (it went to Pump.fun's queue at
+ * once before, audit 2026-10-19).
+ */
+const HELIUS_GAVE_UP = "helius:failed";
+/** Whether Helius has failed a coin: Pump.fun takes these first. */
+const heliusFailed = (c: TapeCoin) =>
+  c.failedSource === "helius" || c.failedSource === BUSY_SOURCE || c.failedSource === HELIUS_GAVE_UP;
+/** Whether Helius reads a coin from its launch. */
+const heliusFromLaunch = (c: TapeCoin) => c.failedSource !== BUSY_SOURCE && c.failedSource !== HELIUS_GAVE_UP;
 
 export interface TapeCoin {
   tokenId: string;
@@ -117,6 +148,16 @@ interface Progress {
   started: boolean;
   /** Helius: each page's newest trade time, for the pace (see HELIUS_ESTIMATE_AFTER_PAGES). */
   pageEnds?: number[];
+  /** Helius: a busy coin's read, newest first from the window's end. */
+  newest?: boolean;
+}
+
+/** The launch-side read a busy coin's hand-off already paid for (see MAX_KEPT_HANDOFFS). */
+interface Handoff {
+  trades: TapeTrade[];
+  launch: { atMs: number | null; creator: string | null } | null;
+  /** The newest trade time it read through. */
+  throughMs: number;
 }
 
 /** Pages a Helius read still needs to reach its window's end, at the pace of its last pages. */
@@ -142,6 +183,7 @@ const state: LaneState = {
   pumpFunPausedUntil: 0,
   coinsStarted: 0,
 };
+const handoffs = new Map<string, Handoff>();
 
 /** Test hook. */
 export function resetTradeTapeState(): void {
@@ -149,6 +191,53 @@ export function resetTradeTapeState(): void {
   state.pumpFun = null;
   state.pumpFunPausedUntil = 0;
   state.coinsStarted = 0;
+  handoffs.clear();
+}
+
+const LANES = ["helius", "pumpFun"] as const;
+
+/**
+ * Saves both lanes' reads in progress, for the next process's first run (restoreProgress): a deploy
+ * mid-read cost a busy Pump.fun read up to 15 runs and a Helius read up to 1,000 credits, started
+ * again from the first page. Called by the worker's shutdown once the jobs have settled.
+ */
+export async function saveTradeTapeProgress(): Promise<number> {
+  let saved = 0;
+  for (const lane of LANES) {
+    const p = state[lane];
+    if (!p) continue;
+    const data = p as unknown as Prisma.InputJsonValue;
+    await prisma.tradeTapeProgress.upsert({
+      where: { lane },
+      create: { lane, tokenId: p.coin.tokenId, data },
+      update: { tokenId: p.coin.tokenId, data, savedAt: new Date() },
+    });
+    saved += 1;
+  }
+  return saved;
+}
+
+/**
+ * Takes a saved read back into its idle lane while its coin still waits (`waiting`), and drops one
+ * whose coin no longer does. Asked every run, not only the first: in a deploy the new process
+ * starts before the old one saves, and its lanes may be busy then.
+ */
+async function restoreProgress(waiting: TapeCoin[]): Promise<void> {
+  const rows = await prisma.tradeTapeProgress.findMany();
+  const done: string[] = [];
+  for (const row of rows) {
+    const lane = LANES.find((l) => l === row.lane);
+    const coin = waiting.find((c) => c.tokenId === row.tokenId);
+    if (!lane || !coin) {
+      done.push(row.lane);
+      continue;
+    }
+    const other = state[lane === "helius" ? "pumpFun" : "helius"];
+    if (state[lane] || other?.coin.tokenId === coin.tokenId) continue;
+    state[lane] = { ...(row.data as unknown as Progress), coin };
+    done.push(row.lane);
+  }
+  if (done.length > 0) await prisma.tradeTapeProgress.deleteMany({ where: { lane: { in: done } } });
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -462,9 +551,12 @@ async function runHeliusLane(
 ) {
   while (budget > 0 && deps.helius.gtfaUsable) {
     if (!state.helius) {
+      const free = called.filter((c) => state.pumpFun?.coin.tokenId !== c.tokenId);
       // Newest first (`called` is), so new calls are read within minutes and the backlog with
-      // what's left of the budget.
-      const coin = called.find((c) => !heliusFailed(c) && state.pumpFun?.coin.tokenId !== c.tokenId);
+      // what's left of the budget. Then the busy coins, oldest first (Pump.fun takes the newest),
+      // newest first from their window's end.
+      const fromLaunch = free.find(heliusFromLaunch);
+      const coin = fromLaunch ?? [...free].reverse().find((c) => c.failedSource === BUSY_SOURCE);
       if (!coin) return;
       called.splice(called.indexOf(coin), 1);
       state.helius = {
@@ -475,12 +567,14 @@ async function runHeliusLane(
         errors: 0,
         launch: null,
         started: false,
+        ...(fromLaunch ? {} : { newest: true }),
       };
     }
     const p = state.helius;
     const page = await deps.helius.getMintTransactionsPage(p.coin.mint, {
       paginationToken: p.cursor,
       untilBlockTime: Math.floor(p.coin.windowEndMs / 1000),
+      ...(p.newest ? { newest: true } : {}),
     });
     budget -= 1;
     counts.heliusPages += 1;
@@ -492,7 +586,8 @@ async function runHeliusLane(
     if (page.status === "failed") {
       p.errors += 1;
       if (p.errors >= 3) {
-        await markFailed(p.coin, "helius", p.calls, RETRY_FAILED_MS, now());
+        const source = p.newest || p.coin.failedSource === "helius" ? HELIUS_GAVE_UP : "helius";
+        await markFailed(p.coin, source, p.calls, RETRY_FAILED_MS, now());
         counts.failed += 1;
         state.helius = null;
         continue;
@@ -504,6 +599,10 @@ async function runHeliusLane(
     // Three failures in a row fail the coin; spread over a long read they no longer throw it away.
     p.errors = 0;
     const parsed = await tradesFromChainTransactionsPriced(p.coin.mint, page.txs, deps.solPrices);
+    if (p.newest) {
+      await readNewestPage(p, page, parsed, counts, now);
+      continue;
+    }
     if (!p.started) {
       p.started = true;
       p.launch = parsed.launch;
@@ -522,7 +621,9 @@ async function runHeliusLane(
       p.calls >= HELIUS_MAX_PAGES_PER_COIN ||
       (left !== null && p.calls + left > HELIUS_MAX_PAGES_PER_COIN * HELIUS_BUSY_MARGIN)
     ) {
-      // Too busy to read in full within the cap: Pump.fun's from the next run on.
+      // Too busy to read in full within the cap: Pump.fun's from the next run on, or this lane's
+      // newest first, which keeps what was read here to meet.
+      keepHandoff(p.coin.tokenId, { trades: p.trades, launch: p.launch, throughMs: lastAtMs });
       await markFailed(p.coin, BUSY_SOURCE, p.calls, 0, now());
       counts.failed += 1;
       counts.handedOff += 1;
@@ -531,12 +632,56 @@ async function runHeliusLane(
   }
 }
 
-/** Pump.fun's failure keeps a busy coin away from Helius (BUSY_SOURCE). */
-const pumpFunFailSource = (c: TapeCoin) => (c.failedSource === BUSY_SOURCE ? BUSY_SOURCE : "pumpfun");
+function keepHandoff(tokenId: string, h: Handoff) {
+  handoffs.delete(tokenId);
+  handoffs.set(tokenId, h);
+  while (handoffs.size > MAX_KEPT_HANDOFFS) handoffs.delete(handoffs.keys().next().value!);
+}
+
+/**
+ * One page of a busy coin's newest-first read: it ends at the launch (a whole tape), at the
+ * launch side the hand-off read (the two halves make a whole tape), or after
+ * HELIUS_NEWEST_MAX_PAGES (partial: who sold after the anchor is right, launch roles unknown).
+ */
+async function readNewestPage(
+  p: Progress,
+  page: { txs: ChainTx[]; paginationToken: string | null },
+  parsed: { trades: TapeTrade[]; launch: Progress["launch"] },
+  counts: RunCounts,
+  now: () => number,
+) {
+  // Chain order kept, as the Pump.fun lane does: each page reversed and put in front.
+  p.trades.unshift(...[...parsed.trades].reverse());
+  p.cursor = page.paginationToken ?? undefined;
+  const times = page.txs.map((t) => (t.blockTime ?? 0) * 1000).filter((t) => t > 0);
+  const oldestAtMs = times.length > 0 ? Math.min(...times) : 0;
+  const handoff = handoffs.get(p.coin.tokenId);
+  if (!page.paginationToken) {
+    p.launch = parsed.launch;
+    await finish(p, "helius", p.launch !== null, counts, now());
+  } else if (handoff && oldestAtMs > 0 && oldestAtMs < handoff.throughMs) {
+    // Strictly older: every trade in the hand-off's last second is on this side too.
+    p.trades = [...handoff.trades, ...p.trades];
+    p.launch = handoff.launch;
+    await finish(p, "helius", p.launch !== null, counts, now());
+  } else if (p.calls >= HELIUS_NEWEST_MAX_PAGES) {
+    p.launch = handoff?.launch ?? null;
+    await finish(p, "helius", false, counts, now());
+  } else {
+    return;
+  }
+  handoffs.delete(p.coin.tokenId);
+  state.helius = null;
+}
+
+/** Pump.fun's failure keeps a coin Helius gave up on away from Helius. */
+const pumpFunFailSource = (c: TapeCoin) =>
+  c.failedSource === BUSY_SOURCE || c.failedSource === HELIUS_GAVE_UP ? c.failedSource : "pumpfun";
 
 async function runPumpFunLane(
   deps: TradeTapeDeps,
   called: TapeCoin[],
+  pending: number,
   heliusOn: boolean,
   calls: number,
   spacingMs: number,
@@ -548,7 +693,8 @@ async function runPumpFunLane(
     if (now() < state.pumpFunPausedUntil) return;
     if (!state.pumpFun) {
       let coin: TapeCoin | null | undefined;
-      if (state.coinsStarted % SAMPLE_EVERY === SAMPLE_EVERY - 1) coin = await pendingSampleCoin(now());
+      if (pending <= SAMPLE_PAUSE_PENDING && state.coinsStarted % SAMPLE_EVERY === SAMPLE_EVERY - 1)
+        coin = await pendingSampleCoin(now());
       const free = called.filter((c) => state.helius?.coin.tokenId !== c.tokenId);
       // Beside Helius: the coins Helius couldn't read, else the oldest of the backlog, so the two
       // lanes work from opposite ends. Without Helius: every coin, newest first.
@@ -633,9 +779,12 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
     throttled: 0,
     handedOff: 0,
   };
+  const waiting = await pendingCalledCoins(now());
+  // The reads a shutdown saved go back to their lanes.
+  await restoreProgress(waiting);
   // A coin carried over from the last run stays with its lane, and out of the lists for new picks.
   const inProgress = new Set([state.helius?.coin.tokenId, state.pumpFun?.coin.tokenId]);
-  const called = (await pendingCalledCoins(now())).filter((c) => !inProgress.has(c.tokenId));
+  const called = waiting.filter((c) => !inProgress.has(c.tokenId));
   const pending = called.length + (inProgress.size - (inProgress.has(undefined) ? 1 : 0));
   const heliusOn = opts.heliusPagesPerRun > 0 && deps.helius.gtfaUsable;
   const closing: ClosingCounts = {
@@ -653,6 +802,7 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
       ? runPumpFunLane(
           deps,
           called,
+          pending,
           heliusOn,
           opts.pumpFunCallsPerRun,
           opts.spacingMs ?? PUMPFUN_SPACING_MS,

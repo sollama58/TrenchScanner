@@ -2969,6 +2969,18 @@ model ExitPlanRescore {
 /// moment a seat called it, or a sampled uncalled decision moment): what the per-wallet rows in
 /// TokenWalletActivity and the stop causes on CandidateOutcome were built from. One row per coin;
 /// a coin is read once, after its reference row is final. See apps/worker/src/jobs/tradeTapeJob.ts.
+/// The trade tape's reads in progress (worker tradeTapeJob.ts), one row per lane ("helius",
+/// "pumpFun"): saved at shutdown, taken back and deleted by the next process's first run, so a
+/// deploy doesn't restart a coin's read from its first page. No relation: a coin gone by then is
+/// simply not taken back.
+model TradeTapeProgress {
+  lane    String   @id
+  tokenId String
+  /// The lane's read: the coin, the trades so far, the cursor.
+  data    Json
+  savedAt DateTime @default(now())
+}
+
 model TokenTradeTape {
   tokenId String @id
   token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
@@ -2983,7 +2995,8 @@ model TokenTradeTape {
   /// after the anchor is still right. "failed": no usable read (retried after retryAt).
   status    String
   /// "helius" (getTransactionsForAddress on the mint) or "pumpfun" (Pump.fun's trade API). On a
-  /// failed row, "helius:busy" is a coin too busy for Helius, left to Pump.fun for good.
+  /// failed row, "helius:busy" is a coin too busy for Helius from its launch (read newest first,
+  /// or by Pump.fun), and "helius:failed" one Helius failed on twice, left to Pump.fun for good.
   source    String?
   windowEnd DateTime
   launchAt  DateTime?
