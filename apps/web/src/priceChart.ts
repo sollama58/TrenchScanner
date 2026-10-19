@@ -581,6 +581,26 @@ export interface Zoom {
 /** The narrowest window the chart zooms to. */
 export const MIN_ZOOM_MS = 30 * SECOND;
 
+/** A picked timeframe opens with candles about this wide on screen. */
+const OPEN_CANDLE_PX = 8;
+/**
+ * Fine timeframes open further out (user ask 2026-10-19: 1s opened on about a minute, too close to
+ * read): on at least this much time, so long as each candle keeps OPEN_MIN_CANDLE_PX or so.
+ */
+const OPEN_MIN_SPAN_MS = 5 * MINUTE;
+const OPEN_MIN_CANDLE_PX = 2;
+
+/**
+ * Exported for tests. The window a picked timeframe opens on (or zooms to when picked), for a plot
+ * `plotW` px wide: about OPEN_CANDLE_PX a candle, and for the fine ones (1s, 5s on a phone) at
+ * least OPEN_MIN_SPAN_MS while candles stay OPEN_MIN_CANDLE_PX wide, leaving room to zoom in.
+ */
+export function openingSpanMs(tfMs: number, plotW: number): number {
+  const readable = tfMs * Math.max(8, Math.round(plotW / OPEN_CANDLE_PX));
+  const wide = Math.min(OPEN_MIN_SPAN_MS, tfMs * Math.max(8, Math.round(plotW / OPEN_MIN_CANDLE_PX)));
+  return Math.max(MIN_ZOOM_MS, readable, wide);
+}
+
 /** Exported for tests. The window a zoom shows inside the view [t0, t1]: the whole view without one. */
 export function zoomWindow(zoom: Zoom | null, t0: number, t1: number): { from: number; to: number } {
   if (!zoom || t1 <= t0) return { from: t0, to: t1 };
