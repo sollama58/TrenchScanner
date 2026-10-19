@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type CuratedStats, type FeedStats, type Leaderboard, type MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
-import { SkeletonCards } from "../components/Charts";
+import { SkeletonCards } from "../components/Skeleton";
 import { AboutModal } from "../components/AboutModal";
 import { introSeen, markIntroSeen } from "../intro";
 import { FeedStatsModal } from "../components/FeedStatsModal";

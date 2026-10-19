@@ -370,9 +370,10 @@ const envSchema = z.object({
   // minutes past the call, for the wallet risk score and the stop causes. Helius pages
   // (getTransactionsForAddress, 10 credits each) per one-minute run, the main source for every new
   // called coin (user decision 2026-10-13). ~600 coins are called a day at 20+ pages each, ~125k+
-  // credits a day; 15 keeps up with room, and caps it at 150 credits a minute (~216k a day).
-  // 0 leaves every coin to Pump.fun's API.
-  TRADE_TAPE_HELIUS_PAGES_PER_RUN: z.coerce.number().int().nonnegative().default(15),
+  // credits a day. 15 (150 credits a minute) did not keep up: the backlog grew 575 -> 581 over 8
+  // runs, so 30 (300 credits a minute, ~432k a day at most; user decision 2026-10-19, performance
+  // audit). 0 leaves every coin to Pump.fun's API.
+  TRADE_TAPE_HELIUS_PAGES_PER_RUN: z.coerce.number().int().nonnegative().default(30),
   // Pump.fun trade API calls per run (free, spaced 12 s, but it answers 429 quickly): the backlog,
   // coins Helius couldn't read, and a sample of uncalled coins. 0 turns it off.
   TRADE_TAPE_PUMPFUN_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(4),

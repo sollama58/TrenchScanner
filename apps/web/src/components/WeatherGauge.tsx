@@ -1,8 +1,7 @@
 import type { MarketWeather } from "../api";
 import { usePolling } from "../hooks";
 import { pct } from "../format";
-import { Skeleton } from "./Charts";
-import { renderWeatherCard } from "./lighthouseCards";
+import { Skeleton } from "./Skeleton";
 import { ShareButton } from "./ShareImageDialog";
 
 /**
@@ -116,7 +115,7 @@ export function WeatherGauge({ base }: { base: string }) {
             title="Market weather"
             fileName="trenchscanner-market-weather"
             caption={`TrenchScanner market weather: ${w.condition === "unknown" ? "too early to read" : `${CONDITION_LABEL[w.condition].toLowerCase()} market`}, last ${w.recentHours} hours`}
-            render={() => renderWeatherCard(w)}
+            render={() => import("./lighthouseCards").then((m) => m.renderWeatherCard(w))}
           />
         </div>
         <h3>

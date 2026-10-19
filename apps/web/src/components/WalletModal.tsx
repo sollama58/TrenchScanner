@@ -8,7 +8,7 @@ import { WalletText } from "./WalletText";
 import { KolAvatar } from "./KolAvatar";
 import { TrackedWalletEditor } from "./TrackedWallets";
 import { LoadingNote, Reveal, SkelValue } from "./Loading";
-import { Skeleton } from "./Charts";
+import { Skeleton } from "./Skeleton";
 import { bundleRead, KolSideWallets, SideLabelsExport, WalletBundle } from "../tabs/SideWalletChecker";
 import { WalletWebButton } from "./WalletWeb";
 import {

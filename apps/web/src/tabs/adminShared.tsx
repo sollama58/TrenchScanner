@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Skeleton } from "../components/Charts";
+import { Skeleton } from "../components/Skeleton";
 import type { Loadable } from "../hooks";
 import { ago, shortAddress } from "../format";
 import { openWallet } from "../walletModal";

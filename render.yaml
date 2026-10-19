@@ -404,8 +404,12 @@ services:
         value: "1000000"
       - key: WATCHLIST_TTL_HOURS
         value: "24"
+      # 900 -> 600 (user decision 2026-10-19, performance audit): 30 DexScreener batches a cycle
+      # sat at the rate gate's burst, so the market refresh alone took 2-7 s of each scan. The
+      # near-band tier and the newest launches are refreshed first, so the cut falls on the
+      # launch-level tail.
       - key: WATCHLIST_MAX_TRACKED
-        value: "900"
+        value: "600"
       - key: CLEANUP_HOUR_UTC
         value: "4"
       - key: SNAPSHOT_RETENTION_DAYS
@@ -714,7 +718,7 @@ services:
     headers:
       - path: /*
         name: Content-Security-Policy
-        value: "script-src 'self' https://challenges.cloudflare.com 'sha256-5Z14paLArXMiYwxC/6ty5E5jlf45X+JMHFxkETVMbhE=' 'sha256-KYIyUYVTuGOUtwgz6C9xzns4oKDzv4LdZ6BVTGNVmlU=' 'sha256-Pc6p2V0C2FtigLvoWfEDwpeNwTCyJR4e9OUX4wVdC8c=' 'sha256-eO6WnxT1VOAqTBWNmFSlQhMN2SWrCT/WzqtXBsogR0k='; connect-src 'self' https://api.trenchscanner.app https://trenchscanner-api.onrender.com https://auth.privy.io https://*.rpc.privy.systems https://api.relay.link https://api.mainnet-beta.solana.com wss://api.mainnet-beta.solana.com; frame-src https://auth.privy.io https://challenges.cloudflare.com; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://holdex.live https://www.holdex.live"
+        value: "script-src 'self' https://challenges.cloudflare.com 'sha256-5Z14paLArXMiYwxC/6ty5E5jlf45X+JMHFxkETVMbhE=' 'sha256-KYIyUYVTuGOUtwgz6C9xzns4oKDzv4LdZ6BVTGNVmlU=' 'sha256-aPP2zqXp+dhQL2Wt2SloBpBN689FOhli++WSSaLxVbY=' 'sha256-eO6WnxT1VOAqTBWNmFSlQhMN2SWrCT/WzqtXBsogR0k='; connect-src 'self' https://api.trenchscanner.app https://trenchscanner-api.onrender.com https://auth.privy.io https://*.rpc.privy.systems https://api.relay.link https://api.mainnet-beta.solana.com wss://api.mainnet-beta.solana.com; frame-src https://auth.privy.io https://challenges.cloudflare.com; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://holdex.live https://www.holdex.live"
       # HTTPS only from the first visit on. No includeSubDomains: only this host's own redirect is
       # certain here, and preload would lock that in for every subdomain.
       - path: /*

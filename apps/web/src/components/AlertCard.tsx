@@ -30,7 +30,7 @@ import {
 } from "./Icons";
 import { XLinkPreview } from "./XLinkPreview";
 import { useImagePreview } from "./ImagePreview";
-import { linkedCount, linkedCountText } from "../bubbleMap";
+import { linkedCount, linkedCountText } from "../linkedCount";
 import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
 import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";

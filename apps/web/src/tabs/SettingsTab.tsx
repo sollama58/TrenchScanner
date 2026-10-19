@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { type AlertPrefs, type ChaosSite, type Settings, type Subscription } from "../api";
 import { DEFAULT_ALERT_PREFS, loadSettings, saveAlertPrefs, useSettings } from "../alerts";
-import { Skeleton } from "../components/Charts";
+import { Skeleton } from "../components/Skeleton";
 import { BurnPanel } from "../components/BurnPanel";
 import { BuyAsdfDialog } from "../components/BuyAsdfDialog";
 import { WalletHoldings } from "../components/WalletHoldings";

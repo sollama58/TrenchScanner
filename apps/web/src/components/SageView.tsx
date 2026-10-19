@@ -5,7 +5,7 @@ import { ago, shortAddress, usd } from "../format";
 import { TokenImage } from "./TokenImage";
 import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, LockIcon, SageIcon } from "./Icons";
 import { XLinkPreview } from "./XLinkPreview";
-import { Skeleton } from "./Charts";
+import { Skeleton } from "./Skeleton";
 import { closeSage, SAGE_PARAM } from "../sage";
 import { useShowNarrativeNote } from "../narrativeNote";
 

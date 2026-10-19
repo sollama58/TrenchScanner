@@ -10,7 +10,7 @@ import {
   LockIcon,
   RobotIcon,
 } from "../components/Icons";
-import { Skeleton } from "../components/Charts";
+import { Skeleton } from "../components/Skeleton";
 import { useNow } from "../hooks";
 import { ago, shortAddress } from "../format";
 import { decimalText, decimalUnits } from "../decimal";

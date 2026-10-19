@@ -38,6 +38,8 @@ const PERSIST = new Set([
   "/announcement",
   "/matches?page=1&includeCurated=saved",
   "/guest/feed?page=1",
+  // The sign-in page's showcase alert: a signed-out return visit paints it at once.
+  "/guest/best",
   "/guest/models?days=30",
   "/guest/models?days=7",
   "/guest/insights?days=7",

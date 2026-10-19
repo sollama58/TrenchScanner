@@ -276,6 +276,9 @@ export async function runFastMatchCycle(
       timeoutMs: 5_000,
       retries: 1,
       deadlineMs: 10_000,
+      // Alert latency: without it this lane queued behind the scan's refresh for ~7 s of its 10 s
+      // deadline (performance audit 2026-10-19).
+      priority: true,
     });
   } catch (err) {
     // The full cycle is still running underneath this; a failed fast pass costs latency, never
