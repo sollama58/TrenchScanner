@@ -5,6 +5,7 @@ import {
   createLogger,
   aiReviewSystemPrompt,
   buildAiReviewBrief,
+  launcherTextInstructs,
   nearestOutcomes,
   passesWalletSafetyCuts,
   isPreFeeWalletStonksRow,
@@ -124,6 +125,18 @@ export async function loadReplayItems(
     const id = a.candidateOutcome?.id;
     // Live, a token is reviewed once however many seats call it (curatedAlerts.ts reviewOnce).
     if (!id || seen.has(id) || seenTokens.has(a.token.id)) return false;
+    // Launcher text written to steer the reviewer is passed on live without asking the model
+    // (reviewer.ts reviewPick), and that pass stays out of the judge's record: replaying it would
+    // send the steering text to the model and grade a verdict the live reviewer never gives.
+    if (
+      launcherTextInstructs({
+        symbol: a.token.symbol ?? undefined,
+        name: a.token.name ?? undefined,
+        description: a.token.description ?? undefined,
+      })
+    ) {
+      return false;
+    }
     // A token the safety screen now rejects is never put to the reviewer live, so it is not replayed.
     if (!passesWalletSafetyCuts(a.candidateOutcome!.features as Record<string, number | null>)) return false;
     if (

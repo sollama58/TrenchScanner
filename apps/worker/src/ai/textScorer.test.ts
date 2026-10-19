@@ -4,7 +4,8 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma, loadEnv, resetAiReviewerSwitchCache, type Env } from "@trenchscanner/core";
 
 const parse = vi.fn();
-vi.mock("./client.js", () => ({
+vi.mock("./client.js", async (importActual) => ({
+  lenientFormat: (await importActual<typeof import("./client.js")>()).lenientFormat,
   anthropicClient: () => ({ beta: { messages: { parse } } }),
   anthropicConfigured: (env: Env) => env.ANTHROPIC_API_KEY !== "",
   describeAnthropicError: (err: unknown) => String(err),
@@ -86,6 +87,38 @@ describe.skipIf(!dbAvailable)("text scorer", () => {
     await requestTextScores(token, env);
     await requestTextScores(await newToken("e2"), env);
     expect(parse).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads a billed answer that isn't schema-valid JSON as no answer, not as a failed call", async () => {
+    const token = await newToken("f");
+    // The SDK's own format throws on such text, which settled the budget at the estimate with the
+    // real usage in hand; the format sent parses it to null instead.
+    parse.mockImplementationOnce(
+      async (params: { output_config: { format: { parse: (s: string) => unknown } } }) => {
+        const format = params.output_config.format;
+        expect(format.parse('{"copycatRisk": 0.2, "narra')).toBeNull();
+        expect(format.parse('{"copycatRisk": "high"}')).toBeNull();
+        expect(
+          format.parse('{"copycatRisk":0.1,"narrativeStrength":0.2,"memeAppeal":0.3,"scamSignals":0.4}'),
+        ).toEqual({
+          copycatRisk: 0.1,
+          narrativeStrength: 0.2,
+          memeAppeal: 0.3,
+          scamSignals: 0.4,
+        });
+        return {
+          model: "claude-haiku-5-5",
+          usage: { input_tokens: 800, output_tokens: 4000 },
+          stop_reason: "max_tokens",
+          parsed_output: format.parse('{"copycatRisk": 0.2, "narra'),
+        };
+      },
+    );
+    await requestTextScores(token, env);
+    const row = await prisma.token.findUniqueOrThrow({ where: { id: token.id } });
+    expect(row.aiTextScoredAt).toBeNull();
+    // Not asked again this run, as before.
+    expect(requestTextScores(token, env)).toBeNull();
   });
 
   it("gives up on a token whose read failed, until the worker restarts", async () => {
