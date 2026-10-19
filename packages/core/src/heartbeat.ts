@@ -213,6 +213,7 @@ export const JOB_LOCKED_JOBS: readonly HeartbeatJob[] = [
   "kol-wallets",
   "label-regrade",
   "outcome-tracking",
+  "pro-holders",
   "trade-tape",
   "wallet-risk",
   "dev-launch-risk",

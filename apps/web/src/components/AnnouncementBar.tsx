@@ -47,7 +47,10 @@ export function linkify(text: string): (string | { href: string })[] {
  */
 export function AnnouncementBar() {
   // Every 30 s: the automatic restart warnings (worker pipelineWatchJob.ts) come a minute ahead.
-  const { data, reload } = usePolling<{ announcement: Announcement | null }>("/announcement", 30_000);
+  const { data, stale, error, reload } = usePolling<{ announcement: Announcement | null }>(
+    "/announcement",
+    30_000,
+  );
   useEffect(() => {
     window.addEventListener(REFRESH_EVENT, reload);
     return () => window.removeEventListener(REFRESH_EVENT, reload);
@@ -65,6 +68,8 @@ export function AnnouncementBar() {
     return () => clearTimeout(timer);
   }, [expiresAt, reload]);
   if (!a || a.id === dismissed) return null;
+  // One restored from an earlier visit that this visit couldn't confirm may have been ended since.
+  if (stale && error) return null;
   if (a.expiresAt && new Date(a.expiresAt).getTime() <= Date.now()) return null;
 
   const dismiss = () => {

@@ -68,6 +68,8 @@ const subscribe = (l: () => void) => {
  */
 export function forgetPossibleSides(): void {
   known.clear();
+  // A refusal belonged to the last account (a guest who has since signed in, an ended access).
+  closed = false;
   version += 1;
   for (const l of listeners) l();
 }

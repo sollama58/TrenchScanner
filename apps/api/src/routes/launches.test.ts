@@ -83,6 +83,17 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
       { at: 300_000, mcap: 30_000, passed: true, graduated: false },
       { at: 50_000, mcap: 90_000, passed: true, graduated: true },
     ]);
+    // On its curve at 60K now: about to graduate.
+    await token("soonish", 200_000, [
+      { at: 200_000, mcap: 20_000, passed: true, graduated: false },
+      { at: 20_000, mcap: 60_000, passed: true, graduated: false },
+    ]);
+    // Scanned at 30K, but its live market cap since is 50K: about to graduate too.
+    await token("liveSoon", 200_000, [{ at: 100_000, mcap: 30_000, passed: true }]);
+    await prisma.token.update({
+      where: { id: ids.liveSoon },
+      data: { liveMarketCapUsd: 50_000, liveDataAt: new Date() },
+    });
     app = await buildServer(env);
   });
 
@@ -111,9 +122,9 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
       }[];
     };
     const mine = body.launches.filter((c) => Object.values(ids).includes(c.tokenId));
-    expect(mine.map((c) => c.tokenId)).toEqual([ids.newer, ids.older, ids.grad]);
+    expect(mine.map((c) => c.tokenId)).toEqual([ids.newer, ids.liveSoon, ids.older, ids.soonish, ids.grad]);
     // The card's Alert figure is the market cap it passed at; Now comes from the newest scan.
-    expect(mine[1]).toMatchObject({
+    expect(mine[2]).toMatchObject({
       kind: "stream",
       snapshot: { marketCapUsd: 15_000 },
       latestSnapshot: { marketCapUsd: 40_000 },
@@ -179,6 +190,19 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
     const mine = body.launches.filter((c) => Object.values(ids).includes(c.tokenId));
     expect(mine.map((c) => c.tokenId)).toEqual([ids.grad]);
     expect(mine[0]?.snapshot.marketCapUsd).toBe(90_000);
+  });
+
+  it("lists tokens still on their curve at the mark now, biggest first", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/launches?soon=1",
+      cookies: { [SESSION_COOKIE_NAME]: cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { launches: { tokenId: string }[] };
+    const mine = body.launches.filter((c) => Object.values(ids).includes(c.tokenId));
+    // older is at 40K, under the mark; grad has graduated; liveSoon's live 50K is newer than its scan.
+    expect(mine.map((c) => c.tokenId)).toEqual([ids.soonish, ids.liveSoon]);
   });
 
   it("is behind sign-in like the feeds", async () => {

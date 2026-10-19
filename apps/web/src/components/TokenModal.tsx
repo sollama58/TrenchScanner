@@ -3055,7 +3055,7 @@ function TrendCard({ read: r }: { read: SageRead }) {
         <p className="small muted">
           {t === null
             ? "Trends weren't checked on this read."
-            : "Not trending: nothing it refers to is up on Wikipedia, Google Trends, the news or X right now."}
+            : "Not trending: nothing it refers to is up on Wikipedia, Google Trends, the news or X when it was read."}
         </p>
       )}
     </section>

@@ -48,6 +48,14 @@ describe("telegram alert text", () => {
     expect(escapeHtml('a"b')).toBe("a&quot;b");
   });
 
+  it("marks the MC as the alert's when the alert goes out late", () => {
+    const now = Date.now();
+    expect(formatAlert(card({ raisedAt: new Date(now - 30_000) }), links, now)).not.toContain("at alert");
+    expect(formatAlert(card({ raisedAt: new Date(now - 7 * 60_000) }), links, now)).toMatch(
+      /💰 MC <b>[^<]+<\/b> at alert, 7m ago/,
+    );
+  });
+
   it("says who raised it", () => {
     expect(headline(card({ filters: [{ name: "Mine", score: 1 }] }))).toBe("caught by “Mine”");
     const call = {
