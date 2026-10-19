@@ -10,8 +10,11 @@ import {
   CPMM_POOL_SIZE,
   CPMM_VAULTS_OFFSET,
   CPMM_VAULTS_READ_BYTES,
+  CPMM_LP_READ_BYTES,
   RAYDIUM_CPMM_PROGRAM,
+  cpmmLpFor,
   cpmmVaultsFor,
+  lockedLpShare,
   decodeLaunchLab,
 } from "./launchLab.js";
 import {
@@ -1833,6 +1836,98 @@ export class HeliusClient {
           ? decodePoolVaults(data[0], mint, quoteMint)
           : null,
       );
+    }
+    return out;
+  }
+
+  /**
+   * The share (0-1) of each Raydium CPMM pool's LP that is burned or in Raydium's LP lock
+   * (launchLab.ts lockedLpShare), for a Stonks coin graduated into a pool RugCheck doesn't list:
+   * it lists only SOL-quoted markets, and a coin paired with a tokenized stock read as its side
+   * pools alone. `pools` maps each pool to its coin's mint. Per pool: its share, null when it is
+   * not a CPMM pool of that mint, or "failed". One getMultipleAccounts for the pools, a batch of
+   * getTokenSupply and getTokenLargestAccounts per LP mint, one getMultipleAccounts for owners.
+   */
+  async getCpmmLpLockedBatch(
+    pools: ReadonlyMap<string, string>,
+  ): Promise<Map<string, number | null | "failed">> {
+    const out = new Map<string, number | null | "failed">();
+    if (pools.size === 0) return out;
+    const accounts = await this.getMultipleAccounts<{ owner?: unknown; data?: unknown }>([...pools.keys()], {
+      encoding: "base64",
+      dataSlice: { offset: 0, length: CPMM_LP_READ_BYTES },
+    });
+    const lpByPool = new Map<string, { lpMint: string; lpSupply: bigint }>();
+    for (const [pool, mint] of pools) {
+      const account = accounts.get(pool);
+      if (!account || account === "failed") {
+        out.set(pool, "failed");
+        continue;
+      }
+      const data = account.value?.data;
+      const lp =
+        account.value?.owner === RAYDIUM_CPMM_PROGRAM && Array.isArray(data) && typeof data[0] === "string"
+          ? cpmmLpFor(data[0], mint)
+          : null;
+      if (lp) lpByPool.set(pool, lp);
+      else out.set(pool, null);
+    }
+    if (lpByPool.size === 0) return out;
+
+    const lpMints = [...new Set([...lpByPool.values()].map((lp) => lp.lpMint))];
+    const responses = await this.sendBatched<{ value?: unknown }>(
+      lpMints.flatMap((lpMint) => [
+        {
+          id: `lta-${lpMint}`,
+          method: "getTokenLargestAccounts",
+          params: [lpMint, { commitment: "confirmed" }],
+        },
+        { id: `sup-${lpMint}`, method: "getTokenSupply", params: [lpMint, { commitment: "confirmed" }] },
+      ]),
+      10_000,
+    );
+    const largestByMint = new Map<string, { address: string; amount: bigint }[]>();
+    const supplyByMint = new Map<string, bigint>();
+    for (const lpMint of lpMints) {
+      const largest = responses.get(`lta-${lpMint}`)?.result?.value;
+      const supply = (responses.get(`sup-${lpMint}`)?.result?.value as { amount?: unknown } | undefined)
+        ?.amount;
+      if (!Array.isArray(largest) || typeof supply !== "string" || !/^\d+$/.test(supply)) continue;
+      largestByMint.set(
+        lpMint,
+        (largest as { address?: unknown; amount?: unknown }[]).flatMap((e) =>
+          typeof e?.address === "string" && typeof e.amount === "string" && /^\d+$/.test(e.amount)
+            ? [{ address: e.address, amount: BigInt(e.amount) }]
+            : [],
+        ),
+      );
+      supplyByMint.set(lpMint, BigInt(supply));
+    }
+    const tokenAccounts = [...new Set([...largestByMint.values()].flat().map((a) => a.address))];
+    const owners =
+      tokenAccounts.length > 0
+        ? await this.getMultipleAccounts<{ data?: { parsed?: { info?: { owner?: unknown } } } }>(
+            tokenAccounts,
+            {
+              encoding: "jsonParsed",
+            },
+          )
+        : new Map();
+    for (const [pool, { lpMint, lpSupply }] of lpByPool) {
+      const largest = largestByMint.get(lpMint);
+      const supply = supplyByMint.get(lpMint);
+      if (!largest || supply === undefined) {
+        out.set(pool, "failed");
+        continue;
+      }
+      const holdings: { owner: string; amount: bigint }[] = [];
+      for (const a of largest) {
+        const account = owners.get(a.address);
+        const owner = account && account !== "failed" ? account.value?.data?.parsed?.info?.owner : undefined;
+        if (typeof owner === "string") holdings.push({ owner, amount: a.amount });
+      }
+      // An owner left unread only makes the share smaller: it never reads LP as locked that isn't.
+      out.set(pool, lockedLpShare(lpSupply, supply, holdings));
     }
     return out;
   }

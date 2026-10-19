@@ -13,6 +13,7 @@ import {
   addNewMintsToWatchlist,
   saveMovingLaunches,
   buildOnChainProfile,
+  needsStonksPoolLockRead,
   freshGraduatesOverCut,
   noteSnapshotWritten,
   persistSnapshot,
@@ -76,6 +77,30 @@ describe("a fresh graduate's own pool in its RugCheck holders", () => {
       buildOnChainProfile({ mintAddress: "Fresh", dexId: "raydium", launchpad: "stonks" }, cached, new Map())
         ?.lpBurned,
     ).toBe(false);
+  });
+
+  it("passes a Stonks coin whose unlisted pool's LP the chain read locked", () => {
+    // DER1K...WTsZ's shape: graduated into a CPMM pool against a tokenized stock, which RugCheck
+    // doesn't list; its report has only the Meteora side pools in SOL, 0% locked.
+    const sidePoolsOnly = new Map([["Fresh", { ...profile(20), lpBurned: false }]]);
+    const stonks = { mintAddress: "Fresh", dexId: "raydium", pairAddress: "Pool", launchpad: "stonks" };
+    expect(needsStonksPoolLockRead(stonks, sidePoolsOnly)).toBe(true);
+    const locked = buildOnChainProfile(
+      stonks,
+      sidePoolsOnly,
+      new Map(),
+      new Map(),
+      new Map(),
+      new Set(["Fresh"]),
+    );
+    expect(locked?.lpBurned).toBe(true);
+    expect(buildOnChainProfile(stonks, sidePoolsOnly, new Map())?.lpBurned).toBe(false);
+    // RugCheck's reading of a listed LaunchLab market stands, and other coins are never read.
+    const listed = new Map([["Fresh", { ...profile(20), lpBurned: false, launchLabLpBurned: false }]]);
+    expect(needsStonksPoolLockRead(stonks, listed)).toBe(false);
+    expect(needsStonksPoolLockRead({ ...stonks, launchpad: "pumpfun" }, sidePoolsOnly)).toBe(false);
+    expect(needsStonksPoolLockRead({ ...stonks, dexId: "stonkfun" }, sidePoolsOnly)).toBe(false);
+    expect(needsStonksPoolLockRead(stonks, new Map())).toBe(true);
   });
 
   it("passes a proven Pump.fun launch on LP and authorities, without its PumpSwap pool as a holder", () => {

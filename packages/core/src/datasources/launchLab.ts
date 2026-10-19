@@ -1,6 +1,7 @@
 import bs58 from "bs58";
 import type { CurveState } from "../curation/curveTape.js";
 import { WRAPPED_SOL_MINT } from "../venueAccounts.js";
+import { findProgramAddress } from "../solana.js";
 
 /**
  * Raydium LaunchLab's bonding curve (Stonks launches: launchpads.ts), read for its price like a
@@ -60,6 +61,65 @@ export function cpmmVaultsFor(
   if (mint0 === mint && mint1 === quoteMint) return { base: vault0, quote: vault1, virtualQuote: 0 };
   if (mint1 === mint && mint0 === quoteMint) return { base: vault1, quote: vault0, virtualQuote: 0 };
   return null;
+}
+
+/**
+ * A CPMM pool's LP: its LP mint and the LP the pool has issued (lp_supply, after the vaults, mints,
+ * token programs, observation key, bump, status and three decimals). The pool counts LP out
+ * as it is minted and back as it is withdrawn, so LP burned with a plain token burn is the
+ * difference between this and the LP mint's own supply.
+ */
+const CPMM_LP_MINT_OFFSET = 136;
+const CPMM_LP_SUPPLY_OFFSET = 333;
+/** The slice the LP read needs: through lp_supply. */
+export const CPMM_LP_READ_BYTES = CPMM_LP_SUPPLY_OFFSET + 8;
+
+/**
+ * Raydium's LP lock (Burn & Earn): the LaunchLab migration burns part of the new pool's LP and
+ * locks the rest here for good, under this one authority (`["lock_cp_authority_seed"]`), keeping
+ * only a fee-claim NFT for the creator and the platform. LP held here can never be withdrawn.
+ */
+export const RAYDIUM_LP_LOCK_PROGRAM = "LockrWmn6K5twhz3y9w1dQERbmgSaRkfnTeTKbpofwE";
+export const RAYDIUM_CPMM_LOCK_AUTHORITY = findProgramAddress(
+  [new TextEncoder().encode("lock_cp_authority_seed")],
+  RAYDIUM_LP_LOCK_PROGRAM,
+);
+
+/**
+ * A CPMM pool's LP mint and issued LP, from its account's first CPMM_LP_READ_BYTES (raw bytes or
+ * base64), or null when the pool doesn't trade `mint`.
+ */
+export function cpmmLpFor(
+  raw: Uint8Array | string,
+  mint: string,
+): { lpMint: string; lpSupply: bigint } | null {
+  const data = typeof raw === "string" ? Uint8Array.from(Buffer.from(raw, "base64")) : raw;
+  if (data.length < CPMM_LP_READ_BYTES) return null;
+  const key = (at: number) => bs58.encode(data.subarray(at, at + 32));
+  if (key(CPMM_MINT0_OFFSET) !== mint && key(CPMM_MINT1_OFFSET) !== mint) return null;
+  const lpSupply = new DataView(data.buffer, data.byteOffset + CPMM_LP_SUPPLY_OFFSET, 8).getBigUint64(
+    0,
+    true,
+  );
+  return { lpMint: key(CPMM_LP_MINT_OFFSET), lpSupply };
+}
+
+/**
+ * The share (0-1) of a CPMM pool's issued LP nobody can withdraw: burned (issued, no longer in the
+ * LP mint's supply) or held by Raydium's LP lock. `holdings` are the LP mint's largest accounts
+ * with their owners. Null for a pool that has issued no LP.
+ */
+export function lockedLpShare(
+  lpSupply: bigint,
+  mintSupply: bigint,
+  holdings: readonly { owner: string; amount: bigint }[],
+): number | null {
+  if (lpSupply <= 0n) return null;
+  const burned = lpSupply > mintSupply ? lpSupply - mintSupply : 0n;
+  const locked = holdings
+    .filter((h) => h.owner === RAYDIUM_CPMM_LOCK_AUTHORITY)
+    .reduce((sum, h) => sum + h.amount, 0n);
+  return Math.min(1, Number(burned + locked) / Number(lpSupply));
 }
 
 /** Status 0 is still on its curve; 1 (migrating) and 2 (migrated) are graduated. */

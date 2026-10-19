@@ -5,6 +5,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import bs58 from "bs58";
 import { mayhemStateAddress } from "../solana.js";
 import { STONKS_FEE_WALLET } from "../stonksFees.js";
+import { CPMM_LP_READ_BYTES, RAYDIUM_CPMM_LOCK_AUTHORITY, RAYDIUM_CPMM_PROGRAM } from "./launchLab.js";
 
 const WALLET = bs58.encode(ed25519.getPublicKey(new Uint8Array(32).fill(7)));
 const CURVE = mayhemStateAddress(WALLET);
@@ -1288,5 +1289,81 @@ describe("HeliusClient.getEarliestActivityBatch on an aged wallet", () => {
     });
     const methods = requests.flatMap((r) => (r.body as { method: string }[]).map((c) => c.method));
     expect(methods).not.toContain("getTransactionsForAddress");
+  });
+});
+
+describe("HeliusClient.getCpmmLpLockedBatch", () => {
+  const MINT = bs58.encode(new Uint8Array(32).fill(3));
+  const LP_MINT = bs58.encode(new Uint8Array(32).fill(4));
+
+  function poolSlice(): string {
+    const data = new Uint8Array(CPMM_LP_READ_BYTES);
+    data.set(bs58.decode(LP_MINT), 136);
+    data.set(bs58.decode(MINT), 200);
+    new DataView(data.buffer).setBigUint64(333, 1000n, true);
+    return Buffer.from(data).toString("base64");
+  }
+
+  it("reads the share of a pool's LP burned or in Raydium's lock", async () => {
+    const { url } = await startServer((calls) =>
+      calls.map((c) => {
+        if (c.method === "getTokenLargestAccounts")
+          return {
+            jsonrpc: "2.0",
+            id: c.id,
+            result: {
+              value: [
+                { address: "locked", amount: "700" },
+                { address: "wallet", amount: "200" },
+              ],
+            },
+          };
+        if (c.method === "getTokenSupply")
+          return { jsonrpc: "2.0", id: c.id, result: { value: { amount: "900" } } };
+        const keys = c.params[0] as string[];
+        const parsed = (c.params[1] as { encoding: string }).encoding === "jsonParsed";
+        return {
+          jsonrpc: "2.0",
+          id: c.id,
+          result: {
+            value: keys.map((k) =>
+              parsed
+                ? {
+                    data: {
+                      parsed: { info: { owner: k === "locked" ? RAYDIUM_CPMM_LOCK_AUTHORITY : WALLET } },
+                    },
+                  }
+                : k === "NotCpmm"
+                  ? { owner: OTHER, data: [poolSlice(), "base64"] }
+                  : k === "Missing"
+                    ? null
+                    : { owner: RAYDIUM_CPMM_PROGRAM, data: [poolSlice(), "base64"] },
+            ),
+          },
+        };
+      }),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+    const result = await client.getCpmmLpLockedBatch(
+      new Map([
+        ["Pool", MINT],
+        ["NotCpmm", MINT],
+        ["Missing", MINT],
+        ["OtherCoin", OTHER],
+      ]),
+    );
+    // 100 burned (issued 1000, supply 900) and 700 locked of 1000.
+    expect(result.get("Pool")).toBeCloseTo(0.8);
+    expect(result.get("NotCpmm")).toBeNull();
+    expect(result.get("Missing")).toBeNull();
+    expect(result.get("OtherCoin")).toBeNull();
+  });
+
+  it("fails a pool whose reads came back without an answer", async () => {
+    const { url } = await startServer((calls) =>
+      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, error: { code: -32000, message: "busy" } })),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+    expect((await client.getCpmmLpLockedBatch(new Map([["Pool", MINT]]))).get("Pool")).toBe("failed");
   });
 });
