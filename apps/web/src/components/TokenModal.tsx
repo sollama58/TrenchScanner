@@ -2153,13 +2153,16 @@ export function ChartCard({
   const shownBounds = bounds && zoom ? zoomWindow(zoom, bounds.from, bounds.to) : bounds;
   const span = shownBounds ? shownBounds.to - shownBounds.from : Infinity;
   const fineOk = !!data?.candles?.length;
-  // Only for a view of the last minutes: the 1-second page never reaches back further, and each
-  // read spends the shared Pump.fun budget.
+  // Only for a view of the last minutes, or one reaching into what the last 1-second page held (a quiet
+  // coin's reaches back further): each read spends the shared Pump.fun budget. Panning a locked 1s
+  // view back keeps its candles 1s as far as the page goes (user ask 2026-10-19).
+  const [secondFrom, setSecondFrom] = useState<{ mint: string; t: number } | null>(null);
   const wantSecond =
     fineOk &&
     !!shownBounds &&
     span <= SECOND_VIEW_MAX_MS &&
-    shownBounds.from >= Date.now() - SECOND_VIEW_MAX_MS;
+    (shownBounds.from >= Date.now() - SECOND_VIEW_MAX_MS ||
+      (secondFrom?.mint === mint && shownBounds.to > secondFrom.t));
   // The experimental predicted path (Customize › Token chart, off by default) reads the last
   // minute second by second, so a live view with it on reads the 1-second page whatever its span;
   // the view itself still draws it only where it would anyway.
@@ -2170,6 +2173,10 @@ export function ChartCard({
     bounds?.live ? FINE_LIVE_POLL_MS : FINE_POLL_MS,
   );
   const second = wantSecond ? secondRead : null;
+  const secondStart = secondRead?.candles?.[0]?.t ?? null;
+  useEffect(() => {
+    if (secondStart !== null) setSecondFrom({ mint, t: secondStart });
+  }, [secondStart, mint]);
   const secondReaches =
     !!second?.candles?.length && !!shownBounds && second.candles[0]!.t <= shownBounds.from + 60_000;
   const quarter = useFineCandles(
