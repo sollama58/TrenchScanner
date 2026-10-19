@@ -72,8 +72,11 @@ describe("dashboard Content-Security-Policy", () => {
   it("lets Privy's email sign-in run, and nothing else from outside", () => {
     const csp = webCsp();
     const connectSrc = csp.get("connect-src") ?? [];
-    for (const host of ["https://auth.privy.io", "https://*.rpc.privy.systems"])
+    // Privy's RPC, which its confirm window reads the fee and balance with. Solana's public RPC
+    // refuses browsers (403), which broke every Privy burn's confirm window.
+    for (const host of ["https://auth.privy.io", "https://*.rpc.privy.systems", "wss://*.rpc.privy.systems"])
       expect(connectSrc).toContain(host);
+    expect(connectSrc).not.toContain("https://api.mainnet-beta.solana.com");
     expect(csp.get("frame-src")).toContain("https://auth.privy.io");
     // The only outside script: Privy's captcha (Cloudflare Turnstile).
     const scripts = (csp.get("script-src") ?? []).filter((s) => !s.startsWith("'sha256-"));
