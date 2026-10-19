@@ -1728,6 +1728,8 @@ export interface Settings {
   push?: { publicKey: string | null };
   /** Absent from API builds before feed appearance. */
   appearance?: FeedAppearance;
+  /** Tokens hidden from the Live feed (hiddenTokens.ts reads it); absent from API builds before it. */
+  hiddenTokens?: unknown;
   account: {
     walletAddress: string;
     memberSince: string;

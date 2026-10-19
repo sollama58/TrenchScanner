@@ -5,6 +5,7 @@ import { useNudgeStream } from "./hooks";
 import { playAlertSound, unlockAudio } from "./alertSounds";
 import { tokenThumb, usd } from "./format";
 import { adoptAppearance, appearanceVersion, useAppearance } from "./appearance";
+import { adoptHiddenTokens, hiddenTokensVersion } from "./hiddenTokens";
 import { openChaosTabs, thisBrowserIsDesktop } from "./chaosMode";
 import { belowMcapLine } from "./components/AlertCard";
 
@@ -47,11 +48,13 @@ function subscribe(listener: () => void) {
 export function loadSettings(force = false): Promise<void> {
   if (loading && !force) return loading;
   const lookVersion = appearanceVersion();
+  const hiddenVersion = hiddenTokensVersion();
   loading = cachedGet<Settings>(SETTINGS_PATH, force ? -1 : 0)
     .then((s) => {
       settings = s;
       // The feed's look rides along; a change made on this device since the request wins.
       adoptAppearance(s.appearance, lookVersion);
+      adoptHiddenTokens(s.hiddenTokens, hiddenVersion);
       emit();
     })
     .finally(() => {
