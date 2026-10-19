@@ -392,7 +392,14 @@ export interface TokenSageAnalysis {
     text?: string | null;
     predates_token_by_s?: number | null;
     reuse_count?: number;
-    author?: (TokenSageXAccount & { user_id?: string | null; joined?: string | null }) | null;
+    author?:
+      | (TokenSageXAccount & {
+          user_id?: string | null;
+          joined?: string | null;
+          /** When the profile figures were read from X (TokenSage audit 2026-10-19). */
+          as_of?: string | null;
+        })
+      | null;
     quoted?: TokenSageXPost | null;
     replied_to?: TokenSageXPost | null;
     accounts?: TokenSageXAccount[];

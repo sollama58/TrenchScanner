@@ -918,6 +918,8 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
         categories: true,
         mainCategory: true,
         analysis: true,
+        nowRead: true,
+        nowAt: true,
       },
     }),
     prisma.token.findUnique({
@@ -969,7 +971,10 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
   const read =
     row?.status === "failed"
       ? null
-      : sageRead(row?.analysis as TokenSageAnalysis | null, row?.depth ?? "basic");
+      : sageRead(row?.analysis as TokenSageAnalysis | null, row?.depth ?? "basic", {
+          trend: (row?.nowRead as { trend?: unknown } | null)?.trend ?? null,
+          at: row?.nowAt ?? null,
+        });
   return {
     mint: mintAddress,
     token: token
