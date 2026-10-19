@@ -3593,3 +3593,24 @@ model SacrificeSettings {
   updatedBy String?
   updatedAt DateTime @updatedAt
 }
+
+/// Flagged wallets' trades the API's live trades follower saw (apps/api/src/chartFlaggedTrades.ts,
+/// user ask 2026-10-19): KOLs and their sides, wallets anyone labeled, risky wallets, known dumpers,
+/// winners and the coin's creator. The trade tape (TokenWalletActivity) reads only to 30 minutes
+/// past the call, so without these a flagged wallet's later trade was marked on the token chart
+/// only while it was open. Read back by the chart's wallet marks; kept apart from the tape so no
+/// model input sees them.
+model ChartFlaggedTrade {
+  sig       String
+  wallet    String
+  /// 1 a buy, -1 a sale.
+  side      Int
+  mint      String
+  /// SOL paid or received; null when the coin's quote couldn't be priced in SOL.
+  sol       Float?
+  at        DateTime
+  createdAt DateTime @default(now())
+
+  @@id([sig, wallet, side])
+  @@index([mint, at])
+}

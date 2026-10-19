@@ -80,6 +80,7 @@ import { RouteTimings } from "./routeTimings.js";
 import { fastifyLogger } from "./fastifyLogger.js";
 import { liveCurves, liveCurvesFor, setLiveCurves } from "./liveCurve.js";
 import { liveTrades, liveTradesFor, setLiveTrades } from "./liveTrades.js";
+import { FlaggedTradeSaver, prismaFlaggedTradeStore } from "./chartFlaggedTrades.js";
 import { dexScreenerQuote, jupiterQuote, QuotePrice, sharedSolPrice } from "./solPrice.js";
 import { recordAdminActions } from "./adminActionLog.js";
 
@@ -655,6 +656,11 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // (liveTrades.ts), behind the same switch as the chart's.
   setLiveTrades(liveTradesFor(env.HELIUS_API_KEY, env.CHART_LIVE_CURVES, solPrice, quotePrice, walletHelius));
   app.addHook("onClose", async () => liveTrades().stop());
+  // Flagged wallets' trades among them are saved for the chart's marks (chartFlaggedTrades.ts),
+  // once listening: a test server never listens and saves none.
+  const flaggedSaver = new FlaggedTradeSaver(liveTrades(), prismaFlaggedTradeStore);
+  app.addHook("onListen", async () => flaggedSaver.start());
+  app.addHook("onClose", async () => flaggedSaver.stop());
   await app.register(registerTokenRoutes, { prefix: "/tokens", env, stonkFees: walletHelius });
   const walletLive = walletHelius ? new WalletLiveReader(walletHelius) : null;
   // Helius's name for it (exchanges, protocols, services): its identity API, on paid plans.

@@ -139,10 +139,18 @@ import {
 } from "../safetyScreen";
 
 /** Mirrors apps/api/src/routes/tokens.ts TokenChart. */
+/** The older candles' width (TokenChart.older; apps/api/src/tokenChart.ts OLDER_CANDLE_MS). */
+const OLDER_CANDLE_MS = 5 * 60_000;
+
 interface TokenChart {
   mint: string;
   /** Pump.fun's minute candles as market cap (apps/api/src/tokenChart.ts McapCandle). */
   candles: { t: number; o: number; h: number; l: number; c: number; vol?: number }[] | null;
+  /**
+   * 5-minute candles before `candles`' first, when those no longer reach back to the launch (a coin
+   * busy for more than Pump.fun's 1,000 minutes): the call's flag stays on the chart. Absent otherwise.
+   */
+  older?: { t: number; o: number; h: number; l: number; c: number; vol?: number }[];
   /** buys/sells: the 5-minute counts before the scan; absent from older API builds. */
   marketCap: { t: number; usd: number; buys?: number | null; sells?: number | null }[];
   /** Absent from an API older than this page. */
@@ -2119,7 +2127,11 @@ export function ChartCard({
       // reach, the coarser ones before - then every live curve change after the newest candle.
       // Without candles, through the scan's readings.
       const runs: (CloseRun & { candles: VolumeCandle[] })[] = fromCandles
-        ? [runOf(data.candles!, 60_000), ...fines]
+        ? [
+            ...(data.older?.length ? [runOf(data.older, OLDER_CANDLE_MS)] : []),
+            runOf(data.candles!, 60_000),
+            ...fines,
+          ]
         : [
             {
               points: data.marketCap
@@ -2482,7 +2494,7 @@ function StaleBadge({ at }: { at: number | null }) {
 function viewBounds(data: TokenChart, range: Range): { from: number; to: number; live: boolean } | null {
   const times = data.candles?.length ? data.candles.map((k) => k.t + 60_000) : data.marketCap.map((p) => p.t);
   if (times.length === 0) return null;
-  const first = Math.min(times[0]!, data.candles?.[0]?.t ?? Infinity);
+  const first = Math.min(times[0]!, data.candles?.[0]?.t ?? Infinity, data.older?.[0]?.t ?? Infinity);
   const last = times[times.length - 1]!;
   const to = Math.max(last, Date.now());
   const from = range === "all" ? first : Math.max(first, to - TRADING_SPAN_MS);
