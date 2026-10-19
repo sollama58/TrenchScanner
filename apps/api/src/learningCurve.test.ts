@@ -10,6 +10,7 @@ import {
   buildLearningTrend,
   caughtByDay,
   chooseRuns,
+  dayIn,
   runnersByDay,
   withCatch,
   MIN_GRADED_FOR_LIFT,
@@ -248,6 +249,15 @@ describe("buildLearningRuns", () => {
   });
 });
 
+describe("dayIn", () => {
+  it("names the calendar day in the reader's zone, not UTC's", () => {
+    const at = new Date("2026-10-19T02:30:00Z");
+    expect(dayIn(at, "UTC")).toBe("2026-10-19");
+    expect(dayIn(at, "America/New_York")).toBe("2026-10-18");
+    expect(dayIn(new Date("2026-10-18T20:00:00Z"), "Asia/Tokyo")).toBe("2026-10-19");
+  });
+});
+
 describe("chooseRuns", () => {
   const stamps = [
     new Date("2026-10-03T22:00:00Z"),
@@ -319,6 +329,66 @@ describe.skipIf(!dbAvailable)("buildLearningCurve", () => {
       expect(mine.trend?.prior?.feed.graded).toBe(13 - TREND_SPAN_DAYS);
     } finally {
       await prisma.curatedAlert.deleteMany({ where: { model } });
+      await prisma.token.delete({ where: { id: token.id } });
+    }
+  });
+
+  it("groups calls by the reader's calendar day, and counts an open call at its latest reading", async () => {
+    const model = `lc-zone-${Date.now()}`;
+    const token = await prisma.token.create({ data: { mintAddress: `${model}-mint`, symbol: "LCZ" } });
+    const until = new Date();
+    const since = new Date(until.getTime() - 7 * 86_400_000);
+    // 02:30 UTC two days ago: that UTC day, but the evening before in New York.
+    const dayStart = Date.UTC(until.getUTCFullYear(), until.getUTCMonth(), until.getUTCDate());
+    const createdAt = new Date(dayStart - 2 * 86_400_000 + 2.5 * 3_600_000);
+    const outcome = await prisma.candidateOutcome.create({
+      data: {
+        tokenId: token.id,
+        sampleKind: "emission",
+        anchorAt: createdAt,
+        anchorPriceUsd: 0.0001,
+        anchorMcapUsd: 50_000,
+        nextCheckAt: until,
+        features: {},
+        peak1hPriceUsd: 0.0003,
+        low1hPriceUsd: 0.0001,
+        lowBefore2xPriceUsd: 0.0001,
+        peak24hPriceUsd: 0.0003,
+        hit2xIn1h: true,
+        disqualified: false,
+        openReturnPct: 80,
+      },
+    });
+    try {
+      await prisma.curatedAlert.create({
+        data: {
+          source: "test",
+          confidence: 70,
+          anchorPriceUsd: 0.0001,
+          anchorMcapUsd: 50_000,
+          tokenId: token.id,
+          model,
+          modelName: "Zone test",
+          createdAt,
+          candidateOutcomeId: outcome.id,
+          hit2xIn1h: true,
+          hit4xIn1h: false,
+          disqualified: false,
+        },
+      });
+      const targets = { hitRate2xPct: 75, hitRate4xPct: 50 };
+      const utc = await buildLearningCurve(since, until, targets, 7);
+      const ny = await buildLearningCurve(since, until, targets, 7, undefined, "America/New_York");
+      expect(ny.timeZone).toBe("America/New_York");
+      const dayOf = (c: typeof utc) => c.models.find((m) => m.model === model)!.days[0]!;
+      expect(dayOf(utc).day).toBe(dayIn(createdAt, "UTC"));
+      expect(dayOf(ny).day).toBe(dayIn(createdAt, "America/New_York"));
+      expect(dayOf(ny).day).not.toBe(dayOf(utc).day);
+      // Still riding its trailing share: in the average at its latest reading, counted as open.
+      expect(dayOf(utc).rates).toMatchObject({ simCalls: 1, simOpen: 1, avgReturnPct: 80 });
+    } finally {
+      await prisma.curatedAlert.deleteMany({ where: { model } });
+      await prisma.candidateOutcome.delete({ where: { id: outcome.id } });
       await prisma.token.delete({ where: { id: token.id } });
     }
   });

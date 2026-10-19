@@ -130,6 +130,11 @@ export interface GradedCounts {
   simCalls?: number;
   sumSimReturnPct?: number;
   /**
+   * Of simCalls, the calls still riding their trailing share, priced at their latest reading
+   * (CandidateOutcome.openReturnPct), where the source counts them in (the learning curve).
+   */
+  simOpen?: number;
+  /**
    * Calls with no verdict that never will get one, so they are not "pending" either. Filter
    * alerts: a Match with no grading anchor (every match before grading shipped on 2026-10-03, or
    * one whose anchor write failed) has nothing for the watcher to close. Curated alerts: the row
@@ -314,7 +319,7 @@ export async function baselineRates(
 ): Promise<GradedRates> {
   if (rows) {
     // The baseline never carried a simulated return; leave it off so the answer stays the same shape.
-    const { sim_calls: _calls, sim_sum: _sum, ...counts } = marketCounts(rows);
+    const { sim_calls: _calls, sim_sum: _sum, sim_open: _open, ...counts } = marketCounts(rows);
     return withRates(toCounts(counts), targets);
   }
   const [row] = await prisma.$queryRaw<RawCounts[]>`

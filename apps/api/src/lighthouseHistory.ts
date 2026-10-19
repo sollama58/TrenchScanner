@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { describeExitPlan, prisma } from "@trenchscanner/core";
-import { SharedCache } from "./sharedCache.js";
+import { SharedCache, withComputedAt } from "./sharedCache.js";
 
 /**
  * The Lighthouse tab's trends: the hourly sums the worker keeps for good (LighthouseHour,
@@ -94,6 +94,8 @@ interface SumRow {
   alerts_ten_x_graded: bigint;
   alerts_return_n: bigint;
   alerts_return_sum: number | null;
+  screened_return_open?: bigint;
+  alerts_return_open?: bigint;
 }
 
 const n = (v: bigint | number | null | undefined) => Number(v ?? 0);
@@ -110,6 +112,8 @@ function sums(r: SumRow | undefined) {
       tenXGraded: n(r?.screened_ten_x_graded),
       returnN: n(r?.screened_return_n),
       returnSum: r?.screened_return_sum ?? 0,
+      /** Of returnN, calls still riding their trailing share, priced at their latest reading. */
+      returnOpen: n(r?.screened_return_open),
     },
     reads: {
       total: n(r?.reads_total),
@@ -135,6 +139,7 @@ function sums(r: SumRow | undefined) {
       tenXGraded: n(r?.alerts_ten_x_graded),
       returnN: n(r?.alerts_return_n),
       returnSum: r?.alerts_return_sum ?? 0,
+      returnOpen: n(r?.alerts_return_open),
     },
   };
 }
@@ -157,6 +162,7 @@ async function sumHours(from: Date | null, to: Date, bucket: HistoryBucket | nul
            sum(h."screenedTenXGraded") AS screened_ten_x_graded,
            sum(h."screenedReturnN") AS screened_return_n,
            sum(h."screenedReturnSum")::float8 AS screened_return_sum,
+           sum(h."screenedReturnOpen") AS screened_return_open,
            sum(h."readsTotal") AS reads_total,
            sum(h."readsDescribed") AS reads_described,
            sum(h."readsDeep") AS reads_deep,
@@ -177,7 +183,8 @@ async function sumHours(from: Date | null, to: Date, bucket: HistoryBucket | nul
            sum(h."alertsWon10x") AS alerts_won10x,
            sum(h."alertsTenXGraded") AS alerts_ten_x_graded,
            sum(h."alertsReturnN") AS alerts_return_n,
-           sum(h."alertsReturnSum")::float8 AS alerts_return_sum
+           sum(h."alertsReturnSum")::float8 AS alerts_return_sum,
+           sum(h."alertsReturnOpen") AS alerts_return_open
     FROM "LighthouseHour" h
     WHERE h."hour" >= ${lower} AND h."hour" < ${to}
     GROUP BY 1 ORDER BY 1`;
@@ -254,11 +261,16 @@ export async function buildLighthouseHistory(q: LighthouseHistoryQuery, now = ne
       GROUP BY 1`,
   ]);
 
-  // Zero-filled buckets from the window's start (or the oldest hour kept) through now.
+  // Zero-filled buckets from the window's start (or the oldest hour kept) through the newest hour
+  // summed. The rollup writes every hour, quiet ones as zeros, so an hour past the newest row is
+  // one it hasn't summed: drawn as zero, a stalled rollup read as the market going quiet.
   const first = since ?? coverage._min.hour ?? to;
+  const drawnTo = coverage._max.hour
+    ? Math.min(to.getTime(), bucketStart(coverage._max.hour.getTime(), "hour") + HOUR_MS)
+    : to.getTime();
   const buckets: number[] = [];
   const step = bucketMs(bucket);
-  for (let b = bucketStart(first.getTime(), bucket); b < to.getTime(); b += step) buckets.push(b);
+  for (let b = bucketStart(first.getTime(), bucket); b < drawnTo; b += step) buckets.push(b);
   const byBucket = new Map(perBucket.filter((r) => r.bucket).map((r) => [r.bucket!.getTime(), r]));
   const series = buckets.map((b) => ({ at: new Date(b).toISOString(), ...sums(byBucket.get(b)) }));
 
@@ -272,7 +284,7 @@ export async function buildLighthouseHistory(q: LighthouseHistoryQuery, now = ne
     .map(([label]) => label);
   const labelBuckets = new Map<number, Map<string, LighthouseLabelTally>>();
   const labelStep = bucketMs(labelBucket);
-  for (let b = bucketStart(first.getTime(), labelBucket); b < to.getTime(); b += labelStep) {
+  for (let b = bucketStart(first.getTime(), labelBucket); b < drawnTo; b += labelStep) {
     labelBuckets.set(b, new Map());
   }
   for (const r of labelRows) {
@@ -345,7 +357,8 @@ export function createLighthouseHistoryCache() {
     }
     return cache;
   };
-  const read = (q: LighthouseHistoryQuery) => cacheFor(q).get(() => buildLighthouseHistory(q));
+  const read = async (q: LighthouseHistoryQuery) =>
+    withComputedAt(await cacheFor(q).getStamped(() => buildLighthouseHistory(q)));
   /** Refills the opening view when it is due or missing. Never rejects. */
   const keepWarm = (aheadMs = 0) =>
     cacheFor(DEFAULT_QUERY).warm(() => buildLighthouseHistory(DEFAULT_QUERY), aheadMs);

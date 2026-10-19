@@ -79,7 +79,7 @@ export interface DayRates extends GradedCounts {
 }
 
 export interface LearningDay {
-  /** UTC calendar day, YYYY-MM-DD. */
+  /** Calendar day in the curve's zone (LearningCurve.timeZone; UTC unless a reader's), YYYY-MM-DD. */
   day: string;
   /** The decision moments the models saw that day: graded "event" rows under a reported label rule (REPORTED_LABEL_RULE). */
   market: DayRates;
@@ -158,6 +158,8 @@ export interface LearningModel {
 
 export interface LearningCurve {
   window: { since: string; until: string };
+  /** The zone whose calendar days `days` are (UTC unless a reader's was asked for). */
+  timeZone: string;
   /** Oldest first. Days with neither a decision moment nor a call are left out. */
   days: LearningDay[];
   /** Each model's own curve against the same market, most graded calls first. */
@@ -182,6 +184,8 @@ type RawDay = {
   /** Calls with a simulated return, and its sum in percent; absent from older fixtures. */
   sim_calls?: bigint;
   sim_sum?: number | null;
+  /** Of sim_calls, the open ones (priced at the latest reading); absent from older fixtures. */
+  sim_open?: bigint;
 };
 
 type RawModelDay = RawDay & { model: string | null; model_name: string | null };
@@ -222,6 +226,7 @@ function dayRates(r: RawDay | undefined): DayRates {
     doubledAfterStop: Number(r?.doubled_after_stop ?? 0),
     simCalls: Number(r?.sim_calls ?? 0),
     sumSimReturnPct: Number(r?.sim_sum ?? 0),
+    simOpen: Number(r?.sim_open ?? 0),
   };
   return withDayRates(c);
 }
@@ -248,6 +253,7 @@ function sumDays(rows: DayRates[]): DayRates {
       doubledAfterStop: acc.doubledAfterStop + r.doubledAfterStop,
       simCalls: (acc.simCalls ?? 0) + (r.simCalls ?? 0),
       sumSimReturnPct: (acc.sumSimReturnPct ?? 0) + (r.sumSimReturnPct ?? 0),
+      simOpen: (acc.simOpen ?? 0) + (r.simOpen ?? 0),
     }),
     {
       calls: 0,
@@ -259,6 +265,7 @@ function sumDays(rows: DayRates[]): DayRates {
       doubledAfterStop: 0,
       simCalls: 0,
       sumSimReturnPct: 0,
+      simOpen: 0,
     },
   );
   return withDayRates(c);
@@ -452,11 +459,30 @@ export function withCatch(rates: DayRates, runners: number, caught: number): Day
   return { ...rates, runners, caught, catchPct: pct(caught, runners) };
 }
 
+/** Formatters by zone: en-CA writes a date as YYYY-MM-DD. Bounded by the zones callers validate. */
+const dayFormats = new Map<string, Intl.DateTimeFormat>();
+
+/** Pure: the calendar day `at` falls on in `timeZone`, as YYYY-MM-DD. */
+export function dayIn(at: Date, timeZone: string): string {
+  if (timeZone === "UTC") return at.toISOString().slice(0, 10);
+  let format = dayFormats.get(timeZone);
+  if (!format) {
+    format = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    dayFormats.set(timeZone, format);
+  }
+  return format.format(at);
+}
+
 /** The market line's day rows from shared market rows: the same columns its query returns. */
-function marketDays(rows: readonly MarketRow[]): RawDay[] {
+function marketDays(rows: readonly MarketRow[], timeZone: string): RawDay[] {
   const byDay = new Map<string, MarketRow[]>();
   for (const r of rows) {
-    const day = r.at.toISOString().slice(0, 10);
+    const day = dayIn(r.at, timeZone);
     const list = byDay.get(day);
     if (list) list.push(r);
     else byDay.set(day, [r]);
@@ -465,8 +491,8 @@ function marketDays(rows: readonly MarketRow[]): RawDay[] {
 }
 
 /** The market's clean doubles by day from shared market rows: the same as readMarketWinners. */
-function marketDayWinners(rows: readonly MarketRow[]): DayWinner[] {
-  return rows.filter(marketRowWon).map((r) => ({ day: r.at.toISOString().slice(0, 10), token: r.token }));
+function marketDayWinners(rows: readonly MarketRow[], timeZone: string): DayWinner[] {
+  return rows.filter(marketRowWon).map((r) => ({ day: dayIn(r.at, timeZone), token: r.token }));
 }
 
 export async function buildLearningCurve(
@@ -476,6 +502,11 @@ export async function buildLearningCurve(
   days: number,
   /** Shared market rows (marketRows.ts); without them, or past their span, the market is read here. */
   marketSource?: MarketRowSource,
+  /**
+   * The zone the days are calendar days in: the reader's, so "Today" is their today (user ask
+   * 2026-10-19). A name Postgres knows (callers check, see readerZone.ts), UTC by default.
+   */
+  timeZone = "UTC",
 ): Promise<LearningCurve> {
   // The trend compares the newest TREND_SPAN_DAYS days with the TREND_SPAN_DAYS before them, so
   // the day reads reach back two spans even when the window is shorter. Reading only the window
@@ -486,14 +517,22 @@ export async function buildLearningCurve(
     Math.min(
       since.getTime(),
       Date.UTC(until.getUTCFullYear(), until.getUTCMonth(), until.getUTCDate()) -
-        (2 * TREND_SPAN_DAYS - 1) * 86_400_000,
+        // A day more than the two spans when the days are another zone's, whose midnight can
+        // fall up to a day either side of UTC's.
+        (2 * TREND_SPAN_DAYS - (timeZone === "UTC" ? 1 : 0)) * 86_400_000,
     ),
   );
-  // Decision moments by UTC day. Only current-rule labels: rows graded from the scan price answer
+  // The columns are timestamp(3) without a zone, stored in UTC: read as UTC, then as the zone's
+  // wall clock, date_trunc groups by the zone's calendar day.
+  const dayOf = (col: Prisma.Sql) =>
+    Prisma.sql`to_char(date_trunc('day', (${col} AT TIME ZONE 'UTC') AT TIME ZONE ${timeZone}), 'YYYY-MM-DD')`;
+  const anchorDay = dayOf(Prisma.sql`"anchorAt"`);
+  const createdDay = dayOf(Prisma.sql`a."createdAt"`);
+  // Decision moments by day. Only current-rule labels: rows graded from the scan price answer
   // an easier question (about twice the base rate), and a day of them next to a day of fill-graded
   // rows would read as the market halving.
   const readMarket = () => prisma.$queryRaw<RawDay[]>`
-    SELECT to_char(date_trunc('day', "anchorAt"), 'YYYY-MM-DD') AS day,
+    SELECT ${anchorDay} AS day,
            count(*) AS calls,
            count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS graded,
            count(*) FILTER (WHERE "hit2xIn1h" AND NOT COALESCE("disqualified", false)) AS won2x,
@@ -503,8 +542,9 @@ export async function buildLearningCurve(
                               AND ("hit10xIn1h" IS NOT NULL
                                    OR NOT ("hit2xIn1h" AND NOT COALESCE("disqualified", false)))) AS ten_x_graded,
            count(*) FILTER (WHERE "disqualified") AS doubled_after_stop,
-           count("simReturnPct") FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS sim_calls,
-           sum("simReturnPct") FILTER (WHERE "hit2xIn1h" IS NOT NULL)::float8 AS sim_sum
+           count(COALESCE("simReturnPct", "openReturnPct")) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS sim_calls,
+           sum(COALESCE("simReturnPct", "openReturnPct")) FILTER (WHERE "hit2xIn1h" IS NOT NULL)::float8 AS sim_sum,
+           count("openReturnPct") FILTER (WHERE "hit2xIn1h" IS NOT NULL AND "simReturnPct" IS NULL) AS sim_open
     FROM "CandidateOutcome"
     WHERE "sampleKind" = 'event'
       AND "anchorAt" >= ${trendSince} AND "anchorAt" < ${until}
@@ -513,7 +553,7 @@ export async function buildLearningCurve(
     GROUP BY 1`;
   // The market's clean doubles by day: the runners a catch is measured against (liveCatch's rule).
   const readMarketWinners = () => prisma.$queryRaw<DayWinner[]>`
-    SELECT DISTINCT to_char(date_trunc('day', "anchorAt"), 'YYYY-MM-DD') AS day, "tokenId" AS token
+    SELECT DISTINCT ${anchorDay} AS day, "tokenId" AS token
     FROM "CandidateOutcome"
     WHERE "sampleKind" = 'event'
       AND "anchorAt" >= ${since} AND "anchorAt" < ${until}
@@ -522,12 +562,22 @@ export async function buildLearningCurve(
       AND "labelRule" >= ${REPORTED_LABEL_RULE}`;
   const heldMarket = marketSource ? marketSource(trendSince) : Promise.resolve(null);
   const marketRows: Promise<RawDay[]> = heldMarket.then((held) =>
-    held ? marketDays(held.filter((r) => r.at < until)) : readMarket(),
+    held
+      ? marketDays(
+          held.filter((r) => r.at < until),
+          timeZone,
+        )
+      : readMarket(),
   );
   const marketWinners: Promise<DayWinner[]> = heldMarket.then((held) =>
-    held ? marketDayWinners(held.filter((r) => r.at >= since && r.at < until)) : readMarketWinners(),
+    held
+      ? marketDayWinners(
+          held.filter((r) => r.at >= since && r.at < until),
+          timeZone,
+        )
+      : readMarketWinners(),
   );
-  // Every model's calls by UTC day, graded the same way (see buildHitRateReport for the label
+  // Every model's calls by day, graded the same way (see buildHitRateReport for the label
   // sources). A call whose training row was graded under the legacy rule is left out for the same
   // reason as above; one whose row is gone keeps its own copied verdict.
   const callCols = Prisma.sql`
@@ -542,17 +592,20 @@ export async function buildLearningCurve(
                                    OR NOT (COALESCE(a."hit2xIn1h", co."hit2xIn1h")
                                            AND NOT COALESCE(a."disqualified", co."disqualified", false)))) AS ten_x_graded,
            count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop,
-           count(COALESCE(a."simReturnPct", co."simReturnPct"))
+           count(COALESCE(a."simReturnPct", co."simReturnPct", co."openReturnPct"))
              FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
-           sum(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum`;
+           sum(COALESCE(a."simReturnPct", co."simReturnPct", co."openReturnPct"))
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum,
+           count(co."openReturnPct")
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL
+                       AND COALESCE(a."simReturnPct", co."simReturnPct") IS NULL) AS sim_open`;
   const callsFrom = Prisma.sql`
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${trendSince} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}
       AND (co."labelRule" IS NULL OR co."labelRule" >= ${REPORTED_LABEL_RULE})`;
   const modelRows = prisma.$queryRaw<RawModelDay[]>`
-    SELECT to_char(date_trunc('day', a."createdAt"), 'YYYY-MM-DD') AS day,
+    SELECT ${createdDay} AS day,
            a."model" AS model,
            max(a."modelName") AS model_name, ${callCols}
     ${callsFrom}
@@ -560,13 +613,13 @@ export async function buildLearningCurve(
   // The feed: every model's calls pooled, each token once (several models calling one token share
   // its grading row; counting it once per model would read high - firstCallOnRowSql).
   const feedRows = prisma.$queryRaw<RawDay[]>`
-    SELECT to_char(date_trunc('day', a."createdAt"), 'YYYY-MM-DD') AS day, ${callCols}
+    SELECT ${createdDay} AS day, ${callCols}
     ${callsFrom}
       AND ${firstCallOnRowSql()}
     GROUP BY 1`;
   // Each model's clean doubles by day, one row per token: the runners it caught.
   const callWinners = prisma.$queryRaw<DayWinner[]>`
-    SELECT DISTINCT to_char(date_trunc('day', a."createdAt"), 'YYYY-MM-DD') AS day,
+    SELECT DISTINCT ${createdDay} AS day,
            a."tokenId" AS token, a."model" AS model
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
@@ -625,7 +678,7 @@ export async function buildLearningCurve(
   const feedCaught = caughtByDay(cWins);
   const catchOf = (rates: DayRates, day: string, caught: Map<string, number>) =>
     withCatch(rates, runners.get(day) ?? 0, caught.get(day) ?? 0);
-  const firstDay = since.toISOString().slice(0, 10);
+  const firstDay = dayIn(since, timeZone);
   const inWindow = <T extends { day: string }>(rows: T[]) => rows.filter((d) => d.day >= firstDay);
   const precision: PrecisionTargets = {
     winRate: targets.hitRate2xPct / 100,
@@ -635,6 +688,7 @@ export async function buildLearningCurve(
   };
   return {
     window: { since: since.toISOString(), until: until.toISOString() },
+    timeZone,
     days: inWindow(dayseries).map((d) => ({
       ...d,
       market: { ...d.market, runners: runners.get(d.day) ?? 0 },

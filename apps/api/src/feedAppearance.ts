@@ -72,6 +72,12 @@ export const CHART_MARKS_REV = 2;
  * and reads as the new one (user ask 2026-10-18).
  */
 export const HIDE_BELOW_MCAP_REV = 2;
+/**
+ * Which feesBadge default a look was saved against (apps/web/src/appearance.ts has the same): a
+ * look from before the badge went on by default that still holds it off never changed it, and reads
+ * as on (user ask 2026-10-19).
+ */
+export const FEES_BADGE_REV = 2;
 /** The chart marks no trade under this many SOL, whatever the setting (user ask 2026-10-18). */
 export const CHART_MARK_MIN_SOL = 0.25;
 export const CHART_MARK_MAX_SOL = 1_000;
@@ -145,7 +151,9 @@ export const feedAppearanceSchema = z
     /** The Transferred tile (supply moved holder to holder among the top 25); hidden by default. */
     transferred: z.boolean().default(false),
     /** The card footer's FEES badge (where the creator fee goes); hidden by default (user ask 2026-10-16). */
-    feesBadge: z.boolean().default(false),
+    feesBadge: z.boolean().default(true),
+    /** Which default feesBadge was saved against; see FEES_BADGE_REV and parseFeedAppearance. */
+    feesBadgeRev: z.literal(FEES_BADGE_REV).default(FEES_BADGE_REV),
     /** On bubble maps, ties between holders the same exchange funded (drawn only); off by default. */
     bubbleCexLinks: z.boolean().default(false),
     /** On bubble maps, a funder's name on a label by its diamond (the diamond and its lines always show); off by default. */
@@ -268,7 +276,8 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   largest: false,
   kolBundled: false,
   transferred: false,
-  feesBadge: false,
+  feesBadge: true,
+  feesBadgeRev: FEES_BADGE_REV,
   bubbleCexLinks: false,
   bubbleFunderLabels: false,
   bubbleSideLinks: true,
@@ -310,7 +319,8 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
       key === "quickLinks" ||
       key === "chartMarkKinds" ||
       key === "chartMarksRev" ||
-      key === "hideBelowMcapRev"
+      key === "hideBelowMcapRev" ||
+      key === "feesBadgeRev"
     )
       continue;
     const parsed = feedAppearanceSchema.shape[key].safeParse(raw[key]);
@@ -345,5 +355,8 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
     out.hideBelowMcapUsd = DEFAULT_FEED_APPEARANCE.hideBelowMcapUsd;
   }
   out.hideBelowMcapRev = HIDE_BELOW_MCAP_REV;
+  // Saved before the fees badge showed by default, still off: the old default, unchanged.
+  if (raw.feesBadgeRev !== FEES_BADGE_REV && out.feesBadge === false) out.feesBadge = true;
+  out.feesBadgeRev = FEES_BADGE_REV;
   return out as FeedAppearance;
 }

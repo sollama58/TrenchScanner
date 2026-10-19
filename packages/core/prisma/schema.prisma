@@ -1205,6 +1205,11 @@ model CandidateOutcome {
   /// trailing exit or the hold cap for one that sold. Null until then, when ungraded, or when the
   /// close price is unknown.
   simReturnPct     Float?
+  /// While the plan still holds its trailing share (exitPlanPositionOpen): the return it would
+  /// make if that share sold at the latest price the watcher saw, rewritten every tick. Reports
+  /// average it in, labelled open, so a winner still riding its trail isn't missing from the
+  /// average while the losers are in it (user ask 2026-10-19). Null once simReturnPct is written.
+  openReturnPct    Float?
   /// Why a stopped row stopped: who sold between the anchor and the stop, from the coin's trade
   /// tape (apps/worker/src/jobs/tradeTapeJob.ts, stopCauseOf in core's wallets/tradeTape.ts) -
   /// the sellers ranked by SOL and each role's share of the selling. Written once the row is
@@ -1906,6 +1911,8 @@ model LighthouseHour {
   /// Rows with a return under the exit plan, and their returns summed (percent of the stake).
   screenedReturnN    Int   @default(0)
   screenedReturnSum  Float @default(0)
+  /// Of screenedReturnN, the rows still open, priced at their latest reading (openReturnPct).
+  screenedReturnOpen Int   @default(0)
 
   /// TokenSage reads checked in the hour.
   readsTotal            Int   @default(0)
@@ -1932,6 +1939,8 @@ model LighthouseHour {
   alertsTenXGraded Int   @default(0)
   alertsReturnN    Int   @default(0)
   alertsReturnSum  Float @default(0)
+  /// Of alertsReturnN, the calls still open, priced at their latest reading.
+  alertsReturnOpen Int   @default(0)
 
   /// The safety screen's verdict on the tokens first scanned in the hour: cleared it at least once
   /// (accepted) or never (rejected, the Lighthouse's "Likely Rugs"). Re-summed only while the

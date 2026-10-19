@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { prisma, type Prisma } from "@trenchscanner/core";
-import { SharedCache } from "../sharedCache.js";
+import { SharedCache, withComputedAt } from "../sharedCache.js";
 import { TOKEN_CARD_SELECT } from "../curatedFeed.js";
 
 /** How many entries the Leaderboard shows. */
@@ -12,8 +12,12 @@ const LEADERBOARD_SIZE = 50;
  */
 const LEADERBOARD_CACHE_TTL_MS = 2 * 60_000;
 
-/** Past the TTL, answer from the old board while it refreshes - see SharedCacheOptions. */
-const LEADERBOARD_STALE_MS = 6 * 3_600_000;
+/**
+ * Past the TTL, answer from the old board while it refreshes - see SharedCacheOptions. Short:
+ * nothing keeps this board warm, so a long window handed its first reader after a quiet spell
+ * an answer hours old.
+ */
+const LEADERBOARD_STALE_MS = 10 * 60_000;
 
 export async function registerLeaderboardRoutes(app: FastifyInstance) {
   // The leaderboard is built from the same paid pipeline as the feed. Behind the paywall - see authenticateSubscriber in server.ts.
@@ -31,7 +35,7 @@ export async function registerLeaderboardRoutes(app: FastifyInstance) {
   const cache = new SharedCache<Awaited<ReturnType<typeof buildLeaderboard>>>(LEADERBOARD_CACHE_TTL_MS, {
     staleWhileRevalidateMs: LEADERBOARD_STALE_MS,
   });
-  app.get("/", async () => cache.get(buildLeaderboard));
+  app.get("/", async () => withComputedAt(await cache.getStamped(buildLeaderboard)));
 }
 
 async function buildLeaderboard() {
