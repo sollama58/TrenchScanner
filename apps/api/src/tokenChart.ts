@@ -533,16 +533,21 @@ export function withTrackedMarks(
 
 /** Riskiest first (creator, KOL and linked wallets ahead of unscored ones), within the caps. */
 function rankAndCap(wallets: MarkedWallet[]): MarkedWallet[] {
+  // A label is a floor under the score, not an answer in its place: a KOL with a low score (most
+  // trade enough coins to carry one) ranked under every unscored linked wallet, and on a coin with
+  // MAX_MARKED_WALLETS of those its marks never showed.
   const weight = (w: MarkedWallet) =>
     (w.tags.includes("creator") ? 1_000 : 0) +
-    (w.score ??
-      (w.tags.includes("kol") || w.tags.includes("winner")
+    Math.max(
+      w.score ?? 0,
+      w.tags.includes("kol") || w.tags.includes("winner")
         ? 60
         : w.tags.includes("side")
           ? 55
           : w.funder
             ? 50
-            : 0)) +
+            : 0,
+    ) +
     w.solIn / 1_000;
   wallets.sort((a, b) => weight(b) - weight(a));
   const kept = wallets.slice(0, MAX_MARKED_WALLETS);
@@ -618,6 +623,30 @@ export class KeyedCache<T> {
   /** Drops a key's answer, so its next reader fills it again. */
   forget(key: string): void {
     this.entries.delete(key);
+  }
+}
+
+/**
+ * The last good answer per key, the `maxEntries` most recently set (oldest out first): what a read
+ * that failed answers instead of nothing.
+ */
+export class LastGood<T> {
+  private readonly entries = new Map<string, T>();
+
+  constructor(private readonly maxEntries = 300) {}
+
+  get(key: string): T | undefined {
+    return this.entries.get(key);
+  }
+
+  set(key: string, value: T): void {
+    this.entries.delete(key);
+    this.entries.set(key, value);
+    while (this.entries.size > this.maxEntries) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest === undefined) break;
+      this.entries.delete(oldest);
+    }
   }
 }
 
