@@ -227,7 +227,7 @@ let quarterCache = new CandleCache(pumpFunCandleFetcher(undefined, "15s"), { ttl
  * sharing the first-minutes one let a handful of open charts starve a brand-new launch's view.
  */
 let fineSecondCache = new CandleCache(pumpFunCandleFetcher(undefined, "1s"), {
-  ttlMs: 4_000,
+  ttlMs: 6_000,
   callsPerMinute: 60,
   maxEntries: 100,
 });
