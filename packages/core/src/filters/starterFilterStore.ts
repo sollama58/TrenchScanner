@@ -33,11 +33,31 @@ const NOT_CRITERIA = new Set<string>([
   "deletedAt",
 ]);
 
-const CRITERIA_COLUMNS = Object.values(Prisma.UserFilterScalarFieldEnum).filter((c) => !NOT_CRITERIA.has(c));
+/**
+ * Criteria the Filters tab has retired that a new account's Default never starts with (user
+ * decision 2026-10-18, "Strip them"): the six still applied but shown as "(old)", which Bundled % and
+ * snipers in the top 25 replaced, and the CEX-funded % bounds the counts replaced. The migration
+ * 20261018233000_starter_filter_strip_retired took them out of the stored copy; this keeps them out.
+ */
+export const RETIRED_STARTER_CRITERIA = new Set<string>([
+  "maxSniperTop10WalletPct",
+  "maxLinkedWalletCount",
+  "maxSameTimeFundedCount",
+  "maxLinkedWalletPct",
+  "maxSameTimeFundedPct",
+  "maxKolBundledPct",
+  "minCexFundedPct",
+  "maxCexFundedPct",
+]);
+
+const CRITERIA_COLUMNS = Object.values(Prisma.UserFilterScalarFieldEnum).filter(
+  (c) => !NOT_CRITERIA.has(c) && !RETIRED_STARTER_CRITERIA.has(c),
+);
 
 /**
  * The stored criteria as UserFilter create data, or null when they don't parse. Keys that are no
- * longer UserFilter columns are dropped, so a column removed after the copy can't fail the create.
+ * longer UserFilter columns are dropped, so a column removed after the copy can't fail the create,
+ * and so are the retired criteria above.
  */
 export function parseStarterCriteria(
   criteria: unknown,
