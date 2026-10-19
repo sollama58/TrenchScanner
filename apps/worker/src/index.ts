@@ -70,6 +70,7 @@ import { drainShadowReviews } from "./jobs/curatedAlerts.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { BurnStreamWake, reconcileBurns } from "./jobs/burnReconciler.js";
 import { runPipelineWatch } from "./jobs/pipelineWatchJob.js";
+import { canaryFailureMeta, runTradeCanary, TRADE_CANARY_INTERVAL_MINUTES } from "./jobs/tradeCanaryJob.js";
 import { createTradingBotRunner } from "./jobs/tradingBotJob.js";
 import { createPaperTradingRunner } from "./jobs/paperTradingJob.js";
 import {
@@ -549,6 +550,18 @@ async function main() {
   schedule("pipeline-watch", () =>
     scheduleInterval("pipeline-watch", () => runPipelineWatch(env), 1, { deadlineMinutes: 10 }),
   );
+  // Builds a Pro trade (never signed or sent) on SOL->USDC, a graduated coin and a curve coin,
+  // pings Sender and the trading RPCs - see runTradeCanary. pipeline-watch tells the admins after
+  // two failed runs in a row. Never in tests: it calls mainnet.
+  if (env.TRADE_CANARY_ENABLED && process.env.NODE_ENV !== "test") {
+    schedule("trade-canary", () =>
+      scheduleInterval("trade-canary", () => runTradeCanary(env), TRADE_CANARY_INTERVAL_MINUTES, {
+        deadlineMinutes: 4,
+        abandonOnDeadline: true,
+        failureMeta: canaryFailureMeta,
+      }),
+    );
+  }
   // Prices the open curated-alerts training rows and closes their label windows - one batched
   // DexScreener sweep per tick, see runCandidateWatchJob. Its cadence IS the label resolution,
   // and the win bar is "2x within 15 minutes", so at the default it decides each verdict on about

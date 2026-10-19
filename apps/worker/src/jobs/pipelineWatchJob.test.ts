@@ -5,10 +5,12 @@ import { prisma, loadEnv, type Env } from "@trenchscanner/core";
 import { JobFailure, SHUTDOWN_INTERRUPTED_ERROR } from "../scheduler.js";
 import {
   clearedKeys,
+  findCanaryProblems,
   findCapacityProblems,
   findCreditProblems,
   findProblems,
   findSideJobProblems,
+  findTradeOutcomeProblems,
   findTrainerProblems,
   notificationText,
   restartStep,
@@ -169,6 +171,49 @@ describe("pipeline watch: what counts as stalled", () => {
     const text = notificationText(over, [], over);
     expect(text).toMatch(/^<b>⚠️ TrenchScanner database is filling up<\/b>\n• Database: 12\.4 GB/);
     expect(text).not.toContain("pipeline stalled");
+  });
+
+  it("tells the trade canary after two failed runs in a row, or once it stops running", () => {
+    const canary = (failures: number, agoMs = MIN, lastError: string | null = null) => ({
+      lastRunAt: new Date(NOW - agoMs),
+      consecutiveFailures: failures,
+      lastError,
+    });
+    // Never ran (switched off, not deployed), healthy, or one failure: nothing to tell.
+    expect(findCanaryProblems(null, NOW)).toEqual([]);
+    expect(findCanaryProblems(canary(0), NOW)).toEqual([]);
+    expect(findCanaryProblems(canary(1, MIN, "trade canary: sender: 503"), NOW)).toEqual([]);
+    const out = findCanaryProblems(canary(2, MIN, "trade canary: curve: CurveA…: no route\nstack"), NOW);
+    expect(out).toEqual([
+      {
+        key: "trade-canary",
+        text: "Pro trade canary: 2 runs failed in a row: curve: CurveA…: no route",
+        side: true,
+        trading: true,
+      },
+    ]);
+    // Silent for half an hour: the same key, so a stop and a failure are one notice.
+    expect(findCanaryProblems(canary(0, 30 * MIN), NOW)).toMatchObject([
+      { key: "trade-canary", text: "Pro trade canary: no run for 30 min" },
+    ]);
+    const text = notificationText(out, [], out);
+    expect(text).toMatch(/^<b>⚠️ TrenchScanner Pro trading needs a look<\/b>\n• Pro trade canary: 2 runs/);
+    expect(text).not.toContain("scanner jobs");
+    expect(notificationText([], ["trade-canary"], [])).toContain("Flowing again:</b> trade-canary");
+  });
+
+  it("flags Pro trades failing or expiring above 30% of the last half hour's, given at least 5", () => {
+    expect(findTradeOutcomeProblems({ total: 4, failed: 4, expired: 0 })).toEqual([]);
+    expect(findTradeOutcomeProblems({ total: 10, failed: 2, expired: 1 })).toEqual([]);
+    const out = findTradeOutcomeProblems({ total: 10, failed: 2, expired: 2 });
+    expect(out).toEqual([
+      {
+        key: "trade-outcomes",
+        text: "Pro trades: 4 of 10 in the last 30 min failed or expired (2 failed, 2 expired)",
+        side: true,
+        trading: true,
+      },
+    ]);
   });
 
   it("flags Telegram delivery when a linked chat's cursor falls behind", () => {
@@ -416,7 +461,7 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
     await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
     // Trainer rows other test files left behind would read as overdue trainer jobs here.
     await prisma.systemHeartbeat.deleteMany({
-      where: { job: { in: [...TRAINER_JOBS, ...SIDE_JOBS, "pipeline-watch"] } },
+      where: { job: { in: [...TRAINER_JOBS, ...SIDE_JOBS, "pipeline-watch", "trade-canary"] } },
     });
     await prisma.announcement.deleteMany({ where: { createdBy: WATCH_ANNOUNCER } });
   });
@@ -653,5 +698,97 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
     });
     expect(await run(t0 + 16 * MIN)).toMatchObject({ stalled: 0, warned: 0 });
     expect(await banners()).toHaveLength(0);
+  });
+
+  it("tells the admins when the trade canary keeps failing and when Pro trades go wrong, then when it clears", async () => {
+    const now = Date.now();
+    const wallet = `${TAG}-admin4`;
+    const user = await prisma.user.create({ data: { walletAddress: wallet } });
+    await prisma.telegramChat.create({
+      data: { chatId: BigInt(now) + 13n, kind: "private", userId: user.id },
+    });
+    await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.tokenNarrative.create({
+      data: { mintAddress: `${TAG}-h`, depth: "basic", status: "complete", checkedAt: new Date(now - MIN) },
+    });
+    await jobsRanAt(now);
+    const canaryAt = async (at: number, consecutiveFailures: number) =>
+      prisma.systemHeartbeat.upsert({
+        where: { job: "trade-canary" },
+        create: {
+          job: "trade-canary",
+          lastRunAt: new Date(at),
+          lastError: "trade canary: sender: 503",
+          meta: { consecutiveFailures },
+        },
+        update: { lastRunAt: new Date(at), meta: { consecutiveFailures } },
+      });
+    // Five Pro trades in the last half hour, three of them failed or expired.
+    const statuses = ["failed", "expired", "failed", "confirmed", "sent"];
+    await prisma.platformTrade.createMany({
+      data: statuses.map((status, i) => ({
+        signature: `${TAG}-sig${i}`,
+        wallet,
+        mint: `${TAG}-mint`,
+        side: "buy",
+        lamports: 10_000_000n,
+        networkFeeLamports: 10_000n,
+        status,
+        sentAt: new Date(now - 5 * MIN),
+      })),
+    });
+    try {
+      const restart = vi.fn();
+      const sendMessage = vi.fn().mockResolvedValue({ ok: true, result: {} });
+      const run = async (at: number) => {
+        const out = await runPipelineWatch(
+          { ...env, ADMIN_WALLET_ADDRESSES: wallet },
+          { now: at, telegram: { sendMessage }, restart },
+        ).catch((e: unknown) => e);
+        const meta = out instanceof JobFailure ? out.meta : (out as Record<string, unknown>);
+        await prisma.systemHeartbeat.upsert({
+          where: { job: "pipeline-watch" },
+          create: { job: "pipeline-watch", lastRunAt: new Date(at), meta: meta as object },
+          update: { lastRunAt: new Date(at), meta: meta as object },
+        });
+        return meta;
+      };
+      // One failed canary run: not yet. The trades already are.
+      await canaryAt(now, 1);
+      expect(await run(now)).toMatchObject({
+        stalledKeys: "trade-outcomes",
+        stalledSince: null,
+        tradeOutcomes: { total: 5, failed: 2, expired: 1 },
+      });
+      expect(String(sendMessage.mock.calls[0]![1])).toContain("Pro trades: 3 of 5 in the last 30 min");
+      // The second in a row: one message, under its own heading, no banner and no restart.
+      await canaryAt(now, 2);
+      expect(await run(now)).toMatchObject({
+        stalledKeys: "trade-canary,trade-outcomes",
+        stalledSince: null,
+      });
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+      expect(String(sendMessage.mock.calls[1]![1])).toContain("Pro trading needs a look");
+      expect(String(sendMessage.mock.calls[1]![1])).toContain(
+        "Pro trade canary: 2 runs failed in a row: sender: 503",
+      );
+      await canaryAt(now, 3);
+      await run(now);
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+      // It passes again, and the trades settle: one "flowing again".
+      await canaryAt(now, 0);
+      await prisma.platformTrade.updateMany({ where: { wallet }, data: { status: "confirmed" } });
+      expect(await run(now)).toMatchObject({ stalled: 0 });
+      expect(sendMessage).toHaveBeenCalledTimes(3);
+      expect(String(sendMessage.mock.calls[2]![1])).toContain(
+        "Flowing again:</b> trade-canary, trade-outcomes",
+      );
+      expect(restart).not.toHaveBeenCalled();
+      expect(await prisma.announcement.count({ where: { createdBy: WATCH_ANNOUNCER } })).toBe(0);
+    } finally {
+      await prisma.platformTrade.deleteMany({ where: { wallet } });
+      await prisma.systemHeartbeat.deleteMany({ where: { job: "trade-canary" } });
+      await prisma.user.delete({ where: { id: user.id } });
+    }
   });
 });

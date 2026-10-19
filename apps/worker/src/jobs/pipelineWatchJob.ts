@@ -46,6 +46,11 @@ const logger = createLogger("pipeline-watch");
  * So are Helius's credits (findCreditProblems): when Helius answers "max usage reached" the
  * scanner stands its Helius calls down, and the admins hear once when that starts and once when it
  * clears; the heartbeat carries heliusCreditsOutUntil meanwhile.
+ *
+ * And so is Pro trading (trading robustness audit 2026-10-19, #6): the trade canary's failed runs
+ * in a row (findCanaryProblems - tradeCanaryJob.ts builds a trade every 5 minutes, never signing)
+ * and the share of recent Pro trades that failed or expired (findTradeOutcomeProblems). Both only
+ * notify: a restart mends neither Jupiter nor the chain, and alerts still flow meanwhile.
  */
 
 export interface FlowCheck {
@@ -119,6 +124,8 @@ export interface Problem {
    * upstream that is refusing every call, and the alerts themselves still flow.
    */
   side?: boolean;
+  /** Pro trading's (the canary, trade outcomes): notified and failed like `side`, under its own heading. */
+  trading?: boolean;
 }
 
 /** The jobs the trainer process runs (see HEARTBEAT_JOB_ROLE), all watched from here. */
@@ -374,6 +381,82 @@ export function findCreditProblems(out: { since: Date; until: Date } | null): Pr
   ];
 }
 
+/** What the trade canary's own heartbeat says (tradeCanaryJob.ts). */
+export interface CanaryCheck {
+  lastRunAt: Date | null;
+  /** Failed runs in a row, as the canary counted them (its meta.consecutiveFailures). */
+  consecutiveFailures: number;
+  lastError: string | null;
+}
+
+/** The canary is told about after this many failed runs in a row: one slow answer is not a page. */
+export const CANARY_ALERT_AFTER_FAILURES = 2;
+/** The canary is quiet after this long without a run (five of its 5-minute intervals). */
+const CANARY_QUIET_MS = 25 * 60_000;
+
+/**
+ * Pure: the trade canary failing run after run, or no longer running. One key for both, so the
+ * admins hear once when it starts and once when it clears. A canary that never ran (switched off,
+ * or not deployed here) is not judged.
+ */
+export function findCanaryProblems(c: CanaryCheck | null, now: number): Problem[] {
+  if (!c || c.lastRunAt === null) return [];
+  const since = now - c.lastRunAt.getTime();
+  if (since > CANARY_QUIET_MS) {
+    return [
+      {
+        key: "trade-canary",
+        text: `Pro trade canary: no run for ${formatAge(since)}`,
+        side: true,
+        trading: true,
+      },
+    ];
+  }
+  if (c.consecutiveFailures < CANARY_ALERT_AFTER_FAILURES) return [];
+  const error = (c.lastError?.split("\n")[0] ?? "").replace(/^trade canary: /, "").slice(0, 300);
+  return [
+    {
+      key: "trade-canary",
+      text: `Pro trade canary: ${c.consecutiveFailures} runs failed in a row${error ? `: ${error}` : ""}`,
+      side: true,
+      trading: true,
+    },
+  ];
+}
+
+/** The window the Pro trades' outcomes are judged over, and the fewest trades worth judging. */
+export const TRADE_OUTCOME_WINDOW_MINUTES = 30;
+export const TRADE_OUTCOME_MIN_TRADES = 5;
+/** More than this share of the window's trades failed or expired is a problem. */
+export const TRADE_OUTCOME_MAX_BAD_SHARE = 0.3;
+
+/** The Pro trades sent in the window (PlatformTrade.sentAt), and how many failed or expired. */
+export interface TradeOutcomeCheck {
+  total: number;
+  failed: number;
+  expired: number;
+}
+
+/**
+ * Pure: too many of the window's Pro trades failed or expired. Trades still in flight count in
+ * the total, so a burst of sends errs quiet, never loud.
+ */
+export function findTradeOutcomeProblems(t: TradeOutcomeCheck): Problem[] {
+  if (t.total < TRADE_OUTCOME_MIN_TRADES) return [];
+  const bad = t.failed + t.expired;
+  if (bad / t.total <= TRADE_OUTCOME_MAX_BAD_SHARE) return [];
+  return [
+    {
+      key: "trade-outcomes",
+      text:
+        `Pro trades: ${bad} of ${t.total} in the last ${TRADE_OUTCOME_WINDOW_MINUTES} min failed or expired ` +
+        `(${t.failed} failed, ${t.expired} expired)`,
+      side: true,
+      trading: true,
+    },
+  ];
+}
+
 /** pg_database_size, in bytes; null when the read fails (the other checks still run). */
 async function databaseBytes(): Promise<number | null> {
   try {
@@ -463,6 +546,30 @@ async function readTrainerJobs(now: number): Promise<TrainerJobCheck[]> {
   });
 }
 
+async function readCanary(): Promise<CanaryCheck | null> {
+  const row = await prisma.systemHeartbeat.findUnique({ where: { job: "trade-canary" } });
+  if (!row) return null;
+  const meta = (row.meta ?? null) as Record<string, unknown> | null;
+  const n = meta?.consecutiveFailures;
+  return {
+    lastRunAt: row.lastRunAt,
+    // A failed run that left no count of its own still counts as one.
+    consecutiveFailures:
+      typeof n === "number" ? n : row.lastSuccessAt && row.lastSuccessAt >= row.lastRunAt ? 0 : 1,
+    lastError: row.lastError,
+  };
+}
+
+async function countTradeOutcomes(now: number): Promise<TradeOutcomeCheck> {
+  const rows = await prisma.platformTrade.groupBy({
+    by: ["status"],
+    where: { sentAt: { gte: new Date(now - TRADE_OUTCOME_WINDOW_MINUTES * 60_000) } },
+    _count: { _all: true },
+  });
+  const of = (status: string) => rows.find((r) => r.status === status)?._count._all ?? 0;
+  return { total: rows.reduce((n, r) => n + r._count._all, 0), failed: of("failed"), expired: of("expired") };
+}
+
 async function oldestChatCursor(): Promise<Date | null> {
   const row = await prisma.telegramChat.findFirst({
     where: { enabled: true, revokedAt: null },
@@ -515,7 +622,8 @@ async function adminChats(env: Env): Promise<bigint[]> {
 export function notificationText(started: Problem[], cleared: string[], still: Problem[]): string {
   const lines: string[] = [];
   const stalled = started.filter((p) => !p.trainer && !p.capacity && !p.side);
-  const side = started.filter((p) => p.side);
+  const side = started.filter((p) => p.side && !p.trading);
+  const trading = started.filter((p) => p.trading);
   const trainer = started.filter((p) => p.trainer);
   const capacity = started.filter((p) => p.capacity);
   if (stalled.length > 0) {
@@ -526,6 +634,11 @@ export function notificationText(started: Problem[], cleared: string[], still: P
     if (lines.length > 0) lines.push("");
     lines.push("<b>⚠️ TrenchScanner scanner jobs need a look</b>");
     for (const p of side) lines.push(`• ${escapeHtml(p.text)}`);
+  }
+  if (trading.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push("<b>⚠️ TrenchScanner Pro trading needs a look</b>");
+    for (const p of trading) lines.push(`• ${escapeHtml(p.text)}`);
   }
   if (trainer.length > 0) {
     if (lines.length > 0) lines.push("");
@@ -668,13 +781,16 @@ async function watchOnce(
   // Still out for a short while past the stand-down's end: it lifts at a fixed time and is only set
   // again by the next billed call refused, so a run in that gap read "flowing again" every cycle.
   const creditsOut = heliusCreditsOut(now - CREDITS_OUT_CLEAR_GRACE_MS);
-  const [flows, jobs, sideJobs, trainerJobs, cursor, dbBytes] = await Promise.all([
+  const [flows, jobs, sideJobs, trainerJobs, cursor, dbBytes, canary, trades] = await Promise.all([
     countFlows(now),
     readJobs(WATCHED_JOBS),
     readJobs(SIDE_JOBS),
     readTrainerJobs(now),
     oldestChatCursor(),
     databaseBytes(),
+    // A canary switched off leaves its last row behind; it is not judged then.
+    env.TRADE_CANARY_ENABLED ? readCanary() : Promise.resolve(null),
+    countTradeOutcomes(now),
   ]);
   const problems = [
     ...findProblems(flows, jobs, now, cursor),
@@ -682,6 +798,8 @@ async function watchOnce(
     ...findTrainerProblems(trainerJobs, now),
     ...findCapacityProblems(dbBytes, env.DB_DISK_ALERT_MB),
     ...findCreditProblems(creditsOut),
+    ...findCanaryProblems(canary, now),
+    ...findTradeOutcomeProblems(trades),
   ];
   // Only the alert path's own problems are a stall: they alone start the clock towards the
   // visitors' banner and the scanner restart, neither of which a trainer job's problem or a
@@ -739,6 +857,7 @@ async function watchOnce(
     databaseMb: dbBytes === null ? null : Math.round(dbBytes / 1_048_576),
     heliusCreditsOutUntil: creditsOut ? creditsOut.until.toISOString() : null,
     flows: Object.fromEntries(flows.map((f) => [f.key, f.recent])),
+    tradeOutcomes: { ...trades },
   };
   if (problems.length > 0) {
     logger.error("pipeline stalled", { problems: problems.map((p) => p.text) });

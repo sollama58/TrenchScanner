@@ -35,7 +35,8 @@ export type HeartbeatJob =
   | "trading-bot"
   | "paper-trading"
   | "asdf-price"
-  | "trade-settlement";
+  | "trade-settlement"
+  | "trade-canary";
 
 /**
  * Which worker process runs a job. The worker is deployed as two processes (render.yaml): the
@@ -62,6 +63,9 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "asdf-price": "scanner",
   // Settles Pro trades no panel is watching and refunds failed ones' Sacrifice (sacrifice.ts).
   "trade-settlement": "scanner",
+  // Builds (never signs) a Pro trade every few minutes, beside pipeline-watch which tells the
+  // admins when it keeps failing (tradeCanaryJob.ts); the scanner has the Helius key it builds with.
+  "trade-canary": "scanner",
   "match-peaks": "scanner",
   "telegram-dispatch": "scanner",
   // Beside the Telegram dispatcher, on the same read horizon and the same alert wake-ups.
