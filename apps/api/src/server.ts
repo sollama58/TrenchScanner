@@ -82,6 +82,7 @@ import { fastifyLogger } from "./fastifyLogger.js";
 import { liveCurves, liveCurvesFor, setLiveCurves } from "./liveCurve.js";
 import { liveTrades, liveTradesFor, setLiveTrades } from "./liveTrades.js";
 import { FlaggedTradeSaver, prismaFlaggedTradeStore } from "./chartFlaggedTrades.js";
+import { defaultChartMarkFiller, setChartMarkFiller } from "./chartMarkFill.js";
 import { dexScreenerQuote, jupiterQuote, QuotePrice, sharedSolPrice } from "./solPrice.js";
 import { recordAdminActions } from "./adminActionLog.js";
 import { chartReaderFor } from "./chartRpc.js";
@@ -690,6 +691,10 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   const flaggedSaver = new FlaggedTradeSaver(liveTrades(), prismaFlaggedTradeStore);
   app.addHook("onListen", async () => flaggedSaver.start());
   app.addHook("onClose", async () => flaggedSaver.stop());
+  // Opening a coin's chart keeps its saved marks longer and fills in the stretches nobody watched
+  // (chartMarkFill.ts), from Pump.fun's free trade API; once listening, as the saver.
+  app.addHook("onListen", async () => setChartMarkFiller(defaultChartMarkFiller()));
+  app.addHook("onClose", async () => setChartMarkFiller(null));
   await app.register(registerTokenRoutes, {
     prefix: "/tokens",
     env,

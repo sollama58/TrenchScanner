@@ -3622,3 +3622,22 @@ model ChartFlaggedTrade {
   @@id([sig, wallet, side])
   @@index([mint, at])
 }
+
+/// A coin's chart marks (ChartFlaggedTrade) past the trade tape's horizon (user ask 2026-10-19):
+/// opening the coin's chart keeps them KEEP_AFTER_OPEN_DAYS more (apps/api/src/chartMarkFill.ts),
+/// and fills in the flagged trades nobody had the coin open for, from Pump.fun's free trade API.
+model ChartMarkCoin {
+  mint           String    @id
+  /// The nightly cleanup keeps the coin's marks past TWA_RETENTION_DAYS until here.
+  keepUntil      DateTime
+  /// The span the fill has read flagged trades for, unbroken. Null: nothing read yet.
+  filledFrom     DateTime?
+  filledTo       DateTime?
+  /// One API instance fills a coin at a time: the claim lapses here.
+  fillLeaseUntil DateTime?
+  /// Pump.fun pages the fills have read, in all.
+  fillCalls      Int       @default(0)
+  updatedAt      DateTime  @updatedAt
+
+  @@index([keepUntil])
+}

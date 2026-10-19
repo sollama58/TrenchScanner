@@ -50,7 +50,7 @@ export interface FlaggedTradeStore {
  * later price can't fix but the time still can), by a flagged wallet or the coin's creator.
  */
 export function flaggedRows(
-  byMint: ReadonlyMap<string, readonly LiveTokenTrade[]>,
+  byMint: ReadonlyMap<string, readonly Pick<LiveTokenTrade, "sig" | "wallet" | "side" | "sol" | "atMs">[]>,
   flagged: ReadonlySet<string>,
   creators: ReadonlyMap<string, string>,
 ): FlaggedTradeRow[] {

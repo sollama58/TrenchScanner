@@ -1021,6 +1021,7 @@ describe.skipIf(!dbAvailable)("runCleanupJob: retention tiers", () => {
   const cleanUp = async () => {
     await prisma.feedbackReport.deleteMany({ where: { submitterKey: TAG } });
     await prisma.chartFlaggedTrade.deleteMany({ where: { mint: { startsWith: TAG } } });
+    await prisma.chartMarkCoin.deleteMany({ where: { mint: { startsWith: TAG } } });
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
     await prisma.user.deleteMany({ where: { walletAddress: WALLET } });
   };
@@ -1166,6 +1167,41 @@ describe.skipIf(!dbAvailable)("runCleanupJob: retention tiers", () => {
     expect(await prisma.chartFlaggedTrade.findMany({ where: { mint }, select: { sig: true } })).toEqual([
       { sig: "fresh" },
     ]);
+  });
+
+  it("keeps a recently opened coin's saved flagged trades past the horizon, and trims a lapsed coin's fill span", async () => {
+    const kept = `${TAG}-kept`;
+    const lapsed = `${TAG}-lapsed`;
+    const gone = `${TAG}-gone`;
+    for (const mint of [kept, lapsed])
+      await prisma.chartFlaggedTrade.create({
+        data: { sig: `${mint}-old`, wallet: "w", side: 1, mint, sol: 1, at: ago(20) },
+      });
+    await prisma.chartMarkCoin.createMany({
+      data: [
+        { mint: kept, keepUntil: ago(-3), filledFrom: ago(25), filledTo: ago(1) },
+        { mint: lapsed, keepUntil: ago(1), filledFrom: ago(25), filledTo: ago(2) },
+        { mint: gone, keepUntil: ago(1), filledFrom: ago(25), filledTo: ago(16) },
+      ],
+    });
+
+    const meta = await runCleanupJob(env, { pauseMs: 0 });
+    expect(meta.deletedChartFlaggedTrades).toBe(1);
+    expect(
+      await prisma.chartFlaggedTrade.findMany({
+        where: { mint: { in: [kept, lapsed] } },
+        select: { mint: true },
+      }),
+    ).toEqual([{ mint: kept }]);
+    const coins = await prisma.chartMarkCoin.findMany({
+      where: { mint: { startsWith: TAG } },
+      orderBy: { mint: "asc" },
+      select: { mint: true, filledFrom: true },
+    });
+    expect(coins.map((c) => c.mint)).toEqual([kept, lapsed]);
+    // The lapsed coin's span now starts where its kept marks do: the next open reads the rest again.
+    expect(coins[1]!.filledFrom!.getTime()).toBeGreaterThan(ago(15).getTime());
+    expect(coins[0]!.filledFrom!.getTime()).toBeLessThan(ago(24).getTime());
   });
 
   it("drops a bug report's screenshot once it is done or a month old, and the done report after a quarter", async () => {
