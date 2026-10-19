@@ -27,6 +27,7 @@ import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
 import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
 import { liveCurves, MAX_WAIT_MS, type LiveCurveAnswer } from "../liveCurve.js";
 import { recordCandleAnswer } from "../chartHealth.js";
+import { chartOpened } from "../chartMarkFill.js";
 import { liveTrades, type LiveTradesAnswer } from "../liveTrades.js";
 import { longPollRateLimit, withinLongPollCeiling } from "../longPollLimit.js";
 import { sharedSolPrice } from "../solPrice.js";
@@ -1038,7 +1039,12 @@ export async function readTokenChart(
     fives?.candles ? onSupply(fives.candles, factor) : null,
     launchAt,
   );
-  if (flagged.status === "fulfilled") lastWallets.set(mintAddress, flagged.value);
+  if (flagged.status === "fulfilled") {
+    lastWallets.set(mintAddress, flagged.value);
+    // Keeps the coin's saved marks 14 more days and fills in the ones nobody had it open for, from
+    // the tape's end (or the launch, for a coin with no tape) to now (chartMarkFill.ts).
+    chartOpened(mintAddress, flagged.value.tape?.windowEnd ?? launchAt, () => walletCache.forget(token.id));
+  }
   const marks = flagged.status === "fulfilled" ? flagged.value : (lastWallets.get(mintAddress) ?? noWallets);
   const wallets =
     tracked.length > 0
