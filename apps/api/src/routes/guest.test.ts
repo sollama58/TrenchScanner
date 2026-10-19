@@ -333,4 +333,19 @@ describe.skipIf(!dbAvailable)("guest showcase", () => {
     expect(best?.token.mintAddress).toBe(`${tag}-b`);
     expect(best?.peakReturnPct).toBe(900);
   });
+
+  it("steps down past a call now trading under its alert price", async () => {
+    // b's coin now sits under its $50K alert: a (next by Peak) takes the showcase.
+    await prisma.token.update({
+      where: { mintAddress: `${tag}-b` },
+      data: { liveMarketCapUsd: 40_000, liveDataAt: new Date() },
+    });
+    expect((await loadGuestBest([shown]))?.token.mintAddress).toBe(`${tag}-a`);
+    // Every candidate under: the best one stays.
+    await prisma.token.update({
+      where: { mintAddress: `${tag}-a` },
+      data: { liveMarketCapUsd: 30_000, liveDataAt: new Date() },
+    });
+    expect((await loadGuestBest([shown]))?.token.mintAddress).toBe(`${tag}-b`);
+  });
 });
