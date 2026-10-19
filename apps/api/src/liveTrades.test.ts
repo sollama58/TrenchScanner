@@ -98,6 +98,25 @@ function setup(
 }
 
 describe("LiveTrades", () => {
+  it("lets the chart's candles read a followed coin's trades without following anything", async () => {
+    const t = setup();
+    expect(await t.trades.recent(MINT)).toBeNull();
+    expect(t.watched.size).toBe(0);
+    t.cover(t.at());
+    await t.trades.read(MINT, 0);
+    t.push(`trades-curve:${MINT}`, "sig-1", curveLogs({}));
+    const r = await t.trades.recent(MINT);
+    expect(r?.since).toBe(t.at());
+    expect(r?.trades).toHaveLength(1);
+    expect(r?.trades[0]?.mcapUsd).toBeGreaterThan(0);
+    // A read of it isn't an ask: the coin is still let go once nobody asks.
+    t.tick(31_000);
+    await t.trades.recent(MINT);
+    t.trades.round();
+    expect(await t.trades.recent(MINT)).toBeNull();
+    t.trades.stop();
+  });
+
   it("follows a coin's curve and pool logs, pending until both are live", async () => {
     const t = setup();
     const a = await t.trades.read(MINT, 0);

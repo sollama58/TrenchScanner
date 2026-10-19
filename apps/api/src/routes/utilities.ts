@@ -42,6 +42,7 @@ import {
 } from "../sideTransfers.js";
 import { allowTextSearch, currentMarketCap, tokenSearchParam } from "./matches.js";
 import {
+  fineFrom,
   fineRes,
   liveAfter,
   liveWait,
@@ -54,7 +55,8 @@ import {
   readTokenTradesLive,
 } from "./tokens.js";
 import { readTokenProfile } from "../tokenProfile.js";
-import { freeLookupReason, type FreeLookupReason } from "../lookupGate.js";
+import { freeLookupReason, RecentlyAllowed, type FreeLookupReason } from "../lookupGate.js";
+import { longPollRateLimit, withinLongPollCeiling } from "../longPollLimit.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
 import { loadWalletBundle } from "../walletBundle.js";
@@ -724,15 +726,17 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
   app.get("/token/:mint/chart/fine", async (request, reply) => {
     const lookup = await paidLookup(request.params, request.user!.walletAddress, "token");
     if ("error" in lookup) return reply.code(lookup.code).send({ error: lookup.error });
-    const fine = await readTokenFine(lookup.subject, fineRes(request.query));
+    const fine = await readTokenFine(lookup.subject, fineRes(request.query), fineFrom(request.query));
     reply.header("Cache-Control", `private, max-age=${fine.stepSec === 1 ? 3 : 30}`);
     return fine;
   });
 
+  // Limited per coin, under a per-reader ceiling shared with /tokens (longPollLimit.ts).
   app.get(
     "/token/:mint/chart/live",
-    { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } },
+    { config: { rateLimit: longPollRateLimit(app, "mint") } },
     async (request, reply) => {
+      if (!withinLongPollCeiling(request, reply, "chart-live")) return reply;
       const lookup = await paidLookup(request.params, request.user!.walletAddress, "token");
       if ("error" in lookup) return reply.code(lookup.code).send({ error: lookup.error });
       reply.header("Cache-Control", "no-store");
@@ -748,8 +752,9 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
   // The Live trades tab and the chart's wallet marks; long-polled like the live tail above.
   app.get(
     "/token/:mint/trades/live",
-    { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } },
+    { config: { rateLimit: longPollRateLimit(app, "mint") } },
     async (request, reply) => {
+      if (!withinLongPollCeiling(request, reply, "trades-live")) return reply;
       const lookup = await paidLookup(request.params, request.user!.walletAddress, "token");
       if ("error" in lookup) return reply.code(lookup.code).send({ error: lookup.error });
       reply.header("Cache-Control", "no-store");
@@ -1047,10 +1052,34 @@ async function paidLookup(
 ): Promise<{ subject: string; paidAt: Date } | { code: number; error: string }> {
   const raw = (params as { mint?: string; wallet?: string }).mint ?? (params as { wallet?: string }).wallet;
   if (!raw || !ADDRESS_RE.test(raw)) return { code: 400, error: "not a valid address" };
-  const open = await openLookup(wallet, utility, raw);
+  const key = `${wallet}:${utility}:${raw}`;
+  const read: { paidAt: Date | null } = { paidAt: null };
+  // A lookup open a moment ago stays open through a database error, so its live tail and Live
+  // trades, which answer from memory, keep going (charts audit item 6).
+  const open = await recentLookups.pass(
+    key,
+    async () => {
+      read.paidAt = (await openLookup(wallet, utility, raw))?.paidAt ?? null;
+      if (read.paidAt) rememberPaidAt(key, read.paidAt);
+      return read.paidAt !== null;
+    },
+    "paid lookup",
+  );
   if (!open)
     return { code: 402, error: "Look this up again to open it: the free re-open window has passed." };
-  return { subject: raw, paidAt: open.paidAt };
+  return { subject: raw, paidAt: read.paidAt ?? recentPaidAt.get(key) ?? new Date() };
+}
+
+/** paidLookup's recent passes, and when each was paid for, for its answer through a database error. */
+const recentLookups = new RecentlyAllowed();
+const recentPaidAt = new Map<string, Date>();
+function rememberPaidAt(key: string, at: Date): void {
+  recentPaidAt.delete(key);
+  recentPaidAt.set(key, at);
+  if (recentPaidAt.size > 20_000) {
+    const oldest = recentPaidAt.keys().next().value;
+    if (oldest !== undefined) recentPaidAt.delete(oldest);
+  }
 }
 
 /**

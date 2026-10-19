@@ -7,6 +7,8 @@ import type { User } from "@prisma/client";
 declare module "fastify" {
   interface FastifyInstance {
     sessionSigner: SessionSigner;
+    /** The global rate limit's key for a request: its verified user and device, else its IP (server.ts). */
+    rateLimitKey: (request: FastifyRequest) => Promise<string>;
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     /** Like `authenticate`, but additionally 403s anyone not in ADMIN_WALLET_ADDRESSES - see routes/admin.ts. */
     authenticateAdmin: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;

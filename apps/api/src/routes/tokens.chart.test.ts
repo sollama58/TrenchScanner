@@ -1,11 +1,17 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma, loadEnv } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
-import { readTokenChart, setCandleFetcherForTests, type TokenChart } from "./tokens.js";
+import {
+  readTokenChart,
+  readTokenFine,
+  setCandleFetcherForTests,
+  setStreamFeedsForTests,
+  type TokenChart,
+} from "./tokens.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -203,6 +209,70 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
       holderEntries: {},
     });
     expect(fetched).not.toContain(unknown);
+  });
+
+  it("answers what worked when one part fails, rather than a 500", async () => {
+    await get(MINT);
+    // Prisma's delegates don't survive mockRestore: the spy is left passing through instead.
+    const original = prisma.tokenSnapshot.findMany.bind(prisma.tokenSnapshot);
+    const spy = vi.spyOn(prisma.tokenSnapshot, "findMany").mockRejectedValueOnce(new Error("db hiccup"));
+    try {
+      const res = await get(MINT);
+      expect(res.statusCode).toBe(200);
+      const body = res.json<TokenChart>();
+      expect(body.candles).toHaveLength(2);
+      expect(body.source).toBe("pumpfun");
+      expect(body.marketCap).toEqual([]);
+    } finally {
+      spy.mockImplementation(original as never);
+    }
+  });
+
+  describe("the chart's own candles off the stream", () => {
+    const now = Date.now();
+    const sec = (s: number) => Math.floor(now / 1000) * 1000 - s * 1000;
+    afterEach(() => {
+      setStreamFeedsForTests({
+        history: async () => null,
+        recent: async () => null,
+        solUsd: async () => null,
+      });
+    });
+
+    it("answers 1-second candles from the stream alone once it reaches back far enough", async () => {
+      const before = fetched.length;
+      setStreamFeedsForTests({
+        history: async (mint) =>
+          mint === MINT
+            ? {
+                ticks: [
+                  [sec(400), 30_000],
+                  [sec(2), 31_000],
+                ],
+                coveredFrom: sec(400),
+                readAt: now,
+              }
+            : null,
+        recent: async () => null,
+        solUsd: async () => 150,
+      });
+      const fine = await readTokenFine(MINT, "1s", null, now);
+      expect(fine).toMatchObject({ stepSec: 1, source: "stream" });
+      expect(fine.candles?.map((k) => k.c)).toEqual([30_000, 31_000]);
+      expect(fetched.length).toBe(before);
+    });
+
+    it("joins the stream's minute candles after Pump.fun's newest on /chart", async () => {
+      setStreamFeedsForTests({
+        history: async (mint) =>
+          mint === MINT ? { ticks: [[180_000, 25_000]], coveredFrom: 170_000, readAt: 181_000 } : null,
+        recent: async () => null,
+        solUsd: async () => null,
+      });
+      const body = (await get(MINT)).json<TokenChart>();
+      expect(body.source).toBe("mixed");
+      expect(body.candles?.map((k) => k.t)).toEqual([60_000, 120_000, 180_000]);
+    });
   });
 
   it("refuses a malformed mint and a reader without a session", async () => {
