@@ -1,11 +1,9 @@
 import { SectionBoundary } from "../components/SectionBoundary";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type CuratedStats, type FeedStats, type Leaderboard, type MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
-import { SkeletonCards } from "../components/Skeleton";
-import { AboutModal } from "../components/AboutModal";
+import { ScopeRowSkeletons, SkeletonCards } from "../components/Skeleton";
 import { introSeen, markIntroSeen } from "../intro";
-import { FeedStatsModal } from "../components/FeedStatsModal";
 import {
   ArrowRightIcon,
   BrainIcon,
@@ -20,15 +18,22 @@ import { useLiveMarketCaps, usePolling, usePollingAll, useNow, useNudgeStream } 
 import { FEED_PAGE_SIZE, fillPage, joinPages, MAX_FILL_PAGES, MAX_READ_PAGES, nextDepth } from "../feedFill";
 import { ago, pct } from "../format";
 import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
-import { CustomizeDrawer } from "../components/CustomizeDrawer";
-import { CaSearchButton, SearchModal } from "../components/CaSearch";
+import { CaSearchButton } from "../components/CaSearchButton";
 import { ScanStatus } from "../components/ScanStatus";
-import { ScopeBoard } from "../components/ScopeBoard";
 import type { ScopeSettingsSection } from "../components/ScopeSettingsModal";
 import { HiddenTokensDialog } from "../components/HiddenTokensDialog";
 import { AsOf } from "../components/AsOf";
 import { dueToUnhide, hideToken, unhideTokens, useHiddenTokenIds, useHiddenTokens } from "../hiddenTokens";
 import { useHeldTokenIds } from "../heldTokens";
+import {
+  AboutModal,
+  CustomizeDrawer,
+  FeedStatsModal,
+  loadAboutModal,
+  ScopeBoard,
+  SearchModal,
+  useOpenedOnce,
+} from "../livePanels";
 
 /** Graded alerts below which the Stats button doesn't show a 2x rate (too early to mean much). */
 const MIN_TEASER = 10;
@@ -122,6 +127,11 @@ export function LiveTab({
   // 2026-10-19), in both views; the feed underneath carries on as it was.
   const [searchOpen, setSearchOpen] = useState(false);
   const openSearch = useCallback(() => setSearchOpen(true), []);
+  // The windows' code loads on their first opening (livePanels.ts), and they stay mounted after.
+  const aboutMounted = useOpenedOnce(aboutOpen);
+  const statsMounted = useOpenedOnce(statsOpen);
+  const customizeMounted = useOpenedOnce(customizing);
+  const searchMounted = useOpenedOnce(searchOpen);
   // "saved": the API mixes in model calls per this user's own switch and checked models; with
   // highConviction those calls are every model's high-conviction tier instead.
   const hc = highConviction ? "&highConviction=1" : "";
@@ -259,22 +269,32 @@ export function LiveTab({
 
   return (
     <div className="stack">
-      <FeedStatsModal
-        open={statsOpen}
-        onClose={() => setStatsOpen(false)}
-        stats={fs ?? null}
-        hours={hours}
-        targets={t}
-        pollKey=""
-        highConviction={highConviction}
-      />
-      <CustomizeDrawer open={customizing} onClose={closeCustomize} />
+      <Suspense fallback={null}>
+        {statsMounted && (
+          <FeedStatsModal
+            open={statsOpen}
+            onClose={() => setStatsOpen(false)}
+            stats={fs ?? null}
+            hours={hours}
+            targets={t}
+            pollKey=""
+            highConviction={highConviction}
+          />
+        )}
+      </Suspense>
+      <Suspense fallback={null}>
+        {customizeMounted && <CustomizeDrawer open={customizing} onClose={closeCustomize} />}
+      </Suspense>
       <SectionBoundary label="Hidden tokens" resetKey={hiddenOpen} onClose={() => setHiddenOpen(false)}>
         <HiddenTokensDialog open={hiddenOpen} onClose={() => setHiddenOpen(false)} now={now} />
       </SectionBoundary>
-      <AboutModal open={aboutOpen} onClose={closeAbout} targets={t} />
+      <Suspense fallback={null}>
+        {aboutMounted && <AboutModal open={aboutOpen} onClose={closeAbout} targets={t} />}
+      </Suspense>
       <SectionBoundary label="The search window" resetKey={searchOpen} onClose={() => setSearchOpen(false)}>
-        <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} now={now} />
+        <Suspense fallback={null}>
+          {searchMounted && <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} now={now} />}
+        </Suspense>
       </SectionBoundary>
       <section className="panel feed">
         <header className="section-head">
@@ -290,6 +310,8 @@ export function LiveTab({
                 type="button"
                 className="ghost icon-btn"
                 onClick={() => setAboutOpen(true)}
+                onPointerEnter={() => void loadAboutModal()}
+                onFocus={() => void loadAboutModal()}
                 aria-label="How this works"
                 title="How this works"
               >
@@ -396,13 +418,15 @@ export function LiveTab({
           </p>
         )}
         {scope && (
-          <ScopeBoard
-            feedPath={feedPath}
-            modelsOn={modelsOn}
-            heldTokenIds={heldTokenIds}
-            settingsSection={scopeSettings}
-            onSettings={setScopeSettings}
-          />
+          <Suspense fallback={<ScopeRowSkeletons />}>
+            <ScopeBoard
+              feedPath={feedPath}
+              modelsOn={modelsOn}
+              heldTokenIds={heldTokenIds}
+              settingsSection={scopeSettings}
+              onSettings={setScopeSettings}
+            />
+          </Suspense>
         )}
         {!scope && (
           <>
