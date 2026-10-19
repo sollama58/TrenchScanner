@@ -31,12 +31,20 @@ const MAX_NAMED = 20_000;
 const failureBackoff = new FailureBackoff();
 /** Whether this process has named the quotes stored without a ticker before this fix. */
 let backfilled = false;
+/**
+ * The backfill's read walks the whole Token table (nothing indexes quoteMint), so a run that left
+ * quotes unnamed (a failed or stood-down metadata lookup) waits this long before the next instead of
+ * repeating that walk every scan cycle until the lookups work again.
+ */
+const BACKFILL_RETRY_MS = 10 * 60_000;
+let backfillNotBefore = 0;
 
 /** Test hook: a fresh process's state. */
 export function resetQuoteSymbolState(): void {
   named.clear();
   failureBackoff.clear();
   backfilled = false;
+  backfillNotBefore = 0;
 }
 
 type SymbolReader = Pick<HeliusClient, "getTokenSymbolsBatch">;
@@ -143,11 +151,12 @@ export async function resolveQuoteSymbols(
 /**
  * Names the quotes rows already store without a ticker (written by GeckoTerminal readings before
  * this fix, or with an address for a ticker), once per process: one read of the rows needing it, then an update per ticker by mint
- * address. A run that couldn't name every quote leaves the rest for the next cycle. Few rows need
+ * address. A run that couldn't name every quote leaves the rest for a run BACKFILL_RETRY_MS later. Few rows need
  * it (a day of GeckoTerminal-priced non-SOL pairs), so the read is small.
  */
-export async function backfillQuoteSymbols(helius: SymbolReader): Promise<number> {
-  if (backfilled) return 0;
+export async function backfillQuoteSymbols(helius: SymbolReader, now = Date.now()): Promise<number> {
+  if (backfilled || now < backfillNotBefore) return 0;
+  backfillNotBefore = now + BACKFILL_RETRY_MS;
   // No ticker, or an address where the ticker belongs.
   const rows = await prisma.$queryRaw<{ mintAddress: string; quoteMint: string }[]>`
     SELECT "mintAddress", "quoteMint" FROM "Token"
@@ -161,6 +170,8 @@ export async function backfillQuoteSymbols(helius: SymbolReader): Promise<number
   const symbols = await quoteSymbolsFor(
     rows.map((r) => r.quoteMint),
     helius,
+    prisma,
+    now,
   );
   const byTicker = new Map<string, string[]>();
   for (const r of rows) {

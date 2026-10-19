@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CandidateToken } from "@trenchscanner/core";
-import { quoteSymbolsFor, resetQuoteSymbolState, resolveQuoteSymbols } from "./quoteSymbols.js";
+import { prisma, type CandidateToken } from "@trenchscanner/core";
+import {
+  backfillQuoteSymbols,
+  quoteSymbolsFor,
+  resetQuoteSymbolState,
+  resolveQuoteSymbols,
+} from "./quoteSymbols.js";
 
 const USD1 = "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB";
 const TRACKED = "TrackedLaunch1111111111111111111111111pump";
@@ -16,7 +21,10 @@ const helius = (answer: Map<string, { symbol: string | null; name: string | null
 const candidate = (quoteMint?: string, quoteSymbol?: string) =>
   ({ mintAddress: "coin", priceUsd: 1, marketCapUsd: 1, quoteMint, quoteSymbol }) as CandidateToken;
 
-beforeEach(() => resetQuoteSymbolState());
+beforeEach(() => {
+  resetQuoteSymbolState();
+  vi.restoreAllMocks();
+});
 
 describe("quoteSymbolsFor", () => {
   it("names quotes from the usual list, the Token table, then token metadata", async () => {
@@ -67,5 +75,33 @@ describe("resolveQuoteSymbols", () => {
     expect(unnamed.quoteMint).toBeUndefined();
     expect(own.quoteSymbol).toBe("ASDF");
     expect(sol.quoteMint).toBeUndefined();
+  });
+});
+
+describe("backfillQuoteSymbols", () => {
+  it("waits ten minutes after a run that left quotes unnamed, rather than re-reading Token every cycle", async () => {
+    const read = vi
+      .spyOn(prisma, "$queryRaw")
+      .mockResolvedValue([{ mintAddress: "coin", quoteMint: STOCK }] as never);
+    vi.spyOn(prisma.token, "findMany").mockResolvedValue([]);
+    const failing = helius("failed");
+
+    expect(await backfillQuoteSymbols(failing, 0)).toBe(0);
+    await backfillQuoteSymbols(failing, 30_000);
+    await backfillQuoteSymbols(failing, 9 * 60_000);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    // Ten minutes on it tries again, and once every quote is named it stops for good.
+    const update = vi.spyOn(prisma.token, "updateMany").mockResolvedValue({ count: 1 });
+    expect(
+      await backfillQuoteSymbols(helius(new Map([[STOCK, { symbol: "SPCX", name: null }]])), 10 * 60_000),
+    ).toBe(1);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(update).toHaveBeenCalledWith({
+      where: { mintAddress: { in: ["coin"] } },
+      data: { quoteSymbol: "SPCX" },
+    });
+    await backfillQuoteSymbols(failing, 60 * 60_000);
+    expect(read).toHaveBeenCalledTimes(2);
   });
 });
