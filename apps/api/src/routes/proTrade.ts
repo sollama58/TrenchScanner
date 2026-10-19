@@ -325,6 +325,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     return lamports;
   };
   const inFlight = new Map<string, InFlight>();
+  /** Signatures a /send is recording and sending right now (not yet in `inFlight`). */
+  const sending = new Set<string>();
   const senderHealth = new SenderHealth();
   // Trades the resend loop has stopped resending, kept a while so their status can still say
   // "expired" rather than pending forever.
@@ -731,8 +733,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           .code(400)
           .send({ error: "That transaction doesn't tip Sender. Nothing was sent.", notSent: true });
       signature = bs58.encode(wire.signatures[0]!);
-      // Sent already (a retried request): the resend loop has it.
-      if (inFlight.has(signature)) return { signature };
+      // Sent already (a retried request), or being sent by a request still under way: the resend
+      // loop has it, or will.
+      if (inFlight.has(signature) || sending.has(signature)) return { signature };
       // One send per build, and only what was built (the wallet may add its own compute budget
       // and Lighthouse guards): our Sender key relays nothing a build didn't make. The build comes
       // from its token, on any instance, or (a panel without tokens) from this instance's memory;
@@ -784,101 +787,116 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         .code(400)
         .send({ error: "That isn't a transaction this can send. Nothing was sent.", notSent: true });
     }
-    const url = senderFor(speed, mevProtect);
-    // The trade record and its Sacrifice, in one transaction before anything goes on chain
-    // (recordPlatformTrade in core): in "on" mode the burned pot is re-checked under the wallet's
-    // credit lock, so two sends can't spend the same credits, and a charge is never unrecorded.
-    // The row also carries what any instance needs to keep resending it and to call it expired.
-    const q = sentBuild.sacrifice;
-    const takes = q.mode === "on" && q.pays && q.lamports !== null;
+    // The wallet's cooldown starts here, with nothing awaited since it was checked above, so two
+    // sends racing each other (two builds sent at once) can't both pass it. Closing sales count
+    // too: a buy right after one still waits. Given back on every path where nothing goes out.
+    const giveBack = cooldown.take(wallet);
+    sending.add(signature);
     try {
-      const recorded = await recordPlatformTrade({
-        signature,
-        wallet,
-        mint: sentBuild.mint,
-        side: sentBuild.side,
-        lamports: sentBuild.lamports,
-        networkFeeLamports: sentBuild.networkFeeLamports,
-        sacrifice: q,
-        inFlight: {
-          transaction,
-          lastValidBlockHeight,
-          senderSpeed: speed,
-          senderMevProtect: mevProtect,
-          buildId: sentBuild.id,
-        },
-      });
-      if (recorded.status === "short")
-        return reply.code(422).send({
-          error:
-            "Your burned credits no longer cover this trade's Sacrifice. Nothing was sent; top up and try again.",
-          topUp: true,
-          notSent: true,
+      const url = senderFor(speed, mevProtect);
+      // The trade record and its Sacrifice, in one transaction before anything goes on chain
+      // (recordPlatformTrade in core): in "on" mode the burned pot is re-checked under the wallet's
+      // credit lock, so two sends can't spend the same credits, and a charge is never unrecorded.
+      // The row also carries what any instance needs to keep resending it and to call it expired.
+      const q = sentBuild.sacrifice;
+      const takes = q.mode === "on" && q.pays && q.lamports !== null;
+      try {
+        const recorded = await recordPlatformTrade({
+          signature,
+          wallet,
+          mint: sentBuild.mint,
+          side: sentBuild.side,
+          lamports: sentBuild.lamports,
+          networkFeeLamports: sentBuild.networkFeeLamports,
+          sacrifice: q,
+          inFlight: {
+            transaction,
+            lastValidBlockHeight,
+            senderSpeed: speed,
+            senderMevProtect: mevProtect,
+            buildId: sentBuild.id,
+          },
         });
-    } catch (err) {
-      // Recorded already: this signature (a retried request, maybe on another instance) is out and
-      // being resent; anything else signed from the same build is not sent a second time.
-      if ((err as { code?: unknown } | null)?.code === "P2002") {
-        const row = await prisma.platformTrade
-          .findUnique({ where: { signature }, select: { wallet: true, status: true } })
-          .catch(() => null);
-        if (row?.wallet === wallet && row.status === "sent") return { signature };
+        if (recorded.status === "short") {
+          giveBack();
+          return reply.code(422).send({
+            error:
+              "Your burned credits no longer cover this trade's Sacrifice. Nothing was sent; top up and try again.",
+            topUp: true,
+            notSent: true,
+          });
+        }
+      } catch (err) {
+        // Recorded already: this signature (a retried request, maybe on another instance) is out and
+        // being resent; anything else signed from the same build is not sent a second time.
+        if ((err as { code?: unknown } | null)?.code === "P2002") {
+          // This request sends nothing: the wallet's cooldown is the earlier send's.
+          giveBack();
+          const row = await prisma.platformTrade
+            .findUnique({ where: { signature }, select: { wallet: true, status: true } })
+            .catch(() => null);
+          if (row?.wallet === wallet && row.status === "sent") return { signature };
+          return reply
+            .code(409)
+            .send({ error: "This trade was already sent once. Nothing more was sent.", notSent: true });
+        }
+        // Without a record a Sacrifice can't be taken, so a paying trade waits; anything else only
+        // loses its fees-saved row, as before.
+        request.log.warn({ signature, err: String(err) }, "platform trade not recorded");
+        if (takes) {
+          giveBack();
+          return reply.code(503).send({
+            error: "Couldn't record the trade just now. Nothing was sent; try again.",
+            notSent: true,
+          });
+        }
+      }
+      const sent = await sendViaSender(url, transaction);
+      senderHealth.note(sent.ok || sent.refused);
+      if (!sent.ok && sent.refused) {
+        countProTrade("sendRefused");
+        giveBack();
+        // Nothing went out: the Sacrifice comes back at once.
+        await settleRefused(signature);
+        request.log.warn(
+          { wallet: walletTag(wallet), signature, error: sent.error },
+          "sender refused a pro trade",
+        );
+        // Refused by Sender: nothing went out under this signature (it is safe to build again).
+        // 409, not a 5xx: a proxy's 502 must never read as "nothing went out".
         return reply
           .code(409)
-          .send({ error: "This trade was already sent once. Nothing more was sent.", notSent: true });
+          .send({ error: `Helius Sender refused the trade: ${sent.error}`, notSent: true });
       }
-      // Without a record a Sacrifice can't be taken, so a paying trade waits; anything else only
-      // loses its fees-saved row, as before.
-      request.log.warn({ signature, err: String(err) }, "platform trade not recorded");
-      if (takes)
-        return reply
-          .code(503)
-          .send({ error: "Couldn't record the trade just now. Nothing was sent; try again.", notSent: true });
+      // No clear answer (a timeout): it may have gone out, so it is treated as sent and resent.
+      if (!sent.ok) {
+        countProTrade("sendUnclear");
+        request.log.warn(
+          { wallet: walletTag(wallet), signature, error: sent.error },
+          "sender send unclear; resending",
+        );
+      }
+      inFlight.set(signature, {
+        base64: transaction,
+        url,
+        lastValidBlockHeight,
+        until: Date.now() + RESEND_FOR_MS,
+        wallet,
+        rpcFallback: !mevProtect,
+        silent: sent.ok ? 0 : 1,
+      });
+      // A backstop on memory only (each wallet has at most MAX_IN_FLIGHT_PER_WALLET): the oldest
+      // stops being resent, and its status can still say "expired".
+      if (inFlight.size > MAX_IN_FLIGHT) {
+        const [oldest, f] = inFlight.entries().next().value!;
+        retire(oldest, f);
+      }
+      scheduleResend();
+      forgetPositions(wallet);
+      return { signature };
+    } finally {
+      sending.delete(signature);
     }
-    // Given back when Sender refuses (nothing went out). Closing sales count too: a buy right
-    // after one still waits.
-    const giveBack = cooldown.take(wallet);
-    const sent = await sendViaSender(url, transaction);
-    senderHealth.note(sent.ok || sent.refused);
-    if (!sent.ok && sent.refused) {
-      countProTrade("sendRefused");
-      giveBack();
-      // Nothing went out: the Sacrifice comes back at once.
-      await settleRefused(signature);
-      request.log.warn(
-        { wallet: walletTag(wallet), signature, error: sent.error },
-        "sender refused a pro trade",
-      );
-      // Refused by Sender: nothing went out under this signature (it is safe to build again).
-      // 409, not a 5xx: a proxy's 502 must never read as "nothing went out".
-      return reply.code(409).send({ error: `Helius Sender refused the trade: ${sent.error}`, notSent: true });
-    }
-    // No clear answer (a timeout): it may have gone out, so it is treated as sent and resent.
-    if (!sent.ok) {
-      countProTrade("sendUnclear");
-      request.log.warn(
-        { wallet: walletTag(wallet), signature, error: sent.error },
-        "sender send unclear; resending",
-      );
-    }
-    inFlight.set(signature, {
-      base64: transaction,
-      url,
-      lastValidBlockHeight,
-      until: Date.now() + RESEND_FOR_MS,
-      wallet,
-      rpcFallback: !mevProtect,
-      silent: sent.ok ? 0 : 1,
-    });
-    // A backstop on memory only (each wallet has at most MAX_IN_FLIGHT_PER_WALLET): the oldest
-    // stops being resent, and its status can still say "expired".
-    if (inFlight.size > MAX_IN_FLIGHT) {
-      const [oldest, f] = inFlight.entries().next().value!;
-      retire(oldest, f);
-    }
-    scheduleResend();
-    forgetPositions(wallet);
-    return { signature };
   });
 
   /**
