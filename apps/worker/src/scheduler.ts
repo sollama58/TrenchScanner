@@ -230,6 +230,11 @@ export function scheduleInterval(
   const { deadlineMinutes, onDeadline = exitOnDeadline } = opts;
   /** Runs given up at their deadline (abandonOnDeadline) that have not settled yet. */
   let abandoned = 0;
+  /**
+   * Runs in a row skipped for a lock while an abandoned run is unsettled: that run most likely
+   * still holds the lock, and a skipped run never reaches the deadline that would restart.
+   */
+  let skippedBehindAbandoned = 0;
   let stopped = false;
   let next: NodeJS.Timeout | undefined;
   let inFlight: Promise<void> | undefined;
@@ -322,6 +327,7 @@ export function scheduleInterval(
       });
       // The effective cadence rides on the row: the intervals are env-tunable, so /health/worker
       // derives its stale threshold from this rather than a table that drifts from the env.
+      skippedBehindAbandoned = 0;
       await recordHeartbeat(name, {
         success: true,
         meta: { ...(meta ?? {}), durationMs: Date.now() - startedAt, intervalMs },
@@ -329,8 +335,13 @@ export function scheduleInterval(
     } catch (err) {
       if (err instanceof JobSkipped) {
         logger.info("run skipped - another process is running this job", { job: name, reason: err.message });
+        if (abandoned > 0 && ++skippedBehindAbandoned >= MAX_ABANDONED_RUNS) {
+          skippedBehindAbandoned = 0;
+          onDeadline(name, Date.now() - startedAt);
+        }
         return;
       }
+      skippedBehindAbandoned = 0;
       if (err instanceof PartialJobFailure) {
         await recordHeartbeat(name, {
           success: true,
