@@ -1,7 +1,17 @@
-import { isServiceWallet, MARKED_BOT_WALLETS, Prisma, prisma, type Env } from "@trenchscanner/core";
+import {
+  isServiceWallet,
+  KNOWN_EXCHANGE_WALLETS,
+  MARKED_BOT_WALLETS,
+  PLATFORM_WALLETS,
+  Prisma,
+  prisma,
+  withoutHandle,
+  type Env,
+} from "@trenchscanner/core";
 import { proStatus } from "./proMode.js";
 import type { PossibleSide } from "./possibleSides.js";
 import type { WalletName } from "./walletNames.js";
+import { knownSideName } from "./kolRoster.js";
 
 /**
  * User Tracked wallets (user ask 2026-10-18): a Pro Mode user labels any wallet, and from then on,
@@ -165,6 +175,69 @@ export async function importTracked(userId: string, entries: readonly ImportEntr
   );
   forgetTracked(userId);
   return result;
+}
+
+/**
+ * Why an imported entry was left out: TrenchScanner already labels that wallet for everyone. "kol"
+ * a named KOL on the roster, "kol-side" a KOL's Known Side, "exchange" an exchange hot wallet,
+ * "launchpad" a launchpad's own wallet (core's PLATFORM_WALLETS), "bot" a wallet marked as a bot.
+ */
+export type PlatformLabelKind = "kol" | "kol-side" | "exchange" | "launchpad" | "bot";
+
+export interface PlatformLabel {
+  wallet: string;
+  /** The name TrenchScanner shows it by; null for a marked bot, which has none. */
+  label: string | null;
+  kind: PlatformLabelKind;
+}
+
+/**
+ * Which of `wallets` TrenchScanner already labels for every reader (user ask 2026-10-19): a label
+ * by hand is refused on these and a JSON import leaves them out, so a file can't rename a KOL, a Known Side, an exchange, a launchpad
+ * wallet or a marked bot. Read from the roster and core's lists only: no Helius calls. Helius
+ * identity names and Probable Sides aren't labels of ours, so those wallets can still be imported.
+ */
+export async function platformLabels(wallets: readonly string[]): Promise<Map<string, PlatformLabel>> {
+  const unique = [...new Set(wallets)];
+  const out = new Map<string, PlatformLabel>();
+  if (unique.length === 0) return out;
+  const rows = await prisma.kolWallet.findMany({
+    where: { wallet: { in: unique } },
+    select: { wallet: true, name: true, mainWallet: true },
+  });
+  const mainWallets = [...new Set(rows.flatMap((r) => (r.mainWallet ? [r.mainWallet] : [])))];
+  const mains = new Map(
+    mainWallets.length
+      ? (
+          await prisma.kolWallet.findMany({
+            where: { wallet: { in: mainWallets } },
+            select: { wallet: true, name: true },
+          })
+        ).map((m) => [m.wallet, m.name?.trim() || null])
+      : [],
+  );
+  const kols = new Map(rows.map((r) => [r.wallet, r]));
+  for (const w of unique) {
+    // In the order walletNames.ts picks a name, so the reason given is the name shown.
+    const platform = PLATFORM_WALLETS.get(w);
+    const kol = kols.get(w);
+    const kolName = kol?.name && withoutHandle(kol.name.trim());
+    const exchange = KNOWN_EXCHANGE_WALLETS.get(w);
+    if (platform) out.set(w, { wallet: w, label: platform, kind: "launchpad" });
+    else if (kol?.mainWallet)
+      out.set(w, {
+        wallet: w,
+        label: knownSideName({
+          wallet: kol.mainWallet,
+          name: mains.get(kol.mainWallet) ?? kol.name?.trim() ?? null,
+        }),
+        kind: "kol-side",
+      });
+    else if (kolName) out.set(w, { wallet: w, label: kolName, kind: "kol" });
+    else if (exchange) out.set(w, { wallet: w, label: withoutHandle(exchange), kind: "exchange" });
+    else if (MARKED_BOT_WALLETS.has(w)) out.set(w, { wallet: w, label: null, kind: "bot" });
+  }
+  return out;
 }
 
 /** Removes a label; whether there was one. */

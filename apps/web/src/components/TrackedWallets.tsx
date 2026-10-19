@@ -1,13 +1,16 @@
 import { useRef, useState } from "react";
 import { shortAddress } from "../format";
 import { openWallet } from "../walletModal";
-import { labelExport, MAX_IMPORT_BYTES, parseLabelImport } from "../trackedImport";
+import { knownText, labelExport, MAX_IMPORT_BYTES, parseLabelImport } from "../trackedImport";
 import {
   importTrackedWallets,
+  KNOWN_CHECK_MAX,
+  knownLabels,
   removeTrackedWallet,
   saveTrackedWallet,
   trackedError,
   useTrackedWallets,
+  type KnownLabel,
   type TrackedWallet,
 } from "../trackedWallets";
 
@@ -87,13 +90,23 @@ function LabelForm({
 const FILTER_FROM = 8;
 
 /** One import's outcome, as the reader reads it. */
-function importText(r: { added: number; updated: number; overCap: number; skipped: number }, cap: number) {
+function importText(
+  r: { added: number; updated: number; overCap: number; skipped: number; rejected: number },
+  cap: number,
+) {
   const parts = [`${r.added} added`];
   if (r.updated) parts.push(`${r.updated} renamed`);
   if (r.overCap) parts.push(`${r.overCap} left out past your ${cap} limit`);
+  if (r.rejected)
+    parts.push(
+      `${r.rejected} rejected because TrenchScanner already labels ${r.rejected === 1 ? "that wallet" : "those wallets"}`,
+    );
   if (r.skipped) parts.push(`${r.skipped} skipped with no valid address or name`);
   return `Imported: ${parts.join(", ")}.`;
 }
+
+/** An import entry TrenchScanner refused: the file's name and the label we already show. */
+type Rejected = KnownLabel & { name: string };
 
 /** Hands the browser the reader's labels as a JSON file. */
 function saveExport(wallets: readonly TrackedWallet[]) {
@@ -105,6 +118,14 @@ function saveExport(wallets: readonly TrackedWallet[]) {
   setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
+/** Why a wallet can't take a label by hand: TrenchScanner already labels it. Null when it can. */
+async function alreadyLabeled(wallet: string): Promise<string | null> {
+  const k = (await knownLabels([wallet]))[0];
+  return k
+    ? `TrenchScanner already labels this wallet (${knownText(k)}), so it can't take a label of yours.`
+    : null;
+}
+
 const kindText = (t: TrackedWallet) => (t.category === "kol" ? "KOL" : "User Tracked");
 
 /**
@@ -114,6 +135,7 @@ const kindText = (t: TrackedWallet) => (t.category === "kol" ? "KOL" : "User Tra
 export function TrackedWalletEditor({ wallet }: { wallet: string }) {
   const tracked = useTrackedWallets();
   const [editing, setEditing] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
   if (!tracked?.pro) return null;
   const current = tracked.wallets.find((w) => w.wallet === wallet);
   const full = !current && tracked.wallets.length >= tracked.cap;
@@ -150,11 +172,16 @@ export function TrackedWalletEditor({ wallet }: { wallet: string }) {
               ? `You have labeled ${tracked.cap} wallets. Remove one in Utilities › Wallet labels to add another.`
               : undefined
           }
-          onClick={() => setEditing(true)}
+          onClick={() =>
+            alreadyLabeled(wallet)
+              .then((why) => (why ? setRefused(why) : setEditing(true)))
+              .catch((e: unknown) => setRefused(trackedError(e)))
+          }
         >
           Label this wallet
         </button>
       )}
+      {refused && !current && <span className="faint">{refused}</span>}
       <span className="faint num">
         {tracked.wallets.length}/{tracked.cap}
       </span>
@@ -180,6 +207,7 @@ export function TrackedWalletsPanel({ upsell = false }: { upsell?: boolean } = {
   const [filter, setFilter] = useState("");
   const [importing, setImporting] = useState(false);
   const [imported, setImported] = useState<string | null>(null);
+  const [rejected, setRejected] = useState<Rejected[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
   if (!tracked) return null;
   if (!tracked.pro && tracked.wallets.length === 0)
@@ -213,6 +241,7 @@ export function TrackedWalletsPanel({ upsell = false }: { upsell?: boolean } = {
     setImporting(true);
     setError(null);
     setImported(null);
+    setRejected([]);
     (file.size > MAX_IMPORT_BYTES
       ? Promise.reject(new Error("That file is too large for a wallet label list (1 MB at most)."))
       : file.text()
@@ -221,12 +250,30 @@ export function TrackedWalletsPanel({ upsell = false }: { upsell?: boolean } = {
         const parsed = parseLabelImport(text);
         if (parsed.entries.length === 0)
           throw new Error("No wallets with a valid address and a name in that file.");
-        if (parsed.entries.length > tracked.cap)
+        if (parsed.entries.length > KNOWN_CHECK_MAX)
           throw new Error(
-            `That file lists ${parsed.entries.length} wallets; you can label up to ${tracked.cap}.`,
+            `That file lists ${parsed.entries.length} wallets; at most ${KNOWN_CHECK_MAX} are read at once.`,
           );
-        const r = await importTrackedWallets(parsed.entries);
-        setImported(importText({ ...r, skipped: parsed.skipped + r.unnamed }, tracked.cap));
+        // Wallets TrenchScanner already labels are left out first, so they take no place under the cap.
+        const known = new Map(
+          (await knownLabels(parsed.entries.map((e) => e.wallet))).map((k) => [k.wallet, k]),
+        );
+        const out: Rejected[] = parsed.entries.flatMap((e) => {
+          const k = known.get(e.wallet);
+          return k ? [{ ...k, name: e.name }] : [];
+        });
+        const entries = parsed.entries.filter((e) => !known.has(e.wallet));
+        if (entries.length > tracked.cap)
+          throw new Error(`That file lists ${entries.length} wallets; you can label up to ${tracked.cap}.`);
+        const r = entries.length
+          ? await importTrackedWallets(entries)
+          : { added: 0, updated: 0, overCap: 0, unnamed: 0, rejected: [] };
+        // The API refuses the same wallets again; any it names that the check didn't are added here.
+        for (const x of r.rejected) if (!known.has(x.wallet)) out.push(x);
+        setRejected(out);
+        setImported(
+          importText({ ...r, skipped: parsed.skipped + r.unnamed, rejected: out.length }, tracked.cap),
+        );
       })
       .catch((e: unknown) => setError(trackedError(e)))
       .finally(() => {
@@ -301,6 +348,21 @@ export function TrackedWalletsPanel({ upsell = false }: { upsell?: boolean } = {
         )}
       </div>
       {imported && <p className="small muted">{imported}</p>}
+      {rejected.length > 0 && (
+        <details className="small muted tw-rejected">
+          <summary>
+            Show the {rejected.length === 1 ? "rejected entry" : `${rejected.length} rejected entries`}
+          </summary>
+          <ul>
+            {rejected.map((x) => (
+              <li key={x.wallet}>
+                <span className="num">{shortAddress(x.wallet)}</span> &ldquo;{x.name}&rdquo;: already labeled{" "}
+                {knownText(x)}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       {!tracked.pro && (
         <p className="warn small">
           Your labels are kept, but show only while you have Pro Mode. You can still remove them.
@@ -372,7 +434,14 @@ export function TrackedWalletsPanel({ upsell = false }: { upsell?: boolean } = {
             className="tw-add"
             onSubmit={(e) => {
               e.preventDefault();
-              if (valid) setAdding(typed);
+              if (!valid) return;
+              setError(null);
+              // A wallet already held is renamed; any other is checked against our own labels first.
+              if (tracked.wallets.some((w) => w.wallet === typed)) setAdding(typed);
+              else
+                alreadyLabeled(typed)
+                  .then((why) => (why ? setError(why) : setAdding(typed)))
+                  .catch((e: unknown) => setError(trackedError(e)));
             }}
           >
             <input
