@@ -215,4 +215,29 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
   it("is behind sign-in like the feeds", async () => {
     expect((await app.inject({ method: "GET", url: "/launches" })).statusCode).toBe(401);
   });
+
+  it("spends the text search budget on a typed search, never on the Stream's own pages", async () => {
+    // Its own account, so the searches above don't count against it.
+    const wallet = "LaunchStreamSearcher11111111111111111111111";
+    const searcher = await prisma.user.create({ data: { walletAddress: wallet } });
+    await prisma.whitelist.create({ data: { walletAddress: wallet, addedBy: ADMIN_WALLET } });
+    const own = await createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS).sign({
+      userId: searcher.id,
+      walletAddress: wallet,
+    });
+    const ask = (url: string) => app.inject({ method: "GET", url, cookies: { [SESSION_COOKIE_NAME]: own } });
+    try {
+      const codes: number[] = [];
+      for (let i = 0; i < 31; i++)
+        codes.push((await ask(`/launches?graduated=1&page=10&q=a${i}`)).statusCode);
+      expect(codes.slice(0, 30).every((c) => c === 200)).toBe(true);
+      expect(codes[30]).toBe(429);
+      // The Stream itself, and a token by its address, are cached reads: still answered.
+      expect((await ask("/launches")).statusCode).toBe(200);
+      expect((await ask(`/launches?mint=${"1".repeat(32)}`)).statusCode).toBe(200);
+    } finally {
+      await prisma.whitelist.deleteMany({ where: { walletAddress: wallet } });
+      await prisma.user.deleteMany({ where: { id: searcher.id } });
+    }
+  });
 });

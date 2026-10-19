@@ -23,6 +23,27 @@ describe("RecentlyAllowed", () => {
     await expect(recent.pass("a", down, "test")).rejects.toThrow("db down");
   });
 
+  it("answers a yes again without asking, within reuseMs only", async () => {
+    let now = 0;
+    const recent = new RecentlyAllowed(15 * 60_000, 100, () => now);
+    let asked = 0;
+    const yes = async () => {
+      asked += 1;
+      return true;
+    };
+    expect(await recent.pass("a", yes, "test", 60_000)).toBe(true);
+    now = 59_000;
+    expect(await recent.pass("a", yes, "test", 60_000)).toBe(true);
+    expect(asked).toBe(1);
+    // Past it the check runs again, and a no then stands.
+    now = 61_000;
+    expect(await recent.pass("a", async () => false, "test", 60_000)).toBe(false);
+    // Without reuseMs every call asks, as before.
+    expect(await recent.pass("b", yes, "test")).toBe(true);
+    expect(await recent.pass("b", yes, "test")).toBe(true);
+    expect(asked).toBe(3);
+  });
+
   it("keeps at most maxKeys, the oldest first out", () => {
     const recent = new RecentlyAllowed(60_000, 2, () => 0);
     recent.remember("a");
