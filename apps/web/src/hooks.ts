@@ -578,3 +578,17 @@ export function useNow(ms = 30_000): number {
   }, [ms]);
   return now;
 }
+
+/** Whether a media query matches, kept current as the window changes. */
+export function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => window.matchMedia?.(query).matches ?? false);
+  useEffect(() => {
+    const list = window.matchMedia?.(query);
+    if (!list) return;
+    const sync = () => setMatches(list.matches);
+    sync();
+    list.addEventListener("change", sync);
+    return () => list.removeEventListener("change", sync);
+  }, [query]);
+  return matches;
+}

@@ -225,3 +225,18 @@ export function shortAge(ms: number): string {
   const h = Math.floor(m / 60);
   return h < 48 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
+
+/** Board-wide reasons to hold still. Only a pointer resting on it or a scrolled list say "Paused". */
+export type ScopeHold = "pointer" | "touch" | "scroll";
+
+/** A sideways swipe this far, and mostly sideways, moves a phone's board one column over. */
+const SWIPE_MIN_PX = 50;
+
+/**
+ * Which way a finger's swipe moves a phone's board: 1 to the next column, -1 to the one before,
+ * 0 when it was a tap or mostly a scroll up or down.
+ */
+export function swipeStep(dx: number, dy: number): -1 | 0 | 1 {
+  if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < 2 * Math.abs(dy)) return 0;
+  return dx < 0 ? 1 : -1;
+}

@@ -236,7 +236,7 @@ function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: 
         {sw(
           "pauseOnHover",
           "Hold still while I'm reading",
-          "New rows wait behind a pill while your pointer or finger is on the board",
+          "New rows wait behind a pill while your mouse is on the board or you've scrolled down a list",
         )}
         <div className="scope-pick-group">
           <span className="scope-pick-label">Columns</span>
