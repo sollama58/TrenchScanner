@@ -14354,38 +14354,35 @@ button.bm-same {
   vertical-align: 1px;
 }
 
-/* ---------- Live feed and Stream: CA search ---------- */
-/* A quiet pill among the feed controls that widens while in use, so a pasted address fits. */
+/* ---------- Live feed: the search pill and its search window ---------- */
+/* A quiet pill among the feed controls; it opens the search window rather than searching in place. */
 .ca-search {
   position: relative;
   display: inline-flex;
   align-items: center;
-  width: 170px;
-  transition: width 0.2s ease;
+  width: 190px;
 }
-.ca-search.focused {
-  width: min(310px, 100%);
-}
-.ca-search input {
+.ca-search-button {
   height: 32px;
   padding: 0 30px 0 31px;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  font-size: 13px;
   background: transparent;
-  border-color: var(--border);
-  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+  justify-content: flex-start;
+  cursor: text;
 }
-.ca-search.address input {
-  font-family: var(--mono);
-  font-size: 11.5px;
-  letter-spacing: -0.02em;
-}
-.ca-search input:hover {
+.ca-search-button:hover:not(:disabled) {
   border-color: var(--border-strong);
-}
-.ca-search input:focus,
-.ca-search.filled input {
   background: var(--surface-2);
+  color: var(--ink-2);
+}
+.ca-search-placeholder {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .ca-search-icon {
   position: absolute;
@@ -14394,8 +14391,7 @@ button.bm-same {
   pointer-events: none;
   transition: color 0.15s;
 }
-.ca-search:focus-within .ca-search-icon,
-.ca-search.filled .ca-search-icon {
+.ca-search-button:hover .ca-search-icon {
   color: var(--brand-ink);
 }
 .ca-search-key {
@@ -14412,12 +14408,8 @@ button.bm-same {
   color: var(--muted);
   pointer-events: none;
 }
-.ca-search:focus-within .ca-search-key {
-  opacity: 0;
-}
 .ca-search-clear {
-  position: absolute;
-  right: 5px;
+  flex: none;
   width: 22px;
   height: 22px;
   padding: 0;
@@ -14430,16 +14422,6 @@ button.bm-same {
 .ca-search-clear:hover:not(:disabled) {
   color: var(--ink);
 }
-.ca-search-note {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 0 0 12px;
-}
-.ca-search-note .icon {
-  flex: none;
-  color: var(--brand-ink);
-}
 /* Touch screens have no "/" key to press. */
 @media (hover: none) {
   .ca-search-key {
@@ -14447,21 +14429,325 @@ button.bm-same {
   }
 }
 @media (max-width: 640px) {
-  .ca-search,
-  .ca-search.focused,
-  .ca-search.filled {
+  .ca-search {
     width: 100%;
     order: 10;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .ca-search {
-    transition: none;
+
+/* The search window: a see-through panel high on the screen, the feed blurred behind it. */
+dialog.search-modal {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(720px, calc(100dvh - 96px));
+  margin: max(48px, 9vh) auto auto;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface-solid) 78%, transparent);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  border-color: var(--border-strong);
+  box-shadow:
+    0 1px 0 var(--highlight) inset,
+    0 32px 80px -24px rgba(0, 0, 0, 0.7);
+}
+dialog.search-modal[open] {
+  display: flex;
+  animation: search-in 0.16s ease-out;
+}
+dialog.search-modal::backdrop {
+  background: rgba(4, 5, 8, 0.45);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+@keyframes search-in {
+  from {
+    transform: translateY(-8px) scale(0.985);
+    opacity: 0;
   }
 }
-/* The feed's title keeps its line while the search widens beside it. */
-.section-head:has(.ca-search) > div:first-child {
-  min-width: min(300px, 100%);
+.search-body {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+}
+.search-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.search-field-icon {
+  flex: none;
+  color: var(--brand-ink);
+}
+.search-field.busy .search-field-icon {
+  animation: pulse 1s ease-in-out infinite;
+}
+.search-field input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 17px;
+  box-shadow: none;
+}
+.search-field input:focus {
+  outline: none;
+  box-shadow: none;
+}
+.search-close {
+  flex: none;
+  height: 26px;
+  padding: 0 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+}
+.search-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.search-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.search-chip {
+  height: 28px;
+  padding: 0 11px;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.search-chip:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+.search-chip.on {
+  border-color: color-mix(in srgb, var(--brand-b) 70%, transparent);
+  background: color-mix(in srgb, var(--brand-a) 22%, transparent);
+  color: var(--ink);
+}
+.search-chip-count {
+  font-size: 11px;
+  color: var(--muted);
+}
+.search-chip.on .search-chip-count {
+  color: var(--brand-ink);
+}
+.search-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.search-sort select {
+  height: 28px;
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 12.5px;
+  background-color: transparent;
+}
+.search-results {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px 8px 12px;
+}
+.search-empty {
+  margin: 0;
+  padding: 28px 16px;
+  text-align: center;
+}
+.search-results .error {
+  margin: 10px 8px;
+}
+.search-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 10px 8px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--brand-ink);
+}
+.search-section-head .small {
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: right;
+}
+.search-hits {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+}
+.search-hit {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.search-hit.active {
+  background: var(--highlight);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.search-hit.opening {
+  opacity: 0.6;
+  cursor: progress;
+}
+.search-hit-img {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface-3);
+}
+.search-hit-img.placeholder {
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+  text-transform: uppercase;
+}
+.search-hit-main {
+  min-width: 0;
+}
+.search-hit-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.search-hit-title strong {
+  font-size: 14.5px;
+  white-space: nowrap;
+}
+.search-hit-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink-2);
+}
+.search-hit-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.search-tag {
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 18px;
+  background: var(--surface-3);
+  color: var(--ink-2);
+}
+.search-tag.yours {
+  background: var(--info-wash);
+  color: var(--link);
+}
+.search-tag.called {
+  background: color-mix(in srgb, var(--brand-a) 22%, transparent);
+  color: var(--brand-ink);
+}
+.search-hit-figs {
+  display: flex;
+  gap: 16px;
+  margin: 0;
+  text-align: right;
+}
+.search-hit-figs > div {
+  min-width: 52px;
+}
+.search-hit-figs dt {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.search-hit-figs dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink);
+}
+.search-hit-figs dd.good {
+  color: var(--good-ink);
+}
+.search-skeleton {
+  display: grid;
+  gap: 2px;
+  padding-top: 8px;
+}
+.skeleton-row {
+  height: 58px;
+  background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%) 0 0 /
+    200% 100%;
+  animation: shimmer 1.4s linear infinite;
+  opacity: 0.5;
+}
+@media (max-width: 640px) {
+  dialog.search-modal {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    border-radius: 0;
+    border: none;
+  }
+  .search-field {
+    padding: 10px 12px;
+  }
+  .search-tools {
+    padding: 8px 12px;
+  }
+  .search-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .search-chip {
+    flex: none;
+  }
+  .search-hit {
+    gap: 10px;
+    padding: 9px 6px;
+  }
+  .search-fig-wide {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  dialog.search-modal[open] {
+    animation: none;
+  }
 }
 
 /* ---------- Feed catch (Live Stats): the Coverage Meter's track, models plus what filters add ---------- */
