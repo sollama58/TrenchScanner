@@ -2154,6 +2154,10 @@ export function ChartCard({
               kind={kind}
               onKind={setKind}
               pinEnd={shownRange === "trading"}
+              // Trading keeps its own candle size, 1-second candles until another is picked there
+              // (user ask 2026-10-19); All keeps the one picked before the views split.
+              tfScope={shownRange === "trading" ? "trading" : undefined}
+              defaultTimeframe={shownRange === "trading" ? 1_000 : null}
               path={view.path}
               ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
             />
