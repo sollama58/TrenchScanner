@@ -412,9 +412,8 @@ export interface OnChainProfile {
   minPreBondSeconds?: number;
   /**
    * Other mints with this one's ticker first seen in the RELAUNCH_FARM_WINDOW_MINUTES before it,
-   * and the highest market cap any of them has been seen at (the worker's relaunchFarms.ts), for
-   * the block on model calls (curation/relaunchFarm.ts). Not a safety-screen cut. Undefined = not
-   * read; the block applies only once known.
+   * and the highest market cap any of them has been seen at (the worker's relaunchFarms.ts),
+   * recorded as model inputs (curation/relaunchFarm.ts). Undefined = not read.
    */
   relaunchSiblings?: number;
   relaunchSiblingPeakMcapUsd?: number;
