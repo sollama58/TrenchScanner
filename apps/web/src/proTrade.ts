@@ -827,7 +827,7 @@ export function summarizePosition(p: PositionResponse, nowMcapUsd: number | null
 export interface BuiltTrade {
   transaction: string;
   lastValidBlockHeight: number;
-  route: "jupiter" | "pump";
+  route: "jupiter" | "pump" | "pumpswap";
   /**
    * A curve quoted in another coin: that coin's mint. The build swaps SOL to it with Jupiter and
    * buys on the curve with it, or sells on the curve and swaps what that paid back to SOL.
@@ -933,6 +933,7 @@ const TRADE_PROGRAMS = new Set([
   "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
   "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
   "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+  "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
 ]);
 /** Helius Sender's tip accounts (packages/core/src/trading/sender.ts). */
 const SENDER_TIP_ACCOUNTS = new Set([
@@ -983,6 +984,13 @@ const JUPITER_SET_LEDGER = "228,85,185,112,78,79,77,2";
 /** Pump.fun v3: buy_exact_quote_in_v3 (sol in, min tokens) and sell_v3 (tokens, min sol). */
 const PUMP_BUY = "225,247,80,30,213,179,132,136";
 const PUMP_SELL = "28,146,222,119,38,196,105,213";
+const PUMP_SWAP = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
+/**
+ * PumpSwap v2, a graduated coin's pool: buy_exact_quote_in_v2 (sol in, min tokens) and sell_v2
+ * (tokens, min sol). Accounts: user 2nd, the user's coin account 6th, its wrapped SOL 7th.
+ */
+const PUMP_SWAP_BUY = "194,171,28,70,104,77,91,47";
+const PUMP_SWAP_SELL = "93,246,130,60,231,233,64,178";
 
 /** The trade the wallet asked for, which the build must be. */
 export interface TradeCheck {
@@ -1196,6 +1204,23 @@ export function tradeProblem(tx: Uint8Array, owner: string, trade: TradeCheck): 
             return "its amount isn't the one you asked for";
           continue;
         }
+        const amount = u64At(8);
+        if (trade.all && side === "sell" ? amount <= 0n : amount !== trade.amount)
+          return "its amount isn't the one you asked for";
+        if (u64At(16) <= 0n) return "it has no minimum, so any price would do";
+        continue;
+      }
+      if (program === PUMP_SWAP) {
+        const side =
+          discriminator === PUMP_SWAP_BUY ? "buy" : discriminator === PUMP_SWAP_SELL ? "sell" : null;
+        if (!side || d.length < 24) return "it has a PumpSwap step this trade doesn't need";
+        swaps++;
+        if (via) return "it isn't exactly one swap on each side";
+        if (side !== trade.side) return "it's a different trade from the one you asked for";
+        // The pool trades for the wallet itself, from and into its own accounts only.
+        if (acct(1) !== owner) return "it trades for a wallet that isn't yours";
+        if (!trade.ownCoinAccounts.includes(acct(5)) || !trade.ownWrappedSol.includes(acct(6)))
+          return "what it buys wouldn't land in your wallet";
         const amount = u64At(8);
         if (trade.all && side === "sell" ? amount <= 0n : amount !== trade.amount)
           return "its amount isn't the one you asked for";
