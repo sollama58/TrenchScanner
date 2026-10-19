@@ -1023,6 +1023,21 @@ const envSchema = z.object({
   // How often the scanner worker looks for new alerts to send (seconds).
   TELEGRAM_DISPATCH_INTERVAL_SECONDS: z.coerce.number().positive().default(10),
 
+  // Web Push alerts (packages/core/src/webPush): notifications that reach a phone's home-screen app
+  // or a browser with TrenchScanner closed. A VAPID key pair (npx web-push generate-vapid-keys);
+  // either empty (the default) leaves the feature inert: the dashboard doesn't offer it, the
+  // subscribe route answers 404 and the worker's web-push-dispatch job sends nothing. The public
+  // key is needed by the api (the dashboard subscribes with it) and the scanner worker (sending),
+  // the private key by the worker only. Changing the pair orphans every subscription.
+  WEB_PUSH_PUBLIC_KEY: pastedKey,
+  WEB_PUSH_PRIVATE_KEY: pastedKey,
+  // Who the push services can contact about this sender: a mailto: or https: URL. Empty uses the
+  // dashboard's URL (TELEGRAM_DASHBOARD_URL, else the first PUBLIC_APP_DOMAIN).
+  WEB_PUSH_SUBJECT: z.string().optional().default(""),
+  // How often the scanner worker looks for new alerts to push (seconds); an alert written wakes a
+  // pass sooner.
+  WEB_PUSH_DISPATCH_INTERVAL_SECONDS: z.coerce.number().positive().default(10),
+
   // Where the burn reconciler and the claim endpoint read the chain.
   //
   // Empty (the default) means Helius, built from HELIUS_API_KEY, and so does a value naming one of

@@ -97,6 +97,7 @@ export const MANUAL_RUN_EXCLUDED: Readonly<Partial<Record<HeartbeatJob, string>>
   "pipeline-watch":
     "Can restart the scanner and messages the admins on Telegram. It already checks every minute.",
   "telegram-dispatch": "Sends Telegram messages, and already runs every few seconds and on every new alert.",
+  "web-push-dispatch": "Sends push notifications, and already runs every few seconds and on every new alert.",
   scan: "Already runs every minute, and sooner when a launch enters the band.",
   "fast-match": "Already runs every few seconds.",
   "live-price": "Already runs every minute.",

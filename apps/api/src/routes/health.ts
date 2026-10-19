@@ -51,6 +51,9 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   // Every TELEGRAM_DISPATCH_INTERVAL_SECONDS (10 by default). While it is down linked Telegram
   // chats hear nothing, and nothing else notices.
   "telegram-dispatch": 10 * 60_000,
+  // Every WEB_PUSH_DISPATCH_INTERVAL_SECONDS (10 by default). While it is down phones and closed
+  // dashboards get no push notifications; an open dashboard still notifies on its own.
+  "web-push-dispatch": 10 * 60_000,
   // Every minute: says when a stage of the alert path stops producing (pipelineWatchJob.ts).
   "pipeline-watch": 10 * 60_000,
   // Every TRADING_BOT_INTERVAL_SECONDS (5 by default) when the trading bot is on; while it is down

@@ -1724,6 +1724,8 @@ export interface ScoreWeightsInfo {
 
 export interface Settings {
   alerts: AlertPrefs;
+  /** Push notifications' VAPID key, null while push is off. Absent from API builds before push. */
+  push?: { publicKey: string | null };
   /** Absent from API builds before feed appearance. */
   appearance?: FeedAppearance;
   account: {
