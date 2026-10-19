@@ -16,6 +16,7 @@ import { cachedGet } from "../cache";
 import { createPortal } from "react-dom";
 import { LiveTradesCard, useBatchedWallets } from "./LiveTrades";
 import { useLiveTrades } from "../liveTrades";
+import { usePossibleSides } from "../possibleSides";
 import {
   createContext,
   useCallback,
@@ -1779,7 +1780,9 @@ function HolderFreshness({
   );
 }
 
-/** A group's heading: a small label with a rule running to the edge. */
+/** No traders: the side read asks for nothing. */
+const NO_TRADERS: readonly string[] = [];
+
 /**
  * A row of tabs that scrolls sideways when the picker beside it leaves too little room (user ask
  * 2026-10-19): a mouse wheel scrolls it, and its edges fade where more tabs are hidden.
@@ -1818,6 +1821,7 @@ function useTabRowScroll(layout: string | null): { ref: RefObject<HTMLDivElement
   return { ref, edges };
 }
 
+/** A group's heading: a small label with a rule running to the edge. */
 function GroupLabel({ id, children }: { id: string; children: ReactNode }) {
   return (
     <h3 id={id} className="tm-group-label">
@@ -1937,9 +1941,12 @@ export function ChartCard({
   const liveFeed = useLiveTrades(api, markPrefs.on && markPrefs.kinds.length > 0);
   const liveTraders = useBatchedWallets(liveFeed.trades);
   const liveNames = useWalletNames(liveTraders);
+  // KOL ties are read for every trader only while funded wallets or Probable Sides are marked.
+  const sideMarks = markPrefs.on && markPrefs.kinds.some((k) => k === "funded" || k === "probable");
+  const liveSides = usePossibleSides(sideMarks ? liveTraders : NO_TRADERS);
   const marked = useMemo(
-    () => withLiveMarks(data?.wallets ?? [], liveFeed.trades, liveNames),
-    [data?.wallets, liveFeed.trades, liveNames],
+    () => withLiveMarks(data?.wallets ?? [], liveFeed.trades, liveNames, liveSides),
+    [data?.wallets, liveFeed.trades, liveNames, liveSides],
   );
   const marks = useMemo(
     () => walletMarks(marked, markPrefs, new Set(pro ? [pro] : [])),

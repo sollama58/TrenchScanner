@@ -174,4 +174,26 @@ describe("withLiveMarks", () => {
       ["C", "T", "my whale (Tracked) bought 3.00 SOL"],
     ]);
   });
+  it("adds a KOL's funded wallet or Probable Side by its tie", () => {
+    const out = withLiveMarks(
+      [],
+      [
+        { wallet: "F", side: "buy", sol: 1, atMs: 1 },
+        { wallet: "P", side: "sell", sol: 1, atMs: 2 },
+      ],
+      {},
+      {
+        F: [
+          { kolWallet: "K", kolName: "Cupsey", pct: 0.9 } as never,
+          { kolWallet: "K", kolName: "Cupsey", funded: true },
+        ],
+        P: [{ kolWallet: "K", kolName: "Cupsey" }],
+      },
+    );
+    const marks = walletMarks(out, { on: true, kinds: ["funded", "probable"], minSol: 0.5 });
+    expect(marks.map((m) => [m.wallet, m.letter])).toEqual([
+      ["F", "F"],
+      ["P", "P"],
+    ]);
+  });
 });

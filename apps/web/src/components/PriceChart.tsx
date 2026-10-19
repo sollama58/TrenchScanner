@@ -611,8 +611,11 @@ export function PriceChart({
     : null;
 
   // The labeled wallets' trades in view, and those by the hovered point.
-  const shownMarks = marks.filter((m) => m.t >= geo.t0 && m.t <= geo.t1);
-  const hMarks = h ? shownMarks.filter((m) => Math.abs(m.t - h.t) <= Math.max(geo.step, 5_000)) : [];
+  // A live trade read before the price line reaches it (the live feed and the curve's ticks come
+  // apart by a few seconds, or the curve isn't followed) sits at the line's latest point.
+  const markAt = (m: WalletMark) => (live && atEnd && m.t > geo.t1 ? geo.t1 : m.t);
+  const shownMarks = marks.filter((m) => m.t >= geo.t0 && markAt(m) <= geo.t1);
+  const hMarks = h ? shownMarks.filter((m) => Math.abs(markAt(m) - h.t) <= Math.max(geo.step, 5_000)) : [];
   // The trader's own trades in view, and those by the hovered point.
   const shownTrades = trades.filter((tr) => tr.t >= geo.t0 && tr.t <= geo.t1);
   const hTrades = h ? shownTrades.filter((tr) => Math.abs(tr.t - h.t) <= Math.max(geo.step, 5_000)) : [];
@@ -967,7 +970,7 @@ export function PriceChart({
                   <g
                     key={`mark-${m.t}-${m.wallet}-${i}`}
                     className={`pc-mark wk-${m.kind} ${m.side}${on ? " on" : ""}`}
-                    transform={`translate(${x(m.t).toFixed(1)},${axis.y(valueAt(pts, m.t) ?? last.v).toFixed(1)})`}
+                    transform={`translate(${x(markAt(m)).toFixed(1)},${axis.y(valueAt(pts, markAt(m)) ?? last.v).toFixed(1)})`}
                   >
                     <circle r={r} />
                     <text dy="0.35em" textAnchor="middle" fontSize={r >= 8 ? 9.5 : 8}>
