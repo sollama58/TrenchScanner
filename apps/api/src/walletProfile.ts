@@ -426,6 +426,11 @@ export class WalletLiveReader {
     return result;
   }
 
+  /** When the overview held for `wallet` was read (ms), or null when none is held. */
+  readAt(wallet: string): number | null {
+    return this.cache.get(wallet)?.at ?? null;
+  }
+
   /**
    * The wallet's funder, read live when the linked-wallets job hasn't; null over budget. The
    * signatures page the overview already read (cached or in flight) is reused, not paid for again.
@@ -671,7 +676,8 @@ export async function loadWalletProfile(
       : null,
     live: liveFound
       ? {
-          readAt: new Date().toISOString(),
+          // The overview is reused for up to its TTL: the time it was read, not this answer's.
+          readAt: new Date(live?.readAt(wallet) ?? Date.now()).toISOString(),
           balanceSol: liveFound.balanceSol,
           txCount: liveFound.txCount,
           complete: liveFound.complete,

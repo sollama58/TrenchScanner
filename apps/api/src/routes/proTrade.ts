@@ -36,7 +36,7 @@ import {
 import { proStatus, type ProStatus } from "../proMode.js";
 import { requireTwoFactor } from "../twoFactor.js";
 import { accessSwapOpen as accessSwapOpenFor } from "./auth.js";
-import { SolPrice } from "../solPrice.js";
+import { sharedSolPrice } from "../solPrice.js";
 import { feeSummary } from "../tradeFees.js";
 import { quoteSacrifice, sacrificeRefusal, sacrificeView, type SacrificeQuote } from "../sacrificeQuote.js";
 
@@ -217,7 +217,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     apiKey: env.PRO_TRADING_JUPITER_API_KEY || undefined,
     backupApiKey: env.JUPITER_API_KEY || undefined,
   });
-  const solPrice = new SolPrice();
+  const solPrice = sharedSolPrice;
   const tradeCache = new Map<string, WalletTrade | null>();
   const positions = new Map<string, { at: number; body: unknown }>();
   const supplies = new Map<string, { at: number; raw: bigint; decimals: number }>();
@@ -249,9 +249,19 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     retired.set(signature, { lastValidBlockHeight: f.lastValidBlockHeight, at: now });
   }
 
-  /** Drops one wallet's cached positions (it just traded); everyone else's stay. */
+  /** Bumped per wallet when it trades: a read begun before then keeps its answer out of the cache. */
+  const positionEpochs = new Map<string, number>();
+
+  /**
+   * Drops one wallet's cached positions (it just traded); everyone else's stay. A read still in
+   * flight was begun before the trade, so it is let go too: the next request reads afresh instead
+   * of joining it, and its answer isn't cached (the pre-trade balance would come back for a while).
+   */
   function forgetPositions(wallet: string) {
     for (const key of positions.keys()) if (key.startsWith(`${wallet}:`)) positions.delete(key);
+    for (const key of positionReads.keys()) if (key.startsWith(`${wallet}:`)) positionReads.delete(key);
+    if (positionEpochs.size > 10_000) positionEpochs.clear();
+    positionEpochs.set(wallet, (positionEpochs.get(wallet) ?? 0) + 1);
   }
   const builds = new Map<
     string,
@@ -781,7 +791,13 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       solPrice.get().catch(() => null),
     ]);
     const { mode, freeRank } = await sacrificeSettings();
-    return { ...feeSummary(trades), since: first?.sentAt ?? null, solUsd, sacrifice: { mode, freeRank } };
+    return {
+      ...feeSummary(trades),
+      since: first?.sentAt ?? null,
+      solUsd,
+      solUsdAt: solUsd ? solPrice.readAt() : null,
+      sacrifice: { mode, freeRank },
+    };
   });
 
   app.get<{ Params: { mint: string } }>(
@@ -799,7 +815,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       // One read per wallet and coin at a time: a second request waits for the first's answer.
       let read = positionReads.get(key);
       if (!read) {
-        read = readPosition(wallet, mint).finally(() => positionReads.delete(key));
+        const mine: Promise<unknown> = readPosition(wallet, mint).finally(() => {
+          if (positionReads.get(key) === mine) positionReads.delete(key);
+        });
+        read = mine;
         positionReads.set(key, read);
       }
       const body = await read;
@@ -810,6 +829,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
 
   async function readPosition(wallet: string, mint: string): Promise<unknown> {
     const key = `${wallet}:${mint}`;
+    const epoch = positionEpochs.get(wallet) ?? 0;
     const [balance, history, supply, solUsd] = await Promise.all([
       rpc.getTokenBalance(wallet, mint),
       walletTokenTrades(rpc, wallet, mint, tradeCache),
@@ -825,6 +845,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       balance: balance.raw.toString(),
       supply: supply ? supply.raw.toString() : null,
       solUsd,
+      solUsdAt: solUsd ? solPrice.readAt() : null,
       trades: (history?.trades ?? []).map((t) => ({
         signature: t.signature,
         t: t.t,
@@ -836,6 +857,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       historyUnavailable: history === null,
       truncated: history?.truncated ?? false,
     };
+    // The wallet traded while this read ran: answer it, but don't keep it.
+    if ((positionEpochs.get(wallet) ?? 0) !== epoch) return body;
     if (positions.size > 1_000) positions.clear();
     positions.set(key, { at: Date.now(), body });
     return body;

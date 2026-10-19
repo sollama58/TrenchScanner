@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { Card } from "../api";
 import { usePolling } from "../hooks";
-import { ago, change, pct, shortAddress, signedPct, usd } from "../format";
+import { ago, change, pct, shortAddress, signedPct, solUsdAgeText, usd } from "../format";
 import { openTokenModal } from "../tokenModal";
 import { TokenImage } from "./TokenImage";
 import { BrainIcon, ChartIcon, ChevronDownIcon, CloseIcon } from "./Icons";
@@ -71,6 +71,8 @@ interface PanelView {
   coins: TradeCoin[];
   stats: TradeStats;
   solUsd: number | null;
+  /** When solUsd was read (ISO). Absent from older API builds. */
+  solUsdAt?: string | null;
 }
 
 /**
@@ -201,7 +203,7 @@ function PanelBody({ open, onClose }: { open: boolean; onClose: () => void }) {
           Couldn&apos;t load your trades: {error.message}
         </p>
       )}
-      {data && <StatsStrip stats={data.stats} solUsd={data.solUsd} />}
+      {data && <StatsStrip stats={data.stats} solUsd={data.solUsd} solUsdAt={data.solUsdAt} />}
       <div className="trades-grid-wrap">
         {!data ? (
           !error && <p className="faint small trades-empty">Loading…</p>
@@ -245,8 +247,19 @@ const tone = (n: number | null | undefined) =>
   n === null || n === undefined || n === 0 ? "" : n > 0 ? " up" : " down";
 
 /** The last 24 hours' figures across every trade, open and closed. */
-export function StatsStrip({ stats, solUsd }: { stats: TradeStats; solUsd: number | null }) {
-  const usdOf = (n: number | null) => (n !== null && solUsd ? usd(n * solUsd) : null);
+export function StatsStrip({
+  stats,
+  solUsd,
+  solUsdAt,
+}: {
+  stats: TradeStats;
+  solUsd: number | null;
+  solUsdAt?: string | null;
+}) {
+  // The api keeps its last SOL price through failed reads: an old one is named on the dollar figure.
+  const solAge = solUsdAgeText(solUsdAt);
+  const usdOf = (n: number | null) =>
+    n !== null && solUsd ? `${usd(n * solUsd)}${solAge ? ` (SOL price ${solAge})` : ""}` : null;
   const tiles: { label: string; value: string; sub?: string | null; tone?: string; title: string }[] = [
     {
       label: "Trades",

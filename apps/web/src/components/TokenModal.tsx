@@ -28,7 +28,7 @@ import {
   type RefObject,
 } from "react";
 import { ApiError, lookupRequired, post, type Card, type Snapshot } from "../api";
-import { usePolling } from "../hooks";
+import { useLiveMarketCaps, usePolling } from "../hooks";
 import { MIN_WIN_SOL, ago, change, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
 import { TokenImage } from "./TokenImage";
 import { FoldHead } from "./Fold";
@@ -61,6 +61,7 @@ import {
   countCutFor,
   linkedReading,
   nowReading,
+  nowReadingAge,
   recordedPeakOf,
   SAFETY_MAX_FRESH_WALLET_PCT,
   SAFETY_MAX_LARGEST_HOLDER_PCT,
@@ -614,8 +615,69 @@ function HoldersPlaceholder({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * A card copy this long without a newer one has stopped being refreshed: it left the feed while
+ * its modal stayed open, or the modal was opened from somewhere that never refreshes it (Scope,
+ * Portfolio, Trades). The feed sends a new copy at least every poll (30 s).
+ */
+const CARD_QUIET_MS = 90_000;
+
+/**
+ * The modal's card, kept current on its own: "Now" from the live tick (as the feed's cards are),
+ * and once the card copy goes quiet (CARD_QUIET_MS), the coin's newest scan laid over it, so the
+ * safety verdict, peak and "Now" don't freeze where the feed left them.
+ */
+function useFreshCard(cardIn: Card, followScans: boolean): Card {
+  const mint = cardIn.token.mintAddress;
+  const lastCopy = useRef({ card: cardIn, at: Date.now() });
+  if (lastCopy.current.card !== cardIn) lastCopy.current = { card: cardIn, at: Date.now() };
+  const [scan, setScan] = useState<{ mint: string; snapshot: Snapshot } | null>(null);
+  useEffect(() => {
+    if (!followScans) return;
+    let live = true;
+    const read = () => {
+      if (document.visibilityState !== "visible" || Date.now() - lastCopy.current.at < CARD_QUIET_MS) return;
+      cachedGet<{ snapshots?: Snapshot[] }>(`/tokens/${encodeURIComponent(mint)}`, HOLDER_SCAN_MS)
+        .then((d) => {
+          const newest = d.snapshots?.[0];
+          if (live && newest) setScan({ mint, snapshot: newest });
+        })
+        .catch(() => undefined);
+    };
+    const timer = window.setInterval(read, HOLDER_SCAN_MS);
+    document.addEventListener("visibilitychange", read);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", read);
+    };
+  }, [followScans, mint]);
+  const withScan = useMemo(() => {
+    const snap = scan?.mint === mint ? scan.snapshot : null;
+    if (!snap) return cardIn;
+    const snapAt = Date.parse(snap.takenAt);
+    const had = cardIn.latestSnapshot ? Date.parse(cardIn.latestSnapshot.takenAt) : 0;
+    if (!(snapAt > had)) return cardIn;
+    const mcapAt = cardIn.currentMarketCapAt ? Date.parse(cardIn.currentMarketCapAt) : 0;
+    const newerMcap = snap.marketCapUsd != null && snapAt > mcapAt;
+    return {
+      ...cardIn,
+      latestSnapshot: snap,
+      ...(newerMcap
+        ? {
+            currentMarketCapUsd: snap.marketCapUsd,
+            currentMarketCapAt: snap.takenAt,
+            currentMarketCapSource: undefined,
+          }
+        : {}),
+    };
+  }, [cardIn, scan, mint]);
+  const cards = useMemo(() => [withScan], [withScan]);
+  return useLiveMarketCaps(cards)?.[0] ?? withScan;
+}
+
 function TokenBody({
-  card,
+  card: cardIn,
   now,
   onClose,
   terminal = false,
@@ -627,6 +689,8 @@ function TokenBody({
   terminal?: boolean;
 }) {
   const { hideSafetyPill } = useAppearance();
+  const utility = useContext(UtilityContext);
+  const card = useFreshCard(cardIn, !utility);
   const mint = card.token.mintAddress;
   const s = card.snapshot;
   const curated = card.curated;
@@ -645,7 +709,7 @@ function TokenBody({
   const peak = move !== null && move > 0 ? Math.max(recordedPeak ?? 0, move) : recordedPeak;
   const hasPeak = peak !== null && peak > 0;
   const label = tokenLabel(card.token);
-  const utility = useContext(UtilityContext);
+  const nowAge = nowReadingAge(card, nowMcap, now);
   const what = utility
     ? "Scanned"
     : card.kind === "stream"
@@ -784,9 +848,11 @@ function TokenBody({
         <label>{utility ? "At scan" : what === "Passed screen" ? "At screen" : "At alert"}</label>
         <span className="num">{usd(alertMcap)}</span>
       </div>
-      <div className="tm-fig">
-        <label>Now</label>
-        <span className="num">{usd(nowMcap)}</span>
+      <div className={`tm-fig${nowAge !== null ? " aged" : ""}`}>
+        <label>Now{nowAge !== null && <span className="fig-age"> · {nowAge}</span>}</label>
+        <span className="num" title={nowAge !== null ? `Read ${nowAge} ago` : undefined}>
+          {usd(nowMcap)}
+        </span>
         {move !== null && (
           <small className={`num delta ${move >= 0 ? "up" : "down"}`}>
             {move >= 0 ? "▲" : "▼"} {pct(Math.abs(move))}
@@ -1268,6 +1334,21 @@ function useHeadHeight(bodyRef: RefObject<HTMLDivElement | null>): number {
  * The safety screen on this coin (user ask 2026-10-16): its verdict on the newest scan, why it
  * failed, and each of its rules against what the scan read.
  */
+/** A holder report this much older than its scan says its own time on the safety card. */
+const HOLDER_READ_LAG_MS = 2 * 60_000;
+
+/** Whether the scan's holder figures (top 10, dev %, holders) came from a report older than it. */
+function holderReadLags(reading: Snapshot): boolean {
+  if (!reading.holderCountAt) return false;
+  return Date.parse(reading.takenAt) - Date.parse(reading.holderCountAt) >= HOLDER_READ_LAG_MS;
+}
+
+function holderReadTitle(reading: Snapshot): string | undefined {
+  if (!reading.holderCountAt) return undefined;
+  const at = new Date(reading.holderCountAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return `Top 10, dev % and the holder count come from the holder report read at ${at}; the scan reuses a report for a few minutes.`;
+}
+
 /**
  * The safety screen's verdict and each check. A pass folds to its heading (user ask 2026-10-16):
  * the badge says it all until someone asks, by opening it here or clicking the header's pill.
@@ -1295,7 +1376,12 @@ function SafetyCard({
           {SAFETY_WORD[state]}
         </span>
         {reading && (
-          <span className="tm-h4-meta small muted">Scan {ago(new Date(reading.takenAt), now)}</span>
+          <span className="tm-h4-meta small muted" title={holderReadTitle(reading)}>
+            Scan {ago(new Date(reading.takenAt), now)}
+            {holderReadLags(reading) && reading.holderCountAt && (
+              <>, holders read {ago(new Date(reading.holderCountAt), now)}</>
+            )}
+          </span>
         )}
       </FoldHead>
       {open && (
@@ -1910,6 +1996,7 @@ export function ChartCard({
       // Whether the view runs to the latest reading (Model View's window can end before it).
       live: bounds.live,
       latest: source[source.length - 1]!.v,
+      latestAt: source[source.length - 1]!.t,
       // The scans the model read before calling it, drawn as dots in Model View.
       scans:
         shownRange === "model"
@@ -1946,6 +2033,8 @@ export function ChartCard({
   );
 
   const latestMcap = view?.live ? view.latest : (data?.marketCap.at(-1)?.usd ?? null);
+  // When that market cap was read: the share card stamps this, not the moment it is drawn.
+  const latestMcapAt = view?.live ? view.latestAt : (data?.marketCap.at(-1)?.t ?? null);
   const summary = useMemo(
     () => (pro && position.data ? summarizePosition(position.data, latestMcap) : null),
     [pro, position.data, latestMcap],
@@ -1972,8 +2061,10 @@ export function ChartCard({
         symbol={card.token.symbol ?? "tokens"}
         name={card.token.name ?? null}
         position={position.data}
+        positionStaleAt={position.error && position.data ? position.at : null}
         summary={summary}
         nowMcap={latestMcap}
+        nowMcapAt={latestMcapAt}
         onTraded={position.reload}
         closeOnly={closeOnly}
         graceEndsAt={graceEndsAt}

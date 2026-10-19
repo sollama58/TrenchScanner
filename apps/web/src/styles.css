@@ -1385,13 +1385,16 @@ img.avatar {
   font-size: 11.5px;
 }
 /* "Now" from a reading minutes old: its age beside the label, the figure dimmed (AlertCard nowReadingAge). */
-.fig .fig-age {
+.fig .fig-age,
+.tm-fig .fig-age {
   text-transform: none;
   letter-spacing: 0;
   font-weight: 500;
 }
 .fig.stale > .num,
-.fig.stale .delta {
+.fig.stale .delta,
+.tm-fig.aged > .num,
+.tm-fig.aged .delta {
   opacity: 0.6;
 }
 .fig.peak.hot > span.num {
