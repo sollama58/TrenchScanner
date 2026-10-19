@@ -68,6 +68,7 @@ export function AlertCard({
   hide,
   detail = true,
   onHide,
+  atAlert = false,
 }: {
   card: Card;
   now: number;
@@ -78,6 +79,11 @@ export function AlertCard({
   hide?: ReadonlySet<CardField>;
   /** Clicking the card opens the token modal (off for the Customize preview). */
   detail?: boolean;
+  /**
+   * The stat tiles show the alert's own scan instead of the newest (the signed-out page's best
+   * call: the stats that came before the run, user ask 2026-10-19).
+   */
+  atAlert?: boolean;
   /** Hides the card's token from the Live feed (user ask 2026-10-19); no button without it. */
   onHide?: () => void;
 }) {
@@ -93,7 +99,15 @@ export function AlertCard({
   const trade = QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id));
   // The stat tiles show the newest scan, the alert's value in the tooltip (user decision
   // 2026-10-17: the result mark already says how the alert did).
-  const t = newestStats(card);
+  // At the alert, the newest scan is left out, so every tile reads the alert's own.
+  const tileCard = atAlert ? { ...card, latestSnapshot: null } : card;
+  const t = newestStats(tileCard);
+  // The newest scan's age once it is old enough to matter: those tiles dim and say it (user
+  // decision 2026-10-19). A coin under the low-cap floor keeps its price live but stops being
+  // scanned, so its holders and volume would otherwise read as current hours later.
+  const aged = atAlert ? null : scanAge(card, now);
+  const agedTag = aged === null ? null : <span className="fig-age"> · {aged}</span>;
+  const agedClass = aged === null ? undefined : "aged";
   const tone = scoreColor ? scoreTone(t.score, scale) : null;
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -175,13 +189,13 @@ export function AlertCard({
     devHolding,
     devFromLatest,
     feeLine,
-  } = cardReadings(card, "newest");
+  } = cardReadings(tileCard, "newest");
   const devWhen = devFromLatest
     ? `as of the scan ${ago(card.latestSnapshot!.takenAt, now)}`
     : "at alert time";
 
   // How a tile reading from after the alert is described: the newest scan's age.
-  const later = laterScanText(card, now);
+  const later = laterScanText(tileCard, now);
   // A wallet tile showing a later scan names the alert's own reading beside it.
   const a = card.snapshot;
   const pctOr = (v: number | null | undefined) => (v == null ? null : pct(v));
@@ -446,10 +460,10 @@ export function AlertCard({
         >
           {show("score") && (
             <div
-              className="stat-score"
+              className={agedClass ? `stat-score ${agedClass}` : "stat-score"}
               title={`${scoreTooltip(t.score, weights, scoreColor ? scale : undefined) ?? "Score"}${t.fromLatest ? `\n${cap(later)}${atAlertNote(s.score == null ? null : String(Math.round(s.score)), t.score == null ? null : String(Math.round(t.score)))}.` : ""}`}
             >
-              <dt>Score</dt>
+              <dt>Score{agedTag}</dt>
               <dd className="num" style={tone === null ? undefined : { color: scoreToneColor(tone) }}>
                 {t.score == null ? "–" : Math.round(t.score)}
               </dd>
@@ -458,30 +472,34 @@ export function AlertCard({
           {show("vol") && (
             <>
               <div
+                className={agedClass}
                 title={`Trading volume over the last 5 minutes, ${t.fromLatest ? later : "at alert time"}${t.fromLatest ? atAlertNote(usd(s.volume5mUsd ?? null), usd(t.volume5mUsd)) : ""}`}
               >
-                <dt>Vol 5m</dt>
+                <dt>Vol 5m{agedTag}</dt>
                 <dd className="num">{usd(t.volume5mUsd)}</dd>
               </div>
               <div
+                className={agedClass}
                 title={`Trading volume over the last hour, ${t.fromLatest ? later : "at alert time"}${t.fromLatest ? atAlertNote(usd(s.volume1hUsd ?? null), usd(t.volume1hUsd)) : ""}`}
               >
-                <dt>Vol 1h</dt>
+                <dt>Vol 1h{agedTag}</dt>
                 <dd className="num">{usd(t.volume1hUsd)}</dd>
               </div>
               <div
+                className={agedClass}
                 title={`Trading volume over the last 24 hours (since launch, for a younger token), ${t.fromLatest ? later : "at alert time"}${t.fromLatest ? atAlertNote(usd(s.volume24hUsd), usd(t.volume24hUsd)) : ""}`}
               >
-                <dt>Vol 24h</dt>
+                <dt>Vol 24h{agedTag}</dt>
                 <dd className="num">{usd(t.volume24hUsd)}</dd>
               </div>
             </>
           )}
           {show("holders") && (
             <div
+              className={agedClass}
               title={`${t.holdersLive ? "Holders: Jupiter's count (the count the Min holders filter reads)" : "Holders: RugCheck's count (no live count was read)"}, ${t.fromLatest ? later : "at alert time"}${t.fromLatest ? atAlertNote(fmtCount(s.liveHolderCount ?? s.holderCount), fmtCount(t.holders)) : ""}`}
             >
-              <dt>Holders</dt>
+              <dt>Holders{agedTag}</dt>
               <dd className="num">{t.holders ?? "–"}</dd>
             </div>
           )}
@@ -490,36 +508,44 @@ export function AlertCard({
               title={
                 s.ageMinutes == null
                   ? undefined
-                  : `Age now. It was ${minutes(s.ageMinutes)} old at the alert.`
+                  : atAlert
+                    ? "Age at the alert."
+                    : `Age now. It was ${minutes(s.ageMinutes)} old at the alert.`
               }
             >
               <dt>Age</dt>
-              <dd className="num">{minutes(ageNow(s, now))}</dd>
+              <dd className="num">{minutes(atAlert ? s.ageMinutes : ageNow(s, now))}</dd>
             </div>
           )}
           {show("top10") && (
             <div
-              {...tileLook(
-                tiles,
-                tileTone(t.top10Pct, SAFETY_REJECT_TOP10_HOLDER_PCT),
-                t.top10Pct != null && t.top10Pct >= SAFETY_REJECT_TOP10_HOLDER_PCT,
+              {...withAged(
+                tileLook(
+                  tiles,
+                  tileTone(t.top10Pct, SAFETY_REJECT_TOP10_HOLDER_PCT),
+                  t.top10Pct != null && t.top10Pct >= SAFETY_REJECT_TOP10_HOLDER_PCT,
+                ),
+                agedClass,
               )}
               title={`Top 10: share of supply the ten largest holders own (pool aside), ${t.top10FromLatest ? `${later}${atAlertNote(s.top10HolderPct == null ? null : pct(s.top10HolderPct), pct(t.top10Pct))}` : "at alert time"}. The safety screen rejects ${SAFETY_REJECT_TOP10_HOLDER_PCT}% or more.`}
             >
-              <dt>Top 10</dt>
+              <dt>Top 10{agedTag}</dt>
               <dd className="num">{pct(t.top10Pct)}</dd>
             </div>
           )}
           {show("largest") && (
             <div
-              {...tileLook(
-                tiles,
-                tileTone(largestPct, SAFETY_MAX_LARGEST_HOLDER_PCT),
-                largestPct !== null && largestPct > SAFETY_MAX_LARGEST_HOLDER_PCT,
+              {...withAged(
+                tileLook(
+                  tiles,
+                  tileTone(largestPct, SAFETY_MAX_LARGEST_HOLDER_PCT),
+                  largestPct !== null && largestPct > SAFETY_MAX_LARGEST_HOLDER_PCT,
+                ),
+                agedClass,
               )}
               title={`Largest holder: one wallet's share of supply (pools aside, its accounts summed)${largestPct === null ? "" : `, ${largestAtAlert ? "at alert time" : `${later}${atAlertNote(s.largestHolderPct == null ? null : pct(s.largestHolderPct), pct(largestPct))}`}`}. The safety screen rejects over ${SAFETY_MAX_LARGEST_HOLDER_PCT}%.`}
             >
-              <dt>Largest</dt>
+              <dt>Largest{agedTag}</dt>
               <dd className={largestPct === null ? "muted" : "num"}>
                 {largestPct === null ? "–" : pct(largestPct)}
               </dd>
@@ -1031,6 +1057,31 @@ export const LATER_SCAN = "from a scan after the alert";
 export function laterScanText(card: Pick<Card, "latestSnapshot">, now: number): string {
   const at = card.latestSnapshot?.takenAt;
   return at && Number.isFinite(Date.parse(at)) ? `from a scan ${ago(at, now)}` : LATER_SCAN;
+}
+
+/** Scan tiles this old or older dim and say the scan's age (user decision 2026-10-19). */
+export const SCAN_STALE_MS = 5 * 60_000;
+
+/**
+ * The age of the newest scan behind a card's scan tiles (score, holders, volume, Top 10, Largest)
+ * as the tiles label it ("12m", "3h"), or null while it is under SCAN_STALE_MS old.
+ */
+export function scanAge(card: Pick<Card, "snapshot" | "latestSnapshot">, now: number): string | null {
+  const at = Math.max(
+    Date.parse(card.snapshot.takenAt),
+    card.latestSnapshot ? Date.parse(card.latestSnapshot.takenAt) : -Infinity,
+  );
+  if (!Number.isFinite(at) || now - at < SCAN_STALE_MS) return null;
+  return minutes((now - at) / 60_000);
+}
+
+/** A tile's color classes with the aged class added, when there is one. */
+function withAged(
+  look: { className?: string; style?: React.CSSProperties },
+  aged: string | undefined,
+): { className?: string; style?: React.CSSProperties } {
+  if (!aged) return look;
+  return { ...look, className: look.className ? `${look.className} ${aged}` : aged };
 }
 
 /**

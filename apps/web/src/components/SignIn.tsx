@@ -252,7 +252,8 @@ function ShowcaseAlert() {
       <p className="signin-alerts-head small muted">
         {isBest ? (
           <>
-            <TrophyIcon size={13} /> Best model alert of the last {best.data?.windowHours ?? 24} hours
+            <TrophyIcon size={13} /> Best model alert of the last {best.data?.windowHours ?? 24} hours, with
+            its stats at the alert
           </>
         ) : (
           <>
@@ -261,7 +262,8 @@ function ShowcaseAlert() {
         )}
       </p>
       <div className="cards signin-cards">
-        <AlertCard card={card} now={now} labelSource detail={false} />
+        {/* The best call shows the stats it was called on, not the coin's after the run. */}
+        <AlertCard card={card} now={now} labelSource detail={false} atAlert={isBest} />
       </div>
     </div>
   );
