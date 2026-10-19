@@ -102,8 +102,14 @@ const PRIORITY_CAP_LAMPORTS: Record<SenderSpeed, bigint> = { eco: 50_000n, turbo
 export const MAX_CUSTOM_FEE_LAMPORTS = 10_000_000n;
 /** The price floor per compute unit, so a quiet network still sees a priority fee (Sender needs one). */
 const MIN_MICROLAMPORTS = 10_000n;
-/** Room under a buy for rent (the token and wrapped-SOL accounts) and base fees. */
-const BUY_MARGIN_LAMPORTS = 5_000_000n;
+/**
+ * Room under a buy for the rent of the accounts it opens, and base fees. A first buy through a
+ * coin quoted in another coin opens up to four: the token's account (~0.0015 SOL), one for each
+ * hop's coin (~0.0015 SOL each) and Pump's volume trackers (~0.0013 SOL each) - 0.0059 SOL on a
+ * 0.25 SOL buy refused on mainnet (2026-10-19) under the 0.005 this was. Still a hard ceiling:
+ * the route can't take more than this beyond the buy and its fees.
+ */
+const BUY_MARGIN_LAMPORTS = 10_000_000n;
 /** Room under a sale's minimum: base fee and rounding. */
 const SELL_MARGIN_LAMPORTS = 100_000n;
 /** Compute units for the curve's own trades (measured on mainnet), with room. */
