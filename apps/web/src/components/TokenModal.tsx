@@ -2,6 +2,7 @@ import {
   alertWideMap,
   fromAlertText,
   hasHolderList,
+  HOLDER_POLL_MS,
   HOLDER_SCAN_MS,
   holderFreshness,
   linkedCountText,
@@ -1626,15 +1627,20 @@ function SafetyCard({
  */
 function useHolderReading(card: Card, mint: string, lookup: boolean): Snapshot | null | undefined {
   const seed = linkedReading(card);
-  // Newest first, so the section follows the coin's scans and its "Last updated" means it.
-  const own = [card.latestSnapshot, seed, card.snapshot].find((s) => s && hasHolderList(s)) ?? null;
+  // Newest first, so the section follows the coin's scans and its "Last updated" means it. A newer
+  // scan without a list of its own (an unchanged list rides only some rows, the worker's
+  // holderListWrites.ts) has the coin's newest reading read, not the alert's put back: that froze
+  // "Now" at the alert once the modal's card followed the scans (user ask 2026-10-19).
+  const latest = card.latestSnapshot && hasHolderList(card.latestSnapshot) ? card.latestSnapshot : null;
+  const older = [seed, card.snapshot].find((s) => s && hasHolderList(s)) ?? null;
+  const own = latest ?? (card.latestSnapshot && !lookup ? null : older);
   const [fetched, setFetched] = useState<{ mint: string; snapshot: Snapshot | null } | null>(null);
   const fetch = !own && !lookup;
   useEffect(() => {
     if (!fetch) return;
     let live = true;
     const read = () =>
-      cachedGet<{ snapshots?: Snapshot[] }>(`/tokens/${encodeURIComponent(mint)}`, HOLDER_SCAN_MS)
+      cachedGet<{ snapshots?: Snapshot[] }>(`/tokens/${encodeURIComponent(mint)}`, HOLDER_POLL_MS)
         .then((d) => {
           if (!live) return;
           const snapshot = pickReading(d.snapshots ?? []) ?? null;
@@ -1645,10 +1651,10 @@ function useHolderReading(card: Card, mint: string, lookup: boolean): Snapshot |
         })
         .catch(() => live && setFetched((f) => (f?.mint === mint ? f : { mint, snapshot: seed })));
     void read();
-    // The worker saves a reading each scan: follow it while the view is open.
+    // The worker saves a reading each minute while the map is open: follow it while the view is.
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void read();
-    }, HOLDER_SCAN_MS);
+    }, HOLDER_POLL_MS);
     return () => {
       live = false;
       window.clearInterval(timer);

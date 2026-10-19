@@ -27,7 +27,7 @@ import {
   nodeSlot,
   sameTimeSlot,
   buildGraph,
-  HOLDER_SCAN_MS,
+  HOLDER_POLL_MS,
   liveWideFor,
   clusterHalos,
   HALO_PAD,
@@ -122,11 +122,13 @@ function useWideMap(mint: string): WideMap | null {
  * null while they load or when the read fails. One cached read serves every caller.
  */
 export function useBubbleMaps(mint: string): BubbleMaps | null {
-  // Re-read at the worker's scan pace while the view is open, so a top 50 read after it opened
-  // (or one that changed) shows without reopening it - and at once when reloadBubbleMaps says so.
+  // Re-read every HOLDER_POLL_MS while the view is open and the page visible, so a top 50 read
+  // after it opened (or one that changed) shows without reopening it - and at once when
+  // reloadBubbleMaps says so. Each read also marks the map as watched, which has the worker re-read
+  // the coin's top holders every minute while it is (user ask 2026-10-19).
   const path = bubbleMapsPath(mint);
   const version = useSyncExternalStore(subscribeMaps, () => mapsVersion.get(mint) ?? 0);
-  const { data } = usePolling<BubbleMaps>(path, HOLDER_SCAN_MS, String(version));
+  const { data } = usePolling<BubbleMaps>(path, HOLDER_POLL_MS, String(version));
   return data;
 }
 

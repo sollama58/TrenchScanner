@@ -60,6 +60,12 @@ describe("shouldWriteHolderReading", () => {
     expect(shouldWriteHolderReading("t1", reading(), T0 + HOLDER_LIST_REWRITE_MS)).toBe(true);
   });
 
+  it("writes an unchanged reading at a watched coin's own pace when one is given", () => {
+    noteHolderReadingWritten("t1", reading(), T0);
+    expect(shouldWriteHolderReading("t1", reading(), T0 + 59_999, 60_000)).toBe(false);
+    expect(shouldWriteHolderReading("t1", reading(), T0 + 60_000, 60_000)).toBe(true);
+  });
+
   it("writes a changed reading at once: a share, a tag or a wallet of the list", () => {
     noteHolderReadingWritten("t1", reading(), T0);
     expect(shouldWriteHolderReading("t1", reading(4.3), T0 + 1_000)).toBe(true);

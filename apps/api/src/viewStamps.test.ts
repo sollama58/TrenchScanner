@@ -40,6 +40,21 @@ describe.skipIf(!dbAvailable)("ViewStampBuffer", () => {
     await buffer.stop();
   });
 
+  it("stamps holdersViewedAt by mint for the bubble map's reads, and leaves lastViewedAt alone", async () => {
+    const tokens = await prisma.token.findMany({
+      where: { id: { in: tokenIds } },
+      select: { mintAddress: true },
+    });
+    const buffer = new ViewStampBuffer({ flushIntervalMs: 60_000, stamp: "holders" });
+    buffer.record(tokens.slice(0, 2).map((t) => t.mintAddress));
+    await buffer.flush();
+    expect(
+      await prisma.token.count({ where: { id: { in: tokenIds }, holdersViewedAt: { not: null } } }),
+    ).toBe(2);
+    expect(await stampedCount()).toBe(0);
+    await buffer.stop();
+  });
+
   it("collapses repeated views of the same tokens into one write", async () => {
     // The curated feed's shape: many readers, one set of twelve tokens. Before buffering this was
     // one transaction per reader, all contending for the same rows.

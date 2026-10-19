@@ -95,6 +95,7 @@ import {
 } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { noteHolderReadingWritten, shouldWriteHolderReading } from "./holderListWrites.js";
+import { refreshWatchedHolders, watchedHolderRewriteMs } from "./watchedHolders.js";
 import { recentLookupMints, splitLowCap } from "./lowCap.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
 import { resolveEarliestActivity, computeFreshPct, FRESH_WITHIN_HOURS } from "./walletFreshness.js";
@@ -651,6 +652,8 @@ function startLinkedWalletStage(
   env: Env,
   /** Model-alerted coins: their bubble map reads the top 50 too (readTopHolders). */
   wideMints: ReadonlySet<string> = new Set(),
+  /** Coins whose bubble map is open now (refreshWatchedHolders): their top holders are re-read faster. */
+  watched: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   if (env.LINKED_WALLET_LOOKUPS_PER_CYCLE <= 0 || groups.length === 0 || linkedStageInFlight) {
     return Promise.resolve();
@@ -664,22 +667,33 @@ function startLinkedWalletStage(
   // Contenders' own extra (LINKED_WALLET_CONTENDER_LOOKUPS_PER_CYCLE), spent before the shared
   // budget and only on the waited pass; what they leave of it is not carried to the rest.
   let contenderLeft = env.LINKED_WALLET_CONTENDER_LOOKUPS_PER_CYCLE;
+  let watchedLeft = env.WATCHED_HOLDER_READS_PER_CYCLE;
   const pass = async (part: LinkedGroup[], contenders: boolean) => {
     if (part.length === 0) return;
-    readsLeft -= await readTopHolders(part, helius, { maxReads: readsLeft, wideMints }).catch(
-      (err: unknown) => {
-        logger.warn("top-holder reads failed - using RugCheck's list", { error: String(err) });
-        return 0;
-      },
-    );
-    // Holder-to-holder transfers over the same top 25, for the coins about to be decided on only,
-    // alongside the funder reads (holderTransfers.ts; never rejects).
-    const transfers = contenders
-      ? resolveHolderTransfers(part, helius, {
-          maxSignatureReads: env.HOLDER_TRANSFER_SIGNATURE_READS_PER_CYCLE,
-          maxTxReads: env.HOLDER_TRANSFER_TX_READS_PER_CYCLE,
-        })
-      : Promise.resolve();
+    const spent = await readTopHolders(part, helius, {
+      maxReads: readsLeft,
+      wideMints,
+      watched,
+      maxWatchedReads: watchedLeft,
+      watchedRefreshMs: env.WATCHED_HOLDERS_REFRESH_SECONDS * 1000,
+    }).catch((err: unknown) => {
+      logger.warn("top-holder reads failed - using RugCheck's list", { error: String(err) });
+      return { reads: 0, watchedReads: 0 };
+    });
+    readsLeft -= spent.reads;
+    watchedLeft -= spent.watchedReads;
+    // Holder-to-holder transfers over the same top 25, for the coins about to be decided on,
+    // alongside the funder reads (holderTransfers.ts; never rejects); and behind the cycle for the
+    // coins whose bubble map is open, so their transfer links follow their new holders too.
+    const watchedPart = contenders ? [] : part.filter((g) => watched.has(g.mintAddress));
+    const transferGroups = contenders ? part : watchedPart;
+    const transfers =
+      transferGroups.length > 0
+        ? resolveHolderTransfers(transferGroups, helius, {
+            maxSignatureReads: env.HOLDER_TRANSFER_SIGNATURE_READS_PER_CYCLE,
+            maxTxReads: env.HOLDER_TRANSFER_TX_READS_PER_CYCLE,
+          })
+        : Promise.resolve();
     const extra = contenders ? contenderLeft : 0;
     const funders = resolveLinkedWallets(part, helius, {
       maxNewLookups: lookupsLeft + extra,
@@ -982,6 +996,9 @@ async function scanCycle(
     orderBy: { lastViewedAt: "desc" },
     take: env.LIVE_PRICE_MAX_TRACKED,
   });
+  // The coins whose bubble map someone has open: their top holders are re-read faster (user ask
+  // 2026-10-19). Read alongside, waited on below where the wallet stage needs it.
+  const watchedHoldersRead = refreshWatchedHolders(env);
   // Coins looked up in the Utilities tab are among the viewed ones; each also wants a full read.
   void noteUtilityLookups(env).catch((err: unknown) =>
     logger.warn("failed to note looked-up tokens for TokenSage", { error: String(err) }),
@@ -1359,6 +1376,7 @@ async function scanCycle(
       },
       curatedBand,
     );
+  const watchedHolders = await watchedHoldersRead;
   const walletGroups = candidates
     .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
     .map((c) => ({
@@ -1369,6 +1387,9 @@ async function scanCycle(
       // for a wallet figure (see resolveAlertTargets): next in line after the contenders, so the
       // reading lands within a cycle or two.
       alerted: alertAwaitingWallets(c.mintAddress),
+      // Someone has its bubble map open: its new holders' funders, fresh and empty checks are read
+      // next, so the map's clusters and the holder list's tags follow its holders (user ask 2026-10-19).
+      watched: watchedHolders.has(c.mintAddress),
       churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
     }))
     .filter((g) => g.addresses.length > 0)
@@ -1376,6 +1397,7 @@ async function scanCycle(
       (a, b) =>
         Number(b.contender) - Number(a.contender) ||
         Number(b.alerted) - Number(a.alerted) ||
+        Number(b.watched) - Number(a.watched) ||
         b.churn - a.churn,
     );
   // Every candidate's own price is already in hand - the wallet valuation reuses it for free.
@@ -1391,12 +1413,15 @@ async function scanCycle(
       contender: contender(c),
       // A user-filter match held for its top-10 snipers share (see resolveAlertTargets).
       alerted: alertAwaitingWallets(c.mintAddress),
+      // Its bubble map is open: its holders' sniper tags follow them (user ask 2026-10-19).
+      watched: watchedHolders.has(c.mintAddress),
       churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
     }))
     .sort(
       (a, b) =>
         Number(b.contender) - Number(a.contender) ||
         Number(b.alerted) - Number(a.alerted) ||
+        Number(b.watched) - Number(a.watched) ||
         b.churn - a.churn,
     );
   const sniperStageStartedAt = Date.now();
@@ -1439,7 +1464,14 @@ async function scanCycle(
     : walletGroups.filter((g) => g.contender || g.alerted).length;
   // Model-alerted coins, whose bubble map takes in the known wallets of their top 50 (display only).
   const wideMints = env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0 ? await wideMapMints() : new Set<string>();
-  const linkedWork = startLinkedWalletStage(linkedGroups, linkedWaited, deps.helius, env, wideMints);
+  const linkedWork = startLinkedWalletStage(
+    linkedGroups,
+    linkedWaited,
+    deps.helius,
+    env,
+    wideMints,
+    watchedHolders,
+  );
   // The live tape: the newest trades of each coin close to a call (contenders, then alerts held
   // for a wallet figure), for the flagged wallets trading it - on the same wait.
   const liveTapeWork = startLiveTapeStage(
@@ -3154,7 +3186,14 @@ async function processCandidate(
   }
   // The holder reading's lists ride only a new reading, or one written ten minutes ago
   // (holderListWrites.ts): the same lists on every 30-second row were most of the table's growth.
-  const writeHolderReading = shouldWriteHolderReading(token.id, scored);
+  // A coin whose bubble map is open carries its reading at the pace its holders are re-read, so the
+  // map's "Last updated" says when it was last checked (user ask 2026-10-19).
+  const writeHolderReading = shouldWriteHolderReading(
+    token.id,
+    scored,
+    Date.now(),
+    watchedHolderRewriteMs(token.mintAddress),
+  );
   const snapshot = await prisma.tokenSnapshot.create({
     data: snapshotDataFor(token.id, scored, "scan", { holderReading: writeHolderReading }),
   });

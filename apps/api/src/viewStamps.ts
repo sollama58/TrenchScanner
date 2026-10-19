@@ -39,9 +39,22 @@ export class ViewStampBuffer {
   private flushing: Promise<void> | null = null;
   private stopped = false;
 
-  constructor(private readonly options: { flushIntervalMs?: number; maxPending?: number } = {}) {}
+  constructor(
+    private readonly options: {
+      flushIntervalMs?: number;
+      maxPending?: number;
+      /**
+       * Which stamp: "viewed" (Token.lastViewedAt, by token id; the default) or "holders"
+       * (Token.holdersViewedAt, by mint: the coin's bubble map is open, user ask 2026-10-19).
+       */
+      stamp?: "viewed" | "holders";
+    } = {},
+  ) {}
 
-  /** Non-blocking. Records that these tokens are on a page somebody just fetched. */
+  /**
+   * Non-blocking. Records that these tokens are on a page somebody just fetched: token ids, or
+   * mints for the "holders" stamp.
+   */
   record(tokenIds: readonly string[]): void {
     if (this.stopped) return;
     for (const id of tokenIds) this.pending.add(id);
@@ -83,10 +96,17 @@ export class ViewStampBuffer {
     const batch = [...this.pending];
     this.pending.clear();
     try {
-      await prisma.token.updateMany({
-        where: { id: { in: batch } },
-        data: { lastViewedAt: new Date() },
-      });
+      if (this.options.stamp === "holders") {
+        await prisma.token.updateMany({
+          where: { mintAddress: { in: batch } },
+          data: { holdersViewedAt: new Date() },
+        });
+      } else {
+        await prisma.token.updateMany({
+          where: { id: { in: batch } },
+          data: { lastViewedAt: new Date() },
+        });
+      }
     } catch (err) {
       logger.error("could not flush view stamps", { err: String(err), count: batch.length });
     }
