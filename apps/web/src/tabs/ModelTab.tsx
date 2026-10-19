@@ -25,6 +25,7 @@ import {
   TargetIcon,
 } from "../components/Icons";
 import { ShareImageDialog } from "../components/ShareImageDialog";
+import { AsOf } from "../components/AsOf";
 import { saveFeedSettings, toggledModels } from "../components/ModelPicker";
 import { CoverageMeter, bestCost, coverageView } from "../components/CoverageMeter";
 import { ExitPlanDetails, ExitPlanInfo } from "../components/ExitPlanInfo";
@@ -32,6 +33,7 @@ import { BAND_TONE, ScoreBar } from "../components/ScoreBar";
 import { prefetch } from "../cache";
 import { CURVE_SLICES } from "../cutoffCurve";
 import { usePolling, useNow } from "../hooks";
+import { learningPath } from "../routes";
 import { GUEST_DELAY_MINUTES } from "../session";
 import { ago, pct, signedPct, stakes, tokenLabel, usd } from "../format";
 import {
@@ -137,6 +139,9 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
                 : ""}
               {lb.showModelAlerts ? "" : ", though Model alerts are switched off in Settings"}.
             </p>
+            <p className={board.stale || insights.stale ? "stale" : undefined}>
+              <AsOf computedAt={olderStamp(lb.computedAt, data.computedAt)} now={now} />
+            </p>
           </div>
         </div>
       </section>
@@ -153,11 +158,17 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
         refreshKey={String(pick)}
       />
 
-      <WeekPanel learning={data.learning} board={lb} now={now} />
+      <WeekPanel api={api} learning={data.learning} board={lb} now={now} />
 
       <WinnerRunsPanel data={data} days={days} />
     </div>
   );
+}
+
+/** The older of two "as of" stamps: a page built from both reports is only as fresh as the older one. */
+function olderStamp(a: string | undefined, b: string | undefined): string | undefined {
+  if (!a || !b) return a ?? b;
+  return Date.parse(a) <= Date.parse(b) ? a : b;
 }
 
 /**
@@ -1877,7 +1888,7 @@ const LEARNING_METRICS = {
     series: "avg return",
     hit: "",
     of: (r: LearningRates) => r.avgReturnPct ?? null,
-    note: "Average return per alert, taking every alert through one fixed exit plan; the filtered market line is a random pick under the same plan.",
+    note: "Average return per alert, taking every alert through one fixed exit plan; the filtered market line is a random pick under the same plan. An alert still riding its trailing share counts at its latest reading until it sells, so recent days can still move.",
   },
   catch: {
     tab: "Catch",
@@ -1930,7 +1941,21 @@ const DEFAULT_CATCH_GOAL_PCT = 75;
 const WEEK_MAX_MODELS = 5;
 const WEEK_DAYS = 7;
 
-/** The UTC day keys of the `n` days ending at `last` (YYYY-MM-DD), oldest first. */
+/** The calendar day `now` falls on in `timeZone`, YYYY-MM-DD (en-CA writes dates that way). */
+export function dayInZone(now: number, timeZone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(now);
+  } catch {
+    return new Date(now).toISOString().slice(0, 10);
+  }
+}
+
+/** The calendar day keys of the `n` days ending at `last` (YYYY-MM-DD), oldest first. */
 function dayKeys(last: string, n: number): string[] {
   const end = Date.parse(`${last}T00:00:00Z`);
   return Array.from({ length: n }, (_, i) =>
@@ -1944,10 +1969,26 @@ function dayKeys(last: string, n: number): string[] {
  * move with the market - on a day the whole market doubles twice as often every model looks twice
  * as good - so each line is read against the market's line for the same day.
  */
-function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: Leaderboard; now: number }) {
+function WeekPanel({
+  api,
+  learning: reportCopy,
+  board,
+  now,
+}: {
+  api: string;
+  /** The report's own copy, in UTC days: shown dimmed until the reader's zone's lands. */
+  learning: LearningCurve;
+  board: Leaderboard;
+  now: number;
+}) {
+  // The days in the reader's own zone, so "Today" is their today (user ask 2026-10-19).
+  const own = usePolling<LearningCurve>(learningPath(api, PAGE_DAYS), 120_000);
+  const learning = own.data ?? reportCopy;
+  const zone = learning.timeZone ?? "UTC";
+  const waiting = own.data === null ? own.error === null : own.stale;
   const series = new Map((learning.models ?? []).map((m) => [m.model, m]));
   const seats = board.entries.map((e) => ({ id: e.id, name: e.name }));
-  const today = new Date(now).toISOString().slice(0, 10);
+  const today = dayInZone(now, zone);
   const yesterday = new Date(Date.parse(`${today}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
   const [withToday, setWithToday] = useState(false);
   const [metric, setMetric] = useState<LearningMetric>("2x");
@@ -2038,7 +2079,7 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
   });
 
   return (
-    <section className="panel learning-panel">
+    <section className={`panel learning-panel${waiting ? " stale" : ""}`} aria-busy={waiting}>
       <header className="section-head">
         <div>
           <span className="eyebrow">
@@ -2149,6 +2190,15 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
       ) : (
         <p className="empty">No graded alerts in these {WEEK_DAYS} days yet.</p>
       )}
+      <p className="faint small">
+        {zone === "UTC" ? "Days in UTC" : "Days in your time zone"}
+        {own.data?.computedAt && (
+          <>
+            {", "}
+            <AsOf computedAt={own.data.computedAt} now={now} />
+          </>
+        )}
+      </p>
 
       <p className="faint small">
         {m.note} A model&apos;s day shows once it has {MIN_CALLS_PER_POINT} graded alerts; fewer leave a gap.

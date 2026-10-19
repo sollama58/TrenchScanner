@@ -101,6 +101,18 @@ describe("summarizeReturns", () => {
     expect(w1).toMatchObject({ alerts: 5, settled: 4, avgReturnPct: 17.5 });
   });
 
+  it("counts a call still riding its trailing share at its current return, labelled open", () => {
+    const [h1] = summarizeReturns(
+      [
+        { at: ago(10), returnPct: -40 },
+        { at: ago(50), returnPct: 120, open: true },
+      ],
+      now,
+    );
+    expect(h1).toMatchObject({ alerts: 2, settled: 2, open: 1, avgReturnPct: 40, profitable: 1 });
+    expect(h1!.buckets[2]).toMatchObject({ settled: 1, open: 1, avgReturnPct: 120 });
+  });
+
   it("puts each alert in the bar for its time, oldest bar first", () => {
     const [h1, , d1, w1] = summarizeReturns(
       [

@@ -25,6 +25,7 @@ import { ScanStatus } from "../components/ScanStatus";
 import { ScopeBoard } from "../components/ScopeBoard";
 import type { ScopeSettingsSection } from "../components/ScopeSettingsModal";
 import { HiddenTokensDialog } from "../components/HiddenTokensDialog";
+import { AsOf } from "../components/AsOf";
 import { dueToUnhide, hideToken, unhideTokens, useHiddenTokenIds, useHiddenTokens } from "../hiddenTokens";
 
 /** Graded alerts below which the Stats button doesn't show a 2x rate (too early to mean much). */
@@ -462,8 +463,8 @@ export function LiveTab({
               <strong className="num">{stats.data.training.finalizedSamples.toLocaleString()}</strong> graded
               moments. Base 2x rate {pct(stats.data.training.baseWinRatePct, 1)}
               {stats.data.curator.modelTrainedAt &&
-                `, model data to ${ago(stats.data.curator.modelTrainedAt, now)}`}
-              .
+                `, model last trained ${ago(stats.data.curator.modelTrainedAt, now)}`}
+              . <AsOf computedAt={stats.data.computedAt} now={now} />
             </span>
           </div>
         )}

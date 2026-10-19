@@ -306,6 +306,7 @@ const WATCH_ROW_SELECT = {
   peak24hReturnPct: true,
   runPeakMinutes: true,
   simReturnPct: true,
+  openReturnPct: true,
   token: { select: { mintAddress: true } },
   // So closing a window can push outcome copies onto the feed row - see runCandidateWatchJob.
   curatedAlerts: { select: { id: true } },
@@ -645,6 +646,13 @@ export async function runCandidateWatchJob(
         ...merged,
         simReturnPct: simReturnPct ?? row.simReturnPct,
       });
+      // While the trailing share is held, what the call would return if it sold now: the share
+      // priced at the latest reading, as the hold cap would price it. Reports average it in,
+      // labelled open, so a winner riding its trail isn't missing while the losers are counted.
+      const openReturnPct = positionOpen
+        ? simulateExitPlan(merged, null, EXIT_PLAN, price ?? row.lastPriceUsd)
+        : null;
+      if (openReturnPct !== row.openReturnPct) data.openReturnPct = openReturnPct;
       // A row not on the 24h watch retires the moment its labels and its return are both in: at
       // the window close for a call that stopped or never sold, at the trail's exit for one that
       // sold. (A row closed ungraded retired above.)

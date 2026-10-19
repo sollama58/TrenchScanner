@@ -20545,3 +20545,12 @@ dialog.tm-modal.tm-terminal::backdrop {
   font-family: inherit;
   cursor: copy;
 }
+
+/* "as of 14:05" on a cached report (components/AsOf.tsx). */
+.as-of {
+  white-space: nowrap;
+}
+.lh-as-of {
+  margin: 0;
+  text-align: right;
+}
