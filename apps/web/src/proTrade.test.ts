@@ -311,6 +311,57 @@ describe("proStateOf", () => {
   });
 });
 
+describe("tradeProblem through a curve's quote coin", () => {
+  // Real builds by the API on mainnet (2026-10-19), unsigned: a coin on a PUMP-quoted Pump.fun
+  // curve, bought for 0.1 SOL (Jupiter SOL -> PUMP, then the curve) and sold (the curve, then a
+  // token-ledger route of all the PUMP it paid back to SOL).
+  const read = (name: string) =>
+    Uint8Array.from(Buffer.from(readFileSync(new URL(name, import.meta.url), "utf8"), "base64"));
+  const viaBuy = read("./proTrade.viaBuy.fixture.b64.txt");
+  const viaSell = read("./proTrade.viaSell.fixture.b64.txt");
+  const COIN = "8kERJT2KGWpiWEzgXvbHZh99x8b9drH17hZHqFwnpump";
+  const PUMP_COIN = "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn";
+  const check = (owner: string, side: "buy" | "sell", amount: bigint): TradeCheck => ({
+    side,
+    amount,
+    slippageBps: 1_000,
+    ownWrappedSol: ownWrappedSolAccounts(owner),
+    ownCoinAccounts: ownTokenAccounts(owner, COIN),
+    ownViaAccounts: ownTokenAccounts(owner, PUMP_COIN),
+  });
+  const buyer = "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9";
+  const seller = "sssssCUP5wgSW3sxjtQNa7u88ytE4st2Z7goX5kKNwi";
+
+  it("passes both real builds for their own wallets", () => {
+    expect(tradeProblem(viaBuy, buyer, check(buyer, "buy", 100_000_000n))).toBeNull();
+    expect(tradeProblem(viaSell, seller, check(seller, "sell", 1_000_000_000_000n))).toBeNull();
+  });
+  it("refuses them as anything but the trade asked for", () => {
+    expect(tradeProblem(viaBuy, buyer, check(buyer, "buy", 1n))).toMatch(/amount/);
+    expect(tradeProblem(viaBuy, buyer, check(buyer, "sell", 100_000_000n))).toMatch(/Jupiter step|different/);
+    expect(tradeProblem(viaSell, seller, check(seller, "sell", 1n))).toMatch(/amount/);
+    // Without the quote coin they aren't one swap, and a quote coin they don't use isn't theirs.
+    expect(
+      tradeProblem(viaBuy, buyer, { ...check(buyer, "buy", 100_000_000n), ownViaAccounts: undefined }),
+    ).not.toBeNull();
+    expect(
+      tradeProblem(viaSell, seller, {
+        ...check(seller, "sell", 1_000_000_000_000n),
+        ownViaAccounts: ownTokenAccounts(seller, COIN),
+      }),
+    ).not.toBeNull();
+  });
+  it("refuses a curve buy spending more quote coin than Jupiter's swap is sure to deliver", () => {
+    // buy_exact_quote_in_v3's spendable_quote_in, raised far past the swap's minimum: it would
+    // spend PUMP the wallet already held.
+    const big = Uint8Array.from(viaBuy);
+    const disc = Buffer.from([225, 247, 80, 30, 213, 179, 132, 136]).toString("hex");
+    const at = Buffer.from(big).toString("hex").indexOf(disc) / 2 + 8;
+    new DataView(big.buffer).setBigUint64(at, 10n ** 15n, true);
+    expect(tradeProblem(big, buyer, check(buyer, "buy", 100_000_000n))).toMatch(/already held/);
+  });
+});
+
 describe("tradeProblem", () => {
   // A real Jupiter buy built by the API on mainnet (2026-10-18), unsigned.
   const built = Uint8Array.from(
