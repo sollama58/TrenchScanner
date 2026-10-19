@@ -42,7 +42,9 @@ import {
   tabFromHash,
   type Tab,
 } from "./routes";
-import { AlertNotifier, resetSettings } from "./alerts";
+import { AlertNotifier, dropPush, resetSettings } from "./alerts";
+import { resetHiddenTokens } from "./hiddenTokens";
+import { resetScopeSettings } from "./scopeSettings";
 import { AnnouncementBar } from "./components/AnnouncementBar";
 import { currentSignIn, hasPendingLink, mayReplaceSignIn, redeemLinkCode, takeLinkCode } from "./deviceLink";
 import { closeSage, useSageMint } from "./sage";
@@ -143,6 +145,18 @@ function resetAccountState(): void {
   closeTokenModal();
 }
 
+/**
+ * What this device keeps for an account beyond the page, dropped when that account leaves it (a
+ * sign-out, or another account signing in): its push subscription, which would otherwise go on
+ * bringing its alerts here, and its hidden tokens and Scope settings, which the next account to
+ * sign in would otherwise take as its own. Not on a guest signing in: a guest's are theirs to keep.
+ */
+function forgetAccountOnDevice(): void {
+  void dropPush();
+  resetHiddenTokens();
+  resetScopeSettings();
+}
+
 export function App() {
   // A returning visitor starts signed in as last time (src/cache.ts keeps the answer), so their
   // feed paints at once; the check below signs them out if the session has since ended.
@@ -174,6 +188,7 @@ export function App() {
           prev.state === "signed-out"
         ) {
           setGuest(false);
+          if (prev.state === "signed-in") forgetAccountOnDevice();
           resetAccountState();
         }
         // The same answer as before keeps the session object, so a routine re-read redraws nothing.
@@ -188,6 +203,7 @@ export function App() {
         if (e instanceof ApiError && e.status === 401) {
           const wasSignedIn = sessionRef.current.state === "signed-in";
           setSessionToken(null);
+          if (wasSignedIn) forgetAccountOnDevice();
           resetAccountState();
           setSession({ state: "signed-out" });
           // The other tabs share the session that just ended.
@@ -227,6 +243,7 @@ export function App() {
         if (s.state === "linking") return;
         if (change.kind === "signed-out") {
           if (s.state !== "signed-in") return;
+          forgetAccountOnDevice();
           resetAccountState();
           setSession({ state: "signed-out" });
           return;
@@ -316,6 +333,9 @@ export function App() {
   };
 
   const signOut = async () => {
+    // Off push first, while the session can still take the subscription off the account.
+    await dropPush();
+    forgetAccountOnDevice();
     await post("/auth/logout").catch(() => undefined);
     // Privy's own session too, so the next email sign-in asks again (only if it's loaded).
     await loadedPrivyControls()

@@ -255,6 +255,27 @@ export function syncPush(publicKey: string | null | undefined, wanted: boolean):
   return pushSync;
 }
 
+/**
+ * Takes this browser off push when its account signs out, so the account's alerts stop arriving
+ * on a device it left. Leaves the notification worker unregistered if it never was.
+ */
+export function dropPush(): Promise<void> {
+  pushSync = pushSync
+    .then(async () => {
+      pushActive = false;
+      if (!pushSupported()) return;
+      const registration = await navigator.serviceWorker.getRegistration();
+      const existing = await registration?.pushManager.getSubscription();
+      if (!existing) return;
+      await post("/settings/push/remove", { endpoint: existing.endpoint }).catch(() => undefined);
+      await existing.unsubscribe().catch(() => false);
+    })
+    .catch(() => {
+      pushActive = false;
+    });
+  return pushSync;
+}
+
 async function doSyncPush(publicKey: string | null, wanted: boolean): Promise<void> {
   if (!pushSupported()) {
     pushActive = false;
