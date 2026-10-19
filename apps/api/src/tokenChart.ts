@@ -16,6 +16,28 @@ export interface McapCandle {
 
 /** Minutes per answer of Pump.fun's candle API: its most recent minutes with a trade. */
 const CANDLE_PAGE = 1000;
+/** The older candles' width (TokenChart.older): Pump.fun's 5-minute page reaches back 5 times further. */
+export const OLDER_CANDLE_MS = 5 * 60_000;
+/** A minute page starting this long or more after the coin's launch didn't reach back to it. */
+export const OLDER_AFTER_MS = 10 * 60_000;
+
+/**
+ * Exported for tests. The coin's 5-minute candles that end by its first minute candle, for the
+ * stretch the minute page no longer reaches (user ask 2026-10-19: on a coin that traded through
+ * more than 1,000 minutes, the call fell before the chart's first candle and its flag went with it).
+ * Null when the minute candles reach back to the launch, or there are none older.
+ */
+export function olderCandles(
+  minutes: readonly McapCandle[] | null,
+  fives: readonly McapCandle[] | null,
+  launchAt: number | null,
+): McapCandle[] | null {
+  const first = minutes?.[0]?.t;
+  if (first === undefined || !fives?.length) return null;
+  if (launchAt !== null && first < launchAt + OLDER_AFTER_MS) return null;
+  const out = drawableCandles(fives.filter((k) => k.t + OLDER_CANDLE_MS <= first));
+  return out.length > 0 ? out : null;
+}
 
 /**
  * Exported for tests. Pump.fun's one-minute USD candles as market-cap candles, oldest first;
@@ -73,7 +95,7 @@ export function drawableCandles(candles: readonly McapCandle[]): McapCandle[] {
 export type CandleFetcher = (mint: string) => Promise<McapCandle[] | null>;
 
 /** Candle widths the first-minutes chart reads (Pump.fun also serves 30s and up). */
-export type CandleInterval = "1s" | "15s" | "1m";
+export type CandleInterval = "1s" | "15s" | "1m" | "5m";
 
 /**
  * Reads a coin's candles from Pump.fun's swap API: its most recent CANDLE_PAGE candles of
@@ -527,6 +549,65 @@ export function withTrackedMarks(
         trades,
       }),
     );
+  }
+  return out;
+}
+
+/** One saved flagged trade (ChartFlaggedTrade): a trade the live trades follower saw. */
+export interface SavedTrade {
+  wallet: string;
+  side: 1 | -1;
+  sol: number | null;
+  atMs: number;
+}
+
+/**
+ * Exported for tests. The trade tape's rows with the saved flagged trades (ChartFlaggedTrade) folded
+ * in, so the marks reach past the tape's 30 minutes after the call: a wallet the tape has gets each
+ * saved trade it doesn't already hold (the same side within SAME_TRADE_MS), one it hasn't joins as a
+ * row of its saved trades alone (the creator's marked as the creator). The rows then go through markedWallets' tagging as the tape's do.
+ */
+export function withSavedTrades(
+  rows: readonly ActivityRow[],
+  saved: readonly SavedTrade[],
+  /** The coin's creator (Token.creator), for a wallet the tape doesn't have. */
+  creator: string | null = null,
+): ActivityRow[] {
+  if (saved.length === 0) return [...rows];
+  const byWallet = new Map<string, SavedTrade[]>();
+  for (const t of saved) {
+    const list = byWallet.get(t.wallet);
+    if (list) list.push(t);
+    else byWallet.set(t.wallet, [t]);
+  }
+  const fold = (base: MarkedTrade[], extra: readonly SavedTrade[]): MarkedTrade[] => {
+    const out = [...base];
+    for (const t of extra) {
+      if (out.some(([at, side]) => side === t.side && Math.abs(at - t.atMs) <= SAME_TRADE_MS)) continue;
+      out.push([t.atMs, t.side, t.sol]);
+    }
+    return out.sort((a, b) => a[0] - b[0]);
+  };
+  const out = rows.map((r) => {
+    const extra = byWallet.get(r.wallet);
+    if (!extra) return r;
+    byWallet.delete(r.wallet);
+    return { ...r, trades: fold(storedTrades(r.trades) ?? firstTrades(r), extra) };
+  });
+  for (const [wallet, extra] of byWallet) {
+    const trades = fold([], extra);
+    const buys = trades.filter((t) => t[1] === 1);
+    const sells = trades.filter((t) => t[1] === -1);
+    out.push({
+      wallet,
+      isCreator: wallet === creator,
+      solIn: buys.reduce((n, t) => n + (t[2] ?? 0), 0),
+      solOut: sells.reduce((n, t) => n + (t[2] ?? 0), 0),
+      heldPctAtAnchor: null,
+      firstBuyAt: buys[0] ? new Date(buys[0][0]) : null,
+      firstSellAt: sells[0] ? new Date(sells[0][0]) : null,
+      trades,
+    });
   }
   return out;
 }

@@ -211,6 +211,11 @@ export class LiveTrades {
     return { since: answer.since, trades: answer.trades };
   }
 
+  /** The coins followed now (chartFlaggedTrades.ts saves their flagged wallets' trades). */
+  followedMints(): string[] {
+    return [...this.followed.keys()];
+  }
+
   private async answer(mint: string, after: number): Promise<LiveTradesAnswer> {
     const f = this.follow(mint, this.now());
     if (!f) return { status: "unavailable", since: null, cursor: 0, trades: [], held: false };

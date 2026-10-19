@@ -12,7 +12,9 @@ import {
   onSupply,
   parseMcapCandles,
   withLiveTrades,
+  withSavedTrades,
   withTrackedMarks,
+  olderCandles,
   type ActivityRow,
   type McapCandle,
 } from "./tokenChart.js";
@@ -410,6 +412,55 @@ describe("markedWallets", () => {
     const out = markedWallets(rows, risk, clusters, opts, new Map([["kol", "Cupsey"]]));
     expect(out).toHaveLength(MAX_MARKED_WALLETS);
     expect(out[0]!.wallet).toBe("kol");
+  });
+});
+
+describe("withSavedTrades", () => {
+  const base: ActivityRow = {
+    wallet: "kol",
+    isCreator: false,
+    solIn: 1,
+    solOut: 0,
+    heldPctAtAnchor: null,
+    firstBuyAt: null,
+    firstSellAt: null,
+    trades: [[1_000, 1, 1]],
+  };
+
+  it("adds saved trades past the tape to its wallets, each once, and wallets it lacks", () => {
+    const out = withSavedTrades(
+      [base],
+      [
+        { wallet: "kol", side: 1, sol: 1, atMs: 1_500 },
+        { wallet: "kol", side: -1, sol: 2, atMs: 9_000_000 },
+        { wallet: "dev", side: 1, sol: 3, atMs: 8_000_000 },
+      ],
+      "dev",
+    );
+    expect(out[0]!.trades).toEqual([
+      [1_000, 1, 1],
+      [9_000_000, -1, 2],
+    ]);
+    expect(out[1]).toMatchObject({ wallet: "dev", isCreator: true, solIn: 3, trades: [[8_000_000, 1, 3]] });
+    expect(
+      markedWallets(out, new Map(), [], { riskyScore: 70 }, new Map([["kol", "K"]])).map((w) => w.wallet),
+    ).toEqual(["dev", "kol"]);
+  });
+});
+
+describe("olderCandles", () => {
+  const k = (t: number) => ({ t, o: 1, h: 2, l: 1, c: 2, vol: 3 });
+  const MIN = 60_000;
+
+  it("fills in 5-minute candles before a minute page that no longer reaches the launch", () => {
+    const minutes = [k(100 * MIN), k(101 * MIN)];
+    const fives = [k(0), k(5 * MIN), k(95 * MIN), k(100 * MIN)];
+    expect(olderCandles(minutes, fives, 0)!.map((c) => c.t)).toEqual([0, 5 * MIN, 95 * MIN]);
+  });
+
+  it("reads none when the minute candles reach the launch", () => {
+    expect(olderCandles([k(2 * MIN)], [k(0)], 0)).toBeNull();
+    expect(olderCandles(null, [k(0)], 0)).toBeNull();
   });
 });
 

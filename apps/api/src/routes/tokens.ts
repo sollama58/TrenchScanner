@@ -43,11 +43,15 @@ import {
   FIRST_MINUTES_MS,
   KeyedCache,
   LastGood,
+  OLDER_AFTER_MS,
+  olderCandles,
   firstMinutes,
   onSupply,
   type CandleFetcher,
   markedWallets,
+  withSavedTrades,
   withTrackedMarks,
+  type SavedTrade,
   parseLiveTrades,
   pumpFunCandleFetcher,
   withLiveTrades,
@@ -150,6 +154,12 @@ export interface TokenChart {
    * when Pump.fun has none (user ask 2026-10-19).
    */
   candles: McapCandle[] | null;
+  /**
+   * 5-minute candles before `candles`' first, oldest first, when the minute candles no longer
+   * reach back to the coin's launch (Pump.fun's page is its newest 1,000 minutes with a trade), so
+   * the call's flag and the marks before them stay on the chart. Absent otherwise.
+   */
+  older?: McapCandle[];
   /**
    * Where `candles` came from: "pumpfun", "stream" (built from the live tail's ticks and Live trades),
    * or "mixed" (Pump.fun's, then the stream's after them). Absent with no candles, and from older
@@ -287,6 +297,16 @@ let fineSecondCache = new CandleCache(pumpFunCandleFetcher(undefined, "1s"), {
   maxEntries: 100,
 });
 
+/**
+ * The 5-minute candles before the minute page's first (TokenChart.older): read only for a coin
+ * whose minute page no longer reaches its launch, and kept a good while, since that stretch is over.
+ */
+let olderCache = new CandleCache(pumpFunCandleFetcher(undefined, "5m"), {
+  ttlMs: 10 * 60_000,
+  callsPerMinute: 20,
+  shared: chartBudget,
+});
+
 /** The live tail's ticks and Live trades' trades, which the chart's own candles are built from. */
 let streamFeeds: StreamFeeds = {
   history: (mint) => liveCurves().history(mint),
@@ -306,12 +326,17 @@ const FIRST_MINUTES_MAX_AGE_MS = 6 * 3_600_000;
 const FIRST_MINUTES_LIVE_MS = FIRST_MINUTES_MS + 30_000;
 
 /** Tests: where the chart's candles come from, instead of Pump.fun. */
-export function setCandleFetcherForTests(fetcher: CandleFetcher, secondsFetcher = fetcher): void {
+export function setCandleFetcherForTests(
+  fetcher: CandleFetcher,
+  secondsFetcher = fetcher,
+  olderFetcher: CandleFetcher = async () => null,
+): void {
   chartBudget = new CallBudget(CHART_CALLS_PER_MINUTE);
   candleCache = new CandleCache(fetcher, { shared: chartBudget });
   secondCache = new CandleCache(secondsFetcher, { shared: chartBudget });
   quarterCache = new CandleCache(secondsFetcher, { shared: chartBudget });
   fineSecondCache = new CandleCache(secondsFetcher, { shared: chartBudget });
+  olderCache = new CandleCache(olderFetcher, { shared: chartBudget });
 }
 
 /** Tests: what the chart's own candles are built from, instead of the live tail and Live trades. */
@@ -319,23 +344,27 @@ export function setStreamFeedsForTests(feeds: StreamFeeds): void {
   streamFeeds = feeds;
 }
 type ChartWallets = Pick<TokenChart, "tape" | "live" | "wallets" | "holderEntries">;
+/** The cached wallets part, with the saved flagged trades the reader's labels are laid over too. */
+type CachedWallets = ChartWallets & { saved: SavedTrade[] };
 /**
  * A failed fill is kept a few seconds: chartWallets is five queries and more, and every chart's
  * retry rerunning it on a struggling database was a stampede (charts audit item 6).
  */
 const WALLETS_FAILURE_MS = 5_000;
-const walletCache = new KeyedCache<ChartWallets>(WALLETS_CACHE_MS, 300, Date.now, WALLETS_FAILURE_MS);
+const walletCache = new KeyedCache<CachedWallets>(WALLETS_CACHE_MS, 300, Date.now, WALLETS_FAILURE_MS);
 /**
  * Each coin's last wallets read, by mint: what a failed read (the database slow or down) answers
  * instead of none, which wiped every wallet mark off the chart until the next good read.
  */
-const lastWallets = new LastGood<ChartWallets>(300);
+const lastWallets = new LastGood<CachedWallets>(300);
 
 /**
  * A coin's trade-tape rows read for its chart at most, newest first. A tape keeps far fewer on a
  * normal coin; this only bounds a pathological one, which used to read every row it had.
  */
 const ACTIVITY_ROWS_MAX = 5_000;
+/** Saved flagged trades (ChartFlaggedTrade) read for a coin's chart at most, newest first. */
+const SAVED_TRADES_MAX = 2_000;
 
 /**
  * The coin's flagged wallets and their trades: the risky wallets and known dumpers the live tape
@@ -343,8 +372,8 @@ const ACTIVITY_ROWS_MAX = 5_000;
  * read (TokenWalletActivity), with the wallet risk scores (WalletRisk) and the linked clusters on
  * its newest snapshot that has them.
  */
-async function chartWallets(tokenId: string): Promise<ChartWallets> {
-  const [tape, rows, clustered, listed, liveSnaps] = await Promise.all([
+async function chartWallets(tokenId: string, mint: string, creator: string | null): Promise<CachedWallets> {
+  const [tape, tapeRows, clustered, listed, liveSnaps, savedRows] = await Promise.all([
     prisma.tokenTradeTape.findUnique({
       where: { tokenId },
       select: { status: true, anchorAt: true, windowEnd: true, readAt: true, launchAt: true },
@@ -386,7 +415,20 @@ async function chartWallets(tokenId: string): Promise<ChartWallets> {
       take: LIVE_SNAPSHOTS,
       select: { takenAt: true, flaggedTrades: true },
     }),
+    // Flagged wallets' trades the live trades follower saw, past the tape's window too.
+    prisma.chartFlaggedTrade.findMany({
+      where: { mint },
+      orderBy: { at: "desc" },
+      take: SAVED_TRADES_MAX,
+      select: { wallet: true, side: true, sol: true, at: true },
+    }),
   ]);
+  const saved = savedRows.flatMap((t) =>
+    t.side === 1 || t.side === -1
+      ? [{ wallet: t.wallet, side: t.side, sol: t.sol, atMs: t.at.getTime() }]
+      : [],
+  ) as SavedTrade[];
+  const rows = withSavedTrades(tapeRows, saved, creator);
   const live = liveSnaps.flatMap((s) => parseLiveTrades(s.flaggedTrades));
   const wallets = [...new Set([...rows.map((r) => r.wallet), ...live.map((t) => t.wallet)])];
   const scores =
@@ -452,7 +494,8 @@ async function chartWallets(tokenId: string): Promise<ChartWallets> {
       risk,
       opts,
     ),
-    holderEntries: holderEntries(rows, listedWallets(listed?.linkedHolders), tape),
+    holderEntries: holderEntries(tapeRows, listedWallets(listed?.linkedHolders), tape),
+    saved,
   };
 }
 
@@ -868,17 +911,21 @@ export async function readTokenChart(
   /** The reader's labels (trackedWallets.ts activeTracked), laid over the shared marks for them alone. */
   tracked: readonly TrackedWallet[] = [],
 ): Promise<TokenChart> {
-  const noWallets: ChartWallets = { tape: null, live: null, wallets: [], holderEntries: {} };
+  const noWallets: CachedWallets = { tape: null, live: null, wallets: [], holderEntries: {}, saved: [] };
   // Token first: Pump.fun's candles are read only for a coin on Token, so a loop over random mints
   // can't spend the shared candle budget everyone's token modal draws from.
   const found = await prisma.token
-    .findUnique({ where: { mintAddress }, select: { id: true } })
+    .findUnique({
+      where: { mintAddress },
+      select: { id: true, creator: true, launchedAt: true, firstSeenAt: true },
+    })
     .then((token) => ({ token }))
     .catch((err: unknown) => {
       logger.warn("chart token read failed", { mint: mintAddress, error: String(err) });
       return null;
     });
-  if (found && !found.token) return { mint: mintAddress, candles: null, marketCap: [], ...noWallets };
+  if (found && !found.token)
+    return { mint: mintAddress, candles: null, marketCap: [], ...shareable(noWallets) };
   const own = streamCandles(streamFeeds, mintAddress, 60_000).catch(() => null);
   if (!found) {
     // The database erring: what is already in memory, without a Pump.fun call.
@@ -897,7 +944,7 @@ export async function readTokenChart(
       ...sourceOf(merged),
       ...(kept.stale && merged.added === 0 && merged.candles ? { stale: true } : {}),
       marketCap: [],
-      ...(lastWallets.get(mintAddress) ?? noWallets),
+      ...shareable(lastWallets.get(mintAddress) ?? noWallets),
     });
   }
   const token = found.token!;
@@ -909,7 +956,7 @@ export async function readTokenChart(
       take: CHART_SNAPSHOT_POINTS,
       select: { takenAt: true, marketCapUsd: true, buys5m: true, sells5m: true },
     }),
-    walletCache.get(token.id, () => chartWallets(token.id)),
+    walletCache.get(token.id, () => chartWallets(token.id, mintAddress, token.creator)),
     launchSupplyFactors([mintAddress]),
   ]);
   for (const [part, r] of [
@@ -927,22 +974,39 @@ export async function readTokenChart(
     pump.candles ? onSupply(pump.candles, factor) : null,
     (await own)?.candles ?? null,
   );
+  // The minute candles stop short of the launch (a coin busy for more than 1,000 minutes): the
+  // 5-minute ones before them, so the call and what came before it stay on the chart.
+  const launchAt = (token.launchedAt ?? token.firstSeenAt).getTime();
+  const firstAt = merged.candles?.[0]?.t;
+  const fives =
+    firstAt !== undefined && firstAt >= launchAt + OLDER_AFTER_MS
+      ? await olderCache.read(mintAddress).catch((err: unknown) => {
+          logger.warn("chart part failed", { mint: mintAddress, part: "older", error: String(err) });
+          return null;
+        })
+      : null;
+  const older = olderCandles(
+    merged.candles,
+    fives?.candles ? onSupply(fives.candles, factor) : null,
+    launchAt,
+  );
   if (flagged.status === "fulfilled") lastWallets.set(mintAddress, flagged.value);
   const marks = flagged.status === "fulfilled" ? flagged.value : (lastWallets.get(mintAddress) ?? noWallets);
   const wallets =
     tracked.length > 0
-      ? await trackedMarks(token.id, marks.wallets, tracked).catch(() => marks.wallets)
+      ? await trackedMarks(token.id, marks.wallets, tracked, marks.saved).catch(() => marks.wallets)
       : marks.wallets;
   return counted("chart", {
     mint: mintAddress,
     candles: merged.candles,
+    ...(older ? { older } : {}),
     ...sourceOf(merged),
     ...(pump.stale && merged.added === 0 && merged.candles ? { stale: true } : {}),
     marketCap: (snapshots.status === "fulfilled" ? snapshots.value : [])
       .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
       .reverse()
       .map((s) => ({ t: s.takenAt.getTime(), usd: s.marketCapUsd, buys: s.buys5m, sells: s.sells5m })),
-    ...marks,
+    ...shareable(marks),
     wallets,
   });
 }
@@ -964,13 +1028,24 @@ function sourceOf(merged: { source?: CandleSource }): { source?: CandleSource } 
   return merged.source ? { source: merged.source } : {};
 }
 
+/** The wallets part as the answer carries it: the saved trades went into its wallets already. */
+function shareable({ saved: _saved, ...rest }: CachedWallets): ChartWallets {
+  return rest;
+}
+
 /** The shared marks with the reader's labeled wallets and their sides laid over them (withTrackedMarks). */
 async function trackedMarks(
   tokenId: string,
   shared: TokenChart["wallets"],
   tracked: readonly TrackedWallet[],
+  saved: readonly SavedTrade[] = [],
 ): Promise<TokenChart["wallets"]> {
-  const rows = await trackedActivity(tokenId, tracked);
+  // The labeled wallets' own saved trades count as their tape rows do (their sides' only from the tape).
+  const labeled = new Set(tracked.map((t) => t.wallet));
+  const rows = withSavedTrades(
+    await trackedActivity(tokenId, tracked),
+    saved.filter((t) => labeled.has(t.wallet)),
+  );
   if (rows.length === 0) return shared;
   const sides = await loadTrackedSides(
     tracked,
