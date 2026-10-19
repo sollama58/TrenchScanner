@@ -203,6 +203,11 @@ export interface Snapshot {
   buys24h: number | null;
   sells24h: number | null;
   holderCount: number | null;
+  /**
+   * When holderCount was read: the RugCheck report's own time, which top 10 and dev % come from
+   * too. Can be up to the report cache's age before takenAt. Absent or null when unknown.
+   */
+  holderCountAt?: string | null;
   /** Jupiter's holder count seconds before the decision (the "Min holders (live)" filter's); null without a quote. */
   liveHolderCount?: number | null;
   holderGrowthPct: number | null;

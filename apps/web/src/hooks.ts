@@ -11,6 +11,8 @@ export interface Loadable<T> {
    * feed before a settings change) and is shown only until the new answer lands.
    */
   stale: boolean;
+  /** When `data` arrived (ms), from this visit or an earlier one; null with no data. */
+  at: number | null;
   error: Error | null;
   loading: boolean;
   reload: () => void;
@@ -39,9 +41,9 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
   const want = `${path}\n${key}`;
   // The data and the path+key it answers. An answer restored from an earlier visit (`saved`)
   // shows as stale until this visit's own lands, but stays up if the API can't be reached.
-  const [held, setHeld] = useState<{ data: T; for: string; saved: boolean } | null>(() => {
+  const [held, setHeld] = useState<{ data: T; for: string; saved: boolean; at: number } | null>(() => {
     const cached = peek<T>(path);
-    return cached ? { data: cached.data, for: want, saved: cached.restored } : null;
+    return cached ? { data: cached.data, for: want, saved: cached.restored, at: cached.at } : null;
   });
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(true);
@@ -67,7 +69,12 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
         if (mine !== seq.current) return;
         failures.current = 0;
         retryAt.current = 0;
-        setHeld({ data: d, for: wantRef.current, saved: false });
+        setHeld({
+          data: d,
+          for: wantRef.current,
+          saved: false,
+          at: peek<T>(pathRef.current)?.at ?? Date.now(),
+        });
         setError(null);
       })
       .catch((e: unknown) => {
@@ -93,6 +100,11 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
     if (busy.current) again.current = true;
     else run(-1);
   }, [run]);
+  // The timed poll: a new request unless one is in flight, which the browser's HTTP cache may
+  // answer (reload() is for "something changed", and goes past it).
+  const poll = useCallback(() => {
+    if (!busy.current) run(0);
+  }, [run]);
 
   const firstKey = useRef(key);
   useEffect(() => {
@@ -102,18 +114,18 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
     firstKey.current = key;
     // A new path shows its own cached data if any; otherwise the previous answer stays up as stale.
     const cached = forced ? null : peek<T>(path);
-    if (cached) setHeld({ data: cached.data, for: `${path}\n${key}`, saved: cached.restored });
+    if (cached) setHeld({ data: cached.data, for: `${path}\n${key}`, saved: cached.restored, at: cached.at });
     setError(null);
     again.current = false;
     run(forced ? -1 : FRESH_ON_MOUNT_MS);
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible" && Date.now() >= retryAt.current) reload();
+      if (document.visibilityState === "visible" && Date.now() >= retryAt.current) poll();
     }, intervalMs);
     // Coming back to the tab refreshes only what has gone stale while it was hidden.
     const onVisible = () => {
       if (document.visibilityState !== "visible") return;
       const cached = peek<T>(pathRef.current);
-      if (!cached || Date.now() - cached.at >= Math.min(intervalMs, 60_000)) reload();
+      if (!cached || Date.now() - cached.at >= Math.min(intervalMs, 60_000)) poll();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -123,14 +135,14 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
       seq.current++;
       busy.current = false;
     };
-  }, [path, key, intervalMs, run, reload]);
+  }, [path, key, intervalMs, run, poll]);
 
   const data = held?.data ?? null;
   const stale = held !== null && (held.for !== want || held.saved);
   // Nothing current to show yet: the page's loading bar waits on this answer.
   const waiting = loading && (data === null || stale);
   useEffect(() => (waiting ? beginWait() : undefined), [waiting, want]);
-  return { data, stale, error, loading, reload };
+  return { data, stale, at: held?.at ?? null, error, loading, reload };
 }
 
 /**
@@ -202,15 +214,28 @@ export function usePollingAll<T>(
     again.current = false;
     busy.current = false;
     run(forced ? -1 : FRESH_ON_MOUNT_MS);
+    // As usePolling's timed poll: past the browser's HTTP cache only for reload().
+    const poll = () => {
+      if (!busy.current) run(0);
+    };
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") reload();
+      if (document.visibilityState === "visible") poll();
     }, intervalMs);
+    // Coming back to the tab refreshes them if any has gone stale while it was hidden, as in
+    // usePolling: the hidden tab's timer is throttled or skipped.
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      const oldest = Math.min(...pathsRef.current.map((p) => peek<T>(p)?.at ?? 0));
+      if (Date.now() - oldest >= Math.min(intervalMs, 60_000)) poll();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
       seq.current++;
       busy.current = false;
     };
-  }, [joined, key, intervalMs, run, reload]);
+  }, [joined, key, intervalMs, run]);
 
   // Keyed on the joined paths, not the array, which a caller may rebuild every render. A path with
   // no answer of its own yet shows the shared cache's, so a view coming back (or reading a page it

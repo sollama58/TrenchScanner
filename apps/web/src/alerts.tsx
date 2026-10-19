@@ -51,7 +51,9 @@ export function loadSettings(force = false): Promise<void> {
   const hiddenVersion = hiddenTokensVersion();
   loading = cachedGet<Settings>(SETTINGS_PATH, force ? -1 : 0)
     .then((s) => {
-      settings = s;
+      // An alert-pref save made while this was in flight is newer than its answer: keep those.
+      settings = savesInFlight > 0 && settings ? { ...s, alerts: settings.alerts } : s;
+      loadedAt = Date.now();
       // The feed's look rides along; a change made on this device since the request wins.
       adoptAppearance(s.appearance, lookVersion);
       adoptHiddenTokens(s.hiddenTokens, hiddenVersion);
@@ -70,10 +72,34 @@ export function resetSettings(): void {
   emit();
 }
 
+/** When the settings last loaded (ms), for refreshSettingsIfOld. */
+let loadedAt = 0;
+/** Alert-pref saves still in flight: a reload then could answer from before them. */
+let savesInFlight = 0;
+/** How old the settings may get before a returning or long-open tab reads them again. */
+const SETTINGS_REFRESH_MS = 5 * 60_000;
+let refreshHooked = false;
+
+/**
+ * Re-reads the settings once they are SETTINGS_REFRESH_MS old, so a change made on another device
+ * (sound, notifications, Chaos Mode) reaches a tab that stays open. Checked when the tab comes back
+ * and on a timer while it is visible; skipped while a save here is in flight.
+ */
+function refreshSettingsIfOld(): void {
+  if (document.visibilityState !== "visible" || settings === null || savesInFlight > 0) return;
+  if (Date.now() - loadedAt < SETTINGS_REFRESH_MS) return;
+  void loadSettings(true).catch(() => undefined);
+}
+
 export function useSettings(): Settings | null {
   const s = useSyncExternalStore(subscribe, () => settings);
   useEffect(() => {
     void loadSettings().catch(() => undefined);
+    if (!refreshHooked) {
+      refreshHooked = true;
+      document.addEventListener("visibilitychange", refreshSettingsIfOld);
+      window.setInterval(refreshSettingsIfOld, 60_000);
+    }
   }, []);
   return s;
 }
@@ -99,8 +125,11 @@ export async function saveAlertPrefs(
     emit();
   }
   const seq = ++saveSeq;
+  savesInFlight++;
   try {
-    const res = await put<{ alerts: AlertPrefs }>(`${SETTINGS_PATH}/alerts`, change);
+    const res = await put<{ alerts: AlertPrefs }>(`${SETTINGS_PATH}/alerts`, change).finally(() => {
+      savesInFlight--;
+    });
     // Only the latest save's answer: an older one landing late would flip a newer toggle back.
     if (settings && seq === saveSeq) {
       settings = { ...settings, alerts: res.alerts };
@@ -338,6 +367,12 @@ const FRESH_MS = 15 * 60_000;
 const SINCE_LAST_LOOK_SLACK_MS = 2 * 60_000;
 /** The fallback check while no stream is up (and, throttled by the browser, in a hidden tab). */
 const CHECK_EVERY_MS = 30_000;
+/**
+ * While both streams are up, every this many CHECK_EVERY_MS ticks still looks (5 min). A nudge
+ * can be lost without the stream dropping (the API's database listener reconnecting misses what
+ * was raised meanwhile); this bounds how long such an alert goes unannounced.
+ */
+const STREAM_BACKSTOP_TICKS = 10;
 /** More new alerts than this at once become one summary notification. */
 const MAX_NOTIFICATIONS = 3;
 const NOTIFIED_KEY = "ts-notified-v1";
@@ -526,9 +561,12 @@ export function AlertNotifier() {
       return;
     }
     if (!busy.current) lookAt(0);
+    let ticks = 0;
     const timer = window.setInterval(() => {
-      // Streams up: they say when to look. Otherwise look on a timer.
-      if (listens && !(matchesLive && callsLive)) check();
+      // Streams up: they say when to look, with a slow look anyway in case one went quiet while
+      // still looking open. Otherwise look on a timer.
+      const streamsUp = matchesLive && callsLive;
+      if (listens && (!streamsUp || ++ticks % STREAM_BACKSTOP_TICKS === 0)) check();
     }, CHECK_EVERY_MS);
     return () => window.clearInterval(timer);
   }, [active, listens, matchesLive, callsLive, check, lookAt]);
