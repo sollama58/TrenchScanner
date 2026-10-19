@@ -488,7 +488,7 @@ export function ScopeRow({
         : [];
   const chips = rowChips(card, d.chips, now);
   const showSource = d.showSource || marker;
-  const img = d.imageSize === "s" ? 36 : d.imageSize === "l" ? 56 : 44;
+  const img = d.imageSize === "s" ? 44 : d.imageSize === "l" ? 72 : 56;
 
   return (
     <article
@@ -504,6 +504,7 @@ export function ScopeRow({
           width={img}
           height={img}
           className="scope-img"
+          preview={!preview}
           fallback={<span className="scope-img placeholder">{(card.token.symbol ?? "?").slice(0, 2)}</span>}
         />
         {mark && d.showResult && (
