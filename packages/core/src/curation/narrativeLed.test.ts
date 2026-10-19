@@ -28,7 +28,7 @@ function rng(seed: number): () => number {
   };
 }
 
-const FEATURES = ["nsXFit", "nsCatAnimal", "top10HolderPct", "firstBuyersHolding"];
+const FEATURES = ["nsXFit", "nsCatAnimal", "top10HolderPct", "firstBuyersHoldingCut"];
 
 /** Wins lean on a good story (nsXFit) and a spread holder base (low top10HolderPct). */
 function rows(n: number, seed = 7): TrainingRow[] {
@@ -50,7 +50,7 @@ function rows(n: number, seed = 7): TrainingRow[] {
         nsXFit: fit,
         nsCatAnimal: r() < 0.3 ? 1 : 0,
         top10HolderPct: top10,
-        firstBuyersHolding: r() * 25,
+        firstBuyersHoldingCut: r() * 25,
       },
     };
   });
@@ -60,7 +60,7 @@ describe("narrativeLedInputs", () => {
   it("sends the safety readings to the safety check and everything else to the story", () => {
     expect(narrativeLedInputs(FEATURES)).toEqual({
       story: ["nsXFit", "nsCatAnimal"],
-      safety: ["top10HolderPct", "firstBuyersHolding"],
+      safety: ["top10HolderPct", "firstBuyersHoldingCut"],
     });
   });
 });
@@ -73,7 +73,7 @@ describe("trainNarrativeLedCurator", () => {
     const m = model!;
     expect(m.kind).toBe(NARRATIVE_LED_MODEL_KIND);
     expect(m.story.featureNames).toEqual(["nsXFit", "nsCatAnimal"]);
-    expect(m.safety.featureNames).toEqual(["top10HolderPct", "firstBuyersHolding"]);
+    expect(m.safety.featureNames).toEqual(["top10HolderPct", "firstBuyersHoldingCut"]);
     expect(isNarrativeLedParams({ ...m, threshold: 0.5 })).toBe(true);
 
     for (const row of data.slice(0, 50)) {
@@ -84,7 +84,7 @@ describe("trainNarrativeLedCurator", () => {
       expect(score).toBeCloseTo(story ** 0.7 * safety ** 0.3, 12);
     }
     // A better story scores higher, the safety readings held fixed.
-    const base = { nsCatAnimal: 0, top10HolderPct: 15, firstBuyersHolding: 12 };
+    const base = { nsCatAnimal: 0, top10HolderPct: 15, firstBuyersHoldingCut: 12 };
     expect(scoreNarrativeLed(m, { ...base, nsXFit: 0.95 })).toBeGreaterThan(
       scoreNarrativeLed(m, { ...base, nsXFit: 0.05 }),
     );
