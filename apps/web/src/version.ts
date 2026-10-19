@@ -92,6 +92,22 @@ export function shouldReloadForChunk(mark: ReloadMark | null, now: number): bool
   return !(mark && now - mark.at < RELOAD_GRACE_MS);
 }
 
+/** The /assets/ file named in a failed chunk load's error ("Failed to fetch dynamically imported module: …"). */
+export function failedAssetUrl(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const m = /(?:https?:\/\/[^\s/'"]+)?\/assets\/[^\s'"]+/.exec(message);
+  return m ? m[0] : null;
+}
+
+/** Fetches `url` past the browser cache (replacing a cached 404); true when the host serves it. */
+export async function refetchAsset(url: string, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  try {
+    return (await fetchImpl(url, { cache: "reload" })).ok;
+  } catch {
+    return false;
+  }
+}
+
 let offered: string | null = null;
 let lastCheck = 0;
 
@@ -135,11 +151,16 @@ export function startVersionWatch(): void {
 
   // A chunk failed to load. If a deploy has replaced this build, that is why: reload onto the new
   // one, once. If the same build is still live it was the network, and a reload wouldn't help.
-  window.addEventListener("vite:preloadError", () => {
+  // The same build is live but its chunk 404'd anyway: a request that landed mid-deploy, whose 404
+  // the browser keeps caching (index.html's boot script handles the same case for the first
+  // screen). Re-fetch the chunk past the cache; if it is there now, reload once.
+  window.addEventListener("vite:preloadError", (event) => {
+    const failed = failedAssetUrl((event as Event & { payload?: unknown }).payload);
     void (async () => {
       const deployed = await fetchDeployedVersion();
-      if (!deployed || deployed === APP_VERSION) return;
+      if (!deployed) return;
       if (!shouldReloadForChunk(readMark(), Date.now())) return;
+      if (deployed === APP_VERSION && !(failed && (await refetchAsset(failed)))) return;
       writeMark(deployed);
       window.location.reload();
     })();
