@@ -18988,7 +18988,7 @@ body:has(.util-toast) .bug-fab {
    set in Scope settings (spacing, cards or list, image and text size, chip style), and a settings
    window with an example row. Phones stay a step tighter whatever the spacing. */
 .scope {
-  --scope-img: 44px;
+  --scope-img: 56px;
   --scope-t: 1;
   --scope-pad: 12px 14px;
   --scope-gap: 10px;
@@ -19005,10 +19005,10 @@ body:has(.util-toast) .bug-fab {
   --scope-row-gap: 3px 8px;
 }
 .scope-img-s {
-  --scope-img: 36px;
+  --scope-img: 44px;
 }
 .scope-img-l {
-  --scope-img: 56px;
+  --scope-img: 72px;
 }
 .scope-text-s {
   --scope-t: 0.92;
@@ -19159,7 +19159,7 @@ body:has(.util-toast) .bug-fab {
     --scope-pad: 9px 10px;
     --scope-gap: 6px;
     --scope-row-gap: 4px 9px;
-    --scope-img: 40px;
+    --scope-img: 48px;
   }
   .scope-d-compact {
     --scope-pad: 6px 8px;
@@ -19167,10 +19167,10 @@ body:has(.util-toast) .bug-fab {
     --scope-row-gap: 2px 8px;
   }
   .scope-img-s {
-    --scope-img: 34px;
+    --scope-img: 40px;
   }
   .scope-img-l {
-    --scope-img: 48px;
+    --scope-img: 60px;
   }
   .scope-col {
     background: transparent;
@@ -20403,6 +20403,109 @@ dialog.tm-modal.tm-terminal::backdrop {
   }
 }
 
+/* ---- Hidden tokens (user ask 2026-10-19): hide a token from Cards and Scope, and bring it back ---- */
+.card-head .card-hide {
+  flex: none;
+  align-self: flex-start;
+  margin: -4px -6px 0 -4px;
+  padding: 5px;
+  color: var(--muted);
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+.card:hover .card-hide,
+.card-hide:focus-visible {
+  opacity: 1;
+}
+.scope-hide {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-solid);
+  color: var(--ink-2);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.scope-row:hover .scope-hide,
+.scope-hide:focus-visible {
+  opacity: 1;
+}
+.scope-hide:hover {
+  color: var(--ink);
+}
+@media (hover: none) {
+  .card-head .card-hide {
+    opacity: 1;
+  }
+  .scope-hide {
+    opacity: 0.85;
+  }
+}
+.hidden-tokens-modal .switch {
+  margin-top: 4px;
+}
+.hidden-tokens-hint {
+  margin: 6px 0 14px;
+}
+.hidden-tokens-empty {
+  margin: 8px 0 4px;
+}
+.hidden-tokens-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--border);
+}
+.hidden-token {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.hidden-token-img {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.hidden-token-img.placeholder {
+  display: grid;
+  place-items: center;
+  background: var(--surface-3);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+.hidden-token-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hidden-token-when {
+  display: block;
+}
+.hidden-token button,
+.hidden-tokens-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+}
+.hidden-tokens-all {
+  margin-top: 10px;
+}
 /* Scope's contract-address chip copies the address instead of opening the coin. */
 .scope-chip-copy {
   font-family: inherit;

@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { QuickBuyPill } from "./QuickBuyPill";
 import { useProState, useTradeSettings, type QuickBuySettings } from "../proTrade";
-import { createPortal } from "react-dom";
 import type { Card, CardField, FeedAppearance, Snapshot } from "../api";
 import {
   ago,
@@ -12,7 +11,6 @@ import {
   shortAddress,
   tokenImageSources,
   tokenLabel,
-  tokenThumb,
   usd,
 } from "../format";
 import {
@@ -22,6 +20,7 @@ import {
   CheckIcon,
   CopyIcon,
   ExternalIcon,
+  EyeOffIcon,
   GiftIcon,
   GlobeIcon,
   HeartIcon,
@@ -30,6 +29,7 @@ import {
   XLogoIcon,
 } from "./Icons";
 import { XLinkPreview } from "./XLinkPreview";
+import { useImagePreview } from "./ImagePreview";
 import { linkedCount, linkedCountText } from "../bubbleMap";
 import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
 import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
@@ -66,6 +66,7 @@ export function AlertCard({
   labelSource = false,
   hide,
   detail = true,
+  onHide,
 }: {
   card: Card;
   now: number;
@@ -76,6 +77,8 @@ export function AlertCard({
   hide?: ReadonlySet<CardField>;
   /** Clicking the card opens the token modal (off for the Customize preview). */
   detail?: boolean;
+  /** Hides the card's token from the Live feed (user ask 2026-10-19); no button without it. */
+  onHide?: () => void;
 }) {
   const show = (f: CardField) => !hide?.has(f);
   const s = card.snapshot;
@@ -362,6 +365,17 @@ export function AlertCard({
             {/* Inter has no ⊘, and the fallback font draws it larger than the other marks. */}
             {resultMark === "⊘" ? <span className="result-stop">⊘</span> : resultMark}
           </span>
+        )}
+        {onHide && (
+          <button
+            type="button"
+            className="ghost icon-btn card-hide"
+            onClick={onHide}
+            title={`Hide ${tokenLabel(card.token)} from your feed. Hidden tokens are listed under Hidden, where you can bring them back.`}
+            aria-label={`Hide ${tokenLabel(card.token)}`}
+          >
+            <EyeOffIcon size={14} />
+          </button>
         )}
       </header>
 
@@ -1323,26 +1337,6 @@ function LinkedTile({
 
 /** Thumbnail size requested from the image host: covers the largest avatar (phones) at 2x density. */
 const THUMB_PX = 128;
-/** The desktop hover preview is this many times the avatar's size, kept inside the window. */
-const PREVIEW_SCALE = 6;
-const PREVIEW_GAP = 12;
-const EDGE = 8;
-/** Only a real mouse/trackpad gets the preview; touch screens fire hover on tap. */
-const HOVER_QUERY = "(hover: hover) and (pointer: fine)";
-
-type PreviewSpot = { left: number; top: number; size: number };
-
-/** Where the preview goes: beside the avatar (right, else left), clamped to the window. */
-function previewSpot(rect: DOMRect): PreviewSpot {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const size = Math.max(0, Math.min(rect.width * PREVIEW_SCALE, vw - 2 * EDGE, vh - 2 * EDGE));
-  let left = rect.right + PREVIEW_GAP;
-  if (left + size > vw - EDGE) left = rect.left - PREVIEW_GAP - size;
-  left = Math.min(Math.max(EDGE, left), vw - EDGE - size);
-  const top = Math.min(Math.max(EDGE, rect.top + rect.height / 2 - size / 2), vh - EDGE - size);
-  return { left, top, size };
-}
 
 /**
  * The token's image as a small thumbnail, falling back through tokenImageSources (the original
@@ -1352,38 +1346,16 @@ function previewSpot(rect: DOMRect): PreviewSpot {
 function TokenAvatar({ url, symbol }: { url: string | null; symbol: string | null }) {
   // An index into tokenImageSources; past its end, the initials.
   const [attempt, setAttempt] = useState(0);
-  const [spot, setSpot] = useState<PreviewSpot | null>(null);
-  const ref = useRef<HTMLImageElement>(null);
   const safe = url?.startsWith("https://") ? url : null;
   const src = tokenImageSources(safe, THUMB_PX)[attempt] ?? null;
-
-  // A scroll or resize moves the avatar out from under the preview; close it rather than chase it.
-  useEffect(() => {
-    if (!spot) return;
-    const close = () => setSpot(null);
-    window.addEventListener("scroll", close, { capture: true, passive: true });
-    window.addEventListener("resize", close);
-    window.addEventListener("blur", close);
-    return () => {
-      window.removeEventListener("scroll", close, { capture: true });
-      window.removeEventListener("resize", close);
-      window.removeEventListener("blur", close);
-    };
-  }, [spot]);
+  const preview = useImagePreview(safe, src);
 
   if (!src) return <span className="avatar placeholder">{(symbol ?? "?").slice(0, 2)}</span>;
-
-  const open = (e: React.PointerEvent) => {
-    if (e.pointerType !== "mouse" || !window.matchMedia?.(HOVER_QUERY).matches || !ref.current) return;
-    const s = previewSpot(ref.current.getBoundingClientRect());
-    setSpot(s.size >= 80 ? s : null);
-  };
 
   return (
     <>
       {/* Launcher-supplied URL: https only, and no referrer sent to whoever hosts it. */}
       <img
-        ref={ref}
         className="avatar"
         src={src}
         alt=""
@@ -1393,59 +1365,13 @@ function TokenAvatar({ url, symbol }: { url: string | null; symbol: string | nul
         decoding="async"
         referrerPolicy="no-referrer"
         onError={() => {
-          setSpot(null);
+          preview.close();
           setAttempt((a) => a + 1);
         }}
-        onPointerEnter={open}
-        onPointerLeave={() => setSpot(null)}
+        {...preview.bind}
       />
-      {spot &&
-        safe &&
-        createPortal(
-          <AvatarPreview spot={spot} small={src} large={tokenThumb(safe, 512)} original={safe} />,
-          document.body,
-        )}
+      {preview.node}
     </>
-  );
-}
-
-/**
- * The hover preview, outside the card (whose overflow and hover transform would clip or shift a
- * fixed child). The small thumbnail already loaded shows at once, and the sharp image covers it
- * when it arrives; if that fails, the original URL, else the small one stays.
- */
-function AvatarPreview({
-  spot,
-  small,
-  large,
-  original,
-}: {
-  spot: PreviewSpot;
-  small: string;
-  large: string;
-  original: string;
-}) {
-  const [sharp, setSharp] = useState<string | null>(large);
-  const [ready, setReady] = useState(false);
-  return (
-    <div
-      className="avatar-preview"
-      aria-hidden="true"
-      style={{ left: spot.left, top: spot.top, width: spot.size, height: spot.size }}
-    >
-      <img src={small} alt="" referrerPolicy="no-referrer" />
-      {sharp && (
-        <img
-          className={ready ? "ready" : undefined}
-          src={sharp}
-          alt=""
-          decoding="async"
-          referrerPolicy="no-referrer"
-          onLoad={() => setReady(true)}
-          onError={() => setSharp(sharp !== original && sharp === large ? original : null)}
-        />
-      )}
-    </div>
   );
 }
 
