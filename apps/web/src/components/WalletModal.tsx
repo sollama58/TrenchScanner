@@ -818,10 +818,19 @@ function Coins({
                     </span>
                   ))}
                 </span>
-                <span className="tm-flow num wm-flow" title="SOL in and out of this coin (realised)">
-                  {c.solIn.toFixed(2)} → {c.solOut.toFixed(2)}{" "}
-                  <span className={c.netSol >= 0 ? "up" : "down"}>({signedSol(c.netSol)})</span>
-                </span>
+                {c.buys === 0 && c.solIn <= 0 && c.solOut > 0 ? (
+                  <span
+                    className="tm-flow num wm-flow faint"
+                    title="Sold with no buy recorded: bought before TrenchScanner recorded the coin, so left out of the PnL above"
+                  >
+                    {c.solIn.toFixed(2)} → {c.solOut.toFixed(2)} (no buy recorded)
+                  </span>
+                ) : (
+                  <span className="tm-flow num wm-flow" title="SOL in and out of this coin (realised)">
+                    {c.solIn.toFixed(2)} → {c.solOut.toFixed(2)}{" "}
+                    <span className={c.netSol >= 0 ? "up" : "down"}>({signedSol(c.netSol)})</span>
+                  </span>
+                )}
               </li>
             );
           })}
