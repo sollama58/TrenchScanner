@@ -581,6 +581,12 @@ services:
       # plan's connection ceiling (see the api service above).
       - key: DATABASE_CONNECTION_LIMIT
         value: "6"
+      # Above the 600 s statement timeout of the hourly wallet-book reads (apps/worker/src/jobs/
+      # longReads.ts): at the default 180 s the client would drop the socket on a read Postgres
+      # still allows, failing wallet-risk and kol-side-wallets while the query ran on. The trainer's
+      # jobs have run deadlines of their own for a host that goes away mid-query.
+      - key: DATABASE_SOCKET_TIMEOUT_SECONDS
+        value: "660"
       - key: WORKER_ROLE
         value: trainer
       - key: ANTHROPIC_API_KEY

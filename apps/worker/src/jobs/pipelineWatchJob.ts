@@ -654,6 +654,9 @@ export async function runPipelineWatch(env: Env, deps: PipelineWatchDeps = {}): 
   }
 }
 
+/** How long past a Helius stand-down's end it still counts as out, for the alert (see watchOnce). */
+const CREDITS_OUT_CLEAR_GRACE_MS = 2 * 60_000;
+
 async function watchOnce(
   env: Env,
   deps: PipelineWatchDeps,
@@ -662,7 +665,9 @@ async function watchOnce(
   const now = deps.now ?? Date.now();
   const before = await previousState();
   remember(before);
-  const creditsOut = heliusCreditsOut(now);
+  // Still out for a short while past the stand-down's end: it lifts at a fixed time and is only set
+  // again by the next billed call refused, so a run in that gap read "flowing again" every cycle.
+  const creditsOut = heliusCreditsOut(now - CREDITS_OUT_CLEAR_GRACE_MS);
   const [flows, jobs, sideJobs, trainerJobs, cursor, dbBytes] = await Promise.all([
     countFlows(now),
     readJobs(WATCHED_JOBS),
