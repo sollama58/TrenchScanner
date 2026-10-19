@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { LoadingNote, SkelValue } from "./Loading";
-import { SecondsAgo } from "./Freshness";
+import { SecondsAgo, hms } from "./Freshness";
 import type { Snapshot, Token } from "../api";
 import { usePolling } from "../hooks";
 import { invalidate } from "../cache";
@@ -2364,6 +2364,21 @@ export function BubbleMapSection({
         : wideIn,
     [wideIn, heldLive],
   );
+  // When what the map draws last changed (user ask 2026-10-19): the holder read, the top 50's, or
+  // the newest live trade since either that moved a share. The badge counts from it, as the map
+  // between reads moves with each trade it is redrawn with.
+  const drawn = useMemo(() => {
+    if (!heldReading) return null;
+    const listAt = holderListAt(heldReading);
+    const wideAt = wideIn ? Date.parse(wideIn.readAt) : NaN;
+    const readAt = Number.isFinite(wideAt) ? Math.max(listAt, wideAt) : listAt;
+    let tradeAt: number | null = null;
+    if (heldLive?.supply)
+      for (const t of heldLive.trades)
+        if (t.tokens > 0 && t.atMs > Math.min(listAt, readAt) && (tradeAt === null || t.atMs > tradeAt))
+          tradeAt = t.atMs;
+    return { listAt, at: Math.max(readAt, tradeAt ?? -Infinity), tradeAt };
+  }, [heldReading, wideIn, heldLive]);
   const { showTransfers, setTransfersOn } = useTransferToggle(snapshot);
   const { bubbleFunderLabels } = useAppearance();
   // Transfers hidden: Linked, its clusters and the bundles as they read without them (user ask
@@ -2427,14 +2442,17 @@ export function BubbleMapSection({
           <span
             className="sage-tag"
             title={
-              chosenWide === undefined && wide
+              (chosenWide === undefined && wide
                 ? `${moment.title} The holders past the scan's top 25 were read ${ago(wide.readAt)}.`
-                : moment.title
+                : moment.title) +
+              (drawn && moment.at !== undefined
+                ? ` Holders read at ${hms(drawn.listAt)}${drawn.tradeAt !== null && drawn.tradeAt > drawn.listAt ? `; shares moved by live trades since, the newest at ${hms(drawn.tradeAt)}` : ""}.`
+                : "")
             }
           >
             {moment.at !== undefined && Number.isFinite(moment.at) ? (
-              // The reading drawn, which waits for the map's next redraw.
-              <SecondsAgo at={heldReading ? holderListAt(heldReading) : moment.at} />
+              // What the map last drew: its reading, or a live trade since, as of its last redraw.
+              <SecondsAgo at={drawn ? drawn.at : moment.at} />
             ) : (
               moment.label
             )}
