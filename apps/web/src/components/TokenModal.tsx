@@ -1023,7 +1023,7 @@ function TokenBody({
         </header>
         <div className="tm-term-grid">
           <div className="tm-term-main">
-            <div className={`tm-term-top${side === "none" ? " solo" : ""}`}>
+            <div className={`tm-term-top${side === "none" ? " solo" : side === "map" ? " with-map" : ""}`}>
               <section className="tm-term-chart" aria-label="Chart">
                 <ChartCard
                   card={card}

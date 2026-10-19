@@ -20183,6 +20183,11 @@ dialog.tm-modal.tm-terminal::backdrop {
   grid-template-columns: minmax(0, 1fr) minmax(400px, 38%);
   border-bottom: 1px solid var(--border);
 }
+/* The bubble map beside the chart gets a wider column, so its bubbles and their text read
+   (user ask 2026-10-19: far too small at 38%). */
+.tm-term-top.with-map {
+  grid-template-columns: minmax(0, 1fr) minmax(480px, 47%);
+}
 .tm-term-chart {
   min-width: 0;
   padding: 10px 14px 6px;
@@ -20393,32 +20398,40 @@ dialog.tm-modal.tm-terminal::backdrop {
   border: 0;
 }
 .bm-col .bm-wt-list {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
 }
 .bm-col .bm-wt {
-  gap: 8px;
-  padding: 5px 8px 5px 5px;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px 4px 4px;
 }
 .bm-col .bm-wt-badge {
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
 }
 .bm-col .bm-wt-text {
   flex: 1;
-  flex-direction: row;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 6px;
+  min-width: 0;
+  gap: 0;
+}
+.bm-col .bm-wt-top {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .bm-col .bm-wt-top b {
-  font-size: 15px;
+  font-size: 13.5px;
+}
+.bm-col .bm-wt-label {
+  font-size: 11.5px;
 }
 .bm-col .bm-wt-share {
-  flex: none;
   margin: 0;
-  font-size: 12px;
+  font-size: 10.5px;
 }
 .bm-col > .bm-stage {
   flex: 1 1 0;
