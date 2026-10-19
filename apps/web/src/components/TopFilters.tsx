@@ -42,7 +42,10 @@ export function TopFiltersPick({ onCopied }: { onCopied: () => void }) {
       await post(`/filters/leaderboard/${e.id}/copy`);
       invalidate("/filters");
       onCopied();
-      setMessage({ text: `Copied “${e.name}” to your filters. It's saved but not active yet.`, ok: true });
+      setMessage({
+        text: `Copied “${e.superseded ? `${e.name} v${e.version}` : e.name}” to your filters. It's saved but not active yet.`,
+        ok: true,
+      });
     } catch (err) {
       setMessage({
         text: err instanceof ApiError || err instanceof Error ? err.message : String(err),
@@ -70,6 +73,7 @@ export function TopFiltersPick({ onCopied }: { onCopied: () => void }) {
           <div className="board-main">
             <div className="row gap-xs wrap">
               <strong>{top.name}</strong>
+              <VersionTag entry={top} />
               <span className="faint small">#{top.tag}</span>
               {top.mine && <span className="pill pill-mine">Yours</span>}
             </div>
@@ -203,9 +207,11 @@ function TopFiltersModal({
             </p>
             {data && (
               <p className="muted small">
-                Each record covers the last {data.windowDays} days since the filter's settings last changed,
-                and a filter needs {data.minGradedToRank} graded alerts to rank. Owners' wallets are never
-                shown. Share one of yours from its settings in Your saved filters.
+                Each record covers the last {data.windowDays} days of one version of a filter's settings, and
+                needs {data.minGradedToRank} graded alerts to rank. When an owner changes a filter, its new
+                settings start a new record and the earlier version stays listed as its own entry once it has{" "}
+                {data.minGradedToRank} graded alerts. Owners' wallets are never shown. Share one of yours from
+                its settings in Your saved filters.
               </p>
             )}
             {message && <p className={message.ok ? "notice" : "error"}>{message.text}</p>}
@@ -272,9 +278,17 @@ function BoardEntry({
       <div className="board-main">
         <div className="row gap-xs wrap">
           <strong>{e.name}</strong>
+          <VersionTag entry={e} />
           <span className="faint small">#{e.tag}</span>
           {e.mine && <span className="pill pill-mine">Yours</span>}
-          {e.retired ? (
+          {e.superseded ? (
+            <span
+              className="pill"
+              title={`Its owner has since changed these settings (now v${e.latestVersion}). This is the frozen record of v${e.version}, and it can still be copied`}
+            >
+              Earlier version
+            </span>
+          ) : e.retired ? (
             <span
               className="pill"
               title="Its owner deleted it; it stays here for its record and can still be copied"
@@ -355,6 +369,22 @@ function BoardEntry({
         </button>
       </div>
     </li>
+  );
+}
+
+/**
+ * "v2" next to a filter that has been edited, so its versions read as one filter's iterations
+ * (they share the #tag too). Nothing for a filter still on its first settings.
+ */
+function VersionTag({ entry: e }: { entry: FilterBoardEntry }) {
+  if (!e.version || !e.latestVersion || e.latestVersion < 2) return null;
+  return (
+    <span
+      className="faint small num"
+      title={`Version ${e.version} of ${e.latestVersion} of this filter's settings`}
+    >
+      v{e.version}
+    </span>
   );
 }
 

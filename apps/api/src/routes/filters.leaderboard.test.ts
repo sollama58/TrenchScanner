@@ -148,7 +148,7 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
     await prisma.userFilter.deleteMany({ where: { id: { in: [runner, flat] } } });
   });
 
-  it("starts a filter's record over when its criteria change, but not on a rename", async () => {
+  it("starts a filter's record over when its criteria change, keeping the old version's as its own entry", async () => {
     const strong = await prisma.userFilter.findFirstOrThrow({ where: { userId: ownerId, name: "strong" } });
     expect((await call(ownerCookie, "PATCH", `/filters/${strong.id}`, { name: "strong!" })).statusCode).toBe(
       200,
@@ -158,10 +158,66 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
     await call(ownerCookie, "PATCH", `/filters/${strong.id}`, { maxFreshTop10WalletPct: 40 });
     expect((await board()).ranked.map((e) => e.id)).toContain(strong.id);
 
+    expect(await prisma.filterVersion.count({ where: { filterId: strong.id } })).toBe(0);
+
     await call(ownerCookie, "PATCH", `/filters/${strong.id}`, { maxFreshTop10WalletPct: 30 });
     const b = await board();
     expect(b.ranked.map((e) => e.id)).not.toContain(strong.id);
-    expect(b.warmingUp.find((e) => e.id === strong.id)?.graded).toBe(0);
+    expect(b.warmingUp.find((e) => e.id === strong.id)).toMatchObject({ graded: 0 });
+    // The settings it ranked with stay on the board, frozen, as v1 of the same filter.
+    const v1 = b.ranked.find((e) => e.id === `${strong.id}-v1`) as
+      | ((typeof b.ranked)[number] & {
+          version: number;
+          latestVersion: number;
+          superseded: boolean;
+          isActive: boolean;
+        })
+      | undefined;
+    expect(v1).toMatchObject({
+      rank: 1,
+      graded: 40,
+      version: 1,
+      latestVersion: 2,
+      superseded: true,
+      isActive: false,
+    });
+    expect(v1!.criteria).toMatchObject({ maxFreshTop10WalletPct: 40 });
+    expect(b.warmingUp.find((e) => e.id === strong.id)).toMatchObject({ version: 2, superseded: false });
+    // The best rank is the version's own, written as the board was built.
+    expect((await prisma.filterVersion.findFirstOrThrow({ where: { filterId: strong.id } })).bestRank).toBe(
+      1,
+    );
+
+    // Copying v1 hands out v1's settings, not the filter's current ones.
+    const res = await call(readerCookie, "POST", `/filters/leaderboard/${strong.id}-v1/copy`);
+    expect(res.statusCode).toBe(201);
+    const copy = await prisma.userFilter.findUniqueOrThrow({
+      where: { id: (res.json() as { id: string }).id },
+    });
+    expect(copy.name).toBe("Copy of strong! v1");
+    expect(copy.maxFreshTop10WalletPct).toBe(40);
+    expect(copy.narrativeKeywords).toEqual(["cat"]);
+    await prisma.userFilter.delete({ where: { id: copy.id } });
+    expect((await call(readerCookie, "POST", `/filters/leaderboard/${strong.id}-v9/copy`)).statusCode).toBe(
+      404,
+    );
+  });
+
+  it("leaves an earlier version off the board until it has a rankable record", async () => {
+    const res = await call(ownerCookie, "POST", "/filters", {
+      name: "tweaked",
+      isActive: false,
+      shareOnLeaderboard: true,
+    });
+    const id = (res.json() as { id: string }).id;
+    await grade(id, 5, 2);
+    await call(ownerCookie, "PATCH", `/filters/${id}`, { maxFreshTop10WalletPct: 20 });
+    expect(await prisma.filterVersion.count({ where: { filterId: id } })).toBe(1);
+    const b = await board();
+    const ids = [...b.ranked, ...b.warmingUp].map((e) => e.id);
+    expect(ids).toContain(id);
+    expect(ids).not.toContain(`${id}-v1`);
+    await prisma.userFilter.delete({ where: { id } });
   });
 
   it("copies a shared filter's criteria into a new inactive, unshared filter of the reader's", async () => {
@@ -248,6 +304,8 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
     const res = await call(readerCookie, "GET", "/filters/leaderboard");
     const after = res.json() as { ranked: { id: string }[]; warmingUp: { id: string }[] };
     expect([...after.ranked, ...after.warmingUp].map((e) => e.id)).not.toContain(strong.id);
+    // Its earlier versions leave with it.
+    expect(after.ranked.map((e) => e.id)).not.toContain(`${strong.id}-v1`);
     // Retired and unshared: no longer copyable either.
     expect((await call(readerCookie, "POST", `/filters/leaderboard/${strong.id}/copy`)).statusCode).toBe(404);
   });

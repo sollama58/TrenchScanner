@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import {
   type Env,
   clampToSafetyBounds,
@@ -13,8 +14,10 @@ import {
   boardFor,
   buildFilterLeaderboard,
   criteriaChanged,
+  criteriaSnapshot,
   filterLeaderboardCache,
   KEEP_IF_EVER_RANKED_WITHIN,
+  parseEntryId,
 } from "../filterLeaderboard.js";
 import { clearReaderCaches } from "./matches.js";
 
@@ -266,14 +269,29 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       const rangeError = filterError(merged);
       if (rangeError) return { error: 400 as const, message: rangeError };
       // New criteria start a new leaderboard record: the record shown must be the one of the
-      // settings a copier would get, not of whatever the filter used to be.
+      // settings a copier would get, not of whatever the filter used to be. The old settings are
+      // kept as a version of their own, so the record they earned stays on the board (as its own
+      // entry, once it is rankable) and can still be copied.
       const reset = criteriaChanged(existing, parsed.data);
+      const changedAt = new Date();
+      if (reset) {
+        const version = (await tx.filterVersion.count({ where: { filterId: id } })) + 1;
+        await tx.filterVersion.create({
+          data: {
+            filterId: id,
+            version,
+            criteria: criteriaSnapshot(existing) as Prisma.InputJsonObject,
+            startedAt: existing.criteriaChangedAt,
+            endedAt: changedAt,
+          },
+        });
+      }
       const updated = await tx.userFilter.update({
         where: { id },
         data: {
           ...parsed.data,
           ...(rearms(existing, parsed.data) ? { armedAt: new Date() } : {}),
-          ...(reset ? { criteriaChangedAt: new Date() } : {}),
+          ...(reset ? { criteriaChangedAt: changedAt } : {}),
         },
       });
       return {
@@ -295,7 +313,8 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
 
   /**
    * Deleting a filter deletes every alert it raised with it (Match cascades) - unless it is on the
-   * board and ever ranked in its top KEEP_IF_EVER_RANKED_WITHIN. Such a filter is retired instead:
+   * board and it, or one of its earlier versions, ever ranked in its top KEEP_IF_EVER_RANKED_WITHIN.
+   * Such a filter is retired instead:
    * hidden from its owner, switched off for good, no longer counted against their cap, but its
    * alert history and record stay on the board (user decision 2026-10-06). An unshared filter is
    * not on the board, so there is no record there to keep: it is deleted whatever it once ranked.
@@ -310,7 +329,12 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       await lockUserFilters(tx, userId);
       const row = await tx.userFilter.findUnique({ where: { id } });
       if (!row || row.userId !== userId || row.deletedAt) return null;
-      if (row.shareOnLeaderboard && row.bestRank !== null && row.bestRank <= KEEP_IF_EVER_RANKED_WITHIN) {
+      const ranked = (bestRank: number | null) => bestRank !== null && bestRank <= KEEP_IF_EVER_RANKED_WITHIN;
+      const versionRanked =
+        (await tx.filterVersion.count({
+          where: { filterId: id, bestRank: { lte: KEEP_IF_EVER_RANKED_WITHIN } },
+        })) > 0;
+      if (row.shareOnLeaderboard && (ranked(row.bestRank) || versionRanked)) {
         await tx.userFilter.update({ where: { id }, data: { deletedAt: new Date(), isActive: false } });
       } else {
         await tx.userFilter.delete({ where: { id } });
@@ -338,14 +362,20 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
   /**
    * Copies a shared filter's criteria into a new saved filter for the caller: inactive, not shared,
    * and counted against their MAX_FILTERS_PER_USER like any other. A retired filter can still be
-   * copied while it is on the board; once its owner unshares it, it can't, like any other.
+   * copied while it is on the board; once its owner unshares it, it can't, like any other. An
+   * earlier version's entry (id "<filter>-vN") copies that version's settings.
    */
   app.post("/leaderboard/:id/copy", async (request, reply) => {
-    const { id } = request.params as { id: string };
+    const { filterId: id, version } = parseEntryId((request.params as { id: string }).id);
     const userId = request.user!.userId;
     const result = await prisma.$transaction(async (tx) => {
       const source = await tx.userFilter.findUnique({ where: { id } });
       if (!source || !source.shareOnLeaderboard) return { error: 404 as const };
+      const earlier =
+        version === null
+          ? null
+          : await tx.filterVersion.findUnique({ where: { filterId_version: { filterId: id, version } } });
+      if (version !== null && !earlier) return { error: 404 as const };
       await lockUserFilters(tx, userId);
       if ((await tx.userFilter.count({ where: { userId, deletedAt: null } })) >= MAX_FILTERS_PER_USER) {
         return { error: 409 as const };
@@ -365,11 +395,20 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
         deletedAt: _deletedAt,
         ...criteria
       } = source;
+      // An earlier version's settings, keeping only columns a filter still has: one dropped since
+      // the version was saved can't fail the create, and one added since takes its default, as the
+      // version never had it.
+      const columns = new Set(Object.keys(criteriaSnapshot(source)));
+      const versionCriteria = earlier
+        ? (Object.fromEntries(
+            Object.entries(earlier.criteria as Record<string, unknown>).filter(([k]) => columns.has(k)),
+          ) as typeof criteria)
+        : null;
       const created = await tx.userFilter.create({
         data: {
           // A source saved before the screen's bounds can't hand a copy values the API refuses.
-          ...clampToSafetyBounds(criteria),
-          name: copyName(name),
+          ...clampToSafetyBounds(versionCriteria ?? criteria),
+          name: copyName(earlier ? `${name} v${earlier.version}` : name),
           isActive: false,
           shareOnLeaderboard: false,
           userId,

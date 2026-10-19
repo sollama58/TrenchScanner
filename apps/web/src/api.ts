@@ -1044,8 +1044,15 @@ export type FilterIconId =
   "target" | "flame" | "bolt" | "rocket" | "star" | "gem" | "crown" | "shield" | "trophy" | "radar";
 
 export interface FilterBoardEntry {
+  /** The filter's id, or "<filter id>-vN" for an earlier version of its settings. */
   id: string;
   name: string;
+  /** Which version of the filter's settings this record is (absent from older API builds). */
+  version?: number;
+  /** The filter's current version: above `version` on an earlier version's entry. */
+  latestVersion?: number;
+  /** An earlier version, frozen: its owner has since changed the settings. */
+  superseded?: boolean;
   /** Short tag from the filter id, to tell apart filters with the same name. */
   tag: string;
   rank: number | null;
