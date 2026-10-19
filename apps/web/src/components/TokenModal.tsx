@@ -758,6 +758,7 @@ function TokenBody({
   // The bubble map's tab opens first when the map is down in the tabs, else Holders: never Live
   // trades on its own, whose feed only runs while someone chose to watch it.
   const [tabPicked, setTab] = useState<TermTab>(side === "map" ? "holders" : "map");
+  const tabRow = useTabRowScroll(terminal ? side : null);
   const tab = tabPicked === side ? (side === "holders" ? "map" : "holders") : tabPicked;
   const [tradeSlot, setTradeSlot] = useState<HTMLDivElement | null>(null);
   const openSafety = () => {
@@ -1045,7 +1046,12 @@ function TokenBody({
               )}
             </div>
             <div className="tm-term-tabs">
-              <div className="tm-term-tablist" role="tablist" aria-label="Sections">
+              <div
+                ref={tabRow.ref}
+                className={`tm-term-tablist${tabRow.edges}`}
+                role="tablist"
+                aria-label="Sections"
+              >
                 {tabs.map((x) => (
                   <button
                     key={x.id}
@@ -1774,6 +1780,44 @@ function HolderFreshness({
 }
 
 /** A group's heading: a small label with a rule running to the edge. */
+/**
+ * A row of tabs that scrolls sideways when the picker beside it leaves too little room (user ask
+ * 2026-10-19): a mouse wheel scrolls it, and its edges fade where more tabs are hidden.
+ * `edges` is the class suffix for those fades. `layout` changes when the row's tabs do (null: no row).
+ */
+function useTabRowScroll(layout: string | null): { ref: RefObject<HTMLDivElement | null>; edges: string } {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [edges, setEdges] = useState("");
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const read = () => {
+      const left = el.scrollLeft > 1;
+      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      setEdges(`${left ? " more-left" : ""}${right ? " more-right" : ""}`);
+    };
+    // A vertical wheel moves the row sideways while it has somewhere to go.
+    const onWheel = (e: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      const before = el.scrollLeft;
+      el.scrollLeft += e.deltaY;
+      if (el.scrollLeft !== before) e.preventDefault();
+    };
+    read();
+    const size = new ResizeObserver(read);
+    size.observe(el);
+    for (const c of el.children) size.observe(c);
+    el.addEventListener("scroll", read, { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      size.disconnect();
+      el.removeEventListener("scroll", read);
+      el.removeEventListener("wheel", onWheel);
+    };
+  }, [layout]);
+  return { ref, edges };
+}
+
 function GroupLabel({ id, children }: { id: string; children: ReactNode }) {
   return (
     <h3 id={id} className="tm-group-label">
