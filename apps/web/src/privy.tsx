@@ -22,6 +22,7 @@ import {
   rememberPlace,
   setPrivyControls,
 } from "./privyBridge";
+import { keepPrivyAboveDialogs } from "./privyLayer";
 
 /**
  * Privy's half of email sign-in: a lazy chunk (see privyBridge.ts), mounted once someone picks
@@ -196,6 +197,9 @@ function Bridge() {
     });
     return () => setPrivyControls(null);
   }, [ready]);
+
+  // Privy's confirm window over the site's popups (the Refill and Buy popups, a token's trade panel).
+  useEffect(() => keepPrivyAboveDialogs(), []);
 
   // Privy's own wallet into the browser's wallet list, once per wallet object.
   useEffect(() => {
