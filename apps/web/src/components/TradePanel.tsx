@@ -277,9 +277,8 @@ const BAR_LABELS: Record<string, string> = {
 };
 
 const RENT_EXPLAINED =
-  "A deposit, not a fee: Solana holds it to open this coin's token account in your wallet. " +
-  "Close the empty account once you've sold it all (most wallets have a close or reclaim rent option) " +
-  "and it comes back to you in full.";
+  "A deposit, not a fee: it opens this coin's token account in your wallet, and comes back in full " +
+  "when you close the empty account after selling (most wallets have a reclaim rent option).";
 
 /** A small arrow curling back: money that returns. */
 function RefundIcon() {
@@ -303,7 +302,7 @@ function RefundIcon() {
  * with TrenchScanner's own fee up top: 0%, or the Sacrifice (ASDF fee plan) once it is on. Sized on the amount in the box last filled (a buy's SOL, or a
  * sale's tokens priced at the position's value), or the first buy button.
  */
-function FeeExplainer({
+export function FeeExplainer({
   fee,
   swap,
   solUsd,
@@ -406,7 +405,7 @@ function FeeExplainer({
               <strong className="num">{solText(total)}</strong>
               <small className="num muted">
                 {sizeSol > 0 ? ` ${((total / sizeSol) * 100).toFixed(2)}% of the trade` : ""}
-                {solUsd ? ` · ≈ ${usdText(total)}` : ""}
+                {solUsd ? ` · ≈\u00a0${usdText(total)}` : ""}
               </small>
             </>
           ) : (
@@ -414,17 +413,6 @@ function FeeExplainer({
           )}
         </span>
       </div>
-      {total !== null && rentSol > 0 && (
-        <div className="tm-fee-rent-line" title={RENT_EXPLAINED}>
-          <span>
-            + <strong className="num">{solText(rentSol)}</strong> token account rent
-          </span>
-          <span className="tm-fee-refund-pill">
-            <RefundIcon />
-            refundable
-          </span>
-        </div>
-      )}
       {total !== null && barTotal > 0 && (
         <>
           <div
@@ -445,16 +433,26 @@ function FeeExplainer({
           </div>
           <ul className="tm-fee-legend">
             {barParts.map((p) => (
-              <li key={p.key} className={p.key === "rent" ? "refund" : undefined}>
+              <li
+                key={p.key}
+                className={p.key === "rent" ? "refund" : undefined}
+                title={p.key === "rent" ? RENT_EXPLAINED : undefined}
+              >
                 <i className={`tm-fee-dot ${p.key}`} aria-hidden="true" />
                 <span>{BAR_LABELS[p.key] ?? p.label}</span>
-                <span className="num">
-                  {p.key === "rent"
-                    ? "refundable"
-                    : total && total > 0
-                      ? `${Math.round((p.sol / total) * 100)}%`
-                      : ""}
-                </span>
+                {p.key === "rent" ? (
+                  <>
+                    <span className="num">{solText(p.sol)}</span>
+                    <span className="tm-fee-refund-pill">
+                      <RefundIcon />
+                      refundable
+                    </span>
+                  </>
+                ) : (
+                  <span className="num">
+                    {total && total > 0 ? `${Math.round((p.sol / total) * 100)}%` : ""}
+                  </span>
+                )}
               </li>
             ))}
           </ul>
