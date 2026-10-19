@@ -32,7 +32,15 @@ function vaultData(amount: bigint): string {
   return Buffer.from(data).toString("base64");
 }
 
-const VAULTS = { base: "base-vault", quote: "quote-vault" };
+const VAULTS = { base: "base-vault", quote: "quote-vault", virtualQuote: 0 };
+
+/** A PumpSwap pool account's data, base64, carrying its virtual quote reserve. */
+function poolAccountData(virtualQuote: bigint): string {
+  const data = new Uint8Array(301);
+  data.set([241, 154, 109, 4, 17, 177, 109, 188], 0);
+  new DataView(data.buffer).setBigInt64(245, virtualQuote, true);
+  return Buffer.from(data).toString("base64");
+}
 
 function setup(
   opts: {
@@ -104,6 +112,8 @@ function setup(
     push: (data: string) => onAccount!(`chart:${MINT}`, data, null),
     pushVault: (side: "base" | "quote", amount: bigint, slot: number) =>
       onAccount!(`pool-${side}:${MINT}`, vaultData(amount), slot),
+    pushPool: (virtualQuote: bigint) =>
+      onAccount!(`pool-account:${MINT}`, poolAccountData(virtualQuote), null),
   };
 }
 
@@ -218,7 +228,7 @@ describe("LiveCurves", () => {
     t.cover(t.at());
     const a = await t.curves.read(MINT, 0);
     expect(a).toMatchObject({ venue: "pool", complete: false, source: "stream" });
-    expect(t.watched).toEqual(new Set([`pool-base:${MINT}`, `pool-quote:${MINT}`]));
+    expect(t.watched).toEqual(new Set([`pool-base:${MINT}`, `pool-quote:${MINT}`, `pool-account:${MINT}`]));
     const poolMcap = (quote: number, base: number) =>
       curveMcapSol({ virtualQuote: quote, virtualToken: base }) * 100;
     expect(a.ticks[a.ticks.length - 1]![1]).toBeCloseTo(poolMcap(8e10, 2e14));
@@ -233,6 +243,26 @@ describe("LiveCurves", () => {
     t.tick(READ_EVERY_MS * 3);
     await t.curves.round();
     expect(t.poolReads).toHaveLength(1);
+    t.curves.stop();
+  });
+
+  it("prices a pool on its quote vault plus the pool's virtual quote reserve", async () => {
+    // As 6AZCEf's PUMP pool read on 2026-10-19, in SOL units here: 2.77 in the vault, 0.49 virtual.
+    const t = setup({
+      stream: true,
+      states: [state(5e10, true)],
+      pool: { vaults: { ...VAULTS, virtualQuote: 4.9e8 }, amounts: [1.54e14, 2.77e9] },
+    });
+    t.cover(t.at());
+    const a = await t.curves.read(MINT, 0);
+    const poolMcap = (quote: number, base: number) =>
+      curveMcapSol({ virtualQuote: quote, virtualToken: base }) * 100;
+    expect(a.ticks.at(-1)![1]).toBeCloseTo(poolMcap(2.77e9 + 4.9e8, 1.54e14));
+    // The reserve moves on the pool account, which the stream follows too.
+    t.tick(400);
+    t.pushPool(500_000_000n);
+    const b = await t.curves.read(MINT, t.at() - 1);
+    expect(b.ticks.at(-1)![1]).toBeCloseTo(poolMcap(2.77e9 + 5e8, 1.54e14));
     t.curves.stop();
   });
 

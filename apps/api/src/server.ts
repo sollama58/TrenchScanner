@@ -640,7 +640,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   app.addHook("onClose", async () => liveCurves().stop());
   // The token page's live trades follow open pages' coins' logs on another Helius socket
   // (liveTrades.ts), behind the same switch as the chart's.
-  setLiveTrades(liveTradesFor(env.HELIUS_API_KEY, env.CHART_LIVE_CURVES, solPrice, quotePrice));
+  setLiveTrades(liveTradesFor(env.HELIUS_API_KEY, env.CHART_LIVE_CURVES, solPrice, quotePrice, walletHelius));
   app.addHook("onClose", async () => liveTrades().stop());
   await app.register(registerTokenRoutes, { prefix: "/tokens", env, stonkFees: walletHelius });
   const walletLive = walletHelius ? new WalletLiveReader(walletHelius) : null;

@@ -2,11 +2,13 @@ import {
   createLogger,
   HeliusAccountStream,
   PUMP_SUPPLY_TOKENS,
+  WRAPPED_SOL_MINT,
   launchSupplyFactors,
   pumpCurveAddressOf,
   pumpSwapPoolOf,
   tradesFromLogs,
   type DecodedTrade,
+  type HeliusClient,
 } from "@trenchscanner/core";
 import { MAX_WAIT_MS } from "./liveCurve.js";
 import type { QuotePrice, SolPrice } from "./solPrice.js";
@@ -42,6 +44,11 @@ const ROUND_MS = 1_000;
 /** The stream keys of a followed coin's curve and pool. */
 const CURVE_PREFIX = "trades-curve:";
 const POOL_PREFIX = "trades-pool:";
+/**
+ * How often a followed coin's PumpSwap pool account is re-read. Its virtual quote reserve (pumpSwapPool.ts)
+ * is in the pool's price but not in its swap events, and moves slowly.
+ */
+const POOL_READ_MS = 30_000;
 
 type Stream = Pick<HeliusAccountStream, "start" | "stop" | "watch" | "unwatch" | "coveredSince"> &
   Partial<Pick<HeliusAccountStream, "takeStats">>;
@@ -94,11 +101,22 @@ export interface LiveTradesStreamTotals {
 interface Kept extends DecodedTrade {
   seq: number;
   sig: string;
+  /** A PumpSwap trade's quote coin when it isn't SOL (PUMP), as the pool it came from was quoted. */
+  poolQuoteMint: string | null;
 }
 
 interface Followed {
   curve: string;
+  /** Its PumpSwap pool: the SOL pool until its curve is read, then the one of its quote coin. */
   pool: string | null;
+  /** The coin's quote coin when it isn't SOL (PUMP, USD1), from its curve; null for SOL or not read yet. */
+  quoteMint: string | null;
+  /** Whether the curve has been read for its quote coin. */
+  quoteKnown: boolean;
+  /** The pool's virtual quote reserve, base units of its quote coin (0 until read). */
+  virtualQuote: number;
+  /** When the pool account was last read for it (ms epoch), null before the first read. */
+  poolReadAt: number | null;
   askedAt: number;
   /** Oldest first, at most MAX_TRADES. */
   trades: Kept[];
@@ -116,6 +134,11 @@ export interface LiveTradesDeps {
   solPrice: Pick<SolPrice, "get">;
   /** Prices a quote coin (PUMP, USD1) for coins whose curve trades in one; without it their SOL is null. */
   quotePrice?: Pick<QuotePrice, "get">;
+  /**
+   * Reads the coin's curve for its quote coin and its pool for the virtual quote reserve; without it
+   * every coin is followed on its SOL pool, priced on the pool's vaults alone.
+   */
+  reader?: Pick<HeliusClient, "getCurveStatesBatch" | "getPoolVaultsBatch"> | null;
   now?: () => number;
 }
 
@@ -131,6 +154,8 @@ export class LiveTrades {
   private readonly startedAt: number;
   /** Pages' held asks, by mint: each woken by the coin's next trade (or its subscriptions going live). */
   private readonly waiters = new Map<string, Set<() => void>>();
+  /** The curve and pool read out now, if one is: the next waits for it to finish. */
+  private reading: Promise<void> | null = null;
 
   constructor(private readonly deps: LiveTradesDeps) {
     this.now = deps.now ?? Date.now;
@@ -181,33 +206,52 @@ export class LiveTrades {
     // A cursor from past this process's newest (a restart, another instance) reads as a fresh ask.
     const from = after > this.seq ? 0 : after;
     const fresh = f.trades.filter((t) => t.seq > from);
-    const usd = fresh.some((t) => t.priceSol !== null || t.quote) ? await this.deps.solPrice.get() : null;
+    const usd = fresh.some((t) => t.priceSol !== null || t.quote || t.pool)
+      ? await this.deps.solPrice.get()
+      : null;
     // The trades' caps are on the launch billion; each is put on the coin's supply now (mintSupply.ts).
     const factor = fresh.length > 0 ? ((await launchSupplyFactors([mint])).get(mint) ?? 1) : 1;
     const quotes = new Map<string, { usd: number; decimals: number } | null>();
-    for (const t of fresh)
-      if (t.quote && !quotes.has(t.quote.mint))
-        quotes.set(t.quote.mint, (await this.deps.quotePrice?.get(t.quote.mint).catch(() => null)) ?? null);
+    for (const t of fresh) {
+      const quoteMint = t.quote?.mint ?? t.poolQuoteMint;
+      if (quoteMint && !quotes.has(quoteMint))
+        quotes.set(quoteMint, (await this.deps.quotePrice?.get(quoteMint).catch(() => null)) ?? null);
+    }
     return {
       status: since === null ? "pending" : "live",
       since,
       cursor: f.trades[f.trades.length - 1]?.seq ?? 0,
       trades: fresh.map((t) => {
-        const priced = t.quote ? quotedInSol(t.quote, quotes.get(t.quote.mint) ?? null, usd) : null;
+        // A pool's price counts its virtual quote reserve, which its swap events leave out.
+        const quoted =
+          t.quote ??
+          (t.pool && t.poolQuoteMint
+            ? {
+                mint: t.poolQuoteMint,
+                amount: t.pool.amount,
+                reserve: t.pool.quoteReserve + f.virtualQuote,
+                tokenReserve: t.pool.baseReserve / 1e6,
+              }
+            : null);
+        const priced = quoted ? quotedInSol(quoted, quotes.get(quoted.mint) ?? null, usd) : null;
+        const priceSol =
+          t.pool && t.pool.baseReserve > 0
+            ? (t.pool.quoteReserve + f.virtualQuote) / 1e9 / (t.pool.baseReserve / 1e6)
+            : t.priceSol;
         return {
           seq: t.seq,
           sig: t.sig,
           wallet: t.wallet,
           side: t.side,
-          sol: t.quote ? (priced?.sol ?? null) : t.sol,
+          sol: quoted ? (priced?.sol ?? null) : t.sol,
           tokens: t.tokens,
           atMs: t.atMs,
-          mcapUsd: t.quote
+          mcapUsd: quoted
             ? priced?.mcapUsd != null
               ? priced.mcapUsd * factor
               : null
-            : t.priceSol !== null && usd !== null
-              ? t.priceSol * PUMP_SUPPLY_TOKENS * usd * factor
+            : priceSol !== null && usd !== null
+              ? priceSol * PUMP_SUPPLY_TOKENS * usd * factor
               : null,
         };
       }),
@@ -225,6 +269,10 @@ export class LiveTrades {
       f = {
         curve,
         pool: pumpSwapPoolOf(mint) ?? null,
+        quoteMint: null,
+        quoteKnown: false,
+        virtualQuote: 0,
+        poolReadAt: null,
         askedAt: now,
         trades: [],
         seen: new Set(),
@@ -232,6 +280,7 @@ export class LiveTrades {
       };
       this.followed.set(mint, f);
       this.ensureRunning();
+      void this.readPools(now);
     }
     f.askedAt = now;
     this.stream?.watch(CURVE_PREFIX + mint, [f.curve], now, "logs");
@@ -265,6 +314,7 @@ export class LiveTrades {
     for (const t of tradesFromLogs(logs, { mint, pool: f.pool })) {
       const id = `${signature}:${t.wallet}:${t.side}`;
       const prior = merged.get(id);
+      const pool = prior?.pool && t.pool ? { ...t.pool, amount: prior.pool.amount + t.pool.amount } : t.pool;
       merged.set(
         id,
         prior
@@ -276,6 +326,7 @@ export class LiveTrades {
               ...(t.quote && prior.quote?.mint === t.quote.mint
                 ? { quote: { ...t.quote, amount: prior.quote.amount + t.quote.amount } }
                 : {}),
+              ...(pool ? { pool } : {}),
             }
           : t,
       );
@@ -284,7 +335,7 @@ export class LiveTrades {
     for (const [id, t] of merged) {
       if (f.seen.has(id)) continue;
       f.seen.add(id);
-      f.trades.push({ ...t, seq: ++this.seq, sig: signature });
+      f.trades.push({ ...t, seq: ++this.seq, sig: signature, poolQuoteMint: t.pool ? f.quoteMint : null });
       added = true;
     }
     if (!added) return;
@@ -351,10 +402,71 @@ export class LiveTrades {
     }
     if (this.followed.size > 0) {
       this.emptySince = null;
+      void this.readPools(now);
       return;
     }
     this.emptySince ??= now;
     if (now - this.emptySince > SOCKET_IDLE_MS) this.idle();
+  }
+
+  /**
+   * Visible for tests: reads each followed coin's curve once for its quote coin, moving a coin quoted
+   * in another coin (PUMP) onto that coin's pool, and its pool every POOL_READ_MS for the virtual
+   * quote reserve. A failed read keeps what was read before. Resolves when the read out now ends.
+   */
+  readPools(now: number = this.now()): Promise<void> {
+    const reader = this.deps.reader;
+    if (this.reading) return this.reading;
+    if (!reader) return Promise.resolve();
+    const due = [...this.followed].filter(
+      ([, f]) => f.poolReadAt === null || now - f.poolReadAt >= POOL_READ_MS,
+    );
+    if (due.length === 0) return Promise.resolve();
+    this.reading = this.readDue(reader, due, now).finally(() => {
+      this.reading = null;
+    });
+    return this.reading;
+  }
+
+  private async readDue(
+    reader: NonNullable<LiveTradesDeps["reader"]>,
+    due: [string, Followed][],
+    now: number,
+  ): Promise<void> {
+    try {
+      for (const [, f] of due) f.poolReadAt = now;
+      const unread = due.filter(([, f]) => !f.quoteKnown);
+      if (unread.length > 0) {
+        const states = await reader.getCurveStatesBatch(unread.map(([, f]) => f.curve));
+        for (const [mint, f] of unread) {
+          const state = states.get(f.curve);
+          if (state === undefined || state === "failed") continue;
+          f.quoteKnown = true;
+          if (state === null || state.quoteIsSol || !state.quoteMint) continue;
+          f.quoteMint = state.quoteMint;
+          const pool = pumpSwapPoolOf(mint, state.quoteMint) ?? null;
+          if (pool === f.pool) continue;
+          this.stream?.unwatch(POOL_PREFIX + mint);
+          f.pool = pool;
+          f.live = false;
+          if (pool) this.stream?.watch(POOL_PREFIX + mint, [pool], now, "logs");
+        }
+      }
+      const pools = new Map<string, { mint: string; quoteMint: string }>();
+      const owners = new Map<string, Followed>();
+      for (const [mint, f] of due)
+        if (f.pool && f.quoteKnown) {
+          pools.set(f.pool, { mint, quoteMint: f.quoteMint ?? WRAPPED_SOL_MINT });
+          owners.set(f.pool, f);
+        }
+      const found = await reader.getPoolVaultsBatch(pools);
+      for (const [pool, vaults] of found) {
+        const f = owners.get(pool);
+        if (f && vaults && vaults !== "failed") f.virtualQuote = vaults.virtualQuote;
+      }
+    } catch (err) {
+      logger.warn("live trades pool read failed", { error: String(err) });
+    }
   }
 
   private ensureRunning(): void {
@@ -427,6 +539,7 @@ export function liveTradesFor(
   enabled: boolean,
   solPrice: Pick<SolPrice, "get">,
   quotePrice?: Pick<QuotePrice, "get">,
+  reader?: LiveTradesDeps["reader"],
 ): LiveTrades {
   const hasSocket = !!(globalThis as { WebSocket?: unknown }).WebSocket;
   return new LiveTrades({
@@ -443,6 +556,7 @@ export function liveTradesFor(
         : null,
     solPrice,
     quotePrice,
+    reader,
   });
 }
 

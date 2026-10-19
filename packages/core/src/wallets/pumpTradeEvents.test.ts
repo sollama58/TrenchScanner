@@ -118,6 +118,7 @@ describe("tradesFromLogs", () => {
         // The vaults after it, as the transaction's token balances show: 2307586090184 lamports
         // over 7592957874736 base units.
         priceSol: 2307.586090184 / 7592957.874736,
+        pool: { amount: 10_778_576, quoteReserve: 2_307_586_090_184, baseReserve: 7_592_957_874_736 },
       },
     ]);
     expect(
@@ -144,6 +145,7 @@ describe("tradesFromLogs", () => {
         atMs: 1792368559000,
         // 540193242367 lamports over 31691956773714 base units after it.
         priceSol: 540.193242367 / 31691956.773714,
+        pool: { amount: 82_476, quoteReserve: 540_193_242_367, baseReserve: 31_691_956_773_714 },
       },
     ]);
   });
