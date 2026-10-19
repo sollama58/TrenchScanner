@@ -1929,14 +1929,17 @@ export function ChartCard({
   // trades tab) fold into the flagged wallets', and KOLs and tracked wallets the chart hasn't
   // flagged yet join by name.
   const liveFeed = useLiveTrades(api, markPrefs.on && markPrefs.kinds.length > 0);
-  const liveTraders = useBatchedWallets(liveFeed.trades);
+  // Every trade read this visit, not only the feed's newest 200: on a busy coin a KOL's buy was
+  // pushed out of those within a minute or two, and its mark went with it (the trade tape only
+  // reads the half hour after the call).
+  const liveTraders = useBatchedWallets(liveFeed.history);
   const liveNames = useWalletNames(liveTraders);
   // KOL ties are read for every trader only while funded wallets or Probable Sides are marked.
   const sideMarks = markPrefs.on && markPrefs.kinds.some((k) => k === "funded" || k === "probable");
   const liveSides = usePossibleSides(sideMarks ? liveTraders : NO_TRADERS);
   const marked = useMemo(
-    () => withLiveMarks(data?.wallets ?? [], liveFeed.trades, liveNames, liveSides),
-    [data?.wallets, liveFeed.trades, liveNames, liveSides],
+    () => withLiveMarks(data?.wallets ?? [], liveFeed.history, liveNames, liveSides),
+    [data?.wallets, liveFeed.history, liveNames, liveSides],
   );
   const marks = useMemo(
     () => walletMarks(marked, markPrefs, new Set(pro ? [pro] : [])),

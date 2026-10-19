@@ -5,6 +5,7 @@ import {
   CandleCache,
   drawableCandles,
   KeyedCache,
+  LastGood,
   markedWallets,
   MAX_MARKED_WALLETS,
   parseLiveTrades,
@@ -400,6 +401,28 @@ describe("markedWallets", () => {
     const out = markedWallets(rows, risk, [], opts);
     expect(out).toHaveLength(MAX_MARKED_WALLETS);
     expect(out[0]!.score).toBe(99);
+  });
+
+  it("keeps a KOL with a low score over a full coin of unscored linked wallets", () => {
+    const rows = [...Array.from({ length: MAX_MARKED_WALLETS + 5 }, (_, i) => row(`l${i}`)), row("kol")];
+    const clusters = [{ funder: "f", wallets: rows.filter((r) => r.wallet !== "kol") }];
+    const risk = new Map([["kol", { score: 12, dumps: 0, appearances: 30 }]]);
+    const out = markedWallets(rows, risk, clusters, opts, new Map([["kol", "Cupsey"]]));
+    expect(out).toHaveLength(MAX_MARKED_WALLETS);
+    expect(out[0]!.wallet).toBe("kol");
+  });
+});
+
+describe("LastGood", () => {
+  it("keeps the newest answer per key, the most recently set keys only", () => {
+    const last = new LastGood<number>(2);
+    last.set("a", 1);
+    last.set("b", 2);
+    last.set("a", 3);
+    last.set("c", 4);
+    expect(last.get("a")).toBe(3);
+    expect(last.get("b")).toBeUndefined();
+    expect(last.get("c")).toBe(4);
   });
 });
 
