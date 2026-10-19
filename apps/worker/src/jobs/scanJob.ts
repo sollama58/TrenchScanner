@@ -235,6 +235,8 @@ export interface ScanDeps {
     watch?(mints: readonly string[]): void;
     /** Their order-flow features right now, when trade flow is on. */
     tradeFlow?(mint: string): TradeFlowFeatures | undefined;
+    /** Whether the mint has had no trade since then, as far as the stream can vouch (PumpPortalStream.quietSince). */
+    quietSince?(mint: string, sinceMs: number): boolean;
   };
   /** Jupiter's newest launches, read between cycles and drained once per cycle (JupiterLaunchPoller). Optional. */
   launchPoller?: { drain(): DiscoveredCoin[]; takeStats?(): Record<string, number> };
@@ -654,6 +656,8 @@ function startLinkedWalletStage(
   wideMints: ReadonlySet<string> = new Set(),
   /** Coins whose bubble map is open now (refreshWatchedHolders): their top holders are re-read faster. */
   watched: ReadonlySet<string> = new Set(),
+  /** Whether a coin has had no trade since then: a watched coin's faster re-read waits for one. */
+  quietSince?: (mint: string, sinceMs: number) => boolean,
 ): Promise<void> {
   if (env.LINKED_WALLET_LOOKUPS_PER_CYCLE <= 0 || groups.length === 0 || linkedStageInFlight) {
     return Promise.resolve();
@@ -676,6 +680,7 @@ function startLinkedWalletStage(
       watched,
       maxWatchedReads: watchedLeft,
       watchedRefreshMs: env.WATCHED_HOLDERS_REFRESH_SECONDS * 1000,
+      quietSince,
     }).catch((err: unknown) => {
       logger.warn("top-holder reads failed - using RugCheck's list", { error: String(err) });
       return { reads: 0, watchedReads: 0 };
@@ -1471,6 +1476,7 @@ async function scanCycle(
     env,
     wideMints,
     watchedHolders,
+    deps.stream?.quietSince ? (mint, sinceMs) => deps.stream!.quietSince!(mint, sinceMs) : undefined,
   );
   // The live tape: the newest trades of each coin close to a call (contenders, then alerts held
   // for a wallet figure), for the flagged wallets trading it - on the same wait.

@@ -458,6 +458,34 @@ describe("readTopHolders", () => {
     expect(helius.getTopHoldersBatch).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a watched coin's list while the trade stream says it hasn't traded since", async () => {
+    const top = [{ owner: "h0", pct: 10 }];
+    const helius = {
+      getTopHoldersBatch: vi.fn(async (mints: string[]) => {
+        return new Map(mints.map((m) => [m, { status: "found" as const, holders: top }]));
+      }),
+    };
+    const groups: LinkedGroup[] = [{ mintAddress: "mQ", holders: [] }];
+    const lastTrade = { at: 0 };
+    const opts = {
+      maxReads: 0,
+      watched: new Set(["mQ"]),
+      maxWatchedReads: 1,
+      watchedRefreshMs: 60_000,
+      quietSince: (_mint: string, since: number) => lastTrade.at <= since,
+    };
+    await readTopHolders(groups, helius, { ...opts, maxReads: 1, nowMs: 0 });
+    expect(await readTopHolders(groups, helius, { ...opts, nowMs: 60_000 })).toEqual({
+      reads: 0,
+      watchedReads: 0,
+    });
+    lastTrade.at = 30_000;
+    expect(await readTopHolders(groups, helius, { ...opts, nowMs: 60_000 })).toEqual({
+      reads: 0,
+      watchedReads: 1,
+    });
+  });
+
   it("leaves a group on RugCheck's list when the read fails", async () => {
     const helius = {
       getTopHoldersBatch: vi.fn(

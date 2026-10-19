@@ -45,7 +45,8 @@ export function TopHolders({
    * When the live list was read and the next is due (null: no more coming), said beside the count
    * (user ask 2026-10-19); none for a list kept as it stood.
    */
-  freshness?: { last: number; next: number | null };
+  /** `live`: shares move with the live trades between reads (liveShares.ts). */
+  freshness?: { last: number; next: number | null; live?: boolean };
 }) {
   const [all, setAll] = useState(false);
   const [open, setOpen] = useState(defaultOpen);
@@ -93,7 +94,7 @@ export function TopHolders({
       <FoldHead open={open} onToggle={() => setOpen((o) => !o)} controls={bodyId}>
         Top holders
         <span className="sage-tag">{holders.length + (rest?.count ?? 0)}</span>
-        {freshness && <LiveStamp last={freshness.last} next={freshness.next} />}
+        {freshness && <LiveStamp last={freshness.last} next={freshness.next} live={freshness.live} />}
         {graph.top10Pct !== null && (
           <span
             className="tm-h4-meta muted small num"
