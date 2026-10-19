@@ -55,6 +55,7 @@ import { setProState, proStateOf } from "./proTrade";
 import { setTrackedAccount } from "./trackedWallets";
 import { ProGraceBanner } from "./components/ProGraceBanner";
 import { BugButton } from "./components/BugButton";
+import { ThisIsFine } from "./components/ThisIsFine";
 import { AdminReportsBadge } from "./components/AdminReportsBadge";
 import { TwoFactorPromptHost } from "./components/TwoFactorPrompt";
 import { onRecheckMe, setMe } from "./me";
@@ -540,23 +541,25 @@ export function App() {
             </section>
           ))}
         {session.state === "unreachable" && (
-          <section className="panel paywall">
-            <h2>Can&apos;t reach TrenchScanner</h2>
-            <p className="muted">
-              The server didn&apos;t answer ({session.message}). It may be restarting; try again in a moment.
-            </p>
-            <button
-              className="button primary"
-              onClick={() => {
-                // The boot requests failed with the rest; drop them so every view asks again.
-                invalidate();
-                setSession({ state: "loading" });
-                checkSession(-1);
-              }}
-            >
-              Try again
-            </button>
-          </section>
+          <ThisIsFine
+            inShell
+            title="Can't reach TrenchScanner"
+            actions={
+              <button
+                className="primary"
+                onClick={() => {
+                  // The boot requests failed with the rest; drop them so every view asks again.
+                  invalidate();
+                  setSession({ state: "loading" });
+                  checkSession(-1);
+                }}
+              >
+                Try again
+              </button>
+            }
+          >
+            The server didn&apos;t answer ({session.message}). It may be restarting; try again in a moment.
+          </ThisIsFine>
         )}
         {session.state === "signed-out" && (
           <Suspense fallback={<Boot />}>
