@@ -404,8 +404,12 @@ services:
         value: "1000000"
       - key: WATCHLIST_TTL_HOURS
         value: "24"
+      # 900 -> 600 (user decision 2026-10-19, performance audit): 30 DexScreener batches a cycle
+      # sat at the rate gate's burst, so the market refresh alone took 2-7 s of each scan. The
+      # near-band tier and the newest launches are refreshed first, so the cut falls on the
+      # launch-level tail.
       - key: WATCHLIST_MAX_TRACKED
-        value: "900"
+        value: "600"
       - key: CLEANUP_HOUR_UTC
         value: "4"
       - key: SNAPSHOT_RETENTION_DAYS
