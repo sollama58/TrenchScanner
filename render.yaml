@@ -62,6 +62,9 @@
 #   - TELEGRAM_BOT_TOKEN (api + worker)            optional: a bot token from @BotFather
 #         Turns on Telegram alerts (Filters tab -> Telegram alerts): the api runs the bot's webhook
 #         and link codes, the worker sends each linked chat its alerts. Empty, the feature is off.
+#   - WEB_PUSH_PUBLIC_KEY (api + worker), WEB_PUSH_PRIVATE_KEY (worker)  optional: a VAPID key pair
+#         Turns on push notifications with the app closed (Settings -> Alerts -> Browser
+#         notifications). Generate with `npx web-push generate-vapid-keys`. Empty, the feature is off.
 #   - TRADING_KMS_KEY_ID, TRADING_AWS_ACCESS_KEY_ID, TRADING_AWS_SECRET_ACCESS_KEY (api + trader,
 #     optional; with TRADING_BOT_ENABLED=true)
 #         Custody for the admin-only trading bot's wallets (README -> Trading bot). One KMS key,
@@ -251,6 +254,10 @@ services:
       # Where Telegram delivers the bot's updates: this service's public webhook route.
       - key: TELEGRAM_WEBHOOK_URL
         value: https://trenchscanner-api.onrender.com/telegram/webhook
+      # Web Push alerts (packages/core/src/webPush): the VAPID public key the dashboard subscribes
+      # with. Empty leaves the feature off. The worker below needs it too, with the private key.
+      - key: WEB_PUSH_PUBLIC_KEY
+        sync: false
       # The trading bot (admin-only, packages/core/src/trading). Off until the KMS key and this
       # service's IAM user (kms:GenerateDataKey only) are in place; flip on here and on the trader.
       - key: TRADING_BOT_ENABLED
@@ -441,6 +448,12 @@ services:
         sync: false
       - key: TELEGRAM_DASHBOARD_URL
         value: https://trenchscanner.app
+      # Web Push alerts: this process sends them (web-push-dispatch). The same public key as on
+      # the api, and the pair's private key, which only this service holds.
+      - key: WEB_PUSH_PUBLIC_KEY
+        sync: false
+      - key: WEB_PUSH_PRIVATE_KEY
+        sync: false
       # The same list as on the api: the dispatcher sends real-time alerts only to accounts with
       # access (admin, whitelist or subscription), and this is how it recognises the admin wallets.
       - key: ADMIN_WALLET_ADDRESSES

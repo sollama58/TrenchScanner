@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { Prisma } from "@prisma/client";
-import { adminWalletSet, prisma, resolveAccess, type Env } from "@trenchscanner/core";
+import { z } from "zod";
+import { adminWalletSet, isPushEndpoint, prisma, resolveAccess, type Env } from "@trenchscanner/core";
 import { alertPrefsPatchSchema, applyAlertPrefsPatch, parseAlertPrefs } from "../alertPrefs.js";
 import { feedAppearanceSchema, parseFeedAppearance } from "../feedAppearance.js";
 
@@ -39,6 +40,8 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
         : null;
     return {
       alerts: parseAlertPrefs(user.alertPrefs),
+      // The VAPID key the dashboard subscribes to push notifications with; null while it's off.
+      push: { publicKey: env.WEB_PUSH_PUBLIC_KEY || null },
       // Predictive price pathing is admins-only (#721): never on for anyone else.
       appearance: withAdminOnly(parseFeedAppearance(user.feedAppearance), access.reason === "admin"),
       account: {
@@ -89,6 +92,57 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
   });
 
   /**
+   * Adds this browser (or installed app) as a push target for the account's alerts, or moves it
+   * here from another account. The worker sends (webPush/dispatch.ts); 404 while push is off.
+   */
+  app.put("/push", { config: { rateLimit: PUSH_RATE_LIMIT } }, async (request, reply) => {
+    if (!env.WEB_PUSH_PUBLIC_KEY) return reply.code(404).send({ error: "push notifications are off" });
+    const parsed = pushSubscriptionSchema.safeParse(request.body);
+    if (!parsed.success || !isPushEndpoint(parsed.data.endpoint)) {
+      return reply.code(400).send({ error: "invalid push subscription" });
+    }
+    const { endpoint, keys } = parsed.data;
+    const userId = request.user!.userId;
+    const fields = { userId, p256dh: keys.p256dh, auth: keys.auth, failures: 0, lastError: null };
+    // A new or moved subscription starts its cursor now, so it never replays the backlog; the
+    // same browser re-subscribing (every page load) keeps its cursor.
+    const existing = await prisma.webPushSubscription.findUnique({
+      where: { endpoint },
+      select: { userId: true },
+    });
+    if (existing && existing.userId === userId) {
+      await prisma.webPushSubscription.update({ where: { endpoint }, data: fields });
+    } else {
+      await prisma.webPushSubscription.upsert({
+        where: { endpoint },
+        create: { endpoint, ...fields },
+        update: { ...fields, sentThrough: new Date(), sentTokens: {} },
+      });
+    }
+    // An account keeps a bounded number: the oldest go first.
+    const extra = await prisma.webPushSubscription.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      skip: MAX_PUSH_SUBSCRIPTIONS,
+      select: { id: true },
+    });
+    if (extra.length > 0) {
+      await prisma.webPushSubscription.deleteMany({ where: { id: { in: extra.map((r) => r.id) } } });
+    }
+    return { ok: true };
+  });
+
+  /** Stops pushing to this browser (notifications switched off, or permission withdrawn). */
+  app.post("/push/remove", { config: { rateLimit: PUSH_RATE_LIMIT } }, async (request, reply) => {
+    const parsed = z.object({ endpoint: z.string().max(2048) }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid request" });
+    await prisma.webPushSubscription.deleteMany({
+      where: { endpoint: parsed.data.endpoint, userId: request.user!.userId },
+    });
+    return { ok: true };
+  });
+
+  /**
    * Replaces the feed appearance. The dashboard always sends the whole thing (it holds it all,
    * and a preset or reset changes most of it at once), so the last save wins with nothing to merge.
    */
@@ -116,6 +170,20 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
     return { appearance: look };
   });
 }
+
+/** Every page load re-sends the subscription; well above that, well below abuse. */
+const PUSH_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
+/** Phones, laptops and a few browsers each; past this the oldest are dropped. */
+export const MAX_PUSH_SUBSCRIPTIONS = 10;
+
+/** PushSubscription.toJSON() as the browser hands it over. */
+const pushSubscriptionSchema = z.object({
+  endpoint: z.string().min(1).max(2048),
+  keys: z.object({
+    p256dh: z.string().regex(/^[A-Za-z0-9_-]{40,200}={0,2}$/),
+    auth: z.string().regex(/^[A-Za-z0-9_-]{10,100}={0,2}$/),
+  }),
+});
 
 /** The appearance with its admins-only parts (predictive price pathing) off for anyone else. */
 function withAdminOnly<T extends { chartPathing: boolean }>(look: T, admin: boolean): T {

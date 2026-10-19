@@ -101,6 +101,7 @@ model User {
   devices           LinkedDevice[]
   telegramLinkCodes TelegramLinkCode[]
   telegramChats     TelegramChat[]
+  webPushSubscriptions WebPushSubscription[]
   tradingWallet     TradingWallet?
   tradingBot        TradingBot?
   paperStrategies   PaperStrategy[]
@@ -259,6 +260,33 @@ model TelegramChat {
   revokedAt DateTime?
 
   alertsSent TelegramAlertSent[]
+
+  @@index([userId])
+}
+
+/// A browser or installed app (a phone's home-screen app included) that gets this account's alerts
+/// as Web Push notifications, so they arrive with the app closed or the phone locked. Added when
+/// the person allows notifications in Settings; one row per push endpoint, which belongs to at most
+/// one account (re-subscribing on another account moves it). Sent by the worker's web-push-dispatch
+/// job (packages/core/src/webPush/dispatch.ts) per the account's alert settings (User.alertPrefs).
+model WebPushSubscription {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The push service URL the browser handed out. Untrusted: only ever POSTed to, over https.
+  endpoint    String    @unique
+  /// The browser's keys for encrypting each message (base64url).
+  p256dh      String
+  auth        String
+  /// Alerts raised at or before this were sent (or never due) - the dispatcher's cursor.
+  sentThrough DateTime  @default(now())
+  /// Token id -> when it was last sent (ms), so a second model calling a coin minutes later isn't
+  /// a second notification. Pruned to REALERT_AFTER_MS on every send.
+  sentTokens  Json      @default("{}")
+  lastSentAt  DateTime?
+  lastError   String?
+  failures    Int       @default(0)
+  createdAt   DateTime  @default(now())
 
   @@index([userId])
 }

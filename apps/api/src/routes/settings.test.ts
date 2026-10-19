@@ -177,13 +177,13 @@ describe("parseFeedAppearance", () => {
 
 describe.skipIf(!dbAvailable)("settings routes", () => {
   const env: Env = dbAvailable
-    ? { ...loadEnv(), ADMIN_WALLET_ADDRESSES: ADMIN_WALLET }
+    ? { ...loadEnv(), ADMIN_WALLET_ADDRESSES: ADMIN_WALLET, WEB_PUSH_PUBLIC_KEY: "BPublicKeyForTests" }
     : (undefined as never);
   let app: FastifyInstance;
   const cookies: Record<"user" | "admin", string> = { user: "", admin: "" };
   const userIds: string[] = [];
 
-  const call = (who: "user" | "admin", method: "GET" | "PUT", url: string, payload?: unknown) =>
+  const call = (who: "user" | "admin", method: "GET" | "PUT" | "POST", url: string, payload?: unknown) =>
     app.inject({ method, url, payload: payload as never, cookies: { [SESSION_COOKIE_NAME]: cookies[who] } });
 
   beforeAll(async () => {
@@ -361,5 +361,37 @@ describe.skipIf(!dbAvailable)("settings routes", () => {
     ]);
     const after = (await call("admin", "GET", "/curated/models?days=30")).json() as Board;
     expect(after).toMatchObject({ selectedModels: ["rules", "trees"], followBest: false });
+  });
+
+  it("adds this browser as a push target, keeps its cursor on re-send, and removes it", async () => {
+    expect((await call("user", "GET", "/settings")).json().push).toEqual({ publicKey: "BPublicKeyForTests" });
+    const sub = {
+      endpoint: "https://fcm.googleapis.com/fcm/send/settings-test",
+      keys: { p256dh: "B".repeat(87), auth: "a".repeat(22) },
+    };
+    expect((await call("user", "PUT", "/settings/push", sub)).statusCode).toBe(200);
+    const row = await prisma.webPushSubscription.findUniqueOrThrow({ where: { endpoint: sub.endpoint } });
+    expect((await call("user", "PUT", "/settings/push", sub)).statusCode).toBe(200);
+    const again = await prisma.webPushSubscription.findUniqueOrThrow({ where: { endpoint: sub.endpoint } });
+    expect(again.sentThrough).toEqual(row.sentThrough);
+
+    // Another account taking the same browser moves it, with a fresh cursor.
+    expect((await call("admin", "PUT", "/settings/push", sub)).statusCode).toBe(200);
+    const moved = await prisma.webPushSubscription.findUniqueOrThrow({ where: { endpoint: sub.endpoint } });
+    expect(moved.userId).not.toBe(row.userId);
+
+    // Only its own account can remove it.
+    await call("user", "POST", "/settings/push/remove", { endpoint: sub.endpoint });
+    expect(await prisma.webPushSubscription.count({ where: { endpoint: sub.endpoint } })).toBe(1);
+    await call("admin", "POST", "/settings/push/remove", { endpoint: sub.endpoint });
+    expect(await prisma.webPushSubscription.count({ where: { endpoint: sub.endpoint } })).toBe(0);
+  });
+
+  it("refuses an endpoint that isn't a public https push service", async () => {
+    const res = await call("user", "PUT", "/settings/push", {
+      endpoint: "https://169.254.169.254/latest/meta-data",
+      keys: { p256dh: "B".repeat(87), auth: "a".repeat(22) },
+    });
+    expect(res.statusCode).toBe(400);
   });
 });

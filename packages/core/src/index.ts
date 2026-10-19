@@ -116,6 +116,7 @@ export * from "./backup/tableBackup.js";
 export * from "./backup/dbDumps.js";
 export * from "./storage/s3.js";
 export * from "./telegram/index.js";
+export * from "./webPush/index.js";
 export * from "./wallets/linkedWallets.js";
 export * from "./wallets/kolOverrides.js";
 export * from "./wallets/sideWalletRules.js";
