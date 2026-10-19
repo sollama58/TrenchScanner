@@ -12,7 +12,7 @@ import {
   type WalletBalance,
 } from "@trenchscanner/core";
 import { proStatus } from "../proMode.js";
-import { SolPrice } from "../solPrice.js";
+import { sharedSolPrice } from "../solPrice.js";
 import { tokenView, type UtilityTokenView } from "./utilities.js";
 
 /**
@@ -76,7 +76,7 @@ export async function registerPortfolioRoutes(app: FastifyInstance, opts: { env:
     apiKey: env.HELIUS_API_KEY || undefined,
     backupUrl: env.TRADING_BACKUP_RPC_URL || undefined,
   });
-  const solPrice = new SolPrice();
+  const solPrice = sharedSolPrice;
   const readings = new Map<string, Reading>();
   const reading = new Map<string, Promise<Reading>>();
 
@@ -235,6 +235,7 @@ export async function registerPortfolioRoutes(app: FastifyInstance, opts: { env:
         followedModels: followed,
       },
       solUsd: sol ?? null,
+      solUsdAt: sol ? solPrice.readAt() : null,
     };
   });
 

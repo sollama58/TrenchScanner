@@ -12,7 +12,7 @@ import {
 } from "../components/Icons";
 import { Skeleton } from "../components/Charts";
 import { useNow } from "../hooks";
-import { ago, shortAddress } from "../format";
+import { ago, pricedAgeText, shortAddress } from "../format";
 import { decimalText, decimalUnits } from "../decimal";
 import { DecimalInput } from "../components/DecimalInput";
 
@@ -84,6 +84,7 @@ interface Position {
   tokensBought: string | null;
   lastMultiple: number | null;
   highMultiple: number | null;
+  lastPricedAt: string | null;
   rungsTaken: number;
   openedAt: string | null;
   closedAt: string | null;
@@ -1253,6 +1254,9 @@ function PositionsPanel({ state, reload }: { state: TradingState; reload: () => 
                     <td className="num">{sol(p.entryLamports)}</td>
                     <td className="num">
                       {p.lastMultiple !== null && p.status === "open" ? `${p.lastMultiple.toFixed(2)}x` : "–"}
+                      {p.status === "open" && pricedAgeText(p.lastPricedAt, now) && (
+                        <div className="faint small">{pricedAgeText(p.lastPricedAt, now)}</div>
+                      )}
                       {p.rungsTaken > 0 && p.status === "open" && (
                         <div className="faint small">{p.rungsTaken} sold</div>
                       )}
@@ -1426,6 +1430,8 @@ interface PaperPosition {
   proceedsLamports: string;
   rungsTaken: number;
   lastMultiple: number | null;
+  /** When lastMultiple was read. Absent from older API builds. */
+  lastPricedAt?: string | null;
   peakMultiple: number | null;
   openedAt: string;
   closedAt: string | null;
@@ -1880,6 +1886,11 @@ function PaperStrategyCard({
                         {p.status === "open" && p.lastMultiple !== null
                           ? `${p.lastMultiple.toFixed(2)}x`
                           : "–"}
+                        {p.status === "open" &&
+                          p.lastPricedAt !== undefined &&
+                          pricedAgeText(p.lastPricedAt, now) && (
+                            <div className="faint small">{pricedAgeText(p.lastPricedAt, now)}</div>
+                          )}
                         {p.peakMultiple !== null && (
                           <div className="faint small">peak {p.peakMultiple.toFixed(2)}x</div>
                         )}

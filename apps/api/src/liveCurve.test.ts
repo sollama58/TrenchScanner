@@ -369,9 +369,12 @@ describe("SolPrice", () => {
     );
     expect(await price.get()).toBe(100);
     expect(price.source()).toBe("coinbase");
+    expect(price.readAt()).toBe(new Date(0).toISOString());
     now = 120_000;
     expect(await price.get()).toBe(100);
     await new Promise((r) => setTimeout(r, 0));
+    // Every source failed: the kept price still says when it was read.
+    expect(price.readAt()).toBe(new Date(0).toISOString());
     jupiterUp = true;
     now = 125_000;
     // Still inside the retry wait after the failure.
@@ -381,6 +384,7 @@ describe("SolPrice", () => {
     expect(await price.get()).toBe(100);
     await new Promise((r) => setTimeout(r, 0));
     expect(await price.get()).toBe(101);
+    expect(price.readAt()).toBe(new Date(131_000).toISOString());
   });
 });
 

@@ -455,6 +455,8 @@ export interface PositionResponse {
   balance: string;
   supply: string | null;
   solUsd: number | null;
+  /** When solUsd was read (ISO): the SOL price is kept through failed reads. Absent from older API builds. */
+  solUsdAt?: string | null;
   trades: {
     signature: string;
     t: number;
@@ -468,14 +470,19 @@ export interface PositionResponse {
 
 const POSITION_POLL_MS = 15_000;
 
-/** The Pro wallet's position in `mint`, polled while `mint` is set (null: not Pro, or no modal). */
+/**
+ * The Pro wallet's position in `mint`, polled while `mint` is set (null: not Pro, or no modal). A
+ * failed read keeps the last position, with `error` set and `at` saying when it was read.
+ */
 export function usePosition(mint: string | null): {
   data: PositionResponse | null;
   error: Error | null;
+  at: number | null;
   reload: () => void;
 } {
   const [data, setData] = useState<PositionResponse | null>(null);
   const [error, setError] = useState<Error | null>(null);
+  const [at, setAt] = useState<number | null>(null);
   const seq = useRef(0);
   const load = useCallback(() => {
     if (!mint) return;
@@ -484,6 +491,7 @@ export function usePosition(mint: string | null): {
       .then((d) => {
         if (mine !== seq.current) return;
         setData(d);
+        setAt(Date.now());
         setError(null);
       })
       .catch((e: unknown) => {
@@ -494,6 +502,7 @@ export function usePosition(mint: string | null): {
   useEffect(() => {
     setData(null);
     setError(null);
+    setAt(null);
     if (!mint) return;
     load();
     const timer = setInterval(() => {
@@ -504,7 +513,7 @@ export function usePosition(mint: string | null): {
       seq.current++;
     };
   }, [mint, load]);
-  return { data, error, reload: load };
+  return { data, error, at, reload: load };
 }
 
 /** What the position adds up to, in SOL and the coin's market cap terms. */

@@ -62,24 +62,36 @@ export function WalletHoldings({ funds, asdfNote }: { funds: WalletBalance; asdf
             value: "–",
             note: `not in the top ${holder.of}${holder.stale ? `, as of ${ago(holder.scannedAt)}` : ""}`,
           };
+  // A refresh that failed keeps the last balances, dimmed, with when they were read.
+  const old = !!error && !!balance;
   return (
-    <div className="sub-coins">
-      <Coin
-        name="SOL"
-        value={balance ? (balance.solLamports != null ? solText(balance.solLamports) : "–") : null}
-        note={balance && balance.solLamports == null ? "couldn't read it" : null}
-      />
-      <Coin
-        name="$ASDFASDFA"
-        value={balance ? formatTokens(BigInt(balance.totalRaw), balance.decimals) : null}
-        note={asdfNote}
-      />
-      <Coin
-        name="Top holder rank"
-        value={rank.value}
-        note={rank.note}
-        tone={holder?.rank != null ? "good" : undefined}
-      />
-    </div>
+    <>
+      <div className={`sub-coins${old ? " stale" : ""}`}>
+        <Coin
+          name="SOL"
+          value={balance ? (balance.solLamports != null ? solText(balance.solLamports) : "–") : null}
+          note={balance && balance.solLamports == null ? "couldn't read it" : null}
+        />
+        <Coin
+          name="$ASDFASDFA"
+          value={balance ? formatTokens(BigInt(balance.totalRaw), balance.decimals) : null}
+          note={asdfNote}
+        />
+        <Coin
+          name="Top holder rank"
+          value={rank.value}
+          note={rank.note}
+          tone={holder?.rank != null ? "good" : undefined}
+        />
+      </div>
+      {old && (
+        <p className="faint small">
+          Couldn&apos;t refresh, showing balances read {funds.at ? ago(new Date(funds.at)) : "earlier"}.{" "}
+          <button type="button" className="link" onClick={funds.reload}>
+            Try again
+          </button>
+        </p>
+      )}
+    </>
   );
 }

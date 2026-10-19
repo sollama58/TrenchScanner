@@ -17,7 +17,7 @@ import {
   type Position,
   type TradeStats,
 } from "../proTrades.js";
-import { SolPrice } from "../solPrice.js";
+import { sharedSolPrice } from "../solPrice.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import {
   keepReading,
@@ -96,7 +96,7 @@ export async function registerProTradesRoutes(
     apiKey: env.HELIUS_API_KEY || undefined,
     backupUrl: env.TRADING_BACKUP_RPC_URL || undefined,
   });
-  const solPrice = new SolPrice();
+  const solPrice = sharedSolPrice;
   const canRead = !!(env.HELIUS_API_KEY || env.SOLANA_RPC_URL);
 
   /** The coin's scan, once per entry: a Utilities lookup without the credit. */
@@ -235,7 +235,7 @@ export async function registerProTradesRoutes(
       (mint, at) => built.callBefore(mint, at) !== null,
       STATS_HOURS,
     );
-    return { coins: built.coins, stats, solUsd: built.sol, following: true };
+    return { coins: built.coins, stats, solUsd: built.sol, solUsdAt: built.solAt, following: true };
   }
 
   /**
@@ -278,6 +278,7 @@ export async function registerProTradesRoutes(
       closedTotal: listed.filter((p) => p.closed).length,
       days: PORTFOLIO_DAYS,
       solUsd: built.sol,
+      solUsdAt: built.solAt,
     };
   }
 
@@ -390,7 +391,14 @@ export async function registerProTradesRoutes(
         scan: view ? view.scan : "none",
       };
     });
-    return { coins, tokenByMint, priceSol, callBefore, sol: sol ?? null };
+    return {
+      coins,
+      tokenByMint,
+      priceSol,
+      callBefore,
+      sol: sol ?? null,
+      solAt: sol ? solPrice.readAt() : null,
+    };
   }
 }
 

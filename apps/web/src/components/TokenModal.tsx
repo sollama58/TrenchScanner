@@ -1910,6 +1910,7 @@ export function ChartCard({
       // Whether the view runs to the latest reading (Model View's window can end before it).
       live: bounds.live,
       latest: source[source.length - 1]!.v,
+      latestAt: source[source.length - 1]!.t,
       // The scans the model read before calling it, drawn as dots in Model View.
       scans:
         shownRange === "model"
@@ -1946,6 +1947,8 @@ export function ChartCard({
   );
 
   const latestMcap = view?.live ? view.latest : (data?.marketCap.at(-1)?.usd ?? null);
+  // When that market cap was read: the share card stamps this, not the moment it is drawn.
+  const latestMcapAt = view?.live ? view.latestAt : (data?.marketCap.at(-1)?.t ?? null);
   const summary = useMemo(
     () => (pro && position.data ? summarizePosition(position.data, latestMcap) : null),
     [pro, position.data, latestMcap],
@@ -1972,8 +1975,10 @@ export function ChartCard({
         symbol={card.token.symbol ?? "tokens"}
         name={card.token.name ?? null}
         position={position.data}
+        positionStaleAt={position.error && position.data ? position.at : null}
         summary={summary}
         nowMcap={latestMcap}
+        nowMcapAt={latestMcapAt}
         onTraded={position.reload}
         closeOnly={closeOnly}
         graceEndsAt={graceEndsAt}

@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { cleanTrackedName, mergeSides, TRACKED_NAME_MAX, withTrackedNames } from "./trackedWallets.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { prisma } from "@trenchscanner/core";
+import type { Env } from "@trenchscanner/core";
+import {
+  activeTracked,
+  cleanTrackedName,
+  mergeSides,
+  resetTrackedCache,
+  TRACKED_NAME_MAX,
+  withTrackedNames,
+} from "./trackedWallets.js";
 
 describe("cleanTrackedName", () => {
   it("drops control and zero-width characters, folds spaces and holds the length", () => {
@@ -36,5 +45,27 @@ describe("mergeSides", () => {
       ["K", "My KOL", "kol"],
       ["T", "Roster", "tracked"],
     ]);
+  });
+});
+
+describe("activeTracked", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetTrackedCache();
+  });
+
+  it("reads a failed lookup as no labels without keeping it, so the next read asks again", async () => {
+    const env = { PRO_TRADING_ENABLED: true } as Env;
+    const user = { userId: "u1", walletAddress: "W" };
+    const find = vi
+      .spyOn(prisma.userTrackedWallet, "findMany")
+      .mockRejectedValueOnce(new Error("db down"))
+      .mockResolvedValueOnce([]);
+    expect(await activeTracked(env, user, 1_000)).toEqual([]);
+    expect(await activeTracked(env, user, 2_000)).toEqual([]);
+    expect(find).toHaveBeenCalledTimes(2);
+    // A good answer is kept for the minute.
+    expect(await activeTracked(env, user, 3_000)).toEqual([]);
+    expect(find).toHaveBeenCalledTimes(2);
   });
 });

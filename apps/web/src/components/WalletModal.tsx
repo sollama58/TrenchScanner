@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, lookupRequired } from "../api";
 import { cachedGet } from "../cache";
 import { MIN_WIN_SOL, ago, shortAddress, signedPct, usd } from "../format";
+import { useNow } from "../hooks";
 import { closeWallet, openWallet, WALLET_LINKS, walletLink, xSearchLink } from "../walletModal";
 import { useWalletNames, type WalletNames } from "../walletNames";
 import { WalletText } from "./WalletText";
@@ -389,6 +390,10 @@ function Profile({ p }: { p: WalletProfile }) {
   );
   // The reader's own label shows in its editor (TrackedWalletEditor), kept up to date as it changes.
   const labels = p.labels.filter((l) => l.source !== "Your label");
+  // The balance is a chain read reused for minutes, and the profile can come from the page's cache:
+  // the line under the stats says when it was read once that isn't "just now".
+  const now = useNow();
+  const balanceAge = p.live ? ago(p.live.readAt, now) : null;
   return (
     <>
       {p.kol && <Kol kol={p.kol} />}
@@ -407,7 +412,7 @@ function Profile({ p }: { p: WalletProfile }) {
         </ul>
       )}
       <dl className="bm-stats">
-        <div>
+        <div title={p.live ? `Read ${new Date(p.live.readAt).toLocaleString()}` : undefined}>
           <dt>Balance</dt>
           <dd className="num">{p.live ? sol(p.live.balanceSol) : "–"}</dd>
         </div>
@@ -436,11 +441,17 @@ function Profile({ p }: { p: WalletProfile }) {
           : p.live
             ? "No transactions"
             : "Live chain read unavailable"}
+        {balanceAge && balanceAge !== "just now" && ` · balance read ${balanceAge}`}
         {p.otherHoldingsUsd !== null && (
           <>
             {" · "}
-            <span title="Tokens other than SOL and stablecoins, at the last holdings check (a floor: unpriced tokens count as 0)">
+            <span
+              title={`Tokens other than SOL and stablecoins, at the last holdings check${
+                p.otherHoldingsAt ? ` (${new Date(p.otherHoldingsAt).toLocaleString()})` : ""
+              } (a floor: unpriced tokens count as 0)`}
+            >
               {usd(p.otherHoldingsUsd)} in other tokens
+              {p.otherHoldingsAt && `, checked ${ago(p.otherHoldingsAt, now)}`}
             </span>
           </>
         )}

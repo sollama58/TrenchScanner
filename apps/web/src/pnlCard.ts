@@ -18,6 +18,8 @@ export const PNL_CARD_HEIGHT = 675;
 
 const FONT = '"Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif';
 const MONO = '"JetBrains Mono Variable", "JetBrains Mono", ui-monospace, Menlo, monospace';
+/** A market cap read within this long is labelled "now" on the position card. */
+const MCAP_CURRENT_MS = 2 * 60_000;
 const UP = "#34d399";
 const DOWN = "#f87171";
 
@@ -207,6 +209,8 @@ export interface PositionCardData {
   solBack: number;
   entryMcap: number | null;
   nowMcap: number | null;
+  /** When nowMcap was read (ms); the card's time. Null or absent: drawn now. */
+  nowMcapAt?: number | null;
   /** Show the SOL and dollar amounts, or only the percentages. */
   showAmounts: boolean;
 }
@@ -282,10 +286,14 @@ export async function renderPositionCard(data: PositionCardData): Promise<HTMLCa
     ctx.fillText(money, pad, 318 + size * 0.86 + 58);
   }
 
-  // The figures, a column of tiles on the right.
+  // The figures, a column of tiles on the right. A market cap read a while back (a delayed chart,
+  // a coin no longer scanned) isn't "now": the footer gives the time it was read.
+  const drawnAt = Date.now();
+  const mcapAt = data.nowMcapAt ?? drawnAt;
+  const mcapIsCurrent = drawnAt - mcapAt < MCAP_CURRENT_MS;
   const rows: [string, string][] = [
     ["Entry mcap", usd(data.entryMcap)],
-    ["Mcap now", usd(data.nowMcap)],
+    [mcapIsCurrent ? "Mcap now" : "Last mcap", usd(data.nowMcap)],
   ];
   if (data.showAmounts)
     rows.push(
@@ -318,8 +326,8 @@ export async function renderPositionCard(data: PositionCardData): Promise<HTMLCa
     y += tileH + gap;
   }
 
-  // Footer: when, the coin's mint (never the wallet), where.
-  const when = new Date().toLocaleString(undefined, {
+  // Footer: when (the market cap's time), the coin's mint (never the wallet), where.
+  const when = new Date(mcapAt).toLocaleString(undefined, {
     month: "short",
     day: "numeric",
     hour: "numeric",
