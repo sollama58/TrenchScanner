@@ -1744,6 +1744,8 @@ export interface FeedAppearance {
   bubbleSideLinks: boolean;
   /** Bubble maps open with arrows between holders that sent the coin to each other; on by default (absent from older API builds: on). */
   bubbleTransferLinks: boolean;
+  /** How often an open bubble map redraws, in seconds (appearance.ts BUBBLE_REFRESH_CHOICES); 5 by default. */
+  bubbleRefreshSeconds: number;
   /** Bubble maps and wallet webs show Pump.fun, FOMO and Helius names; off by default (absent from older API builds: off). */
   bubbleNameLabels: boolean;
   /** Each kind's own choice, overriding bubbleNameLabels; null follows it. Any set hides the one switch. */
