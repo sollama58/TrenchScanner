@@ -86,19 +86,28 @@ export function cardGraduated(card: Card, gradTokens: ReadonlySet<string>): bool
  * graduated tokens. A filter alert a model call folded into is in both: it is your alert and the
  * model's call. An alert whose coin has graduated moves to the Graduated column (user ask
  * 2026-10-18), in its coin's place there or by its alert time, keeping its filter or model marker;
- * `keepGraduated` leaves it in its own column too.
+ * `keepGraduated` leaves it in its own column too. `soon` is the Stream's own list of tokens about
+ * to graduate (GET /launches?soon=1), from the whole day rather than only the newest pages.
  */
 export function splitScope(
   feed: readonly Card[],
   graduated: readonly Card[],
   keepGraduated: { filters: boolean; models: boolean } = { filters: false, models: false },
   stream: readonly Card[] = [],
+  soon: readonly Card[] = [],
 ): ScopeColumns {
   const out = emptyColumns();
   const gradTokens = new Set(graduated.map((c) => c.tokenId));
   // The Stream's tokens still on their curve: About to graduate from SOON_MCAP_USD up, closest
   // first, the rest in New as the Stream has them, newest first.
   const seen = new Set<string>();
+  // Still at the mark by the live reading: one that has dropped under it since isn't new, so it
+  // goes nowhere unless the newest pages have it too.
+  for (const card of soon) {
+    if (seen.has(card.tokenId) || cardGraduated(card, gradTokens) || mcapOf(card) < SOON_MCAP_USD) continue;
+    seen.add(card.tokenId);
+    out.soon.push(card);
+  }
   for (const card of stream) {
     if (seen.has(card.tokenId) || cardGraduated(card, gradTokens)) continue;
     seen.add(card.tokenId);

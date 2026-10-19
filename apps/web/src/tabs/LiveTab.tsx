@@ -20,9 +20,8 @@ import { FEED_PAGE_SIZE, fillPage, joinPages, MAX_FILL_PAGES, MAX_READ_PAGES, ne
 import { ago, pct } from "../format";
 import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { CustomizeDrawer } from "../components/CustomizeDrawer";
-import { CaSearchBox, SearchResults } from "../components/CaSearch";
+import { CaSearchButton, SearchModal } from "../components/CaSearch";
 import { ScanStatus } from "../components/ScanStatus";
-import { parseSearch } from "../caSearch";
 import { ScopeBoard } from "../components/ScopeBoard";
 import type { ScopeSettingsSection } from "../components/ScopeSettingsModal";
 import { HiddenTokensDialog } from "../components/HiddenTokensDialog";
@@ -114,11 +113,10 @@ export function LiveTab({
   const closeCustomize = useCallback(() => setCustomizing(false), []);
   const look = useAppearance();
   const hidden = useMemo(() => cardHideSet(look), [look]);
-  // The search (address, ticker or name) is looked up in the API across the whole feed and shown
-  // in the feed's place; the paged feed underneath carries on as it was.
-  const [searchInput, setSearchInput] = useState("");
-  const clearSearch = useCallback(() => setSearchInput(""), []);
-  const searching = parseSearch(searchInput).kind !== "none";
+  // The search (address, ticker or name) opens its own window over the feed (user ask
+  // 2026-10-19), in both views; the feed underneath carries on as it was.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const openSearch = useCallback(() => setSearchOpen(true), []);
   // "saved": the API mixes in model calls per this user's own switch and checked models; with
   // highConviction those calls are every model's high-conviction tier instead.
   const hc = highConviction ? "&highConviction=1" : "";
@@ -158,9 +156,8 @@ export function LiveTab({
   // The live tick covers the page on screen and the hidden cards among it (which can climb back),
   // not every alert read ahead. Which those are depends on the tick itself, so it follows a render.
   const [tickIds, setTickIds] = useState<string[] | undefined>(undefined);
-  // "Now" on each card, seconds old rather than as old as the last feed poll. A search ticks its
-  // own cards (SearchResults), so the feed's tick rests meanwhile.
-  const cards = useLiveMarketCaps(buffer, searching ? [] : tickIds);
+  // "Now" on each card, seconds old rather than as old as the last feed poll.
+  const cards = useLiveMarketCaps(buffer, tickIds);
   // Hidden tokens come off the page like the low market caps below, older alerts moving up. With
   // auto-unhide on, one that graduated or reached a new 2x, 4x or 10x comes back.
   const unhiddenCards = useMemo(
@@ -264,6 +261,7 @@ export function LiveTab({
       <CustomizeDrawer open={customizing} onClose={closeCustomize} />
       <HiddenTokensDialog open={hiddenOpen} onClose={() => setHiddenOpen(false)} now={now} />
       <AboutModal open={aboutOpen} onClose={closeAbout} targets={t} />
+      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} now={now} scope={scope} />
       <section className="panel feed">
         <header className="section-head">
           <div>
@@ -367,41 +365,23 @@ export function LiveTab({
                 High conviction only
               </button>
             )}
-            <CaSearchBox
-              value={searchInput}
-              onChange={setSearchInput}
-              title="Find a token in your feed by its contract address, ticker or name. Press / to jump here."
+            <CaSearchButton
+              onOpen={openSearch}
+              title="Find any token TrenchScanner tracks by its contract address, ticker or name. Press / to open."
             />
             <ScanStatus showJobs={isAdmin} feed={{ live: streamLive, idle: "Polling" }} />
           </div>
         </header>
-        {searching && (
-          <SearchResults<MatchPage>
-            input={searchInput}
-            pathFor={(search, n) => (search ? `${feedPath(n)}&${search}` : feedPath(1))}
-            pollMs={30_000}
-            pollKey=""
-            cardsOf={(d) => d.matches}
-            hasMoreOf={(d) => d.hasMore ?? false}
-            noun="alert"
-            where="your feed"
-            onClear={clearSearch}
-            now={now}
-            hide={hidden}
-            look={look}
-            labelSource
-          />
-        )}
-        {!searching && !scope && feedPage.error && !feedPage.data && (
+        {!scope && feedPage.error && !feedPage.data && (
           <p className="error">Couldn&apos;t load your feed: {feedPage.error.message}</p>
         )}
-        {!searching && !scope && feedPage.error && feedPage.data && (
+        {!scope && feedPage.error && feedPage.data && (
           <p className="muted small center feed-refresh-note" role="status">
             Couldn&apos;t refresh your feed, showing it from{" "}
             {feedPage.at !== null ? ago(new Date(feedPage.at), now) : "earlier"}. Trying again.
           </p>
         )}
-        {!searching && scope && (
+        {scope && (
           <ScopeBoard
             feedPath={feedPath}
             modelsOn={modelsOn}
@@ -409,7 +389,7 @@ export function LiveTab({
             onSettings={setScopeSettings}
           />
         )}
-        {!searching && !scope && (
+        {!scope && (
           <>
             {!feedPage.data && !feedPage.error && <SkeletonCards count={4} />}
             {feedPage.data && feedPage.data.matches.length === 0 && page === 1 && (

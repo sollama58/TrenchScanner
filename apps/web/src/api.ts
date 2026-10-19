@@ -430,6 +430,34 @@ export interface LiveMarket {
   tokens: { id: string; marketCapUsd: number; priceUsd: number | null; at: string; source?: "curve" }[];
 }
 
+/** One tracked token the feed's search window found (GET /tokens/search). */
+export interface TokenSearchHit {
+  mint: string;
+  symbol: string | null;
+  name: string | null;
+  imageUrl: string | null;
+  marketCapUsd: number | null;
+  marketCapAt: string | null;
+  volume24hUsd: number | null;
+  liquidityUsd: number | null;
+  holderCount: number | null;
+  graduated: boolean | null;
+  /** When the coin launched, else when the scanner first saw it. */
+  launchedAt: string;
+  /** This reader's filters' newest alert on it. */
+  yourAlertAt: string | null;
+  modelCalls: number;
+  lastCallAt: string | null;
+  /** The best 1h run, in percent, any model's call on it saw. */
+  bestCallPeakPct: number | null;
+}
+
+export interface TokenSearchAnswer {
+  hits: TokenSearchHit[];
+  /** More tokens held the text than came back: a longer search narrows it. */
+  truncated: boolean;
+}
+
 /** One feed card - a filter match or a curated alert, which the API serializes alike. */
 export interface Card {
   id: string;
