@@ -652,7 +652,7 @@ function startLinkedWalletStage(
   env: Env,
   /** Model-alerted coins: their bubble map reads the top 50 too (readTopHolders). */
   wideMints: ReadonlySet<string> = new Set(),
-  /** Coins whose bubble map is open now (watchedHolderMints): their top holders are re-read faster. */
+  /** Coins whose bubble map is open now (refreshWatchedHolders): their top holders are re-read faster. */
   watched: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   if (env.LINKED_WALLET_LOOKUPS_PER_CYCLE <= 0 || groups.length === 0 || linkedStageInFlight) {
@@ -1387,8 +1387,8 @@ async function scanCycle(
       // for a wallet figure (see resolveAlertTargets): next in line after the contenders, so the
       // reading lands within a cycle or two.
       alerted: alertAwaitingWallets(c.mintAddress),
-      // Someone has its bubble map open: its new holders' funders are read next, so the map's
-      // clusters follow its holders (user ask 2026-10-19).
+      // Someone has its bubble map open: its new holders' funders, fresh and empty checks are read
+      // next, so the map's clusters and the holder list's tags follow its holders (user ask 2026-10-19).
       watched: watchedHolders.has(c.mintAddress),
       churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
     }))
@@ -1413,12 +1413,15 @@ async function scanCycle(
       contender: contender(c),
       // A user-filter match held for its top-10 snipers share (see resolveAlertTargets).
       alerted: alertAwaitingWallets(c.mintAddress),
+      // Its bubble map is open: its holders' sniper tags follow them (user ask 2026-10-19).
+      watched: watchedHolders.has(c.mintAddress),
       churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
     }))
     .sort(
       (a, b) =>
         Number(b.contender) - Number(a.contender) ||
         Number(b.alerted) - Number(a.alerted) ||
+        Number(b.watched) - Number(a.watched) ||
         b.churn - a.churn,
     );
   const sniperStageStartedAt = Date.now();
