@@ -173,15 +173,57 @@ const JUPITER_ROUTE_DISCRIMINATORS = new Map<string, string>([
   ["176,209,105,168,154,125,69,62", "shared_accounts_exact_out_route"],
 ]);
 
-/** A Jupiter route instruction's slippage and platform fee, or null for any other instruction. */
-export function readJupiterRoute(
-  data: Uint8Array,
-): { name: string; slippageBps: number; platformFeeBps: number } | null {
+/**
+ * Jupiter v6's V2 route instructions (the program's on-chain IDL, read 2026-10-19), and where
+ * their arguments start: after the discriminator, and a shared-accounts route's id (u8). Their
+ * fixed arguments come first: amount (u64), quoted amount (u64), slippage_bps (u16),
+ * platform_fee_bps (u16), positive_slippage_bps (u16), then the route plan (a vec).
+ */
+const JUPITER_V2_ROUTES = new Map<string, { name: string; args: number }>([
+  ["187,100,250,204,49,196,175,20", { name: "route_v2", args: 8 }],
+  ["209,152,83,147,124,254,216,233", { name: "shared_accounts_route_v2", args: 9 }],
+  ["157,138,184,82,21,244,243,36", { name: "exact_out_route_v2", args: 8 }],
+  ["53,96,229,202,216,187,250,24", { name: "shared_accounts_exact_out_route_v2", args: 9 }],
+]);
+
+export interface JupiterRoute {
+  name: string;
+  /** The quoted amount: what an exact-in route quotes out, what an exact-out route quotes in. */
+  quoted: bigint;
+  slippageBps: number;
+  platformFeeBps: number;
+  /** V2's share for the platform of any output beyond the quote (V1 has none: 0). */
+  positiveSlippageBps: number;
+}
+
+/** A Jupiter route instruction's quoted amount, slippage and fees, or null for any other instruction. */
+export function readJupiterRoute(data: Uint8Array): JupiterRoute | null {
+  const discriminator = [...data.subarray(0, 8)].join(",");
+  const v2 = JUPITER_V2_ROUTES.get(discriminator);
+  if (v2) {
+    const at = v2.args;
+    // The fixed arguments and the route plan's length, at least.
+    if (data.length < at + 22 + 4) return null;
+    const u16 = (i: number) => data[i]! | (data[i + 1]! << 8);
+    return {
+      name: v2.name,
+      quoted: u64(data, at + 8),
+      slippageBps: u16(at + 16),
+      platformFeeBps: u16(at + 18),
+      positiveSlippageBps: u16(at + 20),
+    };
+  }
   if (data.length < 8 + 11) return null;
-  const name = JUPITER_ROUTE_DISCRIMINATORS.get([...data.subarray(0, 8)].join(","));
+  const name = JUPITER_ROUTE_DISCRIMINATORS.get(discriminator);
   if (!name) return null;
   const n = data.length;
-  return { name, slippageBps: data[n - 3]! | (data[n - 2]! << 8), platformFeeBps: data[n - 1]! };
+  return {
+    name,
+    quoted: u64(data, n - 11),
+    slippageBps: data[n - 3]! | (data[n - 2]! << 8),
+    platformFeeBps: data[n - 1]!,
+    positiveSlippageBps: 0,
+  };
 }
 
 /** The most SOL a sale may take from the wallet beyond its priority fee: base fees and rent. */
@@ -254,6 +296,10 @@ export function checkInstructions(
         if (route.platformFeeBps !== 0)
           throw new GuardRefusal(
             `instruction ${n}: Jupiter ${route.name} takes a ${route.platformFeeBps}bps platform fee`,
+          );
+        if (route.positiveSlippageBps !== 0)
+          throw new GuardRefusal(
+            `instruction ${n}: Jupiter ${route.name} takes ${route.positiveSlippageBps}bps of any positive slippage`,
           );
         if (limits.maxSlippageBps !== undefined && route.slippageBps > limits.maxSlippageBps)
           throw new GuardRefusal(

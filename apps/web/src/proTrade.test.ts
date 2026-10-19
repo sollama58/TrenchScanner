@@ -483,6 +483,89 @@ describe("tradeProblem", () => {
     // A "buy 0.001 SOL" that spends 1,000,000 raw units of the wallet's other token instead.
     expect(tradeProblem(tx([tip, route(otherAccount)]), owner, jup)).toMatch(/spend from an account/);
   });
+  it.each([false, true])("checks Jupiter's V2 route the same way (shared accounts: %s)", (shared) => {
+    // route_v2: authority, source, destination; shared_accounts_route_v2: program authority,
+    // authority, source, program source, program destination, destination. Their arguments lead:
+    // [id,] in_amount, quoted_out, slippage, platform fee, positive slippage (u16 each), route plan.
+    const route = (
+      o: {
+        source?: string;
+        dest?: string;
+        amount?: bigint;
+        slippage?: number;
+        fee?: number;
+        positive?: number;
+      } = {},
+    ) => {
+      const [source, dest] = [k(o.source ?? own[0]!), k(o.dest ?? usdcAccount)];
+      const u16 = (n: number) => [n & 255, n >> 8];
+      return {
+        program: JUP,
+        accounts: shared
+          ? [k(STRANGER), k(owner), source, k(STRANGER), k(STRANGER), dest]
+          : [k(owner), source, dest],
+        data: [
+          ...(shared ? [209, 152, 83, 147, 124, 254, 216, 233, 0] : [187, 100, 250, 204, 49, 196, 175, 20]),
+          ...u64(o.amount ?? 1_000_000n),
+          ...u64(5n),
+          ...u16(o.slippage ?? 100),
+          ...u16(o.fee ?? 0),
+          ...u16(o.positive ?? 0),
+          ...[1, 0, 0, 0, 17, 1, 16, 39, 0, 1], // one Whirlpool step
+        ],
+      };
+    };
+    const jup: TradeCheck = { ...asked, amount: 1_000_000n };
+    const check = (r: ReturnType<typeof route>) =>
+      tradeProblem(tx([transfer(own[0]!, 1_000_000n), tip, r]), owner, jup);
+    expect(check(route())).toBeNull();
+    expect(check(route({ slippage: 5_000 }))).toBeNull();
+    expect(check(route({ slippage: 5_001 }))).toMatch(/slippage/);
+    expect(check(route({ fee: 300 }))).toMatch(/platform fee/);
+    expect(check(route({ fee: 256 }))).toMatch(/platform fee/);
+    expect(check(route({ positive: 50 }))).toMatch(/better price/);
+    expect(check(route({ amount: 100_000_000_000n }))).toMatch(/amount/);
+    expect(check(route({ dest: otherAccount }))).toMatch(/land in your wallet/);
+    expect(check(route({ source: otherAccount }))).toMatch(/spend from an account/);
+    const short = route();
+    short.data = short.data.slice(0, shared ? 34 : 33);
+    expect(check(short)).toMatch(/Jupiter step/);
+  });
+  it("reads a V2 route's amount and quote on a buy through a curve's quote coin", () => {
+    // route_v2 of 0.001 SOL into the quote coin (here the wallet's USDC account), quoting 5,000
+    // at 1% slippage: the curve may spend 4,950 of it, its coin landing in `otherAccount`.
+    const routeV2 = (amount: bigint) => ({
+      program: JUP,
+      accounts: [k(owner), k(own[0]!), k(usdcAccount)],
+      data: [
+        ...[187, 100, 250, 204, 49, 196, 175, 20],
+        ...u64(amount),
+        ...u64(5_000n),
+        ...[100, 0, 0, 0, 0, 0],
+        ...[1, 0, 0, 0, 17, 1, 16, 39, 0, 1],
+      ],
+    });
+    const curveBuy = (spend: bigint) => ({
+      program: PUMP,
+      accounts: [...new Array<number>(9).fill(k(STRANGER)), k(otherAccount), k(usdcAccount)],
+      data: [225, 247, 80, 30, 213, 179, 132, 136, ...u64(spend), ...u64(1n), 0],
+    });
+    const viaCheck: TradeCheck = {
+      ...asked,
+      amount: 1_000_000n,
+      ownCoinAccounts: [otherAccount],
+      ownViaAccounts: [usdcAccount],
+    };
+    const build = (amount: bigint, spend: bigint) =>
+      tradeProblem(
+        tx([transfer(own[0]!, 1_000_000n), tip, routeV2(amount), curveBuy(spend)]),
+        owner,
+        viaCheck,
+      );
+    expect(build(1_000_000n, 4_950n)).toBeNull();
+    expect(build(1_000_000n, 4_951n)).toMatch(/already held/);
+    expect(build(2_000_000n, 4_950n)).toMatch(/amount/);
+  });
   it("refuses a Pump.fun build that isn't the trade asked for", () => {
     expect(tradeProblem(tx([tip, pumpBuy(100_000_000_000n, 1n)]), owner, hand)).toMatch(/amount/);
     expect(tradeProblem(tx([tip, pumpBuy(1_000_000n, 0n)]), owner, hand)).toMatch(/minimum/);

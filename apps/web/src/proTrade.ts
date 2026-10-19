@@ -963,15 +963,20 @@ const JUPITER = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
 const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 /**
  * Jupiter's exact-in routes the API builds, and where each keeps the account the output lands in.
- * Their arguments end in in_amount (u64), quoted_out (u64), slippage_bps (u16), platform_fee_bps (u8).
+ * V1's arguments end in in_amount (u64), quoted_out (u64), slippage_bps (u16), platform_fee_bps (u8).
+ * V2's (Jupiter's on-chain IDL) start at `args`, after the discriminator and a shared route's id:
+ * in_amount (u64), quoted_out (u64), slippage_bps (u16), platform_fee_bps (u16),
+ * positive_slippage_bps (u16), then the route plan.
  */
-const JUPITER_ROUTES = new Map([
+const JUPITER_ROUTES = new Map<string, { source: number; dest: number; ledger: boolean; args?: number }>([
   ["229,23,203,151,122,227,173,42", { source: 2, dest: 3, ledger: false }], // route: user_source/destination_token_account
   ["193,32,155,51,65,214,156,129", { source: 3, dest: 6, ledger: false }], // shared_accounts_route: source/destination_token_account
   // The same swapping what a token ledger measured, for a curve sale's quote coin: no in_amount,
   // their arguments end in quoted_out, slippage_bps, platform_fee_bps.
   ["150,86,71,116,167,93,14,104", { source: 2, dest: 3, ledger: true }], // route_with_token_ledger
   ["230,121,143,80,119,159,106,170", { source: 3, dest: 6, ledger: true }], // shared_accounts_route_with_token_ledger
+  ["187,100,250,204,49,196,175,20", { source: 1, dest: 2, ledger: false, args: 8 }], // route_v2: user_source/destination_token_account
+  ["209,152,83,147,124,254,216,233", { source: 2, dest: 5, ledger: false, args: 9 }], // shared_accounts_route_v2: source/destination_token_account
 ]);
 /** Jupiter's set_token_ledger: [token_ledger, token_account]. */
 const JUPITER_SET_LEDGER = "228,85,185,112,78,79,77,2";
@@ -1127,10 +1132,19 @@ export function tradeProblem(tx: Uint8Array, owner: string, trade: TradeCheck): 
           continue;
         }
         const at = JUPITER_ROUTES.get(discriminator);
-        if (at === undefined || d.length < 8 + 19) return "it has a Jupiter step this trade doesn't need";
+        // Where its in_amount, slippage and fee sit: V2's fixed arguments come before the route plan.
+        const v2 = at?.args;
+        if (at === undefined || d.length < (v2 === undefined ? 8 + 19 : v2 + 22 + 4))
+          return "it has a Jupiter step this trade doesn't need";
         swaps++;
-        if (d[d.length - 1] !== 0) return "Jupiter would take a platform fee";
-        const slippage = view.getUint16(d.length - 3, true);
+        // V1's in_amount, quoted_out, slippage and fee sit at the end; V2's from `args`.
+        const inAt = v2 ?? d.length - 19;
+        const quotedAt = v2 === undefined ? d.length - 11 : v2 + 8;
+        const fee = v2 === undefined ? d[d.length - 1] : view.getUint16(v2 + 18, true);
+        if (fee !== 0) return "Jupiter would take a platform fee";
+        if (v2 !== undefined && view.getUint16(v2 + 20, true) !== 0)
+          return "Jupiter would take a share of a better price";
+        const slippage = view.getUint16(v2 === undefined ? d.length - 3 : v2 + 16, true);
         if (slippage > trade.slippageBps) return "it allows more slippage than you set";
         if (via) {
           // Buy: the SOL asked into the quote coin. Sale: what the curve paid, back to SOL.
@@ -1142,14 +1156,14 @@ export function tradeProblem(tx: Uint8Array, owner: string, trade: TradeCheck): 
             return "it would spend from an account other than the one this trade uses";
           if (!to.includes(acct(at.dest))) return "what it buys wouldn't land in your wallet";
           if (trade.side === "buy") {
-            const inAmount = u64At(d.length - 19);
+            const inAmount = u64At(inAt);
             if (inAmount !== trade.amount) return "its amount isn't the one you asked for";
-            jupiterFloor = (u64At(d.length - 11) * BigInt(10_000 - slippage)) / 10_000n;
+            jupiterFloor = (u64At(quotedAt) * BigInt(10_000 - slippage)) / 10_000n;
           }
           continue;
         }
         if (at.ledger) return "it has a Jupiter step this trade doesn't need";
-        const inAmount = u64At(d.length - 19);
+        const inAmount = u64At(inAt);
         if (trade.all ? inAmount <= 0n : inAmount !== trade.amount)
           return "its amount isn't the one you asked for";
         const dest = acct(at.dest);
