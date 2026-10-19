@@ -349,9 +349,12 @@ async function deleteExpiredSnapshots(
   // (earliest on a tie), so peak recovery still finds every peak, plus any row a Match or curated
   // alert points at, and the token's newest row carrying a holder list (holderListWrites.ts: rows
   // after it read the list from it, so the token view of a coin past this horizon keeps its holders).
-  // Rerunning it deletes nothing new - each bucket's keeper wins again.
-  const downsampleSql = `DELETE FROM "TokenSnapshot" WHERE "id" IN (
-      SELECT r."id" FROM (
+  // Rerunning it deletes nothing new - each bucket's keeper wins again. So the rows to go are
+  // read once per group of tokens and deleted in slices: deleting some never changes which of
+  // the rest go (a bucket's peak, a referenced row and the newest list row are never among them).
+  // Re-reading them per 5,000-row delete ranked the whole group again each time - 211 s of the
+  // weekly walk's 262 s (performance audits 2026-10-17 #5, 2026-10-19 F6).
+  const downsampleIdsSql = `SELECT r."id" FROM (
         SELECT s."id", s."tokenId", s."takenAt", s."linkedHolders" IS NOT NULL AS "hasList", row_number() OVER (
                  PARTITION BY s."tokenId", floor(extract(epoch FROM s."takenAt") / $4)
                  ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC) AS rn
@@ -363,8 +366,12 @@ async function deleteExpiredSnapshots(
          AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" a WHERE a."snapshotId" = r."id")
          AND NOT (r."hasList" AND NOT EXISTS (
                SELECT 1 FROM "TokenSnapshot" n
-                WHERE n."tokenId" = r."tokenId" AND n."takenAt" > r."takenAt" AND n."linkedHolders" IS NOT NULL))
-       LIMIT $5)`;
+                WHERE n."tokenId" = r."tokenId" AND n."takenAt" > r."takenAt" AND n."linkedHolders" IS NOT NULL))`;
+  // The reference checks again, for a Match or curated alert written since the read.
+  const downsampleSql = `DELETE FROM "TokenSnapshot" s
+       WHERE s."id" = ANY($1::text[])
+         AND NOT EXISTS (SELECT 1 FROM "Match" m WHERE m."snapshotId" = s."id")
+         AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" a WHERE a."snapshotId" = s."id")`;
   // Walk every token old enough to own a row on any horizon.
   const walkCutoff = [untrackedCutoff, downsample?.cutoff].reduce<Date>(
     (latest, d) => (d && d > latest ? d : latest),
@@ -431,18 +438,21 @@ async function deleteExpiredSnapshots(
       // Untracked tokens' rows are already down to their short horizon; thinning them is wasted work.
       const skip = new Set(untrackedIds);
       const trackedIds = ids.filter((id) => !skip.has(id));
-      while (trackedIds.length > 0) {
-        const n = await prisma.$executeRawUnsafe(
-          downsampleSql,
-          trackedIds,
-          downsample.cutoff,
-          downsample.since,
-          downsample.bucketSeconds,
-          opts.rowsPerBatch,
-        );
+      const doomed =
+        trackedIds.length > 0
+          ? await prisma.$queryRawUnsafe<{ id: string }[]>(
+              downsampleIdsSql,
+              trackedIds,
+              downsample.cutoff,
+              downsample.since,
+              downsample.bucketSeconds,
+            )
+          : [];
+      for (let i = 0; i < doomed.length; i += opts.rowsPerBatch) {
+        const slice = doomed.slice(i, i + opts.rowsPerBatch).map((r) => r.id);
+        const n = await prisma.$executeRawUnsafe(downsampleSql, slice);
         downsampled += n;
         if (n > 0) await sleep(opts.pauseMs);
-        if (n < opts.rowsPerBatch) break;
       }
     }
     if (tokens.length < opts.tokensPerBatch) return { expired: total, untracked, downsampled };

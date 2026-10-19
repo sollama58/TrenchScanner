@@ -541,6 +541,113 @@ describe.skipIf(!dbAvailable)("runCleanupJob: tracked snapshot downsampling", ()
     const left = await prisma.tokenSnapshot.findMany({ where: { tokenId: token.id } });
     expect(left.map((s) => s.marketCapUsd).sort()).toEqual([20, 30]);
   });
+
+  it("thins to the same rows the per-batch re-ranking statement did, across groups and slices", async () => {
+    // Three tokens, three old buckets each, rows with tied peaks, holder lists, a matched row and a
+    // curated row - deleted in slices of 2 over groups of 2 tokens.
+    const bucketStart = Math.floor((Date.now() - 10 * DAY) / 300_000) * 300_000;
+    const tokenIds: string[] = [];
+    for (let t = 0; t < 3; t++) {
+      const token = await prisma.token.create({
+        data: {
+          mintAddress: `${TAG}-same-${t}`,
+          firstSeenAt: new Date(Date.now() - 20 * DAY - t),
+          lastLiveAt: new Date(),
+        },
+      });
+      tokenIds.push(token.id);
+      const rows = [];
+      for (let b = 0; b < 3; b++) {
+        for (let i = 0; i < 5; i++) {
+          rows.push({
+            tokenId: token.id,
+            priceUsd: 1,
+            marketCapUsd: ((t * 7 + b * 5 + i * 3) % 4) * 10,
+            takenAt: new Date(bucketStart + b * 300_000 + i * 30_000),
+            ...((t + b + i) % 3 === 0 ? { linkedHolders: [{ wallet: "w", pct: 1 }] } : {}),
+          });
+        }
+      }
+      await prisma.tokenSnapshot.createMany({ data: rows });
+    }
+    const all = await prisma.tokenSnapshot.findMany({
+      where: { tokenId: { in: tokenIds } },
+      orderBy: [{ tokenId: "asc" }, { takenAt: "asc" }],
+    });
+    const user = await prisma.user.create({ data: { walletAddress: WALLET } });
+    const filter = await prisma.userFilter.create({ data: { userId: user.id } });
+    await prisma.match.create({
+      data: {
+        userId: user.id,
+        filterId: filter.id,
+        tokenId: tokenIds[0]!,
+        snapshotId: all[1]!.id,
+        score: 50,
+      },
+    });
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId: tokenIds[1]!,
+        snapshotId: all[17]!.id,
+        source: "heuristic-v1",
+        confidence: 0.9,
+        reasons: [],
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 1,
+      },
+    });
+
+    // The statement as it was, rerun with a LIMIT until a batch comes up short, then rolled back.
+    const ROLLBACK = new Error("rollback");
+    let expected: string[] = [];
+    await prisma
+      .$transaction(async (tx) => {
+        for (;;) {
+          const n = await tx.$executeRawUnsafe(
+            `DELETE FROM "TokenSnapshot" WHERE "id" IN (
+              SELECT r."id" FROM (
+                SELECT s."id", s."tokenId", s."takenAt", s."linkedHolders" IS NOT NULL AS "hasList", row_number() OVER (
+                         PARTITION BY s."tokenId", floor(extract(epoch FROM s."takenAt") / $4)
+                         ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC) AS rn
+                  FROM "TokenSnapshot" s
+                 WHERE s."tokenId" = ANY($1::text[]) AND s."takenAt" < $2 AND s."takenAt" >= $3
+              ) r
+               WHERE r.rn > 1
+                 AND NOT EXISTS (SELECT 1 FROM "Match" m WHERE m."snapshotId" = r."id")
+                 AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" a WHERE a."snapshotId" = r."id")
+                 AND NOT (r."hasList" AND NOT EXISTS (
+                       SELECT 1 FROM "TokenSnapshot" n
+                        WHERE n."tokenId" = r."tokenId" AND n."takenAt" > r."takenAt" AND n."linkedHolders" IS NOT NULL))
+               LIMIT $5)`,
+            tokenIds,
+            new Date(Date.now() - 7 * DAY),
+            new Date(Date.now() - 30 * DAY),
+            300,
+            2,
+          );
+          if (n < 2) break;
+        }
+        const kept = await tx.tokenSnapshot.findMany({ where: { tokenId: { in: tokenIds } } });
+        expected = kept.map((r) => r.id).sort();
+        throw ROLLBACK;
+      })
+      .catch((e: unknown) => {
+        if (e !== ROLLBACK) throw e;
+      });
+    expect(expected.length).toBeGreaterThan(9);
+    expect(expected.length).toBeLessThan(all.length);
+
+    const meta = await runCleanupJob(env, {
+      rowsPerBatch: 2,
+      tokensPerBatch: 2,
+      pauseMs: 0,
+      fullSnapshotWalk: true,
+    });
+    const left = await prisma.tokenSnapshot.findMany({ where: { tokenId: { in: tokenIds } } });
+    expect(left.map((r) => r.id).sort()).toEqual(expected);
+    expect(meta.downsampledSnapshots).toBeGreaterThanOrEqual(all.length - expected.length);
+    expect(left.map((r) => r.id)).toEqual(expect.arrayContaining([all[1]!.id, all[17]!.id]));
+  });
 });
 
 /**

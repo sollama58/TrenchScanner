@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { compactCount, isXLink, placeCard } from "./components/XLinkPreview";
+import { isXLink } from "./components/XLinkPreview";
+import { compactCount, placeCard } from "./components/XPreviewCard";
 
 describe("X link previews", () => {
   it("asks only about https X links", () => {

@@ -21,6 +21,7 @@ import {
   foldCuratedIntoPage,
   groupSameTokenCalls,
   serializeCuratedAlert,
+  cardSnapshot,
   resolveOutcome,
   CURATED_MATCH_LINK_WINDOW_MS,
   callPeakPct,
@@ -1330,10 +1331,10 @@ export async function registerMatchRoutes(
       const current = currentMarketCap(token, latestSnapshot);
       return {
         ...match,
-        snapshot: matchAlertSnapshot(match.snapshot, match.alertMcapUsd),
+        snapshot: cardSnapshot(matchAlertSnapshot(match.snapshot, match.alertMcapUsd)),
         kind: "match" as const,
         token,
-        latestSnapshot,
+        latestSnapshot: latestSnapshot && cardSnapshot(latestSnapshot),
         // The freshest market cap we have and when it was read, resolved server-side so every
         // client doesn't have to re-implement the "which of these two is newer" comparison.
         currentMarketCapUsd: current.marketCapUsd,

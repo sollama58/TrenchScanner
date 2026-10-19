@@ -30,7 +30,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ApiError, lookupRequired, post, type Card, type Snapshot } from "../api";
+import { ApiError, lookupRequired, post, type Card, type ScanVerdict, type Snapshot } from "../api";
 import { useLiveMarketCaps, usePolling } from "../hooks";
 import { MIN_WIN_SOL, ago, change, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
 import { TokenImage } from "./TokenImage";
@@ -39,7 +39,7 @@ import { LiveStamp, hms, nextUpdateText, secondsAgo, useSecondTick } from "./Fre
 import { DevCard, FlowCard, SocialsCard, type TokenProfile } from "./TokenProfileCards";
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
-import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
+import { QUICK_LINK_SITES, pumpFunHref, setAppearance, useAppearance } from "../appearance";
 import { useIsAdmin } from "../session";
 import { useShowNarrativeNote } from "../narrativeNote";
 import { scoreTone, scoreToneColor, useScoreWeights } from "../scoreWeights";
@@ -74,7 +74,9 @@ import {
   SniperTile,
   WalletStat,
 } from "./AlertCard";
-import { CHART_MARKS_SECTION } from "./WalletMarksPicker";
+import { CHART_MARKS_SECTION, WalletMarksPicker } from "./WalletMarksPicker";
+import { BubbleMapControls, ChartControls, Choice, QuickLinkChecks } from "./AppearancePanel";
+import { TradingSettingsPanel } from "./TradingSettingsPanel";
 import { CustomizeDrawer } from "./CustomizeDrawer";
 import {
   CHART_MIN_H_PX,
@@ -84,7 +86,7 @@ import {
   chartMaxHeight,
   useTermLayout,
 } from "./TermSplit";
-import { markPrefsOf, walletMarks, withLiveMarks } from "../walletMarks";
+import { markPrefsOf, walletMarks, withAvatars, withLiveMarks } from "../walletMarks";
 import { TradingChart, type ChartEvent, type ChartKind, type ChartTrade } from "./TradingChart";
 import { TradePanel, solText, tokensText } from "./TradePanel";
 import { PRO_MODE_PERKS } from "./ProModeCard";
@@ -629,17 +631,30 @@ function HoldersPlaceholder({ children }: { children: ReactNode }) {
 }
 
 /**
- * How often an open token view reads the coin's newest scans (GET /tokens/:mint, its 50 newest
- * rows, which the API shares between readers for 10 s): the scan writes a coin's row every 10-20 s
+ * How often an open token view reads the coin's newest scans (GET /tokens/:mint?reading=1, which
+ * the API shares between readers for 10 s): the scan writes a coin's row every 10-20 s
  * in the band (measured 2026-10-19), so each read nearly always brings a newer one. One read
  * serves the card's latest scan, the holder reading and the safety screen's history, and the
  * view's "Next update" countdowns count to it (user ask 2026-10-19).
  */
 const SCAN_READ_MS = 15_000;
 
+/**
+ * GET /tokens/:mint?reading=1 (api routes/tokens.ts readTokenReading): of the coin's 50 newest
+ * scans, the newest and the one the holder reading draws (pickReading's choice, made by the API),
+ * newest first, and every one's safety verdict.
+ */
+interface CoinReading {
+  snapshots?: Snapshot[];
+  verdicts?: ScanVerdict[];
+}
+
 /** The coin's newest scans as last read (null before the first lands), and when the next read is. */
 interface CoinScans {
+  /** The newest scan and the holder reading's, newest first (one row when they are the same). */
   snapshots: Snapshot[] | null;
+  /** The 50 newest scans' safety verdicts, for the safety flip. */
+  verdicts: ScanVerdict[] | null;
   /** Null when the view doesn't follow the scans (a lookup). */
   nextRead: number | null;
 }
@@ -649,7 +664,11 @@ interface CoinScans {
  * comes back. A failed read keeps the last one.
  */
 function useCoinScans(mint: string, follow: boolean): CoinScans {
-  const [read, setRead] = useState<{ mint: string; snapshots: Snapshot[] } | null>(null);
+  const [read, setRead] = useState<{
+    mint: string;
+    snapshots: Snapshot[];
+    verdicts: ScanVerdict[];
+  } | null>(null);
   const [nextRead, setNextRead] = useState<number | null>(null);
   useEffect(() => {
     if (!follow) return;
@@ -659,8 +678,8 @@ function useCoinScans(mint: string, follow: boolean): CoinScans {
       window.clearTimeout(timer);
       if (document.visibilityState === "visible")
         // A read in the last few seconds (a quick return to the page) is reused.
-        cachedGet<{ snapshots?: Snapshot[] }>(`/tokens/${encodeURIComponent(mint)}`, SCAN_READ_MS / 3)
-          .then((d) => live && setRead({ mint, snapshots: d.snapshots ?? [] }))
+        cachedGet<CoinReading>(`/tokens/${encodeURIComponent(mint)}?reading=1`, SCAN_READ_MS / 3)
+          .then((d) => live && setRead({ mint, snapshots: d.snapshots ?? [], verdicts: d.verdicts ?? [] }))
           .catch(() => undefined);
       setNextRead(Date.now() + SCAN_READ_MS);
       timer = window.setTimeout(tick, SCAN_READ_MS);
@@ -678,6 +697,7 @@ function useCoinScans(mint: string, follow: boolean): CoinScans {
   }, [follow, mint]);
   return {
     snapshots: follow && read?.mint === mint ? read.snapshots : null,
+    verdicts: follow && read?.mint === mint ? read.verdicts : null,
     nextRead: follow ? nextRead : null,
   };
 }
@@ -807,7 +827,7 @@ function TokenBody({
   const goTo = (id: SectionId) =>
     document.getElementById(`${ids}-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   const safety = safetyVerdict(card, scanning);
-  const safetyFlipped = useSafetyFlip(card, safety, scans.snapshots);
+  const safetyFlipped = useSafetyFlip(card, safety, scans.verdicts);
   // A pass starts folded, a fail or a pending verdict open; the reader's own choice then holds.
   const [safetyOpenSet, setSafetyOpen] = useState<boolean | null>(null);
   const safetyOpen = safetyOpenSet ?? safety.state !== "passed";
@@ -823,6 +843,11 @@ function TokenBody({
   const tabRow = useTabRowScroll(terminal ? side : null);
   const tab = tabPicked === side ? (side === "holders" ? "map" : "holders") : tabPicked;
   const [tradeSlot, setTradeSlot] = useState<HTMLDivElement | null>(null);
+  // The Pro window's own Customize (user ask 2026-10-19): every option of this page in one place.
+  // Opened at the chart's wallet marks from the chart's own Wallet trades link.
+  const [customizing, setCustomizing] = useState<false | "all" | "marks">(false);
+  const closeCustomize = useCallback(() => setCustomizing(false), []);
+  const customizeMarks = useCallback(() => setCustomizing((o) => (o ? false : "marks")), []);
   const openSafety = () => {
     setSafetyOpen(true);
     goTo("safety");
@@ -907,6 +932,18 @@ function TokenBody({
           <SageIcon size={13} />
           Sage
         </button>
+        {terminal && (
+          <button
+            type="button"
+            className={`tm-custom-pill${customizing ? " on" : ""}`}
+            aria-expanded={!!customizing}
+            onClick={() => setCustomizing((o) => (o ? false : "all"))}
+            title="Customize this page: layout, chart, wallet trades, bubble map, quick links and trade buttons"
+          >
+            <SlidersIcon size={13} />
+            Customize
+          </button>
+        )}
         <button type="button" className="ghost icon-btn tm-close" onClick={onClose} aria-label="Close">
           <CloseIcon size={16} />
         </button>
@@ -1119,6 +1156,7 @@ function TokenBody({
                   what={what}
                   tradeSlot={tradeSlot}
                   plotHeight={plotH}
+                  onCustomize={customizeMarks}
                 />
               </section>
               {side !== "none" && (
@@ -1218,6 +1256,23 @@ function TokenBody({
             {!utility && <CallCard card={card} />}
           </aside>
         </div>
+        <CustomizeDrawer
+          open={!!customizing}
+          onClose={closeCustomize}
+          title="Customize Pro"
+          section={customizing === "marks" ? CHART_MARKS_SECTION : undefined}
+          nested
+        >
+          <ProCustomize
+            side={side}
+            onSide={(next) => {
+              if (side === "map" && next !== "map") setTab("map");
+              setSide(next);
+            }}
+            sized={layout.sideW !== null || layout.chartH !== null}
+            onResetSizes={() => setLayout({ sideW: null, chartH: null })}
+          />
+        </CustomizeDrawer>
       </div>
     );
   }
@@ -1390,6 +1445,90 @@ const TERM_VIEWS: readonly { id: TermTab; label: string }[] = [
   { id: "dev", label: "Dev & socials" },
   { id: "sage", label: "TokenSage" },
 ];
+/**
+ * The Pro coin window's Customize (user ask 2026-10-19): every option that shapes this page, from
+ * its layout to the chart, its wallet marks, the bubble map, the quick links and the Trade panel's
+ * buttons. The account's appearance holds most; the sizes and trade buttons are this browser's.
+ */
+function ProCustomize({
+  side,
+  onSide,
+  sized,
+  onResetSizes,
+}: {
+  side: TermSide;
+  onSide: (side: TermSide) => void;
+  sized: boolean;
+  onResetSizes: () => void;
+}) {
+  const look = useAppearance();
+  return (
+    <div className="appearance-controls pro-customize">
+      <p className="faint small">
+        Changes show here right away. Layout, chart and map choices are saved to your account; column sizes,
+        chart indicators and trade buttons are kept in this browser.
+      </p>
+      <fieldset>
+        <legend>Layout</legend>
+        <Choice
+          label="Coin window opens in"
+          value={look.tokenView}
+          options={[
+            ["pro", "Pro"],
+            ["classic", "Classic"],
+          ]}
+          onChange={(tokenView) => setAppearance({ tokenView })}
+        />
+        <label className="choice-row pro-customize-pick">
+          <span className="small">Beside the chart</span>
+          <select value={side} onChange={(e) => onSide(e.target.value as TermSide)}>
+            <option value="none">None</option>
+            {TERM_VIEWS.map((x) => (
+              <option key={x.id} value={x.id}>
+                {x.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="choice-row">
+          <span className="small">Column width and chart height</span>
+          <button type="button" className="ghost small-btn" disabled={!sized} onClick={onResetSizes}>
+            {sized ? "Reset sizes" : "Default sizes"}
+          </button>
+        </div>
+        <p className="faint small check-hint">
+          Drag the column&apos;s edge or the chart&apos;s foot to resize them.
+        </p>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={!look.hideSafetyPill}
+            onChange={() => setAppearance({ hideSafetyPill: !look.hideSafetyPill })}
+          />
+          Safety pill in the header
+        </label>
+      </fieldset>
+      <fieldset>
+        <legend>Chart</legend>
+        <ChartControls />
+        <p className="faint small check-hint">
+          Candle size, indicators, log scale and drawings are on the chart&apos;s own toolbar.
+        </p>
+        <WalletMarksPicker />
+      </fieldset>
+      <fieldset>
+        <legend>Bubble map</legend>
+        <BubbleMapControls />
+      </fieldset>
+      <fieldset>
+        <legend>Quick links</legend>
+        <QuickLinkChecks />
+      </fieldset>
+      <TradingSettingsPanel />
+    </div>
+  );
+}
+
 /** What sits beside the chart: a view, or none so the chart takes the row. */
 type TermSide = TermTab | "none";
 /** The column's view, kept in this browser for every coin. */
@@ -1498,7 +1637,7 @@ function useHeadHeight(bodyRef: RefObject<HTMLDivElement | null>): number {
  * Whether the safety screen's verdict flipped on this coin (user ask 2026-10-19): the newest scan
  * against the coin's recent scans (the last 50, followed each scan cycle) and the alert's own.
  */
-function useSafetyFlip(card: Card, verdict: SafetyVerdict, scans: Snapshot[] | null): SafetyFlip | null {
+function useSafetyFlip(card: Card, verdict: SafetyVerdict, scans: ScanVerdict[] | null): SafetyFlip | null {
   const reading = verdict.reading;
   return useMemo(() => {
     if (!reading) return null;
@@ -1690,6 +1829,8 @@ function useHolderReading(
   const latest = card.latestSnapshot && hasHolderList(card.latestSnapshot) ? card.latestSnapshot : null;
   const older = [seed, card.snapshot].find((s) => s && hasHolderList(s)) ?? null;
   const own = latest ?? (card.latestSnapshot && !lookup ? null : older);
+  // The API already chose (readTokenReading); picking again over its newest and chosen rows
+  // lands on the same one.
   const picked = useMemo(() => (scans ? pickReading(scans) : undefined), [scans]);
   if (own) return own;
   if (lookup) return seed;
@@ -2040,6 +2181,7 @@ export function ChartCard({
   what,
   tradeSlot,
   plotHeight,
+  onCustomize,
 }: {
   card: Card;
   chart: { data: TokenChart | null; error: Error | null };
@@ -2053,6 +2195,8 @@ export function ChartCard({
   tradeSlot?: HTMLElement | null;
   /** The terminal's plot height the reader dragged it to; absent, the window sets it. */
   plotHeight?: number;
+  /** The page's own Customize, opened at the wallet marks (Pro); absent, the feed's opens here. */
+  onCustomize?: () => void;
 }) {
   const api = useTokenApi(card.token.mintAddress);
   // A second source of candles (user asks 2026-10-19): when the API has none for the coin (Pump.fun
@@ -2158,9 +2302,22 @@ export function ChartCard({
     () => withLiveMarks(data?.wallets ?? [], liveFeed.history, liveNames, liveSides),
     [data?.wallets, liveFeed.history, liveNames, liveSides],
   );
-  const marks = useMemo(
+  const plainMarks = useMemo(
     () => walletMarks(marked, markPrefs, new Set(pro ? [pro] : [])),
     [marked, markPrefs, pro],
+  );
+  // KOLs' X pictures on their marks (user ask 2026-10-19), from the names the lists read too.
+  const picWallets = useMemo(
+    () =>
+      look.chartMarkPics
+        ? [...new Set(plainMarks.flatMap((m) => (m.kind === "kol" || m.kind === "known" ? [m.wallet] : [])))]
+        : NO_TRADERS,
+    [plainMarks, look.chartMarkPics],
+  );
+  const picNames = useWalletNames(picWallets);
+  const marks = useMemo(
+    () => (look.chartMarkPics ? withAvatars(plainMarks, picNames) : plainMarks),
+    [plainMarks, picNames, look.chartMarkPics],
   );
 
   // The view's window over the minute data, before the finer reads that fill it in.
@@ -2444,7 +2601,7 @@ export function ChartCard({
               className={`cm-link${customizing ? " on" : ""}`}
               aria-expanded={customizing}
               title="Choose which labeled wallets' trades the chart marks (Customize › Chart wallet trades)"
-              onClick={() => setCustomizing((o) => !o)}
+              onClick={() => (onCustomize ? onCustomize() : setCustomizing((o) => !o))}
             >
               <SlidersIcon size={12} /> Wallet trades
               <span className="num">{markPrefs.on ? marks.length : "off"}</span>
@@ -2486,6 +2643,8 @@ export function ChartCard({
                 events={events}
                 flow={flow}
                 marks={marks}
+                markPics={look.chartMarkPics}
+                live={view.live}
                 height={height}
                 trades={chartTrades}
                 entry={entry}

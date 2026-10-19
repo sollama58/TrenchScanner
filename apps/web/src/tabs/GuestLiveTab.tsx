@@ -1,16 +1,16 @@
 import { SectionBoundary } from "../components/SectionBoundary";
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import type { MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { SkeletonCards } from "../components/Skeleton";
 import { ScanStatus } from "../components/ScanStatus";
-import { AboutModal } from "../components/AboutModal";
 import { ClockIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";
 import { prefetch } from "../cache";
 import { usePolling, useNow } from "../hooks";
 import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { GUEST_DELAY_MINUTES } from "../session";
 import { introSeen, markIntroSeen } from "../intro";
+import { AboutModal, loadAboutModal, useOpenedOnce } from "../livePanels";
 
 /** GET /guest/feed: the default feed's calls, as feed cards, plus which models those are. */
 export interface GuestPage extends MatchPage {
@@ -38,6 +38,8 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
   const [page, setPage] = useState(1);
   // The tour opens by itself the first time a guest lands here in this browser.
   const [aboutOpen, setAboutOpen] = useState(() => !introSeen(null));
+  // The tour's code loads on its first opening (livePanels.ts), and it stays mounted after.
+  const aboutMounted = useOpenedOnce(aboutOpen);
   const look = useAppearance();
   const hidden = useMemo(() => cardHideSet(look), [look]);
   const feedPath = (n: number) => `/guest/feed?page=${n}`;
@@ -52,15 +54,19 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
 
   return (
     <div className="stack">
-      <AboutModal
-        open={aboutOpen}
-        onClose={() => {
-          setAboutOpen(false);
-          markIntroSeen(null);
-        }}
-        targets={TARGETS}
-        guest
-      />
+      <Suspense fallback={null}>
+        {aboutMounted && (
+          <AboutModal
+            open={aboutOpen}
+            onClose={() => {
+              setAboutOpen(false);
+              markIntroSeen(null);
+            }}
+            targets={TARGETS}
+            guest
+          />
+        )}
+      </Suspense>
       <div className="guest-banner panel" role="note">
         <ClockIcon size={16} />
         <p>
@@ -87,6 +93,8 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
                 type="button"
                 className="ghost icon-btn"
                 onClick={() => setAboutOpen(true)}
+                onPointerEnter={() => void loadAboutModal()}
+                onFocus={() => void loadAboutModal()}
                 aria-label="How this works"
                 title="How this works"
               >

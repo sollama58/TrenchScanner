@@ -417,6 +417,9 @@ export interface Snapshot {
   isMayhemMode?: boolean | null;
 }
 
+/** A scan's safety verdict and its time: all GET /tokens/:mint?reading=1 sends of most scans. */
+export type ScanVerdict = Pick<Snapshot, "takenAt" | "rugScreenPassed">;
+
 export type OutcomeStatus = "watching" | "won" | "missed" | "disqualified" | "unknown";
 
 export interface Outcome {
@@ -1814,6 +1817,8 @@ export interface FeedAppearance {
   /** Which default chartMarkKinds it was saved against (appearance.ts CHART_MARKS_REV). */
   chartMarksRev: number;
   chartMarkMinSol: number;
+  /** KOLs' trades marked with their X pictures rather than a letter (absent from older API builds: on). */
+  chartMarkPics: boolean;
   /** The token chart's default: a line or candles (absent from older API builds: line). */
   chartStyle: "line" | "candles";
   /** The view the token chart opens on: Trading or All (absent from older API builds: Trading). */

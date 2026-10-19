@@ -22,6 +22,7 @@ import {
   configureMintSupplies,
   MintSupplies,
 } from "@trenchscanner/core";
+import { registerEtag } from "./etag.js";
 import { SAVED_FEED_SELECT, toSavedFeed } from "./contest.js";
 import {
   adminSessionFresh,
@@ -238,6 +239,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
    * onSend hooks entirely, so the stream stays unbuffered and un-encoded - which is what an event
    * stream needs.
    */
+  // Before compression: it hashes the JSON, and a 304 it answers has no body to compress.
+  registerEtag(app);
   await app.register(compress, {
     global: true,
     threshold: 1024,

@@ -24,3 +24,18 @@ export function SkeletonCards({ count = 4 }: { count?: number }) {
     </div>
   );
 }
+
+/** Placeholder rows for a column whose data is still on its way. */
+export function ScopeRowSkeletons() {
+  return (
+    <div className="scope-row-skeletons" aria-label="Loading" role="status">
+      {Array.from({ length: 4 }, (_, i) => (
+        <div key={i} className="scope-row-skeleton">
+          <span className="skeleton round" />
+          <span className="skeleton" />
+          <span className="skeleton" />
+        </div>
+      ))}
+    </div>
+  );
+}

@@ -657,6 +657,15 @@ export function curatedMeta(alert: CuratedAlertWithRelations) {
  * exactly right, and every field the scan would have filled reads null rather than zero, because
  * "we no longer hold that detail" is not the same as "it was nothing".
  */
+/**
+ * A snapshot as a feed card carries it: without its flaggedTrades, which no card reads (the token
+ * chart reads its own copy from the database) and which were ~15% of every feed page (2026-10-19).
+ */
+export function cardSnapshot<S extends { flaggedTrades?: unknown }>(snapshot: S): Omit<S, "flaggedTrades"> {
+  const { flaggedTrades: _trades, ...rest } = snapshot;
+  return rest;
+}
+
 export function serializeCuratedAlert(
   alert: CuratedAlertWithRelations,
   currentMarketCap: (
@@ -749,7 +758,11 @@ export function serializeCuratedAlert(
   // Since calls are priced from a fresh Jupiter quote (label rule 4), the scan snapshot's
   // DexScreener price can be far from it (45-60 s stale): the snapshot's market cap under a Peak
   // counted from the anchor put a $11k call's 6x on a $47k alert, an ATH of $294k.
-  const snapshot = { ...stored, priceUsd: alert.anchorPriceUsd, marketCapUsd: alert.anchorMcapUsd };
+  const snapshot = cardSnapshot({
+    ...stored,
+    priceUsd: alert.anchorPriceUsd,
+    marketCapUsd: alert.anchorMcapUsd,
+  });
 
   // The peak the card's ATH section shows. Derived from the outcome watcher's peak rather than
   // the Match peak job (which only tracks matches): supply is fixed for these tokens, so a price
@@ -773,7 +786,7 @@ export function serializeCuratedAlert(
     hitHundredPctAt: null,
     token,
     snapshot,
-    latestSnapshot,
+    latestSnapshot: latestSnapshot && cardSnapshot(latestSnapshot),
     currentMarketCapUsd: current.marketCapUsd,
     currentMarketCapAt: current.at,
     filter: { id: "curated", name: "Curated" },

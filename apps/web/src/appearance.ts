@@ -96,6 +96,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   chartMarkKinds: ["kol", "known", "funded", "probable", "dev", "winner", "linked"],
   chartMarksRev: CHART_MARKS_REV,
   chartMarkMinSol: 0.5,
+  // KOLs' trades as their X pictures on the chart, on by default (user ask 2026-10-19).
+  chartMarkPics: true,
   // The token chart draws a line unless the reader picks candles (user ask 2026-10-18).
   chartStyle: "line",
   // The token chart opens on its Trading view, the latest at the right edge (user ask 2026-10-19).
@@ -362,6 +364,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
       typeof r.chartMarkMinSol === "number" && Number.isFinite(r.chartMarkMinSol)
         ? Math.min(CHART_MARK_MAX_SOL, Math.max(CHART_MARK_MIN_SOL, r.chartMarkMinSol))
         : d.chartMarkMinSol,
+    chartMarkPics: typeof r.chartMarkPics === "boolean" ? r.chartMarkPics : d.chartMarkPics,
     chartStyle: r.chartStyle === "candles" || r.chartStyle === "line" ? r.chartStyle : d.chartStyle,
     chartView: r.chartView === "trading" || r.chartView === "all" ? r.chartView : d.chartView,
     chartPathing: typeof r.chartPathing === "boolean" ? r.chartPathing : d.chartPathing,
@@ -425,6 +428,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartMarks,
     chartMarkKinds,
     chartMarkMinSol,
+    chartMarkPics,
     chartStyle,
     chartView,
     chartPathing,
@@ -456,6 +460,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartMarks,
     chartMarkKinds,
     chartMarkMinSol,
+    chartMarkPics,
     chartStyle,
     chartView,
     chartPathing,

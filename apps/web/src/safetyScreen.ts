@@ -1,4 +1,4 @@
-import type { Card, Snapshot } from "./api";
+import type { Card, ScanVerdict, Snapshot } from "./api";
 import {
   SAFETY_COUNT_CUT_HOLDERS,
   SAFETY_MAX_FRESH_WALLET_PCT,
@@ -188,10 +188,10 @@ export interface SafetyFlip {
  * verdict than `reading`, among `history` (the coin's recent scans, any order) up to `reading`.
  * Null when every screened scan there agrees with it.
  */
-export function safetyFlip(reading: Snapshot, history: readonly Snapshot[]): SafetyFlip | null {
+export function safetyFlip(reading: ScanVerdict, history: readonly ScanVerdict[]): SafetyFlip | null {
   if (typeof reading.rugScreenPassed !== "boolean") return null;
   const at = Date.parse(reading.takenAt);
-  let other: Snapshot | null = null;
+  let other: ScanVerdict | null = null;
   for (const s of history) {
     if (typeof s.rugScreenPassed !== "boolean" || s.rugScreenPassed === reading.rugScreenPassed) continue;
     const t = Date.parse(s.takenAt);
