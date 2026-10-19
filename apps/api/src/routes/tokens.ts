@@ -641,9 +641,16 @@ export const WHY_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 const TOKEN_DETAIL_CACHE_MS = 10_000;
 const tokenDetails = new KeyedCache<Awaited<ReturnType<typeof readTokenDetail>>>(TOKEN_DETAIL_CACHE_MS, 500);
 
+/** The token views' answers (?reading=1), shared the same way. */
+const tokenReadings = new KeyedCache<Awaited<ReturnType<typeof readTokenReading>>>(
+  TOKEN_DETAIL_CACHE_MS,
+  500,
+);
+
 /** Test seam: forget the shared token details. */
 export function clearTokenDetailCache(): void {
   tokenDetails.clear();
+  tokenReadings.clear();
 }
 
 /** The token row and its 50 newest snapshots, as GET /tokens/:mint answers; null for a mint not on Token. */
@@ -663,6 +670,75 @@ export async function readTokenDetail(mintAddress: string) {
   // Each snapshot's flagged trades stay out: the dashboard never reads them here (the chart has
   // its own, GET /chart), and they were a large share of every answer, as on the feed's cards.
   return { ...token, snapshots: snapshots.map(({ flaggedTrades: _trades, ...s }) => s) };
+}
+
+/** One of a coin's 50 newest scans, as far as GET /tokens/:mint?reading=1 chooses among them. */
+export interface ScanTraits {
+  id: string;
+  takenAt: Date;
+  rugScreenPassed: boolean;
+  /** linkedWalletPct is set: the scan read the holders' funders. */
+  linked: boolean;
+  /** It kept a holder list or linked clusters (web bubbleMap.ts hasHolderList). */
+  hasList: boolean;
+}
+
+/**
+ * The scan the token view's holder reading draws, among `scans` newest first: the same choice as
+ * web bubbleMap.ts pickReading (keep the two in step). The newest whose holder list came with its
+ * funders read, else the newest with a holder list, else the newest linked reading.
+ */
+export function pickReadingTraits<S extends Pick<ScanTraits, "linked" | "hasList">>(
+  scans: readonly S[],
+): S | null {
+  return (
+    scans.find((s) => s.linked && s.hasList) ??
+    scans.find((s) => s.hasList) ??
+    scans.find((s) => s.linked) ??
+    null
+  );
+}
+
+/**
+ * What an open token view reads (GET /tokens/:mint?reading=1, web TokenModal.tsx useCoinScans):
+ * the token row; in `snapshots`, newest first, only the newest scan and the one its holder reading
+ * draws (pickReading's choice, made here; one row when they are the same); and in `verdicts` each
+ * of the 50 newest scans' safety verdict, for the safety flip. The 50 full rows with their holder
+ * lists were most of every poll's bytes, and the view drew two of them (API audit 2026-10-19 F5).
+ * Null for a mint not on Token.
+ */
+export async function readTokenReading(mintAddress: string) {
+  const row = await prisma.token.findUnique({ where: { mintAddress } });
+  if (!row) return null;
+  const { aiTextScores: _scores, aiTextScoredAt: _scoredAt, ...token } = row;
+  // The same 50 rows readTokenDetail reads, on the (tokenId, takenAt) index, with only what the
+  // choice needs: the holder lists' lengths are read in the database, the lists stay there.
+  const scans = await prisma.$queryRaw<ScanTraits[]>`
+    SELECT "id", "takenAt", "rugScreenPassed",
+      ("linkedWalletPct" IS NOT NULL) AS "linked",
+      (
+        COALESCE(CASE WHEN jsonb_typeof("linkedHolders") = 'array' THEN jsonb_array_length("linkedHolders") END, 0) > 0
+        OR COALESCE(CASE WHEN jsonb_typeof("linkedClusters") = 'array' THEN jsonb_array_length("linkedClusters") END, 0) > 0
+      ) AS "hasList"
+    FROM "TokenSnapshot"
+    WHERE "tokenId" = ${token.id}
+    ORDER BY "takenAt" DESC
+    LIMIT 50`;
+  const picked = pickReadingTraits(scans);
+  const ids = [...new Set([scans[0]?.id, picked?.id].filter((id): id is string => !!id))];
+  const rows = ids.length === 0 ? [] : await prisma.tokenSnapshot.findMany({ where: { id: { in: ids } } });
+  // In the scans' order (newest first), each without its flagged trades as readTokenDetail's.
+  const snapshots = ids.flatMap((id) => {
+    const found = rows.find((r) => r.id === id);
+    if (!found) return [];
+    const { flaggedTrades: _trades, ...s } = found;
+    return [s];
+  });
+  return {
+    ...token,
+    snapshots,
+    verdicts: scans.map((s) => ({ takenAt: s.takenAt, rugScreenPassed: s.rugScreenPassed })),
+  };
 }
 
 /**
@@ -713,10 +789,14 @@ export async function registerTokenRoutes(
     if (!MINT_RE.test(mintAddress)) return reply.code(400).send({ error: "not a valid mint" });
     // A coin the scanner doesn't track on its own needs the reader's paid lookup (lookupGate.ts).
     if (!(await allowLookupRead(request, reply, "token", mintAddress))) return reply;
-    const detail = await tokenDetails.get(mintAddress, () => readTokenDetail(mintAddress));
+    // ?reading=1, the token view's poll: only what it reads (readTokenReading). Else the 50 rows.
+    const reading = (request.query as { reading?: string } | undefined)?.reading === "1";
+    const detail = await (reading
+      ? tokenReadings.get(mintAddress, () => readTokenReading(mintAddress))
+      : tokenDetails.get(mintAddress, () => readTokenDetail(mintAddress)));
     if (!detail) {
       // Not kept: the coin may land on Token with its next scan.
-      tokenDetails.forget(mintAddress);
+      (reading ? tokenReadings : tokenDetails).forget(mintAddress);
       return reply.code(404).send({ error: "token not found" });
     }
     return detail;

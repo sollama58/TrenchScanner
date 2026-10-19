@@ -417,6 +417,9 @@ export interface Snapshot {
   isMayhemMode?: boolean | null;
 }
 
+/** A scan's safety verdict and its time: all GET /tokens/:mint?reading=1 sends of most scans. */
+export type ScanVerdict = Pick<Snapshot, "takenAt" | "rugScreenPassed">;
+
 export type OutcomeStatus = "watching" | "won" | "missed" | "disqualified" | "unknown";
 
 export interface Outcome {

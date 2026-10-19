@@ -30,7 +30,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ApiError, lookupRequired, post, type Card, type Snapshot } from "../api";
+import { ApiError, lookupRequired, post, type Card, type ScanVerdict, type Snapshot } from "../api";
 import { useLiveMarketCaps, usePolling } from "../hooks";
 import { MIN_WIN_SOL, ago, change, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
 import { TokenImage } from "./TokenImage";
@@ -629,17 +629,30 @@ function HoldersPlaceholder({ children }: { children: ReactNode }) {
 }
 
 /**
- * How often an open token view reads the coin's newest scans (GET /tokens/:mint, its 50 newest
- * rows, which the API shares between readers for 10 s): the scan writes a coin's row every 10-20 s
+ * How often an open token view reads the coin's newest scans (GET /tokens/:mint?reading=1, which
+ * the API shares between readers for 10 s): the scan writes a coin's row every 10-20 s
  * in the band (measured 2026-10-19), so each read nearly always brings a newer one. One read
  * serves the card's latest scan, the holder reading and the safety screen's history, and the
  * view's "Next update" countdowns count to it (user ask 2026-10-19).
  */
 const SCAN_READ_MS = 15_000;
 
+/**
+ * GET /tokens/:mint?reading=1 (api routes/tokens.ts readTokenReading): of the coin's 50 newest
+ * scans, the newest and the one the holder reading draws (pickReading's choice, made by the API),
+ * newest first, and every one's safety verdict.
+ */
+interface CoinReading {
+  snapshots?: Snapshot[];
+  verdicts?: ScanVerdict[];
+}
+
 /** The coin's newest scans as last read (null before the first lands), and when the next read is. */
 interface CoinScans {
+  /** The newest scan and the holder reading's, newest first (one row when they are the same). */
   snapshots: Snapshot[] | null;
+  /** The 50 newest scans' safety verdicts, for the safety flip. */
+  verdicts: ScanVerdict[] | null;
   /** Null when the view doesn't follow the scans (a lookup). */
   nextRead: number | null;
 }
@@ -649,7 +662,11 @@ interface CoinScans {
  * comes back. A failed read keeps the last one.
  */
 function useCoinScans(mint: string, follow: boolean): CoinScans {
-  const [read, setRead] = useState<{ mint: string; snapshots: Snapshot[] } | null>(null);
+  const [read, setRead] = useState<{
+    mint: string;
+    snapshots: Snapshot[];
+    verdicts: ScanVerdict[];
+  } | null>(null);
   const [nextRead, setNextRead] = useState<number | null>(null);
   useEffect(() => {
     if (!follow) return;
@@ -659,8 +676,8 @@ function useCoinScans(mint: string, follow: boolean): CoinScans {
       window.clearTimeout(timer);
       if (document.visibilityState === "visible")
         // A read in the last few seconds (a quick return to the page) is reused.
-        cachedGet<{ snapshots?: Snapshot[] }>(`/tokens/${encodeURIComponent(mint)}`, SCAN_READ_MS / 3)
-          .then((d) => live && setRead({ mint, snapshots: d.snapshots ?? [] }))
+        cachedGet<CoinReading>(`/tokens/${encodeURIComponent(mint)}?reading=1`, SCAN_READ_MS / 3)
+          .then((d) => live && setRead({ mint, snapshots: d.snapshots ?? [], verdicts: d.verdicts ?? [] }))
           .catch(() => undefined);
       setNextRead(Date.now() + SCAN_READ_MS);
       timer = window.setTimeout(tick, SCAN_READ_MS);
@@ -678,6 +695,7 @@ function useCoinScans(mint: string, follow: boolean): CoinScans {
   }, [follow, mint]);
   return {
     snapshots: follow && read?.mint === mint ? read.snapshots : null,
+    verdicts: follow && read?.mint === mint ? read.verdicts : null,
     nextRead: follow ? nextRead : null,
   };
 }
@@ -807,7 +825,7 @@ function TokenBody({
   const goTo = (id: SectionId) =>
     document.getElementById(`${ids}-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   const safety = safetyVerdict(card, scanning);
-  const safetyFlipped = useSafetyFlip(card, safety, scans.snapshots);
+  const safetyFlipped = useSafetyFlip(card, safety, scans.verdicts);
   // A pass starts folded, a fail or a pending verdict open; the reader's own choice then holds.
   const [safetyOpenSet, setSafetyOpen] = useState<boolean | null>(null);
   const safetyOpen = safetyOpenSet ?? safety.state !== "passed";
@@ -1498,7 +1516,7 @@ function useHeadHeight(bodyRef: RefObject<HTMLDivElement | null>): number {
  * Whether the safety screen's verdict flipped on this coin (user ask 2026-10-19): the newest scan
  * against the coin's recent scans (the last 50, followed each scan cycle) and the alert's own.
  */
-function useSafetyFlip(card: Card, verdict: SafetyVerdict, scans: Snapshot[] | null): SafetyFlip | null {
+function useSafetyFlip(card: Card, verdict: SafetyVerdict, scans: ScanVerdict[] | null): SafetyFlip | null {
   const reading = verdict.reading;
   return useMemo(() => {
     if (!reading) return null;
@@ -1690,6 +1708,8 @@ function useHolderReading(
   const latest = card.latestSnapshot && hasHolderList(card.latestSnapshot) ? card.latestSnapshot : null;
   const older = [seed, card.snapshot].find((s) => s && hasHolderList(s)) ?? null;
   const own = latest ?? (card.latestSnapshot && !lookup ? null : older);
+  // The API already chose (readTokenReading); picking again over its newest and chosen rows
+  // lands on the same one.
   const picked = useMemo(() => (scans ? pickReading(scans) : undefined), [scans]);
   if (own) return own;
   if (lookup) return seed;
