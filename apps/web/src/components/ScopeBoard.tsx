@@ -32,7 +32,7 @@ import {
   type ScopeColumns,
   type ScopeFrame,
 } from "../scope";
-import { nowReading, QuotePill, recordedPeakOf, socialLinks } from "./AlertCard";
+import { nowReading, nowReadingAge, QuotePill, recordedPeakOf, socialLinks } from "./AlertCard";
 import { QuickBuyPill } from "./QuickBuyPill";
 import { TokenImage } from "./TokenImage";
 import { FilterGlyph } from "./FilterBadge";
@@ -447,6 +447,15 @@ export function ScopeRow({
   const alertMcap = card.snapshot.marketCapUsd;
   const nowMcap = nowReading(card);
   const move = change(alertMcap, nowMcap);
+  // As on the card: how old "now" is once that matters, and the alert's figure named as such when
+  // there is no reading after the call yet.
+  const nowAge = nowReadingAge(card, nowMcap, now);
+  const nowTitle =
+    nowMcap === null
+      ? "Market cap at the alert: no reading since yet"
+      : nowAge !== null
+        ? `Market cap now, read ${nowAge} ago`
+        : "Market cap now";
   const { pct: recorded } = recordedPeakOf(card);
   const peak = move !== null && move > 0 ? Math.max(recorded ?? 0, move) : recorded;
   const alertedAt = curated?.alertedAt ?? card.matchedAt;
@@ -547,7 +556,7 @@ export function ScopeRow({
         </div>
       </div>
       <div className="scope-figs">
-        <div className="scope-fig scope-now" title="Market cap now">
+        <div className={`scope-fig scope-now${nowAge !== null ? " stale" : ""}`} title={nowTitle}>
           <span className={`num${move === null ? "" : move >= 0 ? " up" : " down"}`}>
             {usd(nowMcap ?? alertMcap)}
           </span>

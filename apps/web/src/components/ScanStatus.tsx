@@ -40,11 +40,11 @@ export function ScanStatus({
   const wrap = useRef<HTMLSpanElement>(null);
   // The pointer that pressed the pill last: a mouse opens the card by hovering, a finger by tapping.
   const pointer = useRef<string>("mouse");
-  // The ages count up live while the card is showing.
+  // The ages count up live: every second while the card is showing, every 15s for the pill, so a
+  // heartbeat held while the API can't be reached (or restored from an earlier visit) ages too.
   useEffect(() => {
-    if (!open) return;
     setNow(Date.now());
-    const id = setInterval(() => setNow(Date.now()), 1000);
+    const id = setInterval(() => setNow(Date.now()), open ? 1000 : 15_000);
     return () => clearInterval(id);
   }, [open]);
   // The card hangs from the pill's right edge; where the pill sits near a narrow screen's left edge
@@ -79,7 +79,13 @@ export function ScanStatus({
     );
   // Only the scan loop decides the pill: daily jobs (cleanup, outcome tracking) read as stale for
   // most of the day by design, and the user is asking "is it finding tokens right now".
-  const bad = !scan || scan.stale || scan.hung;
+  // The server judged staleness when it answered; a held answer is judged again against the clock,
+  // so a pill whose polls keep failing turns to lagging instead of staying green.
+  // A loop that runs but fails every cycle keeps lastRunAt fresh, so its last success is judged
+  // against the same threshold.
+  const past = (iso: string | null) =>
+    scan?.staleAfterMs != null && (!iso || now - new Date(iso).getTime() > scan.staleAfterMs);
+  const bad = !scan || scan.stale || scan.hung || past(scan.lastRunAt) || past(scan.lastSuccessAt);
   const p = data.pipeline;
   const stages = p
     ? [
@@ -123,7 +129,7 @@ export function ScanStatus({
       >
         <span className="pulse" />
         {bad ? "Scanner lagging" : "Scanning"}
-        {scan && <span className="faint"> · {ago(scan.lastSuccessAt)}</span>}
+        {scan && <span className="faint"> · {ago(scan.lastSuccessAt, now)}</span>}
       </span>
       <span
         ref={tip}

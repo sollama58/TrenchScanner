@@ -329,10 +329,17 @@ function strongestFirst(card: AlertCard): AlertCard {
   };
 }
 
+/** Sent this many minutes or more after it was raised, an alert's MC is marked as the alert's. */
+export const LATE_SEND_MINUTES = 2;
+
 /** The numbers, two to a line so they read as a small grid on a phone. */
 function factsLines(card: AlertCard, now: number, parts: AlertParts, compact: boolean): string | null {
   const facts: string[] = [];
-  if (parts.stats && card.snapshot) facts.push(`💰 MC <b>${usd(card.snapshot.marketCapUsd)}</b>`);
+  // The numbers are the alert's own; an alert that goes out late (a backed-up send, a retry, a
+  // restart) says how long ago it was raised, so its MC isn't read as the market now.
+  const lateMin = Math.floor((now - card.raisedAt.getTime()) / 60_000);
+  const late = lateMin >= LATE_SEND_MINUTES ? ` at alert, ${lateMin}m ago` : "";
+  if (parts.stats && card.snapshot) facts.push(`💰 MC <b>${usd(card.snapshot.marketCapUsd)}</b>${late}`);
   if (parts.holders && card.snapshot?.holderCount != null)
     facts.push(`👥 <b>${card.snapshot.holderCount}</b> holders`);
   if (parts.volume && card.snapshot?.volume1hUsd != null)

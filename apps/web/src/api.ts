@@ -1112,6 +1112,8 @@ export interface WorkerHealth {
     lastSuccessAt: string | null;
     lastError: string | null;
     stale: boolean;
+    /** How long after lastRunAt the job reads as stale (absent from older API builds). */
+    staleAfterMs?: number;
     hung: boolean;
   }[];
   /** When each stage of the alert path last produced something (absent from older API builds). */

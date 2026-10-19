@@ -303,13 +303,17 @@ export function claim(keys: string[]): string[] {
   }
 }
 
-function describe(card: Card): { title: string; body: string } {
+function describe(card: Card, now = Date.now()): { title: string; body: string } {
   const t = card.token;
   const name = t.symbol ? `$${t.symbol}` : (t.name ?? `${t.mintAddress.slice(0, 4)}…`);
   // "Called at" is the price the alert went out at (a call's anchor), not the latest reading: in a
-  // call's first minute that reading still shows the market from before it.
+  // call's first minute that reading still shows the market from before it. An alert seen late (a
+  // laptop waking, a tab the browser held back) says how long ago it was raised, so that figure
+  // isn't read as the market now.
   const mcap = card.snapshot?.marketCapUsd ?? null;
-  const at = mcap !== null ? ` at ${usd(mcap)} mcap` : "";
+  const lateMin = Math.floor((now - raisedAt(card)) / 60_000);
+  const when = lateMin >= 2 ? `, ${lateMin}m ago` : "";
+  const at = mcap !== null ? ` at ${usd(mcap)} mcap${when}` : when;
   if (card.kind === "curated") {
     const model = card.curated?.modelName ?? "A model";
     return { title: `${name}: ${model} alert`, body: `${model} alerted on ${name}${at}.` };

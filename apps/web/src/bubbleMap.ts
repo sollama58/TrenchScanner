@@ -2478,8 +2478,12 @@ export function hasHolderList(s: Pick<Snapshot, "linkedClusters" | "linkedHolder
  * cycle writes a snapshot with the holder list it holds, read at most RUGCHECK_CACHE_TTL_MINUTES ago.
  */
 export const HOLDER_SCAN_MS = 60_000;
-/** No reading for this long means the worker has stopped scanning the coin (out of band, unviewed). */
-export const HOLDER_STALE_MS = 10 * 60_000;
+/**
+ * No reading for this long means the worker has stopped scanning the coin (out of band, unviewed).
+ * A list that hasn't changed is written again only every HOLDER_LIST_REWRITE_MS (10 min, worker
+ * holderListWrites.ts), so a coin still being scanned can go that long plus a cycle between rows.
+ */
+export const HOLDER_STALE_MS = 12 * 60_000;
 
 /**
  * When the holder reading was saved and when the next one is due: the next scan, or null once

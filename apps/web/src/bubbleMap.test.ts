@@ -357,8 +357,11 @@ describe("holderFreshness", () => {
   it("says it is due now once that scan is late", () => {
     expect(holderFreshness(at, t + 3 * 60_000)).toEqual({ last: t, next: t + 3 * 60_000 });
   });
-  it("has no next update once the coin has gone unscanned for ten minutes", () => {
-    expect(holderFreshness(at, t + 10 * 60_000)).toEqual({ last: t, next: null });
+  it("still expects one while an unchanged list waits on its ten-minute rewrite", () => {
+    expect(holderFreshness(at, t + 10 * 60_000)).toEqual({ last: t, next: t + 10 * 60_000 });
+  });
+  it("has no next update once the coin has gone unscanned for twelve minutes", () => {
+    expect(holderFreshness(at, t + 12 * 60_000)).toEqual({ last: t, next: null });
   });
 });
 
