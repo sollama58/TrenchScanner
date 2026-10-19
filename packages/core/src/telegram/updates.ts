@@ -558,7 +558,16 @@ async function answerAfterEdit(
   if (!edited.ok && !unchanged) {
     logger.warn("telegram button edit failed", { chatId: String(chatId), description: edited.description });
   }
-  await api.answerCallbackQuery(queryId, unchanged ? "Up to date" : undefined);
+  // A failed edit leaves the old numbers in place: say so, rather than stop the spinner as if the
+  // board had refreshed.
+  await api.answerCallbackQuery(
+    queryId,
+    unchanged
+      ? "Up to date"
+      : edited.ok
+        ? undefined
+        : "Couldn't refresh this just now. Try again in a moment.",
+  );
 }
 
 /** The columns /settings reads and writes, and /alerts reads for its floor and links. */

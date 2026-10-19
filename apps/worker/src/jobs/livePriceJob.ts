@@ -5,6 +5,7 @@ import {
   type Env,
   type DexScreenerClient,
 } from "@trenchscanner/core";
+import { JobFailure } from "../scheduler.js";
 
 const logger = createLogger("live-price-job");
 
@@ -33,7 +34,10 @@ export const LIVE_PRICE_FRESH_MS = 30_000;
  * API's on-demand refresh (apps/api/src/liveRefresh.ts) - otherwise paging back to an already-seen
  * page would show up-to-a-minute-old numbers until this job's next tick came round.
  */
-export async function runLivePriceJob(dexScreener: DexScreenerClient, env: Env): Promise<void> {
+export async function runLivePriceJob(
+  dexScreener: DexScreenerClient,
+  env: Env,
+): Promise<{ viewed: number; refreshed: number; updated: number; failed: number } | void> {
   const startedAt = Date.now();
 
   const viewCutoff = new Date(startedAt - env.ACTIVE_VIEW_WINDOW_MINUTES * 60_000);
@@ -54,9 +58,14 @@ export async function runLivePriceJob(dexScreener: DexScreenerClient, env: Env):
   if (stale.length === 0) return;
 
   let result;
+  // The mints whose DexScreener batch failed: the client answers them as absent, which is also how
+  // a delisted coin reads, so without this a throttled DexScreener recorded a clean run while every
+  // Live feed market cap froze.
+  const failed = new Set<string>();
   try {
     result = await refreshLiveMarketData(dexScreener, stale, {
       peakWindowDays: env.SNAPSHOT_RETENTION_DAYS,
+      failed,
     });
   } catch (err) {
     logger.warn("live price refresh failed", { viewed: stale.length, error: String(err) });
@@ -72,5 +81,18 @@ export async function runLivePriceJob(dexScreener: DexScreenerClient, env: Env):
     refreshed: result.requested,
     updated: result.updated,
     missingFromDexScreener: result.requested - result.updated,
+    failed: failed.size,
   });
+  const counts = {
+    viewed: viewed.length,
+    refreshed: result.requested,
+    updated: result.updated,
+    failed: failed.size,
+  };
+  // Nothing priced because every batch failed: a failed run, so /health/worker and pipeline-watch
+  // see it. Some batches failing is a run that mostly worked; its count rides on the row.
+  if (failed.size > 0 && failed.size >= stale.length && result.updated === 0) {
+    throw new JobFailure(`every DexScreener batch failed (${failed.size} mints)`, counts);
+  }
+  return counts;
 }

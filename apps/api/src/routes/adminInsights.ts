@@ -8,12 +8,15 @@ import {
   type HeartbeatJob,
   walletTag,
 } from "@trenchscanner/core";
-import { SharedCache } from "../sharedCache.js";
+import { ADMIN_STALE_ON_ERROR_MS, SharedCache } from "../sharedCache.js";
 import { screenReasonLabel } from "../screenReasons.js";
 import { summarizeHeartbeat } from "./health.js";
 import { lockUserFilters } from "./filters.js";
 import { clearReaderCaches } from "./matches.js";
 import { filterLeaderboardCache } from "../filterLeaderboard.js";
+
+/** Admin reports answer with a stale copy on a failed fill only while it is recent (ADMIN_STALE_ON_ERROR_MS). */
+const ADMIN_CACHE = { maxStaleOnErrorMs: ADMIN_STALE_ON_ERROR_MS };
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -56,7 +59,7 @@ function keyedCache<T>(ttlMs: number) {
   return (key: number, fill: () => Promise<T>) => {
     let cache = caches.get(key);
     if (!cache) {
-      cache = new SharedCache<T>(ttlMs);
+      cache = new SharedCache<T>(ttlMs, ADMIN_CACHE);
       caches.set(key, cache);
     }
     return cache.get(fill);
@@ -751,10 +754,13 @@ export async function registerAdminInsightRoutes(app: FastifyInstance) {
     return rejections(parsed.data.minutes, () => buildRejectionFeed(parsed.data.minutes));
   });
 
-  const training = new SharedCache<Awaited<ReturnType<typeof buildTrainingReport>>>(LIVE_CACHE_MS);
+  const training = new SharedCache<Awaited<ReturnType<typeof buildTrainingReport>>>(
+    LIVE_CACHE_MS,
+    ADMIN_CACHE,
+  );
   app.get("/training", async () => training.get(buildTrainingReport));
 
-  const filters = new SharedCache<Awaited<ReturnType<typeof buildFiltersReport>>>(LIVE_CACHE_MS);
+  const filters = new SharedCache<Awaited<ReturnType<typeof buildFiltersReport>>>(LIVE_CACHE_MS, ADMIN_CACHE);
   app.get("/filters", async () => filters.get(buildFiltersReport));
 
   /**
@@ -796,6 +802,9 @@ export async function registerAdminInsightRoutes(app: FastifyInstance) {
     },
   );
 
-  const lookups = new SharedCache<Awaited<ReturnType<typeof buildLookupsReport>>>(REPORT_CACHE_MS);
+  const lookups = new SharedCache<Awaited<ReturnType<typeof buildLookupsReport>>>(
+    REPORT_CACHE_MS,
+    ADMIN_CACHE,
+  );
   app.get("/lookups", async () => lookups.get(buildLookupsReport));
 }

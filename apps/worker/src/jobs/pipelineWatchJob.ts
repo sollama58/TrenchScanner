@@ -6,6 +6,7 @@ import {
   HEARTBEAT_JOB_ROLE,
   heldJobLocks,
   JOB_LOCKED_JOBS,
+  lockLostDuringRun,
   runningSinceFrom,
   TelegramApi,
   type Env,
@@ -55,6 +56,12 @@ export interface FlowCheck {
 export interface JobCheck {
   job: HeartbeatJob;
   lastRunAt: Date | null;
+  /**
+   * When a run last succeeded, and the last error: a failed run still advances lastRunAt, so a job
+   * failing every run looked like a healthy one here. Undefined when not read (not judged).
+   */
+  lastSuccessAt?: Date | null;
+  lastError?: string | null;
   /** The cadence the job reported (scheduler meta.intervalMs). */
   intervalMs: number | null;
   runningSince: Date | null;
@@ -81,6 +88,13 @@ const FLOW_LABELS: Record<keyof typeof FLOW_WINDOWS_MINUTES, string> = {
 
 /** The jobs on the alert path; a quiet heartbeat on any of them stops alerts. */
 export const WATCHED_JOBS: HeartbeatJob[] = ["scan", "fast-match", "candidate-watch", "telegram-dispatch"];
+/**
+ * The scanner's jobs off the alert path that users still wait on: burn-scan credits a burn whose
+ * owner closed the tab (a hung run left them locked out until a deploy), live-price moves the
+ * Live feed's market caps. Watched like the alert path's jobs, but only notified: no banner and no
+ * restart, since alerts are not delayed by them.
+ */
+export const SIDE_JOBS: HeartbeatJob[] = ["burn-scan", "live-price"];
 /** A job is quiet after this many of its own intervals without a run, and never sooner than the floor. */
 const JOB_QUIET_INTERVALS = 5;
 const JOB_QUIET_FLOOR_MS = 10 * 60_000;
@@ -94,6 +108,12 @@ export interface Problem {
   trainer?: boolean;
   /** The database's size: notified and failed like a trainer problem; nothing restarts for it. */
   capacity?: boolean;
+  /**
+   * A scanner job that runs but fails every run, or a side job (SIDE_JOBS) in trouble: notified
+   * and failed like a trainer problem, with no banner and no restart - a restart does not mend an
+   * upstream that is refusing every call, and the alerts themselves still flow.
+   */
+  side?: boolean;
 }
 
 /** The jobs the trainer process runs (see HEARTBEAT_JOB_ROLE), all watched from here. */
@@ -132,6 +152,9 @@ const TRAINER_INTERVAL_SLACK_MS = 2 * HOUR_MS;
 /** Errors that say a person or a deploy cut the run, not that the job is failing. */
 const BENIGN_TRAINER_ERRORS = [SHUTDOWN_INTERRUPTED_ERROR, STOPPED_ERROR];
 const TRAINER_ERROR_LENGTH = 200;
+/** A trainer interval job this frequent is reported failing only after FREQUENT_TRAINER_FAILING_MS. */
+const FREQUENT_TRAINER_JOB_MS = 5 * 60_000;
+const FREQUENT_TRAINER_FAILING_MS = 30 * 60_000;
 
 /**
  * How long a trainer job may go without a run before it is called overdue, from the cadence its
@@ -173,6 +196,18 @@ export function findTrainerProblems(jobs: TrainerJobCheck[], now: number): Probl
     }
     const error = j.lastError;
     if (error === null || BENIGN_TRAINER_ERRORS.some((e) => error.startsWith(e))) continue;
+    // A job that runs every few minutes (candle-peaks, label-regrade) is told about once its runs
+    // have failed for a while, not on each failed run: one Pump.fun 429 was a notice and its
+    // "flowing again" a minute later.
+    if (
+      j.dailyAtHourUtc === null &&
+      j.intervalMs !== null &&
+      j.intervalMs <= FREQUENT_TRAINER_JOB_MS &&
+      j.lastSuccessAt !== null &&
+      now - j.lastSuccessAt.getTime() <= FREQUENT_TRAINER_FAILING_MS
+    ) {
+      continue;
+    }
     // A PartialJobFailure is recorded as a success, so its lastSuccessAt is the run's own time.
     const partial = j.lastSuccessAt !== null && j.lastSuccessAt.getTime() >= j.lastRunAt.getTime();
     const day = j.dailyAtHourUtc !== null ? `@${j.lastRunAt.toISOString().slice(0, 10)}` : "";
@@ -241,7 +276,55 @@ export function findProblems(
         key: `job:${j.job}`,
         text: `Job ${j.job}: no run for ${Math.round(since / 60_000)} min`,
       });
+      continue;
     }
+    const failing = failingProblem(j, now, quietAfter);
+    if (failing) out.push(failing);
+  }
+  return out;
+}
+
+/** The key and text for a job that runs but has not succeeded for `afterMs`, or null. */
+function failingProblem(j: JobCheck, now: number, afterMs: number): Problem | null {
+  // Not read (undefined), or a success within the window.
+  if (j.lastSuccessAt === undefined || j.lastRunAt === null) return null;
+  if (j.lastSuccessAt !== null && now - j.lastSuccessAt.getTime() <= afterMs) return null;
+  const forText =
+    j.lastSuccessAt === null
+      ? "every run has failed"
+      : `every run failed for ${formatAge(now - j.lastSuccessAt.getTime())}`;
+  const error = (j.lastError?.split("\n")[0] ?? "").slice(0, TRAINER_ERROR_LENGTH);
+  return {
+    key: `failing:${j.job}`,
+    text: `Job ${j.job}: ${forText}${error ? `: ${error}` : ""}`,
+    side: true,
+  };
+}
+
+/**
+ * Pure: the side jobs (SIDE_JOBS) that hang, have stopped, or fail every run - all notify-only
+ * (`side`), keyed apart from the alert path's so they never start the restart clock.
+ */
+export function findSideJobProblems(jobs: JobCheck[], now: number): Problem[] {
+  const out: Problem[] = [];
+  for (const j of jobs) {
+    if (j.lastRunAt === null) continue;
+    const quietAfter = Math.max(JOB_QUIET_FLOOR_MS, (j.intervalMs ?? 0) * JOB_QUIET_INTERVALS);
+    if (j.runningSince !== null && now - j.runningSince.getTime() > Math.max(JOB_HUNG_MS, quietAfter)) {
+      out.push({
+        key: `side:${j.job}`,
+        text: `Job ${j.job}: a run has not returned for ${formatAge(now - j.runningSince.getTime())}`,
+        side: true,
+      });
+      continue;
+    }
+    const since = now - j.lastRunAt.getTime();
+    if (since > quietAfter) {
+      out.push({ key: `side:${j.job}`, text: `Job ${j.job}: no run for ${formatAge(since)}`, side: true });
+      continue;
+    }
+    const failing = failingProblem(j, now, quietAfter);
+    if (failing) out.push(failing);
   }
   return out;
 }
@@ -307,15 +390,17 @@ async function countFlows(now: number): Promise<FlowCheck[]> {
   return out;
 }
 
-async function readJobs(): Promise<JobCheck[]> {
-  const rows = await prisma.systemHeartbeat.findMany({ where: { job: { in: WATCHED_JOBS } } });
-  return WATCHED_JOBS.map((job) => {
+async function readJobs(jobs: HeartbeatJob[]): Promise<JobCheck[]> {
+  const rows = await prisma.systemHeartbeat.findMany({ where: { job: { in: jobs } } });
+  return jobs.map((job) => {
     const row = rows.find((r) => r.job === job);
     const meta = (row?.meta ?? null) as Record<string, unknown> | null;
     const interval = meta && typeof meta.intervalMs === "number" ? meta.intervalMs : null;
     return {
       job,
       lastRunAt: row?.lastRunAt ?? null,
+      lastSuccessAt: row?.lastSuccessAt ?? null,
+      lastError: row?.lastError ?? null,
       intervalMs: interval,
       runningSince: runningSinceFrom(row?.meta, row?.lastRunAt),
     };
@@ -340,7 +425,9 @@ async function readTrainerJobs(now: number): Promise<TrainerJobCheck[]> {
       since !== null &&
       JOB_LOCKED_JOBS.includes(job) &&
       now - since.getTime() > LOST_RUN_GRACE_MS &&
-      !held.has(job);
+      !held.has(job) &&
+      // Still going after its lock's connection dropped (jobLock.ts): not lost.
+      !lockLostDuringRun(row?.meta, since);
     return {
       lostRunSince: lost ? since : null,
       job,
@@ -404,12 +491,18 @@ async function adminChats(env: Env): Promise<bigint[]> {
 
 export function notificationText(started: Problem[], cleared: string[], still: Problem[]): string {
   const lines: string[] = [];
-  const stalled = started.filter((p) => !p.trainer && !p.capacity);
+  const stalled = started.filter((p) => !p.trainer && !p.capacity && !p.side);
+  const side = started.filter((p) => p.side);
   const trainer = started.filter((p) => p.trainer);
   const capacity = started.filter((p) => p.capacity);
   if (stalled.length > 0) {
     lines.push("<b>⚠️ TrenchScanner pipeline stalled</b>");
     for (const p of stalled) lines.push(`• ${escapeHtml(p.text)}`);
+  }
+  if (side.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push("<b>⚠️ TrenchScanner scanner jobs need a look</b>");
+    for (const p of side) lines.push(`• ${escapeHtml(p.text)}`);
   }
   if (trainer.length > 0) {
     if (lines.length > 0) lines.push("");
@@ -546,22 +639,24 @@ async function watchOnce(
   const now = deps.now ?? Date.now();
   const before = await previousState();
   remember(before);
-  const [flows, jobs, trainerJobs, cursor, dbBytes] = await Promise.all([
+  const [flows, jobs, sideJobs, trainerJobs, cursor, dbBytes] = await Promise.all([
     countFlows(now),
-    readJobs(),
+    readJobs(WATCHED_JOBS),
+    readJobs(SIDE_JOBS),
     readTrainerJobs(now),
     oldestChatCursor(),
     databaseBytes(),
   ]);
   const problems = [
     ...findProblems(flows, jobs, now, cursor),
+    ...findSideJobProblems(sideJobs, now),
     ...findTrainerProblems(trainerJobs, now),
     ...findCapacityProblems(dbBytes, env.DB_DISK_ALERT_MB),
   ];
   // Only the alert path's own problems are a stall: they alone start the clock towards the
   // visitors' banner and the scanner restart, neither of which a trainer job's problem or a
   // filling disk calls for.
-  const stalls = problems.filter((p) => !p.trainer && !p.capacity);
+  const stalls = problems.filter((p) => !p.trainer && !p.capacity && !p.side);
   const keys = new Set(problems.map((p) => p.key));
   const started = problems.filter((p) => !before.keys.has(p.key));
   const cleared = clearedKeys(before.keys, keys);

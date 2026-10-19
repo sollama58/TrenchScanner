@@ -678,6 +678,8 @@ interface Job {
   lastSuccessAt: string | null;
   lastError: string | null;
   stale: boolean;
+  /** Running, but nothing has succeeded within its stale threshold (absent from older API builds). */
+  failing?: boolean;
   hung: boolean;
   runningForMs: number | null;
   lastRun:
@@ -710,6 +712,8 @@ function Worker() {
                   <Tag tone="ok">running {ms(j.runningForMs)}</Tag>
                 ) : j.stale ? (
                   <Tag tone="warn">stale</Tag>
+                ) : j.failing ? (
+                  <Tag tone="bad">failing</Tag>
                 ) : j.lastError ? (
                   <Tag tone="warn">failed</Tag>
                 ) : typeof j.lastRun?.skipped === "string" ? (

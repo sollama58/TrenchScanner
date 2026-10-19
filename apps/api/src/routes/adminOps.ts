@@ -16,7 +16,7 @@ import {
 } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
-import { SharedCache } from "../sharedCache.js";
+import { ADMIN_STALE_ON_ERROR_MS, SharedCache } from "../sharedCache.js";
 import { summarizeHeartbeat } from "./health.js";
 import { issueTradeConfirmation, requireAdminConfirmation } from "../tradeConfirm.js";
 import {
@@ -26,6 +26,9 @@ import {
   buildStorageReport,
   type Targets,
 } from "./stats.js";
+
+/** Admin reports answer with a stale copy on a failed fill only while it is recent (ADMIN_STALE_ON_ERROR_MS). */
+const ADMIN_CACHE = { maxStaleOnErrorMs: ADMIN_STALE_ON_ERROR_MS };
 
 const DAY_MS = 86_400_000;
 
@@ -147,7 +150,7 @@ export async function registerAdminOpsRoutes(
     const days = parsed.data.days;
     let cache = hitRateCaches.get(days);
     if (!cache) {
-      cache = new SharedCache(REPORT_CACHE_MS);
+      cache = new SharedCache(REPORT_CACHE_MS, ADMIN_CACHE);
       hitRateCaches.set(days, cache);
     }
     return cache.get(() => {
@@ -161,7 +164,10 @@ export async function registerAdminOpsRoutes(
   /** What the database is doing right now: running queries, hot tables, indexes, lock waits. */
   app.get("/db", async () => buildDbReport());
 
-  const storageCache = new SharedCache<Awaited<ReturnType<typeof buildStorageReport>>>(5 * REPORT_CACHE_MS);
+  const storageCache = new SharedCache<Awaited<ReturnType<typeof buildStorageReport>>>(
+    5 * REPORT_CACHE_MS,
+    ADMIN_CACHE,
+  );
   /** Where the disk goes and how fast each table grows (the retention view). Cached 5 minutes. */
   app.get("/storage", async () => storageCache.get(buildStorageReport));
 

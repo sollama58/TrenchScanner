@@ -10,6 +10,7 @@ import {
   MAX_COMMIT_WAIT_MS,
   REALERT_AFTER_MS,
   dashboardUrl,
+  dispatchFailure,
   oldestOpenTransaction,
   PICKS_FALLBACK_TEXT,
   resetArtworkMisses,
@@ -48,6 +49,27 @@ describe("dashboardUrl", () => {
     expect(dashboardUrl({ ...env, TELEGRAM_DASHBOARD_URL: "", PUBLIC_APP_DOMAIN: "localhost:5173" })).toBe(
       "http://localhost:5173",
     );
+  });
+});
+
+describe("dispatchFailure", () => {
+  const pass = (over: Partial<Parameters<typeof dispatchFailure>[0]> = {}) => ({
+    chats: 2,
+    sent: 0,
+    digests: 0,
+    failed: 0,
+    skipped: 0,
+    accessErrors: 0,
+    unconfirmed: 0,
+    duplicates: 0,
+    ...over,
+  });
+  it("fails a pass whose every send failed, and no other", () => {
+    expect(dispatchFailure(pass({ failed: 3 }))).toBe("every Telegram send failed (3 of 3 this pass)");
+    expect(dispatchFailure(pass({ failed: 1, sent: 2 }))).toBeNull();
+    expect(dispatchFailure(pass({ failed: 1, digests: 1 }))).toBeNull();
+    // Nothing to send is a quiet pass, not a failed one.
+    expect(dispatchFailure(pass())).toBeNull();
   });
 });
 

@@ -73,6 +73,25 @@ describe("SharedCache", () => {
     ).resolves.toBe("good");
   });
 
+  it("with maxStaleOnErrorMs, answers a failed refresh from a recent value only", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const cache = new SharedCache<string>(0, { maxStaleOnErrorMs: 15 * 60_000 });
+      expect(await cache.get(async () => "good")).toBe("good");
+      const down = async (): Promise<string> => {
+        throw new Error("database is down");
+      };
+      vi.setSystemTime(10 * 60_000);
+      await expect(cache.get(down)).resolves.toBe("good");
+      // An admin report that old reads as current: the error says what is going on instead.
+      vi.setSystemTime(20 * 60_000);
+      await expect(cache.get(down)).rejects.toThrow("database is down");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("propagates the error when there is nothing cached to fall back to", async () => {
     // A cold cache has no better answer than the truth.
     const cache = new SharedCache<string>(1_000);

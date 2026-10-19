@@ -3,8 +3,18 @@ import type { WorkerHealth } from "../api";
 import { usePolling } from "../hooks";
 import { ago } from "../format";
 
-/** Past this, a stage that normally produces every few minutes reads as stalled in the tooltip. */
-const STAGE_STALE_MS = 15 * 60_000;
+/**
+ * Past these, a stage reads as stalled in the tooltip: the windows pipeline-watch judges each
+ * stage by (FLOW_WINDOWS_MINUTES in the worker), so the dot and the admins' alarm agree. Model
+ * alerts are the quietest stage; at 15 minutes their dot went amber most quiet hours while
+ * nothing was wrong. The pre-check pass has no window there and keeps the scan-sized one.
+ */
+const STAGE_STALE_MS = {
+  alert: 90 * 60_000,
+  preCheck: 15 * 60_000,
+  tokenSage: 15 * 60_000,
+  decision: 30 * 60_000,
+} as const;
 
 /** "42s ago", "12m 5s ago", "3h 10m ago": finer than ago(), since a stall is minutes long. */
 function since(iso: string | null | undefined, now: number): string {
@@ -89,10 +99,14 @@ export function ScanStatus({
   const p = data.pipeline;
   const stages = p
     ? [
-        { label: "Last alert by any model", at: p.lastAlertAt },
-        { label: "Last token passed pre-check", at: p.lastPreCheckPassAt },
-        { label: "Last token back from TokenSage", at: p.lastTokenSageAt },
-        { label: "Last token considered by any model", at: p.lastDecisionAt },
+        { label: "Last alert by any model", at: p.lastAlertAt, staleMs: STAGE_STALE_MS.alert },
+        { label: "Last token passed pre-check", at: p.lastPreCheckPassAt, staleMs: STAGE_STALE_MS.preCheck },
+        { label: "Last token back from TokenSage", at: p.lastTokenSageAt, staleMs: STAGE_STALE_MS.tokenSage },
+        {
+          label: "Last token considered by any model",
+          at: p.lastDecisionAt,
+          staleMs: STAGE_STALE_MS.decision,
+        },
       ]
     : [];
   const mouse = (e: React.PointerEvent) => e.pointerType === "mouse";
@@ -152,7 +166,7 @@ export function ScanStatus({
           <>
             <span className="status-tip-head">Alert pipeline</span>
             {stages.map((st) => {
-              const late = !st.at || now - new Date(st.at).getTime() > STAGE_STALE_MS;
+              const late = !st.at || now - new Date(st.at).getTime() > st.staleMs;
               return (
                 <span key={st.label} className="status-tip-row">
                   <span className={`status-tip-dot ${late ? "warn" : "ok"}`} />
@@ -167,7 +181,7 @@ export function ScanStatus({
           <>
             <span className="status-tip-head">Jobs</span>
             {data.jobs.map((j) => {
-              const late = j.stale || j.hung;
+              const late = j.stale || j.hung || j.failing === true;
               return (
                 <span key={j.job} className="status-tip-row">
                   <span className={`status-tip-dot ${late ? "warn" : "ok"}`} />

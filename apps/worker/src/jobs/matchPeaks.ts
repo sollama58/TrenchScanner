@@ -370,9 +370,14 @@ const WINDOW_SLACK_MINUTES = 2;
 export interface SweepResume {
   /** Only tokens whose id sorts after this one are swept. */
   afterTokenId?: string;
+  /** Only these tokens are swept (a retry of the ones an earlier sweep could not read). */
+  onlyTokenIds?: readonly string[];
   /** Called after each batch with the batch's last token id and the totals so far. */
-  onBatch?: (lastTokenId: string, totals: PeakRecordingResult & { failedBatches: number }) => Promise<void>;
+  onBatch?: (lastTokenId: string, totals: FullSweepTotals) => Promise<void>;
 }
+
+/** What a full sweep did; `failedTokenIds` are the tokens it could not read, one at a time. */
+export type FullSweepTotals = PeakRecordingResult & { failedBatches: number; failedTokenIds: string[] };
 
 /** Tokens per statement in the nightly full sweep - see recordMatchPeaksFullSweep. */
 const FULL_SWEEP_TOKENS_PER_BATCH = 100;
@@ -398,14 +403,16 @@ export async function recordMatchPeaksFullSweep(
    */
   snapshotsSince?: Date,
   resume: SweepResume = {},
-): Promise<PeakRecordingResult & { failedBatches: number }> {
+): Promise<FullSweepTotals> {
   const after = resume.afterTokenId ?? "";
-  const tokens = await prisma.$queryRaw<{ tokenId: string }[]>`
+  const tokens = resume.onlyTokenIds
+    ? [...resume.onlyTokenIds].sort().map((tokenId) => ({ tokenId }))
+    : await prisma.$queryRaw<{ tokenId: string }[]>`
     SELECT DISTINCT "tokenId" FROM "Match"
     WHERE "matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
       AND "tokenId" > ${after}
     ORDER BY "tokenId"`;
-  const total = { fromSnapshots: 0, fromLivePings: 0, failedBatches: 0 };
+  const total: FullSweepTotals = { fromSnapshots: 0, fromLivePings: 0, failedBatches: 0, failedTokenIds: [] };
   const add = (batch: PeakRecordingResult) => {
     total.fromSnapshots += batch.fromSnapshots;
     total.fromLivePings += batch.fromLivePings;
@@ -424,12 +431,18 @@ export async function recordMatchPeaksFullSweep(
         } catch (err) {
           logger.warn("full peak sweep failed for a token, moving on", { tokenId, error: String(err) });
           total.failedBatches += 1;
+          total.failedTokenIds.push(tokenId);
         }
       }
     }
     await resume.onBatch?.(tokenIds[tokenIds.length - 1]!, total);
   }
-  logger.info("full peak sweep complete", { tokens: tokens.length, ...total });
+  logger.info("full peak sweep complete", {
+    tokens: tokens.length,
+    fromSnapshots: total.fromSnapshots,
+    fromLivePings: total.fromLivePings,
+    failedBatches: total.failedBatches,
+  });
   return total;
 }
 

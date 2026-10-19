@@ -3,6 +3,7 @@ import { prisma } from "./db.js";
 import {
   HEARTBEAT_JOB_ROLE,
   lastRebuiltAt,
+  lockLostDuringRun,
   recordHeartbeat,
   recordRunStart,
   runningSinceFrom,
@@ -110,5 +111,17 @@ describe("worker roles", () => {
     expect(runsJob("trader", "trading-bot")).toBe(true);
     expect(runsJob("trader", "scan")).toBe(false);
     expect(runsJob("scanner", "trading-bot")).toBe(false);
+  });
+});
+
+describe("lockLostDuringRun", () => {
+  const since = new Date("2026-10-19T03:00:00.000Z");
+  it("is a lock lost after the run in flight started, and nothing else", () => {
+    expect(lockLostDuringRun({ lockLostAt: "2026-10-19T03:20:00.000Z" }, since)).toBe(true);
+    // Left from an earlier run: says nothing about this one.
+    expect(lockLostDuringRun({ lockLostAt: "2026-10-18T03:20:00.000Z" }, since)).toBe(false);
+    expect(lockLostDuringRun({ lockLostAt: "2026-10-19T03:20:00.000Z" }, null)).toBe(false);
+    expect(lockLostDuringRun({ runningSince: since.toISOString() }, since)).toBe(false);
+    expect(lockLostDuringRun(null, since)).toBe(false);
   });
 });

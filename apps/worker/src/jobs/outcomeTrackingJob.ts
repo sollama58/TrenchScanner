@@ -1,5 +1,5 @@
 import { prisma, createLogger, forEachWithConcurrency, type DexScreenerClient } from "@trenchscanner/core";
-import type { JobRunMeta } from "../scheduler.js";
+import { PartialJobFailure, type JobRunMeta } from "../scheduler.js";
 import { recordMatchPeaksFullSweep } from "./matchPeaks.js";
 import { recordCuratedPeaksFullSweep } from "./curatedPeaks.js";
 
@@ -138,6 +138,51 @@ const RESUME_MAX_AGE_MS = 12 * 3_600_000;
 const CHECKPOINT_KEY = "outcomeResume";
 
 /**
+ * Tokens the full sweep could not read, carried to the next nights (see RetryTokens): at most this
+ * many, for at most this many nights each before they are given up on (logged).
+ */
+const RETRY_TOKENS_MAX = 200;
+const RETRY_MAX_NIGHTS = 3;
+
+/**
+ * The tokens a run's full peak sweep could not read, kept on the heartbeat row (retryTokens,
+ * retrySince, retryNights) for the next run to read again first, from the snapshot bound they
+ * missed.
+ *
+ * Why: a failed token used to fail the whole run, so one token that always failed (a history too
+ * long for the statement timeout) failed outcome-tracking every night, spent the day's retries
+ * re-running the whole job, and lost its checkpoint each time with the failed heartbeat's meta.
+ * Now the run succeeds with the failure kept as its error (PartialJobFailure), and only those
+ * tokens are read again.
+ */
+export interface RetryTokens {
+  ids: string[];
+  /** The snapshot bound they were missed from; null for the whole history. */
+  since: Date | null;
+  /** Nights in a row these have failed. */
+  nights: number;
+}
+
+/** The retry list from heartbeat meta, or null when there is none. */
+export function readRetryTokens(meta: unknown): RetryTokens | null {
+  if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
+  const m = meta as Record<string, unknown>;
+  if (typeof m.retryTokens !== "string" || m.retryTokens === "") return null;
+  const since = typeof m.retrySince === "string" ? new Date(m.retrySince) : null;
+  return {
+    ids: m.retryTokens.split(",").filter(Boolean),
+    since: since && !Number.isNaN(since.getTime()) ? since : null,
+    nights: typeof m.retryNights === "number" ? m.retryNights : 1,
+  };
+}
+
+/** The earlier of two snapshot bounds, null (the whole history) winning. */
+function earlierBound(a: Date | null, b: Date | null): Date | null {
+  if (a === null || b === null) return null;
+  return a < b ? a : b;
+}
+
+/**
  * How far a run in flight has got, saved on the job's heartbeat row after every batch.
  *
  * Why: the run takes about twenty minutes and each deploy restarts the trainer, killing it. On
@@ -164,6 +209,8 @@ export interface OutcomeCheckpoint {
   missingLiveData: number;
   /** How many times this run has been resumed. */
   resumes: number;
+  /** Tokens the sweep could not read so far, comma-separated (see RetryTokens). */
+  failedTokens?: string;
 }
 
 /** A saved checkpoint from heartbeat meta, or null when there is none worth resuming. */
@@ -191,6 +238,7 @@ export function readOutcomeCheckpoint(meta: unknown, now: number): OutcomeCheckp
     peaksUpdated: n(c.peaksUpdated),
     missingLiveData: n(c.missingLiveData),
     resumes: n(c.resumes),
+    ...(typeof c.failedTokens === "string" && c.failedTokens !== "" ? { failedTokens: c.failedTokens } : {}),
   };
 }
 
@@ -205,6 +253,15 @@ async function saveCheckpoint(checkpoint: OutcomeCheckpoint): Promise<void> {
 export async function runOutcomeTrackingJob(
   dexScreener: DexScreenerClient,
   snapshotRetentionDays: number,
+  opts: {
+    /**
+     * How long after an alert the coin's candles keep its Peak (PEAK_TRACKING_DAYS, candlePeaks.ts).
+     * Past it the candle reads stop, but this pass goes on for OUTCOME_TRACKING_WINDOW_DAYS, so it
+     * may raise those matches' peaks again: otherwise a coin that woke up between the two windows
+     * was never seen.
+     */
+    peakTrackingDays?: number;
+  } = {},
 ): Promise<JobRunMeta> {
   const startedAt = Date.now();
 
@@ -276,11 +333,32 @@ export async function runOutcomeTrackingJob(
     resumed ? { resumingAt: resumed.stage, after: resumed.after } : {},
   );
 
+  // Tokens an earlier night could not read, first: from the bound they missed, which this run's own
+  // sweep (from a day before the last success) no longer reaches.
+  const retry = readRetryTokens(row?.meta);
+  let retryStillFailing: string[] = [];
+  if (retry && stageIndex <= 0 && checkpoint.after === undefined) {
+    const result = await recordMatchPeaksFullSweep(snapshotRetentionDays, retry.since ?? undefined, {
+      onlyTokenIds: retry.ids,
+    });
+    retryStillFailing = result.failedTokenIds;
+    if (retry.nights >= RETRY_MAX_NIGHTS && retryStillFailing.length > 0) {
+      logger.error("full peak sweep: giving up on tokens that failed every night", {
+        nights: retry.nights + 1,
+        tokens: retryStillFailing.length,
+        sample: retryStillFailing.slice(0, 5),
+      });
+      retryStillFailing = [];
+    }
+    endStage("retryTokens");
+  }
+
   if (stageIndex <= 0) {
     const base = {
       fromSnapshots: checkpoint.fromSnapshots,
       fromLivePings: checkpoint.fromLivePings,
       failedBatches: checkpoint.failedBatches,
+      failedTokens: checkpoint.failedTokens?.split(",").filter(Boolean),
     };
     await recordMatchPeaksFullSweep(snapshotRetentionDays, snapshotsSince, {
       afterTokenId: afterFor("match-peaks"),
@@ -291,6 +369,9 @@ export async function runOutcomeTrackingJob(
           fromSnapshots: base.fromSnapshots + totals.fromSnapshots,
           fromLivePings: base.fromLivePings + totals.fromLivePings,
           failedBatches: base.failedBatches + totals.failedBatches,
+          failedTokens: [...(base.failedTokens ?? []), ...totals.failedTokenIds]
+            .slice(0, RETRY_TOKENS_MAX)
+            .join(","),
         }),
     });
     await save({ stage: "curated-peaks", after: undefined });
@@ -308,6 +389,9 @@ export async function runOutcomeTrackingJob(
   }
 
   const cutoff = new Date(runStartedAt - OUTCOME_TRACKING_WINDOW_DAYS * 86_400_000);
+  // Matches the candle reads no longer follow (see opts.peakTrackingDays).
+  const candleHorizon =
+    opts.peakTrackingDays !== undefined ? new Date(runStartedAt - opts.peakTrackingDays * 86_400_000) : null;
   const matches = await prisma.match.findMany({
     where: { matchedAt: { gt: cutoff } },
     // Only what the reconcile reads - full token and snapshot rows for 30 days of matches is a
@@ -383,9 +467,14 @@ export async function runOutcomeTrackingJob(
       const write = await prisma.match.updateMany({
         where: {
           id: match.id,
-          // A peak the coin's own trades keep (candlePeaks.ts) is theirs, not a live price's.
-          peakCheckedAt: null,
-          OR: [{ peakMcapUsd: null }, { peakMcapUsd: { lt: update.peakMcapUsd } }],
+          AND: [
+            // A peak the coin's own trades keep (candlePeaks.ts) is theirs, not a live price's -
+            // until the candle reads stop following the match, past PEAK_TRACKING_DAYS.
+            {
+              OR: [{ peakCheckedAt: null }, ...(candleHorizon ? [{ matchedAt: { lt: candleHorizon } }] : [])],
+            },
+            { OR: [{ peakMcapUsd: null }, { peakMcapUsd: { lt: update.peakMcapUsd } }] },
+          ],
         },
         data: { peakMcapUsd: update.peakMcapUsd, peakMcapAt: update.peakMcapAt },
       });
@@ -416,11 +505,30 @@ export async function runOutcomeTrackingJob(
     resumes: checkpoint.resumes,
   };
   logger.info("outcome tracking job complete", { durationMs: Date.now() - startedAt, ...summary, stagesMs });
-  // The next sweep reads only snapshots from a day before this run's success, so a batch that
-  // failed here would never have its older snapshots read again. Failing the run keeps
-  // lastSuccessAt where it was, and the next run reads far enough back to cover them.
-  if (checkpoint.failedBatches > 0) {
-    throw new Error(`full peak sweep: ${checkpoint.failedBatches} token(s) failed; next run re-reads them`);
+  // The next sweep reads only snapshots from a day before this run's success, so a token that
+  // failed here would never have its older snapshots read again: they go on the row (RetryTokens)
+  // for the next run to read from this run's bound. The run itself succeeded, with the failure
+  // kept as its error - failing it re-ran the whole job three times a night for one bad token.
+  const failedNow = checkpoint.failedTokens?.split(",").filter(Boolean) ?? [];
+  const carried = [...new Set([...retryStillFailing, ...failedNow])].slice(0, RETRY_TOKENS_MAX);
+  if (carried.length > 0) {
+    const since =
+      retryStillFailing.length > 0 && retry
+        ? failedNow.length > 0
+          ? earlierBound(retry.since, snapshotsSince ?? null)
+          : retry.since
+        : (snapshotsSince ?? null);
+    const nights = retryStillFailing.length > 0 && retry ? retry.nights + 1 : 1;
+    throw new PartialJobFailure(
+      `full peak sweep: ${carried.length} token(s) failed; the next run reads them again`,
+      {
+        ...summary,
+        stagesMs,
+        retryTokens: carried.join(","),
+        retrySince: since?.toISOString() ?? null,
+        retryNights: nights,
+      },
+    );
   }
   // On the heartbeat row (replacing meta, which also clears the checkpoint): the stages say where
   // a slow night's time went, and resumes how many deploys this run outlived.

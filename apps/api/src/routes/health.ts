@@ -3,6 +3,7 @@ import {
   HEARTBEAT_JOB_ROLE,
   JOB_LOCKED_JOBS,
   heldJobLocks,
+  lockLostDuringRun,
   prisma,
   readAiBudget,
   runningSinceFrom,
@@ -190,14 +191,27 @@ export const STRICT_WORKER_JOBS: readonly HeartbeatJob[] = [
 ];
 
 /**
- * The strict jobs that are stale or have no heartbeat row at all, by the same `stale` the body
- * reports. Pure, so the route's status code and its tests agree on one definition.
+ * The strict jobs that are stale, failing every run, or have no heartbeat row at all, by the same
+ * `stale` and `failing` the body reports. Pure, so the route's status code and its tests agree on
+ * one definition. Failing counts: a failed run still advances lastRunAt, so a scan failing every
+ * cycle used to read as healthy here for as long as it kept failing.
  */
-export function strictWorkerFailures(jobs: { job: string; stale: boolean }[]): string[] {
+export function strictWorkerFailures(jobs: { job: string; stale: boolean; failing?: boolean }[]): string[] {
   return STRICT_WORKER_JOBS.filter((job) => {
     const row = jobs.find((j) => j.job === job);
-    return !row || row.stale;
+    // pipeline-watch's failed runs are its reports (a trainer job failing, a filling disk), not
+    // the watcher failing; only its silence counts here.
+    return !row || row.stale || (row.failing === true && job !== "pipeline-watch");
   });
+}
+
+/**
+ * Whether a job has gone its stale threshold without a successful run: every run in that time
+ * failed (a job that has never succeeded, every run so far). Separate from `stale` (no run at
+ * all), since the two call for different fixes.
+ */
+export function isFailing(lastSuccessAt: Date | null, thresholdMs: number, now: number): boolean {
+  return lastSuccessAt === null || now - lastSuccessAt.getTime() > thresholdMs;
 }
 
 /** The later of two optional times. */
@@ -330,12 +344,15 @@ export function summarizeHeartbeat(
   // A lock-guarded run whose lock nobody holds: its process died without its shutdown path, so
   // the run is gone and nothing will clear the stamp before the job's next run. Only judged when
   // the caller read the locks (heldJobLocks).
+  // A run that lost its lock's connection and couldn't take it again (lockLostDuringRun) is still
+  // going without it, so its free lock proves nothing.
   const orphaned =
     opts.heldLocks != null &&
     LOCKED_JOBS.has(h.job) &&
     runningForMs !== null &&
     runningForMs > ORPHAN_GRACE_MS &&
-    !opts.heldLocks.has(h.job);
+    !opts.heldLocks.has(h.job) &&
+    !lockLostDuringRun(h.meta, runningSince);
   return {
     job: h.job,
     // Which worker process owns the job (render.yaml runs a scanner and a trainer), so a
@@ -346,6 +363,8 @@ export function summarizeHeartbeat(
     lastSuccessAt: h.lastSuccessAt,
     lastError: h.lastError ? (opts.fullError ? h.lastError : publicErrorText(h.lastError)) : null,
     stale: now - h.lastRunAt.getTime() > threshold,
+    // Running, but no run has succeeded for as long as `stale` allows (see isFailing).
+    failing: isFailing(h.lastSuccessAt, threshold, now),
     staleAfterMs: threshold,
     runningForMs,
     hung:

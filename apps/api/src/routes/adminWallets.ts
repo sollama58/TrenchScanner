@@ -13,7 +13,9 @@ import {
   type StopCause,
   type StopRole,
 } from "@trenchscanner/core";
-import { SharedCache } from "../sharedCache.js";
+import { ADMIN_STALE_ON_ERROR_MS, SharedCache } from "../sharedCache.js";
+/** Admin reports answer with a stale copy on a failed fill only while it is recent (ADMIN_STALE_ON_ERROR_MS). */
+const ADMIN_CACHE = { maxStaleOnErrorMs: ADMIN_STALE_ON_ERROR_MS };
 
 /**
  * The Admin "Wallets" section (brief: notes/hit-catch-2026-10-13/wallet-risk-brief.md): the
@@ -341,7 +343,7 @@ async function sideBots() {
 }
 
 export async function registerAdminWalletRoutes(app: FastifyInstance) {
-  const bots = new SharedCache<Awaited<ReturnType<typeof sideBots>>>(OVERVIEW_CACHE_MS);
+  const bots = new SharedCache<Awaited<ReturnType<typeof sideBots>>>(OVERVIEW_CACHE_MS, ADMIN_CACHE);
   app.get("/wallets/bots", async () => bots.get(sideBots));
 
   const overview = new Map<string, SharedCache<Awaited<ReturnType<typeof buildOverview>>>>();
@@ -353,7 +355,7 @@ export async function registerAdminWalletRoutes(app: FastifyInstance) {
     let cache = overview.get(key);
     if (!cache) {
       if (overview.size > 16) overview.clear();
-      cache = new SharedCache(OVERVIEW_CACHE_MS);
+      cache = new SharedCache(OVERVIEW_CACHE_MS, ADMIN_CACHE);
       overview.set(key, cache);
     }
     return cache.get(() => buildOverview(parsed.data.limit, parsed.data.minCoins));

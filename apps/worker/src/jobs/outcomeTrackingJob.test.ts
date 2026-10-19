@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   readOutcomeCheckpoint,
+  readRetryTokens,
   reconcileMatchOutcome,
   type MatchOutcomeState,
 } from "./outcomeTrackingJob.js";
@@ -176,5 +177,25 @@ describe("readOutcomeCheckpoint", () => {
     );
     expect(read?.snapshotsSince).toBeNull();
     expect(read?.matchesChecked).toBe(0);
+  });
+});
+
+describe("readRetryTokens", () => {
+  it("reads the tokens a run could not sweep, with the bound they missed", () => {
+    expect(
+      readRetryTokens({ retryTokens: "a,b", retrySince: "2026-10-17T04:00:00.000Z", retryNights: 2 }),
+    ).toEqual({ ids: ["a", "b"], since: new Date("2026-10-17T04:00:00.000Z"), nights: 2 });
+    // No bound: the whole history; no count: the first night.
+    expect(readRetryTokens({ retryTokens: "a", retrySince: null })).toEqual({
+      ids: ["a"],
+      since: null,
+      nights: 1,
+    });
+  });
+
+  it("is null when the last run left nothing to retry", () => {
+    expect(readRetryTokens(null)).toBeNull();
+    expect(readRetryTokens({ matchesChecked: 4 })).toBeNull();
+    expect(readRetryTokens({ retryTokens: "" })).toBeNull();
   });
 });
