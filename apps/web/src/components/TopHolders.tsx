@@ -46,7 +46,7 @@ export function TopHolders({
    * (user ask 2026-10-19); none for a list kept as it stood.
    */
   /** `live`: shares move with the live trades between reads (liveShares.ts). */
-  freshness?: { last: number; next: number | null; live?: boolean };
+  freshness?: { last: number; next: number | null; late?: boolean; live?: boolean };
 }) {
   const [all, setAll] = useState(false);
   const [open, setOpen] = useState(defaultOpen);
@@ -94,7 +94,14 @@ export function TopHolders({
       <FoldHead open={open} onToggle={() => setOpen((o) => !o)} controls={bodyId}>
         Top holders
         <span className="sage-tag">{holders.length + (rest?.count ?? 0)}</span>
-        {freshness && <LiveStamp last={freshness.last} next={freshness.next} live={freshness.live} />}
+        {freshness && (
+          <LiveStamp
+            last={freshness.last}
+            next={freshness.next}
+            late={freshness.late}
+            live={freshness.live}
+          />
+        )}
         {graph.top10Pct !== null && (
           <span
             className="tm-h4-meta muted small num"

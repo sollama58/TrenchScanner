@@ -2,9 +2,8 @@ import {
   alertWideMap,
   fromAlertText,
   hasHolderList,
-  HOLDER_POLL_MS,
-  HOLDER_SCAN_MS,
   holderFreshness,
+  holderListAt,
   linkedCountText,
   momentLabel,
   momentSnapshot,
@@ -36,7 +35,7 @@ import { useLiveMarketCaps, usePolling } from "../hooks";
 import { MIN_WIN_SOL, ago, change, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
 import { TokenImage } from "./TokenImage";
 import { FoldHead } from "./Fold";
-import { LiveStamp, hms, nextUpdateText, useSecondTick } from "./Freshness";
+import { LiveStamp, hms, nextUpdateText, secondsAgo, useSecondTick } from "./Freshness";
 import { DevCard, FlowCard, SocialsCard, type TokenProfile } from "./TokenProfileCards";
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
@@ -629,44 +628,67 @@ function HoldersPlaceholder({ children }: { children: ReactNode }) {
 }
 
 /**
- * A card copy this long without a newer one has stopped being refreshed: it left the feed while
- * its modal stayed open, or the modal was opened from somewhere that never refreshes it (Scope,
- * Portfolio, Trades). The feed sends a new copy at least every poll (30 s).
+ * How often an open token view reads the coin's newest scans (GET /tokens/:mint, its 50 newest
+ * rows, which the API shares between readers for 10 s): the scan writes a coin's row every 10-20 s
+ * in the band (measured 2026-10-19), so each read nearly always brings a newer one. One read
+ * serves the card's latest scan, the holder reading and the safety screen's history, and the
+ * view's "Next update" countdowns count to it (user ask 2026-10-19).
  */
-const CARD_QUIET_MS = 90_000;
+const SCAN_READ_MS = 15_000;
+
+/** The coin's newest scans as last read (null before the first lands), and when the next read is. */
+interface CoinScans {
+  snapshots: Snapshot[] | null;
+  /** Null when the view doesn't follow the scans (a lookup). */
+  nextRead: number | null;
+}
+
+/**
+ * Reads the coin's newest scans every SCAN_READ_MS while the page is visible, and at once when it
+ * comes back. A failed read keeps the last one.
+ */
+function useCoinScans(mint: string, follow: boolean): CoinScans {
+  const [read, setRead] = useState<{ mint: string; snapshots: Snapshot[] } | null>(null);
+  const [nextRead, setNextRead] = useState<number | null>(null);
+  useEffect(() => {
+    if (!follow) return;
+    let live = true;
+    let timer = 0;
+    const tick = () => {
+      window.clearTimeout(timer);
+      if (document.visibilityState === "visible")
+        // A read in the last few seconds (a quick return to the page) is reused.
+        cachedGet<{ snapshots?: Snapshot[] }>(`/tokens/${encodeURIComponent(mint)}`, SCAN_READ_MS / 3)
+          .then((d) => live && setRead({ mint, snapshots: d.snapshots ?? [] }))
+          .catch(() => undefined);
+      setNextRead(Date.now() + SCAN_READ_MS);
+      timer = window.setTimeout(tick, SCAN_READ_MS);
+    };
+    tick();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [follow, mint]);
+  return {
+    snapshots: follow && read?.mint === mint ? read.snapshots : null,
+    nextRead: follow ? nextRead : null,
+  };
+}
 
 /**
  * The modal's card, kept current on its own: "Now" from the live tick (as the feed's cards are),
- * and once the card copy goes quiet (CARD_QUIET_MS), the coin's newest scan laid over it, so the
- * safety verdict, peak and "Now" don't freeze where the feed left them.
+ * and the coin's newest scan (useCoinScans) laid over it when it is newer than the card copy's, so
+ * the safety verdict, peak and "Now" follow the scans whatever opened the modal.
  */
-function useFreshCard(cardIn: Card, followScans: boolean): Card {
-  const mint = cardIn.token.mintAddress;
-  const lastCopy = useRef({ card: cardIn, at: Date.now() });
-  if (lastCopy.current.card !== cardIn) lastCopy.current = { card: cardIn, at: Date.now() };
-  const [scan, setScan] = useState<{ mint: string; snapshot: Snapshot } | null>(null);
-  useEffect(() => {
-    if (!followScans) return;
-    let live = true;
-    const read = () => {
-      if (document.visibilityState !== "visible" || Date.now() - lastCopy.current.at < CARD_QUIET_MS) return;
-      cachedGet<{ snapshots?: Snapshot[] }>(`/tokens/${encodeURIComponent(mint)}`, HOLDER_SCAN_MS)
-        .then((d) => {
-          const newest = d.snapshots?.[0];
-          if (live && newest) setScan({ mint, snapshot: newest });
-        })
-        .catch(() => undefined);
-    };
-    const timer = window.setInterval(read, HOLDER_SCAN_MS);
-    document.addEventListener("visibilitychange", read);
-    return () => {
-      live = false;
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", read);
-    };
-  }, [followScans, mint]);
+function useFreshCard(cardIn: Card, scans: Snapshot[] | null): Card {
   const withScan = useMemo(() => {
-    const snap = scan?.mint === mint ? scan.snapshot : null;
+    const snap = scans?.[0];
     if (!snap) return cardIn;
     const snapAt = Date.parse(snap.takenAt);
     const had = cardIn.latestSnapshot ? Date.parse(cardIn.latestSnapshot.takenAt) : 0;
@@ -684,7 +706,7 @@ function useFreshCard(cardIn: Card, followScans: boolean): Card {
           }
         : {}),
     };
-  }, [cardIn, scan, mint]);
+  }, [cardIn, scans]);
   const cards = useMemo(() => [withScan], [withScan]);
   return useLiveMarketCaps(cards)?.[0] ?? withScan;
 }
@@ -703,7 +725,9 @@ function TokenBody({
 }) {
   const { hideSafetyPill } = useAppearance();
   const utility = useContext(UtilityContext);
-  const card = useFreshCard(cardIn, !utility);
+  const scans = useCoinScans(cardIn.token.mintAddress, !utility);
+  const card = useFreshCard(cardIn, scans.snapshots);
+  const reads = scans.nextRead === null ? null : { nextRead: scans.nextRead, everyMs: SCAN_READ_MS };
   const mint = card.token.mintAddress;
   const s = card.snapshot;
   const curated = card.curated;
@@ -745,7 +769,7 @@ function TokenBody({
   const flags = chart.data ? "ok" : chart.error ? "failed" : "loading";
   const entriesKey = JSON.stringify(chart.data?.holderEntries ?? {});
   const entries = useMemo(() => JSON.parse(entriesKey) as Record<string, HolderEntry>, [entriesKey]);
-  const linked = useHolderReading(card, mint, !!utility);
+  const linked = useHolderReading(card, !!utility, scans.snapshots);
   const holders = useHoldersView(card, linked, alertAt, !!utility);
   const liveShares = useLiveShares(mint, holders.isKept);
   // The top holders as the live trades since the reading moved them (liveShares.ts).
@@ -754,7 +778,7 @@ function TokenBody({
       liveShares && holders.listReading
         ? withLiveShares(
             holders.listReading,
-            liveShareDeltas(liveShares.trades, liveShares.supply, Date.parse(holders.listReading.takenAt)),
+            liveShareDeltas(liveShares.trades, liveShares.supply, holderListAt(holders.listReading)),
           )
         : holders.listReading,
     [liveShares, holders.listReading],
@@ -763,12 +787,10 @@ function TokenBody({
   // list follows the scans; the labeled wallets, the chart read they come from.
   const holdersFresh =
     !holders.isKept && holders.listReading && hasHolderList(holders.listReading)
-      ? { ...holderFreshness(holders.listReading.takenAt, now), live: !!liveShares }
+      ? { ...holderFreshness(holders.listReading, now, reads), live: !!liveShares }
       : undefined;
-  const walletsFresh =
-    chart.at === null
-      ? undefined
-      : { last: chart.at, next: chart.at + (scanning ? SCANNING_POLL_MS : CHART_POLL_MS) };
+  // The chart read's own beat, which the wallets come with.
+  const walletsFresh = chart.at === null ? undefined : { last: chart.at, next: chart.schedule ?? null };
   // Who holds the coin now, by the latest scan's holder list, for the Labeled wallets toggle.
   const currentHolders = useMemo(
     () => new Set((linked?.linkedHolders ?? []).flatMap((h) => (h ? [h.wallet] : []))),
@@ -784,7 +806,7 @@ function TokenBody({
   const goTo = (id: SectionId) =>
     document.getElementById(`${ids}-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   const safety = safetyVerdict(card, scanning);
-  const safetyFlipped = useSafetyFlip(card, safety, !utility);
+  const safetyFlipped = useSafetyFlip(card, safety, scans.snapshots);
   // A pass starts folded, a fail or a pending verdict open; the reader's own choice then holds.
   const [safetyOpenSet, setSafetyOpen] = useState<boolean | null>(null);
   const safetyOpen = safetyOpenSet ?? safety.state !== "passed";
@@ -965,8 +987,7 @@ function TokenBody({
         linked &&
         hasHolderList(linked) && (
           <HolderFreshness
-            takenAt={linked.takenAt}
-            now={now}
+            fresh={holderFreshness(linked, now, reads)}
             moment={utility || holders.canSwitch ? undefined : holdersMoment(card, linked)}
           />
         )
@@ -1188,6 +1209,7 @@ function TokenBody({
                 flip={safetyFlipped}
                 scanning={scanning}
                 now={now}
+                nextRead={scans.nextRead}
                 open={safetyOpenSet ?? true}
                 onToggle={() => setSafetyOpen(!(safetyOpenSet ?? true))}
               />
@@ -1295,6 +1317,7 @@ function TokenBody({
           flip={safetyFlipped}
           scanning={scanning}
           now={now}
+          nextRead={scans.nextRead}
           open={safetyOpen}
           onToggle={() => setSafetyOpen(!safetyOpen)}
         />
@@ -1474,32 +1497,37 @@ function useHeadHeight(bodyRef: RefObject<HTMLDivElement | null>): number {
  * Whether the safety screen's verdict flipped on this coin (user ask 2026-10-19): the newest scan
  * against the coin's recent scans (the last 50, followed each scan cycle) and the alert's own.
  */
-function useSafetyFlip(card: Card, verdict: SafetyVerdict, follow: boolean): SafetyFlip | null {
-  const mint = card.token.mintAddress;
-  const [history, setHistory] = useState<{ mint: string; snapshots: Snapshot[] } | null>(null);
-  useEffect(() => {
-    if (!follow) return;
-    let live = true;
-    const read = () =>
-      cachedGet<{ snapshots?: Snapshot[] }>(`/tokens/${encodeURIComponent(mint)}`, HOLDER_SCAN_MS)
-        .then((d) => live && setHistory({ mint, snapshots: d.snapshots ?? [] }))
-        .catch(() => undefined);
-    void read();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void read();
-    }, HOLDER_SCAN_MS);
-    return () => {
-      live = false;
-      window.clearInterval(timer);
-    };
-  }, [follow, mint]);
+function useSafetyFlip(card: Card, verdict: SafetyVerdict, scans: Snapshot[] | null): SafetyFlip | null {
   const reading = verdict.reading;
-  const scans = history?.mint === mint ? history.snapshots : null;
   return useMemo(() => {
     if (!reading) return null;
     const own = [card.snapshot, card.latestSnapshot].filter((x): x is Snapshot => !!x);
     return safetyFlip(reading, [...(scans ?? []), ...own]);
   }, [reading, scans, card.snapshot, card.latestSnapshot]);
+}
+
+/**
+ * How often the scan writes a coin's row in the band: each cycle (SCAN_INTERVAL_MINUTES, 30 s in
+ * render.yaml; rows landed every 10-20 s when measured, 2026-10-19). Past this a newer row is due.
+ */
+const SCAN_ROW_MS = 30_000;
+/** No scan for this long: the coin has left the scan, and no update is coming. */
+const SCAN_GONE_MS = 15 * 60_000;
+
+/**
+ * The scan's age and its next update: the view's next read of the coin's scans (`nextRead`), which
+ * shows a newer row once the scan writes one; "Checking again" once a row is overdue. No countdown
+ * for a view that doesn't follow the scans, or for a coin no longer scanned.
+ */
+function scanFreshness(
+  reading: Pick<Snapshot, "takenAt">,
+  now: number,
+  nextRead: number | null,
+): { last: number; next: number | null; late: boolean } {
+  const last = Date.parse(reading.takenAt);
+  if (nextRead === null || now - last >= SCAN_GONE_MS) return { last, next: null, late: false };
+  // The view's last read came after a newer row was due and didn't bring one.
+  return { last, next: nextRead, late: nextRead - SCAN_READ_MS >= last + SCAN_ROW_MS };
 }
 
 /** A holder report this much older than its scan says its own time on the safety card. */
@@ -1526,6 +1554,7 @@ function SafetyCard({
   flip,
   scanning,
   now,
+  nextRead,
   open,
   onToggle,
 }: {
@@ -1534,6 +1563,8 @@ function SafetyCard({
   flip: SafetyFlip | null;
   scanning: boolean;
   now: number;
+  /** When the view next reads the coin's scans; null when it doesn't follow them (a lookup). */
+  nextRead: number | null;
   open: boolean;
   onToggle: () => void;
 }) {
@@ -1557,11 +1588,7 @@ function SafetyCard({
         {reading && (
           <>
             {/* The scan's age and the next one's countdown (user ask 2026-10-19). */}
-            <LiveStamp
-              last={Date.parse(reading.takenAt)}
-              next={holderFreshness(reading.takenAt, now).next}
-              title={holderReadTitle(reading)}
-            />
+            <LiveStamp {...scanFreshness(reading, now, nextRead)} title={holderReadTitle(reading)} />
             {holderReadLags(reading) && reading.holderCountAt && (
               <span className="tm-h4-meta small muted" title={holderReadTitle(reading)}>
                 holders read {ago(new Date(reading.holderCountAt), now)}
@@ -1646,10 +1673,14 @@ function SafetyCard({
 
 /**
  * The reading the bubble map and the top holders draw: the card's newest that kept a holder list,
- * else the newest of the coin's scans that did (fetched; a lookup's card is already its latest
+ * else the newest of the coin's scans that did (useCoinScans; a lookup's card is already its latest
  * scan). Undefined while that loads, null when no scan has a list.
  */
-function useHolderReading(card: Card, mint: string, lookup: boolean): Snapshot | null | undefined {
+function useHolderReading(
+  card: Card,
+  lookup: boolean,
+  scans: Snapshot[] | null,
+): Snapshot | null | undefined {
   const seed = linkedReading(card);
   // Newest first, so the section follows the coin's scans and its "Last updated" means it. A newer
   // scan without a list of its own (an unchanged list rides only some rows, the worker's
@@ -1658,35 +1689,11 @@ function useHolderReading(card: Card, mint: string, lookup: boolean): Snapshot |
   const latest = card.latestSnapshot && hasHolderList(card.latestSnapshot) ? card.latestSnapshot : null;
   const older = [seed, card.snapshot].find((s) => s && hasHolderList(s)) ?? null;
   const own = latest ?? (card.latestSnapshot && !lookup ? null : older);
-  const [fetched, setFetched] = useState<{ mint: string; snapshot: Snapshot | null } | null>(null);
-  const fetch = !own && !lookup;
-  useEffect(() => {
-    if (!fetch) return;
-    let live = true;
-    const read = () =>
-      cachedGet<{ snapshots?: Snapshot[] }>(`/tokens/${encodeURIComponent(mint)}`, HOLDER_POLL_MS)
-        .then((d) => {
-          if (!live) return;
-          const snapshot = pickReading(d.snapshots ?? []) ?? null;
-          // A newer reading replaces the one shown; a failed or empty re-read keeps it.
-          setFetched((f) =>
-            f?.mint === mint && f.snapshot && !snapshot ? f : { mint, snapshot: snapshot ?? seed },
-          );
-        })
-        .catch(() => live && setFetched((f) => (f?.mint === mint ? f : { mint, snapshot: seed })));
-    void read();
-    // The worker saves a reading each minute while the map is open: follow it while the view is.
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void read();
-    }, HOLDER_POLL_MS);
-    return () => {
-      live = false;
-      window.clearInterval(timer);
-    };
-  }, [fetch, mint]);
+  const picked = useMemo(() => (scans ? pickReading(scans) : undefined), [scans]);
   if (own) return own;
-  if (!fetch) return seed;
-  return fetched?.mint === mint ? fetched.snapshot : undefined;
+  if (lookup) return seed;
+  // The scans' 50 rows span over ten minutes, past the worker's rewrite of an unchanged list.
+  return scans ? (picked ?? seed) : undefined;
 }
 
 /**
@@ -1705,7 +1712,7 @@ function holdersMoment(card: Card, reading: Snapshot | null | undefined) {
     : {
         label: "Now",
         // Headed with the reading's age, ticking (user ask 2026-10-19).
-        at: Date.parse(reading.takenAt),
+        at: holderListAt(reading),
         title:
           "The latest scan's reading, not the alert's: The alert section below shows the holders at the alert. Counts are over the top holders this scan read (the /25 or /10), which can be a different set.",
       };
@@ -1819,7 +1826,7 @@ function useHoldersView(card: Card, linked: Snapshot | null | undefined, alertAt
         : canSwitch
           ? {
               label: "Now",
-              at: linked ? Date.parse(linked.takenAt) : undefined,
+              at: linked ? holderListAt(linked) : undefined,
               title:
                 "The latest scan's reading. Switch to an earlier moment for the holders as they stood then.",
             }
@@ -1908,28 +1915,41 @@ function AlertHoldersWhen({
   );
 }
 
-/** When the holder reading was saved, and when the next is due (user ask 2026-10-13). */
+/**
+ * When the holder list shown was written, how long ago, and when the next shows (user ask
+ * 2026-10-13, 2026-10-19): the same moment the bubble map's badge counts from.
+ */
 function HolderFreshness({
-  takenAt,
-  now,
+  fresh: { last, next, due, late },
   moment,
 }: {
-  takenAt: string;
-  now: number;
+  fresh: ReturnType<typeof holderFreshness>;
   moment?: { label: string; title: string };
 }) {
-  const { last, next } = holderFreshness(takenAt, now);
-  // Seconds and a countdown (user ask 2026-10-19), on their own one-second tick.
+  // Seconds and a countdown, on their own one-second tick.
   const tick = useSecondTick();
   return (
     <p className="tm-holders-when">
       {moment && <b title={moment.title}>{moment.label} · </b>}
-      Last updated {hms(last)} ·{" "}
-      <span className="num" title={next === null ? undefined : `Due ${hms(next)}`}>
-        {next === null
-          ? "No further updates: the coin is no longer being scanned"
-          : nextUpdateText(next, tick)}
+      <span title={`The top holders as last read by the scan, at ${hms(last)}.`}>
+        Last updated {hms(last)} ({secondsAgo(last, tick)})
       </span>
+      {due === null ? (
+        <> · No further updates: the coin is no longer being scanned</>
+      ) : (
+        next !== null && (
+          <>
+            {" "}
+            ·{" "}
+            <span
+              className="num"
+              title={`The scan reads the top holders again about ${hms(due)}; this view looks for it at ${hms(next)}.`}
+            >
+              {nextUpdateText(next, tick, late)}
+            </span>
+          </>
+        )
+      )}
     </p>
   );
 }
@@ -2720,7 +2740,7 @@ function WalletsCard({
   /** The latest scan's holders: who holds the coin now. */
   holders: ReadonlySet<string>;
   /** When the list was read and the next read is due, said beside the count. */
-  freshness?: { last: number; next: number };
+  freshness?: { last: number; next: { from: number; every: number } | null };
   defaultOpen?: boolean;
 }) {
   const [all, setAll] = useState(false);

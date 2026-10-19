@@ -90,7 +90,7 @@ export async function creatorFeesByMint(
  */
 export async function latestSnapshotsByToken(
   tokenIds: readonly string[],
-): Promise<Map<string, TokenSnapshot>> {
+): Promise<Map<string, TokenSnapshot & CarriedHolderTime>> {
   const ids = [...new Set(tokenIds)];
   if (ids.length === 0) return new Map();
   // The newest row carries the holder reading - the list, its clusters and its same-minute
@@ -103,16 +103,17 @@ export async function latestSnapshotsByToken(
       carriedHolders: Prisma.JsonValue | null;
       carriedClusters: Prisma.JsonValue | null;
       carriedSameTime: Prisma.JsonValue | null;
+      carriedAt: Date | null;
     })[]
   >`
     SELECT s.*, h."linkedHolders" AS "carriedHolders", h."linkedClusters" AS "carriedClusters",
-           h."sameTimeClusters" AS "carriedSameTime"
+           h."sameTimeClusters" AS "carriedSameTime", h."takenAt" AS "carriedAt"
     FROM unnest(${ids}::text[]) AS t(id)
     CROSS JOIN LATERAL (
       SELECT * FROM "TokenSnapshot" WHERE "tokenId" = t.id ORDER BY "takenAt" DESC LIMIT 1
     ) s
     LEFT JOIN LATERAL (
-      SELECT "linkedHolders", "linkedClusters", "sameTimeClusters" FROM "TokenSnapshot"
+      SELECT "linkedHolders", "linkedClusters", "sameTimeClusters", "takenAt" FROM "TokenSnapshot"
       WHERE s."linkedHolders" IS NULL
         AND "tokenId" = t.id
         AND "takenAt" < s."takenAt"
@@ -122,7 +123,7 @@ export async function latestSnapshotsByToken(
       LIMIT 1
     ) h ON true`;
   return new Map(
-    snapshots.map(({ carriedHolders, carriedClusters, carriedSameTime, ...s }) => [
+    snapshots.map(({ carriedHolders, carriedClusters, carriedSameTime, carriedAt, ...s }) => [
       s.tokenId,
       s.linkedHolders === null && carriedHolders !== null
         ? {
@@ -130,6 +131,7 @@ export async function latestSnapshotsByToken(
             linkedHolders: carriedHolders,
             linkedClusters: s.linkedClusters ?? carriedClusters,
             sameTimeClusters: s.sameTimeClusters ?? carriedSameTime,
+            ...(carriedAt ? { holdersAt: carriedAt } : {}),
           }
         : s,
     ]),
@@ -144,6 +146,17 @@ export async function latestSnapshotsByToken(
 const CARRIED_HOLDER_LIST_MS = 2 * 3_600_000;
 
 /**
+ * On a snapshot whose holder reading was carried from an earlier row: that row's takenAt, when the
+ * list was last written (a new reading, or the worker's periodic rewrite of an unchanged one). The
+ * row's own takenAt is only its scan's, every few seconds, so the token view's "Last updated" for
+ * the holders and the trades it moves their shares by count from this instead. Absent on a row
+ * carrying its own list.
+ */
+export interface CarriedHolderTime {
+  holdersAt?: Date;
+}
+
+/**
  * A snapshot with the coin's newest holder reading before it when its own list is null - the
  * single-row form of what latestSnapshotsByToken does for a page (see there).
  */
@@ -155,7 +168,7 @@ export async function withCarriedHolderList<
     linkedClusters?: Prisma.JsonValue | null;
     sameTimeClusters?: Prisma.JsonValue | null;
   },
->(snapshot: S | null): Promise<S | null> {
+>(snapshot: S | null): Promise<(S & CarriedHolderTime) | null> {
   if (snapshot === null || snapshot.linkedHolders !== null) return snapshot;
   const carried = await prisma.tokenSnapshot.findFirst({
     where: {
@@ -164,7 +177,7 @@ export async function withCarriedHolderList<
       linkedHolders: { not: Prisma.DbNull },
     },
     orderBy: { takenAt: "desc" },
-    select: { linkedHolders: true, linkedClusters: true, sameTimeClusters: true },
+    select: { linkedHolders: true, linkedClusters: true, sameTimeClusters: true, takenAt: true },
   });
   return carried === null
     ? snapshot
@@ -173,6 +186,7 @@ export async function withCarriedHolderList<
         linkedHolders: carried.linkedHolders,
         linkedClusters: snapshot.linkedClusters ?? carried.linkedClusters,
         sameTimeClusters: snapshot.sameTimeClusters ?? carried.sameTimeClusters,
+        holdersAt: carried.takenAt,
       };
 }
 
@@ -187,7 +201,7 @@ export async function withCarriedHolderLists<
     linkedClusters?: Prisma.JsonValue | null;
     sameTimeClusters?: Prisma.JsonValue | null;
   },
->(snapshots: readonly S[]): Promise<S[]> {
+>(snapshots: readonly S[]): Promise<(S & CarriedHolderTime)[]> {
   const ids = snapshots.filter((s) => s.linkedHolders === null).map((s) => s.id);
   if (ids.length === 0) return [...snapshots];
   const rows = await prisma.$queryRaw<
@@ -196,13 +210,14 @@ export async function withCarriedHolderLists<
       linkedHolders: Prisma.JsonValue;
       linkedClusters: Prisma.JsonValue | null;
       sameTimeClusters: Prisma.JsonValue | null;
+      takenAt: Date;
     }[]
   >`
-    SELECT s.id, h."linkedHolders", h."linkedClusters", h."sameTimeClusters"
+    SELECT s.id, h."linkedHolders", h."linkedClusters", h."sameTimeClusters", h."takenAt"
     FROM unnest(${ids}::text[]) AS t(id)
     JOIN "TokenSnapshot" s ON s.id = t.id
     CROSS JOIN LATERAL (
-      SELECT "linkedHolders", "linkedClusters", "sameTimeClusters" FROM "TokenSnapshot"
+      SELECT "linkedHolders", "linkedClusters", "sameTimeClusters", "takenAt" FROM "TokenSnapshot"
       WHERE "tokenId" = s."tokenId"
         AND "takenAt" < s."takenAt"
         AND "takenAt" >= s."takenAt" - make_interval(secs => ${CARRIED_HOLDER_LIST_MS / 1000}::float8)
@@ -220,6 +235,7 @@ export async function withCarriedHolderLists<
           linkedHolders: carried.linkedHolders,
           linkedClusters: s.linkedClusters ?? carried.linkedClusters,
           sameTimeClusters: s.sameTimeClusters ?? carried.sameTimeClusters,
+          holdersAt: carried.takenAt,
         };
   });
 }

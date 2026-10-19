@@ -1,18 +1,33 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
+
+/** The one clock every stamp reads, so two stamps of the same moment never differ by a second. */
+let clock = Date.now();
+const clockListeners = new Set<() => void>();
+let clockTimer = 0;
+
+function subscribeClock(listener: () => void): () => void {
+  clockListeners.add(listener);
+  if (clockListeners.size === 1) {
+    clock = Date.now();
+    clockTimer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      clock = Date.now();
+      for (const l of clockListeners) l();
+    }, 1_000);
+  }
+  return () => {
+    clockListeners.delete(listener);
+    if (clockListeners.size === 0) window.clearInterval(clockTimer);
+  };
+}
 
 /**
  * The clock, ticking each second while the page is visible: for the token view's "12s ago" and
  * "Next update in 0:48" (user ask 2026-10-19), which the view's own 15-second tick would jump.
+ * Every stamp shares the one tick, so the header, the map's badge and the lists agree.
  */
 export function useSecondTick(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = window.setInterval(() => {
-      if (document.visibilityState === "visible") setNow(Date.now());
-    }, 1_000);
-    return () => window.clearInterval(t);
-  }, []);
-  return now;
+  return useSyncExternalStore(subscribeClock, () => clock);
 }
 
 /** How long ago, to the second: "12s ago", "3m 05s ago", "2h 04m ago", "3d ago". */
@@ -40,9 +55,23 @@ export function hms(t: number): string {
   return new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
 }
 
-/** "Next update in 0:48", or "Next update due now" once the countdown runs out. */
-export function nextUpdateText(next: number, now: number): string {
-  return next - now >= 1_000 ? `Next update in ${countdown(next - now)}` : "Next update due now";
+/**
+ * "Next update in 0:48", counting to `next`, the view's read that will show it; "Updating…" while
+ * that read lands. `late`: a read since the update was due found none, so the count is to the
+ * next look for it: "Checking again in 0:12".
+ */
+export function nextUpdateText(next: number, now: number, late = false): string {
+  if (next - now < 1_000) return "Updating…";
+  return `${late ? "Checking again" : "Next update"} in ${countdown(next - now)}`;
+}
+
+/**
+ * When a poll on a fixed beat reads next: the first beat at or after `now`, counted from `from`
+ * (when its timer started, hooks.ts usePolling `schedule`).
+ */
+export function nextBeat(schedule: { from: number; every: number }, now: number): number {
+  const { from, every } = schedule;
+  return now <= from ? from : from + Math.ceil((now - from) / every) * every;
 }
 
 /** "12s ago", ticking each second. */
@@ -53,31 +82,36 @@ export function SecondsAgo({ at }: { at: number }) {
 
 /**
  * A section's freshness beside its count: "12s ago · Next update in 0:48" (user ask 2026-10-19).
- * `next` null: no update is coming (the coin is no longer scanned), so only the age shows.
+ * `next` is when the view reads again (the update shows then): a time, or a poll's beat; null
+ * when no update is coming (the coin is no longer scanned), so only the age shows. `late`: see
+ * nextUpdateText.
  */
 export function LiveStamp({
   last,
   next,
+  late = false,
   title,
   live = false,
 }: {
   last: number;
-  next: number | null;
+  next: number | { from: number; every: number } | null;
+  late?: boolean;
   title?: string;
   /** Shares move with each live trade between reads (user ask 2026-10-19): says so after the stamp. */
   live?: boolean;
 }) {
   const now = useSecondTick();
+  const at = next === null ? null : typeof next === "number" ? next : nextBeat(next, now);
   return (
     <span
       className="tm-live-stamp small muted num"
       title={
-        (title ?? `Updated ${hms(last)}${next === null ? "" : `; next due ${hms(next)}`}`) +
+        (title ?? `Updated ${hms(last)}${at === null ? "" : `; next read ${hms(at)}`}`) +
         (live ? ". Shares move with each trade until then; links and tags come with each read." : "")
       }
     >
       {secondsAgo(last, now)}
-      {next !== null && <> · {nextUpdateText(next, now)}</>}
+      {at !== null && <> · {nextUpdateText(at, now, late)}</>}
       {live && <> · Live</>}
     </span>
   );
