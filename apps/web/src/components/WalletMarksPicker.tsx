@@ -74,8 +74,19 @@ export function WalletMarksPicker() {
         />
         SOL
       </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={look.chartMarkPics}
+          disabled={!on}
+          onChange={() => setAppearance({ chartMarkPics: !look.chartMarkPics })}
+        />
+        Show KOLs by their X pictures
+      </label>
       <p className="faint small check-hint">
-        A filled ring is a buy, a hollow one a sale, bigger for more SOL. Never under {MIN_SOL_FLOOR} SOL.
+        Buys hang under the price and sales sit over it, bigger for more SOL. A filled ring is a buy, a hollow
+        one a sale; a KOL&apos;s picture is ringed green for a buy, red for a sale. Click a mark to open the
+        wallet. Never under {MIN_SOL_FLOOR} SOL.
       </p>
     </div>
   );

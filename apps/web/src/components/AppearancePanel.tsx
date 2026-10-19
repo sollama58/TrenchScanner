@@ -31,10 +31,8 @@ const NAME_KINDS = [
  */
 export function AppearanceControls() {
   const look = useAppearance();
-  const admin = useIsAdmin();
   const narrative = useNarrativeNoteReadiness();
   const narrativeShown = look.narrativeNote ?? narrative?.ready ?? false;
-  const namesSplit = NAME_KINDS.some(([key]) => look[key] !== null);
   const hidden = useMemo(() => new Set(look.hidden), [look.hidden]);
   const activePreset = PRESETS.find((p) => sameAppearance(withPreset(look, p.look), look))?.id ?? null;
   const shown = (f: CardField) =>
@@ -238,131 +236,8 @@ export function AppearanceControls() {
             </>
           )}
         </p>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={look.bubbleCexLinks}
-            onChange={() => setAppearance({ bubbleCexLinks: !look.bubbleCexLinks })}
-          />
-          Bubble maps: tie together wallets funded by the same exchange
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={look.bubbleFunderLabels}
-            onChange={() => setAppearance({ bubbleFunderLabels: !look.bubbleFunderLabels })}
-          />
-          Bubble maps: name the wallets that fund bundles on a label by their diamond
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={look.bubbleSideLinks}
-            onChange={() => setAppearance({ bubbleSideLinks: !look.bubbleSideLinks })}
-          />
-          Bubble maps: tie KOLs&apos; probable side wallets to them
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={look.bubbleTransferLinks}
-            onChange={() => setAppearance({ bubbleTransferLinks: !look.bubbleTransferLinks })}
-          />
-          Bubble maps: draw arrows between holders that sent the coin to each other
-        </label>
-        <label className="check">
-          Bubble maps: redraw an open map every{" "}
-          <select
-            value={look.bubbleRefreshSeconds}
-            onChange={(e) => setAppearance({ bubbleRefreshSeconds: Number(e.target.value) })}
-          >
-            {BUBBLE_REFRESH_CHOICES.map((c) => (
-              <option key={c.seconds} value={c.seconds}>
-                {c.label}
-              </option>
-            ))}
-          </select>
-          <span className="faint small"> (the top holders list moves with each trade)</span>
-        </label>
-        {/* One switch for the three kinds of name, or each on its own; any set on its own hides the
-            one switch here and on the map (user ask 2026-10-16). */}
-        {!namesSplit && (
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={look.bubbleNameLabels}
-              onChange={() => setAppearance({ bubbleNameLabels: !look.bubbleNameLabels })}
-            />
-            Bubble maps: show Pump.fun, FOMO and Helius names on wallets (KOLs and exchanges always show)
-          </label>
-        )}
-        <div className="check-sub">
-          <span className="faint small">
-            {namesSplit
-              ? "Bubble maps: names on wallets (KOLs and exchanges always show)"
-              : "Or set each kind:"}
-          </span>
-          {NAME_KINDS.map(([key, text]) => (
-            <label key={key} className="check">
-              <input
-                type="checkbox"
-                checked={look[key] ?? look.bubbleNameLabels}
-                onChange={() => setAppearance({ [key]: !(look[key] ?? look.bubbleNameLabels) })}
-              />
-              {text}
-            </label>
-          ))}
-          {namesSplit && (
-            <button
-              type="button"
-              className="link small"
-              onClick={() =>
-                setAppearance({ bubbleNamesPumpfun: null, bubbleNamesFomo: null, bubbleNamesHelius: null })
-              }
-            >
-              Go back to one switch
-            </button>
-          )}
-        </div>
-        <div className="field-group">
-          <h4>Token chart</h4>
-          <Choice
-            label="Chart type"
-            value={look.chartStyle}
-            options={[
-              ["line", "Line"],
-              ["candles", "Candles"],
-            ]}
-            onChange={(chartStyle) => setAppearance({ chartStyle })}
-          />
-          <Choice
-            label="Default view"
-            value={look.chartView}
-            options={[
-              ["trading", "Trading"],
-              ["all", "All"],
-            ]}
-            onChange={(chartView) => setAppearance({ chartView })}
-          />
-          {/* Admins only while it is tried out (user ask 2026-10-18). */}
-          {admin && (
-            <>
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={look.chartPathing}
-                  onChange={() => setAppearance({ chartPathing: !look.chartPathing })}
-                />
-                Predicted price path <span className="sage-tag">Experimental</span>
-              </label>
-              <p className="faint small">
-                A dotted line for the next minute in 5-second steps, guessed from the last minute&apos;s
-                second-by-second price, with a shaded band for its usual miss. A statistical guess, not
-                advice: in backtests it is wrong often. Shown on a live chart only.
-              </p>
-            </>
-          )}
-        </div>
+        <BubbleMapControls />
+        <ChartControls />
         <WalletMarksPicker />
         <div className="field-group">
           <h4>Quick links</h4>
@@ -374,6 +249,152 @@ export function AppearanceControls() {
           </button>
         )}
       </fieldset>
+    </div>
+  );
+}
+
+/**
+ * The bubble maps' options (Customize, and the Pro coin window's own Customize, user ask
+ * 2026-10-19), saved with the feed's appearance.
+ */
+export function BubbleMapControls() {
+  const look = useAppearance();
+  const namesSplit = NAME_KINDS.some(([key]) => look[key] !== null);
+  return (
+    <>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={look.bubbleCexLinks}
+          onChange={() => setAppearance({ bubbleCexLinks: !look.bubbleCexLinks })}
+        />
+        Bubble maps: tie together wallets funded by the same exchange
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={look.bubbleFunderLabels}
+          onChange={() => setAppearance({ bubbleFunderLabels: !look.bubbleFunderLabels })}
+        />
+        Bubble maps: name the wallets that fund bundles on a label by their diamond
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={look.bubbleSideLinks}
+          onChange={() => setAppearance({ bubbleSideLinks: !look.bubbleSideLinks })}
+        />
+        Bubble maps: tie KOLs&apos; probable side wallets to them
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={look.bubbleTransferLinks}
+          onChange={() => setAppearance({ bubbleTransferLinks: !look.bubbleTransferLinks })}
+        />
+        Bubble maps: draw arrows between holders that sent the coin to each other
+      </label>
+      <label className="check">
+        Bubble maps: redraw an open map every{" "}
+        <select
+          value={look.bubbleRefreshSeconds}
+          onChange={(e) => setAppearance({ bubbleRefreshSeconds: Number(e.target.value) })}
+        >
+          {BUBBLE_REFRESH_CHOICES.map((c) => (
+            <option key={c.seconds} value={c.seconds}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+        <span className="faint small"> (the top holders list moves with each trade)</span>
+      </label>
+      {/* One switch for the three kinds of name, or each on its own; any set on its own hides the
+        one switch here and on the map (user ask 2026-10-16). */}
+      {!namesSplit && (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={look.bubbleNameLabels}
+            onChange={() => setAppearance({ bubbleNameLabels: !look.bubbleNameLabels })}
+          />
+          Bubble maps: show Pump.fun, FOMO and Helius names on wallets (KOLs and exchanges always show)
+        </label>
+      )}
+      <div className="check-sub">
+        <span className="faint small">
+          {namesSplit
+            ? "Bubble maps: names on wallets (KOLs and exchanges always show)"
+            : "Or set each kind:"}
+        </span>
+        {NAME_KINDS.map(([key, text]) => (
+          <label key={key} className="check">
+            <input
+              type="checkbox"
+              checked={look[key] ?? look.bubbleNameLabels}
+              onChange={() => setAppearance({ [key]: !(look[key] ?? look.bubbleNameLabels) })}
+            />
+            {text}
+          </label>
+        ))}
+        {namesSplit && (
+          <button
+            type="button"
+            className="link small"
+            onClick={() =>
+              setAppearance({ bubbleNamesPumpfun: null, bubbleNamesFomo: null, bubbleNamesHelius: null })
+            }
+          >
+            Go back to one switch
+          </button>
+        )}
+      </div>
+    </>
+  );
+}
+
+/** The token chart's defaults (Customize, and the Pro coin window's own Customize). */
+export function ChartControls() {
+  const look = useAppearance();
+  const admin = useIsAdmin();
+  return (
+    <div className="field-group">
+      <h4>Token chart</h4>
+      <Choice
+        label="Chart type"
+        value={look.chartStyle}
+        options={[
+          ["line", "Line"],
+          ["candles", "Candles"],
+        ]}
+        onChange={(chartStyle) => setAppearance({ chartStyle })}
+      />
+      <Choice
+        label="Default view"
+        value={look.chartView}
+        options={[
+          ["trading", "Trading"],
+          ["all", "All"],
+        ]}
+        onChange={(chartView) => setAppearance({ chartView })}
+      />
+      {/* Admins only while it is tried out (user ask 2026-10-18). */}
+      {admin && (
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={look.chartPathing}
+              onChange={() => setAppearance({ chartPathing: !look.chartPathing })}
+            />
+            Predicted price path <span className="sage-tag">Experimental</span>
+          </label>
+          <p className="faint small">
+            A dotted line for the next minute in 5-second steps, guessed from the last minute&apos;s
+            second-by-second price, with a shaded band for its usual miss. A statistical guess, not advice: in
+            backtests it is wrong often. Shown on a live chart only.
+          </p>
+        </>
+      )}
     </div>
   );
 }
@@ -526,7 +547,7 @@ export function SaveNote({ save }: { save: ReturnType<typeof useAppearanceSave> 
 }
 
 /** A labelled row of choices (a segmented control). */
-function Choice<T extends string>({
+export function Choice<T extends string>({
   label,
   value,
   options,

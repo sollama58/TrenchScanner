@@ -6,6 +6,7 @@ import {
   markPrefsOf,
   MIN_SOL_FLOOR,
   walletMarks,
+  withAvatars,
   withLiveMarks,
   type MarkSource,
 } from "./walletMarks";
@@ -195,5 +196,32 @@ describe("withLiveMarks", () => {
       ["F", "F"],
       ["P", "P"],
     ]);
+  });
+});
+
+describe("withAvatars", () => {
+  it("gives a KOL's and its Known Side's marks the KOL's picture, and no other kind", () => {
+    const marks = walletMarks([kol, side], defaults);
+    const out = withAvatars(marks, {
+      [kol.wallet]: { avatar: "/kol-avatars/cupsey?v=1" },
+      [side.wallet]: { avatar: "/kol-avatars/other?v=1" },
+    });
+    expect(out.map((m) => [m.kind, m.avatar])).toEqual([
+      ["kol", "/kol-avatars/cupsey?v=1"],
+      ["probable", undefined],
+    ]);
+  });
+
+  it("leaves marks without a picture as they were", () => {
+    const marks = walletMarks([kol], defaults);
+    expect(withAvatars(marks, {})).toEqual(marks);
+  });
+});
+
+describe("appearance chartMarkPics", () => {
+  it("is on by default and keeps a saved choice", () => {
+    expect(DEFAULT_APPEARANCE.chartMarkPics).toBe(true);
+    expect(normalizeAppearance({}).chartMarkPics).toBe(true);
+    expect(normalizeAppearance({ chartMarkPics: false }).chartMarkPics).toBe(false);
   });
 });

@@ -84,6 +84,9 @@ describe("parseFeedAppearance", () => {
     expect(parseFeedAppearance({ quickLinks: [] }).quickLinks).toEqual([]);
     // The token chart's labeled-wallet trades: every kind but risky wallets at 0.5 SOL, never under 0.25 SOL.
     expect(parseFeedAppearance({})).toMatchObject({ chartMarks: true, chartMarkMinSol: 0.5 });
+    // KOLs' marks as their pictures: on by default, a saved choice kept.
+    expect(parseFeedAppearance({}).chartMarkPics).toBe(true);
+    expect(parseFeedAppearance({ chartMarkPics: false }).chartMarkPics).toBe(false);
     expect(parseFeedAppearance({}).chartMarkKinds).toHaveLength(7);
     expect(parseFeedAppearance({}).chartMarkKinds).not.toContain("risky");
     // A list saved before that with every kind on was the old default: it reads without risky.

@@ -9543,6 +9543,35 @@ button.link.exit-plan-link {
   background: color-mix(in srgb, var(--brand-a) 22%, transparent);
   border-color: color-mix(in srgb, var(--brand-a) 65%, transparent);
 }
+/* The Pro coin window's Customize (user ask 2026-10-19): a quiet pill beside Sage in the header,
+   lit while its drawer is open. */
+.tm-custom-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  flex: none;
+}
+.tm-custom-pill:hover:not(:disabled),
+.tm-custom-pill.on {
+  color: var(--ink);
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+.pro-customize-pick select {
+  max-width: 60%;
+}
+.pro-customize .trading-settings {
+  margin: 4px 0 0;
+}
 @media (min-width: 641px) {
   .sage-modal {
     width: min(760px, calc(100vw - 32px));
@@ -12010,21 +12039,18 @@ img.tm-avatar {
   -webkit-user-select: none;
 }
 .tc-toolbar {
+  position: relative;
+  z-index: 4;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  height: 38px;
+  gap: 6px 8px;
+  min-height: 38px;
   padding: 3px 0 5px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  overscroll-behavior-x: contain;
 }
-.tc-toolbar::-webkit-scrollbar,
-.tc-row::-webkit-scrollbar {
-  display: none;
-}
-/* One row on a desktop; on a phone, the candle sizes over the rest, each row scrolling sideways. */
+/* One line when the chart is wide; a narrow chart (a column beside it, user ask 2026-10-19) folds
+   its indicators into a menu and its candle sizes into a picker, and anything left wraps, so no
+   control runs off the edge. On a phone, two rows. */
 .tc-row {
   display: contents;
 }
@@ -12080,6 +12106,73 @@ img.tm-avatar {
   align-items: center;
   padding: 3px 7px;
 }
+.tc-seg button.tc-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  padding: 3px 7px;
+}
+/* The candle sizes as one picker, where the buttons wouldn't fit. */
+.tc-select select {
+  height: 28px;
+  padding: 0 26px 0 10px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background-color: var(--surface-2);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+/* The indicators folded into a menu under their button. */
+.tc-menu-wrap {
+  position: relative;
+}
+.tc-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.tc-menu-btn .num {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand-b) 22%, transparent);
+  font-size: 10.5px;
+  line-height: 15px;
+}
+.tc-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: max-content;
+  max-width: min(300px, 86vw);
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-solid);
+  box-shadow: var(--shadow);
+}
+.tc-menu .tc-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+  white-space: normal;
+  padding: 5px 9px;
+  border-color: transparent;
+}
+.tc-menu .tc-chip small {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.tc-menu .tc-chip.on {
+  border-color: color-mix(in srgb, var(--brand-b) 60%, transparent);
+}
 .tc-body {
   display: flex;
   gap: 6px;
@@ -12125,6 +12218,26 @@ img.tm-avatar {
 }
 .tc-wrap.drawing .tc-plot {
   cursor: crosshair;
+}
+/* Over a wallet's trade mark: a click opens the wallet. */
+.tc-plot.on-mark,
+.tc-plot.on-mark * {
+  cursor: pointer !important;
+}
+.tc-mark-pic {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+  vertical-align: -4px;
+  box-shadow: 0 0 0 1.5px var(--good-ink);
+}
+.tc-mark-pic.sell {
+  box-shadow: 0 0 0 1.5px var(--bad-ink);
+}
+.tc-detail-hint {
+  font-size: 11px;
 }
 .tc-legend {
   position: absolute;
@@ -12197,19 +12310,15 @@ img.tm-avatar {
   flex-direction: column;
   align-items: stretch;
   gap: 4px;
-  height: 76px;
+  min-height: 76px;
   padding: 2px 0 4px;
-  overflow: visible;
 }
 .tc.phone .tc-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  height: 34px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  overscroll-behavior-x: contain;
+  min-height: 34px;
 }
 .tc.phone .tc-rail {
   flex-direction: row;
