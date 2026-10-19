@@ -166,7 +166,7 @@ describe.skipIf(!dbAvailable)("loadReplayItems", () => {
     expect(items.some((i) => i.candidateOutcomeId === standardId)).toBe(false);
   });
 
-  it("prints the wallet figures the live brief printed: funding-only bundles, no raw risk score as a percentile", async () => {
+  it("prints the wallet figures the live brief printed: no older bundle definitions, no raw risk score as a percentile", async () => {
     // Banked before walletRiskTop10Max became a percentile (no walletRiskScoredTop10): an hour
     // before the switch, however long ago that is now (a fixed 30 hours stopped being "before"
     // at 2026-10-18 01:30 UTC).
@@ -194,8 +194,9 @@ describe.skipIf(!dbAvailable)("loadReplayItems", () => {
       take: 50,
     });
     const brief = items.find((i) => i.candidateOutcomeId === alertId)!.brief;
-    expect(brief).toContain("with those) 8.0%");
-    expect(brief).toContain("tied to the creator by funding 3.0%");
+    // Banked before the vector counted transfers: another definition, so not put to the brief.
+    expect(brief).toContain("they sent the coin) unknown");
+    expect(brief).toContain("tied to the creator by funding or transfers unknown");
     expect(brief).toContain("riskiest top-10 holder unknown; launch's first buyers average 41");
   });
 });
