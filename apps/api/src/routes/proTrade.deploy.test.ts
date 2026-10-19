@@ -24,7 +24,7 @@ import { newBuildId, signBuildToken } from "../buildToken.js";
  * answered from the trade's row. The chain and Sender are stand-ins; the database is real.
  */
 
-const chain = vi.hoisted(() => ({ height: 10_000, seen: new Set<string>() }));
+const chain = vi.hoisted(() => ({ height: 10_000, seen: new Set<string>(), rpcSends: [] as string[] }));
 
 vi.mock("@trenchscanner/core", async (importOriginal) => {
   const core = await importOriginal<typeof import("@trenchscanner/core")>();
@@ -41,9 +41,18 @@ vi.mock("@trenchscanner/core", async (importOriginal) => {
     override async getSignatureStatuses(signatures: string[]) {
       return Promise.all(signatures.map((s) => this.getSignatureStatus(s)));
     }
+    // The RPC fallback's sends: recorded, never sent.
+    override async send(base64Tx: string) {
+      chain.rpcSends.push(base64Tx);
+      return null;
+    }
   }
   return { ...core, TradingRpc: ChainRpc, sendViaSender: vi.fn(async () => ({ ok: true as const })) };
 });
+
+const SENDER_OK = async () => ({ ok: true as const });
+/** Sender not answering: a timeout, which may have gone out. */
+const SENDER_SILENT = async () => ({ ok: false as const, refused: false, error: "timed out" });
 
 const keyPair = () => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -89,6 +98,8 @@ describe.skipIf(!dbAvailable)("Pro trades across API instances", () => {
     servers.push(app);
     return app;
   };
+  const senderCalls = (base64: string) =>
+    vi.mocked(sendViaSender).mock.calls.filter((c) => c[1] === base64).length;
   const send = (app: FastifyInstance, payload: object) =>
     app.inject({
       method: "POST",
@@ -129,6 +140,8 @@ describe.skipIf(!dbAvailable)("Pro trades across API instances", () => {
     await Promise.all(servers.splice(0).map((s) => s.close()));
     await prisma.platformTrade.deleteMany({ where: { wallet: TRADER.address } });
     vi.mocked(sendViaSender).mockClear();
+    vi.mocked(sendViaSender).mockImplementation(SENDER_OK);
+    chain.rpcSends.length = 0;
   });
 
   afterAll(async () => {
@@ -256,5 +269,101 @@ describe.skipIf(!dbAvailable)("Pro trades across API instances", () => {
         (await prisma.platformTrade.findUniqueOrThrow({ where: { signature: gone.signature } })).status,
       ).toBe("expired"),
     );
+  });
+  describe("when Sender stops answering (user decision 2026-10-19: RPC fallback only with MEV Protect off)", () => {
+    it("resends a trade with MEV Protect off through the RPC too after two silent Sender sends", async () => {
+      vi.mocked(sendViaSender).mockImplementation(SENDER_SILENT);
+      const app = await instance();
+      const t = trade();
+      const res = await send(app, {
+        transaction: t.first.base64,
+        buildToken: tokenFor(t.message),
+        mevProtect: false,
+      });
+      // No answer may still mean it went out: sent, not refused.
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ signature: t.first.signature });
+      expect(chain.rpcSends).toEqual([]);
+      await vi.waitFor(() => expect(chain.rpcSends).toContain(t.first.base64), {
+        timeout: 10_000,
+        interval: 100,
+      });
+      // Only after the first send and a resend went unanswered, and Sender is still tried alongside.
+      const before = senderCalls(t.first.base64);
+      expect(before).toBeGreaterThanOrEqual(3);
+      await vi.waitFor(() => expect(senderCalls(t.first.base64)).toBeGreaterThan(before), {
+        timeout: 5_000,
+        interval: 100,
+      });
+    }, 20_000);
+
+    it("never sends a MEV-protected trade through the RPC", async () => {
+      vi.mocked(sendViaSender).mockImplementation(SENDER_SILENT);
+      const app = await instance();
+      const t = trade();
+      const res = await send(app, {
+        transaction: t.first.base64,
+        buildToken: tokenFor(t.message),
+        mevProtect: true,
+      });
+      expect(res.statusCode).toBe(200);
+      await vi.waitFor(() => expect(senderCalls(t.first.base64)).toBeGreaterThanOrEqual(4), {
+        timeout: 12_000,
+        interval: 100,
+      });
+      expect(chain.rpcSends).toEqual([]);
+    }, 20_000);
+
+    it("keeps a Sender refusal a refusal, with no RPC fallback", async () => {
+      vi.mocked(sendViaSender).mockImplementation(async () => ({
+        ok: false as const,
+        refused: true,
+        error: "HTTP 400",
+      }));
+      const app = await instance();
+      const t = trade();
+      const res = await send(app, {
+        transaction: t.first.base64,
+        buildToken: tokenFor(t.message),
+        mevProtect: false,
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ notSent: true });
+      // Nothing went out, so nothing is resent, through Sender or the RPC.
+      await new Promise((r) => setTimeout(r, 2_500));
+      expect(senderCalls(t.first.base64)).toBe(1);
+      expect(chain.rpcSends).toEqual([]);
+    }, 10_000);
+
+    it("falls back for a resumed row with MEV Protect off, never for a protected one", async () => {
+      vi.mocked(sendViaSender).mockImplementation(SENDER_SILENT);
+      const open = trade().first;
+      const shielded = trade().first;
+      await prisma.platformTrade.createMany({
+        data: [
+          { tx: open, mev: false },
+          { tx: shielded, mev: true },
+        ].map(({ tx, mev }) => ({
+          signature: tx.signature,
+          wallet: TRADER.address,
+          mint: MINT,
+          side: "buy",
+          lamports: 20_000_000n,
+          networkFeeLamports: 25_000n,
+          transaction: tx.base64,
+          lastValidBlockHeight: BigInt(chain.height + 100),
+          senderSpeed: "eco",
+          senderMevProtect: mev,
+        })),
+      });
+      await instance();
+      await vi.waitFor(() => expect(chain.rpcSends).toContain(open.base64), {
+        timeout: 12_000,
+        interval: 100,
+      });
+      expect(senderCalls(open.base64)).toBeGreaterThanOrEqual(3);
+      expect(senderCalls(shielded.base64)).toBeGreaterThanOrEqual(3);
+      expect(chain.rpcSends).not.toContain(shielded.base64);
+    }, 20_000);
   });
 });

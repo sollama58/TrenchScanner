@@ -340,6 +340,11 @@ export interface FeeEstimate {
   /** The Sacrifice's SOL value while it is on and the wallet pays, else "0". */
   platformFeeLamports: string;
   sacrifice?: SacrificeView;
+  /**
+   * Helius Sender isn't answering the API just now: trades with MEV Protect off still go out
+   * through the RPC; protected ones may expire. Absent from older API builds.
+   */
+  senderDown?: boolean;
 }
 
 /**
@@ -567,11 +572,12 @@ export function expectedTokens(
 // ---- The wallet's position in a coin ----
 
 /**
- * Fees saved (user ask 2026-10-19) are counted against a 1% platform fee on each buy and sale: the
- * highest of the platforms the Portfolio page compares (Axiom, apps/api/src/tradeFees.ts).
+ * Fees saved (user ask 2026-10-19) are counted against a 0.95% platform fee on each buy and sale: the
+ * highest of the platforms the Portfolio page compares (Axiom's entry tier net of cashback,
+ * apps/api/src/tradeFees.ts).
  */
-export const FEE_BASELINE_BPS = 100;
-export const FEE_BASELINE_TEXT = "vs a 1% fee";
+export const FEE_BASELINE_BPS = 95;
+export const FEE_BASELINE_TEXT = `vs a ${FEE_BASELINE_BPS / 100}% fee`;
 
 /** What a trade of `sizeSol` saves against the baseline fee, less what we charge on it. */
 export function feeSavedSol(sizeSol: number, chargedSol = 0): number {

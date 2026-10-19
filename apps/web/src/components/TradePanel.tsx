@@ -541,7 +541,7 @@ function FeeExplainer({
         {savedSol > 0 && (
           <span
             className="tm-fee-saved"
-            title={`What this trade saves against a ${FEE_BASELINE_BPS / 100}% platform fee (Axiom's), after any fee taken here`}
+            title={`What this trade saves against a ${FEE_BASELINE_BPS / 100}% platform fee (Axiom's, net of its entry cashback), after any fee taken here`}
           >
             <span className="tm-fee-saved-label">Saves</span>
             <strong className="num">{solText(savedSol)}</strong>
@@ -556,6 +556,27 @@ function FeeExplainer({
 
 /** A row of up to four preset buttons, two rows of three for five or six. */
 /** The buy buttons' grid: every button in one row, or split over two (Settings > Trading). */
+/**
+ * Helius Sender isn't answering the API (user ask 2026-10-19): with the MEV shield on, a warning,
+ * since a shielded trade waits on Sender and may expire; with it off, a note that trades still go
+ * through the RPC.
+ */
+export function SenderDownNote({ mevProtect }: { mevProtect: boolean }) {
+  if (mevProtect)
+    return (
+      <p className="small tm-trade-warn" role="alert">
+        <strong>Helius Sender is down.</strong> Trades with the MEV shield off still go through; shielded
+        trades may expire until it&apos;s back. Turn the shield off in the trade settings to trade now,
+        without its sandwich protection.
+      </p>
+    );
+  return (
+    <p className="muted small tm-trade-delay" role="note">
+      Helius Sender is down. Your trades still go through, by the RPC, since the MEV shield is off.
+    </p>
+  );
+}
+
 export function presetCols(n: number, rows: 1 | 2 = 1): React.CSSProperties {
   return { "--cols": Math.max(rows === 2 ? Math.ceil(n / 2) : n, 1) } as React.CSSProperties;
 }
@@ -858,6 +879,7 @@ export function TradePanel({
       {closeOnly && (
         <p className="small tm-trade-warn">Pro Mode has ended for this wallet, so trading is off.</p>
       )}
+      {fee?.senderDown && <SenderDownNote mevProtect={settings.mevProtect} />}
 
       {!hidePosition && hasPosition && summary && (
         <div className={`tm-hold ${tone}${positionStaleAt !== null ? " stale" : ""}`}>

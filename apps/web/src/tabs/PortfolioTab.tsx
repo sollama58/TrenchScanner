@@ -87,9 +87,14 @@ interface FeesSaved {
     name: string;
     buyBps: number;
     sellBps: number;
+    /** Absent from older API builds. */
+    sourceUrl?: string;
+    estimate?: boolean;
     feeSol: number;
     savedSol: number;
   }[];
+  /** When the rates were last checked (ISO date); absent from older API builds. */
+  ratesAsOf?: string;
   since: string | null;
   solUsd: number | null;
 }
@@ -271,8 +276,8 @@ function FeesPanel() {
           </span>
           <h2>What trading here saved you</h2>
           <p className="muted small">
-            Trades you made from TrenchScanner&apos;s Trade panel, against what the same trades would have
-            paid in platform fees elsewhere.{" "}
+            Trades you made from TrenchScanner&apos;s Trade panel, against an estimate of what the same trades
+            would have paid in platform fees elsewhere.{" "}
             {data?.sacrifice?.mode === "on" ? (
               <>
                 TrenchScanner&apos;s fee is 0% for the top {data.sacrifice.freeRank} $ASDFASDFA holders and a
@@ -324,7 +329,7 @@ function FeesPanel() {
             </div>
             {best && (
               <div>
-                <dt>Saved vs {best.name}</dt>
+                <dt>Est. saved vs {best.name}</dt>
                 <dd className={`num${tone(best.savedSol)}`}>
                   {feeSol(best.savedSol)}
                   {inUsd(best.savedSol)}
@@ -340,13 +345,22 @@ function FeesPanel() {
                   <th className="num">Buy fee</th>
                   <th className="num">Sell fee</th>
                   <th className="num">Their fees</th>
-                  <th className="num">You saved</th>
+                  <th className="num">Est. saved</th>
                 </tr>
               </thead>
               <tbody>
                 {data.platforms.map((p) => (
                   <tr key={p.id}>
-                    <td>{p.name}</td>
+                    <td>
+                      {p.sourceUrl ? (
+                        <a href={p.sourceUrl} target="_blank" rel="noopener noreferrer nofollow">
+                          {p.name}
+                        </a>
+                      ) : (
+                        p.name
+                      )}
+                      {p.estimate && <span className="faint small"> · estimate</span>}
+                    </td>
                     <td className="num">{pct(p.buyBps)}</td>
                     <td className="num">{pct(p.sellBps)}</td>
                     <td className="num">{feeSol(p.feeSol)}</td>
@@ -359,6 +373,14 @@ function FeesPanel() {
               </tbody>
             </table>
           </div>
+          {/* Comparison terms (user ask 2026-10-19): dated, sourced, estimated, no implied tie. */}
+          <p className="faint small">
+            Rates as each platform published them
+            {data.ratesAsOf && <> on {new Date(`${data.ratesAsOf}T00:00:00`).toLocaleDateString()}</>}; each
+            linked name goes to its fee page. Standard rates, before any further cashback, referral discount
+            or order-size band, so your actual fees there may differ. Terminal publishes no fee schedule, so
+            its rate is an estimate. TrenchScanner is not affiliated with or endorsed by these platforms.
+          </p>
         </>
       )}
     </section>

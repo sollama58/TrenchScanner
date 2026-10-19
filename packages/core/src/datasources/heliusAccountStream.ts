@@ -107,6 +107,12 @@ export interface HeliusStreamStats {
   logsSubscriptions?: number;
   /** Transactions' logs delivered (the live trades'), in the same bytes and credits. */
   logsUpdates?: number;
+  /**
+   * Reconnects scheduled (a close, a failed open, or a silent socket replaced), and silent sockets
+   * replaced (checkIdle). Always set by takeStats; optional for the older stubs.
+   */
+  reconnects?: number;
+  stalls?: number;
   bytes: number;
   /** Estimated from the bytes received (streamCredits), plus one per connection opened. */
   credits: number;
@@ -130,7 +136,17 @@ export class HeliusAccountStream {
   private timers: ReturnType<typeof setInterval>[] = [];
   private stopped = false;
   private lastActivityAt = 0;
-  private stats = { txs: 0, accountUpdates: 0, logsUpdates: 0, bytes: 0, connections: 0 };
+  private stats = {
+    txs: 0,
+    accountUpdates: 0,
+    logsUpdates: 0,
+    bytes: 0,
+    connections: 0,
+    reconnects: 0,
+    stalls: 0,
+  };
+  /** Silence after which nothing counts as covered (stallAfter); null: only the reconnect's timeout. */
+  private coverStallMs: number | null = null;
   /** The feature this socket's credits go under in ApiUsage (metered); null leaves them out. */
   private meterFeature: string | null = null;
   /** Credits counted but not yet a whole one: ApiUsage keeps whole credits. */
@@ -165,6 +181,27 @@ export class HeliusAccountStream {
   metered(feature: string): this {
     this.meterFeature = feature;
     return this;
+  }
+
+  /**
+   * Treats `ms` without a word from Helius (the slot feed speaks every ~0.4 s) as a stall for cover:
+   * coveredSince answers null until the socket speaks again, so the caller reads by RPC at once,
+   * though the reconnect itself still waits for IDLE_TIMEOUT_MS. For the chart's live tail (audit
+   * 2026-10-19, item 3): a silent socket served frozen prices as "Live" for up to ~75 s.
+   */
+  stallAfter(ms: number): this {
+    this.coverStallMs = ms;
+    return this;
+  }
+
+  /**
+   * How long the open socket has been silent past stallAfter's limit (ms), or 0 while it speaks,
+   * is not open, or no limit was set.
+   */
+  stalledForMs(now: number = Date.now()): number {
+    if (this.coverStallMs === null || this.socket?.readyState !== 1) return 0;
+    const silent = now - this.lastActivityAt;
+    return silent >= this.coverStallMs ? silent : 0;
   }
 
   private meter(bytes: number, connections: number): void {
@@ -263,12 +300,25 @@ export class HeliusAccountStream {
   }
 
   /**
-   * From when `account` has been followed under `key` without a break (ms epoch), or null when it
-   * is not followed right now.
+   * Undoes `key`'s subscription and asks for it again with the same accounts: its cover starts over
+   * once Helius confirms the new one. For a caller that found the stream silently missing an
+   * account's changes (liveCurve.ts checks covered accounts by RPC).
    */
-  coveredSince(key: string, account: string): number | null {
+  resubscribe(key: string): void {
+    const sub = this.subs.get(key);
+    if (!sub) return;
+    this.unsubscribe(key, sub);
+    this.subscribe(key, sub);
+  }
+
+  /**
+   * From when `account` has been followed under `key` without a break (ms epoch), or null when it
+   * is not followed right now (or the socket is stalled: stallAfter).
+   */
+  coveredSince(key: string, account: string, now: number = Date.now()): number | null {
     const sub = this.subs.get(key);
     if (!sub || !sub.accounts.has(account) || this.socket?.readyState !== 1) return null;
+    if (this.stalledForMs(now) > 0) return null;
     if (sub.since !== null) return sub.carried.get(account) ?? sub.since;
     // The replaced subscription, until this one is confirmed, for the accounts both follow.
     const old = sub.retiring;
@@ -288,8 +338,18 @@ export class HeliusAccountStream {
       logsUpdates: this.stats.logsUpdates,
       bytes: this.stats.bytes,
       credits: streamCredits(this.stats.bytes) + this.stats.connections,
+      reconnects: this.stats.reconnects,
+      stalls: this.stats.stalls,
     };
-    this.stats = { txs: 0, accountUpdates: 0, logsUpdates: 0, bytes: 0, connections: 0 };
+    this.stats = {
+      txs: 0,
+      accountUpdates: 0,
+      logsUpdates: 0,
+      bytes: 0,
+      connections: 0,
+      reconnects: 0,
+      stalls: 0,
+    };
     return out;
   }
 
@@ -399,6 +459,7 @@ export class HeliusAccountStream {
     const socket = this.socket;
     if (!socket || this.stopped || now - this.lastActivityAt < IDLE_TIMEOUT_MS) return;
     logger.warn("stream silent, reconnecting", { silentForMs: now - this.lastActivityAt });
+    this.stats.stalls += 1;
     this.dropSocket(socket);
     this.scheduleReconnect();
   }
@@ -553,6 +614,7 @@ export class HeliusAccountStream {
     if (this.stopped || this.reconnectTimer) return;
     const delay = this.backoffMs;
     this.backoffMs = Math.min(MAX_BACKOFF_MS, this.backoffMs * 2);
+    this.stats.reconnects += 1;
     logger.warn("stream disconnected, reconnecting", { inMs: delay });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;

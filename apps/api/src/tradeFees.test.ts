@@ -21,13 +21,13 @@ describe("feeSummary", () => {
       networkFeeSol: 0.0002,
     });
     const by = Object.fromEntries(s.platforms.map((p) => [p.id, p.savedSol]));
-    // 0.5% each way on 6 SOL; 0.35% on the 4 SOL sale only; 1% each way.
-    expect(by).toEqual({ fomo: 0.03, pumpfun: 0.014, terminal: 0.03, axiom: 0.06 });
+    // 0.5%, 0.45% and 0.95% each way on 6 SOL.
+    expect(by).toEqual({ fomo: 0.03, pumpfun: 0.027, terminal: 0.03, axiom: 0.057 });
   });
 
   it("counts a platform fee we charged against the savings, and nothing for no trades", () => {
     const s = feeSummary([{ ...trade("buy", 1n), platformFeeLamports: 1_000_000n }]);
-    expect(s.platforms.find((p) => p.id === "axiom")!.savedSol).toBe(0.009);
+    expect(s.platforms.find((p) => p.id === "axiom")!.savedSol).toBe(0.0085);
     expect(feeSummary([]).platforms.map((p) => p.savedSol)).toEqual(OTHER_PLATFORMS.map(() => 0));
   });
 });

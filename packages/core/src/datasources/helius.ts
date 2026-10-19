@@ -271,6 +271,12 @@ export interface HeliusClientOptions {
    * or a vanity domain in front of Helius would otherwise silently lose the Helius-only path.
    */
   isHelius?: boolean;
+  /**
+   * Its own 429 pause under this name, instead of the one every client of the endpoint shares
+   * (rpcPauseFor). For the token chart's live tail (audit 2026-10-19, item 10): its small price
+   * reads queued behind a pause the wallet modal, fee reads and supplies had run into.
+   */
+  pauseLane?: string;
 }
 
 const PUBLIC_FALLBACK_RPC = "https://solana-rpc.publicnode.com";
@@ -285,11 +291,12 @@ const PUBLIC_FALLBACK_RPC = "https://solana-rpc.publicnode.com";
  */
 const rpcPauses = new Map<string, RateGate>();
 
-function rpcPauseFor(rpcUrl: string): RateGate {
-  let gate = rpcPauses.get(rpcUrl);
+function rpcPauseFor(rpcUrl: string, lane?: string): RateGate {
+  const key = lane ? `${rpcUrl}#${lane}` : rpcUrl;
+  let gate = rpcPauses.get(key);
   if (!gate) {
-    gate = new RateGate({ name: "helius", perMinute: 600_000, burst: 10_000 });
-    rpcPauses.set(rpcUrl, gate);
+    gate = new RateGate({ name: lane ? `helius/${lane}` : "helius", perMinute: 600_000, burst: 10_000 });
+    rpcPauses.set(key, gate);
   }
   return gate;
 }
@@ -660,7 +667,7 @@ export class HeliusClient {
       this.rpcUrl = PUBLIC_FALLBACK_RPC;
       this.usingHelius = false;
     }
-    this.pause = rpcPauseFor(this.rpcUrl);
+    this.pause = rpcPauseFor(this.rpcUrl, options.pauseLane);
     // Only Helius serves getTransactionsForAddress - don't even try it elsewhere.
     this.gtfaUnavailable = !this.usingHelius;
     // Same for the DAS API, which is a Helius extension rather than standard Solana RPC.

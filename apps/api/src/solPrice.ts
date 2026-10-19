@@ -1,4 +1,5 @@
 import { createLogger, fetchJson, type DexScreenerClient } from "@trenchscanner/core";
+import { recordSolPriceFailure } from "./chartHealth.js";
 
 const logger = createLogger("sol-price");
 
@@ -140,6 +141,7 @@ export class SolPrice {
       }
     }
     logger.warn("every sol price source failed; keeping the last price", { last: this.value?.usd ?? null });
+    recordSolPriceFailure();
     this.nextTryAt = this.now() + this.retryMs;
     return this.value?.usd ?? null;
   }
@@ -256,6 +258,7 @@ export class QuotePrice {
         logger.debug("quote price read failed", { mint, reader: i, error: String(err) });
       }
     }
+    recordSolPriceFailure();
     this.nextTryAt.set(mint, this.now() + this.retryMs);
     const held = this.values.get(mint);
     if (held && this.now() - held.at > this.maxAgeMs) {

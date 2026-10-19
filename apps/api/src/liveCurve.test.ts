@@ -1,9 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { CurveState } from "@trenchscanner/core";
-import { curveMcapSol, LiveCurves, READ_EVERY_MS } from "./liveCurve.js";
+import { pumpCurveAddressOf, type CurveState } from "@trenchscanner/core";
+import bs58 from "bs58";
+import {
+  curveMcapSol,
+  LiveCurves,
+  MAX_FOLLOWED,
+  READ_EVERY_MS,
+  VERIFY_EVERY_MS,
+  VERIFY_GRACE_MS,
+} from "./liveCurve.js";
+import { ChartHealth } from "./chartHealth.js";
 import { QuotePrice, SolPrice } from "./solPrice.js";
 
 const MINT = "BfWF6DxxfjdZPqjc2dPQvMd4CJh8Xr7ZPeP3iLh2pump";
+const pumpCurve = (mint: string) => pumpCurveAddressOf(mint)!;
 const DISC = [23, 183, 248, 55, 96, 216, 172, 96];
 
 /** A curve's account data, base64, as the stream delivers it. */
@@ -61,7 +71,11 @@ function setup(
   let covered: number | null = null;
   let onAccount: ((key: string, data: string, slot: number | null) => void) | null = null;
   const poolReads: string[][] = [];
+  const resubscribed: string[] = [];
+  const amounts = opts.pool ? [...opts.pool.amounts] : [0, 0];
+  const health = new ChartHealth(() => now);
   const curves = new LiveCurves({
+    health,
     makeStream: opts.stream
       ? (cb) => {
           onAccount = cb;
@@ -71,6 +85,7 @@ function setup(
             watch: (key: string) => void watched.add(key),
             unwatch: (key: string) => void watched.delete(key),
             coveredSince: (key: string) => (watched.has(key) ? covered : null),
+            resubscribe: (key: string) => void resubscribed.push(key),
           };
         }
       : null,
@@ -86,9 +101,7 @@ function setup(
               new Map([...pools.keys()].map((p) => [p, opts.pool!.vaults])),
             getTokenAmountsBatch: async (list: string[]) => {
               poolReads.push(list);
-              return new Map(
-                list.map((a) => [a, a === VAULTS.base ? opts.pool!.amounts[0] : opts.pool!.amounts[1]]),
-              );
+              return new Map(list.map((a) => [a, a === VAULTS.base ? amounts[0]! : amounts[1]!]));
             },
           }
         : {}),
@@ -109,6 +122,11 @@ function setup(
     at: () => now,
     cover: (since: number | null) => (covered = since),
     poolReads,
+    resubscribed,
+    health,
+    /** What the RPC reads from now on (the stream may not have said). */
+    next: (s: CurveState) => void states.splice(0, states.length, s),
+    nextAmounts: (base: number, quote: number) => void amounts.splice(0, 2, base, quote),
     push: (data: string) => onAccount!(`chart:${MINT}`, data, null),
     pushVault: (side: "base" | "quote", amount: bigint, slot: number) =>
       onAccount!(`pool-${side}:${MINT}`, vaultData(amount), slot),
@@ -155,7 +173,8 @@ describe("LiveCurves", () => {
     const a = await t.curves.read(MINT, 0);
     expect(a.source).toBe("stream");
     expect(a.ticks).toHaveLength(2);
-    expect(a.readAt).toBe(t.at());
+    // Known current as of the delivery, not the ask.
+    expect(a.readAt).toBe(t.at() - 400);
     // Covered by the stream: no polling.
     t.tick(READ_EVERY_MS * 3);
     await t.curves.round();
@@ -322,10 +341,10 @@ describe("LiveCurves", () => {
       },
       solPrice: { get: async () => 100 },
     });
-    expect((await curves.read(MINT, 0)).source).toBe("pending");
-    await curves.round();
+    // The first answer waits for the scan and the pool's first read (discovery, then prices).
     const a = await curves.read(MINT, 0);
     expect(a).toMatchObject({ source: "rpc", complete: false });
+    await curves.round();
     expect(a.ticks[0]![1]).toBeCloseTo(curveMcapSol(onPool) * 100);
     expect(scans).toBe(1);
     curves.stop();
@@ -437,6 +456,156 @@ describe("SolPrice", () => {
   });
 });
 
+describe("LiveCurves stream checks (audit 2026-10-19, item 3)", () => {
+  it("keeps readAt at the last real read: an ask doesn't move it, a matching check does", async () => {
+    const t = setup({ stream: true });
+    t.cover(t.at());
+    const seededAt = t.at();
+    expect(await t.curves.read(MINT, 0)).toMatchObject({ source: "stream", readAt: seededAt });
+    t.tick(5_000);
+    expect((await t.curves.read(MINT, 0)).readAt).toBe(seededAt);
+    // Quiet coin, healthy stream: the check every VERIFY_EVERY_MS matches and moves readAt.
+    t.tick(VERIFY_EVERY_MS - 5_000);
+    await t.curves.round();
+    expect(t.reads).toHaveLength(2);
+    expect(await t.curves.read(MINT, 0)).toMatchObject({ source: "stream", readAt: t.at() });
+    expect(t.health.snapshot().stream).toMatchObject({ verified: 1, mismatches: 0 });
+    // Not again until the next VERIFY_EVERY_MS.
+    t.tick(1_000);
+    await t.curves.round();
+    expect(t.reads).toHaveLength(2);
+    t.curves.stop();
+  });
+
+  it("drops a cover the stream silently lost, records the read and resubscribes", async () => {
+    const t = setup({ stream: true });
+    t.cover(t.at());
+    await t.curves.read(MINT, 0);
+    // A trade the stream never delivered.
+    t.next(state(7e10));
+    t.tick(VERIFY_EVERY_MS);
+    const checkedAt = t.at();
+    await t.curves.round();
+    // Held for the grace: the change may still be on its way.
+    expect(t.resubscribed).toEqual([]);
+    expect((await t.curves.read(MINT, 0)).source).toBe("stream");
+    t.tick(VERIFY_GRACE_MS);
+    await t.curves.round();
+    expect(t.resubscribed).toEqual([`chart:${MINT}`]);
+    expect(t.health.snapshot().stream.mismatches).toBe(1);
+    const a = await t.curves.read(MINT, 0);
+    expect(a.source).toBe("rpc");
+    expect(a.ticks.find(([at]) => at === checkedAt)?.[1]).toBeCloseTo(curveMcapSol(state(7e10)) * 100);
+    // Off the stream: read by RPC every READ_EVERY_MS until the new subscription covers it.
+    const reads = t.reads.length;
+    t.tick(READ_EVERY_MS);
+    await t.curves.round();
+    expect(t.reads.length).toBe(reads + 1);
+    t.tick(100);
+    t.cover(t.at());
+    await t.curves.round();
+    expect((await t.curves.read(MINT, 0)).source).toBe("stream");
+    t.curves.stop();
+  });
+
+  it("keeps the cover when a delivery explains the difference within the grace", async () => {
+    const t = setup({ stream: true });
+    t.cover(t.at());
+    await t.curves.read(MINT, 0);
+    t.next(state(7e10));
+    t.tick(VERIFY_EVERY_MS);
+    await t.curves.round();
+    t.tick(300);
+    t.push(curveData(1_000_000_000_000_000n, 70_000_000_000n));
+    t.tick(VERIFY_GRACE_MS);
+    await t.curves.round();
+    expect(t.resubscribed).toEqual([]);
+    expect(t.health.snapshot().stream.mismatches).toBe(0);
+    expect((await t.curves.read(MINT, 0)).source).toBe("stream");
+    t.curves.stop();
+  });
+
+  it("checks a streamed pool's vaults the same way", async () => {
+    const t = setup({
+      stream: true,
+      states: [state(5e10, true)],
+      pool: { vaults: VAULTS, amounts: [2e14, 8e10] },
+    });
+    t.cover(t.at());
+    expect(await t.curves.read(MINT, 0)).toMatchObject({ venue: "pool", source: "stream" });
+    t.nextAmounts(1.9e14, 9e10);
+    t.tick(VERIFY_EVERY_MS);
+    await t.curves.round();
+    t.tick(VERIFY_GRACE_MS);
+    await t.curves.round();
+    expect(t.resubscribed).toEqual([`pool-base:${MINT}`, `pool-quote:${MINT}`, `pool-account:${MINT}`]);
+    expect(t.health.snapshot().stream.mismatches).toBe(1);
+    const a = await t.curves.read(MINT, 0);
+    expect(a.source).toBe("rpc");
+    expect(a.ticks.at(-1)![1]).toBeCloseTo(curveMcapSol({ virtualQuote: 9e10, virtualToken: 1.9e14 }) * 100);
+    t.curves.stop();
+  });
+
+  it("counts every live tail answer by source", async () => {
+    const t = setup({ stream: true });
+    t.cover(t.at());
+    await t.curves.read(MINT, 0);
+    await t.curves.read(MINT, 0);
+    expect(t.health.snapshot().liveTail).toEqual({ answers: 2, bySource: { stream: 2 } });
+    t.curves.stop();
+  });
+});
+
+describe("LiveCurves follows (audit 2026-10-19, items 10 and 11)", () => {
+  const mintOf = (i: number) => {
+    const bytes = new Uint8Array(32);
+    bytes[0] = 7;
+    new DataView(bytes.buffer).setUint32(1, i);
+    return bs58.encode(bytes);
+  };
+
+  it("never lets a feed card's follow evict an open chart", async () => {
+    const curves = new LiveCurves({
+      makeStream: null,
+      reader: { getCurveStatesBatch: async (list: string[]) => new Map(list.map((c) => [c, state(5e10)])) },
+      solPrice: { get: async () => 100 },
+      health: new ChartHealth(),
+    });
+    const charts = Array.from({ length: 150 }, (_, i) => mintOf(i));
+    for (const mint of charts) await curves.read(mint, 0);
+    await curves.quotes(
+      Array.from({ length: MAX_FOLLOWED }, (_, i) => mintOf(10_000 + i)),
+      0,
+    );
+    expect(curves.stats()).toMatchObject({ followed: MAX_FOLLOWED, charts: 150 });
+    // Each chart is still followed: its next answer comes straight from its tape.
+    for (const mint of charts.slice(0, 5)) expect((await curves.read(mint, 0)).ticks).toHaveLength(1);
+    curves.stop();
+  });
+
+  it("answers a chart while another coin's pool scan hangs", async () => {
+    const OTHER = mintOf(1);
+    const curves = new LiveCurves({
+      makeStream: null,
+      reader: {
+        getCurveStatesBatch: async (list: string[]) =>
+          new Map(list.map((c) => [c, c === pumpCurve(OTHER) ? null : state(5e10)])),
+        // A program scan that never comes back.
+        findLaunchLabPool: () => new Promise<never>(() => {}),
+      },
+      solPrice: { get: async () => 100 },
+      health: new ChartHealth(),
+    });
+    // The other coin's first answer waits out its seed, its scan still out.
+    await curves.read(OTHER, 0);
+    const started = Date.now();
+    const a = await curves.read(MINT, 0);
+    expect(a).toMatchObject({ source: "rpc" });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    curves.stop();
+  });
+});
+
 describe("LiveCurves.quotes (the feed cards' Now)", () => {
   it("puts the cap on the supply now once burns have taken some of the billion", async () => {
     const t = setup({ supplies: { [MINT]: 950_000_000 } });
@@ -473,13 +642,15 @@ describe("LiveCurves.quotes (the feed cards' Now)", () => {
     none.curves.stop();
   });
 
-  it("stamps a streamed curve as current at the ask", async () => {
+  it("stamps a streamed curve with its last delivery, not the ask", async () => {
     const t = setup({ stream: true });
     t.cover(t.at() - 1);
+    const seededAt = t.at();
     await t.curves.quotes([MINT], 2_500);
     t.tick(5_000);
-    const q = await t.curves.quotes([MINT], 2_500);
-    expect(q.get(MINT)?.at).toBe(t.at());
+    expect((await t.curves.quotes([MINT], 2_500)).get(MINT)?.at).toBe(seededAt);
+    t.push(curveData(1_000_000_000_000_000n, 50_000_000_000n));
+    expect((await t.curves.quotes([MINT], 2_500)).get(MINT)?.at).toBe(t.at());
     t.curves.stop();
   });
 });

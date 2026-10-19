@@ -9,6 +9,7 @@ import { AdminReportsBadge } from "../components/AdminReportsBadge";
 import { ModelsAdmin } from "./AdminModels";
 import { WalletsAdmin } from "./AdminWallets";
 import { UsageAdmin } from "./AdminUsage";
+import { ChartsHealth } from "./AdminChartsHealth";
 import { CreditsAdmin } from "./AdminCredits";
 import { FreeAccessAdmin } from "./AdminFreeAccess";
 import { ProModeAdmin, SacrificeAdmin } from "./AdminProMode";
@@ -1898,6 +1899,7 @@ function ApiInstance() {
               ])}
             />
           </Panel>
+          <ChartsHealth />
         </div>
       )}
     </Load>

@@ -19172,26 +19172,50 @@ body:has(.util-toast) .bug-fab {
   .scope-hold {
     font-size: 11px;
   }
-  .scope-strip {
-    display: flex;
-    gap: 0;
-    overflow-x: auto;
-    scroll-snap-type: x mandatory;
-    scrollbar-width: none;
-    overscroll-behavior-x: contain;
+  /* One column at a time (user report 2026-10-19): the page scrolls its rows rather than a box
+     inside the page, under a bar of tabs that sticks below the top bar. Swipe for the next. */
+  .scope-bar {
+    position: sticky;
+    top: var(--scope-sticky-top, 0px);
+    z-index: 4;
+    margin: 0 -4px;
+    padding: 8px 4px 6px;
+    /* The panel's see-through surface over the page, solid so rows don't show through. */
+    background: color-mix(in srgb, var(--surface-solid) 84%, var(--page));
+    border-bottom: 1px solid transparent;
   }
-  .scope-strip::-webkit-scrollbar {
-    display: none;
+  .scope.held .scope-bar {
+    border-bottom-color: var(--border);
+  }
+  .scope-strip {
+    display: block;
+    touch-action: pan-y pinch-zoom;
   }
   .scope-col {
-    flex: 0 0 100%;
-    scroll-snap-align: start;
+    display: none;
+  }
+  .scope-col.active {
+    display: flex;
+    animation: scope-col-in 0.18s ease-out;
   }
   .scope-col-head {
     display: none;
   }
   .scope-rows {
-    max-height: calc(100dvh - 220px);
+    min-height: 240px;
+    max-height: none;
+    overflow: visible;
+  }
+}
+@keyframes scope-col-in {
+  from {
+    opacity: 0.4;
+    transform: translateX(8px);
+  }
+}
+@media (max-width: 899px) and (prefers-reduced-motion: reduce) {
+  .scope-col.active {
+    animation: none;
   }
 }
 @media (max-width: 420px) {
@@ -19212,9 +19236,25 @@ body:has(.util-toast) .bug-fab {
 @media (max-width: 899px) {
   .scope-bar {
     flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .scope-tabs {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
   .scope-tabs button {
+    flex: 1;
     white-space: nowrap;
+    min-height: 36px;
+  }
+  /* Its own line under the tabs, with the New pill at its end. */
+  .scope-hold {
+    flex: 1 1 60%;
+  }
+  .scope-new {
+    padding: 6px 14px;
   }
   .scope-chips {
     flex-wrap: nowrap;
