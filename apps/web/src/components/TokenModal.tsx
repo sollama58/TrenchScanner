@@ -14,7 +14,9 @@ import {
 } from "../bubbleMap";
 import { cachedGet } from "../cache";
 import { createPortal } from "react-dom";
-import { LiveTradesCard } from "./LiveTrades";
+import { LiveTradesCard, useBatchedWallets } from "./LiveTrades";
+import { useLiveTrades } from "../liveTrades";
+import { usePossibleSides } from "../possibleSides";
 import {
   createContext,
   useCallback,
@@ -74,7 +76,7 @@ import {
 } from "./AlertCard";
 import { CHART_MARKS_SECTION } from "./WalletMarksPicker";
 import { CustomizeDrawer } from "./CustomizeDrawer";
-import { markPrefsOf, walletMarks } from "../walletMarks";
+import { markPrefsOf, walletMarks, withLiveMarks } from "../walletMarks";
 import { PriceChart, type ChartEvent, type ChartKind, type ChartTrade } from "./PriceChart";
 import { TradePanel, solText, tokensText } from "./TradePanel";
 import { PRO_MODE_PERKS } from "./ProModeCard";
@@ -737,6 +739,7 @@ function TokenBody({
   // The bubble map's tab opens first when the map is down in the tabs, else Holders: never Live
   // trades on its own, whose feed only runs while someone chose to watch it.
   const [tabPicked, setTab] = useState<TermTab>(side === "map" ? "holders" : "map");
+  const tabRow = useTabRowScroll(terminal ? side : null);
   const tab = tabPicked === side ? (side === "holders" ? "map" : "holders") : tabPicked;
   const [tradeSlot, setTradeSlot] = useState<HTMLDivElement | null>(null);
   const openSafety = () => {
@@ -1024,7 +1027,12 @@ function TokenBody({
               )}
             </div>
             <div className="tm-term-tabs">
-              <div className="tm-term-tablist" role="tablist" aria-label="Sections">
+              <div
+                ref={tabRow.ref}
+                className={`tm-term-tablist${tabRow.edges}`}
+                role="tablist"
+                aria-label="Sections"
+              >
                 {tabs.map((x) => (
                   <button
                     key={x.id}
@@ -1752,6 +1760,47 @@ function HolderFreshness({
   );
 }
 
+/** No traders: the side read asks for nothing. */
+const NO_TRADERS: readonly string[] = [];
+
+/**
+ * A row of tabs that scrolls sideways when the picker beside it leaves too little room (user ask
+ * 2026-10-19): a mouse wheel scrolls it, and its edges fade where more tabs are hidden.
+ * `edges` is the class suffix for those fades. `layout` changes when the row's tabs do (null: no row).
+ */
+function useTabRowScroll(layout: string | null): { ref: RefObject<HTMLDivElement | null>; edges: string } {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [edges, setEdges] = useState("");
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const read = () => {
+      const left = el.scrollLeft > 1;
+      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      setEdges(`${left ? " more-left" : ""}${right ? " more-right" : ""}`);
+    };
+    // A vertical wheel moves the row sideways while it has somewhere to go.
+    const onWheel = (e: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      const before = el.scrollLeft;
+      el.scrollLeft += e.deltaY;
+      if (el.scrollLeft !== before) e.preventDefault();
+    };
+    read();
+    const size = new ResizeObserver(read);
+    size.observe(el);
+    for (const c of el.children) size.observe(c);
+    el.addEventListener("scroll", read, { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      size.disconnect();
+      el.removeEventListener("scroll", read);
+      el.removeEventListener("wheel", onWheel);
+    };
+  }, [layout]);
+  return { ref, edges };
+}
+
 /** A group's heading: a small label with a rule running to the edge. */
 function GroupLabel({ id, children }: { id: string; children: ReactNode }) {
   return (
@@ -1858,9 +1907,22 @@ export function ChartCard({
   const closeCustomize = useCallback(() => setCustomizing(false), []);
   const labeled = data?.wallets ?? [];
   // The trader's own wallet is drawn as their own arrows, whatever its labels.
+  // Live, as they happen (user ask 2026-10-19): the coin's live trades (one feed with the Live
+  // trades tab) fold into the flagged wallets', and KOLs and tracked wallets the chart hasn't
+  // flagged yet join by name.
+  const liveFeed = useLiveTrades(api, markPrefs.on && markPrefs.kinds.length > 0);
+  const liveTraders = useBatchedWallets(liveFeed.trades);
+  const liveNames = useWalletNames(liveTraders);
+  // KOL ties are read for every trader only while funded wallets or Probable Sides are marked.
+  const sideMarks = markPrefs.on && markPrefs.kinds.some((k) => k === "funded" || k === "probable");
+  const liveSides = usePossibleSides(sideMarks ? liveTraders : NO_TRADERS);
+  const marked = useMemo(
+    () => withLiveMarks(data?.wallets ?? [], liveFeed.trades, liveNames, liveSides),
+    [data?.wallets, liveFeed.trades, liveNames, liveSides],
+  );
   const marks = useMemo(
-    () => walletMarks(data?.wallets ?? [], markPrefs, new Set(pro ? [pro] : [])),
-    [data?.wallets, markPrefs, pro],
+    () => walletMarks(marked, markPrefs, new Set(pro ? [pro] : [])),
+    [marked, markPrefs, pro],
   );
 
   // The view's window over the minute data, before the finer reads that fill it in.

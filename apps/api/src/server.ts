@@ -629,13 +629,13 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   const walletHelius = env.HELIUS_API_KEY ? new HeliusClient({ apiKey: env.HELIUS_API_KEY }) : null;
   // The token chart's live tail follows open charts' curves on its own Helius socket (liveCurve.ts).
   const solPrice = sharedSolPrice;
-  setLiveCurves(
-    liveCurvesFor(env.HELIUS_API_KEY, env.CHART_LIVE_CURVES, walletHelius, solPrice, new QuotePrice()),
-  );
+  // One quote-coin price for both: a coin quoted in PUMP or USD1 is read once for its chart and trades.
+  const quotePrice = new QuotePrice();
+  setLiveCurves(liveCurvesFor(env.HELIUS_API_KEY, env.CHART_LIVE_CURVES, walletHelius, solPrice, quotePrice));
   app.addHook("onClose", async () => liveCurves().stop());
   // The token page's live trades follow open pages' coins' logs on another Helius socket
   // (liveTrades.ts), behind the same switch as the chart's.
-  setLiveTrades(liveTradesFor(env.HELIUS_API_KEY, env.CHART_LIVE_CURVES, solPrice));
+  setLiveTrades(liveTradesFor(env.HELIUS_API_KEY, env.CHART_LIVE_CURVES, solPrice, quotePrice));
   app.addHook("onClose", async () => liveTrades().stop());
   await app.register(registerTokenRoutes, { prefix: "/tokens", env, stonkFees: walletHelius });
   const walletLive = walletHelius ? new WalletLiveReader(walletHelius) : null;

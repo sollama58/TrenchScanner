@@ -6,6 +6,7 @@ import {
   markPrefsOf,
   MIN_SOL_FLOOR,
   walletMarks,
+  withLiveMarks,
   type MarkSource,
 } from "./walletMarks";
 
@@ -130,6 +131,69 @@ describe("labeled wallets' marks", () => {
     expect(marks.map((m) => [m.letter, m.text])).toEqual([
       ["T", "Whale (Tracked) bought 2.00 SOL"],
       ["F", "Whale Funded Wallet Fund…1111 bought 1.00 SOL"],
+    ]);
+  });
+});
+
+describe("withLiveMarks", () => {
+  const kolRow = { wallet: "K1", tags: ["kol"], kol: "Cupsey", trades: [[1_000, 1, 2]] as const };
+  it("adds live trades the rows don't hold, once", () => {
+    const out = withLiveMarks(
+      [kolRow],
+      [
+        { wallet: "K1", side: "buy", sol: 2, atMs: 2_000 },
+        { wallet: "K1", side: "sell", sol: 1.5, atMs: 60_000 },
+      ],
+      {},
+    );
+    expect(out[0]?.trades).toEqual([
+      [1_000, 1, 2],
+      [60_000, -1, 1.5],
+    ]);
+  });
+  it("adds traders the chart doesn't flag when their name says KOL, Known Side or tracked", () => {
+    const out = withLiveMarks(
+      [],
+      [
+        { wallet: "A", side: "buy", sol: 3, atMs: 1 },
+        { wallet: "B", side: "buy", sol: 3, atMs: 1 },
+        { wallet: "C", side: "buy", sol: 3, atMs: 1 },
+        { wallet: "D", side: "buy", sol: 3, atMs: 1 },
+      ],
+      {
+        A: { name: "Cupsey", source: "kol" },
+        B: { name: "Cupsey Known Side", source: "kol-side" },
+        C: { name: "my whale", source: "tracked" },
+        D: { name: "Binance", source: "exchange" },
+      },
+    );
+    const marks = walletMarks(out, { on: true, kinds: ["kol", "known"], minSol: 0.5 });
+    expect(marks.map((m) => [m.wallet, m.letter, m.text])).toEqual([
+      ["A", "K", "Cupsey (KOL) bought 3.00 SOL"],
+      ["B", "S", "Cupsey Known Side bought 3.00 SOL"],
+      ["C", "T", "my whale (Tracked) bought 3.00 SOL"],
+    ]);
+  });
+  it("adds a KOL's funded wallet or Probable Side by its tie", () => {
+    const out = withLiveMarks(
+      [],
+      [
+        { wallet: "F", side: "buy", sol: 1, atMs: 1 },
+        { wallet: "P", side: "sell", sol: 1, atMs: 2 },
+      ],
+      {},
+      {
+        F: [
+          { kolWallet: "K", kolName: "Cupsey", pct: 0.9 } as never,
+          { kolWallet: "K", kolName: "Cupsey", funded: true },
+        ],
+        P: [{ kolWallet: "K", kolName: "Cupsey" }],
+      },
+    );
+    const marks = walletMarks(out, { on: true, kinds: ["funded", "probable"], minSol: 0.5 });
+    expect(marks.map((m) => [m.wallet, m.letter])).toEqual([
+      ["F", "F"],
+      ["P", "P"],
     ]);
   });
 });

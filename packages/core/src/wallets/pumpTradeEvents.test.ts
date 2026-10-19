@@ -56,6 +56,15 @@ const POOL_SELL =
   "Program data: Pi83CqUD3CqvX9VqAAAAAOknSAAAAAAAEDIBAAAAAACi7Xd9AAAAAAAAAAAAAAAAaTuL29IcAAByAQjGfQAAABpFAQAAAAAAFAAAAAAAAACnAAAAAAAAAAUAAAAAAAAAKgAAAAAAAABzRAEAAAAAACxCAQAAAAAA/jC8EwgnTR9BG5fZ+NKS9/W3d4k8B95syvO5n8GqHzHEAzPWPlTeLahCX3c4KI6AGwBMj9cviqKDuLlLSX+y5h8q8+57COE/Z2vbATQyDLjkfUZYibVDjJo44lRrPUedwIiUy9FKxUBs2XmD1ZXCtLOH26+nOdAKOXvDLGI5bPiDhHQpLmdalLQ27LCpmIlCMoqD3cYjOAKWEmfFzWEXy6JjF6U7oP1oxMlT7DDw4JuOc2h1HLKBVIbK4+mdCvndUSkczLZhfUQnnpRhFt2COIHBogJMVWyh3/tiwptu8WVBAAAAAAAAAB0CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIgTAAAAAAAAFQAAAAAAAAAccNIXBAAAAAAAAAAAAAAAARrvtnJPiQMAAAAAAAAAAAAAAAAAAAAAAMsCSQAAAAAA";
 const POOL_SELL_MINT = "rEG77ZMAtX6RonsGjMfvnqAgt5xhga6SctCmFUUpump";
 
+/**
+ * Tx on JUWr8a7F... (2026-10-19): a buy_exact_quote_in on a curve quoted in PUMP, whose SOL
+ * fields are all 0; the trade is in the quote fields (19,749.77 PUMP, the 0.95% fee beside it).
+ */
+const QUOTED_BUY =
+  "Program data: vdt/007mYe4EefwP3cchKbCVnjgB7oFYY7TGdmM3vMpau+JwwUchvwAAAAAAAAAAjB3eWwYCAAABSAXf5Ev3tAOUy9CFSJdS1kaiJf14Q0ICGWucRrr0JHVZh9VqAAAAAAAAAAAAAAAArvhioVMZAQAAAAAAAAAAAK5gUFXCGgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABfAAAAAAAAAH/lLgsAAAAAwyyVQNdTpazG91n/Uc1Y9YuAVeMG+N+0YpFtmELZdIlkAAAAAAAAAEKTxQsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEgAAAGJ1eV9leGFjdF9xdW90ZV9pbgAAAAAAAAAAAAAAAAAAAAAAiBMAAAAAAAC/cpcFAAAAAAAAAAAMRfffjZ5ylWKEkz9tmLdXAy6D34RgT7XhF//2HVsS+beFLZkEAAAA9n+ne4MCAABRuDH7yQEAAGQAAAAAAAAAQpPFCwAAAAAkgPG6CQAAAA==";
+const QUOTED_MINT = "JUWr8a7Fx9kYwA3fZJom9L9si4EmekTFkDbcrJipump";
+const PUMP_TOKEN = "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn";
+
 /** `line` as `program` logged it: inside its own invoke frame. */
 const framed = (program: string, ...lines: string[]) => [
   `Program ${program} invoke [1]`,
@@ -164,6 +173,25 @@ describe("tradesFromLogs", () => {
   it("reads every event of the coin in one transaction, in order", () => {
     const logs = framed(PUMP, CURVE_BUY, CURVE_BUY);
     expect(tradesFromLogs(logs, { mint: CURVE_BUY_MINT })).toHaveLength(2);
+  });
+
+  it("reads a curve quoted in another coin from its quote fields", () => {
+    const [t] = tradesFromLogs(framed(PUMP, QUOTED_BUY), { mint: QUOTED_MINT });
+    expect(t).toMatchObject({ side: "buy", sol: null, priceSol: null, tokens: 2226334.34254 });
+    expect(t!.quote).toEqual({
+      mint: PUMP_TOKEN,
+      amount: 19749766583,
+      reserve: 2763738546166,
+      tokenReserve: 309321957.30859,
+    });
+  });
+
+  it("leaves a quoted trade out when its fee doesn't match its amount", () => {
+    const data = Buffer.from(QUOTED_BUY.slice("Program data: ".length), "base64");
+    // The protocol fee, doubled: the quote fields aren't where this reads them.
+    data.writeBigUInt64LE(data.readBigUInt64LE(169) * 2n, 169);
+    const line = `Program data: ${data.toString("base64")}`;
+    expect(tradesFromLogs(framed(PUMP, line), { mint: QUOTED_MINT })).toEqual([]);
   });
 
   it("never throws on garbage", () => {

@@ -36,6 +36,19 @@ const CURVE_TIMESTAMP_OFFSET = 89;
 const CURVE_VIRTUAL_SOL_OFFSET = 97;
 const CURVE_VIRTUAL_TOKEN_OFFSET = 105;
 const CURVE_EVENT_BYTES = CURVE_VIRTUAL_TOKEN_OFFSET + 8;
+/**
+ * Coins on curves quoted in another coin (PUMP, USD1...; user report 2026-10-19: their trades all
+ * read 0 SOL) log 0 in every SOL field and the trade in quote fields after the instruction's name,
+ * a string whose length is at this offset. From the end of that name: the quote mint (all zeros
+ * for SOL), the quote amount and the curve's virtual quote reserves after the trade.
+ */
+const CURVE_IX_NAME_OFFSET = 258;
+const TAIL_QUOTE_MINT = 37;
+const TAIL_QUOTE_AMOUNT = TAIL_QUOTE_MINT + 32;
+const TAIL_QUOTE_RESERVE = TAIL_QUOTE_AMOUNT + 8;
+/** The fee fields the quote amount is checked against: the protocol's basis points and amount. */
+const CURVE_FEE_BPS_OFFSET = 161;
+const CURVE_FEE_OFFSET = 169;
 
 /** PumpSwap's BuyEvent and SellEvent. */
 const POOL_BUY_DISCRIMINATOR = [103, 244, 82, 31, 44, 245, 119, 119];
@@ -54,14 +67,29 @@ const POOL_EVENT_BYTES = POOL_USER_OFFSET + 32;
 export interface DecodedTrade {
   wallet: string;
   side: "buy" | "sell";
-  /** SOL the trade moved: on the curve its sol_amount; on PumpSwap what the user paid or got. */
-  sol: number;
+  /**
+   * SOL the trade moved: on the curve its sol_amount; on PumpSwap what the user paid or got. Null
+   * for a coin quoted in another coin: `quote` holds the trade, to be priced in SOL by the reader.
+   */
+  sol: number | null;
   /** Whole tokens. */
   tokens: number;
   /** The event's own clock (unix seconds, as ms). */
   atMs: number;
   /** SOL per whole token just after the trade, from the reserves it left; null if not derivable. */
   priceSol: number | null;
+  /** A curve quoted in another coin: the trade in that coin's base units. */
+  quote?: QuotedTrade;
+}
+
+export interface QuotedTrade {
+  mint: string;
+  /** What the trade moved, base units of the quote coin. */
+  amount: number;
+  /** The curve's virtual quote reserves after the trade, base units. */
+  reserve: number;
+  /** The curve's virtual token reserves after the trade, whole tokens. */
+  tokenReserve: number;
 }
 
 export interface TradesFromLogsOptions {
@@ -119,6 +147,22 @@ function curveTrade(data: Buffer, mint: string): DecodedTrade | null {
   if (key(data, CURVE_MINT_OFFSET) !== mint) return null;
   const isBuy = data[CURVE_IS_BUY_OFFSET];
   if (isBuy !== 0 && isBuy !== 1) return null;
+  if (u64(data, CURVE_SOL_OFFSET) === 0) {
+    // No SOL moved: a curve quoted in another coin, read from its quote fields; else nothing to show
+    // (a 0 SOL trade is what every such trade read as before, user report 2026-10-19).
+    const quote = quotedTrade(data);
+    const at = Number(data.readBigInt64LE(CURVE_TIMESTAMP_OFFSET));
+    if (!quote || !(at > 0)) return null;
+    return {
+      wallet: key(data, CURVE_USER_OFFSET),
+      side: isBuy === 1 ? "buy" : "sell",
+      sol: null,
+      tokens: u64(data, CURVE_TOKENS_OFFSET) / TOKEN_UNITS,
+      atMs: at * 1000,
+      priceSol: null,
+      quote,
+    };
+  }
   return trade(
     key(data, CURVE_USER_OFFSET),
     isBuy === 1 ? "buy" : "sell",
@@ -128,6 +172,32 @@ function curveTrade(data: Buffer, mint: string): DecodedTrade | null {
     u64(data, CURVE_VIRTUAL_SOL_OFFSET),
     u64(data, CURVE_VIRTUAL_TOKEN_OFFSET),
   );
+}
+
+/**
+ * The quote fields of a curve event whose SOL fields are 0, when the curve is quoted in another
+ * coin; null otherwise (a SOL curve's 0-SOL trade, an older event without them). The amount is
+ * only taken when the protocol fee logged beside it is that share of it, so a layout change reads
+ * as no trade rather than a wrong one.
+ */
+function quotedTrade(data: Buffer): QuotedTrade | null {
+  if (data.length < CURVE_IX_NAME_OFFSET + 4) return null;
+  const tail = CURVE_IX_NAME_OFFSET + 4 + data.readUInt32LE(CURVE_IX_NAME_OFFSET);
+  if (data.length < tail + TAIL_QUOTE_RESERVE + 8) return null;
+  const mintBytes = data.subarray(tail + TAIL_QUOTE_MINT, tail + TAIL_QUOTE_AMOUNT);
+  if (mintBytes.every((b) => b === 0)) return null;
+  const amount = u64(data, tail + TAIL_QUOTE_AMOUNT);
+  const bps = u64(data, CURVE_FEE_BPS_OFFSET);
+  const fee = u64(data, CURVE_FEE_OFFSET);
+  if (!(amount > 0)) return null;
+  if (bps > 0 && Math.abs(fee - (amount * bps) / 10_000) > Math.max(2, fee * 0.02)) return null;
+  const tokenReserve = u64(data, CURVE_VIRTUAL_TOKEN_OFFSET) / TOKEN_UNITS;
+  return {
+    mint: bs58.encode(mintBytes),
+    amount,
+    reserve: u64(data, tail + TAIL_QUOTE_RESERVE),
+    tokenReserve,
+  };
 }
 
 function poolTrade(data: Buffer, pool: string | null): DecodedTrade | null {

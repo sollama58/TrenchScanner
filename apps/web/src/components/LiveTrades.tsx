@@ -38,7 +38,7 @@ const SHOWN = 120;
  * The wallets to name, refreshed every NAMES_EVERY_MS rather than on each trade: every trader the
  * feed holds, so the wallet filter can tell what each one is, not only the rows drawn.
  */
-function useBatchedWallets(trades: readonly LiveTokenTrade[]): string[] {
+export function useBatchedWallets(trades: readonly LiveTokenTrade[]): string[] {
   const [wallets, setWallets] = useState<string[]>([]);
   const latest = useRef(trades);
   useEffect(() => {
@@ -328,7 +328,12 @@ export function LiveTradesCard({
                     {sinceText(t.atMs, now)}
                   </span>
                   <span className="lt-side">{t.side === "buy" ? "Buy" : "Sell"}</span>
-                  <span className="lt-sol num">{solText(t.sol)}</span>
+                  <span
+                    className="lt-sol num"
+                    title={t.sol === null ? "Traded in another coin, not priced in SOL yet" : undefined}
+                  >
+                    {t.sol === null ? "–" : solText(t.sol)}
+                  </span>
                   <span className="lt-mcap num muted">{t.mcapUsd ? usd(t.mcapUsd) : "–"}</span>
                   <button
                     type="button"
