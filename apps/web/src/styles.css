@@ -20116,3 +20116,9 @@ dialog.tm-modal.tm-terminal::backdrop {
     animation: none;
   }
 }
+
+/* Scope's contract-address chip copies the address instead of opening the coin. */
+.scope-chip-copy {
+  font-family: inherit;
+  cursor: copy;
+}
