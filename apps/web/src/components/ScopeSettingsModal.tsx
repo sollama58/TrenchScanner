@@ -16,6 +16,7 @@ import { scopeSampleCard } from "../scopeSample";
 import { useNow } from "../hooks";
 import type { TileMode } from "../tileTone";
 import { CloseIcon } from "./Icons";
+import { QuickLinkChecks, ThemeAndColors } from "./AppearancePanel";
 import { ScopeRow, scopeLookClass } from "./ScopeBoard";
 
 export type ScopeSettingsSection = "display" | ScopeColumn;
@@ -195,7 +196,7 @@ function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: 
         {sw("showAge", "Age")}
         {sw("showFees", "Creator fee", "Where the fee goes, as on the cards")}
         {sw("showSocials", "X and website links")}
-        {sw("showTradeLinks", "Trade links", "Your quick-link sites from Feed appearance, plus Dex and Pump")}
+        {sw("showTradeLinks", "Trade links", "Your sites below, plus Dex and Pump")}
         {sw("showSource", "Where it came from", "Your filter's icon, the model's name, HC")}
         {sw("showAt", "Market cap at the alert")}
         {sw("showPeak", "Peak since the alert")}
@@ -265,6 +266,17 @@ function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: 
             })}
           </div>
         </div>
+      </section>
+      {/* What Scope shows from the shared look, so it's all set from here too (user ask 2026-10-19). */}
+      <section className="scope-section appearance-controls">
+        <h3>Theme and colors</h3>
+        <p className="muted small">The same as in Cards&apos; Customize, and saved to your account.</p>
+        <ThemeAndColors cards={false} />
+      </section>
+      <section className="scope-section appearance-controls">
+        <h3>Trade links</h3>
+        <p className="muted small">Sites shown with Trade links, as on the cards.</p>
+        <QuickLinkChecks />
       </section>
       <div className="scope-settings-foot">
         <button type="button" className="ghost small-btn" onClick={resetScopeDisplay}>
