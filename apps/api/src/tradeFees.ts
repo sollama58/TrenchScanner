@@ -4,12 +4,17 @@
  *
  * Other platforms are compared on their platform fee alone, on the same trade's SOL value: every
  * one of them also pays the network (priority fee, tip, base fee), as we do, so that part is
- * shown as ours but never counted as saved. Rates as the user gave them (2026-10-18).
+ * shown as ours but never counted as saved. Rates checked against each platform's own fee page on
+ * 2026-10-19: Fomo 0.50% (help.fomo.family, orders of 190 USDC and up; smaller orders pay more);
+ * Pump.fun App 0.45% Platform Fee on every trade from 2026-10-17 (pump.fun/docs/fees, on top of the
+ * protocol fees every interface pays); Axiom 0.95% net, its entry tier after cashback
+ * (docs.axiom.trade, 1% gross). Terminal publishes no fee page: 0.50% is the user's figure, below the
+ * ~1% third-party guides report, so it understates rather than overstates the saving.
  *
  * Our own fee is the Sacrifice (ASDF fee plan): 0% for holders above the free cut-off, 0.2% in
  * burned credits for everyone else once it is on, recorded per trade as its SOL value in
- * platformFeeLamports. A saving can go negative (a paying wallet's buys against Pump.fun App's 0%
- * buy fee): it is reported as it is, never clamped to zero.
+ * platformFeeLamports. A saving can go negative (the Sacrifice against a lower fee elsewhere): it is
+ * reported as it is, never clamped to zero.
  */
 
 export interface PlatformFeeRate {
@@ -22,9 +27,9 @@ export interface PlatformFeeRate {
 
 export const OTHER_PLATFORMS: readonly PlatformFeeRate[] = [
   { id: "fomo", name: "Fomo", buyBps: 50, sellBps: 50 },
-  { id: "pumpfun", name: "Pump.fun App", buyBps: 0, sellBps: 35 },
+  { id: "pumpfun", name: "Pump.fun App", buyBps: 45, sellBps: 45 },
   { id: "terminal", name: "Terminal", buyBps: 50, sellBps: 50 },
-  { id: "axiom", name: "Axiom", buyBps: 100, sellBps: 100 },
+  { id: "axiom", name: "Axiom", buyBps: 95, sellBps: 95 },
 ];
 
 export interface FeeTrade {

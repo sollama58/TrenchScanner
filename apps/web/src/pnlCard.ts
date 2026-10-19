@@ -304,7 +304,7 @@ export async function renderPositionCard(data: PositionCardData): Promise<HTMLCa
     );
   else if (data.entryMcap && data.nowMcap)
     rows.push(["Entry to now", multiple((data.nowMcap / data.entryMcap - 1) * 100)]);
-  // Fees saved (user ask 2026-10-19), against a 1% platform fee (FEE_BASELINE_BPS, proTrade.ts).
+  // Fees saved (user ask 2026-10-19), against the baseline platform fee (FEE_BASELINE_BPS, proTrade.ts).
   if (data.showAmounts && data.feesSavedSol && data.feesSavedSol > 0)
     rows.push(["Fees saved", solFigure(data.feesSavedSol)]);
   const colX = W * 0.66;

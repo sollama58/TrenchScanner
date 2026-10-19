@@ -198,7 +198,7 @@ describe("summarizePosition", () => {
 });
 
 describe("summarizePosition fees saved", () => {
-  it("counts only the position's trades made from our Trade panel, against a 1% fee", () => {
+  it("counts only the position's trades made from our Trade panel, against a 0.95% fee", () => {
     const p: PositionResponse = {
       wallet: "w",
       mint: "m",
@@ -238,8 +238,8 @@ describe("summarizePosition fees saved", () => {
       historyUnavailable: false,
       truncated: false,
     };
-    expect(summarizePosition(p, null).feesSavedSol).toBeCloseTo(0.016);
-    expect(feeSavedSol(0.1)).toBeCloseTo(0.001);
+    expect(summarizePosition(p, null).feesSavedSol).toBeCloseTo(0.015);
+    expect(feeSavedSol(0.1)).toBeCloseTo(0.00095);
   });
 });
 
