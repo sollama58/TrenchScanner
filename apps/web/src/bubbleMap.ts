@@ -173,6 +173,20 @@ export function fromAlertText(readAtMs: number, alertAtMs: number, what: string)
 }
 
 /**
+ * The coin's live top 50 to draw over `snapshot`, or null when it is too old for it: read more
+ * than HOLDER_STALE_MS before the scan, and the scan has its own holder list to draw. The wider
+ * read is saved only while the coin is scanned with funder lookups, so for a coin called days ago
+ * it can be days older than the scan it would stand in for.
+ */
+export function liveWideFor(
+  snapshot: Pick<Snapshot, "takenAt" | "linkedClusters" | "linkedHolders"> | null | undefined,
+  wide: WideMap | null,
+): WideMap | null {
+  if (!wide || !snapshot || !hasHolderList(snapshot)) return wide;
+  return Date.parse(snapshot.takenAt) - Date.parse(wide.readAt) > HOLDER_STALE_MS ? null : wide;
+}
+
+/**
  * The reading the map draws: the snapshot's, with the wider map's holders, clusters and
  * same-minute groups in place of its own when the coin has one. Every count (Linked N/25,
  * Same minute, CEX-funded) stays the snapshot's: the top 50 is for the picture only.
@@ -2448,16 +2462,16 @@ export function linkedCountText(c: { linked: number; of: number } | null): strin
 }
 
 /**
- * The reading to draw: the newest with linked clusters, else the newest whose holder list came
- * with its funders read, else with a holder list, else any linked reading. A scan whose funder
- * lookups ran past the cycle keeps the holder list without the linked reading, so the newest list
- * alone would read "not checked yet" while an earlier scan of the coin had checked them.
+ * The reading to draw (`snapshots` newest first): the newest whose holder list came with its
+ * funders read (clusters or none), else with a holder list, else any linked reading. A scan whose
+ * funder lookups ran past the cycle keeps the holder list without the linked reading, so the newest
+ * list alone would read "not checked yet" while an earlier scan of the coin had checked them. An
+ * older scan's clusters never win over a newer checked list: the holders have moved on since.
  */
 export function pickReading<S extends Pick<Snapshot, "linkedWalletPct" | "linkedClusters" | "linkedHolders">>(
   snapshots: readonly S[],
 ): S | null {
   return (
-    snapshots.find((s) => s.linkedWalletPct != null && (s.linkedClusters?.length ?? 0) > 0) ??
     snapshots.find((s) => s.linkedWalletPct != null && hasHolderList(s)) ??
     snapshots.find(hasHolderList) ??
     snapshots.find((s) => s.linkedWalletPct != null) ??

@@ -35,6 +35,7 @@ import {
   holderFreshness,
   layoutGraph,
   pickReading,
+  liveWideFor,
   withWideMap,
   alertWideMap,
   fromAlertText,
@@ -191,6 +192,15 @@ describe("bubble map graph", () => {
     expect(hasHolderList(rows[0]!)).toBe(false);
   });
 
+  it("takes a newer checked holder list over an older reading's clusters", () => {
+    const holders = [{ wallet: A, pct: 12 }];
+    const rows = [
+      { linkedWalletPct: 0, linkedClusters: null, linkedHolders: holders, id: 1 },
+      { linkedWalletPct: 20, linkedClusters: snapshot.linkedClusters, linkedHolders: holders, id: 2 },
+    ];
+    expect(pickReading(rows)?.id).toBe(1);
+  });
+
   it("takes an earlier holder list whose funders were read over a newer one whose weren't", () => {
     const holders = [{ wallet: A, pct: 12 }];
     const rows = [
@@ -198,6 +208,35 @@ describe("bubble map graph", () => {
       { linkedWalletPct: 0, linkedClusters: null, linkedHolders: holders, id: 2 },
     ];
     expect(pickReading(rows)?.id).toBe(2);
+  });
+});
+
+describe("live top 50 over a scan", () => {
+  const holders = [{ wallet: A, pct: 12 }];
+  const wide = {
+    readAt: "2026-10-14T02:00:00Z",
+    holdersRead: 50,
+    knownExtra: 0,
+    holders,
+    clusters: [],
+    sameTimeClusters: [],
+  };
+  const scan = (takenAt: string, list = true) => ({
+    takenAt,
+    linkedClusters: null,
+    linkedHolders: list ? holders : null,
+  });
+
+  it("draws a top 50 read near the scan", () => {
+    expect(liveWideFor(scan("2026-10-14T02:10:00Z"), wide)).toBe(wide);
+  });
+
+  it("leaves off a top 50 read long before the scan, which has its own list", () => {
+    expect(liveWideFor(scan("2026-10-17T02:00:00Z"), wide)).toBeNull();
+  });
+
+  it("keeps an old top 50 when the scan has no list of its own to draw", () => {
+    expect(liveWideFor(scan("2026-10-17T02:00:00Z", false), wide)).toBe(wide);
   });
 });
 
