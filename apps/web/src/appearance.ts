@@ -20,6 +20,12 @@ export const CHART_MARKS_REV = 2;
  * changed, and reads as the new one (user ask 2026-10-18).
  */
 export const HIDE_BELOW_MCAP_REV = 2;
+/**
+ * Which feesBadge default a look was saved against (apps/api/src/feedAppearance.ts has the same): a
+ * look from before the badge went on by default that still holds it off never changed it, and reads
+ * as on (user ask 2026-10-19).
+ */
+export const FEES_BADGE_REV = 2;
 const ALL_MARK_KINDS = ["kol", "known", "funded", "probable", "dev", "risky", "winner", "linked"] as const;
 
 export const DEFAULT_APPEARANCE: FeedAppearance = {
@@ -54,8 +60,9 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   largest: false,
   kolBundled: false,
   transferred: false,
-  // Off by default (user ask 2026-10-16); Customize › Extras switches it on.
-  feesBadge: false,
+  // On by default (user ask 2026-10-19); Customize › Extras switches it off.
+  feesBadge: true,
+  feesBadgeRev: FEES_BADGE_REV,
   bubbleCexLinks: false,
   bubbleFunderLabels: false,
   bubbleSideLinks: true,
@@ -289,7 +296,12 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     largest: typeof r.largest === "boolean" ? r.largest : d.largest,
     kolBundled: typeof r.kolBundled === "boolean" ? r.kolBundled : d.kolBundled,
     transferred: typeof r.transferred === "boolean" ? r.transferred : d.transferred,
-    feesBadge: typeof r.feesBadge === "boolean" ? r.feesBadge : d.feesBadge,
+    // Saved before the badge showed by default, still off: the old default, unchanged.
+    feesBadge:
+      typeof r.feesBadge === "boolean" && (r.feesBadge || r.feesBadgeRev === FEES_BADGE_REV)
+        ? r.feesBadge
+        : d.feesBadge,
+    feesBadgeRev: FEES_BADGE_REV,
     bubbleCexLinks: typeof r.bubbleCexLinks === "boolean" ? r.bubbleCexLinks : d.bubbleCexLinks,
     bubbleFunderLabels:
       typeof r.bubbleFunderLabels === "boolean" ? r.bubbleFunderLabels : d.bubbleFunderLabels,

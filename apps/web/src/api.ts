@@ -1679,8 +1679,10 @@ export interface FeedAppearance {
   kolBundled: boolean;
   /** The Transferred tile (holder-to-holder transfers); off by default (absent from older API builds: off). */
   transferred: boolean;
-  /** The card footer's FEES badge; off by default (absent from older API builds: off). */
+  /** The card footer's FEES badge; on by default (absent from older API builds: on). */
   feesBadge: boolean;
+  /** Which default feesBadge it was saved against (appearance.ts FEES_BADGE_REV). */
+  feesBadgeRev: number;
   /** Bubble maps open with same-exchange ties drawn; off by default (absent from older API builds: off). */
   bubbleCexLinks: boolean;
   /** Bubble maps name the wallets that fund clusters on a label by their diamond; off by default (absent from older API builds: off). */
