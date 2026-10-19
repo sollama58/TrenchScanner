@@ -20220,6 +20220,60 @@ dialog.tm-modal.tm-terminal::backdrop {
   min-width: 0;
   padding: 10px 14px 6px;
 }
+/* The reader's own column width (user ask 2026-10-19), dragged at its edge: the chart keeps
+   CHART_MIN_W_PX (TermSplit.tsx) however wide it was set in a wider window. */
+.tm-term-top.sized:not(.solo) {
+  grid-template-columns: minmax(0, 1fr) max(320px, min(var(--tm-side-w), calc(100% - 420px)));
+}
+.tm-term-top,
+.tm-term-map {
+  position: relative;
+}
+/* The dividers the reader drags: the column's edge and the chart's foot. A thin line lights up on
+   hover, focus and while dragging, over a wider grab area. */
+.tm-split {
+  position: absolute;
+  z-index: 3;
+  touch-action: none;
+  outline: none;
+}
+.tm-split::after {
+  content: "";
+  position: absolute;
+  background: transparent;
+  transition: background 0.12s;
+}
+.tm-split:hover::after,
+.tm-split:focus-visible::after,
+.tm-split.dragging::after {
+  background: var(--brand-a);
+}
+.tm-split-x {
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 9px;
+  cursor: col-resize;
+}
+.tm-split-x::after {
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 3px;
+}
+.tm-split-y {
+  left: 0;
+  right: 0;
+  bottom: -5px;
+  height: 9px;
+  cursor: row-resize;
+}
+.tm-split-y::after {
+  left: 0;
+  right: 0;
+  top: 3px;
+  height: 3px;
+}
 .tm-modal.tm-terminal .tm-term-chart > .sage-card.tm-chart {
   margin: 0;
   padding: 0;
