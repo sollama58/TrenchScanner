@@ -51,6 +51,7 @@ import {
   readTokenFirstMinutes,
   readTokenLive,
   readTokenSage,
+  readTokenTradesLive,
 } from "./tokens.js";
 import { readTokenProfile } from "../tokenProfile.js";
 import { freeLookupReason, type FreeLookupReason } from "../lookupGate.js";
@@ -736,6 +737,23 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
       if ("error" in lookup) return reply.code(lookup.code).send({ error: lookup.error });
       reply.header("Cache-Control", "no-store");
       return readTokenLive(
+        lookup.subject,
+        liveAfter(request.query),
+        liveWait(request.query),
+        closedSignal(reply),
+      );
+    },
+  );
+
+  // The Live trades tab and the chart's wallet marks; long-polled like the live tail above.
+  app.get(
+    "/token/:mint/trades/live",
+    { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const lookup = await paidLookup(request.params, request.user!.walletAddress, "token");
+      if ("error" in lookup) return reply.code(lookup.code).send({ error: lookup.error });
+      reply.header("Cache-Control", "no-store");
+      return readTokenTradesLive(
         lookup.subject,
         liveAfter(request.query),
         liveWait(request.query),
