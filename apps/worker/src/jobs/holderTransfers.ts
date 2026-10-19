@@ -17,7 +17,13 @@ import {
   type HeliusAccountStream,
   type HeliusStreamStats,
 } from "../discovery/heliusAccountStream.js";
-import { cachedHolderAccounts, cachedTopHolders, topHolderWalletsOf } from "./linkedWallets.js";
+import {
+  applyHolderBalances,
+  cachedHolderAccounts,
+  cachedTopHolders,
+  topHolderWalletsOf,
+  type HolderBalanceMove,
+} from "./linkedWallets.js";
 
 const logger = createLogger("holder-transfers");
 
@@ -92,6 +98,8 @@ function streamCovers(mint: string, account: string, e: AccountSignatures): bool
  */
 export function onHolderStreamTx(mint: string, signature: string, tx: ChainTx, nowMs = Date.now()): void {
   if (tx.meta?.err) return;
+  // The holders' new balances land on the coin's top-holder list now (user ask 2026-10-19).
+  applyHolderBalances(mint, balanceMovesOf(mint, tx));
   let touched = 0;
   for (const address of new Set(keysOf(tx))) {
     const e = accountSigs.get(address);
@@ -108,6 +116,52 @@ export function onHolderStreamTx(mint: string, signature: string, tx: ChainTx, n
     const moves = transferMovesOf(mint, tx);
     rememberMoves(key, moves ? { atMs: nowMs, moves, signature } : null);
   }
+}
+
+type StreamBalance = {
+  accountIndex: number;
+  mint?: string;
+  owner?: string;
+  uiTokenAmount?: { amount?: string };
+};
+
+/** Each token account of `mint` a transaction moved: its owner and raw balance before and after. */
+export function balanceMovesOf(mint: string, tx: ChainTx): HolderBalanceMove[] {
+  const keys = keysOf(tx);
+  const byAccount = new Map<string, HolderBalanceMove>();
+  const amount = (b: StreamBalance) => {
+    const a = b.uiTokenAmount?.amount;
+    return typeof a === "string" && /^\d+$/.test(a) ? BigInt(a) : 0n;
+  };
+  const collect = (list: unknown, side: "pre" | "post") => {
+    for (const b of (list ?? []) as StreamBalance[]) {
+      const account = keys[b.accountIndex];
+      if (b.mint !== mint || !account || !b.owner) continue;
+      const m = byAccount.get(account) ?? { account, owner: b.owner, pre: 0n, post: 0n };
+      m[side] = amount(b);
+      byAccount.set(account, m);
+    }
+  };
+  collect(tx.meta?.preTokenBalances, "pre");
+  collect(tx.meta?.postTokenBalances, "post");
+  return [...byAccount.values()].filter((m) => m.pre !== m.post);
+}
+
+/**
+ * Whether the stream has followed every one of a coin's holder accounts since before its list was
+ * read at `listAtMs` (with STREAM_SETTLE_MS to spare): every balance move since is then on the
+ * list (applyHolderBalances), and only a wallet buying in from outside it needs a read.
+ */
+export function holderListStreamed(g: TransferGroup, listAtMs: number, nowMs = Date.now()): boolean {
+  if (!stream) return false;
+  const h = holdersOf(g, nowMs);
+  if (!h) return false;
+  for (const accounts of h.accountsOf.values())
+    for (const a of accounts) {
+      const since = stream.coveredSince(g.mintAddress, a, nowMs);
+      if (since === null || listAtMs < since + STREAM_SETTLE_MS) return false;
+    }
+  return true;
 }
 
 /** Calls since the last call, for the scan's heartbeat: 1 credit each. */

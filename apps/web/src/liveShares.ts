@@ -2,9 +2,10 @@ import type { Snapshot } from "./api";
 import type { WideMap } from "./bubbleMap";
 
 /**
- * Live holder shares between holder reads (user ask 2026-10-19): the bubble map and the top holders
- * re-read the chain once a minute while open, and between those reads each trade the page's live
- * trades feed brings in moves its wallet's share by the tokens it bought or sold. No wallet is
+ * Live holder shares between holder reads (user ask 2026-10-19): while the bubble map is open the
+ * worker keeps its top holders' balances current from the holder stream and writes the list at
+ * least once a minute, and until the next list arrives each trade the page's live trades feed
+ * brings in moves its wallet's share by the tokens it bought or sold. No wallet is
  * looked up for it: a new wallet that buys into the top holders shows at once, unlinked, and gets
  * its funder, tags and cluster from the next read, which corrects any drift too (transfers aren't
  * trades, and a trade routed through an aggregator names the router).
@@ -37,6 +38,27 @@ export function liveShareDeltas(
     const pct = ((t.side === "buy" ? 1 : -1) * t.tokens * 100) / supply;
     out.set(t.wallet, (out.get(t.wallet) ?? 0) + pct);
   }
+  return out;
+}
+
+/**
+ * The top 50's deltas when its top 25 are the scan's list (worker linkedWallets wideMapReadings):
+ * those wallets move from the list's time, which the holder stream keeps current between reads
+ * (user ask 2026-10-19), and only the rest from the top 50's own read. One base for all would count
+ * the trades the stream already put on the list a second time.
+ */
+export function wideShareDeltas(
+  trades: readonly ShareTrade[],
+  supply: number | null,
+  listed: ReadonlySet<string>,
+  listAtMs: number,
+  wideAtMs: number,
+): Map<string, number> {
+  const fromList = liveShareDeltas(trades, supply, listAtMs);
+  const out = new Map<string, number>();
+  for (const [wallet, d] of liveShareDeltas(trades, supply, wideAtMs))
+    if (!listed.has(wallet)) out.set(wallet, d);
+  for (const [wallet, d] of fromList) if (listed.has(wallet)) out.set(wallet, d);
   return out;
 }
 

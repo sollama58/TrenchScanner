@@ -142,6 +142,7 @@ import { alertAwaitingWallets, holdForLinked, noteAlertWallets } from "./walletP
 import {
   holderTransfersOf,
   recordTransferEvents,
+  holderListStreamed,
   resolveHolderTransfers,
   takeHolderStreamStats,
   takeHolderTransferStats,
@@ -681,6 +682,8 @@ function startLinkedWalletStage(
       watched,
       maxWatchedReads: watchedLeft,
       watchedRefreshMs: env.WATCHED_HOLDERS_REFRESH_SECONDS * 1000,
+      streamedRefreshMs: env.WATCHED_HOLDERS_STREAMED_REFRESH_SECONDS * 1000,
+      streamed: (g, listAtMs) => holderListStreamed(g, listAtMs),
       quietSince,
     }).catch((err: unknown) => {
       logger.warn("top-holder reads failed - using RugCheck's list", { error: String(err) });

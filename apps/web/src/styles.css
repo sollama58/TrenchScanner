@@ -16920,17 +16920,27 @@ body:has(.util-toast) .bug-fab {
   white-space: nowrap;
   overflow: hidden;
 }
-/* A narrow side (a phone, or the Buy $ASDFASDFA popup) wraps its buttons rather than squeezing
-   each number past its edge, and drops the "SOL" each button repeats (the side says it). */
+/* A narrow side (a phone, or the Buy $ASDFASDFA popup) keeps the rows set in Settings > Trading
+   (user ask 2026-10-19: re-wrapping five a row into threes read 0.75 then 0.15, out of order).
+   Its buttons tighten instead, and drop the "SOL" each one repeats (the side says it). */
 .tm-side {
   container-type: inline-size;
 }
 @container (max-width: 380px) {
   .tm-presets {
-    grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
+    gap: 4px;
+  }
+  .tm-presets .tm-preset {
+    padding: 6px 2px;
+    font-size: 13px;
   }
   .tm-side.buy .tm-preset small {
     display: none;
+  }
+}
+@container (max-width: 280px) {
+  .tm-presets .tm-preset {
+    font-size: 12px;
   }
 }
 .tm-preset small {
