@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 import { api } from "./api";
 
 /** Mirrors apps/api/src/liveTrades.ts LiveTokenTrade. */
@@ -7,7 +7,8 @@ export interface LiveTokenTrade {
   sig: string;
   wallet: string;
   side: "buy" | "sell";
-  sol: number;
+  /** Null for a coin quoted in another coin (PUMP, USD1) while its price in SOL isn't known. */
+  sol: number | null;
   tokens: number;
   atMs: number;
   /** USD market cap just after the trade, when known. */
@@ -40,67 +41,95 @@ const POLL_MS = 2_000;
 const HELD_GAP_MS = 750;
 const MAX_BACKOFF_MS = 30_000;
 
+/** One coin's feed, shared by every view of it on the page (the Live trades tab, the chart's marks). */
+interface SharedFeed {
+  state: LiveTrades;
+  listeners: Set<() => void>;
+  stop: () => void;
+}
+const feeds = new Map<string, SharedFeed>();
+const EMPTY: LiveTrades = { trades: [], status: null, since: null };
+
+/** Starts `base`'s feed: asks for the trades since the last answer until stopped. */
+function startFeed(base: string): SharedFeed {
+  const feed: SharedFeed = { state: EMPTY, listeners: new Set(), stop: () => {} };
+  const set = (next: LiveTrades) => {
+    feed.state = next;
+    for (const l of feed.listeners) l();
+  };
+  let after = 0;
+  let stopped = false;
+  let timer: number | undefined;
+  let failures = 0;
+  const abort = new AbortController();
+  const next = (ms: number) => {
+    window.clearTimeout(timer);
+    if (!stopped) timer = window.setTimeout(() => void poll(), ms);
+  };
+  const poll = async () => {
+    if (document.visibilityState !== "visible") return next(POLL_MS);
+    const sent = Date.now();
+    try {
+      const a = await api<LiveTradesAnswer>(`${base}/trades/live?after=${after}&wait=1`, {
+        signal: abort.signal,
+      });
+      if (stopped) return;
+      failures = 0;
+      // A cursor behind ours means the API restarted (or another instance answered) and its seqs
+      // began again: it sent everything it has, so start over from that rather than dropping it
+      // all as already seen, which froze the list until its seqs passed ours.
+      const restarted = a.cursor < after;
+      const fresh = restarted ? a.trades : a.trades.filter((t) => t.seq > after);
+      after = restarted ? a.cursor : Math.max(after, a.cursor);
+      const prev = feed.state;
+      set({
+        trades: restarted
+          ? fresh.slice(-MAX_TRADES)
+          : fresh.length > 0
+            ? prev.trades.concat(fresh).slice(-MAX_TRADES)
+            : prev.trades,
+        status: a.status,
+        since: a.since,
+      });
+      if (a.status !== "unavailable") next(a.held ? Math.max(0, HELD_GAP_MS - (Date.now() - sent)) : POLL_MS);
+    } catch {
+      if (!stopped) next(Math.min(MAX_BACKOFF_MS, POLL_MS * 2 ** ++failures));
+    }
+  };
+  void poll();
+  feed.stop = () => {
+    stopped = true;
+    window.clearTimeout(timer);
+    abort.abort();
+  };
+  return feed;
+}
+
 /**
  * A coin's live trades (user ask 2026-10-19): while `enabled`, asks `base`/trades/live for the
  * trades since the last answer, the API holding each ask until the next one lands. The API
  * follows the coin's trades on the chain stream only while someone asks, so nothing is read for a
- * closed view. Only while the tab is visible; a failure backs off and keeps trying.
+ * closed view. Only while the tab is visible; a failure backs off and keeps trying. Every view of
+ * the same coin shares one feed, so the Live trades tab and the chart's marks ask once.
  */
 export function useLiveTrades(base: string, enabled: boolean): LiveTrades {
-  const [feed, setFeed] = useState<LiveTrades>({ trades: [], status: null, since: null });
-  const after = useRef(0);
-
-  useEffect(() => {
-    setFeed({ trades: [], status: null, since: null });
-    after.current = 0;
-    if (!enabled) return;
-    let stopped = false;
-    let timer: number | undefined;
-    let failures = 0;
-    const abort = new AbortController();
-    const next = (ms: number) => {
-      window.clearTimeout(timer);
-      if (!stopped) timer = window.setTimeout(() => void poll(), ms);
-    };
-    const poll = async () => {
-      if (document.visibilityState !== "visible") return next(POLL_MS);
-      const sent = Date.now();
-      try {
-        const a = await api<LiveTradesAnswer>(`${base}/trades/live?after=${after.current}&wait=1`, {
-          signal: abort.signal,
-        });
-        if (stopped) return;
-        failures = 0;
-        // A cursor behind ours means the API restarted (or another instance answered) and its seqs
-        // began again: it sent everything it has, so start over from that rather than dropping it
-        // all as already seen, which froze the list until its seqs passed ours.
-        const restarted = a.cursor < after.current;
-        const fresh = restarted ? a.trades : a.trades.filter((t) => t.seq > after.current);
-        after.current = restarted ? a.cursor : Math.max(after.current, a.cursor);
-        setFeed((prev) => ({
-          trades: restarted
-            ? fresh.slice(-MAX_TRADES)
-            : fresh.length > 0
-              ? prev.trades.concat(fresh).slice(-MAX_TRADES)
-              : prev.trades,
-          status: a.status,
-          since: a.since,
-        }));
-        if (a.status !== "unavailable")
-          next(a.held ? Math.max(0, HELD_GAP_MS - (Date.now() - sent)) : POLL_MS);
-      } catch {
-        if (!stopped) next(Math.min(MAX_BACKOFF_MS, POLL_MS * 2 ** ++failures));
-      }
-    };
-    void poll();
-    return () => {
-      stopped = true;
-      window.clearTimeout(timer);
-      abort.abort();
-    };
-  }, [base, enabled]);
-
-  return feed;
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      if (!enabled) return () => {};
+      let feed = feeds.get(base);
+      if (!feed) feeds.set(base, (feed = startFeed(base)));
+      feed.listeners.add(listener);
+      return () => {
+        feed.listeners.delete(listener);
+        if (feed.listeners.size === 0 && feeds.get(base) === feed) {
+          feed.stop();
+          feeds.delete(base);
+        }
+      };
+    },
+    [base, enabled],
+  );
+  return useSyncExternalStore(subscribe, () => (enabled ? (feeds.get(base)?.state ?? EMPTY) : EMPTY));
 }
 
 export interface TradeTally {
@@ -121,10 +150,10 @@ export function tallyTrades(trades: readonly LiveTokenTrade[], fromMs: number): 
     wallets.add(t.wallet);
     if (t.side === "buy") {
       out.buys += 1;
-      out.solIn += t.sol;
+      out.solIn += t.sol ?? 0;
     } else {
       out.sells += 1;
-      out.solOut += t.sol;
+      out.solOut += t.sol ?? 0;
     }
   }
   out.traders = wallets.size;
@@ -318,8 +347,8 @@ export function filterTrades(
   if (filterCount(f) === 0) return trades;
   return trades.filter(
     (t) =>
-      (f.minSol === null || t.sol >= f.minSol) &&
-      (f.maxSol === null || t.sol <= f.maxSol) &&
+      (f.minSol === null || (t.sol !== null && t.sol >= f.minSol)) &&
+      (f.maxSol === null || (t.sol !== null && t.sol <= f.maxSol)) &&
       (f.labels.length === 0 || f.labels.some((l) => labelsOf(t.wallet).has(l))),
   );
 }

@@ -8,7 +8,7 @@ import {
   type DecodedTrade,
 } from "@trenchscanner/core";
 import { MAX_WAIT_MS } from "./liveCurve.js";
-import type { SolPrice } from "./solPrice.js";
+import type { QuotePrice, SolPrice } from "./solPrice.js";
 
 const logger = createLogger("live-trades");
 
@@ -67,7 +67,11 @@ export interface LiveTokenTrade {
   sig: string;
   wallet: string;
   side: "buy" | "sell";
-  sol: number;
+  /**
+   * SOL the trade moved. A coin quoted in another coin (PUMP, USD1) trades in that coin: its amount
+   * priced in SOL at the quote's and SOL's prices now; null while either price isn't known.
+   */
+  sol: number | null;
   tokens: number;
   atMs: number;
   /** USD market cap just after the trade, when known. */
@@ -109,6 +113,8 @@ export interface LiveTradesDeps {
     | ((onLogs: (key: string, signature: string, logs: string[], slot: number | null) => void) => Stream)
     | null;
   solPrice: Pick<SolPrice, "get">;
+  /** Prices a quote coin (PUMP, USD1) for coins whose curve trades in one; without it their SOL is null. */
+  quotePrice?: Pick<QuotePrice, "get">;
   now?: () => number;
 }
 
@@ -174,21 +180,32 @@ export class LiveTrades {
     // A cursor from past this process's newest (a restart, another instance) reads as a fresh ask.
     const from = after > this.seq ? 0 : after;
     const fresh = f.trades.filter((t) => t.seq > from);
-    const usd = fresh.some((t) => t.priceSol !== null) ? await this.deps.solPrice.get() : null;
+    const usd = fresh.some((t) => t.priceSol !== null || t.quote) ? await this.deps.solPrice.get() : null;
+    const quotes = new Map<string, { usd: number; decimals: number } | null>();
+    for (const t of fresh)
+      if (t.quote && !quotes.has(t.quote.mint))
+        quotes.set(t.quote.mint, (await this.deps.quotePrice?.get(t.quote.mint).catch(() => null)) ?? null);
     return {
       status: since === null ? "pending" : "live",
       since,
       cursor: f.trades[f.trades.length - 1]?.seq ?? 0,
-      trades: fresh.map((t) => ({
-        seq: t.seq,
-        sig: t.sig,
-        wallet: t.wallet,
-        side: t.side,
-        sol: t.sol,
-        tokens: t.tokens,
-        atMs: t.atMs,
-        mcapUsd: t.priceSol !== null && usd !== null ? t.priceSol * PUMP_SUPPLY_TOKENS * usd : null,
-      })),
+      trades: fresh.map((t) => {
+        const priced = t.quote ? quotedInSol(t.quote, quotes.get(t.quote.mint) ?? null, usd) : null;
+        return {
+          seq: t.seq,
+          sig: t.sig,
+          wallet: t.wallet,
+          side: t.side,
+          sol: t.quote ? (priced?.sol ?? null) : t.sol,
+          tokens: t.tokens,
+          atMs: t.atMs,
+          mcapUsd: t.quote
+            ? (priced?.mcapUsd ?? null)
+            : t.priceSol !== null && usd !== null
+              ? t.priceSol * PUMP_SUPPLY_TOKENS * usd
+              : null,
+        };
+      }),
       held: false,
     };
   }
@@ -248,9 +265,12 @@ export class LiveTrades {
         prior
           ? {
               ...t,
-              sol: prior.sol + t.sol,
+              sol: prior.sol !== null && t.sol !== null ? prior.sol + t.sol : (t.sol ?? prior.sol),
               tokens: prior.tokens + t.tokens,
               priceSol: t.priceSol ?? prior.priceSol,
+              ...(t.quote && prior.quote?.mint === t.quote.mint
+                ? { quote: { ...t.quote, amount: prior.quote.amount + t.quote.amount } }
+                : {}),
             }
           : t,
       );
@@ -378,11 +398,30 @@ export class LiveTrades {
   }
 }
 
+/**
+ * A trade in a quote coin as SOL, and the market cap it left in USD: its amount at the quote's USD
+ * price over SOL's, the curve's quote reserves over its token reserves as the price. Null without
+ * both prices.
+ */
+export function quotedInSol(
+  q: NonNullable<DecodedTrade["quote"]>,
+  quote: { usd: number; decimals: number } | null,
+  solUsd: number | null,
+): { sol: number; mcapUsd: number | null } | null {
+  if (!quote || !(quote.usd > 0) || solUsd === null || !(solUsd > 0)) return null;
+  const unit = 10 ** quote.decimals;
+  const amountUsd = (q.amount / unit) * quote.usd;
+  const priceUsd =
+    q.tokenReserve > 0 && q.reserve > 0 ? (q.reserve / unit / q.tokenReserve) * quote.usd : null;
+  return { sol: amountUsd / solUsd, mcapUsd: priceUsd === null ? null : priceUsd * PUMP_SUPPLY_TOKENS };
+}
+
 /** The process's live trades: on Helius when there is a key and a WebSocket, else unavailable. */
 export function liveTradesFor(
   heliusApiKey: string | undefined,
   enabled: boolean,
   solPrice: Pick<SolPrice, "get">,
+  quotePrice?: Pick<QuotePrice, "get">,
 ): LiveTrades {
   const hasSocket = !!(globalThis as { WebSocket?: unknown }).WebSocket;
   return new LiveTrades({
@@ -398,6 +437,7 @@ export function liveTradesFor(
             )
         : null,
     solPrice,
+    quotePrice,
   });
 }
 
