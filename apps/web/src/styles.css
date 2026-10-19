@@ -19942,3 +19942,9 @@ dialog.tm-modal.tm-terminal::backdrop {
 .tm-modal.tm-terminal .tm-fig > :first-child {
   white-space: nowrap;
 }
+
+/* Scope's contract-address chip copies the address instead of opening the coin. */
+.scope-chip-copy {
+  font-family: inherit;
+  cursor: copy;
+}
