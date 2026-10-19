@@ -138,6 +138,7 @@ function HitRow({
   onHover,
   id,
   price,
+  confirm,
 }: {
   hit: TokenSearchHit;
   now: number;
@@ -148,6 +149,8 @@ function HitRow({
   id: string;
   /** An untracked coin: what opening it costs, in place of the alert figures. */
   price?: string;
+  /** The lookup waiting for a yes: the price gives way to Look up and Cancel, in the row itself. */
+  confirm?: { onConfirm: () => void; onCancel: () => void };
 }) {
   const label = hit.symbol ? `$${hit.symbol}` : (hit.name ?? shortAddress(hit.mint));
   return (
@@ -215,9 +218,27 @@ function HitRow({
         )}
         {price ? (
           <div className="search-hit-price">
-            <span className={`util-cost num${price.startsWith("Free") ? " util-cost-free" : ""}`}>
-              {price}
-            </span>
+            {confirm ? (
+              <span className="search-confirm" onClick={(e) => e.stopPropagation()}>
+                <button type="button" className="link small" onClick={confirm.onCancel} disabled={opening}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="primary small-btn"
+                  onClick={confirm.onConfirm}
+                  disabled={opening}
+                  title="Scans it and opens its chart, holders and TokenSage read"
+                  autoFocus
+                >
+                  {opening ? "Looking up…" : `Look up · ${price}`}
+                </button>
+              </span>
+            ) : (
+              <span className={`util-cost num${price.startsWith("Free") ? " util-cost-free" : ""}`}>
+                {price}
+              </span>
+            )}
           </div>
         ) : (
           <div>
@@ -228,39 +249,6 @@ function HitRow({
           </div>
         )}
       </dl>
-    </li>
-  );
-}
-
-/** The line under an untracked coin while its lookup waits for a yes. */
-function ConfirmLookup({
-  hit,
-  price,
-  busy,
-  onConfirm,
-  onCancel,
-}: {
-  hit: ExternalSearchHit;
-  price: string;
-  busy: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  const label = hit.symbol ? `$${hit.symbol}` : shortAddress(hit.mint);
-  return (
-    <li className="search-confirm" role="presentation">
-      <span className="small">
-        TrenchScanner doesn&apos;t track {label} yet. Looking it up scans it and opens its chart, holders and
-        TokenSage read, for <strong className="num">{price}</strong>.
-      </span>
-      <span className="search-confirm-actions">
-        <button type="button" className="ghost small-btn" onClick={onCancel} disabled={busy}>
-          Cancel
-        </button>
-        <button type="button" className="primary small-btn" onClick={onConfirm} disabled={busy} autoFocus>
-          {busy ? "Looking up…" : `Look up (${price})`}
-        </button>
-      </span>
     </li>
   );
 }
@@ -406,7 +394,12 @@ export function SearchModal({
   // Your alerts and Model calls are TrenchScanner's own: nothing untracked has either.
   const outsideApplies = filter === "all" || filter === "graduated";
 
-  const row = (hit: TokenSearchHit, i: number, price?: string) => (
+  const row = (
+    hit: TokenSearchHit,
+    i: number,
+    price?: string,
+    confirm?: { onConfirm: () => void; onCancel: () => void },
+  ) => (
     <HitRow
       key={hit.mint}
       id={`search-hit-${i}`}
@@ -420,6 +413,7 @@ export function SearchModal({
       }}
       onHover={() => setActive(i)}
       price={price}
+      confirm={confirm}
     />
   );
 
@@ -551,7 +545,7 @@ export function SearchModal({
                     {extra
                       ? extraHits.length === 0
                         ? "Nothing else found on DexScreener."
-                        : `${extraShown.length} more on DexScreener · a coin lookup to open${
+                        : `${extraShown.length} on DexScreener${
                             extra.balance !== null
                               ? ` · ${extra.balance} credit${extra.balance === 1 ? "" : "s"}${
                                   extra.freeLeft ? ` + ${extra.freeLeft} free today` : ""
@@ -565,23 +559,20 @@ export function SearchModal({
                 </li>
                 {extraShown.map((hit, j) => {
                   const i = shown.length + j;
-                  const price = priceOf(hit);
-                  return [
-                    row(hit, i, price),
-                    confirming === hit.mint && (
-                      <ConfirmLookup
-                        key={`${hit.mint}-confirm`}
-                        hit={hit}
-                        price={price}
-                        busy={opening === hit.mint}
-                        onConfirm={() => void lookUp(hit)}
-                        onCancel={() => {
-                          setConfirming(null);
-                          input.current?.focus();
-                        }}
-                      />
-                    ),
-                  ];
+                  return row(
+                    hit,
+                    i,
+                    priceOf(hit),
+                    confirming === hit.mint
+                      ? {
+                          onConfirm: () => void lookUp(hit),
+                          onCancel: () => {
+                            setConfirming(null);
+                            input.current?.focus();
+                          },
+                        }
+                      : undefined,
+                  );
                 })}
               </>
             )}

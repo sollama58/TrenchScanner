@@ -14715,22 +14715,13 @@ dialog.search-modal::backdrop {
   justify-content: flex-end;
 }
 .search-confirm {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  margin: 0 4px 6px 62px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--brand-b) 45%, transparent);
-  border-radius: var(--radius-s);
-  background: color-mix(in srgb, var(--brand-a) 12%, transparent);
-  color: var(--ink-2);
+  gap: 10px;
+  white-space: nowrap;
 }
-.search-confirm-actions {
-  display: flex;
-  gap: 6px;
-  margin-left: auto;
+.search-confirm .link {
+  color: var(--muted);
 }
 .search-skeleton {
   display: grid;
@@ -14775,8 +14766,8 @@ dialog.search-modal::backdrop {
   .search-fig-wide {
     display: none;
   }
-  .search-confirm {
-    margin-left: 4px;
+  .search-hit:has(.search-confirm) .search-hit-figs > div:not(.search-hit-price) {
+    display: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {
