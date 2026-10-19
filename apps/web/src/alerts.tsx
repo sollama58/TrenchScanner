@@ -343,15 +343,21 @@ export function AlertNotifier() {
   // Chaos Mode opens every new alert in the feed, whichever the reader is pinged for.
   const listens = active && (chaos || prefs!.notifyOn.filterMatches || prefs!.notifyOn.modelCalls);
 
-  // Browsers only allow sound after an interaction with the page: unlock on the first one.
+  // Browsers only allow sound after an interaction with the page, and phones put audio back to
+  // sleep when the screen locks or the tab is hidden. Keep listening so every tap can wake it again.
+  // Touch taps only count as a user gesture on pointerup/touchend/click, not pointerdown.
   useEffect(() => {
     prepareNotifications();
     const unlock = () => unlockAudio();
-    window.addEventListener("pointerdown", unlock, { once: true });
-    window.addEventListener("keydown", unlock, { once: true });
+    const onVisible = () => {
+      if (document.visibilityState === "visible") unlockAudio();
+    };
+    const events = ["pointerdown", "pointerup", "touchend", "click", "keydown"] as const;
+    for (const e of events) window.addEventListener(e, unlock, { passive: true });
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
-      window.removeEventListener("pointerdown", unlock);
-      window.removeEventListener("keydown", unlock);
+      for (const e of events) window.removeEventListener(e, unlock);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 
