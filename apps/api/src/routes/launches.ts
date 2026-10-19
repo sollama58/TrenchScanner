@@ -33,7 +33,8 @@ export const launchQuerySchema = z.object({
   q: tokenSearchParam,
   /**
    * "1": only graduated tokens, each at its first passing in-band scan after it graduated - Scope's
-   * "All screened graduated" column (user ask 2026-10-18).
+   * "All screened graduated" column (user ask 2026-10-18). Only coins the scan saw on their curve
+   * first, so an old coin someone looks up isn't listed as just graduated (user report 2026-10-19).
    */
   graduated: z.enum(["0", "1"]).optional(),
   /**
@@ -173,7 +174,18 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
         WHERE "tokenId" = t.id
           AND "source" = 'scan'
           AND "rugScreenPassed"
-          ${graduated ? Prisma.sql`AND "graduated"` : Prisma.empty}
+          ${
+            graduated
+              ? // Freshly graduated only: the scan saw it on its curve before this pass. A coin it
+                // first met already graduated - someone looked up an old coin, which puts it on the
+                // watchlist (user report 2026-10-19) - bonded who knows when.
+                Prisma.sql`AND "graduated"
+                  AND EXISTS (
+                    SELECT 1 FROM "TokenSnapshot" c
+                    WHERE c."tokenId" = t.id AND c."graduated" = false AND c."takenAt" < "TokenSnapshot"."takenAt"
+                  )`
+              : Prisma.empty
+          }
           AND "marketCapUsd" BETWEEN ${opts.env.MCAP_FILTER_MIN} AND ${opts.env.MCAP_FILTER_MAX}
         ORDER BY "takenAt" ASC
         LIMIT 1

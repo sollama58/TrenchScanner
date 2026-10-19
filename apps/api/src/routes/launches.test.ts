@@ -83,6 +83,8 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
       { at: 300_000, mcap: 30_000, passed: true, graduated: false },
       { at: 50_000, mcap: 90_000, passed: true, graduated: true },
     ]);
+    // First met already graduated (an old coin someone looked up): not freshly graduated.
+    await token("oldGrad", 100_000, [{ at: 100_000, mcap: 200_000, passed: true, graduated: true }]);
     // On its curve at 60K now: about to graduate.
     await token("soonish", 200_000, [
       { at: 200_000, mcap: 20_000, passed: true, graduated: false },
@@ -122,9 +124,16 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
       }[];
     };
     const mine = body.launches.filter((c) => Object.values(ids).includes(c.tokenId));
-    expect(mine.map((c) => c.tokenId)).toEqual([ids.newer, ids.liveSoon, ids.older, ids.soonish, ids.grad]);
+    expect(mine.map((c) => c.tokenId)).toEqual([
+      ids.newer,
+      ids.liveSoon,
+      ids.oldGrad,
+      ids.older,
+      ids.soonish,
+      ids.grad,
+    ]);
     // The card's Alert figure is the market cap it passed at; Now comes from the newest scan.
-    expect(mine[2]).toMatchObject({
+    expect(mine[3]).toMatchObject({
       kind: "stream",
       snapshot: { marketCapUsd: 15_000 },
       latestSnapshot: { marketCapUsd: 40_000 },
@@ -188,6 +197,7 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as { launches: { tokenId: string; snapshot: { marketCapUsd: number } }[] };
     const mine = body.launches.filter((c) => Object.values(ids).includes(c.tokenId));
+    // oldGrad was never seen on its curve: not freshly graduated.
     expect(mine.map((c) => c.tokenId)).toEqual([ids.grad]);
     expect(mine[0]?.snapshot.marketCapUsd).toBe(90_000);
   });
