@@ -2,6 +2,7 @@ import {
   createLogger,
   decodeCurve,
   decodeLaunchLab,
+  decodePoolVirtualQuote,
   decodeTokenAmount,
   HeliusAccountStream,
   pumpCurveAddressOf,
@@ -61,6 +62,8 @@ const KEY_PREFIX = "chart:";
 /** The stream keys of a followed pool's base and quote vaults. */
 const POOL_BASE_PREFIX = "pool-base:";
 const POOL_QUOTE_PREFIX = "pool-quote:";
+/** The stream key of a followed PumpSwap pool's own account: its virtual quote reserve moves. */
+const POOL_ACCOUNT_PREFIX = "pool-account:";
 /**
  * A swap changes both vaults in one slot, delivered as two updates: the price is recorded once
  * both sides of a slot are in, or this long after one side came alone (a plain transfer in).
@@ -164,6 +167,10 @@ interface Followed {
 
 interface FollowedPool {
   vaults: PoolVaults;
+  /** The PumpSwap pool account, re-read for its virtual quote reserve; null for a Raydium CPMM pool. */
+  address: string | null;
+  /** The pool's virtual quote reserve (base units), priced on top of the quote vault. */
+  virtualQuote: number;
   /** The vaults' balances (base units) and the slot each was delivered at (null: an RPC read). */
   base: number;
   quote: number;
@@ -414,11 +421,13 @@ export class LiveCurves {
   private watchPool(mint: string, pool: FollowedPool, now: number): void {
     this.stream?.watch(POOL_BASE_PREFIX + mint, [pool.vaults.base], now, "account");
     this.stream?.watch(POOL_QUOTE_PREFIX + mint, [pool.vaults.quote], now, "account");
+    if (pool.address) this.stream?.watch(POOL_ACCOUNT_PREFIX + mint, [pool.address], now, "account");
   }
 
   private unwatchPool(mint: string): void {
     this.stream?.unwatch(POOL_BASE_PREFIX + mint);
     this.stream?.unwatch(POOL_QUOTE_PREFIX + mint);
+    this.stream?.unwatch(POOL_ACCOUNT_PREFIX + mint);
   }
 
   /** From when the stream has covered both of `pool`'s vaults without a break, or null. */
@@ -430,6 +439,17 @@ export class LiveCurves {
 
   /** An account update the stream delivered (`slot`: when it was read, to pair a pool's vaults). */
   onAccount(key: string, data: string, slot: number | null = null): void {
+    if (key.startsWith(POOL_ACCOUNT_PREFIX)) {
+      const mint = key.slice(POOL_ACCOUNT_PREFIX.length);
+      const f = this.followed.get(mint);
+      const pool = f ? poolOf(f) : null;
+      if (!f || !pool || pool.readAt === null) return;
+      const virtualQuote = decodePoolVirtualQuote(data);
+      if (virtualQuote === pool.virtualQuote) return;
+      pool.virtualQuote = virtualQuote;
+      this.recordPool(mint, f, pool, this.now());
+      return;
+    }
     if (key.startsWith(POOL_BASE_PREFIX) || key.startsWith(POOL_QUOTE_PREFIX)) {
       const isBase = key.startsWith(POOL_BASE_PREFIX);
       const mint = key.slice((isBase ? POOL_BASE_PREFIX : POOL_QUOTE_PREFIX).length);
@@ -634,7 +654,7 @@ export class LiveCurves {
       f.poolSoughtAt = now;
       const vaults = await reader.findCpmmPoolVaults(mint, f.quoteMint ?? WRAPPED_SOL_MINT);
       if (vaults === "failed" || this.followed.get(mint) !== f) continue;
-      this.setPool(mint, f, vaults, now);
+      this.setPool(mint, f, vaults, now, null);
     }
     if (sought.size > 0) {
       const found = await reader.getPoolVaultsBatch(sought);
@@ -644,7 +664,7 @@ export class LiveCurves {
         if (!f || vaults === undefined) continue;
         f.poolSoughtAt = now;
         if (vaults === "failed") continue;
-        this.setPool(mint, f, vaults, now);
+        this.setPool(mint, f, vaults, now, pool);
       }
     }
     const due: [string, Followed, FollowedPool][] = [];
@@ -660,32 +680,62 @@ export class LiveCurves {
         due.push([mint, f, pool]);
     }
     if (due.length === 0) return;
-    const amounts = await reader.getTokenAmountsBatch(
-      due.flatMap(([, , p]) => [p.vaults.base, p.vaults.quote]),
+    // The pool accounts too: their virtual quote reserve moves along with the vaults.
+    const accounts = new Map(
+      due.flatMap(([mint, f, p]) =>
+        p.address ? [[p.address, { mint, quoteMint: f.quoteMint ?? WRAPPED_SOL_MINT }] as const] : [],
+      ),
     );
+    const [amounts, pools] = await Promise.all([
+      reader.getTokenAmountsBatch(due.flatMap(([, , p]) => [p.vaults.base, p.vaults.quote])),
+      accounts.size > 0
+        ? reader.getPoolVaultsBatch(accounts)
+        : new Map<string, PoolVaults | null | "failed">(),
+    ]);
     for (const [mint, f, pool] of due) {
       const base = amounts.get(pool.vaults.base);
       const quote = amounts.get(pool.vaults.quote);
       if (typeof base !== "number" || typeof quote !== "number") continue;
-      Object.assign(pool, { base, quote, baseSlot: null, quoteSlot: null });
+      const read = pool.address ? pools.get(pool.address) : undefined;
+      // A failed pool read keeps the last virtual reserve: it moves slowly, the vaults don't.
+      const virtualQuote = read && read !== "failed" ? read.virtualQuote : pool.virtualQuote;
+      Object.assign(pool, { base, quote, virtualQuote, baseSlot: null, quoteSlot: null });
       this.recordPool(mint, f, pool, now);
       pool.readAt = now;
     }
   }
 
   /** `f`'s pool once found (null: it has none, and nothing live prices it any more). */
-  private setPool(mint: string, f: Followed, vaults: PoolVaults | null, now: number): void {
+  private setPool(
+    mint: string,
+    f: Followed,
+    vaults: PoolVaults | null,
+    now: number,
+    address: string | null,
+  ): void {
     f.pool =
       vaults === null
         ? "none"
-        : { vaults, base: 0, quote: 0, baseSlot: null, quoteSlot: null, timer: null, readAt: null };
+        : {
+            vaults,
+            address,
+            virtualQuote: vaults.virtualQuote,
+            base: 0,
+            quote: 0,
+            baseSlot: null,
+            quoteSlot: null,
+            timer: null,
+            readAt: null,
+          };
     if (vaults === null) this.wake(mint);
     else this.watchPool(mint, f.pool as FollowedPool, now);
   }
 
   private recordPool(mint: string, f: Followed, pool: FollowedPool, at: number): void {
-    if (!(pool.base > 0) || !(pool.quote > 0)) return;
-    this.recordMcap(mint, f, curveMcapSol({ virtualQuote: pool.quote, virtualToken: pool.base }), at);
+    // PumpSwap prices the quote vault plus the pool's virtual quote reserve (pumpSwapPool.ts).
+    const quote = pool.quote + pool.virtualQuote;
+    if (!(pool.base > 0) || !(quote > 0)) return;
+    this.recordMcap(mint, f, curveMcapSol({ virtualQuote: quote, virtualToken: pool.base }), at);
   }
 
   private record(mint: string, f: Followed, state: CurveState, at: number): void {

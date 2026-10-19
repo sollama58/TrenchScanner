@@ -4,8 +4,9 @@ import { WRAPPED_SOL_MINT, pumpSwapPoolAddress } from "../venueAccounts.js";
 /**
  * A graduated Pump.fun coin's PumpSwap pool, read for its price (user ask 2026-10-18: 1-second
  * charts after bonding). The pool account only names its two vaults; the reserves are those
- * vaults' token balances, so the price is the quote vault's lamports over the base vault's tokens,
- * exactly as a curve's reserves are (liveCurve.ts follows both vaults on the Helius stream).
+ * vaults' token balances, with the pool's virtual quote reserve on top of the quote vault, so the
+ * price is (quote vault + virtual quote) over the base vault's tokens, as a curve's virtual
+ * reserves are (liveCurve.ts follows both vaults and the pool on the Helius stream).
  */
 
 /** Anchor's discriminator for PumpSwap's Pool account: sha256("account:Pool")[0..8]. */
@@ -16,8 +17,18 @@ const QUOTE_MINT_OFFSET = 75;
 /** After the LP mint: the pool's base and quote token accounts. */
 const BASE_VAULT_OFFSET = 139;
 const QUOTE_VAULT_OFFSET = 171;
-/** How many bytes of the pool a reader needs: through the quote vault. */
-export const POOL_READ_BYTES = QUOTE_VAULT_OFFSET + 32;
+/**
+ * After the LP supply (u64), the coin creator and two flags: the pool's virtual quote reserve, an
+ * i64 in the quote's base units that the program prices on top of the quote vault (user bug report
+ * 2026-10-19: graduated coins' live charts read 10-15% low on the vaults alone). A PUMP-quoted pool
+ * read 2.77M PUMP in its vault and 0.49M virtual on 2026-10-19, and Pump.fun's and DexScreener's
+ * price was (vault + virtual) / base to the digit; a SOL pool's swap events log the vaults alone too.
+ */
+const VIRTUAL_QUOTE_OFFSET = 245;
+/** The pool through its quote vault: what an older, shorter pool account still has. */
+const POOL_VAULTS_BYTES = QUOTE_VAULT_OFFSET + 32;
+/** How many bytes of the pool a reader asks for: through the virtual quote reserve. */
+export const POOL_READ_BYTES = VIRTUAL_QUOTE_OFFSET + 8;
 /** A token account's amount: a u64 after its mint and owner (SPL Token and Token-2022 alike). */
 const TOKEN_AMOUNT_OFFSET = 64;
 export const TOKEN_AMOUNT_READ_BYTES = TOKEN_AMOUNT_OFFSET + 8;
@@ -25,8 +36,13 @@ export const TOKEN_AMOUNT_READ_BYTES = TOKEN_AMOUNT_OFFSET + 8;
 export interface PoolVaults {
   /** The pool's token account for the coin. */
   base: string;
-  /** Its token account for SOL (wrapped). */
+  /** Its token account for SOL (wrapped), or the coin it is quoted in. */
   quote: string;
+  /**
+   * The virtual quote reserve (base units of the quote, may be negative), priced on top of the
+   * quote vault: the price is (quote vault + this) / base vault. 0 on a pool account without one.
+   */
+  virtualQuote: number;
 }
 
 /**
@@ -59,10 +75,21 @@ export function decodePoolVaults(
   quoteMint: string = WRAPPED_SOL_MINT,
 ): PoolVaults | null {
   const data = toBytes(raw);
-  if (data.length < POOL_READ_BYTES || POOL_DISCRIMINATOR.some((b, i) => data[i] !== b)) return null;
+  if (data.length < POOL_VAULTS_BYTES || POOL_DISCRIMINATOR.some((b, i) => data[i] !== b)) return null;
   const key = (at: number) => bs58.encode(data.subarray(at, at + 32));
   if (key(BASE_MINT_OFFSET) !== mintAddress || key(QUOTE_MINT_OFFSET) !== quoteMint) return null;
-  return { base: key(BASE_VAULT_OFFSET), quote: key(QUOTE_VAULT_OFFSET) };
+  return {
+    base: key(BASE_VAULT_OFFSET),
+    quote: key(QUOTE_VAULT_OFFSET),
+    virtualQuote: decodePoolVirtualQuote(data),
+  };
+}
+
+/** A PumpSwap pool account's virtual quote reserve (see VIRTUAL_QUOTE_OFFSET); 0 when it has none. */
+export function decodePoolVirtualQuote(raw: Uint8Array | string): number {
+  const data = toBytes(raw);
+  if (data.length < POOL_READ_BYTES || POOL_DISCRIMINATOR.some((b, i) => data[i] !== b)) return 0;
+  return Number(new DataView(data.buffer, data.byteOffset + VIRTUAL_QUOTE_OFFSET, 8).getBigInt64(0, true));
 }
 
 /** A token account's balance in base units, or null when the data is too short to be one. */

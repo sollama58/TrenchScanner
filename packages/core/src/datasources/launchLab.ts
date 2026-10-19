@@ -52,13 +52,13 @@ export function cpmmVaultsFor(
   raw: Uint8Array | string,
   mint: string,
   quoteMint: string,
-): { base: string; quote: string } | null {
+): { base: string; quote: string; virtualQuote: number } | null {
   const data = typeof raw === "string" ? Uint8Array.from(Buffer.from(raw, "base64")) : raw;
   if (data.length < CPMM_VAULTS_READ_BYTES) return null;
   const key = (at: number) => bs58.encode(data.subarray(at, at + 32));
   const [vault0, vault1, mint0, mint1] = [key(0), key(32), key(96), key(128)];
-  if (mint0 === mint && mint1 === quoteMint) return { base: vault0, quote: vault1 };
-  if (mint1 === mint && mint0 === quoteMint) return { base: vault1, quote: vault0 };
+  if (mint0 === mint && mint1 === quoteMint) return { base: vault0, quote: vault1, virtualQuote: 0 };
+  if (mint1 === mint && mint0 === quoteMint) return { base: vault1, quote: vault0, virtualQuote: 0 };
   return null;
 }
 

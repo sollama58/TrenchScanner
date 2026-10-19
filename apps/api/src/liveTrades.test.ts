@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import bs58 from "bs58";
 import { pumpCurveAddressOf, pumpSwapPoolOf } from "@trenchscanner/core";
-import { LiveTrades, MAX_TRADES, quotedInSol } from "./liveTrades.js";
+import { LiveTrades, MAX_TRADES, quotedInSol, type LiveTradesDeps } from "./liveTrades.js";
 
 const MINT = "BfWF6DxxfjdZPqjc2dPQvMd4CJh8Xr7ZPeP3iLh2pump";
 const OTHER = "EMRjzAdUDeKZi6w32yGJiERb7W9spV6UuL7827zUpump";
 const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+const PUMP_TOKEN = "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn";
 const AMM = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
 const WALLET = "29osZx6o2d3CQMpzajE8cyvB9EdYeGhmaFda13CMLoCL";
 const WALLET2 = "A1p8rxcap2fsswEBAQwjzZ2LneiYHJcfA5H3udXKK9wy";
@@ -49,7 +50,14 @@ function poolSellLogs(pool: string): string[] {
   return [`Program ${AMM} invoke [1]`, `Program data: ${data.toString("base64")}`, `Program ${AMM} success`];
 }
 
-function setup(opts: { stream?: boolean; sol?: number | null } = {}) {
+function setup(
+  opts: {
+    stream?: boolean;
+    sol?: number | null;
+    reader?: LiveTradesDeps["reader"];
+    quotePrice?: LiveTradesDeps["quotePrice"];
+  } = {},
+) {
   let now = 1_000_000;
   const watched = new Map<string, string>();
   let covered: number | null = null;
@@ -74,6 +82,8 @@ function setup(opts: { stream?: boolean; sol?: number | null } = {}) {
             };
           },
     solPrice: { get: async () => (opts.sol === undefined ? 100 : opts.sol) },
+    reader: opts.reader,
+    quotePrice: opts.quotePrice,
     now: () => now,
   });
   return {
@@ -145,6 +155,53 @@ describe("LiveTrades", () => {
     expect(b.cursor).toBeGreaterThan(a.cursor);
     // A cursor from past anything this process gave out (a restart) reads as a fresh ask.
     expect((await t.trades.read(MINT, 1e9)).trades).toHaveLength(2);
+    t.trades.stop();
+  });
+
+  it("prices a pool trade on the pool's quote vault plus its virtual quote reserve", async () => {
+    const pool = pumpSwapPoolOf(MINT)!;
+    const reader = {
+      getCurveStatesBatch: async (curves: string[]) =>
+        new Map(curves.map((c) => [c, { quoteIsSol: true, quoteMint: null }])),
+      getPoolVaultsBatch: async (pools: ReadonlyMap<string, unknown>) =>
+        new Map([...pools.keys()].map((p) => [p, { base: "b", quote: "q", virtualQuote: 500_000 }])),
+    } as unknown as LiveTradesDeps["reader"];
+    const t = setup({ reader });
+    t.cover(t.at());
+    await t.trades.read(MINT, 0);
+    await t.trades.readPools();
+    expect(t.watched.get(`trades-pool:${MINT}`)).toBe(pool);
+    t.push(`trades-pool:${MINT}`, "sig-p", poolSellLogs(pool));
+    const [trade] = (await t.trades.read(MINT, 0)).trades;
+    // 99_999.5 SOL in the vault after the sell, plus the 0.0005 virtual: 100 SOL over 1_000_005 tokens.
+    expect(trade!.sol).toBe(0.00049);
+    expect(trade!.mcapUsd).toBeCloseTo((100 / 1_000_005) * 1e9 * 100);
+    t.trades.stop();
+  });
+
+  it("follows a coin quoted in PUMP on its PUMP pool, and prices its trades in SOL", async () => {
+    const pool = pumpSwapPoolOf(MINT, PUMP_TOKEN)!;
+    const reader = {
+      getCurveStatesBatch: async (curves: string[]) =>
+        new Map(curves.map((c) => [c, { quoteIsSol: false, quoteMint: PUMP_TOKEN }])),
+      getPoolVaultsBatch: async (pools: ReadonlyMap<string, { quoteMint: string }>) =>
+        new Map(
+          [...pools].map(([p, { quoteMint }]) => [
+            p,
+            quoteMint === PUMP_TOKEN ? { base: "b", quote: "q", virtualQuote: 500_000 } : null,
+          ]),
+        ),
+    } as unknown as LiveTradesDeps["reader"];
+    const t = setup({ reader, quotePrice: { get: async () => ({ usd: 0.005, decimals: 6 }) } });
+    t.cover(t.at());
+    await t.trades.read(MINT, 0);
+    await t.trades.readPools();
+    expect(t.watched.get(`trades-pool:${MINT}`)).toBe(pool);
+    t.push(`trades-pool:${MINT}`, "sig-q", poolSellLogs(pool));
+    const [trade] = (await t.trades.read(MINT, 0)).trades;
+    // 0.49 PUMP at $0.005, SOL at $100; 100_000 PUMP over 1_000_005 tokens, a billion of them.
+    expect(trade!.sol).toBeCloseTo((0.49 * 0.005) / 100);
+    expect(trade!.mcapUsd).toBeCloseTo((100_000 / 1_000_005) * 0.005 * 1e9);
     t.trades.stop();
   });
 
