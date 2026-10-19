@@ -20256,7 +20256,21 @@ dialog.tm-modal.tm-terminal::backdrop {
   gap: 2px;
   min-width: 0;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   scrollbar-width: none;
+}
+/* Tabs hidden past an edge (the picker beside the row leaves too little room): the edge fades. */
+.tm-term-tablist.more-right {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+}
+.tm-term-tablist.more-left {
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent);
+}
+.tm-term-tablist.more-left.more-right {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
 }
 /* With nothing beside it, the chart takes the whole row (user ask 2026-10-19). */
 .tm-term-top.solo {
@@ -20605,14 +20619,14 @@ dialog.tm-modal.tm-terminal::backdrop {
   display: flex;
   flex: none;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 4px 0;
 }
 .tm-term-pick label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 9.5px;
   font-weight: 650;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   white-space: nowrap;
 }
