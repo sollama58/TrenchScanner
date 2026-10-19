@@ -86,6 +86,7 @@ import {
   CrowdChart,
   INPUTS,
   LINEAGE,
+  AtReadTime,
   LineageText,
   pct0,
   RELATION,
@@ -3004,6 +3005,7 @@ function LineageCard({ read: r }: { read: SageRead }) {
       <h4>
         Copycat check
         {lineage && <span className={`sage-tag tone-${lineage.tone}`}>{lineage.text}</span>}
+        <AtReadTime at={r.trendAt ?? r.analyzedAt} />
       </h4>
       {has ? (
         <>
@@ -3030,6 +3032,7 @@ function TrendCard({ read: r }: { read: SageRead }) {
             strength {pct0(t.score)}
           </span>
         )}
+        <AtReadTime at={r.analyzedAt} />
       </h4>
       {terms.length > 0 ? (
         <ul className="tm-terms">

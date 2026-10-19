@@ -28,8 +28,11 @@ const logger = createLogger("tokensage-now");
  * refresh is older than NOW_FEATURE_MAX_AGE_MIN at the decision.
  */
 
-/** A stored refresh younger than this is not asked again (TokenSage's own is 5 minutes). */
-const NOW_REFRESH_MS = 4 * 60_000;
+/**
+ * A stored refresh younger than this is not asked again: TokenSage's own lasts 5 minutes, and a
+ * decision reads inputs up to NOW_FEATURE_MAX_AGE_MIN (20) old (user ask 2026-10-19).
+ */
+const NOW_REFRESH_MS = 5 * 60_000;
 /** A coin noted this long ago and not since has left the band (or the watchlist). */
 const NOW_WANTED_MS = 10 * 60_000;
 /** Mints asked per flush at most: two calls. */

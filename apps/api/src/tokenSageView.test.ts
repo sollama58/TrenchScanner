@@ -12,6 +12,18 @@ const fixture = (name: string) =>
   ) as { analysis: TokenSageAnalysis };
 
 describe("TokenSage view", () => {
+  it("shows a recent decision-time refresh's trend, else the read's with its time", () => {
+    const full = fixture("full").analysis;
+    const at = Date.parse("2026-10-19T01:00:00Z");
+    const now = { trend: { matched: true, score: 0.8, terms: [{ term: "Moo Deng", source: "x_trends" }] } };
+    const fresh = sageRead(full, "full", { ...now, at: new Date(at - 5 * 60_000) }, at)!;
+    expect(fresh.trend).toMatchObject({ matched: true, score: 0.8, terms: [{ term: "Moo Deng" }] });
+    expect(fresh.trendAt).toBe("2026-10-19T00:55:00.000Z");
+    const stale = sageRead(full, "full", { ...now, at: new Date(at - 25 * 60_000) }, at)!;
+    expect(stale.trendAt).toBe(stale.analyzedAt);
+    expect(stale.trend).toEqual(sageRead(full, "full")!.trend);
+  });
+
   it("shapes a full read for the dashboard", () => {
     const read = sageRead(fixture("full").analysis, "full")!;
     expect(read.referent).toMatchObject({

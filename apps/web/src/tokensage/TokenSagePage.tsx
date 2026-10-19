@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, type LighthouseSignals } from "../api";
+import { ago } from "../format";
 import { HitRates, narratives, seriesClassFor } from "../components/MarketLighthouse";
 import { narrativeBaseline } from "../lighthouseMetrics";
 import { intervalText, RULE_NOTE_UNFILTERED, wilson } from "../rates";
@@ -610,13 +611,13 @@ function Footer({ data }: { data: TokenSageShowcase | null }) {
     <footer className="tsg-foot">
       <p>
         Counts only: no coin, address or wallet is shown on this page. Figures come from the reads
-        TrenchScanner has kept and are refreshed every few minutes.
+        TrenchScanner has kept, summed every hour.
       </p>
       {data ? (
         <p className="tsg-foot-meta">
           {data.rules?.version ? `TokenSage rules ${data.rules.version}` : "TokenSage"}
           {data.rules?.lexicon ? ` · lexicon ${data.rules.lexicon}` : ""}
-          {` · updated ${new Date(data.generatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
+          {` · summed ${ago(data.summedAt ?? data.generatedAt)}`}
         </p>
       ) : null}
       <a href="/" className="tsg-foot-link">
