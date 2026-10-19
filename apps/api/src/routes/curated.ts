@@ -23,7 +23,7 @@ import {
 } from "../curatedFeed.js";
 import type { MatchStream } from "../matchStream.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
-import { SharedCache, SharedCacheMap } from "../sharedCache.js";
+import { SharedCache, SharedCacheMap, withComputedAt } from "../sharedCache.js";
 import { FEED_COMPARE_DAYS, mixFeedRecord, mixKey, sameMix, type FeedMixRecord } from "../feedCompare.js";
 import {
   buildModelRunHistory,
@@ -33,6 +33,8 @@ import {
   type ModelRunHistory,
 } from "../modelInsights.js";
 import { createMarketRows } from "../marketRows.js";
+import { buildLearningCurve, type LearningCurve } from "../learningCurve.js";
+import { postgresTimeZone, readerZoneSchema } from "../readerZone.js";
 import { buildModelLineup, seatWeights, type ModelLineup, type SeatWeights } from "../modelExplain.js";
 import {
   createLighthouseCache,
@@ -97,6 +99,16 @@ const WEATHER_CACHE_TTL_MS = 15 * 60_000;
  * waiting most of a second for a fill on every expiry.
  */
 const REPORT_STALE_MS = 6 * 3_600_000;
+
+/**
+ * The same for the windows nothing keeps warm (keepWarm below): the 90-day board, the 30- and
+ * 90-day reports. Their first reader after a quiet spell would otherwise get an answer up to
+ * REPORT_STALE_MS old; past this they wait for a fresh fill instead.
+ */
+const ON_DEMAND_STALE_MS = 10 * 60_000;
+/** The windows keepWarm refills: the board's, and the report's. */
+const WARM_BOARD_DAYS: readonly number[] = [1, 3, 7, 30];
+const WARM_INSIGHTS_DAYS: readonly number[] = [7];
 /** How often the report keeper (createReportCaches' keepWarm) checks for a refill falling due. */
 const REPORT_KEEP_WARM_MS = 60_000;
 
@@ -134,6 +146,10 @@ export const reportDaysSchema = z.coerce
   .default(30);
 
 const insightsQuerySchema = z.object({ days: reportDaysSchema });
+/** The Week chart's learning curve in the reader's zone (`tz`, as the Lighthouse's). */
+export const learningQuerySchema = z.object({ days: reportDaysSchema, tz: readerZoneSchema });
+/** Zones whose learning curves are held at once; past it the least recently read goes. */
+const LEARNING_ZONES_MAX = 48;
 
 /**
  * The leaderboard also serves 24h and 3-day windows: the Models vs baseline chart switches between
@@ -216,7 +232,7 @@ export function createReportCaches(env: Env) {
     let cache = leaderboardCache.get(days);
     if (!cache) {
       cache = new SharedCache<Leaderboard>(LEADERBOARD_CACHE_TTL_MS, {
-        staleWhileRevalidateMs: REPORT_STALE_MS,
+        staleWhileRevalidateMs: WARM_BOARD_DAYS.includes(days) ? REPORT_STALE_MS : ON_DEMAND_STALE_MS,
         name: `leaderboard ${days}d`,
       });
       // Bounded by the schema: one per LEADERBOARD_WINDOWS_DAYS.
@@ -224,7 +240,8 @@ export function createReportCaches(env: Env) {
     }
     return cache;
   };
-  const leaderboard = (days: number) => leaderboardFor(days).get(() => buildLeaderboard(env, days, market));
+  const leaderboard = async (days: number) =>
+    withComputedAt(await leaderboardFor(days).getStamped(() => buildLeaderboard(env, days, market)));
 
   // One fill per window for every audience: the full report, with what only admins see stripped
   // per reader (insightsView). It used to be a fill per window and audience, so an admin opening
@@ -234,7 +251,7 @@ export function createReportCaches(env: Env) {
     let cache = insightsCache.get(days);
     if (!cache) {
       cache = new SharedCache<FullModelInsights>(INSIGHTS_CACHE_TTL_MS, {
-        staleWhileRevalidateMs: REPORT_STALE_MS,
+        staleWhileRevalidateMs: WARM_INSIGHTS_DAYS.includes(days) ? REPORT_STALE_MS : ON_DEMAND_STALE_MS,
         name: `insights ${days}d`,
       });
       // Bounded by the schema: one per REPORT_WINDOWS_DAYS.
@@ -244,7 +261,35 @@ export function createReportCaches(env: Env) {
   };
   const fillInsights = (days: number) => () => fullModelInsights(env, days, market);
   const insights = async (days: number, isAdmin: boolean) =>
-    insightsView(await insightsFor(days).get(fillInsights(days)), isAdmin);
+    insightsView(withComputedAt(await insightsFor(days).getStamped(fillInsights(days))), isAdmin);
+
+  // The Week chart's days in the reader's own zone, so "Today" is their today (user ask
+  // 2026-10-19): the learning curve alone, per window and zone. UTC is the report's own copy and
+  // costs no fill of its own; other zones fill on demand, the chart showing the UTC copy dimmed
+  // until theirs lands.
+  const zoneLearning = new SharedCacheMap<LearningCurve>(
+    INSIGHTS_CACHE_TTL_MS,
+    LEARNING_ZONES_MAX,
+    ON_DEMAND_STALE_MS,
+  );
+  const learning = async (days: number, zone: string): Promise<LearningCurve & { computedAt: string }> => {
+    const tz = await postgresTimeZone(zone);
+    if (tz === "UTC") {
+      const { data, computedAt } = await insightsFor(days).getStamped(fillInsights(days));
+      return withComputedAt({ data: data.learning, computedAt });
+    }
+    return withComputedAt(
+      await zoneLearning.for(`${days}:${tz}`).getStamped(() => {
+        const until = new Date();
+        const since = new Date(until.getTime() - days * 86_400_000);
+        const targets = {
+          hitRate2xPct: env.CURATED_TARGET_WIN_RATE_PCT,
+          hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
+        };
+        return buildLearningCurve(since, until, targets, days, market, tz);
+      }),
+    );
+  };
 
   const runHistoryCache = new Map<string, SharedCache<ModelRunHistory>>();
   /** Callers check `contestant` against the roster first, which bounds the map. */
@@ -303,6 +348,7 @@ export function createReportCaches(env: Env) {
   return {
     leaderboard,
     insights,
+    learning,
     runHistoryFor,
     lineup,
     lighthouse,
@@ -920,7 +966,7 @@ export async function registerCuratedRoutes(
     name: "learning panel stats",
   });
 
-  app.get("/stats", async () => statsCache.get(buildStats));
+  app.get("/stats", async () => withComputedAt(await statsCache.getStamped(buildStats)));
 
   /**
    * The Model tab: training runs (logistic vs GBDT exam, hit-rate curves, cutoff), what the live
@@ -934,6 +980,15 @@ export async function registerCuratedRoutes(
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     return opts.reports.insights(parsed.data.days, request.access?.reason === "admin");
+  });
+
+  /** The Model tab's Week chart: the learning curve with its days in the reader's zone. */
+  app.get("/insights/learning", async (request, reply) => {
+    const parsed = learningQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    return opts.reports.learning(parsed.data.days, parsed.data.tz);
   });
 
   /** The Market Lighthouse on the Models tab: TokenSage's reads in aggregate (marketLighthouse.ts). */

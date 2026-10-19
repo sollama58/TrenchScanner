@@ -9,6 +9,7 @@ import { bucketMsOf, pricingChangeSlot } from "../pricingChange";
 import { renderTrendCard, type TrendCardData } from "../components/lighthouseCards";
 import { ShareButton } from "../components/ShareImageDialog";
 import { ExitPlanInfo } from "../components/ExitPlanInfo";
+import { AsOf } from "../components/AsOf";
 import { LighthouseBody, WINDOWS as NOW_WINDOWS, type Days } from "../components/MarketLighthouse";
 import {
   ArrowRightIcon,
@@ -285,6 +286,12 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
                   ? `History kept since ${new Date(d.coverage.oldestHour).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}`
                   : "No history summed yet"}
                 {d.coverage.summedAt ? ` · last summed ${ago(d.coverage.summedAt)}` : ""}
+                {d.computedAt && (
+                  <>
+                    {" · "}
+                    <AsOf computedAt={d.computedAt} />
+                  </>
+                )}
                 {" · "}
                 <ExitPlanInfo text="exit plan" />: {d.exitPlan}
               </p>

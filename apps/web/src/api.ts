@@ -548,6 +548,8 @@ export interface MatchPage {
 }
 
 export interface CuratedStats {
+  /** When the server computed this answer (SharedCache); absent from older API builds. Shown as "as of". */
+  computedAt?: string;
   curator: { active: string; phase: string; modelTrainedAt: string | null };
   training: { finalizedSamples: number; samples7d: number; winners: number; baseWinRatePct: number | null };
   feed: {
@@ -901,6 +903,10 @@ export interface LearningModel {
 /** Day-over-day: the feed's edge over the market, and each training run's exam against its base rate. */
 export interface LearningCurve {
   window: { since: string; until: string };
+  /** The zone whose calendar days `days` are; absent (UTC) from older API builds. */
+  timeZone?: string;
+  /** When the server computed it (/insights/learning only). */
+  computedAt?: string;
   days: LearningDay[];
   /** Each model's own curve; absent from an API older than the per-model view. */
   models?: LearningModel[];
@@ -912,6 +918,8 @@ export interface LearningCurve {
 }
 
 export interface ModelInsights {
+  /** When the server computed this answer (SharedCache); absent from older API builds. Shown as "as of". */
+  computedAt?: string;
   window: { days: number };
   targets: { hitRate2xPct: number; hitRate4xPct: number };
   rules: { win: string; goal: string; fill: string };
@@ -1370,6 +1378,8 @@ export interface EvolutionEvent {
 }
 
 export interface Leaderboard {
+  /** When the server computed this answer (SharedCache); absent from older API builds. Shown as "as of". */
+  computedAt?: string;
   window: { days: number; since: string };
   targets: { hitRate2xPct: number; hitRate4xPct: number };
   /** The random-pick baseline over the same window ("event" moments; absent from older API builds). */
@@ -1879,6 +1889,8 @@ export interface LighthouseLabelTally {
   tenXGraded?: number;
 }
 export interface LighthouseHistory {
+  /** When the server computed this answer (SharedCache); absent from older API builds. Shown as "as of". */
+  computedAt?: string;
   window: {
     days: number;
     since: string | null;
@@ -1937,6 +1949,8 @@ export interface LighthouseTally {
   returnSum: number;
 }
 export interface MarketLighthouse {
+  /** When the server computed this answer (SharedCache); absent from older API builds. Shown as "as of". */
+  computedAt?: string;
   window: { days: number; since: string; bucketHours: number };
   tokenSage: { on: boolean; lastCycleAt: string | null };
   reads: {

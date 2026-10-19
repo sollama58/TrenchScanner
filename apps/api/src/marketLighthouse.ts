@@ -24,7 +24,8 @@ import {
   SAFETY_MAX_FRESH_WALLET_PCT,
   type Env,
 } from "@trenchscanner/core";
-import { SharedCache } from "./sharedCache.js";
+import { SharedCache, withComputedAt } from "./sharedCache.js";
+import { readerZoneSchema } from "./readerZone.js";
 import {
   counts,
   sortedTallies,
@@ -79,23 +80,8 @@ export const lighthouseQuerySchema = z.object({
    * a zone newer than our tzdata): the answer says UTC and the web shifts by today's offset, rather
    * than the whole Lighthouse failing over a hint for one chart.
    */
-  tz: z
-    .string()
-    .max(64)
-    .transform((tz) => canonicalTimeZone(tz) ?? "UTC")
-    .default("UTC"),
+  tz: readerZoneSchema,
 });
-
-function canonicalTimeZone(tz: string): string | null {
-  try {
-    const zone = new Intl.DateTimeFormat("en-US", { timeZone: tz }).resolvedOptions().timeZone;
-    // Named zones only. ICU also accepts bare offsets ("+05:30", "-0800": ~2,800 distinct values),
-    // and each one would get a cache of its own below; browsers report a named zone anyway.
-    return /^[+-]/.test(zone) ? null : zone;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Windows "Signals at a glance" can be read over. A day and a week are parts of the full answer
@@ -759,17 +745,22 @@ export function createLighthouseCache() {
     isFullWindow(days)
       ? signalsOf(await windowCache(days).get(() => buildMarketLighthouse(env, days)))
       : signalCache(days).get(() => buildLighthouseSignals(days));
-  const read = async (env: Env, days: number, timeZone = "UTC"): Promise<MarketLighthouse> => {
+  const read = async (
+    env: Env,
+    days: number,
+    timeZone = "UTC",
+  ): Promise<MarketLighthouse & { computedAt: string }> => {
     let hourCache = hourCaches.get(timeZone);
     if (!hourCache) {
       hourCache = new SharedCache<ScreenedByHourOfDay>(CACHE_MS, { staleWhileRevalidateMs: STALE_MS });
       // Bounded by the schema: canonical named zones only (canonicalTimeZone), a few hundred.
       hourCaches.set(timeZone, hourCache);
     }
-    const [m, byHourOfDay] = await Promise.all([
-      windowCache(days).get(() => buildMarketLighthouse(env, days)),
+    const [stamped, byHourOfDay] = await Promise.all([
+      windowCache(days).getStamped(() => buildMarketLighthouse(env, days)),
       hourCache.get(async () => screenedByHourOfDay(await hoursCache.get(screenedHours), timeZone)),
     ]);
+    const m = withComputedAt(stamped);
     return { ...m, screened: { ...m.screened, byHourOfDay } };
   };
   /**

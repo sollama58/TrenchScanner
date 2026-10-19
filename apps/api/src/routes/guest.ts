@@ -16,6 +16,7 @@ import { callPassed, topReturns } from "../feedStats.js";
 import { contestState, modelLabel, readerBoard } from "../contest.js";
 import {
   leaderboardDaysSchema,
+  learningQuerySchema,
   modelRunsRoute,
   modelWeightsRoute,
   reportDaysSchema,
@@ -270,6 +271,15 @@ export async function registerGuestRoutes(
     const { days } = parsed.data;
     const insights = await opts.reports.insights(days, false);
     return { ...insights, recentAiReviews: [] };
+  });
+
+  /** The Week chart's learning curve in the reader's zone: aggregates only, as in the report above. */
+  app.get("/insights/learning", { config: { rateLimit: GUEST_RATE_LIMIT } }, async (request, reply) => {
+    const parsed = learningQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    return opts.reports.learning(parsed.data.days, parsed.data.tz);
   });
 
   /**

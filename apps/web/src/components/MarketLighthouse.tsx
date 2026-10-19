@@ -20,6 +20,7 @@ import {
 import { SafetyGauge } from "./SafetyGauge";
 import { ShareButton } from "./ShareImageDialog";
 import { WeatherGauge } from "./WeatherGauge";
+import { AsOf } from "./AsOf";
 import { PRICING_CHANGE_LABEL, pricingChangeSlot } from "../pricingChange";
 
 /**
@@ -90,6 +91,9 @@ function LighthouseWindow({ base, days }: { base: string; days: Days }) {
 
   return (
     <div className={`stack lh-content${q.stale ? " stale" : ""}`} aria-busy={q.stale}>
+      <p className="lh-as-of">
+        <AsOf computedAt={d.computedAt} />
+      </p>
       {d.safetyScreen && <SafetyGauge s={d.safetyScreen} span={span} days={days} />}
       <Screened s={d.screened} span={span} days={days} since={d.window.since} />
       <h3 className="lh-part">
