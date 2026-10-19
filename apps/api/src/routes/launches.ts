@@ -179,6 +179,30 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
       return snapshot && token ? [{ snapshot, token }] : [];
     });
     const decorated = await withLatestSnapshots(rows);
+    // A graduated entry is its first pass after graduating, often far above where it first passed
+    // in the band (user report 2026-10-19: a coin that passed at $12K showed "At screen $65.5K"):
+    // the first in-band pass rides along, so the card can say when it really passed the screen.
+    const firstPasses = graduated
+      ? new Map(
+          (
+            await prisma.$queryRaw<
+              { tokenId: string; takenAt: Date; marketCapUsd: number | null }[]
+            >(Prisma.sql`
+              SELECT t.id AS "tokenId", s."takenAt", s."marketCapUsd"
+              FROM unnest(${rows.map((r) => r.token.id)}::text[]) AS t(id)
+              CROSS JOIN LATERAL (
+                SELECT "takenAt", "marketCapUsd" FROM "TokenSnapshot"
+                WHERE "tokenId" = t.id
+                  AND "source" = 'scan'
+                  AND "rugScreenPassed"
+                  AND "marketCapUsd" BETWEEN ${opts.env.MCAP_FILTER_MIN} AND ${opts.env.MCAP_FILTER_MAX}
+                ORDER BY "takenAt" ASC
+                LIMIT 1
+              ) s
+            `)
+          ).map((r) => [r.tokenId, { at: r.takenAt.toISOString(), mcapUsd: r.marketCapUsd }]),
+        )
+      : null;
     const launches = decorated.flatMap(({ snapshot, token: { snapshots: latest, ...token } }) => {
       const latestSnapshot = latest[0] ?? null;
       // Passed on the way in but failed since (a dev dump, a flag RugCheck added): not a pass now.
@@ -189,8 +213,11 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
           id: `stream-${token.id}`,
           kind: "stream" as const,
           tokenId: token.id,
-          // When it entered the Stream: the card's time is how long ago it passed.
+          // When it entered the Stream (or, graduated, its first pass since): how long ago it passed.
           matchedAt: snapshot.takenAt,
+          ...(firstPasses
+            ? { streamEntry: "graduated" as const, firstPass: firstPasses.get(token.id) ?? null }
+            : {}),
           score: snapshot.score ?? 0,
           peakReturnPct: null,
           token,

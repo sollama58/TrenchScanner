@@ -156,8 +156,10 @@ function isPhone(): boolean {
 
 /**
  * The token modal's market-cap chart: one line, green above its baseline and red below it, with
- * the area between them shaded. The baseline is the alert's market cap while the alert is in view,
- * else where the view starts, so the colour always answers "up or down since then?". Sized to its
+ * the area between them shaded. The baseline is the trader's entry while they hold the coin, else
+ * the earliest marked moment's market cap while it is in view (the first alert, filter or model;
+ * else the screen pass or the scan), else where the view starts, so the colour always answers "up
+ * or down since then?". Sized to its
  * box in real pixels (a ResizeObserver), so text stays crisp at any width. Hover (or drag on a touch
  * screen) reads one point out; hovering (or tapping) a bar in the volume lane reads out its minutes.
  * On a phone the readout sits under the chart instead of over it (user ask 2026-10-18), showing the
@@ -368,9 +370,22 @@ export function PriceChart({
     if (pts.length < 2) return null;
     const zoomed = zoom !== null || t0 > ext0 + 1;
     const step = stepMs ?? Math.max(1, (t1 - t0) / (pts.length - 1));
-    const lead = events[0];
+    // The baseline (user ask 2026-10-19): the trader's entry while they hold the coin, else the
+    // earliest moment marked (the first alert, filter or model; else its screen pass or the scan),
+    // at its own market cap or the line's at that time, else where the view starts.
+    const lead = events.reduce<ChartEvent | undefined>(
+      (a, e) => (a === undefined || e.t < a.t ? e : a),
+      undefined,
+    );
     const leadShown = lead !== undefined && lead.t >= t0 && lead.t <= t1;
-    const base = leadShown && lead.mcap ? lead.mcap : pts[0]!.v;
+    const leadMcap = leadShown ? (lead.mcap ?? valueAt(points, lead.t)) : null;
+    const ref: { v: number; label: string } | null =
+      entry !== null && entry > 0
+        ? { v: entry, label: "your entry" }
+        : lead && leadMcap !== null && leadMcap > 0
+          ? { v: leadMcap, label: lead.label.toLowerCase() }
+          : null;
+    const base = ref?.v ?? pts[0]!.v;
     // The candles and the volume lane share slots of one timeframe on round times (since the
     // epoch, or the First 15m view's launch), so each candle sits over its volume and keeps its
     // place as new readings arrive: only the slot now forming changes (user ask 2026-10-18: on All
@@ -448,7 +463,9 @@ export function PriceChart({
       x,
       axis,
       base,
-      fromAlert: leadShown && !!lead.mcap,
+      ref,
+      // The entry has a line of its own; the baseline's tag is for an alert's market cap.
+      fromAlert: ref !== null && !(entry !== null && entry > 0),
       hiIdx,
       slices,
       slot0,
@@ -587,8 +604,7 @@ export function PriceChart({
   const lastTagY = Math.min(bottom, Math.max(PAD.t, lastY));
   const ended = !live || !atEnd;
 
-  const shown = events.filter((e) => e.t >= geo.t0 && e.t <= geo.t1);
-  const lead = shown[0];
+  const shown = events.filter((e) => e.t >= geo.t0 && e.t <= geo.t1).sort((a, b) => a.t - b.t);
   // Round times along the axis (on the minute, the quarter hour...), as many as fit their labels:
   // seconds on a view of seconds, the time since launch on the First 15m view.
   const fine = stepMs !== undefined && stepMs < 60_000;
@@ -766,9 +782,9 @@ export function PriceChart({
             : timeLabel(h.t, span > 36 * 3_600_000 ? span : 0, fine)}
         </span>
         <strong className="num">{usd(hv)}</strong>
-        {lead?.mcap ? (
-          <span className={`num pc-chg ${hv >= lead.mcap ? "up" : "down"}`}>
-            {signedPct(change(lead.mcap, hv))} vs {lead.label.toLowerCase()}
+        {geo.ref ? (
+          <span className={`num pc-chg ${hv >= geo.ref.v ? "up" : "down"}`}>
+            {signedPct(change(geo.ref.v, hv))} vs {geo.ref.label}
           </span>
         ) : null}
         {hb &&
@@ -1285,9 +1301,9 @@ export function PriceChart({
                   {timeLabel(last.t, span > 36 * 3_600_000 ? span : 0, fine)}
                 </span>
                 <strong className="num">{usd(last.v)}</strong>
-                {lead?.mcap ? (
-                  <span className={`num pc-chg ${last.v >= lead.mcap ? "up" : "down"}`}>
-                    {signedPct(change(lead.mcap, last.v))} vs {lead.label.toLowerCase()}
+                {geo.ref ? (
+                  <span className={`num pc-chg ${last.v >= geo.ref.v ? "up" : "down"}`}>
+                    {signedPct(change(geo.ref.v, last.v))} vs {geo.ref.label}
                   </span>
                 ) : null}
                 <span className="faint small pc-readout-hint">
