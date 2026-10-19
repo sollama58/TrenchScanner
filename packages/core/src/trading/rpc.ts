@@ -104,6 +104,9 @@ export function parseAccountState(raw: RawAccount | null | undefined): ParsedAcc
   return { lamports: BigInt(raw.lamports), owner: raw.owner, token };
 }
 
+/** Where a signature stands: landed (ok or failed), or not seen. */
+export type SignatureStatus = { seen: false } | { seen: true; confirmed: boolean; error: string | null };
+
 /** One coin a wallet holds: its raw balance across the wallet's token accounts. */
 export interface WalletBalance {
   mint: string;
@@ -155,8 +158,10 @@ export class TradingRpc implements GuardRpc {
 
   /**
    * One JSON-RPC call. Throws RpcError when the node answered with an error; null on no answer.
-   * With a backup endpoint, a call the first one didn't answer (down, timed out, rate limited) is
-   * asked of the backup before giving up.
+   * With a backup endpoint, a call the first one didn't answer (down, timed out, rate limited, out
+   * of credits) is asked of the backup before giving up. The first endpoint then gets at most
+   * PRIMARY_TIMEOUT_MS and no retry of its own, so a hung node fails over in seconds: the backup
+   * is the retry.
    */
   protected async call<T>(
     method: string,
@@ -164,8 +169,9 @@ export class TradingRpc implements GuardRpc {
     timeoutMs = 15_000,
     retries = 1,
   ): Promise<T | null> {
-    const first = await this.callAt<T>(this.url, method, params, timeoutMs, retries);
-    if (first.answered || !this.backupUrl) return first.result;
+    if (!this.backupUrl) return (await this.callAt<T>(this.url, method, params, timeoutMs, retries)).result;
+    const first = await this.callAt<T>(this.url, method, params, Math.min(timeoutMs, PRIMARY_TIMEOUT_MS), 0);
+    if (first.answered) return first.result;
     return (await this.callAt<T>(this.backupUrl, method, params, timeoutMs, retries)).result;
   }
 
@@ -184,7 +190,12 @@ export class TradingRpc implements GuardRpc {
         timeoutMs,
         retries,
       });
-      if (body.error) throw new RpcError(method, body.error.code, body.error.message);
+      if (body.error) {
+        // "Not now" (rate limited, out of credits) says nothing about the request: no answer, so
+        // the backup is asked.
+        if (isNotNowRpcError(body.error)) return { answered: false, result: null };
+        throw new RpcError(method, body.error.code, body.error.message);
+      }
       return { answered: true, result: body.result ?? null };
     } catch (err) {
       if (err instanceof RpcError) throw err;
@@ -419,18 +430,42 @@ export class TradingRpc implements GuardRpc {
     return results.includes(null) ? null : results[0]!;
   }
 
-  /** Where a signature stands: landed (ok or failed), or not seen (null status). Null when unknown. */
+  /**
+   * Where a signature stands: landed (ok or failed), or not seen (null status). Null when unknown.
+   * `searchHistory: false` asks only the node's recent status cache (the last ~150 blocks): faster,
+   * and enough for a signature seconds old, but "not seen" then proves nothing about an older one.
+   */
   async getSignatureStatus(
     signature: string,
-  ): Promise<{ seen: false } | { seen: true; confirmed: boolean; error: string | null } | null> {
-    const out = await this.read<{
-      value?: ({ err: unknown; confirmationStatus?: string | null } | null)[];
-    }>("getSignatureStatuses", [[signature], { searchTransactionHistory: true }]);
-    if (!out?.value) return null;
-    const status = out.value[0];
-    if (!status) return { seen: false };
-    const confirmed = status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized";
-    return { seen: true, confirmed, error: status.err ? JSON.stringify(status.err) : null };
+    options: { searchHistory?: boolean } = {},
+  ): Promise<SignatureStatus | null> {
+    const out = await this.getSignatureStatuses([signature], options);
+    return out ? out[0]! : null;
+  }
+
+  /** getSignatureStatus for many signatures, 256 a call; null when any call went unanswered. */
+  async getSignatureStatuses(
+    signatures: string[],
+    options: { searchHistory?: boolean } = {},
+  ): Promise<SignatureStatus[] | null> {
+    const statuses: SignatureStatus[] = [];
+    for (let i = 0; i < signatures.length; i += 256) {
+      const page = signatures.slice(i, i + 256);
+      const out = await this.read<{
+        value?: ({ err: unknown; confirmationStatus?: string | null } | null)[];
+      }>("getSignatureStatuses", [page, { searchTransactionHistory: options.searchHistory ?? true }]);
+      if (!out?.value || out.value.length !== page.length) return null;
+      for (const status of out.value) {
+        if (!status) {
+          statuses.push({ seen: false });
+          continue;
+        }
+        const confirmed =
+          status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized";
+        statuses.push({ seen: true, confirmed, error: status.err ? JSON.stringify(status.err) : null });
+      }
+    }
+    return statuses;
   }
 
   /** What a landed transaction did to the wallet: its SOL change and its change in `mint`. */
@@ -565,6 +600,20 @@ export class TradingRpc implements GuardRpc {
     }
     return { raw, decimals, accounts };
   }
+}
+
+/** With a backup endpoint, the most a call waits on the first one before asking the backup. */
+export const PRIMARY_TIMEOUT_MS = 6_000;
+
+/**
+ * A JSON-RPC error that means "not now" rather than "no": a rate limit or an exhausted plan, which
+ * some providers (Helius's out-of-credits answer among them) send with HTTP 200.
+ */
+export function isNotNowRpcError(error: { code?: unknown; message?: unknown }): boolean {
+  const message = typeof error.message === "string" ? error.message : "";
+  if (error.code === -32429 || error.code === -32005) return true;
+  if (error.code === -32603 && /rate/i.test(message)) return true;
+  return /rate limit|max usage|credits|too many/i.test(message);
 }
 
 export class RpcError extends Error {

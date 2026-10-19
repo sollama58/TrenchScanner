@@ -50,8 +50,23 @@ describe("asdfPriceFrom", () => {
     expect(state).toMatchObject({ asdfPerSol: null, refusal: "few_samples", samples: 8 });
   });
 
-  it("refuses when the newest sample is over a minute old", () => {
-    expect(asdfPriceFrom(steady(3, 740_000, 90_000), NOW)).toMatchObject({
+  it("keeps the newest sample's price for 10 minutes while the sampler is paused", () => {
+    // A worker deploy: no sample for 8 minutes, and the price as of the last one still stands.
+    expect(asdfPriceFrom(steady(5, 740_000, 8 * 60_000), NOW)).toMatchObject({
+      asdfPerSol: 740_000,
+      refusal: null,
+      samples: 40,
+    });
+    // One source stopped a while before the pause: still refused.
+    const rows = [
+      ...steady(5, 740_000, 10 * 60_000),
+      ...steady(2, 740_000, 8 * 60_000).filter((r) => r.source === "quote"),
+    ];
+    expect(asdfPriceFrom(rows, NOW)).toMatchObject({ asdfPerSol: null, refusal: "source_down" });
+  });
+
+  it("refuses when the newest sample is over 10 minutes old", () => {
+    expect(asdfPriceFrom(steady(5, 740_000, 11 * 60_000), NOW)).toMatchObject({
       asdfPerSol: null,
       refusal: "stale",
     });

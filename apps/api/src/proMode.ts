@@ -62,6 +62,44 @@ export async function proStatus(env: Env, walletAddress: string): Promise<ProSta
   return status ?? PRO_OFF;
 }
 
+/** How long the trade routes reuse a wallet's Pro Mode, and how long it stands while the database is out. */
+export const PRO_STATUS_TTL_MS = 60_000;
+export const PRO_STATUS_STALE_MS = 10 * 60_000;
+const proCache = new Map<string, { at: number; status: ProStatus }>();
+
+/**
+ * proStatus for the trade routes, with a wallet's Pro Mode kept in memory for PRO_STATUS_TTL_MS:
+ * every trade call checks it, and a database blip mustn't stop someone mid-sale. When the read
+ * fails, the last Pro answer stands for up to PRO_STATUS_STALE_MS. Only Pro answers are kept (a
+ * new holder or grant counts at once), the switches and admins in env never go through it, and a
+ * grant written or removed in Admin drops the wallet's entry (forgetProStatus).
+ */
+export async function cachedProStatus(env: Env, walletAddress: string): Promise<ProStatus> {
+  // No database behind these: as proStatus answers them.
+  if (!env.PRO_TRADING_ENABLED || !env.PRO_TRADING_PUBLIC || adminWalletSet(env).has(walletAddress))
+    return proStatus(env, walletAddress);
+  const hit = proCache.get(walletAddress);
+  const now = Date.now();
+  if (hit && now - hit.at < PRO_STATUS_TTL_MS) return hit.status;
+  let status: ProStatus;
+  try {
+    status = await proStatus(env, walletAddress);
+  } catch (err) {
+    if (hit && now - hit.at < PRO_STATUS_STALE_MS) return hit.status;
+    throw err;
+  }
+  if (status.pro) {
+    if (proCache.size > 10_000) proCache.clear();
+    proCache.set(walletAddress, { at: now, status });
+  } else proCache.delete(walletAddress);
+  return status;
+}
+
+/** Drops a wallet's cached Pro Mode (its grant just changed). */
+export function forgetProStatus(walletAddress: string): void {
+  proCache.delete(walletAddress);
+}
+
 /** Whether the wallet has full Pro Mode now. */
 export async function isProWallet(env: Env, walletAddress: string): Promise<boolean> {
   return (await proStatus(env, walletAddress)).pro;

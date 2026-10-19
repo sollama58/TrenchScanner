@@ -13,8 +13,13 @@ import { SUBSCRIPTION_MINT, SUBSCRIPTION_MINT_DECIMALS } from "./constants.js";
  * day's price gives.
  *
  * Guards: at least ASDF_PRICE_MIN_SAMPLES in the 5-minute window, the newest sample under
- * ASDF_PRICE_MAX_AGE_MS old, and each source's newest sample within ASDF_PRICE_MAX_SPREAD of the
- * other's. A failed guard is a reason, never a guess: the build refuses fee-paying trades.
+ * ASDF_PRICE_MAX_AGE_MS old, both sources answering at that newest sample (within
+ * ASDF_PRICE_SOURCE_MAX_AGE_MS of it), and each source's newest sample within ASDF_PRICE_MAX_SPREAD
+ * of the other's. A failed guard is a reason, never a guess: the build refuses fee-paying trades.
+ *
+ * When the sampler pauses (every worker deploy does, for a minute or more), the price as of its
+ * newest sample stands for ASDF_PRICE_MAX_AGE_MS: it is a 24-hour / 5-minute smoothing, so a few
+ * minutes change nothing material, and fee-paying trades shouldn't stop at each worker restart.
  */
 
 export const ASDF_PRICE_SAMPLE_MS = 15_000;
@@ -23,7 +28,9 @@ export const ASDF_PRICE_LONG_MS = 24 * 60 * 60_000;
 /** Samples older than this are pruned: the long window plus an hour. */
 export const ASDF_PRICE_KEEP_MS = 25 * 60 * 60_000;
 export const ASDF_PRICE_MIN_SAMPLES = 10;
-export const ASDF_PRICE_MAX_AGE_MS = 60_000;
+export const ASDF_PRICE_MAX_AGE_MS = 10 * 60_000;
+/** Each source's newest sample must be this close to the newest of all: both were answering. */
+export const ASDF_PRICE_SOURCE_MAX_AGE_MS = 60_000;
 export const ASDF_PRICE_MAX_SPREAD = 0.05;
 
 export type AsdfPriceSource = "quote" | "price";
@@ -117,7 +124,10 @@ function median(values: number[]): number | null {
 export function asdfPriceFrom(rows: readonly AsdfPriceSampleRow[], now: Date): AsdfPriceState {
   const t = now.getTime();
   const long = rows.filter((r) => r.at.getTime() > t - ASDF_PRICE_LONG_MS && r.at.getTime() <= t);
-  const short = long.filter((r) => r.at.getTime() > t - ASDF_PRICE_SHORT_MS);
+  // The 5-minute window ends at the newest sample, not now: a paused sampler keeps the price it
+  // last had (for ASDF_PRICE_MAX_AGE_MS) instead of its window running empty.
+  const anchor = long.reduce((best, r) => Math.max(best, r.at.getTime()), -Infinity);
+  const short = long.filter((r) => r.at.getTime() > anchor - ASDF_PRICE_SHORT_MS);
   const newest = (source: AsdfPriceSource) =>
     short
       .filter((r) => r.source === source)
@@ -127,7 +137,8 @@ export function asdfPriceFrom(rows: readonly AsdfPriceSampleRow[], now: Date): A
   const longMedian = median(long.map((r) => r.asdfPerSol));
   const newestAt = short.reduce<Date | null>((best, r) => (!best || r.at > best ? r.at : best), null);
   let refusal: AsdfPriceRefusal | null = null;
-  const fresh = (r: AsdfPriceSampleRow | null) => !!r && t - r.at.getTime() <= ASDF_PRICE_MAX_AGE_MS;
+  const fresh = (r: AsdfPriceSampleRow | null) =>
+    !!r && anchor - r.at.getTime() <= ASDF_PRICE_SOURCE_MAX_AGE_MS;
   if (short.length < ASDF_PRICE_MIN_SAMPLES) refusal = "few_samples";
   else if (!newestAt || t - newestAt.getTime() > ASDF_PRICE_MAX_AGE_MS) refusal = "stale";
   else if (!fresh(spot.quote) || !fresh(spot.price)) refusal = "source_down";
@@ -182,7 +193,7 @@ export function describeAsdfPriceRefusal(refusal: AsdfPriceRefusal): string {
     case "few_samples":
       return "The ASDF price has too few recent readings to charge the Sacrifice. Try again in a few minutes.";
     case "stale":
-      return "The ASDF price hasn't updated in the last minute, so the Sacrifice can't be worked out. Try again shortly.";
+      return "The ASDF price hasn't updated in the last 10 minutes, so the Sacrifice can't be worked out. Try again shortly.";
     case "source_down":
       return "One of the two ASDF price sources isn't answering, so the Sacrifice can't be checked. Try again shortly.";
     case "sources_apart":

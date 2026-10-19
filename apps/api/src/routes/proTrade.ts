@@ -35,7 +35,7 @@ import {
   settlePlatformTrade,
   tradeOutcome,
 } from "@trenchscanner/core";
-import { proStatus, type ProStatus } from "../proMode.js";
+import { cachedProStatus, type ProStatus } from "../proMode.js";
 import { requireTwoFactor } from "../twoFactor.js";
 import { accessSwapOpen as accessSwapOpenFor } from "./auth.js";
 import { sharedSolPrice } from "../solPrice.js";
@@ -197,9 +197,14 @@ const READ_RATE_LIMIT = { max: 120, timeWindow: "1 minute" };
 /** How often an unconfirmed trade is resent to Sender, and for how long at most. */
 const RESEND_EVERY_MS = 2_000;
 const RESEND_FOR_MS = 75_000;
-/** In-flight trades kept for resending at once, across everyone, and for one wallet. */
-const MAX_IN_FLIGHT = 200;
+/**
+ * In-flight trades kept for resending at once, across everyone, and for one wallet. The resend
+ * loop reads their statuses in one batched call and sends RESEND_BATCH at a time, so the global
+ * cap is only a memory backstop.
+ */
+const MAX_IN_FLIGHT = 5_000;
 const MAX_IN_FLIGHT_PER_WALLET = 5;
+const RESEND_BATCH = 50;
 /**
  * A build is good for one send within this long (a blockhash lives about a minute): /send relays
  * only a transaction on a blockhash this route handed that wallet, so our Helius key carries
@@ -258,6 +263,13 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     apiKey: env.PRO_TRADING_JUPITER_API_KEY || undefined,
     backupApiKey: env.JUPITER_API_KEY || undefined,
   });
+  // The panel's previews (swap costs, sale quotes) on their own client, keyless first: a busy
+  // minute of previews mustn't spend the keys' budget a sale needs. The keys stay its fallback.
+  const previewJupiter = new JupiterSwapClient({
+    apiKey: env.PRO_TRADING_JUPITER_API_KEY || undefined,
+    backupApiKey: env.JUPITER_API_KEY || undefined,
+    keylessFirst: true,
+  });
   const solPrice = sharedSolPrice;
   const tradeCache = new Map<string, WalletTrade | null>();
   const positions = new Map<string, { at: number; body: unknown }>();
@@ -268,9 +280,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const key = `${wallet}:${mint}:${ref}`;
     const hit = swapCosts.get(key);
     if (hit && Date.now() - hit.at < SWAP_COSTS_TTL_MS) return hit.costs;
-    const costs = await estimateSwapCosts({ rpc, jupiter }, { wallet, mint, referenceLamports: ref }).catch(
-      () => null,
-    );
+    const costs = await estimateSwapCosts(
+      { rpc, jupiter: previewJupiter },
+      { wallet, mint, referenceLamports: ref },
+    ).catch(() => null);
     if (swapCosts.size >= MAX_CACHED_SWAP_COSTS) swapCosts.delete(swapCosts.keys().next().value!);
     swapCosts.set(key, { at: Date.now(), costs });
     return costs;
@@ -281,7 +294,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const key = `${mint}:${units}`;
     const hit = saleQuotes.get(key);
     if (hit && Date.now() - hit.at < SWAP_COSTS_TTL_MS) return hit.lamports;
-    const lamports = await estimateSaleProceeds({ jupiter }, { mint, units }).catch(() => null);
+    const lamports = await estimateSaleProceeds({ jupiter: previewJupiter }, { mint, units }).catch(
+      () => null,
+    );
     if (saleQuotes.size >= MAX_CACHED_SWAP_COSTS) saleQuotes.delete(saleQuotes.keys().next().value!);
     saleQuotes.set(key, { at: Date.now(), lamports });
     return lamports;
@@ -386,7 +401,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     opts: { access?: boolean } = {},
   ): Promise<{ wallet: string; pro: boolean; source: ProStatus["source"] } | null> {
     const wallet = request.user!.walletAddress;
-    const status = await proStatus(env, wallet);
+    const status = await cachedProStatus(env, wallet);
     if (!status.pro && !(opts.access && accessSwapOpen())) {
       reply.code(404).send({ error: "not found", notSent: true });
       return null;
@@ -816,16 +831,20 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         "sender send unclear; resending",
       );
     }
-    if (inFlight.size < MAX_IN_FLIGHT) {
-      inFlight.set(signature, {
-        base64: transaction,
-        url,
-        lastValidBlockHeight,
-        until: Date.now() + RESEND_FOR_MS,
-        wallet,
-      });
-      scheduleResend();
+    inFlight.set(signature, {
+      base64: transaction,
+      url,
+      lastValidBlockHeight,
+      until: Date.now() + RESEND_FOR_MS,
+      wallet,
+    });
+    // A backstop on memory only (each wallet has at most MAX_IN_FLIGHT_PER_WALLET): the oldest
+    // stops being resent, and its status can still say "expired".
+    if (inFlight.size > MAX_IN_FLIGHT) {
+      const [oldest, f] = inFlight.entries().next().value!;
+      retire(oldest, f);
     }
+    scheduleResend();
     forgetPositions(wallet);
     return { signature };
   });
@@ -863,7 +882,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       const { wallet } = who;
       const { signature } = request.params;
       if (!SIGNATURE_RE.test(signature)) return reply.code(400).send({ error: "not a signature" });
-      const status = await rpc.getSignatureStatus(signature);
+      // The node's recent status cache: the panel asks about a trade seconds old, and a full
+      // history search is slower. "Not seen" there proves nothing for an older one, so expiry is
+      // only ever concluded from a history search below.
+      let status = await rpc.getSignatureStatus(signature, { searchHistory: false });
       if (!status) return { state: "unknown" };
       if (!status.seen) {
         // Past its blockhash's life and never seen: it won't land. The height is read first
@@ -872,15 +894,17 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           inFlight.get(signature) ?? retired.get(signature) ?? (await rowFlight(signature, wallet));
         const height = flight ? await rpc.getBlockHeight() : null;
         if (flight && height !== null && height > flight.lastValidBlockHeight + EXPIRY_MARGIN_BLOCKS) {
-          const again = await rpc.getSignatureStatus(signature);
+          const again = await rpc.getSignatureStatus(signature, { searchHistory: true });
           if (again && !again.seen) {
             inFlight.delete(signature);
             retired.delete(signature);
             void settle(signature, "expired");
             return { state: "expired" };
           }
+          // Landed longer ago than the recent cache reaches.
+          if (again) status = again;
         }
-        return { state: "pending" };
+        if (!status.seen) return { state: "pending" };
       }
       if (status.error) {
         inFlight.delete(signature);
@@ -1044,21 +1068,26 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   async function resendAll() {
     const now = Date.now();
     const height = await rpc.getBlockHeight().catch(() => null);
-    await Promise.all(
-      [...inFlight].map(async ([signature, f]) => {
-        if (now > f.until || (height !== null && height > f.lastValidBlockHeight)) {
-          retire(signature, f);
-          return;
-        }
-        const status = await rpc.getSignatureStatus(signature).catch(() => null);
-        if (status?.seen) {
-          inFlight.delete(signature);
-          forgetPositions(f.wallet);
-          return;
-        }
-        await sendViaSender(f.url, f.base64);
-      }),
-    );
+    const live: [string, InFlight][] = [];
+    for (const [signature, f] of inFlight) {
+      if (now > f.until || (height !== null && height > f.lastValidBlockHeight)) retire(signature, f);
+      else live.push([signature, f]);
+    }
+    // One status read for them all (256 a call; each is seconds old, so the recent cache is enough).
+    const statuses = await rpc
+      .getSignatureStatuses(
+        live.map(([s]) => s),
+        { searchHistory: false },
+      )
+      .catch(() => null);
+    const unseen = live.filter(([signature, f], i) => {
+      if (!statuses?.[i]?.seen) return true;
+      inFlight.delete(signature);
+      forgetPositions(f.wallet);
+      return false;
+    });
+    for (let i = 0; i < unseen.length; i += RESEND_BATCH)
+      await Promise.all(unseen.slice(i, i + RESEND_BATCH).map(([, f]) => sendViaSender(f.url, f.base64)));
   }
   /**
    * At boot: trades still "sent" and inside their blockhash's life go back on the resend loop

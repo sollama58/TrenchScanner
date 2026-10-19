@@ -25,7 +25,7 @@ import {
   openWalletSecret,
   sealWalletSecret,
 } from "./keyVault.js";
-import { TradingRpc, tipsJito } from "./rpc.js";
+import { isNotNowRpcError, TradingRpc, tipsJito } from "./rpc.js";
 import { decideExit, ladderSoldFraction, sellAmount } from "./exitEngine.js";
 import {
   associatedTokenAddress,
@@ -35,10 +35,11 @@ import {
   type GuardRpc,
   type TradeExpectation,
 } from "./txGuard.js";
-import { HELIUS_SENDER_TIP_ACCOUNTS } from "./sender.js";
+import { HELIUS_SENDER_TIP_ACCOUNTS, senderUrl, sendViaSender } from "./sender.js";
 import {
   dexScreenerPricesUsd,
   JupiterSwapClient,
+  KeyRefusedError,
   NoRouteError,
   RateLimitedError,
   type SwapQuote,
@@ -907,6 +908,63 @@ describe("Jupiter swap client", () => {
     expect(urls).toEqual(["api.jup.ag", "lite-api.jup.ag"]);
   });
 
+  it("moves a call to the next host on a refused key, a server error or a timeout too", async () => {
+    const ask = { inputMint: OWNER, outputMint: quote.outputMint, amount: 1000n, slippageBps: 100 };
+    const hosts: string[] = [];
+    const failing = (fail: () => Response | Promise<Response>) =>
+      (async (_url: string, init?: RequestInit) => {
+        hosts.push(new Headers(init?.headers).get("x-api-key") ?? "keyless");
+        return new Headers(init?.headers).get("x-api-key") === "mine" ? fail() : json(quote)();
+      }) as typeof fetch;
+    for (const fail of [
+      json({ error: "Unauthorized" }, 401),
+      json({ error: "Forbidden" }, 403),
+      json({ error: "busy" }, 502),
+      () => Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError")),
+    ]) {
+      hosts.length = 0;
+      const client = new JupiterSwapClient({
+        apiKey: "mine",
+        backupApiKey: "scan",
+        fetchImpl: failing(fail),
+      });
+      await expect(client.quote(ask)).resolves.toMatchObject({ outAmount: "10" });
+      // Straight on to the backup key, no retry on the failed one; it goes last next time.
+      expect(hosts).toEqual(["mine", "scan"]);
+      await client.quote(ask);
+      expect(hosts.slice(2)).toEqual(["scan"]);
+    }
+    // Every host failing: the most retryable failure, each host asked once and the last twice.
+    hosts.length = 0;
+    const down = (async (_url: string, init?: RequestInit) => {
+      const key = new Headers(init?.headers).get("x-api-key");
+      hosts.push(key ?? "keyless");
+      return key ? json({ error: "Unauthorized" }, 401)() : json({ error: "busy" }, 503)();
+    }) as typeof fetch;
+    await expect(
+      new JupiterSwapClient({ apiKey: "mine", fetchImpl: down }).quote(ask),
+    ).rejects.toBeInstanceOf(TransientError);
+    expect(hosts).toEqual(["mine", "keyless", "keyless"]);
+    // Only refused keys: still an error, not a hang.
+    hosts.length = 0;
+    const refused = (async () => json({ error: "Unauthorized" }, 401)()) as typeof fetch;
+    await expect(
+      new JupiterSwapClient({ apiKey: "mine", fetchImpl: refused }).quote(ask),
+    ).rejects.toBeInstanceOf(KeyRefusedError);
+  });
+
+  it("asks the keyless host first when told to, and keeps the keys as its fallback", async () => {
+    const hosts: string[] = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      const key = new Headers(init?.headers).get("x-api-key");
+      hosts.push(key ?? new URL(url).host);
+      return key ? json(quote)() : json({ error: "slow down" }, 429)();
+    }) as typeof fetch;
+    const client = new JupiterSwapClient({ apiKey: "mine", keylessFirst: true, fetchImpl });
+    await client.quote({ inputMint: OWNER, outputMint: quote.outputMint, amount: 1000n, slippageBps: 100 });
+    expect(hosts).toEqual(["lite-api.jup.ag", "mine"]);
+  });
+
   it("does not repeat a rate limit on one host, or a missing route", async () => {
     let s = scripted([json({ error: "slow down" }, 429)]);
     await expect(
@@ -1040,6 +1098,137 @@ describe("TradingRpc backup endpoint", () => {
     } finally {
       await down.close();
       await backup.close();
+    }
+  });
+
+  it("asks the backup when the first RPC answers 200 with a rate limit or out of credits", async () => {
+    const backup = await rpcServer(() => ({
+      status: 200,
+      body: { jsonrpc: "2.0", id: 1, result: { value: 7 } },
+    }));
+    const errors = [
+      { code: -32429, message: "rate limited" },
+      { code: -32005, message: "Node is behind" },
+      { code: -32603, message: "Internal error: rate exceeded" },
+      { code: -32000, message: "max usage reached" },
+      { code: -32000, message: "You've run out of credits" },
+      { code: -32000, message: "Too many requests for a specific RPC call" },
+    ];
+    try {
+      for (const error of errors) {
+        const first = await rpcServer(() => ({ status: 200, body: { jsonrpc: "2.0", id: 1, error } }));
+        try {
+          const rpc = new TradingRpc({ rpcUrl: first.url, backupUrl: backup.url });
+          expect(await rpc.getBalance(OWNER), error.message).toBe(7n);
+          // Asked once: the backup is the retry.
+          expect(first.seen).toEqual(["getBalance"]);
+        } finally {
+          await first.close();
+        }
+      }
+      // A real error is an answer: the backup isn't asked, and the read is null.
+      backup.seen.length = 0;
+      const refusing = await rpcServer(() => ({
+        status: 200,
+        body: { jsonrpc: "2.0", id: 1, error: { code: -32602, message: "Invalid param: WrongSize" } },
+      }));
+      try {
+        expect(
+          await new TradingRpc({ rpcUrl: refusing.url, backupUrl: backup.url }).getBalance(OWNER),
+        ).toBeNull();
+        expect(backup.seen).toEqual([]);
+      } finally {
+        await refusing.close();
+      }
+    } finally {
+      await backup.close();
+    }
+  });
+
+  it("tells the not-now errors from real ones", () => {
+    expect(isNotNowRpcError({ code: -32429, message: "" })).toBe(true);
+    expect(isNotNowRpcError({ code: -32603, message: "Internal error" })).toBe(false);
+    expect(isNotNowRpcError({ code: -32603, message: "rate limit exceeded" })).toBe(true);
+    expect(isNotNowRpcError({ code: -32002, message: "Transaction simulation failed" })).toBe(false);
+  });
+
+  it("reads many signatures' statuses in one call, recent ones only when asked", async () => {
+    const params: unknown[] = [];
+    const { createServer } = await import("node:http");
+    const server = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c: Buffer) => (raw += c.toString()));
+      req.on("end", () => {
+        const body = JSON.parse(raw) as { params: unknown[] };
+        params.push(body.params[1]);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: { value: [null, { err: null, confirmationStatus: "confirmed" }, { err: { x: 1 } }] },
+          }),
+        );
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    try {
+      const rpc = new TradingRpc({
+        rpcUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+      });
+      expect(await rpc.getSignatureStatuses(["a", "b", "c"], { searchHistory: false })).toEqual([
+        { seen: false },
+        { seen: true, confirmed: true, error: null },
+        { seen: true, confirmed: false, error: '{"x":1}' },
+      ]);
+      // A count that doesn't match the ask is no answer.
+      expect(await rpc.getSignatureStatus("a")).toBeNull();
+      expect(params).toEqual([{ searchTransactionHistory: false }, { searchTransactionHistory: true }]);
+    } finally {
+      await new Promise((r) => server.close(r));
+    }
+  });
+});
+
+describe("Helius Sender", () => {
+  it("sends once more without the key when Sender turns the key away, and only then", async () => {
+    const { createServer } = await import("node:http");
+    const seen: string[] = [];
+    let keyedStatus = 401;
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        const keyed = new URL(req.url!, "http://x").searchParams.has("api-key");
+        seen.push(keyed ? "keyed" : "keyless");
+        const status = keyed ? keyedStatus : 200;
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify(status === 200 ? { jsonrpc: "2.0", id: 1, result: "sig" } : {}));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/fast`;
+    try {
+      const keyedUrl = senderUrl(base, { speed: "eco", mevProtect: true, apiKey: "k" });
+      for (const status of [401, 403, 429]) {
+        keyedStatus = status;
+        seen.length = 0;
+        expect(await sendViaSender(keyedUrl, "AAAA")).toEqual({ ok: true });
+        expect(seen).toEqual(["keyed", "keyless"]);
+      }
+      // Another refusal is the transaction's, not the key's: no second send.
+      keyedStatus = 400;
+      seen.length = 0;
+      expect(await sendViaSender(keyedUrl, "AAAA")).toMatchObject({ ok: false, refused: true });
+      expect(seen).toEqual(["keyed"]);
+      // A keyless URL has nothing to drop.
+      keyedStatus = 401;
+      seen.length = 0;
+      expect(await sendViaSender(senderUrl(base, { speed: "eco", mevProtect: true }), "AAAA")).toEqual({
+        ok: true,
+      });
+      expect(seen).toEqual(["keyless"]);
+    } finally {
+      await new Promise((r) => server.close(r));
     }
   });
 });
