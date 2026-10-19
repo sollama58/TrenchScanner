@@ -11,7 +11,14 @@ import {
 } from "../scopeSettings";
 import { rowChips } from "../scopeChips";
 import { ScopeSettingsModal, type ScopeSettingsSection } from "./ScopeSettingsModal";
-import { usePolling, usePollingAll, useLiveMarketCaps, useNow, useNudgeStream } from "../hooks";
+import {
+  usePolling,
+  usePollingAll,
+  useLiveMarketCaps,
+  useMediaQuery,
+  useNow,
+  useNudgeStream,
+} from "../hooks";
 import { joinPages } from "../feedFill";
 import { change, pct, tokenLabel, usd } from "../format";
 import { cardOutcome, outcomeBadge } from "../outcome";
@@ -29,9 +36,11 @@ import {
   scopeTickIds,
   shortAge,
   splitScope,
+  swipeStep,
   type ScopeColumn,
   type ScopeColumns,
   type ScopeFrame,
+  type ScopeHold,
 } from "../scope";
 import {
   feeBadge,
@@ -49,8 +58,14 @@ import { BrainIcon, EyeOffIcon, FunnelIcon, SlidersIcon } from "./Icons";
 import { dueToUnhide, hideToken, unhideTokens, useHiddenTokenIds, useHiddenTokens } from "../hiddenTokens";
 import { XLinkPreview } from "./XLinkPreview";
 
-/** After a finger lifts, the board stays still this long before new rows drop in. */
-const TOUCH_HOLD_MS = 4_000;
+/** After a finger lifts, the board stays still this long, so a tap lands on the row it aimed at. */
+const TOUCH_HOLD_MS = 1_000;
+
+/** A list scrolled down this far holds the board still. */
+const SCROLL_HOLD_PX = 48;
+
+/** Scope's phone layout: one column at a time under tabs (styles.css's 899px breakpoint). */
+const PHONE_QUERY = "(max-width: 899px)";
 
 /** Clicks on these inside a row do their own thing rather than open the token modal. */
 const OWN_CLICK = "a, button, input, select, textarea, label, summary, [role='button']";
@@ -70,8 +85,8 @@ const STREAM_PATH = "/launches";
  * rows - your filters' alerts, the models' calls, and every graduated token that passes the
  * safety screen - with its own settings (scopeSettings.ts: each column's filters and how the rows
  * look, apart from the Cards view's Customize) and the Live feed's token window. The board
- * holds still while a pointer or finger is on it; new alerts wait behind a "N new" pill.
- * On phones the columns sit side by side in a strip you swipe, with tabs above.
+ * holds still while a mouse rests on it or a list is scrolled down; new alerts wait behind a "N new"
+ * pill. On phones one column shows at a time under sticky tabs: tap a tab or swipe sideways.
  */
 export function ScopeBoard({
   feedPath,
@@ -230,53 +245,124 @@ export function ScopeBoard({
 
   const freshRef = useRef(fresh);
   freshRef.current = fresh;
+  const phone = useMediaQuery(PHONE_QUERY);
+  // Why the board holds still. A finger on it only guards a tap for a moment and says nothing:
+  // on phones every scroll is a touch, so a touch saying "Paused" read as paused all the time
+  // (user report 2026-10-19). A mouse resting on it, or a list scrolled down, does say so.
+  const [holdsBy, setHoldsBy] = useState<ReadonlySet<ScopeHold>>(() => new Set());
+  const setHold = useCallback((why: ScopeHold, on: boolean) => {
+    setHoldsBy((s) => {
+      if (s.has(why) === on) return s;
+      const next = new Set(s);
+      if (on) next.add(why);
+      else next.delete(why);
+      return next;
+    });
+  }, []);
   const touchTimer = useRef<number | undefined>(undefined);
   const holds = display.pauseOnHover;
   useEffect(() => {
-    if (!holds) setFrame(null);
-  }, [holds]);
+    if (!holds || holdsBy.size === 0) setFrame(null);
+    else setFrame((f) => f ?? (freshRef.current ? frameOf(freshRef.current) : null));
+  }, [holds, holdsBy]);
   // Stream on or off is a different board: start it live.
   useEffect(() => setFrame(null), [streamOn]);
-  const pause = useCallback(() => {
-    if (!holds) return;
+  const touchStart = () => {
     window.clearTimeout(touchTimer.current);
-    setFrame((f) => f ?? (freshRef.current ? frameOf(freshRef.current) : null));
-  }, [holds]);
-  const resume = useCallback(() => {
+    setHold("touch", true);
+  };
+  const touchEnd = () => {
     window.clearTimeout(touchTimer.current);
-    setFrame(null);
-  }, []);
-  const resumeSoon = useCallback(() => {
-    window.clearTimeout(touchTimer.current);
-    touchTimer.current = window.setTimeout(() => setFrame(null), TOUCH_HOLD_MS);
-  }, []);
+    touchTimer.current = window.setTimeout(() => setHold("touch", false), TOUCH_HOLD_MS);
+  };
   useEffect(() => () => window.clearTimeout(touchTimer.current), []);
+  const paused = frame !== null && (holdsBy.has("pointer") || holdsBy.has("scroll"));
   // New filters show at once, even on a held board: it holds still from the filtered rows.
   const columnFilters = settings.columns;
   useEffect(() => {
     setFrame((f) => (f && freshRef.current ? frameOf(freshRef.current) : f));
   }, [columnFilters]);
+
+  // Wide screens: a column scrolled down holds the board.
+  const scrolledCols = useRef(new Set<ScopeColumn>());
+  const onColScroll = (id: ScopeColumn, top: number) => {
+    if (phone) return;
+    if (top > SCROLL_HOLD_PX) scrolledCols.current.add(id);
+    else scrolledCols.current.delete(id);
+    setHold("scroll", scrolledCols.current.size > 0);
+  };
+  // Phones: the page scrolls the rows under a bar that sticks below the top bar. Scrolled into the
+  // list, the board holds still; back at its top, it is live again.
+  const root = useRef<HTMLDivElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
+  const strip = useRef<HTMLDivElement>(null);
+  const scrolledInto = useCallback(() => {
+    const b = bar.current?.getBoundingClientRect();
+    const s = strip.current?.getBoundingClientRect();
+    return !!b && !!s && s.top < b.bottom - SCROLL_HOLD_PX;
+  }, []);
+  useEffect(() => {
+    if (!phone) return;
+    scrolledCols.current.clear();
+    let raf = 0;
+    const check = () => {
+      raf = 0;
+      setHold("scroll", scrolledInto());
+    };
+    const onScroll = () => {
+      if (!raf) raf = window.requestAnimationFrame(check);
+    };
+    check();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    // The bar sticks just under the app's top bar, whatever its height.
+    const top = document.querySelector<HTMLElement>(".topbar");
+    const el = root.current;
+    const fit = () => el?.style.setProperty("--scope-sticky-top", `${top ? top.offsetHeight : 0}px`);
+    fit();
+    const ro = top && typeof ResizeObserver === "function" ? new ResizeObserver(fit) : null;
+    if (top) ro?.observe(top);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.cancelAnimationFrame(raf);
+      ro?.disconnect();
+      setHold("scroll", false);
+    };
+  }, [phone, scrolledInto, setHold]);
+  /** Phones: back to the board's top, where it is live. */
+  const toBoardTop = () => {
+    const b = bar.current?.getBoundingClientRect();
+    const s = strip.current?.getBoundingClientRect();
+    if (!b || !s || s.top >= b.bottom) return;
+    window.scrollTo({ top: window.scrollY + s.top - b.bottom - 8, behavior: "smooth" });
+  };
   // "N new": show them now, and keep holding still if the pointer is still on the board.
   const showNew = () => {
     if (!fresh) return;
     setFrame((f) => (f ? frameOf(fresh) : null));
+    if (phone) toBoardTop();
   };
 
-  // Phones: the strip of columns scrolls sideways a column at a time; the tabs follow it.
-  const strip = useRef<HTMLDivElement>(null);
+  // Phones: one column at a time, picked by the tabs or a sideways swipe.
   const [active, setActive] = useState<ScopeColumn>("filters");
-  const onStripScroll = () => {
-    const el = strip.current;
-    if (!el || el.clientWidth === 0) return;
-    const i = Math.round(el.scrollLeft / el.clientWidth);
-    const col = shownCols[Math.min(shownCols.length - 1, Math.max(0, i))];
-    if (col && col.id !== active) setActive(col.id);
-  };
+  const swipeFrom = useRef<{ x: number; y: number } | null>(null);
   const goToColumn = (id: ScopeColumn) => {
-    const el = strip.current;
-    const i = shownCols.findIndex((c) => c.id === id);
+    if (id === activeCol) return;
     setActive(id);
-    el?.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+    if (phone && scrolledInto()) toBoardTop();
+  };
+  const onSwipeStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    swipeFrom.current = e.touches.length === 1 && t ? { x: t.clientX, y: t.clientY } : null;
+  };
+  const onSwipeEnd = (e: React.TouchEvent) => {
+    const from = swipeFrom.current;
+    const t = e.changedTouches[0];
+    swipeFrom.current = null;
+    if (!phone || !from || !t) return;
+    const step = swipeStep(t.clientX - from.x, t.clientY - from.y);
+    const i = shownCols.findIndex((c) => c.id === activeCol) + step;
+    const next = shownCols[i];
+    if (step !== 0 && next) goToColumn(next.id);
   };
 
   // A hidden column can't stay the phone's active tab.
@@ -313,16 +399,17 @@ export function ScopeBoard({
 
   return (
     <div
-      className={`scope${frame ? " held" : ""}${first.stale ? " stale" : ""} ${scopeLookClass(display)}`}
+      ref={root}
+      className={`scope${paused ? " held" : ""}${first.stale ? " stale" : ""} ${scopeLookClass(display)}`}
       style={{ "--scope-cols": shownCols.length } as React.CSSProperties}
-      onPointerEnter={(e) => e.pointerType === "mouse" && pause()}
-      onPointerLeave={(e) => e.pointerType === "mouse" && resume()}
-      onTouchStart={pause}
-      onTouchEnd={resumeSoon}
-      onTouchCancel={resumeSoon}
+      onPointerEnter={(e) => e.pointerType === "mouse" && setHold("pointer", true)}
+      onPointerLeave={(e) => e.pointerType === "mouse" && setHold("pointer", false)}
+      onTouchStart={touchStart}
+      onTouchEnd={touchEnd}
+      onTouchCancel={touchEnd}
     >
       {modal}
-      <div className="scope-bar">
+      <div className="scope-bar" ref={bar}>
         <div className="segmented small scope-tabs" role="tablist" aria-label="Scope columns">
           {shownCols.map((c) => (
             <button
@@ -344,28 +431,46 @@ export function ScopeBoard({
           className="scope-hold muted small"
           aria-live="polite"
           title={
-            frame
-              ? "Held still while you read: new rows wait behind the New pill"
+            paused
+              ? phone
+                ? "Held still while you're scrolled down: new rows wait behind the New pill"
+                : "Held still while you read: new rows wait behind the New pill"
               : "New rows land as they come"
           }
         >
-          {frame ? "Paused" : "Live"}
+          {paused ? "Paused" : "Live"}
         </span>
-        {pending > 0 && (
-          <button type="button" className="scope-new" onClick={showNew}>
+        {paused && pending > 0 && (
+          <button
+            type="button"
+            className="scope-new"
+            onClick={showNew}
+            title={phone ? "Show the new rows and go back to the top" : "Show the new rows"}
+          >
+            {phone && <span aria-hidden="true">↑ </span>}
             {pending} new
           </button>
         )}
       </div>
-      <div className="scope-strip" ref={strip} onScroll={onStripScroll}>
+      <div
+        className="scope-strip"
+        ref={strip}
+        onTouchStart={onSwipeStart}
+        onTouchEnd={onSwipeEnd}
+        onTouchCancel={() => (swipeFrom.current = null)}
+      >
         {shownCols.map((c) => (
-          <section key={c.id} className={`scope-col scope-col-${c.id}`} aria-label={c.label}>
+          <section
+            key={c.id}
+            className={`scope-col scope-col-${c.id}${activeCol === c.id ? " active" : ""}`}
+            aria-label={c.label}
+          >
             <header className="scope-col-head">
               <h3 title={c.hint}>{c.label}</h3>
               <span className="num muted">{cols[c.id].length}</span>
               {filterButton(c.id, c.label)}
             </header>
-            <div className="scope-rows">
+            <div className="scope-rows" onScroll={(e) => onColScroll(c.id, e.currentTarget.scrollTop)}>
               {cols[c.id].length === 0 && loading(c.id) ? (
                 <ScopeRowSkeletons />
               ) : cols[c.id].length === 0 ? (

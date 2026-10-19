@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Card } from "./api";
-import { frameOf, holdFrame, scopeTickIds, shortAge, splitScope } from "./scope";
+import { frameOf, holdFrame, scopeTickIds, shortAge, splitScope, swipeStep } from "./scope";
 
 /** Just the fields Scope's columns read. */
 function card(id: string, kind: Card["kind"], curated = false, tokenId = `t-${id}`): Card {
@@ -147,5 +147,17 @@ describe("shortAge", () => {
     expect(shortAge(2 * 3_600_000)).toBe("2h");
     expect(shortAge(3 * 86_400_000)).toBe("3d");
     expect(shortAge(-5)).toBe("0s");
+  });
+});
+
+describe("swipeStep", () => {
+  it("moves a column on a sideways swipe", () => {
+    expect(swipeStep(-80, 10)).toBe(1);
+    expect(swipeStep(90, -20)).toBe(-1);
+  });
+  it("ignores taps and swipes that are mostly up or down", () => {
+    expect(swipeStep(-20, 0)).toBe(0);
+    expect(swipeStep(-80, 60)).toBe(0);
+    expect(swipeStep(0, 300)).toBe(0);
   });
 });
