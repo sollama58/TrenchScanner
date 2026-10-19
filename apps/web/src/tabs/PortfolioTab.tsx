@@ -1,53 +1,15 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { Card } from "../api";
+import { useState } from "react";
 import { Skeleton } from "../components/Skeleton";
-import {
-  ChartIcon,
-  CloseIcon,
-  GiftIcon,
-  InfoIcon,
-  RobotIcon,
-  TransferIcon,
-  WalletIcon,
-} from "../components/Icons";
-import { TokenImage } from "../components/TokenImage";
+import { ChartIcon, GiftIcon, InfoIcon, RobotIcon, TransferIcon } from "../components/Icons";
 import { sol, StatsStrip, TradeCard, type TradeCoin, type TradeStats } from "../components/TradesDrawer";
 import { useNow, usePolling } from "../hooks";
 import { ago, pricedAgeText, shortAddress, usd } from "../format";
-import { openTokenModal } from "../tokenModal";
 
-/** The API reads the wallet's holdings from the chain at most every 5 minutes; the rest is our own rows. */
 const PORTFOLIO_POLL_MS = 60_000;
 const TRADES_POLL_MS = 30_000;
 const FEES_POLL_MS = 60_000;
 
-interface Holding {
-  mint: string;
-  symbol: string | null;
-  name: string | null;
-  imageUrl: string | null;
-  amount: number;
-  priceUsd: number | null;
-  valueUsd: number | null;
-  marketCapUsd: number | null;
-  pricedAt: string | null;
-  firstAlert: { at: string; modelName: string | null } | null;
-  card: Card | null;
-}
-
 interface Portfolio {
-  holdings: {
-    readAt: string;
-    sol: number | null;
-    solValueUsd: number | null;
-    coins: Holding[];
-    trackedCoins: number;
-    trackedValueUsd: number;
-    untracked: number;
-    /** Tracked coins held below minSol (or unpriced): counted, not shown. */
-    dust: number;
-    minSol: number;
-  } | null;
   botPositions: {
     id: string;
     mint: string;
@@ -128,14 +90,6 @@ interface FeesSaved {
   solUsd: number | null;
 }
 
-function amount(n: number): string {
-  if (n >= 999_995_000) return `${(n / 1e9).toFixed(2)}B`;
-  if (n >= 999_950) return `${(n / 1e6).toFixed(2)}M`;
-  if (n >= 999.95) return `${(n / 1e3).toFixed(1)}K`;
-  if (n === 0) return "0";
-  return n >= 1 ? n.toFixed(0) : n.toPrecision(2);
-}
-
 const tone = (n: number | null | undefined) =>
   n === null || n === undefined || n === 0 ? "" : n > 0 ? " up" : " down";
 
@@ -172,256 +126,11 @@ export function PortfolioTab() {
           are counted but not shown, unless a section says otherwise. Only you can see this page.
         </span>
       </p>
-      <HoldingsPanel holdings={data.holdings} now={now} />
       <TradesPanel now={now} />
       <FeesPanel />
       {data.botPositions.length > 0 && <BotPanel positions={data.botPositions} now={now} />}
       <TapePanel tape={data.tape} now={now} />
     </div>
-  );
-}
-
-function HoldingsPanel({ holdings, now }: { holdings: Portfolio["holdings"]; now: number }) {
-  return (
-    <section className="panel">
-      <header className="section-head">
-        <div>
-          <span className="eyebrow">
-            <WalletIcon size={13} /> Holdings
-          </span>
-          <h2>What your wallet holds</h2>
-          <p className="muted small">
-            Read from the chain every few minutes and priced from TrenchScanner&apos;s own scans. Tracked
-            coins only.
-          </p>
-        </div>
-        {holdings && (
-          <span className="faint small" title={new Date(holdings.readAt).toLocaleString()}>
-            Read {ago(holdings.readAt, now)}
-          </span>
-        )}
-      </header>
-      {!holdings ? (
-        <p className="faint small">Your wallet couldn&apos;t be read just now. It is tried again shortly.</p>
-      ) : (
-        <>
-          <dl className="facts portfolio-totals">
-            <div>
-              <dt>SOL</dt>
-              <dd className="num">
-                {holdings.sol === null ? "–" : sol(holdings.sol)}
-                {holdings.solValueUsd !== null && (
-                  <span className="faint small"> · {usd(holdings.solValueUsd)}</span>
-                )}
-              </dd>
-            </div>
-            <div>
-              <dt>Tracked coins</dt>
-              <dd className="num">
-                {holdings.trackedCoins}
-                <span className="faint small"> · {usd(holdings.trackedValueUsd)}</span>
-              </dd>
-            </div>
-            <div>
-              <dt>Not tracked</dt>
-              <dd
-                className="num"
-                title="Coins in your wallet TrenchScanner doesn't track: counted, not shown"
-              >
-                {holdings.untracked} coin{holdings.untracked === 1 ? "" : "s"}
-              </dd>
-            </div>
-          </dl>
-          {holdings.coins.length === 0 ? (
-            <p className="faint small portfolio-empty">
-              Your wallet holds no coins TrenchScanner tracks worth {holdings.minSol} SOL or more.
-            </p>
-          ) : (
-            <HoldingsGrid coins={holdings.coins} now={now} total={holdings.trackedCoins} />
-          )}
-          {holdings.dust > 0 && (
-            <p className="faint small">
-              {holdings.dust} more tracked coin{holdings.dust === 1 ? " is" : "s are"} worth under{" "}
-              {holdings.minSol} SOL, so {holdings.dust === 1 ? "it isn't" : "they aren't"} shown.
-            </p>
-          )}
-        </>
-      )}
-    </section>
-  );
-}
-
-/**
- * The holdings cards that fit one row (two on narrow screens, where a row is one or two cards),
- * with Show all opening every listed coin in a dialog.
- */
-function HoldingsGrid({ coins, now, total }: { coins: Holding[]; now: number; total: number }) {
-  const grid = useRef<HTMLUListElement>(null);
-  const [cols, setCols] = useState(0);
-  const [all, setAll] = useState(false);
-  useEffect(() => {
-    const el = grid.current;
-    if (!el) return;
-    // The grid's own auto-fill decides the columns; count the tracks it laid out.
-    const measure = () => setCols(getComputedStyle(el).gridTemplateColumns.split(" ").filter(Boolean).length);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  const fit = cols === 0 ? coins.length : cols * (cols >= 3 ? 1 : 2);
-  const shown = coins.slice(0, fit);
-  return (
-    <>
-      <ul className="trades-grid portfolio-grid" ref={grid}>
-        {shown.map((h) => (
-          <li key={h.mint}>
-            <HoldingCard holding={h} now={now} />
-          </li>
-        ))}
-      </ul>
-      {coins.length > shown.length && (
-        <button type="button" className="ghost portfolio-more" onClick={() => setAll(true)}>
-          Show all {coins.length}
-        </button>
-      )}
-      <HoldingsDialog open={all} onClose={() => setAll(false)} coins={coins} now={now} total={total} />
-    </>
-  );
-}
-
-function HoldingsDialog({
-  open,
-  onClose,
-  coins,
-  now,
-  total,
-}: {
-  open: boolean;
-  onClose: () => void;
-  coins: Holding[];
-  now: number;
-  total: number;
-}) {
-  const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
-    if (!open && dialog.open) dialog.close();
-  }, [open]);
-  return (
-    <dialog
-      ref={ref}
-      className="about-modal sheet-modal holdings-modal"
-      aria-labelledby="holdings-title"
-      onClose={(e) => {
-        // Only this dialog's own close: a nested dialog's close bubbles up through React.
-        if (e.target === e.currentTarget) onClose();
-      }}
-      // A click on the backdrop lands on the dialog element itself; clicks inside land on its content.
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="about-body">
-        <header className="about-head">
-          <h2 id="holdings-title">Your holdings · {coins.length}</h2>
-          <button className="ghost icon-btn" onClick={onClose} aria-label="Close">
-            <CloseIcon size={16} />
-          </button>
-        </header>
-        {open && (
-          <>
-            <ul className="trades-grid portfolio-grid">
-              {coins.map((h) => (
-                <li key={h.mint}>
-                  <HoldingCard holding={h} now={now} />
-                </li>
-              ))}
-            </ul>
-            {total > coins.length && (
-              <p className="faint small">
-                Your {coins.length} largest of {total} tracked coins.
-              </p>
-            )}
-          </>
-        )}
-      </div>
-    </dialog>
-  );
-}
-
-function HoldingCard({ holding: h, now }: { holding: Holding; now: number }) {
-  const label = h.symbol ? `$${h.symbol}` : shortAddress(h.mint);
-  const card = h.card;
-  return (
-    <article
-      className={`card compact trade-card${card ? " opens" : ""}`}
-      onClick={() => card && openTokenModal(card, now)}
-      {...(card && {
-        role: "button",
-        tabIndex: 0,
-        onKeyDown: (e: KeyboardEvent) => {
-          if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
-          e.preventDefault();
-          openTokenModal(card, now);
-        },
-      })}
-      title={card ? `${label}: open the chart, bubble map and details` : label}
-    >
-      <header className="card-head">
-        <div className="avatar-wrap tone-neutral">
-          <TokenImage
-            url={h.imageUrl}
-            size={72}
-            width={34}
-            height={34}
-            className="avatar trade-avatar"
-            fallback={
-              <span className="avatar trade-avatar placeholder">{(h.symbol ?? "?").slice(0, 2)}</span>
-            }
-          />
-        </div>
-        <div className="card-title">
-          <div className="title-row">
-            <strong className="symbol" title={h.name ?? label}>
-              {label}
-            </strong>
-          </div>
-          <div className="meta-row">
-            {h.firstAlert ? (
-              <span
-                className="pill"
-                title={`First alert by ${h.firstAlert.modelName ?? "a model"}, ${new Date(h.firstAlert.at).toLocaleString()}`}
-              >
-                <span className="pill-text">Alerted {ago(h.firstAlert.at, now)}</span>
-              </span>
-            ) : (
-              <span className="faint small">No model alert</span>
-            )}
-          </div>
-        </div>
-      </header>
-      <div className="card-figures" style={{ "--fig-cols": 2 } as React.CSSProperties}>
-        <div className="fig">
-          <label>Value</label>
-          <span className="num">{usd(h.valueUsd)}</span>
-        </div>
-        <div className="fig">
-          <label>Mcap</label>
-          <span className="num">{usd(h.marketCapUsd)}</span>
-        </div>
-      </div>
-      <div className="trade-foot">
-        <span className="faint num">{amount(h.amount)} held</span>
-        {h.pricedAt && (
-          <span className="faint" title={`Priced ${new Date(h.pricedAt).toLocaleString()}`}>
-            {ago(h.pricedAt, now)}
-          </span>
-        )}
-      </div>
-    </article>
   );
 }
 
@@ -699,7 +408,7 @@ function TapePanel({ tape, now }: { tape: Portfolio["tape"]; now: number }) {
           <h2>Your trades in tracked coins</h2>
           <p className="muted small">
             What this wallet did in the coins whose trades TrenchScanner recorded, wherever it traded. SOL in
-            and out only: coins still held aren&apos;t valued here (Holdings has them).
+            and out only: coins still held aren&apos;t valued here (Positions has them).
           </p>
         </div>
       </header>
