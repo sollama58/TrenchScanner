@@ -5,7 +5,8 @@ import { lighthousePath } from "../routes";
 import { ago, halfHour, pct, signedPct, usd } from "../format";
 import { narrativeBaseline, relativeScale, signedPts, type NarrativeBaseline } from "../lighthouseMetrics";
 import { intervalText, MIN_GRADED_FOR_RATE, RULE_NOTE_UNFILTERED, wilson } from "../rates";
-import { HBarChart, Skeleton } from "./Charts";
+import { HBarChart } from "./Charts";
+import { Skeleton } from "./Skeleton";
 import { InfoIcon, LighthouseIcon } from "./Icons";
 import { ExitPlanInfo } from "./ExitPlanInfo";
 import {

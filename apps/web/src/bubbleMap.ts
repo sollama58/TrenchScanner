@@ -1,5 +1,6 @@
 import type { Snapshot } from "./api";
 import type { WalletNames } from "./walletNames";
+import { LINKED_HOLDERS_READ, linkedCount, linkedCountText } from "./linkedCount";
 import {
   crossingCount,
   laneOffsets,
@@ -9,6 +10,8 @@ import {
   type LanePoint,
   type LaneRoute,
 } from "./linkLanes";
+
+export { linkedCount, linkedCountText };
 
 /**
  * The linked-wallets bubble map: a coin's top holders as bubbles sized by their share of supply,
@@ -2366,28 +2369,6 @@ export function clusterHalos(
   return out;
 }
 
-/** Holders the linked reading covered on scans that didn't keep the count: RugCheck's top 20. */
-const LINKED_HOLDERS_READ = 20;
-
-/**
- * Linked as a count (user ask 2026-10-13): how many top holders are in a linked cluster, of how
- * many were read, shown "N/25". Scans before the count was kept count the clusters' wallets. Null
- * when the reading isn't in.
- */
-export function linkedCount(
-  s: Pick<
-    Snapshot,
-    "linkedWalletPct" | "linkedWalletCount" | "linkedWalletsChecked" | "linkedClusters" | "linkedHolders"
-  >,
-): { linked: number; of: number } | null {
-  if (s.linkedWalletPct == null) return null;
-  if (s.linkedWalletCount != null) {
-    return { linked: s.linkedWalletCount, of: s.linkedWalletsChecked ?? LINKED_HOLDERS_READ };
-  }
-  const wallets = new Set((s.linkedClusters ?? []).flatMap((c) => (c?.wallets ?? []).map((w) => w.wallet)));
-  return { linked: wallets.size, of: s.linkedHolders?.length || LINKED_HOLDERS_READ };
-}
-
 /**
  * Same-minute funding as a count (user ask 2026-10-13): how many top holders sit in a same-minute
  * group, of how many were read, "N/25". Scans before the count was kept count the groups' wallets.
@@ -2440,11 +2421,6 @@ export function mapLinked(
     count: { linked: base.linked + extra.length, of },
     pct: Math.round((graph.linkedPct + extra.reduce((t, n) => t + n.pct, 0)) * 100) / 100,
   };
-}
-
-/** "4/20", or null without a reading. */
-export function linkedCountText(c: { linked: number; of: number } | null): string | null {
-  return c ? `${c.linked}/${c.of}` : null;
 }
 
 /**

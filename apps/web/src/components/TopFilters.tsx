@@ -7,7 +7,7 @@ import { criteriaLines, MIN_SCORE_LABEL } from "../filterFields";
 import { ScoreExplainer } from "./ScoreExplainer";
 import { ScoreBar } from "./ScoreBar";
 import { ArrowRightIcon, CloseIcon, CopyIcon, TrophyIcon } from "./Icons";
-import { Skeleton } from "./Charts";
+import { Skeleton } from "./Skeleton";
 import { intervalText, isEarly, MIN_GRADED_FOR_RATE, wilsonOfRate } from "../rates";
 
 /** Green only on a meaningful sample: below the floor a rate is greyed, whatever it reads. */

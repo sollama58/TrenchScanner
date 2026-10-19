@@ -10,7 +10,7 @@ import {
   saveAlertPrefs,
   type NotificationState,
 } from "../alerts";
-import { Skeleton } from "./Charts";
+import { Skeleton } from "./Skeleton";
 import { BellIcon, VolumeIcon } from "./Icons";
 
 /**

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Card } from "../api";
-import { Skeleton } from "../components/Charts";
+import { Skeleton } from "../components/Skeleton";
 import {
   ChartIcon,
   CloseIcon,

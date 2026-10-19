@@ -77,6 +77,11 @@ export const GUEST_BEST_WINDOW_HOURS = 24;
 
 /** The showcase changes slowly (a Peak only climbs), so one read a minute serves every guest. */
 const BEST_CACHE_TTL_MS = 60_000;
+/**
+ * Served while the next read fills behind it, so a visitor (whose first paint now waits on this,
+ * index.html's boot) never waits on the fill: the answer is at most one fill older.
+ */
+const BEST_STALE_MS = 10 * 60_000;
 
 /** Just what grouping needs; only the page's lead calls are then loaded in full. */
 const CALL_SELECT = {
@@ -218,7 +223,7 @@ export async function registerGuestRoutes(
     let cache = bestCache.get(key);
     if (!cache) {
       bestCache.clear();
-      cache = new SharedCache(BEST_CACHE_TTL_MS);
+      cache = new SharedCache(BEST_CACHE_TTL_MS, { staleWhileRevalidateMs: BEST_STALE_MS });
       bestCache.set(key, cache);
     }
     const match = await cache.get(() => loadGuestBest(models));

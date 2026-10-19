@@ -32,13 +32,16 @@ else if (tab === "lighthouse") void loadLighthouseTab();
 else if (tab === "filters") void loadFiltersTab();
 else if (tab === "settings") void loadSettingsTab();
 else if (tab === "admin") void loadAdminTab();
-// A signed-out visitor needs the sign-in code next; fetch it as soon as the session check says so.
-void window.__boot?.["/auth/me"]?.then(
-  (res) => {
-    if (!res.ok) void loadSignIn();
-  },
-  () => void loadSignIn(),
-);
+// A signed-out visitor needs the sign-in code next. index.html starts the sign-in page's showcase
+// when this browser has no saved session: fetch the code now then, else once the session check says so.
+if (window.__boot?.["/guest/best"]) void loadSignIn();
+else
+  void window.__boot?.["/auth/me"]?.then(
+    (res) => {
+      if (!res.ok) void loadSignIn();
+    },
+    () => void loadSignIn(),
+  );
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

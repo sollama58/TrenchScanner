@@ -3,7 +3,7 @@ import type { Leaderboard, LighthouseDimension, LighthouseHistory, LighthouseHis
 import { usePolling } from "../hooks";
 import { ago } from "../format";
 import { MIN_GRADED_FOR_RATE, RULE_NOTE_UNFILTERED } from "../rates";
-import { Skeleton } from "../components/Charts";
+import { Skeleton } from "../components/Skeleton";
 import { TrendChart } from "../components/TrendChart";
 import { bucketMsOf, pricingChangeSlot } from "../pricingChange";
 import { renderTrendCard, type TrendCardData } from "../components/lighthouseCards";

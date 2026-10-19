@@ -335,6 +335,9 @@ export function insightsView(full: FullModelInsights, isAdmin: boolean) {
     // Emptied rather than dropped, so the shape stays as every client knows it.
     curatedAlerts: { ...full.curatedAlerts, bySource: [] },
     shadowEmissions: { ...full.shadowEmissions, bySource: [] },
+    // The learning chart reads only its models and days; its per-run rows were 134 KB of a 292 KB
+    // answer (performance audit 2026-10-19). Emptied rather than dropped, as above.
+    learning: { ...full.learning, runs: [] },
     // The AI reviewer is admin-only while it is tested (the Admin panel's AI reviewer switch,
     // user ask 2026-10-17): no verdict, record or playbook reaches anyone else. Emptied rather
     // than dropped, so the shape stays as every client knows it.

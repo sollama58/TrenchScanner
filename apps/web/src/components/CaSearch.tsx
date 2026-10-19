@@ -5,7 +5,7 @@ import { parseSearch, searchParam } from "../caSearch";
 import { useLiveMarketCaps, usePolling } from "../hooks";
 import { feedGridProps } from "../appearance";
 import { AlertCard } from "./AlertCard";
-import { SkeletonCards } from "./Charts";
+import { SkeletonCards } from "./Skeleton";
 import { CloseIcon, SearchIcon } from "./Icons";
 
 /** How long typing rests before a ticker or name is searched: one request per word, not per letter. */

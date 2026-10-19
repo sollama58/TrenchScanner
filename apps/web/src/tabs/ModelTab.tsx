@@ -13,7 +13,8 @@ import {
   IN_SAMPLE_LABEL,
   runExamRates,
 } from "../api";
-import { HBarChart, MarkerBars, MultiLines, Skeleton, TargetBars } from "../components/Charts";
+import { HBarChart, MarkerBars, MultiLines, TargetBars } from "../components/Charts";
+import { Skeleton } from "../components/Skeleton";
 import {
   ArrowRightIcon,
   BrainIcon,

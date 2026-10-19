@@ -243,7 +243,8 @@ function ShowcaseAlert() {
   const now = useNow(15_000);
   // Waits for the showcase answer, so the latest call never flashes up before the best one.
   const card = best.data ? (best.data.match ?? latest.data?.matches[0] ?? null) : null;
-  if (!card) return null;
+  // Holds the card's room while it loads, so its arrival doesn't push the page about.
+  if (!card) return best.error || best.data ? null : <div className="signin-alerts signin-alerts-pending" />;
   const isBest = card === best.data?.match;
   const delay = latest.data?.delayMinutes ?? GUEST_DELAY_MINUTES;
   return (

@@ -93,7 +93,7 @@ import {
   type SageRead,
   type SageView,
 } from "./SageView";
-import { Skeleton } from "./Charts";
+import { Skeleton } from "./Skeleton";
 import { LoadingNote, LoadSteps, SkelValue, Spinner, useElapsed } from "./Loading";
 import { openWallet } from "../walletModal";
 import { closeTokenModal } from "../tokenModal";
