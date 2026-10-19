@@ -1,5 +1,6 @@
 import {
   BURN_CREDIT_MEMO,
+  createLogger,
   burnCreditPrices,
   rawPerCredit,
   creditPots,
@@ -13,6 +14,8 @@ import {
   type SacrificeTier,
 } from "@trenchscanner/core";
 import type { ProStatus } from "./proMode.js";
+
+const logger = createLogger("sacrifice-quote");
 
 /**
  * The Sacrifice on one Pro trade (ASDF fee plan, Build guide step 4): the wallet's tier, what it
@@ -71,6 +74,22 @@ export async function quoteSacrifice(input: {
 }): Promise<SacrificeQuote> {
   const { mode, freeRank } = await sacrificeSettings();
   if (mode === "off") return { mode, freeRank, ...OFF };
+  try {
+    return await quoteFor(input, mode, freeRank);
+  } catch (err) {
+    // Only "on" charges a trade, so only there may a failed read (the database, the price) stop
+    // one; in shadow mode the trade builds without the quote rather than failing for it.
+    if (mode === "on") throw err;
+    logger.warn("sacrifice quote failed in shadow mode; building without it", { error: String(err) });
+    return { mode, freeRank, ...OFF };
+  }
+}
+
+async function quoteFor(
+  input: Parameters<typeof quoteSacrifice>[0],
+  mode: SacrificeMode,
+  freeRank: number,
+): Promise<SacrificeQuote> {
   const tier = await sacrificeTier({
     wallet: input.wallet,
     source: input.source,

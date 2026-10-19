@@ -591,6 +591,7 @@ describe("swap guard: multi-hop routes", () => {
   const mint = generateWalletKeypair().publicKey;
   const hops = [generateWalletKeypair().publicKey, generateWalletKeypair().publicKey];
   const RENT = 2_074_080n;
+  const PREFUND = 890_880n;
   const ata = (m: string) => associatedTokenAddress(wallet, m, PROGRAM.token2022);
   const openAta = (m: string): InstructionSpec => ({
     programId: PROGRAM.ata,
@@ -618,11 +619,16 @@ describe("swap guard: multi-hop routes", () => {
     },
   });
   // SOL in, through two hop tokens whose accounts the wallet lacks, to the coin.
-  const rpc = (spent: bigint, opened: string[], delegate?: string): GuardRpc => ({
+  // `funded`: hop addresses someone sent bare SOL to before the swap opened them.
+  const rpc = (spent: bigint, opened: string[], delegate?: string, funded: string[] = []): GuardRpc => ({
     getAccountsData: async (a) => a.map(() => null),
     getParsedAccounts: async (a) =>
       a.map((k) =>
-        k === wallet ? { lamports: 1_000_000_000n, owner: SYSTEM_PROGRAM_ID, token: null } : null,
+        k === wallet
+          ? { lamports: 1_000_000_000n, owner: SYSTEM_PROGRAM_ID, token: null }
+          : funded.some((m) => ata(m) === k)
+            ? { lamports: PREFUND, owner: SYSTEM_PROGRAM_ID, token: null }
+            : null,
       ),
     simulateParsed: async (_b64, a) => ({
       error: null,
@@ -655,6 +661,18 @@ describe("swap guard: multi-hop routes", () => {
     await expect(
       guardSwapTransaction(rpc(spent, []), tx(openAta(mint), jupiter), wallet, buy),
     ).rejects.toThrow(/more than the/);
+  });
+  it("takes a hop account someone sent SOL to before the swap as new, counting only the rent added", async () => {
+    // The wallet tops the pre-funded account up to its rent: RENT - PREFUND, not a full RENT.
+    const spent = 100_000_000n + RENT * 2n + (RENT - PREFUND);
+    await expect(
+      guardSwapTransaction(
+        rpc(spent, hops, undefined, [hops[0]!]),
+        tx(...[mint, ...hops].map(openAta), jupiter),
+        wallet,
+        buy,
+      ),
+    ).resolves.toBeTruthy();
   });
   it("refuses a hop account that isn't the wallet's alone, or too many of them", async () => {
     const stranger = generateWalletKeypair().publicKey;
