@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { RELOAD_GRACE_MS, fetchDeployedVersion, shouldOffer, shouldReloadForChunk } from "./version";
+import {
+  RELOAD_GRACE_MS,
+  failedAssetUrl,
+  fetchDeployedVersion,
+  refetchAsset,
+  shouldOffer,
+  shouldReloadForChunk,
+} from "./version";
 
 const json = (body: unknown, ok = true) =>
   (async () => ({ ok, json: async () => body }) as Response) as unknown as typeof fetch;
@@ -58,5 +65,47 @@ describe("shouldReloadForChunk", () => {
     expect(shouldReloadForChunk(null, now)).toBe(true);
     expect(shouldReloadForChunk({ version: "chunk", at: now - 5_000 }, now)).toBe(false);
     expect(shouldReloadForChunk({ version: "chunk", at: now - RELOAD_GRACE_MS }, now)).toBe(true);
+  });
+});
+
+describe("failedAssetUrl", () => {
+  it("finds the chunk in Vite's failed-import and CSS-preload errors", () => {
+    expect(
+      failedAssetUrl(
+        new TypeError(
+          "Failed to fetch dynamically imported module: https://trenchscanner.app/assets/Scope-abc123.js",
+        ),
+      ),
+    ).toBe("https://trenchscanner.app/assets/Scope-abc123.js");
+    expect(failedAssetUrl(new Error("Unable to preload CSS for /assets/Scope-abc123.css"))).toBe(
+      "/assets/Scope-abc123.css",
+    );
+  });
+
+  it("is null when no asset is named", () => {
+    expect(failedAssetUrl(new Error("boom"))).toBeNull();
+    expect(failedAssetUrl(undefined)).toBeNull();
+  });
+});
+
+describe("refetchAsset", () => {
+  it("asks past the browser cache and reports whether the host serves the file", async () => {
+    let init: RequestInit | undefined;
+    const ok = (async (_url: string, i?: RequestInit) => {
+      init = i;
+      return { ok: true } as Response;
+    }) as unknown as typeof fetch;
+    expect(await refetchAsset("/assets/a.js", ok)).toBe(true);
+    expect(init?.cache).toBe("reload");
+    expect(
+      await refetchAsset(
+        "/assets/a.js",
+        (async () => ({ ok: false }) as Response) as unknown as typeof fetch,
+      ),
+    ).toBe(false);
+    const offline = (async () => {
+      throw new TypeError("Failed to fetch");
+    }) as unknown as typeof fetch;
+    expect(await refetchAsset("/assets/a.js", offline)).toBe(false);
   });
 });

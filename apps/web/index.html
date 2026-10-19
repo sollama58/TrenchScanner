@@ -4,6 +4,84 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark light" />
+    <script>
+      // Recovers a page whose code didn't load. Right after a deploy the new index.html can name a
+      // file the host doesn't serve yet; that 404 is then cached (Cloudflare marks it cacheable for
+      // hours), so a plain reload hits the same cached 404 and the page stays on "Loading"
+      // (2026-10-19). When one of the app's /assets/ scripts or stylesheets fails, re-fetch them
+      // all past the browser cache, then reload. Before the module scripts so it hears their
+      // failure; a few reloads per 10 minutes at most, so a real outage doesn't loop. Must stay
+      // ES5: it runs before anything else, in any browser.
+      (function () {
+        var KEY = "ts.bootRecover";
+        var WINDOW_MS = 10 * 60 * 1000;
+        var MAX_RELOADS = 3;
+        var started = false;
+        function reloads() {
+          try {
+            var mark = JSON.parse(sessionStorage.getItem(KEY) || "null");
+            return mark && Date.now() - mark.at < WINDOW_MS ? mark.n : 0;
+          } catch (e) {
+            return 0;
+          }
+        }
+        function reload() {
+          try {
+            sessionStorage.setItem(KEY, JSON.stringify({ n: reloads() + 1, at: Date.now() }));
+          } catch (e) {}
+          location.reload();
+        }
+        function assetUrls(failed) {
+          var urls = [failed];
+          var els = document.querySelectorAll("script[src], link[href]");
+          for (var i = 0; i < els.length; i++) {
+            var url = els[i].src || els[i].href;
+            if (isAsset(url) && urls.indexOf(url) < 0) urls.push(url);
+          }
+          return urls;
+        }
+        function isAsset(url) {
+          return typeof url === "string" && url.indexOf(location.origin + "/assets/") === 0;
+        }
+        function recover(failed) {
+          if (started || reloads() >= MAX_RELOADS || !window.fetch || !window.Promise) return;
+          started = true;
+          var urls = assetUrls(failed);
+          var attempt = 0;
+          (function refetch() {
+            attempt++;
+            Promise.all(
+              urls.map(function (url) {
+                // "reload" skips the cached 404 and stores the fresh copy for the page's next load.
+                return fetch(url, { cache: "reload" }).then(
+                  function (res) {
+                    return res.ok;
+                  },
+                  function () {
+                    return false;
+                  },
+                );
+              }),
+            ).then(function (oks) {
+              // Still missing: the deploy is still landing or the CDN still holds the 404. Retry
+              // for about a minute, then reload regardless.
+              if (oks.indexOf(false) < 0 || attempt >= 12) reload();
+              else setTimeout(refetch, 5000);
+            });
+          })();
+        }
+        window.addEventListener(
+          "error",
+          function (e) {
+            var el = e.target;
+            if (!el || (el.tagName !== "SCRIPT" && el.tagName !== "LINK")) return;
+            var url = el.src || el.href;
+            if (isAsset(url)) recover(url);
+          },
+          true,
+        );
+      })();
+    </script>
     <title>TrenchScanner</title>
     <meta
       name="description"
