@@ -23,13 +23,38 @@ export interface PlatformFeeRate {
   /** The fee on each buy and each sale, in bps of the trade's SOL value. */
   buyBps: number;
   sellBps: number;
+  /** The platform's own fee page; absent for a platform that publishes none. */
+  sourceUrl?: string;
+  /** No published rate to check it against (user ask 2026-10-19: shown, labelled as an estimate). */
+  estimate?: boolean;
 }
 
+/** When the rates below were last checked against their sources; shown on the Portfolio page. */
+export const RATES_AS_OF = "2026-10-19";
+
 export const OTHER_PLATFORMS: readonly PlatformFeeRate[] = [
-  { id: "fomo", name: "Fomo", buyBps: 50, sellBps: 50 },
-  { id: "pumpfun", name: "Pump.fun App", buyBps: 45, sellBps: 45 },
-  { id: "terminal", name: "Terminal", buyBps: 50, sellBps: 50 },
-  { id: "axiom", name: "Axiom", buyBps: 95, sellBps: 95 },
+  {
+    id: "fomo",
+    name: "Fomo",
+    buyBps: 50,
+    sellBps: 50,
+    sourceUrl: "https://help.fomo.family/en/articles/14436214-trading-fees-on-fomo",
+  },
+  { id: "pumpfun", name: "Pump.fun App", buyBps: 45, sellBps: 45, sourceUrl: "https://pump.fun/docs/fees" },
+  {
+    id: "terminal",
+    name: "Terminal",
+    buyBps: 50,
+    sellBps: 50,
+    estimate: true,
+  },
+  {
+    id: "axiom",
+    name: "Axiom",
+    buyBps: 95,
+    sellBps: 95,
+    sourceUrl: "https://docs.axiom.trade/getting-started/fees/axiom-fees",
+  },
 ];
 
 export interface FeeTrade {
@@ -48,12 +73,16 @@ export interface FeeSummary {
   /** What we charged (our platform fee) and what the network took, SOL. */
   platformFeeSol: number;
   networkFeeSol: number;
+  /** When the platforms' rates were last checked (RATES_AS_OF). */
+  ratesAsOf: string;
   /** Each other platform's fee on the same trades, and what trading here saved against it. */
   platforms: {
     id: string;
     name: string;
     buyBps: number;
     sellBps: number;
+    sourceUrl?: string;
+    estimate?: boolean;
     feeSol: number;
     savedSol: number;
   }[];
@@ -87,6 +116,7 @@ export function feeSummary(trades: readonly FeeTrade[], platforms = OTHER_PLATFO
     volumeSol: toSol(buyLamports + sellLamports),
     platformFeeSol: toSol(platformFee),
     networkFeeSol: toSol(networkFee),
+    ratesAsOf: RATES_AS_OF,
     platforms: platforms.map((p) => {
       const fee = (buyLamports * BigInt(p.buyBps) + sellLamports * BigInt(p.sellBps)) / 10_000n;
       return { ...p, feeSol: toSol(fee), savedSol: toSol(fee - platformFee) };
