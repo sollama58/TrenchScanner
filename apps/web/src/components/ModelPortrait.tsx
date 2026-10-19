@@ -1,5 +1,4 @@
 import type { ModelProfile } from "../api";
-import { useIsAdmin } from "../session";
 import {
   ArrowRightIcon,
   BookIcon,
@@ -16,8 +15,8 @@ import {
 /**
  * What a model does, drawn (user ask 2026-10-17: "better explanations / graphics of what they
  * do"): its goal, then a three-step picture - what it looks at, how it decides, how much of what
- * it sees it calls - and, for admins, how long it remembers. Everything comes from the API's
- * profile, so a bred recipe taking a seat redraws it.
+ * it sees it calls. Everything comes from the API's profile, so a bred recipe taking a seat
+ * redraws it. Its memory (half-life) is not drawn: a tuning detail (user ask 2026-10-18).
  */
 export function ModelPortrait({
   profile: p,
@@ -31,7 +30,6 @@ export function ModelPortrait({
 }) {
   const callsPct = liveCallsPct !== null && liveCallsPct > 0 ? liveCallsPct : p.aimsToCallPct;
   const GoalIcon = GOAL_ICON[p.goal];
-  const isAdmin = useIsAdmin();
   return (
     <section className="mp" aria-label="What it does">
       <div className={`mp-goal mp-goal-${p.goal}`}>
@@ -86,8 +84,6 @@ export function ModelPortrait({
           <ClockIcon size={14} /> Decides only once it has {p.waitsFor}.
         </p>
       )}
-      {/* How fast it forgets is a tuning detail, shown to admins only (user ask 2026-10-18). */}
-      {isAdmin && p.memoryDays !== null && <MemoryBar halfLifeDays={p.memoryDays} />}
     </section>
   );
 }
@@ -294,49 +290,3 @@ const METHOD_SHAPES: Record<ModelProfile["method"], React.JSX.Element> = {
     </g>
   ),
 };
-
-/**
- * How long it remembers: how much a row counts by its age, fading by half every half-life, over
- * three half-lives (a week at least).
- */
-export function MemoryBar({ halfLifeDays }: { halfLifeDays: number }) {
-  const span = Math.max(7, Math.ceil(halfLifeDays * 3));
-  const w = 560;
-  const h = 80;
-  const pts: string[] = [];
-  for (let i = 0; i <= 60; i++) {
-    const age = (span * i) / 60;
-    const weight = 0.5 ** (age / halfLifeDays);
-    pts.push(`${(w - (age / span) * w).toFixed(1)},${(h - 6 - weight * (h - 12)).toFixed(1)}`);
-  }
-  const halfX = w - (halfLifeDays / span) * w;
-  const days = Number.isInteger(halfLifeDays) ? String(halfLifeDays) : halfLifeDays.toFixed(1);
-  const memory =
-    halfLifeDays <= 4
-      ? "Short memory: it bets the market is changing fast"
-      : halfLifeDays >= 30
-        ? "Long memory"
-        : "Steady memory";
-  return (
-    <figure className="mp-memory">
-      <figcaption>
-        <strong>{memory}.</strong> What happened {days} day{halfLifeDays === 1 ? "" : "s"} ago counts half as
-        much as today.
-      </figcaption>
-      <svg viewBox={`0 0 ${w} ${h + 16}`} role="img" aria-label={`Memory fades by half every ${days} days`}>
-        <polygon points={`${w},${h - 6} ${pts.join(" ")} 0,${h - 6}`} className="mp-mem-area" />
-        <polyline points={pts.join(" ")} className="mp-mem-line" />
-        <line x1={halfX} y1={4} x2={halfX} y2={h - 6} className="mp-mem-half" />
-        <text x={halfX} y={h + 12} className="lbl" style={{ textAnchor: "middle" }}>
-          half
-        </text>
-        <text x={2} y={h + 12} className="lbl" style={{ textAnchor: "start" }}>
-          {span} days ago
-        </text>
-        <text x={w - 2} y={h + 12} className="lbl" style={{ textAnchor: "end" }}>
-          now
-        </text>
-      </svg>
-    </figure>
-  );
-}
