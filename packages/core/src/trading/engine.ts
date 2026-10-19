@@ -26,7 +26,7 @@ import { EXIT_REASON_TEXT, signedSol, solAmount, tokenLink, type TradeNote } fro
 import { saleEvent, type TradeAlertEvent } from "./tradeAlerts.js";
 import type { KeyProvider } from "./keyVault.js";
 import type { MintInfo, TradingRpc, TransactionFill } from "./rpc.js";
-import { checkJupiterFloor } from "./manualTrade.js";
+import { checkJupiterFloor, routeHopMints } from "./manualTrade.js";
 import {
   buildCloseTokenAccount,
   buildSolTransfer,
@@ -644,7 +644,13 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
     const quotedMin = BigInt(quote.otherAmountThreshold);
     const minOut = independent !== null && independent > quotedMin ? independent : quotedMin;
     // Jupiter's route instruction must carry no more slippage than this swap asked for.
-    const jupiterLimits = { ...limits, maxSlippageBps: req.slippageBps };
+    // The coins the route passes through (USDC, PUMP...) may gain, never lose.
+    const hops = routeHopMints(quote, req.mint);
+    const jupiterLimits = {
+      ...limits,
+      maxSlippageBps: req.slippageBps,
+      ...(hops.length > 0 ? { via: hops } : {}),
+    };
     return {
       ...built,
       route: "jupiter",

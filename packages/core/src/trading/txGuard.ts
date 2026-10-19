@@ -100,11 +100,12 @@ interface TradeLimits {
    */
   maxSlippageBps?: number;
   /**
-   * A trade on a curve quoted in another coin (manualTrade.ts): that coin's mint. The wallet's
-   * account for it may gain (a buy's swap delivering above the minimum the curve spends) but never
-   * lose: the trade must not spend quote coin the wallet already held.
+   * The coins the route passes through between SOL and the traded coin: a curve's quote coin
+   * (manualTrade.ts) and any hop a Jupiter route takes (USDC, PUMP...). The wallet's account for
+   * each may gain (a hop delivering above what the next one spends, as Jupiter's leg into a
+   * Pump.fun curve leaves) but never lose: the trade must not spend coin the wallet already held.
    */
-  via?: string;
+  via?: readonly string[];
   /**
    * A PumpSwap trade built here (pumpSwap.ts), with the slippage the trader set: its one pool
    * instruction must be on the traded coin's SOL pool, ask for at least the expectation's minimum
@@ -643,7 +644,7 @@ export async function guardSwapTransaction(
     const b = before.token;
     const a = after.token;
     if (!b || !a) throw new GuardRefusal(`account ${watch[i]} would change type`);
-    if (b.mint === expect.via ? a.amount < b.amount : a.amount !== b.amount)
+    if (expect.via?.includes(b.mint) ? a.amount < b.amount : a.amount !== b.amount)
       throw new GuardRefusal(`another position's balance would change (${b.mint})`);
     if (
       a.owner !== b.owner ||

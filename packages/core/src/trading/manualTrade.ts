@@ -220,6 +220,9 @@ export async function buildManualTrade(
   let quotedOut: bigint;
   let minOut: bigint;
   let via: string | undefined;
+  // Every coin the transaction passes through on the way: the guard lets the wallet's own account
+  // for each gain, never lose.
+  let hops: string[] = [];
   try {
     const quote = await quoteInSol(
       deps.jupiter,
@@ -245,6 +248,7 @@ export async function buildManualTrade(
     quotedOut = BigInt(quote.outAmount);
     minOut = BigInt(quote.otherAmountThreshold);
     checkJupiterFloor(swapIxs, quotedOut, minOut, req.slippageBps);
+    hops = routeHopMints(quote, req.mint);
   } catch (err) {
     if (!(err instanceof NoRouteError || err instanceof RateLimitedError || err instanceof TransientError))
       throw err;
@@ -275,6 +279,7 @@ export async function buildManualTrade(
         );
         via = quoteMint;
         ({ swapIxs, tables, units, quotedOut, minOut } = hop);
+        hops = [quoteMint, ...hop.hops];
       } else {
         const accounts = {
           wallet: req.wallet,
@@ -348,7 +353,7 @@ export async function buildManualTrade(
     maxPriorityFeeLamports: priorityFee,
     ...(route === "jupiter" || via ? { maxSlippageBps: req.slippageBps } : {}),
     ...(route === "pumpswap" ? { pumpSwapSlippageBps: req.slippageBps } : {}),
-    ...(via ? { via } : {}),
+    ...(hops.length > 0 ? { via: hops } : {}),
   };
   const expect: TradeExpectation = buy
     ? {
@@ -564,6 +569,8 @@ async function buildCurveHop(
   units: number;
   quotedOut: bigint;
   minOut: bigint;
+  /** The coins Jupiter's leg passes through between SOL and the quote coin. */
+  hops: string[];
 }> {
   const quoteInfo = await deps.rpc.getMintInfo(quoteMint);
   if (!quoteInfo) throw new TransientError("couldn't read the curve's quote coin");
@@ -638,6 +645,7 @@ async function buildCurveHop(
       units: unitsWith(built.computeUnitLimit, PUMP_BUY_UNITS),
       quotedOut: curveTokensOut(curve, quoteOut),
       minOut: b.minTokens,
+      hops: routeHopMints(q, quoteMint),
     };
   }
 
@@ -682,6 +690,7 @@ async function buildCurveHop(
     units: unitsWith(null, PUMP_SELL_UNITS),
     quotedOut: (quoteOut * 10_000n) / BigInt(10_000 - req.slippageBps),
     minOut,
+    hops: routeHopMints(q, quoteMint),
   };
 }
 
