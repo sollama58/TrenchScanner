@@ -216,7 +216,14 @@ export interface Subscription {
   reason: "admin" | "whitelist" | "subscription" | "free_access" | "none" | null;
   expiresAt: string | null;
   /** What access costs, in $ASDFASDFA. */
-  price?: { mint: string; decimals: number; tokensPerMonth: number; daysPerMonth: number };
+  price?: {
+    mint: string;
+    decimals: number;
+    tokensPerMonth: number;
+    daysPerMonth: number;
+    /** $ASDFASDFA per burn credit (absent from older API builds). */
+    tokensPerCredit?: number;
+  };
 }
 
 export interface Token {

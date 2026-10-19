@@ -110,7 +110,7 @@ export type SacrificeTier =
 
 /**
  * The wallet's tier for a trade now. `source` is its Pro Mode source (apps/api proMode.ts);
- * `access` an ASDF access buy by a wallet without Pro Mode; `liveBalance` reads the wallet's ASDF
+ * `access` a buy of $ASDFASDFA by any wallet (always free); `liveBalance` reads the wallet's ASDF
  * now (null when the read fails: the scan's tier stands, rather than charging on a failed read).
  */
 export async function sacrificeTier(input: {

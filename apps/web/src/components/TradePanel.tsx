@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError } from "../api";
 import { ago, minutes, signedPct, solUsdAgeText, usd } from "../format";
 import {
@@ -614,6 +614,7 @@ export function TradePanel({
   hidePosition = false,
   maxBuySol = null,
   delayed = false,
+  fillBuy = null,
 }: {
   owner: string;
   mint: string;
@@ -643,6 +644,8 @@ export function TradePanel({
    * figures may be behind while trades are priced live (user ask 2026-10-18: open, and minimal).
    */
   delayed?: boolean;
+  /** Fills the Buy amount (a credit pick in the Buy $ASDFASDFA popup); a new `at` fills it again. */
+  fillBuy?: { sol: number; at: number } | null;
 }) {
   // Shared with Settings > Trading: a change there shows here at once, and the other way round.
   const settings = useTradeSettings();
@@ -656,6 +659,11 @@ export function TradePanel({
   const [sharing, setSharing] = useState(false);
   const [shareAmounts, setShareAmounts] = useState(true);
   const busy = status.kind === "busy";
+  useEffect(() => {
+    if (!fillBuy) return;
+    setCustom(String(fillBuy.sol));
+    setSide("buy");
+  }, [fillBuy]);
   const balance = position ? BigInt(position.balance) : 0n;
   const solUsd = position?.solUsd ?? null;
   // The SOL price is kept through failed reads: dollar figures say so once it is a while old.
@@ -774,7 +782,7 @@ export function TradePanel({
   };
 
   const customLamports = parseSol(custom);
-  const fee = useFeeEstimate(mint, settings);
+  const fee = useFeeEstimate(mint, settings, side);
   // Quoted on the amount the buy is set to (a preset fills it), else the first preset.
   const swapCosts = useSwapCosts(
     mint,

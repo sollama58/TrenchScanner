@@ -17740,26 +17740,144 @@ body:has(.util-toast) .bug-fab {
 .privy-btn {
   width: 100%;
 }
-.access-buy {
-  border: 1px solid var(--border);
+/* "Get $ASDFASDFA" (GetAsdf.tsx): the site's own fee-free buy, with picks sized in burn credits. */
+.get-asdf {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--brand-b) 38%, var(--border));
   border-radius: var(--radius-s);
-  padding: 12px;
-  margin: 12px 0;
+  background:
+    radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--brand-b) 16%, transparent), transparent 60%),
+    var(--surface-2);
   text-align: left;
 }
-.access-buy-row {
+.get-asdf-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.get-asdf-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand-b), var(--brand-a));
+  box-shadow: 0 6px 16px -8px var(--brand-b);
+}
+.get-asdf-title {
+  flex: 1;
+  min-width: 0;
+}
+.get-asdf-title h4 {
+  margin: 0;
+  font-size: 15px;
+}
+.get-asdf-title p {
+  margin: 2px 0 0;
+}
+.get-asdf-badge {
+  flex: none;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--good-ink);
+  background: var(--good-wash);
+  border: 1px solid color-mix(in srgb, var(--good) 35%, transparent);
+}
+.get-asdf-note {
+  color: var(--ink-2);
+}
+.get-asdf-picks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
+}
+.get-asdf-pick {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  min-width: 0;
+  padding: 9px 11px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-solid);
+  color: var(--ink);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    transform 0.15s;
+}
+.get-asdf-pick:hover:not(:disabled) {
+  border-color: var(--brand-b);
+  background: color-mix(in srgb, var(--brand-b) 10%, var(--surface-solid));
+  transform: translateY(-1px);
+}
+.get-asdf-pick.on {
+  border-color: var(--brand-b);
+  background: color-mix(in srgb, var(--brand-b) 16%, var(--surface-solid));
+  box-shadow: 0 0 0 1px var(--brand-b) inset;
+}
+.get-asdf-pick:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.get-asdf-pick-credits {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.get-asdf-pick-credits strong {
+  font-size: 16px;
+  color: var(--ink);
+}
+.get-asdf-pick-sol {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--brand-ink);
+}
+.get-asdf-pick-tokens {
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.get-asdf-foot {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin-top: 8px;
+  gap: 8px 12px;
 }
-.access-buy-row label {
-  flex-basis: 100%;
+.get-asdf-buy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
-.access-buy-row input {
-  flex: 1 1 100px;
-  min-width: 0;
+.asdf-buy-picks {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+@media (max-width: 640px) {
+  .get-asdf {
+    padding: 14px;
+  }
+  .get-asdf-picks {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .get-asdf-buy {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
 }
 .good-text {
   color: var(--good-ink);

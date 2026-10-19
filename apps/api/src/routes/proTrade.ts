@@ -109,8 +109,18 @@ const buildSchema = z.object({
     .optional(),
 });
 
+/**
+ * Buying $ASDFASDFA here pays no Sacrifice, for every wallet, Pro Mode or not (user ask
+ * 2026-10-19: the site's "Get $ASDFASDFA" buy is fee-free for all). Selling it is a normal trade.
+ */
+export function freeAsdfBuy(side: "buy" | "sell", mint: string): boolean {
+  return side === "buy" && mint === SUBSCRIPTION_MINT;
+}
+
 const feeSchema = z.object({
   mint: z.string().refine(looksLikeSolanaAddress, "not a token address"),
+  /** The side the panel is sizing; a $ASDFASDFA buy pays no Sacrifice. Left out: a buy. */
+  side: z.enum(["buy", "sell"]).optional(),
   speed: z.enum(["eco", "turbo"]),
   /** The trade's SOL value the Sacrifice is quoted on, lamports. */
   lamports: z
@@ -536,7 +546,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       // The Sacrifice (ASDF fee plan): worked out here and kept on the build, so the send takes
       // exactly this number. In "on" mode a fee payer short of burned credits is refused with
       // the credits to top up, and an unusable ASDF price refuses rather than guesses.
-      const sacrifice = await sacrificeOn(who, tradeLamports, accessBuy && !who.pro);
+      const sacrifice = await sacrificeOn(who, tradeLamports, freeAsdfBuy(body.side, body.mint));
       const refused = sacrificeRefusal(sacrifice);
       if (refused) return reply.code(refused.code).send(refused.body);
       const builtWire = parseWireTransaction(Buffer.from(built.transaction, "base64"));
@@ -627,7 +637,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       sacrificeOn(
         who,
         q.lamports !== undefined && BigInt(q.lamports) > 0n ? BigInt(q.lamports) : DEFAULT_REF_LAMPORTS,
-        !who.pro && q.mint === SUBSCRIPTION_MINT,
+        freeAsdfBuy(q.side ?? "buy", q.mint),
       ),
     ]);
     return {
@@ -654,7 +664,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     if (ref > MAX_REF_LAMPORTS) ref = MAX_REF_LAMPORTS;
     const [costs, sacrifice] = await Promise.all([
       swapCostsFor(who.wallet, q.mint, ref),
-      sacrificeOn(who, ref, !who.pro && q.mint === SUBSCRIPTION_MINT),
+      sacrificeOn(who, ref, freeAsdfBuy("buy", q.mint)),
     ]);
     if (!costs) return reply.code(503).send({ error: "Couldn't read the swap's costs just now." });
     return {

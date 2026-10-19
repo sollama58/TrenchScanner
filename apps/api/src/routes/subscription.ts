@@ -5,6 +5,7 @@ import { burnsMint } from "../burnWire.js";
 import { proStatus } from "../proMode.js";
 import {
   adminWalletSet,
+  burnCreditPrices,
   claimHeldBurns,
   creditBurn,
   describeRejection,
@@ -123,7 +124,7 @@ export async function registerSubscriptionRoutes(
   app.get("/", async (request) => {
     const wallet = request.user!.walletAddress;
     // All three are independent reads keyed on the signed wallet - one round trip, not two.
-    const [access, burnCount, lastBurn] = await Promise.all([
+    const [access, burnCount, lastBurn, creditPrices] = await Promise.all([
       accessWithFreeAccess(request.user!.userId, wallet),
       prisma.burnEvent.count({ where: { burnerWallet: wallet } }),
       prisma.burnEvent.findFirst({
@@ -131,6 +132,7 @@ export async function registerSubscriptionRoutes(
         orderBy: { createdAt: "desc" },
         select: { signature: true, createdAt: true, monthsCredited: true, creditedAt: true },
       }),
+      burnCreditPrices(),
     ]);
 
     return {
@@ -142,6 +144,8 @@ export async function registerSubscriptionRoutes(
         decimals: SUBSCRIPTION_MINT_DECIMALS,
         tokensPerMonth: SUBSCRIPTION_TOKENS_PER_MONTH,
         daysPerMonth: SUBSCRIPTION_DAYS,
+        // The site's buy sizes its quick picks in burn credits (BuyAsdfDialog).
+        tokensPerCredit: creditPrices.tokensPerCredit,
       },
       burnCount,
       lastBurn,

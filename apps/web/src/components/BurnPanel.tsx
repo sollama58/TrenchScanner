@@ -16,6 +16,7 @@ import { usePolling } from "../hooks";
 import { shortAddress } from "../format";
 import { onWalletsChanged } from "../wallet";
 import { useWalletBalance, type WalletBalance } from "../walletBalance";
+import { GetAsdfCard } from "./GetAsdf";
 
 /** Most months one burn buys (the API's MAX_MONTHS_PER_BURN); more than that is lost. */
 const MAX_MONTHS = 12;
@@ -52,8 +53,11 @@ export function BurnPanel({
   onCredited?: () => void;
   /** A balance reading shared with the page (Settings); without one, this reads its own. */
   funds?: WalletBalance;
-  /** Opens the site's own $ASDFASDFA buy; without it, "Get $ASDFASDFA" links to Pump.fun. */
-  onGetAsdf?: () => void;
+  /**
+   * Opens the site's own $ASDFASDFA buy, with a credit pick's SOL when one was chosen; without it,
+   * "Get $ASDFASDFA" links to Pump.fun.
+   */
+  onGetAsdf?: (sol?: number) => void;
 }) {
   const sub = usePolling<Subscription>("/subscription", 300_000);
   const price = sub.data?.price;
@@ -150,6 +154,16 @@ export function BurnPanel({
   const newExpiry = new Date(Math.max(stacks ? current : 0, now) + days * 86_400_000);
   const busy = stage !== null;
   const symbol = "$ASDFASDFA";
+  const shortLine = (
+    <>
+      This wallet holds {formatTokens(total, decimals)} {symbol}
+      {total > largest && largest > 0n ? ` (${formatTokens(largest, decimals)} in one account)` : ""}. One
+      month needs {Number(price.tokensPerMonth).toLocaleString("en-US")}.{" "}
+      <button type="button" className="link" onClick={() => reloadBalance()}>
+        Check again
+      </button>
+    </>
+  );
 
   const burn = async (wallet: BurnWallet) => {
     if (!source || starting.current || pending) return;
@@ -246,24 +260,19 @@ export function BurnPanel({
       ) : !balance ? (
         <p className="muted small">Reading your balance…</p>
       ) : affordable < 1 ? (
-        <p className="small">
-          This wallet holds {formatTokens(total, decimals)} {symbol}
-          {total > largest && largest > 0n ? ` (${formatTokens(largest, decimals)} in one account)` : ""}. One
-          month needs {Number(price.tokensPerMonth).toLocaleString("en-US")}.{" "}
-          {onGetAsdf ? (
-            <button type="button" className="link" onClick={onGetAsdf}>
-              Buy {symbol} here
-            </button>
-          ) : (
+        onGetAsdf ? (
+          <GetAsdfCard mint={price.mint} onBuy={onGetAsdf}>
+            {shortLine}
+          </GetAsdfCard>
+        ) : (
+          <p className="small">
+            {shortLine}
+            {" · "}
             <a href={`https://pump.fun/coin/${price.mint}`} target="_blank" rel="noreferrer">
               Get {symbol}
             </a>
-          )}
-          {" · "}
-          <button type="button" className="link" onClick={() => reloadBalance()}>
-            Check again
-          </button>
-        </p>
+          </p>
+        )
       ) : (
         <>
           <div className="burn-pick">

@@ -96,7 +96,9 @@ const BurnPanel = lazy(() => import("./components/BurnPanel").then((m) => ({ def
 const PrivyWalletPanel = lazy(() =>
   import("./components/PrivyWalletPanel").then((m) => ({ default: m.PrivyWalletPanel })),
 );
-const AccessBuy = lazy(() => import("./components/AccessBuy").then((m) => ({ default: m.AccessBuy })));
+const BuyAsdfDialog = lazy(() =>
+  import("./components/BuyAsdfDialog").then((m) => ({ default: m.BuyAsdfDialog })),
+);
 // Privy (email sign-in): only for someone choosing it, or already signed in with it.
 const PrivyRoot = lazy(() => import("./privy"));
 
@@ -751,6 +753,8 @@ function AccessGate({
   const { data, error, reload } = usePolling<Subscription>("/subscription", 300_000);
   // A finished access buy remounts the burn panel, so it reads the new balance at once.
   const [buys, setBuys] = useState(0);
+  // The Buy $ASDFASDFA popup, from the burn panel's "Get $ASDFASDFA" (with a credit pick's SOL).
+  const [buying, setBuying] = useState<{ sol?: number } | null>(null);
   const hasAccess = data?.hasAccess === true;
   // A gated route said access has ended (api.ts): look again now rather than at the next poll,
   // so the paywall replaces the failing tabs. At most every 10 s, as every open tab's poll says so.
@@ -810,14 +814,21 @@ function AccessGate({
         <Suspense fallback={<p className="muted small">Loading…</p>}>
           {/* A Privy wallet starts empty: where to send SOL comes first. */}
           <PrivyWalletPanel compact />
-          {data.price && (
-            <AccessBuy
-              walletAddress={walletAddress}
+          <BurnPanel
+            key={buys}
+            walletAddress={walletAddress}
+            onCredited={reload}
+            onGetAsdf={data.price ? (sol) => setBuying({ sol }) : undefined}
+          />
+          {buying && data.price && (
+            <BuyAsdfDialog
+              owner={walletAddress}
               mint={data.price.mint}
+              initialSol={buying.sol}
+              onClose={() => setBuying(null)}
               onBought={() => setBuys((n) => n + 1)}
             />
           )}
-          <BurnPanel key={buys} walletAddress={walletAddress} onCredited={reload} />
         </Suspense>
         <p className="faint small">
           You can also burn on the{" "}
