@@ -105,7 +105,7 @@ const feeSchema = z.object({
 
 const costsSchema = z.object({
   mint: z.string().refine(looksLikeSolanaAddress, "not a token address"),
-  /** The buy the swap costs are quoted on, lamports (the panel's first buy button). */
+  /** The buy the swap costs are quoted on, lamports (the amount the panel's buy is set to). */
   refLamports: z
     .string()
     .regex(/^\d{1,12}$/)
@@ -558,6 +558,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       venues: costs.venues,
       priceImpactPct: costs.priceImpactPct,
       accountRentLamports: costs.accountRentLamports.toString(),
+      outAmount: costs.outAmount?.toString() ?? null,
+      decimals: costs.decimals,
       platformFeeBps: charged(sacrifice) ? 20 : 0,
       sacrifice: sacrificeView(sacrifice),
     };

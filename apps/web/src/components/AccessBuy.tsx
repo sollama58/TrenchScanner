@@ -1,8 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { privyConfig } from "../privyBridge";
-import { MIN_TRADE_SOL, readTradeSettings, runTrade, type TradeStage } from "../proTrade";
+import {
+  expectedTokens,
+  MIN_TRADE_SOL,
+  readTradeSettings,
+  runTrade,
+  useSwapCosts,
+  type TradeStage,
+} from "../proTrade";
 import { TwoFactorCancelled } from "../twoFactor";
 import { decimalUnits } from "../decimal";
+import { tokensText } from "./TradePanel";
 
 /**
  * The paywall's in-app $ASDFASDFA buy (user decision 2026-10-18): SOL in the signed-in wallet
@@ -43,11 +51,12 @@ export function AccessBuy({
       live = false;
     };
   }, []);
-  if (!open) return null;
-
   // "0.5" or "0,5" (decimal.ts), to the lamport.
   const lamports = decimalUnits(sol, 9, 6);
   const valid = lamports !== null && lamports >= MIN_LAMPORTS;
+  const quote = useSwapCosts(open && valid ? mint : null, valid ? Number(lamports) / 1e9 : 0);
+  const expected = valid ? expectedTokens(lamports, quote, null) : null;
+  if (!open) return null;
 
   const buy = async () => {
     // A ref, not the stage: the stage is first set only after the wallet's connect prompt, so a
@@ -100,6 +109,11 @@ export function AccessBuy({
         </button>
       </div>
       {!valid && <p className="faint small">At least {MIN_TRADE_SOL} SOL.</p>}
+      {expected && (
+        <p className="faint small num">
+          ≈ {tokensText(expected.tokens)} $ASDFASDFA{expected.quoted ? "" : " (est.)"}
+        </p>
+      )}
       {done && <p className="small good-text">Bought. Burn it below to get access.</p>}
       {error && (
         <p className="error small" role="alert">

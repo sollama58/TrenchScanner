@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ApiError } from "../api";
-import { ago, signedPct, solUsdAgeText, usd } from "../format";
+import { ago, minutes, signedPct, solUsdAgeText, usd } from "../format";
 import {
   graceLeftText,
   MAX_CUSTOM_FEE_SOL,
@@ -11,6 +11,7 @@ import {
   disclaimerAccepted,
   useFeeEstimate,
   useSwapCosts,
+  expectedTokens,
   runTrade,
   saveTradeSettings,
   TradeError,
@@ -697,7 +698,16 @@ export function TradePanel({
 
   const customLamports = parseSol(custom);
   const fee = useFeeEstimate(mint, settings);
-  const swapCosts = useSwapCosts(mint, settings.buyPresets[0] ?? 0.1);
+  // Quoted on the amount the buy is set to (a preset fills it), else the first preset.
+  const swapCosts = useSwapCosts(
+    mint,
+    customLamports ? Number(customLamports) / LAMPORTS : (settings.buyPresets[0] ?? 0.1),
+  );
+  const coinDecimals = position?.decimals ?? null;
+  const supplyCoins =
+    position?.supply && coinDecimals !== null ? Number(BigInt(position.supply)) / 10 ** coinDecimals : null;
+  const coinPriceSol = nowMcap && supplyCoins && solUsd ? nowMcap / supplyCoins / solUsd : null;
+  const expected = expectedTokens(customLamports, swapCosts, coinPriceSol);
   const hasPosition = !!summary && (summary.held > 0 || summary.buys > 0 || summary.sells > 0);
   const open = !!summary && summary.held > 0;
   const tone = summary?.pnlSol == null ? "" : summary.pnlSol >= 0 ? "up" : "down";
@@ -835,6 +845,7 @@ export function TradePanel({
               type="button"
               className="tm-hold-share"
               disabled={!canShare}
+              aria-label="Share PnL"
               title={
                 canShare
                   ? "Share this position as an image (your wallet is never on it)"
@@ -842,7 +853,7 @@ export function TradePanel({
               }
               onClick={() => setSharing(true)}
             >
-              <ShareIcon size={14} /> Share PnL
+              <ShareIcon size={14} />
             </button>
           </div>
           <div className="tm-hold-stats">
@@ -863,11 +874,36 @@ export function TradePanel({
               sub={nowMcap ? `now ${usd(nowMcap)}` : undefined}
             />
             <Stat label="Put in" value={solText(summary.solIn)} sub={`${solText(summary.solOut)} back`} />
-            <Stat
-              label="Trades"
-              value={`${summary.buys} / ${summary.sells}`}
-              sub={`buy${summary.buys === 1 ? "" : "s"} / sell${summary.sells === 1 ? "" : "s"}`}
-            />
+            {open ? (
+              // Where the coins still held bring the whole position back to even (user ask 2026-10-19).
+              <Stat
+                label="Break-even"
+                value={
+                  summary.breakEvenMcap === null
+                    ? "–"
+                    : summary.breakEvenMcap === 0
+                      ? "Covered"
+                      : usd(summary.breakEvenMcap)
+                }
+                sub={
+                  summary.breakEvenMcap === 0
+                    ? "sales paid it back"
+                    : summary.breakEvenMcap !== null && nowMcap
+                      ? `${signedPct((summary.breakEvenMcap / nowMcap - 1) * 100, 0)} from now`
+                      : undefined
+                }
+              />
+            ) : (
+              <Stat
+                label="Held"
+                value={
+                  summary.firstAt !== null && summary.lastAt !== null
+                    ? minutes((summary.lastAt - summary.firstAt) / 60_000)
+                    : "–"
+                }
+                sub={`${summary.buys} buy${summary.buys === 1 ? "" : "s"} · ${summary.sells} sell${summary.sells === 1 ? "" : "s"}`}
+              />
+            )}
           </div>
           {position?.historyUnavailable && (
             <p className="small muted tm-hold-note">Trade history is unavailable just now.</p>
@@ -956,6 +992,19 @@ export function TradePanel({
                   Buy
                 </button>
               </div>
+              {expected && (
+                <p
+                  className="small muted num tm-expect"
+                  title={
+                    expected.quoted
+                      ? "What this buy would get at the route's price now, before slippage"
+                      : "An estimate at the latest price; the exact quote follows in a moment"
+                  }
+                >
+                  ≈ {tokensText(expected.tokens)} {symbol}
+                  {expected.quoted ? "" : " (est.)"}
+                </p>
+              )}
             </div>
           }
           {!buyOnly && (
