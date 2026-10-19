@@ -296,6 +296,9 @@ export class JupiterSwapClient implements SwapClient {
       slippageBps: String(input.slippageBps),
       // Fewer hops through thin intermediate tokens: fewer ways for a memecoin route to fail.
       restrictIntermediateTokens: String(input.restrictIntermediateTokens ?? true),
+      // The route instruction both guards can read (checkJupiterFloor, the browser's tradeProblem):
+      // V2 is live and a change of Jupiter's default would otherwise refuse every Jupiter trade.
+      instructionVersion: "V1",
     });
     const res = await this.call(`/swap/v1/quote?${params}`, {}, "Jupiter quote");
     const quote = (await res.json()) as SwapQuote & { error?: string };

@@ -423,7 +423,16 @@ export async function guardSwapTransaction(
       if (after?.token?.owner === wallet) wrappedPost += after.lamports;
       continue;
     }
-    if (!before) {
+    // An address the swap opens that only held SOL before (anyone can send SOL to a wallet's
+    // future token account, which would otherwise read as "would change type" and refuse every
+    // trade through that hop): new all the same, with only the rent the wallet adds counted.
+    const prefunded =
+      before !== null &&
+      before !== undefined &&
+      before.token === null &&
+      before.owner === SYSTEM_PROGRAM_ID &&
+      totals.openedTokenAccounts.has(watch[i]!);
+    if (!before || prefunded) {
       // Not an account of the wallet's before the swap. One the swap opens as the wallet's own (a
       // route's hop through the coin's quote token) must stay the wallet's alone; its rent is
       // the wallet's still, so it isn't counted as SOL spent.
@@ -434,9 +443,10 @@ export async function guardSwapTransaction(
           (after.token.closeAuthority ?? null) !== null
         )
           throw new GuardRefusal(`the token account opened for ${after.token.mint} isn't the wallet's alone`);
-        if (after.lamports > MAX_ROUTE_ACCOUNT_LAMPORTS)
+        const added = after.lamports - (before?.lamports ?? 0n);
+        if (added > MAX_ROUTE_ACCOUNT_LAMPORTS)
           throw new GuardRefusal(`the token account opened for ${after.token.mint} holds more than its rent`);
-        routeRent += after.lamports;
+        routeRent += added;
         routeAccounts++;
       }
       continue;

@@ -27,6 +27,7 @@ import {
   estimateManualFees,
   estimateSwapCosts,
   estimateSaleProceeds,
+  quoteInSol,
   routeFeeBps,
   TOKEN_2022_ACCOUNT_RENT_LAMPORTS,
   LIGHTHOUSE_PROGRAM,
@@ -739,6 +740,29 @@ describe("swap costs", () => {
     expect(asked).toEqual([undefined, false]);
     expect(costs.routeVia).toEqual([USDC, PUMP]);
     expect(costs.accountRentLamports).toBe(2n * TOKEN_2022_ACCOUNT_RENT_LAMPORTS);
+  });
+});
+
+describe("quoteInSol", () => {
+  const input = { inputMint: WSOL, outputMint: MINT, amount: 1_000n, slippageBps: 500 };
+  const jupiter = (asked: (boolean | undefined)[]) => ({
+    quote: async (q: { restrictIntermediateTokens?: boolean }) => {
+      asked.push(q.restrictIntermediateTokens);
+      if (q.restrictIntermediateTokens !== false) throw new NoRouteError("no route");
+      return { outAmount: "5", otherAmountThreshold: "4" } as never;
+    },
+  });
+  it("asks again with any hop allowed when the liquid hops find no route", async () => {
+    const asked: (boolean | undefined)[] = [];
+    await expect(quoteInSol(jupiter(asked), input, async () => false)).resolves.toMatchObject({
+      outAmount: "5",
+    });
+    expect(asked).toEqual([undefined, false]);
+  });
+  it("leaves a coin still on its SOL curve to the curve, not an open route", async () => {
+    const asked: (boolean | undefined)[] = [];
+    await expect(quoteInSol(jupiter(asked), input, async () => true)).rejects.toBeInstanceOf(NoRouteError);
+    expect(asked).toEqual([undefined]);
   });
 });
 

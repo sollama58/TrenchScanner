@@ -177,12 +177,21 @@ export async function buildManualTrade(
   let quotedOut: bigint;
   let minOut: bigint;
   try {
-    const quote = await quoteInSol(deps.jupiter, {
-      inputMint: buy ? WSOL_MINT : req.mint,
-      outputMint: buy ? req.mint : WSOL_MINT,
-      amount: req.amount,
-      slippageBps: req.slippageBps,
-    });
+    const quote = await quoteInSol(
+      deps.jupiter,
+      {
+        inputMint: buy ? WSOL_MINT : req.mint,
+        outputMint: buy ? req.mint : WSOL_MINT,
+        amount: req.amount,
+        slippageBps: req.slippageBps,
+      },
+      // A coin still on its SOL curve trades there (below) before any open route: one through a
+      // thin pool of some other token would price it off that pool, not the curve.
+      async () => {
+        const curve = await readCurve(deps.rpc, req.mint, deps.random);
+        return !curveRefusal(curve.curve) && !!curve.curve && !!curve.buyback;
+      },
+    );
     const built = await deps.jupiter.swapInstructions({ quote, userPublicKey: req.wallet });
     route = "jupiter";
     swapIxs = built.instructions.filter((ix) => ix.programId !== PROGRAM.computeBudget);
@@ -299,11 +308,14 @@ export async function buildManualTrade(
 export async function quoteInSol(
   jupiter: Pick<ManualTradeJupiter, "quote">,
   input: { inputMint: string; outputMint: string; amount: bigint; slippageBps: number },
+  /** True when the caller has a better route than an open one (the coin's SOL curve): no retry. */
+  preferOwnRoute?: () => Promise<boolean>,
 ): Promise<SwapQuote> {
   try {
     return await jupiter.quote(input);
   } catch (err) {
     if (!(err instanceof NoRouteError)) throw err;
+    if (preferOwnRoute && (await preferOwnRoute().catch(() => false))) throw err;
     return jupiter.quote({ ...input, restrictIntermediateTokens: false });
   }
 }
@@ -570,8 +582,11 @@ export async function estimateSaleProceeds(
   deps: { jupiter: Pick<ManualTradeJupiter, "quote"> },
   input: { mint: string; units: bigint },
 ): Promise<bigint | null> {
-  const quote = await deps.jupiter
-    .quote({ inputMint: input.mint, outputMint: WSOL_MINT, amount: input.units, slippageBps: 500 })
-    .catch(() => null);
+  const quote = await quoteInSol(deps.jupiter, {
+    inputMint: input.mint,
+    outputMint: WSOL_MINT,
+    amount: input.units,
+    slippageBps: 500,
+  }).catch(() => null);
   return quote && /^\d+$/.test(String(quote.outAmount)) ? BigInt(quote.outAmount) : null;
 }
