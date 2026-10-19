@@ -136,7 +136,7 @@ export function AlertCard({
   // (a later market-cap high or the filter alert's ATH came at another time).
   const runPeakAfter =
     isRunPeak && (!nowCounts || (recordedPeak ?? 0) >= (move ?? 0))
-      ? (curated?.outcome.runPeakMinutes ?? null)
+      ? (curated?.outcome?.runPeakMinutes ?? null)
       : null;
   const {
     freshPct,
@@ -1393,7 +1393,7 @@ const SCORE_HINT = "Rank score 0-100, not a probability";
  */
 export function recordedPeakOf(card: Card): { pct: number | null; isRunPeak: boolean } {
   const curated = card.curated;
-  const runPeak = curated?.outcome.peak24hReturnPct ?? null;
+  const runPeak = curated?.outcome?.peak24hReturnPct ?? null;
   // The API's Peak is authoritative when sent, null included: once the candles vouch for a call it
   // leaves out the watcher's run peak (callPeakPct), so falling back to it here would put back the
   // stale reading the candles corrected. Only older API builds, which send none, use the run peak.

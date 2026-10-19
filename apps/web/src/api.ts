@@ -395,7 +395,8 @@ export interface CuratedMeta {
   calibratedPct?: number | null;
   reasons: string[];
   alertedAt: string;
-  outcome: Outcome;
+  /** Null when the call has no grading row (pruned, or not written yet). */
+  outcome: Outcome | null;
   /** The call's Peak, which only rises: its run peak or its market-cap high since (absent from older API builds). */
   peakPct?: number | null;
   /** That Peak as a market cap, null until it traded above the call (absent from older API builds). */

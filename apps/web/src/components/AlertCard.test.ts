@@ -52,6 +52,12 @@ function card(over: {
 }
 
 describe("recordedPeakOf", () => {
+  it("reads a call with no grading data (outcome null) without throwing", () => {
+    const c = card({ kind: "curated", alertMcap: 20_000, peakReturnPct: 50, curated: {} });
+    (c.curated as unknown as { outcome: null }).outcome = null;
+    expect(recordedPeakOf(c).pct).toBe(50);
+  });
+
   it("re-bases a folded call's high onto the filter alert's market cap", () => {
     // Called at $20k, caught by the filter at $60k, topped out at $200k.
     const peak = recordedPeakOf(
