@@ -16,6 +16,11 @@ export interface Loadable<T> {
   error: Error | null;
   loading: boolean;
   reload: () => void;
+  /**
+   * The timed poll's beat: its first tick (`from`, ms) and every `every` ms after, for a
+   * "Next update in" that counts to the read that actually comes. Null before it starts.
+   */
+  schedule?: { from: number; every: number } | null;
 }
 
 /** A cached response younger than this is shown without refetching when a view mounts. */
@@ -57,6 +62,7 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
   const intervalRef = useRef(intervalMs);
   intervalRef.current = intervalMs;
   const failures = useRef(0);
+  const [schedule, setSchedule] = useState<{ from: number; every: number } | null>(null);
   /** The timed poll skips ticks before this (ms), set while failing. */
   const retryAt = useRef(0);
 
@@ -121,6 +127,7 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible" && Date.now() >= retryAt.current) poll();
     }, intervalMs);
+    setSchedule({ from: Date.now() + intervalMs, every: intervalMs });
     // Coming back to the tab refreshes only what has gone stale while it was hidden.
     const onVisible = () => {
       if (document.visibilityState !== "visible") return;
@@ -142,7 +149,7 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
   // Nothing current to show yet: the page's loading bar waits on this answer.
   const waiting = loading && (data === null || stale);
   useEffect(() => (waiting ? beginWait() : undefined), [waiting, want]);
-  return { data, stale, at: held?.at ?? null, error, loading, reload };
+  return { data, stale, at: held?.at ?? null, error, loading, reload, schedule };
 }
 
 /**

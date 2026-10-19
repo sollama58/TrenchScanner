@@ -2529,19 +2529,20 @@ export function hasHolderList(s: Pick<Snapshot, "linkedClusters" | "linkedHolder
 }
 
 /**
- * How often the worker saves a reading for a coin it is scanning (SCAN_INTERVAL_MINUTES): each
- * cycle writes a snapshot with the holder list it holds, read at most RUGCHECK_CACHE_TTL_MINUTES ago.
+ * How often the worker writes a coin's holder list while someone has its token view open: it
+ * re-reads the top holders and writes the list again every WATCHED_HOLDERS_REFRESH_SECONDS (60 s,
+ * worker watchedHolders.ts), on the first scan cycle after that, changed or not.
  */
-export const HOLDER_SCAN_MS = 60_000;
+export const HOLDER_WRITE_MS = 60_000;
 /**
- * How often an open token view re-reads its holder reading and bubble maps: half the scan's pace,
- * so a reading saved by the scan shows within half a minute. The bubble map's read also tells the
- * worker the map is open (Token.holdersViewedAt), which re-reads the coin's top holders every
- * minute instead of every ten (user ask 2026-10-19), so "Now" and its stats keep updating.
+ * How often an open token view re-reads its bubble maps (the top 50). The read also tells the
+ * worker the map is open (Token.holdersViewedAt), which has it re-read and write the coin's top
+ * holders every HOLDER_WRITE_MS instead of every ten minutes (user ask 2026-10-19), so "Now" and
+ * its stats keep updating.
  */
 export const HOLDER_POLL_MS = 30_000;
 /**
- * No reading for this long means the worker has stopped scanning the coin (out of band, unviewed).
+ * No list for this long means the worker has stopped scanning the coin (out of band, unviewed).
  * A list that hasn't changed is written again only every HOLDER_LIST_REWRITE_MS (10 min, worker
  * holderListWrites.ts; every minute while someone has the map open), so a coin still being scanned
  * can go that long plus a cycle between rows.
@@ -2549,13 +2550,42 @@ export const HOLDER_POLL_MS = 30_000;
 export const HOLDER_STALE_MS = 12 * 60_000;
 
 /**
- * When the holder reading was saved and when the next one is due: the next scan, or null once
- * none has come for HOLDER_STALE_MS, so the coin is no longer being scanned.
+ * When a reading's holder list was written: the earlier row the API carried it from (holdersAt),
+ * else its own scan. A scan row lands every few seconds, so its takenAt alone said a list minutes
+ * old was just read.
  */
-export function holderFreshness(takenAt: string, now: number): { last: number; next: number | null } {
-  const last = Date.parse(takenAt);
-  if (now - last >= HOLDER_STALE_MS) return { last, next: null };
-  return { last, next: Math.max(last + HOLDER_SCAN_MS, now) };
+export function holderListAt(s: Pick<Snapshot, "takenAt" | "holdersAt">): number {
+  return Date.parse(s.holdersAt ?? s.takenAt);
+}
+
+/** The first of a view's reads, every `everyMs` from `nextRead`, at or after `at`. */
+export function firstReadAfter(at: number, nextRead: number, everyMs: number): number {
+  return nextRead >= at ? nextRead : nextRead + Math.ceil((at - nextRead) / everyMs) * everyMs;
+}
+
+/**
+ * When the holder list shown was written (`last`), when the next one is due from the worker
+ * (`due`), and when this view will show it (`next`): its first read of the coin's scans after that
+ * (`nextRead`, every `everyMs`), or, past due, its next read (`late` once a read since found none). Null without reads of its own (a
+ * lookup, which doesn't follow the scans), and both are null once no list has come for
+ * HOLDER_STALE_MS: the coin is no longer being scanned.
+ */
+export function holderFreshness(
+  reading: Pick<Snapshot, "takenAt" | "holdersAt">,
+  now: number,
+  reads?: { nextRead: number; everyMs: number } | null,
+): { last: number; due: number | null; next: number | null; late: boolean } {
+  const last = holderListAt(reading);
+  if (now - last >= HOLDER_STALE_MS) return { last, due: null, next: null, late: false };
+  const due = last + HOLDER_WRITE_MS;
+  if (!reads) return { last, due, next: null, late: false };
+  return {
+    last,
+    due,
+    next: firstReadAfter(due, reads.nextRead, reads.everyMs),
+    // The view's last read came after the list was due and didn't bring one.
+    late: reads.nextRead - reads.everyMs >= due,
+  };
 }
 
 /**

@@ -30,6 +30,7 @@ import {
   sameTimeSlot,
   buildGraph,
   HOLDER_POLL_MS,
+  holderListAt,
   liveWideFor,
   clusterHalos,
   HALO_PAD,
@@ -2346,7 +2347,7 @@ export function BubbleMapSection({
       heldReading && heldLive
         ? withLiveShares(
             heldReading,
-            liveShareDeltas(heldLive.trades, heldLive.supply, Date.parse(heldReading.takenAt)),
+            liveShareDeltas(heldLive.trades, heldLive.supply, holderListAt(heldReading)),
           )
         : heldReading,
     [heldReading, heldLive],
@@ -2431,7 +2432,7 @@ export function BubbleMapSection({
           >
             {moment.at !== undefined && Number.isFinite(moment.at) ? (
               // The reading drawn, which waits for the map's next redraw.
-              <SecondsAgo at={heldReading ? Date.parse(heldReading.takenAt) : moment.at} />
+              <SecondsAgo at={heldReading ? holderListAt(heldReading) : moment.at} />
             ) : (
               moment.label
             )}

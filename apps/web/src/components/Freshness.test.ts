@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { countdown, nextUpdateText, secondsAgo } from "./Freshness";
+import { countdown, nextBeat, nextUpdateText, secondsAgo } from "./Freshness";
 
 describe("freshness text", () => {
   const t = 1_000_000_000;
@@ -13,13 +13,23 @@ describe("freshness text", () => {
     expect(secondsAgo(t, t - 3_000)).toBe("0s ago");
   });
 
-  it("counts down to the next update, then says it is due", () => {
+  it("counts down to the next update, then says it is updating", () => {
     expect(countdown(48_000)).toBe("0:48");
     expect(countdown(47_200)).toBe("0:48");
     expect(countdown(725_000)).toBe("12:05");
     expect(countdown(3_725_000)).toBe("1:02:05");
     expect(nextUpdateText(t + 48_000, t)).toBe("Next update in 0:48");
-    expect(nextUpdateText(t + 500, t)).toBe("Next update due now");
-    expect(nextUpdateText(t - 5_000, t)).toBe("Next update due now");
+    expect(nextUpdateText(t + 500, t)).toBe("Updating…");
+    expect(nextUpdateText(t - 5_000, t)).toBe("Updating…");
+    // A read since the update was due found none: the countdown is to the next look for it.
+    expect(nextUpdateText(t + 12_000, t, true)).toBe("Checking again in 0:12");
+  });
+
+  it("finds a poll's next beat from when its timer started", () => {
+    const schedule = { from: t, every: 30_000 };
+    expect(nextBeat(schedule, t - 2_000)).toBe(t);
+    expect(nextBeat(schedule, t + 1)).toBe(t + 30_000);
+    expect(nextBeat(schedule, t + 30_000)).toBe(t + 30_000);
+    expect(nextBeat(schedule, t + 61_000)).toBe(t + 90_000);
   });
 });

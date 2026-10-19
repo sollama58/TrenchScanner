@@ -32,6 +32,7 @@ import {
   clusterHalos,
   graphBounds,
   hasHolderList,
+  firstReadAfter,
   holderFreshness,
   layoutGraph,
   positionsOf,
@@ -408,17 +409,61 @@ describe("sameTimeCount", () => {
 describe("holderFreshness", () => {
   const at = "2026-10-13T23:00:00.000Z";
   const t = Date.parse(at);
-  it("puts the next update one scan after the reading", () => {
-    expect(holderFreshness(at, t + 20_000)).toEqual({ last: t, next: t + 60_000 });
+  const reads = (nextRead: number) => ({ nextRead, everyMs: 15_000 });
+  it("shows the next list at the view's first read after the worker writes it", () => {
+    expect(holderFreshness({ takenAt: at }, t + 20_000, reads(t + 25_000))).toEqual({
+      last: t,
+      due: t + 60_000,
+      next: t + 70_000,
+      late: false,
+    });
+    expect(holderFreshness({ takenAt: at }, t + 50_000, reads(t + 60_000)).next).toBe(t + 60_000);
   });
-  it("says it is due now once that scan is late", () => {
-    expect(holderFreshness(at, t + 3 * 60_000)).toEqual({ last: t, next: t + 3 * 60_000 });
+  it("counts to the next read once a read since the list was due found none", () => {
+    expect(holderFreshness({ takenAt: at }, t + 3 * 60_000, reads(t + 3 * 60_000 + 4_000))).toEqual({
+      last: t,
+      due: t + 60_000,
+      next: t + 3 * 60_000 + 4_000,
+      late: true,
+    });
+    // Due, but the view hasn't looked since: still the next update, not a re-check.
+    expect(holderFreshness({ takenAt: at }, t + 65_000, reads(t + 70_000)).late).toBe(false);
   });
-  it("still expects one while an unchanged list waits on its ten-minute rewrite", () => {
-    expect(holderFreshness(at, t + 10 * 60_000)).toEqual({ last: t, next: t + 10 * 60_000 });
+  it("dates a list carried onto a later scan by when it was written", () => {
+    const scan = "2026-10-13T23:04:00.000Z";
+    expect(
+      holderFreshness({ takenAt: scan, holdersAt: at }, t + 4 * 60_000, reads(t + 4 * 60_000 + 9_000)),
+    ).toEqual({
+      last: t,
+      due: t + 60_000,
+      next: t + 4 * 60_000 + 9_000,
+      late: true,
+    });
+  });
+  it("has no countdown for a view that doesn't follow the scans", () => {
+    expect(holderFreshness({ takenAt: at }, t + 20_000)).toEqual({
+      last: t,
+      due: t + 60_000,
+      next: null,
+      late: false,
+    });
   });
   it("has no next update once the coin has gone unscanned for twelve minutes", () => {
-    expect(holderFreshness(at, t + 12 * 60_000)).toEqual({ last: t, next: null });
+    expect(holderFreshness({ takenAt: at }, t + 12 * 60_000, reads(t + 12 * 60_000 + 1_000))).toEqual({
+      last: t,
+      due: null,
+      next: null,
+      late: false,
+    });
+  });
+});
+
+describe("firstReadAfter", () => {
+  it("takes the first read on the beat at or after the moment", () => {
+    expect(firstReadAfter(100, 100, 15)).toBe(100);
+    expect(firstReadAfter(90, 100, 15)).toBe(100);
+    expect(firstReadAfter(101, 100, 15)).toBe(115);
+    expect(firstReadAfter(130, 100, 15)).toBe(130);
   });
 });
 
