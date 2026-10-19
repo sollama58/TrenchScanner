@@ -66,11 +66,10 @@ export const FRESH_ANCHOR_LABEL_RULE = 4;
 export const FRESH_ANCHOR_MAX_RATIO = 5;
 
 /**
- * The fresh quote's market cap on DexScreener's supply, or null without a usable quote: the quote's
- * price times the supply DexScreener's own figures imply (1B for a Pump.fun coin, as Pump.fun's).
- * Jupiter's own `mcap` counts the supply after burns, 0.91-0.97B on some coins (live probe
- * 2026-10-12), so set beside the DexScreener readings a call's Peak and the mcap band are measured
- * in, it read up to ~9% low and every multiple off it ~9% high.
+ * The fresh quote's market cap on the scan reading's supply, or null without a usable quote: the
+ * quote's price times the supply the scan's own figures imply. That supply is the coin's supply
+ * now, after burns, as DexScreener counts it and every other reading is put on (mintSupply.ts), so
+ * a call's anchor sits on the same supply as the Peak and the mcap band measured beside it.
  */
 export function freshQuoteMcapUsd(scored: {
   priceUsd: number;
@@ -87,7 +86,7 @@ export function freshQuoteMcapUsd(scored: {
 /**
  * The price a decision is graded from, and the rule that grading follows: the fresh quote read
  * just before the decision when there is a plausible one, else the scan's (DexScreener) price.
- * The market cap is the quote's price on DexScreener's supply (freshQuoteMcapUsd).
+ * The market cap is the quote's price on the scan reading's supply (freshQuoteMcapUsd).
  */
 export function decisionAnchor(scored: {
   priceUsd: number;

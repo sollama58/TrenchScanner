@@ -5,6 +5,7 @@ import { RateGate, RateGateDeadlineError, type RateGateStats } from "./rateGate.
 import { normalizeSocialUrl } from "./tokensage.js";
 import { isCurveVenue } from "../launchpads.js";
 import { MARKET_SOURCE } from "../marketSource.js";
+import { mintSupplies } from "../mintSupply.js";
 import type { GeckoTerminalClient } from "./geckoterminal.js";
 import type { CandidateToken, WatchlistCandidate } from "../types.js";
 
@@ -689,8 +690,8 @@ export class DexScreenerClient {
    * liquidity or volume. Every lookup but the scan's band refresh used to read such a coin as $0
    * (the outcome watcher, live prices, fast-match, peaks): 301 of the 7,408 coins graded in the week
    * to 2026-10-14. The price is priceNative times the quote coin's own USD price; the cap is that
-   * on Pump.fun's fixed 1B supply. Off Pump.fun the supply is unknown, so the cap stays 0 for the
-   * fallback to fill. Never throws: a quote that can't be priced leaves its pairs as they were.
+   * on the coin's supply now (mintSupply.ts), else on Pump.fun's launch billion. Off Pump.fun with
+   * no supply read, the cap stays 0 for the fallback to fill. Never throws: a quote that can't be priced leaves its pairs as they were.
    */
   private async priceInQuoteToken(
     pairs: DexScreenerPair[],
@@ -708,17 +709,22 @@ export class DexScreenerClient {
     if (unpriced.length === 0) return tokens;
     const quoteUsd = await this.quoteUsdPrices([...new Set(unpriced.map((u) => u.quote))], gate);
     const priced = new Map<string, CandidateToken>();
+    // The supply now (after burns) where it is known, else Pump.fun's launch billion (mintSupply.ts).
+    const supplies = await mintSupplies()
+      .get(unpriced.filter((u) => quoteUsd.get(u.quote)).map((u) => u.token.mintAddress))
+      .catch(() => new Map<string, number>());
     for (const { token, quote, native } of unpriced) {
       const usd = quoteUsd.get(quote);
       if (!usd) continue;
       const priceUsd = native * usd;
       const onPump = token.dexId === "pumpfun" || token.dexId === "pumpswap";
+      const supply = supplies.get(token.mintAddress) ?? (onPump ? PUMP_FUN_SUPPLY : undefined);
       if (this.quotePriced.size >= QUOTE_PRICE_MAX_MINTS) this.quotePriced.clear();
       this.quotePriced.add(token.mintAddress);
       priced.set(token.mintAddress, {
         ...token,
         priceUsd,
-        marketCapUsd: onPump ? priceUsd * PUMP_FUN_SUPPLY : token.marketCapUsd,
+        marketCapUsd: supply !== undefined ? priceUsd * supply : token.marketCapUsd,
       });
     }
     return tokens.map((t) => priced.get(t.mintAddress) ?? t);

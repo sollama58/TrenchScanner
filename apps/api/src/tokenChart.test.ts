@@ -6,12 +6,21 @@ import {
   markedWallets,
   MAX_MARKED_WALLETS,
   parseLiveTrades,
+  onSupply,
   parseMcapCandles,
   withLiveTrades,
   withTrackedMarks,
   type ActivityRow,
   type McapCandle,
 } from "./tokenChart.js";
+
+describe("onSupply", () => {
+  it("puts launch-billion candles on the supply left after burns, volume as it is", () => {
+    const k = { t: 1, o: 100, h: 200, l: 50, c: 150, vol: 7 };
+    expect(onSupply([k], 0.95)).toEqual([{ t: 1, o: 95, h: 190, l: 47.5, c: 142.5, vol: 7 }]);
+    expect(onSupply([k], undefined)).toEqual([k]);
+  });
+});
 
 describe("parseMcapCandles", () => {
   it("prices candles as market cap, oldest first, dropping unusable ones", () => {

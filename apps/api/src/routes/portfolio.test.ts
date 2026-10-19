@@ -64,6 +64,8 @@ describe.skipIf(!dbAvailable)("GET /portfolio", () => {
       data: [
         { tokenId: tokenIds[0]!, wallet: ADMIN, buys: 2, sells: 1, solIn: 1.5, solOut: 2 },
         { tokenId: tokenIds[1]!, wallet: OTHER, buys: 1, sells: 0, solIn: 0.4, solOut: 0 },
+        // Sold with no buy on the tape (bought before it was recorded): no cost, so out of the totals.
+        { tokenId: tokenIds[1]!, wallet: ADMIN, buys: 0, sells: 1, solIn: 0, solOut: 2.9 },
       ],
     });
     const at = Date.now() - 2 * 3_600_000;
@@ -118,8 +120,11 @@ describe.skipIf(!dbAvailable)("GET /portfolio", () => {
     expect(body.account).toMatchObject({ walletAddress: ADMIN, admin: true, pro: { source: "admin" } });
     // No node to read the chain from in tests: the holdings are left out, not guessed.
     expect(body.holdings).toBeNull();
-    expect(body.tape).toMatchObject({ coins: 1, buys: 2, sells: 1, solIn: 1.5, solOut: 2 });
-    expect(body.tape.recent.map((r: { mint: string }) => r.mint)).toEqual([OPEN_MINT]);
+    expect(body.tape).toMatchObject({ coins: 1, buys: 2, sells: 1, solIn: 1.5, solOut: 2, noBuyCoins: 1 });
+    // The sell-only coin stays listed, just out of the totals.
+    expect(body.tape.recent.map((r: { mint: string }) => r.mint).sort()).toEqual(
+      [OPEN_MINT, SOLD_MINT].sort(),
+    );
 
     // Pro Mode wallets only: anyone else finds nothing there.
     expect((await as(OTHER, "/portfolio")).statusCode).toBe(404);

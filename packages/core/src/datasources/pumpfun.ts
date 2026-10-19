@@ -1,6 +1,7 @@
 import { fetchJson, HttpError } from "./httpClient.js";
 import { pumpFunFrontendGate, pumpFunSwapGate, type PumpFunGate } from "./pumpfunGate.js";
 import { createLogger } from "../logger.js";
+import { mintSupplies, onCurrentSupply } from "../mintSupply.js";
 import { normalizeSocialUrl } from "./tokensage.js";
 import { looksLikeSolanaAddress } from "../solana.js";
 import type { MinuteCandle } from "../curation/regrade.js";
@@ -293,8 +294,8 @@ export class PumpFunClient {
   /**
    * The market cap Pump.fun reports for a coin right now, in USD. Read from the coin's own bonding
    * curve or pool state, it tracks the last trade within seconds, where DexScreener's runs 45-60s
-   * behind (2026-10-12). Null when Pump.fun has no such coin or no usable figure; throws on a
-   * transport failure.
+   * behind (2026-10-12). On the coin's supply now: Pump.fun's own figure counts the launch billion.
+   * Null when Pump.fun has no such coin or no usable figure; throws on a transport failure.
    */
   async liveMarketCap(mintAddress: string, timeoutMs = 2_000): Promise<number | null> {
     try {
@@ -307,7 +308,13 @@ export class PumpFunClient {
         },
       );
       const mcap = coin?.usd_market_cap ?? coin?.market_cap_usd;
-      return typeof mcap === "number" && Number.isFinite(mcap) && mcap > 0 ? mcap : null;
+      if (!(typeof mcap === "number" && Number.isFinite(mcap) && mcap > 0)) return null;
+      // Pump.fun prices every coin on its launch billion; burns are put back in (mintSupply.ts).
+      const supplies = await mintSupplies()
+        .get([mintAddress], Math.min(timeoutMs, 1_000))
+        .catch(() => new Map<string, number>());
+      const supply = supplies.get(mintAddress);
+      return onCurrentSupply(mcap, supply);
     } catch (err) {
       if (err instanceof HttpError && err.status === 404) return null;
       throw err;

@@ -381,15 +381,19 @@ async function alertSummary(userId: string, since7: Date, since30: Date) {
 /**
  * The wallet's trades in tracked coins, as the scanner's trade tape recorded them
  * (TokenWalletActivity): every tracked coin whose tape was read and the wallet traded in. SOL
- * figures are the tape's; coins still held are not valued here (the holdings are).
+ * figures are the tape's; coins still held are not valued here (the holdings are). A coin with
+ * sales but no buy on the tape (bought before TrenchScanner recorded it, or sent in) has no cost,
+ * so its SOL out would read as pure profit: the totals leave it out and count it as noBuyCoins
+ * (user report 2026-10-19), and its row stays listed.
  */
 async function tapeActivity(wallet: string) {
-  const [totals, recent] = await Promise.all([
+  const [totals, noBuyCoins, recent] = await Promise.all([
     prisma.tokenWalletActivity.aggregate({
-      where: { wallet },
+      where: { wallet, OR: [{ buys: { gt: 0 } }, { solIn: { gt: 0 } }] },
       _count: { _all: true },
       _sum: { buys: true, sells: true, solIn: true, solOut: true },
     }),
+    prisma.tokenWalletActivity.count({ where: { wallet, buys: 0, solIn: { lte: 0 } } }),
     prisma.tokenWalletActivity.findMany({
       where: { wallet },
       orderBy: { createdAt: "desc" },
@@ -413,6 +417,7 @@ async function tapeActivity(wallet: string) {
     sells: totals._sum.sells ?? 0,
     solIn: totals._sum.solIn ?? 0,
     solOut: totals._sum.solOut ?? 0,
+    noBuyCoins,
     recent: recent.map((r) => ({
       mint: r.token.mintAddress,
       symbol: r.token.symbol,

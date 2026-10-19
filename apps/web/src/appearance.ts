@@ -94,6 +94,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   chartMarkMinSol: 0.5,
   // The token chart draws a line unless the reader picks candles (user ask 2026-10-18).
   chartStyle: "line",
+  // The token chart opens on its Trading view, the latest at the right edge (user ask 2026-10-19).
+  chartView: "trading",
   // Experimental and off unless the reader turns it on (user ask 2026-10-18).
   chartPathing: false,
   // Off by default, all switchable back on in Customize: the composite score tile, so the stat tiles
@@ -334,6 +336,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
         ? Math.min(CHART_MARK_MAX_SOL, Math.max(CHART_MARK_MIN_SOL, r.chartMarkMinSol))
         : d.chartMarkMinSol,
     chartStyle: r.chartStyle === "candles" || r.chartStyle === "line" ? r.chartStyle : d.chartStyle,
+    chartView: r.chartView === "trading" || r.chartView === "all" ? r.chartView : d.chartView,
     chartPathing: typeof r.chartPathing === "boolean" ? r.chartPathing : d.chartPathing,
     hidden: Array.isArray(r.hidden)
       ? [...new Set(r.hidden.filter((f): f is CardField => typeof f === "string" && CARD_FIELDS.has(f)))]
@@ -395,6 +398,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartMarkKinds,
     chartMarkMinSol,
     chartStyle,
+    chartView,
     chartPathing,
   } = current;
   return normalizeAppearance({
@@ -423,6 +427,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartMarkKinds,
     chartMarkMinSol,
     chartStyle,
+    chartView,
     chartPathing,
   });
 }

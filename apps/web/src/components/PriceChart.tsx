@@ -55,14 +55,20 @@ export interface ChartTrade {
 /** How the chart draws the market cap: a line (the default) or candles. */
 export type ChartKind = "line" | "candles";
 
-/** The candle view's picked timeframe in ms, or null for Auto (as many as fit), kept on this device. */
+/**
+ * The candle view's picked timeframe in ms, or null for Auto (as many as fit), kept on this device
+ * under `key` (one per view); `def` until one is picked there.
+ */
 const TIMEFRAME_KEY = "ts.chartTimeframe";
-function readTimeframe(): number | null {
+function readTimeframe(key: string, def: number | null): number | null {
   try {
-    const ms = Number(localStorage.getItem(TIMEFRAME_KEY));
-    return TIMEFRAMES.some((f) => f.ms === ms) ? ms : null;
+    const v = localStorage.getItem(key);
+    if (v === null) return def;
+    if (v === "auto") return null;
+    const ms = Number(v);
+    return TIMEFRAMES.some((f) => f.ms === ms) ? ms : def;
   } catch {
-    return null;
+    return def;
   }
 }
 /**
@@ -85,20 +91,47 @@ function keepLogScale(on: boolean): void {
     // Private windows: the pick holds for this view only.
   }
 }
-function keepTimeframe(ms: number | null): void {
+function keepTimeframe(key: string, ms: number | null): void {
   try {
-    if (ms === null) localStorage.removeItem(TIMEFRAME_KEY);
-    else localStorage.setItem(TIMEFRAME_KEY, String(ms));
+    localStorage.setItem(key, ms === null ? "auto" : String(ms));
   } catch {
     // Private windows: the pick holds for this view only.
   }
 }
 /** A timeframe picked draws candles this wide on screen, about; the window zooms to fit them. */
 const PICKED_CANDLE_PX = 8;
-/** Candles thinner than this would smear together: the view draws a wider timeframe instead. */
-const MIN_CANDLE_PX = 3;
+/**
+ * A picked timeframe draws as itself up to this many candles in view, however thin; past it (a
+ * picked 1s over hours of history) the view draws a wider one, to keep the chart quick.
+ */
+const MAX_PICKED_BARS = 3_000;
 /** Auto draws candles about this wide, at least: the narrowest timeframe that leaves them room. */
 const AUTO_CANDLE_PX = 8;
+/** The Trading view's fitted value range, in ValueZoom terms: about the padding of the fitted axis. */
+const CENTER_FIT: ValueZoom = { a: -0.08, b: 1.08 };
+
+/**
+ * The value window with `c` at its middle: the fitted range runs as far either side of `c` as the
+ * farther of `lo` and `hi` (in log terms on a log axis), and `vz` zooms within it (0 its bottom, 1
+ * its top). A linear window may reach below zero; the axis labels none there.
+ */
+function centeredWindow(
+  lo: number,
+  hi: number,
+  c: number,
+  vz: ValueZoom,
+  log: boolean,
+): { lo: number; hi: number } {
+  if (!(c > 0)) c = Math.max(hi, 1);
+  if (log && lo > 0) {
+    const l = Math.log(c);
+    const h = Math.max(Math.log(hi) - l, l - Math.log(lo), 0.02);
+    return { lo: Math.exp(l - h + 2 * h * vz.a), hi: Math.exp(l - h + 2 * h * vz.b) };
+  }
+  const h = Math.max(hi - c, c - lo, c * 0.02);
+  return { lo: c - h + 2 * h * vz.a, hi: c - h + 2 * h * vz.b };
+}
+
 /** The widest a candle's body draws, however few share the plot. */
 const MAX_CANDLE_PX = 22;
 
@@ -152,6 +185,9 @@ export function PriceChart({
   onZoom,
   kind = "line",
   onKind,
+  pinEnd = false,
+  tfScope,
+  defaultTimeframe = null,
   path = [],
 }: {
   points: Point[];
@@ -203,6 +239,15 @@ export function PriceChart({
   /** Shows the Line / Candles switch under the chart. */
   onKind?: (kind: ChartKind) => void;
   /**
+   * The Trading view (user ask 2026-10-19): zooming holds the latest at the right edge while the
+   * window runs to it, wherever the pointer or fingers are.
+   */
+  pinEnd?: boolean;
+  /** Which view's candle size this is: each view keeps its own pick (the Trading view's, say). */
+  tfScope?: string;
+  /** The candle size before one is picked in this view: Auto (null) unless given. */
+  defaultTimeframe?: number | null;
+  /**
    * Experimental (Customize › Token chart): the predicted price path from the latest reading,
    * drawn dotted with its band past the line's end. The time axis makes room for it.
    */
@@ -219,15 +264,40 @@ export function PriceChart({
   // Zoom (user ask 2026-10-18): the wheel, a drag, a pinch or the buttons under the chart.
   const [ownZoom, setOwnZoom] = useState<Zoom | null>(null);
   // Candle timeframes (user ask 2026-10-18): null draws as many candles as fit (Auto).
-  const [savedTf, setTimeframe] = useState<number | null>(readTimeframe);
+  /**
+   * Whether the view is as it opened (or was reset): a picked candle size then shows about
+   * PICKED_CANDLE_PX candles; once the reader zooms, any window up to the whole view.
+   */
+  const [opening, setOpening] = useState(true);
+  const tfKey = tfScope ? `${TIMEFRAME_KEY}.${tfScope}` : TIMEFRAME_KEY;
+  const [savedTf, setTimeframe] = useState<number | null>(() => readTimeframe(tfKey, defaultTimeframe));
+  // Another view keeps its own pick.
+  const [tfKeyRead, setTfKeyRead] = useState(tfKey);
+  if (tfKeyRead !== tfKey) {
+    setTfKeyRead(tfKey);
+    setTimeframe(readTimeframe(tfKey, defaultTimeframe));
+    setOpening(true);
+  }
   const [logScale, setLogScale] = useState(readLogScale);
   /**
    * The value axis zoomed by hand (user ask 2026-10-19): scroll or drag on the price axis, or pinch
    * up and down on the chart. Null fits the data.
    */
   const [vZoom, setVZoom] = useState<ValueZoom | null>(null);
+  // A value zoom from the other view starts afresh: Trading's is about the latest price.
+  const [vZoomPin, setVZoomPin] = useState(pinEnd);
+  if (vZoomPin !== pinEnd) {
+    setVZoomPin(pinEnd);
+    setVZoom(null);
+  }
+  const pinRef = useRef(pinEnd);
+  pinRef.current = pinEnd;
   const zoom = onZoom ? (zoomProp ?? null) : ownZoom;
-  const setZoom = onZoom ?? setOwnZoom;
+  const setZoomTo = onZoom ?? setOwnZoom;
+  const setZoom = (z: Zoom | null) => {
+    setOpening(false);
+    setZoomTo(z);
+  };
   /** Phones dock the readout under the chart. */
   const docked = useSyncExternalStore(subscribePhone, isPhone, () => false);
   /**
@@ -275,13 +345,29 @@ export function PriceChart({
   const tfFits = (ms: number) => ms * 3 <= ext1 - ext0;
   const timeframe = savedTf !== null && tfFits(savedTf) ? savedTf : null;
   const plotW = width - PAD.l - PAD.r;
+  /**
+   * A picked candle size holds while zooming (user asks 2026-10-19): zooming out thins its candles
+   * rather than stopping or drawing wider ones, and zooming in never shrinks under three of them
+   * (MIN_ZOOM_MS at the least).
+   */
+  const minSpan = Math.min(
+    Math.max(1, ext1 - ext0),
+    kind === "candles" && timeframe !== null ? Math.max(MIN_ZOOM_MS, timeframe * 3) : MIN_ZOOM_MS,
+  );
 
   const geo = useMemo(() => {
     if (points.length < 2) return null;
-    const { from: t0, to: t1 } = zoomWindow(zoom, ext0, ext1);
+    const shownWin = zoomWindow(zoom, ext0, ext1);
+    const t1 = shownWin.to;
+    // Unzoomed, a picked size opens at about PICKED_CANDLE_PX a candle, as picking it zooms to.
+    const cap =
+      opening && zoom === null && kind === "candles" && timeframe !== null
+        ? timeframe * Math.max(8, Math.round(plotW / PICKED_CANDLE_PX))
+        : Infinity;
+    const t0 = Math.max(Math.min(shownWin.from, t1 - minSpan), t1 - cap, ext0);
     const pts = clipPoints(points, t0, t1);
     if (pts.length < 2) return null;
-    const zoomed = zoom !== null;
+    const zoomed = zoom !== null || t0 > ext0 + 1;
     const step = stepMs ?? Math.max(1, (t1 - t0) / (pts.length - 1));
     const lead = events[0];
     const leadShown = lead !== undefined && lead.t >= t0 && lead.t <= t1;
@@ -300,7 +386,7 @@ export function PriceChart({
     /** Why the drawn timeframe is wider than the one picked: coarser data in view, or too many. */
     let tfWider: "data" | "fit" | null = null;
     if (kind === "candles" && timeframe !== null) {
-      tfMs = candleTimeframe(timeframe, finest, t1 - t0, Math.max(1, Math.floor(plotW / MIN_CANDLE_PX)));
+      tfMs = candleTimeframe(timeframe, finest, t1 - t0, MAX_PICKED_BARS);
       if (tfMs > timeframe)
         tfWider = finest > timeframe && tfMs === candleTimeframe(finest, 0, 0, 1) ? "data" : "fit";
     }
@@ -339,10 +425,16 @@ export function PriceChart({
     const hi = Math.max(...values, ...wicks, ...extra, ...guessed);
     // A hand-zoomed value axis shows its window exactly, on the scale the fitted one would use.
     const fitLog = logScale && lo > 0 && hi / lo > 4;
-    const vw = vZoom ? valueWindow(lo, hi, vZoom, fitLog) : null;
+    // The Trading view holds the latest price at the middle of the axis (user ask 2026-10-19): the
+    // fitted range runs as far either side of it as the farthest value, and zooms about it.
+    const lastBar = bars ? [...bars].reverse().find((b) => b !== null) : undefined;
+    const latest = lastBar?.c ?? pts[pts.length - 1]!.v;
+    const centered = pinEnd ? centeredWindow(lo, hi, latest, vZoom ?? CENTER_FIT, fitLog) : null;
+    const vw = centered ?? (vZoom ? valueWindow(lo, hi, vZoom, fitLog) : null);
     const axis = vw
       ? windowAxis(vw.lo, vw.hi, fitLog, PAD.t, height - PAD.b)
       : mcapAxis(lo, hi, PAD.t, height - PAD.b, 5, logScale);
+    if (centered) axis.ticks = axis.ticks.filter((v) => v >= 0);
     const hiIdx = pts.reduce((best, p, i) => (p.v > pts[best]!.v ? i : best), 0);
     return {
       t0,
@@ -381,8 +473,11 @@ export function PriceChart({
     candles,
     kind,
     timeframe,
+    opening,
+    minSpan,
     logScale,
     vZoom,
+    pinEnd,
     origin,
     path,
     pathShown,
@@ -398,11 +493,19 @@ export function PriceChart({
 
   // The window as the wheel handler reads it: set on each render, and by the handler itself, so
   // wheel events between renders build on each other.
-  const winRef = useRef({ from: 0, to: 0, t0: 0, t1: 0 });
+  const winRef = useRef({ from: 0, to: 0, t0: 0, t1: 0, pin: false, min: MIN_ZOOM_MS });
   const setZoomRef = useRef(setZoom);
   useEffect(() => {
     setZoomRef.current = setZoom;
-    if (geo) winRef.current = { from: geo.t0, to: geo.t1, t0: ext0, t1: ext1 };
+    if (geo)
+      winRef.current = {
+        from: geo.t0,
+        to: geo.t1,
+        t0: ext0,
+        t1: ext1,
+        pin: pinEnd,
+        min: minSpan,
+      };
   });
   const hasGeo = geo !== null;
   useEffect(() => {
@@ -423,9 +526,10 @@ export function PriceChart({
       } else {
         // Zoomed all the way out, scrolling down scrolls the page as before.
         if (e.deltaY === 0 || (e.deltaY > 0 && !zoomed)) return;
-        const at = Math.min(1, Math.max(0, (e.clientX - box.left - PAD.l) / pw));
+        const at =
+          w.pin && w.to >= w.t1 - 1 ? 1 : Math.min(1, Math.max(0, (e.clientX - box.left - PAD.l) / pw));
         const factor = Math.exp(Math.max(-1, Math.min(1, (e.deltaY * unit) / 300)));
-        next = zoomBy(w, w.t0, w.t1, factor, at);
+        next = zoomBy(w, w.t0, w.t1, factor, at, w.min);
       }
       e.preventDefault();
       winRef.current = { ...w, from: next?.from ?? w.t0, to: next?.to ?? w.t1 };
@@ -444,7 +548,7 @@ export function PriceChart({
       if (box.height <= 0 || e.deltaY === 0) return;
       e.preventDefault();
       const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
-      const at = Math.min(1, Math.max(0, (box.bottom - e.clientY) / box.height));
+      const at = pinRef.current ? 0.5 : Math.min(1, Math.max(0, (box.bottom - e.clientY) / box.height));
       const factor = Math.exp(Math.max(-1, Math.min(1, (e.deltaY * unit) / 300)));
       setHover(null);
       setVZoom((vz) => zoomValue(vz, factor, at));
@@ -458,7 +562,7 @@ export function PriceChart({
   const span = geo.t1 - geo.t0;
   const win = { from: geo.t0, to: geo.t1 };
   const zoomed = geo.zoomed;
-  const atMin = span <= Math.min(MIN_ZOOM_MS, ext1 - ext0) + 1;
+  const atMin = span <= minSpan + 1;
   // Whether the window runs to the view's end: zoomed off it, the end tag is the window's last
   // reading and the latest goes under it as "NOW:".
   const atEnd = geo.t1 >= ext1 - 1;
@@ -580,7 +684,9 @@ export function PriceChart({
   };
   /** Both axes back to the whole range, fitted. */
   const resetZoom = () => {
-    winTo(null);
+    setHover(null);
+    setZoomTo(null);
+    setOpening(true);
     setVZoom(null);
   };
   const plotH = bottom - PAD.t;
@@ -590,7 +696,7 @@ export function PriceChart({
   // the latest in view when the window ends on it.
   const pickTimeframe = (ms: number | null) => {
     setTimeframe(ms);
-    keepTimeframe(ms);
+    keepTimeframe(tfKey, ms);
     if (ms === null) return;
     const target = Math.max(MIN_ZOOM_MS, ms * Math.max(8, Math.round(plotW / PICKED_CANDLE_PX)));
     winTo(zoomBy(win, ext0, ext1, target / Math.max(1, span), atEnd ? 1 : 0.5));
@@ -721,7 +827,8 @@ export function PriceChart({
             // Along time when zoomed in on it; up and down too when the value axis is.
             if (zoomed)
               setZoom(panBy(g.win, ext0, ext1, -((e.clientX - g.x) / plotW) * (g.win.to - g.win.from)));
-            if (g.vz) setVZoom(panValue(g.vz, (e.clientY - g.y) / plotH));
+            // Trading holds the latest price centered, so only time moves there.
+            if (g.vz && !pinEnd) setVZoom(panValue(g.vz, (e.clientY - g.y) / plotH));
             return;
           }
           if (touches.current.has(e.pointerId))
@@ -738,10 +845,18 @@ export function PriceChart({
             if (!a || !b || !box) return;
             // The moment under the fingers' first middle stays under their middle as they move.
             const mid = (a.x + b.x) / 2;
-            const at = Math.min(1, Math.max(0, (g.mid - box.left - PAD.l) / plotW));
-            const z = zoomBy(g.win, ext0, ext1, g.dist / Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)), at);
+            const pinned = pinEnd && g.win.to >= ext1 - 1;
+            const at = pinned ? 1 : Math.min(1, Math.max(0, (g.mid - box.left - PAD.l) / plotW));
+            const z = zoomBy(
+              g.win,
+              ext0,
+              ext1,
+              g.dist / Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)),
+              at,
+              minSpan,
+            );
             const w = z ?? { from: ext0, to: ext1 };
-            setZoom(z && panBy(w, ext0, ext1, -((mid - g.mid) / plotW) * (w.to - w.from)));
+            setZoom(pinned ? z : z && panBy(w, ext0, ext1, -((mid - g.mid) / plotW) * (w.to - w.from)));
             return;
           }
           pick(e.clientX);
@@ -760,7 +875,9 @@ export function PriceChart({
                   ? {
                       kind: "vpinch",
                       dist: Math.max(10, Math.abs(a.y - b.y)),
-                      at: Math.min(1, Math.max(0, (box.top + bottom - (a.y + b.y) / 2) / plotH)),
+                      at: pinEnd
+                        ? 0.5
+                        : Math.min(1, Math.max(0, (box.top + bottom - (a.y + b.y) / 2) / plotH)),
                       vz: vZoom,
                     }
                   : {
@@ -1269,7 +1386,7 @@ export function PriceChart({
             aria-label="Zoom out"
             title="Zoom out"
             disabled={!zoomed}
-            onClick={() => winTo(zoomBy(win, ext0, ext1, 2, anchorAt))}
+            onClick={() => winTo(zoomBy(win, ext0, ext1, 2, anchorAt, minSpan))}
           >
             −
           </button>
@@ -1279,11 +1396,11 @@ export function PriceChart({
             aria-label="Zoom in"
             title="Zoom in"
             disabled={atMin}
-            onClick={() => winTo(zoomBy(win, ext0, ext1, 0.5, anchorAt))}
+            onClick={() => winTo(zoomBy(win, ext0, ext1, 0.5, anchorAt, minSpan))}
           >
             +
           </button>
-          {(zoomed || vZoom) && (
+          {(zoomed || vZoom || !opening) && (
             <button
               type="button"
               className="tm-range"

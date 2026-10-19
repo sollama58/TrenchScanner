@@ -4,6 +4,7 @@ import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError } from "./rateGate.js";
 import { isCurveVenue } from "../launchpads.js";
 import { MARKET_SOURCE } from "../marketSource.js";
+import { onCurrentSupplies } from "../mintSupply.js";
 import type { CandidateToken } from "../types.js";
 
 const logger = createLogger("geckoterminal");
@@ -180,7 +181,11 @@ export class GeckoTerminalClient {
       await work;
     }
     if (failed) for (const mint of unique) if (!settled.has(mint)) failed.add(mint);
-    return [...results];
+    // GeckoTerminal's fdv counts a Pump.fun coin's launch billion, burns and all (0.9999B on a coin
+    // with 0.95B left on 2026-10-19): each cap is re-made on the supply now (mintSupply.ts).
+    return onCurrentSupplies(results, {
+      waitMs: deadline === Infinity ? undefined : Math.max(0, deadline - Date.now()),
+    });
   }
 }
 

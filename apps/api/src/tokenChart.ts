@@ -2,7 +2,7 @@ import { createLogger, fetchJson, HttpError, PUMP_SUPPLY_TOKENS, pumpFunSwapGate
 
 const logger = createLogger("token-chart");
 
-/** One minute of a coin's trading, priced as market cap (USD price x Pump.fun's one billion supply). */
+/** One minute of a coin's trading, priced as market cap (USD price x Pump.fun's one billion supply; onSupply puts it on the supply now). */
 export interface McapCandle {
   /** The minute's start, epoch ms. */
   t: number;
@@ -44,6 +44,16 @@ export function parseMcapCandles(body: unknown, supply = PUMP_SUPPLY_TOKENS): Mc
     });
   }
   return out.sort((a, b) => a.t - b.t);
+}
+
+/**
+ * Exported for tests. Candles on the launch billion put on the coin's supply now (`factor`: supply
+ * over 1B, mintSupply.ts), so the chart reads the market cap the top bar and the cards do once
+ * burns have taken some of the billion out. Volume is in USD and stays as it is.
+ */
+export function onSupply(candles: McapCandle[], factor: number | undefined): McapCandle[] {
+  if (factor === undefined || factor === 1 || !(factor > 0)) return candles;
+  return candles.map((k) => ({ ...k, o: k.o * factor, h: k.h * factor, l: k.l * factor, c: k.c * factor }));
 }
 
 export type CandleFetcher = (mint: string) => Promise<McapCandle[] | null>;
