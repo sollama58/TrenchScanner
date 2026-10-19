@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { api, FEED_TIMEOUT_MS } from "../api";
 import type { Point } from "../priceChart";
 
 /** Mirrors apps/api/src/liveCurve.ts LiveCurveAnswer. */
@@ -77,12 +77,15 @@ export function useLiveTail(base: string, enabled: boolean): LiveTail {
       window.clearTimeout(timer);
       if (!stopped) timer = window.setTimeout(() => void poll(), ms);
     };
+    let busy = false;
     const poll = async () => {
       if (document.visibilityState !== "visible") return next(LIVE_POLL_MS);
       const sent = Date.now();
+      busy = true;
       try {
         const a = await api<LiveCurveAnswer>(`${base}/chart/live?after=${after.current}&wait=1`, {
           signal: abort.signal,
+          timeoutMs: FEED_TIMEOUT_MS,
         });
         if (stopped) return;
         failures = 0;
@@ -108,12 +111,22 @@ export function useLiveTail(base: string, enabled: boolean): LiveTail {
         );
       } catch {
         if (!stopped) next(Math.min(MAX_BACKOFF_MS, LIVE_POLL_MS * 2 ** ++failures));
+      } finally {
+        busy = false;
       }
     };
+    // Back online (a laptop woken, a network switched): ask at once rather than out the backoff.
+    const resume = () => {
+      if (busy || stopped) return;
+      failures = 0;
+      next(0);
+    };
     void poll();
+    window.addEventListener("online", resume);
     return () => {
       stopped = true;
       window.clearTimeout(timer);
+      window.removeEventListener("online", resume);
       abort.abort();
     };
   }, [base, enabled]);
@@ -140,10 +153,15 @@ export function useFineCandles(base: string, res: "1s" | "15s" | null, everyMs: 
     if (!res) return;
     let stopped = false;
     let timer: number | undefined;
+    let busy = false;
     const poll = async () => {
+      window.clearTimeout(timer);
+      busy = true;
       if (document.visibilityState === "visible") {
         try {
-          const data = await api<FineCandles>(`${base}/chart/fine?res=${res}`);
+          const data = await api<FineCandles>(`${base}/chart/fine?res=${res}`, {
+            timeoutMs: FEED_TIMEOUT_MS,
+          });
           // An answer with no candles (over budget, upstream paused) keeps the last good page.
           if (!stopped)
             setHeld((prev) =>
@@ -153,12 +171,19 @@ export function useFineCandles(base: string, res: "1s" | "15s" | null, everyMs: 
           // The view keeps its minute candles meanwhile; the next round tries again.
         }
       }
+      busy = false;
       if (!stopped) timer = window.setTimeout(() => void poll(), everyMs);
     };
+    // Back online: read at once rather than at the next round.
+    const resume = () => {
+      if (!busy && !stopped) void poll();
+    };
     void poll();
+    window.addEventListener("online", resume);
     return () => {
       stopped = true;
       window.clearTimeout(timer);
+      window.removeEventListener("online", resume);
     };
   }, [base, res, key, everyMs]);
   return held && held.key === key ? held.data : null;
