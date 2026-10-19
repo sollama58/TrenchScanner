@@ -387,6 +387,32 @@ describe.skipIf(!dbAvailable)("settings routes", () => {
     ).toBe(401);
   });
 
+  it("saves Scope's settings whole and rejects anything out of bounds", async () => {
+    expect((await call("user", "GET", "/settings")).json().scopeSettings).toBeNull();
+    const scope = {
+      display: { stream: true, density: "compact", chips: ["holders", "top10"], hiddenColumns: [] },
+      columns: { models: { mcapMin: 10_000, mcapMax: null, socials: "x", models: ["Narrative"] } },
+    };
+    const res = await call("user", "PUT", "/settings/scope", scope);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().scopeSettings).toEqual(scope);
+    expect((await call("user", "GET", "/settings")).json().scopeSettings).toEqual(scope);
+
+    const bad = [
+      { ...scope, extra: 1 },
+      { display: scope.display },
+      { ...scope, columns: { nope: {} } },
+      { ...scope, display: { stream: { deep: true } } },
+      { ...scope, display: { density: "x".repeat(41) } },
+      { ...scope, display: Object.fromEntries(Array.from({ length: 61 }, (_, i) => [`k${i}`, true])) },
+    ];
+    for (const b of bad) expect((await call("user", "PUT", "/settings/scope", b)).statusCode).toBe(400);
+    expect((await call("user", "GET", "/settings")).json().scopeSettings).toEqual(scope);
+    expect((await app.inject({ method: "PUT", url: "/settings/scope", payload: scope })).statusCode).toBe(
+      401,
+    );
+  });
+
   it("needs a session", async () => {
     const res = await app.inject({ method: "GET", url: "/settings" });
     expect(res.statusCode).toBe(401);

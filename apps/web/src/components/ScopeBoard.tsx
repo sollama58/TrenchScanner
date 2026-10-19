@@ -60,8 +60,6 @@ const GRADUATED_POLL_MS = 10_000;
 
 /** The Stream (GET /launches): Scope's New and About to graduate when its Stream switch is on. */
 const STREAM_PATH = "/launches";
-/** The Stream's tokens about to graduate, from the whole day (the newest pages rarely hold one). */
-const SOON_PATH = "/launches?soon=1";
 
 /**
  * Scope (user ask 2026-10-18): the Live feed's alerts as a dense three-column board of compact
@@ -104,13 +102,11 @@ export function ScopeBoard({
       )
     : [];
   const streamPages = usePollingAll<LaunchPage>(streamPaths, GRADUATED_POLL_MS);
-  const soonPage = usePollingAll<LaunchPage>(streamOn ? [SOON_PATH] : [], GRADUATED_POLL_MS);
-  const soonData = soonPage.data[0];
   // Each column fills in as its own source answers: the feed, the graduated list and the Stream
   // are three requests, and none waits on the others (user ask 2026-10-18).
   const streamFirst = streamPages.data[0];
   const buffer = useMemo(() => {
-    if (!first.data && !graduated.data && !streamFirst && !soonData) return undefined;
+    if (!first.data && !graduated.data && !streamFirst) return undefined;
     const grad = graduated.data?.launches ?? [];
     const gradIds = new Set(grad.map((c) => c.id));
     const stream: Card[] = [];
@@ -119,11 +115,9 @@ export function ScopeBoard({
       if (!p) break;
       for (const c of p.launches) if (!gradIds.has(c.id)) stream.push(c);
     }
-    const inStream = new Set(stream.map((c) => c.id));
-    for (const c of soonData?.launches ?? []) if (!gradIds.has(c.id) && !inStream.has(c.id)) stream.push(c);
     const feed = first.data ? joinPages([first.data, ...more.data]) : [];
     return [...feed, ...grad, ...stream];
-  }, [first.data, more.data, graduated.data, streamPages.data, streamFirst, soonData]);
+  }, [first.data, more.data, graduated.data, streamPages.data, streamFirst]);
   const [tickIds, setTickIds] = useState<string[] | undefined>(undefined);
   const visible = useLiveMarketCaps(buffer, tickIds);
 
@@ -143,13 +137,6 @@ export function ScopeBoard({
     (card: Card) => hideToken(card, visible ?? [], gradTokens),
     [visible, gradTokens],
   );
-  // Which Stream cards came from the newest pages (New and About to graduate) and which from the
-  // about-to-graduate list (About to graduate only).
-  const pageIds = useMemo(
-    () => new Set(streamPages.data.flatMap((p) => (p?.launches ?? []).map((c) => c.id))),
-    [streamPages.data],
-  );
-  const soonIds = useMemo(() => new Set((soonData?.launches ?? []).map((c) => c.id)), [soonData]);
   // Every column before its filters: what the settings window offers to pick from.
   const unfiltered = useMemo(() => {
     if (!visible) return undefined;
@@ -161,15 +148,12 @@ export function ScopeBoard({
         filters: settings.columns.filters.showGraduated,
         models: settings.columns.models.showGraduated,
       },
-      shown.filter((c) => c.kind === "stream" && !gradIds.has(c.id) && pageIds.has(c.id)),
-      shown.filter((c) => c.kind === "stream" && !gradIds.has(c.id) && soonIds.has(c.id)),
+      shown.filter((c) => c.kind === "stream" && !gradIds.has(c.id)),
     );
   }, [
     visible,
     hiddenIds,
     gradIds,
-    pageIds,
-    soonIds,
     settings.columns.filters.showGraduated,
     settings.columns.models.showGraduated,
   ]);
@@ -219,11 +203,9 @@ export function ScopeBoard({
   const loading = (id: ScopeColumn) =>
     id === "graduated"
       ? !graduated.data && !graduated.error
-      : id === "new"
+      : id === "new" || id === "soon"
         ? !streamFirst && !streamPages.error
-        : id === "soon"
-          ? !soonData && !soonPage.error
-          : !first.data && !first.error;
+        : !first.data && !first.error;
   const pending = held?.pending ?? 0;
 
   const tickKey = scopeTickIds(cols).join(",");
@@ -373,13 +355,7 @@ export function ScopeBoard({
                 <p className="muted small scope-empty">
                   {(unfiltered?.[c.id].length ?? 0) > 0
                     ? "Nothing here passes this column's filters right now."
-                    : emptyText(
-                        c.id,
-                        modelsOn,
-                        graduated.error,
-                        streamPages.error ?? soonPage.error,
-                        first.error,
-                      )}
+                    : emptyText(c.id, modelsOn, graduated.error, streamPages.error, first.error)}
                 </p>
               ) : (
                 cols[c.id].map((card, i) => (
@@ -416,7 +392,7 @@ function emptyText(
   if ((col === "new" || col === "soon") && streamError)
     return `Couldn't load the Stream: ${streamError.message}`;
   if (col === "new") return "Nothing has passed the safety screen in the band lately.";
-  if (col === "soon") return "Nothing on the Stream is close to graduating right now.";
+  if (col === "soon") return "Nothing on the Stream is still on its curve lately.";
   if (col === "filters") return "Nothing from your filters among the newest alerts.";
   if (col === "models")
     return modelsOn ? "No model calls among the newest alerts." : "Model alerts are off in Settings.";

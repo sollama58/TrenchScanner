@@ -10,13 +10,9 @@ import { nowReading } from "./components/AlertCard";
 export type ScopeColumn = "filters" | "models" | "new" | "soon" | "graduated";
 
 /**
- * About to graduate: a Stream token at this market cap or more, still on its curve. Pump.fun
- * curves complete at about $70-90K depending on SOL's price, so this is roughly half way and up.
+ * A card's market cap now, else at its scan: how close a coin still on its curve is to graduating,
+ * since a launchpad curve completes at a set market cap (Pump.fun's at about $70-90K).
  */
-export const SOON_MCAP_USD = 45_000;
-const SOON_LABEL = "$45K";
-
-/** A card's market cap now, else at its scan. */
 const mcapOf = (card: Card): number => nowReading(card) ?? card.snapshot.marketCapUsd ?? 0;
 
 export const SCOPE_COLUMNS: { id: ScopeColumn; label: string; short: string; hint: string }[] = [
@@ -37,7 +33,7 @@ export const SCOPE_COLUMNS: { id: ScopeColumn; label: string; short: string; hin
     id: "soon",
     label: "About to graduate",
     short: "Soon",
-    hint: `Tokens on the Stream at ${SOON_LABEL} or more, still on their bonding curve, closest to graduating first`,
+    hint: "The same tokens as New, closest to graduating first",
   },
   {
     id: "graduated",
@@ -92,35 +88,25 @@ function timeOf(iso: string | null | undefined): number {
  * graduated tokens. A filter alert a model call folded into is in both: it is your alert and the
  * model's call. An alert whose coin has graduated moves to the Graduated column (user ask
  * 2026-10-18), in its coin's place there or by its alert time, keeping its filter or model marker;
- * `keepGraduated` leaves it in its own column too. `soon` is the Stream's own list of tokens about
- * to graduate (GET /launches?soon=1), from the whole day rather than only the newest pages.
+ * `keepGraduated` leaves it in its own column too. New and About to graduate hold the same Stream
+ * tokens still on their curve (user ask 2026-10-19), New newest first and About to graduate by
+ * market cap, biggest (closest to graduating) first.
  */
 export function splitScope(
   feed: readonly Card[],
   graduated: readonly Card[],
   keepGraduated: { filters: boolean; models: boolean } = { filters: false, models: false },
   stream: readonly Card[] = [],
-  soon: readonly Card[] = [],
 ): ScopeColumns {
   const out = emptyColumns();
   const gradTokens = new Set(graduated.map((c) => c.tokenId));
-  // The Stream's tokens still on their curve: About to graduate from SOON_MCAP_USD up, closest
-  // first, the rest in New as the Stream has them, newest first.
   const seen = new Set<string>();
-  // Still at the mark by the live reading: one that has dropped under it since isn't new, so it
-  // goes nowhere unless the newest pages have it too.
-  for (const card of soon) {
-    if (seen.has(card.tokenId) || cardGraduated(card, gradTokens) || mcapOf(card) < SOON_MCAP_USD) continue;
-    seen.add(card.tokenId);
-    out.soon.push(card);
-  }
   for (const card of stream) {
     if (seen.has(card.tokenId) || cardGraduated(card, gradTokens)) continue;
     seen.add(card.tokenId);
-    if (mcapOf(card) >= SOON_MCAP_USD) out.soon.push(card);
-    else out.new.push(card);
+    out.new.push(card);
   }
-  out.soon.sort((a, b) => mcapOf(b) - mcapOf(a));
+  out.soon = [...out.new].sort((a, b) => mcapOf(b) - mcapOf(a));
   const moved = new Map<string, Card>();
   // A token both a filter and a model alerted on sits only in the column that alerted first (user
   // ask 2026-10-19); a tie, or no times to go by, goes to Your filters.
