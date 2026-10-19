@@ -725,7 +725,7 @@ services:
     # those scripts, or VITE_API_URL below (the boot prefetch has it baked in), changes its hash:
     # apps/web/src/csp.test.ts fails until the new hash is pasted here. connect-src is the API on
     # both hosts (SAME_SITE_APIS in apps/web/src/api.ts and VITE_API_URL), plus Privy for email
-    # sign-in (its API, its RPC, its funding bridge, and Solana's public RPC it reads with), from
+    # sign-in (its API, its Solana RPC over https and wss, and its funding bridge), from
     # Privy's CSP guide. Privy's window is a frame on auth.privy.io; its captcha is Cloudflare
     # Turnstile (script and frame). DexScreener and GeckoTerminal are the token chart's backup
     # candles, read by the browser when the API has none (apps/web/src/backupCandles.ts). No other
@@ -734,7 +734,7 @@ services:
     headers:
       - path: /*
         name: Content-Security-Policy
-        value: "script-src 'self' https://challenges.cloudflare.com 'sha256-5Z14paLArXMiYwxC/6ty5E5jlf45X+JMHFxkETVMbhE=' 'sha256-KYIyUYVTuGOUtwgz6C9xzns4oKDzv4LdZ6BVTGNVmlU=' 'sha256-aPP2zqXp+dhQL2Wt2SloBpBN689FOhli++WSSaLxVbY=' 'sha256-eO6WnxT1VOAqTBWNmFSlQhMN2SWrCT/WzqtXBsogR0k='; connect-src 'self' https://api.trenchscanner.app https://trenchscanner-api.onrender.com https://auth.privy.io https://*.rpc.privy.systems https://api.relay.link https://api.mainnet-beta.solana.com wss://api.mainnet-beta.solana.com https://api.dexscreener.com https://api.geckoterminal.com; frame-src https://auth.privy.io https://challenges.cloudflare.com; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://holdex.live https://www.holdex.live"
+        value: "script-src 'self' https://challenges.cloudflare.com 'sha256-5Z14paLArXMiYwxC/6ty5E5jlf45X+JMHFxkETVMbhE=' 'sha256-KYIyUYVTuGOUtwgz6C9xzns4oKDzv4LdZ6BVTGNVmlU=' 'sha256-aPP2zqXp+dhQL2Wt2SloBpBN689FOhli++WSSaLxVbY=' 'sha256-eO6WnxT1VOAqTBWNmFSlQhMN2SWrCT/WzqtXBsogR0k='; connect-src 'self' https://api.trenchscanner.app https://trenchscanner-api.onrender.com https://auth.privy.io https://*.rpc.privy.systems wss://*.rpc.privy.systems https://api.relay.link https://api.dexscreener.com https://api.geckoterminal.com; frame-src https://auth.privy.io https://challenges.cloudflare.com; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://holdex.live https://www.holdex.live"
       # HTTPS only from the first visit on. No includeSubDomains: only this host's own redirect is
       # certain here, and preload would lock that in for every subdomain.
       - path: /*
