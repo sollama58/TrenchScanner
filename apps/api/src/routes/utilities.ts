@@ -31,6 +31,7 @@ import {
   walletTag,
 } from "@trenchscanner/core";
 import { creatorFeesByMint, TOKEN_CARD_SELECT, withCarriedHolderList } from "../curatedFeed.js";
+import { searchUntrackedTokens, type ExternalSearchHit } from "../tokenSearch.js";
 import { readKolRows } from "../kolRoster.js";
 import { loadKolLabelCounts, loadKolSideLabels, loadLabeledSides } from "../possibleSides.js";
 import {
@@ -39,7 +40,7 @@ import {
   PAIR_TRANSFERS_MAX,
   transferGroup,
 } from "../sideTransfers.js";
-import { currentMarketCap } from "./matches.js";
+import { allowTextSearch, currentMarketCap, tokenSearchParam } from "./matches.js";
 import {
   fineRes,
   liveAfter,
@@ -102,6 +103,10 @@ const walletSchema = z.object({ wallet: z.string().regex(ADDRESS_RE, "That isn't
 const quoteSchema = z.object({
   utility: z.enum(["token", "wallet"]),
   subject: z.string().regex(ADDRESS_RE, "That isn't a Solana address."),
+});
+const searchSchema = z.object({
+  mint: z.string().regex(ADDRESS_RE, "That isn't a Solana address.").optional(),
+  q: tokenSearchParam,
 });
 const claimSchema = z.object({ signature: z.string().regex(SIGNATURE_RE, "invalid transaction signature") });
 
@@ -313,6 +318,44 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     const reason: FreeLookupReason | "open" | null = free ?? (open ? "open" : null);
     reply.header("Cache-Control", "no-store");
     return { utility, subject, cost: reason ? 0 : prices.cost[utility], free: reason };
+  });
+
+  /**
+   * The search window's second section (user ask 2026-10-19): coins TrenchScanner doesn't track
+   * that match, from DexScreener's search, each with what looking it up would cost the caller
+   * (a re-open or a coin they traded is free), and their balance to pay with.
+   */
+  app.get("/search", async (request, reply) => {
+    const parsed = searchSchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const { mint, q } = parsed.data;
+    if (!mint && !q) return reply.code(400).send({ error: "search by q or mint" });
+    const wallet = request.user!.walletAddress;
+    // The feed's text search budget: the same box asks this alongside GET /tokens/search.
+    if (!mint && !allowTextSearch(`${request.user!.userId}:external`)) {
+      return reply.code(429).send({ error: "Too many searches; wait a few seconds and try again." });
+    }
+    const [found, prices, balance, daily] = await Promise.all([
+      withApiFeature("token-search", () =>
+        searchUntrackedTokens((query) => opts.dexScreener.search(query), mint ? { mint } : { text: q! }),
+      ),
+      burnCreditPrices(),
+      creditBalance(wallet),
+      dailyFreeFor(request) ? dailyFreeCredits(wallet) : null,
+    ]);
+    const hits = await Promise.all(
+      found.map(async (hit): Promise<ExternalSearchHit & { free: FreeLookupReason | "open" | null }> => {
+        const [free, open] = await Promise.all([
+          freeLookupReason(wallet, "token", hit.mint),
+          openLookup(wallet, "token", hit.mint),
+        ]);
+        return { ...hit, free: free ?? (open ? "open" : null) };
+      }),
+    );
+    reply.header("Cache-Control", "no-store");
+    return { hits, cost: prices.cost.token, balance, freeLeft: daily?.left ?? null };
   });
 
   /**

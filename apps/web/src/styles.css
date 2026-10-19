@@ -14589,6 +14589,9 @@ dialog.search-modal::backdrop {
   text-transform: uppercase;
   color: var(--brand-ink);
 }
+.search-section-head > span:first-child {
+  white-space: nowrap;
+}
 .search-section-head .small {
   font-weight: 400;
   letter-spacing: 0;
@@ -14700,6 +14703,35 @@ dialog.search-modal::backdrop {
 .search-hit-figs dd.good {
   color: var(--good-ink);
 }
+.search-hits .search-section-head:not(:first-child) {
+  margin-top: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.search-hit-price {
+  display: flex;
+  align-items: center;
+  min-width: 76px;
+  justify-content: flex-end;
+}
+.search-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 0 4px 6px 62px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--brand-b) 45%, transparent);
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--brand-a) 12%, transparent);
+  color: var(--ink-2);
+}
+.search-confirm-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
 .search-skeleton {
   display: grid;
   gap: 2px;
@@ -14742,6 +14774,9 @@ dialog.search-modal::backdrop {
   }
   .search-fig-wide {
     display: none;
+  }
+  .search-confirm {
+    margin-left: 4px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
