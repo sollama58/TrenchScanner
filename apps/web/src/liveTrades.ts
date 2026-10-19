@@ -71,10 +71,18 @@ export function useLiveTrades(base: string, enabled: boolean): LiveTrades {
         });
         if (stopped) return;
         failures = 0;
-        const fresh = a.trades.filter((t) => t.seq > after.current);
-        after.current = Math.max(after.current, a.cursor);
+        // A cursor behind ours means the API restarted (or another instance answered) and its seqs
+        // began again: it sent everything it has, so start over from that rather than dropping it
+        // all as already seen, which froze the list until its seqs passed ours.
+        const restarted = a.cursor < after.current;
+        const fresh = restarted ? a.trades : a.trades.filter((t) => t.seq > after.current);
+        after.current = restarted ? a.cursor : Math.max(after.current, a.cursor);
         setFeed((prev) => ({
-          trades: fresh.length > 0 ? prev.trades.concat(fresh).slice(-MAX_TRADES) : prev.trades,
+          trades: restarted
+            ? fresh.slice(-MAX_TRADES)
+            : fresh.length > 0
+              ? prev.trades.concat(fresh).slice(-MAX_TRADES)
+              : prev.trades,
           status: a.status,
           since: a.since,
         }));

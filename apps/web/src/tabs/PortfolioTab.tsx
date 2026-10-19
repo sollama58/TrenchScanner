@@ -670,9 +670,11 @@ function BotPanel({ positions, now }: { positions: Portfolio["botPositions"]; no
                 <td className="num">{sol(p.gotSol)}</td>
                 <td className={`num${tone(p.lastMultiple === null ? null : p.lastMultiple - 1)}`}>
                   {p.lastMultiple === null ? "–" : `${p.lastMultiple.toFixed(2)}x`}
-                  {p.status === "open" && pricedAgeText(p.lastPricedAt, now) && (
-                    <div className="faint small">{pricedAgeText(p.lastPricedAt, now)}</div>
-                  )}
+                  {p.status === "open" &&
+                    p.lastPricedAt !== undefined &&
+                    pricedAgeText(p.lastPricedAt, now) && (
+                      <div className="faint small">{pricedAgeText(p.lastPricedAt, now)}</div>
+                    )}
                 </td>
                 <td className="num">{p.highMultiple === null ? "–" : `${p.highMultiple.toFixed(2)}x`}</td>
                 <td className="faint">{p.openedAt ? ago(p.openedAt, now) : "–"}</td>
