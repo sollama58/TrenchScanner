@@ -323,8 +323,8 @@ describe.skipIf(!dbAvailable)("GET /health/worker?strict=1 against the database"
       STRICT_WORKER_JOBS.map((job) =>
         prisma.systemHeartbeat.upsert({
           where: { job },
-          create: { job, lastRunAt: at },
-          update: { lastRunAt: at, meta: {} },
+          create: { job, lastRunAt: at, lastSuccessAt: at },
+          update: { lastRunAt: at, lastSuccessAt: at, meta: {} },
         }),
       ),
     );

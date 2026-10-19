@@ -188,7 +188,8 @@ export class SharedCache<T> {
         // than an error, and the next request retries. Only a cold cache propagates the error.
         if (
           this.value &&
-          (this.maxStaleOnErrorMs === undefined || Date.now() - this.filledAt <= this.maxStaleOnErrorMs)
+          (this.maxStaleOnErrorMs === undefined ||
+            Date.now() - this.value.computedAt.getTime() <= this.maxStaleOnErrorMs)
         ) {
           logger.warn("refresh failed, serving stale", { err: String(err) });
           return this.stamped(this.value);
