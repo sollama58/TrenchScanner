@@ -288,3 +288,20 @@ export function unhideAll(): void {
 export function setAutoUnhide(on: boolean): void {
   change({ ...current, autoUnhide: on });
 }
+
+/**
+ * Forgets this device's copy when its account signs out, so the next account to sign in here
+ * neither sees nor saves this one's list. The bump makes a settings load still on its way skip.
+ */
+export function resetHiddenTokens(): void {
+  if (timer) clearTimeout(timer);
+  timer = null;
+  version++;
+  current = DEFAULT_HIDDEN_TOKENS;
+  try {
+    localStorage.removeItem(HIDDEN_KEY);
+  } catch {
+    // Storage blocked: nothing was kept there either.
+  }
+  emit();
+}

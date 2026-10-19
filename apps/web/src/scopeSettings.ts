@@ -300,6 +300,23 @@ if (typeof window !== "undefined") {
   });
 }
 
+/**
+ * Forgets this device's copy when its account signs out: an account with none saved takes this
+ * browser's (adoptScopeSettings), so the next one to sign in here would otherwise get these.
+ */
+export function resetScopeSettings(): void {
+  if (timer) clearTimeout(timer);
+  timer = null;
+  version++;
+  current = DEFAULT_SCOPE_SETTINGS;
+  try {
+    localStorage.removeItem(SCOPE_SETTINGS_KEY);
+  } catch {
+    // Storage blocked: nothing was kept there either.
+  }
+  for (const l of listeners) l();
+}
+
 /** The local version now; pass it to adoptScopeSettings with what a settings load returned. */
 export function scopeSettingsVersion(): number {
   return version;
