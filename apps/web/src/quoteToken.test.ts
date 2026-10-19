@@ -17,9 +17,12 @@ describe("quoteToken", () => {
     expect(q?.title).toContain("ASDFmint1111");
   });
 
-  it("falls back to a known name, then to the shortened mint", () => {
+  it("falls back to a known name, and never shows the contract address", () => {
     expect(quoteToken({ quoteMint: "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB" })?.label).toBe("USD1");
-    expect(quoteToken({ quoteMint: "Abcd1234567890wxyz" })?.label).toBe("Abcd…wxyz");
+    expect(quoteToken({ quoteMint: "Abcd1234567890wxyz" })).toBeNull();
+    expect(quoteToken({ quoteMint: "Abcd1234567890wxyz", quoteSymbol: " " })).toBeNull();
+    const ca = "DiveEYHTf3qJ1Jh9pZkD5nZtq5tZt7bJvTTr1cBCpump";
+    expect(quoteToken({ quoteMint: ca, quoteSymbol: ca })).toBeNull();
   });
 
   it("cuts a long symbol", () => {

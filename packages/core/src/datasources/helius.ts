@@ -2267,6 +2267,37 @@ export class HeliusClient {
   }
 
   /**
+   * Each mint's ticker and name from its token metadata (DAS getAssetBatch), for the cards' quote
+   * pill: a coin can trade against any mint, and DexScreener's pair names it only when the reading
+   * came from DexScreener. A mint with no metadata is in the map with neither; "failed" when the
+   * call didn't answer. At most 1,000 ids per call, which is far more than a cycle's quotes.
+   */
+  async getTokenSymbolsBatch(
+    mints: string[],
+  ): Promise<Map<string, { symbol: string | null; name: string | null }> | "failed"> {
+    const unique = [...new Set(mints)].slice(0, 1_000);
+    const out = new Map<string, { symbol: string | null; name: string | null }>();
+    if (unique.length === 0) return out;
+    type Asset = {
+      id?: string;
+      content?: { metadata?: { symbol?: string; name?: string } };
+      token_info?: { symbol?: string };
+    } | null;
+    const res = await this.sendSingle<Asset[]>("getAssetBatch", { ids: unique }, 15_000);
+    if (!res || res.error || !Array.isArray(res.result)) return "failed";
+    const clean = (v: string | undefined) => v?.replaceAll("\u0000", "").trim() || null;
+    for (const asset of res.result) {
+      if (!asset?.id) continue;
+      out.set(asset.id, {
+        symbol: clean(asset.token_info?.symbol) ?? clean(asset.content?.metadata?.symbol),
+        name: clean(asset.content?.metadata?.name),
+      });
+    }
+    for (const mint of unique) if (!out.has(mint)) out.set(mint, { symbol: null, name: null });
+    return out;
+  }
+
+  /**
    * Whether DAS-backed holdings lookups are currently believed usable, for health/diagnostics.
    *
    * False while stood down after an outage as well as when permanently unavailable - callers
