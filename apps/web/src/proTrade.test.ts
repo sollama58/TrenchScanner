@@ -108,7 +108,7 @@ describe("summarizePosition", () => {
   it("works out value, PnL and entry from the buys and sales", () => {
     const p: PositionResponse = {
       ...base,
-      balance: "5000000000000", // 5M tokens left of 10M bought
+      balance: "5000000000001", // 5M tokens left of 10M bought, and 1 unit sent in
       trades: [
         { signature: "a", t: 1, side: "buy", lamports: "-1000000000", tokens: "10000000000000" },
         { signature: "b", t: 2, side: "sell", lamports: "800000000", tokens: "-5000000000000" },
@@ -117,7 +117,7 @@ describe("summarizePosition", () => {
     };
     // Bought 1% of supply for 1 SOL: entry at 100 SOL = $20K. Now $40K: 0.5% is worth 1 SOL.
     const s = summarizePosition(p, 40_000);
-    expect(s.held).toBe(5_000_000);
+    expect(s.held).toBeCloseTo(5_000_000);
     expect(s.buys).toBe(1);
     expect(s.sells).toBe(1);
     expect(s.solIn).toBeCloseTo(1);
@@ -126,6 +126,45 @@ describe("summarizePosition", () => {
     expect(s.pnlSol).toBeCloseTo(0.8);
     expect(s.pnlPct).toBeCloseTo(0.8);
     expect(s.entryMcap).toBeCloseTo(20_000);
+    // Half the coins (cost 0.5) sold for 0.8: +0.3. The half held is worth 1 SOL against 0.5: +0.5.
+    expect(s.realizedSol).toBeCloseTo(0.3);
+    expect(s.unrealizedSol).toBeCloseTo(0.5);
+  });
+
+  it("measures the current trade, not an earlier round trip in the same coin", () => {
+    const p: PositionResponse = {
+      ...base,
+      balance: "10000000000000",
+      trades: [
+        { signature: "a", t: 1, side: "buy", lamports: "-1000000000", tokens: "10000000000000" },
+        { signature: "b", t: 2, side: "sell", lamports: "5000000000", tokens: "-10000000000000" },
+        { signature: "c", t: 3, side: "buy", lamports: "-2000000000", tokens: "10000000000000" },
+      ],
+    };
+    // 1% of supply for 2 SOL; at $40K it is worth 2 SOL: flat, whatever the first trade made.
+    const s = summarizePosition(p, 40_000);
+    expect(s.buys).toBe(1);
+    expect(s.sells).toBe(0);
+    expect(s.solIn).toBeCloseTo(2);
+    expect(s.pnlSol).toBeCloseTo(0);
+    expect(s.entryMcap).toBeCloseTo(40_000);
+  });
+
+  it("averages several buys, and leaves coins sent in out of the result", () => {
+    const p: PositionResponse = {
+      ...base,
+      balance: "20000000000000",
+      trades: [
+        { signature: "a", t: 1, side: "buy", lamports: "-1000000000", tokens: "5000000000000" },
+        { signature: "b", t: 2, side: "buy", lamports: "-1000000000", tokens: "5000000000000" },
+        { signature: "c", t: 3, side: "in", lamports: "0", tokens: "10000000000000" },
+      ],
+    };
+    // 2 SOL for 1% of supply; 2% held at $40K is 4 SOL, half of it sent in: 2 SOL against 2.
+    const s = summarizePosition(p, 40_000);
+    expect(s.valueSol).toBeCloseTo(4);
+    expect(s.pnlSol).toBeCloseTo(0);
+    expect(s.entryMcap).toBeCloseTo(40_000);
   });
 
   it("can't price a position without a market cap or supply", () => {
@@ -147,7 +186,8 @@ describe("summarizePosition without the whole history", () => {
       wallet: "w",
       mint: "m",
       decimals: 6,
-      balance: "1000000",
+      // Holding more than the one buy read: some came in before the history starts.
+      balance: "2000000",
       supply: "1000000000000000",
       solUsd: 200,
       trades: [{ signature: "a", t: 1, side: "buy", lamports: "-1000000", tokens: "1000000" }],
@@ -155,6 +195,25 @@ describe("summarizePosition without the whole history", () => {
       truncated: true,
     };
     expect(summarizePosition(p, 40_000).pnlSol).toBeNull();
+  });
+
+  it("still measures a trade that started inside the history read", () => {
+    const p: PositionResponse = {
+      wallet: "w",
+      mint: "m",
+      decimals: 6,
+      balance: "10000000000000",
+      supply: "1000000000000000",
+      solUsd: 200,
+      trades: [
+        // Older history left out; this sale took the wallet to nothing, then it bought in afresh.
+        { signature: "a", t: 1, side: "sell", lamports: "900000000", tokens: "-3000000000000" },
+        { signature: "b", t: 2, side: "buy", lamports: "-1000000000", tokens: "10000000000000" },
+      ],
+      historyUnavailable: false,
+      truncated: true,
+    };
+    expect(summarizePosition(p, 40_000).pnlSol).toBeCloseTo(1);
   });
 });
 

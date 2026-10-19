@@ -13,6 +13,7 @@ import {
   positionPnl,
   positionsOf,
   ProTradeWatcher,
+  tradesOf,
   tradeStats,
   type Position,
   type TradeStats,
@@ -207,7 +208,8 @@ export async function registerProTradesRoutes(
     const shown = positions.slice(0, PANEL_COINS);
     const since = new Date(Date.now() - STATS_HOURS * 3_600_000);
     const windowRows = rows.filter((r) => r.at > since);
-    const windowPositions = positions.filter((p) => p.entryAt > since || p.lastTradeAt > since);
+    // Every trade that ran in the window, a coin's earlier round trips included.
+    const windowPositions = tradesOf(rows).filter((p) => p.entryAt > since || p.lastTradeAt > since);
     const built = await coinsFor(
       shown,
       windowRows.filter((r) => r.entry).map((r) => r.mint),
@@ -259,11 +261,12 @@ export async function registerProTradesRoutes(
     const open = listed.filter((p) => !p.closed).slice(0, PORTFOLIO_OPEN_COINS);
     const closed = listed.filter((p) => p.closed).slice(0, PORTFOLIO_CLOSED_COINS);
     const built = await coinsFor([...open, ...closed], []);
+    const trades = tradesOf(rows).filter((p) => onToken.has(p.mint));
     const statsOver = (hours: number) => {
       const since = new Date(Date.now() - hours * 3_600_000);
       return tradeStats(
         rows.filter((r) => r.at > since && onToken.has(r.mint)),
-        listed.filter((p) => p.entryAt > since || p.lastTradeAt > since),
+        trades.filter((p) => p.entryAt > since || p.lastTradeAt > since),
         built.priceSol,
         (mint, at) => built.callBefore(mint, at) !== null,
         hours,

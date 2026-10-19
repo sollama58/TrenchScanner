@@ -343,6 +343,49 @@ describe("tradeOf", () => {
   });
 });
 
+describe("tradeOf rent and wrapped SOL", () => {
+  const MINT_KEY = key(81);
+  const WSOL = "So11111111111111111111111111111111111111112";
+  const RENT = 2_039_280;
+  it("leaves a token account's rent out of a buy and a sale", () => {
+    // The buy opens the coin's account (index 1): 0.4 SOL went to the coin, the rest is rent.
+    const buy = {
+      blockTime: 1_700_000_000,
+      transaction: { message: { accountKeys: [WALLET, MINT_KEY] } },
+      meta: {
+        err: null,
+        preBalances: [2e9, 0],
+        postBalances: [1.6e9 - RENT, RENT],
+        preTokenBalances: [],
+        postTokenBalances: [{ accountIndex: 1, owner: WALLET, mint: MINT, uiTokenAmount: { amount: "500" } }],
+      },
+    } as unknown as RawTransaction;
+    expect(tradeOf("a", buy, WALLET, MINT)).toMatchObject({ side: "buy", lamports: -400_000_000n });
+    // The sale closes it, the rent comes back, and the SOL is paid into wrapped SOL (index 2).
+    const sell = {
+      blockTime: 1_700_000_000,
+      transaction: { message: { accountKeys: [WALLET, MINT_KEY, key(82)] } },
+      meta: {
+        err: null,
+        preBalances: [1e9, RENT, RENT],
+        postBalances: [1e9 + RENT - 5_000, 0, RENT + 300_000_000],
+        preTokenBalances: [
+          { accountIndex: 1, owner: WALLET, mint: MINT, uiTokenAmount: { amount: "500" } },
+          { accountIndex: 2, owner: WALLET, mint: WSOL, uiTokenAmount: { amount: "0" } },
+        ],
+        postTokenBalances: [
+          { accountIndex: 2, owner: WALLET, mint: WSOL, uiTokenAmount: { amount: "300000000" } },
+        ],
+      },
+    } as unknown as RawTransaction;
+    expect(tradeOf("b", sell, WALLET, MINT)).toMatchObject({
+      side: "sell",
+      lamports: 299_995_000n,
+      tokens: -500n,
+    });
+  });
+});
+
 describe("checkJupiterFloor", () => {
   // Jupiter's `route`: discriminator, route plan (elided), in_amount, quoted_out, slippage, fee.
   const u64 = (v: bigint) => Array.from({ length: 8 }, (_, i) => Number((v >> BigInt(8 * i)) & 0xffn));
