@@ -1887,7 +1887,7 @@ const LEARNING_METRICS = {
     series: "avg return",
     hit: "",
     of: (r: LearningRates) => r.avgReturnPct ?? null,
-    note: "Average return per alert, taking every alert through one fixed exit plan; the filtered market line is a random pick under the same plan.",
+    note: "Average return per alert, taking every alert through one fixed exit plan; the filtered market line is a random pick under the same plan. An alert still riding its trailing share counts at its latest reading until it sells, so recent days can still move.",
   },
   catch: {
     tab: "Catch",

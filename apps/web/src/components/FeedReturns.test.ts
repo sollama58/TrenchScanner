@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { axisLabels } from "./FeedReturns";
+import { axisLabels, returnsCount } from "./FeedReturns";
 
 describe("the week chart's axis labels", () => {
   it("names each local midnight once, on the 6-hour bucket that holds it", () => {
@@ -16,5 +16,12 @@ describe("the week chart's axis labels", () => {
   it("spaces clock times evenly inside a day", () => {
     const ats = Array.from({ length: 24 }, (_, i) => new Date(Date.UTC(2026, 9, 5, i)).toISOString());
     expect(axisLabels(ats, 60).filter(Boolean)).toHaveLength(6);
+  });
+});
+
+describe("the returns tiles' count", () => {
+  it("says how many are still open when some are priced at the latest reading", () => {
+    expect(returnsCount(12, 0, 20)).toBe("12 of 20 settled");
+    expect(returnsCount(12, 3, 20)).toBe("9 settled, 3 open of 20");
   });
 });

@@ -104,6 +104,7 @@ const emptyHour = (): HourRow => ({
   screenedTenXGraded: 0,
   screenedReturnN: 0,
   screenedReturnSum: 0,
+  screenedReturnOpen: 0,
   readsTotal: 0,
   readsDescribed: 0,
   readsDeep: 0,
@@ -125,6 +126,7 @@ const emptyHour = (): HourRow => ({
   alertsTenXGraded: 0,
   alertsReturnN: 0,
   alertsReturnSum: 0,
+  alertsReturnOpen: 0,
   screenAccepted: 0,
   screenRejected: 0,
 });
@@ -175,6 +177,8 @@ interface ScreenedHourRow {
   ten_x_graded: bigint;
   ret_n: bigint;
   ret_sum: number | null;
+  /** Of ret_n, the calls still open, priced at their latest reading. */
+  ret_open: bigint;
 }
 
 interface ScreenHourRow {
@@ -210,6 +214,8 @@ interface AlertsHourRow {
   ten_x_graded: bigint;
   ret_n: bigint;
   ret_sum: number | null;
+  /** Of ret_n, the calls still open, priced at their latest reading. */
+  ret_open: bigint;
 }
 
 /**
@@ -253,8 +259,12 @@ function screenedHours(from: Date, to: Date) {
              count(*) FILTER (WHERE co."hit10xIn1h") AS won10x,
              count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL
                                 AND (co."hit10xIn1h" IS NOT NULL OR NOT (co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)))) AS ten_x_graded,
-             count(co."simReturnPct") AS ret_n,
-             sum(co."simReturnPct")::float8 AS ret_sum
+             -- A call still riding its trailing share counts at its latest reading (openReturnPct),
+             -- so an hour's average doesn't lean on the losers that settle first. Every run
+             -- re-sums the trailing RECOMPUTE_HOURS, which covers the plan's three-hour hold.
+             count(COALESCE(co."simReturnPct", co."openReturnPct")) AS ret_n,
+             sum(COALESCE(co."simReturnPct", co."openReturnPct"))::float8 AS ret_sum,
+             count(co."openReturnPct") FILTER (WHERE co."simReturnPct" IS NULL) AS ret_open
       FROM "CandidateOutcome" co
       WHERE co."sampleKind" = 'event' AND co."anchorAt" >= ${from} AND co."anchorAt" < ${to}
         AND co."labelRule" >= ${REPORTED_LABEL_RULE}
@@ -273,6 +283,7 @@ function screenedColumns(r: ScreenedHourRow | undefined) {
     screenedTenXGraded: n(r?.ten_x_graded),
     screenedReturnN: n(r?.ret_n),
     screenedReturnSum: r?.ret_sum ?? 0,
+    screenedReturnOpen: n(r?.ret_open),
   };
 }
 
@@ -307,9 +318,11 @@ async function sumHours(from: Date, to: Date, screenFrom: Date): Promise<Map<num
              count(*) FILTER (WHERE a."hit10xIn1h") AS won10x,
              count(*) FILTER (WHERE a."hit2xIn1h" IS NOT NULL
                                 AND (a."hit10xIn1h" IS NOT NULL OR NOT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)))) AS ten_x_graded,
-             count(a."simReturnPct") AS ret_n,
-             sum(a."simReturnPct")::float8 AS ret_sum
+             count(COALESCE(a."simReturnPct", co."openReturnPct")) AS ret_n,
+             sum(COALESCE(a."simReturnPct", co."openReturnPct"))::float8 AS ret_sum,
+             count(co."openReturnPct") FILTER (WHERE a."simReturnPct" IS NULL) AS ret_open
       FROM "CuratedAlert" a
+      LEFT JOIN "CandidateOutcome" co ON co.id = a."candidateOutcomeId"
       JOIN "Token" t ON t.id = a."tokenId"
       LEFT JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"
       WHERE a."createdAt" >= ${from} AND a."createdAt" < ${to} AND ${notRetiredModelSql()}
@@ -354,6 +367,7 @@ async function sumHours(from: Date, to: Date, screenFrom: Date): Promise<Map<num
     h.alertsTenXGraded = n(r.ten_x_graded);
     h.alertsReturnN = n(r.ret_n);
     h.alertsReturnSum = r.ret_sum ?? 0;
+    h.alertsReturnOpen = n(r.ret_open);
   }
   for (const r of screen) {
     const h = at(r.hour);
@@ -406,8 +420,10 @@ export async function resumLighthouseReturns(from: Date, to: Date): Promise<numb
         data: {
           screenedReturnN: row.screenedReturnN,
           screenedReturnSum: row.screenedReturnSum,
+          screenedReturnOpen: row.screenedReturnOpen,
           alertsReturnN: row.alertsReturnN,
           alertsReturnSum: row.alertsReturnSum,
+          alertsReturnOpen: row.alertsReturnOpen,
         },
       }),
     );

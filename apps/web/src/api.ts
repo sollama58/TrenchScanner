@@ -541,11 +541,14 @@ export interface FeedReturns {
   windows: {
     hours: number;
     alerts: number;
+    /** Alerts with a return: landed, or `open` (the trailing share priced at the latest reading). */
     settled: number;
+    /** Of `settled`, the ones still open; absent from older API builds. */
+    open?: number;
     avgReturnPct: number | null;
     profitable: number;
     bucketMinutes: number;
-    buckets: { at: string; settled: number; avgReturnPct: number | null }[];
+    buckets: { at: string; settled: number; open?: number; avgReturnPct: number | null }[];
   }[];
   /** The week's three biggest runs (the cards' Peak), one per token, best first (absent from older API builds). */
   top?: {
@@ -1880,6 +1883,8 @@ export interface LighthouseSums {
     tenXGraded: number;
     returnN: number;
     returnSum: number;
+    /** Of returnN, still open and priced at the latest reading; absent from older API builds. */
+    returnOpen?: number;
   };
   reads: {
     total: number;
@@ -1906,6 +1911,7 @@ export interface LighthouseSums {
     tenXGraded?: number;
     returnN: number;
     returnSum: number;
+    returnOpen?: number;
   };
 }
 export interface LighthouseLabelTally {
@@ -2018,6 +2024,8 @@ export interface MarketLighthouse {
     tenXGraded: number;
     avgReturnPct: number | null;
     returnGraded: number;
+    /** Of returnGraded, calls still riding their trailing share, priced now; absent from older API builds. */
+    returnOpen?: number;
     exitPlan: string;
     byBucket: {
       at: string;

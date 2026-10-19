@@ -294,6 +294,8 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
                 )}
                 {" · "}
                 <ExitPlanInfo text="exit plan" />: {d.exitPlan}
+                {(d.totals.screened.returnOpen ?? 0) + (d.totals.alerts.returnOpen ?? 0) > 0 &&
+                  `. Average returns include ${(d.totals.screened.returnOpen ?? 0).toLocaleString()} screened tokens and ${(d.totals.alerts.returnOpen ?? 0).toLocaleString()} alerts still riding their trailing share, priced at the latest reading`}
               </p>
             )}
           </>

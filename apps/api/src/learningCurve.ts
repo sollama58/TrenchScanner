@@ -184,6 +184,8 @@ type RawDay = {
   /** Calls with a simulated return, and its sum in percent; absent from older fixtures. */
   sim_calls?: bigint;
   sim_sum?: number | null;
+  /** Of sim_calls, the open ones (priced at the latest reading); absent from older fixtures. */
+  sim_open?: bigint;
 };
 
 type RawModelDay = RawDay & { model: string | null; model_name: string | null };
@@ -224,6 +226,7 @@ function dayRates(r: RawDay | undefined): DayRates {
     doubledAfterStop: Number(r?.doubled_after_stop ?? 0),
     simCalls: Number(r?.sim_calls ?? 0),
     sumSimReturnPct: Number(r?.sim_sum ?? 0),
+    simOpen: Number(r?.sim_open ?? 0),
   };
   return withDayRates(c);
 }
@@ -250,6 +253,7 @@ function sumDays(rows: DayRates[]): DayRates {
       doubledAfterStop: acc.doubledAfterStop + r.doubledAfterStop,
       simCalls: (acc.simCalls ?? 0) + (r.simCalls ?? 0),
       sumSimReturnPct: (acc.sumSimReturnPct ?? 0) + (r.sumSimReturnPct ?? 0),
+      simOpen: (acc.simOpen ?? 0) + (r.simOpen ?? 0),
     }),
     {
       calls: 0,
@@ -261,6 +265,7 @@ function sumDays(rows: DayRates[]): DayRates {
       doubledAfterStop: 0,
       simCalls: 0,
       sumSimReturnPct: 0,
+      simOpen: 0,
     },
   );
   return withDayRates(c);
@@ -537,8 +542,9 @@ export async function buildLearningCurve(
                               AND ("hit10xIn1h" IS NOT NULL
                                    OR NOT ("hit2xIn1h" AND NOT COALESCE("disqualified", false)))) AS ten_x_graded,
            count(*) FILTER (WHERE "disqualified") AS doubled_after_stop,
-           count("simReturnPct") FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS sim_calls,
-           sum("simReturnPct") FILTER (WHERE "hit2xIn1h" IS NOT NULL)::float8 AS sim_sum
+           count(COALESCE("simReturnPct", "openReturnPct")) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS sim_calls,
+           sum(COALESCE("simReturnPct", "openReturnPct")) FILTER (WHERE "hit2xIn1h" IS NOT NULL)::float8 AS sim_sum,
+           count("openReturnPct") FILTER (WHERE "hit2xIn1h" IS NOT NULL AND "simReturnPct" IS NULL) AS sim_open
     FROM "CandidateOutcome"
     WHERE "sampleKind" = 'event'
       AND "anchorAt" >= ${trendSince} AND "anchorAt" < ${until}
@@ -586,10 +592,13 @@ export async function buildLearningCurve(
                                    OR NOT (COALESCE(a."hit2xIn1h", co."hit2xIn1h")
                                            AND NOT COALESCE(a."disqualified", co."disqualified", false)))) AS ten_x_graded,
            count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop,
-           count(COALESCE(a."simReturnPct", co."simReturnPct"))
+           count(COALESCE(a."simReturnPct", co."simReturnPct", co."openReturnPct"))
              FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
-           sum(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum`;
+           sum(COALESCE(a."simReturnPct", co."simReturnPct", co."openReturnPct"))
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum,
+           count(co."openReturnPct")
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL
+                       AND COALESCE(a."simReturnPct", co."simReturnPct") IS NULL) AS sim_open`;
   const callsFrom = Prisma.sql`
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"

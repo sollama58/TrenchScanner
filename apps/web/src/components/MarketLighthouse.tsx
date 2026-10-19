@@ -868,6 +868,11 @@ function Screened({ s, span, days, since }: { s: ScreenedData; span: string; day
           </span>
           <span className="muted small">
             on the <ExitPlanInfo text="exit plan" /> · {s.returnGraded.toLocaleString()} graded
+            {s.returnOpen ? (
+              <span title="Still riding their trailing share: priced at the latest reading until they sell">
+                , {s.returnOpen.toLocaleString()} open
+              </span>
+            ) : null}
           </span>
         </div>
       </div>

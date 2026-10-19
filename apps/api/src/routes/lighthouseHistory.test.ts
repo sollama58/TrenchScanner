@@ -44,6 +44,7 @@ describe.skipIf(!dbAvailable)("lighthouse history", () => {
           screenedTenXGraded: 6,
           screenedReturnN: 8,
           screenedReturnSum: 80,
+          screenedReturnOpen: 3,
           readsTotal: 5,
           readsDescribed: 4,
           readsDeep: 2,
@@ -108,7 +109,7 @@ describe.skipIf(!dbAvailable)("lighthouse history", () => {
     expect(d.series).toHaveLength(8);
     expect(d.series.every((s) => typeof s.at === "string")).toBe(true);
     const today = d.series[d.series.length - 1]!;
-    expect(today.screened).toMatchObject({ calls: 16, graded: 10, won2x: 6, returnSum: 80 });
+    expect(today.screened).toMatchObject({ calls: 16, graded: 10, won2x: 6, returnSum: 80, returnOpen: 3 });
     expect(today.reads).toMatchObject({ total: 5, described: 4, deep: 2 });
     expect(today.alerts).toMatchObject({ total: 3, graded: 2, won2x: 1 });
     expect(d.series[0]!.screened.calls).toBe(0);
@@ -117,6 +118,14 @@ describe.skipIf(!dbAvailable)("lighthouse history", () => {
     // as the window: 7 days plus today's hours (the row of 2023-05-30 12:00 is in it too).
     expect(d.previous?.screened.calls).toBe(103);
     expect(d.exitPlan).toMatch(/2x/);
+  });
+
+  it("ends the hourly series at the newest hour summed, not at a zero for hours not summed yet", async () => {
+    const d = await buildLighthouseHistory({ days: 1, bucket: "hour", dimension: "flag" }, NOW);
+    expect(d.series[d.series.length - 1]!.at).toBe(
+      new Date(bucketStart(NOW.getTime() - 2 * HOUR_MS, "hour")).toISOString(),
+    );
+    expect(d.series[d.series.length - 1]!.screened.calls).toBe(10);
   });
 
   it("buckets by week on Mondays and takes the whole history", async () => {

@@ -141,6 +141,8 @@ interface ScreenedRow {
   ten_x_graded: bigint;
   sim_calls: bigint;
   sim_sum: number | null;
+  /** Of sim_calls, the open ones (openReturnPct); absent from older fixtures. */
+  sim_open?: bigint;
 }
 
 /** The screened buckets: 3-hourly over a day, daily over a week. */
@@ -166,15 +168,26 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
            count(*) FILTER (WHERE co."hit10xIn1h") AS won10x,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL
                               AND (co."hit10xIn1h" IS NOT NULL OR NOT (co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)))) AS ten_x_graded,
-           count(co."simReturnPct") AS sim_calls,
-           sum(co."simReturnPct")::float8 AS sim_sum
+           count(COALESCE(co."simReturnPct", co."openReturnPct")) AS sim_calls,
+           sum(COALESCE(co."simReturnPct", co."openReturnPct"))::float8 AS sim_sum,
+           count(co."openReturnPct") FILTER (WHERE co."simReturnPct" IS NULL) AS sim_open
     FROM "CandidateOutcome" co
     WHERE co."sampleKind" = 'event' AND co."anchorAt" > ${since}
       AND co."labelRule" >= ${REPORTED_LABEL_RULE}
       AND ${walletSafetyCutsSql(Prisma.raw('co."features"'))}
     GROUP BY 1 ORDER BY 1`;
   const n = (v: bigint | number | null) => Number(v ?? 0);
-  const total = { calls: 0, graded: 0, won2x: 0, won4x: 0, won10x: 0, tenXGraded: 0, simCalls: 0, simSum: 0 };
+  const total = {
+    calls: 0,
+    graded: 0,
+    won2x: 0,
+    won4x: 0,
+    won10x: 0,
+    tenXGraded: 0,
+    simCalls: 0,
+    simSum: 0,
+    simOpen: 0,
+  };
   const byBucket = rows.map((r) => {
     const b = {
       calls: n(r.calls),
@@ -185,6 +198,7 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
       tenXGraded: n(r.ten_x_graded),
       simCalls: n(r.sim_calls),
       simSum: r.sim_sum ?? 0,
+      simOpen: n(r.sim_open ?? 0),
     };
     for (const k of Object.keys(total) as (keyof typeof total)[]) total[k] += b[k];
     return {
@@ -206,6 +220,12 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
     tenXGraded: total.tenXGraded,
     avgReturnPct: total.simCalls > 0 ? total.simSum / total.simCalls : null,
     returnGraded: total.simCalls,
+    /**
+     * Of returnGraded, the calls still riding their trailing share, priced at their latest
+     * reading (CandidateOutcome.openReturnPct): in the average, so it doesn't lean on the losers
+     * that settle first, and said to be open.
+     */
+    returnOpen: total.simOpen,
     exitPlan: describeExitPlan(),
     byBucket,
     // What a token has to clear to count here, for the dashboard's explainer.
