@@ -560,6 +560,103 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
 });
 
 /**
+ * A holder-scan outage (user decision 2026-10-19): the last scan's wallets keep Pro Mode until the
+ * scans resume, and one missing from the first scan back gets its whole day of grace from that scan.
+ */
+describe.skipIf(!dbAvailable)("Pro Mode for the top holders through a scan outage", () => {
+  const STAYS = walletKey();
+  const EARLY = walletKey();
+  const LATE = walletKey();
+  const NEVER = walletKey();
+  const HOUR = 3_600_000;
+  const t0 = new Date(Date.now() - 48 * HOUR);
+  const before = new Date(t0.getTime() + 5 * 60_000);
+  const resumed = new Date(t0.getTime() + 40 * HOUR);
+  const scan = async (at: Date, owners: string[]) => {
+    await refreshProHolders(
+      {
+        getTopHoldersBatch: async (mints) =>
+          new Map(mints.map((m) => [m, { status: "found", holders: owners.map((owner) => ({ owner })) }])),
+      },
+      at,
+    );
+    resetProHolderCacheForTests();
+  };
+
+  beforeAll(async () => {
+    await prisma.proHolder.deleteMany({});
+    resetProHolderCacheForTests();
+    await scan(t0, [STAYS, EARLY, LATE]);
+    // EARLY drops out at a fresh scan, then the scans stop for 40 hours.
+    await scan(before, [STAYS, LATE]);
+  });
+
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await prisma.proHolder.deleteMany({});
+    resetProHolderCacheForTests();
+  });
+
+  it("keeps Pro Mode for the last scan's wallets a day and more into the outage", async () => {
+    for (const hours of [2, 25, 39]) {
+      const at = new Date(before.getTime() + hours * HOUR);
+      expect(await proHolderStanding(STAYS, at)).toMatchObject({ state: "top", rank: 1 });
+      expect(await proHolderStanding(LATE, at)).toMatchObject({ state: "top", rank: 2 });
+    }
+    expect((await proHolderSummary(new Date(before.getTime() + 25 * HOUR))).stale).toBe(true);
+  });
+
+  it("keeps the clock of a wallet that dropped out before the outage", async () => {
+    // Its day runs from the last scan it was in, outage or not.
+    expect(await proHolderStanding(EARLY, new Date(before.getTime() + 2 * HOUR))).toEqual({
+      state: "grace",
+      rank: 2,
+      graceEndsAt: new Date(t0.getTime() + 24 * HOUR),
+      stale: false,
+    });
+    expect(await proHolderStanding(EARLY, new Date(t0.getTime() + 24 * HOUR + 60_000))).toEqual({
+      state: "none",
+    });
+  });
+
+  it("starts the grace of a wallet missing from the first scan back at that scan", async () => {
+    await scan(resumed, [STAYS]);
+    const graceEndsAt = new Date(resumed.getTime() + 24 * HOUR);
+    expect(await proHolderStanding(LATE, new Date(resumed.getTime() + 23 * HOUR))).toEqual({
+      state: "grace",
+      rank: 2,
+      graceEndsAt,
+      stale: false,
+    });
+    expect(await proHolderStanding(LATE, new Date(graceEndsAt.getTime() + 60_000))).toEqual({
+      state: "none",
+    });
+    expect(await proHolderStanding(STAYS, resumed)).toMatchObject({ state: "top", rank: 1 });
+    // Admin lists it with the same end; the wallet that dropped out before the outage is done.
+    const summary = await proHolderSummary(new Date(resumed.getTime() + HOUR));
+    expect(summary.grace).toEqual([{ walletAddress: LATE, rank: 2, graceEndsAt }]);
+    // The scan back left the earlier wallet's clock alone.
+    expect(await proHolderStanding(EARLY, resumed)).toEqual({ state: "none" });
+    const early = await prisma.proHolder.findUnique({ where: { walletAddress: EARLY } });
+    expect(early!.graceFrom).toEqual(t0);
+  });
+
+  it("clears the grace of a wallet back in the top 250", async () => {
+    const back = new Date(resumed.getTime() + 5 * 60_000);
+    await scan(back, [STAYS, LATE]);
+    expect(await proHolderStanding(LATE, back)).toMatchObject({ state: "top", rank: 2 });
+    const late = await prisma.proHolder.findUnique({ where: { walletAddress: LATE } });
+    expect(late!.graceFrom).toBeNull();
+  });
+
+  it("changes nothing for a wallet never in the top 250", async () => {
+    for (const at of [before, new Date(before.getTime() + 30 * HOUR), resumed])
+      expect(await proHolderStanding(NEVER, at)).toEqual({ state: "none" });
+    expect(await prisma.proHolder.findUnique({ where: { walletAddress: NEVER } })).toBeNull();
+  });
+});
+
+/**
  * Privy's confirm window is skipped only on a coin the wallet holds, that passed the safety
  * screen, or that a model called (user rule 2026-10-18); anything else asks.
  */
