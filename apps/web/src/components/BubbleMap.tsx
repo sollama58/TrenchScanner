@@ -101,7 +101,8 @@ import {
   type PossibleSides,
 } from "../possibleSides";
 import { ShareButton } from "./ShareImageDialog";
-import { BubblesIcon, ChevronDownIcon } from "./Icons";
+import { BubblesIcon, ChevronDownIcon, SlidersIcon } from "./Icons";
+import { MAX_MAP_ZOOM, panZoom, zoomAround, zoomedBox, type MapBox, type MapZoom } from "../mapZoom";
 
 /** How many cluster colours there are (styles.css --bm-0..4); more clusters reuse them. */
 export const CLUSTER_COLOURS = MAP_COLOURS;
@@ -351,6 +352,7 @@ function MapView({
   nameToggle,
   flags,
   scanKolBundled,
+  column = false,
 }: {
   graph: BubbleGraph;
   names: WalletNames;
@@ -368,6 +370,8 @@ function MapView({
   flags: FlagsRead;
   /** The scan's KOL Bundled % (TokenSnapshot.kolBundledPct); null while unknown. */
   scanKolBundled: number | null;
+  /** Laid out to fit a fixed column (Scope's desktop page): the lists and wallet types first, the map under them. */
+  column?: boolean;
 }) {
   const [picked, setPicked] = useState<string | null>(null);
   // The cluster picked from the list, by its funder: its index can move when the map updates.
@@ -406,238 +410,287 @@ function MapView({
   // Supply tied to the creator (user ask 2026-10-17): a tile of its own only when there is some.
   const devTied = graph.creatorPct !== null && graph.creatorPct > 0;
 
-  return (
+  const cols = 3 + (graph.sameTimeGroups.length > 0 ? 1 : 0) + (xfer !== null ? 1 : 0) + (devTied ? 1 : 0);
+  // The headline tiles: Linked, KOL bundled, same minute, CEX-funded, tied to dev, transferred.
+  const headline = (
     <>
-      <dl
-        className="bm-stats"
-        style={
-          {
-            "--bm-cols":
-              3 + (graph.sameTimeGroups.length > 0 ? 1 : 0) + (xfer !== null ? 1 : 0) + (devTied ? 1 : 0),
-          } as React.CSSProperties
+      <div
+        className={
+          linked.count !== null &&
+          linked.count.linked >= countCutFor(SAFETY_REJECT_LINKED_COUNT, linked.count.of)
+            ? "risky"
+            : undefined
         }
       >
-        <div
-          className={
-            linked.count !== null &&
-            linked.count.linked >= countCutFor(SAFETY_REJECT_LINKED_COUNT, linked.count.of)
-              ? "risky"
-              : undefined
+        <dt>Linked</dt>
+        <dd
+          className="num"
+          title={
+            linked.pct === null
+              ? undefined
+              : `${linked.count ? `${linked.count.linked} of the top ${linked.count.of} holders, holding ` : ""}${pct(linked.pct, 1)} of supply, counting wallets in a funder's cluster or a KOL's bundle`
           }
         >
-          <dt>Linked</dt>
-          <dd
-            className="num"
-            title={
-              linked.pct === null
-                ? undefined
-                : `${linked.count ? `${linked.count.linked} of the top ${linked.count.of} holders, holding ` : ""}${pct(linked.pct, 1)} of supply, counting wallets in a funder's cluster or a KOL's bundle`
-            }
-          >
-            {/* N/25 and, beside it, the share of supply those linked holders hold (user ask 2026-10-14). */}
-            {linked.count && linked.pct !== null ? (
+          {/* N/25 and, beside it, the share of supply those linked holders hold (user ask 2026-10-14). */}
+          {linked.count && linked.pct !== null ? (
+            <>
+              {linkedCountText(linked.count)} <span className="bm-stat-sub">({pct(linked.pct, 1)})</span>
+            </>
+          ) : (
+            (linkedCountText(linked.count) ?? pct(linked.pct, 1))
+          )}
+        </dd>
+      </div>
+      <div
+        title={
+          kolBundled === null
+            ? "KOL bundled: not checked yet. It comes with the linked-wallet reading."
+            : "KOL bundled: supply held by KOLs and the top holders tied to them (wallets a KOL funded, probable side wallets, and holders sharing a funder or funding minute with those)"
+        }
+      >
+        <dt>KOL bundled</dt>
+        <dd className={kolBundled === null ? "muted" : "num"}>
+          {kolBundled === null ? "–" : pct(kolBundled, 1)}
+        </dd>
+      </div>
+      {graph.sameTimeGroups.length > 0 && (
+        <div
+          className="bm-same-stat"
+          title={`Top holders funded within a minute of each other, from any funders${
+            graph.sameTimePct === null ? "" : `, holding ${pct(graph.sameTimePct, 1)} of supply`
+          }`}
+        >
+          <dt>Same minute</dt>
+          <dd className="num">{linkedCountText(graph.sameTimeCount) ?? pct(graph.sameTimePct, 1)}</dd>
+        </div>
+      )}
+      <div
+        className={
+          cex !== null && cex.linked >= countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, cex.of)
+            ? "risky"
+            : undefined
+        }
+        title={
+          cex === null
+            ? "CEX-funded: not checked yet"
+            : `CEX-funded: ${cex.linked} of the ${cex.of} largest holders were opened from an exchange (or a busy service like a bridge)`
+        }
+      >
+        <dt>CEX-funded</dt>
+        <dd className="num">
+          {cex === null ? "-" : (cexCountText(cex.linked, cex.of) ?? pct(graph.cexPct, 0))}
+        </dd>
+      </div>
+      {devTied && (
+        <div
+          className="risky"
+          title={`Tied to dev: ${pct(graph.creatorPct, 1)} of supply is held by ${
+            graph.creatorCount ? `${graph.creatorCount} ` : ""
+          }top holders the creator or its funder paid for, or that got SOL or the coin from one that was. The creator's own holding is left out.`}
+        >
+          <dt>Tied to dev</dt>
+          <dd className="num">{pct(graph.creatorPct, 1)}</dd>
+        </div>
+      )}
+      {/* Transferred Supply % (user ask 2026-10-16): the coin moved holder to holder among the top
+          25, a stat of its own beside Linked, never counted in it. */}
+      {xfer !== null && (
+        <div
+          className={`bm-xfer-stat${xfer > 0 ? " has" : ""}`}
+          title={
+            xfer === 0
+              ? `Transferred: none of the top ${graph.transferCount?.of ?? 25} holders sent the coin to another`
+              : `Transferred Supply %: ${pct(xfer, 1)} of supply moved holder to holder${
+                  graph.transferCount
+                    ? `, between ${graph.transferCount.linked} of the top ${graph.transferCount.of} holders`
+                    : ""
+                }. The coin itself only: SOL and other coins are ignored. Not counted in Linked.`
+          }
+        >
+          <dt>Transferred</dt>
+          <dd className="num">
+            {pct(xfer, 1)}
+            {graph.transferCount && xfer > 0 && (
               <>
-                {linkedCountText(linked.count)} <span className="bm-stat-sub">({pct(linked.pct, 1)})</span>
+                {" "}
+                <span className="bm-stat-sub">
+                  ({graph.transferCount.linked}/{graph.transferCount.of})
+                </span>
               </>
-            ) : (
-              (linkedCountText(linked.count) ?? pct(linked.pct, 1))
             )}
           </dd>
         </div>
-        <div
-          title={
-            kolBundled === null
-              ? "KOL bundled: not checked yet. It comes with the linked-wallet reading."
-              : "KOL bundled: supply held by KOLs and the top holders tied to them (wallets a KOL funded, probable side wallets, and holders sharing a funder or funding minute with those)"
-          }
-        >
-          <dt>KOL bundled</dt>
-          <dd className={kolBundled === null ? "muted" : "num"}>
-            {kolBundled === null ? "–" : pct(kolBundled, 1)}
-          </dd>
-        </div>
-        {graph.sameTimeGroups.length > 0 && (
-          <div
-            className="bm-same-stat"
-            title={`Top holders funded within a minute of each other, from any funders${
-              graph.sameTimePct === null ? "" : `, holding ${pct(graph.sameTimePct, 1)} of supply`
-            }`}
-          >
-            <dt>Same minute</dt>
-            <dd className="num">{linkedCountText(graph.sameTimeCount) ?? pct(graph.sameTimePct, 1)}</dd>
-          </div>
-        )}
-        <div
-          className={
-            cex !== null && cex.linked >= countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, cex.of)
-              ? "risky"
-              : undefined
-          }
-          title={
-            cex === null
-              ? "CEX-funded: not checked yet"
-              : `CEX-funded: ${cex.linked} of the ${cex.of} largest holders were opened from an exchange (or a busy service like a bridge)`
-          }
-        >
-          <dt>CEX-funded</dt>
-          <dd className="num">
-            {cex === null ? "-" : (cexCountText(cex.linked, cex.of) ?? pct(graph.cexPct, 0))}
-          </dd>
-        </div>
-        {devTied && (
-          <div
-            className="risky"
-            title={`Tied to dev: ${pct(graph.creatorPct, 1)} of supply is held by ${
-              graph.creatorCount ? `${graph.creatorCount} ` : ""
-            }top holders the creator or its funder paid for, or that got SOL or the coin from one that was. The creator's own holding is left out.`}
-          >
-            <dt>Tied to dev</dt>
-            <dd className="num">{pct(graph.creatorPct, 1)}</dd>
-          </div>
-        )}
-        {/* Transferred Supply % (user ask 2026-10-16): the coin moved holder to holder among the top
-            25, a stat of its own beside Linked, never counted in it. */}
-        {xfer !== null && (
-          <div
-            className={`bm-xfer-stat${xfer > 0 ? " has" : ""}`}
-            title={
-              xfer === 0
-                ? `Transferred: none of the top ${graph.transferCount?.of ?? 25} holders sent the coin to another`
-                : `Transferred Supply %: ${pct(xfer, 1)} of supply moved holder to holder${
-                    graph.transferCount
-                      ? `, between ${graph.transferCount.linked} of the top ${graph.transferCount.of} holders`
-                      : ""
-                  }. The coin itself only: SOL and other coins are ignored. Not counted in Linked.`
-            }
-          >
-            <dt>Transferred</dt>
-            <dd className="num">
-              {pct(xfer, 1)}
-              {graph.transferCount && xfer > 0 && (
-                <>
-                  {" "}
-                  <span className="bm-stat-sub">
-                    ({graph.transferCount.linked}/{graph.transferCount.of})
-                  </span>
-                </>
-              )}
-            </dd>
-          </div>
-        )}
-        {/* Fresh, sniper, empty and risky wallets on the map, each its count and supply: a row of its
-            own under the headline tiles (user asks 2026-10-15, 2026-10-16). */}
-        <div className="bm-traits-stat">
-          <dt>Wallet types</dt>
-          <dd>
-            <ul className="bm-wt-list">
-              {TRAIT_ORDER.map((t) => {
-                const s = traits.get(t);
-                return (
-                  <WalletTypeItem
-                    key={t}
-                    tone={t}
-                    icon={<TraitIcon trait={t} size={17} />}
-                    label={TRAIT_LABEL[t]}
-                    count={s?.count ?? 0}
-                    share={pct(s?.pct ?? 0, 1)}
-                    title={`${TRAIT_WORDS[t]}. ${s?.count ?? 0} on the map, holding ${pct(s?.pct ?? 0, 1)} of supply`}
-                  />
-                );
-              })}
-              <WalletTypeItem
-                tone="risky"
-                icon={<RiskyIcon />}
-                label="Risky"
-                count={flags === "ok" ? risky.count : null}
-                share={flags === "ok" ? pct(risky.pct, 1) : flags === "failed" ? "not read" : "loading"}
-                title={
-                  flags === "ok"
-                    ? `${RISKY_WORDS}. ${risky.count} on the map, holding ${pct(risky.pct, 1)} of supply`
-                    : flags === "failed"
-                      ? "Risky: couldn't load the flagged wallets, so no risky ones are ringed. Not a clean reading."
-                      : "Risky: loading the flagged wallets"
-                }
-              />
-            </ul>
-          </dd>
-        </div>
-      </dl>
-      <BubbleSvg
-        graph={regrouped ?? graph}
-        names={names}
-        picked={picked}
-        lit={lit}
-        cexLinks={showCex}
-        transfers={showTransfers}
-        sideGroups={side.shown}
-        kols={drawnKols}
-        sides={sides}
-        onPick={(id) => {
-          setPicked(id);
-          setFocusFunder(null);
-          // A wallet's bubble (a holder, or the funder behind a cluster) opens that wallet's modal;
-          // the "others" bubble has no one wallet, so it only lights up.
-          const wallet = graph.nodes.find((n) => n.id === id)?.wallet;
-          if (wallet) openWallet(wallet);
-        }}
-      />
-      <NameLegend graph={graph} names={names} />
-      {/* The map's switches sit under the legend (user ask 2026-10-16). */}
-      {(graph.cexLinks.length > 0 ||
-        groups.length > 0 ||
-        graph.transferLinks.length > 0 ||
-        nameToggle.hasSwitchable) && (
-        <div className="bm-toggles">
-          {graph.transferLinks.length > 0 && (
-            <MapToggle
-              on={showTransfers}
-              onToggle={() => setTransfersOn(!showTransfers)}
-              keyClass="bm-xfer-key"
-            >
-              Holder transfers
-            </MapToggle>
-          )}
-          {graph.cexLinks.length > 0 && (
-            <MapToggle on={showCex} onToggle={() => setCexOn(!showCex)} keyClass="bm-cex-key">
-              Same-exchange ties
-            </MapToggle>
-          )}
-          {groups.length > 0 && (
-            <MapToggle
-              on={showSides}
-              onToggle={() => setSideOn(!showSides)}
-              keyClass="bm-cex-key bm-side-key"
-            >
-              KOL side wallets
-            </MapToggle>
-          )}
-          {nameToggle.hasSwitchable && (
-            <MapToggle
-              on={nameToggle.showNames}
-              onToggle={() => nameToggle.setNamesOn(!nameToggle.showNames)}
-              keyClass="bm-name-key"
-            >
-              Pump.fun / FOMO / Helius names
-            </MapToggle>
-          )}
-        </div>
       )}
-      <NodeDetail node={node} graph={graph} names={names} sides={sides} />
-      <GroupPanel
-        graph={graph}
-        names={names}
-        kols={drawnKols}
-        transfers={showTransfers}
-        listed={listed}
-        lit={lit}
-        onSelect={(key, cluster) => {
-          const open = listed !== key;
-          setPicked(null);
-          setFocusFunder(open && cluster !== undefined ? (graph.clusters[cluster]?.funder ?? null) : null);
-          setListed(open ? key : null);
-        }}
-      />
     </>
+  );
+  // Fresh, sniper, empty and risky wallets on the map, each its count and supply: a row of its own
+  // under the headline tiles (user asks 2026-10-15, 2026-10-16).
+  const traitsStat = (
+    <div className="bm-traits-stat">
+      <dt>Wallet types</dt>
+      <dd>
+        <ul className="bm-wt-list">
+          {TRAIT_ORDER.map((t) => {
+            const s = traits.get(t);
+            return (
+              <WalletTypeItem
+                key={t}
+                tone={t}
+                icon={<TraitIcon trait={t} size={17} />}
+                label={TRAIT_LABEL[t]}
+                count={s?.count ?? 0}
+                share={pct(s?.pct ?? 0, 1)}
+                title={`${TRAIT_WORDS[t]}. ${s?.count ?? 0} on the map, holding ${pct(s?.pct ?? 0, 1)} of supply`}
+              />
+            );
+          })}
+          <WalletTypeItem
+            tone="risky"
+            icon={<RiskyIcon />}
+            label="Risky"
+            count={flags === "ok" ? risky.count : null}
+            share={flags === "ok" ? pct(risky.pct, 1) : flags === "failed" ? "not read" : "loading"}
+            title={
+              flags === "ok"
+                ? `${RISKY_WORDS}. ${risky.count} on the map, holding ${pct(risky.pct, 1)} of supply`
+                : flags === "failed"
+                  ? "Risky: couldn't load the flagged wallets, so no risky ones are ringed. Not a clean reading."
+                  : "Risky: loading the flagged wallets"
+            }
+          />
+        </ul>
+      </dd>
+    </div>
+  );
+  const map = (
+    <BubbleSvg
+      graph={regrouped ?? graph}
+      names={names}
+      picked={picked}
+      lit={lit}
+      cexLinks={showCex}
+      transfers={showTransfers}
+      sideGroups={side.shown}
+      kols={drawnKols}
+      sides={sides}
+      onPick={(id) => {
+        setPicked(id);
+        setFocusFunder(null);
+        // A wallet's bubble (a holder, or the funder behind a cluster) opens that wallet's modal;
+        // the "others" bubble has no one wallet, so it only lights up.
+        const wallet = graph.nodes.find((n) => n.id === id)?.wallet;
+        if (wallet) openWallet(wallet);
+      }}
+    />
+  );
+  // The map's switches sit under the legend (user ask 2026-10-16).
+  const toggles = (graph.cexLinks.length > 0 ||
+    groups.length > 0 ||
+    graph.transferLinks.length > 0 ||
+    nameToggle.hasSwitchable) && (
+    <div className="bm-toggles">
+      {graph.transferLinks.length > 0 && (
+        <MapToggle on={showTransfers} onToggle={() => setTransfersOn(!showTransfers)} keyClass="bm-xfer-key">
+          Holder transfers
+        </MapToggle>
+      )}
+      {graph.cexLinks.length > 0 && (
+        <MapToggle on={showCex} onToggle={() => setCexOn(!showCex)} keyClass="bm-cex-key">
+          Same-exchange ties
+        </MapToggle>
+      )}
+      {groups.length > 0 && (
+        <MapToggle on={showSides} onToggle={() => setSideOn(!showSides)} keyClass="bm-cex-key bm-side-key">
+          KOL side wallets
+        </MapToggle>
+      )}
+      {nameToggle.hasSwitchable && (
+        <MapToggle
+          on={nameToggle.showNames}
+          onToggle={() => nameToggle.setNamesOn(!nameToggle.showNames)}
+          keyClass="bm-name-key"
+        >
+          Pump.fun / FOMO / Helius names
+        </MapToggle>
+      )}
+    </div>
+  );
+  const groupPanel = (
+    <GroupPanel
+      column={column}
+      graph={graph}
+      names={names}
+      kols={drawnKols}
+      transfers={showTransfers}
+      listed={listed}
+      lit={lit}
+      onSelect={(key, cluster) => {
+        const open = listed !== key;
+        setPicked(null);
+        setFocusFunder(open && cluster !== undefined ? (graph.clusters[cluster]?.funder ?? null) : null);
+        setListed(open ? key : null);
+      }}
+    />
+  );
+
+  if (column)
+    return (
+      <>
+        {toggles && <MapLayers>{toggles}</MapLayers>}
+        {groupPanel}
+        <dl className="bm-stats bm-col-traits">{traitsStat}</dl>
+        {map}
+        <dl className="bm-stats bm-col-figs" style={{ "--bm-cols": cols } as React.CSSProperties}>
+          {headline}
+        </dl>
+      </>
+    );
+  return (
+    <>
+      <dl className="bm-stats" style={{ "--bm-cols": cols } as React.CSSProperties}>
+        {headline}
+        {traitsStat}
+      </dl>
+      {map}
+      <NameLegend graph={graph} names={names} />
+      {toggles}
+      <NodeDetail node={node} graph={graph} names={names} sides={sides} />
+      {groupPanel}
+    </>
+  );
+}
+
+/**
+ * The map's switches folded behind one button in the section's heading, for a fixed column where a
+ * row of them would squeeze the map. Closes on a tap outside it or Escape.
+ */
+function MapLayers({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const close = (e: Event) => {
+      const el = ref.current;
+      if (!el?.open) return;
+      if (e instanceof KeyboardEvent) {
+        if (e.key !== "Escape") return;
+        // Escape folds the switches away, not the whole window.
+        e.preventDefault();
+        el.open = false;
+      } else if (!el.contains(e.target as Node)) el.open = false;
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, []);
+  return (
+    <details className="bm-layers" ref={ref}>
+      <summary title="What the map draws">
+        <SlidersIcon size={13} /> Show
+      </summary>
+      <div className="bm-layers-pop">{children}</div>
+    </details>
   );
 }
 
@@ -704,6 +757,7 @@ function GroupPanel({
   listed,
   lit,
   onSelect,
+  column = false,
 }: {
   graph: BubbleGraph;
   names: WalletNames;
@@ -713,6 +767,8 @@ function GroupPanel({
   listed: string | null;
   lit: number | null;
   onSelect: (key: string, cluster?: number) => void;
+  /** In a fixed column: the lists scroll in their own box, the hint is left off and wallets show only once picked. */
+  column?: boolean;
 }) {
   const detail = useRef<HTMLDivElement>(null);
   const listId = useId();
@@ -850,11 +906,11 @@ function GroupPanel({
   const pick = (g: PanelGroup) => {
     onSelect(g.key, g.cluster);
     // Stacked on a phone, the wallets sit under the list: bring them into view.
-    if (listed !== g.key && window.matchMedia("(max-width: 640px)").matches)
+    if (listed !== g.key && (column || window.matchMedia("(max-width: 640px)").matches))
       window.setTimeout(() => detail.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 50);
   };
   return (
-    <div className="bm-groups">
+    <div className={`bm-groups${column ? " bm-groups-col" : ""}`}>
       <div className="bm-group-list">
         {sections.map((sec, si) => {
           const open = openSection === sec.title;
@@ -911,7 +967,7 @@ function GroupPanel({
           );
         })}
       </div>
-      <div className="bm-group-detail" ref={detail} aria-live="polite">
+      <div className="bm-group-detail" ref={detail} aria-live="polite" hidden={column && !picked}>
         {picked ? (
           <GroupWallets group={picked} names={names} />
         ) : (
@@ -1077,6 +1133,116 @@ function useStageAspect(ref: React.RefObject<HTMLElement | null>): number | null
   return aspect;
 }
 
+/**
+ * Zoom and move around the map (user ask 2026-10-18), as the chart does: scroll or pinch to zoom
+ * (scrolling down at the whole map scrolls the page as before), drag or swipe sideways to move once
+ * zoomed. A drag never opens the bubble it ends on.
+ */
+function useMapZoom(svg: React.RefObject<SVGSVGElement | null>, box: MapBox) {
+  const [zoom, setZoomState] = useState<MapZoom | null>(null);
+  // What the handlers read between renders: set on each render, and by the handlers themselves, so
+  // events between renders build on each other.
+  const live = useRef({ box, zoom });
+  useEffect(() => {
+    live.current = { box, zoom };
+  });
+  const setZoom = (z: MapZoom | null) => {
+    live.current = { ...live.current, zoom: z };
+    setZoomState(z);
+  };
+  const toMap = (clientX: number, clientY: number) => {
+    const m = svg.current?.getScreenCTM();
+    return m ? new DOMPoint(clientX, clientY).matrixTransform(m.inverse()) : null;
+  };
+  const zoomBy = (factor: number, at?: { x: number; y: number } | null) =>
+    setZoom(zoomAround(live.current.box, live.current.zoom, factor, at));
+  const panByPx = (dx: number, dy: number) => {
+    const scale = svg.current?.getScreenCTM()?.a;
+    if (!scale) return;
+    setZoom(panZoom(live.current.box, live.current.zoom, -dx / scale, -dy / scale));
+  };
+  const handlers = useRef({ zoomBy, panByPx, toMap });
+  useEffect(() => {
+    handlers.current = { zoomBy, panByPx, toMap };
+  });
+
+  useEffect(() => {
+    const el = svg.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const zoomed = live.current.zoom !== null;
+      const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        // A sideways swipe on a trackpad moves a zoomed map.
+        if (!zoomed) return;
+        handlers.current.panByPx(-e.deltaX * unit, 0);
+      } else {
+        if (e.deltaY === 0 || (e.deltaY > 0 && !zoomed)) return;
+        const factor = Math.exp(-Math.max(-1, Math.min(1, (e.deltaY * unit) / 400)));
+        handlers.current.zoomBy(factor, handlers.current.toMap(e.clientX, e.clientY));
+      }
+      e.preventDefault();
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [svg]);
+
+  // Pointers down on the map: one drags a zoomed map along, two pinch.
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const pinch = useRef<number | null>(null);
+  const moved = useRef(0);
+  const spread = () => {
+    const [a, b] = [...pointers.current.values()];
+    return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : null;
+  };
+  const gestures = {
+    onPointerDown: (e: React.PointerEvent<SVGSVGElement>) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.current.size === 1) moved.current = 0;
+      pinch.current = spread();
+    },
+    onPointerMove: (e: React.PointerEvent<SVGSVGElement>) => {
+      const was = pointers.current.get(e.pointerId);
+      if (!was) return;
+      const now = { x: e.clientX, y: e.clientY };
+      pointers.current.set(e.pointerId, now);
+      const dx = now.x - was.x;
+      const dy = now.y - was.y;
+      moved.current += Math.abs(dx) + Math.abs(dy);
+      if (pointers.current.size >= 2) {
+        const d = spread();
+        if (d && pinch.current) {
+          const [a, b] = [...pointers.current.values()];
+          zoomBy(d / pinch.current, toMap((a!.x + b!.x) / 2, (a!.y + b!.y) / 2));
+        }
+        pinch.current = d;
+        return;
+      }
+      if (live.current.zoom === null || moved.current < 4) return;
+      // Held from here, so the drag carries on off the map's edge.
+      if (!e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.setPointerCapture(e.pointerId);
+      panByPx(dx, dy);
+    },
+    onPointerUp: (e: React.PointerEvent<SVGSVGElement>) => {
+      pointers.current.delete(e.pointerId);
+      pinch.current = spread();
+    },
+    onPointerCancel: (e: React.PointerEvent<SVGSVGElement>) => {
+      pointers.current.delete(e.pointerId);
+      pinch.current = spread();
+    },
+    // A drag or pinch that ends on a bubble doesn't open it.
+    onClickCapture: (e: React.MouseEvent) => {
+      if (moved.current < 4) return;
+      moved.current = 0;
+      e.stopPropagation();
+      e.preventDefault();
+    },
+  };
+  return { zoom, view: zoomedBox(box, zoom), setZoom, zoomBy, gestures };
+}
+
 function BubbleSvg({
   graph: laid,
   names,
@@ -1204,16 +1370,20 @@ function BubbleSvg({
     return { labels: new Map(list.map((l) => [l.id, l])), placed: placeLabels(graph, list, routes, lines) };
   }, [graph, names, cexLinks, cexSlot, kolSides, kols, routes, lanes, bubbleFunderLabels]);
   const box = graphBounds(graph, 18, placed);
+  const svg = useRef<SVGSVGElement>(null);
+  const { zoom, view, setZoom, zoomBy, gestures } = useMapZoom(svg, box);
   const dim = (n: MapNode) => lit !== null && n.cluster !== lit;
   // Bigger bubbles first so the small ones draw on top and stay tappable.
   const order = [...graph.nodes].sort((a, b) => b.r - a.r);
   const ids = Array.from({ length: CLUSTER_COLOURS }, (_, i) => i);
 
   return (
-    <div className="bm-stage compact" ref={stage}>
+    <div className={`bm-stage compact${zoom ? " zoomed" : ""}`} ref={stage}>
       <svg
+        ref={svg}
         className="bm-svg"
-        viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`}
+        viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
+        {...gestures}
         role="group"
         aria-label={`Bubble map of ${graph.nodes.filter((n) => n.kind === "holder").length} top holders in ${graph.clusters.length} linked clusters`}
       >
@@ -1415,6 +1585,36 @@ function BubbleSvg({
           })}
         </g>
       </svg>
+      <div className="bm-zoom" role="group" aria-label="Zoom">
+        <button
+          type="button"
+          aria-label="Zoom out"
+          title="Zoom out"
+          disabled={!zoom}
+          onClick={() => zoomBy(1 / 1.6)}
+        >
+          −
+        </button>
+        <button
+          type="button"
+          aria-label="Zoom in"
+          title="Zoom in"
+          disabled={(zoom?.k ?? 1) >= MAX_MAP_ZOOM}
+          onClick={() => zoomBy(1.6)}
+        >
+          +
+        </button>
+        {zoom && (
+          <button
+            type="button"
+            className="bm-zoom-reset"
+            title="Show the whole map"
+            onClick={() => setZoom(null)}
+          >
+            Reset
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -2002,6 +2202,7 @@ export function BubbleMapSection({
   pending = false,
   flagged,
   flags,
+  column = false,
 }: {
   token: Token;
   /** The reading to draw; undefined while it loads. */
@@ -2021,6 +2222,8 @@ export function BubbleMapSection({
    */
   flagged: readonly FlaggedHolder[];
   flags: FlagsRead;
+  /** Laid out to fit a fixed column (Scope's desktop page): see MapView. */
+  column?: boolean;
 }) {
   const mint = token.mintAddress;
   const liveWide = useWideMap(mint);
@@ -2074,7 +2277,7 @@ export function BubbleMapSection({
     );
   }
   return (
-    <section className="sage-card bm-section">
+    <section className={`sage-card bm-section${column ? " bm-col" : ""}`}>
       <h4>
         <BubblesIcon size={14} /> Bubble map
         {moment && (
@@ -2117,6 +2320,7 @@ export function BubbleMapSection({
         nameToggle={nameToggle}
         flags={flags}
         scanKolBundled={shown?.kolBundledPct ?? null}
+        column={column}
       />
     </section>
   );

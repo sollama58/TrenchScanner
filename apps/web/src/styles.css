@@ -19554,7 +19554,7 @@ dialog.tm-modal.tm-terminal::backdrop {
 }
 .tm-term-top {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(380px, 34%);
+  grid-template-columns: minmax(0, 1fr) minmax(400px, 38%);
   border-bottom: 1px solid var(--border);
 }
 .tm-term-chart {
@@ -19568,30 +19568,37 @@ dialog.tm-modal.tm-terminal::backdrop {
   background: transparent;
 }
 .tm-term-map {
-  position: relative;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   border-left: 1px solid var(--border);
 }
+/* The column is as tall as the chart beside it; the map takes whatever its lists and figures leave. */
 .tm-term-map-in {
-  position: absolute;
-  inset: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   padding: 10px 12px;
 }
-.tm-term-map-in > .sage-card:first-child,
-.tm-term-map-in > .tm-holders-bar + .sage-card {
-  margin-top: 0;
+.tm-term-map-in > .tm-holders-bar {
+  flex: none;
+  margin-bottom: 8px;
 }
-.tm-term-map .bm-stats {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.tm-term-map-in > .sage-card {
+  margin: 0;
 }
-.tm-term-map .bm-stats > div {
-  padding: 8px 10px;
+.tm-term-map-in > .bm-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 10px 12px 12px;
 }
-.tm-term-map .bm-stage.compact .bm-svg,
-.tm-term-map .bm-svg {
-  height: 340px;
+.tm-term-map .bm-section > h4 {
+  flex: none;
+  margin: 0 !important;
 }
 .tm-term-tabs {
   position: sticky;
@@ -19631,13 +19638,6 @@ dialog.tm-modal.tm-terminal::backdrop {
 .tm-term-rail .tm-safety-label small,
 .tm-term-rail .tm-safety-lead {
   display: none;
-}
-.tm-term-steps {
-  margin: 0;
-  padding-left: 18px;
-  display: grid;
-  gap: 4px;
-  font-size: 12.5px;
 }
 .tm-term-pro ul {
   margin: 0 0 12px;
@@ -19679,14 +19679,266 @@ dialog.tm-modal.tm-terminal::backdrop {
 .tm-term-rail .tm-fee-zero-more {
   display: none;
 }
-/* The map first in its column (user ask: the bubble map always shows), its figures and lists under it. */
-.tm-term-map .bm-section {
+/* The bubble map laid out for a fixed column (Scope's desktop page, user ask 2026-10-18): its lists
+   and wallet types on top, the map filling what's left, its figures in one compact strip under it.
+   Nothing in it scrolls but a long opened list, in its own box. */
+.bm-col .bm-groups-col {
   display: flex;
+  flex: none;
   flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  max-height: 196px;
+  margin: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
-.tm-term-map .bm-section > h4 {
-  order: -2;
+.bm-col .bm-group-list {
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  grid-auto-flow: row dense;
+  gap: 6px;
 }
-.tm-term-map .bm-section > .bm-stage {
-  order: -1;
+.bm-col .bm-group-section.open {
+  grid-column: 1 / -1;
+}
+.bm-col .bm-section-btn {
+  gap: 5px;
+  padding: 6px 8px;
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.bm-col .bm-section-chev {
+  display: none;
+}
+.bm-col .bm-section-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bm-col .bm-section-pct {
+  font-size: 12px;
+}
+.bm-col .bm-section-count {
+  padding: 1px 5px;
+}
+.bm-col .bm-cluster {
+  padding: 6px 10px;
+}
+.bm-col .bm-cluster-name,
+.bm-col .bm-cluster .muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bm-col .bm-cluster-pct {
+  font-size: 13px;
+}
+.bm-col .bm-group-detail {
+  position: static;
+  min-height: 0;
+  padding: 8px;
+}
+.bm-col .bm-stats {
+  margin: 0;
+}
+.bm-col .bm-col-traits {
+  flex: none;
+  grid-template-columns: minmax(0, 1fr);
+}
+.bm-col .bm-col-traits > .bm-traits-stat {
+  gap: 6px;
+  padding: 0;
+  background: none;
+  border: 0;
+}
+.bm-col .bm-wt-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.bm-col .bm-wt {
+  gap: 8px;
+  padding: 5px 8px 5px 5px;
+}
+.bm-col .bm-wt-badge {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+}
+.bm-col .bm-wt-text {
+  flex: 1;
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+.bm-col .bm-wt-top b {
+  font-size: 15px;
+}
+.bm-col .bm-wt-share {
+  flex: none;
+  margin: 0;
+  font-size: 12px;
+}
+.bm-col > .bm-stage {
+  flex: 1 1 0;
+  min-height: 200px;
+}
+.bm-col > .bm-stage .bm-svg {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+}
+/* Linked, KOL bundled and the rest: each figure a label and its value on one line. */
+.bm-col .bm-col-figs {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.bm-col .bm-col-figs > div {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+.bm-col .bm-col-figs dt {
+  font-size: 9.5px;
+}
+.bm-col .bm-col-figs dd {
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.bm-col .bm-col-figs .bm-stat-sub {
+  font-size: 11px;
+}
+.bm-col .bm-toggles {
+  flex: none;
+  gap: 4px;
+  margin: 0;
+}
+.bm-col .switch.bm-toggle {
+  gap: 6px;
+  padding: 2px 9px 2px 3px;
+  font-size: 11.5px;
+}
+/* The map's switches behind a Show button at the heading's end, by the share button. */
+.bm-col {
+  position: relative;
+}
+.bm-layers {
+  position: absolute;
+  top: 10px;
+  right: 52px;
+  z-index: 3;
+}
+.bm-layers > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+  list-style: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.bm-layers > summary::-webkit-details-marker {
+  display: none;
+}
+.bm-layers[open] > summary,
+.bm-layers > summary:hover {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--brand-a) 45%, var(--border-strong));
+}
+.bm-layers > summary:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+.bm-layers-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: max-content;
+  max-width: 300px;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-solid);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.35);
+}
+.bm-layers-pop .bm-toggles {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  margin: 0;
+}
+/* Zoom: − + and Reset at the map's corner, as on the chart. */
+.bm-zoom {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  gap: 4px;
+}
+.bm-zoom button {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1;
+  color: var(--ink-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-solid) 88%, transparent);
+  cursor: pointer;
+}
+.bm-zoom button:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--brand-a) 45%, var(--border-strong));
+}
+.bm-zoom button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.bm-zoom button:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+.bm-zoom .bm-zoom-reset {
+  font-size: 12px;
+}
+/* Unzoomed, a finger swipe still scrolls the page; zoomed, it moves the map. */
+.bm-stage .bm-svg {
+  touch-action: pan-y;
+}
+.bm-stage.zoomed .bm-svg {
+  touch-action: none;
+  cursor: grab;
+}
+.bm-stage.zoomed .bm-svg:active {
+  cursor: grabbing;
+}
+/* Under 1600px the coin's links take a row of their own, so the four figures keep their width. */
+@media (max-width: 1599px) {
+  .tm-modal.tm-terminal .tm-head {
+    grid-template-columns: minmax(220px, auto) minmax(0, 1fr) auto;
+    grid-template-areas:
+      "token figs actions"
+      "links links links";
+  }
+  .tm-modal.tm-terminal .tm-head > .tm-quick {
+    justify-self: end;
+  }
+}
+.tm-modal.tm-terminal .tm-fig > :first-child {
+  white-space: nowrap;
 }

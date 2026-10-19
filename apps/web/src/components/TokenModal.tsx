@@ -75,9 +75,7 @@ import { CustomizeDrawer } from "./CustomizeDrawer";
 import { markPrefsOf, walletMarks, type WalletMark } from "../walletMarks";
 import { PriceChart, type ChartEvent, type ChartKind, type ChartTrade } from "./PriceChart";
 import { TradePanel, solText, tokensText } from "./TradePanel";
-import { ExitPlanInfo } from "./ExitPlanInfo";
 import { PRO_MODE_PERKS } from "./ProModeCard";
-import { exitPlanSteps, useExitPlan } from "../exitPlan";
 import { summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
 import { guessPath, pathFrom, type PathGuess, type PathStep } from "../pricePathing";
@@ -594,7 +592,7 @@ function chartHeight(expanded = false): number {
 }
 /** The Scope terminal's chart: most of the window's height left over by the header and the tabs. */
 function terminalChartHeight(): number {
-  return Math.round(Math.min(560, Math.max(320, window.innerHeight - 440)));
+  return Math.round(Math.min(620, Math.max(400, window.innerHeight - 360)));
 }
 function chartBoxHeight(): number {
   return chartHeight() + CHART_CHROME_PX + (window.innerWidth <= 640 ? CHART_READOUT_PX : 0);
@@ -858,6 +856,7 @@ function TokenBody({
       pending={scanning}
       flagged={flagged}
       flags={flags}
+      column={terminal}
     />
   );
 
@@ -955,7 +954,6 @@ function TokenBody({
           </div>
           <aside className="tm-term-rail" aria-label="Trade and checks">
             <div ref={setTradeSlot} className="tm-term-trade" />
-            <ExitPlanCard />
             <div id={`${ids}-safety`} className="tm-term-safety">
               {/* Open from the start here: the rail is where the checks are read at a glance. */}
               <SafetyCard
@@ -2019,33 +2017,9 @@ export function ChartCard({
         )}
       </section>
       {inTerminal
-        ? tradeSlot && createPortal(tradePanel ?? (proState ? null : <ProModePrompt />), tradeSlot)
+        ? tradeSlot && createPortal(tradePanel ?? (proState?.pro ? null : <ProModePrompt />), tradeSlot)
         : tradePanel}
     </>
-  );
-}
-
-/**
- * The Scope terminal's exit plan (user ask 2026-10-18): the fixed plan every return on the site is
- * graded on, step by step, with its full explainer a tap away. Nothing while it loads.
- */
-function ExitPlanCard() {
-  const { plan } = useExitPlan();
-  if (!plan) return null;
-  return (
-    <section className="sage-card tm-term-plan" aria-label="Exit plan">
-      <h4>
-        Exit plan <span className="small muted">how returns are graded</span>
-        <ExitPlanInfo />
-      </h4>
-      <ol className="tm-term-steps">
-        {exitPlanSteps(plan).map((st) => (
-          <li key={st.title} title={st.body}>
-            {st.title}
-          </li>
-        ))}
-      </ol>
-    </section>
   );
 }
 
