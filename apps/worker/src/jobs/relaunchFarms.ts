@@ -53,8 +53,8 @@ export function resetRelaunchSiblingsForTests(): void {
 }
 
 /**
- * The same-ticker launches before each mint, for the block on model calls on relaunch farms (see
- * core's curation/relaunchFarm.ts). One query over the Token table the discovery stream already
+ * The same-ticker launches before each mint, recorded as model inputs (see core's
+ * curation/relaunchFarm.ts). One query over the Token table the discovery stream already
  * fills, asked once per mint per process: the siblings are fixed by the mint's first sighting,
  * and only a farm's peak (a mint at or past the cut) is read again, every RELAUNCH_PEAK_REREAD_MS.
  * The scan asks about 150-220 candidates a cycle and sees 10-20 new ones, so the read shrinks to
@@ -97,7 +97,7 @@ export async function resolveRelaunchSiblings(
     }
     for (const mint of toRead) if (!read.has(mint)) remember(mint, null, now);
   } catch (err) {
-    logger.warn("relaunch sibling read failed; the relaunch-farm block is skipped this cycle", {
+    logger.warn("relaunch sibling read failed; those inputs are left unread this cycle", {
       mints: toRead.length,
       error: err instanceof Error ? err.message : String(err),
     });

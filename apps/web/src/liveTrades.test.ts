@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   coinLabels,
   filterTrades,
+  mergeHistory,
   NO_FILTER,
   parseFilter,
   sinceText,
@@ -26,6 +27,25 @@ const trade = (
   tokens: 1,
   atMs,
   mcapUsd: null,
+});
+
+describe("mergeHistory", () => {
+  it("keeps trades past the feed's window, each once, oldest first, the newest max", () => {
+    const kept = [trade(1, "buy", 1, "a", 100), trade(2, "sell", 1, "b", 200)];
+    // A restarted feed sends its window again, reaching back before the newest kept trade.
+    const out = mergeHistory(kept, [
+      trade(2, "sell", 1, "b", 200),
+      trade(0, "buy", 1, "c", 50),
+      trade(3, "buy", 1, "d", 300),
+    ]);
+    expect(out.map((t) => t.sig)).toEqual(["s0", "s1", "s2", "s3"]);
+    expect(mergeHistory(out, [trade(4, "buy", 1, "e", 400)], 3).map((t) => t.sig)).toEqual([
+      "s2",
+      "s3",
+      "s4",
+    ]);
+    expect(mergeHistory(kept, [trade(1, "buy", 1, "a", 100)])).toBe(kept);
+  });
 });
 
 describe("live trades", () => {

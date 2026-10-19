@@ -1293,8 +1293,8 @@ async function scanCycle(
     env,
   );
   lap("preBond");
-  // Same-ticker launches just before each candidate, for the relaunch-farm block on model calls
-  // (core's relaunchFarm.ts): one query, asked only about the candidates the local screen and
+  // Same-ticker launches just before each candidate, recorded as model inputs (core's
+  // relaunchFarm.ts): one query, asked only about the candidates the local screen and
   // Mayhem leave standing, as for the pre-bond cut.
   const relaunchByMint = await resolveRelaunchSiblings(
     candidates

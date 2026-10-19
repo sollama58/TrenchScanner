@@ -7,6 +7,7 @@ import { openWallet } from "../walletModal";
 import { useWalletNames, walletText } from "../walletNames";
 import { TRAIT_WORDS, TraitIcon, TransferArrow, xferPctText } from "./BubbleMap";
 import { FoldHead } from "./Fold";
+import { LiveStamp } from "./Freshness";
 import { WalletText } from "./WalletText";
 
 /** Holders listed before "Show all". */
@@ -30,6 +31,7 @@ export function TopHolders({
   entries = {},
   pending = false,
   defaultOpen = false,
+  freshness,
 }: {
   snapshot: Snapshot | null | undefined;
   flagged: readonly FlaggedHolder[];
@@ -39,6 +41,11 @@ export function TopHolders({
   pending?: boolean;
   /** Open from the start: the Scope terminal's Holders tab, where the list is the tab's point. */
   defaultOpen?: boolean;
+  /**
+   * When the live list was read and the next is due (null: no more coming), said beside the count
+   * (user ask 2026-10-19); none for a list kept as it stood.
+   */
+  freshness?: { last: number; next: number | null };
 }) {
   const [all, setAll] = useState(false);
   const [open, setOpen] = useState(defaultOpen);
@@ -86,6 +93,7 @@ export function TopHolders({
       <FoldHead open={open} onToggle={() => setOpen((o) => !o)} controls={bodyId}>
         Top holders
         <span className="sage-tag">{holders.length + (rest?.count ?? 0)}</span>
+        {freshness && <LiveStamp last={freshness.last} next={freshness.next} />}
         {graph.top10Pct !== null && (
           <span
             className="tm-h4-meta muted small num"

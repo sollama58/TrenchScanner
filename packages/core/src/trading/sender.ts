@@ -67,8 +67,40 @@ export type SenderResult = { ok: true } | { ok: false; refused: boolean; error: 
  * Sends one signed transaction (base64) to Sender. Never throws: whether it landed is for the
  * signature's status to say. Only a JSON-RPC error is a refusal; a timeout or a dropped
  * connection may still have gone out, so it is `refused: false` and must be treated as sent.
+ *
+ * A keyed URL whose key Sender turns away (401/403, or 429 on the key's own limit: a suspended or
+ * over-limit Helius account) is tried once more without the key, on Sender's keyless limit. Only
+ * after a refusal, when nothing went out (and the same signed bytes can land only once anyway).
  */
 export async function sendViaSender(url: string, base64Tx: string): Promise<SenderResult> {
+  const first = await sendOnce(url, base64Tx);
+  if (first.ok || !KEY_REFUSALS.has(first.status ?? 0)) return strip(first);
+  const keyless = withoutApiKey(url);
+  if (!keyless) return strip(first);
+  return strip(await sendOnce(keyless, base64Tx));
+}
+
+/** The URL without its api-key parameter; null when it had none. */
+function withoutApiKey(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.searchParams.has("api-key")) return null;
+    parsed.searchParams.delete("api-key");
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** HTTP answers that refuse the key rather than the transaction. */
+const KEY_REFUSALS = new Set([401, 403, 429]);
+
+type SendAttempt = { ok: true } | { ok: false; refused: boolean; error: string; status?: number };
+
+const strip = (r: SendAttempt): SenderResult =>
+  r.ok ? r : { ok: false, refused: r.refused, error: r.error };
+
+async function sendOnce(url: string, base64Tx: string): Promise<SendAttempt> {
   let body: { result?: unknown; error?: { message?: string } };
   try {
     body = await fetchJson<{ result?: unknown; error?: { message?: string } }>(url, {
@@ -87,7 +119,7 @@ export async function sendViaSender(url: string, base64Tx: string): Promise<Send
     // A 4xx answer (rate limit included) is Sender saying no; a timeout or a 5xx may have gone out.
     const status = err instanceof HttpError ? err.status : 0;
     const refused = status >= 400 && status < 500 && status !== 408;
-    return { ok: false, refused, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, refused, error: err instanceof Error ? err.message : String(err), status };
   }
   if (body.error)
     return { ok: false, refused: true, error: body.error.message ?? "Sender refused the transaction" };

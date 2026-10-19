@@ -6,9 +6,10 @@ import { updateFreeTiers } from "./sacrifice.js";
 
 /**
  * Pro Mode for the top $ASDFASDFA holders (user ask 2026-10-18): the 250 largest wallets have it
- * automatically. One that drops out keeps it for 24 hours after the last scan it was in, with
- * warnings, unless a scan finds it moved its bag away (bagMovedAt). After that it has no Pro
- * Mode at all, sells included (user decision 2026-10-18).
+ * automatically. One that drops out keeps it for 24 hours after the last scan it was in (or after
+ * the first fresh scan without it, when the scans had stopped: graceFrom), with warnings, unless a
+ * scan finds it moved its bag away (bagMovedAt). After that it has no Pro Mode at all, sells
+ * included (user decision 2026-10-18).
  *
  * The scan (worker, "pro-holders") reads every token account of the mint and writes the top 250
  * with the scan's time. "In the top 250" means in the newest scan, never "seen recently", so a
@@ -32,7 +33,10 @@ export const PRO_HOLDER_QUALIFY_MS = 0;
  * A newest scan older than this means the scans have stopped (Helius down, the job off). Its
  * wallets keep Pro Mode until the scans resume (user decision 2026-10-19): an outage is not the
  * holder's doing, and with no sell-only access a lapse would leave them unable to sell. Only a
- * scan that finds a wallet out of the top 250 starts its grace period.
+ * scan that finds a wallet out of the top 250 starts its grace period, and the first scan after
+ * an outage starts it from itself, not from the last scan before the outage (graceFrom), so the
+ * outage doesn't use up the grace. A wallet already in its grace when the scans stopped keeps
+ * its clock.
  */
 export const PRO_HOLDER_STALE_MS = 60 * 60_000;
 /**
@@ -96,13 +100,21 @@ export async function refreshProHolders(
       "rank" = EXCLUDED."rank",
       "lastInTopAt" = EXCLUDED."lastInTopAt",
       "heldRaw" = EXCLUDED."heldRaw",
+      "graceFrom" = NULL,
       "inTopSince" = CASE
         WHEN "ProHolder"."lastInTopAt" = ${previous} THEN "ProHolder"."inTopSince"
-        WHEN "ProHolder"."lastInTopAt" > ${graceFloor}
+        WHEN COALESCE("ProHolder"."graceFrom", "ProHolder"."lastInTopAt") > ${graceFloor}
           AND "ProHolder"."lastInTopAt" - "ProHolder"."inTopSince" >= make_interval(mins => ${qualifyMinutes}::int)
           AND ("ProHolder"."bagMovedAt" IS NULL OR "ProHolder"."bagMovedAt" < "ProHolder"."lastInTopAt")
           THEN "ProHolder"."inTopSince"
         ELSE EXCLUDED."inTopSince" END`;
+  // The previous scan's wallets missing from this one start their grace: from the last scan they
+  // were in, or from this one when the scans had stopped in between (an outage isn't theirs).
+  if (previous)
+    await prisma.proHolder.updateMany({
+      where: { lastInTopAt: previous },
+      data: { graceFrom: now.getTime() - previous.getTime() > PRO_HOLDER_STALE_MS ? now : previous },
+    });
   await markMovedBags(ranked, top.length, now, graceFloor, read.holders.length >= PRO_HOLDER_READ);
   await updateFreeTiers(now);
   latestCache = { at: Date.now(), latest: now };
@@ -131,7 +143,7 @@ async function markMovedBags(
   // and every grace wallet outside it as holding nothing.
   const smallestRead = readFull ? ranked[ranked.length - 1]?.pct : 0;
   const dropped = await prisma.proHolder.findMany({
-    where: { lastInTopAt: { lt: now, gt: graceFloor } },
+    where: { lastInTopAt: { lt: now }, ...inGraceSince(graceFloor) },
     select: { walletAddress: true, lastInTopAt: true, inTopSince: true, bagMovedAt: true },
   });
   const moved = dropped
@@ -181,6 +193,18 @@ export async function refreshProHoldersOnDemand(
     },
     { timeout: 60_000, maxWait: 10_000 },
   );
+}
+
+/** When a dropped-out wallet's grace period started (rows from before graceFrom: its last scan). */
+function graceStart(row: { lastInTopAt: Date; graceFrom: Date | null }): Date {
+  return row.graceFrom ?? row.lastInTopAt;
+}
+
+/** Rows whose grace period started after `floor`, for a Prisma where. */
+function inGraceSince(floor: Date) {
+  return {
+    OR: [{ graceFrom: { gt: floor } }, { graceFrom: null, lastInTopAt: { gt: floor } }],
+  } satisfies Prisma.ProHolderWhereInput;
 }
 
 /** Whether a wallet that dropped out moved its bag since (its grace then ended). */
@@ -235,8 +259,8 @@ export async function proHolderStanding(wallet: string, now = new Date()): Promi
   // In the newest scan: Pro Mode, even while the scans have stopped (PRO_HOLDER_STALE_MS).
   if (inLatest) return { state: "top", rank: row.rank };
   if (movedBag(row)) return { state: "none" };
-  // Dropped out: a day from the last scan it was in.
-  const graceEndsAt = new Date(row.lastInTopAt.getTime() + PRO_HOLDER_GRACE_MS);
+  // Dropped out: a day from the last scan it was in, or from the first fresh scan after an outage.
+  const graceEndsAt = new Date(graceStart(row).getTime() + PRO_HOLDER_GRACE_MS);
   return graceEndsAt > now
     ? { state: "grace", rank: row.rank, graceEndsAt, stale: false }
     : { state: "none" };
@@ -313,7 +337,7 @@ export async function proHolderSummary(now = new Date()) {
       take: PRO_HOLDER_COUNT,
     }),
     prisma.proHolder.findMany({
-      where: { lastInTopAt: { lt: latest, gt: new Date(now.getTime() - PRO_HOLDER_GRACE_MS) } },
+      where: { lastInTopAt: { lt: latest }, ...inGraceSince(new Date(now.getTime() - PRO_HOLDER_GRACE_MS)) },
       orderBy: { lastInTopAt: "asc" },
       take: 500,
     }),
@@ -341,10 +365,12 @@ export async function proHolderSummary(now = new Date()) {
     /** In the newest scan, not for an hour yet. */
     qualifying: top.filter((h) => h.qualifiesAt !== null).length,
     top,
-    grace: inGrace.map((g) => ({
-      walletAddress: g.walletAddress,
-      rank: g.rank,
-      graceEndsAt: new Date(g.lastInTopAt.getTime() + PRO_HOLDER_GRACE_MS),
-    })),
+    grace: inGrace
+      .map((g) => ({
+        walletAddress: g.walletAddress,
+        rank: g.rank,
+        graceEndsAt: new Date(graceStart(g).getTime() + PRO_HOLDER_GRACE_MS),
+      }))
+      .sort((a, b) => a.graceEndsAt.getTime() - b.graceEndsAt.getTime()),
   };
 }

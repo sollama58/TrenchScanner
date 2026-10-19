@@ -14,6 +14,7 @@ import { SharedCache } from "../sharedCache.js";
 import { liveCurves } from "../liveCurve.js";
 import { liveTrades } from "../liveTrades.js";
 import { chartHealthForHealth } from "../chartHealth.js";
+import { proTradeCounts } from "../proTradeCounters.js";
 
 /**
  * How stale a job's lastRunAt can get before we call it out - generous multiples of each job's
@@ -62,6 +63,9 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   // Every TRADING_BOT_INTERVAL_SECONDS (5 by default) when the trading bot is on; while it is down
   // open positions are not watched for their exits.
   "trading-bot": 5 * 60_000,
+  // Every 5 minutes: builds a Pro trade without signing it (tradeCanaryJob.ts). pipeline-watch
+  // tells the admins after two failed runs; this only says it stopped running.
+  "trade-canary": 30 * 60_000,
   // Every PAPER_TRADING_INTERVAL_MS (10s): admins' paper strategies; nothing else waits on it.
   "paper-trading": 10 * 60_000,
   cleanup: 26 * 3_600_000,
@@ -250,17 +254,21 @@ export async function registerHealthRoutes(
         liveCurves: liveCurves().stats(),
         liveTrades: liveTrades().stats(),
         charts: chartHealthForHealth(),
+        proTrades: proTradeCounts(),
       };
     }
     // The charts' live curve tails on this instance (liveCurve.ts): curves followed, how many the
     // chart socket covers, and that socket's traffic and estimated Helius credits since boot. The
-    // token pages' live trades (liveTrades.ts) likewise, for their own socket. `charts`: the charts'
-    // health over the last 5 minutes (chartHealth.ts), informational: it never fails /health.
+    // token pages' live trades (liveTrades.ts) likewise, for their own socket. And this instance's
+    // Pro trade builds and sends by outcome (proTradeCounters.ts), so a spike of 503s shows.
+    // `charts`: the charts' health over the last 5 minutes (chartHealth.ts), informational: it
+    // never fails /health.
     return {
       ok: true,
       liveCurves: liveCurves().stats(),
       liveTrades: liveTrades().stats(),
       charts: chartHealthForHealth(),
+      proTrades: proTradeCounts(),
     };
   });
 
@@ -457,6 +465,18 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   // pipeline-watch: what each stage of the alert path produced in its window.
   const flows = stageTimings(meta, "flows");
   if (flows) out.flows = flows;
+  // pipeline-watch: the Pro trades sent in its window, and how many failed or expired.
+  const tradeOutcomes = stageTimings(meta, "tradeOutcomes");
+  if (tradeOutcomes) out.tradeOutcomes = tradeOutcomes;
+  // The trade canary: each probe's result ("ok", "failed", "skipped") and time, and the coins it
+  // built on (public mints). Why a probe failed is the row's lastError.
+  const probes = stringFields(meta, "probes");
+  if (probes) out.probes = probes;
+  const probeMs = stageTimings(meta, "probeMs");
+  if (probeMs) out.probeMs = probeMs;
+  for (const key of ["graduatedMint", "curveMint"] as const) {
+    if (typeof m[key] === "string") out[key] = m[key];
+  }
   const tokensage = stageTimings(meta, "tokensage");
   if (tokensage) out.tokensage = tokensage;
   // The scan's launch first-buyer reads (the top-10 snipers share): requested, found, failed.
@@ -471,6 +491,18 @@ function runningStep(meta: unknown): { step: string; since: string | null } | nu
   const m = meta as Record<string, unknown>;
   if (typeof m.runningStep !== "string") return null;
   return { step: m.runningStep, since: typeof m.runningStepAt === "string" ? m.runningStepAt : null };
+}
+
+/** A `{ name: text }` object from a heartbeat's meta, strings only, or null. */
+function stringFields(meta: unknown, key: string): Record<string, string> | null {
+  if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
+  const value = (meta as Record<string, unknown>)[key];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      (e): e is [string, string] => typeof e[1] === "string",
+    ),
+  );
 }
 
 function stageTimings(meta: unknown, key: string): Record<string, number> | null {

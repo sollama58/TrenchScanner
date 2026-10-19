@@ -31,10 +31,57 @@ export interface LiveTrades {
   status: LiveTradesAnswer["status"] | null;
   /** From when the feed holds every trade (ms); null until it is live. */
   since: number | null;
+  /**
+   * Every trade read for the coin on this page so far, oldest first, the newest MAX_HISTORY: kept
+   * past `trades`' window and across the feed stopping and starting again, so the chart's marks
+   * of a flagged wallet's trade don't vanish once a busy coin's next 200 trades push it out.
+   */
+  history: LiveTokenTrade[];
 }
 
 /** What the view keeps: the API's own window. */
 export const MAX_TRADES = 200;
+/** The trades a coin's history keeps at most, and the coins kept at most (least recently read first out). */
+export const MAX_HISTORY = 5_000;
+const HISTORY_COINS = 20;
+/** Each coin's history (LiveTrades.history), kept after its feed stops. */
+const histories = new Map<string, LiveTokenTrade[]>();
+
+/**
+ * Exported for tests. `kept` with `fresh` folded in by signature, oldest first, the newest `max`.
+ * A trade read again (a restarted feed sends its window over) is kept once.
+ */
+export function mergeHistory(
+  kept: readonly LiveTokenTrade[],
+  fresh: readonly LiveTokenTrade[],
+  max = MAX_HISTORY,
+): LiveTokenTrade[] {
+  if (fresh.length === 0) return kept as LiveTokenTrade[];
+  const seen = new Set(kept.map((t) => t.sig));
+  const add: LiveTokenTrade[] = [];
+  for (const t of fresh) {
+    if (seen.has(t.sig)) continue;
+    seen.add(t.sig);
+    add.push(t);
+  }
+  if (add.length === 0) return kept as LiveTokenTrade[];
+  const last = kept[kept.length - 1];
+  const out = kept.concat(add);
+  // Mostly the new trades come after the kept ones; a restart's window can reach back before them.
+  if (last && add.some((t) => t.atMs < last.atMs)) out.sort((a, b) => a.atMs - b.atMs);
+  return out.length > max ? out.slice(-max) : out;
+}
+
+function keepHistory(base: string, trades: LiveTokenTrade[]) {
+  histories.delete(base);
+  histories.set(base, trades);
+  while (histories.size > HISTORY_COINS) {
+    const oldest = histories.keys().next().value;
+    if (oldest === undefined) break;
+    histories.delete(oldest);
+  }
+}
+
 /** How often to ask again from an API that answered at once (pending, or an older build). */
 const POLL_MS = 2_000;
 /** A held ask comes back with a trade; the next goes out no sooner than this after the last. */
@@ -50,11 +97,15 @@ interface SharedFeed {
   stop: () => void;
 }
 const feeds = new Map<string, SharedFeed>();
-const EMPTY: LiveTrades = { trades: [], status: null, since: null };
+const EMPTY: LiveTrades = { trades: [], status: null, since: null, history: [] };
 
 /** Starts `base`'s feed: asks for the trades since the last answer until stopped. */
 function startFeed(base: string): SharedFeed {
-  const feed: SharedFeed = { state: EMPTY, listeners: new Set(), stop: () => {} };
+  const feed: SharedFeed = {
+    state: { ...EMPTY, history: histories.get(base) ?? [] },
+    listeners: new Set(),
+    stop: () => {},
+  };
   const set = (next: LiveTrades) => {
     feed.state = next;
     for (const l of feed.listeners) l();
@@ -87,6 +138,8 @@ function startFeed(base: string): SharedFeed {
       const fresh = restarted ? a.trades : a.trades.filter((t) => t.seq > after);
       after = restarted ? a.cursor : Math.max(after, a.cursor);
       const prev = feed.state;
+      const history = mergeHistory(prev.history, fresh);
+      if (history !== prev.history) keepHistory(base, history);
       set({
         trades: restarted
           ? fresh.slice(-MAX_TRADES)
@@ -95,6 +148,7 @@ function startFeed(base: string): SharedFeed {
             : prev.trades,
         status: a.status,
         since: a.since,
+        history,
       });
       // "Unavailable" can pass (the coin reaches Token, a follow slot frees up), so ask again now and then.
       next(

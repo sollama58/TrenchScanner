@@ -248,6 +248,35 @@ describe("public worker health: skipped runs", () => {
     const s = summarizeHeartbeat(row as unknown as Parameters<typeof summarizeHeartbeat>[0], 2_000);
     expect(s.lastRun).toEqual({ durationMs: 6, skipped: "reviewer off" });
   });
+
+  it("shows the trade canary's probes and the coins it built on", () => {
+    const row = {
+      job: "trade-canary",
+      lastRunAt: new Date(1_000),
+      lastSuccessAt: null,
+      lastError: "trade canary: sender: HttpError: HTTP 503 for https://sender.helius-rpc.com/ping",
+      meta: {
+        durationMs: 4_000,
+        consecutiveFailures: 2,
+        failed: 1,
+        probes: { "sol-usdc": "ok", sender: "failed", "backup-rpc": "skipped" },
+        probeMs: { "sol-usdc": 900, sender: 120 },
+        graduatedMint: "Grad1111111111111111111111111111111111pump",
+        curveMint: null,
+      },
+    };
+    const s = summarizeHeartbeat(row as unknown as Parameters<typeof summarizeHeartbeat>[0], 2_000);
+    expect(s.lastRun).toEqual({
+      durationMs: 4_000,
+      consecutiveFailures: 2,
+      failed: 1,
+      probes: { "sol-usdc": "ok", sender: "failed", "backup-rpc": "skipped" },
+      probeMs: { "sol-usdc": 900, sender: 120 },
+      graduatedMint: "Grad1111111111111111111111111111111111pump",
+    });
+    expect(s.lastError).toBe("trade canary: sender: HttpError: HTTP 503 for <url>");
+    expect(s.role).toBe("scanner");
+  });
 });
 
 describe("GET /health while the report caches fill", () => {
@@ -262,6 +291,31 @@ describe("GET /health while the report caches fill", () => {
     const res = await app.inject({ url: "/health" });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, liveCurves: { followed: 0, streamed: 0 } });
+    await app.close();
+  });
+
+  it("reports this instance's Pro trade builds and sends by outcome", async () => {
+    const { default: Fastify } = await import("fastify");
+    const { registerHealthRoutes } = await import("./health.js");
+    const { countProTrade, resetProTradeCounts } = await import("../proTradeCounters.js");
+    resetProTradeCounts();
+    countProTrade("buildOk");
+    countProTrade("buildOk");
+    countProTrade("buildUnavailable");
+    countProTrade("sendRefused");
+    const app = Fastify();
+    await app.register(registerHealthRoutes, { prefix: "/health" });
+    const res = await app.inject({ url: "/health" });
+    expect(res.json().proTrades).toMatchObject({
+      buildOk: 2,
+      buildRefused: 0,
+      buildUnavailable: 1,
+      buildFailed: 0,
+      sendRefused: 1,
+      sendUnclear: 0,
+      since: expect.any(String),
+    });
+    resetProTradeCounts();
     await app.close();
   });
 });

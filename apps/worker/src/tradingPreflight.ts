@@ -18,6 +18,7 @@ import {
   WSOL_MINT,
   type TradeExpectation,
 } from "@trenchscanner/core";
+import { DEFAULT_PROBE_WALLET, USDC_MINT } from "./jobs/tradeCanaryJob.js";
 
 /**
  * The trading bot's preflight: run it on the trader service (Render -> trenchscanner-trader ->
@@ -33,9 +34,8 @@ import {
  * Exit code 0 when everything passed; 1 when anything failed.
  */
 
-const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-/** A long-lived, well-funded system wallet used only as the subject of simulations (never signs). */
-const DEFAULT_PROBE_WALLET = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+// Shared with the trade canary (tradeCanaryJob.ts), which runs a few of these checks every 5 minutes.
+const USDC = USDC_MINT;
 
 let failures = 0;
 const ok = (what: string, detail = "") => console.log(`  OK    ${what}${detail ? ` - ${detail}` : ""}`);

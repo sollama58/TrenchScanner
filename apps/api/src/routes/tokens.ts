@@ -42,6 +42,7 @@ import {
   CandleCache,
   FIRST_MINUTES_MS,
   KeyedCache,
+  LastGood,
   firstMinutes,
   onSupply,
   type CandleFetcher,
@@ -324,6 +325,11 @@ type ChartWallets = Pick<TokenChart, "tape" | "live" | "wallets" | "holderEntrie
  */
 const WALLETS_FAILURE_MS = 5_000;
 const walletCache = new KeyedCache<ChartWallets>(WALLETS_CACHE_MS, 300, Date.now, WALLETS_FAILURE_MS);
+/**
+ * Each coin's last wallets read, by mint: what a failed read (the database slow or down) answers
+ * instead of none, which wiped every wallet mark off the chart until the next good read.
+ */
+const lastWallets = new LastGood<ChartWallets>(300);
 
 /**
  * A coin's trade-tape rows read for its chart at most, newest first. A tape keeps far fewer on a
@@ -891,7 +897,7 @@ export async function readTokenChart(
       ...sourceOf(merged),
       ...(kept.stale && merged.added === 0 && merged.candles ? { stale: true } : {}),
       marketCap: [],
-      ...noWallets,
+      ...(lastWallets.get(mintAddress) ?? noWallets),
     });
   }
   const token = found.token!;
@@ -921,7 +927,8 @@ export async function readTokenChart(
     pump.candles ? onSupply(pump.candles, factor) : null,
     (await own)?.candles ?? null,
   );
-  const marks = flagged.status === "fulfilled" ? flagged.value : noWallets;
+  if (flagged.status === "fulfilled") lastWallets.set(mintAddress, flagged.value);
+  const marks = flagged.status === "fulfilled" ? flagged.value : (lastWallets.get(mintAddress) ?? noWallets);
   const wallets =
     tracked.length > 0
       ? await trackedMarks(token.id, marks.wallets, tracked).catch(() => marks.wallets)

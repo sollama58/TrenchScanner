@@ -363,9 +363,10 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           </li>
           <li>Pro Mode starts at the first read that finds the wallet in the top 250.</li>
           <li>
-            A wallet that drops out keeps Pro Mode for 24 hours after the last read it was in, with a warning
-            across the top of the page. Moving the bag away ends that grace at once. After it, trading from
-            the coin window stops, sells included.
+            While our reads are stopped, every wallet in the last one keeps Pro Mode. A wallet that drops out
+            keeps it for 24 hours after the last read it was in (or after the first read back, when the reads
+            had stopped), with a warning across the top of the page. Moving the bag away ends that grace at
+            once. After it, trading from the coin window stops, sells included.
           </li>
           <li>
             Settings › Subscription shows your rank, the countdown while you qualify, and what #250 holds.

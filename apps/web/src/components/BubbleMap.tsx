@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { LoadingNote, SkelValue } from "./Loading";
+import { SecondsAgo } from "./Freshness";
 import type { Snapshot, Token } from "../api";
 import { usePolling } from "../hooks";
 import { invalidate } from "../cache";
@@ -2255,8 +2256,11 @@ export function BubbleMapSection({
   token: Token;
   /** The reading to draw; undefined while it loads. */
   snapshot: Snapshot | null | undefined;
-  /** Which moment the reading is from ("Now", "At the alert"), headed on the map; none leaves it off. */
-  moment?: { label: string; title: string };
+  /**
+   * Which moment the reading is from ("Now", "At the alert"), headed on the map; none leaves it off.
+   * With `at` (the live reading's time), the heading is its age instead: "12s ago".
+   */
+  moment?: { label: string; title: string; at?: number };
   /**
    * The top-50 map to draw over the reading (the one kept at the call, for "At the alert"); null
    * for none. Absent: the coin's live one.
@@ -2339,7 +2343,11 @@ export function BubbleMapSection({
                 : moment.title
             }
           >
-            {moment.label}
+            {moment.at !== undefined && Number.isFinite(moment.at) ? (
+              <SecondsAgo at={moment.at} />
+            ) : (
+              moment.label
+            )}
           </span>
         )}
         <span className="bm-section-actions">

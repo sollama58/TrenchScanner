@@ -35,10 +35,16 @@ export class RateLimitedError extends Error {}
 export interface SwapClientOptions {
   apiKey?: string;
   /**
-   * Another Jupiter key to fall back on when the first host answers 429 (the Pro trades borrow the
-   * scan's JUPITER_API_KEY this way). Each key is its own account's limit.
+   * Another Jupiter key to fall back on when the first host fails (429, a refused key, a timeout or
+   * a 5xx; the Pro trades borrow the scan's JUPITER_API_KEY this way). Each key is its own
+   * account's limit.
    */
   backupApiKey?: string;
+  /**
+   * Try the keyless host before the keys: for previews, so the keys' budget stays with the trades
+   * themselves, and the keys are still there when the keyless host is limited.
+   */
+  keylessFirst?: boolean;
   /** One host only, with no fallback (tests, a proxy). */
   baseUrl?: string;
   fetchImpl?: typeof fetch;
@@ -146,25 +152,36 @@ const NO_ROUTE_CODES = new Set([
 
 /** A failed request is tried once more after this long when it might succeed on a second go. */
 const REQUEST_RETRY_DELAY_MS = 300;
+/** How long one request waits for an answer; a quote is quick when Jupiter is well. */
+const REQUEST_TIMEOUT_MS = 12_000;
+export const QUOTE_TIMEOUT_MS = 6_000;
+
+/** The route's key was refused (401/403: revoked, expired or over its plan): try another route. */
+export class KeyRefusedError extends Error {}
 
 /**
- * One call to a swap API. A network failure, a timeout or a 5xx is tried once more (every call
- * here only reads or builds - nothing is sent - so a repeat is harmless), then thrown as a
- * TransientError. 429 is a RateLimitedError (not retried: the caller backs off); "no route" is
- * a NoRouteError; anything else a plain Error.
+ * One call to a swap API. A network failure, a timeout or a 5xx is tried once more when `retry`
+ * (every call here only reads or builds - nothing is sent - so a repeat is harmless), then thrown
+ * as a TransientError. 429 is a RateLimitedError (not retried: the caller backs off); 401/403 a
+ * KeyRefusedError; "no route" a NoRouteError; anything else a plain Error.
  */
 async function request(
   fetchImpl: typeof fetch,
   url: string,
   init: RequestInit,
   what: string,
+  opts: { timeoutMs?: number; retry?: boolean } = {},
 ): Promise<Response> {
+  const retry = opts.retry ?? true;
   for (let attempt = 0; ; attempt++) {
     let res: Response;
     try {
-      res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(12_000) });
+      res = await fetchImpl(url, {
+        ...init,
+        signal: AbortSignal.timeout(opts.timeoutMs ?? REQUEST_TIMEOUT_MS),
+      });
     } catch (err) {
-      if (attempt === 0) {
+      if (attempt === 0 && retry) {
         await new Promise((r) => setTimeout(r, REQUEST_RETRY_DELAY_MS));
         continue;
       }
@@ -175,6 +192,8 @@ async function request(
     if (res.ok) return res;
     const text = await res.text().catch(() => "");
     if (res.status === 429) throw new RateLimitedError(`${what}: rate limited`);
+    if (res.status === 401 || res.status === 403)
+      throw new KeyRefusedError(`${what}: HTTP ${res.status} ${text.slice(0, 200)}`.trim());
     let code = "";
     let message = text.slice(0, 200);
     try {
@@ -188,7 +207,7 @@ async function request(
       throw new NoRouteError(`${what}: no route (${code || message})`);
     }
     if (res.status >= 500) {
-      if (attempt === 0) {
+      if (attempt === 0 && retry) {
         await new Promise((r) => setTimeout(r, REQUEST_RETRY_DELAY_MS));
         continue;
       }
@@ -228,6 +247,8 @@ const KEYED_HOST = "https://api.jup.ag";
 const KEYLESS_HOST = "https://lite-api.jup.ag";
 /** How long a host that answered 429 is tried last: Jupiter's limits are per second or per minute. */
 const RATE_LIMIT_COOLDOWN_MS = 10_000;
+/** A refused key stays refused for a while: tried last for this long. */
+const KEY_REFUSED_COOLDOWN_MS = 5 * 60_000;
 
 export class JupiterSwapClient implements SwapClient {
   private readonly routes: JupiterRoute[];
@@ -240,12 +261,16 @@ export class JupiterSwapClient implements SwapClient {
       headers: { accept: "application/json", ...(apiKey ? { "x-api-key": apiKey } : {}) },
       coolUntil: 0,
     });
-    // A 429 on one route moves the call to the next: the key's own account, a backup key's, then
-    // the keyless host, whose limit is per IP (and the api's IP is shared with other services).
+    // A failed route moves the call to the next: the key's own account, a backup key's, then the
+    // keyless host, whose limit is per IP (and the api's IP is shared with other services). Or
+    // keyless first (keylessFirst), for callers that should leave the keys' budget to others.
     const keys = [...new Set([options.apiKey, options.backupApiKey].filter((k): k is string => !!k))];
+    const keyed = keys.map((k) => route(KEYED_HOST, k));
     this.routes = options.baseUrl
       ? [route(options.baseUrl, options.apiKey)]
-      : [...keys.map((k) => route(KEYED_HOST, k)), route(KEYLESS_HOST)];
+      : options.keylessFirst
+        ? [route(KEYLESS_HOST), ...keyed]
+        : [...keyed, route(KEYLESS_HOST)];
     this.fetchImpl = options.fetchImpl ?? fetch;
     const fetchImpl = this.fetchImpl;
     this.backupPrices =
@@ -255,30 +280,44 @@ export class JupiterSwapClient implements SwapClient {
   }
 
   /**
-   * One Jupiter call, on the first route that isn't rate limited; a 429 sends it on to the next
-   * route right away, and only when every route answered 429 is it a RateLimitedError.
+   * One Jupiter call, on the first route that isn't cooling down. A 429, a 401/403 (a revoked or
+   * expired key), a timeout or a 5xx sends it on to the next route right away (the next route is
+   * the retry; only the last one retries in place). When every route failed, the most retryable
+   * failure is thrown: a RateLimitedError, else a TransientError, else the key refusal.
    */
-  private async call(path: string, init: RequestInit, what: string): Promise<Response> {
+  private async call(
+    path: string,
+    init: RequestInit,
+    what: string,
+    opts: { timeoutMs?: number } = {},
+  ): Promise<Response> {
     const now = Date.now();
     const order = [...this.routes].sort((a, b) => Number(a.coolUntil > now) - Number(b.coolUntil > now));
-    let limited: unknown = null;
-    for (const r of order) {
+    const failures: unknown[] = [];
+    for (const [i, r] of order.entries()) {
       try {
         const res = await request(
           this.fetchImpl,
           `${r.baseUrl}${path}`,
           { ...init, headers: { ...r.headers, ...(init.headers as Record<string, string> | undefined) } },
           what,
+          { timeoutMs: opts.timeoutMs, retry: i === order.length - 1 },
         );
         r.coolUntil = 0;
         return res;
       } catch (err) {
-        if (!(err instanceof RateLimitedError)) throw err;
-        r.coolUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
-        limited = err;
+        if (err instanceof RateLimitedError || err instanceof TransientError)
+          r.coolUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+        else if (err instanceof KeyRefusedError) r.coolUntil = Date.now() + KEY_REFUSED_COOLDOWN_MS;
+        else throw err;
+        failures.push(err);
       }
     }
-    throw limited;
+    throw (
+      failures.find((e) => e instanceof RateLimitedError) ??
+      failures.find((e) => e instanceof TransientError) ??
+      failures[failures.length - 1]
+    );
   }
 
   async quote(input: {
@@ -306,7 +345,9 @@ export class JupiterSwapClient implements SwapClient {
       ...(input.maxAccounts !== undefined ? { maxAccounts: String(input.maxAccounts) } : {}),
       ...(input.onlyDirectRoutes ? { onlyDirectRoutes: "true" } : {}),
     });
-    const res = await this.call(`/swap/v1/quote?${params}`, {}, "Jupiter quote");
+    const res = await this.call(`/swap/v1/quote?${params}`, {}, "Jupiter quote", {
+      timeoutMs: QUOTE_TIMEOUT_MS,
+    });
     const quote = (await res.json()) as SwapQuote & { error?: string };
     if (quote.error) throw new NoRouteError(`Jupiter quote: ${quote.error}`);
     if (typeof quote.outAmount !== "string" || typeof quote.otherAmountThreshold !== "string") {
