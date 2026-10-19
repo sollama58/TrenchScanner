@@ -6,6 +6,7 @@ import { playAlertSound, unlockAudio } from "./alertSounds";
 import { tokenThumb, usd } from "./format";
 import { adoptAppearance, appearanceVersion, useAppearance } from "./appearance";
 import { adoptHiddenTokens, hiddenTokensVersion } from "./hiddenTokens";
+import { adoptScopeSettings, scopeSettingsVersion } from "./scopeSettings";
 import { openChaosTabs, thisBrowserIsDesktop } from "./chaosMode";
 import { belowMcapLine } from "./components/AlertCard";
 
@@ -49,6 +50,7 @@ export function loadSettings(force = false): Promise<void> {
   if (loading && !force) return loading;
   const lookVersion = appearanceVersion();
   const hiddenVersion = hiddenTokensVersion();
+  const scopeVersion = scopeSettingsVersion();
   loading = cachedGet<Settings>(SETTINGS_PATH, force ? -1 : 0)
     .then((s) => {
       // An alert-pref save made while this was in flight is newer than its answer: keep those.
@@ -57,6 +59,7 @@ export function loadSettings(force = false): Promise<void> {
       // The feed's look rides along; a change made on this device since the request wins.
       adoptAppearance(s.appearance, lookVersion);
       adoptHiddenTokens(s.hiddenTokens, hiddenVersion);
+      adoptScopeSettings(s.scopeSettings, scopeVersion);
       emit();
     })
     .finally(() => {

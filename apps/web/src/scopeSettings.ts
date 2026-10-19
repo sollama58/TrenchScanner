@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type { Card } from "./api";
+import { put, type Card } from "./api";
 import { DEFAULT_SCOPE_CHIPS, SCOPE_CHIP_IDS, type ScopeChip } from "./scopeChips";
 import { cardReadings, newestStats, nowReading, recordedPeakOf, socialLinks } from "./components/AlertCard";
 import { cardOutcome, outcomeResult } from "./outcome";
@@ -8,7 +8,9 @@ import type { ScopeColumn } from "./scope";
 
 /**
  * Scope's own settings (user ask 2026-10-18): what each column lets through and how the rows look,
- * kept apart from the Cards view's Customize and saved in this browser.
+ * kept apart from the Cards view's Customize. Saved to the account (PUT /settings/scope, user ask
+ * 2026-10-19) so they follow the user to every device, and kept in localStorage too so this device
+ * applies them at once, before the settings load, and keeps them if a save fails.
  */
 
 /** One column's filters. Null on a bound means it is off. */
@@ -151,7 +153,8 @@ const SOCIALS = ["any", "x", "website", "either", "both"] as const;
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null);
 const bool = (v: unknown, d: boolean): boolean => (typeof v === "boolean" ? v : d);
 const strings = (v: unknown): string[] =>
-  Array.isArray(v) ? v.filter((s): s is string => typeof s === "string").slice(0, 50) : [];
+  // Within what the account stores (apps/api/src/scopeSettings.ts).
+  Array.isArray(v) ? v.filter((s): s is string => typeof s === "string" && s.length <= 128).slice(0, 50) : [];
 
 function normalizeFilter(raw: unknown): ScopeColumnFilter {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
@@ -240,6 +243,11 @@ function keepOneColumn(hidden: ScopeColumn[]): ScopeColumn[] {
 
 let current: ScopeSettings = load();
 const listeners = new Set<() => void>();
+/** Bumped on every change here, so a settings load that started before it doesn't undo it. */
+let version = 0;
+let timer: ReturnType<typeof setTimeout> | null = null;
+let inflight = 0;
+const SAVE_DELAY_MS = 600;
 
 function load(): ScopeSettings {
   try {
@@ -250,7 +258,7 @@ function load(): ScopeSettings {
   }
 }
 
-function save(next: ScopeSettings) {
+function show(next: ScopeSettings) {
   current = next;
   try {
     localStorage.setItem(SCOPE_SETTINGS_KEY, JSON.stringify(next));
@@ -258,6 +266,59 @@ function save(next: ScopeSettings) {
     // Private mode or blocked storage: the settings still apply for this visit.
   }
   for (const l of listeners) l();
+}
+
+function save(next: ScopeSettings) {
+  version++;
+  show(next);
+  if (timer) clearTimeout(timer);
+  // Quick clicks and typed filters go in one save.
+  timer = setTimeout(() => {
+    timer = null;
+    void saveToAccount();
+  }, SAVE_DELAY_MS);
+}
+
+async function saveToAccount() {
+  inflight++;
+  try {
+    await put<{ scopeSettings: ScopeSettings }>("/settings/scope", current);
+  } catch {
+    // Kept on this device either way; the next change tries the account again.
+  } finally {
+    inflight--;
+  }
+}
+
+// Another window of the dashboard changed them: show the same here. Only shown - that window
+// saves them to the account.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key !== SCOPE_SETTINGS_KEY) return;
+    current = load();
+    for (const l of listeners) l();
+  });
+}
+
+/** The local version now; pass it to adoptScopeSettings with what a settings load returned. */
+export function scopeSettingsVersion(): number {
+  return version;
+}
+
+/**
+ * Takes the account's saved settings (from GET /settings), unless this device changed them since
+ * that request went out or still has a save on the way. An API build without them sends nothing.
+ * An account with none yet (null) takes this browser's, if they were ever changed from the defaults.
+ */
+export function adoptScopeSettings(saved: unknown, sinceVersion: number): void {
+  if (saved === undefined || version !== sinceVersion || timer !== null || inflight > 0) return;
+  if (saved === null) {
+    if (JSON.stringify(current) !== JSON.stringify(DEFAULT_SCOPE_SETTINGS)) void saveToAccount();
+    return;
+  }
+  const next = normalizeScopeSettings(saved);
+  if (JSON.stringify(next) === JSON.stringify(current)) return;
+  show(next);
 }
 
 export function useScopeSettings(): ScopeSettings {
