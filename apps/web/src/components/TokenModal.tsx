@@ -1965,11 +1965,13 @@ export function ChartCard({
   const tail = useLiveTail(api, !!bounds?.live);
   // Whether the coin gets instant updates at all (user ask 2026-10-18): a Pump.fun coin on its curve
   // or in its PumpSwap pool has a live tail. Once the tail says nothing live prices it, it stays so
-  // for this coin, so switching views doesn't bring the pill and the Trade note back and forth.
+  // for this coin, so switching views doesn't bring the pill and the Trade note back and forth,
+  // until the tail's own recheck finds a live price again.
   const [offCurveFor, setOffCurveFor] = useState<string | null>(null);
   useEffect(() => {
     if (tail.done) setOffCurveFor(mint);
-  }, [tail.done, mint]);
+    else if (tail.source === "stream" || tail.source === "rpc") setOffCurveFor(null);
+  }, [tail.done, tail.source, mint]);
   const delayed = !!data && offCurveFor === mint;
   // When the chart last brought new prices, and how often it re-reads them without the live tail:
   // the 1-second candles every few seconds on a view of the last minutes, else the chart's own poll.
@@ -2033,9 +2035,16 @@ export function ChartCard({
     // Zoomed in, the window is thinned on its own, a step past each edge, so it keeps its detail.
     const win = zoom ? zoomWindow(zoom, extent.t0, extent.t1) : null;
     const step = win ? pointWidthMs(Math.max(1_000, win.to - win.from), maxPoints(), finest) : fullStep;
-    const line = win
-      ? linePoints(source, Math.max(from, win.from - step), step, Math.min(to, win.to + step))
-      : full;
+    // With the nearest point on each side of that too, so a window zoomed into a quiet stretch
+    // still has a line to clip at its edges rather than leaving the chart (and its zoom) blank.
+    let line = full;
+    if (win) {
+      const lo = Math.max(from, win.from - step);
+      const hi = Math.min(to, win.to + step);
+      const before = source.filter((p) => p.t >= from && p.t < lo).at(-1);
+      const after = source.find((p) => p.t > hi && p.t <= to);
+      line = [...(before ? [before] : []), ...linePoints(source, lo, step, hi), ...(after ? [after] : [])];
+    }
     // The predicted path, from the finest reading of the last minute: the 1-second candles and
     // the live curve's changes after them.
     // It is read afresh every PATH_EVERY_MS, not on every tick, so its shape holds steady between
@@ -2166,7 +2175,7 @@ export function ChartCard({
               </button>
             ))}
           </span>
-          {labeled.length > 0 && (
+          {(labeled.length > 0 || marks.length > 0) && (
             <button
               type="button"
               className={`cm-link${customizing ? " on" : ""}`}

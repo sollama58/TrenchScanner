@@ -40,6 +40,8 @@ const POLL_MS = 2_000;
 /** A held ask comes back with a trade; the next goes out no sooner than this after the last. */
 const HELD_GAP_MS = 750;
 const MAX_BACKOFF_MS = 30_000;
+/** How often a coin answered "unavailable" for is asked again. */
+const UNAVAILABLE_RECHECK_MS = 60_000;
 
 /** One coin's feed, shared by every view of it on the page (the Live trades tab, the chart's marks). */
 interface SharedFeed {
@@ -91,7 +93,14 @@ function startFeed(base: string): SharedFeed {
         status: a.status,
         since: a.since,
       });
-      if (a.status !== "unavailable") next(a.held ? Math.max(0, HELD_GAP_MS - (Date.now() - sent)) : POLL_MS);
+      // "Unavailable" can pass (the coin reaches Token, a follow slot frees up), so ask again now and then.
+      next(
+        a.status === "unavailable"
+          ? UNAVAILABLE_RECHECK_MS
+          : a.held
+            ? Math.max(0, HELD_GAP_MS - (Date.now() - sent))
+            : POLL_MS,
+      );
     } catch {
       if (!stopped) next(Math.min(MAX_BACKOFF_MS, POLL_MS * 2 ** ++failures));
     }
