@@ -606,7 +606,9 @@ export async function loadWalletProfile(
     };
   });
   const launches = coins.filter((c) => c.isCreator);
-  const traded = coins.filter((c) => c.solIn > 0 || c.solOut > 0);
+  // A coin it only sold on the tape (bought before it was recorded, or sent in) has no cost, so it
+  // stays out of the PnL totals rather than read as pure profit (user report 2026-10-19).
+  const traded = coins.filter((c) => c.solIn > 0);
   const sum = (f: (c: WalletCoin) => number) => traded.reduce((s, c) => s + f(c), 0);
 
   const liveFound = overview && overview.status === "found" ? overview : null;

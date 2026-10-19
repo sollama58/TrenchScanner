@@ -67,6 +67,8 @@ interface Portfolio {
     sells: number;
     solIn: number;
     solOut: number;
+    /** Coins it sold with no buy on the tape: left out of the totals above. */
+    noBuyCoins?: number;
     recent: {
       mint: string;
       symbol: string | null;
@@ -700,6 +702,8 @@ function TapePanel({ tape, now }: { tape: Portfolio["tape"]; now: number }) {
           <p className="muted small">
             What this wallet did in the coins whose trades TrenchScanner recorded, wherever it traded. SOL in
             and out only: coins still held aren&apos;t valued here (Holdings has them).
+            {(tape.noBuyCoins ?? 0) > 0 &&
+              ` ${tape.noBuyCoins} ${tape.noBuyCoins === 1 ? "coin" : "coins"} with sales but no recorded buy ${tape.noBuyCoins === 1 ? "is" : "are"} left out of the totals: the buy came before TrenchScanner recorded it, so the profit can't be told.`}
           </p>
         </div>
       </header>
@@ -762,7 +766,15 @@ function TapePanel({ tape, now }: { tape: Portfolio["tape"]; now: number }) {
             </thead>
             <tbody>
               {tape.recent.map((r) => (
-                <tr key={r.mint}>
+                <tr
+                  key={r.mint}
+                  className={r.buys === 0 && r.solIn <= 0 ? "faint" : undefined}
+                  title={
+                    r.buys === 0 && r.solIn <= 0
+                      ? "No buy recorded: bought before TrenchScanner recorded the coin, so left out of the totals"
+                      : undefined
+                  }
+                >
                   <td>
                     {r.symbol ? `$${r.symbol}` : shortAddress(r.mint)}
                     {r.creator && <span className="faint small"> creator</span>}
@@ -772,7 +784,11 @@ function TapePanel({ tape, now }: { tape: Portfolio["tape"]; now: number }) {
                   <td className="num">{r.sells}</td>
                   <td className="num">{sol(r.solIn)}</td>
                   <td className="num">{sol(r.solOut)}</td>
-                  <td className={`num${tone(r.solOut - r.solIn)}`}>{sol(r.solOut - r.solIn, true)}</td>
+                  {r.buys === 0 && r.solIn <= 0 ? (
+                    <td className="num faint small">No buy recorded</td>
+                  ) : (
+                    <td className={`num${tone(r.solOut - r.solIn)}`}>{sol(r.solOut - r.solIn, true)}</td>
+                  )}
                   <td className="faint">{r.firstBuyAt ? ago(r.firstBuyAt, now) : "–"}</td>
                 </tr>
               ))}
