@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { Skeleton } from "../components/Skeleton";
-import { ChartIcon, GiftIcon, InfoIcon, RobotIcon, TransferIcon } from "../components/Icons";
+import { ChartIcon, GiftIcon, InfoIcon, RobotIcon, TransferIcon, WalletIcon } from "../components/Icons";
 import { sol, StatsStrip, TradeCard, type TradeCoin, type TradeStats } from "../components/TradesDrawer";
+import { WalletHoldings } from "../components/WalletHoldings";
 import { useNow, usePolling } from "../hooks";
 import { ago, pricedAgeText, shortAddress, usd } from "../format";
+import { useWalletBalance } from "../walletBalance";
 
 const PORTFOLIO_POLL_MS = 60_000;
 const TRADES_POLL_MS = 30_000;
@@ -128,11 +130,30 @@ export function PortfolioTab() {
           are counted but not shown, unless a section says otherwise. Only you can see this page.
         </span>
       </p>
+      <BalancesPanel />
       <TradesPanel now={now} />
       <FeesPanel />
       {data.botPositions.length > 0 && <BotPanel positions={data.botPositions} now={now} />}
       <TapePanel tape={data.tape} now={now} />
     </div>
+  );
+}
+
+/** The wallet's SOL and $ASDFASDFA (user ask 2026-10-19), the same row Settings shows. */
+function BalancesPanel() {
+  const funds = useWalletBalance();
+  return (
+    <section className="panel">
+      <header className="section-head">
+        <div>
+          <span className="eyebrow">
+            <WalletIcon size={13} /> Balances
+          </span>
+          <h2>Your wallet</h2>
+        </div>
+      </header>
+      <WalletHoldings funds={funds} />
+    </section>
   );
 }
 
