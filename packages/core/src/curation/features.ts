@@ -256,8 +256,7 @@ export const MARKET_SOURCE_FEATURES = ["mktSource"] as const;
  * read in place of firstBuyersHolding from 2026-10-19, notes/model-retrain-pending.md);
  * seconds a graduated coin spent on its curve (preBondSeconds, null on the curve or when either
  * end is unknown); and same-ticker launches in the 15 minutes before it, with the highest market
- * cap any of them reached (relaunchSiblings, relaunchSiblingPeakMcapUsd; the relaunch-farm block
- * reads them). Null on every row banked before; never backfilled. Recorded only
+ * cap any of them reached (relaunchSiblings, relaunchSiblingPeakMcapUsd; curation/relaunchFarm.ts). Null on every row banked before; never backfilled. Recorded only
  * (RETIRED_LEARNER_INPUTS) until they hold up on later days, firstBuyersHoldingCut aside.
  */
 export const LAUNCH_FACT_FEATURES = [
