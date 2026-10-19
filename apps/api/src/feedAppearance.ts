@@ -235,6 +235,8 @@ export const feedAppearanceSchema = z
     chartMarkMinSol: z.number().min(CHART_MARK_MIN_SOL).max(CHART_MARK_MAX_SOL).default(0.5),
     /** The token chart draws a line or candles (user ask 2026-10-18); a line by default. */
     chartStyle: z.enum(["line", "candles"]).default("line"),
+    /** The view the token chart opens on (user ask 2026-10-19): Trading, the latest at the right edge, or All. */
+    chartView: z.enum(["trading", "all"]).default("trading"),
     /** Experimental: the token chart's dotted predicted price path (user ask 2026-10-18); off by default. */
     chartPathing: z.boolean().default(false),
     /** Card fields not shown. */
@@ -301,6 +303,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   chartMarksRev: CHART_MARKS_REV,
   chartMarkMinSol: 0.5,
   chartStyle: "line",
+  chartView: "trading",
   chartPathing: false,
   // Off by default, all switchable back on in Customize: the composite score tile, so the stat tiles
   // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own), the header's

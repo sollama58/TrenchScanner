@@ -210,12 +210,25 @@ const SAME_TRADE_MS = 3_000;
  * The chart's flagged wallets with the coin's live trades folded in (user ask 2026-10-19: flagged
  * wallets' trades should show as they happen, not when the chart's tape next catches up). A flagged
  * wallet gets each live trade its rows don't already hold; a trader the chart doesn't flag joins
- * when its name says it is a KOL, a KOL's Known Side or a wallet the reader tracks.
+ * when its name says it is a KOL, a KOL's Known Side or a wallet the reader tracks, or when it is a
+ * KOL's funded wallet or Probable Side (`sides`, possibleSides.ts, read only while those show).
  */
 export function withLiveMarks(
   wallets: readonly MarkSource[],
   live: readonly LiveMarkTrade[],
   names: Readonly<Record<string, { name: string; source: string; mine?: boolean }>>,
+  sides: Readonly<
+    Record<
+      string,
+      readonly {
+        kolWallet: string;
+        kolName: string | null;
+        funded?: boolean;
+        known?: boolean;
+        tracked?: "kol" | "tracked";
+      }[]
+    >
+  > = {},
 ): MarkSource[] {
   if (live.length === 0) return wallets as MarkSource[];
   type Trade = MarkSource["trades"][number];
@@ -225,9 +238,8 @@ export function withLiveMarks(
     let w = byWallet.get(t.wallet);
     if (!w) {
       const n = names[t.wallet];
-      if (!n) continue;
-      if (n.source === "kol") w = { wallet: t.wallet, tags: ["kol"], kol: n.name, trades: [] };
-      else if (n.source === "kol-side")
+      if (n?.source === "kol") w = { wallet: t.wallet, tags: ["kol"], kol: n.name, trades: [] };
+      else if (n?.source === "kol-side")
         // Named "<KOL> Known Side" (markName adds it back); the KOL's main wallet isn't in the name.
         w = {
           wallet: t.wallet,
@@ -236,9 +248,25 @@ export function withLiveMarks(
           knownSideOf: t.wallet,
           trades: [],
         };
-      else if (n.source === "tracked" || n.mine)
+      else if (n?.source === "tracked" || n?.mine)
         w = { wallet: t.wallet, tags: ["tracked"], tracked: n.name, trades: [] };
-      else continue;
+      else {
+        // A Known Side is named as one above; the strongest other tie, funded ahead of probable.
+        const all = sides[t.wallet]?.filter((x) => !x.known) ?? [];
+        const s = all.find((x) => x.funded) ?? all[0];
+        if (!s) continue;
+        w = {
+          wallet: t.wallet,
+          tags: ["side"],
+          side: {
+            kind: s.funded ? "funded" : "probable",
+            kolWallet: s.kolWallet,
+            kolName: s.kolName,
+            ...(s.tracked ? { tracked: s.tracked } : {}),
+          },
+          trades: [],
+        };
+      }
       byWallet.set(t.wallet, w);
     }
     const side: 1 | -1 = t.side === "buy" ? 1 : -1;

@@ -455,6 +455,10 @@ export interface SwapCosts {
   priceImpactPct: number | null;
   /** Rent for the wallet's token account on its first buy (refunded when the account is closed); 0 when it has one. */
   accountRentLamports: bigint;
+  /** The coins the reference buy would get, raw units, by the route's quote; null without one. */
+  outAmount: bigint | null;
+  /** The coin's decimals; null when unread. */
+  decimals: number | null;
 }
 
 /**
@@ -495,5 +499,7 @@ export async function estimateSwapCosts(
           ? TOKEN_2022_ACCOUNT_RENT_LAMPORTS
           : TOKEN_ACCOUNT_RENT_LAMPORTS
         : 0n,
+    outAmount: quote && /^\d+$/.test(String(quote.outAmount)) ? BigInt(quote.outAmount) : null,
+    decimals: typeof mintInfo?.decimals === "number" ? mintInfo.decimals : null,
   };
 }

@@ -11,6 +11,7 @@ import {
   readTradeSettings,
   sacrificeLine,
   summarizePosition,
+  expectedTokens,
   tradeProblem,
   type PositionResponse,
   type SacrificeView,
@@ -129,6 +130,10 @@ describe("summarizePosition", () => {
     // Half the coins (cost 0.5) sold for 0.8: +0.3. The half held is worth 1 SOL against 0.5: +0.5.
     expect(s.realizedSol).toBeCloseTo(0.3);
     expect(s.unrealizedSol).toBeCloseTo(0.5);
+    // Even when the 0.5% held is worth 0.5 - 0.3 = 0.2 SOL: 40 SOL for the whole supply, $8K.
+    expect(s.breakEvenMcap).toBeCloseTo(8_000);
+    expect(s.firstAt).toBe(1);
+    expect(s.lastAt).toBe(3);
   });
 
   it("measures the current trade, not an earlier round trip in the same coin", () => {
@@ -451,5 +456,27 @@ describe("sacrificeLine", () => {
     expect(sacrificeLine(view, 2)).toBe(
       "Sacrifice: 2.96 credits (0.2% fee, paid in burned ASDF, about 0.004 SOL).",
     );
+  });
+});
+
+describe("expectedTokens", () => {
+  const quote = {
+    refLamports: "100000000",
+    transferFeeBps: 0,
+    poolFeeBps: 100,
+    venues: [],
+    priceImpactPct: 1,
+    accountRentLamports: "0",
+    outAmount: "5000000000000",
+    decimals: 6,
+  };
+  it("takes the quote made on this amount, and scales one made on another until it is re-quoted", () => {
+    expect(expectedTokens(100_000_000n, quote, null)).toEqual({ tokens: 5_000_000, quoted: true });
+    expect(expectedTokens(200_000_000n, quote, null)).toEqual({ tokens: 10_000_000, quoted: false });
+  });
+  it("estimates from the price without a quote, and says nothing for no amount", () => {
+    expect(expectedTokens(1_000_000_000n, null, 0.0001)).toEqual({ tokens: 10_000, quoted: false });
+    expect(expectedTokens(null, quote, 1)).toBeNull();
+    expect(expectedTokens(1n, null, null)).toBeNull();
   });
 });
