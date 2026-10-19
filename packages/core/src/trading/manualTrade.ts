@@ -1,4 +1,5 @@
 import { TransientError } from "./errors.js";
+import { heliusPriorityFeeEstimate, isHeliusRpcUrl, type HeliusPriorityLevel } from "./heliusPriorityFee.js";
 import { NoRouteError, RateLimitedError, WSOL_MINT, type SwapQuote } from "./jupiterSwap.js";
 import {
   curveQuoteToken,
@@ -54,6 +55,9 @@ export interface ManualTradeRpc extends GuardRpc {
   getLatestBlockhash(): Promise<{ blockhash: string; lastValidBlockHeight: number } | null>;
   getMintInfo(mint: string): Promise<{ program: string; decimals?: number; transferFeeBps?: number } | null>;
   getPriorityFeeEstimate(accounts: string[]): Promise<bigint | null>;
+  /** The endpoints (TradingRpc's): a Helius one is asked for its own fee estimate first. */
+  readonly url?: string;
+  readonly backupUrl?: string | null;
 }
 
 export interface ManualTradeJupiter {
@@ -115,6 +119,8 @@ const PRIORITY_CAP_LAMPORTS: Record<SenderSpeed, bigint> = { eco: 50_000n, turbo
 export const MAX_CUSTOM_FEE_LAMPORTS = 10_000_000n;
 /** The price floor per compute unit, so a quiet network still sees a priority fee (Sender needs one). */
 const MIN_MICROLAMPORTS = 10_000n;
+/** The level of Helius's fee estimate each tier pays (High: 75th percentile, VeryHigh: 95th). */
+const HELIUS_LEVEL: Record<SenderSpeed, HeliusPriorityLevel> = { eco: "High", turbo: "VeryHigh" };
 /**
  * Room under a buy for the rent of the accounts it opens, and base fees. A first buy through a
  * coin quoted in another coin opens up to four: the token's account (~0.0015 SOL), one for each
@@ -279,7 +285,7 @@ export async function buildManualTrade(
     ...new Set(swapIxs.flatMap((ix) => ix.accounts.filter((a) => a.writable).map((a) => a.pubkey))),
   ];
   const [estimate, blockhash, tableData] = await Promise.all([
-    deps.rpc.getPriorityFeeEstimate(writable),
+    req.priorityFeeLamports !== undefined ? null : networkPrice(deps.rpc, writable, req.speed),
     deps.rpc.getLatestBlockhash(),
     tables.length > 0 ? deps.rpc.getAccountsData(tables) : Promise.resolve([]),
   ]);
@@ -424,19 +430,52 @@ export function checkJupiterFloor(
     throw new GuardRefusal("Jupiter's minimum is under the slippage asked for");
 }
 
+/** The network's going rate per compute unit, micro-lamports, and whether it is Helius's for the tier. */
+interface NetworkPrice {
+  microLamports: bigint | null;
+  /** Helius's estimate at the tier's level: already Turbo's, not doubled again. */
+  leveled: boolean;
+}
+
+/**
+ * What transactions writing `accounts` pay now: Helius's account-aware estimate at the tier's
+ * level when the trading RPC (or its backup) is Helius, else - or when it gives no answer - the
+ * 75th percentile of getRecentPrioritizationFees.
+ */
+async function networkPrice(
+  rpc: Pick<ManualTradeRpc, "getPriorityFeeEstimate" | "url" | "backupUrl">,
+  accounts: string[],
+  speed: SenderSpeed,
+): Promise<NetworkPrice> {
+  const helius = [rpc.url, rpc.backupUrl].find(isHeliusRpcUrl);
+  const leveled = helius ? await heliusPriorityFeeEstimate(helius, accounts, HELIUS_LEVEL[speed]) : null;
+  if (leveled !== null) return { microLamports: leveled, leveled: true };
+  return { microLamports: await rpc.getPriorityFeeEstimate(accounts), leveled: false };
+}
+
 /**
  * The compute-unit price for a trade of `units`: the trader's own fee spread over the units, or
  * the network's going rate (with a floor, doubled on Turbo) capped at the speed's ceiling.
+ * Helius's estimate is already Turbo's own level, so there only the floor doubles.
  */
-function priorityPrice(units: number, speed: SenderSpeed, estimate: bigint | null, custom?: bigint): bigint {
+function priorityPrice(
+  units: number,
+  speed: SenderSpeed,
+  estimate: NetworkPrice | null,
+  custom?: bigint,
+): bigint {
   // At least 1 micro-lamport: Sender only takes a transaction that sets a price at all.
   if (custom !== undefined) {
     const p = (custom * 1_000_000n) / BigInt(units);
     return p > 0n ? p : 1n;
   }
   const capPrice = (PRIORITY_CAP_LAMPORTS[speed] * 1_000_000n) / BigInt(units);
-  let price = estimate !== null && estimate > MIN_MICROLAMPORTS ? estimate : MIN_MICROLAMPORTS;
-  if (speed === "turbo") price *= 2n;
+  const going = estimate?.microLamports ?? null;
+  let price = going !== null && going > MIN_MICROLAMPORTS ? going : MIN_MICROLAMPORTS;
+  if (speed === "turbo") {
+    if (!estimate?.leveled) price *= 2n;
+    else if (price < MIN_MICROLAMPORTS * 2n) price = MIN_MICROLAMPORTS * 2n;
+  }
   return price > capPrice ? capPrice : price;
 }
 
@@ -448,13 +487,13 @@ const TYPICAL_UNITS = 250_000;
  * going rate (or the trader's own) and Sender's tip. The panel shows it under the buttons.
  */
 export async function estimateManualFees(
-  rpc: Pick<ManualTradeRpc, "getPriorityFeeEstimate">,
+  rpc: Pick<ManualTradeRpc, "getPriorityFeeEstimate" | "url" | "backupUrl">,
   input: { mint: string; speed: SenderSpeed; priorityFeeLamports?: bigint; tipLamports?: bigint },
 ): Promise<{ priorityFeeLamports: bigint; tipLamports: bigint; baseFeeLamports: bigint }> {
   const estimate =
     input.priorityFeeLamports !== undefined
       ? null
-      : await rpc.getPriorityFeeEstimate([input.mint, PROGRAM.jupiterV6, PROGRAM.pumpFun]);
+      : await networkPrice(rpc, [input.mint, PROGRAM.jupiterV6, PROGRAM.pumpFun], input.speed);
   const price = priorityPrice(TYPICAL_UNITS, input.speed, estimate, input.priorityFeeLamports);
   return {
     priorityFeeLamports: priorityFeeOf(TYPICAL_UNITS, price),

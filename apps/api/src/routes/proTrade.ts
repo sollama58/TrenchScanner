@@ -26,6 +26,7 @@ import {
   SUBSCRIPTION_MINT,
   type DecodedMessage,
   type Env,
+  type PlatformTradeRecord,
   type WalletTrade,
   walletTag,
   prisma,
@@ -40,6 +41,7 @@ import { accessSwapOpen as accessSwapOpenFor } from "./auth.js";
 import { sharedSolPrice } from "../solPrice.js";
 import { feeSummary } from "../tradeFees.js";
 import { quoteSacrifice, sacrificeRefusal, sacrificeView, type SacrificeQuote } from "../sacrificeQuote.js";
+import { newBuildId, signBuildToken, verifyBuildToken } from "../buildToken.js";
 
 /**
  * Pro trades from the token modal (user decision 2026-10-17), for Pro Mode wallets only
@@ -67,6 +69,16 @@ function panelTrade(row: { lamports: bigint; platformFeeLamports: bigint } | und
 
 /** Whether the Sacrifice is actually taken on this quote: "on", a fee payer, and priced. */
 const charged = (q: SacrificeQuote) => q.mode === "on" && !!q.tier?.pays && q.lamports !== null;
+
+/** The Sacrifice as the send records it (and as a build token carries it). */
+const sacrificeRecord = (q: SacrificeQuote): PlatformTradeRecord["sacrifice"] => ({
+  mode: q.mode,
+  tier: q.tier?.reason ?? null,
+  pays: q.tier?.pays ?? false,
+  asdfRaw: q.asdfRaw,
+  lamports: q.lamports,
+  asdfPerSol: q.asdfPerSol,
+});
 
 const SIGNATURE_RE = /^[1-9A-HJ-NP-Za-km-z]{80,90}$/;
 
@@ -130,6 +142,11 @@ const sendSchema = z.object({
   transaction: z.string().min(1).max(2_000),
   speed: z.enum(["eco", "turbo"]),
   mevProtect: z.boolean(),
+  /**
+   * The build's token (buildToken.ts), which /build returned: good on any instance. Left out (a
+   * panel loaded before 2026-10-19), only a build in this instance's memory can be sent.
+   */
+  buildToken: z.string().min(1).max(8_000).optional(),
 });
 
 /**
@@ -209,6 +226,15 @@ const BASE_FEE_LAMPORTS = 5_000n;
 /** The fees read settles trades still "sent" this old, this many per read (expiry: tradeOutcome in core). */
 const FEES_SETTLE_AFTER_MS = 60_000;
 const FEES_SETTLE_PER_READ = 20;
+/** At boot, trades still "sent" this recently are resent again (the blockhash decides the rest). */
+const RESUME_WINDOW_MS = 3 * 60_000;
+/**
+ * On shutdown, how long in-flight trades are still resent before the process lets them go: a
+ * deploy's SIGTERM no longer stops a trade after its first send. Under the api's
+ * SHUTDOWN_DEADLINE_MS (index.ts), which is under render.yaml's maxShutdownDelaySeconds.
+ */
+export const DRAIN_MAX_MS = 75_000;
+const DRAIN_POLL_MS = 500;
 
 interface InFlight {
   base64: string;
@@ -288,9 +314,18 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     if (positionEpochs.size > 10_000) positionEpochs.clear();
     positionEpochs.set(wallet, (positionEpochs.get(wallet) ?? 0) + 1);
   }
+  // Build tokens (buildToken.ts) are signed with a key derived from JWT_SECRET for that use alone.
+  const tokenSecret = env.JWT_SECRET;
+  /** The Sender endpoint for a tier, with the API key: rebuilt from the row on any instance. */
+  const senderFor = (speed: "eco" | "turbo", mevProtect: boolean) =>
+    senderUrl(env.HELIUS_SENDER_URL, { speed, mevProtect, apiKey: env.HELIUS_API_KEY || undefined });
+  // Kept for panels loaded before build tokens (one deploy's worth): their send finds its build
+  // here, on the instance that built it. A token makes a send good on any instance.
   const builds = new Map<
     string,
     {
+      /** The build's id, as its token carries it (PlatformTrade.buildId). */
+      id: string;
       blockhash: string;
       lastValidBlockHeight: number;
       at: number;
@@ -475,24 +510,31 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       if (refused) return reply.code(refused.code).send(refused.body);
       const builtWire = parseWireTransaction(Buffer.from(built.transaction, "base64"));
       const message = decodeMessage(builtWire.message);
-      const list = liveBuilds(wallet);
-      list.push({
-        blockhash: message.recentBlockhash,
+      const at = Date.now();
+      const record = {
+        id: newBuildId(),
         lastValidBlockHeight: built.lastValidBlockHeight,
-        at: Date.now(),
         side: body.side,
         access: accessBuy && !who.pro,
         closing,
-        message,
         mint: body.mint,
         lamports: tradeLamports,
         networkFeeLamports: BigInt(built.priorityFeeLamports) + BigInt(built.tipLamports) + BASE_FEE_LAMPORTS,
-        sacrifice,
-      });
+      };
+      const list = liveBuilds(wallet);
+      list.push({ ...record, blockhash: message.recentBlockhash, at, message, sacrifice });
       builds.set(wallet, list.slice(-MAX_BUILDS_PER_WALLET));
       if (builds.size > 5_000) builds.clear();
+      const buildToken = signBuildToken(tokenSecret, {
+        ...record,
+        wallet,
+        message: Buffer.from(builtWire.message).toString("base64"),
+        sacrifice: sacrificeRecord(sacrifice),
+        expiresAt: at + BUILD_TTL_MS,
+      });
       return {
         ...built,
+        buildToken,
         quietSign: await quietSign(rpc, wallet, body.mint, body.side),
         sacrifice: sacrificeView(sacrifice),
       };
@@ -610,11 +652,19 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const parsed = sendSchema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid", notSent: true });
-    const { transaction, speed, mevProtect } = parsed.data;
+    const { transaction, speed, mevProtect, buildToken } = parsed.data;
     const bytes = Uint8Array.from(Buffer.from(transaction, "base64"));
     let signature: string;
     let lastValidBlockHeight: number;
-    let sentBuild: ReturnType<typeof liveBuilds>[number];
+    let sentBuild: {
+      id: string;
+      side: "buy" | "sell";
+      closing: boolean;
+      mint: string;
+      lamports: bigint;
+      networkFeeLamports: bigint;
+      sacrifice: PlatformTradeRecord["sacrifice"];
+    };
     try {
       const wire = parseWireTransaction(bytes);
       const message = decodeMessage(wire.message);
@@ -635,46 +685,63 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       // Sent already (a retried request): the resend loop has it.
       if (inFlight.has(signature)) return { signature };
       // One send per build, and only what was built (the wallet may add its own compute budget
-      // and Lighthouse guards): our Sender key relays nothing a build didn't make.
+      // and Lighthouse guards): our Sender key relays nothing a build didn't make. The build comes
+      // from its token, on any instance, or (a panel without tokens) from this instance's memory;
+      // one send per build across instances is PlatformTrade's unique buildId, written before it.
       const list = liveBuilds(wallet);
-      const at = list.findIndex(
-        (b) =>
-          b.blockhash === message.recentBlockhash &&
-          (who.pro || b.access) &&
-          signedMatchesBuild(b.message, message) === null,
-      );
-      if (at < 0)
-        return reply.code(400).send({
-          error: "That trade is too old or wasn't built here. Nothing was sent; try again.",
-          notSent: true,
-        });
-      sentBuild = list[at]!;
-      lastValidBlockHeight = sentBuild.lastValidBlockHeight;
+      let at: number;
+      if (buildToken !== undefined) {
+        const claims = verifyBuildToken(tokenSecret, buildToken);
+        const built =
+          claims && claims.wallet === wallet && (who.pro || claims.access)
+            ? decodeMessage(Buffer.from(claims.message, "base64"))
+            : null;
+        if (!claims || !built || signedMatchesBuild(built, message) !== null)
+          return reply.code(400).send({
+            error: "That trade is too old or doesn't match its build. Nothing was sent; try again.",
+            notSent: true,
+          });
+        sentBuild = claims;
+        lastValidBlockHeight = claims.lastValidBlockHeight;
+        at = list.findIndex((b) => b.id === claims.id);
+      } else {
+        at = list.findIndex(
+          (b) =>
+            b.blockhash === message.recentBlockhash &&
+            (who.pro || b.access) &&
+            signedMatchesBuild(b.message, message) === null,
+        );
+        if (at < 0)
+          return reply.code(400).send({
+            error: "That trade is too old or wasn't built here. Nothing was sent; try again.",
+            notSent: true,
+          });
+        const b = list[at]!;
+        sentBuild = { ...b, sacrifice: sacrificeRecord(b.sacrifice) };
+        lastValidBlockHeight = b.lastValidBlockHeight;
+      }
       if ([...inFlight.values()].filter((f) => f.wallet === wallet).length >= MAX_IN_FLIGHT_PER_WALLET)
         return reply.code(429).send({
           error: "Wait for your open trades to land before sending more. Nothing was sent.",
           notSent: true,
         });
-      if (!list[at]!.closing) {
+      if (!sentBuild.closing) {
         const left = cooldown.left(wallet);
         if (left > 0) return tooSoon(reply, left);
       }
-      list.splice(at, 1);
+      if (at >= 0) list.splice(at, 1);
     } catch {
       return reply
         .code(400)
         .send({ error: "That isn't a transaction this can send. Nothing was sent.", notSent: true });
     }
-    const url = senderUrl(env.HELIUS_SENDER_URL, {
-      speed,
-      mevProtect,
-      apiKey: env.HELIUS_API_KEY || undefined,
-    });
+    const url = senderFor(speed, mevProtect);
     // The trade record and its Sacrifice, in one transaction before anything goes on chain
     // (recordPlatformTrade in core): in "on" mode the burned pot is re-checked under the wallet's
     // credit lock, so two sends can't spend the same credits, and a charge is never unrecorded.
+    // The row also carries what any instance needs to keep resending it and to call it expired.
     const q = sentBuild.sacrifice;
-    const takes = charged(q);
+    const takes = q.mode === "on" && q.pays && q.lamports !== null;
     try {
       const recorded = await recordPlatformTrade({
         signature,
@@ -683,13 +750,13 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         side: sentBuild.side,
         lamports: sentBuild.lamports,
         networkFeeLamports: sentBuild.networkFeeLamports,
-        sacrifice: {
-          mode: q.mode,
-          tier: q.tier?.reason ?? null,
-          pays: q.tier?.pays ?? false,
-          asdfRaw: q.asdfRaw,
-          lamports: q.lamports,
-          asdfPerSol: q.asdfPerSol,
+        sacrifice: q,
+        inFlight: {
+          transaction,
+          lastValidBlockHeight,
+          senderSpeed: speed,
+          senderMevProtect: mevProtect,
+          buildId: sentBuild.id,
         },
       });
       if (recorded.status === "short")
@@ -700,6 +767,17 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           notSent: true,
         });
     } catch (err) {
+      // Recorded already: this signature (a retried request, maybe on another instance) is out and
+      // being resent; anything else signed from the same build is not sent a second time.
+      if ((err as { code?: unknown } | null)?.code === "P2002") {
+        const row = await prisma.platformTrade
+          .findUnique({ where: { signature }, select: { wallet: true, status: true } })
+          .catch(() => null);
+        if (row?.wallet === wallet && row.status === "sent") return { signature };
+        return reply
+          .code(409)
+          .send({ error: "This trade was already sent once. Nothing more was sent.", notSent: true });
+      }
       // Without a record a Sacrifice can't be taken, so a paying trade waits; anything else only
       // loses its fees-saved row, as before.
       request.log.warn({ signature, err: String(err) }, "platform trade not recorded");
@@ -756,6 +834,18 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   /** A trade Sender refused (nothing went out): failed, with its Sacrifice refunded at once. */
   const settleRefused = (signature: string) => settle(signature, "failed");
 
+  /**
+   * The wallet's recorded trade's blockhash life, from its row: a trade another instance sent
+   * (before a deploy) can be answered "expired" here too. Undefined when there is no such row.
+   */
+  const rowFlight = async (signature: string, wallet: string) => {
+    const row = await prisma.platformTrade
+      .findUnique({ where: { signature }, select: { wallet: true, lastValidBlockHeight: true } })
+      .catch(() => null);
+    if (row?.wallet !== wallet || row.lastValidBlockHeight === null) return undefined;
+    return { lastValidBlockHeight: Number(row.lastValidBlockHeight) };
+  };
+
   app.get<{ Params: { signature: string } }>(
     "/trade/status/:signature",
     { config: { rateLimit: READ_RATE_LIMIT } },
@@ -770,7 +860,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       if (!status.seen) {
         // Past its blockhash's life and never seen: it won't land. The height is read first
         // and the status again after it, so a landing in between can't read as expired.
-        const flight = inFlight.get(signature) ?? retired.get(signature);
+        const flight =
+          inFlight.get(signature) ?? retired.get(signature) ?? (await rowFlight(signature, wallet));
         const height = flight ? await rpc.getBlockHeight() : null;
         if (flight && height !== null && height > flight.lastValidBlockHeight + EXPIRY_MARGIN_BLOCKS) {
           const again = await rpc.getSignatureStatus(signature);
@@ -961,8 +1052,68 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       }),
     );
   }
+  /**
+   * At boot: trades still "sent" and inside their blockhash's life go back on the resend loop
+   * (the instance that sent them stopped: a crash, or a deploy past its drain). Their rows carry
+   * the signed bytes and the Sender tier; the key is this instance's own.
+   */
+  let closing = false;
+  async function resumeInFlight() {
+    const rows = await prisma.platformTrade.findMany({
+      where: {
+        status: "sent",
+        transaction: { not: null },
+        lastValidBlockHeight: { not: null },
+        sentAt: { gt: new Date(Date.now() - RESUME_WINDOW_MS) },
+      },
+      orderBy: { sentAt: "asc" },
+      take: MAX_IN_FLIGHT,
+      select: {
+        signature: true,
+        wallet: true,
+        transaction: true,
+        lastValidBlockHeight: true,
+        senderSpeed: true,
+        senderMevProtect: true,
+      },
+    });
+    if (rows.length === 0 || closing) return;
+    const height = await rpc.getBlockHeight().catch(() => null);
+    let resumed = 0;
+    for (const r of rows) {
+      const lastValidBlockHeight = Number(r.lastValidBlockHeight);
+      if (inFlight.has(r.signature) || inFlight.size >= MAX_IN_FLIGHT) continue;
+      // Past its life it can't land: /status, the fees read or the settlement job settles it.
+      if (height !== null && height > lastValidBlockHeight) continue;
+      inFlight.set(r.signature, {
+        base64: r.transaction!,
+        url: senderFor(r.senderSpeed === "turbo" ? "turbo" : "eco", r.senderMevProtect === true),
+        lastValidBlockHeight,
+        until: Date.now() + RESEND_FOR_MS,
+        wallet: r.wallet,
+      });
+      resumed++;
+    }
+    if (resumed > 0) app.log.info({ resumed }, "pro trades resumed after a restart");
+    scheduleResend();
+  }
+  void resumeInFlight().catch((err) => app.log.warn({ err: String(err) }, "pro trades not resumed"));
+
+  // A deploy's SIGTERM: trades in flight are resent until they land or expire (bounded by
+  // DRAIN_MAX_MS) before the process goes, instead of after one send.
   app.addHook("onClose", async () => {
+    closing = true;
+    const until = Date.now() + DRAIN_MAX_MS;
+    if (inFlight.size > 0) app.log.info({ inFlight: inFlight.size }, "pro trades draining before shutdown");
+    while (inFlight.size > 0 && Date.now() < until) {
+      scheduleResend();
+      // Not unref'd: this wait is what keeps the process up while the trades drain.
+      await new Promise((r) => setTimeout(r, DRAIN_POLL_MS));
+    }
+    if (inFlight.size > 0)
+      app.log.warn({ inFlight: inFlight.size }, "pro trades still in flight at shutdown");
     if (timer) clearTimeout(timer);
+    timer = null;
     inFlight.clear();
     retired.clear();
   });

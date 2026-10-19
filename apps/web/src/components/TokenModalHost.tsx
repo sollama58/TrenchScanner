@@ -2,6 +2,7 @@ import { SectionBoundary } from "./SectionBoundary";
 import { lazy, Suspense, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useNow } from "../hooks";
+import { LoadingNote } from "./Loading";
 import { closeTokenModal, openTokenModalState, subscribeTokenModal } from "../tokenModal";
 
 // The token modal (and its chart) loads the first time a card is opened.
@@ -15,7 +16,15 @@ export function TokenModalHost() {
   if (!open) return null;
   return createPortal(
     <SectionBoundary label="This token's window" resetKey={open.card.id} onClose={closeTokenModal}>
-      <Suspense fallback={null}>
+      {/* The window's code is fetched the first time a coin is opened: say so meanwhile, rather
+          than nothing on a slow connection. */}
+      <Suspense
+        fallback={
+          <div className="tm-chunk-loading">
+            <LoadingNote slow="Still opening the coin…">Opening the coin…</LoadingNote>
+          </div>
+        }
+      >
         {/* Keyed by card, so opening another card's modal starts it fresh. */}
         <TokenModal
           key={open.card.id}

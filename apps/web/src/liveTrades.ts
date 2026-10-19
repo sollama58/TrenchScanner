@@ -1,5 +1,5 @@
 import { useCallback, useState, useSyncExternalStore } from "react";
-import { api } from "./api";
+import { api, FEED_TIMEOUT_MS } from "./api";
 
 /** Mirrors apps/api/src/liveTrades.ts LiveTokenTrade. */
 export interface LiveTokenTrade {
@@ -68,12 +68,15 @@ function startFeed(base: string): SharedFeed {
     window.clearTimeout(timer);
     if (!stopped) timer = window.setTimeout(() => void poll(), ms);
   };
+  let busy = false;
   const poll = async () => {
     if (document.visibilityState !== "visible") return next(POLL_MS);
     const sent = Date.now();
+    busy = true;
     try {
       const a = await api<LiveTradesAnswer>(`${base}/trades/live?after=${after}&wait=1`, {
         signal: abort.signal,
+        timeoutMs: FEED_TIMEOUT_MS,
       });
       if (stopped) return;
       failures = 0;
@@ -103,12 +106,22 @@ function startFeed(base: string): SharedFeed {
       );
     } catch {
       if (!stopped) next(Math.min(MAX_BACKOFF_MS, POLL_MS * 2 ** ++failures));
+    } finally {
+      busy = false;
     }
   };
+  // Back online (a laptop woken, a network switched): ask at once rather than out the backoff.
+  const resume = () => {
+    if (busy || stopped) return;
+    failures = 0;
+    next(0);
+  };
   void poll();
+  window.addEventListener("online", resume);
   feed.stop = () => {
     stopped = true;
     window.clearTimeout(timer);
+    window.removeEventListener("online", resume);
     abort.abort();
   };
   return feed;

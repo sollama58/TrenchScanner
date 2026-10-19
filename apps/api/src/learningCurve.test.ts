@@ -178,6 +178,43 @@ describe("buildLearningTrend", () => {
     expect(buildLearningTrend(series(3, 3))!.verdict).toBe("flat");
   });
 
+  it("weighs the 4x lift and the return edge too, not the 2x lift alone", () => {
+    // Same 2x lift both spans (3 of 10 vs the market's 50 of 500); the 4x tier falls from 3 to 1.
+    const days = buildLearningDays(
+      Array.from({ length: 2 * TREND_SPAN_DAYS }, (_, i) => raw(dayAt(i), 500, 500, 50, 25, 5)),
+      Array.from({ length: 2 * TREND_SPAN_DAYS }, (_, i) =>
+        raw(dayAt(i), 10, 10, 3, i < TREND_SPAN_DAYS ? 3 : 1, 0),
+      ),
+    );
+    const trend = buildLearningTrend(days)!;
+    expect(trend.recent.lift2x).toBe(trend.prior!.lift2x);
+    expect(trend.prior!.lift4x).toBe(6);
+    expect(trend.recent.lift4x).toBe(2);
+    expect(trend.recent.lift10x).toBe(0);
+    expect(trend.verdict).toBe("worsening");
+    expect(trend.reason).toMatch(/2x lift 3\.00x to 3\.00x, 4x lift 6\.00x to 2\.00x/);
+  });
+
+  it("lets the return edge vote, and splits votes to flat", () => {
+    const day = (d: string, graded: number, won2x: number, ret: number) => ({
+      ...raw(d, graded, graded, won2x),
+      sim_calls: BigInt(graded),
+      sim_sum: ret * graded,
+    });
+    const days = buildLearningDays(
+      Array.from({ length: 2 * TREND_SPAN_DAYS }, (_, i) => day(dayAt(i), 500, 50, -10)),
+      // 2x lift rises 2x to 4x, but the return edge falls from +5 pts to -5 pts.
+      Array.from({ length: 2 * TREND_SPAN_DAYS }, (_, i) =>
+        i < TREND_SPAN_DAYS ? day(dayAt(i), 10, 2, -5) : day(dayAt(i), 10, 4, -15),
+      ),
+    );
+    const trend = buildLearningTrend(days)!;
+    expect(trend.prior!.returnEdgePts).toBe(5);
+    expect(trend.recent.returnEdgePts).toBe(-5);
+    expect(trend.verdict).toBe("flat");
+    expect(trend.reason).toMatch(/return edge \+5\.0 pts to -5\.0 pts/);
+  });
+
   it("withholds a verdict while either span is thin, and reports null with no graded calls", () => {
     // 7 days x 4 graded = 28 < 30.
     const thin = buildLearningTrend(series(2, 1, 4))!;

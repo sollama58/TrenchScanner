@@ -44,3 +44,28 @@ describe("runExamRates", () => {
     expect(r).toEqual({ calls: 30, winRatePct: 50, goalRatePct: 20, heldOut: false });
   });
 });
+
+describe("withTimeout", () => {
+  it("aborts after the time given, and follows the caller's own abort", async () => {
+    const { withTimeout } = await import("./api");
+    const t = withTimeout(undefined, 10);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(t.signal.aborted).toBe(true);
+    t.done();
+
+    const own = new AbortController();
+    const u = withTimeout(own.signal, 60_000);
+    expect(u.signal.aborted).toBe(false);
+    own.abort();
+    expect(u.signal.aborted).toBe(true);
+    u.done();
+  });
+
+  it("clears its timer when done", async () => {
+    const { withTimeout } = await import("./api");
+    const t = withTimeout(undefined, 10);
+    t.done();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(t.signal.aborted).toBe(false);
+  });
+});
