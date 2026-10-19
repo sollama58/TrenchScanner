@@ -29,6 +29,7 @@ import {
   estimateSaleProceeds,
   estimateBuyLamports,
   quoteInSol,
+  routeHopMints,
   routeFeeBps,
   TOKEN_2022_ACCOUNT_RENT_LAMPORTS,
   LIGHTHOUSE_PROGRAM,
@@ -891,6 +892,22 @@ describe("quoteInSol", () => {
     const asked: (boolean | undefined)[] = [];
     await expect(quoteInSol(jupiter(asked), input, async () => true)).rejects.toBeInstanceOf(NoRouteError);
     expect(asked).toEqual([undefined]);
+  });
+});
+
+describe("routeHopMints", () => {
+  it("names the coins a route passes through, for the guard to let gain, never SOL or the coin", () => {
+    const usdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    const route = {
+      routePlan: [
+        { swapInfo: { inputMint: WSOL, outputMint: usdc } },
+        { swapInfo: { inputMint: usdc, outputMint: MINT } },
+      ],
+    } as never;
+    expect(routeHopMints(route, MINT)).toEqual([usdc]);
+    expect(
+      routeHopMints({ routePlan: [{ swapInfo: { inputMint: WSOL, outputMint: MINT } }] } as never, MINT),
+    ).toEqual([]);
   });
 });
 

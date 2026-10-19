@@ -255,6 +255,7 @@ export async function buildManualTrade(
       units: Math.min(MAX_UNITS, Math.max(MIN_UNITS, limit + JUPITER_UNIT_EXTRA)),
       quotedOut,
       minOut,
+      hops: routeHopMints(quote, req.mint),
     };
   } catch (err) {
     if (!(err instanceof NoRouteError || err instanceof RateLimitedError || err instanceof TransientError))
@@ -285,14 +286,14 @@ export async function buildManualTrade(
       );
     } else throw err;
   }
-  const { route, via, quotedOut, minOut } = built;
+  const { route, via, hops, quotedOut, minOut } = built;
   const { tx, blockhash, priorityFee } = assembled;
   const limits = {
     maxExternalLamports: tip,
     maxPriorityFeeLamports: priorityFee,
     ...(route === "jupiter" || via ? { maxSlippageBps: req.slippageBps } : {}),
     ...(route === "pumpswap" ? { pumpSwapSlippageBps: req.slippageBps } : {}),
-    ...(via ? { via } : {}),
+    ...(hops && hops.length > 0 ? { via: hops } : {}),
   };
   const expect: TradeExpectation = buy
     ? {
@@ -332,6 +333,11 @@ interface RouteBuild {
   quotedOut: bigint;
   minOut: bigint;
   via?: string;
+  /**
+   * Every coin the transaction passes through on the way (a curve's quote coin, a Jupiter route's
+   * USDC or PUMP): the guard lets the wallet's own account for each gain, never lose.
+   */
+  hops?: string[];
 }
 
 /**
@@ -358,7 +364,7 @@ async function buildOwnRoute(
   if (quoteMint) {
     // Quoted in another coin: SOL to it with Jupiter, then the curve, in one transaction.
     const hop = await buildCurveHop(deps, req, tokenProgram, curve.curve, curve.recipients, quoteMint);
-    return { route: "pump", via: quoteMint, ...hop };
+    return { route: "pump", via: quoteMint, ...hop, hops: [quoteMint, ...hop.hops] };
   }
   const accounts = {
     wallet: req.wallet,
@@ -639,6 +645,8 @@ async function buildCurveHop(
   units: number;
   quotedOut: bigint;
   minOut: bigint;
+  /** The coins Jupiter's leg passes through between SOL and the quote coin. */
+  hops: string[];
 }> {
   const quoteInfo = await deps.rpc.getMintInfo(quoteMint);
   if (!quoteInfo) throw new TransientError("couldn't read the curve's quote coin");
@@ -714,6 +722,7 @@ async function buildCurveHop(
       units: unitsWith(built.computeUnitLimit, PUMP_BUY_UNITS),
       quotedOut: curveTokensOut(curve, quoteOut),
       minOut: b.minTokens,
+      hops: routeHopMints(q, quoteMint),
     };
   }
 
@@ -758,6 +767,7 @@ async function buildCurveHop(
     units: unitsWith(null, PUMP_SELL_UNITS),
     quotedOut: (quoteOut * 10_000n) / BigInt(10_000 - req.slippageBps),
     minOut,
+    hops: routeHopMints(q, quoteMint),
   };
 }
 

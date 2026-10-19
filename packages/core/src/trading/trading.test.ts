@@ -739,7 +739,7 @@ describe("swap guard: multi-hop routes", () => {
         { pubkey: ata(mint), writable: true },
       ],
     };
-    const viaBuy = { ...buy, via: quoteCoin };
+    const viaBuy = { ...buy, via: [quoteCoin] };
     await expect(guardSwapTransaction(viaRpc(1_007n), tx(holding), wallet, viaBuy)).resolves.toBeTruthy();
     await expect(guardSwapTransaction(viaRpc(993n), tx(holding), wallet, viaBuy)).rejects.toThrow(
       /another position's balance/,
@@ -747,6 +747,63 @@ describe("swap guard: multi-hop routes", () => {
     // Without `via` the quote coin is any other position: it may not change at all.
     await expect(guardSwapTransaction(viaRpc(1_007n), tx(holding), wallet, buy)).rejects.toThrow(
       /another position's balance/,
+    );
+  });
+  it("lets a Jupiter route through USDC leave dust in the wallet's USDC, never take its USDC or touch another position", async () => {
+    // A Jupiter buy of a USDC-quoted coin: SOL to USDC, then the Pump.fun curve, which spends a
+    // little less than the leg delivered. The wallet already held USDC, and another coin.
+    const usdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    const other = hops[1]!;
+    const routeRpc = (usdcAfter: bigint, otherAfter = 50n): GuardRpc => ({
+      getAccountsData: async (a) => a.map(() => null),
+      getParsedAccounts: async (a) =>
+        a.map((k) =>
+          k === wallet
+            ? { lamports: 1_000_000_000n, owner: SYSTEM_PROGRAM_ID, token: null }
+            : k === ata(usdc)
+              ? token(usdc, 2_000_000n)
+              : k === ata(other)
+                ? token(other, 50n)
+                : null,
+        ),
+      simulateParsed: async (_b64, a) => ({
+        error: null,
+        logs: [],
+        accounts: a.map((k) =>
+          k === wallet
+            ? { lamports: 1_000_000_000n - 100_000_000n, owner: SYSTEM_PROGRAM_ID, token: null }
+            : k === ata(mint)
+              ? token(mint, 5_000n)
+              : k === ata(usdc)
+                ? token(usdc, usdcAfter)
+                : k === ata(other)
+                  ? token(other, otherAfter)
+                  : null,
+        ),
+      }),
+    });
+    const route: InstructionSpec = {
+      ...jupiter,
+      accounts: [
+        { pubkey: ata(usdc), writable: true },
+        { pubkey: ata(other), writable: true },
+        { pubkey: ata(mint), writable: true },
+      ],
+    };
+    const routed = { ...buy, via: [usdc] };
+    await expect(guardSwapTransaction(routeRpc(2_000_013n), tx(route), wallet, routed)).resolves.toBeTruthy();
+    await expect(guardSwapTransaction(routeRpc(2_000_000n), tx(route), wallet, routed)).resolves.toBeTruthy();
+    // Spending USDC the wallet already held is still refused.
+    await expect(guardSwapTransaction(routeRpc(1_999_999n), tx(route), wallet, routed)).rejects.toThrow(
+      `another position's balance would change (${usdc})`,
+    );
+    // A coin the route doesn't pass through may not change at all, up or down.
+    await expect(guardSwapTransaction(routeRpc(2_000_013n, 51n), tx(route), wallet, routed)).rejects.toThrow(
+      `another position's balance would change (${other})`,
+    );
+    // Without the route's hops named, USDC is any other position.
+    await expect(guardSwapTransaction(routeRpc(2_000_013n), tx(route), wallet, buy)).rejects.toThrow(
+      `another position's balance would change (${usdc})`,
     );
   });
   it("refuses a hop account that isn't the wallet's alone, or too many of them", async () => {
