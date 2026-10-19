@@ -11867,6 +11867,14 @@ img.tm-avatar {
 .pc-svg.zoomed:active {
   cursor: grabbing;
 }
+/* The price axis's strip: scroll or drag it to zoom the price (user ask 2026-10-19). Takes every
+   touch, so a drag on it scales rather than scrolling the page. */
+.pc-yaxis {
+  position: absolute;
+  right: 0;
+  cursor: ns-resize;
+  touch-action: none;
+}
 /* The candle view: a wick from high to low, a body from open to close. */
 .pc-candle line {
   stroke-width: 1;

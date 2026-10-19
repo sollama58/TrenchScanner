@@ -1869,6 +1869,9 @@ export function ChartCard({
   const firstTradeAt = data?.candles?.[0]?.t ?? data?.marketCap[0]?.t ?? null;
   const young = firstTradeAt !== null && Date.now() - firstTradeAt <= FIRST_VIEW_MAX_AGE_MS;
   const shownRange: Range = range === "first" && !young ? "all" : range;
+  // A range longer than the coin has traded draws the same as All (user ask 2026-10-19: no
+  // timeframes older than the token).
+  const underHour = firstTradeAt !== null && Date.now() - firstTradeAt < 3_600_000;
 
   // Labeled wallets' trades on the line (user ask 2026-10-18), as set in Customize › Chart wallet
   // trades, which the header's link opens over the token view.
@@ -2131,7 +2134,10 @@ export function ChartCard({
                 type="button"
                 className={`tm-range${shownRange === r.id ? " on" : ""}`}
                 aria-pressed={shownRange === r.id}
-                title={r.title}
+                title={
+                  r.id === "1h" && underHour ? "The coin is under an hour old: All shows the same" : r.title
+                }
+                disabled={r.id === "1h" && underHour && shownRange !== "1h"}
                 onClick={() => pickRange(r.id)}
               >
                 {utility && r.id === "alert" ? "From scan" : r.label}
