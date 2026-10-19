@@ -98,6 +98,8 @@ export async function quoteSymbolsFor(
     return out;
   }
   for (const m of ask) {
+    // A mint past the batch's cap wasn't asked: left for the next call, not remembered as unnamed.
+    if (!read.has(m)) continue;
     const meta = read.get(m);
     const symbol = clean(meta?.symbol) ?? clean(meta?.name);
     failureBackoff.succeed(m);

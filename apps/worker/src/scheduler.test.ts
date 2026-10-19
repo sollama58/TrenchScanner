@@ -227,6 +227,26 @@ describe("scheduleInterval", () => {
     expect(heartbeats.filter((h) => !h.success)).toHaveLength(3);
   });
 
+  it("restarts when an abandoned run keeps the lock and every later run is skipped", async () => {
+    const hits: string[] = [];
+    let call = 0;
+    // pro-holders' shape: the hung first run holds the lock, so every later one is skipped and
+    // never reaches a deadline of its own.
+    const job = scheduleInterval(
+      "pro-holders",
+      () => {
+        call += 1;
+        if (call === 1) return new Promise<void>(() => {});
+        return Promise.reject(new JobSkipped("another process holds the pro-holders lock"));
+      },
+      0.25,
+      { deadlineMinutes: 1, abandonOnDeadline: true, onDeadline: (j) => void hits.push(j) },
+    );
+    await vi.advanceTimersByTimeAsync(60_000 + 3 * 15_000 + 5_000);
+    job.stop();
+    expect(hits).toEqual(["pro-holders"]);
+  });
+
   it("leaves the run-start stamp of a lock-guarded job to its lock", async () => {
     const job = scheduleInterval("ai-judge", async () => {}, 10);
     await vi.advanceTimersByTimeAsync(1_000);
