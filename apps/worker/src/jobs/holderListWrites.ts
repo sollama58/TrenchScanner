@@ -92,17 +92,19 @@ export function holderReadingData(
 /**
  * Whether this cycle's snapshot should carry the reading: one this process has not written for
  * the coin, one that differs from the last written, or one last written longer ago than
- * HOLDER_LIST_REWRITE_MS. False for a reading with no list, which has nothing to carry.
+ * `rewriteMs` (HOLDER_LIST_REWRITE_MS; a coin whose bubble map is open passes its re-read pace,
+ * watchedHolders.ts). False for a reading with no list, which has nothing to carry.
  */
 export function shouldWriteHolderReading(
   tokenId: string,
   reading: HolderReading,
   now: number = Date.now(),
+  rewriteMs: number = HOLDER_LIST_REWRITE_MS,
 ): boolean {
   if (!hasLists(reading)) return false;
   const last = lastWritten.get(tokenId);
   if (!last) return true;
-  return now - last.at >= HOLDER_LIST_REWRITE_MS || last.key !== holderReadingKey(reading);
+  return now - last.at >= rewriteMs || last.key !== holderReadingKey(reading);
 }
 
 /** Records that a snapshot carrying `reading` was written for `tokenId` at `now`. */

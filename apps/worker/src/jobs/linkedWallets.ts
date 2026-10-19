@@ -419,23 +419,58 @@ const MAX_WIDE_LISTS = 1_000;
  * reading's holders past RugCheck's 20 accounts. A failed read leaves the group as it was.
  * `wideMints` (the model-alerted coins) keep their top 50 too, for the bubble map, and one with
  * no top 50 yet is read now even when its top 25 is fresh: the read at alert time.
- * Answers how many mints it asked about.
+ * `watched` (coins whose bubble map someone has open, user ask 2026-10-19) are re-read once their
+ * list is `watchedRefreshMs` old, on their own `maxWatchedReads`, so the "Now" map keeps updating.
+ * Answers how many mints it asked about on each budget.
  */
 export async function readTopHolders(
   groups: LinkedGroup[],
   helius: Pick<HeliusClient, "getTopHoldersBatch">,
-  opts: { maxReads: number; nowMs?: number; wideMints?: ReadonlySet<string> },
-): Promise<number> {
+  opts: {
+    maxReads: number;
+    nowMs?: number;
+    wideMints?: ReadonlySet<string>;
+    watched?: ReadonlySet<string>;
+    maxWatchedReads?: number;
+    watchedRefreshMs?: number;
+    /**
+     * Whether a mint has had no trade since then (the trade stream's word): a watched coin quiet
+     * since its last read keeps that list, as no holder's balance moved by trading. A coin the
+     * stream can't vouch for is read; the usual cadence reads every coin either way.
+     */
+    quietSince?: (mint: string, sinceMs: number) => boolean;
+  },
+): Promise<{ reads: number; watchedReads: number }> {
   const now = opts.nowMs ?? Date.now();
   const wide = opts.wideMints ?? new Set<string>();
+  const watched = opts.watched ?? new Set<string>();
+  const ageOf = (mint: string) => {
+    const entry = topHolderLists.get(mint);
+    return entry ? now - entry.atMs : Infinity;
+  };
+  const quiet = (mint: string) => {
+    const entry = topHolderLists.get(mint);
+    return !!entry && !!opts.quietSince?.(mint, entry.atMs);
+  };
   const due = groups
     .filter((g) => {
-      const entry = topHolderLists.get(g.mintAddress);
       if (wide.has(g.mintAddress) && !wideHolderLists.has(g.mintAddress)) return true;
-      return !entry || now - entry.atMs >= TOP_HOLDERS_REFRESH_MS;
+      return ageOf(g.mintAddress) >= TOP_HOLDERS_REFRESH_MS;
     })
     .slice(0, Math.max(0, opts.maxReads));
-  if (due.length === 0) return 0;
+  const dueSet = new Set(due.map((g) => g.mintAddress));
+  const watchedDue = groups
+    .filter(
+      (g) =>
+        watched.has(g.mintAddress) &&
+        !dueSet.has(g.mintAddress) &&
+        ageOf(g.mintAddress) >= (opts.watchedRefreshMs ?? TOP_HOLDERS_REFRESH_MS) &&
+        !quiet(g.mintAddress),
+    )
+    .slice(0, Math.max(0, opts.maxWatchedReads ?? 0));
+  const counts = { reads: due.length, watchedReads: watchedDue.length };
+  due.push(...watchedDue);
+  if (due.length === 0) return counts;
   const anyWide = due.some((g) => wide.has(g.mintAddress));
   const read = await helius.getTopHoldersBatch(
     due.map((g) => g.mintAddress),
@@ -464,7 +499,7 @@ export async function readTopHolders(
       wideHolderLists.set(g.mintAddress, { holders, atMs: now });
     }
   }
-  return due.length;
+  return counts;
 }
 
 /**

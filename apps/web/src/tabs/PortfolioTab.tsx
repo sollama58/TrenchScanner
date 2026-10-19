@@ -6,6 +6,8 @@ import { WalletHoldings } from "../components/WalletHoldings";
 import { useNow, usePolling } from "../hooks";
 import { ago, pricedAgeText, shortAddress, usd } from "../format";
 import { useWalletBalance } from "../walletBalance";
+import { ShareButton } from "../components/ShareImageDialog";
+import { renderFeesCard } from "./feesCard";
 
 const PORTFOLIO_POLL_MS = 60_000;
 const TRADES_POLL_MS = 30_000;
@@ -292,6 +294,14 @@ function FeesPanel() {
             {data?.since && <> Counted since {new Date(data.since).toLocaleDateString()}.</>}
           </p>
         </div>
+        {data && data.trades > 0 && data.platforms.length > 0 && (
+          <ShareButton
+            title="What trading here saved you"
+            fileName="trenchscanner-fees-saved"
+            caption="What trading on TrenchScanner saved me in fees"
+            render={() => renderFeesCard(data)}
+          />
+        )}
       </header>
       {error && !data && (
         <p className="error small" role="alert">

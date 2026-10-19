@@ -425,6 +425,67 @@ describe("readTopHolders", () => {
     expect(helius.getTopHoldersBatch).toHaveBeenCalledTimes(2);
   });
 
+  it("re-reads a coin whose bubble map is open at its own pace and budget (user ask 2026-10-19)", async () => {
+    const top = Array.from({ length: 26 }, (_, i) => ({ owner: `h${i}`, pct: 30 - i }));
+    const helius = {
+      getTopHoldersBatch: vi.fn(async (mints: string[]) => {
+        return new Map(mints.map((m) => [m, { status: "found" as const, holders: top }]));
+      }),
+    };
+    const groups: LinkedGroup[] = ["mA", "mV"].map((m) => ({ mintAddress: m, holders: [] }));
+    const watched = new Set(["mV"]);
+    const opts = { maxReads: 4, watched, maxWatchedReads: 1, watchedRefreshMs: 60_000 };
+    expect(await readTopHolders(groups, helius, { ...opts, nowMs: 0 })).toEqual({
+      reads: 2,
+      watchedReads: 0,
+    });
+    // Within the minute: nothing is due.
+    expect(await readTopHolders(groups, helius, { ...opts, nowMs: 59_999 })).toEqual({
+      reads: 0,
+      watchedReads: 0,
+    });
+    // A minute on: the watched coin is read again, on its own budget, the other not.
+    expect(await readTopHolders(groups, helius, { ...opts, maxReads: 0, nowMs: 60_000 })).toEqual({
+      reads: 0,
+      watchedReads: 1,
+    });
+    expect(helius.getTopHoldersBatch).toHaveBeenLastCalledWith(["mV"], 26);
+    // With no watched budget left it waits for the usual cadence.
+    expect(await readTopHolders(groups, helius, { ...opts, maxWatchedReads: 0, nowMs: 130_000 })).toEqual({
+      reads: 0,
+      watchedReads: 0,
+    });
+    expect(helius.getTopHoldersBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a watched coin's list while the trade stream says it hasn't traded since", async () => {
+    const top = [{ owner: "h0", pct: 10 }];
+    const helius = {
+      getTopHoldersBatch: vi.fn(async (mints: string[]) => {
+        return new Map(mints.map((m) => [m, { status: "found" as const, holders: top }]));
+      }),
+    };
+    const groups: LinkedGroup[] = [{ mintAddress: "mQ", holders: [] }];
+    const lastTrade = { at: 0 };
+    const opts = {
+      maxReads: 0,
+      watched: new Set(["mQ"]),
+      maxWatchedReads: 1,
+      watchedRefreshMs: 60_000,
+      quietSince: (_mint: string, since: number) => lastTrade.at <= since,
+    };
+    await readTopHolders(groups, helius, { ...opts, maxReads: 1, nowMs: 0 });
+    expect(await readTopHolders(groups, helius, { ...opts, nowMs: 60_000 })).toEqual({
+      reads: 0,
+      watchedReads: 0,
+    });
+    lastTrade.at = 30_000;
+    expect(await readTopHolders(groups, helius, { ...opts, nowMs: 60_000 })).toEqual({
+      reads: 0,
+      watchedReads: 1,
+    });
+  });
+
   it("leaves a group on RugCheck's list when the read fails", async () => {
     const helius = {
       getTopHoldersBatch: vi.fn(

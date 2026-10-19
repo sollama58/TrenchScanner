@@ -81,6 +81,7 @@ import { RouteTimings } from "./routeTimings.js";
 import { fastifyLogger } from "./fastifyLogger.js";
 import { liveCurves, liveCurvesFor, setLiveCurves } from "./liveCurve.js";
 import { liveTrades, liveTradesFor, setLiveTrades } from "./liveTrades.js";
+import { FlaggedTradeSaver, prismaFlaggedTradeStore } from "./chartFlaggedTrades.js";
 import { dexScreenerQuote, jupiterQuote, QuotePrice, sharedSolPrice } from "./solPrice.js";
 import { recordAdminActions } from "./adminActionLog.js";
 import { chartReaderFor } from "./chartRpc.js";
@@ -564,8 +565,10 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // write transaction and concurrent readers of the same page stop queueing on the same rows.
   // Flushed on shutdown so the last page anyone opened still counts. See viewStamps.ts.
   const viewStamps = new ViewStampBuffer();
+  // The same for Token.holdersViewedAt: a token view with its bubble map open (user ask 2026-10-19).
+  const holderStamps = new ViewStampBuffer({ stamp: "holders" });
   app.addHook("onClose", async () => {
-    await viewStamps.stop();
+    await Promise.all([viewStamps.stop(), holderStamps.stop()]);
   });
 
   // Set once listening, cleared when the report keeper's first pass ends (or REPORT_WARM_CAP_MS
@@ -682,7 +685,17 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // (liveTrades.ts), behind the same switch as the chart's.
   setLiveTrades(liveTradesFor(env.HELIUS_API_KEY, env.CHART_LIVE_CURVES, solPrice, quotePrice, walletHelius));
   app.addHook("onClose", async () => liveTrades().stop());
-  await app.register(registerTokenRoutes, { prefix: "/tokens", env, stonkFees: walletHelius });
+  // Flagged wallets' trades among them are saved for the chart's marks (chartFlaggedTrades.ts),
+  // once listening: a test server never listens and saves none.
+  const flaggedSaver = new FlaggedTradeSaver(liveTrades(), prismaFlaggedTradeStore);
+  app.addHook("onListen", async () => flaggedSaver.start());
+  app.addHook("onClose", async () => flaggedSaver.stop());
+  await app.register(registerTokenRoutes, {
+    prefix: "/tokens",
+    env,
+    stonkFees: walletHelius,
+    holderStamps,
+  });
   const walletLive = walletHelius ? new WalletLiveReader(walletHelius) : null;
   // Helius's name for it (exchanges, protocols, services): its identity API, on paid plans.
   const walletIdentity = env.HELIUS_API_KEY

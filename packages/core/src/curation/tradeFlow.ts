@@ -222,6 +222,18 @@ export class TradeFlowBook {
     return this.mints.has(mint);
   }
 
+  /**
+   * Whether the mint has had no trade since `sinceMs`, as far as this book can tell: followed
+   * since before it, with no stream gap after it. False for a mint it doesn't follow, so a caller
+   * skipping work on a quiet coin never skips one it can't see.
+   */
+  quietSince(mint: string, sinceMs: number): boolean {
+    const flow = this.mints.get(mint);
+    if (!flow || flow.observedSince > sinceMs) return false;
+    if (flow.gapUntil !== null && flow.gapUntil > sinceMs) return false;
+    return flow.lastTradeAt <= sinceMs;
+  }
+
   /** Every tracked mint - what a reconnecting stream resubscribes to. */
   trackedMints(): string[] {
     return [...this.mints.keys()];

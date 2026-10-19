@@ -633,6 +633,13 @@ model Token {
   // out of band, rather than tracking every historical match forever.
   lastViewedAt DateTime?
 
+  // Stamped by GET /tokens/:mint/bubble-holders (apps/api/src/routes/tokens.ts), which a token
+  // view polls while it is open and the page visible: someone is watching this coin's bubble map
+  // and holders right now (user ask 2026-10-19). The scan re-reads such a coin's top holders every
+  // WATCHED_HOLDERS_REFRESH_SECONDS instead of every 10 minutes, within
+  // WATCHED_HOLDER_READS_PER_CYCLE, so the "Now" map and its stats keep updating while watched.
+  holdersViewedAt DateTime?
+
   // A lightweight, display-only price ping for tokens someone currently has open, refreshed far
   // more often than a full scan cycle (see apps/worker/src/jobs/livePriceJob.ts). Deliberately
   // NOT a TokenSnapshot: a snapshot is a full point-in-time evaluation that feeds scoring,
@@ -695,6 +702,7 @@ model Token {
   // table - every mint ever discovered - which was 20s of each production cycle on 2026-10-03.
   @@index([firstSeenAt])
   @@index([lastViewedAt])
+  @@index([holdersViewedAt])
   // The dashboard's Stream: the tokens that most recently entered the band (apps/api's launches.ts).
   @@index([firstInBandAt])
   // The Dev card's other launches of a creator, and the scan's dev launch reading.
@@ -3592,4 +3600,25 @@ model SacrificeSettings {
   /// The admin wallet that last changed it.
   updatedBy String?
   updatedAt DateTime @updatedAt
+}
+
+/// Flagged wallets' trades the API's live trades follower saw (apps/api/src/chartFlaggedTrades.ts,
+/// user ask 2026-10-19): KOLs and their sides, wallets anyone labeled, risky wallets, known dumpers,
+/// winners and the coin's creator. The trade tape (TokenWalletActivity) reads only to 30 minutes
+/// past the call, so without these a flagged wallet's later trade was marked on the token chart
+/// only while it was open. Read back by the chart's wallet marks; kept apart from the tape so no
+/// model input sees them.
+model ChartFlaggedTrade {
+  sig       String
+  wallet    String
+  /// 1 a buy, -1 a sale.
+  side      Int
+  mint      String
+  /// SOL paid or received; null when the coin's quote couldn't be priced in SOL.
+  sol       Float?
+  at        DateTime
+  createdAt DateTime @default(now())
+
+  @@id([sig, wallet, side])
+  @@index([mint, at])
 }

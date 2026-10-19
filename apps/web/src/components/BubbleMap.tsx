@@ -27,7 +27,7 @@ import {
   nodeSlot,
   sameTimeSlot,
   buildGraph,
-  HOLDER_SCAN_MS,
+  HOLDER_POLL_MS,
   liveWideFor,
   clusterHalos,
   HALO_PAD,
@@ -72,6 +72,7 @@ import {
   type TransferLink,
 } from "../bubbleMap";
 import { renderBubbleCard } from "../bubbleMapCard";
+import { liveShareDeltas, wideWithLiveShares, withLiveShares, type LiveTradeShares } from "../liveShares";
 import { laneD } from "../linkLanes";
 import { openWallet } from "../walletModal";
 import {
@@ -122,11 +123,13 @@ function useWideMap(mint: string): WideMap | null {
  * null while they load or when the read fails. One cached read serves every caller.
  */
 export function useBubbleMaps(mint: string): BubbleMaps | null {
-  // Re-read at the worker's scan pace while the view is open, so a top 50 read after it opened
-  // (or one that changed) shows without reopening it - and at once when reloadBubbleMaps says so.
+  // Re-read every HOLDER_POLL_MS while the view is open and the page visible, so a top 50 read
+  // after it opened (or one that changed) shows without reopening it - and at once when
+  // reloadBubbleMaps says so. Each read also marks the map as watched, which has the worker re-read
+  // the coin's top holders every minute while it is (user ask 2026-10-19).
   const path = bubbleMapsPath(mint);
   const version = useSyncExternalStore(subscribeMaps, () => mapsVersion.get(mint) ?? 0);
-  const { data } = usePolling<BubbleMaps>(path, HOLDER_SCAN_MS, String(version));
+  const { data } = usePolling<BubbleMaps>(path, HOLDER_POLL_MS, String(version));
   return data;
 }
 
@@ -2244,7 +2247,7 @@ export function BubbleMapPlaceholder({ children }: { children: ReactNode }) {
 
 export function BubbleMapSection({
   token,
-  snapshot,
+  snapshot: snapshotIn,
   moment,
   wide: chosenWide,
   pending = false,
@@ -2252,6 +2255,7 @@ export function BubbleMapSection({
   flags,
   column = false,
   spread,
+  live = null,
 }: {
   token: Token;
   /** The reading to draw; undefined while it loads. */
@@ -2278,10 +2282,34 @@ export function BubbleMapSection({
   column?: boolean;
   /** How far sideways the map may spread to fill a wide stage (Scope's tab, user ask 2026-10-19). */
   spread?: number;
+  /**
+   * The coin's live trades and supply: each trade since the reading (and since the top 50's read)
+   * moves its wallet's share on the map between reads (liveShares.ts). None for a kept moment.
+   */
+  live?: LiveTradeShares | null;
 }) {
   const mint = token.mintAddress;
-  const liveWide = liveWideFor(snapshot, useWideMap(mint));
-  const wide = chosenWide !== undefined ? chosenWide : liveWide;
+  const liveWide = liveWideFor(snapshotIn, useWideMap(mint));
+  const wideIn = chosenWide !== undefined ? chosenWide : liveWide;
+  // Trades move shares from each reading's own read time: the scan's for its lists and figures,
+  // the top 50's for its map.
+  const snapshot = useMemo(
+    () =>
+      snapshotIn && live
+        ? withLiveShares(
+            snapshotIn,
+            liveShareDeltas(live.trades, live.supply, Date.parse(snapshotIn.takenAt)),
+          )
+        : snapshotIn,
+    [snapshotIn, live],
+  );
+  const wide = useMemo(
+    () =>
+      wideIn && live
+        ? wideWithLiveShares(wideIn, liveShareDeltas(live.trades, live.supply, Date.parse(wideIn.readAt)))
+        : wideIn,
+    [wideIn, live],
+  );
   const { showTransfers, setTransfersOn } = useTransferToggle(snapshot);
   const { bubbleFunderLabels } = useAppearance();
   // Transfers hidden: Linked, its clusters and the bundles as they read without them (user ask

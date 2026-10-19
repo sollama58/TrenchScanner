@@ -4,7 +4,7 @@ import { CloseIcon, ShareIcon } from "./Icons";
 
 /**
  * A branded share image (shareCard.ts) in a dialog, with the ways to send it, as the PnL card
- * does: the phone's share sheet where there is one, copy the image, or save it. The image is
+ * does: the phone's share sheet where there is one, copy the image, save it, or post it on X. The image is
  * drawn once per opening; the parent mounts this only while sharing.
  */
 export function ShareImageDialog({
@@ -87,6 +87,25 @@ export function ShareImageDialog({
     }
   };
 
+  // X's post composer takes text only, so the image goes on the clipboard first, ready to paste.
+  const postOnX = async () => {
+    // Both start inside the click: the copy before the window, which can use up the click's permission.
+    const copied =
+      png && canCopy ? navigator.clipboard.write([new ClipboardItem({ "image/png": png.blob })]) : null;
+    window.open(
+      `https://x.com/intent/post?text=${encodeURIComponent(`${caption} · ${link}`)}`,
+      "_blank",
+      "noopener,noreferrer",
+    );
+    try {
+      if (!copied) throw new Error("no clipboard");
+      await copied;
+      setNote("Image copied: paste it into your post");
+    } catch {
+      setNote("Save the image, then attach it to your post.");
+    }
+  };
+
   return (
     <dialog
       ref={ref}
@@ -135,6 +154,9 @@ export function ShareImageDialog({
               Save image
             </a>
           ) : null}
+          <button type="button" className="ghost" disabled={!png} onClick={() => void postOnX()}>
+            Post on X
+          </button>
           {png && note && <small className="muted">{note}</small>}
         </div>
       </div>

@@ -25,6 +25,17 @@ import {
 import { drawNarrativesPay } from "../tokensage/shareCards";
 import { drawPricingChange, pricingChangeSlot } from "../pricingChange";
 import { prettyLabel } from "../tokensage/showcase";
+import {
+  clockHour,
+  hourSpan,
+  hourStats,
+  localHours,
+  MIN_HOUR_GRADED,
+  niceCeil,
+  type Clock,
+  type HourOfDayData,
+  type HourRow,
+} from "../hourOfDay";
 
 /**
  * The Lighthouse tab's share images: one per section, in the shared branded frame (shareCard.ts)
@@ -418,6 +429,186 @@ export async function renderScreenedCard(s: Screened, span: string): Promise<HTM
       ctx.fillText(bucketTick(b.at, s.bucketHours), left + slot * i + slot / 2, base - 16);
     }
   });
+  ctx.textAlign = "left";
+  return canvas;
+}
+
+// ---------- By hour of the day ----------
+
+/** A small clock in the badge: the image's hours are the sharer's own. */
+const clockGlyph = (ctx: CanvasRenderingContext2D) => {
+  ctx.beginPath();
+  ctx.arc(12, 12, 10, 0, Math.PI * 2);
+  ctx.moveTo(12, 6.5);
+  ctx.lineTo(12, 12);
+  ctx.lineTo(16, 14.5);
+  ctx.stroke();
+};
+
+/**
+ * The screened field by hour of the day on the sharer's clock (hourOfDay.ts): the best hours
+ * called out, then the 2x rate with the whole day's rate across it and the best hour lit, and
+ * the average return around zero. The badge names the zone, since the hours are the sharer's.
+ */
+export async function renderHourOfDayCard(h: HourOfDayData, clock: Clock): Promise<HTMLCanvasElement> {
+  const { canvas, ctx, icon } = await cardCanvas(2);
+  if (!ctx) return canvas;
+  const { hours, minutes } = localHours(h, clock);
+  const st = hourStats(hours);
+  frame(
+    ctx,
+    icon,
+    "By hour of the day",
+    `Every token that passed our safety pre-checks over ${n(h.days)} days, by the hour it was decided on.`,
+    {
+      badge: (c, right, cy) => pill(c, right, cy, `Local time · ${clock.name}`, clockGlyph),
+      footer: `${n(st.calls)} screened, ${n(st.graded)} graded on a fixed exit plan, rules 3-4`,
+      link: LINK,
+    },
+  );
+  if (st.graded === 0) {
+    empty(ctx, "Nothing graded yet.");
+    return canvas;
+  }
+  const span = (x: HourRow | null) => (x ? hourSpan(x.hour, minutes, "en-US") : "–");
+  const statsY = BODY_TOP + 36;
+  stats(
+    ctx,
+    [
+      {
+        value: span(st.best2x),
+        label: `best for 2x · ${pct(st.best2x?.hit2xPct ?? null, 1)}`,
+        swatch: SERIES[0],
+      },
+      {
+        value: span(st.bestReturn),
+        label: `best return · ${signedPct(st.bestReturn?.avgReturnPct ?? null, 1)}`,
+        color: tone(st.bestReturn?.avgReturnPct ?? null),
+      },
+      { value: span(st.busiest), label: `busiest · ${n(st.busiest?.calls ?? 0)} screened` },
+      { value: pct(st.hit2xPct, 1), label: `hit 2x across the day` },
+    ],
+    statsY,
+    PAD,
+    CARD_W - PAD,
+    38,
+  );
+
+  const left = PAD + 132;
+  const right = CARD_W - PAD;
+  const slot = (right - left) / 24;
+  const bw = Math.min(26, slot * 0.64);
+  const bx = (i: number) => left + slot * i + (slot - bw) / 2;
+  const thin = (x: HourRow) => x.graded < MIN_HOUR_GRADED;
+  const name = (text: string, y: number) => {
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = INK2;
+    ctx.font = `600 17px ${FONT}`;
+    ctx.fillText(text, PAD, y);
+  };
+  const tick = (text: string, y: number, strong = false) => {
+    ctx.strokeStyle = strong ? "rgba(255, 255, 255, 0.2)" : "rgba(255, 255, 255, 0.07)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(right, y);
+    ctx.stroke();
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = MUTED;
+    ctx.font = `500 14px ${FONT}`;
+    ctx.fillText(text, left - 10, y);
+  };
+
+  // 2x rate: bars from zero, the best hour lit with its rate above it, the day's rate across.
+  const rTop = statsY + 80;
+  const rBase = rTop + 104;
+  const top = niceCeil(Math.max(10, ...hours.map((x) => x.hit2xPct ?? 0)));
+  const ry = (v: number) => rBase - (v / top) * (rBase - rTop);
+  name("2x rate", (rTop + rBase) / 2);
+  tick(`${top}%`, rTop);
+  tick(`${top / 2}%`, ry(top / 2));
+  tick("0%", rBase, true);
+  hours.forEach((x, i) => {
+    if (x.hit2xPct === null) return;
+    const best = st.best2x?.hour === x.hour;
+    const bh = Math.max(2, rBase - ry(x.hit2xPct));
+    ctx.globalAlpha = thin(x) ? 0.3 : best ? 1 : 0.78;
+    ctx.fillStyle = best ? "#6aa9f4" : SERIES[0]!;
+    corners(ctx, bx(i), rBase - bh, bw, bh, [4, 4, 0, 0]);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    if (best) {
+      ctx.textAlign = "center";
+      ctx.textBaseline = "alphabetic";
+      ctx.fillStyle = INK;
+      ctx.font = `700 15px ${FONT}`;
+      ctx.fillText(pct(x.hit2xPct, 1), bx(i) + bw / 2, rBase - bh - 7);
+    }
+  });
+  if (st.hit2xPct !== null) {
+    const y = ry(st.hit2xPct);
+    ctx.save();
+    ctx.setLineDash([6, 5]);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(right, y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Average return: around zero, gains up and losses down in the page's two return colors.
+  const aTop = rBase + 30;
+  const aBase = aTop + 54;
+  const mid = (aTop + aBase) / 2;
+  const retTop = niceCeil(Math.max(5, ...hours.map((x) => Math.abs(x.avgReturnPct ?? 0))));
+  name("Avg return", mid);
+  tick(`+${retTop}%`, aTop);
+  tick(`−${retTop}%`, aBase);
+  tick("0%", mid, true);
+  hours.forEach((x, i) => {
+    if (x.avgReturnPct === null) return;
+    const v = Math.max(-retTop, Math.min(retTop, x.avgReturnPct));
+    const bh = Math.max(2, (Math.abs(v) / retTop) * (aBase - mid));
+    ctx.globalAlpha = thin(x) ? 0.3 : 0.9;
+    ctx.fillStyle = v >= 0 ? SERIES[0]! : SERIES[1]!;
+    if (v >= 0) corners(ctx, bx(i), mid - bh, bw, bh, [4, 4, 0, 0]);
+    else corners(ctx, bx(i), mid, bw, bh, [0, 0, 4, 4]);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  });
+
+  // The hours, every third, on the sharer's clock.
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = MUTED;
+  ctx.font = `500 14px ${FONT}`;
+  hours.forEach((x, i) => {
+    if (x.hour % 3 === 0)
+      ctx.fillText(clockHour(x.hour, minutes, "en-US"), left + slot * i + slot / 2, aBase + 8);
+  });
+  // The dashed line's key, right-aligned under the chart.
+  if (st.hit2xPct !== null) {
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.font = `500 14px ${FONT}`;
+    const key = `whole day ${pct(st.hit2xPct, 1)}`;
+    const kx = right - ctx.measureText(key).width;
+    ctx.save();
+    ctx.setLineDash([6, 5]);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(kx - 34, rTop - 18);
+    ctx.lineTo(kx - 8, rTop - 18);
+    ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = INK2;
+    ctx.fillText(key, kx, rTop - 18);
+  }
   ctx.textAlign = "left";
   return canvas;
 }

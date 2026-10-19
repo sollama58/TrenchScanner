@@ -12,6 +12,7 @@ import { ExitPlanInfo } from "./ExitPlanInfo";
 import {
   renderFeeRecipientsCard,
   renderNarrativeMixCard,
+  renderHourOfDayCard,
   renderNarrativesPayCard,
   renderScreenedCard,
   renderSignalsCard,
@@ -23,6 +24,17 @@ import { ShareButton } from "./ShareImageDialog";
 import { WeatherGauge } from "./WeatherGauge";
 import { AsOf } from "./AsOf";
 import { PRICING_CHANGE_LABEL, pricingChangeSlot } from "../pricingChange";
+import {
+  clockHour,
+  hourSpan,
+  hourStats,
+  localClock,
+  localHours,
+  MIN_HOUR_GRADED,
+  niceCeil,
+  type HourOfDayData,
+  type HourRow,
+} from "../hourOfDay";
 
 /**
  * The Market Lighthouse, at the top of the Lighthouse tab: how every token that passed the pre-checks
@@ -993,86 +1005,88 @@ function Screened({ s, span, days, since }: { s: ScreenedData; span: string; day
 
 const retTone = (v: number | null) => (v === null ? "" : v >= 0 ? "lh-up" : "lh-down");
 
-/** Hours with fewer graded tokens than this are drawn faded: too few to read a rate from. */
-const MIN_HOUR_GRADED = 30;
-
-const hourLabel = (h: number, minutes = 0) =>
-  `${String(((h % 24) + 24) % 24).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
-
-/**
- * The browser's clock against UTC: the offset split into whole hours (floored) and the minutes
- * past them, so a UTC hour falls on local hour `utc + offsetHours` starting `minutes` past it
- * (00:00 UTC is 05:30 in Kolkata: column 5, labelled 05:30), and a short name for the zone
- * ("PDT", "GMT+2", or "UTC+5:30" when the short one is just "GMT").
- */
-function localClock(now = new Date()) {
-  const offsetMinutes = -now.getTimezoneOffset();
-  const offsetHours = Math.floor(offsetMinutes / 60);
-  const minutes = offsetMinutes - offsetHours * 60;
-  let name: string;
-  try {
-    name =
-      new Intl.DateTimeFormat([], { timeZoneName: "short" })
-        .formatToParts(now)
-        .find((p) => p.type === "timeZoneName")?.value ?? "";
-  } catch {
-    name = "";
-  }
-  if (!name || name === "GMT" || name === "UTC") {
-    const abs = Math.abs(offsetMinutes);
-    const mm = abs % 60 ? `:${String(abs % 60).padStart(2, "0")}` : "";
-    name = offsetMinutes === 0 ? "UTC" : `UTC${offsetMinutes > 0 ? "+" : "−"}${Math.floor(abs / 60)}${mm}`;
-  }
-  return { offsetHours, minutes, name };
-}
-
 /**
  * The screened field by hour of the day over everything the hourly rollup has kept: which
- * hours screen the most tokens, and which hours' tokens double and pay. The API sums per hour
- * in the browser's zone (the `tz` it was sent), each row on its own date's offset, so "5 am"
- * means the reader's 5 am on either side of a DST change. An older API, or a browser that
- * can't name its zone, gets UTC hours, and the columns are shifted by today's offset instead.
- * Three charts on one column per hour, so a reader lines up busy against good.
+ * hours screen the most tokens, and which hours' tokens double and pay, on the reader's clock
+ * (hourOfDay.ts lays the API's hours on it). The hours worth calling out first, then three
+ * charts on one column per hour, so a reader lines up busy against good.
  */
-function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
+function HourOfDay({ h }: { h: HourOfDayData }) {
   const [hover, setHover] = useState<number | null>(null);
   const clock = localClock();
-  const shift = !h.timeZone || h.timeZone === "UTC" ? clock.offsetHours : 0;
-  // Hours the API grouped in the reader's zone start on the hour. Only UTC hours shifted onto the
-  // local clock start minutes past it (05:30 in Kolkata), and then only if the API sent UTC.
-  const minutes = !h.timeZone || h.timeZone === "UTC" ? clock.minutes : 0;
-  // Column i is local hour i, holding the API hour that falls on it.
-  const hours = Array.from({ length: 24 }, (_, local) => {
-    const from = (((local - shift) % 24) + 24) % 24;
-    return { ...(h.hours[from] ?? h.hours[0]!), hour: local };
-  });
-  const total = hours.reduce((sum, x) => sum + x.calls, 0);
-  if (h.days === 0 || total === 0) return null;
-  const callsMax = Math.max(1, ...hours.map((x) => x.calls));
-  const rateMax = Math.max(10, ...hours.map((x) => x.hit2xPct ?? 0));
-  const top = Math.ceil(rateMax / 10) * 10;
-  const retAbs = Math.max(5, ...hours.map((x) => Math.abs(x.avgReturnPct ?? 0)));
-  const busiest = hours.reduce((b, x) => (x.calls > b.calls ? x : b), hours[0]!);
+  const { hours, minutes } = localHours(h, clock);
+  const st = hourStats(hours);
+  if (h.days === 0 || st.calls === 0) return null;
+  const callsTop = niceCeil(Math.max(1, ...hours.map((x) => x.calls)));
+  const top = niceCeil(Math.max(10, ...hours.map((x) => x.hit2xPct ?? 0)));
+  const retTop = niceCeil(Math.max(5, ...hours.map((x) => Math.abs(x.avgReturnPct ?? 0))));
+  const busiest = st.busiest ?? hours[0]!;
   const focus = hover !== null ? (hours[hover] ?? busiest) : busiest;
   const thin = (x: { graded: number }) => x.graded < MIN_HOUR_GRADED;
-  const col = (x: { hour: number }, i: number) =>
-    `${hover === i ? " is-hover" : ""}${thin(hours[i]!) ? " is-thin" : ""}`;
+  const col = (i: number) =>
+    `${hover === i ? " is-hover" : ""}${thin(hours[i]!) ? " is-thin" : ""}${
+      st.best2x?.hour === i ? " is-best" : ""
+    }`;
   const hoverProps = (i: number) => ({ onMouseEnter: () => setHover(i), onClick: () => setHover(i) });
+  const span = (x: { hour: number }) => hourSpan(x.hour, minutes);
+  const callout = (label: string, x: HourRow | null, value: string, sub: string) => (
+    <button
+      type="button"
+      className="lh-kpi lh-hod-kpi"
+      disabled={!x}
+      onMouseEnter={() => x && setHover(x.hour)}
+      onFocus={() => x && setHover(x.hour)}
+      onClick={() => x && setHover(x.hour)}
+    >
+      <span className="lh-kpi-label">{label}</span>
+      <span className="lh-kpi-value">{x ? span(x) : "–"}</span>
+      <span className="muted small">{x ? `${value} ${sub}` : "Too few graded yet"}</span>
+    </button>
+  );
 
   return (
     <div className="lh-hod" onMouseLeave={() => setHover(null)}>
-      <h4 className="lh-subchart">
-        By hour of the day in your local time ({clock.name}), all {h.days.toLocaleString()} days kept
-      </h4>
+      <div className="lh-hod-head">
+        <h4 className="lh-subchart">
+          By hour of the day in your local time ({clock.name}), all {h.days.toLocaleString()} days kept
+        </h4>
+        <ShareButton
+          title={`By hour of the day (${clock.name})`}
+          fileName="trenchscanner-hour-of-day"
+          caption={
+            st.best2x
+              ? `TrenchScanner: screened tokens double most often at ${span(st.best2x)} ${clock.name} (${pct(st.best2x.hit2xPct, 1)} hit 2x)`
+              : `TrenchScanner: screened tokens by hour of the day (${clock.name})`
+          }
+          render={() => renderHourOfDayCard(h, clock)}
+        />
+      </div>
       <p className="faint small">
-        Every screened token in our history by the hour it was decided on, in your local time zone (
-        {clock.name}): how many tokens each hour brings, how often they doubled, and what they returned on the{" "}
+        Every screened token in our history by the hour it was decided on, in your time zone ({clock.name}):
+        how many each hour brings, how often they doubled, and what they returned on the{" "}
         <ExitPlanInfo text="exit plan" />. Hours with fewer than {MIN_HOUR_GRADED} graded tokens are faded.{" "}
         {RULE_NOTE_UNFILTERED}
       </p>
+      <div className="lh-kpis lh-hod-kpis">
+        {callout("Best hour for 2x", st.best2x, pct(st.best2x?.hit2xPct ?? null, 1), "hit 2x")}
+        {callout(
+          "Best hour for return",
+          st.bestReturn,
+          signedPct(st.bestReturn?.avgReturnPct ?? null, 1),
+          "average return",
+        )}
+        {callout("Busiest hour", st.busiest, (st.busiest?.calls ?? 0).toLocaleString(), "screened")}
+        <div className="lh-kpi">
+          <span className="lh-kpi-label">Whole day</span>
+          <span className="lh-kpi-value num">{pct(st.hit2xPct, 1)}</span>
+          <span className="muted small">
+            hit 2x · <span className={retTone(st.avgReturnPct)}>{signedPct(st.avgReturnPct, 1)}</span> avg
+          </span>
+        </div>
+      </div>
       <div className="lh-readout" aria-live="polite">
         <strong>
-          {hourLabel(focus.hour, minutes)}–{hourLabel(focus.hour + 1, minutes)} {clock.name}
+          {span(focus)} {clock.name}
         </strong>
         <span className="num">{focus.calls.toLocaleString()} screened</span>
         <span className="lh-readout-item">
@@ -1080,7 +1094,8 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
           2x <span className="num">{pct(focus.hit2xPct, 1)}</span>
         </span>
         <span className="lh-readout-item">
-          avg return <span className="num">{signedPct(focus.avgReturnPct, 1)}</span>
+          avg return{" "}
+          <span className={`num ${retTone(focus.avgReturnPct)}`}>{signedPct(focus.avgReturnPct, 1)}</span>
         </span>
         <span className="muted">
           {focus.graded.toLocaleString()} graded{thin(focus) ? " · too few to judge" : ""}
@@ -1096,10 +1111,15 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
         <div
           className="lh-groups"
           role="img"
-          aria-label="2x rate of screened tokens by hour of the day, local time"
+          aria-label={`2x rate of screened tokens by hour of the day, local time; ${pct(st.hit2xPct, 1)} over the whole day`}
         >
+          {st.hit2xPct !== null && (
+            <span className="lh-hod-avg" style={{ bottom: `${(st.hit2xPct / top) * 100}%` }} aria-hidden>
+              <span>day {pct(st.hit2xPct, 1)}</span>
+            </span>
+          )}
           {hours.map((x, i) => (
-            <div key={x.hour} className={`lh-group${col(x, i)}`} {...hoverProps(i)}>
+            <div key={x.hour} className={`lh-group${col(i)}`} {...hoverProps(i)}>
               {x.hit2xPct !== null && (
                 <span
                   className="lh-gbar lh-s1"
@@ -1113,9 +1133,9 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
       <h5 className="lh-subchart">Average return</h5>
       <div className="lh-rate-chart">
         <span className="lh-yaxis" aria-hidden>
-          <span>+{Math.round(retAbs)}%</span>
+          <span>+{retTop}%</span>
           <span>0%</span>
-          <span>−{Math.round(retAbs)}%</span>
+          <span>−{retTop}%</span>
         </span>
         <div
           className="lh-ret"
@@ -1125,11 +1145,11 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
           {hours.map((x, i) => {
             const v = x.avgReturnPct ?? 0;
             return (
-              <div key={x.hour} className={`lh-ret-col${col(x, i)}`} {...hoverProps(i)}>
+              <div key={x.hour} className={`lh-ret-col${col(i)}`} {...hoverProps(i)}>
                 {x.avgReturnPct !== null && (
                   <span
                     className={`lh-ret-bar ${v >= 0 ? "up" : "down"}`}
-                    style={{ height: `${Math.max(0.5, (Math.abs(v) / retAbs) * 50)}%` }}
+                    style={{ height: `${Math.max(0.5, (Math.abs(v) / retTop) * 50)}%` }}
                   />
                 )}
               </div>
@@ -1140,8 +1160,8 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
       <h5 className="lh-subchart">Tokens screened</h5>
       <div className="lh-rate-chart">
         <span className="lh-yaxis" aria-hidden>
-          <span>{callsMax.toLocaleString()}</span>
-          <span>{Math.round(callsMax / 2).toLocaleString()}</span>
+          <span>{callsTop.toLocaleString()}</span>
+          <span>{(callsTop / 2).toLocaleString()}</span>
           <span>0</span>
         </span>
         <div className="lh-groups" role="img" aria-label="Tokens screened by hour of the day, local time">
@@ -1149,7 +1169,7 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
             <div key={x.hour} className={`lh-group${hover === i ? " is-hover" : ""}`} {...hoverProps(i)}>
               <span
                 className="lh-gbar lh-other"
-                style={{ height: `${Math.max(0.5, (x.calls / callsMax) * 100)}%` }}
+                style={{ height: `${Math.max(0.5, (x.calls / callsTop) * 100)}%` }}
               />
             </div>
           ))}
@@ -1157,8 +1177,9 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
       </div>
       <div className="lh-axis lh-axis-inset" aria-hidden>
         {hours.map((x) => (
-          <span key={x.hour}>
-            {x.hour % 3 === 0 ? (minutes ? hourLabel(x.hour, minutes) : `${x.hour}h`) : ""}
+          // Every third hour, every sixth on a phone (styles.css hides the in-between ones).
+          <span key={x.hour} className={x.hour % 6 ? "lh-hod-minor" : undefined}>
+            {x.hour % 3 === 0 ? clockHour(x.hour, minutes) : ""}
           </span>
         ))}
       </div>

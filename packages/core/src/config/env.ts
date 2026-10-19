@@ -247,6 +247,15 @@ const envSchema = z.object({
   // reads off (coins then show no transfer links).
   HOLDER_TRANSFER_SIGNATURE_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(60),
   HOLDER_TRANSFER_TX_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),
+  // A coin whose bubble map someone has open right now (Token.holdersViewedAt, user ask
+  // 2026-10-19) has its top holders re-read every WATCHED_HOLDERS_REFRESH_SECONDS instead of every
+  // 10 minutes, so the "Now" map, its stats and the top holders keep updating while watched: one
+  // getProgramAccountsV2 page each (1 credit), at most WATCHED_HOLDER_READS_PER_CYCLE coins a cycle,
+  // on top of LINKED_HOLDER_READS_PER_CYCLE. New holders' funders come from the cached funder reads
+  // and LINKED_WALLET_LOOKUPS_PER_CYCLE. About 60 credits an hour for each coin kept open. 0 turns
+  // the faster re-read off (watched coins then refresh like any other).
+  WATCHED_HOLDER_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(10),
+  WATCHED_HOLDERS_REFRESH_SECONDS: z.coerce.number().int().min(30).default(60),
   // Follows those holders' token accounts on Helius's enhanced websocket (worker's
   // heliusAccountStream.ts, user ask 2026-10-17: credits) instead of re-reading their signatures
   // every 10 minutes. Streaming bills by size, and holder accounts are quiet, so it costs a small

@@ -2,6 +2,7 @@ import {
   alertWideMap,
   fromAlertText,
   hasHolderList,
+  HOLDER_POLL_MS,
   HOLDER_SCAN_MS,
   holderFreshness,
   linkedCountText,
@@ -16,6 +17,7 @@ import { cachedGet } from "../cache";
 import { createPortal } from "react-dom";
 import { LiveTradesCard, useBatchedWallets } from "./LiveTrades";
 import { useLiveTrades } from "../liveTrades";
+import { liveShareDeltas, withLiveShares, type LiveTradeShares } from "../liveShares";
 import { usePossibleSides } from "../possibleSides";
 import {
   createContext,
@@ -77,6 +79,14 @@ import {
 } from "./AlertCard";
 import { CHART_MARKS_SECTION } from "./WalletMarksPicker";
 import { CustomizeDrawer } from "./CustomizeDrawer";
+import {
+  CHART_MIN_H_PX,
+  CHART_MIN_W_PX,
+  SIDE_MIN_PX,
+  TermSplit,
+  chartMaxHeight,
+  useTermLayout,
+} from "./TermSplit";
 import { markPrefsOf, walletMarks, withLiveMarks } from "../walletMarks";
 import { PriceChart, type ChartEvent, type ChartKind, type ChartTrade } from "./PriceChart";
 import { TradePanel, solText, tokensText } from "./TradePanel";
@@ -139,10 +149,18 @@ import {
 } from "../safetyScreen";
 
 /** Mirrors apps/api/src/routes/tokens.ts TokenChart. */
+/** The older candles' width (TokenChart.older; apps/api/src/tokenChart.ts OLDER_CANDLE_MS). */
+const OLDER_CANDLE_MS = 5 * 60_000;
+
 interface TokenChart {
   mint: string;
   /** Pump.fun's minute candles as market cap (apps/api/src/tokenChart.ts McapCandle). */
   candles: { t: number; o: number; h: number; l: number; c: number; vol?: number }[] | null;
+  /**
+   * 5-minute candles before `candles`' first, when those no longer reach back to the launch (a coin
+   * busy for more than Pump.fun's 1,000 minutes): the call's flag stays on the chart. Absent otherwise.
+   */
+  older?: { t: number; o: number; h: number; l: number; c: number; vol?: number }[];
   /** buys/sells: the 5-minute counts before the scan; absent from older API builds. */
   marketCap: { t: number; usd: number; buys?: number | null; sells?: number | null }[];
   /** Absent from an API older than this page. */
@@ -585,6 +603,8 @@ function chartHeight(expanded = false): number {
   // Pro Mode's bigger chart, while trading or holding the coin: room for the trade marks.
   return expanded ? 400 : 320;
 }
+/** The terminal's rail beside the chart and its column (.tm-term-grid). */
+const TERM_RAIL_PX = 360;
 /** The Scope terminal's chart: most of the window's height left over by the header and the tabs. */
 function terminalChartHeight(): number {
   return Math.round(Math.min(620, Math.max(400, window.innerHeight - 360)));
@@ -725,11 +745,23 @@ function TokenBody({
   const entries = useMemo(() => JSON.parse(entriesKey) as Record<string, HolderEntry>, [entriesKey]);
   const linked = useHolderReading(card, mint, !!utility);
   const holders = useHoldersView(card, linked, alertAt, !!utility);
+  const liveShares = useLiveShares(mint, holders.isKept);
+  // The top holders as the live trades since the reading moved them (liveShares.ts).
+  const listReading = useMemo(
+    () =>
+      liveShares && holders.listReading
+        ? withLiveShares(
+            holders.listReading,
+            liveShareDeltas(liveShares.trades, liveShares.supply, Date.parse(holders.listReading.takenAt)),
+          )
+        : holders.listReading,
+    [liveShares, holders.listReading],
+  );
   // Each live section's age and next update, beside its count (user ask 2026-10-19): the holder
   // list follows the scans; the labeled wallets, the chart read they come from.
   const holdersFresh =
     !holders.isKept && holders.listReading && hasHolderList(holders.listReading)
-      ? holderFreshness(holders.listReading.takenAt, now)
+      ? { ...holderFreshness(holders.listReading.takenAt, now), live: !!liveShares }
       : undefined;
   const walletsFresh =
     chart.at === null
@@ -757,6 +789,9 @@ function TokenBody({
   // The terminal's column view and tab under the chart, and the rail's slot the chart's Trade panel
   // is drawn into. A tab that is now the column's shows the first of the others instead.
   const [side, setSide] = useTermSide();
+  // The column's width and the chart's height, dragged by the reader (user ask 2026-10-19).
+  const [layout, setLayout] = useTermLayout();
+  const sideRef = useRef<HTMLElement>(null);
   // The bubble map's tab opens first when the map is down in the tabs, else Holders: never Live
   // trades on its own, whose feed only runs while someone chose to watch it.
   const [tabPicked, setTab] = useState<TermTab>(side === "map" ? "holders" : "map");
@@ -942,6 +977,7 @@ function TokenBody({
       column={column}
       // Scope's wide tab: the map spreads across it (user ask 2026-10-19).
       spread={terminal && !column ? 2.6 : undefined}
+      live={liveShares}
     />
   );
   const bubbleMap = bubbleMapIn(false);
@@ -963,12 +999,12 @@ function TokenBody({
             </>
           );
         case "trades":
-          return <LiveTradesCard base={tokenApi} snapshot={holders.listReading} flagged={flagged} />;
+          return <LiveTradesCard base={tokenApi} snapshot={listReading} flagged={flagged} />;
         case "holders":
           return (
             <>
               <TopHolders
-                snapshot={holders.listReading}
+                snapshot={listReading}
                 flagged={flagged}
                 entries={entries}
                 pending={scanning}
@@ -1020,6 +1056,12 @@ function TokenBody({
       }
     };
     const sideLabel = TERM_VIEWS.find((x) => x.id === side)?.label ?? "";
+    // The row's width less the rail's: what the chart and the column share.
+    const sideMax = Math.max(SIDE_MIN_PX, window.innerWidth - TERM_RAIL_PX - CHART_MIN_W_PX);
+    const plotH =
+      layout.chartH === null
+        ? undefined
+        : Math.min(chartMaxHeight(), Math.max(CHART_MIN_H_PX, layout.chartH));
     return (
       <div className="about-body tm-body tm-term" ref={bodyRef}>
         <header className="tm-head">
@@ -1028,7 +1070,14 @@ function TokenBody({
         </header>
         <div className="tm-term-grid">
           <div className="tm-term-main">
-            <div className={`tm-term-top${side === "none" ? " solo" : side === "map" ? " with-map" : ""}`}>
+            <div
+              className={`tm-term-top${side === "none" ? " solo" : side === "map" ? " with-map" : ""}${layout.sideW !== null ? " sized" : ""}`}
+              style={
+                layout.sideW !== null
+                  ? ({ "--tm-side-w": `${layout.sideW}px` } as React.CSSProperties)
+                  : undefined
+              }
+            >
               <section className="tm-term-chart" aria-label="Chart">
                 <ChartCard
                   card={card}
@@ -1037,16 +1086,38 @@ function TokenBody({
                   alertMcap={alertMcap}
                   what={what}
                   tradeSlot={tradeSlot}
+                  plotHeight={plotH}
                 />
               </section>
               {side !== "none" && (
                 <section
+                  ref={sideRef}
                   className={`tm-term-map tm-side-${side}${side === "map" && holders.isKept ? " at-alert" : ""}`}
                   aria-label={sideLabel}
                 >
+                  <TermSplit
+                    axis="x"
+                    label={`${sideLabel} width`}
+                    value={layout.sideW}
+                    size={() => Math.round(sideRef.current?.getBoundingClientRect().width ?? SIDE_MIN_PX)}
+                    min={SIDE_MIN_PX}
+                    max={sideMax}
+                    onSize={(w, done) => setLayout({ sideW: w }, done)}
+                    onReset={() => setLayout({ sideW: null })}
+                  />
                   <div className="tm-term-map-in">{view(side, true)}</div>
                 </section>
               )}
+              <TermSplit
+                axis="y"
+                label="Chart height"
+                value={plotH ?? null}
+                size={() => plotH ?? terminalChartHeight()}
+                min={CHART_MIN_H_PX}
+                max={chartMaxHeight()}
+                onSize={(h, done) => setLayout({ chartH: h }, done)}
+                onReset={() => setLayout({ chartH: null })}
+              />
             </div>
             <div className="tm-term-tabs">
               <div
@@ -1173,7 +1244,7 @@ function TokenBody({
         <div className={`tm-holders${holders.isKept ? " at-alert" : ""}`}>
           {bubbleMap}
           <TopHolders
-            snapshot={holders.listReading}
+            snapshot={listReading}
             flagged={flagged}
             entries={entries}
             pending={scanning}
@@ -1570,15 +1641,20 @@ function SafetyCard({
  */
 function useHolderReading(card: Card, mint: string, lookup: boolean): Snapshot | null | undefined {
   const seed = linkedReading(card);
-  // Newest first, so the section follows the coin's scans and its "Last updated" means it.
-  const own = [card.latestSnapshot, seed, card.snapshot].find((s) => s && hasHolderList(s)) ?? null;
+  // Newest first, so the section follows the coin's scans and its "Last updated" means it. A newer
+  // scan without a list of its own (an unchanged list rides only some rows, the worker's
+  // holderListWrites.ts) has the coin's newest reading read, not the alert's put back: that froze
+  // "Now" at the alert once the modal's card followed the scans (user ask 2026-10-19).
+  const latest = card.latestSnapshot && hasHolderList(card.latestSnapshot) ? card.latestSnapshot : null;
+  const older = [seed, card.snapshot].find((s) => s && hasHolderList(s)) ?? null;
+  const own = latest ?? (card.latestSnapshot && !lookup ? null : older);
   const [fetched, setFetched] = useState<{ mint: string; snapshot: Snapshot | null } | null>(null);
   const fetch = !own && !lookup;
   useEffect(() => {
     if (!fetch) return;
     let live = true;
     const read = () =>
-      cachedGet<{ snapshots?: Snapshot[] }>(`/tokens/${encodeURIComponent(mint)}`, HOLDER_SCAN_MS)
+      cachedGet<{ snapshots?: Snapshot[] }>(`/tokens/${encodeURIComponent(mint)}`, HOLDER_POLL_MS)
         .then((d) => {
           if (!live) return;
           const snapshot = pickReading(d.snapshots ?? []) ?? null;
@@ -1589,10 +1665,10 @@ function useHolderReading(card: Card, mint: string, lookup: boolean): Snapshot |
         })
         .catch(() => live && setFetched((f) => (f?.mint === mint ? f : { mint, snapshot: seed })));
     void read();
-    // The worker saves a reading each scan: follow it while the view is open.
+    // The worker saves a reading each minute while the map is open: follow it while the view is.
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void read();
-    }, HOLDER_SCAN_MS);
+    }, HOLDER_POLL_MS);
     return () => {
       live = false;
       window.clearInterval(timer);
@@ -1848,6 +1924,24 @@ function HolderFreshness({
   );
 }
 
+/**
+ * The coin's live trades and supply for the holder shares between reads (user ask 2026-10-19):
+ * the feed the chart's trade marks already follow, so the holders add no stream of their own (and
+ * none with the marks off); none for a kept moment, which stands as it was.
+ */
+function useLiveShares(mint: string, kept: boolean): LiveTradeShares | null {
+  const look = useAppearance();
+  const marksOn = look.chartMarks && look.chartMarkKinds.length > 0;
+  const feed = useLiveTrades(useTokenApi(mint), marksOn && !kept);
+  return useMemo(
+    () =>
+      kept || feed.supply === null || feed.history.length === 0
+        ? null
+        : { trades: feed.history, supply: feed.supply },
+    [kept, feed.history, feed.supply],
+  );
+}
+
 /** No traders: the side read asks for nothing. */
 const NO_TRADERS: readonly string[] = [];
 
@@ -1914,6 +2008,7 @@ export function ChartCard({
   alertMcap,
   what,
   tradeSlot,
+  plotHeight,
 }: {
   card: Card;
   chart: { data: TokenChart | null; error: Error | null };
@@ -1925,6 +2020,8 @@ export function ChartCard({
    * there rather than under the chart. Null until the rail is on the page; absent elsewhere.
    */
   tradeSlot?: HTMLElement | null;
+  /** The terminal's plot height the reader dragged it to; absent, the window sets it. */
+  plotHeight?: number;
 }) {
   const api = useTokenApi(card.token.mintAddress);
   // A second source of candles (user asks 2026-10-19): when the API has none for the coin (Pump.fun
@@ -1978,7 +2075,7 @@ export function ChartCard({
     return () => window.removeEventListener("resize", onResize);
   }, []);
   const inTerminal = tradeSlot !== undefined;
-  const height = inTerminal ? terminalChartHeight() : chartHeight(expanded);
+  const height = inTerminal ? (plotHeight ?? terminalChartHeight()) : chartHeight(expanded);
 
   const events = useMemo<ChartEvent[]>(() => {
     const out: ChartEvent[] = [{ t: alertAt, label: what, mcap: alertMcap > 0 ? alertMcap : null }];
@@ -2119,7 +2216,11 @@ export function ChartCard({
       // reach, the coarser ones before - then every live curve change after the newest candle.
       // Without candles, through the scan's readings.
       const runs: (CloseRun & { candles: VolumeCandle[] })[] = fromCandles
-        ? [runOf(data.candles!, 60_000), ...fines]
+        ? [
+            ...(data.older?.length ? [runOf(data.older, OLDER_CANDLE_MS)] : []),
+            runOf(data.candles!, 60_000),
+            ...fines,
+          ]
         : [
             {
               points: data.marketCap
@@ -2482,7 +2583,7 @@ function StaleBadge({ at }: { at: number | null }) {
 function viewBounds(data: TokenChart, range: Range): { from: number; to: number; live: boolean } | null {
   const times = data.candles?.length ? data.candles.map((k) => k.t + 60_000) : data.marketCap.map((p) => p.t);
   if (times.length === 0) return null;
-  const first = Math.min(times[0]!, data.candles?.[0]?.t ?? Infinity);
+  const first = Math.min(times[0]!, data.candles?.[0]?.t ?? Infinity, data.older?.[0]?.t ?? Infinity);
   const last = times[times.length - 1]!;
   const to = Math.max(last, Date.now());
   const from = range === "all" ? first : Math.max(first, to - TRADING_SPAN_MS);
