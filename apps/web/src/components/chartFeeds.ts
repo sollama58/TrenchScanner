@@ -86,7 +86,9 @@ export function useLiveTail(base: string, enabled: boolean): LiveTail {
         });
         if (stopped) return;
         failures = 0;
-        const fresh = a.ticks.filter(([t]) => t > after.current).map(([t, v]) => ({ t, v }));
+        const fresh = a.ticks
+          .filter(([t, v]) => t > after.current && Number.isFinite(v) && v > 0)
+          .map(([t, v]) => ({ t, v }));
         if (fresh.length > 0) after.current = fresh[fresh.length - 1]!.t;
         setTail((prev) => ({
           ticks: fresh.length > 0 ? prev.ticks.concat(fresh).slice(-MAX_TICKS) : prev.ticks,
@@ -142,7 +144,11 @@ export function useFineCandles(base: string, res: "1s" | "15s" | null, everyMs: 
       if (document.visibilityState === "visible") {
         try {
           const data = await api<FineCandles>(`${base}/chart/fine?res=${res}`);
-          if (!stopped) setHeld({ key, data });
+          // An answer with no candles (over budget, upstream paused) keeps the last good page.
+          if (!stopped)
+            setHeld((prev) =>
+              data.candles == null && prev?.key === key && prev.data.candles?.length ? prev : { key, data },
+            );
         } catch {
           // The view keeps its minute candles meanwhile; the next round tries again.
         }

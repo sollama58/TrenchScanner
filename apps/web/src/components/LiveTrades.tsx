@@ -307,7 +307,15 @@ export function LiveTradesCard({
           {count > 0 && feed.trades.length > 0 && (
             <p className="lt-fnote muted small">
               Showing {filtered.length} of {feed.trades.length} trades.{" "}
-              <button type="button" className="lt-link" onClick={() => setFilter(NO_FILTER)}>
+              <button
+                type="button"
+                className="lt-link"
+                onClick={() => {
+                  // Closed too, so the panel's boxes open on the cleared filter, not the old text.
+                  setFilter(NO_FILTER);
+                  setPanel(false);
+                }}
+              >
                 Show all
               </button>
             </p>
