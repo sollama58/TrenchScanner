@@ -483,6 +483,18 @@ export function expectedTokens(
 
 // ---- The wallet's position in a coin ----
 
+/**
+ * Fees saved (user ask 2026-10-19) are counted against a 1% platform fee on each buy and sale: the
+ * highest of the platforms the Portfolio page compares (Axiom, apps/api/src/tradeFees.ts).
+ */
+export const FEE_BASELINE_BPS = 100;
+export const FEE_BASELINE_TEXT = "vs a 1% fee";
+
+/** What a trade of `sizeSol` saves against the baseline fee, less what we charge on it. */
+export function feeSavedSol(sizeSol: number, chargedSol = 0): number {
+  return (sizeSol * FEE_BASELINE_BPS) / 10_000 - chargedSol;
+}
+
 /** GET /pro/trade/:mint/position. Amounts are decimal strings (u64s never go through a float). */
 export interface PositionResponse {
   wallet: string;
@@ -499,6 +511,8 @@ export interface PositionResponse {
     side: "buy" | "sell" | "in" | "out";
     lamports: string;
     tokens: string;
+    /** Made from our Trade panel: its SOL value and what we charged, lamports. Absent from older API builds. */
+    panel?: { lamports: string; platformFeeLamports: string } | null;
   }[];
   historyUnavailable: boolean;
   truncated: boolean;
@@ -589,6 +603,8 @@ export interface PositionSummary {
   lastAt: number | null;
   buys: number;
   sells: number;
+  /** What this position's trades from our Trade panel saved against the baseline fee, SOL. */
+  feesSavedSol: number;
 }
 
 export function summarizePosition(p: PositionResponse, nowMcapUsd: number | null): PositionSummary {
@@ -602,6 +618,7 @@ export function summarizePosition(p: PositionResponse, nowMcapUsd: number | null
     side: t.side,
     lamports: BigInt(t.lamports),
     tokens: BigInt(t.tokens),
+    panel: t.panel ?? null,
   }));
 
   // Walk back from today's balance to the latest buy made into a holding under 1% of that buy:
@@ -688,6 +705,13 @@ export function summarizePosition(p: PositionResponse, nowMcapUsd: number | null
   const entryMcap =
     costedBought > 0 && supply && p.solUsd ? (solIn / (costedBought / scale)) * supply * p.solUsd : null;
   const mine = start === null ? [] : trades.slice(start);
+  const feesSavedSol = mine.reduce(
+    (sum, t) =>
+      t.panel
+        ? sum + feeSavedSol(Number(t.panel.lamports) / 1e9, Number(t.panel.platformFeeLamports) / 1e9)
+        : sum,
+    0,
+  );
   // The held coins' price that makes realized + their value - their cost = 0.
   const costedCoins = costed / scale;
   const evenSol =
@@ -711,6 +735,7 @@ export function summarizePosition(p: PositionResponse, nowMcapUsd: number | null
     lastAt: mine[mine.length - 1]?.t ?? null,
     buys,
     sells,
+    feesSavedSol,
   };
 }
 

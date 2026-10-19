@@ -17192,6 +17192,32 @@ body:has(.util-toast) .bug-fab {
   border: 1.5px solid var(--border-strong);
 }
 /* Small but unmissable: a green pill at the top of the cost box. */
+/* The badge and, beside it, what the trade saves against a 1% fee elsewhere (user ask 2026-10-19). */
+.tm-fee-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.tm-fee-saved {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px dashed color-mix(in srgb, var(--good) 40%, transparent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.tm-fee-saved strong {
+  color: var(--good);
+  font-weight: 750;
+}
+.tm-fee-saved-label,
+.tm-fee-saved-vs {
+  color: var(--muted);
+}
 .tm-fee-zero-badge {
   display: inline-flex;
   align-items: center;

@@ -23,6 +23,9 @@ import {
   type TradeSettings,
   type TradeStage,
   MIN_TRADE_SOL,
+  FEE_BASELINE_BPS,
+  FEE_BASELINE_TEXT,
+  feeSavedSol,
   sacrificeLine,
   type SacrificeView,
 } from "../proTrade";
@@ -317,6 +320,8 @@ function FeeExplainer({
       : [];
   const parts = [...network.map((p) => ({ ...p, rate: "" })), ...swapParts, ...sacrificeParts];
   const total = fee ? parts.reduce((sum, p) => sum + p.sol, 0) : null;
+  // What this trade saves against a 1% platform fee elsewhere, less the Sacrifice when it's charged.
+  const savedSol = sizeSol > 0 ? feeSavedSol(sizeSol, sac?.mode === "on" ? sacSol : 0) : 0;
   const usdText = (sol: number) => {
     const v = sol * (solUsd ?? 0);
     return v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(v < 0.1 ? 3 : 2)}`;
@@ -486,24 +491,36 @@ function FeeExplainer({
           </ul>
         </div>
       </details>
-      {sac?.pays && sac.mode === "on" ? (
-        <span className="tm-fee-sacrifice-badge">
-          <strong>0.2% Sacrifice</strong>
-          <span className="tm-fee-zero-more">
-            paid in burned ASDF credits, free for the top {sac.freeRank} holders
+      <div className="tm-fee-badges">
+        {sac?.pays && sac.mode === "on" ? (
+          <span className="tm-fee-sacrifice-badge">
+            <strong>0.2% Sacrifice</strong>
+            <span className="tm-fee-zero-more">
+              paid in burned ASDF credits, free for the top {sac.freeRank} holders
+            </span>
           </span>
-        </span>
-      ) : (
-        <span className="tm-fee-zero-badge">
-          <CheckIcon size={12} />
-          <strong>0% platform fee</strong>
-          <span className="tm-fee-zero-more">
-            {sac && !sac.pays && sac.reason === "holder"
-              ? `free as a top ${sac.freeRank} holder`
-              : "TrenchScanner takes nothing"}
+        ) : (
+          <span className="tm-fee-zero-badge">
+            <CheckIcon size={12} />
+            <strong>0% platform fee</strong>
+            <span className="tm-fee-zero-more">
+              {sac && !sac.pays && sac.reason === "holder"
+                ? `free as a top ${sac.freeRank} holder`
+                : "TrenchScanner takes nothing"}
+            </span>
           </span>
-        </span>
-      )}
+        )}
+        {savedSol > 0 && (
+          <span
+            className="tm-fee-saved"
+            title={`What this trade saves against a ${FEE_BASELINE_BPS / 100}% platform fee (Axiom's), after any fee taken here`}
+          >
+            <span className="tm-fee-saved-label">Saves</span>
+            <strong className="num">{solText(savedSol)}</strong>
+            <span className="tm-fee-saved-vs">{FEE_BASELINE_TEXT}</span>
+          </span>
+        )}
+      </div>
       {sacLine && <p className="small muted tm-fee-sacrifice-line">{sacLine}</p>}
     </div>
   );
@@ -1295,6 +1312,7 @@ export function TradePanel({
               entryMcap: summary.entryMcap,
               nowMcap,
               nowMcapAt,
+              feesSavedSol: summary.feesSavedSol,
               showAmounts: shareAmounts,
             })
           }

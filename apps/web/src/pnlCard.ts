@@ -211,6 +211,8 @@ export interface PositionCardData {
   nowMcap: number | null;
   /** When nowMcap was read (ms); the card's time. Null or absent: drawn now. */
   nowMcapAt?: number | null;
+  /** What the position's trades from our Trade panel saved in platform fees, SOL (0: none made here). */
+  feesSavedSol?: number;
   /** Show the SOL and dollar amounts, or only the percentages. */
   showAmounts: boolean;
 }
@@ -302,10 +304,14 @@ export async function renderPositionCard(data: PositionCardData): Promise<HTMLCa
     );
   else if (data.entryMcap && data.nowMcap)
     rows.push(["Entry to now", multiple((data.nowMcap / data.entryMcap - 1) * 100)]);
+  // Fees saved (user ask 2026-10-19), against a 1% platform fee (FEE_BASELINE_BPS, proTrade.ts).
+  if (data.showAmounts && data.feesSavedSol && data.feesSavedSol > 0)
+    rows.push(["Fees saved", solFigure(data.feesSavedSol)]);
   const colX = W * 0.66;
   const colW = W - pad - colX;
-  const tileH = 76;
-  const gap = 12;
+  // Five tiles fit above the footer only a little shorter.
+  const tileH = rows.length > 4 ? 64 : 76;
+  const gap = rows.length > 4 ? 10 : 12;
   let y = 150 + Math.max(0, (4 - rows.length) * (tileH + gap)) / 2;
   for (const [label, value] of rows) {
     roundRect(ctx, colX, y, colW, tileH, 14);
