@@ -54,11 +54,11 @@ const ORDER: Record<Exclude<SearchSort, "match">, (a: TokenSearchHit, b: TokenSe
 };
 
 /** The hits to show, in order. Best match keeps the API's order. */
-export function arrangeHits(
-  hits: readonly TokenSearchHit[],
+export function arrangeHits<T extends TokenSearchHit>(
+  hits: readonly T[],
   filter: SearchFilter,
   sort: SearchSort,
-): TokenSearchHit[] {
+): T[] {
   const kept = hits.filter((h) => keep(h, filter));
   return sort === "match" ? kept : kept.sort(ORDER[sort]);
 }

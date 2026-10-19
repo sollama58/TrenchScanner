@@ -5,7 +5,7 @@ import { loadEnv, prisma, type Env } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
-import { matchRank } from "../tokenSearch.js";
+import { clearExternalSearchCache, matchRank, searchUntrackedTokens } from "../tokenSearch.js";
 
 /** GET /tokens/search and /tokens/:mint/card - the Live feed's search window. */
 
@@ -29,7 +29,10 @@ describe("matchRank", () => {
 });
 
 describe.skipIf(!dbAvailable)("GET /tokens/search", () => {
-  const env: Env = dbAvailable ? { ...loadEnv(), ADMIN_WALLET_ADDRESSES: WALLET } : (undefined as never);
+  // Nothing listens there: the outside search answers nothing, at once.
+  const env: Env = dbAvailable
+    ? { ...loadEnv(), ADMIN_WALLET_ADDRESSES: WALLET, DEXSCREENER_BASE_URL: "http://127.0.0.1:9" }
+    : (undefined as never);
   let app: FastifyInstance;
   let cookie = "";
   let userId = "";
@@ -119,5 +122,45 @@ describe.skipIf(!dbAvailable)("GET /tokens/search", () => {
       currentMarketCapUsd: 42_000,
     });
     expect((await get(`/tokens/${MINTS.nobody}/card`)).statusCode).toBe(404);
+  });
+
+  it("finds untracked coins outside, leaving out tracked ones and quote-coin matches", async () => {
+    clearExternalSearchCache();
+    const asked: string[] = [];
+    const reading = (mintAddress: string, symbol: string, liquidityUsd: number) => ({
+      mintAddress,
+      symbol,
+      name: symbol,
+      priceUsd: 1e-5,
+      marketCapUsd: 50_000,
+      liquidityUsd,
+      dexId: "pumpswap",
+    });
+    const search = async (q: string) => {
+      asked.push(q);
+      return [
+        reading(MINTS.exact, "ZQFROG", 1),
+        reading(MINTS.lookedUp, "ZQFROGX", 5),
+        reading(MINTS.nobody, "ZQFROGZ", 9),
+        reading("TokenSearchQuote111111111111111111111111111", "OTHER", 99),
+      ];
+    };
+    const hits = await searchUntrackedTokens(search, { text: "ZQFrog" });
+    // The tracked coin is in the Tracked section; a lookup-only coin isn't tracked, so it's here.
+    expect(hits.map((h) => h.mint)).toEqual([MINTS.nobody, MINTS.lookedUp]);
+    expect(hits[0]).toMatchObject({ graduated: true, marketCapUsd: 50_000, modelCalls: 0 });
+    // A second reader asking the same thing within the minute is answered from the cache.
+    await searchUntrackedTokens(search, { text: "zqfrog" });
+    expect(asked).toEqual(["zqfrog"]);
+    expect((await searchUntrackedTokens(search, { mint: MINTS.nobody })).map((h) => h.mint)).toEqual([
+      MINTS.nobody,
+    ]);
+  });
+
+  it("answers the outside search with the lookup's price and the reader's balance", async () => {
+    const res = await get("/utilities/search?q=zqnothing");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ hits: [], cost: expect.any(Number), balance: expect.any(Number) });
+    expect((await get("/utilities/search")).statusCode).toBe(400);
   });
 });

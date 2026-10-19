@@ -453,6 +453,21 @@ export interface TokenSearchAnswer {
   truncated: boolean;
 }
 
+/** A token TrenchScanner doesn't track, from the search window's outside search (GET /utilities/search). */
+export interface ExternalSearchHit extends TokenSearchHit {
+  /** Why opening it costs nothing for this reader, or null when it is a paid coin lookup. */
+  free: "tracked" | "traded" | "own" | "open" | null;
+}
+
+export interface ExternalSearchAnswer {
+  hits: ExternalSearchHit[];
+  /** A coin lookup's price in Burn Credits. */
+  cost: number;
+  balance: number | null;
+  /** A subscriber's free daily credits left; null without a subscription. */
+  freeLeft: number | null;
+}
+
 /** One feed card - a filter match or a curated alert, which the API serializes alike. */
 export interface Card {
   id: string;
