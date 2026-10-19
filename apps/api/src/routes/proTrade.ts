@@ -57,6 +57,13 @@ import { quoteSacrifice, sacrificeRefusal, sacrificeView, type SacrificeQuote } 
  * and that tips Sender - so it can't be used to push anyone else's traffic on our Helius key.
  */
 
+/** A trade made from our Trade panel, as the position sends it; null for one made anywhere else. */
+function panelTrade(row: { lamports: bigint; platformFeeLamports: bigint } | undefined) {
+  return row
+    ? { lamports: row.lamports.toString(), platformFeeLamports: row.platformFeeLamports.toString() }
+    : null;
+}
+
 /** Whether the Sacrifice is actually taken on this quote: "on", a fee payer, and priced. */
 const charged = (q: SacrificeQuote) => q.mode === "on" && !!q.tier?.pays && q.lamports !== null;
 
@@ -840,6 +847,20 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     ]);
     if (!balance) return null;
     if (tradeCache.size > MAX_CACHED_TRADES) tradeCache.clear();
+    // The trades made from our Trade panel, for the position's fees saved (user ask 2026-10-19).
+    const signatures = (history?.trades ?? []).map((t) => t.signature);
+    const panel = new Map(
+      signatures.length
+        ? (
+            await prisma.platformTrade
+              .findMany({
+                where: { wallet, mint, signature: { in: signatures }, status: { in: ["sent", "confirmed"] } },
+                select: { signature: true, lamports: true, platformFeeLamports: true },
+              })
+              .catch(() => [])
+          ).map((r) => [r.signature, r])
+        : [],
+    );
     const body = {
       wallet,
       mint,
@@ -854,6 +875,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         side: t.side,
         lamports: t.lamports.toString(),
         tokens: t.tokens.toString(),
+        // Made from our Trade panel: its SOL value and what we charged, as tradeFees.ts counts them.
+        panel: panelTrade(panel.get(t.signature)),
       })),
       // The history couldn't be read (the balance could): the chart shows the position without marks.
       historyUnavailable: history === null,
