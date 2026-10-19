@@ -311,7 +311,7 @@ const REFLECTION_COLUMNS: { key: string; label: string; fmt: (v: number) => stri
   { key: "earlyBuyerSoldShare", label: "launch snipers sold %", fmt: (v) => (v * 100).toFixed(0) },
   { key: "devSoldShare", label: "dev sold %", fmt: (v) => (v * 100).toFixed(0) },
   { key: "devHolding", label: "dev still holding", fmt: (v) => (v === 1 ? "y" : "n") },
-  { key: "firstBuyersHolding", label: "first 25 buyers still holding", fmt: (v) => v.toFixed(0) },
+  { key: "firstBuyersHoldingCut", label: "first buyers holding 0.1%+", fmt: (v) => v.toFixed(0) },
   // The wallet stage the brief now carries (aiReview.ts walletLines); the 5-minute trade-stream
   // columns that sat above are gone with the stream (dead since 2026-10-04).
   // A percentile of the wallets scored at the time since 2026-10-16 (data-correctness audit),

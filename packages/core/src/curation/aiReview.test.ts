@@ -2,7 +2,7 @@ import { EMPTY_TRADE_FLOW } from "./tradeFlow.js";
 import { describe, expect, it } from "vitest";
 import {
   AI_REVIEW_SYSTEM_PROMPT,
-  BRIEF_WALLET_FIELDS_BANKED_AS,
+  BRIEF_WALLET_FIELDS,
   MAX_PLAYBOOK_CHARS,
   aiReviewSystemPrompt,
   buildAiReviewBrief,
@@ -183,7 +183,7 @@ describe("AI review brief", () => {
     expect(buildAiReviewBrief(scored, decision)).not.toContain("wallets:");
   });
 
-  it("prints the funding-only KOL Bundled % and creator share the models read, never the transfer-counted ones", () => {
+  it("prints KOL Bundled % and the creator share with transfers counted, as the models read them", () => {
     const withTransfers = {
       ...scored,
       kolTopHolders: 1,
@@ -196,27 +196,22 @@ describe("AI review brief", () => {
       linkedCreatorPctExTransfers: 3,
     } as ScoredToken;
     const brief = buildAiReviewBrief(withTransfers, decision);
-    expect(brief).toContain("with those) 8.0%");
-    expect(brief).toContain("tied to the creator by funding 3.0%");
-    // No fallback: without the funding-only figures they read unknown.
+    expect(brief).toContain("they sent the coin) 20.0%");
+    expect(brief).toContain("tied to the creator by funding or transfers 9.0%");
+    // No fallback: without the figures themselves they read unknown.
     const without = buildAiReviewBrief(
-      { ...withTransfers, kolBundledPctExTransfers: undefined, linkedCreatorPctExTransfers: undefined },
+      { ...withTransfers, kolBundledPct: undefined, linkedCreatorPct: undefined },
       decision,
     );
-    expect(without).toContain("with those) unknown");
-    expect(without).toContain("tied to the creator by funding unknown");
-    // The same line rebuilt from the feature vector, as the replay does, matches the live brief.
+    expect(without).toContain("they sent the coin) unknown");
+    expect(without).toContain("tied to the creator by funding or transfers unknown");
+    // The same lines rebuilt from the feature vector, as the replay does, match the live brief.
     const features = buildCandidateFeatures(withTransfers);
-    expect(features).toMatchObject({ kolBundledPct: 8, linkedCreatorPct: 3 });
-    const replayed = {
-      ...scored,
-      kolTopHolders: 1,
-      linkedWalletCount: 6,
-      linkedWalletPct: 14.2,
-    } as ScoredToken;
-    for (const [k, banked] of Object.entries(BRIEF_WALLET_FIELDS_BANKED_AS)) {
-      const v = features[banked];
-      if (typeof v === "number") replayed[k as keyof typeof BRIEF_WALLET_FIELDS_BANKED_AS] = v;
+    expect(features).toMatchObject({ kolBundledPct: 20, linkedCreatorPct: 9 });
+    const replayed = { ...scored } as ScoredToken;
+    for (const k of BRIEF_WALLET_FIELDS) {
+      const v = features[k];
+      if (typeof v === "number") replayed[k] = v;
     }
     const walletLinesOf = (b: string) =>
       b.split("\n").filter((l) => l.includes("KOL") || l.includes("linked"));
@@ -396,14 +391,17 @@ describe("AI review brief", () => {
   it("prints only the order-flow lines whose figures are known", () => {
     const tradeFlow = {
       ...EMPTY_TRADE_FLOW,
-      firstBuyersHolding: 9,
+      firstBuyersHolding: 20,
+      firstBuyersHoldingCut: 9,
       firstBuyersSupplyPct: 18.25,
       launchBundledBuyers: 4,
       devBuySupplyPct: 2.5,
       firstBuyersSeen: 25,
     };
     const brief = buildAiReviewBrief({ ...scored, tradeFlow } as ScoredToken, decision);
-    expect(brief).toContain("first 25 buyers after launch (dev aside) still holding: 9 of 25");
+    expect(brief).toContain(
+      "first 25 buyers after launch (dev aside) still holding 0.1% of supply or more: 9 of 25",
+    );
     expect(brief).toContain(
       "bought 18.3% of the supply; 4 of them bought in the launch's own slot (bundled)",
     );
