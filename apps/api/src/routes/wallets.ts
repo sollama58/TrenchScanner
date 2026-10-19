@@ -154,8 +154,11 @@ export async function registerWalletRoutes(
     return { ...result, unnamed, rejected, cap: TRACKED_WALLET_CAP };
   });
 
-  /** Which of a file's wallets TrenchScanner already labels, read before an import. */
-  app.post("/tracked/known", { config: { rateLimit: IMPORT_ROUTE_RATE_LIMIT } }, async (request, reply) => {
+  /**
+   * Which of a file's wallets TrenchScanner already labels, read before an import and before each
+   * label added by hand: on the labels' own budget, as the import's would refuse the 7th in a minute.
+   */
+  app.post("/tracked/known", { config: { rateLimit: TRACKED_ROUTE_RATE_LIMIT } }, async (request, reply) => {
     const body = knownSchema.safeParse(request.body);
     if (!body.success)
       return reply.code(400).send({ error: body.error.issues[0]?.message ?? "invalid request" });

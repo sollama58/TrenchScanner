@@ -13,7 +13,6 @@ import {
 } from "@trenchscanner/core";
 import { proStatus } from "../proMode.js";
 import { sharedSolPrice } from "../solPrice.js";
-import { tokenView, type UtilityTokenView } from "./utilities.js";
 
 /**
  * The Portfolio tab (user ask 2026-10-18), for Pro Mode wallets only (user decision 2026-10-18):
@@ -21,8 +20,9 @@ import { tokenView, type UtilityTokenView } from "./utilities.js";
  * signed-in wallet, for its owner alone - every read is keyed on the session's own wallet, nothing takes an address
  * from the request, and the answer is never cached outside the owner's browser.
  *
- *   GET /portfolio        the account, the coins it holds that TrenchScanner tracks, its bot's open
- *                         positions, its trades in tracked coins, and its alerts
+ *   GET /portfolio        the account, its bot's open positions, its trades in tracked coins, and
+ *                         its alerts (the Holdings list left the tab in #797, so nothing reads the
+ *                         chain for it here)
  *   GET /portfolio/held   just the tracked coins it holds, as token ids: what Live's "Always show
  *                         coins you hold" keeps on Cards and Scope past the viewer's own filters
  *
@@ -32,39 +32,19 @@ import { tokenView, type UtilityTokenView } from "./utilities.js";
  * mintOnFeed's rule: on Token, and not only because someone looked it up), so nothing here gives
  * away a paid lookup. The rest of the wallet's coins are counted, never named.
  *
- * Credits (Helius): the holdings are the only chain read - getBalance and two
+ * Credits (Helius): /held's holdings are the only chain read - getBalance and two
  * getTokenAccountsByOwner, a credit each - and one reading is reused for HOLDINGS_TTL_MS per wallet.
  * Prices come from the scanner's own rows; nothing else is asked of anyone.
  */
 
 const HOLDINGS_TTL_MS = 5 * 60_000;
-/** Held coins listed (by value), each with a card that opens the token modal. */
-const HOLDINGS_SHOWN = 30;
 /** Held coins worth less than this many SOL are dust: left out of the list and the totals (user ask 2026-10-18). */
 const HOLDINGS_MIN_SOL = 0.01;
 /** Mints matched against Token from one wallet: a wallet full of dust can't make the read huge. */
 const HOLDINGS_MINTS_MAX = 500;
-/** Tracked coins valued from one wallet (two reads each). */
-const HOLDINGS_TRACKED_MAX = 100;
 const TAPE_COINS = 20;
 const BOT_POSITIONS = 50;
 const LAMPORTS_PER_SOL = 1e9;
-
-export interface PortfolioHolding {
-  mint: string;
-  symbol: string | null;
-  name: string | null;
-  imageUrl: string | null;
-  amount: number;
-  priceUsd: number | null;
-  valueUsd: number | null;
-  marketCapUsd: number | null;
-  /** When the price was read (a live tick or the newest scan). */
-  pricedAt: Date | null;
-  /** The first model alert on the coin, if any. */
-  firstAlert: { at: Date; modelName: string | null } | null;
-  card: UtilityTokenView["card"] | null;
-}
 
 type Reading = { at: number; lamports: bigint | null; balances: WalletBalance[] | null };
 
@@ -124,71 +104,56 @@ export async function registerPortfolioRoutes(app: FastifyInstance, opts: { env:
     if (!pro.pro) return reply.code(404).send({ error: "not found" });
     const since7 = new Date(Date.now() - 7 * 86_400_000);
     const since30 = new Date(Date.now() - 30 * 86_400_000);
-    const [
-      user,
-      access,
-      credits,
-      lookups30d,
-      burns,
-      filters,
-      alerts,
-      chats,
-      devices,
-      risk,
-      bot,
-      tape,
-      held,
-      sol,
-    ] = await Promise.all([
-      prisma.user.findUniqueOrThrow({
-        where: { id: userId },
-        select: { createdAt: true, feedModels: true, followBestModel: true, showModelAlerts: true },
-      }),
-      request.access ?? resolveAccess(wallet, admins),
-      creditBalance(wallet),
-      // Lookups, not rows: one that drew on two pots of credits is a row per pot at the same time.
-      prisma.$queryRaw<{ n: bigint }[]>`
+    const [user, access, credits, lookups30d, burns, filters, alerts, chats, devices, risk, bot, tape, sol] =
+      await Promise.all([
+        prisma.user.findUniqueOrThrow({
+          where: { id: userId },
+          select: { createdAt: true, feedModels: true, followBestModel: true, showModelAlerts: true },
+        }),
+        request.access ?? resolveAccess(wallet, admins),
+        creditBalance(wallet),
+        // Lookups, not rows: one that drew on two pots of credits is a row per pot at the same time.
+        prisma.$queryRaw<{ n: bigint }[]>`
         SELECT COUNT(DISTINCT ("utility", "subject", "createdAt")) AS n FROM "BurnCreditEntry"
         WHERE "wallet" = ${wallet} AND "kind" = 'spend' AND "createdAt" > ${since30}`,
-      prisma.burnEvent.aggregate({
-        where: { burnerWallet: wallet },
-        _count: { _all: true },
-        _sum: { monthsCredited: true },
-      }),
-      prisma.userFilter.groupBy({
-        by: ["isActive"],
-        where: { userId, deletedAt: null },
-        _count: { _all: true },
-      }),
-      alertSummary(userId, since7, since30),
-      prisma.telegramChat.count({ where: { userId } }),
-      prisma.linkedDevice.count({ where: { userId, revokedAt: null } }),
-      prisma.walletRisk.findUnique({
-        where: { wallet },
-        select: { score: true, appearances: true, wins: true, dumper: true, winner: true, sniper: true },
-      }),
-      prisma.tradingPosition.findMany({
-        where: { userId, status: { in: ["buying", "open", "stuck"] } },
-        orderBy: { createdAt: "desc" },
-        take: BOT_POSITIONS,
-        select: {
-          id: true,
-          mint: true,
-          symbol: true,
-          status: true,
-          sourceLabel: true,
-          swapInLamports: true,
-          proceedsLamports: true,
-          lastMultiple: true,
-          highMultiple: true,
-          lastPricedAt: true,
-          openedAt: true,
-        },
-      }),
-      tapeActivity(wallet),
-      walletReading(wallet),
-      solPrice.get(),
-    ]);
+        prisma.burnEvent.aggregate({
+          where: { burnerWallet: wallet },
+          _count: { _all: true },
+          _sum: { monthsCredited: true },
+        }),
+        prisma.userFilter.groupBy({
+          by: ["isActive"],
+          where: { userId, deletedAt: null },
+          _count: { _all: true },
+        }),
+        alertSummary(userId, since7, since30),
+        prisma.telegramChat.count({ where: { userId } }),
+        prisma.linkedDevice.count({ where: { userId, revokedAt: null } }),
+        prisma.walletRisk.findUnique({
+          where: { wallet },
+          select: { score: true, appearances: true, wins: true, dumper: true, winner: true, sniper: true },
+        }),
+        prisma.tradingPosition.findMany({
+          where: { userId, status: { in: ["buying", "open", "stuck"] } },
+          orderBy: { createdAt: "desc" },
+          take: BOT_POSITIONS,
+          select: {
+            id: true,
+            mint: true,
+            symbol: true,
+            status: true,
+            sourceLabel: true,
+            swapInLamports: true,
+            proceedsLamports: true,
+            lastMultiple: true,
+            highMultiple: true,
+            lastPricedAt: true,
+            openedAt: true,
+          },
+        }),
+        tapeActivity(wallet),
+        solPrice.get(),
+      ]);
 
     const active = filters.find((f) => f.isActive)?._count._all ?? 0;
     const inactive = filters.find((f) => !f.isActive)?._count._all ?? 0;
@@ -213,7 +178,6 @@ export async function registerPortfolioRoutes(app: FastifyInstance, opts: { env:
         telegramChats: chats,
         linkedDevices: devices,
       },
-      holdings: held ? await holdingsView(held, sol) : null,
       botPositions: bot.map((p) => ({
         id: p.id,
         mint: p.mint,
@@ -297,112 +261,6 @@ export async function registerPortfolioRoutes(app: FastifyInstance, opts: { env:
       .map((t) => t.id);
     return { tokenIds, readAt: r && chain ? new Date(r.at) : null };
   });
-
-  /** The coins held that the scanner tracks, valued from its own prices, and a count of the rest. */
-  async function holdingsView(r: Reading, sol: number | null) {
-    const balances = r.balances ?? [];
-    const mints = balances.slice(0, HOLDINGS_MINTS_MAX).map((b) => b.mint);
-    const tokens = mints.length
-      ? await prisma.token.findMany({
-          where: { mintAddress: { in: mints } },
-          select: {
-            id: true,
-            mintAddress: true,
-            symbol: true,
-            name: true,
-            imageUrl: true,
-            discoverySource: true,
-            livePriceUsd: true,
-            liveMarketCapUsd: true,
-            liveDataAt: true,
-          },
-        })
-      : [];
-    // A coin only looked up counts as tracked once a model or a filter alerted on it (mintOnFeed).
-    const lookedUp = tokens.filter((t) => t.discoverySource === "utility").map((t) => t.id);
-    const [lookedUpCalls, lookedUpMatches] = lookedUp.length
-      ? await Promise.all([
-          prisma.curatedAlert.groupBy({ by: ["tokenId"], where: { tokenId: { in: lookedUp } } }),
-          prisma.match.groupBy({ by: ["tokenId"], where: { tokenId: { in: lookedUp } } }),
-        ])
-      : [[], []];
-    const alerted = new Set([...lookedUpCalls, ...lookedUpMatches].map((x) => x.tokenId));
-    const trackedAll = tokens.filter((t) => t.discoverySource !== "utility" || alerted.has(t.id));
-    const tracked = trackedAll.slice(0, HOLDINGS_TRACKED_MAX);
-    // The newest scan and the first model alert of each, one indexed read apiece.
-    const [snaps, firstCalls] = await Promise.all([
-      Promise.all(
-        tracked.map((t) =>
-          prisma.tokenSnapshot.findFirst({
-            where: { tokenId: t.id },
-            orderBy: { takenAt: "desc" },
-            select: { takenAt: true, priceUsd: true, marketCapUsd: true },
-          }),
-        ),
-      ),
-      Promise.all(
-        tracked.map((t) =>
-          prisma.curatedAlert.findFirst({
-            where: { tokenId: t.id },
-            orderBy: { createdAt: "asc" },
-            select: { createdAt: true, modelName: true },
-          }),
-        ),
-      ),
-    ]);
-    const snapOf = new Map(tracked.map((t, i) => [t.id, snaps[i]]));
-    const callOf = new Map(tracked.map((t, i) => [t.id, firstCalls[i]]));
-    const balanceOf = new Map(balances.map((b) => [b.mint, b]));
-
-    const rows = tracked.map((t) => {
-      const b = balanceOf.get(t.mintAddress)!;
-      const amount = Number(b.raw) / 10 ** b.decimals;
-      const snap = snapOf.get(t.id);
-      // The newer of the live tick and the newest scan.
-      const live = t.livePriceUsd && t.liveDataAt ? { at: t.liveDataAt, price: t.livePriceUsd } : null;
-      const scanned = snap?.priceUsd ? { at: snap.takenAt, price: snap.priceUsd } : null;
-      const pick = live && (!scanned || live.at >= scanned.at) ? live : scanned;
-      const mcap = pick === live ? (t.liveMarketCapUsd ?? null) : (snap?.marketCapUsd ?? null);
-      const call = callOf.get(t.id);
-      return {
-        mint: t.mintAddress,
-        symbol: t.symbol,
-        name: t.name,
-        imageUrl: t.imageUrl,
-        amount,
-        priceUsd: pick?.price ?? null,
-        valueUsd: pick ? pick.price * amount : null,
-        marketCapUsd: mcap,
-        pricedAt: pick?.at ?? null,
-        firstAlert: call ? { at: call.createdAt, modelName: call.modelName } : null,
-        card: null as PortfolioHolding["card"],
-      };
-    });
-    // Unpriced coins can't be shown to clear the minimum, so they count as dust too. Without a SOL
-    // price the minimum can't be applied, so only unpriced coins are dropped.
-    const minUsd = sol ? HOLDINGS_MIN_SOL * sol : 0;
-    const kept = rows.filter((h) => h.valueUsd !== null && h.valueUsd >= minUsd);
-    kept.sort((a, b) => b.valueUsd! - a.valueUsd!);
-    const shown = kept.slice(0, HOLDINGS_SHOWN);
-    const views = await Promise.all(shown.map((h) => tokenView(h.mint, new Date())));
-    shown.forEach((h, i) => (h.card = views[i]?.card ?? null));
-    const solHeld = r.lamports !== null ? Number(r.lamports) / LAMPORTS_PER_SOL : null;
-    const trackedUsd = kept.reduce((s, h) => s + (h.valueUsd ?? 0), 0);
-    return {
-      readAt: new Date(r.at),
-      sol: solHeld,
-      solValueUsd: solHeld !== null && sol ? solHeld * sol : null,
-      coins: shown satisfies PortfolioHolding[],
-      /** Tracked coins worth at least HOLDINGS_MIN_SOL (past HOLDINGS_TRACKED_MAX, unvalued ones count too). */
-      trackedCoins: kept.length + (trackedAll.length - tracked.length),
-      trackedValueUsd: trackedUsd,
-      /** Tracked coins held below HOLDINGS_MIN_SOL, or with no price: counted, not shown. */
-      dust: rows.length - kept.length,
-      minSol: HOLDINGS_MIN_SOL,
-      /** Coins in the wallet the scanner doesn't track: counted, not shown. */
-      untracked: balances.length - trackedAll.length,
-    };
-  }
 }
 
 /** The owner's filter alerts over 7 and 30 days: how many, how many reached 2x, and the best one. */
