@@ -37,6 +37,10 @@ vi.mock("@trenchscanner/core", async (importOriginal) => {
         ? { seen: true as const, confirmed: true, error: null }
         : { seen: false as const };
     }
+    // The resend loop reads them all at once.
+    override async getSignatureStatuses(signatures: string[]) {
+      return Promise.all(signatures.map((s) => this.getSignatureStatus(s)));
+    }
   }
   return { ...core, TradingRpc: ChainRpc, sendViaSender: vi.fn(async () => ({ ok: true as const })) };
 });

@@ -84,8 +84,14 @@ describe("runTrade", () => {
       h.now += signs === 1 ? SIGN_FRESH_MS + 1_000 : 2_000;
       return [{ signedTransaction: signed(signs) }];
     });
+    let builds = 0;
+    h.api.mockImplementation(async (path: string) =>
+      path === "/pro/trade/build" ? { ...built, buildToken: `token-${++builds}` } : { state: "confirmed" },
+    );
     const stages: string[] = [];
     await expect(runTrade(input, (s) => stages.push(s))).resolves.toBe("sig");
+    // The fresh build's token goes with the fresh signature.
+    expect((h.post.mock.calls[0]![1] as { buildToken?: string }).buildToken).toBe("token-2");
     expect(h.api.mock.calls.filter(([p]) => p === "/pro/trade/build")).toHaveLength(2);
     expect(stages.slice(0, 4)).toEqual(["building", "signing", "building", "signing"]);
     expect(h.post).toHaveBeenCalledTimes(1);
