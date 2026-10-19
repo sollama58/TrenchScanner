@@ -477,6 +477,14 @@ function fail(userId: string): void {
   if (failures.size > 50_000) failures.clear();
 }
 
+/** Takes back one try counted by fail() (a check that errored rather than answered). */
+function unfail(userId: string): void {
+  const f = failures.get(userId);
+  if (!f) return;
+  if (f.count <= 1) failures.delete(userId);
+  else f.count--;
+}
+
 /** Tests: forget failed attempts. */
 export function resetTwoFactorFailuresForTests(): void {
   failures.clear();
@@ -492,12 +500,24 @@ export async function checkSecondFactor(
   origin?: string,
 ): Promise<CheckResult> {
   if (lockedOut(userId)) return { ok: false, reason: "Too many wrong tries. Wait 15 minutes and try again." };
-  const ok = await check(env, userId, factor, origin);
+  // Counted as a wrong try BEFORE the check, in the same tick as the lockout test above, and
+  // taken back if it matches. Counting after the awaited check let a burst of guesses sent at
+  // once all pass the lockout test before any of them was counted, so the five-tries cap held
+  // only for guesses sent one at a time: a stolen session (or a sign-in ticket) could try
+  // hundreds of codes per 15 minutes by sending them in parallel.
+  fail(userId);
+  let ok: boolean;
+  try {
+    ok = await check(env, userId, factor, origin);
+  } catch (err) {
+    // A database error is no wrong code: the try is taken back, and the error stands.
+    unfail(userId);
+    throw err;
+  }
   if (ok) {
     failures.delete(userId);
     return { ok: true };
   }
-  fail(userId);
   return { ok: false, reason: "That didn't match. Try again." };
 }
 

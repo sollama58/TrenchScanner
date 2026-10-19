@@ -4,7 +4,7 @@ import { z } from "zod";
 import { prisma, type Env } from "@trenchscanner/core";
 import { TOKEN_CARD_SELECT, withCarriedHolderLists, withLatestSnapshots } from "../curatedFeed.js";
 import { SharedCacheMap } from "../sharedCache.js";
-import { currentMarketCap, tokenSearchParam } from "./matches.js";
+import { allowTextSearch, currentMarketCap, tokenSearchParam } from "./matches.js";
 import { LIVE_TICK_MAX_TOKENS } from "./live.js";
 
 /**
@@ -243,7 +243,13 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
     const graduated = parsed.data.graduated === "1";
     const page = mint ? 1 : parsed.data.page;
     const g = graduated ? "grad:" : "";
-    // A typed search isn't cached: a run of keystrokes would push the Stream's own pages out.
+    // A typed search isn't cached (a run of keystrokes would push the Stream's own pages out), so it
+    // spends the feed's text search budget like every other %text% read (API audit 2026-10-19):
+    // unbudgeted, one account could run a graduated page-10 search, thousands of candidates deep,
+    // as fast as the global limit allowed.
+    if (q && !mint && !allowTextSearch(request.user!.userId)) {
+      return reply.code(429).send({ error: "Too many searches; wait a few seconds and try again." });
+    }
     const answer =
       q && !mint
         ? await readLaunches(page, undefined, q, graduated)

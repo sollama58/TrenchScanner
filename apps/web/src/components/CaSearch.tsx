@@ -26,7 +26,6 @@ import {
   type SearchSort,
 } from "../tokenSearch";
 import { TokenImage } from "./TokenImage";
-import { QuickTrade } from "./QuickTrade";
 import {
   CheckIcon,
   ChefHatIcon,
@@ -130,6 +129,10 @@ function SortMenu({
     </div>
   );
 }
+
+// The trade window for a coin found outside the feed, with its Trade panel and the trading code
+// behind it: loaded the first time a coin is opened to trade, not with the first screen.
+const QuickTrade = lazy(() => import("./QuickTrade").then((m) => ({ default: m.QuickTrade })));
 
 // A paid lookup's view is the Utilities tab's own, loaded the first time one is opened from here.
 const UtilityTokenModal = lazy(() =>
@@ -773,23 +776,25 @@ export function SearchModal({ open, onClose, now }: { open: boolean; onClose: ()
         </div>
       </div>
       {trading && (
-        <QuickTrade
-          key={trading}
-          mint={trading}
-          hit={extraHits.find((h) => h.mint === trading) ?? null}
-          searching={outside.state === "loading" || (outside.state === "idle" && !!search)}
-          searchError={outside.state === "error" ? outside.message : null}
-          onSearchAgain={searchOutsideAgain}
-          scanPrice={priceOf(trading)}
-          scanning={opening === trading}
-          scanError={scanError}
-          onScan={() => void lookUp(trading)}
-          onClose={() => {
-            setTrading(null);
-            input.current?.focus();
-          }}
-          now={now}
-        />
+        <Suspense fallback={<p className="muted small">Opening the coin…</p>}>
+          <QuickTrade
+            key={trading}
+            mint={trading}
+            hit={extraHits.find((h) => h.mint === trading) ?? null}
+            searching={outside.state === "loading" || (outside.state === "idle" && !!search)}
+            searchError={outside.state === "error" ? outside.message : null}
+            onSearchAgain={searchOutsideAgain}
+            scanPrice={priceOf(trading)}
+            scanning={opening === trading}
+            scanError={scanError}
+            onScan={() => void lookUp(trading)}
+            onClose={() => {
+              setTrading(null);
+              input.current?.focus();
+            }}
+            now={now}
+          />
+        </Suspense>
       )}
       {lookedUp && (
         <Suspense fallback={null}>

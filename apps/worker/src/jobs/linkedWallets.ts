@@ -296,15 +296,18 @@ export async function resolveLinkedWallets(
       rememberHot(f, hot, now);
       rows.push({ address: f, fullPageSpanMs: a.fullPageSpanMs, hot, checkedAt: new Date(now) });
     }
-    for (const r of rows) {
+    // One statement for the cycle's verdicts (up to the lookup budget), not one upsert each.
+    if (rows.length > 0) {
       try {
-        await prisma.funderActivity.upsert({
-          where: { address: r.address },
-          create: r,
-          update: { fullPageSpanMs: r.fullPageSpanMs, hot: r.hot, checkedAt: r.checkedAt },
-        });
+        await prisma.$executeRaw`
+          INSERT INTO "FunderActivity" ("address", "fullPageSpanMs", "hot", "checkedAt")
+          VALUES ${Prisma.join(rows.map((r) => Prisma.sql`(${r.address}, ${r.fullPageSpanMs}, ${r.hot}, ${r.checkedAt})`))}
+          ON CONFLICT ("address") DO UPDATE SET
+            "fullPageSpanMs" = EXCLUDED."fullPageSpanMs",
+            "hot" = EXCLUDED."hot",
+            "checkedAt" = EXCLUDED."checkedAt"`;
       } catch (err) {
-        logger.warn("failed to store funder activity", { funder: r.address, error: String(err) });
+        logger.warn("failed to store funder activity", { funders: rows.length, error: String(err) });
       }
     }
   }
