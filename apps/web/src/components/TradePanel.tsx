@@ -12,6 +12,8 @@ import {
   useFeeEstimate,
   useSwapCosts,
   expectedTokens,
+  expectedSol,
+  useSaleQuote,
   runTrade,
   saveTradeSettings,
   TradeError,
@@ -740,6 +742,9 @@ export function TradePanel({
     sellUnits !== null && !sellTooMuch && summary?.valueSol != null && balance > 0n
       ? (summary.valueSol * Number(sellUnits)) / Number(balance)
       : null;
+  // The SOL the sale would get, by the route's quote into SOL whatever the coin's pair (PUMP, USDC).
+  const saleQuote = useSaleQuote(buyOnly ? null : mint, sellTooMuch ? null : sellUnits);
+  const expectedOut = sellTooMuch ? null : expectedSol(sellUnits, saleQuote, sellWorthSol);
   const sellCustom = () => {
     if (sellUnits === null || sellTooMuch || sellTokens === null) return;
     const all = sellUnits === balance;
@@ -1082,6 +1087,19 @@ export function TradePanel({
                 </button>
               </div>
               {sellTooMuch && <p className="small tm-amount-note">That&apos;s more than you hold.</p>}
+              {expectedOut && (
+                <p
+                  className="small muted num tm-expect"
+                  title={
+                    expectedOut.quoted
+                      ? "What this sale would get at the route's price now, before slippage"
+                      : "An estimate at the latest price; the exact quote follows in a moment"
+                  }
+                >
+                  ≈ {solText(expectedOut.sol)}
+                  {expectedOut.quoted ? "" : " (est.)"}
+                </p>
+              )}
             </div>
           )}
         </div>

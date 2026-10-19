@@ -460,6 +460,64 @@ export function useSwapCosts(mint: string | null, refSol: number): SwapCostEstim
   return costs;
 }
 
+/** GET /pro/trade/sale-quote: what a sale of `units` raw coins would get, lamports. */
+export interface SaleQuote {
+  units: string;
+  outLamports: string;
+}
+
+/**
+ * The route's quote for a sale of `units` raw coins of `mint` into SOL (GET /pro/trade/sale-quote),
+ * once the amount has settled, re-read every minute. The last quote is kept while a new amount
+ * waits, so the preview can scale it. Null `mint` or `units`: nothing is quoted.
+ */
+export function useSaleQuote(mint: string | null, units: bigint | null): SaleQuote | null {
+  const [quote, setQuote] = useState<SaleQuote | null>(null);
+  const wanted = units !== null && units > 0n ? units.toString() : null;
+  const [ref, setRef] = useState(wanted);
+  useEffect(() => {
+    if (wanted === ref) return;
+    const t = setTimeout(() => setRef(wanted), QUOTE_SETTLE_MS);
+    return () => clearTimeout(t);
+  }, [wanted, ref]);
+  useEffect(() => {
+    if (!mint || !ref) return;
+    let live = true;
+    const load = () =>
+      api<SaleQuote>(`/pro/trade/sale-quote?${new URLSearchParams({ mint, units: ref })}`)
+        .then((q) => live && setQuote(q))
+        .catch(() => undefined);
+    void load();
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, 60_000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [mint, ref]);
+  return quote;
+}
+
+/**
+ * The SOL a sale of `units` raw coins is expected to get: the route's quote when it was made on
+ * this amount; else that quote scaled to it, or (without one) `worthSol`, the coins' share of the
+ * position's value at today's price, while the amount waits to be quoted. Null when nothing is known.
+ */
+export function expectedSol(
+  units: bigint | null,
+  quote: SaleQuote | null,
+  worthSol: number | null,
+): { sol: number; quoted: boolean } | null {
+  if (units === null || units <= 0n) return null;
+  if (quote && BigInt(quote.units) > 0n && /^\d+$/.test(quote.outLamports)) {
+    const out = Number(BigInt(quote.outLamports)) / 1e9;
+    if (quote.units === units.toString()) return { sol: out, quoted: true };
+    return { sol: (Number(units) / Number(BigInt(quote.units))) * out, quoted: false };
+  }
+  return worthSol !== null && worthSol > 0 ? { sol: worthSol, quoted: false } : null;
+}
+
 /**
  * The coins a buy of `lamports` is expected to get, whole coins: the route's quote when it was made
  * on this amount; else the price that quote filled at (or, without one, today's price `priceSol`,

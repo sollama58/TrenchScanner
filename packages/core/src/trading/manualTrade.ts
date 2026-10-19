@@ -503,3 +503,18 @@ export async function estimateSwapCosts(
     decimals: typeof mintInfo?.decimals === "number" ? mintInfo.decimals : null,
   };
 }
+
+/**
+ * The SOL a sale of `units` raw coins would get by the route Jupiter would take now, lamports,
+ * before slippage; null without a route. Quoted into SOL whatever the coin's pool trades against
+ * (a PUMP or USDC pair is routed on to SOL), so it reads like the Buy side's expected coins.
+ */
+export async function estimateSaleProceeds(
+  deps: { jupiter: Pick<ManualTradeJupiter, "quote"> },
+  input: { mint: string; units: bigint },
+): Promise<bigint | null> {
+  const quote = await deps.jupiter
+    .quote({ inputMint: input.mint, outputMint: WSOL_MINT, amount: input.units, slippageBps: 500 })
+    .catch(() => null);
+  return quote && /^\d+$/.test(String(quote.outAmount)) ? BigInt(quote.outAmount) : null;
+}

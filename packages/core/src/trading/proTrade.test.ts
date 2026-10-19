@@ -26,6 +26,7 @@ import {
   checkJupiterFloor,
   estimateManualFees,
   estimateSwapCosts,
+  estimateSaleProceeds,
   routeFeeBps,
   TOKEN_2022_ACCOUNT_RENT_LAMPORTS,
   LIGHTHOUSE_PROGRAM,
@@ -691,5 +692,35 @@ describe("swap costs", () => {
       outAmount: null,
       decimals: null,
     });
+  });
+});
+
+describe("estimateSaleProceeds", () => {
+  it("quotes the coins into SOL, and says nothing without a route", async () => {
+    let asked: { inputMint: string; outputMint: string; amount: bigint } | null = null;
+    const out = await estimateSaleProceeds(
+      {
+        jupiter: {
+          quote: async (q) => {
+            asked = q;
+            return { outAmount: "123456789" } as never;
+          },
+        },
+      },
+      { mint: MINT, units: 5_000n },
+    );
+    expect(out).toBe(123_456_789n);
+    expect(asked).toMatchObject({ inputMint: MINT, outputMint: WSOL, amount: 5_000n });
+    const none = await estimateSaleProceeds(
+      {
+        jupiter: {
+          quote: async () => {
+            throw new Error("no route");
+          },
+        },
+      },
+      { mint: MINT, units: 5_000n },
+    );
+    expect(none).toBeNull();
   });
 });
