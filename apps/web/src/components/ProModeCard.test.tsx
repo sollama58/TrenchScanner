@@ -18,6 +18,7 @@ const funds = (
     accounts: [],
   },
   error: null,
+  at: Date.now(),
   reload: () => {},
 });
 

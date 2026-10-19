@@ -89,6 +89,11 @@ export class SolPrice {
     return this.value?.source ?? null;
   }
 
+  /** When the price in use was read (ISO), so a screen can say it is old once every source has failed for a while. */
+  readAt(): string | null {
+    return this.value ? new Date(this.value.at).toISOString() : null;
+  }
+
   private async refresh(): Promise<number | null> {
     for (const s of this.sources) {
       try {
@@ -106,6 +111,12 @@ export class SolPrice {
     return this.value?.usd ?? null;
   }
 }
+
+/**
+ * The api's one SOL price: every route and the live chart share it, so they agree and only one
+ * of them asks the providers each minute.
+ */
+export const sharedSolPrice = new SolPrice();
 
 /** A quote coin's USD price and decimals (QuotePrice.get). */
 export interface QuoteUsd {

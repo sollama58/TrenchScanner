@@ -69,6 +69,27 @@ export function ago(iso: string | Date | null | undefined, now = Date.now()): st
   return `${Math.floor(h / 24)}d ago`;
 }
 
+/** An open position's price is this old before its row says so (the bots reprice every scan cycle). */
+export const PRICED_STALE_MS = 3 * 60_000;
+
+/**
+ * "priced 12m ago" for an open position whose last price is PRICED_STALE_MS or older, "not priced
+ * yet" without one; null while it is current.
+ */
+export function pricedAgeText(at: string | null | undefined, now = Date.now()): string | null {
+  if (!at) return "not priced yet";
+  return now - new Date(at).getTime() >= PRICED_STALE_MS ? `priced ${ago(at, now)}` : null;
+}
+
+/** A SOL price this old is named with its age where dollar figures use it (the api refreshes it every minute). */
+export const SOL_PRICE_STALE_MS = 5 * 60_000;
+
+/** "12m ago" for a SOL price read SOL_PRICE_STALE_MS or longer ago; null while current or unknown. */
+export function solUsdAgeText(at: string | null | undefined, now = Date.now()): string | null {
+  if (!at) return null;
+  return now - new Date(at).getTime() >= SOL_PRICE_STALE_MS ? ago(at, now) : null;
+}
+
 /** How far off a future moment is: "in 5m", "in 3h", "in 2d"; "now" once it has passed. */
 export function until(iso: string | Date | null | undefined, now = Date.now()): string {
   if (!iso) return "never";

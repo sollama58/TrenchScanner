@@ -6,8 +6,9 @@ import { shortAddress } from "./format";
  * The names holder and wallet lists show in place of an address (POST /wallets/names): a KOL's
  * name, else Helius's identity name, else TrenchScanner's exchange label. A Pump.fun username
  * shows in quotes ("NAME"), tinted light green (the `pumpfun-name` class in styles.css). Each list asks once for
- * the wallets it shows that aren't known yet; answers are kept for the session, so a list opened
- * again (or another list with the same wallets) asks nothing.
+ * the wallets it shows that aren't known yet; answers are kept for NAME_TTL_MS (a "no name" for
+ * NO_NAME_TTL_MS), so a list opened again (or another list with the same wallets) asks nothing
+ * until then. An older answer still shows while it is asked again.
  */
 
 export interface WalletName {
@@ -32,8 +33,19 @@ const ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 /** The API's most wallets per read. */
 const MAX_PER_READ = 200;
 
-/** Answers so far: a name, or null for a wallet with none. */
-const known = new Map<string, WalletName | null>();
+/** How long a name is trusted before a list asks again: a KOL or a label can be renamed. */
+export const NAME_TTL_MS = 30 * 60_000;
+/** A "no name" answer, shorter: a wallet gets a name (a label, a Pump.fun username) more often than it loses one. */
+export const NO_NAME_TTL_MS = 10 * 60_000;
+
+/** Answers so far: a name, or null for a wallet with none, and when it was read. */
+const known = new Map<string, { name: WalletName | null; at: number }>();
+
+/** Whether `w`'s answer is missing or old enough to ask again. */
+function due(w: string, now: number): boolean {
+  const k = known.get(w);
+  return !k || now - k.at >= (k.name ? NAME_TTL_MS : NO_NAME_TTL_MS);
+}
 const asking = new Set<string>();
 const listeners = new Set<() => void>();
 let version = 0;
@@ -45,9 +57,11 @@ function notify() {
   for (const l of listeners) l();
 }
 
-async function load(wallets: readonly string[]) {
+/** Asks the API for the names of `wallets` that aren't known yet or are due again. */
+export async function loadWalletNames(wallets: readonly string[]): Promise<void> {
   if (closed) return;
-  const ask = wallets.filter((w) => !known.has(w) && !asking.has(w)).slice(0, MAX_PER_READ);
+  const now = Date.now();
+  const ask = wallets.filter((w) => due(w, now) && !asking.has(w)).slice(0, MAX_PER_READ);
   if (ask.length === 0) return;
   for (const w of ask) asking.add(w);
   try {
@@ -57,7 +71,8 @@ async function load(wallets: readonly string[]) {
     // A wallet the API didn't get to read this time (its budget ran out) isn't "no name": it is
     // left unknown, so the list asks again the next time it opens.
     const unread = new Set(res.unread ?? []);
-    for (const w of ask) if (!unread.has(w)) known.set(w, res.names?.[w] ?? null);
+    const at = Date.now();
+    for (const w of ask) if (!unread.has(w)) known.set(w, { name: res.names?.[w] ?? null, at });
     notify();
   } catch (err) {
     // A failed read is asked again next time the list opens; no access means never.
@@ -81,13 +96,13 @@ export function useWalletNames(wallets: readonly (string | null | undefined)[]):
   );
   const v = useSyncExternalStore(subscribe, () => version);
   useEffect(() => {
-    if (key) void load(key.split(","));
+    if (key) void loadWalletNames(key.split(","));
   }, [key]);
   return useMemo(() => {
     const out: Record<string, WalletName> = {};
     if (!key) return out;
     for (const w of key.split(",")) {
-      const n = known.get(w);
+      const n = known.get(w)?.name;
       if (n) out[w] = n;
     }
     return out;
