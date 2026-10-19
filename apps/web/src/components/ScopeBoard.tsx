@@ -33,7 +33,7 @@ import {
   type ScopeColumns,
   type ScopeFrame,
 } from "../scope";
-import { nowReading, nowReadingAge, QuotePill, recordedPeakOf, socialLinks } from "./AlertCard";
+import { feeBadge, nowReading, nowReadingAge, QuotePill, recordedPeakOf, socialLinks } from "./AlertCard";
 import { QuickBuyPill } from "./QuickBuyPill";
 import { TokenImage } from "./TokenImage";
 import { FilterGlyph } from "./FilterBadge";
@@ -433,32 +433,6 @@ function emptyText(
     : "No graduated token has passed the safety screen in the last day.";
 }
 
-/** A chip that copies `text` (the contract address) and says so for a moment. */
-function CopyChip({
-  text,
-  className,
-  title,
-  children,
-}: {
-  text: string;
-  className: string;
-  title: string;
-  children: React.ReactNode;
-}) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    void navigator.clipboard?.writeText(text).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1200);
-    });
-  };
-  return (
-    <button type="button" className={`${className} scope-chip-copy`} title={title} onClick={copy}>
-      {copied ? <span className="scope-chip-label">Copied</span> : children}
-    </button>
-  );
-}
-
 /** Placeholder rows for a column whose data is still on its way. */
 function ScopeRowSkeletons() {
   return (
@@ -515,6 +489,13 @@ export function ScopeRow({
   const open = () => {
     if (!preview) openTokenModal(card, now, true);
   };
+  const [copied, setCopied] = useState(false);
+  const copyCa = () => {
+    void navigator.clipboard?.writeText(card.token.mintAddress).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    });
+  };
   const onClick = (e: React.MouseEvent) => {
     if (e.defaultPrevented || e.button !== 0) return;
     if ((e.target as Element).closest?.(OWN_CLICK)) return;
@@ -543,6 +524,7 @@ export function ScopeRow({
   const alertedAt = curated?.alertedAt ?? card.matchedAt;
   const ageMs = now - Date.parse(card.kind === "match" ? card.matchedAt : alertedAt);
   const socials = d.showSocials ? socialLinks(card.token) : [];
+  const fees = d.showFees ? feeBadge(card.token.creatorFee) : null;
   const label = tokenLabel(card.token);
   const high = calls.some((c) => c.tier === "high") || curated?.tier === "high";
   const models =
@@ -591,15 +573,31 @@ export function ScopeRow({
       </div>
       <div className="scope-main">
         <div className="scope-title">
-          <button
-            type="button"
-            className="scope-symbol"
-            onClick={open}
-            title={`${label}: open the token's chart and details`}
-          >
-            {label}
-          </button>
+          {d.tickerCopiesCa ? (
+            <button
+              type="button"
+              className="scope-symbol copy"
+              onClick={copyCa}
+              title={`Copy ${label}'s contract address: ${card.token.mintAddress}`}
+            >
+              {label}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="scope-symbol"
+              onClick={open}
+              title={`${label}: open the token's chart and details`}
+            >
+              {label}
+            </button>
+          )}
           <QuotePill token={card.token} className="scope-quote" />
+          {copied && (
+            <span className="scope-copied" role="status">
+              Copied
+            </span>
+          )}
           {d.showName && card.token.name && card.token.symbol && (
             <span className="scope-name" title={card.token.name}>
               {card.token.name}
@@ -610,6 +608,15 @@ export function ScopeRow({
           {d.showAge && (
             <span className={`scope-age num${d.highlightNew && ageMs < 60_000 ? " new" : ""}`}>
               {shortAge(ageMs)}
+            </span>
+          )}
+          {fees && (
+            <span
+              className={`fee-badge scope-fee fee-${fees.kind}`}
+              title={fees.title}
+              aria-label={fees.title}
+            >
+              <fees.Icon size={12} />
             </span>
           )}
           {filter && showSource && (
@@ -672,18 +679,6 @@ export function ScopeRow({
         <div className="scope-chips">
           {chips.map((c) => {
             const tl = tileLook(tiles, c.tone, c.risky);
-            if (c.copy)
-              return (
-                <CopyChip
-                  key={c.id}
-                  text={c.copy}
-                  className={`scope-chip ${tl.className ?? ""}`}
-                  title={c.title}
-                >
-                  <span className="scope-chip-label">{c.short}</span>
-                  <span className="num">{c.value}</span>
-                </CopyChip>
-              );
             return (
               <span
                 key={c.id}

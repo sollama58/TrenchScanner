@@ -2,7 +2,6 @@ import type { Card } from "./api";
 import {
   ageNow,
   cardReadings,
-  feeBadge,
   countCutFor,
   newestStats,
   nowReading,
@@ -14,7 +13,7 @@ import {
   SAFETY_REJECT_SNIPER_WALLET_PCT,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
 } from "./components/AlertCard";
-import { change, minutes, pct, shortAddress, usd } from "./format";
+import { change, minutes, pct, usd } from "./format";
 import { cardOutcome, outcomeBadge } from "./outcome";
 import { cardCalibratedRate } from "./rates";
 import {
@@ -47,7 +46,6 @@ export type ScopeChip =
   | "liquidity"
   | "vol24h"
   | "age"
-  | "fees"
   | "score"
   | "modelScore"
   | "conviction"
@@ -56,8 +54,7 @@ export type ScopeChip =
   | "alertMcap"
   | "peak"
   | "ath"
-  | "result"
-  | "mint";
+  | "result";
 
 export interface ChipReading {
   value: string;
@@ -66,8 +63,6 @@ export interface ChipReading {
   tone: number | null;
   /** Fails the safety screen's cut (or the tile's red bound). */
   risky: boolean;
-  /** Text the chip copies when clicked (the contract address) instead of opening the coin. */
-  copy?: string;
 }
 
 type Readings = ReturnType<typeof cardReadings>;
@@ -334,29 +329,6 @@ export const SCOPE_CHIP_DEFS: {
     },
   },
   {
-    id: "fees",
-    label: "Creator fees",
-    short: "Fees",
-    group: "Token",
-    read: (c) => {
-      const fee = feeBadge(c.token.creatorFee);
-      return fee ? { value: FEE_WORDS[fee.kind], title: fee.title, tone: null, risky: false } : null;
-    },
-  },
-  {
-    id: "mint",
-    label: "Contract address",
-    short: "CA",
-    group: "Token",
-    read: (c) => ({
-      value: shortAddress(c.token.mintAddress),
-      title: "Copy the contract address",
-      tone: null,
-      risky: false,
-      copy: c.token.mintAddress,
-    }),
-  },
-  {
     id: "alertMcap",
     label: "Market cap at alert",
     short: "At",
@@ -490,14 +462,6 @@ function peakOf(c: Card): number | null {
   const { pct: recorded } = recordedPeakOf(c);
   return move !== null && move > 0 ? Math.max(recorded ?? 0, move) : recorded;
 }
-
-/** The fee chip's word for where the creator fee goes (feeBadge's kinds). */
-const FEE_WORDS: Record<NonNullable<ReturnType<typeof feeBadge>>["kind"], string> = {
-  charity: "charity",
-  rewards: "holders",
-  github: "GitHub",
-  dev: "dev",
-};
 
 export const SCOPE_CHIP_IDS: ScopeChip[] = SCOPE_CHIP_DEFS.map((c) => c.id);
 

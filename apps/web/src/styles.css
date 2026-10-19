@@ -20633,10 +20633,32 @@ dialog.tm-modal.tm-terminal::backdrop {
 .hidden-tokens-all {
   margin-top: 10px;
 }
-/* Scope's contract-address chip copies the address instead of opening the coin. */
-.scope-chip-copy {
-  font-family: inherit;
+/* Scope's ticker copies the contract address (user ask 2026-10-19); "Copied" shows beside it. */
+.scope-symbol.copy {
   cursor: copy;
+}
+.scope-copied {
+  align-self: center;
+  flex: none;
+  color: var(--good-ink);
+  font-size: calc(10.5px * var(--scope-t, 1));
+  font-weight: 700;
+  animation: scope-copied 1.2s ease-out forwards;
+}
+@keyframes scope-copied {
+  70% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+/* The cards' creator fee icon on a Scope row, beside the age; no FEES word, so it stays small. */
+.scope-fee {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
 }
 
 /* "as of 14:05" on a cached report (components/AsOf.tsx). */

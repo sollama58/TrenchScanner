@@ -23,10 +23,25 @@ describe("splitScope", () => {
     expect(cols.graduated.map((c) => c.id)).toEqual(["g1"]);
   });
 
-  it("shows a filter alert a model call folded into in both columns", () => {
-    const cols = splitScope([card("m1", "match", true)], []);
+  it("shows a token a filter and a model both alerted on only in the column that alerted first", () => {
+    const both = (matchedAt: string, alertedAt: string) =>
+      ({ ...card("m1", "match"), matchedAt, curated: { alertId: "a", alertedAt } }) as Card;
+    let cols = splitScope([both("2026-10-19T01:00:00Z", "2026-10-19T01:05:00Z")], []);
     expect(cols.filters.map((c) => c.id)).toEqual(["m1"]);
+    expect(cols.models).toEqual([]);
+    cols = splitScope([both("2026-10-19T01:05:00Z", "2026-10-19T01:00:00Z")], []);
+    expect(cols.filters).toEqual([]);
     expect(cols.models.map((c) => c.id)).toEqual(["m1"]);
+    // Separate cards for one token: the model's call came first, so the filter's alert stays out.
+    const filterAlert = { ...card("m2", "match", false, "t-x"), matchedAt: "2026-10-19T01:05:00Z" } as Card;
+    const modelCall = {
+      ...card("c2", "curated", false, "t-x"),
+      matchedAt: "2026-10-19T01:00:00Z",
+      curated: { alertId: "c2", alertedAt: "2026-10-19T01:00:00Z" },
+    } as Card;
+    cols = splitScope([filterAlert, modelCall], []);
+    expect(cols.filters).toEqual([]);
+    expect(cols.models.map((c) => c.id)).toEqual(["c2"]);
   });
 });
 
