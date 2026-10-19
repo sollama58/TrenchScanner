@@ -2205,9 +2205,11 @@ model ProTrade {
   wallet    String
   signature String
   mint      String
-  /// "buy" (the coin in, SOL out) | "sell" (the coin out, SOL in).
+  /// "buy" (the coin in, SOL out) | "sell" (the coin out, SOL in) | "out" (the coin sent away,
+  /// nothing paid for it: lamports null).
   side      String
-  /// The wallet's SOL change for it, lamports (wrapped SOL and fees included; negative on a buy).
+  /// The wallet's SOL change for it, lamports (wrapped SOL and fees included, token-account rent
+  /// left out; negative on a buy).
   /// Null when it paid or was paid in another coin (USDC, USDT).
   lamports  BigInt?
   /// The wallet's change in the coin, raw units (negative on a sale), and the coin's decimals.
