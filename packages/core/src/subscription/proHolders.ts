@@ -29,8 +29,10 @@ export const PRO_HOLDER_GRACE_MS = 24 * 60 * 60_000;
  */
 export const PRO_HOLDER_QUALIFY_MS = 0;
 /**
- * A newest scan older than this means the scans have stopped (Helius down, the job off): its
- * wallets then count down a grace period from it rather than keep Pro Mode with no end.
+ * A newest scan older than this means the scans have stopped (Helius down, the job off). Its
+ * wallets keep Pro Mode until the scans resume (user decision 2026-10-19): an outage is not the
+ * holder's doing, and with no sell-only access a lapse would leave them unable to sell. Only a
+ * scan that finds a wallet out of the top 250 starts its grace period.
  */
 export const PRO_HOLDER_STALE_MS = 60 * 60_000;
 /**
@@ -230,12 +232,13 @@ export async function proHolderStanding(wallet: string, now = new Date()): Promi
           qualifiesAt: new Date(row.inTopSince.getTime() + PRO_HOLDER_QUALIFY_MS),
         };
   if (!qualified) return { state: "none" };
-  if (inLatest && !stale) return { state: "top", rank: row.rank };
+  // In the newest scan: Pro Mode, even while the scans have stopped (PRO_HOLDER_STALE_MS).
+  if (inLatest) return { state: "top", rank: row.rank };
   if (movedBag(row)) return { state: "none" };
-  // Dropped out, or the scans have stopped: a day from the last scan it was in.
+  // Dropped out: a day from the last scan it was in.
   const graceEndsAt = new Date(row.lastInTopAt.getTime() + PRO_HOLDER_GRACE_MS);
   return graceEndsAt > now
-    ? { state: "grace", rank: row.rank, graceEndsAt, stale: inLatest }
+    ? { state: "grace", rank: row.rank, graceEndsAt, stale: false }
     : { state: "none" };
 }
 
@@ -316,7 +319,7 @@ export async function proHolderSummary(now = new Date()) {
     }),
   ]);
   const stale = now.getTime() - latest.getTime() > PRO_HOLDER_STALE_MS;
-  // In the newest scan and held for an hour: Pro Mode now (while the scans run).
+  // In the newest scan and qualified: Pro Mode now, and while the scans are stopped.
   const top = scan.map((h) => ({
     walletAddress: h.walletAddress,
     rank: h.rank,
@@ -332,7 +335,7 @@ export async function proHolderSummary(now = new Date()) {
     .slice(0, 200);
   return {
     scannedAt: latest,
-    /** The scans have stopped: the newest one's wallets are counting down a grace period. */
+    /** The scans have stopped: the newest one's wallets keep Pro Mode until they resume. */
     stale,
     inTop: top.filter((h) => h.qualifiesAt === null).length,
     /** In the newest scan, not for an hour yet. */
