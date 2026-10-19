@@ -530,6 +530,13 @@ export interface Card {
   id: string;
   /** "stream": a token on the Stream (GET /launches) - no filter caught it and no model called it. */
   kind: "match" | "curated" | "stream";
+  /**
+   * A Stream card from the Graduated list: its time and market cap are its first pass after
+   * graduating, and `firstPass` is when it first passed the screen in the band (absent from API
+   * builds before 2026-10-19).
+   */
+  streamEntry?: "graduated";
+  firstPass?: { at: string; mcapUsd: number | null } | null;
   tokenId: string;
   matchedAt: string;
   score: number;

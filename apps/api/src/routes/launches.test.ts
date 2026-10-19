@@ -195,11 +195,21 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
       cookies: { [SESSION_COOKIE_NAME]: cookie },
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { launches: { tokenId: string; snapshot: { marketCapUsd: number } }[] };
+    const body = res.json() as {
+      launches: {
+        tokenId: string;
+        snapshot: { marketCapUsd: number };
+        streamEntry?: string;
+        firstPass?: { mcapUsd: number } | null;
+      }[];
+    };
     const mine = body.launches.filter((c) => Object.values(ids).includes(c.tokenId));
     // oldGrad was never seen on its curve: not freshly graduated.
     expect(mine.map((c) => c.tokenId)).toEqual([ids.grad]);
     expect(mine[0]?.snapshot.marketCapUsd).toBe(90_000);
+    // Its first pass on the curve rides along, so the card can say when it really passed.
+    expect(mine[0]?.streamEntry).toBe("graduated");
+    expect(mine[0]?.firstPass?.mcapUsd).toBe(30_000);
   });
 
   it("is behind sign-in like the feeds", async () => {

@@ -726,7 +726,9 @@ function TokenBody({
   const what = utility
     ? "Scanned"
     : card.kind === "stream"
-      ? "Passed screen"
+      ? card.streamEntry === "graduated"
+        ? "Graduated"
+        : "Passed screen"
       : card.kind === "curated"
         ? "Model alert"
         : "Alert";
@@ -892,7 +894,15 @@ function TokenBody({
   const figs = (
     <section className="tm-figs" aria-label="Market cap">
       <div className="tm-fig">
-        <label>{utility ? "At scan" : what === "Passed screen" ? "At screen" : "At alert"}</label>
+        <label>
+          {utility
+            ? "At scan"
+            : what === "Passed screen"
+              ? "At screen"
+              : what === "Graduated"
+                ? "At graduation"
+                : "At alert"}
+        </label>
         <span className="num">{usd(alertMcap)}</span>
       </div>
       <div className={`tm-fig${nowAge !== null ? " aged" : ""}`}>
@@ -2079,6 +2089,11 @@ export function ChartCard({
 
   const events = useMemo<ChartEvent[]>(() => {
     const out: ChartEvent[] = [{ t: alertAt, label: what, mcap: alertMcap > 0 ? alertMcap : null }];
+    // A graduated coin's first pass in the band, which the line is coloured from when nothing
+    // alerted it first (user report 2026-10-19: it passed at $12K, not at graduation's $65.5K).
+    const pass = card.firstPass ? Date.parse(card.firstPass.at) : NaN;
+    if (Number.isFinite(pass) && pass < alertAt - 30_000)
+      out.push({ t: pass, label: "Passed screen", mcap: card.firstPass!.mcapUsd });
     // Every other model that called it, once each, at its own call time - on a filter alert a
     // call folded into, its call(s) too.
     const curated = card.curated;
@@ -2092,8 +2107,9 @@ export function ChartCard({
       if (!Number.isFinite(t) || Math.abs(t - alertAt) < 30_000) continue;
       out.push({ t, label: c.modelName ?? "Model" });
     }
-    return out;
-  }, [alertAt, alertMcap, what, card.kind, card.curated]);
+    // Earliest first: the chart marks the first as the lead and colours the line from it.
+    return out.sort((a, b) => a.t - b.t);
+  }, [alertAt, alertMcap, what, card.kind, card.curated, card.firstPass]);
 
   // Labeled wallets' trades on the line (user ask 2026-10-18), as set in Customize › Chart wallet
   // trades, which the header's link opens over the token view.
