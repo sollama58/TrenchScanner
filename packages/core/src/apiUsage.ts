@@ -17,7 +17,8 @@ const logger = createLogger("api-usage");
  * rows. Helius bills per RPC call, not per HTTP request (a batch of 80 is 80 calls), so "calls"
  * is the billable unit and "requests" the HTTP count; credits use HELIUS_CREDITS below.
  *
- * Not counted: the PumpPortal websocket (one long-lived socket, not per-call) and the database.
+ * Helius websockets count themselves (HeliusAccountStream.metered: endpoint "websocket", credits
+ * from the bytes received). Not counted: the PumpPortal websocket and the database.
  */
 
 const BUCKET_MS = 5 * 60_000;
@@ -193,13 +194,16 @@ export function classifyApiRequest(url: string, httpMethod: string, body: unknow
   const provider = providerOf(parsed.hostname);
   const methods = rpcMethods(body);
   if (methods) {
+    // Helius Sender (sender.helius-rpc.com, regional ones like ewr-sender.helius-rpc.com) bills no
+    // credits: the trade panel's resends every 2 s read as ~38 credits a trade (audit 2026-10-19).
+    const billed = provider === "helius" && !/(^|[.-])sender\.helius-rpc\.com$/.test(parsed.hostname);
     const byMethod = new Map<string, number>();
     for (const m of methods) byMethod.set(m, (byMethod.get(m) ?? 0) + 1);
     return [...byMethod].map(([method, calls]) => ({
       provider,
       endpoint: method,
       calls,
-      credits: provider === "helius" ? calls * heliusCredits(method) : 0,
+      credits: billed ? calls * heliusCredits(method) : 0,
     }));
   }
   const endpoint = `${httpMethod} ${normalizePath(parsed.pathname)}`;
@@ -368,6 +372,59 @@ function requestParts(input: Parameters<typeof fetch>[0], init?: RequestInit) {
   return { url: input.url, method: init?.method ?? input.method ?? "GET", body: init?.body };
 }
 
+/**
+ * How long every billed Helius call stands down once Helius says the plan's credits are used up
+ * (a 429 "max usage reached"; a plain 429 is a rate limit and passes). Without it every stage kept
+ * firing every 30 s into the same refusal and the scan still reported success. After the pause
+ * calls go through again: answered, Helius is back; refused, the pause starts over.
+ */
+export const HELIUS_CREDITS_OUT_PAUSE_MS = 15 * 60_000;
+const heliusOut = { since: 0, until: 0 };
+
+/** When this process last heard Helius's credits were out and until when it stands down; null if not now. */
+export function heliusCreditsOut(now = Date.now()): { since: Date; until: Date } | null {
+  return now < heliusOut.until
+    ? { since: new Date(heliusOut.since), until: new Date(heliusOut.until) }
+    : null;
+}
+
+/** Ends a stand-down (a test, or an admin who topped up the plan). */
+export function clearHeliusCreditsOut(): void {
+  heliusOut.since = 0;
+  heliusOut.until = 0;
+}
+
+function latchCreditsOut(now: number) {
+  if (now >= heliusOut.until) {
+    if (heliusOut.until === 0 || now - heliusOut.until > HELIUS_CREDITS_OUT_PAUSE_MS) heliusOut.since = now;
+    logger.error("Helius credits used up; standing down Helius calls", {
+      minutes: HELIUS_CREDITS_OUT_PAUSE_MS / 60_000,
+    });
+  }
+  heliusOut.until = now + HELIUS_CREDITS_OUT_PAUSE_MS;
+}
+
+/** Whether a 429 is Helius's "max usage reached" (credits out), read from a copy of the body. */
+async function saysCreditsOut(res: Response): Promise<boolean> {
+  try {
+    return /max usage reached/i.test(await res.clone().text());
+  } catch {
+    return false;
+  }
+}
+
+/** What a billed Helius call gets while standing down: the same 429 Helius would send, unsent. */
+function standingDown(): Response {
+  return new Response(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32429, message: "max usage reached (standing down)" },
+    }),
+    { status: 429, headers: { "content-type": "application/json" } },
+  );
+}
+
 /** The fetch() wrapper: counts the request, then hands it on untouched. */
 export function meteredFetch(inner: typeof fetch): typeof fetch {
   return async (input, init) => {
@@ -379,9 +436,12 @@ export function meteredFetch(inner: typeof fetch): typeof fetch {
     } catch {
       lines = null;
     }
+    const billedHelius = !!lines?.some((l) => l.provider === "helius" && l.credits > 0);
     const startedAt = Date.now();
+    if (billedHelius && startedAt < heliusOut.until) return standingDown();
     try {
       const res = await inner(input, init);
+      if (billedHelius && res.status === 429 && (await saysCreditsOut(res))) latchCreditsOut(Date.now());
       if (lines) {
         apiUsageMeter.record(lines, {
           requests: 1,

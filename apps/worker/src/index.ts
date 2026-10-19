@@ -281,7 +281,7 @@ async function main() {
           (key, data, bytes) => {
             if (key.startsWith(CURVE_STREAM_KEY_PREFIX)) onCurveStreamUpdate(key, data, bytes);
           },
-        )
+        ).metered("stream/holders-curves-burns")
       : null;
   heliusStream?.start();
   if (heliusStream && burnStreamOn) heliusStream.watch(BURN_STREAM_KEY, [SUBSCRIPTION_MINT]);

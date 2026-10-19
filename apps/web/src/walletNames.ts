@@ -47,6 +47,13 @@ function due(w: string, now: number): boolean {
   return !k || now - k.at >= (k.name ? NAME_TTL_MS : NO_NAME_TTL_MS);
 }
 const asking = new Set<string>();
+/**
+ * A wallet the API didn't read yet (its few misses wait up to a minute to share one Helius call,
+ * or the budget ran out) is asked again this long after, at most UNREAD_RETRIES times in a row.
+ */
+export const UNREAD_RETRY_MS = 65_000;
+const UNREAD_RETRIES = 3;
+const retries = new Map<string, number>();
 const listeners = new Set<() => void>();
 let version = 0;
 /** Set once the API says this visitor can't read names (a guest), so lists stop asking. */
@@ -68,12 +75,19 @@ export async function loadWalletNames(wallets: readonly string[]): Promise<void>
     const res = await post<{ names?: Record<string, WalletName>; unread?: string[] }>("/wallets/names", {
       wallets: ask,
     });
-    // A wallet the API didn't get to read this time (its budget ran out) isn't "no name": it is
-    // left unknown, so the list asks again the next time it opens.
+    // A wallet the API didn't get to read this time (queued for the next batch, or its budget ran
+    // out) isn't "no name": it is left unknown and asked again shortly, or when the list opens again.
     const unread = new Set(res.unread ?? []);
     const at = Date.now();
-    for (const w of ask) if (!unread.has(w)) known.set(w, { name: res.names?.[w] ?? null, at });
+    for (const w of ask) {
+      if (unread.has(w)) continue;
+      known.set(w, { name: res.names?.[w] ?? null, at });
+      retries.delete(w);
+    }
     notify();
+    const again = [...unread].filter((w) => (retries.get(w) ?? 0) < UNREAD_RETRIES);
+    for (const w of again) retries.set(w, (retries.get(w) ?? 0) + 1);
+    if (again.length > 0) setTimeout(() => void loadWalletNames(again), UNREAD_RETRY_MS);
   } catch (err) {
     // A failed read is asked again next time the list opens; no access means never.
     if (err instanceof ApiError && (err.status === 401 || err.status === 402 || err.status === 403))
@@ -204,6 +218,7 @@ export const isKolLike = (n: WalletName | null | undefined): boolean =>
 export function resetWalletNames() {
   known.clear();
   asking.clear();
+  retries.clear();
   closed = false;
   notify();
 }

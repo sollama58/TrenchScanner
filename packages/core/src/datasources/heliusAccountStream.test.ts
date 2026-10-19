@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { apiUsageMeter } from "../apiUsage.js";
 import { HeliusAccountStream } from "./heliusAccountStream.js";
 
 /*
@@ -121,6 +122,26 @@ describe("HeliusAccountStream logs keys", () => {
     );
     expect(onAccount).toHaveBeenCalledTimes(1);
     expect(onLogs).not.toHaveBeenCalled();
+    stream.stop();
+  });
+});
+
+describe("HeliusAccountStream metering", () => {
+  it("counts a metered socket's bytes and connections as Helius credits in API usage", () => {
+    apiUsageMeter.take();
+    const stream = new HeliusAccountStream(
+      "wss://example",
+      vi.fn(),
+      FakeSocket as unknown as new (url: string) => WebSocket,
+    ).metered("stream/test");
+    stream.start();
+    FakeSocket.last!.open(); // 1 credit
+    // 120 KB: 2.4 credits, 2 whole now and 0.4 carried.
+    for (let i = 0; i < 12; i += 1) stream.handleMessage("x".repeat(10_000));
+    const rows = apiUsageMeter.take().filter((r) => r.feature === "stream/test");
+    expect(rows.every((r) => r.provider === "helius" && r.endpoint === "websocket")).toBe(true);
+    expect(rows.reduce((n, r) => n + r.counter.credits, 0)).toBe(3);
+    expect(rows.reduce((n, r) => n + r.counter.calls, 0)).toBe(12);
     stream.stop();
   });
 });

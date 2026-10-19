@@ -37,7 +37,10 @@ describe.skipIf(!dbAvailable)("loadWalletNames", () => {
     }));
     return {
       batch,
-      reader: new WalletIdentityReader({ identity: vi.fn(), batchIdentity: batch }, { perUserPerMinute }),
+      reader: new WalletIdentityReader(
+        { identity: vi.fn(), batchIdentity: batch },
+        { perUserPerMinute, batchWaitMs: 0 },
+      ),
     };
   };
 

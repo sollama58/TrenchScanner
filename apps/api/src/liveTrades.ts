@@ -439,7 +439,7 @@ export function liveTradesFor(
               undefined,
               null,
               (key, signature, logs, _bytes, slot) => onLogs(key, signature, logs, slot),
-            )
+            ).metered("stream/live-trades")
         : null,
     solPrice,
     quotePrice,
