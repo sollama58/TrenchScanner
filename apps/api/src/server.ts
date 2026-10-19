@@ -648,6 +648,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   const walletIdentity = env.HELIUS_API_KEY
     ? new WalletIdentityReader(new HeliusIdentityClient(env.HELIUS_API_KEY), {}, prismaIdentityStore())
     : null;
+  app.addHook("onClose", async () => walletIdentity?.stop());
   await app.register(registerWalletRoutes, {
     prefix: "/wallets",
     env,

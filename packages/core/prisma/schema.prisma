@@ -2969,6 +2969,18 @@ model ExitPlanRescore {
 /// moment a seat called it, or a sampled uncalled decision moment): what the per-wallet rows in
 /// TokenWalletActivity and the stop causes on CandidateOutcome were built from. One row per coin;
 /// a coin is read once, after its reference row is final. See apps/worker/src/jobs/tradeTapeJob.ts.
+/// The trade tape's reads in progress (worker tradeTapeJob.ts), one row per lane ("helius",
+/// "pumpFun"): saved at shutdown, taken back and deleted by the next process's first run, so a
+/// deploy doesn't restart a coin's read from its first page. No relation: a coin gone by then is
+/// simply not taken back.
+model TradeTapeProgress {
+  lane    String   @id
+  tokenId String
+  /// The lane's read: the coin, the trades so far, the cursor.
+  data    Json
+  savedAt DateTime @default(now())
+}
+
 model TokenTradeTape {
   tokenId String @id
   token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
@@ -2983,7 +2995,8 @@ model TokenTradeTape {
   /// after the anchor is still right. "failed": no usable read (retried after retryAt).
   status    String
   /// "helius" (getTransactionsForAddress on the mint) or "pumpfun" (Pump.fun's trade API). On a
-  /// failed row, "helius:busy" is a coin too busy for Helius, left to Pump.fun for good.
+  /// failed row, "helius:busy" is a coin too busy for Helius from its launch (read newest first,
+  /// or by Pump.fun), and "helius:failed" one Helius failed on twice, left to Pump.fun for good.
   source    String?
   windowEnd DateTime
   launchAt  DateTime?
@@ -3229,7 +3242,6 @@ model ApiUsage {
   msTotal     BigInt   @default(0)
 
   @@id([bucket, process, provider, endpoint, feature])
-  @@index([bucket])
 }
 
 /// Solana Tracker's roster of known KOL wallets, read once a day by the worker's kol-wallets job
@@ -3508,7 +3520,8 @@ model PeakWatch {
   /// The coin's first and latest alert (a model call or a filter alert) in the window.
   firstAlertAt DateTime
   lastAlertAt  DateTime
-  /// When to read its candles next: sooner while it trades (nextPeakCheckDelayMs).
+  /// When to read its candles next: sooner while it trades (nextPeakCheckDelayMs). 9999-01-01
+  /// once past its tracking window (parked, candlePeaks.ts), until a new alert brings it back.
   nextCheckAt  DateTime
   lastCheckedAt DateTime?
   /// The start of its latest minute with a trade, as of the last read.

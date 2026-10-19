@@ -1,4 +1,4 @@
-import type { WalletIdentityReader } from "./walletIdentity.js";
+import type { IdentityUserKey, WalletIdentityReader } from "./walletIdentity.js";
 import {
   loadKolLabeledSides,
   loadPossibleSides,
@@ -453,8 +453,12 @@ export async function loadWalletProfile(
   identity: WalletIdentityReader | null = null,
   /** The reader's labels (trackedWallets.ts activeTracked): their ties and their own label show. */
   tracked: readonly TrackedWallet[] = [],
+  /** Who opened it: Helius's identity read counts against their share. */
+  user?: IdentityUserKey,
 ): Promise<WalletProfile> {
-  const identityRead = identity ? identity.labels(wallet).catch(() => []) : Promise.resolve([]);
+  const identityRead = identity
+    ? identity.labels(wallet, Date.now(), user).catch(() => [])
+    : Promise.resolve([]);
   const sidesRead = Promise.all([
     loadPossibleSides([wallet]).catch(() => ({}) as Record<string, PossibleSide[]>),
     loadTrackedSides(tracked, [wallet]).catch(() => ({}) as Record<string, PossibleSide[]>),

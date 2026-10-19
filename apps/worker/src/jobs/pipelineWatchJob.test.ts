@@ -6,6 +6,7 @@ import { JobFailure, SHUTDOWN_INTERRUPTED_ERROR } from "../scheduler.js";
 import {
   clearedKeys,
   findCapacityProblems,
+  findCreditProblems,
   findProblems,
   findSideJobProblems,
   findTrainerProblems,
@@ -142,6 +143,18 @@ describe("pipeline watch: what counts as stalled", () => {
         NOW,
       ),
     ).toEqual([]);
+  });
+
+  it("flags Helius's credits running out, without a restart or banner", () => {
+    expect(findCreditProblems(null)).toEqual([]);
+    const out = findCreditProblems({
+      since: new Date("2026-10-19T04:05:00Z"),
+      until: new Date("2026-10-19T04:20:00Z"),
+    });
+    expect(out.map((p) => p.key)).toEqual(["helius-credits"]);
+    expect(out[0]!.side).toBe(true);
+    expect(out[0]!.text).toContain("Helius credits used up since 04:05 UTC");
+    expect(notificationText(out, [], out)).toMatch(/^<b>⚠️ TrenchScanner scanner jobs need a look<\/b>/);
   });
 
   it("flags the database once it passes the disk warning line, and not with the check off", () => {

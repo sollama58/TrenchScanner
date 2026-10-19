@@ -842,7 +842,7 @@ export function liveCurvesFor(
               () => {},
               undefined,
               (key, data, _bytes, slot) => onAccount(key, data, slot),
-            )
+            ).metered("stream/live-curve")
         : null,
     reader: enabled ? reader : null,
     solPrice,

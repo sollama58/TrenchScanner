@@ -4,6 +4,9 @@ import {
   answeredStatus,
   apiUsageMeter,
   classifyApiRequest,
+  clearHeliusCreditsOut,
+  HELIUS_CREDITS_OUT_PAUSE_MS,
+  heliusCreditsOut,
   flushApiUsage,
   meteredFetch,
   nameApiHost,
@@ -55,6 +58,21 @@ describe("classifyApiRequest", () => {
     expect(lines).toEqual([
       { provider: "solana-public-rpc", endpoint: "getSignaturesForAddress", calls: 1, credits: 0 },
     ]);
+  });
+
+  it("charges nothing for sends through Helius Sender, the global host or a regional one", () => {
+    for (const url of [
+      "https://sender.helius-rpc.com/fast?api-key=k",
+      "http://ewr-sender.helius-rpc.com/fast",
+    ]) {
+      expect(classifyApiRequest(url, "POST", rpcBody("sendTransaction"))).toEqual([
+        { provider: "helius", endpoint: "sendTransaction", calls: 1, credits: 0 },
+      ]);
+    }
+    expect(
+      classifyApiRequest("https://mainnet.helius-rpc.com/?api-key=k", "POST", rpcBody("sendTransaction"))[0]!
+        .credits,
+    ).toBe(1);
   });
 
   it("gives a REST call its route with the ids taken out", () => {
@@ -188,6 +206,43 @@ describe("feature attribution", () => {
     ).rejects.toThrow();
     const row = apiUsageMeter.take().find((r) => r.provider === "helius")!;
     expect(row.counter).toMatchObject({ calls: 4, errors: 3, rateLimited: 1, credits: 1 });
+  });
+});
+
+describe("Helius out of credits", () => {
+  it("stands billed Helius calls down for a while after 'max usage reached', and no others", async () => {
+    clearHeliusCreditsOut();
+    let sent = 0;
+    let reply = () => new Response('{"error":{"code":-32429,"message":"rate limited"}}', { status: 429 });
+    const f = meteredFetch((async () => {
+      sent += 1;
+      return reply();
+    }) as typeof fetch);
+    const call = () => f(helius, { method: "POST", body: rpcBody("getBalance") });
+    // A plain rate limit is not credits out.
+    await call();
+    expect(heliusCreditsOut()).toBeNull();
+
+    reply = () => new Response('{"error":{"code":-32429,"message":"max usage reached"}}', { status: 429 });
+    const res = await call();
+    expect(await res.text()).toContain("max usage reached");
+    expect(heliusCreditsOut()).not.toBeNull();
+    expect(sent).toBe(2);
+    // Standing down: Helius isn't called, the caller sees a 429.
+    expect((await call()).status).toBe(429);
+    expect(sent).toBe(2);
+    // Free sends through Sender and other providers still go.
+    reply = () => new Response("{}", { status: 200 });
+    await f("https://sender.helius-rpc.com/fast", { method: "POST", body: rpcBody("sendTransaction") });
+    await f("https://api.rugcheck.xyz/v1/x");
+    expect(sent).toBe(4);
+    // After the pause calls go through again.
+    const out = heliusCreditsOut()!;
+    expect(heliusCreditsOut(out.until.getTime())).toBeNull();
+    expect(out.until.getTime() - out.since.getTime()).toBe(HELIUS_CREDITS_OUT_PAUSE_MS);
+    clearHeliusCreditsOut();
+    expect((await call()).status).toBe(200);
+    expect(sent).toBe(5);
   });
 });
 

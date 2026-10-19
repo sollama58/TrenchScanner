@@ -17,6 +17,7 @@ import {
   PLATFORM_WALLETS,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
+import { withLongReads } from "./longReads.js";
 import { replaceRows, type ReplaceRowsSpec } from "./replaceRows.js";
 
 const logger = createLogger("wallet-risk");
@@ -200,16 +201,16 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
   const now = new Date((opts.now ?? Date.now)());
   // The market's dump rate, over every wallet, the once-seen ones included.
   // The Wallet Score's market rates are over the same rows (bought), from the same SELECT list.
-  const [totals] = await prisma.$queryRaw<
-    ({ appearances: bigint; dumps: bigint; wins: bigint } & ScoreCountRow)[]
-  >`
+  const [totals] = await withLongReads(
+    (tx) => tx.$queryRaw<({ appearances: bigint; dumps: bigint; wins: bigint } & ScoreCountRow)[]>`
     SELECT COUNT(*) AS appearances,
            COUNT(*) FILTER (WHERE a."dumpedIntoStop") AS dumps,
            COUNT(*) FILTER (WHERE ${winSql}) AS wins,
            ${scoreCountsSql}
     FROM "TokenWalletActivity" a
     ${tapeOutcomesJoinSql}
-    WHERE ${traderSql}`;
+    WHERE ${traderSql}`,
+  );
   const appearances = Number(totals?.appearances ?? 0);
   // Kept to the Wallet Score's significant figures (user decision 2026-10-19, performance audit):
   // unrounded, every tape read nudged them, and the risk and win scores built on them, so the
@@ -226,21 +227,22 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
       : { earlyBuys: 0, early2x: 0, early4x: 0, own2x: 0, own4x: 0, fastExits: 0 }),
   });
 
-  const rows = await prisma.$queryRaw<
-    (Omit<
-      Agg,
-      "appearances" | "dumps" | "fastExits" | "snipes" | "wins" | "earlyWins" | "transferWins" | "pnlCoins"
-    > &
-      ScoreCountRow & {
-        appearances: bigint;
-        dumps: bigint;
-        snipes: bigint;
-        wins: bigint;
-        earlyWins: bigint;
-        transferWins: bigint;
-        pnlCoins: bigint;
-      })[]
-  >`
+  const rows = await withLongReads(
+    (tx) => tx.$queryRaw<
+      (Omit<
+        Agg,
+        "appearances" | "dumps" | "fastExits" | "snipes" | "wins" | "earlyWins" | "transferWins" | "pnlCoins"
+      > &
+        ScoreCountRow & {
+          appearances: bigint;
+          dumps: bigint;
+          snipes: bigint;
+          wins: bigint;
+          earlyWins: bigint;
+          transferWins: bigint;
+          pnlCoins: bigint;
+        })[]
+    >`
     SELECT a."wallet",
            COUNT(*) AS appearances,
            COUNT(*) FILTER (WHERE a."dumpedIntoStop") AS dumps,
@@ -268,7 +270,8 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
     ${tapeOutcomesJoinSql}
     WHERE ${traderSql}
     GROUP BY a."wallet"
-    HAVING COUNT(*) >= ${MIN_APPEARANCES}`;
+    HAVING COUNT(*) >= ${MIN_APPEARANCES}`,
+  );
 
   const data = rows.map((r) => {
     const stats = {

@@ -185,7 +185,7 @@ export async function registerWalletRoutes(
     // Its chain reads count as "wallet-modal" in Admin > API usage.
     const tracked = await trackedOf(request);
     return withApiFeature("wallet-modal", () =>
-      loadWalletProfile(parsed.data.wallet, opts.live, opts.identity ?? null, tracked),
+      loadWalletProfile(parsed.data.wallet, opts.live, opts.identity ?? null, tracked, request.user!.userId),
     );
   });
 

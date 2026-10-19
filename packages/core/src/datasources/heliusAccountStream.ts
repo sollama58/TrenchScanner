@@ -1,3 +1,4 @@
+import { apiUsageMeter } from "../apiUsage.js";
 import { createLogger } from "../logger.js";
 import type { ChainTx } from "../wallets/tradeTape.js";
 
@@ -16,7 +17,10 @@ const logger = createLogger("helius-stream");
  *
  * Nothing waits on it. `coveredSince` says from when a key's accounts have been followed without
  * a break; a caller that read an account itself after that (with STREAM_SETTLE_MS to spare) can
- * trust the stream for everything since, and anything else it polls as before. A dropped
+ * trust the stream for everything since, and anything else it polls as before. A "tx" key whose
+ * accounts change keeps its old subscription until the new one is confirmed, so the accounts in
+ * both keep their cover (audit 2026-10-19: a top-25 list changing by one holder restarted all 25
+ * accounts' cover, and the holder-transfer reads they were meant to spare stayed at their cap). A dropped
  * connection reconnects with backoff and every subscription starts over, so a gap reads as not
  * covered, never as no activity.
  *
@@ -81,6 +85,10 @@ interface Subscription {
   /** When Helius confirmed it, ms epoch: the start of its cover. */
   since: number | null;
   wantedAt: number;
+  /** Accounts covered since before `since`, by the subscription this one replaced ("tx" keys). */
+  carried: Map<string, number>;
+  /** The subscription this one replaced, kept live until this one is confirmed ("tx" keys). */
+  retiring: Subscription | null;
 }
 
 export interface HeliusStreamStats {
@@ -123,6 +131,10 @@ export class HeliusAccountStream {
   private stopped = false;
   private lastActivityAt = 0;
   private stats = { txs: 0, accountUpdates: 0, logsUpdates: 0, bytes: 0, connections: 0 };
+  /** The feature this socket's credits go under in ApiUsage (metered); null leaves them out. */
+  private meterFeature: string | null = null;
+  /** Credits counted but not yet a whole one: ApiUsage keeps whole credits. */
+  private meterPending = 0;
 
   constructor(
     private readonly url: string,
@@ -144,6 +156,29 @@ export class HeliusAccountStream {
       | ((key: string, signature: string, logs: string[], bytes: number, slot: number | null) => void)
       | null = null,
   ) {}
+
+  /**
+   * Counts this socket's bytes and connections as Helius credits in Admin > API usage, under
+   * `feature` (endpoint "websocket"): the meter only sees fetch, so a socket's spend was missing
+   * there and showed only in a since-boot estimate a deploy resets (audit 2026-10-19).
+   */
+  metered(feature: string): this {
+    this.meterFeature = feature;
+    return this;
+  }
+
+  private meter(bytes: number, connections: number): void {
+    if (this.meterFeature === null) return;
+    this.meterPending += (bytes / 100_000) * 2 + connections;
+    const credits = Math.floor(this.meterPending);
+    this.meterPending -= credits;
+    apiUsageMeter.add(
+      Date.now(),
+      this.meterFeature,
+      { provider: "helius", endpoint: "websocket", calls: bytes > 0 ? 1 : 0, credits },
+      { requests: 0, ok: true, rateLimited: false, ms: 0 },
+    );
+  }
 
   static urlFor(apiKey: string): string {
     return `wss://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(apiKey)}`;
@@ -180,7 +215,6 @@ export class HeliusAccountStream {
       return;
     }
     if (!existing && this.countOf(kind) >= MAX_KEYS_OF[kind]) return;
-    if (existing) this.unsubscribe(key, existing);
     const sub: Subscription = {
       kind,
       accounts: new Set(accounts),
@@ -188,7 +222,28 @@ export class HeliusAccountStream {
       subId: null,
       since: null,
       wantedAt: now,
+      carried: new Map(),
+      retiring: null,
     };
+    if (existing) {
+      // Make before break: the live subscription keeps covering the accounts both follow until the
+      // new one is confirmed, and they carry their cover over to it.
+      const live =
+        kind === "tx" && existing.kind === "tx"
+          ? existing.since !== null
+            ? existing
+            : existing.retiring?.since != null
+              ? existing.retiring
+              : null
+          : null;
+      if (live) {
+        for (const a of sub.accounts) {
+          if (live.accounts.has(a)) sub.carried.set(a, live.carried.get(a) ?? live.since!);
+        }
+        sub.retiring = live;
+      }
+      if (existing !== live) this.unsubscribe(key, existing, live);
+    }
     this.subs.set(key, sub);
     this.subscribe(key, sub);
   }
@@ -213,8 +268,12 @@ export class HeliusAccountStream {
    */
   coveredSince(key: string, account: string): number | null {
     const sub = this.subs.get(key);
-    if (!sub || sub.since === null || !sub.accounts.has(account)) return null;
-    return this.socket?.readyState === 1 ? sub.since : null;
+    if (!sub || !sub.accounts.has(account) || this.socket?.readyState !== 1) return null;
+    if (sub.since !== null) return sub.carried.get(account) ?? sub.since;
+    // The replaced subscription, until this one is confirmed, for the accounts both follow.
+    const old = sub.retiring;
+    if (old?.since == null || !old.accounts.has(account)) return null;
+    return old.carried.get(account) ?? old.since;
   }
 
   /** Counts since the last call, for the scan's heartbeat. */
@@ -244,6 +303,7 @@ export class HeliusAccountStream {
   /** Visible for tests: what one message from Helius does. */
   handleMessage(raw: string, at: number = Date.now()): void {
     this.stats.bytes += raw.length;
+    this.meter(raw.length, 0);
     let msg: {
       id?: unknown;
       result?: unknown;
@@ -274,6 +334,10 @@ export class HeliusAccountStream {
         sub.subId = msg.result;
         sub.since = at;
         this.keyOfSub.set(msg.result, key);
+        if (sub.retiring) {
+          this.unsubscribe(key, sub.retiring);
+          sub.retiring = null;
+        }
       } else {
         // Kept, uncovered: asked again with the same accounts it is not resent (a refusal would
         // come back every cycle), only on the next connection or when its accounts change.
@@ -362,6 +426,7 @@ export class HeliusAccountStream {
     socket.addEventListener("open", () => {
       this.lastActivityAt = Date.now();
       this.stats.connections += 1;
+      this.meter(0, 1);
       // The slot feed keeps the connection busy (Helius closes one idle for 10 minutes) and is the
       // heartbeat checkIdle watches; it costs a few hundred credits a day.
       socket.send(JSON.stringify({ jsonrpc: "2.0", id: 0, method: "slotSubscribe" }));
@@ -399,6 +464,8 @@ export class HeliusAccountStream {
       sub.subId = null;
       sub.requestId = null;
       sub.since = null;
+      sub.carried.clear();
+      sub.retiring = null;
     }
   }
 
@@ -450,7 +517,11 @@ export class HeliusAccountStream {
     );
   }
 
-  private unsubscribe(key: string, sub: Subscription): void {
+  /** Undoes `sub`, and the subscription it was replacing unless that is `keep`. */
+  private unsubscribe(key: string, sub: Subscription, keep: Subscription | null = null): void {
+    if (sub.retiring && sub.retiring !== keep) this.unsubscribe(key, sub.retiring);
+    sub.retiring = null;
+    sub.carried.clear();
     if (sub.requestId !== null) {
       this.keyOfRequest.delete(sub.requestId);
       this.abandonedRequests.set(sub.requestId, unsubscribeMethod(sub.kind));

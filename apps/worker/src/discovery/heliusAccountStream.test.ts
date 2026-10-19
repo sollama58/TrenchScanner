@@ -139,6 +139,34 @@ describe("HeliusAccountStream", () => {
     stream.stop();
   });
 
+  it("keeps the accounts both lists follow covered when a live key's accounts change", () => {
+    const { stream, socket } = started();
+    stream.watch("mint-1", ["acc-a", "acc-b"], 1_000);
+    const first = subscribes(socket)[0]!.id;
+    stream.handleMessage(JSON.stringify({ jsonrpc: "2.0", id: first, result: 20 }), 2_000);
+    // One holder swapped: the old subscription stays live until the new one is confirmed.
+    stream.watch("mint-1", ["acc-a", "acc-c"], 5_000);
+    const second = subscribes(socket)[1]!.id;
+    expect(socket.sent.some((m) => m.method === "transactionUnsubscribe")).toBe(false);
+    expect(stream.coveredSince("mint-1", "acc-a")).toBe(2_000);
+    expect(stream.coveredSince("mint-1", "acc-c")).toBeNull();
+    expect(stream.coveredSince("mint-1", "acc-b")).toBeNull();
+    stream.handleMessage(JSON.stringify({ jsonrpc: "2.0", id: second, result: 21 }), 6_000);
+    expect(socket.sent.at(-1)).toMatchObject({ method: "transactionUnsubscribe", params: [20] });
+    // acc-a keeps its cover from the first subscription; acc-c starts with the new one.
+    expect(stream.coveredSince("mint-1", "acc-a")).toBe(2_000);
+    expect(stream.coveredSince("mint-1", "acc-c")).toBe(6_000);
+    // A second change carries acc-a's cover on again.
+    stream.watch("mint-1", ["acc-a", "acc-d"], 7_000);
+    const third = subscribes(socket)[2]!.id;
+    stream.handleMessage(JSON.stringify({ jsonrpc: "2.0", id: third, result: 22 }), 8_000);
+    expect(stream.coveredSince("mint-1", "acc-a")).toBe(2_000);
+    // A dropped connection ends every cover, carried ones included.
+    stream.checkIdle(Date.now() + 10 * 60_000);
+    expect(stream.coveredSince("mint-1", "acc-a")).toBeNull();
+    stream.stop();
+  });
+
   it("drops keys nobody asked for lately, and all cover when the connection goes quiet", () => {
     const { stream, socket } = started();
     stream.watch("old", ["acc-a"], 0);

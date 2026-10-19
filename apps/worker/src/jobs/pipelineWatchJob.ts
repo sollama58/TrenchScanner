@@ -5,6 +5,7 @@ import {
   escapeHtml,
   HEARTBEAT_JOB_ROLE,
   heldJobLocks,
+  heliusCreditsOut,
   JOB_LOCKED_JOBS,
   lockLostDuringRun,
   runningSinceFrom,
@@ -41,6 +42,10 @@ const logger = createLogger("pipeline-watch");
  * at once and leaves no room to reclaim space in place, so the warning has to come while there is
  * still room to act - raise the disk, or run the cleanup early. The size goes on the heartbeat
  * (databaseMb), so /health/worker shows it between warnings.
+ *
+ * So are Helius's credits (findCreditProblems): when Helius answers "max usage reached" the
+ * scanner stands its Helius calls down, and the admins hear once when that starts and once when it
+ * clears; the heartbeat carries heliusCreditsOutUntil meanwhile.
  */
 
 export interface FlowCheck {
@@ -351,6 +356,24 @@ export function findCapacityProblems(databaseBytes: number | null, alertMb: numb
   ];
 }
 
+/**
+ * Helius's credits used up, as this process heard it (apiUsage.ts stands its Helius calls down
+ * meanwhile): wallet, linked, sniper and holder figures go unknown and the burn scan fails until
+ * the plan is topped up. Notified like a failing side job; a restart would not mend it.
+ */
+export function findCreditProblems(out: { since: Date; until: Date } | null): Problem[] {
+  if (!out) return [];
+  return [
+    {
+      key: "helius-credits",
+      text:
+        `Helius credits used up since ${out.since.toISOString().slice(11, 16)} UTC ("max usage reached") - ` +
+        "Helius calls stand down 15 minutes at a time until the plan is topped up or autoscaling is on",
+      side: true,
+    },
+  ];
+}
+
 /** pg_database_size, in bytes; null when the read fails (the other checks still run). */
 async function databaseBytes(): Promise<number | null> {
   try {
@@ -639,6 +662,7 @@ async function watchOnce(
   const now = deps.now ?? Date.now();
   const before = await previousState();
   remember(before);
+  const creditsOut = heliusCreditsOut(now);
   const [flows, jobs, sideJobs, trainerJobs, cursor, dbBytes] = await Promise.all([
     countFlows(now),
     readJobs(WATCHED_JOBS),
@@ -652,6 +676,7 @@ async function watchOnce(
     ...findSideJobProblems(sideJobs, now),
     ...findTrainerProblems(trainerJobs, now),
     ...findCapacityProblems(dbBytes, env.DB_DISK_ALERT_MB),
+    ...findCreditProblems(creditsOut),
   ];
   // Only the alert path's own problems are a stall: they alone start the clock towards the
   // visitors' banner and the scanner restart, neither of which a trainer job's problem or a
@@ -707,6 +732,7 @@ async function watchOnce(
     warned,
     lastRestartAt: lastRestartAt === null ? null : new Date(lastRestartAt).toISOString(),
     databaseMb: dbBytes === null ? null : Math.round(dbBytes / 1_048_576),
+    heliusCreditsOutUntil: creditsOut ? creditsOut.until.toISOString() : null,
     flows: Object.fromEntries(flows.map((f) => [f.key, f.recent])),
   };
   if (problems.length > 0) {

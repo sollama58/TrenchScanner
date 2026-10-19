@@ -173,11 +173,10 @@ export async function registerProTradesRoutes(
   const apiKey = env.HELIUS_API_KEY;
   const stream =
     env.PRO_TRADING_ENABLED && apiKey && (globalThis as { WebSocket?: unknown }).WebSocket
-      ? new LazyTradeStream(
-          () =>
-            new HeliusAccountStream(HeliusAccountStream.urlFor(apiKey), (key, signature, tx) =>
-              watcher.onStreamTx(key, signature, tx),
-            ),
+      ? new LazyTradeStream(() =>
+          new HeliusAccountStream(HeliusAccountStream.urlFor(apiKey), (key, signature, tx) =>
+            watcher.onStreamTx(key, signature, tx),
+          ).metered("stream/pro-trades"),
         )
       : null;
   const watcher: ProTradeWatcher = new ProTradeWatcher({ stream, rpc, onEntry: scanEntry });

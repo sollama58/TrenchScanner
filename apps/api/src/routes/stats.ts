@@ -1286,7 +1286,7 @@ export async function buildStorageReport() {
       LEFT JOIN "Token" t ON t."mintAddress" = n."mintAddress"
       GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`,
     // What a day of snapshots carries in its list columns (the holder list, clusters, flagged
-    // trades), from the same kind of 1% block sample: how many rows have each and their size.
+    // trades, holder transfers), from the same kind of 1% block sample: how many rows have each and their size.
     prisma.$queryRaw<
       {
         rows: bigint;
@@ -1299,6 +1299,10 @@ export async function buildStorageReport() {
         avg_same_time_bytes: number | null;
         with_flagged: bigint;
         avg_flagged_bytes: number | null;
+        with_transfers: bigint;
+        avg_transfers_bytes: number | null;
+        with_clusters_ex: bigint;
+        avg_clusters_ex_bytes: number | null;
       }[]
     >`
       SELECT count(*) AS rows,
@@ -1310,7 +1314,11 @@ export async function buildStorageReport() {
              count(s."sameTimeClusters") AS with_same_time,
              avg(pg_column_size(s."sameTimeClusters"))::float8 AS avg_same_time_bytes,
              count(s."flaggedTrades") AS with_flagged,
-             avg(pg_column_size(s."flaggedTrades"))::float8 AS avg_flagged_bytes
+             avg(pg_column_size(s."flaggedTrades"))::float8 AS avg_flagged_bytes,
+             count(s."holderTransfers") AS with_transfers,
+             avg(pg_column_size(s."holderTransfers"))::float8 AS avg_transfers_bytes,
+             count(s."linkedClustersExTransfers") AS with_clusters_ex,
+             avg(pg_column_size(s."linkedClustersExTransfers"))::float8 AS avg_clusters_ex_bytes
       FROM "TokenSnapshot" s TABLESAMPLE SYSTEM (1)
       WHERE s."takenAt" > now() - interval '1 day'`,
   ]);
@@ -1384,6 +1392,16 @@ export async function buildStorageReport() {
       flaggedTrades: {
         rows: n(snapshotColumns[0]?.with_flagged),
         avgBytes: Math.round(snapshotColumns[0]?.avg_flagged_bytes ?? 0),
+      },
+      // The two list columns added since (database audit 2026-10-19: TokenSnapshot's TOAST went
+      // from 37 MB to 1.5 GB and the columns above didn't account for it).
+      holderTransfers: {
+        rows: n(snapshotColumns[0]?.with_transfers),
+        avgBytes: Math.round(snapshotColumns[0]?.avg_transfers_bytes ?? 0),
+      },
+      linkedClustersExTransfers: {
+        rows: n(snapshotColumns[0]?.with_clusters_ex),
+        avgBytes: Math.round(snapshotColumns[0]?.avg_clusters_ex_bytes ?? 0),
       },
     },
   };

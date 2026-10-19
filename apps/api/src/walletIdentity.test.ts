@@ -62,7 +62,7 @@ describe("WalletIdentityReader", () => {
         ]),
       ),
     }));
-    const reader = new WalletIdentityReader({ identity: vi.fn(), batchIdentity: batch });
+    const reader = new WalletIdentityReader({ identity: vi.fn(), batchIdentity: batch }, { batchWaitMs: 0 });
     const first = await reader.identities(["a", "b", "a"], 0);
     expect([...first.entries()]).toEqual([
       ["a", { type: "exchange", name: "OKX", category: null, tags: [] }],
@@ -84,7 +84,7 @@ describe("WalletIdentityReader", () => {
     const batch = vi.fn(async (wallets: readonly string[]) => named(wallets));
     const reader = new WalletIdentityReader(
       { identity: vi.fn(), batchIdentity: batch },
-      { perMinute: 20, perUserPerMinute: 2, perUserPerDay: 3 },
+      { perMinute: 20, perUserPerMinute: 2, perUserPerDay: 3, batchWaitMs: 0 },
     );
     await reader.identities(["a"], 0, "u1");
     await reader.identities(["b"], 1_000, "u1");
@@ -102,7 +102,7 @@ describe("WalletIdentityReader", () => {
     const batch = vi.fn(async (wallets: readonly string[]) => named(wallets));
     const reader = new WalletIdentityReader(
       { identity: vi.fn(), batchIdentity: batch },
-      { maxEntries: 2, perMinute: 100 },
+      { maxEntries: 2, perMinute: 100, batchWaitMs: 0 },
     );
     await reader.identities(["a", "b"], 0);
     await reader.identities(["a"], 1); // a is now the most recent
@@ -135,7 +135,11 @@ describe("WalletIdentityReader", () => {
       value: new Map<string, HeliusIdentity | null>(wallets.map((w) => [w, null])),
     }));
     const single = vi.fn(async (): Promise<IdentityRead<HeliusIdentity>> => ({ status: "none" }));
-    const reader = new WalletIdentityReader({ identity: single, batchIdentity: batch }, {}, store);
+    const reader = new WalletIdentityReader(
+      { identity: single, batchIdentity: batch },
+      { batchWaitMs: 0 },
+      store,
+    );
 
     expect((await reader.labels("a", 1_000)).map((l) => l.text)).toEqual(["OKX"]);
     expect(single).not.toHaveBeenCalled();
@@ -149,9 +153,61 @@ describe("WalletIdentityReader", () => {
     expect(store.write).toHaveBeenCalledWith(new Map([["b", null]]), new Date(1_000));
 
     // A new process (a deploy) reads "b" from the database, not from Helius.
-    const after = new WalletIdentityReader({ identity: single, batchIdentity: batch }, {}, store);
+    const after = new WalletIdentityReader(
+      { identity: single, batchIdentity: batch },
+      { batchWaitMs: 0 },
+      store,
+    );
     expect(await after.labels("b", 2_000)).toEqual([]);
     expect(single).not.toHaveBeenCalled();
     expect(batch).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues a list's few misses and reads them together once the oldest has waited", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const batch = vi.fn(async (wallets: readonly string[]) => named(wallets));
+      const reader = new WalletIdentityReader(
+        { identity: vi.fn(), batchIdentity: batch },
+        { batchWaitMs: 60_000, askNowAt: 5 },
+      );
+      expect((await reader.identities(["a"], 0, "u1")).size).toBe(0);
+      expect((await reader.identities(["b", "a"], 10_000, "u2")).size).toBe(0);
+      expect(batch).not.toHaveBeenCalled();
+      // A list asking after the oldest has waited reads the whole queue, its own misses too, in one call.
+      expect([...(await reader.identities(["a", "c"], 60_000, "u1")).keys()]).toEqual(["a", "c"]);
+      expect(batch).toHaveBeenCalledTimes(1);
+      expect(batch).toHaveBeenLastCalledWith(["a", "b", "c"]);
+      // With nobody asking, the timer reads the queue once its oldest has waited.
+      vi.setSystemTime(61_000);
+      expect((await reader.identities(["d"], 61_000)).size).toBe(0);
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect(batch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(batch).toHaveBeenLastCalledWith(["d"]);
+      expect((await reader.identities(["b", "d"], 121_000)).size).toBe(2);
+      // A list bringing askNowAt misses is read straight away, the queue with it.
+      await reader.identities(["j"], 122_000);
+      await reader.identities(["e", "f", "g", "h", "i"], 123_000);
+      expect(batch).toHaveBeenLastCalledWith(["j", "e", "f", "g", "h", "i"]);
+      expect(batch).toHaveBeenCalledTimes(3);
+      reader.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the modal's one-wallet reads to the account's share too", async () => {
+    const call = vi.fn(async (): Promise<IdentityRead<HeliusIdentity>> => ({ status: "none" }));
+    const reader = new WalletIdentityReader(
+      { identity: call, batchIdentity: vi.fn() },
+      { perUserPerMinute: 1, perUserPerDay: 10 },
+    );
+    await reader.labels("a", 0, "u1");
+    await reader.labels("b", 1_000, "u1");
+    expect(call).toHaveBeenCalledTimes(1);
+    await reader.labels("b", 1_000, "u2");
+    expect(call).toHaveBeenCalledTimes(2);
   });
 });

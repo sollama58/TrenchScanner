@@ -49,10 +49,21 @@ const ENROL_SLACK_MS = 10 * 60_000;
 
 /** When the last enrolment ran in this process; undefined enrols the whole tracking window. */
 let enrolledUpTo: number | undefined;
+/**
+ * A coin past its tracking window is never read again, but its due time stayed in the past, so
+ * every run walked all of them at the head of PeakWatch_nextCheckAt_idx before a due coin (database
+ * audit 2026-10-17 P2-2). They are parked at this time instead; a new alert moves it back (the
+ * enrolment's LEAST). A date, not 'infinity', so Prisma can read the column.
+ */
+export const PEAK_WATCH_PARKED_AT = new Date("9999-01-01T00:00:00Z");
+/** How often a process parks the coins that left the window. */
+const PARK_EVERY_MS = 3_600_000;
+let parkedAt: number | undefined;
 
 /** Test hook. */
 export function resetPeakWatchEnrolment(): void {
   enrolledUpTo = undefined;
+  parkedAt = undefined;
 }
 
 /**
@@ -140,6 +151,14 @@ export async function runCandlePeaksJob(
   );
   enrolledUpTo = startedAt;
 
+  let parked = 0;
+  if (parkedAt === undefined || startedAt - parkedAt >= PARK_EVERY_MS) {
+    parked = await prisma.$executeRaw`
+      UPDATE "PeakWatch" SET "nextCheckAt" = ${PEAK_WATCH_PARKED_AT}
+      WHERE "lastAlertAt" <= ${horizon} AND "nextCheckAt" < ${PEAK_WATCH_PARKED_AT}`;
+    parkedAt = startedAt;
+  }
+
   const due = await prisma.peakWatch.findMany({
     where: { nextCheckAt: { lte: new Date(startedAt) }, lastAlertAt: { gt: horizon }, noCandles: false },
     orderBy: { nextCheckAt: "asc" },
@@ -222,6 +241,7 @@ export async function runCandlePeaksJob(
   const meta = {
     ...counts,
     enrolled,
+    parked,
     due: due.length,
     backlog,
     oldestDueMinutes: oldestDue ? Math.round((startedAt - oldestDue.nextCheckAt.getTime()) / 60_000) : 0,

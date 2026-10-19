@@ -90,7 +90,7 @@ import { runBundledSupplyBackfill } from "./jobs/bundledSupplyBackfill.js";
 import { runWalletScoreBackfill } from "./jobs/walletScoreBackfill.js";
 import { runWinnerFollowBackfill } from "./jobs/winnerFollowBackfill.js";
 import { runQuoteRegrade } from "./jobs/quoteRegrade.js";
-import { runTradeTapeJob } from "./jobs/tradeTapeJob.js";
+import { runTradeTapeJob, saveTradeTapeProgress } from "./jobs/tradeTapeJob.js";
 import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
 import { runDevLaunchRiskJob } from "./jobs/devLaunchRiskJob.js";
 import { runKolSideWalletsJob } from "./jobs/kolSideWalletsJob.js";
@@ -281,7 +281,7 @@ async function main() {
           (key, data, bytes) => {
             if (key.startsWith(CURVE_STREAM_KEY_PREFIX)) onCurveStreamUpdate(key, data, bytes);
           },
-        )
+        ).metered("stream/holders-curves-burns")
       : null;
   heliusStream?.start();
   if (heliusStream && burnStreamOn) heliusStream.watch(BURN_STREAM_KEY, [SUBSCRIPTION_MINT]);
@@ -1079,6 +1079,10 @@ async function main() {
         ),
       );
     }
+    // The trade tape's reads in progress, for the next process to finish (a no-op where it doesn't run).
+    await saveTradeTapeProgress().catch((err: unknown) =>
+      logger.warn("trade tape progress not saved", { error: String(err) }),
+    );
     stopLoopWatch();
     await stopApiUsageMeter();
     await prisma.$disconnect().catch(() => {});

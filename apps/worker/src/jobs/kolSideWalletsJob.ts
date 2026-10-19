@@ -26,6 +26,7 @@ import {
   type SideWindow,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
+import { withLongReads } from "./longReads.js";
 import { replaceRows, type ReplaceRowsSpec } from "./replaceRows.js";
 import { rebuildTrackedSides, type TrackedSidesMeta } from "./trackedSidesJob.js";
 
@@ -135,9 +136,10 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
 
   // Each KOL's coins in each window. A Known Side's buys are its KOL's (KolWallet.mainWallet,
   // core's KOL_MAINS): one KOL, one row, each coin counted once at the KOL's first buy of it.
-  const kols = await prisma.$queryRaw<
-    { wallet: string; c24: bigint; c48: bigint; c72: bigint; c7: bigint; c30: bigint }[]
-  >`
+  const kols = await withLongReads(
+    (tx) => tx.$queryRaw<
+      { wallet: string; c24: bigint; c48: bigint; c72: bigint; c7: bigint; c30: bigint }[]
+    >`
     WITH kol AS (${kolBuys(since["30d"])})
     SELECT kol."wallet",
            COUNT(*) FILTER (WHERE kol."firstBuyAt" >= ${since["24h"]}) AS c24,
@@ -146,23 +148,25 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
            COUNT(*) FILTER (WHERE kol."firstBuyAt" >= ${since["7d"]}) AS c7,
            COUNT(*) AS c30
     FROM kol
-    GROUP BY kol."wallet"`;
+    GROUP BY kol."wallet"`,
+  );
 
   // Every (KOL, wallet) pair that bought the same coins within the gap, counted per window.
-  const pairs = await prisma.$queryRaw<
-    {
-      kol: string;
-      side: string;
-      s24: bigint;
-      s48: bigint;
-      s72: bigint;
-      s7: bigint;
-      s30: bigint;
-      g24: number | null;
-      g7: number | null;
-      g30: number | null;
-    }[]
-  >`
+  const pairs = await withLongReads(
+    (tx) => tx.$queryRaw<
+      {
+        kol: string;
+        side: string;
+        s24: bigint;
+        s48: bigint;
+        s72: bigint;
+        s7: bigint;
+        s30: bigint;
+        g24: number | null;
+        g7: number | null;
+        g30: number | null;
+      }[]
+    >`
     WITH kol AS (${kolBuys(since["30d"])}), pair AS (
       SELECT kol."wallet" AS kol, o."wallet" AS side, kol."firstBuyAt" AS at,
              EXTRACT(EPOCH FROM (o."firstBuyAt" - kol."firstBuyAt")) AS gap
@@ -190,13 +194,15 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     -- coins than the 24-hour or 7-day lists do, so a pair a tier labels always passes here.
     HAVING COUNT(*) FILTER (WHERE at >= ${since["24h"]}) >= ${SIDE_MIN_SHARED["24h"]}
         OR COUNT(*) FILTER (WHERE at >= ${since["7d"]}) >= ${SIDE_MIN_SHARED["7d"]}
-        OR COUNT(*) >= ${SIDE_MIN_SHARED["30d"]}`;
+        OR COUNT(*) >= ${SIDE_MIN_SHARED["30d"]}`,
+  );
 
   // The listed wallets' own coin counts, and every tracked coin's, for the bot rule and the lists.
   const sides = [...new Set(pairs.map((p) => p.side))];
-  const [sideRows, [totals]] = await Promise.all([
-    sides.length
-      ? prisma.$queryRaw<{ wallet: string; c24: bigint; c7: bigint; c30: bigint }[]>`
+  const [sideRows, [totals]] = await withLongReads((tx) =>
+    Promise.all([
+      sides.length
+        ? tx.$queryRaw<{ wallet: string; c24: bigint; c7: bigint; c30: bigint }[]>`
           SELECT a."wallet",
                  COUNT(*) FILTER (WHERE a."firstBuyAt" >= ${since["24h"]}) AS c24,
                  COUNT(*) FILTER (WHERE a."firstBuyAt" >= ${since["7d"]}) AS c7,
@@ -205,13 +211,14 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
           JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
           WHERE a."buys" > 0 AND a."firstBuyAt" >= ${since["30d"]} AND a."wallet" = ANY(${sides})
           GROUP BY a."wallet"`
-      : Promise.resolve([]),
-    prisma.$queryRaw<{ c30: bigint }[]>`
+        : Promise.resolve([]),
+      tx.$queryRaw<{ c30: bigint }[]>`
       SELECT COUNT(DISTINCT a."tokenId") AS c30
       FROM "TokenWalletActivity" a
       JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
       WHERE a."buys" > 0 AND a."firstBuyAt" >= ${since["30d"]}`,
-  ]);
+    ]),
+  );
   const totalCoins = Number(totals?.c30 ?? 0);
   const sideCoins: Record<SideWindow, Map<string, number>> = {
     "24h": new Map(),

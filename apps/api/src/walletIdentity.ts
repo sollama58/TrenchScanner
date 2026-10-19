@@ -104,6 +104,14 @@ export interface WalletIdentityOptions {
    */
   perUserPerMinute: number;
   perUserPerDay: number;
+  /**
+   * How long a list's few misses wait for others before Helius is asked (each call bills 100
+   * credits however many wallets it carries): the live-trades list sends one to three new traders
+   * every few seconds, so they are queued and read together, up to IDENTITY_BATCH_MAX at once.
+   */
+  batchWaitMs: number;
+  /** A list bringing this many misses at once (a holder list, a bubble map) is read straight away. */
+  askNowAt: number;
 }
 
 const DEFAULT_OPTIONS: WalletIdentityOptions = {
@@ -112,7 +120,11 @@ const DEFAULT_OPTIONS: WalletIdentityOptions = {
   maxEntries: 5_000,
   perUserPerMinute: 4,
   perUserPerDay: 150,
+  batchWaitMs: 60_000,
+  askNowAt: 20,
 };
+/** Misses queued at most; past it a list's misses are left unread and asked again later. */
+const MAX_QUEUED = 1_000;
 const DAY_MS = 24 * 3_600_000;
 /** Accounts whose use is remembered at once; the least recent is forgotten past it. */
 const MAX_TRACKED_USERS = 5_000;
@@ -129,6 +141,10 @@ export class WalletIdentityReader {
   /** Each account's calls in the last day, oldest first. */
   private users = new Map<IdentityUserKey, number[]>();
   private offUntil = 0;
+  /** Misses waiting for the next batch, with when each was queued, oldest first. */
+  private queued = new Map<string, number>();
+  private flushing: Promise<void> | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
   private readonly opts: WalletIdentityOptions;
 
   constructor(
@@ -145,26 +161,35 @@ export class WalletIdentityReader {
    * backed off; counts it if so.
    */
   private take(now: number, user?: IdentityUserKey): boolean {
+    if (!this.callFits(now)) return false;
+    if (user !== undefined && !this.takeUser(now, user)) return false;
+    this.window.push(now);
+    return true;
+  }
+
+  /** Whether the plan isn't backed off and one more call fits the minute's cap (not counted). */
+  private callFits(now: number): boolean {
     if (now < this.offUntil) return false;
     this.window = this.window.filter((t) => now - t < 60_000);
-    if (this.window.length >= this.opts.perMinute) return false;
-    if (user !== undefined) {
-      const mine = (this.users.get(user) ?? []).filter((t) => now - t < DAY_MS);
-      const lastMinute = mine.filter((t) => now - t < 60_000).length;
-      if (lastMinute >= this.opts.perUserPerMinute || mine.length >= this.opts.perUserPerDay) {
-        this.users.set(user, mine);
-        return false;
-      }
-      mine.push(now);
-      // Re-inserted so the map stays in order of last use, and the oldest is forgotten first.
-      this.users.delete(user);
+    return this.window.length < this.opts.perMinute;
+  }
+
+  /** Whether one more ask fits `user`'s share of the minute and their day; counts it if so. */
+  private takeUser(now: number, user: IdentityUserKey): boolean {
+    const mine = (this.users.get(user) ?? []).filter((t) => now - t < DAY_MS);
+    const lastMinute = mine.filter((t) => now - t < 60_000).length;
+    if (lastMinute >= this.opts.perUserPerMinute || mine.length >= this.opts.perUserPerDay) {
       this.users.set(user, mine);
-      if (this.users.size > MAX_TRACKED_USERS) {
-        const oldest = this.users.keys().next().value;
-        if (oldest !== undefined) this.users.delete(oldest);
-      }
+      return false;
     }
-    this.window.push(now);
+    mine.push(now);
+    // Re-inserted so the map stays in order of last use, and the oldest is forgotten first.
+    this.users.delete(user);
+    this.users.set(user, mine);
+    if (this.users.size > MAX_TRACKED_USERS) {
+      const oldest = this.users.keys().next().value;
+      if (oldest !== undefined) this.users.delete(oldest);
+    }
     return true;
   }
 
@@ -213,12 +238,13 @@ export class WalletIdentityReader {
     this.cache.set(wallet, { at: now, value });
   }
 
-  async labels(wallet: string, now = Date.now()): Promise<WalletLabel[]> {
+  /** The wallet modal's one wallet: read at once (someone is looking at it), within `user`'s share. */
+  async labels(wallet: string, now = Date.now(), user?: IdentityUserKey): Promise<WalletLabel[]> {
     const hit = this.cached(wallet, now);
     if (hit) return identityLabels(hit.value);
     const kept = await this.fromStore([wallet], now);
     if (kept.has(wallet)) return identityLabels(kept.get(wallet)!);
-    if (!this.take(now)) return [];
+    if (!this.take(now, user)) return [];
     const res = await this.helius
       .identity(wallet)
       .catch((): IdentityRead<HeliusIdentity> => ({ status: "failed" }));
@@ -235,8 +261,10 @@ export class WalletIdentityReader {
 
   /**
    * Helius's identity for each of `wallets` it could answer: cached ones from the cache, the rest
-   * in batches of up to 100 while the minute's cap (and `user`'s share of it) allows. A wallet
-   * left out was not read.
+   * queued and read in batches of up to IDENTITY_BATCH_MAX, once the oldest has waited
+   * `batchWaitMs`, the queue is full, or this list alone brings `askNowAt` misses. Queuing a list's
+   * misses counts as one of `user`'s calls; each batch as one of the minute's. A wallet left out
+   * was not read yet (the caller asks again later).
    */
   async identities(
     wallets: readonly string[],
@@ -252,22 +280,81 @@ export class WalletIdentityReader {
     }
     for (const [w, value] of await this.fromStore(unread, now)) out.set(w, value);
     const misses = unread.filter((w) => !out.has(w));
-    for (let i = 0; i < misses.length; i += IDENTITY_BATCH_MAX) {
-      if (!this.take(now, user)) break;
-      const res = await this.helius
-        .batchIdentity(misses.slice(i, i + IDENTITY_BATCH_MAX))
-        .catch((): IdentityRead<Map<string, HeliusIdentity | null>> => ({ status: "failed" }));
-      if (res.status === "unavailable") {
-        this.offUntil = now + UNAVAILABLE_BACKOFF_MS;
-        break;
-      }
-      if (res.status !== "found") break;
-      for (const [w, value] of res.value) {
-        this.remember(w, value, now);
-        out.set(w, value);
-      }
-      this.keep(res.value, now);
+    if (misses.length === 0) return out;
+    const fresh = misses.filter((w) => !this.queued.has(w));
+    if (
+      fresh.length > 0 &&
+      now >= this.offUntil &&
+      this.queued.size + fresh.length <= MAX_QUEUED &&
+      (user === undefined || this.takeUser(now, user))
+    )
+      for (const w of fresh) this.queued.set(w, now);
+    const oldest = this.queued.values().next().value;
+    if (
+      oldest !== undefined &&
+      (now - oldest >= this.opts.batchWaitMs ||
+        this.queued.size >= IDENTITY_BATCH_MAX ||
+        misses.length >= this.opts.askNowAt)
+    )
+      await this.flush(now);
+    else this.schedule();
+    for (const w of misses) {
+      const hit = this.cached(w, now);
+      if (hit) out.set(w, hit.value);
     }
     return out;
+  }
+
+  /**
+   * Reads the queue when its oldest has waited long enough (and the minute's cap and any back-off
+   * allow), if no list asks before then.
+   */
+  private schedule() {
+    const oldest = this.queued.values().next().value;
+    if (this.timer || oldest === undefined) return;
+    const capFreesAt = this.window.length >= this.opts.perMinute ? (this.window[0] ?? 0) + 60_000 : 0;
+    const at = Math.max(oldest + this.opts.batchWaitMs, capFreesAt, this.offUntil);
+    this.timer = setTimeout(
+      () => {
+        this.timer = null;
+        void this.flush(Date.now());
+      },
+      Math.max(0, at - Date.now()),
+    );
+    this.timer.unref?.();
+  }
+
+  /** Reads the queue in batches, oldest first, while the minute's cap allows; the rest wait. */
+  private async flush(now: number): Promise<void> {
+    if (this.flushing) return this.flushing;
+    this.flushing = (async () => {
+      while (this.queued.size > 0 && this.callFits(now)) {
+        const batch = [...this.queued.keys()].slice(0, IDENTITY_BATCH_MAX);
+        for (const w of batch) this.queued.delete(w);
+        this.window.push(now);
+        const res = await this.helius
+          .batchIdentity(batch)
+          .catch((): IdentityRead<Map<string, HeliusIdentity | null>> => ({ status: "failed" }));
+        if (res.status === "unavailable") {
+          this.offUntil = now + UNAVAILABLE_BACKOFF_MS;
+          this.queued.clear();
+          break;
+        }
+        // A failed batch is dropped, not retried here: its lists ask again later.
+        if (res.status !== "found") break;
+        for (const [w, value] of res.value) this.remember(w, value, now);
+        this.keep(res.value, now);
+      }
+    })().finally(() => {
+      this.flushing = null;
+      this.schedule();
+    });
+    return this.flushing;
+  }
+
+  /** Stops the queue's timer (the server closing, or a test ending). */
+  stop() {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
   }
 }
