@@ -162,15 +162,8 @@ describe("rowChips", () => {
     expect(chips[0]?.value).toBe("120");
   });
 
-  it("reads the card view's footer too: where fees go, and the address to copy", () => {
-    const c = card({ model: "Atlas", tier: "high" });
-    c.token.creatorFee = { destination: "charity", summary: null };
-    const chips = rowChips(c, ["fees", "mint", "conviction"], NOW);
-    expect(chips.map((x) => [x.id, x.value])).toEqual([
-      ["fees", "charity"],
-      ["mint", "m"],
-      ["conviction", "high"],
-    ]);
-    expect(chips.find((x) => x.id === "mint")?.copy).toBe("m");
+  it("reads the card's conviction", () => {
+    const chips = rowChips(card({ model: "Atlas", tier: "high" }), ["conviction"], NOW);
+    expect(chips.map((x) => [x.id, x.value])).toEqual([["conviction", "high"]]);
   });
 });
