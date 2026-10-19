@@ -340,6 +340,11 @@ export interface FeeEstimate {
   /** The Sacrifice's SOL value while it is on and the wallet pays, else "0". */
   platformFeeLamports: string;
   sacrifice?: SacrificeView;
+  /**
+   * Helius Sender isn't answering the API just now: trades with MEV Protect off still go out
+   * through the RPC; protected ones may expire. Absent from older API builds.
+   */
+  senderDown?: boolean;
 }
 
 /**

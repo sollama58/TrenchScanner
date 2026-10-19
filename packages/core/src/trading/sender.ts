@@ -125,3 +125,17 @@ async function sendOnce(url: string, base64Tx: string): Promise<SendAttempt> {
     return { ok: false, refused: true, error: body.error.message ?? "Sender refused the transaction" };
   return { ok: true };
 }
+
+/**
+ * Whether Sender answers at all: its GET /ping on the endpoint's host, keyless and free. Never
+ * throws. Only a health signal for the trade panel; a send's own answer says more.
+ */
+export async function pingSender(base: string, timeoutMs = 3_000): Promise<boolean> {
+  try {
+    const url = new URL("/ping", base || DEFAULT_HELIUS_SENDER_URL);
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

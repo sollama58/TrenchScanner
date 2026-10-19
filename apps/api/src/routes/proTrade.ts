@@ -12,6 +12,7 @@ import {
   JupiterSwapClient,
   looksLikeSolanaAddress,
   parseWireTransaction,
+  pingSender,
   senderUrl,
   sendViaSender,
   signedMatchesBuild,
@@ -43,6 +44,7 @@ import { feeSummary } from "../tradeFees.js";
 import { countProTrade } from "../proTradeCounters.js";
 import { quoteSacrifice, sacrificeRefusal, sacrificeView, type SacrificeQuote } from "../sacrificeQuote.js";
 import { newBuildId, signBuildToken, verifyBuildToken } from "../buildToken.js";
+import { SenderHealth } from "../senderHealth.js";
 
 /**
  * Pro trades from the token modal (user decision 2026-10-17), for Pro Mode wallets only
@@ -50,7 +52,8 @@ import { newBuildId, signBuildToken, verifyBuildToken } from "../buildToken.js";
  *
  *   POST /pro/trade/build            a swap for the signed-in wallet to sign (manualTrade.ts)
  *   POST /pro/trade/send             relays the signed swap to Helius Sender, and keeps resending
- *                                    it until it lands or its blockhash expires
+ *                                    it until it lands or its blockhash expires (through the RPC
+ *                                    too, with MEV Protect off, once Sender stops answering)
  *   GET  /pro/trade/status/:sig      whether it landed
  *   GET  /pro/trade/:mint/position   the wallet's balance and trades in the coin, for the chart
  *   GET  /pro/trade/fees             what the wallet's trades here cost in fees, against other
@@ -206,6 +209,12 @@ const MAX_IN_FLIGHT = 5_000;
 const MAX_IN_FLIGHT_PER_WALLET = 5;
 const RESEND_BATCH = 50;
 /**
+ * Sender sends of one trade with no answer (a timeout, a 5xx, a dropped connection) before its
+ * resends also go through the RPC and its backup (user decision 2026-10-19): only for a trade with
+ * MEV Protect off, since the RPC path skips Sender's protection.
+ */
+const RPC_FALLBACK_AFTER = 2;
+/**
  * A build is good for one send within this long (a blockhash lives about a minute): /send relays
  * only a transaction on a blockhash this route handed that wallet, so our Helius key carries
  * nothing it didn't build, and the expiry it answers by is the build's own, not the caller's.
@@ -248,6 +257,10 @@ interface InFlight {
   lastValidBlockHeight: number;
   until: number;
   wallet: string;
+  /** MEV Protect is off, so its resends may also go through the RPC once Sender stops answering. */
+  rpcFallback: boolean;
+  /** Its Sender sends in a row with no answer; any answer, a refusal included, resets it. */
+  silent: number;
 }
 
 export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: Env }) {
@@ -302,6 +315,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     return lamports;
   };
   const inFlight = new Map<string, InFlight>();
+  const senderHealth = new SenderHealth();
   // Trades the resend loop has stopped resending, kept a while so their status can still say
   // "expired" rather than pending forever.
   const retired = new Map<string, { lastValidBlockHeight: number; at: number }>();
@@ -598,6 +612,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const parsed = feeSchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
     const q = parsed.data;
+    // Nothing sent lately says whether Sender is up: ask it, for the next read (never waited on).
+    if (senderHealth.pingDue())
+      void pingSender(env.HELIUS_SENDER_URL).then((ok) => senderHealth.notePing(ok));
     const [fees, sacrifice] = await Promise.all([
       estimateManualFees(rpc, {
         mint: q.mint,
@@ -619,6 +636,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       baseFeeLamports: fees.baseFeeLamports.toString(),
       platformFeeLamports: charged(sacrifice) ? sacrifice.lamports!.toString() : "0",
       sacrifice: sacrificeView(sacrifice),
+      // The panel warns while Sender isn't answering: shielded trades may expire, others use the RPC.
+      senderDown: senderHealth.down,
     };
   });
 
@@ -810,6 +829,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     // after one still waits.
     const giveBack = cooldown.take(wallet);
     const sent = await sendViaSender(url, transaction);
+    senderHealth.note(sent.ok || sent.refused);
     if (!sent.ok && sent.refused) {
       countProTrade("sendRefused");
       giveBack();
@@ -837,6 +857,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       lastValidBlockHeight,
       until: Date.now() + RESEND_FOR_MS,
       wallet,
+      rpcFallback: !mevProtect,
+      silent: sent.ok ? 0 : 1,
     });
     // A backstop on memory only (each wallet has at most MAX_IN_FLIGHT_PER_WALLET): the oldest
     // stops being resent, and its status can still say "expired".
@@ -1087,7 +1109,27 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       return false;
     });
     for (let i = 0; i < unseen.length; i += RESEND_BATCH)
-      await Promise.all(unseen.slice(i, i + RESEND_BATCH).map(([, f]) => sendViaSender(f.url, f.base64)));
+      await Promise.all(unseen.slice(i, i + RESEND_BATCH).map(([signature, f]) => resend(signature, f)));
+  }
+  /**
+   * One resend: to Sender, and with MEV Protect off, once Sender has left it unanswered twice, the
+   * same bytes through the RPC and its backup too (the Sender tip in it is harmless there). Neither
+   * answer changes the trade: it may have gone out either way, and only its status settles it.
+   */
+  async function resend(signature: string, f: InFlight) {
+    const viaRpc = f.rpcFallback && f.silent >= RPC_FALLBACK_AFTER;
+    if (viaRpc && f.silent === RPC_FALLBACK_AFTER)
+      app.log.warn(
+        { wallet: walletTag(f.wallet), signature },
+        "sender silent; resending through the rpc too",
+      );
+    const [sent] = await Promise.all([
+      sendViaSender(f.url, f.base64),
+      viaRpc ? rpc.send(f.base64).catch(() => null) : null,
+    ]);
+    const answered = sent.ok || sent.refused;
+    senderHealth.note(answered);
+    f.silent = answered ? 0 : f.silent + 1;
   }
   /**
    * At boot: trades still "sent" and inside their blockhash's life go back on the resend loop
@@ -1128,6 +1170,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         lastValidBlockHeight,
         until: Date.now() + RESEND_FOR_MS,
         wallet: r.wallet,
+        // Only a row that says MEV Protect was off: an older row without it stays on Sender.
+        rpcFallback: r.senderMevProtect === false,
+        silent: 0,
       });
       resumed++;
     }

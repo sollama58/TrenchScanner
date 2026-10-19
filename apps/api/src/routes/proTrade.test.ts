@@ -141,6 +141,8 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
       baseFeeLamports: "5000",
       platformFeeLamports: "0",
       sacrifice: expect.objectContaining({ mode: "off", pays: false, credits: null }),
+      // Sender's health (senderHealth.test.ts): its background ping depends on the network here.
+      senderDown: expect.any(Boolean),
     });
     expect((await as(ADMIN, "GET", `/pro/trade/fee?mint=nope&speed=eco`)).statusCode).toBe(400);
     // Swap costs: Pro wallets only too, and a bad mint is refused before any quote.
