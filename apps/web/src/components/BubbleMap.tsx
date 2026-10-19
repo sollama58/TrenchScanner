@@ -354,6 +354,7 @@ function MapView({
   flags,
   scanKolBundled,
   column = false,
+  spread,
 }: {
   graph: BubbleGraph;
   names: WalletNames;
@@ -373,6 +374,8 @@ function MapView({
   scanKolBundled: number | null;
   /** Laid out to fit a fixed column (Scope's desktop page): the lists and wallet types first, the map under them. */
   column?: boolean;
+  /** How far sideways the map may spread (BubbleSvg). */
+  spread?: number;
 }) {
   const [picked, setPicked] = useState<string | null>(null);
   // The cluster picked from the list, by its funder: its index can move when the map updates.
@@ -565,6 +568,7 @@ function MapView({
   );
   const map = (
     <BubbleSvg
+      spread={spread}
       graph={regrouped ?? graph}
       names={names}
       picked={picked}
@@ -1255,6 +1259,7 @@ function BubbleSvg({
   kols,
   sides,
   onPick,
+  spread,
 }: {
   graph: BubbleGraph;
   names: WalletNames;
@@ -1271,12 +1276,14 @@ function BubbleSvg({
   /** Each holder's possible-side matches, for its title. */
   sides: PossibleSides;
   onPick: (id: string) => void;
+  /** How far sideways the map may spread to fill a wide stage; stretchWide's own cap by default. */
+  spread?: number;
 }) {
   const uid = useId().replace(/:/g, "");
   // The map spread sideways to fill a wide stage (user ask 2026-10-16); a narrow one keeps its shape.
   const stage = useRef<HTMLDivElement>(null);
   const aspect = useStageAspect(stage);
-  const graph = useMemo(() => (aspect ? stretchWide(laid, aspect) : laid), [laid, aspect]);
+  const graph = useMemo(() => (aspect ? stretchWide(laid, aspect, spread) : laid), [laid, aspect, spread]);
   const { bubbleFunderLabels } = useAppearance();
   const index = new Map(graph.nodes.map((n) => [n.id, n]));
   const cexSlot = useMemo(() => cexSlots(graph), [graph]);
@@ -2204,6 +2211,7 @@ export function BubbleMapSection({
   flagged,
   flags,
   column = false,
+  spread,
 }: {
   token: Token;
   /** The reading to draw; undefined while it loads. */
@@ -2225,6 +2233,8 @@ export function BubbleMapSection({
   flags: FlagsRead;
   /** Laid out to fit a fixed column (Scope's desktop page): see MapView. */
   column?: boolean;
+  /** How far sideways the map may spread to fill a wide stage (Scope's tab, user ask 2026-10-19). */
+  spread?: number;
 }) {
   const mint = token.mintAddress;
   const liveWide = liveWideFor(snapshot, useWideMap(mint));
@@ -2329,6 +2339,7 @@ export function BubbleMapSection({
         flags={flags}
         scanKolBundled={shown?.kolBundledPct ?? null}
         column={column}
+        spread={spread}
       />
     </section>
   );
