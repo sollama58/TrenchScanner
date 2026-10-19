@@ -56,6 +56,24 @@ describe("telegram alert text", () => {
     );
   });
 
+  it("says how old a holder count is once it was read minutes before the send", () => {
+    const now = Date.now();
+    const at = (ago: number) =>
+      card({
+        snapshot: {
+          marketCapUsd: 45_200,
+          holderCount: 130,
+          holderCountAt: new Date(now - ago),
+          volume1hUsd: 22_000,
+        },
+      });
+    expect(formatAlert(at(60_000), links, now)).toContain("👥 <b>130</b> holders");
+    expect(formatAlert(at(60_000), links, now)).not.toContain("read ");
+    expect(formatAlert(at(11 * 60_000), links, now)).toContain("👥 <b>130</b> holders, read 11m ago");
+    // No read time (an older snapshot): as before.
+    expect(formatAlert(card(), links, now)).not.toContain("read ");
+  });
+
   it("says who raised it", () => {
     expect(headline(card({ filters: [{ name: "Mine", score: 1 }] }))).toBe("caught by “Mine”");
     const call = {

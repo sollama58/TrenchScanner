@@ -196,6 +196,32 @@ export function runningSinceFrom(meta: unknown, lastRunAt?: Date | null): Date |
   return lastRunAt && lastRunAt.getTime() > at.getTime() ? null : at;
 }
 
+/**
+ * Marks the run in flight as having lost its job lock (apps/worker/src/jobLock.ts): the lock's
+ * connection dropped and the lock could not be taken again, so the run goes on without it. The
+ * lost-run check reads "running, lock free" as a run lost with its process, and without this mark
+ * it raised that alarm for a run that was still going. Cleared with the rest of meta by the
+ * end-of-run heartbeat.
+ */
+export async function recordLockLost(job: HeartbeatJob, at: Date = new Date()): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "SystemHeartbeat"
+    SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object('lockLostAt', ${at.toISOString()}::text)
+    WHERE job = ${job}`;
+}
+
+/**
+ * Whether the run in flight (started `runningSince`) lost its job lock while still going - see
+ * recordLockLost. Such a run's free lock says nothing about whether it is still running.
+ */
+export function lockLostDuringRun(meta: unknown, runningSince: Date | null): boolean {
+  if (runningSince === null || typeof meta !== "object" || meta === null || Array.isArray(meta)) return false;
+  const raw = (meta as Record<string, unknown>).lockLostAt;
+  if (typeof raw !== "string") return false;
+  const at = Date.parse(raw);
+  return !Number.isNaN(at) && at >= runningSince.getTime();
+}
+
 /** The advisory-lock key text for a job (the worker's withJobLock) - hashed by Postgres. */
 export function jobLockKey(job: HeartbeatJob): string {
   return `job-run:${job}`;

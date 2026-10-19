@@ -435,7 +435,12 @@ const TOKEN_SELECT = {
   firstSeenAt: true,
   imageUrl: true,
 } as const;
-const SNAPSHOT_SELECT = { marketCapUsd: true, holderCount: true, volume1hUsd: true } as const;
+const SNAPSHOT_SELECT = {
+  marketCapUsd: true,
+  holderCount: true,
+  holderCountAt: true,
+  volume1hUsd: true,
+} as const;
 
 /** Held for the length of a pass, so only one process is ever sending. */
 export const TELEGRAM_DISPATCH_LOCK = "telegram-dispatch";
@@ -443,6 +448,17 @@ export const TELEGRAM_DISPATCH_LOCK = "telegram-dispatch";
 const PASS_TRANSACTION_TIMEOUT_MS = 120_000;
 
 /** One pass. Returns what it did, for the heartbeat. */
+/**
+ * Why a pass failed although it ran to the end, or null: it had alerts to send and every send
+ * failed (Telegram unreachable, a revoked bot token). Such a pass returned normally and recorded a
+ * success, so /health/worker and pipeline-watch read a dispatcher delivering nothing as healthy
+ * until the chats' cursors fell 15 minutes behind.
+ */
+export function dispatchFailure(summary: DispatchSummary): string | null {
+  if (summary.failed === 0 || summary.sent + summary.digests > 0) return null;
+  return `every Telegram send failed (${summary.failed} of ${summary.failed} this pass)`;
+}
+
 export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Promise<DispatchSummary> {
   const summary: DispatchSummary = {
     chats: 0,

@@ -7,10 +7,12 @@ import {
   clearedKeys,
   findCapacityProblems,
   findProblems,
+  findSideJobProblems,
   findTrainerProblems,
   notificationText,
   restartStep,
   runPipelineWatch,
+  SIDE_JOBS,
   TRAINER_JOBS,
   trainerOverdueAfterMs,
   WATCH_ANNOUNCER,
@@ -58,6 +60,88 @@ describe("pipeline watch: what counts as stalled", () => {
       NOW,
     );
     expect(problems.map((p) => p.key)).toEqual(["job:scan", "job:telegram-dispatch"]);
+  });
+
+  it("tells the admins about an alert-path job that runs but fails every run, without a banner or restart", () => {
+    const problems = findProblems(
+      [],
+      [
+        {
+          job: "scan",
+          lastRunAt: new Date(NOW - MIN),
+          lastSuccessAt: new Date(NOW - 40 * MIN),
+          lastError: "pool timeout\nstack",
+          intervalMs: 30_000,
+          runningSince: null,
+        },
+        // A failure inside the window: one bad run, not a failing job.
+        {
+          job: "fast-match",
+          lastRunAt: new Date(NOW - MIN),
+          lastSuccessAt: new Date(NOW - 3 * MIN),
+          lastError: "429",
+          intervalMs: 15_000,
+          runningSince: null,
+        },
+        // Never succeeded.
+        {
+          job: "telegram-dispatch",
+          lastRunAt: new Date(NOW - MIN),
+          lastSuccessAt: null,
+          lastError: "every Telegram send failed (3 of 3 this pass)",
+          intervalMs: 10_000,
+          runningSince: null,
+        },
+      ],
+      NOW,
+    );
+    expect(problems.map((p) => p.key)).toEqual(["failing:scan", "failing:telegram-dispatch"]);
+    expect(problems.every((p) => p.side)).toBe(true);
+    expect(problems[0]!.text).toBe("Job scan: every run failed for 40 min: pool timeout");
+    expect(notificationText(problems, [], problems)).toContain("scanner jobs need a look");
+    expect(notificationText(problems, [], problems)).not.toContain("pipeline stalled");
+  });
+
+  it("watches burn-scan and live-price: hung, stopped or failing, notify-only", () => {
+    expect(SIDE_JOBS).toEqual(["burn-scan", "live-price"]);
+    const problems = findSideJobProblems(
+      [
+        {
+          job: "burn-scan",
+          lastRunAt: new Date(NOW - 50 * MIN),
+          lastSuccessAt: new Date(NOW - 50 * MIN),
+          intervalMs: 2 * MIN,
+          runningSince: new Date(NOW - 50 * MIN),
+        },
+        {
+          job: "live-price",
+          lastRunAt: new Date(NOW - MIN),
+          lastSuccessAt: new Date(NOW - 30 * MIN),
+          lastError: "every DexScreener batch failed (40 mints)",
+          intervalMs: MIN,
+          runningSince: null,
+        },
+      ],
+      NOW,
+    );
+    expect(problems.map((p) => p.key)).toEqual(["side:burn-scan", "failing:live-price"]);
+    expect(problems[0]!.text).toBe("Job burn-scan: a run has not returned for 50 min");
+    expect(problems.every((p) => p.side && !p.trainer)).toBe(true);
+    // Healthy: nothing.
+    expect(
+      findSideJobProblems(
+        [
+          {
+            job: "live-price",
+            lastRunAt: new Date(NOW - MIN),
+            lastSuccessAt: new Date(NOW - MIN),
+            intervalMs: MIN,
+            runningSince: null,
+          },
+        ],
+        NOW,
+      ),
+    ).toEqual([]);
   });
 
   it("flags the database once it passes the disk warning line, and not with the check off", () => {
@@ -184,6 +268,29 @@ describe("pipeline watch: the trainer's jobs", () => {
     expect(findTrainerProblems([{ ...night(0), lastRunAt: null, lastSuccessAt: null }], NOW)).toEqual([]);
   });
 
+  it("tells about a frequent job's failures only once they have lasted a while", () => {
+    const candle = (sinceSuccessMs: number) =>
+      trainer(
+        "candle-peaks",
+        MIN,
+        { intervalMs: MIN },
+        {
+          lastSuccessAt: new Date(NOW - sinceSuccessMs),
+          lastError: "Pump.fun throttled the candle reads (429) before any coin was read",
+        },
+      );
+    expect(findTrainerProblems([candle(3 * MIN)], NOW)).toEqual([]);
+    expect(findTrainerProblems([candle(45 * MIN)], NOW).map((p) => p.key)).toEqual(["failed:candle-peaks"]);
+    // An hourly job is still told on its first failure.
+    const hourly = trainer(
+      "wallet-risk",
+      MIN,
+      { intervalMs: HOUR },
+      { lastSuccessAt: new Date(NOW - HOUR), lastError: "boom" },
+    );
+    expect(findTrainerProblems([hourly], NOW).map((p) => p.key)).toEqual(["failed:wallet-risk"]);
+  });
+
   it("takes a skipped run (the AI judge with no key) as the job being alive", () => {
     expect(findTrainerProblems([trainer("ai-judge", 10 * MIN, { intervalMs: 10 * MIN })], NOW)).toEqual([]);
   });
@@ -286,8 +393,8 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
       WATCHED_JOBS.map((job) =>
         prisma.systemHeartbeat.upsert({
           where: { job },
-          create: { job, lastRunAt: new Date(at) },
-          update: { lastRunAt: new Date(at), meta: {} },
+          create: { job, lastRunAt: new Date(at), lastSuccessAt: new Date(at) },
+          update: { lastRunAt: new Date(at), lastSuccessAt: new Date(at), meta: {} },
         }),
       ),
     );
@@ -295,7 +402,9 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
   beforeEach(async () => {
     await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
     // Trainer rows other test files left behind would read as overdue trainer jobs here.
-    await prisma.systemHeartbeat.deleteMany({ where: { job: { in: [...TRAINER_JOBS, "pipeline-watch"] } } });
+    await prisma.systemHeartbeat.deleteMany({
+      where: { job: { in: [...TRAINER_JOBS, ...SIDE_JOBS, "pipeline-watch"] } },
+    });
     await prisma.announcement.deleteMany({ where: { createdBy: WATCH_ANNOUNCER } });
   });
   afterAll(async () => {

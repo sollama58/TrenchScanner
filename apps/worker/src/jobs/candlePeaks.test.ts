@@ -5,6 +5,7 @@ import { HttpError, prisma, type MinuteCandle } from "@trenchscanner/core";
 import { enrolPeakWatches, resetPeakWatchEnrolment, runCandlePeaksJob } from "./candlePeaks.js";
 import { recordCuratedPeaks } from "./curatedPeaks.js";
 import { recordMatchPeaks } from "./matchPeaks.js";
+import { JobFailure } from "../scheduler.js";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -233,9 +234,22 @@ describe.skipIf(!dbAvailable)("runCandlePeaksJob", () => {
 
   it("stops at Pump.fun's first 429 and tries a failed coin again soon", async () => {
     const { token, call } = await seedCoin("throttled", 1, { callPeak: 12_000 });
-    candlesByMint.set(token.mintAddress, new HttpError(429, "too many"));
-    const meta = await run();
-    expect(meta).toMatchObject({ throttled: true });
+    // Pump.fun answers the run's first call with a 429 (whichever coin it is: other files' coins
+    // may be due too), so it stops before any coin is read - a failed run, with the backlog it
+    // left on the row.
+    const throttled = {
+      minuteCandles: async (): Promise<MinuteCandle[] | null> => {
+        throw new HttpError(429, "too many");
+      },
+    };
+    const failure = await runCandlePeaksJob(throttled, {
+      trackingDays: 14,
+      coinsPerRun: 500,
+      spacingMs: 0,
+    }).catch((err: unknown) => err);
+    expect(failure).toBeInstanceOf(JobFailure);
+    expect((failure as JobFailure).meta).toMatchObject({ throttled: true, coins: 0, calls: 1 });
+    expect((failure as JobFailure).meta.backlog).toBeGreaterThanOrEqual(1);
     expect((await callOf(call.id)).peakCheckedAt).toBeNull();
     candlesByMint.set(token.mintAddress, new Error("socket hang up"));
     const now = Date.now();

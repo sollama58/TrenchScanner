@@ -7,6 +7,7 @@ import {
   staleThresholdMs,
   STRICT_WORKER_JOBS,
   strictWorkerFailures,
+  isFailing,
   summarizeHeartbeat,
 } from "./health.js";
 
@@ -269,6 +270,15 @@ describe("GET /health while the report caches fill", () => {
  * `?strict=1` puts the alert path's staleness into the status code, for an outside uptime
  * monitor that reads nothing else; without it the route answers 200 exactly as before.
  */
+describe("isFailing", () => {
+  const now = Date.UTC(2026, 9, 19, 1, 0);
+  it("is a job with no success inside its stale threshold, or none ever", () => {
+    expect(isFailing(new Date(now - 5 * 60_000), 10 * 60_000, now)).toBe(false);
+    expect(isFailing(new Date(now - 11 * 60_000), 10 * 60_000, now)).toBe(true);
+    expect(isFailing(null, 10 * 60_000, now)).toBe(true);
+  });
+});
+
 describe("GET /health/worker?strict=1: which jobs fail it", () => {
   const fresh = (job: string) => ({ job, stale: false });
 
@@ -283,6 +293,13 @@ describe("GET /health/worker?strict=1: which jobs fail it", () => {
       { job: "curator-training", stale: true },
     ];
     expect(strictWorkerFailures(jobs)).toEqual(["fast-match"]);
+  });
+
+  it("names an alert-path job that runs but fails every run, though not pipeline-watch's own reports", () => {
+    const jobs = STRICT_WORKER_JOBS.map((job) =>
+      job === "scan" || job === "pipeline-watch" ? { job, stale: false, failing: true } : fresh(job),
+    );
+    expect(strictWorkerFailures(jobs)).toEqual(["scan"]);
   });
 
   it("counts a missing row as failing: the scanner never wrote one", () => {
@@ -306,8 +323,8 @@ describe.skipIf(!dbAvailable)("GET /health/worker?strict=1 against the database"
       STRICT_WORKER_JOBS.map((job) =>
         prisma.systemHeartbeat.upsert({
           where: { job },
-          create: { job, lastRunAt: at },
-          update: { lastRunAt: at, meta: {} },
+          create: { job, lastRunAt: at, lastSuccessAt: at },
+          update: { lastRunAt: at, lastSuccessAt: at, meta: {} },
         }),
       ),
     );

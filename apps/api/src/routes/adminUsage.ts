@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { fetchJson, prisma, Prisma, type Env } from "@trenchscanner/core";
-import { SharedCacheMap } from "../sharedCache.js";
+import { ADMIN_STALE_ON_ERROR_MS, SharedCacheMap } from "../sharedCache.js";
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -287,8 +287,8 @@ export async function readTokenSageUsage(
  * own calls beside them when its admin key is set. Behind authenticateAdmin (server.ts).
  */
 export async function registerAdminUsageRoutes(app: FastifyInstance, opts: { env: Env }) {
-  const reports = new SharedCacheMap<ApiUsageReport>(CACHE_MS, 3);
-  const tokenSage = new SharedCacheMap<TokenSageUsage>(60_000, 3);
+  const reports = new SharedCacheMap<ApiUsageReport>(CACHE_MS, 3, 0, ADMIN_STALE_ON_ERROR_MS);
+  const tokenSage = new SharedCacheMap<TokenSageUsage>(60_000, 3, 0, ADMIN_STALE_ON_ERROR_MS);
 
   app.get("/api-usage", async (request, reply) => {
     const parsed = querySchema.safeParse(request.query);

@@ -9,7 +9,7 @@ import {
   type MinuteCandle,
   type PumpFunClient,
 } from "@trenchscanner/core";
-import type { JobRunMeta } from "../scheduler.js";
+import { JobFailure, type JobRunMeta } from "../scheduler.js";
 
 const logger = createLogger("candle-peaks");
 
@@ -203,16 +203,39 @@ export async function runCandlePeaksJob(
   // The trainer's swap-api budget (pumpfunGate.ts), shared with the regrade jobs: what it let
   // through, paused and held back since the last run.
   const swap = pumpFunSwapGate.takeStats();
+  // The backlog: coins whose read is due and still waiting, and how late the oldest is. A run
+  // reads PEAK_COINS_PER_RUN, so a backlog that only grows says the reads fall behind (Pump.fun
+  // throttling) while the Peaks they own go stale.
+  const backlogWhere = {
+    nextCheckAt: { lte: new Date(startedAt) },
+    lastAlertAt: { gt: horizon },
+    noCandles: false,
+  };
+  const [backlog, oldestDue] = await Promise.all([
+    prisma.peakWatch.count({ where: backlogWhere }),
+    prisma.peakWatch.findFirst({
+      where: backlogWhere,
+      orderBy: { nextCheckAt: "asc" },
+      select: { nextCheckAt: true },
+    }),
+  ]);
   const meta = {
     ...counts,
     enrolled,
     due: due.length,
+    backlog,
+    oldestDueMinutes: oldestDue ? Math.round((startedAt - oldestDue.nextCheckAt.getTime()) / 60_000) : 0,
     throttled,
     swapRequests: swap.requests,
     swapThrottled: swap.throttled,
     swapHeldBack: swap.heldBack,
   };
   if (counts.coins > 0 || enrolled > 0) logger.info("candle peaks", meta);
+  // Throttled before a single coin was read: a failed run, not a quiet one - it used to record a
+  // success while no Peak moved.
+  if (throttled && counts.coins === 0 && counts.noCandles === 0) {
+    throw new JobFailure("Pump.fun throttled the candle reads (429) before any coin was read", meta);
+  }
   return meta;
 }
 

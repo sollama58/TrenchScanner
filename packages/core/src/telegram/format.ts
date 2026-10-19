@@ -20,6 +20,11 @@ export interface AlertToken {
 export interface AlertSnapshot {
   marketCapUsd: number;
   holderCount: number | null;
+  /**
+   * When the holder count was read. A fast-match alert repeats the last scan's count (up to ~12
+   * minutes old), and a scan's count can come from a cached RugCheck report, so an old one says so.
+   */
+  holderCountAt?: Date | null;
   volume1hUsd: number | null;
 }
 
@@ -331,6 +336,8 @@ function strongestFirst(card: AlertCard): AlertCard {
 
 /** Sent this many minutes or more after it was raised, an alert's MC is marked as the alert's. */
 export const LATE_SEND_MINUTES = 2;
+/** A holder count read this many minutes or more before the send says how old it is. */
+export const OLD_HOLDER_COUNT_MINUTES = 5;
 
 /** The numbers, two to a line so they read as a small grid on a phone. */
 function factsLines(card: AlertCard, now: number, parts: AlertParts, compact: boolean): string | null {
@@ -340,8 +347,12 @@ function factsLines(card: AlertCard, now: number, parts: AlertParts, compact: bo
   const lateMin = Math.floor((now - card.raisedAt.getTime()) / 60_000);
   const late = lateMin >= LATE_SEND_MINUTES ? ` at alert, ${lateMin}m ago` : "";
   if (parts.stats && card.snapshot) facts.push(`💰 MC <b>${usd(card.snapshot.marketCapUsd)}</b>${late}`);
-  if (parts.holders && card.snapshot?.holderCount != null)
-    facts.push(`👥 <b>${card.snapshot.holderCount}</b> holders`);
+  if (parts.holders && card.snapshot?.holderCount != null) {
+    const readAt = card.snapshot.holderCountAt;
+    const readMin = readAt ? Math.floor((now - readAt.getTime()) / 60_000) : 0;
+    const old = readMin >= OLD_HOLDER_COUNT_MINUTES ? `, read ${readMin}m ago` : "";
+    facts.push(`👥 <b>${card.snapshot.holderCount}</b> holders${old}`);
+  }
   if (parts.volume && card.snapshot?.volume1hUsd != null)
     facts.push(`📊 Vol 1h <b>${usd(card.snapshot.volume1hUsd)}</b>`);
   const age = parts.age ? ageText(card.token.firstSeenAt, now) : null;

@@ -214,6 +214,7 @@ export function formatActiveAlerts(
   });
   if (sorted.length > ACTIVE_ALERTS_MAX) lines.push("", `… and ${sorted.length - ACTIVE_ALERTS_MAX} more`);
   lines.push("", "<i>Returns are on the market cap at each alert.</i>");
+  lines.push(updatedText(now));
   if (floorNote) lines.push(floorNote);
   const dash = dashboardLink(links, "Open the Live feed");
   if (dash) lines.push(dash);
@@ -224,6 +225,17 @@ function windowName(hours: number): string {
   return hours % 24 === 0 && hours >= 48 ? `${hours / 24}d` : `${hours}h`;
 }
 
+/**
+ * "Updated 14:05 UTC": a board is one message that stays in the chat, refreshed only when someone
+ * presses its button, so without its time an hours-old board read as the numbers now.
+ */
+export function updatedText(now: number): string {
+  const at = new Date(now);
+  const hh = String(at.getUTCHours()).padStart(2, "0");
+  const mm = String(at.getUTCMinutes()).padStart(2, "0");
+  return `<i>Updated ${hh}:${mm} UTC</i>`;
+}
+
 function sinceText(at: Date): string {
   const month = at.toLocaleString("en-US", { month: "short", timeZone: "UTC" });
   const hh = String(at.getUTCHours()).padStart(2, "0");
@@ -232,7 +244,7 @@ function sinceText(at: Date): string {
 }
 
 /** The /trenchboard answer for one window; the buttons under it pick another. */
-export function formatTrenchboard(stats: BoardStats): string {
+export function formatTrenchboard(stats: BoardStats, now = Date.now()): string {
   const lines = [`🏆 <b>Trenchboard</b>  ·  last ${windowName(stats.hours)}`, DIVIDER];
   if (stats.alerts === 0) {
     lines.push("No alerts in this chat over this window.");
@@ -251,5 +263,6 @@ export function formatTrenchboard(stats: BoardStats): string {
   }
   lines.push("", "<i>A win is a clean 2x within 15 minutes; the return is the exit plan's.</i>");
   if (stats.recordedSince) lines.push(`<i>Counting from ${sinceText(stats.recordedSince)}.</i>`);
+  lines.push(updatedText(now));
   return lines.join("\n");
 }

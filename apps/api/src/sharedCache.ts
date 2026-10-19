@@ -24,7 +24,16 @@ export interface SharedCacheOptions {
    * TTL, age and how long its fills take. Unnamed caches (the per-user feed pages) are left out.
    */
   name?: string;
+  /**
+   * The oldest value a failed fill may still answer with (see fill()). Unset, any age: a dated
+   * feed beats an error page. The admin reports set it, since an admin reading a report hours old
+   * as current (the database down, every fill failing) is worse off than one seeing the error.
+   */
+  maxStaleOnErrorMs?: number;
 }
+
+/** maxStaleOnErrorMs for the admin panel's reports: a few of their fills, then the error. */
+export const ADMIN_STALE_ON_ERROR_MS = 15 * 60_000;
 
 /** What GET /stats/caches reports for one named cache. */
 export interface CacheReportRow {
@@ -97,6 +106,7 @@ export class SharedCache<T> {
   /** Bumped by clear(): a fill that started before the bump must not store its (older) result. */
   private generation = 0;
   private readonly staleMs: number;
+  private readonly maxStaleOnErrorMs: number | undefined;
   private readonly name: string | undefined;
   private readonly stats = { fills: 0, failed: 0, lastMs: 0, maxMs: 0, totalMs: 0, waited: 0, stale: 0 };
 
@@ -105,6 +115,7 @@ export class SharedCache<T> {
     opts: SharedCacheOptions = {},
   ) {
     this.staleMs = opts.staleWhileRevalidateMs ?? 0;
+    this.maxStaleOnErrorMs = opts.maxStaleOnErrorMs;
     this.name = opts.name;
     if (this.name) named.add(this as SharedCache<unknown>);
   }
@@ -175,7 +186,11 @@ export class SharedCache<T> {
         this.stats.failed += 1;
         // Serve a stale value over failing the page: a feed a few seconds old is a better answer
         // than an error, and the next request retries. Only a cold cache propagates the error.
-        if (this.value) {
+        if (
+          this.value &&
+          (this.maxStaleOnErrorMs === undefined ||
+            Date.now() - this.value.computedAt.getTime() <= this.maxStaleOnErrorMs)
+        ) {
           logger.warn("refresh failed, serving stale", { err: String(err) });
           return this.stamped(this.value);
         }
@@ -246,6 +261,8 @@ export class SharedCacheMap<T> {
     private readonly maxEntries: number,
     /** Each key's cache's stale-while-revalidate window (SharedCacheOptions); unnamed. */
     private readonly staleWhileRevalidateMs = 0,
+    /** Each key's cache's maxStaleOnErrorMs (SharedCacheOptions). */
+    private readonly maxStaleOnErrorMs?: number,
   ) {}
 
   /** The cache for `key`, created on first use. Marks it most recently used. */
@@ -257,7 +274,10 @@ export class SharedCacheMap<T> {
       this.caches.set(key, existing);
       return existing;
     }
-    const cache = new SharedCache<T>(this.ttlMs, { staleWhileRevalidateMs: this.staleWhileRevalidateMs });
+    const cache = new SharedCache<T>(this.ttlMs, {
+      staleWhileRevalidateMs: this.staleWhileRevalidateMs,
+      maxStaleOnErrorMs: this.maxStaleOnErrorMs,
+    });
     this.caches.set(key, cache);
     if (this.caches.size > this.maxEntries) {
       const oldest = this.caches.keys().next().value;

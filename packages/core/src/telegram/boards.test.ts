@@ -117,6 +117,11 @@ describe("the trenchboard", () => {
     expect(html).toContain("🚀 Best  <b>$MOON</b>  +840%");
   });
 
+  it("says when its numbers were read, since the message stays in the chat", () => {
+    expect(formatTrenchboard(stats, NOW)).toContain("<i>Updated 23:00 UTC</i>");
+    expect(formatActiveAlerts([alert()], links, NOW + 5 * 60_000)).toContain("<i>Updated 23:05 UTC</i>");
+  });
+
   it("names a week as 7d, and says where the record starts", () => {
     const html = formatTrenchboard({ ...stats, hours: 168, recordedSince: new Date("2026-10-10T21:30:00Z") });
     expect(html).toContain("last 7d");

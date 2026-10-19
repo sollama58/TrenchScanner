@@ -1174,6 +1174,8 @@ export interface WorkerHealth {
     stale: boolean;
     /** How long after lastRunAt the job reads as stale (absent from older API builds). */
     staleAfterMs?: number;
+    /** Running, but no run has succeeded within staleAfterMs (absent from older API builds). */
+    failing?: boolean;
     hung: boolean;
   }[];
   /** When each stage of the alert path last produced something (absent from older API builds). */

@@ -32,6 +32,7 @@ import {
   PRO_HOLDER_BACKUP_RPC,
   adminWalletSet,
   runTelegramDispatch,
+  dispatchFailure,
   runWebPushDispatch,
   takeManualRunRequests,
   onAlertWritten,
@@ -72,6 +73,7 @@ import { createPaperTradingRunner } from "./jobs/paperTradingJob.js";
 import {
   scheduleInterval,
   scheduleDailyAt,
+  JobFailure,
   SHUTDOWN_INTERRUPTED_ERROR,
   runningJobsNow,
   type JobRunMeta,
@@ -106,6 +108,15 @@ const logger = createLogger("worker");
 
 /** A day plus slack: a daily job whose last run is older than this missed its slot. */
 const DAILY_CATCH_UP_AFTER_HOURS = 26;
+/**
+ * The nightly sweeps' deadline (cleanup, outcome-tracking): a run takes 3-16 minutes, 30 at the
+ * worst seen, so one still going at two hours is hung, and the restart's catch-up re-runs it.
+ */
+const DAILY_SWEEP_DEADLINE_MINUTES = 120;
+/** The KOL roster read's: a few calls and an avatar pass. */
+const KOL_WALLETS_DEADLINE_MINUTES = 60;
+/** burn-scan's: passes take seconds; long enough that a slow RPC provider never loops restarts. */
+const BURN_SCAN_DEADLINE_MINUTES = 30;
 /** When the KOL roster is re-read: a quiet hour, away from the nightly sweeps. */
 const KOL_WALLETS_HOUR_UTC = 6;
 /** How often the AI judge job checks on replay batches and playbook rounds. */
@@ -363,10 +374,10 @@ async function main() {
   });
 
   // Deadlines (see scheduleInterval): each is several times the slowest run production has
-  // recorded, so only a run that is never coming back reaches one. Curator training and burn-scan
-  // have none: a slow retrain, or a slow RPC provider under the reconciler's sequential pages,
-  // would otherwise restart the whole worker in a loop, and either one stuck holds up nothing
-  // but itself.
+  // recorded, so only a run that is never coming back reaches one. Curator training has its own
+  // (a slow retrain must not restart the worker in a loop); burn-scan's is long for the same reason,
+  // a slow RPC provider under the reconciler's sequential pages, but it has one: a hung pass left
+  // everyone who burned since without access until the next deploy.
   // The other DexScreener sweeps start a few seconds apart from the scan rather than in phase
   // with it: started together, every one of their bursts landed on the scan's band refresh - the
   // call that decides what gets screened - and on each other. Each reschedules from its own run's
@@ -456,6 +467,8 @@ async function main() {
         const covered = horizon ? horizon.getTime() : startedAt - COMMIT_GRACE_MS;
         while (written.length > 0 && written[0]! <= covered) written.shift();
         retryAt = written.length > 0 ? Date.now() + 1_000 : 0;
+        const failure = dispatchFailure(summary);
+        if (failure) throw new JobFailure(failure, { ...summary });
         return summary;
       },
       env.TELEGRAM_DISPATCH_INTERVAL_SECONDS / 60,
@@ -570,7 +583,10 @@ async function main() {
         return counts;
       }),
       env.BURN_SCAN_INTERVAL_MINUTES,
-      { runEarly: burnRunEarly(heliusStream && burnStreamOn ? heliusStream : null, burnWake) },
+      {
+        deadlineMinutes: BURN_SCAN_DEADLINE_MINUTES,
+        runEarly: burnRunEarly(heliusStream && burnStreamOn ? heliusStream : null, burnWake),
+      },
     ),
   );
   // Free Access's end: an hour after a period runs out or an admin switches it off
@@ -610,9 +626,9 @@ async function main() {
         // won't (the scan read nothing from Helius for this classic SPL mint, 2026-10-18).
         () => withJobLock("pro-holders", () => refreshProHolders([deps.helius, proHolderBackup])),
         PRO_HOLDER_SCAN_MINUTES,
-        {
-          deadlineMinutes: PRO_HOLDER_SCAN_MINUTES,
-        },
+        // A hung scan is given up rather than restarting the scanner (its tape and caches with
+        // it): the next scan waits on this one's lock, so they still never overlap.
+        { deadlineMinutes: PRO_HOLDER_SCAN_MINUTES, abandonOnDeadline: true },
       ),
     );
   // The Sacrifice's ASDF price (asdfPrice.ts in core): a Jupiter quote of 1 SOL into ASDF and the
@@ -626,7 +642,8 @@ async function main() {
         "asdf-price",
         async () => ({ ...(await sampleAsdfPrice(asdfPriceReader)) }),
         ASDF_PRICE_SAMPLE_MS / 60_000,
-        { deadlineMinutes: 1 },
+        // One quote that never returns is given up, not a scanner restart: samples are 15 s apart.
+        { deadlineMinutes: 1, abandonOnDeadline: true },
       ),
     );
   }
@@ -860,7 +877,11 @@ async function main() {
           }),
         ),
         KOL_WALLETS_HOUR_UTC,
-        { catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS, runEarly: onRunNow("kol-wallets") },
+        {
+          catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS,
+          runEarly: onRunNow("kol-wallets"),
+          deadlineMinutes: KOL_WALLETS_DEADLINE_MINUTES,
+        },
       ),
     );
   // Cleanup, outcome tracking and the AI judge each run under a lock shared by every worker
@@ -868,6 +889,7 @@ async function main() {
   schedule("cleanup", () =>
     scheduleDailyAt("cleanup", () => withJobLock("cleanup", () => runCleanupJob(env)), env.CLEANUP_HOUR_UTC, {
       catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS,
+      deadlineMinutes: DAILY_SWEEP_DEADLINE_MINUTES,
     }),
   );
   schedule("outcome-tracking", () =>
@@ -875,11 +897,17 @@ async function main() {
       "outcome-tracking",
       takingRunNow("outcome-tracking", () =>
         withJobLock("outcome-tracking", () =>
-          runOutcomeTrackingJob(deps.dexScreener, env.SNAPSHOT_RETENTION_DAYS),
+          runOutcomeTrackingJob(deps.dexScreener, env.SNAPSHOT_RETENTION_DAYS, {
+            peakTrackingDays: env.PEAK_TRACKING_DAYS,
+          }),
         ),
       ),
       env.OUTCOME_TRACKING_HOUR_UTC,
-      { catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS, runEarly: onRunNow("outcome-tracking") },
+      {
+        catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS,
+        runEarly: onRunNow("outcome-tracking"),
+        deadlineMinutes: DAILY_SWEEP_DEADLINE_MINUTES,
+      },
     ),
   );
   // The self-learning half of Curated Alerts: walk-forward evaluation every

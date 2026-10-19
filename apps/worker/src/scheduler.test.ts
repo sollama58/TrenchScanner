@@ -14,6 +14,7 @@ vi.mock("@trenchscanner/core", () => ({
   lastHeartbeatAt: async () => null,
   lastSuccessfulRunAt: async () => null,
   withApiFeature: (_feature: string, fn: () => unknown) => fn(),
+  JOB_LOCKED_JOBS: ["ai-judge", "cleanup", "outcome-tracking"],
 }));
 
 const { scheduleInterval, scheduleDailyAt, JobSkipped, PartialJobFailure } = await import("./scheduler.js");
@@ -183,6 +184,56 @@ describe("scheduleInterval", () => {
     hung.stop();
     fine.stop();
     expect(hits).toEqual([["scan", 20 * 60_000]]);
+  });
+
+  it("gives up a run past its deadline with abandonOnDeadline, and runs the next one", async () => {
+    const hits: string[] = [];
+    const runs: number[] = [];
+    let call = 0;
+    const job = scheduleInterval(
+      "asdf-price",
+      () => {
+        runs.push(Date.now());
+        call += 1;
+        // The first run hangs; the rest return at once.
+        return call === 1 ? new Promise<void>(() => {}) : Promise.resolve();
+      },
+      0.25,
+      { deadlineMinutes: 1, abandonOnDeadline: true, onDeadline: (j) => void hits.push(j) },
+    );
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    job.stop();
+    // No restart: the hung run was recorded as failed and the cadence went on.
+    expect(hits).toEqual([]);
+    expect(runs.length).toBeGreaterThanOrEqual(3);
+    expect(heartbeats[0]).toMatchObject({ job: "asdf-price", success: false });
+    expect(String((heartbeats[0] as { error?: string }).error)).toMatch(
+      /^run passed its deadline after 60s; run abandoned/,
+    );
+    expect(heartbeats.slice(1).every((h) => h.success)).toBe(true);
+  });
+
+  it("restarts after all once too many abandoned runs have not settled", async () => {
+    const hits: string[] = [];
+    const job = scheduleInterval("asdf-price", () => new Promise<void>(() => {}), 0.25, {
+      deadlineMinutes: 1,
+      abandonOnDeadline: true,
+      onDeadline: (j) => void hits.push(j),
+    });
+    // Three runs given up (a minute each), then the fourth's deadline restarts.
+    await vi.advanceTimersByTimeAsync(4 * 60_000 + 30_000);
+    job.stop();
+    expect(hits).toEqual(["asdf-price"]);
+    expect(heartbeats.filter((h) => !h.success)).toHaveLength(3);
+  });
+
+  it("leaves the run-start stamp of a lock-guarded job to its lock", async () => {
+    const job = scheduleInterval("ai-judge", async () => {}, 10);
+    await vi.advanceTimersByTimeAsync(1_000);
+    job.stop();
+    // jobLock.ts stamps it once the lock is taken, so a skipped run never stamps over the real one.
+    expect(starts).toEqual([]);
+    expect(heartbeats).toHaveLength(1);
   });
 
   it("does not count a blocked event loop against the deadline", async () => {
@@ -359,6 +410,22 @@ describe("scheduleDailyAt", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("restarts on a daily run past its deadline, and not on one that returns", async () => {
+    const hits: [string, number][] = [];
+    const hung = scheduleDailyAt("outcome-tracking", () => new Promise(() => {}), 11, {
+      deadlineMinutes: 120,
+      onDeadline: (job, ms) => void hits.push([job, ms]),
+    });
+    const fine = scheduleDailyAt("kol-wallets", async () => {}, 11, {
+      deadlineMinutes: 1,
+      onDeadline: (job, ms) => void hits.push([job, ms]),
+    });
+    await vi.advanceTimersByTimeAsync(4 * HOUR);
+    hung.stop();
+    fine.stop();
+    expect(hits).toEqual([["outcome-tracking", 120 * 60_000]]);
   });
 
   it("waits for its hour when the last run is recent", async () => {

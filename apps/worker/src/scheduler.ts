@@ -1,5 +1,6 @@
 import {
   createLogger,
+  JOB_LOCKED_JOBS,
   lastSuccessfulRunAt,
   recordHeartbeat,
   recordRunStart,
@@ -109,6 +110,61 @@ const STALL_FLOOR_MS = 5 * 60_000;
 const DEADLINE_TICK_MS = 15_000;
 
 /**
+ * Calls `onDeadline` once a run has been going `deadlineMinutes`, and returns the timer to clear
+ * when it ends.
+ *
+ * Counted in ticks of awake time, not wall clock: curator training holds the event loop for
+ * minutes at a stretch, and a plain timer firing straight after that would end a run that was
+ * only waiting its turn. A late tick counts for at most two ticks.
+ */
+function startDeadline(
+  startedAt: number,
+  deadlineMinutes: number | undefined,
+  onDeadline: (runningForMs: number) => void,
+): NodeJS.Timeout | undefined {
+  if (deadlineMinutes === undefined) return undefined;
+  let awakeMs = 0;
+  let lastTick = startedAt;
+  const timer: NodeJS.Timeout = setInterval(() => {
+    const now = Date.now();
+    awakeMs += Math.min(now - lastTick, 2 * DEADLINE_TICK_MS);
+    lastTick = now;
+    if (awakeMs < deadlineMinutes * 60_000) return;
+    clearInterval(timer);
+    onDeadline(now - startedAt);
+  }, DEADLINE_TICK_MS);
+  timer.unref?.();
+  return timer;
+}
+
+/**
+ * The jobs whose run start is stamped by withJobLock (jobLock.ts) once the lock is taken, rather
+ * than by the scheduler before the run: a run skipped because another process holds the lock
+ * stamped runningSince over the real run's, so a run hung since 03:00 read as one started at the
+ * deploy, and the hung timers on /health/worker and pipeline-watch started again from there.
+ */
+const STAMPED_UNDER_LOCK = new Set<HeartbeatJob>(JOB_LOCKED_JOBS);
+
+/** Stamps a run's start unless its job lock stamps it - see STAMPED_UNDER_LOCK. */
+async function stampRunStart(name: HeartbeatJob, startedAt: number): Promise<void> {
+  if (STAMPED_UNDER_LOCK.has(name)) return;
+  // Visibility only - never worth not running the job over.
+  await recordRunStart(name, new Date(startedAt)).catch(() => {});
+}
+
+/**
+ * Thrown inside the scheduler when a run with `abandonOnDeadline` passes its deadline: the run is
+ * recorded as failed and the next one scheduled, while the old one is left to settle on its own.
+ */
+class RunAbandoned extends Error {}
+
+/**
+ * Abandoned runs that have not settled yet, by job, past which a deadline restarts the worker
+ * after all: a job whose every run hangs would otherwise pile up stuck calls without end.
+ */
+const MAX_ABANDONED_RUNS = 3;
+
+/**
  * Runs `fn` immediately, then again `intervalMinutes` after each run STARTED - or straight away
  * when a run took longer than that. Runs never overlap.
  *
@@ -135,6 +191,13 @@ export function scheduleInterval(
   opts: {
     deadlineMinutes?: number;
     onDeadline?: (job: HeartbeatJob, runningForMs: number) => void;
+    /**
+     * At the deadline, give the run up rather than restart the worker: the failure is recorded,
+     * the next run is scheduled, and the old run is left to settle (its result dropped). For a
+     * small side job (a price sample, the holder scan) whose hang should not cost the scanner its
+     * in-memory tape and caches. Past MAX_ABANDONED_RUNS unsettled, the deadline restarts as usual.
+     */
+    abandonOnDeadline?: boolean;
     /** How long to hold the first run, in ms - by default none, it runs at once. */
     firstRunDelayMs?: () => Promise<number>;
     /** Meta a failed run still records (a run that throws otherwise leaves only its timing). */
@@ -165,6 +228,8 @@ export function scheduleInterval(
   const intervalMs = intervalMinutes * 60_000;
   const stallMs = Math.max(STALL_FLOOR_MS, intervalMs * STALL_INTERVALS);
   const { deadlineMinutes, onDeadline = exitOnDeadline } = opts;
+  /** Runs given up at their deadline (abandonOnDeadline) that have not settled yet. */
+  let abandoned = 0;
   let stopped = false;
   let next: NodeJS.Timeout | undefined;
   let inFlight: Promise<void> | undefined;
@@ -194,25 +259,22 @@ export function scheduleInterval(
     // Logging a hung run was not enough: on 2026-10-04 scan, fast-match and candidate-watch all
     // hung at 05:10 on database connections that died under them and sat there for ten hours,
     // logging, while the process stayed up and so was never restarted. A run past its deadline
-    // now ends the process, and Render starts a fresh one with a fresh connection pool.
-    //
-    // Counted in ticks of awake time, not wall clock: curator training holds the event loop for
-    // minutes at a stretch, and a plain timer firing straight after that would end a run that was
-    // only waiting its turn. A late tick counts for at most two ticks.
-    let awakeMs = 0;
-    let lastTick = startedAt;
-    const deadline =
-      deadlineMinutes === undefined
-        ? undefined
-        : setInterval(() => {
-            const now = Date.now();
-            awakeMs += Math.min(now - lastTick, 2 * DEADLINE_TICK_MS);
-            lastTick = now;
-            if (awakeMs < deadlineMinutes * 60_000) return;
-            clearInterval(deadline);
-            onDeadline(name, now - startedAt);
-          }, DEADLINE_TICK_MS);
-    deadline?.unref?.();
+    // now ends the process, and Render starts a fresh one with a fresh connection pool - or, for
+    // a job that asks for it, is given up so the next run can start (abandonOnDeadline).
+    let abandon: ((err: RunAbandoned) => void) | undefined;
+    const abandonedRun = new Promise<never>((_, reject) => {
+      abandon = reject;
+    });
+    abandonedRun.catch(() => {});
+    const deadline = startDeadline(startedAt, deadlineMinutes, (runningForMs) => {
+      if (opts.abandonOnDeadline && abandoned < MAX_ABANDONED_RUNS) {
+        abandon?.(
+          new RunAbandoned(`${DEADLINE_ERROR} after ${Math.round(runningForMs / 1000)}s; run abandoned`),
+        );
+        return;
+      }
+      onDeadline(name, runningForMs);
+    });
     const stopper = opts.stopWhileRunning;
     let stopping = false;
     let checkingStop = false;
@@ -237,11 +299,27 @@ export function scheduleInterval(
           }, stopper.everyMs);
     stopCheck?.unref?.();
     try {
-      await recordRunStart(name, new Date(startedAt)).catch(() => {
-        // Visibility only - never worth not running the job over.
-      });
+      await stampRunStart(name, startedAt);
       // Every outside call the run makes is counted under the job's name (core's apiUsage.ts).
-      const meta = await withApiFeature(name, fn);
+      const running = withApiFeature(name, fn);
+      const meta = await Promise.race([running, abandonedRun]).catch((err: unknown) => {
+        if (err instanceof RunAbandoned) {
+          // Left to settle on its own; counted until it does, so a job that only ever hangs ends
+          // up restarting the worker after all.
+          abandoned += 1;
+          void running
+            .catch(() => {})
+            .finally(() => {
+              abandoned -= 1;
+            });
+          logger.error("job run passed its deadline - abandoned, the next run is scheduled", {
+            job: name,
+            runningForMs: Date.now() - startedAt,
+            unsettled: abandoned,
+          });
+        }
+        throw err;
+      });
       // The effective cadence rides on the row: the intervals are env-tunable, so /health/worker
       // derives its stale threshold from this rather than a table that drifts from the env.
       await recordHeartbeat(name, {
@@ -261,12 +339,14 @@ export function scheduleInterval(
         }).catch(() => {});
         return;
       }
-      logger.error("job threw an unhandled error", { job: name, error: String(err) });
+      if (!(err instanceof RunAbandoned)) {
+        logger.error("job threw an unhandled error", { job: name, error: String(err) });
+      }
       // A job that fails on purpose (pipeline-watch flagging a stall) keeps its counts on the row.
       const errMeta = { ...opts.failureMeta?.(), ...(err instanceof JobFailure ? err.meta : {}) };
       await recordHeartbeat(name, {
         success: false,
-        error: err instanceof JobFailure ? err.message : String(err),
+        error: err instanceof JobFailure || err instanceof RunAbandoned ? err.message : String(err),
         meta: { ...errMeta, durationMs: Date.now() - startedAt, intervalMs },
       }).catch(() => {
         // If the DB itself is unreachable, the heartbeat write will fail too - nothing more we
@@ -368,9 +448,16 @@ export function scheduleDailyAt(
      * now"), and the slot after that run is the next one as usual. Never while a run is in flight.
      */
     runEarly?: { everyMs: number; due: () => Promise<boolean> };
+    /**
+     * A run still going after this long restarts the worker, as an interval job's deadline does
+     * (scheduleInterval): a nightly run hung on a dead connection otherwise held its job until the
+     * next deploy, and the boot after it catches the slot up.
+     */
+    deadlineMinutes?: number;
+    onDeadline?: (job: HeartbeatJob, runningForMs: number) => void;
   } = {},
 ): ScheduledJob {
-  const { retryAfterMinutes = 30, maxRetries = 3 } = opts;
+  const { retryAfterMinutes = 30, maxRetries = 3, deadlineMinutes, onDeadline = exitOnDeadline } = opts;
   let stopped = false;
   let next: NodeJS.Timeout | undefined;
   let readRetry: NodeJS.Timeout | undefined;
@@ -430,8 +517,11 @@ export function scheduleDailyAt(
       logger.error("daily job run has not returned", { job: name, runningForMs: Date.now() - startedAt });
     }, DAILY_STALL_MS);
     watchdog.unref?.();
+    const deadline = startDeadline(startedAt, deadlineMinutes, (runningForMs) =>
+      onDeadline(name, runningForMs),
+    );
     try {
-      await recordRunStart(name, new Date(startedAt)).catch(() => {});
+      await stampRunStart(name, startedAt);
       let meta: JobRunMeta | void;
       let partialError: string | undefined;
       try {
@@ -471,6 +561,7 @@ export function scheduleDailyAt(
       }
     } finally {
       clearInterval(watchdog);
+      if (deadline) clearInterval(deadline);
       inFlightRuns.delete(name);
       running = false;
       if (skipped) recheckAfterSkip();
