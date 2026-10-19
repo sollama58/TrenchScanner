@@ -18,6 +18,7 @@ import {
   zoomBy,
   zoomValue,
   zoomWindow,
+  openingSpanMs,
   sinceLabel,
   TIMEFRAMES,
   timeframeLabel,
@@ -98,8 +99,6 @@ function keepTimeframe(key: string, ms: number | null): void {
     // Private windows: the pick holds for this view only.
   }
 }
-/** A timeframe picked draws candles this wide on screen, about; the window zooms to fit them. */
-const PICKED_CANDLE_PX = 8;
 /**
  * A picked timeframe draws as itself up to this many candles in view, however thin; past it (a
  * picked 1s over hours of history) the view draws a wider one, to keep the chart quick.
@@ -265,8 +264,8 @@ export function PriceChart({
   const [ownZoom, setOwnZoom] = useState<Zoom | null>(null);
   // Candle timeframes (user ask 2026-10-18): null draws as many candles as fit (Auto).
   /**
-   * Whether the view is as it opened (or was reset): a picked candle size then shows about
-   * PICKED_CANDLE_PX candles; once the reader zooms, any window up to the whole view.
+   * Whether the view is as it opened (or was reset): a picked candle size then shows its
+   * openingSpanMs; once the reader zooms, any window up to the whole view.
    */
   const [opening, setOpening] = useState(true);
   const tfKey = tfScope ? `${TIMEFRAME_KEY}.${tfScope}` : TIMEFRAME_KEY;
@@ -359,10 +358,10 @@ export function PriceChart({
     if (points.length < 2) return null;
     const shownWin = zoomWindow(zoom, ext0, ext1);
     const t1 = shownWin.to;
-    // Unzoomed, a picked size opens at about PICKED_CANDLE_PX a candle, as picking it zooms to.
+    // Unzoomed, a picked size opens on its openingSpanMs, as picking it zooms to.
     const cap =
       opening && zoom === null && kind === "candles" && timeframe !== null
-        ? timeframe * Math.max(8, Math.round(plotW / PICKED_CANDLE_PX))
+        ? openingSpanMs(timeframe, plotW)
         : Infinity;
     const t0 = Math.max(Math.min(shownWin.from, t1 - minSpan), t1 - cap, ext0);
     const pts = clipPoints(points, t0, t1);
@@ -692,13 +691,13 @@ export function PriceChart({
   const plotH = bottom - PAD.t;
   // The buttons zoom about the middle, or hold the latest reading in view when the window ends on it.
   const anchorAt = atEnd && live ? 1 : 0.5;
-  // A picked timeframe zooms the window to fit its candles, about PICKED_CANDLE_PX wide, holding
-  // the latest in view when the window ends on it.
+  // A picked timeframe zooms the window to its openingSpanMs, holding the latest in view when the
+  // window ends on it.
   const pickTimeframe = (ms: number | null) => {
     setTimeframe(ms);
     keepTimeframe(tfKey, ms);
     if (ms === null) return;
-    const target = Math.max(MIN_ZOOM_MS, ms * Math.max(8, Math.round(plotW / PICKED_CANDLE_PX)));
+    const target = openingSpanMs(ms, plotW);
     winTo(zoomBy(win, ext0, ext1, target / Math.max(1, span), atEnd ? 1 : 0.5));
   };
   // The volume lane: a bar per slice rising from its floor, green where the price rose across it.

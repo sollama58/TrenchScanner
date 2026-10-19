@@ -7,6 +7,7 @@ import {
   pointCandles,
   zoomBy,
   zoomWindow,
+  openingSpanMs,
   flowAt,
   linearTicks,
   linePoints,
@@ -519,5 +520,23 @@ describe("the live candle view", () => {
     expect(out[3]).toMatchObject({ c: 5, flat: true });
     // Nothing after the last candle: the slot isn't made up.
     expect(out[5]).toBeNull();
+  });
+});
+
+describe("openingSpanMs", () => {
+  it("opens 1s candles on minutes, not on a minute and a half", () => {
+    // A desktop plot (~700px): five minutes, about 2px a candle.
+    expect(openingSpanMs(1_000, 700)).toBe(5 * 60_000);
+    // A phone plot: as far out as 2px candles allow.
+    expect(openingSpanMs(1_000, 320)).toBe(160_000);
+  });
+
+  it("leaves coarser timeframes at about 8px a candle", () => {
+    expect(openingSpanMs(60_000, 700)).toBe(60_000 * 88);
+    expect(openingSpanMs(15_000, 320)).toBe(15_000 * 40);
+  });
+
+  it("never opens under the narrowest zoom", () => {
+    expect(openingSpanMs(1_000, 10)).toBe(30_000);
   });
 });
