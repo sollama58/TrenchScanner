@@ -215,6 +215,15 @@ export class PumpPortalStream {
     return { ...EMPTY_TRADE_FLOW, devInitialBuySol: flow.devInitialBuySol };
   }
 
+  /**
+   * Whether the mint has had no trade since `sinceMs` on this stream (TradeFlowBook.quietSince);
+   * false whenever the stream can't vouch for it (trade flow off, trades not confirmed or refused).
+   */
+  quietSince(mint: string, sinceMs: number): boolean {
+    if (!this.book || !this.tradesConfirmed || this.tradesRefused) return false;
+    return this.book.quietSince(mint, sinceMs);
+  }
+
   /** Whether PumpPortal is refusing trade subscriptions on the current connection. */
   get tradeFlowRefused(): boolean {
     return this.tradesRefused;

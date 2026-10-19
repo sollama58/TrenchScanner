@@ -22,6 +22,8 @@ export interface LiveTradesAnswer {
   cursor: number;
   trades: LiveTokenTrade[];
   held?: boolean;
+  /** The coin's supply in whole tokens, with trades; absent from older API builds and without trades. */
+  supply?: number;
 }
 
 export interface LiveTrades {
@@ -37,6 +39,8 @@ export interface LiveTrades {
    * of a flagged wallet's trade don't vanish once a busy coin's next 200 trades push it out.
    */
   history: LiveTokenTrade[];
+  /** The coin's supply in whole tokens, from the newest answer that had it; null until one did. */
+  supply: number | null;
 }
 
 /** What the view keeps: the API's own window. */
@@ -97,7 +101,7 @@ interface SharedFeed {
   stop: () => void;
 }
 const feeds = new Map<string, SharedFeed>();
-const EMPTY: LiveTrades = { trades: [], status: null, since: null, history: [] };
+const EMPTY: LiveTrades = { trades: [], status: null, since: null, history: [], supply: null };
 
 /** Starts `base`'s feed: asks for the trades since the last answer until stopped. */
 function startFeed(base: string): SharedFeed {
@@ -149,6 +153,7 @@ function startFeed(base: string): SharedFeed {
         status: a.status,
         since: a.since,
         history,
+        supply: typeof a.supply === "number" && a.supply > 0 ? a.supply : prev.supply,
       });
       // "Unavailable" can pass (the coin reaches Token, a follow slot frees up), so ask again now and then.
       next(

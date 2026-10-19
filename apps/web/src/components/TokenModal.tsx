@@ -17,6 +17,7 @@ import { cachedGet } from "../cache";
 import { createPortal } from "react-dom";
 import { LiveTradesCard, useBatchedWallets } from "./LiveTrades";
 import { useLiveTrades } from "../liveTrades";
+import { liveShareDeltas, withLiveShares, type LiveTradeShares } from "../liveShares";
 import { usePossibleSides } from "../possibleSides";
 import {
   createContext,
@@ -744,11 +745,23 @@ function TokenBody({
   const entries = useMemo(() => JSON.parse(entriesKey) as Record<string, HolderEntry>, [entriesKey]);
   const linked = useHolderReading(card, mint, !!utility);
   const holders = useHoldersView(card, linked, alertAt, !!utility);
+  const liveShares = useLiveShares(mint, holders.isKept);
+  // The top holders as the live trades since the reading moved them (liveShares.ts).
+  const listReading = useMemo(
+    () =>
+      liveShares && holders.listReading
+        ? withLiveShares(
+            holders.listReading,
+            liveShareDeltas(liveShares.trades, liveShares.supply, Date.parse(holders.listReading.takenAt)),
+          )
+        : holders.listReading,
+    [liveShares, holders.listReading],
+  );
   // Each live section's age and next update, beside its count (user ask 2026-10-19): the holder
   // list follows the scans; the labeled wallets, the chart read they come from.
   const holdersFresh =
     !holders.isKept && holders.listReading && hasHolderList(holders.listReading)
-      ? holderFreshness(holders.listReading.takenAt, now)
+      ? { ...holderFreshness(holders.listReading.takenAt, now), live: !!liveShares }
       : undefined;
   const walletsFresh =
     chart.at === null
@@ -964,6 +977,7 @@ function TokenBody({
       column={column}
       // Scope's wide tab: the map spreads across it (user ask 2026-10-19).
       spread={terminal && !column ? 2.6 : undefined}
+      live={liveShares}
     />
   );
   const bubbleMap = bubbleMapIn(false);
@@ -985,12 +999,12 @@ function TokenBody({
             </>
           );
         case "trades":
-          return <LiveTradesCard base={tokenApi} snapshot={holders.listReading} flagged={flagged} />;
+          return <LiveTradesCard base={tokenApi} snapshot={listReading} flagged={flagged} />;
         case "holders":
           return (
             <>
               <TopHolders
-                snapshot={holders.listReading}
+                snapshot={listReading}
                 flagged={flagged}
                 entries={entries}
                 pending={scanning}
@@ -1230,7 +1244,7 @@ function TokenBody({
         <div className={`tm-holders${holders.isKept ? " at-alert" : ""}`}>
           {bubbleMap}
           <TopHolders
-            snapshot={holders.listReading}
+            snapshot={listReading}
             flagged={flagged}
             entries={entries}
             pending={scanning}
@@ -1907,6 +1921,24 @@ function HolderFreshness({
           : nextUpdateText(next, tick)}
       </span>
     </p>
+  );
+}
+
+/**
+ * The coin's live trades and supply for the holder shares between reads (user ask 2026-10-19):
+ * the feed the chart's trade marks already follow, so the holders add no stream of their own (and
+ * none with the marks off); none for a kept moment, which stands as it was.
+ */
+function useLiveShares(mint: string, kept: boolean): LiveTradeShares | null {
+  const look = useAppearance();
+  const marksOn = look.chartMarks && look.chartMarkKinds.length > 0;
+  const feed = useLiveTrades(useTokenApi(mint), marksOn && !kept);
+  return useMemo(
+    () =>
+      kept || feed.supply === null || feed.history.length === 0
+        ? null
+        : { trades: feed.history, supply: feed.supply },
+    [kept, feed.history, feed.supply],
   );
 }
 

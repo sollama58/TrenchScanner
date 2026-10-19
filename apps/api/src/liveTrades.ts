@@ -68,6 +68,12 @@ export interface LiveTradesAnswer {
    * can ask again at once. False for an unavailable coin, which isn't worth asking about again soon.
    */
   held: boolean;
+  /**
+   * The coin's supply now in whole tokens, with trades in the answer; absent without. A trade's
+   * tokens over it is the share of supply it moved, which the token view adds to its holders'
+   * shares between holder reads (user ask 2026-10-19).
+   */
+  supply?: number;
 }
 
 export interface LiveTokenTrade {
@@ -277,6 +283,7 @@ export class LiveTrades {
         };
       }),
       held: false,
+      ...(fresh.length > 0 ? { supply: PUMP_SUPPLY_TOKENS * factor } : {}),
     };
   }
 

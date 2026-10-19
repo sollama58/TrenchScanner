@@ -72,6 +72,7 @@ import {
   type TransferLink,
 } from "../bubbleMap";
 import { renderBubbleCard } from "../bubbleMapCard";
+import { liveShareDeltas, wideWithLiveShares, withLiveShares, type LiveTradeShares } from "../liveShares";
 import { laneD } from "../linkLanes";
 import { openWallet } from "../walletModal";
 import {
@@ -2246,7 +2247,7 @@ export function BubbleMapPlaceholder({ children }: { children: ReactNode }) {
 
 export function BubbleMapSection({
   token,
-  snapshot,
+  snapshot: snapshotIn,
   moment,
   wide: chosenWide,
   pending = false,
@@ -2254,6 +2255,7 @@ export function BubbleMapSection({
   flags,
   column = false,
   spread,
+  live = null,
 }: {
   token: Token;
   /** The reading to draw; undefined while it loads. */
@@ -2280,10 +2282,34 @@ export function BubbleMapSection({
   column?: boolean;
   /** How far sideways the map may spread to fill a wide stage (Scope's tab, user ask 2026-10-19). */
   spread?: number;
+  /**
+   * The coin's live trades and supply: each trade since the reading (and since the top 50's read)
+   * moves its wallet's share on the map between reads (liveShares.ts). None for a kept moment.
+   */
+  live?: LiveTradeShares | null;
 }) {
   const mint = token.mintAddress;
-  const liveWide = liveWideFor(snapshot, useWideMap(mint));
-  const wide = chosenWide !== undefined ? chosenWide : liveWide;
+  const liveWide = liveWideFor(snapshotIn, useWideMap(mint));
+  const wideIn = chosenWide !== undefined ? chosenWide : liveWide;
+  // Trades move shares from each reading's own read time: the scan's for its lists and figures,
+  // the top 50's for its map.
+  const snapshot = useMemo(
+    () =>
+      snapshotIn && live
+        ? withLiveShares(
+            snapshotIn,
+            liveShareDeltas(live.trades, live.supply, Date.parse(snapshotIn.takenAt)),
+          )
+        : snapshotIn,
+    [snapshotIn, live],
+  );
+  const wide = useMemo(
+    () =>
+      wideIn && live
+        ? wideWithLiveShares(wideIn, liveShareDeltas(live.trades, live.supply, Date.parse(wideIn.readAt)))
+        : wideIn,
+    [wideIn, live],
+  );
   const { showTransfers, setTransfersOn } = useTransferToggle(snapshot);
   const { bubbleFunderLabels } = useAppearance();
   // Transfers hidden: Linked, its clusters and the bundles as they read without them (user ask

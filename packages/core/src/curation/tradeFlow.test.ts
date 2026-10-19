@@ -25,6 +25,19 @@ function trade(
 }
 
 describe("TradeFlowBook", () => {
+  it("vouches a mint quiet only since a time it followed it, with no trade or stream gap after", () => {
+    const book = new TradeFlowBook();
+    book.watch([MINT], T0);
+    book.trade(trade("a", "buy", 1, sec(60)));
+    expect(book.quietSince(MINT, sec(30))).toBe(false);
+    expect(book.quietSince(MINT, sec(60))).toBe(true);
+    expect(book.quietSince(MINT, T0 - 1)).toBe(false);
+    expect(book.quietSince("other", sec(60))).toBe(false);
+    book.streamGap(sec(90));
+    expect(book.quietSince(MINT, sec(60))).toBe(false);
+    expect(book.quietSince(MINT, sec(90))).toBe(true);
+  });
+
   it("summarizes the last 5 minutes of a launch it saw: buyers, sizes, whales, fresh demand, net flow", () => {
     const book = new TradeFlowBook();
     book.launch({

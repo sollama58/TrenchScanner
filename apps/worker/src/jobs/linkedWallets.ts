@@ -433,6 +433,12 @@ export async function readTopHolders(
     watched?: ReadonlySet<string>;
     maxWatchedReads?: number;
     watchedRefreshMs?: number;
+    /**
+     * Whether a mint has had no trade since then (the trade stream's word): a watched coin quiet
+     * since its last read keeps that list, as no holder's balance moved by trading. A coin the
+     * stream can't vouch for is read; the usual cadence reads every coin either way.
+     */
+    quietSince?: (mint: string, sinceMs: number) => boolean;
   },
 ): Promise<{ reads: number; watchedReads: number }> {
   const now = opts.nowMs ?? Date.now();
@@ -441,6 +447,10 @@ export async function readTopHolders(
   const ageOf = (mint: string) => {
     const entry = topHolderLists.get(mint);
     return entry ? now - entry.atMs : Infinity;
+  };
+  const quiet = (mint: string) => {
+    const entry = topHolderLists.get(mint);
+    return !!entry && !!opts.quietSince?.(mint, entry.atMs);
   };
   const due = groups
     .filter((g) => {
@@ -454,7 +464,8 @@ export async function readTopHolders(
       (g) =>
         watched.has(g.mintAddress) &&
         !dueSet.has(g.mintAddress) &&
-        ageOf(g.mintAddress) >= (opts.watchedRefreshMs ?? TOP_HOLDERS_REFRESH_MS),
+        ageOf(g.mintAddress) >= (opts.watchedRefreshMs ?? TOP_HOLDERS_REFRESH_MS) &&
+        !quiet(g.mintAddress),
     )
     .slice(0, Math.max(0, opts.maxWatchedReads ?? 0));
   const counts = { reads: due.length, watchedReads: watchedDue.length };

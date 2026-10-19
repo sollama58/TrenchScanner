@@ -55,15 +55,30 @@ export function SecondsAgo({ at }: { at: number }) {
  * A section's freshness beside its count: "12s ago · Next update in 0:48" (user ask 2026-10-19).
  * `next` null: no update is coming (the coin is no longer scanned), so only the age shows.
  */
-export function LiveStamp({ last, next, title }: { last: number; next: number | null; title?: string }) {
+export function LiveStamp({
+  last,
+  next,
+  title,
+  live = false,
+}: {
+  last: number;
+  next: number | null;
+  title?: string;
+  /** Shares move with each live trade between reads (user ask 2026-10-19): says so after the stamp. */
+  live?: boolean;
+}) {
   const now = useSecondTick();
   return (
     <span
       className="tm-live-stamp small muted num"
-      title={title ?? `Updated ${hms(last)}${next === null ? "" : `; next due ${hms(next)}`}`}
+      title={
+        (title ?? `Updated ${hms(last)}${next === null ? "" : `; next due ${hms(next)}`}`) +
+        (live ? ". Shares move with each trade until then; links and tags come with each read." : "")
+      }
     >
       {secondsAgo(last, now)}
       {next !== null && <> · {nextUpdateText(next, now)}</>}
+      {live && <> · Live</>}
     </span>
   );
 }
