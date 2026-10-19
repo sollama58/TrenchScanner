@@ -7309,37 +7309,6 @@ html:has(dialog.about-modal[open]) {
   font-size: 12.5px;
   color: var(--ink-2);
 }
-.mp-memory {
-  margin: 12px 0 0;
-}
-.mp-memory figcaption {
-  font-size: 12.5px;
-  color: var(--ink-2);
-  margin-bottom: 4px;
-}
-.mp-memory svg {
-  display: block;
-  width: 100%;
-  height: auto;
-}
-.mp-memory .mp-mem-area {
-  fill: color-mix(in srgb, var(--mp-tone) 18%, transparent);
-}
-.mp-memory .mp-mem-line {
-  fill: none;
-  stroke: var(--mp-tone);
-  stroke-width: 2;
-  vector-effect: non-scaling-stroke;
-}
-.mp-memory .mp-mem-half {
-  stroke: var(--axis);
-  stroke-dasharray: 3 3;
-  vector-effect: non-scaling-stroke;
-}
-.mp-memory .lbl {
-  font-size: 14px;
-  fill: var(--muted);
-}
 .model-detail h4.model-sub {
   margin: 16px 0 8px;
   font-size: 12px;
