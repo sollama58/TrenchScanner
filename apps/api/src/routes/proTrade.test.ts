@@ -144,6 +144,10 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
     expect(send.json()).toMatchObject({ notSent: true });
     // Signed out: no session at all.
     expect((await app.inject({ method: "GET", url: `/pro/trade/${MINT}/position` })).statusCode).toBe(401);
+    // The credit picks follow the access buy: open to anyone signed in while trading is on.
+    expect((await app.inject({ method: "GET", url: "/pro/trade/credit-picks" })).statusCode).toBe(401);
+    if (!env.PRO_TRADING_ENABLED)
+      expect((await as(TRADER, "GET", "/pro/trade/credit-picks")).statusCode).toBe(404);
   });
 
   it("quotes the network fee, with no platform fee while the Sacrifice is off, to Pro wallets only", async () => {

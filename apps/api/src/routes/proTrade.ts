@@ -6,6 +6,10 @@ import {
   estimateManualFees,
   estimateSwapCosts,
   estimateSaleProceeds,
+  estimateBuyLamports,
+  burnCreditPrices,
+  rawPerCredit,
+  SUBSCRIPTION_MINT_DECIMALS,
   type SwapCosts,
   decodeMessage,
   isSenderTipAccount,
@@ -242,6 +246,15 @@ const RETIRED_KEEP_MS = 5 * 60_000;
 const MAX_CACHED_TRADES = 20_000;
 /** Swap costs (a Jupiter quote each) are reused this long: the panel re-reads its fee every 20s. */
 const SWAP_COSTS_TTL_MS = 60_000;
+/** The "Get $ASDFASDFA" quick picks, in burn credits (user ask 2026-10-19). */
+export const CREDIT_PICKS = [10, 50, 100, 250, 500, 1000] as const;
+/** One pick: its credits, the $ASDFASDFA they burn (raw units) and about the SOL that buys them. */
+interface CreditPick {
+  credits: number;
+  units: string;
+  /** Null without a route. */
+  lamports: string | null;
+}
 const MAX_CACHED_SWAP_COSTS = 2_000;
 /** The reference buy when the panel names none: 0.1 SOL. */
 const DEFAULT_REF_LAMPORTS = 100_000_000n;
@@ -323,6 +336,46 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     if (saleQuotes.size >= MAX_CACHED_SWAP_COSTS) saleQuotes.delete(saleQuotes.keys().next().value!);
     saleQuotes.set(key, { at: Date.now(), lamports });
     return lamports;
+  };
+  /**
+   * The "Get $ASDFASDFA" credit picks (user ask 2026-10-19): each pick's SOL, quoted to land at
+   * least that many burn credits of $ASDFASDFA at the current price. Shared by every wallet (the
+   * coin is fixed) and cached like the swap costs, so an open picker costs a handful of quotes a minute.
+   */
+  let creditPicks: { at: number; tokensPerCredit: number; picks: Promise<CreditPick[]> } | null = null;
+  const creditPicksFor = async (): Promise<{ tokensPerCredit: number; picks: CreditPick[] }> => {
+    const { tokensPerCredit } = await burnCreditPrices();
+    if (
+      !creditPicks ||
+      creditPicks.tokensPerCredit !== tokensPerCredit ||
+      Date.now() - creditPicks.at >= SWAP_COSTS_TTL_MS
+    ) {
+      const perCredit = rawPerCredit(tokensPerCredit);
+      // One after another, each starting from the last one's price, so most take two quotes.
+      const picks = (async () => {
+        const out: CreditPick[] = [];
+        let guess = DEFAULT_REF_LAMPORTS;
+        let guessCredits = 0;
+        for (const credits of CREDIT_PICKS) {
+          const units = perCredit * BigInt(credits);
+          const start = guessCredits > 0 ? (guess * BigInt(credits)) / BigInt(guessCredits) : guess;
+          const lamports = await estimateBuyLamports(
+            { jupiter: previewJupiter },
+            { mint: SUBSCRIPTION_MINT, units, guessLamports: start },
+          );
+          if (lamports !== null) {
+            guess = lamports;
+            guessCredits = credits;
+          }
+          out.push({ credits, units: units.toString(), lamports: lamports?.toString() ?? null });
+        }
+        return out;
+      })();
+      creditPicks = { at: Date.now(), tokensPerCredit, picks };
+      // A failed read isn't kept.
+      picks.catch(() => (creditPicks = null));
+    }
+    return { tokensPerCredit, picks: await creditPicks.picks };
   };
   const inFlight = new Map<string, InFlight>();
   /** Signatures a /send is recording and sending right now (not yet in `inFlight`). */
@@ -682,6 +735,15 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       platformFeeBps: charged(sacrifice) ? 20 : 0,
       sacrifice: sacrificeView(sacrifice),
     };
+  });
+
+  // What each "Get $ASDFASDFA" credit pick costs in SOL (creditPicksFor). Anyone signed in may read
+  // it while the access buy is open, as for the access token's other reads.
+  app.get("/trade/credit-picks", { config: { rateLimit: READ_RATE_LIMIT } }, async (request, reply) => {
+    const who = await proWallet(request, reply, { access: true });
+    if (!who) return;
+    const { tokensPerCredit, picks } = await creditPicksFor();
+    return { mint: SUBSCRIPTION_MINT, decimals: SUBSCRIPTION_MINT_DECIMALS, tokensPerCredit, picks };
   });
 
   // What a sale would get, SOL by the route's quote: the Sell side's preview (user ask 2026-10-19).

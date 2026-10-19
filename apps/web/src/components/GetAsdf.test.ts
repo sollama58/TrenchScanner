@@ -1,21 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { CREDIT_BUCKETS, creditBuckets, roundBuySol } from "./GetAsdf";
+import { creditBuckets, roundBuySol } from "./GetAsdf";
 
 describe("creditBuckets", () => {
-  it("sizes each pick in burn credits and prices it at the quoted rate", () => {
-    // 0.1 SOL buys 1,000,000 tokens (6 decimals): 10,000,000 per SOL.
-    const quote = { refLamports: "100000000", outAmount: "1000000000000", decimals: 6 };
-    const picks = creditBuckets(1_000, quote);
-    expect(picks.map((p) => p.credits)).toEqual([...CREDIT_BUCKETS]);
-    expect(picks[0]).toEqual({ credits: 10, tokens: 10_000, sol: 0.01 });
-    expect(picks[2]).toEqual({ credits: 100, tokens: 100_000, sol: 0.01 });
-    expect(picks.at(-1)).toEqual({ credits: 1000, tokens: 1_000_000, sol: 0.1 });
+  it("shows each pick's tokens and its quoted SOL, rounded up", () => {
+    const picks = creditBuckets({
+      mint: "m",
+      decimals: 6,
+      tokensPerCredit: 1_000,
+      picks: [
+        { credits: 10, units: "10000000000", lamports: "1234000" },
+        { credits: 250, units: "250000000000", lamports: "123456789" },
+        { credits: 1000, units: "1000000000000", lamports: null },
+      ],
+    });
+    // Under the smallest trade: the minimum, marked, since it lands more credits than the pick.
+    expect(picks[0]).toEqual({ credits: 10, tokens: 10_000, sol: 0.01, atMinimum: true });
+    expect(picks[1]).toEqual({ credits: 250, tokens: 250_000, sol: 0.124, atMinimum: false });
+    // No route: no price, rather than a guess.
+    expect(picks[2]).toEqual({ credits: 1000, tokens: 1_000_000, sol: null, atMinimum: false });
   });
 
-  it("shows the picks without SOL until the rate is read, and none without a credit price", () => {
-    expect(creditBuckets(500, null).every((p) => p.sol === null)).toBe(true);
-    expect(creditBuckets(null, null)).toEqual([]);
-    expect(creditBuckets(0, null)).toEqual([]);
+  it("has no picks without a reading or a credit price", () => {
+    expect(creditBuckets(null)).toEqual([]);
+    expect(creditBuckets({ mint: "m", decimals: 6, tokensPerCredit: 0, picks: [] })).toEqual([]);
   });
 });
 

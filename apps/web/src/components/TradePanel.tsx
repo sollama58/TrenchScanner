@@ -615,6 +615,7 @@ export function TradePanel({
   maxBuySol = null,
   delayed = false,
   fillBuy = null,
+  expectNote,
 }: {
   owner: string;
   mint: string;
@@ -646,6 +647,8 @@ export function TradePanel({
   delayed?: boolean;
   /** Fills the Buy amount (a credit pick in the Buy $ASDFASDFA popup); a new `at` fills it again. */
   fillBuy?: { sol: number; at: number } | null;
+  /** What the expected tokens come to, after them (the Buy $ASDFASDFA popup: credits or access). */
+  expectNote?: (tokens: number) => string | null;
 }) {
   // Shared with Settings > Trading: a change there shows here at once, and the other way round.
   const settings = useTradeSettings();
@@ -1092,6 +1095,7 @@ export function TradePanel({
                 >
                   ≈ {tokensText(expected.tokens)} {symbol}
                   {expected.quoted ? "" : " (est.)"}
+                  {expectNote && expectNote(expected.tokens) ? `, ${expectNote(expected.tokens)}` : ""}
                 </p>
               )}
             </div>
