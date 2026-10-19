@@ -236,6 +236,16 @@ describe.skipIf(!dbAvailable)("labeled wallets", () => {
       { wallet: ROSTER_SIDE, label: "Roster Kol Known Side", kind: "kol-side" },
       { wallet: "5KXDF6QnqhBj72hDtJNkkpFaQVUfbFXNybMsp3DiK6tD", label: "Stonk_Fees", kind: "launchpad" },
     ]);
+    // A label by hand is refused the same way, a new one or a rename alike.
+    const manual = await as(ADMIN, "PUT", `/wallets/tracked/${ROSTER_KOL}`, { name: "Mine" });
+    expect(manual.statusCode).toBe(409);
+    expect(manual.json()).toMatchObject({
+      error: "TrenchScanner already labels this wallet as Roster Kol.",
+      known: { wallet: ROSTER_KOL, kind: "kol" },
+    });
+    expect((await as(ADMIN, "PUT", `/wallets/tracked/${ROSTER_SIDE}`, { name: "Mine" })).statusCode).toBe(
+      409,
+    );
     // One place left under the cap: the roster wallets take none of it.
     await prisma.userTrackedWallet.createMany({
       data: Array.from({ length: TRACKED_WALLET_CAP - 2 }, (_, i) => ({

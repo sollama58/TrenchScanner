@@ -118,6 +118,14 @@ function saveExport(wallets: readonly TrackedWallet[]) {
   setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
+/** Why a wallet can't take a label by hand: TrenchScanner already labels it. Null when it can. */
+async function alreadyLabeled(wallet: string): Promise<string | null> {
+  const k = (await knownLabels([wallet]))[0];
+  return k
+    ? `TrenchScanner already labels this wallet (${knownText(k)}), so it can't take a label of yours.`
+    : null;
+}
+
 const kindText = (t: TrackedWallet) => (t.category === "kol" ? "KOL" : "User Tracked");
 
 /**
@@ -127,6 +135,7 @@ const kindText = (t: TrackedWallet) => (t.category === "kol" ? "KOL" : "User Tra
 export function TrackedWalletEditor({ wallet }: { wallet: string }) {
   const tracked = useTrackedWallets();
   const [editing, setEditing] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
   if (!tracked?.pro) return null;
   const current = tracked.wallets.find((w) => w.wallet === wallet);
   const full = !current && tracked.wallets.length >= tracked.cap;
@@ -163,11 +172,16 @@ export function TrackedWalletEditor({ wallet }: { wallet: string }) {
               ? `You have labeled ${tracked.cap} wallets. Remove one in Utilities › Wallet labels to add another.`
               : undefined
           }
-          onClick={() => setEditing(true)}
+          onClick={() =>
+            alreadyLabeled(wallet)
+              .then((why) => (why ? setRefused(why) : setEditing(true)))
+              .catch((e: unknown) => setRefused(trackedError(e)))
+          }
         >
           Label this wallet
         </button>
       )}
+      {refused && !current && <span className="faint">{refused}</span>}
       <span className="faint num">
         {tracked.wallets.length}/{tracked.cap}
       </span>
@@ -420,7 +434,14 @@ export function TrackedWalletsPanel({ upsell = false }: { upsell?: boolean } = {
             className="tw-add"
             onSubmit={(e) => {
               e.preventDefault();
-              if (valid) setAdding(typed);
+              if (!valid) return;
+              setError(null);
+              // A wallet already held is renamed; any other is checked against our own labels first.
+              if (tracked.wallets.some((w) => w.wallet === typed)) setAdding(typed);
+              else
+                alreadyLabeled(typed)
+                  .then((why) => (why ? setError(why) : setAdding(typed)))
+                  .catch((e: unknown) => setError(trackedError(e)));
             }}
           >
             <input

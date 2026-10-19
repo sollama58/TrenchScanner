@@ -33,8 +33,9 @@ import {
  * wallets the Side Wallet Checker marks as a KOL's possible side wallet. See possibleSides.ts.
  * The reader's own labels (GET /wallets/tracked, PUT and DELETE /wallets/tracked/:wallet, and
  * POST /wallets/tracked/import for a JSON list): Pro Mode only, at most TRACKED_WALLET_CAP. The names, possible sides and wallet reads lay them over
- * their answers for that reader alone. See trackedWallets.ts. An import leaves out the wallets
- * TrenchScanner already labels (platformLabels), and POST /wallets/tracked/known names them first,
+ * their answers for that reader alone. See trackedWallets.ts. A label by hand is refused, and an
+ * import leaves out, the wallets TrenchScanner already labels (platformLabels); POST
+ * /wallets/tracked/known names them first,
  * so the web app can drop them from a file before holding it to the cap.
  */
 
@@ -106,6 +107,13 @@ export async function registerWalletRoutes(
     const name = cleanTrackedName(body.data.name);
     if (!name) return reply.code(400).send({ error: "name the wallet" });
     if (!(await isPro(request))) return reply.code(403).send({ error: "Labeling wallets needs Pro Mode" });
+    // A wallet TrenchScanner already labels for everyone can't take a label of the reader's own.
+    const ours = (await platformLabels([params.data.wallet])).get(params.data.wallet);
+    if (ours)
+      return reply.code(409).send({
+        error: `TrenchScanner already labels this wallet${ours.label ? ` as ${ours.label}` : " as a bot"}.`,
+        known: ours,
+      });
     const saved = await saveTracked(
       request.user!.userId,
       params.data.wallet,

@@ -192,8 +192,8 @@ export interface PlatformLabel {
 }
 
 /**
- * Which of `wallets` TrenchScanner already labels for every reader (user ask 2026-10-19): a JSON
- * import leaves these out, so a file can't rename a KOL, a Known Side, an exchange, a launchpad
+ * Which of `wallets` TrenchScanner already labels for every reader (user ask 2026-10-19): a label
+ * by hand is refused on these and a JSON import leaves them out, so a file can't rename a KOL, a Known Side, an exchange, a launchpad
  * wallet or a marked bot. Read from the roster and core's lists only: no Helius calls. Helius
  * identity names and Probable Sides aren't labels of ours, so those wallets can still be imported.
  */
