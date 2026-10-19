@@ -21495,3 +21495,32 @@ dialog.tm-modal.tm-terminal::backdrop {
   background: var(--surface-solid);
   box-shadow: 0 6px 24px rgb(0 0 0 / 0.25);
 }
+
+/* The signed-in wallet's SOL and $ASDFASDFA, stacked beside the wallet pill (HeaderBalances.tsx). */
+.header-balances {
+  display: grid;
+  justify-items: end;
+  gap: 1px;
+  font-size: 11.5px;
+  line-height: 1.15;
+  color: var(--ink);
+  white-space: nowrap;
+  cursor: default;
+}
+.header-balances small {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.header-balances.stale {
+  opacity: 0.55;
+}
+@media (max-width: 640px) {
+  .header-balances {
+    font-size: 10.5px;
+  }
+  .header-balances small {
+    font-size: 8.5px;
+  }
+}
