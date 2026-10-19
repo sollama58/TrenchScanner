@@ -14,7 +14,8 @@ import {
 } from "../bubbleMap";
 import { cachedGet } from "../cache";
 import { createPortal } from "react-dom";
-import { LiveTradesCard } from "./LiveTrades";
+import { LiveTradesCard, useBatchedWallets } from "./LiveTrades";
+import { useLiveTrades } from "../liveTrades";
 import {
   createContext,
   useCallback,
@@ -74,7 +75,7 @@ import {
 } from "./AlertCard";
 import { CHART_MARKS_SECTION } from "./WalletMarksPicker";
 import { CustomizeDrawer } from "./CustomizeDrawer";
-import { markPrefsOf, walletMarks, type WalletMark } from "../walletMarks";
+import { markPrefsOf, walletMarks, withLiveMarks, type WalletMark } from "../walletMarks";
 import { PriceChart, type ChartEvent, type ChartKind, type ChartTrade } from "./PriceChart";
 import { TradePanel, solText, tokensText } from "./TradePanel";
 import { PRO_MODE_PERKS } from "./ProModeCard";
@@ -1886,9 +1887,19 @@ export function ChartCard({
   const closeCustomize = useCallback(() => setCustomizing(false), []);
   const labeled = data?.wallets ?? [];
   // The trader's own wallet is drawn as their own arrows, whatever its labels.
+  // Live, as they happen (user ask 2026-10-19): the coin's live trades (one feed with the Live
+  // trades tab) fold into the flagged wallets', and KOLs and tracked wallets the chart hasn't
+  // flagged yet join by name.
+  const liveFeed = useLiveTrades(api, markPrefs.on && markPrefs.kinds.length > 0);
+  const liveTraders = useBatchedWallets(liveFeed.trades);
+  const liveNames = useWalletNames(liveTraders);
+  const marked = useMemo(
+    () => withLiveMarks(data?.wallets ?? [], liveFeed.trades, liveNames),
+    [data?.wallets, liveFeed.trades, liveNames],
+  );
   const marks = useMemo(
-    () => walletMarks(data?.wallets ?? [], markPrefs, new Set(pro ? [pro] : [])),
-    [data?.wallets, markPrefs, pro],
+    () => walletMarks(marked, markPrefs, new Set(pro ? [pro] : [])),
+    [marked, markPrefs, pro],
   );
 
   // The view's window over the minute data, before the finer reads that fill it in.

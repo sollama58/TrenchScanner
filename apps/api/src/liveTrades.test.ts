@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import bs58 from "bs58";
 import { pumpCurveAddressOf, pumpSwapPoolOf } from "@trenchscanner/core";
-import { LiveTrades, MAX_TRADES } from "./liveTrades.js";
+import { LiveTrades, MAX_TRADES, quotedInSol } from "./liveTrades.js";
 
 const MINT = "BfWF6DxxfjdZPqjc2dPQvMd4CJh8Xr7ZPeP3iLh2pump";
 const OTHER = "EMRjzAdUDeKZi6w32yGJiERb7W9spV6UuL7827zUpump";
@@ -222,5 +222,21 @@ describe("LiveTrades", () => {
     expect(t.watched.has(`trades-curve:${mints[0]}`)).toBe(false);
     expect(t.watched.has(`trades-curve:${mints[50]}`)).toBe(true);
     t.trades.stop();
+  });
+
+  it("prices a trade in a quote coin in SOL, with the market cap it left", () => {
+    // 19,749.77 PUMP at $0.0045 with SOL at $180: 0.49 SOL.
+    const q = {
+      mint: "pump",
+      amount: 19_749_766_583,
+      reserve: 2_763_738_546_166,
+      tokenReserve: 309_321_957.3,
+    };
+    const priced = quotedInSol(q, { usd: 0.0045, decimals: 6 }, 180)!;
+    expect(priced.sol).toBeCloseTo(0.4937, 3);
+    // 2,763,738 PUMP over 309.3M tokens, times $0.0045, over the billion supply.
+    expect(priced.mcapUsd).toBeCloseTo(40_207, -1);
+    expect(quotedInSol(q, null, 180)).toBeNull();
+    expect(quotedInSol(q, { usd: 0.0045, decimals: 6 }, null)).toBeNull();
   });
 });
