@@ -287,7 +287,15 @@ export async function registerProTradesRoutes(
     const [tokens, sol] = await Promise.all([
       prisma.token.findMany({
         where: { mintAddress: { in: mints } },
-        select: { id: true, mintAddress: true, symbol: true, name: true, imageUrl: true, livePriceUsd: true },
+        select: {
+          id: true,
+          mintAddress: true,
+          symbol: true,
+          name: true,
+          imageUrl: true,
+          livePriceUsd: true,
+          liveDataAt: true,
+        },
       }),
       solPrice.get(),
     ]);
@@ -314,16 +322,22 @@ export async function registerProTradesRoutes(
       for (const c of list) if (c.createdAt <= at) last = c;
       return last;
     };
-    // The coin's price in SOL from its newest USD price (scan or live tick).
+    // The coin's price in SOL from its newest USD price, scan or live tick, whichever is later:
+    // the tick is written only while someone views the coin, so it freezes once nobody does while
+    // the scans go on (as portfolio.ts and the feed already compare them).
     const views = await Promise.all(
       shown.map((p) => (tokenByMint.has(p.mint) ? tokenView(p.mint, p.entryAt) : null)),
     );
     const priceUsd = new Map<string, number>();
     shown.forEach((p, i) => {
       const card = views[i]?.card;
-      const live = tokenByMint.get(p.mint)?.livePriceUsd;
-      const snap = (card?.latestSnapshot as { priceUsd?: number } | undefined)?.priceUsd;
-      const usd = live && live > 0 ? live : snap && snap > 0 ? snap : null;
+      const token = tokenByMint.get(p.mint);
+      const live = token?.livePriceUsd && token.livePriceUsd > 0 ? token.livePriceUsd : null;
+      const snapRow = card?.latestSnapshot as { priceUsd?: number; takenAt?: Date | string } | undefined;
+      const snap = snapRow?.priceUsd && snapRow.priceUsd > 0 ? snapRow.priceUsd : null;
+      const liveAt = token?.liveDataAt?.getTime() ?? 0;
+      const snapAt = snapRow?.takenAt ? new Date(snapRow.takenAt).getTime() : 0;
+      const usd = live !== null && (snap === null || liveAt >= snapAt) ? live : snap;
       if (usd !== null) priceUsd.set(p.mint, usd);
     });
     for (const t of tokens)

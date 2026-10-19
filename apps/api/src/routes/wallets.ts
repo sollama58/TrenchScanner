@@ -150,7 +150,9 @@ export async function registerWalletRoutes(
     if (!parsed.success)
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     if (!(await allowLookupRead(request, reply, "wallet", parsed.data.wallet))) return reply;
-    reply.header("Cache-Control", "private, max-age=30");
+    // Not kept by the browser: the answer carries the reader's own label, and the page's cache
+    // (src/cache.ts) is the one it forgets on a label edit or an account switch.
+    reply.header("Cache-Control", "private, no-store");
     // Its chain reads count as "wallet-modal" in Admin > API usage.
     const tracked = await trackedOf(request);
     return withApiFeature("wallet-modal", () =>
