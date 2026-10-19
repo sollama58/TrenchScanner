@@ -40,6 +40,7 @@ import { requireTwoFactor } from "../twoFactor.js";
 import { accessSwapOpen as accessSwapOpenFor } from "./auth.js";
 import { sharedSolPrice } from "../solPrice.js";
 import { feeSummary } from "../tradeFees.js";
+import { countProTrade } from "../proTradeCounters.js";
 import { quoteSacrifice, sacrificeRefusal, sacrificeView, type SacrificeQuote } from "../sacrificeQuote.js";
 import { newBuildId, signBuildToken, verifyBuildToken } from "../buildToken.js";
 
@@ -498,6 +499,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           }
         }
       })();
+      countProTrade("buildOk");
       // A partial sale is measured by what the route quotes for it, in lamports.
       if (!closing && body.side === "sell" && BigInt(built.quotedOut) < MIN_TRADE_LAMPORTS)
         return reply.code(422).send({ error: tooSmall("sell") });
@@ -545,6 +547,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       if (err instanceof GuardRefusal) {
         // The guard's simulation refused it: most often the wallet can't afford it or the price
         // moved past the slippage, which the simulation's error says.
+        countProTrade("buildRefused");
         request.log.warn(
           { wallet: walletTag(wallet), mint: body.mint, side: body.side, error: message },
           "pro trade refused",
@@ -552,6 +555,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         return reply.code(422).send({ error: plainRefusal(message, body.side) });
       }
       if (err instanceof TransientError || err instanceof RateLimitedError) {
+        countProTrade("buildUnavailable");
         request.log.warn(
           { wallet: walletTag(wallet), mint: body.mint, side: body.side, error: message },
           "pro trade build unavailable",
@@ -563,6 +567,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
               : "Couldn't reach the chain or Jupiter just now. Try again.",
         });
       }
+      countProTrade("buildFailed");
       request.log.error({ err, wallet: walletTag(wallet), mint: body.mint }, "pro trade build failed");
       return reply.code(502).send({ error: `Couldn't build the trade: ${message}` });
     }
@@ -791,6 +796,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const giveBack = cooldown.take(wallet);
     const sent = await sendViaSender(url, transaction);
     if (!sent.ok && sent.refused) {
+      countProTrade("sendRefused");
       giveBack();
       // Nothing went out: the Sacrifice comes back at once.
       await settleRefused(signature);
@@ -803,11 +809,13 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       return reply.code(409).send({ error: `Helius Sender refused the trade: ${sent.error}`, notSent: true });
     }
     // No clear answer (a timeout): it may have gone out, so it is treated as sent and resent.
-    if (!sent.ok)
+    if (!sent.ok) {
+      countProTrade("sendUnclear");
       request.log.warn(
         { wallet: walletTag(wallet), signature, error: sent.error },
         "sender send unclear; resending",
       );
+    }
     if (inFlight.size < MAX_IN_FLIGHT) {
       inFlight.set(signature, {
         base64: transaction,

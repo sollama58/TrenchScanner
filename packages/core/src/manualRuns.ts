@@ -108,6 +108,7 @@ export const MANUAL_RUN_EXCLUDED: Readonly<Partial<Record<HeartbeatJob, string>>
   "trade-tape": "Already runs every minute.",
   "asdf-price": "Already runs every 15 seconds.",
   "trade-settlement": "Already runs every 30 seconds.",
+  "trade-canary": "Already runs every 5 minutes.",
   "free-access":
     "Deletes accounts for good. It runs every few minutes, an hour after a period ends or is switched off.",
 };

@@ -1187,6 +1187,18 @@ const envSchema = z.object({
         return false;
       }
     }, "HELIUS_SENDER_URL must be an https URL on a helius-rpc.com host"),
+  // The trade canary (worker's tradeCanaryJob.ts, on the scanner): every 5 minutes it builds a Pro
+  // trade - never signed, never sent - for the preflight's probe wallet on SOL->USDC, a graduated
+  // Pump.fun coin and a curve coin, pings Sender and asks the trading RPCs for a block height;
+  // pipeline-watch tells the admins after two failed runs in a row. About 30 Helius credits a run.
+  // "false" switches it off.
+  TRADE_CANARY_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  // The graduated coin the canary buys when recent data names none (a quiet day): any liquid
+  // Pump.fun coin's mint. Empty: that probe is skipped then.
+  TRADE_CANARY_PUMP_MINT: z.string().optional().default(""),
 
   // Privy sign-in (user decision 2026-10-18): email or Google/X accounts with a Solana wallet Privy
   // holds, alongside wallet sign-in (apps/api/src/privy.ts). Off until all three are set: the app's
