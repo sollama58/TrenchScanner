@@ -7,7 +7,13 @@ const KNOWN_QUOTES: Readonly<Record<string, string>> = {
   EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: "USDC",
   Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB: "USDT",
   USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB: "USD1",
+  pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn: "PUMP",
 };
+
+/** The ticker of a usual quote token, for a route's hops; null for one this doesn't know. */
+export function knownQuoteSymbol(mint: string): string | null {
+  return KNOWN_QUOTES[mint] ?? null;
+}
 
 /** A base58 Solana address: what some sources put where a ticker belongs. */
 const MINT_LIKE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;

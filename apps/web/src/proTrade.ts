@@ -398,8 +398,16 @@ export interface SwapCostEstimate {
   venues: string[];
   /** Price impact of the reference buy, percent. */
   priceImpactPct: number | null;
-  /** The token account's rent on a first buy, refunded when it is closed; "0" when the wallet has one. */
+  /**
+   * The rent of the token accounts a buy opens, refunded when they are closed: the coin's on a first
+   * buy, and each new one for a token the route hops through. "0" when the wallet has them all.
+   */
   accountRentLamports: string;
+  /**
+   * The tokens the route hops through between SOL and the coin (mints): a coin quoted in PUMP or
+   * USDC is bought with SOL through them in one swap. Absent from older API builds.
+   */
+  routeVia?: string[];
   /** The coins the reference buy would get, raw units, by the route's quote; null without one. Absent from older API builds. */
   outAmount?: string | null;
   /** The coin's decimals; null when unread. */

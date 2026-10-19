@@ -38,7 +38,8 @@ import {
 import { transferFeeBpsOf } from "./rpc.js";
 import { tradeOf, walletTokenTrades } from "./walletTrades.js";
 import type { RawTransaction } from "./rpc.js";
-import { PROGRAM, WSOL } from "./txGuard.js";
+import { associatedTokenAddress, PROGRAM, WSOL } from "./txGuard.js";
+import { NoRouteError } from "./jupiterSwap.js";
 
 const key = (n: number) => bs58.encode(Uint8Array.from({ length: 32 }, (_, i) => (i === 0 ? n : 7)));
 const WALLET = key(1);
@@ -150,7 +151,7 @@ describe("Pump.fun curve", () => {
       curveRefusal(parsePumpCurve(key(61), curveData(f)));
     expect(refusal({ complete: true })).toMatch(/graduated/);
     expect(refusal({ cashback: true })).toMatch(/cashback/);
-    expect(refusal({ quote: key(62) })).toMatch(/quoted in SOL/);
+    expect(refusal({ quote: key(62) })).toMatch(/trades against another coin/);
     expect(refusal({ quote: WSOL })).toBeNull();
     expect(curveRefusal(null)).toMatch(/no Pump.fun/);
   });
@@ -641,12 +642,12 @@ describe("swap costs", () => {
         percent: 100,
         swapInfo: {
           label: "PumpSwap",
-          inputMint: "S",
-          outputMint: "T",
+          inputMint: WSOL,
+          outputMint: MINT,
           inAmount: "10000",
           outAmount: "5",
           feeAmount: "25",
-          feeMint: "S",
+          feeMint: WSOL,
         },
       },
     ]);
@@ -669,6 +670,7 @@ describe("swap costs", () => {
       venues: ["PumpSwap"],
       priceImpactPct: 1.2,
       accountRentLamports: TOKEN_2022_ACCOUNT_RENT_LAMPORTS,
+      routeVia: [],
       outAmount: 1n,
       decimals: null,
     });
@@ -689,9 +691,54 @@ describe("swap costs", () => {
       venues: [],
       priceImpactPct: null,
       accountRentLamports: 0n,
+      routeVia: [],
       outAmount: null,
       decimals: null,
     });
+  });
+  it("routes a coin quoted in another coin through it, adding rent for each hop's new account", async () => {
+    const USDC = key(20);
+    const PUMP = key(21);
+    const hop = (inputMint: string, outputMint: string) => ({
+      percent: 100,
+      swapInfo: {
+        label: "Pool",
+        inputMint,
+        outputMint,
+        inAmount: "1000",
+        outAmount: "1000",
+        feeAmount: "1",
+        feeMint: inputMint,
+      },
+    });
+    const asked: (boolean | undefined)[] = [];
+    const costs = await estimateSwapCosts(
+      {
+        rpc: {
+          getMintInfo: async (m) => ({
+            program: m === USDC ? PROGRAM.token : PROGRAM.token2022,
+            decimals: 6,
+          }),
+          // The wallet holds USDC already; the coin's and PUMP's accounts are new.
+          getAccountsData: async (a) =>
+            a.map((k) =>
+              k === associatedTokenAddress(WALLET, USDC, PROGRAM.token) ? new Uint8Array(165) : null,
+            ),
+        },
+        jupiter: {
+          quote: async (input) => {
+            asked.push(input.restrictIntermediateTokens);
+            // Jupiter's liquid hop tokens don't include this quote token: only an open route finds it.
+            if (input.restrictIntermediateTokens !== false) throw new NoRouteError("no route");
+            return plan([hop(WSOL, USDC), hop(USDC, PUMP), hop(PUMP, MINT)]);
+          },
+        },
+      },
+      { wallet: WALLET, mint: MINT, referenceLamports: 100_000_000n },
+    );
+    expect(asked).toEqual([undefined, false]);
+    expect(costs.routeVia).toEqual([USDC, PUMP]);
+    expect(costs.accountRentLamports).toBe(2n * TOKEN_2022_ACCOUNT_RENT_LAMPORTS);
   });
 });
 

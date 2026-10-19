@@ -586,6 +586,98 @@ describe("swap guard (wallet security audit 2026-10-18)", () => {
   });
 });
 
+describe("swap guard: multi-hop routes", () => {
+  const wallet = generateWalletKeypair().publicKey;
+  const mint = generateWalletKeypair().publicKey;
+  const hops = [generateWalletKeypair().publicKey, generateWalletKeypair().publicKey];
+  const RENT = 2_074_080n;
+  const ata = (m: string) => associatedTokenAddress(wallet, m, PROGRAM.token2022);
+  const openAta = (m: string): InstructionSpec => ({
+    programId: PROGRAM.ata,
+    accounts: [
+      { pubkey: wallet, writable: true, signer: true },
+      { pubkey: ata(m), writable: true },
+      { pubkey: wallet, writable: false },
+      { pubkey: m, writable: false },
+      { pubkey: SYSTEM_PROGRAM_ID, writable: false },
+      { pubkey: PROGRAM.token2022, writable: false },
+    ],
+    data: [1],
+  });
+  const jupiter = { programId: PROGRAM.jupiterV6, accounts: [], data: [1, 2, 3] };
+  const token = (m: string, amount: bigint, extra: Partial<{ delegate: string }> = {}) => ({
+    lamports: RENT,
+    owner: PROGRAM.token2022,
+    token: {
+      mint: m,
+      owner: wallet,
+      amount,
+      delegate: extra.delegate ?? null,
+      closeAuthority: null,
+      state: null,
+    },
+  });
+  // SOL in, through two hop tokens whose accounts the wallet lacks, to the coin.
+  const rpc = (spent: bigint, opened: string[], delegate?: string): GuardRpc => ({
+    getAccountsData: async (a) => a.map(() => null),
+    getParsedAccounts: async (a) =>
+      a.map((k) =>
+        k === wallet ? { lamports: 1_000_000_000n, owner: SYSTEM_PROGRAM_ID, token: null } : null,
+      ),
+    simulateParsed: async (_b64, a) => ({
+      error: null,
+      logs: [],
+      accounts: a.map((k) => {
+        if (k === wallet) return { lamports: 1_000_000_000n - spent, owner: SYSTEM_PROGRAM_ID, token: null };
+        if (k === ata(mint)) return token(mint, 5_000n);
+        const hop = opened.find((m) => ata(m) === k);
+        return hop ? token(hop, 0n, delegate ? { delegate } : {}) : null;
+      }),
+    }),
+  });
+  const buy: TradeExpectation = {
+    kind: "buy",
+    mint,
+    minOut: 4_000n,
+    // 0.1 SOL, fees and the 0.005 SOL margin the coin's own account comes out of.
+    maxSolDrop: 100_000_000n + 5_000_000n,
+    maxExternalLamports: 0n,
+    maxPriorityFeeLamports: 0n,
+  };
+  const tx = (...ixs: InstructionSpec[]) => buildLegacyTransaction(wallet, BLOCKHASH, ixs);
+
+  it("leaves the rent of a route's new hop accounts out of the SOL a buy spends", async () => {
+    const spent = 100_000_000n + RENT * 3n;
+    await expect(
+      guardSwapTransaction(rpc(spent, hops), tx(...[mint, ...hops].map(openAta), jupiter), wallet, buy),
+    ).resolves.toBeTruthy();
+    // The same SOL gone with no hop account to show for it is over the limit.
+    await expect(
+      guardSwapTransaction(rpc(spent, []), tx(openAta(mint), jupiter), wallet, buy),
+    ).rejects.toThrow(/more than the/);
+  });
+  it("refuses a hop account that isn't the wallet's alone, or too many of them", async () => {
+    const stranger = generateWalletKeypair().publicKey;
+    await expect(
+      guardSwapTransaction(
+        rpc(100_000_000n + RENT * 3n, hops, stranger),
+        tx(...[mint, ...hops].map(openAta), jupiter),
+        wallet,
+        buy,
+      ),
+    ).rejects.toThrow(/isn't the wallet's alone/);
+    const many = [1, 2, 3, 4].map(() => generateWalletKeypair().publicKey);
+    await expect(
+      guardSwapTransaction(
+        rpc(100_000_000n + RENT * 5n, many),
+        tx(...[mint, ...many].map(openAta), jupiter),
+        wallet,
+        buy,
+      ),
+    ).rejects.toThrow(/open 4 token accounts/);
+  });
+});
+
 describe("mint risk", () => {
   const pumpLike = {
     program: PROGRAM.token2022,

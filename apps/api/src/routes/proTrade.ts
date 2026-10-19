@@ -583,6 +583,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       venues: costs.venues,
       priceImpactPct: costs.priceImpactPct,
       accountRentLamports: costs.accountRentLamports.toString(),
+      routeVia: costs.routeVia,
       outAmount: costs.outAmount?.toString() ?? null,
       decimals: costs.decimals,
       platformFeeBps: charged(sacrifice) ? 20 : 0,
