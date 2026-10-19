@@ -1,6 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CandidateToken } from "@trenchscanner/core";
-import { quoteSymbolsFor, resetQuoteSymbolState, resolveQuoteSymbols } from "./quoteSymbols.js";
+// Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
+import "../bootstrap-env.js";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { prisma, type CandidateToken } from "@trenchscanner/core";
+import {
+  BACKFILL_RETRY_MS,
+  backfillQuoteSymbols,
+  quoteSymbolsFor,
+  resetQuoteSymbolState,
+  resolveQuoteSymbols,
+} from "./quoteSymbols.js";
 
 const USD1 = "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB";
 const TRACKED = "TrackedLaunch1111111111111111111111111pump";
@@ -67,5 +75,45 @@ describe("resolveQuoteSymbols", () => {
     expect(unnamed.quoteMint).toBeUndefined();
     expect(own.quoteSymbol).toBe("ASDF");
     expect(sol.quoteMint).toBeUndefined();
+  });
+});
+
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
+const TAG = `quote-symbols-test-${Date.now()}`;
+
+describe.skipIf(!dbAvailable)("backfillQuoteSymbols", () => {
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+  });
+
+  // Each pass reads Token without an index on its quote: a failing metadata read must not make
+  // every 30-second cycle read the whole table again, nor two passes run at once.
+  it("waits BACKFILL_RETRY_MS after a pass that couldn't name every quote, and runs one pass at a time", async () => {
+    const quote = `${TAG.replace(/[^1-9A-HJ-NP-Za-km-z]/g, "x").slice(0, 30)}Quote1`;
+    const coin = await prisma.token.create({
+      data: { mintAddress: `${TAG}-coin`, quoteMint: quote, quoteSymbol: null },
+    });
+    const reads = vi.spyOn(prisma, "$queryRaw");
+    const t0 = 1_000_000;
+
+    const failing = helius("failed");
+    expect(await backfillQuoteSymbols(failing, t0)).toBe(0);
+    expect(failing.getTokenSymbolsBatch).toHaveBeenCalledTimes(1);
+    const after = reads.mock.calls.length;
+
+    // The next cycles inside the wait read nothing at all.
+    expect(await backfillQuoteSymbols(failing, t0 + 30_000)).toBe(0);
+    expect(await backfillQuoteSymbols(failing, t0 + BACKFILL_RETRY_MS - 1)).toBe(0);
+    expect(reads.mock.calls.length).toBe(after);
+
+    // Past it, the quote is named; a second pass started alongside does nothing.
+    const working = helius(new Map([[quote, { symbol: "SPCX", name: null }]]));
+    const first = backfillQuoteSymbols(working, t0 + 2 * BACKFILL_RETRY_MS);
+    expect(await backfillQuoteSymbols(working, t0 + 2 * BACKFILL_RETRY_MS)).toBe(0);
+    expect(await first).toBeGreaterThanOrEqual(1);
+    expect(working.getTokenSymbolsBatch).toHaveBeenCalledTimes(1);
+    expect((await prisma.token.findUnique({ where: { id: coin.id } }))?.quoteSymbol).toBe("SPCX");
+    reads.mockRestore();
   });
 });

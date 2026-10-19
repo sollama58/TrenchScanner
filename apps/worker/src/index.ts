@@ -101,7 +101,12 @@ import { keepCadenceDelayMs, offsetCadenceDelayMs, trainingFirstRunDelayMs } fro
 import { PricePathSeeder } from "./jobs/pricePathSeed.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
 import { HeliusAccountStream } from "./discovery/heliusAccountStream.js";
-import { CURVE_STREAM_KEY_PREFIX, onCurveStreamUpdate, startCurveTape } from "./jobs/curveTape.js";
+import {
+  CURVE_STREAM_KEY_PREFIX,
+  onCurveStreamUpdate,
+  seedCurveStreamSpend,
+  startCurveTape,
+} from "./jobs/curveTape.js";
 import { startPricePathRecorder } from "./jobs/pricePathRecorder.js";
 import { onHolderStreamTx, setHolderTransferStream } from "./jobs/holderTransfers.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
@@ -365,6 +370,20 @@ async function main() {
         pollMaxMints: env.CURVE_TAPE_POLL_MAX_MINTS,
       })
     : undefined;
+  // The day's stream spend so far, from the last scan heartbeat (any process's): the curve tape's
+  // daily pace carries on across a deploy rather than starting the day over (seedCurveStreamSpend).
+  if (stopCurveTape) {
+    void prisma.systemHeartbeat
+      .findUnique({ where: { job: "scan" }, select: { lastRunAt: true, meta: true } })
+      .then((row) => {
+        const curve = (row?.meta as { curveTape?: { streamCreditsToday?: unknown } } | null)?.curveTape;
+        const credits = curve?.streamCreditsToday;
+        if (row && typeof credits === "number") seedCurveStreamSpend(credits, row.lastRunAt);
+      })
+      .catch((err: unknown) =>
+        logger.warn("curve tape: the day's stream spend not read", { error: String(err) }),
+      );
+  }
   // Saves the paths the curve tape lets go of, for predictive price pathing (PRICE_PATH_RECORD).
   const stopPricePaths =
     curveTapeOn && env.PRICE_PATH_RECORD
@@ -1066,7 +1085,10 @@ async function main() {
     for (const { job } of jobs) job.stop();
     stream?.stop();
     stopCurveTape?.();
-    void stopPricePaths?.();
+    // Written alongside the runs' settle, and awaited before the disconnect below.
+    const pricePathsWritten = stopPricePaths?.().catch((err: unknown) =>
+      logger.warn("price paths not written", { error: String(err) }),
+    );
     heliusStream?.stop();
     launchPoller?.stop();
     stopNarrativePolling?.();
@@ -1096,6 +1118,7 @@ async function main() {
     await saveTradeTapeProgress().catch((err: unknown) =>
       logger.warn("trade tape progress not saved", { error: String(err) }),
     );
+    await pricePathsWritten;
     stopLoopWatch();
     await stopApiUsageMeter();
     await prisma.$disconnect().catch(() => {});

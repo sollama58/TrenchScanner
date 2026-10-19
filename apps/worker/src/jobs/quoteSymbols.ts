@@ -31,12 +31,24 @@ const MAX_NAMED = 20_000;
 const failureBackoff = new FailureBackoff();
 /** Whether this process has named the quotes stored without a ticker before this fix. */
 let backfilled = false;
+/** A backfill pass in flight: the scan starts one every cycle without waiting on it. */
+let backfillRunning = false;
+/** No backfill pass before this (ms epoch): set when one could not name every quote. */
+let backfillRetryAt = 0;
+/**
+ * How long after a pass that could not name every quote (a failed or backed-off metadata read,
+ * a database error) the next one waits. Each pass reads Token without an index on its quote, so
+ * on every 30-second cycle a Helius outage turned into a whole-table read twice a minute.
+ */
+export const BACKFILL_RETRY_MS = 10 * 60_000;
 
 /** Test hook: a fresh process's state. */
 export function resetQuoteSymbolState(): void {
   named.clear();
   failureBackoff.clear();
   backfilled = false;
+  backfillRunning = false;
+  backfillRetryAt = 0;
 }
 
 type SymbolReader = Pick<HeliusClient, "getTokenSymbolsBatch">;
@@ -146,8 +158,19 @@ export async function resolveQuoteSymbols(
  * address. A run that couldn't name every quote leaves the rest for the next cycle. Few rows need
  * it (a day of GeckoTerminal-priced non-SOL pairs), so the read is small.
  */
-export async function backfillQuoteSymbols(helius: SymbolReader): Promise<number> {
-  if (backfilled) return 0;
+export async function backfillQuoteSymbols(helius: SymbolReader, now = Date.now()): Promise<number> {
+  if (backfilled || backfillRunning || now < backfillRetryAt) return 0;
+  backfillRunning = true;
+  // Until the pass shows otherwise, the next one waits: a throw below leaves it so.
+  backfillRetryAt = now + BACKFILL_RETRY_MS;
+  try {
+    return await backfillPass(helius, now);
+  } finally {
+    backfillRunning = false;
+  }
+}
+
+async function backfillPass(helius: SymbolReader, now: number): Promise<number> {
   // No ticker, or an address where the ticker belongs.
   const rows = await prisma.$queryRaw<{ mintAddress: string; quoteMint: string }[]>`
     SELECT "mintAddress", "quoteMint" FROM "Token"
@@ -161,6 +184,8 @@ export async function backfillQuoteSymbols(helius: SymbolReader): Promise<number
   const symbols = await quoteSymbolsFor(
     rows.map((r) => r.quoteMint),
     helius,
+    prisma,
+    now,
   );
   const byTicker = new Map<string, string[]>();
   for (const r of rows) {
@@ -179,6 +204,8 @@ export async function backfillQuoteSymbols(helius: SymbolReader): Promise<number
   // or a full page leaves the rest for the next cycle.
   const answered = rows.every((r) => symbols.has(r.quoteMint) || named.has(r.quoteMint));
   if (answered && rows.length < 5_000) backfilled = true;
+  // Every quote answered on a full page: the next page goes on the next cycle.
+  if (answered) backfillRetryAt = 0;
   logger.info("named stored quotes", { rows: rows.length, updated });
   return updated;
 }

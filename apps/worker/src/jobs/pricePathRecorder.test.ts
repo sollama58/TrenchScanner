@@ -104,6 +104,31 @@ describe("recordPricePath", () => {
     expect(takePricePathStats()).toMatchObject({ recorded: 20, capped: 10 });
   });
 
+  // A deploy used to drop the queue: the stop wrote one batch at most, and nothing while the timer's
+  // write was in flight.
+  it("stops by waiting out the write in flight, then writing the whole queue", async () => {
+    const written: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let calls = 0;
+    const stop = startPricePathRecorder({ maxPerDay: 1_000 }, async (rows) => {
+      calls += 1;
+      if (calls === 1) await gate;
+      written.push(...(rows as { mint: string }[]).map((r) => r.mint));
+    });
+    const now = Date.UTC(2026, 9, 18, 23, 30);
+    for (let i = 0; i < 450; i++) recordPricePath(`m${i}`, tape(60), "aged", now);
+    void flushPricePaths();
+    let stopped = false;
+    const stopping = stop().then(() => (stopped = true));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(stopped).toBe(false);
+    release();
+    await stopping;
+    expect(written).toHaveLength(450);
+    expect(new Set(written).size).toBe(450);
+  });
+
   it("drops a batch the database refuses instead of holding it", async () => {
     startPricePathRecorder({ maxPerDay: 10 }, async () => {
       throw new Error("down");
