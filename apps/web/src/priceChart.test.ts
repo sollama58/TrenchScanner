@@ -231,6 +231,13 @@ describe("mcapAxis", () => {
   });
 });
 
+describe("zoomBy's ceiling", () => {
+  it("never grows the window past maxMs", () => {
+    const z = zoomBy({ from: 5_000, to: 6_000 }, 0, 10_000, 4, 1, 10, 1_500);
+    expect(z).toEqual({ from: 4_500, to: 6_000, end: false });
+  });
+});
+
 describe("value zoom", () => {
   it("zooms in about the anchor and back out, within limits", () => {
     const z = zoomValue(null, 0.5, 0);

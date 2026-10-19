@@ -1747,6 +1747,8 @@ export interface FeedAppearance {
   chartMarkMinSol: number;
   /** The token chart's default: a line or candles (absent from older API builds: line). */
   chartStyle: "line" | "candles";
+  /** The view the token chart opens on: Trading or All (absent from older API builds: Trading). */
+  chartView: "trading" | "all";
   /** Experimental: draw the predicted price path on the token chart (absent from older API builds: off). */
   chartPathing: boolean;
   hidden: CardField[];
