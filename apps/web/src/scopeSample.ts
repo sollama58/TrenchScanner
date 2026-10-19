@@ -62,7 +62,17 @@ export function scopeSampleCard(now: number): Card {
       alertedAt: at,
       calledBy: [],
       narrative: { verdict: "agrees" },
-      outcome: null,
+      // A call still being watched (never null on a real call: the card reads its run peak).
+      outcome: {
+        status: "watching",
+        hit2x: false,
+        hitGoal: null,
+        peak1hReturnPct: 64,
+        maxDrawdown1hPct: null,
+        peak24hReturnPct: null,
+        finalized: false,
+        minutesLeft: 14,
+      },
     },
   } as unknown as Card;
 }

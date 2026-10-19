@@ -127,3 +127,21 @@ describe("shortAge", () => {
     expect(shortAge(-5)).toBe("0s");
   });
 });
+
+describe("About to graduate", () => {
+  const at = (id: string, mcap: number) =>
+    ({ ...card(id, "stream"), currentMarketCapUsd: mcap, snapshot: { marketCapUsd: 20_000 } }) as Card;
+
+  it("takes the Stream's about-to-graduate list, still at the mark, biggest first", () => {
+    const cols = splitScope(
+      [],
+      [],
+      undefined,
+      [at("n1", 12_000)],
+      [at("s1", 50_000), at("s2", 80_000), at("s3", 30_000)],
+    );
+    expect(cols.soon.map((c) => c.id)).toEqual(["s2", "s1"]);
+    // One that dropped under the mark since isn't new: it goes nowhere.
+    expect(cols.new.map((c) => c.id)).toEqual(["n1"]);
+  });
+});
