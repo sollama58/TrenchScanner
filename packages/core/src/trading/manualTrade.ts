@@ -14,7 +14,7 @@ import {
   PUMP_GLOBAL,
   type PumpCurve,
 } from "./pumpCurve.js";
-import { pumpSwapBuyInstructions, pumpSwapSellInstructions, readPumpSwap } from "./pumpSwap.js";
+import { pumpFeeBps, pumpSwapBuyInstructions, pumpSwapSellInstructions, readPumpSwap } from "./pumpSwap.js";
 import { pickSenderTipAccount, SENDER_MIN_TIP_LAMPORTS, type SenderSpeed } from "./sender.js";
 import {
   buildV0Transaction,
@@ -893,6 +893,25 @@ export function routeFeeBps(quote: SwapQuote): { bps: number; venues: string[] }
   return { bps: Math.round(bps * 10) / 10, venues };
 }
 
+/**
+ * Pump.fun's own fee on the coin, for a route whose quote doesn't give its pools' fees: only when
+ * there is no quote or the route is a single Pump.fun hop (curve or PumpSwap), so nothing of
+ * another venue's goes uncounted.
+ */
+async function pumpRouteFee(
+  rpc: Pick<ManualTradeRpc, "getAccountsData">,
+  mint: string,
+  quote: SwapQuote | null,
+): Promise<{ bps: number; venues: string[] } | null> {
+  const plan = quote?.routePlan;
+  if (quote && Array.isArray(plan)) {
+    const labels = (plan as { swapInfo?: { label?: unknown } }[]).map((s) => String(s.swapInfo?.label ?? ""));
+    if (labels.length !== 1 || !/^pump/i.test(labels[0]!)) return null;
+  }
+  const pump = await pumpFeeBps(rpc, mint).catch(() => null);
+  return pump && pump.bps > 0 ? { bps: pump.bps, venues: [pump.venue] } : null;
+}
+
 export interface SwapCosts {
   /** The coin's own transfer fee (Token-2022), basis points of every transfer; 0 without one, null unread. */
   transferFeeBps: number | null;
@@ -956,7 +975,8 @@ export async function estimateSwapCosts(
   const accounts = await deps.rpc.getAccountsData(owned.map((o) => o.address)).catch(() => null);
   const rentOf = (p: string) =>
     p === PROGRAM.token2022 ? TOKEN_2022_ACCOUNT_RENT_LAMPORTS : TOKEN_ACCOUNT_RENT_LAMPORTS;
-  const route = quote ? routeFeeBps(quote) : null;
+  // Jupiter's quote often leaves Pump.fun's fees out: then they are read from Pump.fun's own accounts.
+  const route = (quote ? routeFeeBps(quote) : null) ?? (await pumpRouteFee(deps.rpc, input.mint, quote));
   const impact = quote ? Number(quote.priceImpactPct) * 100 : NaN;
   return {
     transferFeeBps: mintInfo ? (mintInfo.transferFeeBps ?? 0) : null,
