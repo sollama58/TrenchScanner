@@ -19,6 +19,8 @@ import {
   decideAccess,
   prisma,
   withApiFeature,
+  configureMintSupplies,
+  MintSupplies,
 } from "@trenchscanner/core";
 import { SAVED_FEED_SELECT, toSavedFeed } from "./contest.js";
 import {
@@ -627,6 +629,9 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // without one the modal shows what the database knows. The token modal's Stonk fee card reads
   // through the same client.
   const walletHelius = env.HELIUS_API_KEY ? new HeliusClient({ apiKey: env.HELIUS_API_KEY }) : null;
+  // The chart, live tail, live trades and positions put Pump.fun's launch-billion caps on each coin's
+  // supply now (mintSupply.ts): a mint read, shared by every reader of the coin for a minute.
+  configureMintSupplies(new MintSupplies(walletHelius ?? new HeliusClient({})));
   // The token chart's live tail follows open charts' curves on its own Helius socket (liveCurve.ts).
   const solPrice = sharedSolPrice;
   // One quote-coin price for both: a coin quoted in PUMP or USD1 is read once for its chart and trades.

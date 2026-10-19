@@ -1952,7 +1952,7 @@ export function freshQuoteFeatures(
     jup5mSellVolumeUsd: n(sellVol),
     // No trades is no share, not an even split.
     jup5mBuyVolumeShare: totalVol !== undefined && totalVol > 0 ? buyVol! / totalVol : null,
-    // On DexScreener's supply, like the anchor (freshQuoteMcapUsd), not Jupiter's post-burn one.
+    // On the scan reading's supply, like the anchor (freshQuoteMcapUsd).
     jup5mVolumeToMcap:
       totalVol !== undefined && quoteMcap !== null && quoteMcap > 0 ? totalVol / quoteMcap : null,
     // A window Jupiter reports at all with no trades in it has counts of zero; one it left out
