@@ -2,7 +2,12 @@
 import "../bootstrap-env.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { HttpError, prisma, type MinuteCandle } from "@trenchscanner/core";
-import { enrolPeakWatches, resetPeakWatchEnrolment, runCandlePeaksJob } from "./candlePeaks.js";
+import {
+  enrolPeakWatches,
+  PEAK_WATCH_PARKED_AT,
+  resetPeakWatchEnrolment,
+  runCandlePeaksJob,
+} from "./candlePeaks.js";
 import { recordCuratedPeaks } from "./curatedPeaks.js";
 import { recordMatchPeaks } from "./matchPeaks.js";
 import { JobFailure } from "../scheduler.js";
@@ -257,6 +262,22 @@ describe.skipIf(!dbAvailable)("runCandlePeaksJob", () => {
     const watch = await prisma.peakWatch.findUniqueOrThrow({ where: { tokenId: token.id } });
     expect(watch.nextCheckAt.getTime()).toBeGreaterThan(now);
     candlesByMint.set(token.mintAddress, null);
+  });
+
+  it("parks a coin past its tracking window, so the due reads stop walking it", async () => {
+    const { token } = await seedCoin("expired", 20 * 24);
+    await prisma.peakWatch.create({
+      data: {
+        tokenId: token.id,
+        firstAlertAt: new Date(Date.now() - 20 * 24 * HOUR),
+        lastAlertAt: new Date(Date.now() - 20 * 24 * HOUR),
+        nextCheckAt: new Date(Date.now() - 19 * 24 * HOUR),
+      },
+    });
+    const meta = await run();
+    expect(meta.parked).toBeGreaterThanOrEqual(1);
+    const watch = await prisma.peakWatch.findUniqueOrThrow({ where: { tokenId: token.id } });
+    expect(watch.nextCheckAt).toEqual(PEAK_WATCH_PARKED_AT);
   });
 
   it("moves a quiet coin's next read up when it is alerted again", async () => {

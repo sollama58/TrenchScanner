@@ -3242,7 +3242,6 @@ model ApiUsage {
   msTotal     BigInt   @default(0)
 
   @@id([bucket, process, provider, endpoint, feature])
-  @@index([bucket])
 }
 
 /// Solana Tracker's roster of known KOL wallets, read once a day by the worker's kol-wallets job
@@ -3521,7 +3520,8 @@ model PeakWatch {
   /// The coin's first and latest alert (a model call or a filter alert) in the window.
   firstAlertAt DateTime
   lastAlertAt  DateTime
-  /// When to read its candles next: sooner while it trades (nextPeakCheckDelayMs).
+  /// When to read its candles next: sooner while it trades (nextPeakCheckDelayMs). 9999-01-01
+  /// once past its tracking window (parked, candlePeaks.ts), until a new alert brings it back.
   nextCheckAt  DateTime
   lastCheckedAt DateTime?
   /// The start of its latest minute with a trade, as of the last read.

@@ -88,7 +88,9 @@
 # under its job lock (apps/worker/src/jobLock.ts: up to two on the scanner, up to six on the
 # trainer) - against the actual connection ceiling on the Postgres plan you deploy to (Render
 # dashboard -> the database -> Info tab; the Admin tab's Database panel shows the live count against
-# it; basic-4gb allows 200, 2026-10-16). Adjust downward if you move to a plan with a lower ceiling,
+# it). The live ceiling read 103 (max_connections, /stats/db, 2026-10-19 database audit), not the
+# 200 assumed before: ~45 steady, so the ~2x overlap of a deploy reaches ~90 of the 100 usable.
+# Adjust downward if you move to a plan with a lower ceiling,
 # or if you scale any service to more than one instance - every instance opens its own pool, and
 # during a deploy the old and new instances are both connected for a while (Render keeps the old
 # one up through the health check plus maxShutdownDelaySeconds), so the peak is about twice the
