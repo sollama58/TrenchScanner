@@ -13996,6 +13996,12 @@ button.bm-same {
   margin-left: auto;
   font-weight: 500;
 }
+/* A section's age and next-update countdown, beside its count (user ask 2026-10-19). */
+.tm-live-stamp {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 /* The figures: four tiles, Now leading with its move. */
 .tm-modal .tm-figs {

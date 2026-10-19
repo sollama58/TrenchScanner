@@ -174,3 +174,28 @@ export function safetyChecks(s: Snapshot): SafetyCheck[] {
     ),
   ];
 }
+
+/** The screen's verdict changed on this coin: what it was before, and the last scan that said so. */
+export interface SafetyFlip {
+  /** The verdict before the flip; the newest scan says the other. */
+  was: "passed" | "failed";
+  /** The last scan with the old verdict. */
+  lastAt: string;
+}
+
+/**
+ * Whether the screen's verdict flipped (user ask 2026-10-19): the newest scan to give the other
+ * verdict than `reading`, among `history` (the coin's recent scans, any order) up to `reading`.
+ * Null when every screened scan there agrees with it.
+ */
+export function safetyFlip(reading: Snapshot, history: readonly Snapshot[]): SafetyFlip | null {
+  if (typeof reading.rugScreenPassed !== "boolean") return null;
+  const at = Date.parse(reading.takenAt);
+  let other: Snapshot | null = null;
+  for (const s of history) {
+    if (typeof s.rugScreenPassed !== "boolean" || s.rugScreenPassed === reading.rugScreenPassed) continue;
+    const t = Date.parse(s.takenAt);
+    if (t < at && (!other || t > Date.parse(other.takenAt))) other = s;
+  }
+  return other ? { was: other.rugScreenPassed ? "passed" : "failed", lastAt: other.takenAt } : null;
+}

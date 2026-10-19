@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Card, Snapshot } from "./api";
-import { safetyChecks, safetyVerdict } from "./safetyScreen";
+import { safetyChecks, safetyFlip, safetyVerdict } from "./safetyScreen";
 
 const snap = (over: Partial<Snapshot>): Snapshot =>
   ({ takenAt: "2026-10-16T00:00:00Z", marketCapUsd: 1, ...over }) as Snapshot;
@@ -77,5 +77,27 @@ describe("safety checks", () => {
     expect(mayhem["Mayhem Mode"]).toMatchObject({ value: "Unverified (fails closed)", status: "fail" });
     // Wallet and share cuts still pass unread.
     expect(mayhem["Top 10 holders"]).toMatchObject({ value: "Not read", status: "unknown" });
+  });
+});
+
+describe("safety flip", () => {
+  const at = (m: number, passed: boolean | undefined) =>
+    snap({ takenAt: `2026-10-16T00:0${m}:00Z`, rugScreenPassed: passed });
+
+  it("names the last scan with the other verdict", () => {
+    const now = at(5, false);
+    expect(safetyFlip(now, [at(4, false), at(3, true), at(2, true), at(1, false)])).toEqual({
+      was: "passed",
+      lastAt: "2026-10-16T00:03:00Z",
+    });
+    expect(safetyFlip(at(5, true), [at(4, false), at(3, undefined)])).toEqual({
+      was: "failed",
+      lastAt: "2026-10-16T00:04:00Z",
+    });
+  });
+
+  it("is null when every screened scan agrees, or for scans after the reading", () => {
+    expect(safetyFlip(at(5, true), [at(4, true), at(3, undefined), at(6, false)])).toBeNull();
+    expect(safetyFlip(at(5, undefined), [at(4, false)])).toBeNull();
   });
 });
