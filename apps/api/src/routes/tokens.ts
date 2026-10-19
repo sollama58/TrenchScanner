@@ -26,6 +26,7 @@ import { SharedCache } from "../sharedCache.js";
 import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
 import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
 import { liveCurves, MAX_WAIT_MS, type LiveCurveAnswer } from "../liveCurve.js";
+import { recordCandleAnswer } from "../chartHealth.js";
 import { liveTrades, type LiveTradesAnswer } from "../liveTrades.js";
 import { longPollRateLimit, withinLongPollCeiling } from "../longPollLimit.js";
 import { sharedSolPrice } from "../solPrice.js";
@@ -890,14 +891,14 @@ export async function readTokenChart(
       kept.candles ? onSupply(kept.candles, factors.get(mintAddress)) : null,
       stream?.candles ?? null,
     );
-    return {
+    return counted("chart", {
       mint: mintAddress,
       candles: merged.candles,
       ...sourceOf(merged),
       ...(kept.stale && merged.added === 0 && merged.candles ? { stale: true } : {}),
       marketCap: [],
       ...(lastWallets.get(mintAddress) ?? noWallets),
-    };
+    });
   }
   const token = found.token!;
   const [read, snapshots, flagged, factors] = await Promise.allSettled([
@@ -932,7 +933,7 @@ export async function readTokenChart(
     tracked.length > 0
       ? await trackedMarks(token.id, marks.wallets, tracked).catch(() => marks.wallets)
       : marks.wallets;
-  return {
+  return counted("chart", {
     mint: mintAddress,
     candles: merged.candles,
     ...sourceOf(merged),
@@ -943,7 +944,19 @@ export async function readTokenChart(
       .map((s) => ({ t: s.takenAt.getTime(), usd: s.marketCapUsd, buys: s.buys5m, sells: s.sells5m })),
     ...marks,
     wallets,
-  };
+  });
+}
+
+/**
+ * Counts a candle answer for a coin on Token in chart health (chartHealth.ts): by its source, null
+ * when it has no candles, and stale. A coin not on Token isn't counted: it never has candles here.
+ */
+function counted<T extends { candles: unknown[] | null; source?: CandleSource; stale?: boolean }>(
+  feed: string,
+  answer: T,
+): T {
+  recordCandleAnswer(feed, answer.candles ? (answer.source ?? "pumpfun") : null, answer.stale === true);
+  return answer;
 }
 
 /** The `source` field of an answer with merged candles (none without candles). */
@@ -1050,7 +1063,12 @@ export async function readTokenFine(
   if (!(await isTracked(mintAddress))) return { mint: mintAddress, stepSec, candles: null };
   const own = await streamCandles(streamFeeds, mintAddress, stepSec * 1_000).catch(() => null);
   if (res === "1s" && streamCovers(own, from ?? now - FINE_STREAM_SPAN_MS, now))
-    return { mint: mintAddress, stepSec, candles: own.candles, source: "stream" };
+    return counted<TokenFineCandles>(`fine${res}`, {
+      mint: mintAddress,
+      stepSec,
+      candles: own.candles,
+      source: "stream",
+    });
   const [read, factors] = await Promise.all([
     (res === "1s" ? fineSecondCache : quarterCache).read(mintAddress),
     launchSupplyFactors([mintAddress]).catch(() => new Map<string, number>()),
@@ -1059,13 +1077,13 @@ export async function readTokenFine(
     read.candles ? onSupply(read.candles, factors.get(mintAddress)) : null,
     own?.candles ?? null,
   );
-  return {
+  return counted<TokenFineCandles>(`fine${res}`, {
     mint: mintAddress,
     stepSec,
     candles: merged.candles,
     ...sourceOf(merged),
     ...(read.stale && merged.added === 0 && merged.candles ? { stale: true } : {}),
-  };
+  });
 }
 
 /** The token chart's live tail (LiveCurveAnswer); only a coin on Token has its curve followed. */

@@ -54,6 +54,7 @@ import { registerAdminFreeAccessRoutes } from "./routes/adminFreeAccess.js";
 import { registerConfigRoutes } from "./routes/config.js";
 import { registerAdminAnnouncementRoutes, registerAnnouncementRoutes } from "./routes/announcements.js";
 import { registerAdminFeedbackRoutes, registerFeedbackRoutes } from "./routes/feedback.js";
+import { registerClientErrorRoutes } from "./routes/clientErrors.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
 import { registerSubscriptionRoutes } from "./routes/subscription.js";
 import { registerStatsRoutes } from "./routes/stats.js";
@@ -82,6 +83,9 @@ import { liveCurves, liveCurvesFor, setLiveCurves } from "./liveCurve.js";
 import { liveTrades, liveTradesFor, setLiveTrades } from "./liveTrades.js";
 import { dexScreenerQuote, jupiterQuote, QuotePrice, sharedSolPrice } from "./solPrice.js";
 import { recordAdminActions } from "./adminActionLog.js";
+import { chartReaderFor } from "./chartRpc.js";
+import { startChartAlerts } from "./chartHealth.js";
+import { adminTelegramNotifier } from "./adminTelegram.js";
 
 const logger = createLogger("api");
 
@@ -576,6 +580,9 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
 
   // The bug button's reports: guests may send them too, so this is outside every auth gate.
   await app.register(registerFeedbackRoutes, { prefix: "/feedback", env });
+  // The web's error boundaries, reported and counted in chart health (clientErrors.ts): outside
+  // every auth gate too, since a crash can come before sign-in.
+  await app.register(registerClientErrorRoutes, { prefix: "/client-errors" });
 
   await app.register(registerAuthRoutes, { prefix: "/auth", env });
 
@@ -649,8 +656,28 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       ? [jupiterQuote, dexScreenerQuote(dexScreener, (mints) => walletHelius.getMintDecimals(mints))]
       : [jupiterQuote],
   );
-  setLiveCurves(liveCurvesFor(env.HELIUS_API_KEY, env.CHART_LIVE_CURVES, walletHelius, solPrice, quotePrice));
+  // Its RPC reads go on their own Helius 429 lane, and what Helius doesn't answer is asked once more
+  // of SOLANA_RPC_URL when that is another endpoint (chartRpc.ts; user ask 2026-10-19: "can we have
+  // multiple data sources?").
+  setLiveCurves(
+    liveCurvesFor(
+      env.HELIUS_API_KEY,
+      env.CHART_LIVE_CURVES,
+      chartReaderFor(env.HELIUS_API_KEY, env.SOLANA_RPC_URL),
+      solPrice,
+      quotePrice,
+    ),
+  );
   app.addHook("onClose", async () => liveCurves().stop());
+  // After a deploy every open chart asks again at once: the chart socket is open before they do.
+  app.addHook("onListen", async () => void liveCurves().warm());
+  // The charts' health (chartHealth.ts): the admins hear on Telegram when candles go blank or the
+  // chart socket stalls for many users at once.
+  const notifyAdmins = adminTelegramNotifier(env);
+  if (notifyAdmins) {
+    const stopAlerts = startChartAlerts(notifyAdmins);
+    app.addHook("onClose", async () => stopAlerts());
+  }
   // The token page's live trades follow open pages' coins' logs on another Helius socket
   // (liveTrades.ts), behind the same switch as the chart's.
   setLiveTrades(liveTradesFor(env.HELIUS_API_KEY, env.CHART_LIVE_CURVES, solPrice, quotePrice, walletHelius));

@@ -18,6 +18,8 @@ import type { RouteTimings } from "../routeTimings.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { ADMIN_STALE_ON_ERROR_MS, SharedCache } from "../sharedCache.js";
 import { summarizeHeartbeat } from "./health.js";
+import { chartHealth } from "../chartHealth.js";
+import { liveCurves } from "../liveCurve.js";
 import { issueTradeConfirmation, requireAdminConfirmation } from "../tradeConfirm.js";
 import {
   buildDbReport,
@@ -179,6 +181,16 @@ export async function registerAdminOpsRoutes(
     stream: { connected: app.matchStream.connected, subscribers: app.matchStream.subscriberCount },
     routes: opts.timings?.summary() ?? [],
     live: await buildLiveFreshnessReport(opts.liveRefresher),
+  }));
+
+  /**
+   * Admin > API's "Charts health": what the chart routes answered over the last 5 minutes on this
+   * instance, the chart socket and its RPC checks, Pump.fun's gate and browsers' error reports,
+   * each judged green, amber or red (chartHealth.ts), with the live tail's follows.
+   */
+  app.get("/charts-health", async () => ({
+    ...chartHealth().snapshot(),
+    liveCurves: liveCurves().stats(),
   }));
 
   /**

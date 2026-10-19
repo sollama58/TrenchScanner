@@ -13,6 +13,7 @@ import {
 import { SharedCache } from "../sharedCache.js";
 import { liveCurves } from "../liveCurve.js";
 import { liveTrades } from "../liveTrades.js";
+import { chartHealthForHealth } from "../chartHealth.js";
 import { proTradeCounts } from "../proTradeCounters.js";
 
 /**
@@ -252,6 +253,7 @@ export async function registerHealthRoutes(
         db: true,
         liveCurves: liveCurves().stats(),
         liveTrades: liveTrades().stats(),
+        charts: chartHealthForHealth(),
         proTrades: proTradeCounts(),
       };
     }
@@ -259,10 +261,13 @@ export async function registerHealthRoutes(
     // chart socket covers, and that socket's traffic and estimated Helius credits since boot. The
     // token pages' live trades (liveTrades.ts) likewise, for their own socket. And this instance's
     // Pro trade builds and sends by outcome (proTradeCounters.ts), so a spike of 503s shows.
+    // `charts`: the charts' health over the last 5 minutes (chartHealth.ts), informational: it
+    // never fails /health.
     return {
       ok: true,
       liveCurves: liveCurves().stats(),
       liveTrades: liveTrades().stats(),
+      charts: chartHealthForHealth(),
       proTrades: proTradeCounts(),
     };
   });
