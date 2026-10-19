@@ -103,10 +103,11 @@ describe("pushPayloads", () => {
 
 const spec = (id: string): ContestantSpec =>
   ({ id, name: id, description: "", role: "rules" }) as ContestantSpec;
+// Its own model ids: the Telegram dispatcher's tests read the same recent calls, and follow "rules".
 const state = {
-  roster: [spec("rules"), spec("trees")],
-  defaultModel: "rules",
-  defaultModels: ["rules"],
+  roster: [spec("wp-rules"), spec("wp-trees")],
+  defaultModel: "wp-rules",
+  defaultModels: ["wp-rules"],
   bestModel: null,
 };
 const env = { ...loadEnv(), TELEGRAM_DASHBOARD_URL: "https://trenchscanner.app" };
@@ -173,7 +174,7 @@ describe.skipIf(!dbAvailable)("runWebPushDispatch", () => {
           confidence: 80,
           anchorPriceUsd: 0.001,
           anchorMcapUsd: 50_000,
-          model: "rules",
+          model: "wp-rules",
           modelName: "Rules",
           createdAt: new Date(at.getTime() + 1_000),
         },
@@ -184,7 +185,7 @@ describe.skipIf(!dbAvailable)("runWebPushDispatch", () => {
           confidence: 80,
           anchorPriceUsd: 0.001,
           anchorMcapUsd: 50_000,
-          model: "trees",
+          model: "wp-trees",
           modelName: "Trees",
           createdAt: new Date(at.getTime() + 2_000),
         },
