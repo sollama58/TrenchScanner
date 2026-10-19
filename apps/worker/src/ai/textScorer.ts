@@ -9,7 +9,7 @@ import {
   cachedAiReviewerState,
   type Env,
 } from "@trenchscanner/core";
-import { anthropicClient, anthropicConfigured, describeAnthropicError } from "./client.js";
+import { anthropicClient, anthropicConfigured, describeAnthropicError, lenientFormat } from "./client.js";
 import {
   estimateCallUsd,
   failedCallCostUsd,
@@ -130,7 +130,7 @@ async function scoreText(
       messages: [{ role: "user", content: buildTextScoringBrief(token) }],
       output_config: {
         ...(noEffort ? {} : { effort: env.AI_TEXT_EFFORT }),
-        format: betaZodOutputFormat(TextScoresSchema),
+        format: lenientFormat(betaZodOutputFormat(TextScoresSchema)),
       },
     });
   } catch (err) {

@@ -17,7 +17,7 @@ import {
   type JudgeRecordSummary,
   type ReflectionCall,
 } from "@trenchscanner/core";
-import { anthropicClient, describeAnthropicError } from "./client.js";
+import { anthropicClient, describeAnthropicError, lenientFormat } from "./client.js";
 import { ensureActivePlaybook, resetActivePlaybookCache, type ActivePlaybook } from "./playbookStore.js";
 import { loadReplayItems, replayRequestUsd, submitReplay, type ScoredReplayRun } from "./replay.js";
 import {
@@ -371,7 +371,7 @@ async function reviewRecord(
           fallbacks: "default",
           system: REFLECTION_SYSTEM_PROMPT,
           messages: [{ role: "user", content: buildReflectionBrief(active.text, record) }],
-          output_config: { effort: "high", format: betaZodOutputFormat(ReflectionSchema) },
+          output_config: { effort: "high", format: lenientFormat(betaZodOutputFormat(ReflectionSchema)) },
         },
         // A review is one call a day reading a few hundred rows; give it room beyond the live
         // reviewer's timeout.
