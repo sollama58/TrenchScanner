@@ -21,6 +21,9 @@ const logger = createLogger("helius-stream");
  * covered, never as no activity.
  *
  * In core so the API can follow curves too: the token chart's live tail (apps/api/src/liveCurve.ts).
+ * And their trades (user ask 2026-10-19: the token page's live trades): a "logs" key follows the
+ * logs of every transaction that mentions its one account (logsSubscribe, ~6 KB a trade), which
+ * carry the swap events core's pumpTradeEvents.ts reads (apps/api/src/liveTrades.ts).
  */
 
 /** Silence after which the connection is presumed dead: the slot subscription speaks every ~0.4 s. */
@@ -41,6 +44,17 @@ export const STREAM_SETTLE_MS = 30_000;
 const MAX_KEYS = 200;
 /** Most account keys followed at once: the young coins' curves (CURVE_TAPE_MAX_MINTS caps it lower). */
 const MAX_ACCOUNT_KEYS = 1_000;
+/**
+ * Most logs keys followed at once: the coins whose trades someone is watching, two keys each (its
+ * curve and its pool; liveTrades.ts follows at most 50 coins).
+ */
+const MAX_LOGS_KEYS = 100;
+
+const MAX_KEYS_OF: Record<StreamKind, number> = {
+  tx: MAX_KEYS,
+  account: MAX_ACCOUNT_KEYS,
+  logs: MAX_LOGS_KEYS,
+};
 
 /** Helius bills 2 credits per 0.1 MB streamed. */
 export function streamCredits(bytes: number): number {
@@ -50,11 +64,12 @@ export function streamCredits(bytes: number): number {
 type WebSocketCtor = new (url: string) => WebSocket;
 
 /**
- * What a key follows: "tx", the transactions touching its accounts (transactionSubscribe); or
+ * What a key follows: "tx", the transactions touching its accounts (transactionSubscribe);
  * "account", its one account's data on every change (accountSubscribe, the worker's
- * jobs/curveTape.ts).
+ * jobs/curveTape.ts); or "logs", the logs of each successful transaction that mentions its one
+ * account (logsSubscribe, the API's liveTrades.ts).
  */
-export type StreamKind = "tx" | "account";
+export type StreamKind = "tx" | "account" | "logs";
 
 interface Subscription {
   kind: StreamKind;
@@ -77,6 +92,13 @@ export interface HeliusStreamStats {
   accountSubscriptions: number;
   /** Account updates delivered (the curve tape's), in the same bytes and credits. */
   accountUpdates: number;
+  /**
+   * Live logs subscriptions (the live trades'). Always set by takeStats; optional so the stubs
+   * written before the "logs" kind still type.
+   */
+  logsSubscriptions?: number;
+  /** Transactions' logs delivered (the live trades'), in the same bytes and credits. */
+  logsUpdates?: number;
   bytes: number;
   /** Estimated from the bytes received (streamCredits), plus one per connection opened. */
   credits: number;
@@ -100,7 +122,7 @@ export class HeliusAccountStream {
   private timers: ReturnType<typeof setInterval>[] = [];
   private stopped = false;
   private lastActivityAt = 0;
-  private stats = { txs: 0, accountUpdates: 0, bytes: 0, connections: 0 };
+  private stats = { txs: 0, accountUpdates: 0, logsUpdates: 0, bytes: 0, connections: 0 };
 
   constructor(
     private readonly url: string,
@@ -114,6 +136,13 @@ export class HeliusAccountStream {
      */
     private readonly onAccount:
       ((key: string, data: string, bytes: number, slot: number | null) => void) | null = null,
+    /**
+     * Each successful transaction's logs delivered for a "logs" key, with its signature, the
+     * message's size and its slot. Failed transactions are dropped here: they traded nothing.
+     */
+    private readonly onLogs:
+      | ((key: string, signature: string, logs: string[], bytes: number, slot: number | null) => void)
+      | null = null,
   ) {}
 
   static urlFor(apiKey: string): string {
@@ -144,13 +173,13 @@ export class HeliusAccountStream {
 
   /** Follow `accounts` under `key` while asked (again at least every UNWATCHED_TTL_MS). */
   watch(key: string, accounts: readonly string[], now = Date.now(), kind: StreamKind = "tx"): void {
-    if (accounts.length === 0 || (kind === "account" && accounts.length !== 1)) return;
+    if (accounts.length === 0 || (kind !== "tx" && accounts.length !== 1)) return;
     const existing = this.subs.get(key);
     if (existing && existing.kind === kind && sameSet(existing.accounts, accounts)) {
       existing.wantedAt = now;
       return;
     }
-    if (!existing && this.countOf(kind) >= (kind === "account" ? MAX_ACCOUNT_KEYS : MAX_KEYS)) return;
+    if (!existing && this.countOf(kind) >= MAX_KEYS_OF[kind]) return;
     if (existing) this.unsubscribe(key, existing);
     const sub: Subscription = {
       kind,
@@ -193,15 +222,23 @@ export class HeliusAccountStream {
     const out: HeliusStreamStats = {
       connected: this.socket?.readyState === 1 ? 1 : 0,
       subscriptions: [...this.subs.values()].filter((s) => s.kind === "tx" && s.since !== null).length,
-      accountSubscriptions: [...this.subs.values()].filter((s) => s.kind === "account" && s.since !== null)
-        .length,
+      accountSubscriptions: this.liveCount("account"),
+      logsSubscriptions: this.liveCount("logs"),
       txs: this.stats.txs,
       accountUpdates: this.stats.accountUpdates,
+      logsUpdates: this.stats.logsUpdates,
       bytes: this.stats.bytes,
       credits: streamCredits(this.stats.bytes) + this.stats.connections,
     };
-    this.stats = { txs: 0, accountUpdates: 0, bytes: 0, connections: 0 };
+    this.stats = { txs: 0, accountUpdates: 0, logsUpdates: 0, bytes: 0, connections: 0 };
     return out;
+  }
+
+  /** Subscriptions of `kind` Helius has confirmed. */
+  private liveCount(kind: StreamKind): number {
+    let n = 0;
+    for (const sub of this.subs.values()) if (sub.kind === kind && sub.since !== null) n += 1;
+    return n;
   }
 
   /** Visible for tests: what one message from Helius does. */
@@ -257,6 +294,24 @@ export class HeliusAccountStream {
         this.onAccount?.(key, data[0], raw.length, slot);
       } catch (err) {
         logger.warn("stream account handler failed", { key, error: String(err) });
+      }
+      return;
+    }
+    if (msg.method === "logsNotification") {
+      const subId = msg.params?.subscription;
+      const key = typeof subId === "number" ? this.keyOfSub.get(subId) : undefined;
+      const result = msg.params?.result as
+        | { context?: { slot?: unknown }; value?: { signature?: unknown; err?: unknown; logs?: unknown } }
+        | undefined;
+      const value = result?.value;
+      if (key === undefined || typeof value?.signature !== "string" || !Array.isArray(value.logs)) return;
+      this.stats.logsUpdates += 1;
+      if (value.err !== null && value.err !== undefined) return;
+      const slot = typeof result?.context?.slot === "number" ? result.context.slot : null;
+      try {
+        this.onLogs?.(key, value.signature, value.logs as string[], raw.length, slot);
+      } catch (err) {
+        logger.warn("stream logs handler failed", { key, error: String(err) });
       }
       return;
     }
@@ -364,6 +419,17 @@ export class HeliusAccountStream {
       );
       return;
     }
+    if (sub.kind === "logs") {
+      socket.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "logsSubscribe",
+          params: [{ mentions: [[...sub.accounts][0]] }, { commitment: "confirmed" }],
+        }),
+      );
+      return;
+    }
     socket.send(
       JSON.stringify({
         jsonrpc: "2.0",
@@ -444,7 +510,11 @@ export function streamTx(raw: unknown): ChainTx | null {
 }
 
 function unsubscribeMethod(kind: StreamKind): string {
-  return kind === "account" ? "accountUnsubscribe" : "transactionUnsubscribe";
+  return kind === "account"
+    ? "accountUnsubscribe"
+    : kind === "logs"
+      ? "logsUnsubscribe"
+      : "transactionUnsubscribe";
 }
 
 function sameSet(a: ReadonlySet<string>, b: readonly string[]): boolean {

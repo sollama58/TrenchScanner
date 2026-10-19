@@ -19911,3 +19911,208 @@ dialog.tm-modal.tm-terminal::backdrop {
 .tm-modal.tm-terminal .tm-fig > :first-child {
   white-space: nowrap;
 }
+/* What sits beside the chart, the reader's pick (user ask 2026-10-19): a slim row over the column. */
+.tm-term-pick {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 0;
+}
+.tm-term-pick label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.tm-term-pick select {
+  width: auto;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+/* Any view but the map scrolls in the column, so the chart sets the row's height. */
+.tm-term-map:not(.tm-side-map) {
+  contain: size;
+}
+.tm-term-map:not(.tm-side-map) > .tm-term-map-in {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.tm-term-map:not(.tm-side-map) > .tm-term-map-in > .sage-card + .sage-card {
+  margin-top: 12px;
+}
+.tm-term-map.tm-side-trades > .tm-term-map-in {
+  overflow: hidden;
+}
+.tm-side-trades .lt-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.tm-side-trades .lt-list {
+  flex: 1;
+  max-height: none;
+  min-height: 0;
+}
+
+/* Live trades (user ask 2026-10-19): the coin's buys and sells as they land, newest first. */
+.lt-card > h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lt-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 650;
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface-3);
+}
+.lt-state::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.lt-state.live {
+  color: var(--good-ink);
+  background: var(--good-wash);
+}
+.lt-state.live::before {
+  animation: lt-pulse 1.6s ease-in-out infinite;
+}
+.lt-filter {
+  margin-left: auto;
+}
+.lt-tally {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0 0 10px;
+}
+.lt-tally > div {
+  min-width: 0;
+  padding: 6px 9px;
+  border-radius: 10px;
+  background: var(--surface-3);
+}
+.lt-tally dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.lt-tally dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lt-tally dd.up,
+.lt-row.buy .lt-side {
+  color: var(--good-ink);
+}
+.lt-tally dd.down,
+.lt-row.sell .lt-side {
+  color: var(--bad-ink);
+}
+.lt-sub {
+  display: block;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.lt-list {
+  max-height: 520px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  scrollbar-width: thin;
+}
+.lt-row {
+  display: grid;
+  grid-template-columns: 36px 38px 62px 62px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+  border-left: 2px solid transparent;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  animation: lt-in 1.2s ease-out;
+}
+.lt-row.buy {
+  border-left-color: color-mix(in srgb, var(--good-ink) 60%, transparent);
+}
+.lt-row.sell {
+  border-left-color: color-mix(in srgb, var(--bad-ink) 60%, transparent);
+}
+.lt-age {
+  color: var(--muted);
+}
+.lt-side {
+  font-weight: 700;
+}
+.lt-sol {
+  font-weight: 650;
+  text-align: right;
+}
+.lt-mcap {
+  text-align: right;
+}
+.lt-wallet {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.lt-wallet:hover {
+  color: var(--link);
+}
+.lt-wallet:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+.lt-empty {
+  margin: 12px 2px !important;
+}
+@keyframes lt-in {
+  from {
+    background: color-mix(in srgb, var(--brand-a) 14%, transparent);
+  }
+  to {
+    background: transparent;
+  }
+}
+@keyframes lt-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lt-row,
+  .lt-state.live::before {
+    animation: none;
+  }
+}

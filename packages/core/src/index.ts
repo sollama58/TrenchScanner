@@ -36,6 +36,7 @@ export * from "./datasources/solanaTracker.js";
 export * from "./datasources/xAvatar.js";
 export * from "./datasources/launchBuyers.js";
 export * from "./wallets/tradeTape.js";
+export * from "./wallets/pumpTradeEvents.js";
 export * from "./wallets/riskScore.js";
 export * from "./wallets/devLaunchScore.js";
 export * from "./wallets/liveFlags.js";
