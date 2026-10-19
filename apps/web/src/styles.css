@@ -20528,6 +20528,18 @@ dialog.tm-modal.tm-terminal::backdrop {
   min-height: 0;
 }
 
+/* Labeled wallets: current holders or every trader (user ask 2026-10-19). */
+.fw-scope {
+  margin: 0 0 8px;
+}
+.fw-scope .num {
+  margin-left: 3px;
+  font-size: 10.5px;
+}
+.fw-none {
+  margin: 8px 2px 4px !important;
+}
+
 /* Live trades (user ask 2026-10-19): the coin's buys and sells as they land, newest first. */
 .lt-card > h4 {
   display: flex;

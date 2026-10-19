@@ -733,6 +733,11 @@ function TokenBody({
   const entries = useMemo(() => JSON.parse(entriesKey) as Record<string, HolderEntry>, [entriesKey]);
   const linked = useHolderReading(card, mint, !!utility);
   const holders = useHoldersView(card, linked, alertAt, !!utility);
+  // Who holds the coin now, by the latest scan's holder list, for the Labeled wallets toggle.
+  const currentHolders = useMemo(
+    () => new Set((linked?.linkedHolders ?? []).flatMap((h) => (h ? [h.wallet] : []))),
+    [linked],
+  );
   useFilterCatchKept(card, !!utility);
   const ids = useId().replace(/:/g, "");
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -970,7 +975,7 @@ function TokenBody({
           );
         case "wallets":
           return flagged.length > 0 ? (
-            <WalletsCard wallets={flagged} defaultOpen />
+            <WalletsCard wallets={flagged} holders={currentHolders} defaultOpen />
           ) : (
             <p className="muted small tm-term-empty">
               {flags === "loading"
@@ -1148,7 +1153,7 @@ function TokenBody({
           {bubbleMap}
           <TopHolders snapshot={holders.listReading} flagged={flagged} entries={entries} pending={scanning} />
         </div>
-        {flagged.length > 0 && <WalletsCard wallets={flagged} />}
+        {flagged.length > 0 && <WalletsCard wallets={flagged} holders={currentHolders} />}
         <StonkFeesCard mint={mint} />
       </section>
 
@@ -2479,118 +2484,166 @@ function StonkFeesCard({ mint }: { mint: string }) {
 }
 
 /** The flagged wallets in the coin: what each is, its score, and what it did in the coin. */
-function WalletsCard({ wallets, defaultOpen = false }: { wallets: FlaggedWallet[]; defaultOpen?: boolean }) {
+function WalletsCard({
+  wallets: every,
+  holders,
+  defaultOpen = false,
+}: {
+  wallets: FlaggedWallet[];
+  /** The latest scan's holders: who holds the coin now. */
+  holders: ReadonlySet<string>;
+  defaultOpen?: boolean;
+}) {
   const [all, setAll] = useState(false);
   // Folded to its heading until opened (user ask 2026-10-16); the map marks these wallets too. The
   // Scope terminal's tab opens it, as the list is all the tab holds.
   const [open, setOpen] = useState(defaultOpen);
+  // Current holders first (user ask 2026-10-19): the labeled wallets in the coin now, with every
+  // labeled wallet that traded it a click away.
+  const [scope, setScope] = useState<"current" | "all">("current");
   const bodyId = useId();
+  const current = useMemo(() => every.filter((w) => holdsNow(w, holders)), [every, holders]);
+  const wallets = scope === "current" ? current : every;
   const shown = all ? wallets : wallets.slice(0, 6);
   // One read names the whole list (and the funders its Linked tags mention).
-  const names = useWalletNames(
-    useMemo(() => wallets.flatMap((w) => [w.wallet, w.funder ?? null]), [wallets]),
-  );
+  const names = useWalletNames(useMemo(() => every.flatMap((w) => [w.wallet, w.funder ?? null]), [every]));
   return (
     <section className={`sage-card tm-wallets${open ? "" : " folded"}`}>
       <FoldHead open={open} onToggle={() => setOpen((o) => !o)} controls={bodyId}>
-        Flagged wallets
+        Labeled wallets
         <span className="sage-tag">{wallets.length}</span>
         <span className="tm-h4-meta muted small">trading this coin</span>
       </FoldHead>
       {open && (
         <div id={bodyId}>
-          <div className="fw-table" role="table" aria-label="Flagged wallets">
-            <div className="fw-row fw-headrow" role="row">
-              <span role="columnheader">Wallet</span>
-              <span role="columnheader" className="fw-score-h" title="Risk score, 0-100">
-                Risk
-              </span>
-              <span role="columnheader" className="fw-num">
-                SOL in
-              </span>
-              <span role="columnheader" className="fw-num">
-                SOL out
-              </span>
-              <span role="columnheader" className="fw-num">
-                Net
-              </span>
-            </div>
-            {shown.map((w) => {
-              const net = w.solOut - w.solIn;
-              const tone = w.score === null ? "none" : w.score >= 70 ? "high" : w.score >= 40 ? "mid" : "low";
-              return (
-                <div key={w.wallet} className="fw-row" role="row">
-                  <span className="fw-who" role="cell">
-                    <i className={`pc-swatch k-${kindOf(w)}`} aria-hidden="true" />
-                    <button
-                      type="button"
-                      className="tm-wallet tm-wallet-btn"
-                      onClick={() => openWallet(w.wallet)}
-                      title="Open this wallet's details"
-                    >
-                      <WalletText wallet={w.wallet} names={names} />
-                    </button>
-                    <span className="tm-tags">
-                      {w.tags.map((t) => (
-                        <span
-                          key={t}
-                          className={`tm-tag k-${TAG_TEXT[t].tone}`}
-                          title={
-                            t === "linked" && w.funder
-                              ? `Funded by ${walletText(w.funder, names)}, like other top holders`
-                              : t === "dumper" && w.dumps !== null
-                                ? `Sold into the stop on ${w.dumps} of its alerted coins (4+, three quarters of them, 10+ coins on record)`
-                                : t === "winner"
-                                  ? `Sold 3 or more of the coins it bought at 2x or better for ${MIN_WIN_SOL}+ SOL profit, at least twice as often as the market, with 10+ coins on record`
-                                  : t === "kol" && w.knownSideOf
-                                    ? `One of ${w.kol || "a KOL"}'s own wallets, not its main one`
-                                    : undefined
-                          }
-                        >
-                          {t === "side" && w.side
-                            ? `${w.side.kolName ?? "KOL"} ${w.side.kind === "funded" ? (w.side.tracked === "tracked" ? "Funded Wallet" : "KOL Funded Wallet") : "Probable Side"}`
-                            : t === "tracked" && w.tracked && names[w.wallet]?.name !== w.tracked
-                              ? `Tracked: ${w.tracked}`
-                              : t === "kol" && w.knownSideOf
-                                ? names[w.wallet]?.source === "kol-side" || !w.kol
-                                  ? "Known Side"
-                                  : `${w.kol} Known Side`
-                                : t === "kol" && w.kol && names[w.wallet]?.name !== w.kol
-                                  ? `KOL: ${w.kol}`
-                                  : TAG_TEXT[t].text}
-                        </span>
-                      ))}
-                    </span>
-                  </span>
-                  <span
-                    role="cell"
-                    className={`fw-score num s-${tone}`}
-                    title={
-                      w.score === null
-                        ? "Not scored: seen in fewer than two read coins"
-                        : `Risk score ${Math.round(w.score)} of 100${w.coins ? `, from ${w.coins} coins` : ""}`
-                    }
-                  >
-                    {w.score === null ? "–" : Math.round(w.score)}
-                  </span>
-                  <span role="cell" className="fw-num num">
-                    {w.solIn.toFixed(2)}
-                  </span>
-                  <span role="cell" className="fw-num num">
-                    {w.solOut.toFixed(2)}
-                  </span>
-                  {/* Before it sells, its SOL in is a position, not a loss. */}
-                  <span
-                    role="cell"
-                    className={`fw-num num ${w.solOut > 0 ? (net >= 0 ? "up" : "down") : "faint"}`}
-                    title={w.solOut > 0 ? undefined : "Still holding: nothing sold yet"}
-                  >
-                    {w.solOut > 0 ? `${net >= 0 ? "+" : ""}${net.toFixed(2)}` : "holding"}
-                  </span>
-                </div>
-              );
-            })}
+          <div className="fw-scope">
+            <span className="segmented small" role="radiogroup" aria-label="Show">
+              {(
+                [
+                  ["current", "Current holders", current.length],
+                  ["all", "All traders", every.length],
+                ] as const
+              ).map(([id, label, n]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="radio"
+                  aria-checked={scope === id}
+                  className={scope === id ? "on" : ""}
+                  title={
+                    id === "current"
+                      ? "On the latest scan's holder list, or bought in and hasn't sold"
+                      : "Every labeled wallet that traded this coin"
+                  }
+                  onClick={() => setScope(id)}
+                >
+                  {label} <span className="num muted">{n}</span>
+                </button>
+              ))}
+            </span>
           </div>
+          {wallets.length === 0 ? (
+            <p className="muted small fw-none">
+              None of them holds the coin now, as far as the latest scan and their trades show.{" "}
+              <button type="button" className="tm-link" onClick={() => setScope("all")}>
+                Show all {every.length} traders
+              </button>
+            </p>
+          ) : (
+            <div className="fw-table" role="table" aria-label="Labeled wallets">
+              <div className="fw-row fw-headrow" role="row">
+                <span role="columnheader">Wallet</span>
+                <span role="columnheader" className="fw-score-h" title="Risk score, 0-100">
+                  Risk
+                </span>
+                <span role="columnheader" className="fw-num">
+                  SOL in
+                </span>
+                <span role="columnheader" className="fw-num">
+                  SOL out
+                </span>
+                <span role="columnheader" className="fw-num">
+                  Net
+                </span>
+              </div>
+              {shown.map((w) => {
+                const net = w.solOut - w.solIn;
+                const tone =
+                  w.score === null ? "none" : w.score >= 70 ? "high" : w.score >= 40 ? "mid" : "low";
+                return (
+                  <div key={w.wallet} className="fw-row" role="row">
+                    <span className="fw-who" role="cell">
+                      <i className={`pc-swatch k-${kindOf(w)}`} aria-hidden="true" />
+                      <button
+                        type="button"
+                        className="tm-wallet tm-wallet-btn"
+                        onClick={() => openWallet(w.wallet)}
+                        title="Open this wallet's details"
+                      >
+                        <WalletText wallet={w.wallet} names={names} />
+                      </button>
+                      <span className="tm-tags">
+                        {w.tags.map((t) => (
+                          <span
+                            key={t}
+                            className={`tm-tag k-${TAG_TEXT[t].tone}`}
+                            title={
+                              t === "linked" && w.funder
+                                ? `Funded by ${walletText(w.funder, names)}, like other top holders`
+                                : t === "dumper" && w.dumps !== null
+                                  ? `Sold into the stop on ${w.dumps} of its alerted coins (4+, three quarters of them, 10+ coins on record)`
+                                  : t === "winner"
+                                    ? `Sold 3 or more of the coins it bought at 2x or better for ${MIN_WIN_SOL}+ SOL profit, at least twice as often as the market, with 10+ coins on record`
+                                    : t === "kol" && w.knownSideOf
+                                      ? `One of ${w.kol || "a KOL"}'s own wallets, not its main one`
+                                      : undefined
+                            }
+                          >
+                            {t === "side" && w.side
+                              ? `${w.side.kolName ?? "KOL"} ${w.side.kind === "funded" ? (w.side.tracked === "tracked" ? "Funded Wallet" : "KOL Funded Wallet") : "Probable Side"}`
+                              : t === "tracked" && w.tracked && names[w.wallet]?.name !== w.tracked
+                                ? `Tracked: ${w.tracked}`
+                                : t === "kol" && w.knownSideOf
+                                  ? names[w.wallet]?.source === "kol-side" || !w.kol
+                                    ? "Known Side"
+                                    : `${w.kol} Known Side`
+                                  : t === "kol" && w.kol && names[w.wallet]?.name !== w.kol
+                                    ? `KOL: ${w.kol}`
+                                    : TAG_TEXT[t].text}
+                          </span>
+                        ))}
+                      </span>
+                    </span>
+                    <span
+                      role="cell"
+                      className={`fw-score num s-${tone}`}
+                      title={
+                        w.score === null
+                          ? "Not scored: seen in fewer than two read coins"
+                          : `Risk score ${Math.round(w.score)} of 100${w.coins ? `, from ${w.coins} coins` : ""}`
+                      }
+                    >
+                      {w.score === null ? "–" : Math.round(w.score)}
+                    </span>
+                    <span role="cell" className="fw-num num">
+                      {w.solIn.toFixed(2)}
+                    </span>
+                    <span role="cell" className="fw-num num">
+                      {w.solOut.toFixed(2)}
+                    </span>
+                    {/* Before it sells, its SOL in is a position, not a loss. */}
+                    <span
+                      role="cell"
+                      className={`fw-num num ${w.solOut > 0 ? (net >= 0 ? "up" : "down") : "faint"}`}
+                      title={w.solOut > 0 ? undefined : "Still holding: nothing sold yet"}
+                    >
+                      {w.solOut > 0 ? `${net >= 0 ? "+" : ""}${net.toFixed(2)}` : "holding"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
           {wallets.length > 6 && (
             <button type="button" className="tm-link tm-more" onClick={() => setAll((a) => !a)}>
               {all ? "Show fewer" : `Show all ${wallets.length}`}
@@ -2606,6 +2659,17 @@ function WalletsCard({ wallets, defaultOpen = false }: { wallets: FlaggedWallet[
       )}
     </section>
   );
+}
+
+/**
+ * Whether a labeled wallet holds the coin now: on the latest scan's holder list, or it bought in and
+ * hasn't sold (a wallet that sold some and isn't on the list can't be told apart from one that sold out).
+ */
+function holdsNow(
+  w: Pick<FlaggedWallet, "wallet" | "solIn" | "solOut">,
+  holders: ReadonlySet<string>,
+): boolean {
+  return holders.has(w.wallet) || (w.solIn > 0 && w.solOut === 0);
 }
 
 /** The card's numbers, all of them, whatever the reader hides on the card itself. */
