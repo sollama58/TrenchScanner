@@ -145,3 +145,64 @@ describe("HeliusAccountStream metering", () => {
     stream.stop();
   });
 });
+
+describe("HeliusAccountStream stalls and resubscribes (the chart's live tail)", () => {
+  function confirmed(
+    stream: HeliusAccountStream,
+    socket: FakeSocket,
+    key: string,
+    subId: number,
+    at: number,
+  ) {
+    stream.watch(key, [`${key}-acc`], at, "account");
+    const sub = socket.sent.filter((m) => m.method === "accountSubscribe").at(-1)!;
+    stream.handleMessage(JSON.stringify({ jsonrpc: "2.0", id: sub.id, result: subId }), at);
+  }
+
+  it("covers nothing while the socket is silent past stallAfter, though the reconnect waits longer", () => {
+    const stream = new HeliusAccountStream(
+      "wss://example",
+      vi.fn(),
+      FakeSocket as unknown as new (url: string) => WebSocket,
+      vi.fn(),
+    ).stallAfter(20_000);
+    stream.start();
+    const socket = FakeSocket.last!;
+    socket.open();
+    confirmed(stream, socket, "chart:m", 4, 1_000);
+    const t0 = Date.now();
+    expect(stream.coveredSince("chart:m", "chart:m-acc", t0 + 5_000)).toBe(1_000);
+    expect(stream.stalledForMs(t0 + 5_000)).toBe(0);
+    expect(stream.coveredSince("chart:m", "chart:m-acc", t0 + 25_000)).toBeNull();
+    expect(stream.stalledForMs(t0 + 25_000)).toBeGreaterThanOrEqual(25_000);
+    // Not replaced yet: the reconnect keeps its own minute.
+    stream.checkIdle(t0 + 25_000);
+    expect(stream.takeStats()).toMatchObject({ stalls: 0, reconnects: 0, connected: 1 });
+    stream.checkIdle(t0 + 61_000);
+    expect(stream.takeStats()).toMatchObject({ stalls: 1, reconnects: 1, connected: 0 });
+    stream.stop();
+  });
+
+  it("never stalls without stallAfter (the worker's sockets)", () => {
+    const { stream, socket } = started();
+    confirmed(stream, socket, "curve:m", 4, 1_000);
+    expect(stream.coveredSince("curve:m", "curve:m-acc", Date.now() + 50_000)).toBe(1_000);
+    expect(stream.stalledForMs(Date.now() + 50_000)).toBe(0);
+    stream.stop();
+  });
+
+  it("resubscribes a key: its cover starts over once Helius confirms the new subscription", () => {
+    const { stream, socket } = started();
+    confirmed(stream, socket, "chart:m", 4, 1_000);
+    stream.resubscribe("chart:m");
+    expect(socket.sent.at(-2)).toMatchObject({ method: "accountUnsubscribe", params: [4] });
+    const again = socket.sent.at(-1)!;
+    expect(again).toMatchObject({ method: "accountSubscribe", params: ["chart:m-acc", expect.anything()] });
+    expect(stream.coveredSince("chart:m", "chart:m-acc")).toBeNull();
+    stream.handleMessage(JSON.stringify({ jsonrpc: "2.0", id: again.id, result: 8 }), 9_000);
+    expect(stream.coveredSince("chart:m", "chart:m-acc")).toBe(9_000);
+    // An unknown key is a no-op.
+    stream.resubscribe("nope");
+    stream.stop();
+  });
+});

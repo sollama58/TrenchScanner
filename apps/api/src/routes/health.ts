@@ -13,6 +13,7 @@ import {
 import { SharedCache } from "../sharedCache.js";
 import { liveCurves } from "../liveCurve.js";
 import { liveTrades } from "../liveTrades.js";
+import { chartHealthForHealth } from "../chartHealth.js";
 
 /**
  * How stale a job's lastRunAt can get before we call it out - generous multiples of each job's
@@ -243,12 +244,24 @@ export async function registerHealthRoutes(
         () => false,
       );
       if (!db) return reply.code(503).send({ ok: false, db: false });
-      return { ok: true, db: true, liveCurves: liveCurves().stats(), liveTrades: liveTrades().stats() };
+      return {
+        ok: true,
+        db: true,
+        liveCurves: liveCurves().stats(),
+        liveTrades: liveTrades().stats(),
+        charts: chartHealthForHealth(),
+      };
     }
     // The charts' live curve tails on this instance (liveCurve.ts): curves followed, how many the
     // chart socket covers, and that socket's traffic and estimated Helius credits since boot. The
-    // token pages' live trades (liveTrades.ts) likewise, for their own socket.
-    return { ok: true, liveCurves: liveCurves().stats(), liveTrades: liveTrades().stats() };
+    // token pages' live trades (liveTrades.ts) likewise, for their own socket. `charts`: the charts'
+    // health over the last 5 minutes (chartHealth.ts), informational: it never fails /health.
+    return {
+      ok: true,
+      liveCurves: liveCurves().stats(),
+      liveTrades: liveTrades().stats(),
+      charts: chartHealthForHealth(),
+    };
   });
 
   /**
