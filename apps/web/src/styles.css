@@ -18702,7 +18702,7 @@ body:has(.util-toast) .bug-fab {
    set in Scope settings (spacing, cards or list, image and text size, chip style), and a settings
    window with an example row. Phones stay a step tighter whatever the spacing. */
 .scope {
-  --scope-img: 44px;
+  --scope-img: 56px;
   --scope-t: 1;
   --scope-pad: 12px 14px;
   --scope-gap: 10px;
@@ -18719,10 +18719,10 @@ body:has(.util-toast) .bug-fab {
   --scope-row-gap: 3px 8px;
 }
 .scope-img-s {
-  --scope-img: 36px;
+  --scope-img: 44px;
 }
 .scope-img-l {
-  --scope-img: 56px;
+  --scope-img: 72px;
 }
 .scope-text-s {
   --scope-t: 0.92;
@@ -18873,7 +18873,7 @@ body:has(.util-toast) .bug-fab {
     --scope-pad: 9px 10px;
     --scope-gap: 6px;
     --scope-row-gap: 4px 9px;
-    --scope-img: 40px;
+    --scope-img: 48px;
   }
   .scope-d-compact {
     --scope-pad: 6px 8px;
@@ -18881,10 +18881,10 @@ body:has(.util-toast) .bug-fab {
     --scope-row-gap: 2px 8px;
   }
   .scope-img-s {
-    --scope-img: 34px;
+    --scope-img: 40px;
   }
   .scope-img-l {
-    --scope-img: 48px;
+    --scope-img: 60px;
   }
   .scope-col {
     background: transparent;
