@@ -1,4 +1,5 @@
 import { deriveGraduated, Prisma, prisma, type CandidateToken } from "@trenchscanner/core";
+import { creatorFeesByMint } from "./curatedFeed.js";
 import { tokenTextWhere } from "./routes/matches.js";
 
 /**
@@ -35,6 +36,11 @@ export interface TokenSearchHit {
   modelCalls: number;
   lastCallAt: Date | null;
   bestCallPeakPct: number | null;
+  /** The coin its pair trades against (Token.quoteMint): wrapped SOL for nearly every launch. */
+  quoteMint: string | null;
+  quoteSymbol: string | null;
+  /** Where its creator fee goes (TokenSage's read, TokenNarrative.feeDestination); null unread. */
+  feeDestination: string | null;
 }
 
 export interface TokenSearchAnswer {
@@ -78,6 +84,8 @@ const TOKEN_SELECT = {
   launchedAt: true,
   liveMarketCapUsd: true,
   liveDataAt: true,
+  quoteMint: true,
+  quoteSymbol: true,
 } satisfies Prisma.TokenSelect;
 
 type Row = Prisma.TokenGetPayload<{ select: typeof TOKEN_SELECT }>;
@@ -123,7 +131,7 @@ export async function searchTrackedTokens(
   }
   if (rows.length === 0) return { hits: [], truncated };
   const ids = rows.map((r) => r.id);
-  const [scans, yours, calls] = await Promise.all([
+  const [scans, yours, calls, fees] = await Promise.all([
     // The newest scan's figures only, not the whole row: holder lists make a snapshot heavy.
     prisma.$queryRaw<LatestScan[]>`
       SELECT s."tokenId", s."takenAt", s."marketCapUsd", s."volume24hUsd", s."liquidityUsd",
@@ -144,6 +152,7 @@ export async function searchTrackedTokens(
       _count: { _all: true },
       _max: { createdAt: true, peak1hReturnPct: true },
     }),
+    creatorFeesByMint(rows.map((r) => r.mintAddress)),
   ]);
   const scanOf = new Map(scans.map((s) => [s.tokenId, s]));
   const yourOf = new Map(yours.map((m) => [m.tokenId, m._max.matchedAt]));
@@ -169,6 +178,9 @@ export async function searchTrackedTokens(
       modelCalls: call?._count._all ?? 0,
       lastCallAt: call?._max.createdAt ?? null,
       bestCallPeakPct: call?._max.peak1hReturnPct ?? null,
+      quoteMint: r.quoteMint,
+      quoteSymbol: r.quoteSymbol,
+      feeDestination: fees.get(r.mintAddress)?.destination ?? null,
     };
   });
   return { hits, truncated };
@@ -244,6 +256,9 @@ export async function searchUntrackedTokens(
       modelCalls: 0,
       lastCallAt: null,
       bestCallPeakPct: null,
+      quoteMint: t.quoteMint ?? null,
+      quoteSymbol: t.quoteSymbol ?? null,
+      feeDestination: null,
     }));
 }
 
