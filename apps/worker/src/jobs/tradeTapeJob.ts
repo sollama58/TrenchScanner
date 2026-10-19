@@ -9,6 +9,7 @@ import {
   pumpFunCursorBefore,
   stopCauseOf,
   summarizeTape,
+  tradesFromChainTransactions,
   tradesFromChainTransactionsPriced,
   TAPE_WINDOW_AFTER_ANCHOR_MS,
   type HeliusClient,
@@ -657,7 +658,8 @@ async function readNewestPage(
   const oldestAtMs = times.length > 0 ? Math.min(...times) : 0;
   const handoff = handoffs.get(p.coin.tokenId);
   if (!page.paginationToken) {
-    p.launch = parsed.launch;
+    // The launch is read off a page's first transaction, oldest first; this page is newest first.
+    p.launch = tradesFromChainTransactions(p.coin.mint, [...page.txs].reverse()).launch;
     await finish(p, "helius", p.launch !== null, counts, now());
   } else if (handoff && oldestAtMs > 0 && oldestAtMs < handoff.throughMs) {
     // Strictly older: every trade in the hand-off's last second is on this side too.
@@ -782,11 +784,14 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
   const waiting = await pendingCalledCoins(now());
   // The reads a shutdown saved go back to their lanes.
   await restoreProgress(waiting);
+  const heliusOn = opts.heliusPagesPerRun > 0 && deps.helius.gtfaUsable;
+  // With the Helius lane off this run, a read held in it would keep its coin from Pump.fun's lane
+  // and never move, saved again at every shutdown: the coin goes back to the called list.
+  if (!heliusOn) state.helius = null;
   // A coin carried over from the last run stays with its lane, and out of the lists for new picks.
   const inProgress = new Set([state.helius?.coin.tokenId, state.pumpFun?.coin.tokenId]);
   const called = waiting.filter((c) => !inProgress.has(c.tokenId));
   const pending = called.length + (inProgress.size - (inProgress.has(undefined) ? 1 : 0));
-  const heliusOn = opts.heliusPagesPerRun > 0 && deps.helius.gtfaUsable;
   const closing: ClosingCounts = {
     closingDone: 0,
     closingFailed: 0,
