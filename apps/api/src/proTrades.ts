@@ -1,4 +1,12 @@
-import { createLogger, keysOf, prisma, STREAM_SETTLE_MS, type ChainTx, walletTag } from "@trenchscanner/core";
+import {
+  createLogger,
+  keysOf,
+  prisma,
+  STREAM_SETTLE_MS,
+  tokenAccountRent,
+  type ChainTx,
+  walletTag,
+} from "@trenchscanner/core";
 
 const logger = createLogger("pro-trades");
 
@@ -50,8 +58,12 @@ const PACING_STALE_MS = 3_600_000;
 export interface SeenTrade {
   signature: string;
   mint: string;
-  side: "buy" | "sell";
-  /** The wallet's SOL change, lamports (wrapped SOL and fees in); null when paid in USDC/USDT. */
+  /** "out": the coin left the wallet with nothing paid for it (sent to another wallet). */
+  side: "buy" | "sell" | "out";
+  /**
+   * The wallet's SOL change, lamports (wrapped SOL and fees in, token-account rent out); null when
+   * paid in USDC/USDT, and for a coin sent out.
+   */
   lamports: bigint | null;
   tokens: bigint;
   decimals: number;
@@ -79,7 +91,12 @@ export type WalletTx = ChainTx & {
  * The trades `wallet` made in one transaction: each coin whose balance in the wallet moved
  * against SOL (or USDC/USDT) moving the other way. Only a transaction the wallet paid for: one
  * someone else paid that moved its coins was a transfer or an airdrop, never its trade. A coin in
- * without a price paid (an airdrop, a transfer it sent itself) is left out too.
+ * without a price paid (an airdrop, a transfer it sent itself) is left out too. A coin out with
+ * nothing paid for it is kept as "out": the position no longer holds it, though nothing was sold.
+ *
+ * The SOL is what the trade really cost or paid: network, priority and platform fees and slippage
+ * are all in the wallet's SOL change. The rent of a token account opened or closed with it is
+ * not: it is a deposit the wallet gets back (tokenAccountRent in core).
  */
 export function walletSwaps(signature: string, tx: WalletTx, wallet: string, seenAt: number): SeenTrade[] {
   const meta = tx.meta;
@@ -88,7 +105,7 @@ export function walletSwaps(signature: string, tx: WalletTx, wallet: string, see
   if (keys[0] !== wallet) return [];
   const pre = meta.preBalances?.[0];
   const post = meta.postBalances?.[0];
-  let lamports = typeof pre === "number" && typeof post === "number" ? BigInt(post) - BigInt(pre) : 0n;
+  let landed = typeof pre === "number" && typeof post === "number" ? BigInt(post) - BigInt(pre) : 0n;
   const deltas = new Map<string, { raw: bigint; decimals: number }>();
   const add = (entries: Balance[] | null | undefined, sign: 1n | -1n) => {
     for (const e of entries ?? []) {
@@ -104,7 +121,8 @@ export function walletSwaps(signature: string, tx: WalletTx, wallet: string, see
   add(meta.preTokenBalances, -1n);
   add(meta.postTokenBalances, 1n);
   // Wrapped SOL is SOL: a router that wraps and unwraps leaves it in the lamports either way.
-  lamports += deltas.get(WSOL)?.raw ?? 0n;
+  landed += deltas.get(WSOL)?.raw ?? 0n;
+  const lamports = landed + tokenAccountRent(meta, wallet);
   const stable = [...deltas].some(([m, d]) => m !== WSOL && QUOTE_MINTS.has(m) && d.raw !== 0n);
   const coins = [...deltas].filter(([m, d]) => !QUOTE_MINTS.has(m) && d.raw !== 0n);
   if (coins.length === 0) return [];
@@ -112,9 +130,14 @@ export function walletSwaps(signature: string, tx: WalletTx, wallet: string, see
   const out: SeenTrade[] = [];
   for (const [mint, d] of coins) {
     const buy = d.raw > 0n;
-    // Paid in SOL when the SOL moved the right way by more than fees; else in a stablecoin, or not paid at all.
-    const solPaid = buy ? -lamports > FEE_ONLY_LAMPORTS : lamports > 0n;
-    if (!solPaid && !stable) continue;
+    // Paid in SOL when the SOL moved the right way by more than fees; else in a stablecoin, or not
+    // paid at all. A sale is told by the SOL as it landed: a dust sale's rent back shows it was paid.
+    const solPaid = buy ? -lamports > FEE_ONLY_LAMPORTS : landed > 0n;
+    if (!solPaid && !stable) {
+      if (!buy)
+        out.push({ signature, mint, side: "out", lamports: null, tokens: d.raw, decimals: d.decimals, at });
+      continue;
+    }
     // One coin per transaction is the trade; when several moved the SOL can't be split between them.
     const sol = solPaid && coins.length === 1 ? lamports : null;
     out.push({
@@ -465,7 +488,11 @@ export interface TradeRow {
   entry: boolean;
 }
 
-/** One coin's current trade: from its latest entry on. */
+/**
+ * One coin's trade: from a buy into a flat position until it is sold out again. Its cost is the
+ * average cost of the coins bought (fees and slippage in): a sale realizes what it got less what
+ * the coins it sold cost, and the coins still held carry the rest of the cost.
+ */
 export interface Position {
   mint: string;
   entryAt: Date;
@@ -475,14 +502,23 @@ export interface Position {
   /** SOL spent on the buys and got from the sales, in SOL; null parts (stablecoin trades) left out. */
   spentSol: number;
   gotSol: number;
-  /** Coins bought and still held (what was bought less what was sold), whole coins. */
+  /** Coins bought and still held (what was bought less what was sold or sent out), whole coins. */
   bought: number;
   held: number;
   decimals: number;
   /** Sold down to under 1% of what was bought. */
   closed: boolean;
-  /** The entry's fill, SOL per whole coin (its first buy); null when it was paid in a stablecoin. */
+  /** The average fill, SOL per whole coin across the buys; null when a buy was paid in a stablecoin. */
   entryPriceSol: number | null;
+  /** Every buy and sale has its SOL: false when one was paid in a stablecoin, so no SOL result. */
+  priced: boolean;
+  /** What the sales made over what the coins they sold cost, SOL. */
+  realizedSol: number;
+  /** The cost of the coins still held, SOL, and how many of them have one (whole coins). */
+  costSol: number;
+  costedHeld: number;
+  /** What went in for the coins traded or held: the buys, less the cost of coins sent out. */
+  investedSol: number;
 }
 
 const LAMPORTS_PER_SOL = 1e9;
@@ -491,73 +527,148 @@ function whole(raw: bigint, decimals: number): number {
   return Number(raw) / 10 ** decimals;
 }
 
-/** Each coin's current position, newest entry first. Rows in any order. */
-export function positionsOf(rows: readonly TradeRow[]): Position[] {
+const sideOrder = (side: string) => (side === "buy" ? 0 : 1);
+
+/** One coin's trade from its rows, oldest first. */
+function positionOf(mint: string, trade: readonly TradeRow[]): Position {
+  let spent = 0;
+  let got = 0;
+  let bought = 0n;
+  let gone = 0n;
+  let buys = 0;
+  let sells = 0;
+  let priced = true;
+  // The average-cost book, in raw coins: those bought with a known cost, and those without one.
+  let costed = 0;
+  let uncosted = 0;
+  let cost = 0;
+  let realized = 0;
+  let sentCost = 0;
+  let costedBought = 0;
+  /** Takes `raw` coins out of the book; the share of them that had a cost, and what that cost. */
+  const take = (raw: number) => {
+    const total = costed + uncosted;
+    const n = Math.min(raw, total);
+    if (n <= 0) return { share: 0, cost: 0 };
+    const fromCosted = (n * costed) / total;
+    const out = costed > 0 ? (cost * fromCosted) / costed : 0;
+    costed -= fromCosted;
+    uncosted -= n - fromCosted;
+    cost -= out;
+    return { share: fromCosted / raw, cost: out };
+  };
+  for (const r of trade) {
+    const sol = r.lamports === null ? null : Number(r.lamports) / LAMPORTS_PER_SOL;
+    if (r.side === "buy") {
+      buys += 1;
+      bought += r.tokens;
+      if (sol === null) {
+        priced = false;
+        uncosted += Number(r.tokens);
+      } else {
+        spent += -sol;
+        cost += -sol;
+        costed += Number(r.tokens);
+        costedBought += Number(r.tokens);
+      }
+    } else if (r.side === "sell") {
+      sells += 1;
+      gone += -r.tokens;
+      const out = take(Number(-r.tokens));
+      if (sol === null) priced = false;
+      else {
+        got += sol;
+        // Only the coins with a cost realize anything: proceeds for coins bought before the watch
+        // (or sold beyond what was bought) have nothing to be measured against.
+        realized += sol * out.share - out.cost;
+      }
+    } else {
+      // Sent out: off the book at their cost, which leaves what went in. Nothing is realized.
+      gone += -r.tokens;
+      sentCost += take(Number(-r.tokens)).cost;
+    }
+  }
+  const decimals = trade[trade.length - 1]!.decimals;
+  const heldRaw = bought > gone ? bought - gone : 0n;
+  const avg = costedBought > 0 ? spent / (costedBought / 10 ** decimals) : null;
+  return {
+    mint,
+    entryAt: trade[0]!.at,
+    lastTradeAt: trade[trade.length - 1]!.at,
+    buys,
+    sells,
+    spentSol: Math.max(0, spent),
+    gotSol: Math.max(0, got),
+    bought: whole(bought, decimals),
+    held: whole(heldRaw, decimals),
+    decimals,
+    closed: bought > 0n ? heldRaw * 100n < bought : true,
+    entryPriceSol: priced && avg !== null && avg > 0 ? avg : null,
+    priced,
+    realizedSol: realized,
+    costSol: Math.max(0, cost),
+    costedHeld: Math.max(0, costed) / 10 ** decimals,
+    investedSol: Math.max(0, spent - sentCost),
+  };
+}
+
+/**
+ * Every trade of every coin, newest entry first. A coin's rows split into trades at each buy into
+ * a sold-out position (under 1% left), so a coin traded twice is two trades, each with its own
+ * cost and result. A coin first seen mid-position (bought before the watch) starts at its first
+ * row; coins only ever sent out (an airdrop passed on) are no trade at all. Rows in any order.
+ */
+export function tradesOf(rows: readonly TradeRow[]): Position[] {
   const byMint = new Map<string, TradeRow[]>();
   for (const r of rows) byMint.set(r.mint, [...(byMint.get(r.mint) ?? []), r]);
   const out: Position[] = [];
   for (const [mint, list] of byMint) {
-    list.sort((a, b) => a.at.getTime() - b.at.getTime());
-    // From the latest entry; a coin first seen mid-position (its buy was before the watch) starts at its first row.
-    let start = 0;
-    for (let i = list.length - 1; i >= 0; i--) {
-      if (list[i]!.entry) {
-        start = i;
-        break;
-      }
-    }
-    const trade = list.slice(start);
-    let spent = 0;
-    let got = 0;
+    list.sort((a, b) => a.at.getTime() - b.at.getTime() || sideOrder(a.side) - sideOrder(b.side));
+    let current: TradeRow[] = [];
     let bought = 0n;
-    let sold = 0n;
-    let buys = 0;
-    let sells = 0;
-    for (const r of trade) {
-      const sol = r.lamports === null ? 0 : Number(r.lamports) / LAMPORTS_PER_SOL;
-      if (r.side === "buy") {
-        buys += 1;
-        bought += r.tokens;
-        spent += -sol;
-      } else {
-        sells += 1;
-        sold += -r.tokens;
-        got += sol;
+    let held = 0n;
+    const flush = () => {
+      if (current.some((r) => r.side !== "out")) out.push(positionOf(mint, current));
+    };
+    for (const r of list) {
+      const flat = bought > 0n ? held * 100n < bought : true;
+      if (r.side === "buy" && flat && current.length > 0) {
+        flush();
+        current = [];
+        bought = 0n;
+        held = 0n;
       }
+      current.push(r);
+      if (r.side === "buy") bought += r.tokens;
+      held += r.tokens;
+      if (held < 0n) held = 0n;
     }
-    const decimals = trade[trade.length - 1]!.decimals;
-    const first = trade.find((r) => r.side === "buy");
-    const firstCoins = first ? whole(first.tokens, first.decimals) : 0;
-    const entryPriceSol =
-      first && first.lamports !== null && firstCoins > 0
-        ? -Number(first.lamports) / LAMPORTS_PER_SOL / firstCoins
-        : null;
-    const heldRaw = bought > sold ? bought - sold : 0n;
-    out.push({
-      mint,
-      entryAt: trade[0]!.at,
-      lastTradeAt: trade[trade.length - 1]!.at,
-      buys,
-      sells,
-      spentSol: Math.max(0, spent),
-      gotSol: Math.max(0, got),
-      bought: whole(bought, decimals),
-      held: whole(heldRaw, decimals),
-      decimals,
-      closed: bought > 0n ? heldRaw * 100n < bought : sold > 0n,
-      entryPriceSol: entryPriceSol !== null && entryPriceSol > 0 ? entryPriceSol : null,
-    });
+    if (current.length > 0) flush();
   }
   return out.sort((a, b) => b.entryAt.getTime() - a.entryAt.getTime());
 }
 
-/** A position's result in SOL: what came back plus what is still held at `priceSol`, less what was spent. */
-export function positionPnl(p: Position, priceSol: number | null): { sol: number; pct: number } | null {
-  if (!(p.spentSol > 0)) return null;
-  if (!p.closed && p.held > 0 && priceSol === null) return null;
-  const value = p.gotSol + (p.closed ? 0 : p.held * (priceSol ?? 0));
-  const sol = value - p.spentSol;
-  return { sol, pct: (sol / p.spentSol) * 100 };
+/** Each coin's current trade (its latest), newest entry first. Rows in any order. */
+export function positionsOf(rows: readonly TradeRow[]): Position[] {
+  const seen = new Set<string>();
+  return tradesOf(rows).filter((p) => !seen.has(p.mint) && !!seen.add(p.mint));
+}
+
+/**
+ * A position's result in SOL: what its sales realized, plus the coins still held at `priceSol`
+ * against what they cost; and that as a share of what went in. A sold-out position's dust is
+ * worth nothing. Null when a trade was paid in a stablecoin, or an open one can't be priced.
+ */
+export function positionPnl(
+  p: Position,
+  priceSol: number | null,
+): { sol: number; pct: number; realizedSol: number; unrealizedSol: number } | null {
+  if (!p.priced || !(p.investedSol > 0)) return null;
+  const holding = !p.closed && p.costedHeld > 0;
+  if (holding && priceSol === null) return null;
+  const unrealizedSol = (holding ? p.costedHeld * (priceSol ?? 0) : 0) - p.costSol;
+  const sol = p.realizedSol + unrealizedSol;
+  return { sol, pct: (sol / p.investedSol) * 100, realizedSol: p.realizedSol, unrealizedSol };
 }
 
 export interface TradeStats {
@@ -573,9 +684,9 @@ export interface TradeStats {
   open: number;
   /** Of the closed trades, the share that made money; null with none closed. */
   winRatePct: number | null;
-  /** Closed trades' result together, SOL. */
+  /** What the sales made over what the coins sold cost, closed trades and open ones' partial sales, SOL. */
   realizedSol: number;
-  /** Open trades' result at today's prices, SOL; null when any couldn't be priced. */
+  /** The coins still held at today's prices against what they cost, SOL; null when any couldn't be priced. */
   unrealizedSol: number | null;
   /** The best closed trade, as a multiple of what it spent. */
   bestMultiple: number | null;
@@ -586,6 +697,7 @@ export interface TradeStats {
   entries: number;
 }
 
+/** `rows` are the window's trades; `positions` every trade (tradesOf) that ran in it. */
 export function tradeStats(
   rows: readonly TradeRow[],
   positions: readonly Position[],
@@ -593,30 +705,32 @@ export function tradeStats(
   calledBefore: (mint: string, at: Date) => boolean,
   hours: number,
 ): TradeStats {
-  const closed = positions.filter((p) => p.closed && p.spentSol > 0);
+  const closed = positions.filter((p) => p.closed && p.investedSol > 0 && p.priced);
   const open = positions.filter((p) => !p.closed);
   const results = closed
     .map((p) => positionPnl(p, null))
-    .filter((r): r is { sol: number; pct: number } => !!r);
+    .filter((r): r is NonNullable<ReturnType<typeof positionPnl>> => !!r);
+  let realized = results.reduce((s, r) => s + r.sol, 0);
   let unrealized: number | null = 0;
   for (const p of open) {
+    // A stablecoin trade has no SOL result to add, either way.
+    if (!p.priced || !(p.investedSol > 0)) continue;
+    realized += p.realizedSol;
     const r = positionPnl(p, priceSol(p.mint));
-    if (r === null) {
-      if (p.spentSol > 0) unrealized = null;
-      continue;
-    }
-    if (unrealized !== null) unrealized += r.sol;
+    if (r === null) unrealized = null;
+    else if (unrealized !== null) unrealized += r.unrealizedSol;
   }
   const holds = closed
     .map((p) => (p.lastTradeAt.getTime() - p.entryAt.getTime()) / 60_000)
     .sort((a, b) => a - b);
+  const traded = rows.filter((r) => r.side === "buy" || r.side === "sell");
   const entries = rows.filter((r) => r.entry);
   return {
     hours,
-    trades: rows.length,
-    buys: rows.filter((r) => r.side === "buy").length,
-    sells: rows.filter((r) => r.side === "sell").length,
-    coins: new Set(rows.map((r) => r.mint)).size,
+    trades: traded.length,
+    buys: traded.filter((r) => r.side === "buy").length,
+    sells: traded.filter((r) => r.side === "sell").length,
+    coins: new Set(traded.map((r) => r.mint)).size,
     volumeSol: rows.reduce(
       (s, r) => s + (r.side === "buy" && r.lamports !== null ? -Number(r.lamports) / LAMPORTS_PER_SOL : 0),
       0,
@@ -624,7 +738,7 @@ export function tradeStats(
     closed: closed.length,
     open: open.length,
     winRatePct: results.length > 0 ? (results.filter((r) => r.sol > 0).length / results.length) * 100 : null,
-    realizedSol: results.reduce((s, r) => s + r.sol, 0),
+    realizedSol: realized,
     unrealizedSol: unrealized,
     bestMultiple: results.length > 0 ? Math.max(...results.map((r) => 1 + r.pct / 100)) : null,
     medianHoldMinutes: holds.length > 0 ? holds[Math.floor(holds.length / 2)]! : null,

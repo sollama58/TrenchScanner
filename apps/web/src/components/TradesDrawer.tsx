@@ -278,14 +278,15 @@ export function StatsStrip({
       value: sol(stats.realizedSol, true),
       sub: usdOf(stats.realizedSol),
       tone: tone(stats.realizedSol),
-      title: "What the closed trades made or lost together, in SOL, fees included",
+      title:
+        "What your sales made or lost against what those coins cost (average cost, fees included): closed trades, and the coins already sold out of open ones",
     },
     {
       label: "Open",
       value: stats.unrealizedSol === null ? "–" : sol(stats.unrealizedSol, true),
       sub: `${stats.open} holding`,
       tone: tone(stats.unrealizedSol),
-      title: "What the coins still held would make or lose if sold at their latest price",
+      title: "What the coins still held would make or lose at their latest price, against what they cost",
     },
     {
       label: "Best",

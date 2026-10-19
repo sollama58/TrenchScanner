@@ -516,21 +516,32 @@ export function usePosition(mint: string | null): {
   return { data, error, at, reload: load };
 }
 
-/** What the position adds up to, in SOL and the coin's market cap terms. */
+/**
+ * What the position adds up to, in SOL and the coin's market cap terms. The position is the current
+ * trade: from the latest buy into an empty (or dust) holding, so an earlier round trip in the same
+ * coin doesn't blur this one's cost or result. Its cost is the average cost of the coins bought,
+ * fees and slippage in (the API leaves token-account rent out: it comes back on close).
+ */
 export interface PositionSummary {
   /** Tokens held, in whole tokens. */
   held: number;
   /** Share of supply held (0..1); null without a supply. */
   share: number | null;
-  /** SOL spent on buys and got back from sales (fees and rent included). */
+  /** SOL spent on this position's buys and got back from its sales. */
   solIn: number;
   solOut: number;
+  /** What went in for the coins traded or still held: the buys, less the cost of coins sent away. */
+  investedSol: number;
   /** The position's value now in SOL, from the chart's latest market cap; null when it can't be priced. */
   valueSol: number | null;
-  /** Value plus what came back, less what went in, and that as a share of what went in. */
+  /** Realized plus unrealized, and that as a share of what went in. */
   pnlSol: number | null;
   pnlPct: number | null;
-  /** The average market cap the held tokens were bought at (USD), by the buys' own prices. */
+  /** What the sales made over what the coins they sold cost; null when the cost is unknown. */
+  realizedSol: number | null;
+  /** The coins still held at today's value against what they cost; null when it can't be priced. */
+  unrealizedSol: number | null;
+  /** The average market cap the position's coins were bought at (USD), by the buys' own prices. */
   entryMcap: number | null;
   buys: number;
   sells: number;
@@ -539,24 +550,81 @@ export interface PositionSummary {
 export function summarizePosition(p: PositionResponse, nowMcapUsd: number | null): PositionSummary {
   const dec = p.decimals ?? 6;
   const scale = 10 ** dec;
-  const held = Number(BigInt(p.balance)) / scale;
+  const balance = BigInt(p.balance);
+  const held = Number(balance) / scale;
   const supply = p.supply ? Number(BigInt(p.supply)) / scale : null;
-  let solIn = 0;
-  let solOut = 0;
-  let boughtTokens = 0;
-  let buys = 0;
-  let sells = 0;
-  for (const t of p.trades) {
-    const lamports = Number(BigInt(t.lamports)) / 1e9;
-    if (t.side === "buy") {
-      solIn += -lamports;
-      boughtTokens += Number(BigInt(t.tokens)) / scale;
-      buys++;
-    } else if (t.side === "sell") {
-      solOut += lamports;
-      sells++;
+  const trades = p.trades.map((t) => ({
+    side: t.side,
+    lamports: BigInt(t.lamports),
+    tokens: BigInt(t.tokens),
+  }));
+
+  // Walk back from today's balance to the latest buy made into a holding under 1% of that buy:
+  // the current position's start. Without one, the whole history is the position, unless older
+  // trades were left out (then its start, and its cost, are unknown).
+  let start: number | null = null;
+  let carried = 0n;
+  let after = balance;
+  for (let i = trades.length - 1; i >= 0; i--) {
+    const before = after - trades[i]!.tokens;
+    if (before < 0n) break;
+    if (trades[i]!.side === "buy" && before * 100n <= trades[i]!.tokens) {
+      start = i;
+      carried = before;
+      break;
+    }
+    after = before;
+    if (i === 0 && !p.truncated) {
+      start = 0;
+      carried = before;
     }
   }
+  if (start === null && trades.length === 0 && !p.truncated) start = 0;
+
+  let solIn = 0;
+  let solOut = 0;
+  let buys = 0;
+  let sells = 0;
+  // The average-cost book, raw coins: those bought at a known cost, and those with none (dust
+  // carried in, coins sent to the wallet).
+  let costed = 0;
+  let uncosted = Number(carried);
+  let cost = 0;
+  let realized = 0;
+  let sentCost = 0;
+  let costedBought = 0;
+  const take = (raw: number) => {
+    const total = costed + uncosted;
+    const n = Math.min(raw, total);
+    if (n <= 0) return { share: 0, cost: 0 };
+    const fromCosted = (n * costed) / total;
+    const out = costed > 0 ? (cost * fromCosted) / costed : 0;
+    costed -= fromCosted;
+    uncosted -= n - fromCosted;
+    cost -= out;
+    return { share: fromCosted / raw, cost: out };
+  };
+  for (const t of start === null ? [] : trades.slice(start)) {
+    const sol = Number(t.lamports) / 1e9;
+    const raw = Number(t.tokens);
+    if (t.side === "buy") {
+      buys++;
+      solIn += -sol;
+      cost += -sol;
+      costed += raw;
+      costedBought += raw;
+    } else if (t.side === "sell") {
+      sells++;
+      solOut += sol;
+      const out = take(-raw);
+      realized += sol * out.share - out.cost;
+    } else if (t.side === "in") {
+      uncosted += raw;
+    } else {
+      sentCost += take(-raw).cost;
+    }
+  }
+  const investedSol = Math.max(0, solIn - sentCost);
   const share = supply && supply > 0 ? held / supply : null;
   const valueSol =
     share !== null && nowMcapUsd !== null && p.solUsd
@@ -564,13 +632,31 @@ export function summarizePosition(p: PositionResponse, nowMcapUsd: number | null
       : held === 0
         ? 0
         : null;
-  // Without the whole history (older trades left out) the cost is unknown, and so is the PnL.
-  const pnlSol = valueSol !== null && solIn > 0 && !p.truncated ? valueSol + solOut - solIn : null;
-  const pnlPct = pnlSol !== null && solIn > 0 ? pnlSol / solIn : null;
+  const known = start !== null && investedSol > 0;
+  // Only the coins with a cost count toward the result: coins sent to the wallet cost it nothing.
+  const costedValue =
+    valueSol === null ? null : balance > 0n ? valueSol * Math.min(1, costed / Number(balance)) : 0;
+  const unrealizedSol = known && costedValue !== null ? costedValue - Math.max(0, cost) : null;
+  const pnlSol = unrealizedSol !== null ? realized + unrealizedSol : null;
+  const pnlPct = pnlSol !== null ? pnlSol / investedSol : null;
   // SOL per token paid across the buys, as a market cap: the line the chart draws as "Entry".
   const entryMcap =
-    boughtTokens > 0 && supply && p.solUsd ? (solIn / boughtTokens) * supply * p.solUsd : null;
-  return { held, share, solIn, solOut, valueSol, pnlSol, pnlPct, entryMcap, buys, sells };
+    costedBought > 0 && supply && p.solUsd ? (solIn / (costedBought / scale)) * supply * p.solUsd : null;
+  return {
+    held,
+    share,
+    solIn,
+    solOut,
+    investedSol,
+    valueSol,
+    pnlSol,
+    pnlPct,
+    realizedSol: known ? realized : null,
+    unrealizedSol,
+    entryMcap,
+    buys,
+    sells,
+  };
 }
 
 // ---- Trading ----

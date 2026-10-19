@@ -49,6 +49,8 @@ export interface TransactionFill {
 }
 
 export interface TokenBalanceEntry {
+  /** The token account's place in the transaction's accounts (and in pre/postBalances). */
+  accountIndex?: number;
   owner?: string;
   mint?: string;
   uiTokenAmount?: { amount?: string; decimals?: number };

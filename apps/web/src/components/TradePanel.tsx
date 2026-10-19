@@ -819,6 +819,17 @@ export function TradePanel({
                   </small>
                 </span>
               )}
+              {open && summary.sells > 0 && summary.realizedSol !== null && (
+                <small
+                  className="muted num tm-hold-split"
+                  title="Realized: what your sales made over what those coins cost. Unrealized: the coins you still hold at today's value, against what they cost. Fees included."
+                >
+                  {solText(summary.realizedSol, true)} realized
+                  {summary.unrealizedSol !== null
+                    ? ` · ${solText(summary.unrealizedSol, true)} unrealized`
+                    : ""}
+                </small>
+              )}
             </div>
             <button
               type="button"
@@ -1230,8 +1241,8 @@ export function TradePanel({
               pnlPct: summary.pnlPct!,
               pnlSol: summary.pnlSol!,
               solUsd,
-              solIn: summary.solIn,
-              solBack: summary.solOut + (summary.valueSol ?? 0),
+              solIn: summary.investedSol,
+              solBack: summary.investedSol + summary.pnlSol!,
               entryMcap: summary.entryMcap,
               nowMcap,
               nowMcapAt,
