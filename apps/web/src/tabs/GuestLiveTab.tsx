@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
-import { SkeletonCards } from "../components/Charts";
+import { SkeletonCards } from "../components/Skeleton";
 import { ScanStatus } from "../components/ScanStatus";
 import { AboutModal } from "../components/AboutModal";
 import { ClockIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";

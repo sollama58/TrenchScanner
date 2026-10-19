@@ -1,5 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type Card, type TokenSearchAnswer, type TokenSearchHit } from "../api";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import {
+  api,
+  post,
+  type Card,
+  type ExternalSearchAnswer,
+  type ExternalSearchHit,
+  type TokenSearchAnswer,
+  type TokenSearchHit,
+} from "../api";
 import { ago, multiple, shortAddress, usd } from "../format";
 import { parseSearch, searchParam } from "../caSearch";
 import { openTokenModal } from "../tokenModal";
@@ -13,6 +21,11 @@ import {
 } from "../tokenSearch";
 import { TokenImage } from "./TokenImage";
 import { CloseIcon, SearchIcon } from "./Icons";
+
+// A paid lookup's view is the Utilities tab's own, loaded the first time one is opened from here.
+const UtilityTokenModal = lazy(() =>
+  import("../tabs/UtilitiesTab").then((m) => ({ default: m.UtilityTokenModal })),
+);
 
 /** How long typing rests before a ticker or name is searched: one request per word, not per letter. */
 const SEARCH_TYPING_MS = 250;
@@ -62,18 +75,22 @@ function useSettled<T>(value: T, ms: number): T {
   return settled;
 }
 
-type Found =
+type Found<T> =
   | { state: "idle" }
-  | { state: "loading"; for: string; last: TokenSearchAnswer | null }
-  | { state: "done"; for: string; answer: TokenSearchAnswer }
+  | { state: "loading"; for: string; last: T | null }
+  | { state: "done"; for: string; answer: T }
   | { state: "error"; for: string; message: string };
 
-/** GET /tokens/search for the box's text: a pasted address at once, typed text once typing rests. */
-function useTokenSearch(input: string): Found {
+/** The search's text as the API's query string: a pasted address at once, typed text once typing rests. */
+function useSearchParam(input: string): string {
   const typed = parseSearch(input);
   const settled = parseSearch(useSettled(input, SEARCH_TYPING_MS));
-  const search = searchParam(typed.kind === "mint" ? typed : settled);
-  const [found, setFound] = useState<Found>({ state: "idle" });
+  return parseSearch(input).kind === "none" ? "" : searchParam(typed.kind === "mint" ? typed : settled);
+}
+
+/** GET `base`?search, kept up while the next search runs. */
+function useSearch<T>(base: string, search: string): Found<T> {
+  const [found, setFound] = useState<Found<T>>({ state: "idle" });
   useEffect(() => {
     if (!search) {
       setFound({ state: "idle" });
@@ -85,7 +102,7 @@ function useTokenSearch(input: string): Found {
       for: search,
       last: f.state === "done" ? f.answer : f.state === "loading" ? f.last : null,
     }));
-    api<TokenSearchAnswer>(`/tokens/search?${search}`)
+    api<T>(`${base}?${search}`)
       .then((answer) => live && setFound({ state: "done", for: search, answer }))
       .catch(
         (e: unknown) =>
@@ -95,10 +112,21 @@ function useTokenSearch(input: string): Found {
     return () => {
       live = false;
     };
-  }, [search]);
+  }, [base, search]);
   // Text too short to search answers nothing, whatever the last search found.
-  return parseSearch(input).kind === "none" ? { state: "idle" } : found;
+  return search === "" ? { state: "idle" } : found;
 }
+
+const answerOf = <T,>(found: Found<T>): T | null =>
+  found.state === "done" ? found.answer : found.state === "loading" ? found.last : null;
+
+/** Why opening an untracked coin costs nothing (the API's quote reasons). */
+const FREE_TEXT: Record<NonNullable<ExternalSearchHit["free"]>, string> = {
+  tracked: "Free",
+  traded: "Free, you traded it",
+  own: "Free",
+  open: "Free, already open",
+};
 
 /** One result: the coin, what TrenchScanner has on it, and its figures. */
 function HitRow({
@@ -109,6 +137,8 @@ function HitRow({
   onOpen,
   onHover,
   id,
+  price,
+  confirm,
 }: {
   hit: TokenSearchHit;
   now: number;
@@ -117,6 +147,10 @@ function HitRow({
   onOpen: () => void;
   onHover: () => void;
   id: string;
+  /** An untracked coin: what opening it costs, in place of the alert figures. */
+  price?: string;
+  /** The lookup waiting for a yes: the price gives way to Look up and Cancel, in the row itself. */
+  confirm?: { onConfirm: () => void; onCancel: () => void };
 }) {
   const label = hit.symbol ? `$${hit.symbol}` : (hit.name ?? shortAddress(hit.mint));
   return (
@@ -124,7 +158,7 @@ function HitRow({
       id={id}
       role="option"
       aria-selected={active}
-      className={`search-hit${active ? " active" : ""}${opening ? " opening" : ""}`}
+      className={`search-hit${active ? " active" : ""}${opening ? " opening" : ""}${price ? " external" : ""}`}
       onClick={onOpen}
       onMouseMove={onHover}
     >
@@ -143,7 +177,9 @@ function HitRow({
         </div>
         <div className="search-hit-sub">
           <span className="num">{shortAddress(hit.mint)}</span>
-          <span>launched {ago(hit.launchedAt, now)}</span>
+          <span>
+            {price ? "listed" : "launched"} {ago(hit.launchedAt, now)}
+          </span>
           {hit.yourAlertAt && (
             <span className="search-tag yours" title="One of your filters alerted on it">
               Your alert {ago(hit.yourAlertAt, now)}
@@ -169,16 +205,49 @@ function HitRow({
           <dt>Vol 24h</dt>
           <dd className="num">{usd(hit.volume24hUsd)}</dd>
         </div>
-        <div className="search-fig-wide">
-          <dt>Holders</dt>
-          <dd className="num">{hit.holderCount?.toLocaleString() ?? "–"}</dd>
-        </div>
-        <div>
-          <dt>Best run</dt>
-          <dd className={`num${hit.bestCallPeakPct !== null && hit.bestCallPeakPct >= 100 ? " good" : ""}`}>
-            {hit.bestCallPeakPct === null ? "–" : multiple(hit.bestCallPeakPct)}
-          </dd>
-        </div>
+        {price ? (
+          <div className="search-fig-wide">
+            <dt>Liquidity</dt>
+            <dd className="num">{usd(hit.liquidityUsd)}</dd>
+          </div>
+        ) : (
+          <div className="search-fig-wide">
+            <dt>Holders</dt>
+            <dd className="num">{hit.holderCount?.toLocaleString() ?? "–"}</dd>
+          </div>
+        )}
+        {price ? (
+          <div className="search-hit-price">
+            {confirm ? (
+              <span className="search-confirm" onClick={(e) => e.stopPropagation()}>
+                <button type="button" className="link small" onClick={confirm.onCancel} disabled={opening}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="primary small-btn"
+                  onClick={confirm.onConfirm}
+                  disabled={opening}
+                  title="Scans it and opens its chart, holders and TokenSage read"
+                  autoFocus
+                >
+                  {opening ? "Looking up…" : `Look up · ${price}`}
+                </button>
+              </span>
+            ) : (
+              <span className={`util-cost num${price.startsWith("Free") ? " util-cost-free" : ""}`}>
+                {price}
+              </span>
+            )}
+          </div>
+        ) : (
+          <div>
+            <dt>Best run</dt>
+            <dd className={`num${hit.bestCallPeakPct !== null && hit.bestCallPeakPct >= 100 ? " good" : ""}`}>
+              {hit.bestCallPeakPct === null ? "–" : multiple(hit.bestCallPeakPct)}
+            </dd>
+          </div>
+        )}
       </dl>
     </li>
   );
@@ -186,9 +255,12 @@ function HitRow({
 
 /**
  * The feed's search window (user ask 2026-10-19): a see-through panel over the feed with the
- * search box on top, every tracked token that matches below, and chips and a sort to narrow and
- * order them. A result opens the token modal over it (free: every result is tracked), and closing
- * that comes back here. Arrow keys move through the results, Enter opens one, Escape closes.
+ * search box on top, chips and a sort to narrow and order the results, then two sections. Tracked
+ * lists every token TrenchScanner tracks that matches; a result opens the token modal over the
+ * window (free), and closing that comes back here. Not tracked lists what DexScreener's search
+ * finds beyond those; opening one is the Utilities tab's coin lookup at its usual price, asked
+ * for first, unless the reader already has it open or traded it. Arrow keys move through both
+ * sections, Enter opens (or asks), Escape closes.
  */
 export function SearchModal({
   open,
@@ -210,7 +282,14 @@ export function SearchModal({
   const [active, setActive] = useState(0);
   const [opening, setOpening] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
-  const found = useTokenSearch(text);
+  // The untracked coin whose lookup is waiting for a yes, and the one whose paid view is open.
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [lookedUp, setLookedUp] = useState<string | null>(null);
+  // Coins looked up from here this visit: they open free again (the lookup's re-open window).
+  const [paid, setPaid] = useState<ReadonlySet<string>>(new Set());
+  const search = useSearchParam(text);
+  const found = useSearch<TokenSearchAnswer>("/tokens/search", search);
+  const outside = useSearch<ExternalSearchAnswer>("/utilities/search", search);
 
   useEffect(() => {
     const dialog = ref.current;
@@ -222,14 +301,29 @@ export function SearchModal({
     if (!open && dialog.open) dialog.close();
   }, [open]);
 
-  const answer = found.state === "done" ? found.answer : found.state === "loading" ? found.last : null;
+  const answer = answerOf(found);
+  const extra = answerOf(outside);
   const hits = useMemo(() => answer?.hits ?? [], [answer]);
-  const counts = useMemo(() => filterCounts(hits), [hits]);
+  const extraHits = useMemo(() => extra?.hits ?? [], [extra]);
+  const counts = useMemo(() => filterCounts([...hits, ...extraHits]), [hits, extraHits]);
   const shown = useMemo(() => arrangeHits(hits, filter, sort), [hits, filter, sort]);
-  // A new list starts at its top.
-  useEffect(() => setActive(0), [shown]);
+  const extraShown = useMemo(() => arrangeHits(extraHits, filter, sort), [extraHits, filter, sort]);
+  const rows = useMemo(() => [...shown, ...extraShown], [shown, extraShown]);
+  // A new list starts at its top, with nothing waiting for a yes.
+  useEffect(() => {
+    setActive(0);
+    setConfirming(null);
+  }, [rows]);
 
-  const openHit = async (hit: TokenSearchHit) => {
+  const priceOf = (hit: ExternalSearchHit): string => {
+    if (paid.has(hit.mint)) return FREE_TEXT.open;
+    if (hit.free) return FREE_TEXT[hit.free];
+    const cost = extra?.cost ?? 1;
+    return `${cost} credit${cost === 1 ? "" : "s"}`;
+  };
+  const freeToOpen = (hit: ExternalSearchHit) => paid.has(hit.mint) || hit.free !== null;
+
+  const openTracked = async (hit: TokenSearchHit) => {
     if (opening) return;
     setOpening(hit.mint);
     setOpenError(null);
@@ -243,18 +337,52 @@ export function SearchModal({
     }
   };
 
+  // The Utilities tab's coin lookup: charged (or not) by the server, then its view opens here.
+  const lookUp = async (hit: ExternalSearchHit) => {
+    if (opening) return;
+    setOpening(hit.mint);
+    setOpenError(null);
+    try {
+      await post("/utilities/token", { mint: hit.mint });
+      setPaid((p) => new Set(p).add(hit.mint));
+      setConfirming(null);
+      setLookedUp(hit.mint);
+    } catch (e) {
+      setOpenError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOpening(null);
+    }
+  };
+
+  const openExternal = (hit: ExternalSearchHit) => {
+    if (freeToOpen(hit)) void lookUp(hit);
+    else setConfirming((c) => (c === hit.mint ? null : hit.mint));
+  };
+
+  const openRow = (i: number) => {
+    if (i < shown.length) {
+      const hit = shown[i];
+      if (hit) void openTracked(hit);
+      return;
+    }
+    const hit = extraShown[i - shown.length];
+    if (!hit) return;
+    if (confirming === hit.mint) void lookUp(hit);
+    else openExternal(hit);
+  };
+
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (shown.length === 0) return;
+    if (rows.length === 0) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       const step = e.key === "ArrowDown" ? 1 : -1;
-      const next = (active + step + shown.length) % shown.length;
+      const next = (active + step + rows.length) % rows.length;
       setActive(next);
+      setConfirming(null);
       document.getElementById(`search-hit-${next}`)?.scrollIntoView({ block: "nearest" });
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const hit = shown[active];
-      if (hit) void openHit(hit);
+      openRow(active);
     }
   };
 
@@ -262,12 +390,38 @@ export function SearchModal({
   const subject =
     query.kind === "mint" ? shortAddress(query.mint) : query.kind === "text" ? `“${query.text}”` : "";
   const busy = found.state === "loading";
+  const outsideBusy = outside.state === "loading";
+  // Your alerts and Model calls are TrenchScanner's own: nothing untracked has either.
+  const outsideApplies = filter === "all" || filter === "graduated";
+
+  const row = (
+    hit: TokenSearchHit,
+    i: number,
+    price?: string,
+    confirm?: { onConfirm: () => void; onCancel: () => void },
+  ) => (
+    <HitRow
+      key={hit.mint}
+      id={`search-hit-${i}`}
+      hit={hit}
+      now={now}
+      active={i === active}
+      opening={opening === hit.mint}
+      onOpen={() => {
+        setActive(i);
+        openRow(i);
+      }}
+      onHover={() => setActive(i)}
+      price={price}
+      confirm={confirm}
+    />
+  );
 
   return (
     <dialog
       ref={ref}
       className="about-modal search-modal"
-      aria-label="Search tracked tokens"
+      aria-label="Search tokens"
       onClose={(e) => {
         // Only this dialog's own close: a nested dialog's close bubbles up through React.
         if (e.target === e.currentTarget) onClose();
@@ -278,7 +432,7 @@ export function SearchModal({
       }}
     >
       <div className="search-body">
-        <div className={`search-field${busy ? " busy" : ""}`} role="search">
+        <div className={`search-field${busy || outsideBusy ? " busy" : ""}`} role="search">
           <SearchIcon size={18} className="search-field-icon" />
           <input
             ref={input}
@@ -289,7 +443,7 @@ export function SearchModal({
             placeholder="Search a ticker, name or contract address"
             aria-label="Search by contract address, ticker or name"
             aria-controls="search-hits"
-            aria-activedescendant={shown.length > 0 ? `search-hit-${active}` : undefined}
+            aria-activedescendant={rows.length > 0 ? `search-hit-${active}` : undefined}
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -328,7 +482,7 @@ export function SearchModal({
                 onClick={() => setFilter(f.id)}
               >
                 {f.label}
-                {answer && <span className="search-chip-count num">{counts[f.id]}</span>}
+                {(answer || extra) && <span className="search-chip-count num">{counts[f.id]}</span>}
               </button>
             ))}
           </div>
@@ -344,7 +498,7 @@ export function SearchModal({
           </label>
         </div>
 
-        <div className="search-results" aria-live="polite" aria-busy={busy}>
+        <div className="search-results" aria-live="polite" aria-busy={busy || outsideBusy}>
           {found.state === "idle" && (
             <p className="search-empty muted">
               Type a ticker or name (two letters or more), or paste a contract address or token link.
@@ -352,49 +506,84 @@ export function SearchModal({
           )}
           {found.state === "error" && <p className="error">Couldn&apos;t search: {found.message}</p>}
           {openError && <p className="error">Couldn&apos;t open that token: {openError}</p>}
-          {answer && (
-            <>
-              <p className="search-section-head">
-                <span>Tracked</span>
-                <span className="muted small">
-                  {hits.length === 0
-                    ? `Nothing TrenchScanner tracks matches ${subject}.`
-                    : `${shown.length} of ${hits.length}${answer.truncated ? "+" : ""} for ${subject}`}
-                </span>
-              </p>
-              {hits.length > 0 && shown.length === 0 && (
-                <p className="search-empty muted">None of these match that filter.</p>
-              )}
-              <ul id="search-hits" role="listbox" className="search-hits" aria-label="Tracked tokens">
-                {shown.map((hit, i) => (
-                  <HitRow
-                    key={hit.mint}
-                    id={`search-hit-${i}`}
-                    hit={hit}
-                    now={now}
-                    active={i === active}
-                    opening={opening === hit.mint}
-                    onOpen={() => void openHit(hit)}
-                    onHover={() => setActive(i)}
-                  />
+          <ul id="search-hits" role="listbox" className="search-hits" aria-label="Search results">
+            {answer && (
+              <>
+                <li className="search-section-head" role="presentation">
+                  <span>Tracked</span>
+                  <span className="muted small">
+                    {hits.length === 0
+                      ? `Nothing TrenchScanner tracks matches ${subject}.`
+                      : `${shown.length} of ${hits.length}${answer.truncated ? "+" : ""} for ${subject}`}
+                  </span>
+                </li>
+                {hits.length > 0 && shown.length === 0 && (
+                  <li className="search-empty muted" role="presentation">
+                    None of these match that filter.
+                  </li>
+                )}
+                {shown.map((hit, i) => row(hit, i))}
+                {answer.truncated && (
+                  <li className="muted small center" role="presentation">
+                    Showing the closest tracked matches. Type more to narrow it down.
+                  </li>
+                )}
+              </>
+            )}
+            {!answer && busy && (
+              <li className="search-skeleton" aria-hidden="true">
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="search-hit skeleton-row" />
                 ))}
-              </ul>
-              {answer.truncated && (
-                <p className="muted small center">
-                  Showing the closest matches. Type more to narrow it down.
-                </p>
-              )}
-            </>
-          )}
-          {!answer && busy && (
-            <div className="search-skeleton" aria-hidden="true">
-              {[0, 1, 2].map((i) => (
-                <div key={i} className="search-hit skeleton-row" />
-              ))}
-            </div>
-          )}
+              </li>
+            )}
+            {found.state !== "idle" && outsideApplies && (
+              <>
+                <li className="search-section-head" role="presentation">
+                  <span>Not tracked</span>
+                  <span className="muted small">
+                    {extra
+                      ? extraHits.length === 0
+                        ? "Nothing else found on DexScreener."
+                        : `${extraShown.length} on DexScreener${
+                            extra.balance !== null
+                              ? ` · ${extra.balance} credit${extra.balance === 1 ? "" : "s"}${
+                                  extra.freeLeft ? ` + ${extra.freeLeft} free today` : ""
+                                }`
+                              : ""
+                          }`
+                      : outside.state === "error"
+                        ? `Couldn't search outside TrenchScanner: ${outside.message}`
+                        : "Searching DexScreener…"}
+                  </span>
+                </li>
+                {extraShown.map((hit, j) => {
+                  const i = shown.length + j;
+                  return row(
+                    hit,
+                    i,
+                    priceOf(hit),
+                    confirming === hit.mint
+                      ? {
+                          onConfirm: () => void lookUp(hit),
+                          onCancel: () => {
+                            setConfirming(null);
+                            input.current?.focus();
+                          },
+                        }
+                      : undefined,
+                  );
+                })}
+              </>
+            )}
+          </ul>
         </div>
       </div>
+      {lookedUp && (
+        <Suspense fallback={null}>
+          <UtilityTokenModal mint={lookedUp} onClose={() => setLookedUp(null)} />
+        </Suspense>
+      )}
     </dialog>
   );
 }

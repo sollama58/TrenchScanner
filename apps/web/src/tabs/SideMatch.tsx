@@ -3,7 +3,7 @@ import { api } from "../api";
 import { shortAddress } from "../format";
 import { TokenImage } from "../components/TokenImage";
 import { openWallet } from "../walletModal";
-import { Skeleton } from "../components/Charts";
+import { Skeleton } from "../components/Skeleton";
 import { ExternalIcon, LinkIcon, TransferIcon } from "../components/Icons";
 
 type SideWindow = "24h" | "7d" | "30d";

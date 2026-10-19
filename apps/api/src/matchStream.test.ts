@@ -306,6 +306,32 @@ describe("MatchStream.dispatchCurated", () => {
   });
 });
 
+describe("MatchStream.catchUp", () => {
+  it("clears the caches and nudges every open stream after a reconnect", () => {
+    // NOTIFY is not queued for a listener that was down: without this an open tab's alert
+    // notifier, which stops polling while its streams are up, never heard about those alerts.
+    const s = stream();
+    const alice = sink();
+    const bob = sink();
+    const feed = sink();
+    s.subscribe("alice", alice.sink);
+    s.subscribe("bob", bob.sink);
+    s.subscribeCurated("carol", feed.sink);
+    const cleared: Array<string | undefined> = [];
+    const readers: string[] = [];
+    s.onCuratedAlert((model) => cleared.push(model));
+    s.onMatch((userId) => readers.push(userId));
+
+    s.catchUp();
+
+    expect(cleared).toEqual([undefined]);
+    expect(readers.sort()).toEqual(["alice", "bob"]);
+    expect(alice.written).toEqual(["event: match\ndata: {}\n\n"]);
+    expect(bob.written).toEqual(["event: match\ndata: {}\n\n"]);
+    expect(feed.written).toEqual(["event: curated\ndata: {}\n\n"]);
+  });
+});
+
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
 /** Polls until `check` holds, so the tests wait on the real reconnect rather than a fixed sleep. */

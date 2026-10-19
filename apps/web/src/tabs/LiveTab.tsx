@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type CuratedStats, type FeedStats, type Leaderboard, type MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
-import { SkeletonCards } from "../components/Charts";
+import { SkeletonCards } from "../components/Skeleton";
 import { AboutModal } from "../components/AboutModal";
 import { introSeen, markIntroSeen } from "../intro";
 import { FeedStatsModal } from "../components/FeedStatsModal";
@@ -312,7 +312,9 @@ export function LiveTab({
               <ChartIcon size={14} />
               Stats
               {fs && fs.graded >= MIN_TEASER && fs.hit2xPct !== null && (
-                <span className="num stats-teaser">2x {pct(fs.hit2xPct, 0)}</span>
+                <span className={`num stats-teaser${feedStats.stale ? " stale" : ""}`}>
+                  2x {pct(fs.hit2xPct, 0)}
+                </span>
               )}
             </button>
             <button
@@ -373,6 +375,12 @@ export function LiveTab({
         {!scope && feedPage.error && !feedPage.data && (
           <p className="error">Couldn&apos;t load your feed: {feedPage.error.message}</p>
         )}
+        {!scope && feedPage.error && feedPage.data && (
+          <p className="muted small center feed-refresh-note" role="status">
+            Couldn&apos;t refresh your feed, showing it from{" "}
+            {feedPage.at !== null ? ago(new Date(feedPage.at), now) : "earlier"}. Trying again.
+          </p>
+        )}
         {scope && (
           <ScopeBoard
             feedPath={feedPath}
@@ -400,7 +408,7 @@ export function LiveTab({
               </div>
             )}
             <div
-              className={`cards${feedPage.stale ? " stale" : ""}`}
+              className={`cards${feedPage.stale || (feedPage.error && feedPage.data) ? " stale" : ""}`}
               aria-busy={feedPage.stale}
               {...feedGridProps(look)}
             >
@@ -447,7 +455,7 @@ export function LiveTab({
           </>
         )}
         {stats.data && look.learningNote && (
-          <div className="learning-note">
+          <div className={`learning-note${stats.stale ? " stale" : ""}`}>
             <BrainIcon size={14} />
             <span>
               Learning from{" "}

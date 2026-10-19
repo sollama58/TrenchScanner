@@ -30,7 +30,7 @@ import {
 } from "./Icons";
 import { XLinkPreview } from "./XLinkPreview";
 import { useImagePreview } from "./ImagePreview";
-import { linkedCount, linkedCountText } from "../bubbleMap";
+import { linkedCount, linkedCountText } from "../linkedCount";
 import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
 import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
@@ -1474,16 +1474,34 @@ export function belowMcapLine(
 export const NOW_STALE_MS = 2 * 60_000;
 
 /**
+ * How far behind the market a DexScreener reading is when it is fetched (see CALL_READING_LAG_MS:
+ * 45-60 s). The lower end, so an age is never overstated.
+ */
+const DEX_READING_LAG_MS = 45_000;
+
+/**
+ * The market time the "Now" reading shows (ms): its fetch time, less DexScreener's own lag unless
+ * it was priced from the curve. NaN with no reading.
+ */
+export function nowReadingMarketAt(
+  card: Pick<Card, "currentMarketCapAt" | "currentMarketCapSource">,
+): number {
+  const at = card.currentMarketCapAt ? Date.parse(card.currentMarketCapAt) : NaN;
+  return card.currentMarketCapSource === "curve" ? at : at - DEX_READING_LAG_MS;
+}
+
+/**
  * The age of the "Now" reading as the card labels it ("3m", "2h"), or null while it is fresh or
- * there is none. A coin nobody has open, or one past the live refresh's budget, keeps its last
- * reading, and a figure minutes old must not read as the price now.
+ * there is none. Counted from the market it shows, not when it was fetched. A coin nobody has open,
+ * or one past the live refresh's budget, keeps its last reading, and a figure minutes old must not
+ * read as the price now.
  */
 export function nowReadingAge(
-  card: Pick<Card, "currentMarketCapAt">,
+  card: Pick<Card, "currentMarketCapAt" | "currentMarketCapSource">,
   nowMcap: number | null,
   now: number,
 ): string | null {
-  const at = card.currentMarketCapAt ? Date.parse(card.currentMarketCapAt) : NaN;
+  const at = nowReadingMarketAt(card);
   if (nowMcap === null || !Number.isFinite(at) || now - at < NOW_STALE_MS) return null;
   return minutes((now - at) / 60_000);
 }
@@ -1493,7 +1511,7 @@ function nowTitle(card: Card, nowMcap: number | null, now: number): string | und
   if (nowMcap === null && card.currentMarketCapUsd !== null) {
     return "Shows from the first reading a minute after the alert: earlier ones lag the market";
   }
-  const at = card.currentMarketCapAt ? Date.parse(card.currentMarketCapAt) : NaN;
+  const at = nowReadingMarketAt(card);
   if (nowMcap === null || !Number.isFinite(at)) return undefined;
   const minutes = Math.floor((now - at) / 60_000);
   return minutes >= 2 ? `Read ${minutes} minutes ago` : undefined;

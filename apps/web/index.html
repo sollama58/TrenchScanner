@@ -210,6 +210,12 @@
                     ]
                   : ["/guest/feed?page=1"],
             );
+          // No session token, no saved session (src/cache.ts keeps /auth/me under ts-cache-v1) and
+          // not a guest: most likely a first visit, which lands on sign-in. Start its showcase alert
+          // (ShowcaseAlert in src/components/SignIn.tsx) too; main.tsx then loads the sign-in code
+          // without waiting for /auth/me.
+          else if (!token && (localStorage.getItem("ts-cache-v1") || "").indexOf('"/auth/me"') < 0)
+            paths.push("/guest/best", "/guest/feed?page=1");
         } catch (e) {}
         paths.forEach(function (p) {
           boot[p] = fetch(api + p, { credentials: "include", headers: headers });

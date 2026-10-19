@@ -38,6 +38,8 @@ const PERSIST = new Set([
   "/announcement",
   "/matches?page=1&includeCurated=saved",
   "/guest/feed?page=1",
+  // The sign-in page's showcase alert: a signed-out return visit paints it at once.
+  "/guest/best",
   "/guest/models?days=30",
   "/guest/models?days=7",
   "/guest/insights?days=7",
@@ -136,7 +138,11 @@ export function cachedGet<T>(path: string, maxAgeMs = 0): Promise<T> {
   if (maxAgeMs > 0 && e.data !== undefined && !e.restored && Date.now() - e.at < maxAgeMs)
     return Promise.resolve(e.data as T);
   const n = ++requests;
-  const p = ((maxAgeMs >= 0 && adoptBoot<T>(path)) || api<T>(path)).then((data) => {
+  // "Something changed" must not be answered by the browser's own HTTP cache either: the API
+  // marks some reads cacheable for 15-60 s (chart, profile, bubble holders), which would hand
+  // back the answer from before the change.
+  const read = () => (maxAgeMs < 0 || recentlyInvalidated(path) ? api<T>(path, REVALIDATE) : api<T>(path));
+  const p = ((maxAgeMs >= 0 && adoptBoot<T>(path)) || read()).then((data) => {
     if (n > (e.n ?? 0)) {
       e.data = data;
       e.at = Date.now();
@@ -163,8 +169,23 @@ export function prefetch(path: string): void {
   cachedGet(path, peek(path)?.restored ? 0 : Number.POSITIVE_INFINITY).catch(() => undefined);
 }
 
+const REVALIDATE: RequestInit = { cache: "no-cache" };
+/**
+ * Longer than any max-age the API sends: until then a path invalidate() dropped is read past the
+ * browser's HTTP cache too, whichever view reads it next.
+ */
+const INVALIDATED_FOR_MS = 60_000;
+const invalidations: { prefix: string; at: number }[] = [];
+
+function recentlyInvalidated(path: string): boolean {
+  const cutoff = Date.now() - INVALIDATED_FOR_MS;
+  while (invalidations.length > 0 && invalidations[0]!.at < cutoff) invalidations.shift();
+  return invalidations.some((i) => path.startsWith(i.prefix));
+}
+
 /** Drops cached responses (all, or those whose path starts with `prefix`), e.g. on sign-out. */
 export function invalidate(prefix = ""): void {
+  invalidations.push({ prefix, at: Date.now() });
   if (window.__boot)
     for (const key of Object.keys(window.__boot)) if (key.startsWith(prefix)) delete window.__boot[key];
   for (const key of entries.keys()) if (key.startsWith(prefix)) entries.delete(key);

@@ -1385,13 +1385,16 @@ img.avatar {
   font-size: 11.5px;
 }
 /* "Now" from a reading minutes old: its age beside the label, the figure dimmed (AlertCard nowReadingAge). */
-.fig .fig-age {
+.fig .fig-age,
+.tm-fig .fig-age {
   text-transform: none;
   letter-spacing: 0;
   font-weight: 500;
 }
 .fig.stale > .num,
-.fig.stale .delta {
+.fig.stale .delta,
+.tm-fig.aged > .num,
+.tm-fig.aged .delta {
   opacity: 0.6;
 }
 .fig.peak.hot > span.num {
@@ -2525,7 +2528,8 @@ legend {
   display: grid;
   grid-template-columns: 1.25fr 1fr;
   gap: 48px;
-  align-items: center;
+  /* Top-aligned: centering moved both columns each time one grew as its data landed. */
+  align-items: start;
   max-width: 1100px;
   margin: 56px auto;
 }
@@ -2543,6 +2547,10 @@ legend {
 }
 .signin-cards {
   grid-template-columns: minmax(0, 1fr);
+}
+/* About the height the showcase card takes, held while it loads. */
+.signin-alerts-pending {
+  min-height: 560px;
 }
 .signin-box {
   padding: 28px;
@@ -14589,6 +14597,9 @@ dialog.search-modal::backdrop {
   text-transform: uppercase;
   color: var(--brand-ink);
 }
+.search-section-head > span:first-child {
+  white-space: nowrap;
+}
 .search-section-head .small {
   font-weight: 400;
   letter-spacing: 0;
@@ -14700,6 +14711,26 @@ dialog.search-modal::backdrop {
 .search-hit-figs dd.good {
   color: var(--good-ink);
 }
+.search-hits .search-section-head:not(:first-child) {
+  margin-top: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.search-hit-price {
+  display: flex;
+  align-items: center;
+  min-width: 76px;
+  justify-content: flex-end;
+}
+.search-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+.search-confirm .link {
+  color: var(--muted);
+}
 .search-skeleton {
   display: grid;
   gap: 2px;
@@ -14741,6 +14772,9 @@ dialog.search-modal::backdrop {
     padding: 9px 6px;
   }
   .search-fig-wide {
+    display: none;
+  }
+  .search-hit:has(.search-confirm) .search-hit-figs > div:not(.search-hit-price) {
     display: none;
   }
 }

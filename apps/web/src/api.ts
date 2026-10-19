@@ -203,6 +203,11 @@ export interface Snapshot {
   buys24h: number | null;
   sells24h: number | null;
   holderCount: number | null;
+  /**
+   * When holderCount was read: the RugCheck report's own time, which top 10 and dev % come from
+   * too. Can be up to the report cache's age before takenAt. Absent or null when unknown.
+   */
+  holderCountAt?: string | null;
   /** Jupiter's holder count seconds before the decision (the "Min holders (live)" filter's); null without a quote. */
   liveHolderCount?: number | null;
   holderGrowthPct: number | null;
@@ -451,6 +456,21 @@ export interface TokenSearchAnswer {
   hits: TokenSearchHit[];
   /** More tokens held the text than came back: a longer search narrows it. */
   truncated: boolean;
+}
+
+/** A token TrenchScanner doesn't track, from the search window's outside search (GET /utilities/search). */
+export interface ExternalSearchHit extends TokenSearchHit {
+  /** Why opening it costs nothing for this reader, or null when it is a paid coin lookup. */
+  free: "tracked" | "traded" | "own" | "open" | null;
+}
+
+export interface ExternalSearchAnswer {
+  hits: ExternalSearchHit[];
+  /** A coin lookup's price in Burn Credits. */
+  cost: number;
+  balance: number | null;
+  /** A subscriber's free daily credits left; null without a subscription. */
+  freeLeft: number | null;
 }
 
 /** One feed card - a filter match or a curated alert, which the API serializes alike. */

@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The cache only needs `api` from ./api; each test hands it a request it can resolve by hand.
-const requests: { path: string; resolve: (data: unknown) => void }[] = [];
+const requests: { path: string; init?: RequestInit; resolve: (data: unknown) => void }[] = [];
 vi.mock("./api", () => ({
-  api: (path: string) =>
+  api: (path: string, init?: RequestInit) =>
     new Promise((resolve) => {
-      requests.push({ path, resolve });
+      requests.push({ path, init, resolve });
     }),
   parse: async (res: Response) => res.json(),
 }));
@@ -58,5 +58,36 @@ describe("cachedGet: sharing a request in flight", () => {
     await first;
     cachedGet("/matches?page=1", -1);
     expect(requests).toHaveLength(2);
+  });
+});
+
+describe("cachedGet: past the browser's HTTP cache", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    requests.length = 0;
+    invalidate();
+    vi.advanceTimersByTime(120_000);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("revalidates a 'something changed' read, and leaves a timed one to the browser", () => {
+    void cachedGet("/tokens/x/chart", 0);
+    expect(requests[0]!.init).toBeUndefined();
+    vi.advanceTimersByTime(1_000);
+    void cachedGet("/tokens/x/chart", -1);
+    expect(requests[1]!.init?.cache).toBe("no-cache");
+  });
+
+  it("revalidates paths under an invalidated prefix for a minute", () => {
+    invalidate("/tokens/x/");
+    void cachedGet("/tokens/x/bubble-holders", 0);
+    void cachedGet("/tokens/y/chart", 0);
+    expect(requests.map((r) => r.init?.cache)).toEqual(["no-cache", undefined]);
+    vi.advanceTimersByTime(61_000);
+    void cachedGet("/tokens/x/profile", 0);
+    expect(requests[2]!.init).toBeUndefined();
   });
 });

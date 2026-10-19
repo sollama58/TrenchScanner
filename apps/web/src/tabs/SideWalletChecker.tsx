@@ -6,7 +6,7 @@ import { ago, shortAddress } from "../format";
 import { openWallet } from "../walletModal";
 import { usePossibleSides } from "../possibleSides";
 import { SideMatch } from "./SideMatch";
-import { Skeleton } from "../components/Charts";
+import { Skeleton } from "../components/Skeleton";
 import { LoadingNote } from "../components/Loading";
 import { WalletWebButton } from "../components/WalletWeb";
 import { KolAvatar } from "../components/KolAvatar";
