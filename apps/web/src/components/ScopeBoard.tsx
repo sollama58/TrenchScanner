@@ -4,7 +4,6 @@ import type { Card, LaunchPage, MatchPage } from "../api";
 import {
   passesColumnFilter,
   useScopeSettings,
-  setScopeDisplay,
   activeFilterCount,
   cardModelNames,
   type ScopeDisplay,
@@ -339,21 +338,6 @@ export function ScopeBoard({
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={streamOn}
-          className={`scope-stream-switch${streamOn ? " on" : ""}`}
-          onClick={() => setScopeDisplay({ stream: !streamOn })}
-          title={
-            streamOn
-              ? "Showing the Stream's new tokens and the ones about to graduate. Switch off for your alerts."
-              : "Show the Stream's new tokens and the ones about to graduate in place of your alerts"
-          }
-        >
-          <span className="scope-switch-track" aria-hidden="true" />
-          Stream
-        </button>
         <span className="scope-bar-filter">
           {filterButton(activeCol, SCOPE_COLUMNS.find((c) => c.id === activeCol)!.label)}
         </span>
