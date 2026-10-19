@@ -123,6 +123,14 @@ function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: 
   );
   return (
     <div className="scope-settings-body">
+      {/* First, as the switch that changes the board most (user ask 2026-10-19). */}
+      <section className="scope-section">
+        {sw(
+          "stream",
+          "Stream",
+          "New and About to graduate, from every token that passes the safety screen, in place of Your filters and Models",
+        )}
+      </section>
       <div className="scope-preview">
         <span className="scope-preview-label">Preview</span>
         <div className={`scope scope-preview-board ${scopeLookClass(d)}`}>
@@ -224,11 +232,6 @@ function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: 
       </section>
       <section className="scope-section">
         <h3>Board</h3>
-        {sw(
-          "stream",
-          "Stream",
-          "New and About to graduate, from every token that passes the safety screen, in place of Your filters and Models",
-        )}
         {sw(
           "pauseOnHover",
           "Hold still while I'm reading",

@@ -145,6 +145,7 @@ import {
   takeHolderStreamStats,
   takeHolderTransferStats,
 } from "./holderTransfers.js";
+import { backfillQuoteSymbols, resolveQuoteSymbols } from "./quoteSymbols.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolvePumpLaunches } from "./pumpLaunch.js";
 import { resolveOnChainHolders } from "./onChainHolders.js";
@@ -1168,6 +1169,13 @@ async function scanCycle(
     .map((c) => c.mintAddress);
   const mintAuthorities = await resolveMintAuthorities(needsAuthorityLookup, deps.helius, env);
   lap("mintAuthority");
+  // Every quote stored with its ticker, never a bare mint (quoteSymbols.ts).
+  await resolveQuoteSymbols(candidates, deps.helius).catch((err) =>
+    logger.warn("quote tickers failed", { error: String(err) }),
+  );
+  void backfillQuoteSymbols(deps.helius).catch((err) =>
+    logger.warn("quote ticker backfill failed", { error: String(err) }),
+  );
   // A coin the data in hand fails on LP or authorities is checked for on-chain proof that it is a
   // Pump.fun launch, whose LP is the protocol's and whose authorities are gone (pumpLaunch.ts).
   const pumpLaunches = await resolvePumpLaunches(

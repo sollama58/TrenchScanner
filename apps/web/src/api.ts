@@ -451,6 +451,11 @@ export interface TokenSearchHit {
   lastCallAt: string | null;
   /** The best 1h run, in percent, any model's call on it saw. */
   bestCallPeakPct: number | null;
+  /** The coin its pair trades against: wrapped SOL for nearly every launch. */
+  quoteMint: string | null;
+  quoteSymbol: string | null;
+  /** Where its creator fee goes (TokenSage's read); null when unread. */
+  feeDestination: string | null;
 }
 
 export interface TokenSearchAnswer {

@@ -1119,15 +1119,17 @@ function NameLegend({ graph, names }: { graph: BubbleGraph; names: WalletNames }
 }
 
 /** The stage's width over its height, as laid out now (and on each resize); null before it's measured. */
-function useStageAspect(ref: React.RefObject<HTMLElement | null>): number | null {
-  const [aspect, setAspect] = useState<number | null>(null);
+function useStageSize(ref: React.RefObject<HTMLElement | null>): { w: number; h: number } | null {
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     const read = () => {
       const { width, height } = el.getBoundingClientRect();
-      // Rounded, so a pixel's change doesn't lay the map out again.
-      if (width > 0 && height > 0) setAspect(Math.round((width / height) * 20) / 20);
+      // Whole pixels, so a fraction's change doesn't draw the map again.
+      const w = Math.round(width);
+      const h = Math.round(height);
+      if (w > 0 && h > 0) setSize((s) => (s && s.w === w && s.h === h ? s : { w, h }));
     };
     read();
     if (typeof ResizeObserver === "undefined") return;
@@ -1135,8 +1137,23 @@ function useStageAspect(ref: React.RefObject<HTMLElement | null>): number | null
     ro.observe(el);
     return () => ro.disconnect();
   }, [ref]);
-  return aspect;
+  return size;
 }
+
+/**
+ * How much to enlarge the bubbles' text on a map drawn small (user ask 2026-10-19: far too small to
+ * read in Scope's column): enough that it shows near its own size, up to TEXT_BOOST_MAX. A map drawn
+ * at full size, or zoomed in to it, keeps its text as laid out.
+ */
+export function textBoost(stage: { w: number; h: number } | null, view: { w: number; h: number }): number {
+  if (!stage || !(view.w > 0) || !(view.h > 0)) return 1;
+  const scale = Math.min(stage.w / view.w, stage.h / view.h);
+  return Math.min(TEXT_BOOST_MAX, Math.max(1, TEXT_TARGET_SCALE / scale));
+}
+/** The on-screen scale the bubbles' text is brought up to. */
+const TEXT_TARGET_SCALE = 0.95;
+const TEXT_BOOST_MAX = 1.5;
+const PILL_BOOST_MAX = 1.25;
 
 /**
  * Zoom and move around the map (user ask 2026-10-18), as the chart does: scroll or pinch to zoom
@@ -1282,7 +1299,9 @@ function BubbleSvg({
   const uid = useId().replace(/:/g, "");
   // The map spread sideways to fill a wide stage (user ask 2026-10-16); a narrow one keeps its shape.
   const stage = useRef<HTMLDivElement>(null);
-  const aspect = useStageAspect(stage);
+  const stageSize = useStageSize(stage);
+  // Rounded, so a pixel's change doesn't lay the map out again.
+  const aspect = stageSize ? Math.round((stageSize.w / stageSize.h) * 20) / 20 : null;
   const graph = useMemo(() => (aspect ? stretchWide(laid, aspect, spread) : laid), [laid, aspect, spread]);
   const { bubbleFunderLabels } = useAppearance();
   const index = new Map(graph.nodes.map((n) => [n.id, n]));
@@ -1380,6 +1399,8 @@ function BubbleSvg({
   const box = graphBounds(graph, 18, placed);
   const svg = useRef<SVGSVGElement>(null);
   const { zoom, view, setZoom, zoomBy, gestures } = useMapZoom(svg, box);
+  const boost = textBoost(stageSize, view);
+  const pillBoost = Math.min(boost, PILL_BOOST_MAX);
   const dim = (n: MapNode) => lit !== null && n.cluster !== lit;
   // Bigger bubbles first so the small ones draw on top and stay tappable.
   const order = [...graph.nodes].sort((a, b) => b.r - a.r);
@@ -1571,6 +1592,7 @@ function BubbleSvg({
               slot={nodeSlot(n, graph)}
               sameSlot={n.sameTime === null ? null : sameTimeSlot(graph, n.sameTime)}
               uid={uid}
+              textScale={boost}
             />
           </g>
         ))}
@@ -1583,6 +1605,12 @@ function BubbleSvg({
                 key={p.id}
                 className={`bm-label ${l.kind}`}
                 style={l.colour ? ({ "--lc": l.colour } as React.CSSProperties) : undefined}
+                // Enlarged less than the bubbles' text: each pill was placed clear of what's around it.
+                transform={
+                  pillBoost > 1.01
+                    ? `translate(${p.x} ${p.y}) scale(${pillBoost.toFixed(3)}) translate(${-p.x} ${-p.y})`
+                    : undefined
+                }
               >
                 <rect x={p.x - p.w / 2} y={p.y - p.h / 2} width={p.w} height={p.h} rx={p.h / 2} />
                 <text x={p.x} y={p.y}>
@@ -1722,6 +1750,7 @@ function Bubble({
   slot,
   sameSlot,
   uid,
+  textScale = 1,
 }: {
   node: MapNode;
   names: WalletNames;
@@ -1730,6 +1759,8 @@ function Bubble({
   sameSlot: number | null;
   /** The map's id prefix, for the bubble gradients. */
   uid: string;
+  /** The % and name enlarged by this about the bubble's centre (textBoost), on a map drawn small. */
+  textScale?: number;
 }) {
   const colour = slot === null ? "var(--bm-none)" : `var(--bm-${slot})`;
   const fill = slot === null ? `url(#${uid}-gn)` : `url(#${uid}-g${slot})`;
@@ -1820,36 +1851,44 @@ function Bubble({
         className="bm-gloss"
       />
       {n.hub && <circle cx={n.x} cy={n.y} r={n.r - 3.5} className="bm-hub-ring" />}
-      {showPct && (
-        <text x={n.x} y={fit ? pctY : n.y} className="bm-pct" style={{ fontSize }}>
-          {pctText(n.pct)}
-        </text>
-      )}
-      {fit && (
-        <g
-          className={`bm-name${pumpfun ? " pumpfun" : ""}${fomo ? " fomo" : ""}${kol ? " kol" : ""}`}
-          style={{ fontSize: fit.size }}
-        >
-          {/* A backing when the name runs past the bubble's edge, so it reads over whatever is behind. */}
-          {(fit.wide || kol) && (
-            <rect
-              className="bm-name-bg"
-              x={n.x - fit.w / 2 - 4}
-              y={(showPct ? nameY : n.y) - fit.size * 0.7}
-              width={fit.w + 8}
-              height={fit.lines.length * lineH + fit.size * 0.35}
-              rx={4}
-            />
-          )}
-          <text x={n.x} y={showPct ? nameY : n.y}>
-            {fit.lines.map((line, i) => (
-              <tspan key={i} x={n.x} dy={i === 0 ? 0 : lineH}>
-                {line}
-              </tspan>
-            ))}
+      <g
+        transform={
+          textScale > 1.01
+            ? `translate(${n.x} ${n.y}) scale(${textScale.toFixed(3)}) translate(${-n.x} ${-n.y})`
+            : undefined
+        }
+      >
+        {showPct && (
+          <text x={n.x} y={fit ? pctY : n.y} className="bm-pct" style={{ fontSize }}>
+            {pctText(n.pct)}
           </text>
-        </g>
-      )}
+        )}
+        {fit && (
+          <g
+            className={`bm-name${pumpfun ? " pumpfun" : ""}${fomo ? " fomo" : ""}${kol ? " kol" : ""}`}
+            style={{ fontSize: fit.size }}
+          >
+            {/* A backing when the name runs past the bubble's edge, so it reads over whatever is behind. */}
+            {(fit.wide || kol) && (
+              <rect
+                className="bm-name-bg"
+                x={n.x - fit.w / 2 - 4}
+                y={(showPct ? nameY : n.y) - fit.size * 0.7}
+                width={fit.w + 8}
+                height={fit.lines.length * lineH + fit.size * 0.35}
+                rx={4}
+              />
+            )}
+            <text x={n.x} y={showPct ? nameY : n.y}>
+              {fit.lines.map((line, i) => (
+                <tspan key={i} x={n.x} dy={i === 0 ? 0 : lineH}>
+                  {line}
+                </tspan>
+              ))}
+            </text>
+          </g>
+        )}
+      </g>
       {trait && <TraitBadge trait={trait.trait} x={trait.x} y={trait.y} />}
       {clock && (
         <g className="bm-trait bm-clock" style={{ color: `var(--bm-${sameSlot})` }}>
