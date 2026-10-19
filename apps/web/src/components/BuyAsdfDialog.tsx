@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
 import { shortAddress } from "../format";
 import { formatTokens, type BurnBalance } from "../burn";
+import { type Subscription } from "../api";
+import { usePolling } from "../hooks";
 import { TradePanel } from "./TradePanel";
 import { CloseIcon, FlameIcon } from "./Icons";
 import { CreditBucketPicks, useCreditBuckets } from "./GetAsdf";
@@ -21,6 +23,7 @@ export function BuyAsdfDialog({
   onBought,
   balance = null,
   initialSol,
+  picks = false,
 }: {
   /** The signed-in wallet: it pays and receives. */
   owner: string;
@@ -32,13 +35,28 @@ export function BuyAsdfDialog({
   balance?: BurnBalance | null;
   /** The SOL a credit pick chose before the popup opened. */
   initialSol?: number;
+  /** Show the burn-credit picks: opened from a credit reload area (UtilitiesTab's CreditBurn). */
+  picks?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const pro = useProState();
   const position = usePosition(mint);
   const canSign = useCanSignTrades(owner);
   // The access buy follows the trading kill switch; null while asking.
-  const { open, buckets } = useCreditBuckets(mint);
+  const { open, buckets } = useCreditBuckets(picks);
+  // What a buy comes to in burn credits (a credit reload) or access (everywhere else).
+  const sub = usePolling<Subscription>("/subscription", 300_000);
+  const price = sub.data?.price;
+  const expectNote = (tokens: number): string | null => {
+    if (picks) {
+      if (!price?.tokensPerCredit) return null;
+      const credits = Math.floor(tokens / price.tokensPerCredit);
+      return `about ${credits.toLocaleString("en-US")} burn credit${credits === 1 ? "" : "s"}`;
+    }
+    if (!price?.tokensPerMonth) return null;
+    const days = Math.floor((tokens / price.tokensPerMonth) * price.daysPerMonth);
+    return `about ${days.toLocaleString("en-US")} day${days === 1 ? "" : "s"} of access`;
+  };
   const [fill, setFill] = useState<{ sol: number; at: number } | null>(() =>
     initialSol ? { sol: initialSol, at: Date.now() } : null,
   );
@@ -118,7 +136,7 @@ export function BuyAsdfDialog({
           </p>
         ) : (
           <>
-            {buckets.length > 0 && (
+            {picks && buckets.length > 0 && (
               <div className="asdf-buy-picks">
                 <small className="muted">Buy by burn credits, at the current rate</small>
                 <CreditBucketPicks
@@ -142,6 +160,7 @@ export function BuyAsdfDialog({
               buyOnly={buyOnly}
               hidePosition
               fillBuy={fill}
+              expectNote={expectNote}
               onTraded={() => {
                 position.reload();
                 onBought();

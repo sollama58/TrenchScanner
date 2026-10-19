@@ -27,6 +27,7 @@ import {
   estimateManualFees,
   estimateSwapCosts,
   estimateSaleProceeds,
+  estimateBuyLamports,
   quoteInSol,
   routeFeeBps,
   TOKEN_2022_ACCOUNT_RENT_LAMPORTS,
@@ -918,6 +919,41 @@ describe("estimateSaleProceeds", () => {
         },
       },
       { mint: MINT, units: 5_000n },
+    );
+    expect(none).toBeNull();
+  });
+});
+
+describe("estimateBuyLamports", () => {
+  // A pool with price impact: each SOL buys a little less than the last.
+  const pool = (q: { amount: bigint }) => {
+    const sol = Number(q.amount) / 1e9;
+    return { outAmount: String(BigInt(Math.floor((1_000_000 * sol) / (1 + sol / 10)))) } as never;
+  };
+
+  it("lands at least the amount wanted, with the buffer on top", async () => {
+    const asked: bigint[] = [];
+    const lamports = await estimateBuyLamports(
+      { jupiter: { quote: async (q) => (asked.push(q.amount), pool(q)) } },
+      { mint: MINT, units: 2_000_000n, guessLamports: 100_000_000n, bufferBps: 100 },
+    );
+    expect(asked.length).toBeLessThanOrEqual(5);
+    const got = BigInt((pool({ amount: lamports! }) as { outAmount: string }).outAmount);
+    expect(got).toBeGreaterThanOrEqual(2_000_000n);
+    // Not far over: within the buffer and one step of impact.
+    expect(Number(lamports) / 1e9).toBeLessThan(2.55);
+  });
+
+  it("says nothing without a route", async () => {
+    const none = await estimateBuyLamports(
+      {
+        jupiter: {
+          quote: async () => {
+            throw new Error("no route");
+          },
+        },
+      },
+      { mint: MINT, units: 5_000n, guessLamports: 100_000_000n },
     );
     expect(none).toBeNull();
   });

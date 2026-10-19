@@ -963,6 +963,58 @@ export async function estimateSwapCosts(
 }
 
 /**
+ * About the SOL a buy needs to get at least `units` of `mint`, lamports, plus `bufferBps` so the
+ * trade's own price move still lands it. Exact-in quotes from `guessLamports`, each next amount
+ * found on the line through the last two quotes (price impact bends it), until one lands the
+ * amount within half a percent over (five quotes at most); the smallest that landed is kept.
+ * Null without a route.
+ */
+export async function estimateBuyLamports(
+  deps: { jupiter: Pick<ManualTradeJupiter, "quote"> },
+  input: { mint: string; units: bigint; guessLamports: bigint; bufferBps?: number },
+): Promise<bigint | null> {
+  const want = input.units;
+  const buffered = (l: bigint) => (l * BigInt(10_000 + (input.bufferBps ?? 100)) + 9_999n) / 10_000n;
+  type Point = { lamports: bigint; out: bigint };
+  const tried: Point[] = [];
+  let best: Point | null = null;
+  let short: Point | null = null;
+  let lamports = input.guessLamports > 0n ? input.guessLamports : 1n;
+  for (let i = 0; i < 5; i++) {
+    const quote = await quoteInSol(deps.jupiter, {
+      inputMint: WSOL_MINT,
+      outputMint: input.mint,
+      amount: lamports,
+      slippageBps: 500,
+    }).catch(() => null);
+    const out = quote && /^\d+$/.test(String(quote.outAmount)) ? BigInt(quote.outAmount) : 0n;
+    if (out <= 0n) break;
+    const point = { lamports, out };
+    tried.push(point);
+    if (out >= want) {
+      if (!best || lamports < best.lamports) best = point;
+      if (out * 1_000n <= want * 1_005n) break;
+    } else if (!short || lamports > short.lamports) short = point;
+    // The next amount: between the closest short and landed quotes when there are both, else on
+    // the line through the last two (through zero for the first).
+    const [a, b]: [Point, Point] =
+      best && short
+        ? [short, best]
+        : tried.length >= 2
+          ? [tried[tried.length - 2]!, point]
+          : [{ lamports: 0n, out: 0n }, point];
+    const next =
+      b.out === a.out
+        ? lamports * 2n
+        : a.lamports + ((b.lamports - a.lamports) * (want - a.out) + (b.out - a.out) - 1n) / (b.out - a.out);
+    if (next <= 0n || next === lamports || (best && next >= best.lamports)) break;
+    lamports = next;
+  }
+  if (best) return buffered(best.lamports);
+  return tried.length > 0 ? buffered(lamports) : null;
+}
+
+/**
  * The SOL a sale of `units` raw coins would get by the route Jupiter would take now, lamports,
  * before slippage; null without a route. Quoted into SOL whatever the coin's pool trades against
  * (a PUMP or USDC pair is routed on to SOL), so it reads like the Buy side's expected coins.

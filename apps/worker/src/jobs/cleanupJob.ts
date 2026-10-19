@@ -746,13 +746,26 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
       "tokenId",
     ),
   );
-  // Flagged wallets' trades the API's live trades follower saved for the chart's marks
-  // (apps/api/src/chartFlaggedTrades.ts). They stand in for the tape past its 30 minutes after the
-  // call, so they go with the tape's rows on the same horizon; nothing else ever removed them,
-  // including the rows of coins the stale-token sweep has since deleted.
-  const deletedChartFlaggedTrades = await stage("chartFlaggedTrades", { count: 0 }, () =>
-    prisma.chartFlaggedTrade.deleteMany({ where: { at: { lt: twaCutoff } } }),
-  );
+  // Flagged wallets' trades the API saved for the chart's marks (apps/api/src/chartFlaggedTrades.ts,
+  // chartMarkFill.ts). They stand in for the tape past its 30 minutes after the call, so they go
+  // with the tape's rows on the same horizon, except a coin whose chart was opened in the last
+  // KEEP_AFTER_OPEN_DAYS (ChartMarkCoin.keepUntil, user ask 2026-10-19): its marks stay until then.
+  // A lapsed coin's fill span loses what was deleted, so its next open reads it in again.
+  const deletedChartFlaggedTrades = await stage("chartFlaggedTrades", { count: 0 }, async () => {
+    const count = await prisma.$executeRaw`
+      DELETE FROM "ChartFlaggedTrade" f
+      WHERE f."at" < ${twaCutoff}
+        AND NOT EXISTS (
+          SELECT 1 FROM "ChartMarkCoin" c WHERE c."mint" = f."mint" AND c."keepUntil" > ${new Date(startedAt)}
+        )`;
+    await prisma.$executeRaw`
+      UPDATE "ChartMarkCoin" SET "filledFrom" = ${twaCutoff}
+      WHERE "keepUntil" <= ${new Date(startedAt)} AND "filledFrom" < ${twaCutoff} AND "filledTo" > ${twaCutoff}`;
+    await prisma.$executeRaw`
+      DELETE FROM "ChartMarkCoin"
+      WHERE "keepUntil" <= ${new Date(startedAt)} AND ("filledTo" IS NULL OR "filledTo" <= ${twaCutoff})`;
+    return { count };
+  });
 
   // Recorded price paths (pricePathRecorder.ts): training data, kept PRICE_PATH_RETENTION_DAYS.
   const deletedPricePaths = await stage("pricePaths", { count: 0 }, () =>

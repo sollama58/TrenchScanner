@@ -9,12 +9,12 @@ import {
   type PrivyClientConfig,
 } from "@privy-io/react-auth";
 import {
+  defaultSolanaRpcsPlugin,
   useExportWallet,
   useSignTransaction,
   useStandardWallets,
   useWallets,
 } from "@privy-io/react-auth/solana";
-import { createSolanaRpc, createSolanaRpcSubscriptions } from "@solana/kit";
 import {
   PRIVY_WALLET_NAME,
   PrivyCancelled,
@@ -22,6 +22,7 @@ import {
   rememberPlace,
   setPrivyControls,
 } from "./privyBridge";
+import { keepPrivyAboveDialogs } from "./privyLayer";
 
 /**
  * Privy's half of email sign-in: a lazy chunk (see privyBridge.ts), mounted once someone picks
@@ -32,10 +33,6 @@ import {
  * so burns and Pro trades sign with it the same way they sign with Phantom: nothing else in the
  * app needs to know which kind of wallet it is.
  */
-
-/** Solana's public RPC: Privy only reads with it here. Trades and burns are sent by the API. */
-const RPC = "https://api.mainnet-beta.solana.com";
-const RPC_WS = "wss://api.mainnet-beta.solana.com";
 
 /** Solana mainnet (CAIP-2), as Privy's funding window names it; SOL by its alias. */
 const SOLANA_MAINNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
@@ -58,14 +55,11 @@ export default function PrivyRoot({ appId }: { appId: string }) {
         solana: { createOnLogin: "all-users" },
         ethereum: { createOnLogin: "off" },
       },
-      solana: {
-        rpcs: {
-          "solana:mainnet": {
-            rpc: createSolanaRpc(RPC),
-            rpcSubscriptions: createSolanaRpcSubscriptions(RPC_WS),
-          },
-        },
-      },
+      // Privy's own Solana RPC, keyed to this app. Its confirm window reads the transaction's fee and
+      // the wallet's balance with it before it can be approved; Solana's public RPC
+      // (api.mainnet-beta) answers browsers 403, which showed "There was an error preparing your
+      // transaction" on every burn. Privy only reads with it here: trades and burns are sent by the API.
+      plugins: [defaultSolanaRpcsPlugin()],
     }),
     [],
   );
@@ -196,6 +190,9 @@ function Bridge() {
     });
     return () => setPrivyControls(null);
   }, [ready]);
+
+  // Privy's confirm window over the site's popups (the Refill and Buy popups, a token's trade panel).
+  useEffect(() => keepPrivyAboveDialogs(), []);
 
   // Privy's own wallet into the browser's wallet list, once per wallet object.
   useEffect(() => {
