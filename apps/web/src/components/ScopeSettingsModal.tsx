@@ -187,6 +187,7 @@ function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: 
         {sw("showAge", "Age")}
         {sw("showFees", "Creator fee", "Where the fee goes, as on the cards")}
         {sw("showSocials", "X and website links")}
+        {sw("showTradeLinks", "Trade links", "Your quick-link sites from Feed appearance, plus Dex and Pump")}
         {sw("showSource", "Where it came from", "Your filter's icon, the model's name, HC")}
         {sw("showAt", "Market cap at the alert")}
         {sw("showPeak", "Peak since the alert")}

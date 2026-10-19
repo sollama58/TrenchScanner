@@ -162,6 +162,24 @@ describe("rowChips", () => {
     expect(chips[0]?.value).toBe("120");
   });
 
+  it("reads the contract check and flagged traders, red when something's wrong", () => {
+    const c = card({});
+    Object.assign(c.snapshot, {
+      mintAuthorityActive: false,
+      freezeAuthorityActive: true,
+      lpBurned: true,
+      flaggedBuyers: 2,
+      flaggedSellers: 0,
+    });
+    const chips = rowChips(c, ["flagged", "contract"], NOW);
+    expect(chips.map((x) => [x.id, x.value, x.risky])).toEqual([
+      ["flagged", "2B 0S", true],
+      ["contract", "Freeze", true],
+    ]);
+    Object.assign(c.snapshot, { freezeAuthorityActive: false });
+    expect(rowChips(c, ["contract"], NOW)[0]).toMatchObject({ value: "OK", risky: false });
+  });
+
   it("reads the card's conviction", () => {
     const chips = rowChips(card({ model: "Atlas", tier: "high" }), ["conviction"], NOW);
     expect(chips.map((x) => [x.id, x.value])).toEqual([["conviction", "high"]]);

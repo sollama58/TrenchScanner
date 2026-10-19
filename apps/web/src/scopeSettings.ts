@@ -65,6 +65,8 @@ export interface ScopeDisplay {
   showFees: boolean;
   /** Clicking the ticker copies the contract address instead of opening the coin (user ask 2026-10-19). */
   tickerCopiesCa: boolean;
+  /** The card footer's trade sites and Dex/Pump links, as small text links after the socials. */
+  showTradeLinks: boolean;
   showAt: boolean;
   showPeak: boolean;
   showResult: boolean;
@@ -117,6 +119,7 @@ export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
     showSocials: true,
     showFees: true,
     tickerCopiesCa: true,
+    showTradeLinks: false,
     showAt: false,
     showPeak: false,
     showResult: false,
@@ -191,6 +194,7 @@ export function normalizeScopeSettings(raw: unknown): ScopeSettings {
       showSocials: bool(disp.showSocials, d.showSocials),
       showFees: bool(disp.showFees, d.showFees),
       tickerCopiesCa: bool(disp.tickerCopiesCa, d.tickerCopiesCa),
+      showTradeLinks: bool(disp.showTradeLinks, d.showTradeLinks),
       showAt: bool(disp.showAt, d.showAt),
       showPeak: bool(disp.showPeak, d.showPeak),
       showResult: bool(disp.showResult, d.showResult),

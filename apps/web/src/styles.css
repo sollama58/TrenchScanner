@@ -20664,6 +20664,19 @@ dialog.tm-modal.tm-terminal::backdrop {
     opacity: 0;
   }
 }
+/* Trade sites and Dex/Pump on a Scope row, as quiet text links after the socials. */
+.scope-trade-link {
+  padding: 0 4px;
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: calc(10.5px * var(--scope-t, 1));
+  font-weight: 600;
+  text-decoration: none;
+}
+.scope-trade-link:hover {
+  color: var(--ink);
+  background: var(--surface-3);
+}
 /* The cards' creator fee icon on a Scope row, beside the age; no FEES word, so it stays small. */
 .scope-fee {
   display: inline-grid;
