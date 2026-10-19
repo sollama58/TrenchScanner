@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from "react";
+import { ThisIsFine } from "./ThisIsFine";
 
 /**
  * The last line of defence: a render error (a missing API field, say) or a code chunk that failed
@@ -23,27 +24,28 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
       error.message,
     );
     return (
-      <main className="crash" role="alert">
-        <h1>{chunk ? "Part of the page didn't load" : "Something went wrong on this page"}</h1>
-        <p className="muted">
-          {chunk
-            ? "The connection dropped while loading. Reloading usually fixes it."
-            : "Reload to try again. If it keeps happening, report it with the bug button once the page is back."}
-        </p>
-        <div className="row">
-          <button className="primary" onClick={() => location.reload()}>
-            Reload
-          </button>
-          <button
-            onClick={() => {
-              location.hash = "";
-              location.reload();
-            }}
-          >
-            Back to Live
-          </button>
-        </div>
-      </main>
+      <ThisIsFine
+        title={chunk ? "Part of the page didn't load" : "Something went wrong on this page"}
+        actions={
+          <>
+            <button className="primary" onClick={() => location.reload()}>
+              Reload
+            </button>
+            <button
+              onClick={() => {
+                location.hash = "";
+                location.reload();
+              }}
+            >
+              Back to Live
+            </button>
+          </>
+        }
+      >
+        {chunk
+          ? "The connection dropped while loading. Reloading usually fixes it."
+          : "Reload to try again. If it keeps happening, report it with the bug button once the page is back."}
+      </ThisIsFine>
     );
   }
 }
