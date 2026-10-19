@@ -20438,18 +20438,40 @@ dialog.tm-modal.tm-terminal::backdrop {
 }
 
 /* ---- Hidden tokens (user ask 2026-10-19): hide a token from Cards and Scope, and bring it back ---- */
-.card-head .card-hide {
-  flex: none;
-  align-self: flex-start;
-  margin: -4px -6px 0 -4px;
-  padding: 5px;
+/* A bare eye in the Alert square's top-right corner: quiet until pointed at. */
+.card-hide {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
   color: var(--muted);
-  opacity: 0.55;
-  transition: opacity 0.15s;
+  opacity: 0.7;
+  transition:
+    opacity 0.15s,
+    color 0.15s,
+    background-color 0.15s;
 }
-.card:hover .card-hide,
+.card-hide:hover,
 .card-hide:focus-visible {
   opacity: 1;
+  color: var(--ink);
+  background: var(--highlight);
+}
+.fig:has(> .card-hide) {
+  position: relative;
+}
+.fig > .card-hide {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+}
+.card-head > .card-hide {
+  flex: none;
+  align-self: flex-start;
 }
 .scope-hide {
   position: absolute;
@@ -20476,9 +20498,6 @@ dialog.tm-modal.tm-terminal::backdrop {
   color: var(--ink);
 }
 @media (hover: none) {
-  .card-head .card-hide {
-    opacity: 1;
-  }
   .scope-hide {
     opacity: 0.85;
   }
