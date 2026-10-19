@@ -433,9 +433,19 @@ export interface SwapCostEstimate {
 }
 
 /** The expected network fee for a trade on `mint` with these settings, re-read every 20s. */
-export function useFeeEstimate(mint: string, settings: TradeSettings): FeeEstimate | null {
+export function useFeeEstimate(
+  mint: string,
+  settings: TradeSettings,
+  side: "buy" | "sell" = "buy",
+): FeeEstimate | null {
   const [fee, setFee] = useState<FeeEstimate | null>(null);
-  const params = new URLSearchParams({ mint, speed: settings.speed, ...feeParams(settings) }).toString();
+  // The side matters for $ASDFASDFA only: buying it pays no Sacrifice, selling it does.
+  const params = new URLSearchParams({
+    mint,
+    speed: settings.speed,
+    side,
+    ...feeParams(settings),
+  }).toString();
   useEffect(() => {
     let live = true;
     const load = () =>

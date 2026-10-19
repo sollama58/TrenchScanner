@@ -13,13 +13,14 @@ import {
   refreshProHoldersOnDemand,
   proHolderStanding,
   resetProHolderCacheForTests,
+  SUBSCRIPTION_MINT,
   type Env,
 } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
-import { plainRefusal, quietSign, TradeCooldown } from "./proTrade.js";
+import { freeAsdfBuy, plainRefusal, quietSign, TradeCooldown } from "./proTrade.js";
 
 // The fee route pings Sender in the background: answered here, so no test reaches the network.
 vi.mock("@trenchscanner/core", async (importOriginal) => ({
@@ -37,6 +38,14 @@ describe("plainRefusal", () => {
     expect(plainRefusal("refused: a program this swap may not call")).toBe(
       "The trade was refused before signing: a program this swap may not call",
     );
+  });
+});
+
+describe("freeAsdfBuy", () => {
+  it("frees every wallet's $ASDFASDFA buy from the Sacrifice, and nothing else", () => {
+    expect(freeAsdfBuy("buy", SUBSCRIPTION_MINT)).toBe(true);
+    expect(freeAsdfBuy("sell", SUBSCRIPTION_MINT)).toBe(false);
+    expect(freeAsdfBuy("buy", "So11111111111111111111111111111111111111112")).toBe(false);
   });
 });
 

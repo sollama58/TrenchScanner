@@ -35,6 +35,8 @@ import {
 } from "../components/Icons";
 import { WalletsToWatch } from "../components/WalletsToWatch";
 import { TrackedWalletsPanel } from "../components/TrackedWallets";
+import { GetAsdfCard } from "../components/GetAsdf";
+import { BuyAsdfDialog } from "../components/BuyAsdfDialog";
 import { SideWalletChecker } from "./SideWalletChecker";
 
 /** Why a lookup costs nothing (apps/api lookupGate.ts freeLookupReason), or "open" for a re-open. */
@@ -424,6 +426,8 @@ export function CreditBurn({
   const [pendingNote, setPendingNote] = useState<string | null>(null);
   const [pendingSlow, setPendingSlow] = useState(false);
   const [done, setDone] = useState<number | null>(null);
+  // The Buy $ASDFASDFA popup from "Get $ASDFASDFA", with a credit pick's SOL.
+  const [buying, setBuying] = useState<{ sol?: number } | null>(null);
   const starting = useRef(false);
   const onCreditedRef = useRef(onCredited);
   onCreditedRef.current = onCredited;
@@ -592,18 +596,14 @@ export function CreditBurn({
       ) : !balance ? (
         <p className="muted small">Reading your {SYMBOL}…</p>
       ) : affordable < 1 ? (
-        <p className="small">
+        <GetAsdfCard mint={overview.burn.mint} onBuy={(sol) => setBuying({ sol })}>
           This wallet holds {formatTokens(total, decimals)} {SYMBOL}
           {total > largest && largest > 0n ? ` (${formatTokens(largest, decimals)} in one account)` : ""}. One
           credit needs {overview.prices.tokensPerCredit.toLocaleString("en-US")}.{" "}
-          <a href={`https://pump.fun/coin/${overview.burn.mint}`} target="_blank" rel="noreferrer">
-            Get {SYMBOL}
-          </a>
-          {" · "}
           <button type="button" className="link" onClick={() => setBalanceKey((k) => k + 1)}>
             Check again
           </button>
-        </p>
+        </GetAsdfCard>
       ) : (
         <>
           <div className="burn-pick">
@@ -661,6 +661,16 @@ export function CreditBurn({
         <p className="error small" role="alert">
           {error}
         </p>
+      )}
+      {buying && (
+        <BuyAsdfDialog
+          owner={walletAddress}
+          mint={overview.burn.mint}
+          balance={balance}
+          initialSol={buying.sol}
+          onClose={() => setBuying(null)}
+          onBought={() => setBalanceKey((k) => k + 1)}
+        />
       )}
     </div>
   );

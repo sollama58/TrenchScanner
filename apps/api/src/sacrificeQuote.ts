@@ -65,7 +65,7 @@ const OFF: Omit<SacrificeQuote, "mode" | "freeRank"> = {
 export async function quoteSacrifice(input: {
   wallet: string;
   source: ProStatus["source"];
-  /** An ASDF access buy by a wallet without Pro Mode: always free. */
+  /** A buy of $ASDFASDFA, by any wallet: always free (user ask 2026-10-19). */
   access: boolean;
   /** The trade's SOL value: a buy's spend, a sale's quoted SOL out. */
   lamports: bigint;

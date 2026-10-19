@@ -358,6 +358,8 @@ function AccountPanel({ account }: { account: Settings["account"] | null }) {
   const funds = useWalletBalance();
   const sub = usePolling<Subscription>("/subscription", 300_000);
   const [buying, setBuying] = useState(false);
+  // A credit pick's SOL, filled into the buy popup ("Get $ASDFASDFA" in the burn panel).
+  const [buySol, setBuySol] = useState<number | undefined>(undefined);
   const access = account?.access;
   const { balance } = funds;
   const mint = balance?.mint ?? sub.data?.price?.mint ?? null;
@@ -503,7 +505,14 @@ function AccountPanel({ account }: { account: Settings["account"] | null }) {
             <BurnPanel
               walletAddress={account.walletAddress}
               funds={funds}
-              onGetAsdf={mint ? () => setBuying(true) : undefined}
+              onGetAsdf={
+                mint
+                  ? (sol) => {
+                      setBuySol(sol);
+                      setBuying(true);
+                    }
+                  : undefined
+              }
               onCredited={() => void loadSettings(true)}
             />
           </div>
@@ -512,9 +521,13 @@ function AccountPanel({ account }: { account: Settings["account"] | null }) {
         <BuyAsdfDialog
           owner={account.walletAddress}
           mint={mint}
-          onClose={() => setBuying(false)}
+          onClose={() => {
+            setBuying(false);
+            setBuySol(undefined);
+          }}
           onBought={funds.reload}
           balance={balance}
+          initialSol={buySol}
         />
       )}
     </section>

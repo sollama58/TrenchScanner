@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { privyConfig } from "../privyBridge";
 import { summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
 import { shortAddress } from "../format";
 import { formatTokens, type BurnBalance } from "../burn";
 import { TradePanel } from "./TradePanel";
 import { CloseIcon, FlameIcon } from "./Icons";
+import { CreditBucketPicks, useCreditBuckets } from "./GetAsdf";
 
 /**
  * Buying $ASDFASDFA on the site (user ask 2026-10-18): the token modal's Trade panel for the access
  * token, in its own popup, for every signed-in wallet. A wallet without Pro Mode gets the Buy side
- * only (the API lets it buy this one coin, any size, and nothing else). Opened from
- * Settings' Subscription section and the burn panel's "Buy $ASDFASDFA here".
+ * only (the API lets it buy this one coin, any size, and nothing else). No account pays the
+ * TrenchScanner fee on it (user ask 2026-10-19). Opened from Settings' Subscription section and
+ * every "Get $ASDFASDFA" section (GetAsdf.tsx), whose credit picks arrive as `initialSol`.
  */
 
 export function BuyAsdfDialog({
@@ -19,6 +20,7 @@ export function BuyAsdfDialog({
   onClose,
   onBought,
   balance = null,
+  initialSol,
 }: {
   /** The signed-in wallet: it pays and receives. */
   owner: string;
@@ -28,13 +30,19 @@ export function BuyAsdfDialog({
   onBought: () => void;
   /** The page's reading of the wallet's SOL and $ASDFASDFA, shown above the panel. */
   balance?: BurnBalance | null;
+  /** The SOL a credit pick chose before the popup opened. */
+  initialSol?: number;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const pro = useProState();
   const position = usePosition(mint);
   const canSign = useCanSignTrades(owner);
   // The access buy follows the trading kill switch; null while asking.
-  const [open, setOpen] = useState<boolean | null>(null);
+  const { open, buckets } = useCreditBuckets(mint);
+  const [fill, setFill] = useState<{ sol: number; at: number } | null>(() =>
+    initialSol ? { sol: initialSol, at: Date.now() } : null,
+  );
+  const [picked, setPicked] = useState<number | null>(null);
   const summary = useMemo(
     () => (position.data ? summarizePosition(position.data, null) : null),
     [position.data],
@@ -44,11 +52,6 @@ export function BuyAsdfDialog({
   useEffect(() => {
     const dialog = ref.current;
     if (dialog && !dialog.open) dialog.showModal();
-    let live = true;
-    void privyConfig().then((c) => live && setOpen(c.accessSwap === true));
-    return () => {
-      live = false;
-    };
   }, []);
 
   return (
@@ -73,8 +76,8 @@ export function BuyAsdfDialog({
           </button>
         </header>
         <p className="small">
-          Swap SOL from your wallet ({shortAddress(owner)}) for $ASDFASDFA, then burn it in Settings for
-          access. TrenchScanner takes no fee.
+          Swap SOL from your wallet ({shortAddress(owner)}) for $ASDFASDFA, then burn it for access or
+          credits. <strong className="good-text">No TrenchScanner fee on this buy</strong>, for every account.
         </p>
         {balance && (
           <div className="asdf-buy-wallet">
@@ -114,20 +117,37 @@ export function BuyAsdfDialog({
             buy can&apos;t be signed here. Open TrenchScanner where that wallet is, or sign in again with it.
           </p>
         ) : (
-          <TradePanel
-            owner={owner}
-            mint={mint}
-            symbol="ASDFASDFA"
-            name="ASDFASDFA"
-            position={position.data}
-            summary={summary}
-            buyOnly={buyOnly}
-            hidePosition
-            onTraded={() => {
-              position.reload();
-              onBought();
-            }}
-          />
+          <>
+            {buckets.length > 0 && (
+              <div className="asdf-buy-picks">
+                <small className="muted">Buy by burn credits, at the current rate</small>
+                <CreditBucketPicks
+                  buckets={buckets}
+                  picked={picked}
+                  onPick={(b) => {
+                    if (b.sol === null) return;
+                    setPicked(b.credits);
+                    setFill({ sol: b.sol, at: Date.now() });
+                  }}
+                />
+              </div>
+            )}
+            <TradePanel
+              owner={owner}
+              mint={mint}
+              symbol="ASDFASDFA"
+              name="ASDFASDFA"
+              position={position.data}
+              summary={summary}
+              buyOnly={buyOnly}
+              hidePosition
+              fillBuy={fill}
+              onTraded={() => {
+                position.reload();
+                onBought();
+              }}
+            />
+          </>
         )}
       </div>
     </dialog>
