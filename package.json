@@ -65,6 +65,12 @@
     },
     "@wagmi/connectors": {
       "ws": "^8.22.0"
+    },
+    "engine.io-client": {
+      "ws": "^8.22.0"
+    },
+    "viem": {
+      "ws": "^8.22.0"
     }
   }
 }
