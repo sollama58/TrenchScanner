@@ -75,7 +75,13 @@ import {
   type TransferLink,
 } from "../bubbleMap";
 import { renderBubbleCard } from "../bubbleMapCard";
-import { liveShareDeltas, wideWithLiveShares, withLiveShares, type LiveTradeShares } from "../liveShares";
+import {
+  liveShareDeltas,
+  wideShareDeltas,
+  wideWithLiveShares,
+  withLiveShares,
+  type LiveTradeShares,
+} from "../liveShares";
 import { laneD } from "../linkLanes";
 import { openWallet } from "../walletModal";
 import {
@@ -128,8 +134,9 @@ function useWideMap(mint: string): WideMap | null {
 export function useBubbleMaps(mint: string): BubbleMaps | null {
   // Re-read every HOLDER_POLL_MS while the view is open and the page visible, so a top 50 read
   // after it opened (or one that changed) shows without reopening it - and at once when
-  // reloadBubbleMaps says so. Each read also marks the map as watched, which has the worker re-read
-  // the coin's top holders every minute while it is (user ask 2026-10-19).
+  // reloadBubbleMaps says so. Each read also marks the map as watched, which has the worker keep the
+  // coin's top holders current while it is (user ask 2026-10-19): their balances from the holder
+  // stream as they move, the list written each minute (bubbleMap.ts HOLDER_WRITE_MS).
   const path = bubbleMapsPath(mint);
   const version = useSyncExternalStore(subscribeMaps, () => mapsVersion.get(mint) ?? 0);
   const { data } = usePolling<BubbleMaps>(path, HOLDER_POLL_MS, String(version));
@@ -2359,10 +2366,18 @@ export function BubbleMapSection({
       wideIn && heldLive
         ? wideWithLiveShares(
             wideIn,
-            liveShareDeltas(heldLive.trades, heldLive.supply, Date.parse(wideIn.readAt)),
+            heldReading
+              ? wideShareDeltas(
+                  heldLive.trades,
+                  heldLive.supply,
+                  new Set((heldReading.linkedHolders ?? []).map((h) => h.wallet)),
+                  holderListAt(heldReading),
+                  Date.parse(wideIn.readAt),
+                )
+              : liveShareDeltas(heldLive.trades, heldLive.supply, Date.parse(wideIn.readAt)),
           )
         : wideIn,
-    [wideIn, heldLive],
+    [wideIn, heldLive, heldReading],
   );
   // When what the map draws last changed (user ask 2026-10-19): the holder read, the top 50's, or
   // the newest live trade since either that moved a share. The badge counts from it, as the map

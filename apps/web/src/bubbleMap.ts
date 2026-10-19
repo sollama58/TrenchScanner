@@ -2529,16 +2529,18 @@ export function hasHolderList(s: Pick<Snapshot, "linkedClusters" | "linkedHolder
 }
 
 /**
- * How often the worker writes a coin's holder list while someone has its token view open: it
- * re-reads the top holders and writes the list again every WATCHED_HOLDERS_REFRESH_SECONDS (60 s,
- * worker watchedHolders.ts), on the first scan cycle after that, changed or not.
+ * The longest the worker goes between writes of a coin's holder list while someone has its token
+ * view open: the list again every WATCHED_HOLDERS_REFRESH_SECONDS (60 s, worker watchedHolders.ts),
+ * on the first scan cycle after that, changed or not. A list that changed is written on the next
+ * cycle: the holder stream moves the top holders' balances as they trade (user ask 2026-10-19), so
+ * the next update often comes before this.
  */
 export const HOLDER_WRITE_MS = 60_000;
 /**
  * How often an open token view re-reads its bubble maps (the top 50). The read also tells the
- * worker the map is open (Token.holdersViewedAt), which has it re-read and write the coin's top
- * holders every HOLDER_WRITE_MS instead of every ten minutes (user ask 2026-10-19), so "Now" and
- * its stats keep updating.
+ * worker the map is open (Token.holdersViewedAt), which has it keep the coin's top holders current
+ * and write them at least every HOLDER_WRITE_MS instead of every ten minutes (user ask 2026-10-19),
+ * so "Now" and its stats keep updating.
  */
 export const HOLDER_POLL_MS = 30_000;
 /**

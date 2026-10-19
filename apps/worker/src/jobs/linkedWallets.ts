@@ -437,6 +437,14 @@ export async function readTopHolders(
     maxWatchedReads?: number;
     watchedRefreshMs?: number;
     /**
+     * A watched coin whose holders' accounts the Helius stream has followed since before its list
+     * was read (holderTransfers.ts holderListStreamed): every balance move of those holders lands on
+     * the list as it happens (applyHolderBalances), so it is re-read only this often, for the new
+     * wallets that bought into the top holders. Unset: every watched coin on `watchedRefreshMs`.
+     */
+    streamedRefreshMs?: number;
+    streamed?: (g: LinkedGroup, listAtMs: number) => boolean;
+    /**
      * Whether a mint has had no trade since then (the trade stream's word): a watched coin quiet
      * since its last read keeps that list, as no holder's balance moved by trading. A coin the
      * stream can't vouch for is read; the usual cadence reads every coin either way.
@@ -462,12 +470,18 @@ export async function readTopHolders(
     })
     .slice(0, Math.max(0, opts.maxReads));
   const dueSet = new Set(due.map((g) => g.mintAddress));
+  const watchedEvery = (g: LinkedGroup) => {
+    const entry = topHolderLists.get(g.mintAddress);
+    return entry && opts.streamedRefreshMs !== undefined && opts.streamed?.(g, entry.atMs)
+      ? opts.streamedRefreshMs
+      : (opts.watchedRefreshMs ?? TOP_HOLDERS_REFRESH_MS);
+  };
   const watchedDue = groups
     .filter(
       (g) =>
         watched.has(g.mintAddress) &&
         !dueSet.has(g.mintAddress) &&
-        ageOf(g.mintAddress) >= (opts.watchedRefreshMs ?? TOP_HOLDERS_REFRESH_MS) &&
+        ageOf(g.mintAddress) >= watchedEvery(g) &&
         !quiet(g.mintAddress),
     )
     .slice(0, Math.max(0, opts.maxWatchedReads ?? 0));
@@ -545,6 +559,56 @@ export function cachedHolderAccounts(
 ): { accountsOf: ReadonlyMap<string, readonly string[]>; supply: bigint; atMs: number } | undefined {
   const entry = holderAccountLists.get(mintAddress);
   return entry && nowMs - entry.atMs < TOP_HOLDERS_MAX_AGE_MS ? entry : undefined;
+}
+
+/**
+ * One holder token account's balance of a coin in a transaction the Helius stream delivered: its
+ * owner, and its raw amount before and after (0 for an account the transaction opened or closed).
+ */
+export interface HolderBalanceMove {
+  account: string;
+  owner: string;
+  pre: bigint;
+  post: bigint;
+}
+
+/**
+ * Moves a coin's top-holder list (and its top 50, where kept) by the balances a streamed
+ * transaction left its holders' token accounts with (user ask 2026-10-19: the top holders live, to
+ * the second, between reads). A holder with one token account takes its new balance outright, so a
+ * transaction the last read already counted changes nothing; one with several moves by the
+ * difference. Only the holders on the list move: a wallet buying in from outside it waits for the
+ * next read. The list keeps its read time (it says when to read again); answers whether any share
+ * moved.
+ */
+export function applyHolderBalances(mintAddress: string, moves: readonly HolderBalanceMove[]): boolean {
+  const read = holderAccountLists.get(mintAddress);
+  const entry = topHolderLists.get(mintAddress);
+  if (!read || !entry || read.supply <= 0n || moves.length === 0) return false;
+  const pctOf = (raw: bigint) => Number((raw * 1_000_000n) / read.supply) / 10_000;
+  const next = new Map<string, number>();
+  for (const m of moves) {
+    const accounts = read.accountsOf.get(m.owner);
+    if (!accounts?.includes(m.account)) continue;
+    const base = next.get(m.owner) ?? entry.holders.find((h) => h.owner === m.owner)?.pct;
+    if (base === undefined) continue;
+    next.set(
+      m.owner,
+      accounts.length === 1 ? pctOf(m.post) : Math.max(0, base + pctOf(m.post) - pctOf(m.pre)),
+    );
+  }
+  if (![...next].some(([owner, pct]) => entry.holders.find((h) => h.owner === owner)?.pct !== pct))
+    return false;
+  const moved = (list: { owner: string; pct: number }[]) =>
+    list
+      .map((h) => (next.has(h.owner) ? { ...h, pct: next.get(h.owner)! } : h))
+      .filter((h) => h.pct > 0)
+      .sort((a, b) => b.pct - a.pct);
+  const holders = moved(entry.holders);
+  topHolderLists.set(mintAddress, { holders, atMs: entry.atMs });
+  const wide = wideHolderLists.get(mintAddress);
+  if (wide) wideHolderLists.set(mintAddress, { holders: moved(wide.holders), atMs: wide.atMs });
+  return true;
 }
 
 /** How far back a model call puts its coin on the wider bubble map. */
