@@ -20399,6 +20399,136 @@ dialog.tm-modal.tm-terminal::backdrop {
 .lt-filter {
   margin-left: auto;
 }
+.lt-card > h4 {
+  flex-wrap: wrap;
+}
+/* The filter (user ask 2026-10-19): by the trade's size and the kind of wallet. */
+.lt-fbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--ink-2);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.lt-fbtn:hover,
+.lt-fbtn.open {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--brand-a) 45%, var(--border));
+}
+.lt-fbtn.on {
+  color: var(--brand-ink);
+  border-color: color-mix(in srgb, var(--brand-a) 55%, transparent);
+  background: color-mix(in srgb, var(--brand-a) 12%, var(--surface-3));
+}
+.lt-fcount {
+  min-width: 16px;
+  padding: 0 4px;
+  font-size: 10.5px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--page);
+  background: var(--brand-a);
+  border-radius: 999px;
+}
+.lt-fpanel {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.lt-fgroup {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+.lt-flabel {
+  padding-top: 4px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.lt-amount {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.lt-amount input {
+  width: 84px;
+  padding: 4px 8px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--page);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.lt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.lt-chip {
+  padding: 3px 9px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--ink-2);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.lt-chip:hover {
+  color: var(--ink);
+}
+.lt-chip.on {
+  color: var(--brand-ink);
+  border-color: color-mix(in srgb, var(--brand-a) 55%, transparent);
+  background: color-mix(in srgb, var(--brand-a) 14%, var(--surface-3));
+}
+.lt-factions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.lt-link {
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--link);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.lt-link:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+.lt-fnote {
+  margin: -4px 2px 8px !important;
+}
+.lt-fbtn:focus-visible,
+.lt-chip:focus-visible,
+.lt-link:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
 .lt-tally {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

@@ -954,7 +954,7 @@ function TokenBody({
             </>
           );
         case "trades":
-          return <LiveTradesCard base={tokenApi} />;
+          return <LiveTradesCard base={tokenApi} snapshot={holders.listReading} flagged={flagged} />;
         case "holders":
           return (
             <>
