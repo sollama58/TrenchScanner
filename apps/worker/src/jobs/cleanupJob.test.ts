@@ -1020,6 +1020,7 @@ describe.skipIf(!dbAvailable)("runCleanupJob: retention tiers", () => {
 
   const cleanUp = async () => {
     await prisma.feedbackReport.deleteMany({ where: { submitterKey: TAG } });
+    await prisma.chartFlaggedTrade.deleteMany({ where: { mint: { startsWith: TAG } } });
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
     await prisma.user.deleteMany({ where: { walletAddress: WALLET } });
   };
@@ -1149,6 +1150,22 @@ describe.skipIf(!dbAvailable)("runCleanupJob: retention tiers", () => {
     });
     expect(fallback.deletedWalletActivity).toBe(0);
     expect(await prisma.tokenWalletActivity.count({ where: { tokenId: token.id } })).toBe(2);
+  });
+
+  it("drops the chart's saved flagged trades on the trade tape's horizon", async () => {
+    const mint = `${TAG}-flagged`;
+    const trade = (sig: string, ageDays: number) =>
+      prisma.chartFlaggedTrade.create({
+        data: { sig, wallet: "w", side: 1, mint, sol: 1, at: ago(ageDays) },
+      });
+    await trade("fresh", 10);
+    await trade("stale", 20);
+
+    const meta = await runCleanupJob(env, { pauseMs: 0 });
+    expect(meta.deletedChartFlaggedTrades).toBe(1);
+    expect(await prisma.chartFlaggedTrade.findMany({ where: { mint }, select: { sig: true } })).toEqual([
+      { sig: "fresh" },
+    ]);
   });
 
   it("drops a bug report's screenshot once it is done or a month old, and the done report after a quarter", async () => {

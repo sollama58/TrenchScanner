@@ -746,6 +746,13 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
       "tokenId",
     ),
   );
+  // Flagged wallets' trades the API's live trades follower saved for the chart's marks
+  // (apps/api/src/chartFlaggedTrades.ts). They stand in for the tape past its 30 minutes after the
+  // call, so they go with the tape's rows on the same horizon; nothing else ever removed them,
+  // including the rows of coins the stale-token sweep has since deleted.
+  const deletedChartFlaggedTrades = await stage("chartFlaggedTrades", { count: 0 }, () =>
+    prisma.chartFlaggedTrade.deleteMany({ where: { at: { lt: twaCutoff } } }),
+  );
 
   // Recorded price paths (pricePathRecorder.ts): training data, kept PRICE_PATH_RETENTION_DAYS.
   const deletedPricePaths = await stage("pricePaths", { count: 0 }, () =>
@@ -1032,6 +1039,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedShadowEmissions: deletedShadowEmissions.count,
     deletedWalletActivity,
     deletedTradeTapes,
+    deletedChartFlaggedTrades: deletedChartFlaggedTrades.count,
     strippedFeedbackScreenshots,
     deletedFeedbackReports: deletedFeedbackReports.count,
     deletedPricePaths: deletedPricePaths.count,
