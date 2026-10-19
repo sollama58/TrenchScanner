@@ -360,6 +360,54 @@ export interface VolumeCandle {
   vol: number;
   /** Its width in ms; a minute when absent (Pump.fun's minute candles). */
   w?: number;
+  /**
+   * A step between two readings (pointCandles), not a candle: its move happened at its end, so it
+   * goes in the slot its end falls in, however long the step.
+   */
+  tick?: boolean;
+}
+
+/**
+ * Where a candle goes among `n` slots `slotMs` wide from `t0`: the slot index and how many slots
+ * it covers, or null when it falls outside them. A candle no wider than a slot goes by the middle
+ * of its width; a wider one (a minute candle among 1-second slots, where the finer candles don't
+ * reach) starts at its own start and runs on over the slots its width covers, so it draws at its
+ * true width instead of squeezed into one slot with flat dashes after it; a reading's step goes
+ * where its end falls.
+ */
+function slotOf(k: VolumeCandle, t0: number, slotMs: number, n: number): { i: number; span: number } | null {
+  const w = k.w ?? MINUTE;
+  const t1 = t0 + slotMs * n;
+  const clamp = (i: number) => Math.min(n - 1, Math.max(0, i));
+  if (k.tick) {
+    const end = k.t + w;
+    if (end < t0 || end > t1) return null;
+    return { i: clamp(Math.floor((end - t0) / slotMs)), span: 1 };
+  }
+  if (w > slotMs * 1.001) {
+    if (k.t + w <= t0 || k.t >= t1) return null;
+    const i = Math.floor((k.t - t0) / slotMs);
+    const last = Math.ceil((k.t + w - t0) / slotMs) - 1;
+    return { i: clamp(i), span: Math.max(1, clamp(last) - clamp(i) + 1) };
+  }
+  const mid = k.t + w / 2;
+  if (mid < t0 || mid > t1) return null;
+  return { i: clamp(Math.floor((mid - t0) / slotMs)), span: 1 };
+}
+
+/**
+ * The bar drawn over slot `i`: its own, or a wider one that started in an earlier slot and runs
+ * over it (OhlcBar.span), with the slot it starts in.
+ */
+export function barOver<B extends { span?: number }>(
+  bars: readonly (B | null)[],
+  i: number,
+): { bar: B; at: number } | null {
+  for (let j = i; j >= 0; j--) {
+    const b = bars[j];
+    if (b) return j + (b.span ?? 1) > i ? { bar: b, at: j } : null;
+  }
+  return null;
 }
 
 /** One bar of the volume lane: the minutes it spans, their USD volume, and the move across them. */
@@ -369,6 +417,8 @@ export interface VolumeBar {
   usd: number;
   o: number;
   c: number;
+  /** Slots it covers, from its own: more than one for a candle wider than a slot (slotOf). */
+  span?: number;
 }
 
 /**
@@ -384,17 +434,32 @@ export function volumeBars(
   t1: number,
   n: number,
 ): (VolumeBar | null)[] {
-  const span = Math.max(1, t1 - t0);
+  const slotMs = Math.max(1, t1 - t0) / Math.max(1, n);
   const out: (VolumeBar | null)[] = Array.from({ length: n }, () => null);
   let covered = -Infinity;
   for (const k of [...candles].sort((a, b) => a.t - b.t)) {
     const w = k.w ?? MINUTE;
+    if (k.t < covered) continue;
+    // A candle just outside the slots still counts in the edge one (its slot is cut by the window).
     const mid = k.t + w / 2;
-    if (mid < t0 - w || mid > t1 + w / 2 || k.t < covered) continue;
+    const at =
+      slotOf(k, t0, slotMs, n) ??
+      (w <= slotMs * 1.001 && mid >= t0 - w && mid <= t1 + w / 2
+        ? { i: mid < t0 ? 0 : n - 1, span: 1 }
+        : null);
+    if (!at) continue;
     covered = k.t + w;
-    const i = Math.min(n - 1, Math.max(0, Math.floor(((mid - t0) / span) * n)));
+    const { i } = at;
     const b = out[i];
-    if (!b) out[i] = { from: k.t, to: k.t + w, usd: k.vol, o: k.o, c: k.c };
+    if (!b)
+      out[i] = {
+        from: k.t,
+        to: k.t + w,
+        usd: k.vol,
+        o: k.o,
+        c: k.c,
+        ...(at.span > 1 ? { span: at.span } : {}),
+      };
     else {
       b.usd += k.vol;
       b.to = k.t + w;
@@ -455,6 +520,8 @@ export interface OhlcBar {
   c: number;
   /** No trades in its slice: drawn flat at the close before it, so the candles run unbroken. */
   flat?: boolean;
+  /** Slots it covers, from its own: more than one for a candle wider than a slot (slotOf). */
+  span?: number;
 }
 
 /**
@@ -465,16 +532,21 @@ export interface OhlcBar {
 export function fillFlat(bars: readonly (OhlcBar | null)[], start: number, ms: number): (OhlcBar | null)[] {
   const out = [...bars];
   let prev: OhlcBar | null = null;
+  let prevAt = -1;
   for (let i = 0; i < out.length; i++) {
     const b = out[i];
     if (b) {
       prev = b;
+      prevAt = i;
       continue;
     }
+    // Under a wider candle running on from an earlier slot: it is drawn there already.
+    if (prev && prevAt + (prev.span ?? 1) > i) continue;
     if (!prev || !out.slice(i + 1).some(Boolean)) continue;
     const v = prev.c;
     out[i] = { from: start + i * ms, to: start + (i + 1) * ms, o: v, h: v, l: v, c: v, flat: true };
     prev = out[i]!;
+    prevAt = i;
   }
   return out;
 }
@@ -527,19 +599,21 @@ export function ohlcBars(
   t1: number,
   n: number,
 ): (OhlcBar | null)[] {
-  const span = Math.max(1, t1 - t0);
+  const slotMs = Math.max(1, t1 - t0) / Math.max(1, n);
   const out: (OhlcBar | null)[] = Array.from({ length: n }, () => null);
   let covered = -Infinity;
   for (const k of [...candles].sort((a, b) => a.t - b.t)) {
     const w = k.w ?? MINUTE;
-    const mid = k.t + w / 2;
-    if (mid < t0 || mid > t1 || k.t < covered) continue;
+    if (k.t < covered) continue;
+    const at = slotOf(k, t0, slotMs, n);
+    if (!at) continue;
     covered = k.t + w;
     const h = Math.max(k.h ?? -Infinity, k.o, k.c);
     const l = Math.min(k.l ?? Infinity, k.o, k.c);
-    const i = Math.min(n - 1, Math.max(0, Math.floor(((mid - t0) / span) * n)));
+    const { i } = at;
     const b = out[i];
-    if (!b) out[i] = { from: k.t, to: k.t + w, o: k.o, h, l, c: k.c };
+    if (!b)
+      out[i] = { from: k.t, to: k.t + w, o: k.o, h, l, c: k.c, ...(at.span > 1 ? { span: at.span } : {}) };
     else {
       b.to = k.t + w;
       b.c = k.c;
@@ -561,7 +635,16 @@ export function pointCandles(points: readonly Point[], start?: Point): VolumeCan
   for (const p of points) {
     if (prev && p.t > prev.t) {
       const o = prev.v;
-      out.push({ t: prev.t, w: p.t - prev.t, o, h: Math.max(o, p.v), l: Math.min(o, p.v), c: p.v, vol: 0 });
+      out.push({
+        t: prev.t,
+        w: p.t - prev.t,
+        o,
+        h: Math.max(o, p.v),
+        l: Math.min(o, p.v),
+        c: p.v,
+        vol: 0,
+        tick: true,
+      });
     }
     prev = p;
   }
@@ -694,6 +777,50 @@ export function candleTimeframe(
 ): number {
   const need = Math.max(pickedMs, finestMs);
   return widths.find((ms) => ms >= need && spanMs / ms <= maxBars) ?? widths[widths.length - 1]!;
+}
+
+/**
+ * Zoomed out, a picked timeframe's candles thin down to about this wide (px a candle) and the
+ * zoom stops there (user ask 2026-10-19: the candle size locks), rather than drawing a wider one.
+ */
+const LOCK_MIN_SLOT_PX = 1;
+/** Zoomed in, candles widen up to about this (px a candle) and the zoom stops there. */
+export const MAX_SLOT_PX = 48;
+/** Auto keeps the width it drew while its candles stay at least this wide (px), as it zooms. */
+const AUTO_MIN_SLOT_PX = 3;
+
+/**
+ * Exported for tests. The narrowest and widest windows (ms) a picked timeframe `tfMs` zooms
+ * between on a plot `plotW` px wide, inside a view `viewMs` long: in as far as three candles or
+ * MAX_SLOT_PX a candle, whichever is further out, and out as far as LOCK_MIN_SLOT_PX a candle. The
+ * candles keep the picked width throughout (user ask 2026-10-19).
+ */
+export function lockedSpans(tfMs: number, plotW: number, viewMs: number): { min: number; max: number } {
+  const view = Math.max(1, viewMs);
+  const min = Math.min(view, Math.max(tfMs * 3, (tfMs * plotW) / MAX_SLOT_PX));
+  const max = Math.min(view, Math.max(min, tfMs * Math.floor(Math.max(1, plotW) / LOCK_MIN_SLOT_PX)));
+  return { min, max };
+}
+
+/**
+ * Exported for tests. Auto's width for a window `spanMs` long on a plot `plotW` px wide: the one it
+ * drew before (`prevMs`) while its candles stay between AUTO_MIN_SLOT_PX and MAX_SLOT_PX wide, so
+ * a zoom changes how wide they draw rather than what each one covers; else, or with none before,
+ * the narrowest that leaves `candlePx` a candle, never finer than the finest candles in view.
+ */
+export function autoTimeframe(
+  prevMs: number | null,
+  finestMs: number,
+  spanMs: number,
+  plotW: number,
+  candlePx: number,
+  widths: readonly number[] = AUTO_TIMEFRAMES_MS,
+): number {
+  if (prevMs !== null && prevMs >= finestMs && widths.includes(prevMs)) {
+    const slot = (plotW * prevMs) / Math.max(1, spanMs);
+    if (slot >= AUTO_MIN_SLOT_PX && slot <= MAX_SLOT_PX) return prevMs;
+  }
+  return candleTimeframe(finestMs, finestMs, spanMs, Math.max(1, Math.floor(plotW / candlePx)), widths);
 }
 
 /**
