@@ -270,6 +270,40 @@ describe.skipIf(!dbAvailable)("Pro trades across API instances", () => {
       ).toBe("expired"),
     );
   });
+  it("lets only one of two trades sent at once through the 5-second limit, and gives it back when nothing went out", async () => {
+    const app = await instance();
+    const a = trade();
+    const b = trade();
+    const both = await Promise.all([
+      send(app, { transaction: a.first.base64, buildToken: tokenFor(a.message, { closing: false }) }),
+      send(app, { transaction: b.first.base64, buildToken: tokenFor(b.message, { closing: false }) }),
+    ]);
+    expect(both.map((r) => r.statusCode).sort()).toEqual([200, 429]);
+    expect(both.find((r) => r.statusCode === 429)!.json()).toMatchObject({ notSent: true });
+    expect(vi.mocked(sendViaSender)).toHaveBeenCalledTimes(1);
+    expect(await prisma.platformTrade.count({ where: { wallet: TRADER.address } })).toBe(1);
+
+    // Sender refusing a trade sends nothing, so the next one isn't held back by it.
+    const other = await instance();
+    vi.mocked(sendViaSender).mockImplementationOnce(async () => ({
+      ok: false as const,
+      refused: true,
+      error: "HTTP 400",
+    }));
+    const c = trade();
+    const d = trade();
+    const refused = await send(other, {
+      transaction: c.first.base64,
+      buildToken: tokenFor(c.message, { closing: false }),
+    });
+    expect(refused.statusCode).toBe(409);
+    const next = await send(other, {
+      transaction: d.first.base64,
+      buildToken: tokenFor(d.message, { closing: false }),
+    });
+    expect(next.statusCode).toBe(200);
+  });
+
   describe("when Sender stops answering (user decision 2026-10-19: RPC fallback only with MEV Protect off)", () => {
     it("resends a trade with MEV Protect off through the RPC too after two silent Sender sends", async () => {
       vi.mocked(sendViaSender).mockImplementation(SENDER_SILENT);
