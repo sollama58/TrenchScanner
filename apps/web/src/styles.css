@@ -11909,255 +11909,6 @@ img.tm-avatar {
   margin-bottom: 12px;
 }
 
-/* The chart. */
-.pc {
-  position: relative;
-  width: 100%;
-  user-select: none;
-}
-.pc-svg {
-  display: block;
-  touch-action: pan-y;
-  overflow: visible;
-}
-/* Zoomed in, a drag pans the window. */
-.pc-svg.zoomed {
-  cursor: grab;
-}
-.pc-svg.zoomed:active {
-  cursor: grabbing;
-}
-/* The price axis's strip: scroll or drag it to zoom the price (user ask 2026-10-19). Takes every
-   touch, so a drag on it scales rather than scrolling the page. */
-.pc-yaxis {
-  position: absolute;
-  right: 0;
-  cursor: ns-resize;
-  touch-action: none;
-}
-/* The candle view: a wick from high to low, a body from open to close. */
-.pc-candle line {
-  stroke-width: 1;
-}
-.pc-candle.up line {
-  stroke: var(--good);
-}
-.pc-candle.up rect {
-  fill: var(--good);
-}
-.pc-candle.down line {
-  stroke: var(--bad);
-}
-.pc-candle.down rect {
-  fill: var(--bad);
-}
-/* A slot with no trades, held at the close before it: a faint dash, so the row runs unbroken. */
-.pc-candle.flat line {
-  stroke: var(--muted);
-  opacity: 0.5;
-}
-.pc-candle.flat rect {
-  fill: var(--muted);
-  opacity: 0.5;
-}
-.pc-candle.on rect {
-  stroke: var(--ink);
-  stroke-width: 1;
-}
-/* Under the chart: Line / Candles, Linear / Log and the zoom buttons. Wraps to a second row on a
-   narrow chart rather than cutting the zoom buttons off. */
-.pc-tools {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px 10px;
-  min-height: 28px;
-  margin-top: 6px;
-}
-.pc-zoom {
-  display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 999px;
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-}
-.pc-zoom .tm-range {
-  min-width: 28px;
-}
-.pc-zoom .tm-range:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-@media (max-width: 640px) {
-  .pc-zoom-hint {
-    display: none;
-  }
-}
-.pc-grid {
-  stroke: var(--grid);
-  stroke-width: 1;
-}
-.pc-axis {
-  stroke: var(--axis);
-  stroke-width: 1;
-}
-.pc-tick {
-  fill: var(--muted);
-  font-size: 10.5px;
-  font-family: var(--font);
-  font-variant-numeric: tabular-nums;
-}
-.pc-line {
-  fill: none;
-  stroke-width: 2;
-  stroke-linejoin: round;
-  stroke-linecap: round;
-}
-.pc-base {
-  stroke: var(--muted);
-  stroke-width: 1;
-  stroke-dasharray: 1 4;
-  stroke-linecap: round;
-  opacity: 0.8;
-}
-.pc-base-tag rect {
-  fill: var(--surface-3);
-  stroke: color-mix(in srgb, var(--brand-a) 55%, var(--border));
-}
-.pc-base-tag text {
-  fill: var(--ink-2);
-  font-size: 10.5px;
-  font-weight: 650;
-  font-family: var(--font);
-  font-variant-numeric: tabular-nums;
-}
-.pc-last {
-  --tone: var(--good);
-}
-.pc-last.down {
-  --tone: var(--bad);
-}
-.pc-last circle {
-  fill: var(--tone);
-  stroke: var(--surface-2);
-  stroke-width: 1.5;
-}
-.pc-last .pc-halo {
-  stroke: none;
-  opacity: 0.22;
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: pc-pulse 2.4s ease-out infinite;
-}
-@keyframes pc-pulse {
-  0% {
-    transform: scale(0.6);
-    opacity: 0.4;
-  }
-  100% {
-    transform: scale(1.6);
-    opacity: 0;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .pc-last .pc-halo {
-    animation: none;
-  }
-}
-.pc-last rect {
-  fill: var(--tone);
-}
-/* Model View's end: where the window stops, not the latest reading. */
-.pc-last.end rect {
-  fill: var(--surface-3);
-  stroke: var(--border-strong);
-}
-.pc-last.end text {
-  fill: var(--ink-2);
-}
-.pc-last text {
-  fill: #fff;
-  font-size: 10.5px;
-  font-weight: 700;
-  font-family: var(--font);
-  font-variant-numeric: tabular-nums;
-}
-.pc-event {
-  stroke: var(--muted);
-  stroke-width: 1;
-  stroke-dasharray: 3 3;
-}
-.pc-event.lead {
-  stroke: var(--brand-a);
-  stroke-width: 1.5;
-  stroke-dasharray: 5 3;
-}
-.pc-flag {
-  position: absolute;
-  top: 0;
-  transform: translateX(-50%);
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 10.5px;
-  font-weight: 600;
-  white-space: nowrap;
-  color: var(--ink-2);
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  pointer-events: auto;
-}
-.pc-flag.lead {
-  z-index: 1;
-  color: #fff;
-  border-color: transparent;
-  background: var(--brand-a);
-}
-.pc-peak circle {
-  fill: var(--surface-2);
-  stroke: var(--good-ink);
-  stroke-width: 1.5;
-}
-.pc-peak text {
-  fill: var(--good-ink);
-  font-size: 10.5px;
-  font-weight: 650;
-  font-family: var(--font);
-}
-.pc-cross line {
-  stroke: var(--muted);
-  stroke-width: 1;
-  stroke-dasharray: 2 3;
-}
-.pc-cross circle {
-  fill: var(--good);
-  stroke: var(--surface-solid);
-  stroke-width: 2;
-}
-.pc-cross.down circle {
-  fill: var(--bad);
-}
-.pc-tip {
-  position: absolute;
-  top: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 7px 10px;
-  border-radius: var(--radius-s);
-  background: color-mix(in srgb, var(--surface-solid) 94%, transparent);
-  border: 1px solid var(--border-strong);
-  box-shadow: 0 10px 24px -14px rgba(0, 0, 0, 0.6);
-  font-size: 12px;
-  pointer-events: none;
-  white-space: nowrap;
-  /* Above the call flags along the top, which it would otherwise sit under. */
-  z-index: 2;
-}
-.pc-tip strong {
-  font-size: 14px;
-}
-
 @media (max-width: 640px) {
   .tm-head {
     margin: 0 -16px 12px;
@@ -12232,33 +11983,6 @@ img.tm-avatar {
   --wk: var(--series-1);
   --wk-ink: var(--series-1);
 }
-.pc-mark circle {
-  stroke: var(--wk);
-  stroke-width: 1.5;
-  opacity: 0.92;
-}
-.pc-mark.buy circle {
-  fill: var(--wk);
-}
-.pc-mark.sell circle {
-  fill: var(--surface-solid);
-  stroke-dasharray: 2.5 1.5;
-}
-.pc-mark text {
-  font-family: var(--font);
-  font-weight: 750;
-  pointer-events: none;
-}
-.pc-mark.buy text {
-  fill: var(--page);
-}
-.pc-mark.sell text {
-  fill: var(--wk-ink);
-}
-.pc-mark.on circle {
-  stroke-width: 2.5;
-  opacity: 1;
-}
 .pc-mark-line {
   display: flex;
   align-items: center;
@@ -12274,6 +11998,236 @@ img.tm-avatar {
 }
 .pc-mark-dot.buy {
   background: var(--wk);
+}
+
+/* The token chart (TradingChart, user ask 2026-10-19: HolDEX's chart): a toolbar of candle sizes,
+   style and indicators over the plot, the drawing tools down its left side (a row over it on a
+   phone), and the readout over the plot's top left. */
+.tc {
+  position: relative;
+  width: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.tc-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 3px 0 5px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+.tc-toolbar::-webkit-scrollbar,
+.tc-row::-webkit-scrollbar {
+  display: none;
+}
+/* One row on a desktop; on a phone, the candle sizes over the rest, each row scrolling sideways. */
+.tc-row {
+  display: contents;
+}
+.tc-seg,
+.tc-chips {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+.tc-seg {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 2px;
+}
+.tc-seg button,
+.tc-chip {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-2);
+  padding: 3px 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.tc-seg button:hover:not(:disabled),
+.tc-chip:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink);
+}
+.tc-seg button.on {
+  background: var(--surface-solid);
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+.tc-seg button:disabled {
+  opacity: 0.35;
+}
+.tc-chip {
+  border-color: var(--border);
+}
+.tc-chip.on {
+  color: var(--brand-ink);
+  border-color: color-mix(in srgb, var(--brand-b) 60%, transparent);
+  background: color-mix(in srgb, var(--brand-b) 12%, transparent);
+}
+.tc-chip.tc-icon {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 7px;
+}
+.tc-body {
+  display: flex;
+  gap: 6px;
+}
+.tc-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: none;
+}
+.tc-tool {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+.tc-tool:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--border-strong);
+  background: var(--surface-3);
+}
+.tc-tool.on {
+  color: var(--brand-ink);
+  border-color: var(--brand-b);
+  background: color-mix(in srgb, var(--brand-b) 14%, transparent);
+}
+.tc-tool:disabled {
+  opacity: 0.35;
+}
+.tc-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.tc-plot {
+  position: absolute;
+  inset: 0;
+}
+.tc-wrap.drawing .tc-plot {
+  cursor: crosshair;
+}
+.tc-legend {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  right: 64px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  font-size: 11.5px;
+  color: var(--muted);
+  pointer-events: none;
+  text-shadow:
+    0 0 6px var(--page),
+    0 0 2px var(--page);
+}
+.tc-legend b {
+  font-weight: 600;
+}
+.tc-legend .up,
+.tc-detail .up {
+  color: var(--good-ink);
+}
+.tc-legend .down,
+.tc-detail .down {
+  color: var(--bad-ink);
+}
+.tc-detail {
+  position: absolute;
+  /* Past the chart library's attribution mark in the corner. */
+  left: 48px;
+  bottom: 36px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: min(360px, calc(100% - 80px));
+  padding: 6px 9px;
+  border-radius: 9px;
+  border: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--surface-solid) 92%, transparent);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  pointer-events: none;
+}
+.tc-detail-event {
+  color: var(--brand-ink);
+  font-weight: 650;
+}
+.tc-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 36px;
+  z-index: 3;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  color: var(--ink);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* On a phone the toolbar is two rows (the drawing tools at the end of the second), and the
+   readout keeps to two lines. */
+.tc.phone .tc-toolbar {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  height: 76px;
+  padding: 2px 0 4px;
+  overflow: visible;
+}
+.tc.phone .tc-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+.tc.phone .tc-rail {
+  flex-direction: row;
+  padding-left: 2px;
+  border-left: 1px solid var(--border);
+}
+.tc.phone .tc-tool {
+  width: 30px;
+  height: 28px;
+}
+.tc.phone .tc-legend {
+  right: 58px;
+  font-size: 11px;
+  gap: 0 8px;
+}
+.tc.phone .tc-seg button,
+.tc.phone .tc-chip {
+  padding: 4px 9px;
 }
 /* The chart header's link to Customize › Chart wallet trades: small, but a gold-ringed pill so
    it reads as the marks' own control. */
@@ -12376,40 +12330,6 @@ img.tm-avatar {
   background: var(--surface-solid);
   color: var(--ink);
   font: inherit;
-}
-/* The volume lane under the plot: a bar per slice, green where the price rose across it. */
-.pc-vol-floor {
-  stroke: var(--grid);
-  stroke-width: 1;
-}
-.pc-vol-bar {
-  pointer-events: none;
-  opacity: 0.5;
-  transition: opacity 0.12s;
-}
-.pc-vol-bar.up {
-  fill: var(--good);
-}
-.pc-vol-bar.down {
-  fill: var(--bad);
-}
-.pc-vol-bar.on {
-  opacity: 1;
-}
-.pc-vol-hit {
-  fill: transparent;
-  cursor: pointer;
-}
-.pc-vol-label {
-  font-size: 10px;
-  fill: var(--muted);
-}
-.pc-flow-line {
-  display: flex;
-  flex-direction: column;
-  margin-top: 3px;
-  padding-top: 3px;
-  border-top: 1px solid var(--border);
 }
 .pc-swatch {
   display: inline-block;
@@ -14366,33 +14286,6 @@ button.bm-same {
 .bm-node.dim .bm-gloss {
   opacity: 0.1;
 }
-
-.pc-cross,
-.pc-last,
-.pc-peak {
-  pointer-events: none;
-}
-/* Model View: what came after the call is shaded; the scans the model read are dots. */
-.pc-unseen rect {
-  fill: var(--ink);
-  opacity: 0.035;
-}
-/* A scan the model read: a small dot on the line, ringed in the card's colour to stand off it. */
-.pc-scan {
-  fill: var(--brand-ink);
-  stroke: var(--surface-2);
-  stroke-width: 1.5;
-  pointer-events: none;
-}
-.pc-scan-line {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--ink-2);
-}
-.pc-scan-line .tm-scan-dot {
-  margin-top: 0;
-}
 .tm-model-note {
   display: flex;
   align-items: flex-start;
@@ -14462,24 +14355,6 @@ button.bm-same {
   height: 6px;
   border-radius: 50%;
   background: var(--brand-ink);
-}
-/* Model View cut off before now: the latest reading, under the window's end tag. */
-.pc-now {
-  pointer-events: none;
-  --tone: var(--good);
-}
-.pc-now.down {
-  --tone: var(--bad);
-}
-.pc-now rect {
-  fill: var(--tone);
-}
-.pc-now text {
-  fill: #fff;
-  font-size: 10.5px;
-  font-weight: 700;
-  font-family: var(--font);
-  font-variant-numeric: tabular-nums;
 }
 .side-hidden-bots {
   margin: 8px 0 0;
@@ -17478,67 +17353,6 @@ body:has(.util-toast) .bug-fab {
   color: var(--ink-2);
 }
 
-/* The experimental predicted path: a dotted guess past the line's end and its shaded band, in one
-   neutral colour whichever way it leans, so it never reads as a signal. */
-.pc-path-line {
-  fill: none;
-  stroke: var(--muted);
-  stroke-width: 1.6;
-  stroke-dasharray: 2 4;
-  stroke-linecap: round;
-}
-/* Where the view's history ends and the predicted path's zone begins. */
-.pc-path-edge {
-  stroke: var(--muted);
-  opacity: 0.5;
-  stroke-dasharray: 2 3;
-}
-.pc-path-dot {
-  fill: var(--muted);
-}
-.pc-path-band {
-  fill: var(--muted);
-  opacity: 0.12;
-}
-.pc-path-label {
-  fill: var(--muted);
-  font-size: 10px;
-  font-weight: 650;
-  font-family: var(--font);
-}
-.pc-entry line {
-  stroke: var(--good-ink);
-  stroke-width: 1;
-  stroke-dasharray: 6 4;
-  opacity: 0.8;
-}
-.pc-entry text {
-  fill: var(--good-ink);
-  font-size: 10.5px;
-  font-weight: 650;
-  font-family: var(--font);
-}
-.pc-trade path {
-  stroke: var(--surface-solid);
-  stroke-width: 1;
-}
-.pc-trade.buy path,
-.pc-trade.buy text {
-  fill: var(--good);
-}
-.pc-trade.sell path,
-.pc-trade.sell text {
-  fill: var(--bad);
-}
-.pc-trade text {
-  font-size: 9.5px;
-  font-weight: 750;
-  font-family: var(--font);
-}
-.pc-trade-line {
-  display: block;
-  font-weight: 650;
-}
 @media (max-width: 640px) {
   .tm-trade-sides,
   .tm-fee-groups {
@@ -18047,23 +17861,6 @@ body:has(.util-toast) .bug-fab {
   padding: 5px 12px;
   font-size: 13px;
 }
-/* The candle view's timeframe picker, beside Line / Candles. */
-.pc-tf {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  white-space: nowrap;
-}
-.pc-tf select {
-  height: 26px;
-  padding: 0 6px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--surface-3);
-  color: var(--ink);
-  font: inherit;
-  font-size: 12px;
-}
 
 /* The header's wallet pill opens a small menu: Portfolio (Pro Mode), Settings (wallet or access) and sign out. */
 .wallet-menu {
@@ -18229,12 +18026,6 @@ body:has(.util-toast) .bug-fab {
   .app:has(.topbar .tabs) .update-banner {
     bottom: calc(76px + env(safe-area-inset-bottom));
   }
-  /* Candle mode's tools wrap to two rows here; a fixed height cut off Zoom out and Reset. */
-  .pc-tools {
-    height: auto;
-    min-height: 28px;
-    overflow: visible;
-  }
   /* Two columns left about 40px per figure, so values read "$1…". */
   .trades-grid.portfolio-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -18388,36 +18179,6 @@ body:has(.util-toast) .bug-fab {
 .tm-back {
   display: none;
 }
-.pc-readout {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 10px;
-  min-height: 78px;
-  margin-top: 6px;
-  padding: 8px 12px;
-  border-radius: var(--radius-s);
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  font-size: 12px;
-}
-.pc-readout > * {
-  flex-basis: 100%;
-  min-width: 0;
-}
-/* The value and its change share the second line. */
-.pc-readout > strong,
-.pc-readout > .pc-chg {
-  flex-basis: auto;
-}
-.pc-readout > strong {
-  font-size: 17px;
-  letter-spacing: -0.01em;
-}
-.pc-readout .pc-mark-line,
-.pc-readout .pc-flow-line {
-  white-space: normal;
-}
 @media (max-width: 640px) {
   dialog.tm-modal.sheet-modal {
     width: 100vw;
@@ -18508,40 +18269,8 @@ body:has(.util-toast) .bug-fab {
   .tm-modal .tm-chart > p {
     padding-inline: 10px;
   }
-  /* The readout and the tools under the chart line up with the page's 16px edge, like the
-     heading above and the cards below. */
-  .tm-modal .tm-chart .pc-readout {
-    margin-inline: 10px;
-  }
-  .tm-modal .tm-chart .pc-tools {
-    margin-top: 8px;
-    padding-inline: 10px;
-  }
   .tm-modal .tm-chart > .pc + p {
     margin-top: 10px;
-  }
-  /* Bigger targets for the zoom buttons under the chart, as tall as Line / Candles beside them,
-     with glyphs big enough to read. */
-  .pc-zoom .tm-range {
-    min-width: 40px;
-    min-height: 34px;
-    font-size: 18px;
-    line-height: 1;
-    color: var(--ink);
-  }
-  .pc-zoom .tm-range:disabled {
-    opacity: 0.3;
-  }
-  /* The candle timeframe picker keeps its 16px text (iOS zooms into smaller fields) and matches
-     the height of Line / Candles beside it. */
-  .tm-modal .pc-tf select {
-    height: 42px;
-    padding: 0 12px;
-    font-weight: 600;
-  }
-  /* Reset is a word, not a glyph. */
-  .pc-zoom .tm-range:not([aria-label]) {
-    font-size: 12px;
   }
   /* The header's link row and the section nav scroll sideways: fade their right edge so a cut-off
      pill reads as "more this way". */
