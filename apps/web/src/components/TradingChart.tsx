@@ -40,13 +40,18 @@ import {
 } from "../priceChart";
 import type { PathStep } from "../pricePathing";
 import type { WalletMark } from "../walletMarks";
+import { atLiveEnd, markAt, type PlacedMark } from "../chartMarkLayout";
+import { API_URL } from "../api";
+import { openWallet } from "../walletModal";
 import {
   ChartOverlay,
   SlotCandleSeries,
+  type MarkItem,
   type OverlayColors,
   type OverlayState,
   type SlotCandleData,
 } from "./chartPlugins";
+import { KolAvatar } from "./KolAvatar";
 
 /** A moment marked on the chart: an alert, a model's call, the screen pass, graduation. */
 export interface ChartEvent {
@@ -193,6 +198,17 @@ function safeLocale(): string {
   }
 }
 
+/**
+ * Below these chart widths (px) the toolbar folds so every control stays in view: the indicators
+ * into one menu, then the candle sizes into a picker.
+ */
+const FOLD_INDICATORS_PX = 900;
+const SELECT_TIMEFRAME_PX = 600;
+const ICON_TOOLS_PX = 520;
+
+const NO_MARKS: WalletMark[] = [];
+const NO_TRADES: ChartTrade[] = [];
+
 /** Labeled trades the readout lists by name at most; the rest are counted. */
 const MAX_TIP_MARKS = 6;
 
@@ -212,8 +228,10 @@ export function TradingChart({
   ticks,
   events,
   flow = [],
-  marks = [],
-  trades = [],
+  marks: marksIn = NO_MARKS,
+  markPics = true,
+  trades: tradesIn = NO_TRADES,
+  live = false,
   entry = null,
   extent,
   height,
@@ -236,10 +254,14 @@ export function TradingChart({
   events: ChartEvent[];
   /** The scans' 5-minute buy and sell counts: the readout gives the buy share where one covers. */
   flow?: ScanFlow[];
-  /** Labeled wallets' trades (KOLs, their sides, flagged wallets): lettered rings on the price. */
+  /** Labeled wallets' trades (KOLs, their sides, flagged wallets): lettered rings by the price. */
   marks?: WalletMark[];
+  /** KOLs' marks as their X pictures, where a mark has one (Customize › Chart wallet trades). */
+  markPics?: boolean;
   /** Pro Mode: the trader's own buys and sells. */
   trades?: ChartTrade[];
+  /** The view runs to now: a trade read before its candle is drawn sits on the newest candle. */
+  live?: boolean;
   /** Pro Mode: the average market cap the held position was bought at, a dashed line. */
   entry?: number | null;
   /** The view's span: which timeframes fit it. */
@@ -268,6 +290,46 @@ export function TradingChart({
   const phone = useSyncExternalStore(subscribePhone, isPhone, () => false);
   const theme = useSyncExternalStore(subscribeTheme, themeKey, () => "");
   const [width, setWidth] = useState(640);
+  // The chart's own width, not the window's: a column beside it (Pro's bubble map) narrows it, and
+  // the toolbar folds to fit rather than running off its edge (user ask 2026-10-19).
+  const [boxW, setBoxW] = useState(1_000);
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      if (entry) setBoxW(Math.round(entry.contentRect.width));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const fold = phone || boxW < FOLD_INDICATORS_PX;
+  const tfPicker = phone || boxW < SELECT_TIMEFRAME_PX;
+  // Narrower still (a wide column beside the chart), the chart type and Reset go to icons.
+  const tight = !phone && boxW < ICON_TOOLS_PX;
+  const [menu, setMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // The indicators' menu closes on a click outside it, and Escape closes it, not the token view.
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (e: PointerEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenu(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      setMenu(false);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [menu]);
+  useEffect(() => {
+    if (!fold) setMenu(false);
+  }, [fold]);
   /** How the crosshair's time reads, set on each render (the chart's formatter reads it). */
   const fmtRef = useRef({ seconds: false, dated: false });
 
@@ -288,6 +350,12 @@ export function TradingChart({
   useEffect(() => {
     onTimeframe?.(tfMs);
   }, [tfMs, onTimeframe]);
+  // A live trade is often read seconds before the candles reach it: drawn at its own time it fell
+  // past the last candle, off the plot, and the bubble vanished until the next read (user report
+  // 2026-10-19). It sits on the newest candle until then.
+  const slotsEnd = slots ? slots.start + slots.bars.length * slots.tfMs : null;
+  const marks = useMemo(() => atLiveEnd(marksIn, live ? slotsEnd : null), [marksIn, live, slotsEnd]);
+  const trades = useMemo(() => atLiveEnd(tradesIn, live ? slotsEnd : null), [tradesIn, live, slotsEnd]);
 
   // The baseline (#835): the trader's entry while they hold the coin, else the earliest marked
   // moment (the first alert, filter or model; else the screen pass) at its own market cap or the
@@ -315,6 +383,31 @@ export function TradingChart({
   }>({ main: null, vol: null, lines: [], rsi: null, baseLine: null, entryLine: null });
   const overlayRef = useRef<ChartOverlay | null>(null);
   const [hover, setHover] = useState<number | null>(null);
+  /** The mark under the mouse, or tapped (its stack: the mark and those folded into it). */
+  const [pointed, setPointed] = useState<PlacedMark<MarkItem> | null>(null);
+  // KOLs' pictures for the marks, loaded once each; the overlay redraws as each one lands. Loaded
+  // with CORS so the canvas stays readable for the saved image.
+  const pics = useRef(new Map<string, HTMLImageElement | "loading" | "failed">());
+  const picOf = (m: WalletMark): CanvasImageSource | null => {
+    const src = m.avatar;
+    if (!src) return null;
+    const hit = pics.current.get(src);
+    if (hit === undefined) {
+      pics.current.set(src, "loading");
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.referrerPolicy = "no-referrer";
+      img.decoding = "async";
+      img.onload = () => {
+        pics.current.set(src, img);
+        overlayRef.current?.update();
+      };
+      img.onerror = () => pics.current.set(src, "failed");
+      img.src = `${API_URL}${src}`;
+      return null;
+    }
+    return typeof hit === "string" ? null : hit;
+  };
   /** Bumped when the series are rebuilt, so the data is handed to the new ones. */
   const [built, setBuilt] = useState(0);
   const [mounted, setMounted] = useState(false);
@@ -639,11 +732,16 @@ export function TradingChart({
       v: (y) => series.current.main?.coordinateToPrice(y) ?? null,
     };
   }, [slots]);
+  const pointedMarks = useMemo(
+    () => (pointed ? [pointed.item, ...pointed.more].flatMap((i) => (i.mark ? [i.mark] : [])) : []),
+    [pointed],
+  );
   const hot = useMemo(() => {
+    if (pointedMarks.length > 0) return new Set(pointedMarks);
     if (hover === null || !slots) return new Set<WalletMark>();
     const from = slots.start + hover * slots.tfMs;
     return new Set(marks.filter((m) => m.t >= from && m.t < from + slots.tfMs));
-  }, [hover, slots, marks]);
+  }, [hover, slots, marks, pointedMarks]);
   useEffect(() => {
     const o = overlayRef.current;
     if (!o || !slots || !colors || !dScale) return;
@@ -652,12 +750,20 @@ export function TradingChart({
       if (t < slots.start - slots.tfMs || t > end + 60_000) return null;
       return slotCandle(slots, slotIndex(slots, t))?.c ?? null;
     };
+    // Candles: a buy hangs under its candle's low, a sale over its high; the line has the price only.
+    const rangeAt = (t: number) => {
+      const v = valueAt(t);
+      if (v === null) return null;
+      const k = kind === "candles" ? slotCandle(slots, slotIndex(slots, t)) : null;
+      return k && !k.flat ? { lo: Math.min(k.l, v), hi: Math.max(k.h, v) } : { lo: v, hi: v };
+    };
     const lastX = dScale.x(slots.start + (slots.bars.length - 0.5) * slots.tfMs);
     const bs = barScale(chartRef.current)?.dx ?? 6;
     o.state = {
       x: dScale.x,
       y: dScale.y,
       valueAt,
+      rangeAt,
       // The flags go under the readout's lines.
       flagTop: phone ? 34 : 20,
       events: [...events]
@@ -669,6 +775,7 @@ export function TradingChart({
       pathZone:
         path.length > 1 && lastX !== null ? { x0: lastX + bs / 2 + 4, w: pathZoneW(plotW) - 8 } : null,
       hot,
+      pic: (m) => (markPics ? picOf(m) : null),
       drawings,
       drawScale: dScale,
       label: axisUsd,
@@ -706,25 +813,53 @@ export function TradingChart({
     const onDown = (e: PointerEvent) => {
       if (e.button === 0) down = { x: e.clientX, y: e.clientY, at: Date.now(), id: e.pointerId };
     };
+    const placedAt = (p: { x: number; y: number } | null) =>
+      p ? markAt(overlayRef.current?.placed ?? [], p.x, p.y, 4) : null;
     const onUp = (e: PointerEvent) => {
       const d = down;
       down = null;
       if (!d || d.id !== e.pointerId) return;
       if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 8 || Date.now() - d.at > 700) return;
       const p = local(e);
-      if (p && (drawings.tool || drawings.count)) drawings.click(p.x, p.y, dScale, e.pointerType === "touch");
+      if (!p) return;
+      if (drawings.tool) {
+        drawings.click(p.x, p.y, dScale, e.pointerType === "touch");
+        return;
+      }
+      // A labeled wallet's mark opens that wallet (user ask 2026-10-19: marks you can act on).
+      const hit = placedAt(p);
+      const wallet = hit?.item.mark?.wallet;
+      if (wallet) {
+        setPointed(hit);
+        openWallet(wallet);
+        return;
+      }
+      setPointed(null);
+      if (drawings.count) drawings.click(p.x, p.y, dScale, e.pointerType === "touch");
     };
     const onMove = (e: PointerEvent) => {
-      if (!drawings.placing || e.pointerType === "touch") return;
+      if (e.pointerType === "touch") return;
       const p = local(e);
-      if (p && drawings.move(p.x, p.y, dScale)) overlayRef.current?.update();
+      if (drawings.placing) {
+        if (p && drawings.move(p.x, p.y, dScale)) overlayRef.current?.update();
+        return;
+      }
+      const hit = drawings.tool ? null : placedAt(p);
+      el.classList.toggle("on-mark", !!hit?.item.mark);
+      setPointed((was) => (was?.item === hit?.item ? was : hit));
+    };
+    const onLeave = () => {
+      el.classList.remove("on-mark");
+      setPointed(null);
     };
     const onCancel = () => (down = null);
     el.addEventListener("pointerdown", onDown);
     el.addEventListener("pointerup", onUp);
     el.addEventListener("pointermove", onMove);
     el.addEventListener("pointercancel", onCancel);
+    el.addEventListener("pointerleave", onLeave);
     return () => {
+      el.removeEventListener("pointerleave", onLeave);
       el.removeEventListener("pointerdown", onDown);
       el.removeEventListener("pointerup", onUp);
       el.removeEventListener("pointermove", onMove);
@@ -789,9 +924,21 @@ export function TradingChart({
   const dated = viewMs > 36 * 3_600_000;
   fmtRef.current = { seconds: fine, dated };
   const hFlow = cur ? flowAt(flow, curFrom, curTo) : null;
-  const hMarks = hover !== null && cur ? marks.filter((m) => m.t >= curFrom && m.t < curTo) : [];
-  const hTrades = hover !== null && cur ? trades.filter((tr) => tr.t >= curFrom && tr.t < curTo) : [];
-  const hEvents = hover !== null && cur ? events.filter((e) => e.t >= curFrom && e.t < curTo) : [];
+  // The marks under the pointer when it is on one, else those in the candle it is over.
+  const onStack = pointed !== null;
+  const stack = pointed ? [pointed.item, ...pointed.more] : [];
+  const hMarks = onStack
+    ? stack.flatMap((i) => (i.mark ? [i.mark] : []))
+    : hover !== null && cur
+      ? marks.filter((m) => m.t >= curFrom && m.t < curTo)
+      : [];
+  const hTrades = onStack
+    ? trades.filter((tr) => stack.some((i) => i.trade?.t === tr.t && i.trade.side === tr.side))
+    : hover !== null && cur
+      ? trades.filter((tr) => tr.t >= curFrom && tr.t < curTo)
+      : [];
+  const hEvents =
+    !onStack && hover !== null && cur ? events.filter((e) => e.t >= curFrom && e.t < curTo) : [];
   const up = cur ? cur.c >= cur.o : true;
   const vsRef = cur && ref ? change(ref.v, cur.c) : null;
   const tool = drawings.tool;
@@ -880,40 +1027,86 @@ export function TradingChart({
     </div>
   );
 
+  const indicatorChips = (
+    <>
+      {INDICATORS.map((i) => (
+        <button
+          key={i.id}
+          type="button"
+          className={`tc-chip${ind.has(i.id) ? " on" : ""}`}
+          aria-pressed={ind.has(i.id)}
+          title={i.title}
+          onClick={() => toggle(i.id)}
+        >
+          {i.label}
+          {fold && <small>{i.title.replace(/, in a pane under the chart$/, "")}</small>}
+        </button>
+      ))}
+      <button
+        type="button"
+        className={`tc-chip${log ? " on" : ""}`}
+        aria-pressed={log}
+        title="Log scale: a big run doesn't flatten what came before it"
+        onClick={() => {
+          setLog(!log);
+          keep(LOG_SCALE_KEY, log ? null : "1");
+        }}
+      >
+        Log
+        {fold && <small>Log scale: a big run doesn&apos;t flatten what came before it</small>}
+      </button>
+    </>
+  );
+
   return (
-    <div className={`tc${phone ? " phone" : ""}`} ref={boxRef}>
+    <div className={`tc${phone ? " phone" : ""}${fold ? " fold" : ""}`} ref={boxRef}>
       <div className="tc-toolbar" role="toolbar" aria-label="Chart settings">
         <div className="tc-row">
-          <div className="tc-seg" role="radiogroup" aria-label="Candle size">
-            <button
-              type="button"
-              role="radio"
-              aria-checked={picked === null}
-              className={picked === null || !timeframeFits(picked, viewMs) ? "on" : ""}
-              title="Auto: a candle size that fits the whole view"
-              onClick={() => pickTimeframe(null)}
-            >
-              {picked === null || !timeframeFits(picked, viewMs)
-                ? `Auto · ${timeframeLabel(autoMs)}`
-                : "Auto"}
-            </button>
-            {TIMEFRAMES.map((f) => (
+          {tfPicker ? (
+            <label className="tc-select" title="Candle size">
+              <span className="sr-only">Candle size</span>
+              <select
+                value={picked === null || !timeframeFits(picked, viewMs) ? "auto" : String(tfMs)}
+                onChange={(e) => pickTimeframe(e.target.value === "auto" ? null : Number(e.target.value))}
+              >
+                <option value="auto">Auto · {timeframeLabel(autoMs)}</option>
+                {TIMEFRAMES.map((f) => (
+                  <option key={f.ms} value={f.ms} disabled={!timeframeFits(f.ms, viewMs)}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <div className="tc-seg" role="radiogroup" aria-label="Candle size">
               <button
-                key={f.ms}
                 type="button"
                 role="radio"
-                aria-checked={tfMs === f.ms && picked !== null}
-                className={picked !== null && tfMs === f.ms ? "on" : ""}
-                disabled={!timeframeFits(f.ms, viewMs)}
-                title={timeframeFits(f.ms, viewMs) ? `${f.label} candles` : "Wider than this view allows"}
-                onClick={() => pickTimeframe(f.ms)}
+                aria-checked={picked === null}
+                className={picked === null || !timeframeFits(picked, viewMs) ? "on" : ""}
+                title="Auto: a candle size that fits the whole view"
+                onClick={() => pickTimeframe(null)}
               >
-                {f.label}
+                {picked === null || !timeframeFits(picked, viewMs)
+                  ? `Auto · ${timeframeLabel(autoMs)}`
+                  : "Auto"}
               </button>
-            ))}
-          </div>
-        </div>
-        <div className="tc-row">
+              {TIMEFRAMES.map((f) => (
+                <button
+                  key={f.ms}
+                  type="button"
+                  role="radio"
+                  aria-checked={tfMs === f.ms && picked !== null}
+                  className={picked !== null && tfMs === f.ms ? "on" : ""}
+                  disabled={!timeframeFits(f.ms, viewMs)}
+                  title={timeframeFits(f.ms, viewMs) ? `${f.label} candles` : "Wider than this view allows"}
+                  onClick={() => pickTimeframe(f.ms)}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="tc-seg" role="radiogroup" aria-label="Chart type">
             {(
               [
@@ -926,45 +1119,77 @@ export function TradingChart({
                 type="button"
                 role="radio"
                 aria-checked={kind === k}
-                className={kind === k ? "on" : ""}
+                aria-label={tight ? text : undefined}
+                title={tight ? text : undefined}
+                className={`${kind === k ? "on" : ""}${tight ? " tc-icon-btn" : ""}`}
                 onClick={() => onKind(k)}
               >
-                {text}
+                {tight ? <KindIcon kind={k} /> : text}
               </button>
             ))}
           </div>
-          <div className="tc-chips" role="group" aria-label="Indicators">
-            {INDICATORS.map((i) => (
+        </div>
+        <div className="tc-row">
+          {fold ? (
+            <div className="tc-menu-wrap" ref={menuRef}>
               <button
-                key={i.id}
                 type="button"
-                className={`tc-chip${ind.has(i.id) ? " on" : ""}`}
-                aria-pressed={ind.has(i.id)}
-                title={i.title}
-                onClick={() => toggle(i.id)}
+                className={`tc-chip tc-menu-btn${ind.size > 0 || log ? " on" : ""}`}
+                aria-expanded={menu}
+                aria-haspopup="true"
+                title="Indicators and scale"
+                onClick={() => setMenu(!menu)}
               >
-                {i.label}
+                Indicators
+                {ind.size + (log ? 1 : 0) > 0 && <span className="num">{ind.size + (log ? 1 : 0)}</span>}
+                <svg
+                  width="10"
+                  height="10"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="3"
+                  aria-hidden="true"
+                >
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
               </button>
-            ))}
+              {menu && (
+                <div className="tc-menu" role="group" aria-label="Indicators">
+                  {indicatorChips}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="tc-chips" role="group" aria-label="Indicators">
+              {indicatorChips}
+            </div>
+          )}
+          <div className="tc-chips">
             <button
               type="button"
-              className={`tc-chip${log ? " on" : ""}`}
-              aria-pressed={log}
-              title="Log scale: a big run doesn't flatten what came before it"
-              onClick={() => {
-                setLog(!log);
-                keep(LOG_SCALE_KEY, log ? null : "1");
-              }}
-            >
-              Log
-            </button>
-            <button
-              type="button"
-              className="tc-chip"
+              className={`tc-chip${tight ? " tc-icon" : ""}`}
               title="Back to the newest candles, price fitted"
+              aria-label={tight ? "Reset the view" : undefined}
               onClick={reset}
             >
-              Reset
+              {tight ? (
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5" />
+                </svg>
+              ) : (
+                "Reset"
+              )}
             </button>
             <button
               type="button"
@@ -1049,9 +1274,21 @@ export function TradingChart({
               ))}
               {hMarks.slice(0, MAX_TIP_MARKS).map((m, i) => (
                 <span key={`m-${i}`} className={`pc-mark-line wk-${m.kind}`}>
-                  <i className={`pc-mark-dot ${m.side}`} aria-hidden="true" /> {m.text}
+                  {markPics && m.avatar ? (
+                    <KolAvatar
+                      src={m.avatar}
+                      className={`tc-mark-pic ${m.side}`}
+                      fallback={<i className={`pc-mark-dot ${m.side}`} aria-hidden="true" />}
+                    />
+                  ) : (
+                    <i className={`pc-mark-dot ${m.side}`} aria-hidden="true" />
+                  )}{" "}
+                  {m.text}
                 </span>
               ))}
+              {onStack && hMarks.length > 0 && (
+                <span className="faint tc-detail-hint">{phone ? "Tap" : "Click"} to open the wallet</span>
+              )}
               {hMarks.length > MAX_TIP_MARKS && (
                 <span className="faint">+{hMarks.length - MAX_TIP_MARKS} more labeled trades here</span>
               )}
@@ -1066,6 +1303,29 @@ export function TradingChart({
         </div>
       </div>
     </div>
+  );
+}
+
+/** The chart type's icon, where the toolbar is too narrow for its words. */
+function KindIcon({ kind }: { kind: ChartKind }) {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {kind === "candles" ? (
+        <path d="M7 3v4M7 17v4M17 3v2M17 15v6M5 7h4v10H5zM15 5h4v10h-4z" />
+      ) : (
+        <path d="m3 17 6-6 4 4 8-8" />
+      )}
+    </svg>
   );
 }
 
@@ -1153,6 +1413,8 @@ function emptyOverlay(): OverlayState {
     x: () => null,
     y: () => null,
     valueAt: () => null,
+    rangeAt: () => null,
+    pic: () => null,
     events: [],
     flagTop: 20,
     marks: [],

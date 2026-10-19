@@ -1814,6 +1814,8 @@ export interface FeedAppearance {
   /** Which default chartMarkKinds it was saved against (appearance.ts CHART_MARKS_REV). */
   chartMarksRev: number;
   chartMarkMinSol: number;
+  /** KOLs' trades marked with their X pictures rather than a letter (absent from older API builds: on). */
+  chartMarkPics: boolean;
   /** The token chart's default: a line or candles (absent from older API builds: line). */
   chartStyle: "line" | "candles";
   /** The view the token chart opens on: Trading or All (absent from older API builds: Trading). */

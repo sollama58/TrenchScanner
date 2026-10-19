@@ -141,6 +141,8 @@ export interface WalletMark {
   /** The readout's line: "Cupsey (KOL) bought 2.4 SOL". */
   text: string;
   wallet: string;
+  /** A KOL's X picture (an API path), drawn in place of the letter while the reader shows them. */
+  avatar?: string;
 }
 
 /**
@@ -275,4 +277,21 @@ export function withLiveMarks(
   }
   for (const w of byWallet.values()) w.trades.sort((a, b) => a[0] - b[0]);
   return [...byWallet.values()];
+}
+
+/** The kinds of mark that are a KOL's own wallet, which show the KOL's picture. */
+const PIC_KINDS: ReadonlySet<MarkKind> = new Set(["kol", "known"]);
+
+/**
+ * The marks with their KOL's X picture (user ask 2026-10-19: KOL bubbles by their pictures, on by
+ * default): a KOL's or its Known Side's trade, where the wallet's name comes with a picture.
+ */
+export function withAvatars(
+  marks: readonly WalletMark[],
+  names: Readonly<Record<string, { avatar?: string }>>,
+): WalletMark[] {
+  return marks.map((m) => {
+    const avatar = PIC_KINDS.has(m.kind) ? names[m.wallet]?.avatar : undefined;
+    return avatar ? { ...m, avatar } : m;
+  });
 }

@@ -16,6 +16,7 @@ import type {
 import { customSeriesDefaultOptions } from "lightweight-charts";
 import type { DrawColors, Drawings, DrawScale } from "../chartDrawings";
 import type { PathStep } from "../pricePathing";
+import { layoutMarks, type MarkSpot, type PlacedMark } from "../chartMarkLayout";
 import { markRadius, type WalletMark } from "../walletMarks";
 
 /** The canvas target the library hands its renderers (fancy-canvas's CanvasRenderingTarget2D). */
@@ -121,6 +122,16 @@ export interface OverlayTrade {
   side: "buy" | "sell";
 }
 
+/** What a placed mark on the chart is: a labeled wallet's trade, or the trader's own. */
+export type MarkItem = { mark: WalletMark; trade?: undefined } | { trade: OverlayTrade; mark?: undefined };
+
+/** A KOL's picture mark's radius (px), growing with the trade's size like the rings. */
+export function picRadius(sol: number): number {
+  return markRadius(sol) + 3;
+}
+/** A level's height in the marks' stacks: the largest picture's diameter. */
+const MARK_PITCH = 2 * picRadius(1e9);
+
 export interface OverlayColors {
   event: string;
   eventLead: string;
@@ -145,6 +156,8 @@ export interface OverlayState {
   y: (v: number) => number | null;
   /** The market cap the line or candles show at a time (ms). */
   valueAt: (t: number) => number | null;
+  /** The low and high there (the candle's; the price itself on the line), which marks hang from. */
+  rangeAt: (t: number) => { lo: number; hi: number } | null;
   events: OverlayEvent[];
   /** How far down the plot the events' flags start (px), clear of the readout. */
   flagTop: number;
@@ -155,6 +168,8 @@ export interface OverlayState {
   pathZone: { x0: number; w: number } | null;
   /** The wallet marks under the pointer, drawn stronger. */
   hot: ReadonlySet<WalletMark>;
+  /** A KOL's picture, once loaded (null: none, not yet, or it failed: the lettered ring shows). */
+  pic: (mark: WalletMark) => CanvasImageSource | null;
   drawings: Drawings | null;
   drawScale: DrawScale | null;
   label: (v: number) => string;
@@ -164,10 +179,13 @@ export interface OverlayState {
 /**
  * Everything the chart marks over its candles, as one series primitive: the alert and model lines
  * with their flags along the top, labeled wallets' trades as lettered rings (filled for a buy,
- * sized by SOL), the trader's own B and S arrows, the predicted path, and the drawings.
+ * sized by SOL) or KOLs' pictures, the trader's own B and S arrows, the predicted path, and the
+ * drawings.
  */
 export class ChartOverlay implements ISeriesPrimitive<Time> {
   state: OverlayState;
+  /** Where the marks were last drawn (CSS px), for the chart's hover and click. */
+  placed: PlacedMark<MarkItem>[] = [];
   private requestUpdate: (() => void) | null = null;
   private readonly views: readonly IPrimitivePaneView[];
 
@@ -280,50 +298,110 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
       }
     }
 
-    // Labeled wallets' trades: a ring on the price at the trade's time, its letter inside.
-    ctx.textAlign = "center";
-    for (const m of s.marks) {
-      const x = s.x(m.t);
-      const v = s.valueAt(m.t);
-      const y = v === null ? null : s.y(v);
-      if (x === null || y === null || x < 0 || x > width) continue;
-      const r = markRadius(m.sol);
-      const k = c.wk(m.kind);
-      const hot = s.hot.has(m);
+    // The trades: buys hang under the price and sales sit over it, stacked where they'd touch,
+    // each stack tied to the price by a stem and a dot (chartMarkLayout.ts).
+    const spots: MarkSpot<MarkItem>[] = [];
+    const spot = (item: MarkItem, t: number, side: "buy" | "sell", r: number) => {
+      const x = s.x(t);
+      const v = s.valueAt(t);
+      const range = s.rangeAt(t);
+      const priceY = v === null ? null : s.y(v);
+      const edgeY = range === null ? priceY : s.y(side === "buy" ? range.lo : range.hi);
+      if (x === null || priceY === null || edgeY === null || x < -r || x > width + r) return;
+      spots.push({ item, side, x, priceY, edgeY, r });
+    };
+    // The trader's own first, so they take the places nearest the price.
+    for (const tr of s.trades) spot({ trade: tr }, tr.t, tr.side, 8);
+    for (const m of s.marks) spot({ mark: m }, m.t, m.side, s.pic(m) ? picRadius(m.sol) : markRadius(m.sol));
+    const placed = layoutMarks(spots, MARK_PITCH, height);
+    this.placed = placed;
+    // Stems first, under every mark: from the price's dot to the mark.
+    for (const p of placed) {
+      const color = p.side === "buy" ? c.buy : c.sell;
+      const toward = p.side === "buy" ? p.y - p.r : p.y + p.r;
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.55;
+      ctx.lineWidth = hr;
       ctx.beginPath();
-      ctx.arc(x * hr, y * vr, r * hr, 0, Math.PI * 2);
-      ctx.globalAlpha = hot ? 1 : 0.92;
-      ctx.fillStyle = m.side === "buy" ? k.fill : c.surface;
-      ctx.fill();
-      ctx.lineWidth = (hot ? 2.5 : 1.5) * hr;
-      ctx.strokeStyle = k.fill;
-      if (m.side === "sell") ctx.setLineDash([2.5 * hr, 1.5 * hr]);
+      ctx.moveTo(Math.round(p.x * hr) + 0.5, p.priceY * vr);
+      ctx.lineTo(Math.round(p.x * hr) + 0.5, toward * vr);
       ctx.stroke();
-      ctx.setLineDash([]);
       ctx.globalAlpha = 1;
-      ctx.fillStyle = m.side === "buy" ? c.page : k.ink;
-      ctx.font = `750 ${Math.round((r >= 8 ? 9.5 : 8) * vr)}px ${c.font}`;
-      ctx.fillText(m.letter, x * hr, (y + 0.5) * vr);
-    }
-
-    // The trader's own trades: a buy's arrow points up at the price from below, a sale's down.
-    ctx.font = `700 ${Math.round(9.5 * vr)}px ${c.font}`;
-    for (const tr of s.trades) {
-      const x = s.x(tr.t);
-      const v = s.valueAt(tr.t);
-      const y = v === null ? null : s.y(v);
-      if (x === null || y === null || x < 0 || x > width) continue;
-      const buy = tr.side === "buy";
-      const tip = buy ? y + 4 : y - 4;
-      const base = buy ? y + 13 : y - 13;
-      ctx.fillStyle = buy ? c.buy : c.sell;
+      ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.moveTo(x * hr, tip * vr);
-      ctx.lineTo((x - 5.5) * hr, base * vr);
-      ctx.lineTo((x + 5.5) * hr, base * vr);
-      ctx.closePath();
+      ctx.arc(p.x * hr, p.priceY * vr, 2.2 * hr, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillText(buy ? "B" : "S", x * hr, (buy ? base + 8 : base - 7) * vr);
+    }
+    ctx.textAlign = "center";
+    for (const p of placed) {
+      const { x, y, r } = p;
+      if (p.item.trade) {
+        // The trader's own: an arrow at the price, B or S on it.
+        const buy = p.side === "buy";
+        ctx.fillStyle = buy ? c.buy : c.sell;
+        ctx.beginPath();
+        ctx.moveTo(x * hr, (buy ? y - r : y + r) * vr);
+        ctx.lineTo((x - r) * hr, (buy ? y + r * 0.7 : y - r * 0.7) * vr);
+        ctx.lineTo((x + r) * hr, (buy ? y + r * 0.7 : y - r * 0.7) * vr);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = c.page;
+        ctx.font = `800 ${Math.round(8.5 * vr)}px ${c.font}`;
+        ctx.fillText(buy ? "B" : "S", x * hr, (buy ? y + 1.5 : y - 1) * vr);
+      } else {
+        const m = p.item.mark;
+        const hot = s.hot.has(m) || p.more.some((o) => !!o.mark && s.hot.has(o.mark));
+        const pic = s.pic(m);
+        if (pic) {
+          // A KOL's picture in a ring of the trade's colour: green for a buy, red for a sale.
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(x * hr, y * vr, r * hr, 0, Math.PI * 2);
+          ctx.fillStyle = c.surface;
+          ctx.fill();
+          ctx.clip();
+          ctx.drawImage(pic, (x - r) * hr, (y - r) * vr, 2 * r * hr, 2 * r * vr);
+          ctx.restore();
+          ctx.beginPath();
+          ctx.arc(x * hr, y * vr, (r + 0.5) * hr, 0, Math.PI * 2);
+          ctx.lineWidth = (hot ? 3 : 2) * hr;
+          ctx.strokeStyle = p.side === "buy" ? c.buy : c.sell;
+          ctx.stroke();
+        } else {
+          // A lettered ring in the wallet kind's colour: filled for a buy, hollow for a sale.
+          const k = c.wk(m.kind);
+          ctx.beginPath();
+          ctx.arc(x * hr, y * vr, r * hr, 0, Math.PI * 2);
+          ctx.globalAlpha = hot ? 1 : 0.92;
+          ctx.fillStyle = m.side === "buy" ? k.fill : c.surface;
+          ctx.fill();
+          ctx.lineWidth = (hot ? 2.5 : 1.5) * hr;
+          ctx.strokeStyle = k.fill;
+          if (m.side === "sell") ctx.setLineDash([2.5 * hr, 1.5 * hr]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = m.side === "buy" ? c.page : k.ink;
+          ctx.font = `750 ${Math.round((r >= 8 ? 9.5 : 8) * vr)}px ${c.font}`;
+          ctx.fillText(m.letter, x * hr, (y + 0.5) * vr);
+        }
+      }
+      if (p.more.length > 0) {
+        // The rest of a full stack, counted on its outermost mark.
+        const text = `+${p.more.length}`;
+        ctx.font = `700 ${Math.round(9 * vr)}px ${c.font}`;
+        const w = ctx.measureText(text).width / hr + 8;
+        const bx = x + r * 0.55;
+        const by = y - r * 0.85;
+        ctx.fillStyle = c.labelBg;
+        roundRect(ctx, bx * hr, (by - 6.5) * vr, w * hr, 13 * vr, 6.5 * hr);
+        ctx.fill();
+        ctx.strokeStyle = c.event;
+        ctx.lineWidth = hr;
+        ctx.stroke();
+        ctx.fillStyle = c.eventText;
+        ctx.fillText(text, (bx + w / 2) * hr, (by + 0.5) * vr);
+      }
     }
     ctx.restore();
 
