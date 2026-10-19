@@ -585,7 +585,7 @@ function peakOf(c: Card): number | null {
 
 export const SCOPE_CHIP_IDS: ScopeChip[] = SCOPE_CHIP_DEFS.map((c) => c.id);
 
-/** The chips Scope starts with: few, so a row reads at a glance (user ask 2026-10-18: less dense), with the move since the alert (user pick 2026-10-19). */
+/** The chips Scope starts with: few, so a row reads at a glance (user ask 2026-10-18: less dense), with the move since the alert (2026-10-19). */
 export const DEFAULT_SCOPE_CHIPS: ScopeChip[] = ["move", "holders", "top10", "fresh"];
 
 /** A row's chips, in the settings window's order, leaving out readings the card doesn't have. */
