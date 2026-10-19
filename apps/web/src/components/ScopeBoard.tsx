@@ -36,7 +36,8 @@ import { nowReading, QuotePill, recordedPeakOf, socialLinks } from "./AlertCard"
 import { QuickBuyPill } from "./QuickBuyPill";
 import { TokenImage } from "./TokenImage";
 import { FilterGlyph } from "./FilterBadge";
-import { BrainIcon, FunnelIcon, SlidersIcon } from "./Icons";
+import { BrainIcon, EyeOffIcon, FunnelIcon, SlidersIcon } from "./Icons";
+import { dueToUnhide, hideToken, unhideTokens, useHiddenTokenIds, useHiddenTokens } from "../hiddenTokens";
 import { XLinkPreview } from "./XLinkPreview";
 
 /** After a finger lifts, the board stays still this long before new rows drop in. */
@@ -113,22 +114,41 @@ export function ScopeBoard({
   const visible = useLiveMarketCaps(buffer, tickIds);
 
   const gradIds = useMemo(() => new Set((graduated.data?.launches ?? []).map((c) => c.id)), [graduated.data]);
-  // Every column before its filters: what the settings window offers to pick from.
-  const unfiltered = useMemo(
-    () =>
-      visible
-        ? splitScope(
-            visible.filter((c) => c.kind !== "stream"),
-            visible.filter((c) => c.kind === "stream" && gradIds.has(c.id)),
-            {
-              filters: settings.columns.filters.showGraduated,
-              models: settings.columns.models.showGraduated,
-            },
-            visible.filter((c) => c.kind === "stream" && !gradIds.has(c.id)),
-          )
-        : undefined,
-    [visible, gradIds, settings.columns.filters.showGraduated, settings.columns.models.showGraduated],
+  const gradTokens = useMemo(
+    () => new Set((graduated.data?.launches ?? []).map((c) => c.tokenId)),
+    [graduated.data],
   );
+  // Tokens the user hid (user ask 2026-10-19) are off every column. With auto-unhide on, one that
+  // graduated or reached a new 2x, 4x or 10x comes back.
+  const hiddenTokens = useHiddenTokens();
+  const hiddenIds = useHiddenTokenIds();
+  useEffect(() => {
+    if (visible) unhideTokens(dueToUnhide(hiddenTokens, visible, gradTokens));
+  }, [visible, hiddenTokens, gradTokens]);
+  const onHide = useCallback(
+    (card: Card) => hideToken(card, visible ?? [], gradTokens),
+    [visible, gradTokens],
+  );
+  // Every column before its filters: what the settings window offers to pick from.
+  const unfiltered = useMemo(() => {
+    if (!visible) return undefined;
+    const shown = hiddenIds.size > 0 ? visible.filter((c) => !hiddenIds.has(c.tokenId)) : visible;
+    return splitScope(
+      shown.filter((c) => c.kind !== "stream"),
+      shown.filter((c) => c.kind === "stream" && gradIds.has(c.id)),
+      {
+        filters: settings.columns.filters.showGraduated,
+        models: settings.columns.models.showGraduated,
+      },
+      shown.filter((c) => c.kind === "stream" && !gradIds.has(c.id)),
+    );
+  }, [
+    visible,
+    hiddenIds,
+    gradIds,
+    settings.columns.filters.showGraduated,
+    settings.columns.models.showGraduated,
+  ]);
   // Each column through its own filters (Scope's settings, not Customize's).
   const fresh = useMemo(() => {
     if (!unfiltered) return undefined;
@@ -164,7 +184,13 @@ export function ScopeBoard({
     () => (fresh && frame ? holdFrame(frame, fresh, lastCards.current) : null),
     [fresh, frame],
   );
-  const cols: ScopeColumns = held?.cols ?? fresh ?? emptyColumns();
+  const heldCols: ScopeColumns = held?.cols ?? fresh ?? emptyColumns();
+  // A held board keeps its rows, but not one just hidden.
+  let cols = heldCols;
+  if (held && hiddenIds.size > 0) {
+    cols = emptyColumns();
+    for (const { id } of SCOPE_COLUMNS) cols[id] = heldCols[id].filter((c) => !hiddenIds.has(c.tokenId));
+  }
   // Columns whose source hasn't answered yet show placeholder rows, not "nothing here".
   const loading = (id: ScopeColumn) =>
     id === "graduated"
@@ -348,6 +374,7 @@ export function ScopeBoard({
                     display={display}
                     tiles={tiles}
                     marker={c.id === "graduated"}
+                    onHide={onHide}
                   />
                 ))
               )}
@@ -418,6 +445,7 @@ export function ScopeRow({
   preview = false,
   marker = false,
   index = 0,
+  onHide,
 }: {
   card: Card;
   now: number;
@@ -429,6 +457,8 @@ export function ScopeRow({
   marker?: boolean;
   /** Its place in the column: a column's first rows fade in one after another as they land. */
   index?: number;
+  /** Hides the row's token from Cards and Scope (user ask 2026-10-19); no button without it. */
+  onHide?: (card: Card) => void;
 }) {
   const open = () => {
     if (!preview) openTokenModal(card, now, true);
@@ -471,6 +501,17 @@ export function ScopeRow({
       onClick={onClick}
     >
       {!preview && <QuickBuyPill mint={card.token.mintAddress} symbol={label} onNeedsPanel={open} />}
+      {!preview && onHide && (
+        <button
+          type="button"
+          className="scope-hide"
+          onClick={() => onHide(card)}
+          title={`Hide ${label} from Scope and Cards. Hidden tokens are listed under Hidden, where you can bring them back.`}
+          aria-label={`Hide ${label}`}
+        >
+          <EyeOffIcon size={12} />
+        </button>
+      )}
       <div className="scope-avatar">
         <TokenImage
           url={card.token.imageUrl?.startsWith("https://") ? card.token.imageUrl : null}

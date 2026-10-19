@@ -8,6 +8,7 @@ import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
 import { DEFAULT_ALERT_PREFS, parseAlertPrefs } from "../alertPrefs.js";
 import { DEFAULT_FEED_APPEARANCE, feedAppearanceSchema, parseFeedAppearance } from "../feedAppearance.js";
+import { DEFAULT_HIDDEN_TOKENS, MAX_HIDDEN_TOKENS, parseHiddenTokens } from "../hiddenTokens.js";
 
 /** The Settings tab's API: alert settings, access, and following the best performer. */
 
@@ -175,6 +176,32 @@ describe("parseFeedAppearance", () => {
   });
 });
 
+describe("parseHiddenTokens", () => {
+  it("defaults to auto-unhide on, drops unreadable or repeated entries and keeps the newest", () => {
+    expect(parseHiddenTokens(null)).toEqual(DEFAULT_HIDDEN_TOKENS);
+    const entry = (tokenId: string) => ({
+      tokenId,
+      mintAddress: null,
+      symbol: "FOO",
+      name: null,
+      imageUrl: null,
+      hiddenAt: "2026-10-19T00:00:00.000Z",
+      baseMcapUsd: 10_000,
+      reachedX: 2,
+      graduated: false,
+    });
+    const out = parseHiddenTokens({
+      autoUnhide: false,
+      tokens: [entry("a"), { tokenId: "b" }, entry("a"), "junk", entry("c")],
+    });
+    expect(out).toEqual({ autoUnhide: false, tokens: [entry("a"), entry("c")] });
+    const many = Array.from({ length: MAX_HIDDEN_TOKENS + 5 }, (_, i) => entry(`t${i}`));
+    const kept = parseHiddenTokens({ tokens: many }).tokens;
+    expect(kept).toHaveLength(MAX_HIDDEN_TOKENS);
+    expect(kept[0]!.tokenId).toBe("t5");
+  });
+});
+
 describe.skipIf(!dbAvailable)("settings routes", () => {
   const env: Env = dbAvailable
     ? { ...loadEnv(), ADMIN_WALLET_ADDRESSES: ADMIN_WALLET }
@@ -317,6 +344,43 @@ describe.skipIf(!dbAvailable)("settings routes", () => {
     expect((await app.inject({ method: "PUT", url: "/settings/appearance", payload: look })).statusCode).toBe(
       401,
     );
+  });
+
+  it("saves the hidden tokens whole and rejects anything out of bounds", async () => {
+    expect((await call("user", "GET", "/settings")).json().hiddenTokens).toEqual(DEFAULT_HIDDEN_TOKENS);
+    const hidden = {
+      autoUnhide: false,
+      tokens: [
+        {
+          tokenId: "tok1",
+          mintAddress: "Mint1111",
+          symbol: "FOO",
+          name: "Foo",
+          imageUrl: "https://example.com/foo.png",
+          hiddenAt: "2026-10-19T00:00:00.000Z",
+          baseMcapUsd: 12_000,
+          reachedX: 0,
+          graduated: false,
+        },
+      ],
+    };
+    const res = await call("user", "PUT", "/settings/hidden-tokens", hidden);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().hiddenTokens).toEqual(hidden);
+    expect((await call("user", "GET", "/settings")).json().hiddenTokens).toEqual(hidden);
+
+    const bad = [
+      { ...hidden, extra: 1 },
+      { ...hidden, tokens: [{ ...hidden.tokens[0], hiddenAt: "yesterday" }] },
+      { ...hidden, tokens: [{ ...hidden.tokens[0], tokenId: "" }] },
+      { autoUnhide: "yes" },
+    ];
+    for (const b of bad)
+      expect((await call("user", "PUT", "/settings/hidden-tokens", b)).statusCode).toBe(400);
+    expect((await call("user", "GET", "/settings")).json().hiddenTokens).toEqual(hidden);
+    expect(
+      (await app.inject({ method: "PUT", url: "/settings/hidden-tokens", payload: hidden })).statusCode,
+    ).toBe(401);
   });
 
   it("needs a session", async () => {

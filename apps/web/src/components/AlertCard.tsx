@@ -22,6 +22,7 @@ import {
   CheckIcon,
   CopyIcon,
   ExternalIcon,
+  EyeOffIcon,
   GiftIcon,
   GlobeIcon,
   HeartIcon,
@@ -66,6 +67,7 @@ export function AlertCard({
   labelSource = false,
   hide,
   detail = true,
+  onHide,
 }: {
   card: Card;
   now: number;
@@ -76,6 +78,8 @@ export function AlertCard({
   hide?: ReadonlySet<CardField>;
   /** Clicking the card opens the token modal (off for the Customize preview). */
   detail?: boolean;
+  /** Hides the card's token from the Live feed (user ask 2026-10-19); no button without it. */
+  onHide?: () => void;
 }) {
   const show = (f: CardField) => !hide?.has(f);
   const s = card.snapshot;
@@ -362,6 +366,17 @@ export function AlertCard({
             {/* Inter has no ⊘, and the fallback font draws it larger than the other marks. */}
             {resultMark === "⊘" ? <span className="result-stop">⊘</span> : resultMark}
           </span>
+        )}
+        {onHide && (
+          <button
+            type="button"
+            className="ghost icon-btn card-hide"
+            onClick={onHide}
+            title={`Hide ${tokenLabel(card.token)} from your feed. Hidden tokens are listed under Hidden, where you can bring them back.`}
+            aria-label={`Hide ${tokenLabel(card.token)}`}
+          >
+            <EyeOffIcon size={14} />
+          </button>
         )}
       </header>
 
