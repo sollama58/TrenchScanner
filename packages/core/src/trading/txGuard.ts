@@ -99,6 +99,12 @@ interface TradeLimits {
    * setting). Its platform fee must be 0: no one may take a cut of the trade.
    */
   maxSlippageBps?: number;
+  /**
+   * A trade on a curve quoted in another coin (manualTrade.ts): that coin's mint. The wallet's
+   * account for it may gain (a buy's swap delivering above the minimum the curve spends) but never
+   * lose: the trade must not spend quote coin the wallet already held.
+   */
+  via?: string;
 }
 
 export type TradeExpectation =
@@ -455,7 +461,8 @@ export async function guardSwapTransaction(
     const b = before.token;
     const a = after.token;
     if (!b || !a) throw new GuardRefusal(`account ${watch[i]} would change type`);
-    if (a.amount !== b.amount) throw new GuardRefusal(`another position's balance would change (${b.mint})`);
+    if (b.mint === expect.via ? a.amount < b.amount : a.amount !== b.amount)
+      throw new GuardRefusal(`another position's balance would change (${b.mint})`);
     if (
       a.owner !== b.owner ||
       (a.delegate ?? null) !== (b.delegate ?? null) ||

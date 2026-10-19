@@ -10,9 +10,11 @@ import { SYSTEM_PROGRAM_ID, u64le, type InstructionSpec } from "./transaction.js
  * no proxy program. Jupiter is asked first (manualTrade.ts); this is for the curve coins it has
  * no route for yet, typically in their first seconds.
  *
- * Only SOL-quoted curves, through the v3 instructions (`buy_exact_quote_in_v3`, `sell_v3`: 17
- * accounts, mayhem coins included, the protocol and creator fees kept on the curve). A coin quoted in another coin, a completed curve, or anything this can't read
- * gets no build and the trade says so. Whatever is built here still goes through the guard's
+ * Through the v3 instructions (`buy_exact_quote_in_v3`, `sell_v3`: 17 accounts, mayhem coins
+ * included, the protocol and creator fees kept on the curve). A SOL-quoted curve trades SOL
+ * directly; one quoted in another coin (PUMP, USDC) trades that coin, which manualTrade.ts swaps
+ * to and from SOL with Jupiter in the same transaction. A completed curve, a cashback coin, or
+ * anything this can't read gets no build and the trade says so. Whatever is built here still goes through the guard's
  * simulation before anyone is asked to sign, so a layout the program has since changed fails
  * there, as "couldn't build", never on chain.
  */
@@ -92,18 +94,26 @@ const GLOBAL_BUYBACK_RECIPIENTS_AT = 741;
  * account can't be read as Global.
  */
 export function pumpBuybackRecipient(global: Uint8Array, random: () => number = Math.random): string | null {
+  const all = pumpBuybackRecipients(global);
+  return all.length > 0 ? all[Math.floor(random() * all.length)]! : null;
+}
+
+/** All of Global's buyback fee recipients (empty when the account can't be read as Global). */
+export function pumpBuybackRecipients(global: Uint8Array): string[] {
   if (
     global.length < GLOBAL_BUYBACK_RECIPIENTS_AT + 8 * 32 ||
     !hasDiscriminator(global, GLOBAL_DISCRIMINATOR)
   )
-    return null;
-  const all = Array.from({ length: 8 }, (_, i) => GLOBAL_BUYBACK_RECIPIENTS_AT + i * 32)
+    return [];
+  return Array.from({ length: 8 }, (_, i) => GLOBAL_BUYBACK_RECIPIENTS_AT + i * 32)
     .filter((at) => !zeroKey(global, at))
     .map((at) => readKey(global, at));
-  return all.length > 0 ? all[Math.floor(random() * all.length)]! : null;
 }
 
-/** Tokens a buy of `solIn` lamports gets at least, before slippage (fees allowed for in full). */
+/**
+ * Tokens a buy of `solIn` gets at least, before slippage (fees allowed for in full). In the curve's
+ * quote units: lamports, or the quote coin's raw units on a curve quoted in another coin.
+ */
 export function curveTokensOut(curve: PumpCurve, solIn: bigint): bigint {
   const net = (solIn * (10_000n - FEE_ALLOWANCE_BPS)) / 10_000n;
   if (net <= 0n) return 0n;
@@ -111,7 +121,7 @@ export function curveTokensOut(curve: PumpCurve, solIn: bigint): bigint {
   return out < curve.realTokenReserves ? out : curve.realTokenReserves;
 }
 
-/** Lamports a sale of `tokens` returns at least, before slippage (fees allowed for in full). */
+/** What a sale of `tokens` returns at least, in the curve's quote units, before slippage (fees allowed for in full). */
 export function curveSolOut(curve: PumpCurve, tokens: bigint): bigint {
   if (tokens <= 0n) return 0n;
   const gross = (curve.virtualQuoteReserves * tokens) / (curve.virtualTokenReserves + tokens);
@@ -125,26 +135,30 @@ interface CurveAccounts {
   mint: string;
   tokenProgram: string;
   curve: PumpCurve;
+  /** SOL-quoted: a buyback wallet. Quoted in a coin: that wallet's account for the coin (it must exist). */
   buybackFeeRecipient: string;
+  /** The curve's quote coin and its token program, when it isn't SOL. */
+  quote?: { mint: string; program: string };
 }
 
 /** The 17 accounts every v3 curve trade takes, in the program's order (docs/instructions/TRADE_V3.md). */
-function v3Accounts({ wallet, mint, tokenProgram, curve, buybackFeeRecipient }: CurveAccounts) {
+function v3Accounts({ wallet, mint, tokenProgram, curve, buybackFeeRecipient, quote }: CurveAccounts) {
   const pda = (seeds: Uint8Array[]) => findProgramAddress(seeds, PROGRAM.pumpFun);
+  // SOL-paired: wrapped SOL stands in for the quote, with the SPL Token program, and the two
+  // quote accounts are derived but unused (needn't exist).
+  const q = quote ?? { mint: WSOL, program: PROGRAM.token };
   return [
     { pubkey: PUMP_GLOBAL, writable: false },
     { pubkey: mint, writable: false },
-    // SOL-paired: wrapped SOL stands in for the quote, with the SPL Token program.
-    { pubkey: WSOL, writable: false },
+    { pubkey: q.mint, writable: false },
     { pubkey: tokenProgram, writable: false },
-    { pubkey: PROGRAM.token, writable: false },
+    { pubkey: q.program, writable: false },
     { pubkey: curve.address, writable: true },
     { pubkey: associatedTokenAddress(curve.address, mint, tokenProgram), writable: true },
-    // Derived but unused for a SOL-paired coin (needn't exist).
-    { pubkey: associatedTokenAddress(curve.address, WSOL, PROGRAM.token), writable: true },
+    { pubkey: associatedTokenAddress(curve.address, q.mint, q.program), writable: true },
     { pubkey: wallet, writable: true, signer: true },
     { pubkey: associatedTokenAddress(wallet, mint, tokenProgram), writable: true },
-    { pubkey: associatedTokenAddress(wallet, WSOL, PROGRAM.token), writable: true },
+    { pubkey: associatedTokenAddress(wallet, q.mint, q.program), writable: true },
     { pubkey: pda([text("user_volume_accumulator"), bs58.decode(wallet)]), writable: true },
     { pubkey: PUMP_FEE_CONFIG, writable: false },
     { pubkey: buybackFeeRecipient, writable: true },
@@ -154,20 +168,27 @@ function v3Accounts({ wallet, mint, tokenProgram, curve, buybackFeeRecipient }: 
   ];
 }
 
-/** Why a curve can't be traded here, or null when it can. */
-export function curveRefusal(curve: PumpCurve | null): string | null {
+/** The coin a curve is quoted in when it isn't SOL, or null for a SOL-quoted curve. */
+export function curveQuoteToken(curve: PumpCurve): string | null {
+  return curve.quoteMint !== null && curve.quoteMint !== WSOL ? curve.quoteMint : null;
+}
+
+/**
+ * Why a curve can't be traded here, or null when it can. A curve quoted in another coin is
+ * refused unless the caller routes that coin to and from SOL itself (`quoteToken`).
+ */
+export function curveRefusal(curve: PumpCurve | null, opts: { quoteToken?: boolean } = {}): string | null {
   if (!curve) return "no Pump.fun bonding curve for this coin";
   if (curve.complete) return "the bonding curve is complete (the coin has graduated)";
-  // Bought with SOL through Jupiter once it routes through the curve's quote token (manualTrade.ts).
-  if (curve.quoteMint !== null && curve.quoteMint !== WSOL)
-    return "it trades against another coin, and Jupiter has no route through it yet: try again in a moment";
+  if (curveQuoteToken(curve) && !opts.quoteToken) return "the curve isn't quoted in SOL";
   // v3 trades refuse a cashback coin (CashbackCoinNotSupported); cashback is deprecated.
   if (curve.cashback) return "a cashback coin (not supported here)";
   return null;
 }
 
 /**
- * The instructions of a curve buy spending exactly `solIn` lamports (fees included): the
+ * The instructions of a curve buy spending exactly `solIn` of the quote (lamports, or the quote
+ * coin's raw units; fees included): the
  * wallet's token account, created if it isn't there (the trade needs it to exist), then
  * `buy_exact_quote_in_v3`. `minTokens` is the least it may deliver.
  */

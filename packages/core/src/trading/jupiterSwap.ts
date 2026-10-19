@@ -288,6 +288,10 @@ export class JupiterSwapClient implements SwapClient {
     slippageBps: number;
     /** False lets the route hop through any token, not just Jupiter's liquid ones (default true). */
     restrictIntermediateTokens?: boolean;
+    /** The most accounts the route may name: room left for other instructions in the transaction. */
+    maxAccounts?: number;
+    /** One pool, no hops: the fewest accounts, for a transaction that has other instructions too. */
+    onlyDirectRoutes?: boolean;
   }) {
     const params = new URLSearchParams({
       inputMint: input.inputMint,
@@ -299,6 +303,8 @@ export class JupiterSwapClient implements SwapClient {
       // The route instruction both guards can read (checkJupiterFloor, the browser's tradeProblem):
       // V2 is live and a change of Jupiter's default would otherwise refuse every Jupiter trade.
       instructionVersion: "V1",
+      ...(input.maxAccounts !== undefined ? { maxAccounts: String(input.maxAccounts) } : {}),
+      ...(input.onlyDirectRoutes ? { onlyDirectRoutes: "true" } : {}),
     });
     const res = await this.call(`/swap/v1/quote?${params}`, {}, "Jupiter quote");
     const quote = (await res.json()) as SwapQuote & { error?: string };
@@ -363,10 +369,22 @@ export class JupiterSwapClient implements SwapClient {
    * compute-budget instructions are left out (the caller sets the price); its unit limit, from
    * its own simulation, is returned.
    */
-  async swapInstructions(input: { quote: SwapQuote; userPublicKey: string }): Promise<{
+  async swapInstructions(input: {
+    quote: SwapQuote;
+    userPublicKey: string;
+    /**
+     * Swap whatever the input account gained since the ledger instruction (`ledgerAt` in the
+     * result) instead of the quote's amount: a sale of a coin quoted in PUMP swaps all the PUMP
+     * its curve sale paid, however much that came to. The swap isn't simulated (the input isn't
+     * there yet), so there is no unit limit.
+     */
+    useTokenLedger?: boolean;
+  }): Promise<{
     instructions: InstructionSpec[];
     lookupTables: string[];
     computeUnitLimit: number | null;
+    /** With useTokenLedger: the ledger instruction's index; what fills the input goes right after it. */
+    ledgerAt?: number;
   }> {
     const res = await this.call(
       "/swap/v1/swap-instructions",
@@ -377,8 +395,9 @@ export class JupiterSwapClient implements SwapClient {
           quoteResponse: input.quote,
           userPublicKey: input.userPublicKey,
           wrapAndUnwrapSol: true,
-          dynamicComputeUnitLimit: true,
+          dynamicComputeUnitLimit: !input.useTokenLedger,
           dynamicSlippage: false,
+          ...(input.useTokenLedger ? { useTokenLedger: true } : {}),
         }),
       },
       "Jupiter swap instructions",
@@ -394,11 +413,14 @@ export class JupiterSwapClient implements SwapClient {
       error?: string;
     };
     if (!out.swapInstruction) throw new Error(`Jupiter swap instructions: ${out.error ?? "none returned"}`);
-    if (out.tokenLedgerInstruction)
-      throw new Error("Jupiter swap instructions: token ledger routes aren't used");
+    if (!input.useTokenLedger === !!out.tokenLedgerInstruction)
+      throw new Error(
+        `Jupiter swap instructions: ${input.useTokenLedger ? "no token ledger returned" : "an unasked-for token ledger"}`,
+      );
+    const head = [...(out.otherInstructions ?? []), ...(out.setupInstructions ?? [])];
     const list = [
-      ...(out.otherInstructions ?? []),
-      ...(out.setupInstructions ?? []),
+      ...head,
+      ...(out.tokenLedgerInstruction ? [out.tokenLedgerInstruction] : []),
       out.swapInstruction,
       ...(out.cleanupInstruction ? [out.cleanupInstruction] : []),
     ];
@@ -406,7 +428,10 @@ export class JupiterSwapClient implements SwapClient {
       instructions: list.map(fromJupiterInstruction),
       lookupTables: Array.isArray(out.addressLookupTableAddresses) ? out.addressLookupTableAddresses : [],
       computeUnitLimit:
-        typeof out.computeUnitLimit === "number" && out.computeUnitLimit > 0 ? out.computeUnitLimit : null,
+        !input.useTokenLedger && typeof out.computeUnitLimit === "number" && out.computeUnitLimit > 0
+          ? out.computeUnitLimit
+          : null,
+      ...(input.useTokenLedger ? { ledgerAt: head.length } : {}),
     };
   }
 

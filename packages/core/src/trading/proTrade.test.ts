@@ -152,7 +152,11 @@ describe("Pump.fun curve", () => {
       curveRefusal(parsePumpCurve(key(61), curveData(f)));
     expect(refusal({ complete: true })).toMatch(/graduated/);
     expect(refusal({ cashback: true })).toMatch(/cashback/);
-    expect(refusal({ quote: key(62) })).toMatch(/trades against another coin/);
+    expect(refusal({ quote: key(62) })).toMatch(/quoted in SOL/);
+    // A caller that swaps the quote coin to and from SOL itself may trade it.
+    expect(
+      curveRefusal(parsePumpCurve(key(61), curveData({ quote: key(62) })), { quoteToken: true }),
+    ).toBeNull();
     expect(refusal({ quote: WSOL })).toBeNull();
     expect(curveRefusal(null)).toMatch(/no Pump.fun/);
   });
@@ -191,6 +195,29 @@ describe("Pump.fun curve", () => {
     const sell = pumpSellInstructions({ ...accounts, tokens: 1_000_000_000n, slippageBps: 500 });
     expect(sell.instructions).toHaveLength(1);
     expect(sell.minSol).toBe((curveSolOut(curve, 1_000_000_000n) * 9_500n) / 10_000n);
+  });
+
+  it("trades a curve quoted in another coin through the wallet's account for that coin", () => {
+    const QUOTE = key(64);
+    const quoted = parsePumpCurve(key(61), curveData({ quote: QUOTE }))!;
+    const buyback = associatedTokenAddress(key(63), QUOTE, PROGRAM.token2022);
+    const accounts = {
+      wallet: WALLET,
+      mint: MINT,
+      tokenProgram: PROGRAM.token2022,
+      curve: quoted,
+      buybackFeeRecipient: buyback,
+      quote: { mint: QUOTE, program: PROGRAM.token2022 },
+    };
+    const ix = pumpBuyInstructions({ ...accounts, solIn: 5_000_000n, slippageBps: 1_000 }).instructions[1]!;
+    const at = (n: number) => ix.accounts[n]!.pubkey;
+    expect([at(2), at(4)]).toEqual([QUOTE, PROGRAM.token2022]);
+    expect(at(7)).toBe(associatedTokenAddress(quoted.address, QUOTE, PROGRAM.token2022));
+    expect(at(10)).toBe(associatedTokenAddress(WALLET, QUOTE, PROGRAM.token2022));
+    expect(at(13)).toBe(buyback);
+    const sell = pumpSellInstructions({ ...accounts, tokens: 1_000_000_000n, slippageBps: 500 })
+      .instructions[0]!;
+    expect(sell.accounts[10]!.pubkey).toBe(associatedTokenAddress(WALLET, QUOTE, PROGRAM.token2022));
   });
 
   it("picks a buyback recipient from Global, skipping empty slots", () => {
@@ -413,6 +440,23 @@ describe("checkJupiterFloor", () => {
       /can't check/,
     );
     expect(() => checkJupiterFloor([route(ok, 100), route(ok, 100)], ok, min, 100)).toThrow(/can't check/);
+  });
+  it("reads a token-ledger route only with its one ledger, and only when one is asked for", () => {
+    const ledgerRoute = route(ok, 100, [230, 121, 143, 80, 119, 159, 106, 170]);
+    const setLedger = {
+      programId: PROGRAM.jupiterV6,
+      accounts: [],
+      data: [228, 85, 185, 112, 78, 79, 77, 2],
+    };
+    expect(() => checkJupiterFloor([setLedger, ledgerRoute], ok, min, 100, { ledger: true })).not.toThrow();
+    expect(() => checkJupiterFloor([ledgerRoute], ok, min, 100, { ledger: true })).toThrow(/can't check/);
+    expect(() =>
+      checkJupiterFloor([setLedger, setLedger, ledgerRoute], ok, min, 100, { ledger: true }),
+    ).toThrow(/can't check/);
+    expect(() => checkJupiterFloor([setLedger, ledgerRoute], ok, min, 100)).toThrow(/can't check/);
+    expect(() => checkJupiterFloor([setLedger, route(ok, 100)], ok, min, 100, { ledger: true })).toThrow(
+      /can't check/,
+    );
   });
 });
 

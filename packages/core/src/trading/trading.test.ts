@@ -674,6 +674,50 @@ describe("swap guard: multi-hop routes", () => {
       ),
     ).resolves.toBeTruthy();
   });
+  it("lets a trade through a curve's quote coin add to the wallet's quote coin, never take from it", async () => {
+    const quoteCoin = hops[0]!;
+    const held = ata(quoteCoin);
+    const viaRpc = (after: bigint): GuardRpc => ({
+      getAccountsData: async (a) => a.map(() => null),
+      getParsedAccounts: async (a) =>
+        a.map((k) =>
+          k === wallet
+            ? { lamports: 1_000_000_000n, owner: SYSTEM_PROGRAM_ID, token: null }
+            : k === held
+              ? token(quoteCoin, 1_000n)
+              : null,
+        ),
+      simulateParsed: async (_b64, a) => ({
+        error: null,
+        logs: [],
+        accounts: a.map((k) =>
+          k === wallet
+            ? { lamports: 1_000_000_000n - 100_000_000n, owner: SYSTEM_PROGRAM_ID, token: null }
+            : k === ata(mint)
+              ? token(mint, 5_000n)
+              : k === held
+                ? token(quoteCoin, after)
+                : null,
+        ),
+      }),
+    });
+    const holding: InstructionSpec = {
+      ...jupiter,
+      accounts: [
+        { pubkey: held, writable: true },
+        { pubkey: ata(mint), writable: true },
+      ],
+    };
+    const viaBuy = { ...buy, via: quoteCoin };
+    await expect(guardSwapTransaction(viaRpc(1_007n), tx(holding), wallet, viaBuy)).resolves.toBeTruthy();
+    await expect(guardSwapTransaction(viaRpc(993n), tx(holding), wallet, viaBuy)).rejects.toThrow(
+      /another position's balance/,
+    );
+    // Without `via` the quote coin is any other position: it may not change at all.
+    await expect(guardSwapTransaction(viaRpc(1_007n), tx(holding), wallet, buy)).rejects.toThrow(
+      /another position's balance/,
+    );
+  });
   it("refuses a hop account that isn't the wallet's alone, or too many of them", async () => {
     const stranger = generateWalletKeypair().publicKey;
     await expect(

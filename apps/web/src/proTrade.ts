@@ -828,6 +828,11 @@ export interface BuiltTrade {
   transaction: string;
   lastValidBlockHeight: number;
   route: "jupiter" | "pump";
+  /**
+   * A curve quoted in another coin: that coin's mint. The build swaps SOL to it with Jupiter and
+   * buys on the curve with it, or sells on the curve and swaps what that paid back to SOL.
+   */
+  via?: string;
   quotedOut: string;
   minOut: string;
   tipLamports: string;
@@ -961,9 +966,15 @@ const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
  * Their arguments end in in_amount (u64), quoted_out (u64), slippage_bps (u16), platform_fee_bps (u8).
  */
 const JUPITER_ROUTES = new Map([
-  ["229,23,203,151,122,227,173,42", { source: 2, dest: 3 }], // route: user_source/destination_token_account
-  ["193,32,155,51,65,214,156,129", { source: 3, dest: 6 }], // shared_accounts_route: source/destination_token_account
+  ["229,23,203,151,122,227,173,42", { source: 2, dest: 3, ledger: false }], // route: user_source/destination_token_account
+  ["193,32,155,51,65,214,156,129", { source: 3, dest: 6, ledger: false }], // shared_accounts_route: source/destination_token_account
+  // The same swapping what a token ledger measured, for a curve sale's quote coin: no in_amount,
+  // their arguments end in quoted_out, slippage_bps, platform_fee_bps.
+  ["150,86,71,116,167,93,14,104", { source: 2, dest: 3, ledger: true }], // route_with_token_ledger
+  ["230,121,143,80,119,159,106,170", { source: 3, dest: 6, ledger: true }], // shared_accounts_route_with_token_ledger
 ]);
+/** Jupiter's set_token_ledger: [token_ledger, token_account]. */
+const JUPITER_SET_LEDGER = "228,85,185,112,78,79,77,2";
 /** Pump.fun v3: buy_exact_quote_in_v3 (sol in, min tokens) and sell_v3 (tokens, min sol). */
 const PUMP_BUY = "225,247,80,30,213,179,132,136";
 const PUMP_SELL = "28,146,222,119,38,196,105,213";
@@ -979,6 +990,11 @@ export interface TradeCheck {
   /** The wallet's wrapped-SOL accounts and its accounts for the coin (solanaPda.ts). */
   ownWrappedSol: string[];
   ownCoinAccounts: string[];
+  /**
+   * A curve quoted in another coin (BuiltTrade.via): the wallet's accounts for that coin. The
+   * build is then two swaps, Jupiter's and the curve's, through those accounts.
+   */
+  ownViaAccounts?: string[];
 }
 
 /**
@@ -996,6 +1012,12 @@ export interface TradeCheck {
  * that side (wrapped SOL for a buy, the coin for a sale), and no more SOL wrapped than a buy spends. What a
  * route's quote should be the browser can't know: the API's guard and simulation check that.
  * Returns why it isn't fine, or null. (The wallet's own preview still shows what it does.)
+ *
+ * Through a curve's quote coin (`ownViaAccounts`), it is two swaps in order. A buy: Jupiter swaps
+ * the SOL asked into the wallet's quote-coin account, then the curve spends no more of it than
+ * that swap's on-chain minimum, so the quote coin the wallet already held is never spent. A sale:
+ * a token ledger on the quote-coin account, the curve sells the coin asked into it, then Jupiter
+ * swaps only what the ledger measured to the wallet's wrapped SOL.
  */
 export function tradeProblem(tx: Uint8Array, owner: string, trade: TradeCheck): string | null {
   const own = new Set([owner, ...trade.ownWrappedSol]);
@@ -1031,6 +1053,13 @@ export function tradeProblem(tx: Uint8Array, owner: string, trade: TradeCheck): 
     let tips = 0n;
     let wrapped = 0n;
     let swaps = 0;
+    const via = trade.ownViaAccounts;
+    // Where each step of a two-swap build sits, and what the curve may spend of Jupiter's output.
+    let jupiterAt = -1;
+    let pumpAt = -1;
+    let ledgerAt = -1;
+    let jupiterFloor = -1n;
+    let curveSpend = 0n;
     let unitLimit = DEFAULT_UNIT_LIMIT;
     let unitPrice = 0n;
     const ixCount = shortVec();
@@ -1091,12 +1120,35 @@ export function tradeProblem(tx: Uint8Array, owner: string, trade: TradeCheck): 
       const u64At = (offset: number) => view.getBigUint64(offset, true);
       const discriminator = Array.from(d.subarray(0, 8)).join(",");
       if (program === JUPITER) {
+        if (discriminator === JUPITER_SET_LEDGER) {
+          if (!via || trade.side !== "sell" || ledgerAt >= 0 || !via.includes(acct(1)))
+            return "it has a Jupiter step this trade doesn't need";
+          ledgerAt = i;
+          continue;
+        }
         const at = JUPITER_ROUTES.get(discriminator);
         if (at === undefined || d.length < 8 + 19) return "it has a Jupiter step this trade doesn't need";
         swaps++;
         if (d[d.length - 1] !== 0) return "Jupiter would take a platform fee";
-        if (view.getUint16(d.length - 3, true) > trade.slippageBps)
-          return "it allows more slippage than you set";
+        const slippage = view.getUint16(d.length - 3, true);
+        if (slippage > trade.slippageBps) return "it allows more slippage than you set";
+        if (via) {
+          // Buy: the SOL asked into the quote coin. Sale: what the curve paid, back to SOL.
+          if (at.ledger !== (trade.side === "sell")) return "it has a Jupiter step this trade doesn't need";
+          if (jupiterAt >= 0) return "it isn't exactly one swap on each side";
+          jupiterAt = i;
+          const [from, to] = trade.side === "buy" ? [trade.ownWrappedSol, via] : [via, trade.ownWrappedSol];
+          if (!from.includes(acct(at.source)))
+            return "it would spend from an account other than the one this trade uses";
+          if (!to.includes(acct(at.dest))) return "what it buys wouldn't land in your wallet";
+          if (trade.side === "buy") {
+            const inAmount = u64At(d.length - 19);
+            if (inAmount !== trade.amount) return "its amount isn't the one you asked for";
+            jupiterFloor = (u64At(d.length - 11) * BigInt(10_000 - slippage)) / 10_000n;
+          }
+          continue;
+        }
+        if (at.ledger) return "it has a Jupiter step this trade doesn't need";
         const inAmount = u64At(d.length - 19);
         if (trade.all ? inAmount <= 0n : inAmount !== trade.amount)
           return "its amount isn't the one you asked for";
@@ -1116,6 +1168,20 @@ export function tradeProblem(tx: Uint8Array, owner: string, trade: TradeCheck): 
         if (!side || d.length < 24) return "it has a Pump.fun step this trade doesn't need";
         swaps++;
         if (side !== trade.side) return "it's a different trade from the one you asked for";
+        if (via) {
+          if (pumpAt >= 0) return "it isn't exactly one swap on each side";
+          pumpAt = i;
+          // v3's user accounts: the coin's (10th) and the quote coin's (11th), both the wallet's own.
+          if (!trade.ownCoinAccounts.includes(acct(9)) || !via.includes(acct(10)))
+            return "what it buys wouldn't land in your wallet";
+          if (u64At(16) <= 0n) return "it has no minimum, so any price would do";
+          if (side === "buy") {
+            curveSpend = u64At(8);
+            if (curveSpend <= 0n) return "its amount isn't the one you asked for";
+          } else if (trade.all ? u64At(8) <= 0n : u64At(8) !== trade.amount)
+            return "its amount isn't the one you asked for";
+          continue;
+        }
         const amount = u64At(8);
         if (trade.all && side === "sell" ? amount <= 0n : amount !== trade.amount)
           return "its amount isn't the one you asked for";
@@ -1123,7 +1189,15 @@ export function tradeProblem(tx: Uint8Array, owner: string, trade: TradeCheck): 
         continue;
       }
     }
-    if (swaps !== 1) return "it isn't exactly one swap";
+    if (via) {
+      if (swaps !== 2 || jupiterAt < 0 || pumpAt < 0) return "it isn't exactly one swap on each side";
+      if (trade.side === "buy") {
+        if (jupiterAt > pumpAt) return "its swaps are out of order";
+        // Never more than Jupiter's swap is sure to deliver: the quote coin already held stays.
+        if (curveSpend > jupiterFloor) return "it would spend quote coin you already held";
+      } else if (!(ledgerAt >= 0 && ledgerAt < pumpAt && pumpAt < jupiterAt))
+        return "its swaps are out of order";
+    } else if (swaps !== 1) return "it isn't exactly one swap";
     // SOL wrapped for the swap: no more than a buy spends, none at all for a sale.
     if (wrapped > (trade.side === "buy" ? trade.amount : 0n))
       return "it moves more SOL than you asked to spend";
@@ -1198,6 +1272,7 @@ export async function runTrade(
     slippageBps: Math.round(input.settings.slippagePct * 100),
     ownWrappedSol: ownWrappedSolAccounts(input.owner),
     ownCoinAccounts: ownTokenAccounts(input.owner, input.mint),
+    ...(built.via ? { ownViaAccounts: ownTokenAccounts(input.owner, built.via) } : {}),
   });
   if (problem) throw new TradeError(`The trade built for you looks wrong (${problem}), so it wasn't signed.`);
   onStage("signing", built);

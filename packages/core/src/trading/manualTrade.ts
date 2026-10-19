@@ -2,13 +2,17 @@ import { TransientError } from "./errors.js";
 import { heliusPriorityFeeEstimate, isHeliusRpcUrl, type HeliusPriorityLevel } from "./heliusPriorityFee.js";
 import { NoRouteError, RateLimitedError, WSOL_MINT, type SwapQuote } from "./jupiterSwap.js";
 import {
+  curveQuoteToken,
   curveRefusal,
+  curveTokensOut,
   parsePumpCurve,
   pumpBuyInstructions,
   pumpCurveAddress,
   pumpBuybackRecipient,
+  pumpBuybackRecipients,
   pumpSellInstructions,
   PUMP_GLOBAL,
+  type PumpCurve,
 } from "./pumpCurve.js";
 import { pickSenderTipAccount, SENDER_MIN_TIP_LAMPORTS, type SenderSpeed } from "./sender.js";
 import {
@@ -63,11 +67,14 @@ export interface ManualTradeJupiter {
     amount: bigint;
     slippageBps: number;
     restrictIntermediateTokens?: boolean;
+    maxAccounts?: number;
+    onlyDirectRoutes?: boolean;
   }): Promise<SwapQuote>;
-  swapInstructions(input: { quote: SwapQuote; userPublicKey: string }): Promise<{
+  swapInstructions(input: { quote: SwapQuote; userPublicKey: string; useTokenLedger?: boolean }): Promise<{
     instructions: InstructionSpec[];
     lookupTables: string[];
     computeUnitLimit: number | null;
+    ledgerAt?: number;
   }>;
 }
 
@@ -90,6 +97,11 @@ export interface ManualTrade {
   transaction: string;
   lastValidBlockHeight: number;
   route: "jupiter" | "pump";
+  /**
+   * A curve quoted in another coin: that coin's mint. The transaction swaps SOL to it with Jupiter
+   * and buys on the curve with it (a sale: sells on the curve, then swaps all it paid back to SOL).
+   */
+  via?: string;
   /** What the route expects out (raw tokens for a buy, lamports for a sale) and the least it may give. */
   quotedOut: string;
   minOut: string;
@@ -131,6 +143,21 @@ const MIN_UNITS = 100_000;
 const MAX_UNITS = 1_400_000;
 /** Jupiter's exact-in route variants, whose arguments end in quoted_out (u64), slippage (u16), fee (u8). */
 const JUPITER_EXACT_IN_ROUTES = new Set(["route", "shared_accounts_route"]);
+/** The same, swapping what a token ledger measured (a curve sale's quote coin), with the same tail. */
+const JUPITER_LEDGER_ROUTES = new Set(["route_with_token_ledger", "shared_accounts_route_with_token_ledger"]);
+/** Jupiter's set_token_ledger: records the input account's balance for the ledger route. */
+export const JUPITER_SET_TOKEN_LEDGER = [228, 85, 185, 112, 78, 79, 77, 2];
+/**
+ * The slippage on the Jupiter half of a trade through a curve's quote coin (PUMP, USDC): those
+ * pools are deep, and on a buy the curve spends that half's minimum, so whatever it delivers above
+ * that stays in the wallet as the quote coin. Kept small so that remainder is small too.
+ */
+const HOP_SLIPPAGE_BPS = 50;
+/**
+ * The most accounts Jupiter's half of such a trade may name: the curve's own instruction takes 17
+ * and the transaction is 1,232 bytes at most.
+ */
+const HOP_MAX_ACCOUNTS = 30;
 
 /** Instructions the guard reads: their accounts stay out of lookup tables. */
 const STATIC_PROGRAMS = new Set<string>([
@@ -182,6 +209,7 @@ export async function buildManualTrade(
   let units: number;
   let quotedOut: bigint;
   let minOut: bigint;
+  let via: string | undefined;
   try {
     const quote = await quoteInSol(
       deps.jupiter,
@@ -211,38 +239,46 @@ export async function buildManualTrade(
     if (!(err instanceof NoRouteError || err instanceof RateLimitedError || err instanceof TransientError))
       throw err;
     const curve = await readCurve(deps.rpc, req.mint, deps.random);
-    const refusal = curveRefusal(curve.curve);
+    const refusal = curveRefusal(curve.curve, { quoteToken: true });
     if (refusal || !curve.curve || !curve.buyback)
       throw err instanceof NoRouteError
         ? new TradeRejected(`no route for this token (${refusal ?? "Pump.fun's fee recipients unreadable"})`)
         : err;
     route = "pump";
-    const accounts = {
-      wallet: req.wallet,
-      mint: req.mint,
-      tokenProgram: mintInfo.program,
-      curve: curve.curve,
-      buybackFeeRecipient: curve.buyback,
-    };
-    if (buy) {
-      const b = (() => {
-        try {
-          return pumpBuyInstructions({ ...accounts, solIn: req.amount, slippageBps: req.slippageBps });
-        } catch (err) {
-          // Too small a buy for the curve to give a token: the trader's input, not a build failure.
-          throw new TradeRejected(err instanceof Error ? err.message : String(err));
-        }
-      })();
-      swapIxs = b.instructions;
-      minOut = b.minTokens;
-      units = PUMP_BUY_UNITS;
+    const quoteMint = curveQuoteToken(curve.curve);
+    if (quoteMint) {
+      // Quoted in another coin: SOL to it with Jupiter, then the curve, in one transaction.
+      const hop = await buildCurveHop(deps, req, mintInfo.program, curve.curve, curve.recipients, quoteMint);
+      via = quoteMint;
+      ({ swapIxs, tables, units, quotedOut, minOut } = hop);
     } else {
-      const s = pumpSellInstructions({ ...accounts, tokens: req.amount, slippageBps: req.slippageBps });
-      swapIxs = s.instructions;
-      minOut = s.minSol;
-      units = PUMP_SELL_UNITS;
+      const accounts = {
+        wallet: req.wallet,
+        mint: req.mint,
+        tokenProgram: mintInfo.program,
+        curve: curve.curve,
+        buybackFeeRecipient: curve.buyback,
+      };
+      if (buy) {
+        const b = (() => {
+          try {
+            return pumpBuyInstructions({ ...accounts, solIn: req.amount, slippageBps: req.slippageBps });
+          } catch (err) {
+            // Too small a buy for the curve to give a token: the trader's input, not a build failure.
+            throw new TradeRejected(err instanceof Error ? err.message : String(err));
+          }
+        })();
+        swapIxs = b.instructions;
+        minOut = b.minTokens;
+        units = PUMP_BUY_UNITS;
+      } else {
+        const s = pumpSellInstructions({ ...accounts, tokens: req.amount, slippageBps: req.slippageBps });
+        swapIxs = s.instructions;
+        minOut = s.minSol;
+        units = PUMP_SELL_UNITS;
+      }
+      quotedOut = (minOut * 10_000n) / BigInt(10_000 - req.slippageBps);
     }
-    quotedOut = (minOut * 10_000n) / BigInt(10_000 - req.slippageBps);
   }
 
   const writable = [
@@ -264,17 +300,29 @@ export async function buildManualTrade(
   const price = priorityPrice(units, req.speed, estimate, req.priorityFeeLamports);
   const priorityFee = priorityFeeOf(units, price);
 
-  const tx = buildV0Transaction(
-    req.wallet,
-    blockhash.blockhash,
-    [...computeBudgetInstructions(units, price), ...swapIxs, tipIx],
-    resolved,
-    STATIC_PROGRAMS,
-  );
+  let tx: Uint8Array;
+  try {
+    tx = buildV0Transaction(
+      req.wallet,
+      blockhash.blockhash,
+      [...computeBudgetInstructions(units, price), ...swapIxs, tipIx],
+      resolved,
+      STATIC_PROGRAMS,
+    );
+  } catch (err) {
+    // Two swaps in one transaction leave little room: Jupiter's pool for the quote coin can be one
+    // with too many accounts at times.
+    if (via && err instanceof Error && /too large/.test(err.message))
+      throw new TransientError(
+        "the swap through this coin's quote coin didn't fit in one transaction: try again",
+      );
+    throw err;
+  }
   const limits = {
     maxExternalLamports: tip,
     maxPriorityFeeLamports: priorityFee,
-    ...(route === "jupiter" ? { maxSlippageBps: req.slippageBps } : {}),
+    ...(route === "jupiter" || via ? { maxSlippageBps: req.slippageBps } : {}),
+    ...(via ? { via } : {}),
   };
   const expect: TradeExpectation = buy
     ? {
@@ -297,6 +345,7 @@ export async function buildManualTrade(
     transaction: Buffer.from(tx).toString("base64"),
     lastValidBlockHeight: blockhash.lastValidBlockHeight,
     route,
+    ...(via ? { via } : {}),
     quotedOut: quotedOut.toString(),
     minOut: minOut.toString(),
     tipLamports: tip.toString(),
@@ -313,7 +362,7 @@ export async function buildManualTrade(
  */
 export async function quoteInSol(
   jupiter: Pick<ManualTradeJupiter, "quote">,
-  input: { inputMint: string; outputMint: string; amount: bigint; slippageBps: number },
+  input: { inputMint: string; outputMint: string; amount: bigint; slippageBps: number; maxAccounts?: number },
   /** True when the caller has a better route than an open one (the coin's SOL curve): no retry. */
   preferOwnRoute?: () => Promise<boolean>,
 ): Promise<SwapQuote> {
@@ -349,13 +398,25 @@ export function checkJupiterFloor(
   quotedOut: bigint,
   minOut: bigint,
   slippageBps: number,
+  /** A ledger route (a curve sale's quote coin to SOL), with its one set_token_ledger. */
+  opts: { ledger?: boolean } = {},
 ): void {
-  const routes = ixs
-    .filter((ix) => ix.programId === PROGRAM.jupiterV6)
+  const isLedger = (ix: InstructionSpec) => JUPITER_SET_TOKEN_LEDGER.every((b, i) => ix.data[i] === b);
+  const jupiter = ixs.filter((ix) => ix.programId === PROGRAM.jupiterV6);
+  const ledgers = jupiter.filter(isLedger);
+  const routes = jupiter
+    .filter((ix) => !isLedger(ix))
     .map((ix) => ({ ix, route: readJupiterRoute(Uint8Array.from(ix.data)) }));
   const read = routes.filter((r) => r.route !== null);
-  // Every Jupiter instruction must be the one route read here: one it can't parse goes unchecked.
-  if (read.length !== 1 || routes.length !== 1 || !JUPITER_EXACT_IN_ROUTES.has(read[0]!.route!.name))
+  const names = opts.ledger ? JUPITER_LEDGER_ROUTES : JUPITER_EXACT_IN_ROUTES;
+  // Every Jupiter instruction must be the one route read here (and the ledger, when one is
+  // asked for): one it can't parse goes unchecked.
+  if (
+    read.length !== 1 ||
+    routes.length !== 1 ||
+    ledgers.length !== (opts.ledger ? 1 : 0) ||
+    !names.has(read[0]!.route!.name)
+  )
     throw new GuardRefusal("Jupiter returned a route this can't check");
   const data = read[0]!.ix.data;
   let onChainQuote = 0n;
@@ -449,7 +510,155 @@ async function readCurve(rpc: ManualTradeRpc, mint: string, random?: () => numbe
   if (!data) throw new TransientError("couldn't read the bonding curve");
   const curve = data[0] ? parsePumpCurve(address, data[0]) : null;
   const buyback = data[1] ? pumpBuybackRecipient(data[1], random) : null;
-  return { curve, buyback };
+  const recipients = data[1] ? pumpBuybackRecipients(data[1]) : [];
+  return { curve, buyback, recipients };
+}
+
+/**
+ * A trade on a curve quoted in another coin (PUMP, USDC), in SOL: the trader pays and receives
+ * SOL, and the quote coin is swapped with Jupiter in the same transaction.
+ *
+ *   Buy:  Jupiter SOL -> quote coin, then the curve spends that swap's minimum on the coin. What
+ *         the swap gives above its minimum (within HOP_SLIPPAGE_BPS) stays in the wallet as the
+ *         quote coin: the curve's spend has to be fixed when the transaction is built.
+ *   Sale: the curve sells the coin for the quote coin, then Jupiter swaps exactly what the sale
+ *         paid back to SOL (a token-ledger route), so none of it is left over.
+ *
+ * Pump.fun's own multi_hop_swap covers coins quoted in a Pump.fun coin, but not PUMP or USDC
+ * (it starts from a Pump.fun pool or curve), so Jupiter takes the SOL half here.
+ */
+async function buildCurveHop(
+  deps: { rpc: ManualTradeRpc; jupiter: ManualTradeJupiter; random?: () => number },
+  req: ManualTradeRequest,
+  tokenProgram: string,
+  curve: PumpCurve,
+  recipients: string[],
+  quoteMint: string,
+): Promise<{
+  swapIxs: InstructionSpec[];
+  tables: string[];
+  units: number;
+  quotedOut: bigint;
+  minOut: bigint;
+}> {
+  const quoteInfo = await deps.rpc.getMintInfo(quoteMint);
+  if (!quoteInfo) throw new TransientError("couldn't read the curve's quote coin");
+  if (quoteInfo.program !== PROGRAM.token && quoteInfo.program !== PROGRAM.token2022)
+    throw new TradeRejected("the curve's quote coin isn't a token this can trade");
+  const quote = { mint: quoteMint, program: quoteInfo.program };
+  // The buyback fee is paid in the quote coin, to a recipient's account for it, which the trade
+  // never creates (and the guard wouldn't let it open someone else's): one that exists already.
+  const buybackAccounts = recipients.map((r) => associatedTokenAddress(r, quoteMint, quote.program));
+  const existing = buybackAccounts.length > 0 ? await deps.rpc.getAccountsData(buybackAccounts) : [];
+  if (!existing) throw new TransientError("couldn't read Pump.fun's fee recipients");
+  const open = buybackAccounts.filter((_, i) => existing[i] !== null);
+  if (open.length === 0)
+    throw new TradeRejected(
+      "no route for this token (Pump.fun's fee recipients have no account for its quote coin)",
+    );
+  const buyback = open[Math.floor((deps.random ?? Math.random)() * open.length)]!;
+  const accounts = {
+    wallet: req.wallet,
+    mint: req.mint,
+    tokenProgram,
+    curve,
+    buybackFeeRecipient: buyback,
+    quote,
+  };
+  const hopSlippage = Math.min(req.slippageBps, HOP_SLIPPAGE_BPS);
+  // One pool between SOL and the quote coin when there is one (the fewest accounts: the curve's
+  // instruction needs room in the transaction too), else a short route.
+  const hopQuote = async (input: {
+    inputMint: string;
+    outputMint: string;
+    amount: bigint;
+    slippageBps: number;
+  }) => {
+    try {
+      return await deps.jupiter.quote({ ...input, onlyDirectRoutes: true });
+    } catch (err) {
+      if (!(err instanceof NoRouteError)) throw err;
+      return quoteInSol(deps.jupiter, { ...input, maxAccounts: HOP_MAX_ACCOUNTS });
+    }
+  };
+  const jupiterIxs = (ixs: InstructionSpec[]) => ixs.filter((ix) => ix.programId !== PROGRAM.computeBudget);
+  const unitsWith = (jupiterLimit: number | null, curveUnits: number) => {
+    const limit = Math.ceil((jupiterLimit ?? DEFAULT_JUPITER_UNITS) * JUPITER_UNIT_SLACK);
+    return Math.min(MAX_UNITS, Math.max(MIN_UNITS, limit + JUPITER_UNIT_EXTRA + curveUnits));
+  };
+
+  if (req.side === "buy") {
+    const q = await hopQuote({
+      inputMint: WSOL_MINT,
+      outputMint: quoteMint,
+      amount: req.amount,
+      slippageBps: hopSlippage,
+    });
+    const built = await deps.jupiter.swapInstructions({ quote: q, userPublicKey: req.wallet });
+    const swapIxs = jupiterIxs(built.instructions);
+    const quoteOut = BigInt(q.outAmount);
+    checkJupiterFloor(swapIxs, quoteOut, BigInt(q.otherAmountThreshold), hopSlippage);
+    // What the swap is sure to deliver, rounded down (Jupiter's own threshold rounds up): the curve
+    // spends no more, so it never dips into quote coin the wallet already held.
+    const quoteMin = (quoteOut * BigInt(10_000 - hopSlippage)) / 10_000n;
+    const b = (() => {
+      try {
+        return pumpBuyInstructions({ ...accounts, solIn: quoteMin, slippageBps: req.slippageBps });
+      } catch (err) {
+        throw new TradeRejected(err instanceof Error ? err.message : String(err));
+      }
+    })();
+    return {
+      swapIxs: [...swapIxs, ...b.instructions],
+      tables: built.lookupTables,
+      units: unitsWith(built.computeUnitLimit, PUMP_BUY_UNITS),
+      quotedOut: curveTokensOut(curve, quoteOut),
+      minOut: b.minTokens,
+    };
+  }
+
+  const s = pumpSellInstructions({ ...accounts, tokens: req.amount, slippageBps: req.slippageBps });
+  if (s.minSol <= 0n) throw new TradeRejected("the sale is too small to get anything back");
+  const q = await hopQuote({
+    inputMint: quoteMint,
+    outputMint: WSOL_MINT,
+    amount: s.minSol,
+    slippageBps: hopSlippage,
+  });
+  const built = await deps.jupiter.swapInstructions({
+    quote: q,
+    userPublicKey: req.wallet,
+    useTokenLedger: true,
+  });
+  const ixs = jupiterIxs(built.instructions);
+  const ledgerAt = ixs.findIndex((ix) => JUPITER_SET_TOKEN_LEDGER.every((b, i) => ix.data[i] === b));
+  if (built.ledgerAt === undefined || ledgerAt < 0)
+    throw new GuardRefusal("Jupiter returned no token ledger");
+  const quoteOut = BigInt(q.outAmount);
+  const minOut = BigInt(q.otherAmountThreshold);
+  checkJupiterFloor(ixs, quoteOut, minOut, hopSlippage, { ledger: true });
+  // The wallet's account for the quote coin must exist before the curve pays into it.
+  const openQuote: InstructionSpec = {
+    programId: PROGRAM.ata,
+    accounts: [
+      { pubkey: req.wallet, writable: true, signer: true },
+      { pubkey: associatedTokenAddress(req.wallet, quoteMint, quote.program), writable: true },
+      { pubkey: req.wallet, writable: false },
+      { pubkey: quoteMint, writable: false },
+      { pubkey: PROGRAM.system, writable: false },
+      { pubkey: quote.program, writable: false },
+    ],
+    data: [1], // CreateIdempotent
+  };
+  return {
+    // The ledger records the quote coin's balance, the curve pays into it, and the route swaps
+    // exactly what came in.
+    swapIxs: [openQuote, ...ixs.slice(0, ledgerAt + 1), ...s.instructions, ...ixs.slice(ledgerAt + 1)],
+    tables: built.lookupTables,
+    units: unitsWith(null, PUMP_SELL_UNITS),
+    quotedOut: (quoteOut * 10_000n) / BigInt(10_000 - req.slippageBps),
+    minOut,
+  };
 }
 
 /** Lighthouse, whose assertion instructions Phantom and other wallets add to what they sign. */
