@@ -11,6 +11,7 @@ import {
 } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
 import { liveCurves } from "../liveCurve.js";
+import { liveTrades } from "../liveTrades.js";
 
 /**
  * How stale a job's lastRunAt can get before we call it out - generous multiples of each job's
@@ -51,6 +52,9 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   // Every TELEGRAM_DISPATCH_INTERVAL_SECONDS (10 by default). While it is down linked Telegram
   // chats hear nothing, and nothing else notices.
   "telegram-dispatch": 10 * 60_000,
+  // Every WEB_PUSH_DISPATCH_INTERVAL_SECONDS (10 by default). While it is down phones and closed
+  // dashboards get no push notifications; an open dashboard still notifies on its own.
+  "web-push-dispatch": 10 * 60_000,
   // Every minute: says when a stage of the alert path stops producing (pipelineWatchJob.ts).
   "pipeline-watch": 10 * 60_000,
   // Every TRADING_BOT_INTERVAL_SECONDS (5 by default) when the trading bot is on; while it is down
@@ -225,11 +229,12 @@ export async function registerHealthRoutes(
         () => false,
       );
       if (!db) return reply.code(503).send({ ok: false, db: false });
-      return { ok: true, db: true, liveCurves: liveCurves().stats() };
+      return { ok: true, db: true, liveCurves: liveCurves().stats(), liveTrades: liveTrades().stats() };
     }
     // The charts' live curve tails on this instance (liveCurve.ts): curves followed, how many the
-    // chart socket covers, and that socket's traffic and estimated Helius credits since boot.
-    return { ok: true, liveCurves: liveCurves().stats() };
+    // chart socket covers, and that socket's traffic and estimated Helius credits since boot. The
+    // token pages' live trades (liveTrades.ts) likewise, for their own socket.
+    return { ok: true, liveCurves: liveCurves().stats(), liveTrades: liveTrades().stats() };
   });
 
   /**

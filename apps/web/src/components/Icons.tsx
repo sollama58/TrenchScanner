@@ -90,6 +90,22 @@ export const TrophyIcon = (p: IconProps) => (
   </Svg>
 );
 
+/** Hide a token from the feed: an eye struck through. */
+export const EyeOffIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M10.6 5.1A10 10 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17 17 0 0 0 2.5 12s3.5 7 9.5 7a9.6 9.6 0 0 0 5.4-1.6" />
+    <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2M3 3l18 18" />
+  </Svg>
+);
+
+/** Show a hidden token again: an eye. */
+export const EyeIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z" />
+    <circle cx="12" cy="12" r="3" />
+  </Svg>
+);
+
 export const CopyIcon = (p: IconProps) => (
   <Svg {...p}>
     <rect x="9" y="9" width="11" height="11" rx="2" />

@@ -20,6 +20,7 @@ import { SharedCache } from "../sharedCache.js";
 import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
 import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
 import { liveCurves, MAX_WAIT_MS, type LiveCurveAnswer } from "../liveCurve.js";
+import { liveTrades, type LiveTradesAnswer } from "../liveTrades.js";
 import {
   CandleCache,
   FIRST_MINUTES_MS,
@@ -579,6 +580,31 @@ export async function registerTokenRoutes(
   );
 
   /**
+   * The token page's live trades: the coin's buys and sells since `after` (a cursor from the last
+   * answer), read off the Helius stream's logs (liveTrades.ts). `wait=1` holds the ask for the next
+   * trade, up to MAX_WAIT_MS, as the chart's live tail does; long-polled like it, so the same limit.
+   */
+  app.get(
+    "/:mintAddress/trades/live",
+    { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } },
+    async (request, reply): Promise<LiveTradesAnswer | undefined> => {
+      const { mintAddress } = request.params as { mintAddress: string };
+      if (!MINT_RE.test(mintAddress)) {
+        reply.code(400).send({ error: "not a valid mint" });
+        return;
+      }
+      if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
+      reply.header("Cache-Control", "no-store");
+      return readTokenTradesLive(
+        mintAddress,
+        liveAfter(request.query),
+        liveWait(request.query),
+        closedSignal(reply),
+      );
+    },
+  );
+
+  /**
    * A model-alerted coin's bubble map over its top 50 holders (BubbleMapHolders): the top 25 and
    * every known wallet past them, clustered alike, now and as it stood at the coin's first call.
    * Null for either the coin has none of.
@@ -830,6 +856,18 @@ export async function readTokenLive(
   if (!(await isTracked(mintAddress)))
     return { mint: mintAddress, source: "none", complete: true, coveredFrom: null, readAt: null, ticks: [] };
   return liveCurves().read(mintAddress, after, waitMs, signal);
+}
+
+/** The token page's live trades (LiveTradesAnswer); as the live tail, only a coin on Token is followed. */
+export async function readTokenTradesLive(
+  mintAddress: string,
+  after: number,
+  waitMs = 0,
+  signal?: AbortSignal,
+): Promise<LiveTradesAnswer> {
+  if (!(await isTracked(mintAddress)))
+    return { status: "unavailable", since: null, cursor: 0, trades: [], held: false };
+  return liveTrades().read(mintAddress, after, waitMs, signal);
 }
 
 const weekLabels = new SharedCache<DayLabelRow[]>(TRACK_CACHE_MS);

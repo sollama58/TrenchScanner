@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
-import { put, type AlertPrefs, type Card, type MatchPage, type Settings } from "./api";
+import { post, put, type AlertPrefs, type Card, type MatchPage, type Settings } from "./api";
 import { cachedGet, peek } from "./cache";
 import { useNudgeStream } from "./hooks";
 import { playAlertSound, unlockAudio } from "./alertSounds";
 import { tokenThumb, usd } from "./format";
 import { adoptAppearance, appearanceVersion, useAppearance } from "./appearance";
+import { adoptHiddenTokens, hiddenTokensVersion } from "./hiddenTokens";
 import { openChaosTabs, thisBrowserIsDesktop } from "./chaosMode";
 import { belowMcapLine } from "./components/AlertCard";
 
@@ -47,11 +48,13 @@ function subscribe(listener: () => void) {
 export function loadSettings(force = false): Promise<void> {
   if (loading && !force) return loading;
   const lookVersion = appearanceVersion();
+  const hiddenVersion = hiddenTokensVersion();
   loading = cachedGet<Settings>(SETTINGS_PATH, force ? -1 : 0)
     .then((s) => {
       settings = s;
       // The feed's look rides along; a change made on this device since the request wins.
       adoptAppearance(s.appearance, lookVersion);
+      adoptHiddenTokens(s.hiddenTokens, hiddenVersion);
       emit();
     })
     .finally(() => {
@@ -163,6 +166,93 @@ function notificationWorker(): Promise<ServiceWorkerRegistration | null> {
 /** Registers the notification worker early, so the first alert doesn't wait on it. */
 export function prepareNotifications(): void {
   if (notificationState() === "granted") void notificationWorker();
+}
+
+// ---- Push notifications ----
+
+/**
+ * Whether this browser is subscribed to push for the signed-in account. While it is, alerts
+ * arrive as push notifications (the worker's web-push-dispatch, with this page closed or the
+ * phone locked too), so the open page only plays its sound and doesn't notify a second time.
+ */
+let pushActive = false;
+
+export function pushIsActive(): boolean {
+  return pushActive;
+}
+
+/** Whether this browser can take push at all (iOS: only from the Home Screen app, 16.4+). */
+export function pushSupported(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.isSecureContext &&
+    "serviceWorker" in navigator &&
+    "PushManager" in window &&
+    typeof Notification !== "undefined"
+  );
+}
+
+function urlBase64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
+  const padded = (base64 + "=".repeat((4 - (base64.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(padded);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
+
+function sameKey(a: ArrayBuffer | null | undefined, b: Uint8Array): boolean {
+  if (!a) return false;
+  const x = new Uint8Array(a);
+  return x.length === b.length && x.every((v, i) => v === b[i]);
+}
+
+let pushSync: Promise<void> = Promise.resolve();
+
+/**
+ * Subscribes this browser to push and registers it with the account when notifications are on
+ * and allowed, or unsubscribes it when they aren't. Safe to call often (every settings change and
+ * page load); calls run one after another. Called straight from the switch's click too, since
+ * Safari only lets a page subscribe inside a user gesture.
+ */
+export function syncPush(publicKey: string | null | undefined, wanted: boolean): Promise<void> {
+  pushSync = pushSync
+    .then(() => doSyncPush(publicKey ?? null, wanted))
+    .catch(() => {
+      pushActive = false;
+    });
+  return pushSync;
+}
+
+async function doSyncPush(publicKey: string | null, wanted: boolean): Promise<void> {
+  if (!pushSupported()) {
+    pushActive = false;
+    return;
+  }
+  const registration = await notificationWorker();
+  if (!registration) {
+    pushActive = false;
+    return;
+  }
+  const existing = await registration.pushManager.getSubscription();
+  const on = wanted && publicKey !== null && notificationState() === "granted";
+  if (!on) {
+    pushActive = false;
+    if (existing) {
+      await post("/settings/push/remove", { endpoint: existing.endpoint }).catch(() => undefined);
+      await existing.unsubscribe().catch(() => false);
+    }
+    return;
+  }
+  const key = urlBase64ToBytes(publicKey);
+  let sub = existing;
+  // A subscription made with an older key can't be sent to with the new one.
+  if (sub && !sameKey(sub.options.applicationServerKey, key)) {
+    await sub.unsubscribe().catch(() => false);
+    sub = null;
+  }
+  sub ??= await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+  await put("/settings/push", sub.toJSON());
+  pushActive = true;
 }
 
 export type NotifyResult = { ok: true } | { ok: false; reason: string };
@@ -361,6 +451,14 @@ export function AlertNotifier() {
     };
   }, []);
 
+  // Push: subscribed while notifications are on and allowed, unsubscribed when they're not.
+  const publicKey = s?.push?.publicKey ?? null;
+  const wantsPush = prefs !== null && prefs.browserNotifications;
+  const prefsLoaded = prefs !== null;
+  useEffect(() => {
+    if (prefsLoaded) void syncPush(publicKey, wantsPush);
+  }, [publicKey, wantsPush, notifies, prefsLoaded]);
+
   const busy = useRef(false);
   const again = useRef(false);
 
@@ -438,7 +536,8 @@ export function AlertNotifier() {
 function announce(p: AlertPrefs, toAnnounce: Card[]): void {
   if (toAnnounce.length === 0) return;
   if (p.soundEnabled) playAlertSound(p.sound, p.volume);
-  if (p.browserNotifications) {
+  // With push on, this browser gets the same alerts as push notifications (open or not).
+  if (p.browserNotifications && !pushIsActive()) {
     if (toAnnounce.length > MAX_NOTIFICATIONS) {
       void showNotification(
         `${toAnnounce.length} new alerts`,

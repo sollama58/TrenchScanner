@@ -61,6 +61,9 @@ REQUIRED=(
   "trenchscanner-trainer ANTHROPIC_API_KEY"
   "trenchscanner-api TELEGRAM_BOT_TOKEN"
   "trenchscanner-worker TELEGRAM_BOT_TOKEN"
+  "trenchscanner-api WEB_PUSH_PUBLIC_KEY"
+  "trenchscanner-worker WEB_PUSH_PUBLIC_KEY"
+  "trenchscanner-worker WEB_PUSH_PRIVATE_KEY"
   # The scanner's narrative prefetch (apps/worker/src/tokensage/prefetch.ts).
   "trenchscanner-worker TOKENSAGE_API_URL"
   "trenchscanner-worker TOKENSAGE_API_KEY"

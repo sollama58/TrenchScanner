@@ -5,7 +5,15 @@ import { SkeletonCards } from "../components/Skeleton";
 import { AboutModal } from "../components/AboutModal";
 import { introSeen, markIntroSeen } from "../intro";
 import { FeedStatsModal } from "../components/FeedStatsModal";
-import { ArrowRightIcon, BrainIcon, ChartIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";
+import {
+  ArrowRightIcon,
+  BrainIcon,
+  ChartIcon,
+  EyeOffIcon,
+  InfoIcon,
+  PaletteIcon,
+  RadarIcon,
+} from "../components/Icons";
 import { prefetch } from "../cache";
 import { useLiveMarketCaps, usePolling, usePollingAll, useNow, useNudgeStream } from "../hooks";
 import { FEED_PAGE_SIZE, fillPage, joinPages, MAX_FILL_PAGES, MAX_READ_PAGES, nextDepth } from "../feedFill";
@@ -17,6 +25,8 @@ import { ScanStatus } from "../components/ScanStatus";
 import { parseSearch } from "../caSearch";
 import { ScopeBoard } from "../components/ScopeBoard";
 import type { ScopeSettingsSection } from "../components/ScopeSettingsModal";
+import { HiddenTokensDialog } from "../components/HiddenTokensDialog";
+import { dueToUnhide, hideToken, unhideTokens, useHiddenTokenIds, useHiddenTokens } from "../hiddenTokens";
 
 /** Graded alerts below which the Stats button doesn't show a 2x rate (too early to mean much). */
 const MIN_TEASER = 10;
@@ -84,6 +94,10 @@ export function LiveTab({
     setCustomizing(false);
     setScopeSettings(null);
   };
+  // Tokens the user hid from Cards and Scope (user ask 2026-10-19), and the list to bring them back.
+  const hiddenTokens = useHiddenTokens();
+  const hiddenTokenIds = useHiddenTokenIds();
+  const [hiddenOpen, setHiddenOpen] = useState(false);
   const scope = view === "scope";
   // Scope has its own settings window (user ask 2026-10-18): Customize opens it while in Scope.
   const [scopeSettings, setScopeSettings] = useState<ScopeSettingsSection | null>(null);
@@ -147,14 +161,23 @@ export function LiveTab({
   // "Now" on each card, seconds old rather than as old as the last feed poll. A search ticks its
   // own cards (SearchResults), so the feed's tick rests meanwhile.
   const cards = useLiveMarketCaps(buffer, searching ? [] : tickIds);
+  // Hidden tokens come off the page like the low market caps below, older alerts moving up. With
+  // auto-unhide on, one that graduated or reached a new 2x, 4x or 10x comes back.
+  const unhiddenCards = useMemo(
+    () => (cards && hiddenTokenIds.size > 0 ? cards.filter((c) => !hiddenTokenIds.has(c.tokenId)) : cards),
+    [cards, hiddenTokenIds],
+  );
+  useEffect(() => {
+    if (cards) unhideTokens(dueToUnhide(hiddenTokens, cards));
+  }, [cards, hiddenTokens]);
   // The "hide below this market cap" setting only takes cards off the screen: the feed's stats and
   // grading are the API's, unchanged. Older alerts move up into the gaps, and a card that climbs
   // back over the line (with a margin, so a coin trading at the line doesn't flicker) takes its own
   // place again. Which cards were hidden last time carries over for that margin.
   const wasHidden = useRef<ReadonlySet<string>>(new Set());
   const filled = useMemo(
-    () => (cards ? fillPage(cards, look, page, wasHidden.current) : null),
-    [cards, look, page],
+    () => (unhiddenCards ? fillPage(unhiddenCards, look, page, wasHidden.current) : null),
+    [unhiddenCards, look, page],
   );
   useEffect(() => {
     wasHidden.current = filled?.hidden ?? new Set();
@@ -239,6 +262,7 @@ export function LiveTab({
         highConviction={highConviction}
       />
       <CustomizeDrawer open={customizing} onClose={closeCustomize} />
+      <HiddenTokensDialog open={hiddenOpen} onClose={() => setHiddenOpen(false)} now={now} />
       <AboutModal open={aboutOpen} onClose={closeAbout} targets={t} />
       <section className="panel feed">
         <header className="section-head">
@@ -309,6 +333,18 @@ export function LiveTab({
               <PaletteIcon size={14} />
               Customize
             </button>
+            {hiddenTokens.tokens.length > 0 && (
+              <button
+                type="button"
+                className={`ghost stats-btn${hiddenOpen ? " on" : ""}`}
+                aria-expanded={hiddenOpen}
+                onClick={() => setHiddenOpen(true)}
+                title="Tokens you hid from Cards and Scope: bring them back, or choose whether they come back by themselves"
+              >
+                <EyeOffIcon size={14} />
+                Hidden <span className="num">{hiddenTokens.tokens.length}</span>
+              </button>
+            )}
             {SHOW_HIGH_CONVICTION && (
               <button
                 type="button"
@@ -389,7 +425,14 @@ export function LiveTab({
               {...feedGridProps(look)}
             >
               {shownCards?.map((card) => (
-                <AlertCard key={card.id} card={card} now={now} labelSource hide={hidden} />
+                <AlertCard
+                  key={card.id}
+                  card={card}
+                  now={now}
+                  labelSource
+                  hide={hidden}
+                  onHide={() => hideToken(card, cards ?? [])}
+                />
               ))}
             </div>
             {hiddenCount > 0 && (
