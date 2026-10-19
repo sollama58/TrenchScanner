@@ -302,6 +302,18 @@ describe.skipIf(!dbAvailable)("admin model backups", () => {
         cookies,
       });
       expect(ok.statusCode).toBe(404);
+      // A database dump's name has dots: its challenge is issued and its signature checks out (409:
+      // no dumps bucket in tests). A path with a dot segment gets no challenge.
+      const dump = "/admin/db-dumps/trenchscanner-20261019T045033Z.dump/download";
+      const d = await signed(app, cookies, "GET", dump, {});
+      expect(d).not.toBeNull();
+      const dumpOk = await app.inject({
+        method: "GET",
+        url: `${dump}?nonce=${encodeURIComponent(d!.nonce)}&signature=${encodeURIComponent(d!.signature)}`,
+        cookies,
+      });
+      expect(dumpOk.statusCode).toBe(409);
+      expect(await signed(app, cookies, "GET", "/admin/db-dumps/../download", {})).toBeNull();
     } finally {
       await app.close();
     }

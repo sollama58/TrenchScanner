@@ -35,11 +35,16 @@ export const confirmationSchema = z.object({
 });
 
 const challengeSchema = z.object({
-  // GET only for a download (an admin table backup), whose confirmation rides in the query.
+  // GET only for a download (an admin table backup or database dump), whose confirmation rides in
+  // the query.
   method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
   // Or pairing a phone (/auth/link/code): the phone gets a year-long session (full admin with no
   // signatures of its own, for an admin), so minting one is signed for like the actions it could do.
-  path: z.string().regex(/^\/((trading|admin)\/[A-Za-z0-9/_-]{1,200}|auth\/link\/code)$/),
+  // Dots for a dump's file name (db-dumps/trenchscanner-<stamp>.dump/download), never two in a row.
+  path: z
+    .string()
+    .regex(/^\/((trading|admin)\/[A-Za-z0-9/_.-]{1,200}|auth\/link\/code)$/)
+    .refine((p) => !p.includes(".."), "no dot segments"),
   body: z.record(z.string(), z.unknown()).default({}),
 });
 
@@ -72,6 +77,8 @@ export function actionLabel(method: string, path: string): string {
     if (rest === "ai/switch") return "Change the AI reviewer switch";
     if (/^model-backups\/[^/]+\/restore$/.test(rest)) return "Restore models from a backup";
     if (/^table-backups\/[^/]+\/download$/.test(rest)) return "Download a table backup (every user's data)";
+    if (/^db-dumps\/[^/]+\/download$/.test(rest))
+      return "Download a full database backup (every user's data)";
     return `${method.toUpperCase()} ${path}`;
   }
   const server = path.startsWith("/trading/server/");
