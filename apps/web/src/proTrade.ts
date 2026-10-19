@@ -843,6 +843,9 @@ export class TradeError extends Error {
   }
 }
 
+/** The trade's blockhash ran out before it landed: nothing changed, and it can go again at Turbo. */
+export class TradeExpiredError extends TradeError {}
+
 function fromBase64(b64: string): Uint8Array {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
@@ -1241,7 +1244,7 @@ export async function runTrade(
         `The trade failed on chain${s.error ? ` (${s.error})` : ""}. Nothing was bought or sold.`,
       );
     if (s.state === "expired")
-      throw new TradeError("The trade didn't land in time and has expired. Nothing changed.");
+      throw new TradeExpiredError("The trade didn't land in time and has expired. Nothing changed.");
     if (Date.now() - started > CONFIRM_GIVE_UP_MS)
       throw new TradeError(
         "Still waiting on the chain. Check your wallet before trading again.",
