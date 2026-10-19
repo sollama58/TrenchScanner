@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from "react";
+import { reportClientError } from "../clientErrors";
 import { ThisIsFine } from "./ThisIsFine";
 
 /**
@@ -15,6 +16,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
 
   componentDidCatch(error: Error) {
     console.error(error);
+    reportClientError("page", error);
   }
 
   render() {

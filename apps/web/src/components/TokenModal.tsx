@@ -82,6 +82,9 @@ import { TradePanel, solText, tokensText } from "./TradePanel";
 import { PRO_MODE_PERKS } from "./ProModeCard";
 import { summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
+import { SectionBoundary } from "./SectionBoundary";
+import { useBackupCandles } from "../backupCandles";
+import { reportClientError } from "../clientErrors";
 import { guessPath, pathFrom, type PathGuess, type PathStep } from "../pricePathing";
 import {
   categoryText,
@@ -1821,7 +1824,7 @@ function lockedText(error: Error, what: string): string | null {
 
 export function ChartCard({
   card,
-  chart: { data, error },
+  chart: { data: served, error },
   alertAt,
   alertMcap,
   what,
@@ -1839,6 +1842,21 @@ export function ChartCard({
   tradeSlot?: HTMLElement | null;
 }) {
   const api = useTokenApi(card.token.mintAddress);
+  // A second source of candles (user asks 2026-10-19): when the API has none for the coin (Pump.fun
+  // down or rate limited) or can't be reached, the browser reads GeckoTerminal's minute candles itself.
+  // Never for an answer that is the API's to give (a lookup to pay for, access ended, no such coin):
+  // only when it had no candles, or couldn't answer at all.
+  const backup = useBackupCandles(
+    card.token.mintAddress,
+    served ? !served.candles?.length : !!error && !(error instanceof ApiError && error.status < 500),
+  );
+  const data = useMemo<TokenChart | null>(() => {
+    if (!backup || served?.candles?.length) return served;
+    return served
+      ? { ...served, candles: backup }
+      : { mint: card.token.mintAddress, candles: backup, marketCap: [] };
+  }, [served, backup, card.token.mintAddress]);
+  const fromBackup = data !== served;
   // Customize › Token chart sets the view it opens on; the switch over the chart this one.
   const look = useAppearance();
   const [rangePicked, setRange] = useState<Range | null>(null);
@@ -1984,103 +2002,130 @@ export function ChartCard({
   const guessRef = useRef<{ mint: string; slot: number; guess: PathGuess | null } | null>(null);
   // A call card's alert price is the call's own anchor; a filter alert's can be a scan's reading.
   const callPriced = card.kind === "curated" && alertMcap > 0;
-  const view = useMemo(() => {
-    if (!data || !bounds) return null;
-    const fromCandles = !!data.candles && data.candles.length > 0;
-    // The newest candle is still open: its close so far is drawn at now, not at its end.
-    const now = Date.now();
-    const runOf = (candles: NonNullable<TokenChart["candles"]>, stepMs: number) => ({
-      stepMs,
-      candles: candles.map((k) => ({ ...k, vol: k.vol ?? 0 })),
-      points: candleCloses(candles, stepMs).map((p) => (p.t > now ? { ...p, t: now } : p)),
-    });
-    // Coarse to fine: the minute candles, then the 15-second and 1-second ones wherever they reach.
-    const fines = [quarter, second].flatMap((f) =>
-      f?.candles?.length ? [runOf(f.candles, f.stepSec * 1_000)] : [],
-    );
-    // The line runs through each candle's close at its end - the finest candles wherever they
-    // reach, the coarser ones before - then every live curve change after the newest candle.
-    // Without candles, through the scan's readings.
-    const runs: (CloseRun & { candles: VolumeCandle[] })[] = fromCandles
-      ? [runOf(data.candles!, 60_000), ...fines]
-      : [{ points: data.marketCap.map((p) => ({ t: p.t, v: p.usd })), stepMs: 0, candles: [] }];
-    const candled = stitch(runs);
-    // The live tail says when the price was last known current: with no change since, the price
-    // held, so the line runs on flat to then rather than stopping at the last change.
-    const held = (pts: Point[]) => {
-      const end = pts[pts.length - 1];
-      const at = tail.readAt === null ? null : Math.min(tail.readAt, now);
-      return bounds.live && end && tail.ticks.length > 0 && at !== null && at > end.t + 1_000
-        ? [...pts, { t: at, v: end.v }]
-        : pts;
-    };
-    const source = held(stitch(runs, bounds.live ? tail.ticks : []));
-    if (source.length < 2) return null;
-    const last = source[source.length - 1]!.t;
-    const from = bounds.from;
-    const to = bounds.live ? last : bounds.to;
-    // Which widths the view is drawn from: a run is used where it wins (stitch's rule) in view.
-    const used = runs.filter((r, i) => {
-      const next = runs.slice(i + 1).find((n) => n.points.length > 0);
-      const until = next ? next.points[0]!.t - next.stepMs : Infinity;
-      return r.points.some((p) => p.t >= from && p.t <= to && p.t <= until);
-    });
-    const candledTo = candled.length > 0 ? candled[candled.length - 1]!.t : -Infinity;
-    const usesTail = bounds.live && tail.ticks.some((p) => p.t >= from && p.t > candledTo);
-    const finest = usesTail ? 1_000 : Math.min(...used.map((r) => r.stepMs || 30_000), 60_000);
-    const fullStep = pointWidthMs(Math.max(1_000, Math.min(to, last) - from), maxPoints(), finest);
-    const full = linePoints(source, from, fullStep, to);
-    if (full.length < 2) return null;
-    const extent = { t0: full[0]!.t, t1: full[full.length - 1]!.t };
-    // Zoomed in, the window is thinned on its own, a step past each edge, so it keeps its detail.
-    const win = zoom ? zoomWindow(zoom, extent.t0, extent.t1) : null;
-    const step = win ? pointWidthMs(Math.max(1_000, win.to - win.from), maxPoints(), finest) : fullStep;
-    // With the nearest point on each side of that too, so a window zoomed into a quiet stretch
-    // still has a line to clip at its edges rather than leaving the chart (and its zoom) blank.
-    let line = full;
-    if (win) {
-      const lo = Math.max(from, win.from - step);
-      const hi = Math.min(to, win.to + step);
-      const before = source.filter((p) => p.t >= from && p.t < lo).at(-1);
-      const after = source.find((p) => p.t > hi && p.t <= to);
-      line = [...(before ? [before] : []), ...linePoints(source, lo, step, hi), ...(after ? [after] : [])];
-    }
-    // The predicted path, from the finest reading of the last minute: the 1-second candles and
-    // the live curve's changes after them.
-    // It is read afresh every PATH_EVERY_MS, not on every tick, so its shape holds steady between
-    // reads instead of twitching with each trade; in between it runs from the line's latest point.
-    let path: PathStep[] = [];
-    if (pathing && secondRead?.candles?.length) {
-      const fine = held(stitch([...runs, runOf(secondRead.candles, 1_000)], bounds.live ? tail.ticks : []));
-      const end = fine[fine.length - 1];
-      if (end) {
-        const slot = Math.floor(end.t / PATH_EVERY_MS);
-        const kept = guessRef.current;
-        const guess =
-          kept && kept.mint === mint && kept.slot === slot
-            ? kept.guess
-            : guessPath(fine, end.t, secondRead.candles);
-        guessRef.current = { mint, slot, guess };
-        const start = source[source.length - 1]!;
-        if (guess) path = pathFrom(guess, start);
+  // A view that couldn't be built (data the chart didn't expect) says so with a way to retry,
+  // rather than taking the token window, and its Trade panel, down with it (user ask 2026-10-19).
+  const [retries, setRetries] = useState(0);
+  const built = useMemo(() => {
+    const make = () => {
+      if (!data || !bounds) return null;
+      const fromCandles = !!data.candles && data.candles.length > 0;
+      // The newest candle is still open: its close so far is drawn at now, not at its end.
+      const now = Date.now();
+      // A candle with a value that isn't a positive number (an upstream hiccup) is left out, so it
+      // can't turn the whole axis to NaN and the chart blank.
+      const sane = (candles: NonNullable<TokenChart["candles"]>) =>
+        candles.filter((k) => [k.t, k.o, k.h, k.l, k.c].every((n) => Number.isFinite(n) && n > 0));
+      const runOf = (raw: NonNullable<TokenChart["candles"]>, stepMs: number) => {
+        const candles = sane(raw);
+        return {
+          stepMs,
+          candles: candles.map((k) => ({ ...k, vol: k.vol ?? 0 })),
+          points: candleCloses(candles, stepMs).map((p) => (p.t > now ? { ...p, t: now } : p)),
+        };
+      };
+      // Coarse to fine: the minute candles, then the 15-second and 1-second ones wherever they reach.
+      const fines = [quarter, second].flatMap((f) =>
+        f?.candles?.length ? [runOf(f.candles, f.stepSec * 1_000)] : [],
+      );
+      // The line runs through each candle's close at its end - the finest candles wherever they
+      // reach, the coarser ones before - then every live curve change after the newest candle.
+      // Without candles, through the scan's readings.
+      const runs: (CloseRun & { candles: VolumeCandle[] })[] = fromCandles
+        ? [runOf(data.candles!, 60_000), ...fines]
+        : [
+            {
+              points: data.marketCap
+                .filter((p) => Number.isFinite(p.usd) && p.usd > 0)
+                .map((p) => ({ t: p.t, v: p.usd })),
+              stepMs: 0,
+              candles: [],
+            },
+          ];
+      const candled = stitch(runs);
+      // The live tail says when the price was last known current: with no change since, the price
+      // held, so the line runs on flat to then rather than stopping at the last change.
+      const held = (pts: Point[]) => {
+        const end = pts[pts.length - 1];
+        const at = tail.readAt === null ? null : Math.min(tail.readAt, now);
+        return bounds.live && end && tail.ticks.length > 0 && at !== null && at > end.t + 1_000
+          ? [...pts, { t: at, v: end.v }]
+          : pts;
+      };
+      const source = held(stitch(runs, bounds.live ? tail.ticks : []));
+      if (source.length < 2) return null;
+      const last = source[source.length - 1]!.t;
+      const from = bounds.from;
+      const to = bounds.live ? last : bounds.to;
+      // Which widths the view is drawn from: a run is used where it wins (stitch's rule) in view.
+      const used = runs.filter((r, i) => {
+        const next = runs.slice(i + 1).find((n) => n.points.length > 0);
+        const until = next ? next.points[0]!.t - next.stepMs : Infinity;
+        return r.points.some((p) => p.t >= from && p.t <= to && p.t <= until);
+      });
+      const candledTo = candled.length > 0 ? candled[candled.length - 1]!.t : -Infinity;
+      const usesTail = bounds.live && tail.ticks.some((p) => p.t >= from && p.t > candledTo);
+      const finest = usesTail ? 1_000 : Math.min(...used.map((r) => r.stepMs || 30_000), 60_000);
+      const fullStep = pointWidthMs(Math.max(1_000, Math.min(to, last) - from), maxPoints(), finest);
+      const full = linePoints(source, from, fullStep, to);
+      if (full.length < 2) return null;
+      const extent = { t0: full[0]!.t, t1: full[full.length - 1]!.t };
+      // Zoomed in, the window is thinned on its own, a step past each edge, so it keeps its detail.
+      const win = zoom ? zoomWindow(zoom, extent.t0, extent.t1) : null;
+      const step = win ? pointWidthMs(Math.max(1_000, win.to - win.from), maxPoints(), finest) : fullStep;
+      // With the nearest point on each side of that too, so a window zoomed into a quiet stretch
+      // still has a line to clip at its edges rather than leaving the chart (and its zoom) blank.
+      let line = full;
+      if (win) {
+        const lo = Math.max(from, win.from - step);
+        const hi = Math.min(to, win.to + step);
+        const before = source.filter((p) => p.t >= from && p.t < lo).at(-1);
+        const after = source.find((p) => p.t > hi && p.t <= to);
+        line = [...(before ? [before] : []), ...linePoints(source, lo, step, hi), ...(after ? [after] : [])];
       }
-    }
-    return {
-      path,
-      // A call is priced from a fresh quote (its anchor), so its price goes on the line at its
-      // time: the "Called" marker then sits on the price the call and its grade start from.
-      points: callPriced ? withCallPoint(line, { t: alertAt, v: alertMcap }) : line,
-      extent,
-      fromCandles,
-      step,
-      // Whether the view runs to the latest reading (Model View's window can end before it).
-      live: bounds.live,
-      latest: source[source.length - 1]!.v,
-      latestAt: source[source.length - 1]!.t,
-      // The candles in view for the volume lane, each stretch from one width only.
-      candles: stitchVolume(runs).filter((k) => k.t + (k.w ?? 60_000) >= from && k.t <= to),
+      // The predicted path, from the finest reading of the last minute: the 1-second candles and
+      // the live curve's changes after them.
+      // It is read afresh every PATH_EVERY_MS, not on every tick, so its shape holds steady between
+      // reads instead of twitching with each trade; in between it runs from the line's latest point.
+      let path: PathStep[] = [];
+      if (pathing && secondRead?.candles?.length) {
+        const fine = held(stitch([...runs, runOf(secondRead.candles, 1_000)], bounds.live ? tail.ticks : []));
+        const end = fine[fine.length - 1];
+        if (end) {
+          const slot = Math.floor(end.t / PATH_EVERY_MS);
+          const kept = guessRef.current;
+          const guess =
+            kept && kept.mint === mint && kept.slot === slot
+              ? kept.guess
+              : guessPath(fine, end.t, secondRead.candles);
+          guessRef.current = { mint, slot, guess };
+          const start = source[source.length - 1]!;
+          if (guess) path = pathFrom(guess, start);
+        }
+      }
+      return {
+        path,
+        // A call is priced from a fresh quote (its anchor), so its price goes on the line at its
+        // time: the "Called" marker then sits on the price the call and its grade start from.
+        points: callPriced ? withCallPoint(line, { t: alertAt, v: alertMcap }) : line,
+        extent,
+        fromCandles,
+        step,
+        // Whether the view runs to the latest reading (Model View's window can end before it).
+        live: bounds.live,
+        latest: source[source.length - 1]!.v,
+        latestAt: source[source.length - 1]!.t,
+        // The candles in view for the volume lane, each stretch from one width only.
+        candles: stitchVolume(runs).filter((k) => k.t + (k.w ?? 60_000) >= from && k.t <= to),
+      };
     };
+    try {
+      return { view: make(), failed: null };
+    } catch (e) {
+      reportClientError("Chart view", e);
+      return { view: null, failed: e instanceof Error ? e : new Error(String(e)) };
+    }
   }, [
+    retries,
     data,
     bounds,
     quarter,
@@ -2096,6 +2141,7 @@ export function ChartCard({
     tail.readAt,
     mint,
   ]);
+  const view = built.view;
 
   // The scans' buy and sell counts, for the buy share in the chart's readouts.
   const flow = useMemo<ScanFlow[]>(
@@ -2145,7 +2191,6 @@ export function ChartCard({
         delayed={delayed}
       />
     ) : null;
-  const streaming = isStreaming(tail);
   const locked = error && !data ? lockedText(error, "chart") : null;
   return (
     <>
@@ -2157,7 +2202,16 @@ export function ChartCard({
               Scan readings
             </span>
           )}
-          {streaming && <LiveBadge tail={tail} />}
+          {fromBackup && view && view.points.length > 1 && (
+            <span
+              className="sage-tag"
+              title="Our candle source had none for this coin just now, so these minute candles come from GeckoTerminal"
+            >
+              Backup candles
+            </span>
+          )}
+          <LiveBadge tail={tail} />
+          {error && served && <StaleBadge at={chartAt} />}
           {delayed && !!bounds?.live && view && view.points.length >= 2 && (
             <DelayBadge updatedAt={updatedAt} everyMs={everyMs} />
           )}
@@ -2200,38 +2254,48 @@ export function ChartCard({
         {error && !data && !locked && (
           <p className="error small">Couldn&apos;t load the chart: {error.message}</p>
         )}
-        {data && (!view || view.points.length < 2) && (
+        {built.failed && (
+          <p className="error small">
+            The chart hit an error drawing this coin.{" "}
+            <button type="button" className="ghost" onClick={() => setRetries((n) => n + 1)}>
+              Try again
+            </button>
+          </p>
+        )}
+        {data && !built.failed && (!view || view.points.length < 2) && (
           <p className="muted small tm-chart-empty">
             No trades to chart yet{shownRange !== "all" ? " in this view" : ""}.
           </p>
         )}
         {view && view.points.length >= 2 && (
           <>
-            <PriceChart
-              points={view.points}
-              stepMs={view.step}
-              events={events}
-              candles={view.candles}
-              flow={flow}
-              live={view.live}
-              now={view.latest}
-              marks={marks}
-              height={height}
-              trades={chartTrades}
-              entry={entry}
-              extent={view.extent}
-              zoom={zoom}
-              onZoom={setZoom}
-              kind={kind}
-              onKind={setKind}
-              pinEnd={shownRange === "trading"}
-              // Trading keeps its own candle size, 1-second candles until another is picked there
-              // (user ask 2026-10-19); All keeps the one picked before the views split.
-              tfScope={shownRange === "trading" ? "trading" : undefined}
-              defaultTimeframe={shownRange === "trading" ? 1_000 : null}
-              path={view.path}
-              ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
-            />
+            <SectionBoundary label="The chart" resetKey={`${mint}|${shownRange}|${kind}`}>
+              <PriceChart
+                points={view.points}
+                stepMs={view.step}
+                events={events}
+                candles={view.candles}
+                flow={flow}
+                live={view.live}
+                now={view.latest}
+                marks={marks}
+                height={height}
+                trades={chartTrades}
+                entry={entry}
+                extent={view.extent}
+                zoom={zoom}
+                onZoom={setZoom}
+                kind={kind}
+                onKind={setKind}
+                pinEnd={shownRange === "trading"}
+                // Trading keeps its own candle size, 1-second candles until another is picked there
+                // (user ask 2026-10-19); All keeps the one picked before the views split.
+                tfScope={shownRange === "trading" ? "trading" : undefined}
+                defaultTimeframe={shownRange === "trading" ? 1_000 : null}
+                path={view.path}
+                ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
+              />
+            </SectionBoundary>
             {view.path.length > 1 && (
               <p className="faint small tm-chart-src">
                 Right of the dashed line: the next minute (experimental). Shaded is where the price landed
@@ -2308,6 +2372,22 @@ function DelayBadge({ updatedAt, everyMs }: { updatedAt: number | null; everyMs:
 }
 
 /**
+ * The header's "Not updating" pill: the chart's last read failed, so what it shows is from the
+ * last good one (user ask 2026-10-19: a chart that stopped updating said nothing). It goes when a
+ * read lands again.
+ */
+function StaleBadge({ at }: { at: number | null }) {
+  const clock = (t: number) =>
+    new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+  const text = `Not updating: the chart's last read failed, so it shows what it had${at !== null ? ` at ${clock(at)}` : ""}. Retrying.`;
+  return (
+    <span className="tm-delay" title={text} aria-label={text}>
+      <ClockIcon size={11} /> Not updating
+    </span>
+  );
+}
+
+/**
  * A view's window over the minute data, running to now: the whole history for All, the last
  * TRADING_SPAN_MS for Trading (all of it for a coin younger than that).
  */
@@ -2331,8 +2411,18 @@ function isStreaming(tail: LiveTail): boolean {
   );
 }
 
-/** The header's "Live" pill: the chart is drawing the coin's curve as it changes. */
+/**
+ * The header's "Live" pill: the chart is drawing the coin's curve as it changes. It checks itself
+ * every second, so a tail that stops answering loses the pill within LIVE_STALE_MS even when
+ * nothing else redraws the chart.
+ */
 function LiveBadge({ tail }: { tail: LiveTail }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => setTick((n) => n + 1), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  if (!isStreaming(tail)) return null;
   const where = tail.venue === "pool" ? "PumpSwap pool" : "bonding curve";
   const how =
     tail.source === "stream"

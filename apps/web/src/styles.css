@@ -21191,3 +21191,17 @@ dialog.tm-modal.tm-terminal::backdrop {
     align-items: stretch;
   }
 }
+
+/* The token window's code on its way (TokenModalHost): a note over the page until it opens. */
+.tm-chunk-loading {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 1000;
+  transform: translateX(-50%);
+  padding: 10px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-solid);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.25);
+}
