@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Card, LaunchPage, MatchPage } from "../api";
 import {
   passesColumnFilter,
+  withinMaxAge,
   useScopeSettings,
   activeFilterCount,
   cardModelNames,
@@ -58,6 +59,9 @@ const OWN_CLICK = "a, button, input, select, textarea, label, summary, [role='bu
 const GRADUATED_PATH = "/launches?graduated=1";
 const GRADUATED_POLL_MS = 10_000;
 
+/** No held coins: one set, so the board's memos keep. */
+const NO_TOKENS: ReadonlySet<string> = new Set();
+
 /** The Stream (GET /launches): Scope's New and About to graduate when its Stream switch is on. */
 const STREAM_PATH = "/launches";
 
@@ -72,12 +76,18 @@ const STREAM_PATH = "/launches";
 export function ScopeBoard({
   feedPath,
   modelsOn,
+  heldTokenIds = NO_TOKENS,
   settingsSection,
   onSettings,
 }: {
   /** The Live feed's page `n`, so Scope reads exactly what the cards view does. */
   feedPath: (n: number) => string;
   modelsOn: boolean;
+  /**
+   * Pro: coins the wallet holds (heldTokens.ts), which skip hiding and the columns' filters but
+   * "older than", and keep the column and place they'd have anyway.
+   */
+  heldTokenIds?: ReadonlySet<string>;
   /** The Scope settings window's open section (the Live header's Customize opens Display), or null. */
   settingsSection: ScopeSettingsSection | null;
   onSettings: (section: ScopeSettingsSection | null) => void;
@@ -140,7 +150,10 @@ export function ScopeBoard({
   // Every column before its filters: what the settings window offers to pick from.
   const unfiltered = useMemo(() => {
     if (!visible) return undefined;
-    const shown = hiddenIds.size > 0 ? visible.filter((c) => !hiddenIds.has(c.tokenId)) : visible;
+    const shown =
+      hiddenIds.size > 0
+        ? visible.filter((c) => !hiddenIds.has(c.tokenId) || heldTokenIds.has(c.tokenId))
+        : visible;
     return splitScope(
       shown.filter((c) => c.kind !== "stream"),
       shown.filter((c) => c.kind === "stream" && gradIds.has(c.id)),
@@ -153,6 +166,7 @@ export function ScopeBoard({
   }, [
     visible,
     hiddenIds,
+    heldTokenIds,
     gradIds,
     settings.columns.filters.showGraduated,
     settings.columns.models.showGraduated,
@@ -165,11 +179,13 @@ export function ScopeBoard({
       const f = settings.columns[id];
       out[id] =
         activeFilterCount(f) > 0
-          ? unfiltered[id].filter((c) => passesColumnFilter(c, f, id, now))
+          ? unfiltered[id].filter((c) =>
+              heldTokenIds.has(c.tokenId) ? withinMaxAge(c, f, now) : passesColumnFilter(c, f, id, now),
+            )
           : unfiltered[id];
     }
     return out;
-  }, [unfiltered, settings.columns, now]);
+  }, [unfiltered, settings.columns, now, heldTokenIds]);
   const modelNames = useMemo(
     () => [...new Set((unfiltered?.models ?? []).flatMap(cardModelNames))],
     [unfiltered],
@@ -197,7 +213,8 @@ export function ScopeBoard({
   let cols = heldCols;
   if (held && hiddenIds.size > 0) {
     cols = emptyColumns();
-    for (const { id } of SCOPE_COLUMNS) cols[id] = heldCols[id].filter((c) => !hiddenIds.has(c.tokenId));
+    for (const { id } of SCOPE_COLUMNS)
+      cols[id] = heldCols[id].filter((c) => !hiddenIds.has(c.tokenId) || heldTokenIds.has(c.tokenId));
   }
   // Columns whose source hasn't answered yet show placeholder rows, not "nothing here".
   const loading = (id: ScopeColumn) =>

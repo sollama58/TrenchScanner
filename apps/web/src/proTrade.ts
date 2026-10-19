@@ -123,6 +123,11 @@ export interface TradeSettings {
   buyRows: 1 | 2;
   /** The quick-buy pill on alert and stream cards (off by default). */
   quickBuy: QuickBuySettings;
+  /**
+   * Live: a coin the wallet holds shows on Cards and Scope whatever the viewer's filters say (user
+   * ask 2026-10-19: on by default). heldTokens.ts.
+   */
+  alwaysShowHeld: boolean;
 }
 
 export interface QuickBuySettings {
@@ -166,6 +171,7 @@ export const DEFAULT_TRADE_SETTINGS: TradeSettings = {
   customTipSol: null,
   buyRows: 1,
   quickBuy: DEFAULT_QUICK_BUY,
+  alwaysShowHeld: true,
 };
 
 const SETTINGS_KEY = "ts-pro-trade-settings";
@@ -200,6 +206,7 @@ export function parseTradeSettings(raw: string | null): TradeSettings {
     const q = (s.quickBuy ?? {}) as Partial<QuickBuySettings>;
     return {
       buyRows,
+      alwaysShowHeld: s.alwaysShowHeld !== false,
       quickBuy: {
         enabled: q.enabled === true,
         amountSol:

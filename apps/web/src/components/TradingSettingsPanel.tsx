@@ -232,6 +232,20 @@ function Panel({ settings }: { settings: TradeSettings }) {
         </label>
       </div>
 
+      <h3 className="trading-sub">Coins you hold</h3>
+      <div className="tab-option">
+        <Switch
+          on={settings.alwaysShowHeld}
+          label="Always show coins you hold"
+          onToggle={() => update({ alwaysShowHeld: !settings.alwaysShowHeld })}
+        />
+        <p className="muted small">
+          A coin in your wallet stays on Cards and Scope even when your filters, the market cap line or Hide
+          would take it off. It still sits in its usual column and place, and only while it would normally be
+          on the feed.
+        </p>
+      </div>
+
       <h3 className="trading-sub">Quick buy on cards</h3>
       <div className="tab-option">
         <Switch on={q.enabled} label="Quick buy" onToggle={() => updateQuick({ enabled: !q.enabled })} />
