@@ -13,7 +13,7 @@ vi.mock("./api", () => ({
 // The module touches window and localStorage at load; neither exists under node, and the cache is
 // written to work without storage anyway.
 (globalThis as { window?: unknown }).window = globalThis;
-const { cachedGet, invalidate } = await import("./cache");
+const { cachedGet, invalidate, peek, cacheSize, MAX_ENTRIES } = await import("./cache");
 
 describe("cachedGet: sharing a request in flight", () => {
   beforeEach(() => {
@@ -89,5 +89,44 @@ describe("cachedGet: past the browser's HTTP cache", () => {
     vi.advanceTimersByTime(61_000);
     void cachedGet("/tokens/x/profile", 0);
     expect(requests[2]!.init).toBeUndefined();
+  });
+});
+
+describe("cachedGet: a long-open tab's cache stays bounded", () => {
+  beforeEach(() => {
+    requests.length = 0;
+    invalidate();
+  });
+
+  /** Reads `path` and lands its answer. */
+  async function read(path: string, data: unknown = { path }) {
+    const p = cachedGet(path, 0);
+    requests[requests.length - 1]!.resolve(data);
+    await p;
+  }
+
+  it("drops the least recently read paths past MAX_ENTRIES", async () => {
+    // A day of opening coins: each token window reads its own paths once and is closed.
+    for (let i = 0; i < MAX_ENTRIES + 50; i += 1) await read(`/tokens/m${i}/chart`);
+    expect(cacheSize()).toBe(MAX_ENTRIES);
+    expect(peek("/tokens/m0/chart")).toBeNull();
+    expect(peek(`/tokens/m${MAX_ENTRIES + 49}/chart`)).not.toBeNull();
+  });
+
+  it("keeps what is still being read, a request in flight, and the answers kept between visits", async () => {
+    await read("/auth/me", { id: "u1" });
+    await read("/tokens/open/chart", { open: true });
+    const pending = cachedGet("/tokens/slow/chart", 0);
+    for (let i = 0; i < MAX_ENTRIES + 50; i += 1) {
+      await read(`/tokens/m${i}/chart`);
+      // The open window re-reads its chart each poll.
+      if (i % 20 === 0) expect(peek("/tokens/open/chart")).not.toBeNull();
+    }
+    expect(peek("/auth/me")).toEqual({ data: { id: "u1" }, at: expect.any(Number), restored: false });
+    expect(peek("/tokens/open/chart")?.data).toEqual({ open: true });
+    // Still in flight: shared with the next caller rather than sent twice.
+    const sent = requests.length;
+    expect(cachedGet("/tokens/slow/chart", 0)).toBe(pending);
+    expect(requests).toHaveLength(sent);
   });
 });
