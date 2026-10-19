@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import bs58 from "bs58";
-import { cpmmVaultsFor, decodeLaunchLab } from "./launchLab.js";
+import {
+  RAYDIUM_CPMM_LOCK_AUTHORITY,
+  cpmmLpFor,
+  cpmmVaultsFor,
+  decodeLaunchLab,
+  lockedLpShare,
+} from "./launchLab.js";
 
 /** A Stonks coin's LaunchLab pool, read off mainnet 2026-10-18 (8fmggHx…eAvx, KM / ELON). */
 const POOL =
@@ -39,5 +45,35 @@ describe("cpmmVaultsFor", () => {
     expect(cpmmVaultsFor(slice, coin, quote)).toEqual({ base: keys[0], quote: keys[1], virtualQuote: 0 });
     expect(cpmmVaultsFor(slice, quote, coin)).toEqual({ base: keys[1], quote: keys[0], virtualQuote: 0 });
     expect(cpmmVaultsFor(slice, coin, "So11111111111111111111111111111111111111112")).toBeNull();
+  });
+});
+
+/** DER1K...WTsZ's CPMM pool against SAMA4 (2cvpE...PYZ), its first 341 bytes, read off mainnet 2026-10-19. */
+const CPMM_POOL =
+  "9+3j9dfD3kapsh8XfpuXbo7hKfQa7zeEqsUUlJCVsALmEX1Z0DaWjz5PhCp9CwyeyOJOoDoxyfh5o13DBHWJGqruXZ6wCC/5lftW7PNAYDDquYTQp9oQmoOEWrkglMsIp8deFGUNTOmoCHevICU2d16J5mJuUSpfdABY+EsfjKDU7h75xKg8DJiUBKg8tU3J68GN9TVkQHoMuoagdgGCiEhAC9DoztY3YFMfo16VImaLs+5MBzDSIGYDuA8D/HC9v7HLKf1ZUUu1u+/RTZoLPwUyVYZjdhDOhKPGxFYzM3QYkLwvNgclxAbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+/wCpBt324e51j94YQl285GzN2rYa/E2DuQ0n/r35KNihi/wlrw0NryIqbyYt7zgf0AnxTLmBQXyIk2gfJPOdD1EZv/0ACQYGHKaR0TUBAAA=";
+
+describe("cpmmLpFor", () => {
+  it("reads a live CPMM pool's LP mint and issued LP", () => {
+    expect(cpmmLpFor(CPMM_POOL, "DER1KeNskuJuBh8roxvSD6iuJhSFFAYKqsa5WZbfWTsZ")).toEqual({
+      lpMint: "BGbsvvgd1hzRuaTJL88CMqxVbUyCceLN6Vc2JYaoCPan",
+      lpSupply: 1330660877852n,
+    });
+    expect(cpmmLpFor(CPMM_POOL, "So11111111111111111111111111111111111111112")).toBeNull();
+    expect(cpmmLpFor(new Uint8Array(100), "DER1KeNskuJuBh8roxvSD6iuJhSFFAYKqsa5WZbfWTsZ")).toBeNull();
+  });
+});
+
+describe("lockedLpShare", () => {
+  it("counts LP burned and LP in Raydium's lock, nothing a wallet holds", () => {
+    // The live pool: the CPMM's own 100 locked units burned, every other LP token in the lock.
+    expect(RAYDIUM_CPMM_LOCK_AUTHORITY).toBe("3f7GcQFG397GAaEnv51zR6tsTVihYRydnydDD1cXekxH");
+    expect(
+      lockedLpShare(1330660877852n, 1330660877752n, [
+        { owner: RAYDIUM_CPMM_LOCK_AUTHORITY, amount: 1330660877752n },
+      ]),
+    ).toBe(1);
+    expect(lockedLpShare(1000n, 600n, [{ owner: "Wallet", amount: 600n }])).toBeCloseTo(0.4);
+    expect(lockedLpShare(1000n, 1000n, [{ owner: "Wallet", amount: 1000n }])).toBe(0);
+    expect(lockedLpShare(0n, 0n, [])).toBeNull();
   });
 });

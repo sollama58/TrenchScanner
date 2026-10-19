@@ -149,6 +149,7 @@ import {
 import { backfillQuoteSymbols, resolveQuoteSymbols } from "./quoteSymbols.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolvePumpLaunches } from "./pumpLaunch.js";
+import { resolveStonksPoolLocks } from "./stonksPoolLock.js";
 import { resolveOnChainHolders } from "./onChainHolders.js";
 import {
   rememberGraduations,
@@ -1208,6 +1209,17 @@ async function scanCycle(
     deps.pumpLaunchBackups,
   );
   lap("pumpLaunch");
+  // A graduated Stonks coin whose pool RugCheck doesn't list (one paired with a tokenized stock)
+  // has its pool's LP lock read from the chain instead (stonksPoolLock.ts).
+  const stonksPoolLocks = await resolveStonksPoolLocks(
+    candidates.flatMap((c) =>
+      c.pairAddress && needsStonksPoolLockRead(c, rugProfiles)
+        ? [{ mintAddress: c.mintAddress, pairAddress: c.pairAddress }]
+        : [],
+    ),
+    deps.helius,
+  );
+  lap("stonksPoolLock");
   // The chain's top 25 where it was read recently (readTopHolders): the coin's current holders,
   // which RugCheck's list may not be (withChainHolders).
   const recentHolderLists = new Map<string, OnChainHolders>();
@@ -1232,7 +1244,14 @@ async function scanCycle(
     ) {
       return false;
     }
-    const profile = buildOnChainProfile(c, rugProfiles, mintAuthorities, recentHolderLists, pumpLaunches);
+    const profile = buildOnChainProfile(
+      c,
+      rugProfiles,
+      mintAuthorities,
+      recentHolderLists,
+      pumpLaunches,
+      stonksPoolLocks,
+    );
     return passesLocalRugScreen(profile) && failsHolderConcentration(profile);
   });
   const onChainHolders = await resolveOnChainHolders(
@@ -1273,7 +1292,7 @@ async function scanCycle(
   const baseProfileByMint = new Map<string, OnChainProfile | null>(
     candidates.map((c) => [
       c.mintAddress,
-      buildOnChainProfile(c, rugProfiles, mintAuthorities, onChainHolders, pumpLaunches),
+      buildOnChainProfile(c, rugProfiles, mintAuthorities, onChainHolders, pumpLaunches, stonksPoolLocks),
     ]),
   );
   const mayhemCandidates = candidates
@@ -3417,6 +3436,9 @@ export function secondLookDue(
  *
  * A chain reading in `onChainHolders` for a coin RugCheck has a report for replaces the report's
  * holder figures (core's withChainHolders): the screen's holder cuts read who holds the coin now.
+ *
+ * A Stonks coin in `stonksPoolLocks` had its Raydium pool's LP read burned or locked on chain
+ * (stonksPoolLock.ts), the reading RugCheck has none of for a pool it doesn't list.
  */
 export function buildOnChainProfile(
   candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress" | "launchpad">,
@@ -3424,19 +3446,37 @@ export function buildOnChainProfile(
   mintAuthorities: Map<string, MintAuthorityResult>,
   onChainHolders: Map<string, OnChainHolders> = new Map(),
   pumpLaunches: Map<string, PumpLaunchResult> = new Map(),
+  stonksPoolLocks: ReadonlySet<string> = new Set(),
 ): OnChainProfile | null {
   const launch = provenPumpLaunch(pumpLaunches, candidate.mintAddress);
-  const profile = profileFromSources(
+  const sourced = profileFromSources(
     candidate,
     rugProfiles,
     mintAuthorities,
     onChainHolders,
     launch !== null,
   );
+  const profile =
+    sourced && stonksPoolLocks.has(candidate.mintAddress) ? { ...sourced, lpBurned: true } : sourced;
   if (!profile || !launch) return profile;
   const withoutPool =
     "topHolderShares" in profile ? withoutVenueHolder(profile as RugCheckProfile, launch.pool) : profile;
   return { ...withoutPool, lpBurned: true, mintAuthorityActive: false, freezeAuthorityActive: false };
+}
+
+/**
+ * Whether a candidate's pool LP is read from the chain (stonksPoolLock.ts): a Stonks coin
+ * graduated onto Raydium whose RugCheck report lists none of its LaunchLab markets, or that has no
+ * report. With a LaunchLab market listed, RugCheck's reading of it stands. Exported for tests.
+ */
+export function needsStonksPoolLockRead(
+  candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress" | "launchpad">,
+  rugProfiles: Map<string, RugCheckProfile>,
+): boolean {
+  if (candidate.launchpad !== STONKS_LAUNCHPAD || candidate.dexId !== "raydium" || !candidate.pairAddress)
+    return false;
+  const report = rugProfiles.get(candidate.mintAddress);
+  return !report || (report.launchLabLpBurned === undefined && !report.lpBurned);
 }
 
 /** The proven Pump.fun launch behind `mintAddress`, or null when there is no proof. */
@@ -3544,7 +3584,7 @@ export function freshGraduatesOverCut(
 /**
  * A launchpad's bonding curve (Pump.fun's, or Stonks' LaunchLab curve) or the PumpSwap pool a
  * Pump.fun coin graduates into: liquidity nobody can pull. A Stonks coin's Raydium pool is not
- * assumed locked: its LP is RugCheck's to report.
+ * assumed locked: its LP is RugCheck's to report, or the chain's (stonksPoolLock.ts).
  */
 function pumpVenue(dexId: string | undefined): boolean {
   return isCurveVenue(dexId) || dexId === "pumpswap";
