@@ -384,6 +384,19 @@ describe("LiveCurves", () => {
   });
 });
 
+describe("LiveCurves.history (the chart's own candles)", () => {
+  it("answers a followed coin's ticks in USD without following anything", async () => {
+    const t = setup();
+    expect(await t.curves.history(MINT)).toBeNull();
+    expect(t.curves.stats().followed).toBe(0);
+    await t.curves.read(MINT, 0);
+    const h = await t.curves.history(MINT);
+    expect(h?.ticks).toEqual([[t.at(), curveMcapSol(state(5e10)) * 100]]);
+    expect(h?.coveredFrom).toBe(t.at());
+    t.curves.stop();
+  });
+});
+
 describe("SolPrice", () => {
   it("falls through to the next source and keeps the last price when all fail", async () => {
     let now = 0;

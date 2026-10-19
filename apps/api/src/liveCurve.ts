@@ -342,6 +342,26 @@ export class LiveCurves {
     return out;
   }
 
+  /**
+   * Read-only: the price changes kept for `mint` (up to KEEP_MS of them) as USD market caps on its
+   * supply now, as the live tail answers them, or null when it isn't followed or has no price. It
+   * neither follows the coin nor counts as an ask, so it never keeps a follow alive: the chart's own
+   * candles are built from these (streamCandles.ts, user ask 2026-10-19).
+   */
+  async history(
+    mint: string,
+  ): Promise<{ ticks: [number, number][]; coveredFrom: number | null; readAt: number | null } | null> {
+    const f = this.followed.get(mint);
+    if (!f || f.none || f.ticks.length === 0) return null;
+    const [usd, factor] = await Promise.all([this.usdRate(f), this.supplyFactor(mint)]);
+    if (usd === null) return null;
+    return {
+      ticks: f.ticks.map(([t, sol]) => [t, sol * usd * factor]),
+      coveredFrom: f.coveredFrom,
+      readAt: f.confirmedAt,
+    };
+  }
+
   /** What `mint`'s launch-billion ticks are multiplied by to read on its supply now (mintSupply.ts). */
   private async supplyFactor(mint: string): Promise<number> {
     return (await launchSupplyFactors([mint], this.deps.supplies)).get(mint) ?? 1;

@@ -1,6 +1,58 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { burnCreditPrices, openLookup, prisma, type UtilityKind } from "@trenchscanner/core";
+import { burnCreditPrices, createLogger, openLookup, prisma, type UtilityKind } from "@trenchscanner/core";
 import { seenWallets } from "./walletNames.js";
+
+const logger = createLogger("lookup-gate");
+
+/**
+ * Keys (a reader and a coin, or a coin) that passed a database-backed gate lately. When the
+ * database errors, a key in here is let through instead of the request failing, so the live tail
+ * and Live trades, which answer from memory, keep going through a database outage (charts audit
+ * item 6, user ask 2026-10-19 "fix all"). A key never seen still needs the database.
+ */
+export class RecentlyAllowed {
+  private readonly at = new Map<string, number>();
+
+  constructor(
+    private readonly ttlMs = 15 * 60_000,
+    private readonly maxKeys = 20_000,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  remember(key: string): void {
+    this.at.delete(key);
+    this.at.set(key, this.now());
+    while (this.at.size > this.maxKeys) {
+      const oldest = this.at.keys().next().value;
+      if (oldest === undefined) break;
+      this.at.delete(oldest);
+    }
+  }
+
+  has(key: string): boolean {
+    const at = this.at.get(key);
+    return at !== undefined && this.now() - at < this.ttlMs;
+  }
+
+  /**
+   * `check`'s answer, remembering a yes. When it throws (the database), a key let through within
+   * the TTL is let through again and the error is logged; otherwise the error stands.
+   */
+  async pass(key: string, check: () => Promise<boolean>, what: string): Promise<boolean> {
+    try {
+      const yes = await check();
+      if (yes) this.remember(key);
+      return yes;
+    } catch (err) {
+      if (!this.has(key)) throw err;
+      logger.warn("gate read failed; letting a recent pass through", { gate: what, error: String(err) });
+      return true;
+    }
+  }
+}
+
+/** allowLookupRead's recent passes, by reader, utility and subject. */
+const recentReads = new RecentlyAllowed();
 
 /**
  * The paid lookups' free twins (P17, 2026-10-14): the wallet modal's read (GET /wallets/:wallet)
@@ -102,8 +154,13 @@ export async function allowLookupRead(
 ): Promise<boolean> {
   if (request.access?.reason === "admin") return true;
   const reader = request.user!.walletAddress;
-  if (await freeLookupReason(reader, utility, subject)) return true;
-  if (await openLookup(reader, utility, subject)) return true;
+  const allowed = await recentReads.pass(
+    `${reader}:${utility}:${subject}`,
+    async () =>
+      !!(await freeLookupReason(reader, utility, subject)) || !!(await openLookup(reader, utility, subject)),
+    "lookup read",
+  );
+  if (allowed) return true;
   const cost = (await burnCreditPrices()).cost[utility];
   const what = utility === "token" ? "coin" : "wallet";
   await reply.code(402).send({

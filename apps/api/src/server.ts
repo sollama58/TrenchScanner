@@ -80,7 +80,7 @@ import { RouteTimings } from "./routeTimings.js";
 import { fastifyLogger } from "./fastifyLogger.js";
 import { liveCurves, liveCurvesFor, setLiveCurves } from "./liveCurve.js";
 import { liveTrades, liveTradesFor, setLiveTrades } from "./liveTrades.js";
-import { QuotePrice, sharedSolPrice } from "./solPrice.js";
+import { dexScreenerQuote, jupiterQuote, QuotePrice, sharedSolPrice } from "./solPrice.js";
 import { recordAdminActions } from "./adminActionLog.js";
 
 const logger = createLogger("api");
@@ -289,19 +289,22 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     return sessions;
   }
 
+  const rateLimitKey = async (request: FastifyRequest): Promise<string> => {
+    // Verified, never merely present: an unverified cookie would let one client mint a fresh
+    // bucket per request simply by changing the value, which is no rate limit at all.
+    // Keyed by the session's revocation discriminator too, so a signed-out cookie somebody
+    // copied before sign-out lands in its own bucket instead of draining the live user's.
+    const session = (await verifySessions(request).catch(() => []))[0];
+    if (!session) return `ip:${clientIp(request)}`;
+    return `user:${session.userId}:${session.deviceId ? `d${session.deviceId}` : `v${session.sessionVersion}`}`;
+  };
+  // Routes that key their own limit finer (the charts' long polls, per coin: longPollLimit.ts) start from it.
+  app.decorate("rateLimitKey", rateLimitKey);
   await app.register(rateLimit, {
     max: 300,
     timeWindow: "1 minute",
     cache: RATE_LIMIT_BUCKETS,
-    keyGenerator: async (request) => {
-      // Verified, never merely present: an unverified cookie would let one client mint a fresh
-      // bucket per request simply by changing the value, which is no rate limit at all.
-      // Keyed by the session's revocation discriminator too, so a signed-out cookie somebody
-      // copied before sign-out lands in its own bucket instead of draining the live user's.
-      const session = (await verifySessions(request).catch(() => []))[0];
-      if (!session) return `ip:${clientIp(request)}`;
-      return `user:${session.userId}:${session.deviceId ? `d${session.deviceId}` : `v${session.sessionVersion}`}`;
-    },
+    keyGenerator: rateLimitKey,
     // A preflight carries no credentials and is answered from a table; counting it against the
     // IP bucket let one office on a shared address spend its limit on OPTIONS.
     allowList: (request) => request.method === "OPTIONS",
@@ -634,8 +637,18 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   configureMintSupplies(new MintSupplies(walletHelius ?? new HeliusClient({})));
   // The token chart's live tail follows open charts' curves on its own Helius socket (liveCurve.ts).
   const solPrice = sharedSolPrice;
+  // Read once listening, so the first chart answers after a deploy don't wait on three providers
+  // (charts audit item 12). A test server never listens and reads none.
+  app.addHook("onListen", async () => {
+    void solPrice.warm();
+  });
   // One quote-coin price for both: a coin quoted in PUMP or USD1 is read once for its chart and trades.
-  const quotePrice = new QuotePrice();
+  // Jupiter first, then DexScreener (its decimals off the mint, by Helius) when Jupiter fails.
+  const quotePrice = new QuotePrice(
+    walletHelius
+      ? [jupiterQuote, dexScreenerQuote(dexScreener, (mints) => walletHelius.getMintDecimals(mints))]
+      : [jupiterQuote],
+  );
   setLiveCurves(liveCurvesFor(env.HELIUS_API_KEY, env.CHART_LIVE_CURVES, walletHelius, solPrice, quotePrice));
   app.addHook("onClose", async () => liveCurves().stop());
   // The token page's live trades follow open pages' coins' logs on another Helius socket

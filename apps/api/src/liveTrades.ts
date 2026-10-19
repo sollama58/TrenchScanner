@@ -199,9 +199,25 @@ export class LiveTrades {
     if (set) for (const done of [...set]) done();
   }
 
+  /**
+   * Read-only: the trades kept for `mint` and since when the feed is whole, or null when it isn't
+   * followed. Neither follows the coin nor counts as an ask: the chart's own candles take their
+   * volume from these (streamCandles.ts, user ask 2026-10-19).
+   */
+  async recent(mint: string): Promise<{ since: number | null; trades: LiveTokenTrade[] } | null> {
+    const f = this.followed.get(mint);
+    if (!f) return null;
+    const answer = await this.priced(mint, f, 0);
+    return { since: answer.since, trades: answer.trades };
+  }
+
   private async answer(mint: string, after: number): Promise<LiveTradesAnswer> {
     const f = this.follow(mint, this.now());
     if (!f) return { status: "unavailable", since: null, cursor: 0, trades: [], held: false };
+    return this.priced(mint, f, after);
+  }
+
+  private async priced(mint: string, f: Followed, after: number): Promise<LiveTradesAnswer> {
     const since = this.coveredSince(mint, f);
     // A cursor from past this process's newest (a restart, another instance) reads as a fresh ask.
     const from = after > this.seq ? 0 : after;

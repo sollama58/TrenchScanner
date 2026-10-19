@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
-import { allowLookupRead } from "../lookupGate.js";
+import { allowLookupRead, RecentlyAllowed } from "../lookupGate.js";
 import { searchTrackedTokens, type TokenSearchAnswer } from "../tokenSearch.js";
 import { allowTextSearch, tokenSearchParam } from "./matches.js";
 import { tokenView } from "./utilities.js";
@@ -9,6 +9,7 @@ import { readKolRows } from "../kolRoster.js";
 import { loadPossibleSides } from "../possibleSides.js";
 import { activeTracked, loadTrackedSides, trackedActivity, type TrackedWallet } from "../trackedWallets.js";
 import {
+  createLogger,
   isStonksCoin,
   NARRATIVE_CONTESTANT,
   Prisma,
@@ -26,7 +27,17 @@ import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
 import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
 import { liveCurves, MAX_WAIT_MS, type LiveCurveAnswer } from "../liveCurve.js";
 import { liveTrades, type LiveTradesAnswer } from "../liveTrades.js";
+import { longPollRateLimit, withinLongPollCeiling } from "../longPollLimit.js";
+import { sharedSolPrice } from "../solPrice.js";
 import {
+  mergeCandles,
+  streamCandles,
+  streamCovers,
+  type CandleSource,
+  type StreamFeeds,
+} from "../streamCandles.js";
+import {
+  CallBudget,
   CandleCache,
   FIRST_MINUTES_MS,
   KeyedCache,
@@ -50,6 +61,8 @@ import {
   type NarrativeAlertRow,
   type SageView,
 } from "../tokenSageView.js";
+
+const logger = createLogger("token-routes");
 
 const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
@@ -129,8 +142,24 @@ function bubbleMapOf(row: {
 /** GET /tokens/:mint/chart: the token modal's price chart (web src/components/TokenModal.tsx). */
 export interface TokenChart {
   mint: string;
-  /** Pump.fun's one-minute candles as market cap, oldest first; null when unavailable. */
+  /**
+   * One-minute candles as market cap, oldest first; null when unavailable. Pump.fun's, with the
+   * API's own off the Helius stream (streamCandles.ts) after Pump.fun's newest, or in their place
+   * when Pump.fun has none (user ask 2026-10-19).
+   */
   candles: McapCandle[] | null;
+  /**
+   * Where `candles` came from: "pumpfun", "stream" (built from the live tail's ticks and Live trades),
+   * or "mixed" (Pump.fun's, then the stream's after them). Absent with no candles, and from older
+   * API builds (all Pump.fun then).
+   */
+  source?: CandleSource;
+  /**
+   * True when Pump.fun's part is past its cache time (its refresh failed, is over budget or still
+   * running) and the stream added nothing after it: the candles are the last good ones. Absent
+   * otherwise, and from older API builds.
+   */
+  stale?: boolean;
   /**
    * The scan's market-cap readings, oldest first: drawn when there are no candles. Each carries the
    * buys and sells DexScreener counted in the 5 minutes before it, when it had them.
@@ -175,12 +204,19 @@ export interface TokenFirstMinutes {
  * GET /tokens/:mint/chart/fine?res=1s|15s: Pump.fun's finest candles for the token chart's shorter
  * views (user ask 2026-10-17), its most recent page of them: on a busy coin the 1-second page
  * reaches back minutes and the 15-second one hours. The chart draws them where they reach and its
- * minute candles before that. Null when Pump.fun has none or its budget is spent this minute.
+ * minute candles before that. The API's own candles off the Helius stream (streamCandles.ts, user
+ * ask 2026-10-19) fill in after Pump.fun's newest and stand in when Pump.fun has none; 1-second
+ * ones come from the stream alone once it reaches back far enough (FINE_STREAM_SPAN_MS, or `from`).
+ * Null when neither has any.
  */
 export interface TokenFineCandles {
   mint: string;
   stepSec: 1 | 15;
   candles: McapCandle[] | null;
+  /** Where `candles` came from (TokenChart.source). Absent with no candles, and from older API builds. */
+  source?: CandleSource;
+  /** Pump.fun's part is the last good answer, past its cache time (TokenChart.stale). Absent otherwise. */
+  stale?: boolean;
 }
 
 /** One holder's trades in the coin, as the trade tape read them. */
@@ -208,8 +244,17 @@ const LIVE_SNAPSHOTS = 60;
 /** One coin's flagged wallets change hourly at most (scores) or once (the tape): a minute's reuse. */
 const WALLETS_CACHE_MS = 60_000;
 
+/**
+ * Every chart cache's Pump.fun calls together, a minute: under the process's swap-api gate (240 a
+ * minute, pumpFunSwapGate in core) with room to spare. The four caches' own budgets add up to more
+ * (270 before, charts audit item 1), and the overflow used to fail at the gate as if Pump.fun were
+ * down; now it is held back here, and each cache serves its last good answer or the stream's.
+ */
+export const CHART_CALLS_PER_MINUTE = 200;
+let chartBudget = new CallBudget(CHART_CALLS_PER_MINUTE);
+
 /** One per process: every reader of a coin shares its Pump.fun call and the call budget. */
-let candleCache = new CandleCache(pumpFunCandleFetcher());
+let candleCache = new CandleCache(pumpFunCandleFetcher(), { callsPerMinute: 80, shared: chartBudget });
 
 /**
  * The first-minutes view's candles: 1-second ones while a coin is inside its first minutes (a
@@ -218,19 +263,41 @@ let candleCache = new CandleCache(pumpFunCandleFetcher());
  */
 let secondCache = new CandleCache(pumpFunCandleFetcher(undefined, "1s"), {
   ttlMs: 4_000,
-  callsPerMinute: 90,
+  callsPerMinute: 60,
+  shared: chartBudget,
   maxEntries: 100,
 });
-let quarterCache = new CandleCache(pumpFunCandleFetcher(undefined, "15s"), { ttlMs: 60_000 });
+let quarterCache = new CandleCache(pumpFunCandleFetcher(undefined, "15s"), {
+  ttlMs: 60_000,
+  callsPerMinute: 40,
+  shared: chartBudget,
+});
 /**
  * The token chart's 1-second candles, on a budget of their own: every short view polls them, and
  * sharing the first-minutes one let a handful of open charts starve a brand-new launch's view.
+ * Most open charts now take theirs from the stream (readTokenFine), so this mostly serves charts
+ * opened a moment ago.
  */
 let fineSecondCache = new CandleCache(pumpFunCandleFetcher(undefined, "1s"), {
   ttlMs: 6_000,
   callsPerMinute: 60,
+  shared: chartBudget,
   maxEntries: 100,
 });
+
+/** The live tail's ticks and Live trades' trades, which the chart's own candles are built from. */
+let streamFeeds: StreamFeeds = {
+  history: (mint) => liveCurves().history(mint),
+  recent: (mint) => liveTrades().recent(mint),
+  solUsd: () => sharedSolPrice.get(),
+};
+
+/**
+ * How far back the stream's 1-second candles must reach, unbroken, to answer /chart/fine?res=1s
+ * alone (without `from`): about what Pump.fun's 1-second page reaches on a busy coin. Past it an
+ * open Trading view costs Pump.fun nothing (user ask 2026-10-19).
+ */
+export const FINE_STREAM_SPAN_MS = 5 * 60_000;
 /** Past this age the 15-second page (1,000 candles with a trade) rarely still reaches the start. */
 const FIRST_MINUTES_MAX_AGE_MS = 6 * 3_600_000;
 /** A little past the 15 minutes, so the 1-second view takes in the last of them. */
@@ -238,13 +305,30 @@ const FIRST_MINUTES_LIVE_MS = FIRST_MINUTES_MS + 30_000;
 
 /** Tests: where the chart's candles come from, instead of Pump.fun. */
 export function setCandleFetcherForTests(fetcher: CandleFetcher, secondsFetcher = fetcher): void {
-  candleCache = new CandleCache(fetcher);
-  secondCache = new CandleCache(secondsFetcher);
-  quarterCache = new CandleCache(secondsFetcher);
-  fineSecondCache = new CandleCache(secondsFetcher);
+  chartBudget = new CallBudget(CHART_CALLS_PER_MINUTE);
+  candleCache = new CandleCache(fetcher, { shared: chartBudget });
+  secondCache = new CandleCache(secondsFetcher, { shared: chartBudget });
+  quarterCache = new CandleCache(secondsFetcher, { shared: chartBudget });
+  fineSecondCache = new CandleCache(secondsFetcher, { shared: chartBudget });
+}
+
+/** Tests: what the chart's own candles are built from, instead of the live tail and Live trades. */
+export function setStreamFeedsForTests(feeds: StreamFeeds): void {
+  streamFeeds = feeds;
 }
 type ChartWallets = Pick<TokenChart, "tape" | "live" | "wallets" | "holderEntries">;
-const walletCache = new KeyedCache<ChartWallets>(WALLETS_CACHE_MS);
+/**
+ * A failed fill is kept a few seconds: chartWallets is five queries and more, and every chart's
+ * retry rerunning it on a struggling database was a stampede (charts audit item 6).
+ */
+const WALLETS_FAILURE_MS = 5_000;
+const walletCache = new KeyedCache<ChartWallets>(WALLETS_CACHE_MS, 300, Date.now, WALLETS_FAILURE_MS);
+
+/**
+ * A coin's trade-tape rows read for its chart at most, newest first. A tape keeps far fewer on a
+ * normal coin; this only bounds a pathological one, which used to read every row it had.
+ */
+const ACTIVITY_ROWS_MAX = 5_000;
 
 /**
  * The coin's flagged wallets and their trades: the risky wallets and known dumpers the live tape
@@ -260,6 +344,8 @@ async function chartWallets(tokenId: string): Promise<ChartWallets> {
     }),
     prisma.tokenWalletActivity.findMany({
       where: { tokenId },
+      orderBy: [{ createdAt: "desc" }, { solIn: "desc" }],
+      take: ACTIVITY_ROWS_MAX,
       select: {
         wallet: true,
         isCreator: true,
@@ -585,7 +671,7 @@ export async function registerTokenRoutes(
       return;
     }
     if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
-    const fine = await readTokenFine(mintAddress, fineRes(request.query));
+    const fine = await readTokenFine(mintAddress, fineRes(request.query), fineFrom(request.query));
     reply.header("Cache-Control", `private, max-age=${fine.stepSec === 1 ? 3 : 30}`);
     return fine;
   });
@@ -593,17 +679,18 @@ export async function registerTokenRoutes(
   /**
    * The token chart's live tail: the coin's bonding-curve price changes since `after` (ms), read
    * off the Helius stream (liveCurve.ts). Long-polled (about 80 asks a minute per open chart on a
-   * busy coin, #719), so its own limit leaves room for two charts open at once.
+   * busy coin, #719), so it is limited per coin, under a per-reader ceiling (longPollLimit.ts).
    */
   app.get(
     "/:mintAddress/chart/live",
-    { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } },
+    { config: { rateLimit: longPollRateLimit(app, "mintAddress") } },
     async (request, reply): Promise<LiveCurveAnswer | undefined> => {
       const { mintAddress } = request.params as { mintAddress: string };
       if (!MINT_RE.test(mintAddress)) {
         reply.code(400).send({ error: "not a valid mint" });
         return;
       }
+      if (!withinLongPollCeiling(request, reply, "chart-live")) return;
       if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
       reply.header("Cache-Control", "no-store");
       return readTokenLive(
@@ -618,17 +705,18 @@ export async function registerTokenRoutes(
   /**
    * The token page's live trades: the coin's buys and sells since `after` (a cursor from the last
    * answer), read off the Helius stream's logs (liveTrades.ts). `wait=1` holds the ask for the next
-   * trade, up to MAX_WAIT_MS, as the chart's live tail does; long-polled like it, so the same limit.
+   * trade, up to MAX_WAIT_MS, as the chart's live tail does; long-polled like it, so the same limits.
    */
   app.get(
     "/:mintAddress/trades/live",
-    { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } },
+    { config: { rateLimit: longPollRateLimit(app, "mintAddress") } },
     async (request, reply): Promise<LiveTradesAnswer | undefined> => {
       const { mintAddress } = request.params as { mintAddress: string };
       if (!MINT_RE.test(mintAddress)) {
         reply.code(400).send({ error: "not a valid mint" });
         return;
       }
+      if (!withinLongPollCeiling(request, reply, "trades-live")) return;
       if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
       reply.header("Cache-Control", "no-store");
       return readTokenTradesLive(
@@ -761,45 +849,99 @@ export async function registerTokenRoutes(
 
 /**
  * The token modal's chart for one mint (GET /tokens/:mint/chart, and the Utilities tab's token
- * lookup): Pump.fun's minute candles, the scan's market caps, and the coin's flagged wallets.
+ * lookup): the minute candles (Pump.fun's, and the stream's own), the scan's market caps, and the
+ * coin's flagged wallets.
+ *
+ * Each part stands alone (charts audit item 6, user ask 2026-10-19 "fix all"): one that fails is
+ * logged and left out (no wallets, candles on the launch billion, no scan readings) rather than
+ * turning the whole chart into a 500 when the candles were fine.
  */
 export async function readTokenChart(
   mintAddress: string,
   /** The reader's labels (trackedWallets.ts activeTracked), laid over the shared marks for them alone. */
   tracked: readonly TrackedWallet[] = [],
 ): Promise<TokenChart> {
+  const noWallets: ChartWallets = { tape: null, live: null, wallets: [], holderEntries: {} };
   // Token first: Pump.fun's candles are read only for a coin on Token, so a loop over random mints
   // can't spend the shared candle budget everyone's token modal draws from.
-  const token = await prisma.token.findUnique({ where: { mintAddress }, select: { id: true } });
-  const [rawCandles, snapshots, flagged, factors] = token
-    ? await Promise.all([
-        candleCache.get(mintAddress),
-        prisma.tokenSnapshot.findMany({
-          where: { tokenId: token.id },
-          orderBy: { takenAt: "desc" },
-          take: CHART_SNAPSHOT_POINTS,
-          select: { takenAt: true, marketCapUsd: true, buys5m: true, sells5m: true },
-        }),
-        walletCache.get(token.id, () => chartWallets(token.id)),
-        launchSupplyFactors([mintAddress]),
-      ])
-    : [null, [], { tape: null, live: null, wallets: [], holderEntries: {} }, new Map<string, number>()];
+  const found = await prisma.token
+    .findUnique({ where: { mintAddress }, select: { id: true } })
+    .then((token) => ({ token }))
+    .catch((err: unknown) => {
+      logger.warn("chart token read failed", { mint: mintAddress, error: String(err) });
+      return null;
+    });
+  if (found && !found.token) return { mint: mintAddress, candles: null, marketCap: [], ...noWallets };
+  const own = streamCandles(streamFeeds, mintAddress, 60_000).catch(() => null);
+  if (!found) {
+    // The database erring: what is already in memory, without a Pump.fun call.
+    const [factors, stream] = await Promise.all([
+      launchSupplyFactors([mintAddress]).catch(() => new Map<string, number>()),
+      own,
+    ]);
+    const kept = candleCache.peek(mintAddress);
+    const merged = mergeCandles(
+      kept.candles ? onSupply(kept.candles, factors.get(mintAddress)) : null,
+      stream?.candles ?? null,
+    );
+    return {
+      mint: mintAddress,
+      candles: merged.candles,
+      ...sourceOf(merged),
+      ...(kept.stale && merged.added === 0 && merged.candles ? { stale: true } : {}),
+      marketCap: [],
+      ...noWallets,
+    };
+  }
+  const token = found.token!;
+  const [read, snapshots, flagged, factors] = await Promise.allSettled([
+    candleCache.read(mintAddress),
+    prisma.tokenSnapshot.findMany({
+      where: { tokenId: token.id },
+      orderBy: { takenAt: "desc" },
+      take: CHART_SNAPSHOT_POINTS,
+      select: { takenAt: true, marketCapUsd: true, buys5m: true, sells5m: true },
+    }),
+    walletCache.get(token.id, () => chartWallets(token.id)),
+    launchSupplyFactors([mintAddress]),
+  ]);
+  for (const [part, r] of [
+    ["candles", read],
+    ["snapshots", snapshots],
+    ["wallets", flagged],
+    ["supply", factors],
+  ] as const)
+    if (r.status === "rejected")
+      logger.warn("chart part failed", { mint: mintAddress, part, error: String(r.reason) });
+  const pump = read.status === "fulfilled" ? read.value : { candles: null, stale: false };
   // Pump.fun's candles count the launch billion; the chart reads on the supply now (mintSupply.ts).
-  const candles = rawCandles ? onSupply(rawCandles, factors.get(mintAddress)) : null;
+  const factor = factors.status === "fulfilled" ? factors.value.get(mintAddress) : undefined;
+  const merged = mergeCandles(
+    pump.candles ? onSupply(pump.candles, factor) : null,
+    (await own)?.candles ?? null,
+  );
+  const marks = flagged.status === "fulfilled" ? flagged.value : noWallets;
   const wallets =
-    token && tracked.length > 0
-      ? await trackedMarks(token.id, flagged.wallets, tracked).catch(() => flagged.wallets)
-      : flagged.wallets;
+    tracked.length > 0
+      ? await trackedMarks(token.id, marks.wallets, tracked).catch(() => marks.wallets)
+      : marks.wallets;
   return {
     mint: mintAddress,
-    candles: candles && candles.length > 0 ? candles : null,
-    marketCap: snapshots
+    candles: merged.candles,
+    ...sourceOf(merged),
+    ...(pump.stale && merged.added === 0 && merged.candles ? { stale: true } : {}),
+    marketCap: (snapshots.status === "fulfilled" ? snapshots.value : [])
       .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
       .reverse()
       .map((s) => ({ t: s.takenAt.getTime(), usd: s.marketCapUsd, buys: s.buys5m, sells: s.sells5m })),
-    ...flagged,
+    ...marks,
     wallets,
   };
+}
+
+/** The `source` field of an answer with merged candles (none without candles). */
+function sourceOf(merged: { source?: CandleSource }): { source?: CandleSource } {
+  return merged.source ? { source: merged.source } : {};
 }
 
 /** The shared marks with the reader's labeled wallets and their sides laid over them (withTrackedMarks). */
@@ -853,31 +995,69 @@ export function liveAfter(query: unknown): number {
   return Number.isFinite(after) && after > 0 ? after : 0;
 }
 
-/** Whether a mint is on Token, reused a while: the live tail asks every couple of seconds. */
-const tracked = new KeyedCache<boolean>(5 * 60_000, 1_000);
-async function isTracked(mintAddress: string): Promise<boolean> {
-  const known = await tracked.get(mintAddress, async () => {
-    const row = await prisma.token.findUnique({ where: { mintAddress }, select: { id: true } });
-    return row !== null;
-  });
-  // A miss isn't kept: the coin may land on Token with its next scan.
-  if (!known) tracked.forget(mintAddress);
-  return known;
+/**
+ * The `from` of a fine-candles request (ms): the oldest moment the chart wants 1-second candles
+ * for, so the stream's alone can answer once they reach it. Null when absent or malformed.
+ */
+export function fineFrom(query: unknown): number | null {
+  const from = Number((query as { from?: unknown } | null)?.from);
+  return Number.isFinite(from) && from > 0 ? from : null;
 }
 
-/** The token chart's finer candles (TokenFineCandles). */
-export async function readTokenFine(mintAddress: string, res: "1s" | "15s"): Promise<TokenFineCandles> {
+/** Whether a mint is on Token, reused a while: the live tail asks every couple of seconds. */
+const tracked = new KeyedCache<boolean>(5 * 60_000, 1_000);
+/** Mints found on Token lately, let through when the database errs (RecentlyAllowed). */
+const trackedLately = new RecentlyAllowed();
+async function isTracked(mintAddress: string): Promise<boolean> {
+  return trackedLately.pass(
+    mintAddress,
+    async () => {
+      const known = await tracked.get(mintAddress, async () => {
+        const row = await prisma.token.findUnique({ where: { mintAddress }, select: { id: true } });
+        return row !== null;
+      });
+      // A miss isn't kept: the coin may land on Token with its next scan.
+      if (!known) tracked.forget(mintAddress);
+      return known;
+    },
+    "tracked mint",
+  );
+}
+
+/**
+ * The token chart's finer candles (TokenFineCandles). 1-second ones come from the stream alone
+ * when it reaches back to `from` (else FINE_STREAM_SPAN_MS) without a break and its price is
+ * current: an open Trading view then spends none of Pump.fun's budget (user ask 2026-10-19).
+ * Otherwise Pump.fun's, with the stream's after their newest, or the stream's alone when Pump.fun
+ * has none. Nothing new is followed for this: the stream's are there only for a coin a chart's
+ * live tail or Live trades follows already.
+ */
+export async function readTokenFine(
+  mintAddress: string,
+  res: "1s" | "15s",
+  from: number | null = null,
+  now = Date.now(),
+): Promise<TokenFineCandles> {
   const stepSec = res === "1s" ? 1 : 15;
   // Token first, as readTokenChart does: Pump.fun is only asked about a coin on Token.
   if (!(await isTracked(mintAddress))) return { mint: mintAddress, stepSec, candles: null };
-  const [candles, factors] = await Promise.all([
-    (res === "1s" ? fineSecondCache : quarterCache).get(mintAddress),
-    launchSupplyFactors([mintAddress]),
+  const own = await streamCandles(streamFeeds, mintAddress, stepSec * 1_000).catch(() => null);
+  if (res === "1s" && streamCovers(own, from ?? now - FINE_STREAM_SPAN_MS, now))
+    return { mint: mintAddress, stepSec, candles: own.candles, source: "stream" };
+  const [read, factors] = await Promise.all([
+    (res === "1s" ? fineSecondCache : quarterCache).read(mintAddress),
+    launchSupplyFactors([mintAddress]).catch(() => new Map<string, number>()),
   ]);
+  const merged = mergeCandles(
+    read.candles ? onSupply(read.candles, factors.get(mintAddress)) : null,
+    own?.candles ?? null,
+  );
   return {
     mint: mintAddress,
     stepSec,
-    candles: candles && candles.length > 0 ? onSupply(candles, factors.get(mintAddress)) : null,
+    candles: merged.candles,
+    ...sourceOf(merged),
+    ...(read.stale && merged.added === 0 && merged.candles ? { stale: true } : {}),
   };
 }
 

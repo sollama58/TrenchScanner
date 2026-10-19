@@ -56,6 +56,20 @@ export function onSupply(candles: McapCandle[], factor: number | undefined): Mca
   return candles.map((k) => ({ ...k, o: k.o * factor, h: k.h * factor, l: k.l * factor, c: k.c * factor }));
 }
 
+/**
+ * Exported for tests. Only candles a chart can draw: a finite time, finite positive o/h/l/c and a
+ * finite volume (0 otherwise). One NaN from any source made the chart's axis NaN and drew nothing,
+ * with no error (charts audit item 18), so every answer goes through this on its way out.
+ */
+export function drawableCandles(candles: readonly McapCandle[]): McapCandle[] {
+  const out: McapCandle[] = [];
+  for (const k of candles) {
+    if (![k.t, k.o, k.h, k.l, k.c].every(Number.isFinite) || Math.min(k.o, k.h, k.l, k.c) <= 0) continue;
+    out.push(Number.isFinite(k.vol) && k.vol >= 0 ? k : { ...k, vol: 0 });
+  }
+  return out;
+}
+
 export type CandleFetcher = (mint: string) => Promise<McapCandle[] | null>;
 
 /** Candle widths the first-minutes chart reads (Pump.fun also serves 30s and up). */
@@ -84,28 +98,88 @@ export function pumpFunCandleFetcher(
   };
 }
 
+/**
+ * Pump.fun calls allowed per rolling minute, shared by several caches (user ask 2026-10-19, "fix
+ * all"): the four chart caches each had a budget of their own and together could ask for more than
+ * the swap-api gate lets through (pumpfunGate.ts), so the overflow failed at the gate instead.
+ */
+export class CallBudget {
+  private readonly calls: number[] = [];
+
+  constructor(
+    readonly perMinute: number,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /** Whether the minute has room for one more call. */
+  hasRoom(): boolean {
+    const now = this.now();
+    while (this.calls.length > 0 && this.calls[0]! <= now - 60_000) this.calls.shift();
+    return this.calls.length < this.perMinute;
+  }
+
+  /** Counts one call. */
+  spend(): void {
+    this.calls.push(this.now());
+  }
+}
+
 export interface CandleCacheOptions {
   /** How long one coin's answer is reused: every reader of a coin within it shares one call. */
   ttlMs?: number;
-  /** Pump.fun calls allowed per rolling minute across every reader; past it, readers get null. */
+  /** Pump.fun calls allowed per rolling minute for this cache alone. */
   callsPerMinute?: number;
+  /** A budget shared with the other chart caches, checked as well as this cache's own. */
+  shared?: CallBudget;
   /** Coins kept; the least recently read one goes first. */
   maxEntries?: number;
+  /**
+   * How long a reader of an expired answer waits on its refresh before taking the last good answer
+   * (marked stale) instead, so a slow Pump.fun never holds a chart for its whole timeout.
+   */
+  refreshWaitMs?: number;
+  /** A last good answer older than this is no longer served: no candles beats very old ones. */
+  maxStaleMs?: number;
   now?: () => number;
+}
+
+/** A coin's candles from the cache, and whether they are past their TTL (a refresh failed or is pending). */
+export interface CandleRead {
+  candles: McapCandle[] | null;
+  stale: boolean;
+}
+
+/** After a failed refresh the next waits this long, so a down Pump.fun isn't asked by every reader. */
+const FAILED_RETRY_MS = 5_000;
+
+interface CandleEntry {
+  /** The last good answer (null: Pump.fun has no such coin) and when it was read; unset before one. */
+  good?: { value: McapCandle[] | null; at: number };
+  expiresAt: number;
+  /** No refresh before this: a failure's backoff. */
+  retryAt: number;
+  refreshing: Promise<void> | null;
 }
 
 /**
  * The token modal's candles, per coin, single-flight and on a call budget: the first reader of a
- * coin starts the one Pump.fun call and everyone else in the TTL shares it. Over budget (or when
- * the call fails) the answer is null and the modal falls back to the scan's market caps, so a
- * burst of readers never turns into a burst of upstream calls.
+ * coin starts the one Pump.fun call and everyone else in the TTL shares it, so a burst of readers
+ * never turns into a burst of upstream calls.
+ *
+ * Stale-while-revalidate (user ask 2026-10-19, "fix all"; charts audit items 1 and 2): once an
+ * answer expires the next reader starts its refresh, but a failed, timed-out or over-budget refresh
+ * never takes the last good answer away. Readers keep getting it, marked stale, until a refresh
+ * lands. One Pump.fun 429 used to blank every open chart for the gate's 30 s pause. Only a coin
+ * never read gets null, and the routes fill that from the stream (streamCandles.ts).
  */
 export class CandleCache {
-  private readonly entries = new Map<string, { expiresAt: number; value: Promise<McapCandle[] | null> }>();
-  private readonly calls: number[] = [];
+  private readonly entries = new Map<string, CandleEntry>();
+  private readonly budget: CallBudget;
+  private readonly shared: CallBudget | undefined;
   private readonly ttlMs: number;
-  private readonly callsPerMinute: number;
   private readonly maxEntries: number;
+  private readonly refreshWaitMs: number;
+  private readonly maxStaleMs: number;
   private readonly now: () => number;
 
   constructor(
@@ -113,40 +187,106 @@ export class CandleCache {
     opts: CandleCacheOptions = {},
   ) {
     this.ttlMs = opts.ttlMs ?? 30_000;
-    this.callsPerMinute = opts.callsPerMinute ?? 60;
-    this.maxEntries = opts.maxEntries ?? 300;
     this.now = opts.now ?? Date.now;
+    this.budget = new CallBudget(opts.callsPerMinute ?? 60, this.now);
+    this.shared = opts.shared;
+    this.maxEntries = opts.maxEntries ?? 300;
+    this.refreshWaitMs = opts.refreshWaitMs ?? 2_000;
+    this.maxStaleMs = opts.maxStaleMs ?? 15 * 60_000;
   }
 
-  get(mint: string): Promise<McapCandle[] | null> {
+  /** The coin's candles (see read): null when there are none to give. */
+  async get(mint: string): Promise<McapCandle[] | null> {
+    return (await this.read(mint)).candles;
+  }
+
+  /**
+   * The coin's candles and whether they are stale. A fresh answer is served as it is. An expired one
+   * starts a refresh (within budget) and waits up to refreshWaitMs for it, then serves the last good
+   * answer marked stale if the refresh hasn't landed. A coin with no answer yet waits for its first.
+   */
+  async read(mint: string): Promise<CandleRead> {
     const now = this.now();
-    const hit = this.entries.get(mint);
-    if (hit && hit.expiresAt > now) {
+    let entry = this.entries.get(mint);
+    if (entry) {
       // Re-inserted so the Map's order stays least-recently-read first.
       this.entries.delete(mint);
-      this.entries.set(mint, hit);
-      return hit.value;
+      this.entries.set(mint, entry);
+      if (entry.good && entry.expiresAt > now) return { candles: entry.good.value, stale: false };
+    } else {
+      entry = { expiresAt: 0, retryAt: 0, refreshing: null };
+      this.entries.set(mint, entry);
+      this.evict();
     }
-    while (this.calls.length > 0 && this.calls[0]! <= now - 60_000) this.calls.shift();
-    // Over budget: an expired answer still beats none.
-    if (this.calls.length >= this.callsPerMinute) return hit ? hit.value : Promise.resolve(null);
-    this.calls.push(now);
-    const value = this.fetcher(mint).catch((err: unknown) => {
-      logger.warn("candles failed", { mint, error: String(err) });
-      // A failure is remembered only briefly, so the next reader soon tries again.
-      const entry = this.entries.get(mint);
-      if (entry?.value === value) entry.expiresAt = Math.min(entry.expiresAt, this.now() + 5_000);
-      return null;
-    });
-    this.entries.delete(mint);
-    this.entries.set(mint, { expiresAt: now + this.ttlMs, value });
+    const refresh = this.refresh(mint, entry, now);
+    if (refresh) await (entry.good ? within(refresh, this.refreshWaitMs) : refresh);
+    return this.served(entry);
+  }
+
+  /** The coin's last good candles without asking Pump.fun: for a reader that mustn't spend the budget. */
+  peek(mint: string): CandleRead {
+    const entry = this.entries.get(mint);
+    return entry ? this.served(entry) : { candles: null, stale: false };
+  }
+
+  private served(entry: CandleEntry): CandleRead {
+    const good = entry.good;
+    if (!good) return { candles: null, stale: false };
+    const now = this.now();
+    if (entry.expiresAt > now) return { candles: good.value, stale: false };
+    if (now - good.at > this.maxStaleMs) return { candles: null, stale: false };
+    return { candles: good.value, stale: good.value !== null };
+  }
+
+  /** Starts (or joins) the coin's refresh; null when none runs (over budget, or backing off a failure). */
+  private refresh(mint: string, entry: CandleEntry, now: number): Promise<void> | null {
+    if (entry.refreshing) return entry.refreshing;
+    if (now < entry.retryAt) return null;
+    if (!this.budget.hasRoom() || (this.shared && !this.shared.hasRoom())) return null;
+    this.budget.spend();
+    this.shared?.spend();
+    const run = this.fetcher(mint)
+      .then((value) => {
+        const at = this.now();
+        // Nothing back for a coin that had candles is a glitch upstream, not news: the candles
+        // stay, and it is asked again after the backoff.
+        if ((value === null || value.length === 0) && entry.good?.value?.length) {
+          entry.retryAt = at + FAILED_RETRY_MS;
+          return;
+        }
+        entry.good = { value, at };
+        entry.expiresAt = at + this.ttlMs;
+      })
+      .catch((err: unknown) => {
+        logger.warn("candles failed", { mint, error: String(err) });
+        // Remembered only briefly, so a reader soon tries again; the last good answer stays.
+        entry.retryAt = this.now() + FAILED_RETRY_MS;
+      })
+      .finally(() => {
+        entry.refreshing = null;
+      });
+    entry.refreshing = run;
+    return run;
+  }
+
+  private evict(): void {
     while (this.entries.size > this.maxEntries) {
       const oldest = this.entries.keys().next().value;
       if (oldest === undefined) break;
       this.entries.delete(oldest);
     }
-    return value;
   }
+}
+
+/** Resolves when `p` settles or after `ms`, whichever is first. */
+function within(p: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    void p.finally(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }
 
 /** How much of a coin's start the first-minutes chart covers. */
@@ -438,7 +578,8 @@ function firstTrades(r: ActivityRow): MarkedTrade[] {
 /**
  * A per-key, single-flight TTL cache for answers that are the same for every reader of one coin
  * (the token modal's wallet markers), bounded to `maxEntries` keys, least recently read first out.
- * A failed fill is not kept.
+ * A failed fill is kept only `failureTtlMs` (none by default): a heavy fill that fails on a busy
+ * database then isn't rerun by every retry at once (charts audit item 6).
  */
 export class KeyedCache<T> {
   private readonly entries = new Map<string, { expiresAt: number; value: Promise<T> }>();
@@ -447,6 +588,7 @@ export class KeyedCache<T> {
     private readonly ttlMs: number,
     private readonly maxEntries = 300,
     private readonly now: () => number = Date.now,
+    private readonly failureTtlMs = 0,
   ) {}
 
   get(key: string, fill: () => Promise<T>): Promise<T> {
@@ -459,7 +601,10 @@ export class KeyedCache<T> {
     }
     const value = fill();
     value.catch(() => {
-      if (this.entries.get(key)?.value === value) this.entries.delete(key);
+      const entry = this.entries.get(key);
+      if (entry?.value !== value) return;
+      if (this.failureTtlMs > 0) entry.expiresAt = Math.min(entry.expiresAt, this.now() + this.failureTtlMs);
+      else this.entries.delete(key);
     });
     this.entries.set(key, { expiresAt: now + this.ttlMs, value });
     while (this.entries.size > this.maxEntries) {

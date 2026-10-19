@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   firstMinutes,
+  CallBudget,
   CandleCache,
+  drawableCandles,
   KeyedCache,
   markedWallets,
   MAX_MARKED_WALLETS,
@@ -47,6 +49,17 @@ describe("parseMcapCandles", () => {
   it("widens a high or low that doesn't bracket the open and close", () => {
     const [c] = parseMcapCandles([{ timestamp: 1, open: 2, high: 1, low: 3, close: 2.5 }], 1);
     expect(c).toMatchObject({ h: 2.5, l: 2 });
+  });
+
+  it("drops candles with NaN, infinite or missing prices, so NaN never reaches the chart", () => {
+    const out = parseMcapCandles([
+      { timestamp: 1, open: "NaN", high: "1", low: "1", close: "1" },
+      { timestamp: 2, open: "1", high: "Infinity", low: "1", close: "1" },
+      { timestamp: 3, open: "1", high: "1", low: null, close: "1" },
+      { timestamp: 4, open: "1", high: "1", low: "1", close: "-1" },
+      { timestamp: 5, open: "1", high: "1", low: "1", close: "1", volume: "NaN" },
+    ]);
+    expect(out).toEqual([{ t: 5, o: 1e9, h: 1e9, l: 1e9, c: 1e9, vol: 0 }]);
   });
 
   it("answers a non-array body with no candles", () => {
@@ -142,6 +155,126 @@ describe("CandleCache", () => {
     expect(calls).toBe(3);
     await cache.get("b");
     expect(calls).toBe(4);
+  });
+
+  it("keeps serving the last good candles, marked stale, while a refresh fails", async () => {
+    let now = 0;
+    let fail = false;
+    let calls = 0;
+    const cache = new CandleCache(
+      async () => {
+        calls += 1;
+        if (fail) throw new Error("429");
+        return [candle];
+      },
+      { ttlMs: 6_000, now: () => now },
+    );
+    expect(await cache.read("a")).toEqual({ candles: [candle], stale: false });
+    fail = true;
+    now = 7_000;
+    expect(await cache.read("a")).toEqual({ candles: [candle], stale: true });
+    // Backing off the failure: no call, still the good candles.
+    now = 8_000;
+    expect(await cache.read("a")).toEqual({ candles: [candle], stale: true });
+    expect(calls).toBe(2);
+    fail = false;
+    now = 13_000;
+    expect(await cache.read("a")).toEqual({ candles: [candle], stale: false });
+    expect(calls).toBe(3);
+  });
+
+  it("never swaps good candles for an empty or missing answer", async () => {
+    let now = 0;
+    let answer: McapCandle[] | null = [candle];
+    const cache = new CandleCache(async () => answer, { ttlMs: 1_000, now: () => now });
+    await cache.read("a");
+    answer = null;
+    now = 2_000;
+    expect(await cache.read("a")).toEqual({ candles: [candle], stale: true });
+    answer = [];
+    now = 8_000;
+    expect(await cache.get("a")).toEqual([candle]);
+  });
+
+  it("serves the last good candles over budget, and stops once they are too old", async () => {
+    let now = 0;
+    const cache = new CandleCache(async () => [candle], {
+      ttlMs: 1_000,
+      callsPerMinute: 1,
+      maxStaleMs: 30_000,
+      now: () => now,
+    });
+    await cache.read("a");
+    now = 20_000;
+    expect(await cache.read("a")).toEqual({ candles: [candle], stale: true });
+    now = 40_000;
+    expect(await cache.read("a")).toEqual({ candles: null, stale: false });
+  });
+
+  it("answers from the last good candles when the refresh is slow, without waiting it out", async () => {
+    let now = 0;
+    let release: (v: McapCandle[]) => void = () => {};
+    let first = true;
+    const cache = new CandleCache(
+      async () => {
+        if (first) {
+          first = false;
+          return [candle];
+        }
+        return new Promise<McapCandle[]>((r) => (release = r));
+      },
+      { ttlMs: 1_000, refreshWaitMs: 10, now: () => now },
+    );
+    await cache.read("a");
+    now = 2_000;
+    expect(await cache.read("a")).toEqual({ candles: [candle], stale: true });
+    const newer = { ...candle, t: 2 };
+    release([newer]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(await cache.read("a")).toEqual({ candles: [newer], stale: false });
+  });
+
+  it("holds every cache sharing a budget to it", async () => {
+    const shared = new CallBudget(2, () => 0);
+    let calls = 0;
+    const fetch = async () => {
+      calls += 1;
+      return [candle];
+    };
+    const one = new CandleCache(fetch, { shared, now: () => 0 });
+    const two = new CandleCache(fetch, { shared, now: () => 0 });
+    await one.get("a");
+    await two.get("b");
+    expect(await two.get("c")).toBeNull();
+    expect(calls).toBe(2);
+  });
+
+  it("peeks at the kept candles without a call", async () => {
+    let calls = 0;
+    const cache = new CandleCache(async () => {
+      calls += 1;
+      return [candle];
+    });
+    expect(cache.peek("a")).toEqual({ candles: null, stale: false });
+    await cache.get("a");
+    expect(cache.peek("a")).toEqual({ candles: [candle], stale: false });
+    expect(calls).toBe(1);
+  });
+});
+
+describe("drawableCandles", () => {
+  it("drops candles a chart can't draw, and zeroes a broken volume", () => {
+    const ok = { t: 1, o: 1, h: 2, l: 1, c: 2, vol: 3 };
+    expect(
+      drawableCandles([
+        ok,
+        { ...ok, t: 2, c: Number.NaN },
+        { ...ok, t: 3, h: Number.POSITIVE_INFINITY },
+        { ...ok, t: 4, l: 0 },
+        { ...ok, t: Number.NaN },
+        { ...ok, t: 5, vol: Number.NaN },
+      ]),
+    ).toEqual([ok, { ...ok, t: 5, vol: 0 }]);
   });
 });
 
@@ -282,6 +415,21 @@ describe("KeyedCache", () => {
     expect(await cache.get("a", fill)).toBe(3);
     await expect(cache.get("c", () => Promise.reject(new Error("db")))).rejects.toThrow("db");
     expect(await cache.get("c", fill)).toBe(4);
+  });
+
+  it("keeps a failed fill for failureTtlMs, so retries don't all rerun it", async () => {
+    let now = 0;
+    let fills = 0;
+    const cache = new KeyedCache<number>(60_000, 10, () => now, 5_000);
+    const failing = async () => {
+      fills += 1;
+      throw new Error("db");
+    };
+    await expect(cache.get("a", failing)).rejects.toThrow("db");
+    await expect(cache.get("a", failing)).rejects.toThrow("db");
+    expect(fills).toBe(1);
+    now = 5_001;
+    expect(await cache.get("a", async () => 7)).toBe(7);
   });
 });
 
