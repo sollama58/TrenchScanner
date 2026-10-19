@@ -436,14 +436,12 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     expect(again.json().retryAfterSec).toBeGreaterThan(55);
   });
 
-  it("turns stopped scans into a grace period instead of Pro Mode with no end", async () => {
-    const later = new Date(Date.now() + 2 * 3_600_000);
-    const standing = await proHolderStanding(HOLDER, later);
-    expect(standing).toMatchObject({ state: "grace", stale: true });
-    // A day from the last scan it was in.
-    expect((standing as { graceEndsAt: Date }).graceEndsAt.getTime() - Date.now()).toBeGreaterThan(
-      23.9 * 3_600_000,
-    );
+  it("keeps Pro Mode for the newest scan's wallets while the scans are stopped", async () => {
+    // Hours, and then days, past the newest scan: an outage never ends it, sells included.
+    for (const hours of [2, 30, 72]) {
+      const later = new Date(Date.now() + hours * 3_600_000);
+      expect(await proHolderStanding(HOLDER, later)).toMatchObject({ state: "top", rank: 1 });
+    }
   });
 
   it("lets a wallet whose Pro Mode ended trade nothing, sells included", async () => {
