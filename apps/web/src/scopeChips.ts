@@ -6,6 +6,7 @@ import {
   newestStats,
   nowReading,
   recordedPeakOf,
+  scanAge,
   SAFETY_MAX_FRESH_WALLET_PCT,
   SAFETY_MAX_LARGEST_HOLDER_PCT,
   SAFETY_REJECT_EMPTY_WALLET_PCT,
@@ -71,7 +72,21 @@ export interface ChipReading {
   tone: number | null;
   /** Fails the safety screen's cut (or the tile's red bound). */
   risky: boolean;
+  /** The age of the scan behind a scan chip once that is old enough to matter (AlertCard scanAge). */
+  aged?: string;
 }
+
+/** The chips read from the card's newest scan, which dim and say its age once it is old. */
+const SCAN_CHIPS: ReadonlySet<ScopeChip> = new Set<ScopeChip>([
+  "holders",
+  "top10",
+  "largest",
+  "vol5m",
+  "vol1h",
+  "vol24h",
+  "liquidity",
+  "score",
+]);
 
 type Readings = ReturnType<typeof cardReadings>;
 type Stats = ReturnType<typeof newestStats>;
@@ -597,9 +612,15 @@ export function rowChips(
   if (chips.length === 0) return [];
   const r = cardReadings(card, "newest");
   const t = newestStats(card);
+  const aged = scanAge(card, now);
   return SCOPE_CHIP_DEFS.flatMap((d) => {
     if (!chips.includes(d.id)) return [];
     const reading = d.read(card, r, t, now);
-    return reading ? [{ id: d.id, short: d.short, ...reading }] : [];
+    if (!reading) return [];
+    if (aged !== null && SCAN_CHIPS.has(d.id))
+      return [
+        { id: d.id, short: d.short, ...reading, aged, title: `${reading.title}, from a scan ${aged} ago` },
+      ];
+    return [{ id: d.id, short: d.short, ...reading }];
   });
 }

@@ -12,6 +12,7 @@ import {
   nowReading,
   nowReadingAge,
   recordedPeakOf,
+  scanAge,
   sniperReading,
   walletCountText,
 } from "./AlertCard";
@@ -344,5 +345,19 @@ describe("tiles read the newest scan (user decision 2026-10-17)", () => {
     expect(atAlertNote("30%", "42%")).toBe(" (at the alert: 30%)");
     expect(atAlertNote("30%", "30%")).toBe("");
     expect(atAlertNote(null, "30%")).toBe("");
+  });
+});
+
+describe("scanAge", () => {
+  const at = (iso: string) => ({ takenAt: iso }) as Card["snapshot"];
+  const now = Date.parse("2026-10-16T13:00:00.000Z");
+
+  it("is null while the newest scan is under five minutes old", () => {
+    expect(scanAge({ snapshot: at(BEFORE), latestSnapshot: at("2026-10-16T12:56:00.000Z") }, now)).toBeNull();
+  });
+
+  it("labels the newest scan's age once it is five minutes old or more", () => {
+    expect(scanAge({ snapshot: at(BEFORE), latestSnapshot: at(AFTER) }, now)).toBe("30m");
+    expect(scanAge({ snapshot: at(ALERTED), latestSnapshot: null }, now)).toBe("1.0h");
   });
 });

@@ -128,6 +128,9 @@ export async function loadGuestRows(models: readonly string[], page: number) {
  * The signed-out page's showcase: the default models' best call of the last 24 hours, by the Peak
  * its card shows, among calls that passed (a stopped-out or missed call's later run is not a win to
  * show off, as on the feed's Top 3). Only calls past the guest delay count. Null when none passed.
+ * A call whose market cap is now under its alert's gives its place to the next one down (user ask
+ * 2026-10-19: a showcase trading below its call reads as a loss); the best one stays when every
+ * candidate is under.
  */
 export async function loadGuestBest(models: readonly string[], now = Date.now()) {
   const cutoff = new Date(now - GUEST_DELAY_MINUTES * 60_000);
@@ -138,7 +141,7 @@ export async function loadGuestBest(models: readonly string[], now = Date.now())
     where: { model: { in: [...models] }, createdAt: { gt: since, lte: cutoff } },
     include: { candidateOutcome: curatedAlertInclude.candidateOutcome },
   });
-  const [best] = topReturns(
+  const ranked = topReturns(
     calls.map((c) => {
       const outcome = resolveOutcome(c);
       return {
@@ -150,16 +153,30 @@ export async function loadGuestBest(models: readonly string[], now = Date.now())
       };
     }),
     now,
-    1,
+    GUEST_BEST_CANDIDATES,
   );
-  if (!best) return null;
-  const alert = await prisma.curatedAlert.findUnique({
-    where: { id: best.id },
+  if (ranked.length === 0) return null;
+  const alerts = await prisma.curatedAlert.findMany({
+    where: { id: { in: ranked.map((r) => r.id) } },
     include: curatedAlertInclude,
   });
-  if (!alert) return null;
-  const [full] = await withLatestSnapshots([alert]);
-  return full ? serializeCuratedAlert(full, currentMarketCap) : null;
+  const byId = new Map((await withLatestSnapshots(alerts)).map((a) => [a.id, a]));
+  const cards = ranked.flatMap((r) => {
+    const full = byId.get(r.id);
+    return full ? [serializeCuratedAlert(full, currentMarketCap)] : [];
+  });
+  return cards.find((c) => !belowAlert(c)) ?? cards[0] ?? null;
+}
+
+/** Calls the showcase reads down through, best Peak first, for one not under its alert price. */
+export const GUEST_BEST_CANDIDATES = 10;
+
+/** Whether a card's market cap now is under its alert's (unknown counts as not under). */
+function belowAlert(card: {
+  currentMarketCapUsd: number | null;
+  snapshot: { marketCapUsd: number };
+}): boolean {
+  return card.currentMarketCapUsd !== null && card.currentMarketCapUsd < card.snapshot.marketCapUsd;
 }
 
 export async function registerGuestRoutes(

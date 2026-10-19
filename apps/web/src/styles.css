@@ -1397,6 +1397,17 @@ img.avatar {
 .tm-fig.aged .delta {
   opacity: 0.6;
 }
+/* Scan tiles and Scope chips from a scan minutes old: the age beside the label, the figure dimmed
+   (AlertCard scanAge). */
+.card-stats .fig-age {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+.card-stats div.aged dd,
+.scope-chip.aged .num {
+  opacity: 0.6;
+}
 .fig.peak.hot > span.num {
   color: var(--good-ink);
 }

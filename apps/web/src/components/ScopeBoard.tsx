@@ -683,7 +683,7 @@ export function ScopeRow({
             return (
               <span
                 key={c.id}
-                className={`scope-chip ${tl.className ?? ""}`}
+                className={`scope-chip ${tl.className ?? ""}${c.aged ? " aged" : ""}`}
                 style={tl.style}
                 title={c.title}
               >
