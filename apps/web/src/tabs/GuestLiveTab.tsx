@@ -1,3 +1,4 @@
+import { SectionBoundary } from "../components/SectionBoundary";
 import { useMemo, useState } from "react";
 import type { MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
@@ -117,7 +118,9 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
         )}
         <div className={`cards${feed.stale ? " stale" : ""}`} aria-busy={feed.stale} {...feedGridProps(look)}>
           {data?.matches.map((card) => (
-            <AlertCard key={card.id} card={card} now={now} labelSource hide={hidden} />
+            <SectionBoundary key={card.id} label="This card" size="card" resetKey={card}>
+              <AlertCard card={card} now={now} labelSource hide={hidden} />
+            </SectionBoundary>
           ))}
         </div>
         {data && data.matches.length === 0 && page > 1 && (

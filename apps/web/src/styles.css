@@ -17827,6 +17827,40 @@ body:has(.util-toast) .bug-fab {
 .crash .row {
   margin-top: 18px;
 }
+/* One card, tab or window that hit a render error (SectionBoundary); the rest of the page keeps working. */
+.section-crash {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bad-wash);
+  color: var(--ink);
+  font-size: 13px;
+}
+.section-crash .row {
+  display: flex;
+  gap: 8px;
+}
+.section-crash.is-card {
+  margin: 0;
+  padding: 8px 10px;
+}
+.section-crash.is-modal {
+  position: fixed;
+  z-index: 1000;
+  left: 50%;
+  top: 20vh;
+  transform: translateX(-50%);
+  width: min(440px, calc(100vw - 32px));
+  margin: 0;
+  background: var(--surface-solid);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
 /* Two-factor setup: the authenticator link is for touch screens, where the app is on this device. */
 .tf-open-app {
   display: none;

@@ -1,3 +1,4 @@
+import { SectionBoundary } from "../components/SectionBoundary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type CuratedStats, type FeedStats, type Leaderboard, type MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
@@ -260,9 +261,13 @@ export function LiveTab({
         highConviction={highConviction}
       />
       <CustomizeDrawer open={customizing} onClose={closeCustomize} />
-      <HiddenTokensDialog open={hiddenOpen} onClose={() => setHiddenOpen(false)} now={now} />
+      <SectionBoundary label="Hidden tokens" resetKey={hiddenOpen} onClose={() => setHiddenOpen(false)}>
+        <HiddenTokensDialog open={hiddenOpen} onClose={() => setHiddenOpen(false)} now={now} />
+      </SectionBoundary>
       <AboutModal open={aboutOpen} onClose={closeAbout} targets={t} />
-      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} now={now} scope={scope} />
+      <SectionBoundary label="The search window" resetKey={searchOpen} onClose={() => setSearchOpen(false)}>
+        <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} now={now} scope={scope} />
+      </SectionBoundary>
       <section className="panel feed">
         <header className="section-head">
           <div>
@@ -414,14 +419,15 @@ export function LiveTab({
               {...feedGridProps(look)}
             >
               {shownCards?.map((card) => (
-                <AlertCard
-                  key={card.id}
-                  card={card}
-                  now={now}
-                  labelSource
-                  hide={hidden}
-                  onHide={() => hideToken(card, cards ?? [])}
-                />
+                <SectionBoundary key={card.id} label="This card" size="card" resetKey={card}>
+                  <AlertCard
+                    card={card}
+                    now={now}
+                    labelSource
+                    hide={hidden}
+                    onHide={() => hideToken(card, cards ?? [])}
+                  />
+                </SectionBoundary>
               ))}
             </div>
             {hiddenCount > 0 && (

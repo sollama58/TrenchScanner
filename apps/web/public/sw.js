@@ -12,7 +12,7 @@ self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim(
 self.addEventListener("push", (event) => {
   let data;
   try {
-    data = event.data ? event.data.json() : {};
+    data = (event.data ? event.data.json() : null) || {};
   } catch {
     data = { body: event.data ? event.data.text() : "" };
   }

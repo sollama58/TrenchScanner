@@ -1254,9 +1254,11 @@ function PositionsPanel({ state, reload }: { state: TradingState; reload: () => 
                     <td className="num">{sol(p.entryLamports)}</td>
                     <td className="num">
                       {p.lastMultiple !== null && p.status === "open" ? `${p.lastMultiple.toFixed(2)}x` : "–"}
-                      {p.status === "open" && pricedAgeText(p.lastPricedAt, now) && (
-                        <div className="faint small">{pricedAgeText(p.lastPricedAt, now)}</div>
-                      )}
+                      {p.status === "open" &&
+                        p.lastPricedAt !== undefined &&
+                        pricedAgeText(p.lastPricedAt, now) && (
+                          <div className="faint small">{pricedAgeText(p.lastPricedAt, now)}</div>
+                        )}
                       {p.rungsTaken > 0 && p.status === "open" && (
                         <div className="faint small">{p.rungsTaken} sold</div>
                       )}
