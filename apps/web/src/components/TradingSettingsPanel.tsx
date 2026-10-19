@@ -7,6 +7,7 @@ import {
   MIN_TIP_SOL,
   QUICK_BUY_COLORS,
   QUICK_BUY_POSITIONS,
+  quickBuyAmountOk,
   saveTradeSettings,
   useProState,
   useTradeSettings,
@@ -45,6 +46,11 @@ export function nextSell(values: number[]): number {
   return [50, 25, 75, 10, 33, 90].find((p) => !values.includes(p)) ?? 20;
 }
 
+/** The quick-buy amount as the field shows it: blank when none is set. */
+export function quickAmountText(amountSol: number): string {
+  return quickBuyAmountOk(amountSol) ? String(amountSol) : "";
+}
+
 export function TradingSettingsPanel() {
   const pro = useProState();
   const settings = useTradeSettings();
@@ -57,7 +63,7 @@ function Panel({ settings }: { settings: TradeSettings }) {
   const updateQuick = (patch: Partial<QuickBuySettings>) =>
     update({ quickBuy: { ...settings.quickBuy, ...patch } });
   const q = settings.quickBuy;
-  const [quickAmount, setQuickAmount] = useState(String(q.amountSol));
+  const [quickAmount, setQuickAmount] = useState(quickAmountText(q.amountSol));
   const maxBuys = BUY_PRESETS_PER_ROW * settings.buyRows;
   // One row holds five: going back to one row keeps the first five.
   const setRows = (rows: 1 | 2) =>
@@ -77,7 +83,7 @@ function Panel({ settings }: { settings: TradeSettings }) {
           className="button ghost small"
           onClick={() => {
             saveTradeSettings(DEFAULT_TRADE_SETTINGS);
-            setQuickAmount(String(DEFAULT_TRADE_SETTINGS.quickBuy.amountSol));
+            setQuickAmount(quickAmountText(DEFAULT_TRADE_SETTINGS.quickBuy.amountSol));
           }}
         >
           Reset
@@ -261,13 +267,15 @@ function Panel({ settings }: { settings: TradeSettings }) {
             <input
               inputMode="decimal"
               autoComplete="off"
+              placeholder="Set an amount to show it"
               value={quickAmount}
               onChange={(e) => setQuickAmount(e.target.value)}
               onBlur={() => {
-                const v = parseDecimal(quickAmount);
-                const ok = v !== null && v >= MIN_TRADE_SOL && v <= 100;
-                if (ok) updateQuick({ amountSol: v });
-                setQuickAmount(String(ok ? v : q.amountSol));
+                // Blank or 0 clears the amount, which hides the button on cards (user ask 2026-10-19).
+                const v = quickAmount.trim() === "" ? 0 : parseDecimal(quickAmount);
+                const next = v === 0 ? 0 : quickBuyAmountOk(v) ? v : q.amountSol;
+                if (next !== q.amountSol) updateQuick({ amountSol: next });
+                setQuickAmount(quickAmountText(next));
               }}
             />
           </label>
@@ -327,8 +335,11 @@ function Panel({ settings }: { settings: TradeSettings }) {
             <span className="qb-preview">
               <span className={`quick-buy qb-inline qb-${q.size} qb-${q.color}`}>
                 <BoltIcon size={q.size === "s" ? 10 : q.size === "l" ? 14 : 12} />
-                <span className="num">{q.amountSol} SOL</span>
+                <span className="num">{quickBuyAmountOk(q.amountSol) ? `${q.amountSol} SOL` : "—"}</span>
               </span>
+              {!quickBuyAmountOk(q.amountSol) && (
+                <span className="small muted">Hidden on cards until an amount is set</span>
+              )}
             </span>
           </div>
         </div>

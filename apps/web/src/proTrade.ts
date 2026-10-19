@@ -132,7 +132,7 @@ export interface TradeSettings {
 
 export interface QuickBuySettings {
   enabled: boolean;
-  /** SOL per tap. */
+  /** SOL per tap; 0 is a blank amount, and the pill stays hidden until one is set. */
   amountSol: number;
   position: "top-right" | "top-left" | "bottom-right" | "bottom-left";
   size: "s" | "m" | "l";
@@ -146,11 +146,24 @@ export const BUY_PRESETS_PER_ROW = 5;
 
 export const DEFAULT_QUICK_BUY: QuickBuySettings = {
   enabled: false,
-  amountSol: 0.1,
+  amountSol: 0,
   position: "top-right",
   size: "m",
   color: "green",
 };
+
+/** A quick-buy amount the API takes; anything else (blank, 0, out of range) leaves the pill hidden. */
+export function quickBuyAmountOk(v: unknown): v is number {
+  return typeof v === "number" && v >= MIN_TRADE_SOL && v <= 100;
+}
+
+/**
+ * Whether cards show the quick-buy pill (user ask 2026-10-19): switched on and with an amount set,
+ * so it's hidden by default and whenever the amount field is blank or zero.
+ */
+export function quickBuyShown(q: QuickBuySettings): boolean {
+  return q.enabled && quickBuyAmountOk(q.amountSol);
+}
 
 /** Each custom fee's ceiling, SOL (the API refuses more). */
 export const MAX_CUSTOM_FEE_SOL = 0.01;
@@ -209,10 +222,7 @@ export function parseTradeSettings(raw: string | null): TradeSettings {
       alwaysShowHeld: s.alwaysShowHeld !== false,
       quickBuy: {
         enabled: q.enabled === true,
-        amountSol:
-          typeof q.amountSol === "number" && q.amountSol >= MIN_TRADE_SOL && q.amountSol <= 100
-            ? q.amountSol
-            : DEFAULT_QUICK_BUY.amountSol,
+        amountSol: quickBuyAmountOk(q.amountSol) ? q.amountSol : DEFAULT_QUICK_BUY.amountSol,
         position: QUICK_BUY_POSITIONS.includes(q.position as never)
           ? (q.position as QuickBuySettings["position"])
           : DEFAULT_QUICK_BUY.position,
