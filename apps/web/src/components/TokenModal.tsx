@@ -50,13 +50,11 @@ import {
   stitchVolume,
   withCallPoint,
   pointWidthMs,
-  zoomWindow,
   type CloseRun,
   type MarkerKind,
   type Point,
   type ScanFlow,
   type VolumeCandle,
-  type Zoom,
 } from "../priceChart";
 import {
   cardReadings,
@@ -87,7 +85,7 @@ import {
   useTermLayout,
 } from "./TermSplit";
 import { markPrefsOf, walletMarks, withLiveMarks } from "../walletMarks";
-import { PriceChart, type ChartEvent, type ChartKind, type ChartTrade } from "./PriceChart";
+import { TradingChart, type ChartEvent, type ChartKind, type ChartTrade } from "./TradingChart";
 import { TradePanel, solText, tokensText } from "./TradePanel";
 import { PRO_MODE_PERKS } from "./ProModeCard";
 import { summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
@@ -221,9 +219,12 @@ const RANGES: { id: Range; label: string; title: string }[] = [
 const TRADING_SPAN_MS = 15 * 60_000;
 /** Points drawn at most: enough for a smooth line, few enough that each one stays hoverable. */
 const MAX_POINTS = 240;
-/** Views this short read Pump.fun's 1-second candles, and up to QUARTER_VIEW_MAX_MS its 15-second ones. */
-const SECOND_VIEW_MAX_MS = 20 * 60_000;
-const QUARTER_VIEW_MAX_MS = 6 * 3_600_000;
+/**
+ * Candles this narrow read Pump.fun's 1-second candles, and under a minute its 15-second ones: the
+ * chart's candle size decides how fine the view reads (user ask 2026-10-19, the HolDEX chart).
+ */
+const SECOND_TF_MAX_MS = 5_000;
+const QUARTER_TF_MAX_MS = 30_000;
 /** The fine candles are re-read this often: 1-second ones on a view running to now, others rarely. */
 const FINE_LIVE_POLL_MS = 5_000;
 /** How often the predicted path is read afresh: its 5-second steps. */
@@ -611,12 +612,12 @@ function terminalChartHeight(): number {
 function chartBoxHeight(): number {
   return chartHeight() + CHART_CHROME_PX + (window.innerWidth <= 640 ? CHART_READOUT_PX : 0);
 }
-/** The Line / Candles and zoom row under the chart. */
-const CHART_TOOLS_PX = 34;
-/** What PriceChart draws around its plot: the time axis, the volume lane and the row under it. */
-const CHART_CHROME_PX = 40 + CHART_TOOLS_PX;
-/** On a phone, the readout PriceChart docks under the chart (its .pc-readout min-height). */
-const CHART_READOUT_PX = 84;
+/** The chart's toolbar over it (.tc-toolbar). */
+const CHART_TOOLS_PX = 38;
+/** What TradingChart draws around its plot: the toolbar and the time axis. */
+const CHART_CHROME_PX = 28 + CHART_TOOLS_PX;
+/** On a phone, the toolbar's second row (.tc.phone .tc-toolbar). */
+const CHART_READOUT_PX = 36;
 
 /** The Holders section's place while its reading is taken: the bubble map's frame, and the list's. */
 function HoldersPlaceholder({ children }: { children: ReactNode }) {
@@ -2073,12 +2074,10 @@ export function ChartCard({
   const look = useAppearance();
   const [rangePicked, setRange] = useState<Range | null>(null);
   const shownRange: Range = rangePicked ?? look.chartView;
-  // Zoomed into the view (user ask 2026-10-18); a new range starts from the whole of it.
-  const [zoom, setZoom] = useState<Zoom | null>(null);
-  const pickRange = (r: Range) => {
-    setRange(r);
-    setZoom(null);
-  };
+  const pickRange = (r: Range) => setRange(r);
+  // The candle size the chart draws, which decides how fine the candles read are; until it says,
+  // the view's default (1-second candles on Trading).
+  const [chartTf, setChartTf] = useState<number | null>(null);
 
   // Pro Mode: the signed-in wallet's position in the coin and the Trade panel. Null for everyone
   // else, so nothing of it is fetched or drawn without Pro Mode.
@@ -2166,23 +2165,13 @@ export function ChartCard({
 
   // The view's window over the minute data, before the finer reads that fill it in.
   const bounds = useMemo(() => (data ? viewBounds(data, shownRange) : null), [data, shownRange]);
-  // Finer candles where they add detail: 1-second ones for a view of minutes, 15-second ones for
-  // hours - and for a short view the 1-second page doesn't reach back across (Pump.fun sends the
-  // most recent 1,000 with a trade, minutes of a busy coin).
-  // Zoomed in, the window decides: zooming into minutes reads them finer.
-  const shownBounds = bounds && zoom ? zoomWindow(zoom, bounds.from, bounds.to) : bounds;
-  const span = shownBounds ? shownBounds.to - shownBounds.from : Infinity;
+  // Finer candles where the chart's candles are finer than a minute: 1-second ones for 1s and 5s
+  // candles, 15-second ones for 15s and 30s - and for those, where the 1-second page doesn't reach
+  // back across the view (Pump.fun sends the most recent 1,000 with a trade, minutes of a busy coin).
+  // Each read spends the shared Pump.fun budget, so a minute or wider reads neither.
+  const tfShown = chartTf ?? (shownRange === "trading" ? 1_000 : 60_000);
   const fineOk = !!data?.candles?.length;
-  // Only for a view of the last minutes, or one reaching into what the last 1-second page held (a quiet
-  // coin's reaches back further): each read spends the shared Pump.fun budget. Panning a locked 1s
-  // view back keeps its candles 1s as far as the page goes (user ask 2026-10-19).
-  const [secondFrom, setSecondFrom] = useState<{ mint: string; t: number } | null>(null);
-  const wantSecond =
-    fineOk &&
-    !!shownBounds &&
-    span <= SECOND_VIEW_MAX_MS &&
-    (shownBounds.from >= Date.now() - SECOND_VIEW_MAX_MS ||
-      (secondFrom?.mint === mint && shownBounds.to > secondFrom.t));
+  const wantSecond = fineOk && !!bounds && tfShown <= SECOND_TF_MAX_MS;
   // The experimental predicted path (Customize › Token chart, off by default) reads the last
   // minute second by second, so a live view with it on reads the 1-second page whatever its span;
   // the view itself still draws it only where it would anyway.
@@ -2193,15 +2182,10 @@ export function ChartCard({
     bounds?.live ? FINE_LIVE_POLL_MS : FINE_POLL_MS,
   );
   const second = wantSecond ? secondRead : null;
-  const secondStart = secondRead?.candles?.[0]?.t ?? null;
-  useEffect(() => {
-    if (secondStart !== null) setSecondFrom({ mint, t: secondStart });
-  }, [secondStart, mint]);
-  const secondReaches =
-    !!second?.candles?.length && !!shownBounds && second.candles[0]!.t <= shownBounds.from + 60_000;
+  const secondReaches = !!second?.candles?.length && !!bounds && second.candles[0]!.t <= bounds.from + 60_000;
   const quarter = useFineCandles(
     api,
-    fineOk && span <= QUARTER_VIEW_MAX_MS && (!wantSecond || (second !== null && !secondReaches))
+    fineOk && !!bounds && tfShown <= QUARTER_TF_MAX_MS && (!wantSecond || (second !== null && !secondReaches))
       ? "15s"
       : null,
     FINE_POLL_MS,
@@ -2301,19 +2285,12 @@ export function ChartCard({
       const full = linePoints(source, from, fullStep, to);
       if (full.length < 2) return null;
       const extent = { t0: full[0]!.t, t1: full[full.length - 1]!.t };
-      // Zoomed in, the window is thinned on its own, a step past each edge, so it keeps its detail.
-      const win = zoom ? zoomWindow(zoom, extent.t0, extent.t1) : null;
-      const step = win ? pointWidthMs(Math.max(1_000, win.to - win.from), maxPoints(), finest) : fullStep;
-      // With the nearest point on each side of that too, so a window zoomed into a quiet stretch
-      // still has a line to clip at its edges rather than leaving the chart (and its zoom) blank.
-      let line = full;
-      if (win) {
-        const lo = Math.max(from, win.from - step);
-        const hi = Math.min(to, win.to + step);
-        const before = source.filter((p) => p.t >= from && p.t < lo).at(-1);
-        const after = source.find((p) => p.t > hi && p.t <= to);
-        line = [...(before ? [before] : []), ...linePoints(source, lo, step, hi), ...(after ? [after] : [])];
-      }
+      const step = fullStep;
+      const line = full;
+      // The chart builds its candles from the candles themselves, and from the readings after the
+      // newest one (the live curve's ticks, which move the forming candle); without candles, from
+      // the scans' readings.
+      const ticks = source.filter((p) => p.t >= from && p.t <= to && (!fromCandles || p.t > candledTo));
       // The predicted path, from the finest reading of the last minute: the 1-second candles and
       // the live curve's changes after them.
       // It is read afresh every PATH_EVERY_MS, not on every tick, so its shape holds steady between
@@ -2342,6 +2319,7 @@ export function ChartCard({
         extent,
         fromCandles,
         step,
+        ticks,
         // Whether the view runs to the latest reading (Model View's window can end before it).
         live: bounds.live,
         latest: source[source.length - 1]!.v,
@@ -2369,7 +2347,6 @@ export function ChartCard({
     alertAt,
     alertMcap,
     callPriced,
-    zoom,
     tail.readAt,
     mint,
   ]);
@@ -2502,21 +2479,17 @@ export function ChartCard({
         {view && view.points.length >= 2 && (
           <>
             <SectionBoundary label="The chart" resetKey={`${mint}|${shownRange}|${kind}`}>
-              <PriceChart
-                points={view.points}
-                stepMs={view.step}
-                events={events}
+              <TradingChart
+                mint={mint}
                 candles={view.candles}
+                ticks={view.ticks}
+                events={events}
                 flow={flow}
-                live={view.live}
-                now={view.latest}
                 marks={marks}
                 height={height}
                 trades={chartTrades}
                 entry={entry}
                 extent={view.extent}
-                zoom={zoom}
-                onZoom={setZoom}
                 kind={kind}
                 onKind={setKind}
                 pinEnd={shownRange === "trading"}
@@ -2524,7 +2497,9 @@ export function ChartCard({
                 // (user ask 2026-10-19); All keeps the one picked before the views split.
                 tfScope={shownRange === "trading" ? "trading" : undefined}
                 defaultTimeframe={shownRange === "trading" ? 1_000 : null}
+                onTimeframe={setChartTf}
                 path={view.path}
+                fileName={`${card.token.symbol ?? "coin"}-mcap`}
                 ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
               />
             </SectionBoundary>
