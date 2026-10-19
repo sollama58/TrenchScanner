@@ -164,6 +164,20 @@ describe("tokenSageHints", () => {
     expect(tokenSageHints(row)).toEqual({ name: "Dog" });
   });
 
+  it("never cuts a hint through an emoji, which TokenSage refuses as invalid text", () => {
+    const hints = tokenSageHints({
+      name: "d".repeat(199) + "😀",
+      symbol: "s".repeat(49) + "😀",
+      description: "x".repeat(1_999) + "😀 tail",
+    })!;
+    expect(hints.name).toBe("d".repeat(199));
+    expect(hints.symbol).toBe("s".repeat(49));
+    expect(hints.description).toBe("x".repeat(1_999));
+    expect(JSON.stringify(hints)).not.toMatch(/\\ud83d/i);
+    // a pair that fits whole is kept
+    expect(tokenSageHints({ name: "Dog 😀" })!.name).toBe("Dog 😀");
+  });
+
   it("leaves out a URL longer than TokenSage accepts, which would 422 the whole batch", () => {
     const long = `https://ipfs.io/ipfs/${"x".repeat(2048)}`;
     expect(tokenSageHints({ name: "Dog", imageUrl: long, twitterUrl: long, websiteUrl: long })).toEqual({
