@@ -165,6 +165,12 @@ services:
     # that fails typecheck or a test never reaches production. 2026-10-16 database audit.
     autoDeployTrigger: checksPass
     healthCheckPath: /health
+    # Seconds from SIGTERM to SIGKILL (Render's default is 30). A deploy no longer cuts off Pro
+    # trades in flight: the old instance keeps resending them until they land or expire, up to
+    # 75s (apps/api/src/routes/proTrade.ts, DRAIN_MAX_MS), under the api's own 85s
+    # SHUTDOWN_DEADLINE_MS (apps/api/src/index.ts). Raise those three together. A shutdown with no
+    # trade in flight still ends at once.
+    maxShutdownDelaySeconds: 90
     envVars:
       - fromGroup: trenchscanner-shared
       - key: DATABASE_URL
