@@ -149,14 +149,19 @@ export function quoteText(
   side: "buy" | "sell",
   position: { decimals: number | null } | null,
   symbol: string,
+  /** A buy's token account rent, lamports: said after the fees, as the refundable deposit it is. */
+  rentLamports?: string | null,
 ): string {
   // Network fees (priority fee, Sender tip, base fee); the Sacrifice, when it is on, is its own line.
   const fees =
     (Number(BigInt(built.priorityFeeLamports)) + Number(BigInt(built.tipLamports)) + 5_000) / LAMPORTS;
   const sacrifice = sacrificeLine(built.sacrifice);
-  const tail = sacrifice
-    ? `network fee ${solText(fees)}. ${sacrifice}`
-    : `network fee ${solText(fees)}, no platform fee.`;
+  const rent = side === "buy" && rentLamports ? Number(BigInt(rentLamports)) / LAMPORTS : 0;
+  const tail =
+    (sacrifice
+      ? `network fee ${solText(fees)}. ${sacrifice}`
+      : `network fee ${solText(fees)}, no platform fee.`) +
+    (rent > 0 ? ` Plus ${solText(rent)} token account rent, refundable.` : "");
   if (side === "sell")
     return `About ${solText(Number(BigInt(built.quotedOut)) / LAMPORTS)}, at least ${solText(Number(BigInt(built.minOut)) / LAMPORTS)}; ${tail}`;
   const scale = 10 ** (position?.decimals ?? 6);
@@ -260,13 +265,44 @@ function bpsText(bps: number): string {
   return `${Number((bps / 100).toFixed(2))}%`;
 }
 
+/** The bar's legend: each part by a word or two. */
+const BAR_LABELS: Record<string, string> = {
+  priority: "Priority",
+  tip: "Sender tip",
+  base: "Base fee",
+  pool: "Pool fees",
+  tax: "Transfer tax",
+  sacrifice: "Sacrifice",
+  rent: "Rent",
+};
+
+const RENT_EXPLAINED =
+  "A deposit, not a fee: it opens this coin's token account in your wallet, and comes back in full " +
+  "when you close the empty account after selling (most wallets have a reclaim rent option).";
+
+/** A small arrow curling back: money that returns. */
+function RefundIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 /**
  * What a buy costs in all (user ask 2026-10-18): one bar for the whole swap cost, color coded,
- * the network's fee, the pools' fees, the coin's own transfer tax and a first buy's account rent,
+ * the network's fee, the pools' fees and the coin's own transfer tax, with a first buy's account
+ * rent beside the total as the refundable deposit it is,
  * with TrenchScanner's own fee up top: 0%, or the Sacrifice (ASDF fee plan) once it is on. Sized on the amount in the box last filled (a buy's SOL, or a
  * sale's tokens priced at the position's value), or the first buy button.
  */
-function FeeExplainer({
+export function FeeExplainer({
   fee,
   swap,
   solUsd,
@@ -312,21 +348,14 @@ function FeeExplainer({
               },
             ]
           : []),
-        // Rent is opening the token account, so only a buy pays it.
-        ...(side === "buy" && Number(swap.accountRentLamports) > 0
-          ? [
-              {
-                key: "rent",
-                label: swap.routeVia?.length
-                  ? "Token account rent (first buy and the route's tokens, refundable)"
-                  : "Token account rent (first buy, refundable)",
-                sol: Number(swap.accountRentLamports) / LAMPORTS,
-                rate: "",
-              },
-            ]
-          : []),
       ]
     : [];
+  // Rent opens the token account, so only a buy pays it. A deposit, not a cost: it comes back when
+  // the account is closed, so it sits beside the total rather than in it (user ask 2026-10-19).
+  const rentSol = side === "buy" && swap ? Number(swap.accountRentLamports) / LAMPORTS : 0;
+  const rentLabel = swap?.routeVia?.length
+    ? "Token account rent, this coin's and the route's tokens"
+    : "Token account rent, a first buy of this coin";
   // The Sacrifice (ASDF fee plan): 0.2%, paid in burned credits, by wallets below the free
   // cut-off. Counted in the total only while it is on; in shadow it is shown as a preview.
   const sac = fee?.sacrifice && fee.sacrifice.mode !== "off" ? fee.sacrifice : null;
@@ -338,6 +367,12 @@ function FeeExplainer({
       : [];
   const parts = [...network.map((p) => ({ ...p, rate: "" })), ...swapParts, ...sacrificeParts];
   const total = fee ? parts.reduce((sum, p) => sum + p.sol, 0) : null;
+  // The bar: each cost by its share of the total, the refundable rent after a gap, hatched.
+  const barParts = [
+    ...parts,
+    ...(rentSol > 0 ? [{ key: "rent", label: "Rent", sol: rentSol, rate: "" }] : []),
+  ];
+  const barTotal = barParts.reduce((sum, p) => sum + p.sol, 0);
   // What this trade saves against a 1% platform fee elsewhere, less the Sacrifice when it's charged.
   const savedSol = sizeSol > 0 ? feeSavedSol(sizeSol, sac?.mode === "on" ? sacSol : 0) : 0;
   const usdText = (sol: number) => {
@@ -370,7 +405,7 @@ function FeeExplainer({
               <strong className="num">{solText(total)}</strong>
               <small className="num muted">
                 {sizeSol > 0 ? ` ${((total / sizeSol) * 100).toFixed(2)}% of the trade` : ""}
-                {solUsd ? ` · ≈ ${usdText(total)}` : ""}
+                {solUsd ? ` · ≈\u00a0${usdText(total)}` : ""}
               </small>
             </>
           ) : (
@@ -378,17 +413,50 @@ function FeeExplainer({
           )}
         </span>
       </div>
-      {total !== null && total > 0 && (
-        <div className="tm-fee-bar" role="img" aria-label="How the cost splits">
-          {parts.map((p) => (
-            <span
-              key={p.key}
-              className={p.key}
-              title={`${p.label}: ${solText(p.sol)}`}
-              style={{ flexGrow: Math.max(p.sol / total, 0.025) }}
-            />
-          ))}
-        </div>
+      {total !== null && barTotal > 0 && (
+        <>
+          <div
+            className="tm-fee-bar"
+            role="img"
+            aria-label={`How the cost splits: ${barParts
+              .map((p) => `${BAR_LABELS[p.key] ?? p.label} ${solText(p.sol)}`)
+              .join(", ")}`}
+          >
+            {barParts.map((p) => (
+              <span
+                key={p.key}
+                className={p.key}
+                title={`${p.key === "rent" ? `${rentLabel} (refundable)` : p.label}: ${solText(p.sol)}`}
+                style={{ flexGrow: Math.max(p.sol / barTotal, 0.03) }}
+              />
+            ))}
+          </div>
+          <ul className="tm-fee-legend">
+            {barParts.map((p) => (
+              <li
+                key={p.key}
+                className={p.key === "rent" ? "refund" : undefined}
+                title={p.key === "rent" ? RENT_EXPLAINED : undefined}
+              >
+                <i className={`tm-fee-dot ${p.key}`} aria-hidden="true" />
+                <span>{BAR_LABELS[p.key] ?? p.label}</span>
+                {p.key === "rent" ? (
+                  <>
+                    <span className="num">{solText(p.sol)}</span>
+                    <span className="tm-fee-refund-pill">
+                      <RefundIcon />
+                      refundable
+                    </span>
+                  </>
+                ) : (
+                  <span className="num">
+                    {total && total > 0 ? `${Math.round((p.sol / total) * 100)}%` : ""}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
       )}
       <details className="tm-fee-more">
         <summary>
@@ -436,8 +504,16 @@ function FeeExplainer({
                   {swap && swap.poolFeeBps === null && (
                     <li className="tm-fee-none">
                       <i className="tm-fee-dot none" aria-hidden="true" />
-                      <span>Pool and LP fees</span>
-                      <span className="num">in the quote</span>
+                      <span>
+                        Pool and LP fees
+                        {swap.venues.length ? ` (${swap.venues.join(", ")})` : ""}
+                      </span>
+                      <span
+                        className="num"
+                        title="The route didn't give its pools' rate, so it can't be shown on its own; it is taken out of the tokens you're quoted, not charged on top"
+                      >
+                        taken from the quote
+                      </span>
                     </li>
                   )}
                   {swap && routeText(swap.routeVia) && (
@@ -475,6 +551,22 @@ function FeeExplainer({
                   )}
                 </ul>
               </div>
+              {rentSol > 0 && (
+                <div className="tm-fee-group tm-fee-refund">
+                  <span className="tm-fee-group-title">Refundable, not in the total</span>
+                  <ul className="tm-fee-rows">
+                    <li>
+                      <i className="tm-fee-dot rent" aria-hidden="true" />
+                      <span>{rentLabel}</span>
+                      <span className="num">{solText(rentSol)}</span>
+                    </li>
+                  </ul>
+                  <p className="tm-fee-refund-note">
+                    <RefundIcon />
+                    <span>{RENT_EXPLAINED}</span>
+                  </p>
+                </div>
+              )}
             </div>
           )}
           {swap && swap.transferFeeBps !== null && swap.transferFeeBps > 0 && (
@@ -730,7 +822,9 @@ export function TradePanel({
             kind: "busy",
             stage,
             what,
-            quote: built ? quoteText(built, side, position, symbol) : undefined,
+            quote: built
+              ? quoteText(built, side, position, symbol, swapCosts?.accountRentLamports)
+              : undefined,
           });
         },
       );

@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { api } from "./api";
+import { cachedGet } from "./cache";
 
 /**
  * Privy sign-in (email or Google/X, with a wallet Privy holds), the part in the main bundle.
@@ -23,9 +23,9 @@ export const PRIVY_WALLET_NAME = "Privy";
 
 let configPromise: Promise<PrivyConfig> | null = null;
 
-/** GET /auth/privy/config, once per page; any failure reads as off. */
+/** GET /auth/privy/config, once per page (adopting index.html's early request); any failure reads as off. */
 export function privyConfig(): Promise<PrivyConfig> {
-  configPromise ??= api<PrivyConfig>("/auth/privy/config").catch(() => {
+  configPromise ??= cachedGet<PrivyConfig>("/auth/privy/config").catch(() => {
     configPromise = null;
     return { enabled: false };
   });

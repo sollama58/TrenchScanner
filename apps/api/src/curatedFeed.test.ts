@@ -207,6 +207,20 @@ describe("serializeCuratedAlert", () => {
     expect(card.currentMarketCapUsd).toBe(150_000);
   });
 
+  it("leaves each snapshot's flaggedTrades off the card, keeping the rest", () => {
+    // No card reads them (the chart reads its own copy) and they were ~15% of a feed page.
+    const trades = [{ wallet: "w1", side: "buy", sol: 1 }];
+    const row = alertRow({
+      snapshot: { id: "s1", takenAt: at(0), marketCapUsd: 90_000, priceUsd: 0.0009, flaggedTrades: trades },
+    }) as any;
+    row.token.snapshots = [{ id: "s2", takenAt: at(4), marketCapUsd: 140_000, flaggedTrades: trades }];
+    const card = serializeCuratedAlert(row, currentMarketCap);
+    expect(card.snapshot).not.toHaveProperty("flaggedTrades");
+    expect(card.latestSnapshot).not.toHaveProperty("flaggedTrades");
+    expect(card.snapshot.id).toBe("s1");
+    expect(card.latestSnapshot).toMatchObject({ id: "s2", marketCapUsd: 140_000 });
+  });
+
   it("carries the Narrative seat's note; the reader's Customize toggle decides whether it shows", () => {
     const noted = alertRow({ narrativeVerdict: "warns", narrativeNotedAt: at(5) }) as any;
     expect(serializeCuratedAlert(alertRow() as any, currentMarketCap).curated.narrative).toBeNull();

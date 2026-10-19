@@ -16,7 +16,7 @@ import {
   type ManualTradeRpc,
 } from "./manualTrade.js";
 import { NoRouteError, RateLimitedError } from "./jupiterSwap.js";
-import { PUMP_GLOBAL, pumpCurveAddress } from "./pumpCurve.js";
+import { PUMP_FEE_CONFIG, PUMP_GLOBAL, pumpCurveAddress } from "./pumpCurve.js";
 import {
   parsePumpSwapFeeConfig,
   parsePumpSwapGlobal,
@@ -26,6 +26,7 @@ import {
   pumpPoolAuthority,
   PUMP_SWAP_FEE_CONFIG,
   PUMP_SWAP_GLOBAL_CONFIG,
+  pumpFeeBps,
   pumpSwapBuyInstructions,
   pumpSwapFees,
   pumpSwapPoolOfMint,
@@ -695,5 +696,52 @@ describe("PumpSwap as Jupiter's fallback", () => {
       buildManualTrade({ rpc: rpc(chain(true), seen), jupiter: failing(broken) }, req),
     ).rejects.toBe(broken);
     expect(seen).toHaveLength(0);
+  });
+});
+
+describe("Pump.fun's fee for the cost breakdown", () => {
+  // 30 SOL against 1.073B virtual tokens on the curve (about 28 SOL of market cap: the first
+  // tier), and the pool's 1,000 SOL against 200M tokens (5,000 SOL: the top tier).
+  function chain(complete: boolean, creator = key(60)): Record<string, Uint8Array> {
+    const curve = new Uint8Array(150);
+    curve.set([23, 183, 248, 55, 96, 216, 172, 96], 0);
+    put(curve, 8, 1_073_000_000_000_000n);
+    put(curve, 16, 30_000_000_000n);
+    put(curve, 24, 793_100_000_000_000n);
+    curve[48] = complete ? 1 : 0;
+    curve.set(bs58.decode(creator), 49);
+    return {
+      [pumpCurveAddress(MINT)]: curve,
+      [PUMP_FEE_CONFIG]: feeConfigData(),
+      [POOL]: poolData(),
+      [PUMP_SWAP_GLOBAL_CONFIG]: globalData(),
+      [PUMP_SWAP_FEE_CONFIG]: feeConfigData(),
+      [MINT]: mintAccount(1_000_000_000_000_000n),
+      [key(20)]: tokenAccount(state.baseReserve),
+      [key(21)]: tokenAccount(state.quoteVaultAmount),
+    };
+  }
+  const rpc = (c: Record<string, Uint8Array>) => ({
+    getAccountsData: async (a: string[]) => a.map((k) => c[k] ?? null),
+  });
+
+  it("reads a curve coin's tier (protocol and creator, no LP) and a graduated coin's pool fees", async () => {
+    expect(await pumpFeeBps(rpc(chain(false)), MINT)).toEqual({ bps: 123, venue: "Pump.fun" });
+    expect(await pumpFeeBps(rpc(chain(false, SYSTEM_PROGRAM_ID)), MINT)).toEqual({
+      bps: 93,
+      venue: "Pump.fun",
+    });
+    expect(await pumpFeeBps(rpc(chain(true)), MINT)).toEqual({ bps: 30, venue: "PumpSwap" });
+  });
+
+  it("says nothing for a coin that isn't Pump.fun's, or when the chain can't be read", async () => {
+    const none = chain(false);
+    delete none[pumpCurveAddress(MINT)];
+    delete none[POOL];
+    expect(await pumpFeeBps(rpc(none), MINT)).toBeNull();
+    expect(await pumpFeeBps({ getAccountsData: async () => null }, MINT)).toBeNull();
+    const noSchedule = chain(false);
+    delete noSchedule[PUMP_FEE_CONFIG];
+    expect(await pumpFeeBps(rpc(noSchedule), MINT)).toBeNull();
   });
 });

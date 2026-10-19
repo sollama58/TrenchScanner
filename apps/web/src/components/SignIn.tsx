@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, type User } from "../api";
+import { type User } from "../api";
+import { cachedGet } from "../cache";
 import { GUEST_DELAY_MINUTES } from "../session";
 import {
   describeSignInError,
@@ -64,7 +65,8 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
   const [free, setFree] = useState<FreeAccessNotice | null>(null);
   useEffect(() => {
     let live = true;
-    api<FreeAccessNotice>("/config/free-access")
+    // index.html starts this on a first visit; cachedGet adopts that request.
+    cachedGet<FreeAccessNotice>("/config/free-access")
       .then((f) => live && setFree(f.phase ? f : null))
       .catch(() => undefined);
     return () => {
