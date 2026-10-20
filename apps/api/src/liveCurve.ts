@@ -55,6 +55,12 @@ const logger = createLogger("live-curve");
 const LAUNCHLAB_RETRY_MS = 10_000;
 /** Stonks coins' LaunchLab pools found so far (a scan each), kept across follows. */
 const MAX_LAUNCHLAB_POOLS = 2_000;
+/**
+ * A graduated Stonks coin's CPMM pool scan (a getProgramAccounts, 10-20 credits) is tried again
+ * after this long when it failed, not every READ_EVERY_MS; the vaults it finds are kept across
+ * follows like the LaunchLab pools (audit 2026-10-19, H6).
+ */
+const CPMM_RETRY_MS = LAUNCHLAB_RETRY_MS;
 /** A curve is let go once no chart has asked about it for this long. */
 const IDLE_MS = 30_000;
 /** Off the stream, a followed curve is read this often (1 credit per 100 curves a read). */
@@ -276,6 +282,8 @@ export class LiveCurves {
   private readonly startedAt: number;
   /** Each Stonks mint's LaunchLab pool (or null: none), so a coin is scanned for once. */
   private readonly launchLabPools = new Map<string, string | null>();
+  /** Graduated Stonks coins' CPMM pool vaults found so far, by mint and quote mint. */
+  private readonly cpmmPools = new Map<string, PoolVaults>();
   /** Charts' held asks, by mint: each woken by the curve's next change. */
   private readonly waiters = new Map<string, Set<() => void>>();
   /** Each loop's pass in flight ("prices", "discover", "verify"): a loop never runs twice at once. */
@@ -887,7 +895,8 @@ export class LiveCurves {
     const cpmm: [string, Followed][] = [];
     for (const [mint, f] of this.followed) {
       if (f.none || !f.complete || !f.wantPool || f.pool !== null) continue;
-      if (f.poolSoughtAt !== null && now - f.poolSoughtAt < READ_EVERY_MS) continue;
+      if (f.poolSoughtAt !== null && now - f.poolSoughtAt < (f.launchLab ? CPMM_RETRY_MS : READ_EVERY_MS))
+        continue;
       // A LaunchLab (Stonks) coin graduates into a Raydium CPMM pool, not PumpSwap.
       if (f.launchLab) {
         cpmm.push([mint, f]);
@@ -916,10 +925,23 @@ export class LiveCurves {
         f.pool = "none";
         continue;
       }
+      const quoteMint = f.quoteMint ?? WRAPPED_SOL_MINT;
+      const known = this.cpmmPools.get(`${mint}:${quoteMint}`);
+      if (known) {
+        this.setPool(mint, f, known, this.now(), null);
+        continue;
+      }
       if (this.now() > deadline) break;
       f.poolSoughtAt = now;
-      const vaults = await reader.findCpmmPoolVaults(mint, f.quoteMint ?? WRAPPED_SOL_MINT);
+      const vaults = await reader.findCpmmPoolVaults(mint, quoteMint);
       if (vaults === "failed" || this.followed.get(mint) !== f) continue;
+      if (vaults !== null) {
+        if (this.cpmmPools.size >= MAX_LAUNCHLAB_POOLS) {
+          const oldest = this.cpmmPools.keys().next().value;
+          if (oldest !== undefined) this.cpmmPools.delete(oldest);
+        }
+        this.cpmmPools.set(`${mint}:${quoteMint}`, vaults);
+      }
       this.setPool(mint, f, vaults, this.now(), null);
     }
   }

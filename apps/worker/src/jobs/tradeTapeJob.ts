@@ -239,13 +239,20 @@ const heldElsewhere = (tokenId: string, lane: Lane) =>
 /**
  * Saves the lanes' reads in progress, for the next process's first run (restoreProgress): a deploy
  * mid-read cost a busy Pump.fun read up to 15 runs and a Helius read up to 1,000 credits, started
- * again from the first page. Called by the worker's shutdown once the jobs have settled.
+ * again from the first page. Called by the worker's shutdown once the jobs have settled, and after
+ * every run with `keepOthers` so a crash or a kill without shutdown loses at most a run (audit
+ * 2026-10-19, H2a): a lane's saved row for another coin is then left alone, since in a deploy it is
+ * the old process's read, waiting for this lane to free up (restoreProgress).
  */
-export async function saveTradeTapeProgress(): Promise<number> {
+export async function saveTradeTapeProgress(opts: { keepOthers?: boolean } = {}): Promise<number> {
   let saved = 0;
   for (const lane of LANES) {
     const p = state[lane];
     if (!p) continue;
+    if (opts.keepOthers) {
+      const row = await prisma.tradeTapeProgress.findUnique({ where: { lane }, select: { tokenId: true } });
+      if (row && row.tokenId !== p.coin.tokenId) continue;
+    }
     const data = p as unknown as Prisma.InputJsonValue;
     await prisma.tradeTapeProgress.upsert({
       where: { lane },
@@ -1038,6 +1045,9 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
         })
       : Promise.resolve(),
   ]);
+  await saveTradeTapeProgress({ keepOthers: true }).catch((err: unknown) =>
+    logger.warn("trade tape progress not saved", { error: String(err) }),
+  );
   const rpc = deps.helius.takeCallStats();
   const meta: JobRunMeta = {
     pendingCalledCoins: pending,

@@ -2,6 +2,7 @@
 // worker's existing imports.
 export {
   HeliusAccountStream,
+  REFUSED_RETRY_MS,
   STREAM_SETTLE_MS,
   UNWATCHED_TTL_MS,
   streamCredits,

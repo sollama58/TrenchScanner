@@ -376,6 +376,47 @@ describe("LiveCurves", () => {
     curves.stop();
   });
 
+  it("scans for a Stonks coin's CPMM pool again only after 10 s when it failed, and keeps the vaults it found", async () => {
+    const graduated: CurveState = { ...state(0), virtualToken: 0, virtualQuote: 0, complete: true };
+    let now = 1_000_000;
+    let scans = 0;
+    const curves = new LiveCurves({
+      makeStream: null,
+      now: () => now,
+      reader: {
+        getCurveStatesBatch: async (list: string[]) =>
+          new Map(list.map((c) => [c, c === "ll-pool" ? graduated : null])),
+        findLaunchLabPool: async () => "ll-pool",
+        findCpmmPoolVaults: async () => (++scans === 1 ? "failed" : VAULTS),
+        getPoolVaultsBatch: async () => new Map(),
+        getTokenAmountsBatch: async (list: string[]) =>
+          new Map(list.map((a) => [a, a === VAULTS.base ? 2e14 : 8e10])),
+      },
+      solPrice: { get: async () => 100 },
+    });
+    await curves.read(MINT, 0);
+    await curves.round();
+    await curves.round();
+    expect(scans).toBe(1);
+    now += READ_EVERY_MS;
+    await curves.round();
+    expect(scans).toBe(1);
+    now += 10_000;
+    await curves.round();
+    await curves.round();
+    expect(scans).toBe(2);
+    expect(await curves.read(MINT, 0)).toMatchObject({ venue: "pool" });
+    // Let go, then followed again: the vaults are known, no scan.
+    now += 60_000;
+    await curves.round();
+    await curves.read(MINT, 0);
+    await curves.round();
+    await curves.round();
+    expect(scans).toBe(2);
+    expect(await curves.read(MINT, 0)).toMatchObject({ venue: "pool" });
+    curves.stop();
+  });
+
   it("reads a pool by RPC every READ_EVERY_MS off the stream", async () => {
     const t = setup({ states: [state(5e10, true)], pool: { vaults: VAULTS, amounts: [2e14, 8e10] } });
     expect(await t.curves.read(MINT, 0)).toMatchObject({ venue: "pool", complete: false, source: "rpc" });

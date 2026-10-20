@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { keysOf } from "@trenchscanner/core";
 import {
   HeliusAccountStream,
+  REFUSED_RETRY_MS,
   STREAM_SETTLE_MS,
   streamCredits,
   streamTx,
@@ -213,6 +214,39 @@ describe("HeliusAccountStream", () => {
     expect(stream.coveredSince("mint-1", "acc-a")).toBeNull();
     stream.watch("mint-1", ["acc-a", "acc-b"]);
     expect(subscribes(socket)).toHaveLength(2);
+    stream.stop();
+  });
+
+  it("asks for a refused subscription again after REFUSED_RETRY_MS, and counts the refusal", () => {
+    const { stream, socket } = started();
+    stream.watch("mint-1", ["acc-a"], 1_000);
+    const id = subscribes(socket)[0]!.id;
+    stream.handleMessage(JSON.stringify({ jsonrpc: "2.0", id, error: { message: "nope" } }), 2_000);
+    stream.watch("mint-1", ["acc-a"], 2_000 + REFUSED_RETRY_MS - 1);
+    expect(subscribes(socket)).toHaveLength(1);
+    stream.watch("mint-1", ["acc-a"], 2_000 + REFUSED_RETRY_MS);
+    expect(subscribes(socket)).toHaveLength(2);
+    const again = subscribes(socket)[1]!.id;
+    stream.handleMessage(JSON.stringify({ jsonrpc: "2.0", id: again, result: 5 }), 400_000);
+    expect(stream.coveredSince("mint-1", "acc-a", 400_000)).toBe(400_000);
+    // Confirmed: not asked for again.
+    stream.watch("mint-1", ["acc-a"], 2_000_000);
+    expect(subscribes(socket)).toHaveLength(2);
+    expect(stream.takeStats()).toMatchObject({ refused: 1, capped: 0 });
+    stream.stop();
+  });
+
+  it("at the cap, gives a key nobody asked for in 5 minutes' place to a new one, else counts it turned away", () => {
+    const { stream, socket } = started();
+    for (let i = 0; i < 200; i += 1) stream.watch(`mint-${i}`, [`acc-${i}`], i === 0 ? 0 : 290_000);
+    expect(subscribes(socket)).toHaveLength(200);
+    // mint-0 was last asked for 5 minutes ago: it makes room.
+    stream.watch("new-1", ["acc-new-1"], 300_000);
+    expect(subscribes(socket)).toHaveLength(201);
+    // The rest were asked for 10 s ago: the next is turned away, and counted.
+    stream.watch("new-2", ["acc-new-2"], 300_000);
+    expect(subscribes(socket)).toHaveLength(201);
+    expect(stream.takeStats()).toMatchObject({ capped: 1 });
     stream.stop();
   });
 });
