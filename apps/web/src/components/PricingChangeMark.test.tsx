@@ -12,9 +12,18 @@ describe("the pricing change marker", () => {
       series: [{ id: "a", label: "2x rate", unit: "pct" as const, slot: 1, values: [10, 12, 9, 11] }],
       kind: "line" as const,
     };
-    const html = renderToStaticMarkup(<TrendChart {...props} pricingChange={2.67} />);
+    const html = renderToStaticMarkup(
+      <TrendChart
+        {...props}
+        changes={[
+          { pos: 1.5, label: "Pricing Methods Changed" },
+          { pos: 2.67, label: "Floor Lowered to $7k" },
+        ]}
+      />,
+    );
     expect(html).toContain('class="pricing-change"');
     expect(html).toContain("Pricing Methods Changed");
+    expect(html).toContain("Floor Lowered to $7k");
     expect(renderToStaticMarkup(<TrendChart {...props} />)).not.toContain("pricing-change");
   });
 
@@ -23,7 +32,7 @@ describe("the pricing change marker", () => {
       <MultiLines
         labels={days}
         series={[{ key: "a", label: "Model", tone: "s1", values: [10, 12, 9, 11] }]}
-        pricingChange={2.17}
+        changes={[{ pos: 2.17, label: "Pricing Methods Changed" }]}
       />,
     );
     expect(html).toContain("Pricing Methods Changed");

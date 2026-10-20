@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Series, Unit } from "../lighthouseMetrics";
 import { compactNumber, niceScale, scaleTicks, tickIndices, tickTextWidth, tipCenter } from "../chartScale";
 import { PricingChangeMark } from "./PricingChangeMark";
+import type { ChartChange } from "../pricingChange";
 import { pickHandlers, pointerX, useChartWidth } from "./useChartWidth";
 
 /**
@@ -21,8 +22,8 @@ export interface TrendChartProps {
   height?: number;
   /** Buckets whose readout should say they are still filling (the current one). */
   partialLast?: boolean;
-  /** Where pricing changed, in bucket widths from the left edge (pricingChangeSlot); null when off-axis. */
-  pricingChange?: number | null;
+  /** The marked changes, in bucket widths from the left edge (changeSlots). */
+  changes?: readonly ChartChange[];
 }
 
 /** A readable number: counts whole, rates to a decimal, with the unit's sign and suffix. */
@@ -52,7 +53,7 @@ export function TrendChart({
   kind,
   height = 220,
   partialLast = false,
-  pricingChange = null,
+  changes = [],
 }: TrendChartProps) {
   const [hover, setHover] = useState<number | null>(null);
   const [boxRef, width] = useChartWidth(640);
@@ -201,14 +202,16 @@ export function TrendChart({
               />
             ) : null,
           )}
-          {pricingChange !== null && (
+          {changes.map((c) => (
             <PricingChangeMark
-              x={padL + pricingChange * slot}
+              key={c.label}
+              x={padL + c.pos * slot}
               top={padT}
               bottom={padT + plotH}
               width={width}
+              label={c.label}
             />
-          )}
+          ))}
           {kind === "line" &&
             series.map((s) => <path key={s.id} className={`lht-line ${cls(s.slot)}`} d={linePath(s)} />)}
           {kind === "bars" &&
