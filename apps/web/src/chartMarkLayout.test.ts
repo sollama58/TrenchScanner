@@ -38,22 +38,28 @@ describe("layoutMarks", () => {
   });
 
   it("pulls a stack closer with a small gap and pushes it out with a large one", () => {
-    const buy = (gap?: number) => layoutMarks([spot("a", "buy", 50), spot("b", "buy", 51)], 20, 400, gap);
-    const near = buy(0.5);
-    const mid = buy(1);
-    const far = buy(2);
-    const fromEdge = (p: (typeof near)[number]) => p.y - p.edgeY;
-    expect(fromEdge(near[0]!)).toBeLessThan(fromEdge(mid[0]!));
-    expect(fromEdge(mid[0]!)).toBeLessThan(fromEdge(far[0]!));
-    const span = (rows: typeof near) => rows[1]!.y - rows[0]!.y;
-    expect(span(near)).toBeLessThan(span(mid));
-    expect(span(mid)).toBeLessThan(span(far));
+    const one = (gap?: number) => layoutMarks([spot("a", "buy", 50)], 20, 400, gap)[0]!;
+    const near = one(0.5);
+    const mid = one(1);
+    const far = one(2);
+    expect(near.y - near.edgeY).toBeLessThan(mid.y - mid.edgeY);
+    expect(mid.y - mid.edgeY).toBeLessThan(far.y - far.edgeY);
     // The gap moves the stack. It does not change a mark's own radius.
-    expect(near[0]!.r).toBe(mid[0]!.r);
-    expect(far[0]!.r).toBe(8);
-    expect(buy()[0]!.y).toBe(mid[0]!.y);
-    expect(buy(0)[0]!.y).toBe(mid[0]!.y);
-    expect(buy(-1)[0]!.y).toBe(mid[0]!.y);
+    expect(near.r).toBe(8);
+    expect(far.r).toBe(8);
+    expect(one().y).toBe(mid.y);
+    expect(one(0).y).toBe(mid.y);
+    expect(one(-1).y).toBe(mid.y);
+    // Small radii stay on consecutive levels, so the row spacing is the scaled pitch.
+    const stacked = (gap: number) =>
+      layoutMarks([spot("a", "buy", 50, 4), spot("b", "buy", 50, 4)], 20, 400, gap);
+    for (const gap of [0.5, 1, 2]) expect(stacked(gap).map((p) => p.level)).toEqual([0, 1]);
+    const span = (gap: number) => {
+      const rows = stacked(gap);
+      return rows[1]!.y - rows[0]!.y;
+    };
+    expect(span(0.5)).toBeLessThan(span(1));
+    expect(span(1)).toBeLessThan(span(2));
   });
 });
 
