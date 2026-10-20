@@ -65,13 +65,25 @@ const listeners = new Set<() => void>();
 let version = 0;
 /** Set once the API says this visitor can't read names (a guest), so lists stop asking. */
 let closed = false;
+/**
+ * A read that failed (a 429 on a busy minute, a dropped connection) is asked again this long after,
+ * doubling up to FAILED_RETRY_MAX_MS, six times in a row at most. Before, it waited for the list's
+ * wallets to change, which a chart's few KOLs never did, so their names and pictures never came
+ * (user report 2026-10-20).
+ */
+export const FAILED_RETRY_MS = 4_000;
+const FAILED_RETRY_MAX_MS = 60_000;
+let failedInARow = 0;
 
 function notify() {
   version += 1;
   for (const l of listeners) l();
 }
 
-/** Asks the API for the names of `wallets` that aren't known yet or are due again. */
+/**
+ * Asks the API for the names of `wallets` that aren't known yet or are due again, the first
+ * MAX_PER_READ of them in the order given (a live list puts its newest traders first).
+ */
 export async function loadWalletNames(wallets: readonly string[]): Promise<void> {
   if (closed) return;
   const now = Date.now();
@@ -91,6 +103,7 @@ export async function loadWalletNames(wallets: readonly string[]): Promise<void>
       known.set(w, { name: res.names?.[w] ?? null, at });
       retries.delete(w);
     }
+    failedInARow = 0;
     notify();
     const again = [...unread].filter((w) => (retries.get(w) ?? 0) < UNREAD_RETRIES);
     for (const w of again) retries.set(w, (retries.get(w) ?? 0) + 1);
@@ -108,9 +121,14 @@ export async function loadWalletNames(wallets: readonly string[]): Promise<void>
       }, UNREAD_COOLDOWN_MS);
     }
   } catch (err) {
-    // A failed read is asked again next time the list opens; no access means never.
+    // No access means never; anything else is asked again shortly.
     if (err instanceof ApiError && (err.status === 401 || err.status === 402 || err.status === 403))
       closed = true;
+    else if (failedInARow < 6) {
+      const wait = Math.min(FAILED_RETRY_MAX_MS, FAILED_RETRY_MS * 2 ** failedInARow);
+      failedInARow += 1;
+      setTimeout(() => void loadWalletNames(ask), wait);
+    }
   } finally {
     for (const w of ask) asking.delete(w);
   }
@@ -121,10 +139,13 @@ const subscribe = (l: () => void) => {
   return () => listeners.delete(l);
 };
 
-/** The names of `wallets`, read in one batch for those not known yet. */
+/**
+ * The names of `wallets`, read in one batch for those not known yet. Asked in the order given, so
+ * a list longer than one read gets its first wallets' names first.
+ */
 export function useWalletNames(wallets: readonly (string | null | undefined)[]): WalletNames {
   const key = useMemo(
-    () => [...new Set(wallets.filter((w): w is string => !!w && ADDRESS_RE.test(w)))].sort().join(","),
+    () => [...new Set(wallets.filter((w): w is string => !!w && ADDRESS_RE.test(w)))].join(","),
     [wallets],
   );
   const v = useSyncExternalStore(subscribe, () => version);

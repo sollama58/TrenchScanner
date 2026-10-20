@@ -36,7 +36,14 @@ const asking = new Set<string>();
 const listeners = new Set<() => void>();
 let version = 0;
 let closed = false;
+/**
+ * A failed read is asked again this long after, doubling to a minute, six times in a row at most
+ * (as walletNames.ts does).
+ */
+const FAILED_RETRY_MS = 4_000;
+let failedInARow = 0;
 
+/** Asks for the first MAX_PER_READ of `wallets` not known yet, in the order given. */
 async function load(wallets: readonly string[]) {
   if (closed) return;
   const ask = wallets.filter((w) => !known.has(w) && !asking.has(w)).slice(0, MAX_PER_READ);
@@ -47,11 +54,17 @@ async function load(wallets: readonly string[]) {
       wallets: ask,
     });
     for (const w of ask) known.set(w, res.sides?.[w] ?? []);
+    failedInARow = 0;
     version += 1;
     for (const l of listeners) l();
   } catch (err) {
     if (err instanceof ApiError && (err.status === 401 || err.status === 402 || err.status === 403))
       closed = true;
+    else if (failedInARow < 6) {
+      const wait = Math.min(60_000, FAILED_RETRY_MS * 2 ** failedInARow);
+      failedInARow += 1;
+      setTimeout(() => void load(ask), wait);
+    }
   } finally {
     for (const w of ask) asking.delete(w);
   }
@@ -74,12 +87,9 @@ export function forgetPossibleSides(): void {
   for (const l of listeners) l();
 }
 
-/** The possible-side matches of `wallets` that have any. */
+/** The possible-side matches of `wallets` that have any, asked in the order given. */
 export function usePossibleSides(wallets: readonly (string | null | undefined)[]): PossibleSides {
-  const key = useMemo(
-    () => [...new Set(wallets.filter((w): w is string => !!w))].sort().join(","),
-    [wallets],
-  );
+  const key = useMemo(() => [...new Set(wallets.filter((w): w is string => !!w))].join(","), [wallets]);
   const v = useSyncExternalStore(subscribe, () => version);
   useEffect(() => {
     if (key) void load(key.split(","));

@@ -529,7 +529,8 @@ export function withTrackedMarks(
       continue;
     }
     if (added >= MAX_TRACKED_MARKED_WALLETS || budget <= 0) continue;
-    const trades = (storedTrades(r.trades) ?? firstTrades(r)).slice(0, budget);
+    // The newest trades past the budget: the marks a live chart is waiting on.
+    const trades = newest(storedTrades(r.trades) ?? firstTrades(r), budget);
     if (trades.length === 0) continue;
     budget -= trades.length;
     added += 1;
@@ -634,10 +635,17 @@ function rankAndCap(wallets: MarkedWallet[]): MarkedWallet[] {
   const kept = wallets.slice(0, MAX_MARKED_WALLETS);
   let budget = MAX_MARKED_TRADES;
   for (const w of kept) {
-    if (w.trades.length > budget) w.trades = w.trades.slice(0, Math.max(0, budget));
+    // Past the budget, a wallet keeps its newest trades: keeping its oldest left a busy coin's new
+    // marks off the chart (user report 2026-10-20: marks that never appear).
+    if (w.trades.length > budget) w.trades = newest(w.trades, budget);
     budget -= w.trades.length;
   }
   return kept.filter((w) => w.trades.length > 0);
+}
+
+/** The last `n` of time-ordered trades (none when `n` is 0 or less). */
+function newest(trades: MarkedTrade[], n: number): MarkedTrade[] {
+  return n <= 0 ? [] : trades.length > n ? trades.slice(trades.length - n) : trades;
 }
 
 /** A row's stored trades (StoredTrade in core's tradeTape.ts) as marked trades; null when absent. */
