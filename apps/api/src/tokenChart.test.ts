@@ -7,6 +7,7 @@ import {
   KeyedCache,
   LastGood,
   markedWallets,
+  MAX_MARKED_TRADES,
   MAX_MARKED_WALLETS,
   parseLiveTrades,
   onSupply,
@@ -403,6 +404,20 @@ describe("markedWallets", () => {
     const out = markedWallets(rows, risk, [], opts);
     expect(out).toHaveLength(MAX_MARKED_WALLETS);
     expect(out[0]!.score).toBe(99);
+  });
+
+  it("keeps a wallet's newest trades past the trade budget", () => {
+    const many = Array.from({ length: MAX_MARKED_TRADES + 10 }, (_, i) => [i * 1_000, 1, 1, 1]);
+    const [w] = markedWallets(
+      [row("kol", { trades: many })],
+      new Map(),
+      [],
+      opts,
+      new Map([["kol", "Cupsey"]]),
+    );
+    expect(w!.trades).toHaveLength(MAX_MARKED_TRADES);
+    expect(w!.trades[0]![0]).toBe(10_000);
+    expect(w!.trades.at(-1)![0]).toBe((MAX_MARKED_TRADES + 9) * 1_000);
   });
 
   it("keeps a KOL with a low score over a full coin of unscored linked wallets", () => {

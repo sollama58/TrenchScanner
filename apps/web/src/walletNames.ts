@@ -38,12 +38,19 @@ export const NAME_TTL_MS = 30 * 60_000;
 /** A "no name" answer, shorter: a wallet gets a name (a label, a Pump.fun username) more often than it loses one. */
 export const NO_NAME_TTL_MS = 10 * 60_000;
 
-/** Answers so far: a name, or null for a wallet with none, and when it was read. */
-const known = new Map<string, { name: WalletName | null; at: number }>();
+/**
+ * Answers so far: a name, or null for a wallet with none, and when it was read; `own` for an
+ * answer read without Helius (TrenchScanner's own names only).
+ */
+const known = new Map<string, { name: WalletName | null; at: number; own?: true }>();
 
-/** Whether `w`'s answer is missing or old enough to ask again. */
-function due(w: string, now: number): boolean {
+/**
+ * Whether `w`'s answer is missing or old enough to ask again. A list that reads Helius's names
+ * asks again for a wallet whose "no name" came from TrenchScanner's own names only.
+ */
+function due(w: string, now: number, identity: boolean): boolean {
   const k = known.get(w);
+  if (identity && k?.own && !k.name) return true;
   return !k || now - k.at >= (k.name ? NAME_TTL_MS : NO_NAME_TTL_MS);
 }
 const asking = new Set<string>();
@@ -65,22 +72,37 @@ const listeners = new Set<() => void>();
 let version = 0;
 /** Set once the API says this visitor can't read names (a guest), so lists stop asking. */
 let closed = false;
+/**
+ * A read that failed (a 429 on a busy minute, a dropped connection) is asked again this long after,
+ * doubling up to FAILED_RETRY_MAX_MS, six times in a row at most. Before, it waited for the list's
+ * wallets to change, which a chart's few KOLs never did, so their names and pictures never came
+ * (user report 2026-10-20).
+ */
+export const FAILED_RETRY_MS = 4_000;
+const FAILED_RETRY_MAX_MS = 60_000;
+let failedInARow = 0;
 
 function notify() {
   version += 1;
   for (const l of listeners) l();
 }
 
-/** Asks the API for the names of `wallets` that aren't known yet or are due again. */
-export async function loadWalletNames(wallets: readonly string[]): Promise<void> {
+/**
+ * Asks the API for the names of `wallets` that aren't known yet or are due again, the first
+ * MAX_PER_READ of them in the order given (a live list puts its newest traders first). `identity`
+ * false: TrenchScanner's own names only, no Helius read (user ask 2026-10-20: Helius's names
+ * rarely matter on the long lists, the live traders and the chart).
+ */
+export async function loadWalletNames(wallets: readonly string[], identity = true): Promise<void> {
   if (closed) return;
   const now = Date.now();
-  const ask = wallets.filter((w) => due(w, now) && !asking.has(w)).slice(0, MAX_PER_READ);
+  const ask = wallets.filter((w) => due(w, now, identity) && !asking.has(w)).slice(0, MAX_PER_READ);
   if (ask.length === 0) return;
   for (const w of ask) asking.add(w);
   try {
     const res = await post<{ names?: Record<string, WalletName>; unread?: string[] }>("/wallets/names", {
       wallets: ask,
+      ...(identity ? {} : { identity: false }),
     });
     // A wallet the API didn't get to read this time (queued for the next batch, or its budget ran
     // out) isn't "no name": it is left unknown and asked again shortly, or when the list opens again.
@@ -88,9 +110,10 @@ export async function loadWalletNames(wallets: readonly string[]): Promise<void>
     const at = Date.now();
     for (const w of ask) {
       if (unread.has(w)) continue;
-      known.set(w, { name: res.names?.[w] ?? null, at });
+      known.set(w, { name: res.names?.[w] ?? null, at, ...(identity ? {} : { own: true as const }) });
       retries.delete(w);
     }
+    failedInARow = 0;
     notify();
     const again = [...unread].filter((w) => (retries.get(w) ?? 0) < UNREAD_RETRIES);
     for (const w of again) retries.set(w, (retries.get(w) ?? 0) + 1);
@@ -108,9 +131,14 @@ export async function loadWalletNames(wallets: readonly string[]): Promise<void>
       }, UNREAD_COOLDOWN_MS);
     }
   } catch (err) {
-    // A failed read is asked again next time the list opens; no access means never.
+    // No access means never; anything else is asked again shortly.
     if (err instanceof ApiError && (err.status === 401 || err.status === 402 || err.status === 403))
       closed = true;
+    else if (failedInARow < 6) {
+      const wait = Math.min(FAILED_RETRY_MAX_MS, FAILED_RETRY_MS * 2 ** failedInARow);
+      failedInARow += 1;
+      setTimeout(() => void loadWalletNames(ask, identity), wait);
+    }
   } finally {
     for (const w of ask) asking.delete(w);
   }
@@ -121,16 +149,23 @@ const subscribe = (l: () => void) => {
   return () => listeners.delete(l);
 };
 
-/** The names of `wallets`, read in one batch for those not known yet. */
-export function useWalletNames(wallets: readonly (string | null | undefined)[]): WalletNames {
+/**
+ * The names of `wallets`, read in one batch for those not known yet. Asked in the order given, so
+ * a list longer than one read gets its first wallets' names first. `identity` false: TrenchScanner's
+ * own names only, for the long lists (loadWalletNames).
+ */
+export function useWalletNames(
+  wallets: readonly (string | null | undefined)[],
+  { identity = true }: { identity?: boolean } = {},
+): WalletNames {
   const key = useMemo(
-    () => [...new Set(wallets.filter((w): w is string => !!w && ADDRESS_RE.test(w)))].sort().join(","),
+    () => [...new Set(wallets.filter((w): w is string => !!w && ADDRESS_RE.test(w)))].join(","),
     [wallets],
   );
   const v = useSyncExternalStore(subscribe, () => version);
   useEffect(() => {
-    if (key) void loadWalletNames(key.split(","));
-  }, [key]);
+    if (key) void loadWalletNames(key.split(","), identity);
+  }, [key, identity]);
   return useMemo(() => {
     const out: Record<string, WalletName> = {};
     if (!key) return out;

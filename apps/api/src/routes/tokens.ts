@@ -29,6 +29,7 @@ import { liveCurves, MAX_WAIT_MS, type LiveCurveAnswer } from "../liveCurve.js";
 import { recordCandleAnswer } from "../chartHealth.js";
 import { chartOpened } from "../chartMarkFill.js";
 import { liveTrades, type LiveTradesAnswer } from "../liveTrades.js";
+import { liveTraderLabels } from "../liveTraderLabels.js";
 import { longPollRateLimit, withinLongPollCeiling } from "../longPollLimit.js";
 import { sharedSolPrice } from "../solPrice.js";
 import {
@@ -1331,7 +1332,10 @@ export async function readTokenTradesLive(
 ): Promise<LiveTradesAnswer> {
   if (!(await isTracked(mintAddress)))
     return { status: "unavailable", since: null, cursor: 0, trades: [], held: false };
-  return liveTrades().read(mintAddress, after, waitMs, signal);
+  const answer = await liveTrades().read(mintAddress, after, waitMs, signal);
+  if (answer.trades.length === 0) return answer;
+  const labels = await liveTraderLabels(answer.trades.map((t) => t.wallet));
+  return Object.keys(labels).length > 0 ? { ...answer, labels } : answer;
 }
 
 const weekLabels = new SharedCache<DayLabelRow[]>(TRACK_CACHE_MS);

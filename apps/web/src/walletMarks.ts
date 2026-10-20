@@ -38,12 +38,14 @@ export const MARK_KINDS: readonly { kind: MarkKind; label: string; letter: strin
     letter: "K",
     title: "Wallets on the KOL roster, and the wallets you labeled (User Tracked ones as T)",
   },
-  { kind: "known", label: "Known Sides", letter: "S", title: "Other wallets we know are a KOL's own" },
-  { kind: "funded", label: "KOL Funded", letter: "F", title: "Wallets a KOL paid for (their first SOL)" },
+  // A KOL's sides are marked as the KOL is, K or its picture (user ask 2026-10-20); the readout
+  // still says which tie it is.
+  { kind: "known", label: "Known Sides", letter: "K", title: "Other wallets we know are a KOL's own" },
+  { kind: "funded", label: "KOL Funded", letter: "K", title: "Wallets a KOL paid for (their first SOL)" },
   {
     kind: "probable",
     label: "Probable Sides",
-    letter: "P",
+    letter: "K",
     title: "Wallets that keep buying a KOL's coins within minutes of it, or move coins with it",
   },
   { kind: "dev", label: "Dev", letter: "D", title: "The coin's creator" },
@@ -125,9 +127,13 @@ export function markName(w: MarkSource, kind: MarkKind): string {
 /** A wallet the reader tracks that isn't also a KOL: marked with the KOLs, but as User Tracked. */
 const isTrackedOnly = (w: MarkSource) => !!w.tracked && !w.tags.includes("kol");
 
-/** A mark's letter: its kind's, but T for a User Tracked wallet marked with the KOLs. */
+/**
+ * A mark's letter: its kind's (K for a KOL and its sides), but T for a User Tracked wallet marked
+ * with the KOLs, and for the wallets it funded or that side with it.
+ */
 export function markLetter(w: MarkSource, kind: MarkKind): string {
   if (kind === "kol" && isTrackedOnly(w)) return "T";
+  if ((kind === "funded" || kind === "probable") && w.side?.tracked === "tracked") return "T";
   return MARK_KINDS.find((k) => k.kind === kind)!.letter;
 }
 
@@ -143,6 +149,8 @@ export interface WalletMark {
   wallet: string;
   /** A KOL's X picture (an API path), drawn in place of the letter while the reader shows them. */
   avatar?: string;
+  /** The wallet whose name carries the mark's picture: the KOL's own, or the KOL a side is tied to. */
+  picFrom?: string;
 }
 
 /**
@@ -170,6 +178,7 @@ export function walletMarks(
     if (!kind) continue;
     const letter = markLetter(w, kind);
     const name = markName(w, kind);
+    const picFrom = picWallet(w, kind);
     for (const [t, side, sol] of w.trades) {
       if (sol === null || !(sol >= min)) continue;
       out.push({
@@ -180,10 +189,54 @@ export function walletMarks(
         letter,
         text: `${name} ${side === 1 ? "bought" : "sold"} ${solText(sol)} SOL`,
         wallet: w.wallet,
+        ...(picFrom ? { picFrom } : {}),
       });
     }
   }
   return out.sort((a, b) => a.t - b.t);
+}
+
+/**
+ * The wallet whose name carries a mark's KOL picture: a KOL's own; a Known Side's, or its KOL's main
+ * wallet where the chart knows it; a funded wallet's or Probable Side's KOL. None for the rest.
+ */
+function picWallet(w: MarkSource, kind: MarkKind): string | null {
+  switch (kind) {
+    case "kol":
+      return isTrackedOnly(w) ? null : w.wallet;
+    case "known":
+      return w.knownSideOf ?? w.wallet;
+    case "funded":
+    case "probable":
+      return w.side && w.side.tracked !== "tracked" ? w.side.kolWallet : null;
+    default:
+      return null;
+  }
+}
+
+/**
+ * The chart's marked wallets across its re-reads (user report 2026-10-20: marks that disappear):
+ * the API sends the 40 strongest wallets each time, so one near the cut came and went between
+ * reads. A wallet read before stays, with the trades of every read, and takes the newest read's
+ * labels when it is in it.
+ */
+export function keepMarkSources<T extends MarkSource>(prev: readonly T[], next: readonly T[]): T[] {
+  if (prev.length === 0) return next as T[];
+  const nextBy = new Map(next.map((w) => [w.wallet, w]));
+  const prevBy = new Map(prev.map((w) => [w.wallet, w]));
+  const out: T[] = [];
+  for (const w of next) {
+    const old = prevBy.get(w.wallet);
+    if (!old) {
+      out.push(w);
+      continue;
+    }
+    const seen = new Set(w.trades.map(([t, side]) => `${t}|${side}`));
+    const extra = old.trades.filter(([t, side]) => !seen.has(`${t}|${side}`));
+    out.push(extra.length ? { ...w, trades: [...extra, ...w.trades].sort((a, b) => a[0] - b[0]) } : w);
+  }
+  for (const w of prev) if (!nextBy.has(w.wallet)) out.push(w);
+  return out;
 }
 
 /** A trade's size: two decimals under 10 SOL, one under 100, whole past it. */
@@ -279,19 +332,91 @@ export function withLiveMarks(
   return [...byWallet.values()];
 }
 
-/** The kinds of mark that are a KOL's own wallet, which show the KOL's picture. */
-const PIC_KINDS: ReadonlySet<MarkKind> = new Set(["kol", "known"]);
+/** What the API knows of a live trader (apps/api/src/liveTraderLabels.ts LiveTraderLabel). */
+export interface LiveTraderLabel {
+  name?: { name: string; source: "kol" | "kol-side"; avatar?: string };
+  side?: { kolWallet: string; kolName: string | null; funded?: boolean; avatar?: string };
+  risky?: boolean;
+  dumper?: boolean;
+  winner?: boolean;
+}
+
+/**
+ * The chart's flagged wallets with the live traders the live feed labeled (user ask 2026-10-20:
+ * flag trades from TrenchScanner's own records as they land): a KOL, a Known Side, a KOL's funded
+ * wallet or Probable Side, a risky wallet, a known dumper or a winner joins with no trades of its
+ * own; withLiveMarks then gives it its live trades. A wallet the chart already flags is left as the
+ * chart has it.
+ */
+export function withLabeledTraders(
+  wallets: readonly MarkSource[],
+  labels: Readonly<Record<string, LiveTraderLabel>>,
+): MarkSource[] {
+  const have = new Set(wallets.map((w) => w.wallet));
+  const add: MarkSource[] = [];
+  for (const [wallet, l] of Object.entries(labels)) {
+    if (have.has(wallet)) continue;
+    const tags: string[] = [];
+    let w: MarkSource = { wallet, tags, trades: [] };
+    if (l.name) {
+      tags.push("kol");
+      w =
+        l.name.source === "kol-side"
+          ? { ...w, kol: l.name.name.replace(/\s*Known Side$/i, ""), knownSideOf: wallet }
+          : { ...w, kol: l.name.name };
+    } else if (l.side) {
+      tags.push("side");
+      w = {
+        ...w,
+        side: {
+          kind: l.side.funded ? "funded" : "probable",
+          kolWallet: l.side.kolWallet,
+          kolName: l.side.kolName,
+        },
+      };
+    }
+    if (l.risky) tags.push("risky");
+    if (l.dumper) tags.push("dumper");
+    if (l.winner) tags.push("winner");
+    if (tags.length > 0) add.push(w);
+  }
+  return add.length > 0 ? [...wallets, ...add] : (wallets as MarkSource[]);
+}
+
+/** The KOL pictures the live feed's labels carry, keyed as withAvatars reads them. */
+export function labelAvatars(
+  labels: Readonly<Record<string, LiveTraderLabel>>,
+): Record<string, { avatar: string }> {
+  const out: Record<string, { avatar: string }> = {};
+  for (const [wallet, l] of Object.entries(labels)) {
+    if (l.name?.avatar) out[wallet] = { avatar: l.name.avatar };
+    if (l.side?.avatar) out[l.side.kolWallet] = { avatar: l.side.avatar };
+  }
+  return out;
+}
 
 /**
  * The marks with their KOL's X picture (user ask 2026-10-19: KOL bubbles by their pictures, on by
- * default): a KOL's or its Known Side's trade, where the wallet's name comes with a picture.
+ * default): a KOL's trade, or any of its sides' (user ask 2026-10-20), where the name of the wallet
+ * the picture comes from (`picFrom`) carries one; a Known Side's own name may too.
  */
 export function withAvatars(
   marks: readonly WalletMark[],
   names: Readonly<Record<string, { avatar?: string }>>,
 ): WalletMark[] {
   return marks.map((m) => {
-    const avatar = PIC_KINDS.has(m.kind) ? names[m.wallet]?.avatar : undefined;
+    const avatar = m.picFrom ? (names[m.picFrom]?.avatar ?? names[m.wallet]?.avatar) : undefined;
     return avatar ? { ...m, avatar } : m;
   });
+}
+
+/** The wallets whose names carry the marks' pictures. */
+export function picWallets(marks: readonly WalletMark[]): string[] {
+  const out = new Set<string>();
+  for (const m of marks) {
+    if (!m.picFrom) continue;
+    out.add(m.picFrom);
+    if (m.kind === "known") out.add(m.wallet);
+  }
+  return [...out];
 }

@@ -82,21 +82,24 @@ const INDICATORS: { id: Indicator; label: string; title: string }[] = [
   { id: "rsi", label: "RSI", title: "Relative Strength Index (14), in a pane under the chart" },
 ];
 
-/** Per-device conveniences: the candle size (per view), log scale, and the indicators shown. */
+/** A KOL picture that failed to load is tried this many times, waiting this long times the failures. */
+const PIC_TRIES = 4;
+const PIC_RETRY_MS = 15_000;
+
+/** Per-device conveniences: the candle size, log scale, and the indicators shown. */
 const TIMEFRAME_KEY = "ts.chartTimeframe";
 const LOG_SCALE_KEY = "ts.chartLogScale";
 const INDICATORS_KEY = "ts.chartIndicators";
 const DRAWINGS_KEY = "ts.chartDrawings";
 
-function readTimeframe(key: string, def: number | null): number | null {
+function readTimeframe(): number | null {
   try {
-    const v = localStorage.getItem(key);
-    if (v === null) return def;
-    if (v === "auto") return null;
+    const v = localStorage.getItem(TIMEFRAME_KEY);
+    if (v === null || v === "auto") return null;
     const ms = Number(v);
-    return TIMEFRAMES.some((f) => f.ms === ms) ? ms : def;
+    return TIMEFRAMES.some((f) => f.ms === ms) ? ms : null;
   } catch {
-    return def;
+    return null;
   }
 }
 function keep(key: string, value: string | null): void {
@@ -237,9 +240,6 @@ export function TradingChart({
   height,
   kind,
   onKind,
-  pinEnd = false,
-  tfScope,
-  defaultTimeframe = null,
   onTimeframe,
   path = [],
   fileName = "chart",
@@ -270,12 +270,6 @@ export function TradingChart({
   height: number;
   kind: ChartKind;
   onKind: (kind: ChartKind) => void;
-  /** The Trading view: zooming holds the latest candle at the right edge. */
-  pinEnd?: boolean;
-  /** Which view's candle size this is: each view keeps its own pick. */
-  tfScope?: string;
-  /** The candle size before one is picked in this view: Auto (null) unless given. */
-  defaultTimeframe?: number | null;
   /** The candle size drawn, so the view reads candles fine enough for it. */
   onTimeframe?: (ms: number) => void;
   /** Experimental: the predicted price path from the latest reading, past the last candle. */
@@ -333,13 +327,7 @@ export function TradingChart({
   /** How the crosshair's time reads, set on each render (the chart's formatter reads it). */
   const fmtRef = useRef({ seconds: false, dated: false });
 
-  const tfKey = tfScope ? `${TIMEFRAME_KEY}.${tfScope}` : TIMEFRAME_KEY;
-  const [picked, setPicked] = useState<number | null>(() => readTimeframe(tfKey, defaultTimeframe));
-  const [tfKeyRead, setTfKeyRead] = useState(tfKey);
-  if (tfKeyRead !== tfKey) {
-    setTfKeyRead(tfKey);
-    setPicked(readTimeframe(tfKey, defaultTimeframe));
-  }
+  const [picked, setPicked] = useState<number | null>(readTimeframe);
   const [log, setLog] = useState(readLog);
   const [ind, setInd] = useState(readIndicators);
   const viewMs = Math.max(1, extent.t1 - extent.t0);
@@ -387,26 +375,31 @@ export function TradingChart({
   const [pointed, setPointed] = useState<PlacedMark<MarkItem> | null>(null);
   // KOLs' pictures for the marks, loaded once each; the overlay redraws as each one lands. Loaded
   // with CORS so the canvas stays readable for the saved image.
-  const pics = useRef(new Map<string, HTMLImageElement | "loading" | "failed">());
+  const pics = useRef(new Map<string, HTMLImageElement | { failed: number; at: number } | "loading">());
   const picOf = (m: WalletMark): CanvasImageSource | null => {
     const src = m.avatar;
     if (!src) return null;
     const hit = pics.current.get(src);
-    if (hit === undefined) {
-      pics.current.set(src, "loading");
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.referrerPolicy = "no-referrer";
-      img.decoding = "async";
-      img.onload = () => {
-        pics.current.set(src, img);
-        overlayRef.current?.update();
-      };
-      img.onerror = () => pics.current.set(src, "failed");
-      img.src = `${API_URL}${src}`;
-      return null;
-    }
-    return typeof hit === "string" ? null : hit;
+    if (hit instanceof HTMLImageElement) return hit;
+    if (hit === "loading") return null;
+    // A failed picture is tried again a while later (a busy minute's error, a dropped connection),
+    // a few times: failing for good kept most KOLs as letters (user report 2026-10-20).
+    if (hit && (hit.failed >= PIC_TRIES || Date.now() - hit.at < PIC_RETRY_MS * hit.failed)) return null;
+    const failed = hit?.failed ?? 0;
+    pics.current.set(src, "loading");
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.referrerPolicy = "no-referrer";
+    img.decoding = "async";
+    img.onload = () => {
+      pics.current.set(src, img);
+      overlayRef.current?.update();
+    };
+    img.onerror = () => pics.current.set(src, { failed: failed + 1, at: Date.now() });
+    // Its own address for the CORS read: a copy the page's plain <img> (the readout, the KOL lists)
+    // cached without CORS headers otherwise failed the canvas's read in some browsers.
+    img.src = `${API_URL}${src}${src.includes("?") ? "&" : "?"}cors=1`;
+    return null;
   };
   /** Bumped when the series are rebuilt, so the data is handed to the new ones. */
   const [built, setBuilt] = useState(0);
@@ -600,14 +593,12 @@ export function TradingChart({
     setBuilt((n) => n + 1);
   }, [colors, kind, indKey, log]);
 
-  // The Trading view holds the latest candle at the right edge as it zooms.
   useEffect(() => {
     chartRef.current?.timeScale().applyOptions({
-      rightBarStaysOnScroll: pinEnd,
       rightOffsetPixels: path.length > 1 ? RIGHT_PX + pathZoneW(plotW) : RIGHT_PX,
       secondsVisible: tfMs < 60_000,
     });
-  }, [pinEnd, path.length > 1, plotW, tfMs]);
+  }, [path.length > 1, plotW, tfMs]);
 
   // The data, handed to the series; the window shown stays on the same moments as candles land.
   const [opened, setOpened] = useState(0);
@@ -694,7 +685,7 @@ export function TradingChart({
 
     // Which window to show: a new view (or candle size) opens on its newest candles; otherwise
     // the window keeps its moments, and follows the newest candle when it ran to it.
-    const scope = `${mint}|${tfScope ?? ""}|${opened}`;
+    const scope = `${mint}|${opened}`;
     const n = bars.length;
     if (!prev || prev.tf !== slots.tfMs || prev.scope !== scope || !range) {
       const fit = Math.max(8, Math.floor(plotW / OPEN_BAR_PX));
@@ -888,7 +879,7 @@ export function TradingChart({
 
   const pickTimeframe = (ms: number | null) => {
     setPicked(ms);
-    keep(tfKey, ms === null ? "auto" : String(ms));
+    keep(TIMEFRAME_KEY, ms === null ? "auto" : String(ms));
   };
   const toggle = (id: Indicator) => {
     const next = new Set(ind);

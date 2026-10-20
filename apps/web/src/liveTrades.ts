@@ -1,5 +1,6 @@
 import { useCallback, useState, useSyncExternalStore } from "react";
 import { api, FEED_TIMEOUT_MS } from "./api";
+import type { LiveTraderLabel } from "./walletMarks";
 
 /** Mirrors apps/api/src/liveTrades.ts LiveTokenTrade. */
 export interface LiveTokenTrade {
@@ -24,6 +25,8 @@ export interface LiveTradesAnswer {
   held?: boolean;
   /** The coin's supply in whole tokens, with trades; absent from older API builds and without trades. */
   supply?: number;
+  /** What TrenchScanner knows of the answer's traders (KOL ties, wallet book flags); absent for none. */
+  labels?: Record<string, LiveTraderLabel>;
 }
 
 export interface LiveTrades {
@@ -41,6 +44,8 @@ export interface LiveTrades {
   history: LiveTokenTrade[];
   /** The coin's supply in whole tokens, from the newest answer that had it; null until one did. */
   supply: number | null;
+  /** Every trader's label the feed has brought for the coin, kept like `history`. */
+  labels: Readonly<Record<string, LiveTraderLabel>>;
 }
 
 /** What the view keeps: the API's own window. */
@@ -83,6 +88,7 @@ function keepHistory(base: string, trades: LiveTokenTrade[]) {
     const oldest = histories.keys().next().value;
     if (oldest === undefined) break;
     histories.delete(oldest);
+    labelsKept.delete(oldest);
   }
 }
 
@@ -101,12 +107,22 @@ interface SharedFeed {
   stop: () => void;
 }
 const feeds = new Map<string, SharedFeed>();
-const EMPTY: LiveTrades = { trades: [], status: null, since: null, history: [], supply: null };
+const NO_LABELS: Readonly<Record<string, LiveTraderLabel>> = {};
+const EMPTY: LiveTrades = {
+  trades: [],
+  status: null,
+  since: null,
+  history: [],
+  supply: null,
+  labels: NO_LABELS,
+};
+/** Each coin's labels (LiveTrades.labels), kept with its history. */
+const labelsKept = new Map<string, Readonly<Record<string, LiveTraderLabel>>>();
 
 /** Starts `base`'s feed: asks for the trades since the last answer until stopped. */
 function startFeed(base: string): SharedFeed {
   const feed: SharedFeed = {
-    state: { ...EMPTY, history: histories.get(base) ?? [] },
+    state: { ...EMPTY, history: histories.get(base) ?? [], labels: labelsKept.get(base) ?? NO_LABELS },
     listeners: new Set(),
     stop: () => {},
   };
@@ -144,6 +160,9 @@ function startFeed(base: string): SharedFeed {
       const prev = feed.state;
       const history = mergeHistory(prev.history, fresh);
       if (history !== prev.history) keepHistory(base, history);
+      const labels =
+        a.labels && Object.keys(a.labels).length > 0 ? { ...prev.labels, ...a.labels } : prev.labels;
+      if (labels !== prev.labels) labelsKept.set(base, labels);
       set({
         trades: restarted
           ? fresh.slice(-MAX_TRADES)
@@ -154,6 +173,7 @@ function startFeed(base: string): SharedFeed {
         since: a.since,
         history,
         supply: typeof a.supply === "number" && a.supply > 0 ? a.supply : prev.supply,
+        labels,
       });
       // "Unavailable" can pass (the coin reaches Token, a follow slot frees up), so ask again now and then.
       next(
