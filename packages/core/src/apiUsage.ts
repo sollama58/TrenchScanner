@@ -68,15 +68,22 @@ const HELIUS_REST_CREDITS = 100;
  */
 const HELIUS_IDENTITY_ENDPOINT = /^GET \/v1\/wallet\/:id\/identity$/;
 
+/**
+ * RugCheck's report for a mint it hasn't indexed: a 400 {"error":"not found"} (a 404 before
+ * 2026-10-07). The client reads both as "no report yet" and caches it (rugcheck.ts), so they are
+ * answers, not failures; counted as errors they buried the real failures in the panel.
+ */
+const RUGCHECK_REPORT_ENDPOINT = /^GET \/v1\/tokens\/:id\/report$/;
+
 /** Whether a response counts as answered (billed, not an error) for `lines`. */
 export function answeredStatus(lines: readonly ApiCallLine[], status: number): boolean {
   if (status >= 200 && status < 300) return true;
-  return (
-    status === 404 &&
-    lines.length === 1 &&
-    lines[0]!.provider === "helius" &&
-    HELIUS_IDENTITY_ENDPOINT.test(lines[0]!.endpoint)
-  );
+  if (lines.length !== 1) return false;
+  const { provider, endpoint } = lines[0]!;
+  if (provider === "helius") return status === 404 && HELIUS_IDENTITY_ENDPOINT.test(endpoint);
+  if (provider === "rugcheck")
+    return (status === 400 || status === 404) && RUGCHECK_REPORT_ENDPOINT.test(endpoint);
+  return false;
 }
 /**
  * Jupiter's credits per call on a paid plan (developers.jup.ag/docs/portal/plans, checked

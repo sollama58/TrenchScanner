@@ -185,6 +185,16 @@ describe("feature attribution", () => {
     expect(answeredStatus(classifyApiRequest("https://api.rugcheck.xyz/v1/x", "GET", undefined), 404)).toBe(
       false,
     );
+    // RugCheck's "not found" for an unindexed mint is an answer the client caches, not a failure.
+    const report = classifyApiRequest(
+      `https://api.rugcheck.xyz/v1/tokens/${wallet}/report`,
+      "GET",
+      undefined,
+    );
+    expect(answeredStatus(report, 400)).toBe(true);
+    expect(answeredStatus(report, 404)).toBe(true);
+    expect(answeredStatus(report, 429)).toBe(false);
+    expect(answeredStatus(report, 500)).toBe(false);
 
     apiUsageMeter.take();
     const f = meteredFetch((async () => new Response("{}", { status: 404 })) as typeof fetch);
