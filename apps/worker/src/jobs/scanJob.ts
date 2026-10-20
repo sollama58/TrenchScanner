@@ -78,7 +78,6 @@ import type { Token } from "@prisma/client";
 import { requestTextScores } from "../ai/textScorer.js";
 import {
   flushNarrativeRequests,
-  noteLaunchNarratives,
   noteNarrativeWanted,
   takeTokenSageStats,
   tokenSageEnabled,
@@ -158,7 +157,7 @@ import {
   resolveLaunchTimes,
   resolvePreBondSeconds,
 } from "./launchTimes.js";
-import { ignoreMayhemMints, resolveMayhemMode } from "./mayhemMode.js";
+import { ignoreMayhemMints, knownMayhem, resolveMayhemMode, setAsideMayhemLaunches } from "./mayhemMode.js";
 import { resolveRelaunchSiblings } from "./relaunchFarms.js";
 import { fillLaunchDetails, takeLaunchDetailStats } from "./launchDetails.js";
 import {
@@ -940,16 +939,17 @@ async function scanCycle(
   await ignoreMayhemMints(
     [...newMints, ...active, ...(koth ? [koth] : [])].filter((c) => c.mayhemMode).map((c) => c.mintAddress),
   );
+  // The rest, which no source flags now Pump.fun's API is blocked, by one on-chain lookup for the
+  // cycle's new Pump.fun launches before the scan picks its candidates (see setAsideMayhemLaunches).
+  await setAsideMayhemLaunches(
+    [...streamed.filter((e) => e.kind === "create"), ...jupiterMoving, ...polled, ...newMints]
+      .filter((c) => (c.launchpad ?? PUMPFUN_LAUNCHPAD) === PUMPFUN_LAUNCHPAD)
+      .map((c) => c.mintAddress),
+    deps.helius,
+  );
   // Pump.fun's launch times, for the safety screen's pre-bond cut (see launchTimes.ts).
   rememberLaunchTimes([...newMints, ...active, ...(koth ? [koth] : [])]);
   rememberGraduations(streamed.filter((e) => e.kind === "migrate"));
-  // TokenSage's quick read for each new launch, sent now rather than at the cycle's end so it
-  // has the cycle's whole run to land (TOKENSAGE_BASIC_AT_DISCOVERY; off by default).
-  const launchReads = noteLaunchNarratives(
-    [...newMints, ...streamed.filter((e) => e.kind === "create").map((e) => ({ ...e, createdAt: e.at }))],
-    env,
-  );
-  if (launchReads > 0) void flushNarrativeRequests(env);
 
   // Moving mints jump the watchlist queue: Pump.fun's own market cap for the newest launches, the
   // recently-traded and the king-of-the-hill coins, and the near-band floor for a graduation (a
@@ -3206,6 +3206,23 @@ async function processCandidate(
           update: changes,
         });
 
+  // TokenSage's quick read from the coin's first scan, before its screen verdict (user decision
+  // 2026-10-20, notes/model-checkin-2026-10-20): it lands about when the first decision does, at
+  // the low tier until a screen pass below raises it. It replaced the read for every launch
+  // discovery saw (TOKENSAGE_BASIC_AT_DISCOVERY), ~1,900 an hour of which 6.6% ever passed the
+  // screen; that backlog filled TokenSage's queue and turned away the decision reads. Never for a
+  // Mayhem coin: nothing more is read about one.
+  if (!knownMayhem(token.mintAddress)) {
+    noteNarrativeWanted(
+      token.mintAddress,
+      "basic",
+      env,
+      tokenSageEnabled(env)
+        ? tokenSageHints({ ...token, description: scored.description ?? token.description })
+        : undefined,
+      { firstScan: true },
+    );
+  }
   if (!scored.rugScreen.passed) noteScreenReject(token, scored);
   if (!scored.rugScreen.passed && !persistSnapshot(token.id, prior)) {
     // Out of the fast lane exactly as a failing verdict would put it - see vettedTokens.ts.

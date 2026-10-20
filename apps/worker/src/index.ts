@@ -110,6 +110,7 @@ import {
 import { startPricePathRecorder } from "./jobs/pricePathRecorder.js";
 import { onHolderStreamTx, setHolderTransferStream } from "./jobs/holderTransfers.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
+import { knownMayhem } from "./jobs/mayhemMode.js";
 import { startNarrativePolling } from "./tokensage/prefetch.js";
 
 const logger = createLogger("worker");
@@ -341,9 +342,12 @@ async function main() {
     liveLaunches: jupiter ? new LiveLaunchQuotes(jupiter, geckoTerminal) : undefined,
     // Starts the scan early when a young launch crosses into the band between cycles.
     bandEntryWatch: jupiter
-      ? new BandEntryWatch(jupiter, env.MCAP_FILTER_MIN, () => [
-          ...new Set([...(stream?.pendingLaunches() ?? []), ...(launchPoller?.pendingLaunches() ?? [])]),
-        ])
+      ? new BandEntryWatch(jupiter, env.MCAP_FILTER_MIN, () =>
+          // A launch already known to be Mayhem is never scanned, so it never wakes the scan.
+          [
+            ...new Set([...(stream?.pendingLaunches() ?? []), ...(launchPoller?.pendingLaunches() ?? [])]),
+          ].filter((mint) => !knownMayhem(mint)),
+        )
       : undefined,
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),

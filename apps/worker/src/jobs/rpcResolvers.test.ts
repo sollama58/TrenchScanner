@@ -4,7 +4,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma, loadEnv, type HeliusClient } from "@trenchscanner/core";
 import { computeFreshPct, resolveEarliestActivity, resetWalletFailureBackoff } from "./walletFreshness.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
-import { ignoreMayhemMints, resolveMayhemMode, resetMayhemFailureBackoff } from "./mayhemMode.js";
+import {
+  ignoreMayhemMints,
+  knownMayhem,
+  resolveMayhemMode,
+  resetMayhemFailureBackoff,
+  setAsideMayhemLaunches,
+} from "./mayhemMode.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -309,5 +315,46 @@ describe.skipIf(!dbAvailable)("ignoreMayhemMints", () => {
     expect(asked.mints).toHaveLength(0);
     // Already set aside: nothing is written again.
     expect(await ignoreMayhemMints([mint])).toBe(0);
+  });
+});
+
+describe.skipIf(!dbAvailable)("setAsideMayhemLaunches", () => {
+  beforeEach(() => resetMayhemFailureBackoff());
+  afterEach(async () => {
+    if (!dbAvailable) return;
+    await prisma.mayhemModeCache.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+  });
+
+  it("sets the Mayhem launches aside at discovery and leaves the rest on the watchlist", async () => {
+    const mayhem = `${TAG}-launch-mayhem`;
+    const plain = `${TAG}-launch-plain`;
+    await prisma.token.createMany({ data: [{ mintAddress: mayhem }, { mintAddress: plain }] });
+    const { client } = stubHelius({
+      getMayhemModeBatch: async (mints: string[]) =>
+        new Map(mints.map((m) => [m, { status: "found" as const, isMayhemMode: m === mayhem }])),
+    });
+
+    expect(await setAsideMayhemLaunches([mayhem, plain], client)).toBe(1);
+    const rows = await prisma.token.findMany({ where: { mintAddress: { in: [mayhem, plain] } } });
+    expect(rows.find((r) => r.mintAddress === mayhem)?.ignoredAt).toBeInstanceOf(Date);
+    expect(rows.find((r) => r.mintAddress === plain)?.ignoredAt).toBeNull();
+    expect(knownMayhem(mayhem)).toBe(true);
+    expect(knownMayhem(plain)).toBe(false);
+  });
+
+  it("leaves a launch the RPC can't see yet for the scan to check, without backing it off", async () => {
+    const mint = `${TAG}-launch-pending`;
+    const { client, asked } = stubHelius({
+      getMayhemModeBatch: async (mints: string[]) => {
+        asked.mints.push(mints);
+        return new Map(mints.map((m) => [m, { status: "failed" as const, mintPending: true }]));
+      },
+    });
+
+    expect(await setAsideMayhemLaunches([mint], client)).toBe(0);
+    // The scan's own lookup still goes to the chain rather than answering "unverified" from a backoff.
+    await resolveMayhemMode([mint], client);
+    expect(asked.mints).toEqual([[mint], [mint]]);
   });
 });
