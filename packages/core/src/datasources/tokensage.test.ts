@@ -3,9 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   TokenSageClient,
   tokenSageHints,
+  basicXRetryable,
   narrativeDepthCovers,
   narrativeFieldsFromAnalysis,
   nowFieldsFromItem,
+  tokenSageReadIsStale,
+  tokenSageReferent,
+  twitterLinksTweet,
   type TokenSageNowItem,
   tokenSageFlagSeverity,
   tokenSageRulesAtLeast,
@@ -122,9 +126,120 @@ describe("narrativeFieldsFromAnalysis", () => {
     expect(
       narrativeFieldsFromAnalysis({ mint: "M", depth: "basic", trend }, "partial").trendMatched,
     ).toBeNull();
+    expect(
+      narrativeFieldsFromAnalysis({ mint: "M", depth: "basic", trend }, "partial").trendScore,
+    ).toBeNull();
     expect(narrativeFieldsFromAnalysis({ mint: "M", depth: "full", trend }, "complete").trendMatched).toBe(
       false,
     );
+  });
+
+  it("keeps a basic read's post text and drops the full-only signals (rules 0.36.0)", () => {
+    const basic = {
+      depth: "basic",
+      analyzed_at: "2026-10-20T12:00:00Z",
+      referent: {
+        label: "Peanut",
+        kind: "famous_animal",
+        confidence: 0.8,
+        source: "x",
+        post_id: "1791351500217754008",
+        supported_by: ["x"],
+      },
+      summary: "The launch post is about Peanut",
+      flags: [
+        { code: "borrowed_narrative", severity: "info" },
+        { code: "tweet_deleted", severity: "warn" },
+      ],
+      x: {
+        status: "ok",
+        relation: "narrative_reference",
+        text: "rip peanut",
+        author: { handle: "elonmusk", followers: 100 },
+        predates_token_by_s: 90,
+        reuse_count: 4,
+        credibility: 0.2,
+        reuse_rank: 2,
+        account: { age_at_launch_s: 10, made_for_coin: true },
+        engagement: { likes: 9, reposts: 1, replies: 1, views: 80, as_of: "2026-10-20T12:00:00Z" },
+        match: { fit: 0.9, verdict: "about_this_coin" },
+      },
+      trend: { matched: true, score: 0.7, novelty: 0.4 },
+      caveats: ["basic x: tweet fetch timed out after 3 s"],
+    } as unknown as TokenSageAnalysis;
+    expect(narrativeFieldsFromAnalysis(basic, "complete")).toMatchObject({
+      depth: "basic",
+      referentLabel: "Peanut",
+      referentSupport: ["x"],
+      referentPostId: "1791351500217754008",
+      referentGeneric: false,
+      xRelation: "narrative_reference",
+      xAuthorFollowers: 100,
+      xPredatesTokenS: 90,
+      xReuseCount: 4,
+      flags: ["borrowed_narrative", "tweet_deleted"],
+      xFit: null,
+      xVerdict: null,
+      xCredibility: null,
+      xAccountAgeS: null,
+      xAccountMadeForCoin: null,
+      xReuseRank: null,
+      xLikes: null,
+      xViews: null,
+      trendMatched: null,
+      trendScore: null,
+      trendNovelty: null,
+    });
+    expect(basicXRetryable(basic)).toBe(false);
+    expect(twitterLinksTweet("https://x.com/elonmusk/status/1791351500217754008?s=20")).toBe(true);
+    expect(twitterLinksTweet("https://x.com/elonmusk")).toBe(false);
+  });
+
+  it("does not trust a referent that came from a deleted post", () => {
+    const onlyX = {
+      depth: "basic",
+      x: { status: "deleted" },
+      referent: { label: "Peanut", confidence: 0.8, source: "x", supported_by: ["x"], post_id: "1" },
+    } as unknown as TokenSageAnalysis;
+    expect(tokenSageReferent(onlyX)).toBeNull();
+    expect(narrativeFieldsFromAnalysis(onlyX, "complete")).toMatchObject({
+      referentLabel: null,
+      referentSupport: [],
+      referentPostId: null,
+      referentGeneric: null,
+    });
+    const named = {
+      ...onlyX,
+      referent: { label: "Peanut", confidence: 0.8, source: "x", supported_by: ["name", "x"], post_id: "1" },
+    } as unknown as TokenSageAnalysis;
+    expect(narrativeFieldsFromAnalysis(named, "complete")).toMatchObject({
+      referentLabel: "Peanut",
+      referentSupport: ["name"],
+      referentPostId: null,
+    });
+  });
+
+  it("retries a basic read when the linked tweet was not fetched", () => {
+    const missed = {
+      depth: "basic",
+      raw: { twitter: "https://x.com/a/status/5" },
+      x: { status: "not_fetched", ref: { kind: "tweet", tweet_id: "5" } },
+    } as unknown as TokenSageAnalysis;
+    expect(basicXRetryable(missed)).toBe(true);
+    expect(basicXRetryable({ ...missed, depth: "full" })).toBe(false);
+    expect(
+      basicXRetryable({ ...missed, x: { status: "failed", ref: { kind: "tweet", tweet_id: "5" } } }),
+    ).toBe(false);
+    expect(
+      basicXRetryable({ depth: "basic", raw: { twitter: "https://x.com/a" }, x: { status: "not_fetched" } }),
+    ).toBe(false);
+    expect(tokenSageReadIsStale(new Date("2026-10-20T10:00:00Z"), new Date("2026-10-20T12:00:00Z"))).toBe(
+      true,
+    );
+    expect(tokenSageReadIsStale(new Date("2026-10-20T11:59:00Z"), new Date("2026-10-20T12:00:00Z"))).toBe(
+      false,
+    );
+    expect(tokenSageReadIsStale(null, new Date())).toBe(false);
   });
 });
 
@@ -364,7 +479,8 @@ describe("narrativeFieldsFromAnalysis on real TokenSage responses", () => {
       rulesVersion: null,
       analyzedAt: null,
       xFit: null,
-      xVerdict: "about_this_coin",
+      // depth "deepest" is stored as basic, and the X match is full-only.
+      xVerdict: null,
     });
     for (const junk of [null, undefined, "x", 7, [], { x: null }, { x: { match: [] } }]) {
       expect(() =>
@@ -387,7 +503,11 @@ describe("narrativeFieldsFromAnalysis on real TokenSage responses", () => {
 
   it("keeps a new X verdict as text, and strips NUL characters Postgres would reject", () => {
     const f = narrativeFieldsFromAnalysis(
-      { summary: "a\u0000b", x: { match: { fit: 0.4, verdict: "parody" } } } as TokenSageAnalysis,
+      {
+        depth: "full",
+        summary: "a\u0000b",
+        x: { match: { fit: 0.4, verdict: "parody" } },
+      } as TokenSageAnalysis,
       "complete",
     );
     expect(f).toMatchObject({ summary: "ab", xFit: 0.4, xVerdict: "parody" });
@@ -1020,6 +1140,12 @@ describe("logo labels and pump.fun pairs (rules 0.25.0, 0.27.0)", () => {
     });
     expect(nowFieldsFromItem(heatAt(undefined), "MINT")?.heatCoins).toBeNull();
     expect(nowFieldsFromItem(heatAt("2026-10-13T21:01:00Z"), "MINT")?.heatCoins).toBe(3);
+    // A heat stamp a few seconds ahead of the refresh is clock skew. One well ahead is not current.
+    expect(nowFieldsFromItem(heatAt("2026-10-13T21:05:30Z"), "MINT")?.heatCoins).toBe(3);
+    expect(nowFieldsFromItem(heatAt("2026-10-13T21:10:00Z"), "MINT")).toMatchObject({
+      heatCoins: null,
+      heatIsLeader: null,
+    });
     // Nothing to store without a refresh.
     expect(nowFieldsFromItem({ ca: "MINT", status: "pending" }, "MINT")).toBeNull();
     expect(

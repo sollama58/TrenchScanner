@@ -4,6 +4,7 @@ import {
   TOKENSAGE_LOGO_MIN_SCORE,
   parseNarrativeRationale,
   tokenSageFlagSeverity,
+  tokenSageReferent,
   type TokenSageAnalysis,
 } from "@trenchscanner/core";
 import { topCategory } from "./routes/adminInsights.js";
@@ -125,6 +126,8 @@ export interface SageRead {
     confidence: number | null;
     generic: boolean;
     supportedBy: string[];
+    /** Rules 0.36.0+: the post this referent was read from. Null when it did not come from one. */
+    postId: string | null;
     wave: {
       launches1h: number | null;
       launches6h: number | null;
@@ -411,10 +414,11 @@ export function sageRead(
   at = Date.now(),
 ): SageRead | null {
   if (!doc || typeof doc !== "object") return null;
-  const ref = doc.referent;
+  const ref = tokenSageReferent(doc);
   const lin = doc.lineage;
   const x = doc.x;
   const xRead = x?.status === "ok";
+  const full = depth === "full";
   const url = xUrl(doc);
   const categories = (Array.isArray(doc.categories) ? doc.categories : [])
     .filter((c) => typeof c?.label === "string" && typeof c.confidence === "number")
@@ -471,6 +475,7 @@ export function sageRead(
             confidence: num(ref.confidence),
             generic: ref.generic === true,
             supportedBy: strings(ref.supported_by),
+            postId: clip(ref.post_id, 40),
             wave: ref.wave
               ? {
                   launches1h: num(ref.wave.launches_1h),
@@ -510,32 +515,38 @@ export function sageRead(
         ? {
             url,
             read: xRead,
-            relation: clip(x.relation, 40),
+            relation: xRead ? clip(x.relation, 40) : null,
             text: xRead ? clip(x.text, 400) : null,
-            postedAt: typeof x.object_time === "string" ? x.object_time : null,
-            author: x.author
-              ? {
-                  handle: clip(x.author.handle, 40),
-                  name: clip(x.author.name, 80),
-                  followers: num(x.author.followers),
-                  verified: clip(x.author.verified_type, 20),
-                  asOf: typeof x.author.as_of === "string" ? x.author.as_of : null,
-                }
-              : null,
-            predatesTokenS: num(x.predates_token_by_s),
-            reuseCount: num(x.reuse_count),
-            reuseRank: num(x.reuse_rank),
-            credibility: num(x.credibility),
-            accountAgeS: num(x.account?.age_at_launch_s),
-            madeForCoin: typeof x.account?.made_for_coin === "boolean" ? x.account.made_for_coin : null,
-            verdict: clip(x.match?.verdict, 30),
-            fit: num(x.match?.fit),
-            basis: strings(x.match?.basis),
+            postedAt: xRead && typeof x.object_time === "string" ? x.object_time : null,
+            author:
+              xRead && x.author
+                ? {
+                    handle: clip(x.author.handle, 40),
+                    name: clip(x.author.name, 80),
+                    followers: num(x.author.followers),
+                    verified: clip(x.author.verified_type, 20),
+                    asOf: typeof x.author.as_of === "string" ? x.author.as_of : null,
+                  }
+                : null,
+            predatesTokenS: xRead ? num(x.predates_token_by_s) : null,
+            reuseCount: xRead ? num(x.reuse_count) : null,
+            reuseRank: full && xRead ? num(x.reuse_rank) : null,
+            credibility: full ? num(x.credibility) : null,
+            accountAgeS: full ? num(x.account?.age_at_launch_s) : null,
+            madeForCoin:
+              full && typeof x.account?.made_for_coin === "boolean" ? x.account.made_for_coin : null,
+            verdict: full ? clip(x.match?.verdict, 30) : null,
+            fit: full ? num(x.match?.fit) : null,
+            basis: full ? strings(x.match?.basis) : [],
           }
         : null,
+    // A basic read does not run the trend match: its false means unread. A decision-time
+    // refresh still stands in when one was stored.
     ...(fresh
       ? { trendAt: now!.at!.toISOString(), trend: trendView(now!.trend as TokenSageAnalysis["trend"]) }
-      : { trendAt: analyzedAt, trend: trendView(doc.trend) }),
+      : full
+        ? { trendAt: analyzedAt, trend: trendView(doc.trend) }
+        : { trendAt: null, trend: null }),
     flags: (Array.isArray(doc.flags) ? doc.flags : [])
       .filter((f) => typeof f?.code === "string")
       .slice(0, MAX_FLAGS)

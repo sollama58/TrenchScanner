@@ -523,6 +523,18 @@ function rec(v: unknown): Rec {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Rec) : {};
 }
 
+/**
+ * narrativeText plus the row's referentPostId when the document was not stored (a basic read of
+ * a coin that never reached the band). The document wins when it names a post.
+ */
+export function narrativeExportText(
+  analysis: unknown,
+  storedPostId: string | null | undefined,
+): Record<(typeof NARRATIVE_TEXT)[number], unknown> {
+  const text = narrativeText(analysis);
+  return { ...text, referentPostId: text.referentPostId ?? storedPostId ?? null };
+}
+
 /** The parts of a stored TokenSage analysis that say what the narrative is (null-safe on old rows). */
 export function narrativeText(analysis: unknown): Record<(typeof NARRATIVE_TEXT)[number], unknown> {
   const doc = rec(analysis);
@@ -599,10 +611,19 @@ async function* narrativePages(since: Date, until: Date, pageSize = EXPORT_PAGE_
       where,
       orderBy: [{ checkedAt: "asc" }, { mintAddress: "asc" }],
       take: pageSize,
-      select: { ...Object.fromEntries(NARRATIVE_COLUMNS.map((c) => [c, true])), analysis: true },
+      // referentPostId is a column so a basic read stored without its document still exports
+      // the wave key. narrativeText reads the same field from the document when that was kept.
+      select: {
+        ...Object.fromEntries(NARRATIVE_COLUMNS.map((c) => [c, true])),
+        analysis: true,
+        referentPostId: true,
+      },
     });
     if (rows.length === 0) return;
-    yield rows.map(({ analysis, ...r }) => ({ ...r, ...narrativeText(analysis) }) as Rec);
+    yield rows.map(
+      ({ analysis, referentPostId, ...r }) =>
+        ({ ...r, ...narrativeExportText(analysis, referentPostId) }) as Rec,
+    );
     // The select is built from NARRATIVE_COLUMNS, so Prisma can't type the key columns.
     const tail = rows[rows.length - 1] as unknown as { checkedAt: Date; mintAddress: string };
     last = { at: tail.checkedAt, id: tail.mintAddress };

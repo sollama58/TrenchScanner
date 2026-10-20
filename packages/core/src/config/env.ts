@@ -949,9 +949,11 @@ const envSchema = z.object({
   // midnight UTC.
   //
   // Early deep read (user decision 2026-10-07): a coin with an X link that reaches the watchlist
-  // under TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES old gets the full read at once instead of the
-  // basic one, so the X match is usually in before its first decision. 0 turns it off. TOKENSAGE_POLL_SECONDS re-sends queued requests between scan cycles, so a finished
-  // read is picked up within seconds rather than at the next 30-second scan (0: scan only).
+  // under TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES old gets the full read in the same flush as its
+  // basic one, so the X match is usually in before its first decision. The basic read still goes
+  // (rules 0.36.0: it interprets the linked post). 0 turns the early full read off.
+  // TOKENSAGE_POLL_SECONDS re-sends queued requests between scan cycles, so a finished
+  // read is picked up within seconds rather than at the next scan (0: scan only).
   TOKENSAGE_ENABLED: z
     .enum(["true", "false"])
     .default("false")

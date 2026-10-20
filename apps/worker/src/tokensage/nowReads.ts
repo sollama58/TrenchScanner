@@ -88,7 +88,13 @@ export async function flushNowReads(env: Env, client?: TokenSageClient, now = Da
       select: { mintAddress: true, nowAt: true },
     });
     const ask = rows
-      .filter((r) => r.nowAt === null || now - r.nowAt.getTime() >= NOW_REFRESH_MS)
+      .filter((r) => {
+        if (r.nowAt === null) return true;
+        const age = now - r.nowAt.getTime();
+        // A refresh stamped ahead of this clock is skew, not one from the future. askedAt still
+        // spaces the calls. One older than NOW_REFRESH_MS is due.
+        return age < 0 || age >= NOW_REFRESH_MS;
+      })
       .sort((a, b) => (a.nowAt?.getTime() ?? 0) - (b.nowAt?.getTime() ?? 0))
       .slice(0, MAX_PER_FLUSH)
       .map((r) => r.mintAddress);

@@ -127,20 +127,128 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
   it("upgrades to full depth, keeps the X match, and never lets a basic answer overwrite it", async () => {
     const { client, batch } = fakeClient();
     const c = `${TAG}-c`;
-    batch.mockResolvedValueOnce(ok([{ ca: c, status: "complete", analysis: analysis(c, "full") }]));
+    // Rules 0.36.0: the basic read noted first is still sent. Full is asked beside it, not instead.
+    batch.mockImplementation(async (entries: { ca: string }[], depth: "basic" | "full") =>
+      ok(entries.map((e) => ({ ca: e.ca, status: "complete", analysis: analysis(e.ca, depth) }))),
+    );
     noteNarrativeWanted(c, "basic", env);
     noteNarrativeWanted(c, "full", env);
     await flushNarrativeRequests(env, client);
+    expect(batch.mock.calls.map((call) => call[1])).toEqual(["full", "basic"]);
     expect(cas(batch.mock.calls[0]!)).toEqual([c]);
-    expect(batch.mock.calls[0]![1]).toBe("full");
     const row = await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: c } });
     expect(row).toMatchObject({ depth: "full", xFit: 0.96, xVerdict: "about_this_coin" });
 
     resetTokenSage();
+    batch.mockClear();
     noteNarrativeWanted(c, "basic", env);
     await flushNarrativeRequests(env, client);
     // Already stored at full depth: not even sent.
-    expect(batch).toHaveBeenCalledTimes(1);
+    expect(batch).not.toHaveBeenCalled();
+  });
+
+  it("sends a young coin's basic read at the screen-pass tier beside its early full read", async () => {
+    const { client, batch } = fakeClient();
+    batch.mockImplementation(async (entries: { ca: string }[]) =>
+      ok(entries.map((e) => ({ ca: e.ca, status: "pending", job_id: 1 }))),
+    );
+    const m = `${TAG}-early-both`;
+    noteNarrativeWanted(m, "basic", env, undefined, { firstScan: true });
+    noteNarrativeWanted(m, "basic", env);
+    noteNarrativeWanted(m, "full", env, undefined, { early: true });
+    await flushNarrativeRequests(env, client);
+    const byDepth = Object.fromEntries(
+      batch.mock.calls.map((c) => [c[1] as string, (c[0] as { ca: string; priority: string }[])[0]]),
+    );
+    expect(byDepth.full).toMatchObject({ ca: m, priority: "normal" });
+    expect(byDepth.basic).toMatchObject({ ca: m, priority: "normal" });
+  });
+
+  it("drops a basic read that aged out beside a full upgrade, and keeps the full read", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { client, batch } = fakeClient();
+      batch.mockResolvedValue(ok([]));
+      const m = `${TAG}-aged-basic`;
+      noteNarrativeWanted(m, "basic", env);
+      vi.setSystemTime(Date.now() + 11 * 60_000);
+      noteNarrativeWanted(m, "full", env);
+      await flushNarrativeRequests(env, client);
+      expect(batch.mock.calls.map((c) => c[1])).toEqual(["full"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks again, at low priority, when a basic read did not fetch the tweet, and keeps a newer analysis", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { client, batch } = fakeClient();
+      const m = `${TAG}-xretry`;
+      const doc = (status: string, at: string, relation?: string) => ({
+        ...analysis(m, "basic"),
+        analyzed_at: at,
+        summary: status,
+        raw: { twitter: "https://x.com/elonmusk/status/1791351500217754008" },
+        x: {
+          status,
+          relation: relation ?? null,
+          ref: { kind: "tweet", tweet_id: "1791351500217754008" },
+        },
+        referent:
+          status === "ok"
+            ? {
+                label: "Peanut",
+                confidence: 0.8,
+                source: "x",
+                supported_by: ["x"],
+                post_id: "1791351500217754008",
+              }
+            : { label: "Name", confidence: 0.4, supported_by: ["name"] },
+      });
+      batch.mockResolvedValueOnce(
+        ok([{ ca: m, status: "complete", analysis: doc("not_fetched", "2026-10-20T12:00:00Z") }]),
+      );
+      noteNarrativeWanted(m, "basic", env);
+      await flushNarrativeRequests(env, client);
+      expect(batch).toHaveBeenCalledTimes(1);
+
+      await flushNarrativeRequests(env, client);
+      expect(batch).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(Date.now() + 2 * 60_000);
+      batch.mockResolvedValueOnce(
+        ok([{ ca: m, status: "complete", analysis: doc("not_fetched", "2026-10-20T11:00:00Z") }]),
+      );
+      await flushNarrativeRequests(env, client);
+      const retry = batch.mock.calls.at(-1)!;
+      expect(retry[1]).toBe("basic");
+      expect((retry[0] as { priority: string }[])[0]?.priority).toBe("low");
+      const row = await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: m } });
+      expect(row.summary).toBe("not_fetched");
+      expect(row.analyzedAt?.toISOString()).toBe("2026-10-20T12:00:00.000Z");
+
+      vi.setSystemTime(Date.now() + 2 * 60_000);
+      batch.mockResolvedValueOnce(
+        ok([
+          {
+            ca: m,
+            status: "complete",
+            analysis: doc("ok", "2026-10-20T12:05:00Z", "narrative_reference"),
+          },
+        ]),
+      );
+      await flushNarrativeRequests(env, client);
+      const stored = await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: m } });
+      expect(stored).toMatchObject({
+        xRelation: "narrative_reference",
+        referentPostId: "1791351500217754008",
+        referentSupport: ["x"],
+        depth: "basic",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("falls back to basic once the full-depth quota is spent", async () => {
