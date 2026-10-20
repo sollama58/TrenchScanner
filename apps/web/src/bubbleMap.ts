@@ -630,9 +630,9 @@ function flagsOf(w: FlaggedHolder | undefined): Flag[] {
 
 /**
  * The map's nodes and links. Every wallet in a cluster is a holder bubble linked to the cluster's
- * funder (a node of its own, or the holder that funded the rest). Flagged wallets the chart knows
- * hold at least MIN_FLAGGED_HELD_PCT and in no cluster are bubbles too, unlinked, as is every other
- * holder when the scan kept the list (linkedHolders, on scans since it was added). What the map
+ * funder (a node of its own, or the holder that funded the rest). Every other holder is a bubble
+ * too, unlinked, when the scan kept the list (linkedHolders, on scans since it was added); without
+ * one, the flagged wallets the chart knows held at least MIN_FLAGGED_HELD_PCT at the call stand in. What the map
  * can't place individually is one dashed bubble: on older scans, the rest of the top 10.
  */
 export function buildGraph(
@@ -768,7 +768,12 @@ export function buildGraph(
     shownPct += h.pct;
     shownCount += 1;
   }
-  for (const w of flagged) {
+  // Flagged wallets the reading doesn't place stand in for holders only on a reading with no list
+  // of its own (older scans). Their share is the one held at the call: on a reading with the list,
+  // one off it isn't a top holder now, and a KOL that sold out was drawn at its call-time 2.86%
+  // (user report 2026-10-20).
+  const hasList = (snapshot.linkedHolders?.length ?? 0) > 0;
+  for (const w of hasList ? [] : flagged) {
     if (seen.has(w.wallet) || w.heldPct === null || w.heldPct < MIN_FLAGGED_HELD_PCT) continue;
     if (flagsOf(w).length === 0 && kolOf(w) === null) continue;
     seen.add(w.wallet);

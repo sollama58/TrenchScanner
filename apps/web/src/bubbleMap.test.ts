@@ -145,6 +145,15 @@ describe("bubble map graph", () => {
     expect(g.nodes.find((n) => n.kind === "rest")).toMatchObject({ count: 5, pct: 14 });
   });
 
+  it("adds no flagged wallet off the list when the reading has a holder list of its own", () => {
+    // trunoest held 2.86% at the call and sold out since: the current list doesn't have it.
+    const listed = { ...snapshot, linkedHolders: [{ wallet: A, pct: 12 }] };
+    const g = buildGraph(listed, [
+      { wallet: R, tags: ["kol"], score: null, dumps: null, heldPct: 2.86, kol: "trunoest" },
+    ]);
+    expect(g.nodes.some((n) => n.wallet === R)).toBe(false);
+  });
+
   it("names a KOL holder without ringing it as risky", () => {
     const g = buildGraph(snapshot, [
       { wallet: A, tags: ["kol", "linked"], score: null, dumps: null, heldPct: 12, kol: "Cupsey" },
