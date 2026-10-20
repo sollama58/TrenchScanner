@@ -35,8 +35,9 @@ describe("liveShareDeltas", () => {
 });
 
 describe("wideShareDeltas", () => {
-  it("moves the scan's top holders from the list's time and the rest from the top 50's read", () => {
-    // The top 50 was read at T; the list, kept current by the holder stream, was written at T + 10.
+  it("moves wallets already on the list from the share time and everyone else from the enumeration", () => {
+    // Enumerated at T. The holder stream moved the listed wallet at T + 5, so its share is current
+    // at T + 10; that buy must not be applied again. The extra wallet was not on the list.
     const trades = [
       buy("listed", 10_000_000, T + 5),
       buy("listed", 1_000_000, T + 20),
@@ -95,6 +96,18 @@ describe("withLiveShares", () => {
 
   it("returns the reading itself with no moves", () => {
     expect(withLiveShares(reading, new Map())).toBe(reading);
+  });
+
+  it("replaces a holder who sold down with the buyer who now outranks them", () => {
+    const live = withLiveShares(
+      reading,
+      new Map([
+        ["c", -0.8],
+        ["new", 0.5],
+      ]),
+    );
+    expect(live.linkedHolders?.map((h) => h.wallet)).toEqual(["a", "b", "new"]);
+    expect(live.linkedHolders?.map((h) => h.pct)).toEqual([5, 3, 0.5]);
   });
 });
 

@@ -30,6 +30,7 @@ import {
   sameTimeSlot,
   buildGraph,
   HOLDER_POLL_MS,
+  holderChainReadAt,
   holderListAt,
   liveWideFor,
   clusterHalos,
@@ -139,8 +140,11 @@ export function useBubbleMaps(mint: string): BubbleMaps | null {
   // stream as they move, the list written each minute (bubbleMap.ts HOLDER_WRITE_MS).
   const path = bubbleMapsPath(mint);
   const version = useSyncExternalStore(subscribeMaps, () => mapsVersion.get(mint) ?? 0);
-  const { data } = usePolling<BubbleMaps>(path, HOLDER_POLL_MS, String(version));
-  return data;
+  const { data, stale } = usePolling<BubbleMaps>(path, HOLDER_POLL_MS, String(version));
+  // A path change keeps the previous coin's maps up, flagged stale, until this coin's land.
+  // Drawing those over this coin's holders mixes the two lists. A refetch of the same coin is
+  // not stale.
+  return stale ? null : data;
 }
 
 const bubbleMapsPath = (mint: string) => `/tokens/${encodeURIComponent(mint)}/bubble-holders`;
@@ -2364,7 +2368,13 @@ export function BubbleMapSection({
       heldReading && heldLive
         ? withLiveShares(
             heldReading,
-            liveShareDeltas(heldLive.trades, heldLive.supply, holderListAt(heldReading)),
+            wideShareDeltas(
+              heldLive.trades,
+              heldLive.supply,
+              new Set((heldReading.linkedHolders ?? []).map((h) => h.wallet)),
+              holderListAt(heldReading),
+              holderChainReadAt(heldReading),
+            ),
           )
         : heldReading,
     [heldReading, heldLive],
@@ -2378,11 +2388,15 @@ export function BubbleMapSection({
               ? wideShareDeltas(
                   heldLive.trades,
                   heldLive.supply,
-                  new Set((heldReading.linkedHolders ?? []).map((h) => h.wallet)),
-                  holderListAt(heldReading),
+                  new Set(wideIn.holders.map((h) => h.wallet)),
+                  wideIn.balancesAt ? Date.parse(wideIn.balancesAt) : holderListAt(heldReading),
                   Date.parse(wideIn.readAt),
                 )
-              : liveShareDeltas(heldLive.trades, heldLive.supply, Date.parse(wideIn.readAt)),
+              : liveShareDeltas(
+                  heldLive.trades,
+                  heldLive.supply,
+                  Date.parse(wideIn.balancesAt ?? wideIn.readAt),
+                ),
           )
         : wideIn,
     [wideIn, heldLive, heldReading],

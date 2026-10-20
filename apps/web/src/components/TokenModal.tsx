@@ -3,6 +3,7 @@ import {
   fromAlertText,
   hasHolderList,
   holderFreshness,
+  holderChainReadAt,
   holderListAt,
   linkedCountText,
   momentLabel,
@@ -16,7 +17,7 @@ import { cachedGet } from "../cache";
 import { createPortal } from "react-dom";
 import { LiveTradesCard, useBatchedWallets } from "./LiveTrades";
 import { useLiveTrades } from "../liveTrades";
-import { liveShareDeltas, withLiveShares, type LiveTradeShares } from "../liveShares";
+import { wideShareDeltas, withLiveShares, type LiveTradeShares } from "../liveShares";
 import { usePossibleSides } from "../possibleSides";
 import {
   createContext,
@@ -785,7 +786,13 @@ function TokenBody({
       liveShares && holders.listReading
         ? withLiveShares(
             holders.listReading,
-            liveShareDeltas(liveShares.trades, liveShares.supply, holderListAt(holders.listReading)),
+            wideShareDeltas(
+              liveShares.trades,
+              liveShares.supply,
+              new Set((holders.listReading.linkedHolders ?? []).map((h) => h.wallet)),
+              holderListAt(holders.listReading),
+              holderChainReadAt(holders.listReading),
+            ),
           )
         : holders.listReading,
     [liveShares, holders.listReading],

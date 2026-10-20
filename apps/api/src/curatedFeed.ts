@@ -104,16 +104,20 @@ export async function latestSnapshotsByToken(
       carriedClusters: Prisma.JsonValue | null;
       carriedSameTime: Prisma.JsonValue | null;
       carriedAt: Date | null;
+      carriedBalancesAt: Date | null;
+      carriedChainReadAt: Date | null;
     })[]
   >`
     SELECT s.*, h."linkedHolders" AS "carriedHolders", h."linkedClusters" AS "carriedClusters",
-           h."sameTimeClusters" AS "carriedSameTime", h."takenAt" AS "carriedAt"
+           h."sameTimeClusters" AS "carriedSameTime", h."takenAt" AS "carriedAt",
+           h."holderBalancesAt" AS "carriedBalancesAt", h."holderChainReadAt" AS "carriedChainReadAt"
     FROM unnest(${ids}::text[]) AS t(id)
     CROSS JOIN LATERAL (
       SELECT * FROM "TokenSnapshot" WHERE "tokenId" = t.id ORDER BY "takenAt" DESC LIMIT 1
     ) s
     LEFT JOIN LATERAL (
-      SELECT "linkedHolders", "linkedClusters", "sameTimeClusters", "takenAt" FROM "TokenSnapshot"
+      SELECT "linkedHolders", "linkedClusters", "sameTimeClusters", "takenAt",
+             "holderBalancesAt", "holderChainReadAt" FROM "TokenSnapshot"
       WHERE s."linkedHolders" IS NULL
         AND "tokenId" = t.id
         AND "takenAt" < s."takenAt"
@@ -123,18 +127,30 @@ export async function latestSnapshotsByToken(
       LIMIT 1
     ) h ON true`;
   return new Map(
-    snapshots.map(({ carriedHolders, carriedClusters, carriedSameTime, carriedAt, ...s }) => [
-      s.tokenId,
-      s.linkedHolders === null && carriedHolders !== null
-        ? {
-            ...s,
-            linkedHolders: carriedHolders,
-            linkedClusters: s.linkedClusters ?? carriedClusters,
-            sameTimeClusters: s.sameTimeClusters ?? carriedSameTime,
-            ...(carriedAt ? { holdersAt: carriedAt } : {}),
-          }
-        : s,
-    ]),
+    snapshots.map(
+      ({
+        carriedHolders,
+        carriedClusters,
+        carriedSameTime,
+        carriedAt,
+        carriedBalancesAt,
+        carriedChainReadAt,
+        ...s
+      }) => [
+        s.tokenId,
+        s.linkedHolders === null && carriedHolders !== null
+          ? {
+              ...s,
+              linkedHolders: carriedHolders,
+              linkedClusters: s.linkedClusters ?? carriedClusters,
+              sameTimeClusters: s.sameTimeClusters ?? carriedSameTime,
+              ...(carriedAt ? { holdersAt: carriedBalancesAt ?? carriedAt } : {}),
+              ...(carriedBalancesAt ? { holderBalancesAt: carriedBalancesAt } : {}),
+              ...(carriedChainReadAt ? { holderChainReadAt: carriedChainReadAt } : {}),
+            }
+          : s,
+      ],
+    ),
   );
 }
 
@@ -177,7 +193,14 @@ export async function withCarriedHolderList<
       linkedHolders: { not: Prisma.DbNull },
     },
     orderBy: { takenAt: "desc" },
-    select: { linkedHolders: true, linkedClusters: true, sameTimeClusters: true, takenAt: true },
+    select: {
+      linkedHolders: true,
+      linkedClusters: true,
+      sameTimeClusters: true,
+      takenAt: true,
+      holderBalancesAt: true,
+      holderChainReadAt: true,
+    },
   });
   return carried === null
     ? snapshot
@@ -186,7 +209,9 @@ export async function withCarriedHolderList<
         linkedHolders: carried.linkedHolders,
         linkedClusters: snapshot.linkedClusters ?? carried.linkedClusters,
         sameTimeClusters: snapshot.sameTimeClusters ?? carried.sameTimeClusters,
-        holdersAt: carried.takenAt,
+        holdersAt: carried.holderBalancesAt ?? carried.takenAt,
+        ...(carried.holderBalancesAt ? { holderBalancesAt: carried.holderBalancesAt } : {}),
+        ...(carried.holderChainReadAt ? { holderChainReadAt: carried.holderChainReadAt } : {}),
       };
 }
 
@@ -211,13 +236,17 @@ export async function withCarriedHolderLists<
       linkedClusters: Prisma.JsonValue | null;
       sameTimeClusters: Prisma.JsonValue | null;
       takenAt: Date;
+      holderBalancesAt: Date | null;
+      holderChainReadAt: Date | null;
     }[]
   >`
-    SELECT s.id, h."linkedHolders", h."linkedClusters", h."sameTimeClusters", h."takenAt"
+    SELECT s.id, h."linkedHolders", h."linkedClusters", h."sameTimeClusters", h."takenAt",
+           h."holderBalancesAt", h."holderChainReadAt"
     FROM unnest(${ids}::text[]) AS t(id)
     JOIN "TokenSnapshot" s ON s.id = t.id
     CROSS JOIN LATERAL (
-      SELECT "linkedHolders", "linkedClusters", "sameTimeClusters", "takenAt" FROM "TokenSnapshot"
+      SELECT "linkedHolders", "linkedClusters", "sameTimeClusters", "takenAt",
+             "holderBalancesAt", "holderChainReadAt" FROM "TokenSnapshot"
       WHERE "tokenId" = s."tokenId"
         AND "takenAt" < s."takenAt"
         AND "takenAt" >= s."takenAt" - make_interval(secs => ${CARRIED_HOLDER_LIST_MS / 1000}::float8)
@@ -235,7 +264,9 @@ export async function withCarriedHolderLists<
           linkedHolders: carried.linkedHolders,
           linkedClusters: s.linkedClusters ?? carried.linkedClusters,
           sameTimeClusters: s.sameTimeClusters ?? carried.sameTimeClusters,
-          holdersAt: carried.takenAt,
+          holdersAt: carried.holderBalancesAt ?? carried.takenAt,
+          ...(carried.holderBalancesAt ? { holderBalancesAt: carried.holderBalancesAt } : {}),
+          ...(carried.holderChainReadAt ? { holderChainReadAt: carried.holderChainReadAt } : {}),
         };
   });
 }

@@ -93,6 +93,11 @@ const CHART_SNAPSHOT_POINTS = 240;
 /** GET /tokens/:mint/bubble-holders: a model-alerted coin's bubble map over its top 50 (web src/bubbleMap.ts). */
 export interface BubbleHoldersMap {
   readAt: string;
+  /**
+   * When the shares were current. Absent on maps stored before it: those shares were current at
+   * `readAt`. The token view counts trades of wallets already on the map from here.
+   */
+  balancesAt?: string;
   holdersRead: number;
   knownExtra: number;
   holders: { wallet: string; pct: number; rank?: number; cexFunder?: string }[];
@@ -128,6 +133,7 @@ export interface BubbleHolders {
 /** A stored map row (BubbleMapHolders or BubbleMapAtAlert) as the API sends it. */
 function bubbleMapOf(row: {
   readAt: Date;
+  balancesAt?: Date | null;
   holdersRead: number;
   knownExtra: number;
   holders: unknown;
@@ -137,6 +143,7 @@ function bubbleMapOf(row: {
 }): BubbleHoldersMap {
   return {
     readAt: row.readAt.toISOString(),
+    ...(row.balancesAt ? { balancesAt: row.balancesAt.toISOString() } : {}),
     holdersRead: row.holdersRead,
     knownExtra: row.knownExtra,
     holders: row.holders as BubbleHoldersMap["holders"],

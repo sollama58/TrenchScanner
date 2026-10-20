@@ -88,6 +88,10 @@ export function snapshotDataFor(
     // among them and the same-minute groups - on the rows that carry a new reading, not every
     // scan (holderListWrites.ts): readers take the newest row that has them.
     ...(opts.holderReading !== false ? holderReadingData(scored) : {}),
+    // With the list, not on a row that leaves it off: the times describe the shares on this row.
+    ...(opts.holderReading !== false && scored.holderBalancesAt
+      ? { holderBalancesAt: scored.holderBalancesAt, holderChainReadAt: scored.holderChainReadAt ?? null }
+      : {}),
     sameTimeFundedPct: scored.sameTimeFundedPct,
     sameTimeClusterCount: scored.sameTimeClusterCount,
     sameTimeFundedCount: scored.sameTimeFundedCount,

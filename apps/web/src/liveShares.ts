@@ -47,10 +47,11 @@ export function liveShareDeltas(
 }
 
 /**
- * The top 50's deltas when its top 25 are the scan's list (worker linkedWallets wideMapReadings):
- * those wallets move from the list's time, which the holder stream keeps current between reads
- * (user ask 2026-10-19), and only the rest from the top 50's own read. One base for all would count
- * the trades the stream already put on the list a second time.
+ * Deltas for a list whose shares are already current as of `balancesAtMs`, while the set of
+ * wallets was last enumerated at `enumeratedAtMs`. Wallets on the list move from the share time,
+ * so a trade the holder stream already folded in is not counted again. Everyone else moves from
+ * the enumeration, so a wallet that bought in after that read still appears. One time for both
+ * either counts the stream's trades twice or hides every buyer from before a later scan stamp.
  */
 export function wideShareDeltas(
   trades: readonly ShareTrade[],
@@ -97,7 +98,8 @@ function movedGroups<G extends { wallets: { wallet: string; pct: number }[]; pct
 
 /**
  * The holder list with its shares moved, largest first, and the wallets that bought in since the
- * read added where they would rank among it (reaching its smallest share), kept to its length.
+ * read added where they rank among it, kept to its length. The bar is the list after the moves:
+ * a buyer who outranks a holder that sold down takes their place, and one who doesn't is left out.
  */
 function movedHolders<H extends { wallet: string; pct: number }>(
   holders: readonly H[],
@@ -106,10 +108,11 @@ function movedHolders<H extends { wallet: string; pct: number }>(
 ): H[] {
   const list = movedWallets(holders, deltas);
   const listed = new Set(holders.map((h) => h.wallet));
-  const floor = holders.length > 0 ? Math.min(...holders.map((h) => h.pct)) : 0;
   for (const [wallet, d] of deltas) {
-    if (listed.has(wallet) || !(d > 0) || round2(d) < floor) continue;
-    list.push(make(wallet, round2(d)));
+    if (listed.has(wallet) || !(d > 0)) continue;
+    const pct = round2(d);
+    if (!(pct > 0)) continue;
+    list.push(make(wallet, pct));
   }
   return list.sort((a, b) => b.pct - a.pct).slice(0, Math.max(holders.length, 1));
 }
