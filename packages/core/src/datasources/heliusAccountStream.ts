@@ -54,6 +54,19 @@ const MAX_ACCOUNT_KEYS = 1_000;
  */
 const MAX_LOGS_KEYS = 100;
 
+/**
+ * At a kind's cap, a key nobody has asked for in this long gives its place to a new one rather than
+ * holding it until evict's UNWATCHED_TTL_MS: the holder transfers ask for every coin they read each
+ * cycle, so a coin that left them kept a newer contender polling for up to 15 minutes (audit
+ * 2026-10-19, H1).
+ */
+const STALE_AT_CAP_MS = 5 * 60_000;
+/**
+ * A refused subscription is asked for again after this long: it used to stay uncovered, its coin
+ * polling, until its accounts changed or the socket reconnected.
+ */
+export const REFUSED_RETRY_MS = 5 * 60_000;
+
 const MAX_KEYS_OF: Record<StreamKind, number> = {
   tx: MAX_KEYS,
   account: MAX_ACCOUNT_KEYS,
@@ -89,6 +102,8 @@ interface Subscription {
   carried: Map<string, number>;
   /** The subscription this one replaced, kept live until this one is confirmed ("tx" keys). */
   retiring: Subscription | null;
+  /** When Helius last refused it (ms epoch), until it is asked for again. */
+  refusedAt: number | null;
 }
 
 export interface HeliusStreamStats {
@@ -113,6 +128,12 @@ export interface HeliusStreamStats {
    */
   reconnects?: number;
   stalls?: number;
+  /**
+   * Keys turned away at their kind's cap, and subscriptions Helius refused: each one's coin polls
+   * instead. Always set by takeStats; optional for the older stubs.
+   */
+  capped?: number;
+  refused?: number;
   bytes: number;
   /** Estimated from the bytes received (streamCredits), plus one per connection opened. */
   credits: number;
@@ -144,6 +165,8 @@ export class HeliusAccountStream {
     connections: 0,
     reconnects: 0,
     stalls: 0,
+    capped: 0,
+    refused: 0,
   };
   /** Silence after which nothing counts as covered (stallAfter); null: only the reconnect's timeout. */
   private coverStallMs: number | null = null;
@@ -249,9 +272,16 @@ export class HeliusAccountStream {
     const existing = this.subs.get(key);
     if (existing && existing.kind === kind && sameSet(existing.accounts, accounts)) {
       existing.wantedAt = now;
+      if (existing.refusedAt !== null && now - existing.refusedAt >= REFUSED_RETRY_MS) {
+        existing.refusedAt = null;
+        this.subscribe(key, existing);
+      }
       return;
     }
-    if (!existing && this.countOf(kind) >= MAX_KEYS_OF[kind]) return;
+    if (!existing && this.countOf(kind) >= MAX_KEYS_OF[kind] && !this.evictStalest(kind, now)) {
+      this.stats.capped += 1;
+      return;
+    }
     const sub: Subscription = {
       kind,
       accounts: new Set(accounts),
@@ -261,6 +291,7 @@ export class HeliusAccountStream {
       wantedAt: now,
       carried: new Map(),
       retiring: null,
+      refusedAt: null,
     };
     if (existing) {
       // Make before break: the live subscription keeps covering the accounts both follow until the
@@ -291,6 +322,18 @@ export class HeliusAccountStream {
     if (!sub) return;
     this.unsubscribe(key, sub);
     this.subs.delete(key);
+  }
+
+  /** Drops the `kind` key asked for least lately, unless within STALE_AT_CAP_MS; whether it did. */
+  private evictStalest(kind: StreamKind, now: number): boolean {
+    let stalest: [string, Subscription] | null = null;
+    for (const entry of this.subs) {
+      if (entry[1].kind === kind && (!stalest || entry[1].wantedAt < stalest[1].wantedAt)) stalest = entry;
+    }
+    if (!stalest || now - stalest[1].wantedAt < STALE_AT_CAP_MS) return false;
+    this.unsubscribe(stalest[0], stalest[1]);
+    this.subs.delete(stalest[0]);
+    return true;
   }
 
   private countOf(kind: StreamKind): number {
@@ -340,6 +383,8 @@ export class HeliusAccountStream {
       credits: streamCredits(this.stats.bytes) + this.stats.connections,
       reconnects: this.stats.reconnects,
       stalls: this.stats.stalls,
+      capped: this.stats.capped,
+      refused: this.stats.refused,
     };
     this.stats = {
       txs: 0,
@@ -349,6 +394,8 @@ export class HeliusAccountStream {
       connections: 0,
       reconnects: 0,
       stalls: 0,
+      capped: 0,
+      refused: 0,
     };
     return out;
   }
@@ -393,14 +440,18 @@ export class HeliusAccountStream {
       if (typeof msg.result === "number") {
         sub.subId = msg.result;
         sub.since = at;
+        sub.refusedAt = null;
         this.keyOfSub.set(msg.result, key);
         if (sub.retiring) {
           this.unsubscribe(key, sub.retiring);
           sub.retiring = null;
         }
       } else {
-        // Kept, uncovered: asked again with the same accounts it is not resent (a refusal would
-        // come back every cycle), only on the next connection or when its accounts change.
+        // Kept, uncovered: asked again with the same accounts it is resent only after
+        // REFUSED_RETRY_MS (a refusal would come back every cycle), on the next connection, or when
+        // its accounts change.
+        sub.refusedAt = at;
+        this.stats.refused += 1;
         logger.warn("subscription refused", { key, error: String(msg.error?.message ?? "unknown") });
       }
       return;
@@ -527,6 +578,7 @@ export class HeliusAccountStream {
       sub.since = null;
       sub.carried.clear();
       sub.retiring = null;
+      sub.refusedAt = null;
     }
   }
 

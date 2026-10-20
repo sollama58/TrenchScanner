@@ -562,6 +562,35 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
     expect(await prisma.tradeTapeProgress.count()).toBe(0);
   });
 
+  it("saves a read in progress after every run, so a crash loses at most a run, but leaves another coin's save", async () => {
+    const { token } = await seedCalled("crashed", null);
+    const mint = token.mintAddress;
+    const asked: (string | undefined)[] = [];
+    const helius: TradeTapeDeps["helius"] = {
+      gtfaUsable: true,
+      takeCallStats: () => ({}),
+      getMintTransactionsPage: async (m, opts) => {
+        if (m !== mint) return { status: "ok", txs: [], paginationToken: null };
+        asked.push(opts?.paginationToken);
+        return { status: "ok", txs: [], paginationToken: opts?.paginationToken ? null : "p2" };
+      },
+    };
+    const none = pumpFunStub("none", []);
+    const opts = { heliusPagesPerRun: 1, pumpFunCallsPerRun: 0, now: () => NOW };
+    await runTradeTapeJob({ helius, pumpFun: none.stub }, opts);
+    expect(await prisma.tradeTapeProgress.findUnique({ where: { lane: "helius" } })).toMatchObject({
+      tokenId: token.id,
+    });
+    // Another process's save for a different coin is not overwritten.
+    await prisma.tradeTapeProgress.update({ where: { lane: "helius" }, data: { tokenId: "other" } });
+    expect(await saveTradeTapeProgress({ keepOthers: true })).toBe(0);
+    expect((await prisma.tradeTapeProgress.findUnique({ where: { lane: "helius" } }))?.tokenId).toBe("other");
+    await prisma.tradeTapeProgress.update({ where: { lane: "helius" }, data: { tokenId: token.id } });
+    resetTradeTapeState(); // killed without a shutdown
+    await runTradeTapeJob({ helius, pumpFun: none.stub }, opts);
+    expect(asked).toEqual([undefined, "p2"]);
+  });
+
   it("keeps a coin whose Helius page failed, and asks for the page again next run", async () => {
     const flaky = await seedCalled("flaky", null);
     const mint = flaky.token.mintAddress;
