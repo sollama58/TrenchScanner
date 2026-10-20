@@ -6,7 +6,7 @@ import {
   recordRunStart,
   type HeartbeatJob,
 } from "@trenchscanner/core";
-import { JobSkipped } from "./scheduler.js";
+import { JobLockLost, JobSkipped } from "./scheduler.js";
 
 const logger = createLogger("job-lock");
 
@@ -33,20 +33,25 @@ export { jobLockKey };
  * open for the whole of a half-hour sweep. Ending the connection releases the lock, so there is no
  * unlock to get wrong.
  *
- * A connection the database drops mid-run takes the lock with it, and the run carries on rather
- * than being abandoned half-way. The lock is taken again on a fresh connection when it can be; when
- * it can't (another process took it meanwhile, or the database is still unreachable), the run is
- * marked on its heartbeat row (recordLockLost), so the lost-run check - "running, lock free" - does
- * not call a run that is still going lost.
+ * A connection the database drops mid-run takes the lock with it. The lock is taken again on a
+ * fresh connection when it can be. When it can't (another process took it meanwhile, or the
+ * database is still unreachable), a sweep that is safe to repeat keeps going and is marked on its
+ * heartbeat row (recordLockLost), so the lost-run check - "running, lock free" - does not call a
+ * run that is still going lost. A run that inserts or spends (`stopWhenLockLost`) stops instead:
+ * it is signalled, and JobLockLost is thrown once it returns, so a second process cannot ingest
+ * the same batch and charge it again. The scheduler writes no heartbeat for that stop.
+ *
+ * `fn` receives that signal. Callers that ignore the argument are unchanged.
  *
  * The run's start is stamped here, once the lock is taken (the scheduler leaves these jobs to it):
  * a skipped run's stamp used to replace the running one's.
  */
 export async function withJobLock<T>(
   job: HeartbeatJob,
-  fn: () => Promise<T>,
-  opts: { databaseUrl?: string; startedAt?: Date } = {},
+  fn: (signal: AbortSignal) => Promise<T>,
+  opts: { databaseUrl?: string; startedAt?: Date; stopWhenLockLost?: boolean } = {},
 ): Promise<T> {
+  const stop = new AbortController();
   const connect = () =>
     new Client({
       connectionString: opts.databaseUrl ?? process.env.DATABASE_URL,
@@ -83,23 +88,48 @@ export async function withJobLock<T>(
     // A failure on this one is answered below, not by another retake.
     next.on("error", () => {});
     clients.push(next);
+    // False when the lock is held again (or the run already finished). Otherwise why it was not.
+    let lost: "held" | "failed" | false = false;
+    let failure: unknown;
     try {
       const locked = await take(next);
       if (finished) {
         // The run ended while this was connecting: let go of what it took.
         await next.end().catch(() => {});
-        return;
-      }
-      if (locked) {
+      } else if (locked) {
         watch(next);
         logger.info("job lock taken again", { job });
-        return;
+      } else {
+        lost = "held";
       }
-      logger.warn("job lock held elsewhere after a lost connection - the run continues without it", { job });
     } catch (err) {
-      logger.warn("job lock not taken again - the run continues without it", { job, error: String(err) });
+      lost = "failed";
+      failure = err;
     } finally {
       retaking = false;
+    }
+    if (lost === "held") {
+      logger.warn(
+        opts.stopWhenLockLost
+          ? "job lock held elsewhere after a lost connection - stopping the run"
+          : "job lock held elsewhere after a lost connection - the run continues without it",
+        { job },
+      );
+    } else if (lost === "failed") {
+      logger.warn(
+        opts.stopWhenLockLost
+          ? "job lock not taken again - stopping the run"
+          : "job lock not taken again - the run continues without it",
+        { job, error: String(failure) },
+      );
+    } else {
+      return;
+    }
+    if (opts.stopWhenLockLost) {
+      // This run is stopping, not continuing unlocked, so the lost-run check should see a free
+      // lock as a run that ended. The process that holds the lock stamps its own start.
+      stop.abort();
+      return;
     }
     await recordLockLost(job).catch(() => {});
   };
@@ -111,7 +141,19 @@ export async function withJobLock<T>(
     await recordRunStart(job, opts.startedAt).catch(() => {
       // Visibility only - never worth not running the job over.
     });
-    return await fn();
+    try {
+      const result = await fn(stop.signal);
+      if (stop.signal.aborted) throw new JobLockLost(job);
+      return result;
+    } catch (err) {
+      if (stop.signal.aborted) {
+        if (!(err instanceof JobLockLost)) {
+          logger.warn("job stopped after losing its lock", { job, error: String(err) });
+        }
+        throw new JobLockLost(job);
+      }
+      throw err;
+    }
   } finally {
     finished = true;
     // Bounded: ending a connection whose socket died can wait on it.

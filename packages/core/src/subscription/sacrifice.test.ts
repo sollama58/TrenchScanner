@@ -190,6 +190,7 @@ describe.skipIf(!dbAvailable)("the fee tier", () => {
 describe.skipIf(!dbAvailable)("taking the Sacrifice at send", () => {
   const RUN = Date.now();
   const W = `SacrificeSendWallet${RUN}`;
+  const PACE = `SacrificePace${RUN}`;
   const TOKENS = 10n ** 6n;
   const trade = (n: number, mode: "on" | "shadow" | "off", asdfRaw: bigint | null = 1_000n * TOKENS) => ({
     signature: `SacrificeSendSig${RUN}-${n}`,
@@ -210,7 +211,9 @@ describe.skipIf(!dbAvailable)("taking the Sacrifice at send", () => {
 
   afterAll(async () => {
     await prisma.burnCreditEntry.deleteMany({ where: { wallet: W } });
-    await prisma.platformTrade.deleteMany({ where: { wallet: W } });
+    await prisma.platformTrade.deleteMany({
+      where: { OR: [{ wallet: W }, { wallet: { startsWith: PACE } }] },
+    });
   });
 
   it("lets only one of two sends spend the same credits, and records each charge with its trade", async () => {
@@ -252,6 +255,58 @@ describe.skipIf(!dbAvailable)("taking the Sacrifice at send", () => {
       sacrificeMode: "shadow",
     });
     expect(await refundSacrifice(trade(3, "shadow").signature)).toBe(0n);
+  });
+
+  it("lets one paced send through and refuses the next until the window has passed", async () => {
+    const wallet = `${PACE}-window`;
+    const paceMs = 60_000;
+    const opened = await recordPlatformTrade({ ...trade(10, "off"), wallet, paceMs, now: Date.now() });
+    expect(opened).toMatchObject({ status: "recorded" });
+    const row = await prisma.platformTrade.findUniqueOrThrow({
+      where: { signature: trade(10, "off").signature },
+    });
+    const again = await recordPlatformTrade({
+      ...trade(11, "off"),
+      wallet,
+      paceMs,
+      now: row.sentAt.getTime() + 1_000,
+    });
+    expect(again.status).toBe("too-soon");
+    if (again.status === "too-soon") expect(again.retryAfterMs).toBeGreaterThan(0);
+    expect(
+      await recordPlatformTrade({
+        ...trade(12, "off"),
+        wallet,
+        paceMs,
+        now: row.sentAt.getTime() + paceMs,
+      }),
+    ).toMatchObject({ status: "recorded" });
+  });
+
+  it("lets only one of two paced sends at the same moment through", async () => {
+    const wallet = `${PACE}-race`;
+    const now = Date.now();
+    const outcomes = await Promise.all([
+      recordPlatformTrade({ ...trade(13, "off"), wallet, paceMs: 60_000, now }),
+      recordPlatformTrade({ ...trade(14, "off"), wallet, paceMs: 60_000, now }),
+    ]);
+    expect(outcomes.map((o) => o.status).sort()).toEqual(["recorded", "too-soon"]);
+  });
+
+  it("counts a closing sale toward the next paced trade", async () => {
+    const wallet = `${PACE}-close`;
+    expect(await recordPlatformTrade({ ...trade(15, "off"), wallet })).toMatchObject({ status: "recorded" });
+    const row = await prisma.platformTrade.findUniqueOrThrow({
+      where: { signature: trade(15, "off").signature },
+    });
+    expect(
+      await recordPlatformTrade({
+        ...trade(16, "off"),
+        wallet,
+        paceMs: 60_000,
+        now: row.sentAt.getTime() + 1_000,
+      }),
+    ).toMatchObject({ status: "too-soon" });
   });
 
   it("refunds a trade's Sacrifice once, however many times it is asked", async () => {

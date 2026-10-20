@@ -4,6 +4,7 @@ import {
   quickBuyShown,
   runTrade,
   tradeCooldownLeft,
+  tradePacePhrase,
   useCanSignTrades,
   useProState,
   useTradeSettings,
@@ -75,12 +76,12 @@ export function QuickBuyPill({
       onNeedsPanel();
       return;
     }
-    // The API's one trade per 5 seconds per wallet, said here without a round trip.
+    // The API's one trade per second per wallet, said here without a round trip.
     const left = tradeCooldownLeft(owner);
     if (left > 0) {
       setState({
         kind: "failed",
-        message: `One trade every 5 seconds: try again in ${Math.ceil(left / 1_000)}s.`,
+        message: `One trade ${tradePacePhrase()}: try again in ${Math.ceil(left / 1_000)}s.`,
       });
       return;
     }

@@ -17,7 +17,8 @@ vi.mock("@trenchscanner/core", () => ({
   JOB_LOCKED_JOBS: ["ai-judge", "cleanup", "outcome-tracking"],
 }));
 
-const { scheduleInterval, scheduleDailyAt, JobSkipped, PartialJobFailure } = await import("./scheduler.js");
+const { scheduleInterval, scheduleDailyAt, JobLockLost, JobSkipped, PartialJobFailure } =
+  await import("./scheduler.js");
 const { registerShutdown } = await import("./processExit.js");
 
 /** A job whose every run takes `ms` of (fake) time. */
@@ -373,6 +374,22 @@ describe("scheduleInterval", () => {
       async () => {
         runs.push(Date.now());
         throw new JobSkipped("another process holds the ai-judge lock");
+      },
+      10,
+    );
+    await vi.advanceTimersByTimeAsync(11 * 60_000);
+    job.stop();
+    expect(runs).toEqual([0, 600_000]);
+    expect(heartbeats).toEqual([]);
+  });
+
+  it("writes nothing when a run stops because it lost its lock", async () => {
+    const runs: number[] = [];
+    const job = scheduleInterval(
+      "ai-judge",
+      async () => {
+        runs.push(Date.now());
+        throw new JobLockLost("ai-judge");
       },
       10,
     );

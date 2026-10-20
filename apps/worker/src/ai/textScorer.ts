@@ -122,17 +122,21 @@ async function scoreText(
   const noEffort = env.AI_TEXT_MODEL.startsWith("claude-haiku-4");
   let response;
   try {
-    response = await anthropicClient(env).beta.messages.parse({
-      model: env.AI_TEXT_MODEL,
-      max_tokens: 4000,
-      ...(haiku ? {} : { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }),
-      system: TEXT_SCORER_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: buildTextScoringBrief(token) }],
-      output_config: {
-        ...(noEffort ? {} : { effort: env.AI_TEXT_EFFORT }),
-        format: lenientFormat(betaZodOutputFormat(TextScoresSchema)),
+    response = await anthropicClient(env).beta.messages.parse(
+      {
+        model: env.AI_TEXT_MODEL,
+        max_tokens: 4000,
+        ...(haiku ? {} : { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }),
+        system: TEXT_SCORER_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: buildTextScoringBrief(token) }],
+        output_config: {
+          ...(noEffort ? {} : { effort: env.AI_TEXT_EFFORT }),
+          format: lenientFormat(betaZodOutputFormat(TextScoresSchema)),
+        },
       },
-    });
+      // No retry: a timed-out read can still be billed, and the ledger reserved one estimate.
+      { maxRetries: 0 },
+    );
   } catch (err) {
     await settleAiSpend(reservation, failedCallCostUsd(err, reservation));
     throw err;

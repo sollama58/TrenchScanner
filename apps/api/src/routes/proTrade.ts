@@ -169,13 +169,21 @@ const sendSchema = z.object({
 
 /**
  * Trade limits (user ask 2026-10-18): no trade under 0.01 SOL (a buy's spend, a sale's quoted
- * proceeds), and one trade sent every 5 seconds per wallet. A sale of the whole balance closes a
+ * proceeds), and one trade sent per second per wallet. A sale of the whole balance closes a
  * position and is exempt from both: nobody is ever stuck holding dust or waiting to get out.
  */
 export const MIN_TRADE_LAMPORTS = 10_000_000n;
-export const TRADE_COOLDOWN_MS = 5_000;
+export const TRADE_COOLDOWN_MS = 1_000;
 
-/** When each wallet last sent a trade, for TRADE_COOLDOWN_MS. */
+/** "every second", or "every N seconds" for any other window. */
+function tradePacePhrase(ms: number): string {
+  return ms === 1_000 ? "every second" : `every ${ms / 1_000} seconds`;
+}
+
+/**
+ * When each wallet last sent a trade, for TRADE_COOLDOWN_MS. This map only sees this process.
+ * recordPlatformTrade's pace check is what holds the same limit across API instances.
+ */
 export class TradeCooldown {
   private readonly last = new Map<string, number>();
   constructor(
@@ -444,7 +452,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   function tooSoon(reply: FastifyReply, leftMs: number) {
     const seconds = Math.max(1, Math.ceil(leftMs / 1_000));
     return reply.code(429).send({
-      error: `One trade every ${TRADE_COOLDOWN_MS / 1_000} seconds: try again in ${seconds}s. Nothing was sent.`,
+      error: `One trade ${tradePacePhrase(TRADE_COOLDOWN_MS)}: try again in ${seconds}s. Nothing was sent.`,
       retryAfterMs: leftMs,
       notSent: true,
     });
@@ -861,7 +869,6 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       // credit lock, so two sends can't spend the same credits, and a charge is never unrecorded.
       // The row also carries what any instance needs to keep resending it and to call it expired.
       const q = sentBuild.sacrifice;
-      const takes = q.mode === "on" && q.pays && q.lamports !== null;
       try {
         const recorded = await recordPlatformTrade({
           signature,
@@ -878,6 +885,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
             senderMevProtect: mevProtect,
             buildId: sentBuild.id,
           },
+          // Closing sales are exempt. The row is still written under the pace lock, so the next
+          // paced trade on any instance sees it. The in-memory cooldown is only the fast path.
+          paceMs: sentBuild.closing ? undefined : TRADE_COOLDOWN_MS,
         });
         if (recorded.status === "short") {
           giveBack();
@@ -887,6 +897,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
             topUp: true,
             notSent: true,
           });
+        }
+        if (recorded.status === "too-soon") {
+          giveBack();
+          return tooSoon(reply, recorded.retryAfterMs);
         }
       } catch (err) {
         // Recorded already: this signature (a retried request, maybe on another instance) is out and
@@ -902,16 +916,14 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
             .code(409)
             .send({ error: "This trade was already sent once. Nothing more was sent.", notSent: true });
         }
-        // Without a record a Sacrifice can't be taken, so a paying trade waits; anything else only
-        // loses its fees-saved row, as before.
+        // No row means nothing may go out: a later signature of this build would otherwise be a
+        // second trade, and the build id that blocks it would never have been stored.
         request.log.warn({ signature, err: String(err) }, "platform trade not recorded");
-        if (takes) {
-          giveBack();
-          return reply.code(503).send({
-            error: "Couldn't record the trade just now. Nothing was sent; try again.",
-            notSent: true,
-          });
-        }
+        giveBack();
+        return reply.code(503).send({
+          error: "Couldn't record the trade just now. Nothing was sent; try again.",
+          notSent: true,
+        });
       }
       const sent = await sendViaSender(url, transaction);
       senderHealth.note(sent.ok || sent.refused);

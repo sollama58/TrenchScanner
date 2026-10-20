@@ -334,7 +334,9 @@ export async function submitReplay(
     },
   });
   try {
-    const batch = await anthropicClient(env).messages.batches.create({ requests });
+    // No retry: a timeout after the batch was created would submit a second one and bill both,
+    // against the one reservation made above. A batch that was never created bills nothing.
+    const batch = await anthropicClient(env).messages.batches.create({ requests }, { maxRetries: 0 });
     await prisma.aiReplayRun.update({ where: { id: run.id }, data: { batchId: batch.id } });
     logger.info("ai replay submitted", {
       run: run.id,
@@ -421,11 +423,16 @@ export interface ScoredReplayRun {
  * Checks every submitted run's batch; for each that has ended, stores its verdicts, grades them
  * by the alerts' labels and records a summary per playbook. Returns the runs scored this pass.
  * A run whose batch can't be read is retried next pass; one with no batch id is failed.
+ *
+ * `signal` aborts a pass whose job lock was lost (aiJudgeJob). A run not yet marked scored is
+ * left submitted: the next pass deletes its partial verdicts and ingests again. Marking scored
+ * is a conditional update, so two overlapping passes cannot both settle the same batch.
  */
-export async function pollReplayRuns(env: Env): Promise<ScoredReplayRun[]> {
+export async function pollReplayRuns(env: Env, signal?: AbortSignal): Promise<ScoredReplayRun[]> {
   const runs = await prisma.aiReplayRun.findMany({ where: { status: "submitted" } });
   const scored: ScoredReplayRun[] = [];
   for (const run of runs) {
+    if (signal?.aborted) return scored;
     if (!run.batchId) {
       await prisma.aiReplayRun.update({
         where: { id: run.id },
@@ -443,6 +450,9 @@ export async function pollReplayRuns(env: Env): Promise<ScoredReplayRun[]> {
       let buffer: NonNullable<ReturnType<typeof replayVerdictRow>>[] = [];
       let costUsd = 0;
       for await (const result of await client.messages.batches.results(run.batchId)) {
+        // Stop before writing more of a batch another process may now be ingesting. The next
+        // pass deletes these rows and starts the ingest over.
+        if (signal?.aborted) return scored;
         // Only requests that ran are billed, at batch rates.
         if (result.result.type === "succeeded") {
           const message = result.result.message;
@@ -457,11 +467,19 @@ export async function pollReplayRuns(env: Env): Promise<ScoredReplayRun[]> {
       }
       if (buffer.length > 0) await prisma.aiReplayVerdict.createMany({ data: buffer });
 
+      if (signal?.aborted) return scored;
       const summaries = await summarizeRun(run.id, run.playbookIds, env);
-      await prisma.aiReplayRun.update({
-        where: { id: run.id },
+      // Only the pass that moves the row off "submitted" settles it. A second pass that ingested
+      // the same batch (the lock was lost) finds the row already scored and does not charge again.
+      if (signal?.aborted) return scored;
+      const claimed = await prisma.aiReplayRun.updateMany({
+        where: { id: run.id, status: "submitted" },
         data: { status: "scored", scoredAt: new Date(), metrics: summaries as object, costUsd },
       });
+      if (claimed.count !== 1) {
+        logger.info("ai replay already scored by another run", { run: run.id });
+        continue;
+      }
       // True the day's budget up from the reservation made at submit to what the batch cost -
       // after the run is marked scored, so a pass that dies half-way can't count it twice. A run
       // from before the ledger existed reserved nothing, and is charged in full.

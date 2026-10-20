@@ -20,7 +20,7 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
-import { freeAsdfBuy, plainRefusal, quietSign, TradeCooldown } from "./proTrade.js";
+import { freeAsdfBuy, plainRefusal, quietSign, TRADE_COOLDOWN_MS, TradeCooldown } from "./proTrade.js";
 
 // The fee route pings Sender in the background: answered here, so no test reaches the network.
 vi.mock("@trenchscanner/core", async (importOriginal) => ({
@@ -50,7 +50,8 @@ describe("freeAsdfBuy", () => {
 });
 
 describe("TradeCooldown", () => {
-  it("allows one trade every 5 seconds per wallet, and gives a refused send's slot back", () => {
+  it("spaces one wallet's trades by its window, and gives a refused send's slot back", () => {
+    expect(TRADE_COOLDOWN_MS).toBe(1_000);
     let now = 1_000_000;
     const cooldown = new TradeCooldown(5_000, () => now);
     expect(cooldown.left("a")).toBe(0);

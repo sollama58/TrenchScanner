@@ -270,7 +270,7 @@ describe.skipIf(!dbAvailable)("Pro trades across API instances", () => {
       ).toBe("expired"),
     );
   });
-  it("lets only one of two trades sent at once through the 5-second limit, and gives it back when nothing went out", async () => {
+  it("lets only one of two trades sent at once through the 1-second limit, and gives it back when nothing went out", async () => {
     const app = await instance();
     const a = trade();
     const b = trade();
@@ -302,6 +302,52 @@ describe.skipIf(!dbAvailable)("Pro trades across API instances", () => {
       buildToken: tokenFor(d.message, { closing: false }),
     });
     expect(next.statusCode).toBe(200);
+  });
+
+  it("sends nothing when the trade row cannot be recorded, then a later send still can", async () => {
+    const app = await instance();
+    const t = trade();
+    const token = tokenFor(t.message, { closing: false });
+    const tx = vi.spyOn(prisma, "$transaction").mockRejectedValueOnce(new Error("db down"));
+    try {
+      const res = await send(app, { transaction: t.first.base64, buildToken: token });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toMatchObject({
+        notSent: true,
+        error: "Couldn't record the trade just now. Nothing was sent; try again.",
+      });
+      expect(vi.mocked(sendViaSender)).not.toHaveBeenCalled();
+      expect(await prisma.platformTrade.count({ where: { wallet: TRADER.address } })).toBe(0);
+    } finally {
+      tx.mockRestore();
+    }
+    // The cooldown was given back, and no row was written, so a new signature of that build goes out.
+    const again = t.sign(7n);
+    const next = await send(app, { transaction: again.base64, buildToken: token });
+    expect(next.statusCode).toBe(200);
+    expect(next.json()).toEqual({ signature: again.signature });
+    expect(vi.mocked(sendViaSender)).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds the 1-second limit across two instances", async () => {
+    const a = await instance();
+    const b = await instance();
+    const first = trade();
+    const second = trade();
+    const sent = await send(a, {
+      transaction: first.first.base64,
+      buildToken: tokenFor(first.message, { closing: false }),
+    });
+    expect(sent.statusCode).toBe(200);
+    const held = await send(b, {
+      transaction: second.first.base64,
+      buildToken: tokenFor(second.message, { closing: false }),
+    });
+    expect(held.statusCode).toBe(429);
+    expect(held.json()).toMatchObject({ notSent: true });
+    expect(held.json().error).toMatch(/every second/);
+    expect(vi.mocked(sendViaSender)).toHaveBeenCalledTimes(1);
+    expect(await prisma.platformTrade.count({ where: { wallet: TRADER.address } })).toBe(1);
   });
 
   describe("when Sender stops answering (user decision 2026-10-19: RPC fallback only with MEV Protect off)", () => {

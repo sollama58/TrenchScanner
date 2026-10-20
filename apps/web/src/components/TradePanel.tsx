@@ -19,6 +19,7 @@ import {
   TradeError,
   TradeExpiredError,
   tradeCooldownLeft,
+  tradePacePhrase,
   type FeeEstimate,
   type SwapCostEstimate,
   type PositionResponse,
@@ -68,10 +69,10 @@ import { knownQuoteSymbol } from "../quoteToken";
 const LAMPORTS = 1_000_000_000;
 /**
  * The trade limits the API enforces (proTrade.ts, user ask 2026-10-18), checked here first so the
- * panel can say so without a round trip: 0.01 SOL at least, one trade every 5 seconds per wallet,
+ * panel can say so without a round trip: 0.01 SOL at least, one trade per second per wallet,
  * and a sale of 100% (closing the position) exempt from both.
  */
-const TRADE_LIMITS_TEXT = "Trades start at 0.01 SOL, one every 5 seconds. Selling 100% is always allowed.";
+const TRADE_LIMITS_TEXT = `Trades start at 0.01 SOL, one ${tradePacePhrase()}. Selling 100% is always allowed.`;
 
 export function solText(sol: number, signed = false): string {
   const abs = Math.abs(sol);
@@ -786,7 +787,8 @@ export function TradePanel({
           "That sale is worth under 0.01 SOL, the smallest trade. Sell 100% to close the position.",
         );
       const left = tradeCooldownLeft(owner);
-      if (left > 0) return refuse(`One trade every 5 seconds: try again in ${Math.ceil(left / 1_000)}s.`);
+      if (left > 0)
+        return refuse(`One trade ${tradePacePhrase()}: try again in ${Math.ceil(left / 1_000)}s.`);
     }
     // A big buy is one click from a preset or a typo: ask first, with its Sacrifice when it pays one.
     // A sale's SOL value is the position's share; the two-factor prompt shows the same line.

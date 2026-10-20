@@ -239,6 +239,7 @@ export function jobLockKey(job: HeartbeatJob): string {
 export const JOB_LOCKED_JOBS: readonly HeartbeatJob[] = [
   "ai-judge",
   "cleanup",
+  "curator-training",
   "kol-side-wallets",
   "kol-wallets",
   "label-regrade",

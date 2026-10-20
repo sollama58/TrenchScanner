@@ -369,12 +369,9 @@ export async function registerStatsRoutes(
   };
 
   async function guard(request: FastifyRequest, reply: FastifyReply) {
-    if (!enabled) {
-      reply.code(404).send({ error: "not_found" });
-      return;
-    }
+    if (!enabled) return reply.code(404).send({ error: "not_found" });
     if (!bearerMatches(request.headers.authorization, token)) {
-      reply.code(401).send({ error: "unauthorized" });
+      return reply.code(401).send({ error: "unauthorized" });
     }
   }
 
