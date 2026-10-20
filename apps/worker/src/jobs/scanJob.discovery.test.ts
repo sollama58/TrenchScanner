@@ -245,8 +245,12 @@ describe("buildOnChainProfile without a RugCheck report", () => {
     const profile = buildOnChainProfile({ mintAddress: "Pre", dexId: "pumpfun" }, none, authorities);
     expect(profile?.lpBurned).toBe(true);
     // Still unverified on Mayhem until that lookup lands - the screen keeps failing closed on it.
-    expect(runRugScreen(profile).reasons).toEqual(["Mayhem Mode status unverified - failing closed"]);
-    expect(runRugScreen({ ...profile!, isMayhemMode: false }).passed).toBe(true);
+    // And on its top holders until the chain's read of them lands.
+    expect(runRugScreen(profile).reasons).toEqual([
+      "Mayhem Mode status unverified - failing closed",
+      "top holders not read - failing closed",
+    ]);
+    expect(runRugScreen({ ...profile!, isMayhemMode: false, top10HolderPct: 20 }).passed).toBe(true);
   });
 
   it("counts a PumpSwap pool as locked, but keeps any other pool unverified until RugCheck reports it", () => {
@@ -280,7 +284,7 @@ describe("buildOnChainProfile without a RugCheck report", () => {
     ]);
     const pump = buildOnChainProfile({ mintAddress: "Pre", dexId: "pumpfun" }, early, authorities);
     expect(pump?.lpBurned).toBe(true);
-    expect(runRugScreen({ ...pump!, isMayhemMode: false }).passed).toBe(true);
+    expect(runRugScreen({ ...pump!, isMayhemMode: false, top10HolderPct: 20 }).passed).toBe(true);
     // Off a Pump.fun venue the report's answer stands until RugCheck lists the pool.
     expect(buildOnChainProfile({ mintAddress: "Pre", dexId: "raydium" }, early, authorities)?.lpBurned).toBe(
       false,

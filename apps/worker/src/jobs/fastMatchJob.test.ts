@@ -52,6 +52,8 @@ async function seedVetted(suffix: string, overrides: Record<string, unknown> = {
       rugScreenPassed: true,
       // The screen's holder reading is in - a match waits for it (matchDispatch's awaitsScreenReading).
       freshTop10WalletPct: 10,
+      // The top holders behind it: the screen fails a coin closed without them.
+      top10HolderPct: 20,
       ...overrides,
     },
   });
