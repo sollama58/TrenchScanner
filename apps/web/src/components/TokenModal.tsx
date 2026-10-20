@@ -512,33 +512,56 @@ function MintChip({ mint }: { mint: string }) {
   );
 }
 
-/** The coin on the trading sites (Settings › Quick links) and the explorers, as pills under Sage. */
-function QuickLinks({ mint, socials }: { mint: string; socials?: TokenProfile["socials"] | null }) {
+/**
+ * The coin on the trading sites (Settings › Quick links) and the explorers, as pills under the
+ * title, and the coin's own X, Telegram and website. The terminal keeps the trading sites with
+ * the title and puts the coin's own links in the header's corner.
+ */
+function QuickLinks({
+  mint,
+  socials,
+  trade = true,
+  own = true,
+}: {
+  mint: string;
+  socials?: TokenProfile["socials"] | null;
+  /** Trading sites and explorers. */
+  trade?: boolean;
+  /** The coin's own X, Telegram and website. */
+  own?: boolean;
+}) {
   const { quickLinks } = useAppearance();
   // The coin's own X, Telegram and website (user ask 2026-10-16), launcher-supplied, https only.
-  const own = socials
-    ? [
-        { label: "X", href: socials.x },
-        { label: "Telegram", href: socials.telegram },
-        { label: "Website", href: socials.website },
-      ].filter((l): l is { label: string; href: string } => !!l.href)
+  const social = own
+    ? socials
+      ? [
+          { label: "X", href: socials.x },
+          { label: "Telegram", href: socials.telegram },
+          { label: "Website", href: socials.website },
+        ].filter((l): l is { label: string; href: string } => !!l.href)
+      : []
     : [];
-  const trade = QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id));
+  const sites = trade ? QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id)) : [];
+  const explorers = trade ? LINKS : [];
+  if (sites.length === 0 && explorers.length === 0 && social.length === 0) return null;
   return (
-    <nav className="tm-quick" aria-label="Open this coin elsewhere">
-      {trade.map((l) => (
+    <nav
+      className={`tm-quick${trade ? "" : " tm-own"}`}
+      aria-label={trade ? "Open this coin elsewhere" : "This coin's social links"}
+    >
+      {sites.map((l) => (
         <a key={l.id} className="trade" href={l.href(mint)} target="_blank" rel="noreferrer">
           {l.label}
           <ExternalIcon size={11} />
         </a>
       ))}
-      {LINKS.map((l) => (
+      {explorers.map((l) => (
         <a key={l.label} href={l.href(mint)} target="_blank" rel="noreferrer">
           {l.label}
           <ExternalIcon size={11} />
         </a>
       ))}
-      {own.map((l) => (
+      {social.map((l) => (
         <a key={l.label} className="social" href={l.href} target="_blank" rel="noopener noreferrer nofollow">
           {l.label}
           <ExternalIcon size={11} />
@@ -701,6 +724,73 @@ function clockHm(t: number): string {
   return new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
+/** Two marks this close are one moment, the same window the chart uses for its events. */
+const SAME_MOMENT_MS = 30_000;
+/**
+ * A stored scan this soon after firstSeenAt is the scanner's first reading of the mint. A later
+ * point in a truncated chart series is not that reading.
+ */
+const FIRST_SCAN_SLACK_MS = 2 * 60_000;
+/** GET /tokens/:mint/chart keeps this many newest scans (routes/tokens.ts CHART_SNAPSHOT_POINTS). */
+const CHART_SCAN_CAP = 240;
+
+type DetectionSource = "first-scan" | "first-pass" | "earliest" | "none";
+
+/**
+ * Market cap for the terminal's At detection square.
+ *
+ * A first stored scan that is not the alert uses that scan. A first screen pass that is not the
+ * alert uses the pass, when that cap was stored. When detection and the alert are the same event,
+ * the earliest stored cap is used, which is the alert's own when nothing earlier was kept. A
+ * number that was not stored stays missing.
+ */
+export function detectionMcap(input: {
+  alertAt: number;
+  alertMcap: number;
+  kind: Card["kind"];
+  firstPass?: { at: string; mcapUsd: number | null } | null;
+  /** Undefined while first-seen is still loading; null when the coin has none. */
+  firstSeenAt?: string | null;
+  scans?: { t: number; usd: number }[] | null;
+  /** True when `scans` is every stored scan, not the newest CHART_SCAN_CAP. */
+  scansComplete?: boolean;
+}): { usd: number | null; source: DetectionSource } {
+  const stored = (n: number | null | undefined): n is number => n != null && Number.isFinite(n) && n > 0;
+  const scans = (input.scans ?? [])
+    .filter((p) => stored(p.usd) && Number.isFinite(p.t))
+    .sort((a, b) => a.t - b.t);
+  const earliest = scans[0] ?? null;
+  const seen = input.firstSeenAt ? Date.parse(input.firstSeenAt) : NaN;
+  const seenKnown = input.firstSeenAt !== undefined;
+  const passAt = input.firstPass ? Date.parse(input.firstPass.at) : NaN;
+  const apart = (t: number) => Number.isFinite(t) && Math.abs(t - input.alertAt) > SAME_MOMENT_MS;
+  const seenApart = Number.isFinite(seen) && apart(seen);
+  const nearSeen =
+    Number.isFinite(seen) &&
+    earliest != null &&
+    earliest.t + SAME_MOMENT_MS >= seen &&
+    earliest.t <= seen + FIRST_SCAN_SLACK_MS;
+
+  if (input.scansComplete && earliest && apart(earliest.t))
+    return { usd: earliest.usd, source: "first-scan" };
+  if (nearSeen && seenApart) return { usd: earliest.usd, source: "first-scan" };
+  if (apart(passAt)) {
+    return stored(input.firstPass?.mcapUsd)
+      ? { usd: input.firstPass!.mcapUsd, source: "first-pass" }
+      : { usd: null, source: "none" };
+  }
+
+  const same =
+    (Number.isFinite(seen) && !seenApart) ||
+    (Number.isFinite(passAt) && !apart(passAt) && !seenApart) ||
+    (input.scansComplete && earliest != null && !apart(earliest.t)) ||
+    (input.kind === "stream" && !input.firstPass && seenKnown && !Number.isFinite(seen));
+  if (!same) return { usd: null, source: "none" };
+  const early = earliest && Math.abs(earliest.t - input.alertAt) <= FIRST_SCAN_SLACK_MS ? earliest.usd : null;
+  const usd = early ?? (stored(input.alertMcap) ? input.alertMcap : null);
+  return { usd, source: usd == null ? "none" : "earliest" };
+}
+
 /**
  * The modal's card, kept current on its own: "Now" from the live tick (as the feed's cards are),
  * and the coin's newest scan (useCoinScans) laid over it when it is newer than the card copy's, so
@@ -761,7 +851,8 @@ function TokenBody({
   const proWallet = proState?.wallet ?? null;
   const canSign = useCanSignTrades(proWallet);
   const position = usePosition(proWallet ? mint : null);
-  const showBalances = spendBalancesShown(!!proState?.pro, canSign);
+  // The terminal moves this pill onto the Trade title, which already follows the live balance.
+  const showBalances = spendBalancesShown(!!proState?.pro, canSign) && !terminal;
   const funds = useWalletBalance(showBalances, showBalances);
   const s = card.snapshot;
   const curated = card.curated;
@@ -964,7 +1055,7 @@ function TokenBody({
               </span>
             )}
           </div>
-          {terminal && <QuickLinks mint={mint} socials={profile.data?.socials} />}
+          {terminal && <QuickLinks mint={mint} socials={profile.data?.socials} own={false} />}
         </div>
       </div>
       <div className="tm-actions">
@@ -999,19 +1090,53 @@ function TokenBody({
             Customize
           </button>
         )}
-        <button type="button" className="ghost icon-btn tm-close" onClick={onClose} aria-label="Close">
-          <CloseIcon size={16} />
-        </button>
+        {terminal ? (
+          <span className="tm-corner">
+            <QuickLinks mint={mint} socials={profile.data?.socials} trade={false} />
+            <button type="button" className="ghost icon-btn tm-close" onClick={onClose} aria-label="Close">
+              <CloseIcon size={16} />
+            </button>
+          </span>
+        ) : (
+          <button type="button" className="ghost icon-btn tm-close" onClick={onClose} aria-label="Close">
+            <CloseIcon size={16} />
+          </button>
+        )}
       </div>
       {!terminal && <QuickLinks mint={mint} socials={profile.data?.socials} />}
     </>
   );
   const latestSnap = card.latestSnapshot;
-  const liqNow = latestSnap?.liquidityUsd ?? s.liquidityUsd;
-  const holdersNow =
-    latestSnap?.liveHolderCount ?? latestSnap?.holderCount ?? s.liveHolderCount ?? s.holderCount;
   const ageSnap = latestSnap?.ageMinutes != null ? latestSnap : s;
   const tokenAge = ageNow(ageSnap, now);
+  // The chart's scans are the longer series. Until they land, TokenSage's series can still
+  // name a first scan that lines up with firstSeenAt. A short chart series is every scan stored.
+  const detectionScans = chart.data
+    ? chart.data.marketCap.map((p) => ({ t: p.t, usd: p.usd }))
+    : (sage.data?.marketCap ?? []).flatMap((p) => {
+        const t = Date.parse(p.t);
+        return Number.isFinite(t) ? [{ t, usd: p.usd }] : [];
+      });
+  const firstSeenAt = sage.data ? (sage.data.token?.firstSeenAt ?? null) : sage.error ? null : undefined;
+  const detection = detectionMcap({
+    alertAt,
+    alertMcap,
+    kind: card.kind,
+    firstPass: card.firstPass,
+    firstSeenAt,
+    scans: detectionScans,
+    scansComplete: !!chart.data && chart.data.marketCap.length < CHART_SCAN_CAP,
+  });
+  const detectionPending =
+    detection.source === "none" && ((!chart.data && !chart.error) || firstSeenAt === undefined);
+  const detectionTitle =
+    detection.source === "first-scan"
+      ? "Market cap when the scanner first saw this coin"
+      : detection.source === "first-pass"
+        ? "Market cap when this coin first passed the screen"
+        : detection.source === "earliest"
+          ? "Earliest market cap stored for this coin"
+          : "No detection market cap is stored";
   const alertWord = utility
     ? "At scan"
     : what === "Passed screen"
@@ -1042,21 +1167,23 @@ function TokenBody({
   );
   const figs = terminal ? (
     <section className="tm-figs" aria-label="Market">
-      {nowFig}
       <div className="tm-fig">
-        <label>Liquidity</label>
-        <span className={liqNow != null ? "num" : "num none"}>{liqNow != null ? usd(liqNow) : "–"}</span>
-      </div>
-      <div className="tm-fig">
-        <label>Holders</label>
-        <span className={holdersNow != null ? "num" : "num none"}>
-          {holdersNow != null ? holdersNow.toLocaleString() : "–"}
+        <label>At detection</label>
+        <span className={detection.usd != null ? "num" : "num none"} title={detectionTitle}>
+          {detectionPending ? <SkelValue width="3.2em" /> : detection.usd != null ? usd(detection.usd) : "–"}
         </span>
       </div>
       <div className={`tm-fig${hasPeak && peak >= 100 ? " hot" : ""}`}>
-        <label>{alertWord}</label>
+        <label>At alert</label>
         <span className="num">{usd(alertMcap)}</span>
         {hasPeak && <small className="num muted">Peak {multiple(peak)}</small>}
+      </div>
+      {nowFig}
+      <div className="tm-fig">
+        <label>Token age</label>
+        <span className="num">
+          {tokenAge == null && scanning ? <SkelValue width="2.6em" /> : minutes(tokenAge)}
+        </span>
       </div>
     </section>
   ) : (
@@ -1336,13 +1463,7 @@ function TokenBody({
           <aside className="tm-term-rail" aria-label="Trade and checks">
             <div ref={setTradeSlot} className="tm-term-trade" />
             <section className="tm-term-market" aria-label="Market">
-              <div className="tm-term-age">
-                <span>Token age</span>
-                <strong className="num">
-                  {tokenAge == null && scanning ? <SkelValue width="2.6em" /> : minutes(tokenAge)}
-                </strong>
-              </div>
-              <StatsCard card={card} />
+              <StatsCard card={card} liquidity />
             </section>
             <div id={`${ids}-safety`} className="tm-term-safety">
               {/* Open from the start here: the rail is where the checks are read at a glance. */}
@@ -2713,6 +2834,7 @@ export function ChartCard({
         closeOnly={closeOnly}
         graceEndsAt={graceEndsAt}
         delayed={delayed}
+        pairInTitle={inTerminal}
       />
     ) : null;
   const locked = error && !data ? lockedText(error, "chart") : null;
@@ -3409,7 +3531,7 @@ function holdsNow(
 }
 
 /** The card's numbers, all of them, whatever the reader hides on the card itself. */
-function StatsCard({ card }: { card: Card }) {
+function StatsCard({ card, liquidity = false }: { card: Card; liquidity?: boolean }) {
   const s = card.snapshot;
   const r = cardReadings(card);
   const utility = useContext(UtilityContext);
@@ -3463,6 +3585,14 @@ function StatsCard({ card }: { card: Card }) {
             })()}
           </dd>
         </div>
+        {liquidity && (
+          <div title="Liquidity in the pool now">
+            <dt>Liquidity</dt>
+            <dd className={(latest?.liquidityUsd ?? s.liquidityUsd) == null ? "muted" : "num"}>
+              {usd(latest?.liquidityUsd ?? s.liquidityUsd)}
+            </dd>
+          </div>
+        )}
         <div>
           <dt>Vol 5m</dt>
           <dd className="num">{usd(s.volume5mUsd ?? null)}</dd>
