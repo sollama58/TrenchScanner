@@ -195,22 +195,30 @@ function useEvery<T>(value: T, ms: number, hasData: (v: T) => boolean): T {
   return shown;
 }
 
-/** The names of every wallet on the map (holders and funders), in one read. */
+/**
+ * The names of every wallet on the map. Funders are read with Helius's names, which tell an
+ * exchange that funded holders; holders with TrenchScanner's own names only, unless Settings shows
+ * Pump.fun, FOMO or Helius names on the map (user ask 2026-10-20: Helius's names rarely matter,
+ * an exchange's aside).
+ */
 function useGraphNames(graph: BubbleGraph | null): WalletNames {
-  return useWalletNames(
+  const { bubbleNameLabels, bubbleNamesPumpfun, bubbleNamesFomo, bubbleNamesHelius } = useAppearance();
+  const holderIdentity = bubbleNameLabels || !!bubbleNamesPumpfun || !!bubbleNamesFomo || !!bubbleNamesHelius;
+  const funders = useWalletNames(
     useMemo(
-      () =>
-        graph
-          ? [
-              ...graph.nodes.map((n) => n.wallet),
-              ...graph.clusters.map((c) => c.funder),
-              ...graph.cexLinks.map((l) => l.funder),
-            ]
-          : [],
+      () => (graph ? [...graph.clusters.map((c) => c.funder), ...graph.cexLinks.map((l) => l.funder)] : []),
       [graph],
     ),
   );
+  const holders = useWalletNames(
+    useMemo(() => (graph ? graph.nodes.map((n) => n.wallet) : []), [graph]),
+    holderIdentity ? FULL_NAMES : OWN_NAMES,
+  );
+  return useMemo(() => ({ ...holders, ...funders }), [holders, funders]);
 }
+/** useWalletNames' options: with Helius's names, or TrenchScanner's own only. */
+const FULL_NAMES = { identity: true };
+const OWN_NAMES = { identity: false };
 
 /**
  * Whether the same-exchange ties show: the viewer's default from Settings, switchable on the map

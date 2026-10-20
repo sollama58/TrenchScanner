@@ -332,6 +332,69 @@ export function withLiveMarks(
   return [...byWallet.values()];
 }
 
+/** What the API knows of a live trader (apps/api/src/liveTraderLabels.ts LiveTraderLabel). */
+export interface LiveTraderLabel {
+  name?: { name: string; source: "kol" | "kol-side"; avatar?: string };
+  side?: { kolWallet: string; kolName: string | null; funded?: boolean; avatar?: string };
+  risky?: boolean;
+  dumper?: boolean;
+  winner?: boolean;
+}
+
+/**
+ * The chart's flagged wallets with the live traders the live feed labeled (user ask 2026-10-20:
+ * flag trades from TrenchScanner's own records as they land): a KOL, a Known Side, a KOL's funded
+ * wallet or Probable Side, a risky wallet, a known dumper or a winner joins with no trades of its
+ * own; withLiveMarks then gives it its live trades. A wallet the chart already flags is left as the
+ * chart has it.
+ */
+export function withLabeledTraders(
+  wallets: readonly MarkSource[],
+  labels: Readonly<Record<string, LiveTraderLabel>>,
+): MarkSource[] {
+  const have = new Set(wallets.map((w) => w.wallet));
+  const add: MarkSource[] = [];
+  for (const [wallet, l] of Object.entries(labels)) {
+    if (have.has(wallet)) continue;
+    const tags: string[] = [];
+    let w: MarkSource = { wallet, tags, trades: [] };
+    if (l.name) {
+      tags.push("kol");
+      w =
+        l.name.source === "kol-side"
+          ? { ...w, kol: l.name.name.replace(/\s*Known Side$/i, ""), knownSideOf: wallet }
+          : { ...w, kol: l.name.name };
+    } else if (l.side) {
+      tags.push("side");
+      w = {
+        ...w,
+        side: {
+          kind: l.side.funded ? "funded" : "probable",
+          kolWallet: l.side.kolWallet,
+          kolName: l.side.kolName,
+        },
+      };
+    }
+    if (l.risky) tags.push("risky");
+    if (l.dumper) tags.push("dumper");
+    if (l.winner) tags.push("winner");
+    if (tags.length > 0) add.push(w);
+  }
+  return add.length > 0 ? [...wallets, ...add] : (wallets as MarkSource[]);
+}
+
+/** The KOL pictures the live feed's labels carry, keyed as withAvatars reads them. */
+export function labelAvatars(
+  labels: Readonly<Record<string, LiveTraderLabel>>,
+): Record<string, { avatar: string }> {
+  const out: Record<string, { avatar: string }> = {};
+  for (const [wallet, l] of Object.entries(labels)) {
+    if (l.name?.avatar) out[wallet] = { avatar: l.name.avatar };
+    if (l.side?.avatar) out[l.side.kolWallet] = { avatar: l.side.avatar };
+  }
+  return out;
+}
+
 /**
  * The marks with their KOL's X picture (user ask 2026-10-19: KOL bubbles by their pictures, on by
  * default): a KOL's trade, or any of its sides' (user ask 2026-10-20), where the name of the wallet

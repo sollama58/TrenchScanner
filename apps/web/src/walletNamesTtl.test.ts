@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const asked: string[][] = [];
+const identities: (boolean | undefined)[] = [];
 /** Wallets starting with Q come back unread the first time, as a queued read does; Z every time until `zRead`. */
 const answered = new Set<string>();
 let zRead = false;
@@ -8,8 +9,9 @@ vi.mock("./api", () => ({
   ApiError: class extends Error {
     status = 0;
   },
-  post: async (_path: string, body: { wallets: string[] }) => {
+  post: async (_path: string, body: { wallets: string[]; identity?: boolean }) => {
     asked.push(body.wallets);
+    identities.push(body.identity);
     const unread = body.wallets.filter(
       (w) => (w.startsWith("Q") && !answered.has(w)) || (w.startsWith("Z") && !zRead),
     );
@@ -35,6 +37,7 @@ describe("wallet name answers", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     asked.length = 0;
+    identities.length = 0;
     resetWalletNames();
   });
   afterEach(() => vi.useRealTimers());
@@ -82,5 +85,21 @@ describe("wallet name answers", () => {
     // Read now: no more asking.
     await vi.advanceTimersByTimeAsync(UNREAD_COOLDOWN_MS * 2);
     expect(asked).toHaveLength(5);
+  });
+
+  it("reads TrenchScanner's own names alone when asked, and Helius's later for a list that wants them", async () => {
+    await loadWalletNames(["B"], false);
+    expect(identities).toEqual([false]);
+    // Its own "no name" stands for another own read...
+    await loadWalletNames(["B"], false);
+    expect(asked).toHaveLength(1);
+    // ...but a list reading Helius's names asks again.
+    await loadWalletNames(["B"]);
+    expect(asked).toEqual([["B"], ["B"]]);
+    expect(identities[1]).toBeUndefined();
+    // A name found either way stands for both.
+    await loadWalletNames(["A"], false);
+    await loadWalletNames(["A"]);
+    expect(asked).toHaveLength(3);
   });
 });

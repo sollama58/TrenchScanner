@@ -4,11 +4,13 @@ import {
   clampMinSol,
   keepMarkSources,
   kindsOf,
+  labelAvatars,
   markPrefsOf,
   MIN_SOL_FLOOR,
   walletMarks,
   withAvatars,
   picWallets,
+  withLabeledTraders,
   withLiveMarks,
   type MarkSource,
 } from "./walletMarks";
@@ -254,5 +256,43 @@ describe("keepMarkSources", () => {
     const next = [a, b];
     expect(keepMarkSources([a], next)).toEqual(next);
     expect(keepMarkSources([], next)).toBe(next);
+  });
+});
+
+describe("withLabeledTraders", () => {
+  const labels = {
+    K: { name: { name: "Cupsey", source: "kol" as const, avatar: "/kol-avatars/cupsey" } },
+    S: { name: { name: "Cupsey Known Side", source: "kol-side" as const } },
+    F: { side: { kolWallet: "K", kolName: "Cupsey", funded: true, avatar: "/kol-avatars/cupsey" } },
+    R: { risky: true, winner: true },
+    D: { dumper: true },
+    A: { name: { name: "Ansem", source: "kol" as const } },
+  };
+  it("adds the live feed's labeled traders the chart doesn't flag, and marks their live trades", () => {
+    const flagged: MarkSource[] = [{ wallet: "A", tags: ["linked"], trades: [] }];
+    const wallets = withLabeledTraders(flagged, labels);
+    const out = withLiveMarks(
+      wallets,
+      ["K", "S", "F", "R", "D", "A"].map((wallet, i) => ({ wallet, side: "buy" as const, sol: 2, atMs: i })),
+      {},
+    );
+    const marks = walletMarks(out, {
+      on: true,
+      kinds: ["kol", "known", "funded", "risky", "winner", "linked"],
+      minSol: 0.5,
+    });
+    expect(marks.map((m) => [m.wallet, m.kind, m.letter])).toEqual([
+      ["K", "kol", "K"],
+      ["S", "known", "K"],
+      ["F", "funded", "K"],
+      ["R", "risky", "R"],
+      ["D", "risky", "R"],
+      // Already flagged by the chart: kept as the chart has it.
+      ["A", "linked", "L"],
+    ]);
+    expect(marks[1]!.text).toBe("Cupsey Known Side bought 2.00 SOL");
+  });
+  it("gives the KOL pictures the labels carry, a side's under its KOL", () => {
+    expect(labelAvatars(labels)).toEqual({ K: { avatar: "/kol-avatars/cupsey" } });
   });
 });

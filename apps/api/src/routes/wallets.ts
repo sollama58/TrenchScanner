@@ -47,7 +47,15 @@ const WALLET_ROUTE_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 const NAMES_ROUTE_RATE_LIMIT = { max: 60, timeWindow: "1 minute" };
 /** The longest list read at once: two Helius batches. */
 const MAX_NAMES = 200;
-const namesSchema = z.object({ wallets: z.array(address).min(1).max(MAX_NAMES) });
+const namesSchema = z.object({
+  wallets: z.array(address).min(1).max(MAX_NAMES),
+  /**
+   * False: TrenchScanner's own names only (KOLs, Known Sides, exchanges, labels), no Helius read.
+   * The long lists (live traders, the chart, wallet webs) ask so (user ask 2026-10-20: Helius's
+   * names rarely matter there); holder lists and the wallet modal leave it out.
+   */
+  identity: z.boolean().optional(),
+});
 const trackedSchema = z.object({
   name: z
     .string()
@@ -199,7 +207,11 @@ export async function registerWalletRoutes(
     // Its Helius reads count as "wallet-names" in Admin > API usage.
     const [read, tracked] = await Promise.all([
       withApiFeature("wallet-names", () =>
-        loadWalletNames(parsed.data.wallets, opts.identity ?? null, request.user!.userId),
+        loadWalletNames(
+          parsed.data.wallets,
+          parsed.data.identity === false ? null : (opts.identity ?? null),
+          request.user!.userId,
+        ),
       ),
       trackedOf(request),
     ]);
