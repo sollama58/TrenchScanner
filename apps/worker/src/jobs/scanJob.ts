@@ -3395,17 +3395,18 @@ async function processCandidate(
   const narrativeHints = tokenSageEnabled(env)
     ? tokenSageHints({ ...token, description: scored.description ?? token.description })
     : undefined;
-  // A young coin with an X link gets the deep read straight away (user decision 2026-10-07): the
-  // deep read is the one that opens the X post, and asked at the first decision it lands after
-  // that decision for most coins.
+  // Rules 0.36.0: the first read is always basic. It now interprets the linked post or profile,
+  // so the narrative is in before the full bundle. A young coin with an X link still gets the
+  // deep read in the same flush (user decision 2026-10-07, kept for the match, account
+  // credibility, trends, and quoted or replied posts). The basic note raises a first-scan read
+  // off the low tier.
   const earlyDeep =
     narrativeHints?.twitter !== undefined &&
     env.TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES > 0 &&
     createdAt !== undefined &&
     Date.now() - createdAt.getTime() <= env.TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES * 60_000;
-  noteNarrativeWanted(token.mintAddress, earlyDeep ? "full" : "basic", env, narrativeHints, {
-    early: earlyDeep,
-  });
+  noteNarrativeWanted(token.mintAddress, "basic", env, narrativeHints);
+  if (earlyDeep) noteNarrativeWanted(token.mintAddress, "full", env, narrativeHints, { early: true });
   // In the band, where decisions are made, the read's trend and the story's market are kept
   // current from TokenSage's refresh (tokensage/nowReads.ts; a no-op without a full read).
   if (inCuratedBand) noteNowWanted(token.mintAddress, env);

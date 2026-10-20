@@ -185,9 +185,14 @@ export interface TokenSageCreatorFee {
 /**
  * One Analysis document (schema_version "1"). Typed from TokenSage's openapi.v1.json and checked
  * against real responses (fixtures/tokensage/). Every field is optional and may be null: a
- * partial answer (mint not yet on-chain, analysed from our hints) has no market data, a basic
- * answer has `x.status: "not_fetched"` and `x.match: null`, and new fields can appear at any
- * time. `market.creator` is here for completeness only: creator history is not a model input
+ * partial answer (mint not yet on-chain, analysed from our hints) has no market data. From rules
+ * 0.36.0 a basic answer interprets the linked post or profile when that text loads (`x.status:
+ * "ok"`: `x.text`, `x.relation`, `x.author`, a referent supported by "x", and flags such as
+ * `borrowed_narrative`). `x.match`, `x.credibility`, engagement and `trend` stay full-only.
+ * `x.status` "not_fetched" means no cache and the fetch was off, failed or timed out; the
+ * analysis is still complete and the narrative falls back to name and logo. "deleted" means the
+ * post is gone. New fields can appear at any time. `market.creator` is here for completeness
+ * only: creator history is not a model input
  * (user decision 2026-10-04), so nothing here keys on it. From rules 0.19.0 it is always a wallet
  * or null (the sharing config's admin on a fee-shared coin), and the raw curve field moved to
  * `creator_onchain`.
@@ -294,6 +299,11 @@ export interface TokenSageAnalysis {
     confidence?: number;
     /** Which inputs point at the referent: name, symbol, description, image, x, trend, chain, db. */
     supported_by?: string[];
+    /**
+     * Rules 0.36.0+: the post this referent was read from. The wave key is `x:<post_id>` when
+     * the subject came from that post. Generic referents have none, and no `wave`.
+     */
+    post_id?: string | null;
     /** Rules 0.15.0+: how many coins TokenSage resolved to this referent in the hours before the read. */
     wave?: {
       launches_1h?: number | null;
@@ -387,7 +397,12 @@ export interface TokenSageAnalysis {
     } | null;
     object_time?: string | null;
     relation?: string | null;
-    /** "ok" | "not_fetched" | ...; anything but "ok" means the post was not read. */
+    /**
+     * "ok" (post or profile text was interpreted; from rules 0.36.0 this happens at basic depth
+     * too), "not_fetched" (no cache, and the fetch was disabled, failed or hit BASIC_X_TIMEOUT_S),
+     * "deleted" (the post is gone; do not trust a referent that came from it), "failed" (mirrors
+     * failed). Anything but "ok" means the text was not read.
+     */
     status?: string;
     text?: string | null;
     predates_token_by_s?: number | null;
@@ -761,6 +776,11 @@ export interface TokenNarrativeFields {
    * a referent.
    */
   referentGeneric: boolean | null;
+  /**
+   * Rules 0.36.0+ (`referent.post_id`): the post the referent was read from. Null when the
+   * referent is generic, came from the name or logo only, or the post was deleted.
+   */
+  referentPostId: string | null;
   summary: string | null;
   flags: string[];
   xFit: number | null;
@@ -787,9 +807,9 @@ export interface TokenNarrativeFields {
   copiesRecent: boolean | null;
   /**
    * How the linked X post relates to the coin (x.relation: "launch_announcement",
-   * "official_account", "narrative_reference", "search_only"; kept open). Null when
-   * the post was not read (basic depth, no link, or a fetch that failed), and for "spoofed", which
-   * no longer counts (DROPPED_X_RELATIONS).
+   * "official_account", "narrative_reference", "search_only"; kept open). Set whenever the post
+   * text was read (`x.status` "ok"), including a basic read from rules 0.36.0. Null when the
+   * text was not read, and for "spoofed", which no longer counts (DROPPED_X_RELATIONS).
    */
   xRelation: string | null;
   /** The post author's follower count, when the post was read. */
@@ -902,6 +922,65 @@ function labels(value: unknown, max: number): string[] {
 }
 
 /**
+ * The referent a reader may trust. A deleted post (`x.status` "deleted") does not support one:
+ * a referent that rests only on X is dropped, and "x" is taken out of `supported_by` when the
+ * name or logo still agrees. Every other status keeps the referent TokenSage sent.
+ */
+export function tokenSageReferent(
+  analysis: TokenSageAnalysis | null | undefined,
+): TokenSageAnalysis["referent"] | null {
+  const doc = asRecord(analysis);
+  const referent = asRecord(doc?.referent);
+  if (!referent) return null;
+  const x = asRecord(doc?.x);
+  if (x?.status !== "deleted") return referent as TokenSageAnalysis["referent"];
+  const support = labels(referent.supported_by, 10);
+  const rest = support.filter((s) => s !== "x");
+  const fromX = referent.source === "x" || support.includes("x");
+  if (!fromX) return referent as TokenSageAnalysis["referent"];
+  if (rest.length === 0) return null;
+  return {
+    ...(referent as TokenSageAnalysis["referent"]),
+    supported_by: rest,
+    // The post is gone, so it is not a wave key. The name or logo still names the referent.
+    source: referent.source === "x" ? null : (referent.source as string | null | undefined),
+    post_id: null,
+  };
+}
+
+const TWEET_STATUS_URL = /^https:\/\/(?:www\.)?(?:x|twitter)\.com\/[^/?#\s]+\/status\/\d+/i;
+
+/** True when a launcher social link points at a post, not a profile. */
+export function twitterLinksTweet(url: string | null | undefined): boolean {
+  return typeof url === "string" && TWEET_STATUS_URL.test(url.trim());
+}
+
+/**
+ * A complete basic read whose linked tweet was not fetched (rules 0.36.0: cache miss and the
+ * fetch timed out or was skipped). Worth asking again later: another coin on the same post may
+ * have filled `x_tweet`. A profile link, a deleted or failed post, and a full read are not.
+ */
+export function basicXRetryable(analysis: TokenSageAnalysis | null | undefined): boolean {
+  const doc = asRecord(analysis);
+  if (!doc || doc.depth === "full") return false;
+  const x = asRecord(doc.x);
+  if (!x || x.status !== "not_fetched") return false;
+  const raw = asRecord(doc.raw);
+  if (twitterLinksTweet(typeof raw?.twitter === "string" ? raw.twitter : null)) return true;
+  const ref = asRecord(x.ref);
+  return ref?.kind === "tweet" && typeof ref.tweet_id === "string" && ref.tweet_id.trim() !== "";
+}
+
+/**
+ * True when `incoming` is an older analysis than `stored` by more than clock skew. Missing
+ * times are not stale: the new document is kept.
+ */
+export function tokenSageReadIsStale(incoming: Date | null, stored: Date | null): boolean {
+  if (!incoming || !stored) return false;
+  return incoming.getTime() < stored.getTime() - TOKENSAGE_CLOCK_SKEW_MS;
+}
+
+/**
  * Reads the parts of one Analysis document that a TokenNarrative row stores. Built to survive
  * anything TokenSage might send: missing, null or wrongly typed fields fall back to empty, and
  * unknown fields are ignored. Throws on nothing.
@@ -929,12 +1008,16 @@ export function narrativeFieldsFromAnalysis(
   const severityCount = (severity: string) =>
     flagRecords.filter((f) => f !== null && tokenSageFlagSeverity(f.code, f.severity) === severity).length;
   const analyzedAt = typeof doc.analyzed_at === "string" ? new Date(doc.analyzed_at) : null;
-  const referent = asRecord(doc.referent);
+  const referent = asRecord(tokenSageReferent(analysis as TokenSageAnalysis));
   const x = asRecord(doc.x);
   const match = asRecord(x?.match);
   const verdict = clip(match?.verdict);
   // Only a post that was actually read says anything about the link; anything else is unknown.
+  // Rules 0.36.0: that read happens at basic depth too. Match, credibility, account age and
+  // engagement stay full-only, so a basic document that carries them is not stored as if the
+  // deep read had run.
   const xRead = x !== null && x.status === "ok";
+  const fullDepth = doc.depth === "full";
   const count = (value: unknown): number | null =>
     typeof value === "number" && Number.isFinite(value) ? Math.round(value) : null;
   const trend = asRecord(doc.trend);
@@ -992,14 +1075,16 @@ export function narrativeFieldsFromAnalysis(
     waveLaunches24h: count(wave?.launches_24h),
     waveRank24h: count(wave?.rank_24h),
     topCategoryInputs: top && Array.isArray(top.inputs) ? top.inputs.length : null,
-    xCredibility: xRead ? unit(x.credibility) : null,
-    xAccountAgeS: count(account?.age_at_launch_s),
+    xCredibility: fullDepth && xRead ? unit(x.credibility) : null,
+    xAccountAgeS: fullDepth ? count(account?.age_at_launch_s) : null,
     // The account block says so directly; the x_account_made_for_coin flag (info) says the same.
-    xAccountMadeForCoin:
-      bool(account?.made_for_coin) ?? (xRead && flags.includes("x_account_made_for_coin") ? true : null),
-    xReuseRank: xRead ? count(x.reuse_rank) : null,
-    trendScore: unit(trend?.score),
-    trendNovelty: unit(trend?.novelty),
+    // Both are full-depth account signals (rules 0.36.0 leaves them off the basic read).
+    xAccountMadeForCoin: fullDepth
+      ? (bool(account?.made_for_coin) ?? (xRead && flags.includes("x_account_made_for_coin") ? true : null))
+      : null,
+    xReuseRank: fullDepth && xRead ? count(x.reuse_rank) : null,
+    trendScore: fullDepth ? unit(trend?.score) : null,
+    trendNovelty: fullDepth ? unit(trend?.novelty) : null,
     depth: doc.depth === "full" ? "full" : "basic",
     status,
     categories,
@@ -1009,10 +1094,11 @@ export function narrativeFieldsFromAnalysis(
     referentConfidence: referent ? unit(referent.confidence) : null,
     referentSupport: labels(referent?.supported_by, 10),
     referentGeneric: referent ? referent.generic === true : null,
+    referentPostId: clip(referent?.post_id)?.slice(0, 40) ?? null,
     summary: clip(doc.summary),
     flags,
-    xFit: known !== null ? unit(match?.fit) : null,
-    xVerdict: known,
+    xFit: fullDepth && known !== null ? unit(match?.fit) : null,
+    xVerdict: fullDepth ? known : null,
     pairKind: clip(pair?.kind)?.slice(0, 40) ?? null,
     pairSymbol: clip(pair?.symbol)?.slice(0, 40) ?? null,
     copiesRecent,
@@ -1020,7 +1106,7 @@ export function narrativeFieldsFromAnalysis(
     xAuthorFollowers: xRead ? count(asRecord(x.author)?.followers) : null,
     xPredatesTokenS: xRead ? count(x.predates_token_by_s) : null,
     xReuseCount: xRead ? count(x.reuse_count) : null,
-    ...engagementFields(xRead ? x : null),
+    ...engagementFields(fullDepth && xRead ? x : null),
     // A basic read never runs the trend match: its false means unread, not "not in the news" (audit
     // 2026-10-14, L10 M1). The model input was already null there; the AI brief and Lighthouse were not.
     trendMatched:
@@ -1081,6 +1167,13 @@ export interface TokenNarrativeNowFields {
 
 /** How much older than its refresh a story heat reading may be and still be stored as current. */
 const HEAT_MAX_LAG_MS = 10 * 60_000;
+/**
+ * How far ahead of the timestamp it is compared with a TokenSage clock may sit and still be the
+ * same moment. A heat reading or a stored analysis older than this behind one we already have
+ * is a stale copy, not a newer read.
+ */
+export const TOKENSAGE_CLOCK_SKEW_MS = 2 * 60_000;
+const HEAT_CLOCK_SKEW_MS = TOKENSAGE_CLOCK_SKEW_MS;
 
 /**
  * The columns one refresh stores, or null when the item carries no refresh (pending with
@@ -1097,11 +1190,16 @@ export function nowFieldsFromItem(item: TokenSageNowItem, mint: string): TokenNa
   // A refresh whose heat lookup failed can carry an older cached heat: its own as_of says when
   // that market data was read, and one well before the refresh is not current, so it is dropped.
   const heatAt = isoDate(heat?.as_of);
+  // A few minutes of clock skew between the refresh and the heat reading still counts. A heat
+  // stamp well ahead of the refresh is a bad clock, not a newer market, so it is dropped the
+  // same way an old cached reading is.
+  const heatLag = heatAt === null ? null : at.getTime() - heatAt.getTime();
   const ok =
     heat !== null &&
     heat.status === "ok" &&
-    heatAt !== null &&
-    at.getTime() - heatAt.getTime() <= HEAT_MAX_LAG_MS;
+    heatLag !== null &&
+    heatLag <= HEAT_MAX_LAG_MS &&
+    heatLag >= -HEAT_CLOCK_SKEW_MS;
   const leader = ok ? asRecord(heat.leader) : null;
   const num = (value: unknown): number | null =>
     typeof value === "number" && Number.isFinite(value) ? value : null;

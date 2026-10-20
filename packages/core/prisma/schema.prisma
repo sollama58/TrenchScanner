@@ -1797,6 +1797,10 @@ model TokenNarrative {
   /// TokenSage rules 0.17.0+: only the referent's kind is known (referent.generic; "frog", not
   /// a named frog). False on a named referent, null without one or on older rules.
   referentGeneric       Boolean?
+  /// TokenSage rules 0.36.0+ (referent.post_id): the post the referent was read from, including
+  /// on a basic read. Wave key x:<post_id>. Null when the subject did not come from a post, and
+  /// kept when the raw document is not (a basic read of a coin that never reached the band).
+  referentPostId        String?
   /// market.pair: what the coin trades against ("sol", "stablecoin", "token", "tokenized_stock", ...).
   pairKind              String?
   pairSymbol            String?
@@ -1811,10 +1815,11 @@ model TokenNarrative {
   /// Copies a coin launched in the last 30 days (copy_of[].recent). Null on analyses from before
   /// TokenSage rules 0.10.0, which didn't say.
   copiesRecent          Boolean?
-  /// The linked X post, when the full read opened it (x.status "ok"): how it relates to the coin
-  /// ("launch_announcement", "official_account", "narrative_reference", "spoofed", ...), its
-  /// author's followers, how many seconds it predates the token, and how many other coins link
-  /// the same post. All null when the post was not read.
+  /// The linked X post, when its text was read (x.status "ok"; from rules 0.36.0 a basic read
+  /// does this too): how it relates to the coin ("launch_announcement", "official_account",
+  /// "narrative_reference", "spoofed", ...), its author's followers, how many seconds it predates
+  /// the token, and how many other coins link the same post. All null when the post was not read.
+  /// x.match, credibility and engagement stay full-depth.
   xRelation             String?
   xAuthorFollowers      Int?
   xPredatesTokenS       Int?

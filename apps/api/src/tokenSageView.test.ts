@@ -254,6 +254,55 @@ describe("pair and logo marks (rules 0.25.0, 0.27.0)", () => {
       score: 0.8,
     });
   });
+
+  it("shows a basic read's post text and hides the full-only match and trend", () => {
+    const read = sageRead(
+      {
+        depth: "basic",
+        summary: "From the launch post",
+        referent: {
+          label: "Peanut",
+          confidence: 0.8,
+          source: "x",
+          post_id: "1791351500217754008",
+          supported_by: ["x"],
+        },
+        x: {
+          status: "ok",
+          relation: "narrative_reference",
+          text: "rip peanut",
+          author: { handle: "elonmusk", followers: 10 },
+          credibility: 0.2,
+          match: { fit: 0.9, verdict: "about_this_coin" },
+        },
+        trend: { matched: false, score: 0 },
+        flags: [{ code: "borrowed_narrative", severity: "info" }],
+      },
+      "basic",
+    )!;
+    expect(read.referent).toMatchObject({
+      label: "Peanut",
+      supportedBy: ["x"],
+      postId: "1791351500217754008",
+    });
+    expect(read.x).toMatchObject({
+      read: true,
+      relation: "narrative_reference",
+      text: "rip peanut",
+      verdict: null,
+      fit: null,
+      credibility: null,
+    });
+    expect(read.trend).toBeNull();
+    const deleted = sageRead(
+      {
+        x: { status: "deleted" },
+        referent: { label: "Peanut", source: "x", supported_by: ["x"], post_id: "1" },
+      },
+      "basic",
+    )!;
+    expect(deleted.referent).toBeNull();
+  });
 });
 
 describe("sageNarrative", () => {

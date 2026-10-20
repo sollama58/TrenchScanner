@@ -11,6 +11,7 @@ import {
   csvColumns,
   exportChunks,
   exportQuerySchema,
+  narrativeExportText,
   narrativeText,
   startExportStream,
 } from "./statsExport.js";
@@ -57,6 +58,11 @@ describe("export query", () => {
       trendTerms: [],
     });
     expect(narrativeText(null).copyOf).toEqual([]);
+    // A basic read stored without its document keeps the post id on the row.
+    expect(narrativeExportText(null, "1791351500217754008").referentPostId).toBe("1791351500217754008");
+    expect(narrativeExportText({ referent: { post_id: "99" } }, "1791351500217754008").referentPostId).toBe(
+      "99",
+    );
     expect(exportQuerySchema.parse({ dataset: "narratives" }).dataset).toBe("narratives");
     expect(csvColumns("narratives")).toContain("referentLabel");
   });

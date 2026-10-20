@@ -4,11 +4,13 @@ import {
   HttpError,
   TokenSageClient,
   TOKENSAGE_PREFETCH_CHUNK,
+  basicXRetryable,
   narrativeDepthCovers,
   narrativeFieldsFromAnalysis,
   storableAnalysis,
   tokenSageEnabled,
   tokenSageImageUrl,
+  tokenSageReadIsStale,
   type Env,
   type TokenSageAnalysis,
   type TokenSageDepth,
@@ -27,11 +29,12 @@ const logger = createLogger("tokensage");
  * The scan notes the mints it wants (noteNarrativeWanted), with what discovery already knows
  * about them as hints: basic depth the first time a mint passes the rug screen on the watchlist
  * (any scanned mint, in band or still below it, so the read is usually stored before the band
- * entry that most first decisions follow within a minute), full depth (which also reads the X
- * link, its match with the token, and trends) when the mint gets a decision ("event") row.
- * A coin with an X link that reaches the watchlist young gets the full read at once instead
- * (no daily cap of our own since 2026-10-11, user decision), and startNarrativePolling re-sends
- * what is queued between cycles. At the end of each cycle flushNarrativeRequests
+ * entry that most first decisions follow within a minute). From rules 0.36.0 that basic read
+ * interprets the linked post or profile text. Full depth (the X match, account credibility,
+ * trends, and quoted or replied posts) is still asked when the mint gets a decision ("event")
+ * row, and for a young coin with an X link, in the same flush as the basic read rather than
+ * instead of it (no daily cap of our own since 2026-10-11, user decision). startNarrativePolling
+ * re-sends what is queued between cycles. At the end of each cycle flushNarrativeRequests
  * sends them in batches and is never awaited: nothing in the scan, matching or alerting path
  * waits on TokenSage. A batch answers cached mints at once and queues the rest; a queued mint is
  * simply re-sent in the next cycle's batch, which joins its open job for free and returns the
@@ -91,6 +94,14 @@ interface Wanted {
   early?: boolean;
   /** When the scan last noted it (see WANTED_BASIC_MAX_AGE_MS). */
   notedAt: number;
+  /**
+   * A basic read noted and not yet sent, kept when the same mint is upgraded to full before the
+   * flush. Rules 0.36.0: the basic read is the fast narrative; full still runs for the match.
+   */
+  alsoBasic?: boolean;
+  basicPriority?: TokenSagePriority;
+  /** notedAt of that basic read, so the upgrade does not refresh its drop window. */
+  basicNotedAt?: number;
 }
 
 interface Pending {
@@ -106,7 +117,17 @@ interface Settled {
   /** Set while a partial answer may still be asked again: when, and how many times so far. */
   partialAt?: number;
   partialTries?: number;
+  /**
+   * A complete basic read whose tweet text was not fetched. Asked again at xRetryAt, xRetries
+   * times so far, then left. The cache may fill from another coin on the same post.
+   */
+  xRetryAt?: number;
+  xRetries?: number;
 }
+
+/** How long to wait before asking again for a tweet TokenSage did not fetch, and how many times. */
+const BASIC_X_RETRY_MS = 2 * 60_000;
+const BASIC_X_MAX_RETRIES = 2;
 
 const wanted = new Map<string, Wanted>();
 const pending = new Map<string, Pending>();
@@ -207,6 +228,8 @@ export { tokenSageEnabled };
 function settledCovers(mintAddress: string, depth: TokenSageDepth, now: number): boolean {
   const s = settled.get(mintAddress);
   if (!s || !narrativeDepthCovers(s.depth, depth)) return false;
+  // A basic read whose tweet text never arrived is asked again once the retry is due.
+  if (depth === "basic" && s.xRetryAt !== undefined && now >= s.xRetryAt) return false;
   // A partial answer is worth asking for again once TokenSage would re-analyse it.
   if (s.partialAt !== undefined && now - s.partialAt >= PARTIAL_RETRY_MS) {
     return (s.partialTries ?? 0) >= PARTIAL_MAX_RETRIES;
@@ -252,12 +275,21 @@ export function noteNarrativeWanted(
   const have = wanted.get(mintAddress);
   const early = depth === "full" && opts.early === true;
   // A queued deep read is never downgraded: a decision-row full read outranks an early one (it
-  // isn't held to the early budget), and a basic request adds nothing to either.
-  if (have?.depth === "full" && (depth === "basic" || !have.early || early)) return;
+  // isn't held to the early budget). A basic note can still raise the basic read riding along
+  // with that full one, and refresh its drop window: the scan asked for it again.
+  if (have?.depth === "full" && (depth === "basic" || !have.early || early)) {
+    if (depth === "basic" && have.alsoBasic) {
+      have.basicPriority = higher(narrativePriority("basic", opts.firstScan), have.basicPriority);
+      have.basicNotedAt = now;
+      if (hints) have.hints = hints;
+    }
+    return;
+  }
   if (!have && wanted.size >= MAX_WANTED) {
     const oldest = wanted.keys().next().value;
     if (oldest !== undefined) wanted.delete(oldest);
   }
+  const keepBasic = depth === "full" && (have?.depth === "basic" || have?.alsoBasic === true);
   wanted.set(mintAddress, {
     depth,
     // A coin noted at its first scan and again on a screen pass keeps the pass's tier.
@@ -267,7 +299,14 @@ export function noteNarrativeWanted(
     ),
     hints: hints ?? have?.hints,
     ...(early ? { early } : {}),
-    notedAt: now,
+    ...(keepBasic
+      ? {
+          alsoBasic: true,
+          basicPriority: have?.depth === "basic" ? have.priority : (have?.basicPriority ?? "normal"),
+          basicNotedAt: have?.basicNotedAt ?? have?.notedAt ?? now,
+        }
+      : {}),
+    notedAt: depth === "basic" ? now : (have?.notedAt ?? now),
   });
 }
 
@@ -283,7 +322,8 @@ export function startNarrativePolling(env: Env, client?: TokenSageClient): (() =
     // The decision-time refreshes ride the same timer: a new one is ready seconds after it was
     // asked for, not a scan cycle later (nowReads.ts; a no-op when nothing is due).
     void flushNowReads(env, client);
-    if (pending.size === 0 && wanted.size === 0) return;
+    // A tweet-text retry lives on the settled map until it is due, with nothing queued.
+    if (pending.size === 0 && wanted.size === 0 && !basicXRetryDue()) return;
     void flushNarrativeRequests(env, client);
   }, env.TOKENSAGE_POLL_SECONDS * 1000);
   timer.unref();
@@ -309,12 +349,69 @@ export function takeTokenSageStats(): Record<string, number> {
 function settle(mintAddress: string, depth: TokenSageDepth, partial: boolean): void {
   if (settled.size >= MAX_SETTLED) settled.clear();
   const prev = settled.get(mintAddress);
-  settled.set(
-    mintAddress,
-    partial
-      ? { depth, partialAt: Date.now(), partialTries: (prev?.partialTries ?? 0) + (prev?.partialAt ? 1 : 0) }
-      : { depth },
-  );
+  const next: Settled = partial
+    ? { depth, partialAt: Date.now(), partialTries: (prev?.partialTries ?? 0) + (prev?.partialAt ? 1 : 0) }
+    : { depth };
+  // A full read closes the basic X retry. A basic store keeps the count so the next schedule
+  // does not start it over.
+  if (depth !== "full" && prev?.xRetries !== undefined) next.xRetries = prev.xRetries;
+  if (depth !== "full" && prev?.xRetryAt !== undefined) next.xRetryAt = prev.xRetryAt;
+  settled.set(mintAddress, next);
+}
+
+/** Ask again later for a basic read whose tweet text was not fetched, up to BASIC_X_MAX_RETRIES. */
+function scheduleBasicXRetry(mint: string): void {
+  const s = settled.get(mint);
+  if (!s || s.depth === "full") return;
+  const tries = (s.xRetries ?? 0) + 1;
+  s.xRetries = tries;
+  if (tries > BASIC_X_MAX_RETRIES) {
+    delete s.xRetryAt;
+    return;
+  }
+  s.xRetryAt = Date.now() + BASIC_X_RETRY_MS;
+}
+
+function clearBasicXRetry(mint: string): void {
+  const s = settled.get(mint);
+  if (!s) return;
+  delete s.xRetryAt;
+  delete s.xRetries;
+}
+
+/**
+ * A basic read whose tweet text was not fetched, due for another try, and not already noted.
+ * Low tier: it must not cut in front of a screen-pass read. A full read already noted keeps its
+ * place and carries the basic retry beside it.
+ */
+function basicXRetryDue(now = Date.now()): boolean {
+  for (const s of settled.values()) {
+    if (s.depth !== "full" && s.xRetryAt !== undefined && now >= s.xRetryAt) return true;
+  }
+  return false;
+}
+
+function queueDueBasicXRetries(now: number): void {
+  for (const [mint, s] of settled) {
+    if (s.xRetryAt === undefined || now < s.xRetryAt || s.depth === "full") continue;
+    if ((s.xRetries ?? 0) > BASIC_X_MAX_RETRIES) {
+      delete s.xRetryAt;
+      continue;
+    }
+    if (pending.has(mint)) continue;
+    const have = wanted.get(mint);
+    if (have?.depth === "full") {
+      if (!have.alsoBasic) {
+        have.alsoBasic = true;
+        have.basicPriority = "low";
+        have.basicNotedAt = now;
+      }
+      continue;
+    }
+    if (have?.depth === "basic") continue;
+    if (wanted.size >= MAX_WANTED) continue;
+    wanted.set(mint, { depth: "basic", priority: "low", notedAt: now });
+  }
 }
 
 function utcDay(now: number): string {
@@ -339,15 +436,21 @@ async function storeAnalysis(
   const fields = narrativeFieldsFromAnalysis(analysis, status);
   const existing = await prisma.tokenNarrative.findUnique({
     where: { mintAddress: mint },
-    select: { depth: true, status: true },
+    select: { depth: true, status: true, analyzedAt: true },
   });
   // A shallower answer that lands after a deeper one must not overwrite it, and neither may a
-  // partial answer overwrite a complete one at the same depth.
+  // partial answer overwrite a complete one at the same depth. An older analysis at the same
+  // depth (a cached copy, past clock skew) must not replace the one we already stored.
   if (existing && existing.status !== "failed") {
     const deeper = !narrativeDepthCovers(fields.depth, existing.depth as TokenSageDepth);
     const worse = existing.depth === fields.depth && existing.status === "complete" && status === "partial";
-    if (deeper || worse) {
+    const stale =
+      existing.depth === fields.depth && tokenSageReadIsStale(fields.analyzedAt, existing.analyzedAt);
+    if (deeper || worse || stale) {
       settle(mint, existing.depth as TokenSageDepth, false);
+      if (deeper) clearBasicXRetry(mint);
+      else if (stale && basicXRetryable(analysis)) scheduleBasicXRetry(mint);
+      else if (stale) clearBasicXRetry(mint);
       return;
     }
   }
@@ -373,6 +476,24 @@ async function storeAnalysis(
   stats.stored += 1;
   failCounts.delete(mint);
   settle(mint, fields.depth, status === "partial");
+  if (status === "complete" && fields.depth === "basic" && basicXRetryable(analysis)) {
+    scheduleBasicXRetry(mint);
+  } else {
+    clearBasicXRetry(mint);
+  }
+  if (fields.depth === "basic" && fields.referentSupport.includes("x")) {
+    logger.info("TokenSage basic read names its referent from X", {
+      mint,
+      postId: fields.referentPostId,
+      relation: fields.xRelation,
+    });
+  }
+  const caveats = Array.isArray(analysis.caveats)
+    ? analysis.caveats.filter((c): c is string => typeof c === "string" && c.startsWith("basic x:"))
+    : [];
+  if (caveats.length > 0) {
+    logger.info("TokenSage basic X caveat", { mint, caveats });
+  }
   await backfillTokenImage(mint, analysis);
 }
 
@@ -516,6 +637,9 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
     resend[p.depth].push({ ca: mint, hints: p.hints, priority: p.priority });
   }
 
+  // A basic read whose tweet was not fetched, due again between scans.
+  queueDueBasicXRetries(now);
+
   // Newly noted: drop what's already stored deep enough (or queued).
   const fresh = [...wanted.keys()].filter((m) => !pending.has(m) || wanted.get(m)!.depth === "full");
   const stored =
@@ -532,6 +656,9 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
       wanted.delete(mint);
       continue;
     }
+    if (w.alsoBasic && w.basicNotedAt !== undefined && now - w.basicNotedAt > WANTED_BASIC_MAX_AGE_MS) {
+      w.alsoBasic = false;
+    }
     const queued = pending.get(mint);
     if (queued && narrativeDepthCovers(queued.depth, w.depth)) {
       // Asked for at a higher tier than it was queued at (a launch read the scan now wants):
@@ -546,7 +673,8 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
       continue;
     }
     const row = storedByMint.get(mint);
-    if (row && (row.status === "failed" || narrativeDepthCovers(row.depth, w.depth))) {
+    const xDue = w.depth === "basic" && (settled.get(mint)?.xRetryAt ?? Number.POSITIVE_INFINITY) <= now;
+    if (!xDue && row && (row.status === "failed" || narrativeDepthCovers(row.depth, w.depth))) {
       // A partial answer the scan asked for again (settledCovers let it through) is re-sent.
       const retryPartial = row.status === "partial" && settled.get(mint)?.partialAt !== undefined;
       if (!retryPartial) {
@@ -558,17 +686,28 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
     }
     // No daily cap of our own (user decision 2026-10-11): every deep read the scan asks for is
     // sent, unless TokenSage itself has said its full quota is spent for the day.
+    const basicEntry = (): Entry => ({
+      ca: mint,
+      hints: w.hints,
+      priority: w.basicPriority ?? w.priority,
+    });
     if (w.depth === "full" && fullOpen) {
       if (w.early) earlyMints.add(mint);
       byDepth.full.push({ ca: mint, hints: w.hints, priority: w.priority });
+      // The basic read noted before this upgrade still goes out: it is the fast narrative.
+      if (w.alsoBasic) byDepth.basic.push(basicEntry());
     } else if (w.early) {
       // TokenSage's full quota is spent: the basic read, as for any other coin, unless one is on
       // its way.
       if (queued || row) wanted.delete(mint);
-      else byDepth.basic.push({ ca: mint, hints: w.hints, priority: w.priority });
+      else
+        byDepth.basic.push(w.alsoBasic ? basicEntry() : { ca: mint, hints: w.hints, priority: w.priority });
     } else if (queued || (w.depth === "full" && row && row.status !== "failed")) {
       // TokenSage's full quota is spent, with a basic answer stored or on its way: the full
-      // request stays noted for when the quota is back.
+      // request stays noted for when the quota is back. A basic read not yet sent still goes.
+      const basicStored =
+        row !== undefined && row.status !== "failed" && narrativeDepthCovers(row.depth, "basic");
+      if (w.alsoBasic && !queued && !basicStored) byDepth.basic.push(basicEntry());
       continue;
     } else {
       byDepth.basic.push({ ca: mint, hints: w.hints, priority: w.priority });
@@ -656,7 +795,13 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
     const sent = new Map(chunk.map((e) => [e.ca, e]));
     for (const e of chunk) {
       const w = wanted.get(e.ca);
-      if (w && narrativeDepthCovers(depth, w.depth)) wanted.delete(e.ca);
+      if (!w) continue;
+      // The basic half of a full upgrade was sent. The full request stays noted.
+      if (depth === "basic" && w.alsoBasic && w.depth === "full") {
+        w.alsoBasic = false;
+        continue;
+      }
+      if (narrativeDepthCovers(depth, w.depth)) wanted.delete(e.ca);
     }
     for (const item of items) {
       const entry = typeof item?.ca === "string" ? sent.get(item.ca) : undefined;
