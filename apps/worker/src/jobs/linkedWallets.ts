@@ -6,6 +6,7 @@ import {
   createLogger,
   HOT_FUNDER_WINDOW_MS,
   isHotFunder,
+  isWalletAddress,
   LINKED_TOP_N,
   linkedWallets,
   prisma,
@@ -371,7 +372,16 @@ const TOP_HOLDERS_MAX_AGE_MS = 60 * 60_000;
  */
 const topHolderLists = new Map<
   string,
-  { holders: { owner: string; pct: number }[]; atMs: number; refreshMs: number }
+  {
+    holders: { owner: string; pct: number }[];
+    /** When the list was last read or found unchanged: how soon to read it again. */
+    atMs: number;
+    /** When the set of wallets was enumerated from the chain. */
+    readAtMs: number;
+    /** When the shares were current (the chain read, or the last streamed balance). */
+    balancesAtMs: number;
+    refreshMs: number;
+  }
 >();
 const MAX_TOP_HOLDER_LISTS = 5_000;
 
@@ -431,7 +441,10 @@ export function topHolderWalletsOf(
  * when read: the same read as its top 25 (the whole token-account list comes back either way, so
  * the wider cut costs nothing), kept only for the bubble map.
  */
-const wideHolderLists = new Map<string, { holders: { owner: string; pct: number }[]; atMs: number }>();
+const wideHolderLists = new Map<
+  string,
+  { holders: { owner: string; pct: number }[]; atMs: number; balancesAtMs: number }
+>();
 const MAX_WIDE_LISTS = 1_000;
 
 /**
@@ -537,6 +550,8 @@ export async function readTopHolders(
     topHolderLists.set(g.mintAddress, {
       holders: top,
       atMs: now,
+      readAtMs: now,
+      balancesAtMs: now,
       refreshMs: oldMints.has(g.mintAddress) ? TOP_HOLDERS_OLD_REFRESH_MS : TOP_HOLDERS_REFRESH_MS,
     });
     g.holders = top;
@@ -546,7 +561,7 @@ export async function readTopHolders(
         if (oldest !== undefined) wideHolderLists.delete(oldest);
       }
       wideHolderLists.delete(g.mintAddress);
-      wideHolderLists.set(g.mintAddress, { holders, atMs: now });
+      wideHolderLists.set(g.mintAddress, { holders, atMs: now, balancesAtMs: now });
     }
   }
   return counts;
@@ -619,41 +634,116 @@ export interface HolderBalanceMove {
 
 /**
  * Moves a coin's top-holder list (and its top 50, where kept) by the balances a streamed
- * transaction left its holders' token accounts with (user ask 2026-10-19: the top holders live, to
- * the second, between reads). A holder with one token account takes its new balance outright, so a
- * transaction the last read already counted changes nothing; one with several moves by the
- * difference. Only the holders on the list move: a wallet buying in from outside it waits for the
- * next read. The list keeps its read time (it says when to read again); answers whether any share
- * moved.
+ * transaction left token accounts with (user ask 2026-10-19: the top holders live, to the second,
+ * between reads). A holder with one token account takes its new balance outright, so a transaction
+ * the last read already counted changes nothing; one with several moves by the difference. A wallet
+ * buying in from outside the list joins it when the balance it is left with outranks the smallest
+ * holder, and whoever falls out of the list's length leaves. A program account (the curve, a pool)
+ * never joins. The list keeps its read time (it says when to read again) and when its wallets were
+ * enumerated; the share time moves to `nowMs`. Answers whether any share moved.
  */
-export function applyHolderBalances(mintAddress: string, moves: readonly HolderBalanceMove[]): boolean {
+export function applyHolderBalances(
+  mintAddress: string,
+  moves: readonly HolderBalanceMove[],
+  nowMs = Date.now(),
+): boolean {
   const read = holderAccountLists.get(mintAddress);
   const entry = topHolderLists.get(mintAddress);
   if (!read || !entry || read.supply <= 0n || moves.length === 0) return false;
   const pctOf = (raw: bigint) => Number((raw * 1_000_000n) / read.supply) / 10_000;
+  const wide = wideHolderLists.get(mintAddress);
+  const knownPct = (owner: string) =>
+    entry.holders.find((h) => h.owner === owner)?.pct ?? wide?.holders.find((h) => h.owner === owner)?.pct;
   const next = new Map<string, number>();
   for (const m of moves) {
     const accounts = read.accountsOf.get(m.owner);
     if (!accounts?.includes(m.account)) continue;
-    const base = next.get(m.owner) ?? entry.holders.find((h) => h.owner === m.owner)?.pct;
+    const base = next.get(m.owner) ?? knownPct(m.owner);
     if (base === undefined) continue;
     next.set(
       m.owner,
       accounts.length === 1 ? pctOf(m.post) : Math.max(0, base + pctOf(m.post) - pctOf(m.pre)),
     );
   }
-  if (![...next].some(([owner, pct]) => entry.holders.find((h) => h.owner === owner)?.pct !== pct))
-    return false;
-  const moved = (list: { owner: string; pct: number }[]) =>
-    list
-      .map((h) => (next.has(h.owner) ? { ...h, pct: next.get(h.owner)! } : h))
+  // Buyers the list doesn't have yet, summed over the accounts this transaction touched. A later
+  // transaction of one of those accounts takes the new balance outright (one account) or by the
+  // difference (several), the same as a holder the chain read listed.
+  const incoming = new Map<string, { post: bigint; accounts: string[] }>();
+  for (const m of moves) {
+    if (read.accountsOf.has(m.owner) || next.has(m.owner) || !isWalletAddress(m.owner)) continue;
+    const cur = incoming.get(m.owner) ?? { post: 0n, accounts: [] };
+    cur.post += m.post;
+    if (!cur.accounts.includes(m.account)) cur.accounts.push(m.account);
+    incoming.set(m.owner, cur);
+  }
+  const ranked = (
+    list: { owner: string; pct: number }[],
+    cap: number,
+    /** Holders of the wider list whose new share may now rank in this one. */
+    rising: readonly { owner: string; pct: number }[] = [],
+  ) => {
+    const moved = list.map((h) => (next.has(h.owner) ? { ...h, pct: next.get(h.owner)! } : h));
+    for (const h of rising) if (!moved.some((x) => x.owner === h.owner) && h.pct > 0) moved.push({ ...h });
+    for (const [owner, inc] of incoming) {
+      if (moved.some((h) => h.owner === owner)) continue;
+      const pct = pctOf(inc.post);
+      if (pct > 0) moved.push({ owner, pct });
+    }
+    return moved
       .filter((h) => h.pct > 0)
-      .sort((a, b) => b.pct - a.pct);
-  const holders = moved(entry.holders);
-  topHolderLists.set(mintAddress, { ...entry, holders });
-  const wide = wideHolderLists.get(mintAddress);
-  if (wide) wideHolderLists.set(mintAddress, { holders: moved(wide.holders), atMs: wide.atMs });
+      .sort((a, b) => b.pct - a.pct)
+      .slice(0, Math.max(cap, 1));
+  };
+  const rising = [...next]
+    .filter(([owner]) => !entry.holders.some((h) => h.owner === owner))
+    .map(([owner, pct]) => ({ owner, pct }));
+  const unchanged = (before: { owner: string; pct: number }[], after: { owner: string; pct: number }[]) =>
+    after.length === before.length &&
+    after.every((h, i) => h.owner === before[i]?.owner && h.pct === before[i]?.pct);
+  const holders = ranked(entry.holders, entry.holders.length, rising);
+  const wideHolders = wide ? ranked(wide.holders, wide.holders.length) : null;
+  const topSame = unchanged(entry.holders, holders);
+  const wideSame = !wide || !wideHolders || unchanged(wide.holders, wideHolders);
+  if (topSame && wideSame) return false;
+  if (!topSame) topHolderLists.set(mintAddress, { ...entry, holders, balancesAtMs: nowMs });
+  const joined = [...incoming.keys()].filter(
+    (owner) => holders.some((h) => h.owner === owner) || !!wideHolders?.some((h) => h.owner === owner),
+  );
+  if (joined.length > 0) {
+    const accountsOf = new Map(read.accountsOf);
+    for (const owner of joined) accountsOf.set(owner, incoming.get(owner)!.accounts);
+    holderAccountLists.set(mintAddress, { ...read, accountsOf });
+  }
+  if (wide && wideHolders && !wideSame)
+    wideHolderLists.set(mintAddress, { holders: wideHolders, atMs: wide.atMs, balancesAtMs: nowMs });
   return true;
+}
+
+/** When a mint's chain list was enumerated, and when its shares were current. */
+export interface HolderListClock {
+  readAtMs: number;
+  balancesAtMs: number;
+}
+
+/**
+ * Points each group at the chain list the holder stream has been moving, and answers when that
+ * list's wallets were enumerated and when its shares were current. A group keeps the list it was
+ * given when the chain list isn't in. The two times are the list's at this call: a scan that
+ * stamps its own later write time on the shares drops the trades in between, and counting from
+ * the enumeration instead counts the stream's moves a second time.
+ */
+export function adoptLiveHolders(
+  groups: readonly LinkedGroup[],
+  nowMs = Date.now(),
+): Map<string, HolderListClock> {
+  const clocks = new Map<string, HolderListClock>();
+  for (const g of groups) {
+    const entry = topHolderLists.get(g.mintAddress);
+    if (!entry || nowMs - entry.atMs >= TOP_HOLDERS_MAX_AGE_MS) continue;
+    g.holders = entry.holders;
+    clocks.set(g.mintAddress, { readAtMs: entry.readAtMs, balancesAtMs: entry.balancesAtMs });
+  }
+  return clocks;
 }
 
 /** How far back a model call puts its coin on the wider bubble map. */
@@ -706,6 +796,8 @@ export interface WideMapReading {
   mintAddress: string;
   /** When the top 50 was read. */
   readAt: Date;
+  /** When the shares in `holders` were current (the read, or the last streamed balance). */
+  balancesAt: Date;
   /** How many holders the top-50 read listed (pools and the creator aside). */
   holdersRead: number;
   /** Of those past the top 25, how many we know the funder of (on the map). */
@@ -791,11 +883,15 @@ export async function wideMapReadings(
 
   const out: WideMapReading[] = [];
   for (const { g, wide } of todo) {
-    const extras = extrasOf(g, wide.holders).filter((h) => {
+    // The stream may have moved both lists while the funders were read. The reading takes the
+    // lists as they stand now, with the share time of that same moment.
+    const liveWide = wideHolderLists.get(g.mintAddress) ?? wide;
+    const top = topHolderLists.get(g.mintAddress)?.holders ?? g.holders;
+    const extras = extrasOf({ ...g, holders: top }, liveWide.holders).filter((h) => {
       const f = funderOf.get(h.owner);
       return !!f && hotKnown(f);
     });
-    const list = [...g.holders, ...extras.map(({ owner, pct }) => ({ owner, pct }))];
+    const list = [...top, ...extras.map(({ owner, pct }) => ({ owner, pct }))];
     const creator = g.creator ?? null;
     const creatorFunder = creator ? (funderOf.get(creator) ?? null) : null;
     const topN = list.length;
@@ -812,8 +908,9 @@ export async function wideMapReadings(
     const rankOf = new Map(extras.map((h) => [h.owner, h.rank]));
     out.push({
       mintAddress: g.mintAddress,
-      readAt: new Date(wide.atMs),
-      holdersRead: wide.holders.filter((h) => h.owner !== creator).slice(0, BUBBLE_WIDE_TOP_N).length,
+      readAt: new Date(liveWide.atMs),
+      balancesAt: new Date(liveWide.balancesAtMs),
+      holdersRead: liveWide.holders.filter((h) => h.owner !== creator).slice(0, BUBBLE_WIDE_TOP_N).length,
       knownExtra: extras.length,
       holders: reading.holders.map((h) => ({
         ...h,
@@ -889,6 +986,7 @@ export async function storeWideMapReadings(
     await freezeAtAlert(r, calledAt.get(r.mintAddress));
     const key = JSON.stringify([
       r.readAt.getTime(),
+      r.balancesAt.getTime(),
       r.holders,
       r.clusters,
       r.clustersExTransfers ?? null,
@@ -897,6 +995,7 @@ export async function storeWideMapReadings(
     if (storedWide.get(r.mintAddress) === key) continue;
     const data = {
       readAt: r.readAt,
+      balancesAt: r.balancesAt,
       holdersRead: r.holdersRead,
       knownExtra: r.knownExtra,
       holders: r.holders as unknown as Prisma.InputJsonValue,

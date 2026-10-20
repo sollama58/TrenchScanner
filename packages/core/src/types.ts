@@ -365,6 +365,16 @@ export interface OnChainProfile {
     creatorTied?: boolean;
   }[];
   /**
+   * When `linkedHolders`' shares were current (the chain read, or the last holder-stream update
+   * folded into them). The scan's takenAt is later. Undefined when the list isn't the chain's.
+   */
+  holderBalancesAt?: Date;
+  /**
+   * When the set of wallets on `linkedHolders` was last enumerated from the chain. A buyer from
+   * outside the list isn't on it until the next enumeration.
+   */
+  holderChainReadAt?: Date;
+  /**
    * Top holders funded within a minute of each other, whoever paid (core's sameTimeClusters): the
    * % of supply they hold, the group count, and the groups. Read with the linked reading.
    */

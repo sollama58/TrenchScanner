@@ -107,6 +107,7 @@ import {
   cexReadingOf,
   linkedHoldersOf,
   linkedReadingOf,
+  adoptLiveHolders,
   cachedTopHolders,
   currentTopHolders,
   topHolderWalletsOf,
@@ -1725,6 +1726,9 @@ async function scanCycle(
   // Linked without transfers, kept recorded (user ask 2026-10-16), and Linked with them: a transfer
   // past dust and clear of exchanges links its two holders (user decision 2026-10-16). Only a coin
   // whose transfer reading is complete gets them; the rest read on funding alone.
+  // The holder stream has been moving the chain lists since the groups were built. The reading
+  // takes those lists, and the times the shares and the wallet set were current, together.
+  const holderClocks = adoptLiveHolders(linkedGroups);
   const linkedBaseByMint = new Map(
     linkedLookups
       ? linkedGroups.map((g) => [g.mintAddress, linkedReadingOf(g, linkedLookups!)] as const)
@@ -1736,7 +1740,18 @@ async function scanCycle(
           const base = linkedBaseByMint.get(g.mintAddress) ?? null;
           const transfers = transfersByMint.get(g.mintAddress)?.transfers;
           const counted = base && transfers?.length ? linkedReadingOf(g, linkedLookups!, transfers) : base;
-          return [g.mintAddress, counted && sameLinked(counted, base) ? base : counted] as const;
+          const chosen = counted && sameLinked(counted, base) ? base : counted;
+          const clock = holderClocks.get(g.mintAddress);
+          return [
+            g.mintAddress,
+            chosen && clock
+              ? {
+                  ...chosen,
+                  holderBalancesAt: new Date(clock.balancesAtMs),
+                  holderChainReadAt: new Date(clock.readAtMs),
+                }
+              : chosen,
+          ] as const;
         })
       : [],
   );
@@ -3917,7 +3932,7 @@ function sameLinked(a: LinkedWalletsReading, b: LinkedWalletsReading | null): bo
 /** The linked-wallets reading on the profile; unknown (left off) without one. Exported for tests. */
 export function withLinkedWallets(
   onChain: OnChainProfile | null,
-  linked: LinkedWalletsReading | null,
+  linked: (LinkedWalletsReading & { holderBalancesAt?: Date; holderChainReadAt?: Date }) | null,
   cex: CexFundedReading | null = null,
   sniperWallets?: ReadonlySet<string>,
 ): OnChainProfile | null {
@@ -3947,15 +3962,23 @@ export function withLinkedWallets(
     ? { ...withCex, linkedHolders: tagCex(withCex.linkedHolders) }
     : withCex;
   const read = linked ? withLinkedReading(tagged, linked, tagCex) : tagged;
+  const timed =
+    read && linked?.holderBalancesAt
+      ? {
+          ...read,
+          holderBalancesAt: linked.holderBalancesAt,
+          holderChainReadAt: linked.holderChainReadAt,
+        }
+      : read;
   // Launch snipers among the same top holders (user ask 2026-10-13, "N/25"): the linked reading's
   // list when it has one (the chain's top 25, pools and the creator aside), else the list read.
-  const list = (linked?.holders ?? read.linkedHolders?.map((h) => ({ wallet: h.wallet })) ?? []).slice(
+  const list = (linked?.holders ?? timed?.linkedHolders?.map((h) => ({ wallet: h.wallet })) ?? []).slice(
     0,
     LINKED_TOP_N,
   );
-  if (!sniperWallets || list.length === 0) return read;
+  if (!sniperWallets || list.length === 0) return timed;
   return {
-    ...read,
+    ...timed,
     sniperTopHolderCount: list.filter((h) => sniperWallets.has(h.wallet)).length,
     sniperTopHoldersChecked: list.length,
   };

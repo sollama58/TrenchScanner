@@ -253,6 +253,16 @@ export interface Snapshot {
    * withCarriedHolderList): when that list was written. Absent when the row carries its own.
    */
   holdersAt?: string;
+  /**
+   * When the holder shares were current (the chain read, or the last holder-stream update folded
+   * into them). Absent on scans from before it, which the view reads as `holdersAt` or `takenAt`.
+   */
+  holderBalancesAt?: string | null;
+  /**
+   * When the set of wallets on the holder list was last read from the chain. A wallet that bought
+   * in after this isn't on the list until the next read. Absent on scans from before it.
+   */
+  holderChainReadAt?: string | null;
   priceUsd: number;
   marketCapUsd: number;
   liquidityUsd: number | null;

@@ -295,6 +295,38 @@ describe("holder transfers", () => {
       ]);
     });
 
+    it("adds a buyer who outranks the smallest holder and drops the one who falls out", async () => {
+      setHolderTransferStream(fakeStream(NOW - 60_000));
+      const helius = fakeHelius({}, {});
+      const group = { mintAddress: MINT, holders: [], creator: null };
+      await readTopHolders([group], helius, { maxReads: 1, nowMs: NOW });
+      // D, who was not on the list, buys 4%. The list keeps its length, so C (1%) leaves.
+      const D = "2DKZ9HQ2Q42x1mMf4qYqoXyioLU3wTiN9XkRMiUcVy8F";
+      const buy = {
+        meta: {
+          err: null,
+          preTokenBalances: [],
+          postTokenBalances: [
+            { accountIndex: 1, mint: MINT, owner: D, uiTokenAmount: { amount: "40000000" } },
+          ],
+        },
+        transaction: { signatures: ["buy"], message: { accountKeys: [D, "acc-d"] } },
+      } as unknown as ChainTx;
+      onHolderStreamTx(MINT, "buy", buy, NOW + 5_000);
+      expect(cachedTopHolders(MINT, NOW + 5_000)).toEqual([
+        { owner: A, pct: 5 },
+        { owner: D, pct: 4 },
+        { owner: B, pct: 3 },
+      ]);
+      // The same transaction again changes nothing: D's one account takes its balance outright.
+      onHolderStreamTx(MINT, "buy", buy, NOW + 6_000);
+      expect(cachedTopHolders(MINT, NOW + 6_000)).toEqual([
+        { owner: A, pct: 5 },
+        { owner: D, pct: 4 },
+        { owner: B, pct: 3 },
+      ]);
+    });
+
     it("re-reads a watched coin's list less often while the stream has followed all its holders", async () => {
       const stream = fakeStream(NOW - 60_000);
       setHolderTransferStream(stream);

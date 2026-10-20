@@ -45,6 +45,11 @@ export interface WideHolder {
  */
 export interface WideMap {
   readAt: string;
+  /**
+   * When the shares were current (the chain read, or the last holder-stream update stored with
+   * them). Absent on maps from before it: the shares were current at `readAt`.
+   */
+  balancesAt?: string;
   /** How many holders the read listed (pools and the creator aside). */
   holdersRead: number;
   /** Of those past the top 25, how many are on the map. */
@@ -2557,12 +2562,28 @@ export const HOLDER_POLL_MS = 30_000;
 export const HOLDER_STALE_MS = 12 * 60_000;
 
 /**
- * When a reading's holder list was written: the earlier row the API carried it from (holdersAt),
- * else its own scan. A scan row lands every few seconds, so its takenAt alone said a list minutes
- * old was just read.
+ * When a reading's holder shares were current: the chain read or the last holder-stream update
+ * stored with them (`holderBalancesAt`), else the earlier row the API carried the list from
+ * (`holdersAt`), else its own scan. A scan row lands every few seconds, so its takenAt alone said
+ * a list minutes old was just read, and it also sits after the shares were copied, so the trades
+ * in between were neither in the shares nor applied on top.
  */
-export function holderListAt(s: Pick<Snapshot, "takenAt" | "holdersAt">): number {
-  return Date.parse(s.holdersAt ?? s.takenAt);
+export function holderListAt(s: Pick<Snapshot, "takenAt" | "holdersAt" | "holderBalancesAt">): number {
+  const balances = s.holderBalancesAt ? Date.parse(s.holderBalancesAt) : NaN;
+  return Number.isFinite(balances) ? balances : Date.parse(s.holdersAt ?? s.takenAt);
+}
+
+/**
+ * When the set of wallets on the list was last enumerated from the chain. A buyer from outside
+ * the list is counted from here; wallets already on it move from holderListAt, which the holder
+ * stream keeps later. Without a chain time, both are the share time, so a stream update isn't
+ * counted twice.
+ */
+export function holderChainReadAt(
+  s: Pick<Snapshot, "takenAt" | "holdersAt" | "holderBalancesAt" | "holderChainReadAt">,
+): number {
+  const chain = s.holderChainReadAt ? Date.parse(s.holderChainReadAt) : NaN;
+  return Number.isFinite(chain) ? chain : holderListAt(s);
 }
 
 /** The first of a view's reads, every `everyMs` from `nextRead`, at or after `at`. */
@@ -2578,7 +2599,7 @@ export function firstReadAfter(at: number, nextRead: number, everyMs: number): n
  * HOLDER_STALE_MS: the coin is no longer being scanned.
  */
 export function holderFreshness(
-  reading: Pick<Snapshot, "takenAt" | "holdersAt">,
+  reading: Pick<Snapshot, "takenAt" | "holdersAt" | "holderBalancesAt">,
   now: number,
   reads?: { nextRead: number; everyMs: number } | null,
 ): { last: number; due: number | null; next: number | null; late: boolean } {

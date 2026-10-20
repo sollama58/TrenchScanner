@@ -1330,6 +1330,15 @@ model TokenSnapshot {
   // curatedFeed.ts carries onto a card's latest snapshot, and the row a Match or CuratedAlert
   // points at gets the reading when it is written. Before that, on every scan that had one.
   linkedHolders           Json?
+  // When the shares on linkedHolders were current: the chain read, or the last holder-stream
+  // balance applied to that list. A scan row's takenAt is later (the row is written at the end of
+  // the cycle), so the token view moves shares from this, not from takenAt. Null on rows from
+  // before it existed and on rows that don't carry a list.
+  holderBalancesAt        DateTime?
+  // When the set of wallets on that list was last enumerated from the chain. The holder stream
+  // moves wallets already on the list after this, but a wallet buying in from outside it is not on
+  // the list until the next enumeration, so the token view counts that buyer's trades from here.
+  holderChainReadAt       DateTime?
   // Top holders funded within a minute of each other, from any funders (core's sameTimeClusters):
   // the % of supply they hold, how many such groups, and the groups themselves (when each was
   // funded, by whom, and each wallet's %); null when there are none. Read with the linked reading,
@@ -3465,6 +3474,10 @@ model BubbleMapHolders {
   mintAddress      String   @id
   /// When the top 50 was read.
   readAt           DateTime
+  /// When the shares in `holders` were current. The holder stream moves them after `readAt`; the
+  /// token view counts trades of wallets already on the map from here, and everyone else from
+  /// `readAt`. Null on rows from before it existed (those shares were current at `readAt`).
+  balancesAt       DateTime?
   /// How many holders the read listed (pools and the creator aside), at most 50.
   holdersRead      Int
   /// Of those past the top 25, how many are on the map (funder known).

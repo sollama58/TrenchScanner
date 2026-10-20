@@ -99,7 +99,7 @@ function streamCovers(mint: string, account: string, e: AccountSignatures): bool
 export function onHolderStreamTx(mint: string, signature: string, tx: ChainTx, nowMs = Date.now()): void {
   if (tx.meta?.err) return;
   // The holders' new balances land on the coin's top-holder list now (user ask 2026-10-19).
-  applyHolderBalances(mint, balanceMovesOf(mint, tx));
+  applyHolderBalances(mint, balanceMovesOf(mint, tx), nowMs);
   let touched = 0;
   for (const address of new Set(keysOf(tx))) {
     const e = accountSigs.get(address);
