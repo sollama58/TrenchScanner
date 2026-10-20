@@ -635,7 +635,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: TEN_X_CONTESTANT,
     name: "10x Hunter",
     description:
-      "Boosted trees trained on a clean 10x inside the hour (the 4x while too few 10x rows exist); judged on its 10x rate",
+      "Boosted trees trained on a clean 10x inside the hour; a run with fewer than 30 rows whose 10x verdict is known skips the seat instead of training a 4x model under this name; judged on its 10x rate",
     summary: "Looks only for coins that can go ten times.",
     role: "learner",
     recipe: { learner: "gbdt", goal: "10x" },

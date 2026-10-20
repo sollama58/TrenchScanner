@@ -19,6 +19,7 @@ import {
   isTraderMember,
   GEMS_CONTESTANT,
   GEMS_RECIPE,
+  TEN_X_CONTESTANT,
   TRADER_CONTESTANT,
   WINNERS_CONTESTANT,
   WINNERS_RECIPE,
@@ -42,7 +43,12 @@ import {
 } from "./trainingRun.js";
 import { isDecisionRow, type TrainingRow } from "./trainer.js";
 import { STACKED_MODEL_KIND } from "./stacking.js";
-import { defaultContestant, NEVER_EMIT_THRESHOLD, runContestTraining } from "./trainingRun.js";
+import {
+  defaultContestant,
+  NEVER_EMIT_THRESHOLD,
+  runContestTraining,
+  runEvolvingContest,
+} from "./trainingRun.js";
 import { syntheticMarket } from "./syntheticMarket.js";
 import type { StackedCuratorParams } from "./stacking.js";
 
@@ -325,11 +331,12 @@ describe("Gems", () => {
     }
   }, 120_000);
 
-  it("gates on the stored reading of an era-masked input, not the mask (user decision 2026-10-20)", () => {
+  it("does not treat a pre-2026-10-19 bundle figure as today's transfer-counted reading", () => {
     const gate = { mcapMin: 0, mcapMax: 1e12, maxBundledSupplyPct: 20 };
     const base = { mcapUsd: 50_000, bundledSupplyPct: 5 };
     const rows: TrainingRow[] = [
-      // Banked before the transfer-linked reads: masked for the learners, 60% as stored.
+      // Banked before the transfer-counted reads. Masked for the learners; the stored 60% is
+      // another definition and stays masked, so the cap is skipped.
       {
         anchorAt: new Date("2026-10-18T00:00:00Z"),
         features: { ...base, bundledSupplyPct: null },
@@ -338,17 +345,16 @@ describe("Gems", () => {
         anchorPriceUsd: 1,
         anchorMcapUsd: 50_000,
       },
-      // The same, under the cap.
+      // After the transfer-counted reads, 60% is today's figure and fails the cap.
       {
-        anchorAt: new Date("2026-10-18T01:00:00Z"),
-        features: { ...base, bundledSupplyPct: null },
-        gateInputs: { bundledSupplyPct: 10 },
+        anchorAt: new Date("2026-10-19T12:00:00Z"),
+        features: { ...base, bundledSupplyPct: 60 },
         labelValue: 0,
         anchorPriceUsd: 1,
         anchorMcapUsd: 50_000,
       },
       {
-        anchorAt: new Date("2026-10-19T12:00:00Z"),
+        anchorAt: new Date("2026-10-19T13:00:00Z"),
         features: base,
         labelValue: 0,
         anchorPriceUsd: 1,
@@ -357,10 +363,9 @@ describe("Gems", () => {
     ];
     const gated = gatedTrainingSet(rows, gate);
     expect(gated.map((r) => r.anchorAt.toISOString())).toEqual([
-      "2026-10-18T01:00:00.000Z",
-      "2026-10-19T12:00:00.000Z",
+      "2026-10-18T00:00:00.000Z",
+      "2026-10-19T13:00:00.000Z",
     ]);
-    // The learners still read the masked input as missing.
     expect(gated[0]!.features.bundledSupplyPct).toBeNull();
   });
 });
@@ -460,6 +465,33 @@ describe("Winners", () => {
     const none = await runContestTraining(market, cfg);
     expect(none.map((r) => r.contestant)).not.toContain(WINNERS_CONTESTANT);
   }, 120_000);
+});
+
+describe("10x Hunter", () => {
+  it("skips the seat when fewer than 30 rows have a known 10x verdict", async () => {
+    const spec = contestantSpec(TEN_X_CONTESTANT)!;
+    const rows: TrainingRow[] = Array.from({ length: 20 }, (_, i) => ({
+      anchorAt: new Date(Date.UTC(2026, 9, 1, 0, i)),
+      features: { mcapUsd: 50_000, ageMinutes: 10 },
+      labelValue: 1,
+      anchorPriceUsd: 1,
+      anchorMcapUsd: 50_000,
+      sampleKind: "event",
+    }));
+    const outcome = await runEvolvingContest(rows, {
+      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
+      targetPerHour: 6,
+      heuristicMinScore: 55,
+      minRowsToPromote: 500,
+      cooldownHours: 24,
+      heuristicPrecisionGate: true,
+      contestants: [spec],
+    });
+    expect(outcome.results.map((r) => r.contestant)).not.toContain(TEN_X_CONTESTANT);
+    expect(outcome.skipped).toHaveLength(1);
+    expect(outcome.skipped[0]).toMatchObject({ contestant: TEN_X_CONTESTANT, name: "10x Hunter" });
+    expect(outcome.skipped[0]!.reason).toContain("Not trained as a 4× model");
+  });
 });
 
 describe("defaultContestant", () => {
