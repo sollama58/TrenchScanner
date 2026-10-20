@@ -742,7 +742,7 @@ function BaselineChart({
             bonding curve that took at least 5 seconds to fill. A token that fails is never sampled at all.
           </li>
           <li>
-            <strong>Passes the pre-check</strong>: market cap inside the scanner&apos;s band ($10k to $1M),
+            <strong>Passes the pre-check</strong>: market cap inside the scanner&apos;s band ($7k to $1M),
             under 6 hours old, buyers making at least 55% of the last hour&apos;s trades, price not collapsing
             (down 65% or more within a minute, or 80% or more over 5 minutes; once a token is an hour old, up
             at least 25% over the last 5 minutes instead), and the fresh and empty wallet checks done.
