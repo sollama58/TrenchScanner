@@ -56,6 +56,17 @@ export function adminSessionFresh(session: SessionPayload, now = Date.now()): bo
 }
 
 /**
+ * How recent a sign-in must be to change two-factor (user decision 2026-10-20): someone holding an
+ * old session, copied or left open, has to sign in again (and pass two-factor there) first.
+ */
+export const RECENT_SIGN_IN_MS = 10 * 60_000;
+
+/** Whether this session's sign-in was within RECENT_SIGN_IN_MS. */
+export function signedInRecently(session: SessionPayload, now = Date.now()): boolean {
+  return session.issuedAtMs !== undefined && now - session.issuedAtMs <= RECENT_SIGN_IN_MS;
+}
+
+/**
  * How long a paired-phone JWT is signed for. Long, because a linked device is meant to last until
  * someone revokes it - but NOT infinite, because a JWT is the one credential that cannot be
  * recalled, and an unbounded one would outlive the database row that governs it. Revocation is

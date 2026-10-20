@@ -2,9 +2,18 @@
 import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma, loadEnv } from "@trenchscanner/core";
-import type { FastifyInstance } from "fastify";
+import { randomBytes } from "node:crypto";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
+import {
+  KNOWN_DEVICE_COOKIE,
+  isKnownDevice,
+  issueKnownDevice,
+  issuePass,
+  sealSecret,
+  twoFactorState,
+} from "../twoFactor.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `session-revocation-test-${Date.now()}`;
@@ -128,5 +137,111 @@ describe.skipIf(!dbAvailable)("browser session revocation", () => {
       cookies: { [SESSION_COOKIE_NAME]: cookie },
     });
     expect(own.statusCode).toBe(200);
+  });
+});
+
+describe.skipIf(!dbAvailable)("two-factor passes and remembered browsers", () => {
+  // User decision 2026-10-20: neither survives a sign-out everywhere or a change to two-factor.
+  let app: FastifyInstance;
+  let userId: string;
+  const env = loadEnv();
+  const signer = createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS);
+  const wallet = `${TAG}-2fa-wallet`;
+
+  beforeAll(async () => {
+    app = await buildServer(env);
+    userId = (await prisma.user.create({ data: { walletAddress: wallet } })).id;
+    await prisma.twoFactorSettings.create({
+      data: { userId, totpSecret: sealSecret(env, userId, randomBytes(20)) },
+    });
+  });
+
+  afterAll(async () => {
+    await app?.close();
+    if (dbAvailable) await prisma.user.deleteMany({ where: { walletAddress: wallet } });
+  });
+
+  /** A fresh browser session at the user's current version. */
+  async function cookie() {
+    const { sessionVersion } = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    return signer.sign({ userId, walletAddress: wallet, sessionVersion });
+  }
+
+  /** A "manage" pass and a remembered-browser cookie, both from the account's current epoch. */
+  async function passAndDevice() {
+    const { epoch } = await twoFactorState(userId);
+    return {
+      pass: await issuePass(env, userId, "manage", epoch),
+      device: await issueKnownDevice(env, userId, epoch),
+    };
+  }
+
+  /** Whether the pass still opens a two-factor change (saving the same choices changes nothing). */
+  async function passWorks(pass: string) {
+    const res = await app.inject({
+      method: "PUT",
+      url: "/auth/2fa/actions",
+      payload: { actions: ["signin", "pair"] },
+      headers: { "x-ts-2fa": pass },
+      cookies: { [SESSION_COOKIE_NAME]: await cookie() },
+    });
+    if (res.statusCode === 200) return true;
+    expect(res.json()).toMatchObject({ twoFactor: { action: "manage" } });
+    return false;
+  }
+
+  async function deviceKnown(device: string) {
+    const request = { cookies: { [KNOWN_DEVICE_COOKIE]: device } } as unknown as FastifyRequest;
+    return isKnownDevice(env, request, userId, (await twoFactorState(userId)).epoch);
+  }
+
+  it("signing out everywhere ends them", async () => {
+    const { pass, device } = await passAndDevice();
+    expect(await passWorks(pass)).toBe(true);
+    expect(await deviceKnown(device)).toBe(true);
+
+    const out = await app.inject({
+      method: "POST",
+      url: "/auth/logout",
+      cookies: { [SESSION_COOKIE_NAME]: await cookie() },
+    });
+    expect(out.statusCode).toBe(200);
+
+    expect(await passWorks(pass)).toBe(false);
+    expect(await deviceKnown(device)).toBe(false);
+  });
+
+  it("making new backup codes ends them", async () => {
+    const { pass, device } = await passAndDevice();
+    const codes = await app.inject({
+      method: "POST",
+      url: "/auth/2fa/backup-codes",
+      headers: { "x-ts-2fa": pass },
+      cookies: { [SESSION_COOKIE_NAME]: await cookie() },
+    });
+    expect(codes.statusCode).toBe(200);
+    expect(await passWorks(pass)).toBe(false);
+    expect(await deviceKnown(device)).toBe(false);
+  });
+
+  it("adding a factor ends them, and so does removing one", async () => {
+    const before = await passAndDevice();
+    // Added straight to the table: a real WebAuthn registration can't run here.
+    const passkey = await prisma.twoFactorPasskey.create({
+      data: { userId, credentialId: `${TAG}-cred`, publicKey: Buffer.from([1]), name: "Test" },
+    });
+    expect(await passWorks(before.pass)).toBe(false);
+    expect(await deviceKnown(before.device)).toBe(false);
+
+    const { pass, device } = await passAndDevice();
+    const removed = await app.inject({
+      method: "DELETE",
+      url: `/auth/2fa/passkey/${passkey.id}`,
+      headers: { "x-ts-2fa": pass },
+      cookies: { [SESSION_COOKIE_NAME]: await cookie() },
+    });
+    expect(removed.statusCode).toBe(200);
+    expect(await passWorks(pass)).toBe(false);
+    expect(await deviceKnown(device)).toBe(false);
   });
 });

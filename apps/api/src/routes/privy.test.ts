@@ -9,7 +9,14 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { PrivyUnavailable, privyTestDoubles, verifyPrivyToken } from "../privy.js";
-import { openSecret, resetTwoFactorFailuresForTests, sealSecret, totpCode } from "../twoFactor.js";
+import {
+  issuePass,
+  openSecret,
+  resetTwoFactorFailuresForTests,
+  sealSecret,
+  totpCode,
+  twoFactorState,
+} from "../twoFactor.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const APP_ID = "privy-test-app";
@@ -418,6 +425,75 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
         headers: { authorization: `Bearer ${token}` },
       });
       expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ code: "paired_phone" });
+    });
+
+    /** Every route that changes two-factor, with a body each would otherwise accept. */
+    const CHANGES: [method: "POST" | "PUT" | "DELETE", url: string, payload?: object][] = [
+      ["POST", "/auth/2fa/totp/setup"],
+      ["POST", "/auth/2fa/totp/confirm", { code: "123456" }],
+      ["DELETE", "/auth/2fa/totp"],
+      ["POST", "/auth/2fa/passkey/register-options"],
+      ["POST", "/auth/2fa/passkey/register", { token: "t", response: { id: "a", type: "public-key" } }],
+      ["DELETE", "/auth/2fa/passkey/some-id"],
+      ["PUT", "/auth/2fa/actions", { actions: ["signin"] }],
+      ["POST", "/auth/2fa/backup-codes"],
+    ];
+
+    /** Every change refused with `code`, even with a good "manage" pass; nothing changed. */
+    async function refusesEveryChange(auth: Record<string, string>, code: string) {
+      const before = await twoFactorState(userId);
+      const pass = await issuePass(env, userId, "manage", before.epoch);
+      for (const [method, url, payload] of CHANGES) {
+        const res = await app.inject({ method, url, payload, headers: { ...auth, "x-ts-2fa": pass } });
+        expect([url, res.statusCode]).toEqual([url, 403]);
+        expect(res.json()).toMatchObject({ code });
+      }
+      const state = await app.inject({ method: "GET", url: "/auth/2fa", headers: auth });
+      expect(state.json()).toMatchObject({ enabled: true, changeBlocked: code });
+      expect((await twoFactorState(userId)).epoch).toBe(before.epoch);
+    }
+
+    it("never changes two-factor from a paired phone, even with a pass", async () => {
+      const device = await prisma.linkedDevice.create({ data: { userId } });
+      const token = await app.sessionSigner.sign({ userId, walletAddress: address, deviceId: device.id });
+      await refusesEveryChange({ authorization: `Bearer ${token}` }, "paired_phone");
+      // The phone still passes two-factor checks for what it may do.
+      const state = await app.inject({
+        method: "GET",
+        url: "/auth/2fa",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(state.statusCode).toBe(200);
+      await prisma.linkedDevice.delete({ where: { id: device.id } });
+    });
+
+    it("asks for a sign-in from the last 10 minutes to change two-factor", async () => {
+      const { sessionVersion } = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+      const elevenMinutesAgo = Math.floor((Date.now() - 11 * 60_000) / 1000);
+      const old = await new SignJWT({ walletAddress: address, sv: sessionVersion })
+        .setProtectedHeader({ alg: "HS256" })
+        .setSubject(userId)
+        .setIssuedAt(elevenMinutesAgo)
+        .setExpirationTime("1h")
+        .sign(new TextEncoder().encode(env.JWT_SECRET));
+      // Still signed in for everything else.
+      expect(
+        (await app.inject({ method: "GET", url: "/auth/me", headers: { authorization: `Bearer ${old}` } }))
+          .statusCode,
+      ).toBe(200);
+      await refusesEveryChange({ authorization: `Bearer ${old}` }, "sign_in_again");
+
+      // A fresh sign-in, with the pass, may.
+      const pass = await issuePass(env, userId, "manage", (await twoFactorState(userId)).epoch);
+      const saved = await as(
+        "PUT",
+        "/auth/2fa/actions",
+        { actions: ["signin", "sell"] },
+        { "x-ts-2fa": pass },
+      );
+      expect(saved.statusCode).toBe(200);
+      expect((await as("GET", "/auth/2fa")).json()).toMatchObject({ changeBlocked: null });
     });
   });
 

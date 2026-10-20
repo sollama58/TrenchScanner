@@ -149,22 +149,32 @@ export interface TwoFactorState {
   buyOverLamports: bigint | null;
   backupCodesLeft: number;
   /**
-   * Changes with every sign-out (sessionVersion) and every factor added, replaced or removed:
-   * passes and the known-device cookie carry it and die with it (user ask 2026-10-18).
+   * Changes with every sign-out (sessionVersion), every factor added, replaced or removed, and
+   * every new set of backup codes: passes and the known-device cookie carry it and die with it
+   * (user asks 2026-10-18 and 2026-10-20).
    */
   epoch: string;
 }
 
-/** The account's two-factor epoch (TwoFactorState.epoch) from its parts. */
-export function twoFactorEpoch(sessionVersion: number, totpSecret: string | null, passkeyIds: string[]) {
+/**
+ * The account's two-factor epoch (TwoFactorState.epoch) from its parts. `backupSet` names the
+ * current set of backup codes (any one id of it: a new set replaces every row), so using a code
+ * leaves it alone and making new ones moves it.
+ */
+export function twoFactorEpoch(
+  sessionVersion: number,
+  totpSecret: string | null,
+  passkeyIds: string[],
+  backupSet: string | null = null,
+) {
   return createHash("sha256")
-    .update(`${sessionVersion}|${totpSecret ?? ""}|${[...passkeyIds].sort().join(",")}`)
+    .update(`${sessionVersion}|${totpSecret ?? ""}|${[...passkeyIds].sort().join(",")}|${backupSet ?? ""}`)
     .digest("base64url")
     .slice(0, 16);
 }
 
 export async function twoFactorState(userId: string): Promise<TwoFactorState> {
-  const [settings, passkeys, backupCodesLeft, user] = await Promise.all([
+  const [settings, passkeys, backupCodesLeft, backupSet, user] = await Promise.all([
     prisma.twoFactorSettings.findUnique({ where: { userId } }),
     prisma.twoFactorPasskey.findMany({
       where: { userId },
@@ -172,6 +182,7 @@ export async function twoFactorState(userId: string): Promise<TwoFactorState> {
       orderBy: { createdAt: "asc" },
     }),
     prisma.twoFactorBackupCode.count({ where: { userId, usedAt: null } }),
+    prisma.twoFactorBackupCode.findFirst({ where: { userId }, select: { id: true }, orderBy: { id: "asc" } }),
     prisma.user.findUnique({ where: { id: userId }, select: { sessionVersion: true } }),
   ]);
   const totp = Boolean(settings?.totpSecret);
@@ -186,6 +197,7 @@ export async function twoFactorState(userId: string): Promise<TwoFactorState> {
       user?.sessionVersion ?? 0,
       settings?.totpSecret ?? null,
       passkeys.map((p) => p.id),
+      backupSet?.id ?? null,
     ),
   };
 }
@@ -308,7 +320,7 @@ export async function requireTwoFactor(
 
 /**
  * The pass a device cookie carries: this browser passed a sign-in check for this user, since the
- * last sign-out and the last change to the account's factors (its epoch).
+ * last sign-out and the last change to the account's factors or backup codes (its epoch).
  */
 export const KNOWN_DEVICE_COOKIE = "ts_2fa_device";
 const KNOWN_DEVICE_TTL_SECONDS = 180 * 24 * 60 * 60;
