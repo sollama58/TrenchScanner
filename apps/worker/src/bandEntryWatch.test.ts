@@ -48,8 +48,8 @@ describe("BandEntryWatch", () => {
     // The early cycle notes a fresh list; until then nothing is asked again.
     expect(await watch.due(t0 + BAND_ENTRY_MIN_GAP_MS + 10_000)).toBe(false);
     expect(asked).toHaveLength(2);
-    expect(watch.takeStats()).toEqual({ checks: 2, wakes: 1, newLaunchWakes: 0 });
-    expect(watch.takeStats()).toEqual({ checks: 0, wakes: 0, newLaunchWakes: 0 });
+    expect(watch.takeStats()).toEqual({ checks: 2, wakes: 1, newLaunchWakes: 0, curveWakes: 0 });
+    expect(watch.takeStats()).toEqual({ checks: 0, wakes: 0, newLaunchWakes: 0, curveWakes: 0 });
   });
 
   it("keeps the cadence when the check fails, and asks nothing with nothing near the floor", async () => {
@@ -107,7 +107,7 @@ describe("BandEntryWatch", () => {
     // No cycle has noted anything yet: the new launches alone are worth the call.
     expect(await watch.due(t0)).toBe(true);
     expect(asked[0]).toEqual(["fresh"]);
-    expect(watch.takeStats()).toEqual({ checks: 1, wakes: 1, newLaunchWakes: 1 });
+    expect(watch.takeStats()).toEqual({ checks: 1, wakes: 1, newLaunchWakes: 1, curveWakes: 0 });
 
     // The woken cycle drains the stream and notes what it priced; a new launch still under the floor
     // is asked alongside the approaching ones and wakes nothing.
@@ -117,5 +117,94 @@ describe("BandEntryWatch", () => {
     expect(asked[1]).toHaveLength(BAND_ENTRY_MAX_NEW + 1);
     expect(asked[1]![0]).toBe("new0");
     expect(asked[1]).toContain("near");
+  });
+});
+
+describe("BandEntryWatch on the curve tape", () => {
+  const t0 = 1_000_000;
+  const quiet = () => ({
+    calls: 0,
+    getLaunches: async function (this: { calls: number }) {
+      this.calls += 1;
+      return [] as CandidateToken[];
+    },
+  });
+
+  it("wakes the scan the moment a watched launch's curve price crosses the floor, with no Jupiter call", async () => {
+    const jupiter = quiet();
+    // $1,000 of market cap per unit of curve price, read off three coins.
+    const curve = new Map<string, number | null>([
+      ["near", 6.3],
+      ["a", 20],
+      ["b", 30],
+      ["unfollowed", null],
+    ]);
+    const watch = new BandEntryWatch(
+      jupiter,
+      7_000,
+      () => [],
+      (mint) => curve.get(mint) ?? null,
+    );
+    watch.note(
+      [reading("near", 6_300), reading("a", 20_000), reading("b", 30_000), reading("unfollowed", 6_900)],
+      t0,
+    );
+    expect(await watch.due(t0 + 1_000)).toBe(false);
+    curve.set("near", 6.99);
+    expect(await watch.due(t0 + 2_000)).toBe(false);
+    curve.set("near", 7.05);
+    expect(await watch.due(t0 + 3_000)).toBe(true);
+    expect(jupiter.calls).toBe(0);
+    // Nothing is watched until the early cycle notes again.
+    expect(await watch.due(t0 + 4_000)).toBe(false);
+    expect(watch.takeStats()).toEqual({ checks: 0, wakes: 1, newLaunchWakes: 0, curveWakes: 1 });
+  });
+
+  it("prices a brand-new launch off its curve, and asks Jupiter only about the ones it can't price", async () => {
+    let asked: string[] = [];
+    const curve = new Map<string, number | null>([
+      ["a", 20],
+      ["b", 30],
+      ["c", 40],
+      ["fresh", 3],
+    ]);
+    const watch = new BandEntryWatch(
+      {
+        getLaunches: async (mints: string[]) => {
+          asked = mints;
+          return [];
+        },
+      },
+      7_000,
+      () => ["fresh", "elsewhere"],
+      (mint) => curve.get(mint) ?? null,
+    );
+    watch.note([reading("a", 20_000), reading("b", 30_000), reading("c", 40_000)], t0);
+    expect(await watch.due(t0 + BAND_ENTRY_MIN_GAP_MS)).toBe(false);
+    expect(asked).toEqual(["elsewhere"]);
+    curve.set("fresh", 7.2);
+    expect(await watch.due(t0 + BAND_ENTRY_MIN_GAP_MS + 1_000)).toBe(true);
+    expect(watch.takeStats()).toEqual({ checks: 1, wakes: 1, newLaunchWakes: 1, curveWakes: 1 });
+  });
+
+  it("sets no dollar scale from fewer than three curve-priced readings", async () => {
+    const watch = new BandEntryWatch(
+      quiet(),
+      7_000,
+      () => [],
+      () => 100,
+    );
+    watch.note([reading("near", 6_500), reading("a", 20_000)], t0);
+    // 100 x (20,000 / 100) would be past the floor, but no scale is set.
+    expect(await watch.due(t0 + 1_000)).toBe(false);
+  });
+
+  it("asks Jupiter no more often than its own cadence while checking the curves every second", async () => {
+    const jupiter = quiet();
+    const watch = new BandEntryWatch(jupiter, 7_000);
+    watch.note([reading("near", 6_500)], t0);
+    for (let s = 8; s <= 20; s += 1) await watch.due(t0 + s * 1_000);
+    // At 8 s, 13 s and 18 s.
+    expect(jupiter.calls).toBe(3);
   });
 });

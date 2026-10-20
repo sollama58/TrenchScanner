@@ -151,22 +151,41 @@ export async function resolveMayhemMode(
  * first minute. The scan asks again as before.
  */
 export async function setAsideMayhemLaunches(mintAddresses: string[], helius: HeliusClient): Promise<number> {
-  if (mintAddresses.length === 0) return 0;
+  return (await screenOutMayhem(mintAddresses, helius)).setAside;
+}
+
+/**
+ * The launches among `mintAddresses` confirmed NOT Mayhem, by the same lookup as
+ * setAsideMayhemLaunches (which it runs: the Mayhem ones are set aside). A launch the lookup could
+ * not answer is left out, to be asked again; nothing unverified is let through.
+ */
+export async function screenOutMayhem(
+  mintAddresses: string[],
+  helius: HeliusClient,
+): Promise<{ clear: string[]; setAside: number }> {
+  if (mintAddresses.length === 0) return { clear: [], setAside: 0 };
   try {
     const found = await resolveMayhemMode(mintAddresses, helius, { backOffFailures: false });
-    return await ignoreMayhemMints(
+    const setAside = await ignoreMayhemMints(
       [...found].filter(([, m]) => m.status === "found" && m.isMayhemMode).map(([mint]) => mint),
     );
+    const clear = [...found].filter(([, m]) => m.status === "found" && !m.isMayhemMode).map(([mint]) => mint);
+    return { clear, setAside };
   } catch (err) {
     // The scan's own lookup still catches them, as before this existed.
     logger.warn("mayhem check at discovery failed", { count: mintAddresses.length, error: String(err) });
-    return 0;
+    return { clear: [], setAside: 0 };
   }
 }
 
 /** Whether `mintAddress` is known, in this process, to be a Mayhem Mode coin. */
 export function knownMayhem(mintAddress: string): boolean {
   return settledMayhem.take([mintAddress]).get(mintAddress) === true;
+}
+
+/** Whether `mintAddress` is known, in this process, NOT to be a Mayhem Mode coin. */
+export function knownNotMayhem(mintAddress: string): boolean {
+  return settledMayhem.take([mintAddress]).get(mintAddress) === false;
 }
 
 /** Mints already taken off the watchlist by this process - spares rewriting them every cycle. */

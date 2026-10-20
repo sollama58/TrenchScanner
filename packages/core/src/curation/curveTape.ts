@@ -321,6 +321,16 @@ export class CurveTape {
     };
   }
 
+  /**
+   * The curve's price now (lamports per raw token unit), or null when the tape is not current or
+   * the curve is not priced in SOL (one SOL-wide conversion to dollars covers the rest).
+   */
+  priceNow(mint: string, now: number): number | null {
+    const tape = this.tapes.get(mint);
+    if (!tape || tape.complete || !tape.quoteIsSol || now - tape.confirmedAt > CURVE_GAP_MS) return null;
+    return tape.ticks[tape.ticks.length - 1]?.price ?? null;
+  }
+
   /** Forgets a mint. */
   forget(mint: string): void {
     this.tapes.delete(mint);

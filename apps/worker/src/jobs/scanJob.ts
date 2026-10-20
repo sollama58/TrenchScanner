@@ -157,7 +157,13 @@ import {
   resolveLaunchTimes,
   resolvePreBondSeconds,
 } from "./launchTimes.js";
-import { ignoreMayhemMints, knownMayhem, resolveMayhemMode, setAsideMayhemLaunches } from "./mayhemMode.js";
+import {
+  ignoreMayhemMints,
+  knownMayhem,
+  knownNotMayhem,
+  resolveMayhemMode,
+  setAsideMayhemLaunches,
+} from "./mayhemMode.js";
 import { resolveRelaunchSiblings } from "./relaunchFarms.js";
 import { fillLaunchDetails, takeLaunchDetailStats } from "./launchDetails.js";
 import {
@@ -1049,7 +1055,10 @@ async function scanCycle(
     // one crosses (see BandEntryWatch).
     if (deps.bandEntryWatch && live) {
       const young = new Set(live.mints);
-      deps.bandEntryWatch.note(refreshed.marketData.filter((t) => young.has(t.mintAddress)));
+      // Only coins confirmed not Mayhem: one is never scanned, so it never wakes the scan.
+      deps.bandEntryWatch.note(
+        refreshed.marketData.filter((t) => young.has(t.mintAddress) && knownNotMayhem(t.mintAddress)),
+      );
     }
     // Each coin's launchpad, as discovery recorded it: a re-read from DexScreener doesn't say.
     const launchpadOf = new Map(tracked.map((t) => [t.mintAddress, t.launchpad]));
