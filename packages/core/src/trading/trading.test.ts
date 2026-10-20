@@ -1040,6 +1040,26 @@ describe("Jupiter swap client", () => {
     ).rejects.toBeInstanceOf(KeyRefusedError);
   });
 
+  it("leaves a cooling host out while another is ready, rather than adding its 429 to every failed call", async () => {
+    const hosts: string[] = [];
+    let keylessDown = false;
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      const key = new Headers(init?.headers).get("x-api-key");
+      hosts.push(key ?? "keyless");
+      if (key) return json({ error: "slow down" }, 429)();
+      return keylessDown ? json({ error: "busy" }, 503)() : json(quote)();
+    }) as typeof fetch;
+    const client = new JupiterSwapClient({ apiKey: "mine", fetchImpl });
+    const ask = { inputMint: OWNER, outputMint: quote.outputMint, amount: 1000n, slippageBps: 100 };
+    await client.quote(ask);
+    expect(hosts).toEqual(["mine", "keyless"]);
+    // The keyless host now fails too: the cooling key is not asked again behind it.
+    hosts.length = 0;
+    keylessDown = true;
+    await expect(client.quote(ask)).rejects.toBeInstanceOf(TransientError);
+    expect(hosts).toEqual(["keyless", "keyless"]);
+  });
+
   it("asks the keyless host first when told to, and keeps the keys as its fallback", async () => {
     const hosts: string[] = [];
     const fetchImpl = (async (url: string, init?: RequestInit) => {

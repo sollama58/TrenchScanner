@@ -1,4 +1,5 @@
 import { fetchJson, HttpError } from "../datasources/httpClient.js";
+import { rpcPauseFor } from "../datasources/helius.js";
 import { createLogger } from "../logger.js";
 import type { ParsedTransaction } from "./parseBurn.js";
 
@@ -158,6 +159,7 @@ export class SolanaRpc {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
         timeoutMs,
+        gate: rpcPauseFor(this.rpcUrl),
       });
       if (body.error) {
         logger.warn("rpc error", { method, code: body.error.code, message: body.error.message });
@@ -235,6 +237,9 @@ export class SolanaRpc {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
         timeoutMs: 30_000,
+        // The endpoint's shared pause (HeliusClient's): ungated, a 429 on these batches of up to
+        // 50 reads paused nothing else in the process, and their retries went back on their own.
+        gate: rpcPauseFor(this.rpcUrl),
       });
       // Some endpoints refuse a batch with a 200 and a single error object rather than a 4xx
       // (plan-gated batching answers this way). Unlatched, that failed every fetch on every pass

@@ -595,6 +595,12 @@ services:
         value: "660"
       - key: WORKER_ROLE
         value: trainer
+      # Its own DexScreener budget, out of the per-IP 300 a minute the scanner (180) and the api
+      # (120) already take between them. At the default 180 the daily outcome pass could push the
+      # three past the limit together (inferred from 429s in the API usage panel, 2026-10-20). It reads
+      # one batch at a time, so 60 a minute still finishes thousands of mints in minutes.
+      - key: DEXSCREENER_REQUESTS_PER_MINUTE
+        value: "60"
       - key: ANTHROPIC_API_KEY
         sync: false
       # Optional: the same CoinGecko key as on the api and worker. The nightly outcome sweep

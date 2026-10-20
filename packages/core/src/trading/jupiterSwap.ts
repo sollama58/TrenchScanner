@@ -239,7 +239,7 @@ function fromJupiterInstruction(ix: JupiterInstruction): InstructionSpec {
 interface JupiterRoute {
   baseUrl: string;
   headers: Record<string, string>;
-  /** Rate limited until then (epoch ms): the other routes go first. */
+  /** Rate limited until then (epoch ms): skipped while another route is ready. */
   coolUntil: number;
 }
 
@@ -292,7 +292,11 @@ export class JupiterSwapClient implements SwapClient {
     opts: { timeoutMs?: number } = {},
   ): Promise<Response> {
     const now = Date.now();
-    const order = [...this.routes].sort((a, b) => Number(a.coolUntil > now) - Number(b.coolUntil > now));
+    // Only routes not cooling down, unless every route is: a host that answered 429 seconds ago
+    // almost always answers it again, and trying it after the others failed only added a 429 to
+    // each failed call (and on a bot's 5-second price tick, every tick).
+    const ready = this.routes.filter((r) => r.coolUntil <= now);
+    const order = ready.length > 0 ? ready : [...this.routes].sort((a, b) => a.coolUntil - b.coolUntil);
     const failures: unknown[] = [];
     for (const [i, r] of order.entries()) {
       try {

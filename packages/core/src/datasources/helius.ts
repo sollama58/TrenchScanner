@@ -290,11 +290,12 @@ const PUBLIC_FALLBACK_RPC = "https://solana-rpc.publicnode.com";
  * endpoint until the backoff passes, so the other batches in flight stop firing into the same
  * limit and a retry waits out the pause instead of hitting the wall again half a second later
  * (audit 2026-10-14, L6 R4). The rate is set far above any plan's so the gate only ever pauses;
- * pacing stays with each job's own per-cycle budgets.
+ * pacing stays with each job's own per-cycle budgets. Exported for the RPC readers that are not a
+ * HeliusClient (SolanaRpc), so their 429s pause the same endpoint and they wait out its pauses.
  */
 const rpcPauses = new Map<string, RateGate>();
 
-function rpcPauseFor(rpcUrl: string, lane?: string): RateGate {
+export function rpcPauseFor(rpcUrl: string, lane?: string): RateGate {
   const key = lane ? `${rpcUrl}#${lane}` : rpcUrl;
   let gate = rpcPauses.get(key);
   if (!gate) {
