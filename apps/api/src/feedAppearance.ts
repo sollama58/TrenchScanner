@@ -254,6 +254,8 @@ export const feedAppearanceSchema = z
     chartMarkMinSol: z.number().min(CHART_MARK_MIN_SOL).max(CHART_MARK_MAX_SOL).default(0.5),
     /** KOLs' trades are marked with their X pictures rather than a letter (user ask 2026-10-19); on by default. */
     chartMarkPics: z.boolean().default(true),
+    /** How big those marks draw: small, medium or large (user ask 2026-10-20); medium by default. */
+    chartMarkScale: z.enum(["s", "m", "l"]).default("m"),
     /** The token chart draws a line or candles (user ask 2026-10-18); a line by default. */
     chartStyle: z.enum(["line", "candles"]).default("line"),
     /** The view the token chart opens on (user ask 2026-10-19): Trading, the latest at the right edge, or All. */
@@ -326,6 +328,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   chartMarksRev: CHART_MARKS_REV,
   chartMarkMinSol: 0.5,
   chartMarkPics: true,
+  chartMarkScale: "m",
   chartStyle: "line",
   chartView: "trading",
   chartPathing: false,

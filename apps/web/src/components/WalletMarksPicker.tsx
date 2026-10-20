@@ -83,10 +83,42 @@ export function WalletMarksPicker() {
         />
         Show KOLs by their X pictures
       </label>
+      <div className={`cm-scale${on ? "" : " off"}`}>
+        <span>Mark size</span>
+        <div className="segmented small" role="radiogroup" aria-label="Trade mark size">
+          {(
+            [
+              ["s", "Small"],
+              ["m", "Medium"],
+              ["l", "Large"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={look.chartMarkScale === id}
+              className={look.chartMarkScale === id ? "on" : ""}
+              disabled={!on}
+              title={
+                id === "s"
+                  ? "Smaller rings and pictures"
+                  : id === "l"
+                    ? "Larger rings and pictures"
+                    : "The usual size"
+              }
+              onClick={() => setAppearance({ chartMarkScale: id })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
       <p className="faint small check-hint">
         Buys hang under the price and sales sit over it, bigger for more SOL. A filled ring is a buy, a hollow
-        one a sale; a KOL&apos;s picture is ringed green for a buy, red for a sale. Click a mark to open the
-        wallet. Never under {MIN_SOL_FLOOR} SOL.
+        one a sale; a KOL&apos;s picture is ringed green for a buy, red for a sale. Small, medium and large
+        scale both the rings and the pictures. Click a mark to open the wallet. Never under {MIN_SOL_FLOOR}{" "}
+        SOL.
       </p>
     </div>
   );

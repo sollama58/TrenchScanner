@@ -244,6 +244,10 @@ export function solText(sol: number): string {
   return sol < 10 ? sol.toFixed(2) : sol < 100 ? sol.toFixed(1) : Math.round(sol).toString();
 }
 
+/** How big chart trade marks draw: small, medium or large (Customize › Chart wallet trades). */
+export const MARK_SCALE = { s: 0.75, m: 1, l: 1.35 } as const;
+export type MarkScale = keyof typeof MARK_SCALE;
+
 /** A mark's ring radius in px, growing with the trade's size: 6 at the floor, 10 at 50 SOL or more. */
 export function markRadius(sol: number): number {
   const f = Math.min(1, Math.log10(Math.max(1, sol / MIN_SOL_FLOOR)) / Math.log10(50 / MIN_SOL_FLOOR));

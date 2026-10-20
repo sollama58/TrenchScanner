@@ -29,7 +29,7 @@ import {
   timeframeFits,
   type Slots,
 } from "../chartBars";
-import { Drawings, type DrawScale, type DrawTool } from "../chartDrawings";
+import { Drawings, FIB_LEVELS, type DrawScale, type DrawTool } from "../chartDrawings";
 import { bollinger, ema, rsi, sma } from "../chartIndicators";
 import {
   flowAt,
@@ -41,7 +41,7 @@ import {
   type VolumeCandle,
 } from "../priceChart";
 import type { PathStep } from "../pricePathing";
-import type { WalletMark } from "../walletMarks";
+import { MARK_SCALE, type MarkScale, type WalletMark } from "../walletMarks";
 import { atLiveEnd, markAt, type PlacedMark } from "../chartMarkLayout";
 import { API_URL } from "../api";
 import { openWallet } from "../walletModal";
@@ -93,6 +93,26 @@ const TIMEFRAME_KEY = "ts.chartTimeframe";
 const LOG_SCALE_KEY = "ts.chartLogScale";
 const INDICATORS_KEY = "ts.chartIndicators";
 const DRAWINGS_KEY = "ts.chartDrawings";
+const FIB_LEVELS_KEY = "ts.chartFibLevels";
+const TREND_EXTEND_KEY = "ts.chartTrendExtend";
+
+function readFibLevels(): number[] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(FIB_LEVELS_KEY) ?? "null");
+    if (!Array.isArray(raw)) return [...FIB_LEVELS];
+    const on = FIB_LEVELS.filter((lv) => raw.some((n) => typeof n === "number" && Math.abs(n - lv) < 1e-6));
+    return on.length ? [...on] : [...FIB_LEVELS];
+  } catch {
+    return [...FIB_LEVELS];
+  }
+}
+function readTrendExtend(): boolean {
+  try {
+    return localStorage.getItem(TREND_EXTEND_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 function readTimeframe(): number | null {
   try {
@@ -235,6 +255,7 @@ export function TradingChart({
   flow = [],
   marks: marksIn = NO_MARKS,
   markPics = true,
+  markScale = "m",
   trades: tradesIn = NO_TRADES,
   live = false,
   entry = null,
@@ -260,6 +281,8 @@ export function TradingChart({
   marks?: WalletMark[];
   /** KOLs' marks as their X pictures, where a mark has one (Customize › Chart wallet trades). */
   markPics?: boolean;
+  /** How big those marks draw: the lettered rings and the pictures (Customize › Chart wallet trades). */
+  markScale?: MarkScale;
   /** Pro Mode: the trader's own buys and sells. */
   trades?: ChartTrade[];
   /** The view runs to now: a trade read before its candle is drawn sits on the newest candle. */
@@ -413,6 +436,15 @@ export function TradingChart({
     () => new Drawings(`${DRAWINGS_KEY}.${mint}`, () => setDrawTick((n) => n + 1)),
     [mint],
   );
+  const [fibOn, setFibOn] = useState(readFibLevels);
+  const [extendTrend, setExtendTrend] = useState(readTrendExtend);
+  useEffect(() => {
+    drawings.setFibLevels(fibOn);
+  }, [drawings, fibOn]);
+  useEffect(() => {
+    drawings.setExtendTrend(extendTrend);
+  }, [drawings, extendTrend]);
+  const markFactor = MARK_SCALE[markScale] ?? 1;
 
   const colors = useMemo(
     () => (mounted && boxRef.current ? readColors(boxRef.current) : null),
@@ -769,6 +801,7 @@ export function TradingChart({
         path.length > 1 && lastX !== null ? { x0: lastX + bs / 2 + 4, w: pathZoneW(plotW) - 8 } : null,
       hot,
       pic: (m) => (markPics ? picOf(m) : null),
+      markScale: markFactor,
       drawings,
       drawScale: dScale,
       label: axisUsd,
@@ -937,16 +970,32 @@ export function TradingChart({
   const vsRef = cur && ref ? change(ref.v, cur.c) : null;
   const tool = drawings.tool;
   const hint = tool
-    ? drawings.placing
-      ? tool === "trend"
-        ? `${phone ? "Tap" : "Click"} the second point`
-        : `${phone ? "Tap" : "Click"} the end of the move (level 0)`
-      : tool === "trend"
-        ? `${phone ? "Tap" : "Click"} the start of the trendline`
-        : `${phone ? "Tap" : "Click"} the start of the move (level 1)`
+    ? tool === "level"
+      ? `${phone ? "Tap" : "Click"} the price`
+      : drawings.placing
+        ? tool === "trend"
+          ? `${phone ? "Tap" : "Click"} the second point`
+          : `${phone ? "Tap" : "Click"} the end of the move (level 0)`
+        : tool === "trend"
+          ? `${phone ? "Tap" : "Click"} the start of the trendline`
+          : `${phone ? "Tap" : "Click"} the start of the move (level 1)`
     : drawings.selectedId
       ? "Drawing selected. Delete removes it."
       : null;
+  const showFib = tool === "fib" || drawings.selectedType === "fib";
+  const showExtend = tool === "trend" || drawings.selectedType === "trend";
+  const toggleFib = (lv: number) => {
+    const has = fibOn.some((n) => Math.abs(n - lv) < 1e-6);
+    const next = has ? fibOn.filter((n) => Math.abs(n - lv) >= 1e-6) : [...fibOn, lv].sort((a, b) => a - b);
+    if (!next.length) return;
+    setFibOn(next);
+    keep(FIB_LEVELS_KEY, JSON.stringify(next));
+  };
+  const toggleExtend = () => {
+    const next = !extendTrend;
+    setExtendTrend(next);
+    keep(TREND_EXTEND_KEY, next ? "1" : null);
+  };
   const plotH = height + TIME_AXIS_PX + (ind.has("rsi") ? Math.round(height * 0.3) : 0);
 
   const rail = (
@@ -960,6 +1009,15 @@ export function TradingChart({
         <line x1="5" y1="19" x2="19" y2="5" />
         <circle cx="5" cy="19" r="2" fill="currentColor" />
         <circle cx="19" cy="5" r="2" fill="currentColor" />
+      </DrawButton>
+      <DrawButton
+        tool="level"
+        active={tool}
+        onPick={(t) => drawings.setTool(t)}
+        title={phone ? "Price level: tap the price" : "Price level: click the price"}
+      >
+        <line x1="3" y1="12" x2="21" y2="12" />
+        <circle cx="12" cy="12" r="2.2" fill="currentColor" />
       </DrawButton>
       <DrawButton
         tool="fib"
@@ -1209,6 +1267,37 @@ export function TradingChart({
           </div>
           {phone && rail}
         </div>
+        {(showFib || showExtend) && (
+          <div className="tc-draw-opts" role="group" aria-label="Drawing options">
+            {showExtend && (
+              <button
+                type="button"
+                className={`tc-chip${extendTrend ? " on" : ""}`}
+                aria-pressed={extendTrend}
+                title="Run the trendline past both points"
+                onClick={toggleExtend}
+              >
+                Extend
+              </button>
+            )}
+            {showFib &&
+              FIB_LEVELS.map((lv) => {
+                const on = fibOn.some((n) => Math.abs(n - lv) < 1e-6);
+                return (
+                  <button
+                    key={lv}
+                    type="button"
+                    className={`tc-chip${on ? " on" : ""}`}
+                    aria-pressed={on}
+                    title={`Fibonacci ${lv}`}
+                    onClick={() => toggleFib(lv)}
+                  >
+                    {lv}
+                  </button>
+                );
+              })}
+          </div>
+        )}
       </div>
 
       <div className="tc-body">
@@ -1276,7 +1365,7 @@ export function TradingChart({
                   {markPics && m.avatar ? (
                     <KolAvatar
                       src={m.avatar}
-                      className={`tc-mark-pic ${m.side}`}
+                      className={`tc-mark-pic ${m.side} sz-${markScale}`}
                       fallback={<i className={`pc-mark-dot ${m.side}`} aria-hidden="true" />}
                     />
                   ) : (
@@ -1348,7 +1437,7 @@ function DrawButton({
       className={`tc-tool${on ? " on" : ""}`}
       aria-pressed={on}
       title={title}
-      aria-label={tool === "trend" ? "Trendline" : "Fibonacci retracement"}
+      aria-label={tool === "trend" ? "Trendline" : tool === "level" ? "Price level" : "Fibonacci retracement"}
       onClick={() => onPick(tool)}
     >
       <svg
@@ -1421,6 +1510,7 @@ function emptyOverlay(): OverlayState {
     path: [],
     pathZone: null,
     hot: new Set(),
+    markScale: 1,
     drawings: null,
     drawScale: null,
     label: axisUsd,
