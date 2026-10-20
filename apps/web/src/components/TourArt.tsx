@@ -374,7 +374,7 @@ export function YoursArt() {
         Hide below
       </text>
       <text x="364" y="40" className="label" textAnchor="end">
-        $10k
+        $7k
       </text>
       <path className="slider-track" d="M212 58 H364" />
       <path className="slider-fill" d="M212 58 H262" />
