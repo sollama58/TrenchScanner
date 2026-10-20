@@ -809,10 +809,19 @@ export function gatedTrainingSet(
   rows: readonly TrainingRow[],
   gate: Parameters<typeof passesModelGateOnFeatures>[1],
 ): TrainingRow[] {
-  const onsets = gateInputOnsets(rows);
+  const onsets = gateInputOnsets(rows.map(gateView));
   return rows.filter((r) =>
-    passesModelGateOnFeatures(r.features, gate, unrecordedGateInputs(r.anchorAt, onsets)),
+    passesModelGateOnFeatures(gateView(r).features, gate, unrecordedGateInputs(r.anchorAt, onsets)),
   );
+}
+
+/**
+ * The inputs a gated seat's filter reads on a training row: its features with the era-masked
+ * readings the row stored put back (TrainingRow.gateInputs, user decision 2026-10-20).
+ */
+export function gateView(row: TrainingRow): Pick<TrainingRow, "anchorAt" | "features"> {
+  if (row.gateInputs === undefined) return row;
+  return { anchorAt: row.anchorAt, features: { ...row.features, ...row.gateInputs } };
 }
 
 /** Fewest deep-read rows the Narrative seat's exam runs on: under this its cutoff would be a coin flip. */
@@ -1187,12 +1196,13 @@ export async function runEvolvingContest(
   // or lets through too few decision moments.
   // A gate criterion on an input recorded only partway through the window skips the rows banked
   // before it (unrecordedGateInputs) instead of failing them all.
-  const gateOnsets = gatedSpecs.length > 0 ? gateInputOnsets(rows) : new Map<string, number>();
+  // The filter reads the stored values of era-masked inputs (gateView), the learners don't.
+  const gateOnsets = gatedSpecs.length > 0 ? gateInputOnsets(rows.map(gateView)) : new Map<string, number>();
   for (const spec of gatedSpecs) {
     const gate = spec.gate !== undefined ? cfg.gates?.[spec.gate] : undefined;
     if (spec.gate !== undefined && !gate) continue;
     const seatRows = rows.filter((r) =>
-      seatConsiders(spec, r.features, gate, unrecordedGateInputs(r.anchorAt, gateOnsets)),
+      seatConsiders(spec, gateView(r).features, gate, unrecordedGateInputs(r.anchorAt, gateOnsets)),
     );
     if (seatRows.filter((r) => isDecisionRow(r, cfg.mcapBand)).length < GATED_MIN_ROWS) continue;
     const ownFeatures = runFeatures(seatRows, cfg);

@@ -96,4 +96,21 @@ describe("askBefore", () => {
     promptRequest()!.done(false);
     await expect(burning).rejects.toBeInstanceOf(TwoFactorCancelled);
   });
+
+  it("lets an export go ahead when the settings can't be read, but not a burn (user decision 2026-10-20)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+    await expect(askBefore("export")).resolves.toBeUndefined();
+    await expect(askBefore("burn")).rejects.toThrow();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ error: "down" }, { status: 503 })),
+    );
+    await expect(askBefore("export")).resolves.toBeUndefined();
+    expect(promptRequest()).toBeNull();
+  });
 });

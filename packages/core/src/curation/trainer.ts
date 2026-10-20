@@ -119,6 +119,14 @@ export interface TrainingRow {
    * crash model predicts (see ReturnRisk). Omitted when unknown.
    */
   crashed?: boolean;
+  /**
+   * The stored readings of the inputs maskKnownBadInputs cleared on this row as from another era
+   * that a gated seat's frozen filter still reads (HOLDER_TRANSFER_LINKED_FEATURES: the creator
+   * share, KOL Bundled % and Bundled % before HOLDER_TRANSFER_LINKS_READ_SINCE). The gate decides
+   * on what the row stored, so its population isn't widened by the mask (user decision
+   * 2026-10-20); the learners still read them as missing. Omitted when nothing was cleared.
+   */
+  gateInputs?: Record<string, number | null | undefined>;
 }
 
 /**

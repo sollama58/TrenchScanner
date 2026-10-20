@@ -210,6 +210,17 @@ services:
       # only needs a value to point at a different paid RPC.
       - key: SOLANA_RPC_URL
         sync: false
+      # Pro trades (routes/proTrade.ts, proTrades.ts, trading.ts), all optional: a second RPC from
+      # another provider, asked when the first gives no answer and sent every transaction too;
+      # Pro trades' own Jupiter key (empty: Jupiter's keyless hosts); and Helius Sender's endpoint
+      # (empty: the global https://sender.helius-rpc.com/fast). Declared so they survive a Blueprint
+      # re-create (user decision 2026-10-20).
+      - key: TRADING_BACKUP_RPC_URL
+        sync: false
+      - key: PRO_TRADING_JUPITER_API_KEY
+        sync: false
+      - key: HELIUS_SENDER_URL
+        sync: false
       # Email sign-in through Privy (apps/api/src/privy.ts): on only when all three are set, from the
       # Privy dashboard (App settings: App ID, App secret, and the JWKS endpoint, an https URL on
       # auth.privy.io). JWT_SECRET also keeps two-factor secrets sealed, so rotating it
