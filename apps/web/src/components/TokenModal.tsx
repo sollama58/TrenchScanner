@@ -77,6 +77,7 @@ import {
   WalletStat,
   ageNow,
 } from "./AlertCard";
+import { ChartEventsPicker } from "./ChartEventsPicker";
 import { CHART_MARKS_SECTION, WalletMarksPicker } from "./WalletMarksPicker";
 import { BubbleMapControls, ChartControls, Choice, QuickLinkChecks } from "./AppearancePanel";
 import { TradingSettingsPanel } from "./TradingSettingsPanel";
@@ -99,6 +100,7 @@ import {
   withLabeledTraders,
   withLiveMarks,
 } from "../walletMarks";
+import { chartFlagKind } from "../chartEvents";
 import { TradingChart, type ChartEvent, type ChartKind, type ChartTrade } from "./TradingChart";
 import { TokenPairBalances } from "./HeaderBalances";
 import { TradePanel, solText, tokensText } from "./TradePanel";
@@ -1623,6 +1625,7 @@ function ProCustomize({
           Candle size, indicators, log scale and drawings are on the chart&apos;s own toolbar.
         </p>
         <WalletMarksPicker />
+        <ChartEventsPicker />
       </fieldset>
       <fieldset>
         <legend>Bubble map</legend>
@@ -2365,12 +2368,24 @@ export function ChartCard({
   const height = inTerminal ? (plotHeight ?? terminalChartHeight()) : chartHeight(expanded);
 
   const events = useMemo<ChartEvent[]>(() => {
-    const out: ChartEvent[] = [{ t: alertAt, label: what, mcap: alertMcap > 0 ? alertMcap : null }];
+    const out: ChartEvent[] = [
+      {
+        t: alertAt,
+        label: what,
+        mcap: alertMcap > 0 ? alertMcap : null,
+        kind: chartFlagKind(what, "primary", card.kind),
+      },
+    ];
     // A graduated coin's first pass in the band, which the line is coloured from when nothing
     // alerted it first (user report 2026-10-19: it passed at $12K, not at graduation's $65.5K).
     const pass = card.firstPass ? Date.parse(card.firstPass.at) : NaN;
     if (Number.isFinite(pass) && pass < alertAt - 30_000)
-      out.push({ t: pass, label: "Passed screen", mcap: card.firstPass!.mcapUsd });
+      out.push({
+        t: pass,
+        label: "Passed screen",
+        mcap: card.firstPass!.mcapUsd,
+        kind: chartFlagKind("Passed screen", "screen"),
+      });
     // Every other model that called it, once each, at its own call time - on a filter alert a
     // call folded into, its call(s) too.
     const curated = card.curated;
@@ -2382,9 +2397,10 @@ export function ChartCard({
     for (const c of calls) {
       const t = Date.parse(c.alertedAt);
       if (!Number.isFinite(t) || Math.abs(t - alertAt) < 30_000) continue;
-      out.push({ t, label: c.modelName ?? "Model" });
+      const label = c.modelName ?? "Model";
+      out.push({ t, label, kind: chartFlagKind(label, "model") });
     }
-    // Earliest first: the chart marks the first as the lead and colours the line from it.
+    // Earliest first: the chart marks the first shown flag as the lead and colours the line from it.
     return out.sort((a, b) => a.t - b.t);
   }, [alertAt, alertMcap, what, card.kind, card.curated, card.firstPass]);
 

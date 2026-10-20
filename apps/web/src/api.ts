@@ -1849,6 +1849,16 @@ export interface FeedAppearance {
   chartView: "trading" | "all";
   /** Experimental: draw the predicted price path on the token chart (absent from older API builds: off). */
   chartPathing: boolean;
+  /**
+   * Which event flags the token chart draws (chartEvents.ts). Passed screen is off unless listed.
+   * Absent from older API builds: every kind but the screen pass.
+   */
+  chartEventKinds: ("alert" | "screen" | "filter" | "model" | "graduation" | "scanned")[];
+  /**
+   * Of these kinds, only the earliest flag is drawn. Filter and model by default, not alert.
+   * Absent from older API builds: filter and model.
+   */
+  chartEventFirst: ("alert" | "filter" | "model")[];
   hidden: CardField[];
 }
 

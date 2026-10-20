@@ -1,5 +1,12 @@
 import { useSyncExternalStore, type CSSProperties } from "react";
 import { put, type CardField, type FeedAppearance, type QuickLink } from "./api";
+import {
+  CHART_EVENT_FIRST_KINDS,
+  CHART_EVENT_KINDS,
+  DEFAULT_CHART_EVENT_FIRST,
+  DEFAULT_CHART_EVENT_KINDS,
+  chartEventChoice,
+} from "./chartEvents";
 
 /**
  * How the Live feed looks: theme, colors, spacing, columns and which card fields show. Saved to
@@ -110,6 +117,10 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   chartView: "trading",
   // Experimental and off unless the reader turns it on (user ask 2026-10-18).
   chartPathing: false,
+  // Which event flags the token chart draws (chartEvents.ts). Passed screen starts off; only the
+  // first filter and the first model are drawn.
+  chartEventKinds: [...DEFAULT_CHART_EVENT_KINDS],
+  chartEventFirst: [...DEFAULT_CHART_EVENT_FIRST],
   // Off by default, all switchable back on in Customize: the composite score tile, so the stat tiles
   // fill a clean 4 x 2 grid, the header's "≈N% 2x" pill and the 1st Buyers Holding tile, which Snipers replaced (user asks 2026-10-14).
   // An account that saved its own field list keeps that list.
@@ -381,6 +392,8 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     chartStyle: r.chartStyle === "candles" || r.chartStyle === "line" ? r.chartStyle : d.chartStyle,
     chartView: r.chartView === "trading" || r.chartView === "all" ? r.chartView : d.chartView,
     chartPathing: typeof r.chartPathing === "boolean" ? r.chartPathing : d.chartPathing,
+    chartEventKinds: chartEventChoice(r.chartEventKinds, CHART_EVENT_KINDS, d.chartEventKinds),
+    chartEventFirst: chartEventChoice(r.chartEventFirst, CHART_EVENT_FIRST_KINDS, d.chartEventFirst),
     hidden: Array.isArray(r.hidden)
       ? [...new Set(r.hidden.filter((f): f is CardField => typeof f === "string" && CARD_FIELDS.has(f)))]
       : d.hidden,
@@ -449,6 +462,8 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartStyle,
     chartView,
     chartPathing,
+    chartEventKinds,
+    chartEventFirst,
     bubbleRefreshSeconds,
   } = current;
   return normalizeAppearance({
@@ -485,6 +500,8 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartStyle,
     chartView,
     chartPathing,
+    chartEventKinds,
+    chartEventFirst,
     bubbleRefreshSeconds,
   });
 }
