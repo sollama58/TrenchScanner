@@ -11,6 +11,7 @@ import {
   type HeliusClient,
 } from "@trenchscanner/core";
 import { MAX_WAIT_MS } from "./liveCurve.js";
+import type { LiveTraderLabel } from "./liveTraderLabels.js";
 import type { QuotePrice, SolPrice } from "./solPrice.js";
 
 const logger = createLogger("live-trades");
@@ -74,6 +75,11 @@ export interface LiveTradesAnswer {
    * shares between holder reads (user ask 2026-10-19).
    */
   supply?: number;
+  /**
+   * The KOL ties of the answer's traders that have one (liveTraderLabels.ts), so a KOL's trade is
+   * marked as it lands. Added by the route; absent without trades.
+   */
+  labels?: Record<string, LiveTraderLabel>;
 }
 
 export interface LiveTokenTrade {

@@ -88,10 +88,12 @@ import {
 } from "./TermSplit";
 import {
   keepMarkSources,
+  labelAvatars,
   markPrefsOf,
   picWallets as picWalletsOf,
   walletMarks,
   withAvatars,
+  withLabeledTraders,
   withLiveMarks,
 } from "../walletMarks";
 import { TradingChart, type ChartEvent, type ChartKind, type ChartTrade } from "./TradingChart";
@@ -2100,6 +2102,8 @@ function useLiveShares(mint: string, kept: boolean): LiveTradeShares | null {
 
 /** No traders: the side read asks for nothing. */
 const NO_TRADERS: readonly string[] = [];
+/** useWalletNames' options for the chart's traders: TrenchScanner's own names, no Helius read. */
+const OWN_NAMES = { identity: false };
 
 /**
  * A row of tabs that scrolls sideways when the picker beside it leaves too little room (user ask
@@ -2285,13 +2289,15 @@ export function ChartCard({
   // pushed out of those within a minute or two, and its mark went with it (the trade tape only
   // reads the half hour after the call).
   const liveTraders = useBatchedWallets(liveFeed.history);
-  const liveNames = useWalletNames(liveTraders);
+  // TrenchScanner's own names only (user ask 2026-10-20: Helius's rarely matter here); the feed's
+  // labels bring KOLs, their sides and the wallet book's flags with each trade.
+  const liveNames = useWalletNames(liveTraders, OWN_NAMES);
   // KOL ties are read for every trader only while funded wallets or Probable Sides are marked.
   const sideMarks = markPrefs.on && markPrefs.kinds.some((k) => k === "funded" || k === "probable");
   const liveSides = usePossibleSides(sideMarks ? liveTraders : NO_TRADERS);
   const marked = useMemo(
-    () => withLiveMarks(labeled, liveFeed.history, liveNames, liveSides),
-    [labeled, liveFeed.history, liveNames, liveSides],
+    () => withLiveMarks(withLabeledTraders(labeled, liveFeed.labels), liveFeed.history, liveNames, liveSides),
+    [labeled, liveFeed.labels, liveFeed.history, liveNames, liveSides],
   );
   const plainMarks = useMemo(
     () => walletMarks(marked, markPrefs, new Set(pro ? [pro] : [])),
@@ -2303,10 +2309,13 @@ export function ChartCard({
     () => (look.chartMarkPics ? picWalletsOf(plainMarks) : NO_TRADERS),
     [plainMarks, look.chartMarkPics],
   );
-  const picNames = useWalletNames(picWallets);
+  const picNames = useWalletNames(picWallets, OWN_NAMES);
   const marks = useMemo(
-    () => (look.chartMarkPics ? withAvatars(plainMarks, picNames) : plainMarks),
-    [plainMarks, picNames, look.chartMarkPics],
+    () =>
+      look.chartMarkPics
+        ? withAvatars(plainMarks, { ...labelAvatars(liveFeed.labels), ...picNames })
+        : plainMarks,
+    [plainMarks, picNames, liveFeed.labels, look.chartMarkPics],
   );
 
   // The view's window over the minute data, before the finer reads that fill it in.

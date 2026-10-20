@@ -31,6 +31,8 @@ type SideFilter = "all" | "buy" | "sell";
 const TALLY_MS = 5 * 60_000;
 /** Wallet names are asked for this often at most, so a busy coin's new traders come in batches. */
 const NAMES_EVERY_MS = 5_000;
+/** useWalletNames' options for the traders: no Helius read. */
+const OWN_NAMES = { identity: false };
 /** Rows drawn at most: the newest. */
 const SHOWN = 120;
 
@@ -210,7 +212,8 @@ export function LiveTradesCard({
   const panelId = useId();
   const now = useNow();
   const traders = useBatchedWallets(feed.trades);
-  const names = useWalletNames(traders);
+  // TrenchScanner's own names only: Helius's rarely matter for traders (user ask 2026-10-20).
+  const names = useWalletNames(traders, OWN_NAMES);
   // KOL ties are read for every trader only while a side label is picked: otherwise names and the
   // coin's own read are all the filter needs.
   const needSides = filter.labels.some((l) => SIDE_LABELS.has(l));
