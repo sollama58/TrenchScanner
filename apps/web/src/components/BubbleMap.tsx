@@ -2474,8 +2474,13 @@ export function BubbleMapSection({
             }
           >
             {moment.at !== undefined && Number.isFinite(moment.at) ? (
-              // What the map last drew: its reading, or a live trade since, as of its last redraw.
-              <SecondsAgo at={drawn ? drawn.at : moment.at} />
+              // Live while the trades feed moves its shares (user ask 2026-10-20: one state,
+              // whichever is true); else what the map last drew: its reading, or a live trade since.
+              heldLive?.live ? (
+                "Live"
+              ) : (
+                <SecondsAgo at={drawn ? drawn.at : moment.at} />
+              )
             ) : (
               moment.label
             )}

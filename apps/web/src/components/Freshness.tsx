@@ -27,7 +27,9 @@ function subscribeClock(listener: () => void): () => void {
  * Every stamp shares the one tick, so the header, the map's badge and the lists agree.
  */
 export function useSecondTick(): number {
-  return useSyncExternalStore(subscribeClock, () => clock);
+  const read = () => clock;
+  // The same clock on a server render (the tests' renderToStaticMarkup).
+  return useSyncExternalStore(subscribeClock, read, read);
 }
 
 /** How long ago, to the second: "12s ago", "3m 05s ago", "2h 04m ago", "3d ago". */
@@ -84,7 +86,8 @@ export function SecondsAgo({ at }: { at: number }) {
  * A section's freshness beside its count: "12s ago · Next update in 0:48" (user ask 2026-10-19).
  * `next` is when the view reads again (the update shows then): a time, or a poll's beat; null
  * when no update is coming (the coin is no longer scanned), so only the age shows. `late`: see
- * nextUpdateText.
+ * nextUpdateText. `live`: the shares move with each trade, so "Live" stands alone (user ask
+ * 2026-10-20: one state, whichever is true); the read times stay in the title.
  */
 export function LiveStamp({
   last,
@@ -97,7 +100,7 @@ export function LiveStamp({
   next: number | { from: number; every: number } | null;
   late?: boolean;
   title?: string;
-  /** Shares move with each live trade between reads (user ask 2026-10-19): says so after the stamp. */
+  /** Shares move with each live trade between reads (user ask 2026-10-19): "Live" in place of the stamp. */
   live?: boolean;
 }) {
   const now = useSecondTick();
@@ -110,9 +113,14 @@ export function LiveStamp({
         (live ? ". Shares move with each trade until then; links and tags come with each read." : "")
       }
     >
-      {secondsAgo(last, now)}
-      {at !== null && <> · {nextUpdateText(at, now, late)}</>}
-      {live && <> · Live</>}
+      {live ? (
+        "Live"
+      ) : (
+        <>
+          {secondsAgo(last, now)}
+          {at !== null && <> · {nextUpdateText(at, now, late)}</>}
+        </>
+      )}
     </span>
   );
 }

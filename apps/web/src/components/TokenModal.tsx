@@ -794,7 +794,7 @@ function TokenBody({
   // list follows the scans; the labeled wallets, the chart read they come from.
   const holdersFresh =
     !holders.isKept && holders.listReading && hasHolderList(holders.listReading)
-      ? { ...holderFreshness(holders.listReading, now, reads), live: !!liveShares }
+      ? { ...holderFreshness(holders.listReading, now, reads), live: !!liveShares?.live }
       : undefined;
   // The chart read's own beat, which the wallets come with.
   const walletsFresh = chart.at === null ? undefined : { last: chart.at, next: chart.schedule ?? null };
@@ -2095,8 +2095,8 @@ function useLiveShares(mint: string, kept: boolean): LiveTradeShares | null {
     () =>
       kept || feed.supply === null || feed.history.length === 0
         ? null
-        : { trades: feed.history, supply: feed.supply },
-    [kept, feed.history, feed.supply],
+        : { trades: feed.history, supply: feed.supply, live: feed.status === "live" },
+    [kept, feed.history, feed.supply, feed.status],
   );
 }
 

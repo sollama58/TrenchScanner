@@ -23,6 +23,11 @@ export interface ShareTrade {
 export interface LiveTradeShares {
   trades: readonly ShareTrade[];
   supply: number | null;
+  /**
+   * Whether the feed follows the coin's trades now (its status "live"): only then do shares move
+   * with each trade, and the holders say "Live" instead of their age and next update.
+   */
+  live?: boolean;
 }
 
 /** Each wallet's share of supply moved (in %) by the trades after `fromMs`; empty without a supply. */
