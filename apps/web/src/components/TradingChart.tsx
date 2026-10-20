@@ -18,6 +18,8 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { change, signedPct, usd } from "../format";
+import { flowApartFromCandle } from "../marketClock";
+import { ClockIcon } from "./Icons";
 import {
   autoTimeframe,
   buildSlots,
@@ -915,6 +917,7 @@ export function TradingChart({
   const dated = viewMs > 36 * 3_600_000;
   fmtRef.current = { seconds: fine, dated };
   const hFlow = cur ? flowAt(flow, curFrom, curTo) : null;
+  const flowLags = hFlow != null && flowApartFromCandle(hFlow.t, curTo);
   // The marks under the pointer when it is on one, else those in the candle it is over.
   const onStack = pointed !== null;
   const stack = pointed ? [pointed.item, ...pointed.more] : [];
@@ -1247,10 +1250,15 @@ export function TradingChart({
               {cur.vol > 0 && <span>Vol {usd(cur.vol)}</span>}
               {hFlow && (
                 <span
-                  className={hFlow.buys / (hFlow.buys + hFlow.sells) >= 0.5 ? "up" : "down"}
+                  className={`${hFlow.buys / (hFlow.buys + hFlow.sells) >= 0.5 ? "up" : "down"}${flowLags ? " lags" : ""}`}
                   title={`${hFlow.buys} buys, ${hFlow.sells} sells in the ${FLOW_WINDOW_MS / 60_000} min to ${clock(hFlow.t, false, false)}`}
                 >
                   {Math.round((hFlow.buys / (hFlow.buys + hFlow.sells)) * 100)}% buys
+                  {flowLags && (
+                    <span className="lag-mark">
+                      <ClockIcon size={11} />
+                    </span>
+                  )}
                 </span>
               )}
             </div>
