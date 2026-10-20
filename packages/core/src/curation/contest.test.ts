@@ -324,6 +324,45 @@ describe("Gems", () => {
       expect(combiner.members.map((m) => m.contestant)).not.toContain(GEMS_CONTESTANT);
     }
   }, 120_000);
+
+  it("gates on the stored reading of an era-masked input, not the mask (user decision 2026-10-20)", () => {
+    const gate = { mcapMin: 0, mcapMax: 1e12, maxBundledSupplyPct: 20 };
+    const base = { mcapUsd: 50_000, bundledSupplyPct: 5 };
+    const rows: TrainingRow[] = [
+      // Banked before the transfer-linked reads: masked for the learners, 60% as stored.
+      {
+        anchorAt: new Date("2026-10-18T00:00:00Z"),
+        features: { ...base, bundledSupplyPct: null },
+        gateInputs: { bundledSupplyPct: 60 },
+        labelValue: 0,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 50_000,
+      },
+      // The same, under the cap.
+      {
+        anchorAt: new Date("2026-10-18T01:00:00Z"),
+        features: { ...base, bundledSupplyPct: null },
+        gateInputs: { bundledSupplyPct: 10 },
+        labelValue: 0,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 50_000,
+      },
+      {
+        anchorAt: new Date("2026-10-19T12:00:00Z"),
+        features: base,
+        labelValue: 0,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 50_000,
+      },
+    ];
+    const gated = gatedTrainingSet(rows, gate);
+    expect(gated.map((r) => r.anchorAt.toISOString())).toEqual([
+      "2026-10-18T01:00:00.000Z",
+      "2026-10-19T12:00:00.000Z",
+    ]);
+    // The learners still read the masked input as missing.
+    expect(gated[0]!.features.bundledSupplyPct).toBeNull();
+  });
 });
 
 describe("Winners", () => {

@@ -193,9 +193,16 @@ export function postWithTwoFactor<T>(path: string, body?: unknown, note?: string
  * when it may go ahead; rejects with TwoFactorCancelled when the user backs out.
  */
 export async function askBefore(action: "burn" | "export"): Promise<void> {
-  const state = await api<{ enabled: boolean; totp: boolean; passkeys: unknown[]; actions: string[] }>(
-    "/auth/2fa",
-  );
+  type State = { enabled: boolean; totp: boolean; passkeys: unknown[]; actions: string[] };
+  let state: State;
+  try {
+    state = await api<State>("/auth/2fa");
+  } catch (e) {
+    // Export never waits on the API (user decision 2026-10-20): the key lives with Privy and this
+    // step is the browser's only, so a settings read that fails (an outage) lets it go ahead.
+    if (action === "export") return;
+    throw e;
+  }
   if (!state.enabled) return;
   if (action !== "export" && !state.actions.includes(action)) return;
   await passFor(action, { totp: state.totp, passkey: state.passkeys.length > 0 });

@@ -1105,7 +1105,7 @@ export const HOLDER_TRANSFER_LINKS_WINDOW = {
  * the learners off them until the rows since cover enough of the exam's span.
  */
 export const HOLDER_TRANSFER_LINKS_READ_SINCE = new Date("2026-10-19T06:00:00Z");
-const HOLDER_TRANSFER_LINKED_FEATURES = [
+export const HOLDER_TRANSFER_LINKED_FEATURES = [
   "linkedCreatorPct",
   "kolBundledPct",
   "bundledSupplyPct",
