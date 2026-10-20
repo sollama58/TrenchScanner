@@ -75,6 +75,7 @@ import {
   SAFETY_REJECT_TOP10_HOLDER_PCT,
   SniperTile,
   WalletStat,
+  ageNow,
 } from "./AlertCard";
 import { CHART_MARKS_SECTION, WalletMarksPicker } from "./WalletMarksPicker";
 import { BubbleMapControls, ChartControls, Choice, QuickLinkChecks } from "./AppearancePanel";
@@ -952,6 +953,7 @@ function TokenBody({
               </span>
             )}
           </div>
+          {terminal && <QuickLinks mint={mint} socials={profile.data?.socials} />}
         </div>
       </div>
       <div className="tm-actions">
@@ -981,42 +983,69 @@ function TokenBody({
           <CloseIcon size={16} />
         </button>
       </div>
-      <QuickLinks mint={mint} socials={profile.data?.socials} />
+      {!terminal && <QuickLinks mint={mint} socials={profile.data?.socials} />}
     </>
   );
-  const figs = (
+  const latestSnap = card.latestSnapshot;
+  const liqNow = latestSnap?.liquidityUsd ?? s.liquidityUsd;
+  const holdersNow =
+    latestSnap?.liveHolderCount ?? latestSnap?.holderCount ?? s.liveHolderCount ?? s.holderCount;
+  const ageSnap = latestSnap?.ageMinutes != null ? latestSnap : s;
+  const tokenAge = ageNow(ageSnap, now);
+  const alertWord = utility
+    ? "At scan"
+    : what === "Passed screen"
+      ? "At screen"
+      : what === "Graduated"
+        ? "At graduation"
+        : "At alert";
+  const nowFig = (
+    <div className={`tm-fig${nowAge !== null ? " aged" : ""}`}>
+      <label>
+        Now
+        {nowAge !== null && <span className="fig-age"> · {nowAge}</span>}
+        {nowLagsChart && (
+          <span className="lag-mark" title={nowLagTitle}>
+            <ClockIcon size={11} />
+          </span>
+        )}
+      </label>
+      <span className="num" title={nowTitle ?? (nowAge !== null ? `Read ${nowAge} ago` : undefined)}>
+        {usd(nowMcap)}
+      </span>
+      {move !== null && (
+        <small className={`num delta ${move >= 0 ? "up" : "down"}`}>
+          {move >= 0 ? "▲" : "▼"} {pct(Math.abs(move))}
+        </small>
+      )}
+    </div>
+  );
+  const figs = terminal ? (
+    <section className="tm-figs" aria-label="Market">
+      {nowFig}
+      <div className="tm-fig">
+        <label>Liquidity</label>
+        <span className={liqNow != null ? "num" : "num none"}>{liqNow != null ? usd(liqNow) : "–"}</span>
+      </div>
+      <div className="tm-fig">
+        <label>Holders</label>
+        <span className={holdersNow != null ? "num" : "num none"}>
+          {holdersNow != null ? holdersNow.toLocaleString() : "–"}
+        </span>
+      </div>
+      <div className={`tm-fig${hasPeak && peak >= 100 ? " hot" : ""}`}>
+        <label>{alertWord}</label>
+        <span className="num">{usd(alertMcap)}</span>
+        {hasPeak && <small className="num muted">Peak {multiple(peak)}</small>}
+      </div>
+    </section>
+  ) : (
     <section className="tm-figs" aria-label="Market cap">
       <div className="tm-fig">
-        <label>
-          {utility
-            ? "At scan"
-            : what === "Passed screen"
-              ? "At screen"
-              : what === "Graduated"
-                ? "At graduation"
-                : "At alert"}
-        </label>
+        <label>{alertWord}</label>
         <span className="num">{usd(alertMcap)}</span>
       </div>
-      <div className={`tm-fig${nowAge !== null ? " aged" : ""}`}>
-        <label>
-          Now
-          {nowAge !== null && <span className="fig-age"> · {nowAge}</span>}
-          {nowLagsChart && (
-            <span className="lag-mark" title={nowLagTitle}>
-              <ClockIcon size={11} />
-            </span>
-          )}
-        </label>
-        <span className="num" title={nowTitle ?? (nowAge !== null ? `Read ${nowAge} ago` : undefined)}>
-          {usd(nowMcap)}
-        </span>
-        {move !== null && (
-          <small className={`num delta ${move >= 0 ? "up" : "down"}`}>
-            {move >= 0 ? "▲" : "▼"} {pct(Math.abs(move))}
-          </small>
-        )}
-      </div>
+      {nowFig}
       <div className={`tm-fig${hasPeak && peak >= 100 ? " hot" : ""}`}>
         <label>Peak</label>
         <span className={hasPeak ? "num" : "num none"}>{hasPeak ? multiple(peak) : "–"}</span>
@@ -1156,8 +1185,6 @@ function TokenBody({
               />
             </>
           );
-        case "market":
-          return <StatsCard card={card} />;
         case "dev":
           return (
             <div className="tm-grid tm-dev-grid">
@@ -1287,6 +1314,15 @@ function TokenBody({
           </div>
           <aside className="tm-term-rail" aria-label="Trade and checks">
             <div ref={setTradeSlot} className="tm-term-trade" />
+            <section className="tm-term-market" aria-label="Market">
+              <div className="tm-term-age">
+                <span>Token age</span>
+                <strong className="num">
+                  {tokenAge == null && scanning ? <SkelValue width="2.6em" /> : minutes(tokenAge)}
+                </strong>
+              </div>
+              <StatsCard card={card} />
+            </section>
             <div id={`${ids}-safety`} className="tm-term-safety">
               {/* Open from the start here: the rail is where the checks are read at a glance. */}
               <SafetyCard
@@ -1487,14 +1523,13 @@ type SectionId = (typeof SECTIONS)[number]["id"];
  * The Scope terminal's views (user picks 2026-10-18): one in the column beside the chart, the
  * reader's pick (user ask 2026-10-19), and every other in the tabs under it.
  */
-type TermTab = "map" | "trades" | "holders" | "wallets" | "flow" | "market" | "dev" | "sage";
+type TermTab = "map" | "trades" | "holders" | "wallets" | "flow" | "dev" | "sage";
 const TERM_VIEWS: readonly { id: TermTab; label: string }[] = [
   { id: "map", label: "Bubble map" },
   { id: "trades", label: "Live trades" },
   { id: "holders", label: "Holders" },
   { id: "wallets", label: "Labeled wallets" },
   { id: "flow", label: "Order flow" },
-  { id: "market", label: "Market" },
   { id: "dev", label: "Dev & socials" },
   { id: "sage", label: "TokenSage" },
 ];
@@ -2713,6 +2748,7 @@ export function ChartCard({
                 flow={flow}
                 marks={marks}
                 markPics={look.chartMarkPics}
+                markScale={look.chartMarkScale}
                 live={view.live}
                 height={height}
                 trades={chartTrades}

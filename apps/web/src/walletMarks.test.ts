@@ -241,6 +241,15 @@ describe("appearance chartMarkPics", () => {
   });
 });
 
+describe("appearance chartMarkScale", () => {
+  it("is medium by default and keeps a saved size", () => {
+    expect(DEFAULT_APPEARANCE.chartMarkScale).toBe("m");
+    expect(normalizeAppearance({}).chartMarkScale).toBe("m");
+    expect(normalizeAppearance({ chartMarkScale: "l" }).chartMarkScale).toBe("l");
+    expect(normalizeAppearance({ chartMarkScale: "huge" }).chartMarkScale).toBe("m");
+  });
+});
+
 describe("keepMarkSources", () => {
   const a: MarkSource = { wallet: "A", tags: ["kol"], kol: "Cupsey", trades: [[1_000, 1, 1]] };
   const b: MarkSource = { wallet: "B", tags: ["linked"], trades: [[2_000, -1, 1]] };

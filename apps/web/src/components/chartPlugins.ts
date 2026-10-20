@@ -170,6 +170,8 @@ export interface OverlayState {
   hot: ReadonlySet<WalletMark>;
   /** A KOL's picture, once loaded (null: none, not yet, or it failed: the lettered ring shows). */
   pic: (mark: WalletMark) => CanvasImageSource | null;
+  /** How big the trade marks draw (Customize › Chart wallet trades). */
+  markScale: number;
   drawings: Drawings | null;
   drawScale: DrawScale | null;
   label: (v: number) => string;
@@ -311,9 +313,11 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
       spots.push({ item, side, x, priceY, edgeY, r });
     };
     // The trader's own first, so they take the places nearest the price.
-    for (const tr of s.trades) spot({ trade: tr }, tr.t, tr.side, 8);
-    for (const m of s.marks) spot({ mark: m }, m.t, m.side, s.pic(m) ? picRadius(m.sol) : markRadius(m.sol));
-    const placed = layoutMarks(spots, MARK_PITCH, height);
+    const scale = s.markScale > 0 ? s.markScale : 1;
+    for (const tr of s.trades) spot({ trade: tr }, tr.t, tr.side, 8 * scale);
+    for (const m of s.marks)
+      spot({ mark: m }, m.t, m.side, (s.pic(m) ? picRadius(m.sol) : markRadius(m.sol)) * scale);
+    const placed = layoutMarks(spots, MARK_PITCH * scale, height);
     this.placed = placed;
     // Stems first, under every mark: from the price's dot to the mark.
     for (const p of placed) {
@@ -405,7 +409,7 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
     }
     ctx.restore();
 
-    if (s.drawings && s.drawScale) s.drawings.draw(ctx, hr, vr, s.drawScale, c.draw, s.label);
+    if (s.drawings && s.drawScale) s.drawings.draw(ctx, hr, vr, s.drawScale, c.draw, s.label, width, height);
   }
 }
 

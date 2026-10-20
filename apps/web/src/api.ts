@@ -1829,6 +1829,8 @@ export interface FeedAppearance {
   chartMarkMinSol: number;
   /** KOLs' trades marked with their X pictures rather than a letter (absent from older API builds: on). */
   chartMarkPics: boolean;
+  /** How big those marks draw: small, medium or large (absent from older API builds: medium). */
+  chartMarkScale: "s" | "m" | "l";
   /** The token chart's default: a line or candles (absent from older API builds: line). */
   chartStyle: "line" | "candles";
   /** The view the token chart opens on: Trading or All (absent from older API builds: Trading). */

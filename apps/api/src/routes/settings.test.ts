@@ -87,6 +87,9 @@ describe("parseFeedAppearance", () => {
     // KOLs' marks as their pictures: on by default, a saved choice kept.
     expect(parseFeedAppearance({}).chartMarkPics).toBe(true);
     expect(parseFeedAppearance({ chartMarkPics: false }).chartMarkPics).toBe(false);
+    expect(parseFeedAppearance({}).chartMarkScale).toBe("m");
+    expect(parseFeedAppearance({ chartMarkScale: "s" }).chartMarkScale).toBe("s");
+    expect(parseFeedAppearance({ chartMarkScale: "xl" }).chartMarkScale).toBe("m");
     expect(parseFeedAppearance({}).chartMarkKinds).toHaveLength(7);
     expect(parseFeedAppearance({}).chartMarkKinds).not.toContain("risky");
     // A list saved before that with every kind on was the old default: it reads without risky.
