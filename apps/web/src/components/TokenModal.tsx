@@ -972,7 +972,7 @@ function TokenBody({
             tokenRaw={position.data?.balance ?? null}
             decimals={position.data?.decimals ?? null}
             solLamports={funds.balance?.solLamports ?? null}
-            stale={!!(funds.error && funds.balance)}
+            stale={!!((funds.error && funds.balance) || (position.error && position.data))}
           />
         )}
         {!hideSafetyPill && <SafetyPill verdict={safety} onClick={openSafety} />}

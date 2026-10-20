@@ -14,9 +14,10 @@ export interface WalletBalance {
 /** How often an open, visible page reads the balances again (a buy or a burn elsewhere shows). */
 export const BALANCE_POLL_MS = 60_000;
 /**
- * While a Pro balance is on screen, the shared reading follows the position poll
- * (POSITION_POLL_MS in proTrade.ts). The idle minute poll stays for Settings and Portfolio.
- * The live trade stream is a trade tape, not a balance, so this does not run any faster.
+ * While the token view or its Trade panel is showing a balance, the shared reading follows the
+ * position poll (POSITION_POLL_MS in proTrade.ts). The site header does not hold this cadence, so
+ * Settings and Portfolio return to the minute poll once that view closes. The live trade stream
+ * is a trade tape, not a balance, so this does not run any faster.
  */
 export const BALANCE_LIVE_MS = 15_000;
 /** A reading this fresh answers a panel that opens (Settings, Portfolio) without asking again. */
@@ -28,10 +29,12 @@ type Reading = Pick<WalletBalance, "balance" | "error" | "at">;
  * One reading shared by every open panel (user ask 2026-10-19: the header shows it too), so the
  * header, Settings and Portfolio cost one GET /subscription/balance between them, not one each.
  * Read when the first panel opens, when a panel opens on a reading older than BALANCE_FRESH_MS,
- * on reload(), every BALANCE_POLL_MS while the page is visible (BALANCE_LIVE_MS while a Pro balance
- * is showing), and on coming back to a page whose reading is older than that. A failed read keeps
- * the last balances (with `error` set, so they can be shown as old). Forgotten once the last panel
- * closes (signing out unmounts the header), so the next wallet never sees the last one's.
+ * on reload(), every BALANCE_POLL_MS while the page is visible (BALANCE_LIVE_MS while the token
+ * view or its Trade panel is showing a balance), and on coming back to a page whose reading is
+ * older than that. The site header shows the same reading without holding the fast poll, so the
+ * minute poll returns once that view closes. A failed read keeps the last balances (with `error`
+ * set, so they can be shown as old). Forgotten once the last panel closes (signing out unmounts
+ * the header), so the next wallet never sees the last one's.
  */
 export class BalanceStore {
   private reading: Reading = { balance: null, error: null, at: null };
@@ -135,7 +138,8 @@ const NOTHING: Reading = { balance: null, error: null, at: null };
  * The shared reading (BalanceStore). Settings' Subscription section hands its reading to its burn
  * panel, so a buy or a burn refreshes both, and the header follows along. `enabled` false: this
  * panel neither reads nor shows anything (the burn panel was handed a reading instead). `live`
- * follows the position poll (the Pro header and the Trade panel); other panels keep the minute one.
+ * follows the position poll (the token header and the Trade panel). The site header, Settings and
+ * Portfolio stay on the minute poll, and that poll returns when the last live panel closes.
  */
 export function useWalletBalance(enabled = true, live = false): WalletBalance {
   useEffect(() => (enabled ? shared.open(live) : undefined), [enabled, live]);

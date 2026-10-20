@@ -11,6 +11,7 @@ import {
   readTradeSettings,
   sacrificeLine,
   summarizePosition,
+  shownPosition,
   feeSavedSol,
   expectedTokens,
   expectedSol,
@@ -102,6 +103,31 @@ describe("solText", () => {
 describe("readTradeSettings", () => {
   it("falls back to the defaults without storage", () => {
     expect(readTradeSettings()).toEqual(DEFAULT_TRADE_SETTINGS);
+  });
+});
+
+describe("shownPosition", () => {
+  const pos = (mint: string): PositionResponse => ({
+    wallet: "w",
+    mint,
+    decimals: 6,
+    balance: "1",
+    supply: null,
+    solUsd: null,
+    trades: [],
+    historyUnavailable: false,
+    truncated: false,
+  });
+
+  it("hides another coin's balance while this coin's read is still in flight", () => {
+    expect(shownPosition("b", pos("a"), null, 10, null)).toEqual({ data: null, error: null, at: null });
+    expect(shownPosition("a", pos("a"), new Error("old"), 10, "a").data?.mint).toBe("a");
+  });
+
+  it("keeps a failed refresh of this coin, and not a failure from the previous one", () => {
+    const err = new Error("down");
+    expect(shownPosition("a", pos("a"), err, 10, "a")).toMatchObject({ error: err, at: 10 });
+    expect(shownPosition("b", pos("a"), err, 10, "a")).toEqual({ data: null, error: null, at: null });
   });
 });
 

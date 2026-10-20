@@ -624,6 +624,22 @@ export const POSITION_POLL_MS = 15_000;
  * The Pro wallet's position in `mint`, polled while `mint` is set (null: not Pro, or no modal). A
  * failed read keeps the last position, with `error` set and `at` saying when it was read.
  */
+/**
+ * The position to show for `mint`. A read for another coin (the one still in state while the next
+ * coin's request is in flight) is not that coin's balance. An error counts only for the mint it
+ * was read for, so a failed refresh of this coin still shows its last position.
+ */
+export function shownPosition(
+  mint: string | null,
+  data: PositionResponse | null,
+  error: Error | null,
+  at: number | null,
+  errorMint: string | null,
+): { data: PositionResponse | null; error: Error | null; at: number | null } {
+  const same = mint !== null && data?.mint === mint ? data : null;
+  return { data: same, error: mint !== null && errorMint === mint ? error : null, at: same ? at : null };
+}
+
 export function usePosition(mint: string | null): {
   data: PositionResponse | null;
   error: Error | null;
@@ -633,26 +649,32 @@ export function usePosition(mint: string | null): {
   const [data, setData] = useState<PositionResponse | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [at, setAt] = useState<number | null>(null);
+  /** The mint `error` belongs to. A failed read keeps the last position only for that coin. */
+  const [errorMint, setErrorMint] = useState<string | null>(null);
   const seq = useRef(0);
   const load = useCallback(() => {
     if (!mint) return;
     const mine = ++seq.current;
+    const asked = mint;
     api<PositionResponse>(`/pro/trade/${encodeURIComponent(mint)}/position`)
       .then((d) => {
-        if (mine !== seq.current) return;
+        if (mine !== seq.current || d.mint !== asked) return;
         setData(d);
         setAt(Date.now());
         setError(null);
+        setErrorMint(asked);
       })
       .catch((e: unknown) => {
         if (mine !== seq.current) return;
         setError(e instanceof Error ? e : new Error(String(e)));
+        setErrorMint(asked);
       });
   }, [mint]);
   useEffect(() => {
     setData(null);
     setError(null);
     setAt(null);
+    setErrorMint(null);
     if (!mint) return;
     load();
     const timer = setInterval(() => {
@@ -663,7 +685,7 @@ export function usePosition(mint: string | null): {
       seq.current++;
     };
   }, [mint, load]);
-  return { data, error, at, reload: load };
+  return { ...shownPosition(mint, data, error, at, errorMint), reload: load };
 }
 
 /**

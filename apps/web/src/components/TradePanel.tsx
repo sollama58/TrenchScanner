@@ -759,8 +759,11 @@ export function TradePanel({
   const busy = status.kind === "busy";
   // SOL the buy can spend, for a wallet that can trade here. The shared reading follows the
   // position poll. A dash holds the row until the first answer, so the buy side stays put.
-  const showSol = spendBalancesShown(!!useProState()?.pro, true) && !buyOnly && !closeOnly;
-  const funds = useWalletBalance(showSol, showSol);
+  // The Buy $ASDFASDFA popup already prints SOL above the panel (hidePosition): follow the same
+  // poll, and do not print it again beside Buy.
+  const trackSol = spendBalancesShown(!!useProState()?.pro, true) && !buyOnly && !closeOnly;
+  const showSol = trackSol && !hidePosition;
+  const funds = useWalletBalance(trackSol, trackSol);
   const solHave = funds.balance?.solLamports != null ? solText(Number(funds.balance.solLamports) / 1e9) : "–";
   useEffect(() => {
     if (!fillBuy) return;
@@ -862,7 +865,7 @@ export function TradePanel({
       });
     } finally {
       onTraded();
-      if (showSol) funds.reload();
+      if (trackSol) funds.reload();
     }
   };
 

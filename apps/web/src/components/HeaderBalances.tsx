@@ -11,15 +11,16 @@ import {
 /**
  * The signed-in wallet's SOL and $ASDFASDFA beside the header's wallet pill (user ask 2026-10-19),
  * from the reading Settings and Portfolio share (walletBalance.ts). Shown for a wallet that can
- * trade here (Pro Mode, and a browser that can sign), on the same cadence as its position. Nothing
- * is read for anyone else. A missing first reading is a dash; a failed refresh keeps the last one,
- * dimmed.
+ * trade here (full Pro Mode, and a browser that can sign). The site header does not ask for the
+ * position cadence: that stays with the token view, so Settings and Portfolio keep the minute poll
+ * once the trade view closes. Nothing is read for anyone else. A missing first reading is a dash;
+ * a failed refresh keeps the last one, dimmed.
  */
 export function HeaderBalances() {
   const pro = useProState();
   const canSign = useCanSignTrades(pro?.wallet ?? null);
   const shown = spendBalancesShown(!!pro?.pro, canSign);
-  const { balance, error } = useWalletBalance(shown, shown);
+  const { balance, error } = useWalletBalance(shown, false);
   if (!shown) return null;
   const sol = balance?.solLamports != null ? compactSol(balance.solLamports) : "–";
   const asdf = balance ? compactTokens(balance.totalRaw, balance.decimals) : "–";

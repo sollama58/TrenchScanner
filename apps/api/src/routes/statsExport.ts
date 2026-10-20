@@ -2,7 +2,7 @@ import { Readable, Transform, pipeline } from "node:stream";
 import { createGzip } from "node:zlib";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
-import { prisma, createLogger, CANDIDATE_FEATURE_NAMES } from "@trenchscanner/core";
+import { prisma, createLogger, CANDIDATE_FEATURE_NAMES, tokenSageReferent } from "@trenchscanner/core";
 import { ALERT_LOOKAHEAD_MS, ALERT_LOOKBACK_MS, alertFor } from "../telegramBoards.js";
 
 const logger = createLogger("stats-export");
@@ -525,13 +525,17 @@ function rec(v: unknown): Rec {
 
 /**
  * narrativeText plus the row's referentPostId when the document was not stored (a basic read of
- * a coin that never reached the band). The document wins when it names a post.
+ * a coin that never reached the band). A document that carries a referent is the read policy: a
+ * post dropped because it was deleted does not come back from the column. A document with no
+ * referent falls back to the column.
  */
 export function narrativeExportText(
   analysis: unknown,
   storedPostId: string | null | undefined,
 ): Record<(typeof NARRATIVE_TEXT)[number], unknown> {
   const text = narrativeText(analysis);
+  const hadReferent = Object.keys(rec(rec(analysis).referent)).length > 0;
+  if (hadReferent) return text;
   return { ...text, referentPostId: text.referentPostId ?? storedPostId ?? null };
 }
 
@@ -540,11 +544,13 @@ export function narrativeText(analysis: unknown): Record<(typeof NARRATIVE_TEXT)
   const doc = rec(analysis);
   const lineage = rec(doc.lineage);
   const x = rec(doc.x);
+  // The same referent a reader may trust (a deleted post does not keep its wave key).
+  const referent = rec(tokenSageReferent(analysis as Parameters<typeof tokenSageReferent>[0]));
   // TokenSage rules 0.30.0+: the post's counts as of engagement.as_of (null on older reads).
   const engagement = rec(x.engagement);
   const copies = Array.isArray(doc.copy_of) ? doc.copy_of.slice(0, 3).map(rec) : [];
   return {
-    referentDesc: str(rec(doc.referent).desc, 300),
+    referentDesc: str(referent.desc, 300),
     lineageOfName: str(lineage.of_name, 120),
     lineageOfTicker: str(lineage.of_ticker, 40),
     copyOf: copies.map((c) => ({
@@ -564,7 +570,7 @@ export function narrativeText(analysis: unknown): Record<(typeof NARRATIVE_TEXT)
     xEngagementAsOf: str(engagement.as_of, 40),
     xQuotedViews: num(rec(rec(x.quoted).engagement).views),
     xMediaCount: Array.isArray(x.media) ? x.media.length : null,
-    referentPostId: str(rec(doc.referent).post_id, 40),
+    referentPostId: str(referent.post_id, 40),
     lineageSameTicker: num(lineage.same_ticker),
     timedOut: Array.isArray(doc.timed_out) ? doc.timed_out.filter((t) => typeof t === "string") : [],
     // Which trending terms the full read matched, by source (Wikipedia, Google Trends, X's

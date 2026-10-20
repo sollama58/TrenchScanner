@@ -531,7 +531,7 @@ export function sageRead(
             predatesTokenS: xRead ? num(x.predates_token_by_s) : null,
             reuseCount: xRead ? num(x.reuse_count) : null,
             reuseRank: full && xRead ? num(x.reuse_rank) : null,
-            credibility: full ? num(x.credibility) : null,
+            credibility: full && xRead ? num(x.credibility) : null,
             accountAgeS: full ? num(x.account?.age_at_launch_s) : null,
             madeForCoin:
               full && typeof x.account?.made_for_coin === "boolean" ? x.account.made_for_coin : null,
