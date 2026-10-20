@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { ApiError } from "../api";
 import { ago, minutes, signedPct, solUsdAgeText, usd } from "../format";
 import {
@@ -15,7 +16,9 @@ import {
   expectedSol,
   useSaleQuote,
   runTrade,
+  sellSizing,
   shareOf,
+  STALE_TOTAL_SALE,
   saveTradeSettings,
   TradeError,
   TradeExpiredError,
@@ -137,6 +140,14 @@ export const TRADE_DISCLAIMER =
 /** Buys this size or more ask before they start. */
 const CONFIRM_BUY_LAMPORTS = 5n * BigInt(LAMPORTS);
 
+/** Compact a raw token amount with the same integer scale as `unitsText`. Null when it isn't a number. */
+function quoteTokens(raw: string, decimals: number): string {
+  if (!/^\d+$/.test(raw)) return raw;
+  const exact = unitsText(BigInt(raw), decimals);
+  const n = Number(exact);
+  return Number.isFinite(n) ? tokensText(n) : exact;
+}
+
 /** What the build quotes, said before the wallet asks to sign: "About 1.2M PEPE, at least 1.02M." */
 export function quoteText(
   built: {
@@ -145,18 +156,23 @@ export function quoteText(
     priorityFeeLamports: string;
     tipLamports: string;
     sacrifice?: SacrificeView;
+    /** Decimals from the build that will be signed. Wins over the position's copy. */
+    decimals?: number | null;
   },
   side: "buy" | "sell",
   position: { decimals: number | null } | null,
   symbol: string,
-  /** A buy's token account rent, lamports: said after the fees, as the refundable deposit it is. */
+  /** Rent from the build that will be signed, lamports. A stale preview is not used. */
   rentLamports?: string | null,
-): string {
+): string | null {
   // Network fees (priority fee, Sender tip, base fee); the Sacrifice, when it is on, is its own line.
   const fees =
     (Number(BigInt(built.priorityFeeLamports)) + Number(BigInt(built.tipLamports)) + 5_000) / LAMPORTS;
   const sacrifice = sacrificeLine(built.sacrifice);
-  const rent = side === "buy" && rentLamports ? Number(BigInt(rentLamports)) / LAMPORTS : 0;
+  const rent =
+    side === "buy" && rentLamports && /^\d+$/.test(rentLamports)
+      ? Number(BigInt(rentLamports)) / LAMPORTS
+      : 0;
   const tail =
     (sacrifice
       ? `network fee ${solText(fees)}. ${sacrifice}`
@@ -164,8 +180,10 @@ export function quoteText(
     (rent > 0 ? ` Plus ${solText(rent)} token account rent, refundable.` : "");
   if (side === "sell")
     return `About ${solText(Number(BigInt(built.quotedOut)) / LAMPORTS)}, at least ${solText(Number(BigInt(built.minOut)) / LAMPORTS)}; ${tail}`;
-  const scale = 10 ** (position?.decimals ?? 6);
-  return `About ${tokensText(Number(BigInt(built.quotedOut)) / scale)} ${symbol}, at least ${tokensText(Number(BigInt(built.minOut)) / scale)}; ${tail}`;
+  const decimals =
+    built.decimals === null ? null : typeof built.decimals === "number" ? built.decimals : position?.decimals;
+  if (typeof decimals !== "number") return null;
+  return `About ${quoteTokens(built.quotedOut, decimals)} ${symbol}, at least ${quoteTokens(built.minOut, decimals)}; ${tail}`;
 }
 
 const STAGE_TEXT: Record<TradeStage, string> = {
@@ -778,16 +796,20 @@ export function TradePanel({
   // the status, and an in-flight trade no longer paints its result here.
   const tradeGen = useRef(0);
   const mintSeen = useRef(mint);
+  const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => abortRef.current?.abort(), []);
   useEffect(() => {
     if (mintSeen.current === mint) return;
     mintSeen.current = mint;
+    abortRef.current?.abort();
     tradeGen.current += 1;
     setSellText("");
     setSellPct(null);
     setCustom("");
     setStatus({ kind: "idle" });
   }, [mint]);
-  const balance = position ? BigInt(position.balance) : 0n;
+  const balance = position && /^\d+$/.test(position.balance) ? BigInt(position.balance) : 0n;
+  const sizing = sellSizing(position);
   const solUsd = position?.solUsd ?? null;
   // The SOL price is kept through failed reads: dollar figures say so once it is a while old.
   const solPriceAge = solUsdAgeText(position?.solUsdAt);
@@ -848,7 +870,16 @@ export function TradePanel({
       !window.confirm(`${what} of ${symbol}?${sacrificeNote ? `\n\n${sacrificeNote}` : ""}`)
     )
       return;
+    if (
+      side === "sell" &&
+      positionStaleAt !== null &&
+      (closing || amount >= (sizing.feeBps > 0 ? sizing.sellable : sizing.ata))
+    )
+      return refuse(STALE_TOTAL_SALE);
     setStatus({ kind: "busy", stage: "building", what });
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
     try {
       const signature = await runTrade(
         {
@@ -860,16 +891,28 @@ export function TradePanel({
           ...(percent !== undefined ? { percent } : {}),
           settings: turbo ? { ...settings, speed: "turbo" } : settings,
           sacrificeNote,
+          signal: ac.signal,
         },
-        (stage, built) => {
+        async (stage, built) => {
           if (gen !== tradeGen.current) return;
-          setStatus({
-            kind: "busy",
-            stage,
-            what,
-            quote: built
-              ? quoteText(built, side, position, symbol, swapCosts?.accountRentLamports)
-              : undefined,
+          const quote = built
+            ? quoteText(built, side, position, symbol, built.accountRentLamports ?? null)
+            : null;
+          flushSync(() => {
+            setStatus({
+              kind: "busy",
+              stage,
+              what,
+              ...(quote ? { quote } : {}),
+            });
+          });
+          if (stage !== "signing") return;
+          await new Promise<void>((resolve) => {
+            if (typeof requestAnimationFrame !== "function") {
+              setTimeout(resolve, 0);
+              return;
+            }
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
           });
         },
       );
@@ -938,11 +981,12 @@ export function TradePanel({
     mint,
     customLamports ? Number(customLamports) / LAMPORTS : (settings.buyPresets[0] ?? 0.1),
   );
-  const coinDecimals = position?.decimals ?? null;
+  const coinDecimals =
+    position?.decimals ?? (typeof swapCosts?.decimals === "number" ? swapCosts.decimals : null);
   const supplyCoins =
     position?.supply && coinDecimals !== null ? Number(BigInt(position.supply)) / 10 ** coinDecimals : null;
   const coinPriceSol = nowMcap && supplyCoins && solUsd ? nowMcap / supplyCoins / solUsd : null;
-  const expected = expectedTokens(customLamports, swapCosts, coinPriceSol);
+  const expected = coinDecimals === null ? null : expectedTokens(customLamports, swapCosts, coinPriceSol);
   const hasPosition = !!summary && (summary.held > 0 || summary.buys > 0 || summary.sells > 0);
   const open = !!summary && summary.held > 0;
   const tone = summary?.pnlSol == null ? "" : summary.pnlSol >= 0 ? "up" : "down";
@@ -951,16 +995,20 @@ export function TradePanel({
     customLamports && void trade("buy", customLamports, `Buy ${solText(Number(customLamports) / LAMPORTS)}`);
   // Exact token amounts need the coin's decimals; without them the field stays off.
   const decimals = position?.decimals ?? null;
-  // A preset tracks the percent. The field follows the latest balance, and Sell asks the API to
-  // take that percent of the balance it reads then, not the number from when the preset was pressed.
+  // A preset tracks the percent of the associated account the route debits. Sell all is that
+  // account after a transfer fee. The API reads the same account again when the trade is built.
+  const sellCap = sizing.feeBps > 0 ? sizing.sellable : sizing.ata;
   useEffect(() => {
     if (sellPct === null || decimals === null) return;
-    setSellText(balance > 0n ? unitsText(shareOf(balance, sellPct), decimals) : "");
-  }, [balance, sellPct, decimals]);
+    const base = sellPct >= 100 ? sizing.sellable : sizing.ata;
+    setSellText(base > 0n ? unitsText(shareOf(base, sellPct), decimals) : "");
+  }, [sizing.ata, sizing.sellable, sellPct, decimals]);
   const presetUnits =
-    sellPct !== null && decimals !== null && balance > 0n ? shareOf(balance, sellPct) : null;
+    sellPct !== null && decimals !== null && (sellPct >= 100 ? sizing.sellable : sizing.ata) > 0n
+      ? shareOf(sellPct >= 100 ? sizing.sellable : sizing.ata, sellPct)
+      : null;
   const sellUnits = presetUnits ?? (decimals !== null ? parseTokens(sellText, decimals) : null);
-  const sellTooMuch = presetUnits === null && sellUnits !== null && sellUnits > balance;
+  const sellTooMuch = presetUnits === null && sellUnits !== null && sellUnits > sellCap;
   const sellTokens = sellUnits !== null && decimals !== null ? Number(sellUnits) / 10 ** decimals : null;
   const sellWorthSol =
     sellUnits !== null && !sellTooMuch && summary?.valueSol != null && balance > 0n
@@ -971,8 +1019,9 @@ export function TradePanel({
   const expectedOut = sellTooMuch ? null : expectedSol(sellUnits, saleQuote, sellWorthSol);
   const sellCustom = () => {
     if (sellPct !== null) {
-      if (balance <= 0n || decimals === null) return;
-      const units = shareOf(balance, sellPct);
+      const base = sellPct >= 100 ? sizing.sellable : sizing.ata;
+      if (base <= 0n || decimals === null) return;
+      const units = shareOf(base, sellPct);
       const all = sellPct >= 100;
       void trade(
         "sell",
@@ -985,7 +1034,7 @@ export function TradePanel({
       return;
     }
     if (sellUnits === null || sellTooMuch || sellTokens === null) return;
-    const all = sellUnits === balance;
+    const all = sellUnits === sellCap && sellCap > 0n;
     void trade(
       "sell",
       sellUnits,
@@ -1297,12 +1346,19 @@ export function TradePanel({
                     type="button"
                     className={`tm-preset${sellPct === pct ? " on" : ""}`}
                     aria-pressed={sellPct === pct}
-                    disabled={busy || balance === 0n || decimals === null}
-                    title={balance === 0n ? "Nothing to sell" : undefined}
+                    disabled={busy || sellCap === 0n || decimals === null}
+                    title={
+                      sellCap === 0n
+                        ? sizing.elsewhere > 0n
+                          ? "The account this sale debits is empty. The rest sits in another token account."
+                          : "Nothing to sell"
+                        : undefined
+                    }
                     onClick={() => {
                       if (decimals === null) return;
+                      const base = pct >= 100 ? sizing.sellable : sizing.ata;
                       setSellPct(pct);
-                      setSellText(unitsText(shareOf(balance, pct), decimals));
+                      setSellText(base > 0n ? unitsText(shareOf(base, pct), decimals) : "");
                       setSide("sell");
                     }}
                   >
@@ -1311,6 +1367,16 @@ export function TradePanel({
                   </button>
                 ))}
               </div>
+              {sizing.elsewhere > 0n && (
+                <p className="small muted">
+                  The rest of this coin sits in another token account. Sell uses the account the route debits.
+                </p>
+              )}
+              {sizing.feeBps > 0 && (
+                <p className="small muted">
+                  A transfer fee is taken from this coin, so Sell all is what that fee leaves the pool.
+                </p>
+              )}
               <div className="tm-amount">
                 <span className="tm-amount-field">
                   <input
@@ -1318,7 +1384,7 @@ export function TradePanel({
                     placeholder="Amount"
                     aria-label={`Sell amount in ${symbol || "tokens"}`}
                     aria-invalid={sellTooMuch || undefined}
-                    disabled={balance === 0n || decimals === null}
+                    disabled={sellCap === 0n || decimals === null}
                     value={sellText}
                     onChange={(e) => {
                       setSellPct(null);
@@ -1341,7 +1407,15 @@ export function TradePanel({
                   Sell
                 </button>
               </div>
-              {sellTooMuch && <p className="small tm-amount-note">That&apos;s more than you hold.</p>}
+              {sellTooMuch && (
+                <p className="small tm-amount-note">
+                  {sizing.elsewhere > 0n
+                    ? "That's more than the account this sale debits. The rest sits in another token account."
+                    : sizing.feeBps > 0
+                      ? "A transfer fee is taken from this coin, so that's more than the pool can receive."
+                      : "That's more than you hold."}
+                </p>
+              )}
               {expectedOut && (
                 <p
                   className="small muted num tm-expect"

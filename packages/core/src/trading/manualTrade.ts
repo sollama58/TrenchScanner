@@ -1,3 +1,5 @@
+import bs58 from "bs58";
+import { findProgramAddress } from "../solana.js";
 import { TransientError } from "./errors.js";
 import { heliusPriorityFeeEstimate, isHeliusRpcUrl, type HeliusPriorityLevel } from "./heliusPriorityFee.js";
 import { NoRouteError, RateLimitedError, WSOL_MINT, type SwapQuote } from "./jupiterSwap.js";
@@ -109,6 +111,15 @@ export interface ManualTrade {
   minOut: string;
   tipLamports: string;
   priorityFeeLamports: string;
+  /** When the blockhash was fetched (ms). A slow build can already be late before anyone signs. */
+  blockhashAt: number;
+  /** The mint's decimals, when the mint account said. Null when it didn't. */
+  decimals: number | null;
+  /**
+   * Rent the accounts this route opens, lamports. The line the wallet shows is this build's, not
+   * an earlier preview. Absent when the accounts couldn't be read.
+   */
+  accountRentLamports?: string;
 }
 
 /** The slippage a Pro trade may ask for, in bps (50%: a launch can move that much in a slot). */
@@ -131,6 +142,19 @@ const HELIUS_LEVEL: Record<SenderSpeed, HeliusPriorityLevel> = { eco: "High", tu
  * the route can't take more than this beyond the buy and its fees.
  */
 const BUY_MARGIN_LAMPORTS = 10_000_000n;
+/** Slack on top of the rent a route was measured to open. Not a second flat ceiling. */
+const BUY_MARGIN_FLOOR_LAMPORTS = 100_000n;
+/**
+ * The guard's extra SOL ceiling. When the route's rent was measured, the ceiling is that rent
+ * (plus a little slack), and it rises past the flat figure only when the route actually opens
+ * more than that. A flat 0.01 is only the fallback when the accounts couldn't be read, so a
+ * multi-hop the wallet can pay isn't refused for a margin smaller than the accounts it opens.
+ */
+export function buyMarginLamports(routeRent: bigint | null): bigint {
+  if (routeRent === null || routeRent < 0n) return BUY_MARGIN_LAMPORTS;
+  const need = routeRent + BUY_MARGIN_FLOOR_LAMPORTS;
+  return need > BUY_MARGIN_LAMPORTS ? need : BUY_MARGIN_LAMPORTS;
+}
 /** Room under a sale's minimum: base fee and rounding. */
 const SELL_MARGIN_LAMPORTS = 100_000n;
 /** Compute units for the curve's own trades (measured on mainnet), with room. */
@@ -287,7 +311,14 @@ export async function buildManualTrade(
     } else throw err;
   }
   const { route, via, hops, quotedOut, minOut } = built;
-  const { tx, blockhash, priorityFee } = assembled;
+  const { tx, blockhash, priorityFee, blockhashAt } = assembled;
+  const routeRent = await measureRouteRent(deps.rpc, {
+    wallet: req.wallet,
+    mint: req.mint,
+    tokenProgram: mintInfo.program,
+    hops: [...(via ? [via] : []), ...(hops ?? [])],
+    route,
+  }).catch(() => null);
   const limits = {
     maxExternalLamports: tip,
     maxPriorityFeeLamports: priorityFee,
@@ -300,7 +331,7 @@ export async function buildManualTrade(
         kind: "buy",
         mint: req.mint,
         minOut,
-        maxSolDrop: req.amount + priorityFee + tip + BUY_MARGIN_LAMPORTS,
+        maxSolDrop: req.amount + priorityFee + tip + buyMarginLamports(routeRent),
         ...limits,
       }
     : {
@@ -321,6 +352,9 @@ export async function buildManualTrade(
     minOut: minOut.toString(),
     tipLamports: tip.toString(),
     priorityFeeLamports: priorityFee.toString(),
+    blockhashAt,
+    decimals: typeof mintInfo.decimals === "number" ? mintInfo.decimals : null,
+    ...(routeRent !== null ? { accountRentLamports: routeRent.toString() } : {}),
   };
 }
 
@@ -407,6 +441,8 @@ interface Assembled {
   tx: Uint8Array;
   blockhash: { blockhash: string; lastValidBlockHeight: number };
   priorityFee: bigint;
+  /** When `blockhash` was fetched. */
+  blockhashAt: number;
 }
 
 /**
@@ -430,6 +466,7 @@ async function assemble(
     rpc.getAccountsData([...tables, ...shared]),
   ]);
   if (!blockhash) throw new TransientError("couldn't read a recent blockhash");
+  const blockhashAt = Date.now();
   if (!tableData) throw new TransientError("couldn't read the route's lookup tables");
   const resolved = new Map<string, string[]>();
   tables.forEach((t, i) => {
@@ -457,7 +494,7 @@ async function assemble(
     resolved,
     STATIC_PROGRAMS,
   );
-  return { tx, blockhash, priorityFee };
+  return { tx, blockhash, priorityFee, blockhashAt };
 }
 
 /**
@@ -593,15 +630,29 @@ const TYPICAL_UNITS = 250_000;
  */
 export async function estimateManualFees(
   rpc: Pick<ManualTradeRpc, "getPriorityFeeEstimate" | "url" | "backupUrl">,
-  input: { mint: string; speed: SenderSpeed; priorityFeeLamports?: bigint; tipLamports?: bigint },
+  input: {
+    mint: string;
+    speed: SenderSpeed;
+    priorityFeeLamports?: bigint;
+    tipLamports?: bigint;
+    /** The last build's compute-unit limit, when one exists. Otherwise a typical trade. */
+    unitLimit?: number;
+  },
 ): Promise<{ priorityFeeLamports: bigint; tipLamports: bigint; baseFeeLamports: bigint }> {
+  const units =
+    typeof input.unitLimit === "number" &&
+    Number.isInteger(input.unitLimit) &&
+    input.unitLimit >= MIN_UNITS &&
+    input.unitLimit <= MAX_UNITS
+      ? input.unitLimit
+      : TYPICAL_UNITS;
   const estimate =
     input.priorityFeeLamports !== undefined
       ? null
       : await networkPrice(rpc, [input.mint, PROGRAM.jupiterV6, PROGRAM.pumpFun], input.speed);
-  const price = priorityPrice(TYPICAL_UNITS, input.speed, estimate, input.priorityFeeLamports);
+  const price = priorityPrice(units, input.speed, estimate, input.priorityFeeLamports);
   return {
-    priorityFeeLamports: priorityFeeOf(TYPICAL_UNITS, price),
+    priorityFeeLamports: priorityFeeOf(units, price),
     tipLamports: input.tipLamports ?? SENDER_MIN_TIP_LAMPORTS[input.speed],
     // One signature.
     baseFeeLamports: 5_000n,
@@ -856,7 +907,77 @@ export function signedMatchesBuild(built: DecodedMessage, signed: DecodedMessage
     else if (d[0] === 3 && d.length >= 9) price = view.getBigUint64(1, true);
   }
   if ((price * limit) / 1_000_000n > MAX_CUSTOM_FEE_LAMPORTS) return "a priority fee over 0.01 SOL";
+  // A wallet may raise the priority fee. It may not cut the one this build set: a lower fee can
+  // miss the block the quote was priced for, and the preview would no longer be the trade.
+  if (budgetFee(signed) < budgetFee(built)) return "a priority fee below the one this trade was built with";
   return null;
+}
+
+/** The priority fee a message's compute-budget instructions set, lamports (the runtime's default limit when unset). */
+export function budgetFee(message: DecodedMessage): bigint {
+  let limit = 200_000n;
+  let price = 0n;
+  for (const ix of message.instructions) {
+    if (message.staticKeys[ix.programIdIndex] !== PROGRAM.computeBudget) continue;
+    const d = ix.data;
+    const view = new DataView(d.buffer, d.byteOffset, d.byteLength);
+    if (d[0] === 2 && d.length >= 5) limit = BigInt(view.getUint32(1, true));
+    else if (d[0] === 3 && d.length >= 9) price = view.getBigUint64(1, true);
+  }
+  return (price * limit) / 1_000_000n;
+}
+
+/** The compute-unit limit a built message set, or null when it didn't. */
+export function messageUnitLimit(message: DecodedMessage): number | null {
+  for (const ix of message.instructions) {
+    if (message.staticKeys[ix.programIdIndex] !== PROGRAM.computeBudget) continue;
+    const d = ix.data;
+    if (d[0] === 2 && d.length >= 5) {
+      return new DataView(d.buffer, d.byteOffset, d.byteLength).getUint32(1, true);
+    }
+  }
+  return null;
+}
+
+/**
+ * Rent for the token accounts this route still has to open, plus a Pump volume accumulator when
+ * the route is Pump's and that account isn't there yet. Null when the accounts couldn't be read.
+ * The flat buy margin is not added here: the caller raises it only when this number needs it.
+ */
+export async function measureRouteRent(
+  rpc: Pick<ManualTradeRpc, "getAccountsData" | "getMintInfo">,
+  input: {
+    wallet: string;
+    mint: string;
+    tokenProgram: string;
+    hops: string[];
+    route: ManualTrade["route"];
+  },
+): Promise<bigint | null> {
+  const mints = [...new Set([input.mint, ...input.hops])];
+  const programs = await Promise.all(
+    mints.map(async (mint, i) =>
+      i === 0 ? input.tokenProgram : ((await rpc.getMintInfo(mint))?.program ?? PROGRAM.token),
+    ),
+  );
+  const atas = mints.map((mint, i) => associatedTokenAddress(input.wallet, mint, programs[i]!));
+  const volume =
+    input.route === "pump" || input.route === "pumpswap"
+      ? findProgramAddress(
+          [new TextEncoder().encode("user_volume_accumulator"), bs58.decode(input.wallet)],
+          input.route === "pump" ? PROGRAM.pumpFun : PROGRAM.pumpSwap,
+        )
+      : null;
+  const data = await rpc.getAccountsData(volume ? [...atas, volume] : atas);
+  if (!data) return null;
+  const rentOf = (program: string) =>
+    program === PROGRAM.token2022 ? TOKEN_2022_ACCOUNT_RENT_LAMPORTS : TOKEN_ACCOUNT_RENT_LAMPORTS;
+  let rent = 0n;
+  atas.forEach((_, i) => {
+    if (data[i] === null) rent += rentOf(programs[i]!);
+  });
+  if (volume && data[atas.length] === null) rent += 1_500_000n;
+  return rent;
 }
 
 /** A new token account's rent, lamports: the classic program's 165 bytes, Token-2022's with its fee extension. */

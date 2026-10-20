@@ -22,13 +22,16 @@ import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
 import {
   freeAsdfBuy,
+  chainTradeState,
   landedFailure,
   plainRefusal,
   quietSign,
+  resendTarget,
   sellShare,
   slippageMiss,
   SLIPPAGE_LANDED,
   SLIPPAGE_UNSENT,
+  RENT_SHORT,
   TRADE_COOLDOWN_MS,
   TradeCooldown,
 } from "./proTrade.js";
@@ -55,6 +58,10 @@ describe("plainRefusal", () => {
     expect(plainRefusal("refused: a program this swap may not call")).toBe(
       "The trade was refused before signing: a program this swap may not call",
     );
+    expect(plainRefusal("refused: simulation failed: InsufficientFundsForRent")).toBe(RENT_SHORT);
+    expect(plainRefusal('{"InstructionError":[3,{"Custom":1}]}', "sell")).toMatch(/fewer tokens/);
+    expect(plainRefusal("simulation failed: InstructionError unknown")).toMatch(/wasn't signed/);
+    expect(plainRefusal("blockhash expired")).toMatch(/refused before signing/);
   });
 });
 
@@ -77,6 +84,38 @@ describe("landedFailure", () => {
     expect(slippageMiss("timed out")).toBe(false);
     expect(slippageMiss("blockhash not found")).toBe(false);
     expect(slippageMiss('{"Custom":16001}')).toBe(false);
+    expect(landedFailure("InsufficientFundsForRent").error).toMatch(/rent-exempt/);
+    expect(landedFailure("InsufficientFundsForRent").error).toMatch(/Nothing was bought or sold/);
+    expect(landedFailure('{"InstructionError":[2,{"Custom":1}]}', "sell").error).toMatch(/fewer tokens/);
+    expect(landedFailure("simulation failed: something else").error).toMatch(/program rejected it/);
+    expect(landedFailure("processed").error).toBe("processed");
+  });
+});
+
+describe("resendTarget", () => {
+  const row = {
+    status: "sent",
+    wallet: "w",
+    transaction: "bytes",
+    lastValidBlockHeight: 100n,
+  };
+  it("reattaches the same bytes while the blockhash is still live", () => {
+    expect(resendTarget(row, "w", 90)).toEqual({ base64: "bytes", lastValidBlockHeight: 100 });
+    expect(resendTarget(row, "w", null)).toEqual({ base64: "bytes", lastValidBlockHeight: 100 });
+    expect(resendTarget(row, "w", 101)).toBeNull();
+    expect(resendTarget({ ...row, status: "confirmed" }, "w", 90)).toBeNull();
+    expect(resendTarget({ ...row, transaction: null }, "w", 90)).toBeNull();
+    expect(resendTarget(row, "other", 90)).toBeNull();
+    expect(resendTarget(null, "w", 90)).toBeNull();
+  });
+});
+
+describe("chainTradeState", () => {
+  it("treats processed as a success so far, not a failure", () => {
+    expect(chainTradeState({ seen: true, confirmed: false, error: null })).toBe("processed");
+    expect(chainTradeState({ seen: true, confirmed: true, error: null })).toBe("confirmed");
+    expect(chainTradeState({ seen: true, confirmed: false, error: "x" })).toBe("failed");
+    expect(chainTradeState({ seen: false, confirmed: false, error: null })).toBe("unseen");
   });
 });
 

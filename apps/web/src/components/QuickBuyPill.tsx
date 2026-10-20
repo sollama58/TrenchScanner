@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   disclaimerAccepted,
   quickBuyShown,
@@ -58,6 +58,8 @@ export function QuickBuyPill({
   const shown = quickBuyShown(q) && here;
   const canSign = useCanSignTrades(shown ? owner : null);
   const [state, setState] = useState<State>({ kind: "idle" });
+  const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   // A result shows for a moment, then the pill is ready again.
   useEffect(() => {
@@ -87,9 +89,19 @@ export function QuickBuyPill({
     }
     if (q.amountSol >= CONFIRM_BUY_SOL && !window.confirm(`Buy ${q.amountSol} SOL of ${symbol}?`)) return;
     setState({ kind: "busy", stage: "building" });
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
     try {
       await runTrade(
-        { owner, mint, side: "buy", amount: BigInt(Math.round(q.amountSol * 1e9)), settings },
+        {
+          owner,
+          mint,
+          side: "buy",
+          amount: BigInt(Math.round(q.amountSol * 1e9)),
+          settings,
+          signal: ac.signal,
+        },
         (stage) => setState({ kind: "busy", stage }),
       );
       setState({ kind: "done" });

@@ -608,6 +608,14 @@ export interface PositionResponse {
   mint: string;
   decimals: number | null;
   balance: string;
+  /** The associated account the route debits, raw units. Absent on older API builds (then `balance`). */
+  tradable?: string;
+  /** Raw units in other token accounts. Absent when there are none or the API is older. */
+  elsewhere?: string;
+  /** Token-2022 transfer fee, basis points. 0 when the mint has none. */
+  transferFeeBps?: number;
+  /** Sell all: `tradable` after the transfer fee. Absent on older API builds. */
+  sellable?: string;
   supply: string | null;
   solUsd: number | null;
   /** When solUsd was read (ISO): the SOL price is kept through failed reads. Absent from older API builds. */
@@ -893,6 +901,14 @@ export interface BuiltTrade {
   sacrifice?: SacrificeView;
   /** The build, signed by the API: sent back with the signed trade, so any API instance takes it. */
   buildToken?: string;
+  /** When the blockhash was fetched (ms). Absent on older API builds. */
+  blockhashAt?: number;
+  /** The mint's decimals. Null when unknown; absent on older API builds. */
+  decimals?: number | null;
+  /** Rent this build opens, lamports. The sign line uses this, not an earlier preview. */
+  accountRentLamports?: string;
+  /** Raw units of this coin that sit outside the account the route debits. */
+  elsewhere?: string;
   /**
    * A sell preset: the raw units the build sold, and the balance it read them from. The page checks
    * the units are that percent of that balance before it asks the wallet to sign.
@@ -908,13 +924,22 @@ export class TradeError extends Error {
     message: string,
     /** Set once the trade went out: it may still land, so check before trading again. */
     readonly signature?: string,
+    /**
+     * The chain has settled it (confirmed is a return, not an error; failed or expired). A give-up
+     * or a lost send is not settled: the in-flight lock stays.
+     */
+    readonly settled = false,
   ) {
     super(message);
   }
 }
 
 /** The trade's blockhash ran out before it landed: nothing changed, and it can go again at Turbo. */
-export class TradeExpiredError extends TradeError {}
+export class TradeExpiredError extends TradeError {
+  constructor(message: string, signature?: string) {
+    super(message, signature, true);
+  }
+}
 
 function fromBase64(b64: string): Uint8Array {
   const bin = atob(b64);
@@ -1352,11 +1377,76 @@ export const SLIPPAGE_UNSENT =
   "The price moved past your slippage. Nothing was sent. Try again, or raise the slippage.";
 
 /** What the panel says when the chain reports the signature failed. Not a fill, and not a timeout. */
-export function landedFailureMessage(error?: string, reason?: string): string {
+export function landedFailureMessage(error?: string, reason?: string, side: "buy" | "sell" = "buy"): string {
   if (reason === "slippage" || (error ? slippageMiss(error) : false)) return SLIPPAGE_LANDED;
+  if (error && /InsufficientFundsForRent|rent-exempt/i.test(error))
+    return "Not enough SOL left to keep your wallet rent-exempt after this trade. Nothing was bought or sold.";
+  if (
+    error &&
+    side === "sell" &&
+    /InsufficientFunds|"Custom":1\b|\b0x1\b/i.test(error) &&
+    !slippageMiss(error)
+  )
+    return "You hold fewer tokens than that sale. Nothing was bought or sold.";
   if (error && /Nothing was bought or sold\.$/.test(error)) return error;
+  // A raw program error is not shown as JSON. A timeout keeps its own sentence.
+  if (error && /[{}]/.test(error))
+    return "The trade landed and the program rejected it. Nothing was bought or sold.";
   return `The trade failed on chain${error ? ` (${error})` : ""}. Nothing was bought or sold.`;
 }
+
+/** What a transfer fee leaves the pool from `raw`. Sell all stops here. */
+export function sellableAfterTransferFee(raw: bigint, transferFeeBps: number): bigint {
+  if (!Number.isInteger(transferFeeBps) || transferFeeBps <= 0) return raw;
+  if (transferFeeBps >= 10_000) return 0n;
+  const fee = (raw * BigInt(transferFeeBps) + 9_999n) / 10_000n;
+  return raw > fee ? raw - fee : 0n;
+}
+
+/**
+ * Where a sale is sized from: the associated account the route debits, not the sum of every
+ * token account. Sell all is that account after the transfer fee.
+ */
+export function sellSizing(
+  position: {
+    balance: string;
+    tradable?: string;
+    elsewhere?: string;
+    transferFeeBps?: number;
+    sellable?: string;
+  } | null,
+): { ata: bigint; elsewhere: bigint; sellable: bigint; feeBps: number } {
+  const total = position && /^\d+$/.test(position.balance) ? BigInt(position.balance) : 0n;
+  const ata =
+    position?.tradable !== undefined && /^\d+$/.test(position.tradable) ? BigInt(position.tradable) : total;
+  const elsewhere =
+    position?.elsewhere !== undefined && /^\d+$/.test(position.elsewhere) ? BigInt(position.elsewhere) : 0n;
+  const feeBps =
+    typeof position?.transferFeeBps === "number" && position.transferFeeBps > 0 ? position.transferFeeBps : 0;
+  const sellable =
+    position?.sellable !== undefined && /^\d+$/.test(position.sellable)
+      ? BigInt(position.sellable)
+      : sellableAfterTransferFee(ata, feeBps);
+  return { ata, elsewhere, sellable, feeBps };
+}
+
+/** A failed refresh must not sell the whole balance it last showed. */
+export const STALE_TOTAL_SALE =
+  "Couldn't refresh your position, so this sale of the whole balance wasn't sent.";
+
+/** Pro turned off mid-session: App refreshes /auth/me and hides trading. */
+const sessionRefreshers = new Set<() => void>();
+export function onTradingSessionRefresh(cb: () => void): () => void {
+  sessionRefreshers.add(cb);
+  return () => sessionRefreshers.delete(cb);
+}
+export function tradingUnavailable(): void {
+  for (const cb of sessionRefreshers) cb();
+}
+
+export const TRADING_OFF = "Trading isn't available for this wallet right now. Nothing was sent.";
+export const STATUS_MAYBE =
+  "Trading is off for this wallet now. This trade may still have landed. Check it before trading again.";
 
 /** The API's one trade per second per wallet (sales of 100% exempt), checked here first. */
 export const TRADE_COOLDOWN_MS = 1_000;
@@ -1374,6 +1464,95 @@ const lastSentAt = new Map<string, number>();
 /** Milliseconds until `owner` may trade again here; 0 when it may now. */
 export function tradeCooldownLeft(owner: string, now = Date.now()): number {
   return Math.max(0, (lastSentAt.get(owner) ?? -Infinity) + TRADE_COOLDOWN_MS - now);
+}
+
+/**
+ * One trade at a time per wallet, for the life of the page. Preparing covers build and sign, so
+ * two panels can't both open the wallet. Live is a signature that has been sent: closing the
+ * token window, or giving up after 90s, does not drop it. It drops when the chain settles it
+ * (confirmed, failed, expired) or the blockhash's life has passed.
+ */
+type WalletSlot =
+  | { kind: "preparing"; mint: string; id: number; prevPace: number | undefined; paced: boolean }
+  | { kind: "live"; mint: string; id: number; signature: string; blockhashAt: number };
+
+const walletSlots = new Map<string, WalletSlot>();
+let walletSlotId = 0;
+
+export function walletTradeBlock(owner: string): string | null {
+  const slot = walletSlots.get(owner);
+  if (!slot) return null;
+  if (slot.kind === "preparing")
+    return "This wallet is already signing a trade. Wait for that one to finish.";
+  return "A trade from this wallet is still in flight. Wait for it to land before trading again.";
+}
+
+function claimWallet(owner: string, mint: string, pace: boolean): number {
+  const blocked = walletTradeBlock(owner);
+  if (blocked) throw new TradeError(blocked);
+  const prevPace = lastSentAt.get(owner);
+  // The pace starts when the click is accepted, so a second panel can't both build before the
+  // send returns. A closing sale stays exempt from the one-second pace and still takes the lock.
+  if (pace) {
+    const left = tradeCooldownLeft(owner);
+    if (left > 0)
+      throw new TradeError(`One trade ${tradePacePhrase()}: try again in ${Math.ceil(left / 1_000)}s.`);
+    lastSentAt.set(owner, Date.now());
+  }
+  const id = ++walletSlotId;
+  walletSlots.set(owner, { kind: "preparing", mint, id, prevPace, paced: pace });
+  return id;
+}
+
+function releaseUnsent(owner: string, id: number): void {
+  const slot = walletSlots.get(owner);
+  if (!slot || slot.kind !== "preparing" || slot.id !== id) return;
+  walletSlots.delete(owner);
+  if (!slot.paced) return;
+  if (slot.prevPace === undefined) lastSentAt.delete(owner);
+  else lastSentAt.set(owner, slot.prevPace);
+}
+
+function markLive(owner: string, id: number, signature: string, blockhashAt: number): void {
+  const slot = walletSlots.get(owner);
+  if (!slot || slot.id !== id) return;
+  walletSlots.set(owner, { kind: "live", mint: slot.mint, id, signature, blockhashAt });
+}
+
+function clearSlot(owner: string, id: number): void {
+  const slot = walletSlots.get(owner);
+  if (slot && slot.id === id) walletSlots.delete(owner);
+}
+
+/** Keeps polling after the panel gives up, and drops the lock once the chain settles the signature. */
+function watchLive(owner: string, id: number, signature: string, blockhashAt: number): void {
+  if (typeof window === "undefined") return;
+  void (async () => {
+    const until = blockhashAt + 90_000;
+    while (Date.now() < until) {
+      await new Promise((r) => setTimeout(r, STATUS_POLL_MS));
+      const slot = walletSlots.get(owner);
+      if (!slot || slot.kind !== "live" || slot.id !== id) return;
+      try {
+        const s = await api<{ state: string }>(`/pro/trade/status/${encodeURIComponent(signature)}`, {
+          signal: AbortSignal.timeout(STATUS_TIMEOUT_MS),
+        });
+        if (s.state === "confirmed" || s.state === "failed" || s.state === "expired") {
+          clearSlot(owner, id);
+          return;
+        }
+      } catch {
+        // A 404 (trading turned off) still leaves the signature locked until the blockhash is done.
+      }
+    }
+    const slot = walletSlots.get(owner);
+    if (slot?.kind === "live" && slot.id === id) walletSlots.delete(owner);
+  })();
+}
+
+export function resetTradeSessionForTests(): void {
+  lastSentAt.clear();
+  walletSlots.clear();
 }
 
 const STATUS_POLL_MS = 1_200;
@@ -1493,28 +1672,41 @@ async function postSend(body: unknown): Promise<{ signature: string }> {
  * Poll /status until the signature confirms, fails, expires, or the wait runs out. A failure is
  * never a fill. Slippage is its own sentence; a timeout stays "still waiting" or "lost touch".
  */
-async function confirmTrade(signature: string, uncertain: boolean): Promise<string> {
+async function confirmTrade(
+  signature: string,
+  uncertain: boolean,
+  side: "buy" | "sell",
+  giveUpMs = CONFIRM_GIVE_UP_MS,
+): Promise<string> {
   const started = Date.now();
   let seen = false;
   for (;;) {
     await new Promise((r) => setTimeout(r, STATUS_POLL_MS));
     // A poll that hangs (an API restart) is given up on and asked again, so the give-up below
-    // still comes on time.
-    const s = await api<{ state: string; error?: string; reason?: string }>(
-      `/pro/trade/status/${encodeURIComponent(signature)}`,
-      { signal: AbortSignal.timeout(STATUS_TIMEOUT_MS) },
-    ).catch(() => ({ state: "unknown" }) as { state: string; error?: string; reason?: string });
+    // still comes on time. A 404 is not "unknown": trading may have been turned off after the send.
+    let s: { state: string; error?: string; reason?: string };
+    try {
+      s = await api<{ state: string; error?: string; reason?: string }>(
+        `/pro/trade/status/${encodeURIComponent(signature)}`,
+        { signal: AbortSignal.timeout(STATUS_TIMEOUT_MS) },
+      );
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) throw e;
+      s = { state: "unknown" };
+    }
     if (s.state === "confirmed") return signature;
-    if (s.state === "failed") throw new TradeError(landedFailureMessage(s.error, s.reason), signature);
+    // Processed has landed and not failed. It is not a success to close on, and not a failure.
+    if (s.state === "processed" || s.state === "pending") seen = true;
+    if (s.state === "failed")
+      throw new TradeError(landedFailureMessage(s.error, s.reason, side), signature, true);
     if (s.state === "expired")
       throw new TradeExpiredError(
         "The trade didn't land in time and has expired. Nothing changed.",
         signature,
       );
-    if (s.state === "pending") seen = true;
     // Unseen after an unanswered send: stop soon, and say it may have landed. Once the chain has
     // seen it, wait the full window so a retry isn't a second trade of one that's still in flight.
-    const limit = !uncertain || seen ? CONFIRM_GIVE_UP_MS : UNCLEAR_SEND_POLL_MS;
+    const limit = !uncertain || seen ? giveUpMs : UNCLEAR_SEND_POLL_MS;
     if (Date.now() - started > limit)
       throw new TradeError(
         uncertain && !seen
@@ -1523,6 +1715,14 @@ async function confirmTrade(signature: string, uncertain: boolean): Promise<stri
         signature,
       );
   }
+}
+
+function blockhashLate(built: { blockhashAt?: number }, now = Date.now()): boolean {
+  return typeof built.blockhashAt === "number" && now - built.blockhashAt > SIGN_FRESH_MS;
+}
+
+function windowClosed(): TradeError {
+  return new TradeError("This window closed before the trade was signed. Nothing was sent.");
 }
 
 export async function runTrade(
@@ -1538,122 +1738,182 @@ export async function runTrade(
     settings: TradeSettings;
     /** The trade's Sacrifice line, for the two-factor prompt (sacrificeLine). */
     sacrificeNote?: string | null;
+    /** Set when the token window or quick-trade dialog closes. Checked before the wallet opens. */
+    signal?: AbortSignal;
   },
-  onStage: (stage: TradeStage, built?: BuiltTrade) => void,
+  onStage: (stage: TradeStage, built?: BuiltTrade) => void | Promise<void>,
 ): Promise<string> {
-  // Slippage, speed and MEV as they were when Buy or Sell was pressed. A rebuild after a slow
-  // signature uses these, not a setting changed while the wallet was open, and the send uses the
-  // same speed the build tipped for.
-  const settings: TradeSettings = { ...input.settings };
-  const asked = { ...input, settings };
-  // The wallet first: if it isn't here there's no point building anything.
-  const { account, sign, name } = await accountFor(asked.owner);
-  const { ownTokenAccounts, ownWrappedSolAccounts } = await import("./solanaPda");
-  // Built and signed again, once, when the wallet took so long that the blockhash is nearly spent:
-  // sent, it would only expire. The slippage is not widened.
-  let built: BuiltTrade;
-  let signedBytes: Uint8Array | undefined;
-  for (let attempt = 0; ; attempt++) {
-    onStage("building");
-    built = await buildTrade(asked);
-    let amount = asked.amount;
-    let all = asked.all;
-    if (
-      asked.percent !== undefined &&
-      built.inputAmount &&
-      built.inputBalance &&
-      /^\d+$/.test(built.inputAmount) &&
-      /^\d+$/.test(built.inputBalance)
-    ) {
-      const balance = BigInt(built.inputBalance);
-      const sold = BigInt(built.inputAmount);
-      if (shareOf(balance, asked.percent) !== sold)
+  // One signature at a time for this wallet, taken before any await so two panels can't both sign.
+  // A closing sale is in that lock and exempt from the one-second pace, as the API is.
+  const closing = input.all === true || (input.percent ?? 0) >= 100;
+  const slot = claimWallet(input.owner, input.mint, !closing);
+  let sentOut = false;
+  try {
+    // Slippage, speed and MEV as they were when Buy or Sell was pressed. A rebuild after a slow
+    // signature uses these, not a setting changed while the wallet was open, and the send uses the
+    // same speed the build tipped for.
+    const settings: TradeSettings = { ...input.settings };
+    const asked = { ...input, settings };
+    if (input.signal?.aborted) throw windowClosed();
+    // The wallet first: if it isn't here there's no point building anything.
+    const { account, sign, name } = await accountFor(asked.owner);
+    const { ownTokenAccounts, ownWrappedSolAccounts } = await import("./solanaPda");
+    // Built and signed again, once, when the blockhash is already late or the wallet took so long
+    // that it is nearly spent: sent, it would only expire. The slippage is not widened.
+    let built!: BuiltTrade;
+    let signedBytes: Uint8Array | undefined;
+    for (let attempt = 0; ; attempt++) {
+      if (input.signal?.aborted) throw windowClosed();
+      onStage("building");
+      try {
+        built = await buildTrade(asked);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) {
+          tradingUnavailable();
+          throw new TradeError(TRADING_OFF);
+        }
+        throw e;
+      }
+      let amount = asked.amount;
+      let all = asked.all;
+      if (
+        asked.percent !== undefined &&
+        built.inputAmount &&
+        built.inputBalance &&
+        /^\d+$/.test(built.inputAmount) &&
+        /^\d+$/.test(built.inputBalance)
+      ) {
+        const balance = BigInt(built.inputBalance);
+        const sold = BigInt(built.inputAmount);
+        if (shareOf(balance, asked.percent) !== sold)
+          throw new TradeError(
+            "The trade built for you looks wrong (its amount isn't the percent you asked for), so it wasn't signed.",
+          );
+        amount = sold;
+        all = asked.percent >= 100;
+      }
+      const unsigned = fromBase64(built.transaction);
+      const problem = tradeProblem(unsigned, asked.owner, {
+        side: asked.side,
+        amount,
+        all,
+        slippageBps: Math.round(settings.slippagePct * 100),
+        ownWrappedSol: ownWrappedSolAccounts(asked.owner),
+        ownCoinAccounts: ownTokenAccounts(asked.owner, asked.mint),
+        ...(built.via ? { ownViaAccounts: ownTokenAccounts(asked.owner, built.via) } : {}),
+      });
+      if (problem)
+        throw new TradeError(`The trade built for you looks wrong (${problem}), so it wasn't signed.`);
+      // A buy is not signed until the mint's decimals are known: the quote on screen has to be
+      // the one in the transaction. An omitted field (an older build) still signs.
+      if (asked.side === "buy" && built.decimals === null)
         throw new TradeError(
-          "The trade built for you looks wrong (its amount isn't the percent you asked for), so it wasn't signed.",
+          "This coin's decimals aren't known yet, so nothing was signed. Try again once the mint is known.",
         );
-      amount = sold;
-      all = asked.percent >= 100;
-    }
-    const unsigned = fromBase64(built.transaction);
-    const problem = tradeProblem(unsigned, asked.owner, {
-      side: asked.side,
-      amount,
-      all,
-      slippageBps: Math.round(settings.slippagePct * 100),
-      ownWrappedSol: ownWrappedSolAccounts(asked.owner),
-      ownCoinAccounts: ownTokenAccounts(asked.owner, asked.mint),
-      ...(built.via ? { ownViaAccounts: ownTokenAccounts(asked.owner, built.via) } : {}),
-    });
-    if (problem)
-      throw new TradeError(`The trade built for you looks wrong (${problem}), so it wasn't signed.`);
-    onStage("signing", built);
-    // Privy's confirm window shows for every trade but one the API marked quiet, and only after
-    // the check above passed: a coin the wallet holds, that passed the safety screen, or a model called.
-    const quiet = built.quietSign === true && name === PRIVY_WALLET_NAME;
-    const signingStarted = Date.now();
-    try {
-      signedBytes = quiet
-        ? await withTimeout(
-            privyControls().then((privy) => privy.signQuietly(input.owner, unsigned)),
-            "sign",
-          )
-        : (
-            await withTimeout(
-              sign.signTransaction({ account, transaction: unsigned, chain: "solana:mainnet" }),
+      if (blockhashLate(built)) {
+        if (attempt > 0)
+          throw new TradeError(
+            "The quote's blockhash expired before it could be signed. Nothing was sent; try again.",
+          );
+        continue;
+      }
+      if (input.signal?.aborted) throw windowClosed();
+      // The quote has to be on screen before the wallet opens.
+      await Promise.resolve(onStage("signing", built));
+      if (input.signal?.aborted) throw windowClosed();
+      // Privy's confirm window shows for every trade but one the API marked quiet, and only after
+      // the check above passed: a coin the wallet holds, that passed the safety screen, or a model called.
+      const quiet = built.quietSign === true && name === PRIVY_WALLET_NAME;
+      const signingStarted = Date.now();
+      try {
+        signedBytes = quiet
+          ? await withTimeout(
+              privyControls().then((privy) => privy.signQuietly(input.owner, unsigned)),
               "sign",
             )
-          )[0]?.signedTransaction;
-    } catch (e) {
-      if (name === PRIVY_WALLET_NAME && privyUnreachable(e))
+          : (
+              await withTimeout(
+                sign.signTransaction({ account, transaction: unsigned, chain: "solana:mainnet" }),
+                "sign",
+              )
+            )[0]?.signedTransaction;
+      } catch (e) {
+        if (name === PRIVY_WALLET_NAME && privyUnreachable(e))
+          throw new TradeError(
+            "Privy is unreachable right now, so the trade couldn't be signed. Nothing was sent.",
+          );
+        throw e;
+      }
+      if (input.signal?.aborted) throw windowClosed();
+      if (!signedBytes) throw new TradeError(`${name} returned no signed transaction`);
+      if (!blockhashLate(built) && Date.now() - signingStarted <= SIGN_FRESH_MS) break;
+      if (attempt > 0)
         throw new TradeError(
-          "Privy is unreachable right now, so the trade couldn't be signed. Nothing was sent.",
+          "That took too long to sign, so it would have expired. Nothing was sent; try again.",
         );
-      throw e;
     }
-    if (!signedBytes) throw new TradeError(`${name} returned no signed transaction`);
-    if (Date.now() - signingStarted <= SIGN_FRESH_MS) break;
-    if (attempt > 0)
-      throw new TradeError(
-        "That took too long to sign, so it would have expired. Nothing was sent; try again.",
-      );
-  }
-  const bytes = Uint8Array.from(signedBytes);
-  // Its signature, known from here on (one signer: the 64 bytes after the count), so anything
-  // that goes wrong past this point can say which transaction to check before trading again.
-  const signature = bytes.length >= 65 && bytes[0] === 1 ? bs58.encode(bytes.subarray(1, 65)) : undefined;
-  onStage("sending", built);
-  let sent: { signature: string };
-  try {
-    sent = await postSend({
-      transaction: toBase64(bytes),
-      speed: settings.speed,
-      mevProtect: settings.mevProtect,
-      ...(built.buildToken ? { buildToken: built.buildToken } : {}),
-    });
-  } catch (e) {
-    // The API refused it before Sender, or Sender refused it: nothing went out. Only the API's own
-    // word counts (a proxy's 502 during a restart could follow a send). A slippage miss here was
-    // refused, not landed, so it stays distinct from one the chain reverted.
-    const notSent =
-      e instanceof ApiError &&
-      ((e.body as { notSent?: unknown } | null)?.notSent === true || [401, 403, 404].includes(e.status));
-    if (notSent) {
-      if (e instanceof ApiError && slippageMiss(e.message)) throw new TradeError(SLIPPAGE_UNSENT);
-      throw e;
+    const bytes = Uint8Array.from(signedBytes);
+    // Its signature, known from here on (one signer: the 64 bytes after the count), so anything
+    // that goes wrong past this point can say which transaction to check before trading again.
+    const signature = bytes.length >= 65 && bytes[0] === 1 ? bs58.encode(bytes.subarray(1, 65)) : undefined;
+    onStage("sending", built);
+    let sent: { signature: string };
+    let uncertain = false;
+    try {
+      sent = await postSend({
+        transaction: toBase64(bytes),
+        speed: settings.speed,
+        mevProtect: settings.mevProtect,
+        ...(built.buildToken ? { buildToken: built.buildToken } : {}),
+      });
+    } catch (e) {
+      // Trading turned off after the click: refresh the session. Nothing went out.
+      if (e instanceof ApiError && e.status === 404) {
+        tradingUnavailable();
+        throw new TradeError(TRADING_OFF);
+      }
+      // The API refused it before Sender, or Sender refused it: nothing went out. Only the API's own
+      // word counts (a proxy's 502 during a restart could follow a send). A slippage miss here was
+      // refused, not landed, so it stays distinct from one the chain reverted.
+      const notSent =
+        e instanceof ApiError &&
+        ((e.body as { notSent?: unknown } | null)?.notSent === true || [401, 403].includes(e.status));
+      if (notSent) {
+        if (e instanceof ApiError && slippageMiss(e.message)) throw new TradeError(SLIPPAGE_UNSENT);
+        throw e;
+      }
+      // The connection dropped, or /send sat unanswered. The signature may be on its way. Watch it
+      // before saying so: a landing is a fill or a revert, not a timeout, and not a second submit.
+      if (!signature)
+        throw new TradeError(
+          "Lost touch with the server while sending. It may still land: check your wallet before trading again.",
+        );
+      uncertain = true;
+      sent = { signature };
     }
-    // The connection dropped, or /send sat unanswered. The signature may be on its way. Watch it
-    // before saying so: a landing is a fill or a revert, not a timeout, and not a second submit.
-    if (!signature)
-      throw new TradeError(
-        "Lost touch with the server while sending. It may still land: check your wallet before trading again.",
-      );
-    lastSentAt.set(asked.owner, Date.now());
+    sentOut = true;
+    const blockhashAt = built.blockhashAt ?? Date.now();
+    markLive(asked.owner, slot, sent.signature, blockhashAt);
     onStage("confirming", built);
-    return confirmTrade(signature, true);
+    try {
+      const confirmed = await confirmTrade(sent.signature, uncertain, asked.side);
+      clearSlot(asked.owner, slot);
+      return confirmed;
+    } catch (e) {
+      // Status 404 after a successful send: the signature stays, and it may still have landed.
+      if (e instanceof ApiError && e.status === 404) {
+        tradingUnavailable();
+        watchLive(asked.owner, slot, sent.signature, blockhashAt);
+        throw new TradeError(STATUS_MAYBE, sent.signature);
+      }
+      if (e instanceof TradeError && e.settled) clearSlot(asked.owner, slot);
+      else watchLive(asked.owner, slot, sent.signature, blockhashAt);
+      throw e;
+    }
+  } catch (e) {
+    if (!sentOut) releaseUnsent(input.owner, slot);
+    throw e;
   }
-  lastSentAt.set(asked.owner, Date.now());
-  onStage("confirming", built);
-  return confirmTrade(sent.signature, false);
 }
 
 /**
