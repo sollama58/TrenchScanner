@@ -86,7 +86,14 @@ import {
   chartMaxHeight,
   useTermLayout,
 } from "./TermSplit";
-import { markPrefsOf, walletMarks, withAvatars, withLiveMarks } from "../walletMarks";
+import {
+  keepMarkSources,
+  markPrefsOf,
+  picWallets as picWalletsOf,
+  walletMarks,
+  withAvatars,
+  withLiveMarks,
+} from "../walletMarks";
 import { TradingChart, type ChartEvent, type ChartKind, type ChartTrade } from "./TradingChart";
 import { TradePanel, solText, tokensText } from "./TradePanel";
 import { PRO_MODE_PERKS } from "./ProModeCard";
@@ -208,17 +215,6 @@ function kindOf(w: FlaggedWallet): MarkerKind {
   return "linked";
 }
 
-/**
- * The chart's two views (user ask 2026-10-19): Trading, the last minutes with the latest at the
- * right edge, and All, the coin's whole history. Customize › Token chart sets which one opens.
- */
-type Range = "trading" | "all";
-const RANGES: { id: Range; label: string; title: string }[] = [
-  { id: "trading", label: "Trading", title: "The last 15 minutes, the latest candle at the right edge" },
-  { id: "all", label: "All", title: "The coin's whole history" },
-];
-/** How far back the Trading view reaches (never before the first trade). */
-const TRADING_SPAN_MS = 15 * 60_000;
 /** Points drawn at most: enough for a smooth line, few enough that each one stays hoverable. */
 const MAX_POINTS = 240;
 /**
@@ -475,18 +471,6 @@ function OpeningBody({ mint, token, error, onRetry, onClose }: OpeningView & { o
             <section className="sage-card tm-chart">
               <h4>
                 <ChartIcon size={14} /> Market cap
-                <span className="tm-ranges" aria-hidden="true">
-                  {["Trading", "All"].map((r) => (
-                    <button
-                      key={r}
-                      type="button"
-                      className={`tm-range${r === "Trading" ? " on" : ""}`}
-                      disabled
-                    >
-                      {r}
-                    </button>
-                  ))}
-                </span>
               </h4>
               <ChartSkeleton>Loading the chart…</ChartSkeleton>
             </section>
@@ -2214,13 +2198,9 @@ export function ChartCard({
       : { mint: card.token.mintAddress, candles: backup, marketCap: [] };
   }, [served, backup, card.token.mintAddress]);
   const fromBackup = data !== served;
-  // Customize › Token chart sets the view it opens on; the switch over the chart this one.
   const look = useAppearance();
-  const [rangePicked, setRange] = useState<Range | null>(null);
-  const shownRange: Range = rangePicked ?? look.chartView;
-  const pickRange = (r: Range) => setRange(r);
-  // The candle size the chart draws, which decides how fine the candles read are; until it says,
-  // the view's default (1-second candles on Trading).
+  // The candle size the chart draws, which decides how fine the candles read are; minute candles
+  // until it says.
   const [chartTf, setChartTf] = useState<number | null>(null);
 
   // Pro Mode: the signed-in wallet's position in the coin and the Trade panel. Null for everyone
@@ -2284,7 +2264,18 @@ export function ChartCard({
   const kind = kindPicked ?? look.chartStyle;
   const [customizing, setCustomizing] = useState(false);
   const closeCustomize = useCallback(() => setCustomizing(false), []);
-  const labeled = data?.wallets ?? [];
+  // The flagged wallets of every read of this coin, not only the newest: the API sends its 40
+  // strongest each time, and a wallet near the cut came and went with each read (user report
+  // 2026-10-20: marks that disappear).
+  const flagged = data?.wallets;
+  const [kept, setKept] = useState({ mint, from: flagged, wallets: flagged ?? [] });
+  if (kept.mint !== mint || kept.from !== flagged)
+    setKept({
+      mint,
+      from: flagged,
+      wallets: kept.mint === mint ? keepMarkSources(kept.wallets, flagged ?? []) : (flagged ?? []),
+    });
+  const labeled = kept.mint === mint ? kept.wallets : (flagged ?? []);
   // The trader's own wallet is drawn as their own arrows, whatever its labels.
   // Live, as they happen (user ask 2026-10-19): the coin's live trades (one feed with the Live
   // trades tab) fold into the flagged wallets', and KOLs and tracked wallets the chart hasn't
@@ -2299,19 +2290,17 @@ export function ChartCard({
   const sideMarks = markPrefs.on && markPrefs.kinds.some((k) => k === "funded" || k === "probable");
   const liveSides = usePossibleSides(sideMarks ? liveTraders : NO_TRADERS);
   const marked = useMemo(
-    () => withLiveMarks(data?.wallets ?? [], liveFeed.history, liveNames, liveSides),
-    [data?.wallets, liveFeed.history, liveNames, liveSides],
+    () => withLiveMarks(labeled, liveFeed.history, liveNames, liveSides),
+    [labeled, liveFeed.history, liveNames, liveSides],
   );
   const plainMarks = useMemo(
     () => walletMarks(marked, markPrefs, new Set(pro ? [pro] : [])),
     [marked, markPrefs, pro],
   );
-  // KOLs' X pictures on their marks (user ask 2026-10-19), from the names the lists read too.
+  // KOLs' X pictures on their marks and their sides' (user asks 2026-10-19 and 10-20), from the
+  // names the lists read too.
   const picWallets = useMemo(
-    () =>
-      look.chartMarkPics
-        ? [...new Set(plainMarks.flatMap((m) => (m.kind === "kol" || m.kind === "known" ? [m.wallet] : [])))]
-        : NO_TRADERS,
+    () => (look.chartMarkPics ? picWalletsOf(plainMarks) : NO_TRADERS),
     [plainMarks, look.chartMarkPics],
   );
   const picNames = useWalletNames(picWallets);
@@ -2321,12 +2310,12 @@ export function ChartCard({
   );
 
   // The view's window over the minute data, before the finer reads that fill it in.
-  const bounds = useMemo(() => (data ? viewBounds(data, shownRange) : null), [data, shownRange]);
+  const bounds = useMemo(() => (data ? viewBounds(data) : null), [data]);
   // Finer candles where the chart's candles are finer than a minute: 1-second ones for 1s and 5s
   // candles, 15-second ones for 15s and 30s - and for those, where the 1-second page doesn't reach
   // back across the view (Pump.fun sends the most recent 1,000 with a trade, minutes of a busy coin).
   // Each read spends the shared Pump.fun budget, so a minute or wider reads neither.
-  const tfShown = chartTf ?? (shownRange === "trading" ? 1_000 : 60_000);
+  const tfShown = chartTf ?? 60_000;
   const fineOk = !!data?.candles?.length;
   const wantSecond = fineOk && !!bounds && tfShown <= SECOND_TF_MAX_MS;
   // The experimental predicted path (Customize › Token chart, off by default) reads the last
@@ -2581,20 +2570,6 @@ export function ChartCard({
           {delayed && !!bounds?.live && view && view.points.length >= 2 && (
             <DelayBadge updatedAt={updatedAt} everyMs={everyMs} />
           )}
-          <span className="tm-ranges" role="group" aria-label="Chart range">
-            {RANGES.map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                className={`tm-range${shownRange === r.id ? " on" : ""}`}
-                aria-pressed={shownRange === r.id}
-                title={r.title}
-                onClick={() => pickRange(r.id)}
-              >
-                {r.label}
-              </button>
-            ))}
-          </span>
           {(labeled.length > 0 || marks.length > 0) && (
             <button
               type="button"
@@ -2629,13 +2604,11 @@ export function ChartCard({
           </p>
         )}
         {data && !built.failed && (!view || view.points.length < 2) && (
-          <p className="muted small tm-chart-empty">
-            No trades to chart yet{shownRange !== "all" ? " in this view" : ""}.
-          </p>
+          <p className="muted small tm-chart-empty">No trades to chart yet.</p>
         )}
         {view && view.points.length >= 2 && (
           <>
-            <SectionBoundary label="The chart" resetKey={`${mint}|${shownRange}|${kind}`}>
+            <SectionBoundary label="The chart" resetKey={`${mint}|${kind}`}>
               <TradingChart
                 mint={mint}
                 candles={view.candles}
@@ -2651,11 +2624,6 @@ export function ChartCard({
                 extent={view.extent}
                 kind={kind}
                 onKind={setKind}
-                pinEnd={shownRange === "trading"}
-                // Trading keeps its own candle size, 1-second candles until another is picked there
-                // (user ask 2026-10-19); All keeps the one picked before the views split.
-                tfScope={shownRange === "trading" ? "trading" : undefined}
-                defaultTimeframe={shownRange === "trading" ? 1_000 : null}
                 onTimeframe={setChartTf}
                 path={view.path}
                 fileName={`${card.token.symbol ?? "coin"}-mcap`}
@@ -2754,17 +2722,16 @@ function StaleBadge({ at }: { at: number | null }) {
 }
 
 /**
- * A view's window over the minute data, running to now: the whole history for All, the last
- * TRADING_SPAN_MS for Trading (all of it for a coin younger than that).
+ * The chart's window over the minute data: the coin's whole history, running to now. One view only
+ * (user ask 2026-10-20: the Trading/All switch went; zoom in on the chart itself).
  */
-function viewBounds(data: TokenChart, range: Range): { from: number; to: number; live: boolean } | null {
+function viewBounds(data: TokenChart): { from: number; to: number; live: boolean } | null {
   const times = data.candles?.length ? data.candles.map((k) => k.t + 60_000) : data.marketCap.map((p) => p.t);
   if (times.length === 0) return null;
   const first = Math.min(times[0]!, data.candles?.[0]?.t ?? Infinity, data.older?.[0]?.t ?? Infinity);
   const last = times[times.length - 1]!;
   const to = Math.max(last, Date.now());
-  const from = range === "all" ? first : Math.max(first, to - TRADING_SPAN_MS);
-  return { from, to, live: true };
+  return { from: first, to, live: true };
 }
 
 /** Whether the live tail is current: its price confirmed within the last few polls. */

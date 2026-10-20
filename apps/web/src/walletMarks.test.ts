@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_APPEARANCE, normalizeAppearance } from "./appearance";
 import {
   clampMinSol,
+  keepMarkSources,
   kindsOf,
   markPrefsOf,
   MIN_SOL_FLOOR,
   walletMarks,
   withAvatars,
+  picWallets,
   withLiveMarks,
   type MarkSource,
 } from "./walletMarks";
@@ -114,7 +116,7 @@ describe("chart mark settings", () => {
 
 describe("labeled wallets' marks", () => {
   const prefs = { on: true, kinds: ["kol", "funded"] as const, minSol: 0.25 };
-  it("marks a User Tracked wallet with the KOLs as T, and its funded wallets without KOL", () => {
+  it("marks a User Tracked wallet with the KOLs as T, and its funded wallets as T without KOL", () => {
     const mine: MarkSource = {
       wallet: "Mine111111111111111111111111111111111111111",
       tags: ["tracked"],
@@ -131,7 +133,7 @@ describe("labeled wallets' marks", () => {
     const marks = walletMarks([mine, funded], { ...prefs, kinds: [...prefs.kinds] });
     expect(marks.map((m) => [m.letter, m.text])).toEqual([
       ["T", "Whale (Tracked) bought 2.00 SOL"],
-      ["F", "Whale Funded Wallet Fund…1111 bought 1.00 SOL"],
+      ["T", "Whale Funded Wallet Fund…1111 bought 1.00 SOL"],
     ]);
   });
 });
@@ -171,11 +173,11 @@ describe("withLiveMarks", () => {
     const marks = walletMarks(out, { on: true, kinds: ["kol", "known"], minSol: 0.5 });
     expect(marks.map((m) => [m.wallet, m.letter, m.text])).toEqual([
       ["A", "K", "Cupsey (KOL) bought 3.00 SOL"],
-      ["B", "S", "Cupsey Known Side bought 3.00 SOL"],
+      ["B", "K", "Cupsey Known Side bought 3.00 SOL"],
       ["C", "T", "my whale (Tracked) bought 3.00 SOL"],
     ]);
   });
-  it("adds a KOL's funded wallet or Probable Side by its tie", () => {
+  it("adds a KOL's funded wallet or Probable Side by its tie, lettered K like the KOL", () => {
     const out = withLiveMarks(
       [],
       [
@@ -192,23 +194,34 @@ describe("withLiveMarks", () => {
       },
     );
     const marks = walletMarks(out, { on: true, kinds: ["funded", "probable"], minSol: 0.5 });
-    expect(marks.map((m) => [m.wallet, m.letter])).toEqual([
-      ["F", "F"],
-      ["P", "P"],
+    expect(marks.map((m) => [m.wallet, m.letter, m.picFrom])).toEqual([
+      ["F", "K", "K"],
+      ["P", "K", "K"],
     ]);
   });
 });
 
 describe("withAvatars", () => {
-  it("gives a KOL's and its Known Side's marks the KOL's picture, and no other kind", () => {
-    const marks = walletMarks([kol, side], defaults);
+  it("gives a KOL's marks and its sides' the KOL's picture, and no other kind", () => {
+    const known: MarkSource = {
+      wallet: "Known11111111111111111111111111111111111111",
+      tags: ["kol"],
+      kol: "Cupsey",
+      knownSideOf: kol.wallet,
+      trades: [[1_700, 1, 1]],
+    };
+    const marks = walletMarks([kol, side, known, devRisky], defaults);
+    expect(picWallets(marks).sort()).toEqual([kol.wallet, known.wallet].sort());
     const out = withAvatars(marks, {
       [kol.wallet]: { avatar: "/kol-avatars/cupsey?v=1" },
       [side.wallet]: { avatar: "/kol-avatars/other?v=1" },
+      [devRisky.wallet]: { avatar: "/kol-avatars/dev?v=1" },
     });
     expect(out.map((m) => [m.kind, m.avatar])).toEqual([
+      ["dev", undefined],
       ["kol", "/kol-avatars/cupsey?v=1"],
-      ["probable", undefined],
+      ["probable", "/kol-avatars/cupsey?v=1"],
+      ["known", "/kol-avatars/cupsey?v=1"],
     ]);
   });
 
@@ -223,5 +236,23 @@ describe("appearance chartMarkPics", () => {
     expect(DEFAULT_APPEARANCE.chartMarkPics).toBe(true);
     expect(normalizeAppearance({}).chartMarkPics).toBe(true);
     expect(normalizeAppearance({ chartMarkPics: false }).chartMarkPics).toBe(false);
+  });
+});
+
+describe("keepMarkSources", () => {
+  const a: MarkSource = { wallet: "A", tags: ["kol"], kol: "Cupsey", trades: [[1_000, 1, 1]] };
+  const b: MarkSource = { wallet: "B", tags: ["linked"], trades: [[2_000, -1, 1]] };
+  it("keeps a wallet a later read left out, and the trades of every read", () => {
+    const next = [{ ...a, kol: "Cupsey2", trades: [[3_000, -1, 2]] as MarkSource["trades"] }];
+    const out = keepMarkSources([a, b], next);
+    expect(out.map((w) => [w.wallet, w.kol, w.trades.map((t) => t[0])])).toEqual([
+      ["A", "Cupsey2", [1_000, 3_000]],
+      ["B", undefined, [2_000]],
+    ]);
+  });
+  it("keeps the newest read as it is when it holds everything", () => {
+    const next = [a, b];
+    expect(keepMarkSources([a], next)).toEqual(next);
+    expect(keepMarkSources([], next)).toBe(next);
   });
 });

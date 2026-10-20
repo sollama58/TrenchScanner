@@ -48,7 +48,17 @@ export function useBatchedWallets(trades: readonly LiveTokenTrade[]): string[] {
   useEffect(() => {
     if (empty) return;
     const read = () => {
-      const next = [...new Set(latest.current.map((x) => x.wallet))].sort();
+      // Newest traders first: names are read 200 at a time, and in address order a busy coin's new
+      // KOL waited behind its older traders, its mark late or never (user report 2026-10-20).
+      const next: string[] = [];
+      const seen = new Set<string>();
+      for (let i = latest.current.length - 1; i >= 0; i--) {
+        const w = latest.current[i]!.wallet;
+        if (!seen.has(w)) {
+          seen.add(w);
+          next.push(w);
+        }
+      }
       setWallets((prev) => (prev.join() === next.join() ? prev : next));
     };
     read();

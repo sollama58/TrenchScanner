@@ -368,15 +368,6 @@ export function ChartControls() {
         ]}
         onChange={(chartStyle) => setAppearance({ chartStyle })}
       />
-      <Choice
-        label="Default view"
-        value={look.chartView}
-        options={[
-          ["trading", "Trading"],
-          ["all", "All"],
-        ]}
-        onChange={(chartView) => setAppearance({ chartView })}
-      />
       {/* Admins only while it is tried out (user ask 2026-10-18). */}
       {admin && (
         <>
