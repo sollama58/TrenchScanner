@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { SignJWT } from "jose";
-import { ADMIN_SESSION_MAX_AGE_MS, adminSessionFresh, createSessionSigner } from "./session.js";
+import {
+  ADMIN_SESSION_MAX_AGE_MS,
+  RECENT_SIGN_IN_MS,
+  adminSessionFresh,
+  createSessionSigner,
+  signedInRecently,
+} from "./session.js";
 
 const SECRET = "session-test-secret-0000000000000000000000";
 
@@ -29,5 +35,17 @@ describe("admin session age", () => {
 
   it("treats a session with no sign-in time as stale", () => {
     expect(adminSessionFresh({ userId: "u1", walletAddress: "w1" })).toBe(false);
+  });
+});
+
+describe("recent sign-in (to change two-factor)", () => {
+  it("is ten minutes from the sign-in, and a session with no sign-in time is never recent", async () => {
+    expect(RECENT_SIGN_IN_MS).toBe(10 * 60_000);
+    const signer = createSessionSigner(SECRET, 24 * 30);
+    const session = (await signer.verify(await signer.sign({ userId: "u1", walletAddress: "w1" })))!;
+    expect(signedInRecently(session)).toBe(true);
+    expect(signedInRecently(session, session.issuedAtMs! + RECENT_SIGN_IN_MS)).toBe(true);
+    expect(signedInRecently(session, session.issuedAtMs! + RECENT_SIGN_IN_MS + 1)).toBe(false);
+    expect(signedInRecently({ userId: "u1", walletAddress: "w1" })).toBe(false);
   });
 });

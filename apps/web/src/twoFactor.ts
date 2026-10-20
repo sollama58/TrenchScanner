@@ -48,6 +48,26 @@ export function twoFactorNeeded(e: unknown): { action: TwoFactorAction; hint?: F
   return { action: t.action as TwoFactorAction, hint };
 }
 
+/**
+ * Why the API won't let this session change two-factor (user decisions 2026-10-20): a phone paired
+ * by QR never can, and a browser only within 10 minutes of signing in. Read from /auth/2fa's
+ * `changeBlocked`, or from the 403 a change answered with.
+ */
+export type ChangeBlock = "paired_phone" | "sign_in_again";
+
+export const CHANGE_BLOCK_NOTES: Record<ChangeBlock, string> = {
+  paired_phone:
+    "Change two-factor from your computer. A phone paired by QR can pass two-factor checks but can't change them.",
+  sign_in_again:
+    "Sign in again to change two-factor: changes need a sign-in from the last 10 minutes. Sign out, then sign in again here.",
+};
+
+export function changeBlocked(e: unknown): ChangeBlock | null {
+  if (!(e instanceof ApiError) || e.status !== 403) return null;
+  const code = (e.body as { code?: unknown } | null)?.code;
+  return code === "paired_phone" || code === "sign_in_again" ? code : null;
+}
+
 // ---- The prompt (TwoFactorPrompt.tsx draws it) ----
 
 export interface PromptRequest {

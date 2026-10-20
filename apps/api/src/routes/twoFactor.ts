@@ -22,43 +22,59 @@ import {
   sealSecret,
   twoFactorState,
   type TwoFactorAction,
+  type TwoFactorState,
 } from "../twoFactor.js";
+import { signedInRecently, type SessionPayload } from "../auth/session.js";
 
 /**
  * /auth/2fa: the signed-in user's own two-factor (twoFactor.ts). Everything here is about the
- * session's own account; once two-factor is on, changing it needs a "manage" pass.
+ * session's own account. Changing it needs a browser sign-in from the last few minutes, never a
+ * paired phone, and once two-factor is on, a "manage" pass too.
  */
 
 const RATE_LIMIT = { max: 30, timeWindow: "1 minute", keyGenerator: ipRateLimitKey };
 const PASS_ACTIONS = [...TWO_FACTOR_ACTIONS, "manage"] as const;
+
+/**
+ * Why this session may not change two-factor at all, whatever pass it has (user decisions
+ * 2026-10-20). A paired phone never can: it can't sign with the wallet, and a phone paired from a
+ * stolen session must not be able to lock the owner out. A browser can only within
+ * RECENT_SIGN_IN_MS of its sign-in. The codes are what the dashboard reads to say which.
+ */
+type ChangeBlock = "paired_phone" | "sign_in_again";
+const CHANGE_REFUSALS: Record<ChangeBlock, string> = {
+  paired_phone: "Change two-factor from your computer. A paired phone can't change it.",
+  sign_in_again: "Sign in again to change two-factor. Changes need a sign-in from the last 10 minutes.",
+};
+
+function changeBlock(session: SessionPayload): ChangeBlock | null {
+  if (session.deviceId) return "paired_phone";
+  return signedInRecently(session) ? null : "sign_in_again";
+}
 
 export async function registerTwoFactorRoutes(app: FastifyInstance, opts: { env: Env }) {
   const { env } = opts;
   app.addHook("preHandler", app.authenticate);
 
   /**
-   * Asks for a "manage" pass once two-factor is on; true when the change may go ahead. A paired
-   * phone (a device session, which can't sign with the wallet) changes it only by passing the
-   * check itself: with two-factor off it can't turn it on (user ask 2026-10-18), the browser where
-   * the wallet signs does that.
+   * Whether this session may change two-factor now: the account's state when it may; when not,
+   * it has answered 403, with `code` (changeBlock) or with the "manage" ask once two-factor is on.
    */
   async function mayManage(
     request: Parameters<typeof hasPass>[1],
     reply: FastifyReply,
     userId: string,
-  ): Promise<boolean> {
-    const state = await twoFactorState(userId);
-    if (!state.enabled && request.user?.deviceId) {
-      void reply.code(403).send({
-        error: "Turn on two-factor from a browser signed in with your wallet, not from a paired phone.",
-      });
-      return false;
+  ): Promise<TwoFactorState | null> {
+    const block = changeBlock(request.user!);
+    if (block) {
+      void reply.code(403).send({ error: CHANGE_REFUSALS[block], code: block });
+      return null;
     }
-    if (!state.enabled || (await hasPass(env, request, userId, "manage", state.epoch))) return true;
-    void reply.code(403).send(manageRefusal);
-    return false;
+    const state = await twoFactorState(userId);
+    if (!state.enabled || (await hasPass(env, request, userId, "manage", state.epoch))) return state;
+    void reply.code(403).send({ error: "Two-factor check needed", twoFactor: { action: "manage" } });
+    return null;
   }
-  const manageRefusal = { error: "Two-factor check needed", twoFactor: { action: "manage" } };
 
   app.get("/", async (request) => {
     const state = await twoFactorState(request.user!.userId);
@@ -66,6 +82,8 @@ export async function registerTwoFactorRoutes(app: FastifyInstance, opts: { env:
       ...state,
       buyOverLamports: state.buyOverLamports?.toString() ?? null,
       choices: TWO_FACTOR_ACTIONS,
+      // Why changes here would be refused right now, so Settings can say so up front.
+      changeBlocked: changeBlock(request.user!),
     };
   });
 
@@ -215,10 +233,9 @@ export async function registerTwoFactorRoutes(app: FastifyInstance, opts: { env:
 
   app.post("/backup-codes", { config: { rateLimit: RATE_LIMIT } }, async (request, reply) => {
     const userId = request.user!.userId;
-    const state = await twoFactorState(userId);
+    const state = await mayManage(request, reply, userId);
+    if (!state) return;
     if (!state.enabled) return reply.code(400).send({ error: "Turn on two-factor first." });
-    if (!(await hasPass(env, request, userId, "manage", state.epoch)))
-      return reply.code(403).send(manageRefusal);
     return { backupCodes: await newBackupCodes(env, userId) };
   });
 

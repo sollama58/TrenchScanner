@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
   askBefore,
+  changeBlocked,
   clearPasses,
   promptRequest,
   twoFactorNeeded,
@@ -25,6 +26,26 @@ describe("twoFactorNeeded", () => {
     expect(twoFactorNeeded(new ApiError(403, "Pro Mode only", { error: "Pro Mode only" }))).toBeNull();
     expect(twoFactorNeeded(new ApiError(401, "x", { twoFactor: { action: "buy" } }))).toBeNull();
     expect(twoFactorNeeded(new Error("x"))).toBeNull();
+  });
+});
+
+describe("changeBlocked", () => {
+  it("reads why the API refused a two-factor change, and nothing else", () => {
+    const refused = (code: string) => new ApiError(403, "x", { error: "x", code });
+    expect(changeBlocked(refused("paired_phone"))).toBe("paired_phone");
+    expect(changeBlocked(refused("sign_in_again"))).toBe("sign_in_again");
+    expect(changeBlocked(refused("something_else"))).toBeNull();
+    expect(changeBlocked(needs("manage"))).toBeNull();
+    expect(changeBlocked(new ApiError(401, "x", { code: "sign_in_again" }))).toBeNull();
+  });
+
+  it("is never prompted for: the change can't pass with a code", async () => {
+    const call = vi.fn(async () => {
+      throw new ApiError(403, "x", { error: "x", code: "paired_phone" });
+    });
+    await expect(withTwoFactor(call)).rejects.toBeInstanceOf(ApiError);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(promptRequest()).toBeNull();
   });
 });
 

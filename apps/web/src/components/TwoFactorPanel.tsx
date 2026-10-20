@@ -1,14 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import qrcode from "qrcode-generator";
 import { api } from "../api";
-import { ACTION_CHOICES, TwoFactorCancelled, withTwoFactor } from "../twoFactor";
+import {
+  ACTION_CHOICES,
+  CHANGE_BLOCK_NOTES,
+  TwoFactorCancelled,
+  changeBlocked,
+  withTwoFactor,
+  type ChangeBlock,
+} from "../twoFactor";
 import { ago } from "../format";
 import { CheckIcon, CopyIcon, LockIcon, TrashIcon } from "./Icons";
 
 /**
  * Settings card: two-factor (user decision 2026-10-18). Optional; an authenticator app, passkeys,
  * or both, and the actions that ask for it. Once it's on, every change here asks for it first
- * (the API answers 403 and withTwoFactor prompts).
+ * (the API answers 403 and withTwoFactor prompts). Changes need a recent sign-in in a browser, never
+ * a paired phone (user decisions 2026-10-20): the card says which instead of a bare error.
  */
 
 interface State {
@@ -18,6 +26,7 @@ interface State {
   actions: string[];
   buyOverLamports: string | null;
   backupCodesLeft: number;
+  changeBlocked: ChangeBlock | null;
 }
 
 type Setup =
@@ -38,6 +47,11 @@ export function TwoFactorPanel({ onChanged }: { onChanged?: () => void }) {
   const [code, setCode] = useState("");
   const [actions, setActions] = useState<Set<string>>(new Set());
   const [buyOver, setBuyOver] = useState("");
+  // A change refused since the card loaded (the sign-in grew too old while it was open).
+  const [refused, setRefused] = useState<ChangeBlock | null>(null);
+  const blocked = refused ?? state?.changeBlocked ?? null;
+  /** Change controls are off while one runs, and while changes would be refused. */
+  const locked = busy !== null || blocked !== null;
 
   const load = useCallback(async () => {
     try {
@@ -59,7 +73,12 @@ export function TwoFactorPanel({ onChanged }: { onChanged?: () => void }) {
       await load();
       onChanged?.();
     } catch (e) {
-      if (!(e instanceof TwoFactorCancelled)) setError(e instanceof Error ? e.message : String(e));
+      const block = changeBlocked(e);
+      if (block) {
+        setRefused(block);
+        // An app setup can't finish now; backup codes already shown stay up to be saved.
+        setSetup((s) => (s.step === "scan" ? { step: "idle" } : s));
+      } else if (!(e instanceof TwoFactorCancelled)) setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
     }
@@ -162,6 +181,11 @@ export function TwoFactorPanel({ onChanged }: { onChanged?: () => void }) {
         )
       ) : (
         <>
+          {blocked && (
+            <p className="notice small" role="status">
+              {CHANGE_BLOCK_NOTES[blocked]}
+            </p>
+          )}
           {setup.step === "scan" && <TotpSetup secret={setup.secret} url={setup.url} />}
           {setup.step === "scan" && (
             <form
@@ -183,7 +207,7 @@ export function TwoFactorPanel({ onChanged }: { onChanged?: () => void }) {
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
               />
-              <button className="button primary" type="submit" disabled={busy !== null || !code.trim()}>
+              <button className="button primary" type="submit" disabled={locked || !code.trim()}>
                 {busy === "confirm" ? "Checking…" : "Turn on"}
               </button>
               <button type="button" className="button ghost" onClick={() => setSetup({ step: "idle" })}>
@@ -201,14 +225,14 @@ export function TwoFactorPanel({ onChanged }: { onChanged?: () => void }) {
               {state.totp ? (
                 <button
                   className="button ghost small"
-                  disabled={busy !== null}
+                  disabled={locked}
                   onClick={() => void run("totp-off", () => call("/auth/2fa/totp", "DELETE"))}
                 >
                   Remove
                 </button>
               ) : (
                 setup.step !== "scan" && (
-                  <button className="button small" disabled={busy !== null} onClick={() => void startTotp()}>
+                  <button className="button small" disabled={locked} onClick={() => void startTotp()}>
                     Set up
                   </button>
                 )
@@ -216,7 +240,7 @@ export function TwoFactorPanel({ onChanged }: { onChanged?: () => void }) {
             </div>
             <div className="tf-factor">
               <strong>Passkeys</strong>
-              <button className="button small" disabled={busy !== null} onClick={() => void addPasskey()}>
+              <button className="button small" disabled={locked} onClick={() => void addPasskey()}>
                 {busy === "passkey" ? "Waiting…" : "Add a passkey"}
               </button>
             </div>
@@ -230,7 +254,7 @@ export function TwoFactorPanel({ onChanged }: { onChanged?: () => void }) {
                 <button
                   className="ghost icon-btn"
                   aria-label={`Remove ${p.name || "passkey"}`}
-                  disabled={busy !== null}
+                  disabled={locked}
                   onClick={() =>
                     void run("pk-" + p.id, () =>
                       call(`/auth/2fa/passkey/${encodeURIComponent(p.id)}`, "DELETE"),
@@ -252,7 +276,7 @@ export function TwoFactorPanel({ onChanged }: { onChanged?: () => void }) {
                     <input
                       type="checkbox"
                       checked={c.id === "export" || actions.has(c.id)}
-                      disabled={c.id === "export" || busy !== null}
+                      disabled={c.id === "export" || locked}
                       onChange={(e) => {
                         const next = new Set(actions);
                         if (e.target.checked) next.add(c.id);
@@ -280,17 +304,13 @@ export function TwoFactorPanel({ onChanged }: { onChanged?: () => void }) {
                 ))}
               </fieldset>
               {changed && (
-                <button
-                  className="button primary"
-                  disabled={busy !== null}
-                  onClick={() => void saveActions()}
-                >
+                <button className="button primary" disabled={locked} onClick={() => void saveActions()}>
                   {busy === "actions" ? "Saving…" : "Save choices"}
                 </button>
               )}
               <p className="faint small">
                 Backup codes left: {state.backupCodesLeft}.{" "}
-                <button className="link" disabled={busy !== null} onClick={() => void newCodes()}>
+                <button className="link" disabled={locked} onClick={() => void newCodes()}>
                   Make new ones
                 </button>{" "}
                 (the old ones stop working).
