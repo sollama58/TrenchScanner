@@ -1050,6 +1050,23 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch fan-out", () => {
     await prisma.telegramAlertSent.deleteMany({ where: { chat: { chatId: { in: chatIds } } } });
     const start = Date.now();
     let t = start;
+    // A send claims its row before it reaches Telegram, and the pass races a sleep against those
+    // claims. The clock moves only for the sleep that wins. A losing one must not move it: on a
+    // loaded runner the claim takes longer than a fixed yield, and a 10s sleep that lost was still
+    // stamping the other chats as if they had waited the 429 out. Nor do losing sleeps add up —
+    // each moves TO its own end, and only the latest one is allowed to.
+    let claimsInFlight = 0;
+    let sleepGeneration = 0;
+    const sentModel = prisma.telegramAlertSent;
+    const originalClaim = sentModel.createManyAndReturn.bind(sentModel);
+    sentModel.createManyAndReturn = (async (args: Parameters<typeof originalClaim>[0]) => {
+      claimsInFlight += 1;
+      try {
+        return await originalClaim(args);
+      } finally {
+        claimsInFlight -= 1;
+      }
+    }) as typeof sentModel.createManyAndReturn;
     const limitedOnce = new Set<string>();
     const sentAt = new Map<string, number>();
     const api = new (class extends FakeTelegramApi {
@@ -1071,24 +1088,34 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch fan-out", () => {
         return super.call<T>(method, params);
       }
     })();
-    await runTelegramDispatch(env, {
-      api,
-      now: () => t,
-      // Each sleep yields for a moment of real time before the clock moves, so the database
-      // writes keep pace (each send claims its row first) and a send already under way isn't
-      // stamped as if it had waited out a wait that was only racing it. The clock moves TO the
-      // sleep's end, not BY its length, as a real one does: the pass races a sleep against its
-      // sends and starts a new one each time a send wins, and on a loaded machine those losing
-      // 10 s sleeps used to add up past the pass budget before the limited chat's turn came.
-      sleep: async (ms) => {
-        const until = t + ms;
-        await new Promise((resolve) => setTimeout(resolve, ms >= 1_000 ? 100 : 5));
-        t = Math.max(t, until);
-      },
-      hasAccess: async () => true,
-      oldestOpenTransaction: async () => null,
-      feedModelState: async () => state,
-    });
+    try {
+      await runTelegramDispatch(env, {
+        api,
+        now: () => t,
+        sleep: async (ms) => {
+          const until = t + ms;
+          const generation = ++sleepGeneration;
+          if (ms >= 1_000) {
+            const giveUpAt = Date.now() + 5_000;
+            for (;;) {
+              await new Promise((resolve) => setTimeout(resolve, 20));
+              if (generation !== sleepGeneration) return;
+              if (claimsInFlight === 0 || Date.now() >= giveUpAt) break;
+            }
+          } else {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            if (generation !== sleepGeneration) return;
+          }
+          if (generation !== sleepGeneration) return;
+          t = Math.max(t, until);
+        },
+        hasAccess: async () => true,
+        oldestOpenTransaction: async () => null,
+        feedModelState: async () => state,
+      });
+    } finally {
+      sentModel.createManyAndReturn = originalClaim;
+    }
     return sentAt;
   };
 
