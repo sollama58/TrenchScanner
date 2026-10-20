@@ -18,3 +18,4 @@ export * from "./pumpCurve.js";
 export * from "./manualTrade.js";
 export * from "./walletTrades.js";
 export * from "./pumpSwap.js";
+export * from "./tradeChecks.js";

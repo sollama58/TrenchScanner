@@ -6,4 +6,4 @@
 
 SET LOCAL lock_timeout = '5s';
 
-ALTER TABLE "TokenNarrative" ADD COLUMN "referentPostId" TEXT;
+ALTER TABLE "TokenNarrative" ADD COLUMN IF NOT EXISTS "referentPostId" TEXT;

@@ -63,6 +63,13 @@ describe("export query", () => {
     expect(narrativeExportText({ referent: { post_id: "99" } }, "1791351500217754008").referentPostId).toBe(
       "99",
     );
+    // A deleted post does not keep the wave key, and the column does not put it back.
+    const deleted = {
+      x: { status: "deleted" },
+      referent: { desc: "gone", post_id: "1", source: "x", supported_by: ["x"] },
+    };
+    expect(narrativeText(deleted)).toMatchObject({ referentPostId: null, referentDesc: null });
+    expect(narrativeExportText(deleted, "1").referentPostId).toBeNull();
     expect(exportQuerySchema.parse({ dataset: "narratives" }).dataset).toBe("narratives");
     expect(csvColumns("narratives")).toContain("referentLabel");
   });

@@ -8,7 +8,7 @@
 
 SET LOCAL lock_timeout = '5s';
 
-ALTER TABLE "TokenSnapshot" ADD COLUMN "holderBalancesAt" TIMESTAMP(3),
-ADD COLUMN "holderChainReadAt" TIMESTAMP(3);
+ALTER TABLE "TokenSnapshot" ADD COLUMN IF NOT EXISTS "holderBalancesAt" TIMESTAMP(3);
+ALTER TABLE "TokenSnapshot" ADD COLUMN IF NOT EXISTS "holderChainReadAt" TIMESTAMP(3);
 
-ALTER TABLE "BubbleMapHolders" ADD COLUMN "balancesAt" TIMESTAMP(3);
+ALTER TABLE "BubbleMapHolders" ADD COLUMN IF NOT EXISTS "balancesAt" TIMESTAMP(3);

@@ -54,8 +54,12 @@ export function senderUrl(
   options: { speed: SenderSpeed; mevProtect: boolean; apiKey?: string },
 ): string {
   const url = new URL(base || DEFAULT_HELIUS_SENDER_URL);
+  // The base URL may already carry a tier (a saved eco endpoint). Set the one this trade asked
+  // for, and take the other off, so Turbo is not sent down the eco path or the other way round.
   if (options.speed === "eco") url.searchParams.set("swqos_only", "true");
+  else url.searchParams.delete("swqos_only");
   if (options.mevProtect) url.searchParams.set("mev-protect", "true");
+  else url.searchParams.delete("mev-protect");
   if (options.apiKey) url.searchParams.set("api-key", options.apiKey);
   return url.toString();
 }

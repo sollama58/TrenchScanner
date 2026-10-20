@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
+import { ApiError } from "./api";
 import {
   acceptDisclaimer,
   DEFAULT_TRADE_SETTINGS,
@@ -11,18 +12,27 @@ import {
   readTradeSettings,
   sacrificeLine,
   summarizePosition,
+  shownPosition,
+  shownQuote,
+  shownFee,
   feeSavedSol,
   expectedTokens,
   expectedSol,
   tradeProblem,
   TradeError,
   TradeExpiredError,
+  slippageMiss,
+  landedFailureMessage,
+  SLIPPAGE_LANDED,
+  SLIPPAGE_UNSENT,
+  type FeeEstimate,
   type PositionResponse,
   type SacrificeView,
   type TradeCheck,
 } from "./proTrade";
 import { ownTokenAccounts, ownWrappedSolAccounts } from "./solanaPda";
 import {
+  describeTradeError,
   feeTotalSol,
   parseSol,
   parseTokens,
@@ -102,6 +112,82 @@ describe("solText", () => {
 describe("readTradeSettings", () => {
   it("falls back to the defaults without storage", () => {
     expect(readTradeSettings()).toEqual(DEFAULT_TRADE_SETTINGS);
+  });
+});
+
+describe("shownPosition", () => {
+  const pos = (mint: string): PositionResponse => ({
+    wallet: "w",
+    mint,
+    decimals: 6,
+    balance: "1",
+    supply: null,
+    solUsd: null,
+    trades: [],
+    historyUnavailable: false,
+    truncated: false,
+  });
+
+  it("hides another coin's balance while this coin's read is still in flight", () => {
+    expect(shownPosition("b", pos("a"), null, 10, null)).toEqual({ data: null, error: null, at: null });
+    expect(shownPosition("a", pos("a"), new Error("old"), 10, "a").data?.mint).toBe("a");
+  });
+
+  it("keeps a failed refresh of this coin, and not a failure from the previous one", () => {
+    const err = new Error("down");
+    expect(shownPosition("a", pos("a"), err, 10, "a")).toMatchObject({ error: err, at: 10 });
+    expect(shownPosition("b", pos("a"), err, 10, "a")).toEqual({ data: null, error: null, at: null });
+  });
+});
+
+describe("shownQuote", () => {
+  it("hides a fee or a route quote that was read for another coin, side or speed", () => {
+    expect(shownQuote("b", { mint: "a", value: { out: 1 } })).toBeNull();
+    expect(shownQuote("a", { mint: "a", value: { out: 1 } })).toEqual({ out: 1 });
+    expect(shownQuote(null, { mint: "a", value: { out: 1 } })).toBeNull();
+    const fee = { priorityFeeLamports: "1" } as FeeEstimate;
+    expect(shownFee("m", "sell", "turbo", { mint: "m", side: "buy", speed: "turbo", value: fee })).toBeNull();
+    expect(shownFee("m", "buy", "eco", { mint: "m", side: "buy", speed: "turbo", value: fee })).toBeNull();
+    expect(shownFee("m", "buy", "turbo", { mint: "m", side: "buy", speed: "turbo", value: fee })).toBe(fee);
+  });
+});
+
+describe("a slippage miss after Buy or Sell", () => {
+  const chain = '{"InstructionError":[2,{"Custom":6001}]}';
+
+  it("is the price moving past the slippage, not a fill and not a timeout", () => {
+    expect(slippageMiss(chain)).toBe(true);
+    expect(slippageMiss("custom program error: 0x1771")).toBe(true);
+    expect(slippageMiss("custom program error: 0x179a")).toBe(true);
+    expect(slippageMiss("timed out")).toBe(false);
+    expect(slippageMiss("Sender refused the transaction")).toBe(false);
+    expect(landedFailureMessage(chain)).toBe(SLIPPAGE_LANDED);
+    expect(landedFailureMessage(chain, "slippage")).toBe(SLIPPAGE_LANDED);
+    expect(landedFailureMessage("timed out", "rejected")).toBe(
+      "The trade failed on chain (timed out). Nothing was bought or sold.",
+    );
+    expect(landedFailureMessage(undefined, "rejected")).toBe(
+      "The trade failed on chain. Nothing was bought or sold.",
+    );
+    expect(SLIPPAGE_LANDED).not.toMatch(/Nothing was sent/);
+    expect(SLIPPAGE_UNSENT).toMatch(/Nothing was sent/);
+    expect(SLIPPAGE_UNSENT).not.toMatch(/bought or sold/);
+  });
+
+  it("does not turn the chain's words, or a sender refusal, into a wallet cancel", () => {
+    expect(describeTradeError(new TradeError(SLIPPAGE_LANDED, "sig"))).toBe(SLIPPAGE_LANDED);
+    expect(describeTradeError(new TradeError(SLIPPAGE_UNSENT))).toBe(SLIPPAGE_UNSENT);
+    expect(
+      describeTradeError(
+        new ApiError(409, "Helius Sender refused the trade: cancelled by the node", { notSent: true }),
+      ),
+    ).toMatch(/Sender refused/);
+    expect(
+      describeTradeError(new ApiError(409, "Helius Sender refused the trade: cancelled by the node", null)),
+    ).not.toMatch(/You cancelled/);
+    expect(describeTradeError(Object.assign(new Error("User rejected the request"), { code: 4001 }))).toMatch(
+      /You cancelled in the wallet/,
+    );
   });
 });
 

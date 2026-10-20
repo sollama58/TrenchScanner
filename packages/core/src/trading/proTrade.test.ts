@@ -33,6 +33,9 @@ import {
   routeFeeBps,
   TOKEN_2022_ACCOUNT_RENT_LAMPORTS,
   LIGHTHOUSE_PROGRAM,
+  buyMarginLamports,
+  budgetFee,
+  messageUnitLimit,
   signedMatchesBuild,
   TradeRejected,
   type ManualTradeJupiter,
@@ -41,6 +44,7 @@ import {
 import { transferFeeBpsOf } from "./rpc.js";
 import { tradeOf, walletTokenTrades } from "./walletTrades.js";
 import type { RawTransaction } from "./rpc.js";
+import { sellableAfterTransferFee, solShortfall, solShortfallText } from "./tradeChecks.js";
 import { associatedTokenAddress, PROGRAM, WSOL } from "./txGuard.js";
 import { NoRouteError } from "./jupiterSwap.js";
 
@@ -119,6 +123,20 @@ describe("Helius Sender", () => {
     );
     expect(turbo.searchParams.get("swqos_only")).toBeNull();
     expect(turbo.searchParams.get("mev-protect")).toBeNull();
+    // A base URL saved for Eco must not keep Turbo on the eco path, or drop the shield when it's on.
+    const fromEco = new URL(
+      senderUrl("https://sender.helius-rpc.com/fast?swqos_only=true&mev-protect=true", {
+        speed: "turbo",
+        mevProtect: true,
+      }),
+    );
+    expect(fromEco.searchParams.get("swqos_only")).toBeNull();
+    expect(fromEco.searchParams.get("mev-protect")).toBe("true");
+    const ecoOff = new URL(
+      senderUrl("https://sender.helius-rpc.com/fast?mev-protect=true", { speed: "eco", mevProtect: false }),
+    );
+    expect(ecoOff.searchParams.get("swqos_only")).toBe("true");
+    expect(ecoOff.searchParams.get("mev-protect")).toBeNull();
   });
 });
 
@@ -318,6 +336,11 @@ describe("custom fees", () => {
       }),
     ).toMatchObject({ priorityFeeLamports: 123_000n, tipLamports: 50_000n });
     expect(asked).toBe(2);
+    // The last build's unit limit prices the preview, not the fixed 250,000.
+    expect(
+      (await estimateManualFees(feeRpc, { mint: MINT, speed: "eco", unitLimit: 500_000 }))
+        .priorityFeeLamports,
+    ).toBe(20_000n);
   });
 
   it("caps the going rate on Eco", async () => {
@@ -632,6 +655,54 @@ describe("signedMatchesBuild", () => {
       ix.programIdIndex === budget && ix.data[0] === 3 ? price(10_000_000_000n) : ix,
     );
     expect(signedMatchesBuild(built, { ...built, instructions: drained })).toMatch(/priority fee/);
+    const builtFee = budgetFee(built);
+    const lowered = built.instructions.map((ix) =>
+      ix.programIdIndex === budget && ix.data[0] === 3 ? price(1n) : ix,
+    );
+    if (builtFee > budgetFee({ ...built, instructions: lowered }))
+      expect(signedMatchesBuild(built, { ...built, instructions: lowered })).toMatch(/priority fee below/);
+    else {
+      const raised = built.instructions.map((ix) =>
+        ix.programIdIndex === budget && ix.data[0] === 3 ? price(1_000_000n) : ix,
+      );
+      const cut = raised.map((ix) => (ix.programIdIndex === budget && ix.data[0] === 3 ? price(1n) : ix));
+      expect(signedMatchesBuild({ ...built, instructions: raised }, { ...built, instructions: cut })).toMatch(
+        /priority fee below/,
+      );
+    }
+    const limit = new Uint8Array(5);
+    limit[0] = 2;
+    new DataView(limit.buffer).setUint32(1, 400_000, true);
+    expect(
+      messageUnitLimit({
+        ...built,
+        instructions: [{ programIdIndex: budget, accountIndexes: [], data: limit }, ...built.instructions],
+      }),
+    ).toBe(400_000);
+  });
+});
+
+describe("buy margin and sell sizing", () => {
+  it("raises the buy ceiling only when the route's rent needs it", () => {
+    expect(buyMarginLamports(null)).toBe(10_000_000n);
+    expect(buyMarginLamports(1_000n)).toBe(10_000_000n);
+    expect(buyMarginLamports(20_000_000n)).toBe(20_100_000n);
+  });
+
+  it("caps sell all at what a transfer fee leaves, and names the short piece of a buy", () => {
+    expect(sellableAfterTransferFee(10_000n, 0)).toBe(10_000n);
+    expect(sellableAfterTransferFee(10_000n, 100)).toBe(9_900n);
+    expect(sellableAfterTransferFee(1n, 1)).toBe(0n);
+    const rent = solShortfall({ balance: 700n, buy: 500n, fee: 100n, rent: 200n, reserve: 300n });
+    expect(rent?.piece).toBe("rent");
+    expect(solShortfallText(rent!)).toMatch(/token-account rent/);
+    const reserve = solShortfall({ balance: 800n, buy: 500n, fee: 100n, rent: 100n, reserve: 300n });
+    expect(reserve?.piece).toBe("reserve");
+    expect(solShortfall({ balance: 1_000n, buy: 500n, fee: 100n, rent: 100n, reserve: 300n })).toBeNull();
+    const fee = solShortfall({ balance: 550n, buy: 500n, fee: 100n, rent: 0n, reserve: 0n });
+    expect(fee?.piece).toBe("fee");
+    const buy = solShortfall({ balance: 100n, buy: 500n, fee: 0n, rent: 0n, reserve: 0n });
+    expect(buy?.piece).toBe("buy");
   });
 });
 

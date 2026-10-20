@@ -5796,6 +5796,8 @@ html:has(dialog.about-modal[open]) {
   }
   .brand-name {
     font-size: 15px;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
   .topbar-right {
@@ -11326,6 +11328,43 @@ img.tm-avatar {
   align-items: center;
   gap: 6px;
   flex: none;
+}
+/* The wallet's coin and SOL, beside the header's actions (TokenPairBalances). A dash holds the width. */
+.tm-balances {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.tm-balances span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tm-balances small {
+  margin-left: 2px;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.tm-balances.stale {
+  opacity: 0.55;
+}
+@media (max-width: 640px) {
+  .tm-balances {
+    gap: 6px;
+    padding: 2px 6px;
+    font-size: 11px;
+  }
 }
 .tm-figs {
   display: grid;
@@ -18432,6 +18471,13 @@ body:has(.util-toast) .bug-fab {
   .tm-modal .tm-head > .tm-actions {
     justify-self: start;
     align-self: center;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tm-modal .tm-head > .tm-actions::-webkit-scrollbar {
+    display: none;
   }
   .tm-modal .tm-head > .tm-quick {
     align-self: center;
@@ -20291,7 +20337,7 @@ dialog.tm-modal.tm-terminal::backdrop {
   position: static;
   margin: 0;
   padding: 10px 16px;
-  grid-template-columns: minmax(220px, max-content) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) minmax(0, max-content);
   grid-template-areas: "token figs actions";
   align-items: center;
   row-gap: 6px;
@@ -20304,6 +20350,10 @@ dialog.tm-modal.tm-terminal::backdrop {
 .tm-modal.tm-terminal .tm-title-block .tm-quick {
   justify-content: flex-start;
   margin-top: 6px;
+}
+.tm-modal.tm-terminal .tm-head > .tm-actions {
+  min-width: 0;
+  justify-content: flex-end;
 }
 .tm-modal.tm-terminal .tm-head > .tm-figs {
   grid-area: figs;
@@ -21552,7 +21602,14 @@ dialog.tm-modal.tm-terminal::backdrop {
 }
 @media (max-width: 640px) {
   .header-balances {
+    min-width: 0;
     font-size: 10.5px;
+  }
+  .header-balances span {
+    display: block;
+    max-width: 6.75rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .header-balances small {
     font-size: 8.5px;

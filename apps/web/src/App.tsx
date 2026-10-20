@@ -54,7 +54,7 @@ import { beginWait, markNavigation } from "./loadTracker";
 import { useAppearance } from "./appearance";
 import { TokenModalHost } from "./components/TokenModalHost";
 import { closeTokenModal } from "./tokenModal";
-import { setProState, proStateOf } from "./proTrade";
+import { onTradingSessionRefresh, setProState, proStateOf } from "./proTrade";
 import { setTrackedAccount } from "./trackedWallets";
 import { ProGraceBanner } from "./components/ProGraceBanner";
 import { BugButton } from "./components/BugButton";
@@ -397,6 +397,11 @@ export function App() {
   const pro = signedIn ? proStateOf(session.user) : null;
   // Every render: setProState ignores a state equal to the one it has.
   useEffect(() => setProState(pro));
+  // A 404 from build, send, or status means Pro or the public trading flag changed. Re-read
+  // /auth/me so the Trade panel hides. A signature already sent stays locked until it settles.
+  const checkSessionRef = useRef(checkSession);
+  checkSessionRef.current = checkSession;
+  useEffect(() => onTradingSessionRefresh(() => checkSessionRef.current(0)), []);
   // Labeled wallets are the account's own: another account (or a change of Pro Mode) reads afresh.
   useEffect(() => setTrackedAccount(pro?.wallet ?? null, !!pro?.pro));
   // Pro Mode changes while a page stays open: a wallet that has just held its hour in the top 250

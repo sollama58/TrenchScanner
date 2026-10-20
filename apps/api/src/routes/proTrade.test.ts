@@ -20,7 +20,21 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
-import { freeAsdfBuy, plainRefusal, quietSign, TRADE_COOLDOWN_MS, TradeCooldown } from "./proTrade.js";
+import {
+  freeAsdfBuy,
+  chainTradeState,
+  landedFailure,
+  plainRefusal,
+  quietSign,
+  resendTarget,
+  sellShare,
+  slippageMiss,
+  SLIPPAGE_LANDED,
+  SLIPPAGE_UNSENT,
+  RENT_SHORT,
+  TRADE_COOLDOWN_MS,
+  TradeCooldown,
+} from "./proTrade.js";
 
 // The fee route pings Sender in the background: answered here, so no test reaches the network.
 vi.mock("@trenchscanner/core", async (importOriginal) => ({
@@ -33,11 +47,84 @@ describe("plainRefusal", () => {
     expect(plainRefusal('refused: simulation failed: {"InstructionError":[3,{"Custom":1}]}')).toMatch(
       /Not enough SOL/,
     );
-    expect(plainRefusal("refused: simulation failed: custom program error: 0x1771")).toMatch(/slippage/);
+    expect(plainRefusal("refused: simulation failed: custom program error: 0x1771")).toBe(SLIPPAGE_UNSENT);
+    // The RPC's err object, not the log line: Jupiter's SlippageToleranceExceeded is Custom 6001.
+    expect(plainRefusal('refused: simulation failed: {"InstructionError":[2,{"Custom":6001}]}')).toBe(
+      SLIPPAGE_UNSENT,
+    );
+    expect(plainRefusal('{"InstructionError":[4,{"Custom":6002}]}')).toMatch(/Nothing was sent/);
+    expect(plainRefusal('{"InstructionError":[4,{"Custom":6042}]}')).toMatch(/slippage/);
     expect(plainRefusal("refused: simulation failed: AccountNotFound")).toMatch(/no SOL yet/);
     expect(plainRefusal("refused: a program this swap may not call")).toBe(
       "The trade was refused before signing: a program this swap may not call",
     );
+    expect(plainRefusal("refused: simulation failed: InsufficientFundsForRent")).toBe(RENT_SHORT);
+    expect(plainRefusal('{"InstructionError":[3,{"Custom":1}]}', "sell")).toMatch(/fewer tokens/);
+    expect(plainRefusal("simulation failed: InstructionError unknown")).toMatch(/wasn't signed/);
+    expect(plainRefusal("blockhash expired")).toMatch(/refused before signing/);
+  });
+});
+
+describe("landedFailure", () => {
+  it("says a landed slippage miss is not a fill, and leaves a timeout alone", () => {
+    const slipped = landedFailure('{"InstructionError":[2,{"Custom":6001}]}');
+    expect(slipped).toEqual({ reason: "slippage", error: SLIPPAGE_LANDED });
+    expect(slipped.error).not.toMatch(/Nothing was sent/);
+    expect(landedFailure("custom program error: 0x1771").reason).toBe("slippage");
+    expect(landedFailure("custom program error: 0x179a").reason).toBe("slippage");
+    // Not enough SOL is its own cause, and it did land.
+    expect(landedFailure('{"InstructionError":[3,{"Custom":1}]}')).toEqual({
+      reason: "rejected",
+      error: "Not enough SOL in your wallet for this trade and its fees. Nothing was bought or sold.",
+    });
+    // A drop or a timeout is not rewritten into a slippage miss, and the chain's words stay.
+    const dropped = landedFailure("timed out");
+    expect(dropped.reason).toBe("rejected");
+    expect(dropped.error).toBe("timed out");
+    expect(slippageMiss("timed out")).toBe(false);
+    expect(slippageMiss("blockhash not found")).toBe(false);
+    expect(slippageMiss('{"Custom":16001}')).toBe(false);
+    expect(landedFailure("InsufficientFundsForRent").error).toMatch(/rent-exempt/);
+    expect(landedFailure("InsufficientFundsForRent").error).toMatch(/Nothing was bought or sold/);
+    expect(landedFailure('{"InstructionError":[2,{"Custom":1}]}', "sell").error).toMatch(/fewer tokens/);
+    expect(landedFailure("simulation failed: something else").error).toMatch(/program rejected it/);
+    expect(landedFailure("processed").error).toBe("processed");
+  });
+});
+
+describe("resendTarget", () => {
+  const row = {
+    status: "sent",
+    wallet: "w",
+    transaction: "bytes",
+    lastValidBlockHeight: 100n,
+  };
+  it("reattaches the same bytes while the blockhash is still live", () => {
+    expect(resendTarget(row, "w", 90)).toEqual({ base64: "bytes", lastValidBlockHeight: 100 });
+    expect(resendTarget(row, "w", null)).toEqual({ base64: "bytes", lastValidBlockHeight: 100 });
+    expect(resendTarget(row, "w", 101)).toBeNull();
+    expect(resendTarget({ ...row, status: "confirmed" }, "w", 90)).toBeNull();
+    expect(resendTarget({ ...row, transaction: null }, "w", 90)).toBeNull();
+    expect(resendTarget(row, "other", 90)).toBeNull();
+    expect(resendTarget(null, "w", 90)).toBeNull();
+  });
+});
+
+describe("chainTradeState", () => {
+  it("treats processed as a success so far, not a failure", () => {
+    expect(chainTradeState({ seen: true, confirmed: false, error: null })).toBe("processed");
+    expect(chainTradeState({ seen: true, confirmed: true, error: null })).toBe("confirmed");
+    expect(chainTradeState({ seen: true, confirmed: false, error: "x" })).toBe("failed");
+    expect(chainTradeState({ seen: false, confirmed: false, error: null })).toBe("unseen");
+  });
+});
+
+describe("sellShare", () => {
+  it("takes a percent of the balance read at build time, and all of it at 100", () => {
+    expect(sellShare(1_000n, 25)).toBe(250n);
+    expect(sellShare(999n, 50)).toBe(499n);
+    expect(sellShare(123_456_789_012_345_678n, 100)).toBe(123_456_789_012_345_678n);
+    expect(sellShare(10n, 1)).toBe(0n);
   });
 });
 

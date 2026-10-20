@@ -20,6 +20,13 @@ import {
   senderUrl,
   sendViaSender,
   signedMatchesBuild,
+  messageUnitLimit,
+  sellableAfterTransferFee,
+  splitTokenBalance,
+  solShortfall,
+  solShortfallText,
+  associatedTokenAddress,
+  RENT_EXEMPT_MIN_LAMPORTS,
   TradeRejected,
   TradingRpc,
   TransientError,
@@ -102,6 +109,11 @@ const buildSchema = z.object({
   speed: z.enum(["eco", "turbo"]),
   /** A sale of the whole balance, read fresh here (the panel's copy can be seconds old). */
   all: z.boolean().optional(),
+  /**
+   * A sell preset's percent of the balance, read fresh here. The panel's figure can be seconds
+   * old; 100 is the whole balance (closing), the same as `all`.
+   */
+  percent: z.number().int().min(1).max(100).optional(),
   /** The trader's own priority fee and Sender tip, lamports; left out, the going rate and the minimum. */
   priorityFeeLamports: z
     .string()
@@ -292,6 +304,7 @@ interface InFlight {
   rpcFallback: boolean;
   /** Its Sender sends in a row with no answer; any answer, a refusal included, resets it. */
   silent: number;
+  side?: "buy" | "sell";
 }
 
 export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: Env }) {
@@ -386,6 +399,23 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     return { tokensPerCredit, picks: await creditPicks.picks };
   };
   const inFlight = new Map<string, InFlight>();
+  /** The last build's compute-unit limit for a wallet and mint, so the fee preview matches it. */
+  const lastUnits = new Map<string, number>();
+  /**
+   * A signature this process already saw fail on chain (a slippage miss, most often). Kept so a
+   * later status read that misses the recent cache can't call that landing expired or still pending:
+   * the trader would retry a trade that already landed, or think a landed one was still open.
+   */
+  const failures = new Map<string, { reason: "slippage" | "rejected"; error: string; at: number }>();
+  const rememberFailure = (signature: string, error: string, side: "buy" | "sell" = "buy") => {
+    const now = Date.now();
+    if (failures.size > 2_000)
+      for (const [s, f] of failures)
+        if (now - f.at > RETIRED_KEEP_MS || failures.size > 2_000) failures.delete(s);
+    const failure = { ...landedFailure(error, side), at: now };
+    failures.set(signature, failure);
+    return { reason: failure.reason, error: failure.error };
+  };
   /** Signatures a /send is recording and sending right now (not yet in `inFlight`). */
   const sending = new Set<string>();
   const senderHealth = new SenderHealth();
@@ -490,7 +520,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const wallet = request.user!.walletAddress;
     const status = await cachedProStatus(env, wallet);
     if (!status.pro && !(opts.access && accessSwapOpen())) {
-      reply.code(404).send({ error: "not found", notSent: true });
+      reply.code(404).send({ error: TRADING_OFF, notSent: true });
       return null;
     }
     return { wallet, pro: status.pro, source: status.source };
@@ -530,11 +560,15 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     // else gets the same 404 as before, malformed or not, so the route still looks absent.
     const asked = (request.body ?? {}) as { side?: unknown; mint?: unknown };
     const accessBuy = asked.side === "buy" && asked.mint === SUBSCRIPTION_MINT && accessSwapOpen();
-    if (!who.pro && !accessBuy) return reply.code(404).send({ error: "not found", notSent: true });
+    if (!who.pro && !accessBuy) return reply.code(404).send({ error: TRADING_OFF, notSent: true });
     const parsed = buildSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
     const body = parsed.data;
-    const closing = body.side === "sell" && body.all === true;
+    if (body.percent !== undefined && body.side !== "sell")
+      return reply.code(400).send({ error: "A percent is for a sale." });
+    // A percent is taken off the balance read below, not the panel's copy. 100% closes, as `all` does.
+    const closing =
+      body.side === "sell" && (body.percent !== undefined ? body.percent >= 100 : body.all === true);
     if (!closing) {
       const left = cooldown.left(wallet);
       if (left > 0) return tooSoon(reply, left);
@@ -550,22 +584,85 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       return;
     try {
       let amount = BigInt(body.amount);
-      if (body.side === "sell" && body.all) {
-        const balance = await rpc.getTokenBalance(wallet, body.mint);
-        if (!balance) throw new TransientError("couldn't read the balance");
-        if (balance.raw === 0n) return reply.code(422).send({ error: "You don't hold any of this coin." });
-        amount = balance.raw;
+      // The balance a percent (or a 100% sale) was taken from: the associated account the route
+      // debits, read now, not the sum of every token account and not the panel's copy.
+      let inputBalance: string | undefined;
+      let elsewhereBalance: string | undefined;
+      if (body.side === "sell") {
+        const [mintInfo, balance] = await Promise.all([
+          rpc.getMintInfo(body.mint),
+          rpc.getTokenBalance(wallet, body.mint),
+        ]);
+        // A failed read must not sell the amount the panel still has on screen.
+        if (!mintInfo || !balance) throw new TransientError("couldn't read the balance");
+        const split = splitTokenBalance(
+          balance.accounts,
+          associatedTokenAddress(wallet, body.mint, mintInfo.program),
+        );
+        const feeBps = mintInfo.transferFeeBps ?? 0;
+        const sellable = sellableAfterTransferFee(split.ata, feeBps);
+        if (split.elsewhere > 0n) elsewhereBalance = split.elsewhere.toString();
+        if (split.ata === 0n) {
+          return reply.code(422).send({
+            error:
+              split.elsewhere > 0n
+                ? "The account this sale debits is empty. The rest of this coin sits in another token account."
+                : "You don't hold any of this coin.",
+          });
+        }
+        if (body.percent !== undefined || body.all) {
+          // Sell all is capped at what a transfer fee still lets the pool receive.
+          const base = (body.percent ?? 100) >= 100 ? sellable : split.ata;
+          inputBalance = base.toString();
+          amount = body.percent !== undefined ? sellShare(base, body.percent) : sellable;
+          if (amount <= 0n)
+            return reply.code(422).send({ error: "That share of your balance is too small to sell." });
+        } else if (amount > split.ata) {
+          return reply.code(422).send({
+            error:
+              split.elsewhere > 0n
+                ? "This sale is larger than the account the route debits. The rest sits in another token account."
+                : "You hold fewer tokens than that sale. Refresh and try again.",
+          });
+        } else if (feeBps > 0 && amount > sellable) {
+          return reply.code(422).send({
+            error:
+              "A transfer fee is taken from this coin, so this sale is more than the pool can receive. Sell less, or sell all.",
+          });
+        }
       }
-      // A buy the wallet plainly can't pay for, said plainly: a new wallet starts with no SOL, and
-      // some nodes won't simulate a transaction whose payer doesn't exist yet. Unread is no verdict.
+      // A buy the wallet plainly can't pay for, said plainly: the buy, the fee estimate, the
+      // preview rent and the rent-exempt reserve, naming the piece that's short. Unread is no verdict.
       if (body.side === "buy") {
         const lamports = await rpc.getBalance(wallet);
         if (lamports === 0n)
           return reply.code(422).send({ error: "Your wallet has no SOL yet. Add some SOL to it, then buy." });
-        if (lamports !== null && lamports < amount)
-          return reply.code(422).send({
-            error: `Your wallet has ${solAmount(lamports)} SOL, less than this buy. Buy less, or add SOL first.`,
+        if (lamports !== null) {
+          const [fees, costs] = await Promise.all([
+            estimateManualFees(rpc, {
+              mint: body.mint,
+              speed: body.speed,
+              ...(body.priorityFeeLamports !== undefined
+                ? { priorityFeeLamports: BigInt(body.priorityFeeLamports) }
+                : {}),
+              ...(body.tipLamports !== undefined ? { tipLamports: BigInt(body.tipLamports) } : {}),
+              ...(lastUnits.get(`${wallet}:${body.mint}`) !== undefined
+                ? { unitLimit: lastUnits.get(`${wallet}:${body.mint}`) }
+                : {}),
+            }).catch(() => null),
+            swapCostsFor(wallet, body.mint, amount),
+          ]);
+          const fee = fees ? fees.priorityFeeLamports + fees.tipLamports + fees.baseFeeLamports : 0n;
+          const rent = costs?.accountRentLamports ?? 0n;
+          const short = solShortfall({
+            balance: lamports,
+            buy: amount,
+            fee,
+            rent,
+            reserve: RENT_EXEMPT_MIN_LAMPORTS,
           });
+          if (short) return reply.code(422).send({ error: solShortfallText(short) });
+        }
       }
       const build = () =>
         buildManualTrade(
@@ -627,6 +724,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       };
       const list = liveBuilds(wallet);
       list.push({ ...record, blockhash: message.recentBlockhash, at, message, sacrifice });
+      const units = messageUnitLimit(message);
+      if (units !== null) lastUnits.set(`${wallet}:${body.mint}`, units);
       builds.set(wallet, list.slice(-MAX_BUILDS_PER_WALLET));
       if (builds.size > 5_000) builds.clear();
       const buildToken = signBuildToken(tokenSecret, {
@@ -638,6 +737,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       });
       return {
         ...built,
+        ...(inputBalance !== undefined ? { inputAmount: amount.toString(), inputBalance } : {}),
+        ...(elsewhereBalance !== undefined ? { elsewhere: elsewhereBalance } : {}),
         buildToken,
         quietSign: await quietSign(rpc, wallet, body.mint, body.side),
         sacrifice: sacrificeView(sacrifice),
@@ -696,6 +797,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           ? { priorityFeeLamports: BigInt(q.priorityFeeLamports) }
           : {}),
         ...(q.tipLamports !== undefined ? { tipLamports: BigInt(q.tipLamports) } : {}),
+        ...(lastUnits.get(`${who.wallet}:${q.mint}`) !== undefined
+          ? { unitLimit: lastUnits.get(`${who.wallet}:${q.mint}`) }
+          : {}),
       }),
       sacrificeOn(
         who,
@@ -911,7 +1015,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           const row = await prisma.platformTrade
             .findUnique({ where: { signature }, select: { wallet: true, status: true } })
             .catch(() => null);
-          if (row?.wallet === wallet && row.status === "sent") return { signature };
+          if (row?.wallet === wallet && row.status === "sent") {
+            await attachRecorded(signature, wallet);
+            return { signature };
+          }
           return reply
             .code(409)
             .send({ error: "This trade was already sent once. Nothing more was sent.", notSent: true });
@@ -938,9 +1045,12 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         );
         // Refused by Sender: nothing went out under this signature (it is safe to build again).
         // 409, not a 5xx: a proxy's 502 must never read as "nothing went out".
-        return reply
-          .code(409)
-          .send({ error: `Helius Sender refused the trade: ${sent.error}`, notSent: true });
+        return reply.code(409).send({
+          error: slippageMiss(sent.error ?? "")
+            ? SLIPPAGE_UNSENT
+            : "Helius Sender refused the trade, so nothing was sent. You can try again.",
+          notSent: true,
+        });
       }
       // No clear answer (a timeout): it may have gone out, so it is treated as sent and resent.
       if (!sent.ok) {
@@ -958,6 +1068,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         wallet,
         rpcFallback: !mevProtect,
         silent: sent.ok ? 0 : 1,
+        side: sentBuild.side,
       });
       // A backstop on memory only (each wallet has at most MAX_IN_FLIGHT_PER_WALLET): the oldest
       // stops being resent, and its status can still say "expired".
@@ -996,6 +1107,47 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     if (row?.wallet !== wallet || row.lastValidBlockHeight === null) return undefined;
     return { lastValidBlockHeight: Number(row.lastValidBlockHeight) };
   };
+  const rowSide = async (signature: string, wallet: string): Promise<"buy" | "sell"> => {
+    const row = await prisma.platformTrade
+      .findUnique({ where: { signature }, select: { wallet: true, side: true } })
+      .catch(() => null);
+    return row?.wallet === wallet && row.side === "sell" ? "sell" : "buy";
+  };
+  /**
+   * A row still "sent" and inside its blockhash, on this instance's resend loop even when another
+   * process sent it. The stored bytes are the only ones resent: one signature, no second fill.
+   */
+  const attachRecorded = async (signature: string, wallet: string) => {
+    if (inFlight.has(signature) || sending.has(signature) || inFlight.size >= MAX_IN_FLIGHT) return;
+    const row = await prisma.platformTrade
+      .findUnique({
+        where: { signature },
+        select: {
+          wallet: true,
+          status: true,
+          transaction: true,
+          lastValidBlockHeight: true,
+          senderSpeed: true,
+          senderMevProtect: true,
+          side: true,
+        },
+      })
+      .catch(() => null);
+    const height = await rpc.getBlockHeight().catch(() => null);
+    const target = resendTarget(row, wallet, height);
+    if (!target || !row) return;
+    inFlight.set(signature, {
+      base64: target.base64,
+      url: senderFor(row.senderSpeed === "turbo" ? "turbo" : "eco", row.senderMevProtect === true),
+      lastValidBlockHeight: target.lastValidBlockHeight,
+      until: Date.now() + RESEND_FOR_MS,
+      wallet,
+      rpcFallback: row.senderMevProtect === false,
+      silent: 0,
+      side: row.side === "sell" ? "sell" : "buy",
+    });
+    scheduleResend();
+  };
 
   app.get<{ Params: { signature: string } }>(
     "/trade/status/:signature",
@@ -1010,8 +1162,15 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       // history search is slower. "Not seen" there proves nothing for an older one, so expiry is
       // only ever concluded from a history search below.
       let status = await rpc.getSignatureStatus(signature, { searchHistory: false });
-      if (!status) return { state: "unknown" };
+      if (!status) {
+        const earlier = failures.get(signature);
+        if (earlier) return { state: "failed", reason: earlier.reason, error: earlier.error };
+        return { state: "unknown" };
+      }
       if (!status.seen) {
+        // A landing we already saw fail stays a failure. Expiry is only for a signature never seen.
+        const earlier = failures.get(signature);
+        if (earlier) return { state: "failed", reason: earlier.reason, error: earlier.error };
         // Past its blockhash's life and never seen: it won't land. The height is read first
         // and the status again after it, so a landing in between can't read as expired.
         const flight =
@@ -1028,20 +1187,36 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           // Landed longer ago than the recent cache reaches.
           if (again) status = again;
         }
-        if (!status.seen) return { state: "pending" };
+        if (!status.seen) {
+          // A retry of a row this process did not send: same bytes, back on this instance's loop.
+          if (!inFlight.has(signature)) void attachRecorded(signature, wallet);
+          return { state: "pending" };
+        }
       }
       if (status.error) {
+        const side = inFlight.get(signature)?.side ?? (await rowSide(signature, wallet));
         inFlight.delete(signature);
         void settle(signature, "failed");
-        return { state: "failed", error: status.error };
+        // The balance may have moved (a fee, or a fill the error doesn't describe): the next
+        // position read must not answer with the pre-trade cache.
+        forgetPositions(wallet);
+        const failure = rememberFailure(signature, status.error, side);
+        return { state: "failed", ...failure };
       }
       if (status.confirmed) {
         inFlight.delete(signature);
+        failures.delete(signature);
         void settle(signature, "confirmed");
         forgetPositions(wallet);
         return { state: "confirmed" };
       }
-      return { state: "pending" };
+      // Seen, with no error, and not confirmed yet: processed. That is a success so far, not a failure.
+      if (!inFlight.has(signature)) void attachRecorded(signature, wallet);
+      // Seen earlier as a failure, and this read hasn't confirmed it since: still a failure.
+      // A cache miss must not turn a landed revert into "pending" or, past the blockhash, "expired".
+      const earlier = failures.get(signature);
+      if (earlier) return { state: "failed", reason: earlier.reason, error: earlier.error };
+      return { state: "processed" };
     },
   );
 
@@ -1117,13 +1292,18 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   async function readPosition(wallet: string, mint: string): Promise<unknown> {
     const key = `${wallet}:${mint}`;
     const epoch = positionEpochs.get(wallet) ?? 0;
-    const [balance, history, supply, solUsd] = await Promise.all([
+    const [balance, history, supply, solUsd, mintInfo] = await Promise.all([
       rpc.getTokenBalance(wallet, mint),
       walletTokenTrades(rpc, wallet, mint, tradeCache),
       supplyOf(mint),
       solPrice.get().catch(() => null),
+      rpc.getMintInfo(mint).catch(() => null),
     ]);
     if (!balance) return null;
+    const split = mintInfo
+      ? splitTokenBalance(balance.accounts, associatedTokenAddress(wallet, mint, mintInfo.program))
+      : { ata: balance.raw, elsewhere: 0n };
+    const transferFeeBps = mintInfo?.transferFeeBps ?? 0;
     if (tradeCache.size > MAX_CACHED_TRADES) tradeCache.clear();
     // The trades made from our Trade panel, for the position's fees saved (user ask 2026-10-19).
     const signatures = (history?.trades ?? []).map((t) => t.signature);
@@ -1142,8 +1322,12 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const body = {
       wallet,
       mint,
-      decimals: balance.decimals ?? supply?.decimals ?? null,
+      decimals: balance.decimals ?? supply?.decimals ?? mintInfo?.decimals ?? null,
       balance: balance.raw.toString(),
+      tradable: split.ata.toString(),
+      elsewhere: split.elsewhere.toString(),
+      transferFeeBps,
+      sellable: sellableAfterTransferFee(split.ata, transferFeeBps).toString(),
       supply: supply ? supply.raw.toString() : null,
       solUsd,
       solUsdAt: solUsd ? solPrice.readAt() : null,
@@ -1205,7 +1389,17 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       )
       .catch(() => null);
     const unseen = live.filter(([signature, f], i) => {
-      if (!statuses?.[i]?.seen) return true;
+      const st = statuses?.[i];
+      // Landed and reverted (slippage, most often): stop resending the same bytes, and don't
+      // treat the sighting as a fill. A wider slippage is never built from here.
+      if (st && st.seen && st.error) {
+        rememberFailure(signature, st.error, f.side ?? "buy");
+        inFlight.delete(signature);
+        forgetPositions(f.wallet);
+        void settle(signature, "failed");
+        return false;
+      }
+      if (!st?.seen) return true;
       inFlight.delete(signature);
       forgetPositions(f.wallet);
       return false;
@@ -1256,6 +1450,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         lastValidBlockHeight: true,
         senderSpeed: true,
         senderMevProtect: true,
+        side: true,
       },
     });
     if (rows.length === 0 || closing) return;
@@ -1275,6 +1470,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         // Only a row that says MEV Protect was off: an older row without it stays on Sender.
         rpcFallback: r.senderMevProtect === false,
         silent: 0,
+        side: r.side === "sell" ? "sell" : "buy",
       });
       resumed++;
     }
@@ -1346,17 +1542,115 @@ export async function quietSign(
   }
 }
 
+/**
+ * A percent of a raw balance, the same way the panel's sell presets count it (shareOf): all of it
+ * at 100. The build uses this on the balance it just read, not the figure the page was showing.
+ */
+export function sellShare(raw: bigint, percent: number): bigint {
+  if (percent >= 100) return raw;
+  return (raw * BigInt(Math.round(percent * 100))) / 10_000n;
+}
+
+/**
+ * Whether `message` is a swap that would execute outside the slippage the trade was built with.
+ * Jupiter's SlippageToleranceExceeded is 6001 (0x1771). Pump.fun's buy and sell misses are 6002
+ * and 6003. PumpSwap's is 6042 (0x179a). The RPC reports the program error as JSON
+ * (`{"Custom":6001}`), which is not the log line "custom program error: 0x1771".
+ */
+export function slippageMiss(message: string): boolean {
+  if (
+    /SlippageToleranceExceeded|TooMuchSolRequired|TooLittleSolReceived|ExceededSlippage|under the quoted minimum/i.test(
+      message,
+    )
+  )
+    return true;
+  if (/0x1771|0x1772|0x1773|0x179a/i.test(message)) return true;
+  return /(?:^|[^0-9])(6001|6002|6003|6042)(?:[^0-9]|$)/.test(message);
+}
+
+/** The price moved before anything was signed: nothing went out. */
+export const SLIPPAGE_UNSENT =
+  "The price moved past your slippage. Nothing was sent. Try again, or raise the slippage.";
+
+/** The signed trade landed and reverted because the price moved. It is not a fill. */
+export const SLIPPAGE_LANDED =
+  "The price moved past your slippage. Nothing was bought or sold. Try again, or raise the slippage.";
+
 /** The guard's refusal in the trader's words, where it can be said plainly. */
-export function plainRefusal(message: string, side: "buy" | "sell" = "buy"): string {
+/** Pro is off, or the public trading flag is off. Not the words "not found". */
+export const TRADING_OFF = "Trading isn't available for this wallet right now.";
+
+/** Not enough SOL to leave the wallet rent-exempt. Distinct from a token shortfall and from slippage. */
+export const RENT_SHORT = "Not enough SOL left to keep your wallet rent-exempt after this trade.";
+
+export function plainRefusal(message: string, side: "buy" | "sell" = "buy", landed = false): string {
+  if (/InsufficientFundsForRent/i.test(message))
+    return landed ? `${RENT_SHORT} Nothing was bought or sold.` : RENT_SHORT;
   if (/insufficient lamports/i.test(message))
     return "Not enough SOL in your wallet for this trade and its fees.";
   // Token program error 1 (InsufficientFunds) on a sale is the tokens, not the SOL.
-  if (/InsufficientFunds|0x1\b|"Custom":1\}/i.test(message))
+  // 0x1 must not swallow 0x1771 (slippage): the boundary keeps them apart, and slippage is next.
+  if (/InsufficientFunds|0x1\b|"Custom":1\}/i.test(message) && !slippageMiss(message))
     return side === "sell"
       ? "You hold fewer tokens than that sale. Refresh and try again."
       : "Not enough SOL in your wallet for this trade and its fees.";
-  if (/6042|6002|6003|0x1771|SlippageToleranceExceeded|under the quoted minimum/i.test(message))
-    return "The price moved past your slippage. Try again, or raise the slippage.";
+  if (slippageMiss(message)) return landed ? SLIPPAGE_LANDED : SLIPPAGE_UNSENT;
   if (/AccountNotFound/i.test(message)) return "Your wallet has no SOL yet (the account doesn't exist).";
+  if (/simulation failed|InstructionError/i.test(message))
+    return landed
+      ? "The trade landed and the program rejected it. Nothing was bought or sold."
+      : "The trade failed in simulation, so it wasn't signed. Nothing was sent.";
   return `The trade was refused before signing: ${message.replace(/^refused: /, "")}`;
+}
+
+/**
+ * A signature the chain has already landed as a failure. Slippage stays its own sentence (nothing
+ * was bought or sold, and nothing is retried at a wider slippage). Anything else keeps its cause:
+ * a timeout or a drop is not rewritten into a slippage miss.
+ */
+export function landedFailure(
+  error: string,
+  side: "buy" | "sell" = "buy",
+): { reason: "slippage" | "rejected"; error: string } {
+  if (slippageMiss(error)) return { reason: "slippage", error: SLIPPAGE_LANDED };
+  const plain = plainRefusal(error, side, true);
+  if (plain.startsWith("The trade was refused before signing:")) return { reason: "rejected", error };
+  if (/\bNothing was bought or sold\.$/.test(plain)) return { reason: "rejected", error: plain };
+  return { reason: "rejected", error: `${plain} Nothing was bought or sold.` };
+}
+
+/**
+ * A recorded trade this process can put back on its resend loop: still sent, bytes stored, and
+ * the blockhash not yet expired. Anything else is not resent, and a different transaction is
+ * never built from it. `height` null means the chain height couldn't be read, so the blockhash
+ * is treated as still live.
+ */
+export function resendTarget(
+  row: {
+    status: string;
+    wallet: string;
+    transaction: string | null;
+    lastValidBlockHeight: bigint | number | null;
+  } | null,
+  wallet: string,
+  height: number | null,
+): { base64: string; lastValidBlockHeight: number } | null {
+  if (!row || row.wallet !== wallet || row.status !== "sent") return null;
+  if (!row.transaction || row.lastValidBlockHeight === null) return null;
+  const lastValidBlockHeight = Number(row.lastValidBlockHeight);
+  if (!Number.isFinite(lastValidBlockHeight)) return null;
+  if (height !== null && height > lastValidBlockHeight) return null;
+  return { base64: row.transaction, lastValidBlockHeight };
+}
+
+/** Seen without an error and not yet confirmed: processed, which is not a failure. */
+export function chainTradeState(status: {
+  seen: boolean;
+  confirmed: boolean;
+  error: string | null;
+}): "unseen" | "processed" | "confirmed" | "failed" {
+  if (!status.seen) return "unseen";
+  if (status.error) return "failed";
+  if (status.confirmed) return "confirmed";
+  return "processed";
 }

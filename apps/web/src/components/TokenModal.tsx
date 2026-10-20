@@ -100,9 +100,11 @@ import {
   withLiveMarks,
 } from "../walletMarks";
 import { TradingChart, type ChartEvent, type ChartKind, type ChartTrade } from "./TradingChart";
+import { TokenPairBalances } from "./HeaderBalances";
 import { TradePanel, solText, tokensText } from "./TradePanel";
 import { PRO_MODE_PERKS } from "./ProModeCard";
 import { summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
+import { spendBalancesShown, useWalletBalance } from "../walletBalance";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
 import { lagsLead, preferLiveChartNow, scanReplacesMarketCap, type ChartNow } from "../marketClock";
 import { SectionBoundary } from "./SectionBoundary";
@@ -752,6 +754,13 @@ function TokenBody({
   const [chartNow, setChartNow] = useState<ChartNow | null>(null);
   const reads = scans.nextRead === null ? null : { nextRead: scans.nextRead, everyMs: SCAN_READ_MS };
   const mint = card.token.mintAddress;
+  // One position read for the chart and the header. Balances show only where this wallet can trade.
+  const proState = useProState();
+  const proWallet = proState?.wallet ?? null;
+  const canSign = useCanSignTrades(proWallet);
+  const position = usePosition(proWallet ? mint : null);
+  const showBalances = spendBalancesShown(!!proState?.pro, canSign);
+  const funds = useWalletBalance(showBalances, showBalances);
   const s = card.snapshot;
   const curated = card.curated;
   const outcome = cardOutcome(card, now);
@@ -957,6 +966,15 @@ function TokenBody({
         </div>
       </div>
       <div className="tm-actions">
+        {showBalances && (
+          <TokenPairBalances
+            symbol={card.token.symbol ?? "tokens"}
+            tokenRaw={position.data?.balance ?? null}
+            decimals={position.data?.decimals ?? null}
+            solLamports={funds.balance?.solLamports ?? null}
+            stale={!!((funds.error && funds.balance) || (position.error && position.data))}
+          />
+        )}
         {!hideSafetyPill && <SafetyPill verdict={safety} onClick={openSafety} />}
         <button
           type="button"
@@ -1230,6 +1248,7 @@ function TokenBody({
                   plotHeight={plotH}
                   onCustomize={customizeMarks}
                   onChartNow={setChartNow}
+                  position={position}
                 />
               </section>
               {side !== "none" && (
@@ -1411,6 +1430,7 @@ function TokenBody({
           alertMcap={alertMcap}
           what={what}
           onChartNow={setChartNow}
+          position={position}
         />
         {profile.data?.flow && <FlowCard flow={profile.data.flow} now={now} />}
       </section>
@@ -2273,6 +2293,7 @@ export function ChartCard({
   plotHeight,
   onCustomize,
   onChartNow,
+  position,
 }: {
   card: Card;
   chart: { data: TokenChart | null; error: Error | null };
@@ -2293,6 +2314,8 @@ export function ChartCard({
    * so the header doesn't take a minute candle whose close was clamped to now.
    */
   onChartNow?: (now: ChartNow | null) => void;
+  /** The wallet's position in this coin, read once for the header and the chart. */
+  position: ReturnType<typeof usePosition>;
 }) {
   const api = useTokenApi(card.token.mintAddress);
   // A second source of candles (user asks 2026-10-19): when the API has none for the coin (Pump.fun
@@ -2315,15 +2338,14 @@ export function ChartCard({
   // until it says.
   const [chartTf, setChartTf] = useState<number | null>(null);
 
-  // Pro Mode: the signed-in wallet's position in the coin and the Trade panel. Null for everyone
-  // else, so nothing of it is fetched or drawn without Pro Mode.
+  // Pro Mode: the signed-in wallet's position in the coin (read once by the token view) and the
+  // Trade panel. Null for everyone else, so nothing of it is drawn without Pro Mode.
   const proState = useProState();
   const pro = proState?.wallet ?? null;
   // Pro Mode ended: the panel only says trading is off (no sells: #717), for a coin the wallet holds.
   const closeOnly = !!proState && !proState.pro;
   const graceEndsAt = proState?.pro ? proState.graceEndsAt : null;
   const mint = card.token.mintAddress;
-  const position = usePosition(pro ? mint : null);
   const holds = !!position.data && BigInt(position.data.balance) > 0n;
   // Trade is its own section, always open (user ask 2026-10-18), for Pro Mode wallets (admins
   // included). Never where no wallet here could sign a trade (a phone signed in by QR, say).

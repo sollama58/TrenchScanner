@@ -293,6 +293,17 @@ describe("pair and logo marks (rules 0.25.0, 0.27.0)", () => {
       fit: null,
       credibility: null,
     });
+    // A full read that never opened the post does not show that post's credibility.
+    expect(
+      sageRead(
+        {
+          depth: "full",
+          raw: { twitter: "https://x.com/a/status/1" },
+          x: { status: "not_fetched", credibility: 0.4 },
+        },
+        "full",
+      )!.x?.credibility,
+    ).toBeNull();
     expect(read.trend).toBeNull();
     const deleted = sageRead(
       {
