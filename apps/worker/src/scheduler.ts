@@ -91,6 +91,33 @@ export class PartialJobFailure extends Error {
  */
 export class JobSkipped extends Error {}
 
+/**
+ * Thrown when a run that must not continue without its lock (`withJobLock`'s `stopWhenLockLost`)
+ * lost that lock and stopped. Like JobSkipped, nothing is written to the heartbeat row: the
+ * process that holds the lock now owns that row, and a failure here would replace its runningSince.
+ */
+export class JobLockLost extends Error {
+  constructor(job: string) {
+    super(`${job} lost its lock to another process and stopped`);
+    this.name = "JobLockLost";
+  }
+}
+
+/** A run that did not finish as this process's: another process holds the job, or this one stopped
+ *  because it lost the lock to that process. */
+function anotherProcessHoldsTheJob(err: unknown): err is JobSkipped | JobLockLost {
+  return err instanceof JobSkipped || err instanceof JobLockLost;
+}
+
+function logHeldElsewhere(name: HeartbeatJob, err: JobSkipped | JobLockLost): void {
+  logger.info(
+    err instanceof JobLockLost
+      ? "run stopped - its lock is held by another process"
+      : "run skipped - another process is running this job",
+    { job: name, reason: err.message },
+  );
+}
+
 /** What a job may hand back about its own run - stored on its heartbeat row and served by
  *  GET /health/worker, which is the only view of production timing that needs no log access. */
 export type JobRunMeta = Record<
@@ -333,8 +360,8 @@ export function scheduleInterval(
         meta: { ...(meta ?? {}), durationMs: Date.now() - startedAt, intervalMs },
       });
     } catch (err) {
-      if (err instanceof JobSkipped) {
-        logger.info("run skipped - another process is running this job", { job: name, reason: err.message });
+      if (anotherProcessHoldsTheJob(err)) {
+        logHeldElsewhere(name, err);
         if (abandoned > 0 && ++skippedBehindAbandoned >= MAX_ABANDONED_RUNS) {
           skippedBehindAbandoned = 0;
           onDeadline(name, Date.now() - startedAt);
@@ -544,7 +571,7 @@ export function scheduleDailyAt(
           partialError = err.message;
         } else {
           // Only the job itself failing earns a retry - not the heartbeat write after a good run.
-          if (!(err instanceof JobSkipped)) failuresInARow += 1;
+          if (!anotherProcessHoldsTheJob(err)) failuresInARow += 1;
           throw err;
         }
       }
@@ -556,12 +583,12 @@ export function scheduleDailyAt(
         meta: { ...(meta ?? {}), durationMs: Date.now() - startedAt, dailyAtHourUtc: hourUtc },
       });
     } catch (err) {
-      if (err instanceof JobSkipped) {
+      if (anotherProcessHoldsTheJob(err)) {
         skipped = true;
         // This process did not take the slot after all - the catch-up must not think it did.
         lastStartedAt = previousStartedAt;
         failuresInARow = 0;
-        logger.info("run skipped - another process is running this job", { job: name, reason: err.message });
+        logHeldElsewhere(name, err);
       } else {
         logger.error("job threw an unhandled error", { job: name, error: String(err) });
         await recordHeartbeat(name, {

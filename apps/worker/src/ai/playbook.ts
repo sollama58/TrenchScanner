@@ -374,8 +374,8 @@ async function reviewRecord(
           output_config: { effort: "high", format: lenientFormat(betaZodOutputFormat(ReflectionSchema)) },
         },
         // A review is one call a day reading a few hundred rows; give it room beyond the live
-        // reviewer's timeout.
-        { timeout: 10 * 60_000 },
+        // reviewer's timeout. No retry: a timed-out review can still be billed against one estimate.
+        { timeout: 10 * 60_000, maxRetries: 0 },
       );
     } catch (err) {
       await settleAiSpend(reservation, failedCallCostUsd(err, reservation));

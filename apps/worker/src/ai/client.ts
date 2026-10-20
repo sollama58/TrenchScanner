@@ -13,7 +13,11 @@ export function anthropicClient(env: Env): Anthropic {
     client = new Anthropic({
       apiKey: env.ANTHROPIC_API_KEY,
       timeout: env.AI_REVIEW_TIMEOUT_MS,
-      maxRetries: 1,
+      // No SDK retry. A timed-out call can still be billed, and a retry bills again, while
+      // reserveAiSpend recorded one estimate (reviewer.ts). The text scorer, the playbook review
+      // and replay batch create share this client and do not pass their own retry count. A timeout
+      // stays a failed call, settled by failedCallCostUsd. The reviewer also passes maxRetries: 0.
+      maxRetries: 0,
     });
     clientKey = env.ANTHROPIC_API_KEY;
   }

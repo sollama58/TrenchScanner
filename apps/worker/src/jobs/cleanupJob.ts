@@ -57,6 +57,9 @@ const REVOKED_DEVICE_RETENTION_DAYS = 30;
 /** How long a chat's "already alerted about this token" row is kept. */
 const TELEGRAM_ALERT_SENT_RETENTION_DAYS = 7;
 
+/** How long an admin audit row is kept. The panel reads recent actions; 90 days covers that. */
+const ADMIN_ACTION_RETENTION_DAYS = 90;
+
 /**
  * How far before the snapshot horizon a token's last sign of life may be and still be walked
  * nightly - slack for nights the sweep missed. See deleteExpiredSnapshots.
@@ -868,6 +871,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedTelegramLinkCodes,
     deletedRevokedDevices,
     deletedNonces,
+    deletedAdminActions,
     deletedFilterBaselines,
     deletedTelegramAlertsSent,
     deletedBubbleMaps,
@@ -900,6 +904,13 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     stage("nonces", none, () =>
       prisma.authNonce.deleteMany({
         where: { expiresAt: { lt: new Date(startedAt - 3_600_000) } },
+      }),
+    ),
+    // Admin writes (AdminAction), the audit the panel reads. Nothing else deletes them, and the
+    // panel does not look back past a quarter. The table is small; the same delete as the nonces.
+    stage("adminActions", none, () =>
+      prisma.adminAction.deleteMany({
+        where: { at: { lt: new Date(startedAt - ADMIN_ACTION_RETENTION_DAYS * DAY_MS) } },
       }),
     ),
     // What a filter already matched when it was armed only counts for the alert cooldown, so a
@@ -1073,6 +1084,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedTelegramLinkCodes: deletedTelegramLinkCodes.count,
     deletedRevokedDevices: deletedRevokedDevices.count,
     deletedNonces: deletedNonces.count,
+    deletedAdminActions: deletedAdminActions.count,
     deletedFilterBaselines: deletedFilterBaselines.count,
     deletedTelegramAlertsSent: deletedTelegramAlertsSent.count,
     deletedBubbleMaps: deletedBubbleMaps.count,

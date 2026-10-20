@@ -969,14 +969,17 @@ async function main() {
   schedule("curator-training", () =>
     scheduleInterval(
       "curator-training",
-      async () => {
-        // Every run, early or on the cadence, answers the admin's pending "retrain now".
-        await prisma.curatorRetrainRequest.updateMany({
-          where: { startedAt: null },
-          data: { startedAt: new Date() },
-        });
-        return runCuratorTrainingJob(env);
-      },
+      () =>
+        // One trainer at a time across processes (a deploy runs both). The publish step already
+        // drops an older overlapping run; the lock skips that second walk-forward entirely.
+        withJobLock("curator-training", async () => {
+          // Every run, early or on the cadence, answers the admin's pending "retrain now".
+          await prisma.curatorRetrainRequest.updateMany({
+            where: { startedAt: null },
+            data: { startedAt: new Date() },
+          });
+          return runCuratorTrainingJob(env);
+        }),
       env.CURATOR_TRAINING_INTERVAL_HOURS * 60,
       {
         // A run takes about ten minutes. One that hangs (a dead connection, a training thread that
@@ -1051,7 +1054,9 @@ async function main() {
   schedule("ai-judge", () =>
     scheduleInterval(
       "ai-judge",
-      takingRunNow("ai-judge", () => withJobLock("ai-judge", () => runAiJudgeJob(env))),
+      takingRunNow("ai-judge", () =>
+        withJobLock("ai-judge", (signal) => runAiJudgeJob(env, signal), { stopWhenLockLost: true }),
+      ),
       AI_JUDGE_INTERVAL_MINUTES,
       { runEarly: onRunNow("ai-judge") },
     ),

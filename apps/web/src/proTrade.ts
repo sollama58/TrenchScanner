@@ -1267,8 +1267,13 @@ export function tradeProblem(tx: Uint8Array, owner: string, trade: TradeCheck): 
   }
 }
 
-/** The API's one trade per 5 seconds per wallet (sales of 100% exempt), checked here first. */
-export const TRADE_COOLDOWN_MS = 5_000;
+/** The API's one trade per second per wallet (sales of 100% exempt), checked here first. */
+export const TRADE_COOLDOWN_MS = 1_000;
+
+/** "every second", or "every N seconds" when the API's window is something else. */
+export function tradePacePhrase(ms = TRADE_COOLDOWN_MS): string {
+  return ms === 1_000 ? "every second" : `every ${ms / 1_000} seconds`;
+}
 /**
  * When each wallet last sent a trade from this page: the Trade panels, quick buy and the access
  * buy alike, so a quick buy straight after a panel trade says "wait" instead of a round trip.

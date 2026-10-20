@@ -211,12 +211,26 @@ export interface PlatformTradeRecord {
     senderMevProtect: boolean;
     buildId: string | null;
   };
+  /**
+   * When set (a buy, or a sale that is not closing the position), refuse this insert when the
+   * wallet already has a PlatformTrade sent within this many milliseconds. Held under a per-wallet
+   * advisory lock, so two API processes share one pace. Omit for a closing sale: it is still
+   * inserted under that lock, so the next paced trade sees it, and it is not refused.
+   */
+  paceMs?: number;
+  /**
+   * Clock for the pace check, milliseconds since the epoch. Tests pass it. The send path leaves
+   * it unset and the check uses Date.now().
+   */
+  now?: number;
 }
 
 export type RecordTradeOutcome =
   | { status: "recorded"; taken: bigint }
   /** "on", a fee payer, and the burned pot no longer covers it: nothing was written. */
-  | { status: "short"; burnedRaw: bigint; asdfRaw: bigint };
+  | { status: "short"; burnedRaw: bigint; asdfRaw: bigint }
+  /** A paced trade, and this wallet already sent one inside `paceMs`: nothing was written. */
+  | { status: "too-soon"; retryAfterMs: number };
 
 /**
  * The send's one database transaction (Build guide step 5), before the trade goes to Sender:
@@ -224,11 +238,30 @@ export type RecordTradeOutcome =
  * source, the trade's signature) and the PlatformTrade row with the Sacrifice. Two sends at once
  * can't spend the same credits, and a charge is never unrecorded. "shadow" records the Sacrifice on
  * the trade but takes nothing; "off" records the trade alone.
+ *
+ * Every insert, paced or not, takes the wallet's pace lock first. A closing sale omits `paceMs`
+ * and is never refused, but a paced trade behind it waits out the window: the two cannot pass
+ * each other. The in-memory cooldown on one API process is only the fast path.
  */
 export async function recordPlatformTrade(r: PlatformTradeRecord): Promise<RecordTradeOutcome> {
   const s = r.sacrifice;
   const take = s.mode === "on" && s.pays && s.asdfRaw !== null && s.asdfRaw > 0n ? s.asdfRaw : 0n;
   return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"pro-trade-pace:" + r.wallet}))`;
+    if (r.paceMs !== undefined && r.paceMs > 0) {
+      const now = r.now ?? Date.now();
+      const recent = await tx.platformTrade.findFirst({
+        where: { wallet: r.wallet, sentAt: { gt: new Date(now - r.paceMs) } },
+        orderBy: { sentAt: "desc" },
+        select: { sentAt: true },
+      });
+      if (recent) {
+        return {
+          status: "too-soon" as const,
+          retryAfterMs: Math.max(1, recent.sentAt.getTime() + r.paceMs - now),
+        };
+      }
+    }
     if (take > 0n) {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${creditWalletLockKey(r.wallet)}))`;
       const pots = await creditPots(r.wallet, tx);
