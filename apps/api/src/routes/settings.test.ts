@@ -90,6 +90,31 @@ describe("parseFeedAppearance", () => {
     expect(parseFeedAppearance({}).chartMarkScale).toBe("m");
     expect(parseFeedAppearance({ chartMarkScale: "s" }).chartMarkScale).toBe("s");
     expect(parseFeedAppearance({ chartMarkScale: "xl" }).chartMarkScale).toBe("m");
+    // Chart event flags: every kind but the screen pass, and only the first filter and model.
+    expect(parseFeedAppearance({}).chartEventKinds).toEqual([
+      "alert",
+      "filter",
+      "model",
+      "graduation",
+      "scanned",
+    ]);
+    expect(parseFeedAppearance({}).chartEventFirst).toEqual(["filter", "model"]);
+    expect(parseFeedAppearance({ chartEventKinds: ["screen", "model"] }).chartEventKinds).toEqual([
+      "screen",
+      "model",
+    ]);
+    expect(parseFeedAppearance({ chartEventFirst: ["alert"] }).chartEventFirst).toEqual(["alert"]);
+    expect(parseFeedAppearance({ chartEventKinds: [] }).chartEventKinds).toEqual([]);
+    for (const bad of ["nope", 1, ["alert", "nope"], ["filter", "filter"]]) {
+      expect(parseFeedAppearance({ chartEventKinds: bad }).chartEventKinds).toEqual([
+        "alert",
+        "filter",
+        "model",
+        "graduation",
+        "scanned",
+      ]);
+      expect(parseFeedAppearance({ chartEventFirst: bad }).chartEventFirst).toEqual(["filter", "model"]);
+    }
     expect(parseFeedAppearance({}).chartMarkKinds).toHaveLength(7);
     expect(parseFeedAppearance({}).chartMarkKinds).not.toContain("risky");
     // A list saved before that with every kind on was the old default: it reads without risky.
@@ -167,6 +192,8 @@ describe("parseFeedAppearance", () => {
       hideBelowMcap,
       hideBelowMcapUsd,
       hideBelowMcapRev,
+      chartEventKinds,
+      chartEventFirst,
       ...older
     } = DEFAULT_FEED_APPEARANCE;
     const parsed = feedAppearanceSchema.safeParse(older);
@@ -186,6 +213,8 @@ describe("parseFeedAppearance", () => {
       hideBelowMcap,
       hideBelowMcapUsd,
       hideBelowMcapRev,
+      chartEventKinds,
+      chartEventFirst,
     });
   });
 });

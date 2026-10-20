@@ -17,6 +17,8 @@ import {
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
+import { useAppearance } from "../appearance";
+import { chartEventsToDraw, type ChartEventKind } from "../chartEvents";
 import { change, signedPct, usd } from "../format";
 import { flowApartFromCandle } from "../marketClock";
 import { ClockIcon } from "./Icons";
@@ -55,10 +57,12 @@ import {
 } from "./chartPlugins";
 import { KolAvatar } from "./KolAvatar";
 
-/** A moment marked on the chart: an alert, a model's call, the screen pass, graduation. */
+/** A moment marked on the chart: an alert, a model's call, a filter match, the screen pass, graduation. */
 export interface ChartEvent {
   t: number;
   label: string;
+  /** Which Customize › Chart events switch this flag follows (chartEvents.ts). */
+  kind: ChartEventKind;
   /** Market cap at the moment, when known (the readout shows the move since). */
   mcap?: number | null;
 }
@@ -352,6 +356,12 @@ export function TradingChart({
   /** How the crosshair's time reads, set on each render (the chart's formatter reads it). */
   const fmtRef = useRef({ seconds: false, dated: false });
 
+  // Customize › Chart events: a kind that is off is not drawn, and only-first keeps the earliest.
+  const look = useAppearance();
+  const shownEvents = useMemo(
+    () => chartEventsToDraw(events, { kinds: look.chartEventKinds, first: look.chartEventFirst }),
+    [events, look.chartEventKinds, look.chartEventFirst],
+  );
   const [picked, setPicked] = useState<number | null>(readTimeframe);
   const [log, setLog] = useState(readLog);
   const [ind, setInd] = useState(readIndicators);
@@ -374,8 +384,9 @@ export function TradingChart({
   // moment (the first alert, filter or model; else the screen pass) at its own market cap or the
   // chart's then, else where the chart starts.
   const lead = useMemo(
-    () => events.reduce<ChartEvent | undefined>((a, e) => (a === undefined || e.t < a.t ? e : a), undefined),
-    [events],
+    () =>
+      shownEvents.reduce<ChartEvent | undefined>((a, e) => (a === undefined || e.t < a.t ? e : a), undefined),
+    [shownEvents],
   );
   const ref = useMemo(() => {
     if (entry !== null && entry > 0) return { v: entry, label: "your entry" };
@@ -791,7 +802,7 @@ export function TradingChart({
       rangeAt,
       // The flags go under the readout's lines.
       flagTop: phone ? 34 : 20,
-      events: [...events]
+      events: [...shownEvents]
         .sort((a, b) => a.t - b.t)
         .map((e, i) => ({ t: e.t, label: e.label, lead: i === 0 })),
       marks,
@@ -965,7 +976,7 @@ export function TradingChart({
       ? trades.filter((tr) => tr.t >= curFrom && tr.t < curTo)
       : [];
   const hEvents =
-    !onStack && hover !== null && cur ? events.filter((e) => e.t >= curFrom && e.t < curTo) : [];
+    !onStack && hover !== null && cur ? shownEvents.filter((e) => e.t >= curFrom && e.t < curTo) : [];
   const up = cur ? cur.c >= cur.o : true;
   const vsRef = cur && ref ? change(ref.v, cur.c) : null;
   const tool = drawings.tool;
