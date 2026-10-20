@@ -173,9 +173,22 @@ describe("runRugScreen", () => {
   // that would have failed on any of those alone now passes the automatic screen. Top-10
   // concentration is the same below SAFETY_REJECT_TOP10_HOLDER_PCT.
 
-  it("passes despite an unknown top-10 concentration - that's now opt-in, not automatic", () => {
-    const result = runRugScreen({ ...safeProfile, top10HolderPct: undefined });
-    expect(result.passed).toBe(true);
+  // An unread holder list is not an unknown concentration to let through: none of the holder
+  // checks could run (user report 2026-10-20, a rug passing with every holder check unread).
+  it("fails closed when the top holders weren't read", () => {
+    const result = runRugScreen({
+      ...safeProfile,
+      top10HolderPct: undefined,
+      largestHolderPct: undefined,
+      top10HolderAddresses: undefined,
+    });
+    expect(result.passed).toBe(false);
+    expect(result.reasons).toEqual(["top holders not read - failing closed"]);
+  });
+
+  it("names only the local failure when holders went unread behind it", () => {
+    const result = runRugScreen({ ...safeProfile, top10HolderPct: undefined, lpBurned: false });
+    expect(result.reasons).toEqual(["liquidity not burned/locked (LP can be pulled)"]);
   });
 
   it("passes despite a large dev wallet - that's now opt-in, not automatic", () => {

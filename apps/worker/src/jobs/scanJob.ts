@@ -1264,7 +1264,12 @@ async function scanCycle(
       pumpLaunches,
       stonksPoolLocks,
     );
-    return passesLocalRugScreen(profile) && failsHolderConcentration(profile);
+    // A report with no usable holder list (none indexed yet, or shares past 100%) is read from
+    // the chain too: the screen fails a coin closed until its top holders are read.
+    return (
+      passesLocalRugScreen(profile) &&
+      (failsHolderConcentration(profile) || typeof profile?.top10HolderPct !== "number")
+    );
   });
   const onChainHolders = await resolveOnChainHolders(
     [

@@ -67,7 +67,7 @@ describe("safety checks", () => {
     expect(by["Exchange-funded"]).toMatchObject({ status: "unknown" });
   });
 
-  it("fails an unread liquidity or Mayhem Mode check, as the screen fails closed", () => {
+  it("fails an unread liquidity, Mayhem Mode or top-10 holders check, as the screen fails closed", () => {
     const passing = { mintAuthorityActive: false, freezeAuthorityActive: false };
     const unread = Object.fromEntries(safetyChecks(snap(passing)).map((c) => [c.label, c]));
     expect(unread["Liquidity"]).toMatchObject({ value: "Unverified (fails closed)", status: "fail" });
@@ -75,8 +75,11 @@ describe("safety checks", () => {
       safetyChecks(snap({ ...passing, lpBurned: true })).map((c) => [c.label, c]),
     );
     expect(mayhem["Mayhem Mode"]).toMatchObject({ value: "Unverified (fails closed)", status: "fail" });
-    // Wallet and share cuts still pass unread.
-    expect(mayhem["Top 10 holders"]).toMatchObject({ value: "Not read", status: "unknown" });
+    // An unread holder list fails; the wallet checks that follow from it still pass unread.
+    expect(mayhem["Top 10 holders"]).toMatchObject({ value: "Unverified (fails closed)", status: "fail" });
+    expect(mayhem["Fresh wallets"]).toMatchObject({ value: "Not read", status: "unknown" });
+    // Behind a failed local check the holders aren't read, and stay "Not read".
+    expect(unread["Top 10 holders"]).toMatchObject({ value: "Not read", status: "unknown" });
   });
 });
 
