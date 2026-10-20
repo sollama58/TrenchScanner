@@ -2521,7 +2521,8 @@ export function ChartCard({
       const label = c.modelName ?? "Model";
       out.push({ t, label, kind: chartFlagKind(label, "model") });
     }
-    // Earliest first: the chart marks the first shown flag as the lead and colours the line from it.
+    // Earliest first. The line is coloured from the earliest event, including a screen pass whose
+    // flag is hidden. Which flags are drawn is separate (chartEvents.ts).
     return out.sort((a, b) => a.t - b.t);
   }, [alertAt, alertMcap, what, card.kind, card.curated, card.firstPass]);
 
