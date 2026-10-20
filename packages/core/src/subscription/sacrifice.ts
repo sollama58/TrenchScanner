@@ -213,9 +213,11 @@ export interface PlatformTradeRecord {
   };
   /**
    * When set (a buy, or a sale that is not closing the position), refuse this insert when the
-   * wallet already has a PlatformTrade sent within this many milliseconds. Held under a per-wallet
-   * advisory lock, so two API processes share one pace. Omit for a closing sale: it is still
-   * inserted under that lock, so the next paced trade sees it, and it is not refused.
+   * wallet already has a PlatformTrade sent within this many milliseconds. A row marked failed
+   * does not count: Sender's refusal is settled that way before the next send, and nothing went
+   * out. Held under a per-wallet advisory lock, so two API processes share one pace. Omit for a
+   * closing sale: it is still inserted under that lock, so the next paced trade sees it, and it
+   * is not refused.
    */
   paceMs?: number;
   /**
@@ -251,7 +253,11 @@ export async function recordPlatformTrade(r: PlatformTradeRecord): Promise<Recor
     if (r.paceMs !== undefined && r.paceMs > 0) {
       const now = r.now ?? Date.now();
       const recent = await tx.platformTrade.findFirst({
-        where: { wallet: r.wallet, sentAt: { gt: new Date(now - r.paceMs) } },
+        where: {
+          wallet: r.wallet,
+          status: { not: "failed" },
+          sentAt: { gt: new Date(now - r.paceMs) },
+        },
         orderBy: { sentAt: "desc" },
         select: { sentAt: true },
       });

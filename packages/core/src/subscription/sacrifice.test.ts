@@ -283,6 +283,18 @@ describe.skipIf(!dbAvailable)("taking the Sacrifice at send", () => {
     ).toMatchObject({ status: "recorded" });
   });
 
+  it("does not let a trade Sender refused hold the next one", async () => {
+    const wallet = `${PACE}-refused`;
+    const now = Date.now();
+    expect(await recordPlatformTrade({ ...trade(17, "off"), wallet, paceMs: 60_000, now })).toMatchObject({
+      status: "recorded",
+    });
+    expect(await settlePlatformTrade(trade(17, "off").signature, "failed")).toBe(true);
+    expect(
+      await recordPlatformTrade({ ...trade(18, "off"), wallet, paceMs: 60_000, now: now + 1_000 }),
+    ).toMatchObject({ status: "recorded" });
+  });
+
   it("lets only one of two paced sends at the same moment through", async () => {
     const wallet = `${PACE}-race`;
     const now = Date.now();
