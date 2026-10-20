@@ -23,7 +23,7 @@ import { SafetyGauge } from "./SafetyGauge";
 import { ShareButton } from "./ShareImageDialog";
 import { WeatherGauge } from "./WeatherGauge";
 import { AsOf } from "./AsOf";
-import { PRICING_CHANGE_LABEL, pricingChangeSlot } from "../pricingChange";
+import { changeSlots } from "../pricingChange";
 import {
   clockHour,
   hourSpan,
@@ -801,21 +801,22 @@ function Screened({ s, span, days, since }: { s: ScreenedData; span: string; day
   const buckets = fillBuckets(s.byBucket, s.bucketHours, since);
   const anyGraded = buckets.some((b) => b.graded > 0);
   const per = s.bucketHours >= 24 ? "day" : `${s.bucketHours} hours`;
-  const change = pricingChangeSlot(
+  const changes = changeSlots(
     buckets.map((b) => Date.parse(b.at)),
     s.bucketHours * 3_600_000,
   );
-  // The second chart repeats the line without the label, under the first one's.
+  // The second chart repeats the lines without the labels, under the first one's.
   const changeMark = (labelled: boolean) =>
-    change === null ? null : (
+    changes.map((c) => (
       <span
-        className={`lh-change${change / buckets.length > 0.6 ? " flip" : ""}`}
-        style={{ left: `${(change / buckets.length) * 100}%` }}
-        aria-label={labelled ? PRICING_CHANGE_LABEL : undefined}
+        key={c.label}
+        className={`lh-change${c.pos / buckets.length > 0.6 ? " flip" : ""}`}
+        style={{ left: `${(c.pos / buckets.length) * 100}%` }}
+        aria-label={labelled ? c.label : undefined}
       >
-        {labelled && <span>{PRICING_CHANGE_LABEL}</span>}
+        {labelled && <span>{c.label}</span>}
       </span>
-    );
+    ));
   const rateMax = Math.max(
     10,
     ...buckets.flatMap((b) => [b.hit2xPct ?? 0, b.hit4xPct ?? 0, b.hit10xPct ?? 0]),

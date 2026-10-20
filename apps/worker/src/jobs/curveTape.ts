@@ -46,6 +46,17 @@ export interface CurveTapeConfig {
   streamCreditsPerDay: number;
   pollSeconds: number;
   pollMaxMints: number;
+  /**
+   * The launches created since the last scan cycle (the PumpPortal stream's and Jupiter's newest),
+   * followed from the next round rather than from the cycle that lists them, ~25 s later (user ask
+   * 2026-10-20: the band-entry watch reads their price off the curve, not Jupiter).
+   */
+  newLaunches?: () => string[];
+  /**
+   * Of new launches, the ones confirmed not Mayhem (user decision: Mayhem coins are never followed
+   * or read). Unset, every new launch is followed.
+   */
+  screenLaunches?: (mints: string[]) => Promise<string[]>;
 }
 
 interface Followed {
@@ -154,6 +165,23 @@ export function followYoungCurves(
 }
 
 /**
+ * Follows launches the scan hasn't listed yet, ahead of the curves it has (rank 0: polled first
+ * while the stream is off). The next cycle's followYoungCurves keeps them, or drops the ones that
+ * did not make its watchlist (a Mayhem coin, set aside at discovery).
+ */
+function followNewLaunches(mints: readonly string[], now: number): void {
+  if (!cfg) return;
+  for (const mint of mints) {
+    if (followed.size >= cfg.maxMints) break;
+    if (followed.has(mint) || done.has(mint)) continue;
+    const curve = pumpCurveAddressOf(mint);
+    if (!curve) continue;
+    followed.set(mint, { curve, rank: 0, readAt: null, bornAt: now });
+    if (!paused) stream?.watch(keyOf(mint), [curve], now, "account");
+  }
+}
+
+/**
  * The curve path features for a mint as of `now`: all null when its curve isn't followed, or when
  * the coin is past the features' age (followed longer only for the price path recorder).
  */
@@ -161,6 +189,14 @@ export function curvePathOf(mint: string, now = Date.now()): CurvePathFeatures {
   const f = followed.get(mint);
   const maxAgeMs = (cfg?.featureMaxAgeMinutes ?? cfg?.maxAgeMinutes ?? Infinity) * 60_000;
   return f && now - f.bornAt <= maxAgeMs ? tape.features(mint, now) : { ...EMPTY_CURVE_PATH };
+}
+
+/**
+ * A followed coin's curve price now (quote per token), from the stream's latest change; null when
+ * the coin isn't followed or its tape is not current. Read by the band-entry watch.
+ */
+export function curvePriceOf(mint: string, now = Date.now()): number | null {
+  return followed.has(mint) ? tape.priceNow(mint, now) : null;
 }
 
 /** Counts since the last call, for the scan's heartbeat; null while the tape is off. */
@@ -233,6 +269,11 @@ export async function round(now = Date.now()): Promise<void> {
         else stream?.watch(keyOf(mint), [f.curve], now, "account");
       }
     }
+    const unseen = (cfg.newLaunches?.() ?? []).filter((m) => !followed.has(m) && !done.has(m));
+    followNewLaunches(
+      cfg.screenLaunches && unseen.length > 0 ? await cfg.screenLaunches(unseen) : unseen,
+      now,
+    );
     const toRead: string[] = [];
     let polls = 0;
     let seeds = 0;

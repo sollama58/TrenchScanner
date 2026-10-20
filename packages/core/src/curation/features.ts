@@ -799,6 +799,15 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "nsLogoMeme",
   "nsLogoRobot",
   "livestreamViewers",
+  // Model check-in 2026-10-20 (notes/model-checkin-2026-10-20): the two market base rates sat at
+  // AUC 0.50-0.52 on every window - they describe the hour, not the coin. pathRet5mPct flipped
+  // from AUC 0.68 (10-12..16) to 0.48 since 10-18 12:00 (0.40 on coins 5-15 minutes old); it fills
+  // about 19% of rows and is blank under 5 minutes. A paired walk-forward backtest over 10-15..10-19
+  // gave +0.5 / +0.7 points of top-fifth 2x rate for taking them out (within noise). Still
+  // recorded, so they can come back by removing them here.
+  "mktBaseRate1hPct",
+  "mktBaseRate6hPct",
+  "pathRet5mPct",
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */

@@ -8,7 +8,6 @@ import {
   narrativeFieldsFromAnalysis,
   storableAnalysis,
   tokenSageEnabled,
-  tokenSageHints,
   tokenSageImageUrl,
   type Env,
   type TokenSageAnalysis,
@@ -40,11 +39,13 @@ const logger = createLogger("tokensage");
  * 60/min per key, where polling each job would not be.
  *
  * Every request carries a priority tier (narrativePriority), which orders both our own sends and
- * TokenSage's job queue: the reads the scan asks for (watchlist quick reads, deep reads) ahead of
- * the launch reads asked for every new coin discovery sees. On 2026-10-15, with the Jupiter discovery sources, TokenSage served every
- * request oldest first at one priority: a decision's deep read took 45 s at the median instead of
- * 4 s, and the share of decisions carrying any read fell from ~85% to ~45%. A launch read is
- * raised to the watchlist tier when the scan notes the coin, by re-sending it at that tier.
+ * TokenSage's job queue: the reads for coins that passed the screen (quick and deep) ahead of the
+ * first-scan reads asked before a coin's first screen verdict. On 2026-10-15, with the Jupiter
+ * discovery sources, TokenSage served every request oldest first at one priority: a decision's
+ * deep read took 45 s at the median instead of 4 s, and the share of decisions carrying any read
+ * fell from ~85% to ~45%. A first-scan read is raised to the normal tier when the coin passes the
+ * screen, by re-sending it at that tier. (Until 2026-10-20 the low tier was a read for every
+ * launch discovery saw, ~1,900 an hour; that backlog filled TokenSage's queue.)
  *
  * Failures cost only the narrative:
  * - a 429 or 503 on the whole batch pauses requests for a minute;
@@ -222,14 +223,14 @@ function higher(a: TokenSagePriority, b: TokenSagePriority | undefined): TokenSa
 }
 
 /**
- * A request's tier: a launch read low, every other read normal. Deep reads went in "high" at
- * first, ahead of every quick read, but a deep read can hold one of TokenSage's analyzer slots
+ * A request's tier: the first-scan read (asked before the coin's first screen verdict) low, every
+ * other read normal. Deep reads went in "high" at first, ahead of every quick read, but a deep read can hold one of TokenSage's analyzer slots
  * for minutes (X, OCR): on 2026-10-16 from 01:10 UTC the deep reads filled every slot and quick
  * reads stopped completing altogether (250+ queued, none stored). At one tier they share the
- * slots oldest first, as before priorities existed, and only the launch reads yield.
+ * slots oldest first, as before priorities existed, and only the first-scan reads yield.
  */
-export function narrativePriority(_depth: TokenSageDepth, launch = false): TokenSagePriority {
-  return launch ? "low" : "normal";
+export function narrativePriority(_depth: TokenSageDepth, firstScan = false): TokenSagePriority {
+  return firstScan ? "low" : "normal";
 }
 
 /** Notes that the scan wants this mint's narrative at `depth`. Cheap; does no IO. */
@@ -238,7 +239,7 @@ export function noteNarrativeWanted(
   depth: TokenSageDepth,
   env: Env,
   hints?: TokenSageHints,
-  opts: { early?: boolean; launch?: boolean } = {},
+  opts: { early?: boolean; firstScan?: boolean } = {},
 ): void {
   if (!tokenSageEnabled(env)) return;
   const now = Date.now();
@@ -259,60 +260,15 @@ export function noteNarrativeWanted(
   }
   wanted.set(mintAddress, {
     depth,
-    // A coin noted at launch and again by the scan keeps the scan's tier, whichever came first.
+    // A coin noted at its first scan and again on a screen pass keeps the pass's tier.
     priority: higher(
-      narrativePriority(depth, opts.launch),
+      narrativePriority(depth, opts.firstScan),
       have?.depth === depth ? have.priority : undefined,
     ),
     hints: hints ?? have?.hints,
     ...(early ? { early } : {}),
     notedAt: now,
   });
-}
-
-/** A launch older than this when discovery lists it is left to the scan's own request. */
-export const LAUNCH_READ_MAX_AGE_MS = 5 * 60_000;
-
-/** A brand-new launch as discovery sees it: the Pump.fun newest-coins feed or the PumpPortal stream. */
-export interface LaunchSighting {
-  mintAddress: string;
-  name?: string;
-  symbol?: string;
-  description?: string;
-  imageUrl?: string;
-  twitterUrl?: string;
-  websiteUrl?: string;
-  createdAt?: Date;
-}
-
-/**
- * Notes the quick read for every new launch discovery saw this cycle, when
- * TOKENSAGE_BASIC_AT_DISCOVERY is on. The scan's own request comes at the coin's first
- * watchlist scan, which on the first day of live reads was also its first decision for most
- * coins (median ~1 min old), so the read landed after it. Asking at launch buys that minute
- * at the cost of a read for every launch, including the ones that never trade. A coin listed
- * by both sources keeps the richer hints (the feed's: description, image, X link).
- * Returns how many were noted.
- */
-export function noteLaunchNarratives(launches: LaunchSighting[], env: Env, now = Date.now()): number {
-  if (!env.TOKENSAGE_BASIC_AT_DISCOVERY || !tokenSageEnabled(env)) return 0;
-  const byMint = new Map<string, LaunchSighting>();
-  for (const l of launches) {
-    if (l.createdAt !== undefined && now - l.createdAt.getTime() > LAUNCH_READ_MAX_AGE_MS) continue;
-    const prev = byMint.get(l.mintAddress);
-    if (!prev || (l.description !== undefined && prev.description === undefined))
-      byMint.set(l.mintAddress, l);
-  }
-  for (const l of byMint.values()) {
-    noteNarrativeWanted(
-      l.mintAddress,
-      "basic",
-      env,
-      tokenSageHints({ ...l, launchedAt: l.createdAt ?? null }),
-      { launch: true },
-    );
-  }
-  return byMint.size;
 }
 
 /**

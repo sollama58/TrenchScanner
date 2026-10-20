@@ -58,7 +58,7 @@ import {
 import { MIN_GRADED_FOR_RATE, RULE_NOTE, intervalText, isEarly, wilsonOfRate } from "../rates";
 import { ModelDetailModal } from "./ModelDetail";
 import { renderWeekCard, type WeekCardData } from "./weekCard";
-import { DAY_MS, dayStarts, pricingChangePoint } from "../pricingChange";
+import { DAY_MS, changePoints, dayStarts } from "../pricingChange";
 
 /**
  * The Model tab: the curator contest. Several models train on the same graded history, each calls
@@ -742,7 +742,7 @@ function BaselineChart({
             bonding curve that took at least 5 seconds to fill. A token that fails is never sampled at all.
           </li>
           <li>
-            <strong>Passes the pre-check</strong>: market cap inside the scanner&apos;s band ($10k to $1M),
+            <strong>Passes the pre-check</strong>: market cap inside the scanner&apos;s band ($7k to $1M),
             under 6 hours old, buyers making at least 55% of the last hour&apos;s trades, price not collapsing
             (down 65% or more within a minute, or 80% or more over 5 minutes; once a token is an hour old, up
             at least 25% over the last 5 minutes instead), and the fresh and empty wallet checks done.
@@ -2014,7 +2014,7 @@ function WeekPanel({
   const m = LEARNING_METRICS[metric];
   const byDay = new Map(learning.days.map((d) => [d.day, d]));
   const labels = keys.map((k) => (k === today ? "Today" : shortDay(k)));
-  const pricingChange = pricingChangePoint(dayStarts(keys), DAY_MS);
+  const changes = changePoints(dayStarts(keys), DAY_MS);
   const nameOf = (id: string) => seats.find((s) => s.id === id)?.name ?? series.get(id)?.name ?? id;
   const modelRows = picked.map((id, i) => {
     const own = new Map((series.get(id)?.days ?? []).map((d) => [d.day, d.rates]));
@@ -2075,7 +2075,7 @@ function WeekPanel({
     labels,
     lines: lines.map((l) => ({ label: l.label, tone: l.tone, values: l.values, week: l.week[metric] })),
     graded: all.graded,
-    pricingChange,
+    changes,
   });
 
   return (
@@ -2178,7 +2178,7 @@ function WeekPanel({
           labels={labels}
           series={lines}
           signed={metric === "ret"}
-          pricingChange={pricingChange}
+          changes={changes}
           subs={keys.map((k) => {
             const d = byDay.get(k);
             if (!d) return "No data";

@@ -14,7 +14,7 @@ import {
   pill,
   roundRect,
 } from "../shareCard";
-import { drawPricingChange } from "../pricingChange";
+import { drawPricingChange, type ChartChange } from "../pricingChange";
 import { lineScale, tickIndices } from "../chartScale";
 
 /**
@@ -32,8 +32,8 @@ export interface WeekCardData {
   lines: { label: string; tone: string; values: (number | null)[]; week: number | null }[];
   /** Graded calls across all models over the week. */
   graded: number;
-  /** Where pricing changed, in points from the first day (pricingChangePoint). */
-  pricingChange?: number | null;
+  /** The marked changes, in points from the first day (changePoints). */
+  changes?: readonly ChartChange[];
 }
 
 const MARKET = "rgba(255, 255, 255, 0.55)";
@@ -87,7 +87,7 @@ function chart(ctx: CanvasRenderingContext2D, d: WeekCardData, x0: number, x1: n
     ctx.fillText(label, x(i), base + 10);
   });
 
-  if (d.pricingChange != null && n > 1) drawPricingChange(ctx, x(d.pricingChange), top, base, FONT, x1);
+  if (n > 1) for (const c of d.changes ?? []) drawPricingChange(ctx, x(c.pos), top, base, FONT, x1, c.label);
 
   const line = (vals: (number | null)[], color: string, width: number) => {
     ctx.strokeStyle = color;

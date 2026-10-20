@@ -12,7 +12,6 @@ import {
 } from "@trenchscanner/core";
 import {
   flushNarrativeRequests,
-  noteLaunchNarratives,
   noteNarrativeWanted,
   resetTokenSage,
   setFlushDeadlineForTest,
@@ -613,57 +612,20 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     expect(takeTokenSageStats()).toMatchObject({ fullToday: 3, earlyFullToday: 2 });
   });
 
-  it("asks for the quick read at launch only when switched on, with the richer hints", async () => {
-    const { client, batch } = fakeClient();
-    const now = Date.now();
-    const fresh = `${TAG}-launch`;
-    const old = `${TAG}-launch-old`;
-    const launches = [
-      { mintAddress: fresh, name: "Dog", symbol: "DOG", createdAt: new Date(now - 5_000) },
-      {
-        mintAddress: fresh,
-        name: "Dog",
-        symbol: "DOG",
-        description: "a dog",
-        twitterUrl: "https://x.com/dog",
-        createdAt: new Date(now - 5_000),
-      },
-      { mintAddress: old, name: "Old", createdAt: new Date(now - 30 * 60_000) },
-    ];
-    expect(noteLaunchNarratives(launches, env, now)).toBe(0);
-    expect(noteLaunchNarratives(launches, { ...env, TOKENSAGE_BASIC_AT_DISCOVERY: true }, now)).toBe(1);
-    batch.mockResolvedValueOnce(ok([{ ca: fresh, status: "pending", job_id: 1 }]));
-    await flushNarrativeRequests(env, client);
-    expect(batch.mock.calls[0]![1]).toBe("basic");
-    expect(batch.mock.calls[0]![0]).toEqual([
-      {
-        ca: fresh,
-        hints: {
-          name: "Dog",
-          symbol: "DOG",
-          description: "a dog",
-          twitter: "https://x.com/dog",
-          created_at: new Date(now - 5_000).toISOString(),
-        },
-        priority: "low",
-      },
-    ]);
-  });
-
-  it("sends the watchlist's quick reads ahead of a backlog of queued launch reads", async () => {
+  it("sends the screen-passed quick reads ahead of a backlog of queued first-scan reads", async () => {
     // 2026-10-15: launch reads re-sent every flush filled the quick-read batch, and TokenSage ran
     // them first too, so coins the scan was about to decide on waited behind them.
     const { client, batch } = fakeClient();
     batch.mockImplementation(async (entries: { ca: string }[]) =>
       ok(entries.map((e) => ({ ca: e.ca, status: "pending", job_id: 1 }))),
     );
-    const on = { ...env, TOKENSAGE_BASIC_AT_DISCOVERY: true, TOKENSAGE_MAX_BATCHES_PER_CYCLE: 1 };
+    const on = { ...env, TOKENSAGE_MAX_BATCHES_PER_CYCLE: 1 };
     const now = Date.now();
     const launches = Array.from({ length: TOKENSAGE_PREFETCH_CHUNK }, (_, i) => ({
       mintAddress: `${TAG}-tier-launch${i}`,
       createdAt: new Date(now - 1_000),
     }));
-    noteLaunchNarratives(launches, on, now);
+    for (const l of launches) noteNarrativeWanted(l.mintAddress, "basic", on, undefined, { firstScan: true });
     await flushNarrativeRequests(on, client);
     expect(new Set((batch.mock.calls[0]![0] as { priority: string }[]).map((e) => e.priority))).toEqual(
       new Set(["low"]),
@@ -684,9 +646,9 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
 
     // A deep read is normal too, and a later launch note never lowers the watchlist's tier.
     noteNarrativeWanted(watch, "full", on);
-    noteLaunchNarratives([{ mintAddress: `${TAG}-tier-x`, createdAt: new Date(now) }], on, now);
+    noteNarrativeWanted(`${TAG}-tier-x`, "basic", on, undefined, { firstScan: true });
     noteNarrativeWanted(`${TAG}-tier-x`, "basic", on);
-    noteLaunchNarratives([{ mintAddress: `${TAG}-tier-x`, createdAt: new Date(now) }], on, now);
+    noteNarrativeWanted(`${TAG}-tier-x`, "basic", on, undefined, { firstScan: true });
     await flushNarrativeRequests({ ...on, TOKENSAGE_MAX_BATCHES_PER_CYCLE: 2 }, client);
     expect(batch.mock.calls[2]![1]).toBe("full");
     expect(batch.mock.calls[2]![0]).toEqual([{ ca: watch, priority: "normal" }]);

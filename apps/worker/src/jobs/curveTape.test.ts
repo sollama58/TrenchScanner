@@ -3,6 +3,7 @@ import { pumpCurveAddressOf, type CurveState } from "@trenchscanner/core";
 import {
   followYoungCurves,
   curvePathOf,
+  curvePriceOf,
   onCurveStreamUpdate,
   overStreamPace,
   resetCurveTape,
@@ -25,7 +26,12 @@ const state = (price: number): CurveState => ({
 
 function setup(
   coveredSince: number | null,
-  ages: { maxAgeMinutes?: number; featureMaxAgeMinutes?: number } = {},
+  ages: {
+    maxAgeMinutes?: number;
+    featureMaxAgeMinutes?: number;
+    newLaunches?: () => string[];
+    screenLaunches?: (mints: string[]) => Promise<string[]>;
+  } = {},
 ) {
   const reads: string[][] = [];
   const reader = {
@@ -63,6 +69,50 @@ describe("curve tape", () => {
     firstSeenAt: new Date(NOW),
     launchpad: null,
   };
+
+  it("follows a new launch from the next round, before any scan lists it, and prices it", async () => {
+    let pending = [MINT];
+    const s = setup(NOW - 1_000, { newLaunches: () => pending });
+    stop = s.stop;
+    expect(curvePriceOf(MINT, NOW)).toBeNull();
+    await round(NOW);
+    expect(s.stream.watch).toHaveBeenCalledWith(`curve:${MINT}`, [pumpCurveAddressOf(MINT)], NOW, "account");
+    expect(s.reads).toEqual([[pumpCurveAddressOf(MINT)]]);
+    expect(curvePriceOf(MINT, NOW)).toBe(1);
+    pending = [];
+    // The next cycle's watchlist keeps it.
+    followYoungCurves([young], NOW + 1_000);
+    expect(curvePriceOf(MINT, NOW + 1_000)).toBe(1);
+  });
+
+  it("follows only the new launches confirmed not Mayhem, and asks again about the unanswered", async () => {
+    const MAYHEM = "May1111111111111111111111111111111111111111";
+    const screened: string[][] = [];
+    let answered = false;
+    const s = setup(NOW - 1_000, {
+      newLaunches: () => [MINT, MAYHEM],
+      screenLaunches: async (mints) => {
+        screened.push(mints);
+        return answered ? mints.filter((m) => m !== MAYHEM) : [];
+      },
+    });
+    stop = s.stop;
+    await round(NOW);
+    expect(s.stream.watch).not.toHaveBeenCalled();
+    answered = true;
+    await round(NOW + 5_000);
+    expect(screened).toEqual([
+      [MINT, MAYHEM],
+      [MINT, MAYHEM],
+    ]);
+    expect(s.stream.watch).toHaveBeenCalledTimes(1);
+    expect(s.stream.watch).toHaveBeenCalledWith(
+      `curve:${MINT}`,
+      [pumpCurveAddressOf(MINT)],
+      NOW + 5_000,
+      "account",
+    );
+  });
 
   it("follows young coins on the stream, seeds each once, then carries them on the stream", async () => {
     const s = setup(NOW - 1_000);

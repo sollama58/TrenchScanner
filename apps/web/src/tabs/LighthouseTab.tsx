@@ -5,7 +5,7 @@ import { ago } from "../format";
 import { MIN_GRADED_FOR_RATE, RULE_NOTE_UNFILTERED } from "../rates";
 import { Skeleton } from "../components/Skeleton";
 import { TrendChart } from "../components/TrendChart";
-import { bucketMsOf, pricingChangeSlot } from "../pricingChange";
+import { bucketMsOf, changeSlots, type ChartChange } from "../pricingChange";
 import { renderTrendCard, type TrendCardData } from "../components/lighthouseCards";
 import { ShareButton } from "../components/ShareImageDialog";
 import { ExitPlanInfo } from "../components/ExitPlanInfo";
@@ -561,10 +561,10 @@ function MetricsChart({
   const series = useMemo(() => metricSeries(history, panel.metrics, targets), [history, panel, targets]);
   const change = useMemo(() => changeSlot(history.series.map((p) => p.at)), [history]);
   useEffect(
-    () => onDrawn({ labels, series, kind: panel.kind, pricingChange: change }),
+    () => onDrawn({ labels, series, kind: panel.kind, changes: change }),
     [labels, series, panel.kind, change, onDrawn],
   );
-  return <TrendChart labels={labels} series={series} kind={panel.kind} partialLast pricingChange={change} />;
+  return <TrendChart labels={labels} series={series} kind={panel.kind} partialLast changes={change} />;
 }
 
 /**
@@ -597,7 +597,7 @@ function BreakdownChart({
   const change = useMemo(() => changeSlot(h.labels.buckets.map((p) => p.at)), [h]);
   const kind = breakdownKind(panel.breakdown, panel.kind);
   useEffect(() => {
-    if (history) onDrawn({ labels, series, kind, pricingChange: change });
+    if (history) onDrawn({ labels, series, kind, changes: change });
   }, [history, labels, series, kind, change, onDrawn]);
   if (!history) {
     if (own.error) return <p className="error">Couldn&apos;t load this breakdown: {own.error.message}</p>;
@@ -606,15 +606,15 @@ function BreakdownChart({
   const stale = own.stale || (!own.data && !!history);
   return (
     <div className={stale ? "stale" : undefined} aria-busy={stale}>
-      <TrendChart labels={labels} series={series} kind={kind} partialLast pricingChange={change} />
+      <TrendChart labels={labels} series={series} kind={kind} partialLast changes={change} />
     </div>
   );
 }
 
-/** Where pricing changed on a chart of these buckets (pricingChange.ts). */
-function changeSlot(ats: readonly string[]): number | null {
+/** The marked changes on a chart of these buckets (pricingChange.ts). */
+function changeSlot(ats: readonly string[]): ChartChange[] {
   const starts = ats.map((a) => Date.parse(a));
-  return pricingChangeSlot(starts, bucketMsOf(starts, 3_600_000));
+  return changeSlots(starts, bucketMsOf(starts, 3_600_000));
 }
 
 /** Hands the window's sums to the browser as a file. */

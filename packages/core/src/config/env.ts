@@ -171,7 +171,7 @@ const envSchema = z.object({
   // RUGCHECK_CACHE_TTL_MINUTES, or a cached holder count on both sides of the comparison would
   // make growth read 0 rather than "unmeasured".
   HOLDER_GROWTH_WINDOW_MINUTES: z.coerce.number().positive().default(30),
-  MCAP_FILTER_MIN: z.coerce.number().nonnegative().default(10_000),
+  MCAP_FILTER_MIN: z.coerce.number().nonnegative().default(7_000),
   MCAP_FILTER_MAX: z.coerce.number().positive().default(1_000_000),
   // How long a discovered mint stays on the active watchlist (re-checked every scan cycle) before
   // it's considered stale and dropped. Most tokens that haven't gained traction go quiet well
@@ -590,8 +590,9 @@ const envSchema = z.object({
   // fresh quote it is anchored and shown on (decisionAnchor) and Pump.fun's live figure when the
   // pass reads one. The band check runs on DexScreener's figure, 45-60 s behind the market, so a
   // coin can still read in band there after it has fallen out; this is the grace below
-  // MCAP_FILTER_MIN such a call is allowed. 7,500: user decision 2026-10-12.
-  CURATED_ALERT_MIN_MCAP_USD: z.coerce.number().nonnegative().default(7_500),
+  // MCAP_FILTER_MIN such a call is allowed. 7,500: user decision 2026-10-12; 7,000 with the band
+  // floor itself from 2026-10-20 (user decision: nothing is called under $7k).
+  CURATED_ALERT_MIN_MCAP_USD: z.coerce.number().nonnegative().default(7_000),
 
   // The curator-training job (apps/worker/src/jobs/curatorTrainingJob.ts): trains on the rolling
   // window of finalized CandidateOutcome rows, walk-forward-evaluates against the heuristic, and
@@ -971,14 +972,6 @@ const envSchema = z.object({
   TOKENSAGE_MAX_BATCHES_PER_CYCLE: z.coerce.number().int().min(0).default(4),
   TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES: z.coerce.number().min(0).default(10),
   TOKENSAGE_POLL_SECONDS: z.coerce.number().min(0).default(8),
-  // Quick read at launch instead of at the first watchlist scan (tokensage/prefetch.ts,
-  // noteLaunchNarratives). On the first day of live reads the first scan was also the first
-  // decision for most coins, so their decision rows carried no narrative. Costs a basic read
-  // for every launch (~25/min) on TokenSage's side. Off by default: the user's load call.
-  TOKENSAGE_BASIC_AT_DISCOVERY: z
-    .enum(["true", "false"])
-    .default("false")
-    .transform((v) => v === "true"),
   // The hard daily cap on everything the AI spends (curation/aiSpend.ts): the reviewer, the text
   // reads and the playbook evolution share AI_DAILY_BUDGET_USD per UTC day. Every call reserves
   // its estimated cost before it runs and is trued up to the real cost afterwards; once the next

@@ -407,7 +407,8 @@ services:
       - key: HOLDER_GROWTH_WINDOW_MINUTES
         value: "30"
       - key: MCAP_FILTER_MIN
-        value: "10000"
+        # 10000 -> 7000 (user decision 2026-10-20): calls from $7k, on the way up.
+        value: "7000"
       - key: MCAP_FILTER_MAX
         value: "1000000"
       - key: WATCHLIST_TTL_HOURS
@@ -622,7 +623,8 @@ services:
       # curated band is what training grades decision moments inside, and the retention values
       # are what cleanup enforces.
       - key: MCAP_FILTER_MIN
-        value: "10000"
+        # 10000 -> 7000 (user decision 2026-10-20): calls from $7k, on the way up.
+        value: "7000"
       - key: MCAP_FILTER_MAX
         value: "1000000"
       - key: CLEANUP_HOUR_UTC

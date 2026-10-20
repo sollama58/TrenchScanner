@@ -23,7 +23,7 @@ import {
   roundRect,
 } from "../shareCard";
 import { drawNarrativesPay } from "../tokensage/shareCards";
-import { drawPricingChange, pricingChangeSlot } from "../pricingChange";
+import { changeSlots, drawPricingChange, type ChartChange } from "../pricingChange";
 import { prettyLabel } from "../tokensage/showcase";
 import {
   clockHour,
@@ -409,8 +409,9 @@ export async function renderScreenedCard(s: Screened, span: string): Promise<HTM
   const slot = (right - left) / buckets.length;
   const bw = Math.max(2, Math.min(16, (slot * 0.78) / 3));
   const starts = buckets.map((b) => Date.parse(b.at));
-  const change = pricingChangeSlot(starts, s.bucketHours * 3_600_000);
-  if (change !== null) drawPricingChange(ctx, left + slot * change, top, y(0), FONT, right);
+  for (const c of changeSlots(starts, s.bucketHours * 3_600_000)) {
+    drawPricingChange(ctx, left + slot * c.pos, top, y(0), FONT, right, c.label);
+  }
   const every = Math.ceil(buckets.length / 8);
   buckets.forEach((b, i) => {
     const gx = left + slot * i + (slot - bw * 3 - 4) / 2;
@@ -919,8 +920,8 @@ export interface TrendCardData {
   labels: { short: string; full: string }[];
   series: Series[];
   kind: "line" | "bars" | "stacked";
-  /** Where pricing changed, in bucket widths from the left edge (pricingChangeSlot). */
-  pricingChange?: number | null;
+  /** The marked changes, in bucket widths from the left edge (changeSlots). */
+  changes?: readonly ChartChange[];
 }
 
 const fmt = (v: number, unit: Unit) =>
@@ -1043,7 +1044,8 @@ export async function renderTrendCard(d: TrendCardData): Promise<HTMLCanvasEleme
   ctx.fillStyle = MUTED;
   ctx.font = `500 14px ${FONT}`;
   for (let i = 0; i < n_; i += every) ctx.fillText(d.labels[i]!.short, xOf(i), base + 8);
-  if (d.pricingChange != null) drawPricingChange(ctx, left + slotW * d.pricingChange, top, base, FONT, right);
+  for (const c of d.changes ?? [])
+    drawPricingChange(ctx, left + slotW * c.pos, top, base, FONT, right, c.label);
 
   if (d.kind === "line") {
     for (const s of d.series) {

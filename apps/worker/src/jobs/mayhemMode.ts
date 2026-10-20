@@ -65,6 +65,7 @@ export async function cachedMayhemMode(mintAddresses: string[]): Promise<Map<str
 export async function resolveMayhemMode(
   mintAddresses: string[],
   helius: HeliusClient,
+  { backOffFailures = true }: { backOffFailures?: boolean } = {},
 ): Promise<Map<string, MayhemModeResult>> {
   const unique = [...new Set(mintAddresses)];
   const result = new Map<string, MayhemModeResult>();
@@ -109,7 +110,9 @@ export async function resolveMayhemMode(
       toCache.push({ mintAddress: mint, isMayhemMode: outcome.isMayhemMode });
       failureBackoff.succeed(mint);
     } else {
-      failureBackoff.fail(mint, now, outcome.mintPending ? MINT_PENDING_BACKOFF_MINUTES : undefined);
+      if (backOffFailures) {
+        failureBackoff.fail(mint, now, outcome.mintPending ? MINT_PENDING_BACKOFF_MINUTES : undefined);
+      }
       failed += 1;
     }
   }
@@ -134,6 +137,55 @@ export async function resolveMayhemMode(
   });
 
   return result;
+}
+
+/**
+ * Sets aside the Mayhem coins among Pump.fun launches just discovered, before any scan reads them
+ * (user ask 2026-10-20: Mayhem coins are never wanted). Pump.fun's own flag used to do this at
+ * discovery, but its API has been blocked since 2026-10-14 and Jupiter's and PumpPortal's lists
+ * carry no flag, so about half of all scanned coins were Mayhem caught only at the scan (632 of
+ * 1,237 over 3 hours on 2026-10-20). One batched on-chain lookup per cycle answers it here.
+ *
+ * A failed lookup is not backed off: a launch seconds old is often not visible to the RPC yet,
+ * and a backoff would make the scan's own lookup report it unverified (a screen reject) for its
+ * first minute. The scan asks again as before.
+ */
+export async function setAsideMayhemLaunches(mintAddresses: string[], helius: HeliusClient): Promise<number> {
+  return (await screenOutMayhem(mintAddresses, helius)).setAside;
+}
+
+/**
+ * The launches among `mintAddresses` confirmed NOT Mayhem, by the same lookup as
+ * setAsideMayhemLaunches (which it runs: the Mayhem ones are set aside). A launch the lookup could
+ * not answer is left out, to be asked again; nothing unverified is let through.
+ */
+export async function screenOutMayhem(
+  mintAddresses: string[],
+  helius: HeliusClient,
+): Promise<{ clear: string[]; setAside: number }> {
+  if (mintAddresses.length === 0) return { clear: [], setAside: 0 };
+  try {
+    const found = await resolveMayhemMode(mintAddresses, helius, { backOffFailures: false });
+    const setAside = await ignoreMayhemMints(
+      [...found].filter(([, m]) => m.status === "found" && m.isMayhemMode).map(([mint]) => mint),
+    );
+    const clear = [...found].filter(([, m]) => m.status === "found" && !m.isMayhemMode).map(([mint]) => mint);
+    return { clear, setAside };
+  } catch (err) {
+    // The scan's own lookup still catches them, as before this existed.
+    logger.warn("mayhem check at discovery failed", { count: mintAddresses.length, error: String(err) });
+    return { clear: [], setAside: 0 };
+  }
+}
+
+/** Whether `mintAddress` is known, in this process, to be a Mayhem Mode coin. */
+export function knownMayhem(mintAddress: string): boolean {
+  return settledMayhem.take([mintAddress]).get(mintAddress) === true;
+}
+
+/** Whether `mintAddress` is known, in this process, NOT to be a Mayhem Mode coin. */
+export function knownNotMayhem(mintAddress: string): boolean {
+  return settledMayhem.take([mintAddress]).get(mintAddress) === false;
 }
 
 /** Mints already taken off the watchlist by this process - spares rewriting them every cycle. */

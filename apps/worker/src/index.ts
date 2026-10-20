@@ -103,6 +103,7 @@ import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
 import { HeliusAccountStream } from "./discovery/heliusAccountStream.js";
 import {
   CURVE_STREAM_KEY_PREFIX,
+  curvePriceOf,
   onCurveStreamUpdate,
   seedCurveStreamSpend,
   startCurveTape,
@@ -110,6 +111,7 @@ import {
 import { startPricePathRecorder } from "./jobs/pricePathRecorder.js";
 import { onHolderStreamTx, setHolderTransferStream } from "./jobs/holderTransfers.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
+import { knownMayhem, knownNotMayhem, screenOutMayhem } from "./jobs/mayhemMode.js";
 import { startNarrativePolling } from "./tokensage/prefetch.js";
 
 const logger = createLogger("worker");
@@ -332,6 +334,13 @@ async function main() {
   launchPoller?.start();
   // The per-mint price tape behind the price-path model inputs - in memory, bounded.
   const pricePath = new PricePathBook();
+  // The launches created since the last cycle, but the ones already known to be Mayhem: never
+  // scanned, so never followed on the curve tape (which screens the rest first) nor allowed to wake
+  // the scan (which takes only the ones confirmed not Mayhem).
+  const newLaunches = () =>
+    [...new Set([...(stream?.pendingLaunches() ?? []), ...(launchPoller?.pendingLaunches() ?? [])])].filter(
+      (mint) => !knownMayhem(mint),
+    );
   const deps = {
     pumpFun: new PumpFunClient({ baseUrl: env.PUMPFUN_BASE_URL }),
     dexScreener,
@@ -341,9 +350,13 @@ async function main() {
     liveLaunches: jupiter ? new LiveLaunchQuotes(jupiter, geckoTerminal) : undefined,
     // Starts the scan early when a young launch crosses into the band between cycles.
     bandEntryWatch: jupiter
-      ? new BandEntryWatch(jupiter, env.MCAP_FILTER_MIN, () => [
-          ...new Set([...(stream?.pendingLaunches() ?? []), ...(launchPoller?.pendingLaunches() ?? [])]),
-        ])
+      ? new BandEntryWatch(
+          jupiter,
+          env.MCAP_FILTER_MIN,
+          () => newLaunches().filter((mint) => knownNotMayhem(mint)),
+          // The curve tape's live prices: a crossing is seen within a second of the trade.
+          curveTapeOn ? (mint, now) => curvePriceOf(mint, now) : undefined,
+        )
       : undefined,
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
@@ -368,6 +381,8 @@ async function main() {
         streamCreditsPerDay: env.CURVE_TAPE_STREAM_CREDITS_PER_DAY,
         pollSeconds: env.CURVE_TAPE_POLL_SECONDS,
         pollMaxMints: env.CURVE_TAPE_POLL_MAX_MINTS,
+        newLaunches,
+        screenLaunches: async (mints) => (await screenOutMayhem(mints, deps.helius)).clear,
       })
     : undefined;
   // The day's stream spend so far, from the last scan heartbeat (any process's): the curve tape's

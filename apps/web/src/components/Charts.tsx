@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { signedPct } from "../format";
 import { PricingChangeMark } from "./PricingChangeMark";
+import type { ChartChange } from "../pricingChange";
 import { CURVE_SLICES, offScale, perHourText, shareAt, type CutoffPoint } from "../cutoffCurve";
 import { lineScale, tickIndices, tickTextWidth, tipCenter } from "../chartScale";
 import { pickHandlers, pointerX, useChartWidth } from "./useChartWidth";
@@ -246,7 +247,7 @@ export function MultiLines({
   height = 220,
   signed = false,
   subs,
-  pricingChange = null,
+  changes = [],
 }: {
   labels: string[];
   series: LineSeries[];
@@ -254,8 +255,8 @@ export function MultiLines({
   signed?: boolean;
   /** Shown in the tooltip under the values, one per label. */
   subs?: string[];
-  /** Where pricing changed, in points from the first (pricingChangePoint); null when off-axis. */
-  pricingChange?: number | null;
+  /** The marked changes, in points from the first (changePoints). */
+  changes?: readonly ChartChange[];
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const [boxRef, width] = useChartWidth();
@@ -323,9 +324,17 @@ export function MultiLines({
               </text>
             </g>
           ))}
-          {pricingChange !== null && n > 1 && (
-            <PricingChangeMark x={x(pricingChange)} top={padT} bottom={padT + plotH} width={width} />
-          )}
+          {n > 1 &&
+            changes.map((c) => (
+              <PricingChangeMark
+                key={c.label}
+                x={x(c.pos)}
+                top={padT}
+                bottom={padT + plotH}
+                width={width}
+                label={c.label}
+              />
+            ))}
           {drawn.map((s) => (
             <path key={s.key} className={`line ${s.tone}`} d={path(s.values)} />
           ))}
