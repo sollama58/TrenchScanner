@@ -139,7 +139,8 @@ describe.skipIf(!dbAvailable)("Pro trades across API instances", () => {
       chain.seen.add(t.signature);
     await Promise.all(servers.splice(0).map((s) => s.close()));
     await prisma.platformTrade.deleteMany({ where: { wallet: TRADER.address } });
-    vi.mocked(sendViaSender).mockClear();
+    // mockClear leaves a queued mockImplementationOnce, which then refuses the next test's send.
+    vi.mocked(sendViaSender).mockReset();
     vi.mocked(sendViaSender).mockImplementation(SENDER_OK);
     chain.rpcSends.length = 0;
   });
@@ -282,6 +283,10 @@ describe.skipIf(!dbAvailable)("Pro trades across API instances", () => {
     expect(both.find((r) => r.statusCode === 429)!.json()).toMatchObject({ notSent: true });
     expect(vi.mocked(sendViaSender)).toHaveBeenCalledTimes(1);
     expect(await prisma.platformTrade.count({ where: { wallet: TRADER.address } })).toBe(1);
+
+    // The trade that went out holds the pace for a second, in memory and in the row. Wait it out
+    // so the refusal below is the sender's, not that pace.
+    await new Promise((r) => setTimeout(r, 1_100));
 
     // Sender refusing a trade sends nothing, so the next one isn't held back by it.
     const other = await instance();
