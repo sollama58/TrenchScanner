@@ -62,6 +62,26 @@ describe("live tape", () => {
     expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a quiet coin's page instead of re-reading it (user decision 2026-10-20)", async () => {
+    const helius = fakeHelius();
+    const lastTrade = { at: 0 };
+    const opts = {
+      maxPages: 2,
+      refreshMs: 60_000,
+      quietSince: (_m: string, since: number) => lastTrade.at <= since,
+    };
+    await readLiveTape([MINT], helius, { ...opts, nowMs: 1000 });
+    // Due, but no trade since the page: kept, and as of now, so it doesn't go stale.
+    await readLiveTape([MINT], helius, { ...opts, nowMs: 61_000 });
+    await readLiveTape([MINT], helius, { ...opts, nowMs: 20 * 60_000 });
+    expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(1);
+    expect(livePageOf(MINT, 21 * 60_000)).toBeDefined();
+    // A trade since: read again once due.
+    lastTrade.at = 20 * 60_000 + 1;
+    await readLiveTape([MINT], helius, { ...opts, nowMs: 21 * 60_000 });
+    expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(2);
+  });
+
   it("is unknown without the scores or once the page is stale", async () => {
     await readLiveTape([MINT], fakeHelius(), { maxPages: 1, refreshMs: 60_000, nowMs: 0 });
     expect(liveFlagsOf(MINT, undefined, 1)).toBeNull();

@@ -177,7 +177,7 @@ import {
 } from "./launchSnipers.js";
 import { absentTtlFor, resolveRugProfiles } from "./rugCheckProfiles.js";
 import { recordCandidateSample, takeSampleStats } from "./candidateOutcomeJob.js";
-import { noteHolderCutVerdict, rugCheckTtlFor } from "./youngHolderRecheck.js";
+import { holderCutRecheckTtlFor, noteHolderCutVerdict, rugCheckTtlFor } from "./youngHolderRecheck.js";
 import { settledRejects } from "./settledRejects.js";
 import { flushScreenRejects, foldRejectExtremes, noteScreenReject } from "./rejectExtremes.js";
 import { type DecisionHoldReason, noteDecisionHold, takeDecisionHolds } from "./decisionHolds.js";
@@ -283,6 +283,42 @@ const WALLET_STAGE_BUDGET_MS = 15_000;
 /** The wallet stage's lookups while they are still running, possibly past a cycle's budget. */
 let walletStageInFlight: Promise<void> | null = null;
 
+/**
+ * Past this age a coin no decision is near has its per-coin Helius reads backed off (user decision
+ * 2026-10-20 (Helius audit)): most of them refreshed every screen-passed coin at one flat rate for
+ * its whole life, though an old coin's holders turn over slowly and nothing waits on its figures.
+ */
+export const OLD_COIN_MINUTES = 120;
+
+/**
+ * The screen-passed coins past OLD_COIN_MINUTES that are not contenders, alerted (held for a
+ * wallet figure), called by a model (`called`) or watched: the ones whose wallet-holdings backfill
+ * and top-holder re-reads back off. A coin of unknown age is treated as young.
+ */
+export function oldCoinMints(
+  groups: readonly {
+    mintAddress: string;
+    contender: boolean;
+    alerted: boolean;
+    watched: boolean;
+    ageMinutes: number | undefined;
+  }[],
+  called: ReadonlySet<string>,
+): Set<string> {
+  return new Set(
+    groups
+      .filter(
+        (g) =>
+          !g.contender &&
+          !g.alerted &&
+          !g.watched &&
+          !called.has(g.mintAddress) &&
+          (g.ageMinutes ?? 0) >= OLD_COIN_MINUTES,
+      )
+      .map((g) => g.mintAddress),
+  );
+}
+
 /** The wallet lookups for non-contenders running behind a cycle, if any - see startWalletBackfill. */
 let walletBackfillInFlight: Promise<void> | null = null;
 
@@ -295,7 +331,8 @@ export async function settleWalletBackfill(): Promise<void> {
  * Looks up the wallets of candidates that aren't about to be decided on, behind the cycle and on
  * the budget the contenders left, so their figures are cached for the next cycle. Its results are
  * not used directly - both resolvers cache everything they learn. One at a time: a backfill still
- * running when the next cycle ends just means that cycle adds none.
+ * running when the next cycle ends just means that cycle adds none. `groups` are the holdings
+ * lookups' (see the call: old coins no decision is near are left out); freshness has its own.
  */
 function startWalletBackfill(
   groups: { mintAddress: string; addresses: string[] }[],
@@ -305,12 +342,12 @@ function startWalletBackfill(
   budget: { freshness: number; holdings: number },
   valuation?: WalletHoldingsOptions["valuation"],
 ): void {
-  if (walletBackfillInFlight || groups.length === 0) return;
+  if (walletBackfillInFlight || (groups.length === 0 && freshnessGroups.length === 0)) return;
   const work: Promise<unknown>[] = [];
   if (budget.freshness > 0) {
     work.push(resolveEarliestActivity(freshnessGroups, helius, { maxNewLookups: budget.freshness }));
   }
-  if (budget.holdings > 0) {
+  if (budget.holdings > 0 && groups.length > 0) {
     work.push(resolveWalletHoldings(groups, helius, env, { maxNewLookups: budget.holdings, valuation }));
   }
   if (work.length === 0) return;
@@ -624,6 +661,8 @@ function startLiveTapeStage(
   helius: HeliusClient,
   env: Env,
   solPrices?: SolPriceLookup,
+  /** Whether a coin has had no trade since then: a quiet coin's page stands without a re-read. */
+  quietSince?: (mint: string, sinceMs: number) => boolean,
 ): Promise<void> {
   if (liveTapeInFlight || env.LIVE_TAPE_PAGES_PER_CYCLE <= 0 || mints.length === 0) {
     return liveTapeInFlight ?? Promise.resolve();
@@ -632,6 +671,7 @@ function startLiveTapeStage(
     maxPages: env.LIVE_TAPE_PAGES_PER_CYCLE,
     refreshMs: env.LIVE_TAPE_REFRESH_SECONDS * 1000,
     solPrices,
+    quietSince,
   }).catch((err: unknown) => logger.warn("live tape reads failed", { error: String(err) }));
   liveTapeInFlight = work;
   void work.finally(() => {
@@ -663,8 +703,10 @@ function startLinkedWalletStage(
   wideMints: ReadonlySet<string> = new Set(),
   /** Coins whose bubble map is open now (refreshWatchedHolders): their top holders are re-read faster. */
   watched: ReadonlySet<string> = new Set(),
-  /** Whether a coin has had no trade since then: a watched coin's faster re-read waits for one. */
+  /** Whether a coin has had no trade since then: a quiet coin's list stands without a re-read. */
   quietSince?: (mint: string, sinceMs: number) => boolean,
+  /** Old coins no decision is near (oldCoinMints): their top holders are re-read less often. */
+  oldMints: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   if (env.LINKED_WALLET_LOOKUPS_PER_CYCLE <= 0 || groups.length === 0 || linkedStageInFlight) {
     return Promise.resolve();
@@ -679,12 +721,18 @@ function startLinkedWalletStage(
   // budget and only on the waited pass; what they leave of it is not carried to the rest.
   let contenderLeft = env.LINKED_WALLET_CONTENDER_LOOKUPS_PER_CYCLE;
   let watchedLeft = env.WATCHED_HOLDER_READS_PER_CYCLE;
+  // One holder-transfer budget for the cycle, the waited pass first and the rest on what it leaves:
+  // each pass used to get the whole of both caps, so a cycle could spend them twice (user decision
+  // 2026-10-20 (Helius audit)).
+  let transferSignaturesLeft = env.HOLDER_TRANSFER_SIGNATURE_READS_PER_CYCLE;
+  let transferTxLeft = env.HOLDER_TRANSFER_TX_READS_PER_CYCLE;
   const pass = async (part: LinkedGroup[], contenders: boolean) => {
     if (part.length === 0) return;
     const spent = await readTopHolders(part, helius, {
       maxReads: readsLeft,
       wideMints,
       watched,
+      oldMints,
       maxWatchedReads: watchedLeft,
       watchedRefreshMs: env.WATCHED_HOLDERS_REFRESH_SECONDS * 1000,
       streamedRefreshMs: env.WATCHED_HOLDERS_STREAMED_REFRESH_SECONDS * 1000,
@@ -704,8 +752,11 @@ function startLinkedWalletStage(
     const transfers =
       transferGroups.length > 0
         ? resolveHolderTransfers(transferGroups, helius, {
-            maxSignatureReads: env.HOLDER_TRANSFER_SIGNATURE_READS_PER_CYCLE,
-            maxTxReads: env.HOLDER_TRANSFER_TX_READS_PER_CYCLE,
+            maxSignatureReads: Math.max(0, transferSignaturesLeft),
+            maxTxReads: Math.max(0, transferTxLeft),
+          }).then((sent) => {
+            transferSignaturesLeft -= sent.signatureReads;
+            transferTxLeft -= sent.txReads;
           })
         : Promise.resolve();
     const extra = contenders ? contenderLeft : 0;
@@ -1271,6 +1322,22 @@ async function scanCycle(
       (failsHolderConcentration(profile) || typeof profile?.top10HolderPct !== "number")
     );
   });
+  // A coin past its first hour failing a holder cut is re-read every 15 minutes, not every 5, and
+  // not at all while the trade stream says it hasn't traded since (user decision 2026-10-20 (Helius
+  // audit)): youngHolderRecheck.ts's OLD_HOLDER_RECHECK_MINUTES.
+  const recheckAgeByMint = new Map(
+    holderCutRecheck.map(
+      (c) =>
+        [
+          c.mintAddress,
+          candidateAgeMinutes({
+            launchedAt: storedLaunchByMint.get(c.mintAddress) ?? undefined,
+            pairCreatedAt: c.pairCreatedAt,
+            firstSeenAt: firstSeenByMint.get(c.mintAddress),
+          }),
+        ] as const,
+    ),
+  );
   const onChainHolders = await resolveOnChainHolders(
     [
       ...candidates.filter((c) => {
@@ -1292,7 +1359,10 @@ async function scanCycle(
     // A young coin failing a holder cut is re-read every minute here too: on the plain 5-minute
     // TTL a list read in its first seconds (every holder then a first buyer) kept it failing the
     // snipers cut for minutes after the holders had turned over.
-    holderTtl,
+    holderCutRecheckTtlFor(holderTtl, (mint) => recheckAgeByMint.get(mint)),
+    deps.stream?.quietSince
+      ? (mint, readAtMs) => recheckAgeByMint.has(mint) && deps.stream!.quietSince!(mint, readAtMs)
+      : undefined,
   );
   // This cycle's chain read first, then the recent top-25 lists for the rest.
   for (const [mint, holders] of recentHolderLists) {
@@ -1431,6 +1501,12 @@ async function scanCycle(
       // Someone has its bubble map open: its new holders' funders, fresh and empty checks are read
       // next, so the map's clusters and the holder list's tags follow its holders (user ask 2026-10-19).
       watched: watchedHolders.has(c.mintAddress),
+      // For oldCoinMints: an old coin no decision is near has its holder reads backed off.
+      ageMinutes: candidateAgeMinutes({
+        launchedAt: launchedAtByMint.get(c.mintAddress),
+        pairCreatedAt: c.pairCreatedAt,
+        firstSeenAt: firstSeenByMint.get(c.mintAddress),
+      }),
       churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
     }))
     .filter((g) => g.addresses.length > 0)
@@ -1505,6 +1581,8 @@ async function scanCycle(
     : walletGroups.filter((g) => g.contender || g.alerted).length;
   // Model-alerted coins, whose bubble map takes in the known wallets of their top 50 (display only).
   const wideMints = env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0 ? await wideMapMints() : new Set<string>();
+  // Old coins no decision is near: their top holders and wallet holdings are read less often.
+  const oldMints = oldCoinMints(walletGroups, wideMints);
   const linkedWork = startLinkedWalletStage(
     linkedGroups,
     linkedWaited,
@@ -1513,6 +1591,7 @@ async function scanCycle(
     wideMints,
     watchedHolders,
     deps.stream?.quietSince ? (mint, sinceMs) => deps.stream!.quietSince!(mint, sinceMs) : undefined,
+    oldMints,
   );
   // The live tape: the newest trades of each coin close to a call (contenders, then alerts held
   // for a wallet figure), for the flagged wallets trading it - on the same wait.
@@ -1522,6 +1601,7 @@ async function scanCycle(
     env,
     // Test doubles may stub the client without it.
     deps.dexScreener.solPricesOf ? (m) => deps.dexScreener.solPricesOf(m) : undefined,
+    deps.stream?.quietSince ? (mint, sinceMs) => deps.stream!.quietSince!(mint, sinceMs) : undefined,
   );
 
   // A user filter with a wallet criterion holds a match until the figure is in, up to
@@ -1610,7 +1690,11 @@ async function scanCycle(
       walletResults = await fromCacheOnly();
     } else {
       startWalletBackfill(
-        walletGroups,
+        // Not the old coins no decision is near: their top 10's empty-wallet check was re-run on the
+        // 60-minute cache for as long as they stayed in band (user decision 2026-10-20 (Helius
+        // audit)); one turning contender is read in the stage above. Unless a user filter caps
+        // the empty share, which every candidate's figure is then waited on for (waitedGroups).
+        walletFiltersActive ? walletGroups : walletGroups.filter((g) => !oldMints.has(g.mintAddress)),
         freshness.groups,
         deps.helius,
         env,

@@ -218,19 +218,20 @@ function holdersOf(
  * Reads what the groups' readings still need, in their order (contenders first): each holder
  * account never read, or read more than ACCOUNT_REREAD_MS ago (only its newer signatures), a whole
  * coin at a time within `maxSignatureReads`; then the shared transactions not yet read, up to
- * `maxTxReads` (a coin left part-read finishes on a later cycle). Never rejects.
+ * `maxTxReads` (a coin left part-read finishes on a later cycle). Answers how many of each it sent,
+ * so a caller reading in several passes can hold them all to one budget. Never rejects.
  */
 export async function resolveHolderTransfers(
   groups: readonly TransferGroup[],
   helius: Pick<HeliusClient, "getAccountSignaturesBatch" | "getTransactionsBatch">,
   opts: { maxSignatureReads: number; maxTxReads: number; nowMs?: number },
-): Promise<void> {
+): Promise<{ signatureReads: number; txReads: number }> {
   const now = opts.nowMs ?? Date.now();
   const read = groups.flatMap((g) => {
     const h = holdersOf(g, now);
     return h ? [{ g, h }] : [];
   });
-  if (read.length === 0) return;
+  if (read.length === 0) return { signatureReads: 0, txReads: 0 };
 
   // Signatures, a whole coin at a time.
   const due: { address: string; until: string | null }[] = [];
@@ -294,7 +295,8 @@ export async function resolveHolderTransfers(
       wanted.set(sig, list);
     }
   }
-  if (wanted.size === 0) return;
+  const spent = { signatureReads: due.length, txReads: wanted.size };
+  if (wanted.size === 0) return spent;
   try {
     const txs = await helius.getTransactionsBatch([...wanted.keys()]);
     calls.getTransaction += wanted.size;
@@ -309,6 +311,7 @@ export async function resolveHolderTransfers(
   } catch (err) {
     logger.warn("holder transfer transaction reads failed", { txs: wanted.size, error: String(err) });
   }
+  return spent;
 }
 
 /**

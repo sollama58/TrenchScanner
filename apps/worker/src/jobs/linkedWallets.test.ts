@@ -6,7 +6,9 @@ import {
   cachedTopHolders,
   cexReadingOf,
   linkedHoldersOf,
+  currentTopHolders,
   readTopHolders,
+  TOP_HOLDERS_OLD_REFRESH_MS,
   TOP_HOLDERS_REFRESH_MS,
   type LinkedGroup,
   linkedReadingOf,
@@ -520,6 +522,55 @@ describe("readTopHolders", () => {
       reads: 0,
       watchedReads: 1,
     });
+  });
+
+  it("re-reads an old coin no decision is near less often, its list standing meanwhile (user decision 2026-10-20)", async () => {
+    const top = [{ owner: "h0", pct: 10 }];
+    const helius = {
+      getTopHoldersBatch: vi.fn(async (mints: string[]) => {
+        return new Map(mints.map((m) => [m, { status: "found" as const, holders: top }]));
+      }),
+    };
+    const groups: LinkedGroup[] = [
+      { mintAddress: "mOld", holders: [] },
+      { mintAddress: "mNew", holders: [] },
+    ];
+    const opts = { maxReads: 4, oldMints: new Set(["mOld"]) };
+    await readTopHolders(groups, helius, { ...opts, nowMs: 0 });
+    expect(await readTopHolders(groups, helius, { ...opts, nowMs: TOP_HOLDERS_REFRESH_MS })).toEqual({
+      reads: 1,
+      watchedReads: 0,
+    });
+    expect(helius.getTopHoldersBatch).toHaveBeenLastCalledWith(["mNew"], 26);
+    // Still the coin's current holders for the screen while it waits for its slower re-read.
+    expect(currentTopHolders("mOld", TOP_HOLDERS_OLD_REFRESH_MS)).toEqual(top);
+    await readTopHolders(groups, helius, { ...opts, nowMs: TOP_HOLDERS_OLD_REFRESH_MS });
+    expect(helius.getTopHoldersBatch).toHaveBeenLastCalledWith(["mOld", "mNew"], 26);
+  });
+
+  it("keeps any coin's list, as of now, while the trade stream says it hasn't traded since (user decision 2026-10-20)", async () => {
+    const top = [{ owner: "h0", pct: 10 }];
+    const helius = {
+      getTopHoldersBatch: vi.fn(async (mints: string[]) => {
+        return new Map(mints.map((m) => [m, { status: "found" as const, holders: top }]));
+      }),
+    };
+    const groups: LinkedGroup[] = [{ mintAddress: "mQ", holders: [] }];
+    const lastTrade = { at: 0 };
+    const opts = { maxReads: 1, quietSince: (_mint: string, since: number) => lastTrade.at <= since };
+    await readTopHolders(groups, helius, { ...opts, nowMs: 0 });
+    const later = 5 * TOP_HOLDERS_REFRESH_MS;
+    expect(await readTopHolders(groups, helius, { ...opts, nowMs: TOP_HOLDERS_REFRESH_MS })).toEqual({
+      reads: 0,
+      watchedReads: 0,
+    });
+    await readTopHolders(groups, helius, { ...opts, nowMs: later });
+    expect(helius.getTopHoldersBatch).toHaveBeenCalledTimes(1);
+    // Kept as of the last quiet check, so it hasn't lapsed though first read long ago.
+    expect(cachedTopHolders("mQ", later + 1)).toEqual(top);
+    lastTrade.at = later + 1;
+    await readTopHolders(groups, helius, { ...opts, nowMs: later + TOP_HOLDERS_REFRESH_MS });
+    expect(helius.getTopHoldersBatch).toHaveBeenCalledTimes(2);
   });
 
   it("leaves a group on RugCheck's list when the read fails", async () => {

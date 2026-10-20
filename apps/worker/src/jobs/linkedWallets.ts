@@ -356,10 +356,23 @@ export function linkedHoldersOf(profile: {
 
 /** How long a mint's holder list stands before it is read again; holders trade, funders don't. */
 export const TOP_HOLDERS_REFRESH_MS = 10 * 60_000;
+/**
+ * The same for a coin past two hours old that is not a contender, alerted, called or watched
+ * (readTopHolders `oldMints`): its holders turn over slowly and no decision waits on them, and the
+ * flat 10 minutes re-read every screen-passed coin for its whole life (user decision 2026-10-20
+ * (Helius audit)).
+ */
+export const TOP_HOLDERS_OLD_REFRESH_MS = 30 * 60_000;
 /** Past this a list is too old to stand in while the new read waits. */
 const TOP_HOLDERS_MAX_AGE_MS = 60 * 60_000;
-/** Each mint's largest wallets from the chain (LINKED_TOP_N and one more, for the creator) and when read. */
-const topHolderLists = new Map<string, { holders: { owner: string; pct: number }[]; atMs: number }>();
+/**
+ * Each mint's largest wallets from the chain (LINKED_TOP_N and one more, for the creator), when
+ * read (or last found unchanged: see readTopHolders), and how long until it is read again.
+ */
+const topHolderLists = new Map<
+  string,
+  { holders: { owner: string; pct: number }[]; atMs: number; refreshMs: number }
+>();
 const MAX_TOP_HOLDER_LISTS = 5_000;
 
 /** The chain's top-holder list for a mint while it is fresh enough to use, else undefined. */
@@ -378,13 +391,18 @@ export function cachedTopHolders(
  */
 export const CURRENT_HOLDERS_MAX_AGE_MS = TOP_HOLDERS_REFRESH_MS + 5 * 60_000;
 
-/** The chain's top-holder list for a mint while it is recent enough to be its current holders. */
+/**
+ * The chain's top-holder list for a mint while it is recent enough to be its current holders: until
+ * the cycle after its re-read is due, so an old coin's list (TOP_HOLDERS_OLD_REFRESH_MS) stands as
+ * long as it waits for one rather than leaving the holder cuts on RugCheck's older list meanwhile.
+ */
 export function currentTopHolders(
   mintAddress: string,
   nowMs = Date.now(),
 ): { owner: string; pct: number }[] | undefined {
   const entry = topHolderLists.get(mintAddress);
-  return entry && nowMs - entry.atMs < CURRENT_HOLDERS_MAX_AGE_MS ? entry.holders : undefined;
+  const maxAgeMs = CURRENT_HOLDERS_MAX_AGE_MS - TOP_HOLDERS_REFRESH_MS + (entry?.refreshMs ?? 0);
+  return entry && nowMs - entry.atMs < maxAgeMs ? entry.holders : undefined;
 }
 
 /**
@@ -424,6 +442,10 @@ const MAX_WIDE_LISTS = 1_000;
  * no top 50 yet is read now even when its top 25 is fresh: the read at alert time.
  * `watched` (coins whose bubble map someone has open, user ask 2026-10-19) are re-read once their
  * list is `watchedRefreshMs` old, on their own `maxWatchedReads`, so the "Now" map keeps updating.
+ * `oldMints` are re-read on TOP_HOLDERS_OLD_REFRESH_MS instead of TOP_HOLDERS_REFRESH_MS, and a
+ * coin due on either that the trade stream says has not traded since its list was read keeps the
+ * list (user decision 2026-10-20 (Helius audit)): with no trade no holder's balance moved, so the
+ * read would answer the same list. Its read time moves up to now, as the read would have.
  * Answers how many mints it asked about on each budget.
  */
 export async function readTopHolders(
@@ -434,6 +456,8 @@ export async function readTopHolders(
     nowMs?: number;
     wideMints?: ReadonlySet<string>;
     watched?: ReadonlySet<string>;
+    /** Coins past two hours old that are not contenders, alerted, called or watched. */
+    oldMints?: ReadonlySet<string>;
     maxWatchedReads?: number;
     watchedRefreshMs?: number;
     /**
@@ -463,10 +487,15 @@ export async function readTopHolders(
     const entry = topHolderLists.get(mint);
     return !!entry && !!opts.quietSince?.(mint, entry.atMs);
   };
+  const oldMints = opts.oldMints ?? new Set<string>();
   const due = groups
     .filter((g) => {
       if (wide.has(g.mintAddress) && !wideHolderLists.has(g.mintAddress)) return true;
-      return ageOf(g.mintAddress) >= TOP_HOLDERS_REFRESH_MS;
+      const every = oldMints.has(g.mintAddress) ? TOP_HOLDERS_OLD_REFRESH_MS : TOP_HOLDERS_REFRESH_MS;
+      if (ageOf(g.mintAddress) < every) return false;
+      if (!quiet(g.mintAddress)) return true;
+      keepQuietList(g.mintAddress, now);
+      return false;
     })
     .slice(0, Math.max(0, opts.maxReads));
   const dueSet = new Set(due.map((g) => g.mintAddress));
@@ -505,7 +534,11 @@ export async function readTopHolders(
       if (oldest !== undefined) topHolderLists.delete(oldest);
     }
     topHolderLists.delete(g.mintAddress);
-    topHolderLists.set(g.mintAddress, { holders: top, atMs: now });
+    topHolderLists.set(g.mintAddress, {
+      holders: top,
+      atMs: now,
+      refreshMs: oldMints.has(g.mintAddress) ? TOP_HOLDERS_OLD_REFRESH_MS : TOP_HOLDERS_REFRESH_MS,
+    });
     g.holders = top;
     if (wide.has(g.mintAddress)) {
       if (wideHolderLists.size >= MAX_WIDE_LISTS) {
@@ -517,6 +550,18 @@ export async function readTopHolders(
     }
   }
   return counts;
+}
+
+/**
+ * A list found unchanged since its read (no trade since, readTopHolders): it is as current as a read
+ * now would be, so it takes now as its read time, and the holder accounts read with it too, so
+ * neither lapses (cachedTopHolders, cachedHolderAccounts) while the coin stays quiet.
+ */
+function keepQuietList(mintAddress: string, nowMs: number): void {
+  const entry = topHolderLists.get(mintAddress);
+  if (entry) topHolderLists.set(mintAddress, { ...entry, atMs: nowMs });
+  const accounts = holderAccountLists.get(mintAddress);
+  if (accounts) holderAccountLists.set(mintAddress, { ...accounts, atMs: nowMs });
 }
 
 /**
@@ -605,7 +650,7 @@ export function applyHolderBalances(mintAddress: string, moves: readonly HolderB
       .filter((h) => h.pct > 0)
       .sort((a, b) => b.pct - a.pct);
   const holders = moved(entry.holders);
-  topHolderLists.set(mintAddress, { holders, atMs: entry.atMs });
+  topHolderLists.set(mintAddress, { ...entry, holders });
   const wide = wideHolderLists.get(mintAddress);
   if (wide) wideHolderLists.set(mintAddress, { holders: moved(wide.holders), atMs: wide.atMs });
   return true;

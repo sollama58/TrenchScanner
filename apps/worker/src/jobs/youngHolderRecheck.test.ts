@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OnChainProfile } from "@trenchscanner/core";
 import {
+  OLD_HOLDER_RECHECK_MINUTES,
+  OLD_HOLDER_RECHECK_TTL_MINUTES,
   YOUNG_HOLDER_RECHECK_MINUTES,
+  holderCutRecheckTtlFor,
   noteHolderCutVerdict,
   resetYoungHolderRecheck,
   rugCheckTtlFor,
@@ -61,5 +64,23 @@ describe("young holder recheck", () => {
     noteHolderCutVerdict("b", null, minutesAgo(1), NOW);
     expect(rugCheckTtlFor(5, NOW)("a")).toBe(5);
     expect(rugCheckTtlFor(5, NOW)("b")).toBe(5);
+  });
+});
+
+describe("holder-cut recheck TTL (user decision 2026-10-20)", () => {
+  it("stretches the chain read of a coin past its first hour, and only of the rechecks", () => {
+    const ages = new Map([
+      ["old", OLD_HOLDER_RECHECK_MINUTES],
+      ["young", OLD_HOLDER_RECHECK_MINUTES - 1],
+    ]);
+    const ttl = holderCutRecheckTtlFor(
+      (mint) => (mint === "long" ? 30 : 5),
+      (mint) => (mint === "long" ? 600 : ages.get(mint)),
+    );
+    expect(ttl("old")).toBe(OLD_HOLDER_RECHECK_TTL_MINUTES);
+    expect(ttl("young")).toBe(5);
+    expect(ttl("not-a-recheck")).toBe(5);
+    // Never shortens a longer TTL.
+    expect(ttl("long")).toBe(30);
   });
 });
