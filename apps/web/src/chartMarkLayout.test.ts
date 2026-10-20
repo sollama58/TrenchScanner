@@ -36,6 +36,25 @@ describe("layoutMarks", () => {
     const [p] = layoutMarks([{ ...spot("a", "buy", 50), edgeY: 395 }], 20, 400);
     expect(p!.y).toBeLessThanOrEqual(400 - 8 - 1);
   });
+
+  it("pulls a stack closer with a small gap and pushes it out with a large one", () => {
+    const buy = (gap?: number) => layoutMarks([spot("a", "buy", 50), spot("b", "buy", 51)], 20, 400, gap);
+    const near = buy(0.5);
+    const mid = buy(1);
+    const far = buy(2);
+    const fromEdge = (p: (typeof near)[number]) => p.y - p.edgeY;
+    expect(fromEdge(near[0]!)).toBeLessThan(fromEdge(mid[0]!));
+    expect(fromEdge(mid[0]!)).toBeLessThan(fromEdge(far[0]!));
+    const span = (rows: typeof near) => rows[1]!.y - rows[0]!.y;
+    expect(span(near)).toBeLessThan(span(mid));
+    expect(span(mid)).toBeLessThan(span(far));
+    // The gap moves the stack. It does not change a mark's own radius.
+    expect(near[0]!.r).toBe(mid[0]!.r);
+    expect(far[0]!.r).toBe(8);
+    expect(buy()[0]!.y).toBe(mid[0]!.y);
+    expect(buy(0)[0]!.y).toBe(mid[0]!.y);
+    expect(buy(-1)[0]!.y).toBe(mid[0]!.y);
+  });
 });
 
 describe("markAt", () => {

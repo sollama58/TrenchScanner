@@ -2771,6 +2771,9 @@ export function ChartCard({
                 marks={marks}
                 markPics={look.chartMarkPics}
                 markScale={look.chartMarkScale}
+                markShape={look.chartMarkShape}
+                markStem={look.chartMarkStem}
+                markGap={look.chartMarkGap}
                 live={view.live}
                 height={height}
                 trades={chartTrades}

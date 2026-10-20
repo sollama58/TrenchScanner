@@ -256,6 +256,18 @@ export const feedAppearanceSchema = z
     chartMarkPics: z.boolean().default(true),
     /** How big those marks draw: small, medium or large (user ask 2026-10-20); medium by default. */
     chartMarkScale: z.enum(["s", "m", "l"]).default("m"),
+    /**
+     * Lettered wallet marks: a circle, a square or a diamond (user ask 2026-10-20). A circle by
+     * default. KOL pictures stay round, and the trader's own buys and sells stay arrows.
+     */
+    chartMarkShape: z.enum(["circle", "square", "diamond"]).default("circle"),
+    /** A line from the mark to the candle (user ask 2026-10-20); off unless the reader turns it on. */
+    chartMarkStem: z.boolean().default(false),
+    /**
+     * How far marks sit from the candle: small, medium or large (user ask 2026-10-20). Medium is
+     * today's pitch. This is not the mark's size.
+     */
+    chartMarkGap: z.enum(["s", "m", "l"]).default("m"),
     /** The token chart draws a line or candles (user ask 2026-10-18); a line by default. */
     chartStyle: z.enum(["line", "candles"]).default("line"),
     /** The view the token chart opens on (user ask 2026-10-19): Trading, the latest at the right edge, or All. */
@@ -329,6 +341,9 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   chartMarkMinSol: 0.5,
   chartMarkPics: true,
   chartMarkScale: "m",
+  chartMarkShape: "circle",
+  chartMarkStem: false,
+  chartMarkGap: "m",
   chartStyle: "line",
   chartView: "trading",
   chartPathing: false,

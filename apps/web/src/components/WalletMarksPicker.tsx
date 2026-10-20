@@ -7,8 +7,8 @@ export const CHART_MARKS_SECTION = "customize-chart-marks";
 
 /**
  * Customize › Chart wallet trades (user ask 2026-10-18): whether the token chart marks labeled
- * wallets' trades, which kinds of wallet, and the smallest trade it marks (never under
- * MIN_SOL_FLOOR SOL). Saved with the feed's appearance, so every device marks the same.
+ * wallets' trades, which kinds of wallet, the smallest trade it marks (never under MIN_SOL_FLOOR
+ * SOL), and how those marks look. Saved with the feed's appearance, so every device marks the same.
  */
 export function WalletMarksPicker() {
   const look = useAppearance();
@@ -102,9 +102,9 @@ export function WalletMarksPicker() {
               disabled={!on}
               title={
                 id === "s"
-                  ? "Smaller rings and pictures"
+                  ? "Smaller marks and pictures"
                   : id === "l"
-                    ? "Larger rings and pictures"
+                    ? "Larger marks and pictures"
                     : "The usual size"
               }
               onClick={() => setAppearance({ chartMarkScale: id })}
@@ -114,11 +114,71 @@ export function WalletMarksPicker() {
           ))}
         </div>
       </div>
+      <div className={`cm-scale${on ? "" : " off"}`}>
+        <span>Shape</span>
+        <div className="segmented small" role="radiogroup" aria-label="Trade mark shape">
+          {(
+            [
+              ["circle", "Circle", "A ring, the usual mark"],
+              ["square", "Square", "A square"],
+              ["diamond", "Diamond", "A diamond"],
+            ] as const
+          ).map(([id, label, title]) => (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={look.chartMarkShape === id}
+              className={look.chartMarkShape === id ? "on" : ""}
+              disabled={!on}
+              title={title}
+              onClick={() => setAppearance({ chartMarkShape: id })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={look.chartMarkStem}
+          disabled={!on}
+          onChange={() => setAppearance({ chartMarkStem: !look.chartMarkStem })}
+        />
+        Line to the candle
+      </label>
+      <div className={`cm-scale${on ? "" : " off"}`}>
+        <span>Distance</span>
+        <div className="segmented small" role="radiogroup" aria-label="Distance from the candle">
+          {(
+            [
+              ["s", "Small", "Closer to the candle"],
+              ["m", "Medium", "The usual distance from the candle"],
+              ["l", "Large", "Farther from the candle"],
+            ] as const
+          ).map(([id, label, title]) => (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={look.chartMarkGap === id}
+              className={look.chartMarkGap === id ? "on" : ""}
+              disabled={!on}
+              title={title}
+              onClick={() => setAppearance({ chartMarkGap: id })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
       <p className="faint small check-hint">
-        Buys hang under the price and sales sit over it, bigger for more SOL. A filled ring is a buy, a hollow
-        one a sale; a KOL&apos;s picture is ringed green for a buy, red for a sale. Small, medium and large
-        scale both the rings and the pictures. Click a mark to open the wallet. Never under {MIN_SOL_FLOOR}{" "}
-        SOL.
+        Buys hang under the price and sales sit over it, bigger for more SOL. A filled mark is a buy, a hollow
+        one a sale. Circle, square and diamond are the lettered wallet marks; a KOL&apos;s picture stays
+        round, and your own buys and sells stay arrows. Mark size scales the marks. Distance is how far they
+        sit from the candle, separate from that size. The line to the candle is off unless you turn it on.
+        Click a mark to open the wallet. Never under {MIN_SOL_FLOOR} SOL.
       </p>
     </div>
   );

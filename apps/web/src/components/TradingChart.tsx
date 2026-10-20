@@ -41,7 +41,14 @@ import {
   type VolumeCandle,
 } from "../priceChart";
 import type { PathStep } from "../pricePathing";
-import { MARK_SCALE, type MarkScale, type WalletMark } from "../walletMarks";
+import {
+  MARK_GAP,
+  MARK_SCALE,
+  type MarkGap,
+  type MarkScale,
+  type MarkShape,
+  type WalletMark,
+} from "../walletMarks";
 import { atLiveEnd, markAt, type PlacedMark } from "../chartMarkLayout";
 import { API_URL } from "../api";
 import { openWallet } from "../walletModal";
@@ -256,6 +263,9 @@ export function TradingChart({
   marks: marksIn = NO_MARKS,
   markPics = true,
   markScale = "m",
+  markShape = "circle",
+  markStem = false,
+  markGap = "m",
   trades: tradesIn = NO_TRADES,
   live = false,
   entry = null,
@@ -277,12 +287,18 @@ export function TradingChart({
   events: ChartEvent[];
   /** The scans' 5-minute buy and sell counts: the readout gives the buy share where one covers. */
   flow?: ScanFlow[];
-  /** Labeled wallets' trades (KOLs, their sides, flagged wallets): lettered rings by the price. */
+  /** Labeled wallets' trades (KOLs, their sides, flagged wallets): lettered marks by the price. */
   marks?: WalletMark[];
   /** KOLs' marks as their X pictures, where a mark has one (Customize › Chart wallet trades). */
   markPics?: boolean;
-  /** How big those marks draw: the lettered rings and the pictures (Customize › Chart wallet trades). */
+  /** How big those marks draw: the lettered marks and the pictures (Customize › Chart wallet trades). */
   markScale?: MarkScale;
+  /** Lettered wallet marks: a circle, a square or a diamond. Pictures stay round; B and S stay arrows. */
+  markShape?: MarkShape;
+  /** A line from each mark to the candle. Off unless the reader turns it on. */
+  markStem?: boolean;
+  /** How far marks sit from the candle, apart from their size. */
+  markGap?: MarkGap;
   /** Pro Mode: the trader's own buys and sells. */
   trades?: ChartTrade[];
   /** The view runs to now: a trade read before its candle is drawn sits on the newest candle. */
@@ -445,6 +461,7 @@ export function TradingChart({
     drawings.setExtendTrend(extendTrend);
   }, [drawings, extendTrend]);
   const markFactor = MARK_SCALE[markScale] ?? 1;
+  const gapFactor = MARK_GAP[markGap] ?? 1;
 
   const colors = useMemo(
     () => (mounted && boxRef.current ? readColors(boxRef.current) : null),
@@ -802,6 +819,9 @@ export function TradingChart({
       hot,
       pic: (m) => (markPics ? picOf(m) : null),
       markScale: markFactor,
+      markShape,
+      markStem,
+      markGap: gapFactor,
       drawings,
       drawScale: dScale,
       label: axisUsd,
@@ -1511,6 +1531,9 @@ function emptyOverlay(): OverlayState {
     pathZone: null,
     hot: new Set(),
     markScale: 1,
+    markShape: "circle",
+    markStem: false,
+    markGap: 1,
     drawings: null,
     drawScale: null,
     label: axisUsd,

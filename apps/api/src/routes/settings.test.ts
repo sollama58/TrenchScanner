@@ -90,6 +90,41 @@ describe("parseFeedAppearance", () => {
     expect(parseFeedAppearance({}).chartMarkScale).toBe("m");
     expect(parseFeedAppearance({ chartMarkScale: "s" }).chartMarkScale).toBe("s");
     expect(parseFeedAppearance({ chartMarkScale: "xl" }).chartMarkScale).toBe("m");
+    // Circle, no line to the candle, medium distance. A bad value falls back; a saved one stays.
+    expect(parseFeedAppearance({})).toMatchObject({
+      chartMarkShape: "circle",
+      chartMarkStem: false,
+      chartMarkGap: "m",
+    });
+    expect(
+      parseFeedAppearance({ chartMarkShape: "diamond", chartMarkStem: true, chartMarkGap: "l" }),
+    ).toMatchObject({ chartMarkShape: "diamond", chartMarkStem: true, chartMarkGap: "l" });
+    expect(
+      parseFeedAppearance({ chartMarkShape: "star", chartMarkStem: "yes", chartMarkGap: "xl" }),
+    ).toMatchObject({ chartMarkShape: "circle", chartMarkStem: false, chartMarkGap: "m" });
+    const {
+      chartMarkShape: _shape,
+      chartMarkStem: _stem,
+      chartMarkGap: _gap,
+      ...noMarkStyle
+    } = DEFAULT_FEED_APPEARANCE;
+    const filled = feedAppearanceSchema.safeParse(noMarkStyle);
+    expect(filled.success && filled.data).toMatchObject({
+      chartMarkShape: "circle",
+      chartMarkStem: false,
+      chartMarkGap: "m",
+    });
+    const styled = feedAppearanceSchema.safeParse({
+      ...DEFAULT_FEED_APPEARANCE,
+      chartMarkShape: "square",
+      chartMarkStem: true,
+      chartMarkGap: "s",
+    });
+    expect(styled.success && styled.data).toMatchObject({
+      chartMarkShape: "square",
+      chartMarkStem: true,
+      chartMarkGap: "s",
+    });
     expect(parseFeedAppearance({}).chartMarkKinds).toHaveLength(7);
     expect(parseFeedAppearance({}).chartMarkKinds).not.toContain("risky");
     // A list saved before that with every kind on was the old default: it reads without risky.

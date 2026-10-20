@@ -100,6 +100,10 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   chartMarkPics: true,
   // Medium rings and pictures (user ask 2026-10-20); small and large are choices.
   chartMarkScale: "m",
+  // A circle, no line to the candle, at the usual distance (user ask 2026-10-20).
+  chartMarkShape: "circle",
+  chartMarkStem: false,
+  chartMarkGap: "m",
   // The token chart draws a line unless the reader picks candles (user ask 2026-10-18).
   chartStyle: "line",
   // The token chart opens on its Trading view, the latest at the right edge (user ask 2026-10-19).
@@ -371,6 +375,9 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
       r.chartMarkScale === "s" || r.chartMarkScale === "l" || r.chartMarkScale === "m"
         ? r.chartMarkScale
         : d.chartMarkScale,
+    chartMarkShape: pick(r.chartMarkShape, ["circle", "square", "diamond"] as const, d.chartMarkShape),
+    chartMarkStem: typeof r.chartMarkStem === "boolean" ? r.chartMarkStem : d.chartMarkStem,
+    chartMarkGap: pick(r.chartMarkGap, ["s", "m", "l"] as const, d.chartMarkGap),
     chartStyle: r.chartStyle === "candles" || r.chartStyle === "line" ? r.chartStyle : d.chartStyle,
     chartView: r.chartView === "trading" || r.chartView === "all" ? r.chartView : d.chartView,
     chartPathing: typeof r.chartPathing === "boolean" ? r.chartPathing : d.chartPathing,
@@ -436,6 +443,9 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartMarkMinSol,
     chartMarkPics,
     chartMarkScale,
+    chartMarkShape,
+    chartMarkStem,
+    chartMarkGap,
     chartStyle,
     chartView,
     chartPathing,
@@ -469,6 +479,9 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartMarkMinSol,
     chartMarkPics,
     chartMarkScale,
+    chartMarkShape,
+    chartMarkStem,
+    chartMarkGap,
     chartStyle,
     chartView,
     chartPathing,
