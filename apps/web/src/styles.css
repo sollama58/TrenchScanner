@@ -11327,6 +11327,36 @@ img.tm-avatar {
   gap: 6px;
   flex: none;
 }
+/* The wallet's coin and SOL, beside the header's actions (TokenPairBalances). A dash holds the width. */
+.tm-balances {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.tm-balances small {
+  margin-left: 2px;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.tm-balances.stale {
+  opacity: 0.55;
+}
+@media (max-width: 640px) {
+  .tm-balances {
+    gap: 6px;
+    padding: 2px 6px;
+    font-size: 11px;
+  }
+}
 .tm-figs {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

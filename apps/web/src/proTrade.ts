@@ -617,7 +617,8 @@ export interface PositionResponse {
   truncated: boolean;
 }
 
-const POSITION_POLL_MS = 15_000;
+/** How often an open position is read again. The live SOL balance uses this same cadence (walletBalance.ts). */
+export const POSITION_POLL_MS = 15_000;
 
 /**
  * The Pro wallet's position in `mint`, polled while `mint` is set (null: not Pro, or no modal). A

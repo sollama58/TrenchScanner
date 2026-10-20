@@ -32,7 +32,9 @@ import {
   feeSavedSol,
   sacrificeLine,
   type SacrificeView,
+  useProState,
 } from "../proTrade";
+import { spendBalancesShown, useWalletBalance } from "../walletBalance";
 import { BurnUncertainError, describeBurnError, topUpBurnCredits } from "../burn";
 import { WalletTimeoutError } from "../wallet";
 import { decimalUnits, parseAmounts, parseDecimal } from "../decimal";
@@ -755,6 +757,11 @@ export function TradePanel({
   const [sharing, setSharing] = useState(false);
   const [shareAmounts, setShareAmounts] = useState(true);
   const busy = status.kind === "busy";
+  // SOL the buy can spend, for a wallet that can trade here. The shared reading follows the
+  // position poll. A dash holds the row until the first answer, so the buy side stays put.
+  const showSol = spendBalancesShown(!!useProState()?.pro, true) && !buyOnly && !closeOnly;
+  const funds = useWalletBalance(showSol, showSol);
+  const solHave = funds.balance?.solLamports != null ? solText(Number(funds.balance.solLamports) / 1e9) : "–";
   useEffect(() => {
     if (!fillBuy) return;
     setCustom(String(fillBuy.sol));
@@ -855,6 +862,7 @@ export function TradePanel({
       });
     } finally {
       onTraded();
+      if (showSol) funds.reload();
     }
   };
 
@@ -1130,7 +1138,20 @@ export function TradePanel({
             <div className="tm-side buy" role="group" aria-label="Buy">
               <div className="tm-side-head">
                 <span className="tm-side-title">Buy</span>
-                <span className="muted small">with SOL</span>
+                {showSol ? (
+                  <span
+                    className={`muted small num${funds.error ? " stale" : ""}`}
+                    title={
+                      funds.balance?.solLamports != null
+                        ? "SOL in your wallet"
+                        : "Your SOL balance is loading"
+                    }
+                  >
+                    {solHave}
+                  </span>
+                ) : (
+                  <span className="muted small">with SOL</span>
+                )}
               </div>
               <div className="tm-presets" style={presetCols(settings.buyPresets.length, settings.buyRows)}>
                 {settings.buyPresets.map((sol, i) => (

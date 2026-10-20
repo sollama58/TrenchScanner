@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BurnBalance } from "./burn";
-import { BALANCE_FRESH_MS, BALANCE_POLL_MS, BalanceStore, compactSol, compactTokens } from "./walletBalance";
+import { POSITION_POLL_MS } from "./proTrade";
+import {
+  BALANCE_FRESH_MS,
+  BALANCE_LIVE_MS,
+  BALANCE_POLL_MS,
+  BalanceStore,
+  compactSol,
+  compactTokens,
+  headerPairText,
+  spendBalancesShown,
+} from "./walletBalance";
 
 const reading = (totalRaw: string): BurnBalance => ({
   mint: "m",
@@ -64,6 +74,22 @@ describe("BalanceStore", () => {
     expect(s.get().balance).toBeNull();
   });
 
+  it("follows the position poll while a live panel is open, and the minute poll once it closes", async () => {
+    const read = vi.fn(() => Promise.resolve(reading("5")));
+    const s = store(read);
+    const closeLive = s.open(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(BALANCE_LIVE_MS);
+    expect(read).toHaveBeenCalledTimes(2);
+    s.open();
+    closeLive();
+    await vi.advanceTimersByTimeAsync(BALANCE_LIVE_MS);
+    expect(read).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(BALANCE_POLL_MS);
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
   it("drops an answer that lands after the panels closed", async () => {
     let answer: (b: BurnBalance) => void = () => {};
     const s = store(() => new Promise((resolve) => (answer = resolve)));
@@ -71,6 +97,15 @@ describe("BalanceStore", () => {
     answer(reading("9"));
     await vi.advanceTimersByTimeAsync(0);
     expect(s.get().balance).toBeNull();
+  });
+});
+
+describe("who sees a balance", () => {
+  it("shows one for a Pro wallet that can sign, and for no one else", () => {
+    expect(spendBalancesShown(true, true)).toBe(true);
+    expect(spendBalancesShown(true, false)).toBe(false);
+    expect(spendBalancesShown(false, true)).toBe(false);
+    expect(spendBalancesShown(false, false)).toBe(false);
   });
 });
 
@@ -87,5 +122,23 @@ describe("header amounts", () => {
     expect(compactTokens("12400000000", 6)).toBe("12.4K");
     expect(compactTokens("1234567000000", 6)).toBe("1.23M");
     expect(compactTokens("4500000000000000", 6)).toBe("4.5B");
+  });
+  it("keeps a dash in the token header until the coin and SOL have both been read", () => {
+    expect(headerPairText({ tokenRaw: null, decimals: null, solLamports: null })).toEqual({
+      token: "–",
+      sol: "–",
+    });
+    expect(headerPairText({ tokenRaw: "12400000000", decimals: null, solLamports: "1500000000" })).toEqual({
+      token: "–",
+      sol: "1.5",
+    });
+    expect(headerPairText({ tokenRaw: "12400000000", decimals: 6, solLamports: "1500000000" })).toEqual({
+      token: "12.4K",
+      sol: "1.5",
+    });
+  });
+  it("refreshes a live balance on the position cadence, not faster", () => {
+    expect(BALANCE_LIVE_MS).toBe(POSITION_POLL_MS);
+    expect(BALANCE_LIVE_MS).toBeLessThan(BALANCE_POLL_MS);
   });
 });
