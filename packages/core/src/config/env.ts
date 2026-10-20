@@ -388,7 +388,10 @@ const envSchema = z.object({
   // called coin (user decision 2026-10-13). ~600 coins are called a day at 20+ pages each, ~125k+
   // credits a day. 15 (150 credits a minute) did not keep up: the backlog grew 575 -> 581 over 8
   // runs, so 30 (300 credits a minute, ~432k a day at most; user decision 2026-10-19, performance
-  // audit). 0 leaves every coin to Pump.fun's API.
+  // audit). 0 leaves every coin to Pump.fun's API. Newest-first reads (busy called coins, and coins
+  // users trade or narrow filters match) take at most a third of these (rounded down: 10 of 30),
+  // after the from-launch reads of called coins, in that order: traded, busy called, narrow-matched
+  // (user decision 2026-10-20 (Helius audit); tradeTapeJob.ts HELIUS_NEWEST_SHARE).
   TRADE_TAPE_HELIUS_PAGES_PER_RUN: z.coerce.number().int().nonnegative().default(30),
   // Pump.fun trade API calls per run (free, spaced 8 s, but it answers 429 quickly): the backlog,
   // coins Helius couldn't read, and a sample of uncalled coins. 0 turns it off. 6 (was 4, at 12 s):
