@@ -438,11 +438,17 @@ export function useFeeEstimate(
   settings: TradeSettings,
   side: "buy" | "sell" = "buy",
 ): FeeEstimate | null {
-  const [fee, setFee] = useState<FeeEstimate | null>(null);
+  const [fee, setFee] = useState<{
+    mint: string;
+    side: "buy" | "sell";
+    speed: "eco" | "turbo";
+    value: FeeEstimate;
+  } | null>(null);
   // The side matters for $ASDFASDFA only: buying it pays no Sacrifice, selling it does.
+  const speed = settings.speed;
   const params = new URLSearchParams({
     mint,
-    speed: settings.speed,
+    speed,
     side,
     ...feeParams(settings),
   }).toString();
@@ -450,7 +456,7 @@ export function useFeeEstimate(
     let live = true;
     const load = () =>
       api<FeeEstimate>(`/pro/trade/fee?${params}`)
-        .then((f) => live && setFee(f))
+        .then((f) => live && setFee({ mint, side, speed, value: f }))
         .catch(() => undefined);
     void load();
     const timer = setInterval(() => {
@@ -460,8 +466,8 @@ export function useFeeEstimate(
       live = false;
       clearInterval(timer);
     };
-  }, [params]);
-  return fee;
+  }, [params, mint, side, speed]);
+  return shownFee(mint, side, speed, fee);
 }
 
 /** How long the buy amount must sit still before it is quoted: typing doesn't quote every keystroke. */
@@ -472,7 +478,7 @@ const QUOTE_SETTLE_MS = 500;
  * Jupiter quote each, so a typed amount is quoted only once it has settled. Null `mint`: none.
  */
 export function useSwapCosts(mint: string | null, refSol: number): SwapCostEstimate | null {
-  const [costs, setCosts] = useState<SwapCostEstimate | null>(null);
+  const [costs, setCosts] = useState<{ mint: string; value: SwapCostEstimate } | null>(null);
   const wanted = String(Math.round(refSol * 1e9));
   const [ref, setRef] = useState(wanted);
   useEffect(() => {
@@ -484,9 +490,10 @@ export function useSwapCosts(mint: string | null, refSol: number): SwapCostEstim
     // No coin: nothing to quote (the caller isn't showing a buy).
     if (!mint) return;
     let live = true;
+    const asked = mint;
     const load = () =>
-      api<SwapCostEstimate>(`/pro/trade/costs?${new URLSearchParams({ mint, refLamports: ref })}`)
-        .then((c) => live && setCosts(c))
+      api<SwapCostEstimate>(`/pro/trade/costs?${new URLSearchParams({ mint: asked, refLamports: ref })}`)
+        .then((c) => live && setCosts({ mint: asked, value: c }))
         .catch(() => undefined);
     void load();
     const timer = setInterval(() => {
@@ -497,7 +504,7 @@ export function useSwapCosts(mint: string | null, refSol: number): SwapCostEstim
       clearInterval(timer);
     };
   }, [mint, ref]);
-  return costs;
+  return shownQuote(mint, costs);
 }
 
 /** GET /pro/trade/sale-quote: what a sale of `units` raw coins would get, lamports. */
@@ -512,7 +519,7 @@ export interface SaleQuote {
  * waits, so the preview can scale it. Null `mint` or `units`: nothing is quoted.
  */
 export function useSaleQuote(mint: string | null, units: bigint | null): SaleQuote | null {
-  const [quote, setQuote] = useState<SaleQuote | null>(null);
+  const [quote, setQuote] = useState<{ mint: string; value: SaleQuote } | null>(null);
   const wanted = units !== null && units > 0n ? units.toString() : null;
   const [ref, setRef] = useState(wanted);
   useEffect(() => {
@@ -523,9 +530,10 @@ export function useSaleQuote(mint: string | null, units: bigint | null): SaleQuo
   useEffect(() => {
     if (!mint || !ref) return;
     let live = true;
+    const asked = mint;
     const load = () =>
-      api<SaleQuote>(`/pro/trade/sale-quote?${new URLSearchParams({ mint, units: ref })}`)
-        .then((q) => live && setQuote(q))
+      api<SaleQuote>(`/pro/trade/sale-quote?${new URLSearchParams({ mint: asked, units: ref })}`)
+        .then((q) => live && setQuote({ mint: asked, value: q }))
         .catch(() => undefined);
     void load();
     const timer = setInterval(() => {
@@ -536,7 +544,7 @@ export function useSaleQuote(mint: string | null, units: bigint | null): SaleQuo
       clearInterval(timer);
     };
   }, [mint, ref]);
-  return quote;
+  return shownQuote(mint, quote);
 }
 
 /**
@@ -885,6 +893,12 @@ export interface BuiltTrade {
   sacrifice?: SacrificeView;
   /** The build, signed by the API: sent back with the signed trade, so any API instance takes it. */
   buildToken?: string;
+  /**
+   * A sell preset: the raw units the build sold, and the balance it read them from. The page checks
+   * the units are that percent of that balance before it asks the wallet to sign.
+   */
+  inputAmount?: string;
+  inputBalance?: string;
 }
 
 export type TradeStage = "building" | "signing" | "sending" | "confirming";
@@ -1290,6 +1304,60 @@ export function tradeProblem(tx: Uint8Array, owner: string, trade: TradeCheck): 
   }
 }
 
+/** `pct` percent of a raw balance; all of it at 100. The API's sellShare counts the same way. */
+export function shareOf(raw: bigint, pct: number): bigint {
+  if (pct >= 100) return raw;
+  return (raw * BigInt(Math.round(pct * 100))) / 10_000n;
+}
+
+/**
+ * A quote kept in a hook, shown only for the coin it was read for. A read for the previous coin
+ * must not price this one while the next request is in flight.
+ */
+export function shownQuote<T>(mint: string | null, quote: { mint: string; value: T } | null): T | null {
+  return mint !== null && quote?.mint === mint ? quote.value : null;
+}
+
+/** A fee read, shown only for the coin, side and speed it was made for. */
+export function shownFee(
+  mint: string,
+  side: "buy" | "sell",
+  speed: "eco" | "turbo",
+  quote: { mint: string; side: "buy" | "sell"; speed: "eco" | "turbo"; value: FeeEstimate } | null,
+): FeeEstimate | null {
+  return quote && quote.mint === mint && quote.side === side && quote.speed === speed ? quote.value : null;
+}
+
+/**
+ * Whether `message` is a swap outside the slippage it was built with. The same codes the API
+ * matches (proTrade.ts slippageMiss): Jupiter 6001 / 0x1771, Pump.fun 6002 and 6003, PumpSwap 6042.
+ */
+export function slippageMiss(message: string): boolean {
+  if (
+    /SlippageToleranceExceeded|TooMuchSolRequired|TooLittleSolReceived|ExceededSlippage|under the quoted minimum/i.test(
+      message,
+    )
+  )
+    return true;
+  if (/0x1771|0x1772|0x1773|0x179a/i.test(message)) return true;
+  return /(?:^|[^0-9])(6001|6002|6003|6042)(?:[^0-9]|$)/.test(message);
+}
+
+/** The signed trade landed and reverted: the price moved past the slippage set when it was sent. */
+export const SLIPPAGE_LANDED =
+  "The price moved past your slippage. Nothing was bought or sold. Try again, or raise the slippage.";
+
+/** The price moved before the trade was sent. */
+export const SLIPPAGE_UNSENT =
+  "The price moved past your slippage. Nothing was sent. Try again, or raise the slippage.";
+
+/** What the panel says when the chain reports the signature failed. Not a fill, and not a timeout. */
+export function landedFailureMessage(error?: string, reason?: string): string {
+  if (reason === "slippage" || (error ? slippageMiss(error) : false)) return SLIPPAGE_LANDED;
+  if (error && /Nothing was bought or sold\.$/.test(error)) return error;
+  return `The trade failed on chain${error ? ` (${error})` : ""}. Nothing was bought or sold.`;
+}
+
 /** The API's one trade per second per wallet (sales of 100% exempt), checked here first. */
 export const TRADE_COOLDOWN_MS = 1_000;
 
@@ -1312,10 +1380,18 @@ const STATUS_POLL_MS = 1_200;
 const CONFIRM_GIVE_UP_MS = 90_000;
 /**
  * The longest the panel waits on a build (the API retries a busy chain or Jupiter itself) and on
- * one status poll. Never on the send: a send that times out may still have gone out.
+ * one status poll. A send that takes longer than SEND_WAIT_MS is watched by its signature instead
+ * of spinning: the request may have gone out, so the wait is not reported as a slippage miss.
  */
 export const BUILD_TIMEOUT_MS = 45_000;
 export const STATUS_TIMEOUT_MS = 8_000;
+/** How long /send may sit unanswered before the signature we already know is polled. */
+export const SEND_WAIT_MS = 20_000;
+/**
+ * After an unanswered send, how long to watch a signature that has not been seen at all. Once it
+ * is seen, the full confirm window applies: it may still land, and a retry would be a second trade.
+ */
+const UNCLEAR_SEND_POLL_MS = 20_000;
 /**
  * A blockhash lives about 60-80 seconds from the build: a signature that took longer than this is
  * built and signed afresh rather than sent to expire.
@@ -1336,6 +1412,8 @@ async function buildTrade(input: {
   side: "buy" | "sell";
   amount: bigint;
   all?: boolean;
+  /** A sell preset's percent. The API reads the balance and sells this share of it. */
+  percent?: number;
   settings: TradeSettings;
   sacrificeNote?: string | null;
 }): Promise<BuiltTrade> {
@@ -1347,6 +1425,7 @@ async function buildTrade(input: {
     speed: input.settings.speed,
     ...feeParams(input.settings),
     ...(input.all ? { all: true } : {}),
+    ...(input.percent !== undefined ? { percent: input.percent } : {}),
   });
   try {
     // Two-factor, when the user chose it for this side (or this size): the API asks, we prompt.
@@ -1392,6 +1471,60 @@ export function privyUnreachable(e: unknown): boolean {
  * One trade, start to finish: build (the API checks it by simulation), sign in the wallet, send
  * through Sender, then wait for it to land. Resolves with the signature once confirmed.
  */
+/** /send, given up after SEND_WAIT_MS. A timeout throws; the signature may still have gone out. */
+async function postSend(body: unknown): Promise<{ signature: string }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      post<{ signature: string }>("/pro/trade/send", body),
+      new Promise<{ signature: string }>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new DOMException("The operation timed out.", "TimeoutError")),
+          SEND_WAIT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Poll /status until the signature confirms, fails, expires, or the wait runs out. A failure is
+ * never a fill. Slippage is its own sentence; a timeout stays "still waiting" or "lost touch".
+ */
+async function confirmTrade(signature: string, uncertain: boolean): Promise<string> {
+  const started = Date.now();
+  let seen = false;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, STATUS_POLL_MS));
+    // A poll that hangs (an API restart) is given up on and asked again, so the give-up below
+    // still comes on time.
+    const s = await api<{ state: string; error?: string; reason?: string }>(
+      `/pro/trade/status/${encodeURIComponent(signature)}`,
+      { signal: AbortSignal.timeout(STATUS_TIMEOUT_MS) },
+    ).catch(() => ({ state: "unknown" }) as { state: string; error?: string; reason?: string });
+    if (s.state === "confirmed") return signature;
+    if (s.state === "failed") throw new TradeError(landedFailureMessage(s.error, s.reason), signature);
+    if (s.state === "expired")
+      throw new TradeExpiredError(
+        "The trade didn't land in time and has expired. Nothing changed.",
+        signature,
+      );
+    if (s.state === "pending") seen = true;
+    // Unseen after an unanswered send: stop soon, and say it may have landed. Once the chain has
+    // seen it, wait the full window so a retry isn't a second trade of one that's still in flight.
+    const limit = !uncertain || seen ? CONFIRM_GIVE_UP_MS : UNCLEAR_SEND_POLL_MS;
+    if (Date.now() - started > limit)
+      throw new TradeError(
+        uncertain && !seen
+          ? "Lost touch with the server while sending. It may still land: check your wallet before trading again."
+          : "Still waiting on the chain. Check your wallet before trading again.",
+        signature,
+      );
+  }
+}
+
 export async function runTrade(
   input: {
     owner: string;
@@ -1400,31 +1533,56 @@ export async function runTrade(
     amount: bigint;
     /** A sale of the whole balance, as the chain has it when the trade is built. */
     all?: boolean;
+    /** A sell preset's percent of the balance the API reads at build time. */
+    percent?: number;
     settings: TradeSettings;
     /** The trade's Sacrifice line, for the two-factor prompt (sacrificeLine). */
     sacrificeNote?: string | null;
   },
   onStage: (stage: TradeStage, built?: BuiltTrade) => void,
 ): Promise<string> {
+  // Slippage, speed and MEV as they were when Buy or Sell was pressed. A rebuild after a slow
+  // signature uses these, not a setting changed while the wallet was open, and the send uses the
+  // same speed the build tipped for.
+  const settings: TradeSettings = { ...input.settings };
+  const asked = { ...input, settings };
   // The wallet first: if it isn't here there's no point building anything.
-  const { account, sign, name } = await accountFor(input.owner);
+  const { account, sign, name } = await accountFor(asked.owner);
   const { ownTokenAccounts, ownWrappedSolAccounts } = await import("./solanaPda");
   // Built and signed again, once, when the wallet took so long that the blockhash is nearly spent:
-  // sent, it would only expire.
+  // sent, it would only expire. The slippage is not widened.
   let built: BuiltTrade;
   let signedBytes: Uint8Array | undefined;
   for (let attempt = 0; ; attempt++) {
     onStage("building");
-    built = await buildTrade(input);
+    built = await buildTrade(asked);
+    let amount = asked.amount;
+    let all = asked.all;
+    if (
+      asked.percent !== undefined &&
+      built.inputAmount &&
+      built.inputBalance &&
+      /^\d+$/.test(built.inputAmount) &&
+      /^\d+$/.test(built.inputBalance)
+    ) {
+      const balance = BigInt(built.inputBalance);
+      const sold = BigInt(built.inputAmount);
+      if (shareOf(balance, asked.percent) !== sold)
+        throw new TradeError(
+          "The trade built for you looks wrong (its amount isn't the percent you asked for), so it wasn't signed.",
+        );
+      amount = sold;
+      all = asked.percent >= 100;
+    }
     const unsigned = fromBase64(built.transaction);
-    const problem = tradeProblem(unsigned, input.owner, {
-      side: input.side,
-      amount: input.amount,
-      all: input.all,
-      slippageBps: Math.round(input.settings.slippagePct * 100),
-      ownWrappedSol: ownWrappedSolAccounts(input.owner),
-      ownCoinAccounts: ownTokenAccounts(input.owner, input.mint),
-      ...(built.via ? { ownViaAccounts: ownTokenAccounts(input.owner, built.via) } : {}),
+    const problem = tradeProblem(unsigned, asked.owner, {
+      side: asked.side,
+      amount,
+      all,
+      slippageBps: Math.round(settings.slippagePct * 100),
+      ownWrappedSol: ownWrappedSolAccounts(asked.owner),
+      ownCoinAccounts: ownTokenAccounts(asked.owner, asked.mint),
+      ...(built.via ? { ownViaAccounts: ownTokenAccounts(asked.owner, built.via) } : {}),
     });
     if (problem)
       throw new TradeError(`The trade built for you looks wrong (${problem}), so it wasn't signed.`);
@@ -1466,50 +1624,36 @@ export async function runTrade(
   onStage("sending", built);
   let sent: { signature: string };
   try {
-    sent = await post<{ signature: string }>("/pro/trade/send", {
+    sent = await postSend({
       transaction: toBase64(bytes),
-      speed: input.settings.speed,
-      mevProtect: input.settings.mevProtect,
+      speed: settings.speed,
+      mevProtect: settings.mevProtect,
       ...(built.buildToken ? { buildToken: built.buildToken } : {}),
     });
   } catch (e) {
     // The API refused it before Sender, or Sender refused it: nothing went out. Only the API's own
-    // word counts (a proxy's 502 during a restart could follow a send).
-    if (
+    // word counts (a proxy's 502 during a restart could follow a send). A slippage miss here was
+    // refused, not landed, so it stays distinct from one the chain reverted.
+    const notSent =
       e instanceof ApiError &&
-      ((e.body as { notSent?: unknown } | null)?.notSent === true || [401, 403, 404].includes(e.status))
-    )
+      ((e.body as { notSent?: unknown } | null)?.notSent === true || [401, 403, 404].includes(e.status));
+    if (notSent) {
+      if (e instanceof ApiError && slippageMiss(e.message)) throw new TradeError(SLIPPAGE_UNSENT);
       throw e;
-    // Anything else (the connection dropped, the API timed out) may have sent it.
-    throw new TradeError(
-      "Lost touch with the server while sending. It may still land: check your wallet before trading again.",
-      signature,
-    );
+    }
+    // The connection dropped, or /send sat unanswered. The signature may be on its way. Watch it
+    // before saying so: a landing is a fill or a revert, not a timeout, and not a second submit.
+    if (!signature)
+      throw new TradeError(
+        "Lost touch with the server while sending. It may still land: check your wallet before trading again.",
+      );
+    lastSentAt.set(asked.owner, Date.now());
+    onStage("confirming", built);
+    return confirmTrade(signature, true);
   }
-  lastSentAt.set(input.owner, Date.now());
+  lastSentAt.set(asked.owner, Date.now());
   onStage("confirming", built);
-  const started = Date.now();
-  for (;;) {
-    await new Promise((r) => setTimeout(r, STATUS_POLL_MS));
-    // A poll that hangs (an API restart) is given up on and asked again, so the give-up below
-    // still comes on time.
-    const s = await api<{ state: string; error?: string }>(
-      `/pro/trade/status/${encodeURIComponent(sent.signature)}`,
-      { signal: AbortSignal.timeout(STATUS_TIMEOUT_MS) },
-    ).catch(() => ({ state: "unknown" }) as { state: string; error?: string });
-    if (s.state === "confirmed") return sent.signature;
-    if (s.state === "failed")
-      throw new TradeError(
-        `The trade failed on chain${s.error ? ` (${s.error})` : ""}. Nothing was bought or sold.`,
-      );
-    if (s.state === "expired")
-      throw new TradeExpiredError("The trade didn't land in time and has expired. Nothing changed.");
-    if (Date.now() - started > CONFIRM_GIVE_UP_MS)
-      throw new TradeError(
-        "Still waiting on the chain. Check your wallet before trading again.",
-        sent.signature,
-      );
-  }
+  return confirmTrade(sent.signature, false);
 }
 
 /**

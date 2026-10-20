@@ -119,6 +119,20 @@ describe("Helius Sender", () => {
     );
     expect(turbo.searchParams.get("swqos_only")).toBeNull();
     expect(turbo.searchParams.get("mev-protect")).toBeNull();
+    // A base URL saved for Eco must not keep Turbo on the eco path, or drop the shield when it's on.
+    const fromEco = new URL(
+      senderUrl("https://sender.helius-rpc.com/fast?swqos_only=true&mev-protect=true", {
+        speed: "turbo",
+        mevProtect: true,
+      }),
+    );
+    expect(fromEco.searchParams.get("swqos_only")).toBeNull();
+    expect(fromEco.searchParams.get("mev-protect")).toBe("true");
+    const ecoOff = new URL(
+      senderUrl("https://sender.helius-rpc.com/fast?mev-protect=true", { speed: "eco", mevProtect: false }),
+    );
+    expect(ecoOff.searchParams.get("swqos_only")).toBe("true");
+    expect(ecoOff.searchParams.get("mev-protect")).toBeNull();
   });
 });
 

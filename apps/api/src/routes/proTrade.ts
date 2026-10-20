@@ -102,6 +102,11 @@ const buildSchema = z.object({
   speed: z.enum(["eco", "turbo"]),
   /** A sale of the whole balance, read fresh here (the panel's copy can be seconds old). */
   all: z.boolean().optional(),
+  /**
+   * A sell preset's percent of the balance, read fresh here. The panel's figure can be seconds
+   * old; 100 is the whole balance (closing), the same as `all`.
+   */
+  percent: z.number().int().min(1).max(100).optional(),
   /** The trader's own priority fee and Sender tip, lamports; left out, the going rate and the minimum. */
   priorityFeeLamports: z
     .string()
@@ -386,6 +391,21 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     return { tokensPerCredit, picks: await creditPicks.picks };
   };
   const inFlight = new Map<string, InFlight>();
+  /**
+   * A signature this process already saw fail on chain (a slippage miss, most often). Kept so a
+   * later status read that misses the recent cache can't call that landing expired or still pending:
+   * the trader would retry a trade that already landed, or think a landed one was still open.
+   */
+  const failures = new Map<string, { reason: "slippage" | "rejected"; error: string; at: number }>();
+  const rememberFailure = (signature: string, error: string) => {
+    const now = Date.now();
+    if (failures.size > 2_000)
+      for (const [s, f] of failures)
+        if (now - f.at > RETIRED_KEEP_MS || failures.size > 2_000) failures.delete(s);
+    const failure = { ...landedFailure(error), at: now };
+    failures.set(signature, failure);
+    return { reason: failure.reason, error: failure.error };
+  };
   /** Signatures a /send is recording and sending right now (not yet in `inFlight`). */
   const sending = new Set<string>();
   const senderHealth = new SenderHealth();
@@ -534,7 +554,11 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const parsed = buildSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
     const body = parsed.data;
-    const closing = body.side === "sell" && body.all === true;
+    if (body.percent !== undefined && body.side !== "sell")
+      return reply.code(400).send({ error: "A percent is for a sale." });
+    // A percent is taken off the balance read below, not the panel's copy. 100% closes, as `all` does.
+    const closing =
+      body.side === "sell" && (body.percent !== undefined ? body.percent >= 100 : body.all === true);
     if (!closing) {
       const left = cooldown.left(wallet);
       if (left > 0) return tooSoon(reply, left);
@@ -550,11 +574,17 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       return;
     try {
       let amount = BigInt(body.amount);
-      if (body.side === "sell" && body.all) {
+      // The balance a percent (or a 100% sale) was taken from, returned so the page can check the
+      // build sells that share and not some other amount.
+      let inputBalance: string | undefined;
+      if (body.side === "sell" && (body.all || body.percent !== undefined)) {
         const balance = await rpc.getTokenBalance(wallet, body.mint);
         if (!balance) throw new TransientError("couldn't read the balance");
         if (balance.raw === 0n) return reply.code(422).send({ error: "You don't hold any of this coin." });
-        amount = balance.raw;
+        inputBalance = balance.raw.toString();
+        amount = body.percent !== undefined ? sellShare(balance.raw, body.percent) : balance.raw;
+        if (amount <= 0n)
+          return reply.code(422).send({ error: "That share of your balance is too small to sell." });
       }
       // A buy the wallet plainly can't pay for, said plainly: a new wallet starts with no SOL, and
       // some nodes won't simulate a transaction whose payer doesn't exist yet. Unread is no verdict.
@@ -638,6 +668,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       });
       return {
         ...built,
+        ...(inputBalance !== undefined ? { inputAmount: amount.toString(), inputBalance } : {}),
         buildToken,
         quietSign: await quietSign(rpc, wallet, body.mint, body.side),
         sacrifice: sacrificeView(sacrifice),
@@ -1010,8 +1041,15 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       // history search is slower. "Not seen" there proves nothing for an older one, so expiry is
       // only ever concluded from a history search below.
       let status = await rpc.getSignatureStatus(signature, { searchHistory: false });
-      if (!status) return { state: "unknown" };
+      if (!status) {
+        const earlier = failures.get(signature);
+        if (earlier) return { state: "failed", reason: earlier.reason, error: earlier.error };
+        return { state: "unknown" };
+      }
       if (!status.seen) {
+        // A landing we already saw fail stays a failure. Expiry is only for a signature never seen.
+        const earlier = failures.get(signature);
+        if (earlier) return { state: "failed", reason: earlier.reason, error: earlier.error };
         // Past its blockhash's life and never seen: it won't land. The height is read first
         // and the status again after it, so a landing in between can't read as expired.
         const flight =
@@ -1033,14 +1071,23 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       if (status.error) {
         inFlight.delete(signature);
         void settle(signature, "failed");
-        return { state: "failed", error: status.error };
+        // The balance may have moved (a fee, or a fill the error doesn't describe): the next
+        // position read must not answer with the pre-trade cache.
+        forgetPositions(wallet);
+        const failure = rememberFailure(signature, status.error);
+        return { state: "failed", ...failure };
       }
       if (status.confirmed) {
         inFlight.delete(signature);
+        failures.delete(signature);
         void settle(signature, "confirmed");
         forgetPositions(wallet);
         return { state: "confirmed" };
       }
+      // Seen earlier as a failure, and this read hasn't confirmed it since: still a failure.
+      // A cache miss must not turn a landed revert into "pending" or, past the blockhash, "expired".
+      const earlier = failures.get(signature);
+      if (earlier) return { state: "failed", reason: earlier.reason, error: earlier.error };
       return { state: "pending" };
     },
   );
@@ -1205,7 +1252,17 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       )
       .catch(() => null);
     const unseen = live.filter(([signature, f], i) => {
-      if (!statuses?.[i]?.seen) return true;
+      const st = statuses?.[i];
+      // Landed and reverted (slippage, most often): stop resending the same bytes, and don't
+      // treat the sighting as a fill. A wider slippage is never built from here.
+      if (st && st.seen && st.error) {
+        rememberFailure(signature, st.error);
+        inFlight.delete(signature);
+        forgetPositions(f.wallet);
+        void settle(signature, "failed");
+        return false;
+      }
+      if (!st?.seen) return true;
       inFlight.delete(signature);
       forgetPositions(f.wallet);
       return false;
@@ -1346,6 +1403,40 @@ export async function quietSign(
   }
 }
 
+/**
+ * A percent of a raw balance, the same way the panel's sell presets count it (shareOf): all of it
+ * at 100. The build uses this on the balance it just read, not the figure the page was showing.
+ */
+export function sellShare(raw: bigint, percent: number): bigint {
+  if (percent >= 100) return raw;
+  return (raw * BigInt(Math.round(percent * 100))) / 10_000n;
+}
+
+/**
+ * Whether `message` is a swap that would execute outside the slippage the trade was built with.
+ * Jupiter's SlippageToleranceExceeded is 6001 (0x1771). Pump.fun's buy and sell misses are 6002
+ * and 6003. PumpSwap's is 6042 (0x179a). The RPC reports the program error as JSON
+ * (`{"Custom":6001}`), which is not the log line "custom program error: 0x1771".
+ */
+export function slippageMiss(message: string): boolean {
+  if (
+    /SlippageToleranceExceeded|TooMuchSolRequired|TooLittleSolReceived|ExceededSlippage|under the quoted minimum/i.test(
+      message,
+    )
+  )
+    return true;
+  if (/0x1771|0x1772|0x1773|0x179a/i.test(message)) return true;
+  return /(?:^|[^0-9])(6001|6002|6003|6042)(?:[^0-9]|$)/.test(message);
+}
+
+/** The price moved before anything was signed: nothing went out. */
+export const SLIPPAGE_UNSENT =
+  "The price moved past your slippage. Nothing was sent. Try again, or raise the slippage.";
+
+/** The signed trade landed and reverted because the price moved. It is not a fill. */
+export const SLIPPAGE_LANDED =
+  "The price moved past your slippage. Nothing was bought or sold. Try again, or raise the slippage.";
+
 /** The guard's refusal in the trader's words, where it can be said plainly. */
 export function plainRefusal(message: string, side: "buy" | "sell" = "buy"): string {
   if (/insufficient lamports/i.test(message))
@@ -1355,8 +1446,19 @@ export function plainRefusal(message: string, side: "buy" | "sell" = "buy"): str
     return side === "sell"
       ? "You hold fewer tokens than that sale. Refresh and try again."
       : "Not enough SOL in your wallet for this trade and its fees.";
-  if (/6042|6002|6003|0x1771|SlippageToleranceExceeded|under the quoted minimum/i.test(message))
-    return "The price moved past your slippage. Try again, or raise the slippage.";
+  if (slippageMiss(message)) return SLIPPAGE_UNSENT;
   if (/AccountNotFound/i.test(message)) return "Your wallet has no SOL yet (the account doesn't exist).";
   return `The trade was refused before signing: ${message.replace(/^refused: /, "")}`;
+}
+
+/**
+ * A signature the chain has already landed as a failure. Slippage stays its own sentence (nothing
+ * was bought or sold, and nothing is retried at a wider slippage). Anything else keeps its cause:
+ * a timeout or a drop is not rewritten into a slippage miss.
+ */
+export function landedFailure(error: string): { reason: "slippage" | "rejected"; error: string } {
+  if (slippageMiss(error)) return { reason: "slippage", error: SLIPPAGE_LANDED };
+  const plain = plainRefusal(error);
+  if (plain.startsWith("The trade was refused before signing:")) return { reason: "rejected", error };
+  return { reason: "rejected", error: `${plain} Nothing was bought or sold.` };
 }

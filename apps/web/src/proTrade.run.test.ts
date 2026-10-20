@@ -36,9 +36,17 @@ vi.mock("./burn", () => ({
   }),
 }));
 
-const { runTrade, TradeError, privyUnreachable, BUILD_TIMEOUT_MS, SIGN_FRESH_MS } =
-  await import("./proTrade");
+const {
+  runTrade,
+  TradeError,
+  privyUnreachable,
+  BUILD_TIMEOUT_MS,
+  SIGN_FRESH_MS,
+  SLIPPAGE_LANDED,
+  SLIPPAGE_UNSENT,
+} = await import("./proTrade");
 const { DEFAULT_TRADE_SETTINGS } = await import("./proTrade");
+const { ApiError } = await import("./api");
 
 const input = {
   owner,
@@ -134,6 +142,65 @@ describe("runTrade", () => {
     expect(polls).toBe(2);
     // The send itself has no time limit: a send that times out may have gone out.
     expect(h.post.mock.calls[0]).toHaveLength(2);
+  });
+
+  it("reports a landed slippage miss as a miss, not a fill", async () => {
+    h.signTransaction.mockImplementation(async () => [{ signedTransaction: signed(1) }]);
+    h.api.mockImplementation(async (path: string) =>
+      path === "/pro/trade/build"
+        ? built
+        : { state: "failed", reason: "slippage", error: '{"InstructionError":[2,{"Custom":6001}]}' },
+    );
+    const err = await runTrade(input, () => {}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TradeError);
+    if (!(err instanceof TradeError)) return;
+    expect(err.message).toBe(SLIPPAGE_LANDED);
+    expect(err.signature).toBeTruthy();
+    expect(err.message).not.toMatch(/Nothing was sent|timed out/);
+  });
+
+  it("keeps a dropped send that then lands as a fill, and one that reverts as slippage", async () => {
+    h.signTransaction.mockImplementation(async () => [{ signedTransaction: signed(1) }]);
+    h.post.mockRejectedValue(new DOMException("The operation timed out.", "TimeoutError"));
+    h.api.mockImplementation(async (path: string) =>
+      path === "/pro/trade/build" ? built : { state: "confirmed" },
+    );
+    await expect(runTrade(input, () => {})).resolves.toEqual(expect.any(String));
+
+    h.api.mockImplementation(async (path: string) =>
+      path === "/pro/trade/build"
+        ? built
+        : { state: "failed", error: '{"InstructionError":[2,{"Custom":6001}]}' },
+    );
+    await expect(runTrade(input, () => {})).rejects.toThrow(SLIPPAGE_LANDED);
+  });
+
+  it("says a sender refusal sent nothing, even when the refusal names slippage", async () => {
+    h.signTransaction.mockImplementation(async () => [{ signedTransaction: signed(1) }]);
+    h.post.mockRejectedValue(
+      new ApiError(409, `Helius Sender refused the trade: custom program error: 0x1771`, { notSent: true }),
+    );
+    await expect(runTrade(input, () => {})).rejects.toThrow(SLIPPAGE_UNSENT);
+    h.post.mockRejectedValue(
+      new ApiError(409, "Helius Sender refused the trade: HTTP 400", { notSent: true }),
+    );
+    await expect(runTrade(input, () => {})).rejects.toThrow(/Helius Sender refused the trade: HTTP 400/);
+  });
+
+  it("says an unanswered send that the chain never sees may still land, not that slippage missed", async () => {
+    h.signTransaction.mockImplementation(async () => [{ signedTransaction: signed(1) }]);
+    h.post.mockRejectedValue(new DOMException("The operation timed out.", "TimeoutError"));
+    h.api.mockImplementation(async (path: string) => {
+      if (path === "/pro/trade/build") return built;
+      h.now += 30_000;
+      return { state: "unknown" };
+    });
+    const err = await runTrade(input, () => {}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TradeError);
+    if (!(err instanceof TradeError)) return;
+    expect(err.message).toMatch(/Lost touch with the server while sending/);
+    expect(err.message).not.toMatch(/slippage/);
+    expect(err.signature).toBeTruthy();
   });
 
   it("says Privy is unreachable when Privy's signing can't reach Privy", async () => {
