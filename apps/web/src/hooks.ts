@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_URL, api, type Card, type LiveMarket } from "./api";
 import { cachedGet, peek } from "./cache";
 import { beginWait } from "./loadTracker";
+import { READING_LAG_MS } from "./marketClock";
 import { sessionToken } from "./session";
 
 export interface Loadable<T> {
@@ -481,8 +482,6 @@ export function useNudgeStream(
 
 /** How often an open feed asks for fresh market caps. The API keeps each reading under 8s old. */
 const LIVE_TICK_MS = 10_000;
-/** How far DexScreener's figures run behind the market (see AlertCard's CALL_READING_LAG_MS). */
-const DEX_LAG_MS = 60_000;
 /** The least time between two ticks when the tokens on screen change. */
 const MIN_RETICK_MS = 3_000;
 
@@ -565,7 +564,7 @@ export function useLiveMarketCaps(
       // up to a minute before its stamp, so the feed's only wins once it is stamped a minute later.
       const cardAt = card.currentMarketCapAt ? new Date(card.currentMarketCapAt).getTime() : 0;
       const readAt = new Date(reading.at).getTime();
-      if (readAt + (reading.source === "curve" ? DEX_LAG_MS : 0) <= cardAt) return card;
+      if (readAt + (reading.source === "curve" ? READING_LAG_MS : 0) <= cardAt) return card;
       return {
         ...card,
         currentMarketCapUsd: reading.marketCapUsd,

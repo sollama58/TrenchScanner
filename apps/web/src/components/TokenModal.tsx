@@ -65,6 +65,7 @@ import {
   linkedReading,
   nowReading,
   nowReadingAge,
+  nowReadingMarketAt,
   recordedPeakOf,
   SAFETY_MAX_FRESH_WALLET_PCT,
   SAFETY_MAX_LARGEST_HOLDER_PCT,
@@ -102,6 +103,7 @@ import { TradePanel, solText, tokensText } from "./TradePanel";
 import { PRO_MODE_PERKS } from "./ProModeCard";
 import { summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
+import { lagsLead, preferLiveChartNow, scanReplacesMarketCap, type ChartNow } from "../marketClock";
 import { SectionBoundary } from "./SectionBoundary";
 import { useBackupCandles } from "../backupCandles";
 import { reportClientError } from "../clientErrors";
@@ -689,10 +691,19 @@ function useCoinScans(mint: string, follow: boolean): CoinScans {
   };
 }
 
+/** Hour and minute, for a figure's own clock next to the live chart's. */
+function clockHm(t: number): string {
+  return new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 /**
  * The modal's card, kept current on its own: "Now" from the live tick (as the feed's cards are),
  * and the coin's newest scan (useCoinScans) laid over it when it is newer than the card copy's, so
  * the safety verdict, peak and "Now" follow the scans whatever opened the modal.
+ *
+ * The scan still updates the safety reading whenever it is newer. Its market cap replaces "Now"
+ * only when that figure is the newer one: a curve price stays until the scan is stamped a minute
+ * later (scanReplacesMarketCap), because the scan's stamp is when the row was written.
  */
 function useFreshCard(cardIn: Card, scans: Snapshot[] | null): Card {
   const withScan = useMemo(() => {
@@ -702,7 +713,8 @@ function useFreshCard(cardIn: Card, scans: Snapshot[] | null): Card {
     const had = cardIn.latestSnapshot ? Date.parse(cardIn.latestSnapshot.takenAt) : 0;
     if (!(snapAt > had)) return cardIn;
     const mcapAt = cardIn.currentMarketCapAt ? Date.parse(cardIn.currentMarketCapAt) : 0;
-    const newerMcap = snap.marketCapUsd != null && snapAt > mcapAt;
+    const newerMcap =
+      snap.marketCapUsd != null && scanReplacesMarketCap(mcapAt, cardIn.currentMarketCapSource, snapAt);
     return {
       ...cardIn,
       latestSnapshot: snap,
@@ -735,6 +747,8 @@ function TokenBody({
   const utility = useContext(UtilityContext);
   const scans = useCoinScans(cardIn.token.mintAddress, !utility);
   const card = useFreshCard(cardIn, scans.snapshots);
+  // The chart's live tail, reported by ChartCard. Adopted as "Now" only while it is the line drawn.
+  const [chartNow, setChartNow] = useState<ChartNow | null>(null);
   const reads = scans.nextRead === null ? null : { nextRead: scans.nextRead, everyMs: SCAN_READ_MS };
   const mint = card.token.mintAddress;
   const s = card.snapshot;
@@ -748,13 +762,39 @@ function TokenBody({
     card.kind === "curated" ? (curated?.alertedAt ?? card.matchedAt) : card.matchedAt,
   );
   const alertMcap = s.marketCapUsd;
-  const nowMcap = nowReading(card);
+  const cardNowUsd = nowReading(card);
+  const cardMarketAt = nowReadingMarketAt(card);
+  // The chart's pool (after bonding) or curve is the price to the block. The card's "Now" is the
+  // live tick, which leaves graduated coins on DexScreener, so an open live chart leads.
+  const shownNow = preferLiveChartNow(
+    cardNowUsd != null && Number.isFinite(cardMarketAt) ? { usd: cardNowUsd, atMs: cardMarketAt } : null,
+    chartNow,
+  );
+  const nowMcap = shownNow?.usd ?? null;
+  const fromChart = shownNow != null && chartNow?.adopt === true && shownNow.atMs === chartNow.atMs;
   const move = change(alertMcap, nowMcap);
   const { pct: recordedPeak } = recordedPeakOf(card);
   const peak = move !== null && move > 0 ? Math.max(recordedPeak ?? 0, move) : recordedPeak;
   const hasPeak = peak !== null && peak > 0;
   const label = tokenLabel(card.token);
-  const nowAge = nowReadingAge(card, nowMcap, now);
+  // shownNow.atMs is already the market time (a curve tick, or the card's dex stamp less its lag).
+  const nowAge =
+    shownNow == null
+      ? null
+      : nowReadingAge(
+          {
+            currentMarketCapAt: new Date(shownNow.atMs).toISOString(),
+            currentMarketCapSource: "curve",
+          },
+          shownNow.usd,
+          now,
+        );
+  const nowLagTitle =
+    shownNow != null && chartNow != null && lagsLead(shownNow.atMs, chartNow.atMs)
+      ? `Behind the live chart: this figure is from ${clockHm(shownNow.atMs)}, the chart from ${clockHm(chartNow.atMs)}`
+      : undefined;
+  const nowLagsChart = nowLagTitle != null;
+  const nowTitle = nowLagTitle ?? (fromChart ? "The chart's live price" : undefined);
   const what = utility
     ? "Scanned"
     : card.kind === "stream"
@@ -959,8 +999,16 @@ function TokenBody({
         <span className="num">{usd(alertMcap)}</span>
       </div>
       <div className={`tm-fig${nowAge !== null ? " aged" : ""}`}>
-        <label>Now{nowAge !== null && <span className="fig-age"> · {nowAge}</span>}</label>
-        <span className="num" title={nowAge !== null ? `Read ${nowAge} ago` : undefined}>
+        <label>
+          Now
+          {nowAge !== null && <span className="fig-age"> · {nowAge}</span>}
+          {nowLagsChart && (
+            <span className="lag-mark" title={nowLagTitle}>
+              <ClockIcon size={11} />
+            </span>
+          )}
+        </label>
+        <span className="num" title={nowTitle ?? (nowAge !== null ? `Read ${nowAge} ago` : undefined)}>
           {usd(nowMcap)}
         </span>
         {move !== null && (
@@ -1046,7 +1094,11 @@ function TokenBody({
 
   if (terminal) {
     const counts: Partial<Record<TermTab, number>> = {
-      holders: s.holderCount ?? undefined,
+      holders:
+        holders.listReading?.liveHolderCount ??
+        holders.listReading?.holderCount ??
+        s.holderCount ??
+        undefined,
       wallets: flagged.length || undefined,
     };
     const tabs = TERM_VIEWS.filter((x) => x.id !== side);
@@ -1150,6 +1202,7 @@ function TokenBody({
                   tradeSlot={tradeSlot}
                   plotHeight={plotH}
                   onCustomize={customizeMarks}
+                  onChartNow={setChartNow}
                 />
               </section>
               {side !== "none" && (
@@ -1315,7 +1368,14 @@ function TokenBody({
       {figs}
 
       <section id={`${ids}-chart`} className="tm-group" aria-label="Chart">
-        <ChartCard card={card} chart={chart} alertAt={alertAt} alertMcap={alertMcap} what={what} />
+        <ChartCard
+          card={card}
+          chart={chart}
+          alertAt={alertAt}
+          alertMcap={alertMcap}
+          what={what}
+          onChartNow={setChartNow}
+        />
         {profile.data?.flow && <FlowCard flow={profile.data.flow} now={now} />}
       </section>
 
@@ -2177,6 +2237,7 @@ export function ChartCard({
   tradeSlot,
   plotHeight,
   onCustomize,
+  onChartNow,
 }: {
   card: Card;
   chart: { data: TokenChart | null; error: Error | null };
@@ -2192,6 +2253,11 @@ export function ChartCard({
   plotHeight?: number;
   /** The page's own Customize, opened at the wallet marks (Pro); absent, the feed's opens here. */
   onCustomize?: () => void;
+  /**
+   * The chart's live clock, for the header's "Now". `adopt` only while the tail is the line drawn,
+   * so the header doesn't take a minute candle whose close was clamped to now.
+   */
+  onChartNow?: (now: ChartNow | null) => void;
 }) {
   const api = useTokenApi(card.token.mintAddress);
   // A second source of candles (user asks 2026-10-19): when the API has none for the coin (Pump.fun
@@ -2484,6 +2550,8 @@ export function ChartCard({
         ticks,
         // Whether the view runs to the latest reading (Model View's window can end before it).
         live: bounds.live,
+        // The line's newest point is a live tick, not a candle close clamped to now.
+        usesTail,
         latest: source[source.length - 1]!.v,
         latestAt: source[source.length - 1]!.t,
         // The candles in view for the volume lane, each stretch from one width only.
@@ -2513,6 +2581,18 @@ export function ChartCard({
     mint,
   ]);
   const view = built.view;
+  // The header's "Now" follows this tail only while it is the line (usesTail) and still streaming.
+  const chartNowReported = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onChartNow) return;
+    const streaming = isStreaming(tail);
+    const adopt = streaming && !!view?.live && !!view.usesTail && view.latest > 0;
+    const atMs = streaming ? tail.readAt : null;
+    const key = atMs == null ? "" : `${adopt ? view!.latest : ""}|${atMs}|${adopt ? 1 : 0}`;
+    if (chartNowReported.current === key) return;
+    chartNowReported.current = key;
+    onChartNow(atMs != null ? { usd: adopt ? view!.latest : null, atMs, adopt } : null);
+  }, [onChartNow, view, tail]);
 
   // The scans' buy and sell counts, for the buy share in the chart's readouts.
   const flow = useMemo<ScanFlow[]>(

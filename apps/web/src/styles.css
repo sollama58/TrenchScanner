@@ -1391,6 +1391,15 @@ img.avatar {
   letter-spacing: 0;
   font-weight: 500;
 }
+/* A figure that isn't on the lead clock: a clock, with the reason on hover. */
+.lag-mark {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  color: var(--muted);
+  cursor: help;
+  vertical-align: -2px;
+}
 .fig.stale > .num,
 .fig.stale .delta,
 .tm-fig.aged > .num,
@@ -12238,6 +12247,11 @@ img.tm-avatar {
 .tc-legend .up,
 .tc-detail .up {
   color: var(--good-ink);
+}
+/* The buy share's clock can be hovered; the rest of the legend stays out of the chart's way. */
+.tc-legend span.lags {
+  pointer-events: auto;
+  cursor: help;
 }
 .tc-legend .down,
 .tc-detail .down {
