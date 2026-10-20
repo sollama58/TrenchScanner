@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   largestHolderShare,
   RugCheckClient,
+  RUGCHECK_BREAKER_FAILURES,
   toProfile,
   withChainHolders,
   withoutVenueHolder,
@@ -331,6 +332,46 @@ describe("RugCheckClient.getProfileResult", () => {
     answer(429, { error: "rate limited" });
     const client = new RugCheckClient();
     await expect(client.getProfileResult(MINT)).resolves.toEqual({ status: "failed" });
+  });
+
+  it("stands down after a run of failures, probes once per stand-down, and a real answer closes it", async () => {
+    // A 403 (blocked), not a 5xx: it fails at once instead of retrying after a backoff.
+    let status = 403;
+    let sent = 0;
+    vi.stubGlobal("fetch", async () => {
+      sent += 1;
+      return new Response(JSON.stringify(status === 200 ? baseReport() : { error: "boom" }), { status });
+    });
+    let now = 1_000_000;
+    const client = new RugCheckClient({ now: () => now });
+    for (let i = 0; i < RUGCHECK_BREAKER_FAILURES; i++) {
+      await expect(client.getProfileResult(MINT)).resolves.toEqual({ status: "failed" });
+    }
+    expect(client.standingDown).toBe(true);
+    const before = sent;
+    await expect(client.getProfileResult(MINT)).resolves.toEqual({ status: "failed" });
+    expect(sent).toBe(before);
+
+    // The stand-down lapses: one probe goes out, fails, and the next stand-down is longer.
+    now += 30_000;
+    await client.getProfileResult(MINT);
+    expect(sent).toBeGreaterThan(before);
+    expect(client.standingDown).toBe(true);
+    now += 30_000;
+    expect(client.standingDown).toBe(true);
+
+    // The probe that answers closes it.
+    now += 30_000;
+    status = 200;
+    await expect(client.getProfileResult(MINT)).resolves.toMatchObject({ status: "found" });
+    expect(client.standingDown).toBe(false);
+  });
+
+  it("never stands down on 'not found' answers, however many", async () => {
+    answer(400, { error: "not found" });
+    const client = new RugCheckClient();
+    for (let i = 0; i < RUGCHECK_BREAKER_FAILURES + 2; i++) await client.getProfileResult(MINT);
+    expect(client.standingDown).toBe(false);
   });
 
   it("records nothing for a mint still queued at the deadline: never asked is not a failure", async () => {

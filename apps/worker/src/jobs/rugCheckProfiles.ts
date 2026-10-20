@@ -393,7 +393,16 @@ export async function resolveRugProfiles(
   // Started only once the awaited lookups are done, so they don't share RugCheck's rate with it.
   if (background.length > 0) {
     const refresh = fetchAndCache(background, rugCheck).then(
-      () => undefined,
+      (results) => {
+        // Held off like an awaited failure. Without it a stale mint whose refresh failed was
+        // still stale next cycle and went straight back out, every cycle RugCheck was failing.
+        const at = Date.now();
+        for (const mint of background) {
+          const status = results.get(mint)?.status;
+          if (status === "failed") lookupBackoff.fail(mint, at);
+          else if (status !== undefined) lookupBackoff.succeed(mint);
+        }
+      },
       (err: unknown) => logger.warn("background rugcheck refresh failed", { error: String(err) }),
     );
     backgroundRefresh = refresh;

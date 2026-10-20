@@ -1,4 +1,5 @@
 import { fetchJson, HttpError } from "./httpClient.js";
+import { RateGate } from "./rateGate.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import type { OnChainProfile } from "../types.js";
@@ -137,7 +138,27 @@ export type RugCheckProfileResult =
 
 export interface RugCheckClientOptions {
   baseUrl?: string;
+  /** Sustained requests a minute (default DEFAULT_RUGCHECK_REQUESTS_PER_MINUTE). */
+  requestsPerMinute?: number;
+  /** Requests that may go out back to back. */
+  burst?: number;
+  now?: () => number;
 }
+
+/**
+ * RugCheck's limit: its responses carry `x-rate-limit-limit: 15` and 30 requests fired at once
+ * all answered (checked 2026-10-20), so about 15 a second. Five lookups at a time at ~200 ms each
+ * reached 25 a second, past it, and nothing paced them. 10 a second with a burst of 10 leaves
+ * headroom and is still far above a steady cycle's handful of lookups.
+ */
+export const DEFAULT_RUGCHECK_REQUESTS_PER_MINUTE = 600;
+const DEFAULT_RUGCHECK_BURST = 10;
+
+/** Failed lookups in a row (no report and no "not found") that open the breaker. */
+export const RUGCHECK_BREAKER_FAILURES = 10;
+/** First stand-down once the breaker opens; doubles on each failed probe, up to the max. */
+const RUGCHECK_BREAKER_FIRST_MS = 30_000;
+const RUGCHECK_BREAKER_MAX_MS = 5 * 60_000;
 
 const TOP_N_FOR_CONCENTRATION = 10;
 /** A top-10 share past this (100%, plus rounding) means the report's shares don't share one supply. */
@@ -161,9 +182,30 @@ const SIDE_POOL_MAX_SHARE = 0.05;
 
 export class RugCheckClient {
   private readonly baseUrl: string;
+  private readonly gate: RateGate;
+  private readonly now: () => number;
+  /** Failures in a row since the last real answer - see standingDown. */
+  private failuresInRow = 0;
+  /** Until when lookups are answered "failed" without a request (epoch ms); 0 while closed. */
+  private downUntil = 0;
+  /** The current stand-down, doubled by each failed probe. */
+  private downMs = RUGCHECK_BREAKER_FIRST_MS;
+  /** A probe is out after a stand-down: every other lookup keeps standing down until it lands. */
+  private probing = false;
 
   constructor(options: RugCheckClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "https://api.rugcheck.xyz/v1";
+    this.now = options.now ?? Date.now;
+    this.gate = new RateGate({
+      name: "rugcheck",
+      perMinute: options.requestsPerMinute ?? DEFAULT_RUGCHECK_REQUESTS_PER_MINUTE,
+      burst: options.burst ?? DEFAULT_RUGCHECK_BURST,
+    });
+  }
+
+  /** Whether lookups are standing down after a run of failures. */
+  get standingDown(): boolean {
+    return this.probing || this.now() < this.downUntil;
   }
 
   /**
@@ -188,10 +230,47 @@ export class RugCheckClient {
    * same reason: only a definitive answer is safe to write to a cache.
    */
   async getProfileResult(mintAddress: string): Promise<RugCheckProfileResult> {
+    // A circuit breaker. A failed lookup is never cached (see RugCheckProfileResult), so while
+    // RugCheck was failing every cycle asked again for every mint it had no fresh answer for, each
+    // with a retry: 107k failed requests of 147k in one day (API usage panel, 2026-10-20), where a
+    // healthy day is a few a minute. Past RUGCHECK_BREAKER_FAILURES failures in a row, lookups fail
+    // at once without a request, one probe goes out per stand-down, and a real answer closes it.
+    // The screen fails closed on a failed lookup either way, so standing down loses nothing.
+    if (this.standingDown) return { status: "failed" };
+    const probe = this.failuresInRow >= RUGCHECK_BREAKER_FAILURES;
+    if (probe) this.probing = true;
+    const result = await this.lookup(mintAddress);
+    if (probe) this.probing = false;
+    if (result.status === "failed") {
+      this.failuresInRow += 1;
+      if (this.failuresInRow >= RUGCHECK_BREAKER_FAILURES) {
+        if (this.now() >= this.downUntil) {
+          logger.warn("rugcheck keeps failing - standing down lookups", {
+            failuresInRow: this.failuresInRow,
+            seconds: this.downMs / 1000,
+          });
+        }
+        if (probe) this.downMs = Math.min(RUGCHECK_BREAKER_MAX_MS, this.downMs * 2);
+        this.downUntil = this.now() + this.downMs;
+      }
+    } else {
+      this.failuresInRow = 0;
+      this.downUntil = 0;
+      this.downMs = RUGCHECK_BREAKER_FIRST_MS;
+    }
+    return result;
+  }
+
+  private async lookup(mintAddress: string): Promise<RugCheckProfileResult> {
     try {
       const report = await fetchJson<RugCheckReport>(`${this.baseUrl}/tokens/${mintAddress}/report`, {
         timeoutMs: 10_000,
         retries: 1,
+        // Paced, and a 429 pauses every lookup rather than only the one that got it.
+        gate: this.gate,
+        // At least a second's pause on a 429: the default half-second backoff sent the retry and
+        // the queued lookups straight back into the same window.
+        retryDelayMs: 1_000,
       });
       return { status: "found", profile: toProfile(mintAddress, report) };
     } catch (err) {
