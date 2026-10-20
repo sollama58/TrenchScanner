@@ -6,6 +6,15 @@ import {
   type ChartEventKind,
 } from "../chartEvents";
 
+const KIND_TITLE: Record<ChartEventKind, string> = {
+  alert: "An alert that is not a filter match or a model call",
+  screen: "When the coin first passed the safety screen",
+  filter: "The mark labeled Alert, where a filter caught the coin",
+  model: "Model alert, and each model's own call",
+  graduation: "When a graduated coin is marked",
+  scanned: "A coin opened from search, before it was alerted",
+};
+
 /**
  * Customize › Chart events, beside Chart wallet trades: which flags the token chart draws, and
  * whether filter matches and model calls collapse to the earliest one. Saved with the feed's
@@ -34,7 +43,7 @@ export function ChartEventsPicker() {
       <h4>Chart events</h4>
       <div role="group" aria-label="Event markers on token charts">
         {CHART_EVENT_KIND_OPTIONS.map((k) => (
-          <label key={k.kind} className="check">
+          <label key={k.kind} className="check" title={KIND_TITLE[k.kind]}>
             <input
               type="checkbox"
               checked={look.chartEventKinds.includes(k.kind)}

@@ -380,13 +380,13 @@ export function TradingChart({
   const marks = useMemo(() => atLiveEnd(marksIn, live ? slotsEnd : null), [marksIn, live, slotsEnd]);
   const trades = useMemo(() => atLiveEnd(tradesIn, live ? slotsEnd : null), [tradesIn, live, slotsEnd]);
 
-  // The baseline (#835): the trader's entry while they hold the coin, else the earliest marked
-  // moment (the first alert, filter or model; else the screen pass) at its own market cap or the
-  // chart's then, else where the chart starts.
+  // The baseline (#835): the trader's entry while they hold the coin, else the earliest event
+  // (a hidden screen pass still counts, so a graduated coin stays coloured from the pass) at its
+  // own market cap or the chart's then, else where the chart starts. The flag itself follows
+  // shownEvents.
   const lead = useMemo(
-    () =>
-      shownEvents.reduce<ChartEvent | undefined>((a, e) => (a === undefined || e.t < a.t ? e : a), undefined),
-    [shownEvents],
+    () => events.reduce<ChartEvent | undefined>((a, e) => (a === undefined || e.t < a.t ? e : a), undefined),
+    [events],
   );
   const ref = useMemo(() => {
     if (entry !== null && entry > 0) return { v: entry, label: "your entry" };
