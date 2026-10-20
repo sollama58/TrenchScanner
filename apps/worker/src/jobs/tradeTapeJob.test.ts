@@ -9,7 +9,9 @@ import {
   type PumpFunTradesPage,
 } from "@trenchscanner/core";
 import {
+  heliusNewestPagesPerRun,
   heliusPagesLeft,
+  pendingCalledCoins,
   resetTradeTapeState,
   runTradeTapeJob,
   saveTradeTapeProgress,
@@ -463,10 +465,14 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
       },
     };
     const none = pumpFunStub("none", []);
-    await runTradeTapeJob(
-      { helius, pumpFun: none.stub },
-      { heliusPagesPerRun: 50, pumpFunCallsPerRun: 0, now: () => NOW },
-    );
+    const opts = { heliusPagesPerRun: 50, pumpFunCallsPerRun: 0, now: () => NOW };
+    // A third of the run's pages at most (16 of 50), carried over to the next run.
+    const first = await runTradeTapeJob({ helius, pumpFun: none.stub }, opts);
+    expect(first.heliusNewestPages).toBe(16);
+    expect(await prisma.tokenTradeTape.findUnique({ where: { tokenId: busy.token.id } })).toMatchObject({
+      status: "failed",
+    });
+    await runTradeTapeJob({ helius, pumpFun: none.stub }, opts);
     expect(modes).toHaveLength(30);
     expect(modes.every(Boolean)).toBe(true);
     expect(await prisma.tokenTradeTape.findUnique({ where: { tokenId: busy.token.id } })).toMatchObject({
@@ -635,6 +641,328 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
     expect(calls.length).toBeGreaterThan(0);
     expect(await prisma.tokenTradeTape.findUnique({ where: { tokenId: older.token.id } })).toMatchObject({
       source: "pumpfun",
+    });
+  });
+});
+
+describe("heliusNewestPagesPerRun", () => {
+  it("leaves the newest-first reads a third of the run's pages, rounded down", () => {
+    expect(heliusNewestPagesPerRun(30)).toBe(10);
+    expect(heliusNewestPagesPerRun(50)).toBe(16);
+    expect(heliusNewestPagesPerRun(2)).toBe(0);
+  });
+});
+
+/**
+ * The newest-first reads' cap and order (user decision 2026-10-20, Helius audit), years past the
+ * other tests' coins so no other row is in their lookbacks.
+ */
+describe.skipIf(!dbAvailable)("trade tape job: newest-first reads", () => {
+  const BASE = Date.parse("2031-03-01T12:00:00Z");
+  const dev = "HYi9a633brCmNtqLgat8fDo8huRYuYpUxsoJhuSzJiaP";
+  const PRICES = { peak1hPriceUsd: 1, low1hPriceUsd: 1, lowBefore2xPriceUsd: 1, peak24hPriceUsd: 1 };
+  beforeEach(() => resetTradeTapeState());
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await prisma.tradingPosition.deleteMany({ where: { mint: { startsWith: TAG } } });
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
+  });
+
+  const token = (label: string) =>
+    prisma.token.create({ data: { mintAddress: `${TAG}-${label}`, symbol: "T" } });
+
+  async function seedCall(label: string, anchorMs: number, busy: boolean) {
+    const t = await token(label);
+    const row = await prisma.candidateOutcome.create({
+      data: {
+        tokenId: t.id,
+        anchorAt: new Date(anchorMs),
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 10_000,
+        ...PRICES,
+        features: {},
+        sampleKind: "emission",
+        labelRule: 4,
+        nextCheckAt: new Date(anchorMs),
+        finalizedAt: new Date(anchorMs + 30 * MIN),
+      },
+    });
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId: t.id,
+        candidateOutcomeId: row.id,
+        source: "model",
+        confidence: 0.5,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 10_000,
+        createdAt: new Date(anchorMs),
+      },
+    });
+    if (busy) {
+      await prisma.tokenTradeTape.create({
+        data: {
+          tokenId: t.id,
+          outcomeId: row.id,
+          anchorAt: new Date(anchorMs),
+          reason: "called",
+          status: "failed",
+          source: "helius:busy",
+          windowEnd: new Date(anchorMs + 30 * MIN),
+          retryAt: new Date(anchorMs),
+        },
+      });
+    }
+    return t;
+  }
+
+  async function seedTraded(label: string, openedAtMs: number) {
+    const t = await token(label);
+    await prisma.tradingPosition.create({
+      data: {
+        userId: `${TAG}-trader`,
+        mint: t.mintAddress,
+        sourceKind: "model",
+        sourceRef: "rules",
+        sourceLabel: "Model: Rules",
+        signalAt: new Date(openedAtMs),
+        status: "closed",
+        exitPlan: {},
+        openedAt: new Date(openedAtMs),
+      },
+    });
+    return t;
+  }
+
+  async function seedFilter(label: string) {
+    const user = await prisma.user.create({ data: { walletAddress: `${TAG}-${label}` } });
+    const filter = await prisma.userFilter.create({ data: { userId: user.id, name: label } });
+    return async (t: { id: string }, atMs: number) => {
+      const snapshot = await prisma.tokenSnapshot.create({
+        data: { tokenId: t.id, takenAt: new Date(atMs), priceUsd: 1, marketCapUsd: 10_000, score: 70 },
+      });
+      await prisma.match.create({
+        data: {
+          userId: user.id,
+          filterId: filter.id,
+          tokenId: t.id,
+          snapshotId: snapshot.id,
+          matchedAt: new Date(atMs),
+          score: 70,
+        },
+      });
+    };
+  }
+
+  /** Decision moments on `n` coins over the day before `atMs`: a filter is narrow under 5% of them. */
+  async function seedEvents(label: string, n: number, atMs: number) {
+    for (let i = 0; i < n; i += 1) {
+      const t = await token(`${label}-${i}`);
+      await prisma.candidateOutcome.create({
+        data: {
+          tokenId: t.id,
+          anchorAt: new Date(atMs - (i + 1) * MIN),
+          anchorPriceUsd: 1,
+          anchorMcapUsd: 10_000,
+          ...PRICES,
+          features: {},
+          sampleKind: "event",
+          nextCheckAt: new Date(atMs),
+        },
+      });
+    }
+  }
+
+  /** One buy a page, newest first back from the window's end, `pages` pages (endless when absent). */
+  function newestHelius(pagesOf: (mint: string) => number | undefined) {
+    const asked: { mint: string; newest: boolean }[] = [];
+    const helius: TradeTapeDeps["helius"] = {
+      gtfaUsable: true,
+      takeCallStats: () => ({}),
+      getMintTransactionsPage: async (m, opts) => {
+        asked.push({ mint: m, newest: Boolean(opts?.newest) });
+        const i = opts?.paginationToken ? Number(opts.paginationToken) : 0;
+        const pages = pagesOf(m);
+        return {
+          status: "ok",
+          paginationToken: pages !== undefined && i + 1 >= pages ? null : String(i + 1),
+          txs: [
+            {
+              blockTime: opts!.untilBlockTime! - i,
+              transaction: { signatures: [`${m}-${i}`], message: { accountKeys: [dev, "ata"] } },
+              meta: {
+                err: null,
+                preTokenBalances: [],
+                postTokenBalances: [
+                  { accountIndex: 1, mint: m, owner: dev, uiTokenAmount: { amount: "1000000", decimals: 6 } },
+                ],
+                preBalances: [2e9, 0],
+                postBalances: [1e9, 0],
+              },
+            },
+          ],
+        };
+      },
+    };
+    return { helius, asked };
+  }
+
+  it("reads traded coins first, then busy called ones, then narrow filters' matches, and skips a broad filter's", async () => {
+    const at = BASE - 60 * MIN;
+    const traded = await seedTraded("o-traded", at);
+    const busy = await seedCall("o-busy", at, true);
+    const narrow = await token("o-narrow");
+    const broad = await token("o-broad");
+    const broad2 = await token("o-broad2");
+    // 40 coins with a decision moment: a filter matching 2 coins (5%) is broad, 1 is narrow.
+    await seedEvents("o-event", 40, BASE);
+    await (
+      await seedFilter("o-narrow-filter")
+    )(narrow, at);
+    const broadMatch = await seedFilter("o-broad-filter");
+    await broadMatch(broad, at);
+    await broadMatch(broad2, at + MIN);
+
+    const ours = new Set([traded, busy, narrow, broad, broad2].map((t) => t.mintAddress));
+    const { helius, asked } = newestHelius((m) => (ours.has(m) ? 1 : 0));
+    const none = pumpFunStub("none", []);
+    const meta = await runTradeTapeJob(
+      { helius, pumpFun: none.stub },
+      { heliusPagesPerRun: 30, pumpFunCallsPerRun: 0, now: () => BASE },
+    );
+    expect(asked.filter((a) => ours.has(a.mint))).toEqual([
+      { mint: traded.mintAddress, newest: true },
+      { mint: busy.mintAddress, newest: true },
+      { mint: narrow.mintAddress, newest: true },
+    ]);
+    expect(meta.heliusNewestPages).toBe(asked.length);
+
+    const tapeOf = (t: { id: string }) => prisma.tokenTradeTape.findUnique({ where: { tokenId: t.id } });
+    // New to the tape: no outcome row, anchored at the first buy or match, no stop cause.
+    expect(await tapeOf(traded)).toMatchObject({
+      reason: "traded",
+      outcomeId: null,
+      source: "helius",
+      anchorAt: new Date(at),
+      windowEnd: new Date(at + 30 * MIN),
+      trades: 1,
+      wallets: 1,
+    });
+    expect(await tapeOf(narrow)).toMatchObject({ reason: "matched", outcomeId: null, trades: 1 });
+    expect(await tapeOf(busy)).toMatchObject({ reason: "called", source: "helius" });
+    expect(await tapeOf(broad)).toBeNull();
+    expect(await tapeOf(broad2)).toBeNull();
+    const wallet = await prisma.tokenWalletActivity.findFirst({ where: { tokenId: traded.id } });
+    expect(wallet).toMatchObject({ wallet: dev, buys: 1, dumpedIntoStop: false });
+
+    // A later call on a traded coin still gets its own read from the launch.
+    const row = await prisma.candidateOutcome.create({
+      data: {
+        tokenId: traded.id,
+        anchorAt: new Date(BASE),
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 10_000,
+        ...PRICES,
+        features: {},
+        sampleKind: "emission",
+        nextCheckAt: new Date(BASE),
+        finalizedAt: new Date(BASE + 30 * MIN),
+      },
+    });
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId: traded.id,
+        candidateOutcomeId: row.id,
+        source: "model",
+        confidence: 0.5,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 10_000,
+        createdAt: new Date(BASE),
+      },
+    });
+    const called = await pendingCalledCoins(BASE + 40 * MIN);
+    expect(called.find((c) => c.tokenId === traded.id)).toMatchObject({
+      reason: "called",
+      refOutcomeId: row.id,
+      failedSource: null,
+    });
+  });
+
+  it("caps newest-first reads at a third of the run's pages, after the from-launch reads", async () => {
+    const base = BASE + 30 * 24 * 60 * MIN;
+    const busy = await seedCall("c-busy", base - 60 * MIN, true);
+    const { helius, asked } = newestHelius(() => undefined);
+    const none = pumpFunStub("none", []);
+    const opts = { heliusPagesPerRun: 30, pumpFunCallsPerRun: 0, now: () => base };
+    const first = await runTradeTapeJob({ helius, pumpFun: none.stub }, opts);
+    expect(first).toMatchObject({ heliusPages: 10, heliusNewestPages: 10 });
+
+    // A new call while the busy coin is part read: read from its launch first, with the run's pages
+    // it needs (25), and the busy coin gets what is left (5), not its third.
+    const fresh = await seedCall("c-fresh", base - 40 * MIN, false);
+    const launchAt = base - 43 * MIN;
+    const fromLaunch: TradeTapeDeps["helius"] = {
+      ...helius,
+      getMintTransactionsPage: async (m, o) => {
+        if (o?.newest || m !== fresh.mintAddress) return helius.getMintTransactionsPage(m, o);
+        asked.push({ mint: m, newest: false });
+        const i = o?.paginationToken ? Number(o.paginationToken) : 0;
+        return {
+          status: "ok",
+          paginationToken: i + 1 >= 25 ? null : String(i + 1),
+          txs: [
+            {
+              blockTime: launchAt / 1000 + 75 * i,
+              transaction: { signatures: [`fresh-${i}`], message: { accountKeys: [dev, "ata"] } },
+              meta: {
+                err: null,
+                preTokenBalances:
+                  i === 0
+                    ? []
+                    : [
+                        {
+                          accountIndex: 1,
+                          mint: m,
+                          owner: dev,
+                          uiTokenAmount: { amount: String(i * 1e6), decimals: 6 },
+                        },
+                      ],
+                postTokenBalances: [
+                  {
+                    accountIndex: 1,
+                    mint: m,
+                    owner: dev,
+                    uiTokenAmount: { amount: String((i + 1) * 1e6), decimals: 6 },
+                  },
+                ],
+                preBalances: [10e9, 0],
+                postBalances: [9e9, 0],
+              },
+            },
+          ],
+        };
+      },
+    };
+    asked.length = 0;
+    const second = await runTradeTapeJob({ helius: fromLaunch, pumpFun: none.stub }, opts);
+    expect(second).toMatchObject({ heliusPages: 30, heliusNewestPages: 5, done: 1 });
+    expect(asked.slice(0, 25).every((a) => a.mint === fresh.mintAddress && !a.newest)).toBe(true);
+    expect(asked.slice(25).every((a) => a.mint === busy.mintAddress && a.newest)).toBe(true);
+    expect(await prisma.tokenTradeTape.findUnique({ where: { tokenId: fresh.id } })).toMatchObject({
+      status: "done",
+      reason: "called",
+      calls: 25,
+    });
+
+    // Nothing from the launch left: still a third, until the busy coin's 30 pages are read.
+    const third = await runTradeTapeJob({ helius, pumpFun: none.stub }, opts);
+    expect(third).toMatchObject({ heliusPages: 10, heliusNewestPages: 10 });
+    const fourth = await runTradeTapeJob({ helius, pumpFun: none.stub }, opts);
+    expect(fourth).toMatchObject({ heliusNewestPages: 5, partial: 1 });
+    expect(await prisma.tokenTradeTape.findUnique({ where: { tokenId: busy.id } })).toMatchObject({
+      status: "partial",
+      source: "helius",
+      calls: 30,
     });
   });
 });

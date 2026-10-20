@@ -101,7 +101,9 @@ const earlySql = Prisma.sql`(a."firstBuyAt" IS NOT NULL AND a."firstBuyAt" < t."
  * join) and the subquery is kept whole (OFFSET 0): as a plain join the planner hashed the whole
  * CandidateOutcome table, features and all, in both of wallet-risk's whole-tape reads every hour
  * - the read the Wallet Score added on 10-16, after which the job went from 13 s to 75 s
- * (performance audit 2026-10-17).
+ * (performance audit 2026-10-17). Only the called and sampled coins' tapes: a coin read for a
+ * user's trade or match (tradeTapeJob.ts, user decision 2026-10-20) has no outcome row and no stop,
+ * so it would count as a buy that neither won nor dumped.
  */
 export const tapeOutcomesJoinSql = Prisma.sql`JOIN (
     SELECT t."tokenId", t."anchorAt", o."hit2xIn1h", o."hit4xIn1h", o."disqualified"
@@ -112,7 +114,7 @@ export const tapeOutcomesJoinSql = Prisma.sql`JOIN (
       WHERE c."id" = t."outcomeId"
       LIMIT 1
     ) o ON true
-    WHERE t."status" IN ('done', 'partial')
+    WHERE t."status" IN ('done', 'partial') AND t."reason" IN ('called', 'sample')
     OFFSET 0
   ) t ON t."tokenId" = a."tokenId"`;
 

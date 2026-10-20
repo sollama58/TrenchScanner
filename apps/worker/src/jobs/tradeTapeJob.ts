@@ -53,13 +53,26 @@ const logger = createLogger("trade-tape");
  *    the oldest of the backlog (working from the other end), and one coin in SAMPLE_EVERY from the
  *    uncalled sample. Without Helius it takes every coin.
  * Each lane works one coin at a time and carries it over to the next run until it's read, and a
- * shutdown saves both lanes' reads (TradeTapeProgress) for the next process to finish.
+ * shutdown saves the lanes' reads (TradeTapeProgress) for the next process to finish.
  *
- * When no coin is left for Helius to read from the launch, its pages go to the busy coins (audit
- * 2026-10-19: the lane sat idle in half its runs while ~580 busy coins waited on Pump.fun's few
- * calls a minute and mostly aged out unread): newest first from the window's end, up to
- * HELIUS_NEWEST_MAX_PAGES, stored as partial like Pump.fun's capped reads, or as a whole tape when
- * the read meets the launch side the hand-off had already read.
+ * When no coin is left for Helius to read from the launch, its spare pages are read newest first
+ * from the window's end (audit 2026-10-19: the lane sat idle in half its runs while ~580 busy
+ * coins waited on Pump.fun's few calls a minute and mostly aged out unread), up to
+ * HELIUS_NEWEST_MAX_PAGES a coin, stored as partial like Pump.fun's capped reads, or as a whole
+ * tape when the read meets the launch side the hand-off had already read. These reads take at most
+ * a third of the run's pages (HELIUS_NEWEST_SHARE), go to the coins in this order, and have their
+ * own slot, so a new call is read from its launch first, with the whole budget, while one of them
+ * is part read (user decision 2026-10-20, Helius audit):
+ *  1. coins a user is trading (a TradingPosition opened within LOOKBACK_MS), anchored at the first
+ *     position's first buy (openedAt);
+ *  2. the busy called coins (BUSY_SOURCE), oldest first (Pump.fun takes the newest);
+ *  3. coins a narrow filter matched in the last NARROW_SPAN_MS (a Match, anchored at matchedAt): one
+ *     that matched fewer distinct coins in that span than NARROW_SHARE of the coins with a decision
+ *     moment (CandidateOutcome "event"). A broad filter's matches are left out.
+ * The traded and matched coins are new to the tape (reason "traded" or "matched"): read once their
+ * window has closed, only while they have no tape and no call (a call reads its coin from the
+ * launch, and takes over a tape read for these), with no outcome row (no stop cause; roles at the
+ * anchor). The wallet scores leave their tapes out (walletRiskJob.ts tapeOutcomesJoinSql).
  */
 
 /** Called coins this far back are read (the backlog goes to Pump.fun). */
@@ -89,6 +102,19 @@ export const HELIUS_BUSY_MARGIN = 2;
  * trades back from the window's end, 300 credits, half what Pump.fun's partial reads hold.
  */
 export const HELIUS_NEWEST_MAX_PAGES = 30;
+/**
+ * Newest-first reads take at most one page in this many of the lane's run (rounded down: 30 pages a
+ * run, at most 10), user decision 2026-10-20 (Helius audit). The rest stays the from-launch reads'.
+ */
+export const HELIUS_NEWEST_SHARE = 3;
+/** Pages a run's newest-first reads may take, of the lane's `pagesPerRun`. */
+export const heliusNewestPagesPerRun = (pagesPerRun: number) => Math.floor(pagesPerRun / HELIUS_NEWEST_SHARE);
+/** A filter is narrow when it matched fewer distinct coins over this span... */
+const NARROW_SPAN_MS = 24 * 3_600_000;
+/** ...than this share of the distinct coins with a decision moment ("event") over it. */
+export const NARROW_SHARE = 0.05;
+/** Traded or matched coins asked for at a time (newest first). */
+const NEWEST_PICK_LIMIT = 50;
 /**
  * Hand-offs whose launch-side pages are kept for the newest-first read to meet (a few hundred KB
  * each). One that meets them makes a whole tape of the two halves.
@@ -128,9 +154,13 @@ const heliusFromLaunch = (c: TapeCoin) => c.failedSource !== BUSY_SOURCE && c.fa
 export interface TapeCoin {
   tokenId: string;
   mint: string;
-  reason: "called" | "sample";
-  /** The reference row: roles at its anchor; and every row the tape gives a stop cause. */
-  refOutcomeId: string;
+  /** "traded" and "matched": a coin read newest first for a user's trade or narrow filter. */
+  reason: "called" | "sample" | "traded" | "matched";
+  /**
+   * The reference row: roles at its anchor; and every row the tape gives a stop cause. Null, with
+   * no rows, for a traded or matched coin: roles at anchorAtMs, no stop cause.
+   */
+  refOutcomeId: string | null;
   anchorAtMs: number;
   outcomeIds: string[];
   windowEndMs: number;
@@ -172,7 +202,10 @@ export function heliusPagesLeft(pageEnds: readonly number[], windowEndMs: number
 }
 
 interface LaneState {
+  /** Helius from the launch. */
   helius: Progress | null;
+  /** Helius newest first (HELIUS_NEWEST_SHARE): its own slot, so a new call never waits on it. */
+  heliusNewest: Progress | null;
   pumpFun: Progress | null;
   pumpFunPausedUntil: number;
   coinsStarted: number;
@@ -180,6 +213,7 @@ interface LaneState {
 
 const state: LaneState = {
   helius: null,
+  heliusNewest: null,
   pumpFun: null,
   pumpFunPausedUntil: 0,
   coinsStarted: 0,
@@ -189,16 +223,21 @@ const handoffs = new Map<string, Handoff>();
 /** Test hook. */
 export function resetTradeTapeState(): void {
   state.helius = null;
+  state.heliusNewest = null;
   state.pumpFun = null;
   state.pumpFunPausedUntil = 0;
   state.coinsStarted = 0;
   handoffs.clear();
 }
 
-const LANES = ["helius", "pumpFun"] as const;
+const LANES = ["helius", "heliusNewest", "pumpFun"] as const;
+type Lane = (typeof LANES)[number];
+/** Whether a lane other than `lane` has the coin open. */
+const heldElsewhere = (tokenId: string, lane: Lane) =>
+  LANES.some((l) => l !== lane && state[l]?.coin.tokenId === tokenId);
 
 /**
- * Saves both lanes' reads in progress, for the next process's first run (restoreProgress): a deploy
+ * Saves the lanes' reads in progress, for the next process's first run (restoreProgress): a deploy
  * mid-read cost a busy Pump.fun read up to 15 runs and a Helius read up to 1,000 credits, started
  * again from the first page. Called by the worker's shutdown once the jobs have settled.
  */
@@ -219,23 +258,34 @@ export async function saveTradeTapeProgress(): Promise<number> {
 }
 
 /**
- * Takes a saved read back into its idle lane while its coin still waits (`waiting`), and drops one
- * whose coin no longer does. Asked every run, not only the first: in a deploy the new process
- * starts before the old one saves, and its lanes may be busy then.
+ * Takes a saved read back into its idle lane while its coin still waits (`waiting`, or for a traded
+ * or matched coin, while it has no tape), and drops one whose coin no longer does. Asked every run,
+ * not only the first: in a deploy the new process starts before the old one saves, and its lanes
+ * may be busy then.
  */
 async function restoreProgress(waiting: TapeCoin[]): Promise<void> {
   const rows = await prisma.tradeTapeProgress.findMany();
   const done: string[] = [];
   for (const row of rows) {
-    const lane = LANES.find((l) => l === row.lane);
-    const coin = waiting.find((c) => c.tokenId === row.tokenId);
+    const saved = row.data as unknown as Progress;
+    // A newest-first read saved from the one Helius slot before it had two.
+    const lane = saved.newest && row.lane === "helius" ? "heliusNewest" : LANES.find((l) => l === row.lane);
+    let coin = waiting.find((c) => c.tokenId === row.tokenId);
+    if (
+      !coin &&
+      (saved.coin?.reason === "traded" || saved.coin?.reason === "matched") &&
+      !(await prisma.tokenTradeTape.findUnique({
+        where: { tokenId: row.tokenId },
+        select: { tokenId: true },
+      }))
+    )
+      coin = saved.coin;
     if (!lane || !coin) {
       done.push(row.lane);
       continue;
     }
-    const other = state[lane === "helius" ? "pumpFun" : "helius"];
-    if (state[lane] || other?.coin.tokenId === coin.tokenId) continue;
-    state[lane] = { ...(row.data as unknown as Progress), coin };
+    if (state[lane] || heldElsewhere(coin.tokenId, lane)) continue;
+    state[lane] = { ...saved, coin };
     done.push(row.lane);
   }
   if (done.length > 0) await prisma.tradeTapeProgress.deleteMany({ where: { lane: { in: done } } });
@@ -243,7 +293,14 @@ async function restoreProgress(waiting: TapeCoin[]): Promise<void> {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Called coins whose window has closed and whose tape isn't read, newest first. */
+/** A tape's failed source, for a called coin: none from a done read, or a traded or matched one's. */
+const failedSourceOf = (t: { reason: string; status: string; source: string | null } | null) =>
+  t?.status === "failed" && t.reason !== "traded" && t.reason !== "matched" ? t.source : null;
+
+/**
+ * Called coins whose window has closed and whose tape isn't read, newest first. A tape read for a
+ * user's trade or match (no outcome row, maybe partial) gives way to the call's.
+ */
 export async function pendingCalledCoins(nowMs: number): Promise<TapeCoin[]> {
   const alerts = await prisma.curatedAlert.findMany({
     where: {
@@ -253,12 +310,15 @@ export async function pendingCalledCoins(nowMs: number): Promise<TapeCoin[]> {
         OR: [
           { tradeTape: { is: null } },
           { tradeTape: { is: { status: "failed", retryAt: { lte: new Date(nowMs) } } } },
+          { tradeTape: { is: { reason: { in: ["traded", "matched"] } } } },
         ],
       },
     },
     select: {
       tokenId: true,
-      token: { select: { mintAddress: true, tradeTape: { select: { source: true } } } },
+      token: {
+        select: { mintAddress: true, tradeTape: { select: { reason: true, status: true, source: true } } },
+      },
       candidateOutcome: { select: { id: true, anchorAt: true, finalizedAt: true } },
     },
     orderBy: { createdAt: "desc" },
@@ -272,7 +332,7 @@ export async function pendingCalledCoins(nowMs: number): Promise<TapeCoin[]> {
     if (!a.candidateOutcome) continue;
     const entry = byToken.get(a.tokenId) ?? {
       mint: a.token.mintAddress,
-      failedSource: a.token.tradeTape?.source ?? null,
+      failedSource: failedSourceOf(a.token.tradeTape),
       rows: [],
     };
     if (!entry.rows.some((r) => r.id === a.candidateOutcome!.id)) {
@@ -331,6 +391,69 @@ export async function pendingSampleCoin(nowMs: number): Promise<TapeCoin | null>
   };
 }
 
+/** A traded or matched coin from its query's row. */
+const newestCoin = (
+  reason: "traded" | "matched",
+  r: { tokenId: string; mintAddress: string; anchorAt: Date },
+): TapeCoin => ({
+  tokenId: r.tokenId,
+  mint: r.mintAddress,
+  reason,
+  refOutcomeId: null,
+  anchorAtMs: r.anchorAt.getTime(),
+  outcomeIds: [],
+  windowEndMs: r.anchorAt.getTime() + TAPE_WINDOW_AFTER_ANCHOR_MS,
+});
+
+/**
+ * Coins a user is trading (a real position: TradingPosition, the trading bot's, one row a user and
+ * coin), with no tape and no call, whose window from the first position's first buy has closed;
+ * newest first. TradingPosition is small (the bot's positions), so read without an index.
+ */
+export async function pendingTradedCoins(nowMs: number): Promise<TapeCoin[]> {
+  const rows = await prisma.$queryRaw<{ tokenId: string; mintAddress: string; anchorAt: Date }[]>`
+    SELECT t.id AS "tokenId", t."mintAddress", MIN(p."openedAt") AS "anchorAt"
+    FROM "TradingPosition" p JOIN "Token" t ON t."mintAddress" = p."mint"
+    WHERE p."openedAt" >= ${new Date(nowMs - LOOKBACK_MS)}
+      AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" a WHERE a."tokenId" = t.id)
+      AND NOT EXISTS (SELECT 1 FROM "TokenTradeTape" tt WHERE tt."tokenId" = t.id)
+    GROUP BY t.id, t."mintAddress"
+    HAVING MIN(p."openedAt") <= ${new Date(nowMs - TAPE_WINDOW_AFTER_ANCHOR_MS - SETTLE_MS)}
+    ORDER BY MIN(p."openedAt") DESC
+    LIMIT ${NEWEST_PICK_LIMIT}`;
+  return rows.map((r) => newestCoin("traded", r));
+}
+
+/**
+ * Coins a narrow filter matched over the last NARROW_SPAN_MS (see NARROW_SHARE), with no tape and no
+ * call, whose window from the first such match has closed; newest first. On the indexed matchedAt
+ * and (sampleKind, anchorAt).
+ */
+export async function pendingMatchedCoins(nowMs: number): Promise<TapeCoin[]> {
+  const since = new Date(nowMs - NARROW_SPAN_MS);
+  const rows = await prisma.$queryRaw<{ tokenId: string; mintAddress: string; anchorAt: Date }[]>`
+    WITH events AS (
+      SELECT COUNT(DISTINCT co."tokenId") AS n FROM "CandidateOutcome" co
+      WHERE co."sampleKind" = 'event' AND co."anchorAt" >= ${since} AND co."anchorAt" <= ${new Date(nowMs)}
+    ), broad AS (
+      SELECT m."filterId" FROM "Match" m
+      WHERE m."matchedAt" >= ${since} AND m."matchedAt" <= ${new Date(nowMs)}
+      GROUP BY m."filterId"
+      HAVING COUNT(DISTINCT m."tokenId") >= ${NARROW_SHARE} * (SELECT n FROM events)
+    )
+    SELECT t.id AS "tokenId", t."mintAddress", MIN(m."matchedAt") AS "anchorAt"
+    FROM "Match" m JOIN "Token" t ON t.id = m."tokenId"
+    WHERE m."matchedAt" >= ${since}
+      AND m."filterId" NOT IN (SELECT "filterId" FROM broad)
+      AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" a WHERE a."tokenId" = t.id)
+      AND NOT EXISTS (SELECT 1 FROM "TokenTradeTape" tt WHERE tt."tokenId" = t.id)
+    GROUP BY t.id, t."mintAddress"
+    HAVING MIN(m."matchedAt") <= ${new Date(nowMs - TAPE_WINDOW_AFTER_ANCHOR_MS - SETTLE_MS)}
+    ORDER BY MIN(m."matchedAt") DESC
+    LIMIT ${NEWEST_PICK_LIMIT}`;
+  return rows.map((r) => newestCoin("matched", r));
+}
+
 /** A row's stop on the grade training reads: its rule-4 re-grade when it has one. */
 export function stoppedAtOf(row: { stoppedAt: Date | null; rule4Grade: Prisma.JsonValue }): Date | null {
   const r4 = row.rule4Grade;
@@ -362,6 +485,15 @@ async function markFailed(coin: TapeCoin, source: string, calls: number, retryMs
   });
 }
 
+/** A tape's closing read undone (tradeTapeClosing.ts), for a tape stored over another. */
+const NOT_CLOSED = {
+  closeStatus: null,
+  closeRetryAt: null,
+  closedThrough: null,
+  closeTrades: null,
+  closeCalls: null,
+};
+
 /** Builds the per-wallet rows and the stop causes from a finished read, and stores them. */
 export async function storeTape(
   coin: TapeCoin,
@@ -376,10 +508,14 @@ export async function storeTape(
   nowMs: number,
 ): Promise<{ wallets: number; stopCauses: number }> {
   const trades = orderTrades(read.trades).filter((t) => t.atMs <= coin.windowEndMs);
-  const outcomes = await prisma.candidateOutcome.findMany({
-    where: { id: { in: coin.outcomeIds } },
-    select: { id: true, anchorAt: true, stoppedAt: true, rule4Grade: true },
-  });
+  // None for a traded or matched coin: roles at its anchor, no stop cause.
+  const outcomes =
+    coin.outcomeIds.length === 0
+      ? []
+      : await prisma.candidateOutcome.findMany({
+          where: { id: { in: coin.outcomeIds } },
+          select: { id: true, anchorAt: true, stoppedAt: true, rule4Grade: true },
+        });
   const ref = outcomes.find((o) => o.id === coin.refOutcomeId);
   const refStop = ref ? stoppedAtOf(ref) : null;
   const summaries = summarizeTape(trades, {
@@ -424,7 +560,8 @@ export async function storeTape(
       await tx.tokenTradeTape.upsert({
         where: { tokenId: coin.tokenId },
         create: { tokenId: coin.tokenId, ...tape },
-        update: tape,
+        // A call's tape over a traded or matched one is closed afresh (tradeTapeClosing.ts).
+        update: { ...tape, ...NOT_CLOSED },
       });
       if (read.creator) {
         await tx.token.updateMany({
@@ -506,6 +643,8 @@ interface RunCounts {
   throttled: number;
   /** Coins left to Pump.fun as too busy for Helius (BUSY_SOURCE), also counted in failed. */
   handedOff: number;
+  /** Of heliusPages, the newest-first reads' (at most a third, HELIUS_NEWEST_SHARE). */
+  heliusNewestPages: number;
 }
 
 async function finish(
@@ -543,22 +682,53 @@ async function finish(
   counts.stopCauses += stored.stopCauses;
 }
 
+/**
+ * The traded and matched coins a run's newest-first reads may pick. The traded are asked before the
+ * lanes start (a small table), so the lane's first pick doesn't wait on a query while the Pump.fun
+ * lane picks the same busy coin; the matched once a run, when reached.
+ */
+interface NewestPicks {
+  traded: TapeCoin[];
+  matched?: TapeCoin[];
+}
+
+/**
+ * The next coin to read newest first, in the order of user decision 2026-10-20 (file header), taken
+ * off its list at once (the Pump.fun lane picks from `called` alongside).
+ */
+async function nextNewestCoin(called: TapeCoin[], picks: NewestPicks, nowMs: number) {
+  const take = (list: TapeCoin[], coin: TapeCoin | undefined) => {
+    if (coin) list.splice(list.indexOf(coin), 1);
+    return coin;
+  };
+  const free = (c: TapeCoin) => !heldElsewhere(c.tokenId, "heliusNewest");
+  const traded = take(picks.traded, picks.traded.find(free));
+  if (traded) return traded;
+  // Oldest first: Pump.fun takes the newest.
+  const busy = take(
+    called,
+    [...called].reverse().find((c) => c.failedSource === BUSY_SOURCE && free(c)),
+  );
+  if (busy) return busy;
+  picks.matched ??= await pendingMatchedCoins(nowMs);
+  return take(picks.matched, picks.matched.find(free)) ?? null;
+}
+
 async function runHeliusLane(
   deps: TradeTapeDeps,
   called: TapeCoin[],
-  budget: number,
+  picks: NewestPicks,
+  pagesPerRun: number,
   counts: RunCounts,
   now: () => number,
 ) {
+  let budget = pagesPerRun;
+  // From the launch, newest first (`called` is), so new calls are read within minutes and the
+  // backlog with what's left of the budget.
   while (budget > 0 && deps.helius.gtfaUsable) {
     if (!state.helius) {
-      const free = called.filter((c) => state.pumpFun?.coin.tokenId !== c.tokenId);
-      // Newest first (`called` is), so new calls are read within minutes and the backlog with
-      // what's left of the budget. Then the busy coins, oldest first (Pump.fun takes the newest),
-      // newest first from their window's end.
-      const fromLaunch = free.find(heliusFromLaunch);
-      const coin = fromLaunch ?? [...free].reverse().find((c) => c.failedSource === BUSY_SOURCE);
-      if (!coin) return;
+      const coin = called.find((c) => heliusFromLaunch(c) && !heldElsewhere(c.tokenId, "helius"));
+      if (!coin) break;
       called.splice(called.indexOf(coin), 1);
       state.helius = {
         coin,
@@ -568,69 +738,100 @@ async function runHeliusLane(
         errors: 0,
         launch: null,
         started: false,
-        ...(fromLaunch ? {} : { newest: true }),
       };
     }
-    const p = state.helius;
-    const page = await deps.helius.getMintTransactionsPage(p.coin.mint, {
-      paginationToken: p.cursor,
-      untilBlockTime: Math.floor(p.coin.windowEndMs / 1000),
-      ...(p.newest ? { newest: true } : {}),
-    });
     budget -= 1;
-    counts.heliusPages += 1;
-    p.calls += 1;
-    if (page.status === "unsupported") {
-      state.helius = null;
-      return;
-    }
-    if (page.status === "failed") {
-      p.errors += 1;
-      if (p.errors >= 3) {
-        const source = p.newest || p.coin.failedSource === "helius" ? HELIUS_GAVE_UP : "helius";
-        await markFailed(p.coin, source, p.calls, RETRY_FAILED_MS, now());
-        counts.failed += 1;
-        state.helius = null;
-        continue;
-      }
-      // The coin is carried over and the page asked again next run: asked again at once, a failing
-      // page took the run's whole budget in a few seconds (each one billed when it timed out).
-      return;
-    }
-    // Three failures in a row fail the coin; spread over a long read they no longer throw it away.
-    p.errors = 0;
-    const parsed = await tradesFromChainTransactionsPriced(p.coin.mint, page.txs, deps.solPrices);
-    if (p.newest) {
-      await readNewestPage(p, page, parsed, counts, now);
-      continue;
-    }
-    if (!p.started) {
-      p.started = true;
-      p.launch = parsed.launch;
-    }
-    p.trades.push(...parsed.trades);
-    p.cursor = page.paginationToken ?? undefined;
-    const lastAtMs = Math.max(0, ...page.txs.map((t) => (t.blockTime ?? 0) * 1000));
-    (p.pageEnds ??= []).push(lastAtMs);
-    const left =
-      p.calls >= HELIUS_ESTIMATE_AFTER_PAGES ? heliusPagesLeft(p.pageEnds, p.coin.windowEndMs) : null;
-    if (!page.paginationToken || lastAtMs > p.coin.windowEndMs) {
-      // The tape runs from the launch when the first page started at it.
-      await finish(p, "helius", p.launch !== null, counts, now());
-      state.helius = null;
-    } else if (
-      p.calls >= HELIUS_MAX_PAGES_PER_COIN ||
-      (left !== null && p.calls + left > HELIUS_MAX_PAGES_PER_COIN * HELIUS_BUSY_MARGIN)
-    ) {
-      // Too busy to read in full within the cap: Pump.fun's from the next run on, or this lane's
-      // newest first, which keeps what was read here to meet.
-      keepHandoff(p.coin.tokenId, { trades: p.trades, launch: p.launch, throughMs: lastAtMs });
-      await markFailed(p.coin, BUSY_SOURCE, p.calls, 0, now());
-      counts.failed += 1;
-      counts.handedOff += 1;
-      state.helius = null;
-    }
+    if (!(await readHeliusPage(deps, "helius", counts, now))) return;
   }
+  // Then the spare pages, newest first from the window's end, up to a third of the run's.
+  let newest = Math.min(budget, heliusNewestPagesPerRun(pagesPerRun));
+  while (newest > 0 && deps.helius.gtfaUsable) {
+    if (!state.heliusNewest) {
+      const coin = await nextNewestCoin(called, picks, now());
+      if (!coin) return;
+      state.heliusNewest = {
+        coin,
+        trades: [],
+        calls: 0,
+        cursor: undefined,
+        errors: 0,
+        launch: null,
+        started: false,
+        newest: true,
+      };
+    }
+    newest -= 1;
+    if (!(await readHeliusPage(deps, "heliusNewest", counts, now))) return;
+  }
+}
+
+/** Reads one page of a Helius slot's coin. False: the lane stops for this run. */
+async function readHeliusPage(
+  deps: TradeTapeDeps,
+  lane: "helius" | "heliusNewest",
+  counts: RunCounts,
+  now: () => number,
+): Promise<boolean> {
+  const p = state[lane]!;
+  const page = await deps.helius.getMintTransactionsPage(p.coin.mint, {
+    paginationToken: p.cursor,
+    untilBlockTime: Math.floor(p.coin.windowEndMs / 1000),
+    ...(p.newest ? { newest: true } : {}),
+  });
+  counts.heliusPages += 1;
+  if (p.newest) counts.heliusNewestPages += 1;
+  p.calls += 1;
+  if (page.status === "unsupported") {
+    state[lane] = null;
+    return false;
+  }
+  if (page.status === "failed") {
+    p.errors += 1;
+    if (p.errors >= 3) {
+      const source = p.newest || p.coin.failedSource === "helius" ? HELIUS_GAVE_UP : "helius";
+      await markFailed(p.coin, source, p.calls, RETRY_FAILED_MS, now());
+      counts.failed += 1;
+      state[lane] = null;
+      return true;
+    }
+    // The coin is carried over and the page asked again next run: asked again at once, a failing
+    // page took the run's whole budget in a few seconds (each one billed when it timed out).
+    return false;
+  }
+  // Three failures in a row fail the coin; spread over a long read they no longer throw it away.
+  p.errors = 0;
+  const parsed = await tradesFromChainTransactionsPriced(p.coin.mint, page.txs, deps.solPrices);
+  if (p.newest) {
+    await readNewestPage(p, page, parsed, counts, now);
+    return true;
+  }
+  if (!p.started) {
+    p.started = true;
+    p.launch = parsed.launch;
+  }
+  p.trades.push(...parsed.trades);
+  p.cursor = page.paginationToken ?? undefined;
+  const lastAtMs = Math.max(0, ...page.txs.map((t) => (t.blockTime ?? 0) * 1000));
+  (p.pageEnds ??= []).push(lastAtMs);
+  const left =
+    p.calls >= HELIUS_ESTIMATE_AFTER_PAGES ? heliusPagesLeft(p.pageEnds, p.coin.windowEndMs) : null;
+  if (!page.paginationToken || lastAtMs > p.coin.windowEndMs) {
+    // The tape runs from the launch when the first page started at it.
+    await finish(p, "helius", p.launch !== null, counts, now());
+    state.helius = null;
+  } else if (
+    p.calls >= HELIUS_MAX_PAGES_PER_COIN ||
+    (left !== null && p.calls + left > HELIUS_MAX_PAGES_PER_COIN * HELIUS_BUSY_MARGIN)
+  ) {
+    // Too busy to read in full within the cap: Pump.fun's from the next run on, or this lane's
+    // newest first, which keeps what was read here to meet.
+    keepHandoff(p.coin.tokenId, { trades: p.trades, launch: p.launch, throughMs: lastAtMs });
+    await markFailed(p.coin, BUSY_SOURCE, p.calls, 0, now());
+    counts.failed += 1;
+    counts.handedOff += 1;
+    state.helius = null;
+  }
+  return true;
 }
 
 function keepHandoff(tokenId: string, h: Handoff) {
@@ -640,8 +841,8 @@ function keepHandoff(tokenId: string, h: Handoff) {
 }
 
 /**
- * One page of a busy coin's newest-first read: it ends at the launch (a whole tape), at the
- * launch side the hand-off read (the two halves make a whole tape), or after
+ * One page of a newest-first read (a busy, traded or matched coin): it ends at the launch (a whole
+ * tape), at the launch side the hand-off read (the two halves make a whole tape), or after
  * HELIUS_NEWEST_MAX_PAGES (partial: who sold after the anchor is right, launch roles unknown).
  */
 async function readNewestPage(
@@ -673,7 +874,7 @@ async function readNewestPage(
     return;
   }
   handoffs.delete(p.coin.tokenId);
-  state.helius = null;
+  state.heliusNewest = null;
 }
 
 /** Pump.fun's failure keeps a coin Helius gave up on away from Helius. */
@@ -697,7 +898,7 @@ async function runPumpFunLane(
       let coin: TapeCoin | null | undefined;
       if (pending <= SAMPLE_PAUSE_PENDING && state.coinsStarted % SAMPLE_EVERY === SAMPLE_EVERY - 1)
         coin = await pendingSampleCoin(now());
-      const free = called.filter((c) => state.helius?.coin.tokenId !== c.tokenId);
+      const free = called.filter((c) => !heldElsewhere(c.tokenId, "pumpFun"));
       // Beside Helius: the coins Helius couldn't read, else the oldest of the backlog, so the two
       // lanes work from opposite ends. Without Helius: every coin, newest first.
       coin ??= heliusOn ? (free.find(heliusFailed) ?? free.at(-1)) : free[0];
@@ -780,6 +981,7 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
     pumpFunCalls: 0,
     throttled: 0,
     handedOff: 0,
+    heliusNewestPages: 0,
   };
   const waiting = await pendingCalledCoins(now());
   // The reads a shutdown saved go back to their lanes.
@@ -787,11 +989,18 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
   const heliusOn = opts.heliusPagesPerRun > 0 && deps.helius.gtfaUsable;
   // With the Helius lane off this run, a read held in it would keep its coin from Pump.fun's lane
   // and never move, saved again at every shutdown: the coin goes back to the called list.
-  if (!heliusOn) state.helius = null;
+  if (!heliusOn) {
+    state.helius = null;
+    state.heliusNewest = null;
+  }
   // A coin carried over from the last run stays with its lane, and out of the lists for new picks.
-  const inProgress = new Set([state.helius?.coin.tokenId, state.pumpFun?.coin.tokenId]);
+  const inProgress = new Set(LANES.map((l) => state[l]?.coin.tokenId));
   const called = waiting.filter((c) => !inProgress.has(c.tokenId));
   const pending = called.length + (inProgress.size - (inProgress.has(undefined) ? 1 : 0));
+  const picks: NewestPicks = {
+    traded:
+      heliusOn && heliusNewestPagesPerRun(opts.heliusPagesPerRun) > 0 ? await pendingTradedCoins(now()) : [],
+  };
   const closing: ClosingCounts = {
     closingDone: 0,
     closingFailed: 0,
@@ -801,7 +1010,7 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
   };
   await Promise.all([
     opts.heliusPagesPerRun > 0
-      ? runHeliusLane(deps, called, opts.heliusPagesPerRun, counts, now)
+      ? runHeliusLane(deps, called, picks, opts.heliusPagesPerRun, counts, now)
       : Promise.resolve(),
     opts.pumpFunCallsPerRun > 0
       ? runPumpFunLane(

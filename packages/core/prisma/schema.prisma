@@ -3012,6 +3012,9 @@ model TokenTradeTape {
   outcomeId String?
   anchorAt  DateTime
   /// "called": a seat called the coin. "sample": an uncalled decision moment, for comparison.
+  /// "traded": a user's trading position in it; "matched": a narrow filter matched it (user decision
+  /// 2026-10-20): read newest first, no outcome row (outcomeId null), anchored at the first buy or
+  /// match. A call's tape replaces either.
   reason    String
   /// "done": every trade from launch to windowEnd. "partial": the read stopped short of the
   /// launch (too many trades), so launch roles (first buyers, snipers) are unknown, while who sold
