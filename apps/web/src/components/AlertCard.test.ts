@@ -14,6 +14,8 @@ import {
   recordedPeakOf,
   scanAge,
   sniperReading,
+  sniperTileMark,
+  sniperTileTitle,
   walletCountText,
 } from "./AlertCard";
 
@@ -259,6 +261,29 @@ describe("holder counts", () => {
       top25: false,
     });
     expect(sniperReading({}, true)).toBeNull();
+  });
+
+  it("does not mark a top-25 sniper count risky from the top-10 cut", () => {
+    const top25 = sniperReading(
+      {
+        sniperTopHolderCount: 6,
+        sniperTopHoldersChecked: 25,
+        sniperTop10WalletPct: 80,
+        top10WalletsChecked: 10,
+      },
+      true,
+    );
+    expect(sniperTileMark(top25)).toEqual({ risky: false, share: null });
+    expect(sniperTileTitle(top25, "later")).not.toContain("(top 10 only on this scan)");
+    const only10 = sniperReading({ sniperTop10WalletPct: 80, top10WalletsChecked: 10 }, false);
+    expect(sniperTileMark(only10)).toEqual({ risky: true, share: 80 });
+    expect(sniperTileTitle(only10, "later")).toContain("(top 10 only on this scan)");
+    expect(
+      sniperTileMark(sniperReading({ sniperTop10WalletPct: 30, top10WalletsChecked: 10 }, true)),
+    ).toEqual({
+      risky: false,
+      share: 30,
+    });
   });
 
   it("reads Fresh over the top 25 where the scan counted it, else the top 10", () => {

@@ -34,7 +34,7 @@ import { linkedCount, linkedCountText } from "../linkedCount";
 import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
 import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
-import { cardCalibratedRate } from "../rates";
+import { calibratedRateLabel, cardCalibratedRate } from "../rates";
 import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../scoreWeights";
 import { filterCardStyle } from "../filterStyle";
 import { quoteToken } from "../quoteToken";
@@ -371,14 +371,14 @@ export function AlertCard({
                 <span className="pill-text">Narrative: {curated.narrative.verdict}</span>
               </span>
             )}
-            {curated && show("calibrated") && cardCalibratedRate(curated, calls) !== null && (
+            {curated && show("calibrated") && calibratedRateLabel(cardCalibratedRate(curated, calls)) && (
               <span
                 className="pill pill-rate"
-                title={`Of recent out-of-sample alerts ranked like this one, the share that hit 2x within 15 min of the alert, before a 50% stop${
+                title={`The share of similarly ranked recent calls that doubled: of alerts like it, this percent hit 2x within 15 min of the alert, before a 50% stop${
                   calls.length > 1 ? " (the middle of the alerting models' rates)" : ""
                 }`}
               >
-                <span className="pill-text">≈{cardCalibratedRate(curated, calls)!.toFixed(0)}% 2x</span>
+                <span className="pill-text">{calibratedRateLabel(cardCalibratedRate(curated, calls))}</span>
               </span>
             )}
             {show("time") && <span className="when">{ago(card.matchedAt, now)}</span>}
@@ -1229,9 +1229,32 @@ export function sniperReading(
 }
 
 /**
+ * Red and the color scale follow the number on the tile. A top-25 count is not judged by the
+ * screen's top-10 sniper cut. A scan that only kept the top-10 share uses that cut on that share.
+ */
+export function sniperTileMark(reading: SniperReading | null): { risky: boolean; share: number | null } {
+  if (!reading || reading.top25) return { risky: false, share: null };
+  const share = reading.top10Pct ?? (reading.of > 0 ? (reading.count * 100) / reading.of : null);
+  return { risky: share != null && share >= SAFETY_REJECT_SNIPER_WALLET_PCT, share };
+}
+
+/** The tile's tooltip. A top-10-only scan keeps the "(top 10 only on this scan)" label. */
+export function sniperTileTitle(reading: SniperReading | null, later: string): string {
+  if (!reading) return "Snipers: not checked yet. The launch's first buyers are read a few tokens per scan.";
+  const which = reading.top25 ? "" : " (top 10 only on this scan)";
+  const top10 =
+    reading.top10Pct != null ? ` In the top 10: ${walletCountText(reading.top10Pct, reading.top10Of)}.` : "";
+  const when = reading.atAlert ? "at alert time" : later;
+  const cut = reading.top25
+    ? " The safety screen's sniper cut is on the top 10, not this count."
+    : ` The safety screen rejects ${SAFETY_REJECT_SNIPER_WALLET_PCT / 10} or more of the top 10.`;
+  return `Snipers: ${reading.count} of the ${reading.of} largest holders${which} were among the first 25 buyers after launch, ${when}.${top10}${cut}`;
+}
+
+/**
  * The Snipers tile: how many top holders (the top 25, pools aside) were among the launch's first
- * 25 buyers, "N/25". Red when the top ten would fail the safety screen's sniper cut, which still
- * reads the top ten (8 or more of 10).
+ * 25 buyers, "N/25". Red only when the number shown is the top-10 share and that share hits the
+ * screen's sniper cut (8 or more of 10).
  */
 export function SniperTile({
   reading,
@@ -1244,22 +1267,12 @@ export function SniperTile({
   /** How a reading from after the alert is described (see laterScanText). */
   later?: string;
 }) {
-  const risky = reading?.top10Pct != null && reading.top10Pct >= SAFETY_REJECT_SNIPER_WALLET_PCT;
-  // The cut reads the top ten; a scan without that share is placed by its top-25 share instead.
-  const share =
-    reading === null
-      ? null
-      : (reading.top10Pct ?? (reading.of > 0 ? (reading.count * 100) / reading.of : null));
-  const top10 =
-    reading?.top10Pct != null ? ` In the top 10: ${walletCountText(reading.top10Pct, reading.top10Of)}.` : "";
-  const title =
-    reading === null
-      ? "Snipers: not checked yet. The launch's first buyers are read a few tokens per scan."
-      : `Snipers: ${reading.count} of the ${reading.of} largest holders${reading.top25 ? "" : " (top 10 only on this scan)"} were among the first 25 buyers after launch, ${
-          reading.atAlert ? "at alert time" : later
-        }.${top10} The safety screen rejects ${SAFETY_REJECT_SNIPER_WALLET_PCT / 10} or more of the top 10.`;
+  const { risky, share } = sniperTileMark(reading);
   return (
-    <div {...tileLook(tiles, tileTone(share, SAFETY_REJECT_SNIPER_WALLET_PCT), risky)} title={title}>
+    <div
+      {...tileLook(tiles, tileTone(share, SAFETY_REJECT_SNIPER_WALLET_PCT), risky)}
+      title={sniperTileTitle(reading, later)}
+    >
       <dt>Snipers</dt>
       <dd className={reading === null ? "muted" : "num"}>
         {reading === null ? "Not checked" : `${reading.count}/${reading.of}`}

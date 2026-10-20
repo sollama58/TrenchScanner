@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Card, Snapshot } from "./api";
-import { safetyChecks, safetyFlip, safetyVerdict } from "./safetyScreen";
+import { safetyChecks, safetyFlip, safetyPillCopy, safetyVerdict } from "./safetyScreen";
 
 const snap = (over: Partial<Snapshot>): Snapshot =>
   ({ takenAt: "2026-10-16T00:00:00Z", marketCapUsd: 1, ...over }) as Snapshot;
@@ -29,6 +29,34 @@ describe("safety verdict", () => {
       passedAtAlert: true,
     });
     expect(safetyVerdict(card(alert, alert), false)).toMatchObject({ state: "passed", passedAtAlert: false });
+  });
+
+  it("says the pill was not read when a pass left fresh, empty, sniper or top-10 unmeasured", () => {
+    const measured = {
+      rugScreenPassed: true,
+      top10HolderPct: 20,
+      freshTopHolderCount: 2,
+      freshTopHoldersChecked: 25,
+      emptyTop10WalletPct: 10,
+      sniperTop10WalletPct: 10,
+    };
+    expect(safetyPillCopy(safetyVerdict(card(snap(measured)), false))).toMatchObject({
+      word: "Passed",
+      tone: "passed",
+    });
+    // The screen still passed; the pill must not say so while those checks were unknown.
+    const unread = snap({ rugScreenPassed: true, top10HolderPct: 20, mintAuthorityActive: false });
+    expect(safetyPillCopy(safetyVerdict(card(unread), false))).toMatchObject({
+      word: "Not read",
+      tone: "unread",
+    });
+    expect(safetyVerdict(card(unread), false).state).toBe("passed");
+    // A real failure stays Failed, including when the wallet checks were not read.
+    const failed = snap({
+      rugScreenPassed: false,
+      rugScreenReasons: ["mint authority not renounced (supply can be inflated)"],
+    });
+    expect(safetyPillCopy(safetyVerdict(card(failed), false)).word).toBe("Failed");
   });
 });
 

@@ -106,10 +106,11 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   chartView: "trading",
   // Experimental and off unless the reader turns it on (user ask 2026-10-18).
   chartPathing: false,
-  // Off by default, all switchable back on in Customize: the composite score tile, so the stat tiles
-  // fill a clean 4 x 2 grid, the header's "≈N% 2x" pill and the 1st Buyers Holding tile, which Snipers replaced (user asks 2026-10-14).
+  // Off by default, switchable back on in Customize: the composite score tile, so the stat tiles
+  // fill a clean 4 x 2 grid, and the 1st Buyers Holding tile, which Snipers replaced (user asks 2026-10-14).
+  // The header's calibrated 2x pill shows unless an account saved it hidden.
   // An account that saved its own field list keeps that list.
-  hidden: ["score", "calibrated", "snipers"],
+  hidden: ["score", "snipers"],
 };
 
 /** Trading sites a card can open the token in, as Settings lists them. */
@@ -157,7 +158,7 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
       { id: "time", label: "Time since alert" },
       { id: "modelPill", label: "Model and confidence" },
       { id: "conviction", label: "High conviction" },
-      { id: "calibrated", label: "≈2x rate" },
+      { id: "calibrated", label: "Of alerts like it 2x'd" },
       { id: "result", label: "Result mark (✓ / ✕)" },
     ],
   },
