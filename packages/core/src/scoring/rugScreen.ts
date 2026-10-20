@@ -143,7 +143,8 @@ export const SAFETY_MIN_PREBOND_SECONDS = 5;
  * user's own filter explicitly excludes it.
  *
  * Fails closed on what's left: if we don't have a verified on-chain profile
- * at all, that's a fail rather than letting an unverifiable token through.
+ * at all, or one without its top-holder list, that's a fail rather than letting an
+ * unverifiable token through.
  */
 export function runRugScreen(profile: OnChainProfile | null | undefined): RugScreenResult {
   if (!profile) {
@@ -151,6 +152,7 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
   }
 
   const reasons = [...localScreenReasons(profile)];
+  const localFailed = reasons.length > 0;
 
   // Mayhem Mode tokens have an extra 1B supply minted and traded by Pump.fun's own AI agents for
   // their first 24h, with whatever goes unsold burned afterwards. Every market signal this app
@@ -163,13 +165,23 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
   // coins passing those (the scan's two-pass assembly), so every LP or authority reject read
   // "Mayhem unverified" too and the per-rule counts overstated it (audit 2026-10-14, L3 M3). The
   // verdict is the same either way.
-  const mayhemUnchecked = profile.isMayhemMode === undefined && reasons.length > 0;
+  const mayhemUnchecked = profile.isMayhemMode === undefined && localFailed;
   if (profile.isMayhemMode !== false && !mayhemUnchecked) {
     reasons.push(
       profile.isMayhemMode === true
         ? "Pump.fun Mayhem Mode token (AI-driven supply and trading)"
         : "Mayhem Mode status unverified - failing closed",
     );
+  }
+
+  // The holder list behind every holder cut: the top ten's share and the largest holder's, and
+  // the wallets the fresh, empty, sniper, linked and exchange-funded checks look up. Without it
+  // none of them can run, and a coin with RugCheck down and the chain's read failed passed with
+  // every holder check unread (an obvious rug on 2026-10-20). Unread fails, like Mayhem above;
+  // the wallet checks that follow from a read list still apply only once measured. Skipped when a
+  // local check already failed, for the same reason as Mayhem: holders aren't read for those.
+  if (typeof profile.top10HolderPct !== "number" && !localFailed) {
+    reasons.push("top holders not read - failing closed");
   }
 
   // Applies only once measured, like the wallet cuts: a token whose launch or graduation time is

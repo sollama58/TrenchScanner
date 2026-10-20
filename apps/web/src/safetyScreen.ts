@@ -79,25 +79,28 @@ function flag(
   return { label, value: v ? yes : no, status: v === bad ? "fail" : "ok", rule };
 }
 
-/** A share or count against its cut: failing when `fails` says so. */
+/** A share or count against its cut: failing when `fails` says so, or unread with `unreadFails`. */
 function measured(
   label: string,
   v: number | null | undefined,
   text: (v: number) => string,
   fails: (v: number) => boolean,
   rule: string,
+  unreadFails = false,
 ): SafetyCheck {
   if (typeof v !== "number" || !Number.isFinite(v))
-    return { label, value: NOT_READ, status: "unknown", rule };
+    return unreadFails
+      ? { label, value: UNVERIFIED, status: "fail", rule }
+      : { label, value: NOT_READ, status: "unknown", rule };
   return { label, value: text(v), status: fails(v) ? "fail" : "ok", rule };
 }
 
 /**
  * Every rule the safety screen applies (core's runRugScreen), read off one scan, in the screen's
  * order. A wallet or share cut the scan didn't read is "Not read": the screen lets those through.
- * An unread liquidity or Mayhem Mode check fails, as the screen fails closed on those (Mayhem is
- * looked up only once the authority and liquidity checks pass, so it stays "Not read" after one of
- * them failed). The bonding curve's fill time is not kept on the scan, so it shows only among a
+ * An unread liquidity, Mayhem Mode or top-10 holders check fails, as the screen fails closed on
+ * those (Mayhem and the holders are read only once the authority and liquidity checks pass, so
+ * they stay "Not read" after one of them failed). The bonding curve's fill time is not kept on the scan, so it shows only among a
  * failed verdict's reasons.
  */
 export function safetyChecks(s: Snapshot): SafetyCheck[] {
@@ -129,6 +132,7 @@ export function safetyChecks(s: Snapshot): SafetyCheck[] {
       (v) => pct(v),
       (v) => v >= SAFETY_REJECT_TOP10_HOLDER_PCT,
       `Fails at ${SAFETY_REJECT_TOP10_HOLDER_PCT}% of supply or more`,
+      !localFailed,
     ),
     measured(
       "Largest holder",
