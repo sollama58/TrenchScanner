@@ -31,6 +31,12 @@ export interface RateGateOptions {
    * waits while the bucket holds this many or fewer. 0 (the default) makes every request equal.
    */
   reserve?: number;
+  /**
+   * Shortest pause a 429 sets. Without a Retry-After header the pause was fetchJson's first
+   * backoff, 250-750 ms, and the queued requests went straight back into the provider's window
+   * (DexScreener's and Jupiter's limits are per second or per minute).
+   */
+  minPauseMs?: number;
   /** Name used in the log line a throttle writes. */
   name: string;
   now?: () => number;
@@ -106,6 +112,7 @@ export class RateGate {
    */
   throttled(delayMs: number): void {
     const now = this.now();
+    delayMs = Math.max(delayMs, this.options.minPauseMs ?? 0);
     const until = now + Math.max(0, delayMs);
     if (now >= this.pausedUntil) {
       this.stats.throttled += 1;

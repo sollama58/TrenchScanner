@@ -94,6 +94,9 @@ describe("classifyApiRequest", () => {
     expect(credits("https://api.jup.ag/tokens/v2/toptrending/1h")).toBe(5);
     expect(credits("https://api.jup.ag/swap/v2/execute")).toBe(0);
     expect(credits("https://api.jup.ag/swap/v1/quote")).toBe(1);
+    // The keyless host bills nothing, and is named apart so its 429s can be told from the key's.
+    const [keyless] = classifyApiRequest(`https://lite-api.jup.ag/price/v3?ids=${mint}`, "GET", undefined);
+    expect(keyless).toMatchObject({ provider: "jupiter", endpoint: "GET /price/v3 (keyless)", credits: 0 });
   });
 
   it("never keeps a Telegram bot token in the endpoint", () => {

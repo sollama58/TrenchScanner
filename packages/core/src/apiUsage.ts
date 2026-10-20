@@ -206,12 +206,17 @@ export function classifyApiRequest(url: string, httpMethod: string, body: unknow
       credits: billed ? calls * heliusCredits(method) : 0,
     }));
   }
-  const endpoint = `${httpMethod} ${normalizePath(parsed.pathname)}`;
+  // Jupiter's keyless host (lite-api.jup.ag) has its own per-IP limit and bills nothing: named
+  // apart, so the panel shows which host a 429 came from, and charged no credits.
+  const keylessJupiter = provider === "jupiter" && parsed.hostname === "lite-api.jup.ag";
+  const endpoint = `${httpMethod} ${normalizePath(parsed.pathname)}${keylessJupiter ? " (keyless)" : ""}`;
   const credits =
     provider === "helius"
       ? HELIUS_REST_CREDITS
       : provider === "jupiter"
-        ? jupiterCredits(parsed.pathname)
+        ? keylessJupiter
+          ? 0
+          : jupiterCredits(parsed.pathname)
         : parsed.hostname === "pro-api.coingecko.com"
           ? COINGECKO_PRO_CREDITS
           : 0;

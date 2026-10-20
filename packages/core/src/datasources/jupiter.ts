@@ -135,6 +135,8 @@ export class JupiterClient {
       perMinute: options.requestsPerMinute ?? DEFAULT_JUPITER_REQUESTS_PER_MINUTE,
       burst,
       reserve: jupiterPriorityReserve(burst),
+      // The plan's limit is per second: a 429 waits that second out before anything else goes.
+      minPauseMs: 1_000,
     });
   }
 

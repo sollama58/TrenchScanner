@@ -84,6 +84,14 @@ export const DEXSCREENER_PRIORITY_RESERVE = 20;
  * moment ago must not be hidden for the TTL.
  */
 export const QUOTE_CACHE_MS = 10_000;
+/** The shortest pause a 429 sets on the lookup gate - see RateGateOptions.minPauseMs. */
+const THROTTLE_MIN_PAUSE_MS = 2_000;
+/**
+ * The discovery feeds (token-profiles, token-boosts) are limited to 60 a minute, apart from the
+ * lookups' 300. They had no gate at all, so a 429 on them never paused anything; half the limit
+ * leaves the API process room if it ever reads them too.
+ */
+const DISCOVERY_REQUESTS_PER_MINUTE = 30;
 /** Mints held at once; far above a cycle's working set, so pruning is the TTL's job. */
 const QUOTE_CACHE_MAX = 5_000;
 
@@ -200,6 +208,8 @@ export class DexScreenerClient {
    * together on a 429 - see RateGate. One client per process, so one budget per process.
    */
   private readonly gate: RateGate;
+  /** The discovery feeds' own, smaller budget - see DISCOVERY_REQUESTS_PER_MINUTE. */
+  private readonly discoveryGate: RateGate;
   private readonly fallback?: GeckoTerminalClient;
   /** Until when DexScreener is treated as blank (epoch ms); 0 while it answers. */
   private blankUntil = 0;
@@ -234,6 +244,13 @@ export class DexScreenerClient {
       perMinute: options.requestsPerMinute ?? DEFAULT_DEXSCREENER_REQUESTS_PER_MINUTE,
       burst: GATE_BURST,
       reserve: DEXSCREENER_PRIORITY_RESERVE,
+      minPauseMs: THROTTLE_MIN_PAUSE_MS,
+    });
+    this.discoveryGate = new RateGate({
+      name: "dexscreener/discovery",
+      perMinute: DISCOVERY_REQUESTS_PER_MINUTE,
+      burst: 4,
+      minPauseMs: THROTTLE_MIN_PAUSE_MS,
     });
     this.fallback = options.fallback;
     this.staleCheck = options.staleCheck;
@@ -972,6 +989,7 @@ export class DexScreenerClient {
       return await fetchJson<DexScreenerDiscoveryEntry[]>(`${this.baseUrl}${path}`, {
         timeoutMs: 8000,
         retries: 1,
+        gate: this.discoveryGate,
       });
     } catch (err) {
       logger.warn("discovery endpoint failed", { path, error: String(err) });
@@ -987,6 +1005,9 @@ export class DexScreenerClient {
     try {
       const data = await fetchJson<{ pairs?: DexScreenerPair[] }>(
         `${this.baseUrl}/latest/dex/search?q=${encodeURIComponent(query)}`,
+        // On the lookups' budget (search shares their 300 a minute): ungated, its 429s paused
+        // nothing and its two retries went straight back into the limit.
+        { gate: this.gate, retries: 1 },
       );
       return this.selectCanonicalPairs((data.pairs ?? []).filter((p) => p.chainId === SOLANA_CHAIN_ID));
     } catch (err) {
