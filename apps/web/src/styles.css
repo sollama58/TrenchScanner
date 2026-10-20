@@ -601,12 +601,6 @@ input[type="checkbox"] {
 .wallet-pill {
   color: var(--ink);
 }
-.wallet-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--brand-a);
-}
 .admin-tag {
   font-size: 10px;
   text-transform: uppercase;
@@ -5808,7 +5802,6 @@ html:has(dialog.about-modal[open]) {
     padding: 6px 10px;
     gap: 6px;
   }
-  .wallet-pill .wallet-dot,
   .wallet-pill .admin-tag {
     display: none;
   }
