@@ -309,6 +309,34 @@ describe.skipIf(!dbAvailable)("resolveRugProfiles", () => {
     expect(next.stats).toMatchObject({ cached: 1, fetched: 0 });
   });
 
+  it("holds off a stale mint whose background refresh failed, instead of re-sending it every cycle", async () => {
+    const old = mint("swr-fail");
+    const answers: Record<string, RugCheckProfileResult> = {
+      [old]: { status: "found", profile: profile(old, 10) },
+    };
+    const { client, calls } = fakeClient(answers);
+    await resolveRugProfiles([old], client, 5);
+    await prisma.rugCheckCache.updateMany({
+      where: { mintAddress: old },
+      data: { checkedAt: new Date(Date.now() - 10 * 60_000) },
+    });
+    calls.length = 0;
+    delete answers[old]; // RugCheck now failing
+
+    const opts = { refreshStaleInBackground: true };
+    const first = await resolveRugProfiles([old], client, 5, Infinity, opts);
+    expect(first.stats).toMatchObject({ refreshing: 1 });
+    await settleRugCheckRefresh();
+    expect(calls).toHaveLength(1);
+
+    // Next cycle: still stale, but held off - its stale report is served and nothing goes out.
+    const second = await resolveRugProfiles([old], client, 5, Infinity, opts);
+    await settleRugCheckRefresh();
+    expect(calls).toHaveLength(1);
+    expect(second.profiles.get(old)?.holderCount).toBe(10);
+    expect(second.stats).toMatchObject({ heldOff: 1 });
+  });
+
   it("re-asks a young coin's 'no report' after a minute, an old coin's only after the TTL", async () => {
     // RugCheck indexes a launch minutes after it is first seen: on the report TTL a coin seen at
     // launch kept "no report" past most of its decision moments (2026-10-14/15).
