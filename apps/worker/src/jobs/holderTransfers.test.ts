@@ -93,7 +93,10 @@ describe("holder transfers", () => {
     await readTopHolders([group], helius, { maxReads: 1, nowMs: NOW });
     expect(holderTransfersOf(group, NOW)).toBeNull();
 
-    await resolveHolderTransfers([group], helius, { maxSignatureReads: 10, maxTxReads: 10, nowMs: NOW });
+    // Answers what it sent, so the scan's passes share one budget (user decision 2026-10-20).
+    expect(
+      await resolveHolderTransfers([group], helius, { maxSignatureReads: 10, maxTxReads: 10, nowMs: NOW }),
+    ).toEqual({ signatureReads: 3, txReads: 1 });
     expect(helius.getAccountSignaturesBatch).toHaveBeenCalledTimes(1);
     expect(helius.getTransactionsBatch.mock.calls[0]![0]).toEqual(["send"]);
     expect(takeHolderTransferStats()).toEqual({ getSignaturesForAddress: 3, getTransaction: 1, credits: 4 });
@@ -110,7 +113,9 @@ describe("holder transfers", () => {
     const group = { mintAddress: MINT, holders: [], creator: null };
     await readTopHolders([group], helius, { maxReads: 1, nowMs: NOW });
 
-    await resolveHolderTransfers([group], helius, { maxSignatureReads: 2, maxTxReads: 10, nowMs: NOW });
+    expect(
+      await resolveHolderTransfers([group], helius, { maxSignatureReads: 2, maxTxReads: 10, nowMs: NOW }),
+    ).toEqual({ signatureReads: 0, txReads: 0 });
     expect(helius.getAccountSignaturesBatch).not.toHaveBeenCalled();
 
     await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: NOW });

@@ -11,7 +11,9 @@ const logger = createLogger("onchain-holders");
  * RugCheck's report, so an answer is reused for RUGCHECK_CACHE_TTL_MINUTES like one - or for the
  * shorter TTL a young coin failing a holder cut gets (`ttlMinutesFor`, see youngHolderRecheck.ts),
  * the same as its RugCheck report would; failures back off like the other on-chain lookups and are
- * never cached.
+ * never cached. An answer past its TTL for a coin `keepWhileQuiet` says has not traded since it was
+ * read is kept, as of now, instead of read again: no trade moved its holders (user decision
+ * 2026-10-20 (Helius audit), for the coins failing a holder cut).
  */
 const cache = new Map<string, { at: number; holders: OnChainHolders }>();
 const CACHE_MAX = 5_000;
@@ -29,6 +31,7 @@ export async function resolveOnChainHolders(
   env: Env,
   now = Date.now(),
   ttlMinutesFor: (mintAddress: string) => number = () => env.RUGCHECK_CACHE_TTL_MINUTES,
+  keepWhileQuiet?: (mintAddress: string, readAtMs: number) => boolean,
 ): Promise<Map<string, OnChainHolders>> {
   const out = new Map<string, OnChainHolders>();
   if (env.ONCHAIN_HOLDERS_MAX_PER_CYCLE === 0) return out;
@@ -37,7 +40,10 @@ export async function resolveOnChainHolders(
   for (const mint of new Set(mintAddresses)) {
     const hit = cache.get(mint);
     if (hit && now - hit.at < ttlMinutesFor(mint) * 60_000) out.set(mint, hit.holders);
-    else if (!failureBackoff.blocked(mint, now) && toRead.length < env.ONCHAIN_HOLDERS_MAX_PER_CYCLE)
+    else if (hit && keepWhileQuiet?.(mint, hit.at)) {
+      cache.set(mint, { at: now, holders: hit.holders });
+      out.set(mint, hit.holders);
+    } else if (!failureBackoff.blocked(mint, now) && toRead.length < env.ONCHAIN_HOLDERS_MAX_PER_CYCLE)
       toRead.push(mint);
     // Past the budget, a stale answer still beats none: the next cycle refreshes it.
     else if (hit) out.set(mint, hit.holders);

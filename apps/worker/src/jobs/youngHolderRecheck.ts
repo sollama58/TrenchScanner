@@ -47,6 +47,34 @@ export function rugCheckTtlFor(
       : defaultTtlMinutes;
 }
 
+/**
+ * A coin past OLD_HOLDER_RECHECK_MINUTES failing a holder cut on RugCheck's list has its top 10
+ * read from the chain (scanJob's holderCutRecheck, onChainHolders.ts) every
+ * OLD_HOLDER_RECHECK_TTL_MINUTES instead of on the RugCheck TTL: on the 5-minute TTL a coin that
+ * kept failing was re-read for its whole life, though past its first hour its holders turn over
+ * slowly (user decision 2026-10-20 (Helius audit)).
+ */
+export const OLD_HOLDER_RECHECK_MINUTES = 60;
+export const OLD_HOLDER_RECHECK_TTL_MINUTES = 15;
+
+/**
+ * The chain holder read's TTL for each mint: `ttlFor`'s, stretched to OLD_HOLDER_RECHECK_TTL_MINUTES
+ * for a holder-cut recheck (`ageMinutesOf` answers for those only) past OLD_HOLDER_RECHECK_MINUTES.
+ * A coin of unknown age keeps `ttlFor`'s.
+ */
+export function holderCutRecheckTtlFor(
+  ttlFor: (mintAddress: string) => number,
+  ageMinutesOf: (mintAddress: string) => number | undefined,
+): (mintAddress: string) => number {
+  return (mintAddress) => {
+    const ttl = ttlFor(mintAddress);
+    const age = ageMinutesOf(mintAddress);
+    return age !== undefined && age >= OLD_HOLDER_RECHECK_MINUTES
+      ? Math.max(ttl, OLD_HOLDER_RECHECK_TTL_MINUTES)
+      : ttl;
+  };
+}
+
 /** Tests only. */
 export function resetYoungHolderRecheck(): void {
   failingYoung.clear();

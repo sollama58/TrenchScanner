@@ -32,6 +32,24 @@ describe("resolveOnChainHolders", () => {
     expect(getLargestHoldersBatch.mock.calls.map((c) => c[0])).toEqual([["young", "old"], ["young"]]);
   });
 
+  it("keeps a stale answer for a coin the trade stream says hasn't traded since (user decision 2026-10-20)", async () => {
+    const { helius, getLargestHoldersBatch } = fakeHelius(() => ({ status: "found", holders }));
+    const lastTrade = { at: 0 };
+    const quiet = (_mint: string, since: number) => lastTrade.at <= since;
+    await resolveOnChainHolders(["q"], helius, env, 0, undefined, quiet);
+    // Past the TTL but quiet: kept, as of now.
+    expect((await resolveOnChainHolders(["q"], helius, env, 6 * 60_000, undefined, quiet)).get("q")).toBe(
+      holders,
+    );
+    expect(getLargestHoldersBatch).toHaveBeenCalledTimes(1);
+    // A trade since: read again once the TTL from the kept time runs out.
+    lastTrade.at = 7 * 60_000;
+    await resolveOnChainHolders(["q"], helius, env, 10 * 60_000, undefined, quiet);
+    expect(getLargestHoldersBatch).toHaveBeenCalledTimes(1);
+    await resolveOnChainHolders(["q"], helius, env, 11 * 60_000, undefined, quiet);
+    expect(getLargestHoldersBatch).toHaveBeenCalledTimes(2);
+  });
+
   it("backs off a mint whose read failed instead of asking every cycle", async () => {
     const { helius, getLargestHoldersBatch } = fakeHelius(() => ({ status: "failed" }));
     expect((await resolveOnChainHolders(["a"], helius, env, 0)).size).toBe(0);

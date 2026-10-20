@@ -26,7 +26,8 @@ const logger = createLogger("live-tape");
  * the post-call trade tape. User decision 2026-10-13: Helius, for coins close to a call.
  *
  * Contenders and alerts held for a wallet figure come first, as in the wallet stage. A coin's
- * page is read again once it is LIVE_TAPE_REFRESH_SECONDS old, and at most
+ * page is read again once it is LIVE_TAPE_REFRESH_SECONDS old, unless the trade stream says the
+ * coin has not traded since (user decision 2026-10-20 (Helius audit)), and at most
  * LIVE_TAPE_PAGES_PER_CYCLE pages go out a cycle: that cap is the credit ceiling.
  */
 
@@ -60,7 +61,9 @@ export function resetLiveTape(): void {
 
 /**
  * Reads the newest page for the first `maxPages` of `mints` (priority order) whose page is
- * missing or older than `refreshMs`. Never rejects.
+ * missing or older than `refreshMs`. A page due whose coin `quietSince` says has had no trade since
+ * it was read is still the coin's newest: it is kept, as of now, so it doesn't age out of
+ * livePageOf while the coin stays quiet. Never rejects.
  */
 export async function readLiveTape(
   mints: readonly string[],
@@ -71,6 +74,8 @@ export async function readLiveTape(
     nowMs?: number;
     /** Prices the coins a trade was paid in other than SOL (a coin-paired launch's quote coin). */
     solPrices?: SolPriceLookup;
+    /** Whether a mint has had no trade since then, as far as the trade stream can vouch. */
+    quietSince?: (mint: string, sinceMs: number) => boolean;
   },
 ): Promise<void> {
   if (!helius.gtfaUsable || opts.maxPages <= 0) return;
@@ -78,7 +83,11 @@ export async function readLiveTape(
   const due = mints
     .filter((m) => {
       const page = pages.get(m);
-      return !page || now - page.atMs >= opts.refreshMs;
+      if (!page) return true;
+      if (now - page.atMs < opts.refreshMs) return false;
+      if (!opts.quietSince?.(m, page.atMs)) return true;
+      pages.set(m, { ...page, atMs: now });
+      return false;
     })
     .slice(0, opts.maxPages);
   await Promise.all(

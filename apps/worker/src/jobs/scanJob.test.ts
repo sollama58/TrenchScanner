@@ -4,9 +4,11 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, loadEnv } from "@trenchscanner/core";
 import {
   LIVE_LAUNCH_MAX,
+  OLD_COIN_MINUTES,
   candidateAgeMinutes,
   liveLaunchSource,
   newestLaunches,
+  oldCoinMints,
   selectWatchlist,
 } from "./scanJob.js";
 
@@ -353,5 +355,28 @@ describe("candidateAgeMinutes", () => {
       ),
     ).toBe(70);
     expect(candidateAgeMinutes({ launchedAt: new Date(NaN), pairCreatedAt: minutesAgo(3) }, now)).toBe(3);
+  });
+});
+
+describe("oldCoinMints (user decision 2026-10-20)", () => {
+  const coin = (mintAddress: string, over: Partial<Parameters<typeof oldCoinMints>[0][number]> = {}) => ({
+    mintAddress,
+    contender: false,
+    alerted: false,
+    watched: false,
+    ageMinutes: OLD_COIN_MINUTES,
+    ...over,
+  });
+  it("backs off only coins past two hours that no decision or viewer is near", () => {
+    const groups = [
+      coin("old"),
+      coin("young", { ageMinutes: OLD_COIN_MINUTES - 1 }),
+      coin("unknown-age", { ageMinutes: undefined }),
+      coin("contender", { contender: true }),
+      coin("alerted", { alerted: true }),
+      coin("watched", { watched: true }),
+      coin("called"),
+    ];
+    expect([...oldCoinMints(groups, new Set(["called"]))]).toEqual(["old"]);
   });
 });
