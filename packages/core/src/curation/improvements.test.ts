@@ -954,7 +954,7 @@ describe("the feature onset guard", () => {
     const onset = market[market.length - 1]!.anchorAt.getTime() - 6 * 3_600_000;
     const rows = market.map((r) => ({
       ...r,
-      features: { ...r.features, pathRet5mPct: r.anchorAt.getTime() >= onset ? 1 : null },
+      features: { ...r.features, pathRet15mPct: r.anchorAt.getTime() >= onset ? 1 : null },
     }));
     const results = await runContestTraining(rows, {
       targets,
@@ -971,9 +971,9 @@ describe("the feature onset guard", () => {
     for (const id of ["linear", "trees"]) {
       const r = results.find((x) => x.contestant === id)!;
       const params = r.params as { featureNames: string[] };
-      expect(params.featureNames).not.toContain("pathRet5mPct");
+      expect(params.featureNames).not.toContain("pathRet15mPct");
       expect(params.featureNames).toContain("mcapUsd");
-      expect(r.metrics.heldFeatures?.map((h) => h.feature)).toContain("pathRet5mPct");
+      expect(r.metrics.heldFeatures?.map((h) => h.feature)).toContain("pathRet15mPct");
     }
   }, 120_000);
 });
