@@ -14,8 +14,9 @@ import {
 } from "./trainer.js";
 
 /**
- * Reliance of the next fit on minutesSinceFirstInBand ("time in the band"), measured before
- * that input is retired. bandDwellShare stays a learner input beside it. No production
+ * Reliance of a recipe that still names minutesSinceFirstInBand ("time in the band"). The column
+ * is retired from the fit; bandDwellShare is the learner input, and the minutes are still written
+ * so a deployed model that names them scores. No production
  * decision rows or saved model params are in this environment, so this is the synthetic
  * market (syntheticMarket.ts): its "interactions" truth
  * already makes a young coin with a 5m volume burst more likely to win, and it does not mention
@@ -188,10 +189,10 @@ function clockSlice<T extends { name: string }>(rows: T[]): T[] {
   return CLOCKS.map((name) => rows.find((r) => r.name === name)!);
 }
 
-describe("minutesSinceFirstInBand reliance, before any retirement", () => {
-  it("is still a learner input, beside bandDwellShare", () => {
-    expect(RETIRED_LEARNER_INPUTS.has("minutesSinceFirstInBand")).toBe(false);
-    expect(LEARNER_FEATURE_NAMES).toContain("minutesSinceFirstInBand");
+describe("minutesSinceFirstInBand reliance", () => {
+  it("is retired; bandDwellShare stays a learner input", () => {
+    expect(RETIRED_LEARNER_INPUTS.has("minutesSinceFirstInBand")).toBe(true);
+    expect(LEARNER_FEATURE_NAMES).not.toContain("minutesSinceFirstInBand");
     expect(RETIRED_LEARNER_INPUTS.has("bandDwellShare")).toBe(false);
     expect(LEARNER_FEATURE_NAMES).toContain("bandDwellShare");
     // The mixed clock is already out of the next fit. This test does not put it back.

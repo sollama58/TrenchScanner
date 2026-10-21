@@ -278,6 +278,14 @@ describe("toProfile", () => {
     expect(toProfile(MINT, baseReport({ score_normalised: undefined })).riskScore).toBeUndefined();
   });
 
+  it("leaves a risk of 0 unknown when the holder list is not indexed yet", () => {
+    const profile = toProfile(MINT, baseReport({ totalHolders: 0, score_normalised: 0 }));
+    expect(profile.holderCount).toBeUndefined();
+    expect(profile.riskScore).toBeUndefined();
+    // A counted list with a real 0 stays a clean score.
+    expect(toProfile(MINT, baseReport({ score_normalised: 0 })).riskScore).toBe(0);
+  });
+
   it("passes through RugCheck's own risk score and flags", () => {
     const profile = toProfile(MINT, baseReport());
     expect(profile.riskScore).toBe(43);

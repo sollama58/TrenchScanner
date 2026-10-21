@@ -29,6 +29,7 @@ import {
   VOLUME_ACCEL_YOUNG_NULL_SINCE,
   WEEKEND_FLAG_FROM,
   FRESH_QUOTE_GAP_SINCE,
+  RUGCHECK_UNINDEXED_FILL,
   PATH_TAPE_REFILL_SINCE,
   PATH_RETURNS_ACROSS_GAPS_SINCE,
   PRICE_PATH_FEATURES,
@@ -63,6 +64,7 @@ import { EMPTY_CURVE_PATH } from "./curveTape.js";
 import { EMPTY_DEV_LAUNCH } from "../wallets/devLaunchScore.js";
 import type { ScoredToken } from "../types.js";
 import { decisionAnchor } from "./labels.js";
+import { EMPTY_PRICE_PATH } from "./pricePath.js";
 
 function scored(overrides: Partial<ScoredToken> = {}): ScoredToken {
   return {
@@ -151,6 +153,7 @@ describe("buildCandidateFeatures - short-window derivations", () => {
       "sells24h",
       "pathRet15mPct",
       "pathRet30mPct",
+      "minutesSinceFirstInBand",
       "priceChange6hPct",
       "priceChange24hPct",
       "volume1hUsd",
@@ -442,7 +445,7 @@ describe("scoredFromFeatures - replay round trip", () => {
     }
   });
 
-  it("records the dev launch reading, replays it, and leaves it unread by the learners", () => {
+  it("records the dev launch reading, replays it, and the learners read it", () => {
     const devLaunch = {
       ...EMPTY_DEV_LAUNCH,
       devLaunchRisk: 62.5,
@@ -453,9 +456,38 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(features.devLaunchRisk).toBe(62.5);
     expect(features.devLaunchPrior).toBe(4);
     expect(features.devLaunchFamilyCreators).toBe(0);
+    // Unknown stays null. A count of 0 above is a real zero, not a fill-in.
     expect(buildCandidateFeatures(scored()).devLaunchRisk).toBeNull();
     expect(scoredFromFeatures(features, 0.0001, 150_000).devLaunch?.devLaunchPrior).toBe(4);
-    for (const name of DEV_LAUNCH_FEATURES) expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+    for (const name of DEV_LAUNCH_FEATURES) {
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+      expect(name.startsWith("ns")).toBe(false);
+    }
+  });
+
+  it("records the wallet win counts, and the learners read them, null while unread", () => {
+    const features = buildCandidateFeatures(
+      scored({
+        walletWinTop10Max: 80,
+        walletWinFirstBuyersMean: 40,
+        walletWinHighSupplyPct: 6,
+        knownWinnerFirstBuyers: 2,
+        winnerRecentBuyers: 1,
+        winnerRecentSellers: 0,
+      }),
+    );
+    expect(features.walletWinTop10Max).toBe(80);
+    expect(features.winnerRecentSellers).toBe(0);
+    const none = buildCandidateFeatures(scored());
+    for (const name of WALLET_WIN_FEATURES) {
+      expect(none[name]).toBeNull();
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+      expect(name.startsWith("ns")).toBe(false);
+    }
   });
 
   it("says whether the age counts from the launch or the pool, null without an age, and replays it", () => {
@@ -639,7 +671,65 @@ describe("buildCandidateFeatures - audit additions", () => {
     expect(f.dexBoosted).toBe(1);
     expect(f.hasDescription).toBe(0);
     expect(f.holderGrowth10mPct).toBe(12);
+    // Still written at the same number. The fit reads bandDwellShare; this column is retired.
     expect(f.minutesSinceFirstInBand).toBe(30);
+    expect(RETIRED_LEARNER_INPUTS.has("minutesSinceFirstInBand")).toBe(true);
+    expect(LEARNER_FEATURE_NAMES).not.toContain("minutesSinceFirstInBand");
+    expect(LEARNER_FEATURE_NAMES).toContain("bandDwellShare");
+  });
+
+  it("records an unindexed or too-close RugCheck holder reading as null, not 0", () => {
+    const unindexed = buildCandidateFeatures(
+      scored({
+        holderCount: 0,
+        holderGrowthPct: 0,
+        holderGrowth10mPct: 0,
+        riskScore: 0,
+        pricePath: { ...EMPTY_PRICE_PATH, pathHolderSlope10m: 0 },
+      }),
+    );
+    expect(unindexed.holderCount).toBeNull();
+    expect(unindexed.holderGrowthPct).toBeNull();
+    expect(unindexed.holderGrowth10mPct).toBeNull();
+    expect(unindexed.riskScore).toBeNull();
+    expect(unindexed.pathHolderSlope10m).toBeNull();
+    // No report at all is the same answer.
+    const missing = buildCandidateFeatures(scored({}));
+    expect(missing.holderCount).toBeNull();
+    expect(missing.holderGrowthPct).toBeNull();
+    expect(missing.riskScore).toBeNull();
+    // A real flat on a counted holder list stays 0. Jupiter's count is a different input.
+    const flat = buildCandidateFeatures(
+      scored({
+        holderCount: 220,
+        holderGrowthPct: 0,
+        holderGrowth10mPct: 0,
+        riskScore: 0,
+        pricePath: { ...EMPTY_PRICE_PATH, pathHolderSlope10m: 0 },
+        freshQuote: { priceUsd: 0.0001, marketCapUsd: 150_000, fetchedAt: new Date(), holderCount: 218 },
+      }),
+    );
+    expect(flat.holderCount).toBe(220);
+    expect(flat.holderGrowthPct).toBe(0);
+    expect(flat.holderGrowth10mPct).toBe(0);
+    expect(flat.riskScore).toBe(0);
+    expect(flat.pathHolderSlope10m).toBe(0);
+    expect(flat.jupHolderCount).toBe(218);
+    for (const name of [
+      "holderCount",
+      "riskScore",
+      "holderGrowthPct",
+      "holderGrowth10mPct",
+      "pathHolderSlope10m",
+    ] as const) {
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+      expect(LEARNER_FEATURE_NAMES).not.toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain(name);
+    }
+    for (const name of ["jupHolderCount", "jup5mHolderChange", "jup1hHolderChange"] as const) {
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+    }
   });
 
   it("leaves them null when the inputs were never seen", () => {
@@ -975,6 +1065,50 @@ describe("maskKnownBadInputs", () => {
     expect(isRawWalletRiskRow(before, percentile)).toBe(false);
     expect(maskKnownBadInputs(before, percentile)).toMatchObject({ walletRiskTop10Max: 60 });
     expect(maskKnownBadInputs(WALLET_RISK_PERCENTILE_SINCE, raw)).toBe(raw);
+  });
+
+  it("reads a RugCheck 0 as missing while a missing report meant the coin was not indexed", () => {
+    const row = {
+      holderCount: 0,
+      riskScore: 0,
+      holderGrowthPct: 0,
+      holderGrowth10mPct: 0,
+      pathHolderSlope10m: 0,
+      jupHolderCount: 40,
+      jup5mHolderChange: 3,
+      mcapUsd: 20_000,
+    };
+    const during = new Date("2026-10-15T12:00:00Z");
+    expect(maskKnownBadInputs(during, row)).toEqual({
+      ...row,
+      holderCount: null,
+      riskScore: null,
+      holderGrowthPct: null,
+      holderGrowth10mPct: null,
+      pathHolderSlope10m: null,
+    });
+    expect(row.holderGrowthPct).toBe(0);
+    // A non-zero reading stays, Jupiter's count included. A 0 does not, even beside a count:
+    // in this window a stored 0 was not distinguishable from a report that was not in yet.
+    const indexed = {
+      holderCount: 180,
+      holderGrowthPct: 4,
+      holderGrowth10mPct: 2,
+      riskScore: 12,
+      pathHolderSlope10m: 1.5,
+      jupHolderCount: 180,
+    };
+    expect(maskKnownBadInputs(during, indexed)).toBe(indexed);
+    const flatBesideCount = { holderCount: 180, holderGrowthPct: 0, jup5mHolderChange: 1 };
+    expect(maskKnownBadInputs(during, flatBesideCount)).toEqual({
+      holderCount: 180,
+      holderGrowthPct: null,
+      jup5mHolderChange: 1,
+    });
+    // Outside the window a 0 is a reading again.
+    expect(maskKnownBadInputs(new Date(RUGCHECK_UNINDEXED_FILL.from.getTime() - 1), row)).toBe(row);
+    expect(maskKnownBadInputs(RUGCHECK_UNINDEXED_FILL.until, row)).toBe(row);
+    expect(maskKnownBadInputs(RUGCHECK_UNINDEXED_FILL.from, row).holderGrowthPct).toBeNull();
   });
 
   it("reads emptyTop10WalletPct as missing before unpriced holdings made it unknown (#678)", () => {

@@ -13,9 +13,9 @@
  * Measured on 3,416 called coins' tapes (10-12..10-17, the creator from the tape): a coin whose dev
  * had launched before stopped 86-89% of the time against 75% for a first launch, and one whose dev
  * had earlier graded launches and no win doubled 11.2% (n=884) against 15.3%. A dev with a win
- * among a third or more of its graded launches doubled 17.2% (n=157). A modest signal, so the
- * score is recorded on the decisions first (features.ts DEV_LAUNCH_FEATURES) and, like the wallet
- * risk score, meant to be read, not fitted.
+ * among a third or more of its graded launches doubled 17.2% (n=157). The learners read the
+ * decision-time features (features.ts DEV_LAUNCH_FEATURES). A missing score stays null, and the
+ * onset guard holds the columns out of a run until they cover the exam.
  *
  * A fresh wallet per launch would hide a farm from a per-creator record (relaunchFarm.ts), so the
  * creators one funder paid for (WalletFunder, exchanges and other hot funders aside) are pooled as

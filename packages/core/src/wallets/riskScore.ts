@@ -303,7 +303,7 @@ export interface WalletRiskAsOf {
   rank?: (score: number) => number;
 }
 
-/** What the scan reads per coin from the win scores (recorded only, not read by the models yet). */
+/** What the scan reads per coin from the win scores. The learners read these (features.ts WALLET_WIN_FEATURES); null stays null, and the onset guard holds them until they cover the exam. */
 export interface CoinWalletWins {
   /** Highest win score among the top-10 holders scored; null when none is. */
   walletWinTop10Max: number | null;

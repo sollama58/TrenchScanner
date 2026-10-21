@@ -112,6 +112,11 @@ export function clockContext(
   };
 }
 
+/** A RugCheck count of 0 is an unindexed list, not a flat book. Left on the tape it slopes at 0. */
+function holderReading(holders: number | null | undefined): number | null {
+  return typeof holders === "number" && holders > 0 ? holders : null;
+}
+
 interface Tick {
   at: number;
   priceUsd: number;
@@ -176,7 +181,7 @@ export class PricePathBook {
       }
       if (last && t - last.at < MIN_TICK_SPACING_MS) tape.pop();
     }
-    tape.push({ at: t, priceUsd, holders: holders ?? null, holdersAt: holdersAt?.getTime() ?? t });
+    tape.push({ at: t, priceUsd, holders: holderReading(holders), holdersAt: holdersAt?.getTime() ?? t });
     const cutoff = t - TAPE_MS;
     while (tape.length > 0 && tape[0]!.at < cutoff) tape.shift();
     this.tapes.set(mint, tape);
@@ -210,7 +215,7 @@ export class PricePathBook {
       earlier.push({
         at,
         priceUsd: t.priceUsd,
-        holders: t.holders ?? null,
+        holders: holderReading(t.holders),
         holdersAt: t.holdersAt?.getTime() ?? at,
       });
     }

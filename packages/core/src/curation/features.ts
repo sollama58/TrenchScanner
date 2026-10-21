@@ -143,7 +143,11 @@ export const BUNDLED_FEATURES = ["sameTimeFundedCount", "bundledWalletCount"] as
  * score among the top-10 holders, the first buyers' mean, the % of supply held by top holders
  * labelled winners, how many first buyers are labelled winners, and how many
  * winner wallets bought and sold in the coin's newest trades. Null on the same terms as the risk
- * readings. Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ * readings. A null stays null: an unscored wallet is not a win score of 0.
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-21), so they are not in RETIRED_LEARNER_INPUTS. They are
+ * not ns* features. The onset guard (featureOnset.ts) keeps them out of a run until they cover
+ * enough of the exam's span, including inside age buckets.
  */
 export const WALLET_WIN_FEATURES = [
   "walletWinTop10Max",
@@ -390,8 +394,11 @@ export const CURVE_PATH_FEATURES = [
  * behind it. The coin's own launch is taken out. Null while the creator is unknown or the hourly
  * scores aren't loaded, and on every row banked before. On 3,416 called coins' tapes, a dev with
  * graded launches and no win doubled 11.2% against 15.3% for a first launch, and any earlier launch
- * raised the stop rate from 75% to 86-89%. Recorded first: no learner reads them until a few days
- * of decision rows show what they carry (RETIRED_LEARNER_INPUTS).
+ * raised the stop rate from 75% to 86-89%. A missing score stays null: a first look is not a risk of 0.
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-21), so they are not in RETIRED_LEARNER_INPUTS. They are
+ * not ns* features. The onset guard (featureOnset.ts) keeps them out of a run until they cover
+ * enough of the exam's span, including inside age buckets.
  */
 export const DEV_LAUNCH_FEATURES = [
   "devLaunchRisk",
@@ -463,7 +470,9 @@ export const CANDIDATE_FEATURE_NAMES = [
   "scoreTotal",
   // Added 2026-10-03 (pipeline audit). Ratios a linear model can't build from its inputs, the
   // short-window holder growth young tokens otherwise lack, how long the token has already sat
-  // in the band, and discovery metadata.
+  // in the band, and discovery metadata. minutesSinceFirstInBand is still written at this number
+  // so a deployed model that names it scores. The fit reads bandDwellShare (the share of
+  // launch-age spent in the band).
   "liquidityToMcapRatio",
   "volume5mToMcapRatio",
   "holderGrowth10mPct",
@@ -738,8 +747,9 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "devSoldShare",
   // The in-memory tape's length (user decision 2026-10-08): the tape empties on every deploy (13-14
   // times in three days), so for up to an hour after one every token reads as minutes old and the
-  // models learned it as youth. ageMinutes and minutesSinceFirstInBand carry youth without the
-  // artefact; it stays recorded as the gauge of how far the other path inputs can be trusted.
+  // models learned it as youth. launchAgeMinutes and bandDwellShare carry youth and time in the
+  // band without the artefact; it stays recorded as the gauge of how far the other path inputs
+  // can be trusted. minutesSinceFirstInBand is retired below.
   "pathObservedMinutes",
   // X counts (NARRATIVE_FEATURES_V7) and story heat (NARRATIVE_FEATURES_V8) are read from
   // 2026-10-21 (user ask). Market seats see them through MARKET_TOKENSAGE_INPUTS; the onset
@@ -778,9 +788,8 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // The live flagged-wallet trades (added 2026-10-13): recorded first, on the same terms.
   ...LIVE_FLAG_FEATURES,
   // The same-minute funding groups (added 2026-10-13): recorded first, on the same terms.
-  // The win-side wallet readings and the KOL counts (added 2026-10-13): recorded first, on the
-  // same terms (notes/holder-data-eval-2026-10-13/report.md).
-  ...WALLET_WIN_FEATURES,
+  // The win-side wallet readings (WALLET_WIN_FEATURES, added 2026-10-13) are read from 2026-10-21
+  // (user ask). They are not ns* features. Null stays null. The onset guard times their first run.
   // TokenSage's trend novelty and decision-time trend and story heat (added 2026-10-13, user
   // ask "build all of the fixes"): recorded first. Bring them in by removing them here once two
   // days of decision rows show they separate runners (notes/tokensage-trend-heat-2026-10-13.md).
@@ -801,8 +810,8 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // The hidden Wallet Score of the newest buyers (added 2026-10-16, user ask): recorded first, on
   // the same terms (notes/wallet-score-2026-10-16/report.md).
   // The bonding-curve path of a young coin (added 2026-10-17, user ask): recorded first.
-  // The dev launch reading (added 2026-10-17, user ask): recorded first.
-  ...DEV_LAUNCH_FEATURES,
+  // The dev launch reading (DEV_LAUNCH_FEATURES, added 2026-10-17) is read from 2026-10-21 (user
+  // ask). It is not an ns* feature. Null stays null. The onset guard times its first run.
   // Dead inputs (notes/full-audit-2026-10-14, lanes 4 and 10): the launch-text read is empty on
   // every row since the text scorer has no API key, nsXCredibility is empty since TokenSage's
   // rules 0.23 moved credibility to nsXCredibility23, and nsFeeMutable is 0 on every row that
@@ -881,6 +890,10 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "sells24h",
   "pathRet15mPct",
   "pathRet30mPct",
+  // Time already spent in the band (2026-10-21). bandDwellShare is the share of launch-age spent
+  // in the band and is the learner input. minutesSinceFirstInBand stays on the vector at the same
+  // number buildCandidateFeatures writes, so a deployed model that still names it scores.
+  "minutesSinceFirstInBand",
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
@@ -1247,6 +1260,31 @@ const SOCIALS_UNREAD_FEATURES = [
 export const EMPTY_WALLETS_UNPRICED_NULL_SINCE = new Date("2026-10-16T19:30:00Z");
 
 /**
+ * Rows anchored in this window stored a RugCheck holder reading of 0 where the report was not
+ * indexed yet (data-correctness audit 2026-10-16). From 2026-10-14 13:00 UTC a cached "not found"
+ * (#599) stood in for a young coin: holder count, risk and the growth built on RugCheck's count
+ * were present on 99% of decision rows under five minutes old on 10-11 and 6% on 10-15. A 0 in
+ * that window is the missing report written as a number (flat growth, an empty count, a perfect
+ * risk, a holder slope of 0), which a learner or a recipe that names the column treats as "flat"
+ * rather than "not in yet". Those zeros read as missing. A non-zero reading is a report RugCheck
+ * had indexed and stays. #599 re-asks a young coin after a minute (deployed 2026-10-15 23:21 UTC);
+ * the late edge has slack so a row banked under the old cache is not read as measured. Jupiter's
+ * holder count and holder changes are a different source and are not touched. The RugCheck columns
+ * stay in RETIRED_LEARNER_INPUTS.
+ */
+export const RUGCHECK_UNINDEXED_FILL = {
+  from: new Date("2026-10-14T13:00:00Z"),
+  until: new Date("2026-10-15T23:30:00Z"),
+} as const;
+const RUGCHECK_DERIVED_FEATURES = [
+  "holderCount",
+  "riskScore",
+  "holderGrowthPct",
+  "holderGrowth10mPct",
+  "pathHolderSlope10m",
+] as const satisfies readonly CandidateFeatureName[];
+
+/**
  * Rows banked before this may carry a graduated coin's age counted from its PumpSwap pool: a coin
  * the scan first met after graduation took its age from the pool pair, so one that bonded after
  * an hour read as a minute old. Since #678 (dc17709, committed 2026-10-16 18:47 UTC, deployed with
@@ -1320,6 +1358,8 @@ export function withLaunchAge<T extends Record<string, number | null | undefined
  * The creator share and the two bundle figures through HOLDER_TRANSFER_LINKS_WINDOW.
  * walletRiskTop10Max on raw-score rows (isRawWalletRiskRow), a 0 social bit before
  * SOCIALS_UNREAD_NULL_SINCE, and emptyTop10WalletPct before EMPTY_WALLETS_UNPRICED_NULL_SINCE.
+ * A RugCheck-derived 0 (holder count, risk, both holder-growth inputs, the holder slope) inside
+ * RUGCHECK_UNINDEXED_FILL, where that 0 was a report not indexed yet.
  * (A graduated row's pool age is rebuilt separately, by withLaunchAge, since it needs the Token.)
  * The TokenSage inputs on rows banked before NS_RULES_VERSION_MARKER_SINCE that carry no
  * nsRulesVersion: those pre-date the marker and span the #631 regime step. From here on a change
@@ -1369,6 +1409,9 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
     masked[name] = null;
   };
   const done = (): T => (masked ?? features) as T;
+  if (at >= RUGCHECK_UNINDEXED_FILL.from.getTime() && at < RUGCHECK_UNINDEXED_FILL.until.getTime()) {
+    for (const name of RUGCHECK_DERIVED_FEATURES) if (features[name] === 0) clear(name);
+  }
   if (unwaitedHourly) HOURLY_UNWAITED_FEATURES.forEach(clear);
   if (rebuiltBundled) clear("bundledSupplyPct");
   if (unversionedNs) ALL_NARRATIVE_FEATURES.forEach(clear);
@@ -1878,6 +1921,17 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
       ? (scored.volume5mUsd * 12) / scored.volume1hUsd
       : null;
 
+  // RugCheck's count of 0 is an unindexed list. Growth, risk and the holder slope of 0 beside
+  // no count are that same "report not in yet", not a flat or clean coin. A real 0 measured on
+  // a positive count stays 0. Jupiter's holder count is a different field and is not rewritten.
+  const indexedHolderCount =
+    typeof scored.holderCount === "number" && scored.holderCount > 0 ? scored.holderCount : null;
+  const rugReading = (value: number | undefined): number | null => {
+    if (value === undefined) return null;
+    if (indexedHolderCount === null && value === 0) return null;
+    return value;
+  };
+
   const features = {
     mcapUsd: scored.marketCapUsd ?? null,
     liquidityUsd: scored.liquidityUsd ?? null,
@@ -1897,12 +1951,12 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     buyRatio1h,
     volume1hToMcapRatio,
     volumeAccel,
-    holderCount: scored.holderCount ?? null,
-    holderGrowthPct: scored.holderGrowthPct ?? null,
-    holderGrowth10mPct: scored.holderGrowth10mPct ?? null,
+    holderCount: indexedHolderCount,
+    holderGrowthPct: rugReading(scored.holderGrowthPct),
+    holderGrowth10mPct: rugReading(scored.holderGrowth10mPct),
     top10HolderPct: scored.top10HolderPct ?? null,
     devWalletPct: scored.devWalletPct ?? null,
-    riskScore: scored.riskScore ?? null,
+    riskScore: rugReading(scored.riskScore),
     freshTop10WalletPct: scored.freshTop10WalletPct ?? null,
     emptyTop10WalletPct: scored.emptyTop10WalletPct ?? null,
     sniperTop10WalletPct: scored.sniperTop10WalletPct ?? null,
@@ -2017,7 +2071,10 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     textMemeAppeal: scored.textScores?.memeAppeal ?? null,
     textScamSignals: scored.textScores?.scamSignals ?? null,
     ...(Object.fromEntries(
-      PRICE_PATH_FEATURES.map((k) => [k, (scored.pricePath ?? EMPTY_PRICE_PATH)[k]]),
+      PRICE_PATH_FEATURES.map((k) => {
+        const value = (scored.pricePath ?? EMPTY_PRICE_PATH)[k];
+        return [k, k === "pathHolderSlope10m" ? rugReading(value ?? undefined) : value];
+      }),
     ) as Record<(typeof PRICE_PATH_FEATURES)[number], number | null>),
     ...(Object.fromEntries(
       MARKET_CONTEXT_FEATURES.map((k) => [k, (scored.marketContext ?? EMPTY_MARKET_CONTEXT)[k]]),

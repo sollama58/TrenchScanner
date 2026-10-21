@@ -443,7 +443,13 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
     mintAuthorityActive: report.token ? Boolean(report.token.mintAuthority) : true,
     freezeAuthorityActive: report.token ? Boolean(report.token.freezeAuthority) : true,
     lpBurned,
-    riskScore: report.score_normalised,
+    // 0 with no indexed holder list is "report not in yet", not a clean score. A real 0 on a
+    // list RugCheck has counted stays 0.
+    riskScore:
+      typeof report.score_normalised === "number" &&
+      ((typeof report.totalHolders === "number" && report.totalHolders > 0) || report.score_normalised !== 0)
+        ? report.score_normalised
+        : undefined,
     riskFlags,
     ...(markets.length === 0 ? { marketsListed: false as const } : {}),
     ...(launchLabMarkets.length > 0 ? { launchLabLpBurned: launchLabMarkets.every(locked) } : {}),

@@ -238,6 +238,11 @@ describe("PricePathBook", () => {
     const stale = new PricePathBook();
     for (let m = 0; m <= 15; m++) stale.observe("s", new Date(T0 + m * MIN), 1, 100, new Date(T0));
     expect(stale.features("s").pathHolderSlope10m).toBeNull();
+    // An unindexed count of 0, ten minutes apart, is not a flat slope.
+    const unindexed = new PricePathBook();
+    unindexed.observe("u", new Date(T0), 1, 0, new Date(T0));
+    unindexed.observe("u", new Date(T0 + 10 * MIN), 1, 0, new Date(T0 + 10 * MIN));
+    expect(unindexed.features("u").pathHolderSlope10m).toBeNull();
   });
 
   it("forgets mints that stopped being observed", () => {
