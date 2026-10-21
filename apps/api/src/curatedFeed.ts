@@ -842,6 +842,43 @@ export function cardSnapshot<S extends { flaggedTrades?: unknown }>(snapshot: S)
   return rest;
 }
 
+/**
+ * Age at the alert, from the newest scan, so the feed's Age tile still has a clock after the
+ * alert snapshot is dropped. The tile ages `ageMinutes` forward from the snapshot's own time,
+ * which for the stand-in is the alert.
+ */
+function ageMinutesAtAlert(
+  alertAt: Date,
+  latest: { ageMinutes?: number | null; takenAt?: Date | null } | null,
+): number | null {
+  if (!latest || latest.ageMinutes == null || !(latest.takenAt instanceof Date)) return null;
+  const age = latest.ageMinutes + (alertAt.getTime() - latest.takenAt.getTime()) / 60_000;
+  return Number.isFinite(age) && age >= 0 ? age : null;
+}
+
+/** Volume over the cap the card shows. A ratio stored against the scan cap is moved onto the anchor. */
+function anchorVolumeToMcap(
+  stored: { marketCapUsd?: number | null; volume24hUsd?: number | null; volumeToMcapRatio?: number | null },
+  anchorMcapUsd: number,
+): number | null {
+  const volume = stored.volume24hUsd;
+  if (typeof volume === "number" && Number.isFinite(volume) && anchorMcapUsd > 0)
+    return volume / anchorMcapUsd;
+  const ratio = stored.volumeToMcapRatio;
+  const scanCap = stored.marketCapUsd;
+  if (
+    typeof ratio === "number" &&
+    Number.isFinite(ratio) &&
+    typeof scanCap === "number" &&
+    scanCap > 0 &&
+    anchorMcapUsd > 0 &&
+    scanCap !== anchorMcapUsd
+  ) {
+    return (ratio * scanCap) / anchorMcapUsd;
+  }
+  return typeof ratio === "number" && Number.isFinite(ratio) ? ratio : null;
+}
+
 export function serializeCuratedAlert(
   alert: CuratedAlertWithRelations,
   currentMarketCap: (
@@ -919,7 +956,7 @@ export function serializeCuratedAlert(
     mintAuthorityActive: null,
     freezeAuthorityActive: null,
     lpBurned: null,
-    ageMinutes: null,
+    ageMinutes: ageMinutesAtAlert(alert.createdAt, latestSnapshot),
     // The token's composite score is a scan figure this synthesized snapshot doesn't hold (the
     // card shows it under "Score"); the model's own confidence is on `curated`.
     score: null,
@@ -938,6 +975,7 @@ export function serializeCuratedAlert(
     ...stored,
     priceUsd: alert.anchorPriceUsd,
     marketCapUsd: alert.anchorMcapUsd,
+    volumeToMcapRatio: anchorVolumeToMcap(stored, alert.anchorMcapUsd),
   });
 
   // The peak the card's ATH section shows. Derived from the outcome watcher's peak rather than
@@ -1038,6 +1076,8 @@ export interface ModelCall {
   tier: string | null;
   calibratedPct: number | null;
   alertedAt: Date;
+  /** The call's stored anchor cap. Null when that row did not carry one. */
+  mcapUsd: number | null;
 }
 
 /**
@@ -1078,6 +1118,7 @@ export function groupSameTokenCalls<
     confidence: number;
     tier?: string | null;
     calibratedPct?: number | null;
+    anchorMcapUsd?: number | null;
   },
 >(rowsNewestFirst: T[], windowMs: number): CallGroup<T>[] {
   const open = new Map<string, { newest: T; rows: T[] }>();
@@ -1108,6 +1149,7 @@ export function groupSameTokenCalls<
         tier: r.tier ?? null,
         calibratedPct: r.calibratedPct ?? null,
         alertedAt: r.createdAt,
+        mcapUsd: typeof r.anchorMcapUsd === "number" && r.anchorMcapUsd > 0 ? r.anchorMcapUsd : null,
       })),
     };
   });

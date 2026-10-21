@@ -317,8 +317,10 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(row?.sentThrough.getTime()).toBeGreaterThanOrEqual(later.getTime());
   });
 
-  it("shows Pump.fun's market cap at the call instead of the lagging scan snapshot's", async () => {
+  it("shows the stored alert cap, not Pump.fun's live cap and not the lagging scan", async () => {
     await rewind();
+    await prisma.curatedAlert.deleteMany({ where: { tokenId } });
+    await prisma.match.deleteMany({ where: { tokenId } });
     const at = new Date(Date.now() - 30_000);
     await prisma.curatedAlert.create({
       data: {
@@ -326,8 +328,8 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
         snapshotId,
         source: "test",
         confidence: 80,
-        anchorPriceUsd: 0.001,
-        anchorMcapUsd: 50_000,
+        anchorPriceUsd: 0.00096,
+        anchorMcapUsd: 48_000,
         liveMcapUsd: 43_200,
         model: "rules",
         modelName: "Rules",
@@ -336,7 +338,10 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     });
     const api = new FakeTelegramApi();
     expect((await run(api)).sent).toBe(1);
-    expect(api.sent()[0]!.text).toContain("MC <b>$43.2k</b>");
+    const text = api.sent()[0]!.text;
+    expect(text).toContain("MC <b>$48.0k</b>");
+    expect(text).not.toContain("$43.2k");
+    expect(text).not.toContain("$50.0k");
   });
 
   it("shows the call's anchor, not the lagging scan snapshot's, when Pump.fun didn't answer", async () => {

@@ -357,7 +357,8 @@ export interface VolumeCandle {
   /** Its high and low, for the candle view; absent, the open and close bound it. */
   h?: number;
   l?: number;
-  vol: number;
+  /** USD volume. Null when the source omitted it: that is not a trade of size 0. */
+  vol: number | null;
   /** Its width in ms; a minute when absent (Pump.fun's minute candles). */
   w?: number;
   /**
@@ -414,7 +415,8 @@ export function barOver<B extends { span?: number }>(
 export interface VolumeBar {
   from: number;
   to: number;
-  usd: number;
+  /** Null when every candle in the slice omitted volume. A reported 0 stays 0. */
+  usd: number | null;
   o: number;
   c: number;
   /** Slots it covers, from its own: more than one for a candle wider than a slot (slotOf). */
@@ -461,7 +463,7 @@ export function volumeBars(
         ...(at.span > 1 ? { span: at.span } : {}),
       };
     else {
-      b.usd += k.vol;
+      if (k.vol != null) b.usd = (b.usd ?? 0) + k.vol;
       b.to = k.t + w;
       b.c = k.c;
     }

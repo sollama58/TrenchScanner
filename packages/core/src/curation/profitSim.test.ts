@@ -5,6 +5,7 @@ import {
   describeExitPlan,
   exitPlanView,
   exitPlanPositionOpen,
+  foldWindowCloseTrail,
   simulateExitPlan,
   trailLevelPriceUsd,
   type ExitPlan,
@@ -156,6 +157,25 @@ describe("simulateExitPlan under the default plan (35% at 2x, 30% at 4x, 25% at 
       trailExitPriceUsd: 3,
     });
     expect(simulateExitPlan(fired, 2.9)).toBeCloseTo((0.35 * 2 + 0.3 * 4 + 0.35 * 3 - 1) * 100, 6);
+  });
+
+  it("applies the window peak before a close at or above 2x can arm the trail", () => {
+    // The peak ran to 12x inside the window. The close, 2.9, is already through the 40% trail
+    // (7.2) and is itself above 2x. Arming at 2.9 first would drop the 4x and 10x rungs and
+    // leave the share open (2.9 sits above 2.9 x 0.6). The peak arms first, then the close fills.
+    const open = row({ peakBeforeStopPriceUsd: 12, peak1hPriceUsd: 12 });
+    const folded = foldWindowCloseTrail(open, 2.9, at);
+    expect(folded.trailHighPriceUsd).toBe(12);
+    expect(folded.trailExitPriceUsd).toBe(2.9);
+    const armed = row({ ...open, ...folded });
+    expect(simulateExitPlan(armed, 2.9)).toBeCloseTo(
+      (0.35 * 2 + 0.3 * 4 + 0.25 * 10 + 0.1 * 2.9 - 1) * 100,
+      6,
+    );
+    // 8 is still above the 7.2 level, so the share stays open and the high stays the peak.
+    const held = foldWindowCloseTrail(open, 8, at);
+    expect(held).toEqual({ trailHighPriceUsd: 12 });
+    expect(simulateExitPlan(row({ ...open, ...held }), 8)).toBeNull();
   });
 });
 

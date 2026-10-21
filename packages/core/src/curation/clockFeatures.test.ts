@@ -84,6 +84,15 @@ describe("applyClockFeatures", () => {
     expect(applyClockFeatures({ pairAgeMinutes: 3, volume5mUsd: 60 }).volPerMin5m).toBe(20);
   });
 
+  it("uses a stored fresh anchor instead of the scan cap it would otherwise keep", () => {
+    // A rule-3 row regraded onto a fresh quote stores that cap on the row. The vector can still
+    // hold the scan cap, and clearing the gap would rebuild decisionMcapUsd from it.
+    const fresh = applyClockFeatures({ mcapUsd: 10_000, freshGapPct: null, decisionMcapUsd: 10_000 }, 16_000);
+    expect(fresh.decisionMcapUsd).toBe(16_000);
+    const same = applyClockFeatures({ mcapUsd: 10_000, decisionMcapUsd: 10_000 }, 10_000);
+    expect(same.decisionMcapUsd).toBe(10_000);
+  });
+
   it("keeps a stored decision cap when the scan cap and gap would rebuild a different one", () => {
     // Live (buildCandidateFeatures) stores decisionAnchor's cap. The anchor refuses a quote
     // that has a price but no market cap, even when the gap is inside the trusted ratio, and

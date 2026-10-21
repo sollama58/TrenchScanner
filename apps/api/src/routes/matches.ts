@@ -75,6 +75,7 @@ const CALL_SELECT = {
   confidence: true,
   tier: true,
   calibratedPct: true,
+  anchorMcapUsd: true,
 } satisfies Prisma.CuratedAlertSelect;
 type CallRow = Prisma.CuratedAlertGetPayload<{ select: typeof CALL_SELECT }>;
 
@@ -1426,12 +1427,18 @@ export function currentMarketCap(
 ): { marketCapUsd: number | null; at: Date | null } {
   const liveAt = token.liveDataAt?.getTime() ?? -Infinity;
   const snapshotAt = latestSnapshot?.takenAt.getTime() ?? -Infinity;
+  // A missing cap stored as 0 is not a reading. It must not beat a real cap, even when its
+  // timestamp is the newer one.
+  const liveCap =
+    token.liveMarketCapUsd != null && token.liveMarketCapUsd > 0 ? token.liveMarketCapUsd : null;
+  const snapCap =
+    latestSnapshot != null && latestSnapshot.marketCapUsd > 0 ? latestSnapshot.marketCapUsd : null;
 
-  if (token.liveMarketCapUsd != null && liveAt >= snapshotAt) {
-    return { marketCapUsd: token.liveMarketCapUsd, at: token.liveDataAt };
+  if (liveCap != null && (snapCap == null || liveAt >= snapshotAt)) {
+    return { marketCapUsd: liveCap, at: token.liveDataAt };
   }
-  if (latestSnapshot) {
-    return { marketCapUsd: latestSnapshot.marketCapUsd, at: latestSnapshot.takenAt };
+  if (snapCap != null && latestSnapshot) {
+    return { marketCapUsd: snapCap, at: latestSnapshot.takenAt };
   }
   return { marketCapUsd: null, at: null };
 }

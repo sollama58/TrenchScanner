@@ -110,7 +110,7 @@ describe("buildSlots", () => {
       [8_000, 11],
     ]);
     // The dropped 5-second candle's volume (40) is not painted on the 1-second scale either.
-    expect(slots.bars.reduce((sum, b) => sum + b.vol, 0)).toBe(6);
+    expect(slots.bars.reduce((sum, b) => sum + (b.vol ?? 0), 0)).toBe(6);
     // A 5s candle handed straight to the 1s slots is omitted too, not drawn five seconds wide.
     const direct = buildSlots([k(0, 1, 2, 5_000), k(5_000, 2, 3, 1_000)], [], 1_000)!;
     expect(direct.start).toBe(5_000);

@@ -276,6 +276,22 @@ describe.skipIf(!dbAvailable)("curated alert emission", () => {
     const under = await prisma.token.create({ data: { mintAddress: `${TAG}-under-band` } });
     const scoredUnder = curatableFixture(under.mintAddress, { marketCapUsd: env.MCAP_FILTER_MIN / 2 });
     expect(await collectAndEmit(env, under, scoredUnder, null)).toBe(false);
+
+    // Dex is inside the band. The fresh anchor is above the max, so the call does not go out.
+    const quoted = await prisma.token.create({ data: { mintAddress: `${TAG}-quote-over-max` } });
+    const scanCap = Math.max(env.MCAP_FILTER_MAX / 4, env.MCAP_FILTER_MIN);
+    const quotePrice = 0.0001 * Math.min(5, (env.MCAP_FILTER_MAX / scanCap) * 1.2);
+    const scoredQuote = curatableFixture(quoted.mintAddress, {
+      priceUsd: 0.0001,
+      marketCapUsd: scanCap,
+      freshQuote: {
+        priceUsd: quotePrice,
+        marketCapUsd: scanCap * (quotePrice / 0.0001),
+        fetchedAt: new Date(),
+      },
+    });
+    expect(await collectAndEmit(env, quoted, scoredQuote, null)).toBe(false);
+    expect(await prisma.curatedAlert.count({ where: { tokenId: quoted.id } })).toBe(0);
   });
 
   it("emits nothing for a candidate the gate rejects, and creates no extra rows doing it", async () => {

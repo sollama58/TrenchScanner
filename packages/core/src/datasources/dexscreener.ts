@@ -1334,7 +1334,9 @@ function toCandidateToken(pair: DexScreenerPair, launchHomeClock = false): Candi
     name: pair.baseToken.name,
     pairAddress: pair.pairAddress,
     priceUsd: Number(pair.priceUsd ?? 0),
-    marketCapUsd: pair.marketCap ?? pair.fdv ?? 0,
+    // A missing cap is not 0, and a 0 must not hide a real fdv. 0 is only what is left when
+    // neither figure is a cap; currentMarketCap does not let that 0 beat a real one.
+    marketCapUsd: [pair.marketCap, pair.fdv].find((v) => typeof v === "number" && v > 0) ?? 0,
     liquidityUsd: pair.liquidity?.usd,
     volume24hUsd: usd?.h24,
     buys24h: pair.txns?.h24?.buys,

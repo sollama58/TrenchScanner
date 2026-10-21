@@ -252,8 +252,12 @@ export function parseGeckoTokens(
     });
     const pool = selectable.length > 0 ? pickCanonicalPair(selectable, launchHomeClock).pool : undefined;
     const p = pool?.attributes;
+    // A reported 0 is a missing cap. It must not hide a real fdv, and it must not be the cap
+    // that later wins currentMarketCap over a real one.
     const marketCapUsd =
-      num(a.market_cap_usd) ?? num(a.fdv_usd) ?? num(p?.market_cap_usd) ?? num(p?.fdv_usd) ?? 0;
+      [num(a.market_cap_usd), num(a.fdv_usd), num(p?.market_cap_usd), num(p?.fdv_usd)].find(
+        (v) => v !== undefined && v > 0,
+      ) ?? 0;
     const priceUsd = num(p?.base_token_price_usd) ?? num(a.price_usd) ?? 0;
     if (marketCapUsd <= 0 && priceUsd <= 0) continue;
     const dexId = toDexId(pool?.relationships?.dex?.data?.id, launchHomeClock);

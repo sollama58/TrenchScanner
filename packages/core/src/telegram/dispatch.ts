@@ -399,24 +399,18 @@ export function buildPending(
   }
   if (chat.modelCalls) {
     // Per coin, which of a call's figures its card's market cap was set from.
-    const callMcapSet = new Map<string, "live" | "anchor">();
+    const callMcapSet = new Map<string, "anchor">();
     for (const c of calls) {
       if (!inWindow(c.createdAt)) continue;
       const p = take(c.tokenId, c.createdAt, c.token, c.snapshot);
       if (c.id && p.sends[0]!.curatedAlertId === null) p.sends[0]!.curatedAlertId = c.id;
-      // The call's price as it went out, over the scan snapshot's (a filter match's included):
-      // that one is DexScreener's, 45-60s behind the market. Pump.fun's market cap at send when a
-      // call on the coin has it (CuratedAlert.liveMcapUsd), else the first call's own anchor, the
-      // "Alert" figure the dashboard shows.
+      // The call's stored anchor, over the scan snapshot's (a filter match's included): that
+      // one is DexScreener's, 45-60s behind the market. liveMcapUsd is a later print and must
+      // not replace the anchor the card and the grades use.
       const set = callMcapSet.get(c.tokenId);
-      if (p.card.snapshot && set !== "live") {
-        if (c.liveMcapUsd != null) {
-          p.card.snapshot = { ...p.card.snapshot, marketCapUsd: c.liveMcapUsd };
-          callMcapSet.set(c.tokenId, "live");
-        } else if (set === undefined && c.anchorMcapUsd !== undefined && c.anchorMcapUsd > 0) {
-          p.card.snapshot = { ...p.card.snapshot, marketCapUsd: c.anchorMcapUsd };
-          callMcapSet.set(c.tokenId, "anchor");
-        }
+      if (p.card.snapshot && set !== "anchor" && c.anchorMcapUsd !== undefined && c.anchorMcapUsd > 0) {
+        p.card.snapshot = { ...p.card.snapshot, marketCapUsd: c.anchorMcapUsd };
+        callMcapSet.set(c.tokenId, "anchor");
       }
       const modelName = c.modelName ?? c.model ?? "A model";
       if (!p.card.calls.some((k) => k.modelName === modelName)) {
