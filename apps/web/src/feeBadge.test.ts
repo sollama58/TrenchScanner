@@ -26,4 +26,18 @@ describe("feeBadge", () => {
     );
     expect(feeBadge({ destination: "creator", summary: null })?.title).toBe("Creator fees go to the dev.");
   });
+
+  it("names the charity on the heart's tooltip when Pump.fun loaded one (user ask 2026-10-21)", () => {
+    const name = "St. Jude Children's Research Hospital";
+    expect(
+      feeBadge({ destination: "charity", summary: "creator fees go to charity.", charityName: name })?.title,
+    ).toBe(`${name}. Creator fees go to charity.`);
+    expect(feeBadge({ destination: "charity", summary: null, charityName: name })?.title).toBe(
+      `Creator fees go to ${name}.`,
+    );
+    // A name on any other destination is not the heart, and is not shown there.
+    expect(feeBadge({ destination: "creator", summary: null, charityName: name })?.title).toBe(
+      "Creator fees go to the dev.",
+    );
+  });
 });

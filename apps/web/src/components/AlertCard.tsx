@@ -190,6 +190,7 @@ export function AlertCard({
     devHolding,
     devFromLatest,
     feeLine,
+    charityName,
   } = cardReadings(tileCard, "newest");
   const devWhen = devFromLatest
     ? `as of the scan ${ago(card.latestSnapshot!.takenAt, now)}`
@@ -727,6 +728,7 @@ export function AlertCard({
                   : devHolding
                     ? `DH = Dev Holding: the creator's wallet still holds this token (${devWhen})`
                     : `DS = Dev Sold: the creator's wallet holds none of this token (${devWhen})`) +
+                (charityName ? `\nCharity: ${charityName}` : "") +
                 (feeLine ? `\n${feeLine}` : "")
               }
             >
@@ -890,6 +892,17 @@ const FEE_BADGES = {
  * icon - a heart for a charity, a gift for holder rewards or any other wallet, a robot for a GitHub
  * account, a chef's hat for the dev. Nothing when TokenSage hasn't read the coin or can't tell.
  */
+/**
+ * A charity name safe to show (user ask 2026-10-21). Blank when it isn't a real name: the
+ * heart then keeps the generic "a charity" tooltip, and the token details omit the line.
+ */
+export function shownCharityName(name: string | null | undefined): string | null {
+  if (typeof name !== "string") return null;
+  const text = name.replace(/\s+/g, " ").trim();
+  if (!text || !/\p{L}/u.test(text)) return null;
+  return text.length > 80 ? `${text.slice(0, 79).trimEnd()}…` : text;
+}
+
 export function feeBadge(fee: Card["token"]["creatorFee"]): {
   kind: keyof typeof FEE_BADGES;
   Icon: (typeof FEE_BADGES)[keyof typeof FEE_BADGES]["Icon"];
@@ -899,11 +912,20 @@ export function feeBadge(fee: Card["token"]["creatorFee"]): {
   if (!kind) return null;
   const { Icon, label } = FEE_BADGES[kind];
   const summary = fee?.summary?.trim().replace(/\.$/, "");
-  return {
-    kind,
-    Icon,
-    title: summary ? `${summary.charAt(0).toUpperCase()}${summary.slice(1)}.` : `Creator fees ${label}.`,
-  };
+  const summaryTitle = summary
+    ? `${summary.charAt(0).toUpperCase()}${summary.slice(1)}.`
+    : `Creator fees ${label}.`;
+  // The heart's tooltip names the charity when Pump.fun loaded one (user ask 2026-10-21).
+  const charityName = kind === "charity" ? shownCharityName(fee?.charityName) : null;
+  const title =
+    charityName == null
+      ? summaryTitle
+      : summary && !summaryTitle.includes(charityName)
+        ? `${charityName}. ${summaryTitle}`
+        : summary
+          ? summaryTitle
+          : `Creator fees go to ${charityName}.`;
+  return { kind, Icon, title };
 }
 
 /** TokenSage's fee destination as a badge kind (packages/core/src/datasources/tokensage.ts). */
@@ -988,6 +1010,8 @@ export function cardReadings(card: Card, prefer: "alert" | "newest" = "alert") {
   const feeLine = fee?.summary
     ? `${fee.summary.charAt(0).toUpperCase()}${fee.summary.slice(1).replace(/\.$/, "")}.`
     : null;
+  // The organization a Pump.fun charity coin names (user ask 2026-10-21), for the token details.
+  const charityName = fee?.destination === "charity" ? shownCharityName(fee.charityName) : null;
   return {
     freshPct,
     freshOf:
@@ -1027,6 +1051,7 @@ export function cardReadings(card: Card, prefer: "alert" | "newest" = "alert") {
     devHolding,
     devFromLatest,
     feeLine,
+    charityName,
   };
 }
 
