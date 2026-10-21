@@ -102,6 +102,7 @@ describe("boosting objectives", () => {
     expect(Math.abs(mean - base)).toBeLessThan(0.08);
   });
 
+  // Two boosted fits on 4,000 rows. CI hit the 5s default at 5074ms and 5094ms on 2026-10-21.
   it("the ranking objective orders each hour's winners first and runs are rewarded", async () => {
     const train = runRows(4000, 3);
     const test = runRows(2000, 4);
@@ -120,7 +121,7 @@ describe("boosting objectives", () => {
     for (const s of scores) expect(s > 0 && s < 1).toBe(true);
     const copy = JSON.parse(JSON.stringify(ranker));
     expect(scoreBoosted(copy, test[0]!.features)).toBe(scores[0]);
-  });
+  }, 20_000);
 
   it("the run-size objective counts a loss that fell through the stop as 0, not its later peak", async () => {
     // Three segments: plain losses, clean 2.2x winners (60% of the time), and dump-then-pump
