@@ -755,6 +755,14 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  // Refuse a fit that beats the heuristic only on the days it was selected on. The newest UTC
+  // day is held out and compared with the serving champion, and every input the fit reads must
+  // be filled on at least MIN_ROWS_PER_INPUT rows. Off (the default): promotion is the fold rule
+  // that shipped. On changes which model is chosen (review 2026-10-21). An owner decision.
+  CURATOR_CHAMPION_HOLDOUT_GATE: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   // Rule 5 is rule 4's anchor graded with sub-minute curve prints. Those rows can only see more
   // wicks, so the 2x rate moves with whether the tape was watching. Off (the default) keeps
   // rule 5 in the fit, which is what shipped on 2026-10-21. On, rule-5 rows stay out until a

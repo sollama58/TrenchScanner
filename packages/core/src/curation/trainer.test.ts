@@ -7,6 +7,11 @@ import {
   precisionCurve,
   walkForwardEvaluate,
   decidePromotion,
+  splitNewestUtcDay,
+  filledRowsByInput,
+  topShareRecord,
+  holdoutBeatsChampion,
+  MIN_ROWS_PER_INPUT,
   confidenceRanks,
   thresholdAtRank,
   transformFeature,
@@ -465,6 +470,85 @@ describe("decidePromotion", () => {
     expect(decidePromotion([thinHeuristic, thinHeuristic], 5_000, 1_500).promote).toBe(true);
     const thinBoth = fold({ emitted: 100, precisionPct: 8 }, { emitted: 2, precisionPct: 100 });
     expect(decidePromotion([thinBoth, thinBoth], 5_000, 1_500).promote).toBe(false);
+  });
+
+  it("refuses a fold win that does not beat the champion on the held-out day", () => {
+    const folds = [fold({}, {}), fold({}, {})];
+    const holdout = {
+      candidate: { emitted: 20, precisionPct: 40 },
+      champion: { emitted: 20, precisionPct: 55 },
+    };
+    const refused = decidePromotion(folds, 5_000, 1_500, undefined, { holdout });
+    expect(refused.promote).toBe(false);
+    expect(refused.reason).toContain("does not beat the champion");
+    const beaten = decidePromotion(folds, 5_000, 1_500, undefined, {
+      holdout: {
+        candidate: { emitted: 20, precisionPct: 60 },
+        champion: { emitted: 20, precisionPct: 40 },
+      },
+    });
+    expect(beaten.promote).toBe(true);
+    // No serving champion is not a loss, once the candidate itself has enough calls.
+    expect(
+      decidePromotion(folds, 5_000, 1_500, undefined, {
+        holdout: { candidate: { emitted: 20, precisionPct: 40 }, champion: null },
+      }).promote,
+    ).toBe(true);
+    expect(
+      decidePromotion(folds, 5_000, 1_500, undefined, {
+        holdout: { candidate: { emitted: 2, precisionPct: 100 }, champion: null },
+      }).promote,
+    ).toBe(false);
+  });
+
+  it("refuses a fold win whose thinnest input is under the row floor", () => {
+    const folds = [fold({}, {}), fold({}, {})];
+    const refused = decidePromotion(folds, 5_000, 1_500, undefined, {
+      minFilledRows: 12,
+      minRowsPerInput: MIN_ROWS_PER_INPUT,
+      shortInputs: 70,
+    });
+    expect(refused.promote).toBe(false);
+    expect(refused.reason).toContain("70 input");
+    expect(
+      decidePromotion(folds, 5_000, 1_500, undefined, {
+        minFilledRows: MIN_ROWS_PER_INPUT,
+        minRowsPerInput: MIN_ROWS_PER_INPUT,
+        shortInputs: 0,
+      }).promote,
+    ).toBe(true);
+  });
+});
+
+describe("held-out day and input fills", () => {
+  it("holds out the newest UTC day and leaves a one-day window whole", () => {
+    const row = (iso: string) => ({ anchorAt: new Date(iso) });
+    const split = splitNewestUtcDay([
+      row("2026-10-19T23:00:00Z"),
+      row("2026-10-20T00:30:00Z"),
+      row("2026-10-20T18:00:00Z"),
+    ]);
+    expect(split.fit.map((r) => r.anchorAt.toISOString())).toEqual(["2026-10-19T23:00:00.000Z"]);
+    expect(split.holdout).toHaveLength(2);
+    const oneDay = splitNewestUtcDay([row("2026-10-20T01:00:00Z"), row("2026-10-20T02:00:00Z")]);
+    expect(oneDay.holdout).toEqual([]);
+    expect(oneDay.fit).toHaveLength(2);
+  });
+
+  it("counts only finite fills and ranks the top scores", () => {
+    const fills = filledRowsByInput(
+      [{ features: { a: 1, b: null } }, { features: { a: Number.NaN, b: 2 } }, { features: { a: 3 } }],
+      ["a", "b"],
+    );
+    expect(fills).toEqual([
+      { name: "a", filled: 2 },
+      { name: "b", filled: 1 },
+    ]);
+    // The two highest scores are indexes 2 (a win) and 1 (a loss).
+    expect(topShareRecord([0, 0, 1], [0.1, 0.2, 0.9], 2)).toEqual({ emitted: 2, precisionPct: 50 });
+    expect(
+      holdoutBeatsChampion({ emitted: 10, precisionPct: 20 }, { emitted: 10, precisionPct: 20 }, 5).beats,
+    ).toBe(false);
   });
 });
 
