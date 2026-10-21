@@ -734,11 +734,13 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // models learned it as youth. ageMinutes and minutesSinceFirstInBand carry youth without the
   // artefact; it stays recorded as the gauge of how far the other path inputs can be trusted.
   "pathObservedMinutes",
+  // X counts (NARRATIVE_FEATURES_V7) and story heat (NARRATIVE_FEATURES_V8) are read from
+  // 2026-10-21 (user ask). Market seats see them through MARKET_TOKENSAGE_INPUTS; the onset
+  // guard still holds a column whose exam coverage is far from live.
   // TokenSage's X engagement counts (rules 0.30.0, added 2026-10-12): recorded so they can be
   // judged, not yet read. On their first two hours 100 reads carried them (median 0 likes, 44
   // views); bring them in by removing them here once a few days of decision rows show they
   // separate runners (notes/audit-2026-10-12/features.md).
-  ...NARRATIVE_FEATURES_V7,
   // RugCheck's holder count and risk score, and the two holder-growth inputs built on RugCheck's
   // count readings (data-correctness audit, user ask 2026-10-16, notes/data-audit-2026-10-16):
   // whether RugCheck had indexed a coin yet decided whether they were filled. They were present on
@@ -765,47 +767,33 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // tied to the creator doubled 5.4% (n=74) against 15.5% over 10-13..14, in both windows checked
   // (notes/full-audit-2026-10-14/lane3-safety-wallets.md, section 3). Null on rows banked before
   // 2026-10-13 04:52 and until the funders are read; the trainer's missing indicator covers that.
-  ...LINKED_WALLET_FEATURES.filter((name) => name !== "linkedCreatorPct"),
   // The exchange-funded share (added 2026-10-13): recorded first, on the same terms.
-  ...CEX_FUNDED_FEATURES,
   // The live flagged-wallet trades (added 2026-10-13): recorded first, on the same terms.
   ...LIVE_FLAG_FEATURES,
   // The same-minute funding groups (added 2026-10-13): recorded first, on the same terms.
-  ...SAME_TIME_FUNDING_FEATURES,
   // The win-side wallet readings and the KOL counts (added 2026-10-13): recorded first, on the
   // same terms (notes/holder-data-eval-2026-10-13/report.md).
   ...WALLET_WIN_FEATURES,
-  ...KOL_FEATURES,
   // TokenSage's trend novelty and decision-time trend and story heat (added 2026-10-13, user
   // ask "build all of the fixes"): recorded first. Bring them in by removing them here once two
   // days of decision rows show they separate runners (notes/tokensage-trend-heat-2026-10-13.md).
-  ...NARRATIVE_FEATURES_V8,
   // The same-minute and bundled holder counts (added 2026-10-13): recorded first, on the same terms.
-  ...BUNDLED_FEATURES,
   // The screen's holder figures as counts, and the largest holder (added 2026-10-13): recorded
   // first, on the same terms.
-  ...HOLDER_SET_FEATURES,
-  ...FRESH_TOP_HOLDER_FEATURES,
   // KOL Bundled % (added 2026-10-14): recorded first, on the same terms.
-  ...KOL_BUNDLED_FEATURES,
   // Transferred % and the transfer count (added 2026-10-16, user ask): recorded first, on the same
   // terms. Bring them in by removing them here once a few days of decision rows show they separate
   // runners.
-  ...TRANSFER_FEATURES,
   // The scored top-10 count behind walletRiskTop10Max (added 2026-10-16, data-correctness
   // audit): recorded first, on the same terms.
-  ...WALLET_RISK_COVERAGE_FEATURES,
   // The launch facts (added 2026-10-16, user ask): recorded first, on the same terms. All but
   // firstBuyersHoldingCut, which the learners read in place of firstBuyersHolding from 2026-10-19
   // (user decision 2026-10-16, notes/model-retrain-pending.md); null on rows banked before 10-16,
   // which the onset guard and the trainer's missing indicator cover.
-  ...LAUNCH_FACT_FEATURES.filter((name) => name !== "firstBuyersHoldingCut"),
   "firstBuyersHolding",
   // The hidden Wallet Score of the newest buyers (added 2026-10-16, user ask): recorded first, on
   // the same terms (notes/wallet-score-2026-10-16/report.md).
-  ...WALLET_SCORE_FEATURES,
   // The bonding-curve path of a young coin (added 2026-10-17, user ask): recorded first.
-  ...CURVE_PATH_FEATURES,
   // The dev launch reading (added 2026-10-17, user ask): recorded first.
   ...DEV_LAUNCH_FEATURES,
   // Dead inputs (notes/full-audit-2026-10-14, lanes 4 and 10): the launch-text read is empty on
@@ -897,6 +885,8 @@ export const MARKET_TOKENSAGE_INPUTS: readonly CandidateFeatureName[] = [
   "nsFeeToWallet",
   "nsFeeCreatorShare",
   "nsLogoScore",
+  ...NARRATIVE_FEATURES_V7,
+  ...NARRATIVE_FEATURES_V8,
 ];
 
 /** A TokenSage input: an ns* reading, or one TokenSage's writer owns. */
@@ -906,7 +896,8 @@ export function isTokenSageInput(name: string): boolean {
 
 /**
  * The inputs a market seat (every learner but the Narrative and Narrative Blend seats) reads unless
- * its recipe names its own: every learner input, with TokenSage's narrowed to MARKET_TOKENSAGE_INPUTS.
+ * its recipe names its own: every learner input, with TokenSage's narrowed to MARKET_TOKENSAGE_INPUTS
+ * (the fee group, the logo score, the X counts and the story heat).
  */
 export const MARKET_LEARNER_FEATURE_NAMES: readonly CandidateFeatureName[] = LEARNER_FEATURE_NAMES.filter(
   (name) => !isTokenSageInput(name) || MARKET_TOKENSAGE_INPUTS.includes(name),

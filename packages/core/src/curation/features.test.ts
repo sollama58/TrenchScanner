@@ -37,12 +37,27 @@ import {
   LAUNCH_FACT_FEATURES,
   MARKET_LEARNER_FEATURE_NAMES,
   MARKET_TOKENSAGE_INPUTS,
+  isTokenSageInput,
   WALLET_SCORE_FEATURES,
   WINNER_FOLLOW_FEATURES,
   CURVE_PATH_FEATURES,
   DEV_LAUNCH_FEATURES,
+  LINKED_WALLET_FEATURES,
+  BUNDLED_FEATURES,
+  KOL_BUNDLED_FEATURES,
+  KOL_FEATURES,
+  CEX_FUNDED_FEATURES,
+  SAME_TIME_FUNDING_FEATURES,
+  FRESH_TOP_HOLDER_FEATURES,
+  HOLDER_SET_FEATURES,
+  TRANSFER_FEATURES,
+  WALLET_RISK_COVERAGE_FEATURES,
+  LIVE_FLAG_FEATURES,
+  WALLET_WIN_FEATURES,
+  WALLET_RISK_FEATURES,
+  TRADE_FLOW_FEATURES,
 } from "./features.js";
-import { NS_RULES_VERSION } from "./narrativeFeatures.js";
+import { NS_RULES_VERSION, NARRATIVE_FEATURES_V7, NARRATIVE_FEATURES_V8 } from "./narrativeFeatures.js";
 import { EMPTY_TRADE_FLOW } from "./tradeFlow.js";
 import { EMPTY_CURVE_PATH } from "./curveTape.js";
 import { EMPTY_DEV_LAUNCH } from "../wallets/devLaunchScore.js";
@@ -377,14 +392,18 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(CANDIDATE_FEATURE_NAMES).toContain("walletRiskScoredTop10");
   });
 
-  it("records the curve path, replays it, and leaves it unread by the learners", () => {
+  it("records the curve path, replays it, and the learners read it", () => {
     const curvePath = { ...EMPTY_CURVE_PATH, curveRet10sPct: 4.2, curveNetSol1m: 3.5 };
     const features = buildCandidateFeatures(scored({ curvePath }));
     expect(features.curveRet10sPct).toBe(4.2);
     expect(features.curveNetSol1m).toBe(3.5);
     expect(buildCandidateFeatures(scored()).curveRet10sPct).toBeNull();
     expect(scoredFromFeatures(features, 0.0001, 150_000).curvePath?.curveNetSol1m).toBe(3.5);
-    for (const name of CURVE_PATH_FEATURES) expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+    for (const name of CURVE_PATH_FEATURES) {
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+    }
   });
 
   it("records the dev launch reading, replays it, and leaves it unread by the learners", () => {
@@ -439,16 +458,18 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
   });
 
-  it("records Transferred % and the transfer count, recorded only, null while unread", () => {
+  it("records Transferred % and the transfer count, read by the learners, null while unread", () => {
     const f = buildCandidateFeatures(scored({ transferredSupplyPct: 3, transferWalletCount: 5 }));
     expect(f.transferredSupplyPct).toBe(3);
     expect(f.transferWalletCount).toBe(5);
     expect(buildCandidateFeatures(scored()).transferredSupplyPct).toBeNull();
-    expect(RETIRED_LEARNER_INPUTS.has("transferredSupplyPct")).toBe(true);
-    expect(RETIRED_LEARNER_INPUTS.has("transferWalletCount")).toBe(true);
+    expect(RETIRED_LEARNER_INPUTS.has("transferredSupplyPct")).toBe(false);
+    expect(RETIRED_LEARNER_INPUTS.has("transferWalletCount")).toBe(false);
+    expect(LEARNER_FEATURE_NAMES).toContain("transferredSupplyPct");
+    expect(LEARNER_FEATURE_NAMES).toContain("transferWalletCount");
   });
 
-  it("records the launch facts, recorded only, null while unread", () => {
+  it("records the launch facts, read by the learners, null while unread", () => {
     const f = buildCandidateFeatures(
       scored({
         tradeFlow: { ...EMPTY_TRADE_FLOW, firstBuyersSeen: 9, firstBuyersHoldingCut: 4 },
@@ -467,13 +488,13 @@ describe("scoredFromFeatures - replay round trip", () => {
     const none = buildCandidateFeatures(scored());
     for (const name of LAUNCH_FACT_FEATURES) {
       expect(none[name]).toBeNull();
-      // The 0.1% count is read in place of the above-dust one (user decision 2026-10-16).
-      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(name !== "firstBuyersHoldingCut");
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
     }
     expect(RETIRED_LEARNER_INPUTS.has("firstBuyersHolding")).toBe(true);
   });
 
-  it("records the newest buyers' Wallet Score, unread by the learners, unknown without it", () => {
+  it("records the newest buyers' Wallet Score, read by the learners, unknown without it", () => {
     const f = buildCandidateFeatures(
       scored({ walletScoreRecentBuyersMean: -1.25, walletScoreRecentBuyersScored: 31 }),
     );
@@ -481,7 +502,9 @@ describe("scoredFromFeatures - replay round trip", () => {
     const none = buildCandidateFeatures(scored());
     for (const name of WALLET_SCORE_FEATURES) {
       expect(none[name]).toBeNull();
-      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
     }
   });
 
@@ -1054,16 +1077,24 @@ describe("maskKnownBadInputs", () => {
 });
 
 describe("the market seats' TokenSage inputs", () => {
-  it("keeps the fee group and logo score, and leaves the rest to the Narrative seats", () => {
-    for (const name of MARKET_TOKENSAGE_INPUTS) expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+  it("keeps the fee group, logo score, X counts and story heat, and leaves the other ns* inputs to the Narrative seats", () => {
+    for (const name of MARKET_TOKENSAGE_INPUTS) {
+      expect(isTokenSageInput(name)).toBe(true);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+    }
+    for (const name of [...NARRATIVE_FEATURES_V7, ...NARRATIVE_FEATURES_V8]) {
+      expect(isTokenSageInput(name)).toBe(true);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+    }
+    expect(isTokenSageInput("nsCatAnimal")).toBe(true);
     expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain("nsCatAnimal");
     expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain("nsDepthFull");
+    expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
     expect(LEARNER_FEATURE_NAMES).toContain("nsCatAnimal");
-    expect(MARKET_LEARNER_FEATURE_NAMES.filter((n) => n.startsWith("ns"))).toHaveLength(
-      MARKET_TOKENSAGE_INPUTS.length,
-    );
-    // Every non-TokenSage learner input stays.
-    for (const name of LEARNER_FEATURE_NAMES.filter((n) => !n.startsWith("ns"))) {
+    expect(LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
+    expect(MARKET_LEARNER_FEATURE_NAMES.filter((n) => isTokenSageInput(n))).toEqual([...MARKET_TOKENSAGE_INPUTS]);
+    for (const name of LEARNER_FEATURE_NAMES.filter((n) => !isTokenSageInput(n))) {
       expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
     }
   });

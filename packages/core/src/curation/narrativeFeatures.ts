@@ -219,8 +219,11 @@ export const NARRATIVE_FEATURES_V6 = [
  * drawn - its likes, reposts, replies and views as TokenSage counted them, views per minute the
  * post has been up, and how old those counts are at the decision (our reads are not refreshed,
  * so a count taken at the first read stays the count the later decisions see). Null when the
- * post was not read, and on older reads. Recorded only for now: retired from the learners until
- * enough decision rows carry them to judge (features.ts RETIRED_LEARNER_INPUTS).
+ * post was not read, and on older reads.
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-21), narrative seats and market seats both
+ * (features.ts MARKET_TOKENSAGE_INPUTS). The onset guard (features.ts featureOnset) keeps them
+ * out of a run until they cover enough of the exam's span, including inside age buckets.
  */
 export const NARRATIVE_FEATURES_V7 = [
   "nsXLikes",
@@ -241,9 +244,12 @@ export const NARRATIVE_FEATURES_V7 = [
  * GeckoTerminal (market cap, 5 min / 1 h price change, 1 h volume, minutes since its 24 h peak and
  * its price against that peak), how many coins are on the story and their summed 1 h volume, and
  * whether this coin is the leader. nsNowAgeMin is how old the refresh is at the decision. Null
- * without a refresh, or one older than NOW_FEATURE_MAX_AGE_MIN. Recorded only for now: retired
- * from the learners until two days of decision rows carry them (features.ts
- * RETIRED_LEARNER_INPUTS). notes/tokensage-trend-heat-2026-10-13.md.
+ * without a refresh, or one older than NOW_FEATURE_MAX_AGE_MIN.
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-21), narrative seats and market seats both
+ * (features.ts MARKET_TOKENSAGE_INPUTS). The onset guard (features.ts featureOnset) keeps them
+ * out of a run until they cover enough of the exam's span, including inside age buckets.
+ * notes/tokensage-trend-heat-2026-10-13.md.
  */
 export const NARRATIVE_FEATURES_V8 = [
   "nsTrendNovelty",
