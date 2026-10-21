@@ -123,4 +123,22 @@ describe("feeDesksFromOtcRoster", () => {
     expect(fees.has(OTHER)).toBe(false);
     expect(fees.has(THIRD)).toBe(false);
   });
+
+  it("prefers a later row that names reward coins over an earlier row that does not", () => {
+    const fees = feeDesksFromOtcRoster({
+      coins: [
+        { mint: MINT, name: "Featured" },
+        { mint: MINT, rewardBasket: [OTHER, THIRD] },
+        { mint: OTHER, symbol: "NVDAx" },
+        { mint: THIRD, symbol: "TSLAx" },
+      ],
+    });
+    expect(fees.get(MINT)).toEqual({
+      line: "OTC Desks pays holder rewards in NVDAx and TSLAx.",
+      rewards: [
+        { label: "NVDAx", mint: OTHER },
+        { label: "TSLAx", mint: THIRD },
+      ],
+    });
+  });
 });

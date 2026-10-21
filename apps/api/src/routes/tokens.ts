@@ -28,6 +28,7 @@ import {
 } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
 import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
+import { charityNamesByMint } from "../curatedFeed.js";
 import { otcDeskFees } from "../otcDesk.js";
 import type { OtcDeskFee } from "../feeDesks.js";
 import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
@@ -71,6 +72,7 @@ import {
   sageNarrative,
   sageRead,
   sageTrack,
+  withSageCharityName,
   type DayLabelRow,
   type NarrativeAlertRow,
   type SageView,
@@ -1412,7 +1414,11 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
       select: { id: true, symbol: true, name: true, imageUrl: true, firstSeenAt: true },
     }),
   ]);
-  const [snapshots, labels, judged, desks] = await Promise.all([
+  const feeDestination =
+    row?.status === "failed"
+      ? null
+      : (row?.analysis as TokenSageAnalysis | null)?.market?.creator_fee?.destination;
+  const [snapshots, labels, judged, desks, charityNames] = await Promise.all([
     token
       ? prisma.tokenSnapshot.findMany({
           where: { tokenId: token.id },
@@ -1453,14 +1459,20 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
         })
       : ([] as NarrativeAlertRow[]),
     otcDeskFees([mintAddress], { wait: true }).catch(() => new Map<string, OtcDeskFee>()),
+    feeDestination === "charity"
+      ? charityNamesByMint([mintAddress])
+      : Promise.resolve(new Map<string, string>()),
   ]);
-  const read =
+  const read = withSageCharityName(
     row?.status === "failed"
       ? null
       : sageRead(row?.analysis as TokenSageAnalysis | null, row?.depth ?? "basic", {
           trend: (row?.nowRead as { trend?: unknown } | null)?.trend ?? null,
           at: row?.nowAt ?? null,
-        });
+        }),
+    charityNames.get(mintAddress) ?? null,
+  );
+  const desk = desks.get(mintAddress);
   return {
     mint: mintAddress,
     token: token
@@ -1481,9 +1493,9 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
     failReason: row?.status === "failed" ? failCode(row.failReason) : null,
     read,
     /** OTC Desks reward routing, when their roster names it (user ask 2026-10-21). */
-    feeDesk: desks.get(mintAddress)?.line ?? null,
-    /** Each reward coin in feeDesk, so the card can render the mint as that token. */
-    feeRewards: desks.get(mintAddress)?.rewards ?? null,
+    feeDesk: desk?.line ?? null,
+    /** Each reward coin in feeDesk, the same roster row as feeDesk. */
+    feeRewards: desk?.rewards ?? null,
     marketCap: snapshots
       .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
       .reverse()
