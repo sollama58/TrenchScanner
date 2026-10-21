@@ -60,10 +60,29 @@ function syntheticRows(count: number, seed = 42): TrainingRow[] {
   return rows;
 }
 
+/**
+ * The columns syntheticRows varies. volumeToMcapRatio, ageMinutes and the score are retired from
+ * the next production fit; these tests still name them so they keep checking that the trainer
+ * learns a planted signal, not which names the production list currently admits.
+ */
+const SYNTHETIC_FEATURES = [
+  "volumeToMcapRatio",
+  "buyRatio24h",
+  "holderGrowthPct",
+  "ageMinutes",
+  "scoreTotal",
+  "liquidityUsd",
+  "graduated",
+  "priceChange5mPct",
+  "mcapUsd",
+  "buys1h",
+  "sells1h",
+] as const;
+
 describe("trainCurator", () => {
   it("learns a genuinely predictive feature and ranks by it", async () => {
     const rows = syntheticRows(2_000);
-    const params = await trainCurator(rows);
+    const params = await trainCurator(rows, { featureNames: SYNTHETIC_FEATURES });
 
     const hot = scoreCandidateWithModel(params, {
       volumeToMcapRatio: 2.8,
@@ -143,12 +162,15 @@ describe("trainCurator", () => {
     const hotCandidate = { volumeToMcapRatio: 2.8, scoreTotal: 40 };
     const coldCandidate = { volumeToMcapRatio: 0.3, scoreTotal: 40 };
 
-    const equalWeighted = await trainCurator(rows);
+    const equalWeighted = await trainCurator(rows, { featureNames: SYNTHETIC_FEATURES });
     expect(scoreCandidateWithModel(equalWeighted, hotCandidate)).toBeGreaterThan(
       scoreCandidateWithModel(equalWeighted, coldCandidate),
     );
 
-    const recencyWeighted = await trainCurator(rows, { recencyHalfLifeDays: 7 });
+    const recencyWeighted = await trainCurator(rows, {
+      recencyHalfLifeDays: 7,
+      featureNames: SYNTHETIC_FEATURES,
+    });
     expect(scoreCandidateWithModel(recencyWeighted, coldCandidate)).toBeGreaterThan(
       scoreCandidateWithModel(recencyWeighted, hotCandidate),
     );
@@ -158,7 +180,7 @@ describe("trainCurator", () => {
 describe("calibrateThreshold", () => {
   it("matches the target emission rate over the calibration span", async () => {
     const rows = syntheticRows(1_000);
-    const params = await trainCurator(rows);
+    const params = await trainCurator(rows, { featureNames: SYNTHETIC_FEATURES });
     const threshold = calibrateThreshold(params, rows, 2); // 2/hour over ~100h span
     const emitted = rows.filter((r) => scoreCandidateWithModel(params, r.features) >= threshold).length;
     const spanHours =
@@ -189,6 +211,7 @@ describe("walkForwardEvaluate", () => {
       targetPerHour: 5,
       heuristicMinScore: 55,
       minRowsToPromote: 1_500,
+      featureNames: SYNTHETIC_FEATURES,
     });
     expect(result.folds.length).toBeGreaterThanOrEqual(2);
     for (const fold of result.folds) {
@@ -236,6 +259,7 @@ describe("walkForwardEvaluate", () => {
       heuristicMinScore: 55,
       mcapBand: { min: 50_000, max: 500_000 },
       minRowsToPromote: 1_500,
+      featureNames: SYNTHETIC_FEATURES,
     });
     for (const fold of excluded.folds) {
       expect(fold.model.emitted).toBe(0);
@@ -251,6 +275,7 @@ describe("walkForwardEvaluate", () => {
       heuristicMinScore: 55,
       mcapBand: { min: 1, max: 10_000_000 },
       minRowsToPromote: 1_500,
+      featureNames: SYNTHETIC_FEATURES,
     });
     for (const fold of included.folds) expect(fold.model.emitted).toBeGreaterThan(0);
   });
@@ -329,6 +354,7 @@ describe("walkForwardEvaluate", () => {
       targetPerHour: target,
       heuristicMinScore: 55,
       minRowsToPromote: 1_500,
+      featureNames: SYNTHETIC_FEATURES,
     });
     expect(result.folds.length).toBeGreaterThanOrEqual(2);
     for (const fold of result.folds) {
@@ -752,6 +778,7 @@ describe("walkForwardEvaluate at the hit-rate cutoffs", () => {
       heuristicMinScore: 55,
       minRowsToPromote: 1_500,
       targets: reachable,
+      featureNames: SYNTHETIC_FEATURES,
     });
     expect(result.folds.length).toBeGreaterThanOrEqual(2);
     for (const fold of result.folds) {
@@ -767,6 +794,7 @@ describe("walkForwardEvaluate at the hit-rate cutoffs", () => {
       heuristicMinScore: 55,
       minRowsToPromote: 1_500,
       targets: impossible,
+      featureNames: SYNTHETIC_FEATURES,
     });
     expect(result.folds.length).toBeGreaterThanOrEqual(2);
     for (const fold of result.folds) {

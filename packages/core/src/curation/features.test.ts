@@ -8,6 +8,7 @@ import {
   learnerSubset,
   maskKnownBadInputs,
   withLaunchAge,
+  applyClockFeatures,
   ageMayBePoolAge,
   isRawWalletRiskRow,
   AGE_FROM_LAUNCH_SINCE,
@@ -28,6 +29,7 @@ import {
   VOLUME_ACCEL_YOUNG_NULL_SINCE,
   WEEKEND_FLAG_FROM,
   FRESH_QUOTE_GAP_SINCE,
+  RUGCHECK_UNINDEXED_FILL,
   PATH_TAPE_REFILL_SINCE,
   PATH_RETURNS_ACROSS_GAPS_SINCE,
   PRICE_PATH_FEATURES,
@@ -36,16 +38,33 @@ import {
   LAUNCH_FACT_FEATURES,
   MARKET_LEARNER_FEATURE_NAMES,
   MARKET_TOKENSAGE_INPUTS,
+  isTokenSageInput,
   WALLET_SCORE_FEATURES,
   WINNER_FOLLOW_FEATURES,
   CURVE_PATH_FEATURES,
   DEV_LAUNCH_FEATURES,
+  LINKED_WALLET_FEATURES,
+  BUNDLED_FEATURES,
+  KOL_BUNDLED_FEATURES,
+  KOL_FEATURES,
+  CEX_FUNDED_FEATURES,
+  SAME_TIME_FUNDING_FEATURES,
+  FRESH_TOP_HOLDER_FEATURES,
+  HOLDER_SET_FEATURES,
+  TRANSFER_FEATURES,
+  WALLET_RISK_COVERAGE_FEATURES,
+  LIVE_FLAG_FEATURES,
+  WALLET_WIN_FEATURES,
+  WALLET_RISK_FEATURES,
+  TRADE_FLOW_FEATURES,
 } from "./features.js";
-import { NS_RULES_VERSION } from "./narrativeFeatures.js";
+import { NS_RULES_VERSION, NARRATIVE_FEATURES_V7, NARRATIVE_FEATURES_V8 } from "./narrativeFeatures.js";
 import { EMPTY_TRADE_FLOW } from "./tradeFlow.js";
 import { EMPTY_CURVE_PATH } from "./curveTape.js";
 import { EMPTY_DEV_LAUNCH } from "../wallets/devLaunchScore.js";
 import type { ScoredToken } from "../types.js";
+import { decisionAnchor } from "./labels.js";
+import { EMPTY_PRICE_PATH } from "./pricePath.js";
 
 function scored(overrides: Partial<ScoredToken> = {}): ScoredToken {
   return {
@@ -88,12 +107,69 @@ describe("buildCandidateFeatures - short-window derivations", () => {
       expect(LEARNER_FEATURE_NAMES).not.toContain(name);
     }
     expect(LEARNER_FEATURE_NAMES.length).toBe(CANDIDATE_FEATURE_NAMES.length - RETIRED_LEARNER_INPUTS.size);
-    for (const name of ["priceChange5mPct", "volume5mUsd", "ageMinutes", "buyRatio5m", "ctxHourSin"] as const)
+    for (const name of ["launchAgeMinutes", "pairAgeMinutes", "buyRatio5m", "buyRatio24h", "ctxHourSin"] as const)
       expect(LEARNER_FEATURE_NAMES).toContain(name);
+    // The mixed clock is recorded for deployed models and is not fit.
+    expect(RETIRED_LEARNER_INPUTS.has("ageMinutes")).toBe(true);
+    expect(LEARNER_FEATURE_NAMES).not.toContain("ageMinutes");
     // The tape's coverage is a learner input and rides with the path block, live and replayed.
     expect(LEARNER_FEATURE_NAMES).toContain("pathGapMinutes");
+    expect(new Set(CANDIDATE_FEATURE_NAMES).size).toBe(CANDIDATE_FEATURE_NAMES.length);
+    // The clock-honest readings are learner inputs. The named windows they replace stay recorded
+    // (a deployed model still scores those numbers) and are out of the next fit. Buy ratios stay.
+    for (const name of [
+      "volPerMin5m",
+      "volPerMin24h",
+      "tradesPerMin24h",
+      "px5mFullPct",
+      "px1hFullPct",
+      "pxSincePairPct",
+      "pxSincePairPerMin",
+      "jupPx5mFullPct",
+      "jupPx1hFullPct",
+      "jupVolPerMin5m",
+      "launchAgeMinutes",
+      "bandDwellShare",
+      "decisionMcapUsd",
+      "freshQuoteAgeSec",
+      "pathSpan15mMin",
+      "pathSpan30mMin",
+      "pathRet15mPerMin",
+      "pathRet30mPerMin",
+    ] as const) {
+      expect(CANDIDATE_FEATURE_NAMES).toContain(name);
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+    }
+    for (const name of [
+      "priceChange5mPct",
+      "priceChange1hPct",
+      "volume5mUsd",
+      "volume24hUsd",
+      "volumeToMcapRatio",
+      "volume5mToMcapRatio",
+      "buys24h",
+      "sells24h",
+      "pathRet15mPct",
+      "pathRet30mPct",
+      "priceChange6hPct",
+      "priceChange24hPct",
+      "volume1hUsd",
+    ] as const) {
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+      expect(LEARNER_FEATURE_NAMES).not.toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain(name);
+    }
+    expect(LEARNER_FEATURE_NAMES).toContain("minutesSinceFirstInBand");
+    expect(RETIRED_LEARNER_INPUTS.has("minutesSinceFirstInBand")).toBe(false);
+    expect(RETIRED_LEARNER_INPUTS.has("buyRatio5m")).toBe(false);
+    expect(RETIRED_LEARNER_INPUTS.has("buyRatio24h")).toBe(false);
+    expect(RETIRED_LEARNER_INPUTS.has("buyRatio1h")).toBe(true);
     expect(PRICE_PATH_FEATURES).toContain("pathGapMinutes");
-    expect(learnerSubset(["scoreTotal", "ageMinutes", "hasTelegram"])).toEqual(["ageMinutes"]);
+    expect(learnerSubset(["scoreTotal", "launchAgeMinutes", "ageMinutes", "hasTelegram"])).toEqual([
+      "launchAgeMinutes",
+    ]);
   });
 
   it("derives 1h churn against mcap", () => {
@@ -158,6 +234,137 @@ describe("buildCandidateFeatures - short-window derivations", () => {
     expect(at(new Date(now.getTime() + 5_000))).toBe(0);
   });
 
+  it("drops a pool clock from before the launch and keeps the launch age", () => {
+    const now = new Date("2026-10-21T12:00:00Z");
+    const junk = buildCandidateFeatures(
+      scored({
+        ageMinutes: 90,
+        ageFromLaunch: true,
+        pairCreatedAt: new Date(now.getTime() - 2 * 24 * 60 * 60_000),
+      }),
+      now,
+    );
+    expect(junk.pairAgeMinutes).toBeNull();
+    expect(junk.ageMinutes).toBe(90);
+    // The graduation pool is younger than the coin: that clock stands.
+    const graduated = buildCandidateFeatures(
+      scored({
+        ageMinutes: 90,
+        ageFromLaunch: true,
+        pairCreatedAt: new Date(now.getTime() - 3 * 60_000),
+      }),
+      now,
+    );
+    expect(graduated.pairAgeMinutes).toBeCloseTo(3);
+    expect(graduated.ageMinutes).toBe(90);
+  });
+
+  it("rates a young pair's windows by the minutes they actually cover", () => {
+    const now = new Date("2026-10-21T12:00:00Z");
+    const young = buildCandidateFeatures(
+      scored({
+        marketCapUsd: 20_000,
+        volume5mUsd: 12_000,
+        volume24hUsd: 12_000,
+        buys24h: 80,
+        sells24h: 40,
+        priceChange5mPct: 40,
+        priceChange1hPct: 40,
+        priceChange6hPct: 40,
+        priceChange24hPct: 40,
+        ageMinutes: 2,
+        ageFromLaunch: true,
+        minutesSinceFirstInBand: 1,
+        pairCreatedAt: new Date(now.getTime() - 2 * 60_000),
+        freshQuote: { priceUsd: 0.00011, marketCapUsd: 22_000, fetchedAt: now },
+      }),
+      now,
+    );
+    // Lifetime volume and the since-open move, not four copies of a 24h window.
+    expect(young.volPerMin5m).toBeCloseTo(6_000);
+    expect(young.volPerMin24h).toBeCloseTo(6_000);
+    expect(young.tradesPerMin24h).toBeCloseTo(60);
+    expect(young.px5mFullPct).toBeNull();
+    expect(young.px1hFullPct).toBeNull();
+    expect(young.pxSincePairPct).toBe(40);
+    expect(young.pxSincePairPerMin).toBeCloseTo(20);
+    expect(young.launchAgeMinutes).toBe(2);
+    expect(young.bandDwellShare).toBeCloseTo(0.5);
+    // The label's cap is the fresh quote on the scan's supply: 20_000 * 1.1.
+    expect(young.freshGapPct).toBeCloseTo(10);
+    expect(young.decisionMcapUsd).toBeCloseTo(22_000);
+    expect(young.freshQuoteAgeSec).toBe(0);
+
+    const aged = buildCandidateFeatures(
+      scored({
+        volume24hUsd: 144_000,
+        priceChange5mPct: 5,
+        priceChange1hPct: 12,
+        priceChange6hPct: 80,
+        priceChange24hPct: 80,
+        ageMinutes: 90,
+        ageFromLaunch: false,
+        pairCreatedAt: new Date(now.getTime() - 90 * 60_000),
+      }),
+      now,
+    );
+    // 90 minutes old: the 5m and 1h moves are real windows, the 6h print is still since the pair opened.
+    expect(aged.px5mFullPct).toBe(5);
+    expect(aged.px1hFullPct).toBe(12);
+    expect(aged.pxSincePairPct).toBe(80);
+    expect(aged.pxSincePairPerMin).toBeCloseTo(80 / 90);
+    expect(aged.volPerMin24h).toBeCloseTo(144_000 / 90);
+    expect(aged.launchAgeMinutes).toBeNull();
+    expect(aged.bandDwellShare).toBeNull();
+
+    const day = buildCandidateFeatures(
+      scored({
+        volume24hUsd: 144_000,
+        priceChange24hPct: 30,
+        pairCreatedAt: new Date(now.getTime() - 2 * 24 * 60 * 60_000),
+      }),
+      now,
+    );
+    expect(day.pxSincePairPct).toBeNull();
+    expect(day.volPerMin24h).toBeCloseTo(100);
+    expect(day.decisionMcapUsd).toBe(150_000);
+  });
+
+  it("sets the decision cap from the anchor when the gap alone would disagree", () => {
+    const now = new Date("2026-10-21T12:00:00Z");
+    // A quote with no market cap is not the anchor, even though its price is within the ratio.
+    const noQuoteCap = scored({
+      priceUsd: 0.0001,
+      marketCapUsd: 100_000,
+      freshQuote: { priceUsd: 0.00014, marketCapUsd: 0, fetchedAt: now },
+    });
+    expect(decisionAnchor(noQuoteCap).marketCapUsd).toBe(100_000);
+    expect(buildCandidateFeatures(noQuoteCap, now).decisionMcapUsd).toBe(100_000);
+    expect(buildCandidateFeatures(noQuoteCap, now).freshGapPct).toBeCloseTo(40);
+    // A scan cap of 0 cannot scale. The anchor cap is the quote's own market cap.
+    const noScanCap = scored({
+      priceUsd: 0.0001,
+      marketCapUsd: 0,
+      freshQuote: { priceUsd: 0.00011, marketCapUsd: 50_000, fetchedAt: now },
+    });
+    expect(decisionAnchor(noScanCap).marketCapUsd).toBe(50_000);
+    expect(buildCandidateFeatures(noScanCap, now).decisionMcapUsd).toBe(50_000);
+    // Exactly 5x is trusted, the same bound as the anchor; just past it the scan cap stands.
+    const atBound = scored({
+      priceUsd: 0.0001,
+      marketCapUsd: 10_000,
+      freshQuote: { priceUsd: 0.0005, marketCapUsd: 50_000, fetchedAt: now },
+    });
+    expect(buildCandidateFeatures(atBound, now).decisionMcapUsd).toBeCloseTo(50_000);
+    const pastBound = scored({
+      priceUsd: 0.0001,
+      marketCapUsd: 10_000,
+      freshQuote: { priceUsd: 0.00051, marketCapUsd: 51_000, fetchedAt: now },
+    });
+    expect(decisionAnchor(pastBound).labelRule).toBe(3);
+    expect(buildCandidateFeatures(pastBound, now).decisionMcapUsd).toBe(10_000);
+  });
+
   it("records every declared feature name, unknowns as null", () => {
     const f = buildCandidateFeatures(scored({}));
     for (const name of CANDIDATE_FEATURE_NAMES) {
@@ -219,22 +426,27 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(buildCandidateFeatures(scored({ launchpad: "bonk" })).launchpadStonks).toBeNull();
     expect(scoredFromFeatures(stonks, 0.0001, 150_000).launchpad).toBe("stonks");
     expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).launchpad).toBeUndefined();
-    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("devLaunchFamilyLaunches");
+    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("pathRet30mPerMin");
+    expect(CANDIDATE_FEATURE_NAMES).toContain("devLaunchFamilyLaunches");
     // Appended on 2026-10-16: the scored top-10 count behind walletRiskTop10Max.
     expect(CANDIDATE_FEATURE_NAMES).toContain("walletRiskScoredTop10");
   });
 
-  it("records the curve path, replays it, and leaves it unread by the learners", () => {
+  it("records the curve path, replays it, and the learners read it", () => {
     const curvePath = { ...EMPTY_CURVE_PATH, curveRet10sPct: 4.2, curveNetSol1m: 3.5 };
     const features = buildCandidateFeatures(scored({ curvePath }));
     expect(features.curveRet10sPct).toBe(4.2);
     expect(features.curveNetSol1m).toBe(3.5);
     expect(buildCandidateFeatures(scored()).curveRet10sPct).toBeNull();
     expect(scoredFromFeatures(features, 0.0001, 150_000).curvePath?.curveNetSol1m).toBe(3.5);
-    for (const name of CURVE_PATH_FEATURES) expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+    for (const name of CURVE_PATH_FEATURES) {
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+    }
   });
 
-  it("records the dev launch reading, replays it, and leaves it unread by the learners", () => {
+  it("records the dev launch reading, replays it, and the learners read it", () => {
     const devLaunch = {
       ...EMPTY_DEV_LAUNCH,
       devLaunchRisk: 62.5,
@@ -245,9 +457,38 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(features.devLaunchRisk).toBe(62.5);
     expect(features.devLaunchPrior).toBe(4);
     expect(features.devLaunchFamilyCreators).toBe(0);
+    // Unknown stays null. A count of 0 above is a real zero, not a fill-in.
     expect(buildCandidateFeatures(scored()).devLaunchRisk).toBeNull();
     expect(scoredFromFeatures(features, 0.0001, 150_000).devLaunch?.devLaunchPrior).toBe(4);
-    for (const name of DEV_LAUNCH_FEATURES) expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+    for (const name of DEV_LAUNCH_FEATURES) {
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+      expect(name.startsWith("ns")).toBe(false);
+    }
+  });
+
+  it("records the wallet win counts, and the learners read them, null while unread", () => {
+    const features = buildCandidateFeatures(
+      scored({
+        walletWinTop10Max: 80,
+        walletWinFirstBuyersMean: 40,
+        walletWinHighSupplyPct: 6,
+        knownWinnerFirstBuyers: 2,
+        winnerRecentBuyers: 1,
+        winnerRecentSellers: 0,
+      }),
+    );
+    expect(features.walletWinTop10Max).toBe(80);
+    expect(features.winnerRecentSellers).toBe(0);
+    const none = buildCandidateFeatures(scored());
+    for (const name of WALLET_WIN_FEATURES) {
+      expect(none[name]).toBeNull();
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+      expect(name.startsWith("ns")).toBe(false);
+    }
   });
 
   it("says whether the age counts from the launch or the pool, null without an age, and replays it", () => {
@@ -286,16 +527,18 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
   });
 
-  it("records Transferred % and the transfer count, recorded only, null while unread", () => {
+  it("records Transferred % and the transfer count, read by the learners, null while unread", () => {
     const f = buildCandidateFeatures(scored({ transferredSupplyPct: 3, transferWalletCount: 5 }));
     expect(f.transferredSupplyPct).toBe(3);
     expect(f.transferWalletCount).toBe(5);
     expect(buildCandidateFeatures(scored()).transferredSupplyPct).toBeNull();
-    expect(RETIRED_LEARNER_INPUTS.has("transferredSupplyPct")).toBe(true);
-    expect(RETIRED_LEARNER_INPUTS.has("transferWalletCount")).toBe(true);
+    expect(RETIRED_LEARNER_INPUTS.has("transferredSupplyPct")).toBe(false);
+    expect(RETIRED_LEARNER_INPUTS.has("transferWalletCount")).toBe(false);
+    expect(LEARNER_FEATURE_NAMES).toContain("transferredSupplyPct");
+    expect(LEARNER_FEATURE_NAMES).toContain("transferWalletCount");
   });
 
-  it("records the launch facts, recorded only, null while unread", () => {
+  it("records the launch facts, read by the learners, null while unread", () => {
     const f = buildCandidateFeatures(
       scored({
         tradeFlow: { ...EMPTY_TRADE_FLOW, firstBuyersSeen: 9, firstBuyersHoldingCut: 4 },
@@ -314,13 +557,13 @@ describe("scoredFromFeatures - replay round trip", () => {
     const none = buildCandidateFeatures(scored());
     for (const name of LAUNCH_FACT_FEATURES) {
       expect(none[name]).toBeNull();
-      // The 0.1% count is read in place of the above-dust one (user decision 2026-10-16).
-      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(name !== "firstBuyersHoldingCut");
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
     }
     expect(RETIRED_LEARNER_INPUTS.has("firstBuyersHolding")).toBe(true);
   });
 
-  it("records the newest buyers' Wallet Score, unread by the learners, unknown without it", () => {
+  it("records the newest buyers' Wallet Score, read by the learners, unknown without it", () => {
     const f = buildCandidateFeatures(
       scored({ walletScoreRecentBuyersMean: -1.25, walletScoreRecentBuyersScored: 31 }),
     );
@@ -328,11 +571,13 @@ describe("scoredFromFeatures - replay round trip", () => {
     const none = buildCandidateFeatures(scored());
     for (const name of WALLET_SCORE_FEATURES) {
       expect(none[name]).toBeNull();
-      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
     }
   });
 
-  it("records the clean winners' reading of the newest buyers, read by Winners alone, unknown without it", () => {
+  it("records the clean winners' reading of the newest buyers, read by the learners, unknown without it", () => {
     const f = buildCandidateFeatures(
       scored({
         cleanWinnerRecentBuyers: 3,
@@ -358,7 +603,9 @@ describe("scoredFromFeatures - replay round trip", () => {
     const none = buildCandidateFeatures(scored());
     for (const name of WINNER_FOLLOW_FEATURES) {
       expect(none[name]).toBeNull();
-      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
     }
   });
 
@@ -425,7 +672,65 @@ describe("buildCandidateFeatures - audit additions", () => {
     expect(f.dexBoosted).toBe(1);
     expect(f.hasDescription).toBe(0);
     expect(f.holderGrowth10mPct).toBe(12);
+    // Still written, and still a learner input. The reliance test kept it beside bandDwellShare.
     expect(f.minutesSinceFirstInBand).toBe(30);
+    expect(RETIRED_LEARNER_INPUTS.has("minutesSinceFirstInBand")).toBe(false);
+    expect(LEARNER_FEATURE_NAMES).toContain("minutesSinceFirstInBand");
+    expect(LEARNER_FEATURE_NAMES).toContain("bandDwellShare");
+  });
+
+  it("records an unindexed or too-close RugCheck holder reading as null, not 0", () => {
+    const unindexed = buildCandidateFeatures(
+      scored({
+        holderCount: 0,
+        holderGrowthPct: 0,
+        holderGrowth10mPct: 0,
+        riskScore: 0,
+        pricePath: { ...EMPTY_PRICE_PATH, pathHolderSlope10m: 0 },
+      }),
+    );
+    expect(unindexed.holderCount).toBeNull();
+    expect(unindexed.holderGrowthPct).toBeNull();
+    expect(unindexed.holderGrowth10mPct).toBeNull();
+    expect(unindexed.riskScore).toBeNull();
+    expect(unindexed.pathHolderSlope10m).toBeNull();
+    // No report at all is the same answer.
+    const missing = buildCandidateFeatures(scored({}));
+    expect(missing.holderCount).toBeNull();
+    expect(missing.holderGrowthPct).toBeNull();
+    expect(missing.riskScore).toBeNull();
+    // A real flat on a counted holder list stays 0. Jupiter's count is a different input.
+    const flat = buildCandidateFeatures(
+      scored({
+        holderCount: 220,
+        holderGrowthPct: 0,
+        holderGrowth10mPct: 0,
+        riskScore: 0,
+        pricePath: { ...EMPTY_PRICE_PATH, pathHolderSlope10m: 0 },
+        freshQuote: { priceUsd: 0.0001, marketCapUsd: 150_000, fetchedAt: new Date(), holderCount: 218 },
+      }),
+    );
+    expect(flat.holderCount).toBe(220);
+    expect(flat.holderGrowthPct).toBe(0);
+    expect(flat.holderGrowth10mPct).toBe(0);
+    expect(flat.riskScore).toBe(0);
+    expect(flat.pathHolderSlope10m).toBe(0);
+    expect(flat.jupHolderCount).toBe(218);
+    for (const name of [
+      "holderCount",
+      "riskScore",
+      "holderGrowthPct",
+      "holderGrowth10mPct",
+      "pathHolderSlope10m",
+    ] as const) {
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+      expect(LEARNER_FEATURE_NAMES).not.toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain(name);
+    }
+    for (const name of ["jupHolderCount", "jup5mHolderChange", "jup1hHolderChange"] as const) {
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+    }
   });
 
   it("leaves them null when the inputs were never seen", () => {
@@ -564,8 +869,11 @@ describe("withLaunchAge", () => {
     const launchedAt = new Date(before.getTime() - 200 * 60_000);
     expect(ageMayBePoolAge(before, poolAged)).toBe(true);
     const rebuilt = withLaunchAge(before, poolAged, launchedAt);
-    expect(rebuilt).toEqual({ ...poolAged, ageMinutes: 200 });
+    expect(rebuilt).toEqual({ ...poolAged, ageMinutes: 200, ageSource: 1 });
     expect(poolAged.ageMinutes).toBe(2);
+    // The rebuilt launch age is the launch clock. A pool-aged row (ageSource 0) is not.
+    expect(applyClockFeatures(rebuilt!).launchAgeMinutes).toBe(200);
+    expect(applyClockFeatures({ ...poolAged, ageSource: 0 }).launchAgeMinutes).toBeNull();
   });
 
   it("drops a pool-aged row with no launch time, and masks the age it can't tell", () => {
@@ -760,6 +1068,50 @@ describe("maskKnownBadInputs", () => {
     expect(maskKnownBadInputs(WALLET_RISK_PERCENTILE_SINCE, raw)).toBe(raw);
   });
 
+  it("reads a RugCheck 0 as missing while a missing report meant the coin was not indexed", () => {
+    const row = {
+      holderCount: 0,
+      riskScore: 0,
+      holderGrowthPct: 0,
+      holderGrowth10mPct: 0,
+      pathHolderSlope10m: 0,
+      jupHolderCount: 40,
+      jup5mHolderChange: 3,
+      mcapUsd: 20_000,
+    };
+    const during = new Date("2026-10-15T12:00:00Z");
+    expect(maskKnownBadInputs(during, row)).toEqual({
+      ...row,
+      holderCount: null,
+      riskScore: null,
+      holderGrowthPct: null,
+      holderGrowth10mPct: null,
+      pathHolderSlope10m: null,
+    });
+    expect(row.holderGrowthPct).toBe(0);
+    // A non-zero reading stays, Jupiter's count included. A 0 does not, even beside a count:
+    // in this window a stored 0 was not distinguishable from a report that was not in yet.
+    const indexed = {
+      holderCount: 180,
+      holderGrowthPct: 4,
+      holderGrowth10mPct: 2,
+      riskScore: 12,
+      pathHolderSlope10m: 1.5,
+      jupHolderCount: 180,
+    };
+    expect(maskKnownBadInputs(during, indexed)).toBe(indexed);
+    const flatBesideCount = { holderCount: 180, holderGrowthPct: 0, jup5mHolderChange: 1 };
+    expect(maskKnownBadInputs(during, flatBesideCount)).toEqual({
+      holderCount: 180,
+      holderGrowthPct: null,
+      jup5mHolderChange: 1,
+    });
+    // Outside the window a 0 is a reading again.
+    expect(maskKnownBadInputs(new Date(RUGCHECK_UNINDEXED_FILL.from.getTime() - 1), row)).toBe(row);
+    expect(maskKnownBadInputs(RUGCHECK_UNINDEXED_FILL.until, row)).toBe(row);
+    expect(maskKnownBadInputs(RUGCHECK_UNINDEXED_FILL.from, row).holderGrowthPct).toBeNull();
+  });
+
   it("reads emptyTop10WalletPct as missing before unpriced holdings made it unknown (#678)", () => {
     const row = { emptyTop10WalletPct: 70, mcapUsd: 50_000 };
     const before = new Date(EMPTY_WALLETS_UNPRICED_NULL_SINCE.getTime() - 1);
@@ -896,16 +1248,24 @@ describe("maskKnownBadInputs", () => {
 });
 
 describe("the market seats' TokenSage inputs", () => {
-  it("keeps the fee group and logo score, and leaves the rest to the Narrative seats", () => {
-    for (const name of MARKET_TOKENSAGE_INPUTS) expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+  it("keeps the fee group, logo score, X counts and story heat, and leaves the other ns* inputs to the Narrative seats", () => {
+    for (const name of MARKET_TOKENSAGE_INPUTS) {
+      expect(isTokenSageInput(name)).toBe(true);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+    }
+    for (const name of [...NARRATIVE_FEATURES_V7, ...NARRATIVE_FEATURES_V8]) {
+      expect(isTokenSageInput(name)).toBe(true);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+    }
+    expect(isTokenSageInput("nsCatAnimal")).toBe(true);
     expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain("nsCatAnimal");
     expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain("nsDepthFull");
+    expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
     expect(LEARNER_FEATURE_NAMES).toContain("nsCatAnimal");
-    expect(MARKET_LEARNER_FEATURE_NAMES.filter((n) => n.startsWith("ns"))).toHaveLength(
-      MARKET_TOKENSAGE_INPUTS.length,
-    );
-    // Every non-TokenSage learner input stays.
-    for (const name of LEARNER_FEATURE_NAMES.filter((n) => !n.startsWith("ns"))) {
+    expect(LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
+    expect(MARKET_LEARNER_FEATURE_NAMES.filter((n) => isTokenSageInput(n))).toEqual([...MARKET_TOKENSAGE_INPUTS]);
+    for (const name of LEARNER_FEATURE_NAMES.filter((n) => !isTokenSageInput(n))) {
       expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
     }
   });

@@ -10,7 +10,7 @@ import { fetchJson } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError, type RateGateStats } from "./rateGate.js";
-import type { DexScreenerClient, TokenLookupOptions } from "./dexscreener.js";
+import { canonicalPairCreatedAt, type DexScreenerClient, type TokenLookupOptions } from "./dexscreener.js";
 import type { CandidateToken, FreshQuote, FreshQuoteStats } from "../types.js";
 import type { DiscoveredCoin } from "./pumpfun.js";
 
@@ -47,7 +47,11 @@ interface JupiterToken {
   graduatedPool?: string | null;
   /** When it did. */
   graduatedAt?: string | null;
-  /** The mint's first pool: for a Pump.fun launch, its bonding curve, opened at launch. */
+  /**
+   * The mint's first pool. For a Pump.fun coin still on its curve this is the bonding curve,
+   * opened at launch. It is not the pool clock once the coin has graduated, and it is not used
+   * when it is some other pool.
+   */
   firstPool?: { id?: string; createdAt?: string | null } | null;
   holderCount?: number | null;
   icon?: string | null;
@@ -419,8 +423,13 @@ export function parseJupiterLaunches(body: unknown, requested: Set<string>): Can
           : "stonkfun"
         : undefined;
     const liquidity = finite(t.liquidity);
-    const createdAt = t.firstPool?.createdAt ? new Date(t.firstPool.createdAt) : undefined;
+    // On the curve the canonical pair is the bonding curve (firstPool, opened at launch). Once
+    // graduated, the pair we price is the graduation pool, whose created time is graduatedAt.
+    // firstPool is then a different pair — the curve, or a junk pool opened beside it — and must
+    // not keep the clock. A graduate with no graduation time has an unknown pool age.
+    const curveAt = t.firstPool?.createdAt ? new Date(t.firstPool.createdAt) : undefined;
     const graduatedAt = t.graduatedPool && t.graduatedAt ? new Date(t.graduatedAt) : undefined;
+    const pairCreatedAt = canonicalPairCreatedAt(dexId, isCurveVenue(dexId) ? curveAt : graduatedAt);
     const m5 = t.stats5m ?? undefined;
     const h1 = t.stats1h ?? undefined;
     const h24 = t.stats24h ?? undefined;
@@ -445,7 +454,7 @@ export function parseJupiterLaunches(body: unknown, requested: Set<string>): Can
       sells5m: finite(m5?.numSells),
       buys1h: finite(h1?.numBuys),
       sells1h: finite(h1?.numSells),
-      pairCreatedAt: createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : undefined,
+      pairCreatedAt,
       dexId,
       graduatedAt: graduatedAt && !Number.isNaN(graduatedAt.getTime()) ? graduatedAt : undefined,
       launchpad,

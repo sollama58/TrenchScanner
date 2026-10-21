@@ -199,6 +199,15 @@ export function curvePriceOf(mint: string, now = Date.now()): number | null {
   return followed.has(mint) ? tape.priceNow(mint, now) : null;
 }
 
+/**
+ * Curve prices the candidate watcher can grade from between `afterMs` and `untilMs`. The tape
+ * and the watcher run in this process; nothing is written for the label. Empty when this mint
+ * has no cover (an older coin, a graduate already dropped, a restart).
+ */
+export function curveLabelPrices(mint: string, afterMs: number, untilMs: number) {
+  return tape.labelPrices(mint, afterMs, untilMs);
+}
+
 /** Counts since the last call, for the scan's heartbeat; null while the tape is off. */
 export function takeCurveTapeStats(now = Date.now()) {
   if (!cfg) return null;

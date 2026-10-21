@@ -4,7 +4,9 @@ import type { TapeTrade } from "./tradeTape.js";
 /**
  * Who is buying, read through the best wallets' records (user ask 2026-10-17, "a model that
  * learns based on the top-performing winner wallets", notes/winners-model-2026-10-17): the inputs
- * the Winners seat reads (curation/contestants.ts WINNERS_RECIPE), from the wallets trading in the
+ * learner inputs (curation/features.ts WINNER_FOLLOW_FEATURES). The Winners seat still decides only
+ * when the tape is present and fits the shares rather than the two counts (contestants.ts
+ * WINNERS_RECIPE), from the wallets trading in the
  * coin's newest trades read before the decision (the live tape) and the hourly wallet book
  * (WalletRisk).
  *

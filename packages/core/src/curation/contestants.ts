@@ -211,14 +211,18 @@ export const TREES_RECENT_HALF_LIFE_DAYS = 1.5;
  * Order flow and short-window momentum only - what the last minutes of trading say, blind to
  * holder structure, socials and the heuristic's own scores. Deliberately partial: a member that
  * sees the market through one lens disagrees with the others in ways the consensus can use.
+ * Price and volume are the clock-honest readings (curation/clockFeatures.ts): the full named
+ * window only when the pair has lived it, otherwise the move since the pair opened, per minute.
+ * The mislabeled window sums are retired, so learnerSubset leaves them out.
  */
 export const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = learnerSubset([
   "mcapUsd",
-  "priceChange5mPct",
-  "priceChange1hPct",
-  "volume5mUsd",
+  "px5mFullPct",
+  "px1hFullPct",
+  "pxSincePairPct",
+  "pxSincePairPerMin",
+  "volPerMin5m",
   "volume1hUsd",
-  "volume5mToMcapRatio",
   "volume1hToMcapRatio",
   "volumeAccel",
   "buys5m",
@@ -366,10 +370,13 @@ export const WINNERS_SEAT_INPUTS: readonly CandidateFeatureName[] = WINNER_FOLLO
  * input but TokenSage's, a 3-day half-life, the Sharp seats' top-12% cutoff - plus the clean
  * winners' reading of the newest trades (WINNERS_SEAT_INPUTS, core's wallets/winnerFollow.ts):
  * their share of the buyers and the SOL, the buyers' own 2x record, and how the winners are trading
- * the coin (conviction, buying in against getting out, their share of the sellers). No other seat
- * reads them. It decides only on moments that carry the reading (ContestantSpec.requires), so its
- * exam is the moments the live tape was read on, filled for the history by the worker's
- * winnerFollowBackfill.ts.
+ * the coin (conviction, buying in against getting out, their share of the sellers). Every other
+ * learner reads all eight clean-winner inputs (WINNER_FOLLOW_FEATURES), the two counts included,
+ * and a missing tape stays null. Winners still skips those counts, which run lower on the
+ * backfilled rows than live, so its list is the trees' inputs with the eight taken out and
+ * WINNERS_SEAT_INPUTS put back. It decides only on moments that carry the reading
+ * (ContestantSpec.requires), so its exam is the moments the live tape was read on, filled for the
+ * history by the worker's winnerFollowBackfill.ts.
  *
  * Point-in-time on 9,837 rows decided around a taped coin (10-11..10-17), a boosted-tree fit with
  * the reading against the same fit without it: walk-forward AUC 0.631 against 0.597, a top-12% 2x
@@ -379,7 +386,12 @@ export const WINNERS_SEAT_INPUTS: readonly CandidateFeatureName[] = WINNER_FOLLO
 export const WINNERS_RECIPE: CuratorRecipe = {
   learner: "gbdt",
   twoStage: true,
-  featureNames: [...TREES_NO_TOKENSAGE_FEATURES, ...WINNERS_SEAT_INPUTS],
+  featureNames: [
+    ...TREES_NO_TOKENSAGE_FEATURES.filter(
+      (name) => !(WINNER_FOLLOW_FEATURES as readonly string[]).includes(name),
+    ),
+    ...WINNERS_SEAT_INPUTS,
+  ],
   recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS,
   cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
   goal: "return",

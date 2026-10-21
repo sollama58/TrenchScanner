@@ -17,6 +17,8 @@ import {
   WIN_WINDOW_MINUTES,
   TEN_X_WINDOW_MINUTES,
   decisionAnchor,
+  dollarTicksFromCurve,
+  FINE_TICK_LABEL_RULE,
   FRESH_ANCHOR_LABEL_RULE,
   type Env,
   type DexScreenerClient,
@@ -24,6 +26,7 @@ import {
   type OutcomeAggregates,
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
+import { curveLabelPrices } from "./curveTape.js";
 
 const logger = createLogger("candidate-outcome");
 
@@ -456,6 +459,7 @@ export async function runCandidateWatchJob(
   let fromSnapshots = 0;
   let crashTicksSkipped = 0;
   let crashTicksDeferred = 0;
+  let fineTicks = 0;
   await forEachWithConcurrency(due, UPDATE_CONCURRENCY, async (row) => {
     try {
       const tickAt = observedAt;
@@ -515,6 +519,27 @@ export async function runCandidateWatchJob(
       }
       if (candidate) ticks.push({ priceUsd: candidate.priceUsd, at: candidate.at });
       if (candidate?.fromSnapshot) fromSnapshots += 1;
+      // Sub-minute curve prints the minute fetch cannot see. Scaled onto the dollar print this
+      // sweep is about to fold in, or onto the previous dollar print when this sweep has none.
+      // No tape (or a tape that does not cover that print) adds nothing: the minute sample stands.
+      const scaleAt = candidate
+        ? { at: candidate.at, priceUsd: candidate.priceUsd }
+        : row.lastPriceUsd !== null && row.lastPriceUsd > 0 && row.lastCheckedAt
+          ? { at: row.lastCheckedAt, priceUsd: row.lastPriceUsd }
+          : null;
+      let usedFineTicks = false;
+      if (scaleAt) {
+        const fine = dollarTicksFromCurve(
+          curveLabelPrices(row.token.mintAddress, seenUpTo, Math.max(tickAt.getTime(), scaleAt.at.getTime())),
+          scaleAt,
+        );
+        if (fine.length > 0) {
+          usedFineTicks = true;
+          fineTicks += fine.length;
+          ticks.push(...fine);
+          ticks.sort((a, b) => a.at.getTime() - b.at.getTime());
+        }
+      }
       const last = ticks.at(-1);
       const price = last?.priceUsd;
       // When the price was seen: its batch's answer, or the snapshot's own time - a 2x or a stop is
@@ -553,6 +578,12 @@ export async function runCandidateWatchJob(
         lastCheckedAt: priceAt > tickAt ? priceAt : tickAt,
       };
       if (price !== undefined) data.lastPriceUsd = price;
+      // Rule 5 is rule 4's anchor plus these prints. A rule-3 row keeps rule 3: its anchor is the
+      // scan price, and a higher rule would start restamping DexScreener's lag. History on rule 4
+      // is not rewritten; only a row that actually folded a curve print moves.
+      if (usedFineTicks && row.labelRule >= FRESH_ANCHOR_LABEL_RULE && row.labelRule < FINE_TICK_LABEL_RULE) {
+        data.labelRule = FINE_TICK_LABEL_RULE;
+      }
 
       const elapsedMs = tickAt.getTime() - row.anchorAt.getTime();
       const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
@@ -829,6 +860,7 @@ export async function runCandidateWatchJob(
     fromSnapshots,
     crashTicksSkipped,
     crashTicksDeferred,
+    fineTicks,
     finalized,
     retired,
     retiredUngraded: unobserved,

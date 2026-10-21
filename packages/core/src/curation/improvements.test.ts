@@ -109,6 +109,10 @@ describe("PricePathBook", () => {
     expect(f.pathObservedMinutes).toBe(30);
     expect(f.pathGapMinutes).toBe(0);
     expect(f.pathRet30mPct!).toBeCloseTo(60, 0);
+    // A full half hour of tape: the 30-minute return really spans 30 minutes, two percent a minute.
+    expect(f.pathSpan30mMin).toBe(30);
+    expect(f.pathRet30mPerMin!).toBeCloseTo(2, 5);
+    expect(f.pathSpan15mMin).toBe(15);
     expect(f.pathRet1mPct!).toBeLessThan(0);
     expect(f.pathDrawdown15mPct!).toBeCloseTo(-20, 0);
     expect(f.pathDrawdown60mPct!).toBeCloseTo(-20, 0);
@@ -157,6 +161,10 @@ describe("PricePathBook", () => {
     // gap says the window's minutes 11 to 40 went unobserved.
     expect(f.pathRet15mPct!).toBeCloseTo(30, 6);
     expect(f.pathRet30mPct!).toBeCloseTo(30, 6);
+    // The named window is 15 minutes; the two prices are 40 minutes apart (minute 1 to minute 41).
+    expect(f.pathSpan15mMin).toBe(40);
+    expect(f.pathSpan30mMin).toBe(40);
+    expect(f.pathRet15mPerMin!).toBeCloseTo(0.75, 5);
     expect(f.pathGapMinutes).toBe(29);
     // The minute just observed is still a minute.
     expect(f.pathRet1mPct!).toBeCloseTo(4, 6);
@@ -181,6 +189,10 @@ describe("PricePathBook", () => {
     // Both longer windows answer from the oldest tick; the shorter ones keep their own rule.
     expect(f.pathRet15mPct!).toBeCloseTo(8, 6);
     expect(f.pathRet30mPct!).toBeCloseTo(8, 6);
+    // Eight minutes of tape, labeled as a 15-minute and a 30-minute return. The span says so.
+    expect(f.pathSpan15mMin).toBe(8);
+    expect(f.pathSpan30mMin).toBe(8);
+    expect(f.pathRet15mPerMin!).toBeCloseTo(1, 5);
     expect(f.pathRet5mPct!).toBeCloseTo(((1.08 - 1.03) / 1.03) * 100, 6);
     expect(f.pathRet1mPct!).toBeCloseTo(((1.08 - 1.07) / 1.07) * 100, 6);
     // Two ticks are still a tape: the move since the scanner's first look, with the gap to say so.
@@ -188,6 +200,8 @@ describe("PricePathBook", () => {
     brief.observe("b", new Date(T0), 1);
     brief.observe("b", new Date(T0 + 30_000), 1.2);
     expect(brief.features("b").pathRet30mPct!).toBeCloseTo(20, 6);
+    expect(brief.features("b").pathSpan30mMin).toBe(0.5);
+    expect(brief.features("b").pathRet30mPerMin!).toBeCloseTo(40, 5);
     expect(brief.features("b").pathGapMinutes).toBe(29.5);
     // A hole of a few cycles inside a full tape counts as gap; one missed cycle does not.
     const holed = new PricePathBook();
@@ -224,6 +238,11 @@ describe("PricePathBook", () => {
     const stale = new PricePathBook();
     for (let m = 0; m <= 15; m++) stale.observe("s", new Date(T0 + m * MIN), 1, 100, new Date(T0));
     expect(stale.features("s").pathHolderSlope10m).toBeNull();
+    // An unindexed count of 0, ten minutes apart, is not a flat slope.
+    const unindexed = new PricePathBook();
+    unindexed.observe("u", new Date(T0), 1, 0, new Date(T0));
+    unindexed.observe("u", new Date(T0 + 10 * MIN), 1, 0, new Date(T0 + 10 * MIN));
+    expect(unindexed.features("u").pathHolderSlope10m).toBeNull();
   });
 
   it("forgets mints that stopped being observed", () => {

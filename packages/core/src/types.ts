@@ -257,7 +257,7 @@ export interface OnChainProfile {
   /**
    * The wallets buying in the newest trades read before the decision, read through the clean
    * winners' records (wallets/winnerFollow.ts). Undefined without a live page or the wallet book.
-   * Recorded as model inputs; the Winners seat reads them.
+   * Recorded as learner inputs. The Winners seat still decides only on moments that carry the tape.
    */
   cleanWinnerRecentBuyers?: number;
   cleanWinnerRecentShare?: number;

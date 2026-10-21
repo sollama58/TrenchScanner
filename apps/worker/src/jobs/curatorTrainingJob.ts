@@ -33,6 +33,7 @@ import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
   passesWalletSafetyCuts,
   maskKnownBadInputs,
+  applyClockFeatures,
   isPreFeeWalletStonksRow,
   withLaunchAge,
   AGE_FROM_LAUNCH_SINCE,
@@ -1412,12 +1413,16 @@ async function loadRowsOfKind(
       }
       // An older graduated row's age as live reads it today: from the launch, not the pool. A row
       // whose true age is unknown and may be past the age cap leaves the set.
-      const features = withLaunchAge(r.anchorAt, masked, loaded.launchedAt);
-      if (features === null) continue;
+      const launched = withLaunchAge(r.anchorAt, masked, loaded.launchedAt);
+      if (launched === null) continue;
       // A row re-graded in place (born rule 3 after the fresh quotes began, no usable quote at the
       // scan) had its fresh-price gap overwritten with the candle re-grade's, measured after the
-      // decision: live, the same no-quote decision carries no gap at all.
-      if (loaded.rule3Grade !== null && features.freshGapPct !== undefined) features.freshGapPct = null;
+      // decision: live, the same no-quote decision carries no gap at all. Cleared before the
+      // clock block, which rebuilds the decision's market cap from this gap.
+      if (loaded.rule3Grade !== null && launched.freshGapPct !== undefined) launched.freshGapPct = null;
+      // The named windows are "since the pair opened" on a young pair. Fill the per-minute and
+      // full-window readings from inputs this row already stored (curation/clockFeatures.ts).
+      const features = applyClockFeatures(launched);
       const row: TrainingRow = {
         tokenId: r.tokenId,
         anchorAt: r.anchorAt,
