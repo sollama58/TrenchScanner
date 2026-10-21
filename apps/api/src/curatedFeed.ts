@@ -1,6 +1,7 @@
 import { Prisma, type TokenSnapshot } from "@prisma/client";
 import {
   prisma,
+  PumpFunClient,
   readCreatorFeeBps,
   WIN_WINDOW_MINUTES,
   GOAL_WINDOW_MINUTES,
@@ -66,6 +67,77 @@ export interface CardCreatorFee {
    * 2026-10-21).
    */
   bps: number | null;
+  /**
+   * The charity's name for a Pump.fun charity coin (user ask 2026-10-21). Absent when the coin
+   * is not a charity coin, or Pump.fun's payload did not name one.
+   */
+  charityName?: string | null;
+}
+
+/** A loaded charity name is kept this long: the organization on a coin does not move. */
+const CHARITY_NAME_OK_MS = 6 * 60 * 60_000;
+/** A coin that answered with no name is left alone this long, then asked again. */
+const CHARITY_NAME_MISS_MS = 10 * 60_000;
+const charityNameCache = new Map<string, { name: string | null; until: number }>();
+
+/**
+ * Puts loaded charity names onto charity-fee rows (user ask 2026-10-21). Other destinations
+ * are left as they were, and a blank name is not attached.
+ */
+export function applyCharityNames(
+  fees: Map<string, CardCreatorFee>,
+  names: ReadonlyMap<string, string | null>,
+): void {
+  for (const [mint, fee] of fees) {
+    if (fee.destination !== "charity") continue;
+    const name = names.get(mint);
+    if (name) fees.set(mint, { ...fee, charityName: name });
+  }
+}
+
+/**
+ * Charity names for these mints, from Pump.fun's single-coin endpoint, remembered so a feed
+ * poll does not ask again. A transport failure or a budget hold is not remembered: the next
+ * read can try. Never throws.
+ */
+export async function charityNamesByMint(mints: readonly string[]): Promise<Map<string, string>> {
+  const now = Date.now();
+  const out = new Map<string, string>();
+  const todo: string[] = [];
+  for (const mint of mints) {
+    const hit = charityNameCache.get(mint);
+    if (hit && hit.until > now) {
+      if (hit.name) out.set(mint, hit.name);
+      continue;
+    }
+    todo.push(mint);
+  }
+  if (todo.length === 0) return out;
+  const client = new PumpFunClient({ baseUrl: process.env.PUMPFUN_BASE_URL || undefined });
+  await Promise.all(
+    todo.map(async (mint) => {
+      try {
+        const name = await client.charityName(mint);
+        charityNameCache.set(mint, {
+          name,
+          until: now + (name ? CHARITY_NAME_OK_MS : CHARITY_NAME_MISS_MS),
+        });
+        if (name) out.set(mint, name);
+      } catch {
+        // Pump.fun didn't answer. The cards still show the heart; the next read can try.
+      }
+    }),
+  );
+  if (charityNameCache.size > 2_000) {
+    const extra = charityNameCache.size - 2_000;
+    let dropped = 0;
+    for (const key of charityNameCache.keys()) {
+      if (dropped >= extra) break;
+      charityNameCache.delete(key);
+      dropped += 1;
+    }
+  }
+  return out;
 }
 
 /**
@@ -101,13 +173,16 @@ export async function creatorFeesByMint(
       FROM "TokenNarrative"
       WHERE "mintAddress" = ANY(${unique}::text[])
         AND "feeDestination" IS NOT NULL`;
-    return new Map(
+    const fees = new Map(
       rows.flatMap((r) => {
         if (!r.feeDestination) return [];
         const bps = readCreatorFeeBps(r.storedBps ?? r.analysisBps);
         return [[r.mintAddress, { destination: r.feeDestination, summary: r.feeSummary, bps }] as const];
       }),
     );
+    const charityMints = [...fees].filter(([, fee]) => fee.destination === "charity").map(([mint]) => mint);
+    if (charityMints.length > 0) applyCharityNames(fees, await charityNamesByMint(charityMints));
+    return fees;
   } catch {
     return new Map();
   }

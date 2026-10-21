@@ -51,6 +51,19 @@ interface PumpFunCoin {
   num_participants?: number;
   /** "active", "paused" or "completed" on a Mayhem Mode coin; null on every other. */
   mayhem_state?: string | null;
+  /**
+   * True when the creator picked a donate.gg charity in the Pump.fun app (coins-v2, captured
+   * 2026-06-17). The organization's name is not in that capture.
+   */
+  is_charity?: boolean | null;
+  /**
+   * The charity's name, when this coin payload carries one. Live frontend-api-v3 could not be
+   * reached here (2026-10-21), so this spelling was not checked against a live coin. See
+   * charityNameFromPumpCoin.
+   */
+  charity_name?: string | null;
+  /** The same name nested, when Pump.fun sends an object instead of charity_name. */
+  charity?: { name?: string | null } | null;
   /** The wallet that launched the coin. */
   creator?: string;
 }
@@ -240,6 +253,29 @@ export class PumpFunClient {
         },
       );
       return coin?.mint === mintAddress ? toDiscoveredCoin(coin) : null;
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * The charity a Pump.fun charity coin names (user ask 2026-10-21), from the same single-coin
+   * endpoint as coinDetails. Null when Pump.fun has no such coin or the payload names no charity.
+   * Throws on a transport failure, including a 429 from our own budget.
+   */
+  async charityName(mintAddress: string, timeoutMs = 2_500): Promise<string | null> {
+    try {
+      const coin = await fetchJson<PumpFunCoin | null>(
+        `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
+        {
+          gate: this.frontendGate,
+          timeoutMs,
+          retries: 0,
+        },
+      );
+      if (!coin || coin.mint !== mintAddress) return null;
+      return charityNameFromPumpCoin(coin);
     } catch (err) {
       if (err instanceof HttpError && err.status === 404) return null;
       throw err;
@@ -579,6 +615,36 @@ const clip = (v: string | undefined, max: number): string | undefined =>
  * clock skew allowed). One Invalid Date reached the watchlist's createMany and failed the whole
  * scan cycle, every cycle the coin stayed on a discovery page.
  */
+/** How long a charity name shown on a card may be. Longer ones are cut, not rejected. */
+const MAX_CHARITY_NAME_CHARS = 80;
+
+/**
+ * The charity a Pump.fun charity coin names (user ask 2026-10-21: the heart's tooltip, and a
+ * line in the token details).
+ *
+ * Live frontend-api-v3 could not be reached from this environment, so the field spelling was
+ * not checked against a live coin. The coins-v2 capture of 2026-06-17 (BankkRoll/pumpfun-apis,
+ * and TokenSage's pump.fun notes) names `is_charity` and does not include a display name.
+ * TokenSage stores `charity_config_id` and says donate.gg publishes no free lookup of the
+ * organization's name. When a payload does carry a name, it is read from `charity_name`, or
+ * from `charity.name`, and only while `is_charity` is true. The coin's own name is not used.
+ * A missing or unusable name stays blank rather than a guessed organization.
+ */
+export function charityNameFromPumpCoin(body: unknown): string | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const coin = body as PumpFunCoin;
+  if (coin.is_charity !== true) return null;
+  return clipCharityName(coin.charity_name) ?? clipCharityName(coin.charity?.name);
+}
+
+function clipCharityName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const name = value.replace(/\s+/g, " ").trim();
+  // A pubkey is the donate.gg config id, not the organization's name. A name needs a letter.
+  if (!name || !/\p{L}/u.test(name) || looksLikeSolanaAddress(name)) return null;
+  return name.length > MAX_CHARITY_NAME_CHARS ? name.slice(0, MAX_CHARITY_NAME_CHARS).trimEnd() : name;
+}
+
 function launchDate(ms: unknown, now = Date.now()): Date | undefined {
   if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0 || ms > now + 60_000) return undefined;
   const date = new Date(ms);
