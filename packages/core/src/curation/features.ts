@@ -1790,11 +1790,24 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
   // The pair's age too, not only the token's: the windows are per DexScreener pair, and at
   // graduation the canonical pair becomes the new PumpSwap pool, whose volume only covers trades
   // since it opened - the same "12 by construction" for the pool's first five minutes while the
-  // token itself reads as minutes or hours old.
-  const pairAgeMinutes =
+  // token itself reads as minutes or hours old. pairCreatedAt is that canonical pair only
+  // (curve, PumpSwap, or Raydium); a junk pool is left unset by the market-data parsers.
+  let pairAgeMinutes =
     scored.pairCreatedAt instanceof Date && !Number.isNaN(scored.pairCreatedAt.getTime())
       ? (now.getTime() - scored.pairCreatedAt.getTime()) / 60_000
       : undefined;
+  // A created time before the launch is not the bonding curve (opened at launch) or the
+  // graduation pool (opened after). Drop the pool clock; ageMinutes stays the launch clock
+  // when ageFromLaunch is set, so deployed models keep that number. Two minutes is source
+  // skew, not a different pool.
+  if (
+    pairAgeMinutes !== undefined &&
+    scored.ageFromLaunch === true &&
+    typeof scored.ageMinutes === "number" &&
+    pairAgeMinutes > scored.ageMinutes + 2
+  ) {
+    pairAgeMinutes = undefined;
+  }
   const tooYoungForAccel = (age: number | undefined) =>
     age !== undefined && age < VOLUME_ACCEL_MIN_AGE_MINUTES;
   const volumeAccel =

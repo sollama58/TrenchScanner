@@ -68,13 +68,27 @@ describe("parseJupiterLaunches", () => {
         mcap: 45_500,
         liquidity: 10_000,
         launchpad: "pump.fun",
+        // An earlier pool than the graduation pool. It must not set the pair clock.
+        firstPool: { id: "side", createdAt: "2026-10-12T18:00:00Z" },
         graduatedPool: "pool",
         graduatedAt: "2026-10-12T20:50:00Z",
+      },
+      {
+        id: "noGradTime",
+        usdPrice: 0.00004,
+        mcap: 40_000,
+        liquidity: 9_000,
+        launchpad: "pump.fun",
+        graduatedPool: "pool",
+        firstPool: { createdAt: "2026-10-12T18:00:00Z" },
       },
       { id: "untraded", usdPrice: null, mcap: null, launchpad: "pump.fun" },
       { id: "stranger", usdPrice: 1, mcap: 1 },
     ];
-    const [curve, graduate, ...rest] = parseJupiterLaunches(body, new Set(["curve", "graduate", "untraded"]));
+    const [curve, graduate, noGradTime, ...rest] = parseJupiterLaunches(
+      body,
+      new Set(["curve", "graduate", "noGradTime", "untraded"]),
+    );
     expect(rest).toEqual([]);
     expect(curve).toMatchObject({
       mintAddress: "curve",
@@ -98,9 +112,12 @@ describe("parseJupiterLaunches", () => {
       dexId: "pumpswap",
       marketSource: "jupiter",
       graduatedAt: new Date("2026-10-12T20:50:00Z"),
+      pairCreatedAt: new Date("2026-10-12T20:50:00Z"),
       liquidityUsd: 20_000,
       volume5mUsd: undefined,
     });
+    expect(noGradTime?.pairCreatedAt).toBeUndefined();
+    expect(noGradTime?.dexId).toBe("pumpswap");
     expect(curve!.graduatedAt).toBeUndefined();
     expect(parseJupiterLaunches({ error: "nope" }, new Set(["curve"]))).toEqual([]);
   });
@@ -123,6 +140,7 @@ describe("parseJupiterLaunches", () => {
           fdv: 100_000,
           liquidity: 30_000,
           launchpad: "stonkfun",
+          firstPool: { createdAt: "2026-10-16T00:00:00Z" },
           graduatedPool: "cpmm",
           graduatedAt: "2026-10-16T00:10:00Z",
         },
@@ -133,6 +151,7 @@ describe("parseJupiterLaunches", () => {
     expect(curve!.graduatedAt).toBeUndefined();
     expect(graduate).toMatchObject({ dexId: "raydium", launchpad: "stonks", liquidityUsd: 60_000 });
     expect(graduate!.graduatedAt).toEqual(new Date("2026-10-16T00:10:00Z"));
+    expect(graduate!.pairCreatedAt).toEqual(new Date("2026-10-16T00:10:00Z"));
   });
 });
 

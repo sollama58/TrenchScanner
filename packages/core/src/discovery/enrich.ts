@@ -4,7 +4,10 @@ import type { CandidateToken, EnrichedToken, OnChainProfile } from "../types.js"
 
 export interface EnrichOptions {
   now?: Date;
-  /** Best available creation timestamp (pump.fun created_timestamp, DexScreener pairCreatedAt, or Helius fallback). */
+  /**
+   * Best available creation timestamp (pump.fun created_timestamp, the canonical pair's
+   * pairCreatedAt, or Helius fallback). Not a side pool's created time.
+   */
   createdAt?: Date;
   /**
    * When the coin launched, from a launch source (Token.launchedAt). Outranks createdAt for the
@@ -36,6 +39,9 @@ export function enrichToken(
     options.launchedAt instanceof Date && !Number.isNaN(options.launchedAt.getTime())
       ? options.launchedAt
       : undefined;
+  // Launch time outranks every pool. pairCreatedAt is the canonical pair's clock only (the
+  // parsers leave a Meteora or other junk pool unset), so it cannot become ageMinutes when the
+  // launch is unknown, and it is not adopted when the launch is known either.
   const createdAt = launchedAt ?? options.createdAt ?? candidate.pairCreatedAt;
   // Kept to two decimals (0.01 min = 0.6s) rather than rounded to whole minutes. Rounding here
   // is what made sub-minute filters meaningless: a token 15 seconds old recorded as 0 and one 40

@@ -3182,8 +3182,9 @@ async function processCandidate(
   // figures without them ride along, recorded (user ask 2026-10-16).
   const onChain = withExTransfers(withHolderTransfers(withBundled, transfers), exTransfers);
   // Launch time: what a launch source said (Token.launchedAt, resolveLaunchTimes), else the
-  // earliest of the DEX pair's creation time and when the watchlist first saw the mint. After
-  // graduation DexScreener's canonical pair is the PumpSwap pool, whose creation time is the
+  // earliest of the canonical pair's creation time and when the watchlist first saw the mint.
+  // pairCreatedAt is unset when the priced pair is a junk pool, so that pool cannot anchor the
+  // age. After graduation DexScreener's canonical pair is the PumpSwap pool, whose creation time is the
   // graduation, and age read from it restarted at zero - a six-hour old token matched a "max 30
   // minutes old" filter the moment it bonded; and on a coin the scan first met after graduation
   // every anchor it has is that pool (27-45% of graduated rows on some days, data audit

@@ -173,6 +173,31 @@ describe("buildCandidateFeatures - short-window derivations", () => {
     expect(at(new Date(now.getTime() + 5_000))).toBe(0);
   });
 
+  it("drops a pool clock from before the launch and keeps the launch age", () => {
+    const now = new Date("2026-10-21T12:00:00Z");
+    const junk = buildCandidateFeatures(
+      scored({
+        ageMinutes: 90,
+        ageFromLaunch: true,
+        pairCreatedAt: new Date(now.getTime() - 2 * 24 * 60 * 60_000),
+      }),
+      now,
+    );
+    expect(junk.pairAgeMinutes).toBeNull();
+    expect(junk.ageMinutes).toBe(90);
+    // The graduation pool is younger than the coin: that clock stands.
+    const graduated = buildCandidateFeatures(
+      scored({
+        ageMinutes: 90,
+        ageFromLaunch: true,
+        pairCreatedAt: new Date(now.getTime() - 3 * 60_000),
+      }),
+      now,
+    );
+    expect(graduated.pairAgeMinutes).toBeCloseTo(3);
+    expect(graduated.ageMinutes).toBe(90);
+  });
+
   it("rates a young pair's windows by the minutes they actually cover", () => {
     const now = new Date("2026-10-21T12:00:00Z");
     const young = buildCandidateFeatures(
