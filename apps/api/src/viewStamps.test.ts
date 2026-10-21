@@ -1,7 +1,7 @@
 import "./bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
-import { ViewStampBuffer } from "./viewStamps.js";
+import { releaseHolderStamps, ViewStampBuffer } from "./viewStamps.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `view-stamp-test-${Date.now()}`;
@@ -123,6 +123,39 @@ describe.skipIf(!dbAvailable)("ViewStampBuffer", () => {
     await buffer.stop();
 
     expect(await stampedCount()).toBe(3);
+  });
+
+  it("clears a released bubble-map stamp, and leaves a newer one", async () => {
+    const tokens = await prisma.token.findMany({
+      where: { id: { in: tokenIds } },
+      select: { mintAddress: true },
+    });
+    const older = tokens[0]!;
+    const newer = tokens[1]!;
+    const pending = tokens[2]!;
+    const oldAt = new Date("2026-10-21T17:00:00Z");
+    const newAt = new Date("2026-10-21T17:05:00Z");
+    await prisma.token.update({ where: { id: tokenIds[0] }, data: { holdersViewedAt: oldAt } });
+    await prisma.token.update({ where: { id: tokenIds[1] }, data: { holdersViewedAt: newAt } });
+    const buffer = new ViewStampBuffer({ flushIntervalMs: 60_000, stamp: "holders" });
+    buffer.record([pending.mintAddress]);
+    // 2026-10-21 user ask: releasing drops a pending stamp of that mint, clears a stamp from the
+    // poll that was released, and does not clear a stamp a later poll already wrote.
+    await releaseHolderStamps(buffer, [
+      { mint: older.mintAddress, at: oldAt.getTime() },
+      { mint: newer.mintAddress, at: oldAt.getTime() },
+      { mint: pending.mintAddress, at: oldAt.getTime() },
+    ]);
+    await buffer.flush();
+    const rows = await prisma.token.findMany({
+      where: { id: { in: tokenIds } },
+      select: { mintAddress: true, holdersViewedAt: true },
+    });
+    const at = (mint: string) => rows.find((row) => row.mintAddress === mint)?.holdersViewedAt ?? null;
+    expect(at(older.mintAddress)).toBeNull();
+    expect(at(newer.mintAddress)?.toISOString()).toBe(newAt.toISOString());
+    expect(at(pending.mintAddress)).toBeNull();
+    await buffer.stop();
   });
 
   it("ignores stamps recorded after shutdown", async () => {

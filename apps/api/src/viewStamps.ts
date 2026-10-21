@@ -52,6 +52,14 @@ export class ViewStampBuffer {
   ) {}
 
   /**
+   * Drops ids from the pending stamp set. A bubble map that just slid out of an account's four
+   * must not be rewritten by a flush of the poll that is releasing it (user ask 2026-10-21).
+   */
+  dismiss(ids: readonly string[]): void {
+    for (const id of ids) this.pending.delete(id);
+  }
+
+  /**
    * Non-blocking. Records that these tokens are on a page somebody just fetched: token ids, or
    * mints for the "holders" stamp.
    */
@@ -125,5 +133,35 @@ export class ViewStampBuffer {
     }
     if (this.flushing) await this.flushing;
     await this.flush();
+  }
+}
+
+/**
+ * Clears bubble-map stamps a sliding watch released (user ask 2026-10-21). Not awaited by the
+ * bubble-holders response. A stamp newer than the poll that was released is left alone, so an
+ * account that still has the map (and has stamped it again) keeps the fast re-read.
+ */
+export function releaseHolderStamps(
+  buffer: ViewStampBuffer | undefined,
+  released: readonly { mint: string; at: number }[],
+): Promise<void> {
+  if (released.length === 0) return Promise.resolve();
+  buffer?.dismiss(released.map((row) => row.mint));
+  return clearReleasedHolderStamps(released);
+}
+
+async function clearReleasedHolderStamps(released: readonly { mint: string; at: number }[]): Promise<void> {
+  try {
+    for (const row of released) {
+      await prisma.token.updateMany({
+        where: { mintAddress: row.mint, holdersViewedAt: { lte: new Date(row.at) } },
+        data: { holdersViewedAt: null },
+      });
+    }
+  } catch (err) {
+    logger.error("could not clear a released bubble-map stamp", {
+      err: String(err),
+      count: released.length,
+    });
   }
 }

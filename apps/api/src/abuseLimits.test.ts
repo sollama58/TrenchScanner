@@ -28,18 +28,43 @@ describe("view stamps per account", () => {
 });
 
 describe("bubble map watches per account", () => {
-  it("lets one account keep four maps on the fast re-read, and not a fifth until the window passes", () => {
+  it("keeps the four newest maps, and releases the oldest when a fifth is opened", () => {
     clearHolderWatchWindows();
     const t0 = 7_000_000;
     const mints = ["a", "b", "c", "d", "e"];
     for (const mint of mints.slice(0, HOLDER_WATCHES_PER_USER)) {
-      expect(allowHolderWatch("u", mint, t0)).toBe(true);
+      expect(allowHolderWatch("u", mint, t0)).toEqual({ stamp: true, released: [] });
     }
-    expect(allowHolderWatch("u", "e", t0 + 1)).toBe(false);
-    // Re-polling a map already in the window still stamps it.
-    expect(allowHolderWatch("u", "a", t0 + 30_000)).toBe(true);
-    expect(allowHolderWatch("other", "e", t0 + 1)).toBe(true);
-    expect(allowHolderWatch("u", "e", t0 + 2 * 60_000 + 1)).toBe(true);
+    // 2026-10-21 user ask: the fifth is stamped, and the oldest stamp is the one to clear.
+    expect(allowHolderWatch("u", "e", t0 + 1)).toEqual({
+      stamp: true,
+      released: [{ mint: "a", at: t0 }],
+    });
+    // Re-polling a map still held makes it the newest, so the next new map releases the next oldest.
+    expect(allowHolderWatch("u", "b", t0 + 30_000)).toEqual({ stamp: true, released: [] });
+    expect(allowHolderWatch("u", "f", t0 + 30_001)).toEqual({
+      stamp: true,
+      released: [{ mint: "c", at: t0 }],
+    });
+  });
+
+  it("does not release a map another account still holds, and does release one the window outlived", () => {
+    clearHolderWatchWindows();
+    const t0 = 8_000_000;
+    expect(allowHolderWatch("u", "a", t0).released).toEqual([]);
+    expect(allowHolderWatch("other", "a", t0).released).toEqual([]);
+    expect(allowHolderWatch("u", "b", t0 + 1).released).toEqual([]);
+    expect(allowHolderWatch("u", "c", t0 + 2).released).toEqual([]);
+    expect(allowHolderWatch("u", "d", t0 + 3).released).toEqual([]);
+    // "a" is u's oldest, but other still has it, so nothing is cleared.
+    expect(allowHolderWatch("u", "e", t0 + 4).released).toEqual([]);
+    // Past the window, u's maps age out. "a" is still other's, so only u's others are released.
+    const aged = allowHolderWatch("u", "z", t0 + 2 * 60_000 + 10);
+    expect(aged.stamp).toBe(true);
+    expect(aged.released.map((row) => row.mint).sort()).toEqual(["b", "c", "d", "e"]);
+    // The same call that reopens an expired map does not release it.
+    expect(allowHolderWatch("solo", "a", t0).released).toEqual([]);
+    expect(allowHolderWatch("solo", "a", t0 + 2 * 60_000 + 10).released).toEqual([]);
   });
 });
 
