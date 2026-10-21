@@ -17,8 +17,8 @@ afterEach(async () => {
 describe("applyCharityNames", () => {
   it("attaches a loaded name only to a charity coin", () => {
     const fees = new Map<string, CardCreatorFee>([
-      ["charityMint", { destination: "charity", summary: "creator fees go to charity" }],
-      ["devMint", { destination: "creator", summary: null }],
+      ["charityMint", { destination: "charity", summary: "creator fees go to charity", bps: null }],
+      ["devMint", { destination: "creator", summary: null, bps: null }],
     ]);
     applyCharityNames(
       fees,
