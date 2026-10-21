@@ -5,6 +5,7 @@ import { searchTrackedTokens, type TokenSearchAnswer } from "../tokenSearch.js";
 import { fillSearchMarketHits, loadSearchMarketHits, SEARCH_MARKET_FETCH_MAX } from "../searchMarket.js";
 import { allowTextSearch, tokenSearchParam } from "./matches.js";
 import { allowHolderWatch } from "./live.js";
+import { releaseHolderStamps } from "../viewStamps.js";
 import { tokenView } from "./utilities.js";
 import { keepFilterMoment, readBubbleMoments, type BubbleMomentView } from "../bubbleMoments.js";
 import { readKolRows } from "../kolRoster.js";
@@ -950,9 +951,14 @@ export async function registerTokenRoutes(
       reply.code(400).send({ error: "not a valid mint" });
       return;
     }
-    // One account's open maps must not fill the worker's 50 watch slots (allowHolderWatch).
+    // One account's open maps must not fill the worker's 50 watch slots. The four newest stay
+    // stamped; a map that slid out is cleared off the request path (allowHolderWatch).
     const userId = request.user?.userId;
-    if (userId && allowHolderWatch(userId, mintAddress)) opts.holderStamps?.record([mintAddress]);
+    if (userId) {
+      const watch = allowHolderWatch(userId, mintAddress);
+      if (watch.stamp) opts.holderStamps?.record([mintAddress]);
+      void releaseHolderStamps(opts.holderStamps, watch.released);
+    }
     // Shorter than the view's 30-second poll, so each poll reaches here (and stamps the coin).
     reply.header("Cache-Control", "private, max-age=15");
     const [row, frozen, moments] = await Promise.all([

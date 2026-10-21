@@ -105,28 +105,73 @@ export function clearViewStampWindows(): void {
 /**
  * How many distinct bubble maps one account may keep on the fast holder re-read. The worker
  * watches the 50 most recently stamped coins (watchedHolders.ts MAX_WATCHED). One account opening
- * token after token used to stamp all 50 (review 2026-10-21). Four open maps fit a few tabs; a
- * fifth distinct mint in the window is not stamped. Re-polling a map already in the window is.
+ * token after token used to stamp all 50 (review 2026-10-21). Four open maps fit a few tabs.
+ *
+ * The cap is the four maps polled most recently, not the first four of a two-minute window
+ * (user ask 2026-10-21). A fifth distinct mint is stamped, and the oldest of the four is
+ * released. A map not polled for HOLDER_WATCH_WINDOW_MS is released too. The caller clears
+ * holdersViewedAt for a released mint only when no account still holds it, so one account cannot
+ * leave stamps behind for the worker's whole window after it has moved on.
  */
 const HOLDER_WATCH_WINDOW_MS = 2 * 60_000;
 export const HOLDER_WATCHES_PER_USER = 4;
-const holderWatchesByUser = new Map<string, { at: number; mints: Set<string> }>();
+/** mint -> the last poll that counted it. Insertion order is oldest first. */
+const holderWatchesByUser = new Map<string, Map<string, number>>();
 
-/** Whether this account may stamp `mint` as a watched bubble map now. */
-export function allowHolderWatch(userKey: string, mint: string, now = Date.now()): boolean {
-  let entry = holderWatchesByUser.get(userKey);
-  holderWatchesByUser.delete(userKey);
-  if (!entry || now - entry.at > HOLDER_WATCH_WINDOW_MS) entry = { at: now, mints: new Set() };
-  holderWatchesByUser.set(userKey, entry);
-  while (holderWatchesByUser.size > VIEW_STAMP_USERS_MAX) {
-    const oldest = holderWatchesByUser.keys().next().value;
-    if (oldest === undefined) break;
-    holderWatchesByUser.delete(oldest);
+/** A bubble map this call dropped. `at` is the poll that last stamped it. */
+export interface ReleasedHolderWatch {
+  mint: string;
+  at: number;
+}
+
+function holderWatchHeld(mint: string): boolean {
+  for (const watches of holderWatchesByUser.values()) {
+    if (watches.has(mint)) return true;
   }
-  if (entry.mints.has(mint)) return true;
-  if (entry.mints.size >= HOLDER_WATCHES_PER_USER) return false;
-  entry.mints.add(mint);
-  return true;
+  return false;
+}
+
+/**
+ * Keeps `mint` among this account's four newest bubble maps. Always stamps `mint`. `released` is
+ * the maps this call dropped that no account still holds, oldest first.
+ */
+export function allowHolderWatch(
+  userKey: string,
+  mint: string,
+  now = Date.now(),
+): { stamp: true; released: ReleasedHolderWatch[] } {
+  let watches = holderWatchesByUser.get(userKey);
+  holderWatchesByUser.delete(userKey);
+  if (!watches) watches = new Map();
+  holderWatchesByUser.set(userKey, watches);
+  const dropped: ReleasedHolderWatch[] = [];
+  while (holderWatchesByUser.size > VIEW_STAMP_USERS_MAX) {
+    const oldestUser = holderWatchesByUser.keys().next().value;
+    // This account was just moved to the end, so it is not the one to drop.
+    if (oldestUser === undefined || oldestUser === userKey) break;
+    const gone = holderWatchesByUser.get(oldestUser);
+    holderWatchesByUser.delete(oldestUser);
+    if (!gone) continue;
+    for (const [goneMint, at] of gone) dropped.push({ mint: goneMint, at });
+  }
+  for (const [held, at] of watches) {
+    if (now - at > HOLDER_WATCH_WINDOW_MS) {
+      watches.delete(held);
+      dropped.push({ mint: held, at });
+    }
+  }
+  if (watches.has(mint)) {
+    watches.delete(mint);
+  } else if (watches.size >= HOLDER_WATCHES_PER_USER) {
+    const oldest = watches.keys().next().value;
+    if (oldest !== undefined) {
+      dropped.push({ mint: oldest, at: watches.get(oldest)! });
+      watches.delete(oldest);
+    }
+  }
+  watches.set(mint, now);
+  const released = dropped.filter((row) => !holderWatchHeld(row.mint));
+  return { stamp: true, released };
 }
 
 /** Test seam: forget the per-account bubble-map windows. */
