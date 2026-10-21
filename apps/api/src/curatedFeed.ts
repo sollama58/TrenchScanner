@@ -12,7 +12,8 @@ import {
   cleanPeakPriceUsd,
   contestantSpec,
 } from "@trenchscanner/core";
-import { otcDeskLines } from "./otcDesk.js";
+import { otcDeskFees } from "./otcDesk.js";
+import type { OtcDeskFee, OtcRewardCoin } from "./feeDesks.js";
 
 /**
  * Turning a CuratedAlert into a feed card.
@@ -60,13 +61,17 @@ export async function withLatestSnapshots<T extends { token: { id: string; mintA
 /**
  * Where a card's coin sends its creator fee (TokenNarrative.feeDestination and feeSummary).
  * `deskLine` is set when OTC Desks' roster names the reward coins for this mint (user ask
- * 2026-10-21). Destination stays null when TokenSage has not said and only the desk has.
+ * 2026-10-21). `deskRewards` is those coins, each with the mint when the roster gave one, so a
+ * surface that can render tokens can. Destination stays null when TokenSage has not said and
+ * only the desk has.
  */
 export interface CardCreatorFee {
   destination: string | null;
   summary: string | null;
   /** OTC Desks' reward routing when their roster names this mint (user ask 2026-10-21). */
   deskLine?: string | null;
+  /** Each reward coin in `deskLine`: its ticker or shortened mint, and the mint when known. */
+  deskRewards?: OtcRewardCoin[] | null;
   /**
    * The charity's name for a Pump.fun charity coin (user ask 2026-10-21). Absent when the coin
    * is not a charity coin, or Pump.fun's payload did not name one.
@@ -158,20 +163,26 @@ export async function creatorFeesByMint(
         select: { mintAddress: true, feeDestination: true, feeSummary: true },
       })
       .catch(() => []),
-    otcDeskLines(unique, { wait: opts?.waitForDesk === true }).catch(() => new Map<string, string>()),
+    otcDeskFees(unique, { wait: opts?.waitForDesk === true }).catch(() => new Map<string, OtcDeskFee>()),
   ]);
   const out = new Map<string, CardCreatorFee>();
+  const deskFields = (mint: string): Pick<CardCreatorFee, "deskLine" | "deskRewards"> => {
+    const desk = desks.get(mint);
+    return { deskLine: desk?.line ?? null, deskRewards: desk?.rewards ?? null };
+  };
   for (const r of rows) {
     out.set(r.mintAddress, {
       destination: r.feeDestination,
       summary: r.feeSummary,
-      deskLine: desks.get(r.mintAddress) ?? null,
+      ...deskFields(r.mintAddress),
     });
   }
   const charityMints = [...out].filter(([, fee]) => fee.destination === "charity").map(([mint]) => mint);
   if (charityMints.length > 0) applyCharityNames(out, await charityNamesByMint(charityMints));
-  for (const [mint, deskLine] of desks) {
-    if (!out.has(mint)) out.set(mint, { destination: null, summary: null, deskLine });
+  for (const [mint, desk] of desks) {
+    if (!out.has(mint)) {
+      out.set(mint, { destination: null, summary: null, deskLine: desk.line, deskRewards: desk.rewards });
+    }
   }
   return out;
 }

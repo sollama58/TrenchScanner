@@ -41,6 +41,16 @@ describe("feeBadge", () => {
     expect(creatorFeeLine({ destination: "wallet", summary: null })).toBeNull();
   });
 
+  it("lists every coin in a multi-coin OTC basket on the gift tooltip and the token-details line", () => {
+    const desk = "OTC Desks pays holder rewards in NVDAx and TSLAx.";
+    expect(
+      feeBadge({ destination: "wallet", summary: "creator fees go to a wallet", deskLine: desk })?.title,
+    ).toBe("Creator fees go to a wallet. OTC Desks pays holder rewards in NVDAx and TSLAx.");
+    expect(feeBadge({ destination: null, summary: null, deskLine: desk })?.title).toContain("NVDAx");
+    expect(feeBadge({ destination: null, summary: null, deskLine: desk })?.title).toContain("TSLAx");
+    expect(creatorFeeLine({ destination: "holder_rewards", summary: null, deskLine: desk })).toBe(desk);
+  });
+
   it("names the charity on the heart's tooltip when Pump.fun loaded one (user ask 2026-10-21)", () => {
     const name = "St. Jude Children's Research Hospital";
     expect(

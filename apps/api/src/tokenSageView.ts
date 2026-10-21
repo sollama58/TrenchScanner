@@ -42,8 +42,10 @@ export interface SageView {
   /**
    * OTC Desks' reward routing for this mint, when their public roster names it (user ask
    * 2026-10-21). Null when it does not. Paid, which would name an XMoney user, has no source here.
+   * `feeRewards` is each coin in that sentence, with its mint when the roster gave one.
    */
   feeDesk: string | null;
+  feeRewards: { label: string; mint: string | null }[] | null;
   /** Market cap at each stored scan, oldest first, for the chart. */
   marketCap: { t: string; usd: number }[];
   /** How the models' calls on coins in this coin's top narrative graded over the last week. */
