@@ -62,8 +62,8 @@ export const CHART_MARK_KINDS = [
   "winner",
   "linked",
 ] as const;
-/** The kinds marked by default: all but risky wallets and dumpers (user ask 2026-10-18). */
-export const DEFAULT_CHART_MARK_KINDS = CHART_MARK_KINDS.filter((k) => k !== "risky");
+/** The kinds marked by default: all but risky wallets, dumpers, and winners. */
+export const DEFAULT_CHART_MARK_KINDS = CHART_MARK_KINDS.filter((k) => k !== "risky" && k !== "winner");
 
 /**
  * Event flags the token chart can draw (apps/web/src/chartEvents.ts). A filter match is the flag
@@ -76,8 +76,8 @@ export const DEFAULT_CHART_EVENT_KINDS = CHART_EVENT_KINDS.filter((k) => k !== "
 export const CHART_EVENT_FIRST_KINDS = ["alert", "filter", "model"] as const;
 /** Only the first filter and the first model. Alerts are not collapsed unless the reader asks. */
 export const DEFAULT_CHART_EVENT_FIRST = ["filter", "model"] as const;
-/** apps/web/src/appearance.ts has the same. */
-export const CHART_MARKS_REV = 2;
+/** apps/web/src/appearance.ts has the same. 3 turns winners off by default. */
+export const CHART_MARKS_REV = 3;
 /**
  * Which hideBelowMcap default a look was saved against (apps/web/src/appearance.ts has the same): a
  * look from before it went on at 6k that still holds the old default (off at 5k) was never changed,
@@ -250,16 +250,15 @@ export const feedAppearanceSchema = z
       .default(["terminal"]),
     /** The token chart marks labeled wallets' trades (user ask 2026-10-18); on by default. */
     chartMarks: z.boolean().default(true),
-    /** Which kinds of labeled wallet it marks; every kind but risky wallets and dumpers by default. */
+    /** Which kinds of labeled wallet it marks; risky wallets, dumpers, and winners are off by default. */
     chartMarkKinds: z
       .array(z.enum(CHART_MARK_KINDS))
       .max(CHART_MARK_KINDS.length)
       .refine((k) => new Set(k).size === k.length, "chart mark kinds repeat")
       .default([...DEFAULT_CHART_MARK_KINDS]),
     /**
-     * Which default chartMarkKinds was saved against: 2 from the build that turned risky wallets
-     * off by default (user ask 2026-10-18). A list saved before it with every kind still on was
-     * never changed, so reading it drops "risky" (parseFeedAppearance).
+     * Which default chartMarkKinds was saved against: 2 turned risky wallets off, 3 turns winners
+     * off. A list that is still exactly an older default was never changed (parseFeedAppearance).
      */
     chartMarksRev: z.literal(CHART_MARKS_REV).default(CHART_MARKS_REV),
     /** The smallest trade it marks, in SOL: 0.5 by default, never under CHART_MARK_MIN_SOL. */
@@ -430,11 +429,20 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
   const kinds = Array.isArray(raw.chartMarkKinds)
     ? [...new Set(raw.chartMarkKinds.filter((k): k is string => typeof k === "string" && markKinds.has(k)))]
     : DEFAULT_FEED_APPEARANCE.chartMarkKinds;
-  // Saved before risky wallets went off by default, with every kind on: the old default, unchanged.
+  // An older default left untouched: every kind (before rev 2), or every kind but risky (rev 2).
+  // A list the reader edited keeps winners as they left them. Rev 2 with risky switched back on
+  // keeps risky.
+  const sameKinds = (expected: readonly string[]) =>
+    kinds.length === expected.length && expected.every((k) => kinds.includes(k));
+  const beforeWinnersOff = CHART_MARK_KINDS.filter((k) => k !== "risky");
   out.chartMarkKinds =
-    raw.chartMarksRev !== CHART_MARKS_REV && kinds.length === CHART_MARK_KINDS.length
-      ? kinds.filter((k) => k !== "risky")
-      : kinds;
+    raw.chartMarksRev === CHART_MARKS_REV
+      ? kinds
+      : sameKinds(CHART_MARK_KINDS) && raw.chartMarksRev !== 2
+        ? kinds.filter((k) => k !== "risky" && k !== "winner")
+        : sameKinds(CHART_MARK_KINDS) || sameKinds(beforeWinnersOff)
+          ? kinds.filter((k) => k !== "winner")
+          : kinds;
   out.chartMarksRev = CHART_MARKS_REV;
   // A bad or repeated kind falls back to the default list; a real list is kept, in the listed order.
   out.chartEventKinds = chosenKinds(raw.chartEventKinds, CHART_EVENT_KINDS, DEFAULT_CHART_EVENT_KINDS);

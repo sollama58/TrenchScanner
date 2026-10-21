@@ -319,7 +319,8 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
       spots.push({ item, side, x, priceY, edgeY, r });
     };
     // The trader's own first, so they take the places nearest the price.
-    // Size scales the radius. Distance scales the stack's pitch and its gap from the price.
+    // Size scales the radius. Distance moves the stack off the price; marks in one stack stay a
+    // fixed gap apart (chartMarkLayout.ts).
     const scale = s.markScale > 0 ? s.markScale : 1;
     const gap = s.markGap > 0 ? s.markGap : 1;
     for (const tr of s.trades) spot({ trade: tr }, tr.t, tr.side, 8 * scale);
