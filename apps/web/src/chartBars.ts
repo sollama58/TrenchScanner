@@ -52,6 +52,17 @@ const SECOND_MS = 1_000;
  * price at one moment, so it becomes the single second it landed in. Nothing is invented inside a
  * coarser bar. Wider timeframes still receive every candle, including ones wider than a slot.
  */
+/**
+ * What to tell a reader when the 1-second chart has history, but none of it is 1 second wide.
+ * Coarser candles are omitted (candlesForResolution) rather than painted on the 1-second scale,
+ * which otherwise leaves a coin that only has minute bars looking like a blank chart.
+ * Null when this timeframe draws something, or when there were no candles to begin with.
+ */
+export function oneSecondChartNotice(tfMs: number, candleCount: number, drawn: boolean): string | null {
+  if (tfMs !== SECOND_MS || drawn || candleCount <= 0) return null;
+  return "No 1-second trades in this view. Coarser candles are not drawn on the 1-second chart.";
+}
+
 export function candlesForResolution(candles: readonly VolumeCandle[], tfMs: number): VolumeCandle[] {
   if (tfMs !== SECOND_MS) return candles as VolumeCandle[];
   const out: VolumeCandle[] = [];

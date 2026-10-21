@@ -25,6 +25,7 @@ import { ClockIcon } from "./Icons";
 import {
   autoTimeframe,
   buildSlots,
+  oneSecondChartNotice,
   slotCandle,
   slotIndex,
   slotOfTime,
@@ -1028,6 +1029,7 @@ export function TradingChart({
     keep(TREND_EXTEND_KEY, next ? "1" : null);
   };
   const plotH = height + TIME_AXIS_PX + (ind.has("rsi") ? Math.round(height * 0.3) : 0);
+  const secondNotice = oneSecondChartNotice(tfMs, candles.length, slots !== null);
 
   const rail = (
     <div className="tc-rail" role="toolbar" aria-label="Drawing tools">
@@ -1336,6 +1338,11 @@ export function TradingChart({
 
         <div className={`tc-wrap${tool ? " drawing" : ""}`} style={{ height: plotH }}>
           <div className="tc-plot" ref={plotRef} role="img" aria-label={ariaLabel} />
+          {secondNotice && (
+            <p className="tc-empty" role="status">
+              {secondNotice}
+            </p>
+          )}
           {cur && (
             <div className="tc-legend num" aria-live="off">
               <span className="faint">
