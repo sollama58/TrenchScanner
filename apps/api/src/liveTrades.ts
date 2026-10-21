@@ -243,7 +243,12 @@ export class LiveTrades {
       ? await this.deps.solPrice.get()
       : null;
     // The trades' caps are on the launch billion; each is put on the coin's supply now (mintSupply.ts).
-    const factor = fresh.length > 0 ? ((await launchSupplyFactors([mint])).get(mint) ?? 1) : 1;
+    // A missing factor leaves the cap on the launch billion (the best figure there is) but does not
+    // invent a 1 billion supply for holder percents: those are skipped until the real supply is known.
+    const knownFactor = fresh.length > 0 ? (await launchSupplyFactors([mint])).get(mint) : undefined;
+    const factor = knownFactor ?? 1;
+    const holderSupply =
+      knownFactor !== undefined && knownFactor > 0 ? PUMP_SUPPLY_TOKENS * knownFactor : undefined;
     const quotes = new Map<string, { usd: number; decimals: number } | null>();
     for (const t of fresh) {
       const quoteMint = t.quote?.mint ?? t.poolQuoteMint;
@@ -289,7 +294,7 @@ export class LiveTrades {
         };
       }),
       held: false,
-      ...(fresh.length > 0 ? { supply: PUMP_SUPPLY_TOKENS * factor } : {}),
+      ...(holderSupply !== undefined ? { supply: holderSupply } : {}),
     };
   }
 

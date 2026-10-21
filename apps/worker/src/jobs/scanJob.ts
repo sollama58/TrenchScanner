@@ -1091,9 +1091,6 @@ async function scanCycle(
     orderBy: { lastViewedAt: "desc" },
     take: env.LIVE_PRICE_MAX_TRACKED,
   });
-  // The coins whose bubble map someone has open: their top holders are re-read faster (user ask
-  // 2026-10-19). Read alongside, waited on below where the wallet stage needs it.
-  const watchedHoldersRead = refreshWatchedHolders(env);
   // Coins looked up in the Utilities tab are among the viewed ones; each also wants a full read.
   void noteUtilityLookups(env).catch((err: unknown) =>
     logger.warn("failed to note looked-up tokens for TokenSage", { error: String(err) }),
@@ -1223,6 +1220,15 @@ async function scanCycle(
     });
     return { stagesMs, lowCapHeld, ...earlyExitMeta(env, deps.pumpFun) };
   }
+
+  // The coins whose bubble map someone has open, among this cycle's candidates only: their top
+  // holders are re-read faster (user ask 2026-10-19). Started here so it overlaps RugCheck, and
+  // waited on below where the wallet stage needs it.
+  const watchedHoldersRead = refreshWatchedHolders(
+    env,
+    Date.now(),
+    new Set(candidates.map((c) => c.mintAddress)),
+  );
 
   const firstSeenByMint = new Map([...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.firstSeenAt]));
   const storedLaunchByMint = new Map(
@@ -1779,6 +1785,7 @@ async function scanCycle(
                   ...chosen,
                   holderBalancesAt: new Date(clock.balancesAtMs),
                   holderChainReadAt: new Date(clock.readAtMs),
+                  holderNextReadAt: new Date(clock.nextReadAtMs),
                 }
               : chosen,
           ] as const;
@@ -4049,7 +4056,13 @@ function sameLinked(a: LinkedWalletsReading, b: LinkedWalletsReading | null): bo
 /** The linked-wallets reading on the profile; unknown (left off) without one. Exported for tests. */
 export function withLinkedWallets(
   onChain: OnChainProfile | null,
-  linked: (LinkedWalletsReading & { holderBalancesAt?: Date; holderChainReadAt?: Date }) | null,
+  linked:
+    | (LinkedWalletsReading & {
+        holderBalancesAt?: Date;
+        holderChainReadAt?: Date;
+        holderNextReadAt?: Date;
+      })
+    | null,
   cex: CexFundedReading | null = null,
   sniperWallets?: ReadonlySet<string>,
 ): OnChainProfile | null {
@@ -4085,6 +4098,7 @@ export function withLinkedWallets(
           ...read,
           holderBalancesAt: linked.holderBalancesAt,
           holderChainReadAt: linked.holderChainReadAt,
+          ...(linked.holderNextReadAt ? { holderNextReadAt: linked.holderNextReadAt } : {}),
         }
       : read;
   // Launch snipers among the same top holders (user ask 2026-10-13, "N/25"): the linked reading's

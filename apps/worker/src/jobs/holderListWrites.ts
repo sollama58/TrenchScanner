@@ -31,8 +31,16 @@ export const HOLDER_LIST_REWRITE_MS = 10 * 60_000;
 /** Coins tracked at once; past this the least recently written go (coins that left the band). */
 const MAX_TRACKED = 20_000;
 
-/** The lists a holder reading leaves on a snapshot. */
-export type HolderReading = Pick<ScoredToken, "linkedHolders" | "linkedClusters" | "sameTimeClusters">;
+/** The lists a holder reading leaves on a snapshot, and the clocks that describe them. */
+export type HolderReading = Pick<
+  ScoredToken,
+  | "linkedHolders"
+  | "linkedClusters"
+  | "sameTimeClusters"
+  | "holderBalancesAt"
+  | "holderChainReadAt"
+  | "holderNextReadAt"
+>;
 type HolderList = NonNullable<ScoredToken["linkedHolders"]>;
 
 /** What this process last wrote for each coin: the reading's key and when. */
@@ -70,12 +78,38 @@ function hasLists(reading: HolderReading): boolean {
 }
 
 /**
+ * The clocks that ride with a holder list. A balance time is not an enumeration: copying the
+ * lists without these made the next row's takenAt the stamp, and filling a missing chain read
+ * from the balance time would move the enumeration on a balance tick.
+ */
+export function holderClockFields(reading: {
+  holderBalancesAt?: Date | null;
+  holderChainReadAt?: Date | null;
+  holderNextReadAt?: Date | null;
+}): { holderBalancesAt?: Date; holderChainReadAt?: Date; holderNextReadAt?: Date } {
+  return {
+    ...(reading.holderBalancesAt ? { holderBalancesAt: reading.holderBalancesAt } : {}),
+    ...(reading.holderChainReadAt ? { holderChainReadAt: reading.holderChainReadAt } : {}),
+    ...(reading.holderNextReadAt ? { holderNextReadAt: reading.holderNextReadAt } : {}),
+  };
+}
+
+/**
  * The reading's three columns as a snapshot row stores them: a list only when there is one to
- * list (most coins have no cluster, and these are columns on every scan's row).
+ * list (most coins have no cluster, and these are columns on every scan's row). The clocks go
+ * with the lists. A row that leaves the lists off leaves the clocks off too.
  */
 export function holderReadingData(
   reading: HolderReading,
-): Pick<Prisma.TokenSnapshotUncheckedCreateInput, "linkedHolders" | "linkedClusters" | "sameTimeClusters"> {
+): Pick<
+  Prisma.TokenSnapshotUncheckedCreateInput,
+  | "linkedHolders"
+  | "linkedClusters"
+  | "sameTimeClusters"
+  | "holderBalancesAt"
+  | "holderChainReadAt"
+  | "holderNextReadAt"
+> {
   return {
     linkedHolders: reading.linkedHolders?.length
       ? (reading.linkedHolders as unknown as Prisma.InputJsonValue)
@@ -86,6 +120,7 @@ export function holderReadingData(
     sameTimeClusters: reading.sameTimeClusters?.length
       ? (reading.sameTimeClusters as unknown as Prisma.InputJsonValue)
       : undefined,
+    ...holderClockFields(reading),
   };
 }
 

@@ -7,6 +7,7 @@ import {
   KeyedCache,
   LastGood,
   markedWallets,
+  withDevChip,
   MAX_MARKED_TRADES,
   MAX_MARKED_WALLETS,
   parseLiveTrades,
@@ -628,5 +629,37 @@ describe("withTrackedMarks", () => {
 
   it("adds nothing without labels", () => {
     expect(withTrackedMarks(shared, [row("mine")], [], {})).toEqual(shared);
+  });
+});
+
+describe("withDevChip", () => {
+  const dev = "D".repeat(32);
+  const chip = {
+    wallet: dev,
+    tags: ["creator"],
+    score: null,
+    dumps: null,
+    coins: null,
+    funder: null,
+    kol: null,
+    solIn: 0,
+    solOut: 0,
+    heldPct: null,
+    trades: [],
+  };
+
+  it("keeps the dev chip when the holder list has the wallet and the tape window does not", () => {
+    expect(withDevChip([], new Set([dev]), dev)).toEqual([chip]);
+  });
+
+  it("does not invent a chip for a creator the holder list does not have, and adds no trades", () => {
+    expect(withDevChip([], new Set(), dev)).toEqual([]);
+    const kept = withDevChip([], new Set([dev]), dev);
+    expect(kept[0]?.trades).toEqual([]);
+  });
+
+  it("leaves a wallet the tape already tagged as the creator", () => {
+    const tagged = { ...chip, tags: ["creator" as const], trades: [[1, 1, 1] as [number, 1, number]] };
+    expect(withDevChip([tagged], new Set([dev]), dev)).toEqual([tagged]);
   });
 });

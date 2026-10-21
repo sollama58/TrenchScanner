@@ -613,6 +613,43 @@ export function withSavedTrades(
   return out;
 }
 
+/**
+ * The dev chip when the creator's activity row has fallen out of the chart's newest rows. The
+ * chip stays only when that wallet is still on the holder list; an empty trade list adds no
+ * chart mark. A wallet already tagged from the tape is left as it is.
+ */
+export function withDevChip(
+  wallets: readonly MarkedWallet[],
+  listed: ReadonlySet<string>,
+  creator: string | null,
+): MarkedWallet[] {
+  if (!creator || !listed.has(creator)) return [...wallets];
+  const i = wallets.findIndex((w) => w.wallet === creator);
+  if (i >= 0) {
+    const w = wallets[i]!;
+    if (w.tags.includes("creator")) return [...wallets];
+    const out = [...wallets];
+    out[i] = { ...w, tags: ["creator", ...w.tags] };
+    return out;
+  }
+  return [
+    ...wallets,
+    {
+      wallet: creator,
+      tags: ["creator"],
+      score: null,
+      dumps: null,
+      coins: null,
+      funder: null,
+      kol: null,
+      solIn: 0,
+      solOut: 0,
+      heldPct: null,
+      trades: [],
+    },
+  ];
+}
+
 /** Riskiest first (creator, KOL and linked wallets ahead of unscored ones), within the caps. */
 function rankAndCap(wallets: MarkedWallet[]): MarkedWallet[] {
   // A label is a floor under the score, not an answer in its place: a KOL with a low score (most

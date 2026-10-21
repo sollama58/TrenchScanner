@@ -517,8 +517,9 @@ describe("readTopHolders", () => {
       reads: 0,
       watchedReads: 0,
     });
-    lastTrade.at = 30_000;
-    expect(await readTopHolders(groups, helius, { ...opts, nowMs: 60_000 })).toEqual({
+    // The quiet keep moved the schedule to 60s. A trade after that is read on the next interval.
+    lastTrade.at = 90_000;
+    expect(await readTopHolders(groups, helius, { ...opts, nowMs: 120_000 })).toEqual({
       reads: 0,
       watchedReads: 1,
     });
