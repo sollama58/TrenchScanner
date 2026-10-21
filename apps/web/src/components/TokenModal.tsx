@@ -3712,14 +3712,24 @@ function StatsCard({ card, liquidity = false }: { card: Card; liquidity?: boolea
                   : "–")}
           </dd>
         </div>
-        <div title={r.feeLine ?? undefined}>
+        <div
+          title={
+            [r.charityName && `Charity: ${r.charityName}`, r.feeLine].filter(Boolean).join("\n") || undefined
+          }
+        >
           <dt>Dev</dt>
           <dd>
             {wait(r.devHolding === null) ?? (r.devHolding === null ? "–" : r.devHolding ? "Holding" : "Sold")}
           </dd>
         </div>
       </dl>
-      {r.feeLine && <p className="small muted tm-fee">Creator fee: {r.feeLine}</p>}
+      {(r.charityName || r.feeLine) && (
+        <p className="small muted tm-fee">
+          {r.charityName && <>Charity: {r.charityName}</>}
+          {r.charityName && r.feeLine && <br />}
+          {r.feeLine && <>Creator fee: {r.feeLine}</>}
+        </p>
+      )}
     </section>
   );
 }

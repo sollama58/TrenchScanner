@@ -190,6 +190,7 @@ export function AlertCard({
     devHolding,
     devFromLatest,
     feeLine,
+    charityName,
   } = cardReadings(tileCard, "newest");
   const devWhen = devFromLatest
     ? `as of the scan ${ago(card.latestSnapshot!.takenAt, now)}`
@@ -727,6 +728,7 @@ export function AlertCard({
                   : devHolding
                     ? `DH = Dev Holding: the creator's wallet still holds this token (${devWhen})`
                     : `DS = Dev Sold: the creator's wallet holds none of this token (${devWhen})`) +
+                (charityName ? `\nCharity: ${charityName}` : "") +
                 (feeLine ? `\n${feeLine}` : "")
               }
             >
@@ -898,10 +900,22 @@ export function creatorFeeLine(fee: Card["token"]["creatorFee"] | null | undefin
 }
 
 /**
+ * A charity name safe to show (user ask 2026-10-21). Blank when it isn't a real name: the
+ * heart then keeps the generic "a charity" tooltip, and the token details omit the line.
+ */
+export function shownCharityName(name: string | null | undefined): string | null {
+  if (typeof name !== "string") return null;
+  const text = name.replace(/\s+/g, " ").trim();
+  if (!text || !/\p{L}/u.test(text)) return null;
+  return text.length > 80 ? `${text.slice(0, 79).trimEnd()}…` : text;
+}
+
+/**
  * The footer's FEES badge: where the coin's creator fee goes (TokenSage's read), as one outline
  * icon - a heart for a charity, a gift for holder rewards or any other wallet, a robot for a GitHub
  * account, a chef's hat for the dev. A gift also when OTC Desks' roster names the reward coins and
- * TokenSage has not (user ask 2026-10-21). Nothing when neither source has said.
+ * TokenSage has not. On a charity coin the tooltip names the organization when one was loaded
+ * (user ask 2026-10-21). Nothing when neither source has said.
  */
 export function feeBadge(fee: Card["token"]["creatorFee"]): {
   kind: keyof typeof FEE_BADGES;
@@ -911,11 +925,11 @@ export function feeBadge(fee: Card["token"]["creatorFee"]): {
   const kind = feeKind(fee?.destination) ?? (fee?.deskLine?.trim() ? "rewards" : null);
   if (!kind) return null;
   const { Icon, label } = FEE_BADGES[kind];
-  return {
-    kind,
-    Icon,
-    title: creatorFeeLine(fee) ?? `Creator fees ${label}.`,
-  };
+  const base = creatorFeeLine(fee) ?? `Creator fees ${label}.`;
+  const charityName = kind === "charity" ? shownCharityName(fee?.charityName) : null;
+  const title =
+    charityName == null || base.includes(charityName) ? base : `${charityName}. ${base}`;
+  return { kind, Icon, title };
 }
 
 /** TokenSage's fee destination as a badge kind (packages/core/src/datasources/tokensage.ts). */
@@ -995,8 +1009,10 @@ export function cardReadings(card: Card, prefer: "alert" | "newest" = "alert") {
   const devHolding = latest?.devHolding ?? s.devHolding ?? null;
   const devFromLatest = latest?.devHolding != null;
   // Where the creator fee goes, under the Dev tile's tooltip (2026-10-21): TokenSage's sentence,
-  // and OTC Desks' reward coins when their roster names them.
-  const feeLine = creatorFeeLine(card.token.creatorFee);
+  // OTC Desks' reward coins when their roster names them, and the charity's name for the details.
+  const fee = card.token.creatorFee;
+  const feeLine = creatorFeeLine(fee);
+  const charityName = fee?.destination === "charity" ? shownCharityName(fee.charityName) : null;
   return {
     freshPct,
     freshOf:
@@ -1036,6 +1052,7 @@ export function cardReadings(card: Card, prefer: "alert" | "newest" = "alert") {
     devHolding,
     devFromLatest,
     feeLine,
+    charityName,
   };
 }
 
