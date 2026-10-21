@@ -45,6 +45,10 @@ export const CLOCK_HONEST_FEATURES = [
   "jupPx5mFullPct",
   "jupPx1hFullPct",
   "jupVolPerMin5m",
+  // Both Jupiter sides present. jupVolPerMin5m still treats a missing side as zero so a deployed
+  // model keeps that meaning (review 2026-10-21). This column is retired from the fit until it
+  // is shown not to hurt the 2x rate.
+  "jupVolPerMin5mKnown",
   "launchAgeMinutes",
   "bandDwellShare",
   "decisionMcapUsd",
@@ -129,6 +133,10 @@ const sumSides = (a: number | null, b: number | null): number | null => {
   return (a ?? 0) + (b ?? 0);
 };
 
+/** A total only when both sides were reported. One missing side is unknown, not zero. */
+const bothSides = (a: number | null, b: number | null): number | null =>
+  a === null || b === null ? null : a + b;
+
 /** Slack before a band dwell longer than the launch age is treated as two clocks disagreeing. */
 const DWELL_SLACK_MINUTES = 1;
 
@@ -185,7 +193,10 @@ export function clockFeatureValues(
   const gap = finite(features.freshGapPct);
   const quoteRatio = gap === null ? null : 1 + gap / 100;
   const quoteTrusted = quoteRatio !== null && freshAnchorRatioTrusted(quoteRatio);
-  const jup5mVol = sumSides(finite(features.jup5mBuyVolumeUsd), finite(features.jup5mSellVolumeUsd));
+  const jupBuy = finite(features.jup5mBuyVolumeUsd);
+  const jupSell = finite(features.jup5mSellVolumeUsd);
+  const jup5mVol = sumSides(jupBuy, jupSell);
+  const jup5mVolKnown = bothSides(jupBuy, jupSell);
   const span15 = finite(features.pathSpan15mMin);
   const span30 = finite(features.pathSpan30mMin);
   const ret15 = finite(features.pathRet15mPct);
@@ -210,6 +221,7 @@ export function clockFeatureValues(
     jupPx5mFullPct: fullWindowValue(finite(features.jup5mPriceChangePct), pairAge, WINDOW_5M_MINUTES),
     jupPx1hFullPct: fullWindowValue(finite(features.jup1hPriceChangePct), pairAge, WINDOW_1H_MINUTES),
     jupVolPerMin5m: levelPerMinute(jup5mVol, pairAge, WINDOW_5M_MINUTES),
+    jupVolPerMin5mKnown: levelPerMinute(jup5mVolKnown, pairAge, WINDOW_5M_MINUTES),
     launchAgeMinutes: launchAge,
     bandDwellShare,
     // The cap the label is graded from: the fresh quote on the scan's supply when the gap was

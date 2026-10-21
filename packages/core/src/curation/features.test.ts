@@ -120,6 +120,9 @@ describe("buildCandidateFeatures - short-window derivations", () => {
     // The mixed clock is recorded for deployed models and is not fit.
     expect(RETIRED_LEARNER_INPUTS.has("ageMinutes")).toBe(true);
     expect(LEARNER_FEATURE_NAMES).not.toContain("ageMinutes");
+    // One missing Jupiter side stays zero on the column deployed models read.
+    expect(RETIRED_LEARNER_INPUTS.has("jupVolPerMin5mKnown")).toBe(true);
+    expect(LEARNER_FEATURE_NAMES).not.toContain("jupVolPerMin5mKnown");
     // The tape's coverage is a learner input and rides with the path block, live and replayed.
     expect(LEARNER_FEATURE_NAMES).toContain("pathGapMinutes");
     expect(new Set(CANDIDATE_FEATURE_NAMES).size).toBe(CANDIDATE_FEATURE_NAMES.length);

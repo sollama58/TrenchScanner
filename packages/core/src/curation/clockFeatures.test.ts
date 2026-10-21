@@ -102,6 +102,24 @@ describe("applyClockFeatures", () => {
     expect(applyClockFeatures({ mcapUsd: 10_000, freshGapPct: -80.01 }).decisionMcapUsd).toBe(10_000);
   });
 
+  it("leaves a one-sided Jupiter volume unknown on the both-sides column", () => {
+    const one = applyClockFeatures({
+      pairAgeMinutes: 5,
+      jup5mBuyVolumeUsd: 60,
+      jup5mSellVolumeUsd: null,
+    });
+    // The column deployed models read still treats the missing side as zero.
+    expect(one.jupVolPerMin5m).toBe(12);
+    expect(one.jupVolPerMin5mKnown).toBeNull();
+    const both = applyClockFeatures({
+      pairAgeMinutes: 5,
+      jup5mBuyVolumeUsd: 40,
+      jup5mSellVolumeUsd: 20,
+    });
+    expect(both.jupVolPerMin5m).toBe(12);
+    expect(both.jupVolPerMin5mKnown).toBe(12);
+  });
+
   it("keeps the scan's market cap when the fresh quote is too far to be the anchor", () => {
     const filled = applyClockFeatures({ mcapUsd: 10_000, freshGapPct: 1_000 });
     expect(filled.decisionMcapUsd).toBe(10_000);

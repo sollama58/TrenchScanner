@@ -870,6 +870,10 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // (null when the launch is unknown) and pairAgeMinutes. ageMinutes stays on the vector at
   // today's meaning so a model already deployed still scores.
   "ageMinutes",
+  // Jupiter 5m volume per minute only when both sides were reported (review 2026-10-21).
+  // jupVolPerMin5m still treats a missing side as zero, which deployed models already learned.
+  // Recorded, not fit, until a backtest shows this column does not hurt the 2x rate.
+  "jupVolPerMin5mKnown",
   // Mislabeled windows (2026-10-21, user ask, curation/clockFeatures.ts). DexScreener and Jupiter
   // name a bucket for the move since the pair opened whenever the pair is younger than that
   // bucket, and the tape's 15 and 30-minute returns answer from the first tick on a short tape.
@@ -1639,6 +1643,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   jupPx5mFullPct: "Jupiter 5m move, full window",
   jupPx1hFullPct: "Jupiter 1h move, full window",
   jupVolPerMin5m: "Jupiter 5m volume per minute",
+  jupVolPerMin5mKnown: "Jupiter 5m volume per minute, both sides",
   launchAgeMinutes: "age since launch",
   bandDwellShare: "share of life in the band",
   decisionMcapUsd: "market cap at the decision",
