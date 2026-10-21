@@ -1015,6 +1015,8 @@ async function main() {
   );
   // The default model follows the leaderboard between training runs - and at start-up, so a
   // fresh install (or the first deploy of the champion table) has a default at once.
+  // This job, model-backup, score-weights and ai-judge had no run deadline, so a hung pass sat
+  // until the process was restarted (review 2026-10-21). The other jobs already had one.
   schedule("champion-refresh", () =>
     scheduleInterval(
       "champion-refresh",
@@ -1023,7 +1025,7 @@ async function main() {
         ...(await seatLiveShareAlarms(env)),
       })),
       CHAMPION_REFRESH_MINUTES,
-      { runEarly: onRunNow("champion-refresh") },
+      { deadlineMinutes: 10, runEarly: onRunNow("champion-refresh") },
     ),
   );
   // Weekly model backups, checked hourly (see runModelBackupJob). Held a few minutes after boot so
@@ -1033,7 +1035,7 @@ async function main() {
       "model-backup",
       takingRunNow("model-backup", () => runModelBackupJob(env)),
       MODEL_BACKUP_CHECK_MINUTES,
-      { firstRunDelayMs: async () => 5 * 60_000, runEarly: onRunNow("model-backup") },
+      { deadlineMinutes: 30, firstRunDelayMs: async () => 5 * 60_000, runEarly: onRunNow("model-backup") },
     ),
   );
   // The composite score's adaptive weights (scoring/scoreWeights.ts): refit on the newest graded
@@ -1044,6 +1046,7 @@ async function main() {
       takingRunNow("score-weights", () => runScoreWeightsJob()),
       SCORE_WEIGHTS_INTERVAL_HOURS * 60,
       {
+        deadlineMinutes: 30,
         runEarly: onRunNow("score-weights"),
         firstRunDelayMs: async () => {
           const last = await lastHeartbeatAt("score-weights");
@@ -1062,7 +1065,7 @@ async function main() {
         withJobLock("ai-judge", (signal) => runAiJudgeJob(env, signal), { stopWhenLockLost: true }),
       ),
       AI_JUDGE_INTERVAL_MINUTES,
-      { runEarly: onRunNow("ai-judge") },
+      { deadlineMinutes: 30, runEarly: onRunNow("ai-judge") },
     ),
   );
 
