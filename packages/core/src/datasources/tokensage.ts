@@ -169,6 +169,12 @@ export interface TokenSageCreatorFee {
   destination?: string | null;
   /** direct | sharing_config | holder_rewards | cashback; kept open. */
   mechanism?: string | null;
+  /**
+   * Basis points of the trade taken as the creator fee. 5 is 0.05%, 100 is 1%, 300 is 3%.
+   * On a holder-reward coin this is the tax paid to holders (user ask 2026-10-21). The live
+   * TokenSage spelling was not re-checked that day; this is the field the type already names.
+   * 0 means the standard fee schedule, not a 0% tax.
+   */
   creator_fee_bps?: number | null;
   admin?: string | null;
   sharing_config?: string | null;
@@ -863,15 +869,18 @@ export interface TokenNarrativeFields {
   /**
    * Rules 0.19.0+ (market.creator_fee): where the coin's creator fee goes (creator,
    * holder_rewards, wallet, split, github, charity, cashback, ...; kept open), how it is routed,
-   * the creator's own share of it (0-1), whether the split can still change, and TokenSage's
-   * one-line summary. All null when the read has no creator_fee (older rules, a non-pump.fun
-   * mint, or a coin read before it was on-chain): missing and null mean the same.
+   * the creator's own share of it (0-1), whether the split can still change, TokenSage's
+   * one-line summary, and the fee in basis points (creator_fee_bps: 5 is 0.05%). All null when
+   * the read has no creator_fee (older rules, a non-pump.fun mint, or a coin read before it was
+   * on-chain): missing and null mean the same. The basis points are for the card's gift label
+   * (user ask 2026-10-21) and are not a model input.
    */
   feeDestination: string | null;
   feeMechanism: string | null;
   feeCreatorShare: number | null;
   feeMutable: boolean | null;
   feeSummary: string | null;
+  feeCreatorBps: number | null;
   /**
    * Flag counts by severity, so a reader needs no catalogue of codes. 0 when there are none.
    * Severity as of today's rules (tokenSageFlagSeverity): recycled_x_account counts as info, and
@@ -1227,12 +1236,31 @@ export function nowFieldsFromItem(item: TokenSageNowItem, mint: string): TokenNa
 /** Fee destinations where the creator wallet gets none of the fee and no split is involved. */
 const FEE_TO_OTHERS_ONLY = new Set(["holder_rewards", "cashback"]);
 
+/**
+ * market.creator_fee.creator_fee_bps as a whole number of basis points from 1 to 10000.
+ * 5 is 0.05%, 100 is 1%, 300 is 3% (user ask 2026-10-21). A string is accepted only when the
+ * stored analysis is read back as text. 0 is the on-chain "use the fee schedule" sentinel, not
+ * a 0% tax, so it is not a rate to show. Anything else is not a rate.
+ */
+export function readCreatorFeeBps(value: unknown): number | null {
+  const n =
+    typeof value === "bigint"
+      ? Number(value)
+      : typeof value === "number"
+        ? value
+        : typeof value === "string" && /^-?\d+$/.test(value.trim())
+          ? Number(value.trim())
+          : Number.NaN;
+  if (!Number.isInteger(n) || n <= 0 || n > 10_000) return null;
+  return n;
+}
+
 /** The creator-fee columns from market.creator_fee (rules 0.19.0+); all null without one. */
 function creatorFeeFields(
   fee: Record<string, unknown> | null,
 ): Pick<
   TokenNarrativeFields,
-  "feeDestination" | "feeMechanism" | "feeCreatorShare" | "feeMutable" | "feeSummary"
+  "feeDestination" | "feeMechanism" | "feeCreatorShare" | "feeMutable" | "feeSummary" | "feeCreatorBps"
 > {
   const destination = clip(fee?.destination)?.slice(0, 40) ?? null;
   if (!fee || destination === null) {
@@ -1242,6 +1270,7 @@ function creatorFeeFields(
       feeCreatorShare: null,
       feeMutable: null,
       feeSummary: null,
+      feeCreatorBps: null,
     };
   }
   const shares = asRecord(fee.shares);
@@ -1260,6 +1289,7 @@ function creatorFeeFields(
     feeCreatorShare: destination === "unknown" ? null : creatorShare,
     feeMutable: typeof fee.mutable === "boolean" ? fee.mutable : null,
     feeSummary: clip(fee.summary)?.slice(0, 300) ?? null,
+    feeCreatorBps: readCreatorFeeBps(fee.creator_fee_bps),
   };
 }
 
