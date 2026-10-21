@@ -1,6 +1,12 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { cardSearchQuery, googleSearchHref, openCardSearch, useCardSearchReady, xSearchHref } from "../cardSearch";
+import {
+  cardSearchQuery,
+  googleSearchHref,
+  openCardSearch,
+  useCardSearchReady,
+  xSearchHref,
+} from "../cardSearch";
 import { SearchIcon } from "./Icons";
 
 /**
@@ -51,7 +57,10 @@ export function CardSearchButton({
     const r = btn.current?.getBoundingClientRect();
     if (!r) return;
     const width = 240;
-    setBox({ top: r.bottom + 4, left: Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8)) });
+    setBox({
+      top: r.bottom + 4,
+      left: Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8)),
+    });
   };
 
   return (
@@ -79,12 +88,7 @@ export function CardSearchButton({
       {open &&
         box &&
         createPortal(
-          <div
-            id={menuId}
-            className="card-search-menu"
-            role="menu"
-            style={{ top: box.top, left: box.left }}
-          >
+          <div id={menuId} className="card-search-menu" role="menu" style={{ top: box.top, left: box.left }}>
             {query && ready && (
               <button
                 type="button"

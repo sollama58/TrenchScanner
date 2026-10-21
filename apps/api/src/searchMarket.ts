@@ -255,7 +255,10 @@ async function fillSearchMarketHitsInner<T extends SearchMarketHit>(
   const mints = hits.map((h) => h.mint);
   const cached = dex.cachedQuotes(mints, SEARCH_MARKET_FRESH_MS, now);
   const plan = hits.map((hit) => {
-    const merged = coalesceMarketReadings(readingsFor(hit, cached.get(hit.mint), remembered.get(hit.mint)), now);
+    const merged = coalesceMarketReadings(
+      readingsFor(hit, cached.get(hit.mint), remembered.get(hit.mint)),
+      now,
+    );
     return { hit, merged };
   });
 
@@ -272,12 +275,17 @@ async function fillSearchMarketHitsInner<T extends SearchMarketHit>(
 
   return plan.map(({ hit }) => {
     const merged = coalesceMarketReadings(
-      readingsFor(hit, dex.cachedQuotes([hit.mint], SEARCH_MARKET_FRESH_MS, Date.now()).get(hit.mint), remembered.get(hit.mint)),
+      readingsFor(
+        hit,
+        dex.cachedQuotes([hit.mint], SEARCH_MARKET_FRESH_MS, Date.now()).get(hit.mint),
+        remembered.get(hit.mint),
+      ),
       Date.now(),
     );
     if (merged.skipFetch && merged.marketCapAt !== null) {
       const prev = remembered.get(hit.mint);
-      if (!prev || prev.at < merged.marketCapAt) remember(hit.mint, tokenFrom(hit.mint, merged), merged.marketCapAt);
+      if (!prev || prev.at < merged.marketCapAt)
+        remember(hit.mint, tokenFrom(hit.mint, merged), merged.marketCapAt);
     }
     return apply(hit, merged);
   });
@@ -384,7 +392,10 @@ function shell(mint: string, row: ShellRow | undefined, scanOf: Map<string, Late
   if (!row) return empty;
   const scan = scanOf.get(row.id);
   const liveAt = row.liveDataAt?.getTime() ?? -Infinity;
-  const live = row.liveMarketCapUsd != null && row.liveMarketCapUsd > 0 && liveAt >= (scan?.takenAt.getTime() ?? -Infinity);
+  const live =
+    row.liveMarketCapUsd != null &&
+    row.liveMarketCapUsd > 0 &&
+    liveAt >= (scan?.takenAt.getTime() ?? -Infinity);
   return {
     mint,
     symbol: row.symbol,
