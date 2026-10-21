@@ -763,6 +763,14 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+  // A Meteora DBC or Raydium LaunchLab curve keeps its created time, and a trading one is the
+  // pair ahead of a deeper side pool. Off (the default): those venues are not a clock, which is
+  // what shipped on 2026-10-21. On changes the price and the pair age of those coins, so which
+  // alerts fire (review 2026-10-21). An owner decision.
+  LAUNCH_HOME_CLOCK: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   // The curator contest's roster, comma-separated contestant ids (curation/contestants.ts):
   // each trains every run and makes calls on its own feed, and the consensus stacks the learners.
   // Default: all of them. Trim it if a training run gets too slow for the worker - memory stays

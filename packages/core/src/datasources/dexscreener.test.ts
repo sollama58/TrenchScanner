@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DexScreenerClient, pickCanonicalPair, pumpSwapPoolCreatedAt } from "./dexscreener.js";
+import {
+  DexScreenerClient,
+  canonicalPairCreatedAt,
+  pickCanonicalPair,
+  pumpSwapPoolCreatedAt,
+} from "./dexscreener.js";
 import { MARKET_SOURCE } from "../marketSource.js";
 import { buildCandidateFeatures } from "../curation/features.js";
 import { enrichToken } from "../discovery/enrich.js";
@@ -117,6 +122,167 @@ describe("pickCanonicalPair", () => {
     const raydium = { dexId: "raydium", liquidity: { usd: 12_000 }, pairCreatedAt: 4_000 };
     expect(pickCanonicalPair([quiet, spam, raydium])).toBe(raydium);
   });
+
+  it("takes the documented branch for each shape of pair list", () => {
+    const pair = (label: string, dexId: string, extra: Record<string, unknown> = {}) => ({
+      label,
+      dexId,
+      ...extra,
+    });
+    const cases: {
+      name: string;
+      pairs: ReturnType<typeof pair>[];
+      winner: string;
+      launchHomeClock?: boolean;
+    }[] = [
+      {
+        name: "the deepest funded pumpswap pool, ahead of a trading curve and a deeper side pool",
+        pairs: [
+          pair("curve", "pumpfun", { volume: { h1: 20_000 } }),
+          pair("spam", "meteora", { liquidity: { usd: 90_000 }, volume: { h1: 8_000 } }),
+          pair("thin", "pumpswap", { liquidity: { usd: 2_000 }, volume: { h1: 10 } }),
+          pair("home", "pumpswap", { liquidity: { usd: 20_000 }, volume: { h1: 10 } }),
+        ],
+        winner: "home",
+      },
+      {
+        name: "a pumpswap pool quoted in the curve's own coin once it trades",
+        pairs: [
+          pair("curve", "pumpfun", {
+            quoteToken: { address: "DOPE" },
+            volume: { h1: 0 },
+            txns: { h1: { buys: 9, sells: 3 } },
+          }),
+          pair("home", "pumpswap", {
+            quoteToken: { address: "DOPE" },
+            volume: { h1: 0 },
+            txns: { h1: { buys: 4, sells: 1 } },
+          }),
+          pair("stray", "pumpswap", {
+            quoteToken: { address: "OTHER" },
+            volume: { h1: 0 },
+            txns: { h1: { buys: 80, sells: 40 } },
+          }),
+        ],
+        winner: "home",
+      },
+      {
+        name: "a pumpswap pool quoted in some other coin is not that graduation",
+        pairs: [
+          pair("home", "pumpfun", {
+            quoteToken: { address: "DOPE" },
+            volume: { h1: 0 },
+            txns: { h1: { buys: 9, sells: 3 } },
+          }),
+          pair("stray", "pumpswap", {
+            quoteToken: { address: "OTHER" },
+            volume: { h1: 0 },
+            txns: { h1: { buys: 80, sells: 40 } },
+          }),
+        ],
+        winner: "home",
+      },
+      {
+        name: "a trading curve, by volume, over a funded side pool",
+        pairs: [
+          pair("home", "pumpfun", { volume: { h1: 20_000 } }),
+          pair("spam", "meteora", { liquidity: { usd: 50_000 }, volume: { h1: 9_000 } }),
+        ],
+        winner: "home",
+      },
+      {
+        name: "a drained pumpswap pool over the frozen curve and a deeper Meteora pool",
+        pairs: [
+          pair("curve", "pumpfun", { volume: { h1: 0 } }),
+          pair("spam", "meteora", { liquidity: { usd: 90_000 } }),
+          pair("home", "pumpswap", { liquidity: { usd: 600 } }),
+        ],
+        winner: "home",
+      },
+      {
+        name: "a quiet curve over a dust pumpswap pool",
+        pairs: [
+          pair("home", "pumpfun", { volume: { h1: 0 } }),
+          pair("dust", "pumpswap", { liquidity: { usd: 10 } }),
+        ],
+        winner: "home",
+      },
+      {
+        name: "a quiet Pump.fun curve yields to its funded Raydium graduation, not to Meteora",
+        pairs: [
+          pair("curve", "pumpfun", { volume: { h1: 0 } }),
+          pair("spam", "meteora", { liquidity: { usd: 40_000 } }),
+          pair("home", "raydium", { liquidity: { usd: 12_000 } }),
+        ],
+        winner: "home",
+      },
+      {
+        name: "a quiet Stonks curve yields to Raydium the same way",
+        pairs: [
+          pair("curve", "stonkfun", { volume: { h1: 0 } }),
+          pair("home", "raydium", { liquidity: { usd: 12_000 } }),
+        ],
+        winner: "home",
+      },
+      {
+        launchHomeClock: true,
+        name: "a quiet LaunchLab curve yields to its Raydium pool",
+        pairs: [
+          pair("curve", "launchlab", { volume: { h1: 0 } }),
+          pair("spam", "meteora", { liquidity: { usd: 80_000 } }),
+          pair("home", "raydium", { liquidity: { usd: 12_000 } }),
+        ],
+        winner: "home",
+      },
+      {
+        launchHomeClock: true,
+        name: "a quiet Meteora DBC stays the pair beside a funded Raydium pool",
+        pairs: [
+          pair("home", "meteoradbc", { volume: { h1: 0 }, liquidity: { usd: 3_000 } }),
+          pair("ray", "raydium", { liquidity: { usd: 40_000 } }),
+          pair("amm", "meteora", { liquidity: { usd: 90_000 } }),
+        ],
+        winner: "home",
+      },
+      {
+        launchHomeClock: true,
+        name: "a trading Meteora DBC over a deeper Meteora AMM",
+        pairs: [
+          pair("amm", "meteora", { liquidity: { usd: 90_000 }, volume: { h1: 8_000 } }),
+          pair("home", "meteoradbc", { volume: { h1: 1_000 }, liquidity: { usd: 4_000 } }),
+        ],
+        winner: "home",
+      },
+      {
+        launchHomeClock: true,
+        name: "a trading LaunchLab curve over a deeper Meteora pool",
+        pairs: [
+          pair("spam", "meteora", { liquidity: { usd: 90_000 }, volume: { h1: 8_000 } }),
+          pair("home", "launchlab", { volume: { h1: 500 } }),
+        ],
+        winner: "home",
+      },
+      {
+        name: "the deepest funded pool when no curve and no PumpSwap pool exist",
+        pairs: [
+          pair("thin", "raydium", { liquidity: { usd: 2_000 } }),
+          pair("home", "meteora", { liquidity: { usd: 8_000 } }),
+        ],
+        winner: "home",
+      },
+      {
+        name: "the deepest pair of any size when nothing is funded",
+        pairs: [
+          pair("dust", "meteora", { liquidity: { usd: 10 } }),
+          pair("home", "raydium", { liquidity: { usd: 500 } }),
+        ],
+        winner: "home",
+      },
+    ];
+    for (const c of cases) {
+      expect(pickCanonicalPair(c.pairs, c.launchHomeClock === true).label, c.name).toBe(c.winner);
+    }
+  });
 });
 
 describe("pair clock", () => {
@@ -225,6 +391,57 @@ describe("pair clock", () => {
     const enriched = enrichToken(token!, null, { now });
     expect(enriched.ageMinutes).toBeUndefined();
     expect(buildCandidateFeatures(scored(token!), now).pairAgeMinutes).toBeNull();
+  });
+
+  it("keeps a Meteora DBC or LaunchLab curve's age when that curve is the pair", () => {
+    const at = Date.parse("2026-10-21T12:00:00Z");
+    expect(canonicalPairCreatedAt("meteoradbc", at)).toBeUndefined();
+    expect(canonicalPairCreatedAt("launchlab", at)).toBeUndefined();
+    expect(canonicalPairCreatedAt("meteoradbc", at, true)).toEqual(new Date(at));
+    expect(canonicalPairCreatedAt("launchlab", at, true)).toEqual(new Date(at));
+    expect(canonicalPairCreatedAt("meteora", at, true)).toBeUndefined();
+    expect(canonicalPairCreatedAt("meteoradbc", 0, true)).toBeUndefined();
+    expect(canonicalPairCreatedAt(undefined, at, true)).toBeUndefined();
+  });
+
+  it("reads a DBC-only and a LaunchLab-only listing as that home's clock", async () => {
+    const at = Date.parse("2026-10-21T12:00:00Z");
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify([
+            {
+              chainId: "solana",
+              dexId: "meteoradbc",
+              baseToken: { address: "dbc" },
+              liquidity: { usd: 4_000 },
+              volume: { h1: 1_000 },
+              marketCap: 20_000,
+              pairCreatedAt: at,
+            },
+            {
+              chainId: "solana",
+              dexId: "launchlab",
+              baseToken: { address: "lab" },
+              volume: { h1: 800 },
+              marketCap: 15_000,
+              pairCreatedAt: at,
+            },
+          ]),
+        ),
+      ),
+    );
+    const tokens = await new DexScreenerClient({ launchHomeClock: true }).getTokensByAddresses(
+      ["dbc", "lab"],
+      1,
+      { retries: 0 },
+    );
+    const by = new Map(tokens.map((t) => [t.mintAddress, t]));
+    expect(by.get("dbc")?.dexId).toBe("meteoradbc");
+    expect(by.get("dbc")?.pairCreatedAt).toEqual(new Date(at));
+    expect(by.get("lab")?.dexId).toBe("launchlab");
+    expect(by.get("lab")?.pairCreatedAt).toEqual(new Date(at));
+    expect(buildCandidateFeatures(scored(by.get("dbc")!), now).pairAgeMinutes).toBeCloseTo(90);
   });
 });
 
@@ -846,6 +1063,90 @@ describe("parseGeckoTokens", () => {
     expect(by.get(mint)?.pairCreatedAt?.toISOString()).toBe("2026-10-21T13:00:00.000Z");
     expect(by.get("onlySpam")?.dexId).toBe("meteora");
     expect(by.get("onlySpam")?.pairCreatedAt).toBeUndefined();
+  });
+
+  it("keeps a Meteora DBC or LaunchLab home's age, and still drops a Meteora AMM", () => {
+    const mint = "homeMint";
+    const body = {
+      data: [
+        {
+          attributes: { address: mint, price_usd: "1", market_cap_usd: "20000" },
+          relationships: { top_pools: { data: [{ id: "p_amm" }, { id: "p_dbc" }] } },
+        },
+        {
+          attributes: { address: "labMint", price_usd: "1", market_cap_usd: "15000" },
+          relationships: { top_pools: { data: [{ id: "p_lab" }, { id: "p_cpmm" }] } },
+        },
+      ],
+      included: [
+        {
+          id: "p_amm",
+          attributes: {
+            address: "amm",
+            base_token_price_usd: "9",
+            reserve_in_usd: "90000",
+            pool_created_at: "2026-10-21T10:00:00Z",
+            volume_usd: { h1: "8000" },
+          },
+          relationships: {
+            base_token: { data: { id: `solana_${mint}` } },
+            dex: { data: { id: "meteora" } },
+          },
+        },
+        {
+          id: "p_dbc",
+          attributes: {
+            address: "dbc-pool",
+            base_token_price_usd: "1",
+            reserve_in_usd: "4000",
+            pool_created_at: "2026-10-21T12:00:00Z",
+            volume_usd: { h1: "1000" },
+          },
+          relationships: {
+            base_token: { data: { id: `solana_${mint}` } },
+            dex: { data: { id: "meteora-dbc" } },
+          },
+        },
+        {
+          id: "p_lab",
+          attributes: {
+            address: "lab-pool",
+            base_token_price_usd: "1",
+            reserve_in_usd: "3000",
+            pool_created_at: "2026-10-21T12:30:00Z",
+            volume_usd: { h1: "500" },
+          },
+          relationships: {
+            base_token: { data: { id: "solana_labMint" } },
+            dex: { data: { id: "raydium-launchlab" } },
+          },
+        },
+        {
+          id: "p_cpmm",
+          attributes: {
+            address: "cpmm-pool",
+            base_token_price_usd: "2",
+            reserve_in_usd: "20000",
+            pool_created_at: "2026-10-21T13:00:00Z",
+          },
+          relationships: {
+            base_token: { data: { id: "solana_labMint" } },
+            dex: { data: { id: "raydium-cpmm" } },
+          },
+        },
+      ],
+    };
+    const off = parseGeckoTokens(body, new Set([mint]));
+    expect(off[0]?.dexId).not.toBe("meteoradbc");
+    expect(off[0]?.pairCreatedAt).toBeUndefined();
+    const by = new Map(
+      parseGeckoTokens(body, new Set([mint, "labMint"]), true).map((t) => [t.mintAddress, t]),
+    );
+    expect(by.get(mint)).toMatchObject({ dexId: "meteoradbc", pairAddress: "dbc-pool" });
+    expect(by.get(mint)?.pairCreatedAt?.toISOString()).toBe("2026-10-21T12:00:00.000Z");
+    // LaunchLab is still trading, so the later CPMM is not the pair yet.
+    expect(by.get("labMint")).toMatchObject({ dexId: "launchlab", pairAddress: "lab-pool" });
+    expect(by.get("labMint")?.pairCreatedAt?.toISOString()).toBe("2026-10-21T12:30:00.000Z");
   });
 });
 

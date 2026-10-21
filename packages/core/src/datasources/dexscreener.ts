@@ -3,7 +3,7 @@ import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError, type RateGateStats } from "./rateGate.js";
 import { normalizeSocialUrl } from "./tokensage.js";
-import { isCurveVenue } from "../launchpads.js";
+import { isCurveVenue, isLaunchHomeCurve } from "../launchpads.js";
 import { MARKET_SOURCE } from "../marketSource.js";
 import { mintSupplies } from "../mintSupply.js";
 import type { GeckoTerminalClient } from "./geckoterminal.js";
@@ -109,6 +109,12 @@ export interface DexScreenerClientOptions {
    * correctStalePrices. Unset, DexScreener's readings stand as given.
    */
   staleCheck?: StalePriceSource;
+  /**
+   * Keep a Meteora DBC or Raydium LaunchLab curve's age, and price off that curve when it is the
+   * coin's home. Off (the default): those venues are not a clock and a deeper side pool can be
+   * the pair, which is what shipped on 2026-10-21. On is an owner decision (review 2026-10-21).
+   */
+  launchHomeClock?: boolean;
 }
 
 /** Where stale-looking readings are cross-checked (JupiterClient). */
@@ -236,9 +242,11 @@ export class DexScreenerClient {
   private readonly staleAsking = new Set<string>();
   /** The latest cross-check, for tests to await. */
   staleCrossCheck: Promise<void> = Promise.resolve();
+  private readonly launchHomeClock: boolean;
 
   constructor(options: DexScreenerClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "https://api.dexscreener.com";
+    this.launchHomeClock = options.launchHomeClock === true;
     this.gate = new RateGate({
       name: "dexscreener",
       perMinute: options.requestsPerMinute ?? DEFAULT_DEXSCREENER_REQUESTS_PER_MINUTE,
@@ -1067,7 +1075,7 @@ export class DexScreenerClient {
       else byMint.set(mint, [pair]);
     }
     return [...byMint.values()].map((list) => {
-      const token = toCandidateToken(pickCanonicalPair(list));
+      const token = toCandidateToken(pickCanonicalPair(list, this.launchHomeClock), this.launchHomeClock);
       const graduatedAt = deriveGraduated(token.dexId) ? pumpSwapPoolCreatedAt(list) : undefined;
       return graduatedAt ? { ...token, graduatedAt } : token;
     });
@@ -1157,12 +1165,22 @@ function isRaydiumVenue(dexId: string | undefined): boolean {
 }
 
 /**
- * Venues whose created time may be the pair clock: the bonding curve, PumpSwap (Pump.fun's
- * graduation pool), and Raydium (older Pump.fun graduations and Stonks). A Meteora pool, or any
- * other side pool, is not one of these.
+ * Curves that graduate into a Raydium pool. Meteora DBC graduates into a Meteora AMM, and that
+ * AMM uses the same dex id as a spam pool, so a quiet DBC does not yield to Raydium.
  */
-export function isCanonicalClockVenue(dexId: string | undefined): boolean {
-  return isCurveVenue(dexId) || dexId === "pumpswap" || isRaydiumVenue(dexId);
+function graduatesOntoRaydium(dexId: string | undefined): boolean {
+  return dexId === "pumpfun" || dexId === "stonkfun" || dexId === "launchlab";
+}
+
+/**
+ * Venues whose created time may be the pair clock: a launch's own bonding curve, PumpSwap
+ * (Pump.fun's graduation pool), and Raydium (older Pump.fun graduations, Stonks, and LaunchLab
+ * after it bonds). A Meteora AMM, or any other side pool, is not one of these. (2026-10-21, user
+ * ask: a Meteora DBC or Raydium LaunchLab curve that is the coin's real home keeps its age.)
+ */
+export function isCanonicalClockVenue(dexId: string | undefined, launchHomeClock = false): boolean {
+  if (!launchHomeClock && (dexId === "meteoradbc" || dexId === "launchlab")) return false;
+  return isLaunchHomeCurve(dexId) || dexId === "pumpswap" || isRaydiumVenue(dexId);
 }
 
 /**
@@ -1174,8 +1192,9 @@ export function isCanonicalClockVenue(dexId: string | undefined): boolean {
 export function canonicalPairCreatedAt(
   dexId: string | undefined,
   createdAt: Date | number | undefined,
+  launchHomeClock = false,
 ): Date | undefined {
-  if (!isCanonicalClockVenue(dexId)) return undefined;
+  if (!isCanonicalClockVenue(dexId, launchHomeClock)) return undefined;
   const date =
     createdAt instanceof Date
       ? createdAt
@@ -1196,8 +1215,9 @@ export function canonicalPairCreatedAt(
  *  - otherwise a drained pumpswap pool (under the funded threshold but above dust) beats the
  *    quiet curve, which DexScreener keeps listing frozen at the graduation price, and beats a
  *    side pool the same way;
- *  - otherwise a quiet curve yields only to a funded Raydium pool (an older graduation), never
- *    to a Meteora pool;
+ *  - otherwise a quiet Pump.fun, Stonks, or LaunchLab curve yields only to a funded Raydium
+ *    pool (its graduation), never to a Meteora pool. A quiet Meteora DBC stays the pair: its
+ *    graduation AMM is not distinguishable from spam;
  *  - otherwise (no curve and no graduation pool) the deepest real pool, falling back to the
  *    deepest pair of any size. That pair's created time is kept only if its venue is canonical
  *    (canonicalPairCreatedAt).
@@ -1205,8 +1225,10 @@ export function canonicalPairCreatedAt(
 export function pickCanonicalPair<
   P extends Pick<DexScreenerPair, "dexId" | "liquidity" | "volume"> &
     Partial<Pick<DexScreenerPair, "txns" | "quoteToken">>,
->(pairs: P[]): P {
+>(pairs: P[], launchHomeClock = false): P {
   const liq = (p: P) => p.liquidity?.usd ?? 0;
+  const curveOf = (dexId: string | undefined) =>
+    launchHomeClock ? isLaunchHomeCurve(dexId) : isCurveVenue(dexId);
   const deepest = (list: P[]) => list.reduce((best, p) => (liq(p) > liq(best) ? p : best));
   // A pair quoted in another coin reports no USD volume (0) while it trades, so its trade count
   // says whether it is active.
@@ -1231,24 +1253,28 @@ export function pickCanonicalPair<
   if (tokenQuotedPools.length > 0) {
     return tokenQuotedPools.reduce((best, p) => (trades1h(p) > trades1h(best) ? p : best));
   }
-  const curve = pairs.find((p) => isCurveVenue(p.dexId) && active(p));
+  const curve = pairs.find((p) => curveOf(p.dexId) && active(p));
   if (curve) return curve;
   // A quiet curve beside a drained pumpswap pool is a graduated coin: DexScreener keeps listing the
   // old curve frozen at the graduation price, so it must not win. A dust pool is still no signal,
   // and neither is a Meteora pool that happens to look deeper.
   const drained = pairs.filter((p) => p.dexId === "pumpswap" && liq(p) >= MIN_DRAINED_PUMPSWAP_LIQUIDITY_USD);
   if (drained.length > 0) return deepest(drained);
-  const quietCurve = pairs.find((p) => isCurveVenue(p.dexId));
+  const quietCurve = pairs.find((p) => curveOf(p.dexId));
   const raydium = pairs.filter((p) => isRaydiumVenue(p.dexId) && liq(p) >= MIN_CANONICAL_POOL_LIQUIDITY_USD);
-  if (quietCurve && raydium.length > 0) return deepest(raydium);
+  // With the flag off every quiet pump or stonks curve yields to Raydium, as before. With it on,
+  // a quiet Meteora DBC does not: its graduation AMM is not a Raydium pool.
+  if (quietCurve && (!launchHomeClock || graduatesOntoRaydium(quietCurve.dexId)) && raydium.length > 0) {
+    return deepest(raydium);
+  }
   if (quietCurve) return quietCurve;
   // No curve and no PumpSwap pool: a non-Pump.fun token's deepest real pool, else any pair.
-  const pools = pairs.filter((p) => !isCurveVenue(p.dexId) && liq(p) >= MIN_CANONICAL_POOL_LIQUIDITY_USD);
+  const pools = pairs.filter((p) => !curveOf(p.dexId) && liq(p) >= MIN_CANONICAL_POOL_LIQUIDITY_USD);
   if (pools.length > 0) return deepest(pools);
   return deepest(pairs);
 }
 
-function toCandidateToken(pair: DexScreenerPair): CandidateToken {
+function toCandidateToken(pair: DexScreenerPair, launchHomeClock = false): CandidateToken {
   // A pair without an info block (nearly every young coin) says nothing about the socials:
   // unknown, not "none". Only a block that is there is a read (2026-10-16 data audit).
   const info = pair.info;
@@ -1277,10 +1303,11 @@ function toCandidateToken(pair: DexScreenerPair): CandidateToken {
     sells5m: pair.txns?.m5?.sells,
     buys1h: pair.txns?.h1?.buys,
     sells1h: pair.txns?.h1?.sells,
-    // The priced pair's own created time only when that pair is the curve, PumpSwap, or Raydium.
-    // pickCanonicalPair already refuses to price a Pump.fun mint off a side pool; a reading that
-    // is only a Meteora pool still lands here, and its created time is not a pool age.
-    pairCreatedAt: canonicalPairCreatedAt(pair.dexId, pair.pairCreatedAt),
+    // The priced pair's own created time only when that pair is a launch curve, PumpSwap, or
+    // Raydium. pickCanonicalPair already refuses to price a Pump.fun mint off a side pool; a
+    // reading that is only a Meteora AMM still lands here, and its created time is not a pool age.
+    // A Meteora DBC or LaunchLab curve that won the pair choice is the coin's home, so it is kept.
+    pairCreatedAt: canonicalPairCreatedAt(pair.dexId, pair.pairCreatedAt, launchHomeClock),
     hasTwitter: info ? socials.some((s) => s.type === "twitter") : undefined,
     hasTelegram: info ? socials.some((s) => s.type === "telegram") : undefined,
     hasWebsite: info ? (info.websites?.length ?? 0) > 0 : undefined,
