@@ -190,6 +190,8 @@ export async function creatorFeesByMint(
     otcDeskFees(unique, { wait: opts?.waitForDesk === true }).catch(() => new Map<string, OtcDeskFee>()),
   ]);
   const out = new Map<string, CardCreatorFee>();
+  // One roster row. The sentence and its coins are written together, including when
+  // the feed has not waited and both are still empty.
   const deskFields = (mint: string): Pick<CardCreatorFee, "deskLine" | "deskRewards"> => {
     const desk = desks.get(mint);
     return { deskLine: desk?.line ?? null, deskRewards: desk?.rewards ?? null };

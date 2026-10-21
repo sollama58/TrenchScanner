@@ -85,6 +85,8 @@ export interface SageRead {
       url: string | null;
       lifetimeReceived: number | null;
     }[];
+    /** Pump.fun's organization, when this charity coin named one. */
+    charityName?: string | null;
   } | null;
   summary: string | null;
   tickerExplanation: string | null;
@@ -757,8 +759,32 @@ function sentence(text: string): string {
   return `${t.charAt(0).toUpperCase()}${t.slice(1)}.`;
 }
 
+/**
+ * A charity name safe to show. Matches the heart's tooltip: a real name, cut at 80
+ * characters. The heart itself is unchanged.
+ */
+function charityLabel(name: string | null | undefined): string | null {
+  if (typeof name !== "string") return null;
+  const text = name.replace(/\s+/g, " ").trim();
+  if (!text || !/\p{L}/u.test(text)) return null;
+  return text.length > 80 ? `${text.slice(0, 79).trimEnd()}…` : text;
+}
+
+/** TokenSage's sentence, with the charity's name in front when Pump.fun named one. */
+export function sageFeeIntro(fee: {
+  destination: string;
+  summary: string | null;
+  charityName?: string | null;
+}): string | null {
+  const charity = fee.destination === "charity" ? charityLabel(fee.charityName) : null;
+  const summary = fee.summary ? sentence(fee.summary) : null;
+  if (charity && summary) return summary.includes(charity) ? summary : `${charity}. ${summary}`;
+  if (charity) return `Creator fees go to ${charity}.`;
+  return summary;
+}
+
 /** Where the creator fee goes: TokenSage's sentence, each recipient's share, and links. */
-function FeeCard({
+export function FeeCard({
   fee,
   deskLine,
   rewards,
@@ -768,6 +794,7 @@ function FeeCard({
   rewards?: { label: string; mint: string | null }[] | null;
 }) {
   const named = fee.recipients.filter((r) => r.label !== null || r.lifetimeReceived !== null);
+  const intro = sageFeeIntro(fee);
   return (
     <section className="sage-card">
       <h4>
@@ -777,7 +804,7 @@ function FeeCard({
         </span>
         {fee.mutable && <span className="sage-tag tone-neutral">Split can still change</span>}
       </h4>
-      {fee.summary && <p>{sentence(fee.summary)}</p>}
+      {intro && <p>{intro}</p>}
       {(deskLine || rewards?.length) && (
         <p>
           <DeskSentence line={deskLine} rewards={rewards} />

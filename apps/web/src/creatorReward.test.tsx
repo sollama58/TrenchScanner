@@ -90,4 +90,88 @@ describe("creator reward square", () => {
     expect(fig.title).toContain("TSLAx");
     expect(feeBadge(next.token.creatorFee)?.title).toContain("NVDAx and TSLAx");
   });
+
+  it("uses the empty dash when the destination is unknown and the gift is hidden", () => {
+    expect(
+      creatorRewardFigure({ destination: "unknown", summary: "fee split; recipients unreadable" }),
+    ).toEqual({
+      value: "–",
+      detail: null,
+      title: "Fee split; recipients unreadable.",
+      empty: true,
+    });
+    expect(creatorRewardFigure({ destination: "unknown", summary: null })).toEqual({
+      value: "–",
+      detail: null,
+      title: "No creator reward is stored",
+      empty: true,
+    });
+    const fig = creatorRewardFigure({ destination: "unknown", summary: null });
+    const html = renderToStaticMarkup(
+      <span className={fig.empty ? "num none" : "num"} title={fig.title}>
+        {fig.value}
+      </span>,
+    );
+    expect(html).toContain("num none");
+    expect(html).toContain("–");
+    expect(html).not.toContain("Rewards");
+  });
+
+  it("keeps a holder tax, the dev, a charity, and an OTC line", () => {
+    expect(creatorRewardFigure({ destination: "holder_rewards", summary: null, bps: 300 })).toMatchObject({
+      value: "Holders 3%",
+      empty: false,
+    });
+    expect(creatorRewardFigure({ destination: "creator", summary: null }).value).toBe("Dev");
+    expect(
+      creatorRewardFigure({ destination: "charity", summary: null, charityName: "Red Cross" }).value,
+    ).toBe("Charity");
+    const otc = creatorRewardFigure({
+      destination: "unknown",
+      summary: "fee split; recipients unreadable",
+      deskLine,
+      deskRewards: [
+        { label: "NVDAx", mint: NVDA },
+        { label: "TSLAx", mint: TSLA },
+      ],
+    });
+    expect(otc.empty).toBe(false);
+    expect(otc.value).not.toBe("–");
+    expect(otc.title).toContain("NVDAx and TSLAx");
+  });
+
+  it("copies the sage desk sentence and its coins from the same side", () => {
+    const card = {
+      token: {
+        creatorFee: {
+          destination: "wallet",
+          summary: "creator fees go to a wallet",
+          charityName: "Red Cross",
+          bps: 300,
+          deskLine: "OTC Desks pays holder rewards in NVDAx.",
+          deskRewards: [{ label: "NVDAx", mint: NVDA }],
+        },
+      },
+    } as unknown as Card;
+    const rewards = [
+      { label: "NVDAx", mint: NVDA },
+      { label: "TSLAx", mint: TSLA },
+    ];
+    const next = cardWithOtcDesk(card, { feeDesk: deskLine, feeRewards: rewards });
+    expect(next.token.creatorFee).toMatchObject({
+      charityName: "Red Cross",
+      bps: 300,
+      deskLine,
+      deskRewards: rewards,
+    });
+    const split = cardWithOtcDesk(card, {
+      feeDesk: null,
+      feeRewards: [{ label: "TSLAx", mint: TSLA }],
+    });
+    expect(split.token.creatorFee?.deskLine ?? null).toBeNull();
+    expect(split.token.creatorFee?.deskRewards).toEqual([{ label: "TSLAx", mint: TSLA }]);
+    expect(cardWithOtcDesk(card, null).token.creatorFee?.deskLine).toBe(
+      "OTC Desks pays holder rewards in NVDAx.",
+    );
+  });
 });

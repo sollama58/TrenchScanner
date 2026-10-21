@@ -186,7 +186,11 @@ function rewardNamesByMint(coins: readonly unknown[]): Map<string, string> {
   return names;
 }
 
-/** mint -> desk fee, for a GET /api/coins body. Coins with no named reward are left out. */
+/**
+ * mint -> desk fee, for a GET /api/coins body. Coins with no named reward are left out.
+ * A mint's first row often has no reward fields (the featured set). That row does not
+ * block a later row that names the reward coins.
+ */
 export function feeDesksFromOtcRoster(body: unknown): Map<string, OtcDeskFee> {
   const coins = rosterCoins(body);
   if (!coins) return new Map();

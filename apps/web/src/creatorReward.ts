@@ -62,8 +62,16 @@ export function creatorRewardFigure(fee: Fee | null | undefined): CreatorRewardF
   const tax = fee?.destination === "holder_rewards" ? holderRewardTaxLabel(fee.bps) : null;
   const line = creatorFeeLine(fee);
   const badge = fee ? feeBadge(fee) : null;
-  if (!badge && coins.length === 0 && !line) {
-    return { value: "–", detail: null, title: "No creator reward is stored", empty: true };
+  // An unknown destination hides the gift. A summary alone is not a reward label: the
+  // square uses the same dash as a missing detection cap. A real holder, dev, charity,
+  // or OTC desk still has a badge or reward coins, and those stay.
+  if (!badge && coins.length === 0) {
+    return {
+      value: "–",
+      detail: null,
+      title: line ?? "No creator reward is stored",
+      empty: true,
+    };
   }
   const value = fee ? headline(fee, coins, tax) : coinValue(coins);
   const parts: string[] = [];
@@ -77,21 +85,47 @@ export function creatorRewardFigure(fee: Fee | null | undefined): CreatorRewardF
   };
 }
 
+type DeskReward = { label: string; mint: string | null };
+
 type DeskView = {
   feeDesk?: string | null;
-  feeRewards?: { label: string; mint: string | null }[] | null;
+  feeRewards?: DeskReward[] | null;
 } | null;
+
+interface DeskPair {
+  line: string | null;
+  rewards: DeskReward[] | null;
+}
+
+function deskPair(
+  line: string | null | undefined,
+  rewards: DeskReward[] | null | undefined,
+): DeskPair | null {
+  const text = typeof line === "string" && line.trim() ? line.trim() : null;
+  const coins = rewards?.length ? rewards : null;
+  if (!text && !coins) return null;
+  return { line: text, rewards: coins };
+}
+
+function sameRewards(a: DeskReward[] | null, b: DeskReward[] | null): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((reward, i) => reward.label === b[i]?.label && reward.mint === b[i]?.mint);
+}
 
 /**
  * The token view's card, with OTC Desks' reward coins from the sage read when the feed card
- * was built before the roster was cached. The card's own desk line wins when it already has one.
+ * was built before the roster was cached. The sentence and its coins always come from the
+ * same side: the sage payload once that read has a desk, otherwise the card's own pair.
  */
 export function cardWithOtcDesk<T extends Card>(card: T, view: DeskView): T {
-  const line = view?.feeDesk?.trim() || null;
-  const rewards = view?.feeRewards?.length ? view.feeRewards : null;
-  if (!line && !rewards) return card;
   const fee = card.token.creatorFee;
-  if (fee?.deskLine?.trim()) return card;
+  const cardDesk = deskPair(fee?.deskLine, fee?.deskRewards);
+  const sageDesk = deskPair(view?.feeDesk, view?.feeRewards);
+  const desk = sageDesk ?? cardDesk;
+  if (!desk) return card;
+  if ((cardDesk?.line ?? null) === desk.line && sameRewards(cardDesk?.rewards ?? null, desk.rewards))
+    return card;
   return {
     ...card,
     token: {
@@ -101,8 +135,8 @@ export function cardWithOtcDesk<T extends Card>(card: T, view: DeskView): T {
         summary: fee?.summary ?? null,
         bps: fee?.bps ?? null,
         charityName: fee?.charityName,
-        deskLine: line,
-        deskRewards: fee?.deskRewards?.length ? fee.deskRewards : rewards,
+        deskLine: desk.line,
+        deskRewards: desk.rewards,
       },
     },
   };
