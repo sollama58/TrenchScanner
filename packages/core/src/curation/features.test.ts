@@ -105,7 +105,7 @@ describe("buildCandidateFeatures - short-window derivations", () => {
       expect(LEARNER_FEATURE_NAMES).not.toContain(name);
     }
     expect(LEARNER_FEATURE_NAMES.length).toBe(CANDIDATE_FEATURE_NAMES.length - RETIRED_LEARNER_INPUTS.size);
-    for (const name of ["priceChange5mPct", "volume5mUsd", "launchAgeMinutes", "pairAgeMinutes", "buyRatio5m", "ctxHourSin"] as const)
+    for (const name of ["launchAgeMinutes", "pairAgeMinutes", "buyRatio5m", "buyRatio24h", "ctxHourSin"] as const)
       expect(LEARNER_FEATURE_NAMES).toContain(name);
     // The mixed clock is recorded for deployed models and is not fit.
     expect(RETIRED_LEARNER_INPUTS.has("ageMinutes")).toBe(true);
@@ -113,19 +113,55 @@ describe("buildCandidateFeatures - short-window derivations", () => {
     // The tape's coverage is a learner input and rides with the path block, live and replayed.
     expect(LEARNER_FEATURE_NAMES).toContain("pathGapMinutes");
     expect(new Set(CANDIDATE_FEATURE_NAMES).size).toBe(CANDIDATE_FEATURE_NAMES.length);
-    // The clock-honest readings are recorded and watched, and no learner reads them yet.
+    // The clock-honest readings are learner inputs. The named windows they replace stay recorded
+    // (a deployed model still scores those numbers) and are out of the next fit. Buy ratios stay.
     for (const name of [
+      "volPerMin5m",
       "volPerMin24h",
-      "pxSincePairPerMin",
+      "tradesPerMin24h",
       "px5mFullPct",
+      "px1hFullPct",
+      "pxSincePairPct",
+      "pxSincePairPerMin",
+      "jupPx5mFullPct",
+      "jupPx1hFullPct",
+      "jupVolPerMin5m",
+      "launchAgeMinutes",
+      "bandDwellShare",
       "decisionMcapUsd",
       "freshQuoteAgeSec",
       "pathSpan15mMin",
+      "pathSpan30mMin",
       "pathRet15mPerMin",
+      "pathRet30mPerMin",
     ] as const) {
       expect(CANDIDATE_FEATURE_NAMES).toContain(name);
-      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
     }
+    for (const name of [
+      "priceChange5mPct",
+      "priceChange1hPct",
+      "volume5mUsd",
+      "volume24hUsd",
+      "volumeToMcapRatio",
+      "volume5mToMcapRatio",
+      "buys24h",
+      "sells24h",
+      "pathRet15mPct",
+      "pathRet30mPct",
+      "priceChange6hPct",
+      "priceChange24hPct",
+      "volume1hUsd",
+    ] as const) {
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+      expect(LEARNER_FEATURE_NAMES).not.toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain(name);
+    }
+    expect(RETIRED_LEARNER_INPUTS.has("buyRatio5m")).toBe(false);
+    expect(RETIRED_LEARNER_INPUTS.has("buyRatio24h")).toBe(false);
+    expect(RETIRED_LEARNER_INPUTS.has("buyRatio1h")).toBe(true);
     expect(PRICE_PATH_FEATURES).toContain("pathGapMinutes");
     expect(learnerSubset(["scoreTotal", "launchAgeMinutes", "ageMinutes", "hasTelegram"])).toEqual([
       "launchAgeMinutes",

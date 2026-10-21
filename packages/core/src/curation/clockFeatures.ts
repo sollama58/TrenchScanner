@@ -16,9 +16,12 @@ import { freshAnchorRatioTrusted } from "./labels.js";
  * window only when the pair has lived the whole of it, and the since-open move once, as its
  * own input, divided by the pair's age. They are derived from inputs the row already carries
  * (applyClockFeatures), so a training row banked before they existed is filled at load time.
- * Recorded on every row and watched on the feature report. launchAgeMinutes is the launch clock
- * the learners read (null when the launch time is unknown). The rest stay out of the fit until
- * a walk-forward takes them out of RETIRED_LEARNER_INPUTS (features.ts).
+ * Recorded on every row and read by the learners (user ask 2026-10-21). launchAgeMinutes is the
+ * launch clock (null when the launch time is unknown). The named-window sums these replace
+ * (priceChange5mPct, volume24hUsd, pathRet15mPct and the rest listed in RETIRED_LEARNER_INPUTS)
+ * stay recorded at the same numbers so a deployed model still scores; the next fit reads these
+ * instead. The onset guard (featureOnset.ts) holds a column out of a run until its history covers
+ * the exam.
  */
 
 /** The bucket widths, in minutes, DexScreener and Jupiter name their windows by. */

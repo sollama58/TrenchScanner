@@ -429,7 +429,9 @@ export const CANDIDATE_FEATURE_NAMES = [
   // trainer's missing-indicators absorb that cleanly). The windows are per DexScreener pair: for a
   // pair younger than a window DexScreener reports the change since the pair opened - since launch
   // on the bonding curve, since graduation once the PumpSwap pool is the canonical pair - so on a
-  // pair under an hour old the 1h, 6h and 24h figures are one and the same.
+  // pair under an hour old the 1h, 6h and 24h figures are one and the same. The next fit reads the
+  // clock-honest block (CLOCK_HONEST_FEATURES) instead of the mislabeled sums; the numbers stored
+  // under these names are unchanged so a deployed model still scores.
   "priceChange5mPct",
   "priceChange1hPct",
   "priceChange6hPct",
@@ -654,9 +656,14 @@ export const CANDIDATE_FEATURE_NAMES = [
   // Appended last (2026-10-21 audit). The named DexScreener and Jupiter windows are the move
   // since the pair opened whenever the pair is younger than the window, and the tape's 15 and
   // 30-minute returns answer across a short tape. These are the same readings divided by the
-  // minutes they actually cover (curation/clockFeatures.ts). Recorded on every row, including
-  // rows banked before (the training load fills them from inputs the row already has).
-  // launchAgeMinutes is the launch clock and is read. The rest wait on a walk-forward.
+  // minutes they actually cover, the full named window only when the span is that long, and the
+  // since-open move once (curation/clockFeatures.ts). Recorded on every row, including rows
+  // banked before (the training load fills them from inputs the row already has).
+  // READ BY THE LEARNERS (user ask 2026-10-21), so none of CLOCK_HONEST_FEATURES or
+  // PATH_CLOCK_FEATURES are in RETIRED_LEARNER_INPUTS. They are not TokenSage inputs, so the
+  // market seats keep them. A missing input stays null. The onset guard (featureOnset.ts) keeps
+  // a column out of a run until it covers enough of the exam's span, including inside age buckets.
+  // The mislabeled window names they replace are retired below; their stored numbers are unchanged.
   ...CLOCK_HONEST_FEATURES,
   ...PATH_CLOCK_FEATURES,
 ] as const;
@@ -854,14 +861,26 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // (null when the launch is unknown) and pairAgeMinutes. ageMinutes stays on the vector at
   // today's meaning so a model already deployed still scores.
   "ageMinutes",
-  // The clock-honest readings (2026-10-21 audit, curation/clockFeatures.ts): recorded so the
-  // feature report can score them against the mislabeled windows, not fit until a paired
-  // walk-forward shows they earn their place. launchAgeMinutes is the exception: it is the
-  // launch clock, and it is read. The named-window inputs stay until that same backtest says
-  // the full-window and per-minute readings replace them — deleting priceChange5mPct,
-  // volume24hUsd or pathRet15mPct here before then changes the next fit with no measurement.
-  ...CLOCK_HONEST_FEATURES.filter((name) => name !== "launchAgeMinutes"),
-  ...PATH_CLOCK_FEATURES,
+  // Mislabeled windows (2026-10-21, user ask, curation/clockFeatures.ts). DexScreener and Jupiter
+  // name a bucket for the move since the pair opened whenever the pair is younger than that
+  // bucket, and the tape's 15 and 30-minute returns answer from the first tick on a short tape.
+  // The next fit reads the clock-honest readings (CLOCK_HONEST_FEATURES, PATH_CLOCK_FEATURES)
+  // instead: per minute actually covered, the full window only when the span is that long, and
+  // the since-open move once. These names stay on the vector at the same numbers
+  // buildCandidateFeatures already writes, so a model already deployed still scores. Buy ratios
+  // stay in the fit (compositions, not sums over a mislabeled window). priceChange6hPct,
+  // priceChange24hPct, volume1hUsd and its twins were already retired above. launchAgeMinutes
+  // stays a learner input. The onset guard still holds a new column with thin history.
+  "priceChange5mPct",
+  "priceChange1hPct",
+  "volume5mUsd",
+  "volume24hUsd",
+  "volumeToMcapRatio",
+  "volume5mToMcapRatio",
+  "buys24h",
+  "sells24h",
+  "pathRet15mPct",
+  "pathRet30mPct",
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
