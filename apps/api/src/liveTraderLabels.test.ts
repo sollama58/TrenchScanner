@@ -19,7 +19,7 @@ describe("traderLabel", () => {
         [{ kolWallet: "K", kolName: "Cupsey", known: true }],
         {},
       ),
-    ).toEqual({ name: { name: "Cupsey Known Side", source: "kol-side" } });
+    ).toEqual({ name: { name: "Cupsey Known Side", source: "kol-side", kolWallet: "K" } });
   });
 
   it("labels a side by its strongest tie, funded first, with its KOL's picture", () => {

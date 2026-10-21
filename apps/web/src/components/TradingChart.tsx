@@ -25,6 +25,7 @@ import { ClockIcon } from "./Icons";
 import {
   autoTimeframe,
   buildSlots,
+  closeTimeMs,
   oneSecondChartNotice,
   slotCandle,
   slotIndex,
@@ -45,14 +46,23 @@ import {
 } from "../priceChart";
 import type { PathStep } from "../pricePathing";
 import {
-  MARK_GAP,
+  BUBBLE_GRID_STEPS,
   MARK_SCALE,
   type MarkGap,
   type MarkScale,
   type MarkShape,
   type WalletMark,
 } from "../walletMarks";
-import { atLiveEnd, markAt, markBandPx, priceScaleTop, type PlacedMark } from "../chartMarkLayout";
+import {
+  atLiveEnd,
+  bubbleHeadroomPx,
+  bubbleItems,
+  gridIntervalAt,
+  markAt,
+  ownTradeExtentPx,
+  priceGridStep,
+  type PlacedMark,
+} from "../chartMarkLayout";
 import { API_URL } from "../api";
 import { openWallet } from "../walletModal";
 import {
@@ -481,11 +491,11 @@ export function TradingChart({
     drawings.setExtendTrend(extendTrend);
   }, [drawings, extendTrend]);
   const markFactor = MARK_SCALE[markScale] ?? 1;
-  const gapFactor = MARK_GAP[markGap] ?? 1;
+  const bubbleSteps = BUBBLE_GRID_STEPS[markGap] ?? 1;
   // The chart is rebuilt without these in its deps. The margin effect below reads them live,
   // and a rebuild reads whatever size is current.
-  const markLayoutRef = useRef({ factor: markFactor, gap: gapFactor });
-  markLayoutRef.current = { factor: markFactor, gap: gapFactor };
+  const markLayoutRef = useRef({ factor: markFactor, own: trades.length > 0 });
+  markLayoutRef.current = { factor: markFactor, own: trades.length > 0 };
   // Headroom for the bubble band only while something is drawn there. A chart with no bubbles
   // keeps the flag margin it had (2026-10-21).
   const bubbles = marks.length > 0 || trades.length > 0 || dexInfo !== null;
@@ -603,11 +613,13 @@ export function TradingChart({
     overlayRef.current = overlay;
     chart.priceScale("right").applyOptions({
       mode: log ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
-      // Top margin holds the trade-bubble band above the candles (chartMarkLayout.ts).
-      scaleMargins: {
-        top: bubblesRef.current ? markerMargin(markLayoutRef.current, height) : 0.12,
-        bottom: ind.has("vol") ? 0.2 : 0.06,
-      },
+      // Headroom for the highest bubble and, when the reader has trades, the triangles under the low.
+      scaleMargins: chartMargins(height, {
+        bubbles: bubblesRef.current,
+        vol: ind.has("vol"),
+        factor: markLayoutRef.current.factor,
+        own: markLayoutRef.current.own,
+      }),
     });
     if (ind.has("vol")) {
       const v = chart.addSeries(HistogramSeries, {
@@ -677,16 +689,18 @@ export function TradingChart({
     setBuilt((n) => n + 1);
   }, [colors, kind, indKey, log]);
 
-  // The band above the candles grows with the bubble size (user ask 2026-10-21). Rebuilt charts
-  // set this too; this keeps a size or distance change from waiting on a rebuild.
+  // Headroom for the highest bubble, and room under the lowest candle for the reader's triangles.
+  // Rebuilt charts set this too; this keeps a size change from waiting on a rebuild.
   useEffect(() => {
     chartRef.current?.priceScale("right").applyOptions({
-      scaleMargins: {
-        top: bubbles ? markerMargin({ factor: markFactor, gap: gapFactor }, height) : 0.12,
-        bottom: ind.has("vol") ? 0.2 : 0.06,
-      },
+      scaleMargins: chartMargins(height, {
+        bubbles,
+        vol: ind.has("vol"),
+        factor: markFactor,
+        own: trades.length > 0,
+      }),
     });
-  }, [built, markFactor, gapFactor, height, ind, bubbles]);
+  }, [built, markFactor, height, ind, bubbles, trades.length]);
 
   useEffect(() => {
     chartRef.current?.timeScale().applyOptions({
@@ -706,6 +720,8 @@ export function TradingChart({
     const range = ts.getVisibleLogicalRange();
     const time = (t: number) => (t / 1000) as UTCTimestamp;
     const bars = slots.bars;
+    // The line draws each close at the bucket end. Candles stay stamped at the open.
+    const barTime = (t: number) => time(kind === "line" ? closeTimeMs(t, slots.tfMs) : t);
     if (kind === "candles") {
       (s.main as unknown as ISeriesApi<"Custom", Time, SlotCandleData>).setData(
         bars.map((b) => ({
@@ -722,26 +738,28 @@ export function TradingChart({
       const last = bars[bars.length - 1];
       if (last) s.main.applyOptions({ color: last.c >= last.o ? colors.up : colors.down });
     } else {
-      // The line runs through each candle's close; a wider candle's at its last slot.
+      // The line runs through each candle's close at the end of its bucket (candleCloses). A wider
+      // candle's close is at the end of its last slot. Plotting the close at the open put the next
+      // close under a mark that sits on the real trade time.
       (s.main as ISeriesApi<"Baseline">).setData(
         bars.map((b, i) => {
           const parent = b.under ? bars[i - b.under] : b;
           const last = !bars[i + 1]?.under;
           return parent && (b.span ?? 1) === 1 && last
-            ? { time: time(b.t), value: parent.c }
-            : { time: time(b.t) };
+            ? { time: barTime(b.t), value: parent.c }
+            : { time: barTime(b.t) };
         }),
       );
       s.main.applyOptions({ baseValue: { type: "price", price: base } });
     }
     s.vol?.setData(
       bars.map((b) => ({
-        time: time(b.t),
+        time: barTime(b.t),
         value: b.vol,
         color: hexA(b.c >= b.o ? colors.up : colors.down, 0.38),
       })),
     );
-    const closes = bars.map((b) => ({ time: b.t / 1000, close: b.c }));
+    const closes = bars.map((b) => ({ time: Number(barTime(b.t)), close: b.c }));
     const asLine = (pts: { time: number; value: number }[]) =>
       pts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value }));
     // In the order the lines were added.
@@ -803,23 +821,24 @@ export function TradingChart({
       if (shift !== 0 || n !== prev.n) ts.setVisibleLogicalRange(next);
     }
     lastData.current = { start: slots.start, n, tf: slots.tfMs, scope };
-  }, [slots, built, base, ref, entry, phone, opened]);
+  }, [slots, built, base, ref, entry, phone, opened, kind]);
 
   // The overlay: the marks, events, path and drawings, placed through the chart's own scales.
+  const closeAtEnd = kind === "line";
   const dScale = useMemo<DrawScale | null>(() => {
     if (!slots) return null;
     return {
-      x: (t) => toX(chartRef.current, slots, t),
+      x: (t) => toX(chartRef.current, slots, t, closeAtEnd),
       y: (v) => series.current.main?.priceToCoordinate(v) ?? null,
       t: (x) => {
         const l = toLogical(chartRef.current, x);
-        return l === null ? null : slots.start + (l + 0.5) * slots.tfMs;
+        return l === null ? null : slots.start + (l + (closeAtEnd ? 1 : 0.5)) * slots.tfMs;
       },
       v: (y) => series.current.main?.coordinateToPrice(y) ?? null,
     };
-  }, [slots]);
+  }, [slots, closeAtEnd]);
   const pointedMarks = useMemo(
-    () => (pointed ? [pointed.item, ...pointed.more].flatMap((i) => (i.mark ? [i.mark] : [])) : []),
+    () => (pointed ? bubbleItems(pointed).flatMap((i) => (i.mark ? [i.mark] : [])) : []),
     [pointed],
   );
   const hot = useMemo(() => {
@@ -843,14 +862,25 @@ export function TradingChart({
       const k = kind === "candles" ? slotCandle(slots, slotIndex(slots, t)) : null;
       return k && !k.flat ? { lo: Math.min(k.l, v), hi: Math.max(k.h, v) } : { lo: v, hi: v };
     };
-    const lastX = dScale.x(slots.start + (slots.bars.length - 0.5) * slots.tfMs);
-    const bs = barScale(chartRef.current)?.dx ?? 6;
+    const barsOnScreen = barScale(chartRef.current);
+    const bs = barsOnScreen?.dx ?? 6;
+    // The last bar's centre. On the line chart that centre is the bucket-end close.
+    const lastX = barsOnScreen ? barsOnScreen.x0 + (slots.bars.length - 1) * barsOnScreen.dx : null;
     o.state = {
       x: dScale.x,
       y: dScale.y,
       valueAt,
       rangeAt,
       seriesTop: () => seriesTopY(chartRef.current, series.current.main, slots),
+      column: (t) => slotIndex(slots, t),
+      gridStep: (atPrice) =>
+        readGridStep(
+          chartRef.current,
+          series.current.main,
+          atPrice,
+          chartRef.current?.paneSize(0).height ?? height,
+        ),
+      bubbleSteps,
       // The flags go under the readout's lines.
       flagTop: phone ? 34 : 20,
       events: [...shownEvents]
@@ -867,7 +897,7 @@ export function TradingChart({
       markScale: markFactor,
       markShape,
       markStem,
-      markGap: gapFactor,
+      markGap: 1,
       drawings,
       drawScale: dScale,
       label: axisUsd,
@@ -1014,12 +1044,16 @@ export function TradingChart({
   const curTo = cur && slots ? cur.t + (cur.span ?? 1) * slots.tfMs : 0;
   const fine = tfMs < 60_000;
   const dated = viewMs > 36 * 3_600_000;
+  // The line's vertex is the bucket-end close. A one-second line labels that close; a wider
+  // bucket still shows its span, which ends on the same close.
+  const lineCloseLabel = closeAtEnd && (cur?.span ?? 1) === 1 && tfMs <= 1_000;
+  const legendSpan = !lineCloseLabel && ((cur?.span ?? 1) > 1 || tfMs > 1_000);
   fmtRef.current = { seconds: fine, dated };
   const hFlow = cur ? flowAt(flow, curFrom, curTo) : null;
   const flowLags = hFlow != null && flowApartFromCandle(hFlow.t, curTo);
   // The marks under the pointer when it is on one, else those in the candle it is over.
   const onStack = pointed !== null;
-  const stack = pointed ? [pointed.item, ...pointed.more] : [];
+  const stack = pointed ? bubbleItems(pointed) : [];
   const hMarks = onStack
     ? stack.flatMap((i) => (i.mark ? [i.mark] : []))
     : hover !== null && cur
@@ -1385,8 +1419,8 @@ export function TradingChart({
           {cur && (
             <div className="tc-legend num" aria-live="off">
               <span className="faint">
-                {clock(curFrom, fine, dated)}
-                {(cur.span ?? 1) > 1 || (slots?.tfMs ?? 0) > 1_000 ? `–${clock(curTo, fine, false)}` : ""}
+                {clock(lineCloseLabel ? curTo : curFrom, fine, dated)}
+                {legendSpan ? `–${clock(curTo, fine, false)}` : ""}
               </span>
               {cur.flat ? (
                 <span className="faint">
@@ -1442,7 +1476,7 @@ export function TradingChart({
                   {e.mcap ? ` at ${usd(e.mcap)}` : ""}
                 </span>
               ))}
-              {hMarks.slice(0, MAX_TIP_MARKS).map((m, i) => (
+              {(onStack ? hMarks : hMarks.slice(0, MAX_TIP_MARKS)).map((m, i) => (
                 <span key={`m-${i}`} className={`pc-mark-line wk-${m.kind}`}>
                   {markPics && m.avatar ? (
                     <KolAvatar
@@ -1459,7 +1493,7 @@ export function TradingChart({
               {onStack && hMarks.length > 0 && (
                 <span className="faint tc-detail-hint">{phone ? "Tap" : "Click"} to open the wallet</span>
               )}
-              {hMarks.length > MAX_TIP_MARKS && (
+              {!onStack && hMarks.length > MAX_TIP_MARKS && (
                 <span className="faint">+{hMarks.length - MAX_TIP_MARKS} more labeled trades here</span>
               )}
               {hTrades.map((tr, i) => (
@@ -1550,9 +1584,9 @@ function barScale(chart: IChartApi | null): { x0: number; dx: number } | null {
 }
 
 /** A time (ms) to the plot's x (CSS px): between candles too, and past either end. */
-function toX(chart: IChartApi | null, slots: Slots, t: number): number | null {
+function toX(chart: IChartApi | null, slots: Slots, t: number, closeAtEnd = false): number | null {
   const s = barScale(chart);
-  return s ? s.x0 + slotOfTime(slots, t) * s.dx : null;
+  return s ? s.x0 + slotOfTime(slots, t, closeAtEnd) * s.dx : null;
 }
 
 /** The plot's x (CSS px) to the bar scale, fractional. */
@@ -1578,10 +1612,54 @@ function tickLabel(t: number, type: TickMarkType): string {
   }
 }
 
-/** Top price-scale margin for the bubble band at the reader's size (chartMarkLayout.ts). */
-function markerMargin(layout: { factor: number; gap: number }, plotHeight: number): number {
-  const scale = layout.factor > 0 ? layout.factor : 1;
-  return priceScaleTop(markBandPx(2 * picRadius(1e9) * scale, layout.gap), plotHeight);
+/**
+ * Price-scale margins. The top fits the highest bubble (one large grid offset) and the event
+ * flags. It does not reserve a band that pins every bubble to the top of the pane. The bottom
+ * grows when the reader's triangles sit under the lowest candle.
+ */
+function chartMargins(
+  plotHeight: number,
+  opts: { bubbles: boolean; vol: boolean; factor: number; own: boolean },
+): { top: number; bottom: number } {
+  const h = Math.max(160, plotHeight > 0 ? plotHeight : 160);
+  const scale = opts.factor > 0 ? opts.factor : 1;
+  const top = opts.bubbles
+    ? Math.min(0.32, Math.max(0.08, bubbleHeadroomPx(BUBBLE_GRID_STEPS.l, scale, picRadius(1e9)) / h))
+    : 0.12;
+  const ownPx = opts.own ? ownTradeExtentPx(scale) : 0;
+  // Volume already occupies the bottom of the pane. The triangles need their own room above that,
+  // or the lowest candle's marks draw through the volume bars.
+  const bottom = Math.min(0.42, (opts.vol ? 0.2 : 0.06) + (opts.own ? ownPx / h : 0));
+  return { top, bottom };
+}
+
+/**
+ * One horizontal grid line at `atPrice`. Linear: the pane's tick span. Log: one tick-mark of
+ * pixels through the chart's own scale, so it is not a linear tick of the wrong range.
+ */
+function readGridStep(
+  chart: IChartApi | null,
+  main: ISeriesApi<SeriesType> | null,
+  atPrice: number,
+  plotHeight: number,
+): number {
+  if (!chart || !main || !(atPrice > 0) || !(plotHeight > 1)) return 0;
+  const log = chart.priceScale("right").options().mode === PriceScaleMode.Logarithmic;
+  if (!log) {
+    const top = main.coordinateToPrice(0);
+    const bottom = main.coordinateToPrice(plotHeight);
+    if (top != null && bottom != null && Number.isFinite(top) && Number.isFinite(bottom)) {
+      const low = Math.min(top, bottom);
+      const high = Math.max(top, bottom);
+      const step = priceGridStep(low, high, plotHeight);
+      if (step > 0) return step;
+    }
+  }
+  return gridIntervalAt(
+    atPrice,
+    (p) => main.priceToCoordinate(p),
+    (y) => main.coordinateToPrice(y),
+  );
 }
 
 /**
@@ -1618,6 +1696,9 @@ function emptyOverlay(): OverlayState {
     valueAt: () => null,
     rangeAt: () => null,
     seriesTop: () => null,
+    column: () => 0,
+    gridStep: () => 0,
+    bubbleSteps: 1,
     pic: () => null,
     events: [],
     flagTop: 20,

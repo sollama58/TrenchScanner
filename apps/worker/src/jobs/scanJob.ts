@@ -9,6 +9,7 @@ import {
   Prisma,
   dexInfoMintsToAsk,
   DEX_INFO_RECHECK_MS,
+  nextDexPayment,
   createLogger,
   refreshAndFilterToBand,
   type LaunchQuoteSource,
@@ -2681,19 +2682,22 @@ export async function recordDexInfoOrders(
   for (const row of rows) {
     const read = byRead.get(row.mintAddress);
     if (!read) continue;
-    const payment = read.payment;
-    const prev = row.dexInfoPaidAt?.getTime() ?? 0;
+    // A mint the orders call did not answer is not in `reads`. A missing update is not a newer
+    // payment. An answer replaces the stored time, including when the newest order was cancelled
+    // and an older payment (or none) is what still counts.
+    const next = nextDexPayment(read.payment);
+    if (!next) continue;
     await prisma.token.update({
       where: { mintAddress: row.mintAddress },
       data: {
         dexInfoCheckedAt: now,
-        ...(payment
-          ? {
+        ...(next.paidAtMs == null
+          ? { dexInfoPaidAt: null, dexInfoUpdated: false }
+          : {
               dexInfo: true,
-              ...(payment.paidAtMs > prev ? { dexInfoPaidAt: new Date(payment.paidAtMs) } : {}),
-              ...(payment.updated || row.dexInfoUpdated ? { dexInfoUpdated: true } : {}),
-            }
-          : {}),
+              dexInfoPaidAt: new Date(next.paidAtMs),
+              dexInfoUpdated: next.updated,
+            }),
       },
     });
     wrote += 1;

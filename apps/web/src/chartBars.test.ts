@@ -6,6 +6,7 @@ import {
   oneSecondChartNotice,
   slotCandle,
   slotIndex,
+  closeTimeMs,
   slotOfTime,
   timeframeFits,
 } from "./chartBars";
@@ -127,6 +128,12 @@ describe("slot positions", () => {
   it("places a time on the bar scale, slot i spanning i - 0.5 to i + 0.5", () => {
     expect(slotOfTime(s, 0)).toBe(-0.5);
     expect(slotOfTime(s, 90_000)).toBe(1);
+  });
+  it("puts a line close at the bucket end, on that bar and not the next", () => {
+    expect(closeTimeMs(0, 60_000)).toBe(60_000);
+    expect(slotOfTime(s, closeTimeMs(0, 60_000), true)).toBe(0);
+    expect(slotOfTime(s, closeTimeMs(60_000, 60_000), true)).toBe(1);
+    expect(slotOfTime(s, 90_000, true)).toBe(0.5);
   });
   it("clamps a time to the slots there are", () => {
     expect(slotIndex(s, -5)).toBe(0);

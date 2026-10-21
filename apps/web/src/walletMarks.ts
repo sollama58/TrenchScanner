@@ -1,5 +1,6 @@
 import type { ChartMarkKind } from "./api";
 import { CHART_MARK_MAX_SOL, CHART_MARK_MIN_SOL } from "./appearance";
+import type { BubbleIdentity } from "./chartMarkLayout";
 import { shortAddress } from "./format";
 
 /**
@@ -17,7 +18,13 @@ export interface MarkSource {
   wallet: string;
   tags: readonly string[];
   kol?: string | null;
+  /** A KOL's Known Side: the KOL's main wallet. The tape stores that wallet. A live row must too. */
   knownSideOf?: string;
+  /**
+   * A Known Side when the KOL's main wallet is not on the row yet. `knownSideOf` is that wallet
+   * when we have it. The side's own address is not a stand-in: grouping would miss the KOL.
+   */
+  knownSide?: boolean;
   side?: {
     kind: "funded" | "probable";
     kolWallet: string;
@@ -86,7 +93,7 @@ export function clampMinSol(v: unknown): number {
 /** Every kind a wallet counts as, strongest first (the order of MARK_KINDS). */
 export function kindsOf(w: MarkSource): MarkKind[] {
   const out = new Set<MarkKind>();
-  if (w.tags.includes("kol")) out.add(w.knownSideOf ? "known" : "kol");
+  if (w.tags.includes("kol")) out.add(w.knownSide || w.knownSideOf ? "known" : "kol");
   // A wallet the reader labeled User Tracked is marked with the KOLs (lettered T, markLetter).
   if (w.tags.includes("tracked")) out.add("kol");
   if (w.side) out.add(w.side.kind);
@@ -152,6 +159,13 @@ export interface WalletMark {
   avatar?: string;
   /** The wallet whose name carries the mark's picture: the KOL's own, or the KOL a side is tied to. */
   picFrom?: string;
+  /**
+   * The bubble this trade shares (chartMarkLayout.collapseBubbleSpots). A KOL, a known side of
+   * that KOL, and a plain side of that KOL carry the KOL's wallet as `id` and their own role.
+   * Absent for a dev, a risky wallet, a winner or a linked wallet: each of those stays its own bubble.
+   * A known side whose KOL wallet is not on the row is absent too, so it is not grouped with itself.
+   */
+  bubble?: BubbleIdentity;
 }
 
 /**
@@ -180,6 +194,7 @@ export function walletMarks(
     const letter = markLetter(w, kind);
     const name = markName(w, kind);
     const picFrom = picWallet(w, kind);
+    const bubble = bubbleIdentity(w, kind);
     for (const [t, side, sol] of w.trades) {
       if (sol === null || !(sol >= min)) continue;
       out.push({
@@ -191,10 +206,32 @@ export function walletMarks(
         text: `${name} ${side === 1 ? "bought" : "sold"} ${solText(sol)} SOL`,
         wallet: w.wallet,
         ...(picFrom ? { picFrom } : {}),
+        ...(bubble ? { bubble } : {}),
       });
     }
   }
   return out.sort((a, b) => a.t - b.t);
+}
+
+/**
+ * The identity collapseBubbleSpots groups on. A KOL (and a wallet the reader tracks, marked with
+ * the KOLs) is `kol` of its own wallet. A known side is `known` of its KOL's main wallet. A funded
+ * wallet or probable side is `side` of the KOL it is tied to. The chart draws one bubble for the
+ * KOL together with both of those when they share a column, and keeps known sides and plain sides
+ * apart when the KOL is not in that column. A known side stamped with its own address is not a KOL
+ * id: that live row never joined the bubble.
+ */
+function bubbleIdentity(w: MarkSource, kind: MarkKind): BubbleIdentity | null {
+  if (kind === "kol") return { role: "kol", id: w.wallet };
+  if (kind === "known") {
+    const id = w.knownSideOf && w.knownSideOf !== w.wallet ? w.knownSideOf : null;
+    return id ? { role: "known", id } : null;
+  }
+  if (kind === "funded" || kind === "probable") {
+    const id = w.side?.kolWallet;
+    return id ? { role: "side", id } : null;
+  }
+  return null;
 }
 
 /**
@@ -258,12 +295,18 @@ export const MARK_SHAPES = ["circle", "square", "diamond"] as const;
 export type MarkShape = (typeof MARK_SHAPES)[number];
 
 /**
- * How far the bubble band sits above the series (Customize › Chart wallet trades). Medium is the
- * usual clearance. The factor moves the band. It does not change the gap between marks in a
- * stack, or a mark's radius. It never pulls a bubble closer than MIN_SERIES_CLEARANCE.
+ * Kept for a saved look (Customize › Chart wallet trades). Letter and picture bubbles use
+ * BUBBLE_GRID_STEPS. This factor no longer moves them into a pixel band above the series.
  */
 export const MARK_GAP = { s: 0.75, m: 1, l: 1.4 } as const;
 export type MarkGap = keyof typeof MARK_GAP;
+
+/**
+ * How many of the chart's horizontal grid lines a trade bubble's bottom sits above its candle
+ * high (Customize › Chart wallet trades). Small is one grid line. Medium is 1.5 and large is 2.
+ * This is a price offset, not a pixel band, and it does not pin the bubble to the top of the pane.
+ */
+export const BUBBLE_GRID_STEPS = { s: 1, m: 1.5, l: 2 } as const;
 
 /** A mark's ring radius in px, growing with the trade's size: 6 at the floor, 10 at 50 SOL or more. */
 export function markRadius(sol: number): number {
@@ -315,16 +358,17 @@ export function withLiveMarks(
     if (!w) {
       const n = names[t.wallet];
       if (n?.source === "kol") w = { wallet: t.wallet, tags: ["kol"], kol: n.name, trades: [] };
-      else if (n?.source === "kol-side")
-        // Named "<KOL> Known Side" (markName adds it back); the KOL's main wallet isn't in the name.
+      else if (n?.source === "kol-side") {
+        // Named "<KOL> Known Side" (markName adds it back). The KOL's wallet is the known-side
+        // tie, not this wallet: grouping on the side's own address never joined the KOL bubble.
         w = {
           wallet: t.wallet,
           tags: ["kol"],
           kol: n.name.replace(/\s*Known Side$/i, ""),
-          knownSideOf: t.wallet,
           trades: [],
         };
-      else if (n?.source === "tracked" || n?.mine)
+        applyKnownKol(w, knownKolWallet(t.wallet, sides));
+      } else if (n?.source === "tracked" || n?.mine)
         w = { wallet: t.wallet, tags: ["tracked"], tracked: n.name, trades: [] };
       else {
         // A Known Side is named as one above; the strongest other tie, funded ahead of probable.
@@ -345,6 +389,7 @@ export function withLiveMarks(
       }
       byWallet.set(t.wallet, w);
     }
+    if (w.knownSide || w.knownSideOf) applyKnownKol(w, knownKolWallet(t.wallet, sides));
     const side: 1 | -1 = t.side === "buy" ? 1 : -1;
     if (w.trades.some(([at, s]) => s === side && Math.abs(at - t.atMs) <= SAME_TRADE_MS)) continue;
     w.trades.push([t.atMs, side, t.sol]);
@@ -353,9 +398,31 @@ export function withLiveMarks(
   return [...byWallet.values()];
 }
 
+/** The KOL a known-side tie names, when that tie is on the row. The side's own address is not one. */
+function knownKolWallet(
+  wallet: string,
+  sides: Readonly<Record<string, readonly { kolWallet: string; known?: boolean }[]>>,
+): string | undefined {
+  const id = sides[wallet]?.find((s) => s.known)?.kolWallet;
+  return id && id !== wallet ? id : undefined;
+}
+
+/**
+ * A Known Side joins its KOL. `kolWallet` is that KOL's main wallet. The side's own address is
+ * cleared: grouping treated it as a different id, so the live bubble never met the KOL's.
+ */
+function applyKnownKol(
+  w: { wallet: string; knownSideOf?: string; knownSide?: boolean },
+  kolWallet: string | undefined,
+): void {
+  w.knownSide = true;
+  if (kolWallet && kolWallet !== w.wallet) w.knownSideOf = kolWallet;
+  else if (w.knownSideOf === w.wallet) delete w.knownSideOf;
+}
+
 /** What the API knows of a live trader (apps/api/src/liveTraderLabels.ts LiveTraderLabel). */
 export interface LiveTraderLabel {
-  name?: { name: string; source: "kol" | "kol-side"; avatar?: string };
+  name?: { name: string; source: "kol" | "kol-side"; avatar?: string; kolWallet?: string };
   side?: { kolWallet: string; kolName: string | null; funded?: boolean; avatar?: string };
   risky?: boolean;
   dumper?: boolean;
@@ -383,7 +450,12 @@ export function withLabeledTraders(
       tags.push("kol");
       w =
         l.name.source === "kol-side"
-          ? { ...w, kol: l.name.name.replace(/\s*Known Side$/i, ""), knownSideOf: wallet }
+          ? {
+              ...w,
+              kol: l.name.name.replace(/\s*Known Side$/i, ""),
+              knownSide: true,
+              ...(l.name.kolWallet && l.name.kolWallet !== wallet ? { knownSideOf: l.name.kolWallet } : {}),
+            }
           : { ...w, kol: l.name.name };
     } else if (l.side) {
       tags.push("side");
