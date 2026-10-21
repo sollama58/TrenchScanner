@@ -51,6 +51,25 @@ describe("currentMarketCap", () => {
     expect(result.marketCapUsd).toBe(200_000);
   });
 
+  it("does not let a missing cap stored as 0 beat a real cap", () => {
+    const newerZero = currentMarketCap(
+      { liveMarketCapUsd: 0, liveDataAt: T(1) },
+      { marketCapUsd: 200_000, takenAt: T(9) },
+    );
+    expect(newerZero).toMatchObject({ marketCapUsd: 200_000 });
+    const newerSnapZero = currentMarketCap(
+      { liveMarketCapUsd: 180_000, liveDataAt: T(9) },
+      { marketCapUsd: 0, takenAt: T(1) },
+    );
+    expect(newerSnapZero).toMatchObject({ marketCapUsd: 180_000 });
+    expect(
+      currentMarketCap({ liveMarketCapUsd: 0, liveDataAt: T(1) }, { marketCapUsd: 0, takenAt: T(2) }),
+    ).toEqual({
+      marketCapUsd: null,
+      at: null,
+    });
+  });
+
   it("reports the timestamp belonging to whichever reading it chose", () => {
     const liveAt = T(1);
     const result = currentMarketCap(

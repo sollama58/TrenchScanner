@@ -27,7 +27,8 @@ export interface BackupCandle {
   h: number;
   l: number;
   c: number;
-  vol: number;
+  /** Null when the row omitted volume. A reported 0 stays 0. */
+  vol: number | null;
 }
 
 interface DexPair {
@@ -67,15 +68,17 @@ export function parseOhlcv(body: unknown, supply: number): BackupCandle[] {
   const out: BackupCandle[] = [];
   for (const row of list) {
     if (!Array.isArray(row) || row.length < 5) continue;
-    const [s, o, h, l, c, v] = row.map(Number) as number[];
+    const [s, o, h, l, c] = row.slice(0, 5).map(Number) as number[];
     if (![s, o, h, l, c].every((n) => Number.isFinite(n) && n! > 0)) continue;
+    const rawV = row.length > 5 ? row[5] : undefined;
+    const v = rawV == null ? null : Number(rawV);
     out.push({
       t: s! * 1_000,
       o: o! * supply,
       h: h! * supply,
       l: l! * supply,
       c: c! * supply,
-      vol: Number.isFinite(v) && v! > 0 ? v! : 0,
+      vol: v == null ? null : Number.isFinite(v) && v >= 0 ? v : 0,
     });
   }
   return out.sort((a, b) => a.t - b.t);

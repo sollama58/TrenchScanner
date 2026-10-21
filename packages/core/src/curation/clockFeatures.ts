@@ -156,6 +156,29 @@ function storedDecisionCap(
   return kept;
 }
 
+/** Far enough apart that the two caps are not the same reading with rounding. */
+function capsDiffer(a: number, b: number): boolean {
+  return Math.abs(a - b) / Math.max(Math.abs(a), Math.abs(b), 1) > 1e-4;
+}
+
+/**
+ * The cap the label was graded from. A stored anchor that is not the raw scan cap wins: a
+ * rule-3 row regraded onto a fresh quote keeps that anchor on the row, and rebuilding from
+ * mcapUsd would train on the scan. Otherwise a positive cap already stored wins, then the
+ * scan cap scaled by a trusted fresh-quote ratio.
+ */
+function decisionCap(
+  stored: number | null | undefined,
+  mcap: number | null,
+  quoteRatio: number | null,
+  anchorCap: number | null | undefined,
+): number | null {
+  const anchor = finite(anchorCap);
+  const scan = mcap !== null && mcap > 0 ? mcap : null;
+  if (anchor !== null && anchor > 0 && scan !== null && capsDiffer(anchor, scan)) return anchor;
+  return storedDecisionCap(stored, mcap, quoteRatio);
+}
+
 /**
  * The clock-honest block for one feature vector, from inputs the vector already carries.
  * Path per-minute returns need the spans the tape recorded (pathSpan15mMin / pathSpan30mMin);
@@ -163,6 +186,8 @@ function storedDecisionCap(
  */
 export function clockFeatureValues(
   features: Record<string, number | null | undefined>,
+  /** The row's stored anchor cap, when the caller has it. The scan cap when it is the anchor. */
+  anchorMcapUsd?: number | null,
 ): Record<ClockHonestFeature | (typeof PATH_CLOCK_FEATURES)[number], number | null> {
   const pairAge = finite(features.pairAgeMinutes);
   const m5 = finite(features.priceChange5mPct);
@@ -234,7 +259,13 @@ export function clockFeatureValues(
     // replace that stored cap on every training load. A cap already on the row is kept. A row
     // banked before the column existed (no stored cap) is still filled from the scan cap and
     // the gap. A scan cap of 0 cannot rebuild the product either, so a stored cap is what is left.
-    decisionMcapUsd: storedDecisionCap(features.decisionMcapUsd, mcap, quoteTrusted ? quoteRatio : null),
+    // A stored anchor that is not that scan cap is the fresh quote the label was graded from.
+    decisionMcapUsd: decisionCap(
+      features.decisionMcapUsd,
+      mcap,
+      quoteTrusted ? quoteRatio : null,
+      anchorMcapUsd,
+    ),
     // How old the fresh quote is. The training load cannot rebuild it (the fetch time was never
     // stored); live scoring sets it from FreshQuote.fetchedAt before this runs. Null is unknown,
     // not "fresh".
@@ -253,8 +284,9 @@ export function clockFeatureValues(
  */
 export function applyClockFeatures<T extends Record<string, number | null | undefined>>(
   features: T,
+  anchorMcapUsd?: number | null,
 ): T & Record<ClockHonestFeature | (typeof PATH_CLOCK_FEATURES)[number], number | null> {
-  const next = clockFeatureValues(features);
+  const next = clockFeatureValues(features, anchorMcapUsd);
   let out: Record<string, number | null | undefined> | null = null;
   for (const name of Object.keys(next) as (keyof typeof next)[]) {
     if (features[name] === next[name]) continue;

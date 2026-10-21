@@ -735,11 +735,17 @@ export function TradingChart({
       s.main.applyOptions({ baseValue: { type: "price", price: base } });
     }
     s.vol?.setData(
-      bars.map((b) => ({
-        time: time(b.t),
-        value: b.vol,
-        color: hexA(b.c >= b.o ? colors.up : colors.down, 0.38),
-      })),
+      bars.flatMap((b) =>
+        b.vol == null
+          ? []
+          : [
+              {
+                time: time(b.t),
+                value: b.vol,
+                color: hexA(b.c >= b.o ? colors.up : colors.down, 0.38),
+              },
+            ],
+      ),
     );
     const closes = bars.map((b) => ({ time: b.t / 1000, close: b.c }));
     const asLine = (pts: { time: number; value: number }[]) =>
@@ -1413,7 +1419,7 @@ export function TradingChart({
                   {signedPct(vsRef, 1)} vs {ref.label}
                 </span>
               )}
-              {cur.vol > 0 && <span>Vol {usd(cur.vol)}</span>}
+              {cur.vol != null && cur.vol > 0 && <span>Vol {usd(cur.vol)}</span>}
               {hFlow && (
                 <span
                   className={`${hFlow.buys / (hFlow.buys + hFlow.sells) >= 0.5 ? "up" : "down"}${flowLags ? " lags" : ""}`}

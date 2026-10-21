@@ -43,9 +43,11 @@ import {
  * aggregates never fold in. The plan still applies to it: a close at or under the stop fills at
  * the stop, and a close at or over a take-profit level fills that rung (and arms the trail).
  * Once the trail is already armed, a close at or under the level that high sets fills the
- * remainder at the close (the price seen, not the level). The watcher arms some rows from the
- * window's peak on that same close, so the close can already be through the level (user ask
- * 2026-10-21). A close still above the level leaves the trailing share open.
+ * remainder at the close (the price seen, not the level). The watcher arms an unarmed row from
+ * the window's peak before that close can arm the trail: a close already at or above 2x must not
+ * become the high while a higher peak is still unapplied, or the 4x and 10x rungs drop and a
+ * close already through the peak's trail stays open (user ask 2026-10-21). A close still above
+ * the level leaves the trailing share open.
  *
  * The result is written when the position is fully out: at the window close for a call that
  * stopped out or never sold, at the trailing exit or the hold cap for one that sold
@@ -285,6 +287,40 @@ export function applyTrailTick(
   if (level !== null && priceUsd <= level) {
     updates.trailExitAt = at;
     updates.trailExitPriceUsd = priceUsd;
+  }
+  return updates;
+}
+
+/**
+ * The trail at a window close. The window peak is applied before the close can arm the trail.
+ * A close at or above the first rung must not become the high while that peak is still unarmed:
+ * the 4x and 10x rungs would drop, and a close already through the peak's trail would stay open.
+ * A close through the armed high fills at the price seen. A close still above the level leaves
+ * the share open. A trail that already fired, or that an earlier tick already armed, is left as
+ * it is: the caller folded those prices in order.
+ */
+export function foldWindowCloseTrail(
+  state: TrailState & Pick<OutcomeAggregates, "peak1hPriceUsd" | "peakBeforeStopPriceUsd" | "low1hPriceUsd">,
+  closePriceUsd: number | null,
+  at: Date,
+  plan: ExitPlan = EXIT_PLAN,
+): Partial<Pick<OutcomeAggregates, "trailHighPriceUsd" | "trailExitAt" | "trailExitPriceUsd">> {
+  if (state.trailExitAt != null || plan.trail.length === 0) return {};
+  const updates: Partial<Pick<OutcomeAggregates, "trailHighPriceUsd" | "trailExitAt" | "trailExitPriceUsd">> =
+    {};
+  let next: TrailState = state;
+  if (next.trailHighPriceUsd == null && exitPlanPositionOpen({ ...state, simReturnPct: null }, plan)) {
+    const high = cleanPeakPriceUsd(state);
+    if (high > 0) {
+      updates.trailHighPriceUsd = high;
+      next = { ...next, trailHighPriceUsd: high };
+    }
+  }
+  const close =
+    closePriceUsd !== null && Number.isFinite(closePriceUsd) && closePriceUsd > 0 ? closePriceUsd : null;
+  // Only a trail this close found unarmed. One an earlier tick armed already saw the close.
+  if (state.trailHighPriceUsd == null && close !== null) {
+    Object.assign(updates, applyTrailTick(next, close, at, plan));
   }
   return updates;
 }

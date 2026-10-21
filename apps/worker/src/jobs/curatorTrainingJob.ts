@@ -1276,11 +1276,25 @@ type GradedFields = Pick<
  * models called are graded on the same rule as the rest. An alerted row born rule 4 can carry one
  * too: the quote re-grade's candle replay (quoteRegrade.ts), for a coin whose price read $0 while
  * it was watched. That replay is read as well, but the row keeps its own freshGapPct: it is the
- * live quote's gap, already rule 4's. A re-graded rule-3 row's freshGapPct reads as missing: the
- * re-grade measured it on a candle from the alert's moved send-time anchor, after the decision
- * (maskKnownBadInputs nulls it on every row before FRESH_QUOTE_GAP_SINCE as well). Every other
- * row is returned as it is.
+ * live quote's gap, already rule 4's. A re-graded rule-3 row's freshGapPct reads as missing when
+ * it does not scale a stored cap onto the fresh anchor (a candle from the alert's moved send-time
+ * anchor, after the decision). The gap that is that anchor is kept. maskKnownBadInputs nulls the
+ * gap on every row before FRESH_QUOTE_GAP_SINCE as well. Every other row is returned as it is.
  */
+function freshGapDefinesAnchor(
+  gapPct: number | null | undefined,
+  anchorMcapUsd: number,
+  bases: readonly (number | null | undefined)[],
+): boolean {
+  if (typeof gapPct !== "number" || !Number.isFinite(gapPct) || !(anchorMcapUsd > 0)) return false;
+  const ratio = 1 + gapPct / 100;
+  if (!(ratio > 0)) return false;
+  return bases.some((base) => {
+    if (typeof base !== "number" || !(base > 0)) return false;
+    return Math.abs(base * ratio - anchorMcapUsd) / anchorMcapUsd <= 1e-4;
+  });
+}
+
 export function trainingGradeOf<R extends GradedFields & { features: unknown; rule4Grade: unknown }>(
   r: R,
 ): R {
@@ -1314,7 +1328,20 @@ export function trainingGradeOf<R extends GradedFields & { features: unknown; ru
     trailExitAt: dateOf(grade.trailExitAt),
     trailExitPriceUsd: num(grade.trailExitPriceUsd),
     simReturnPct: num(grade.simReturnPct),
-    features: born4 ? r.features : { ...(r.features as Record<string, number | null>), freshGapPct: null },
+    features: born4
+      ? r.features
+      : {
+          ...(r.features as Record<string, number | null>),
+          // The gap stays when it is the move from a stored cap onto this fresh anchor.
+          // One measured on a later candle, that does not scale to the anchor, reads as missing.
+          freshGapPct: freshGapDefinesAnchor(
+            num(grade.freshGapPct),
+            num(grade.anchorMcapUsd) ?? r.anchorMcapUsd,
+            [(r.features as Record<string, number | null>).mcapUsd, r.anchorMcapUsd],
+          )
+            ? num(grade.freshGapPct)
+            : null,
+        },
   };
 }
 
@@ -1454,13 +1481,21 @@ async function loadRowsOfKind(
       // which still needs it to drop a pool-aged row whose launch time is unknown.
       const dated = withoutPreCanonicalPairAge(r.anchorAt, launched);
       // A row re-graded in place (born rule 3 after the fresh quotes began, no usable quote at the
-      // scan) had its fresh-price gap overwritten with the candle re-grade's, measured after the
-      // decision: live, the same no-quote decision carries no gap at all. Cleared before the
-      // clock block, which rebuilds the decision's market cap from this gap.
-      if (loaded.rule3Grade !== null && dated.freshGapPct !== undefined) dated.freshGapPct = null;
+      // scan) had its fresh-price gap overwritten with the candle re-grade's. That gap stays when
+      // it is the move onto the fresh anchor the row stored. A gap that does not scale to that
+      // anchor was measured off the decision and reads as missing, as a live no-quote row does.
+      if (loaded.rule3Grade !== null && dated.freshGapPct !== undefined) {
+        const old = loaded.rule3Grade as Record<string, unknown>;
+        const oldAnchor = typeof old.anchorMcapUsd === "number" ? old.anchorMcapUsd : null;
+        if (!freshGapDefinesAnchor(dated.freshGapPct, r.anchorMcapUsd, [dated.mcapUsd, oldAnchor])) {
+          dated.freshGapPct = null;
+        }
+      }
       // The named windows are "since the pair opened" on a young pair. Fill the per-minute and
       // full-window readings from inputs this row already stored (curation/clockFeatures.ts).
-      const features = applyClockFeatures(dated);
+      // The row's anchor cap is the fresh one a regrade stored; the clock block must not rebuild
+      // the decision cap from the raw scan cap instead.
+      const features = applyClockFeatures(dated, r.anchorMcapUsd);
       const row: TrainingRow = {
         tokenId: r.tokenId,
         anchorAt: r.anchorAt,

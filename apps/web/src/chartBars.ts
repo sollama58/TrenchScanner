@@ -23,8 +23,11 @@ export interface SlotBar {
   h: number;
   l: number;
   c: number;
-  /** USD volume in the slot (a wider candle's, all in its first slot). */
-  vol: number;
+  /**
+   * USD volume in the slot (a wider candle's, all in its first slot). Null when the candles
+   * omitted volume. A flat slot and a reported 0 stay 0.
+   */
+  vol: number | null;
   /** No trades in the slot: the close before it, held. */
   flat?: boolean;
   /** A wider candle starts here and runs over this many slots. */
@@ -126,7 +129,7 @@ export function buildSlots(
       h: b.h,
       l: b.l,
       c: b.c,
-      vol: vols[i]?.usd ?? 0,
+      vol: vols[i] ? vols[i]!.usd : 0,
       ...(b.flat ? { flat: true } : {}),
       ...(span > 1 ? { span } : {}),
     };

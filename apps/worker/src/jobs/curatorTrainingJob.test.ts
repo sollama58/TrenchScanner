@@ -407,9 +407,19 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
         // A background row of a coin over the age cap, and a frozen curve nobody traded.
         row(6, "hourly", 50_000, { ageMinutes: 600 }),
         row(7, "hourly", 50_000, { ageMinutes: 20, volume1hUsd: 0, buys1h: 0 }),
-        // Born rule 3 (no usable quote at the scan) and re-graded in place: its gap was measured
-        // after the decision, so it reads as missing.
+        // Born rule 3 (no usable quote at the scan) and re-graded in place. This gap does not
+        // scale a stored cap onto the anchor, so it reads as missing.
         { ...row(8, "event", 50_000, { ageMinutes: 3, freshGapPct: 5 }), rule3Grade: { labelValue: 0 } },
+        // The gap is the fresh anchor: 10k x 1.6 = 16k. Training keeps it and the anchor cap.
+        {
+          ...row(12, "event", 16_000, {
+            ageMinutes: 3,
+            mcapUsd: 10_000,
+            freshGapPct: 60,
+            decisionMcapUsd: 10_000,
+          }),
+          rule3Grade: { labelValue: 0, anchorMcapUsd: 10_000 },
+        },
         // The decision pre-gate's old-coin momentum test: an hour-old coin needs +25% in 5 minutes.
         row(9, "event", 50_000, { ageMinutes: 90, priceChange5mPct: 5 }),
         row(10, "event", 50_000, { ageMinutes: 90, priceChange5mPct: 40 }),
@@ -420,9 +430,11 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
     const rows = await loadTrainingRows(windowStart, 100, 50, { min: 10_000, max: 1_000_000 });
     expect(
       rows.map((r) => `${r.sampleKind}@${(r.anchorAt.getTime() - windowStart.getTime()) / 60_000}`),
-    ).toEqual(["event@10", "event@8", "event@3", "hourly@1"]);
-    expect(rows[1]!.features.freshGapPct).toBeNull();
-    expect(rows[2]!.features.ageMinutes).toBe(30);
+    ).toEqual(["event@12", "event@10", "event@8", "event@3", "hourly@1"]);
+    expect(rows[0]!.features.freshGapPct).toBe(60);
+    expect(rows[0]!.features.decisionMcapUsd).toBeCloseTo(16_000);
+    expect(rows[2]!.features.freshGapPct).toBeNull();
+    expect(rows[3]!.features.ageMinutes).toBe(30);
   });
 
   it("reads the waited-for inputs as missing on hourly rows banked before the hourly wait, keeping decisions", async () => {
@@ -710,9 +722,24 @@ describe("trainingGradeOf", () => {
       anchorMcapUsd: 16_000,
       maxDrawdown1hPct: -60,
       peakBeforeStopPriceUsd: null,
-      // The re-grade's gap was measured after the decision: it reads as missing.
-      features: { mcapUsd: 10_000, freshGapPct: null },
+      // 10k x 1.6 = 16k: this gap is the fresh anchor, so it stays.
+      features: { mcapUsd: 10_000, freshGapPct: 60 },
     });
+  });
+
+  it("clears a regrade gap that does not scale onto the stored anchor", () => {
+    const g = trainingGradeOf({
+      ...base,
+      rule4Grade: {
+        labelValue: 0,
+        anchorPriceUsd: 1.6,
+        anchorMcapUsd: 16_000,
+        hit10xIn1h: false,
+        freshGapPct: 10,
+      },
+    });
+    expect(g.anchorMcapUsd).toBe(16_000);
+    expect((g.features as unknown as { freshGapPct: number | null }).freshGapPct).toBeNull();
   });
 
   it("reads the quote re-grade's replay on an alerted row born rule 4, keeping its live fresh-price gap", () => {

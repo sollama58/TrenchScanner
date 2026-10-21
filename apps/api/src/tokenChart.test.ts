@@ -47,7 +47,20 @@ describe("parseMcapCandles", () => {
     expect(out[1]!.c).toBeCloseTo(25_000);
     expect(out[1]!.h).toBeCloseTo(30_000);
     expect(out[1]!.vol).toBeCloseTo(412.5);
-    expect(out[0]!.vol).toBe(0);
+    // No volume field is not a trade of size 0.
+    expect(out[0]!.vol).toBeNull();
+  });
+
+  it("keeps a reported zero volume and does not treat an omitted one as zero", () => {
+    const out = parseMcapCandles(
+      [
+        { timestamp: 1, open: "1", high: "1", low: "1", close: "1", volume: "0" },
+        { timestamp: 2, open: "1", high: "1", low: "1", close: "1", volume: 0 },
+        { timestamp: 3, open: "1", high: "1", low: "1", close: "1" },
+      ],
+      1,
+    );
+    expect(out.map((c) => c.vol)).toEqual([0, 0, null]);
   });
 
   it("widens a high or low that doesn't bracket the open and close", () => {

@@ -828,7 +828,11 @@ export async function collectCuratedContender(
   /** The moment this is: a decision moment (every seat) or a second look (the Narrative seat only). */
   population: DecisionPopulation = "event",
 ): Promise<void> {
-  if (!inMcapBand(scored.marketCapUsd, { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX })) {
+  // Both bounds use the decision cap: the fresh anchor when that is what the call is graded
+  // from, otherwise DexScreener's. The floor alone used to read the fresh anchor, so a quote
+  // above the band max still got called.
+  const bandCap = decisionAnchor(scored).marketCapUsd;
+  if (!inMcapBand(bandCap, { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX })) {
     return;
   }
 
@@ -1016,8 +1020,8 @@ export async function emitCuratedCycle(
 /**
  * The market cap a call goes out at, as low as any current reading puts it: the fresh quote it is
  * anchored and shown on (decisionAnchor), and Pump.fun's live figure when the pass read one. The
- * band check in collectCuratedContender reads DexScreener, 45-60 s behind the market, so on its
- * own it let through calls on coins that had already fallen out of the band.
+ * band check in collectCuratedContender uses that same decision cap for both bounds, so a quote
+ * that has already left the band — under the floor or over the max — is not called.
  */
 export function callMcapUsd(contender: Pick<CuratedContender, "scored" | "liveMcapUsd">): number {
   const anchor = decisionAnchor(contender.scored).marketCapUsd;

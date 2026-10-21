@@ -12,7 +12,13 @@ import {
   type OutcomeAggregates,
   type OutcomeLabels,
 } from "./labels.js";
-import { applyTrailTick, EXIT_PLAN, exitPlanPositionOpen, simulateExitPlan } from "./profitSim.js";
+import {
+  applyTrailTick,
+  EXIT_PLAN,
+  exitPlanPositionOpen,
+  foldWindowCloseTrail,
+  simulateExitPlan,
+} from "./profitSim.js";
 
 /**
  * Re-grading history from trade truth (user decision 2026-10-12, notes/audit-2026-10-12/timing.md).
@@ -115,10 +121,15 @@ export function replayOutcome(
     // The row as it stood before this tick: the watcher settles a held trailing share on it.
     const before = { ...agg, simReturnPct };
     const price = lastTradedPrice(candles, at.getTime());
+    const peakBefore = cleanPeakPriceUsd(agg);
     if (price !== null) {
       Object.assign(agg, applyPriceTick(agg, price, at));
       if (finalizedAt === null || (agg.trailHighPriceUsd != null && simReturnPct === null)) {
-        Object.assign(agg, applyTrailTick(agg, price, at));
+        // Same order as the watcher: a close at or above 2x must not arm the trail while the
+        // window peak is still higher. foldWindowCloseTrail applies that peak, then the close.
+        const closingMinute = elapsedMs >= labelWindowMs;
+        const skipArm = closingMinute && agg.trailHighPriceUsd == null && peakBefore > price;
+        if (!skipArm) Object.assign(agg, applyTrailTick(agg, price, at));
       }
       lastPrice = price;
     }
@@ -130,18 +141,10 @@ export function replayOutcome(
       finalizedAt = at;
       closedNow = true;
       if (labels.hit10xIn1h !== null) tenX = labels.hit10xIn1h;
-      let armedFromPeak = false;
-      if (agg.trailHighPriceUsd == null && exitPlanPositionOpen({ ...agg, simReturnPct: null })) {
-        agg.trailHighPriceUsd = cleanPeakPriceUsd(agg);
-        armedFromPeak = true;
-      }
       const closePrice = price ?? lastPrice;
-      // 2026-10-21 user ask: same as the watcher. Arming from the window peak on this close does
-      // not fold the close through applyTrailTick. A close already through that high's level is
-      // the trail's exit, at the price seen, so the replay records it.
-      if (armedFromPeak && closePrice != null && closePrice > 0) {
-        Object.assign(agg, applyTrailTick(agg, closePrice, at));
-      }
+      // The window peak arms the trail before this close. A close already through that high's
+      // level is the trail's exit, at the price seen, so the replay records it.
+      Object.assign(agg, foldWindowCloseTrail(agg, closePrice, at));
       simReturnPct = simulateExitPlan(agg, closePrice);
       if (labels.hit2xIn1h && !labels.disqualified) extended = true;
     }

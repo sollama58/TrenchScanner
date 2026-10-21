@@ -43,6 +43,22 @@ describe("parseJupiterTokens", () => {
     expect(b!.volume24hUsd).toBeUndefined();
     expect(parseJupiterTokens({ error: "nope" }, new Set(["a"]))).toEqual([]);
   });
+
+  it("does not let mcap 0 hide fdv, and does not store one-sided volume as a total", () => {
+    const [token] = parseJupiterTokens(
+      [
+        {
+          id: "z",
+          usdPrice: 0.00002,
+          mcap: 0,
+          fdv: 80_000,
+          stats24h: { buyVolume: 400 },
+        },
+      ],
+      new Set(["z"]),
+    );
+    expect(token).toMatchObject({ marketCapUsd: 80_000, volume24hUsd: undefined });
+  });
 });
 
 describe("parseJupiterLaunches", () => {
@@ -120,6 +136,23 @@ describe("parseJupiterLaunches", () => {
     expect(noGradTime?.dexId).toBe("pumpswap");
     expect(curve!.graduatedAt).toBeUndefined();
     expect(parseJupiterLaunches({ error: "nope" }, new Set(["curve"]))).toEqual([]);
+  });
+
+  it("keeps a launch whose mcap is 0 when fdv is a real cap, and leaves one-sided volume unknown", () => {
+    const [kept] = parseJupiterLaunches(
+      [
+        {
+          id: "fdvOnly",
+          usdPrice: 0.00003,
+          mcap: 0,
+          fdv: 30_000,
+          launchpad: "pump.fun",
+          stats5m: { buyVolume: 100 },
+        },
+      ],
+      new Set(["fdvOnly"]),
+    );
+    expect(kept).toMatchObject({ marketCapUsd: 30_000, volume5mUsd: undefined });
   });
 
   it("reads a Stonks coin on its LaunchLab curve, and after it moves to its Raydium pool", () => {
@@ -255,9 +288,11 @@ describe("parseJupiterQuotes", () => {
       { id: "b", usdPrice: 0, mcap: 1_000 },
       { id: "c", usdPrice: 1, mcap: null, fdv: null },
       { id: "d", usdPrice: 0.00001, fdv: 10_000, updatedAt: "not a date" },
+      { id: "e", usdPrice: 0.00002, mcap: 0, fdv: 22_000 },
     ];
-    const quotes = parseJupiterQuotes(body, new Set(["a", "b", "c", "d"]));
-    expect(quotes.map((q) => q.mintAddress)).toEqual(["a", "d"]);
+    const quotes = parseJupiterQuotes(body, new Set(["a", "b", "c", "d", "e"]));
+    expect(quotes.map((q) => q.mintAddress)).toEqual(["a", "d", "e"]);
+    expect(quotes[2]!.quote.marketCapUsd).toBe(22_000);
     expect(quotes[0]!.quote).toMatchObject({
       priceUsd: 0.00005,
       marketCapUsd: 50_000,

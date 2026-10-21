@@ -516,6 +516,8 @@ export interface ModelCall {
   tier?: string | null;
   calibratedPct?: number | null;
   alertedAt: string;
+  /** The call's stored anchor cap. Absent from older API builds. */
+  mcapUsd?: number | null;
 }
 
 /** GET /live/market: current market data for the tokens on screen, seconds old. */
