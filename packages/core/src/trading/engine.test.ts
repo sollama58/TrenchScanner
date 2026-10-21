@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import bs58 from "bs58";
 import { PrismaClient } from "@prisma/client";
-import { appendPoolParams, namePassLock, prisma } from "../db.js";
+import { appendPoolParams, namePassLock, PASS_LOCK_APPLICATION_NAME, prisma } from "../db.js";
 import {
   feeForRetry,
   runTradingEngine,
@@ -1543,25 +1543,51 @@ describe.skipIf(!dbAvailable)("signalHorizon", () => {
     const other = new PrismaClient({ datasourceUrl: appendPoolParams(process.env.DATABASE_URL!, {}) });
     const holdOpen = async (asPassLock: boolean) => {
       let release = () => {};
-      let began = (_at: Date) => {};
-      const start = new Promise<Date>((resolve) => (began = resolve));
+      let began = (_row: { at: Date; pid: number }) => {};
+      const start = new Promise<{ at: Date; pid: number }>((resolve) => (began = resolve));
       const done = other.$transaction(
         async (tx) => {
           if (asPassLock) await namePassLock(tx);
-          const [row] = await tx.$queryRaw<{ at: Date }[]>`SELECT now() AS at`;
-          began(row!.at);
+          const [row] = await tx.$queryRaw<{ at: Date; pid: number | bigint }[]>`
+            SELECT now() AS at, pg_backend_pid() AS pid`;
+          began({ at: row!.at, pid: Number(row!.pid) });
           await new Promise<void>((resolve) => (release = resolve));
         },
         { timeout: 30_000 },
       );
-      return { start: await start, release: () => (release(), done) };
+      const opened = await start;
+      return { start: opened.at, pid: opened.pid, release: () => (release(), done) };
+    };
+    /** Other client transactions open right now, besides `pid` (the one this test is holding). */
+    const othersOpenAt = async (pid: number) => {
+      const rows = await prisma.$queryRaw<{ at: Date }[]>`
+        SELECT xact_start AS at FROM pg_stat_activity
+        WHERE datname = current_database() AND pid <> ${pid} AND xact_start IS NOT NULL
+          AND backend_type = 'client backend' AND state <> 'idle'`;
+      return rows.map((row) => row.at.getTime());
     };
     try {
       // Read as from ten seconds later, so a transaction opened just now is past the grace.
-      const locking = await holdOpen(true);
+      // Other files hold short transactions of their own. `signalHorizon` returns millisecond
+      // timestamps, so one of those sharing the pass lock's millisecond looks exactly like the
+      // lock itself. Wait out that millisecond (nothing new can start in it) and reopen until
+      // the lock is the only transaction still open from it.
+      let locking = await holdOpen(true);
+      let isolated = false;
+      for (let attempt = 0; attempt < 5 && !isolated; attempt++) {
+        if (attempt > 0) locking = await holdOpen(true);
+        const [named] = await prisma.$queryRaw<{ application_name: string | null }[]>`
+          SELECT application_name FROM pg_stat_activity WHERE pid = ${locking.pid}`;
+        expect(named?.application_name).toBe(PASS_LOCK_APPLICATION_NAME);
+        const waitMs = locking.start.getTime() + 50 - Date.now();
+        if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+        const tied = (await othersOpenAt(locking.pid)).some((at) => at === locking.start.getTime());
+        if (!tied) isolated = true;
+        else await locking.release();
+      }
+      expect(isolated).toBe(true);
       const later = new Date(locking.start.getTime() + 2 * SIGNAL_COMMIT_GRACE_MS);
       const free = await signalHorizon(later);
-      // Other test files may hold short transactions of their own; never this one.
       expect(free.getTime()).not.toBe(locking.start.getTime());
       await locking.release();
       const writing = await holdOpen(false);

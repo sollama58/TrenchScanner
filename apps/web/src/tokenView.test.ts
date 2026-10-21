@@ -10,14 +10,20 @@ describe("the token window's desktop layout", () => {
   });
 
   it("shows the calibrated 2x pill for a new look, and keeps a saved hidden list", () => {
-    expect(DEFAULT_APPEARANCE.hidden).not.toContain("calibrated");
-    expect(normalizeAppearance({}).hidden).not.toContain("calibrated");
+    expect(DEFAULT_APPEARANCE.hidden).toEqual(["score", "sage", "snipers"]);
+    expect(normalizeAppearance({}).hidden).toEqual(["score", "sage", "snipers"]);
     expect(normalizeAppearance({ hidden: ["score", "calibrated", "snipers"] }).hidden).toEqual([
       "score",
       "calibrated",
       "snipers",
     ]);
-    expect(defaultLook(normalizeAppearance({})).hidden).not.toContain("calibrated");
+    expect(normalizeAppearance({ hidden: ["score", "sage", "calibrated", "snipers"] }).hidden).toEqual([
+      "score",
+      "sage",
+      "calibrated",
+      "snipers",
+    ]);
+    expect(defaultLook(normalizeAppearance({})).hidden).toEqual(["score", "sage", "snipers"]);
   });
 
   it("keeps the reader's pick through a preset and the default look", () => {

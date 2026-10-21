@@ -1831,12 +1831,34 @@ export interface FeedAppearance {
   chartMarkPics: boolean;
   /** How big those marks draw: small, medium or large (absent from older API builds: medium). */
   chartMarkScale: "s" | "m" | "l";
+  /**
+   * Lettered wallet marks: a circle, a square or a diamond (absent from older API builds: circle).
+   * KOL pictures stay round, and the trader's own buys and sells stay arrows.
+   */
+  chartMarkShape: "circle" | "square" | "diamond";
+  /** A line from the mark to the candle (absent from older API builds: off). */
+  chartMarkStem: boolean;
+  /**
+   * How far marks sit from the candle: small, medium or large (absent from older API builds: medium).
+   * Medium is today's pitch. This is not the mark's size.
+   */
+  chartMarkGap: "s" | "m" | "l";
   /** The token chart's default: a line or candles (absent from older API builds: line). */
   chartStyle: "line" | "candles";
   /** The view the token chart opens on: Trading or All (absent from older API builds: Trading). */
   chartView: "trading" | "all";
   /** Experimental: draw the predicted price path on the token chart (absent from older API builds: off). */
   chartPathing: boolean;
+  /**
+   * Which event flags the token chart draws (chartEvents.ts). Passed screen is off unless listed.
+   * Absent from older API builds: every kind but the screen pass.
+   */
+  chartEventKinds: ("alert" | "screen" | "filter" | "model" | "graduation" | "scanned")[];
+  /**
+   * Of these kinds, only the earliest flag is drawn. Filter and model by default, not alert.
+   * Absent from older API builds: filter and model.
+   */
+  chartEventFirst: ("alert" | "filter" | "model")[];
   hidden: CardField[];
 }
 

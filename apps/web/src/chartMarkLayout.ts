@@ -36,19 +36,26 @@ const SIDE_GAP = 2;
 /**
  * The marks' places: in time order, each side apart, each mark on the first level where it touches
  * no mark already placed; a mark with no free level folds into the mark nearest its outermost
- * place. `pitch` is a level's height (the largest mark's diameter); `height` keeps marks on the plot.
+ * place. `pitch` is a level's height (the largest mark's diameter). `gap` scales that pitch and the
+ * offset from the price (1 is today's); it does not change a mark's radius. `height` keeps marks
+ * on the plot.
  */
 export function layoutMarks<T>(
   spots: readonly MarkSpot<T>[],
   pitch: number,
   height: number,
+  gap = 1,
 ): PlacedMark<T>[] {
+  const g = gap > 0 && Number.isFinite(gap) ? gap : 1;
+  const step = pitch * g;
+  const edge = EDGE_GAP * g;
+  const stack = STACK_GAP * g;
   const out: PlacedMark<T>[] = [];
   for (const side of ["buy", "sell"] as const) {
     const placed: PlacedMark<T>[] = [];
     const mine = spots.filter((s) => s.side === side).sort((a, b) => a.x - b.x);
     const yAt = (s: MarkSpot<T>, level: number) => {
-      const away = EDGE_GAP + pitch / 2 + level * (pitch + STACK_GAP);
+      const away = edge + step / 2 + level * (step + stack);
       const raw = side === "buy" ? s.edgeY + away : s.edgeY - away;
       // Kept on the plot: a buy at the bottom edge or a sale at the top stays in view.
       return Math.min(Math.max(raw, s.r + 1), Math.max(s.r + 1, height - s.r - 1));

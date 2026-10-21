@@ -1,5 +1,12 @@
 import { useSyncExternalStore, type CSSProperties } from "react";
 import { put, type CardField, type FeedAppearance, type QuickLink } from "./api";
+import {
+  CHART_EVENT_FIRST_KINDS,
+  CHART_EVENT_KINDS,
+  DEFAULT_CHART_EVENT_FIRST,
+  DEFAULT_CHART_EVENT_KINDS,
+  chartEventChoice,
+} from "./chartEvents";
 
 /**
  * How the Live feed looks: theme, colors, spacing, columns and which card fields show. Saved to
@@ -100,17 +107,26 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   chartMarkPics: true,
   // Medium rings and pictures (user ask 2026-10-20); small and large are choices.
   chartMarkScale: "m",
+  // A circle, no line to the candle, at the usual distance (user ask 2026-10-20).
+  chartMarkShape: "circle",
+  chartMarkStem: false,
+  chartMarkGap: "m",
   // The token chart draws a line unless the reader picks candles (user ask 2026-10-18).
   chartStyle: "line",
   // The token chart opens on its Trading view, the latest at the right edge (user ask 2026-10-19).
   chartView: "trading",
   // Experimental and off unless the reader turns it on (user ask 2026-10-18).
   chartPathing: false,
+  // Which event flags the token chart draws (chartEvents.ts). Passed screen starts off; only the
+  // first filter and the first model are drawn.
+  chartEventKinds: [...DEFAULT_CHART_EVENT_KINDS],
+  chartEventFirst: [...DEFAULT_CHART_EVENT_FIRST],
   // Off by default, switchable back on in Customize: the composite score tile, so the stat tiles
-  // fill a clean 4 x 2 grid, and the 1st Buyers Holding tile, which Snipers replaced (user asks 2026-10-14).
-  // The header's calibrated 2x pill shows unless an account saved it hidden.
-  // An account that saved its own field list keeps that list.
-  hidden: ["score", "snipers"],
+  // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own) and the 1st Buyers
+  // Holding tile, which Snipers replaced (user asks 2026-10-14). The header's calibrated 2x pill
+  // shows unless an account saved it hidden. An account that saved its own field list keeps that list.
+  // Same list as apps/api/src/feedAppearance.ts.
+  hidden: ["score", "sage", "snipers"],
 };
 
 /** Trading sites a card can open the token in, as Settings lists them. */
@@ -203,10 +219,15 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
 ];
 
 // "vol" is listed apart from the groups: it is opt-in (FeedAppearance.volume), not hide-able.
+// "sage" is a hideable card field on the API schema. A saved hidden list that names it is kept.
 // "reasons", "sniperTop10", "largest", "kolBundled", "transferred" and "dev" are listed in the groups
 // but have their own switches too (FeedAppearance.reasons, .sniperTop10, .largest, .kolBundled,
 // .transferred, .devTile, and .feesBadge for "fees").
-const CARD_FIELDS = new Set<string>([...CARD_FIELD_GROUPS.flatMap((g) => g.fields.map((f) => f.id)), "vol"]);
+const CARD_FIELDS = new Set<string>([
+  ...CARD_FIELD_GROUPS.flatMap((g) => g.fields.map((f) => f.id)),
+  "vol",
+  "sage",
+]);
 
 /** The card fields not to draw: the ones the user hid, plus the opt-in ones not switched on. */
 export function cardHideSet(
@@ -372,9 +393,14 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
       r.chartMarkScale === "s" || r.chartMarkScale === "l" || r.chartMarkScale === "m"
         ? r.chartMarkScale
         : d.chartMarkScale,
+    chartMarkShape: pick(r.chartMarkShape, ["circle", "square", "diamond"] as const, d.chartMarkShape),
+    chartMarkStem: typeof r.chartMarkStem === "boolean" ? r.chartMarkStem : d.chartMarkStem,
+    chartMarkGap: pick(r.chartMarkGap, ["s", "m", "l"] as const, d.chartMarkGap),
     chartStyle: r.chartStyle === "candles" || r.chartStyle === "line" ? r.chartStyle : d.chartStyle,
     chartView: r.chartView === "trading" || r.chartView === "all" ? r.chartView : d.chartView,
     chartPathing: typeof r.chartPathing === "boolean" ? r.chartPathing : d.chartPathing,
+    chartEventKinds: chartEventChoice(r.chartEventKinds, CHART_EVENT_KINDS, d.chartEventKinds),
+    chartEventFirst: chartEventChoice(r.chartEventFirst, CHART_EVENT_FIRST_KINDS, d.chartEventFirst),
     hidden: Array.isArray(r.hidden)
       ? [...new Set(r.hidden.filter((f): f is CardField => typeof f === "string" && CARD_FIELDS.has(f)))]
       : d.hidden,
@@ -437,9 +463,14 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartMarkMinSol,
     chartMarkPics,
     chartMarkScale,
+    chartMarkShape,
+    chartMarkStem,
+    chartMarkGap,
     chartStyle,
     chartView,
     chartPathing,
+    chartEventKinds,
+    chartEventFirst,
     bubbleRefreshSeconds,
   } = current;
   return normalizeAppearance({
@@ -470,9 +501,14 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartMarkMinSol,
     chartMarkPics,
     chartMarkScale,
+    chartMarkShape,
+    chartMarkStem,
+    chartMarkGap,
     chartStyle,
     chartView,
     chartPathing,
+    chartEventKinds,
+    chartEventFirst,
     bubbleRefreshSeconds,
   });
 }

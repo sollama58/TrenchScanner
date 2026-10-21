@@ -39,6 +39,7 @@ import {
   useProState,
 } from "../proTrade";
 import { spendBalancesShown, useWalletBalance } from "../walletBalance";
+import { TokenPairBalances } from "./HeaderBalances";
 import { BurnUncertainError, describeBurnError, topUpBurnCredits } from "../burn";
 import { WalletTimeoutError } from "../wallet";
 import { decimalUnits, parseAmounts, parseDecimal } from "../decimal";
@@ -328,14 +329,12 @@ function RefundIcon() {
 export function FeeExplainer({
   fee,
   swap,
-  solUsd,
   sizeSol,
   side = "buy",
   sizeLabel = null,
 }: {
   fee: FeeEstimate | null;
   swap: SwapCostEstimate | null;
-  solUsd: number | null;
   /** The trade's size in SOL: what a buy spends, or what a sale is worth (0 when unpriced). */
   sizeSol: number;
   side?: "buy" | "sell";
@@ -398,10 +397,6 @@ export function FeeExplainer({
   const barTotal = barParts.reduce((sum, p) => sum + p.sol, 0);
   // What this trade saves against a 1% platform fee elsewhere, less the Sacrifice when it's charged.
   const savedSol = sizeSol > 0 ? feeSavedSol(sizeSol, sac?.mode === "on" ? sacSol : 0) : 0;
-  const usdText = (sol: number) => {
-    const v = sol * (solUsd ?? 0);
-    return v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(v < 0.1 ? 3 : 2)}`;
-  };
   return (
     <div className="tm-trade-fee" aria-live="polite">
       <div className="tm-fee-head">
@@ -426,10 +421,9 @@ export function FeeExplainer({
           {total !== null ? (
             <>
               <strong className="num">{solText(total)}</strong>
-              <small className="num muted">
-                {sizeSol > 0 ? ` ${((total / sizeSol) * 100).toFixed(2)}% of the trade` : ""}
-                {solUsd ? ` · ≈\u00a0${usdText(total)}` : ""}
-              </small>
+              {sizeSol > 0 && (
+                <small className="num muted"> {((total / sizeSol) * 100).toFixed(2)}% of the trade</small>
+              )}
             </>
           ) : (
             <span className="muted">Working it out…</span>
@@ -731,6 +725,7 @@ export function TradePanel({
   delayed = false,
   fillBuy = null,
   expectNote,
+  pairInTitle = false,
 }: {
   owner: string;
   mint: string;
@@ -764,6 +759,11 @@ export function TradePanel({
   fillBuy?: { sol: number; at: number } | null;
   /** What the expected tokens come to, after them (the Buy $ASDFASDFA popup: credits or access). */
   expectNote?: (tokens: number) => string | null;
+  /**
+   * The terminal's trade rail: the wallet's coin and SOL sit on the title row. Classic keeps that
+   * pill in the token header. The same balance reading the buy side already follows.
+   */
+  pairInTitle?: boolean;
 }) {
   // Shared with Settings > Trading: a change there shows here at once, and the other way round.
   const settings = useTradeSettings();
@@ -781,10 +781,11 @@ export function TradePanel({
   const busy = status.kind === "busy";
   // SOL the buy can spend, for a wallet that can trade here. The shared reading follows the
   // position poll. A dash holds the row until the first answer, so the buy side stays put.
-  // The Buy $ASDFASDFA popup already prints SOL above the panel (hidePosition): follow the same
-  // poll, and do not print it again beside Buy.
+  // The Buy $ASDFASDFA popup prints SOL above the panel (hidePosition), and the terminal title
+  // already shows this coin and SOL (pairInTitle). Follow the same poll, and do not print SOL
+  // again beside Buy.
   const trackSol = spendBalancesShown(!!useProState()?.pro, true) && !buyOnly && !closeOnly;
-  const showSol = trackSol && !hidePosition;
+  const showSol = trackSol && !hidePosition && !pairInTitle;
   const funds = useWalletBalance(trackSol, trackSol);
   const solHave = funds.balance?.solLamports != null ? solText(Number(funds.balance.solLamports) / 1e9) : "–";
   useEffect(() => {
@@ -1048,10 +1049,27 @@ export function TradePanel({
       <BoltIcon size={14} /> Trade{symbol ? ` $${symbol}` : ""}
     </>
   );
+  const pairBalances =
+    pairInTitle && trackSol ? (
+      <TokenPairBalances
+        symbol={symbol || "tokens"}
+        tokenRaw={position?.balance ?? null}
+        decimals={position?.decimals ?? null}
+        solLamports={funds.balance?.solLamports ?? null}
+        stale={!!((funds.error && funds.balance) || (positionStaleAt !== null && position))}
+      />
+    ) : null;
   return (
     <section className="sage-card tm-trade" aria-label="Trade">
       <header className="tm-trade-head">
-        <h4>{title}</h4>
+        {pairBalances ? (
+          <div className="tm-trade-title">
+            <h4>{title}</h4>
+            {pairBalances}
+          </div>
+        ) : (
+          <h4>{title}</h4>
+        )}
         <span className="tm-trade-tools">
           <span className="segmented small tm-trade-speed" role="radiogroup" aria-label="Speed">
             {(["eco", "turbo"] as const).map((sp) => (
@@ -1618,7 +1636,6 @@ export function TradePanel({
       <FeeExplainer
         fee={fee}
         swap={swapCosts}
-        solUsd={solUsd}
         {...(side === "sell" && !buyOnly && sellTokens !== null && !sellTooMuch
           ? {
               side: "sell" as const,

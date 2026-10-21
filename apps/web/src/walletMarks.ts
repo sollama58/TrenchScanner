@@ -5,10 +5,11 @@ import { shortAddress } from "./format";
 /**
  * Labeled-wallet trade marks on the token chart (user ask 2026-10-18): the trades of KOLs, their
  * side wallets and the other flagged wallets in the coin (apps/api/src/tokenChart.ts MarkedWallet),
- * drawn as lettered rings, apart from a Pro trader's own buy and sell arrows. The reader picks
- * which kinds of wallet show and the smallest trade that does in Customize (saved with the feed's
- * appearance, so every device marks the same); trades under MIN_SOL_FLOOR never show (only the
- * reader's own trades do, and those are drawn elsewhere).
+ * drawn as lettered marks (a circle, square or diamond), apart from a Pro trader's own buy and
+ * sell arrows. A KOL's picture stays round. The reader picks which kinds of wallet show and the
+ * smallest trade that does in Customize (saved with the feed's appearance, so every device marks
+ * the same); trades under MIN_SOL_FLOOR never show (only the reader's own trades do, and those are
+ * drawn elsewhere).
  */
 
 /** A flagged wallet as the chart answer sends it, the parts the marks read. */
@@ -247,6 +248,17 @@ export function solText(sol: number): string {
 /** How big chart trade marks draw: small, medium or large (Customize › Chart wallet trades). */
 export const MARK_SCALE = { s: 0.75, m: 1, l: 1.35 } as const;
 export type MarkScale = keyof typeof MARK_SCALE;
+
+/** Lettered wallet marks: a circle (today's ring), a square or a diamond. */
+export const MARK_SHAPES = ["circle", "square", "diamond"] as const;
+export type MarkShape = (typeof MARK_SHAPES)[number];
+
+/**
+ * How far chart trade marks sit from the candle (Customize › Chart wallet trades). Medium is today's
+ * pitch. The factor scales the stack's pitch and its gap from the price, not a mark's radius.
+ */
+export const MARK_GAP = { s: 0.75, m: 1, l: 1.4 } as const;
+export type MarkGap = keyof typeof MARK_GAP;
 
 /** A mark's ring radius in px, growing with the trade's size: 6 at the floor, 10 at 50 SOL or more. */
 export function markRadius(sol: number): number {

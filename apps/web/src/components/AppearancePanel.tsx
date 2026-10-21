@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ChartEventsPicker } from "./ChartEventsPicker";
 import { WalletMarksPicker } from "./WalletMarksPicker";
 import type { CardField, NarrativeNoteReadiness, QuickLink } from "../api";
 import {
@@ -239,6 +240,7 @@ export function AppearanceControls() {
         <BubbleMapControls />
         <ChartControls />
         <WalletMarksPicker />
+        <ChartEventsPicker />
         <div className="field-group">
           <h4>Quick links</h4>
           <QuickLinkChecks />

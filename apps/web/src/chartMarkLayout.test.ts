@@ -36,6 +36,31 @@ describe("layoutMarks", () => {
     const [p] = layoutMarks([{ ...spot("a", "buy", 50), edgeY: 395 }], 20, 400);
     expect(p!.y).toBeLessThanOrEqual(400 - 8 - 1);
   });
+
+  it("pulls a stack closer with a small gap and pushes it out with a large one", () => {
+    const one = (gap?: number) => layoutMarks([spot("a", "buy", 50)], 20, 400, gap)[0]!;
+    const near = one(0.5);
+    const mid = one(1);
+    const far = one(2);
+    expect(near.y - near.edgeY).toBeLessThan(mid.y - mid.edgeY);
+    expect(mid.y - mid.edgeY).toBeLessThan(far.y - far.edgeY);
+    // The gap moves the stack. It does not change a mark's own radius.
+    expect(near.r).toBe(8);
+    expect(far.r).toBe(8);
+    expect(one().y).toBe(mid.y);
+    expect(one(0).y).toBe(mid.y);
+    expect(one(-1).y).toBe(mid.y);
+    // Small radii stay on consecutive levels, so the row spacing is the scaled pitch.
+    const stacked = (gap: number) =>
+      layoutMarks([spot("a", "buy", 50, 4), spot("b", "buy", 50, 4)], 20, 400, gap);
+    for (const gap of [0.5, 1, 2]) expect(stacked(gap).map((p) => p.level)).toEqual([0, 1]);
+    const span = (gap: number) => {
+      const rows = stacked(gap);
+      return rows[1]!.y - rows[0]!.y;
+    };
+    expect(span(0.5)).toBeLessThan(span(1));
+    expect(span(1)).toBeLessThan(span(2));
+  });
 });
 
 describe("markAt", () => {

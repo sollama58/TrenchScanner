@@ -80,7 +80,6 @@ export function WalletMenu({
         aria-controls={open ? menuId : undefined}
         onClick={() => setOpen(!open)}
       >
-        <span className="wallet-dot" />
         {user.isAdmin && <span className="admin-tag">admin</span>}
         <span className="num">{shortAddress(user.walletAddress)}</span>
         <ChevronDownIcon size={14} />

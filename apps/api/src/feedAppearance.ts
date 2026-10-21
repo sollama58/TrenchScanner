@@ -64,6 +64,18 @@ export const CHART_MARK_KINDS = [
 ] as const;
 /** The kinds marked by default: all but risky wallets and dumpers (user ask 2026-10-18). */
 export const DEFAULT_CHART_MARK_KINDS = CHART_MARK_KINDS.filter((k) => k !== "risky");
+
+/**
+ * Event flags the token chart can draw (apps/web/src/chartEvents.ts). A filter match is the flag
+ * labeled "Alert"; model calls include "Model alert" and each model's name.
+ */
+export const CHART_EVENT_KINDS = ["alert", "screen", "filter", "model", "graduation", "scanned"] as const;
+/** Shown by default: every kind but the screen pass. */
+export const DEFAULT_CHART_EVENT_KINDS = CHART_EVENT_KINDS.filter((k) => k !== "screen");
+/** Kinds that can collapse to the earliest flag. */
+export const CHART_EVENT_FIRST_KINDS = ["alert", "filter", "model"] as const;
+/** Only the first filter and the first model. Alerts are not collapsed unless the reader asks. */
+export const DEFAULT_CHART_EVENT_FIRST = ["filter", "model"] as const;
 /** apps/web/src/appearance.ts has the same. */
 export const CHART_MARKS_REV = 2;
 /**
@@ -256,12 +268,42 @@ export const feedAppearanceSchema = z
     chartMarkPics: z.boolean().default(true),
     /** How big those marks draw: small, medium or large (user ask 2026-10-20); medium by default. */
     chartMarkScale: z.enum(["s", "m", "l"]).default("m"),
+    /**
+     * Lettered wallet marks: a circle, a square or a diamond (user ask 2026-10-20). A circle by
+     * default. KOL pictures stay round, and the trader's own buys and sells stay arrows.
+     */
+    chartMarkShape: z.enum(["circle", "square", "diamond"]).default("circle"),
+    /** A line from the mark to the candle (user ask 2026-10-20); off unless the reader turns it on. */
+    chartMarkStem: z.boolean().default(false),
+    /**
+     * How far marks sit from the candle: small, medium or large (user ask 2026-10-20). Medium is
+     * today's pitch. This is not the mark's size.
+     */
+    chartMarkGap: z.enum(["s", "m", "l"]).default("m"),
     /** The token chart draws a line or candles (user ask 2026-10-18); a line by default. */
     chartStyle: z.enum(["line", "candles"]).default("line"),
     /** The view the token chart opens on (user ask 2026-10-19): Trading, the latest at the right edge, or All. */
     chartView: z.enum(["trading", "all"]).default("trading"),
     /** Experimental: the token chart's dotted predicted price path (user ask 2026-10-18); off by default. */
     chartPathing: z.boolean().default(false),
+    /**
+     * Which event flags the token chart draws. Passed screen is off unless the reader turns it on.
+     * Missing on a save from before this field: the default, so an older save still parses.
+     */
+    chartEventKinds: z
+      .array(z.enum(CHART_EVENT_KINDS))
+      .max(CHART_EVENT_KINDS.length)
+      .refine((k) => new Set(k).size === k.length, "chart event kinds repeat")
+      .default([...DEFAULT_CHART_EVENT_KINDS]),
+    /**
+     * Draw only the earliest flag of these kinds. Filter and model by default; alert is offered
+     * and starts off. Missing on an older save: that default.
+     */
+    chartEventFirst: z
+      .array(z.enum(CHART_EVENT_FIRST_KINDS))
+      .max(CHART_EVENT_FIRST_KINDS.length)
+      .refine((k) => new Set(k).size === k.length, "chart event first repeats")
+      .default([...DEFAULT_CHART_EVENT_FIRST]),
     /** Card fields not shown. */
     hidden: z
       .array(z.enum(CARD_FIELDS))
@@ -329,15 +371,32 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   chartMarkMinSol: 0.5,
   chartMarkPics: true,
   chartMarkScale: "m",
+  chartMarkShape: "circle",
+  chartMarkStem: false,
+  chartMarkGap: "m",
   chartStyle: "line",
   chartView: "trading",
   chartPathing: false,
+  chartEventKinds: [...DEFAULT_CHART_EVENT_KINDS],
+  chartEventFirst: [...DEFAULT_CHART_EVENT_FIRST],
   // Off by default, switchable back on in Customize: the composite score tile, so the stat tiles
   // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own) and the 1st Buyers
   // Holding tile, which Snipers replaced (user asks 2026-10-14). The header's calibrated 2x pill
   // shows unless an account saved it hidden. An account that saved its own field list keeps that list.
   hidden: ["score", "sage", "snipers"],
 };
+
+/**
+ * A saved list of chart-event kinds. Missing, repeated, or holding a value that is not a kind: the
+ * default. Otherwise the reader's list, in `allowed` order (an empty list stays empty).
+ */
+function chosenKinds<T extends string>(raw: unknown, allowed: readonly T[], fallback: readonly T[]): T[] {
+  if (!Array.isArray(raw) || new Set(raw).size !== raw.length) return [...fallback];
+  if (raw.some((k) => typeof k !== "string" || !(allowed as readonly string[]).includes(k)))
+    return [...fallback];
+  const picked = new Set(raw as T[]);
+  return allowed.filter((k) => picked.has(k));
+}
 
 /** The stored JSON as an appearance, field by field: a bad or missing field takes its default. */
 export function parseFeedAppearance(stored: unknown): FeedAppearance {
@@ -349,6 +408,8 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
       key === "quickLinks" ||
       key === "chartMarkKinds" ||
       key === "chartMarksRev" ||
+      key === "chartEventKinds" ||
+      key === "chartEventFirst" ||
       key === "hideBelowMcapRev" ||
       key === "feesBadgeRev"
     )
@@ -375,6 +436,9 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
       ? kinds.filter((k) => k !== "risky")
       : kinds;
   out.chartMarksRev = CHART_MARKS_REV;
+  // A bad or repeated kind falls back to the default list; a real list is kept, in the listed order.
+  out.chartEventKinds = chosenKinds(raw.chartEventKinds, CHART_EVENT_KINDS, DEFAULT_CHART_EVENT_KINDS);
+  out.chartEventFirst = chosenKinds(raw.chartEventFirst, CHART_EVENT_FIRST_KINDS, DEFAULT_CHART_EVENT_FIRST);
   // Saved before low market caps were hidden by default, still off at 5k: the old default, unchanged.
   if (
     raw.hideBelowMcapRev !== HIDE_BELOW_MCAP_REV &&

@@ -17,7 +17,7 @@ import { customSeriesDefaultOptions } from "lightweight-charts";
 import type { DrawColors, Drawings, DrawScale } from "../chartDrawings";
 import type { PathStep } from "../pricePathing";
 import { layoutMarks, type MarkSpot, type PlacedMark } from "../chartMarkLayout";
-import { markRadius, type WalletMark } from "../walletMarks";
+import { markRadius, type MarkShape, type WalletMark } from "../walletMarks";
 
 /** The canvas target the library hands its renderers (fancy-canvas's CanvasRenderingTarget2D). */
 type Target = Parameters<ICustomSeriesPaneRenderer["draw"]>[0];
@@ -172,6 +172,12 @@ export interface OverlayState {
   pic: (mark: WalletMark) => CanvasImageSource | null;
   /** How big the trade marks draw (Customize › Chart wallet trades). */
   markScale: number;
+  /** Lettered wallet marks. Pictures stay round; the trader's own buys and sells stay arrows. */
+  markShape: MarkShape;
+  /** The line and the dot from a mark to the price. Off unless the reader turns it on. */
+  markStem: boolean;
+  /** How far the stack sits from the price, as a factor of today's pitch (1). */
+  markGap: number;
   drawings: Drawings | null;
   drawScale: DrawScale | null;
   label: (v: number) => string;
@@ -180,9 +186,9 @@ export interface OverlayState {
 
 /**
  * Everything the chart marks over its candles, as one series primitive: the alert and model lines
- * with their flags along the top, labeled wallets' trades as lettered rings (filled for a buy,
- * sized by SOL) or KOLs' pictures, the trader's own B and S arrows, the predicted path, and the
- * drawings.
+ * with their flags along the top, labeled wallets' trades as lettered marks (a circle, square or
+ * diamond, filled for a buy, sized by SOL) or KOLs' pictures, the trader's own B and S arrows, an
+ * optional line to the candle, the predicted path, and the drawings.
  */
 export class ChartOverlay implements ISeriesPrimitive<Time> {
   state: OverlayState;
@@ -300,8 +306,8 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
       }
     }
 
-    // The trades: buys hang under the price and sales sit over it, stacked where they'd touch,
-    // each stack tied to the price by a stem and a dot (chartMarkLayout.ts).
+    // The trades: buys hang under the price and sales sit over it, stacked where they'd touch.
+    // A line and a dot tie each stack to the price when the reader asks for one (chartMarkLayout.ts).
     const spots: MarkSpot<MarkItem>[] = [];
     const spot = (item: MarkItem, t: number, side: "buy" | "sell", r: number) => {
       const x = s.x(t);
@@ -313,28 +319,32 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
       spots.push({ item, side, x, priceY, edgeY, r });
     };
     // The trader's own first, so they take the places nearest the price.
+    // Size scales the radius. Distance scales the stack's pitch and its gap from the price.
     const scale = s.markScale > 0 ? s.markScale : 1;
+    const gap = s.markGap > 0 ? s.markGap : 1;
     for (const tr of s.trades) spot({ trade: tr }, tr.t, tr.side, 8 * scale);
     for (const m of s.marks)
       spot({ mark: m }, m.t, m.side, (s.pic(m) ? picRadius(m.sol) : markRadius(m.sol)) * scale);
-    const placed = layoutMarks(spots, MARK_PITCH * scale, height);
+    const placed = layoutMarks(spots, MARK_PITCH * scale, height, gap);
     this.placed = placed;
-    // Stems first, under every mark: from the price's dot to the mark.
-    for (const p of placed) {
-      const color = p.side === "buy" ? c.buy : c.sell;
-      const toward = p.side === "buy" ? p.y - p.r : p.y + p.r;
-      ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.55;
-      ctx.lineWidth = hr;
-      ctx.beginPath();
-      ctx.moveTo(Math.round(p.x * hr) + 0.5, p.priceY * vr);
-      ctx.lineTo(Math.round(p.x * hr) + 0.5, toward * vr);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(p.x * hr, p.priceY * vr, 2.2 * hr, 0, Math.PI * 2);
-      ctx.fill();
+    // The line to the candle, under every mark: from the price's dot to the mark. Off by default.
+    if (s.markStem) {
+      for (const p of placed) {
+        const color = p.side === "buy" ? c.buy : c.sell;
+        const toward = p.side === "buy" ? p.y - p.r : p.y + p.r;
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.55;
+        ctx.lineWidth = hr;
+        ctx.beginPath();
+        ctx.moveTo(Math.round(p.x * hr) + 0.5, p.priceY * vr);
+        ctx.lineTo(Math.round(p.x * hr) + 0.5, toward * vr);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(p.x * hr, p.priceY * vr, 2.2 * hr, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
     ctx.textAlign = "center";
     for (const p of placed) {
@@ -372,10 +382,10 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
           ctx.strokeStyle = p.side === "buy" ? c.buy : c.sell;
           ctx.stroke();
         } else {
-          // A lettered ring in the wallet kind's colour: filled for a buy, hollow for a sale.
+          // A lettered mark in the wallet kind's colour: filled for a buy, hollow for a sale.
+          // Circle, square or diamond. A KOL's picture stays round, and B/S stay arrows.
           const k = c.wk(m.kind);
-          ctx.beginPath();
-          ctx.arc(x * hr, y * vr, r * hr, 0, Math.PI * 2);
+          markOutline(ctx, s.markShape, x * hr, y * vr, r * hr);
           ctx.globalAlpha = hot ? 1 : 0.92;
           ctx.fillStyle = m.side === "buy" ? k.fill : c.surface;
           ctx.fill();
@@ -411,6 +421,24 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
 
     if (s.drawings && s.drawScale) s.drawings.draw(ctx, hr, vr, s.drawScale, c.draw, s.label, width, height);
   }
+}
+
+/** A lettered wallet mark's outline, in bitmap px: a circle, a square or a diamond. */
+function markOutline(ctx: CanvasRenderingContext2D, shape: MarkShape, x: number, y: number, r: number): void {
+  ctx.beginPath();
+  if (shape === "square") {
+    ctx.rect(x - r, y - r, r * 2, r * 2);
+    return;
+  }
+  if (shape === "diamond") {
+    ctx.moveTo(x, y - r);
+    ctx.lineTo(x + r, y);
+    ctx.lineTo(x, y + r);
+    ctx.lineTo(x - r, y);
+    ctx.closePath();
+    return;
+  }
+  ctx.arc(x, y, r, 0, Math.PI * 2);
 }
 
 function roundRect(

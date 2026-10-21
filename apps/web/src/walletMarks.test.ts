@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_APPEARANCE, normalizeAppearance } from "./appearance";
+import { DEFAULT_APPEARANCE, normalizeAppearance, withPreset } from "./appearance";
 import {
   clampMinSol,
   keepMarkSources,
@@ -247,6 +247,41 @@ describe("appearance chartMarkScale", () => {
     expect(normalizeAppearance({}).chartMarkScale).toBe("m");
     expect(normalizeAppearance({ chartMarkScale: "l" }).chartMarkScale).toBe("l");
     expect(normalizeAppearance({ chartMarkScale: "huge" }).chartMarkScale).toBe("m");
+  });
+});
+
+describe("appearance chart mark style", () => {
+  it("defaults to a circle, no line and a medium gap, and keeps a saved choice", () => {
+    expect(DEFAULT_APPEARANCE).toMatchObject({
+      chartMarkShape: "circle",
+      chartMarkStem: false,
+      chartMarkGap: "m",
+    });
+    expect(normalizeAppearance({})).toMatchObject({
+      chartMarkShape: "circle",
+      chartMarkStem: false,
+      chartMarkGap: "m",
+    });
+    expect(
+      normalizeAppearance({ chartMarkShape: "diamond", chartMarkStem: true, chartMarkGap: "l" }),
+    ).toMatchObject({ chartMarkShape: "diamond", chartMarkStem: true, chartMarkGap: "l" });
+    expect(normalizeAppearance({ chartMarkShape: "square", chartMarkGap: "s" })).toMatchObject({
+      chartMarkShape: "square",
+      chartMarkGap: "s",
+    });
+    expect(
+      normalizeAppearance({ chartMarkShape: "star", chartMarkStem: "yes", chartMarkGap: "xl" }),
+    ).toMatchObject({ chartMarkShape: "circle", chartMarkStem: false, chartMarkGap: "m" });
+  });
+
+  it("keeps a saved mark style through a preset", () => {
+    const look = normalizeAppearance({ chartMarkShape: "square", chartMarkStem: true, chartMarkGap: "s" });
+    expect(withPreset(look, { density: "compact" })).toMatchObject({
+      chartMarkShape: "square",
+      chartMarkStem: true,
+      chartMarkGap: "s",
+      density: "compact",
+    });
   });
 });
 
