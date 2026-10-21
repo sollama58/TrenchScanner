@@ -7,8 +7,13 @@ import {
   decisionAnchor,
   dollarTicksFromCurve,
   freshQuoteMcapUsd,
+  dollarScaleBasis,
+  fineTickWindow,
   FINE_TICK_LABEL_RULE,
   FRESH_ANCHOR_LABEL_RULE,
+  nextCurveTapeCoveredMs,
+  trainsOnLabelRule,
+  CANDIDATE_WATCH_WINDOW_MINUTES,
   isCurrentLabelRule,
   initialOutcomeAggregates,
   LABEL_LOG2_CAP,
@@ -502,5 +507,132 @@ describe("sub-minute curve prints", () => {
         { priceUsd: 1, at: minute },
       ),
     ).toEqual([]);
+  });
+
+  it("prices SOL-quoted curve prints from SOL/USD, not from a lagged dollar print", () => {
+    // Pump.fun coins are 6 decimals. The tape's price is lamports per raw token, so
+    // USD = curvePrice * solUsd * 1e6 / 1e9. At $150 SOL that factor is 0.15.
+    const solUsd = 150;
+    const perUnit = (solUsd * 1e6) / 1e9;
+    const atDollar = (usd: number) => usd / perUnit;
+    const minute = new Date(T0.getTime() + 60_000);
+    // The coin halved across the 15s DexScreener's lag can be off (the watcher restamps by
+    // 45s; the feed runs 45-60s behind). The dollar print is still $1. The curve in force
+    // at that timestamp has already halved.
+    const curve = {
+      basis: { at: minute.getTime(), price: atDollar(0.5) },
+      changes: [
+        { at: T0.getTime() + 20_000, price: atDollar(1) },
+        { at: T0.getTime() + 50_000, price: atDollar(0.5) },
+      ],
+    };
+    const lagged = dollarTicksFromCurve(curve, { priceUsd: 1, at: minute });
+    // Dividing the lagged $1 by the dumped curve doubles every earlier print: a fake 2x,
+    // and the stop prints as $1.
+    expect(lagged.find((t) => t.at.getTime() === T0.getTime() + 20_000)!.priceUsd).toBeCloseTo(2);
+    expect(lagged.find((t) => t.at.getTime() === T0.getTime() + 50_000)!.priceUsd).toBeCloseTo(1);
+    const honest = dollarTicksFromCurve(curve, { priceUsd: 1, at: minute }, perUnit);
+    expect(honest.find((t) => t.at.getTime() === T0.getTime() + 20_000)!.priceUsd).toBeCloseTo(1);
+    expect(honest.find((t) => t.at.getTime() === T0.getTime() + 50_000)!.priceUsd).toBeCloseTo(0.5);
+
+    // The other way: a 2x that sticks across that same 15s is flattened back to the lagged print.
+    const pumped = {
+      basis: { at: minute.getTime(), price: atDollar(2) },
+      changes: [
+        { at: T0.getTime() + 20_000, price: atDollar(1) },
+        { at: T0.getTime() + 50_000, price: atDollar(2) },
+      ],
+    };
+    const hidden = dollarTicksFromCurve(pumped, { priceUsd: 1, at: minute });
+    expect(hidden.find((t) => t.at.getTime() === T0.getTime() + 50_000)!.priceUsd).toBeCloseTo(1);
+    const seen = dollarTicksFromCurve(pumped, { priceUsd: 1, at: minute }, perUnit);
+    expect(seen.find((t) => t.at.getTime() === T0.getTime() + 50_000)!.priceUsd).toBeCloseTo(2);
+
+    let agg = initialOutcomeAggregates(1, T0);
+    for (const tick of [...honest, { priceUsd: 1, at: minute }].sort(
+      (a, b) => a.at.getTime() - b.at.getTime(),
+    )) {
+      agg = { ...agg, ...applyPriceTick(agg, tick.priceUsd, tick.at) };
+    }
+    const labels = computeOutcomeLabels(agg);
+    expect(labels.hit2xIn1h).toBe(false);
+    expect(labels.disqualified).toBe(false);
+    expect(agg.low1hPriceUsd).toBeCloseTo(0.5);
+  });
+});
+
+describe("curve label window and scale basis", () => {
+  it("clamps folded prints to the label window and drops an empty slice", () => {
+    const anchor = T0;
+    const windowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
+    const open = fineTickWindow(anchor, anchor.getTime(), anchor.getTime() + 60_000);
+    expect(open).toEqual({ afterMs: anchor.getTime(), untilMs: anchor.getTime() + 60_000 });
+    // A sweep past the window still stops at the window's end.
+    const late = fineTickWindow(anchor, anchor.getTime() + 10 * 60_000, anchor.getTime() + 40 * 60_000);
+    expect(late?.untilMs).toBe(anchor.getTime() + windowMs);
+    // Already graded through the window: nothing left to fold.
+    expect(fineTickWindow(anchor, anchor.getTime() + windowMs, anchor.getTime() + 40 * 60_000)).toBeNull();
+    // Before the anchor is not a slice.
+    expect(fineTickWindow(anchor, anchor.getTime() - 1_000, anchor.getTime() - 1)).toBeNull();
+  });
+
+  it("scales from the last dollar print, not from a curve tick stored as lastPriceUsd", () => {
+    const dollarAt = new Date(T0.getTime() + 60_000);
+    const curveAt = new Date(T0.getTime() + 70_000);
+    // This sweep has a dollar print. It wins, whatever lastPriceUsd holds.
+    expect(
+      dollarScaleBasis({
+        candidate: { at: dollarAt, priceUsd: 1.1 },
+        lastDollarAt: null,
+        lastDollarPriceUsd: null,
+        labelRule: 5,
+        lastPriceUsd: 4,
+        lastCheckedAt: curveAt,
+      }),
+    ).toEqual({ at: dollarAt, priceUsd: 1.1 });
+    // No new dollar print. Rule 5's lastPriceUsd may be a scaled curve tick, so it is not the basis.
+    expect(
+      dollarScaleBasis({
+        candidate: null,
+        lastDollarAt: dollarAt,
+        lastDollarPriceUsd: 1.1,
+        labelRule: 5,
+        lastPriceUsd: 4,
+        lastCheckedAt: curveAt,
+      }),
+    ).toEqual({ at: dollarAt, priceUsd: 1.1 });
+    expect(
+      dollarScaleBasis({
+        candidate: null,
+        lastDollarAt: null,
+        lastDollarPriceUsd: null,
+        labelRule: 5,
+        lastPriceUsd: 4,
+        lastCheckedAt: curveAt,
+      }),
+    ).toBeNull();
+    // A rule-4 row has never written a curve tick into lastPriceUsd.
+    expect(
+      dollarScaleBasis({
+        candidate: null,
+        lastDollarAt: null,
+        lastDollarPriceUsd: null,
+        labelRule: 4,
+        lastPriceUsd: 1.1,
+        lastCheckedAt: dollarAt,
+      }),
+    ).toEqual({ at: dollarAt, priceUsd: 1.1 });
+  });
+
+  it("keeps rule 5 in the fit unless the flag says otherwise, and caps tape coverage", () => {
+    expect(trainsOnLabelRule(4)).toBe(true);
+    expect(trainsOnLabelRule(5)).toBe(true);
+    expect(trainsOnLabelRule(5, true)).toBe(false);
+    expect(trainsOnLabelRule(4, true)).toBe(true);
+    expect(trainsOnLabelRule(3, true)).toBe(false);
+    const windowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
+    expect(nextCurveTapeCoveredMs(null, 10_000)).toBe(10_000);
+    expect(nextCurveTapeCoveredMs(windowMs - 1_000, 5_000)).toBe(windowMs);
+    expect(nextCurveTapeCoveredMs(12_000, 0)).toBe(12_000);
   });
 });

@@ -755,6 +755,14 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  // Rule 5 is rule 4's anchor graded with sub-minute curve prints. Those rows can only see more
+  // wicks, so the 2x rate moves with whether the tape was watching. Off (the default) keeps
+  // rule 5 in the fit, which is what shipped on 2026-10-21. On, rule-5 rows stay out until a
+  // backtest shows they share rule 4's base rate (review 2026-10-21). Does not change live calls.
+  CURATOR_EXCLUDE_FINE_TICK_LABELS: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   // The curator contest's roster, comma-separated contestant ids (curation/contestants.ts):
   // each trains every run and makes calls on its own feed, and the consensus stacks the learners.
   // Default: all of them. Trim it if a training run gets too slow for the worker - memory stays

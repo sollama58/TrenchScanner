@@ -619,6 +619,22 @@ export class DexScreenerClient {
    * coin, on the same short-lived cache as priceInQuoteToken. A coin it can't price is left out;
    * never throws.
    */
+  /**
+   * SOL in dollars, from the quote-price cache (30s). One DexScreener lookup when the cache is
+   * cold. Never throws: a failed lookup is null, and the caller keeps the minute sample's own
+   * scale. The outcome watcher uses this to price a SOL-quoted bonding curve without dividing a
+   * lagged dollar print by the live curve (labels.ts pumpCurveUsdPerUnit).
+   */
+  async solUsd(): Promise<number | null> {
+    const gate = {
+      acquire: () => this.gate.acquire(),
+      throttled: (delayMs: number) => this.gate.throttled(delayMs),
+    };
+    const usd = await this.quoteUsdPrices([WRAPPED_SOL_MINT], gate);
+    const price = usd.get(WRAPPED_SOL_MINT);
+    return price !== undefined && price > 0 ? price : null;
+  }
+
   async solPricesOf(mints: string[]): Promise<Map<string, number>> {
     const out = new Map<string, number>();
     const ask = [...new Set(mints)].filter((m) => m !== WRAPPED_SOL_MINT);

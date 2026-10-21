@@ -1132,6 +1132,15 @@ model CandidateOutcome {
   nextCheckAt   DateTime
   lastCheckedAt DateTime?
   lastPriceUsd  Float?
+  /// The last dollar print (DexScreener or Jupiter), never a curve tick scaled into dollars.
+  /// The next sweep's ratio scale reads this, so a curve-derived lastPriceUsd cannot become the
+  /// scale (2026-10-21). Null until the first dollar print.
+  lastDollarPriceUsd Float?
+  lastDollarAt       DateTime?
+  /// Milliseconds of the 30-minute label window the in-memory curve tape covered, summed across
+  /// sweeps and capped at the window. Null on rows the tape never priced. A restart drops the
+  /// tape, so the number is only the cover this process still had (2026-10-21).
+  curveTapeCoveredMs Int?
   /// Whether this row keeps being watched past the 30-minute label window, out to 24h - set for
   /// clean winners (to record how far they ultimately ran: the run peak) and for rows a curated
   /// alert points at (their public outcome badge shows the 24h peak). Everything else stops when

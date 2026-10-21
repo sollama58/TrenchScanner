@@ -41,7 +41,7 @@ import {
   trainingWeightByAge,
   MAX_EVENT_AGE_MINUTES,
   FRESH_ANCHOR_LABEL_RULE,
-  isCurrentLabelRule,
+  trainsOnLabelRule,
   isDecisionRow,
   CANDIDATE_FEATURE_NAMES,
   ALL_NARRATIVE_FEATURES,
@@ -125,10 +125,16 @@ async function trainCurators(
 
   progress.stage("load rows");
 
-  const trainingRows = await loadTrainingRows(windowStart, env.CURATOR_TRAINING_MAX_ROWS, LOAD_PAGE_ROWS, {
-    min: env.MCAP_FILTER_MIN,
-    max: env.MCAP_FILTER_MAX,
-  });
+  const trainingRows = await loadTrainingRows(
+    windowStart,
+    env.CURATOR_TRAINING_MAX_ROWS,
+    LOAD_PAGE_ROWS,
+    {
+      min: env.MCAP_FILTER_MIN,
+      max: env.MCAP_FILTER_MAX,
+    },
+    { excludeFineTickLabels: env.CURATOR_EXCLUDE_FINE_TICK_LABELS },
+  );
   if (trainingRows.length < MIN_ROWS_TO_TRAIN) {
     logger.info("not enough finalized samples to train yet", {
       rows: trainingRows.length,
@@ -919,13 +925,18 @@ export async function loadTrainingRows(
   maxRows: number,
   pageRows = LOAD_PAGE_ROWS,
   band?: { min: number; max: number },
+  /**
+   * excludeFineTickLabels: drop rule-5 rows (CURATOR_EXCLUDE_FINE_TICK_LABELS). Default keeps
+   * them, the same fit as before the flag existed.
+   */
+  opts?: { excludeFineTickLabels?: boolean },
 ): Promise<TrainingRow[]> {
   const [events, alerted] = await Promise.all([
-    loadRowsOfKind("event", windowStart, maxRows, pageRows),
+    loadRowsOfKind("event", windowStart, maxRows, pageRows, undefined, opts),
     alertedEventAnchors(windowStart),
   ]);
   const hourly = withoutEventTwins(
-    await loadRowsOfKind("hourly", windowStart, maxRows - events.length, pageRows, band),
+    await loadRowsOfKind("hourly", windowStart, maxRows - events.length, pageRows, band, opts),
     events.map((e) => ({
       tokenId: e.tokenId,
       anchorAt: e.anchorAt,
@@ -1329,6 +1340,7 @@ async function loadRowsOfKind(
   maxRows: number,
   pageRows: number,
   band?: { min: number; max: number },
+  opts?: { excludeFineTickLabels?: boolean },
 ): Promise<TrainingRow[]> {
   // Background rows are banked across the padded scan band, but no call is ever made outside the
   // curated band: half of them sat under its floor (2026-10-08), teaching a market nobody trades.
@@ -1391,7 +1403,7 @@ async function loadRowsOfKind(
       // for re-graded ones while skipped hourly rows doubled 3.9% (data-correctness audit
       // 2026-10-16). Since 2026-10-12 a row is born rule 3 only when the scan had no usable fresh
       // quote (1-3% of decision rows a day); the re-grade then rewrites it in place.
-      if (!isCurrentLabelRule(r)) continue;
+      if (!trainsOnLabelRule(r.labelRule, opts?.excludeFineTickLabels === true)) continue;
       // A completed curve nobody trades (no volume, no buys in the hour) reads a frozen market cap
       // near $49.6k and stale holder figures, and never moves: 5,523 hourly rows on 10-06..10-11
       // taught the band where live near-graduation coins sit that it never doubles.

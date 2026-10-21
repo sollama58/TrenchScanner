@@ -141,6 +141,86 @@ export function isCurrentLabelRule(row: { labelRule?: number }): boolean {
   return row.labelRule === undefined || row.labelRule >= CURRENT_LABEL_RULE;
 }
 
+/**
+ * Whether a row belongs in the fit. Rule 4 and rule 5 are both current. Rule 5 can only see more
+ * wicks than the minute sample, so its base rate moves with tape coverage. `excludeFineTickLabels`
+ * holds those rows out (env CURATOR_EXCLUDE_FINE_TICK_LABELS). The default keeps them in, which
+ * is what the fit has done since rule 5 shipped (2026-10-21). A backtest has to show the two
+ * rules share a base rate before that default changes.
+ */
+export function trainsOnLabelRule(labelRule: number | undefined, excludeFineTickLabels = false): boolean {
+  if (!isCurrentLabelRule({ labelRule })) return false;
+  if (excludeFineTickLabels && labelRule === FINE_TICK_LABEL_RULE) return false;
+  return true;
+}
+
+/**
+ * The slice of the label window one sweep may fold curve prints into. `afterMs` is exclusive
+ * and never before the anchor. `untilMs` is inclusive and never after the label window (30
+ * minutes): a print past that window can still move the 24h run peak, but only from the minute
+ * sample, not from a curve tick the tape happened to still hold. Null when the slice is empty.
+ */
+export function fineTickWindow(
+  anchorAt: Date,
+  seenUpToMs: number,
+  observedAtMs: number,
+): { afterMs: number; untilMs: number } | null {
+  const start = anchorAt.getTime();
+  const end = start + CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
+  const afterMs = Math.max(seenUpToMs, start);
+  const untilMs = Math.min(observedAtMs, end);
+  if (!(untilMs > afterMs)) return null;
+  return { afterMs, untilMs };
+}
+
+/**
+ * The dollar print a curve scale may divide by. A curve-derived tick is never one: once it is
+ * written into lastPriceUsd, the next sweep with no fresh dollar print would divide that scaled
+ * price by a later curve and the scale would drift. `lastDollar*` is the last real dollar print.
+ * A row that has not folded a curve print yet (rule below 5) may still use lastPriceUsd, which
+ * on those rows is a dollar print.
+ */
+export function dollarScaleBasis(input: {
+  candidate: { at: Date; priceUsd: number } | null;
+  lastDollarAt: Date | null;
+  lastDollarPriceUsd: number | null;
+  labelRule: number;
+  lastPriceUsd: number | null;
+  lastCheckedAt: Date | null;
+}): { at: Date; priceUsd: number } | null {
+  if (input.candidate && input.candidate.priceUsd > 0) {
+    return { at: input.candidate.at, priceUsd: input.candidate.priceUsd };
+  }
+  if (
+    input.lastDollarAt &&
+    input.lastDollarPriceUsd !== null &&
+    input.lastDollarPriceUsd > 0 &&
+    !Number.isNaN(input.lastDollarAt.getTime())
+  ) {
+    return { at: input.lastDollarAt, priceUsd: input.lastDollarPriceUsd };
+  }
+  if (
+    input.labelRule < FINE_TICK_LABEL_RULE &&
+    input.lastCheckedAt &&
+    input.lastPriceUsd !== null &&
+    input.lastPriceUsd > 0
+  ) {
+    return { at: input.lastCheckedAt, priceUsd: input.lastPriceUsd };
+  }
+  return null;
+}
+
+/** Running total of label-window milliseconds the curve tape covered, capped at the window. */
+export function nextCurveTapeCoveredMs(
+  prev: number | null | undefined,
+  addedMs: number,
+  windowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000,
+): number {
+  const base = typeof prev === "number" && Number.isFinite(prev) && prev > 0 ? prev : 0;
+  const add = Number.isFinite(addedMs) && addedMs > 0 ? addedMs : 0;
+  return Math.min(windowMs, base + add);
+}
+
 /** How long the WIN has to land in - "2x within 15 minutes" of the alert. */
 export const WIN_WINDOW_MINUTES = 15;
 /** How long the GOAL has to land in - "4x within 30 minutes" of the alert. */
@@ -374,27 +454,65 @@ export interface CurveLabelPrices {
 }
 
 /**
+ * Pump.fun tokens have 6 decimals (wallets/pumpTradeEvents.ts). The curve tape stores
+ * virtualQuote / virtualToken, which for a SOL quote is lamports per raw token.
+ */
+export const PUMP_CURVE_TOKEN_DECIMALS = 6;
+const LAMPORTS_PER_SOL = 1e9;
+
+/**
+ * USD per one curve-price unit for a SOL-quoted Pump.fun curve: `solUsd * 10^decimals / 1e9`.
+ * SOL moves a fraction of a percent a minute, so this scale does not depend on which instant a
+ * lagged dollar print was paired with. Null when `solUsd` is not a positive finite price.
+ */
+export function pumpCurveUsdPerUnit(
+  solUsd: number,
+  tokenDecimals = PUMP_CURVE_TOKEN_DECIMALS,
+): number | null {
+  if (!(solUsd > 0) || !Number.isFinite(solUsd)) return null;
+  if (!Number.isInteger(tokenDecimals) || tokenDecimals < 0 || tokenDecimals > 12) return null;
+  const scale = (solUsd * 10 ** tokenDecimals) / LAMPORTS_PER_SOL;
+  return Number.isFinite(scale) && scale > 0 ? scale : null;
+}
+
+/**
  * Dollar ticks for curve prints the minute sample missed. `usd` is a dollar price observed at
- * `usd.at` (this sweep's print, or the row's previous one when this sweep has none). The scale is
- * that dollar price divided by the curve price in force at the same instant — the tape's price is
- * a step, so the newest print at or before `usd.at` is exact then. Each change at a different
- * millisecond becomes a dollar tick for applyPriceTick. Empty when the tape does not cover the
- * dollar print: no scale, so a coin with no curve tape is left on the minute sample.
+ * `usd.at` (this sweep's print, or the row's previous one when this sweep has none).
+ *
+ * `usdPerCurveUnit`, when set, is the scale: curve price times that factor is dollars. The
+ * outcome watcher passes `pumpCurveUsdPerUnit` for a SOL-quoted curve. Without it, the scale is
+ * the dollar print divided by the curve price in force at `usd.at`. That pair is exact only when
+ * the print and the curve are the same instant. DexScreener runs 45-60s behind the market
+ * (DEXSCREENER_LAG_MS). A print from the start of that lag, divided by the curve 15s later,
+ * scales every other print by how far the coin moved in those 15s: a dump that sticks fakes a
+ * 2x on the earlier prints and hides the 50% stop, and a pump that sticks hides the 2x.
+ *
+ * Each change at a millisecond other than the dollar print's becomes a tick for applyPriceTick.
+ * Empty when there is no scale: no tape covering the dollar print, and no SOL scale either, so a
+ * coin with no curve tape stays on the minute sample.
  */
 export function dollarTicksFromCurve(
   prices: CurveLabelPrices,
   usd: { at: Date; priceUsd: number },
+  usdPerCurveUnit?: number,
 ): { priceUsd: number; at: Date }[] {
   if (!(usd.priceUsd > 0) || !Number.isFinite(usd.priceUsd)) return [];
   const usdMs = usd.at.getTime();
-  let curveAtUsd: number | null = null;
-  if (prices.basis && prices.basis.at <= usdMs && prices.basis.price > 0) curveAtUsd = prices.basis.price;
-  for (const change of prices.changes) {
-    if (change.at > usdMs) break;
-    if (change.price > 0) curveAtUsd = change.price;
+  const absolute =
+    typeof usdPerCurveUnit === "number" && Number.isFinite(usdPerCurveUnit) && usdPerCurveUnit > 0
+      ? usdPerCurveUnit
+      : null;
+  let scale = absolute;
+  if (scale === null) {
+    let curveAtUsd: number | null = null;
+    if (prices.basis && prices.basis.at <= usdMs && prices.basis.price > 0) curveAtUsd = prices.basis.price;
+    for (const change of prices.changes) {
+      if (change.at > usdMs) break;
+      if (change.price > 0) curveAtUsd = change.price;
+    }
+    if (curveAtUsd === null || !(curveAtUsd > 0)) return [];
+    scale = usd.priceUsd / curveAtUsd;
   }
-  if (curveAtUsd === null || !(curveAtUsd > 0)) return [];
-  const scale = usd.priceUsd / curveAtUsd;
   const ticks: { priceUsd: number; at: Date }[] = [];
   for (const change of prices.changes) {
     if (change.at === usdMs || !(change.price > 0) || !Number.isFinite(change.price)) continue;
