@@ -236,8 +236,11 @@ export interface Token {
   /** The last measured top-10 wallet shares, from any scan - for when the snapshots lack one. */
   lastEmptyTop10WalletPct?: number | null;
   lastFreshTop10WalletPct?: number | null;
-  /** Where the coin's creator fee goes, from its TokenSage read; null when the read doesn't say. */
-  creatorFee?: { destination: string; summary: string | null } | null;
+  /**
+   * Where the coin's creator fee goes, from its TokenSage read; null when the read doesn't say.
+   * `charityName` is the organization a Pump.fun charity coin names (user ask 2026-10-21).
+   */
+  creatorFee?: { destination: string; summary: string | null; charityName?: string | null } | null;
   /** The coin's own X and website links as found at discovery (https only); null when it has none. */
   twitterUrl?: string | null;
   websiteUrl?: string | null;

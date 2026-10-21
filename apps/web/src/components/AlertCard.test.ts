@@ -356,6 +356,26 @@ describe("tiles read the newest scan (user decision 2026-10-17)", () => {
     );
   });
 
+  it("carries a Pump.fun charity name into the token details (user ask 2026-10-21)", () => {
+    const name = "American Red Cross";
+    const readings = cardReadings({
+      snapshot: { takenAt: "2026-10-21T00:00:00.000Z" },
+      latestSnapshot: null,
+      token: {
+        creatorFee: { destination: "charity", summary: "creator fees go to charity", charityName: name },
+      },
+    } as unknown as Card);
+    expect(readings.charityName).toBe(name);
+    expect(readings.feeLine).toBe("Creator fees go to charity.");
+    expect(
+      cardReadings({
+        snapshot: { takenAt: "2026-10-21T00:00:00.000Z" },
+        latestSnapshot: null,
+        token: { creatorFee: { destination: "creator", summary: null, charityName: name } },
+      } as unknown as Card).charityName,
+    ).toBeNull();
+  });
+
   it("reads wallet tiles newest first on the card, alert first in the token view", () => {
     expect(cardReadings(c, "newest")).toMatchObject({
       largestPct: 9,

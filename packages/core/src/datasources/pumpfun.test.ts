@@ -1,6 +1,12 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ipfsMetadataCid, LIST_BLOCK_BACKOFF_MS, parseLaunchMetadata, PumpFunClient } from "./pumpfun.js";
+import {
+  charityNameFromPumpCoin,
+  ipfsMetadataCid,
+  LIST_BLOCK_BACKOFF_MS,
+  parseLaunchMetadata,
+  PumpFunClient,
+} from "./pumpfun.js";
 
 let server: Server | undefined;
 
@@ -133,6 +139,70 @@ describe("PumpFunClient Mayhem flag", () => {
     expect(flag.get("Done")).toBe(true);
     expect(flag.get("Null")).toBeUndefined();
     expect(flag.get("None")).toBeUndefined();
+  });
+});
+
+describe("charityNameFromPumpCoin", () => {
+  const hospital = "St. Jude Children's Research Hospital";
+
+  it("reads charity_name on a coin Pump.fun marks is_charity", () => {
+    expect(charityNameFromPumpCoin({ is_charity: true, charity_name: `  ${hospital}  ` })).toBe(hospital);
+  });
+
+  it("reads charity.name when the name is nested, and ignores the coin's own name", () => {
+    expect(
+      charityNameFromPumpCoin({
+        is_charity: true,
+        name: "KindnessCoin",
+        charity: { name: "American Red Cross" },
+      }),
+    ).toBe("American Red Cross");
+  });
+
+  it("is blank unless the coin is a charity coin with a real name", () => {
+    expect(charityNameFromPumpCoin({ is_charity: false, charity_name: hospital })).toBeNull();
+    expect(charityNameFromPumpCoin({ is_charity: true })).toBeNull();
+    expect(charityNameFromPumpCoin({ is_charity: true, charity_name: "   " })).toBeNull();
+    expect(
+      charityNameFromPumpCoin({
+        is_charity: true,
+        charity_name: "H16fEMZN9b8Zmhh5Ara343WdZdSdgn2P8oUkAGdB57Ru",
+      }),
+    ).toBeNull();
+    expect(charityNameFromPumpCoin(null)).toBeNull();
+  });
+});
+
+describe("PumpFunClient.charityName", () => {
+  async function serveCoin(status: number, body: unknown): Promise<string> {
+    server = createServer((_req, res) => {
+      res.statusCode = status;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(body));
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (typeof address === "string" || address === null) throw new Error("failed to bind test server");
+    return `http://127.0.0.1:${address.port}`;
+  }
+
+  it("loads the charity name from coins-v2", async () => {
+    const url = await serveCoin(200, {
+      mint: "m",
+      is_charity: true,
+      charity_name: "National Breast Cancer Foundation",
+    });
+    expect(await new PumpFunClient({ baseUrl: url }).charityName("m")).toBe(
+      "National Breast Cancer Foundation",
+    );
+  });
+
+  it("is null when Pump.fun has no such coin, and throws when the host fails", async () => {
+    const url = await serveCoin(404, { message: "Not Found" });
+    expect(await new PumpFunClient({ baseUrl: url }).charityName("m")).toBeNull();
+    await new Promise<void>((resolve) => server!.close(() => resolve()));
+    const failing = await serveCoin(500, {});
+    await expect(new PumpFunClient({ baseUrl: failing }).charityName("m")).rejects.toThrow();
   });
 });
 
