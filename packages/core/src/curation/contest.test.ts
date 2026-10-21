@@ -9,6 +9,7 @@ import {
   TREES_NO_TOKENSAGE_CONTESTANT,
   TREES_NO_TOKENSAGE_FEATURES,
   HIGH_PRECISION_CUTOFF_SHARE,
+  HIGH_PRECISION_SHARE_BAND,
   RECENT_HALF_LIFE_DAYS,
   SHARP_DEEP_TREES_CONTESTANT,
   SHARP_SURVIVOR_CONTESTANT,
@@ -126,6 +127,14 @@ describe("contestant roster", () => {
 });
 
 describe("the high-precision seats", () => {
+  it("anchors the cutoff at the top 8% of decision moments", () => {
+    // 2026-10-21 user ask: narrower than the top 12%. The walk-forward in the constant's comment
+    // is the reason it stops here: top 8% caught 25.4% 2x and 10.6% 4x, against 23.7% and 9.1%
+    // at 12%. Top 5% caught only 8% of the runners.
+    expect(HIGH_PRECISION_CUTOFF_SHARE).toBe(0.08);
+    expect(HIGH_PRECISION_SHARE_BAND).toBe(0.03);
+  });
+
   it("are learners at their own share cutoff, outside the combiners and evolution, and can be the default", () => {
     for (const id of [SHARP_TREES_CONTESTANT, SHARP_SURVIVOR_CONTESTANT]) {
       const spec = contestantSpec(id)!;

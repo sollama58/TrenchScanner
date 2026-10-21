@@ -23,10 +23,10 @@ describe("modelProfile", () => {
     });
     expect(profile("linear-recent")).toMatchObject({ method: "formula", memoryDays: 3 });
     expect(profile("order-flow").reads).toBe("The last few minutes of trading");
-    expect(profile("sharp-survivor")).toMatchObject({ goal: "2x", method: "two-step", aimsToCallPct: 12 });
+    expect(profile("sharp-survivor")).toMatchObject({ goal: "2x", method: "two-step", aimsToCallPct: 8 });
     expect(profile("catcher")).toMatchObject({ goal: "catch", aimsToCallPct: 35 });
-    expect(profile("return-regression")).toMatchObject({ method: "regression", aimsToCallPct: 12 });
-    expect(profile("profit-factor")).toMatchObject({ goal: "return", method: "scales", aimsToCallPct: 12 });
+    expect(profile("return-regression")).toMatchObject({ method: "regression", aimsToCallPct: 8 });
+    expect(profile("profit-factor")).toMatchObject({ goal: "return", method: "scales", aimsToCallPct: 8 });
     expect(profile("runner").goal).toBe("moonshot");
     expect(profile("trees-no-tokensage").reads).toBe("Every signal except TokenSage's read");
     expect(profile("gems").waitsFor).toBe("the Gemerald filter's go-ahead");

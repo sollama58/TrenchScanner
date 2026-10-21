@@ -691,18 +691,31 @@ export async function runCandidateWatchJob(
           data.hit10xIn1h = tenX;
         }
         data.labelValue = closedLabels.labelValue;
-        // The call's return under the fixed exit plan, closing a call that never sold at this
+        // The call's return under the fixed exit plan. A call that never sold closes at this
         // tick's price (the first seen at or after the window closed) or, without one, the last
-        // price the row saw. A call that sold is still holding its trailing share: its return
-        // lands when that share is out (below), and until then the row stays on watch.
+        // price the row saw. A call that sold keeps its trailing share unless this close is
+        // already through the level of the high the trail arms from: then that share is out at
+        // the close. Otherwise the return lands when the share is out, and the row stays on watch.
+        let armedFromPeak = false;
         if (merged.trailHighPriceUsd == null && exitPlanPositionOpen({ ...merged, simReturnPct: null })) {
           // Sold inside the window on a tick this build never saw (a row open when the trail
           // shipped): the trail arms now, from the window's peak, the highest price since the sale.
           const high = cleanPeakPriceUsd(merged);
           merged.trailHighPriceUsd = high;
           data.trailHighPriceUsd = high;
+          armedFromPeak = true;
         }
-        simReturnPct = simulateExitPlan(merged, price ?? row.lastPriceUsd);
+        const closePrice = price ?? row.lastPriceUsd;
+        // 2026-10-21 user ask: those ticks ran before the arm, so a close already at or under the
+        // level of this peak never reached applyTrailTick. Fold it now. The exit is recorded on
+        // the row (training replays the stored exit, not the close). A close still above the level
+        // leaves the share open. A trail this sweep already armed does not get the close twice.
+        if (armedFromPeak && closePrice != null && closePrice > 0) {
+          const trailClose = applyTrailTick(merged, closePrice, priceAt);
+          Object.assign(merged, trailClose);
+          Object.assign(data, trailClose);
+        }
+        simReturnPct = simulateExitPlan(merged, closePrice);
         data.simReturnPct = simReturnPct;
         finalized += 1;
 

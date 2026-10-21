@@ -39,7 +39,7 @@ import type { CuratorLearner, SeatGoal } from "./trainer.js";
  *  - "agreement": how many learners call the token at their own cutoff, nothing fitted
  *    (curation/agreement.ts) - the tokens the room agrees on, most agreed first.
  *    Two learner seats are "standalone" (Sharp Trees, Sharp Survivor): a tree recipe whose
- *    cutoff passes only its top 12% or so of decision moments, outside the combiners and
+ *    cutoff passes only its top 8% or so of decision moments, outside the combiners and
  *    evolution (see ContestantSpec.standalone). Sharp Survivor took over from Sharp Deep Trees
  *    (retired, user decision 2026-10-14).
  *    Gems (user ask 2026-10-17) is a standalone seat too, with a gate: it considers only tokens
@@ -293,24 +293,33 @@ export function isMemberLearner(spec: ContestantSpec): boolean {
 /**
  * The high-precision seats' cutoff (user ask 2026-10-12: "the highest % 2x/4x/10x possible,
  * while also trying to only alert about 6/hr ... can be more but generally shouldn't be less";
- * 2026-10-13: "find the highest returning runners, and call only those"): the top 12% of decision
- * moments, moved within HIGH_PRECISION_SHARE_BAND by hit rate (PrecisionTargets.targetShare).
- * At the 50-60 decision moments an hour the feed saw on 10-12, 12% is 6-7 calls an hour.
+ * 2026-10-13: "find the highest returning runners, and call only those"; 2026-10-21: narrow it).
+ * The top 8% of decision moments, moved within HIGH_PRECISION_SHARE_BAND by hit rate
+ * (PrecisionTargets.targetShare).
  *
- * It replaces a pace floor of 8 calls per exam hour (PrecisionTargets.minCallsPerHour). That
- * floor was set when the exam saw about 42 moments an hour, so it meant the top fifth; once the
- * exam graded rule-4 rows only and grew to 70% of the history it saw about 33 an hour, the floor
- * meant the top quarter to third, and live the seats sent 21-24 calls an hour (10-13 00:00-04:00,
- * against Trees' 20), no sharper than the field. A share carries over from the exam to the live
- * feed; a count per exam hour does not.
+ * It was the top 12% from 2026-10-13 through 2026-10-21. At the 50-60 decision moments an hour
+ * the feed saw on 10-12, 12% is 6-7 calls an hour and 8% is about 4-5, under that 6/hr floor.
+ * The band can still sit the cutoff as high as 11% (about 6 an hour when the feed is busy).
+ * Top 5% was measured and not taken: it catches about 8% of the runners.
+ *
+ * The 12% anchor replaced a pace floor of 8 calls per exam hour (PrecisionTargets.minCallsPerHour).
+ * That floor was set when the exam saw about 42 moments an hour, so it meant the top fifth; once
+ * the exam graded rule-4 rows only and grew to 70% of the history it saw about 33 an hour, the
+ * floor meant the top quarter to third, and live the seats sent 21-24 calls an hour (10-13
+ * 00:00-04:00, against Trees' 20), no sharper than the field. A share carries over from the exam
+ * to the live feed; a count per exam hour does not.
  * Walk-forward replay, 12-hour blocks 10-09..10-13 (rule-4 grades, base 2x 15%), each block's
- * cutoff chosen on the three days before it (2x / 4x / runners caught):
+ * cutoff chosen on the three days before it (2x / 4x / runners caught). The 2026-10-21 step is
+ * the top 8% row, not the top 5%:
  *  - Sharp Trees' recipe: floor 8/h passed 25% of moments, 20.9% / 7.6% / 41%; top 12% +-3:
  *    23.7% / 9.1% / 24%; top 8%: 25.4% / 10.6% / 16%; top 5%: 28.2% / 13.6% / 8%.
  *  - Sharp Deep Trees' recipe: floor 8/h passed 32% of moments, 21.7% / 8.3% / 55%; top 12% +-3:
  *    21.6% / 8.8% / 17%. Its ranking does not get sharper toward the top on this data.
+ *
+ * A model already serving keeps the cutoff it was trained with. This share is what the next
+ * train writes into a new high-precision recipe.
  */
-export const HIGH_PRECISION_CUTOFF_SHARE = 0.12;
+export const HIGH_PRECISION_CUTOFF_SHARE = 0.08;
 /** How far, as a share of moments, the high-precision cutoff may move from its anchor. */
 export const HIGH_PRECISION_SHARE_BAND = 0.03;
 
@@ -342,7 +351,7 @@ export function isTraderMember(spec: ContestantSpec): boolean {
  *    a trade under the site's exit plan (+4.3%, 7d);
  *  - no TokenSage read: Simple Trees, Trees' twin without it, matched or beat Trees in every window;
  *  - a short memory: Linear Recent (3-day half-life) 21.6-21.7%, Trees Recent (1.5 days) 22.3% (3d);
- *  - only its surest calls: Top Slice 21.6-21.8% and the Sharp seats' top-12% cutoff.
+ *  - only its surest calls: Top Slice 21.6-21.8% and the Sharp seats' high-precision cutoff.
  * The spread between seats is inside noise at these counts; the gate is what makes Gems different.
  */
 export const GEMS_RECIPE: CuratorRecipe = {
@@ -367,7 +376,7 @@ export const WINNERS_SEAT_INPUTS: readonly CandidateFeatureName[] = WINNER_FOLLO
  * Winners (user ask 2026-10-17: "a model that learns based on the top-performing winner wallets",
  * leaving out wallets whose wins came from tokens transferred in, and learning how those wallets
  * trade; notes/winners-model-2026-10-17): Gems' shape - Survivor's two boosted-tree stages on every
- * input but TokenSage's, a 3-day half-life, the Sharp seats' top-12% cutoff - plus the clean
+ * input but TokenSage's, a 3-day half-life, the Sharp seats' high-precision cutoff - plus the clean
  * winners' reading of the newest trades (WINNERS_SEAT_INPUTS, core's wallets/winnerFollow.ts):
  * their share of the buyers and the SOL, the buyers' own 2x record, and how the winners are trading
  * the coin (conviction, buying in against getting out, their share of the sellers). Every other
@@ -576,9 +585,9 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: SHARP_TREES_CONTESTANT,
     name: "Sharp",
     description:
-      "Slow, coarse boosted trees (depth 4, 100 rows a leaf) alerting only on their surest tokens: about the top 12% of decision moments, moved by 2x record",
+      "Slow, coarse boosted trees (depth 4, 100 rows a leaf) alerting only on their surest tokens: about the top 8% of decision moments, moved by 2x record",
     summary:
-      "Alerts only on the tokens it is surest of, about 6-8 an hour, for the best hit rate rather than catching every runner.",
+      "Alerts only on the tokens it is surest of, about 4-5 an hour, for the best hit rate rather than catching every runner.",
     role: "learner",
     recipe: {
       learner: "gbdt",
@@ -592,9 +601,9 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: SHARP_DEEP_TREES_CONTESTANT,
     name: "Sharp Deep Trees",
     description:
-      "Deep Trees' boosted trees, trained on a clean 2x, alerting only on their surest tokens: about the top 12% of decision moments, moved by 2x record",
+      "Deep Trees' boosted trees, trained on a clean 2x, alerting only on their surest tokens: about the top 8% of decision moments, moved by 2x record",
     summary:
-      "Alerts only on the tokens Deep Trees' trees are surest of, about 6-8 an hour, for the best hit rate rather than catching every runner.",
+      "Alerts only on the tokens Deep Trees' trees are surest of, about 4-5 an hour, for the best hit rate rather than catching every runner.",
     role: "learner",
     recipe: {
       learner: "gbdt",
@@ -616,9 +625,9 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: SHARP_SURVIVOR_CONTESTANT,
     name: "Sharp Survivor",
     description:
-      "Survivor's two boosted-tree stages (first whether it holds above the stop, then whether it doubles), trained on a clean 2x, alerting only on their surest tokens: about the top 12% of decision moments, moved by 2x record",
+      "Survivor's two boosted-tree stages (first whether it holds above the stop, then whether it doubles), trained on a clean 2x, alerting only on their surest tokens: about the top 8% of decision moments, moved by 2x record",
     summary:
-      "Asks first whether a token will avoid a 50% drop, then whether it will double, and alerts only on the ones it is surest of, about 6-8 an hour.",
+      "Asks first whether a token will avoid a 50% drop, then whether it will double, and alerts only on the ones it is surest of, about 4-5 an hour.",
     role: "learner",
     recipe: { learner: "gbdt", twoStage: true, cutoffShare: HIGH_PRECISION_CUTOFF_SHARE, goal: "2x" },
     standalone: true,
@@ -675,7 +684,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: RETURN_REGRESSION_CONTESTANT,
     name: "Profit",
     description:
-      "Boosted trees fitted straight to each alert's return under the exit plan (capped at +500%), with no split into 2x and crash odds, alerting only on the coins it expects to pay most: about the top 12% of decision moments; judged on return",
+      "Boosted trees fitted straight to each alert's return under the exit plan (capped at +500%), with no split into 2x and crash odds, alerting only on the coins it expects to pay most: about the top 8% of decision moments; judged on return",
     summary:
       "Learns how much an alert makes under the exit plan, and alerts only on the coins it expects to pay most.",
     role: "learner",
@@ -701,7 +710,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: PROFIT_FACTOR_CONTESTANT,
     name: "Profit Factor",
     description:
-      "Boosted trees on whether an alert made money under the exit plan, each training alert weighted by how much it made or lost (capped at +500%), so the score is the money won against the money lost by coins like it; alerting on about the top 12% of decision moments; judged on return",
+      "Boosted trees on whether an alert made money under the exit plan, each training alert weighted by how much it made or lost (capped at +500%), so the score is the money won against the money lost by coins like it; alerting on about the top 8% of decision moments; judged on return",
     summary:
       "Learns which kinds of coins win more money than they lose, counting every past alert by what it actually made or lost, and alerts on the ones where the wins outweigh the losses most.",
     role: "learner",
@@ -719,7 +728,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: GEMS_CONTESTANT,
     name: "Gems",
     description:
-      "Only tokens that pass the Gemerald filter (a frozen copy): Survivor's two boosted-tree stages on every input but TokenSage's, mostly the last few days, alerting only on its surest tokens - about the top 12% of Gemerald's moments, moved by 2x record, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model, among the coins in the top 60% of its 2x odds)",
+      "Only tokens that pass the Gemerald filter (a frozen copy): Survivor's two boosted-tree stages on every input but TokenSage's, mostly the last few days, alerting only on its surest tokens - about the top 8% of Gemerald's moments, moved by 2x record, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model, among the coins in the top 60% of its 2x odds)",
     summary:
       "Looks only at coins the Gemerald filter lets through, asks whether each will avoid a 50% drop and then double, and alerts only on the ones it is surest of.",
     role: "learner",
@@ -733,7 +742,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: WINNERS_CONTESTANT,
     name: "Winners",
     description:
-      "Who is buying and how, read through the best wallets' records: the clean Winner wallets' (no win fed by tokens transferred in) share of the newest buyers and of the SOL, the buyers' own 2x record, how hard the winners are buying against their usual stake and whether they are buying in or getting out, beside every input but TokenSage's. Survivor's two boosted-tree stages, mostly the last few days, alerting only on its surest tokens - about the top 12% of the moments the newest trades were read on, moved by 2x record, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model, among the coins in the top 60% of its 2x odds)",
+      "Who is buying and how, read through the best wallets' records: the clean Winner wallets' (no win fed by tokens transferred in) share of the newest buyers and of the SOL, the buyers' own 2x record, how hard the winners are buying against their usual stake and whether they are buying in or getting out, beside every input but TokenSage's. Survivor's two boosted-tree stages, mostly the last few days, alerting only on its surest tokens - about the top 8% of the moments the newest trades were read on, moved by 2x record, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model, among the coins in the top 60% of its 2x odds)",
     summary:
       "Watches which proven winning wallets are trading a coin right now and how (how big they are buying, whether they are getting in or out), leaving out wallets whose wins came from tokens sent to them, weighs that with the rest of the coin's picture, and alerts only on the ones it is surest of.",
     role: "learner",
