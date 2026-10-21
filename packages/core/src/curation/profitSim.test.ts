@@ -140,6 +140,23 @@ describe("simulateExitPlan under the default plan (35% at 2x, 30% at 4x, 25% at 
       trailExitPriceUsd: 2.9,
     });
   });
+
+  it("fills the remainder at a close already through the trail of the high it was armed from", () => {
+    // 2026-10-21 user ask: the window close can arm the trail from a 5x peak (40% level at 3x)
+    // and grade that same close without a trail tick. 2.9 is already through it, so the rest
+    // sells there: 35% at 2x, 30% at 4x, 35% at 2.9. 4.5 is still above the level, so it stays
+    // open. A trail that already fired keeps its own price.
+    const armed = row({ peakBeforeStopPriceUsd: 5, peak1hPriceUsd: 5, trailHighPriceUsd: 5 });
+    expect(simulateExitPlan(armed, 2.9)).toBeCloseTo((0.35 * 2 + 0.3 * 4 + 0.35 * 2.9 - 1) * 100, 6);
+    expect(simulateExitPlan(armed, 4.5)).toBeNull();
+    expect(exitPlanPositionOpen(armed)).toBe(true);
+    const fired = row({
+      ...armed,
+      trailExitAt: at,
+      trailExitPriceUsd: 3,
+    });
+    expect(simulateExitPlan(fired, 2.9)).toBeCloseTo((0.35 * 2 + 0.3 * 4 + 0.35 * 3 - 1) * 100, 6);
+  });
 });
 
 describe("simulateExitPlan under the 2026-10-07 plan (half at 2x, rest trails 35% off its high, stop -50% before the sale)", () => {
