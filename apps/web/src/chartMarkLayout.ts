@@ -27,8 +27,9 @@ export interface PlacedMark<T> extends MarkSpot<T> {
 
 /** Stacked rows at most, each side; the rest fold into the outermost mark's "+N". */
 export const MAX_LEVELS = 3;
-/** The gap between the price's edge and the first mark, and between stacked marks (px). */
+/** How far the first mark sits from the candle's edge, before the distance selector (px). */
 const EDGE_GAP = 7;
+/** Fixed space between stacked marks on one column (px). The distance selector does not scale it. */
 const STACK_GAP = 3;
 /** Two marks this close side by side (px, past their radii) share a column. */
 const SIDE_GAP = 2;
@@ -36,9 +37,9 @@ const SIDE_GAP = 2;
 /**
  * The marks' places: in time order, each side apart, each mark on the first level where it touches
  * no mark already placed; a mark with no free level folds into the mark nearest its outermost
- * place. `pitch` is a level's height (the largest mark's diameter). `gap` scales that pitch and the
- * offset from the price (1 is today's); it does not change a mark's radius. `height` keeps marks
- * on the plot.
+ * place. `pitch` is a level's height (the largest mark's diameter). `gap` scales how far the
+ * stack sits from the candle (1 is today's); the gap between marks that share a column stays
+ * `pitch + STACK_GAP` pixels. It does not change a mark's radius. `height` keeps marks on the plot.
  */
 export function layoutMarks<T>(
   spots: readonly MarkSpot<T>[],
@@ -47,15 +48,16 @@ export function layoutMarks<T>(
   gap = 1,
 ): PlacedMark<T>[] {
   const g = gap > 0 && Number.isFinite(gap) ? gap : 1;
-  const step = pitch * g;
-  const edge = EDGE_GAP * g;
-  const stack = STACK_GAP * g;
+  // Level 0 matches the old scaled offset (edge and half a pitch). Further levels step by a
+  // fixed pitch, so the distance control moves the stack and leaves the stack's own gaps alone.
+  const row = pitch + STACK_GAP;
+  const base = (EDGE_GAP + pitch / 2) * g;
   const out: PlacedMark<T>[] = [];
   for (const side of ["buy", "sell"] as const) {
     const placed: PlacedMark<T>[] = [];
     const mine = spots.filter((s) => s.side === side).sort((a, b) => a.x - b.x);
     const yAt = (s: MarkSpot<T>, level: number) => {
-      const away = edge + step / 2 + level * (step + stack);
+      const away = base + level * row;
       const raw = side === "buy" ? s.edgeY + away : s.edgeY - away;
       // Kept on the plot: a buy at the bottom edge or a sale at the top stays in view.
       return Math.min(Math.max(raw, s.r + 1), Math.max(s.r + 1, height - s.r - 1));

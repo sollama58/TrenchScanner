@@ -255,7 +255,8 @@ export type MarkShape = (typeof MARK_SHAPES)[number];
 
 /**
  * How far chart trade marks sit from the candle (Customize › Chart wallet trades). Medium is today's
- * pitch. The factor scales the stack's pitch and its gap from the price, not a mark's radius.
+ * offset. The factor moves the stack off the price. It does not change the gap between marks in a
+ * stack, or a mark's radius.
  */
 export const MARK_GAP = { s: 0.75, m: 1, l: 1.4 } as const;
 export type MarkGap = keyof typeof MARK_GAP;

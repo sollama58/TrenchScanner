@@ -150,13 +150,27 @@ describe("parseFeedAppearance", () => {
       ]);
       expect(parseFeedAppearance({ chartEventFirst: bad }).chartEventFirst).toEqual(["filter", "model"]);
     }
-    expect(parseFeedAppearance({}).chartMarkKinds).toHaveLength(7);
+    expect(parseFeedAppearance({}).chartMarkKinds).toHaveLength(6);
     expect(parseFeedAppearance({}).chartMarkKinds).not.toContain("risky");
-    // A list saved before that with every kind on was the old default: it reads without risky.
+    expect(parseFeedAppearance({}).chartMarkKinds).not.toContain("winner");
+    // A list saved before that with every kind on was the old default: it reads without risky or winners.
     const all = ["kol", "known", "funded", "probable", "dev", "risky", "winner", "linked"];
     expect(parseFeedAppearance({ chartMarkKinds: all }).chartMarkKinds).not.toContain("risky");
+    expect(parseFeedAppearance({ chartMarkKinds: all }).chartMarkKinds).not.toContain("winner");
+    // Risky turned back on against rev 2 stays; winners were still that default, so they go off.
+    const riskyOn = parseFeedAppearance({ chartMarkKinds: all, chartMarksRev: 2 });
+    expect(riskyOn.chartMarkKinds).toContain("risky");
+    expect(riskyOn.chartMarkKinds).not.toContain("winner");
     // Turned back on since (saved with the new revision), or kept with another kind off, it stays.
-    expect(parseFeedAppearance({ chartMarkKinds: all, chartMarksRev: 2 }).chartMarkKinds).toContain("risky");
+    expect(parseFeedAppearance({ chartMarkKinds: all, chartMarksRev: 3 }).chartMarkKinds).toContain("risky");
+    expect(parseFeedAppearance({ chartMarkKinds: all, chartMarksRev: 3 }).chartMarkKinds).toContain("winner");
+    const rev2 = ["kol", "known", "funded", "probable", "dev", "winner", "linked"];
+    expect(parseFeedAppearance({ chartMarkKinds: rev2, chartMarksRev: 2 }).chartMarkKinds).not.toContain(
+      "winner",
+    );
+    expect(
+      parseFeedAppearance({ chartMarkKinds: ["kol", "winner"], chartMarksRev: 2 }).chartMarkKinds,
+    ).toEqual(["kol", "winner"]);
     expect(parseFeedAppearance({ chartMarkKinds: ["kol", "risky"] }).chartMarkKinds).toEqual([
       "kol",
       "risky",
