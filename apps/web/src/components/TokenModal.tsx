@@ -103,6 +103,7 @@ import {
   withLiveMarks,
 } from "../walletMarks";
 import { chartFlagKind } from "../chartEvents";
+import { DexInfoLabel, dexInfoChartMark } from "../dexInfoLabel";
 import { TradingChart, type ChartEvent, type ChartKind, type ChartTrade } from "./TradingChart";
 import { TokenPairBalances } from "./HeaderBalances";
 import { TradePanel, solText, tokensText } from "./TradePanel";
@@ -1036,6 +1037,7 @@ function TokenBody({
           <div className="tm-title-row">
             <h2 id="tm-title" className="tm-title" tabIndex={-1} autoFocus>
               {label}
+              <DexInfoLabel token={card.token} now={now} />
               {card.token.name && card.token.symbol && <span className="token-name"> {card.token.name}</span>}
             </h2>
             <MintChip mint={mint} />
@@ -2919,6 +2921,7 @@ export function ChartCard({
                 markShape={look.chartMarkShape}
                 markStem={look.chartMarkStem}
                 markGap={look.chartMarkGap}
+                dexInfo={dexInfoChartMark(card.token)}
                 live={view.live}
                 height={height}
                 trades={chartTrades}

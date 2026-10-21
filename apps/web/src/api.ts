@@ -240,8 +240,9 @@ export interface Token {
    * Where the coin's creator fee goes, from its TokenSage read; null when the read doesn't say.
    * `deskLine` is OTC Desks' reward routing when their roster names it. `deskRewards` is each
    * reward coin in that sentence (ticker or shortened mint, and the mint when known).
-   * `charityName` is the organization a Pump.fun charity coin names. Destination stays null when
-   * only the desk has spoken (user ask 2026-10-21).
+   * `charityName` is the organization a Pump.fun charity coin names. `bps` is the holder-reward
+   * tax in basis points (5 is 0.05%, 100 is 1%, 300 is 3%). Destination stays null when only the
+   * desk has spoken (user ask 2026-10-21).
    */
   creatorFee?: {
     destination: string | null;
@@ -249,6 +250,7 @@ export interface Token {
     deskLine?: string | null;
     deskRewards?: { label: string; mint: string | null }[] | null;
     charityName?: string | null;
+    bps?: number | null;
   } | null;
   /** The coin's own X and website links as found at discovery (https only); null when it has none. */
   twitterUrl?: string | null;
@@ -256,6 +258,15 @@ export interface Token {
   /** The coin the token's pair trades against (wrapped SOL for most); null until a reading names it. */
   quoteMint?: string | null;
   quoteSymbol?: string | null;
+  /**
+   * DexScreener enhanced token info (profile, links, images). True once a pair info block or a
+   * token-info payment was seen. Absent on API builds from before 2026-10-21.
+   */
+  dexInfo?: boolean;
+  /** ISO payment time from DexScreener orders. Null when the profile is known but the time is not. */
+  dexInfoPaidAt?: string | null;
+  /** The newest payment is an update (a later token-info order), not the first one. */
+  dexInfoUpdated?: boolean;
 }
 
 export interface Snapshot {

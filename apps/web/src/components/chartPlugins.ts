@@ -122,8 +122,19 @@ export interface OverlayTrade {
   side: "buy" | "sell";
 }
 
-/** What a placed mark on the chart is: a labeled wallet's trade, or the trader's own. */
-export type MarkItem = { mark: WalletMark; trade?: undefined } | { trade: OverlayTrade; mark?: undefined };
+/** DexScreener token info, paid or updated, drawn in the same band as the trade bubbles. */
+export interface OverlayDexInfo {
+  t: number;
+  /** The readout line: "DexScreener token info paid 2h ago". */
+  text: string;
+  updated: boolean;
+}
+
+/** What a placed mark on the chart is: a labeled wallet's trade, the trader's own, or DexScreener info. */
+export type MarkItem =
+  | { mark: WalletMark; trade?: undefined; dex?: undefined }
+  | { trade: OverlayTrade; mark?: undefined; dex?: undefined }
+  | { dex: OverlayDexInfo; mark?: undefined; trade?: undefined };
 
 /** A KOL's picture mark's radius (px), growing with the trade's size like the rings. */
 export function picRadius(sol: number): number {
@@ -144,6 +155,8 @@ export interface OverlayColors {
   path: string;
   pathBand: string;
   font: string;
+  /** DexScreener token-info bubble. Distinct from a dev's mark. */
+  dex: string;
   /** A wallet mark's colour and its text's, by kind (walletMarks.ts MarkKind). */
   wk: (kind: string) => { fill: string; ink: string };
   draw: DrawColors;
@@ -156,13 +169,20 @@ export interface OverlayState {
   y: (v: number) => number | null;
   /** The market cap the line or candles show at a time (ms). */
   valueAt: (t: number) => number | null;
-  /** The low and high there (the candle's; the price itself on the line), which marks hang from. */
+  /** The low and high there (the candle's; the price itself on the line). Marks clear the high. */
   rangeAt: (t: number) => { lo: number; hi: number } | null;
+  /**
+   * Y of the highest candle in view (smaller is higher). The trade bubbles sit in a band above
+   * it (user ask 2026-10-21). Null: each mark clears its own candle high.
+   */
+  seriesTop: () => number | null;
   events: OverlayEvent[];
   /** How far down the plot the events' flags start (px), clear of the readout. */
   flagTop: number;
   marks: WalletMark[];
   trades: OverlayTrade[];
+  /** DexScreener token-info payment, when the orders response gave a time. */
+  dexInfo: OverlayDexInfo | null;
   /** The predicted path, from the latest reading, drawn in the zone past the last candle. */
   path: PathStep[];
   pathZone: { x0: number; w: number } | null;
@@ -187,8 +207,10 @@ export interface OverlayState {
 /**
  * Everything the chart marks over its candles, as one series primitive: the alert and model lines
  * with their flags along the top, labeled wallets' trades as lettered marks (a circle, square or
- * diamond, filled for a buy, sized by SOL) or KOLs' pictures, the trader's own B and S arrows, an
- * optional line to the candle, the predicted path, and the drawings.
+ * diamond, filled for a buy, sized by SOL) or KOLs' pictures, the trader's own B and S arrows, a
+ * DexScreener token-info bubble when its payment time is known, an optional line to the candle,
+ * the predicted path, and the drawings. Trade bubbles sit in a band above the series
+ * (chartMarkLayout.ts, user ask 2026-10-21).
  */
 export class ChartOverlay implements ISeriesPrimitive<Time> {
   state: OverlayState;
@@ -306,33 +328,36 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
       }
     }
 
-    // The trades: buys hang under the price and sales sit over it, stacked where they'd touch.
-    // A line and a dot tie each stack to the price when the reader asks for one (chartMarkLayout.ts).
+    // Trade bubbles sit in one band above the series (user ask 2026-10-21). The candle high is
+    // each mark's own ceiling; seriesTop is the highest candle in view, which wins when it is
+    // higher, so a bubble cannot cover a neighbouring candle. Size scales the radius. Distance
+    // moves the band off the series; marks in one stack stay a fixed gap apart (chartMarkLayout.ts).
     const spots: MarkSpot<MarkItem>[] = [];
     const spot = (item: MarkItem, t: number, side: "buy" | "sell", r: number) => {
       const x = s.x(t);
       const v = s.valueAt(t);
       const range = s.rangeAt(t);
       const priceY = v === null ? null : s.y(v);
-      const edgeY = range === null ? priceY : s.y(side === "buy" ? range.lo : range.hi);
+      const edgeY = range === null ? priceY : s.y(range.hi);
       if (x === null || priceY === null || edgeY === null || x < -r || x > width + r) return;
       spots.push({ item, side, x, priceY, edgeY, r });
     };
-    // The trader's own first, so they take the places nearest the price.
-    // Size scales the radius. Distance moves the stack off the price; marks in one stack stay a
-    // fixed gap apart (chartMarkLayout.ts).
     const scale = s.markScale > 0 ? s.markScale : 1;
     const gap = s.markGap > 0 ? s.markGap : 1;
+    // The trader's own first, so at a shared time they take the row nearest the candles.
     for (const tr of s.trades) spot({ trade: tr }, tr.t, tr.side, 8 * scale);
+    if (s.dexInfo) spot({ dex: s.dexInfo }, s.dexInfo.t, "buy", 12 * scale);
     for (const m of s.marks)
       spot({ mark: m }, m.t, m.side, (s.pic(m) ? picRadius(m.sol) : markRadius(m.sol)) * scale);
-    const placed = layoutMarks(spots, MARK_PITCH * scale, height, gap);
+    const seriesTop = s.seriesTop() ?? undefined;
+    const placed = layoutMarks(spots, MARK_PITCH * scale, height, gap, seriesTop);
     this.placed = placed;
     // The line to the candle, under every mark: from the price's dot to the mark. Off by default.
     if (s.markStem) {
       for (const p of placed) {
-        const color = p.side === "buy" ? c.buy : c.sell;
-        const toward = p.side === "buy" ? p.y - p.r : p.y + p.r;
+        const color = p.item.dex ? c.dex : p.side === "buy" ? c.buy : c.sell;
+        // Every bubble is above the series, so the line meets the bottom of the bubble.
+        const toward = p.y + p.r;
         ctx.strokeStyle = color;
         ctx.globalAlpha = 0.55;
         ctx.lineWidth = hr;
@@ -350,8 +375,22 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
     ctx.textAlign = "center";
     for (const p of placed) {
       const { x, y, r } = p;
-      if (p.item.trade) {
-        // The trader's own: an arrow at the price, B or S on it.
+      if (p.item.dex) {
+        // DexScreener token info. "DS" is this payment, not a dev's mark (letter D).
+        ctx.beginPath();
+        ctx.arc(x * hr, y * vr, r * hr, 0, Math.PI * 2);
+        ctx.fillStyle = c.dex;
+        ctx.globalAlpha = 0.95;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = 1.5 * hr;
+        ctx.strokeStyle = c.page;
+        ctx.stroke();
+        ctx.fillStyle = c.page;
+        ctx.font = `800 ${Math.round(Math.max(7, r * 0.7) * vr)}px ${c.font}`;
+        ctx.fillText("DS", x * hr, (y + 0.5) * vr);
+      } else if (p.item.trade) {
+        // The trader's own: an arrow, B or S on it. Both sit in the band above the candles.
         const buy = p.side === "buy";
         ctx.fillStyle = buy ? c.buy : c.sell;
         ctx.beginPath();
@@ -364,7 +403,7 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
         ctx.font = `800 ${Math.round(8.5 * vr)}px ${c.font}`;
         ctx.fillText(buy ? "B" : "S", x * hr, (buy ? y + 1.5 : y - 1) * vr);
       } else {
-        const m = p.item.mark;
+        const m = p.item.mark!;
         const hot = s.hot.has(m) || p.more.some((o) => !!o.mark && s.hot.has(o.mark));
         const pic = s.pic(m);
         if (pic) {

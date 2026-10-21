@@ -2,6 +2,7 @@ import { Prisma, type TokenSnapshot } from "@prisma/client";
 import {
   prisma,
   PumpFunClient,
+  readCreatorFeeBps,
   WIN_WINDOW_MINUTES,
   GOAL_WINDOW_MINUTES,
   TEN_X_WINDOW_MINUTES,
@@ -72,6 +73,12 @@ export interface CardCreatorFee {
   deskLine?: string | null;
   /** Each reward coin in `deskLine`: its ticker or shortened mint, and the mint when known. */
   deskRewards?: OtcRewardCoin[] | null;
+  /**
+   * Creator fee in basis points when the read gave a whole rate from 1 to 10000 (5 is 0.05%).
+   * Null when it didn't. The card shows this beside the gift on a holder-reward coin (user ask
+   * 2026-10-21).
+   */
+  bps: number | null;
   /**
    * The charity's name for a Pump.fun charity coin (user ask 2026-10-21). Absent when the coin
    * is not a charity coin, or Pump.fun's payload did not name one.
@@ -149,6 +156,11 @@ export async function charityNamesByMint(mints: readonly string[]): Promise<Map<
  * The creator-fee read for each mint that has one, in one primary-key lookup. A failed lookup
  * leaves the cards without it rather than failing the feed: it is a tooltip line. The desk
  * roster is asked on the token page (`waitForDesk`); a feed uses the roster already in hand.
+ *
+ * The rate is feeCreatorBps when a read has stored it. Rows from before that column still keep
+ * creator_fee_bps inside the analysis document, and only a holder-reward coin with no column
+ * reads that one number (user ask 2026-10-21). A basic read outside the band does not keep the
+ * document, so the column is what those cards use after the next read.
  */
 export async function creatorFeesByMint(
   mints: readonly (string | undefined)[],
@@ -157,12 +169,24 @@ export async function creatorFeesByMint(
   const unique = [...new Set(mints.filter((m): m is string => typeof m === "string" && m !== ""))];
   if (unique.length === 0) return new Map();
   const [rows, desks] = await Promise.all([
-    prisma.tokenNarrative
-      .findMany({
-        where: { mintAddress: { in: unique }, feeDestination: { not: null } },
-        select: { mintAddress: true, feeDestination: true, feeSummary: true },
-      })
-      .catch(() => []),
+    prisma.$queryRaw<
+      {
+        mintAddress: string;
+        feeDestination: string | null;
+        feeSummary: string | null;
+        storedBps: number | null;
+        analysisBps: string | null;
+      }[]
+    >`
+      SELECT "mintAddress", "feeDestination", "feeSummary", "feeCreatorBps" AS "storedBps",
+             CASE
+               WHEN "feeCreatorBps" IS NULL AND "feeDestination" = 'holder_rewards'
+               THEN "analysis" #>> '{market,creator_fee,creator_fee_bps}'
+               ELSE NULL
+             END AS "analysisBps"
+      FROM "TokenNarrative"
+      WHERE "mintAddress" = ANY(${unique}::text[])
+        AND "feeDestination" IS NOT NULL`.catch(() => []),
     otcDeskFees(unique, { wait: opts?.waitForDesk === true }).catch(() => new Map<string, OtcDeskFee>()),
   ]);
   const out = new Map<string, CardCreatorFee>();
@@ -171,9 +195,11 @@ export async function creatorFeesByMint(
     return { deskLine: desk?.line ?? null, deskRewards: desk?.rewards ?? null };
   };
   for (const r of rows) {
+    if (!r.feeDestination) continue;
     out.set(r.mintAddress, {
       destination: r.feeDestination,
       summary: r.feeSummary,
+      bps: readCreatorFeeBps(r.storedBps ?? r.analysisBps),
       ...deskFields(r.mintAddress),
     });
   }
@@ -181,17 +207,18 @@ export async function creatorFeesByMint(
   if (charityMints.length > 0) applyCharityNames(out, await charityNamesByMint(charityMints));
   for (const [mint, desk] of desks) {
     if (!out.has(mint)) {
-      out.set(mint, { destination: null, summary: null, deskLine: desk.line, deskRewards: desk.rewards });
+      out.set(mint, {
+        destination: null,
+        summary: null,
+        bps: null,
+        deskLine: desk.line,
+        deskRewards: desk.rewards,
+      });
     }
   }
   return out;
 }
 
-/**
- * Each token's newest snapshot, in one statement: one index probe per token through
- * (tokenId, takenAt), returning the whole row. This was two round trips - the ids first, then
- * the rows by id - and a feed page runs it once per half (matches and curated calls).
- */
 export async function latestSnapshotsByToken(
   tokenIds: readonly string[],
 ): Promise<Map<string, TokenSnapshot & CarriedHolderTime>> {
@@ -401,6 +428,10 @@ export const TOKEN_CARD_SELECT = {
   description: true,
   discoverySource: true,
   dexBoosted: true,
+  // DexScreener token info (user ask 2026-10-21). The checked-at column stays off the card.
+  dexInfo: true,
+  dexInfoPaidAt: true,
+  dexInfoUpdated: true,
   firstInBandAt: true,
   lastViewedAt: true,
   liveMarketCapUsd: true,

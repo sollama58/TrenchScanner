@@ -51,6 +51,23 @@ describe("feeBadge", () => {
     expect(creatorFeeLine({ destination: "holder_rewards", summary: null, deskLine: desk })).toBe(desk);
   });
 
+  // User ask 2026-10-21: the holder-reward tax sits beside the gift, as a percent.
+  it("shows the holder-reward tax beside the gift as a percent", () => {
+    const tax = (bps: number | null | undefined, destination = "holder_rewards") =>
+      feeBadge({ destination, summary: null, bps })?.tax ?? null;
+    expect(tax(5)).toBe("0.05%");
+    expect(tax(100)).toBe("1%");
+    expect(tax(300)).toBe("3%");
+    expect(tax(95)).toBe("0.95%");
+    expect(tax(10)).toBe("0.1%");
+    expect(tax(null)).toBeNull();
+    expect(tax(undefined)).toBeNull();
+    expect(tax(0)).toBeNull();
+    expect(tax(10001)).toBeNull();
+    expect(tax(300, "wallet")).toBeNull();
+    expect(tax(300, "charity")).toBeNull();
+  });
+
   it("names the charity on the heart's tooltip when Pump.fun loaded one (user ask 2026-10-21)", () => {
     const name = "St. Jude Children's Research Hospital";
     expect(

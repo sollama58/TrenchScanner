@@ -53,6 +53,7 @@ import {
   socialLinks,
 } from "./AlertCard";
 import { CardSearchButton } from "./CardSearchButton";
+import { DexInfoLabel } from "../dexInfoLabel";
 import { QuickBuyPill } from "./QuickBuyPill";
 import { TokenImage } from "./TokenImage";
 import { FilterGlyph } from "./FilterBadge";
@@ -674,6 +675,7 @@ export function ScopeRow({
             </button>
           )}
           <QuotePill token={card.token} className="scope-quote" />
+          <DexInfoLabel token={card.token} now={now} />
           {copied && (
             <span className="scope-copied" role="status">
               Copied
@@ -701,11 +703,12 @@ export function ScopeRow({
           )}
           {fees && (
             <span
-              className={`fee-badge scope-fee fee-${fees.kind}`}
+              className={`fee-badge scope-fee fee-${fees.kind}${fees.tax ? " has-tax" : ""}`}
               title={fees.title}
-              aria-label={fees.title}
+              aria-label={fees.tax ? `${fees.title} Holder reward tax ${fees.tax}.` : fees.title}
             >
               <fees.Icon size={12} />
+              {fees.tax && <span className="fee-tax num">{fees.tax}</span>}
             </span>
           )}
           {filter && showSource && (

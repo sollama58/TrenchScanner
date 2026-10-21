@@ -102,10 +102,10 @@ export function WalletMarksPicker() {
               disabled={!on}
               title={
                 id === "s"
-                  ? "Smaller marks and pictures"
+                  ? "Smaller bubbles and pictures"
                   : id === "l"
-                    ? "Larger marks and pictures"
-                    : "The usual size"
+                    ? "Larger bubbles and pictures"
+                    : "Medium, the size the chart already draws"
               }
               onClick={() => setAppearance({ chartMarkScale: id })}
             >
@@ -153,9 +153,9 @@ export function WalletMarksPicker() {
         <div className="segmented small" role="radiogroup" aria-label="Distance from the candle">
           {(
             [
-              ["s", "Small", "Closer to the candle"],
-              ["m", "Medium", "The usual distance from the candle"],
-              ["l", "Large", "Farther from the candle"],
+              ["s", "Small", "Closer above the candles"],
+              ["m", "Medium", "The usual distance above the candles"],
+              ["l", "Large", "Farther above the candles"],
             ] as const
           ).map(([id, label, title]) => (
             <button
@@ -174,11 +174,12 @@ export function WalletMarksPicker() {
         </div>
       </div>
       <p className="faint small check-hint">
-        Buys hang under the price and sales sit over it, bigger for more SOL. A filled mark is a buy, a hollow
-        one a sale. Circle, square and diamond are the lettered wallet marks; a KOL&apos;s picture stays
-        round, and your own buys and sells stay arrows. Mark size scales the marks. Distance is how far they
-        sit from the candle, separate from that size. The line to the candle is off unless you turn it on.
-        Click a mark to open the wallet. Never under {MIN_SOL_FLOOR} SOL.
+        Bubbles sit in a band above the candles, so they don&apos;t cover them, and stack upward when several
+        share a time. Bigger for more SOL. A filled mark is a buy, a hollow one a sale. Circle, square and
+        diamond are the lettered wallet marks; a KOL&apos;s picture stays round, and your own buys and sells
+        stay arrows. Mark size is small, medium or large. Medium is the size the chart already draws. Distance
+        is how far the band sits above the candles, separate from that size. The line to the candle is off
+        unless you turn it on. Click a mark to open the wallet. Never under {MIN_SOL_FLOOR} SOL.
       </p>
     </div>
   );

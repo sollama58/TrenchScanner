@@ -6,6 +6,7 @@ import {
   basicXRetryable,
   narrativeDepthCovers,
   narrativeFieldsFromAnalysis,
+  readCreatorFeeBps,
   nowFieldsFromItem,
   tokenSageReadIsStale,
   tokenSageReferent,
@@ -986,7 +987,11 @@ describe("narrativeFieldsFromAnalysis on a rules-0.19.0 document (creator fee)",
       }),
       "complete",
     );
-    expect(holders).toMatchObject({ feeDestination: "holder_rewards", feeCreatorShare: 0 });
+    expect(holders).toMatchObject({
+      feeDestination: "holder_rewards",
+      feeCreatorShare: 0,
+      feeCreatorBps: null,
+    });
     const unknown = narrativeFieldsFromAnalysis(
       withFee({ destination: "unknown", shares: null }),
       "complete",
@@ -1001,11 +1006,36 @@ describe("narrativeFieldsFromAnalysis on a rules-0.19.0 document (creator fee)",
       feeCreatorShare: null,
       feeMutable: null,
       feeSummary: null,
+      feeCreatorBps: null,
     };
     expect(narrativeFieldsFromAnalysis(withFee(null), "partial")).toMatchObject(empty);
     expect(narrativeFieldsFromAnalysis(withFee(undefined, "0.18.0-full"), "complete")).toMatchObject(empty);
     expect(narrativeFieldsFromAnalysis({ mint: "X", market: null }, "complete")).toMatchObject(empty);
     expect(narrativeFieldsFromAnalysis(withFee("charity"), "complete")).toMatchObject(empty);
+  });
+
+  // User ask 2026-10-21: the holder-reward tax is creator_fee_bps (5 → 0.05%, 100 → 1%, 300 → 3%).
+  it("keeps a whole creator fee in basis points and drops anything that is not that rate", () => {
+    const bps = (creator_fee_bps: unknown) =>
+      narrativeFieldsFromAnalysis(
+        withFee({ destination: "holder_rewards", mechanism: "holder_rewards", creator_fee_bps }),
+        "complete",
+      ).feeCreatorBps;
+    expect(bps(5)).toBe(5);
+    expect(bps(100)).toBe(100);
+    expect(bps(300)).toBe(300);
+    expect(bps(10_000)).toBe(10_000);
+    expect(bps(0)).toBeNull();
+    expect(bps(10_001)).toBeNull();
+    expect(bps(5.5)).toBeNull();
+    expect(bps(0.05)).toBeNull();
+    // A digit string is the same rate read back as text from the stored analysis.
+    expect(bps("300")).toBe(300);
+    expect(bps("nope")).toBeNull();
+    expect(bps(null)).toBeNull();
+    expect(readCreatorFeeBps("300")).toBe(300);
+    expect(readCreatorFeeBps("5.5")).toBeNull();
+    expect(readCreatorFeeBps(300n)).toBe(300);
   });
 });
 
