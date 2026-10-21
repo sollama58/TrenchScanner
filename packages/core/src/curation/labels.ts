@@ -374,27 +374,65 @@ export interface CurveLabelPrices {
 }
 
 /**
+ * Pump.fun tokens have 6 decimals (wallets/pumpTradeEvents.ts). The curve tape stores
+ * virtualQuote / virtualToken, which for a SOL quote is lamports per raw token.
+ */
+export const PUMP_CURVE_TOKEN_DECIMALS = 6;
+const LAMPORTS_PER_SOL = 1e9;
+
+/**
+ * USD per one curve-price unit for a SOL-quoted Pump.fun curve: `solUsd * 10^decimals / 1e9`.
+ * SOL moves a fraction of a percent a minute, so this scale does not depend on which instant a
+ * lagged dollar print was paired with. Null when `solUsd` is not a positive finite price.
+ */
+export function pumpCurveUsdPerUnit(
+  solUsd: number,
+  tokenDecimals = PUMP_CURVE_TOKEN_DECIMALS,
+): number | null {
+  if (!(solUsd > 0) || !Number.isFinite(solUsd)) return null;
+  if (!Number.isInteger(tokenDecimals) || tokenDecimals < 0 || tokenDecimals > 12) return null;
+  const scale = (solUsd * 10 ** tokenDecimals) / LAMPORTS_PER_SOL;
+  return Number.isFinite(scale) && scale > 0 ? scale : null;
+}
+
+/**
  * Dollar ticks for curve prints the minute sample missed. `usd` is a dollar price observed at
- * `usd.at` (this sweep's print, or the row's previous one when this sweep has none). The scale is
- * that dollar price divided by the curve price in force at the same instant — the tape's price is
- * a step, so the newest print at or before `usd.at` is exact then. Each change at a different
- * millisecond becomes a dollar tick for applyPriceTick. Empty when the tape does not cover the
- * dollar print: no scale, so a coin with no curve tape is left on the minute sample.
+ * `usd.at` (this sweep's print, or the row's previous one when this sweep has none).
+ *
+ * `usdPerCurveUnit`, when set, is the scale: curve price times that factor is dollars. The
+ * outcome watcher passes `pumpCurveUsdPerUnit` for a SOL-quoted curve. Without it, the scale is
+ * the dollar print divided by the curve price in force at `usd.at`. That pair is exact only when
+ * the print and the curve are the same instant. DexScreener runs 45-60s behind the market
+ * (DEXSCREENER_LAG_MS). A print from the start of that lag, divided by the curve 15s later,
+ * scales every other print by how far the coin moved in those 15s: a dump that sticks fakes a
+ * 2x on the earlier prints and hides the 50% stop, and a pump that sticks hides the 2x.
+ *
+ * Each change at a millisecond other than the dollar print's becomes a tick for applyPriceTick.
+ * Empty when there is no scale: no tape covering the dollar print, and no SOL scale either, so a
+ * coin with no curve tape stays on the minute sample.
  */
 export function dollarTicksFromCurve(
   prices: CurveLabelPrices,
   usd: { at: Date; priceUsd: number },
+  usdPerCurveUnit?: number,
 ): { priceUsd: number; at: Date }[] {
   if (!(usd.priceUsd > 0) || !Number.isFinite(usd.priceUsd)) return [];
   const usdMs = usd.at.getTime();
-  let curveAtUsd: number | null = null;
-  if (prices.basis && prices.basis.at <= usdMs && prices.basis.price > 0) curveAtUsd = prices.basis.price;
-  for (const change of prices.changes) {
-    if (change.at > usdMs) break;
-    if (change.price > 0) curveAtUsd = change.price;
+  const absolute =
+    typeof usdPerCurveUnit === "number" && Number.isFinite(usdPerCurveUnit) && usdPerCurveUnit > 0
+      ? usdPerCurveUnit
+      : null;
+  let scale = absolute;
+  if (scale === null) {
+    let curveAtUsd: number | null = null;
+    if (prices.basis && prices.basis.at <= usdMs && prices.basis.price > 0) curveAtUsd = prices.basis.price;
+    for (const change of prices.changes) {
+      if (change.at > usdMs) break;
+      if (change.price > 0) curveAtUsd = change.price;
+    }
+    if (curveAtUsd === null || !(curveAtUsd > 0)) return [];
+    scale = usd.priceUsd / curveAtUsd;
   }
-  if (curveAtUsd === null || !(curveAtUsd > 0)) return [];
-  const scale = usd.priceUsd / curveAtUsd;
   const ticks: { priceUsd: number; at: Date }[] = [];
   for (const change of prices.changes) {
     if (change.at === usdMs || !(change.price > 0) || !Number.isFinite(change.price)) continue;

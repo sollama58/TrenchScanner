@@ -342,8 +342,17 @@ export class CurveTape {
     mint: string,
     afterMs: number,
     untilMs: number,
-  ): { basis: { at: number; price: number } | null; changes: { at: number; price: number }[] } {
-    const empty = { basis: null, changes: [] as { at: number; price: number }[] };
+  ): {
+    basis: { at: number; price: number } | null;
+    changes: { at: number; price: number }[];
+    /** False when the mint has no tape, or the curve is not quoted in SOL. */
+    quoteIsSol: boolean;
+  } {
+    const empty = {
+      basis: null,
+      changes: [] as { at: number; price: number }[],
+      quoteIsSol: false,
+    };
     const tape = this.tapes.get(mint);
     if (!tape || tape.ticks.length === 0 || !(untilMs > afterMs)) return empty;
     if (untilMs < tape.coveredFrom) return empty;
@@ -355,7 +364,7 @@ export class CurveTape {
       else if (tick.at <= untilMs) changes.push({ at: tick.at, price: tick.price });
       else break;
     }
-    return { basis, changes };
+    return { basis, changes, quoteIsSol: tape.quoteIsSol };
   }
 
   /** Forgets a mint. */

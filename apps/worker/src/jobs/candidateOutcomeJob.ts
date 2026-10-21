@@ -18,6 +18,7 @@ import {
   TEN_X_WINDOW_MINUTES,
   decisionAnchor,
   dollarTicksFromCurve,
+  pumpCurveUsdPerUnit,
   FINE_TICK_LABEL_RULE,
   FRESH_ANCHOR_LABEL_RULE,
   type Env,
@@ -329,7 +330,13 @@ const WATCH_ROW_SELECT = {
  * observed past the entry delay, retires it ungraded rather than inventing a loss.
  */
 export async function runCandidateWatchJob(
-  dexScreener: Pick<DexScreenerClient, "getTokensByAddresses">,
+  dexScreener: Pick<DexScreenerClient, "getTokensByAddresses"> & {
+    /**
+     * SOL/USD for scaling SOL-quoted curve prints (DexScreenerClient.solUsd). Absent on the
+     * test double that scales a curve whose units already match the dollar print.
+     */
+    solUsd?: () => Promise<number | null>;
+  },
   env: Env,
 ): Promise<Record<string, number> | void> {
   const startedAt = Date.now();
@@ -381,6 +388,18 @@ export async function runCandidateWatchJob(
   const seenAt = new Map<string, Date>();
   // The mints Jupiter priced (seconds old); the rest were priced by DexScreener - see restamp below.
   const freshSources = new Set<string>();
+  // SOL/USD, once per sweep. A SOL-quoted curve's dollar price is its reserves times this, not
+  // a lagged DexScreener print divided by the curve at a different instant (labels.ts). A miss
+  // leaves the sweep on that ratio, which is what a test double with no solUsd does.
+  let curveUsdPerUnit: number | null = null;
+  if (typeof dexScreener.solUsd === "function") {
+    try {
+      const sol = await dexScreener.solUsd();
+      curveUsdPerUnit = sol === null ? null : pumpCurveUsdPerUnit(sol);
+    } catch (err) {
+      logger.warn("SOL price for curve labels failed", { error: String(err) });
+    }
+  }
   try {
     for (const candidate of await dexScreener.getTokensByAddresses(mints, undefined, {
       timeoutMs: 8_000,
@@ -529,9 +548,17 @@ export async function runCandidateWatchJob(
           : null;
       let usedFineTicks = false;
       if (scaleAt) {
+        const prices = curveLabelPrices(
+          row.token.mintAddress,
+          seenUpTo,
+          Math.max(tickAt.getTime(), scaleAt.at.getTime()),
+        );
+        // Only a SOL quote uses the SOL/USD scale. A coin-quoted curve stays on the dollar
+        // print's own ratio: that scale is not lamports per raw token.
         const fine = dollarTicksFromCurve(
-          curveLabelPrices(row.token.mintAddress, seenUpTo, Math.max(tickAt.getTime(), scaleAt.at.getTime())),
+          prices,
           scaleAt,
+          prices.quoteIsSol ? (curveUsdPerUnit ?? undefined) : undefined,
         );
         if (fine.length > 0) {
           usedFineTicks = true;

@@ -433,7 +433,11 @@ describe("sub-minute curve prints", () => {
     later: [price: number, minute: number][] = [],
   ) => {
     let agg = initialOutcomeAggregates(anchor, T0);
-    const ticks = [...dollarTicksFromCurve(curve, minute), minute, ...later.map(([price, m]) => ({ priceUsd: price, at: minutes(m) }))];
+    const ticks = [
+      ...dollarTicksFromCurve(curve, minute),
+      minute,
+      ...later.map(([price, m]) => ({ priceUsd: price, at: minutes(m) })),
+    ];
     ticks.sort((a, b) => a.at.getTime() - b.at.getTime());
     for (const tick of ticks) agg = { ...agg, ...applyPriceTick(agg, tick.priceUsd, tick.at) };
     return agg;
@@ -498,5 +502,56 @@ describe("sub-minute curve prints", () => {
         { priceUsd: 1, at: minute },
       ),
     ).toEqual([]);
+  });
+
+  it("prices SOL-quoted curve prints from SOL/USD, not from a lagged dollar print", () => {
+    // Pump.fun coins are 6 decimals. The tape's price is lamports per raw token, so
+    // USD = curvePrice * solUsd * 1e6 / 1e9. At $150 SOL that factor is 0.15.
+    const solUsd = 150;
+    const perUnit = (solUsd * 1e6) / 1e9;
+    const atDollar = (usd: number) => usd / perUnit;
+    const minute = new Date(T0.getTime() + 60_000);
+    // The coin halved across the 15s DexScreener's lag can be off (the watcher restamps by
+    // 45s; the feed runs 45-60s behind). The dollar print is still $1. The curve in force
+    // at that timestamp has already halved.
+    const curve = {
+      basis: { at: minute.getTime(), price: atDollar(0.5) },
+      changes: [
+        { at: T0.getTime() + 20_000, price: atDollar(1) },
+        { at: T0.getTime() + 50_000, price: atDollar(0.5) },
+      ],
+    };
+    const lagged = dollarTicksFromCurve(curve, { priceUsd: 1, at: minute });
+    // Dividing the lagged $1 by the dumped curve doubles every earlier print: a fake 2x,
+    // and the stop prints as $1.
+    expect(lagged.find((t) => t.at.getTime() === T0.getTime() + 20_000)!.priceUsd).toBeCloseTo(2);
+    expect(lagged.find((t) => t.at.getTime() === T0.getTime() + 50_000)!.priceUsd).toBeCloseTo(1);
+    const honest = dollarTicksFromCurve(curve, { priceUsd: 1, at: minute }, perUnit);
+    expect(honest.find((t) => t.at.getTime() === T0.getTime() + 20_000)!.priceUsd).toBeCloseTo(1);
+    expect(honest.find((t) => t.at.getTime() === T0.getTime() + 50_000)!.priceUsd).toBeCloseTo(0.5);
+
+    // The other way: a 2x that sticks across that same 15s is flattened back to the lagged print.
+    const pumped = {
+      basis: { at: minute.getTime(), price: atDollar(2) },
+      changes: [
+        { at: T0.getTime() + 20_000, price: atDollar(1) },
+        { at: T0.getTime() + 50_000, price: atDollar(2) },
+      ],
+    };
+    const hidden = dollarTicksFromCurve(pumped, { priceUsd: 1, at: minute });
+    expect(hidden.find((t) => t.at.getTime() === T0.getTime() + 50_000)!.priceUsd).toBeCloseTo(1);
+    const seen = dollarTicksFromCurve(pumped, { priceUsd: 1, at: minute }, perUnit);
+    expect(seen.find((t) => t.at.getTime() === T0.getTime() + 50_000)!.priceUsd).toBeCloseTo(2);
+
+    let agg = initialOutcomeAggregates(1, T0);
+    for (const tick of [...honest, { priceUsd: 1, at: minute }].sort(
+      (a, b) => a.at.getTime() - b.at.getTime(),
+    )) {
+      agg = { ...agg, ...applyPriceTick(agg, tick.priceUsd, tick.at) };
+    }
+    const labels = computeOutcomeLabels(agg);
+    expect(labels.hit2xIn1h).toBe(false);
+    expect(labels.disqualified).toBe(false);
+    expect(agg.low1hPriceUsd).toBeCloseTo(0.5);
   });
 });

@@ -7,18 +7,13 @@ import {
   prisma,
   loadEnv,
   initialOutcomeAggregates,
+  pumpCurveUsdPerUnit,
   type CurveState,
   type DexScreenerClient,
   type ScoredToken,
 } from "@trenchscanner/core";
 import { recordCandidateSample, runCandidateWatchJob } from "./candidateOutcomeJob.js";
-import {
-  curveLabelPrices,
-  followYoungCurves,
-  resetCurveTape,
-  round,
-  startCurveTape,
-} from "./curveTape.js";
+import { curveLabelPrices, followYoungCurves, resetCurveTape, round, startCurveTape } from "./curveTape.js";
 
 /**
  * Same posture as outcomeBookkeeping.test.ts: this logic IS row bookkeeping, so it's tested
@@ -245,6 +240,74 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
       expect(plainAfter.hit2xAt).toBeNull();
       expect(plainAfter.peak1hPriceUsd).toBeCloseTo(1.05);
       expect(plainAfter.labelRule).toBe(4);
+    } finally {
+      stop();
+      resetCurveTape();
+      await prisma.token.deleteMany({ where: { mintAddress: tapeMint } });
+    }
+  });
+
+  it("does not turn a lagged dollar print and a dumped curve into a 2x", async () => {
+    // DexScreener is 45-60s behind. The watcher restamps by 45s, so the curve it divides by can
+    // be 15s newer than the print. Here the coin halved in that gap and stayed there. The print
+    // is still $1. Dividing it by the dumped curve doubles the earlier prints (a fake 2x) and
+    // prints the stop as $1. SOL/USD scales the same prints back to $1 and $0.50.
+    const now = Date.now();
+    const anchorMs = now - 3 * MINUTE;
+    const solUsd = 150;
+    const perUnit = pumpCurveUsdPerUnit(solUsd)!;
+    const tapeMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    await prisma.token.deleteMany({ where: { mintAddress: tapeMint } });
+    const taped = await prisma.token.create({ data: { mintAddress: tapeMint } });
+    const curveOf = (usd: number): CurveState => ({
+      virtualToken: 1e15,
+      virtualQuote: (usd / perUnit) * 1e15,
+      realQuote: 0,
+      complete: false,
+      quoteIsSol: true,
+    });
+    let usd = 1;
+    const stop = startCurveTape(
+      {
+        getCurveStatesBatch: async (curves: string[]) => new Map(curves.map((c) => [c, curveOf(usd)])),
+      },
+      null,
+      {
+        maxAgeMinutes: 30,
+        maxMints: 10,
+        streamCreditsPerDay: 0,
+        pollSeconds: 3_600,
+        pollMaxMints: 10,
+      },
+    );
+    try {
+      followYoungCurves(
+        [
+          {
+            mintAddress: taped.mintAddress,
+            launchedAt: new Date(anchorMs),
+            firstSeenAt: new Date(anchorMs),
+            launchpad: null,
+          },
+        ],
+        anchorMs,
+      );
+      await round(anchorMs);
+      await round(now - 60_000);
+      usd = 0.5;
+      await round(now - 50_000);
+      const row = await seedRow(taped.id, new Date(anchorMs), 1, {
+        labelRule: 4,
+        lastCheckedAt: new Date(anchorMs),
+      });
+      const dex = stubDexScreener({ [tapeMint]: 1 });
+      await runCandidateWatchJob(Object.assign(dex, { solUsd: async () => solUsd }), env);
+      const after = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+      expect(after.hit2xAt).toBeNull();
+      expect(after.low1hPriceUsd).toBeCloseTo(0.5);
+      expect(after.lowBefore2xPriceUsd).toBeCloseTo(0.5);
+      expect(after.peak1hPriceUsd).toBeCloseTo(1);
+      expect(after.labelRule).toBe(5);
     } finally {
       stop();
       resetCurveTape();
