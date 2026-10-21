@@ -42,6 +42,7 @@ import { DevCard, FlowCard, SocialsCard, type TokenProfile } from "./TokenProfil
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
 import { CreatorFeeRich } from "./FeeRewards";
+import { cardWithOtcDesk, creatorRewardFigure } from "../creatorReward";
 import { QUICK_LINK_SITES, pumpFunHref, setAppearance, useAppearance } from "../appearance";
 import { useIsAdmin } from "../session";
 import { useShowNarrativeNote } from "../narrativeNote";
@@ -998,6 +999,9 @@ function TokenBody({
   // A lookup asks TokenSage for a fresh read, which lands within minutes: check more often.
   const tokenApi = useTokenApi(mint);
   const sage = usePolling<SageView>(`${tokenApi}/sage`, utility ? 20_000 : 120_000);
+  // The feed card can be a poll ahead of the roster. The sage read waits for it, and the
+  // creator-reward square and the fee line read that copy.
+  const detailCard = useMemo(() => cardWithOtcDesk(card, sage.data), [card, sage.data]);
   // The Dev, Socials and Order flow cards' read (user ask 2026-10-16); the flow moves with each scan.
   const profile = usePolling<TokenProfile>(
     `${useTokenApi(mint)}/profile`,
@@ -1173,8 +1177,17 @@ function TokenBody({
       )}
     </div>
   );
+  const reward = creatorRewardFigure(detailCard.token.creatorFee);
+  const rewardPending = reward.empty && sage.data == null && sage.error == null;
   const figs = terminal ? (
     <section className="tm-figs" aria-label="Market">
+      <div className="tm-fig">
+        <label>Creator reward</label>
+        <span className={reward.empty ? "num none" : "num"} title={reward.title}>
+          {rewardPending ? <SkelValue width="3.2em" /> : reward.value}
+        </span>
+        {!rewardPending && reward.detail && <small className="num muted">{reward.detail}</small>}
+      </div>
       <div className="tm-fig">
         <label>At detection</label>
         <span className={detection.usd != null ? "num" : "num none"} title={detectionTitle}>
@@ -1471,7 +1484,7 @@ function TokenBody({
           <aside className="tm-term-rail" aria-label="Trade and checks">
             <div ref={setTradeSlot} className="tm-term-trade" />
             <section className="tm-term-market" aria-label="Market">
-              <StatsCard card={card} liquidity />
+              <StatsCard card={detailCard} liquidity />
             </section>
             <div id={`${ids}-safety`} className="tm-term-safety">
               {/* Open from the start here: the rail is where the checks are read at a glance. */}
@@ -1589,10 +1602,10 @@ function TokenBody({
         <GroupLabel id={`${ids}-call-h`}>{utility ? "Market" : "The alert"}</GroupLabel>
         {utility ? (
           // A lookup has no call to explain: the numbers take the full width.
-          <StatsCard card={card} />
+          <StatsCard card={detailCard} />
         ) : (
           <div className="tm-grid">
-            <StatsCard card={card} />
+            <StatsCard card={detailCard} />
             <CallCard card={card} />
           </div>
         )}

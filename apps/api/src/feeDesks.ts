@@ -157,6 +157,11 @@ export function feeDeskLineFromOtcCoin(coin: unknown, known?: ReadonlyMap<string
   return feeDeskFromOtcCoin(coin, known)?.line ?? null;
 }
 
+/** Coins in a GET /api/coins body: a list, or `coins` / `data` / `tokens`. */
+export function otcRosterCoins(body: unknown): unknown[] | null {
+  return rosterCoins(body);
+}
+
 function rosterCoins(body: unknown): unknown[] | null {
   if (Array.isArray(body)) return body;
   if (!body || typeof body !== "object") return null;

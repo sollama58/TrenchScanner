@@ -457,13 +457,23 @@ function SageBody({ mint, onClose }: { mint: string; onClose: () => void }) {
         </p>
       )}
       {data && !r && (
-        <p className="muted sage-empty">
-          {data.status === "failed"
-            ? `TokenSage couldn't read this coin${data.failReason ? ` (${data.failReason})` : ""}.`
-            : data.status === "expired"
-              ? "TokenSage read this coin, but its reads are kept for three weeks and this one has been cleared."
-              : "TokenSage hasn't read this coin yet. Reads usually land within a minute or two of launch."}
-        </p>
+        <>
+          <p className="muted sage-empty">
+            {data.status === "failed"
+              ? `TokenSage couldn't read this coin${data.failReason ? ` (${data.failReason})` : ""}.`
+              : data.status === "expired"
+                ? "TokenSage read this coin, but its reads are kept for three weeks and this one has been cleared."
+                : "TokenSage hasn't read this coin yet. Reads usually land within a minute or two of launch."}
+          </p>
+          {(data.feeDesk || data.feeRewards?.length) && (
+            <section className="sage-card">
+              <h4>Creator fee</h4>
+              <p>
+                <DeskSentence line={data.feeDesk} rewards={data.feeRewards} />
+              </p>
+            </section>
+          )}
+        </>
       )}
 
       {r && <SageReadView read={r} view={data!} />}
