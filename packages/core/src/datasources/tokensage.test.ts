@@ -987,7 +987,11 @@ describe("narrativeFieldsFromAnalysis on a rules-0.19.0 document (creator fee)",
       }),
       "complete",
     );
-    expect(holders).toMatchObject({ feeDestination: "holder_rewards", feeCreatorShare: 0, feeCreatorBps: null });
+    expect(holders).toMatchObject({
+      feeDestination: "holder_rewards",
+      feeCreatorShare: 0,
+      feeCreatorBps: null,
+    });
     const unknown = narrativeFieldsFromAnalysis(
       withFee({ destination: "unknown", shares: null }),
       "complete",
