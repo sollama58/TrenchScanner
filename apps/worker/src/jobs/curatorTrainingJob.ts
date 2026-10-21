@@ -68,6 +68,7 @@ import {
   judgeProbation,
   type Challenger,
   type TrainedCuratorParams,
+  type UnthresholdedCuratorParams,
   gatesById,
   loadModelGates,
   GEMERALD_ASKED_AT,
@@ -79,6 +80,23 @@ import { runContestOffThread } from "../training/runContest.js";
 import type { ContestPlan } from "../training/contestPlan.js";
 
 const logger = createLogger("curator-training");
+
+/**
+ * The serving champion's scoring params, for the held-out-day comparison. A Rules champion has
+ * no scored model. Only called when CURATOR_CHAMPION_HOLDOUT_GATE is on.
+ */
+async function loadServingChampionParams(): Promise<UnthresholdedCuratorParams | null> {
+  const champ = await loadChampion();
+  if (!champ || champ.contestant === RULES_CONTESTANT) return null;
+  const row = await prisma.curatorModel.findFirst({
+    where: { contestant: champ.contestant, status: "active" },
+    orderBy: { createdAt: "desc" },
+    select: { kind: true, params: true },
+  });
+  if (!row || row.kind === RULES_MODEL_KIND) return null;
+  if (typeof row.params !== "object" || row.params === null || Array.isArray(row.params)) return null;
+  return row.params as unknown as UnthresholdedCuratorParams;
+}
 
 /**
  * Below this many finalized rows there is nothing worth even evaluating - the job logs the count
@@ -231,6 +249,7 @@ async function trainCurators(
   // cutoff; challengers sit it too; the consensus is stacked on the final lineup's out-of-sample
   // calls (see runEvolvingContest in packages/core/src/curation/trainingRun.ts for all the math).
   progress.stage("exams");
+  const servingChampionParams = env.CURATOR_CHAMPION_HOLDOUT_GATE ? await loadServingChampionParams() : null;
   const outcome = await runContestOffThread(
     trainingRows,
     {
@@ -251,6 +270,8 @@ async function trainCurators(
       calibrationWindowDays: env.CURATOR_CALIBRATION_WINDOW_DAYS,
       featureOnsetGuard: env.CURATOR_FEATURE_ONSET_GUARD,
       unknownRiskFails: env.SAFETY_UNKNOWN_RISK_FAILS,
+      championHoldoutGate: env.CURATOR_CHAMPION_HOLDOUT_GATE,
+      servingChampionParams,
       windowStart,
       rulesFromBest: env.CURATOR_RULES_FROM_BEST,
       rulesTeachers,

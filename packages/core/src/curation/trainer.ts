@@ -2237,7 +2237,123 @@ export function applyCooldown<T extends { row: TrainingRow }>(
  * requirement, the promotion rule's whole recency guard, could be satisfied by exactly that
  * noise. A side under the floor is treated as not having meaningfully emitted at all.
  */
-const MIN_FOLD_EMISSIONS_TO_WIN = 5;
+export const MIN_FOLD_EMISSIONS_TO_WIN = 5;
+
+/**
+ * Fewest filled rows an input needs before a fit that reads it may ship. A batch of about 70
+ * inputs was admitted at once (review 2026-10-21); a column present on only a thin slice of
+ * rows teaches "the input is there" as "the row is new". Used only when the champion-holdout
+ * gate is on.
+ */
+export const MIN_ROWS_PER_INPUT = 200;
+
+/** How many rows carry a finite value for each named input. */
+export function filledRowsByInput(
+  rows: readonly { features: Record<string, number | null | undefined> }[],
+  names: readonly string[],
+): { name: string; filled: number }[] {
+  return names.map((name) => ({
+    name,
+    filled: rows.reduce((n, row) => {
+      const v = row.features[name];
+      return n + (typeof v === "number" && Number.isFinite(v) ? 1 : 0);
+    }, 0),
+  }));
+}
+
+/**
+ * The newest UTC day of rows, held out of a fit. A window that is only that day is not split:
+ * there is nothing left to train on.
+ */
+export function splitNewestUtcDay<T extends { anchorAt: Date }>(
+  rows: readonly T[],
+): { fit: T[]; holdout: T[] } {
+  if (rows.length === 0) return { fit: [], holdout: [] };
+  let newest = rows[0]!.anchorAt.getTime();
+  for (const row of rows) {
+    const t = row.anchorAt.getTime();
+    if (t > newest) newest = t;
+  }
+  const day = new Date(newest).toISOString().slice(0, 10);
+  const holdout: T[] = [];
+  const fit: T[] = [];
+  for (const row of rows) {
+    if (row.anchorAt.toISOString().slice(0, 10) === day) holdout.push(row);
+    else fit.push(row);
+  }
+  if (fit.length === 0 || holdout.length === 0) return { fit: [...rows], holdout: [] };
+  return { fit, holdout };
+}
+
+/** One side's calls on a held-out day. */
+export interface HoldoutRecord {
+  emitted: number;
+  precisionPct: number | null;
+}
+
+/**
+ * The top `take` scores, as a hit rate. `labels[i] > 0` is a win. Ties keep the earlier index.
+ */
+export function topShareRecord(
+  labels: readonly number[],
+  scores: readonly number[],
+  take: number,
+): HoldoutRecord {
+  const n = Math.min(labels.length, scores.length);
+  if (n === 0 || take <= 0) return { emitted: 0, precisionPct: null };
+  const order = [...Array(n).keys()].sort((a, b) => scores[b]! - scores[a]! || a - b);
+  const k = Math.min(take, n);
+  let wins = 0;
+  for (let i = 0; i < k; i++) if (labels[order[i]!]! > 0) wins += 1;
+  return { emitted: k, precisionPct: (wins / k) * 100 };
+}
+
+/**
+ * Whether the candidate's held-out day beats the serving champion's. No champion (null) is not a
+ * loss. A champion that cannot be compared, or a candidate with too few calls, is a loss: the
+ * fit then only beat the heuristic on the days it was selected on.
+ */
+export function holdoutBeatsChampion(
+  candidate: HoldoutRecord,
+  champion: HoldoutRecord | null,
+  minEmissions: number,
+): { beats: boolean; reason: string } {
+  if (candidate.emitted < minEmissions) {
+    return {
+      beats: false,
+      reason: `held-out day has ${candidate.emitted} candidate calls, need ${minEmissions}`,
+    };
+  }
+  if (champion === null) return { beats: true, reason: "no serving champion to compare" };
+  if (champion.emitted < minEmissions) {
+    return {
+      beats: false,
+      reason: `held-out day has ${champion.emitted} champion calls, need ${minEmissions}`,
+    };
+  }
+  const candidateRate = candidate.precisionPct ?? 0;
+  const championRate = champion.precisionPct ?? 0;
+  if (candidateRate > championRate) {
+    return {
+      beats: true,
+      reason: `held-out day ${candidateRate}% against the champion's ${championRate}%`,
+    };
+  }
+  return {
+    beats: false,
+    reason: `held-out day ${candidateRate}% does not beat the champion's ${championRate}%`,
+  };
+}
+
+/** Evidence the champion-holdout gate reads. Omitted, decidePromotion is unchanged. */
+export interface PromotionGate {
+  holdout?: { candidate: HoldoutRecord; champion: HoldoutRecord | null };
+  /** Fewest filled rows among the inputs this fit reads. */
+  minFilledRows?: number;
+  minRowsPerInput?: number;
+  /** How many inputs are under minRowsPerInput. */
+  shortInputs?: number;
+}
 
 /**
  * The promotion rule, spelled out so the learning panel can show WHY:
@@ -2258,6 +2374,7 @@ export function decidePromotion(
   totalRows: number,
   minRowsToPromote: number,
   minEmissionsToWin: number = MIN_FOLD_EMISSIONS_TO_WIN,
+  gate?: PromotionGate,
 ): PromotionVerdict {
   if (totalRows < minRowsToPromote) {
     return {
@@ -2288,10 +2405,40 @@ export function decidePromotion(
   const wins = scoreable.filter(modelWon).length;
   const wonNewest = modelWon(scoreable[scoreable.length - 1]!);
   const promote = wins * 2 > scoreable.length && wonNewest;
-  return {
+  const verdict: PromotionVerdict = {
     promote,
     reason: `model won ${wins}/${scoreable.length} scoreable folds${wonNewest ? "" : ", but not the newest"}${
       promote ? " - promoting" : " - keeping current curator"
     }`,
   };
+  if (!promote || gate === undefined) return verdict;
+  return applyPromotionGate(verdict, gate, minEmissionsToWin);
+}
+
+/**
+ * A fold win is not enough when this is passed: the fit must also beat the serving champion on
+ * a day the selection did not use, and every input it reads must be filled on enough rows.
+ * (review 2026-10-21). The caller turns it on; decidePromotion without a gate is unchanged.
+ */
+export function applyPromotionGate(
+  verdict: PromotionVerdict,
+  gate: PromotionGate,
+  minEmissions: number,
+): PromotionVerdict {
+  const kept = verdict.reason.replace(" - promoting", "");
+  if (gate.minRowsPerInput !== undefined && (gate.minFilledRows ?? 0) < gate.minRowsPerInput) {
+    return {
+      promote: false,
+      reason:
+        `${kept}, but ${gate.shortInputs ?? 1} input(s) filled on ${gate.minFilledRows ?? 0} rows, ` +
+        `need ${gate.minRowsPerInput} - keeping current curator`,
+    };
+  }
+  if (gate.holdout !== undefined) {
+    const beat = holdoutBeatsChampion(gate.holdout.candidate, gate.holdout.champion, minEmissions);
+    if (!beat.beats) {
+      return { promote: false, reason: `${kept}, but ${beat.reason} - keeping current curator` };
+    }
+  }
+  return verdict;
 }

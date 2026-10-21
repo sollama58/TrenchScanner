@@ -11,6 +11,13 @@ import {
   MIN_KNOWN_TEN_X_VERDICTS,
   type SeatGoal,
   walkForwardEvaluate,
+  decidePromotion,
+  splitNewestUtcDay,
+  filledRowsByInput,
+  topShareRecord,
+  MIN_ROWS_PER_INPUT,
+  MIN_FOLD_EMISSIONS_TO_WIN,
+  type PromotionGate,
   type CuratorLearner,
   type PrecisionCalibration,
   type PrecisionCurvePoint,
@@ -129,6 +136,18 @@ export interface CuratorTrainingConfig {
    * SAFETY_UNKNOWN_RISK_FAILS). Omitted = off, matching live.
    */
   unknownRiskFails?: boolean;
+  /**
+   * Refuse a fit that beats the heuristic only on the days it was selected on. The newest UTC
+   * day is held out of the exam; the fit must beat the serving champion there, and every input
+   * it reads must be filled on MIN_ROWS_PER_INPUT rows (env CURATOR_CHAMPION_HOLDOUT_GATE).
+   * Omitted = off, which is what shipped.
+   */
+  championHoldoutGate?: boolean;
+  /**
+   * The serving champion's scoring params, for the held-out day. Null or omitted: there is no
+   * scored champion to beat. Only read when championHoldoutGate is on.
+   */
+  servingChampionParams?: UnthresholdedCuratorParams | null;
   /**
    * The training window's start (the rows were loaded from it). The onset guard judges coverage
    * from there or from the first row on the current label rule, whichever is later. Omitted =
@@ -501,7 +520,11 @@ async function sitRecipeExam(
         }
       : cfg.targets;
   const recencyHalfLifeDays = recipe.recencyHalfLifeDays ?? cfg.recencyHalfLifeDays;
-  const evaluation = await walkForwardEvaluate(rows, {
+  // The champion-holdout gate (off by default) keeps the newest UTC day out of the exam, so a
+  // fold win cannot be the only evidence. The shipped model is still fit on the full window later.
+  const split = cfg.championHoldoutGate === true ? splitNewestUtcDay(rows) : { fit: rows, holdout: [] };
+  const examRows = split.holdout.length > 0 ? split.fit : rows;
+  const evaluation = await walkForwardEvaluate(examRows, {
     targetPerHour: cfg.targetPerHour,
     heuristicMinScore: cfg.heuristicMinScore,
     // Emission enforces the band before either curator runs (see maybeEmitCuratedAlert), so
@@ -529,6 +552,69 @@ async function sitRecipeExam(
     minTestWins: cfg.minTestWins,
     examShare: cfg.examShare,
   });
+  if (cfg.championHoldoutGate === true && evaluation.verdict.promote) {
+    const names = recipe.featureNames ?? MARKET_LEARNER_FEATURE_NAMES;
+    const fills = filledRowsByInput(examRows, names);
+    const minFilledRows = fills.reduce((min, row) => Math.min(min, row.filled), Number.POSITIVE_INFINITY);
+    const gate: PromotionGate = {
+      minFilledRows: Number.isFinite(minFilledRows) ? minFilledRows : 0,
+      minRowsPerInput: MIN_ROWS_PER_INPUT,
+      shortInputs: fills.filter((row) => row.filled < MIN_ROWS_PER_INPUT).length,
+    };
+    if (split.holdout.length > 0) {
+      const day = split.holdout.filter((row) => isDecisionRow(row, cfg.mcapBand));
+      const judged = day.length > 0 ? day : split.holdout;
+      const take = Math.max(MIN_FOLD_EMISSIONS_TO_WIN, Math.round(cfg.targetPerHour * 24));
+      const labels = judged.map((row) => row.labelValue);
+      const scoreSide = (params: UnthresholdedCuratorParams | null): number[] | null => {
+        if (params === null) return null;
+        try {
+          return judged.map((row) => scoreCandidateWithModel(params, row.features));
+        } catch {
+          return null;
+        }
+      };
+      let candidateScores: number[] | null;
+      try {
+        const candidate = await trainCuratorModel(examRows, {
+          recencyHalfLifeDays,
+          learner: recipe.learner,
+          featureNames: recipe.featureNames,
+          boosting: recipe.boosting,
+          forest: recipe.forest,
+          twoStage: recipe.twoStage,
+          narrativeBlend: recipe.narrativeBlend,
+          narrativeLed: recipe.narrativeLed,
+          legacyLabelWeight: cfg.legacyLabelWeight,
+          runWeightPerDoubling: cfg.runWeightPerDoubling,
+          goal: recipe.goal,
+        });
+        candidateScores = scoreSide(candidate);
+      } catch {
+        candidateScores = null;
+      }
+      const championScores = scoreSide(cfg.servingChampionParams ?? null);
+      gate.holdout = {
+        candidate:
+          candidateScores === null
+            ? { emitted: 0, precisionPct: null }
+            : topShareRecord(labels, candidateScores, take),
+        champion:
+          cfg.servingChampionParams == null
+            ? null
+            : championScores === null
+              ? { emitted: 0, precisionPct: null }
+              : topShareRecord(labels, championScores, take),
+      };
+    }
+    evaluation.verdict = decidePromotion(
+      evaluation.folds,
+      examRows.length,
+      cfg.minRowsToPromote,
+      MIN_FOLD_EMISSIONS_TO_WIN,
+      gate,
+    );
+  }
   // Calibrated in RANK units: each fold model and the shipped model put probabilities on their
   // own scales, so a raw probability that hit 75% on the fold models says nothing about the
   // same number on the shipped one. "The top r of decision moments" does carry over.
