@@ -21,6 +21,7 @@ import {
   resolveAlertTargets,
   type FilterWithUser,
 } from "./matchDispatch.js";
+import { holderClockFields } from "./holderListWrites.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { recentScanVerdicts, type VettedEntry } from "./vettedTokens.js";
 import { noteFreshMarketData } from "./matchPeaks.js";
@@ -78,6 +79,9 @@ interface SnapshotHolderLists {
   linkedHolders?: unknown;
   linkedClusters?: unknown;
   sameTimeClusters?: unknown;
+  holderBalancesAt?: Date | null;
+  holderChainReadAt?: Date | null;
+  holderNextReadAt?: Date | null;
 }
 
 /** A stored JSON list as the typed list it was written from, or undefined when absent or empty. */
@@ -85,14 +89,25 @@ function jsonList<T>(value: unknown): T[] | undefined {
   return Array.isArray(value) && value.length > 0 ? (value as T[]) : undefined;
 }
 
-/** The holder lists on a snapshot, as the profile fields they were written from. */
+/** The holder lists on a snapshot, as the profile fields they were written from, clocks included. */
 function holderListsOf(
   snapshot: SnapshotHolderLists,
-): Pick<OnChainProfile, "linkedHolders" | "linkedClusters" | "sameTimeClusters"> {
+): Pick<
+  OnChainProfile,
+  | "linkedHolders"
+  | "linkedClusters"
+  | "sameTimeClusters"
+  | "holderBalancesAt"
+  | "holderChainReadAt"
+  | "holderNextReadAt"
+> {
   return {
     linkedHolders: jsonList<NonNullable<OnChainProfile["linkedHolders"]>[number]>(snapshot.linkedHolders),
     linkedClusters: jsonList<LinkedCluster>(snapshot.linkedClusters),
     sameTimeClusters: jsonList<SameTimeCluster>(snapshot.sameTimeClusters),
+    // Both clocks. A later row's takenAt is not when the list was read, and a balance time is
+    // not the enumeration.
+    ...holderClockFields(snapshot),
   };
 }
 
@@ -434,7 +449,14 @@ async function alertForToken(
     const withLists = await prisma.tokenSnapshot.findFirst({
       where: { tokenId: token.id, source: "scan", linkedHolders: { not: Prisma.DbNull } },
       orderBy: { takenAt: "desc" },
-      select: { linkedHolders: true, linkedClusters: true, sameTimeClusters: true },
+      select: {
+        linkedHolders: true,
+        linkedClusters: true,
+        sameTimeClusters: true,
+        holderBalancesAt: true,
+        holderChainReadAt: true,
+        holderNextReadAt: true,
+      },
     });
     if (withLists) Object.assign(scored, holderListsOf(withLists));
   }

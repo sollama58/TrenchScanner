@@ -680,8 +680,9 @@ export function buildGraph(
   const nodes: MapNode[] = [];
   const links: MapLink[] = [];
   const seen = new Set<string>();
-  const holder = (wallet: string, pct: number, cluster: number | null, hub: boolean): MapNode => {
+  const holder = (wallet: string, rawPct: number, cluster: number | null, hub: boolean): MapNode => {
     const f = byWallet.get(wallet);
+    const pct = Math.min(100, Math.max(0, rawPct));
     return {
       id: `h:${wallet}`,
       kind: "holder",
@@ -2545,21 +2546,35 @@ export function hasHolderList(s: Pick<Snapshot, "linkedClusters" | "linkedHolder
  * cycle: the holder stream moves the top holders' balances as they trade (user ask 2026-10-19), so
  * the next update often comes before this.
  */
+/**
+ * Chain re-enumeration while a bubble map is open and the holder stream is not covering the coin
+ * (worker WATCHED_HOLDERS_REFRESH_SECONDS). A streamed watch uses HOLDER_STREAMED_READ_MS.
+ */
 export const HOLDER_WRITE_MS = 60_000;
+/**
+ * Chain re-enumeration while a bubble map is open and the holder stream already follows the
+ * holders (worker WATCHED_HOLDERS_STREAMED_REFRESH_SECONDS). Balances move on each trade; the
+ * set of wallets is read again on this cadence, not every minute.
+ */
+export const HOLDER_STREAMED_READ_MS = 5 * 60_000;
 /**
  * How often an open token view re-reads its bubble maps (the top 50). The read also tells the
  * worker the map is open (Token.holdersViewedAt), which has it keep the coin's top holders current
- * and write them at least every HOLDER_WRITE_MS instead of every ten minutes (user ask 2026-10-19),
+ * and write them at the chain-read cadence instead of every ten minutes (user ask 2026-10-19),
  * so "Now" and its stats keep updating.
  */
 export const HOLDER_POLL_MS = 30_000;
 /**
- * No list for this long means the worker has stopped scanning the coin (out of band, unviewed).
- * A list that hasn't changed is written again only every HOLDER_LIST_REWRITE_MS (10 min, worker
- * holderListWrites.ts; every minute while someone has the map open), so a coin still being scanned
- * can go that long plus a cycle between rows.
+ * A wide map read this long before the scan it would stand in for is too old to draw over that
+ * scan. Not the holders section's "no longer scanned" line: that follows the scan rows.
  */
 export const HOLDER_STALE_MS = 12 * 60_000;
+/**
+ * No scan row for this long: the coin has left the scan. Matches the safety card's window
+ * (TokenModal SCAN_GONE_MS). An old enumeration is not this — a quiet coin keeps its chain-read
+ * time while scans are still landing.
+ */
+export const HOLDER_SCAN_GONE_MS = 15 * 60_000;
 
 /**
  * When a reading's holder shares were current: the chain read or the last holder-stream update
@@ -2588,9 +2603,21 @@ export function holderShownAt(
   if (Number.isFinite(chain)) return chain;
   const carried = s.holdersAt ? Date.parse(s.holdersAt) : NaN;
   if (Number.isFinite(carried)) return carried;
-  const balances = s.holderBalancesAt ? Date.parse(s.holderBalancesAt) : NaN;
-  if (Number.isFinite(balances)) return balances;
+  // Not holderBalancesAt. A balance tick moves shares; it is not a new read of who holds.
   return Date.parse(s.takenAt);
+}
+
+/**
+ * How long until the next chain enumeration when the row has no holderNextReadAt. A balance newer
+ * than the enumeration means the holder stream is covering the coin, so the chain read is every
+ * five minutes. Otherwise an open map's chain read is every minute.
+ */
+export function holderChainEveryMs(s: Pick<Snapshot, "holderBalancesAt" | "holderChainReadAt">): number {
+  const chain = s.holderChainReadAt ? Date.parse(s.holderChainReadAt) : NaN;
+  const balances = s.holderBalancesAt ? Date.parse(s.holderBalancesAt) : NaN;
+  if (Number.isFinite(chain) && Number.isFinite(balances) && balances > chain + 1_000)
+    return HOLDER_STREAMED_READ_MS;
+  return HOLDER_WRITE_MS;
 }
 
 /**
@@ -2628,17 +2655,26 @@ export function firstReadAfter(at: number, nextRead: number, everyMs: number): n
  * When the holder list shown was written (`last`), when the next one is due from the worker
  * (`due`), and when this view will show it (`next`): its first read of the coin's scans after that
  * (`nextRead`, every `everyMs`), or, past due, its next read (`late` once a read since found none). Null without reads of its own (a
- * lookup, which doesn't follow the scans), and both are null once no list has come for
- * HOLDER_STALE_MS: the coin is no longer being scanned.
+ * lookup, which doesn't follow the scans). `due` is the chain-read schedule (holderNextReadAt, or
+ * the streamed five minutes / the open-map minute). Both are null once scans have stopped
+ * (HOLDER_SCAN_GONE_MS on takenAt): the coin is no longer being scanned.
  */
 export function holderFreshness(
-  reading: Pick<Snapshot, "takenAt" | "holdersAt" | "holderBalancesAt" | "holderChainReadAt">,
+  reading: Pick<
+    Snapshot,
+    "takenAt" | "holdersAt" | "holderBalancesAt" | "holderChainReadAt" | "holderNextReadAt"
+  >,
   now: number,
   reads?: { nextRead: number; everyMs: number } | null,
 ): { last: number; due: number | null; next: number | null; late: boolean } {
   const last = holderShownAt(reading);
-  if (now - last >= HOLDER_STALE_MS) return { last, due: null, next: null, late: false };
-  const due = last + HOLDER_WRITE_MS;
+  const scannedAt = Date.parse(reading.takenAt);
+  // Scans stopped. An old enumeration on a coin that is still being scanned is not this: a quiet
+  // coin bumps the schedule and leaves the enumeration where it was.
+  if (!Number.isFinite(scannedAt) || now - scannedAt >= HOLDER_SCAN_GONE_MS)
+    return { last, due: null, next: null, late: false };
+  const scheduled = reading.holderNextReadAt ? Date.parse(reading.holderNextReadAt) : NaN;
+  const due = Number.isFinite(scheduled) ? scheduled : last + holderChainEveryMs(reading);
   if (!reads) return { last, due, next: null, late: false };
   return {
     last,

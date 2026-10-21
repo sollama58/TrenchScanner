@@ -58,6 +58,7 @@ import {
   onSupply,
   type CandleFetcher,
   markedWallets,
+  withDevChip,
   withSavedTrades,
   withTrackedMarks,
   type SavedTrade,
@@ -515,11 +516,10 @@ async function chartWallets(tokenId: string, mint: string, creator: string | nul
         }
       : null,
     live: liveSnaps[0] ? { readAt: liveSnaps[0].takenAt.getTime() } : null,
-    wallets: withLiveTrades(
-      markedWallets(rows, risk, clusters, opts, kols, knownSides, sides),
-      live,
-      risk,
-      opts,
+    wallets: withDevChip(
+      withLiveTrades(markedWallets(rows, risk, clusters, opts, kols, knownSides, sides), live, risk, opts),
+      listedWallets(listed?.linkedHolders),
+      creator,
     ),
     holderEntries: holderEntries(tapeRows, listedWallets(listed?.linkedHolders), tape),
     saved,
@@ -959,8 +959,11 @@ export async function registerTokenRoutes(
     // stamped; a map that slid out is cleared off the request path (allowHolderWatch).
     const userId = request.user?.userId;
     if (userId) {
-      const watch = allowHolderWatch(userId, mintAddress);
-      if (watch.stamp) opts.holderStamps?.record([mintAddress]);
+      const now = Date.now();
+      const watch = allowHolderWatch(userId, mintAddress, now);
+      // The same instant the watch stores. The flush writes holdersViewedAt a few seconds later;
+      // the release clears that written time, not this poll (viewStamps.ts).
+      if (watch.stamp) opts.holderStamps?.record([mintAddress], now);
       void releaseHolderStamps(opts.holderStamps, watch.released);
     }
     // Shorter than the view's 30-second poll, so each poll reaches here (and stamps the coin).

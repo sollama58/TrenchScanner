@@ -293,6 +293,12 @@ describe("holder transfers", () => {
         { owner: A, pct: 4 },
         { owner: B, pct: 3 },
       ]);
+      // The same transaction again must not subtract the difference a second time.
+      onHolderStreamTx(MINT, "sell", sell, NOW + 6_000);
+      expect(cachedTopHolders(MINT, NOW + 6_000)).toEqual([
+        { owner: A, pct: 4 },
+        { owner: B, pct: 3 },
+      ]);
     });
 
     it("adds a buyer who outranks the smallest holder and drops the one who falls out", async () => {

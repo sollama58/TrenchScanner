@@ -1359,7 +1359,12 @@ model TokenSnapshot {
   // When the set of wallets on that list was last enumerated from the chain. The holder stream
   // moves wallets already on the list after this, but a wallet buying in from outside it is not on
   // the list until the next enumeration, so the token view counts that buyer's trades from here.
+  // A balance tick does not move this.
   holderChainReadAt       DateTime?
+  // When the next chain enumeration is due. The worker's schedule clock (a chain read, or a quiet
+  // keep that bumps the schedule and not the enumeration) plus that coin's re-read interval.
+  // The holders countdown follows this. A balance tick does not move it. Null on older rows.
+  holderNextReadAt        DateTime?
   // Top holders funded within a minute of each other, from any funders (core's sameTimeClusters):
   // the % of supply they hold, how many such groups, and the groups themselves (when each was
   // funded, by whom, and each wallet's %); null when there are none. Read with the linked reading,

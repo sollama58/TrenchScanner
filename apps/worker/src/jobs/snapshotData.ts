@@ -87,11 +87,10 @@ export function snapshotDataFor(
     // The reading's lists - the top holders the scan read (user ask 2026-10-13), the clusters
     // among them and the same-minute groups - on the rows that carry a new reading, not every
     // scan (holderListWrites.ts): readers take the newest row that has them.
+    // The lists and both clocks (holderListWrites.ts). A row that leaves the lists off leaves
+    // the clocks off: they describe the shares on this row. A missing chain read stays missing,
+    // so a balance tick is not stored as the enumeration.
     ...(opts.holderReading !== false ? holderReadingData(scored) : {}),
-    // With the list, not on a row that leaves it off: the times describe the shares on this row.
-    ...(opts.holderReading !== false && scored.holderBalancesAt
-      ? { holderBalancesAt: scored.holderBalancesAt, holderChainReadAt: scored.holderChainReadAt ?? null }
-      : {}),
     sameTimeFundedPct: scored.sameTimeFundedPct,
     sameTimeClusterCount: scored.sameTimeClusterCount,
     sameTimeFundedCount: scored.sameTimeFundedCount,

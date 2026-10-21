@@ -239,18 +239,20 @@ export async function latestSnapshotsByToken(
       carriedAt: Date | null;
       carriedBalancesAt: Date | null;
       carriedChainReadAt: Date | null;
+      carriedNextReadAt: Date | null;
     })[]
   >`
     SELECT s.*, h."linkedHolders" AS "carriedHolders", h."linkedClusters" AS "carriedClusters",
            h."sameTimeClusters" AS "carriedSameTime", h."takenAt" AS "carriedAt",
-           h."holderBalancesAt" AS "carriedBalancesAt", h."holderChainReadAt" AS "carriedChainReadAt"
+           h."holderBalancesAt" AS "carriedBalancesAt", h."holderChainReadAt" AS "carriedChainReadAt",
+           h."holderNextReadAt" AS "carriedNextReadAt"
     FROM unnest(${ids}::text[]) AS t(id)
     CROSS JOIN LATERAL (
       SELECT * FROM "TokenSnapshot" WHERE "tokenId" = t.id ORDER BY "takenAt" DESC LIMIT 1
     ) s
     LEFT JOIN LATERAL (
       SELECT "linkedHolders", "linkedClusters", "sameTimeClusters", "takenAt",
-             "holderBalancesAt", "holderChainReadAt" FROM "TokenSnapshot"
+             "holderBalancesAt", "holderChainReadAt", "holderNextReadAt" FROM "TokenSnapshot"
       WHERE s."linkedHolders" IS NULL
         AND "tokenId" = t.id
         AND "takenAt" < s."takenAt"
@@ -268,6 +270,7 @@ export async function latestSnapshotsByToken(
         carriedAt,
         carriedBalancesAt,
         carriedChainReadAt,
+        carriedNextReadAt,
         ...s
       }) => [
         s.tokenId,
@@ -280,6 +283,7 @@ export async function latestSnapshotsByToken(
               ...(carriedAt ? { holdersAt: carriedChainReadAt ?? carriedAt } : {}),
               ...(carriedBalancesAt ? { holderBalancesAt: carriedBalancesAt } : {}),
               ...(carriedChainReadAt ? { holderChainReadAt: carriedChainReadAt } : {}),
+              ...(carriedNextReadAt ? { holderNextReadAt: carriedNextReadAt } : {}),
             }
           : s,
       ],
@@ -333,6 +337,7 @@ export async function withCarriedHolderList<
       takenAt: true,
       holderBalancesAt: true,
       holderChainReadAt: true,
+      holderNextReadAt: true,
     },
   });
   return carried === null
@@ -345,6 +350,7 @@ export async function withCarriedHolderList<
         holdersAt: carried.holderChainReadAt ?? carried.takenAt,
         ...(carried.holderBalancesAt ? { holderBalancesAt: carried.holderBalancesAt } : {}),
         ...(carried.holderChainReadAt ? { holderChainReadAt: carried.holderChainReadAt } : {}),
+        ...(carried.holderNextReadAt ? { holderNextReadAt: carried.holderNextReadAt } : {}),
       };
 }
 
@@ -371,15 +377,16 @@ export async function withCarriedHolderLists<
       takenAt: Date;
       holderBalancesAt: Date | null;
       holderChainReadAt: Date | null;
+      holderNextReadAt: Date | null;
     }[]
   >`
     SELECT s.id, h."linkedHolders", h."linkedClusters", h."sameTimeClusters", h."takenAt",
-           h."holderBalancesAt", h."holderChainReadAt"
+           h."holderBalancesAt", h."holderChainReadAt", h."holderNextReadAt"
     FROM unnest(${ids}::text[]) AS t(id)
     JOIN "TokenSnapshot" s ON s.id = t.id
     CROSS JOIN LATERAL (
       SELECT "linkedHolders", "linkedClusters", "sameTimeClusters", "takenAt",
-             "holderBalancesAt", "holderChainReadAt" FROM "TokenSnapshot"
+             "holderBalancesAt", "holderChainReadAt", "holderNextReadAt" FROM "TokenSnapshot"
       WHERE "tokenId" = s."tokenId"
         AND "takenAt" < s."takenAt"
         AND "takenAt" >= s."takenAt" - make_interval(secs => ${CARRIED_HOLDER_LIST_MS / 1000}::float8)
@@ -400,6 +407,7 @@ export async function withCarriedHolderLists<
           holdersAt: carried.holderChainReadAt ?? carried.takenAt,
           ...(carried.holderBalancesAt ? { holderBalancesAt: carried.holderBalancesAt } : {}),
           ...(carried.holderChainReadAt ? { holderChainReadAt: carried.holderChainReadAt } : {}),
+          ...(carried.holderNextReadAt ? { holderNextReadAt: carried.holderNextReadAt } : {}),
         };
   });
 }

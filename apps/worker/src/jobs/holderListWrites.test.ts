@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   HOLDER_LIST_REWRITE_MS,
+  holderClockFields,
   holderListKey,
+  holderReadingData,
   holderReadingKey,
   noteHolderReadingWritten,
   resetHolderListWritesForTests,
@@ -156,6 +158,39 @@ describe("snapshotDataFor: the holder reading", () => {
     expect(data.sameTimeClusters).toBeUndefined();
     // The reading's numbers still ride every row.
     expect(data.priceUsd).toBe(1);
+  });
+
+  it("copies both holder clocks with the lists and does not turn a balance into the enumeration", () => {
+    const balances = new Date("2026-10-21T18:04:00.000Z");
+    const chain = new Date("2026-10-21T18:00:00.000Z");
+    const next = new Date("2026-10-21T18:05:00.000Z");
+    const clocks = holderClockFields({
+      holderBalancesAt: balances,
+      holderChainReadAt: chain,
+      holderNextReadAt: next,
+    });
+    expect(clocks).toEqual({ holderBalancesAt: balances, holderChainReadAt: chain, holderNextReadAt: next });
+    // A balance tick has a share time and no new enumeration. The chain clock stays absent.
+    expect(holderClockFields({ holderBalancesAt: balances })).toEqual({ holderBalancesAt: balances });
+    const data = holderReadingData({ ...reading(), holderBalancesAt: balances, holderChainReadAt: chain });
+    expect(data.linkedHolders).toEqual(list());
+    expect(data.holderBalancesAt).toEqual(balances);
+    expect(data.holderChainReadAt).toEqual(chain);
+    const row = snapshotDataFor(
+      "t1",
+      { ...scored, holderBalancesAt: balances, holderChainReadAt: chain } as ScoredToken,
+      "fast",
+    );
+    expect(row.holderBalancesAt).toEqual(balances);
+    expect(row.holderChainReadAt).toEqual(chain);
+    const bare = snapshotDataFor(
+      "t1",
+      { ...scored, holderBalancesAt: balances, holderChainReadAt: chain } as ScoredToken,
+      "scan",
+      { holderReading: false },
+    );
+    expect(bare.holderBalancesAt).toBeUndefined();
+    expect(bare.holderChainReadAt).toBeUndefined();
   });
 
   it("stores no empty list", () => {

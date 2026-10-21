@@ -68,8 +68,10 @@ export function wideShareDeltas(
   return out;
 }
 
-const round2 = (v: number) => Math.round(v * 100) / 100;
-const moved = (pct: number, d: number | undefined) => (d === undefined ? pct : Math.max(0, round2(pct + d)));
+/** A displayed share of supply: nothing past the whole coin, nothing below zero. */
+const clampShare = (n: number) => Math.min(100, Math.max(0, n));
+const round2 = (v: number) => Math.round(clampShare(v) * 100) / 100;
+const moved = (pct: number, d: number | undefined) => (d === undefined ? round2(pct) : round2(pct + d));
 
 /** A list's wallets with their shares moved; the ones sold out of it gone. */
 function movedWallets<W extends { wallet: string; pct: number }>(

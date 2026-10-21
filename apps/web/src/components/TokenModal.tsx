@@ -2221,7 +2221,7 @@ function useHoldersView(card: Card, linked: Snapshot | null | undefined, alertAt
         : canSwitch
           ? {
               label: "Now",
-              at: linked ? holderListAt(linked) : undefined,
+              at: linked ? holderShownAt(linked) : undefined,
               title:
                 "The latest scan's reading. Switch to an earlier moment for the holders as they stood then.",
             }

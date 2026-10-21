@@ -286,6 +286,11 @@ export interface Snapshot {
    * in after this isn't on the list until the next read. Absent on scans from before it.
    */
   holderChainReadAt?: string | null;
+  /**
+   * When the next chain enumeration is due. The holders countdown counts to this. A balance tick
+   * does not move it. Absent on rows from before it existed.
+   */
+  holderNextReadAt?: string | null;
   priceUsd: number;
   marketCapUsd: number;
   liquidityUsd: number | null;

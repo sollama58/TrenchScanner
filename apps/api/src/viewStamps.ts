@@ -33,7 +33,13 @@ const MAX_PENDING = 2_000;
  * costs at most one skipped live-price refresh, which the reader's next poll re-requests anyway.
  */
 export class ViewStampBuffer {
-  private pending = new Set<string>();
+  /** Id to the poll time it was recorded at. A holders flush writes later than this. */
+  private pending = new Map<string, number>();
+  /**
+   * For a holders stamp, the poll a flush wrote and the timestamp that flush stored. The release
+   * compares against this, not the poll: the column is the flush time, a few seconds later.
+   */
+  private writtenHolderStamp = new Map<string, { pollAt: number; writtenAt: number }>();
   private timer: NodeJS.Timeout | undefined;
   /** Guards against a slow write overlapping the next tick and stacking flushes. */
   private flushing: Promise<void> | null = null;
@@ -61,11 +67,12 @@ export class ViewStampBuffer {
 
   /**
    * Non-blocking. Records that these tokens are on a page somebody just fetched: token ids, or
-   * mints for the "holders" stamp.
+   * mints for the "holders" stamp. `at` is the poll time for a holders stamp; the flush writes
+   * that poll's stamp a few seconds later, and a release clears by the time that was written.
    */
-  record(tokenIds: readonly string[]): void {
+  record(tokenIds: readonly string[], at = Date.now()): void {
     if (this.stopped) return;
-    for (const id of tokenIds) this.pending.add(id);
+    for (const id of tokenIds) this.pending.set(id, at);
 
     if (this.pending.size >= (this.options.maxPending ?? MAX_PENDING)) {
       void this.flush();
@@ -98,25 +105,65 @@ export class ViewStampBuffer {
     await this.flushing;
   }
 
+  /**
+   * Waits out a flush already in flight. A release that starts while its poll is being written
+   * has to clear the timestamp that write stores, which is not known until the batch is swapped.
+   */
+  async settle(): Promise<void> {
+    if (this.flushing) await this.flushing;
+  }
+
+  /**
+   * The time a released holders poll should clear through. A flush stores `new Date()` at write
+   * time, which is after the poll, so a clear bounded by the poll never matches that row.
+   */
+  holderStampClearAt(mint: string, pollAt: number): number {
+    return holderStampClearAt(pollAt, this.writtenHolderStamp.get(mint));
+  }
+
+  /**
+   * Drops the written stamp for a poll at or before `pollAt`. A flush of a later poll, stored
+   * while the clear was in flight, is left in place.
+   */
+  forgetHolderStamp(mint: string, pollAt: number): void {
+    const rec = this.writtenHolderStamp.get(mint);
+    if (rec && rec.pollAt <= pollAt) this.writtenHolderStamp.delete(mint);
+  }
+
   private async write(): Promise<void> {
     // Swapped before the await so stamps arriving mid-write land in the next batch instead of
     // being cleared unwritten.
     const batch = [...this.pending];
     this.pending.clear();
+    const writtenAt = new Date();
+    const ids = batch.map(([id]) => id);
+    if (this.options.stamp === "holders") {
+      for (const [mint, pollAt] of batch) this.rememberHolderStamp(mint, pollAt, writtenAt.getTime());
+    }
     try {
       if (this.options.stamp === "holders") {
         await prisma.token.updateMany({
-          where: { mintAddress: { in: batch } },
-          data: { holdersViewedAt: new Date() },
+          where: { mintAddress: { in: ids } },
+          data: { holdersViewedAt: writtenAt },
         });
       } else {
         await prisma.token.updateMany({
-          where: { id: { in: batch } },
-          data: { lastViewedAt: new Date() },
+          where: { id: { in: ids } },
+          data: { lastViewedAt: writtenAt },
         });
       }
     } catch (err) {
       logger.error("could not flush view stamps", { err: String(err), count: batch.length });
+    }
+  }
+
+  private rememberHolderStamp(mint: string, pollAt: number, writtenAt: number): void {
+    this.writtenHolderStamp.delete(mint);
+    this.writtenHolderStamp.set(mint, { pollAt, writtenAt });
+    while (this.writtenHolderStamp.size > 5_000) {
+      const oldest = this.writtenHolderStamp.keys().next().value;
+      if (oldest === undefined) break;
+      this.writtenHolderStamp.delete(oldest);
     }
   }
 
@@ -137,26 +184,45 @@ export class ViewStampBuffer {
 }
 
 /**
+ * The clear bound for one released poll. The column holds the flush time, which is after the poll,
+ * so the bound is that written time when this buffer flushed the poll (or an earlier one). A stamp
+ * from a later poll is left alone.
+ */
+export function holderStampClearAt(
+  pollAt: number,
+  written: { pollAt: number; writtenAt: number } | undefined,
+): number {
+  if (written && written.pollAt <= pollAt) return Math.max(pollAt, written.writtenAt);
+  return pollAt;
+}
+
+/**
  * Clears bubble-map stamps a sliding watch released (user ask 2026-10-21). Not awaited by the
- * bubble-holders response. A stamp newer than the poll that was released is left alone, so an
+ * bubble-holders response. A stamp newer than the one this release wrote is left alone, so an
  * account that still has the map (and has stamped it again) keeps the fast re-read.
  */
-export function releaseHolderStamps(
+export async function releaseHolderStamps(
   buffer: ViewStampBuffer | undefined,
   released: readonly { mint: string; at: number }[],
 ): Promise<void> {
-  if (released.length === 0) return Promise.resolve();
+  if (released.length === 0) return;
   buffer?.dismiss(released.map((row) => row.mint));
-  return clearReleasedHolderStamps(released);
+  await buffer?.settle();
+  return clearReleasedHolderStamps(released, buffer);
 }
 
-async function clearReleasedHolderStamps(released: readonly { mint: string; at: number }[]): Promise<void> {
+async function clearReleasedHolderStamps(
+  released: readonly { mint: string; at: number }[],
+  buffer: ViewStampBuffer | undefined,
+): Promise<void> {
   try {
     for (const row of released) {
+      const until = buffer ? buffer.holderStampClearAt(row.mint, row.at) : row.at;
       await prisma.token.updateMany({
-        where: { mintAddress: row.mint, holdersViewedAt: { lte: new Date(row.at) } },
+        where: { mintAddress: row.mint, holdersViewedAt: { lte: new Date(until) } },
         data: { holdersViewedAt: null },
       });
+      buffer?.forgetHolderStamp(row.mint, row.at);
     }
   } catch (err) {
     logger.error("could not clear a released bubble-map stamp", {
