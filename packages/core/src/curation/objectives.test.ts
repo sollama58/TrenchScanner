@@ -70,12 +70,21 @@ function corr(a: number[], b: number[]): number {
 /** The "fuel" signal: how far a winner runs, read back from the volume feature. */
 const fuel = (r: BoostingRow) => r.features.volume24hUsd! / 10_000;
 
+/**
+ * volume24hUsd and ageMinutes are retired from the next production fit. These tests still name
+ * them: the signal is planted there, and the check is the objective, not the production list.
+ */
+const PLANTED_FEATURES = ["buyRatio24h", "volume24hUsd", "ageMinutes"] as const;
+
 describe("boosting objectives", () => {
   it("the run-size objective ranks the big runners above the sure doubles", async () => {
     const train = runRows(4000, 1);
     const test = runRows(2000, 2);
-    const runner = await trainBoostedCurator(train, { objective: "runSize" });
-    const plain = await trainBoostedCurator(train);
+    const runner = await trainBoostedCurator(train, {
+      objective: "runSize",
+      featureNames: PLANTED_FEATURES,
+    });
+    const plain = await trainBoostedCurator(train, { featureNames: PLANTED_FEATURES });
     expect(runner.objective).toBe("runSize");
     expect(plain.objective).toBeUndefined();
     const runnerScores = test.map((r) => scoreBoosted(runner, r.features));
@@ -96,9 +105,12 @@ describe("boosting objectives", () => {
   it("the ranking objective orders each hour's winners first and runs are rewarded", async () => {
     const train = runRows(4000, 3);
     const test = runRows(2000, 4);
-    const ranker = await trainBoostedCurator(train, { objective: "lambdarank" });
+    const ranker = await trainBoostedCurator(train, {
+      objective: "lambdarank",
+      featureNames: PLANTED_FEATURES,
+    });
     expect(ranker.objective).toBe("lambdarank");
-    const plain = await trainBoostedCurator(train);
+    const plain = await trainBoostedCurator(train, { featureNames: PLANTED_FEATURES });
     const scores = test.map((r) => scoreBoosted(ranker, r.features));
     const plainScores = test.map((r) => scoreBoosted(plain, r.features));
     const labels = test.map((r) => r.labelValue);
@@ -172,7 +184,10 @@ describe("boosting objectives", () => {
         survived: !fresh || win || rand() > 0.7,
       });
     }
-    const runner = await trainBoostedCurator(rows, { objective: "runSize" });
+    const runner = await trainBoostedCurator(rows, {
+      objective: "runSize",
+      featureNames: ["ageMinutes", "buyRatio24h"],
+    });
     expect(scoreBoosted(runner, { ageMinutes: 2, buyRatio24h: 0.5 })).toBeGreaterThan(
       scoreBoosted(runner, { ageMinutes: 270, buyRatio24h: 0.5 }),
     );

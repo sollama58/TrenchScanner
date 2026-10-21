@@ -261,6 +261,25 @@ export class DexScreenerClient {
     return this.fallback !== undefined && Date.now() < this.blankUntil;
   }
 
+  /**
+   * Pairs this process stored within `maxAgeMs`, without asking DexScreener. The lookup cache
+   * itself is only QUOTE_CACHE_MS (10s); a caller that can show a reading for longer (the search
+   * window's minute) peeks here and skips a refetch of its own.
+   */
+  cachedQuotes(
+    mints: readonly string[],
+    maxAgeMs: number,
+    now = Date.now(),
+  ): Map<string, { token: CandidateToken; at: Date }> {
+    const out = new Map<string, { token: CandidateToken; at: Date }>();
+    for (const mint of mints) {
+      const q = this.quotes.get(mint);
+      if (!q || now - q.at.getTime() > maxAgeMs) continue;
+      out.set(mint, { token: { ...q.token }, at: q.at });
+    }
+    return out;
+  }
+
   /** Mints answered from the recent-quote cache since the last call, then reset. */
   takeQuoteCacheHits(): number {
     const hits = this.quoteHits;
@@ -1116,17 +1135,56 @@ const MIN_CANONICAL_POOL_LIQUIDITY_USD = 1000;
  */
 const MIN_DRAINED_PUMPSWAP_LIQUIDITY_USD = 250;
 
+/** Raydium is the graduation venue for older Pump.fun coins and for Stonks. */
+function isRaydiumVenue(dexId: string | undefined): boolean {
+  return typeof dexId === "string" && dexId.startsWith("raydium");
+}
+
+/**
+ * Venues whose created time may be the pair clock: the bonding curve, PumpSwap (Pump.fun's
+ * graduation pool), and Raydium (older Pump.fun graduations and Stonks). A Meteora pool, or any
+ * other side pool, is not one of these.
+ */
+export function isCanonicalClockVenue(dexId: string | undefined): boolean {
+  return isCurveVenue(dexId) || dexId === "pumpswap" || isRaydiumVenue(dexId);
+}
+
+/**
+ * Created time of a pair, kept only when that pair is a canonical clock venue.
+ * A junk pool (a Meteora pool opened beside the curve, a Raydium pool that is not the one we
+ * price) must not become pairAgeMinutes, and must not become ageMinutes when the launch time
+ * is missing. Undefined leaves both clocks unknown.
+ */
+export function canonicalPairCreatedAt(
+  dexId: string | undefined,
+  createdAt: Date | number | undefined,
+): Date | undefined {
+  if (!isCanonicalClockVenue(dexId)) return undefined;
+  const date =
+    createdAt instanceof Date
+      ? createdAt
+      : typeof createdAt === "number" && createdAt > 0
+        ? new Date(createdAt)
+        : undefined;
+  return date && !Number.isNaN(date.getTime()) ? date : undefined;
+}
+
 /**
  * The pair a mint's market data is read from. A pre-bond Pump.fun curve pair reports no
  * liquidity object at all, so "deepest liquidity" alone let any $1 side pool someone opened for
  * the mint outrank the curve - mispricing it and flipping deriveGraduated to true. So:
- *  - a funded pumpswap pool (Pump.fun's graduation target) means the mint has graduated, and the
- *    deepest real pool is canonical;
+ *  - a funded pumpswap pool (Pump.fun's graduation target) is canonical. A deeper Meteora or
+ *    Raydium pool beside it is a side pool, not the market: spam pools print liquidity so they
+ *    become the pair, and their created time would reset or stretch the pool clock;
  *  - otherwise a curve that is still trading is canonical, whatever side pools exist;
  *  - otherwise a drained pumpswap pool (under the funded threshold but above dust) beats the
- *    quiet curve, which DexScreener keeps listing frozen at the graduation price;
- *  - otherwise (a non-Pump.fun token, or an older Raydium graduation) the deepest real pool,
- *    falling back to the deepest pair of any size.
+ *    quiet curve, which DexScreener keeps listing frozen at the graduation price, and beats a
+ *    side pool the same way;
+ *  - otherwise a quiet curve yields only to a funded Raydium pool (an older graduation), never
+ *    to a Meteora pool;
+ *  - otherwise (no curve and no graduation pool) the deepest real pool, falling back to the
+ *    deepest pair of any size. That pair's created time is kept only if its venue is canonical
+ *    (canonicalPairCreatedAt).
  */
 export function pickCanonicalPair<
   P extends Pick<DexScreenerPair, "dexId" | "liquidity" | "volume"> &
@@ -1138,8 +1196,10 @@ export function pickCanonicalPair<
   // says whether it is active.
   const trades1h = (p: P) => (p.txns?.h1?.buys ?? 0) + (p.txns?.h1?.sells ?? 0);
   const active = (p: P) => (p.volume?.h1 ?? 0) > 0 || trades1h(p) > 0;
-  const pools = pairs.filter((p) => p.dexId !== "pumpfun" && liq(p) >= MIN_CANONICAL_POOL_LIQUIDITY_USD);
-  if (pools.some((p) => p.dexId === "pumpswap")) return deepest(pools);
+  const fundedPumpSwap = pairs.filter(
+    (p) => p.dexId === "pumpswap" && liq(p) >= MIN_CANONICAL_POOL_LIQUIDITY_USD,
+  );
+  if (fundedPumpSwap.length > 0) return deepest(fundedPumpSwap);
   // A curve quoted in another coin graduates into a pumpswap pool quoted in that coin, which
   // DexScreener can't value either (no liquidity figure): once it trades, it is the market.
   const quote = (p: P) => p.quoteToken?.address;
@@ -1155,18 +1215,21 @@ export function pickCanonicalPair<
   if (tokenQuotedPools.length > 0) {
     return tokenQuotedPools.reduce((best, p) => (trades1h(p) > trades1h(best) ? p : best));
   }
-  const curve = pairs.find((p) => p.dexId === "pumpfun" && active(p));
+  const curve = pairs.find((p) => isCurveVenue(p.dexId) && active(p));
   if (curve) return curve;
   // A quiet curve beside a drained pumpswap pool is a graduated coin: DexScreener keeps listing the
-  // old curve frozen at the graduation price, so it must not win. A dust pool is still no signal.
+  // old curve frozen at the graduation price, so it must not win. A dust pool is still no signal,
+  // and neither is a Meteora pool that happens to look deeper.
   const drained = pairs.filter((p) => p.dexId === "pumpswap" && liq(p) >= MIN_DRAINED_PUMPSWAP_LIQUIDITY_USD);
-  if (drained.length > 0) return deepest([...pools, ...drained]);
+  if (drained.length > 0) return deepest(drained);
+  const quietCurve = pairs.find((p) => isCurveVenue(p.dexId));
+  const raydium = pairs.filter((p) => isRaydiumVenue(p.dexId) && liq(p) >= MIN_CANONICAL_POOL_LIQUIDITY_USD);
+  if (quietCurve && raydium.length > 0) return deepest(raydium);
+  if (quietCurve) return quietCurve;
+  // No curve and no PumpSwap pool: a non-Pump.fun token's deepest real pool, else any pair.
+  const pools = pairs.filter((p) => !isCurveVenue(p.dexId) && liq(p) >= MIN_CANONICAL_POOL_LIQUIDITY_USD);
   if (pools.length > 0) return deepest(pools);
-  // No real pool and a quiet curve: the curve is still where the token lives. Falling through to
-  // the deepest pair of any size let a few dollars in a side pool outrank it - pricing the token
-  // off that pool and reading it as graduated.
-  const quietCurve = pairs.find((p) => p.dexId === "pumpfun");
-  return quietCurve ?? deepest(pairs);
+  return deepest(pairs);
 }
 
 function toCandidateToken(pair: DexScreenerPair): CandidateToken {
@@ -1198,7 +1261,10 @@ function toCandidateToken(pair: DexScreenerPair): CandidateToken {
     sells5m: pair.txns?.m5?.sells,
     buys1h: pair.txns?.h1?.buys,
     sells1h: pair.txns?.h1?.sells,
-    pairCreatedAt: pair.pairCreatedAt ? new Date(pair.pairCreatedAt) : undefined,
+    // The priced pair's own created time only when that pair is the curve, PumpSwap, or Raydium.
+    // pickCanonicalPair already refuses to price a Pump.fun mint off a side pool; a reading that
+    // is only a Meteora pool still lands here, and its created time is not a pool age.
+    pairCreatedAt: canonicalPairCreatedAt(pair.dexId, pair.pairCreatedAt),
     hasTwitter: info ? socials.some((s) => s.type === "twitter") : undefined,
     hasTelegram: info ? socials.some((s) => s.type === "telegram") : undefined,
     hasWebsite: info ? (info.websites?.length ?? 0) > 0 : undefined,

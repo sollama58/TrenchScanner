@@ -302,7 +302,8 @@ export async function runFastMatchCycle(
     const launchpad = entry.token.launchpad ?? launchpadFromVenue(candidate.dexId);
     const scored = buildScoredToken(launchpad ? { ...candidate, launchpad } : candidate, onChain, {
       // The earlier of the two, as the scan does: a graduated token's canonical pair is its
-      // PumpSwap pool, created at graduation, not at launch.
+      // PumpSwap pool, created at graduation, not at launch. A junk pool leaves pairCreatedAt
+      // unset, so it cannot become this age.
       createdAt:
         candidate.pairCreatedAt && candidate.pairCreatedAt < entry.token.firstSeenAt
           ? candidate.pairCreatedAt

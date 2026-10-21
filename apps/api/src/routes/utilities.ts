@@ -32,6 +32,7 @@ import {
 } from "@trenchscanner/core";
 import { creatorFeesByMint, TOKEN_CARD_SELECT, withCarriedHolderList } from "../curatedFeed.js";
 import { ExternalSearchUnavailable, searchUntrackedTokens, type ExternalSearchHit } from "../tokenSearch.js";
+import { fillSearchMarketHits } from "../searchMarket.js";
 import { readKolRows } from "../kolRoster.js";
 import { loadKolLabelCounts, loadKolSideLabels, loadLabeledSides } from "../possibleSides.js";
 import {
@@ -355,8 +356,9 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     if (found === null) {
       return reply.code(502).send({ error: "DexScreener couldn't be reached. Try again in a moment." });
     }
+    const priced = found.length > 0 ? await fillSearchMarketHits(found, opts.dexScreener) : found;
     const hits = await Promise.all(
-      found.map(async (hit): Promise<ExternalSearchHit & { free: FreeLookupReason | "open" | null }> => {
+      priced.map(async (hit): Promise<ExternalSearchHit & { free: FreeLookupReason | "open" | null }> => {
         const [free, open] = await Promise.all([
           freeLookupReason(wallet, "token", hit.mint),
           openLookup(wallet, "token", hit.mint),

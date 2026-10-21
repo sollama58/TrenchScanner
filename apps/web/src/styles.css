@@ -21339,6 +21339,60 @@ dialog.tm-modal.tm-terminal::backdrop {
   flex: none;
   align-self: flex-start;
 }
+.card-head > .card-search {
+  flex: none;
+  align-self: flex-start;
+}
+.card-search-btn {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-solid);
+  color: var(--ink-2);
+}
+.card-search-btn:hover,
+.card-search-btn.open {
+  color: var(--ink);
+  border-color: var(--border-strong);
+  background: var(--highlight);
+}
+.card-search-menu {
+  position: fixed;
+  z-index: 80;
+  width: 240px;
+  padding: 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface-solid);
+  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.6);
+}
+.card-search-menu button,
+.card-search-menu a {
+  display: block;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.card-search-menu button:hover,
+.card-search-menu a:hover {
+  background: var(--highlight);
+}
+.scope-title > .scope-search {
+  align-self: center;
+  margin-left: auto;
+}
 .scope-hide {
   position: absolute;
   top: 3px;

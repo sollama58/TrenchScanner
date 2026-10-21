@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DexScreenerClient, pickCanonicalPair, pumpSwapPoolCreatedAt } from "./dexscreener.js";
 import { MARKET_SOURCE } from "../marketSource.js";
+import { buildCandidateFeatures } from "../curation/features.js";
+import { enrichToken } from "../discovery/enrich.js";
 import { GeckoTerminalClient, parseGeckoTokens } from "./geckoterminal.js";
+import type { CandidateToken, ScoredToken } from "../types.js";
 
 describe("pickCanonicalPair", () => {
   const curve = { dexId: "pumpfun", volume: { h1: 20_000 } };
@@ -83,6 +86,135 @@ describe("pickCanonicalPair", () => {
     const a = { dexId: "meteora", liquidity: { usd: 10 } };
     const b = { dexId: "raydium", liquidity: { usd: 500 } };
     expect(pickCanonicalPair([a, b])).toBe(b);
+  });
+
+  it("keeps the PumpSwap pool when a spam Meteora or Raydium pool is deeper", () => {
+    const curve = { dexId: "pumpfun", volume: { h1: 0 }, pairCreatedAt: 1_000 };
+    const pumpswap = { dexId: "pumpswap", liquidity: { usd: 20_000 }, volume: { h1: 100 }, pairCreatedAt: 3_000 };
+    const meteora = { dexId: "meteora", liquidity: { usd: 90_000 }, volume: { h1: 8_000 }, pairCreatedAt: 9_000 };
+    const raydium = { dexId: "raydium", liquidity: { usd: 80_000 }, pairCreatedAt: 8_000 };
+    expect(pickCanonicalPair([curve, meteora, pumpswap])).toBe(pumpswap);
+    expect(pickCanonicalPair([pumpswap, raydium])).toBe(pumpswap);
+    // A drained graduation pool still beats a deeper junk pool and the frozen curve.
+    const drained = { dexId: "pumpswap", liquidity: { usd: 600 }, pairCreatedAt: 3_000 };
+    expect(pickCanonicalPair([curve, meteora, drained])).toBe(drained);
+  });
+
+  it("keeps a quiet curve over a funded Meteora pool, and a Raydium graduation over that pool", () => {
+    const quiet = { dexId: "pumpfun", volume: { h1: 0 }, pairCreatedAt: 1_000 };
+    const spam = { dexId: "meteora", liquidity: { usd: 40_000 }, pairCreatedAt: 500 };
+    expect(pickCanonicalPair([quiet, spam])).toBe(quiet);
+    const raydium = { dexId: "raydium", liquidity: { usd: 12_000 }, pairCreatedAt: 4_000 };
+    expect(pickCanonicalPair([quiet, spam, raydium])).toBe(raydium);
+  });
+});
+
+describe("pair clock", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const launch = Date.parse("2026-10-21T12:00:00Z");
+  const grad = Date.parse("2026-10-21T13:00:00Z");
+  const spamAt = Date.parse("2026-10-21T11:00:00Z");
+  const now = new Date(grad + 30 * 60_000);
+
+  function scored(token: CandidateToken, launchedAt?: Date): ScoredToken {
+    const enriched = enrichToken(token, null, { now, launchedAt });
+    return {
+      ...enriched,
+      narrativeTags: enriched.narrativeTags ?? [],
+      rugScreen: { passed: true, reasons: [] },
+      score: { momentum: 0, holderHealth: 0, age: 0, narrative: 0, total: 0 },
+    };
+  }
+
+  it("follows the canonical PumpSwap pair, not a deeper newer Meteora pool", async () => {
+    const pairs = [
+      {
+        chainId: "solana",
+        dexId: "pumpfun",
+        baseToken: { address: "m" },
+        volume: { h1: 0 },
+        marketCap: 80_000,
+        pairCreatedAt: launch,
+      },
+      {
+        chainId: "solana",
+        dexId: "pumpswap",
+        baseToken: { address: "m" },
+        liquidity: { usd: 20_000 },
+        volume: { h1: 100 },
+        marketCap: 80_000,
+        pairCreatedAt: grad,
+      },
+      {
+        chainId: "solana",
+        dexId: "meteora",
+        baseToken: { address: "m" },
+        liquidity: { usd: 90_000 },
+        volume: { h1: 5_000 },
+        marketCap: 10_000,
+        pairCreatedAt: Date.parse("2026-10-21T13:40:00Z"),
+      },
+    ];
+    vi.stubGlobal("fetch", () => Promise.resolve(new Response(JSON.stringify(pairs))));
+    const [token] = await new DexScreenerClient().getTokensByAddresses(["m"], 1, { retries: 0 });
+    expect(token?.dexId).toBe("pumpswap");
+    expect(token?.pairCreatedAt).toEqual(new Date(grad));
+    const features = buildCandidateFeatures(scored(token!, new Date(launch)), now);
+    // Launch was an hour before graduation; the pool clock is the thirty minutes since graduation.
+    expect(features.ageMinutes).toBe(90);
+    expect(features.pairAgeMinutes).toBeCloseTo(30);
+  });
+
+  it("follows the bonding curve when that is the canonical pair beside a Meteora pool", async () => {
+    const pairs = [
+      {
+        chainId: "solana",
+        dexId: "pumpfun",
+        baseToken: { address: "m" },
+        volume: { h1: 2_000 },
+        marketCap: 20_000,
+        pairCreatedAt: launch,
+      },
+      {
+        chainId: "solana",
+        dexId: "meteora",
+        baseToken: { address: "m" },
+        liquidity: { usd: 50_000 },
+        volume: { h1: 9_000 },
+        marketCap: 20_000,
+        pairCreatedAt: spamAt,
+      },
+    ];
+    vi.stubGlobal("fetch", () => Promise.resolve(new Response(JSON.stringify(pairs))));
+    const [token] = await new DexScreenerClient().getTokensByAddresses(["m"], 1, { retries: 0 });
+    expect(token?.dexId).toBe("pumpfun");
+    expect(token?.pairCreatedAt).toEqual(new Date(launch));
+    const features = buildCandidateFeatures(scored(token!, new Date(launch)), now);
+    expect(features.pairAgeMinutes).toBeCloseTo(90);
+    expect(features.ageMinutes).toBe(90);
+  });
+
+  it("does not invent a pool age from a Meteora pool alone", async () => {
+    const pairs = [
+      {
+        chainId: "solana",
+        dexId: "meteora",
+        baseToken: { address: "m" },
+        liquidity: { usd: 90_000 },
+        marketCap: 10_000,
+        pairCreatedAt: spamAt,
+      },
+    ];
+    vi.stubGlobal("fetch", () => Promise.resolve(new Response(JSON.stringify(pairs))));
+    const [token] = await new DexScreenerClient().getTokensByAddresses(["m"], 1, { retries: 0 });
+    expect(token?.dexId).toBe("meteora");
+    expect(token?.pairCreatedAt).toBeUndefined();
+    const enriched = enrichToken(token!, null, { now });
+    expect(enriched.ageMinutes).toBeUndefined();
+    expect(buildCandidateFeatures(scored(token!), now).pairAgeMinutes).toBeNull();
   });
 });
 
@@ -643,6 +775,68 @@ describe("parseGeckoTokens", () => {
     });
     expect(t?.pairCreatedAt?.toISOString()).toBe("2026-10-07T20:00:00.000Z");
   });
+
+  it("prices the canonical PumpSwap pool, not a deeper Meteora pool listed first, and invents no age from Meteora alone", () => {
+    const mint = "m1";
+    const body = {
+      data: [
+        {
+          attributes: { address: mint, price_usd: "2", market_cap_usd: "1000" },
+          relationships: { top_pools: { data: [{ id: "p_spam" }, { id: "p_swap" }] } },
+        },
+        {
+          attributes: { address: "onlySpam", price_usd: "1", market_cap_usd: "500" },
+          relationships: { top_pools: { data: [{ id: "p_only" }] } },
+        },
+      ],
+      included: [
+        {
+          id: "p_spam",
+          attributes: {
+            address: "spam-pool",
+            base_token_price_usd: "9",
+            reserve_in_usd: "90000",
+            pool_created_at: "2026-10-21T11:00:00Z",
+          },
+          relationships: {
+            base_token: { data: { id: `solana_${mint}` } },
+            dex: { data: { id: "meteora" } },
+          },
+        },
+        {
+          id: "p_swap",
+          attributes: {
+            address: "grad-pool",
+            base_token_price_usd: "1.5",
+            reserve_in_usd: "20000",
+            pool_created_at: "2026-10-21T13:00:00Z",
+          },
+          relationships: {
+            base_token: { data: { id: `solana_${mint}` } },
+            dex: { data: { id: "pumpswap" } },
+          },
+        },
+        {
+          id: "p_only",
+          attributes: {
+            address: "only-pool",
+            base_token_price_usd: "1",
+            reserve_in_usd: "40000",
+            pool_created_at: "2026-10-21T10:00:00Z",
+          },
+          relationships: {
+            base_token: { data: { id: "solana_onlySpam" } },
+            dex: { data: { id: "meteora" } },
+          },
+        },
+      ],
+    };
+    const by = new Map(parseGeckoTokens(body, new Set([mint, "onlySpam"])).map((t) => [t.mintAddress, t]));
+    expect(by.get(mint)).toMatchObject({ dexId: "pumpswap", pairAddress: "grad-pool", priceUsd: 1.5 });
+    expect(by.get(mint)?.pairCreatedAt?.toISOString()).toBe("2026-10-21T13:00:00.000Z");
+    expect(by.get("onlySpam")?.dexId).toBe("meteora");
+    expect(by.get("onlySpam")?.pairCreatedAt).toBeUndefined();
+  });
 });
 
 describe("GeckoTerminalClient with a CoinGecko key", () => {
@@ -712,6 +906,17 @@ describe("getTokensByAddresses quote cache", () => {
     expect(seenAt.get("a")).toEqual(firstSeen.get("a"));
     expect(client.takeQuoteCacheHits()).toBe(2);
     expect(client.takeQuoteCacheHits()).toBe(0);
+  });
+
+  it("peeks a quote older than the lookup cache without another request", async () => {
+    const urls = stubPairs();
+    const client = new DexScreenerClient();
+    await client.getTokensByAddresses(["a"], 1, { retries: 0 });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 11_000);
+    expect(client.cachedQuotes(["a"], 60_000).get("a")?.token.marketCapUsd).toBe(50_000);
+    expect(client.cachedQuotes(["a"], 10_000).has("a")).toBe(false);
+    expect(urls).toHaveLength(1);
   });
 
   it("goes upstream when asked for a fresh reading, and once the window has passed", async () => {

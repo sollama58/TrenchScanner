@@ -1766,6 +1766,8 @@ export interface FeedAppearance {
   transferred: boolean;
   /** The card footer's FEES badge; on by default (absent from older API builds: on). */
   feesBadge: boolean;
+  /** The search control on each card; on by default (absent from older API builds: on). */
+  cardSearch: boolean;
   /** Which default feesBadge it was saved against (appearance.ts FEES_BADGE_REV). */
   feesBadgeRev: number;
   /** Bubble maps open with same-exchange ties drawn; off by default (absent from older API builds: off). */

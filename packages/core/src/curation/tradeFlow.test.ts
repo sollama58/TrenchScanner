@@ -212,7 +212,7 @@ describe("order-flow features in the vector", () => {
       names
         .slice(start + TRADE_FLOW_FEATURES.length)
         .every((n) =>
-          /^(text|path|mkt|ctx|buys5m|sells5m|buyRatio5m|ns[A-Z]|scoreNarrativeV2$|livestream|pairAgeMinutes$|sniperTop10WalletPct$|firstBuyersSupplyPct$|launchBundledBuyers$|devBuySupplyPct$|freshGapPct$|jup|freshLaunchBuyerPct$|walletRisk|knownDumperFirstBuyers$|linked|bundled|flagged|cexFunded|sameTime|walletWin|knownWinnerFirstBuyers$|winnerRecent|kol|largestHolderPct$|sniperTopHolder|top10WalletsChecked$|freshTopHolder|launchpadStonks$|transfer|ageSource$|walletRiskScoredTop10$|firstBuyersSeen$|firstBuyersHoldingCut$|preBondSeconds$|relaunchSibling|walletScoreRecentBuyers|cleanWinner|recentBuyers|curve|devLaunch)/.test(
+          /^(text|path|mkt|ctx|buys5m|sells5m|buyRatio5m|ns[A-Z]|scoreNarrativeV2$|livestream|pairAgeMinutes$|sniperTop10WalletPct$|firstBuyersSupplyPct$|launchBundledBuyers$|devBuySupplyPct$|freshGapPct$|freshQuoteAge|jup|freshLaunchBuyerPct$|walletRisk|knownDumperFirstBuyers$|linked|bundled|flagged|cexFunded|sameTime|walletWin|knownWinnerFirstBuyers$|winnerRecent|kol|largestHolderPct$|sniperTopHolder|top10WalletsChecked$|freshTopHolder|launchpadStonks$|transfer|ageSource$|walletRiskScoredTop10$|firstBuyersSeen$|firstBuyersHoldingCut$|preBondSeconds$|relaunchSibling|walletScoreRecentBuyers|cleanWinner|recentBuyers|curve|devLaunch|vol|px|launchAge|bandDwell|decisionMcap|tradesPerMin)/.test(
             n,
           ),
         ),

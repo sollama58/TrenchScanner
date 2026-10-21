@@ -97,22 +97,48 @@ describe("chart mark settings", () => {
     expect(markPrefsOf(look)).toEqual({ on: false, kinds: ["kol"], minSol: 0.25 });
     expect(markPrefsOf(normalizeAppearance({}))).toEqual(defaults);
     expect(defaults).toMatchObject({ on: true, minSol: 0.5 });
-    expect(defaults.kinds).toHaveLength(7);
+    expect(defaults.kinds).toHaveLength(6);
     expect(defaults.kinds).not.toContain("risky");
+    expect(defaults.kinds).not.toContain("winner");
   });
 
   it("turns risky wallets off for a look saved with every kind still on, and only then", () => {
     const all = ["kol", "known", "funded", "probable", "dev", "risky", "winner", "linked"];
     expect(normalizeAppearance({ chartMarkKinds: all }).chartMarkKinds).not.toContain("risky");
+    expect(normalizeAppearance({ chartMarkKinds: all }).chartMarkKinds).not.toContain("winner");
     // Switched back on since: saved against the new default, it stays on.
     const back = normalizeAppearance({ ...normalizeAppearance({}), chartMarkKinds: all });
     expect(back.chartMarkKinds).toContain("risky");
+    expect(back.chartMarkKinds).toContain("winner");
     expect(normalizeAppearance(back).chartMarkKinds).toContain("risky");
     // A list the reader changed otherwise keeps risky wallets as they left them.
     expect(normalizeAppearance({ chartMarkKinds: ["kol", "risky"] }).chartMarkKinds).toEqual([
       "kol",
       "risky",
     ]);
+  });
+
+  it("turns winners off for a look still on the previous default, and keeps a later choice", () => {
+    const rev2 = ["kol", "known", "funded", "probable", "dev", "winner", "linked"];
+    expect(normalizeAppearance({ chartMarkKinds: rev2, chartMarksRev: 2 }).chartMarkKinds).not.toContain(
+      "winner",
+    );
+    // Risky switched back on against rev 2 stays on; winners were still the default, so they go off.
+    const all = ["kol", "known", "funded", "probable", "dev", "risky", "winner", "linked"];
+    const riskyOn = normalizeAppearance({ chartMarkKinds: all, chartMarksRev: 2 });
+    expect(riskyOn.chartMarkKinds).toContain("risky");
+    expect(riskyOn.chartMarkKinds).not.toContain("winner");
+    // The reader turned winners on after this default: the saved revision keeps them.
+    const chosen = normalizeAppearance({
+      ...normalizeAppearance({}),
+      chartMarkKinds: [...rev2],
+    });
+    expect(chosen.chartMarkKinds).toContain("winner");
+    expect(normalizeAppearance(chosen).chartMarkKinds).toContain("winner");
+    // A list they edited otherwise keeps winners as they left them.
+    expect(
+      normalizeAppearance({ chartMarkKinds: ["kol", "winner"], chartMarksRev: 2 }).chartMarkKinds,
+    ).toEqual(["kol", "winner"]);
   });
 });
 

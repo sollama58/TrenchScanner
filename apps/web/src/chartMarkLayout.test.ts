@@ -50,7 +50,7 @@ describe("layoutMarks", () => {
     expect(one().y).toBe(mid.y);
     expect(one(0).y).toBe(mid.y);
     expect(one(-1).y).toBe(mid.y);
-    // Small radii stay on consecutive levels, so the row spacing is the scaled pitch.
+    // Same x: the rows stay one level apart, and that gap is pitch + 3px at every distance.
     const stacked = (gap: number) =>
       layoutMarks([spot("a", "buy", 50, 4), spot("b", "buy", 50, 4)], 20, 400, gap);
     for (const gap of [0.5, 1, 2]) expect(stacked(gap).map((p) => p.level)).toEqual([0, 1]);
@@ -58,8 +58,9 @@ describe("layoutMarks", () => {
       const rows = stacked(gap);
       return rows[1]!.y - rows[0]!.y;
     };
-    expect(span(0.5)).toBeLessThan(span(1));
-    expect(span(1)).toBeLessThan(span(2));
+    expect(span(0.5)).toBe(23);
+    expect(span(1)).toBe(23);
+    expect(span(2)).toBe(23);
   });
 });
 

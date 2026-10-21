@@ -28,6 +28,7 @@ import {
   SlidersIcon,
   XLogoIcon,
 } from "./Icons";
+import { CardSearchButton } from "./CardSearchButton";
 import { XLinkPreview } from "./XLinkPreview";
 import { useImagePreview } from "./ImagePreview";
 import { linkedCount, linkedCountText } from "../linkedCount";
@@ -395,6 +396,14 @@ export function AlertCard({
             {/* Inter has no ⊘, and the fallback font draws it larger than the other marks. */}
             {resultMark === "⊘" ? <span className="result-stop">⊘</span> : resultMark}
           </span>
+        )}
+        {detail && look.cardSearch && (
+          <CardSearchButton
+            className="card-search"
+            symbol={card.token.symbol}
+            name={card.token.name}
+            mint={card.token.mintAddress}
+          />
         )}
         {!hideInAlert && hideButton}
       </header>

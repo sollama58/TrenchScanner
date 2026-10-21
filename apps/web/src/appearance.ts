@@ -17,10 +17,11 @@ import {
 
 /**
  * Which default chartMarkKinds a look was saved against (apps/api/src/feedAppearance.ts has the
- * same): a list from before risky wallets went off by default with every kind on is the old
- * default, never changed, and reads without them.
+ * same): 2 turned risky wallets off; 3 turns winners off. A list that is still exactly an older
+ * default was never changed, and reads as the new one. A list the reader edited keeps winners as
+ * they left them.
  */
-export const CHART_MARKS_REV = 2;
+export const CHART_MARKS_REV = 3;
 /**
  * Which hideBelowMcap default a look was saved against (apps/api/src/feedAppearance.ts has the
  * same): a look from before it went on at 6k that still holds the old default (off at 5k) was never
@@ -69,6 +70,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   transferred: false,
   // On by default (user ask 2026-10-19); Customize › Extras switches it off.
   feesBadge: true,
+  // The search control on each card (user ask 2026-10-21); Customize switches it off.
+  cardSearch: true,
   feesBadgeRev: FEES_BADGE_REV,
   bubbleCexLinks: false,
   bubbleFunderLabels: false,
@@ -98,9 +101,10 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   hideBelowMcapRev: HIDE_BELOW_MCAP_REV,
   quickLinks: ["terminal"],
   // The token chart's labeled-wallet trades (user ask 2026-10-18): 0.5 SOL and up, every kind but
-  // risky wallets and dumpers, which are off by default (user ask 2026-10-18).
+  // risky wallets and dumpers (user ask 2026-10-18) and winners (user ask 2026-10-21), which are
+  // off by default.
   chartMarks: true,
-  chartMarkKinds: ["kol", "known", "funded", "probable", "dev", "winner", "linked"],
+  chartMarkKinds: ["kol", "known", "funded", "probable", "dev", "linked"],
   chartMarksRev: CHART_MARKS_REV,
   chartMarkMinSol: 0.5,
   // KOLs' trades as their X pictures on the chart, on by default (user ask 2026-10-19).
@@ -353,6 +357,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
         ? r.feesBadge
         : d.feesBadge,
     feesBadgeRev: FEES_BADGE_REV,
+    cardSearch: typeof r.cardSearch === "boolean" ? r.cardSearch : d.cardSearch,
     bubbleCexLinks: typeof r.bubbleCexLinks === "boolean" ? r.bubbleCexLinks : d.bubbleCexLinks,
     bubbleFunderLabels:
       typeof r.bubbleFunderLabels === "boolean" ? r.bubbleFunderLabels : d.bubbleFunderLabels,
@@ -425,14 +430,33 @@ function hideBelowMcapOf(
   };
 }
 
+/** The rev-2 default: every kind but risky, winners still on. */
+const MARK_KINDS_BEFORE_WINNERS_OFF = [
+  "kol",
+  "known",
+  "funded",
+  "probable",
+  "dev",
+  "winner",
+  "linked",
+] as const;
+
+const sameMarkKinds = (kinds: readonly string[], expected: readonly string[]) =>
+  kinds.length === expected.length && expected.every((k) => kinds.includes(k));
+
 /** A saved look's chart mark kinds, in MARK_KINDS order; see CHART_MARKS_REV. */
 function chartMarkKindsOf(r: Record<string, unknown>): FeedAppearance["chartMarkKinds"] {
   if (!Array.isArray(r.chartMarkKinds)) return DEFAULT_APPEARANCE.chartMarkKinds;
   const saved = r.chartMarkKinds as unknown[];
   const kinds = ALL_MARK_KINDS.filter((k) => saved.includes(k));
-  return r.chartMarksRev !== CHART_MARKS_REV && kinds.length === ALL_MARK_KINDS.length
-    ? kinds.filter((k) => k !== "risky")
-    : kinds;
+  if (r.chartMarksRev === CHART_MARKS_REV) return kinds;
+  // Every kind still on, and not saved after risky went off: the untouched old default.
+  if (sameMarkKinds(kinds, ALL_MARK_KINDS) && r.chartMarksRev !== 2)
+    return kinds.filter((k) => k !== "risky" && k !== "winner");
+  // Rev 2's default (or risky switched back on against it): winners were still the default.
+  if (sameMarkKinds(kinds, ALL_MARK_KINDS) || sameMarkKinds(kinds, MARK_KINDS_BEFORE_WINNERS_OFF))
+    return kinds.filter((k) => k !== "winner");
+  return kinds;
 }
 
 /** A preset applied on top of the default, keeping the user's theme and colors. */

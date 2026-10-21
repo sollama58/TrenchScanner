@@ -52,6 +52,7 @@ import {
   recordedPeakOf,
   socialLinks,
 } from "./AlertCard";
+import { CardSearchButton } from "./CardSearchButton";
 import { QuickBuyPill } from "./QuickBuyPill";
 import { TokenImage } from "./TokenImage";
 import { FilterGlyph } from "./FilterBadge";
@@ -682,6 +683,14 @@ export function ScopeRow({
             <span className="scope-name" title={card.token.name}>
               {card.token.name}
             </span>
+          )}
+          {d.showSearch && (
+            <CardSearchButton
+              className="scope-search"
+              symbol={card.token.symbol}
+              name={card.token.name}
+              mint={card.token.mintAddress}
+            />
           )}
         </div>
         <div className="scope-meta">

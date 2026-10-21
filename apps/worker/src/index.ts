@@ -597,9 +597,10 @@ async function main() {
     );
   }
   // Prices the open curated-alerts training rows and closes their label windows - one batched
-  // DexScreener sweep per tick, see runCandidateWatchJob. Its cadence IS the label resolution,
-  // and the win bar is "2x within 15 minutes", so at the default it decides each verdict on about
-  // fifteen observations - lowering it is the lever for sharper labels.
+  // DexScreener sweep per tick, see runCandidateWatchJob. For a coin the curve tape is not
+  // following, that cadence is the label resolution (about fifteen observations at the default
+  // across the 15-minute win). The tape's own prints, read in this process, fill the minutes
+  // in between for a coin it still follows.
   schedule("candidate-watch", () =>
     scheduleInterval(
       "candidate-watch",

@@ -227,7 +227,7 @@ export interface ScoredWallet {
   winner?: boolean;
   /** The hidden composite Wallet Score (walletScore.ts); null or absent when it has none. */
   walletScore?: number | null;
-  /** Coins it traded itself at 2x or better (WalletRisk.own2x), for the Winners seat's inputs. */
+  /** Coins it traded itself at 2x or better (WalletRisk.own2x), for the clean-winner inputs. */
   own2x?: number;
   /**
    * Its win-sized trades fed by tokens transferred in (WalletRisk.transferWins): null until the
@@ -303,7 +303,7 @@ export interface WalletRiskAsOf {
   rank?: (score: number) => number;
 }
 
-/** What the scan reads per coin from the win scores (recorded only, not read by the models yet). */
+/** What the scan reads per coin from the win scores. The learners read these (features.ts WALLET_WIN_FEATURES); null stays null, and the onset guard holds them until they cover the exam. */
 export interface CoinWalletWins {
   /** Highest win score among the top-10 holders scored; null when none is. */
   walletWinTop10Max: number | null;

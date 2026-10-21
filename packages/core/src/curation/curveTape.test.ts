@@ -102,4 +102,23 @@ describe("CurveTape", () => {
     expect(f.curveChanges1m).toBeNull();
     expect(f.curveNetSol1m).toBe(0);
   });
+
+  it("answers the prints between two moments, and nothing for a mint it never saw", () => {
+    const tape = new CurveTape();
+    expect(tape.labelPrices("m", 0, 60_000)).toEqual({ basis: null, changes: [] });
+    tape.record("m", 0, state(1), "read");
+    tape.record("m", 10_000, state(2.2), "stream");
+    tape.record("m", 20_000, state(1.05), "stream");
+    expect(tape.labelPrices("m", 0, 60_000)).toEqual({
+      basis: { at: 0, price: 1 },
+      changes: [
+        { at: 10_000, price: 2.2 },
+        { at: 20_000, price: 1.05 },
+      ],
+    });
+    expect(tape.labelPrices("other", 0, 60_000)).toEqual({ basis: null, changes: [] });
+    // A hole drops the old cover. The price before it is not a basis for the new one.
+    tape.record("m", 20_000 + 60_000, state(4), "read");
+    expect(tape.labelPrices("m", 0, 20_000)).toEqual({ basis: null, changes: [] });
+  });
 });

@@ -11,6 +11,7 @@ import {
 import { ago, multiple, shortAddress, usd } from "../format";
 import { parseSearch, searchParam } from "../caSearch";
 import { openTokenModal } from "../tokenModal";
+import { overlaySearchMarket, type SearchMarketPatch } from "../cardSearch";
 import {
   ANY_FACETS,
   arrangeHits,
@@ -320,7 +321,18 @@ function HitRow({
  * opens to trade by itself (user ask 2026-10-19). Arrow keys move through both sections, Enter
  * opens, Escape closes.
  */
-export function SearchModal({ open, onClose, now }: { open: boolean; onClose: () => void; now: number }) {
+export function SearchModal({
+  open,
+  onClose,
+  now,
+  seed = null,
+}: {
+  open: boolean;
+  onClose: () => void;
+  now: number;
+  /** A card's search: fill the box with this text. `id` changes every time, so a repeat fills again. */
+  seed?: { text: string; id: number } | null;
+}) {
   const ref = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const [text, setText] = useState("");
@@ -343,6 +355,10 @@ export function SearchModal({ open, onClose, now }: { open: boolean; onClose: ()
   const search = useSearchParam(text);
   const [found] = useSearch<TokenSearchAnswer>("/tokens/search", search);
   const [outside, searchOutsideAgain] = useSearch<ExternalSearchAnswer>("/utilities/search", search);
+  // Readings for the rows on screen, refreshed while the window stays open. The server reuses
+  // anything younger than a minute, so this poll is a cache read unless a row has gone stale.
+  const [patches, setPatches] = useState<Map<string, SearchMarketPatch>>(new Map());
+  const seeded = useRef(0);
 
   useEffect(() => {
     const dialog = ref.current;
@@ -354,10 +370,28 @@ export function SearchModal({ open, onClose, now }: { open: boolean; onClose: ()
     if (!open && dialog.open) dialog.close();
   }, [open]);
 
+  useEffect(() => {
+    if (!seed || seed.id === seeded.current) return;
+    seeded.current = seed.id;
+    setText(seed.text);
+    const el = input.current;
+    if (!el) return;
+    el.focus();
+    requestAnimationFrame(() => el.select());
+  }, [seed]);
+
+  useEffect(() => setPatches(new Map()), [search]);
+
   const answer = answerOf(found);
   const extra = answerOf(outside);
-  const hits = useMemo(() => answer?.hits ?? [], [answer]);
-  const extraHits = useMemo(() => extra?.hits ?? [], [extra]);
+  const hits = useMemo(
+    () => (answer?.hits ?? []).map((h) => overlaySearchMarket(h, patches.get(h.mint))),
+    [answer, patches],
+  );
+  const extraHits = useMemo(
+    () => (extra?.hits ?? []).map((h) => overlaySearchMarket(h, patches.get(h.mint))),
+    [extra, patches],
+  );
   const allHits = useMemo(() => [...hits, ...extraHits], [hits, extraHits]);
   const counts = useMemo(() => filterCounts(allHits, facets), [allHits, facets]);
   const options = useMemo(() => facetOptions(allHits, filter), [allHits, filter]);
@@ -376,6 +410,39 @@ export function SearchModal({ open, onClose, now }: { open: boolean; onClose: ()
     [extraShown, expanded.outside],
   );
   const rows = useMemo(() => [...trackedRows, ...outsideRows], [trackedRows, outsideRows]);
+  const visibleMints = rows
+    .map((r) => r.mint)
+    .slice(0, 30)
+    .join(",");
+  const missingMints = rows
+    .filter((r) => r.marketCapUsd === null)
+    .map((r) => r.mint)
+    .slice(0, 30)
+    .join(",");
+  useEffect(() => {
+    if (!open || !visibleMints) return;
+    let stop = false;
+    const refresh = (mints: string) => {
+      api<{ hits: SearchMarketPatch[] }>(`/tokens/search/markets?mints=${encodeURIComponent(mints)}`)
+        .then((res) => {
+          if (stop) return;
+          setPatches((prev) => {
+            const next = new Map(prev);
+            for (const p of res.hits) next.set(p.mint, p);
+            return next;
+          });
+        })
+        .catch(() => undefined);
+    };
+    // A row that came back blank is asked again once the search's own fill has had a moment.
+    const soon = missingMints ? window.setTimeout(() => refresh(missingMints), 2_000) : undefined;
+    const timer = window.setInterval(() => refresh(visibleMints), 30_000);
+    return () => {
+      stop = true;
+      if (soon !== undefined) window.clearTimeout(soon);
+      window.clearInterval(timer);
+    };
+  }, [open, visibleMints, missingMints]);
   useEffect(() => setExpanded({ tracked: false, outside: false }), [search]);
   // A new list starts at its top.
   useEffect(() => setActive(0), [rows]);

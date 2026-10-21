@@ -371,22 +371,32 @@ describe("Gems", () => {
 });
 
 describe("Winners", () => {
-  it("is a standalone learner on the clean-winner reading, the only seat reading it, outside every combiner", () => {
+  it("is a standalone learner on the clean-winner reading, outside every combiner", () => {
     const spec = contestantSpec(WINNERS_CONTESTANT)!;
     expect(spec.name).toBe("Winners");
     expect(spec.role).toBe("learner");
     expect(spec.standalone).toBe(true);
     expect(spec.requires).toBe("recentBuyersRead");
     expect(spec.gate).toBeUndefined();
+    const winnerFollow = new Set<string>(WINNER_FOLLOW_FEATURES);
     expect(WINNERS_RECIPE).toEqual({
       learner: "gbdt",
       twoStage: true,
-      featureNames: [...TREES_NO_TOKENSAGE_FEATURES, ...WINNERS_SEAT_INPUTS],
+      featureNames: [
+        ...TREES_NO_TOKENSAGE_FEATURES.filter((name) => !winnerFollow.has(name)),
+        ...WINNERS_SEAT_INPUTS,
+      ],
       recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS,
       cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
       goal: "return",
     });
-    for (const name of WINNER_FOLLOW_FEATURES) expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+    for (const name of WINNER_FOLLOW_FEATURES) {
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+    }
+    expect(WINNERS_RECIPE.featureNames).not.toContain("cleanWinnerRecentBuyers");
+    expect(WINNERS_RECIPE.featureNames).not.toContain("recentBuyersRead");
+    expect(new Set(WINNERS_RECIPE.featureNames).size).toBe(WINNERS_RECIPE.featureNames!.length);
     // The shares and how winners trade, not the counts, which read lower on backfilled rows.
     expect(WINNERS_SEAT_INPUTS).not.toContain("cleanWinnerRecentBuyers");
     expect(WINNERS_SEAT_INPUTS).not.toContain("recentBuyersRead");

@@ -28,9 +28,10 @@
  * hit4xIn1h, ...): they are the stored contract the API, the exports and the dashboard read.
  * They now mean "inside the label window", "the win" and "the goal".
  *
- * Granularity caveat: the watcher samples roughly once a minute, so intra-minute wicks - both
- * a momentary 2x and a momentary stop-run - are invisible. That cuts both ways and is accepted;
- * the label describes what a human watching the chart at the same cadence could have traded.
+ * Granularity: the watcher's own price fetch is still about once a minute. Where the worker's
+ * in-memory bonding-curve tape has prints inside that minute, those are folded in through
+ * applyPriceTick (dollarTicksFromCurve) and the row is stamped FINE_TICK_LABEL_RULE. A coin with
+ * no curve tape is graded on the minute sample alone, the same question as rule 4.
  */
 
 /**
@@ -43,12 +44,24 @@
  *       which runs 45-60 s behind the market (user decision 2026-10-12; decisionAnchor below).
  *       History from rule 3 was re-graded to it from Pump.fun's minute candles where they could
  *       vouch for the price (labelRegradeJob in the worker); the rest stays on rule 3.
+ *   5 - rule 4's anchor, with sub-minute bonding-curve prints folded in when the worker's curve
+ *       tape had them (FINE_TICK_LABEL_RULE, 2026-10-21). The bar is unchanged (2x / 15m, stop at
+ *       50% before the 2x, 4x / 30m, log2 of the clean peak). A row the tape never priced stays
+ *       on rule 4. Rule 4 rows are not re-graded onto rule 5: the tape was not kept, so rewriting
+ *       them would pretend a wick was seen. Rule 5 is still the current question (labelRule >=
+ *       CURRENT_LABEL_RULE) — a finer reading of the same bar, not a new one — so the fit keeps
+ *       rule 4.
  *
- * Training and the exam weigh rule-4 rows as current and rule-3 rows as legacy. The live record
- * and the charts read both (REPORTED_LABEL_RULE).
+ * Training and the exam weigh rule-4 and rule-5 rows as current and rule-3 rows as legacy. The
+ * live record and the charts read rule 3 and newer (REPORTED_LABEL_RULE).
  */
 export const LEGACY_LABEL_RULE = 1;
 export const CURRENT_LABEL_RULE = 4;
+/**
+ * Rule 4's anchor, graded with sub-minute curve-tape prints when the tape had them. See the
+ * rule list above. Not CURRENT_LABEL_RULE: bumping that would drop every rule-4 row from the fit.
+ */
+export const FINE_TICK_LABEL_RULE = 5;
 /** The rule a decision anchored on DexScreener's price is graded under (no usable fresh quote). */
 export const DEXSCREENER_ANCHOR_LABEL_RULE = 3;
 /**
@@ -64,6 +77,21 @@ export const FRESH_ANCHOR_LABEL_RULE = 4;
  * wrong pool or a stale entry on one side, not a move): the row anchors on DexScreener's price.
  */
 export const FRESH_ANCHOR_MAX_RATIO = 5;
+
+/**
+ * Whether a fresh quote's price / the scan's price is close enough to be the anchor (decisionAnchor)
+ * and the decision's market cap (decisionMcapUsd). Inclusive at the factor: "further than" it is
+ * a bad quote. One predicate so the label and the clock block cannot drift apart.
+ */
+export function freshAnchorRatioTrusted(ratio: number): boolean {
+  // The clock block rebuilds the ratio from freshGapPct (`1 + gap/100`). A gap of -80 is a
+  // ratio of 1/5, but that round trip is one ulp under the bound. The slack is far smaller
+  // than any quote anyone would call a different price.
+  const slack = 1e-9;
+  const max = FRESH_ANCHOR_MAX_RATIO * (1 + slack);
+  const min = (1 / FRESH_ANCHOR_MAX_RATIO) * (1 - slack);
+  return Number.isFinite(ratio) && ratio > 0 && ratio <= max && ratio >= min;
+}
 
 /**
  * The fresh quote's market cap on the scan reading's supply, or null without a usable quote: the
@@ -97,7 +125,7 @@ export function decisionAnchor(scored: {
   if (q && q.priceUsd > 0 && q.marketCapUsd > 0 && scored.priceUsd > 0) {
     const ratio = q.priceUsd / scored.priceUsd;
     const mcap = freshQuoteMcapUsd(scored);
-    if (mcap !== null && ratio <= FRESH_ANCHOR_MAX_RATIO && ratio >= 1 / FRESH_ANCHOR_MAX_RATIO) {
+    if (mcap !== null && freshAnchorRatioTrusted(ratio)) {
       return { priceUsd: q.priceUsd, marketCapUsd: mcap, labelRule: FRESH_ANCHOR_LABEL_RULE };
     }
   }
@@ -333,6 +361,48 @@ export function applyPriceTick(
   }
 
   return updates;
+}
+
+/**
+ * A curve-tape price (quote per token, not dollars) the outcome watcher can grade from. `basis`
+ * is the price in force at the start of the window when the cover includes it. `changes` are
+ * prints strictly after that start, through the window, oldest first.
+ */
+export interface CurveLabelPrices {
+  basis: { at: number; price: number } | null;
+  changes: readonly { at: number; price: number }[];
+}
+
+/**
+ * Dollar ticks for curve prints the minute sample missed. `usd` is a dollar price observed at
+ * `usd.at` (this sweep's print, or the row's previous one when this sweep has none). The scale is
+ * that dollar price divided by the curve price in force at the same instant — the tape's price is
+ * a step, so the newest print at or before `usd.at` is exact then. Each change at a different
+ * millisecond becomes a dollar tick for applyPriceTick. Empty when the tape does not cover the
+ * dollar print: no scale, so a coin with no curve tape is left on the minute sample.
+ */
+export function dollarTicksFromCurve(
+  prices: CurveLabelPrices,
+  usd: { at: Date; priceUsd: number },
+): { priceUsd: number; at: Date }[] {
+  if (!(usd.priceUsd > 0) || !Number.isFinite(usd.priceUsd)) return [];
+  const usdMs = usd.at.getTime();
+  let curveAtUsd: number | null = null;
+  if (prices.basis && prices.basis.at <= usdMs && prices.basis.price > 0) curveAtUsd = prices.basis.price;
+  for (const change of prices.changes) {
+    if (change.at > usdMs) break;
+    if (change.price > 0) curveAtUsd = change.price;
+  }
+  if (curveAtUsd === null || !(curveAtUsd > 0)) return [];
+  const scale = usd.priceUsd / curveAtUsd;
+  const ticks: { priceUsd: number; at: Date }[] = [];
+  for (const change of prices.changes) {
+    if (change.at === usdMs || !(change.price > 0) || !Number.isFinite(change.price)) continue;
+    const priceUsd = change.price * scale;
+    if (!Number.isFinite(priceUsd) || priceUsd <= 0) continue;
+    ticks.push({ priceUsd, at: new Date(change.at) });
+  }
+  return ticks;
 }
 
 export interface OutcomeLabels {

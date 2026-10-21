@@ -3,6 +3,7 @@ import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError } from "./rateGate.js";
 import { isCurveVenue } from "../launchpads.js";
+import { canonicalPairCreatedAt, pickCanonicalPair } from "./dexscreener.js";
 import { MARKET_SOURCE } from "../marketSource.js";
 import { onCurrentSupplies } from "../mintSupply.js";
 import type { CandidateToken } from "../types.js";
@@ -216,10 +217,24 @@ export function parseGeckoTokens(body: GeckoMultiResponse, requested: Set<string
     const a = token.attributes;
     const mint = a?.address;
     if (!a || !mint || !requested.has(mint)) continue;
-    // A pool where the mint is the quote token carries the other token's price.
-    const pool = (token.relationships?.top_pools?.data ?? [])
+    // A pool where the mint is the quote token carries the other token's price. Among the pools
+    // it is the base of, the same pair the scan prices on DexScreener (pickCanonicalPair): a
+    // deeper Meteora pool listed first must not become the pair or its clock.
+    const basePools = (token.relationships?.top_pools?.data ?? [])
       .map((ref) => pools.get(ref.id))
-      .find((p) => p?.relationships?.base_token?.data?.id === `${SOLANA}_${mint}`);
+      .filter((p): p is GeckoPool => p?.relationships?.base_token?.data?.id === `${SOLANA}_${mint}`);
+    const selectable = basePools.map((pool) => {
+      const quote = pool.relationships?.quote_token?.data?.id?.replace(`${SOLANA}_`, "");
+      return {
+        pool,
+        dexId: toDexId(pool.relationships?.dex?.data?.id) ?? "",
+        liquidity: { usd: num(pool.attributes?.reserve_in_usd) },
+        volume: { h1: num(pool.attributes?.volume_usd?.h1) },
+        txns: { h1: pool.attributes?.transactions?.h1 },
+        ...(quote ? { quoteToken: { address: quote } } : {}),
+      };
+    });
+    const pool = selectable.length > 0 ? pickCanonicalPair(selectable).pool : undefined;
     const p = pool?.attributes;
     const marketCapUsd =
       num(a.market_cap_usd) ?? num(a.fdv_usd) ?? num(p?.market_cap_usd) ?? num(p?.fdv_usd) ?? 0;
@@ -250,7 +265,11 @@ export function parseGeckoTokens(body: GeckoMultiResponse, requested: Set<string
       sells5m: p?.transactions?.m5?.sells,
       buys1h: p?.transactions?.h1?.buys,
       sells1h: p?.transactions?.h1?.sells,
-      pairCreatedAt: createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : undefined,
+      // Same rule as DexScreener: a Meteora (or other non-canonical) pool does not supply the clock.
+      pairCreatedAt: canonicalPairCreatedAt(
+        dexId,
+        createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : undefined,
+      ),
       dexId,
       // "solana_<mint>"; the symbol isn't in the response, so the cards name it from the mint.
       quoteMint: pool?.relationships?.quote_token?.data?.id.replace(`${SOLANA}_`, "") || undefined,

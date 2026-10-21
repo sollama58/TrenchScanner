@@ -41,6 +41,19 @@ export interface PricePathFeatures {
    * reads a gap too (ageMinutes rides alongside in the vector).
    */
   pathGapMinutes: number | null;
+  /**
+   * Minutes actually elapsed between the two prices behind pathRet15mPct / pathRet30mPct.
+   * Those returns answer across a short tape or a hole, so the named window is not the span:
+   * an eight-minute tape's whole move is stored as the 15-minute return, and a hole can put
+   * forty minutes of move under the same name. Null when that return is null. The per-minute
+   * returns divide the move by this span.
+   */
+  pathSpan15mMin: number | null;
+  pathSpan30mMin: number | null;
+  /** pathRet15mPct / pathSpan15mMin, in percent per minute. Null when either is. */
+  pathRet15mPerMin: number | null;
+  /** pathRet30mPct / pathSpan30mMin, in percent per minute. Null when either is. */
+  pathRet30mPerMin: number | null;
 }
 
 export const EMPTY_PRICE_PATH: PricePathFeatures = {
@@ -55,6 +68,10 @@ export const EMPTY_PRICE_PATH: PricePathFeatures = {
   pathHolderSlope10m: null,
   pathObservedMinutes: null,
   pathGapMinutes: null,
+  pathSpan15mMin: null,
+  pathSpan30mMin: null,
+  pathRet15mPerMin: null,
+  pathRet30mPerMin: null,
 };
 
 export interface MarketContextFeatures {
@@ -93,6 +110,11 @@ export function clockContext(
     ctxHourCos: Math.cos(angle),
     ctxWeekend: day === 0 || day === 6 ? 1 : 0,
   };
+}
+
+/** A RugCheck count of 0 is an unindexed list, not a flat book. Left on the tape it slopes at 0. */
+function holderReading(holders: number | null | undefined): number | null {
+  return typeof holders === "number" && holders > 0 ? holders : null;
 }
 
 interface Tick {
@@ -159,7 +181,7 @@ export class PricePathBook {
       }
       if (last && t - last.at < MIN_TICK_SPACING_MS) tape.pop();
     }
-    tape.push({ at: t, priceUsd, holders: holders ?? null, holdersAt: holdersAt?.getTime() ?? t });
+    tape.push({ at: t, priceUsd, holders: holderReading(holders), holdersAt: holdersAt?.getTime() ?? t });
     const cutoff = t - TAPE_MS;
     while (tape.length > 0 && tape[0]!.at < cutoff) tape.shift();
     this.tapes.set(mint, tape);
@@ -193,7 +215,7 @@ export class PricePathBook {
       earlier.push({
         at,
         priceUsd: t.priceUsd,
-        holders: t.holders ?? null,
+        holders: holderReading(t.holders),
         holdersAt: t.holdersAt?.getTime() ?? at,
       });
     }
@@ -243,21 +265,31 @@ export class PricePathBook {
     // the band: on 20+ minute-old coins a missing 15-minute return doubled 9.2% against 3.1%, and
     // the seats scored those rows about three times the ones carrying a value. Now the move is a
     // value and pathGapMinutes says how much of the window the tape missed, so the models see both.
-    const priceAgo = (minutes: number, acrossGaps: boolean): number | null => {
+    const priceAgo = (minutes: number, acrossGaps: boolean): Tick | null => {
       const target = now.at - minutes * MINUTE;
       let best: Tick | null = null;
       for (const tick of tape) {
         if (tick.at <= target + PRICE_AGO_SLACK_MS) best = tick;
         else break;
       }
-      if (!best) return acrossGaps ? first.priceUsd : null;
+      if (!best) return acrossGaps ? first : null;
       if (!acrossGaps && target - best.at > priceAgoTolerance(minutes)) return null;
-      return best.priceUsd;
+      return best;
     };
     const ret = (minutes: number, acrossGaps = false): number | null => {
       const p = priceAgo(minutes, acrossGaps);
-      return p === null ? null : ((now.priceUsd - p) / p) * 100;
+      return p === null ? null : ((now.priceUsd - p.priceUsd) / p.priceUsd) * 100;
     };
+    // The named window is not the span when the return is taken across a short tape or a hole.
+    const spanMinutes = (minutes: number, acrossGaps: boolean): number | null => {
+      const p = priceAgo(minutes, acrossGaps);
+      if (p === null) return null;
+      const span = (now.at - p.at) / MINUTE;
+      if (!(span > 0)) return null;
+      return Math.round(span * 100) / 100;
+    };
+    const perMinute = (retPct: number | null, span: number | null): number | null =>
+      retPct === null || span === null || !(span > 0) ? null : retPct / span;
     // Minutes of the window no tape covers: before its first tick, and every hole inside it.
     const windowStart = now.at - PATH_GAP_WINDOW_MINUTES * MINUTE;
     let uncoveredMs = Math.max(0, first.at - windowStart);
@@ -317,11 +349,15 @@ export class PricePathBook {
 
     const dd15 = drawdown(15);
     const dd60 = drawdown(60);
+    const ret15 = ret(15, true);
+    const ret30 = ret(30, true);
+    const span15 = spanMinutes(15, true);
+    const span30 = spanMinutes(30, true);
     return {
       pathRet1mPct: ret(1),
       pathRet5mPct: ret(5),
-      pathRet15mPct: ret(15, true),
-      pathRet30mPct: ret(30, true),
+      pathRet15mPct: ret15,
+      pathRet30mPct: ret30,
       pathDrawdown15mPct: dd15 ? dd15.pct : null,
       pathDrawdown60mPct: dd60 ? dd60.pct : null,
       pathGreenShare10m: observedMinutes >= 3 && moves > 0 ? ups / moves : observedMinutes >= 3 ? 0.5 : null,
@@ -329,6 +365,10 @@ export class PricePathBook {
       pathHolderSlope10m: holderSlope,
       pathObservedMinutes: Math.round(observedMinutes * 10) / 10,
       pathGapMinutes: gapMinutes,
+      pathSpan15mMin: span15,
+      pathSpan30mMin: span30,
+      pathRet15mPerMin: perMinute(ret15, span15),
+      pathRet30mPerMin: perMinute(ret30, span30),
     };
   }
 

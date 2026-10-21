@@ -16,7 +16,8 @@ const logger = createLogger("winner-follow-backfill");
 
 /**
  * The clean winners' reading of the newest buyers (user ask 2026-10-17, core's
- * wallets/winnerFollow.ts: the Winners seat's inputs) for the decision rows banked before the scan
+ * wallets/winnerFollow.ts: learner inputs; the Winners seat still requires the tape) for the decision
+ * rows banked before the scan
  * recorded it, once, rebuilt point-in-time, so the seat has an exam to sit from its first run.
  *
  * The scan reads the buyers in the coin's newest page of trades (the live tape, up to

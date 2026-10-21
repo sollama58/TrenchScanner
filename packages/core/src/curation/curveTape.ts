@@ -331,6 +331,33 @@ export class CurveTape {
     return tape.ticks[tape.ticks.length - 1]?.price ?? null;
   }
 
+  /**
+   * Curve prices the outcome label can fold in between `afterMs` and `untilMs` (both ms epoch).
+   * `basis` is the price in force at `afterMs` when this cover includes that moment. `changes`
+   * are prints with `at` in (`afterMs`, `untilMs`], oldest first. Empty when the mint has no
+   * tape, or the cover ends before the window: a hole already dropped the unknown stretch, and
+   * nothing here invents a price across it. In memory only; the watcher reads it in process.
+   */
+  labelPrices(
+    mint: string,
+    afterMs: number,
+    untilMs: number,
+  ): { basis: { at: number; price: number } | null; changes: { at: number; price: number }[] } {
+    const empty = { basis: null, changes: [] as { at: number; price: number }[] };
+    const tape = this.tapes.get(mint);
+    if (!tape || tape.ticks.length === 0 || !(untilMs > afterMs)) return empty;
+    if (untilMs < tape.coveredFrom) return empty;
+    const changes: { at: number; price: number }[] = [];
+    let basis: { at: number; price: number } | null = null;
+    for (const tick of tape.ticks) {
+      if (tick.at < tape.coveredFrom) continue;
+      if (tick.at <= afterMs) basis = { at: tick.at, price: tick.price };
+      else if (tick.at <= untilMs) changes.push({ at: tick.at, price: tick.price });
+      else break;
+    }
+    return { basis, changes };
+  }
+
   /** Forgets a mint. */
   forget(mint: string): void {
     this.tapes.delete(mint);

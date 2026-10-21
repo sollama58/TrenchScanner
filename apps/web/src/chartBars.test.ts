@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { autoTimeframe, buildSlots, slotCandle, slotIndex, slotOfTime, timeframeFits } from "./chartBars";
+import {
+  autoTimeframe,
+  buildSlots,
+  candlesForResolution,
+  slotCandle,
+  slotIndex,
+  slotOfTime,
+  timeframeFits,
+} from "./chartBars";
+import { stitchVolume } from "./priceChart";
 
 const k = (t: number, o: number, c: number, w = 60_000, vol = 10) => ({
   t,
@@ -59,13 +68,43 @@ describe("buildSlots", () => {
   });
 
   it("keeps the newest slots of a long history at a fine timeframe", () => {
-    const s = buildSlots([k(0, 1, 2), k(3_600_000, 2, 3)], [], 1_000, 100)!;
+    const s = buildSlots([k(0, 1, 2, 1_000), k(3_600_000, 2, 3, 1_000)], [], 1_000, 100)!;
     expect(s.bars.length).toBeLessThanOrEqual(100);
     expect(s.bars[s.bars.length - 1]!.t).toBeGreaterThanOrEqual(3_600_000);
   });
 
   it("is null without anything to draw", () => {
     expect(buildSlots([], [], 1_000)).toBeNull();
+  });
+
+  it("a merged series requested at 1s does not contain a 5s-width candle", () => {
+    // The stitch keeps the 5s bucket for the stretch the 1s page does not reach. The 1s chart
+    // must not draw it, wide or squeezed into one slot.
+    const merged = stitchVolume([
+      { candles: [k(0, 10, 12, 5_000, 40)], stepMs: 5_000 },
+      { candles: [k(5_000, 12, 13, 1_000, 4), k(8_000, 13, 11, 1_000, 2)], stepMs: 1_000 },
+    ]);
+    expect(merged.some((c) => c.w === 5_000)).toBe(true);
+    const at1s = candlesForResolution(merged, 1_000);
+    expect(at1s.map((c) => [c.t, c.w])).toEqual([
+      [5_000, 1_000],
+      [8_000, 1_000],
+    ]);
+    const slots = buildSlots(merged, [], 1_000)!;
+    expect(slots.bars.some((b) => (b.span ?? 1) > 1)).toBe(false);
+    expect(slots.bars.filter((b) => !b.flat && !b.under).map((b) => [b.t, b.c])).toEqual([
+      [5_000, 13],
+      [8_000, 11],
+    ]);
+    // A 5s candle handed straight to the 1s slots is omitted too, not drawn five seconds wide.
+    const direct = buildSlots([k(0, 1, 2, 5_000), k(5_000, 2, 3, 1_000)], [], 1_000)!;
+    expect(direct.start).toBe(5_000);
+    expect(direct.bars.every((b) => (b.span ?? 1) === 1)).toBe(true);
+    // A live step several seconds long sits in the one second it happened, not as a 5s candle.
+    const live = buildSlots([k(0, 1, 2, 1_000)], [{ t: 6_000, v: 4 }], 1_000)!;
+    expect(live.bars.every((b) => (b.span ?? 1) === 1)).toBe(true);
+    expect(live.bars.find((b) => b.t === 0)).toMatchObject({ c: 2 });
+    expect(live.bars.find((b) => b.t === 6_000)).toMatchObject({ c: 4, o: 2 });
   });
 });
 
