@@ -62,6 +62,9 @@ function versionFile(): Plugin {
 
 export default defineConfig(({ command }) => ({
   plugins: [react(), fontPreload(), versionFile()],
+  // Same condition as apps/web/tsconfig.json: chartMarks is bundled from source. The package's
+  // Node conditions still point at packages/core/dist, which this build does not produce.
+  resolve: { conditions: ["trenchscanner-web"] },
   // Empty under `vite` (dev) and vitest: nothing is deployed there, so there is nothing to check for.
   define: { __APP_VERSION__: JSON.stringify(command === "build" ? APP_VERSION : "") },
   server: { port: 5173 },
