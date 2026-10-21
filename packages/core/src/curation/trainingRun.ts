@@ -35,8 +35,10 @@ import {
   HOLDER_TRANSFER_LINKED_FEATURES,
   HOLDER_TRANSFER_LINKS_READ_SINCE,
   MARKET_LEARNER_FEATURE_NAMES,
+  marketLearnerFeatureNamesForRun,
   withCurrentNarrativeTiming,
 } from "./features.js";
+import { labelRuleMix, suggestPromotions } from "./promoteCandidates.js";
 import {
   CONSENSUS_CONTESTANT,
   HIGH_PRECISION_SHARE_BAND,
@@ -191,6 +193,10 @@ export interface StoredEvalMetrics {
   gate?: { id: string; rows: number; of: number; uncheckedOffline: string[] };
   /** Which decision moments the exam graded (event rows alone, or with pseudo-events) - see ExamPopulation. */
   examPopulation?: ExamPopulation;
+  /** Share of decision rows on fresh-quote label rule 4+. */
+  labelRuleMix?: { total: number; rule4Share: number; rule3Share: number };
+  /** Retired inputs that look ready to promote (promoteCandidates.ts). */
+  promotionSuggestions?: { feature: string; reason: string }[];
   /** The Agreement seat only: out-of-sample win rate by how many learners called (curation/agreement.ts). */
   agreementCurve?: AgreementCurvePoint[];
   /**
@@ -1146,6 +1152,11 @@ export async function runEvolvingContest(
   // Decided once for the whole field: the inputs too new (or lately dead) to train on.
   const features = runFeatures(rows, cfg);
   const heldFeatures = cfg.featureOnsetGuard ? { heldFeatures: features.held } : {};
+  const marketFeatureNames = marketLearnerFeatureNamesForRun(rows);
+  const withMarketDefaults = (recipe: CuratorRecipe): CuratorRecipe =>
+    recipe.featureNames ? recipe : { ...recipe, featureNames: marketFeatureNames };
+  let sharedTrainingMeta: StoredEvalMetrics["labelRuleMix"] | undefined;
+  let promotionSuggestions: StoredEvalMetrics["promotionSuggestions"];
 
   // Progress for the admin panel: one step per exam sat (seats, narrative seats, challengers).
   // Gated seats sit their own exam on the rows their gate lets through (below), like the narrative seats.
@@ -1176,7 +1187,15 @@ export async function runEvolvingContest(
       }
     }
     examining(spec.name);
-    const exam = await examineLearner(rows, cfg, spec.id, spec.name, spec.recipe, reference, features.usable);
+    const exam = await examineLearner(
+      rows,
+      cfg,
+      spec.id,
+      spec.name,
+      withMarketDefaults(spec.recipe),
+      reference,
+      features.usable,
+    );
     if (reference === null) {
       reference = exam.evaluation.decisionReference;
       rulesEvidence = {
@@ -1184,8 +1203,12 @@ export async function runEvolvingContest(
         heuristicOutOfSample: exam.evaluation.heuristicOutOfSample,
       };
       featureReport = featureHealthReport(reference);
+      sharedTrainingMeta = labelRuleMix(rows, { decisionOnly: true });
+      promotionSuggestions = suggestPromotions(reference);
     }
     if (featureReport) exam.result.metrics.featureReport = featureReport;
+    if (sharedTrainingMeta) exam.result.metrics.labelRuleMix = sharedTrainingMeta;
+    if (promotionSuggestions) exam.result.metrics.promotionSuggestions = promotionSuggestions;
     Object.assign(exam.result.metrics, heldFeatures);
     results.push(exam.result);
     // A control or standalone seat ships and calls on its own ledger, but feeds no combiner, the
@@ -1253,7 +1276,7 @@ export async function runEvolvingContest(
       cfg,
       spec.id,
       spec.name,
-      spec.recipe!,
+      withMarketDefaults(spec.recipe!),
       null,
       ownFeatures.usable,
     );
@@ -1276,7 +1299,7 @@ export async function runEvolvingContest(
   let bestChallenger: { index: number; trial: LearnerTrial } | null = null;
   for (const [i, bred] of (plan?.challengers ?? []).entries()) {
     examining(`challenger ${bred.name}`);
-    const trial = await sitLearnerExam(rows, cfg, bred.recipe, reference, features.usable);
+    const trial = await sitLearnerExam(rows, cfg, withMarketDefaults(bred.recipe), reference, features.usable);
     challengerScores.push(trial.examScore);
     challengerCalls.push(trial.calls);
     challengerRanks.push(trial.ranks);
@@ -1718,7 +1741,7 @@ function rulesSeatResult(
   const teacher = pickRulesTeacher(cfg, pool);
   if (teacher !== null && pool.reference.length > 0) {
     const ranks = pool.foldRanks.get(teacher)!;
-    const featureNames = MARKET_LEARNER_FEATURE_NAMES.filter(
+    const featureNames = marketLearnerFeatureNamesForRun(pool.reference).filter(
       (f) => pool.usable === null || pool.usable.has(f),
     );
     const conditions = distillRuleSet(pool.reference, ranks, featureNames);

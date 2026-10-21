@@ -24,7 +24,9 @@ import {
   COMBINER_MODEL_KINDS,
   assessTrainingRun,
   examRegressionAlarms,
+  examPopulationAlarms,
   fillRateAlarms,
+  promotionSummary,
   inputFills,
   liveShareAlarms,
   LEARNER_FEATURE_NAMES,
@@ -75,6 +77,7 @@ import {
 import { RunProgress } from "../runProgress.js";
 import { runContestOffThread } from "../training/runContest.js";
 import type { ContestPlan } from "../training/contestPlan.js";
+import { runFeatureHealthJob } from "./featureHealthJob.js";
 
 const logger = createLogger("curator-training");
 
@@ -276,7 +279,24 @@ async function trainCurators(
   // Alarms only (runGuard.ts): an exam that fell sharply against the model it replaces, and an
   // input the learners read gone dead (or a retired one filled again). Nothing waits on them.
   const incumbentExams = await loadIncumbentExams();
+  const population = results.find((r) => r.metrics.examPopulation)?.metrics.examPopulation;
+  const labelMix = results.find((r) => r.metrics.labelRuleMix)?.metrics.labelRuleMix;
+  const promote = results.find((r) => r.metrics.promotionSuggestions)?.metrics.promotionSuggestions;
+  if (labelMix) {
+    logger.info("training label rule mix", {
+      decisionRows: labelMix.total,
+      rule4Share: Math.round(labelMix.rule4Share * 1000) / 1000,
+      rule3Share: Math.round(labelMix.rule3Share * 1000) / 1000,
+    });
+    if (labelMix.rule4Share < 0.85) {
+      logger.warn("low Jupiter anchor coverage on decision rows", { rule4Share: labelMix.rule4Share });
+    }
+  }
+  const promoteMsg = promote ? promotionSummary(promote) : null;
+  if (promoteMsg) logger.info(promoteMsg, { suggestions: promote });
+
   const alarms = [
+    ...(population ? examPopulationAlarms(population) : []),
     ...examRegressionAlarms(
       incumbentExams,
       results.flatMap((r) =>
@@ -455,6 +475,9 @@ async function trainCurators(
         }
       : null,
   });
+  void runFeatureHealthJob(env).catch((err: unknown) =>
+    logger.warn("feature health snapshot failed", { error: String(err) }),
+  );
   return { stored: true, ...alarmMeta };
 }
 

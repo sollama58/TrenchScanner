@@ -1,4 +1,5 @@
 import type { HeldFeature } from "./featureOnset.js";
+import type { ExamPopulation } from "./trainer.js";
 import { NEVER_EMIT_THRESHOLD, RULES_MODEL_KIND } from "./trainingRun.js";
 
 /**
@@ -175,6 +176,22 @@ function wilsonBounds(k: number, n: number, z = 1.96): [number, number] {
 }
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+
+/** Exam graded on pseudo-events or sparse event wins — live precision may read high. */
+export function examPopulationAlarms(population: ExamPopulation): string[] {
+  const out: string[] = [];
+  if (population.kind === "events+pseudo") {
+    out.push(
+      `exam uses ${population.pseudoRows} pseudo-event rows; hit-rate may overstate live precision`,
+    );
+  }
+  if (population.eventWinsNewestHalf < population.eventWinsNeeded) {
+    out.push(
+      `sparse event wins in newest exam half (${population.eventWinsNewestHalf} wins, need ${population.eventWinsNeeded})`,
+    );
+  }
+  return out;
+}
 
 /** Seats whose exam 2x rate fell sharply against the model they replace. */
 export function examRegressionAlarms(

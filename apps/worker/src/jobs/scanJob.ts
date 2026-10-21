@@ -1905,7 +1905,7 @@ async function scanCycle(
     try {
       perCandidateMatches.push(
         await processCandidate(
-          candidate,
+          stampMarketReadAt(candidate, readingSeenAt),
           priors.get(candidate.mintAddress) ?? NO_PRIORS,
           firstSeenByMint.get(candidate.mintAddress),
           launchedAtByMint.get(candidate.mintAddress),
@@ -3075,6 +3075,15 @@ export function persistSnapshot(tokenId: string, prior: CandidatePrior, now: num
  * said (resolveLaunchTimes), else the earlier of the pair's creation and the watchlist's first
  * sighting (processCandidate's age anchors, less the Token row's).
  */
+/** Attach when this cycle's market reading was taken (dexQuoteAgeSec at decision time). */
+export function stampMarketReadAt(
+  candidate: CandidateToken,
+  seenAt: ReadonlyMap<string, Date>,
+): CandidateToken {
+  const at = seenAt.get(candidate.mintAddress);
+  return at ? { ...candidate, marketReadAt: at } : candidate;
+}
+
 export function candidateAgeMinutes(
   anchors: { launchedAt?: Date; pairCreatedAt?: Date; firstSeenAt?: Date },
   now: number = Date.now(),

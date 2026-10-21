@@ -111,6 +111,8 @@ export * from "./curation/topSlice.js";
 export * from "./curation/narrativeNote.js";
 export * from "./curation/featureReport.js";
 export * from "./curation/featureOnset.js";
+export * from "./curation/promoteCandidates.js";
+export * from "./curation/pathStability.js";
 export * from "./curation/runGuard.js";
 export * from "./curation/rulesDistill.js";
 export * from "./curation/modelBackup.js";

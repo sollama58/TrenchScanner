@@ -25,9 +25,11 @@ import {
   NARRATIVE_FEATURES_V8,
   NARRATIVE_FEATURES_V9,
   NARRATIVE_FRIENDLY_LABELS,
+  NS_RULES_VERSION,
   narrativeFeatureValues,
   narrativeFromFeatures,
 } from "./narrativeFeatures.js";
+import { extraPathLearnerInputs } from "./pathStability.js";
 
 /**
  * Added 2026-10-13 (inputs thread, notes/hit-catch-2026-10-13/inputs.md): the holder count on the
@@ -39,6 +41,16 @@ import {
  * five minutes old its organic score reads 0 and the organic counts are absent.)
  */
 export const JUPITER_EXTRA_FEATURES = ["jupHolderCount"] as const;
+
+/**
+ * Added 2026-10-21 (model audit): how stale the market figures are at the decision. DexScreener's
+ * price is often 45-60 s behind; Jupiter's quote carries its own clock. Null without a read time.
+ */
+export const QUOTE_STALENESS_FEATURES = [
+  "dexQuoteAgeSec",
+  "jupiterQuoteAgeSec",
+  "tokenMinusPairAgeMin",
+] as const;
 
 /**
  * Added 2026-10-13 (wallet risk brief, notes/hit-catch-2026-10-13/wallet-risk-brief.md): who the
@@ -572,6 +584,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   // before. Never backfilled.
   "freshLaunchBuyerPct",
   ...JUPITER_EXTRA_FEATURES,
+  ...QUOTE_STALENESS_FEATURES,
   ...WALLET_RISK_FEATURES,
   ...LINKED_WALLET_FEATURES,
   ...LIVE_FLAG_FEATURES,
@@ -654,25 +667,8 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "nsReferentNamed",
   // Equal to nsXVerdictUnrelated on every row that carries either (1,671 of 1,671).
   "nsXContentMismatch",
-  // The one order-flow input filled while PumpPortal refuses the trade stream (from the launch's
-  // create message). Without trades the tracker drops a launch within 10-15 minutes, so on the
-  // 2-4% of rows that carry it, its presence says "decided within minutes of launch", not what
-  // the dev bought.
-  "devInitialBuySol",
-  // The trade-by-trade order flow (user decision 2026-10-08): dead since 2026-10-04, as PumpPortal
-  // only streams trades to a funded API key and none is set. Still recorded, so they come back by
-  // removing them here once a key is funded.
-  "uniqueBuyers5m",
-  "buysPerBuyer5m",
-  "avgBuySol5m",
-  "topBuyerShare5m",
-  "newBuyerShare5m",
-  "netFlow5mToMcap",
-  "tradesPerMin5m",
-  "earlyBuyerCount",
-  "earlyBuyerHoldPct",
-  "earlyBuyerSoldShare",
-  "devSoldShare",
+  // Trade-flow inputs read again from 2026-10-21 (model audit): null without a funded PumpPortal
+  // stream; maskKnownBadInputs still clears fake zeros on pre-2026-10-05 rows.
   // The in-memory tape's length (user decision 2026-10-08): the tape empties on every deploy (13-14
   // times in three days), so for up to an hour after one every token reads as minutes old and the
   // models learned it as youth. ageMinutes and minutesSinceFirstInBand carry youth without the
@@ -729,42 +725,13 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // The screen's holder figures as counts, and the largest holder (added 2026-10-13): recorded
   // first, on the same terms.
   ...HOLDER_SET_FEATURES,
-  ...FRESH_TOP_HOLDER_FEATURES,
   // KOL Bundled % (added 2026-10-14): recorded first, on the same terms.
   ...KOL_BUNDLED_FEATURES,
-  // Transferred % and the transfer count (added 2026-10-16, user ask): recorded first, on the same
-  // terms. Bring them in by removing them here once a few days of decision rows show they separate
-  // runners.
-  ...TRANSFER_FEATURES,
-  // The scored top-10 count behind walletRiskTop10Max (added 2026-10-16, data-correctness
-  // audit): recorded first, on the same terms.
-  ...WALLET_RISK_COVERAGE_FEATURES,
-  // The launch facts (added 2026-10-16, user ask): recorded first, on the same terms. All but
-  // firstBuyersHoldingCut, which the learners read in place of firstBuyersHolding from 2026-10-19
-  // (user decision 2026-10-16, notes/model-retrain-pending.md); null on rows banked before 10-16,
-  // which the onset guard and the trainer's missing indicator cover.
-  ...LAUNCH_FACT_FEATURES.filter((name) => name !== "firstBuyersHoldingCut"),
   "firstBuyersHolding",
-  // The hidden Wallet Score of the newest buyers (added 2026-10-16, user ask): recorded first, on
-  // the same terms (notes/wallet-score-2026-10-16/report.md).
-  ...WALLET_SCORE_FEATURES,
   // The clean winners buying (added 2026-10-17, user ask): read by the Winners seat alone, which
   // names them in its recipe and decides only on moments that carry them.
   ...WINNER_FOLLOW_FEATURES,
-  // The bonding-curve path of a young coin (added 2026-10-17, user ask): recorded first.
-  ...CURVE_PATH_FEATURES,
-  // The dev launch reading (added 2026-10-17, user ask): recorded first.
-  ...DEV_LAUNCH_FEATURES,
-  // Dead inputs (notes/full-audit-2026-10-14, lanes 4 and 10): the launch-text read is empty on
-  // every row since the text scorer has no API key, nsXCredibility is empty since TokenSage's
-  // rules 0.23 moved credibility to nsXCredibility23, and nsFeeMutable is 0 on every row that
-  // carries it. The onset guard already kept the empty ones out of each run; this makes it
-  // explicit. The training run's fill-rate alarm (runGuard.ts fillRateAlarms) says when one of
-  // them fills again.
-  "textCopycatRisk",
-  "textNarrativeStrength",
-  "textMemeAppeal",
-  "textScamSignals",
+  // Dead TokenSage inputs (notes/full-audit-2026-10-14, lanes 4 and 10).
   "nsXCredibility",
   "nsFeeMutable",
   // Exact repeats of another learner input (overlap audit, notes/overlap-audit-2026-10-15/report.md,
@@ -845,6 +812,56 @@ export function isTokenSageInput(name: string): boolean {
 export const MARKET_LEARNER_FEATURE_NAMES: readonly CandidateFeatureName[] = LEARNER_FEATURE_NAMES.filter(
   (name) => !isTokenSageInput(name) || MARKET_TOKENSAGE_INPUTS.includes(name),
 );
+
+/** Market-seat inputs for one training run, including path features when stable (pathStability.ts). */
+export function marketLearnerFeatureNamesForRun(
+  rows: readonly {
+    features: Record<string, number | null | undefined>;
+    labelValue: number;
+    anchorAt?: Date;
+  }[],
+): readonly CandidateFeatureName[] {
+  const extra = extraPathLearnerInputs(rows);
+  if (extra.length === 0) return MARKET_LEARNER_FEATURE_NAMES;
+  const names = new Set<CandidateFeatureName>(MARKET_LEARNER_FEATURE_NAMES);
+  for (const f of extra) names.add(f);
+  return [...names];
+}
+
+/** Seconds since the DexScreener market read used for this decision. */
+export function dexQuoteAgeSec(
+  scored: Pick<ScoredToken, "marketReadAt">,
+  now: Date = new Date(),
+): number | null {
+  const t = scored.marketReadAt;
+  if (!(t instanceof Date) || Number.isNaN(t.getTime())) return null;
+  return Math.max(0, (now.getTime() - t.getTime()) / 1000);
+}
+
+/** Seconds since Jupiter last updated the fresh quote (or since it was fetched). */
+export function jupiterQuoteAgeSec(
+  scored: Pick<ScoredToken, "freshQuote">,
+  now: Date = new Date(),
+): number | null {
+  const q = scored.freshQuote;
+  if (!q) return null;
+  const t = q.updatedAt ?? q.fetchedAt;
+  if (!(t instanceof Date) || Number.isNaN(t.getTime())) return null;
+  return Math.max(0, (now.getTime() - t.getTime()) / 1000);
+}
+
+/** On a graduated coin, how much older the token is than its pricing pair (minutes). */
+export function tokenMinusPairAgeMin(features: {
+  ageMinutes?: number | null;
+  pairAgeMinutes?: number | null;
+  graduated?: number | null;
+}): number | null {
+  if (features.graduated !== 1) return null;
+  const age = features.ageMinutes;
+  const pair = features.pairAgeMinutes;
+  if (age == null || pair == null) return null;
+  return age - pair;
+}
 
 /** A recipe's feature list with the retired inputs taken out. */
 export function learnerSubset(names: readonly CandidateFeatureName[]): CandidateFeatureName[] {
@@ -1266,6 +1283,8 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
     at < NS_RULES_VERSION_MARKER_SINCE.getTime() &&
     features.nsRulesVersion == null &&
     ALL_NARRATIVE_FEATURES.some((name) => features[name] != null);
+  const staleNsVersion =
+    features.nsRulesVersion != null && features.nsRulesVersion !== NS_RULES_VERSION;
   const transferLinked = at < HOLDER_TRANSFER_LINKS_READ_SINCE.getTime();
   const rawWalletRisk = isRawWalletRiskRow(anchorAt, features);
   const unreadSocials = at < SOCIALS_UNREAD_NULL_SINCE.getTime();
@@ -1275,6 +1294,7 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
     !unwaitedHourly &&
     !rebuiltBundled &&
     !unversionedNs &&
+    !staleNsVersion &&
     !transferLinked &&
     !rawWalletRisk &&
     !unreadSocials &&
@@ -1292,7 +1312,7 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
   const done = (): T => (masked ?? features) as T;
   if (unwaitedHourly) HOURLY_UNWAITED_FEATURES.forEach(clear);
   if (rebuiltBundled) clear("bundledSupplyPct");
-  if (unversionedNs) ALL_NARRATIVE_FEATURES.forEach(clear);
+  if (unversionedNs || staleNsVersion) ALL_NARRATIVE_FEATURES.forEach(clear);
   if (transferLinked) HOLDER_TRANSFER_LINKED_FEATURES.forEach(clear);
   if (rawWalletRisk) clear("walletRiskTop10Max");
   if (unreadSocials) for (const name of SOCIALS_UNREAD_FEATURES) if (features[name] === 0) clear(name);
@@ -1528,6 +1548,9 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   jup5mHolderChange: "5m holder change (live)",
   jup1hHolderChange: "1h holder change (live)",
   jupHolderCount: "holders (live)",
+  dexQuoteAgeSec: "Dex price age (seconds)",
+  jupiterQuoteAgeSec: "Jupiter quote age (seconds)",
+  tokenMinusPairAgeMin: "token age minus pair age (minutes)",
   walletRiskTop10Max: "riskiest top-10 wallet (percentile of scored wallets)",
   walletRiskScoredTop10: "top-10 wallets scored",
   walletRiskFirstBuyersMean: "first buyers' wallet risk",
@@ -1927,6 +1950,13 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
       scored.livestream === undefined ? null : scored.livestream.live ? scored.livestream.viewers : 0,
     // A pair time a few seconds ahead of this clock is skew, not a pool from the future.
     pairAgeMinutes: pairAgeMinutes === undefined ? null : Math.max(0, pairAgeMinutes),
+    dexQuoteAgeSec: dexQuoteAgeSec(scored, now),
+    jupiterQuoteAgeSec: jupiterQuoteAgeSec(scored, now),
+    tokenMinusPairAgeMin: tokenMinusPairAgeMin({
+      ageMinutes: scored.ageMinutes ?? null,
+      pairAgeMinutes: pairAgeMinutes === undefined ? null : Math.max(0, pairAgeMinutes),
+      graduated: scored.graduated === undefined ? null : scored.graduated ? 1 : 0,
+    }),
     ...freshQuoteFeatures(scored),
   };
 }

@@ -147,6 +147,29 @@ describe("buildCandidateFeatures - short-window derivations", () => {
     ).toBeCloseTo(2);
   });
 
+  it("records quote staleness and token-minus-pair age", () => {
+    const now = new Date("2026-10-21T12:00:00Z");
+    const readAt = new Date(now.getTime() - 45_000);
+    const f = buildCandidateFeatures(
+      scored({
+        marketReadAt: readAt,
+        graduated: true,
+        ageMinutes: 30,
+        pairCreatedAt: new Date(now.getTime() - 5 * 60_000),
+        freshQuote: {
+          priceUsd: 1,
+          marketCapUsd: 1_000_000,
+          fetchedAt: new Date(now.getTime() - 2_000),
+          updatedAt: new Date(now.getTime() - 3_000),
+        },
+      }),
+      now,
+    );
+    expect(f.dexQuoteAgeSec).toBeCloseTo(45);
+    expect(f.jupiterQuoteAgeSec).toBeCloseTo(3);
+    expect(f.tokenMinusPairAgeMin).toBeCloseTo(25);
+  });
+
   it("records the pair's age in minutes, null without a pair time", () => {
     const now = new Date("2026-10-08T12:00:00Z");
     const at = (pairCreatedAt?: Date) =>
@@ -224,17 +247,17 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(CANDIDATE_FEATURE_NAMES).toContain("walletRiskScoredTop10");
   });
 
-  it("records the curve path, replays it, and leaves it unread by the learners", () => {
+  it("records the curve path, replays it, and reads it in the learners", () => {
     const curvePath = { ...EMPTY_CURVE_PATH, curveRet10sPct: 4.2, curveNetSol1m: 3.5 };
     const features = buildCandidateFeatures(scored({ curvePath }));
     expect(features.curveRet10sPct).toBe(4.2);
     expect(features.curveNetSol1m).toBe(3.5);
     expect(buildCandidateFeatures(scored()).curveRet10sPct).toBeNull();
     expect(scoredFromFeatures(features, 0.0001, 150_000).curvePath?.curveNetSol1m).toBe(3.5);
-    for (const name of CURVE_PATH_FEATURES) expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+    for (const name of CURVE_PATH_FEATURES) expect(LEARNER_FEATURE_NAMES).toContain(name);
   });
 
-  it("records the dev launch reading, replays it, and leaves it unread by the learners", () => {
+  it("records the dev launch reading, replays it, and reads it in the learners", () => {
     const devLaunch = {
       ...EMPTY_DEV_LAUNCH,
       devLaunchRisk: 62.5,
@@ -247,7 +270,7 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(features.devLaunchFamilyCreators).toBe(0);
     expect(buildCandidateFeatures(scored()).devLaunchRisk).toBeNull();
     expect(scoredFromFeatures(features, 0.0001, 150_000).devLaunch?.devLaunchPrior).toBe(4);
-    for (const name of DEV_LAUNCH_FEATURES) expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+    for (const name of DEV_LAUNCH_FEATURES) expect(LEARNER_FEATURE_NAMES).toContain(name);
   });
 
   it("says whether the age counts from the launch or the pool, null without an age, and replays it", () => {
@@ -286,16 +309,16 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
   });
 
-  it("records Transferred % and the transfer count, recorded only, null while unread", () => {
+  it("records Transferred % and the transfer count, learner inputs, null while unread", () => {
     const f = buildCandidateFeatures(scored({ transferredSupplyPct: 3, transferWalletCount: 5 }));
     expect(f.transferredSupplyPct).toBe(3);
     expect(f.transferWalletCount).toBe(5);
     expect(buildCandidateFeatures(scored()).transferredSupplyPct).toBeNull();
-    expect(RETIRED_LEARNER_INPUTS.has("transferredSupplyPct")).toBe(true);
-    expect(RETIRED_LEARNER_INPUTS.has("transferWalletCount")).toBe(true);
+    expect(LEARNER_FEATURE_NAMES).toContain("transferredSupplyPct");
+    expect(LEARNER_FEATURE_NAMES).toContain("transferWalletCount");
   });
 
-  it("records the launch facts, recorded only, null while unread", () => {
+  it("records the launch facts as learner inputs, null while unread", () => {
     const f = buildCandidateFeatures(
       scored({
         tradeFlow: { ...EMPTY_TRADE_FLOW, firstBuyersSeen: 9, firstBuyersHoldingCut: 4 },
@@ -314,13 +337,12 @@ describe("scoredFromFeatures - replay round trip", () => {
     const none = buildCandidateFeatures(scored());
     for (const name of LAUNCH_FACT_FEATURES) {
       expect(none[name]).toBeNull();
-      // The 0.1% count is read in place of the above-dust one (user decision 2026-10-16).
-      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(name !== "firstBuyersHoldingCut");
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
     }
     expect(RETIRED_LEARNER_INPUTS.has("firstBuyersHolding")).toBe(true);
   });
 
-  it("records the newest buyers' Wallet Score, unread by the learners, unknown without it", () => {
+  it("records the newest buyers' Wallet Score as learner inputs, unknown without it", () => {
     const f = buildCandidateFeatures(
       scored({ walletScoreRecentBuyersMean: -1.25, walletScoreRecentBuyersScored: 31 }),
     );
@@ -328,7 +350,7 @@ describe("scoredFromFeatures - replay round trip", () => {
     const none = buildCandidateFeatures(scored());
     for (const name of WALLET_SCORE_FEATURES) {
       expect(none[name]).toBeNull();
-      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
     }
   });
 
@@ -871,8 +893,10 @@ describe("maskKnownBadInputs", () => {
     // A row from the marker on carries its version and is read as stored, same object.
     const versioned = { ...row, nsRulesVersion: NS_RULES_VERSION, nsRead: 1 };
     expect(maskKnownBadInputs(NS_RULES_VERSION_MARKER_SINCE, versioned)).toBe(versioned);
-    // A pre-marker row that somehow carries one is trusted on it.
+    // A pre-marker row with the current rules version is still read.
     expect(maskKnownBadInputs(before, versioned)).toBe(versioned);
+    // A row stamped with an older writer version is masked like the pre-marker era.
+    expect(maskKnownBadInputs(before, { ...versioned, nsRulesVersion: 0 }).nsCopycat).toBeNull();
     // Nothing to mask on a row without TokenSage inputs: same object.
     const noRead = { mcapUsd: 40_000, hasTwitter: 1 };
     expect(maskKnownBadInputs(before, noRead)).toBe(noRead);
@@ -889,9 +913,10 @@ describe("maskKnownBadInputs", () => {
   });
 
   it("keeps the retired duplicates off the learner list", () => {
-    for (const name of ["nsReferentNamed", "nsXContentMismatch", "devInitialBuySol"] as const) {
+    for (const name of ["nsReferentNamed", "nsXContentMismatch"] as const) {
       expect(LEARNER_FEATURE_NAMES).not.toContain(name);
     }
+    expect(LEARNER_FEATURE_NAMES).toContain("devInitialBuySol");
   });
 });
 

@@ -98,6 +98,8 @@ export interface CandidateToken {
    * parser and by the band refresh's merge; undefined on a reading built without one.
    */
   marketSource?: MarketSource;
+  /** When this cycle's DexScreener (or band refresh) reading for the mint was taken. */
+  marketReadAt?: Date;
 }
 
 /**

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assessTrainingRun,
   examRegressionAlarms,
+  examPopulationAlarms,
   fillRateAlarms,
   firstNonFinite,
   liveShareAlarms,
@@ -165,6 +166,18 @@ describe("firstNonFinite", () => {
 });
 
 describe("run alarms", () => {
+  it("warns when the exam used pseudo-events", () => {
+    expect(
+      examPopulationAlarms({
+        kind: "events+pseudo",
+        decisionRows: 1000,
+        pseudoRows: 200,
+        eventWinsNewestHalf: 50,
+        eventWinsNeeded: 30,
+      }),
+    ).toEqual(["exam uses 200 pseudo-event rows; hit-rate may overstate live precision"]);
+  });
+
   it("flags a seat whose exam fell sharply against the model it replaces", () => {
     const alarms = examRegressionAlarms(
       [
