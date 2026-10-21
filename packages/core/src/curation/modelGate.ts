@@ -1,6 +1,8 @@
 import type { FilterCriteria, ScoredToken } from "../types.js";
 import { matchesFilter } from "../scoring/matchFilters.js";
 import { STONKS_LAUNCHPAD, PUMPFUN_LAUNCHPAD } from "../launchpads.js";
+import { scoredFromFeatures } from "./features.js";
+import { NARRATIVE_CATEGORY_IDS, NARRATIVE_TOP_CATEGORIES } from "./narrativeFeatures.js";
 
 /**
  * Model gates: a saved filter's criteria, frozen, that a seat must see a token pass before it
@@ -65,34 +67,55 @@ export function passesModelGate(scored: ScoredToken, gate: FilterCriteria): bool
   return matchesFilter(scored, gate);
 }
 
+/** Top-level TokenSage labels, the only category ids a stored vector can answer (nsCat* bits). */
+const TOP_CATEGORY_IDS: ReadonlySet<string> = new Set(NARRATIVE_CATEGORY_IDS);
+const CATEGORY_FEATURE: ReadonlyMap<string, string> = new Map(
+  (Object.entries(NARRATIVE_TOP_CATEGORIES) as [string, string][]).map(([feature, label]) => [
+    label,
+    feature,
+  ]),
+);
+
 /**
- * The criteria a training row can't be checked against: the stored inputs carry no reading for
- * them (the risk flags, the keywords, the composite score, TokenSage's labels). Offline the gate
- * skips them, so a seat trains on a slightly wider set than it calls on; live they are checked
- * like every other criterion (passesModelGate).
+ * A category list the stored vector can answer: every id is a top-level label. A sub-label
+ * ("animal/dog") is not stored, so the criterion stays skipped (gateCriteriaUncheckedOffline).
+ */
+function categoriesAnswerable(labels: readonly string[] | undefined): boolean {
+  return (labels ?? []).every((label) => TOP_CATEGORY_IDS.has(label));
+}
+
+/**
+ * The criteria a training row can't be checked against, whichever row it is. RugCheck's critical
+ * flag names and the free-text keywords are not in the feature vector. A category list that names
+ * a sub-label isn't either: the vector stores the top-level theme only. Everything else the live
+ * gate checks is applied when the row actually recorded the input (passesModelGateOnFeatures).
  */
 export function gateCriteriaUncheckedOffline(gate: FilterCriteria): string[] {
   const out: string[] = [];
   if (gate.excludeCriticalRiskFlags) out.push("excludeCriticalRiskFlags");
   if ((gate.narrativeKeywords?.length ?? 0) > 0) out.push("narrativeKeywords");
-  if (isSet(gate.minScore)) out.push("minScore");
-  if ((gate.narrativeCategories?.length ?? 0) > 0) out.push("narrativeCategories");
-  if ((gate.excludeNarrativeCategories?.length ?? 0) > 0) out.push("excludeNarrativeCategories");
-  if (gate.excludeCopycats) out.push("excludeCopycats");
-  if (gate.excludeNarrativeRedFlags) out.push("excludeNarrativeRedFlags");
-  if (gate.excludeUnrelatedX) out.push("excludeUnrelatedX");
-  if (gate.requireTrendMatch) out.push("requireTrendMatch");
-  if (gate.excludeLateCopies) out.push("excludeLateCopies");
+  if ((gate.narrativeCategories?.length ?? 0) > 0 && !categoriesAnswerable(gate.narrativeCategories)) {
+    out.push("narrativeCategories");
+  }
+  if (
+    (gate.excludeNarrativeCategories?.length ?? 0) > 0 &&
+    !categoriesAnswerable(gate.excludeNarrativeCategories)
+  ) {
+    out.push("excludeNarrativeCategories");
+  }
   return out;
 }
 
 /**
  * Whether a training row passes the gate, read from its stored inputs with matchesFilter's rules:
  * a floor fails on an unknown reading, a ceiling skips one - except the wallet ceilings, which fail
- * on an unknown reading as passesModelGate does. Criteria with no stored reading are skipped
- * (gateCriteriaUncheckedOffline). Linked-to-creator, KOL Bundled and Bundled % are stored in their
- * funding-only definition (features.ts), the filter reads them with transfers counted: close, not
- * identical, until the retrain moves the models onto the new definitions.
+ * on an unknown reading as passesModelGate does. Criteria the vector never carries are skipped
+ * (gateCriteriaUncheckedOffline). minScore, the top-level categories, copycats, red flags,
+ * unrelated X, trend match and late copies are applied once the row recorded the input they read,
+ * the same way passesModelGate does. A category sub-label is not recorded, so that list stays
+ * skipped. Linked-to-creator, KOL Bundled and Bundled % from before the transfer-counted reads
+ * (HOLDER_TRANSFER_LINKS_READ_SINCE) stay masked: those figures are another definition, and the
+ * gate does not treat them as today's.
  *
  * `unrecorded` names the inputs the scan didn't record yet when the row was banked
  * (unrecordedGateInputs): a criterion on one of them is skipped like the unchecked ones, rather
@@ -199,6 +222,82 @@ export function passesModelGateOnFeatures(
   if (isSet(gate.minTokenAgeMinutes) && (f("ageMinutes") ?? 0) < gate.minTokenAgeMinutes!) return false;
   if (!ceiling(gate.maxTokenAgeMinutes, "ageMinutes")) return false;
 
+  // Today's composite, recomputed from the stored inputs. scoreTotal is the first composite and
+  // is not what the live gate reads (scorer.ts).
+  if (isSet(gate.minScore)) {
+    const total = scoredFromFeatures(features, 1, f("mcapUsd") ?? 0).score.total;
+    if (total < gate.minScore!) return false;
+  }
+
+  if (!passesNarrativeGateFromFeatures(features, gate, unrecorded, f)) return false;
+
+  return true;
+}
+
+/**
+ * TokenSage's criteria, from the ns* inputs, with matchesNarrativeCriteria's fail-closed rules.
+ * Skipped when the read wasn't recorded yet (nsDepthFull unrecorded) and when the category list
+ * names a sub-label the vector doesn't store. A recorded read that is missing (null depth) fails
+ * closed, as a token with no read does live.
+ */
+function passesNarrativeGateFromFeatures(
+  features: Readonly<Record<string, number | null | undefined>>,
+  gate: FilterCriteria,
+  unrecorded: ReadonlySet<string>,
+  f: (name: string) => number | undefined,
+): boolean {
+  const includeCategories =
+    (gate.narrativeCategories?.length ?? 0) > 0 && categoriesAnswerable(gate.narrativeCategories);
+  const excludeCategories =
+    (gate.excludeNarrativeCategories?.length ?? 0) > 0 &&
+    categoriesAnswerable(gate.excludeNarrativeCategories);
+  const uses =
+    includeCategories ||
+    excludeCategories ||
+    gate.excludeCopycats === true ||
+    gate.excludeNarrativeRedFlags === true ||
+    gate.excludeUnrelatedX === true ||
+    gate.requireTrendMatch === true ||
+    gate.excludeLateCopies === true;
+  if (!uses) return true;
+  // The scan hadn't started recording the read when this row was banked.
+  if (unrecorded.has("nsDepthFull")) return true;
+
+  const depth = f("nsDepthFull");
+  if (depth === undefined) return false;
+
+  const bitOn = (label: string) => f(CATEGORY_FEATURE.get(label) ?? "") === 1;
+  if (includeCategories && !gate.narrativeCategories!.some(bitOn)) return false;
+  if (excludeCategories && gate.excludeNarrativeCategories!.some(bitOn)) return false;
+
+  if (gate.excludeCopycats === true && (f("nsCopycat") === 1 || f("nsEarlierSameName") === 1)) return false;
+  if (
+    gate.excludeCopycats === true &&
+    (f("nsCopycat") === undefined || f("nsEarlierSameName") === undefined)
+  ) {
+    return false;
+  }
+
+  if (gate.excludeNarrativeRedFlags === true) {
+    const flags = f("nsHighFlagCount");
+    if (flags === undefined || flags > 0) return false;
+  }
+
+  if (gate.excludeUnrelatedX === true) {
+    // A basic read passes only when the coin has no X link. Unknown fails closed.
+    if (depth !== 1 && f("hasTwitter") !== 0) return false;
+    if (f("nsXVerdictUnrelated") === 1) return false;
+  }
+
+  if (gate.requireTrendMatch === true && !(depth === 1 && f("nsTrendMatched") === 1)) return false;
+
+  // Unknown lineage fails closed, as narrativeIsLateCopy's null does. The late_copy flag with
+  // some other lineage is not stored; nsLineageLateCopy is the reading the row can answer.
+  if (gate.excludeLateCopies === true) {
+    const late = f("nsLineageLateCopy");
+    if (late === undefined || late === 1) return false;
+  }
+
   return true;
 }
 
@@ -223,6 +322,9 @@ const GATE_INPUTS: readonly string[] = [
   "freshTop10WalletPct",
   "jupHolderCount",
   "firstBuyersHoldingCut",
+  // TokenSage's read. Rows banked before the first numeric depth skip the narrative criteria
+  // rather than failing closed as "no read".
+  "nsDepthFull",
 ];
 
 /** When each gate input was first recorded among `rows` (ms); an input never recorded is absent. */

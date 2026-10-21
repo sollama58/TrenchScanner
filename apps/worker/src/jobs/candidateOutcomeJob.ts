@@ -730,9 +730,8 @@ export async function runCandidateWatchJob(
 
       const copyRunPeak = row.sampleKind === "match" && finalPeak24hPct !== null;
       // Only if the row is still anchored where this sweep read it, and no other sweep has ticked
-      // it since. A curated alert going out moves a fresh row's anchor to the moment it is sent
-      // (emitCuratedAlert); a tick computed against the old anchor would fold in a price seen
-      // before the alert, and overwrite the moved row's schedule. And candidate-watch runs with no
+      // it since. A curated alert no longer moves that anchor to send time (emitCuratedAlert);
+      // the compare still drops a tick that raced another write of the same row. And candidate-watch runs with no
       // job lock, so for the minute a deploy runs two scanners both sweep: every tick writes
       // lastCheckedAt, so the second one's claim on the value it read misses, and its peaks and
       // labels, computed from the same stale read, stay unwritten. The next sweep picks both up.

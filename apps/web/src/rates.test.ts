@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  calibratedRateLabel,
   cardCalibratedRate,
   intervalText,
   isEarly,
@@ -66,6 +67,12 @@ describe("cardCalibratedRate", () => {
     expect(cardCalibratedRate({ calibratedPct: 25 }, [])).toBe(25);
     expect(cardCalibratedRate({}, [{ calibratedPct: null }, { calibratedPct: 20 }])).toBe(20);
     expect(cardCalibratedRate({ calibratedPct: null }, [])).toBeNull();
+    // A model's raw confidence is not this rate, and a missing rate stays off the card.
+    expect(cardCalibratedRate({ calibratedPct: null }, [{ calibratedPct: null }])).toBeNull();
+    expect(cardCalibratedRate({ calibratedPct: 41 }, [])).toBe(41);
+    expect(calibratedRateLabel(null)).toBeNull();
+    expect(calibratedRateLabel(41.4)).toBe("41% of alerts like it 2x'd");
+    expect(calibratedRateLabel(41)).not.toMatch(/90/);
   });
 });
 

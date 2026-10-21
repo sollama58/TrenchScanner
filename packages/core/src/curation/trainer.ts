@@ -120,11 +120,10 @@ export interface TrainingRow {
    */
   crashed?: boolean;
   /**
-   * The stored readings of the inputs maskKnownBadInputs cleared on this row as from another era
-   * that a gated seat's frozen filter still reads (HOLDER_TRANSFER_LINKED_FEATURES: the creator
-   * share, KOL Bundled % and Bundled % before HOLDER_TRANSFER_LINKS_READ_SINCE). The gate decides
-   * on what the row stored, so its population isn't widened by the mask (user decision
-   * 2026-10-20); the learners still read them as missing. Omitted when nothing was cleared.
+   * Stored readings maskKnownBadInputs cleared that a gated seat may still read (gateView). The
+   * creator share, KOL Bundled % and Bundled % from before HOLDER_TRANSFER_LINKS_READ_SINCE are
+   * not put back: they are not today's transfer-counted figures, and a masked older row stays
+   * masked. The learners always read the masked vector. Omitted when nothing was cleared.
    */
   gateInputs?: Record<string, number | null | undefined>;
 }
@@ -428,8 +427,30 @@ export const MOONSHOT_RUN_WEIGHT_PER_DOUBLING = 3;
 export const CATCH_RUN_WEIGHT_PER_DOUBLING = 1.5;
 /** How many times over the "safe" goal counts a loss (the crash payoff and every negative return). */
 export const SAFE_LOSS_AVERSION = 2;
-/** Fewest clean 10x positives the "10x" goal trains on; fewer and it trains on the 4x instead. */
-const MIN_TEN_X_POSITIVES = 30;
+/**
+ * Fewest rows with a known 10× verdict (a loss, or a clean winner whose hit10x is in) before the
+ * 10× goal trains. Fewer, and the seat is skipped: it is not trained as a 4× model under the
+ * 10× name.
+ */
+export const MIN_KNOWN_TEN_X_VERDICTS = 30;
+
+/** A row whose 10× tier is settled: a loss, or a winner with a hit10x verdict. */
+export function knownTenXVerdicts(rows: readonly { labelValue: number; hit10x?: boolean }[]): number {
+  let n = 0;
+  for (const r of rows) if (r.labelValue <= 0 || r.hit10x !== undefined) n += 1;
+  return n;
+}
+
+/** Thrown when a 10× fit is asked for without enough settled verdicts. The seat skips instead. */
+export class TenXVerdictsTooFew extends Error {
+  readonly known: number;
+  constructor(known: number) {
+    super(`10× goal needs ${MIN_KNOWN_TEN_X_VERDICTS} rows with a known 10× verdict; this set has ${known}`);
+    this.name = "TenXVerdictsTooFew";
+    this.known = known;
+  }
+}
+
 const FOUR_X_LABEL = Math.log2(4);
 
 /** Trains one model of the given family (and shape) toward its goal - see SeatGoal. */
@@ -444,9 +465,9 @@ export async function trainCuratorModel(
       opts,
     );
   if (goal === "10x") {
+    const knownCount = knownTenXVerdicts(rows);
+    if (knownCount < MIN_KNOWN_TEN_X_VERDICTS) throw new TenXVerdictsTooFew(knownCount);
     const known = rows.filter((r) => r.labelValue <= 0 || r.hit10x !== undefined);
-    const positives = known.filter((r) => r.hit10x === true).length;
-    if (positives < MIN_TEN_X_POSITIVES) return trainCuratorModel(rows, { ...opts, goal: "4x" });
     return trainWinModel(
       relabel(known, (r) => r.hit10x === true),
       opts,

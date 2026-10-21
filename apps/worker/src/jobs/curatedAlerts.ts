@@ -1247,7 +1247,8 @@ async function emitForModel(
     } else if (reviewing && !gating && reviewPriority(pick.decision, env, isDefault) !== null) {
       // Shadow mode: the alert is already out; the review is bookkeeping and must never hold
       // up the scan cycle, so it runs detached - tracked, so a shutdown can wait for it.
-      const shared = reviewOnce(pick, env, { isDefault });
+      // The decision clock is the scan's, not the moment this detached review actually runs.
+      const shared = reviewOnce(pick, env, { isDefault, decisionAt: new Date(clock.now) });
       if (shared.fresh) {
         trackShadowReview(
           shared.result
@@ -1270,6 +1271,23 @@ async function emitForModel(
     lastHour,
   });
   return emitted;
+}
+
+/**
+ * The columns a fresh, still-unfilled cycle anchor gains when the alert is sent. `anchorAt` is
+ * not one of them: the label window stays on the decision anchor.
+ */
+export function freshUnfilledAnchorPatch(): { extended24h: true } {
+  return { extended24h: true };
+}
+
+/**
+ * The moment the 15-minute 2× window and the exit-plan return start from. A later send does not
+ * become that moment; the features were built at `decisionAnchorAt`.
+ */
+export function labelAnchor(decisionAnchorAt: Date, sentAt: Date): Date {
+  void sentAt;
+  return decisionAnchorAt;
 }
 
 /**
@@ -1311,19 +1329,13 @@ async function emitCuratedAlert(
 
       let anchor = sharedAnchor ?? (pick.cycleSample?.created ? pick.cycleSample : null);
       if (anchor && !sharedAnchor) {
-        // The windows run from the alert, and the alert is going out now - after the rest of the
-        // scan cycle, the governor and (in gate mode) the AI review, which can take most of a
-        // minute - so the anchor's clock moves to now. Its price stays the one the token was
-        // detected and alerted at. Only while the row has seen no price yet: once it has, that
-        // price predates the alert, and the alert gets a fresh row like a stale sample would.
-        const now = new Date();
+        // The 15-minute 2× window and the exit-plan return start at the anchor the features were
+        // built for. Sending later does not move that clock (labelAnchor). The price on the row
+        // is already the decision price. Only while the row has seen no price yet: once it has,
+        // that price predates this send, and the alert gets a fresh row like a stale sample would.
         const moved = await tx.candidateOutcome.updateMany({
           where: { id: anchor.id, entryAt: null },
-          data: {
-            extended24h: true,
-            anchorAt: now,
-            nextCheckAt: new Date(now.getTime() + env.CANDIDATE_WATCH_INTERVAL_MINUTES * 60_000),
-          },
+          data: freshUnfilledAnchorPatch(),
         });
         if (moved.count === 0) anchor = null;
       }
@@ -1414,7 +1426,7 @@ export function resetSharedReviews(): void {
 function reviewOnce(
   pick: CuratedContender,
   env: Env,
-  opts: { gate?: boolean; isDefault: boolean },
+  opts: { gate?: boolean; isDefault: boolean; decisionAt?: Date },
 ): { result: Promise<AiReviewResult | null>; fresh: boolean } {
   const now = Date.now();
   const ttlMs = env.AI_REVIEW_VETO_COOLDOWN_MINUTES * 60_000;

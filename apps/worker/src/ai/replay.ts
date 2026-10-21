@@ -13,7 +13,6 @@ import {
   summarizeJudgeRecord,
   aiSpendDay,
   usageCostUsd,
-  CANDIDATE_WATCH_WINDOW_MINUTES,
   BRIEF_WALLET_FIELDS,
   isRawWalletRiskRow,
   HOLDER_TRANSFER_LINKS_READ_SINCE,
@@ -31,6 +30,7 @@ import { blendTargets } from "./blend.js";
 import {
   COMPARABLES_K,
   COMPARABLE_POOL_DAYS,
+  comparablesKnowableAt,
   VerdictSchema,
   loadGradedPool,
   verdictFromParsed,
@@ -55,8 +55,6 @@ const logger = createLogger("ai-replay");
 
 /** How long a submitted run's batch may stay unreadable before the run is failed. */
 const UNREADABLE_BATCH_GIVE_UP_MS = 3 * 86_400_000;
-/** A pool row counts as known at time t once its label window (plus slack) has closed. */
-const LABEL_SETTLE_MS = (CANDIDATE_WATCH_WINDOW_MINUTES + 5) * 60_000;
 /** The most pool rows one replay loads for comparables. */
 const REPLAY_POOL_MAX_ROWS = 8_000;
 /** Most requests one replay sends - well under the API's limits, keeps the request body small. */
@@ -231,13 +229,7 @@ function comparablesAsOf(
   pool: DatedGradedRow[],
   at: Date,
 ): ReturnType<typeof nearestOutcomes> {
-  const settled = at.getTime() - LABEL_SETTLE_MS;
-  const earliest = at.getTime() - COMPARABLE_POOL_DAYS * 86_400_000;
-  const known = pool.filter((r) => {
-    const t = r.anchorAt.getTime();
-    return t <= settled && t >= earliest;
-  });
-  return nearestOutcomes(features, known, COMPARABLES_K);
+  return nearestOutcomes(features, comparablesKnowableAt(pool, at), COMPARABLES_K);
 }
 
 /** custom_id: the playbook's position in the run, then the alert's anchor row. */

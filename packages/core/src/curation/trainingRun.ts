@@ -7,6 +7,8 @@ import {
   probabilityAtRank,
   trainCuratorModel,
   goalValue,
+  knownTenXVerdicts,
+  MIN_KNOWN_TEN_X_VERDICTS,
   type SeatGoal,
   walkForwardEvaluate,
   type CuratorLearner,
@@ -30,6 +32,8 @@ import {
 } from "./trainer.js";
 import {
   CANDIDATE_FEATURE_NAMES,
+  HOLDER_TRANSFER_LINKED_FEATURES,
+  HOLDER_TRANSFER_LINKS_READ_SINCE,
   MARKET_LEARNER_FEATURE_NAMES,
   withCurrentNarrativeTiming,
 } from "./features.js";
@@ -815,13 +819,25 @@ export function gatedTrainingSet(
   );
 }
 
+const TRANSFER_LINKED: ReadonlySet<string> = new Set(HOLDER_TRANSFER_LINKED_FEATURES);
+
 /**
- * The inputs a gated seat's filter reads on a training row: its features with the era-masked
- * readings the row stored put back (TrainingRow.gateInputs, user decision 2026-10-20).
+ * The inputs a gated seat's filter reads on a training row. Readings maskKnownBadInputs cleared
+ * can be put back through TrainingRow.gateInputs, except the creator share and the two bundle
+ * figures from before HOLDER_TRANSFER_LINKS_READ_SINCE: those are funding-only (or the
+ * transfer-linked window), not the transfer-counted definition the live filter reads today, so a
+ * masked older row stays masked.
  */
 export function gateView(row: TrainingRow): Pick<TrainingRow, "anchorAt" | "features"> {
   if (row.gateInputs === undefined) return row;
-  return { anchorAt: row.anchorAt, features: { ...row.features, ...row.gateInputs } };
+  const maskedEra = row.anchorAt.getTime() < HOLDER_TRANSFER_LINKS_READ_SINCE.getTime();
+  const restored: Record<string, number | null | undefined> = {};
+  for (const [name, value] of Object.entries(row.gateInputs)) {
+    if (maskedEra && TRANSFER_LINKED.has(name)) continue;
+    restored[name] = value;
+  }
+  if (Object.keys(restored).length === 0) return row;
+  return { anchorAt: row.anchorAt, features: { ...row.features, ...restored } };
 }
 
 /** Fewest deep-read rows the Narrative seat's exam runs on: under this its cutoff would be a coin flip. */
@@ -1033,6 +1049,19 @@ export interface ContestRunOutcome {
   probation: ProbationStart | null;
   /** A takeover the rule decided that this run could not carry out, and why (for the run log). */
   dropped: string | null;
+  /**
+   * Seats this run did not train. The 10× Hunter sits out when fewer than MIN_KNOWN_TEN_X_VERDICTS
+   * rows have a known 10× verdict, instead of shipping a 4× model under that name. The job logs
+   * these and keeps each seat's running model.
+   */
+  skipped: SkippedContestant[];
+}
+
+/** A seat this run did not train, and the reason the job logs. */
+export interface SkippedContestant {
+  contestant: string;
+  name: string;
+  reason: string;
 }
 
 export interface ProbationStart extends Replacement {
@@ -1074,6 +1103,7 @@ export async function runEvolvingContest(
   // as it does live (see withCurrentNarrativeTiming); the narrative seats read storedRows.
   const rows = withCurrentNarrativeTiming(storedRows);
   const results: ContestantTrainingResult[] = [];
+  const skipped: SkippedContestant[] = [];
   const foldRanks = new Map<string, Float64Array>();
   const shippedProbabilities = new Map<string, Float64Array>();
   const laneExamScores = new Map<string, number | null>();
@@ -1134,6 +1164,17 @@ export async function runEvolvingContest(
 
   for (const spec of learnerSpecs) {
     if (!spec.recipe) continue;
+    if (spec.recipe.goal === "10x") {
+      const known = knownTenXVerdicts(rows);
+      if (known < MIN_KNOWN_TEN_X_VERDICTS) {
+        skipped.push({
+          contestant: spec.id,
+          name: spec.name,
+          reason: `${spec.name} skipped: ${known} rows have a known 10× verdict, need ${MIN_KNOWN_TEN_X_VERDICTS}. Not trained as a 4× model.`,
+        });
+        continue;
+      }
+    }
     examining(spec.name);
     const exam = await examineLearner(rows, cfg, spec.id, spec.name, spec.recipe, reference, features.usable);
     if (reference === null) {
@@ -1196,7 +1237,7 @@ export async function runEvolvingContest(
   // or lets through too few decision moments.
   // A gate criterion on an input recorded only partway through the window skips the rows banked
   // before it (unrecordedGateInputs) instead of failing them all.
-  // The filter reads the stored values of era-masked inputs (gateView), the learners don't.
+  // The filter reads gateView: era-masked inputs stay masked when they are not today's definition.
   const gateOnsets = gatedSpecs.length > 0 ? gateInputOnsets(rows.map(gateView)) : new Map<string, number>();
   for (const spec of gatedSpecs) {
     const gate = spec.gate !== undefined ? cfg.gates?.[spec.gate] : undefined;
@@ -1533,7 +1574,7 @@ export async function runEvolvingContest(
   // Roster order, so storage and logs read the same way the leaderboard lists them.
   const order = new Map(cfg.contestants.map((c, i) => [c.id, i]));
   results.sort((a, b) => order.get(a.contestant)! - order.get(b.contestant)!);
-  return { results, challengerScores, replacement, probation, dropped };
+  return { results, challengerScores, replacement, probation, dropped, skipped };
 }
 
 /** The learners' exam evidence the Rules seat can learn from (see rulesSeatResult). */

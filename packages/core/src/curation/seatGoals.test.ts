@@ -18,6 +18,8 @@ import {
   scoreCandidateWithModel,
   scoreWinOdds,
   trainCuratorModel,
+  TenXVerdictsTooFew,
+  MIN_KNOWN_TEN_X_VERDICTS,
   type TrainingRow,
 } from "./trainer.js";
 
@@ -172,12 +174,18 @@ describe("seat goals", () => {
     expect(safe.returnRisk!.winFloor).toBeUndefined();
   }, 60_000);
 
-  it("falls back to the 4x for the 10x goal when there are too few clean 10x rows", async () => {
-    const thin = rows.map((r) => ({ ...r, hit10x: false }));
-    const tenX = await trainCuratorModel(thin, { learner: "logistic", goal: "10x" });
-    const fourX = await trainCuratorModel(thin, { learner: "logistic", goal: "4x" });
+  it("does not train a 4x model when fewer than 30 rows have a known 10x verdict", async () => {
+    const unsettled = Array.from({ length: MIN_KNOWN_TEN_X_VERDICTS - 1 }, (_, i) =>
+      row({ labelValue: 1, anchorAt: new Date(T0 + i * 60_000) }),
+    );
+    await expect(trainCuratorModel(unsettled, { learner: "logistic", goal: "10x" })).rejects.toBeInstanceOf(
+      TenXVerdictsTooFew,
+    );
+    const known = rows.map((r) => ({ ...r, hit10x: false }));
+    const tenX = await trainCuratorModel(known, { learner: "logistic", goal: "10x" });
+    const fourX = await trainCuratorModel(known, { learner: "logistic", goal: "4x" });
     const f = { buyRatio24h: 0.5, volume24hUsd: 5_000, ageMinutes: 60 };
-    expect(scoreWinOdds(tenX, f)).toBeCloseTo(scoreWinOdds(fourX, f), 9);
+    expect(scoreWinOdds(tenX, f)).not.toBeCloseTo(scoreWinOdds(fourX, f), 5);
   }, 60_000);
 
   it("fits the return itself for the return objective, with no crash model on top", async () => {

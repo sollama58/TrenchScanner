@@ -332,11 +332,11 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   chartStyle: "line",
   chartView: "trading",
   chartPathing: false,
-  // Off by default, all switchable back on in Customize: the composite score tile, so the stat tiles
-  // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own), the header's
-  // "≈N% 2x" pill and the 1st Buyers Holding tile, which Snipers replaced (user asks 2026-10-14).
-  // An account that saved its own field list keeps that list.
-  hidden: ["score", "sage", "calibrated", "snipers"],
+  // Off by default, switchable back on in Customize: the composite score tile, so the stat tiles
+  // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own) and the 1st Buyers
+  // Holding tile, which Snipers replaced (user asks 2026-10-14). The header's calibrated 2x pill
+  // shows unless an account saved it hidden. An account that saved its own field list keeps that list.
+  hidden: ["score", "sage", "snipers"],
 };
 
 /** The stored JSON as an appearance, field by field: a bad or missing field takes its default. */

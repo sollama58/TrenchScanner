@@ -33,7 +33,6 @@ import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
   passesWalletSafetyCuts,
   maskKnownBadInputs,
-  HOLDER_TRANSFER_LINKED_FEATURES,
   isPreFeeWalletStonksRow,
   withLaunchAge,
   AGE_FROM_LAUNCH_SINCE,
@@ -256,15 +255,21 @@ async function trainCurators(
   const { results } = outcome;
   // The Narrative seat sits out until it has rows enough (NARRATIVE_MIN_ROWS), a gated seat until its
   // gate is stored and lets enough through (GATED_MIN_ROWS), Winners until enough rows carry its
-  // reading (the same floor); a running model, if any, stays active
-  // rather than retiring with the generation.
-  const kept = contestants
-    .filter(
-      (c) => (c.role === "narrative" || hasOwnPopulation(c)) && !results.some((r) => r.contestant === c.id),
-    )
-    .map((c) => c.id);
+  // reading (the same floor), and the 10× Hunter until enough rows have a known 10× verdict
+  // (outcome.skipped). A running model, if any, stays active rather than retiring with the generation.
+  const kept = [
+    ...contestants
+      .filter(
+        (c) => (c.role === "narrative" || hasOwnPopulation(c)) && !results.some((r) => r.contestant === c.id),
+      )
+      .map((c) => c.id),
+    ...outcome.skipped.map((s) => s.contestant),
+  ];
   if (results.length === 0) {
-    logger.info("contest training produced nothing to store", { rows: trainingRows.length });
+    logger.info("contest training produced nothing to store", {
+      rows: trainingRows.length,
+      skipped: outcome.skipped,
+    });
     return;
   }
 
@@ -418,6 +423,8 @@ async function trainCurators(
       highConviction: r.metrics.highConviction ?? null,
       calibrationCalls: r.metrics.calibrationCalls ?? 0,
     })),
+    // Seats this run did not train (the 10× Hunter, when too few 10× verdicts are known).
+    skipped: outcome.skipped,
     // Inputs held back as too new (or lately dead) to train on - see curation/featureOnset.ts.
     heldFeatures: learnerMetrics?.heldFeatures?.map((h) => ({
       feature: h.feature,
@@ -931,8 +938,9 @@ export async function loadTrainingRows(
 /** An hourly row this close to one of its token's event rows was banked from the same scan. */
 const TWIN_WINDOW_MS = 5_000;
 /**
- * How far an alerted event row's anchor can have moved past its scan: emitCuratedAlert restamps
- * it at send time (after the cycle, the governor and any AI review) but keeps the scan price.
+ * How far an alerted event row's anchor can have moved past its scan. Alerts sent before the
+ * label clock stayed on the decision anchor were restamped at send time (emitCuratedAlert) while
+ * the scan price stayed. New alerts are not restamped; the window still drops those older twins.
  */
 const MOVED_TWIN_WINDOW_MS = 180_000;
 
@@ -1410,14 +1418,6 @@ async function loadRowsOfKind(
       // scan) had its fresh-price gap overwritten with the candle re-grade's, measured after the
       // decision: live, the same no-quote decision carries no gap at all.
       if (loaded.rule3Grade !== null && features.freshGapPct !== undefined) features.freshGapPct = null;
-      // The gated seats' filters read what the row stored for the transfer-linked inputs the mask
-      // cleared (TrainingRow.gateInputs, user decision 2026-10-20).
-      let gateInputs: Record<string, number | null> | undefined;
-      if (masked !== stored) {
-        for (const name of HOLDER_TRANSFER_LINKED_FEATURES) {
-          if (masked[name] == null && stored[name] != null) (gateInputs ??= {})[name] = stored[name];
-        }
-      }
       const row: TrainingRow = {
         tokenId: r.tokenId,
         anchorAt: r.anchorAt,
@@ -1444,7 +1444,6 @@ async function loadRowsOfKind(
         // the exit plan re-score replayed from candles takes that return (user ask 2026-10-18),
         // when it is graded from the same price the re-score replayed from.
         ...rowReturn(r, r.anchorPriceUsd === loaded.anchorPriceUsd ? loaded.rescoredReturnPct : null),
-        ...(gateInputs !== undefined ? { gateInputs } : {}),
       };
       // The decision pre-gate's old-coin momentum test (#567) re-applied, as the exam does: the
       // 1,942 older rows that fail it today doubled 1.8% and held 9.6% of the training weight.
