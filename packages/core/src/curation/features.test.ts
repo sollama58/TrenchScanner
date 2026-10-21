@@ -12,6 +12,7 @@ import {
   ageMayBePoolAge,
   isRawWalletRiskRow,
   AGE_FROM_LAUNCH_SINCE,
+  CANONICAL_PAIR_CLOCK_SINCE,
   WALLET_RISK_PERCENTILE_SINCE,
   SOCIALS_UNREAD_NULL_SINCE,
   EMPTY_WALLETS_UNPRICED_NULL_SINCE,
@@ -1076,6 +1077,18 @@ describe("maskKnownBadInputs", () => {
     expect(isRawWalletRiskRow(before, percentile)).toBe(false);
     expect(maskKnownBadInputs(before, percentile)).toMatchObject({ walletRiskTop10Max: 60 });
     expect(maskKnownBadInputs(WALLET_RISK_PERCENTILE_SINCE, raw)).toBe(raw);
+  });
+
+  it("reads pairAgeMinutes as missing on rows banked before the canonical pair clock", () => {
+    const row = { pairAgeMinutes: 2.5, mcapUsd: 20_000, volume5mUsd: 60 };
+    const before = new Date(CANONICAL_PAIR_CLOCK_SINCE.getTime() - 60_000);
+    expect(maskKnownBadInputs(before, row).pairAgeMinutes).toBeNull();
+    expect(maskKnownBadInputs(before, row).mcapUsd).toBe(20_000);
+    // The per-minute rate is filled after the mask. With the age gone it stays unknown.
+    expect(applyClockFeatures(maskKnownBadInputs(before, row)).volPerMin5m).toBeNull();
+    const after = maskKnownBadInputs(CANONICAL_PAIR_CLOCK_SINCE, row);
+    expect(after.pairAgeMinutes).toBe(2.5);
+    expect(after).toBe(row);
   });
 
   it("reads a RugCheck 0 as missing while a missing report meant the coin was not indexed", () => {

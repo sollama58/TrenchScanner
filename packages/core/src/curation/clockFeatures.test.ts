@@ -68,6 +68,22 @@ describe("applyClockFeatures", () => {
     expect(kept.decisionMcapUsd).toBe(50_000);
   });
 
+  it("floors a seconds-old pair at one minute before dividing a per-minute rate", () => {
+    // 0.01 minute is the smallest age the scan stores. $60 of volume must not become $6,000 a minute.
+    const young = applyClockFeatures({
+      pairAgeMinutes: 0.01,
+      volume5mUsd: 60,
+      priceChange5mPct: 12,
+      pathRet15mPct: 6,
+      pathSpan15mMin: 0.01,
+    });
+    expect(young.volPerMin5m).toBe(60);
+    expect(young.pxSincePairPerMin).toBe(12);
+    expect(young.pathRet15mPerMin).toBe(6);
+    // A pair that has lived a minute is divided by its real age.
+    expect(applyClockFeatures({ pairAgeMinutes: 3, volume5mUsd: 60 }).volPerMin5m).toBe(20);
+  });
+
   it("keeps a stored decision cap when the scan cap and gap would rebuild a different one", () => {
     // Live (buildCandidateFeatures) stores decisionAnchor's cap. The anchor refuses a quote
     // that has a price but no market cap, even when the gap is inside the trusted ratio, and

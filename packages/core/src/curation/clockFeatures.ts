@@ -74,13 +74,25 @@ export function bucketElapsedMinutes(pairAgeMinutes: number | null, windowMinute
   return Math.min(pairAgeMinutes, windowMinutes);
 }
 
+/**
+ * The divisor for a per-minute rate. A pair a few seconds old (age is stored to 0.01 minute)
+ * would otherwise turn a small print into a huge rate. One minute is the floor: the rate is at
+ * most the level itself until the pair has lived a minute (2026-10-21).
+ */
+export const MIN_RATE_MINUTES = 1;
+
+export function rateElapsedMinutes(elapsed: number | null): number | null {
+  if (elapsed === null || !(elapsed > 0)) return null;
+  return Math.max(elapsed, MIN_RATE_MINUTES);
+}
+
 /** A bucket's level (volume, trade count) per minute it actually covers. */
 export function levelPerMinute(
   level: number | null,
   pairAgeMinutes: number | null,
   windowMinutes: number,
 ): number | null {
-  const elapsed = bucketElapsedMinutes(pairAgeMinutes, windowMinutes);
+  const elapsed = rateElapsedMinutes(bucketElapsedMinutes(pairAgeMinutes, windowMinutes));
   if (level === null || elapsed === null) return null;
   return level / elapsed;
 }
@@ -178,6 +190,11 @@ export function clockFeatureValues(
   const span30 = finite(features.pathSpan30mMin);
   const ret15 = finite(features.pathRet15mPct);
   const ret30 = finite(features.pathRet30mPct);
+  const perMinute = (level: number | null, elapsed: number | null): number | null => {
+    const minutes = rateElapsedMinutes(elapsed);
+    if (level === null || minutes === null) return null;
+    return level / minutes;
+  };
   return {
     volPerMin5m: levelPerMinute(finite(features.volume5mUsd), pairAge, WINDOW_5M_MINUTES),
     volPerMin24h: levelPerMinute(finite(features.volume24hUsd), pairAge, WINDOW_24H_MINUTES),
@@ -189,7 +206,7 @@ export function clockFeatureValues(
     px5mFullPct: fullWindowValue(m5, pairAge, WINDOW_5M_MINUTES),
     px1hFullPct: fullWindowValue(h1, pairAge, WINDOW_1H_MINUTES),
     pxSincePairPct: since,
-    pxSincePairPerMin: since !== null && pairAge !== null && pairAge > 0 ? since / pairAge : null,
+    pxSincePairPerMin: perMinute(since, pairAge),
     jupPx5mFullPct: fullWindowValue(finite(features.jup5mPriceChangePct), pairAge, WINDOW_5M_MINUTES),
     jupPx1hFullPct: fullWindowValue(finite(features.jup1hPriceChangePct), pairAge, WINDOW_1H_MINUTES),
     jupVolPerMin5m: levelPerMinute(jup5mVol, pairAge, WINDOW_5M_MINUTES),
@@ -212,8 +229,8 @@ export function clockFeatureValues(
     freshQuoteAgeSec: finite(features.freshQuoteAgeSec),
     pathSpan15mMin: span15,
     pathSpan30mMin: span30,
-    pathRet15mPerMin: ret15 !== null && span15 !== null && span15 > 0 ? ret15 / span15 : null,
-    pathRet30mPerMin: ret30 !== null && span30 !== null && span30 > 0 ? ret30 / span30 : null,
+    pathRet15mPerMin: perMinute(ret15, span15),
+    pathRet30mPerMin: perMinute(ret30, span30),
   };
 }
 
