@@ -1,4 +1,13 @@
 import { z } from "zod";
+import {
+  CHART_MARK_KINDS,
+  CHART_MARKS_REV,
+  DEFAULT_CHART_MARK_KINDS,
+  reviseChartMarkKinds,
+  type ChartMarkKind,
+} from "@trenchscanner/core/chartMarks";
+
+export { CHART_MARK_KINDS, CHART_MARKS_REV, DEFAULT_CHART_MARK_KINDS };
 
 /**
  * How the Live feed looks for one user: theme, colors, spacing, columns and which card fields
@@ -48,24 +57,6 @@ export const CARD_FIELDS = [
 export const QUICK_LINKS = ["terminal", "axiom", "gmgn"] as const;
 
 /**
- * Kinds of labeled wallet whose trades the token chart can mark (apps/web/src/walletMarks.ts):
- * KOLs, Known Sides, KOL funded wallets, Probable Sides, the dev, risky wallets and dumpers,
- * winners, linked holders.
- */
-export const CHART_MARK_KINDS = [
-  "kol",
-  "known",
-  "funded",
-  "probable",
-  "dev",
-  "risky",
-  "winner",
-  "linked",
-] as const;
-/** The kinds marked by default: all but risky wallets, dumpers, and winners. */
-export const DEFAULT_CHART_MARK_KINDS = CHART_MARK_KINDS.filter((k) => k !== "risky" && k !== "winner");
-
-/**
  * Event flags the token chart can draw (apps/web/src/chartEvents.ts). A filter match is the flag
  * labeled "Alert"; model calls include "Model alert" and each model's name.
  */
@@ -76,8 +67,6 @@ export const DEFAULT_CHART_EVENT_KINDS = CHART_EVENT_KINDS.filter((k) => k !== "
 export const CHART_EVENT_FIRST_KINDS = ["alert", "filter", "model"] as const;
 /** Only the first filter and the first model. Alerts are not collapsed unless the reader asks. */
 export const DEFAULT_CHART_EVENT_FIRST = ["filter", "model"] as const;
-/** apps/web/src/appearance.ts has the same. 3 turns winners off by default. */
-export const CHART_MARKS_REV = 3;
 /**
  * Which hideBelowMcap default a look was saved against (apps/web/src/appearance.ts has the same): a
  * look from before it went on at 6k that still holds the old default (off at 5k) was never changed,
@@ -428,24 +417,18 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
   out.quickLinks = Array.isArray(raw.quickLinks)
     ? [...new Set(raw.quickLinks.filter((l): l is string => typeof l === "string" && sites.has(l)))]
     : DEFAULT_FEED_APPEARANCE.quickLinks;
+  // Unknown names are dropped. Order stays as saved. The shared revision then turns an
+  // untouched older default into the current one (packages/core/src/chartMarks.ts).
   const markKinds = new Set<string>(CHART_MARK_KINDS);
   const kinds = Array.isArray(raw.chartMarkKinds)
-    ? [...new Set(raw.chartMarkKinds.filter((k): k is string => typeof k === "string" && markKinds.has(k)))]
-    : DEFAULT_FEED_APPEARANCE.chartMarkKinds;
-  // An older default left untouched: every kind (before rev 2), or every kind but risky (rev 2).
-  // A list the reader edited keeps winners as they left them. Rev 2 with risky switched back on
-  // keeps risky.
-  const sameKinds = (expected: readonly string[]) =>
-    kinds.length === expected.length && expected.every((k) => kinds.includes(k));
-  const beforeWinnersOff = CHART_MARK_KINDS.filter((k) => k !== "risky");
+    ? [
+        ...new Set(
+          raw.chartMarkKinds.filter((k): k is ChartMarkKind => typeof k === "string" && markKinds.has(k)),
+        ),
+      ]
+    : null;
   out.chartMarkKinds =
-    raw.chartMarksRev === CHART_MARKS_REV
-      ? kinds
-      : sameKinds(CHART_MARK_KINDS) && raw.chartMarksRev !== 2
-        ? kinds.filter((k) => k !== "risky" && k !== "winner")
-        : sameKinds(CHART_MARK_KINDS) || sameKinds(beforeWinnersOff)
-          ? kinds.filter((k) => k !== "winner")
-          : kinds;
+    kinds === null ? DEFAULT_FEED_APPEARANCE.chartMarkKinds : reviseChartMarkKinds(kinds, raw.chartMarksRev);
   out.chartMarksRev = CHART_MARKS_REV;
   // A bad or repeated kind falls back to the default list; a real list is kept, in the listed order.
   out.chartEventKinds = chosenKinds(raw.chartEventKinds, CHART_EVENT_KINDS, DEFAULT_CHART_EVENT_KINDS);

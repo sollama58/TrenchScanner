@@ -1,4 +1,10 @@
 import { useSyncExternalStore, type CSSProperties } from "react";
+import {
+  CHART_MARK_KINDS,
+  CHART_MARKS_REV,
+  DEFAULT_CHART_MARK_KINDS,
+  reviseChartMarkKinds,
+} from "@trenchscanner/core/chartMarks";
 import { put, type CardField, type FeedAppearance, type QuickLink } from "./api";
 import {
   CHART_EVENT_FIRST_KINDS,
@@ -16,12 +22,12 @@ import {
  */
 
 /**
- * Which default chartMarkKinds a look was saved against (apps/api/src/feedAppearance.ts has the
- * same): 2 turned risky wallets off; 3 turns winners off. A list that is still exactly an older
- * default was never changed, and reads as the new one. A list the reader edited keeps winners as
- * they left them.
+ * Which default chartMarkKinds a look was saved against (packages/core/src/chartMarks.ts): 2
+ * turned risky wallets off; 3 turns winners off. A list that is still exactly an older default
+ * was never changed, and reads as the new one. A list the reader edited keeps winners as they
+ * left them. Re-exported so a save stamps the same revision the shared reader checks.
  */
-export const CHART_MARKS_REV = 3;
+export { CHART_MARKS_REV };
 /**
  * Which hideBelowMcap default a look was saved against (apps/api/src/feedAppearance.ts has the
  * same): a look from before it went on at 6k that still holds the old default (off at 5k) was never
@@ -34,7 +40,6 @@ export const HIDE_BELOW_MCAP_REV = 2;
  * as on (user ask 2026-10-19).
  */
 export const FEES_BADGE_REV = 2;
-const ALL_MARK_KINDS = ["kol", "known", "funded", "probable", "dev", "risky", "winner", "linked"] as const;
 
 export const DEFAULT_APPEARANCE: FeedAppearance = {
   // Dark until the user picks (user ask 2026-10-14); "auto" (Match device) stays a choice.
@@ -104,7 +109,7 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   // risky wallets and dumpers (user ask 2026-10-18) and winners (user ask 2026-10-21), which are
   // off by default.
   chartMarks: true,
-  chartMarkKinds: ["kol", "known", "funded", "probable", "dev", "linked"],
+  chartMarkKinds: [...DEFAULT_CHART_MARK_KINDS],
   chartMarksRev: CHART_MARKS_REV,
   chartMarkMinSol: 0.5,
   // KOLs' trades as their X pictures on the chart, on by default (user ask 2026-10-19).
@@ -430,33 +435,13 @@ function hideBelowMcapOf(
   };
 }
 
-/** The rev-2 default: every kind but risky, winners still on. */
-const MARK_KINDS_BEFORE_WINNERS_OFF = [
-  "kol",
-  "known",
-  "funded",
-  "probable",
-  "dev",
-  "winner",
-  "linked",
-] as const;
-
-const sameMarkKinds = (kinds: readonly string[], expected: readonly string[]) =>
-  kinds.length === expected.length && expected.every((k) => kinds.includes(k));
-
-/** A saved look's chart mark kinds, in MARK_KINDS order; see CHART_MARKS_REV. */
+/** A saved look's chart mark kinds, in CHART_MARK_KINDS order; see reviseChartMarkKinds. */
 function chartMarkKindsOf(r: Record<string, unknown>): FeedAppearance["chartMarkKinds"] {
   if (!Array.isArray(r.chartMarkKinds)) return DEFAULT_APPEARANCE.chartMarkKinds;
   const saved = r.chartMarkKinds as unknown[];
-  const kinds = ALL_MARK_KINDS.filter((k) => saved.includes(k));
-  if (r.chartMarksRev === CHART_MARKS_REV) return kinds;
-  // Every kind still on, and not saved after risky went off: the untouched old default.
-  if (sameMarkKinds(kinds, ALL_MARK_KINDS) && r.chartMarksRev !== 2)
-    return kinds.filter((k) => k !== "risky" && k !== "winner");
-  // Rev 2's default (or risky switched back on against it): winners were still the default.
-  if (sameMarkKinds(kinds, ALL_MARK_KINDS) || sameMarkKinds(kinds, MARK_KINDS_BEFORE_WINNERS_OFF))
-    return kinds.filter((k) => k !== "winner");
-  return kinds;
+  // Canonical order, unlike the API, which keeps the order the look was saved in.
+  const kinds = CHART_MARK_KINDS.filter((k) => saved.includes(k));
+  return reviseChartMarkKinds(kinds, r.chartMarksRev);
 }
 
 /** A preset applied on top of the default, keeping the user's theme and colors. */
