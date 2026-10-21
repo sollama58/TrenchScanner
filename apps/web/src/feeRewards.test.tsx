@@ -38,6 +38,7 @@ describe("CreatorFeeRich", () => {
     );
     expect(html).toContain(`href="https://solscan.io/token/${MINT}"`);
     expect(html).toContain(`href="https://solscan.io/token/${OTHER}"`);
+    expect(html).toContain('class="fee-reward"');
     expect(creatorFeeLine(fee)).toBe(
       "Creator fees go to a wallet. OTC Desks pays holder rewards in NVDAx and TSLAx.",
     );

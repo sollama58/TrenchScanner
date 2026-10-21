@@ -50,6 +50,7 @@ export function FeeRewards({ rewards }: { rewards: DeskReward[] }) {
           {joinGap(rewards.length, index)}
           {reward.mint ? (
             <a
+              className="fee-reward"
               href={`https://solscan.io/token/${reward.mint}`}
               target="_blank"
               rel="noopener noreferrer"
@@ -58,7 +59,7 @@ export function FeeRewards({ rewards }: { rewards: DeskReward[] }) {
               {reward.label}
             </a>
           ) : (
-            reward.label
+            <span className="fee-reward">{reward.label}</span>
           )}
         </Fragment>
       ))}
