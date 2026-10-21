@@ -69,10 +69,7 @@ const finite = (v: number | null | undefined): number | null =>
  * positive: a missing age must not be treated as a full window, which is what left a
  * two-minute pair's lifetime volume labeled as 24h volume.
  */
-export function bucketElapsedMinutes(
-  pairAgeMinutes: number | null,
-  windowMinutes: number,
-): number | null {
+export function bucketElapsedMinutes(pairAgeMinutes: number | null, windowMinutes: number): number | null {
   if (pairAgeMinutes === null || !(pairAgeMinutes > 0) || !(windowMinutes > 0)) return null;
   return Math.min(pairAgeMinutes, windowMinutes);
 }
@@ -147,7 +144,13 @@ export function clockFeatureValues(
   const launchAge = features.ageSource === 1 ? finite(features.ageMinutes) : null;
   const dwell = finite(features.minutesSinceFirstInBand);
   let bandDwellShare: number | null = null;
-  if (launchAge !== null && launchAge > 0 && dwell !== null && dwell >= 0 && dwell <= launchAge + DWELL_SLACK_MINUTES) {
+  if (
+    launchAge !== null &&
+    launchAge > 0 &&
+    dwell !== null &&
+    dwell >= 0 &&
+    dwell <= launchAge + DWELL_SLACK_MINUTES
+  ) {
     bandDwellShare = Math.min(1, dwell / launchAge);
   }
   const mcap = finite(features.mcapUsd);
@@ -182,7 +185,11 @@ export function clockFeatureValues(
     // multiply mcap by the gap, so the product is its own input. A scan cap of 0 cannot rebuild
     // that product; a cap already written from the anchor (the quote's own market cap) is kept.
     decisionMcapUsd:
-      mcap !== null && mcap > 0 ? (quoteTrusted ? mcap * quoteRatio! : mcap) : finite(features.decisionMcapUsd),
+      mcap !== null && mcap > 0
+        ? quoteTrusted
+          ? mcap * quoteRatio!
+          : mcap
+        : finite(features.decisionMcapUsd),
     // How old the fresh quote is. The training load cannot rebuild it (the fetch time was never
     // stored); live scoring sets it from FreshQuote.fetchedAt before this runs. Null is unknown,
     // not "fresh".
@@ -209,5 +216,6 @@ export function applyClockFeatures<T extends Record<string, number | null | unde
     out ??= { ...features };
     out[name] = next[name];
   }
-  return (out ?? features) as T & Record<ClockHonestFeature | (typeof PATH_CLOCK_FEATURES)[number], number | null>;
+  return (out ?? features) as T &
+    Record<ClockHonestFeature | (typeof PATH_CLOCK_FEATURES)[number], number | null>;
 }

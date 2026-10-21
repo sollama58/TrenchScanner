@@ -86,7 +86,9 @@ const searchMarketsSchema = z.object({
   mints: z
     .string()
     .transform((v) => [...new Set(v.split(",").filter(Boolean))])
-    .pipe(z.array(z.string().regex(MINT_RE, "mint must be a Solana address")).min(1).max(SEARCH_MARKET_FETCH_MAX)),
+    .pipe(
+      z.array(z.string().regex(MINT_RE, "mint must be a Solana address")).min(1).max(SEARCH_MARKET_FETCH_MAX),
+    ),
 });
 
 /** Market cap points drawn in the TokenSage view's chart (the newest scans). */
@@ -798,14 +800,19 @@ export async function registerTokenRoutes(
    * Market fields for the search rows on screen. Cached quotes and snapshots younger than a minute
    * are reused; only mints older than that share one DexScreener batch.
    */
-  app.get("/search/markets", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request, reply) => {
-    const parsed = searchMarketsSchema.safeParse(request.query);
-    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "bad search" });
-    const shells = await loadSearchMarketHits(parsed.data.mints);
-    const hits = opts.dexScreener ? await fillSearchMarketHits(shells, opts.dexScreener) : shells;
-    reply.header("Cache-Control", "no-store");
-    return { hits };
-  });
+  app.get(
+    "/search/markets",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const parsed = searchMarketsSchema.safeParse(request.query);
+      if (!parsed.success)
+        return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "bad search" });
+      const shells = await loadSearchMarketHits(parsed.data.mints);
+      const hits = opts.dexScreener ? await fillSearchMarketHits(shells, opts.dexScreener) : shells;
+      reply.header("Cache-Control", "no-store");
+      return { hits };
+    },
+  );
 
   /** A tracked token as a feed card (kind "stream"), for opening the token modal from a search result. */
   app.get("/:mintAddress/card", async (request, reply) => {
