@@ -140,6 +140,15 @@ describe("chart mark settings", () => {
       normalizeAppearance({ chartMarkKinds: ["kol", "winner"], chartMarksRev: 2 }).chartMarkKinds,
     ).toEqual(["kol", "winner"]);
   });
+
+  it("keeps risky and winner when the look was saved at chart marks revision 3", () => {
+    // 2026-10-21 user ask: revision 3 is its own case, not only a round trip through a fresh save.
+    const all = ["kol", "known", "funded", "probable", "dev", "risky", "winner", "linked"];
+    const look = normalizeAppearance({ chartMarkKinds: all, chartMarksRev: 3 });
+    expect(look.chartMarkKinds).toContain("risky");
+    expect(look.chartMarkKinds).toContain("winner");
+    expect(look.chartMarksRev).toBe(3);
+  });
 });
 
 describe("labeled wallets' marks", () => {

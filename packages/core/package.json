@@ -8,6 +8,7 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": "./dist/index.js",
+    "./chartMarks": "./dist/chartMarks.js",
     "./prisma": "./generated/prisma/index.js"
   },
   "scripts": {
