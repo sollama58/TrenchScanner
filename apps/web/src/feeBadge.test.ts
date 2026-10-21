@@ -49,6 +49,14 @@ describe("feeBadge", () => {
     expect(feeBadge({ destination: "charity", summary: null, charityName: name })?.title).toBe(
       `Creator fees go to ${name}.`,
     );
+    expect(
+      feeBadge({
+        destination: "charity",
+        summary: null,
+        charityName: name,
+        deskLine: "OTC Desks pays holder rewards in NVDAx.",
+      })?.title,
+    ).toBe(`Creator fees go to ${name}. OTC Desks pays holder rewards in NVDAx.`);
     // A name on any other destination is not the heart, and is not shown there.
     expect(feeBadge({ destination: "creator", summary: null, charityName: name })?.title).toBe(
       "Creator fees go to the dev.",

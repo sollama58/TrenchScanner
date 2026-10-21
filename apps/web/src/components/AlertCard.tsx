@@ -925,10 +925,25 @@ export function feeBadge(fee: Card["token"]["creatorFee"]): {
   const kind = feeKind(fee?.destination) ?? (fee?.deskLine?.trim() ? "rewards" : null);
   if (!kind) return null;
   const { Icon, label } = FEE_BADGES[kind];
-  const base = creatorFeeLine(fee) ?? `Creator fees ${label}.`;
+  // TokenSage's sentence, with OTC Desks' reward-coin sentence after it when the roster names one.
+  const line = creatorFeeLine(fee);
   const charityName = kind === "charity" ? shownCharityName(fee?.charityName) : null;
-  const title =
-    charityName == null || base.includes(charityName) ? base : `${charityName}. ${base}`;
+  const hasSummary = Boolean(fee?.summary?.trim().replace(/\.$/, ""));
+  // A loaded charity name leads TokenSage's sentence, and replaces the generic heart sentence
+  // when TokenSage has none (`Creator fees go to <name>.`). The desk sentence still follows.
+  let title: string;
+  if (charityName == null) {
+    title = line ?? `Creator fees ${label}.`;
+  } else if (!hasSummary) {
+    const named = `Creator fees go to ${charityName}.`;
+    title = line && line !== named ? `${named} ${line}` : named;
+  } else if (line?.includes(charityName)) {
+    title = line;
+  } else if (line) {
+    title = `${charityName}. ${line}`;
+  } else {
+    title = `Creator fees go to ${charityName}.`;
+  }
   return { kind, Icon, title };
 }
 
