@@ -90,8 +90,18 @@ describe("pickCanonicalPair", () => {
 
   it("keeps the PumpSwap pool when a spam Meteora or Raydium pool is deeper", () => {
     const curve = { dexId: "pumpfun", volume: { h1: 0 }, pairCreatedAt: 1_000 };
-    const pumpswap = { dexId: "pumpswap", liquidity: { usd: 20_000 }, volume: { h1: 100 }, pairCreatedAt: 3_000 };
-    const meteora = { dexId: "meteora", liquidity: { usd: 90_000 }, volume: { h1: 8_000 }, pairCreatedAt: 9_000 };
+    const pumpswap = {
+      dexId: "pumpswap",
+      liquidity: { usd: 20_000 },
+      volume: { h1: 100 },
+      pairCreatedAt: 3_000,
+    };
+    const meteora = {
+      dexId: "meteora",
+      liquidity: { usd: 90_000 },
+      volume: { h1: 8_000 },
+      pairCreatedAt: 9_000,
+    };
     const raydium = { dexId: "raydium", liquidity: { usd: 80_000 }, pairCreatedAt: 8_000 };
     expect(pickCanonicalPair([curve, meteora, pumpswap])).toBe(pumpswap);
     expect(pickCanonicalPair([pumpswap, raydium])).toBe(pumpswap);

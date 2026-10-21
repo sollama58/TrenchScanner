@@ -74,7 +74,10 @@ export function enrichToken(
     if (!previous || previous <= 0 || indexedHolderCount === undefined) return undefined;
     const readAt = onChain?.holderCountAt;
     const spanMs =
-      readAt instanceof Date && previousAt instanceof Date && !Number.isNaN(readAt.getTime()) && !Number.isNaN(previousAt.getTime())
+      readAt instanceof Date &&
+      previousAt instanceof Date &&
+      !Number.isNaN(readAt.getTime()) &&
+      !Number.isNaN(previousAt.getTime())
         ? readAt.getTime() - previousAt.getTime()
         : undefined;
     if (spanMs !== undefined && spanMs < (windowMinutes / 2) * 60_000) return undefined;
