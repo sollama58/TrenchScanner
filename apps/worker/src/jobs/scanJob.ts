@@ -1951,7 +1951,7 @@ async function scanCycle(
                 riskLookup,
                 ownTapes.get(candidate.mintAddress),
               ),
-          // The same for the clean winners' reading (the Winners seat's inputs).
+          // The same for the clean winners' reading (learner inputs; Winners still requires the tape).
           ownTapes === null
             ? null
             : liveWinnerFollowOn(

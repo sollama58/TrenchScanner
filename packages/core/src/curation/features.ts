@@ -3,7 +3,7 @@ import { marketSourceCode, marketSourceFromCode } from "../marketSource.js";
 import type { ScoredToken } from "../types.js";
 import { scoreNarrative, scoreToken, scoreTokenLegacy } from "../scoring/scorer.js";
 import { EMPTY_TRADE_FLOW, resolveDevHolding, type TradeFlowFeatures } from "./tradeFlow.js";
-import { freshQuoteMcapUsd } from "./labels.js";
+import { decisionAnchor, freshQuoteMcapUsd } from "./labels.js";
 import type { TextScores } from "./textFeatures.js";
 import { EMPTY_CURVE_PATH, type CurvePathFeatures } from "./curveTape.js";
 import { EMPTY_DEV_LAUNCH, type DevLaunchFeatures } from "../wallets/devLaunchScore.js";
@@ -50,8 +50,8 @@ export const JUPITER_EXTRA_FEATURES = ["jupHolderCount"] as const;
  * of called coins whose outcome was final, so never the coin's own result). The highest score
  * among the top-10 holders, the mean score of the launch's first buyers, the % of supply held by
  * top holders scored 70 or more, and how many first buyers are known dumpers. Null when no
- * wallet in view is scored yet, and on every row banked before. Recorded only
- * (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ * wallet in view is scored yet, and on every row banked before. All but
+ * walletRiskTop10Max stay recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
  */
 export const WALLET_RISK_FEATURES = [
   "walletRiskTop10Max",
@@ -65,8 +65,11 @@ export const WALLET_RISK_FEATURES = [
  * were scored when walletRiskTop10Max was read. From the same deploy walletRiskTop10Max is the
  * percentile of the riskiest scored holder among every wallet scored at the time, with the
  * coin's own tape taken out (core's wallets/riskScore.ts coinWalletRisk); the max of more scored
- * holders reads higher, which this count says. Null on every row banked before. Recorded only
- * (RETIRED_LEARNER_INPUTS) until a retrain admits it.
+ * holders reads higher, which this count says. Null on every row banked before.
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-21), so it is not in RETIRED_LEARNER_INPUTS. The onset
+ * guard (featureOnset.ts) keeps it out of a run until it covers enough of the exam's span,
+ * including inside age buckets.
  */
 export const WALLET_RISK_COVERAGE_FEATURES = ["walletRiskScoredTop10"] as const;
 
@@ -75,7 +78,11 @@ export const WALLET_RISK_COVERAGE_FEATURES = ["walletRiskScoredTop10"] as const;
  * paid for each one (core's wallets/linkedWallets.ts). The % of supply held by holders in a
  * cluster (one funder, or one funded another), the cluster count, the largest cluster's %, and the
  * % tied to the creator. Null until every holder's funder is read, and on every row banked before.
- * Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ * linkedCreatorPct has been read since 2026-10-14. The rest joined on 2026-10-21 (user ask).
+ *
+ * READ BY THE LEARNERS, so none of them are in RETIRED_LEARNER_INPUTS. The onset guard
+ * (featureOnset.ts) keeps a column out of a run until it covers enough of the exam's span,
+ * including inside age buckets.
  */
 export const LINKED_WALLET_FEATURES = [
   "linkedWalletPct",
@@ -93,15 +100,21 @@ export const LINKED_WALLET_FEATURES = [
  * Added 2026-10-13: the % of the largest holders (up to 20, the creator aside) whose funder is an
  * exchange or a busy service (core's cexFundedReading): wallets opened from a withdrawal, the way
  * retail arrives. Null until every one of their funders is read, and on every row banked before.
- * Recorded only (RETIRED_LEARNER_INPUTS) until it holds up on later days.
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-21), so it is not in RETIRED_LEARNER_INPUTS. The onset
+ * guard (featureOnset.ts) keeps it out of a run until it covers enough of the exam's span,
+ * including inside age buckets. The count form (cexFundedCount, cexFundedHolders) is read too.
  */
 export const CEX_FUNDED_FEATURES = ["cexFundedPct"] as const;
 
 /**
  * Added 2026-10-13: top holders funded within a minute of each other, from any funders (core's
  * sameTimeClusters): the % of supply they hold and how many such groups. Read with the linked
- * reading, so null until every holder's funder is read, and on every row banked before. Recorded
- * only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ * reading, so null until every holder's funder is read, and on every row banked before.
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-21), so they are not in RETIRED_LEARNER_INPUTS. The onset
+ * guard (featureOnset.ts) keeps them out of a run until they cover enough of the exam's span,
+ * including inside age buckets.
  */
 export const SAME_TIME_FUNDING_FEATURES = ["sameTimeFundedPct", "sameTimeClusterCount"] as const;
 
@@ -109,8 +122,12 @@ export const SAME_TIME_FUNDING_FEATURES = ["sameTimeFundedPct", "sameTimeCluster
  * Added 2026-10-13 (user ask, "Bundled"): of the top-25 holders, how many sit in a same-minute
  * funding group, and how many share a funder or a funding minute with another holder, each counted
  * once (core's linkedWallets). Null until every holder's funder is read, and on every row banked
- * before. Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days. Later the same
- * day Linked took in the same-minute holders, so linkedWalletCount equals bundledWalletCount from then on.
+ * before. Later the same day Linked took in the same-minute holders, so linkedWalletCount equals
+ * bundledWalletCount from then on.
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-21), so they are not in RETIRED_LEARNER_INPUTS. The onset
+ * guard (featureOnset.ts) keeps them out of a run until they cover enough of the exam's span,
+ * including inside age buckets. bundledSupplyPct was already read.
  */
 export const BUNDLED_FEATURES = ["sameTimeFundedCount", "bundledWalletCount"] as const;
 
@@ -142,7 +159,10 @@ export const WALLET_WIN_FEATURES = [
  * coin's top-20 holders (count and their % of supply), among the launch's first buyers, and
  * buying or selling in the newest trades read before the decision. Null without the roster (no
  * SOLANA_TRACKER_API_KEY), without the list in question, and on every row banked before.
- * Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-21), so they are not in RETIRED_LEARNER_INPUTS. The onset
+ * guard (featureOnset.ts) keeps them out of a run until they cover enough of the exam's span,
+ * including inside age buckets. No new paid call: the roster is the one the scan already loads.
  */
 export const KOL_FEATURES = [
   "kolTopHolders",
@@ -159,7 +179,10 @@ export const KOL_FEATURES = [
  * count and how many holders it read (the top 25, the creator aside), how many of the top 25
  * holders (pools aside) were among the launch's first 25 buyers and how many holders that read,
  * and how many top-10 wallets the fresh and empty checks read. Null on every row banked before.
- * Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-21), so they are not in RETIRED_LEARNER_INPUTS. The onset
+ * guard (featureOnset.ts) keeps them out of a run until they cover enough of the exam's span,
+ * including inside age buckets.
  */
 export const HOLDER_SET_FEATURES = [
   "largestHolderPct",
@@ -175,19 +198,21 @@ export const HOLDER_SET_FEATURES = [
  * the creator aside) as a count, and how many holders it read. Null until the top-25 list and all
  * its wallets are read, and on every row banked before.
  *
- * RETRAINING NOTE: recorded only (RETIRED_LEARNER_INPUTS). The models still read
- * freshTop10WalletPct, the top-10 share, while the screen, the pick rule and the filters moved to
- * the top-25 count (freshWalletShare). Once enough rows carry these, judge them on the feature
- * report and retrain with them in place of (or beside) freshTop10WalletPct, together with the
- * other 25-holder counts recorded only so far (HOLDER_SET_FEATURES: CEX-funded and snipers N/25).
+ * READ BY THE LEARNERS (user ask 2026-10-21), beside freshTop10WalletPct, the top-10 share the
+ * models already read. The screen, the pick rule and the filters use the top-25 count
+ * (freshWalletShare). The onset guard (featureOnset.ts) keeps these out of a run until they cover
+ * enough of the exam's span, including inside age buckets.
  */
 export const FRESH_TOP_HOLDER_FEATURES = ["freshTopHolderCount", "freshTopHoldersChecked"] as const;
 
 /**
  * Added 2026-10-14 (user ask): KOL Bundled %, the share of supply KOLs hold through bundles among
  * the top holders (core's wallets/kolBundled.ts). Null until the linked reading lands and the KOL
- * roster loads, and on every row banked before. Recorded only (RETIRED_LEARNER_INPUTS) until it
- * holds up on later days.
+ * roster loads, and on every row banked before.
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-21), so it is not in RETIRED_LEARNER_INPUTS. The onset
+ * guard (featureOnset.ts) keeps it out of a run until it covers enough of the exam's span,
+ * including inside age buckets.
  */
 export const KOL_BUNDLED_FEATURES = ["kolBundledPct"] as const;
 
@@ -221,7 +246,10 @@ export const LAUNCHPAD_FEATURES = ["launchpadStonks"] as const;
  * supply the top-25 holders sent each other (the coin itself; core's wallets/holderTransfers.ts),
  * and how many of them sent or got one: the "3.0% transferred holder to holder (5/25)" line on the
  * bubble map. Null until the top 25's transfer reads are in, and on every row banked before.
- * Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-21), so they are not in RETIRED_LEARNER_INPUTS. The onset
+ * guard (featureOnset.ts) keeps them out of a run until they cover enough of the exam's span,
+ * including inside age buckets.
  */
 export const TRANSFER_FEATURES = ["transferredSupplyPct", "transferWalletCount"] as const;
 
@@ -261,7 +289,11 @@ export const MARKET_SOURCE_FEATURES = ["mktSource"] as const;
  * seconds a graduated coin spent on its curve (preBondSeconds, null on the curve or when either
  * end is unknown); and same-ticker launches in the 15 minutes before it, with the highest market
  * cap any of them reached (relaunchSiblings, relaunchSiblingPeakMcapUsd; curation/relaunchFarm.ts). Null on every row banked before; never backfilled. Recorded only
- * (RETIRED_LEARNER_INPUTS) until they hold up on later days, firstBuyersHoldingCut aside.
+ * firstBuyersHoldingCut has been read since 2026-10-19. The rest joined on 2026-10-21 (user ask).
+ *
+ * READ BY THE LEARNERS, so none of LAUNCH_FACT_FEATURES are in RETIRED_LEARNER_INPUTS.
+ * firstBuyersHolding stays retired. The onset guard (featureOnset.ts) keeps a column out of a run
+ * until it covers enough of the exam's span, including inside age buckets.
  */
 export const LAUNCH_FACT_FEATURES = [
   "firstBuyersSeen",
@@ -276,8 +308,11 @@ export const LAUNCH_FACT_FEATURES = [
  * (core's wallets/walletScore.ts) of the wallets buying in the coin's newest trades read before
  * the decision (the live tape): their mean, and how many of them have a score. Null without a
  * live page or before the scores load. Backfilled point-in-time on the rows decided around a
- * called coin's tape (worker's walletScoreBackfill.ts). Recorded only (RETIRED_LEARNER_INPUTS)
- * until they hold up on later days.
+ * called coin's tape (worker's walletScoreBackfill.ts).
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-21), so they are not in RETIRED_LEARNER_INPUTS. The onset
+ * guard (featureOnset.ts) keeps them out of a run until they cover enough of the exam's span,
+ * including inside age buckets.
  */
 export const WALLET_SCORE_FEATURES = [
   "walletScoreRecentBuyersMean",
@@ -292,8 +327,14 @@ export const WALLET_SCORE_FEATURES = [
  * own-2x rate, how many buyers were read, and how the clean winners are trading it (the surest
  * one's stake against its usual, buying in against getting out, their share of the sellers). Null without a live page or before the wallet book
  * loads. Backfilled point-in-time on the rows decided around a called coin's tape (worker's
- * winnerFollowBackfill.ts). The Winners seat reads them and decides only on moments that carry
- * them (ContestantSpec.requires); every other learner has them retired (RETIRED_LEARNER_INPUTS).
+ * winnerFollowBackfill.ts).
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-21), so they are not in RETIRED_LEARNER_INPUTS. They are
+ * not TokenSage inputs, so the market seats keep them (MARKET_LEARNER_FEATURE_NAMES). A missing
+ * read stays null (no live page, or the wallet book has not loaded); do not fill it with zero.
+ * The Winners seat still decides only on moments that carry the tape (ContestantSpec.requires)
+ * and still fits the shares rather than the two counts. The onset guard (featureOnset.ts) keeps
+ * a column out of a run until it covers enough of the exam's span, including inside age buckets.
  */
 export const WINNER_FOLLOW_FEATURES = [
   "cleanWinnerRecentBuyers",
@@ -320,7 +361,10 @@ export const LIVE_FLAG_FEATURES = [
  * 2026-10-17, user ask: the first ~15 minutes as granular as possible; curation/curveTape.ts, the
  * worker's jobs/curveTape.ts). Null while the coin's curve isn't followed (past 15 minutes, not a
  * Pump.fun curve, graduated) and on every row banked before. Recorded first: no learner reads them
- * until a few days of decision rows show what they carry (RETIRED_LEARNER_INPUTS).
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-21), so they are not in RETIRED_LEARNER_INPUTS. The onset
+ * guard (featureOnset.ts) keeps them out of a run until they cover enough of the exam's span,
+ * including inside age buckets. A curve that isn't followed still reads null.
  */
 export const CURVE_PATH_FEATURES = [
   "curveCoveredSec",
@@ -611,8 +655,8 @@ export const CANDIDATE_FEATURE_NAMES = [
   // since the pair opened whenever the pair is younger than the window, and the tape's 15 and
   // 30-minute returns answer across a short tape. These are the same readings divided by the
   // minutes they actually cover (curation/clockFeatures.ts). Recorded on every row, including
-  // rows banked before (the training load fills them from inputs the row already has). No
-  // learner reads them until a walk-forward takes them out of RETIRED_LEARNER_INPUTS.
+  // rows banked before (the training load fills them from inputs the row already has).
+  // launchAgeMinutes is the launch clock and is read. The rest wait on a walk-forward.
   ...CLOCK_HONEST_FEATURES,
   ...PATH_CLOCK_FEATURES,
 ] as const;
@@ -760,9 +804,6 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // The hidden Wallet Score of the newest buyers (added 2026-10-16, user ask): recorded first, on
   // the same terms (notes/wallet-score-2026-10-16/report.md).
   ...WALLET_SCORE_FEATURES,
-  // The clean winners buying (added 2026-10-17, user ask): read by the Winners seat alone, which
-  // names them in its recipe and decides only on moments that carry them.
-  ...WINNER_FOLLOW_FEATURES,
   // The bonding-curve path of a young coin (added 2026-10-17, user ask): recorded first.
   ...CURVE_PATH_FEATURES,
   // The dev launch reading (added 2026-10-17, user ask): recorded first.
@@ -820,13 +861,18 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "mktBaseRate1hPct",
   "mktBaseRate6hPct",
   "pathRet5mPct",
+  // The mixed clock (2026-10-21): ageMinutes is launch age when the launch time was known and
+  // the pool's age otherwise, one number for two clocks. The next fit reads launchAgeMinutes
+  // (null when the launch is unknown) and pairAgeMinutes. ageMinutes stays on the vector at
+  // today's meaning so a model already deployed still scores.
+  "ageMinutes",
   // The clock-honest readings (2026-10-21 audit, curation/clockFeatures.ts): recorded so the
   // feature report can score them against the mislabeled windows, not fit until a paired
-  // walk-forward shows they earn their place. Promote by deleting these two spreads. The
-  // named-window inputs stay until that same backtest says the full-window and per-minute
-  // readings replace them — deleting priceChange1hPct or volume24hUsd here before then changes
-  // the next fit with no measurement.
-  ...CLOCK_HONEST_FEATURES,
+  // walk-forward shows they earn their place. launchAgeMinutes is the exception: it is the
+  // launch clock, and it is read. The named-window inputs stay until that same backtest says
+  // the full-window and per-minute readings replace them — deleting priceChange5mPct,
+  // volume24hUsd or pathRet15mPct here before then changes the next fit with no measurement.
+  ...CLOCK_HONEST_FEATURES.filter((name) => name !== "launchAgeMinutes"),
   ...PATH_CLOCK_FEATURES,
 ]);
 
@@ -1196,7 +1242,8 @@ export const EMPTY_WALLETS_UNPRICED_NULL_SINCE = new Date("2026-10-16T19:30:00Z"
  * an hour read as a minute old. Since #678 (dc17709, committed 2026-10-16 18:47 UTC, deployed with
  * the 19:30 batch) the age counts from Token.launchedAt when known and ageSource says which
  * (1 launch, 0 pool). An older graduated row carries no ageSource, so its age is rebuilt from the
- * launch time where the Token has one (withLaunchAge).
+ * launch time where the Token has one (withLaunchAge), and that rebuild sets ageSource to 1 so
+ * launchAgeMinutes counts it.
  */
 export const AGE_FROM_LAUNCH_SINCE = new Date("2026-10-16T19:30:00Z");
 /** How close the stored age sits to the pool's age (pairAgeMinutes) for it to be read as the pool's. */
@@ -1218,11 +1265,13 @@ export function ageMayBePoolAge(
 /**
  * The row's age as live reads it today (AGE_FROM_LAUNCH_SINCE). On a row whose age may be its
  * pool's, ageMinutes is rebuilt point-in-time from the coin's launch (anchor minus
- * Token.launchedAt, which never changes). With no launch time it reads as missing, and when the
- * stored age is the pool's (within POOL_AGE_SLACK_MINUTES of pairAgeMinutes) null is returned:
- * the coin's true age is unknown and may be past the age cap, so the row leaves the age-capped
- * kinds. The training loader's SQL age cap reads the same rebuilt age. Returns the same object
- * when nothing applies; the stored vector itself is never changed.
+ * Token.launchedAt, which never changes) and ageSource is set to 1, so the rebuilt number is
+ * the launch clock (launchAgeMinutes) and not another pool age. With no launch time it reads
+ * as missing, and when the stored age is the pool's (within POOL_AGE_SLACK_MINUTES of
+ * pairAgeMinutes) null is returned: the coin's true age is unknown and may be past the age cap,
+ * so the row leaves the age-capped kinds. The training loader's SQL age cap reads the same
+ * rebuilt age. Returns the same object when nothing applies; the stored vector itself is never
+ * changed.
  */
 export function withLaunchAge<T extends Record<string, number | null | undefined>>(
   anchorAt: Date,
@@ -1236,7 +1285,7 @@ export function withLaunchAge<T extends Record<string, number | null | undefined
       0,
       Math.round(((anchorAt.getTime() - launchedAt.getTime()) / 60_000) * 100) / 100,
     );
-    return { ...features, ageMinutes };
+    return { ...features, ageMinutes, ageSource: 1 };
   }
   const age = features.ageMinutes as number;
   const pairAge = features.pairAgeMinutes;
@@ -1987,7 +2036,13 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
   };
   // Filled from the inputs above, so a live row and a training row loaded from storage agree
   // (applyClockFeatures). The path spans come from the tape; the per-minute returns divide by them.
-  return applyClockFeatures(features);
+  const clocked = applyClockFeatures(features);
+  // The label's cap, including a quote the gap alone would scale but the anchor refuses (no
+  // quote market cap) and a scan cap of 0 whose anchor cap is the quote's own. ageMinutes above
+  // is unchanged: deployed models still read today's mixed clock.
+  const anchorCap = decisionAnchor(scored).marketCapUsd;
+  if (!(anchorCap > 0) || clocked.decisionMcapUsd === anchorCap) return clocked;
+  return { ...clocked, decisionMcapUsd: anchorCap };
 }
 
 const FRESH_QUOTE_FEATURES = [

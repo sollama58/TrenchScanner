@@ -8,6 +8,7 @@ import {
   learnerSubset,
   maskKnownBadInputs,
   withLaunchAge,
+  applyClockFeatures,
   ageMayBePoolAge,
   isRawWalletRiskRow,
   AGE_FROM_LAUNCH_SINCE,
@@ -46,6 +47,7 @@ import { EMPTY_TRADE_FLOW } from "./tradeFlow.js";
 import { EMPTY_CURVE_PATH } from "./curveTape.js";
 import { EMPTY_DEV_LAUNCH } from "../wallets/devLaunchScore.js";
 import type { ScoredToken } from "../types.js";
+import { decisionAnchor } from "./labels.js";
 
 function scored(overrides: Partial<ScoredToken> = {}): ScoredToken {
   return {
@@ -88,8 +90,11 @@ describe("buildCandidateFeatures - short-window derivations", () => {
       expect(LEARNER_FEATURE_NAMES).not.toContain(name);
     }
     expect(LEARNER_FEATURE_NAMES.length).toBe(CANDIDATE_FEATURE_NAMES.length - RETIRED_LEARNER_INPUTS.size);
-    for (const name of ["priceChange5mPct", "volume5mUsd", "ageMinutes", "buyRatio5m", "ctxHourSin"] as const)
+    for (const name of ["priceChange5mPct", "volume5mUsd", "launchAgeMinutes", "pairAgeMinutes", "buyRatio5m", "ctxHourSin"] as const)
       expect(LEARNER_FEATURE_NAMES).toContain(name);
+    // The mixed clock is recorded for deployed models and is not fit.
+    expect(RETIRED_LEARNER_INPUTS.has("ageMinutes")).toBe(true);
+    expect(LEARNER_FEATURE_NAMES).not.toContain("ageMinutes");
     // The tape's coverage is a learner input and rides with the path block, live and replayed.
     expect(LEARNER_FEATURE_NAMES).toContain("pathGapMinutes");
     expect(new Set(CANDIDATE_FEATURE_NAMES).size).toBe(CANDIDATE_FEATURE_NAMES.length);
@@ -98,7 +103,6 @@ describe("buildCandidateFeatures - short-window derivations", () => {
       "volPerMin24h",
       "pxSincePairPerMin",
       "px5mFullPct",
-      "launchAgeMinutes",
       "decisionMcapUsd",
       "freshQuoteAgeSec",
       "pathSpan15mMin",
@@ -108,7 +112,9 @@ describe("buildCandidateFeatures - short-window derivations", () => {
       expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
     }
     expect(PRICE_PATH_FEATURES).toContain("pathGapMinutes");
-    expect(learnerSubset(["scoreTotal", "ageMinutes", "hasTelegram"])).toEqual(["ageMinutes"]);
+    expect(learnerSubset(["scoreTotal", "launchAgeMinutes", "ageMinutes", "hasTelegram"])).toEqual([
+      "launchAgeMinutes",
+    ]);
   });
 
   it("derives 1h churn against mcap", () => {
@@ -267,6 +273,41 @@ describe("buildCandidateFeatures - short-window derivations", () => {
     expect(day.pxSincePairPct).toBeNull();
     expect(day.volPerMin24h).toBeCloseTo(100);
     expect(day.decisionMcapUsd).toBe(150_000);
+  });
+
+  it("sets the decision cap from the anchor when the gap alone would disagree", () => {
+    const now = new Date("2026-10-21T12:00:00Z");
+    // A quote with no market cap is not the anchor, even though its price is within the ratio.
+    const noQuoteCap = scored({
+      priceUsd: 0.0001,
+      marketCapUsd: 100_000,
+      freshQuote: { priceUsd: 0.00014, marketCapUsd: 0, fetchedAt: now },
+    });
+    expect(decisionAnchor(noQuoteCap).marketCapUsd).toBe(100_000);
+    expect(buildCandidateFeatures(noQuoteCap, now).decisionMcapUsd).toBe(100_000);
+    expect(buildCandidateFeatures(noQuoteCap, now).freshGapPct).toBeCloseTo(40);
+    // A scan cap of 0 cannot scale. The anchor cap is the quote's own market cap.
+    const noScanCap = scored({
+      priceUsd: 0.0001,
+      marketCapUsd: 0,
+      freshQuote: { priceUsd: 0.00011, marketCapUsd: 50_000, fetchedAt: now },
+    });
+    expect(decisionAnchor(noScanCap).marketCapUsd).toBe(50_000);
+    expect(buildCandidateFeatures(noScanCap, now).decisionMcapUsd).toBe(50_000);
+    // Exactly 5x is trusted, the same bound as the anchor; just past it the scan cap stands.
+    const atBound = scored({
+      priceUsd: 0.0001,
+      marketCapUsd: 10_000,
+      freshQuote: { priceUsd: 0.0005, marketCapUsd: 50_000, fetchedAt: now },
+    });
+    expect(buildCandidateFeatures(atBound, now).decisionMcapUsd).toBeCloseTo(50_000);
+    const pastBound = scored({
+      priceUsd: 0.0001,
+      marketCapUsd: 10_000,
+      freshQuote: { priceUsd: 0.00051, marketCapUsd: 51_000, fetchedAt: now },
+    });
+    expect(decisionAnchor(pastBound).labelRule).toBe(3);
+    expect(buildCandidateFeatures(pastBound, now).decisionMcapUsd).toBe(10_000);
   });
 
   it("records every declared feature name, unknowns as null", () => {
@@ -444,7 +485,7 @@ describe("scoredFromFeatures - replay round trip", () => {
     }
   });
 
-  it("records the clean winners' reading of the newest buyers, read by Winners alone, unknown without it", () => {
+  it("records the clean winners' reading of the newest buyers, read by the learners, unknown without it", () => {
     const f = buildCandidateFeatures(
       scored({
         cleanWinnerRecentBuyers: 3,
@@ -470,7 +511,9 @@ describe("scoredFromFeatures - replay round trip", () => {
     const none = buildCandidateFeatures(scored());
     for (const name of WINNER_FOLLOW_FEATURES) {
       expect(none[name]).toBeNull();
-      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
     }
   });
 
@@ -676,8 +719,11 @@ describe("withLaunchAge", () => {
     const launchedAt = new Date(before.getTime() - 200 * 60_000);
     expect(ageMayBePoolAge(before, poolAged)).toBe(true);
     const rebuilt = withLaunchAge(before, poolAged, launchedAt);
-    expect(rebuilt).toEqual({ ...poolAged, ageMinutes: 200 });
+    expect(rebuilt).toEqual({ ...poolAged, ageMinutes: 200, ageSource: 1 });
     expect(poolAged.ageMinutes).toBe(2);
+    // The rebuilt launch age is the launch clock. A pool-aged row (ageSource 0) is not.
+    expect(applyClockFeatures(rebuilt!).launchAgeMinutes).toBe(200);
+    expect(applyClockFeatures({ ...poolAged, ageSource: 0 }).launchAgeMinutes).toBeNull();
   });
 
   it("drops a pool-aged row with no launch time, and masks the age it can't tell", () => {

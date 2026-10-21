@@ -227,7 +227,7 @@ export interface ScoredWallet {
   winner?: boolean;
   /** The hidden composite Wallet Score (walletScore.ts); null or absent when it has none. */
   walletScore?: number | null;
-  /** Coins it traded itself at 2x or better (WalletRisk.own2x), for the Winners seat's inputs. */
+  /** Coins it traded itself at 2x or better (WalletRisk.own2x), for the clean-winner inputs. */
   own2x?: number;
   /**
    * Its win-sized trades fed by tokens transferred in (WalletRisk.transferWins): null until the

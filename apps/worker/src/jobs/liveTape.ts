@@ -201,7 +201,8 @@ export function liveWalletScoreOn(
 
 /**
  * The newest buyers read through the clean winner wallets' records (core's winnerFollowReading,
- * the Winners seat's inputs), or null without the coin's recent page (livePageOf) or the wallet book. Wallets in
+ * learner inputs; the Winners seat still requires the tape), or null without the coin's recent page
+ * (livePageOf) or the wallet book. Wallets in
  * `ownTape` (rows on this coin's own tape already in the book) count as buyers but are read as
  * unknown.
  */
