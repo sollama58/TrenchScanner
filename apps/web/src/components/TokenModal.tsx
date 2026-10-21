@@ -41,6 +41,7 @@ import { LiveStamp, hms, nextUpdateText, secondsAgo, useSecondTick } from "./Fre
 import { DevCard, FlowCard, SocialsCard, type TokenProfile } from "./TokenProfileCards";
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
+import { CreatorFeeRich } from "./FeeRewards";
 import { QUICK_LINK_SITES, pumpFunHref, setAppearance, useAppearance } from "../appearance";
 import { useIsAdmin } from "../session";
 import { useShowNarrativeNote } from "../narrativeNote";
@@ -3730,7 +3731,11 @@ function StatsCard({ card, liquidity = false }: { card: Card; liquidity?: boolea
         <p className="small muted tm-fee">
           {r.charityName && <>Charity: {r.charityName}</>}
           {r.charityName && r.feeLine && <br />}
-          {r.feeLine && <>Creator fee: {r.feeLine}</>}
+          {r.feeLine && card.token.creatorFee && (
+            <>
+              Creator fee: <CreatorFeeRich fee={card.token.creatorFee} />
+            </>
+          )}
         </p>
       )}
     </section>

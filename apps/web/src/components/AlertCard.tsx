@@ -894,6 +894,18 @@ const FEE_BADGES = {
   dev: { Icon: ChefHatIcon, label: "go to the dev" },
 } as const;
 
+/** TokenSage's sentence and, when known, the desk's own sentence, each stopped once. */
+export function creatorFeeLine(fee: Card["token"]["creatorFee"] | null | undefined): string | null {
+  const sentence = (text: string | null | undefined): string | null => {
+    const t = text?.trim().replace(/\.$/, "");
+    return t ? `${t.charAt(0).toUpperCase()}${t.slice(1)}.` : null;
+  };
+  const summary = sentence(fee?.summary);
+  const desk = sentence(fee?.deskLine);
+  if (summary && desk && summary !== desk) return `${summary} ${desk}`;
+  return summary ?? desk;
+}
+
 /**
  * Basis points as a percent beside the gift (user ask 2026-10-21): 5 is 0.05%, 100 is 1%, 300 is 3%.
  * Null when there is no whole rate from 1 to 10000 basis points to show.
@@ -918,9 +930,10 @@ export function shownCharityName(name: string | null | undefined): string | null
 /**
  * The footer's FEES badge: where the coin's creator fee goes (TokenSage's read), as one outline
  * icon - a heart for a charity, a gift for holder rewards or any other wallet, a robot for a GitHub
- * account, a chef's hat for the dev. A holder-reward coin adds its tax beside the gift when the
- * read gave one. On a charity coin the tooltip names the organization when one was loaded (user
- * ask 2026-10-21). Nothing when TokenSage hasn't read the coin or can't tell.
+ * account, a chef's hat for the dev. A gift also when OTC Desks' roster names the reward coins and
+ * TokenSage has not. A holder-reward coin adds its tax beside the gift when the read gave one.
+ * On a charity coin the tooltip names the organization when one was loaded (user ask 2026-10-21).
+ * Nothing when neither source has said.
  */
 export function feeBadge(fee: Card["token"]["creatorFee"]): {
   kind: keyof typeof FEE_BADGES;
@@ -929,23 +942,28 @@ export function feeBadge(fee: Card["token"]["creatorFee"]): {
   /** "0.05%" next to the gift on a holder-reward coin; null otherwise. */
   tax: string | null;
 } | null {
-  const kind = feeKind(fee?.destination);
+  const kind = feeKind(fee?.destination) ?? (fee?.deskLine?.trim() ? "rewards" : null);
   if (!kind) return null;
   const { Icon, label } = FEE_BADGES[kind];
-  const summary = fee?.summary?.trim().replace(/\.$/, "");
-  const summaryTitle = summary
-    ? `${summary.charAt(0).toUpperCase()}${summary.slice(1)}.`
-    : `Creator fees ${label}.`;
-  // The heart's tooltip names the charity when Pump.fun loaded one (user ask 2026-10-21).
+  // TokenSage's sentence, with OTC Desks' reward-coin sentence after it when the roster names one.
+  const line = creatorFeeLine(fee);
   const charityName = kind === "charity" ? shownCharityName(fee?.charityName) : null;
-  const title =
-    charityName == null
-      ? summaryTitle
-      : summary && !summaryTitle.includes(charityName)
-        ? `${charityName}. ${summaryTitle}`
-        : summary
-          ? summaryTitle
-          : `Creator fees go to ${charityName}.`;
+  const hasSummary = Boolean(fee?.summary?.trim().replace(/\.$/, ""));
+  // A loaded charity name leads TokenSage's sentence, and replaces the generic heart sentence
+  // when TokenSage has none (`Creator fees go to <name>.`). The desk sentence still follows.
+  let title: string;
+  if (charityName == null) {
+    title = line ?? `Creator fees ${label}.`;
+  } else if (!hasSummary) {
+    const named = `Creator fees go to ${charityName}.`;
+    title = line && line !== named ? `${named} ${line}` : named;
+  } else if (line?.includes(charityName)) {
+    title = line;
+  } else if (line) {
+    title = `${charityName}. ${line}`;
+  } else {
+    title = `Creator fees go to ${charityName}.`;
+  }
   const tax = fee?.destination === "holder_rewards" ? holderRewardTaxLabel(fee.bps) : null;
   return { kind, Icon, title, tax };
 }
@@ -1026,13 +1044,10 @@ export function cardReadings(card: Card, prefer: "alert" | "newest" = "alert") {
   // Whether the dev still holds: the newest reading first, since a dev can sell after the alert.
   const devHolding = latest?.devHolding ?? s.devHolding ?? null;
   const devFromLatest = latest?.devHolding != null;
-  // Where the creator fee goes (TokenSage), under the Dev tile's tooltip: about 14% of coins
-  // send it to holders, a charity, a GitHub account or other wallets instead of the dev.
+  // Where the creator fee goes, under the Dev tile's tooltip (2026-10-21): TokenSage's sentence,
+  // OTC Desks' reward coins when their roster names them, and the charity's name for the details.
   const fee = card.token.creatorFee;
-  const feeLine = fee?.summary
-    ? `${fee.summary.charAt(0).toUpperCase()}${fee.summary.slice(1).replace(/\.$/, "")}.`
-    : null;
-  // The organization a Pump.fun charity coin names (user ask 2026-10-21), for the token details.
+  const feeLine = creatorFeeLine(fee);
   const charityName = fee?.destination === "charity" ? shownCharityName(fee.charityName) : null;
   return {
     freshPct,

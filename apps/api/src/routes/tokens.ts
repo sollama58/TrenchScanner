@@ -28,6 +28,8 @@ import {
 } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
 import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
+import { otcDeskFees } from "../otcDesk.js";
+import type { OtcDeskFee } from "../feeDesks.js";
 import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
 import { liveCurves, MAX_WAIT_MS, type LiveCurveAnswer } from "../liveCurve.js";
 import { recordCandleAnswer } from "../chartHealth.js";
@@ -1410,7 +1412,7 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
       select: { id: true, symbol: true, name: true, imageUrl: true, firstSeenAt: true },
     }),
   ]);
-  const [snapshots, labels, judged] = await Promise.all([
+  const [snapshots, labels, judged, desks] = await Promise.all([
     token
       ? prisma.tokenSnapshot.findMany({
           where: { tokenId: token.id },
@@ -1450,6 +1452,7 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
           },
         })
       : ([] as NarrativeAlertRow[]),
+    otcDeskFees([mintAddress], { wait: true }).catch(() => new Map<string, OtcDeskFee>()),
   ]);
   const read =
     row?.status === "failed"
@@ -1477,6 +1480,10 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
           : "none",
     failReason: row?.status === "failed" ? failCode(row.failReason) : null,
     read,
+    /** OTC Desks reward routing, when their roster names it (user ask 2026-10-21). */
+    feeDesk: desks.get(mintAddress)?.line ?? null,
+    /** Each reward coin in feeDesk, so the card can render the mint as that token. */
+    feeRewards: desks.get(mintAddress)?.rewards ?? null,
     marketCap: snapshots
       .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
       .reverse()

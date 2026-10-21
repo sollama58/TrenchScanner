@@ -3,7 +3,9 @@
  * The web (apps/web/src/appearance.ts) and the API (apps/api/src/feedAppearance.ts) both read a
  * saved look through reviseChartMarkKinds (user ask 2026-10-21: one shared revision, so the two
  * copies cannot drift). This file imports nothing, so the web can take it from the chartMarks
- * subpath without pulling in the rest of core.
+ * subpath without pulling in the rest of core. The trenchscanner-web export condition points
+ * here: the dashboard build typechecks and bundles this file, and does not compile core's dist
+ * first. Node (the api and the worker) still loads dist/chartMarks.js.
  *
  * Revision 3 is the current default: risky wallets and winners are off. A look saved at revision
  * 3 keeps the list the reader saved, including risky and winner when they turned those back on.

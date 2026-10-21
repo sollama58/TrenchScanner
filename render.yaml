@@ -712,11 +712,15 @@ services:
     buildCommand: npm ci --include=dev && npm run build -w @trenchscanner/web
     autoDeployTrigger: checksPass
     # A backend-only merge leaves the dashboard as it is (see the api service's buildFilter). The
-    # web build reads only apps/web and the root manifests: it imports nothing from packages/, and
-    # its tsconfig extends nothing.
+    # web build reads apps/web, the root manifests, and one core file: @trenchscanner/core/chartMarks
+    # (packages/core/src/chartMarks.ts, via the trenchscanner-web export condition). It does not
+    # compile packages/core, and its tsconfig extends nothing. The api and the worker still import
+    # that subpath from dist, which their own builds compile first.
     buildFilter:
       paths:
         - apps/web/**
+        - packages/core/package.json
+        - packages/core/src/chartMarks.ts
         - package.json
         - package-lock.json
         - .node-version

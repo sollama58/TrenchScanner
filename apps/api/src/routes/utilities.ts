@@ -1157,7 +1157,7 @@ export interface UtilityTokenView {
 export async function tokenView(mint: string, paidAt: Date): Promise<UtilityTokenView | null> {
   const [token, fees] = await Promise.all([
     prisma.token.findUnique({ where: { mintAddress: mint }, select: TOKEN_CARD_SELECT }),
-    creatorFeesByMint([mint]),
+    creatorFeesByMint([mint], { waitForDesk: true }),
   ]);
   if (!token) return null;
   // With the newest holder list before it when the newest scan carries none (holderListWrites.ts):

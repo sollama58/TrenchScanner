@@ -11507,6 +11507,25 @@ img.tm-avatar {
 .tm-fee {
   margin: 10px 0 0 !important;
 }
+/* An OTC reward coin inside a creator-fee sentence: the ticker, or a shortened mint, as that token. */
+.fee-reward {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--link) 38%, transparent);
+  background: var(--info-wash);
+  color: var(--link);
+  font-size: 0.92em;
+  font-weight: 700;
+  line-height: 1.45;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  text-decoration: none;
+  vertical-align: baseline;
+}
+a.fee-reward:hover {
+  text-decoration: underline;
+}
 .tm-calls {
   display: grid;
   gap: 6px !important;

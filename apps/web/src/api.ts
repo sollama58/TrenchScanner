@@ -238,12 +238,17 @@ export interface Token {
   lastFreshTop10WalletPct?: number | null;
   /**
    * Where the coin's creator fee goes, from its TokenSage read; null when the read doesn't say.
+   * `deskLine` is OTC Desks' reward routing when their roster names it. `deskRewards` is each
+   * reward coin in that sentence (ticker or shortened mint, and the mint when known).
    * `charityName` is the organization a Pump.fun charity coin names. `bps` is the holder-reward
-   * tax in basis points (5 is 0.05%, 100 is 1%, 300 is 3%). Both are absent from older API builds.
+   * tax in basis points (5 is 0.05%, 100 is 1%, 300 is 3%). Destination stays null when only the
+   * desk has spoken (user ask 2026-10-21).
    */
   creatorFee?: {
-    destination: string;
+    destination: string | null;
     summary: string | null;
+    deskLine?: string | null;
+    deskRewards?: { label: string; mint: string | null }[] | null;
     charityName?: string | null;
     bps?: number | null;
   } | null;

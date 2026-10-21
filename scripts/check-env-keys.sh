@@ -42,6 +42,9 @@ DIRECT_READS=(
   # (apps/worker/src/tradingPreflight.ts), run by hand, never by a service.
   PREFLIGHT_PROBE_WALLET
   PREFLIGHT_PUMP_MINT
+  # Set by Vitest itself. otcDeskLines skips the live OTC roster while tests run
+  # (apps/api/src/otcDesk.ts) so a card render does not call otcdesks.cash.
+  VITEST
 )
 
 # "service KEY" pairs: the service reads KEY, so render.yaml must declare it there (point 2).

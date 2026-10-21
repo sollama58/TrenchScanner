@@ -13,6 +13,8 @@ import {
   cleanPeakPriceUsd,
   contestantSpec,
 } from "@trenchscanner/core";
+import { otcDeskFees } from "./otcDesk.js";
+import type { OtcDeskFee, OtcRewardCoin } from "./feeDesks.js";
 
 /**
  * Turning a CuratedAlert into a feed card.
@@ -57,10 +59,20 @@ export async function withLatestSnapshots<T extends { token: { id: string; mintA
   });
 }
 
-/** Where a card's coin sends its creator fee (TokenNarrative.feeDestination and feeSummary). */
+/**
+ * Where a card's coin sends its creator fee (TokenNarrative.feeDestination and feeSummary).
+ * `deskLine` is set when OTC Desks' roster names the reward coins for this mint (user ask
+ * 2026-10-21). `deskRewards` is those coins, each with the mint when the roster gave one, so a
+ * surface that can render tokens can. Destination stays null when TokenSage has not said and
+ * only the desk has.
+ */
 export interface CardCreatorFee {
-  destination: string;
+  destination: string | null;
   summary: string | null;
+  /** OTC Desks' reward routing when their roster names this mint (user ask 2026-10-21). */
+  deskLine?: string | null;
+  /** Each reward coin in `deskLine`: its ticker or shortened mint, and the mint when known. */
+  deskRewards?: OtcRewardCoin[] | null;
   /**
    * Creator fee in basis points when the read gave a whole rate from 1 to 10000 (5 is 0.05%).
    * Null when it didn't. The card shows this beside the gift on a holder-reward coin (user ask
@@ -142,7 +154,8 @@ export async function charityNamesByMint(mints: readonly string[]): Promise<Map<
 
 /**
  * The creator-fee read for each mint that has one, in one primary-key lookup. A failed lookup
- * leaves the cards without it rather than failing the feed: it is a tooltip line.
+ * leaves the cards without it rather than failing the feed: it is a tooltip line. The desk
+ * roster is asked on the token page (`waitForDesk`); a feed uses the roster already in hand.
  *
  * The rate is feeCreatorBps when a read has stored it. Rows from before that column still keep
  * creator_fee_bps inside the analysis document, and only a holder-reward coin with no column
@@ -151,11 +164,12 @@ export async function charityNamesByMint(mints: readonly string[]): Promise<Map<
  */
 export async function creatorFeesByMint(
   mints: readonly (string | undefined)[],
+  opts?: { waitForDesk?: boolean },
 ): Promise<Map<string, CardCreatorFee>> {
   const unique = [...new Set(mints.filter((m): m is string => typeof m === "string" && m !== ""))];
   if (unique.length === 0) return new Map();
-  try {
-    const rows = await prisma.$queryRaw<
+  const [rows, desks] = await Promise.all([
+    prisma.$queryRaw<
       {
         mintAddress: string;
         feeDestination: string | null;
@@ -172,27 +186,39 @@ export async function creatorFeesByMint(
              END AS "analysisBps"
       FROM "TokenNarrative"
       WHERE "mintAddress" = ANY(${unique}::text[])
-        AND "feeDestination" IS NOT NULL`;
-    const fees = new Map(
-      rows.flatMap((r) => {
-        if (!r.feeDestination) return [];
-        const bps = readCreatorFeeBps(r.storedBps ?? r.analysisBps);
-        return [[r.mintAddress, { destination: r.feeDestination, summary: r.feeSummary, bps }] as const];
-      }),
-    );
-    const charityMints = [...fees].filter(([, fee]) => fee.destination === "charity").map(([mint]) => mint);
-    if (charityMints.length > 0) applyCharityNames(fees, await charityNamesByMint(charityMints));
-    return fees;
-  } catch {
-    return new Map();
+        AND "feeDestination" IS NOT NULL`.catch(() => []),
+    otcDeskFees(unique, { wait: opts?.waitForDesk === true }).catch(() => new Map<string, OtcDeskFee>()),
+  ]);
+  const out = new Map<string, CardCreatorFee>();
+  const deskFields = (mint: string): Pick<CardCreatorFee, "deskLine" | "deskRewards"> => {
+    const desk = desks.get(mint);
+    return { deskLine: desk?.line ?? null, deskRewards: desk?.rewards ?? null };
+  };
+  for (const r of rows) {
+    if (!r.feeDestination) continue;
+    out.set(r.mintAddress, {
+      destination: r.feeDestination,
+      summary: r.feeSummary,
+      bps: readCreatorFeeBps(r.storedBps ?? r.analysisBps),
+      ...deskFields(r.mintAddress),
+    });
   }
+  const charityMints = [...out].filter(([, fee]) => fee.destination === "charity").map(([mint]) => mint);
+  if (charityMints.length > 0) applyCharityNames(out, await charityNamesByMint(charityMints));
+  for (const [mint, desk] of desks) {
+    if (!out.has(mint)) {
+      out.set(mint, {
+        destination: null,
+        summary: null,
+        bps: null,
+        deskLine: desk.line,
+        deskRewards: desk.rewards,
+      });
+    }
+  }
+  return out;
 }
 
-/**
- * Each token's newest snapshot, in one statement: one index probe per token through
- * (tokenId, takenAt), returning the whole row. This was two round trips - the ids first, then
- * the rows by id - and a feed page runs it once per half (matches and curated calls).
- */
 export async function latestSnapshotsByToken(
   tokenIds: readonly string[],
 ): Promise<Map<string, TokenSnapshot & CarriedHolderTime>> {
