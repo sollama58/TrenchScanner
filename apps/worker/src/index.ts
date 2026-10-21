@@ -269,11 +269,6 @@ async function main() {
       ? new PumpPortalStream(env.PUMPPORTAL_WS_URL, undefined, { tradeFlow: env.PUMPPORTAL_TRADE_FLOW })
       : undefined;
   stream?.start();
-  if (scans && env.PUMPPORTAL_TRADE_FLOW && !env.PUMPPORTAL_WS_URL.includes("api-key=")) {
-    logger.warn(
-      "PUMPPORTAL_TRADE_FLOW is on but PUMPPORTAL_WS_URL has no api-key: order-flow model inputs stay null until the stream is funded",
-    );
-  }
   // One Helius websocket, only in the process that scans and reconciles burns: it keeps contenders'
   // holder accounts fresh instead of re-reading them (holderTransfers.ts, HELIUS_HOLDER_STREAM), and
   // wakes the burn reconciler when the subscription mint moves (BurnStreamWake, HELIUS_BURN_STREAM).

@@ -129,7 +129,7 @@ const envSchema = z.object({
   // Without one the trade inputs stay null (the stream logs the refusal once).
   PUMPPORTAL_TRADE_FLOW: z
     .enum(["true", "false"])
-    .default("true")
+    .default("false")
     .transform((v) => v === "true"),
 
   // One minute. Not a performance figure - a full cycle takes ~10 seconds - but a rate-limit one:
@@ -888,7 +888,7 @@ const envSchema = z.object({
   // trusted; "gate" only sends alerts it says to buy; "off" never calls it. Without
   // ANTHROPIC_API_KEY it is off whatever the mode says. A pick it passes on is not re-asked for
   // AI_REVIEW_VETO_COOLDOWN_MINUTES, so one token can't buy a review every scan cycle.
-  AI_REVIEW_MODE: z.enum(["off", "shadow", "gate"]).default("shadow"),
+  AI_REVIEW_MODE: z.enum(["off", "shadow", "gate"]).default("off"),
   ANTHROPIC_API_KEY: pastedKey,
   AI_REVIEW_MODEL: z.string().default("claude-opus-5-5"),
   AI_REVIEW_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),

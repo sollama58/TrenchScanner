@@ -913,10 +913,9 @@ describe("maskKnownBadInputs", () => {
   });
 
   it("keeps the retired duplicates off the learner list", () => {
-    for (const name of ["nsReferentNamed", "nsXContentMismatch"] as const) {
+    for (const name of ["nsReferentNamed", "nsXContentMismatch", "devInitialBuySol"] as const) {
       expect(LEARNER_FEATURE_NAMES).not.toContain(name);
     }
-    expect(LEARNER_FEATURE_NAMES).toContain("devInitialBuySol");
   });
 });
 

@@ -3247,12 +3247,10 @@ async function processCandidate(
       firstInBandAt,
     },
   );
-  // A Stonks coin's trades never come through PumpPortal, so its 5m flow is read off the live
-  // tape's chain trades instead; the stream's empty window would read as a dead coin.
-  const flow =
-    scored.launchpad === STONKS_LAUNCHPAD
-      ? withWindowFlow(tradeFlow, liveWindowFlowOf(candidate.mintAddress))
-      : tradeFlow;
+  // 5m order-flow window: PumpPortal when funded (PUMPPORTAL_TRADE_FLOW), else Helius live tape
+  // (readLiveTape + chainWindowFlow) for contenders close to a call — no paid stream required.
+  const windowFlow = liveWindowFlowOf(candidate.mintAddress);
+  const flow = windowFlow ? withWindowFlow(tradeFlow, windowFlow) : tradeFlow;
   if (flow) scored.tradeFlow = flow;
   // TokenSage's read, as stored when this cycle began: the ns* model inputs, the narrative
   // filter criteria and the score's narrative part all read it from here. Never looked up

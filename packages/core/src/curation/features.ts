@@ -667,8 +667,22 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "nsReferentNamed",
   // Equal to nsXVerdictUnrelated on every row that carries either (1,671 of 1,671).
   "nsXContentMismatch",
-  // Trade-flow inputs read again from 2026-10-21 (model audit): null without a funded PumpPortal
-  // stream; maskKnownBadInputs still clears fake zeros on pre-2026-10-05 rows.
+  // Trade-by-trade order flow from the PumpPortal stream (paid API key). The 5m window fields
+  // can also be filled from Helius live tape (chainWindowFlow / liveWindowFlowOf) for contenders,
+  // but stay retired until fill rates on decision rows justify a retrain. maskKnownBadInputs
+  // still clears fake zeros on pre-2026-10-05 rows.
+  "devInitialBuySol",
+  "uniqueBuyers5m",
+  "buysPerBuyer5m",
+  "avgBuySol5m",
+  "topBuyerShare5m",
+  "newBuyerShare5m",
+  "netFlow5mToMcap",
+  "tradesPerMin5m",
+  "earlyBuyerCount",
+  "earlyBuyerHoldPct",
+  "earlyBuyerSoldShare",
+  "devSoldShare",
   // The in-memory tape's length (user decision 2026-10-08): the tape empties on every deploy (13-14
   // times in three days), so for up to an hour after one every token reads as minutes old and the
   // models learned it as youth. ageMinutes and minutesSinceFirstInBand carry youth without the
@@ -731,6 +745,12 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // The clean winners buying (added 2026-10-17, user ask): read by the Winners seat alone, which
   // names them in its recipe and decides only on moments that carry them.
   ...WINNER_FOLLOW_FEATURES,
+  // Claude text scorer (ANTHROPIC_API_KEY): recorded for the feature report; not read while the
+  // AI reviewer stays off and the scorer is not run in production.
+  "textCopycatRisk",
+  "textNarrativeStrength",
+  "textMemeAppeal",
+  "textScamSignals",
   // Dead TokenSage inputs (notes/full-audit-2026-10-14, lanes 4 and 10).
   "nsXCredibility",
   "nsFeeMutable",
