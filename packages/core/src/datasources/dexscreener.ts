@@ -8,6 +8,12 @@ import { MARKET_SOURCE } from "../marketSource.js";
 import { mintSupplies } from "../mintSupply.js";
 import type { GeckoTerminalClient } from "./geckoterminal.js";
 import type { CandidateToken, WatchlistCandidate } from "../types.js";
+import {
+  DEX_INFO_ORDERS_PER_CYCLE,
+  pairHasTokenInfo,
+  readDexInfoPayment,
+  type DexInfoOrderRead,
+} from "../dexInfo.js";
 
 const logger = createLogger("dexscreener");
 
@@ -1006,6 +1012,10 @@ export class DexScreenerClient {
     // Boosts are paid placements; which mints bought one is recorded (Token.dexBoosted) so the
     // learner can find out whether a paid boost helps or hurts a call.
     const boosted = new Set(boosts.filter((b) => b.chainId === SOLANA_CHAIN_ID).map((b) => b.tokenAddress));
+    // A profile is paid token info. A boost alone is not (that stays dexBoosted).
+    const profileMints = new Set(
+      profiles.filter((b) => b.chainId === SOLANA_CHAIN_ID && b.tokenAddress).map((b) => b.tokenAddress),
+    );
     const byMint = new Map<string, WatchlistCandidate>();
     for (const entry of [...profiles, ...boosts]) {
       if (entry.chainId !== SOLANA_CHAIN_ID || !entry.tokenAddress) continue;
@@ -1022,9 +1032,45 @@ export class DexScreenerClient {
           undefined,
         discoverySource: "dexscreener",
         boosted: boosted.has(entry.tokenAddress),
+        ...(profileMints.has(entry.tokenAddress) ? { dexInfo: true } : {}),
       });
     }
     return [...byMint.values()];
+  }
+
+  /**
+   * Solana mints on the latest community-takeover feed (a paid token-info update). Empty when
+   * the feed can't be read. Not used as discovery: a takeover of a mint we don't track is ignored.
+   */
+  async communityTakeoverMints(): Promise<string[]> {
+    const rows = await this.fetchDiscoveryEndpoint("/community-takeovers/latest/v1");
+    return [
+      ...new Set(
+        rows.filter((r) => r.chainId === SOLANA_CHAIN_ID && r.tokenAddress).map((r) => r.tokenAddress),
+      ),
+    ];
+  }
+
+  /**
+   * Token-info payments for these mints (GET /orders/v1/solana/{mint}), on the discovery budget.
+   * A mint that errors is left out, so the caller retries it. A mint that answers with no
+   * token-info payment is returned with payment null. Capped per call.
+   */
+  async readTokenInfoOrders(mints: readonly string[]): Promise<DexInfoOrderRead[]> {
+    const unique = [...new Set(mints.filter((m) => m.length > 0))].slice(0, DEX_INFO_ORDERS_PER_CYCLE);
+    const out: DexInfoOrderRead[] = [];
+    await forEachWithConcurrency(unique, 2, async (mint) => {
+      try {
+        const body = await fetchJson<unknown>(
+          `${this.baseUrl}/orders/v1/${SOLANA_CHAIN_ID}/${encodeURIComponent(mint)}`,
+          { timeoutMs: 8000, retries: 0, gate: this.discoveryGate },
+        );
+        out.push({ mint, payment: readDexInfoPayment(body) });
+      } catch (err) {
+        logger.warn("token info orders failed", { mint, error: String(err) });
+      }
+    });
+    return out;
   }
 
   private async fetchDiscoveryEndpoint(path: string): Promise<DexScreenerDiscoveryEntry[]> {
@@ -1312,6 +1358,8 @@ function toCandidateToken(pair: DexScreenerPair, launchHomeClock = false): Candi
     hasTelegram: info ? socials.some((s) => s.type === "telegram") : undefined,
     hasWebsite: info ? (info.websites?.length ?? 0) > 0 : undefined,
     imageUrl: info?.imageUrl,
+    // The info block is the paid profile. Absent on a pair that has none; no time comes with it.
+    ...(pairHasTokenInfo(info) ? { dexInfo: true } : {}),
     dexId: pair.dexId,
     quoteMint: pair.quoteToken?.address || undefined,
     quoteSymbol: pair.quoteToken?.symbol?.trim() || undefined,

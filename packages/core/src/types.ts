@@ -75,6 +75,11 @@ export interface CandidateToken {
   /** Whether the mint has ever appeared on DexScreener's paid-boost feed (Token.dexBoosted). */
   dexBoosted?: boolean;
   /**
+   * The pair response included an info block: DexScreener has enhanced token info (profile,
+   * links, images). Not a model input. Undefined when this reading had no info block.
+   */
+  dexInfo?: boolean;
+  /**
    * The launchpad the coin came from, normalized (launchpads.ts: "pumpfun", "stonks", ...):
    * Token.launchpad, else what the venue gives away. Undefined when unknown.
    */
@@ -131,6 +136,8 @@ export interface WatchlistCandidate {
   discoverySource?: string;
   /** Seen on DexScreener's paid-boost feed - recorded (stickily) as Token.dexBoosted. */
   boosted?: boolean;
+  /** Seen on DexScreener's token-profile feed - recorded (stickily) as Token.dexInfo. */
+  dexInfo?: boolean;
   /** The launchpad, normalized (launchpads.ts) - recorded as Token.launchpad. */
   launchpad?: string;
   /** The wallet that launched the coin, when the source names one - recorded as Token.creator. */

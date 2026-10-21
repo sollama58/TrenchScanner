@@ -7,6 +7,8 @@ import {
   floatArrayParam,
   prisma,
   Prisma,
+  dexInfoMintsToAsk,
+  DEX_INFO_RECHECK_MS,
   createLogger,
   refreshAndFilterToBand,
   type LaunchQuoteSource,
@@ -198,6 +200,27 @@ import {
 import type { BandEntryWatch } from "../bandEntryWatch.js";
 
 const logger = createLogger("scan-job");
+
+/**
+ * Mints this scan wants an orders read for (latest profiles, and in-band tokens whose pair has
+ * an info block). Cleared when the cycle asks, or at the start of the next cycle. Capped so a
+ * big band cannot turn into a table-wide orders sweep (user ask 2026-10-21).
+ */
+const dexInfoQueue: string[] = [];
+
+function rememberDexInfo(mint: string, checkedAt?: Date | null): void {
+  if (!mint || dexInfoQueue.length >= 48 || dexInfoQueue.includes(mint)) return;
+  if (checkedAt && Date.now() - checkedAt.getTime() < DEX_INFO_RECHECK_MS) return;
+  dexInfoQueue.push(mint);
+}
+
+function scheduleDexInfo(dex: DexScreenerClient): void {
+  if (typeof dex.readTokenInfoOrders !== "function" || dexInfoQueue.length === 0) return;
+  const mints = dexInfoQueue.splice(0, dexInfoQueue.length);
+  void recordDexInfoOrders(dex, mints).catch((err: unknown) =>
+    logger.warn("dexscreener token info orders failed", { error: String(err) }),
+  );
+}
 
 /** How many candidates get their own DB writes + rug/match processing in flight at once. Safe to
  *  run concurrently across candidates - each touches a different token's rows - and cheap now
@@ -842,6 +865,7 @@ async function scanCycle(
   apiStage: (stage: string) => void,
 ): Promise<ScanCycleMeta> {
   const startedAt = Date.now();
+  dexInfoQueue.length = 0;
   logger.info("scan cycle starting");
   // The composite score's newest adopted weights (cached; never fails the cycle).
   await refreshScoreWeights();
@@ -993,6 +1017,9 @@ async function scanCycle(
     ...(koth ? [toWatchlistCandidate(koth, "pumpfun-koth")] : []),
   ];
   await addNewMintsToWatchlist(discovered);
+  // DexScreener token-info payments (user ask 2026-10-21). After the rows exist, and behind the
+  // rest of the cycle: a few orders lookups on the discovery budget, never on the alert path.
+  for (const c of trending) if (c.dexInfo) rememberDexInfo(c.mintAddress);
   // Mayhem coins, by Pump.fun's own flag, leave the watchlist before they cost a lookup.
   await ignoreMayhemMints(
     [...newMints, ...active, ...(koth ? [koth] : [])].filter((c) => c.mayhemMode).map((c) => c.mintAddress),
@@ -1039,6 +1066,7 @@ async function scanCycle(
 
   if (tracked.length === 0) {
     logger.info("scan cycle complete (empty watchlist)", { durationMs: Date.now() - startedAt });
+    scheduleDexInfo(deps.dexScreener);
     return { stagesMs, ...earlyExitMeta(env, deps.pumpFun) };
   }
 
@@ -1128,6 +1156,7 @@ async function scanCycle(
     void foldRejectExtremes(refreshed.marketData, refreshed.seenAt);
   } catch (err) {
     logger.error("dexscreener refresh failed, aborting cycle", { error: String(err) });
+    scheduleDexInfo(deps.dexScreener);
     return { stagesMs, ...earlyExitMeta(env, deps.pumpFun) };
   }
   lap("marketRefresh");
@@ -1187,6 +1216,7 @@ async function scanCycle(
   lap("viewedRefresh");
 
   if (candidates.length === 0) {
+    scheduleDexInfo(deps.dexScreener);
     logger.info("scan cycle complete (nothing in band or actively viewed)", {
       durationMs: Date.now() - startedAt,
       lowCapHeld,
@@ -2001,6 +2031,8 @@ async function scanCycle(
     forEachWithConcurrency(others, CANDIDATE_CONCURRENCY, processOne(lateCycle)),
   ]);
   const curatedEmitted = contenderEmitted + (await emitCurated(lateCycle));
+  // In-band tokens with DexScreener info, plus this cycle's profile feed. Capped inside.
+  scheduleDexInfo(deps.dexScreener);
   const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);
   markScanVerdictsPopulated();
   // This cycle's first safety-screen rejections, which the next refreshes fold prices into.
@@ -2608,6 +2640,68 @@ export async function reviveMovingMints(
 }
 
 /**
+ * Ask DexScreener's orders endpoint for token-info payments (user ask 2026-10-21) and store the
+ * time it returns. Only mints on this cycle's token-profile feed or the community-takeover feed,
+ * and only ones already on the watchlist. A failed lookup is left unchecked so the next cycle
+ * retries it. An answer with no token-info payment is checked, and does not invent a time.
+ * A pair info block with no orders time still shows the label, without a chart bubble.
+ */
+export async function recordDexInfoOrders(
+  dex: Pick<DexScreenerClient, "readTokenInfoOrders"> &
+    Partial<Pick<DexScreenerClient, "communityTakeoverMints">>,
+  profileMints: readonly string[],
+): Promise<number> {
+  const takeovers = dex.communityTakeoverMints ? await dex.communityTakeoverMints().catch(() => []) : [];
+  const priority = [...new Set([...profileMints, ...takeovers])].slice(0, 200);
+  if (priority.length === 0) return 0;
+  // Only mints already on the watchlist. No table-wide scan: a token whose pair has an info
+  // block but which is not on these feeds still shows the label, without a payment time.
+  const known = await prisma.token.findMany({
+    where: { mintAddress: { in: priority } },
+    select: { mintAddress: true, dexInfoCheckedAt: true },
+  });
+  const have = new Set(known.map((row) => row.mintAddress));
+  // Cap after dropping mints that are not on the watchlist, so a few unknown addresses
+  // cannot crowd out the ones we can store.
+  const ask = dexInfoMintsToAsk(
+    priority.filter((mint) => have.has(mint)),
+    known,
+    [],
+    Date.now(),
+  );
+  if (ask.length === 0) return 0;
+  const reads = await dex.readTokenInfoOrders(ask);
+  const byRead = new Map(reads.map((row) => [row.mint, row]));
+  const rows = await prisma.token.findMany({
+    where: { mintAddress: { in: ask } },
+    select: { mintAddress: true, dexInfoPaidAt: true, dexInfoUpdated: true },
+  });
+  const now = new Date();
+  let wrote = 0;
+  for (const row of rows) {
+    const read = byRead.get(row.mintAddress);
+    if (!read) continue;
+    const payment = read.payment;
+    const prev = row.dexInfoPaidAt?.getTime() ?? 0;
+    await prisma.token.update({
+      where: { mintAddress: row.mintAddress },
+      data: {
+        dexInfoCheckedAt: now,
+        ...(payment
+          ? {
+              dexInfo: true,
+              ...(payment.paidAtMs > prev ? { dexInfoPaidAt: new Date(payment.paidAtMs) } : {}),
+              ...(payment.updated || row.dexInfoUpdated ? { dexInfoUpdated: true } : {}),
+            }
+          : {}),
+      },
+    });
+    wrote += 1;
+  }
+  return wrote;
+}
+
+/**
  * Bulk-inserts any not-yet-seen mints as bare watchlist entries. Existing rows are left
  * untouched. Deduped by mint first (rather than relying solely on skipDuplicates against the DB)
  * since the same mint can legitimately show up from both discovery sources in the same cycle.
@@ -2669,6 +2763,7 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
       description: coin.description?.slice(0, 2_000),
       discoverySource: coin.discoverySource,
       dexBoosted: coin.boosted ?? false,
+      dexInfo: coin.dexInfo ?? false,
       launchpad: coin.launchpad,
       creator: coin.creator,
     })),
@@ -2716,6 +2811,15 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
         ),
       )
       .catch((err) => logger.warn("failed to record launch times", { error: String(err) }));
+  }
+
+  // Sticky token-info flag for mints already on the table. A profile paid after discovery is
+  // still token info. Settles to zero rows once every such mint is marked.
+  const withInfo = valid.filter((c) => c.dexInfo).map((c) => c.mintAddress);
+  if (withInfo.length > 0) {
+    await prisma.token
+      .updateMany({ where: { mintAddress: { in: withInfo }, dexInfo: false }, data: { dexInfo: true } })
+      .catch((err) => logger.warn("failed to mark dexscreener token info", { error: String(err) }));
   }
 
   // Sticky boost flag for mints already on the table - a paid boost bought after discovery is
@@ -2971,6 +3075,8 @@ interface TokenScanFields {
   narrativeTags: string[];
   emptyTop10WalletPct?: number;
   freshTop10WalletPct?: number;
+  /** Pair info block seen this reading. Sticky true; never cleared by a reading that has none. */
+  dexInfo?: boolean;
 }
 
 /**
@@ -3019,6 +3125,9 @@ export function tokenChanges(existing: Token | null, f: TokenScanFields): Prisma
   const website = social(f.hasWebsite, existing?.hasWebsite);
   if (website !== undefined) out.hasWebsite = website;
   if (f.firstInBandAt && !existing?.firstInBandAt) out.firstInBandAt = f.firstInBandAt;
+  // DexScreener token info sticks once a pair's info block (or a profile feed) has said so.
+  // A reading without one leaves the row alone. Not a model input (user ask 2026-10-21).
+  if (f.dexInfo === true && existing?.dexInfo !== true) out.dexInfo = true;
   // Only a measured reading is written; an unknown one never clears the last known.
   if (
     f.emptyTop10WalletPct !== undefined &&
@@ -3202,9 +3311,11 @@ async function processCandidate(
     candidate.marketCapUsd >= env.MCAP_FILTER_MIN && candidate.marketCapUsd <= env.MCAP_FILTER_MAX;
   const firstInBandAt = existingToken?.firstInBandAt ?? (inCuratedBand ? new Date() : undefined);
 
+  // dexInfo is a card label, not a model input. Leave it off the scored token.
+  const { dexInfo, ...candidateMarket } = candidate;
   const scored = buildScoredToken(
     {
-      ...candidate,
+      ...candidateMarket,
       // Re-scans come from DexScreener, which carries neither of these; discovery stored them.
       description: candidate.description ?? existingToken?.description ?? undefined,
       dexBoosted: existingToken ? existingToken.dexBoosted : undefined,
@@ -3281,6 +3392,8 @@ async function processCandidate(
   // upsert this replaces rewrote every candidate's Token row - description and all - every cycle:
   // around a million dead row versions a day for autovacuum to clear, on the table every feed
   // query joins. Nearly every re-scan changes nothing here.
+  if (dexInfo || existingToken?.dexInfo)
+    rememberDexInfo(candidate.mintAddress, existingToken?.dexInfoCheckedAt);
   const changes = tokenChanges(existingToken, {
     symbol: candidate.symbol,
     name: candidate.name,
@@ -3295,6 +3408,7 @@ async function processCandidate(
     narrativeTags: scored.narrativeTags,
     emptyTop10WalletPct: scored.emptyTop10WalletPct,
     freshTop10WalletPct: scored.freshTop10WalletPct,
+    ...(dexInfo ? { dexInfo: true } : {}),
   });
   const token =
     existingToken && Object.keys(changes).length === 0
@@ -3316,6 +3430,7 @@ async function processCandidate(
             narrativeTags: scored.narrativeTags,
             lastEmptyTop10WalletPct: scored.emptyTop10WalletPct,
             lastFreshTop10WalletPct: scored.freshTop10WalletPct,
+            ...(dexInfo ? { dexInfo: true } : {}),
           },
           update: changes,
         });

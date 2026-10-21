@@ -1305,6 +1305,20 @@ img.avatar {
   color: var(--ink-2);
   white-space: normal;
 }
+/* DexScreener token info, next to the ticker (user ask 2026-10-21). */
+.pill.dex-info {
+  align-self: center;
+  color: var(--series-3);
+  border-color: color-mix(in srgb, var(--series-3) 45%, transparent);
+  background: color-mix(in srgb, var(--series-3) 14%, transparent);
+  font-size: 10px;
+  letter-spacing: 0.01em;
+  padding: 1px 6px;
+}
+.tm-title .pill.dex-info {
+  margin: 0 2px 0 8px;
+  vertical-align: 2px;
+}
 .pill-warn {
   color: var(--bad-ink);
   border-color: color-mix(in srgb, var(--bad) 40%, transparent);

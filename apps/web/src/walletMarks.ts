@@ -245,7 +245,11 @@ export function solText(sol: number): string {
   return sol < 10 ? sol.toFixed(2) : sol < 100 ? sol.toFixed(1) : Math.round(sol).toString();
 }
 
-/** How big chart trade marks draw: small, medium or large (Customize › Chart wallet trades). */
+/**
+ * How big chart trade marks draw: small, medium or large (Customize › Chart wallet trades).
+ * Medium is 1, the radius the chart drew before the size choice, so an existing look does not
+ * jump (user ask 2026-10-21).
+ */
 export const MARK_SCALE = { s: 0.75, m: 1, l: 1.35 } as const;
 export type MarkScale = keyof typeof MARK_SCALE;
 
@@ -254,9 +258,9 @@ export const MARK_SHAPES = ["circle", "square", "diamond"] as const;
 export type MarkShape = (typeof MARK_SHAPES)[number];
 
 /**
- * How far chart trade marks sit from the candle (Customize › Chart wallet trades). Medium is today's
- * offset. The factor moves the stack off the price. It does not change the gap between marks in a
- * stack, or a mark's radius.
+ * How far the bubble band sits above the series (Customize › Chart wallet trades). Medium is the
+ * usual clearance. The factor moves the band. It does not change the gap between marks in a
+ * stack, or a mark's radius. It never pulls a bubble closer than MIN_SERIES_CLEARANCE.
  */
 export const MARK_GAP = { s: 0.75, m: 1, l: 1.4 } as const;
 export type MarkGap = keyof typeof MARK_GAP;

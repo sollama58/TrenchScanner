@@ -372,6 +372,10 @@ export const TOKEN_CARD_SELECT = {
   description: true,
   discoverySource: true,
   dexBoosted: true,
+  // DexScreener token info (user ask 2026-10-21). The checked-at column stays off the card.
+  dexInfo: true,
+  dexInfoPaidAt: true,
+  dexInfoUpdated: true,
   firstInBandAt: true,
   lastViewedAt: true,
   liveMarketCapUsd: true,

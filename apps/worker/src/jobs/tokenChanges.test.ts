@@ -91,6 +91,17 @@ describe("tokenChanges", () => {
   });
 });
 
+describe("tokenChanges - DexScreener token info", () => {
+  const base = { narrativeTags: ["animal"] };
+
+  it("sticks once a pair has an info block, and a reading without one leaves it", () => {
+    expect(tokenChanges(existing, { ...base, dexInfo: true })).toEqual({ dexInfo: true });
+    expect(tokenChanges({ ...existing, dexInfo: true } as Token, { ...base, dexInfo: true })).toEqual({});
+    expect(tokenChanges({ ...existing, dexInfo: true } as Token, base)).toEqual({});
+    expect(tokenChanges(existing, base)).toEqual({});
+  });
+});
+
 describe("knownSocial", () => {
   it("keeps a link the Token row holds when the re-scan's candidate lacks it", () => {
     // DexScreener reports socials for almost nothing in the band; the Token row keeps Pump.fun's.

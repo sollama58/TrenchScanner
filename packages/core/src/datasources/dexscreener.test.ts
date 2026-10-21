@@ -513,8 +513,51 @@ describe("socials on a candidate", () => {
     const by = new Map(tokens.map((t) => [t.mintAddress, t]));
     expect(by.get("bare")?.hasTwitter).toBeUndefined();
     expect(by.get("bare")?.hasWebsite).toBeUndefined();
+    expect(by.get("bare")?.dexInfo).toBeUndefined();
     expect(by.get("profiled")?.hasTwitter).toBe(true);
     expect(by.get("profiled")?.hasWebsite).toBe(false);
+    // The info block is DexScreener token info. It carries no payment time.
+    expect(by.get("profiled")?.dexInfo).toBe(true);
+  });
+});
+
+describe("token info orders", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reads a token-profile payment and leaves a failed mint out", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      urls.push(url);
+      if (url.endsWith("/paid")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify([{ type: "tokenProfile", status: "approved", paymentTimestamp: 1_700_000_000 }]),
+          ),
+        );
+      }
+      return Promise.resolve(new Response("", { status: 500 }));
+    });
+    const reads = await new DexScreenerClient().readTokenInfoOrders(["paid", "down"]);
+    expect(reads).toEqual([
+      { mint: "paid", payment: { type: "tokenProfile", updated: false, paidAtMs: 1_700_000_000_000 } },
+    ]);
+    expect(urls.every((url) => url.includes("/orders/v1/solana/"))).toBe(true);
+  });
+
+  it("marks a profile feed mint as token info and a boost-only mint as not", async () => {
+    vi.stubGlobal("fetch", (url: string) => {
+      const body = url.includes("token-profiles")
+        ? [{ chainId: "solana", tokenAddress: "profiled", links: [] }]
+        : [{ chainId: "solana", tokenAddress: "boosted", amount: 10 }];
+      return Promise.resolve(new Response(JSON.stringify(body)));
+    });
+    const found = await new DexScreenerClient().discoverTrendingMints();
+    const by = new Map(found.map((c) => [c.mintAddress, c]));
+    expect(by.get("profiled")?.dexInfo).toBe(true);
+    expect(by.get("boosted")?.dexInfo).toBeUndefined();
+    expect(by.get("boosted")?.boosted).toBe(true);
   });
 });
 

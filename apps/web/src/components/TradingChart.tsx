@@ -52,13 +52,15 @@ import {
   type MarkShape,
   type WalletMark,
 } from "../walletMarks";
-import { atLiveEnd, markAt, type PlacedMark } from "../chartMarkLayout";
+import { atLiveEnd, markAt, markBandPx, priceScaleTop, type PlacedMark } from "../chartMarkLayout";
 import { API_URL } from "../api";
 import { openWallet } from "../walletModal";
 import {
   ChartOverlay,
+  picRadius,
   SlotCandleSeries,
   type MarkItem,
+  type OverlayDexInfo,
   type OverlayColors,
   type OverlayState,
   type SlotCandleData,
@@ -272,6 +274,7 @@ export function TradingChart({
   markStem = false,
   markGap = "m",
   trades: tradesIn = NO_TRADES,
+  dexInfo = null,
   live = false,
   entry = null,
   extent,
@@ -306,6 +309,11 @@ export function TradingChart({
   markGap?: MarkGap;
   /** Pro Mode: the trader's own buys and sells. */
   trades?: ChartTrade[];
+  /**
+   * DexScreener token-info payment, when the orders response gave a time (user ask 2026-10-21).
+   * Drawn in the same band as the trade bubbles, at that time. No bubble without a time.
+   */
+  dexInfo?: OverlayDexInfo | null;
   /** The view runs to now: a trade read before its candle is drawn sits on the newest candle. */
   live?: boolean;
   /** Pro Mode: the average market cap the held position was bought at, a dashed line. */
@@ -474,6 +482,15 @@ export function TradingChart({
   }, [drawings, extendTrend]);
   const markFactor = MARK_SCALE[markScale] ?? 1;
   const gapFactor = MARK_GAP[markGap] ?? 1;
+  // The chart is rebuilt without these in its deps. The margin effect below reads them live,
+  // and a rebuild reads whatever size is current.
+  const markLayoutRef = useRef({ factor: markFactor, gap: gapFactor });
+  markLayoutRef.current = { factor: markFactor, gap: gapFactor };
+  // Headroom for the bubble band only while something is drawn there. A chart with no bubbles
+  // keeps the flag margin it had (2026-10-21).
+  const bubbles = marks.length > 0 || trades.length > 0 || dexInfo !== null;
+  const bubblesRef = useRef(bubbles);
+  bubblesRef.current = bubbles;
 
   const colors = useMemo(
     () => (mounted && boxRef.current ? readColors(boxRef.current) : null),
@@ -586,7 +603,11 @@ export function TradingChart({
     overlayRef.current = overlay;
     chart.priceScale("right").applyOptions({
       mode: log ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
-      scaleMargins: { top: 0.12, bottom: ind.has("vol") ? 0.2 : 0.06 },
+      // Top margin holds the trade-bubble band above the candles (chartMarkLayout.ts).
+      scaleMargins: {
+        top: bubblesRef.current ? markerMargin(markLayoutRef.current, height) : 0.12,
+        bottom: ind.has("vol") ? 0.2 : 0.06,
+      },
     });
     if (ind.has("vol")) {
       const v = chart.addSeries(HistogramSeries, {
@@ -655,6 +676,17 @@ export function TradingChart({
     lastData.current = null;
     setBuilt((n) => n + 1);
   }, [colors, kind, indKey, log]);
+
+  // The band above the candles grows with the bubble size (user ask 2026-10-21). Rebuilt charts
+  // set this too; this keeps a size or distance change from waiting on a rebuild.
+  useEffect(() => {
+    chartRef.current?.priceScale("right").applyOptions({
+      scaleMargins: {
+        top: bubbles ? markerMargin({ factor: markFactor, gap: gapFactor }, height) : 0.12,
+        bottom: ind.has("vol") ? 0.2 : 0.06,
+      },
+    });
+  }, [built, markFactor, gapFactor, height, ind, bubbles]);
 
   useEffect(() => {
     chartRef.current?.timeScale().applyOptions({
@@ -804,7 +836,7 @@ export function TradingChart({
       if (t < slots.start - slots.tfMs || t > end + 60_000) return null;
       return slotCandle(slots, slotIndex(slots, t))?.c ?? null;
     };
-    // Candles: a buy hangs under its candle's low, a sale over its high; the line has the price only.
+    // The candle's high is what a bubble must clear. The line has the price for both.
     const rangeAt = (t: number) => {
       const v = valueAt(t);
       if (v === null) return null;
@@ -818,6 +850,7 @@ export function TradingChart({
       y: dScale.y,
       valueAt,
       rangeAt,
+      seriesTop: () => seriesTopY(chartRef.current, series.current.main, slots),
       // The flags go under the readout's lines.
       flagTop: phone ? 34 : 20,
       events: [...shownEvents]
@@ -825,6 +858,7 @@ export function TradingChart({
         .map((e, i) => ({ t: e.t, label: e.label, lead: i === 0 })),
       marks,
       trades,
+      dexInfo: dexInfo ? (atLiveEnd([dexInfo], live ? slotsEnd : null)[0] ?? null) : null,
       path,
       pathZone:
         path.length > 1 && lastX !== null ? { x0: lastX + bs / 2 + 4, w: pathZoneW(plotW) - 8 } : null,
@@ -887,9 +921,9 @@ export function TradingChart({
       // A labeled wallet's mark opens that wallet (user ask 2026-10-19: marks you can act on).
       const hit = placedAt(p);
       const wallet = hit?.item.mark?.wallet;
-      if (wallet) {
+      if (wallet || hit?.item.dex) {
         setPointed(hit);
-        openWallet(wallet);
+        if (wallet) openWallet(wallet);
         return;
       }
       setPointed(null);
@@ -903,7 +937,7 @@ export function TradingChart({
         return;
       }
       const hit = drawings.tool ? null : placedAt(p);
-      el.classList.toggle("on-mark", !!hit?.item.mark);
+      el.classList.toggle("on-mark", !!hit?.item.mark || !!hit?.item.dex);
       setPointed((was) => (was?.item === hit?.item ? was : hit));
     };
     const onLeave = () => {
@@ -998,6 +1032,11 @@ export function TradingChart({
       : [];
   const hEvents =
     !onStack && hover !== null && cur ? shownEvents.filter((e) => e.t >= curFrom && e.t < curTo) : [];
+  const hDex = onStack
+    ? stack.flatMap((i) => (i.dex ? [i.dex.text] : []))
+    : dexInfo && hover !== null && cur && dexInfo.t >= curFrom && dexInfo.t < curTo
+      ? [dexInfo.text]
+      : [];
   const up = cur ? cur.c >= cur.o : true;
   const vsRef = cur && ref ? change(ref.v, cur.c) : null;
   const tool = drawings.tool;
@@ -1390,8 +1429,13 @@ export function TradingChart({
               )}
             </div>
           )}
-          {(hMarks.length > 0 || hTrades.length > 0 || hEvents.length > 0) && (
+          {(hMarks.length > 0 || hTrades.length > 0 || hEvents.length > 0 || hDex.length > 0) && (
             <div className="tc-detail">
+              {hDex.map((text, i) => (
+                <span key={`dex-${i}`} className="tc-detail-event">
+                  {text}
+                </span>
+              ))}
               {hEvents.map((e, i) => (
                 <span key={`e-${i}`} className="tc-detail-event">
                   {e.label}
@@ -1534,17 +1578,52 @@ function tickLabel(t: number, type: TickMarkType): string {
   }
 }
 
+/** Top price-scale margin for the bubble band at the reader's size (chartMarkLayout.ts). */
+function markerMargin(layout: { factor: number; gap: number }, plotHeight: number): number {
+  const scale = layout.factor > 0 ? layout.factor : 1;
+  return priceScaleTop(markBandPx(2 * picRadius(1e9) * scale, layout.gap), plotHeight);
+}
+
+/**
+ * Y of the highest candle currently in view. Called while the overlay draws, so the price scale
+ * (including the band's top margin) is the one the bubbles clear.
+ */
+function seriesTopY(
+  chart: IChartApi | null,
+  main: ISeriesApi<SeriesType> | null,
+  slots: Slots | null,
+): number | null {
+  if (!chart || !main || !slots) return null;
+  const range = chart.timeScale().getVisibleLogicalRange();
+  if (!range) return null;
+  const from = Math.max(0, Math.floor(range.from) - 1);
+  const to = Math.min(slots.bars.length - 1, Math.ceil(range.to) + 1);
+  let top: number | null = null;
+  for (let i = from; i <= to; i++) {
+    const bar = slots.bars[i];
+    if (!bar) continue;
+    const high = bar.flat ? bar.c : Math.max(bar.h, bar.o, bar.c);
+    if (!(high > 0)) continue;
+    const y = main.priceToCoordinate(high);
+    if (y === null || !Number.isFinite(y)) continue;
+    if (top === null || y < top) top = y;
+  }
+  return top;
+}
+
 function emptyOverlay(): OverlayState {
   return {
     x: () => null,
     y: () => null,
     valueAt: () => null,
     rangeAt: () => null,
+    seriesTop: () => null,
     pic: () => null,
     events: [],
     flagTop: 20,
     marks: [],
     trades: [],
+    dexInfo: null,
     path: [],
     pathZone: null,
     hot: new Set(),
@@ -1617,6 +1696,7 @@ function readColors(el: HTMLElement) {
     path: v("--series-1", "#3987e5"),
     pathBand: hexA(v("--series-1", "#3987e5"), 0.14),
     font,
+    dex: v("--series-3", "#199e70"),
     wk,
     draw: {
       trend: v("--series-1", "#3987e5"),
