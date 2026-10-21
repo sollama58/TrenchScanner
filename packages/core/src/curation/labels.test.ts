@@ -7,8 +7,13 @@ import {
   decisionAnchor,
   dollarTicksFromCurve,
   freshQuoteMcapUsd,
+  dollarScaleBasis,
+  fineTickWindow,
   FINE_TICK_LABEL_RULE,
   FRESH_ANCHOR_LABEL_RULE,
+  nextCurveTapeCoveredMs,
+  trainsOnLabelRule,
+  CANDIDATE_WATCH_WINDOW_MINUTES,
   isCurrentLabelRule,
   initialOutcomeAggregates,
   LABEL_LOG2_CAP,
@@ -553,5 +558,81 @@ describe("sub-minute curve prints", () => {
     expect(labels.hit2xIn1h).toBe(false);
     expect(labels.disqualified).toBe(false);
     expect(agg.low1hPriceUsd).toBeCloseTo(0.5);
+  });
+});
+
+describe("curve label window and scale basis", () => {
+  it("clamps folded prints to the label window and drops an empty slice", () => {
+    const anchor = T0;
+    const windowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
+    const open = fineTickWindow(anchor, anchor.getTime(), anchor.getTime() + 60_000);
+    expect(open).toEqual({ afterMs: anchor.getTime(), untilMs: anchor.getTime() + 60_000 });
+    // A sweep past the window still stops at the window's end.
+    const late = fineTickWindow(anchor, anchor.getTime() + 10 * 60_000, anchor.getTime() + 40 * 60_000);
+    expect(late?.untilMs).toBe(anchor.getTime() + windowMs);
+    // Already graded through the window: nothing left to fold.
+    expect(fineTickWindow(anchor, anchor.getTime() + windowMs, anchor.getTime() + 40 * 60_000)).toBeNull();
+    // Before the anchor is not a slice.
+    expect(fineTickWindow(anchor, anchor.getTime() - 1_000, anchor.getTime() - 1)).toBeNull();
+  });
+
+  it("scales from the last dollar print, not from a curve tick stored as lastPriceUsd", () => {
+    const dollarAt = new Date(T0.getTime() + 60_000);
+    const curveAt = new Date(T0.getTime() + 70_000);
+    // This sweep has a dollar print. It wins, whatever lastPriceUsd holds.
+    expect(
+      dollarScaleBasis({
+        candidate: { at: dollarAt, priceUsd: 1.1 },
+        lastDollarAt: null,
+        lastDollarPriceUsd: null,
+        labelRule: 5,
+        lastPriceUsd: 4,
+        lastCheckedAt: curveAt,
+      }),
+    ).toEqual({ at: dollarAt, priceUsd: 1.1 });
+    // No new dollar print. Rule 5's lastPriceUsd may be a scaled curve tick, so it is not the basis.
+    expect(
+      dollarScaleBasis({
+        candidate: null,
+        lastDollarAt: dollarAt,
+        lastDollarPriceUsd: 1.1,
+        labelRule: 5,
+        lastPriceUsd: 4,
+        lastCheckedAt: curveAt,
+      }),
+    ).toEqual({ at: dollarAt, priceUsd: 1.1 });
+    expect(
+      dollarScaleBasis({
+        candidate: null,
+        lastDollarAt: null,
+        lastDollarPriceUsd: null,
+        labelRule: 5,
+        lastPriceUsd: 4,
+        lastCheckedAt: curveAt,
+      }),
+    ).toBeNull();
+    // A rule-4 row has never written a curve tick into lastPriceUsd.
+    expect(
+      dollarScaleBasis({
+        candidate: null,
+        lastDollarAt: null,
+        lastDollarPriceUsd: null,
+        labelRule: 4,
+        lastPriceUsd: 1.1,
+        lastCheckedAt: dollarAt,
+      }),
+    ).toEqual({ at: dollarAt, priceUsd: 1.1 });
+  });
+
+  it("keeps rule 5 in the fit unless the flag says otherwise, and caps tape coverage", () => {
+    expect(trainsOnLabelRule(4)).toBe(true);
+    expect(trainsOnLabelRule(5)).toBe(true);
+    expect(trainsOnLabelRule(5, true)).toBe(false);
+    expect(trainsOnLabelRule(4, true)).toBe(true);
+    expect(trainsOnLabelRule(3, true)).toBe(false);
+    const windowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
+    expect(nextCurveTapeCoveredMs(null, 10_000)).toBe(10_000);
+    expect(nextCurveTapeCoveredMs(windowMs - 1_000, 5_000)).toBe(windowMs);
+    expect(nextCurveTapeCoveredMs(12_000, 0)).toBe(12_000);
   });
 });

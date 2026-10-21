@@ -141,6 +141,86 @@ export function isCurrentLabelRule(row: { labelRule?: number }): boolean {
   return row.labelRule === undefined || row.labelRule >= CURRENT_LABEL_RULE;
 }
 
+/**
+ * Whether a row belongs in the fit. Rule 4 and rule 5 are both current. Rule 5 can only see more
+ * wicks than the minute sample, so its base rate moves with tape coverage. `excludeFineTickLabels`
+ * holds those rows out (env CURATOR_EXCLUDE_FINE_TICK_LABELS). The default keeps them in, which
+ * is what the fit has done since rule 5 shipped (2026-10-21). A backtest has to show the two
+ * rules share a base rate before that default changes.
+ */
+export function trainsOnLabelRule(labelRule: number | undefined, excludeFineTickLabels = false): boolean {
+  if (!isCurrentLabelRule({ labelRule })) return false;
+  if (excludeFineTickLabels && labelRule === FINE_TICK_LABEL_RULE) return false;
+  return true;
+}
+
+/**
+ * The slice of the label window one sweep may fold curve prints into. `afterMs` is exclusive
+ * and never before the anchor. `untilMs` is inclusive and never after the label window (30
+ * minutes): a print past that window can still move the 24h run peak, but only from the minute
+ * sample, not from a curve tick the tape happened to still hold. Null when the slice is empty.
+ */
+export function fineTickWindow(
+  anchorAt: Date,
+  seenUpToMs: number,
+  observedAtMs: number,
+): { afterMs: number; untilMs: number } | null {
+  const start = anchorAt.getTime();
+  const end = start + CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
+  const afterMs = Math.max(seenUpToMs, start);
+  const untilMs = Math.min(observedAtMs, end);
+  if (!(untilMs > afterMs)) return null;
+  return { afterMs, untilMs };
+}
+
+/**
+ * The dollar print a curve scale may divide by. A curve-derived tick is never one: once it is
+ * written into lastPriceUsd, the next sweep with no fresh dollar print would divide that scaled
+ * price by a later curve and the scale would drift. `lastDollar*` is the last real dollar print.
+ * A row that has not folded a curve print yet (rule below 5) may still use lastPriceUsd, which
+ * on those rows is a dollar print.
+ */
+export function dollarScaleBasis(input: {
+  candidate: { at: Date; priceUsd: number } | null;
+  lastDollarAt: Date | null;
+  lastDollarPriceUsd: number | null;
+  labelRule: number;
+  lastPriceUsd: number | null;
+  lastCheckedAt: Date | null;
+}): { at: Date; priceUsd: number } | null {
+  if (input.candidate && input.candidate.priceUsd > 0) {
+    return { at: input.candidate.at, priceUsd: input.candidate.priceUsd };
+  }
+  if (
+    input.lastDollarAt &&
+    input.lastDollarPriceUsd !== null &&
+    input.lastDollarPriceUsd > 0 &&
+    !Number.isNaN(input.lastDollarAt.getTime())
+  ) {
+    return { at: input.lastDollarAt, priceUsd: input.lastDollarPriceUsd };
+  }
+  if (
+    input.labelRule < FINE_TICK_LABEL_RULE &&
+    input.lastCheckedAt &&
+    input.lastPriceUsd !== null &&
+    input.lastPriceUsd > 0
+  ) {
+    return { at: input.lastCheckedAt, priceUsd: input.lastPriceUsd };
+  }
+  return null;
+}
+
+/** Running total of label-window milliseconds the curve tape covered, capped at the window. */
+export function nextCurveTapeCoveredMs(
+  prev: number | null | undefined,
+  addedMs: number,
+  windowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000,
+): number {
+  const base = typeof prev === "number" && Number.isFinite(prev) && prev > 0 ? prev : 0;
+  const add = Number.isFinite(addedMs) && addedMs > 0 ? addedMs : 0;
+  return Math.min(windowMs, base + add);
+}
+
 /** How long the WIN has to land in - "2x within 15 minutes" of the alert. */
 export const WIN_WINDOW_MINUTES = 15;
 /** How long the GOAL has to land in - "4x within 30 minutes" of the alert. */

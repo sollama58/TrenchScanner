@@ -308,6 +308,9 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
       expect(after.lowBefore2xPriceUsd).toBeCloseTo(0.5);
       expect(after.peak1hPriceUsd).toBeCloseTo(1);
       expect(after.labelRule).toBe(5);
+      // The dollar print stays the scale basis. The curve's $0.50 is not written there.
+      expect(after.lastDollarPriceUsd).toBeCloseTo(1);
+      expect(after.curveTapeCoveredMs).toBeGreaterThan(0);
     } finally {
       stop();
       resetCurveTape();

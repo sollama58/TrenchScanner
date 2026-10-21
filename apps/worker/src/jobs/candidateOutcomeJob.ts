@@ -18,6 +18,9 @@ import {
   TEN_X_WINDOW_MINUTES,
   decisionAnchor,
   dollarTicksFromCurve,
+  dollarScaleBasis,
+  fineTickWindow,
+  nextCurveTapeCoveredMs,
   pumpCurveUsdPerUnit,
   FINE_TICK_LABEL_RULE,
   FRESH_ANCHOR_LABEL_RULE,
@@ -282,6 +285,9 @@ const WATCH_ROW_SELECT = {
   nextCheckAt: true,
   lastCheckedAt: true,
   lastPriceUsd: true,
+  lastDollarPriceUsd: true,
+  lastDollarAt: true,
+  curveTapeCoveredMs: true,
   extended24h: true,
   peak1hPriceUsd: true,
   peak1hAt: true,
@@ -538,33 +544,47 @@ export async function runCandidateWatchJob(
       }
       if (candidate) ticks.push({ priceUsd: candidate.priceUsd, at: candidate.at });
       if (candidate?.fromSnapshot) fromSnapshots += 1;
-      // Sub-minute curve prints the minute fetch cannot see. Scaled onto the dollar print this
-      // sweep is about to fold in, or onto the previous dollar print when this sweep has none.
-      // No tape (or a tape that does not cover that print) adds nothing: the minute sample stands.
-      const scaleAt = candidate
-        ? { at: candidate.at, priceUsd: candidate.priceUsd }
-        : row.lastPriceUsd !== null && row.lastPriceUsd > 0 && row.lastCheckedAt
-          ? { at: row.lastCheckedAt, priceUsd: row.lastPriceUsd }
-          : null;
+      // Sub-minute curve prints the minute fetch cannot see. A SOL quote is scaled by SOL/USD.
+      // Otherwise the scale is a real dollar print (this sweep's, or the last one stored on the
+      // row), never lastPriceUsd after a curve tick has been written there. Prints are clamped
+      // to the label window: past it, only the minute sample moves the 24h peak.
+      const dollar = dollarScaleBasis({
+        candidate: candidate ? { at: candidate.at, priceUsd: candidate.priceUsd } : null,
+        lastDollarAt: row.lastDollarAt,
+        lastDollarPriceUsd: row.lastDollarPriceUsd,
+        labelRule: row.labelRule,
+        lastPriceUsd: row.lastPriceUsd,
+        lastCheckedAt: row.lastCheckedAt,
+      });
+      const slice = fineTickWindow(
+        row.anchorAt,
+        seenUpTo,
+        Math.max(tickAt.getTime(), dollar?.at.getTime() ?? tickAt.getTime()),
+      );
       let usedFineTicks = false;
-      if (scaleAt) {
-        const prices = curveLabelPrices(
-          row.token.mintAddress,
-          seenUpTo,
-          Math.max(tickAt.getTime(), scaleAt.at.getTime()),
-        );
-        // Only a SOL quote uses the SOL/USD scale. A coin-quoted curve stays on the dollar
-        // print's own ratio: that scale is not lamports per raw token.
-        const fine = dollarTicksFromCurve(
-          prices,
-          scaleAt,
-          prices.quoteIsSol ? (curveUsdPerUnit ?? undefined) : undefined,
-        );
-        if (fine.length > 0) {
-          usedFineTicks = true;
-          fineTicks += fine.length;
-          ticks.push(...fine);
-          ticks.sort((a, b) => a.at.getTime() - b.at.getTime());
+      let coveredAdd = 0;
+      if (slice) {
+        const prices = curveLabelPrices(row.token.mintAddress, slice.afterMs, slice.untilMs);
+        coveredAdd = prices.coveredMs;
+        const scaleAt =
+          dollar ??
+          (curveUsdPerUnit !== null && prices.quoteIsSol
+            ? { at: new Date(slice.afterMs), priceUsd: 1 }
+            : null);
+        if (scaleAt) {
+          // Only a SOL quote uses the SOL/USD scale. A coin-quoted curve stays on the dollar
+          // print's own ratio: that scale is not lamports per raw token.
+          const fine = dollarTicksFromCurve(
+            prices,
+            scaleAt,
+            prices.quoteIsSol ? (curveUsdPerUnit ?? undefined) : undefined,
+          );
+          if (fine.length > 0) {
+            usedFineTicks = true;
+            fineTicks += fine.length;
+            ticks.push(...fine);
+            ticks.sort((a, b) => a.at.getTime() - b.at.getTime());
+          }
         }
       }
       const last = ticks.at(-1);
@@ -603,8 +623,17 @@ export async function runCandidateWatchJob(
         ...aggUpdates,
         ...trailUpdates,
         lastCheckedAt: priceAt > tickAt ? priceAt : tickAt,
+        // Null stays null until a sweep actually had tape inside the window.
+        ...(coveredAdd > 0 || row.curveTapeCoveredMs != null
+          ? { curveTapeCoveredMs: nextCurveTapeCoveredMs(row.curveTapeCoveredMs, coveredAdd) }
+          : {}),
       };
       if (price !== undefined) data.lastPriceUsd = price;
+      // The scale basis is the dollar print, even when lastPriceUsd is a later curve tick.
+      if (candidate) {
+        data.lastDollarPriceUsd = candidate.priceUsd;
+        data.lastDollarAt = candidate.at;
+      }
       // Rule 5 is rule 4's anchor plus these prints. A rule-3 row keeps rule 3: its anchor is the
       // scan price, and a higher rule would start restamping DexScreener's lag. History on rule 4
       // is not rewritten; only a row that actually folded a curve print moves.

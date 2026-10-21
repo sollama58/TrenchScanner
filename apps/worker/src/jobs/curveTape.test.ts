@@ -88,16 +88,19 @@ describe("curve tape", () => {
       basis: null,
       changes: [{ at: NOW, price: 1 }],
       quoteIsSol: true,
+      coveredMs: 0,
     });
     expect(curveLabelPrices(MINT, NOW, NOW + 60_000)).toEqual({
       basis: { at: NOW, price: 1 },
       changes: [],
       quoteIsSol: true,
+      coveredMs: 0,
     });
     expect(curveLabelPrices("never", NOW - 1, NOW + 1)).toEqual({
       basis: null,
       changes: [],
       quoteIsSol: false,
+      coveredMs: 0,
     });
   });
 
