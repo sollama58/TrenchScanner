@@ -68,6 +68,12 @@ function goalRows(count: number, seed: number): TrainingRow[] {
   return rows;
 }
 
+/**
+ * volume24hUsd is the planted crash-risk signal and ageMinutes a covariate. Both are retired
+ * from the next production fit; these tests still name them so the goal checks keep seeing risk.
+ */
+const PLANTED_FEATURES = ["buyRatio24h", "volume24hUsd", "ageMinutes"] as const;
+
 const row = (over: Partial<TrainingRow>): TrainingRow => ({
   anchorAt: new Date(T0),
   features: {},
@@ -130,8 +136,12 @@ describe("seat goals", () => {
   const rows = goalRows(4000, 7);
 
   it("trains a crash model beside the 2x model for the return goal, and ranks risky coins lower", async () => {
-    const plain = await trainCuratorModel(rows, { learner: "gbdt" });
-    const ret = await trainCuratorModel(rows, { learner: "gbdt", goal: "return" });
+    const plain = await trainCuratorModel(rows, { learner: "gbdt", featureNames: PLANTED_FEATURES });
+    const ret = await trainCuratorModel(rows, {
+      learner: "gbdt",
+      goal: "return",
+      featureNames: PLANTED_FEATURES,
+    });
     expect(plain.returnRisk).toBeUndefined();
     expect(ret.returnRisk).toBeDefined();
     const safeCoin = { buyRatio24h: 0.8, volume24hUsd: 1_000, ageMinutes: 60 };
@@ -193,6 +203,7 @@ describe("seat goals", () => {
       learner: "gbdt",
       boosting: { objective: "return" },
       goal: "return",
+      featureNames: PLANTED_FEATURES,
     });
     expect(reg.returnRisk).toBeUndefined();
     expect(reg.kind === "gbdt-v1" && reg.objective).toBe("return");
@@ -212,6 +223,7 @@ describe("seat goals", () => {
       learner: "gbdt",
       boosting: { objective: "payoff" },
       goal: "return",
+      featureNames: PLANTED_FEATURES,
     });
     expect(pf.returnRisk).toBeUndefined();
     expect(pf.kind === "gbdt-v1" && pf.objective).toBe("payoff");

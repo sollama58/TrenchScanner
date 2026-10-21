@@ -211,14 +211,18 @@ export const TREES_RECENT_HALF_LIFE_DAYS = 1.5;
  * Order flow and short-window momentum only - what the last minutes of trading say, blind to
  * holder structure, socials and the heuristic's own scores. Deliberately partial: a member that
  * sees the market through one lens disagrees with the others in ways the consensus can use.
+ * Price and volume are the clock-honest readings (curation/clockFeatures.ts): the full named
+ * window only when the pair has lived it, otherwise the move since the pair opened, per minute.
+ * The mislabeled window sums are retired, so learnerSubset leaves them out.
  */
 export const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = learnerSubset([
   "mcapUsd",
-  "priceChange5mPct",
-  "priceChange1hPct",
-  "volume5mUsd",
+  "px5mFullPct",
+  "px1hFullPct",
+  "pxSincePairPct",
+  "pxSincePairPerMin",
+  "volPerMin5m",
   "volume1hUsd",
-  "volume5mToMcapRatio",
   "volume1hToMcapRatio",
   "volumeAccel",
   "buys5m",
