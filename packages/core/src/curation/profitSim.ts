@@ -42,6 +42,10 @@ import {
  * The window's close is the first price seen at or after the window closed, which the window's
  * aggregates never fold in. The plan still applies to it: a close at or under the stop fills at
  * the stop, and a close at or over a take-profit level fills that rung (and arms the trail).
+ * Once the trail is already armed, a close at or under the level that high sets fills the
+ * remainder at the close (the price seen, not the level). The watcher arms some rows from the
+ * window's peak on that same close, so the close can already be through the level (user ask
+ * 2026-10-21). A close still above the level leaves the trailing share open.
  *
  * The result is written when the position is fully out: at the window close for a call that
  * stopped out or never sold, at the trailing exit or the hold cap for one that sold
@@ -322,7 +326,8 @@ export function exitPlanPositionOpen(
  * `closePriceUsd` is the price when the label window closed; null when unknown, in which case the
  * result is null unless the plan was already fully out (every share sold at a take-profit or the
  * stop). The close is subject to the plan like any other price: at or under the stop it fills at
- * the stop, at or over a take-profit level it fills that rung (see the module comment).
+ * the stop, at or over a take-profit level it fills that rung, and once the trail is armed a
+ * close at or under that high's level fills the remainder at the close (see the module comment).
  * `trailCapPriceUsd` is the price at the trailing hold cap, passed once the cap has passed: the
  * share the trail still holds closes there. While a trailing share is still open the result is
  * null: the call is not graded for its return yet.
@@ -373,12 +378,29 @@ export function simulateExitPlan(
     // one, the trail's level sits above the stop from the sale on).
     if (stopped && (!sold || plan.trail.length === 0)) proceeds += held * plan.stopFraction;
     else if (sold && plan.trail.length > 0) {
-      // The rest rode the trail: out at the price that fired it, else at the hold cap, else still open.
-      if (row.trailExitAt != null && row.trailExitPriceUsd != null && row.trailExitPriceUsd > 0)
-        proceeds += held * (row.trailExitPriceUsd / entry);
-      else if (trailCapPriceUsd !== null && Number.isFinite(trailCapPriceUsd) && trailCapPriceUsd > 0)
-        proceeds += held * (trailCapPriceUsd / entry);
-      else return null;
+      // The rest rode the trail. Out at the price that fired it. Else, when this close is already
+      // at or under the level the armed high sets, at the close: the window can arm the trail from
+      // a peak this close never passed through applyTrailTick (user ask 2026-10-21). A recorded
+      // exit wins over that close. Else at the hold cap. Else the share is still open. A close
+      // above the level does not fill.
+      const fired =
+        row.trailExitAt != null && row.trailExitPriceUsd != null && row.trailExitPriceUsd > 0
+          ? row.trailExitPriceUsd
+          : null;
+      const high = row.trailHighPriceUsd;
+      const level = high != null && high > 0 ? trailLevelPriceUsd(entry, high, plan) : null;
+      const pierced = fired === null && close !== null && level !== null && close <= level ? close : null;
+      const capped =
+        fired === null &&
+        pierced === null &&
+        trailCapPriceUsd !== null &&
+        Number.isFinite(trailCapPriceUsd) &&
+        trailCapPriceUsd > 0
+          ? trailCapPriceUsd
+          : null;
+      const exitPrice = fired ?? pierced ?? capped;
+      if (exitPrice === null) return null;
+      proceeds += held * (exitPrice / entry);
     } else if (close !== null) proceeds += held * (close / entry);
     else return null;
   }

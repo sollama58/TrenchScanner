@@ -356,7 +356,10 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
       },
     });
 
-    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.4 }), env);
+    // 1.8 is under the first rung, so this sweep does not arm the trail at the close. It is also
+    // above the 40% trail of the 2.6 peak (1.56), so the share stays open. A close already through
+    // that level fills in the test below (user ask 2026-10-21).
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.8 }), env);
 
     const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
     expect(updated.finalizedAt).not.toBeNull();
@@ -403,6 +406,45 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(settled.finalized24hAt).toBeNull();
     const settledAlert = await prisma.curatedAlert.findUniqueOrThrow({ where: { id: alert.id } });
     expect(settledAlert.simReturnPct).toBeCloseTo(settled.simReturnPct!);
+  });
+
+  it("sells the trailing share when the close is already through the peak the trail arms from", async () => {
+    // 2026-10-21 user ask: the 5x peak was seen before this build kept a trail, so this sweep
+    // arms from that peak. The last price, 2.9, is already under the 40% level (3). There is no
+    // fresh tick this sweep, so nothing else folds 2.9 in. The rest sells at 2.9, and that exit
+    // is what training replays.
+    const token = await createToken("trail-close");
+    const anchorAt = new Date(Date.now() - 61 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      peak1hPriceUsd: 5,
+      peakBeforeStopPriceUsd: 5,
+      hit2xAt: new Date(anchorAt.getTime() + 8 * MINUTE),
+      lowBefore2xPriceUsd: 0.8,
+      low1hPriceUsd: 0.8,
+      peak24hPriceUsd: 5,
+      lastPriceUsd: 2.9,
+    });
+    const alert = await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        candidateOutcomeId: row.id,
+        source: "heuristic-v1",
+        confidence: 80,
+        anchorPriceUsd: 1.0,
+        anchorMcapUsd: 100_000,
+      },
+    });
+
+    await runCandidateWatchJob(stubDexScreener({}), env);
+
+    const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(updated.trailHighPriceUsd).toBeCloseTo(5);
+    expect(updated.trailExitPriceUsd).toBeCloseTo(2.9);
+    expect(updated.trailExitAt).not.toBeNull();
+    expect(updated.simReturnPct).toBeCloseTo((0.35 * 2 + 0.3 * 4 + 0.35 * 2.9 - 1) * 100);
+    expect(updated.extended24h).toBe(true);
+    const updatedAlert = await prisma.curatedAlert.findUniqueOrThrow({ where: { id: alert.id } });
+    expect(updatedAlert.simReturnPct).toBeCloseTo(updated.simReturnPct!);
   });
 
   it("grades a 2x after 15 minutes as a miss, but keeps watching its trailing share to the hold cap", async () => {
