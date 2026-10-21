@@ -1,5 +1,6 @@
 import type { ScoredToken } from "../types.js";
 import { freshWalletShare } from "../scoring/rugScreen.js";
+import type { UnknownRiskPolicy } from "../scoring/matchFilters.js";
 
 /**
  * The hand-tuned v1 curator behind the Curated Alerts feed - the gate that decides which
@@ -154,7 +155,11 @@ export interface CurationDecision {
  * Evaluates one scored, rug-screen-passing candidate. `minScore` comes from env
  * (CURATED_MIN_SCORE) so the floor can be tuned in production without a deploy.
  */
-export function evaluateCandidateHeuristic(scored: ScoredToken, minScore: number): CurationDecision {
+export function evaluateCandidateHeuristic(
+  scored: ScoredToken,
+  minScore: number,
+  policy?: UnknownRiskPolicy,
+): CurationDecision {
   const no: CurationDecision = {
     curate: false,
     confidence: 0,
@@ -205,6 +210,9 @@ export function evaluateCandidateHeuristic(scored: ScoredToken, minScore: number
   if (scored.emptyTop10WalletPct !== undefined && scored.emptyTop10WalletPct > MAX_EMPTY_TOP10_WALLET_PCT) {
     return no;
   }
+  // The cap is always on. Unknown still passes unless SAFETY_UNKNOWN_RISK_FAILS is set: a coin
+  // RugCheck has not indexed yet is not, by itself, a veto (see the note at the top).
+  if (policy?.unknownFails && scored.riskScore === undefined) return no;
   if (scored.riskScore !== undefined && scored.riskScore > MAX_RISK_SCORE) return no;
   if (scored.devWalletPct !== undefined && scored.devWalletPct > MAX_DEV_WALLET_PCT) return no;
 

@@ -114,6 +114,22 @@ describe("model gates", () => {
     expect(passesModelGate(token({ ...passing, emptyTop10WalletPct: undefined }), gate)).toBe(false);
     // A ceiling it doesn't hold to a wallet figure still skips an unknown, as the filter does.
     expect(passesModelGate(token({ ...passing, top10HolderPct: undefined }), gate)).toBe(true);
+    const strict = { unknownFails: true };
+    const riskGate = { ...gate, maxRiskScore: 50 };
+    expect(passesModelGate(token({ ...passing, riskScore: undefined }), riskGate)).toBe(true);
+    expect(passesModelGate(token({ ...passing, riskScore: undefined }), riskGate, strict)).toBe(false);
+    expect(
+      passesModelGateOnFeatures(
+        { ...buildCandidateFeatures(passing), riskScore: null },
+        riskGate,
+        new Set(),
+        strict,
+      ),
+    ).toBe(false);
+    const growthGate = { ...gate, minHolderGrowthPct: 5 };
+    expect(passesModelGate(token({ ...passing, holderGrowth10mPct: undefined }), growthGate, strict)).toBe(
+      false,
+    );
   });
 
   it("reads a training row's stored inputs the way it reads the live token", () => {

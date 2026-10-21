@@ -417,6 +417,7 @@ async function alertForToken(
     activeFilters,
     guard: env.MATCH_ALERT_GUARD,
     walletWaitMs: env.FILTER_WALLET_MAX_WAIT_SECONDS * 1000,
+    unknownRiskFails: env.SAFETY_UNKNOWN_RISK_FAILS,
     // Only the scan, which scores on the full picture, ends a wallet-figure hold.
     clearWalletWait: false,
   });

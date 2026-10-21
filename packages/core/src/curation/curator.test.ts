@@ -142,6 +142,10 @@ describe("evaluateCandidateHeuristic", () => {
       devWalletPct: undefined,
     });
     expect(evaluateCandidateHeuristic(unknownRisk, MIN_SCORE).curate).toBe(true);
+    expect(evaluateCandidateHeuristic(unknownRisk, MIN_SCORE, { unknownFails: true }).curate).toBe(false);
+    expect(evaluateCandidateHeuristic(strongCandidate(), MIN_SCORE, { unknownFails: true }).curate).toBe(
+      true,
+    );
   });
 
   it("judges buy pressure on the last hour when DexScreener reported it, not the 24h total", () => {

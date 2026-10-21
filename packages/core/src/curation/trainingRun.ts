@@ -125,6 +125,11 @@ export interface CuratorTrainingConfig {
    */
   featureOnsetGuard?: boolean;
   /**
+   * Missing risk, holder count, or holder growth fails a gate that reads it (env
+   * SAFETY_UNKNOWN_RISK_FAILS). Omitted = off, matching live.
+   */
+  unknownRiskFails?: boolean;
+  /**
    * The training window's start (the rows were loaded from it). The onset guard judges coverage
    * from there or from the first row on the current label rule, whichever is later. Omitted =
    * from the first current-rule row.
@@ -1243,7 +1248,9 @@ export async function runEvolvingContest(
     const gate = spec.gate !== undefined ? cfg.gates?.[spec.gate] : undefined;
     if (spec.gate !== undefined && !gate) continue;
     const seatRows = rows.filter((r) =>
-      seatConsiders(spec, gateView(r).features, gate, unrecordedGateInputs(r.anchorAt, gateOnsets)),
+      seatConsiders(spec, gateView(r).features, gate, unrecordedGateInputs(r.anchorAt, gateOnsets), {
+        unknownFails: cfg.unknownRiskFails,
+      }),
     );
     if (seatRows.filter((r) => isDecisionRow(r, cfg.mcapBand)).length < GATED_MIN_ROWS) continue;
     const ownFeatures = runFeatures(seatRows, cfg);
