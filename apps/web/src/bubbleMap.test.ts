@@ -33,6 +33,7 @@ import {
   graphBounds,
   hasHolderList,
   firstReadAfter,
+  holderBadgeAt,
   holderFreshness,
   layoutGraph,
   positionsOf,
@@ -437,6 +438,31 @@ describe("holderFreshness", () => {
     });
     // Due, but the view hasn't looked since: still the next update, not a re-check.
     expect(holderFreshness({ takenAt: at }, t + 65_000, reads(t + 70_000)).late).toBe(false);
+  });
+  it("does not treat a streamed balance as a new read of the holder list", () => {
+    // 2026-10-21 user ask: the list was read at `chain`. A later streamed balance and the scan
+    // row that carried it are not that read. The countdown stays on the chain read, so it is
+    // already late instead of starting another minute from the balance.
+    const chain = "2026-10-13T23:00:00.000Z";
+    const balances = "2026-10-13T23:04:50.000Z";
+    const scan = "2026-10-13T23:04:55.000Z";
+    const now = Date.parse(scan) + 5_000;
+    expect(
+      holderFreshness(
+        { takenAt: scan, holdersAt: chain, holderBalancesAt: balances, holderChainReadAt: chain },
+        now,
+        reads(now + 4_000),
+      ),
+    ).toMatchObject({
+      last: Date.parse(chain),
+      due: Date.parse(chain) + 60_000,
+      late: true,
+    });
+    // The map's badge is the top-50 read, not a later balance or the scan row.
+    expect(
+      holderBadgeAt({ takenAt: scan, holderBalancesAt: balances, holderChainReadAt: chain }, chain),
+    ).toBe(Date.parse(chain));
+    expect(holderBadgeAt({ takenAt: scan, holderBalancesAt: balances })).toBe(Date.parse(balances));
   });
   it("dates a list carried onto a later scan by when it was written", () => {
     const scan = "2026-10-13T23:04:00.000Z";

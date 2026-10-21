@@ -12,9 +12,9 @@ describe("LiveStamp", () => {
     expect(html).not.toContain("Live");
   });
 
-  it("says only Live while the trades feed moves the shares", () => {
+  it("keeps the age and the countdown while the trades feed moves the shares", () => {
     const html = renderToStaticMarkup(<LiveStamp last={last} next={next} live />);
-    expect(html).toMatch(/>Live<\/span>$/);
-    expect(html).not.toMatch(/s ago|Next update/);
+    expect(html).toMatch(/Live · /);
+    expect(html).toMatch(/s ago · Next update in /);
   });
 });

@@ -2574,6 +2574,39 @@ export function holderListAt(s: Pick<Snapshot, "takenAt" | "holdersAt" | "holder
 }
 
 /**
+ * When the holder set was last taken, for the "Last updated" stamp and the next-read countdown.
+ * The chain enumeration (`holderChainReadAt`), else the carried list's time, else the balance
+ * time, else the scan. The balance time moves with every streamed trade and is what later trades
+ * are counted from (holderListAt); using it here made a list read minutes ago look just written,
+ * and the countdown to the next read kept starting over (user ask 2026-10-21, token
+ * vofbjQG4x2uJBKSe1QLkk6tsjpNk1wwZUucGmp73mab).
+ */
+export function holderShownAt(
+  s: Pick<Snapshot, "takenAt" | "holdersAt" | "holderBalancesAt" | "holderChainReadAt">,
+): number {
+  const chain = s.holderChainReadAt ? Date.parse(s.holderChainReadAt) : NaN;
+  if (Number.isFinite(chain)) return chain;
+  const carried = s.holdersAt ? Date.parse(s.holdersAt) : NaN;
+  if (Number.isFinite(carried)) return carried;
+  const balances = s.holderBalancesAt ? Date.parse(s.holderBalancesAt) : NaN;
+  if (Number.isFinite(balances)) return balances;
+  return Date.parse(s.takenAt);
+}
+
+/**
+ * The bubble map badge's time: the top-50 enumeration when that map is what's drawn, else
+ * holderShownAt. Not the newest live trade and not the later of the two clocks. A trade or a
+ * streamed balance moves a share; it is not a new read of who the holders are.
+ */
+export function holderBadgeAt(
+  reading: Pick<Snapshot, "takenAt" | "holdersAt" | "holderBalancesAt" | "holderChainReadAt">,
+  wideReadAt?: string | null,
+): number {
+  const wide = wideReadAt ? Date.parse(wideReadAt) : NaN;
+  return Number.isFinite(wide) ? wide : holderShownAt(reading);
+}
+
+/**
  * When the set of wallets on the list was last enumerated from the chain. A buyer from outside
  * the list is counted from here; wallets already on it move from holderListAt, which the holder
  * stream keeps later. Without a chain time, both are the share time, so a stream update isn't
@@ -2599,11 +2632,11 @@ export function firstReadAfter(at: number, nextRead: number, everyMs: number): n
  * HOLDER_STALE_MS: the coin is no longer being scanned.
  */
 export function holderFreshness(
-  reading: Pick<Snapshot, "takenAt" | "holdersAt" | "holderBalancesAt">,
+  reading: Pick<Snapshot, "takenAt" | "holdersAt" | "holderBalancesAt" | "holderChainReadAt">,
   now: number,
   reads?: { nextRead: number; everyMs: number } | null,
 ): { last: number; due: number | null; next: number | null; late: boolean } {
-  const last = holderListAt(reading);
+  const last = holderShownAt(reading);
   if (now - last >= HOLDER_STALE_MS) return { last, due: null, next: null, late: false };
   const due = last + HOLDER_WRITE_MS;
   if (!reads) return { last, due, next: null, late: false };

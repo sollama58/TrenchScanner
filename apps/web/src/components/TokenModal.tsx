@@ -5,6 +5,7 @@ import {
   holderFreshness,
   holderChainReadAt,
   holderListAt,
+  holderShownAt,
   linkedCountText,
   momentLabel,
   momentSnapshot,
@@ -687,14 +688,22 @@ function useCoinScans(mint: string, follow: boolean): CoinScans {
     if (!follow) return;
     let live = true;
     let timer = 0;
+    let generation = 0;
     const tick = () => {
       window.clearTimeout(timer);
+      const started = Date.now();
+      const mine = ++generation;
       if (document.visibilityState === "visible")
         // A read in the last few seconds (a quick return to the page) is reused.
+        // nextRead moves only once this read has landed. Setting it to the following poll
+        // before that made the countdown skip the read in flight and keep calling an old list
+        // current (user ask 2026-10-21).
         cachedGet<CoinReading>(`/tokens/${encodeURIComponent(mint)}?reading=1`, SCAN_READ_MS / 3)
           .then((d) => live && setRead({ mint, snapshots: d.snapshots ?? [], verdicts: d.verdicts ?? [] }))
-          .catch(() => undefined);
-      setNextRead(Date.now() + SCAN_READ_MS);
+          .catch(() => undefined)
+          .finally(() => {
+            if (live && mine === generation) setNextRead(started + SCAN_READ_MS);
+          });
       timer = window.setTimeout(tick, SCAN_READ_MS);
     };
     tick();
@@ -2082,7 +2091,7 @@ function holdersMoment(card: Card, reading: Snapshot | null | undefined) {
     : {
         label: "Now",
         // Headed with the reading's age, ticking (user ask 2026-10-19).
-        at: holderListAt(reading),
+        at: holderShownAt(reading),
         title:
           "The latest scan's reading, not the alert's: The alert section below shows the holders at the alert. Counts are over the top holders this scan read (the /25 or /10), which can be a different set.",
       };
