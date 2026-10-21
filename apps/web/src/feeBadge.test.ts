@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { feeBadge } from "./components/AlertCard";
+import { creatorFeeLine, feeBadge } from "./components/AlertCard";
 
 describe("feeBadge", () => {
   it("names where the creator fee goes, one kind per destination", () => {
@@ -25,5 +25,19 @@ describe("feeBadge", () => {
       "Creator fees go to charity.",
     );
     expect(feeBadge({ destination: "creator", summary: null })?.title).toBe("Creator fees go to the dev.");
+  });
+
+  it("adds OTC Desks' reward coins to the tooltip and the token-details line when they are known", () => {
+    const desk = "OTC Desks pays holder rewards in NVDAx.";
+    expect(
+      feeBadge({ destination: "wallet", summary: "creator fees go to a wallet", deskLine: desk })?.title,
+    ).toBe("Creator fees go to a wallet. OTC Desks pays holder rewards in NVDAx.");
+    expect(feeBadge({ destination: null, summary: null, deskLine: desk })).toMatchObject({
+      kind: "rewards",
+      title: desk,
+    });
+    expect(creatorFeeLine({ destination: null, summary: null, deskLine: desk })).toBe(desk);
+    expect(feeBadge({ destination: null, summary: null })).toBeNull();
+    expect(creatorFeeLine({ destination: "wallet", summary: null })).toBeNull();
   });
 });

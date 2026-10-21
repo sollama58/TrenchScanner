@@ -39,6 +39,11 @@ export interface SageView {
   status: "ok" | "failed" | "expired" | "none";
   failReason: string | null;
   read: SageRead | null;
+  /**
+   * OTC Desks' reward routing for this mint, when their public roster names it (user ask
+   * 2026-10-21). Null when it does not. Paid, which would name an XMoney user, has no source here.
+   */
+  feeDesk: string | null;
   /** Market cap at each stored scan, oldest first, for the chart. */
   marketCap: { t: string; usd: number }[];
   /** How the models' calls on coins in this coin's top narrative graded over the last week. */

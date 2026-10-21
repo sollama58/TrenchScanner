@@ -11,6 +11,7 @@ import {
   cleanPeakPriceUsd,
   contestantSpec,
 } from "@trenchscanner/core";
+import { otcDeskLines } from "./otcDesk.js";
 
 /**
  * Turning a CuratedAlert into a feed card.
@@ -55,32 +56,49 @@ export async function withLatestSnapshots<T extends { token: { id: string; mintA
   });
 }
 
-/** Where a card's coin sends its creator fee (TokenNarrative.feeDestination and feeSummary). */
+/**
+ * Where a card's coin sends its creator fee (TokenNarrative.feeDestination and feeSummary).
+ * `deskLine` is set when OTC Desks' roster names the reward coins for this mint (user ask
+ * 2026-10-21). Destination stays null when TokenSage has not said and only the desk has.
+ */
 export interface CardCreatorFee {
-  destination: string;
+  destination: string | null;
   summary: string | null;
+  deskLine?: string | null;
 }
 
 /**
  * The creator-fee read for each mint that has one, in one primary-key lookup. A failed lookup
- * leaves the cards without it rather than failing the feed: it is a tooltip line.
+ * leaves the cards without it rather than failing the feed: it is a tooltip line. The desk
+ * roster is asked on the token page (`waitForDesk`); a feed uses the roster already in hand.
  */
 export async function creatorFeesByMint(
   mints: readonly (string | undefined)[],
+  opts?: { waitForDesk?: boolean },
 ): Promise<Map<string, CardCreatorFee>> {
   const unique = [...new Set(mints.filter((m): m is string => typeof m === "string" && m !== ""))];
   if (unique.length === 0) return new Map();
-  try {
-    const rows = await prisma.tokenNarrative.findMany({
-      where: { mintAddress: { in: unique }, feeDestination: { not: null } },
-      select: { mintAddress: true, feeDestination: true, feeSummary: true },
+  const [rows, desks] = await Promise.all([
+    prisma.tokenNarrative
+      .findMany({
+        where: { mintAddress: { in: unique }, feeDestination: { not: null } },
+        select: { mintAddress: true, feeDestination: true, feeSummary: true },
+      })
+      .catch(() => []),
+    otcDeskLines(unique, { wait: opts?.waitForDesk === true }).catch(() => new Map<string, string>()),
+  ]);
+  const out = new Map<string, CardCreatorFee>();
+  for (const r of rows) {
+    out.set(r.mintAddress, {
+      destination: r.feeDestination,
+      summary: r.feeSummary,
+      deskLine: desks.get(r.mintAddress) ?? null,
     });
-    return new Map(
-      rows.map((r) => [r.mintAddress, { destination: r.feeDestination!, summary: r.feeSummary }]),
-    );
-  } catch {
-    return new Map();
   }
+  for (const [mint, deskLine] of desks) {
+    if (!out.has(mint)) out.set(mint, { destination: null, summary: null, deskLine });
+  }
+  return out;
 }
 
 /**

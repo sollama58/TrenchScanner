@@ -885,24 +885,36 @@ const FEE_BADGES = {
   dev: { Icon: ChefHatIcon, label: "go to the dev" },
 } as const;
 
+/** TokenSage's sentence and, when known, the desk's own sentence, each stopped once. */
+export function creatorFeeLine(fee: Card["token"]["creatorFee"] | null | undefined): string | null {
+  const sentence = (text: string | null | undefined): string | null => {
+    const t = text?.trim().replace(/\.$/, "");
+    return t ? `${t.charAt(0).toUpperCase()}${t.slice(1)}.` : null;
+  };
+  const summary = sentence(fee?.summary);
+  const desk = sentence(fee?.deskLine);
+  if (summary && desk && summary !== desk) return `${summary} ${desk}`;
+  return summary ?? desk;
+}
+
 /**
  * The footer's FEES badge: where the coin's creator fee goes (TokenSage's read), as one outline
  * icon - a heart for a charity, a gift for holder rewards or any other wallet, a robot for a GitHub
- * account, a chef's hat for the dev. Nothing when TokenSage hasn't read the coin or can't tell.
+ * account, a chef's hat for the dev. A gift also when OTC Desks' roster names the reward coins and
+ * TokenSage has not (user ask 2026-10-21). Nothing when neither source has said.
  */
 export function feeBadge(fee: Card["token"]["creatorFee"]): {
   kind: keyof typeof FEE_BADGES;
   Icon: (typeof FEE_BADGES)[keyof typeof FEE_BADGES]["Icon"];
   title: string;
 } | null {
-  const kind = feeKind(fee?.destination);
+  const kind = feeKind(fee?.destination) ?? (fee?.deskLine?.trim() ? "rewards" : null);
   if (!kind) return null;
   const { Icon, label } = FEE_BADGES[kind];
-  const summary = fee?.summary?.trim().replace(/\.$/, "");
   return {
     kind,
     Icon,
-    title: summary ? `${summary.charAt(0).toUpperCase()}${summary.slice(1)}.` : `Creator fees ${label}.`,
+    title: creatorFeeLine(fee) ?? `Creator fees ${label}.`,
   };
 }
 
@@ -982,12 +994,9 @@ export function cardReadings(card: Card, prefer: "alert" | "newest" = "alert") {
   // Whether the dev still holds: the newest reading first, since a dev can sell after the alert.
   const devHolding = latest?.devHolding ?? s.devHolding ?? null;
   const devFromLatest = latest?.devHolding != null;
-  // Where the creator fee goes (TokenSage), under the Dev tile's tooltip: about 14% of coins
-  // send it to holders, a charity, a GitHub account or other wallets instead of the dev.
-  const fee = card.token.creatorFee;
-  const feeLine = fee?.summary
-    ? `${fee.summary.charAt(0).toUpperCase()}${fee.summary.slice(1).replace(/\.$/, "")}.`
-    : null;
+  // Where the creator fee goes, under the Dev tile's tooltip (2026-10-21): TokenSage's sentence,
+  // and OTC Desks' reward coins when their roster names them.
+  const feeLine = creatorFeeLine(card.token.creatorFee);
   return {
     freshPct,
     freshOf:

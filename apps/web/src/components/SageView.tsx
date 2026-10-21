@@ -33,6 +33,8 @@ export interface SageView {
   status: "ok" | "failed" | "expired" | "none";
   failReason: string | null;
   read: SageRead | null;
+  /** OTC Desks' reward routing, when their roster names it. Absent from an older API. */
+  feeDesk?: string | null;
   marketCap: { t: string; usd: number }[];
   track: SageTrack | null;
   /** Absent from a server older than this page. */
@@ -681,7 +683,13 @@ function SageReadView({ read: r, view }: { read: SageRead; view: SageView }) {
         </section>
       )}
 
-      {r.creatorFee && <FeeCard fee={r.creatorFee} />}
+      {r.creatorFee && <FeeCard fee={r.creatorFee} deskLine={view.feeDesk} />}
+      {!r.creatorFee && view.feeDesk && (
+        <section className="sage-card">
+          <h4>Creator fee</h4>
+          <p>{view.feeDesk}</p>
+        </section>
+      )}
 
       {r.x && <XCard x={r.x} readAt={r.analyzedAt} />}
 
@@ -735,7 +743,7 @@ function sentence(text: string): string {
 }
 
 /** Where the creator fee goes: TokenSage's sentence, each recipient's share, and links. */
-function FeeCard({ fee }: { fee: NonNullable<SageRead["creatorFee"]> }) {
+function FeeCard({ fee, deskLine }: { fee: NonNullable<SageRead["creatorFee"]>; deskLine?: string | null }) {
   const named = fee.recipients.filter((r) => r.label !== null || r.lifetimeReceived !== null);
   return (
     <section className="sage-card">
@@ -747,6 +755,7 @@ function FeeCard({ fee }: { fee: NonNullable<SageRead["creatorFee"]> }) {
         {fee.mutable && <span className="sage-tag tone-neutral">Split can still change</span>}
       </h4>
       {fee.summary && <p>{sentence(fee.summary)}</p>}
+      {deskLine && <p>{deskLine}</p>}
       {fee.shares.length > 1 && (
         <WeightBars
           rows={fee.shares.map((s) => ({
