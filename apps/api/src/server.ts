@@ -698,6 +698,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     env,
     stonkFees: walletHelius,
     holderStamps,
+    dexScreener,
   });
   const walletLive = walletHelius ? new WalletLiveReader(walletHelius) : null;
   // Helius's name for it (exchanges, protocols, services): its identity API, on paid plans.

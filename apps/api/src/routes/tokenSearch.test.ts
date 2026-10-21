@@ -48,9 +48,11 @@ describe.skipIf(!dbAvailable)("GET /tokens/search", () => {
   const tokenIds: Record<string, string> = {};
 
   beforeAll(async () => {
-    dex = createServer((_req, res) => {
+    dex = createServer((req, res) => {
       res.writeHead(dexDown ? 404 : 200, { "content-type": "application/json" });
-      res.end(dexDown ? "{}" : JSON.stringify({ pairs: [] }));
+      // Token lookups answer an array; the text search answers { pairs }.
+      const body = req.url?.includes("/tokens/v1/") ? "[]" : JSON.stringify({ pairs: [] });
+      res.end(dexDown ? "{}" : body);
     });
     await new Promise<void>((resolve) => dex!.listen(0, "127.0.0.1", resolve));
     env.DEXSCREENER_BASE_URL = `http://127.0.0.1:${(dex.address() as AddressInfo).port}`;

@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { allowLookupRead, RecentlyAllowed } from "../lookupGate.js";
 import { searchTrackedTokens, type TokenSearchAnswer } from "../tokenSearch.js";
+import { fillSearchMarketHits, loadSearchMarketHits, SEARCH_MARKET_FETCH_MAX } from "../searchMarket.js";
 import { allowTextSearch, tokenSearchParam } from "./matches.js";
 import { tokenView } from "./utilities.js";
 import { keepFilterMoment, readBubbleMoments, type BubbleMomentView } from "../bubbleMoments.js";
@@ -18,6 +19,7 @@ import {
   RISKY_WALLET_SCORE,
   STONKS_FEE_WALLET,
   STONKS_FEE_WALLET_LABEL,
+  type DexScreenerClient,
   type Env,
   type HeliusClient,
   type TokenSageAnalysis,
@@ -78,6 +80,13 @@ const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const searchQuerySchema = z.object({
   mint: z.string().regex(MINT_RE, "mint must be a Solana address").optional(),
   q: tokenSearchParam,
+});
+
+const searchMarketsSchema = z.object({
+  mints: z
+    .string()
+    .transform((v) => [...new Set(v.split(",").filter(Boolean))])
+    .pipe(z.array(z.string().regex(MINT_RE, "mint must be a Solana address")).min(1).max(SEARCH_MARKET_FETCH_MAX)),
 });
 
 /** Market cap points drawn in the TokenSage view's chart (the newest scans). */
@@ -762,6 +771,8 @@ export async function registerTokenRoutes(
     stonkFees?: StonkFeesReader | null;
     /** Token.holdersViewedAt, stamped by the bubble map's poll (viewStamps.ts). */
     holderStamps?: ViewStampBuffer;
+    /** Fills search rows from the quote cache before any new DexScreener call. */
+    dexScreener?: DexScreenerClient;
   } = {},
 ) {
   // Token detail is reached from the paid feed. Behind the paywall - see authenticateSubscriber in server.ts.
@@ -773,13 +784,27 @@ export async function registerTokenRoutes(
     if (!parsed.success)
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "bad search" });
     const { mint, q } = parsed.data;
-    if (mint) return searchTrackedTokens(request.user!.userId, { mint });
-    if (!q) return reply.code(400).send({ error: "search by q or mint" });
+    if (!mint && !q) return reply.code(400).send({ error: "search by q or mint" });
     // Shares the feed search's budget: the same uncached %text% read, from the same box.
-    if (!allowTextSearch(request.user!.userId)) {
+    if (!mint && !allowTextSearch(request.user!.userId)) {
       return reply.code(429).send({ error: "Too many searches; wait a few seconds and try again." });
     }
-    return searchTrackedTokens(request.user!.userId, { text: q });
+    const found = await searchTrackedTokens(request.user!.userId, mint ? { mint } : { text: q! });
+    if (!opts.dexScreener || found.hits.length === 0) return found;
+    return { ...found, hits: await fillSearchMarketHits(found.hits, opts.dexScreener) };
+  });
+
+  /**
+   * Market fields for the search rows on screen. Cached quotes and snapshots younger than a minute
+   * are reused; only mints older than that share one DexScreener batch.
+   */
+  app.get("/search/markets", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request, reply) => {
+    const parsed = searchMarketsSchema.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "bad search" });
+    const shells = await loadSearchMarketHits(parsed.data.mints);
+    const hits = opts.dexScreener ? await fillSearchMarketHits(shells, opts.dexScreener) : shells;
+    reply.header("Cache-Control", "no-store");
+    return { hits };
   });
 
   /** A tracked token as a feed card (kind "stream"), for opening the token modal from a search result. */

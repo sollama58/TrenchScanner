@@ -714,6 +714,17 @@ describe("getTokensByAddresses quote cache", () => {
     expect(client.takeQuoteCacheHits()).toBe(0);
   });
 
+  it("peeks a quote older than the lookup cache without another request", async () => {
+    const urls = stubPairs();
+    const client = new DexScreenerClient();
+    await client.getTokensByAddresses(["a"], 1, { retries: 0 });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 11_000);
+    expect(client.cachedQuotes(["a"], 60_000).get("a")?.token.marketCapUsd).toBe(50_000);
+    expect(client.cachedQuotes(["a"], 10_000).has("a")).toBe(false);
+    expect(urls).toHaveLength(1);
+  });
+
   it("goes upstream when asked for a fresh reading, and once the window has passed", async () => {
     const urls = stubPairs();
     const client = new DexScreenerClient();
