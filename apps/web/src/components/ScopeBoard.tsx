@@ -53,6 +53,7 @@ import {
   socialLinks,
 } from "./AlertCard";
 import { CardSearchButton } from "./CardSearchButton";
+import { DexInfoLabel } from "../dexInfoLabel";
 import { QuickBuyPill } from "./QuickBuyPill";
 import { TokenImage } from "./TokenImage";
 import { FilterGlyph } from "./FilterBadge";
@@ -674,6 +675,7 @@ export function ScopeRow({
             </button>
           )}
           <QuotePill token={card.token} className="scope-quote" />
+          <DexInfoLabel token={card.token} now={now} />
           {copied && (
             <span className="scope-copied" role="status">
               Copied

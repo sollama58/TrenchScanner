@@ -29,6 +29,7 @@ import {
   XLogoIcon,
 } from "./Icons";
 import { CardSearchButton } from "./CardSearchButton";
+import { DexInfoLabel } from "../dexInfoLabel";
 import { XLinkPreview } from "./XLinkPreview";
 import { useImagePreview } from "./ImagePreview";
 import { linkedCount, linkedCountText } from "../linkedCount";
@@ -299,6 +300,7 @@ export function AlertCard({
               </strong>
             )}
             <QuotePill token={card.token} />
+            <DexInfoLabel token={card.token} now={now} />
             {quickBuy("top-left")}
             {show("tokenName") && card.token.name && card.token.symbol && (
               <span className="token-name" title={card.token.name}>

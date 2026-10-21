@@ -247,6 +247,15 @@ export interface Token {
   /** The coin the token's pair trades against (wrapped SOL for most); null until a reading names it. */
   quoteMint?: string | null;
   quoteSymbol?: string | null;
+  /**
+   * DexScreener enhanced token info (profile, links, images). True once a pair info block or a
+   * token-info payment was seen. Absent on API builds from before 2026-10-21.
+   */
+  dexInfo?: boolean;
+  /** ISO payment time from DexScreener orders. Null when the profile is known but the time is not. */
+  dexInfoPaidAt?: string | null;
+  /** The newest payment is an update (a later token-info order), not the first one. */
+  dexInfoUpdated?: boolean;
 }
 
 export interface Snapshot {

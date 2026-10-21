@@ -599,6 +599,18 @@ model Token {
   /// Whether the mint has ever appeared on DexScreener's paid-boost feed. Sticky (false -> true
   /// only); a model feature, so the learner can say whether a paid boost helps or hurts.
   dexBoosted              Boolean   @default(false)
+  /// DexScreener enhanced token info (profile, links, images, description). Sticky. Set when a
+  /// pair response includes an info block, or the orders endpoint lists a tokenProfile or
+  /// communityTakeover payment (user ask 2026-10-21). Not a model input. Distinct from dexBoosted.
+  dexInfo                 Boolean   @default(false)
+  /// Latest token-info payment time from DexScreener's orders paymentTimestamp. Null when we
+  /// only know the info block exists (that response has no time).
+  dexInfoPaidAt           DateTime?
+  /// The stored payment is an update: the orders list had an earlier token-info payment too.
+  dexInfoUpdated          Boolean   @default(false)
+  /// When the orders endpoint was last asked about this mint, including an answer with no
+  /// token-info payment. Null = never asked. Not shown on cards.
+  dexInfoCheckedAt        DateTime?
   /// The launchpad the coin came from, normalized (core's launchpads.ts): "pumpfun", "stonks", or
   /// another source's own name. Set at discovery by the sources that say (Jupiter, PumpPortal,
   /// Pump.fun's lists); null when none has. Feeds the launchpadStonks input and the filters'

@@ -20,6 +20,7 @@ export * from "./walletTag.js";
 
 export * from "./datasources/httpClient.js";
 export * from "./datasources/dexscreener.js";
+export * from "./dexInfo.js";
 export * from "./datasources/geckoterminal.js";
 export * from "./datasources/jupiter.js";
 export * from "./datasources/rateGate.js";
