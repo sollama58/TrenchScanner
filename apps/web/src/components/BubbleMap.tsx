@@ -30,6 +30,7 @@ import {
   sameTimeSlot,
   buildGraph,
   HOLDER_POLL_MS,
+  holderBadgeAt,
   holderChainReadAt,
   holderListAt,
   liveWideFor,
@@ -2401,20 +2402,19 @@ export function BubbleMapSection({
         : wideIn,
     [wideIn, heldLive, heldReading],
   );
-  // When what the map draws last changed (user ask 2026-10-19): the holder read, the top 50's, or
-  // the newest live trade since either that moved a share. The badge counts from it, as the map
-  // between reads moves with each trade it is redrawn with.
+  // The badge is when the holder set on screen was read (the top 50's enumeration, else the
+  // scan's chain read). A later streamed balance or a live trade moves a share and stays in the
+  // title; it does not make the badge read as just updated (user ask 2026-10-21).
   const drawn = useMemo(() => {
     if (!heldReading) return null;
     const listAt = holderListAt(heldReading);
-    const wideAt = wideIn ? Date.parse(wideIn.readAt) : NaN;
-    const readAt = Number.isFinite(wideAt) ? Math.max(listAt, wideAt) : listAt;
+    const at = holderBadgeAt(heldReading, wideIn?.readAt);
     let tradeAt: number | null = null;
     if (heldLive?.supply)
       for (const t of heldLive.trades)
-        if (t.tokens > 0 && t.atMs > Math.min(listAt, readAt) && (tradeAt === null || t.atMs > tradeAt))
+        if (t.tokens > 0 && t.atMs > Math.min(listAt, at) && (tradeAt === null || t.atMs > tradeAt))
           tradeAt = t.atMs;
-    return { listAt, at: Math.max(readAt, tradeAt ?? -Infinity), tradeAt };
+    return { listAt, at, tradeAt };
   }, [heldReading, wideIn, heldLive]);
   const { showTransfers, setTransfersOn } = useTransferToggle(snapshot);
   const { bubbleFunderLabels } = useAppearance();
@@ -2488,13 +2488,7 @@ export function BubbleMapSection({
             }
           >
             {moment.at !== undefined && Number.isFinite(moment.at) ? (
-              // Live while the trades feed moves its shares (user ask 2026-10-20: one state,
-              // whichever is true); else what the map last drew: its reading, or a live trade since.
-              heldLive?.live ? (
-                "Live"
-              ) : (
-                <SecondsAgo at={drawn ? drawn.at : moment.at} />
-              )
+              <SecondsAgo at={drawn ? drawn.at : moment.at} />
             ) : (
               moment.label
             )}

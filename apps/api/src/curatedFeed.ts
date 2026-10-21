@@ -144,7 +144,7 @@ export async function latestSnapshotsByToken(
               linkedHolders: carriedHolders,
               linkedClusters: s.linkedClusters ?? carriedClusters,
               sameTimeClusters: s.sameTimeClusters ?? carriedSameTime,
-              ...(carriedAt ? { holdersAt: carriedBalancesAt ?? carriedAt } : {}),
+              ...(carriedAt ? { holdersAt: carriedChainReadAt ?? carriedAt } : {}),
               ...(carriedBalancesAt ? { holderBalancesAt: carriedBalancesAt } : {}),
               ...(carriedChainReadAt ? { holderChainReadAt: carriedChainReadAt } : {}),
             }
@@ -162,10 +162,10 @@ export async function latestSnapshotsByToken(
 const CARRIED_HOLDER_LIST_MS = 2 * 3_600_000;
 
 /**
- * On a snapshot whose holder reading was carried from an earlier row: that row's takenAt, when the
- * list was last written (a new reading, or the worker's periodic rewrite of an unchanged one). The
- * row's own takenAt is only its scan's, every few seconds, so the token view's "Last updated" for
- * the holders and the trades it moves their shares by count from this instead. Absent on a row
+ * On a snapshot whose holder reading was carried from an earlier row: when that list was taken
+ * (its chain read, else that row's takenAt). Not the balance-stream time, which moves on a trade
+ * without a new read of who the holders are, and not this row's own takenAt (a scan every few
+ * seconds). The token view's "Last updated" and its countdown count from this. Absent on a row
  * carrying its own list.
  */
 export interface CarriedHolderTime {
@@ -209,7 +209,7 @@ export async function withCarriedHolderList<
         linkedHolders: carried.linkedHolders,
         linkedClusters: snapshot.linkedClusters ?? carried.linkedClusters,
         sameTimeClusters: snapshot.sameTimeClusters ?? carried.sameTimeClusters,
-        holdersAt: carried.holderBalancesAt ?? carried.takenAt,
+        holdersAt: carried.holderChainReadAt ?? carried.takenAt,
         ...(carried.holderBalancesAt ? { holderBalancesAt: carried.holderBalancesAt } : {}),
         ...(carried.holderChainReadAt ? { holderChainReadAt: carried.holderChainReadAt } : {}),
       };
@@ -264,7 +264,7 @@ export async function withCarriedHolderLists<
           linkedHolders: carried.linkedHolders,
           linkedClusters: s.linkedClusters ?? carried.linkedClusters,
           sameTimeClusters: s.sameTimeClusters ?? carried.sameTimeClusters,
-          holdersAt: carried.holderBalancesAt ?? carried.takenAt,
+          holdersAt: carried.holderChainReadAt ?? carried.takenAt,
           ...(carried.holderBalancesAt ? { holderBalancesAt: carried.holderBalancesAt } : {}),
           ...(carried.holderChainReadAt ? { holderChainReadAt: carried.holderChainReadAt } : {}),
         };

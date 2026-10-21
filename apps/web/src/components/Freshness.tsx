@@ -5,19 +5,35 @@ let clock = Date.now();
 const clockListeners = new Set<() => void>();
 let clockTimer = 0;
 
+function syncClock(): void {
+  const next = Date.now();
+  if (next === clock) return;
+  clock = next;
+  for (const l of clockListeners) l();
+}
+
+/** A hidden tab's timer is paused or skipped. Catch up the moment it is visible again, or a
+ * stamp keeps the time from when the tab was left and an old holder list reads as just updated
+ * (user ask 2026-10-21). */
+function onClockVisible(): void {
+  if (document.visibilityState === "visible") syncClock();
+}
+
 function subscribeClock(listener: () => void): () => void {
   clockListeners.add(listener);
   if (clockListeners.size === 1) {
     clock = Date.now();
-    clockTimer = window.setInterval(() => {
-      if (document.visibilityState !== "visible") return;
-      clock = Date.now();
-      for (const l of clockListeners) l();
-    }, 1_000);
+    // Keep ticking while hidden too. Skipping those ticks left `clock` at the last visible
+    // second, so "12s ago" and the countdown stayed there until the next tick after returning.
+    clockTimer = window.setInterval(syncClock, 1_000);
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", onClockVisible);
   }
   return () => {
     clockListeners.delete(listener);
-    if (clockListeners.size === 0) window.clearInterval(clockTimer);
+    if (clockListeners.size === 0) {
+      window.clearInterval(clockTimer);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onClockVisible);
+    }
   };
 }
 
@@ -86,8 +102,8 @@ export function SecondsAgo({ at }: { at: number }) {
  * A section's freshness beside its count: "12s ago · Next update in 0:48" (user ask 2026-10-19).
  * `next` is when the view reads again (the update shows then): a time, or a poll's beat; null
  * when no update is coming (the coin is no longer scanned), so only the age shows. `late`: see
- * nextUpdateText. `live`: the shares move with each trade, so "Live" stands alone (user ask
- * 2026-10-20: one state, whichever is true); the read times stay in the title.
+ * nextUpdateText. `live`: shares also move with each trade. That does not replace the age or the
+ * countdown: a trade is not a new holder read (user ask 2026-10-21).
  */
 export function LiveStamp({
   last,
@@ -113,14 +129,9 @@ export function LiveStamp({
         (live ? ". Shares move with each trade until then; links and tags come with each read." : "")
       }
     >
-      {live ? (
-        "Live"
-      ) : (
-        <>
-          {secondsAgo(last, now)}
-          {at !== null && <> · {nextUpdateText(at, now, late)}</>}
-        </>
-      )}
+      {live ? "Live · " : null}
+      {secondsAgo(last, now)}
+      {at !== null && <> · {nextUpdateText(at, now, late)}</>}
     </span>
   );
 }
