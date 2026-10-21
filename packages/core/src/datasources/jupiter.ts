@@ -1,5 +1,6 @@
 import {
   isCurveVenue,
+  isLaunchHomeCurve,
   normalizeLaunchpad,
   PUMPFUN_LAUNCHPAD,
   SCANNED_LAUNCHPADS,
@@ -113,6 +114,11 @@ export interface JupiterClientOptions {
    * reads go out together this many at a time rather than one per sustained interval.
    */
   burst?: number;
+  /**
+   * Keep a Meteora DBC or Raydium LaunchLab curve's age. Off, those launchpads have no dex id
+   * here, which is what shipped.
+   */
+  launchHomeClock?: boolean;
 }
 
 /**
@@ -128,10 +134,12 @@ export class JupiterClient {
   private readonly baseUrl: string;
   private readonly headers: Record<string, string>;
   private readonly gate: RateGate;
+  private readonly launchHomeClock: boolean;
   private lastMovingAt = Number.NEGATIVE_INFINITY;
 
   constructor(options: JupiterClientOptions) {
     this.baseUrl = options.baseUrl ?? "https://api.jup.ag";
+    this.launchHomeClock = options.launchHomeClock === true;
     this.headers = { accept: "application/json", "x-api-key": options.apiKey };
     const burst = Math.max(1, Math.floor(options.burst ?? DEFAULT_JUPITER_REQUESTS_PER_SECOND));
     this.gate = new RateGate({
@@ -236,7 +244,9 @@ export class JupiterClient {
    */
   async getLaunches(mintAddresses: string[], options: TokenLookupOptions = {}): Promise<CandidateToken[]> {
     const { seenAt, freshSources: _fresh, ...rest } = options;
-    const found = await this.search(mintAddresses, 2, rest, parseJupiterLaunches);
+    const found = await this.search(mintAddresses, 2, rest, (body, requested) =>
+      parseJupiterLaunches(body, requested, this.launchHomeClock),
+    );
     if (seenAt) for (const { token, answered } of found) seenAt.set(token.mintAddress, answered);
     return found.map((f) => f.token);
   }
@@ -389,6 +399,28 @@ const sumOrUndefined = (a: number | undefined, b: number | undefined): number | 
   a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0);
 
 /**
+ * DexScreener's venue id for a Jupiter launchpad. Pump.fun and Stonks as before. Meteora DBC
+ * (`met-dbc`) and Raydium LaunchLab stay on their curve until Jupiter reports a graduated pool;
+ * LaunchLab then moves to Raydium, and a graduated DBC has no dex id of its own here.
+ */
+function dexIdForLaunch(
+  launchpad: string | undefined,
+  graduated: boolean,
+  launchHomeClock: boolean,
+): string | undefined {
+  if (launchpad === PUMPFUN_LAUNCHPAD) return graduated ? "pumpswap" : "pumpfun";
+  if (launchpad === STONKS_LAUNCHPAD) return graduated ? "raydium" : "stonkfun";
+  if (!launchHomeClock) return undefined;
+  if (launchpad === "met-dbc" || launchpad === "meteora-dbc" || launchpad === "meteoradbc") {
+    return graduated ? undefined : "meteoradbc";
+  }
+  if (launchpad === "raydium-launchlab" || launchpad === "launchlab") {
+    return graduated ? "raydium" : "launchlab";
+  }
+  return undefined;
+}
+
+/**
  * Exported for tests. A launch as the scan's band refresh reads a DexScreener pair: price, cap and
  * the 5m/1h/24h activity, the venue and when its first pool opened. Only the requested mints, each
  * once, and only with a positive price and market cap: a launch nobody has traded yet has neither,
@@ -399,29 +431,27 @@ const sumOrUndefined = (a: number | undefined, b: number | undefined): number | 
  * "pumpswap". A curve's liquidity is left unset, as DexScreener and GeckoTerminal leave it, so a
  * coin reads the same whichever of them priced it.
  */
-export function parseJupiterLaunches(body: unknown, requested: Set<string>): CandidateToken[] {
+export function parseJupiterLaunches(
+  body: unknown,
+  requested: Set<string>,
+  launchHomeClock = false,
+): CandidateToken[] {
   if (!Array.isArray(body)) return [];
   const out = new Map<string, CandidateToken>();
   for (const t of body as JupiterToken[]) {
     if (!t || typeof t.id !== "string" || !requested.has(t.id) || out.has(t.id)) continue;
     const priceUsd = finite(t.usdPrice);
     const launchpad = normalizeLaunchpad(t.launchpad);
-    const pump = launchpad === PUMPFUN_LAUNCHPAD;
     // On the coin's supply now, after burns, as DexScreener counts it too (mintSupply.ts): fdv is
     // the price on the mint's whole supply, which burns take out of.
     const marketCapUsd = finite(t.fdv) ?? finite(t.mcap);
     if (priceUsd === undefined || priceUsd <= 0 || marketCapUsd === undefined || marketCapUsd <= 0) continue;
     // A Stonks coin's LaunchLab curve is "stonkfun" (GeckoTerminal's name: DexScreener lists no
-    // curve), and it graduates into a Raydium pool.
-    const dexId = pump
-      ? t.graduatedPool
-        ? "pumpswap"
-        : "pumpfun"
-      : launchpad === STONKS_LAUNCHPAD
-        ? t.graduatedPool
-          ? "raydium"
-          : "stonkfun"
-        : undefined;
+    // curve), and it graduates into a Raydium pool. Meteora DBC and Raydium LaunchLab are the
+    // same kind of home: on the curve their created time is the pair clock, and a graduated
+    // LaunchLab coin moves to Raydium. A graduated DBC's AMM shares Jupiter's lack of a dex id
+    // with every other pool, so that clock stays unknown rather than trusting a side pool.
+    const dexId = dexIdForLaunch(launchpad, Boolean(t.graduatedPool), launchHomeClock);
     const liquidity = finite(t.liquidity);
     // On the curve the canonical pair is the bonding curve (firstPool, opened at launch). Once
     // graduated, the pair we price is the graduation pool, whose created time is graduatedAt.
@@ -429,7 +459,8 @@ export function parseJupiterLaunches(body: unknown, requested: Set<string>): Can
     // not keep the clock. A graduate with no graduation time has an unknown pool age.
     const curveAt = t.firstPool?.createdAt ? new Date(t.firstPool.createdAt) : undefined;
     const graduatedAt = t.graduatedPool && t.graduatedAt ? new Date(t.graduatedAt) : undefined;
-    const pairCreatedAt = canonicalPairCreatedAt(dexId, isCurveVenue(dexId) ? curveAt : graduatedAt);
+    const onCurve = launchHomeClock ? isLaunchHomeCurve(dexId) : isCurveVenue(dexId);
+    const pairCreatedAt = canonicalPairCreatedAt(dexId, onCurve ? curveAt : graduatedAt, launchHomeClock);
     const m5 = t.stats5m ?? undefined;
     const h1 = t.stats1h ?? undefined;
     const h24 = t.stats24h ?? undefined;

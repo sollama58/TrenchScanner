@@ -510,16 +510,27 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     baseUrl: env.DEXSCREENER_BASE_URL,
     requestsPerMinute: LIVE_REFRESH_CALLS_PER_MINUTE,
     // A small share of GeckoTerminal's 30 a minute: the worker takes the rest.
+    launchHomeClock: env.LAUNCH_HOME_CLOCK,
     fallback: new GeckoTerminalClient(
       env.COINGECKO_API_KEY
-        ? { apiKey: env.COINGECKO_API_KEY, priorityPerMinute: 1, backgroundPerMinute: 30 }
-        : { priorityPerMinute: 1, backgroundPerMinute: 6 },
+        ? {
+            apiKey: env.COINGECKO_API_KEY,
+            priorityPerMinute: 1,
+            backgroundPerMinute: 30,
+            launchHomeClock: env.LAUNCH_HOME_CLOCK,
+          }
+        : { priorityPerMinute: 1, backgroundPerMinute: 6, launchHomeClock: env.LAUNCH_HOME_CLOCK },
     ),
     // A page's "Now" (and the Peak it folds in) re-priced from Jupiter when DexScreener's reading
     // has stopped at a stale price - see DexScreenerClient.correctStalePrices. A handful of calls a
     // minute at most: 100 mints a call, each asked about at most every two minutes.
     staleCheck: env.JUPITER_API_KEY
-      ? new JupiterClient({ apiKey: env.JUPITER_API_KEY, requestsPerMinute: 6, burst: 2 })
+      ? new JupiterClient({
+          apiKey: env.JUPITER_API_KEY,
+          requestsPerMinute: 6,
+          burst: 2,
+          launchHomeClock: env.LAUNCH_HOME_CLOCK,
+        })
       : undefined,
   });
   // One per process, shared by every route, so its in-flight sharing, cooldown and call budget

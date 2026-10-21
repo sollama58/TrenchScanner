@@ -153,6 +153,82 @@ describe("parseJupiterLaunches", () => {
     expect(graduate!.graduatedAt).toEqual(new Date("2026-10-16T00:10:00Z"));
     expect(graduate!.pairCreatedAt).toEqual(new Date("2026-10-16T00:10:00Z"));
   });
+
+  it("keeps a Meteora DBC or LaunchLab curve's age, and a LaunchLab graduation's Raydium time", () => {
+    const [dbc, lab, labGrad, dbcGrad] = parseJupiterLaunches(
+      [
+        {
+          id: "dbcMint",
+          usdPrice: 0.00001,
+          mcap: 12_000,
+          liquidity: 4_000,
+          launchpad: "met-dbc",
+          firstPool: { createdAt: "2026-10-21T12:00:00Z" },
+        },
+        {
+          id: "labMint",
+          usdPrice: 0.00002,
+          mcap: 18_000,
+          liquidity: 5_000,
+          launchpad: "raydium-launchlab",
+          firstPool: { createdAt: "2026-10-21T12:30:00Z" },
+        },
+        {
+          id: "labGrad",
+          usdPrice: 0.00004,
+          mcap: 40_000,
+          liquidity: 20_000,
+          launchpad: "launchlab",
+          firstPool: { createdAt: "2026-10-21T12:00:00Z" },
+          graduatedPool: "cpmm",
+          graduatedAt: "2026-10-21T13:00:00Z",
+        },
+        {
+          id: "dbcGrad",
+          usdPrice: 0.00004,
+          mcap: 40_000,
+          liquidity: 20_000,
+          launchpad: "met-dbc",
+          firstPool: { createdAt: "2026-10-21T12:00:00Z" },
+          graduatedPool: "damm",
+          graduatedAt: "2026-10-21T13:00:00Z",
+        },
+      ],
+      new Set(["dbcMint", "labMint", "labGrad", "dbcGrad"]),
+      true,
+    );
+    expect(
+      parseJupiterLaunches(
+        [
+          {
+            id: "dbcMint",
+            usdPrice: 0.00001,
+            mcap: 12_000,
+            launchpad: "met-dbc",
+            firstPool: { createdAt: "2026-10-21T12:00:00Z" },
+          },
+        ],
+        new Set(["dbcMint"]),
+      )[0],
+    ).toMatchObject({
+      dexId: undefined,
+      pairCreatedAt: undefined,
+    });
+    expect(dbc).toMatchObject({
+      dexId: "meteoradbc",
+      pairCreatedAt: new Date("2026-10-21T12:00:00Z"),
+    });
+    expect(lab).toMatchObject({
+      dexId: "launchlab",
+      pairCreatedAt: new Date("2026-10-21T12:30:00Z"),
+    });
+    expect(labGrad).toMatchObject({
+      dexId: "raydium",
+      pairCreatedAt: new Date("2026-10-21T13:00:00Z"),
+    });
+    expect(dbcGrad?.dexId).toBeUndefined();
+    expect(dbcGrad?.pairCreatedAt).toBeUndefined();
+  });
 });
 
 describe("parseJupiterQuotes", () => {

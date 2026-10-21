@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isCurveVenue, launchpadFromVenue, normalizeLaunchpad } from "./launchpads.js";
+import { isCurveVenue, isLaunchHomeCurve, launchpadFromVenue, normalizeLaunchpad } from "./launchpads.js";
 
 describe("normalizeLaunchpad", () => {
   it("gives every source's spelling one name, and keeps a launchpad nobody has mapped", () => {
@@ -20,7 +20,13 @@ describe("venues", () => {
     expect(isCurveVenue("pumpfun")).toBe(true);
     expect(isCurveVenue("stonkfun")).toBe(true);
     expect(isCurveVenue("raydium")).toBe(false);
+    expect(isCurveVenue("meteoradbc")).toBe(false);
+    expect(isCurveVenue("launchlab")).toBe(false);
     expect(isCurveVenue(undefined)).toBe(false);
+    expect(isLaunchHomeCurve("pumpfun")).toBe(true);
+    expect(isLaunchHomeCurve("meteoradbc")).toBe(true);
+    expect(isLaunchHomeCurve("launchlab")).toBe(true);
+    expect(isLaunchHomeCurve("meteora")).toBe(false);
     expect(launchpadFromVenue("pumpswap")).toBe("pumpfun");
     expect(launchpadFromVenue("stonkfun")).toBe("stonks");
     expect(launchpadFromVenue("raydium")).toBeUndefined();

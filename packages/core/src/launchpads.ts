@@ -50,9 +50,22 @@ export function normalizeLaunchpad(name: unknown): string | undefined {
  */
 const CURVE_VENUES: ReadonlySet<string> = new Set(["pumpfun", "stonkfun"]);
 
-/** Whether a venue id is a launchpad's bonding curve. */
+/**
+ * Curves whose pool was created with the coin. Meteora DBC and Raydium LaunchLab are homes in
+ * the same way Pump.fun's curve is, but they are not Pump venues: the safety screen still does
+ * not treat their liquidity as burned (isCurveVenue). DexScreener spells them meteoradbc and
+ * launchlab; GeckoTerminal's meteora-dbc and raydium-launchlab are mapped onto these first.
+ */
+const LAUNCH_HOME_CURVES: ReadonlySet<string> = new Set(["pumpfun", "stonkfun", "meteoradbc", "launchlab"]);
+
+/** Whether a venue id is a launchpad's bonding curve. Pump.fun and Stonks only. */
 export function isCurveVenue(dexId: string | undefined): boolean {
   return dexId !== undefined && CURVE_VENUES.has(dexId);
+}
+
+/** Whether a venue id is the coin's own bonding curve, including Meteora DBC and LaunchLab. */
+export function isLaunchHomeCurve(dexId: string | undefined): boolean {
+  return dexId !== undefined && LAUNCH_HOME_CURVES.has(dexId);
 }
 
 /** The launchpad a venue id gives away, when it does (a graduated Raydium pool doesn't). */

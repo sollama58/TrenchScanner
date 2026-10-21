@@ -78,6 +78,11 @@ export interface GeckoTerminalClientOptions {
   priorityPerMinute?: number;
   /** Calls a minute for every other lookup. */
   backgroundPerMinute?: number;
+  /**
+   * Keep a Meteora DBC or Raydium LaunchLab curve's age. Off, those ids stay as GeckoTerminal
+   * spelled them and a LaunchLab curve is folded into "raydium", which is what shipped.
+   */
+  launchHomeClock?: boolean;
 }
 
 /**
@@ -95,6 +100,7 @@ export class GeckoTerminalClient {
   private readonly backgroundGate: RateGate;
   private readonly headers: Record<string, string>;
   private readonly backgroundMaxMints: number;
+  private readonly launchHomeClock: boolean;
 
   constructor(options: GeckoTerminalClientOptions = {}) {
     const keyed = Boolean(options.apiKey);
@@ -105,6 +111,7 @@ export class GeckoTerminalClient {
       ? { accept: "application/json", "x-cg-pro-api-key": options.apiKey! }
       : { accept: "application/json" };
     this.backgroundMaxMints = keyed ? Infinity : BACKGROUND_MAX_MINTS;
+    this.launchHomeClock = options.launchHomeClock === true;
     this.priorityGate = new RateGate({
       name: "geckoterminal",
       perMinute: options.priorityPerMinute ?? DEFAULT_GECKOTERMINAL_PRIORITY_PER_MINUTE,
@@ -162,7 +169,7 @@ export class GeckoTerminalClient {
         );
         const answered = new Date();
         for (const mint of chunk) settled.add(mint);
-        const tokens = parseGeckoTokens(body, new Set(chunk));
+        const tokens = parseGeckoTokens(body, new Set(chunk), this.launchHomeClock);
         if (seenAt) for (const t of tokens) seenAt.set(t.mintAddress, answered);
         results.push(...tokens);
       } catch (err) {
@@ -200,9 +207,14 @@ const num = (v: string | number | null | undefined): number | undefined => {
  * GeckoTerminal's dex ids in DexScreener's spelling where the scan reads them: "pumpfun" is a
  * pre-bond curve (deriveGraduated), "pumpswap" is the same on both.
  */
-function toDexId(id: string | undefined): string | undefined {
+function toDexId(id: string | undefined, launchHomeClock: boolean): string | undefined {
   if (id === undefined) return undefined;
   if (id === "pump-fun") return "pumpfun";
+  // Launch homes stay their own venues when the owner turns the clock on. Folding
+  // raydium-launchlab into "raydium" let a deeper side pool become the pair, and meteora-dbc
+  // is not the "meteora" AMM the clock refuses. DexScreener spells these meteoradbc and launchlab.
+  if (launchHomeClock && id === "raydium-launchlab") return "launchlab";
+  if (launchHomeClock && id === "meteora-dbc") return "meteoradbc";
   // GeckoTerminal names each Raydium program ("raydium-clmm", "raydium-cpmm"); DexScreener calls
   // them all "raydium", which is where a Stonks coin graduates.
   if (id.startsWith("raydium")) return "raydium";
@@ -210,7 +222,11 @@ function toDexId(id: string | undefined): string | undefined {
 }
 
 /** Exported for tests. Only the requested mints, priced off a top pool they are the base of. */
-export function parseGeckoTokens(body: GeckoMultiResponse, requested: Set<string>): CandidateToken[] {
+export function parseGeckoTokens(
+  body: GeckoMultiResponse,
+  requested: Set<string>,
+  launchHomeClock = false,
+): CandidateToken[] {
   const pools = new Map((body.included ?? []).map((p) => [p.id, p]));
   const out: CandidateToken[] = [];
   for (const token of body.data ?? []) {
@@ -227,20 +243,20 @@ export function parseGeckoTokens(body: GeckoMultiResponse, requested: Set<string
       const quote = pool.relationships?.quote_token?.data?.id?.replace(`${SOLANA}_`, "");
       return {
         pool,
-        dexId: toDexId(pool.relationships?.dex?.data?.id) ?? "",
+        dexId: toDexId(pool.relationships?.dex?.data?.id, launchHomeClock) ?? "",
         liquidity: { usd: num(pool.attributes?.reserve_in_usd) },
         volume: { h1: num(pool.attributes?.volume_usd?.h1) },
         txns: { h1: pool.attributes?.transactions?.h1 },
         ...(quote ? { quoteToken: { address: quote } } : {}),
       };
     });
-    const pool = selectable.length > 0 ? pickCanonicalPair(selectable).pool : undefined;
+    const pool = selectable.length > 0 ? pickCanonicalPair(selectable, launchHomeClock).pool : undefined;
     const p = pool?.attributes;
     const marketCapUsd =
       num(a.market_cap_usd) ?? num(a.fdv_usd) ?? num(p?.market_cap_usd) ?? num(p?.fdv_usd) ?? 0;
     const priceUsd = num(p?.base_token_price_usd) ?? num(a.price_usd) ?? 0;
     if (marketCapUsd <= 0 && priceUsd <= 0) continue;
-    const dexId = toDexId(pool?.relationships?.dex?.data?.id);
+    const dexId = toDexId(pool?.relationships?.dex?.data?.id, launchHomeClock);
     const createdAt = p?.pool_created_at ? new Date(p.pool_created_at) : undefined;
     out.push({
       mintAddress: mint,
@@ -269,6 +285,7 @@ export function parseGeckoTokens(body: GeckoMultiResponse, requested: Set<string
       pairCreatedAt: canonicalPairCreatedAt(
         dexId,
         createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : undefined,
+        launchHomeClock,
       ),
       dexId,
       // "solana_<mint>"; the symbol isn't in the response, so the cards name it from the mint.

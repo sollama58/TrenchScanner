@@ -305,8 +305,9 @@ async function main() {
           apiKey: env.COINGECKO_API_KEY,
           priorityPerMinute: Math.ceil(env.COINGECKO_REQUESTS_PER_MINUTE * 0.6),
           backgroundPerMinute: Math.floor(env.COINGECKO_REQUESTS_PER_MINUTE * 0.4),
+          launchHomeClock: env.LAUNCH_HOME_CLOCK,
         }
-      : {},
+      : { launchHomeClock: env.LAUNCH_HOME_CLOCK },
   );
   // With a Jupiter key, the price-only jobs (candidate-watch, the empty-wallet check) ask Jupiter
   // first, so DexScreener's per-IP budget goes to the scan's refresh and fast-match.
@@ -317,11 +318,13 @@ async function main() {
           env.JUPITER_REQUESTS_PER_MINUTE ??
           jupiterRequestsPerMinute(env.JUPITER_MONTHLY_CREDITS, env.JUPITER_REQUESTS_PER_SECOND),
         burst: env.JUPITER_REQUESTS_PER_SECOND,
+        launchHomeClock: env.LAUNCH_HOME_CLOCK,
       })
     : undefined;
   const dexScreener = new DexScreenerClient({
     baseUrl: env.DEXSCREENER_BASE_URL,
     requestsPerMinute: env.DEXSCREENER_REQUESTS_PER_MINUTE,
+    launchHomeClock: env.LAUNCH_HOME_CLOCK,
     // Answers token lookups while DexScreener answers them blank (2026-10-07).
     fallback: geckoTerminal,
     // Re-prices readings frozen at a stale price (a graduated coin's dead curve, a pool quoted in
