@@ -433,7 +433,11 @@ describe("sub-minute curve prints", () => {
     later: [price: number, minute: number][] = [],
   ) => {
     let agg = initialOutcomeAggregates(anchor, T0);
-    const ticks = [...dollarTicksFromCurve(curve, minute), minute, ...later.map(([price, m]) => ({ priceUsd: price, at: minutes(m) }))];
+    const ticks = [
+      ...dollarTicksFromCurve(curve, minute),
+      minute,
+      ...later.map(([price, m]) => ({ priceUsd: price, at: minutes(m) })),
+    ];
     ticks.sort((a, b) => a.at.getTime() - b.at.getTime());
     for (const tick of ticks) agg = { ...agg, ...applyPriceTick(agg, tick.priceUsd, tick.at) };
     return agg;

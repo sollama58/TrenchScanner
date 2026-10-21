@@ -12,13 +12,7 @@ import {
   type ScoredToken,
 } from "@trenchscanner/core";
 import { recordCandidateSample, runCandidateWatchJob } from "./candidateOutcomeJob.js";
-import {
-  curveLabelPrices,
-  followYoungCurves,
-  resetCurveTape,
-  round,
-  startCurveTape,
-} from "./curveTape.js";
+import { curveLabelPrices, followYoungCurves, resetCurveTape, round, startCurveTape } from "./curveTape.js";
 
 /**
  * Same posture as outcomeBookkeeping.test.ts: this logic IS row bookkeeping, so it's tested
