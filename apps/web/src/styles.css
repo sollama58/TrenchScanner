@@ -10190,6 +10190,15 @@ button.link.exit-plan-link {
 .fee-dev .icon {
   color: var(--warn-ink);
 }
+/* Holder-reward tax beside the gift (user ask 2026-10-21): 0.05%, 1%, 3%. */
+.fee-tax {
+  letter-spacing: 0;
+  font-size: 11px;
+  font-weight: 600;
+}
+.fee-rewards .fee-tax {
+  color: var(--good-ink);
+}
 
 /* The Live tab's picture tour (AboutModal, TourArt) */
 .tour-modal {
@@ -21546,6 +21555,14 @@ dialog.tm-modal.tm-terminal::backdrop {
   place-items: center;
   width: 18px;
   height: 18px;
+}
+/* The percent sits beside the gift, so the mark grows past the icon's box. */
+.scope-fee.has-tax {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  gap: 2px;
+  padding: 0 3px;
 }
 
 /* "as of 14:05" on a cached report (components/AsOf.tsx). */

@@ -2,6 +2,7 @@ import { Prisma, type TokenSnapshot } from "@prisma/client";
 import {
   prisma,
   PumpFunClient,
+  readCreatorFeeBps,
   WIN_WINDOW_MINUTES,
   GOAL_WINDOW_MINUTES,
   TEN_X_WINDOW_MINUTES,
@@ -60,6 +61,12 @@ export async function withLatestSnapshots<T extends { token: { id: string; mintA
 export interface CardCreatorFee {
   destination: string;
   summary: string | null;
+  /**
+   * Creator fee in basis points when the read gave a whole rate from 1 to 10000 (5 is 0.05%).
+   * Null when it didn't. The card shows this beside the gift on a holder-reward coin (user ask
+   * 2026-10-21).
+   */
+  bps: number | null;
   /**
    * The charity's name for a Pump.fun charity coin (user ask 2026-10-21). Absent when the coin
    * is not a charity coin, or Pump.fun's payload did not name one.
@@ -136,6 +143,11 @@ export async function charityNamesByMint(mints: readonly string[]): Promise<Map<
 /**
  * The creator-fee read for each mint that has one, in one primary-key lookup. A failed lookup
  * leaves the cards without it rather than failing the feed: it is a tooltip line.
+ *
+ * The rate is feeCreatorBps when a read has stored it. Rows from before that column still keep
+ * creator_fee_bps inside the analysis document, and only a holder-reward coin with no column
+ * reads that one number (user ask 2026-10-21). A basic read outside the band does not keep the
+ * document, so the column is what those cards use after the next read.
  */
 export async function creatorFeesByMint(
   mints: readonly (string | undefined)[],
@@ -143,12 +155,30 @@ export async function creatorFeesByMint(
   const unique = [...new Set(mints.filter((m): m is string => typeof m === "string" && m !== ""))];
   if (unique.length === 0) return new Map();
   try {
-    const rows = await prisma.tokenNarrative.findMany({
-      where: { mintAddress: { in: unique }, feeDestination: { not: null } },
-      select: { mintAddress: true, feeDestination: true, feeSummary: true },
-    });
+    const rows = await prisma.$queryRaw<
+      {
+        mintAddress: string;
+        feeDestination: string | null;
+        feeSummary: string | null;
+        storedBps: number | null;
+        analysisBps: string | null;
+      }[]
+    >`
+      SELECT "mintAddress", "feeDestination", "feeSummary", "feeCreatorBps" AS "storedBps",
+             CASE
+               WHEN "feeCreatorBps" IS NULL AND "feeDestination" = 'holder_rewards'
+               THEN "analysis" #>> '{market,creator_fee,creator_fee_bps}'
+               ELSE NULL
+             END AS "analysisBps"
+      FROM "TokenNarrative"
+      WHERE "mintAddress" = ANY(${unique}::text[])
+        AND "feeDestination" IS NOT NULL`;
     const fees = new Map(
-      rows.map((r) => [r.mintAddress, { destination: r.feeDestination!, summary: r.feeSummary }]),
+      rows.flatMap((r) => {
+        if (!r.feeDestination) return [];
+        const bps = readCreatorFeeBps(r.storedBps ?? r.analysisBps);
+        return [[r.mintAddress, { destination: r.feeDestination, summary: r.feeSummary, bps }] as const];
+      }),
     );
     const charityMints = [...fees].filter(([, fee]) => fee.destination === "charity").map(([mint]) => mint);
     if (charityMints.length > 0) applyCharityNames(fees, await charityNamesByMint(charityMints));

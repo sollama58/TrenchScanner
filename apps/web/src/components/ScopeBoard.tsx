@@ -703,11 +703,12 @@ export function ScopeRow({
           )}
           {fees && (
             <span
-              className={`fee-badge scope-fee fee-${fees.kind}`}
+              className={`fee-badge scope-fee fee-${fees.kind}${fees.tax ? " has-tax" : ""}`}
               title={fees.title}
-              aria-label={fees.title}
+              aria-label={fees.tax ? `${fees.title} Holder reward tax ${fees.tax}.` : fees.title}
             >
               <fees.Icon size={12} />
+              {fees.tax && <span className="fee-tax num">{fees.tax}</span>}
             </span>
           )}
           {filter && showSource && (

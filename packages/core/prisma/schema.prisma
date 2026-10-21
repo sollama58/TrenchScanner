@@ -1922,6 +1922,10 @@ model TokenNarrative {
   feeCreatorShare       Float?
   feeMutable            Boolean?
   feeSummary            String?
+  /// Basis points of the trade taken as the creator fee (TokenSage market.creator_fee.creator_fee_bps).
+  /// 5 is 0.05%, 100 is 1%, 300 is 3%. Shown beside the gift on a holder-reward coin (user ask
+  /// 2026-10-21). Null when the read didn't give a whole rate from 1 to 10000. Not a model input.
+  feeCreatorBps         Int?
   /// Flags by severity, so the models and score need no catalogue of codes.
   highFlagCount         Int       @default(0)
   warnFlagCount         Int       @default(0)

@@ -807,9 +807,14 @@ export function AlertCard({
             </span>
           )}
           {fees && (
-            <span className={`fee-badge fee-${fees.kind}`} title={fees.title} aria-label={fees.title}>
+            <span
+              className={`fee-badge fee-${fees.kind}${fees.tax ? " has-tax" : ""}`}
+              title={fees.title}
+              aria-label={fees.tax ? `${fees.title} Holder reward tax ${fees.tax}.` : fees.title}
+            >
               <span className="fee-word">FEES</span>
               <fees.Icon size={14} />
+              {fees.tax && <span className="fee-tax num">{fees.tax}</span>}
             </span>
           )}
           {(show("links") || trade.length > 0) && (
@@ -890,6 +895,16 @@ const FEE_BADGES = {
 } as const;
 
 /**
+ * Basis points as a percent beside the gift (user ask 2026-10-21): 5 is 0.05%, 100 is 1%, 300 is 3%.
+ * Null when there is no whole rate from 1 to 10000 basis points to show.
+ */
+export function holderRewardTaxLabel(bps: number | null | undefined): string | null {
+  if (typeof bps !== "number" || !Number.isInteger(bps) || bps <= 0 || bps > 10_000) return null;
+  const text = (bps / 100).toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+  return `${text}%`;
+}
+
+/**
  * A charity name safe to show (user ask 2026-10-21). Blank when it isn't a real name: the
  * heart then keeps the generic "a charity" tooltip, and the token details omit the line.
  */
@@ -903,13 +918,16 @@ export function shownCharityName(name: string | null | undefined): string | null
 /**
  * The footer's FEES badge: where the coin's creator fee goes (TokenSage's read), as one outline
  * icon - a heart for a charity, a gift for holder rewards or any other wallet, a robot for a GitHub
- * account, a chef's hat for the dev. Nothing when TokenSage hasn't read the coin or can't tell.
- * On a charity coin the tooltip names the organization when one was loaded.
+ * account, a chef's hat for the dev. A holder-reward coin adds its tax beside the gift when the
+ * read gave one. On a charity coin the tooltip names the organization when one was loaded (user
+ * ask 2026-10-21). Nothing when TokenSage hasn't read the coin or can't tell.
  */
 export function feeBadge(fee: Card["token"]["creatorFee"]): {
   kind: keyof typeof FEE_BADGES;
   Icon: (typeof FEE_BADGES)[keyof typeof FEE_BADGES]["Icon"];
   title: string;
+  /** "0.05%" next to the gift on a holder-reward coin; null otherwise. */
+  tax: string | null;
 } | null {
   const kind = feeKind(fee?.destination);
   if (!kind) return null;
@@ -928,7 +946,8 @@ export function feeBadge(fee: Card["token"]["creatorFee"]): {
         : summary
           ? summaryTitle
           : `Creator fees go to ${charityName}.`;
-  return { kind, Icon, title };
+  const tax = fee?.destination === "holder_rewards" ? holderRewardTaxLabel(fee.bps) : null;
+  return { kind, Icon, title, tax };
 }
 
 /** TokenSage's fee destination as a badge kind (packages/core/src/datasources/tokensage.ts). */
