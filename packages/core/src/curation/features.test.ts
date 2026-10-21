@@ -8,10 +8,12 @@ import {
   learnerSubset,
   maskKnownBadInputs,
   withLaunchAge,
+  withoutPreCanonicalPairAge,
   applyClockFeatures,
   ageMayBePoolAge,
   isRawWalletRiskRow,
   AGE_FROM_LAUNCH_SINCE,
+  CANONICAL_PAIR_CLOCK_SINCE,
   WALLET_RISK_PERCENTILE_SINCE,
   SOCIALS_UNREAD_NULL_SINCE,
   EMPTY_WALLETS_UNPRICED_NULL_SINCE,
@@ -345,8 +347,12 @@ describe("buildCandidateFeatures - short-window derivations", () => {
       freshQuote: { priceUsd: 0.00014, marketCapUsd: 0, fetchedAt: now },
     });
     expect(decisionAnchor(noQuoteCap).marketCapUsd).toBe(100_000);
-    expect(buildCandidateFeatures(noQuoteCap, now).decisionMcapUsd).toBe(100_000);
-    expect(buildCandidateFeatures(noQuoteCap, now).freshGapPct).toBeCloseTo(40);
+    const liveNoQuoteCap = buildCandidateFeatures(noQuoteCap, now);
+    expect(liveNoQuoteCap.decisionMcapUsd).toBe(100_000);
+    expect(liveNoQuoteCap.freshGapPct).toBeCloseTo(40);
+    // Training loads this stored vector and fills the clock block again. The gap is still 40,
+    // so rebuilding the cap would train on $140k for a label graded from $100k.
+    expect(applyClockFeatures(liveNoQuoteCap).decisionMcapUsd).toBe(100_000);
     // A scan cap of 0 cannot scale. The anchor cap is the quote's own market cap.
     const noScanCap = scored({
       priceUsd: 0.0001,
@@ -1072,6 +1078,34 @@ describe("maskKnownBadInputs", () => {
     expect(isRawWalletRiskRow(before, percentile)).toBe(false);
     expect(maskKnownBadInputs(before, percentile)).toMatchObject({ walletRiskTop10Max: 60 });
     expect(maskKnownBadInputs(WALLET_RISK_PERCENTILE_SINCE, raw)).toBe(raw);
+  });
+
+  it("reads pairAgeMinutes as missing on rows banked before the canonical pair clock", () => {
+    const row = { pairAgeMinutes: 2.5, mcapUsd: 20_000, volume5mUsd: 60 };
+    const before = new Date(CANONICAL_PAIR_CLOCK_SINCE.getTime() - 60_000);
+    // The era mask leaves the age. withLaunchAge still needs it to drop a pool-aged row.
+    expect(maskKnownBadInputs(before, row)).toBe(row);
+    const cleared = withoutPreCanonicalPairAge(before, row);
+    expect(cleared.pairAgeMinutes).toBeNull();
+    expect(cleared.mcapUsd).toBe(20_000);
+    // The per-minute rate is filled after the clear. With the age gone it stays unknown.
+    expect(applyClockFeatures(cleared).volPerMin5m).toBeNull();
+    const after = withoutPreCanonicalPairAge(CANONICAL_PAIR_CLOCK_SINCE, row);
+    expect(after.pairAgeMinutes).toBe(2.5);
+    expect(after).toBe(row);
+    expect(withoutPreCanonicalPairAge(before, { mcapUsd: 20_000 })).toEqual({ mcapUsd: 20_000 });
+  });
+
+  it("keeps a pre-clock pair age until withLaunchAge has used it to drop a pool-aged row", () => {
+    const pool = { graduated: 1, ageMinutes: 2, pairAgeMinutes: 2.3 };
+    const old = new Date(AGE_FROM_LAUNCH_SINCE.getTime() - 60_000);
+    expect(withLaunchAge(old, pool, null)).toBeNull();
+    // Clearing the pair age first would keep the row, with an unknown coin age.
+    expect(withLaunchAge(old, withoutPreCanonicalPairAge(old, pool), null)).toEqual({
+      graduated: 1,
+      ageMinutes: null,
+      pairAgeMinutes: null,
+    });
   });
 
   it("reads a RugCheck 0 as missing while a missing report meant the coin was not indexed", () => {
