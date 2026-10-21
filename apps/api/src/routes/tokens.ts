@@ -787,8 +787,9 @@ export async function registerTokenRoutes(
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "bad search" });
     const { mint, q } = parsed.data;
     if (!mint && !q) return reply.code(400).send({ error: "search by q or mint" });
-    // Shares the feed search's budget: the same uncached %text% read, from the same box.
-    if (!mint && !allowTextSearch(request.user!.userId)) {
+    // Mint lookups skipped this and sat only under the process-wide HTTP cap (review 2026-10-21).
+    // A mint is the same per-account search as a text query.
+    if (!allowTextSearch(request.user!.userId)) {
       return reply.code(429).send({ error: "Too many searches; wait a few seconds and try again." });
     }
     const found = await searchTrackedTokens(request.user!.userId, mint ? { mint } : { text: q! });

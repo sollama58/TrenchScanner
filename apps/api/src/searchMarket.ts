@@ -14,6 +14,24 @@ export const SEARCH_MARKET_FETCH_MAX = 30;
 /** How long a search waits on that batch before answering with what it already has. */
 export const SEARCH_MARKET_FETCH_WAIT_MS = 2_000;
 
+/**
+ * DexScreener batches search may start per minute. The API client is also the live refresh's
+ * (120 a minute in server.ts). 24 is a fifth of that, so a busy search box cannot spend the
+ * budget a page tick needs (review 2026-10-21).
+ */
+export const SEARCH_DEX_CALLS_PER_MINUTE = 24;
+const searchDexCalls: number[] = [];
+
+/** Whether search may start another DexScreener batch now. Records it when so. */
+export function allowSearchDexCall(now = Date.now()): boolean {
+  const recent = searchDexCalls.filter((t) => now - t < 60_000);
+  searchDexCalls.length = 0;
+  searchDexCalls.push(...recent);
+  if (searchDexCalls.length >= SEARCH_DEX_CALLS_PER_MINUTE) return false;
+  searchDexCalls.push(now);
+  return true;
+}
+
 const REMEMBER_MAX = 4_000;
 
 export type MarketSource = "memory" | "hit";
@@ -144,6 +162,8 @@ const inflight = new Map<string, Promise<void>>();
 /** Forgets quotes this process stored for search (tests). */
 export function clearSearchMarketMemory(): void {
   remembered.clear();
+  inflight.clear();
+  searchDexCalls.length = 0;
 }
 
 function remember(mint: string, token: CandidateToken | null, at: number): void {
@@ -271,7 +291,7 @@ async function fillSearchMarketHitsInner<T extends SearchMarketHit>(
     .slice(0, SEARCH_MARKET_FETCH_MAX)
     .map((p) => p.hit.mint);
 
-  if (need.length > 0) await fetchFresh(dex, need);
+  if (need.length > 0) await fetchFresh(dex, need, now);
 
   return plan.map(({ hit }) => {
     const merged = coalesceMarketReadings(
@@ -291,7 +311,24 @@ async function fillSearchMarketHitsInner<T extends SearchMarketHit>(
   });
 }
 
-async function fetchFresh(dex: SearchQuoteSource, mints: string[]): Promise<void> {
+/** Resolves when `p` settles, or when `ms` passes, whichever is first. A hung lookup must not hold the search. */
+function settleWithin(p: Promise<void>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    p.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+    );
+  });
+}
+
+async function fetchFresh(dex: SearchQuoteSource, mints: string[], now: number): Promise<void> {
   const wait: Promise<void>[] = [];
   const start: string[] = [];
   for (const mint of mints) {
@@ -299,12 +336,13 @@ async function fetchFresh(dex: SearchQuoteSource, mints: string[]): Promise<void
     if (running) wait.push(running);
     else start.push(mint);
   }
-  if (start.length > 0) {
+  // Past search's share of the DexScreener budget, keep the snapshot. An in-flight batch still finishes.
+  if (start.length > 0 && allowSearchDexCall(now)) {
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    for (const mint of start) inflight.set(mint, gate);
+    let bounded: Promise<void> = gate;
     const job = (async () => {
       try {
         const tokens = await dex.getTokensByAddresses(start, 1, { deadlineMs: SEARCH_MARKET_FETCH_WAIT_MS });
@@ -315,13 +353,20 @@ async function fetchFresh(dex: SearchQuoteSource, mints: string[]): Promise<void
         const at = Date.now();
         for (const mint of start) remember(mint, null, at);
       } finally {
-        for (const mint of start) inflight.delete(mint);
+        for (const mint of start) if (inflight.get(mint) === bounded) inflight.delete(mint);
         release();
       }
     })();
-    wait.push(job);
+    // The client is asked to stop at 2s. This bound still returns if that fetch never settles.
+    bounded = settleWithin(job, SEARCH_MARKET_FETCH_WAIT_MS);
+    for (const mint of start) inflight.set(mint, bounded);
+    // Drop the slot when the wait ends, even if the fetch is still hung, so the next search can try.
+    void bounded.then(() => {
+      for (const mint of start) if (inflight.get(mint) === bounded) inflight.delete(mint);
+    });
+    wait.push(bounded);
   }
-  await Promise.all(wait);
+  await Promise.all(wait.map((p) => settleWithin(p, SEARCH_MARKET_FETCH_WAIT_MS)));
 }
 
 interface ShellRow {

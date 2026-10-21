@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { CandidateToken } from "@trenchscanner/core";
 import {
+  allowSearchDexCall,
   clearSearchMarketMemory,
   coalesceMarketReadings,
   fillSearchMarketHits,
+  SEARCH_DEX_CALLS_PER_MINUTE,
   SEARCH_MARKET_FRESH_MS,
+  SEARCH_MARKET_FETCH_WAIT_MS,
   type SearchMarketHit,
   type SearchQuoteSource,
 } from "./searchMarket.js";
@@ -200,5 +203,33 @@ describe("fillSearchMarketHits", () => {
       NOW,
     );
     expect(filled).toMatchObject({ marketCapUsd: 4_000, holderCount: 9 });
+  });
+
+  it("stops asking DexScreener once search has used its share of the minute", async () => {
+    for (let i = 0; i < SEARCH_DEX_CALLS_PER_MINUTE; i++) expect(allowSearchDexCall(NOW + i)).toBe(true);
+    expect(allowSearchDexCall(NOW + 100)).toBe(false);
+    const dex = source({ fetched: [token("mint", 12_000)] });
+    const [filled] = await fillSearchMarketHits(
+      [hit({ marketCapUsd: 4_000, marketCapAt: new Date(NOW - 90_000) })],
+      dex,
+      NOW + 100,
+    );
+    expect(dex.calls).toEqual([]);
+    expect(filled?.marketCapUsd).toBe(4_000);
+  });
+
+  it("asks with the 2s deadline and answers without waiting out a hung fetch", async () => {
+    let deadline: number | undefined;
+    const dex = source({});
+    dex.getTokensByAddresses = async (mints, _concurrency, options) => {
+      deadline = options?.deadlineMs;
+      dex.calls.push(mints);
+      return new Promise(() => {});
+    };
+    const started = Date.now();
+    const [filled] = await fillSearchMarketHits([hit()], dex, Date.now());
+    expect(deadline).toBe(SEARCH_MARKET_FETCH_WAIT_MS);
+    expect(Date.now() - started).toBeLessThan(SEARCH_MARKET_FETCH_WAIT_MS + 800);
+    expect(filled?.marketCapUsd).toBeNull();
   });
 });

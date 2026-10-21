@@ -22,7 +22,7 @@ describe("view stamps per account", () => {
 });
 
 describe("text search budget", () => {
-  it("allows 30 searches a minute per account", () => {
+  it("allows 30 searches a minute per account, mint lookups included", () => {
     const t0 = 5_000_000;
     for (let i = 0; i < 30; i++) expect(allowTextSearch("searcher", t0 + i)).toBe(true);
     expect(allowTextSearch("searcher", t0 + 31)).toBe(false);
