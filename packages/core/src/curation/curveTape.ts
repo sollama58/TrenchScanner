@@ -342,8 +342,20 @@ export class CurveTape {
     mint: string,
     afterMs: number,
     untilMs: number,
-  ): { basis: { at: number; price: number } | null; changes: { at: number; price: number }[] } {
-    const empty = { basis: null, changes: [] as { at: number; price: number }[] };
+  ): {
+    basis: { at: number; price: number } | null;
+    changes: { at: number; price: number }[];
+    /** False when the mint has no tape, or the curve is not quoted in SOL. */
+    quoteIsSol: boolean;
+    /** Milliseconds of [afterMs, untilMs] the unbroken cover includes. */
+    coveredMs: number;
+  } {
+    const empty = {
+      basis: null,
+      changes: [] as { at: number; price: number }[],
+      quoteIsSol: false,
+      coveredMs: 0,
+    };
     const tape = this.tapes.get(mint);
     if (!tape || tape.ticks.length === 0 || !(untilMs > afterMs)) return empty;
     if (untilMs < tape.coveredFrom) return empty;
@@ -355,7 +367,12 @@ export class CurveTape {
       else if (tick.at <= untilMs) changes.push({ at: tick.at, price: tick.price });
       else break;
     }
-    return { basis, changes };
+    // Unbroken cover inside the asked window. A hole resets coveredFrom, so the stretch before
+    // it is not claimed. A single print is a point: coveredMs is 0, and the print is still a change.
+    const coverEnd = Math.min(untilMs, tape.confirmedAt);
+    const coverStart = Math.max(afterMs, tape.coveredFrom);
+    const coveredMs = coverEnd > coverStart ? coverEnd - coverStart : 0;
+    return { basis, changes, quoteIsSol: tape.quoteIsSol, coveredMs };
   }
 
   /** Forgets a mint. */
