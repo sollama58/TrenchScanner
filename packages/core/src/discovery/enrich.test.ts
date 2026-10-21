@@ -153,13 +153,17 @@ describe("enrichToken", () => {
 
   it("leaves an unindexed or too-close holder reading unknown, not 0", () => {
     const readAt = new Date("2026-01-01T00:48:00Z");
-    const close = enrichToken(candidate, { ...onChain, holderCountAt: readAt }, {
-      previousHolderCount: 220,
-      previousHolderCountAt: readAt,
-      previousHolderCount10m: 220,
-      previousHolderCount10mAt: new Date(readAt.getTime() - 4 * 60_000),
-      holderGrowthWindowMinutes: 30,
-    });
+    const close = enrichToken(
+      candidate,
+      { ...onChain, holderCountAt: readAt },
+      {
+        previousHolderCount: 220,
+        previousHolderCountAt: readAt,
+        previousHolderCount10m: 220,
+        previousHolderCount10mAt: new Date(readAt.getTime() - 4 * 60_000),
+        holderGrowthWindowMinutes: 30,
+      },
+    );
     expect(close.holderGrowthPct).toBeUndefined();
     expect(close.holderGrowth10mPct).toBeUndefined();
     expect(close.holderGrowthPct).not.toBe(0);
@@ -172,24 +176,32 @@ describe("enrichToken", () => {
     expect(untimed.holderGrowthPct).toBeUndefined();
     expect(untimed.holderGrowth10mPct).toBeUndefined();
     // 0 holders is an unindexed list. It is not flat growth and not -100%.
-    const unindexed = enrichToken(candidate, { ...onChain, holderCount: 0, riskScore: 0 }, {
-      previousHolderCount: 200,
-      previousHolderCountAt: new Date("2026-01-01T00:00:00Z"),
-      previousHolderCount10m: 180,
-      previousHolderCount10mAt: new Date("2026-01-01T00:30:00Z"),
-      holderGrowthWindowMinutes: 30,
-    });
+    const unindexed = enrichToken(
+      candidate,
+      { ...onChain, holderCount: 0, riskScore: 0 },
+      {
+        previousHolderCount: 200,
+        previousHolderCountAt: new Date("2026-01-01T00:00:00Z"),
+        previousHolderCount10m: 180,
+        previousHolderCount10mAt: new Date("2026-01-01T00:30:00Z"),
+        holderGrowthWindowMinutes: 30,
+      },
+    );
     expect(unindexed.holderCount).toBeUndefined();
     expect(unindexed.holderGrowthPct).toBeUndefined();
     expect(unindexed.holderGrowth10mPct).toBeUndefined();
     expect(unindexed.riskScore).toBeUndefined();
     expect(enrichToken(candidate, null, { previousHolderCount: 200 }).holderGrowthPct).toBeUndefined();
     // Two readings half a window apart that did not change are a real flat.
-    const flat = enrichToken(candidate, { ...onChain, holderCountAt: readAt }, {
-      previousHolderCount: 220,
-      previousHolderCountAt: new Date(readAt.getTime() - 20 * 60_000),
-      holderGrowthWindowMinutes: 30,
-    });
+    const flat = enrichToken(
+      candidate,
+      { ...onChain, holderCountAt: readAt },
+      {
+        previousHolderCount: 220,
+        previousHolderCountAt: new Date(readAt.getTime() - 20 * 60_000),
+        holderGrowthWindowMinutes: 30,
+      },
+    );
     expect(flat.holderCount).toBe(220);
     expect(flat.holderGrowthPct).toBe(0);
   });

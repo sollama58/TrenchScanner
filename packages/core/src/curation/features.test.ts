@@ -107,7 +107,13 @@ describe("buildCandidateFeatures - short-window derivations", () => {
       expect(LEARNER_FEATURE_NAMES).not.toContain(name);
     }
     expect(LEARNER_FEATURE_NAMES.length).toBe(CANDIDATE_FEATURE_NAMES.length - RETIRED_LEARNER_INPUTS.size);
-    for (const name of ["launchAgeMinutes", "pairAgeMinutes", "buyRatio5m", "buyRatio24h", "ctxHourSin"] as const)
+    for (const name of [
+      "launchAgeMinutes",
+      "pairAgeMinutes",
+      "buyRatio5m",
+      "buyRatio24h",
+      "ctxHourSin",
+    ] as const)
       expect(LEARNER_FEATURE_NAMES).toContain(name);
     // The mixed clock is recorded for deployed models and is not fit.
     expect(RETIRED_LEARNER_INPUTS.has("ageMinutes")).toBe(true);
@@ -1264,7 +1270,9 @@ describe("the market seats' TokenSage inputs", () => {
     expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
     expect(LEARNER_FEATURE_NAMES).toContain("nsCatAnimal");
     expect(LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
-    expect(MARKET_LEARNER_FEATURE_NAMES.filter((n) => isTokenSageInput(n))).toEqual([...MARKET_TOKENSAGE_INPUTS]);
+    expect(MARKET_LEARNER_FEATURE_NAMES.filter((n) => isTokenSageInput(n))).toEqual([
+      ...MARKET_TOKENSAGE_INPUTS,
+    ]);
     for (const name of LEARNER_FEATURE_NAMES.filter((n) => !isTokenSageInput(n))) {
       expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
     }

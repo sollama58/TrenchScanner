@@ -47,7 +47,10 @@ const atOf = (value: string | null | undefined): number => {
  * Lays a newer market reading over a search row. A field only the older side has is kept, so a
  * refresh that learned the market cap does not wipe a volume the row already showed.
  */
-export function overlaySearchMarket<T extends TokenSearchHit>(hit: T, patch: SearchMarketPatch | undefined): T {
+export function overlaySearchMarket<T extends TokenSearchHit>(
+  hit: T,
+  patch: SearchMarketPatch | undefined,
+): T {
   if (!patch || patch.mint !== hit.mint) return hit;
   const newer = atOf(patch.marketCapAt) >= atOf(hit.marketCapAt) && atOf(patch.marketCapAt) > 0;
   const num = (key: "marketCapUsd" | "volume24hUsd" | "liquidityUsd" | "holderCount") => {
