@@ -10,7 +10,10 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    // Resolves @trenchscanner/core/chartMarks to its source. Render's web build does not compile
+    // packages/core, and the Node conditions of that export stay on dist for the api and worker.
+    "customConditions": ["trenchscanner-web"]
   },
   "include": ["src", "vite.config.ts"]
 }

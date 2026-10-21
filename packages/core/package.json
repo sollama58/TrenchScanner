@@ -8,7 +8,12 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": "./dist/index.js",
-    "./chartMarks": "./dist/chartMarks.js",
+    "./chartMarks": {
+      "trenchscanner-web": "./src/chartMarks.ts",
+      "types": "./dist/chartMarks.d.ts",
+      "import": "./dist/chartMarks.js",
+      "default": "./dist/chartMarks.js"
+    },
     "./prisma": "./generated/prisma/index.js"
   },
   "scripts": {
