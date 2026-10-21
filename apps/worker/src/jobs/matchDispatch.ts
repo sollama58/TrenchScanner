@@ -259,6 +259,7 @@ export async function createMatchesForCandidate(opts: {
     activeFilters,
     guard: env?.MATCH_ALERT_GUARD,
     walletWaitMs: env ? env.FILTER_WALLET_MAX_WAIT_SECONDS * 1000 : undefined,
+    unknownRiskFails: env?.SAFETY_UNKNOWN_RISK_FAILS,
   });
   if (toAlert.length === 0) return 0;
 
@@ -295,13 +296,17 @@ export async function resolveAlertTargets(opts: {
    * seconds restarted it on each scan - the FILTER_WALLET_MAX_WAIT_SECONDS bound never ran out.
    */
   clearWalletWait?: boolean;
+  /** SAFETY_UNKNOWN_RISK_FAILS. Omitted means off: an unknown risk ceiling still passes. */
+  unknownRiskFails?: boolean;
 }): Promise<FilterWithUser[]> {
   const { tokenId, scored, activeFilters } = opts;
   const clearWait = () => {
     if (opts.clearWalletWait !== false) clearFilterWalletWait(scored.mintAddress);
   };
 
-  const allMatching = activeFilters.filter((filter) => matchesFilter(scored, filter));
+  const allMatching = activeFilters.filter((filter) =>
+    matchesFilter(scored, filter, { unknownFails: opts.unknownRiskFails }),
+  );
   if (allMatching.length === 0) {
     clearWait();
     return [];

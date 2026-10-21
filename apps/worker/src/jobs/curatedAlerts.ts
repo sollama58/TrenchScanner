@@ -426,7 +426,9 @@ function readHeuristicCutoff(evalMetrics: unknown): number | undefined {
  * CURATED_HEURISTIC_PRECISION_GATE=false restores the gate-only behaviour.
  */
 function heuristicGate(scored: ScoredToken, rankCutoff: number | undefined, env: Env): CurationDecision {
-  const decision = evaluateCandidateHeuristic(scored, env.CURATED_MIN_SCORE);
+  const decision = evaluateCandidateHeuristic(scored, env.CURATED_MIN_SCORE, {
+    unknownFails: env.SAFETY_UNKNOWN_RISK_FAILS,
+  });
   if (!decision.curate || !env.CURATED_HEURISTIC_PRECISION_GATE || rankCutoff === undefined) {
     return decision;
   }
@@ -543,7 +545,8 @@ function decideCurations(
       );
     } else if (entry.role === "learner") {
       // A gated seat considers only what its frozen filter lets through: no score, no decision.
-      if (entry.gate && !passesModelGate(scored, entry.gate)) continue;
+      if (entry.gate && !passesModelGate(scored, entry.gate, { unknownFails: env.SAFETY_UNKNOWN_RISK_FAILS }))
+        continue;
       // A seat on a reading of its own (Winners) considers only moments that carry it.
       if (entry.spec.requires !== undefined && !seatConsiders(entry.spec, features, undefined)) continue;
       const { params, id } = entry.model;

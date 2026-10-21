@@ -743,6 +743,14 @@ const envSchema = z.object({
   // decision rows the cutoffs are set on matches what live candidates carry. Without it, a run
   // right after new inputs ship sets its cutoffs and high-conviction line on rows that lack them.
   // "false" trains on every input as before.
+  // Missing RugCheck risk, holder count, or holder growth fails a criterion that reads it.
+  // Off (the default): an unknown ceiling still passes, which is what the filters and the
+  // heuristic shipped with. On is an owner decision (review 2026-10-21): it also drops coins
+  // RugCheck has not indexed yet, which is most coins in their first minute.
+  SAFETY_UNKNOWN_RISK_FAILS: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   CURATOR_FEATURE_ONSET_GUARD: z
     .enum(["true", "false"])
     .default("true")

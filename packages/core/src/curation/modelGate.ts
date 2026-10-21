@@ -1,4 +1,5 @@
 import type { FilterCriteria, ScoredToken } from "../types.js";
+import type { UnknownRiskPolicy } from "../scoring/matchFilters.js";
 import { matchesFilter } from "../scoring/matchFilters.js";
 import { STONKS_LAUNCHPAD, PUMPFUN_LAUNCHPAD } from "../launchpads.js";
 import { scoredFromFeatures } from "./features.js";
@@ -60,11 +61,26 @@ const WALLET_CEILINGS: readonly {
 const isSet = (v: unknown) => v !== null && v !== undefined;
 
 /** Whether the token passes the gate live: the filter's own check, once every capped figure is in. */
-export function passesModelGate(scored: ScoredToken, gate: FilterCriteria): boolean {
+export function passesModelGate(
+  scored: ScoredToken,
+  gate: FilterCriteria,
+  policy?: UnknownRiskPolicy,
+): boolean {
   for (const c of WALLET_CEILINGS) {
     if (c.criteria.some((k) => isSet(gate[k])) && scored[c.scored] === undefined) return false;
   }
-  return matchesFilter(scored, gate);
+  if (policy?.unknownFails && gate.maxRiskScore != null && scored.riskScore === undefined) return false;
+  if (policy?.unknownFails && gate.minHolderGrowthPct != null && scored.holderGrowth10mPct === undefined) {
+    return false;
+  }
+  if (
+    policy?.unknownFails &&
+    gate.minLiveHolderCount != null &&
+    scored.freshQuote?.holderCount === undefined
+  ) {
+    return false;
+  }
+  return matchesFilter(scored, gate, policy);
 }
 
 /** Top-level TokenSage labels, the only category ids a stored vector can answer (nsCat* bits). */
@@ -126,6 +142,7 @@ export function passesModelGateOnFeatures(
   features: Readonly<Record<string, number | null | undefined>>,
   gate: FilterCriteria,
   unrecorded: ReadonlySet<string> = NONE_UNRECORDED,
+  policy?: UnknownRiskPolicy,
 ): boolean {
   const f = (name: string): number | undefined => {
     const v = features[name];
@@ -138,6 +155,8 @@ export function passesModelGateOnFeatures(
   };
   const ceiling = (max: number | null | undefined, name: string) => {
     const v = f(name);
+    if (policy?.unknownFails && name === "riskScore" && isSet(max) && on(name) && v === undefined)
+      return false;
     return !isSet(max) || !on(name) || v === undefined || v <= max!;
   };
   const known = (max: number | null | undefined, name: string) =>
@@ -159,6 +178,14 @@ export function passesModelGateOnFeatures(
     (f("volumeToMcapRatio") ?? 0) < gate.minVolumeMcapRatio!
   )
     return false;
+  if (
+    policy?.unknownFails &&
+    isSet(gate.minHolderGrowthPct) &&
+    on("holderGrowth10mPct") &&
+    f("holderGrowth10mPct") === undefined
+  ) {
+    return false;
+  }
   if (
     isSet(gate.minHolderGrowthPct) &&
     on("holderGrowth10mPct") &&
@@ -208,6 +235,14 @@ export function passesModelGateOnFeatures(
   if (!ceiling(gate.maxFlaggedBuySol, "flaggedBuySol")) return false;
 
   // matchesFilter reads a missing quote's holder count as 0.
+  if (
+    policy?.unknownFails &&
+    isSet(gate.minLiveHolderCount) &&
+    on("jupHolderCount") &&
+    f("jupHolderCount") === undefined
+  ) {
+    return false;
+  }
   if (
     isSet(gate.minLiveHolderCount) &&
     on("jupHolderCount") &&
@@ -380,12 +415,13 @@ export function seatConsiders(
   features: Readonly<Record<string, number | null | undefined>>,
   gate: FilterCriteria | undefined,
   unrecorded?: ReadonlySet<string>,
+  policy?: UnknownRiskPolicy,
 ): boolean {
   if (spec.requires !== undefined) {
     const v = features[spec.requires];
     if (typeof v !== "number" || !Number.isFinite(v)) return false;
   }
   if (spec.gate !== undefined)
-    return gate !== undefined && passesModelGateOnFeatures(features, gate, unrecorded);
+    return gate !== undefined && passesModelGateOnFeatures(features, gate, unrecorded, policy);
   return true;
 }

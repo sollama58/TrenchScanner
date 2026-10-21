@@ -243,6 +243,7 @@ async function trainCurators(
       highConvictionRank: env.CURATED_HIGH_CONVICTION_RANK,
       calibrationWindowDays: env.CURATOR_CALIBRATION_WINDOW_DAYS,
       featureOnsetGuard: env.CURATOR_FEATURE_ONSET_GUARD,
+      unknownRiskFails: env.SAFETY_UNKNOWN_RISK_FAILS,
       windowStart,
       rulesFromBest: env.CURATOR_RULES_FROM_BEST,
       rulesTeachers,

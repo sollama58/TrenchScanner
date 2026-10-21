@@ -31,7 +31,22 @@ import {
  *    The trend criterion needs the deep read, so it fails on a quick one; so does "exclude
  *    unrelated X", unless the coin has no X link for the deep read to judge (2026-10-07).
  */
-export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boolean {
+/**
+ * When true, a missing risk score, holder count, or holder-growth reading fails any criterion
+ * that reads it. Off everywhere that does not pass it: an unknown ceiling still passes, which
+ * is the shipped rule (a ceiling cannot be shown to be exceeded by data we do not have, and
+ * RugCheck often has not indexed a coin in its first minute). On is env SAFETY_UNKNOWN_RISK_FAILS,
+ * default false, so turning it on is an owner decision (2026-10-21 review).
+ */
+export interface UnknownRiskPolicy {
+  unknownFails?: boolean;
+}
+
+export function matchesFilter(
+  token: ScoredToken,
+  filter: FilterCriteria,
+  policy?: UnknownRiskPolicy,
+): boolean {
   if (token.marketCapUsd < filter.mcapMin || token.marketCapUsd > filter.mcapMax) {
     return false;
   }
@@ -52,6 +67,9 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
   // Over the last 10 minutes (user decision 2026-10-15, notes/overlap-audit-2026-10-15/report.md):
   // the 30-minute growth it read before is unknown for every coin under 30 minutes old, so the
   // floor, failing closed, hid every young coin whatever its value.
+  if (policy?.unknownFails && filter.minHolderGrowthPct != null && token.holderGrowth10mPct === undefined) {
+    return false;
+  }
   if (
     filter.minHolderGrowthPct != null &&
     (token.holderGrowth10mPct ?? -Infinity) < filter.minHolderGrowthPct
@@ -83,6 +101,9 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     return false;
   }
 
+  if (policy?.unknownFails && filter.maxRiskScore != null && token.riskScore === undefined) {
+    return false;
+  }
   if (filter.maxRiskScore != null && token.riskScore !== undefined && token.riskScore > filter.maxRiskScore) {
     return false;
   }
@@ -204,6 +225,13 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
   }
 
   // A floor, so it fails closed: without a fresh quote the count is unknown.
+  if (
+    policy?.unknownFails &&
+    filter.minLiveHolderCount != null &&
+    token.freshQuote?.holderCount === undefined
+  ) {
+    return false;
+  }
   if (filter.minLiveHolderCount != null && (token.freshQuote?.holderCount ?? 0) < filter.minLiveHolderCount) {
     return false;
   }

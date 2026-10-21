@@ -77,6 +77,14 @@ describe("matchesFilter", () => {
     expect(matchesFilter(baseToken({ riskScore: 80 }), filter)).toBe(false);
     expect(matchesFilter(baseToken({ riskScore: 20 }), filter)).toBe(true);
     expect(matchesFilter(baseToken({ riskScore: undefined }), filter)).toBe(true);
+    // SAFETY_UNKNOWN_RISK_FAILS: a missing score, growth, or holder count fails the criterion.
+    const strict = { unknownFails: true };
+    expect(matchesFilter(baseToken({ riskScore: undefined }), filter, strict)).toBe(false);
+    expect(matchesFilter(baseToken({ riskScore: 20 }), filter, strict)).toBe(true);
+    const growth = { ...baseFilter, minHolderGrowthPct: 10 };
+    expect(matchesFilter(baseToken({ holderGrowth10mPct: undefined }), growth, strict)).toBe(false);
+    const holders = { ...baseFilter, minLiveHolderCount: 30 };
+    expect(matchesFilter(baseToken({ freshQuote: undefined }), holders, strict)).toBe(false);
   });
 
   it("applies excludeCriticalRiskFlags", () => {
