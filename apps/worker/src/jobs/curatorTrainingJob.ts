@@ -36,6 +36,7 @@ import {
   applyClockFeatures,
   isPreFeeWalletStonksRow,
   withLaunchAge,
+  withoutPreCanonicalPairAge,
   AGE_FROM_LAUNCH_SINCE,
   TRAINING_ROW_RULES_SINCE,
   trainingWeightByAge,
@@ -1428,14 +1429,17 @@ async function loadRowsOfKind(
       // whose true age is unknown and may be past the age cap leaves the set.
       const launched = withLaunchAge(r.anchorAt, masked, loaded.launchedAt);
       if (launched === null) continue;
+      // A pair age banked before #896 can be a junk pool's clock. Cleared after withLaunchAge,
+      // which still needs it to drop a pool-aged row whose launch time is unknown.
+      const dated = withoutPreCanonicalPairAge(r.anchorAt, launched);
       // A row re-graded in place (born rule 3 after the fresh quotes began, no usable quote at the
       // scan) had its fresh-price gap overwritten with the candle re-grade's, measured after the
       // decision: live, the same no-quote decision carries no gap at all. Cleared before the
       // clock block, which rebuilds the decision's market cap from this gap.
-      if (loaded.rule3Grade !== null && launched.freshGapPct !== undefined) launched.freshGapPct = null;
+      if (loaded.rule3Grade !== null && dated.freshGapPct !== undefined) dated.freshGapPct = null;
       // The named windows are "since the pair opened" on a young pair. Fill the per-minute and
       // full-window readings from inputs this row already stored (curation/clockFeatures.ts).
-      const features = applyClockFeatures(launched);
+      const features = applyClockFeatures(dated);
       const row: TrainingRow = {
         tokenId: r.tokenId,
         anchorAt: r.anchorAt,

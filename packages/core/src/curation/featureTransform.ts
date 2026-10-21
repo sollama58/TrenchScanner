@@ -17,6 +17,11 @@ export const CURRENT_FEATURE_TRANSFORM: FeatureTransform = "signed-log1p-v1";
 /**
  * Features left on their raw scale under the log transform: already bounded (0-100 scores and
  * shares, 0/1 flags) or small counts where a log adds nothing.
+ *
+ * Per-minute rates (volPerMin*, pxSincePairPerMin, pathRet*PerMin) are floored at one minute of
+ * elapsed time before they are stored (clockFeatures.ts MIN_RATE_MINUTES, 2026-10-21), so a
+ * seconds-old pair cannot dominate this log. The floor lives with the division, where training
+ * and live both rebuild the number.
  */
 const UNTRANSFORMED_FEATURES = new Set([
   "buyRatio24h",
