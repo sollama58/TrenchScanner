@@ -92,6 +92,21 @@ describe("buildCandidateFeatures - short-window derivations", () => {
       expect(LEARNER_FEATURE_NAMES).toContain(name);
     // The tape's coverage is a learner input and rides with the path block, live and replayed.
     expect(LEARNER_FEATURE_NAMES).toContain("pathGapMinutes");
+    expect(new Set(CANDIDATE_FEATURE_NAMES).size).toBe(CANDIDATE_FEATURE_NAMES.length);
+    // The clock-honest readings are recorded and watched, and no learner reads them yet.
+    for (const name of [
+      "volPerMin24h",
+      "pxSincePairPerMin",
+      "px5mFullPct",
+      "launchAgeMinutes",
+      "decisionMcapUsd",
+      "freshQuoteAgeSec",
+      "pathSpan15mMin",
+      "pathRet15mPerMin",
+    ] as const) {
+      expect(CANDIDATE_FEATURE_NAMES).toContain(name);
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+    }
     expect(PRICE_PATH_FEATURES).toContain("pathGapMinutes");
     expect(learnerSubset(["scoreTotal", "ageMinutes", "hasTelegram"])).toEqual(["ageMinutes"]);
   });
@@ -158,6 +173,77 @@ describe("buildCandidateFeatures - short-window derivations", () => {
     expect(at(new Date(now.getTime() + 5_000))).toBe(0);
   });
 
+  it("rates a young pair's windows by the minutes they actually cover", () => {
+    const now = new Date("2026-10-21T12:00:00Z");
+    const young = buildCandidateFeatures(
+      scored({
+        marketCapUsd: 20_000,
+        volume5mUsd: 12_000,
+        volume24hUsd: 12_000,
+        buys24h: 80,
+        sells24h: 40,
+        priceChange5mPct: 40,
+        priceChange1hPct: 40,
+        priceChange6hPct: 40,
+        priceChange24hPct: 40,
+        ageMinutes: 2,
+        ageFromLaunch: true,
+        minutesSinceFirstInBand: 1,
+        pairCreatedAt: new Date(now.getTime() - 2 * 60_000),
+        freshQuote: { priceUsd: 0.00011, marketCapUsd: 22_000, fetchedAt: now },
+      }),
+      now,
+    );
+    // Lifetime volume and the since-open move, not four copies of a 24h window.
+    expect(young.volPerMin5m).toBeCloseTo(6_000);
+    expect(young.volPerMin24h).toBeCloseTo(6_000);
+    expect(young.tradesPerMin24h).toBeCloseTo(60);
+    expect(young.px5mFullPct).toBeNull();
+    expect(young.px1hFullPct).toBeNull();
+    expect(young.pxSincePairPct).toBe(40);
+    expect(young.pxSincePairPerMin).toBeCloseTo(20);
+    expect(young.launchAgeMinutes).toBe(2);
+    expect(young.bandDwellShare).toBeCloseTo(0.5);
+    // The label's cap is the fresh quote on the scan's supply: 20_000 * 1.1.
+    expect(young.freshGapPct).toBeCloseTo(10);
+    expect(young.decisionMcapUsd).toBeCloseTo(22_000);
+    expect(young.freshQuoteAgeSec).toBe(0);
+
+    const aged = buildCandidateFeatures(
+      scored({
+        volume24hUsd: 144_000,
+        priceChange5mPct: 5,
+        priceChange1hPct: 12,
+        priceChange6hPct: 80,
+        priceChange24hPct: 80,
+        ageMinutes: 90,
+        ageFromLaunch: false,
+        pairCreatedAt: new Date(now.getTime() - 90 * 60_000),
+      }),
+      now,
+    );
+    // 90 minutes old: the 5m and 1h moves are real windows, the 6h print is still since the pair opened.
+    expect(aged.px5mFullPct).toBe(5);
+    expect(aged.px1hFullPct).toBe(12);
+    expect(aged.pxSincePairPct).toBe(80);
+    expect(aged.pxSincePairPerMin).toBeCloseTo(80 / 90);
+    expect(aged.volPerMin24h).toBeCloseTo(144_000 / 90);
+    expect(aged.launchAgeMinutes).toBeNull();
+    expect(aged.bandDwellShare).toBeNull();
+
+    const day = buildCandidateFeatures(
+      scored({
+        volume24hUsd: 144_000,
+        priceChange24hPct: 30,
+        pairCreatedAt: new Date(now.getTime() - 2 * 24 * 60 * 60_000),
+      }),
+      now,
+    );
+    expect(day.pxSincePairPct).toBeNull();
+    expect(day.volPerMin24h).toBeCloseTo(100);
+    expect(day.decisionMcapUsd).toBe(150_000);
+  });
+
   it("records every declared feature name, unknowns as null", () => {
     const f = buildCandidateFeatures(scored({}));
     for (const name of CANDIDATE_FEATURE_NAMES) {
@@ -219,7 +305,8 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(buildCandidateFeatures(scored({ launchpad: "bonk" })).launchpadStonks).toBeNull();
     expect(scoredFromFeatures(stonks, 0.0001, 150_000).launchpad).toBe("stonks");
     expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).launchpad).toBeUndefined();
-    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("devLaunchFamilyLaunches");
+    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("pathRet30mPerMin");
+    expect(CANDIDATE_FEATURE_NAMES).toContain("devLaunchFamilyLaunches");
     // Appended on 2026-10-16: the scored top-10 count behind walletRiskTop10Max.
     expect(CANDIDATE_FEATURE_NAMES).toContain("walletRiskScoredTop10");
   });

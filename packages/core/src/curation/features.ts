@@ -13,6 +13,9 @@ import {
   type MarketContextFeatures,
   type PricePathFeatures,
 } from "./pricePath.js";
+import { applyClockFeatures, CLOCK_HONEST_FEATURES, PATH_CLOCK_FEATURES } from "./clockFeatures.js";
+
+export { applyClockFeatures, CLOCK_HONEST_FEATURES, PATH_CLOCK_FEATURES };
 import {
   NARRATIVE_FEATURES,
   NARRATIVE_FEATURES_V2,
@@ -34,9 +37,10 @@ import {
  * same Jupiter answer as the fresh quote, at no extra request. It is seconds old, where RugCheck's
  * (holderCount) is a cached report that can be minutes old or missing: on 2026-10-12 from 13:00 to
  * 21:00 UTC most decisions on coins under five minutes old had none. Recorded so it can be judged
- * on decision rows, not yet read (RETIRED_LEARNER_INPUTS). Null without a quote, and on every row
- * banked before. (Jupiter's organic-buyer figures were looked at too and left out: on coins under
- * five minutes old its organic score reads 0 and the organic counts are absent.)
+ * on decision rows. Read by the learners (jupHolderCount is not in RETIRED_LEARNER_INPUTS): it
+ * replaced RugCheck's holder count, which had gone missing on young coins. Null without a quote,
+ * and on every row banked before. (Jupiter's organic-buyer figures were looked at too and left
+ * out: on coins under five minutes old its organic score reads 0 and the organic counts are absent.)
  */
 export const JUPITER_EXTRA_FEATURES = ["jupHolderCount"] as const;
 
@@ -603,6 +607,14 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...WINNER_FOLLOW_FEATURES,
   ...CURVE_PATH_FEATURES,
   ...DEV_LAUNCH_FEATURES,
+  // Appended last (2026-10-21 audit). The named DexScreener and Jupiter windows are the move
+  // since the pair opened whenever the pair is younger than the window, and the tape's 15 and
+  // 30-minute returns answer across a short tape. These are the same readings divided by the
+  // minutes they actually cover (curation/clockFeatures.ts). Recorded on every row, including
+  // rows banked before (the training load fills them from inputs the row already has). No
+  // learner reads them until a walk-forward takes them out of RETIRED_LEARNER_INPUTS.
+  ...CLOCK_HONEST_FEATURES,
+  ...PATH_CLOCK_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -808,6 +820,14 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "mktBaseRate1hPct",
   "mktBaseRate6hPct",
   "pathRet5mPct",
+  // The clock-honest readings (2026-10-21 audit, curation/clockFeatures.ts): recorded so the
+  // feature report can score them against the mislabeled windows, not fit until a paired
+  // walk-forward shows they earn their place. Promote by deleting these two spreads. The
+  // named-window inputs stay until that same backtest says the full-window and per-minute
+  // readings replace them — deleting priceChange1hPct or volume24hUsd here before then changes
+  // the next fit with no measurement.
+  ...CLOCK_HONEST_FEATURES,
+  ...PATH_CLOCK_FEATURES,
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
@@ -1378,6 +1398,7 @@ export const PRICE_PATH_FEATURES = [
   "pathHolderSlope10m",
   "pathObservedMinutes",
   "pathGapMinutes",
+  ...PATH_CLOCK_FEATURES,
 ] as const satisfies readonly (CandidateFeatureName & keyof PricePathFeatures)[];
 
 /** The market-context features, in vector order - each a MarketContextFeatures field of the same name. */
@@ -1479,6 +1500,24 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   pathHolderSlope10m: "holders per minute",
   pathObservedMinutes: "minutes on tape",
   pathGapMinutes: "minutes off tape (30m)",
+  pathSpan15mMin: "minutes the 15m return spans",
+  pathSpan30mMin: "minutes the 30m return spans",
+  pathRet15mPerMin: "15m path return per minute",
+  pathRet30mPerMin: "30m path return per minute",
+  volPerMin5m: "5m volume per minute",
+  volPerMin24h: "volume per minute",
+  tradesPerMin24h: "trades per minute",
+  px5mFullPct: "5m price move, full window",
+  px1hFullPct: "1h price move, full window",
+  pxSincePairPct: "price move since the pair opened",
+  pxSincePairPerMin: "price move per minute since the pair opened",
+  jupPx5mFullPct: "Jupiter 5m move, full window",
+  jupPx1hFullPct: "Jupiter 1h move, full window",
+  jupVolPerMin5m: "Jupiter 5m volume per minute",
+  launchAgeMinutes: "age since launch",
+  bandDwellShare: "share of life in the band",
+  decisionMcapUsd: "market cap at the decision",
+  freshQuoteAgeSec: "fresh quote age (seconds)",
   curveCoveredSec: "seconds of curve tape",
   curveRet10sPct: "curve return (10s)",
   curveRet30sPct: "curve return (30s)",
@@ -1767,7 +1806,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
       ? (scored.volume5mUsd * 12) / scored.volume1hUsd
       : null;
 
-  return {
+  const features = {
     mcapUsd: scored.marketCapUsd ?? null,
     liquidityUsd: scored.liquidityUsd ?? null,
     volume24hUsd: scored.volume24hUsd ?? null,
@@ -1928,7 +1967,14 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     // A pair time a few seconds ahead of this clock is skew, not a pool from the future.
     pairAgeMinutes: pairAgeMinutes === undefined ? null : Math.max(0, pairAgeMinutes),
     ...freshQuoteFeatures(scored),
+    freshQuoteAgeSec:
+      scored.freshQuote?.fetchedAt instanceof Date && !Number.isNaN(scored.freshQuote.fetchedAt.getTime())
+        ? Math.max(0, (now.getTime() - scored.freshQuote.fetchedAt.getTime()) / 1000)
+        : null,
   };
+  // Filled from the inputs above, so a live row and a training row loaded from storage agree
+  // (applyClockFeatures). The path spans come from the tape; the per-minute returns divide by them.
+  return applyClockFeatures(features);
 }
 
 const FRESH_QUOTE_FEATURES = [
