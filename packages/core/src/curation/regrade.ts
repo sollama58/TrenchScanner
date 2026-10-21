@@ -4,7 +4,7 @@ import {
   CANDIDATE_WATCH_WINDOW_MINUTES,
   cleanPeakPriceUsd,
   computeOutcomeLabels,
-  FRESH_ANCHOR_MAX_RATIO,
+  freshAnchorRatioTrusted,
   initialOutcomeAggregates,
   tenXVerdict,
   TEN_X_WINDOW_MINUTES,
@@ -193,7 +193,7 @@ export function regradeFromCandles(
   const fresh = lastTradedPrice(candles, anchorMs);
   if (fresh === null || !(fresh > 0) || !(row.anchorPriceUsd > 0)) return { skip: "not-covered" };
   const ratio = fresh / row.anchorPriceUsd;
-  if (ratio > FRESH_ANCHOR_MAX_RATIO || ratio < 1 / FRESH_ANCHOR_MAX_RATIO) return { skip: "implausible" };
+  if (!freshAnchorRatioTrusted(ratio)) return { skip: "implausible" };
   // An alert's row starts on the 24h watch; the rest are put there by a clean win.
   const replay = replayOutcome(fresh, row.anchorAt, candles, { extended24h: row.startsExtended, nowMs });
   if (!replay) return { skip: "unfinished" };

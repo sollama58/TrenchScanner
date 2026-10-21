@@ -1,4 +1,4 @@
-import { FRESH_ANCHOR_MAX_RATIO } from "./labels.js";
+import { freshAnchorRatioTrusted } from "./labels.js";
 
 /**
  * Clock-honest readings of inputs the scan already stores under a window's name.
@@ -16,8 +16,9 @@ import { FRESH_ANCHOR_MAX_RATIO } from "./labels.js";
  * window only when the pair has lived the whole of it, and the since-open move once, as its
  * own input, divided by the pair's age. They are derived from inputs the row already carries
  * (applyClockFeatures), so a training row banked before they existed is filled at load time.
- * Recorded on every row and watched on the feature report; no learner reads them until they
- * are taken out of RETIRED_LEARNER_INPUTS after a walk-forward (features.ts).
+ * Recorded on every row and watched on the feature report. launchAgeMinutes is the launch clock
+ * the learners read (null when the launch time is unknown). The rest stay out of the fit until
+ * a walk-forward takes them out of RETIRED_LEARNER_INPUTS (features.ts).
  */
 
 /** The bucket widths, in minutes, DexScreener and Jupiter name their windows by. */
@@ -138,6 +139,8 @@ export function clockFeatureValues(
     [WINDOW_6H_MINUTES, h6],
     [WINDOW_24H_MINUTES, h24],
   ]);
+  // Launch clock only. ageSource 0 is the pool's age in ageMinutes; a missing source is unknown.
+  // withLaunchAge sets ageSource to 1 when it rebuilds ageMinutes from Token.launchedAt.
   const launchAge = features.ageSource === 1 ? finite(features.ageMinutes) : null;
   const dwell = finite(features.minutesSinceFirstInBand);
   let bandDwellShare: number | null = null;
@@ -147,11 +150,7 @@ export function clockFeatureValues(
   const mcap = finite(features.mcapUsd);
   const gap = finite(features.freshGapPct);
   const quoteRatio = gap === null ? null : 1 + gap / 100;
-  const quoteTrusted =
-    quoteRatio !== null &&
-    quoteRatio > 0 &&
-    quoteRatio <= FRESH_ANCHOR_MAX_RATIO &&
-    quoteRatio >= 1 / FRESH_ANCHOR_MAX_RATIO;
+  const quoteTrusted = quoteRatio !== null && freshAnchorRatioTrusted(quoteRatio);
   const jup5mVol = sumSides(finite(features.jup5mBuyVolumeUsd), finite(features.jup5mSellVolumeUsd));
   const span15 = finite(features.pathSpan15mMin);
   const span30 = finite(features.pathSpan30mMin);
@@ -175,10 +174,12 @@ export function clockFeatureValues(
     launchAgeMinutes: launchAge,
     bandDwellShare,
     // The cap the label is graded from: the fresh quote on the scan's supply when the gap was
-    // trusted, else the scan's own cap (decisionAnchor in labels.ts). A gap past
-    // FRESH_ANCHOR_MAX_RATIO is a bad quote, not the anchor. A linear model cannot multiply
-    // mcap by the gap, so the product is its own input.
-    decisionMcapUsd: mcap === null ? null : quoteTrusted ? mcap * quoteRatio! : mcap,
+    // trusted, else the scan's own cap (decisionAnchor / freshAnchorRatioTrusted in labels.ts).
+    // A gap past the anchor's ratio is a bad quote, not the anchor. A linear model cannot
+    // multiply mcap by the gap, so the product is its own input. A scan cap of 0 cannot rebuild
+    // that product; a cap already written from the anchor (the quote's own market cap) is kept.
+    decisionMcapUsd:
+      mcap !== null && mcap > 0 ? (quoteTrusted ? mcap * quoteRatio! : mcap) : finite(features.decisionMcapUsd),
     // How old the fresh quote is. The training load cannot rebuild it (the fetch time was never
     // stored); live scoring sets it from FreshQuote.fetchedAt before this runs. Null is unknown,
     // not "fresh".

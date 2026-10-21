@@ -63,6 +63,18 @@ describe("applyClockFeatures", () => {
     expect(once.pathRet30mPerMin).toBeCloseTo(10 / 30);
   });
 
+  it("keeps a decision cap the anchor already wrote when the scan cap cannot rebuild it", () => {
+    const kept = applyClockFeatures({ mcapUsd: 0, freshGapPct: 10, decisionMcapUsd: 50_000 });
+    expect(kept.decisionMcapUsd).toBe(50_000);
+  });
+
+  it("trusts a fresh quote at the same ratio the label anchor does", () => {
+    expect(applyClockFeatures({ mcapUsd: 10_000, freshGapPct: 400 }).decisionMcapUsd).toBeCloseTo(50_000);
+    expect(applyClockFeatures({ mcapUsd: 10_000, freshGapPct: 400.01 }).decisionMcapUsd).toBe(10_000);
+    expect(applyClockFeatures({ mcapUsd: 10_000, freshGapPct: -80 }).decisionMcapUsd).toBeCloseTo(2_000);
+    expect(applyClockFeatures({ mcapUsd: 10_000, freshGapPct: -80.01 }).decisionMcapUsd).toBe(10_000);
+  });
+
   it("keeps the scan's market cap when the fresh quote is too far to be the anchor", () => {
     const filled = applyClockFeatures({ mcapUsd: 10_000, freshGapPct: 1_000 });
     expect(filled.decisionMcapUsd).toBe(10_000);

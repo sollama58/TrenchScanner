@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { pumpCurveAddressOf, type CurveState } from "@trenchscanner/core";
 import {
   followYoungCurves,
+  curveLabelPrices,
   curvePathOf,
   curvePriceOf,
   onCurveStreamUpdate,
@@ -83,6 +84,15 @@ describe("curve tape", () => {
     // The next cycle's watchlist keeps it.
     followYoungCurves([young], NOW + 1_000);
     expect(curvePriceOf(MINT, NOW + 1_000)).toBe(1);
+    expect(curveLabelPrices(MINT, NOW - 1, NOW)).toEqual({
+      basis: null,
+      changes: [{ at: NOW, price: 1 }],
+    });
+    expect(curveLabelPrices(MINT, NOW, NOW + 60_000)).toEqual({
+      basis: { at: NOW, price: 1 },
+      changes: [],
+    });
+    expect(curveLabelPrices("never", NOW - 1, NOW + 1)).toEqual({ basis: null, changes: [] });
   });
 
   it("follows only the new launches confirmed not Mayhem, and asks again about the unanswered", async () => {

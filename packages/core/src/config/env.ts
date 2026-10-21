@@ -517,10 +517,11 @@ const envSchema = z.object({
   // Curated-alerts training data (see apps/worker/src/jobs/candidateOutcomeJob.ts and
   // packages/core/src/curation/). Every rug-screen-passing candidate gets a CandidateOutcome row
   // at most once per CANDIDATE_SAMPLE_SPACING_MINUTES, and the watcher job price-checks open rows
-  // every CANDIDATE_WATCH_INTERVAL_MINUTES. That cadence is the label's resolution: the win bar
-  // is "2x within 15 minutes", ~15 observations at the default, and a 2x that round-trips inside a
-  // minute is invisible. Shortening this sharpens every future label at a directly proportional
-  // cost in DexScreener calls; stretching it coarsens them.
+  // every CANDIDATE_WATCH_INTERVAL_MINUTES. That cadence is the label's resolution for a coin
+  // the curve tape is not following: the win bar is "2x within 15 minutes", ~15 observations at
+  // the default. A coin the tape is following is also graded on the tape's own prints, so a 2x
+  // or a stop that round-trips inside a minute is visible there (labels.ts, rule 5). Shortening
+  // this sharpens the no-tape labels at a directly proportional cost in DexScreener calls.
   // CANDIDATE_WATCH_MAX_BATCH caps rows per sweep as DexScreener back-pressure. It was 600 until
   // 2026-10-05, when every sweep came back at exactly 600 due (filter-alert anchors had grown to
   // ~40% of new rows); 600 rows were ~390 mints, 13 batched calls and 1.5s, so 2000 is ~45 calls

@@ -5,7 +5,9 @@ import {
   CURRENT_LABEL_RULE,
   DEXSCREENER_ANCHOR_LABEL_RULE,
   decisionAnchor,
+  dollarTicksFromCurve,
   freshQuoteMcapUsd,
+  FINE_TICK_LABEL_RULE,
   FRESH_ANCHOR_LABEL_RULE,
   isCurrentLabelRule,
   initialOutcomeAggregates,
@@ -415,5 +417,86 @@ describe("decisionAnchor", () => {
     expect(decisionAnchor(scan)).toEqual(expected);
     expect(decisionAnchor({ ...scan, freshQuote: fresh(0.0006) })).toEqual(expected);
     expect(decisionAnchor({ ...scan, freshQuote: fresh(0.00001) })).toEqual(expected);
+    // Inclusive at 5x and at 1/5, the same bound decisionMcapUsd uses.
+    expect(decisionAnchor({ ...scan, freshQuote: fresh(0.0005) }).labelRule).toBe(FRESH_ANCHOR_LABEL_RULE);
+    expect(decisionAnchor({ ...scan, freshQuote: fresh(0.00002) }).labelRule).toBe(FRESH_ANCHOR_LABEL_RULE);
+    expect(decisionAnchor({ ...scan, freshQuote: fresh(0.00051) })).toEqual(expected);
+    expect(decisionAnchor({ ...scan, freshQuote: fresh(0.000019) })).toEqual(expected);
+  });
+});
+
+describe("sub-minute curve prints", () => {
+  const fold = (
+    anchor: number,
+    curve: { basis: { at: number; price: number } | null; changes: { at: number; price: number }[] },
+    minute: { priceUsd: number; at: Date },
+    later: [price: number, minute: number][] = [],
+  ) => {
+    let agg = initialOutcomeAggregates(anchor, T0);
+    const ticks = [...dollarTicksFromCurve(curve, minute), minute, ...later.map(([price, m]) => ({ priceUsd: price, at: minutes(m) }))];
+    ticks.sort((a, b) => a.at.getTime() - b.at.getTime());
+    for (const tick of ticks) agg = { ...agg, ...applyPriceTick(agg, tick.priceUsd, tick.at) };
+    return agg;
+  };
+
+  it("counts a wick to 2x and back inside one minute as a win", () => {
+    const minute = new Date(T0.getTime() + 60_000);
+    // Curve units are 10x the dollar price. The minute print is back at $1.05.
+    const curve = {
+      basis: { at: T0.getTime(), price: 10 },
+      changes: [
+        { at: T0.getTime() + 20_000, price: 22 },
+        { at: T0.getTime() + 40_000, price: 10.5 },
+      ],
+    };
+    const withTape = fold(1, curve, { priceUsd: 1.05, at: minute });
+    const labels = computeOutcomeLabels(withTape);
+    expect(labels.hit2xIn1h).toBe(true);
+    expect(labels.hit2xIn15m).toBe(true);
+    expect(labels.disqualified).toBe(false);
+    expect(labels.labelValue).toBeCloseTo(Math.log2(2.2));
+    expect(withTape.hit2xAt).toEqual(new Date(T0.getTime() + 20_000));
+    // The minute sample alone never saw the wick.
+    const minuteOnly = fold(1, { basis: null, changes: [] }, { priceUsd: 1.05, at: minute });
+    expect(computeOutcomeLabels(minuteOnly).hit2xIn1h).toBe(false);
+    expect(computeOutcomeLabels(minuteOnly).labelValue).toBe(0);
+    expect(FINE_TICK_LABEL_RULE).toBe(5);
+    expect(CURRENT_LABEL_RULE).toBe(4);
+  });
+
+  it("disqualifies a wick through the stop that recovers before a later 2x", () => {
+    const minute = new Date(T0.getTime() + 60_000);
+    const curve = {
+      basis: { at: T0.getTime(), price: 10 },
+      changes: [
+        { at: T0.getTime() + 10_000, price: 4 },
+        { at: T0.getTime() + 30_000, price: 10 },
+      ],
+    };
+    const agg = fold(1, curve, { priceUsd: 1, at: minute }, [[2.4, 10]]);
+    const labels = computeOutcomeLabels(agg);
+    expect(labels.hit2xIn1h).toBe(true);
+    expect(labels.disqualified).toBe(true);
+    expect(labels.hit4xIn1h).toBe(false);
+    expect(labels.labelValue).toBe(0);
+    expect(agg.lowBefore2xPriceUsd).toBeCloseTo(0.4);
+  });
+
+  it("leaves a coin with no curve tape on the minute sample", () => {
+    const minute = new Date(T0.getTime() + 60_000);
+    expect(dollarTicksFromCurve({ basis: null, changes: [] }, { priceUsd: 2.2, at: minute })).toEqual([]);
+    const agg = fold(1, { basis: null, changes: [] }, { priceUsd: 2.2, at: minute });
+    expect(computeOutcomeLabels(agg)).toMatchObject({
+      hit2xIn1h: true,
+      disqualified: false,
+      labelValue: Math.log2(2.2),
+    });
+    // A tape that starts after the dollar print cannot invent a scale.
+    expect(
+      dollarTicksFromCurve(
+        { basis: null, changes: [{ at: minute.getTime() + 5_000, price: 30 }] },
+        { priceUsd: 1, at: minute },
+      ),
+    ).toEqual([]);
   });
 });

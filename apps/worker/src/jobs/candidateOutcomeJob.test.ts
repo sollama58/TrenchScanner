@@ -7,10 +7,18 @@ import {
   prisma,
   loadEnv,
   initialOutcomeAggregates,
+  type CurveState,
   type DexScreenerClient,
   type ScoredToken,
 } from "@trenchscanner/core";
 import { recordCandidateSample, runCandidateWatchJob } from "./candidateOutcomeJob.js";
+import {
+  curveLabelPrices,
+  followYoungCurves,
+  resetCurveTape,
+  round,
+  startCurveTape,
+} from "./curveTape.js";
 
 /**
  * Same posture as outcomeBookkeeping.test.ts: this logic IS row bookkeeping, so it's tested
@@ -165,6 +173,83 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     // Rule 3 reads DexScreener's prices as before; a Jupiter price is seconds old and lands as read.
     expect((await read(scan.id)).entryAt).not.toBeNull();
     expect((await read(jup.id)).entryAt).not.toBeNull();
+  });
+
+  it("grades a 2x wick on the curve tape and leaves a coin with no tape on the minute print", async () => {
+    const anchorMs = Date.now() - 5 * MINUTE;
+    // A real 32-byte mint: followYoungCurves derives the curve address and skips anything else.
+    const tapeMint = "So11111111111111111111111111111111111111112";
+    await prisma.token.deleteMany({ where: { mintAddress: tapeMint } });
+    const taped = await prisma.token.create({ data: { mintAddress: tapeMint } });
+    const plain = await createToken("wick-plain");
+    const curveOf = (price: number): CurveState => ({
+      virtualToken: 1e15,
+      virtualQuote: price * 1e15,
+      realQuote: 0,
+      complete: false,
+      quoteIsSol: true,
+    });
+    let curvePrice = 1;
+    const stop = startCurveTape(
+      {
+        getCurveStatesBatch: async (curves: string[]) => new Map(curves.map((c) => [c, curveOf(curvePrice)])),
+      },
+      null,
+      {
+        maxAgeMinutes: 30,
+        maxMints: 10,
+        streamCreditsPerDay: 0,
+        pollSeconds: 3_600,
+        pollMaxMints: 10,
+      },
+    );
+    try {
+      followYoungCurves(
+        [
+          {
+            mintAddress: taped.mintAddress,
+            launchedAt: new Date(anchorMs),
+            firstSeenAt: new Date(anchorMs),
+            launchpad: null,
+          },
+        ],
+        anchorMs,
+      );
+      await round(anchorMs);
+      curvePrice = 2.2;
+      await round(anchorMs + 5_000);
+      curvePrice = 1.05;
+      await round(anchorMs + 10_000);
+      const prints = curveLabelPrices(taped.mintAddress, anchorMs, anchorMs + 60_000);
+      expect(prints.changes.map((c) => c.price)).toEqual([2.2, 1.05]);
+
+      const tapedRow = await seedRow(taped.id, new Date(anchorMs), 1, {
+        labelRule: 4,
+        lastCheckedAt: new Date(anchorMs),
+      });
+      const plainRow = await seedRow(plain.id, new Date(anchorMs), 1, {
+        labelRule: 4,
+        lastCheckedAt: new Date(anchorMs),
+      });
+      await runCandidateWatchJob(
+        stubDexScreener({ [taped.mintAddress]: 1.05, [plain.mintAddress]: 1.05 }),
+        env,
+      );
+      const tapedAfter = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: tapedRow.id } });
+      const plainAfter = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: plainRow.id } });
+      expect(tapedAfter.hit2xAt).not.toBeNull();
+      expect(tapedAfter.peak1hPriceUsd).toBeCloseTo(2.2);
+      expect(tapedAfter.lowBefore2xPriceUsd).toBeGreaterThan(0.5);
+      expect(tapedAfter.labelRule).toBe(5);
+      expect(tapedAfter.finalizedAt).toBeNull();
+      expect(plainAfter.hit2xAt).toBeNull();
+      expect(plainAfter.peak1hPriceUsd).toBeCloseTo(1.05);
+      expect(plainAfter.labelRule).toBe(4);
+    } finally {
+      stop();
+      resetCurveTape();
+      await prisma.token.deleteMany({ where: { mintAddress: tapeMint } });
+    }
   });
 
   it("folds a mid-window tick into the aggregates and reschedules the row", async () => {
