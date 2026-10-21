@@ -69,6 +69,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   transferred: false,
   // On by default (user ask 2026-10-19); Customize › Extras switches it off.
   feesBadge: true,
+  // The search control on each card (user ask 2026-10-21); Customize switches it off.
+  cardSearch: true,
   feesBadgeRev: FEES_BADGE_REV,
   bubbleCexLinks: false,
   bubbleFunderLabels: false,
@@ -353,6 +355,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
         ? r.feesBadge
         : d.feesBadge,
     feesBadgeRev: FEES_BADGE_REV,
+    cardSearch: typeof r.cardSearch === "boolean" ? r.cardSearch : d.cardSearch,
     bubbleCexLinks: typeof r.bubbleCexLinks === "boolean" ? r.bubbleCexLinks : d.bubbleCexLinks,
     bubbleFunderLabels:
       typeof r.bubbleFunderLabels === "boolean" ? r.bubbleFunderLabels : d.bubbleFunderLabels,

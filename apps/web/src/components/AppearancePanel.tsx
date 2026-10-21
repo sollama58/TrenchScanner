@@ -200,6 +200,14 @@ export function AppearanceControls() {
         <label className="check">
           <input
             type="checkbox"
+            checked={look.cardSearch}
+            onChange={() => setAppearance({ cardSearch: !look.cardSearch })}
+          />
+          Search button on each card
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
             checked={look.volume}
             // Switching volume on also unhides it, in case an older preset hid the old tile.
             onChange={() =>
