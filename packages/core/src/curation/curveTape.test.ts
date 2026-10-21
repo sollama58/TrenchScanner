@@ -105,7 +105,12 @@ describe("CurveTape", () => {
 
   it("answers the prints between two moments, and nothing for a mint it never saw", () => {
     const tape = new CurveTape();
-    expect(tape.labelPrices("m", 0, 60_000)).toEqual({ basis: null, changes: [] });
+    expect(tape.labelPrices("m", 0, 60_000)).toEqual({
+      basis: null,
+      changes: [],
+      quoteIsSol: false,
+      coveredMs: 0,
+    });
     tape.record("m", 0, state(1), "read");
     tape.record("m", 10_000, state(2.2), "stream");
     tape.record("m", 20_000, state(1.05), "stream");
@@ -115,10 +120,45 @@ describe("CurveTape", () => {
         { at: 10_000, price: 2.2 },
         { at: 20_000, price: 1.05 },
       ],
+      quoteIsSol: true,
+      coveredMs: 20_000,
     });
-    expect(tape.labelPrices("other", 0, 60_000)).toEqual({ basis: null, changes: [] });
+    expect(tape.labelPrices("other", 0, 60_000)).toEqual({
+      basis: null,
+      changes: [],
+      quoteIsSol: false,
+      coveredMs: 0,
+    });
     // A hole drops the old cover. The price before it is not a basis for the new one.
     tape.record("m", 20_000 + 60_000, state(4), "read");
-    expect(tape.labelPrices("m", 0, 20_000)).toEqual({ basis: null, changes: [] });
+    expect(tape.labelPrices("m", 0, 20_000)).toEqual({
+      basis: null,
+      changes: [],
+      quoteIsSol: false,
+      coveredMs: 0,
+    });
+  });
+
+  it("counts a print at the window's end once, and a print at the start as the basis", () => {
+    const tape = new CurveTape();
+    tape.record("m", 1_000, state(1), "read");
+    tape.record("m", 2_000, state(2), "stream");
+    tape.record("m", 3_000, state(3), "stream");
+    // afterMs is exclusive, untilMs inclusive: the print at 2_000 is the basis, the one at 3_000
+    // is a change. The next window opens at 3_000, so that print is not counted twice.
+    expect(tape.labelPrices("m", 2_000, 3_000)).toEqual({
+      basis: { at: 2_000, price: 2 },
+      changes: [{ at: 3_000, price: 3 }],
+      quoteIsSol: true,
+      coveredMs: 1_000,
+    });
+    expect(tape.labelPrices("m", 3_000, 4_000)).toEqual({
+      basis: { at: 3_000, price: 3 },
+      changes: [],
+      quoteIsSol: true,
+      coveredMs: 0,
+    });
+    // A print from before the open is not folded in as a move.
+    expect(tape.labelPrices("m", 2_500, 3_000).changes.map((c) => c.at)).toEqual([3_000]);
   });
 });
