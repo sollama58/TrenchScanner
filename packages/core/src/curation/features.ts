@@ -749,7 +749,7 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // times in three days), so for up to an hour after one every token reads as minutes old and the
   // models learned it as youth. launchAgeMinutes and bandDwellShare carry youth and time in the
   // band without the artefact; it stays recorded as the gauge of how far the other path inputs
-  // can be trusted. minutesSinceFirstInBand is retired below.
+  // can be trusted. minutesSinceFirstInBand stays a learner input (bandClockReliance.test.ts).
   "pathObservedMinutes",
   // X counts (NARRATIVE_FEATURES_V7) and story heat (NARRATIVE_FEATURES_V8) are read from
   // 2026-10-21 (user ask). Market seats see them through MARKET_TOKENSAGE_INPUTS; the onset
@@ -890,10 +890,10 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "sells24h",
   "pathRet15mPct",
   "pathRet30mPct",
-  // Time already spent in the band (2026-10-21). bandDwellShare is the share of launch-age spent
-  // in the band and is the learner input. minutesSinceFirstInBand stays on the vector at the same
-  // number buildCandidateFeatures writes, so a deployed model that still names it scores.
-  "minutesSinceFirstInBand",
+  // minutesSinceFirstInBand stays a learner input. A synthetic refit barely used it, but a label
+  // that actually depends on time in the band put 42% of the logistic weight and 51% of the tree
+  // splits on it (bandClockReliance.test.ts). bandDwellShare did not replace that. It is not
+  // retired until a fit on real decision rows shows the seats can do without it.
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */

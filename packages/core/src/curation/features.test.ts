@@ -153,7 +153,6 @@ describe("buildCandidateFeatures - short-window derivations", () => {
       "sells24h",
       "pathRet15mPct",
       "pathRet30mPct",
-      "minutesSinceFirstInBand",
       "priceChange6hPct",
       "priceChange24hPct",
       "volume1hUsd",
@@ -162,6 +161,8 @@ describe("buildCandidateFeatures - short-window derivations", () => {
       expect(LEARNER_FEATURE_NAMES).not.toContain(name);
       expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain(name);
     }
+    expect(LEARNER_FEATURE_NAMES).toContain("minutesSinceFirstInBand");
+    expect(RETIRED_LEARNER_INPUTS.has("minutesSinceFirstInBand")).toBe(false);
     expect(RETIRED_LEARNER_INPUTS.has("buyRatio5m")).toBe(false);
     expect(RETIRED_LEARNER_INPUTS.has("buyRatio24h")).toBe(false);
     expect(RETIRED_LEARNER_INPUTS.has("buyRatio1h")).toBe(true);
@@ -671,10 +672,10 @@ describe("buildCandidateFeatures - audit additions", () => {
     expect(f.dexBoosted).toBe(1);
     expect(f.hasDescription).toBe(0);
     expect(f.holderGrowth10mPct).toBe(12);
-    // Still written at the same number. The fit reads bandDwellShare; this column is retired.
+    // Still written, and still a learner input. The reliance test kept it beside bandDwellShare.
     expect(f.minutesSinceFirstInBand).toBe(30);
-    expect(RETIRED_LEARNER_INPUTS.has("minutesSinceFirstInBand")).toBe(true);
-    expect(LEARNER_FEATURE_NAMES).not.toContain("minutesSinceFirstInBand");
+    expect(RETIRED_LEARNER_INPUTS.has("minutesSinceFirstInBand")).toBe(false);
+    expect(LEARNER_FEATURE_NAMES).toContain("minutesSinceFirstInBand");
     expect(LEARNER_FEATURE_NAMES).toContain("bandDwellShare");
   });
 
