@@ -1080,6 +1080,14 @@ const PATH_TAPE_MAX_WINDOW_MINUTES = 30;
  * banked under the old rule reads as the new one.
  */
 export const PATH_RETURNS_ACROSS_GAPS_SINCE = new Date("2026-10-16T19:30:00Z");
+/**
+ * pairAgeMinutes before this is the clock from before #896 (merged 2026-10-21 04:57 UTC): a
+ * junk pool's created time could be the pair's age, and every per-minute input divides by it.
+ * Training reads those ages as missing after withLaunchAge (withoutPreCanonicalPairAge): the
+ * rebuild still needs the stored age to tell a pool age from a launch age. Live rows from the
+ * new clock are kept.
+ */
+export const CANONICAL_PAIR_CLOCK_SINCE = new Date("2026-10-21T04:57:00Z");
 const PATH_RETURN_WINDOWS = [
   ["pathRet15mPct", 15],
   ["pathRet30mPct", 30],
@@ -1339,6 +1347,21 @@ export function withLaunchAge<T extends Record<string, number | null | undefined
   const pairAge = features.pairAgeMinutes;
   if (typeof pairAge === "number" && Math.abs(pairAge - age) <= POOL_AGE_SLACK_MINUTES) return null;
   return { ...features, ageMinutes: null };
+}
+
+/**
+ * pairAgeMinutes from before the canonical pair clock (#896, CANONICAL_PAIR_CLOCK_SINCE) reads as
+ * missing. Called after withLaunchAge: that rebuild still needs the stored age to tell a pool
+ * age from a launch age, and dropping the pair age first would keep a row the age cap sends away.
+ * The per-minute inputs are filled after this, so they do not learn the junk-pool clock.
+ */
+export function withoutPreCanonicalPairAge<T extends Record<string, number | null | undefined>>(
+  anchorAt: Date,
+  features: T,
+): T {
+  if (anchorAt.getTime() >= CANONICAL_PAIR_CLOCK_SINCE.getTime()) return features;
+  if (features.pairAgeMinutes == null) return features;
+  return { ...features, pairAgeMinutes: null };
 }
 
 /**
