@@ -156,9 +156,11 @@ import {
   SlidersIcon,
 } from "./Icons";
 import { XLinkPreview } from "./XLinkPreview";
+import { calibratedRateLabel } from "../rates";
 import {
   safetyChecks,
   safetyFlip,
+  safetyPillCopy,
   safetyVerdict,
   type SafetyFlip,
   type SafetyVerdict,
@@ -576,25 +578,19 @@ const SAFETY_WORD = { passed: "Passed", failed: "Failed", pending: "Pending" } a
 
 /** The safety screen's verdict, left of Sage: a link down to the Safety section. */
 function SafetyPill({ verdict, onClick }: { verdict: SafetyVerdict; onClick?: () => void }) {
-  const { state } = verdict;
-  const title =
-    state === "passed"
-      ? "Passed the safety screen. See the Safety section."
-      : state === "failed"
-        ? `Failed the safety screen${verdict.passedAtAlert ? " on a scan after the alert" : ""}. See the Safety section.`
-        : "The safety screen's verdict lands with the coin's scan.";
+  const face = safetyPillCopy(verdict);
   return (
     <button
       type="button"
-      className={`tm-safety-pill ${state}`}
+      className={`tm-safety-pill ${face.tone}`}
       onClick={onClick}
       disabled={!onClick}
-      title={title}
-      aria-label={`Safety screen: ${SAFETY_WORD[state].toLowerCase()}`}
+      title={face.title}
+      aria-label={`Safety screen: ${face.word.toLowerCase()}`}
     >
-      {state === "pending" ? <Spinner size={11} /> : <ShieldIcon size={13} />}
+      {verdict.state === "pending" ? <Spinner size={11} /> : <ShieldIcon size={13} />}
       <span className="tm-safety-word">Safety </span>
-      {SAFETY_WORD[state]}
+      {face.word}
     </button>
   );
 }
@@ -3863,12 +3859,12 @@ function CallCard({ card }: { card: Card }) {
             <strong>{c.modelName ?? "Model"}</strong>
             <span className="num">{c.confidence.toFixed(0)}</span>
             {c.tier === "high" && <span className="sage-tag tone-good">High conviction</span>}
-            {typeof c.calibratedPct === "number" && (
+            {calibratedRateLabel(c.calibratedPct ?? null) && (
               <span
                 className="muted small"
-                title="Of recent out-of-sample alerts ranked like this one, the share that doubled within 15 minutes"
+                title="The share of similarly ranked recent calls that doubled, within 15 minutes of the alert"
               >
-                ≈{c.calibratedPct.toFixed(0)}% 2x
+                {calibratedRateLabel(c.calibratedPct ?? null)}
               </span>
             )}
           </li>

@@ -121,10 +121,12 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   // first filter and the first model are drawn.
   chartEventKinds: [...DEFAULT_CHART_EVENT_KINDS],
   chartEventFirst: [...DEFAULT_CHART_EVENT_FIRST],
-  // Off by default, all switchable back on in Customize: the composite score tile, so the stat tiles
-  // fill a clean 4 x 2 grid, the header's "≈N% 2x" pill and the 1st Buyers Holding tile, which Snipers replaced (user asks 2026-10-14).
-  // An account that saved its own field list keeps that list.
-  hidden: ["score", "calibrated", "snipers"],
+  // Off by default, switchable back on in Customize: the composite score tile, so the stat tiles
+  // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own) and the 1st Buyers
+  // Holding tile, which Snipers replaced (user asks 2026-10-14). The header's calibrated 2x pill
+  // shows unless an account saved it hidden. An account that saved its own field list keeps that list.
+  // Same list as apps/api/src/feedAppearance.ts.
+  hidden: ["score", "sage", "snipers"],
 };
 
 /** Trading sites a card can open the token in, as Settings lists them. */
@@ -172,7 +174,7 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
       { id: "time", label: "Time since alert" },
       { id: "modelPill", label: "Model and confidence" },
       { id: "conviction", label: "High conviction" },
-      { id: "calibrated", label: "≈2x rate" },
+      { id: "calibrated", label: "Of alerts like it 2x'd" },
       { id: "result", label: "Result mark (✓ / ✕)" },
     ],
   },
@@ -217,10 +219,15 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
 ];
 
 // "vol" is listed apart from the groups: it is opt-in (FeedAppearance.volume), not hide-able.
+// "sage" is a hideable card field on the API schema. A saved hidden list that names it is kept.
 // "reasons", "sniperTop10", "largest", "kolBundled", "transferred" and "dev" are listed in the groups
 // but have their own switches too (FeedAppearance.reasons, .sniperTop10, .largest, .kolBundled,
 // .transferred, .devTile, and .feesBadge for "fees").
-const CARD_FIELDS = new Set<string>([...CARD_FIELD_GROUPS.flatMap((g) => g.fields.map((f) => f.id)), "vol"]);
+const CARD_FIELDS = new Set<string>([
+  ...CARD_FIELD_GROUPS.flatMap((g) => g.fields.map((f) => f.id)),
+  "vol",
+  "sage",
+]);
 
 /** The card fields not to draw: the ones the user hid, plus the opt-in ones not switched on. */
 export function cardHideSet(

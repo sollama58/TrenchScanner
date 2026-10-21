@@ -91,6 +91,16 @@ export function cardCalibratedRate(
 }
 
 /**
+ * The card's words for that rate: the share of similarly ranked recent calls that doubled.
+ * Null when there is no calibrated rate, so a missing rate stays off the card. Never the model's
+ * raw confidence.
+ */
+export function calibratedRateLabel(rate: number | null): string | null {
+  if (rate === null || !Number.isFinite(rate)) return null;
+  return `${Math.round(rate)}% of alerts like it 2x'd`;
+}
+
+/**
  * The window the 24h "best" and the top models are read on (core curation/topModels.ts
  * topModelsWindow): the 24 hours ending `lagMinutes` before the current refresh slot began.
  */

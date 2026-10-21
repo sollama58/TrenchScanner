@@ -203,8 +203,16 @@ describe("parseFeedAppearance", () => {
     expect(parseFeedAppearance({ feesBadge: false, feesBadgeRev: 2 }).feesBadge).toBe(false);
     for (const bad of [2_000, 21_000, 4_500, "8000"])
       expect(parseFeedAppearance({ hideBelowMcapUsd: bad }).hideBelowMcapUsd).toBe(6_000);
-    // The score tile and TokenSage button are hidden by default; a saved field list is kept as is.
-    expect(parseFeedAppearance({}).hidden).toEqual(["score", "sage", "calibrated", "snipers"]);
+    // The score tile and TokenSage button are hidden by default. The calibrated 2x pill is not.
+    // A saved field list, including one that hid it, is kept as is.
+    expect(parseFeedAppearance({}).hidden).toEqual(["score", "sage", "snipers"]);
+    expect(parseFeedAppearance(null).hidden).toEqual(["score", "sage", "snipers"]);
+    expect(parseFeedAppearance({ hidden: ["score", "sage", "calibrated", "snipers"] }).hidden).toEqual([
+      "score",
+      "sage",
+      "calibrated",
+      "snipers",
+    ]);
     // Dark until the user picks a theme; a saved "auto" keeps following the device.
     expect(parseFeedAppearance({}).theme).toBe("dark");
     expect(parseFeedAppearance({ theme: "auto" }).theme).toBe("auto");

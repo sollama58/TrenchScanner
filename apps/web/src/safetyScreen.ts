@@ -27,6 +27,55 @@ export interface SafetyVerdict {
   passedAtAlert: boolean;
 }
 
+/**
+ * Fresh, empty, sniper and top-10 were not measured on this scan. The screen lets those through
+ * when they are unknown (fail-open); this only describes the reading, it does not re-judge it.
+ */
+export function walletChecksUnmeasured(
+  s: Pick<
+    Snapshot,
+    | "freshTopHolderCount"
+    | "freshTopHoldersChecked"
+    | "freshTop10WalletPct"
+    | "emptyTop10WalletPct"
+    | "sniperTop10WalletPct"
+    | "top10HolderPct"
+  >,
+): boolean {
+  const fresh =
+    (typeof s.freshTopHolderCount === "number" && (s.freshTopHoldersChecked ?? 0) > 0) ||
+    typeof s.freshTop10WalletPct === "number";
+  return (
+    !fresh ||
+    typeof s.emptyTop10WalletPct !== "number" ||
+    typeof s.sniperTop10WalletPct !== "number" ||
+    typeof s.top10HolderPct !== "number"
+  );
+}
+
+/** What the token-view safety pill says. A pass on unread wallet checks says "Not read", not "Passed". */
+export function safetyPillCopy(verdict: SafetyVerdict): {
+  word: "Passed" | "Failed" | "Pending" | "Not read";
+  tone: SafetyVerdict["state"] | "unread";
+  title: string;
+} {
+  if (verdict.state === "passed" && verdict.reading && walletChecksUnmeasured(verdict.reading)) {
+    return {
+      word: "Not read",
+      tone: "unread",
+      title: "Wallet checks were not read. See the Safety section.",
+    };
+  }
+  const title =
+    verdict.state === "passed"
+      ? "Passed the safety screen. See the Safety section."
+      : verdict.state === "failed"
+        ? `Failed the safety screen${verdict.passedAtAlert ? " on a scan after the alert" : ""}. See the Safety section.`
+        : "The safety screen's verdict lands with the coin's scan.";
+  const word = verdict.state === "passed" ? "Passed" : verdict.state === "failed" ? "Failed" : "Pending";
+  return { word, tone: verdict.state, title };
+}
+
 /** The newest screened reading of a card's coin, and what the screen made of it. */
 export function safetyVerdict(card: Card, scanning: boolean): SafetyVerdict {
   const pending: SafetyVerdict = { state: "pending", reading: null, reasons: [], passedAtAlert: false };

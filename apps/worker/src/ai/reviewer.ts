@@ -25,6 +25,7 @@ import {
   type Env,
   type ScoredToken,
   HIGH_CONVICTION_TIER,
+  CANDIDATE_WATCH_WINDOW_MINUTES,
 } from "@trenchscanner/core";
 import { anthropicClient, describeAnthropicError } from "./client.js";
 import {
@@ -130,7 +131,30 @@ export const COMPARABLES_K = 20;
 export const COMPARABLE_POOL_DAYS = 30;
 export const COMPARABLE_POOL_MAX_ROWS = 5_000;
 const POOL_CACHE_TTL_MS = 15 * 60_000;
-let poolCache: { fetchedAt: number; rows: GradedRow[] } | null = null;
+let poolCache: { fetchedAt: number; rows: DatedGradedRow[] } | null = null;
+
+/**
+ * A pool row counts as known at a decision once its label window (plus slack) has closed.
+ * Replay's comparablesAsOf uses this same cutoff.
+ */
+export const LABEL_SETTLE_MS = (CANDIDATE_WATCH_WINDOW_MINUTES + 5) * 60_000;
+
+/**
+ * Rows whose outcome was already knowable at `decisionAt`: anchored at or before the decision
+ * minus the watch window, and inside the comparable pool's age. A coin that settles during a
+ * detached shadow review is not among them.
+ */
+export function comparablesKnowableAt<T extends { anchorAt: Date }>(
+  pool: readonly T[],
+  decisionAt: Date,
+): T[] {
+  const settled = decisionAt.getTime() - LABEL_SETTLE_MS;
+  const earliest = decisionAt.getTime() - COMPARABLE_POOL_DAYS * 86_400_000;
+  return pool.filter((r) => {
+    const t = r.anchorAt.getTime();
+    return t <= settled && t >= earliest;
+  });
+}
 
 /** Test hook. */
 export function resetComparablePoolCache(): void {
@@ -197,7 +221,7 @@ export async function loadGradedPool(
  * The graded moments a live pick is compared against: the last COMPARABLE_POOL_DAYS of
  * loadGradedPool, cached briefly since the pool moves over hours.
  */
-async function comparablePool(env: Env): Promise<GradedRow[]> {
+async function comparablePool(env: Env): Promise<DatedGradedRow[]> {
   if (poolCache && Date.now() - poolCache.fetchedAt < POOL_CACHE_TTL_MS) return poolCache.rows;
   const now = Date.now();
   const rows = await loadGradedPool(env, {
@@ -209,11 +233,20 @@ async function comparablePool(env: Env): Promise<GradedRow[]> {
   return rows;
 }
 
-/** The pick's nearest graded past calls, or undefined when the lookup fails (the brief then omits them). */
-async function comparablesFor(scored: ScoredToken, env: Env): Promise<ComparableOutcome[] | undefined> {
+/**
+ * The pick's nearest graded past calls, or undefined when the lookup fails (the brief then omits them).
+ * `decisionAt` set (a shadow review): only rows knowable at that decision. Omitted (an in-cycle
+ * gate review): the live pool, because "now" is the decision.
+ */
+async function comparablesFor(
+  scored: ScoredToken,
+  env: Env,
+  decisionAt?: Date,
+): Promise<ComparableOutcome[] | undefined> {
   try {
     const pool = await comparablePool(env);
-    return nearestOutcomes(buildCandidateFeatures(scored), pool, COMPARABLES_K);
+    const known = decisionAt ? comparablesKnowableAt(pool, decisionAt) : pool;
+    return nearestOutcomes(buildCandidateFeatures(scored), known, COMPARABLES_K);
   } catch (err) {
     logger.warn("could not load comparable outcomes", { error: String(err) });
     return undefined;
@@ -332,14 +365,14 @@ export async function reviewPick(
    * a slow one costs one timeout at most before the pick fails open). isDefault: the pick is the
    * default seat's (see reviewPriority).
    */
-  opts: { gate?: boolean; isDefault?: boolean } = {},
+  opts: { gate?: boolean; isDefault?: boolean; decisionAt?: Date } = {},
 ): Promise<AiReviewResult | null> {
   const priority = reviewPriority(decision, env, opts.isDefault);
   if (priority === null) return null;
   // Launcher text written to steer the reviewer is a pass on its own, decided here so the model
   // is never the only check against it (and no spend goes on reading it).
   if (launcherTextInstructs(scored)) return launcherTextVeto(scored, decision);
-  return withReviewSlot(() => callReviewer(scored, decision, env, priority));
+  return withReviewSlot(() => callReviewer(scored, decision, env, priority, opts.decisionAt));
 }
 
 /** The call itself, once a review slot is free - see reviewPick. */
@@ -348,6 +381,7 @@ async function callReviewer(
   decision: CurationDecision,
   env: Env,
   priority: "live" | "background",
+  decisionAt?: Date,
 ): Promise<AiReviewResult | null> {
   const reservation = await reserveAiSpend(
     env,
@@ -357,7 +391,10 @@ async function callReviewer(
   );
   if (!reservation) return null;
   const startedAt = Date.now();
-  const [comparables, playbook] = await Promise.all([comparablesFor(scored, env), activePlaybook()]);
+  const [comparables, playbook] = await Promise.all([
+    comparablesFor(scored, env, decisionAt),
+    activePlaybook(),
+  ]);
   const brief = buildAiReviewBrief(scored, decision, comparables);
   const base = {
     model: env.AI_REVIEW_MODEL,
