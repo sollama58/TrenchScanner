@@ -569,7 +569,7 @@ export function calledNear(
 /** A filter that is the owner's and switched on: the "active filters" the both-only feed counts. */
 const ACTIVE_FILTER = { isActive: true, deletedAt: null } satisfies Prisma.UserFilterWhereInput;
 
-/** Text searches one account may run per minute (GET /matches?q=). */
+/** Tracked-token searches one account may run per minute, by text or by mint. */
 const TEXT_SEARCHES_PER_MINUTE = 30;
 const textSearches = new Map<string, number[]>();
 
