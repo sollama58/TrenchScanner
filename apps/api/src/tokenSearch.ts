@@ -254,7 +254,8 @@ export async function searchUntrackedTokens(
       name: t.name ?? null,
       imageUrl: t.imageUrl?.startsWith("https://") ? t.imageUrl : null,
       marketCapUsd: t.marketCapUsd > 0 ? t.marketCapUsd : null,
-      marketCapAt: new Date(now),
+      // The cache's own time, so a hit served again inside the minute is not stamped as new.
+      marketCapAt: new Date(entry.at),
       volume24hUsd: t.volume24hUsd ?? null,
       liquidityUsd: t.liquidityUsd ?? null,
       holderCount: null,

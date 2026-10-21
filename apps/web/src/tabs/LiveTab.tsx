@@ -18,6 +18,7 @@ import { useLiveMarketCaps, usePolling, usePollingAll, useNow, useNudgeStream } 
 import { FEED_PAGE_SIZE, fillPage, joinPages, MAX_FILL_PAGES, MAX_READ_PAGES, nextDepth } from "../feedFill";
 import { ago, pct } from "../format";
 import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
+import { registerCardSearch } from "../cardSearch";
 import { CaSearchButton } from "../components/CaSearchButton";
 import { ScanStatus } from "../components/ScanStatus";
 import type { ScopeSettingsSection } from "../components/ScopeSettingsModal";
@@ -126,7 +127,13 @@ export function LiveTab({
   // The search (address, ticker or name) opens its own window over the feed (user ask
   // 2026-10-19), in both views; the feed underneath carries on as it was.
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchSeed, setSearchSeed] = useState<{ text: string; id: number } | null>(null);
   const openSearch = useCallback(() => setSearchOpen(true), []);
+  const openSearchQuery = useCallback((text: string) => {
+    setSearchSeed({ text, id: Date.now() });
+    setSearchOpen(true);
+  }, []);
+  useEffect(() => registerCardSearch(openSearchQuery), [openSearchQuery]);
   // The windows' code loads on their first opening (livePanels.ts), and they stay mounted after.
   const aboutMounted = useOpenedOnce(aboutOpen);
   const statsMounted = useOpenedOnce(statsOpen);
@@ -293,7 +300,9 @@ export function LiveTab({
       </Suspense>
       <SectionBoundary label="The search window" resetKey={searchOpen} onClose={() => setSearchOpen(false)}>
         <Suspense fallback={null}>
-          {searchMounted && <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} now={now} />}
+          {searchMounted && (
+            <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} now={now} seed={searchSeed} />
+          )}
         </Suspense>
       </SectionBoundary>
       <section className="panel feed">

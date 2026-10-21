@@ -188,6 +188,7 @@ function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: 
       <section className="scope-section">
         <h3>On each row</h3>
         {sw("showName", "Token name")}
+        {sw("showSearch", "Search button", "Search the ticker, name or contract")}
         {sw(
           "tickerCopiesCa",
           "Click the ticker to copy the CA",

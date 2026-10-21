@@ -261,6 +261,25 @@ export class DexScreenerClient {
     return this.fallback !== undefined && Date.now() < this.blankUntil;
   }
 
+  /**
+   * Pairs this process stored within `maxAgeMs`, without asking DexScreener. The lookup cache
+   * itself is only QUOTE_CACHE_MS (10s); a caller that can show a reading for longer (the search
+   * window's minute) peeks here and skips a refetch of its own.
+   */
+  cachedQuotes(
+    mints: readonly string[],
+    maxAgeMs: number,
+    now = Date.now(),
+  ): Map<string, { token: CandidateToken; at: Date }> {
+    const out = new Map<string, { token: CandidateToken; at: Date }>();
+    for (const mint of mints) {
+      const q = this.quotes.get(mint);
+      if (!q || now - q.at.getTime() > maxAgeMs) continue;
+      out.set(mint, { token: { ...q.token }, at: q.at });
+    }
+    return out;
+  }
+
   /** Mints answered from the recent-quote cache since the last call, then reset. */
   takeQuoteCacheHits(): number {
     const hits = this.quoteHits;

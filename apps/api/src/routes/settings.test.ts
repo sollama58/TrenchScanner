@@ -29,6 +29,8 @@ describe("parseAlertPrefs", () => {
 describe("parseFeedAppearance", () => {
   it("fills missing or bad fields with the defaults and drops unknown card fields", () => {
     expect(parseFeedAppearance(null)).toEqual(DEFAULT_FEED_APPEARANCE);
+    expect(parseFeedAppearance({}).cardSearch).toBe(true);
+    expect(parseFeedAppearance({ cardSearch: false }).cardSearch).toBe(false);
     expect(
       parseFeedAppearance({
         theme: "neon",

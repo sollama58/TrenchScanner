@@ -171,6 +171,8 @@ export const feedAppearanceSchema = z
     transferred: z.boolean().default(false),
     /** The card footer's FEES badge (where the creator fee goes); hidden by default (user ask 2026-10-16). */
     feesBadge: z.boolean().default(true),
+    /** The search control on each card; on by default (user ask 2026-10-21). */
+    cardSearch: z.boolean().default(true),
     /** Which default feesBadge was saved against; see FEES_BADGE_REV and parseFeedAppearance. */
     feesBadgeRev: z.literal(FEES_BADGE_REV).default(FEES_BADGE_REV),
     /** On bubble maps, ties between holders the same exchange funded (drawn only); off by default. */
@@ -343,6 +345,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   kolBundled: false,
   transferred: false,
   feesBadge: true,
+  cardSearch: true,
   feesBadgeRev: FEES_BADGE_REV,
   bubbleCexLinks: false,
   bubbleFunderLabels: false,
