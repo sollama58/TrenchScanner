@@ -130,10 +130,19 @@ export function replayOutcome(
       finalizedAt = at;
       closedNow = true;
       if (labels.hit10xIn1h !== null) tenX = labels.hit10xIn1h;
+      let armedFromPeak = false;
       if (agg.trailHighPriceUsd == null && exitPlanPositionOpen({ ...agg, simReturnPct: null })) {
         agg.trailHighPriceUsd = cleanPeakPriceUsd(agg);
+        armedFromPeak = true;
       }
-      simReturnPct = simulateExitPlan(agg, price ?? lastPrice);
+      const closePrice = price ?? lastPrice;
+      // 2026-10-21 user ask: same as the watcher. Arming from the window peak on this close does
+      // not fold the close through applyTrailTick. A close already through that high's level is
+      // the trail's exit, at the price seen, so the replay records it.
+      if (armedFromPeak && closePrice != null && closePrice > 0) {
+        Object.assign(agg, applyTrailTick(agg, closePrice, at));
+      }
+      simReturnPct = simulateExitPlan(agg, closePrice);
       if (labels.hit2xIn1h && !labels.disqualified) extended = true;
     }
 
