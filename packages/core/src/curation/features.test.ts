@@ -107,7 +107,13 @@ describe("buildCandidateFeatures - short-window derivations", () => {
       expect(LEARNER_FEATURE_NAMES).not.toContain(name);
     }
     expect(LEARNER_FEATURE_NAMES.length).toBe(CANDIDATE_FEATURE_NAMES.length - RETIRED_LEARNER_INPUTS.size);
-    for (const name of ["launchAgeMinutes", "pairAgeMinutes", "buyRatio5m", "buyRatio24h", "ctxHourSin"] as const)
+    for (const name of [
+      "launchAgeMinutes",
+      "pairAgeMinutes",
+      "buyRatio5m",
+      "buyRatio24h",
+      "ctxHourSin",
+    ] as const)
       expect(LEARNER_FEATURE_NAMES).toContain(name);
     // The mixed clock is recorded for deployed models and is not fit.
     expect(RETIRED_LEARNER_INPUTS.has("ageMinutes")).toBe(true);
@@ -339,8 +345,12 @@ describe("buildCandidateFeatures - short-window derivations", () => {
       freshQuote: { priceUsd: 0.00014, marketCapUsd: 0, fetchedAt: now },
     });
     expect(decisionAnchor(noQuoteCap).marketCapUsd).toBe(100_000);
-    expect(buildCandidateFeatures(noQuoteCap, now).decisionMcapUsd).toBe(100_000);
-    expect(buildCandidateFeatures(noQuoteCap, now).freshGapPct).toBeCloseTo(40);
+    const liveNoQuoteCap = buildCandidateFeatures(noQuoteCap, now);
+    expect(liveNoQuoteCap.decisionMcapUsd).toBe(100_000);
+    expect(liveNoQuoteCap.freshGapPct).toBeCloseTo(40);
+    // Training loads this stored vector and fills the clock block again. The gap is still 40,
+    // so rebuilding the cap would train on $140k for a label graded from $100k.
+    expect(applyClockFeatures(liveNoQuoteCap).decisionMcapUsd).toBe(100_000);
     // A scan cap of 0 cannot scale. The anchor cap is the quote's own market cap.
     const noScanCap = scored({
       priceUsd: 0.0001,
@@ -1264,7 +1274,9 @@ describe("the market seats' TokenSage inputs", () => {
     expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
     expect(LEARNER_FEATURE_NAMES).toContain("nsCatAnimal");
     expect(LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
-    expect(MARKET_LEARNER_FEATURE_NAMES.filter((n) => isTokenSageInput(n))).toEqual([...MARKET_TOKENSAGE_INPUTS]);
+    expect(MARKET_LEARNER_FEATURE_NAMES.filter((n) => isTokenSageInput(n))).toEqual([
+      ...MARKET_TOKENSAGE_INPUTS,
+    ]);
     for (const name of LEARNER_FEATURE_NAMES.filter((n) => !isTokenSageInput(n))) {
       expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
     }

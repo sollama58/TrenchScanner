@@ -68,6 +68,17 @@ describe("applyClockFeatures", () => {
     expect(kept.decisionMcapUsd).toBe(50_000);
   });
 
+  it("keeps a stored decision cap when the scan cap and gap would rebuild a different one", () => {
+    // Live (buildCandidateFeatures) stores decisionAnchor's cap. The anchor refuses a quote
+    // that has a price but no market cap, even when the gap is inside the trusted ratio, and
+    // the row keeps the scan cap. The gap is still on the vector. Rebuilding
+    // mcap * (1 + gap/100) here would train on $12k for a label graded from $10k.
+    const kept = applyClockFeatures({ mcapUsd: 10_000, freshGapPct: 20, decisionMcapUsd: 10_000 });
+    expect(kept.decisionMcapUsd).toBe(10_000);
+    // A row banked before the column existed still gets the rebuilt cap.
+    expect(applyClockFeatures({ mcapUsd: 10_000, freshGapPct: 20 }).decisionMcapUsd).toBeCloseTo(12_000);
+  });
+
   it("trusts a fresh quote at the same ratio the label anchor does", () => {
     expect(applyClockFeatures({ mcapUsd: 10_000, freshGapPct: 400 }).decisionMcapUsd).toBeCloseTo(50_000);
     expect(applyClockFeatures({ mcapUsd: 10_000, freshGapPct: 400.01 }).decisionMcapUsd).toBe(10_000);

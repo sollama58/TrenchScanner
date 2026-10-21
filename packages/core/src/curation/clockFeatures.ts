@@ -69,10 +69,7 @@ const finite = (v: number | null | undefined): number | null =>
  * positive: a missing age must not be treated as a full window, which is what left a
  * two-minute pair's lifetime volume labeled as 24h volume.
  */
-export function bucketElapsedMinutes(
-  pairAgeMinutes: number | null,
-  windowMinutes: number,
-): number | null {
+export function bucketElapsedMinutes(pairAgeMinutes: number | null, windowMinutes: number): number | null {
   if (pairAgeMinutes === null || !(pairAgeMinutes > 0) || !(windowMinutes > 0)) return null;
   return Math.min(pairAgeMinutes, windowMinutes);
 }
@@ -124,6 +121,22 @@ const sumSides = (a: number | null, b: number | null): number | null => {
 const DWELL_SLACK_MINUTES = 1;
 
 /**
+ * The decision's market cap. A positive cap already stored — what live scored, and what the
+ * label was graded from — wins. Otherwise the scan cap, scaled by a trusted fresh-quote ratio
+ * when there is one. A missing stored cap is how a row banked before the column existed is filled.
+ */
+function storedDecisionCap(
+  stored: number | null | undefined,
+  mcap: number | null,
+  quoteRatio: number | null,
+): number | null {
+  const kept = finite(stored);
+  if (kept !== null && kept > 0) return kept;
+  if (mcap !== null && mcap > 0) return quoteRatio !== null ? mcap * quoteRatio : mcap;
+  return kept;
+}
+
+/**
  * The clock-honest block for one feature vector, from inputs the vector already carries.
  * Path per-minute returns need the spans the tape recorded (pathSpan15mMin / pathSpan30mMin);
  * a row banked before those spans exist reads them null, and the per-minute returns follow.
@@ -147,7 +160,13 @@ export function clockFeatureValues(
   const launchAge = features.ageSource === 1 ? finite(features.ageMinutes) : null;
   const dwell = finite(features.minutesSinceFirstInBand);
   let bandDwellShare: number | null = null;
-  if (launchAge !== null && launchAge > 0 && dwell !== null && dwell >= 0 && dwell <= launchAge + DWELL_SLACK_MINUTES) {
+  if (
+    launchAge !== null &&
+    launchAge > 0 &&
+    dwell !== null &&
+    dwell >= 0 &&
+    dwell <= launchAge + DWELL_SLACK_MINUTES
+  ) {
     bandDwellShare = Math.min(1, dwell / launchAge);
   }
   const mcap = finite(features.mcapUsd);
@@ -179,10 +198,14 @@ export function clockFeatureValues(
     // The cap the label is graded from: the fresh quote on the scan's supply when the gap was
     // trusted, else the scan's own cap (decisionAnchor / freshAnchorRatioTrusted in labels.ts).
     // A gap past the anchor's ratio is a bad quote, not the anchor. A linear model cannot
-    // multiply mcap by the gap, so the product is its own input. A scan cap of 0 cannot rebuild
-    // that product; a cap already written from the anchor (the quote's own market cap) is kept.
-    decisionMcapUsd:
-      mcap !== null && mcap > 0 ? (quoteTrusted ? mcap * quoteRatio! : mcap) : finite(features.decisionMcapUsd),
+    // multiply mcap by the gap, so the product is its own input.
+    // Live writes that cap onto the vector (buildCandidateFeatures), including when the anchor
+    // refused the quote — a price with no market cap, gap still inside the ratio — and stored
+    // the scan cap. Rebuilding mcap * (1 + gap/100) whenever the scan cap is positive would
+    // replace that stored cap on every training load. A cap already on the row is kept. A row
+    // banked before the column existed (no stored cap) is still filled from the scan cap and
+    // the gap. A scan cap of 0 cannot rebuild the product either, so a stored cap is what is left.
+    decisionMcapUsd: storedDecisionCap(features.decisionMcapUsd, mcap, quoteTrusted ? quoteRatio : null),
     // How old the fresh quote is. The training load cannot rebuild it (the fetch time was never
     // stored); live scoring sets it from FreshQuote.fetchedAt before this runs. Null is unknown,
     // not "fresh".
@@ -209,5 +232,6 @@ export function applyClockFeatures<T extends Record<string, number | null | unde
     out ??= { ...features };
     out[name] = next[name];
   }
-  return (out ?? features) as T & Record<ClockHonestFeature | (typeof PATH_CLOCK_FEATURES)[number], number | null>;
+  return (out ?? features) as T &
+    Record<ClockHonestFeature | (typeof PATH_CLOCK_FEATURES)[number], number | null>;
 }
