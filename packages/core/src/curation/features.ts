@@ -1083,7 +1083,9 @@ export const PATH_RETURNS_ACROSS_GAPS_SINCE = new Date("2026-10-16T19:30:00Z");
 /**
  * pairAgeMinutes before this is the clock from before #896 (merged 2026-10-21 04:57 UTC): a
  * junk pool's created time could be the pair's age, and every per-minute input divides by it.
- * Training reads those ages as missing. Live rows from the new clock are kept.
+ * Training reads those ages as missing after withLaunchAge (withoutPreCanonicalPairAge): the
+ * rebuild still needs the stored age to tell a pool age from a launch age. Live rows from the
+ * new clock are kept.
  */
 export const CANONICAL_PAIR_CLOCK_SINCE = new Date("2026-10-21T04:57:00Z");
 const PATH_RETURN_WINDOWS = [
@@ -1348,6 +1350,21 @@ export function withLaunchAge<T extends Record<string, number | null | undefined
 }
 
 /**
+ * pairAgeMinutes from before the canonical pair clock (#896, CANONICAL_PAIR_CLOCK_SINCE) reads as
+ * missing. Called after withLaunchAge: that rebuild still needs the stored age to tell a pool
+ * age from a launch age, and dropping the pair age first would keep a row the age cap sends away.
+ * The per-minute inputs are filled after this, so they do not learn the junk-pool clock.
+ */
+export function withoutPreCanonicalPairAge<T extends Record<string, number | null | undefined>>(
+  anchorAt: Date,
+  features: T,
+): T {
+  if (anchorAt.getTime() >= CANONICAL_PAIR_CLOCK_SINCE.getTime()) return features;
+  if (features.pairAgeMinutes == null) return features;
+  return { ...features, pairAgeMinutes: null };
+}
+
+/**
  * A stored vector with the inputs known to be wrong on it read as missing: the order-flow inputs
  * on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came from
  * the create message and is real), the social bits on rows banked before
@@ -1395,12 +1412,8 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
   const rawWalletRisk = isRawWalletRiskRow(anchorAt, features);
   const unreadSocials = at < SOCIALS_UNREAD_NULL_SINCE.getTime();
   const unpricedEmpty = at < EMPTY_WALLETS_UNPRICED_NULL_SINCE.getTime();
-  // A pair age from before the canonical-pair clock (#896) is masked below. The early return
-  // would otherwise skip every row since 2026-10-16, which is most of those ages.
-  const preCanonicalPairClock = at < CANONICAL_PAIR_CLOCK_SINCE.getTime();
   if (
     at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime() &&
-    !preCanonicalPairClock &&
     !unwaitedHourly &&
     !rebuiltBundled &&
     !unversionedNs &&
@@ -1429,7 +1442,6 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
   if (rawWalletRisk) clear("walletRiskTop10Max");
   if (unreadSocials) for (const name of SOCIALS_UNREAD_FEATURES) if (features[name] === 0) clear(name);
   if (unpricedEmpty) clear("emptyTop10WalletPct");
-  if (preCanonicalPairClock) clear("pairAgeMinutes");
   if (at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime()) return done();
   // The tape held less than `windowMinutes` of the coin's life (the pre-refill rule's test, with
   // its slack for the rounding of pathObservedMinutes and the reference tick's own).

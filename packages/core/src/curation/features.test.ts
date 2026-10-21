@@ -8,6 +8,7 @@ import {
   learnerSubset,
   maskKnownBadInputs,
   withLaunchAge,
+  withoutPreCanonicalPairAge,
   applyClockFeatures,
   ageMayBePoolAge,
   isRawWalletRiskRow,
@@ -1082,13 +1083,29 @@ describe("maskKnownBadInputs", () => {
   it("reads pairAgeMinutes as missing on rows banked before the canonical pair clock", () => {
     const row = { pairAgeMinutes: 2.5, mcapUsd: 20_000, volume5mUsd: 60 };
     const before = new Date(CANONICAL_PAIR_CLOCK_SINCE.getTime() - 60_000);
-    expect(maskKnownBadInputs(before, row).pairAgeMinutes).toBeNull();
-    expect(maskKnownBadInputs(before, row).mcapUsd).toBe(20_000);
-    // The per-minute rate is filled after the mask. With the age gone it stays unknown.
-    expect(applyClockFeatures(maskKnownBadInputs(before, row)).volPerMin5m).toBeNull();
-    const after = maskKnownBadInputs(CANONICAL_PAIR_CLOCK_SINCE, row);
+    // The era mask leaves the age. withLaunchAge still needs it to drop a pool-aged row.
+    expect(maskKnownBadInputs(before, row)).toBe(row);
+    const cleared = withoutPreCanonicalPairAge(before, row);
+    expect(cleared.pairAgeMinutes).toBeNull();
+    expect(cleared.mcapUsd).toBe(20_000);
+    // The per-minute rate is filled after the clear. With the age gone it stays unknown.
+    expect(applyClockFeatures(cleared).volPerMin5m).toBeNull();
+    const after = withoutPreCanonicalPairAge(CANONICAL_PAIR_CLOCK_SINCE, row);
     expect(after.pairAgeMinutes).toBe(2.5);
     expect(after).toBe(row);
+    expect(withoutPreCanonicalPairAge(before, { mcapUsd: 20_000 })).toEqual({ mcapUsd: 20_000 });
+  });
+
+  it("keeps a pre-clock pair age until withLaunchAge has used it to drop a pool-aged row", () => {
+    const pool = { graduated: 1, ageMinutes: 2, pairAgeMinutes: 2.3 };
+    const old = new Date(AGE_FROM_LAUNCH_SINCE.getTime() - 60_000);
+    expect(withLaunchAge(old, pool, null)).toBeNull();
+    // Clearing the pair age first would keep the row, with an unknown coin age.
+    expect(withLaunchAge(old, withoutPreCanonicalPairAge(old, pool), null)).toEqual({
+      graduated: 1,
+      ageMinutes: null,
+      pairAgeMinutes: null,
+    });
   });
 
   it("reads a RugCheck 0 as missing while a missing report meant the coin was not indexed", () => {
