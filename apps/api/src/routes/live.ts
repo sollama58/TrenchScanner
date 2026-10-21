@@ -103,6 +103,38 @@ export function clearViewStampWindows(): void {
 }
 
 /**
+ * How many distinct bubble maps one account may keep on the fast holder re-read. The worker
+ * watches the 50 most recently stamped coins (watchedHolders.ts MAX_WATCHED). One account opening
+ * token after token used to stamp all 50 (review 2026-10-21). Four open maps fit a few tabs; a
+ * fifth distinct mint in the window is not stamped. Re-polling a map already in the window is.
+ */
+const HOLDER_WATCH_WINDOW_MS = 2 * 60_000;
+export const HOLDER_WATCHES_PER_USER = 4;
+const holderWatchesByUser = new Map<string, { at: number; mints: Set<string> }>();
+
+/** Whether this account may stamp `mint` as a watched bubble map now. */
+export function allowHolderWatch(userKey: string, mint: string, now = Date.now()): boolean {
+  let entry = holderWatchesByUser.get(userKey);
+  holderWatchesByUser.delete(userKey);
+  if (!entry || now - entry.at > HOLDER_WATCH_WINDOW_MS) entry = { at: now, mints: new Set() };
+  holderWatchesByUser.set(userKey, entry);
+  while (holderWatchesByUser.size > VIEW_STAMP_USERS_MAX) {
+    const oldest = holderWatchesByUser.keys().next().value;
+    if (oldest === undefined) break;
+    holderWatchesByUser.delete(oldest);
+  }
+  if (entry.mints.has(mint)) return true;
+  if (entry.mints.size >= HOLDER_WATCHES_PER_USER) return false;
+  entry.mints.add(mint);
+  return true;
+}
+
+/** Test seam: forget the per-account bubble-map windows. */
+export function clearHolderWatchWindows(): void {
+  holderWatchesByUser.clear();
+}
+
+/**
  * The live tick: current market data for the tokens on an open page, seconds old.
  *
  * Before this, "Now" on a card was as fresh as the last full feed poll (every 30s) carrying the

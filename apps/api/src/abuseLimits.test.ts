@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { allowViewStamps, clearViewStampWindows } from "./routes/live.js";
+import {
+  allowHolderWatch,
+  allowViewStamps,
+  clearHolderWatchWindows,
+  clearViewStampWindows,
+  HOLDER_WATCHES_PER_USER,
+} from "./routes/live.js";
 import { allowTextSearch } from "./routes/matches.js";
 import { ipRateLimitKey } from "./clientIp.js";
 
@@ -18,6 +24,22 @@ describe("view stamps per account", () => {
     expect(allowViewStamps("u2", ids(500, 30), t0 + 3)).toHaveLength(30);
     // A new window starts over.
     expect(allowViewStamps("u1", ids(900, 30), t0 + 6 * 60_000)).toHaveLength(30);
+  });
+});
+
+describe("bubble map watches per account", () => {
+  it("lets one account keep four maps on the fast re-read, and not a fifth until the window passes", () => {
+    clearHolderWatchWindows();
+    const t0 = 7_000_000;
+    const mints = ["a", "b", "c", "d", "e"];
+    for (const mint of mints.slice(0, HOLDER_WATCHES_PER_USER)) {
+      expect(allowHolderWatch("u", mint, t0)).toBe(true);
+    }
+    expect(allowHolderWatch("u", "e", t0 + 1)).toBe(false);
+    // Re-polling a map already in the window still stamps it.
+    expect(allowHolderWatch("u", "a", t0 + 30_000)).toBe(true);
+    expect(allowHolderWatch("other", "e", t0 + 1)).toBe(true);
+    expect(allowHolderWatch("u", "e", t0 + 2 * 60_000 + 1)).toBe(true);
   });
 });
 
