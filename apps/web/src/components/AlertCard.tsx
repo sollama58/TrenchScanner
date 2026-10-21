@@ -888,11 +888,6 @@ const FEE_BADGES = {
 } as const;
 
 /**
- * The footer's FEES badge: where the coin's creator fee goes (TokenSage's read), as one outline
- * icon - a heart for a charity, a gift for holder rewards or any other wallet, a robot for a GitHub
- * account, a chef's hat for the dev. Nothing when TokenSage hasn't read the coin or can't tell.
- */
-/**
  * A charity name safe to show (user ask 2026-10-21). Blank when it isn't a real name: the
  * heart then keeps the generic "a charity" tooltip, and the token details omit the line.
  */
@@ -903,6 +898,12 @@ export function shownCharityName(name: string | null | undefined): string | null
   return text.length > 80 ? `${text.slice(0, 79).trimEnd()}…` : text;
 }
 
+/**
+ * The footer's FEES badge: where the coin's creator fee goes (TokenSage's read), as one outline
+ * icon - a heart for a charity, a gift for holder rewards or any other wallet, a robot for a GitHub
+ * account, a chef's hat for the dev. Nothing when TokenSage hasn't read the coin or can't tell.
+ * On a charity coin the tooltip names the organization when one was loaded.
+ */
 export function feeBadge(fee: Card["token"]["creatorFee"]): {
   kind: keyof typeof FEE_BADGES;
   Icon: (typeof FEE_BADGES)[keyof typeof FEE_BADGES]["Icon"];
