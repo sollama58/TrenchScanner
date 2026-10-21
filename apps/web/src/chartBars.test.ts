@@ -3,6 +3,7 @@ import {
   autoTimeframe,
   buildSlots,
   candlesForResolution,
+  oneSecondChartNotice,
   slotCandle,
   slotIndex,
   slotOfTime,
@@ -77,6 +78,17 @@ describe("buildSlots", () => {
     expect(buildSlots([], [], 1_000)).toBeNull();
   });
 
+  it("is null for a minute-only history on the 1-second chart, and says so", () => {
+    expect(buildSlots([k(0, 1, 2, 60_000, 40)], [], 1_000)).toBeNull();
+    expect(oneSecondChartNotice(1_000, 1, false)).toBe(
+      "No 1-second trades in this view. Coarser candles are not drawn on the 1-second chart.",
+    );
+    // A wider timeframe, a chart that drew, and a coin with no candles at all stay quiet.
+    expect(oneSecondChartNotice(60_000, 1, false)).toBeNull();
+    expect(oneSecondChartNotice(1_000, 1, true)).toBeNull();
+    expect(oneSecondChartNotice(1_000, 0, false)).toBeNull();
+  });
+
   it("a merged series requested at 1s does not contain a 5s-width candle", () => {
     // The stitch keeps the 5s bucket for the stretch the 1s page does not reach. The 1s chart
     // must not draw it, wide or squeezed into one slot.
@@ -96,6 +108,8 @@ describe("buildSlots", () => {
       [5_000, 13],
       [8_000, 11],
     ]);
+    // The dropped 5-second candle's volume (40) is not painted on the 1-second scale either.
+    expect(slots.bars.reduce((sum, b) => sum + b.vol, 0)).toBe(6);
     // A 5s candle handed straight to the 1s slots is omitted too, not drawn five seconds wide.
     const direct = buildSlots([k(0, 1, 2, 5_000), k(5_000, 2, 3, 1_000)], [], 1_000)!;
     expect(direct.start).toBe(5_000);
