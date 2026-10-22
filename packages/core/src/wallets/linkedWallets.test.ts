@@ -220,6 +220,32 @@ describe("linkedWallets", () => {
     expect(r.holders).toHaveLength(5);
     expect(r.holders.map((h) => h.pct)).toEqual([...r.holders.map((h) => h.pct)].sort((x, y) => y - x));
   });
+
+  it("keeps each holder's first funder and funding time, including an exchange", () => {
+    const funders = new Map<string, string | null>([
+      ["a", "CEX"],
+      ["b", "F"],
+      ["c", null],
+      ["d", null],
+      ["e", null],
+    ]);
+    const at = new Map<string, number | null>([
+      ["a", 1_700_000_000_000],
+      ["b", 1_700_000_060_000],
+      ["c", null],
+    ]);
+    const r = linkedWallets(holders, funders, { hot: (w) => w === "CEX", fundedAtOf: at })!;
+    expect(r.holders.find((h) => h.wallet === "a")).toMatchObject({
+      funder: "CEX",
+      fundedAtMs: 1_700_000_000_000,
+    });
+    expect(r.holders.find((h) => h.wallet === "b")).toMatchObject({
+      funder: "F",
+      fundedAtMs: 1_700_000_060_000,
+    });
+    expect(r.holders.find((h) => h.wallet === "c")!.funder).toBeUndefined();
+    expect(r.holders.find((h) => h.wallet === "c")!.fundedAtMs).toBeUndefined();
+  });
 });
 
 describe("supply tied to the creator", () => {

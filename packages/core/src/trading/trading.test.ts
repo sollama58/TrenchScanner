@@ -1082,7 +1082,7 @@ describe("Jupiter swap client", () => {
       }).pricesUsd([OWNER]),
     ).rejects.toBeInstanceOf(RateLimitedError);
     expect(s.calls()).toBe(1);
-    s = scripted([json({ errorCode: "COULD_NOT_FIND_ANY_ROUTE", error: "no route" }, 400)]);
+    s = scripted([json({ errorCode: "NO_ROUTES_FOUND", error: "No routes found" }, 400)]);
     await expect(
       new JupiterSwapClient({ fetchImpl: s.fetchImpl }).quote({
         inputMint: OWNER,
@@ -1090,8 +1090,79 @@ describe("Jupiter swap client", () => {
         amount: 1000n,
         slippageBps: 100,
       }),
-    ).rejects.toBeInstanceOf(NoRouteError);
-    expect(s.calls()).toBe(1);
+    ).rejects.toThrow("Jupiter quote: no route (NO_ROUTES_FOUND)");
+    // Liquid intermediates, then any hop. Not a third try of the same request.
+    expect(s.calls()).toBe(2);
+  });
+
+  it("forms a quote Jupiter can route when the direct or liquid-only request cannot", async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      urls.push(String(url));
+      const q = new URL(String(url)).searchParams;
+      // The old request: direct only, a zero amount, or a mint under the wrong field.
+      const oldShape =
+        q.get("onlyDirectRoutes") === "true" ||
+        q.get("amount") === "0" ||
+        q.get("amount") === null ||
+        !q.get("inputMint") ||
+        !q.get("outputMint") ||
+        q.has("mint") ||
+        q.get("restrictIntermediateTokens") !== "false";
+      return oldShape
+        ? json({ errorCode: "NO_ROUTES_FOUND", error: "No routes found" }, 400)()
+        : json(quote)();
+    }) as typeof fetch;
+    const client = new JupiterSwapClient({ baseUrl: "https://lite-api.jup.ag", fetchImpl });
+    await expect(
+      client.quote({
+        inputMint: OWNER,
+        outputMint: quote.outputMint,
+        amount: 1000n,
+        slippageBps: 100,
+        onlyDirectRoutes: true,
+      }),
+    ).resolves.toMatchObject({ outAmount: "10" });
+    const last = new URL(urls[urls.length - 1]!);
+    expect(last.hostname).toBe("lite-api.jup.ag");
+    expect(last.pathname).toBe("/swap/v1/quote");
+    expect(last.searchParams.get("onlyDirectRoutes")).toBeNull();
+    expect(last.searchParams.get("asLegacyTransaction")).toBeNull();
+    expect(last.searchParams.get("restrictIntermediateTokens")).toBe("false");
+    expect(last.searchParams.get("amount")).toBe("1000");
+    expect(last.searchParams.get("inputMint")).toBe(OWNER);
+    expect(last.searchParams.get("outputMint")).toBe(quote.outputMint);
+    expect(urls.some((u) => new URL(u).searchParams.get("onlyDirectRoutes") === "true")).toBe(true);
+  });
+
+  it("does not ask Jupiter to route a zero amount, or a pump.fun mint through an open side pool", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls++;
+      return json({ errorCode: "NO_ROUTES_FOUND", error: "No routes found" }, 400)();
+    }) as typeof fetch;
+    const client = new JupiterSwapClient({ baseUrl: "https://lite-api.jup.ag", fetchImpl });
+    await expect(
+      client.quote({ inputMint: OWNER, outputMint: quote.outputMint, amount: 0n, slippageBps: 100 }),
+    ).rejects.toThrow(/amount must be more than zero/);
+    expect(calls).toBe(0);
+    const pump = `${"1".repeat(40)}pump`;
+    await expect(
+      client.quote({ inputMint: OWNER, outputMint: pump, amount: 1000n, slippageBps: 100 }),
+    ).rejects.toThrow("Jupiter quote: no route (NO_ROUTES_FOUND)");
+    // One request. An open retry would buy the coin on whatever pool Jupiter found, not its curve.
+    expect(calls).toBe(1);
+    calls = 0;
+    await expect(
+      client.quote({
+        inputMint: OWNER,
+        outputMint: quote.outputMint,
+        amount: 1000n,
+        slippageBps: 100,
+        restrictIntermediateTokens: true,
+      }),
+    ).rejects.toThrow("Jupiter quote: no route (NO_ROUTES_FOUND)");
+    expect(calls).toBe(1);
   });
 
   it("asks for the estimate under the cap, or exactly a raised fee (never over the cap)", async () => {

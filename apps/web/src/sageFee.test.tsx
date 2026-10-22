@@ -16,15 +16,16 @@ describe("TokenSage fee card", () => {
       recipients: [],
       charityName: name,
     };
-    expect(sageFeeIntro(fee)).toBe(`${name}. Creator fees go to charity.`);
+    expect(sageFeeIntro(fee)).toBe(`Creator fees go to ${name}.`);
     const html = renderToStaticMarkup(<FeeCard fee={fee} />);
+    expect(html).toContain("Creator fees go to");
     expect(html).toContain("St. Jude Children");
     expect(html).toContain("Research Hospital");
-    expect(html).toContain("Creator fees go to charity.");
-    // The heart's tooltip is the same sentence. This card does not replace that rule.
+    expect(html).not.toContain("Creator fees go to charity.");
+    // The heart's tooltip is the same sentence.
     expect(
       feeBadge({ destination: "charity", summary: "creator fees go to charity.", charityName: name })?.title,
-    ).toBe(`${name}. Creator fees go to charity.`);
+    ).toBe(`Creator fees go to ${name}.`);
     expect(sageFeeIntro({ ...fee, charityName: null })).toBe("Creator fees go to charity.");
     expect(
       sageFeeIntro({ destination: "creator", summary: "creator fees go to the dev", charityName: name }),

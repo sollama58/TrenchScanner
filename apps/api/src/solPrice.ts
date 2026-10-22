@@ -104,6 +104,11 @@ export class SolPrice {
     return this.get().catch(() => null);
   }
 
+  /** The price already kept, or null. Does not ask a provider. */
+  current(): number | null {
+    return this.kept(this.now());
+  }
+
   /** The kept price if it is young enough to serve, else null (logged). */
   private kept(now: number): number | null {
     if (!this.value) return null;

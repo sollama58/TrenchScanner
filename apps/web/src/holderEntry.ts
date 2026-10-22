@@ -8,6 +8,12 @@ export interface HolderEntry {
   solIn: number;
   solOut: number;
   soldShare: number | null;
+  /**
+   * Whole tokens bought and sold on the tape. Absent from API builds from before they were sent.
+   * 0 means the tape read none, not that the amounts were never calculated.
+   */
+  tokensBought?: number;
+  tokensSold?: number;
 }
 
 const sol = (v: number) => `${v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2)} SOL`;

@@ -190,7 +190,6 @@ export function AlertCard({
     devHolding,
     devFromLatest,
     feeLine,
-    charityName,
   } = cardReadings(tileCard, "newest");
   const devWhen = devFromLatest
     ? `as of the scan ${ago(card.latestSnapshot!.takenAt, now)}`
@@ -306,6 +305,7 @@ export function AlertCard({
                 {card.token.name}
               </span>
             )}
+            {show("time") && <span className="when">{ago(card.matchedAt, now)}</span>}
           </div>
           <div className="meta-row">
             {styled ? (
@@ -384,30 +384,31 @@ export function AlertCard({
                 <span className="pill-text">{calibratedRateLabel(cardCalibratedRate(curated, calls))}</span>
               </span>
             )}
-            {show("time") && <span className="when">{ago(card.matchedAt, now)}</span>}
           </div>
         </div>
-        {quickBuy("top-right")}
-        {resultMark && show("result") && (
-          <span
-            className={`badge card-result ${badge.tone}`}
-            role="img"
-            title={badge.text}
-            aria-label={badge.text}
-          >
-            {/* Inter has no ⊘, and the fallback font draws it larger than the other marks. */}
-            {resultMark === "⊘" ? <span className="result-stop">⊘</span> : resultMark}
-          </span>
-        )}
-        {detail && look.cardSearch && (
-          <CardSearchButton
-            className="card-search"
-            symbol={card.token.symbol}
-            name={card.token.name}
-            mint={card.token.mintAddress}
-          />
-        )}
-        {!hideInAlert && hideButton}
+        <div className="card-tools">
+          {quickBuy("top-right")}
+          {resultMark && show("result") && (
+            <span
+              className={`badge card-result ${badge.tone}`}
+              role="img"
+              title={badge.text}
+              aria-label={badge.text}
+            >
+              {/* Inter has no ⊘, and the fallback font draws it larger than the other marks. */}
+              {resultMark === "⊘" ? <span className="result-stop">⊘</span> : resultMark}
+            </span>
+          )}
+          {detail && look.cardSearch && (
+            <CardSearchButton
+              className="card-search"
+              symbol={card.token.symbol}
+              name={card.token.name}
+              mint={card.token.mintAddress}
+            />
+          )}
+          {!hideInAlert && hideButton}
+        </div>
       </header>
 
       {figCount > 0 && (
@@ -729,7 +730,6 @@ export function AlertCard({
                   : devHolding
                     ? `DH = Dev Holding: the creator's wallet still holds this token (${devWhen})`
                     : `DS = Dev Sold: the creator's wallet holds none of this token (${devWhen})`) +
-                (charityName ? `\nCharity: ${charityName}` : "") +
                 (feeLine ? `\n${feeLine}` : "")
               }
             >
@@ -893,14 +893,62 @@ const FEE_BADGES = {
   dev: { Icon: ChefHatIcon, label: "go to the dev" },
 } as const;
 
+/**
+ * A charity name safe to show (user ask 2026-10-21). Blank when it isn't a real name: the
+ * heart and the token details then keep the generic charity sentence.
+ */
+export function shownCharityName(name: string | null | undefined): string | null {
+  if (typeof name !== "string") return null;
+  const text = name.replace(/\s+/g, " ").trim();
+  if (!text || !/\p{L}/u.test(text)) return null;
+  return text.length > 80 ? `${text.slice(0, 79).trimEnd()}…` : text;
+}
+
+function stopped(text: string | null | undefined): string | null {
+  const t = text?.trim().replace(/\.$/, "");
+  return t ? `${t.charAt(0).toUpperCase()}${t.slice(1)}.` : null;
+}
+
+/** TokenSage's generic charity sentence, with or without "a", and without a final period. */
+const GENERIC_CHARITY = /^creator fees go to (?:a )?charity$/i;
+
+/**
+ * The sentence every charity surface shows once Pump.fun has named the organization.
+ * A coin with no name yet keeps TokenSage's own sentence.
+ */
+export function creatorFeeSummary(
+  fee:
+    | {
+        destination?: string | null;
+        summary?: string | null;
+        charityName?: string | null;
+      }
+    | null
+    | undefined,
+): string | null {
+  const named = fee?.destination === "charity" ? shownCharityName(fee.charityName) : null;
+  const raw = fee?.summary?.trim().replace(/\.$/, "") ?? "";
+  if (named) {
+    const sentence = `Creator fees go to ${named}.`;
+    if (!raw || GENERIC_CHARITY.test(raw)) return sentence;
+    const rest = raw.replace(/^creator fees go to (?:a )?charity\b/i, "").trim();
+    if (rest !== raw) {
+      if (!rest) return sentence;
+      const gap = rest.startsWith(":") || rest.startsWith(",") ? "" : " ";
+      const joined = `Creator fees go to ${named}${gap}${rest}`;
+      return joined.endsWith(".") ? joined : `${joined}.`;
+    }
+    if (raw.toLowerCase().includes(named.toLowerCase())) return stopped(raw);
+    const full = stopped(raw);
+    return full ? `${sentence} ${full}` : sentence;
+  }
+  return stopped(fee?.summary);
+}
+
 /** TokenSage's sentence and, when known, the desk's own sentence, each stopped once. */
 export function creatorFeeLine(fee: Card["token"]["creatorFee"] | null | undefined): string | null {
-  const sentence = (text: string | null | undefined): string | null => {
-    const t = text?.trim().replace(/\.$/, "");
-    return t ? `${t.charAt(0).toUpperCase()}${t.slice(1)}.` : null;
-  };
-  const summary = sentence(fee?.summary);
-  const desk = sentence(fee?.deskLine);
+  const summary = creatorFeeSummary(fee);
+  const desk = stopped(fee?.deskLine);
   if (summary && desk && summary !== desk) return `${summary} ${desk}`;
   return summary ?? desk;
 }
@@ -913,17 +961,6 @@ export function holderRewardTaxLabel(bps: number | null | undefined): string | n
   if (typeof bps !== "number" || !Number.isInteger(bps) || bps <= 0 || bps > 10_000) return null;
   const text = (bps / 100).toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
   return `${text}%`;
-}
-
-/**
- * A charity name safe to show (user ask 2026-10-21). Blank when it isn't a real name: the
- * heart then keeps the generic "a charity" tooltip, and the token details omit the line.
- */
-export function shownCharityName(name: string | null | undefined): string | null {
-  if (typeof name !== "string") return null;
-  const text = name.replace(/\s+/g, " ").trim();
-  if (!text || !/\p{L}/u.test(text)) return null;
-  return text.length > 80 ? `${text.slice(0, 79).trimEnd()}…` : text;
 }
 
 /**
@@ -944,25 +981,9 @@ export function feeBadge(fee: Card["token"]["creatorFee"]): {
   const kind = feeKind(fee?.destination) ?? (fee?.deskLine?.trim() ? "rewards" : null);
   if (!kind) return null;
   const { Icon, label } = FEE_BADGES[kind];
-  // TokenSage's sentence, with OTC Desks' reward-coin sentence after it when the roster names one.
-  const line = creatorFeeLine(fee);
-  const charityName = kind === "charity" ? shownCharityName(fee?.charityName) : null;
-  const hasSummary = Boolean(fee?.summary?.trim().replace(/\.$/, ""));
-  // A loaded charity name leads TokenSage's sentence, and replaces the generic heart sentence
-  // when TokenSage has none (`Creator fees go to <name>.`). The desk sentence still follows.
-  let title: string;
-  if (charityName == null) {
-    title = line ?? `Creator fees ${label}.`;
-  } else if (!hasSummary) {
-    const named = `Creator fees go to ${charityName}.`;
-    title = line && line !== named ? `${named} ${line}` : named;
-  } else if (line?.includes(charityName)) {
-    title = line;
-  } else if (line) {
-    title = `${charityName}. ${line}`;
-  } else {
-    title = `Creator fees go to ${charityName}.`;
-  }
+  // TokenSage's sentence, with the charity's organization in that same sentence, and OTC Desks'
+  // reward-coin sentence after it when the roster names one.
+  const title = creatorFeeLine(fee) ?? `Creator fees ${label}.`;
   const tax = fee?.destination === "holder_rewards" ? holderRewardTaxLabel(fee.bps) : null;
   return { kind, Icon, title, tax };
 }
@@ -1044,7 +1065,7 @@ export function cardReadings(card: Card, prefer: "alert" | "newest" = "alert") {
   const devHolding = latest?.devHolding ?? s.devHolding ?? null;
   const devFromLatest = latest?.devHolding != null;
   // Where the creator fee goes, under the Dev tile's tooltip (2026-10-21): TokenSage's sentence,
-  // OTC Desks' reward coins when their roster names them, and the charity's name for the details.
+  // the charity's organization in that same sentence, and OTC Desks' reward coins.
   const fee = card.token.creatorFee;
   const feeLine = creatorFeeLine(fee);
   const charityName = fee?.destination === "charity" ? shownCharityName(fee.charityName) : null;

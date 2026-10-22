@@ -37,7 +37,7 @@ import { useLiveMarketCaps, usePolling } from "../hooks";
 import { MIN_WIN_SOL, ago, change, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
 import { TokenImage } from "./TokenImage";
 import { FoldHead } from "./Fold";
-import { LiveStamp, hms, nextUpdateText, secondsAgo, useSecondTick } from "./Freshness";
+import { LiveStamp, hms } from "./Freshness";
 import { DevCard, FlowCard, SocialsCard, type TokenProfile } from "./TokenProfileCards";
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
@@ -192,6 +192,8 @@ interface TokenChart {
   wallets?: FlaggedWallet[];
   /** How each top holder got in, by wallet (HolderEntry). Absent from older API builds. */
   holderEntries?: Record<string, HolderEntry>;
+  /** SOL's USD price already kept by the API. Absent when it has none in hand. */
+  solUsd?: number;
 }
 
 /** Mirrors apps/api/src/tokenChart.ts MarkedWallet. */
@@ -952,10 +954,14 @@ function TokenBody({
   );
   // Each live section's age and next update, beside its count (user ask 2026-10-19): the holder
   // list follows the scans; the labeled wallets, the chart read they come from.
-  const holdersFresh =
-    !holders.isKept && holders.listReading && hasHolderList(holders.listReading)
-      ? { ...holderFreshness(holders.listReading, now, reads), live: !!liveShares?.live }
-      : undefined;
+  const holdersFresh = (() => {
+    if (holders.isKept || !holders.listReading || !hasHolderList(holders.listReading)) return undefined;
+    const chain = holderFreshness(holders.listReading, now, reads);
+    // The trade feed's "live" is the stream pushing updates. A balance tick does not set it.
+    // While that stream is covering the coin there is no scheduled re-read to count down.
+    if (liveShares?.live) return { last: chain.last, next: null, late: false, live: true, gone: false };
+    return { last: chain.last, next: chain.due, late: false, live: false, gone: chain.due === null };
+  })();
   // The chart read's own beat, which the wallets come with.
   const walletsFresh = chart.at === null ? undefined : { last: chart.at, next: chart.schedule ?? null };
   // Who holds the coin now, by the latest scan's holder list, for the Labeled wallets toggle.
@@ -1262,10 +1268,9 @@ function TokenBody({
           reading={holders.reading}
         />
       ) : (
-        linked &&
-        hasHolderList(linked) && (
+        holdersFresh && (
           <HolderFreshness
-            fresh={holderFreshness(linked, now, reads)}
+            fresh={holdersFresh}
             moment={utility || holders.canSwitch ? undefined : holdersMoment(card, linked)}
           />
         )
@@ -1287,6 +1292,7 @@ function TokenBody({
       // Scope's wide tab: the map spreads across it (user ask 2026-10-19).
       spread={terminal && !column ? 2.6 : undefined}
       live={liveShares}
+      freshness={holdersFresh}
     />
   );
   const bubbleMap = bubbleMapIn(false);
@@ -1323,6 +1329,7 @@ function TokenBody({
                 pending={scanning}
                 defaultOpen
                 freshness={holdersFresh}
+                solUsd={chart.data?.solUsd ?? null}
               />
               <StonkFeesCard mint={mint} />
             </>
@@ -1592,6 +1599,7 @@ function TokenBody({
             entries={entries}
             pending={scanning}
             freshness={holdersFresh}
+            solUsd={chart.data?.solUsd ?? null}
           />
         </div>
         {flagged.length > 0 && (
@@ -2317,36 +2325,17 @@ function AlertHoldersWhen({
  * 2026-10-13, 2026-10-19): the same moment the bubble map's badge counts from.
  */
 function HolderFreshness({
-  fresh: { last, next, due, late },
+  fresh,
   moment,
 }: {
-  fresh: ReturnType<typeof holderFreshness>;
+  fresh: { last: number; next: number | null; late?: boolean; live?: boolean; gone?: boolean };
   moment?: { label: string; title: string };
 }) {
-  // Seconds and a countdown, on their own one-second tick.
-  const tick = useSecondTick();
   return (
     <p className="tm-holders-when">
-      {moment && <b title={moment.title}>{moment.label} · </b>}
-      <span title={`The top holders as last read by the scan, at ${hms(last)}.`}>
-        Last updated {hms(last)} ({secondsAgo(last, tick)})
-      </span>
-      {due === null ? (
-        <> · No further updates: the coin is no longer being scanned</>
-      ) : (
-        next !== null && (
-          <>
-            {" "}
-            ·{" "}
-            <span
-              className="num"
-              title={`The scan reads the top holders again about ${hms(due)}; this view looks for it at ${hms(next)}.`}
-            >
-              {nextUpdateText(next, tick, late)}
-            </span>
-          </>
-        )
-      )}
+      {moment && !fresh.live && <b title={moment.title}>{moment.label} · </b>}
+      <LiveStamp last={fresh.last} next={fresh.next} late={fresh.late} live={fresh.live} />
+      {fresh.gone && <> · No further updates: the coin is no longer being scanned</>}
     </p>
   );
 }
@@ -3748,26 +3737,16 @@ function StatsCard({ card, liquidity = false }: { card: Card; liquidity?: boolea
                   : "–")}
           </dd>
         </div>
-        <div
-          title={
-            [r.charityName && `Charity: ${r.charityName}`, r.feeLine].filter(Boolean).join("\n") || undefined
-          }
-        >
+        <div title={r.feeLine || undefined}>
           <dt>Dev</dt>
           <dd>
             {wait(r.devHolding === null) ?? (r.devHolding === null ? "–" : r.devHolding ? "Holding" : "Sold")}
           </dd>
         </div>
       </dl>
-      {(r.charityName || r.feeLine) && (
+      {r.feeLine && card.token.creatorFee && (
         <p className="small muted tm-fee">
-          {r.charityName && <>Charity: {r.charityName}</>}
-          {r.charityName && r.feeLine && <br />}
-          {r.feeLine && card.token.creatorFee && (
-            <>
-              Creator fee: <CreatorFeeRich fee={card.token.creatorFee} />
-            </>
-          )}
+          Creator fee: <CreatorFeeRich fee={card.token.creatorFee} />
         </p>
       )}
     </section>

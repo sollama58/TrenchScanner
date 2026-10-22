@@ -7,6 +7,7 @@ import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, LockIcon, SageIcon } from
 import { XLinkPreview } from "./XLinkPreview";
 import { Skeleton } from "./Skeleton";
 import { closeSage, SAGE_PARAM } from "../sage";
+import { creatorFeeSummary, shownCharityName } from "./AlertCard";
 import { DeskSentence } from "./FeeRewards";
 import { useShowNarrativeNote } from "../narrativeNote";
 
@@ -753,34 +754,13 @@ function SageReadView({ read: r, view }: { read: SageRead; view: SageView }) {
   );
 }
 
-/** TokenSage's lower-case fragment as a sentence. */
-function sentence(text: string): string {
-  const t = text.trim().replace(/\.$/, "");
-  return `${t.charAt(0).toUpperCase()}${t.slice(1)}.`;
-}
-
-/**
- * A charity name safe to show. Matches the heart's tooltip: a real name, cut at 80
- * characters. The heart itself is unchanged.
- */
-function charityLabel(name: string | null | undefined): string | null {
-  if (typeof name !== "string") return null;
-  const text = name.replace(/\s+/g, " ").trim();
-  if (!text || !/\p{L}/u.test(text)) return null;
-  return text.length > 80 ? `${text.slice(0, 79).trimEnd()}…` : text;
-}
-
-/** TokenSage's sentence, with the charity's name in front when Pump.fun named one. */
+/** The same charity sentence as the heart's tooltip and the token details. */
 export function sageFeeIntro(fee: {
   destination: string;
   summary: string | null;
   charityName?: string | null;
 }): string | null {
-  const charity = fee.destination === "charity" ? charityLabel(fee.charityName) : null;
-  const summary = fee.summary ? sentence(fee.summary) : null;
-  if (charity && summary) return summary.includes(charity) ? summary : `${charity}. ${summary}`;
-  if (charity) return `Creator fees go to ${charity}.`;
-  return summary;
+  return creatorFeeSummary(fee);
 }
 
 /** Where the creator fee goes: TokenSage's sentence, each recipient's share, and links. */
@@ -793,6 +773,7 @@ export function FeeCard({
   deskLine?: string | null;
   rewards?: { label: string; mint: string | null }[] | null;
 }) {
+  const org = fee.destination === "charity" ? shownCharityName(fee.charityName) : null;
   const named = fee.recipients.filter((r) => r.label !== null || r.lifetimeReceived !== null);
   const intro = sageFeeIntro(fee);
   return (
@@ -800,7 +781,7 @@ export function FeeCard({
       <h4>
         Creator fee
         <span className="sage-tag tone-neutral">
-          {FEE_DESTINATION[fee.destination] ?? FEE_DESTINATION.other}
+          {org ? `Goes to ${org}` : (FEE_DESTINATION[fee.destination] ?? FEE_DESTINATION.other)}
         </span>
         {fee.mutable && <span className="sage-tag tone-neutral">Split can still change</span>}
       </h4>
@@ -821,26 +802,30 @@ export function FeeCard({
       )}
       {named.length > 0 && (
         <ul className="sage-terms">
-          {named.map((r, i) => (
-            <li key={`${r.kind}-${i}`}>
-              {r.url ? (
-                <a href={r.url} target="_blank" rel="noopener noreferrer">
-                  {r.label ?? FEE_RECIPIENT[r.kind] ?? words(r.kind)}
-                </a>
-              ) : (
-                <strong>{r.label ?? FEE_RECIPIENT[r.kind] ?? words(r.kind)}</strong>
-              )}
-              <span className="muted small">
-                {FEE_RECIPIENT[r.kind] ?? words(r.kind)}
-                {r.share !== null ? ` · ${pct0(r.share)}` : ""}
-                {r.lifetimeReceived !== null
-                  ? r.kind === "charity"
-                    ? ` · ${amount(r.lifetimeReceived)} donated by this coin`
-                    : ` · ${amount(r.lifetimeReceived)} SOL claimed across its coins`
-                  : ""}
-              </span>
-            </li>
-          ))}
+          {named.map((r, i) => {
+            const who =
+              r.label ?? (r.kind === "charity" && org ? org : null) ?? FEE_RECIPIENT[r.kind] ?? words(r.kind);
+            return (
+              <li key={`${r.kind}-${i}`}>
+                {r.url ? (
+                  <a href={r.url} target="_blank" rel="noopener noreferrer">
+                    {who}
+                  </a>
+                ) : (
+                  <strong>{who}</strong>
+                )}
+                <span className="muted small">
+                  {FEE_RECIPIENT[r.kind] ?? words(r.kind)}
+                  {r.share !== null ? ` · ${pct0(r.share)}` : ""}
+                  {r.lifetimeReceived !== null
+                    ? r.kind === "charity"
+                      ? ` · ${amount(r.lifetimeReceived)} donated by this coin`
+                      : ` · ${amount(r.lifetimeReceived)} SOL claimed across its coins`
+                    : ""}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

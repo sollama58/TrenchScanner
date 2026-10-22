@@ -224,8 +224,17 @@ export interface LinkedWalletsReading {
   /**
    * Every holder the reading covers (the creator aside) and its share, %, largest first: the
    * bubble map's bubbles. creatorTied: counted in linkedCreatorPct (the top-holder list's tag).
+   * `funder` and `fundedAtMs` are the first-fund lookup already in hand: who paid for the wallet
+   * and when. Absent when that lookup found nobody, or the time was not kept. A hot funder (an
+   * exchange) is still recorded here; it is only left out of the clusters.
    */
-  holders: { wallet: string; pct: number; creatorTied?: true }[];
+  holders: {
+    wallet: string;
+    pct: number;
+    creatorTied?: true;
+    funder?: string;
+    fundedAtMs?: number;
+  }[];
   /** % of supply held by holders funded within SAME_TIME_FUNDING_MS of each other (any funders). */
   sameTimeFundedPct: number;
   /** Groups of two or more holders funded within SAME_TIME_FUNDING_MS of each other. */
@@ -454,11 +463,18 @@ export function linkedWallets(
     clusters,
     holders: [...list]
       .sort((a, b) => b.pct - a.pct)
-      .map((h) => ({
-        wallet: h.owner,
-        pct: round2(h.pct),
-        ...(tied.has(h.owner) ? { creatorTied: true as const } : {}),
-      })),
+      .map((h) => {
+        const funder = funderOf.get(h.owner);
+        const at = opts.fundedAtOf?.get(h.owner);
+        return {
+          wallet: h.owner,
+          pct: round2(h.pct),
+          ...(tied.has(h.owner) ? { creatorTied: true as const } : {}),
+          // The first fund already read for this wallet. Not a new lookup.
+          ...(funder ? { funder } : {}),
+          ...(typeof at === "number" && Number.isFinite(at) ? { fundedAtMs: at } : {}),
+        };
+      }),
     sameTimeFundedPct: round2(sameTime.reduce((s, c) => s + c.pct, 0)),
     sameTimeClusterCount: sameTime.length,
     sameTimeFundedCount: sameTime.reduce((n, c) => n + c.wallets.length, 0),

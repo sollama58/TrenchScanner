@@ -368,6 +368,19 @@ export interface Snapshot {
         empty?: boolean;
         /** Counted in linkedCreatorPct: tied to the creator, on scans since 2026-10-17. */
         creatorTied?: boolean;
+        /** Who paid for the wallet's first SOL, and when. Absent when the lookup had neither. */
+        funder?: string;
+        fundedAtMs?: number;
+        /**
+         * Priced non-SOL, non-stablecoin holdings in USD. Absent when that check did not run.
+         * Never filled with 0 to mean "not calculated".
+         */
+        portfolioUsd?: number;
+        /**
+         * Native SOL in lamports from the holder chain read. Absent when that batch failed or
+         * this wallet was not in it. Zero is a real empty account.
+         */
+        solLamports?: number;
       }[]
     | null;
   /**
@@ -1935,6 +1948,25 @@ export interface ScoreWeightsInfo {
     narrative: number;
     reason: string;
   }[];
+}
+
+/** One Model Alert key as Settings lists it. The secret is not included. */
+export interface ModelAlertKey {
+  id: string;
+  /** The start of the secret, so a key can be recognized after the secret is gone. */
+  prefix: string;
+  createdAt: string;
+}
+
+/** GET /settings/model-alert-keys. */
+export interface ModelAlertKeyList {
+  keys: ModelAlertKey[];
+  limit: number;
+}
+
+/** POST /settings/model-alert-keys. `secret` is shown once, in this response only. */
+export interface ModelAlertKeyCreated extends ModelAlertKey {
+  secret: string;
 }
 
 export interface Settings {

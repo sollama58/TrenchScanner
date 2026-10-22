@@ -1,8 +1,14 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { prisma, type FunderActivityResult, type FunderResult } from "@trenchscanner/core";
 import {
+  prisma,
+  type FunderActivityResult,
+  type FunderResult,
+  type OnChainProfile,
+} from "@trenchscanner/core";
+import {
+  applyHolderBalances,
   cachedTopHolders,
   cexReadingOf,
   linkedHoldersOf,
@@ -18,6 +24,7 @@ import {
   takeLinkedWalletStats,
   wideMapReadings,
 } from "./linkedWallets.js";
+import { withLinkedWallets } from "./scanJob.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `linked-test-${Date.now()}`;
@@ -584,5 +591,76 @@ describe("readTopHolders", () => {
     await readTopHolders(groups, helius, { maxReads: 4 });
     expect(groups[0]!.holders).toEqual([{ owner: "rugcheck", pct: 1 }]);
     expect(cachedTopHolders("mC")).toBeUndefined();
+  });
+
+  it("reads native SOL once with the chain list and keeps it across a balance tick", async () => {
+    const helius = {
+      getTopHoldersBatch: vi.fn(async (mints: string[]) => {
+        return new Map(
+          mints.map((m) => [
+            m,
+            {
+              status: "found" as const,
+              supply: "1000000000",
+              holders: [
+                { owner: "rich", pct: 5, accounts: ["acc-rich"] },
+                { owner: "gone", pct: 3, accounts: ["acc-gone"] },
+                { owner: "empty", pct: 1, accounts: ["acc-empty"] },
+              ],
+            },
+          ]),
+        );
+      }),
+      getNativeSolLamports: vi.fn(async (addresses: string[]) => {
+        const balances = new Map<string, number | null>([
+          ["rich", 1_500_000_000],
+          ["gone", null],
+          ["empty", 0],
+        ]);
+        return new Map(addresses.map((a) => [a, balances.get(a) ?? null]));
+      }),
+    };
+    const groups: LinkedGroup[] = [{ mintAddress: "mSol", holders: [] }];
+    await readTopHolders(groups, helius, { maxReads: 1, nowMs: 0 });
+    expect(helius.getNativeSolLamports).toHaveBeenCalledTimes(1);
+    expect(helius.getNativeSolLamports.mock.calls[0]![0].sort()).toEqual(["empty", "gone", "rich"]);
+    expect(cachedTopHolders("mSol", 1)).toEqual([
+      { owner: "rich", pct: 5, solLamports: 1_500_000_000 },
+      { owner: "gone", pct: 3 },
+      { owner: "empty", pct: 1, solLamports: 0 },
+    ]);
+    const carried = withLinkedWallets(
+      {
+        mintAddress: "mSol",
+        topHolderShares: [
+          { owner: "rich", pct: 5 },
+          { owner: "gone", pct: 3 },
+          { owner: "empty", pct: 1 },
+        ],
+      } as unknown as OnChainProfile,
+      null,
+    );
+    expect(carried?.linkedHolders).toEqual([
+      { wallet: "rich", pct: 5, solLamports: 1_500_000_000 },
+      { wallet: "gone", pct: 3 },
+      { wallet: "empty", pct: 1, solLamports: 0 },
+    ]);
+
+    // Inside the refresh window the list is not read again, and neither is SOL.
+    await readTopHolders(groups, helius, { maxReads: 1, nowMs: 1 });
+    expect(helius.getTopHoldersBatch).toHaveBeenCalledTimes(1);
+    expect(helius.getNativeSolLamports).toHaveBeenCalledTimes(1);
+
+    // A streamed token-balance update moves the share and does not ask for SOL again.
+    applyHolderBalances(
+      "mSol",
+      [{ account: "acc-rich", owner: "rich", pre: 50_000_000n, post: 40_000_000n }],
+      2,
+      "sig",
+    );
+    expect(helius.getNativeSolLamports).toHaveBeenCalledTimes(1);
+    const rich = cachedTopHolders("mSol", 3)?.find((h) => h.owner === "rich");
+    expect(rich?.solLamports).toBe(1_500_000_000);
+    expect(rich?.pct).not.toBe(5);
   });
 });

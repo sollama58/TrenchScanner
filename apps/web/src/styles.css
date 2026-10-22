@@ -1500,6 +1500,17 @@ img.avatar {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* "Holders · 12m" stays one line with the age. A wrapped label made the tiles in a row
+   different heights, so the values no longer sat on one baseline. */
+.card-stats dt:has(.fig-age) {
+  white-space: nowrap;
+  letter-spacing: 0;
+  font-size: 7.5px;
+  line-height: 1.15;
+}
+.card-stats div:has(> dt .fig-age) {
+  padding-inline: 2px;
+}
 .card-stats dd {
   margin: 0;
   margin-top: auto;
@@ -4900,6 +4911,38 @@ button.small-btn {
     width: 100%;
   }
 }
+/* A short landscape window is only a few hundred pixels tall, and the bug button sits on the
+   feed heading. Keep the heading and the scanning pill on that one row, and inset the row so
+   the button does not cover the pill. The heading gives up width before the row wraps. */
+@media (max-height: 480px) and (min-width: 641px) {
+  .section-head:has(.feed-controls) {
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding-right: 40px;
+  }
+  .section-head:has(.feed-controls) > :first-child {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .section-head:has(.feed-controls) .heading-row {
+    min-width: 0;
+  }
+  .section-head:has(.feed-controls) .heading-row h2 {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .section-head:has(.feed-controls) .feed-controls {
+    flex: none;
+    flex-wrap: nowrap;
+    width: auto;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+}
 
 /* Rules seat: the checks it runs, under its leaderboard row */
 .rules-in-use {
@@ -5495,6 +5538,34 @@ html:has(dialog.about-modal[open]) {
   }
 }
 
+/* Settings > Model Alert API keys (ModelAlertKeys). The one-time secret and the key list. */
+.mak-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.mak-key {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.mak-secret {
+  display: block;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  word-break: break-all;
+}
+
 /* ---------- Connect your phone (Settings) ---------- */
 .cp-pair {
   display: flex;
@@ -5616,25 +5687,146 @@ html:has(dialog.about-modal[open]) {
  * symbol is cut. The symbol doesn't flex-shrink: when it did, Chrome's sub-pixel rounding
  * ellipsized a five-letter symbol ("$TO…") on phone cards even though the text fit its box.
  */
+.title-row {
+  flex-wrap: nowrap;
+  align-items: baseline;
+}
 .title-row .symbol {
-  flex: 0 0 auto;
-  max-width: 60%;
+  flex: 0 1 auto;
+  max-width: min(12em, 58%);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.title-row .token-name {
-  flex: 0 1000 auto;
-  min-width: 0;
+/* The Dex pill and the quote pill stay whole. The name gives way before either of them, and
+   before the alert age, which shares this row. */
+.title-row .pill.dex-info,
+.title-row .quote-pill {
+  flex: none;
+  align-self: center;
 }
-/* The result, top right of the card: the title column shrinks for it, never the other way. */
+.title-row .token-name {
+  flex: 1 100 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+.title-row .when {
+  flex: none;
+  margin-left: auto;
+  white-space: nowrap;
+}
+/* The result, on the ticker's row: the title column shrinks for it, never the other way. */
 .card-head .card-result {
-  align-self: flex-start;
+  align-self: center;
   flex: none;
   font-size: 15px;
   font-weight: 700;
   letter-spacing: -0.04em;
   padding: 2px 9px;
+}
+/* Feed cards: avatar beside two tight lines. Line one is the ticker, Dex pill, name, alert age
+   and the result. Line two is the model and the rate sentence. Trade cards keep the plain row. */
+.card:not(.trade-card) > .card-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 3px;
+}
+.card:not(.trade-card) > .card-head > .avatar-wrap {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+.card:not(.trade-card) > .card-head > .card-title {
+  display: contents;
+}
+.card:not(.trade-card) > .card-head > .title-row,
+.card:not(.trade-card) .title-row {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+/* A short ticker stays whole. A long one ellipsizes only after the Dex pill and the age have their width. */
+.card:not(.trade-card) .title-row .symbol {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+.card:not(.trade-card) .meta-row {
+  grid-column: 2 / -1;
+  grid-row: 2;
+}
+.card:not(.trade-card) > .card-head > .card-tools {
+  grid-column: 3;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.card-tools:empty {
+  display: none;
+}
+.card-tools .card-result,
+.card-tools .card-search,
+.card-tools > .card-hide,
+.card-tools > .quick-buy {
+  align-self: center;
+}
+/* Three cards across a laptop, or one card on a phone: the avatar and the gaps give the
+   ticker row the width it needs for the Dex pill and the age. */
+@container (max-width: 420px) {
+  .card:not(.trade-card) > .card-head {
+    column-gap: 6px;
+    row-gap: 2px;
+  }
+  .card:not(.trade-card) > .card-head .avatar {
+    width: 40px;
+    height: 40px;
+  }
+  .card:not(.trade-card) .title-row {
+    gap: 4px;
+  }
+  .card:not(.trade-card) .card-result {
+    padding: 1px 6px;
+  }
+  /* The search icon moves under the result so the ticker row can keep the Dex pill and the age. */
+  .card:not(.trade-card) .meta-row {
+    grid-column: 2;
+  }
+  .card:not(.trade-card) > .card-head > .card-tools {
+    display: contents;
+  }
+  .card:not(.trade-card) .card-result {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
+  }
+  .card:not(.trade-card) .card-search,
+  .card:not(.trade-card) .card-tools > .card-hide,
+  .card:not(.trade-card) .card-tools > .quick-buy {
+    grid-column: 3;
+    grid-row: 2;
+    justify-self: end;
+    align-self: center;
+  }
+}
+/* On a narrow card the coin's name cannot sit whole between the Dex pill and the age. A one-letter
+   stub reads as a glitch, so the name stays available to assistive tech and the row stays the
+   ticker, the pill and the age. Wider cards still show the name on that row. */
+@container (max-width: 360px) {
+  .card:not(.trade-card) .title-row .token-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
 }
 .card-result .result-stop {
   font-size: 0.78em;
@@ -5666,8 +5858,9 @@ html:has(dialog.about-modal[open]) {
   text-overflow: ellipsis;
 }
 .meta-row {
-  flex-wrap: nowrap;
-  min-height: 20px;
+  flex-wrap: wrap;
+  align-items: center;
+  min-height: 0;
   min-width: 0;
 }
 .meta-row > * {
@@ -5679,9 +5872,19 @@ html:has(dialog.about-modal[open]) {
 .meta-row > .pill-calls {
   flex-shrink: 100;
 }
-/* "≈61% 2x" is short and means nothing cut. */
+/* The rate is a whole sentence ("58% of alerts like it 2x'd"). It stays one line: beside the
+   model pill when the card has room, otherwise on the next line. It does not shrink to a dot,
+   and the alert age is on the ticker row so the sentence cannot push it off the card. */
+.meta-row > .pill-calls {
+  /* Basis 0 so a long model name shares the line instead of taking it and pushing the
+     rate sentence onto a row of its own. The name ellipsizes; the sentence does not. */
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 100%;
+}
 .meta-row > .pill-rate {
   flex: none;
+  max-width: 100%;
 }
 .meta-row > .when {
   flex: none;
@@ -5725,9 +5928,10 @@ html:has(dialog.about-modal[open]) {
     display: none;
   }
 }
-/* Too narrow for the footer on one line (Customize's narrow cards, two to a phone row): it wraps
-   rather than lose a link, and the rows' shared height keeps the cards matching. */
-@container (max-width: 290px) {
+/* Too narrow for the footer on one line (three cards across a 1100px window, Customize's narrow
+   cards, two to a phone row): it wraps rather than lose a link, and the rows' shared height
+   keeps the cards matching. */
+@container (max-width: 320px) {
   .card-foot,
   .card-links {
     flex-wrap: wrap;
@@ -16778,6 +16982,24 @@ body:has(.util-toast) .bug-fab {
 .th-entry > span + span {
   white-space: nowrap;
 }
+/* Portfolio, entry, exit and PnL already on the holder. A missing figure is absent, not a dash. */
+.th-stats {
+  min-width: 0;
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+/* Who funded the wallet, on the right of the row. */
+.th-fund {
+  flex-basis: 100%;
+  margin-left: auto;
+  text-align: right;
+  font-size: 11px;
+  line-height: 1.35;
+}
 
 /* Settings › Chaos Mode's per-minute cap. */
 .chaos-cap {
@@ -19236,7 +19458,9 @@ body:has(.util-toast) .bug-fab {
 .scope-mark {
   position: absolute;
   right: -5px;
-  bottom: -5px;
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
   padding: 1px 4px;
   border-radius: 999px;
   border: 1px solid var(--border-strong);
@@ -19256,6 +19480,7 @@ body:has(.util-toast) .bug-fab {
 }
 .scope-title {
   display: flex;
+  flex-wrap: nowrap;
   align-items: baseline;
   gap: 6px;
   min-width: 0;
@@ -19269,17 +19494,27 @@ body:has(.util-toast) .bug-fab {
   font-weight: 700;
   white-space: nowrap;
   cursor: pointer;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .scope-symbol:hover {
   text-decoration: underline;
 }
 .scope-name {
+  flex: 1 1 auto;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   color: var(--muted);
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.scope-title .pill.dex-info,
+.scope-title .quote-pill {
+  flex: none;
 }
 .scope-meta {
   display: flex;
@@ -19675,6 +19910,7 @@ body:has(.util-toast) .bug-fab {
 .scope-col {
   background: var(--surface);
   border-radius: var(--radius-s);
+  container: scope-col / inline-size;
 }
 .scope-col-head {
   padding: 10px 14px;
@@ -19724,11 +19960,51 @@ body:has(.util-toast) .bug-fab {
 .scope-img {
   border-radius: 10px;
 }
+/* Ticker, Dex pill, name and alert age on one line. The fee and source icons take the next
+   line. The result mark sits on the avatar, centred on this same line. */
 .scope-main {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 4px;
+  flex-flow: row wrap;
+  align-items: baseline;
+  align-content: center;
+  justify-content: flex-start;
+  column-gap: 6px;
+  row-gap: 2px;
+  min-width: 0;
+}
+.scope-title,
+.scope-meta {
+  display: contents;
+}
+.scope-symbol {
+  flex: 100 1 0;
+  min-width: 0;
+  max-width: max-content;
+}
+/* The name shares the icon line. The ticker line is the symbol, the Dex pill and the age, so a
+   long name cannot push the age down or shrink the ticker to a letter. */
+.scope-name {
+  order: 2;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 14em;
+}
+.scope-age {
+  order: 1;
+  flex: none;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.scope-meta > :not(.scope-age),
+.scope-search {
+  order: 2;
+}
+.scope-main::after {
+  content: "";
+  order: 1;
+  flex-basis: 100%;
+  width: 0;
+  height: 0;
 }
 .scope-meta {
   margin-top: 0;
@@ -19849,6 +20125,19 @@ body:has(.util-toast) .bug-fab {
   .scope-img {
     width: var(--scope-img);
     height: var(--scope-img);
+  }
+}
+/* Three Scope columns on a laptop are too narrow for the ticker, the Dex pill and the age
+   until the avatar and the column gap give a little back. */
+@container scope-col (max-width: 400px) {
+  .scope-row {
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+    column-gap: 6px;
+  }
+  .scope-avatar,
+  .scope-img {
+    width: 40px;
+    height: 40px;
   }
 }
 
@@ -20385,26 +20674,62 @@ dialog.tm-modal.tm-terminal::backdrop {
 .tm-modal.tm-terminal .tm-head {
   position: static;
   margin: 0;
-  padding: 10px 16px;
-  /* The figures take the width their labels need. The title column gives up space first. */
-  grid-template-columns: minmax(0, 1fr) max-content minmax(max-content, max-content);
-  grid-template-areas: "token figs actions";
+  padding: 8px 14px;
+  /* Identity beside the five figures, links and actions on the line under that. One strip,
+     not a figure per row and not a full-width band under a stacked title. */
+  grid-template-columns: auto minmax(0, 1fr) max-content;
+  grid-template-areas:
+    "avatar title figs"
+    "avatar sub figs"
+    "links links actions";
   align-items: center;
-  row-gap: 6px;
+  column-gap: 10px;
+  row-gap: 4px;
   backdrop-filter: none;
   background: var(--surface-solid);
 }
+.tm-modal.tm-terminal .tm-token,
 .tm-modal.tm-terminal .tm-title-block {
-  max-width: 460px;
+  display: contents;
+}
+.tm-modal.tm-terminal .tm-token .avatar-wrap {
+  grid-area: avatar;
+  align-self: center;
+}
+.tm-modal.tm-terminal .tm-title-row {
+  grid-area: title;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.tm-modal.tm-terminal .tm-sub {
+  grid-area: sub;
+  flex-wrap: nowrap;
+  min-width: 0;
+  margin-top: 0;
+  overflow: hidden;
+}
+.tm-modal.tm-terminal .tm-sub .pill {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tm-modal.tm-terminal .tm-title-block .tm-quick,
+.tm-modal.tm-terminal .tm-head .tm-quick {
+  grid-area: links;
+  max-width: 100%;
+  min-width: 0;
 }
 .tm-modal.tm-terminal .tm-title-block .tm-quick {
   justify-content: flex-start;
-  margin-top: 6px;
+  flex-wrap: nowrap;
+  margin-top: 0;
 }
 .tm-modal.tm-terminal .tm-head > .tm-actions {
   min-width: 0;
   justify-content: flex-end;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-self: center;
 }
 /* The coin's own socials and Exit, together at the header's corner. */
 .tm-modal.tm-terminal .tm-corner {
@@ -20420,22 +20745,24 @@ dialog.tm-modal.tm-terminal::backdrop {
 .tm-modal.tm-terminal .tm-head > .tm-figs {
   grid-area: figs;
   grid-template-columns: repeat(5, max-content);
-  justify-content: center;
-  gap: 8px;
+  justify-content: end;
+  align-self: center;
+  gap: 6px;
   margin: 0;
-  min-width: max-content;
+  min-width: 0;
+  width: auto;
 }
 .tm-modal.tm-terminal .tm-fig {
   gap: 1px;
-  min-width: max-content;
-  padding: 6px 10px;
-  overflow: visible;
+  min-width: 0;
+  padding: 4px 8px;
+  overflow: hidden;
   border-radius: var(--radius-s);
 }
 .tm-modal.tm-terminal .tm-fig > label {
-  white-space: normal;
-  overflow: visible;
-  text-overflow: unset;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   line-height: 1.15;
 }
 .tm-modal.tm-terminal .tm-fig > span.num {
@@ -21447,7 +21774,8 @@ dialog.tm-modal.tm-terminal::backdrop {
 }
 .scope-title > .scope-search {
   align-self: center;
-  margin-left: auto;
+  flex: none;
+  margin-left: 0;
 }
 .scope-hide {
   position: absolute;

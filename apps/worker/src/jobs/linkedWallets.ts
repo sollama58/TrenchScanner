@@ -374,10 +374,13 @@ const TOP_HOLDERS_MAX_AGE_MS = 60 * 60_000;
 /** Signatures already applied to a mint's holder list, so a replayed multi-account delta is not added twice. */
 const appliedBalanceTx = new Map<string, Set<string>>();
 
+/** One wallet on a chain holder list. `solLamports` is that read's native SOL; a miss leaves it off. */
+type ChainHolder = { owner: string; pct: number; solLamports?: number };
+
 const topHolderLists = new Map<
   string,
   {
-    holders: { owner: string; pct: number }[];
+    holders: ChainHolder[];
     /** When the list was last read or found unchanged: how soon to read it again. */
     atMs: number;
     /** When the set of wallets was enumerated from the chain. */
@@ -395,10 +398,7 @@ const topHolderLists = new Map<
 const MAX_TOP_HOLDER_LISTS = 5_000;
 
 /** The chain's top-holder list for a mint while it is fresh enough to use, else undefined. */
-export function cachedTopHolders(
-  mintAddress: string,
-  nowMs = Date.now(),
-): { owner: string; pct: number }[] | undefined {
+export function cachedTopHolders(mintAddress: string, nowMs = Date.now()): ChainHolder[] | undefined {
   const entry = topHolderLists.get(mintAddress);
   return entry && nowMs - entry.atMs < TOP_HOLDERS_MAX_AGE_MS ? entry.holders : undefined;
 }
@@ -415,10 +415,7 @@ export const CURRENT_HOLDERS_MAX_AGE_MS = TOP_HOLDERS_REFRESH_MS + 5 * 60_000;
  * the cycle after its re-read is due, so an old coin's list (TOP_HOLDERS_OLD_REFRESH_MS) stands as
  * long as it waits for one rather than leaving the holder cuts on RugCheck's older list meanwhile.
  */
-export function currentTopHolders(
-  mintAddress: string,
-  nowMs = Date.now(),
-): { owner: string; pct: number }[] | undefined {
+export function currentTopHolders(mintAddress: string, nowMs = Date.now()): ChainHolder[] | undefined {
   const entry = topHolderLists.get(mintAddress);
   const maxAgeMs = CURRENT_HOLDERS_MAX_AGE_MS - TOP_HOLDERS_REFRESH_MS + (entry?.refreshMs ?? 0);
   return entry && nowMs - entry.atMs < maxAgeMs ? entry.holders : undefined;
@@ -468,11 +465,19 @@ const MAX_WIDE_LISTS = 1_000;
  * coin due on either that the trade stream says has not traded since its list was read keeps the
  * list (user decision 2026-10-20 (Helius audit)): with no trade no holder's balance moved, so the
  * read would answer the same list. Its read time moves up to now, as the read would have.
+ * A read that enumerates holders also asks for those wallets' native SOL, one getMultipleAccounts
+ * for the set (rememberNativeSol). A quiet keep and a streamed token-balance update do not.
  * Answers how many mints it asked about on each budget.
  */
 export async function readTopHolders(
   groups: LinkedGroup[],
-  helius: Pick<HeliusClient, "getTopHoldersBatch">,
+  helius: Pick<HeliusClient, "getTopHoldersBatch"> & {
+    /**
+     * Native SOL for the wallets just enumerated (getNativeSolLamports: one getMultipleAccounts).
+     * Omitted by tests that only move the holder list. A balance tick does not call it.
+     */
+    getNativeSolLamports?: (addresses: string[]) => Promise<Map<string, number | null>>;
+  },
   opts: {
     maxReads: number;
     nowMs?: number;
@@ -584,7 +589,53 @@ export async function readTopHolders(
       wideHolderLists.set(g.mintAddress, { holders, atMs: now, balancesAtMs: now });
     }
   }
+  await rememberNativeSol(due, helius, now);
   return counts;
+}
+
+/**
+ * Native SOL for the wallets a chain read just enumerated, kept on that list until the next
+ * enumeration. One getMultipleAccounts for the whole set. A failed batch, or a wallet missing
+ * from it, leaves `solLamports` off. Zero lamports stays 0. Not called for a balance tick.
+ */
+async function rememberNativeSol(
+  due: readonly LinkedGroup[],
+  helius: { getNativeSolLamports?: (addresses: string[]) => Promise<Map<string, number | null>> },
+  now: number,
+): Promise<void> {
+  if (!helius.getNativeSolLamports) return;
+  const owners = [
+    ...new Set(
+      due.flatMap((g) => {
+        const entry = topHolderLists.get(g.mintAddress);
+        return entry && entry.readAtMs === now ? entry.holders.map((h) => h.owner) : [];
+      }),
+    ),
+  ];
+  if (owners.length === 0) return;
+  let balances: Map<string, number | null>;
+  try {
+    balances = await helius.getNativeSolLamports(owners);
+  } catch {
+    // The holder list still stands. The row omits SOL rather than show a failed read as 0.
+    return;
+  }
+  for (const g of due) {
+    const entry = topHolderLists.get(g.mintAddress);
+    if (!entry || entry.readAtMs !== now) continue;
+    const holders = entry.holders.map((h) => {
+      const lamports = balances.get(h.owner);
+      return typeof lamports === "number" ? { ...h, solLamports: lamports } : h;
+    });
+    topHolderLists.set(g.mintAddress, { ...entry, holders });
+    g.holders = holders;
+  }
+}
+
+/** Native SOL in lamports for a wallet on this mint's latest chain holder list, if that read had it. */
+export function cachedHolderSolLamports(mintAddress: string, wallet: string): number | undefined {
+  const lamports = topHolderLists.get(mintAddress)?.holders.find((h) => h.owner === wallet)?.solLamports;
+  return typeof lamports === "number" ? lamports : undefined;
 }
 
 /**
