@@ -120,10 +120,11 @@ export interface TrainingRow {
    */
   crashed?: boolean;
   /**
-   * Stored readings maskKnownBadInputs cleared that a gated seat may still read (gateView). The
-   * creator share, KOL Bundled % and Bundled % from before HOLDER_TRANSFER_LINKS_READ_SINCE are
-   * not put back: they are not today's transfer-counted figures, and a masked older row stays
-   * masked. The learners always read the masked vector. Omitted when nothing was cleared.
+   * The stored readings of the inputs maskKnownBadInputs cleared on this row as from another era
+   * that a gated seat's frozen filter still reads (HOLDER_TRANSFER_LINKED_FEATURES: the creator
+   * share, KOL Bundled % and Bundled % before HOLDER_TRANSFER_LINKS_READ_SINCE). The gate decides
+   * on what the row stored, so its population isn't widened by the mask (user decision
+   * 2026-10-20); the learners still read them as missing. Omitted when nothing was cleared.
    */
   gateInputs?: Record<string, number | null | undefined>;
 }

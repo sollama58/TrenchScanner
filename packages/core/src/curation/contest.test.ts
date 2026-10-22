@@ -340,12 +340,11 @@ describe("Gems", () => {
     }
   }, 120_000);
 
-  it("does not treat a pre-2026-10-19 bundle figure as today's transfer-counted reading", () => {
+  it("gates on the stored reading of an era-masked input, not the mask (user decision 2026-10-20)", () => {
     const gate = { mcapMin: 0, mcapMax: 1e12, maxBundledSupplyPct: 20 };
     const base = { mcapUsd: 50_000, bundledSupplyPct: 5 };
     const rows: TrainingRow[] = [
-      // Banked before the transfer-counted reads. Masked for the learners; the stored 60% is
-      // another definition and stays masked, so the cap is skipped.
+      // Banked before the transfer-linked reads: masked for the learners, 60% as stored.
       {
         anchorAt: new Date("2026-10-18T00:00:00Z"),
         features: { ...base, bundledSupplyPct: null },
@@ -354,7 +353,16 @@ describe("Gems", () => {
         anchorPriceUsd: 1,
         anchorMcapUsd: 50_000,
       },
-      // After the transfer-counted reads, 60% is today's figure and fails the cap.
+      // The same, under the cap.
+      {
+        anchorAt: new Date("2026-10-18T01:00:00Z"),
+        features: { ...base, bundledSupplyPct: null },
+        gateInputs: { bundledSupplyPct: 10 },
+        labelValue: 0,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 50_000,
+      },
+      // After the transfer-linked reads, a reading over the cap fails as it does live.
       {
         anchorAt: new Date("2026-10-19T12:00:00Z"),
         features: { ...base, bundledSupplyPct: 60 },
@@ -372,9 +380,10 @@ describe("Gems", () => {
     ];
     const gated = gatedTrainingSet(rows, gate);
     expect(gated.map((r) => r.anchorAt.toISOString())).toEqual([
-      "2026-10-18T00:00:00.000Z",
+      "2026-10-18T01:00:00.000Z",
       "2026-10-19T13:00:00.000Z",
     ]);
+    // The learners still read the masked input as missing.
     expect(gated[0]!.features.bundledSupplyPct).toBeNull();
   });
 });

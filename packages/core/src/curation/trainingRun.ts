@@ -38,8 +38,6 @@ import {
 } from "./trainer.js";
 import {
   CANDIDATE_FEATURE_NAMES,
-  HOLDER_TRANSFER_LINKED_FEATURES,
-  HOLDER_TRANSFER_LINKS_READ_SINCE,
   MARKET_LEARNER_FEATURE_NAMES,
   withCurrentNarrativeTiming,
 } from "./features.js";
@@ -909,25 +907,13 @@ export function gatedTrainingSet(
   );
 }
 
-const TRANSFER_LINKED: ReadonlySet<string> = new Set(HOLDER_TRANSFER_LINKED_FEATURES);
-
 /**
- * The inputs a gated seat's filter reads on a training row. Readings maskKnownBadInputs cleared
- * can be put back through TrainingRow.gateInputs, except the creator share and the two bundle
- * figures from before HOLDER_TRANSFER_LINKS_READ_SINCE: those are funding-only (or the
- * transfer-linked window), not the transfer-counted definition the live filter reads today, so a
- * masked older row stays masked.
+ * The inputs a gated seat's filter reads on a training row: its features with the era-masked
+ * readings the row stored put back (TrainingRow.gateInputs, user decision 2026-10-20).
  */
 export function gateView(row: TrainingRow): Pick<TrainingRow, "anchorAt" | "features"> {
   if (row.gateInputs === undefined) return row;
-  const maskedEra = row.anchorAt.getTime() < HOLDER_TRANSFER_LINKS_READ_SINCE.getTime();
-  const restored: Record<string, number | null | undefined> = {};
-  for (const [name, value] of Object.entries(row.gateInputs)) {
-    if (maskedEra && TRANSFER_LINKED.has(name)) continue;
-    restored[name] = value;
-  }
-  if (Object.keys(restored).length === 0) return row;
-  return { anchorAt: row.anchorAt, features: { ...row.features, ...restored } };
+  return { anchorAt: row.anchorAt, features: { ...row.features, ...row.gateInputs } };
 }
 
 /** Fewest deep-read rows the Narrative seat's exam runs on: under this its cutoff would be a coin flip. */
@@ -1327,7 +1313,7 @@ export async function runEvolvingContest(
   // or lets through too few decision moments.
   // A gate criterion on an input recorded only partway through the window skips the rows banked
   // before it (unrecordedGateInputs) instead of failing them all.
-  // The filter reads gateView: era-masked inputs stay masked when they are not today's definition.
+  // The filter reads the stored values of era-masked inputs (gateView), the learners don't.
   const gateOnsets = gatedSpecs.length > 0 ? gateInputOnsets(rows.map(gateView)) : new Map<string, number>();
   for (const spec of gatedSpecs) {
     const gate = spec.gate !== undefined ? cfg.gates?.[spec.gate] : undefined;
