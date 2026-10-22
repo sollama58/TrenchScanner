@@ -724,10 +724,7 @@ export class HeliusClient {
    * by position. An empty map means the whole request failed - callers treat that as "no answer
    * for any of these", not "no data for any of these".
    */
-  private async sendBatch<T>(
-    calls: RpcCall[],
-    timeoutMs: number,
-  ): Promise<Map<string, RpcResponse<T>>> {
+  private async sendBatch<T>(calls: RpcCall[], timeoutMs: number): Promise<Map<string, RpcResponse<T>>> {
     const byId = new Map<string, RpcResponse<T>>();
     if (calls.length === 0) return byId;
 

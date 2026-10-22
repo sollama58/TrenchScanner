@@ -47,7 +47,11 @@ export function rememberLaunchTapeSeed(
 }
 
 /** The seed for `mint`, removed. Undefined when there is none or it is older than `maxAgeMs`. */
-export function takeLaunchTapeSeed(mint: string, maxAgeMs: number, now = Date.now()): LaunchTapeSeed | undefined {
+export function takeLaunchTapeSeed(
+  mint: string,
+  maxAgeMs: number,
+  now = Date.now(),
+): LaunchTapeSeed | undefined {
   const seed = seeds.get(mint);
   if (!seed) return undefined;
   seeds.delete(mint);

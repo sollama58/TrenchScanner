@@ -682,7 +682,13 @@ describe("readTopHolders", () => {
     };
     const groups: LinkedGroup[] = [{ mintAddress: "mReuse", holders: [] }];
     const watched = new Set(["mReuse"]);
-    await readTopHolders(groups, helius, { maxReads: 0, maxWatchedReads: 1, watched, watchedRefreshMs: 60_000, nowMs: 0 });
+    await readTopHolders(groups, helius, {
+      maxReads: 0,
+      maxWatchedReads: 1,
+      watched,
+      watchedRefreshMs: 60_000,
+      nowMs: 0,
+    });
     await readTopHolders(groups, helius, {
       maxReads: 0,
       maxWatchedReads: 1,
