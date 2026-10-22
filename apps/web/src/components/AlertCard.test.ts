@@ -366,7 +366,8 @@ describe("tiles read the newest scan (user decision 2026-10-17)", () => {
       },
     } as unknown as Card);
     expect(readings.charityName).toBe(name);
-    expect(readings.feeLine).toBe("Creator fees go to charity.");
+    expect(readings.feeLine).toBe(`Creator fees go to ${name}.`);
+    expect(readings.feeLine).not.toBe("Creator fees go to charity.");
     expect(
       cardReadings({
         snapshot: { takenAt: "2026-10-21T00:00:00.000Z" },

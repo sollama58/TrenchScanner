@@ -161,6 +161,7 @@ describe("charityNameFromPumpCoin", () => {
 
   it("is blank unless the coin is a charity coin with a real name", () => {
     expect(charityNameFromPumpCoin({ is_charity: false, charity_name: hospital })).toBeNull();
+    expect(charityNameFromPumpCoin({ is_charity: false, charityName: hospital })).toBeNull();
     expect(charityNameFromPumpCoin({ is_charity: true })).toBeNull();
     expect(charityNameFromPumpCoin({ is_charity: true, charity_name: "   " })).toBeNull();
     expect(
@@ -169,7 +170,25 @@ describe("charityNameFromPumpCoin", () => {
         charity_name: "H16fEMZN9b8Zmhh5Ara343WdZdSdgn2P8oUkAGdB57Ru",
       }),
     ).toBeNull();
+    expect(charityNameFromPumpCoin({ name: "KindnessCoin" })).toBeNull();
     expect(charityNameFromPumpCoin(null)).toBeNull();
+  });
+
+  it("reads a live coin payload that names the charity and omits is_charity", () => {
+    // frontend-api-v3 was blocked (2026-10-22). These are the spellings Pump.fun has used.
+    expect(charityNameFromPumpCoin({ charityName: hospital })).toBe(hospital);
+    expect(charityNameFromPumpCoin({ charity_name: `  ${hospital}  ` })).toBe(hospital);
+    expect(charityNameFromPumpCoin({ name: "KindnessCoin", charity: { name: "American Red Cross" } })).toBe(
+      "American Red Cross",
+    );
+    expect(charityNameFromPumpCoin({ charity: { charityName: hospital } })).toBe(hospital);
+    expect(charityNameFromPumpCoin({ charity: { charity_name: hospital } })).toBe(hospital);
+    expect(charityNameFromPumpCoin({ charity: { charity: { name: hospital } } })).toBe(hospital);
+    expect(charityNameFromPumpCoin({ is_charity: true, charityName: hospital })).toBe(hospital);
+    // The organization field wins over a different name nested beside it.
+    expect(charityNameFromPumpCoin({ charityName: hospital, charity: { name: "American Red Cross" } })).toBe(
+      hospital,
+    );
   });
 });
 
@@ -194,6 +213,17 @@ describe("PumpFunClient.charityName", () => {
     });
     expect(await new PumpFunClient({ baseUrl: url }).charityName("m")).toBe(
       "National Breast Cancer Foundation",
+    );
+  });
+
+  it("loads charityName when the live coin omits is_charity", async () => {
+    const url = await serveCoin(200, {
+      mint: "m",
+      name: "KindnessCoin",
+      charityName: "St. Jude Children's Research Hospital",
+    });
+    expect(await new PumpFunClient({ baseUrl: url }).charityName("m")).toBe(
+      "St. Jude Children's Research Hospital",
     );
   });
 

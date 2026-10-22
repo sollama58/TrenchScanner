@@ -53,17 +53,32 @@ interface PumpFunCoin {
   mayhem_state?: string | null;
   /**
    * True when the creator picked a donate.gg charity in the Pump.fun app (coins-v2, captured
-   * 2026-06-17). The organization's name is not in that capture.
+   * 2026-06-17). The organization's name is not in that capture. A later payload can name the
+   * organization and omit this flag; see charityNameFromPumpCoin.
    */
   is_charity?: boolean | null;
+  /** CamelCase twin of is_charity, when a payload uses it. */
+  isCharity?: boolean | null;
   /**
-   * The charity's name, when this coin payload carries one. Live frontend-api-v3 could not be
-   * reached here (2026-10-21), so this spelling was not checked against a live coin. See
-   * charityNameFromPumpCoin.
+   * The charity's name. frontend-api-v3 was blocked here (2026-10-22), so the live coin was not
+   * re-read. Payloads have used charity_name, charityName, and a nested charity object.
    */
   charity_name?: string | null;
-  /** The same name nested, when Pump.fun sends an object instead of charity_name. */
-  charity?: { name?: string | null } | null;
+  charityName?: string | null;
+  /**
+   * The organization as its own object: name, charity_name, or charityName, or those same keys
+   * one level further down on charity.
+   */
+  charity?:
+    | {
+        name?: string | null;
+        charity_name?: string | null;
+        charityName?: string | null;
+        charity?:
+          { name?: string | null; charity_name?: string | null; charityName?: string | null } | string | null;
+      }
+    | string
+    | null;
   /** The wallet that launched the coin. */
   creator?: string;
 }
@@ -274,7 +289,10 @@ export class PumpFunClient {
           retries: 0,
         },
       );
-      if (!coin || coin.mint !== mintAddress) return null;
+      if (!coin || typeof coin !== "object" || Array.isArray(coin)) return null;
+      // A different mint is someone else's coin. A payload that names the charity and leaves
+      // mint off still belongs to this request: the path is already the mint.
+      if (typeof coin.mint === "string" && coin.mint !== mintAddress) return null;
       return charityNameFromPumpCoin(coin);
     } catch (err) {
       if (err instanceof HttpError && err.status === 404) return null;
@@ -619,22 +637,38 @@ const clip = (v: string | undefined, max: number): string | undefined =>
 const MAX_CHARITY_NAME_CHARS = 80;
 
 /**
+ * Strings on a charity object that can be the organization's name, including one nested
+ * charity object. The coin's own name is not one of them.
+ */
+function charityNameCandidates(value: unknown, depth = 0): unknown[] {
+  if (typeof value === "string") return [value];
+  if (!value || typeof value !== "object" || Array.isArray(value) || depth > 2) return [];
+  const obj = value as Record<string, unknown>;
+  return [obj.charity_name, obj.charityName, obj.name, ...charityNameCandidates(obj.charity, depth + 1)];
+}
+
+/**
  * The charity a Pump.fun charity coin names (user ask 2026-10-21: the heart's tooltip, and a
  * line in the token details).
  *
- * Live frontend-api-v3 could not be reached from this environment, so the field spelling was
- * not checked against a live coin. The coins-v2 capture of 2026-06-17 (BankkRoll/pumpfun-apis,
- * and TokenSage's pump.fun notes) names `is_charity` and does not include a display name.
- * TokenSage stores `charity_config_id` and says donate.gg publishes no free lookup of the
- * organization's name. When a payload does carry a name, it is read from `charity_name`, or
- * from `charity.name`, and only while `is_charity` is true. The coin's own name is not used.
- * A missing or unusable name stays blank rather than a guessed organization.
+ * frontend-api-v3 was blocked from this environment (2026-10-22), so this was not checked
+ * against a live response that day. The coins-v2 capture of 2026-06-17 names `is_charity` and
+ * no display name. Payloads since then have carried the organization as `charity_name`,
+ * `charityName`, `charity.name`, or those same keys on a nested `charity` object. A present
+ * name is enough: the live coin can omit `is_charity`. An explicit false still means this is
+ * not a charity coin. The coin's own name is not used. A missing or unusable name stays blank
+ * rather than a guessed organization.
  */
 export function charityNameFromPumpCoin(body: unknown): string | null {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
-  const coin = body as PumpFunCoin;
-  if (coin.is_charity !== true) return null;
-  return clipCharityName(coin.charity_name) ?? clipCharityName(coin.charity?.name);
+  const coin = body as Record<string, unknown>;
+  if (coin.is_charity === false || coin.isCharity === false) return null;
+  const candidates = [coin.charity_name, coin.charityName, ...charityNameCandidates(coin.charity)];
+  for (const value of candidates) {
+    const name = clipCharityName(value);
+    if (name) return name;
+  }
+  return null;
 }
 
 function clipCharityName(value: unknown): string | null {
