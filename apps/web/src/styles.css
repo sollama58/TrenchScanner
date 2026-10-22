@@ -2586,6 +2586,10 @@ legend {
 .check input {
   width: 16px;
 }
+.check:has(input:disabled) {
+  opacity: 0.5;
+  cursor: default;
+}
 
 /* ---------- Sign in / landing ---------- */
 .signin {

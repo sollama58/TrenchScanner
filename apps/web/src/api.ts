@@ -1909,6 +1909,32 @@ export interface FeedAppearance {
    * Absent from older API builds: filter and model.
    */
   chartEventFirst: ("alert" | "filter" | "model")[];
+  /**
+   * Master switch for those flags, vertical and horizontal (absent from older API builds: on).
+   * Off hides every event flag; the kind list is kept.
+   */
+  chartEvents: boolean;
+  /** Words on the flag and on its horizontal price line (absent from older API builds: on). */
+  chartEventLabels: boolean;
+  /** How big those flags draw (absent from older API builds: medium). */
+  chartEventScale: "s" | "m" | "l";
+  /**
+   * The earliest flag's colour from the chart palette (absent from older API builds: brand).
+   * Off draws every flag the same.
+   */
+  chartEventEmphasis: "off" | "brand" | "win" | "loss" | "mine";
+  /** Candle width in ms, or null for Auto (absent from older API builds: Auto). */
+  chartTimeframeMs: number | null;
+  /** Log scale (absent from older API builds: off). */
+  chartLogScale: boolean;
+  /** Indicators drawn on the token chart (absent from older API builds: volume). */
+  chartIndicators: ("vol" | "ma20" | "ema50" | "bb" | "rsi")[];
+  /** Draw the coin's saved drawings (absent from older API builds: on). */
+  chartShowDrawings: boolean;
+  /** Fibonacci levels left on (absent from older API builds: all of them). */
+  chartFibLevels: number[];
+  /** A trendline runs past both points (absent from older API builds: off). */
+  chartTrendExtend: boolean;
   hidden: CardField[];
 }
 
@@ -1980,6 +2006,11 @@ export interface Settings {
   push?: { publicKey: string | null };
   /** Absent from API builds before feed appearance. */
   appearance?: FeedAppearance;
+  /**
+   * Keys present on the stored appearance (absent from older API builds). A parsed appearance
+   * fills missing chart prefs with defaults, so this is how a saved default is told from a gap.
+   */
+  appearanceKeys?: string[];
   /** Tokens hidden from the Live feed (hiddenTokens.ts reads it); absent from API builds before it. */
   hiddenTokens?: unknown;
   /** The Scope view's settings (scopeSettings.ts reads them), null before any; absent from older API builds. */

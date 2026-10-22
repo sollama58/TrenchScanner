@@ -3,7 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { adminWalletSet, isPushEndpoint, prisma, resolveAccess, type Env } from "@trenchscanner/core";
 import { alertPrefsPatchSchema, applyAlertPrefsPatch, parseAlertPrefs } from "../alertPrefs.js";
-import { feedAppearanceSchema, parseFeedAppearance } from "../feedAppearance.js";
+import { feedAppearanceSchema, parseFeedAppearance, storedAppearanceKeys } from "../feedAppearance.js";
 import { hiddenTokensSchema, parseHiddenTokens } from "../hiddenTokens.js";
 import { parseScopeSettings, scopeSettingsSchema } from "../scopeSettings.js";
 
@@ -48,6 +48,9 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
       push: { publicKey: env.WEB_PUSH_PUBLIC_KEY || null },
       // Predictive price pathing is admins-only (#721): never on for anyone else.
       appearance: withAdminOnly(parseFeedAppearance(user.feedAppearance), access.reason === "admin"),
+      // Which keys the account JSON actually has. The parsed appearance fills the rest with
+      // defaults, and a filled-in default is not a choice the reader saved.
+      appearanceKeys: storedAppearanceKeys(user.feedAppearance),
       hiddenTokens: parseHiddenTokens(user.hiddenTokens),
       // Null until Scope is first customized: the dashboard then uses its defaults.
       scopeSettings: parseScopeSettings(user.scopeSettings),

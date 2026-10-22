@@ -7,11 +7,20 @@ import {
 } from "@trenchscanner/core/chartMarks";
 import { put, type CardField, type FeedAppearance, type QuickLink } from "./api";
 import {
+  CHART_EVENT_EMPHASIS,
   CHART_EVENT_FIRST_KINDS,
   CHART_EVENT_KINDS,
+  CHART_EVENT_SCALES,
+  CHART_FIB_LEVELS,
   DEFAULT_CHART_EVENT_FIRST,
   DEFAULT_CHART_EVENT_KINDS,
+  DEFAULT_CHART_INDICATORS,
   chartEventChoice,
+  chartFibChoice,
+  chartIndicatorChoice,
+  chartPrefsFromDevice,
+  chartTimeframeChoice,
+  DEVICE_CHART_PREF_KEYS,
 } from "./chartEvents";
 
 /**
@@ -127,9 +136,26 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   // Experimental and off unless the reader turns it on (user ask 2026-10-18).
   chartPathing: false,
   // Which event flags the token chart draws (chartEvents.ts). Passed screen starts off; only the
-  // first filter and the first model are drawn.
+  // first filter and the first model are drawn. The master switch is the same idea as chart marks:
+  // off hides every event flag, vertical and horizontal.
+  chartEvents: true,
   chartEventKinds: [...DEFAULT_CHART_EVENT_KINDS],
   chartEventFirst: [...DEFAULT_CHART_EVENT_FIRST],
+  // The flag's words, its size, and whether the earliest one uses a palette colour. Medium and
+  // labelled, with the brand colour on the earliest, is how the chart already draws them.
+  chartEventLabels: true,
+  chartEventScale: "m",
+  chartEventEmphasis: "brand",
+  // Candle size, log scale and indicators used to live in this browser only. Auto, linear, and
+  // volume is how the chart opens.
+  chartTimeframeMs: null,
+  chartLogScale: false,
+  chartIndicators: [...DEFAULT_CHART_INDICATORS],
+  // Drawings stay per coin on this device. Whether they show, which Fibonacci levels, and whether
+  // a trendline runs on are the reader's, on every chart.
+  chartShowDrawings: true,
+  chartFibLevels: [...CHART_FIB_LEVELS],
+  chartTrendExtend: false,
   // Off by default, switchable back on in Customize: the composite score tile, so the stat tiles
   // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own) and the 1st Buyers
   // Holding tile, which Snipers replaced (user asks 2026-10-14). The header's calibrated 2x pill
@@ -409,8 +435,18 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     chartStyle: r.chartStyle === "candles" || r.chartStyle === "line" ? r.chartStyle : d.chartStyle,
     chartView: r.chartView === "trading" || r.chartView === "all" ? r.chartView : d.chartView,
     chartPathing: typeof r.chartPathing === "boolean" ? r.chartPathing : d.chartPathing,
+    chartEvents: typeof r.chartEvents === "boolean" ? r.chartEvents : d.chartEvents,
     chartEventKinds: chartEventChoice(r.chartEventKinds, CHART_EVENT_KINDS, d.chartEventKinds),
     chartEventFirst: chartEventChoice(r.chartEventFirst, CHART_EVENT_FIRST_KINDS, d.chartEventFirst),
+    chartEventLabels: typeof r.chartEventLabels === "boolean" ? r.chartEventLabels : d.chartEventLabels,
+    chartEventScale: pick(r.chartEventScale, CHART_EVENT_SCALES, d.chartEventScale),
+    chartEventEmphasis: pick(r.chartEventEmphasis, CHART_EVENT_EMPHASIS, d.chartEventEmphasis),
+    chartTimeframeMs: chartTimeframeChoice(r.chartTimeframeMs),
+    chartLogScale: typeof r.chartLogScale === "boolean" ? r.chartLogScale : d.chartLogScale,
+    chartIndicators: chartIndicatorChoice(r.chartIndicators, d.chartIndicators),
+    chartShowDrawings: typeof r.chartShowDrawings === "boolean" ? r.chartShowDrawings : d.chartShowDrawings,
+    chartFibLevels: chartFibChoice(r.chartFibLevels),
+    chartTrendExtend: typeof r.chartTrendExtend === "boolean" ? r.chartTrendExtend : d.chartTrendExtend,
     hidden: Array.isArray(r.hidden)
       ? [...new Set(r.hidden.filter((f): f is CardField => typeof f === "string" && CARD_FIELDS.has(f)))]
       : d.hidden,
@@ -478,8 +514,18 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartStyle,
     chartView,
     chartPathing,
+    chartEvents,
     chartEventKinds,
     chartEventFirst,
+    chartEventLabels,
+    chartEventScale,
+    chartEventEmphasis,
+    chartTimeframeMs,
+    chartLogScale,
+    chartIndicators,
+    chartShowDrawings,
+    chartFibLevels,
+    chartTrendExtend,
     bubbleRefreshSeconds,
   } = current;
   return normalizeAppearance({
@@ -516,8 +562,18 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartStyle,
     chartView,
     chartPathing,
+    chartEvents,
     chartEventKinds,
     chartEventFirst,
+    chartEventLabels,
+    chartEventScale,
+    chartEventEmphasis,
+    chartTimeframeMs,
+    chartLogScale,
+    chartIndicators,
+    chartShowDrawings,
+    chartFibLevels,
+    chartTrendExtend,
     bubbleRefreshSeconds,
   });
 }
@@ -550,13 +606,63 @@ const SAVE_DELAY_MS = 600;
 
 export type SaveState = { state: "idle" | "saving" | "saved" } | { state: "error"; message: string };
 
+/**
+ * Fields that used to live only in this browser. When a saved look (this device or the account)
+ * does not have one yet, the device value is kept. An account that already saved the field wins.
+ */
+const LOCAL_CHART_PREF_KEYS = [
+  "chartTimeframeMs",
+  "chartLogScale",
+  "chartIndicators",
+  "chartFibLevels",
+  "chartTrendExtend",
+] as const satisfies readonly (keyof FeedAppearance)[];
+
 function readLocal(): FeedAppearance {
   try {
-    const raw = localStorage.getItem(APPEARANCE_KEY);
-    return raw ? normalizeAppearance(JSON.parse(raw)) : DEFAULT_APPEARANCE;
+    const text = localStorage.getItem(APPEARANCE_KEY);
+    const raw: unknown = text ? JSON.parse(text) : null;
+    const look = raw ? normalizeAppearance(raw) : DEFAULT_APPEARANCE;
+    const patch = chartPrefsFromDevice(raw, (key) => localStorage.getItem(key));
+    const keys = Object.keys(patch) as (keyof typeof patch)[];
+    if (keys.length === 0) return look;
+    const next = normalizeAppearance({ ...look, ...patch });
+    writeLocal(next);
+    for (const key of DEVICE_CHART_PREF_KEYS) localStorage.removeItem(key);
+    return next;
   } catch {
     return DEFAULT_APPEARANCE;
   }
+}
+
+/**
+ * A chart pref this browser already chose, filled in only where the account has not stored that
+ * key. Parsing turns a missing key into the default, which is also a real choice (log off, Auto,
+ * volume only), so a saved default must win. `storedKeys` is the account JSON's keys when the
+ * payload was already parsed. Without it, `saved` itself is checked.
+ */
+/** Exported for tests. */
+export function preferDeviceChartPrefs(
+  saved: unknown,
+  local: FeedAppearance,
+  storedKeys?: readonly string[] | null,
+): FeedAppearance {
+  const incoming = normalizeAppearance(saved);
+  const raw =
+    typeof saved === "object" && saved !== null && !Array.isArray(saved)
+      ? (saved as Record<string, unknown>)
+      : {};
+  const listed = storedKeys == null ? null : new Set(storedKeys);
+  let changed = false;
+  const next = { ...incoming };
+  for (const key of LOCAL_CHART_PREF_KEYS) {
+    const accountChose = listed !== null ? listed.has(key) : Object.prototype.hasOwnProperty.call(raw, key);
+    if (accountChose) continue;
+    if (JSON.stringify(local[key]) === JSON.stringify(incoming[key])) continue;
+    next[key] = local[key] as never;
+    changed = true;
+  }
+  return changed ? next : incoming;
 }
 
 function writeLocal(a: FeedAppearance) {
@@ -622,9 +728,16 @@ export function appearanceVersion(): number {
  * Takes the account's saved appearance (from GET /settings), unless this device changed it since
  * that request went out or still has a save on the way. An API build without it sends nothing.
  */
-export function adoptAppearance(saved: unknown, sinceVersion: number): void {
+export function adoptAppearance(
+  saved: unknown,
+  sinceVersion: number,
+  storedKeys?: readonly string[] | null,
+): void {
   if (saved === undefined || version !== sinceVersion || timer !== null || inflight > 0) return;
-  const next = normalizeAppearance(saved);
+  // A chart pref this device already chose stays when the account has not stored that key. A key
+  // the account did store wins, including when the stored value is the default. The next change
+  // of the look saves the whole thing.
+  const next = preferDeviceChartPrefs(saved, current, storedKeys);
   if (sameAppearance(next, current)) return;
   current = next;
   writeLocal(current);
