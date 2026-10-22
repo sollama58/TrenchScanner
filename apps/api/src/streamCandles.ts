@@ -1,3 +1,4 @@
+import { MAX_TRADES } from "./liveTrades.js";
 import { drawableCandles, type McapCandle } from "./tokenChart.js";
 
 /**
@@ -62,11 +63,15 @@ export interface CandleTrade {
  * when the step began (the last change before it), so candles join up as Pump.fun's do. A step
  * with trades but no price change is drawn flat at the price then. With no ticks at all, the trades'
  * own market caps are the prices. Steps with neither are left out, as Pump.fun leaves them out.
+ * Steps starting before `volumeFrom` (ms) have volume null, unknown: the trades kept don't reach
+ * back over them (or there are none to read), and a 0 there would read as no trading (charts audit
+ * CH-10).
  */
 export function buildCandles(
   ticks: readonly [number, number][],
   trades: readonly CandleTrade[],
   stepMs: number,
+  volumeFrom = -Infinity,
 ): McapCandle[] {
   const points = (
     ticks.length > 0
@@ -106,6 +111,7 @@ export function buildCandles(
     const k = out.get(at);
     if (k) k.vol = usd;
   }
+  for (const k of out.values()) if (k.t < volumeFrom) k.vol = null;
   return drawableCandles([...out.values()].sort((a, b) => a.t - b.t));
 }
 
@@ -125,7 +131,9 @@ function lastBefore(points: readonly [number, number][], at: number): number | n
 
 /**
  * The coin's candles `stepMs` wide off what the stream holds for it, or null when it holds nothing
- * (the coin isn't followed). The trades' volume is their SOL at SOL's price now, 0 without one.
+ * (the coin isn't followed). The trades' volume is their SOL at SOL's price now. Volume is known
+ * (else null) only from when Live trades has followed the coin whole, and from its oldest kept trade
+ * once it holds all MAX_TRADES it keeps; not at all without a trade feed or SOL's price.
  */
 export async function streamCandles(
   feeds: StreamFeeds,
@@ -143,7 +151,12 @@ export async function streamCandles(
     usd: t.sol !== null && sol !== null ? t.sol * sol : null,
     mcapUsd: t.mcapUsd,
   }));
-  const candles = buildCandles(history?.ticks ?? [], trades, stepMs);
+  const kept = recent?.trades ?? [];
+  const volumeFrom =
+    recent?.since == null || (sol === null && kept.length > 0)
+      ? Infinity
+      : Math.max(recent.since, kept.length >= MAX_TRADES ? (kept[0]?.atMs ?? -Infinity) : -Infinity);
+  const candles = buildCandles(history?.ticks ?? [], trades, stepMs, volumeFrom);
   if (candles.length === 0) return null;
   return history
     ? {
