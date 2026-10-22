@@ -245,28 +245,43 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
     expect(outcome!.stopCause).toMatchObject({ sellers: 1, soldSol: 2.5, lead: "launchSnipers" });
   });
 
-  it("starts a Helius tape after the launch-buyer pages already paid for", async () => {
-    const { token } = await seedCalled("seeded", new Date(ANCHOR + 5 * MIN));
-    const mint = token.mintAddress;
-    const dev = "HYi9a633brCmNtqLgat8fDo8huRYuYpUxsoJhuSzJiaP";
-    const sniper = "4WPT9wLwQWYS5zyX36ZgoY3ESxxLgDmE12upKXDAyYbL";
-    const bal = (accountIndex: number, owner: string, amount: number) => ({
-      accountIndex,
+  const SEED_DEV = "HYi9a633brCmNtqLgat8fDo8huRYuYpUxsoJhuSzJiaP";
+  const SEED_SNIPER = "4WPT9wLwQWYS5zyX36ZgoY3ESxxLgDmE12upKXDAyYbL";
+  /** A transaction moving `mint` for `owner` from `pre` to `post` tokens. */
+  const seedTx = (
+    mint: string,
+    atMs: number,
+    owner: string,
+    pre: number,
+    post: number,
+    lamports: number,
+  ): ChainTx => {
+    const bal = (amount: number) => ({
+      accountIndex: 1,
       mint,
       owner,
       uiTokenAmount: { amount: String(amount * 1e6), decimals: 6 },
     });
-    const tx = (atMs: number, owner: string, pre: number, post: number, lamports: number): ChainTx => ({
+    return {
       blockTime: atMs / 1000,
       transaction: { signatures: [`${owner}-${atMs}`], message: { accountKeys: [owner, "ata"] } },
       meta: {
         err: null,
-        preTokenBalances: pre ? [bal(1, owner, pre)] : [],
-        postTokenBalances: [bal(1, owner, post)],
+        preTokenBalances: pre ? [bal(pre)] : [],
+        postTokenBalances: [bal(post)],
         preBalances: [10e9, 0],
         postBalances: [10e9 + lamports, 0],
       },
-    });
+    };
+  };
+
+  it("starts a Helius tape after the launch-buyer pages already paid for", async () => {
+    const { token } = await seedCalled("seeded", new Date(ANCHOR + 5 * MIN));
+    const mint = token.mintAddress;
+    const dev = SEED_DEV;
+    const sniper = SEED_SNIPER;
+    const tx = (atMs: number, owner: string, pre: number, post: number, lamports: number) =>
+      seedTx(mint, atMs, owner, pre, post, lamports);
     rememberLaunchTapeSeed(mint, {
       txs: [tx(LAUNCH, dev, 0, 30_000_000, -1e9)],
       pages: 1,
@@ -296,6 +311,77 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
     expect(meta.heliusPages).toBe(1);
     const tape = await prisma.tokenTradeTape.findUnique({ where: { tokenId: token.id } });
     expect(tape).toMatchObject({ status: "done", source: "helius", creator: dev, trades: 2 });
+  });
+
+  it("reads from the launch when a seed without a token stops short of the window's end", async () => {
+    // The launch read ran at two minutes old and saw one short page: that is not the whole tape.
+    const { token } = await seedCalled("seeded-short", new Date(ANCHOR + 5 * MIN));
+    const mint = token.mintAddress;
+    rememberLaunchTapeSeed(mint, {
+      txs: [seedTx(mint, LAUNCH, SEED_DEV, 0, 30_000_000, -1e9)],
+      pages: 1,
+      pageEnds: [LAUNCH],
+      paginationToken: null,
+    });
+    const asked: (string | undefined)[] = [];
+    const helius: TradeTapeDeps["helius"] = {
+      gtfaUsable: true,
+      takeCallStats: () => ({}),
+      getMintTransactionsPage: async (m, opts) => {
+        if (m !== mint) return { status: "failed" };
+        asked.push(opts?.paginationToken);
+        return {
+          status: "ok",
+          txs: [
+            seedTx(mint, LAUNCH, SEED_DEV, 0, 30_000_000, -1e9),
+            seedTx(mint, ANCHOR + MIN, SEED_SNIPER, 0, 1, -1e9),
+            seedTx(mint, ANCHOR + 20 * MIN, SEED_SNIPER, 1, 0, 1e9),
+          ],
+          paginationToken: null,
+        };
+      },
+    };
+    const { stub } = pumpFunStub("none", []);
+    await runTradeTapeJob(
+      { helius, pumpFun: stub },
+      { heliusPagesPerRun: 1, pumpFunCallsPerRun: 0, now: () => NOW },
+    );
+    expect(asked).toEqual([undefined]);
+    const tape = await prisma.tokenTradeTape.findUnique({ where: { tokenId: token.id } });
+    expect(tape).toMatchObject({ status: "done", source: "helius", creator: SEED_DEV, trades: 3 });
+  });
+
+  it("stores a seed without a token as the tape when its pages already reach past the window", async () => {
+    const { token } = await seedCalled("seeded-whole", new Date(ANCHOR + 5 * MIN));
+    const mint = token.mintAddress;
+    rememberLaunchTapeSeed(mint, {
+      txs: [
+        seedTx(mint, LAUNCH, SEED_DEV, 0, 30_000_000, -1e9),
+        seedTx(mint, ANCHOR + MIN, SEED_SNIPER, 0, 1, -1e9),
+        seedTx(mint, ANCHOR + 35 * MIN, SEED_SNIPER, 1, 0, 1e9),
+      ],
+      pages: 1,
+      pageEnds: [ANCHOR + 35 * MIN],
+      paginationToken: null,
+    });
+    const asked: (string | undefined)[] = [];
+    const helius: TradeTapeDeps["helius"] = {
+      gtfaUsable: true,
+      takeCallStats: () => ({}),
+      getMintTransactionsPage: async (_m, opts) => {
+        asked.push(opts?.paginationToken);
+        return { status: "failed" };
+      },
+    };
+    const { stub } = pumpFunStub("none", []);
+    await runTradeTapeJob(
+      { helius, pumpFun: stub },
+      { heliusPagesPerRun: 1, pumpFunCallsPerRun: 0, now: () => NOW },
+    );
+    expect(asked).toEqual([]);
+    const tape = await prisma.tokenTradeTape.findUnique({ where: { tokenId: token.id } });
+    // The sell after the window's end is cut off the stored tape.
+    expect(tape).toMatchObject({ status: "done", source: "helius", creator: SEED_DEV, trades: 2 });
   });
 
   it("leaves a coin Helius failed on twice to Pump.fun", async () => {

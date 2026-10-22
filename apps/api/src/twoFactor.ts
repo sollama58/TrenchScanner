@@ -482,11 +482,20 @@ function lockedOut(userId: string): boolean {
   return f.count >= MAX_FAILURES;
 }
 
+/** Users whose failed tries are remembered. Past it the oldest window is dropped, not all of them. */
+export const MAX_TRACKED_FAILURES = 50_000;
+
 function fail(userId: string): void {
   const f = failures.get(userId);
-  if (!f || Date.now() - f.since > FAILURE_WINDOW_MS) failures.set(userId, { count: 1, since: Date.now() });
-  else f.count++;
-  if (failures.size > 50_000) failures.clear();
+  if (f && Date.now() - f.since <= FAILURE_WINDOW_MS) {
+    f.count++;
+    return;
+  }
+  // A new window goes to the back, so the first entry is always the oldest. Clearing the whole
+  // map here would have lifted every lockout in progress.
+  failures.delete(userId);
+  if (failures.size >= MAX_TRACKED_FAILURES) failures.delete(failures.keys().next().value!);
+  failures.set(userId, { count: 1, since: Date.now() });
 }
 
 /** Takes back one try counted by fail() (a check that errored rather than answered). */
@@ -501,6 +510,9 @@ function unfail(userId: string): void {
 export function resetTwoFactorFailuresForTests(): void {
   failures.clear();
 }
+
+/** Tests: count a wrong try, and read the lockout, without a check. */
+export { fail as failTwoFactorForTests, lockedOut as twoFactorLockedOutForTests };
 
 export type CheckResult = { ok: true } | { ok: false; reason: string };
 

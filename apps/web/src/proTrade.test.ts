@@ -3,6 +3,7 @@ import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api";
 import {
+  blockhashFetchedAt,
   acceptDisclaimer,
   DEFAULT_TRADE_SETTINGS,
   disclaimerAccepted,
@@ -896,5 +897,15 @@ describe("routeText", () => {
     expect(routeText([USDC, "Abcd1234567890wxyz"])).toBe("through 2 tokens");
     expect(routeText([])).toBeNull();
     expect(routeText(undefined)).toBeNull();
+  });
+});
+
+describe("blockhashFetchedAt", () => {
+  it("counts back the API's reported age from the answer's arrival, on this browser's clock", () => {
+    expect(blockhashFetchedAt({ blockhashAgeMs: 1_500 }, 100_000)).toBe(98_500);
+    // An older API without the age, or a nonsense one, counts from the arrival.
+    expect(blockhashFetchedAt({}, 100_000)).toBe(100_000);
+    expect(blockhashFetchedAt({ blockhashAgeMs: -5 }, 100_000)).toBe(100_000);
+    expect(blockhashFetchedAt({ blockhashAgeMs: Number.NaN }, 100_000)).toBe(100_000);
   });
 });

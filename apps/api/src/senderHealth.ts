@@ -1,3 +1,5 @@
+import type { SenderPing } from "@trenchscanner/core";
+
 /**
  * Whether Helius Sender looks down from this instance (trading robustness audit 2026-10-19, #5):
  * two sends in a row with no answer (a timeout, a 5xx, a dropped connection), or a failed GET
@@ -30,9 +32,12 @@ export class SenderHealth {
     this.lastSilentAt = at;
   }
 
-  /** A ping's outcome: a failed one reads as down for the window on its own. */
-  notePing(ok: boolean) {
-    if (ok) return this.note(true);
+  /**
+   * A ping's outcome: a failed one reads as down for the window on its own. A rate-limited ping
+   * (429) is still an answer: Sender is reachable, so it does not read as down.
+   */
+  notePing(result: SenderPing) {
+    if (result !== "down") return this.note(true);
     this.note(false);
     this.silent = Math.max(this.silent, SENDER_DOWN_AFTER);
   }

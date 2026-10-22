@@ -546,6 +546,8 @@ const TOKEN_PROGRAM_IDS = [
  * credit when the coin is read alone. The token-account enumeration still runs every call.
  */
 const MINT_ACCOUNT_REUSE_MS = 5 * 60_000;
+/** Mint accounts kept at once. The oldest read goes first. */
+const MAX_MINT_ACCOUNTS = 5_000;
 
 /** Wallets per getTokenAccountsByOwner POST - see getTokenBalancesBatch. */
 const BALANCE_WALLETS_PER_POST = 5;
@@ -572,7 +574,9 @@ export type TokenBalancesResult =
   { status: "found"; balances: Map<string, bigint>; truncated?: boolean } | { status: "failed" };
 
 /** getTokenAccountsByOwner's value (an array), or V2's, which can also come wrapped with context. */
-export function tokenAccountsPage(result: unknown): { accounts: TokenAccountSlice[]; more: boolean } | null {
+export function tokenAccountsPage(
+  result: unknown,
+): { accounts: TokenAccountSlice[]; more: boolean; key: string | null } | null {
   if (!result || typeof result !== "object") return null;
   const r = result as { value?: unknown; paginationKey?: unknown };
   const inner = r.value && !Array.isArray(r.value) && typeof r.value === "object" ? r.value : null;
@@ -585,10 +589,8 @@ export function tokenAccountsPage(result: unknown): { accounts: TokenAccountSlic
   const key = r.paginationKey ?? (inner as { paginationKey?: unknown } | null)?.paginationKey;
   // V2 can hand back a key on the last page too (its end is an empty page), so a key only means
   // more when the page came back full.
-  return {
-    accounts,
-    more: typeof key === "string" && key.length > 0 && accounts.length >= TOKEN_ACCOUNTS_PAGE_LIMIT,
-  };
+  const more = typeof key === "string" && key.length > 0 && accounts.length >= TOKEN_ACCOUNTS_PAGE_LIMIT;
+  return { accounts, more, key: more ? (key as string) : null };
 }
 
 /** One getTokenAccountsByOwner entry under a base64 dataSlice. */
@@ -617,7 +619,9 @@ export class HeliusClient {
   /**
    * Program id and raw supply from a successful mint-account read, kept for MINT_ACCOUNT_REUSE_MS.
    * The timestamp is that read, not the last reuse, so a coin re-read every minute pays for the
-   * mint account again once five minutes have passed. A failed read is not stored.
+   * mint account again once five minutes have passed. A failed read is not stored. Kept in read
+   * order: an expired entry is dropped when looked up or when it reaches the front, and the map
+   * holds at most MAX_MINT_ACCOUNTS.
    */
   private readonly mintAccounts = new Map<string, { program: string; supply: bigint; atMs: number }>();
   /** The endpoint's shared 429 pause - see rpcPauseFor. */
@@ -954,6 +958,14 @@ export class HeliusClient {
     return out;
   }
 
+  /** Drops expired mint accounts from the front (the oldest reads), then the oldest past the cap. */
+  private pruneMintAccounts(now: number) {
+    for (const [mint, entry] of this.mintAccounts) {
+      if (now - entry.atMs < MINT_ACCOUNT_REUSE_MS && this.mintAccounts.size <= MAX_MINT_ACCOUNTS) break;
+      this.mintAccounts.delete(mint);
+    }
+  }
+
   /**
    * The `n` largest wallets of each mint, pools aside, and their % of supply: past the 20 token
    * accounts RugCheck and getTokenLargestAccounts stop at, of which the pool takes one to three
@@ -984,7 +996,10 @@ export class HeliusClient {
       if (cached && now - cached.atMs < MINT_ACCOUNT_REUSE_MS) {
         programOf.set(mint, cached.program);
         supplyOf.set(mint, cached.supply);
-      } else unread.push(mint);
+      } else {
+        if (cached) this.mintAccounts.delete(mint);
+        unread.push(mint);
+      }
     }
     if (unread.length > 0) {
       const mints = await this.getMultipleAccounts<{
@@ -1010,8 +1025,10 @@ export class HeliusClient {
         const raw = BigInt(supply);
         programOf.set(mint, value.owner);
         supplyOf.set(mint, raw);
+        this.mintAccounts.delete(mint);
         this.mintAccounts.set(mint, { program: value.owner, supply: raw, atMs: now });
       }
+      this.pruneMintAccounts(now);
     }
     for (const mint of programOf.keys()) this.gpaErrors.delete(mint);
     const rowsByMint = await this.tokenAccountsOfMints(programOf);
@@ -2159,7 +2176,9 @@ export class HeliusClient {
         txs.push(...res.result.data);
         const token = res.result.paginationToken ?? undefined;
         const historyEnds = res.result.data.length < LAUNCH_TX_PAGE || !token;
-        notePage(mint, res.result.data, historyEnds ? null : (token ?? null));
+        // The seed keeps the token even after a short page: a young coin's history has only ended
+        // so far, and the trade tape reads it after the window closed, so it continues from here.
+        notePage(mint, res.result.data, token ?? null);
         const reading = parseLaunchBuyers(mint, txs, maxBuyers);
         if (!reading) {
           if (txs.length === 0 || txs.some((tx) => !tx || !tx.meta)) {

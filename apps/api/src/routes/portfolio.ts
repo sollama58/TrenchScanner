@@ -9,7 +9,7 @@ import {
   withApiFeature,
   type Env,
   walletTag,
-  type WalletBalance,
+  type WalletBalances,
 } from "@trenchscanner/core";
 import { proStatus } from "../proMode.js";
 import { sharedSolPrice } from "../solPrice.js";
@@ -32,9 +32,10 @@ import { sharedSolPrice } from "../solPrice.js";
  * mintOnFeed's rule: on Token, and not only because someone looked it up), so nothing here gives
  * away a paid lookup. The rest of the wallet's coins are counted, never named.
  *
- * Credits (Helius): /held's holdings are the only chain read - getBalance, two sliced
- * getTokenAccountsByOwnerV2 pages, and one getMultipleAccounts for decimals - and one reading
- * is reused for HOLDINGS_TTL_MS per wallet.
+ * Credits (Helius): /held's holdings are the only chain read - getBalance, sliced
+ * getTokenAccountsByOwnerV2 pages (one per program, more for a wallet past 1,000 token accounts,
+ * capped in getWalletBalances), and one getMultipleAccounts for decimals - and one reading is
+ * reused for HOLDINGS_TTL_MS per wallet.
  * Prices come from the scanner's own rows; nothing else is asked of anyone.
  */
 
@@ -47,7 +48,7 @@ const TAPE_COINS = 20;
 const BOT_POSITIONS = 50;
 const LAMPORTS_PER_SOL = 1e9;
 
-type Reading = { at: number; lamports: bigint | null; balances: WalletBalance[] | null };
+type Reading = { at: number; lamports: bigint | null; balances: WalletBalances | null };
 
 export async function registerPortfolioRoutes(app: FastifyInstance, opts: { env: Env }) {
   const { env } = opts;
@@ -220,7 +221,7 @@ export async function registerPortfolioRoutes(app: FastifyInstance, opts: { env:
     const pro = await proStatus(env, wallet);
     if (!pro.pro) return reply.code(404).send({ error: "not found" });
     const [r, sol] = await Promise.all([walletReading(wallet), solPrice.get()]);
-    const chain = r?.balances ?? null;
+    const chain = r?.balances?.balances ?? null;
     const since = chain ? new Date(r!.at) : null;
     const [ledger, recent] = await Promise.all([
       prisma.proTrade.groupBy({ by: ["mint"], where: { wallet }, _sum: { tokens: true } }),
@@ -260,7 +261,13 @@ export async function registerPortfolioRoutes(app: FastifyInstance, opts: { env:
         return (Number(b.raw) / 10 ** b.decimals) * t.livePriceUsd >= minUsd;
       })
       .map((t) => t.id);
-    return { tokenIds, readAt: r && chain ? new Date(r.at) : null };
+    // truncated: the wallet has more token accounts than the read pages through, so a held coin
+    // past them may be missing from tokenIds.
+    return {
+      tokenIds,
+      readAt: r && chain ? new Date(r.at) : null,
+      truncated: r?.balances?.truncated ?? false,
+    };
   });
 }
 
