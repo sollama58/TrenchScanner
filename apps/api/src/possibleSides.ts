@@ -1,4 +1,11 @@
-import { isServiceWallet, MARKED_BOT_WALLETS, prisma } from "@trenchscanner/core";
+import {
+  BWAM_DEV_KOL_WALLET,
+  bwamDevSideExportWallets,
+  isServiceWallet,
+  MARKED_BOT_WALLETS,
+  prisma,
+  type SideWindow,
+} from "@trenchscanner/core";
 import { readKolRows } from "./kolRoster.js";
 
 /**
@@ -214,6 +221,26 @@ export function numberLabeledSides(sides: Record<string, PossibleSide[]>): Label
  */
 export async function loadLabeledSides(): Promise<LabeledSide[]> {
   return numberLabeledSides(await loadPossibleSides(await labeledCandidates()));
+}
+
+type StoredSideList = Partial<Record<SideWindow, { wallet: string; pct: number }[]>> & {
+  likelyBots?: string[];
+};
+
+/**
+ * bwam_dev's 30d listed side wallets that are not already in the labeled export (user ask
+ * 2026-10-22). The count and the toggle's export use this same set.
+ */
+export async function loadBwamDevSideExport(
+  alreadyExported: ReadonlySet<string>,
+): Promise<{ wallet: string; name: string }[]> {
+  const row = await prisma.kolSideWallets.findUnique({ where: { wallet: BWAM_DEV_KOL_WALLET } });
+  if (!row) return [];
+  const stored = row.sides as StoredSideList;
+  const listed = stored["30d"] ?? [];
+  const likelyBots = new Set(stored.likelyBots ?? []);
+  const kolName = (await readKolRows([BWAM_DEV_KOL_WALLET])).get(BWAM_DEV_KOL_WALLET)?.name ?? "bwam_dev";
+  return bwamDevSideExportWallets(listed, likelyBots, alreadyExported, kolName);
 }
 
 /**

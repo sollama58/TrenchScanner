@@ -3897,6 +3897,16 @@ body.trades-open .util-drawer > * {
   align-self: flex-start;
   margin-top: auto;
 }
+.side-rule-export .side-export-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  cursor: pointer;
+}
+.side-rule-export .side-export-toggle .switch {
+  flex-shrink: 0;
+}
 .side-rule {
   display: flex;
   flex-direction: column;

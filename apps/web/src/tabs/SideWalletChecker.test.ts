@@ -4,6 +4,7 @@ import {
   labelBasis,
   labelPill,
   pinLabeled,
+  sideLabelsForExport,
   sideLabelsText,
   type SideWallet,
 } from "./SideWalletChecker";
@@ -12,6 +13,37 @@ describe("flaggedText", () => {
   it("counts the flagged wallets", () => {
     expect(flaggedText(1)).toBe("1 Flagged Wallet");
     expect(flaggedText(1200)).toBe("1,200 Flagged Wallets");
+  });
+});
+
+describe("sideLabelsForExport", () => {
+  const base = {
+    count: 1,
+    wallets: [{ wallet: "L1", name: "Cupsey_1" }],
+    bwamDevSide: {
+      count: 2,
+      wallets: [
+        { wallet: "B1", name: "bwam_dev_1" },
+        { wallet: "B2", name: "bwam_dev_2" },
+      ],
+    },
+  };
+
+  it("leaves the export unchanged when the toggle is off", () => {
+    expect(sideLabelsForExport(base, false)).toEqual({
+      count: 1,
+      wallets: base.wallets,
+      bwamDevSide: base.bwamDevSide,
+    });
+    expect(sideLabelsText(sideLabelsForExport(base, false))).toBe("L1,Cupsey_1\n");
+  });
+
+  it("appends bwam_dev sides when the toggle is on and matches the displayed count", () => {
+    const out = sideLabelsForExport(base, true);
+    expect(out.count).toBe(3);
+    expect(out.wallets).toHaveLength(3);
+    expect(out.bwamDevSide?.count).toBe(2);
+    expect(sideLabelsText(out)).toBe("L1,Cupsey_1\nB1,bwam_dev_1\nB2,bwam_dev_2\n");
   });
 });
 
