@@ -231,6 +231,35 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
     expect((await signIn(await privyToken(existing))).statusCode).toBe(200);
   });
 
+  it("keeps the account count for the config a minute, and reads it again after an account is made", async () => {
+    const config = async () =>
+      (await app.inject({ method: "GET", url: "/auth/privy/config" })).json() as { signupsOpen: boolean };
+    // From an address of its own, so these sign-ins leave the file's others under the route's limit.
+    const signInApart = (accessToken: string) =>
+      app.inject({
+        method: "POST",
+        url: "/auth/privy",
+        payload: { accessToken },
+        headers: { "cf-connecting-ip": "198.51.100.7" },
+      });
+    // An account made through the route drops the kept count, so the next config reads it.
+    const first = newDid();
+    privyWallets.set(first, wallet());
+    expect((await signInApart(await privyToken(first))).statusCode).toBe(200);
+    const counted = await prisma.user.count({ where: { privyUserId: { not: null } } });
+    expect((await config()).signupsOpen).toBe(true);
+    // One made elsewhere (another instance) reaches the cap, but the kept count is used.
+    const elsewhere = await prisma.user.create({ data: { walletAddress: wallet(), privyUserId: newDid() } });
+    userIds.push(elsewhere.id);
+    env.PRIVY_SIGNUP_CAP = counted + 1;
+    expect((await config()).signupsOpen).toBe(true);
+    // A refused sign-up (full) drops it too.
+    const late = newDid();
+    privyWallets.set(late, wallet());
+    expect((await signInApart(await privyToken(late))).statusCode).toBe(403);
+    expect((await config()).signupsOpen).toBe(false);
+  });
+
   it("never pairs a phone for a Privy account", async () => {
     const did = newDid();
     privyWallets.set(did, wallet());
