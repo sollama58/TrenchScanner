@@ -12,6 +12,8 @@ import {
   tradesFromChainTransactions,
   tradesFromChainTransactionsPriced,
   TAPE_WINDOW_AFTER_ANCHOR_MS,
+  takeLaunchTapeSeed,
+  resetLaunchTapeSeeds,
   type HeliusClient,
   type PumpFunClient,
   type SolPriceLookup,
@@ -43,9 +45,10 @@ const logger = createLogger("trade-tape");
  *  - Helius getTransactionsForAddress on the mint, oldest first (10 credits a page of 100), the
  *    main source (user decision 2026-10-13, over the cost below): every coin, newest call first, so
  *    new calls are read within minutes and the backlog with what is left.
- *    TRADE_TAPE_HELIUS_PAGES_PER_RUN caps the pages a one-minute run. A full read
- *    averages 20+ pages a coin (2026-10-13 sample of 26 called coins: median ~700 trades, a quarter
- *    over 4,000), so at ~600 called coins a day this is ~125k+ credits a day. A coin past
+ *    TRADE_TAPE_HELIUS_PAGES_PER_RUN caps the pages a one-minute run (20 since 2026-10-22, was 30).
+ *    A full read averages 20+ pages a coin (2026-10-13 sample of 26 called coins: median ~700
+ *    trades, a quarter over 4,000), so at ~600 called coins a day this is ~125k+ credits a day at
+ *    the old 30, and about a third less at 20 when the budget stays full. A coin past
  *    HELIUS_MAX_PAGES_PER_COIN is left to Pump.fun at once (BUSY_SOURCE), and stays Pump.fun's.
  *  - Pump.fun's trade API, free but quick to answer 429: read backwards from the end of the window
  *    (a cursor at a timestamp skips everything after it), spaced calls a run
@@ -103,8 +106,8 @@ export const HELIUS_BUSY_MARGIN = 2;
  */
 export const HELIUS_NEWEST_MAX_PAGES = 30;
 /**
- * Newest-first reads take at most one page in this many of the lane's run (rounded down: 30 pages a
- * run, at most 10), user decision 2026-10-20 (Helius audit). The rest stays the from-launch reads'.
+ * Newest-first reads take at most one page in this many of the lane's run (rounded down: 20 pages a
+ * run, at most 6), user decision 2026-10-20 (Helius audit). The rest stays the from-launch reads'.
  */
 export const HELIUS_NEWEST_SHARE = 3;
 /** Pages a run's newest-first reads may take, of the lane's `pagesPerRun`. */
@@ -228,7 +231,14 @@ export function resetTradeTapeState(): void {
   state.pumpFunPausedUntil = 0;
   state.coinsStarted = 0;
   handoffs.clear();
+  resetLaunchTapeSeeds();
 }
+
+/**
+ * How long a launch-buyer seed may start a tape. The pages themselves do not go stale. The
+ * pagination token is what ages out: past this, the tape reads from the launch itself.
+ */
+const LAUNCH_SEED_MAX_AGE_MS = 6 * 3_600_000;
 
 const LANES = ["helius", "heliusNewest", "pumpFun"] as const;
 type Lane = (typeof LANES)[number];
@@ -721,6 +731,38 @@ async function nextNewestCoin(called: TapeCoin[], picks: NewestPicks, nowMs: num
   return take(picks.matched, picks.matched.find(free)) ?? null;
 }
 
+/**
+ * Starts a from-launch read on the pages the launch-buyer read already paid for.
+ * "done": those pages already cover the window, and the tape is stored. A Progress: the
+ * next page continues from the seed's token. Null: no usable seed.
+ */
+async function seedFromLaunchBuyers(
+  deps: TradeTapeDeps,
+  coin: TapeCoin,
+  counts: RunCounts,
+  now: () => number,
+): Promise<Progress | "done" | null> {
+  const seed = takeLaunchTapeSeed(coin.mint, LAUNCH_SEED_MAX_AGE_MS, now());
+  if (!seed) return null;
+  const parsed = await tradesFromChainTransactionsPriced(coin.mint, seed.txs, deps.solPrices);
+  const lastAtMs = seed.pageEnds.length > 0 ? seed.pageEnds[seed.pageEnds.length - 1]! : 0;
+  const more = seed.paginationToken !== null && !(lastAtMs > coin.windowEndMs);
+  const progress: Progress = {
+    coin,
+    trades: parsed.trades,
+    calls: seed.pages,
+    cursor: more ? seed.paginationToken! : undefined,
+    errors: 0,
+    launch: parsed.launch,
+    started: true,
+    pageEnds: [...seed.pageEnds],
+  };
+  if (more) return progress;
+  if (parsed.trades.length === 0) return null;
+  await finish(progress, "helius", parsed.launch !== null, counts, now());
+  return "done";
+}
+
 async function runHeliusLane(
   deps: TradeTapeDeps,
   called: TapeCoin[],
@@ -737,7 +779,9 @@ async function runHeliusLane(
       const coin = called.find((c) => heliusFromLaunch(c) && !heldElsewhere(c.tokenId, "helius"));
       if (!coin) break;
       called.splice(called.indexOf(coin), 1);
-      state.helius = {
+      const seeded = await seedFromLaunchBuyers(deps, coin, counts, now);
+      if (seeded === "done") continue;
+      state.helius = seeded ?? {
         coin,
         trades: [],
         calls: 0,

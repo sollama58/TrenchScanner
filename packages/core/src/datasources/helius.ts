@@ -37,6 +37,7 @@ import {
   type PumpLaunchResult,
 } from "./pumpLaunch.js";
 import { parseLaunchBuyers, type LaunchBuyersReading, type RawLaunchTx } from "./launchBuyers.js";
+import { rememberLaunchTapeSeed } from "./launchTapeSeed.js";
 import type { ChainTx } from "../wallets/tradeTape.js";
 import { funderFromEarliestTransactions, FUNDER_TXS_WALKED } from "../wallets/linkedWallets.js";
 import {
@@ -563,7 +564,7 @@ export type TokenBalancesResult =
   { status: "found"; balances: Map<string, bigint>; truncated?: boolean } | { status: "failed" };
 
 /** getTokenAccountsByOwner's value (an array), or V2's, which can also come wrapped with context. */
-function tokenAccountsPage(result: unknown): { accounts: TokenAccountSlice[]; more: boolean } | null {
+export function tokenAccountsPage(result: unknown): { accounts: TokenAccountSlice[]; more: boolean } | null {
   if (!result || typeof result !== "object") return null;
   const r = result as { value?: unknown; paginationKey?: unknown };
   const inner = r.value && !Array.isArray(r.value) && typeof r.value === "object" ? r.value : null;
@@ -712,7 +713,6 @@ export class HeliusClient {
   private async sendBatch<T>(
     calls: RpcCall[],
     timeoutMs: number,
-    opts: { retryOnTimeout?: boolean } = {},
   ): Promise<Map<string, RpcResponse<T>>> {
     const byId = new Map<string, RpcResponse<T>>();
     if (calls.length === 0) return byId;
@@ -737,7 +737,9 @@ export class HeliusClient {
         // A retry is another billed request: counted like the first.
         onRetry: count,
         gate: this.pause,
-        ...(opts.retryOnTimeout === false ? { retryOnTimeout: false } : {}),
+        // A timeout is billed whether or not the answer arrives. Retrying it pays twice
+        // (user decision 2026-10-22). A 429 still retries: that request was refused.
+        retryOnTimeout: false,
       });
 
       // A malformed batch can come back as a single error object rather than an array.
@@ -764,7 +766,7 @@ export class HeliusClient {
   private async sendBatched<T>(
     calls: RpcCall[],
     timeoutMs: number,
-    opts: { batchSize?: number; concurrency?: number; retryOnTimeout?: boolean } = {},
+    opts: { batchSize?: number; concurrency?: number } = {},
   ): Promise<Map<string, RpcResponse<T>>> {
     const size = opts.batchSize ?? RPC_BATCH_SIZE;
     const chunks: RpcCall[][] = [];
@@ -774,7 +776,7 @@ export class HeliusClient {
 
     const merged = new Map<string, RpcResponse<T>>();
     await forEachWithConcurrency(chunks, opts.concurrency ?? BATCH_CONCURRENCY, async (chunk) => {
-      const result = await this.sendBatch<T>(chunk, timeoutMs, { retryOnTimeout: opts.retryOnTimeout });
+      const result = await this.sendBatch<T>(chunk, timeoutMs);
       for (const [id, res] of result) merged.set(id, res);
     });
     return merged;
@@ -1516,8 +1518,6 @@ export class HeliusClient {
         ],
       })),
       20_000,
-      // Billed whether or not the answer arrives in time, as for the launch read.
-      { retryOnTimeout: false },
     );
     for (const wallet of wallets) {
       const res = responses.get(wallet);
@@ -2055,6 +2055,27 @@ export class HeliusClient {
 
     const txsByMint = new Map<string, RawLaunchTx[]>(unique.map((m) => [m, []]));
     const cursor = new Map<string, string | undefined>();
+    // Pages already paid for, so the trade tape can start after them (launchTapeSeed.ts).
+    const pageEnds = new Map<string, number[]>();
+    const seedToken = new Map<string, string | null>();
+    const notePage = (mint: string, data: RawLaunchTx[], nextToken: string | null) => {
+      const times = data.map((tx) => tx.blockTime).filter((t): t is number => typeof t === "number");
+      const ends = pageEnds.get(mint) ?? [];
+      ends.push(times.length > 0 ? Math.max(...times) * 1000 : 0);
+      pageEnds.set(mint, ends);
+      seedToken.set(mint, nextToken);
+    };
+    const publishSeed = (mint: string) => {
+      const ends = pageEnds.get(mint);
+      const txs = txsByMint.get(mint) ?? [];
+      if (!ends || ends.length === 0 || txs.length === 0) return;
+      rememberLaunchTapeSeed(mint, {
+        txs: txs as ChainTx[],
+        pages: ends.length,
+        pageEnds: ends,
+        paginationToken: seedToken.get(mint) ?? null,
+      });
+    };
     let pending = unique;
     for (let page = 1; page <= LAUNCH_MAX_PAGES && pending.length > 0; page += 1) {
       const calls: RpcCall[] = pending.map((mint) => ({
@@ -2080,8 +2101,8 @@ export class HeliusClient {
         calls,
         15_000,
         // A page of 100 full transactions that timed out was most likely served and billed
-        // anyway; the same request again pays twice. The mint is re-read on a later cycle.
-        { batchSize: 1, concurrency: LAUNCH_READ_CONCURRENCY, retryOnTimeout: false },
+        // anyway. Timeouts are not retried (sendBatch). The mint is re-read on a later cycle.
+        { batchSize: 1, concurrency: LAUNCH_READ_CONCURRENCY },
       );
 
       const next: string[] = [];
@@ -2099,10 +2120,14 @@ export class HeliusClient {
           // A later page failing doesn't lose the pages already paid for: what they hold is the
           // reading so far, incomplete, and the retry adds to it rather than starting over.
           const partial = txs.length > 0 ? parseLaunchBuyers(mint, txs, maxBuyers) : null;
+          if (partial) publishSeed(mint);
           out.set(mint, partial ? { status: "found", complete: false, ...partial } : { status: "failed" });
           continue;
         }
         txs.push(...res.result.data);
+        const token = res.result.paginationToken ?? undefined;
+        const historyEnds = res.result.data.length < LAUNCH_TX_PAGE || !token;
+        notePage(mint, res.result.data, historyEnds ? null : (token ?? null));
         const reading = parseLaunchBuyers(mint, txs, maxBuyers);
         if (!reading) {
           if (txs.length === 0 || txs.some((tx) => !tx || !tx.meta)) {
@@ -2117,6 +2142,7 @@ export class HeliusClient {
             // transaction is fixed. Reported as a complete reading with no buyers - which stays
             // "unknown" downstream - so the caller caches it instead of re-paying 10-30 credits
             // for the same answer every five minutes the token spends in band.
+            publishSeed(mint);
             out.set(mint, {
               status: "found",
               complete: true,
@@ -2129,9 +2155,8 @@ export class HeliusClient {
           }
           continue;
         }
-        const token = res.result.paginationToken ?? undefined;
-        const historyEnds = res.result.data.length < LAUNCH_TX_PAGE || !token;
         if (reading.buyers.length >= maxBuyers || historyEnds || page === LAUNCH_MAX_PAGES) {
+          publishSeed(mint);
           out.set(mint, {
             status: "found",
             complete: reading.buyers.length >= maxBuyers || !historyEnds,
@@ -2192,8 +2217,6 @@ export class HeliusClient {
         },
       ],
       20_000,
-      // A timed-out page of full transactions was most likely served and billed anyway.
-      { retryOnTimeout: false },
     );
     const res = responses.get(mint);
     if (res?.error?.code === RPC_METHOD_NOT_FOUND) {
@@ -2253,10 +2276,8 @@ export class HeliusClient {
       method: "getTransactionsForAddress",
       params: [address, { sortOrder: "asc", limit: 1, transactionDetails: "signatures" }],
     }));
-    // Not retried on a timeout, for the launch read's reason (10 credits an address, already billed).
-    const responses = await this.sendBatched<TransactionsForAddressResult>(calls, 15_000, {
-      retryOnTimeout: false,
-    });
+    // Not retried on a timeout (sendBatch): 10 credits an address, billed even when the answer is late.
+    const responses = await this.sendBatched<TransactionsForAddressResult>(calls, 15_000);
 
     let usable = 0;
     let answered = 0;
