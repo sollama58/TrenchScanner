@@ -430,8 +430,8 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   if (rpcCalls) out.rpcCalls = rpcCalls;
   // The scan's market-data calls since the last cycle (requests, 429 pauses, time queued, gave
   // up): whether DexScreener is throttling the shared budget, and how much Jupiter took off it.
-  // Who priced the newest launches (liveLaunchQuotes), and the band-entry checks between cycles
-  // and the cycles they started early (bandEntryWatch). The cycle's RugCheck reports: cached, and
+  // Who priced the newest launches (liveLaunchQuotes), and the entry fast path's crossings, first
+  // scans, calls, skips and crossing-to-decision times (entryFastPath). The cycle's RugCheck reports: cached, and
   // looked up while it waited (rugCheckLookups). The linked-wallet funder reads and their credits
   // (linkedWalletCalls), and the holder-transfer reads (holderTransferCalls) with the Helius stream that spares them (heliusStream). The young coins' curve tape and its spend (curveTape). The live tape's pages before a call (liveTape). Jupiter's newest-launch
   // reads between cycles and the launches they found (launchPoller).
@@ -439,7 +439,7 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
     "dexScreenerCalls",
     "jupiterCalls",
     "liveLaunchQuotes",
-    "bandEntryWatch",
+    "entryFastPath",
     "rugCheckLookups",
     "linkedWalletCalls",
     "holderTransferCalls",

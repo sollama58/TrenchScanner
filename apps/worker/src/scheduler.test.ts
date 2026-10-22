@@ -20,6 +20,8 @@ vi.mock("@trenchscanner/core", () => ({
 const { scheduleInterval, scheduleDailyAt, JobLockLost, JobSkipped, PartialJobFailure } =
   await import("./scheduler.js");
 const { registerShutdown } = await import("./processExit.js");
+const { scanScheduleOptions } = await import("./scanSchedule.js");
+const { EntryWatch } = await import("./entryWatch.js");
 
 /** A job whose every run takes `ms` of (fake) time. */
 function jobTaking(ms: number, runs: number[]) {
@@ -97,6 +99,41 @@ describe("scheduleInterval", () => {
     await vi.advanceTimersByTimeAsync(1_300_000);
     job.stop();
     expect(runs).toEqual([30_000, 630_000, 1_230_000]);
+  });
+
+  it("never starts the scan early: a launch crossing into the band gets a fast scan, not a cycle", async () => {
+    // The band wake (#874) started the cycle at once on every crossing, and the scan ran ~3.6
+    // times a minute on per-cycle Helius budgets (user decision 2026-10-22 retired it).
+    const options = scanScheduleOptions(() => ({}));
+    expect(options?.runEarly).toBeUndefined();
+    const runs: number[] = [];
+    const job = scheduleInterval("scan", jobTaking(10_000, runs), 1, options);
+    const curve = new Map([
+      ["near", 6.9],
+      ["a", 20],
+      ["b", 30],
+      ["c", 40],
+    ]);
+    const entered: number[] = [];
+    const watch = new EntryWatch(
+      { getLaunches: async () => [] },
+      7_000,
+      () => [],
+      (mint) => curve.get(mint) ?? null,
+      () => entered.push(Date.now()),
+    );
+    watch.note(
+      ["near", "a", "b", "c"].map((m) => ({ mintAddress: m, marketCapUsd: curve.get(m)! * 1_000 })),
+      0,
+    );
+    watch.start();
+    await vi.advanceTimersByTimeAsync(20_000);
+    curve.set("near", 7.2);
+    await vi.advanceTimersByTimeAsync(110_000);
+    watch.stop();
+    job.stop();
+    expect(entered).toHaveLength(1);
+    expect(runs).toEqual([0, 60_000, 120_000]);
   });
 
   it("never overlaps runs", async () => {

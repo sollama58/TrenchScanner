@@ -49,7 +49,7 @@ export interface CurveTapeConfig {
   /**
    * The launches created since the last scan cycle (the PumpPortal stream's and Jupiter's newest),
    * followed from the next round rather than from the cycle that lists them, ~25 s later (user ask
-   * 2026-10-20: the band-entry watch reads their price off the curve, not Jupiter).
+   * 2026-10-20: the entry watch reads their price off the curve, not Jupiter).
    */
   newLaunches?: () => string[];
   /**
@@ -193,7 +193,7 @@ export function curvePathOf(mint: string, now = Date.now()): CurvePathFeatures {
 
 /**
  * A followed coin's curve price now (quote per token), from the stream's latest change; null when
- * the coin isn't followed or its tape is not current. Read by the band-entry watch.
+ * the coin isn't followed or its tape is not current. Read by the entry watch (entryWatch.ts).
  */
 export function curvePriceOf(mint: string, now = Date.now()): number | null {
   return followed.has(mint) ? tape.priceNow(mint, now) : null;

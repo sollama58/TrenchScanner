@@ -401,6 +401,14 @@ services:
       # ~8s on 2026-10-04.
       - key: SCAN_INTERVAL_MINUTES
         value: "0.5"
+      # The entry fast path (worker's entryFastPath.ts, user decision 2026-10-22): a young launch
+      # that holds the band's floor for 2.5 s between cycles gets its first scan at once, alone, on
+      # the cycle's own stages, instead of starting the whole cycle early as the band wake did. At
+      # most ENTRY_FAST_PATH_MAX_PER_MINUTE a minute; the rest wait for the cycle. "false" turns it off.
+      - key: ENTRY_FAST_PATH_ENABLED
+        value: "true"
+      - key: ENTRY_FAST_PATH_MAX_PER_MINUTE
+        value: "30"
       # Per-CYCLE Helius budgets. Curated contenders' wallets are looked up first, the rest
       # behind the cycle on what is left. Freshness is half its default (50) because the cycle
       # above runs twice a minute. Holdings was cut from 15 to 10 on 2026-10-04 to save Helius

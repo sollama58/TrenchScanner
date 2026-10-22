@@ -264,14 +264,20 @@ export class PumpPortalStream {
 
   /**
    * The launches created since the last drain, newest first, left buffered for the scan: what
-   * BandEntryWatch checks between cycles, since a launch that crosses $10k in its first seconds
-   * would otherwise wait for the next cycle to be noticed at all.
+   * EntryWatch checks between cycles, since a launch that crosses the band's floor in its first
+   * seconds would otherwise wait for the next cycle to be noticed at all.
    */
   pendingLaunches(): string[] {
     return [...this.buffer.values()]
       .filter((e) => e.kind === "create")
       .map((e) => e.mintAddress)
       .reverse();
+  }
+
+  /** One launch created since the last drain, left buffered: what the entry fast path records it from. */
+  pendingLaunch(mint: string): StreamEvent | undefined {
+    const event = this.buffer.get(mint);
+    return event?.kind === "create" ? event : undefined;
   }
 
   /** Visible for tests: what an incoming message does. */
