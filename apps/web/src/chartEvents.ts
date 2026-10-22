@@ -214,7 +214,10 @@ export const CHART_FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1] as const
 const FIB_EPS = 1e-6;
 
 /** A saved list of indicator ids, in CHART_INDICATOR_IDS order. A bad list is the default. Empty stays empty. */
-export function chartIndicatorChoice(raw: unknown, fallback: readonly ChartIndicatorId[]): ChartIndicatorId[] {
+export function chartIndicatorChoice(
+  raw: unknown,
+  fallback: readonly ChartIndicatorId[],
+): ChartIndicatorId[] {
   if (!Array.isArray(raw)) return [...fallback];
   if (raw.some((k) => typeof k !== "string" || !(CHART_INDICATOR_IDS as readonly string[]).includes(k)))
     return [...fallback];

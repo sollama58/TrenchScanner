@@ -60,11 +60,7 @@ export function ChartEventsPicker() {
     <div className="field-group">
       <h4>Chart events</h4>
       <label className="check">
-        <input
-          type="checkbox"
-          checked={on}
-          onChange={() => setAppearance({ chartEvents: !on })}
-        />
+        <input type="checkbox" checked={on} onChange={() => setAppearance({ chartEvents: !on })} />
         Show event flags on token charts
       </label>
       <div role="group" aria-label="Event markers on token charts">
@@ -142,12 +138,12 @@ export function ChartEventsPicker() {
         </div>
       </div>
       <p className="faint small check-hint">
-        Each kind draws a vertical line and a horizontal price line. Turning a kind off removes both;
-        turning it on brings both back. The switch above hides every event flag and keeps the kinds.
-        Only the first filter and the first model. Later filters and later model calls stay off the
-        chart; alerts all show unless Alert is checked here or the Alert kind is off. Labels cover the
-        flag and the price line&apos;s name. Passed screen starts off. The line stays coloured from a
-        hidden screen pass, with no flag and no price line for it.
+        Each kind draws a vertical line and a horizontal price line. Turning a kind off removes both; turning
+        it on brings both back. The switch above hides every event flag and keeps the kinds. Only the first
+        filter and the first model. Later filters and later model calls stay off the chart; alerts all show
+        unless Alert is checked here or the Alert kind is off. Labels cover the flag and the price line&apos;s
+        name. Passed screen starts off. The line stays coloured from a hidden screen pass, with no flag and no
+        price line for it.
       </p>
     </div>
   );

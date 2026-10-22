@@ -140,7 +140,9 @@ describe("horizontal and vertical flags", () => {
       "Called",
       "Trees",
     ]);
-    expect(drawn).toEqual(chartEventsToDraw(many, { kinds: DEFAULT_CHART_EVENT_KINDS, first: ["filter", "model"] }));
+    expect(drawn).toEqual(
+      chartEventsToDraw(many, { kinds: DEFAULT_CHART_EVENT_KINDS, first: ["filter", "model"] }),
+    );
   });
 
   it("hides every flag when the master switch is off, and keeps the colour reference", () => {
@@ -186,11 +188,13 @@ describe("horizontal and vertical flags", () => {
     expect(saved.chartIndicators).toEqual(["vol", "rsi"]);
     expect(saved.chartFibLevels).toEqual([0, 0.5, 1]);
     expect(saved.chartTimeframeMs).toBe(60_000);
-    expect(normalizeAppearance({ chartTimeframeMs: 123, chartEventEmphasis: "rainbow" }).chartTimeframeMs).toBe(
-      null,
-    );
+    expect(
+      normalizeAppearance({ chartTimeframeMs: 123, chartEventEmphasis: "rainbow" }).chartTimeframeMs,
+    ).toBe(null);
     expect(normalizeAppearance({ chartEventEmphasis: "rainbow" }).chartEventEmphasis).toBe("brand");
-    expect(normalizeAppearance({ chartIndicators: ["nope"] }).chartIndicators).toEqual([...DEFAULT_CHART_INDICATORS]);
+    expect(normalizeAppearance({ chartIndicators: ["nope"] }).chartIndicators).toEqual([
+      ...DEFAULT_CHART_INDICATORS,
+    ]);
     expect(eventFlagMetrics("m")).toEqual({ factor: 1, line: 1 });
     expect(eventFlagMetrics("s").factor).toBeLessThan(1);
     expect(eventFlagMetrics("s").line).toBe(1);
@@ -221,7 +225,8 @@ describe("horizontal and vertical flags", () => {
     expect(preferDeviceChartPrefs({ chartLogScale: false }, local).chartLogScale).toBe(false);
     expect(preferDeviceChartPrefs({ chartLogScale: false }, local).chartIndicators).toEqual(["rsi"]);
     expect(
-      preferDeviceChartPrefs({ chartLogScale: true }, normalizeAppearance({ chartLogScale: false })).chartLogScale,
+      preferDeviceChartPrefs({ chartLogScale: true }, normalizeAppearance({ chartLogScale: false }))
+        .chartLogScale,
     ).toBe(true);
     // A parsed account look has every key. The key list says which of those were really stored.
     const parsed = normalizeAppearance({});

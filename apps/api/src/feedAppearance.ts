@@ -343,13 +343,10 @@ export const feedAppearanceSchema = z
       .array(z.number())
       .min(1)
       .max(CHART_FIB_LEVELS.length)
-      .refine(
-        (levels) => {
-          if (new Set(levels).size !== levels.length) return false;
-          return levels.every((n) => CHART_FIB_LEVELS.some((lv) => Math.abs(lv - n) < 1e-6));
-        },
-        "not a fib level",
-      )
+      .refine((levels) => {
+        if (new Set(levels).size !== levels.length) return false;
+        return levels.every((n) => CHART_FIB_LEVELS.some((lv) => Math.abs(lv - n) < 1e-6));
+      }, "not a fib level")
       .default([...CHART_FIB_LEVELS]),
     /** A trendline runs past both points. Off by default. */
     chartTrendExtend: z.boolean().default(false),

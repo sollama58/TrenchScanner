@@ -380,7 +380,9 @@ export function ChartControls() {
   const toggleIndicator = (id: ChartIndicatorId) => {
     const has = look.chartIndicators.includes(id);
     setAppearance({
-      chartIndicators: CHART_INDICATOR_IDS.filter((k) => (k === id ? !has : look.chartIndicators.includes(k))),
+      chartIndicators: CHART_INDICATOR_IDS.filter((k) =>
+        k === id ? !has : look.chartIndicators.includes(k),
+      ),
     });
   };
   const toggleFib = (lv: number) => {

@@ -186,10 +186,7 @@ describe("parseFeedAppearance", () => {
     });
     expect(storedAppearanceKeys(null)).toEqual([]);
     expect(storedAppearanceKeys([])).toEqual([]);
-    expect(storedAppearanceKeys({ chartLogScale: false, theme: "dark" })).toEqual([
-      "chartLogScale",
-      "theme",
-    ]);
+    expect(storedAppearanceKeys({ chartLogScale: false, theme: "dark" })).toEqual(["chartLogScale", "theme"]);
     expect(parseFeedAppearance({ chartTimeframeMs: 123 }).chartTimeframeMs).toBeNull();
     expect(parseFeedAppearance({ chartIndicators: ["nope"] }).chartIndicators).toEqual(["vol"]);
     expect(parseFeedAppearance({ chartIndicators: [] }).chartIndicators).toEqual([]);
