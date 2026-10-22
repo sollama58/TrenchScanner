@@ -655,32 +655,39 @@ export function ScopeRow({
       </div>
       <div className="scope-main">
         <div className="scope-title">
-          {d.tickerCopiesCa ? (
-            <button
-              type="button"
-              className="scope-symbol copy"
-              onClick={copyCa}
-              title={`Copy ${label}'s contract address: ${card.token.mintAddress}`}
-            >
-              {label}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="scope-symbol"
-              onClick={open}
-              title={`${label}: open the token's chart and details`}
-            >
-              {label}
-            </button>
-          )}
-          <QuotePill token={card.token} className="scope-quote" />
-          <DexInfoLabel token={card.token} now={now} />
-          {copied && (
-            <span className="scope-copied" role="status">
-              Copied
-            </span>
-          )}
+          <div className="scope-ticker">
+            {d.tickerCopiesCa ? (
+              <button
+                type="button"
+                className="scope-symbol copy"
+                onClick={copyCa}
+                title={`Copy ${label}'s contract address: ${card.token.mintAddress}`}
+              >
+                {label}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="scope-symbol"
+                onClick={open}
+                title={`${label}: open the token's chart and details`}
+              >
+                {label}
+              </button>
+            )}
+            <QuotePill token={card.token} className="scope-quote" />
+            <DexInfoLabel token={card.token} now={now} />
+            {copied && (
+              <span className="scope-copied" role="status">
+                Copied
+              </span>
+            )}
+            {d.showAge && (
+              <span className={`scope-age age-chip num${d.highlightNew && ageMs < 60_000 ? " new" : ""}`}>
+                {shortAge(ageMs)}
+              </span>
+            )}
+          </div>
           {d.showName && card.token.name && card.token.symbol && (
             <span className="scope-name" title={card.token.name}>
               {card.token.name}
@@ -696,11 +703,6 @@ export function ScopeRow({
           )}
         </div>
         <div className="scope-meta">
-          {d.showAge && (
-            <span className={`scope-age num${d.highlightNew && ageMs < 60_000 ? " new" : ""}`}>
-              {shortAge(ageMs)}
-            </span>
-          )}
           {fees && (
             <span
               className={`fee-badge scope-fee fee-${fees.kind}${fees.tax ? " has-tax" : ""}`}
