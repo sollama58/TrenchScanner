@@ -106,11 +106,14 @@ import { HeliusAccountStream } from "./discovery/heliusAccountStream.js";
 import {
   CURVE_STREAM_KEY_PREFIX,
   curvePriceOf,
+  curveTapeView,
   onCurveStreamUpdate,
   seedCurveStreamSpend,
   startCurveTape,
 } from "./jobs/curveTape.js";
 import { startPricePathRecorder } from "./jobs/pricePathRecorder.js";
+import { startCurveCandles } from "./jobs/curveCandles.js";
+import { startCandleBackfill } from "./jobs/candleBackfill.js";
 import { onHolderStreamTx, setHolderTransferStream } from "./jobs/holderTransfers.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
 import { knownMayhem, knownNotMayhem, screenOutMayhem } from "./jobs/mayhemMode.js";
@@ -429,6 +432,21 @@ async function main() {
   const stopPricePaths =
     curveTapeOn && env.PRICE_PATH_RECORD
       ? startPricePathRecorder({ maxPerDay: env.PRICE_PATH_RECORD_MAX_PER_DAY })
+      : undefined;
+  // The chart's candle store (core's candles/): the curve tape's 1-second bars each minute, and the
+  // one-time backfill to launch of each coin a chart opened or a call named (CANDLE_STORE).
+  const stopCurveCandles =
+    curveTapeOn && env.CANDLE_STORE
+      ? startCurveCandles({ view: curveTapeView, solUsd: () => dexScreener.solUsd() })
+      : undefined;
+  const stopCandleBackfill =
+    scans && env.CANDLE_STORE
+      ? startCandleBackfill({
+          geckoPage: (pool, mint, beforeMs) => geckoTerminal.poolMinuteCandles(pool, mint, beforeMs),
+          geckoPerMinute: env.CANDLE_BACKFILL_GECKO_PER_MINUTE,
+          maxPages: env.CANDLE_BACKFILL_MAX_PAGES,
+          keepDays: env.CANDLE_RETENTION_DAYS,
+        })
       : undefined;
 
   // Reads the chain for the subscription gate. Its own client rather than `deps.helius` because
@@ -1135,11 +1153,16 @@ async function main() {
     for (const { job } of jobs) job.stop();
     stream?.stop();
     deps.entryWatch?.stop();
+    // Before the tape stops: the final flush reads what it still holds.
+    const curveCandlesWritten = stopCurveCandles?.().catch((err: unknown) =>
+      logger.warn("curve candles not written", { error: String(err) }),
+    );
     stopCurveTape?.();
     // Written alongside the runs' settle, and awaited before the disconnect below.
     const pricePathsWritten = stopPricePaths?.().catch((err: unknown) =>
       logger.warn("price paths not written", { error: String(err) }),
     );
+    stopCandleBackfill?.();
     heliusStream?.stop();
     launchPoller?.stop();
     stopNarrativePolling?.();
@@ -1172,6 +1195,7 @@ async function main() {
       logger.warn("trade tape progress not saved", { error: String(err) }),
     );
     await pricePathsWritten;
+    await curveCandlesWritten;
     stopLoopWatch();
     await stopApiUsageMeter();
     await prisma.$disconnect().catch(() => {});
