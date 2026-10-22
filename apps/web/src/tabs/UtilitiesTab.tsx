@@ -15,7 +15,7 @@ import {
   type BurnWallet,
   type PendingBurn,
 } from "../burn";
-import { usePolling } from "../hooks";
+import { usePolling, viewForMint } from "../hooks";
 import { ago, shortAddress, tokenLabel } from "../format";
 import { TokenImage } from "../components/TokenImage";
 import { onWalletsChanged } from "../wallet";
@@ -981,7 +981,10 @@ export function UtilityTokenModal({
 }) {
   const path = `/utilities/token/${encodeURIComponent(mint)}`;
   const [poll, setPoll] = useState(SCAN_POLL_MS);
-  const { data, error, reload } = usePolling<UtilityTokenView>(path, poll);
+  const polled = usePolling<UtilityTokenView>(path, poll);
+  const { error, reload } = polled;
+  // The previous coin's lookup stays in the poll until this mint's lands. Don't draw it.
+  const data = viewForMint(mint, polled.data, polled.stale);
   // The first answer's token, kept so a later refresh never blanks the header.
   const [token] = useState(() => lookups?.find((l) => l.subject === mint)?.token ?? null);
   const [now, setNow] = useState(Date.now());
@@ -1004,7 +1007,7 @@ export function UtilityTokenModal({
       now={now}
       onClose={onClose}
       utility={data ? { apiBase: "/utilities/token", scan: data.scan, since: Date.parse(data.paidAt) } : null}
-      opening={{ mint, token, error: data ? null : error, onRetry: reload }}
+      opening={{ mint, token, error: data || polled.stale ? null : error, onRetry: reload }}
     />,
     document.body,
   );

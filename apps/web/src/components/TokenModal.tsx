@@ -365,7 +365,14 @@ export function TokenModal({
     >
       <UtilityContext.Provider value={utility}>
         {card ? (
-          <TokenBody card={card} now={now} onClose={() => ref.current?.close()} terminal={terminal} />
+          // Another coin starts this body fresh: chart, scans and the holder frame are per mint.
+          <TokenBody
+            key={card.token.mintAddress}
+            card={card}
+            now={now}
+            onClose={() => ref.current?.close()}
+            terminal={terminal}
+          />
         ) : (
           opening && <OpeningBody {...opening} onClose={() => ref.current?.close()} />
         )}
@@ -689,6 +696,8 @@ function useCoinScans(mint: string, follow: boolean): CoinScans {
     verdicts: ScanVerdict[];
   } | null>(null);
   const [nextRead, setNextRead] = useState<number | null>(null);
+  const mintRef = useRef(mint);
+  mintRef.current = mint;
   useEffect(() => {
     if (!follow) return;
     let live = true;
@@ -698,16 +707,22 @@ function useCoinScans(mint: string, follow: boolean): CoinScans {
       window.clearTimeout(timer);
       const started = Date.now();
       const mine = ++generation;
+      const asked = mint;
       if (document.visibilityState === "visible")
         // A read in the last few seconds (a quick return to the page) is reused.
         // nextRead moves only once this read has landed. Setting it to the following poll
         // before that made the countdown skip the read in flight and keep calling an old list
         // current (user ask 2026-10-21).
-        cachedGet<CoinReading>(`/tokens/${encodeURIComponent(mint)}?reading=1`, SCAN_READ_MS / 3)
-          .then((d) => live && setRead({ mint, snapshots: d.snapshots ?? [], verdicts: d.verdicts ?? [] }))
+        cachedGet<CoinReading>(`/tokens/${encodeURIComponent(asked)}?reading=1`, SCAN_READ_MS / 3)
+          .then((d) => {
+            // `mintRef` moves on the render that switches coins, before this effect cleans up.
+            // A response for the coin just left must not land on the one now open.
+            if (!live || mine !== generation || mintRef.current !== asked) return;
+            setRead({ mint: asked, snapshots: d.snapshots ?? [], verdicts: d.verdicts ?? [] });
+          })
           .catch(() => undefined)
           .finally(() => {
-            if (live && mine === generation) setNextRead(started + SCAN_READ_MS);
+            if (live && mine === generation && mintRef.current === asked) setNextRead(started + SCAN_READ_MS);
           });
       timer = window.setTimeout(tick, SCAN_READ_MS);
     };
@@ -926,11 +941,14 @@ function TokenBody({
     `${useTokenApi(mint)}/chart`,
     scanning ? SCANNING_POLL_MS : CHART_POLL_MS,
   );
+  // While the next coin's chart is in flight the previous coin's answer stays, flagged stale.
+  // Its candles, flagged wallets and holder entries must not draw on this coin.
+  const chartShown = chart.stale ? { ...chart, data: null } : chart;
   // Kept as the same list while a poll brings the same wallets, so the map isn't rebuilt for nothing.
-  const flaggedKey = JSON.stringify(chart.data?.wallets ?? []);
+  const flaggedKey = JSON.stringify(chartShown.data?.wallets ?? []);
   const flagged = useMemo(() => JSON.parse(flaggedKey) as FlaggedWallet[], [flaggedKey]);
-  const flags = chart.data ? "ok" : chart.error ? "failed" : "loading";
-  const entriesKey = JSON.stringify(chart.data?.holderEntries ?? {});
+  const flags = chart.stale ? "loading" : chartShown.data ? "ok" : chart.error ? "failed" : "loading";
+  const entriesKey = JSON.stringify(chartShown.data?.holderEntries ?? {});
   const entries = useMemo(() => JSON.parse(entriesKey) as Record<string, HolderEntry>, [entriesKey]);
   const linked = useHolderReading(card, !!utility, scans.snapshots);
   const holders = useHoldersView(card, linked, alertAt, !!utility);
@@ -1131,8 +1149,8 @@ function TokenBody({
   const tokenAge = ageNow(ageSnap, now);
   // The chart's scans are the longer series. Until they land, TokenSage's series can still
   // name a first scan that lines up with firstSeenAt. A short chart series is every scan stored.
-  const detectionScans = chart.data
-    ? chart.data.marketCap.map((p) => ({ t: p.t, usd: p.usd }))
+  const detectionScans = chartShown.data
+    ? chartShown.data.marketCap.map((p) => ({ t: p.t, usd: p.usd }))
     : (sage.data?.marketCap ?? []).flatMap((p) => {
         const t = Date.parse(p.t);
         return Number.isFinite(t) ? [{ t, usd: p.usd }] : [];
@@ -1145,10 +1163,11 @@ function TokenBody({
     firstPass: card.firstPass,
     firstSeenAt,
     scans: detectionScans,
-    scansComplete: !!chart.data && chart.data.marketCap.length < CHART_SCAN_CAP,
+    scansComplete: !!chartShown.data && chartShown.data.marketCap.length < CHART_SCAN_CAP,
   });
   const detectionPending =
-    detection.source === "none" && ((!chart.data && !chart.error) || firstSeenAt === undefined);
+    detection.source === "none" &&
+    ((!chartShown.data && (!chart.error || chart.stale)) || firstSeenAt === undefined);
   const detectionTitle =
     detection.source === "first-scan"
       ? "Market cap when the scanner first saw this coin"
@@ -1279,8 +1298,9 @@ function TokenBody({
   );
   const bubbleMapIn = (column: boolean) => (
     <BubbleMapSection
-      // A fresh map for each view: its picks, open lists and toggles belong to one reading.
-      key={holders.view}
+      // A fresh map for each coin and each view: its picks, open lists and toggles belong to one
+      // reading. The mint is in the key so a token switch remounts instead of painting the last coin.
+      key={`${mint}:${holders.view}`}
       token={card.token}
       snapshot={holders.reading}
       moment={holders.moment}
@@ -1323,13 +1343,14 @@ function TokenBody({
           return (
             <>
               <TopHolders
+                key={mint}
                 snapshot={listReading}
                 flagged={flagged}
                 entries={entries}
                 pending={scanning}
                 defaultOpen
                 freshness={holdersFresh}
-                solUsd={chart.data?.solUsd ?? null}
+                solUsd={chartShown.data?.solUsd ?? null}
               />
               <StonkFeesCard mint={mint} />
             </>
@@ -1355,7 +1376,7 @@ function TokenBody({
                 </p>
               )}
               <FlowMore
-                points={chart.data?.marketCap ?? []}
+                points={chartShown.data?.marketCap ?? []}
                 flagged={flagged}
                 entries={entries}
                 snap={card.latestSnapshot ?? card.snapshot}
@@ -1399,7 +1420,7 @@ function TokenBody({
               <section className="tm-term-chart" aria-label="Chart">
                 <ChartCard
                   card={card}
-                  chart={chart}
+                  chart={chartShown}
                   alertAt={alertAt}
                   alertMcap={alertMcap}
                   what={what}
@@ -1559,7 +1580,7 @@ function TokenBody({
           since={utility.since}
           steps={[
             { label: "Market data", done: true },
-            { label: "Chart", done: !!chart.data || !!chart.error },
+            { label: "Chart", done: !!chartShown.data || (!!chart.error && !chart.stale) },
             { label: "Holders and safety checks", done: !scanning },
             {
               label: "TokenSage read",
@@ -1578,7 +1599,7 @@ function TokenBody({
       <section id={`${ids}-chart`} className="tm-group" aria-label="Chart">
         <ChartCard
           card={card}
-          chart={chart}
+          chart={chartShown}
           alertAt={alertAt}
           alertMcap={alertMcap}
           what={what}
@@ -1594,12 +1615,13 @@ function TokenBody({
         <div className={`tm-holders${holders.isKept ? " at-alert" : ""}`}>
           {bubbleMap}
           <TopHolders
+            key={mint}
             snapshot={listReading}
             flagged={flagged}
             entries={entries}
             pending={scanning}
             freshness={holdersFresh}
-            solUsd={chart.data?.solUsd ?? null}
+            solUsd={chartShown.data?.solUsd ?? null}
           />
         </div>
         {flagged.length > 0 && (
