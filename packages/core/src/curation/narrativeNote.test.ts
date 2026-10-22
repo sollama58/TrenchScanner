@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { emptyRecord } from "./leaderboard.js";
 import {
   NARRATIVE_NOTE_MIN_GRADED,
+  narrativeAlertsPause,
   narrativeNoteChoice,
   narrativeNoteReadiness,
   parseNarrativeRationale,
@@ -74,5 +75,22 @@ describe("parseNarrativeRationale", () => {
     expect(parseNarrativeRationale(null)).toBeNull();
     expect(parseNarrativeRationale([])).toBeNull();
     expect(parseNarrativeRationale({ for: [], against: [] })).toBeNull();
+  });
+});
+
+describe("narrative alerts pause", () => {
+  it("pauses only on a lift below 1", () => {
+    expect(narrativeAlertsPause({ lift: 0.65, marketRatePct: 16.4, graded: 278 })).toEqual({
+      paused: true,
+      lift: 0.65,
+      graded: 278,
+    });
+    expect(narrativeAlertsPause({ lift: 1, marketRatePct: 16.4, graded: 50 }).paused).toBe(false);
+    expect(narrativeAlertsPause({ lift: 1.2, marketRatePct: 16.4, graded: 50 }).paused).toBe(false);
+  });
+
+  it("keeps calling without enough graded calls for a lift", () => {
+    expect(narrativeAlertsPause({ lift: null, marketRatePct: 10, graded: 5 }).paused).toBe(false);
+    expect(narrativeAlertsPause(undefined)).toEqual({ paused: false, lift: null, graded: 0 });
   });
 });

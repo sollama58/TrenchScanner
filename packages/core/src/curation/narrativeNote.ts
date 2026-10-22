@@ -1,6 +1,6 @@
 import { NARRATIVE_CONTESTANT } from "./contestants.js";
-import { liveCallRecords, loadCurrentLanes } from "./laneStore.js";
-import { emptyRecord, type CallRecord } from "./leaderboard.js";
+import { liveCallRecords, liveMarketLift, loadCurrentLanes } from "./laneStore.js";
+import { emptyRecord, type CallRecord, type MarketLift } from "./leaderboard.js";
 
 /**
  * Whether the Narrative seat's "agrees"/"warns" note on other models' cards (dashboard pill and
@@ -162,4 +162,48 @@ export function parseNarrativeRationale(value: unknown): NarrativeRationale | nu
     for: pros,
     against: cons,
   };
+}
+
+/**
+ * Whether the Narrative seat's own calls are held back (user decision 2026-10-22): while its live
+ * 2x rate over NARRATIVE_NOTE_WINDOW_DAYS is below the market's in the same hours (lift < 1, see
+ * liveMarketLift), it sends no cards of its own. Over 10-15..10-22 it called at 10.9% against a
+ * 16.4% market (lift 0.65; notes/model-inputs-audit-2026-10-22/sanity-and-outputs.md). It keeps
+ * scoring and training, and its notes on other seats' cards are unaffected. Without enough graded
+ * calls for a lift (MIN_CALLS_FOR_LIFT) it calls as before, so once a paused stretch's calls age
+ * out of the window it calls again and is judged on the new ones.
+ */
+export interface NarrativeAlertsPause {
+  paused: boolean;
+  lift: number | null;
+  graded: number;
+}
+
+let pauseCached: { at: number; value: Promise<NarrativeAlertsPause> } | null = null;
+
+/** Test hook. */
+export function resetNarrativeAlertsPause(): void {
+  pauseCached = null;
+}
+
+/** The pause from a lift reading: on only with a lift, and that lift below 1. */
+export function narrativeAlertsPause(lift: MarketLift | undefined): NarrativeAlertsPause {
+  const value = lift?.lift ?? null;
+  return { paused: value !== null && value < 1, lift: value, graded: lift?.graded ?? 0 };
+}
+
+/** The Narrative seat's pause from its live lift, cached for five minutes per process. */
+export function loadNarrativeAlertsPause(now: number = Date.now()): Promise<NarrativeAlertsPause> {
+  if (pauseCached && now - pauseCached.at < CACHE_MS) return pauseCached.value;
+  const value = (async () => {
+    const since = new Date(now - NARRATIVE_NOTE_WINDOW_DAYS * 86_400_000);
+    const lanes = await loadCurrentLanes();
+    const lifts = await liveMarketLift([NARRATIVE_CONTESTANT], since, lanes);
+    return narrativeAlertsPause(lifts.get(NARRATIVE_CONTESTANT));
+  })();
+  pauseCached = { at: now, value };
+  value.catch(() => {
+    if (pauseCached?.value === value) pauseCached = null;
+  });
+  return value;
 }

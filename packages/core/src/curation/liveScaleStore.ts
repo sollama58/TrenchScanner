@@ -5,6 +5,7 @@ import { LiveRescorer, type LiveSeatModel, type RescoreFeatures } from "./liveRe
 import { CONTESTANTS } from "./contestants.js";
 import { gatesById, loadModelGates } from "./modelGateStore.js";
 import { LIVE_SCORE_WINDOW_HOURS, type LiveScales } from "./liveScale.js";
+import { buildRankRates, RANK_RATE_WINDOW_HOURS, type RankRateBand } from "./liveRankRates.js";
 
 /** Rows read per feature query: a retrain re-reads the whole window's feature vectors once. */
 const FEATURE_BATCH = 500;
@@ -71,7 +72,29 @@ export async function loadLiveScales(highConvictionRank: number, now = new Date(
     }
   }
   rescorer.prune(rows, models);
-  return rescorer.build(rows, models, since, highConvictionRank, LIVE_CONVICTION_MIN_SAMPLES);
+  const scales = rescorer.build(rows, models, since, highConvictionRank, LIVE_CONVICTION_MIN_SAMPLES);
+  const rankRates = await loadRankRates(now).catch(() => undefined);
+  return rankRates ? { ...scales, rankRates } : scales;
+}
+
+/**
+ * Each seat's measured 2x rate by live rank band over the graded decision moments of the last
+ * RANK_RATE_WINDOW_HOURS (curation/liveRankRates.ts), from the scores stored on each moment. A
+ * clean 2x is hit2xIn1h on a row that wasn't disqualified, as the live records count it.
+ */
+async function loadRankRates(now: Date): Promise<Map<string, RankRateBand[]>> {
+  const rows = await prisma.candidateOutcome.findMany({
+    where: {
+      sampleKind: "event",
+      anchorAt: { gt: new Date(now.getTime() - RANK_RATE_WINDOW_HOURS * 3_600_000) },
+      hit2xIn1h: { not: null },
+      seatScores: { not: Prisma.DbNull },
+    },
+    select: { seatScores: true, hit2xIn1h: true, disqualified: true },
+  });
+  return buildRankRates(
+    rows.map((r) => ({ seatScores: r.seatScores, won: r.hit2xIn1h === true && r.disqualified !== true })),
+  );
 }
 
 /** Each seat's newest active model - the one the worker's roster scores it with. */
