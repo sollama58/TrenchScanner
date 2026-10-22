@@ -115,11 +115,14 @@ export async function registerModelAlertSocket(app: FastifyInstance, opts: { env
       }, AUTH_DEADLINE_MS);
       timer.unref?.();
       socket.once("close", finish);
+      let framed = false;
       socket.on("message", (data) => {
         // Authenticated or not, a client frame is never written back out.
-        if (settled) return;
-        finish();
-        void authenticateFrame(opts, admins, socket, data);
+        if (settled || framed) return;
+        framed = true;
+        // The deadline keeps running through the key check. A check that hangs on the database
+        // still closes the socket, and a late answer finds it closed and admits nothing.
+        void authenticateFrame(opts, admins, socket, data).finally(finish);
       });
     },
   );
@@ -152,17 +155,27 @@ async function authenticateFrame(
     socket.close(4401, "unauthorized");
     return;
   }
-  const result = await authenticateKey(secret, admins, opts.env.JWT_SECRET);
-  if (!result.ok) {
-    if (result.status === 401) recordAuthFailure();
-    socket.close(
-      result.status === 403 ? 4403 : 4401,
-      result.status === 403 ? "access_ended" : "unauthorized",
-    );
-    return;
+  try {
+    const result = await authenticateKey(secret, admins, opts.env.JWT_SECRET);
+    if (!result.ok) {
+      if (result.status === 401) recordAuthFailure();
+      socket.close(
+        result.status === 403 ? 4403 : 4401,
+        result.status === 403 ? "access_ended" : "unauthorized",
+      );
+      return;
+    }
+    admit(opts.hub, socket, { ...result.client, openedAt: Date.now() });
+    ignoreClientFrames(socket);
+  } catch {
+    // The key could not be checked (database error). Close so the client reconnects, instead
+    // of leaving it on a socket that is neither admitted nor timed. Not counted as a failure.
+    try {
+      socket.close(1011, "try_again");
+    } catch {
+      // Already closed.
+    }
   }
-  admit(opts.hub, socket, { ...result.client, openedAt: Date.now() });
-  ignoreClientFrames(socket);
 }
 
 async function authenticateKey(

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { AccessSource } from "@prisma/client";
 import { loadEnv, prisma, type Env } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import {
@@ -635,6 +635,20 @@ describe.skipIf(!dbAvailable)("model alert api keys and socket", () => {
     const ws = await connect(secret, "api-key");
     expect(ws.readyState).toBe(WebSocket.OPEN);
     ws.close();
+  });
+
+  it("closes a first-frame socket with 1011 when the key check fails on the database", async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/model-alerts`);
+    sockets.push(ws);
+    const closed = new Promise<number>((resolve) => ws.once("close", (code) => resolve(code)));
+    await opened(ws);
+    const spy = vi.spyOn(prisma.userApiKey, "findUnique").mockRejectedValueOnce(new Error("pool exhausted"));
+    try {
+      ws.send(`tsma_${"d".repeat(43)}`);
+      expect(await closed).toBe(1011);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("bounds failed key guesses", async () => {
