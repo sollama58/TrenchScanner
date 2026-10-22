@@ -51,6 +51,7 @@ import {
 import { BAND_ENTRY_CHECK_MS, BandEntryWatch } from "./bandEntryWatch.js";
 import { runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
 import { pumpLaunchBackups } from "./jobs/pumpLaunch.js";
+import { chainBackupUrl, ScreenBackup } from "./jobs/screenBackup.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
 import { runOutcomeTrackingJob, repairOutcomeBookkeeping } from "./jobs/outcomeTrackingJob.js";
 import { createMatchPeaksRunner } from "./jobs/matchPeaks.js";
@@ -363,6 +364,9 @@ async function main() {
       : undefined,
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
+    // The screen's Mayhem and holder reads when Helius gives no answer, so it doesn't reject every
+    // new coin through a Helius outage (screenBackup.ts).
+    screenBackup: new ScreenBackup(new HeliusClient({ rpcUrl: chainBackupUrl(env) })),
     pumpLaunchBackups: pumpLaunchBackups(env),
     stream,
     launchPoller,
@@ -416,11 +420,7 @@ async function main() {
   });
   // What the burn scan asks when that endpoint doesn't answer (Helius out of credits, say): the
   // first paid CHAIN_BACKUP_RPC_URLS entry, else the public node the Pro holder check falls back to.
-  const burnBackupUrl =
-    env.CHAIN_BACKUP_RPC_URLS.split(",")
-      .map((u) => u.trim())
-      .find((u) => /^https:\/\//.test(u)) ?? PRO_HOLDER_BACKUP_RPC;
-  const burnBackupRpc = new SolanaRpc({ rpcUrl: burnBackupUrl });
+  const burnBackupRpc = new SolanaRpc({ rpcUrl: chainBackupUrl(env) });
 
   // Deadlines (see scheduleInterval): each is several times the slowest run production has
   // recorded, so only a run that is never coming back reaches one. Curator training has its own
