@@ -10947,104 +10947,211 @@ button.link.exit-plan-link {
 .fee-rewards .fee-tax {
   color: var(--good-ink);
 }
-/* OTC Desks reward tokens beside the gift and in the pro token square. */
-.fee-badge.has-desk-rewards {
-  max-width: 100%;
-}
-.fee-badge.has-desk-rewards .desk-reward-tokens.compact {
-  min-width: 0;
-}
+/* OTC Desks reward coins (DeskRewardTokens.tsx): round logos, their ticker, name and CA in a
+   tooltip (user ask 2026-10-22). Each sits a little behind the one before it, with a ring in the
+   panel color so the stack reads as separate coins on any background, light or dark. */
 .desk-reward-tokens {
+  --desk-coin: 16px;
+  --desk-ring: var(--surface-solid);
+  isolation: isolate;
   display: inline-flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex: none;
+  /* The +N and every logo sit in the ring's room, so the stack doesn't touch its neighbours. */
+  padding: 1.5px;
 }
-.desk-reward-tokens.compact {
-  gap: 4px;
-  flex-wrap: nowrap;
+.desk-reward-tokens:not(.compact) {
+  --desk-coin: 24px;
 }
-.desk-reward-token {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+.desk-reward-coin {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: var(--desk-coin);
+  height: var(--desk-coin);
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-3);
+  box-shadow: 0 0 0 1.5px var(--desk-ring);
   color: inherit;
-  text-decoration: none;
-  font-size: 11px;
-  font-weight: 600;
-  min-width: 0;
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.12s ease;
 }
-a.desk-reward-token:hover {
-  text-decoration: underline;
+.desk-reward-coin + .desk-reward-coin {
+  margin-left: calc(var(--desk-coin) * -0.25);
+}
+/* The pro square has the room: the coins only just touch there. */
+.desk-reward-tokens:not(.compact) .desk-reward-coin + .desk-reward-coin {
+  margin-left: calc(var(--desk-coin) * -0.12);
+}
+/* A hairline inside the ring, so a white logo still has an edge on a light card. */
+.desk-reward-coin::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 14%, transparent);
+  pointer-events: none;
+}
+.desk-reward-coin:hover,
+.desk-reward-coin[aria-expanded="true"] {
+  transform: translateY(-1px);
+  z-index: 10 !important;
+}
+.desk-reward-coin:focus-visible {
+  outline: 2px solid var(--border-strong);
+  outline-offset: 2px;
+  z-index: 10 !important;
 }
 .desk-reward-avatar {
-  width: 14px;
-  height: 14px;
+  display: block;
+  width: 100%;
+  height: 100%;
   border-radius: 50%;
   object-fit: cover;
-  flex: none;
 }
-.desk-reward-tokens:not(.compact) .desk-reward-avatar {
-  width: 16px;
-  height: 16px;
-}
+/* No image: the ticker's first letters on a tint of its own. */
 .desk-reward-avatar.placeholder {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 8px;
+  display: grid;
+  place-items: center;
+  font-size: calc(var(--desk-coin) * 0.4);
   font-weight: 700;
-  background: var(--surface-3);
-  color: var(--muted);
-}
-.desk-reward-name {
-  max-width: 6rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.desk-reward-more-wrap {
-  position: relative;
-  display: inline-flex;
+  letter-spacing: 0;
+  line-height: 1;
+  color: var(--ink);
+  background: color-mix(in srgb, hsl(var(--mono-hue, 150) 62% 50%) 32%, var(--surface-3));
 }
 .desk-reward-more {
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--good-ink);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1;
-  padding: 2px 5px;
+  width: auto;
+  min-width: var(--desk-coin);
+  padding: 0 4px;
   border-radius: 999px;
-  cursor: default;
+  font-size: calc(var(--desk-coin) * 0.56);
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+  color: var(--good-ink);
 }
-.desk-reward-more-menu {
-  display: none;
-  position: absolute;
-  z-index: 20;
-  right: 0;
-  top: calc(100% + 4px);
-  min-width: 10rem;
-  padding: 6px;
-  border-radius: var(--radius-s);
-  border: 1px solid var(--border);
-  background: var(--surface-1);
-  box-shadow: var(--shadow-2);
-  flex-direction: column;
-  gap: 6px;
+.desk-reward-more::after {
+  border-radius: 999px;
 }
-.desk-reward-more-wrap:hover .desk-reward-more-menu,
-.desk-reward-more-wrap:focus-within .desk-reward-more-menu {
+/* The count tucks in less than a logo would, so its number stays whole. */
+.desk-reward-coin + .desk-reward-more {
+  margin-left: calc(var(--desk-coin) * -0.1);
+}
+/* On a card and a Scope row the gift heads the stack: on a soft green disc, with the first logo
+   tucked behind it, so the gift and its coins read as one mark. */
+.fee-badge.has-desk-rewards {
+  max-width: 100%;
+  /* Keeps the gift's and the coins' stacking inside the badge, under the page's fixed bars. */
+  isolation: isolate;
+}
+.fee-badge.has-desk-rewards > .icon {
+  position: relative;
+  z-index: 11;
+  box-sizing: content-box;
+  padding: 2px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--good) 16%, var(--surface-solid));
+  box-shadow: 0 0 0 1.5px var(--surface-solid);
+}
+.fee-badge.has-desk-rewards > .icon + .desk-reward-tokens {
+  margin-left: -9px;
+}
+.fee-badge.has-desk-rewards > .icon + .desk-reward-tokens > .desk-reward-coin:first-child {
+  margin-left: 0;
+}
+.desk-reward-tip {
+  position: fixed;
+  z-index: 1200;
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 180px;
+  padding: 9px 11px 10px;
+  border-radius: 10px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 10px 28px -10px rgba(0, 0, 0, 0.55);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.35;
+  letter-spacing: 0;
+  text-align: left;
+  white-space: normal;
+  cursor: auto;
+  animation: touch-tip-in 0.12s ease-out;
 }
-.desk-reward-more-menu .desk-reward-token {
-  width: 100%;
+.desk-reward-tip-head {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
-.tm-fig-otc .tm-desk-rewards {
+.desk-reward-tip-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+}
+.desk-reward-tip-row > .desk-reward-avatar {
+  --desk-coin: 28px;
+  width: 28px;
+  height: 28px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 14%, transparent);
+}
+.desk-reward-tip-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.desk-reward-tip-ticker {
+  font-weight: 700;
+}
+.desk-reward-tip-name {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.desk-reward-tip-ca {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   margin-top: 2px;
 }
-.tm-fig-otc .desk-reward-name {
-  max-width: 9rem;
+.desk-reward-tip-ca a {
+  color: var(--muted);
+  font-size: 11.5px;
+  text-decoration: none;
+}
+.desk-reward-tip-ca a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+.desk-reward-copy {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+.desk-reward-copy:hover,
+.desk-reward-copy:focus-visible {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+.tm-fig-otc .tm-desk-rewards {
+  margin-top: 4px;
+  --desk-ring: var(--surface-2);
 }
 
 /* The Live tab's picture tour (AboutModal, TourArt) */
@@ -22573,6 +22680,13 @@ dialog.tm-modal.tm-terminal::backdrop {
   width: auto;
   gap: 2px;
   padding: 0 3px;
+}
+/* So do the OTC reward logos tucked behind it. */
+.scope-fee.has-desk-rewards {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  gap: 4px;
 }
 
 /* "as of 14:05" on a cached report (components/AsOf.tsx). */
