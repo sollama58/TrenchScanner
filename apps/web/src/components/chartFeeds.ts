@@ -121,12 +121,17 @@ export function useLiveTail(base: string, enabled: boolean): LiveTail {
       failures = 0;
       next(0);
     };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") resume();
+    };
     void poll();
     window.addEventListener("online", resume);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       stopped = true;
       window.clearTimeout(timer);
       window.removeEventListener("online", resume);
+      document.removeEventListener("visibilitychange", onVisible);
       abort.abort();
     };
   }, [base, enabled]);
@@ -178,12 +183,17 @@ export function useFineCandles(base: string, res: "1s" | "15s" | null, everyMs: 
     const resume = () => {
       if (!busy && !stopped) void poll();
     };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") resume();
+    };
     void poll();
     window.addEventListener("online", resume);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       stopped = true;
       window.clearTimeout(timer);
       window.removeEventListener("online", resume);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [base, res, key, everyMs]);
   return held && held.key === key ? held.data : null;

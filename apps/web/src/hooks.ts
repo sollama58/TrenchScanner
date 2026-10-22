@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_URL, api, type Card, type LiveMarket } from "./api";
 import { cachedGet, peek } from "./cache";
+import { chartHistoryExtended, isChartPollPath, type ChartPollBody } from "./chartPoll";
 import { beginWait } from "./loadTracker";
 import { READING_LAG_MS } from "./marketClock";
 import { sessionToken } from "./session";
@@ -26,6 +27,20 @@ export interface Loadable<T> {
 
 /** A cached response younger than this is shown without refetching when a view mounts. */
 const FRESH_ON_MOUNT_MS = 10_000;
+
+/** How far past the browser cache a mount read goes. Chart paths always refetch: a fresh tail can hide older candles. */
+export function pollMountMaxAge(path: string, forced: boolean): number {
+  if (forced) return -1;
+  if (isChartPollPath(path)) return 0;
+  return FRESH_ON_MOUNT_MS;
+}
+
+/** Whether a tab coming back should poll this path (chart always; others when the cache has aged). */
+export function shouldPollOnVisible(path: string, cachedAt: number | null, intervalMs: number): boolean {
+  if (isChartPollPath(path)) return true;
+  if (cachedAt === null) return true;
+  return Date.now() - cachedAt >= Math.min(intervalMs, 60_000);
+}
 
 /** The path and key a poll answer belongs to. */
 export function pollWant(path: string, key: string): string {
@@ -176,16 +191,32 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
       setHeld({ data: cached.data, for: pollWant(path, key), saved: cached.restored, at: cached.at });
     setError(null);
     again.current = false;
-    run(forced ? -1 : FRESH_ON_MOUNT_MS);
+    run(pollMountMaxAge(path, forced));
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible" && Date.now() >= retryAt.current) poll();
     }, intervalMs);
     setSchedule({ from: Date.now() + intervalMs, every: intervalMs });
-    // Coming back to the tab refreshes only what has gone stale while it was hidden.
+    // Coming back to the tab refreshes only what has gone stale while it was hidden. Chart paths
+    // always poll: history can land in the shared cache while this hook's last response was a tail.
     const onVisible = () => {
       if (document.visibilityState !== "visible") return;
-      const cached = peek<T>(pathRef.current);
-      if (!cached || Date.now() - cached.at >= Math.min(intervalMs, 60_000)) poll();
+      const p = pathRef.current;
+      const want = wantRef.current;
+      const cached = peek<T>(p);
+      if (cached?.data && isChartPollPath(p)) {
+        setHeld((h) => {
+          if (!h || h.for !== want) {
+            return { data: cached.data, for: want, saved: false, at: cached.at };
+          }
+          const prev = h.data as ChartPollBody;
+          const body = cached.data as ChartPollBody;
+          if (prev.mint === body.mint && chartHistoryExtended(prev, body)) {
+            return { data: cached.data, for: want, saved: false, at: cached.at };
+          }
+          return h;
+        });
+      }
+      if (shouldPollOnVisible(p, cached?.at ?? null, intervalMs)) poll();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -273,7 +304,8 @@ export function usePollingAll<T>(
     }
     again.current = false;
     busy.current = false;
-    run(forced ? -1 : FRESH_ON_MOUNT_MS);
+    const list = pathsRef.current;
+    run(forced ? -1 : list.some((p) => isChartPollPath(p)) ? 0 : FRESH_ON_MOUNT_MS);
     // As usePolling's timed poll: past the browser's HTTP cache only for reload().
     const poll = () => {
       if (!busy.current) run(0);
@@ -285,8 +317,8 @@ export function usePollingAll<T>(
     // usePolling: the hidden tab's timer is throttled or skipped.
     const onVisible = () => {
       if (document.visibilityState !== "visible") return;
-      const oldest = Math.min(...pathsRef.current.map((p) => peek<T>(p)?.at ?? 0));
-      if (Date.now() - oldest >= Math.min(intervalMs, 60_000)) poll();
+      const paths = pathsRef.current;
+      if (paths.some((p) => shouldPollOnVisible(p, peek<T>(p)?.at ?? null, intervalMs))) poll();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {

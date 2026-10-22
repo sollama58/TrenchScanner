@@ -83,6 +83,9 @@ export function mergeTokenChart(prev: ChartPollBody, next: ChartPollBody): Chart
   };
 }
 
+/** GET paths for the token modal chart (usePolling / cachedGet). */
+export const isChartPollPath = (path: string): boolean => /\/chart$/.test(path);
+
 /** The chart answer to show for `mint`, or null when it is stale or for another coin. */
 export function chartForMint<T extends { mint: string }>(
   mint: string,

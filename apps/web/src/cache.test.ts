@@ -189,3 +189,34 @@ describe("boot requests (window.__boot)", () => {
     vi.useRealTimers();
   });
 });
+
+describe("cachedGet: chart history", () => {
+  const path = "/tokens/m/chart";
+  const tail = {
+    mint: "m",
+    candles: [{ t: 50_000, o: 1, h: 1, l: 1, c: 1 }],
+    marketCap: [{ t: 50_000, usd: 1 }],
+  };
+  const full = {
+    mint: "m",
+    candles: [{ t: 50_000, o: 1, h: 1, l: 1, c: 1 }],
+    older: [{ t: 0, o: 1, h: 1, l: 1, c: 1 }],
+    marketCap: [{ t: 0, usd: 1 }],
+  };
+
+  beforeEach(() => {
+    requests.length = 0;
+    invalidate();
+  });
+
+  it("merges extended history into a cached tail answer", async () => {
+    const short = cachedGet(path, 0);
+    requests[0]!.resolve(tail);
+    await short;
+    const longer = cachedGet(path, 0);
+    requests[1]!.resolve(full);
+    const merged = await longer;
+    expect(merged.older?.[0]?.t).toBe(0);
+    expect(peek(path)?.data).toEqual(merged);
+  });
+});
