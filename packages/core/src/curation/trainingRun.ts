@@ -7,8 +7,7 @@ import {
   probabilityAtRank,
   trainCuratorModel,
   goalValue,
-  knownTenXVerdicts,
-  MIN_KNOWN_TEN_X_VERDICTS,
+  tenXSitOutReason,
   type SeatGoal,
   walkForwardEvaluate,
   decidePromotion,
@@ -1142,7 +1141,7 @@ export interface ContestRunOutcome {
   dropped: string | null;
   /**
    * Seats this run did not train. The 10× Hunter sits out when fewer than MIN_KNOWN_TEN_X_VERDICTS
-   * rows have a known 10× verdict, instead of shipping a 4× model under that name. The job logs
+   * rows have a known 10× verdict or fewer than MIN_TEN_X_POSITIVES reached 10×, instead of shipping a 4× model under that name. The job logs
    * these and keeps each seat's running model.
    */
   skipped: SkippedContestant[];
@@ -1256,12 +1255,12 @@ export async function runEvolvingContest(
   for (const spec of learnerSpecs) {
     if (!spec.recipe) continue;
     if (spec.recipe.goal === "10x") {
-      const known = knownTenXVerdicts(rows);
-      if (known < MIN_KNOWN_TEN_X_VERDICTS) {
+      const sitOut = tenXSitOutReason(rows);
+      if (sitOut !== null) {
         skipped.push({
           contestant: spec.id,
           name: spec.name,
-          reason: `${spec.name} skipped: ${known} rows have a known 10× verdict, need ${MIN_KNOWN_TEN_X_VERDICTS}. Not trained as a 4× model.`,
+          reason: `${spec.name} skipped: ${sitOut}. Not trained as a 4× model.`,
         });
         continue;
       }

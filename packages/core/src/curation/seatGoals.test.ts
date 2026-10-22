@@ -20,6 +20,7 @@ import {
   trainCuratorModel,
   TenXVerdictsTooFew,
   MIN_KNOWN_TEN_X_VERDICTS,
+  MIN_TEN_X_POSITIVES,
   type TrainingRow,
 } from "./trainer.js";
 
@@ -184,14 +185,19 @@ describe("seat goals", () => {
     expect(safe.returnRisk!.winFloor).toBeUndefined();
   }, 60_000);
 
-  it("does not train a 4x model when fewer than 30 rows have a known 10x verdict", async () => {
+  it("does not train a 4x model when fewer than 30 rows have a known 10x verdict or reached 10x", async () => {
     const unsettled = Array.from({ length: MIN_KNOWN_TEN_X_VERDICTS - 1 }, (_, i) =>
       row({ labelValue: 1, anchorAt: new Date(T0 + i * 60_000) }),
     );
     await expect(trainCuratorModel(unsettled, { learner: "logistic", goal: "10x" })).rejects.toBeInstanceOf(
       TenXVerdictsTooFew,
     );
-    const known = rows.map((r) => ({ ...r, hit10x: false }));
+    // Every verdict known but only a few winners: still no 10× fit.
+    const fewWinners = rows.map((r, i) => ({ ...r, hit10x: i < MIN_TEN_X_POSITIVES - 1 }));
+    await expect(trainCuratorModel(fewWinners, { learner: "logistic", goal: "10x" })).rejects.toThrow(
+      `${MIN_TEN_X_POSITIVES - 1} rows reached 10×`,
+    );
+    const known = rows.map((r, i) => ({ ...r, hit10x: i % 20 === 0 }));
     const tenX = await trainCuratorModel(known, { learner: "logistic", goal: "10x" });
     const fourX = await trainCuratorModel(known, { learner: "logistic", goal: "4x" });
     const f = { buyRatio24h: 0.5, volume24hUsd: 5_000, ageMinutes: 60 };

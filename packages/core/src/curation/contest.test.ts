@@ -511,6 +511,32 @@ describe("10x Hunter", () => {
     expect(outcome.skipped[0]).toMatchObject({ contestant: TEN_X_CONTESTANT, name: "10x Hunter" });
     expect(outcome.skipped[0]!.reason).toContain("Not trained as a 4× model");
   });
+
+  it("skips the seat when every verdict is known but fewer than 30 rows reached 10x", async () => {
+    const spec = contestantSpec(TEN_X_CONTESTANT)!;
+    // Thousands of losses settle the tier; four winners are not enough to fit one.
+    const rows: TrainingRow[] = Array.from({ length: 400 }, (_, i) => ({
+      anchorAt: new Date(Date.UTC(2026, 9, 1, 0, i)),
+      features: { mcapUsd: 50_000, ageMinutes: 10 },
+      labelValue: i < 4 ? Math.log2(10) : 0,
+      hit10x: i < 4,
+      anchorPriceUsd: 1,
+      anchorMcapUsd: 50_000,
+      sampleKind: "event",
+    }));
+    const outcome = await runEvolvingContest(rows, {
+      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
+      targetPerHour: 6,
+      heuristicMinScore: 55,
+      minRowsToPromote: 500,
+      cooldownHours: 24,
+      heuristicPrecisionGate: true,
+      contestants: [spec],
+    });
+    expect(outcome.results.map((r) => r.contestant)).not.toContain(TEN_X_CONTESTANT);
+    expect(outcome.skipped).toHaveLength(1);
+    expect(outcome.skipped[0]!.reason).toContain("4 rows reached 10×, need 30");
+  });
 });
 
 describe("defaultContestant", () => {
