@@ -8,6 +8,7 @@ import {
   CANDIDATE_FEATURE_NAMES,
   HOURLY_ROWS_WAIT_SINCE,
   AGE_FROM_LAUNCH_SINCE,
+  HOLDER_TRANSFER_LINKS_READ_SINCE,
   type Env,
   RULES_MODEL_KIND,
   STACKED_MODEL_KIND,
@@ -486,6 +487,37 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
     });
     expect(event!.features).toMatchObject({ freshTop10WalletPct: 20, nsXRead: 1 });
     expect(since!.features).toMatchObject({ freshTop10WalletPct: 20, nsXRead: 1 });
+  });
+
+  it("keeps the stored transfer-linked readings the mask cleared for the gated seats (user decision 2026-10-20)", async () => {
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-load-gate-inputs` } });
+    const at = (m: number) => new Date(HOLDER_TRANSFER_LINKS_READ_SINCE.getTime() + m * 60_000);
+    const row = (m: number) => ({
+      tokenId: token.id,
+      anchorAt: at(m),
+      finalizedAt: at(m),
+      sampleKind: "event",
+      labelRule: 4,
+      anchorPriceUsd: 1 + m / 1000,
+      anchorMcapUsd: 50_000,
+      features: { mcapUsd: 50_000, ageMinutes: 4, bundledSupplyPct: 60, linkedCreatorPct: 12 },
+      score: 50,
+      nextCheckAt: at(m),
+      labelValue: 0,
+      peak1hPriceUsd: 1,
+      low1hPriceUsd: 1,
+      lowBefore2xPriceUsd: 1,
+      peak24hPriceUsd: 1,
+    });
+    await prisma.candidateOutcome.createMany({ data: [row(-60), row(60)] });
+    const rows = (await loadTrainingRows(at(-90), 5_000, 500)).filter((r) => r.tokenId === token.id);
+    expect(rows).toHaveLength(2);
+    const [after, before] = rows;
+    // Banked before the transfer-counted reads: masked for the learners, kept for the gate.
+    expect(before!.features).toMatchObject({ bundledSupplyPct: null, linkedCreatorPct: null });
+    expect(before!.gateInputs).toEqual({ bundledSupplyPct: 60, linkedCreatorPct: 12 });
+    expect(after!.features).toMatchObject({ bundledSupplyPct: 60, linkedCreatorPct: 12 });
+    expect(after!.gateInputs).toBeUndefined();
   });
 
   it("rebuilds an older graduated row's age from the launch, caps it, and cuts on the inputs as they mean today", async () => {
