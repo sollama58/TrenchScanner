@@ -1,5 +1,7 @@
 import { curvePathOf, followYoungCurves, takeCurveTapeStats } from "./curveTape.js";
 import { takePricePathStats } from "./pricePathRecorder.js";
+import { takeCurveCandleStats } from "./curveCandles.js";
+import { takeCandleBackfillStats } from "./candleBackfill.js";
 import {
   tokenSageHints,
   recordRunProgress,
@@ -2103,6 +2105,9 @@ async function scanCycle(
   const curveTape = takeCurveTapeStats();
   // The price path recorder: paths saved, skipped as too quiet, over the day's cap, and written.
   const pricePaths = takePricePathStats();
+  // The chart's candle store: the curve tape's 1-second rows written, and the backfill's steps.
+  const curveCandles = takeCurveCandleStats();
+  const candleBackfill = takeCandleBackfillStats();
   // This process's Pump.fun budget (pumpfunGate.ts): requests let through, 429 pauses, held back.
   const pumpfunGate = takePumpFunGateStats();
   // The live tape's pages (10 credits each) since the last cycle, and the coins it holds a page for.
@@ -2135,6 +2140,8 @@ async function scanCycle(
     ...(heliusStream ? { heliusStream: { ...heliusStream } } : {}),
     ...(curveTape ? { curveTape } : {}),
     ...(pricePaths ? { pricePaths } : {}),
+    ...(curveCandles ? { curveCandles } : {}),
+    ...(candleBackfill ? { candleBackfill } : {}),
     pumpfunGate,
     liveTape,
     ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
