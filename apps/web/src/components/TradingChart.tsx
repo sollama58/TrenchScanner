@@ -74,6 +74,7 @@ import {
   type PlacedMark,
 } from "../chartMarkLayout";
 import { API_URL } from "../api";
+import { chartHistoryGrew, openingLogicalRange } from "../chartViewport";
 import { openWallet } from "../walletModal";
 import {
   ChartOverlay,
@@ -436,7 +437,9 @@ export function TradingChart({
   /** Bumped when the series are rebuilt, so the data is handed to the new ones. */
   const [built, setBuilt] = useState(0);
   const [mounted, setMounted] = useState(false);
-  const lastData = useRef<{ start: number; n: number; tf: number; scope: string } | null>(null);
+  const lastData = useRef<{ start: number; n: number; tf: number; scope: string; extentT0: number } | null>(
+    null,
+  );
 
   const [drawTick, setDrawTick] = useState(0);
   const drawings = useMemo(
@@ -776,14 +779,17 @@ export function TradingChart({
         title: "Your entry",
       });
 
-    // Which window to show: a new view (or candle size) opens on its newest candles; otherwise
-    // the window keeps its moments, and follows the newest candle when it ran to it.
+    // Which window to show: a new view opens with enough history before now on screen; later reads
+    // that reach further back keep the live end anchored instead of snapping to a short tail.
     const scope = `${mint}|${opened}`;
     const n = bars.length;
-    if (!prev || prev.tf !== slots.tfMs || prev.scope !== scope || !range) {
-      const fit = Math.max(8, Math.floor(plotW / OPEN_BAR_PX));
-      ts.setVisibleLogicalRange(n <= fit ? { from: -0.5, to: n - 0.5 } : { from: n - fit, to: n - 0.5 });
-      if (n <= fit)
+    const historyGrew = prev && chartHistoryGrew(prev.extentT0, extent.t0, slots.tfMs / 2);
+    const tfChanged = prev && prev.tf !== slots.tfMs;
+    const reset = !prev || prev.scope !== scope || !range || (tfChanged && !historyGrew);
+    if (reset) {
+      const { from, to } = openingLogicalRange(n, plotW, slots.tfMs, extent);
+      ts.setVisibleLogicalRange({ from, to });
+      if (n <= Math.ceil(to - from))
         ts.applyOptions({ rightOffsetPixels: path.length > 1 ? RIGHT_PX + pathZoneW(plotW) : RIGHT_PX });
     } else {
       const shift = (prev.start - slots.start) / slots.tfMs;
@@ -800,15 +806,19 @@ export function TradingChart({
       }
       if (shift !== 0 || n !== prev.n) ts.setVisibleLogicalRange(next);
     }
-    lastData.current = { start: slots.start, n, tf: slots.tfMs, scope };
+    lastData.current = { start: slots.start, n, tf: slots.tfMs, scope, extentT0: extent.t0 };
   }, [
     slots,
     built,
     base,
+    ref,
     entry,
     phone,
     opened,
     kind,
+    extent,
+    plotW,
+    path.length,
     priceFlags,
     look.chartEventLabels,
     look.chartEventScale,

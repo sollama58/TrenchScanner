@@ -103,6 +103,7 @@ import {
   withLabeledTraders,
   withLiveMarks,
 } from "../walletMarks";
+import { chartForMint } from "../chartPoll";
 import { chartFlagKind } from "../chartEvents";
 import { DexInfoLabel, dexInfoChartMark } from "../dexInfoLabel";
 import { TradingChart, type ChartEvent, type ChartKind, type ChartTrade } from "./TradingChart";
@@ -943,7 +944,8 @@ function TokenBody({
   );
   // While the next coin's chart is in flight the previous coin's answer stays, flagged stale.
   // Its candles, flagged wallets and holder entries must not draw on this coin.
-  const chartShown = chart.stale ? { ...chart, data: null } : chart;
+  const chartData = chartForMint(mint, chart.data, chart.stale);
+  const chartShown = chartData ? { ...chart, data: chartData, stale: false } : { ...chart, data: null };
   // Kept as the same list while a poll brings the same wallets, so the map isn't rebuilt for nothing.
   const flaggedKey = JSON.stringify(chartShown.data?.wallets ?? []);
   const flagged = useMemo(() => JSON.parse(flaggedKey) as FlaggedWallet[], [flaggedKey]);
