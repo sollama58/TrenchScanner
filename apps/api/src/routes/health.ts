@@ -304,6 +304,9 @@ export async function registerHealthRoutes(
     // The shared Helius stand-down (apiUsage.ts) lives in this table but is not a job.
     const heartbeats = rows.filter((h) => h.job !== HELIUS_CREDITS_OUT_ROW);
     const creditsOut = sharedCreditsOut(rows.find((h) => h.job === HELIUS_CREDITS_OUT_ROW)?.meta);
+    const watchMeta = heartbeats.find((h) => h.job === "pipeline-watch")?.meta as
+      Record<string, unknown> | null | undefined;
+    const heliusPlan = heliusPlanOf(watchMeta?.heliusPlan);
     const scanMeta = heartbeats.find((h) => h.job === "scan")?.meta as Record<string, unknown> | null;
     const screenPass = scanMeta?.lastScreenPassAt;
     // When each stage of the alert path last produced something (the header pill's tooltip).
@@ -313,7 +316,7 @@ export async function registerHealthRoutes(
       lastTokenSageAt: lastRead._max.checkedAt,
       lastDecisionAt: latest(lastDecision._max.anchorAt, lastSecondLook._max.anchorAt),
     };
-    return { heartbeats, aiBudget, pipeline, heldLocks, creditsOut };
+    return { heartbeats, aiBudget, pipeline, heldLocks, creditsOut, heliusPlan };
   };
   const heartbeatCache = new SharedCache<Awaited<ReturnType<typeof readHeartbeats>>>(WORKER_HEALTH_CACHE_MS);
 
@@ -321,7 +324,7 @@ export async function registerHealthRoutes(
   // a monitor that only reads status codes can alert on it. Without it the route always answers
   // 200 and the dashboard reads the flags from the body, as it always has.
   app.get<{ Querystring: { strict?: string } }>("/worker", async (request, reply) => {
-    const { heartbeats, aiBudget, pipeline, heldLocks, creditsOut } =
+    const { heartbeats, aiBudget, pipeline, heldLocks, creditsOut, heliusPlan } =
       await heartbeatCache.get(readHeartbeats);
     // Ages are measured now, not when the rows were read, so the cache never makes a job look fresher.
     const now = Date.now();
@@ -336,6 +339,9 @@ export async function registerHealthRoutes(
       pipeline,
       // While Helius's credits are out, every process's stand-down (apiUsage.ts): since and until when.
       heliusCreditsOut: creditsOut && creditsOut.until > now ? creditsOut : null,
+      // The Helius plan against its billing cycle, as pipeline-watch last read it (HELIUS_MONTHLY_CREDITS;
+      // null with that unset): credits so far, the last day's, and when that rate runs the plan out.
+      heliusPlan,
       // Today's AI spend against the daily cap (AI_DAILY_BUDGET_USD): totals only here - the
       // per-source split is on the admin panel.
       aiBudget: {
@@ -352,6 +358,27 @@ export async function registerHealthRoutes(
 }
 
 type HeartbeatRow = Awaited<ReturnType<typeof prisma.systemHeartbeat.findMany>>[number];
+
+/** The plan figures pipeline-watch's heartbeat carries (apps/worker/src/jobs/heliusBudget.ts), or null. */
+function heliusPlanOf(meta: unknown) {
+  if (typeof meta !== "object" || meta === null) return null;
+  const m = meta as Record<string, unknown>;
+  if (typeof m.planCredits !== "number" || typeof m.cycleCredits !== "number") return null;
+  const str = (k: string) => (typeof m[k] === "string" ? (m[k] as string) : null);
+  const num = (k: string) => (typeof m[k] === "number" ? (m[k] as number) : null);
+  return {
+    planCredits: m.planCredits,
+    cycleStart: str("cycleStart"),
+    cycleEnd: str("cycleEnd"),
+    countedSince: str("countedSince"),
+    cycleCredits: m.cycleCredits,
+    usedPct: Math.round((m.cycleCredits / m.planCredits) * 1000) / 10,
+    last24h: num("last24h"),
+    projectedCycle: num("projectedCycle"),
+    projectedRunOutAt: str("projectedRunOutAt"),
+    checkedAt: str("checkedAt"),
+  };
+}
 
 /** The shared Helius stand-down row's times (apiUsage.ts writes them as ms epochs), or null. */
 function sharedCreditsOut(meta: unknown): { since: number; until: number } | null {

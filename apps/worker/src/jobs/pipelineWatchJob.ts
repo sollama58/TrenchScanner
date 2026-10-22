@@ -15,6 +15,7 @@ import {
 } from "@trenchscanner/core";
 import { JobFailure, SHUTDOWN_INTERRUPTED_ERROR, STOPPED_ERROR, type JobRunMeta } from "../scheduler.js";
 import { exitForRestart } from "../processExit.js";
+import { checkHeliusPlan, readPlanState, type HeliusPlanState } from "./heliusBudget.js";
 
 const logger = createLogger("pipeline-watch");
 
@@ -616,6 +617,8 @@ interface WatchState {
   /** 0 none, 1 the 5-minute warning is up, 2 the 1-minute warning is up (restart due), -1 restart capped. */
   warned: number;
   lastRestartAt: number | null;
+  /** The Helius plan's cycle so far (heliusBudget.ts); null with the alarm off. */
+  heliusPlan: HeliusPlanState | null;
 }
 
 async function previousState(): Promise<WatchState> {
@@ -631,6 +634,7 @@ async function previousState(): Promise<WatchState> {
     stalledSince: time("stalledSince"),
     warned: meta && typeof meta.warned === "number" ? meta.warned : 0,
     lastRestartAt: time("lastRestartAt"),
+    heliusPlan: readPlanState(meta?.heliusPlan),
   };
 }
 
@@ -794,6 +798,7 @@ function stateMeta(state: WatchState): JobRunMeta {
     stalledSince: state.stalledSince === null ? null : new Date(state.stalledSince).toISOString(),
     warned: state.warned,
     lastRestartAt: state.lastRestartAt === null ? null : new Date(state.lastRestartAt).toISOString(),
+    heliusPlan: state.heliusPlan,
   };
 }
 
@@ -825,6 +830,15 @@ async function watchOnce(
   const now = deps.now ?? Date.now();
   const before = await previousState();
   remember(before);
+  // The Helius plan against its cycle (HELIUS_MONTHLY_CREDITS): read about once an hour, notified
+  // once per threshold a cycle. A failed read keeps the last state and judges nothing new.
+  let heliusPlan = before.heliusPlan;
+  let planNotices: string[] = [];
+  try {
+    ({ state: heliusPlan, notices: planNotices } = await checkHeliusPlan(env, before.heliusPlan, now));
+  } catch (err) {
+    logger.warn("Helius plan not read", { error: String(err) });
+  }
   // Still out for a short while past the stand-down's end: it lifts at a fixed time and is only set
   // again by the next billed call refused, so a run in that gap read "flowing again" every cycle.
   const creditsOut = heliusCreditsOut(now - CREDITS_OUT_CLEAR_GRACE_MS);
@@ -859,7 +873,7 @@ async function watchOnce(
   let warned = stalls.length === 0 ? 0 : before.warned;
   let lastRestartAt = before.lastRestartAt;
 
-  const notices: string[] = [];
+  const notices: string[] = [...planNotices];
   if (started.length > 0 || cleared.length > 0) notices.push(notificationText(started, cleared, problems));
   if (stalls.length === 0 && before.stalledSince !== null) await endBanners(now);
   await creditsOutBanner(
@@ -869,7 +883,7 @@ async function watchOnce(
 
   // From here on a failure keeps this run's warning level and any restart it scheduled. The
   // stalled keys stay the previous run's until the notices go out, so a failed send is retried.
-  remember({ keys: before.keys, stalledSince, warned, lastRestartAt });
+  remember({ keys: before.keys, stalledSince, warned, lastRestartAt, heliusPlan });
   const step = restartStep(stalledSince === null ? null : now - stalledSince, warned, lastRestartAt, now);
   if (step === "warn5" || step === "warn1") {
     warned = step === "warn5" ? 1 : 2;
@@ -878,11 +892,11 @@ async function watchOnce(
       notices.push("<b>🔄 Restarting the scanner in about a minute</b> to clear the stall.");
       (deps.restart ?? restartForStall)();
     }
-    remember({ keys: before.keys, stalledSince, warned, lastRestartAt });
+    remember({ keys: before.keys, stalledSince, warned, lastRestartAt, heliusPlan });
     await postBanner(BANNER[step], now);
   } else if (step === "capped") {
     warned = -1;
-    remember({ keys: before.keys, stalledSince, warned, lastRestartAt });
+    remember({ keys: before.keys, stalledSince, warned, lastRestartAt, heliusPlan });
     notices.push(
       "<b>Not restarting:</b> the scanner already restarted in the last hour, so this stall needs a look.",
     );
@@ -907,6 +921,7 @@ async function watchOnce(
     lastRestartAt: lastRestartAt === null ? null : new Date(lastRestartAt).toISOString(),
     databaseMb: dbBytes === null ? null : Math.round(dbBytes / 1_048_576),
     heliusCreditsOutUntil: creditsOut ? creditsOut.until.toISOString() : null,
+    heliusPlan,
     flows: Object.fromEntries(flows.map((f) => [f.key, f.recent])),
     tradeOutcomes: { ...trades },
   };
