@@ -2754,12 +2754,9 @@ export function ChartCard({
       const last = source[source.length - 1]!.t;
       const from = bounds.from;
       const to = bounds.live ? last : bounds.to;
-      // Which widths the view is drawn from: a run is used where it wins (stitch's rule) in view.
-      const used = runs.filter((r, i) => {
-        const next = runs.slice(i + 1).find((n) => n.points.length > 0);
-        const until = next ? next.points[0]!.t - next.stepMs : Infinity;
-        return r.points.some((p) => p.t >= from && p.t <= to && p.t <= until);
-      });
+      // Which widths the view is drawn from: a run is used where its closes survived the stitch, in view.
+      const survived = new Set(candled);
+      const used = runs.filter((r) => r.points.some((p) => p.t >= from && p.t <= to && survived.has(p)));
       const candledTo = candled.length > 0 ? candled[candled.length - 1]!.t : -Infinity;
       const usesTail = bounds.live && tail.ticks.some((p) => p.t >= from && p.t > candledTo);
       const finest = usesTail ? 1_000 : Math.min(...used.map((r) => r.stepMs || 30_000), 60_000);

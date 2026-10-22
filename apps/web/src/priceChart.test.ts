@@ -69,6 +69,17 @@ describe("stitch", () => {
     expect(stitch([minute], ticks).map((p) => p.t / M)).toEqual([4, 5, 5.2, 5.5]);
   });
 
+  it("keeps the coarser closes after a finer run that is behind", () => {
+    // The 15-second page was read at 3:15; the minute candles reach 6:00.
+    const minute = { points: pts(1 * M, 2 * M, 3 * M, 4 * M, 5 * M, 6 * M), stepMs: M };
+    const quarter = { points: pts(2.75 * M, 3 * M, 3.25 * M), stepMs: 15_000 };
+    expect(stitch([minute, quarter]).map((p) => p.t / M)).toEqual([1, 2, 2.75, 3, 3.25, 4, 5, 6]);
+    // The ticks take over from the newest candle's start: the minute candle's, not the finer run's.
+    expect(stitch([minute, quarter], pts(5.5 * M)).map((p) => p.t / M)).toEqual([
+      1, 2, 2.75, 3, 3.25, 4, 5, 5.5,
+    ]);
+  });
+
   it("leaves the runs alone without finer ones", () => {
     expect(
       stitch([
@@ -316,6 +327,40 @@ describe("volumeBars", () => {
       [0, 60_000],
       [60_000, 15_000],
       [75_000, 15_000],
+    ]);
+  });
+
+  it("keeps the coarser candles after a finer run that is behind", () => {
+    const vol = stitchVolume([
+      {
+        candles: [k(0, 1, 1, 60), k(60_000, 1, 1, 60), k(120_000, 1, 1, 60), k(180_000, 1, 1, 60)],
+        stepMs: 60_000,
+      },
+      { candles: [k(60_000, 1, 1, 30), k(75_000, 1, 1, 30)], stepMs: 15_000 },
+    ]);
+    expect(vol.map((c) => [c.t, c.w])).toEqual([
+      [0, 60_000],
+      [60_000, 15_000],
+      [75_000, 15_000],
+      [120_000, 60_000],
+      [180_000, 60_000],
+    ]);
+  });
+
+  it("keeps a coarser candle open at a finer run's end whole, without the finer candles inside it", () => {
+    const vol = stitchVolume([
+      { candles: [k(0, 1, 1, 60), k(60_000, 1, 1, 60), k(120_000, 1, 1, 60)], stepMs: 60_000 },
+      // The 15-second page runs from 0:30 to 1:30, ending inside the 1:00 minute.
+      {
+        candles: [k(30_000, 1, 1, 30), k(45_000, 1, 1, 30), k(60_000, 1, 1, 30), k(75_000, 1, 1, 30)],
+        stepMs: 15_000,
+      },
+    ]);
+    expect(vol.map((c) => [c.t, c.w])).toEqual([
+      [30_000, 15_000],
+      [45_000, 15_000],
+      [60_000, 60_000],
+      [120_000, 60_000],
     ]);
   });
 

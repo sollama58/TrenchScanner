@@ -28,10 +28,13 @@ export interface CloseRun {
 }
 
 /**
- * Exported for tests. The finest reading at every moment: each run (coarse to fine) wins from where
- * it starts, so the minute closes cover what Pump.fun's finer pages don't reach back to, the
+ * Exported for tests. The finest reading at every moment: each run (coarse to fine) wins over the
+ * stretch it covers, so the minute closes cover what Pump.fun's finer pages don't reach back to, the
  * 15-second ones the hours before the 1-second page, and the live curve ticks everything after the
- * newest candle. A finer run starts at its first candle's start (its first close less its width).
+ * newest candle. A finer run starts at its first candle's start (its first close less its width)
+ * and ends at its last close: a finer page read a while ago (the 15-second one is polled every
+ * minute, the 1-second one kept through empty answers) doesn't hide the newer coarser closes after
+ * it, which are the only readings of those minutes when the live tail isn't streaming.
  */
 export function stitch(runs: readonly CloseRun[], ticks: readonly Point[] = []): Point[] {
   let out: Point[] = [];
@@ -39,8 +42,14 @@ export function stitch(runs: readonly CloseRun[], ticks: readonly Point[] = []):
   for (const run of runs) {
     if (run.points.length === 0) continue;
     const from = run.points[0]!.t - run.stepMs;
-    out = out.filter((p) => p.t <= from).concat(run.points);
-    lastStep = run.stepMs;
+    const to = run.points[run.points.length - 1]!.t;
+    const after = out.filter((p) => p.t > to);
+    out = out
+      .filter((p) => p.t <= from)
+      .concat(run.points)
+      .concat(after);
+    // The newest point's own width, for where the ticks take over below.
+    if (after.length === 0) lastStep = run.stepMs;
   }
   // The ticks win from the newest candle's start: that candle may still be open (its close so far
   // drawn at now), and the curve's changes inside it are the finer reading.
@@ -472,8 +481,8 @@ export function volumeBars(
 }
 
 /**
- * Exported for tests. The volume lane's candles for a stitched view: each run's candles from where
- * that run takes over (the same rule as stitch), so a stretch is counted from one width only.
+ * Exported for tests. The volume lane's candles for a stitched view: each run's candles over the
+ * stretch that run covers (the same rule as stitch), so a stretch is counted from one width only.
  */
 export function stitchVolume(
   runs: readonly { candles: readonly VolumeCandle[]; stepMs: number }[],
@@ -482,9 +491,16 @@ export function stitchVolume(
   for (const run of runs) {
     if (run.candles.length === 0) continue;
     const from = run.candles[0]!.t;
+    const lastEnd = run.candles[run.candles.length - 1]!.t + run.stepMs;
+    // A coarser candle still open at the finer run's end (the minute the 15-second page stopped
+    // in) keeps its whole stretch, and the finer candles inside it give way: the newer coarser
+    // candle saw more of it, and dropping it would leave a hole up to the next one.
+    const straddle = out.find((k) => k.t > from && k.t < lastEnd && k.t + (k.w ?? MINUTE) > lastEnd);
+    const until = straddle ? straddle.t : lastEnd;
     out = out
       .filter((k) => k.t + (k.w ?? MINUTE) <= from)
-      .concat(run.candles.map((k) => ({ ...k, w: run.stepMs })));
+      .concat(run.candles.filter((k) => k.t + run.stepMs <= until).map((k) => ({ ...k, w: run.stepMs })))
+      .concat(out.filter((k) => k.t >= until));
   }
   return out;
 }
