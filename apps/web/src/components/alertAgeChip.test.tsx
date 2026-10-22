@@ -29,7 +29,7 @@ function chipCount(html: string): number {
 describe("alert age chip", () => {
   it("uses the same chip for a filter alert and a model alert on a card", () => {
     const filter = scopeSampleCard(now);
-    filter.curated = undefined;
+    filter.curated = null;
     const filterHtml = renderToStaticMarkup(<AlertCard card={filter} now={now} />);
     expect(chipCount(filterHtml)).toBe(1);
     expect(filterHtml).toContain(`class="when age-chip"`);
@@ -64,7 +64,7 @@ describe("alert age chip", () => {
     const stream = scopeSampleCard(now);
     (stream as Card).kind = "stream";
     stream.filter = null;
-    stream.curated = undefined;
+    stream.curated = null;
     const streamHtml = renderToStaticMarkup(
       <ScopeRow card={stream} now={now} display={display} tiles={tiles} preview />,
     );
