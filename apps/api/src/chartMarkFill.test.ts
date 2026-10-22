@@ -5,8 +5,10 @@ import {
   ChartMarkFiller,
   FRESH_MS,
   KEEP_AFTER_OPEN_DAYS,
+  OPEN_POLL_GAP_MS,
   PAGES_PER_FILL,
   planFill,
+  REFRESH_EVERY_MS,
   spanAfter,
   type FillSpan,
   type MarkFillStore,
@@ -198,5 +200,61 @@ describe("ChartMarkFiller", () => {
     await filler.drain();
     expect(state.keepUntil?.getTime()).toBe(t + KEEP_AFTER_OPEN_DAYS * 24 * 3_600_000);
     expect(reads).toBe(2);
+  });
+
+  it("reads what is new for a chart that stays open, every REFRESH_EVERY_MS, and never back toward the start", async () => {
+    const { state, store } = memoryStore();
+    let t = NOW;
+    const asked: number[] = [];
+    let filled = 0;
+    const filler = new ChartMarkFiller(
+      store,
+      flagStore(["kol"]).store,
+      async () => {
+        asked.push(t);
+        return {
+          trades: [{ wallet: "kol", side: "buy", sol: 1, tokens: 1, atMs: t - 1_000, tx: `x${t}` }],
+          nextCursor: null,
+        };
+      },
+      { now: () => t, sleep: noSleep },
+    );
+    const poll = async (at: number) => {
+      t = at;
+      filler.open("m", NOW - 10 * MIN, () => (filled += 1));
+      await new Promise((r) => setTimeout(r, 0));
+      await filler.drain();
+    };
+    await poll(NOW);
+    expect(asked).toHaveLength(1);
+    // The chart's 30 s polls: nothing until REFRESH_EVERY_MS has passed, then only the new stretch.
+    for (let at = NOW + 30_000; at < NOW + REFRESH_EVERY_MS; at += 30_000) await poll(at);
+    expect(asked).toHaveLength(1);
+    await poll(NOW + REFRESH_EVERY_MS);
+    expect(asked).toHaveLength(2);
+    expect(filled).toBe(2);
+    expect(state.span).toEqual({ from: NOW - 10 * MIN, to: NOW + REFRESH_EVERY_MS });
+    // Closed a while, then opened again within the hour: that read alone refreshes nothing.
+    await poll(NOW + REFRESH_EVERY_MS + OPEN_POLL_GAP_MS + 10 * MIN);
+    expect(asked).toHaveLength(2);
+    await poll(NOW + REFRESH_EVERY_MS + OPEN_POLL_GAP_MS + 10 * MIN + 30_000);
+    expect(asked).toHaveLength(3);
+  });
+
+  it("a refresh leaves the older stretch to the hourly open", async () => {
+    const { state, store } = memoryStore({ from: NOW - 5 * MIN, to: NOW - 30_000 });
+    let reads = 0;
+    const filler = new ChartMarkFiller(
+      store,
+      flagStore([]).store,
+      async () => {
+        reads += 1;
+        return { trades: [], nextCursor: null };
+      },
+      { now: () => NOW, sleep: noSleep },
+    );
+    expect(await filler.fill("m", NOW - 60 * MIN, true)).toBe(0);
+    expect(reads).toBe(0);
+    expect(state.span).toEqual({ from: NOW - 5 * MIN, to: NOW - 30_000 });
   });
 });

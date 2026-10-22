@@ -220,4 +220,30 @@ describe("cachedGet: chart history", () => {
     expect(merged.older?.[0]?.t).toBe(0);
     expect(peek(path)?.data).toEqual(merged);
   });
+
+  it("lets a late, older answer add history without overwriting the newer data", async () => {
+    vi.useFakeTimers();
+    try {
+      const slow = cachedGet<ChartPollBody>(path, 0);
+      vi.advanceTimersByTime(1_000);
+      const middle = cachedGet<ChartPollBody>(path, -1);
+      vi.advanceTimersByTime(1_000);
+      const fast = cachedGet<ChartPollBody>(path, -1);
+      expect(requests).toHaveLength(3);
+      const now = { ...tail, candles: [{ t: 50_000, o: 1, h: 2, l: 1, c: 2 }], wallets: [{ wallet: "E" }] };
+      requests[2]!.resolve(now);
+      await fast;
+      requests[0]!.resolve({ ...full, wallets: [{ wallet: "A" }, { wallet: "B" }] });
+      const merged = await slow;
+      expect(merged.older?.[0]?.t).toBe(0);
+      expect(merged.candles).toEqual(now.candles);
+      expect(merged.wallets).toEqual(now.wallets);
+      // The counter stays at the newest request, so the middle one, older than what is shown, is
+      // not taken when it lands last.
+      requests[1]!.resolve({ ...tail, wallets: [{ wallet: "B" }] });
+      expect(await middle).toEqual(merged);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

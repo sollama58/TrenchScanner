@@ -42,6 +42,29 @@ export function shouldPollOnVisible(path: string, cachedAt: number | null, inter
   return Date.now() - cachedAt >= Math.min(intervalMs, 60_000);
 }
 
+/**
+ * Runs `run` every `intervalMs` while the tab is visible, and once on return to the tab when a run
+ * is due by then. Returns the cleanup.
+ */
+export function everyWhileVisible(run: () => void, intervalMs: number): () => void {
+  let last = Date.now();
+  const tick = () => {
+    last = Date.now();
+    run();
+  };
+  const timer = setInterval(() => {
+    if (document.visibilityState === "visible") tick();
+  }, intervalMs);
+  const onVisible = () => {
+    if (document.visibilityState === "visible" && Date.now() - last >= intervalMs) tick();
+  };
+  document.addEventListener("visibilitychange", onVisible);
+  return () => {
+    clearInterval(timer);
+    document.removeEventListener("visibilitychange", onVisible);
+  };
+}
+
 /** The path and key a poll answer belongs to. */
 export function pollWant(path: string, key: string): string {
   return `${path}\n${key}`;
