@@ -11,6 +11,9 @@ export interface KolOverride {
   twitter?: string | null;
 }
 
+/** The bwam_dev KOL's main wallet (user ask 2026-10-22: optional KOL export toggle). */
+export const BWAM_DEV_KOL_WALLET = "bwamJzztZsepfkteWRChggmXuiiCQvpLqPietdNfSXa";
+
 export const KOL_OVERRIDES: ReadonlyMap<string, KolOverride> = new Map([
   // User ask 2026-10-14: the roster's entry for this wallet showed broken.
   ["5hAgYC8TJCcEZV7LTXAzkTrm7YL29YXyQQJPCNrG84zM", { name: "Schoen" }],
@@ -24,7 +27,7 @@ export const KOL_OVERRIDES: ReadonlyMap<string, KolOverride> = new Map([
   // User ask 2026-10-16: name this wallet as this KOL.
   ["VJSDW6S74YXR4rRR9P4xwhMvLZJQMhrUb8XMFirUsy1", { name: "Beanzz" }],
   // User ask 2026-10-16: name this wallet as this KOL.
-  ["bwamJzztZsepfkteWRChggmXuiiCQvpLqPietdNfSXa", { name: "bwam_dev" }],
+  [BWAM_DEV_KOL_WALLET, { name: "bwam_dev" }],
   // User ask 2026-10-16: name these nine wallets as these KOLs.
   ["4S8YBCt6hhi7Nr1NnKF6jF856LLN8JJFzD1a8nF5UuHA", { name: "shaka" }],
   ["ALauG4FwEYDgSXd5Hen6kvuWSCdUi2fYNSNqM1Ci31wE", { name: "Thurston" }],

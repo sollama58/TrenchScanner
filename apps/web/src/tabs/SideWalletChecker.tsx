@@ -29,6 +29,15 @@ export const SIDE_WINDOWS = ["24h", "7d", "30d"] as const;
 export interface SideLabels {
   count: number;
   wallets: { wallet: string; name: string }[];
+  /** bwam_dev's listed 30d side wallets not already in `wallets` (absent from older API builds). */
+  bwamDevSide?: { count: number; wallets: { wallet: string; name: string }[] };
+}
+
+/** The wallets the export copies: labeled sides, and optionally bwam_dev's listed sides. */
+export function sideLabelsForExport(labels: SideLabels, includeBwamDev: boolean): SideLabels {
+  if (!includeBwamDev || !labels.bwamDevSide?.wallets.length) return labels;
+  const extra = labels.bwamDevSide.wallets;
+  return { ...labels, count: labels.count + extra.length, wallets: [...labels.wallets, ...extra] };
 }
 
 /** The export (user asks 2026-10-14): one WALLET_ADDRESS,KOL_N per line, copied to the clipboard. */
@@ -437,10 +446,17 @@ export function SideWalletChecker() {
  * downloading them when the browser blocks the clipboard. The checker's Labeled sides box and a
  * KOL's wallet modal both use it.
  */
-export function SideLabelsExport({ labels }: { labels: SideLabels | null | undefined }) {
+export function SideLabelsExport({
+  labels,
+  includeBwamDev = false,
+}: {
+  labels: SideLabels | null | undefined;
+  includeBwamDev?: boolean;
+}) {
   const [copied, setCopied] = useState<"copied" | "downloaded" | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
+  const exportLabels = labels ? sideLabelsForExport(labels, includeBwamDev) : null;
   const copy = async (l: SideLabels) => {
     let done: "copied" | "downloaded" = "copied";
     try {
@@ -457,12 +473,12 @@ export function SideLabelsExport({ labels }: { labels: SideLabels | null | undef
     <button
       type="button"
       className="ghost small-btn side-export"
-      disabled={!labels || labels.count === 0}
-      onClick={() => labels && void copy(labels)}
+      disabled={!exportLabels || exportLabels.count === 0}
+      onClick={() => exportLabels && void copy(exportLabels)}
     >
       {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}{" "}
       {copied === "copied"
-        ? `Copied ${plural(labels?.count ?? 0, "wallet")}`
+        ? `Copied ${plural(exportLabels?.count ?? 0, "wallet")}`
         : copied === "downloaded"
           ? "Clipboard blocked: downloaded"
           : "Export"}
@@ -471,6 +487,8 @@ export function SideLabelsExport({ labels }: { labels: SideLabels | null | undef
 }
 
 function SideRulesCard({ rules, labels }: { rules: SideRules; labels: SideLabels | null | undefined }) {
+  const [includeBwamDev, setIncludeBwamDev] = useState(false);
+  const bwamCount = labels?.bwamDevSide?.count;
   return (
     <div className="side-rules" aria-label="Match rules">
       <div className="side-rule">
@@ -537,7 +555,23 @@ function SideRulesCard({ rules, labels }: { rules: SideRules; labels: SideLabels
           High-confidence (Probable Side), Known and KOL Funded wallets, each once under its KOL. Export
           copies them as one address,KOL_N per line.
         </p>
-        <SideLabelsExport labels={labels} />
+        {bwamCount != null && (
+          <label className="side-export-toggle">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={includeBwamDev}
+              className={`switch${includeBwamDev ? " on" : ""}`}
+              onClick={() => setIncludeBwamDev((on) => !on)}
+            >
+              <span className="switch-track">
+                <span className="switch-thumb" />
+              </span>
+            </button>
+            <span className="small">Include BWAM sides? ({bwamCount.toLocaleString("en-US")})</span>
+          </label>
+        )}
+        <SideLabelsExport labels={labels} includeBwamDev={includeBwamDev} />
       </div>
     </div>
   );

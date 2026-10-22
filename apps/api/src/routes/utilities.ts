@@ -34,7 +34,12 @@ import { creatorFeesByMint, TOKEN_CARD_SELECT, withCarriedHolderList } from "../
 import { ExternalSearchUnavailable, searchUntrackedTokens, type ExternalSearchHit } from "../tokenSearch.js";
 import { fillSearchMarketHits } from "../searchMarket.js";
 import { readKolRows } from "../kolRoster.js";
-import { loadKolLabelCounts, loadKolSideLabels, loadLabeledSides } from "../possibleSides.js";
+import {
+  loadBwamDevSideExport,
+  loadKolLabelCounts,
+  loadKolSideLabels,
+  loadLabeledSides,
+} from "../possibleSides.js";
 import {
   loadPairTransfers,
   loadTransferCounts,
@@ -546,8 +551,14 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
    */
   app.get("/side-labels", async (_request, reply) => {
     const wallets = await loadLabeledSides();
+    const exported = new Set(wallets.map((w) => w.wallet));
+    const bwamDevWallets = await loadBwamDevSideExport(exported);
     reply.header("Cache-Control", "private, max-age=300");
-    return { count: wallets.length, wallets };
+    return {
+      count: wallets.length,
+      wallets,
+      bwamDevSide: { count: bwamDevWallets.length, wallets: bwamDevWallets },
+    };
   });
 
   /** One KOL's top side wallets in each window, with the risk labels each carries. */
