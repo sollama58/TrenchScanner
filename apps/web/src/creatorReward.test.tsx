@@ -13,6 +13,7 @@ describe("creator reward square", () => {
     expect(creatorRewardFigure(null)).toEqual({
       value: "–",
       detail: null,
+      logoDetail: null,
       title: "No creator reward is stored",
       empty: true,
       squareLabel: "Creator reward",
@@ -114,6 +115,7 @@ describe("creator reward square", () => {
     ).toEqual({
       value: "–",
       detail: null,
+      logoDetail: null,
       title: "Fee split; recipients unreadable.",
       empty: true,
       squareLabel: "Creator reward",
@@ -122,6 +124,7 @@ describe("creator reward square", () => {
     expect(creatorRewardFigure({ destination: "unknown", summary: null })).toEqual({
       value: "–",
       detail: null,
+      logoDetail: null,
       title: "No creator reward is stored",
       empty: true,
       squareLabel: "Creator reward",
@@ -159,6 +162,33 @@ describe("creator reward square", () => {
     expect(otc.empty).toBe(false);
     expect(otc.value).not.toBe("–");
     expect(otc.title).toContain("NVDAx and TSLAx");
+  });
+
+  it("leaves the coin names off the line under the OTC logos, keeping the tax (user ask 2026-10-22)", () => {
+    const fig = creatorRewardFigure({
+      destination: "holder_rewards",
+      summary: null,
+      bps: 100,
+      deskLine,
+      deskRewards: [
+        { label: "NVDAx", mint: NVDA },
+        { label: "TSLAx", mint: TSLA },
+        { label: "SPYx", mint: null },
+      ],
+    });
+    expect(fig.otcDesk).toBe(true);
+    expect(fig.logoDetail).toBe("1%");
+    const wallet = creatorRewardFigure({
+      destination: "wallet",
+      summary: null,
+      deskLine,
+      deskRewards: [
+        { label: "NVDAx", mint: NVDA },
+        { label: "TSLAx", mint: TSLA },
+      ],
+    });
+    expect(wallet.detail).toBe("NVDAx, TSLAx");
+    expect(wallet.logoDetail).toBeNull();
   });
 
   it("copies the sage desk sentence and its coins from the same side", () => {
