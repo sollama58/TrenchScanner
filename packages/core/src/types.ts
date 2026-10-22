@@ -382,6 +382,12 @@ export interface OnChainProfile {
      * was left unpriced. Never a stand-in zero.
      */
     portfolioUsd?: number;
+    /**
+     * Native SOL in lamports, from the holder chain read's getMultipleAccounts of these
+     * wallets' system accounts. Absent when that batch failed or this wallet was not in it.
+     * Zero is a real empty account, not a stand-in for a miss.
+     */
+    solLamports?: number;
   }[];
   /**
    * When `linkedHolders`' shares were current (the chain read, or the last holder-stream update

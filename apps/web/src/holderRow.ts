@@ -6,10 +6,9 @@ import type { WalletNames } from "./walletNames";
 /**
  * Figures for one top-holder row, from numbers the pipeline already has.
  *
- * SOL balance of the wallet is not one of them. Holder balances are token balances, the tape
- * stores trades, and a funding transfer is the SOL that opened the wallet, not what it holds now.
- * The wallet panel reads the balance with its own getBalance when someone opens that wallet.
- * Nothing stored lets a row derive it, so the row leaves it off rather than show a stand-in.
+ * Native SOL is the wallet's system-account lamports from the holder chain read (one
+ * getMultipleAccounts for the list). A streamed token-balance update does not read it again.
+ * A miss is left off the row. Zero lamports is a real empty account and is shown.
  */
 
 export interface HolderAverage {
@@ -32,6 +31,8 @@ type ListedHolder = {
   fundedAtMs?: number;
   cexFunder?: string;
   portfolioUsd?: number;
+  /** Native SOL in lamports from the holder chain read. Absent when that read missed the wallet. */
+  solLamports?: number;
 };
 type SameWallet = { wallet: string; pct?: number; funder: string | null; fundedAtMs: number };
 
@@ -180,15 +181,51 @@ export function tradeStatsFor(entry: HolderEntry | undefined, price: HolderPrice
   );
 }
 
+const LAMPORTS_PER_SOL = 1_000_000_000;
+
+/**
+ * Lamports from one getMultipleAccounts result, lined up with `wallets`.
+ * A failed batch (no list, or one that does not line up) and a missing account omit that wallet.
+ * An account whose lamports are 0 stays 0.
+ */
+export function solLamportsByWallet(
+  wallets: readonly string[],
+  accounts: readonly ({ lamports?: unknown } | null)[] | null | undefined,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!accounts || accounts.length !== wallets.length) return out;
+  wallets.forEach((wallet, i) => {
+    const account = accounts[i];
+    if (!wallet || !account) return;
+    const lamports = account.lamports;
+    if (typeof lamports !== "number" || !Number.isFinite(lamports) || lamports < 0) return;
+    out.set(wallet, lamports);
+  });
+  return out;
+}
+
+/** Compact SOL for a holder row. Null when the balance was not read. 0 lamports is "0 SOL". */
+export function holderSolText(lamports: number | null | undefined): string | null {
+  if (typeof lamports !== "number" || !Number.isFinite(lamports) || lamports < 0) return null;
+  const sol = lamports / LAMPORTS_PER_SOL;
+  const digits = sol < 1 ? 3 : sol < 100 ? 2 : 1;
+  const text = sol.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: digits });
+  return `${text} SOL`;
+}
+
 /** One row's lines. A missing figure is left out; nothing here is a dash or a stand-in zero. */
 export function holderStatLines(input: {
   portfolioUsd: number | null;
+  /** Native lamports. Null or absent: the batch missed this wallet. 0 is a real empty account. */
+  solLamports?: number | null;
   entry: HolderAverage | null;
   exit: HolderAverage | null;
   unrealizedSol: number | null;
   realizedSol: number | null;
 }): string[] {
   const lines: string[] = [];
+  const sol = holderSolText(input.solLamports);
+  if (sol !== null) lines.push(sol);
   if (input.portfolioUsd !== null) lines.push(`Portfolio ${usd(input.portfolioUsd)}`);
   if (input.entry)
     lines.push(

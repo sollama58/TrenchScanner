@@ -107,6 +107,7 @@ import { devLaunchReadings, refreshDevLaunchBook } from "./devLaunchBook.js";
 import { kolLookup, refreshKolWalletBook } from "./kolWalletBook.js";
 import { kolBundledByMint, type KolBundledReading } from "./kolBundled.js";
 import {
+  cachedHolderSolLamports,
   cexReadingOf,
   linkedHoldersOf,
   linkedReadingOf,
@@ -4111,12 +4112,28 @@ export function withLinkedWallets(
     0,
     LINKED_TOP_N,
   );
-  if (!sniperWallets || list.length === 0) return timed;
-  return {
+  if (!sniperWallets || list.length === 0) return withHolderSol(timed);
+  return withHolderSol({
     ...timed,
     sniperTopHolderCount: list.filter((h) => sniperWallets.has(h.wallet)).length,
     sniperTopHoldersChecked: list.length,
-  };
+  });
+}
+
+/**
+ * The chain read's native SOL on each holder (rememberNativeSol). A wallet the batch missed, or a
+ * list that is not the chain's, is left without it. A streamed balance update does not read it again.
+ */
+function withHolderSol(profile: OnChainProfile | null): OnChainProfile | null {
+  if (!profile?.linkedHolders?.length || !profile.mintAddress) return profile;
+  let changed = false;
+  const linkedHolders = profile.linkedHolders.map((h) => {
+    const solLamports = cachedHolderSolLamports(profile.mintAddress, h.wallet);
+    if (solLamports === undefined) return h;
+    changed = true;
+    return { ...h, solLamports };
+  });
+  return changed ? { ...profile, linkedHolders } : profile;
 }
 
 /**

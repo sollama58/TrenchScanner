@@ -376,6 +376,11 @@ export interface Snapshot {
          * Never filled with 0 to mean "not calculated".
          */
         portfolioUsd?: number;
+        /**
+         * Native SOL in lamports from the holder chain read. Absent when that batch failed or
+         * this wallet was not in it. Zero is a real empty account.
+         */
+        solLamports?: number;
       }[]
     | null;
   /**

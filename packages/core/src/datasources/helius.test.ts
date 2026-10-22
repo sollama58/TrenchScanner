@@ -476,6 +476,36 @@ describe("HeliusClient.getEarliestActivityBatch when the cheap lookup fails", ()
   });
 });
 
+describe("HeliusClient.getNativeSolLamports", () => {
+  it("reads lamports with one getMultipleAccounts and returns null for a missing account", async () => {
+    const { url, requests } = await gmaServer((key) =>
+      key === "gone" ? null : { lamports: key === "empty" ? 0 : 1_500_000_000 },
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+    const got = await client.getNativeSolLamports(["rich", "gone", "empty", "rich"]);
+    expect(got.get("rich")).toBe(1_500_000_000);
+    expect(got.get("gone")).toBeNull();
+    expect(got.get("empty")).toBe(0);
+    expect(requests).toHaveLength(1);
+    const call = (
+      requests[0]!.body as {
+        method: string;
+        params: [
+          string[],
+          { encoding?: string; commitment?: string; dataSlice?: { offset: number; length: number } },
+        ];
+      }[]
+    )[0]!;
+    expect(call.method).toBe("getMultipleAccounts");
+    expect(call.params[0]).toEqual(["rich", "gone", "empty"]);
+    expect(call.params[1]).toMatchObject({
+      encoding: "base64",
+      commitment: "confirmed",
+      dataSlice: { offset: 0, length: 0 },
+    });
+  });
+});
+
 describe("HeliusClient.getMintAuthorityStatusBatch", () => {
   function mintAccount(mintAuthority: string | null, freezeAuthority: string | null) {
     return { data: { parsed: { info: { mintAuthority, freezeAuthority } } } };

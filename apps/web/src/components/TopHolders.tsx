@@ -171,6 +171,7 @@ export function TopHolders({
                   : null;
               const stats = holderStatLines({
                 portfolioUsd: portfolioUsdOf(listed),
+                solLamports: listed?.solLamports ?? null,
                 ...tradeStatsFor(entry, price),
               });
               const fund = h.wallet && snapshot ? holderFunding(h.wallet, snapshot) : null;

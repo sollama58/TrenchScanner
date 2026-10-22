@@ -3,12 +3,59 @@ import {
   fundingLine,
   fundingWho,
   holderFunding,
+  holderSolText,
   holderStatLines,
   holderTradeStats,
   portfolioUsdOf,
+  solLamportsByWallet,
 } from "./holderRow";
 
 const ADDR = "abcd1111111111111111wxyz";
+
+describe("holder row SOL balance", () => {
+  it("turns a batched account result into a SOL figure and omits a missing account", () => {
+    const wallets = ["rich", "gone", "empty"];
+    const byWallet = solLamportsByWallet(wallets, [{ lamports: 1_500_000_000 }, null, { lamports: 0 }]);
+    expect(holderSolText(byWallet.get("rich"))).toBe("1.5 SOL");
+    expect(byWallet.has("gone")).toBe(false);
+    expect(holderSolText(byWallet.has("gone") ? byWallet.get("gone") : null)).toBeNull();
+    expect(byWallet.get("empty")).toBe(0);
+    expect(holderSolText(0)).toBe("0 SOL");
+    // A failed batch, or a list that does not line up, is not a zero balance.
+    expect(solLamportsByWallet(wallets, null).size).toBe(0);
+    expect(solLamportsByWallet(wallets, [{ lamports: 1 }]).size).toBe(0);
+    expect(
+      holderStatLines({
+        portfolioUsd: null,
+        solLamports: byWallet.get("rich") ?? null,
+        entry: null,
+        exit: null,
+        unrealizedSol: null,
+        realizedSol: null,
+      }),
+    ).toEqual(["1.5 SOL"]);
+    expect(
+      holderStatLines({
+        portfolioUsd: null,
+        solLamports: null,
+        entry: null,
+        exit: null,
+        unrealizedSol: null,
+        realizedSol: null,
+      }),
+    ).toEqual([]);
+    expect(
+      holderStatLines({
+        portfolioUsd: null,
+        solLamports: 0,
+        entry: null,
+        exit: null,
+        unrealizedSol: null,
+        realizedSol: null,
+      }),
+    ).toEqual(["0 SOL"]);
+  });
+});
 
 describe("holder row portfolio", () => {
   it("omits a portfolio that was not calculated", () => {

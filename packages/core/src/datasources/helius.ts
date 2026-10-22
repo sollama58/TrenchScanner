@@ -1677,6 +1677,37 @@ export class HeliusClient {
   }
 
   /**
+   * Native SOL, in lamports, for many wallets at once. One getMultipleAccounts per 100 system
+   * accounts (1 credit), the same RPC the rest of the holder reads use. dataSlice length 0: the
+   * account's lamports are the balance, and no account bytes come back.
+   *
+   * A number is that balance, including 0. Null means the wallet was not in the response (no
+   * account there, or its chunk failed). Callers omit a null. They do not show it as 0.
+   */
+  async getNativeSolLamports(addresses: string[]): Promise<Map<string, number | null>> {
+    const unique = [...new Set(addresses)];
+    const out = new Map<string, number | null>();
+    if (unique.length === 0) return out;
+    const accounts = await this.getMultipleAccounts<{ lamports?: unknown }>(unique, {
+      encoding: "base64",
+      dataSlice: { offset: 0, length: 0 },
+    });
+    for (const address of unique) {
+      const account = accounts.get(address);
+      if (!account || account === "failed" || !account.value) {
+        out.set(address, null);
+        continue;
+      }
+      const lamports = account.value.lamports;
+      out.set(
+        address,
+        typeof lamports === "number" && Number.isFinite(lamports) && lamports >= 0 ? lamports : null,
+      );
+    }
+    return out;
+  }
+
+  /**
    * On-chain proof of which mints are Pump.fun launches (see pumpLaunch.ts): each mint and its
    * bonding-curve PDA in one jsonParsed getMultipleAccounts. A read without an answer is "failed",
    * never a definitive "not a Pump.fun launch".
