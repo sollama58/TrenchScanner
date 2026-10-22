@@ -1,3 +1,5 @@
+import { isAdminHash } from "./adminNav";
+
 /** The dashboard's tabs, and the code-split chunks behind them. */
 export type Tab =
   "live" | "model" | "lighthouse" | "filters" | "utilities" | "portfolio" | "settings" | "admin";
@@ -6,8 +8,8 @@ export function tabFromHash(): Tab {
   const h = window.location.hash.replace("#", "");
   // Top filters used to be its own tab; it is a card on the Filters tab now, so old links land there.
   if (h === "top") return "filters";
-  // The trading bot was its own tab; it is a section of Admin now (opened by AdminTab).
-  if (h === "trading") return "admin";
+  // The trading bot was its own tab; it is a section of Admin now. A section lives at #admin/<id>.
+  if (isAdminHash(h)) return "admin";
   // The Stream was its own tab; it is Scope's Stream switch on the Live tab now (user ask 2026-10-18).
   return h === "model" ||
     h === "lighthouse" ||

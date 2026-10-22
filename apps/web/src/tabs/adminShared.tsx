@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Skeleton } from "../components/Skeleton";
 import type { Loadable } from "../hooks";
 import { ago, shortAddress } from "../format";
+import { formatAdminTime } from "./adminTime";
 import { openWallet } from "../walletModal";
 import type { WalletNames } from "../walletNames";
 import { WalletText } from "../components/WalletText";
@@ -116,7 +117,7 @@ export const ms = (v: number | null | undefined) =>
         ? `${(v / 1000).toFixed(1)}s`
         : `${Math.round(v)}ms`;
 export const when = (iso: string | null | undefined) =>
-  iso ? <span title={new Date(iso).toLocaleString()}>{ago(iso)}</span> : <span className="faint">never</span>;
+  iso ? <span title={formatAdminTime(iso) ?? iso}>{ago(iso)}</span> : <span className="faint">never</span>;
 export const Tag = ({ tone, children }: { tone: "ok" | "warn" | "bad" | "muted"; children: ReactNode }) => (
   <span className={`admin-tag-${tone}`}>{children}</span>
 );

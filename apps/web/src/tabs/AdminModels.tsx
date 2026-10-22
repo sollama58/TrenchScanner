@@ -1,9 +1,19 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
+import type { Leaderboard, LearningCurve } from "../api";
 import { usePolling } from "../hooks";
 import { pct, shortAddress } from "../format";
 import { ArrowRightIcon, BrainIcon, RadarIcon, RobotIcon, TargetIcon } from "../components/Icons";
 import { Load, Panel, Table, Tag, n, when } from "./adminShared";
 import { ModelUnderTheHood } from "./ModelTab";
+import { Training } from "./AdminInsights";
+import {
+  ModelRecord,
+  ModelsCompare,
+  ModelsPerformance,
+  ModelsStatus,
+  type ModelsDesk,
+} from "./AdminModelsTraining";
+import { resolveSelection, type ExplainSeatRef } from "./adminModelsView";
 import { niceScale, scaleTicks } from "../chartScale";
 import { pickHandlers, pointerX, useChartWidth } from "../components/useChartWidth";
 
@@ -144,23 +154,126 @@ function rankText(rank: number): string {
 
 const perHour = (v: number) => (v >= 10 ? v.toFixed(0) : v.toFixed(1));
 
+const LEARNING_PATH = "/curated/insights/learning?days=30&tz=America%2FNew_York";
+
+function jump(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 export function ModelsAdmin() {
   const q = usePolling<Lineup>("/admin/models/explain", 300_000);
+  const desk = usePolling<ModelsDesk>("/admin/models/desk", 15_000);
+  const board = usePolling<Leaderboard>("/curated/models?days=7", 120_000);
+  const learning = usePolling<LearningCurve>(LEARNING_PATH, 300_000);
   const [picked, setPicked] = useState<string | null>(null);
+  const explainSeats: ExplainSeatRef[] = (q.data?.seats ?? []).map((s) => ({
+    id: s.id,
+    name: s.name,
+    status: s.status,
+    callsPerHour: s.calls.perHour24h,
+  }));
+  const selected = resolveSelection(
+    picked,
+    q.data?.seats ?? [],
+    desk.data?.roster ?? [],
+    q.data?.defaultModel ?? null,
+  );
+  const seat = q.data?.seats.find((s) => s.id === selected) ?? null;
+  const rosterSeat = desk.data?.roster.find((r) => r.id === selected) ?? null;
+  const active = desk.data?.active.find((m) => m.contestant === selected) ?? null;
+  const entry = board.data?.entries.find((e) => e.id === selected) ?? null;
+  const record = (
+    <ModelRecord
+      name={seat?.name ?? rosterSeat?.name ?? selected ?? "Model"}
+      enabled={rosterSeat?.enabled ?? seat !== null}
+      retired={rosterSeat?.retired ?? false}
+      status={seat?.status ?? entry?.status ?? null}
+      kind={active?.kind ?? seat?.model?.kind ?? null}
+      modelId={active?.id ?? seat?.model?.id ?? null}
+      trainedAt={active?.createdAt ?? seat?.model?.trainedAt ?? null}
+      trainingRows={active?.trainingRows ?? seat?.model?.trainingRows ?? null}
+      trainingFrom={active?.trainingFrom ?? null}
+      trainingTo={active?.trainingTo ?? null}
+      exam={active?.exam ?? null}
+      entry={entry}
+      labelSummary={
+        active || seat?.model
+          ? "The label rule is not stored on this model row. The trainer spec above is what the fit loads."
+          : null
+      }
+    />
+  );
   return (
-    <Load q={q}>
-      {(data) => {
-        const seat = data.seats.find((s) => s.id === (picked ?? data.defaultModel)) ?? data.seats[0] ?? null;
-        return (
-          <div className="stack">
-            <Lineup data={data} selected={seat?.id ?? null} onPick={setPicked} />
-            {seat && <SeatPanel seat={seat} data={data} onPick={setPicked} />}
-            {seat && <CallsPanel key={seat.id} seat={seat} />}
-            <ModelUnderTheHood />
-          </div>
-        );
-      }}
-    </Load>
+    <div className="stack">
+      <nav className="models-jump" aria-label="On this page">
+        {(
+          [
+            ["models-status", "Trainer"],
+            ["models-compare", "Comparison"],
+            ["models-roster", "Lineup"],
+            ["models-seat", "This model"],
+            ["models-performance", "Over time"],
+            ["models-runs", "Runs"],
+          ] as const
+        ).map(([id, label]) => (
+          <button key={id} type="button" className="ghost" onClick={() => jump(id)}>
+            {label}
+          </button>
+        ))}
+      </nav>
+      <div id="models-status">
+        <ModelsStatus q={desk} />
+      </div>
+      <div id="models-compare">
+        <ModelsCompare
+          roster={desk.data?.roster ?? []}
+          explain={explainSeats}
+          board={board}
+          selected={selected}
+          onPick={setPicked}
+        />
+      </div>
+      <div id="models-roster">
+        <Load q={q}>
+          {(data) => (
+            <div className="stack">
+              <Lineup data={data} selected={seat?.id ?? null} onPick={setPicked} />
+              {seat ? (
+                <SeatPanel seat={seat} data={data} onPick={setPicked} record={record} />
+              ) : (
+                rosterSeat && (
+                  <Panel
+                    title={rosterSeat.name}
+                    note={
+                      rosterSeat.retired
+                        ? "Retired seat."
+                        : rosterSeat.enabled
+                          ? "Enabled, but this response has no recipe for it yet."
+                          : "Not on the enabled roster. The trainer does not fit it."
+                    }
+                  >
+                    {record}
+                  </Panel>
+                )
+              )}
+              {seat && <CallsPanel key={seat.id} seat={seat} />}
+            </div>
+          )}
+        </Load>
+      </div>
+      <div id="models-performance">
+        <ModelsPerformance
+          q={learning}
+          modelId={selected}
+          modelName={seat?.name ?? rosterSeat?.name ?? null}
+        />
+      </div>
+      <div className="stack" id="models-runs">
+        {desk.data && <p className="muted small">{desk.data.runHistoryNote}</p>}
+        <Training />
+      </div>
+      <ModelUnderTheHood />
+    </div>
   );
 }
 
@@ -332,7 +445,17 @@ function FlowStage({
 
 // ---------- One seat ----------
 
-function SeatPanel({ seat, data, onPick }: { seat: Seat; data: Lineup; onPick: (id: string) => void }) {
+function SeatPanel({
+  seat,
+  data,
+  onPick,
+  record,
+}: {
+  seat: Seat;
+  data: Lineup;
+  onPick: (id: string) => void;
+  record?: ReactNode;
+}) {
   const combiner = COMBINERS.includes(seat.role);
   return (
     <Panel
@@ -349,6 +472,7 @@ function SeatPanel({ seat, data, onPick }: { seat: Seat; data: Lineup; onPick: (
       }
     >
       <div className="stack">
+        {record}
         <div className="model-facts">
           {seat.model && (
             <div>
