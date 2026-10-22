@@ -97,6 +97,7 @@ export function resetLinkedWallets(): void {
   topHolderLists.clear();
   holderAccountLists.clear();
   wideHolderLists.clear();
+  nativeSolCache.clear();
   storedWide.clear();
   frozenAtAlert.clear();
   alertedMints = null;
@@ -594,9 +595,19 @@ export async function readTopHolders(
 }
 
 /**
- * Native SOL for the wallets a chain read just enumerated, kept on that list until the next
- * enumeration. One getMultipleAccounts for the whole set. A failed batch, or a wallet missing
- * from it, leaves `solLamports` off. Zero lamports stays 0. Not called for a balance tick.
+ * How long a wallet's native SOL from one holder-list read is reused on the next. The holder
+ * list itself still refreshes on its own cadence (a minute while a bubble map is open). SOL on
+ * the map can be this old; the percentages stay on the list's cadence. One getMultipleAccounts
+ * is 1 credit per 100 wallets, so a watched coin was paying it every minute.
+ */
+const NATIVE_SOL_REUSE_MS = 5 * 60_000;
+const MAX_NATIVE_SOL = 20_000;
+const nativeSolCache = new Map<string, { lamports: number; atMs: number }>();
+
+/**
+ * Native SOL for the wallets a chain read just enumerated. Wallets read within
+ * NATIVE_SOL_REUSE_MS are not asked again. A failed batch, or a wallet missing from it, leaves
+ * `solLamports` off. Zero lamports stays 0. Not called for a balance tick.
  */
 async function rememberNativeSol(
   due: readonly LinkedGroup[],
@@ -613,18 +624,37 @@ async function rememberNativeSol(
     ),
   ];
   if (owners.length === 0) return;
-  let balances: Map<string, number | null>;
-  try {
-    balances = await helius.getNativeSolLamports(owners);
-  } catch {
-    // The holder list still stands. The row omits SOL rather than show a failed read as 0.
-    return;
+  const known = new Map<string, number>();
+  const need: string[] = [];
+  for (const owner of owners) {
+    const hit = nativeSolCache.get(owner);
+    if (hit && now - hit.atMs < NATIVE_SOL_REUSE_MS) known.set(owner, hit.lamports);
+    else need.push(owner);
+  }
+  if (need.length > 0) {
+    try {
+      const balances = await helius.getNativeSolLamports(need);
+      for (const owner of need) {
+        const lamports = balances.get(owner);
+        if (typeof lamports !== "number") continue;
+        known.set(owner, lamports);
+        nativeSolCache.delete(owner);
+        nativeSolCache.set(owner, { lamports, atMs: now });
+      }
+      while (nativeSolCache.size > MAX_NATIVE_SOL) {
+        const oldest = nativeSolCache.keys().next().value;
+        if (oldest === undefined) break;
+        nativeSolCache.delete(oldest);
+      }
+    } catch {
+      // The holder list still stands. Cached SOL is kept; the rest omit it rather than show 0.
+    }
   }
   for (const g of due) {
     const entry = topHolderLists.get(g.mintAddress);
     if (!entry || entry.readAtMs !== now) continue;
     const holders = entry.holders.map((h) => {
-      const lamports = balances.get(h.owner);
+      const lamports = known.get(h.owner);
       return typeof lamports === "number" ? { ...h, solLamports: lamports } : h;
     });
     topHolderLists.set(g.mintAddress, { ...entry, holders });

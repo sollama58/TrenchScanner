@@ -663,4 +663,42 @@ describe("readTopHolders", () => {
     expect(rich?.solLamports).toBe(1_500_000_000);
     expect(rich?.pct).not.toBe(5);
   });
+
+  it("reuses native SOL for five minutes across holder-list re-reads", async () => {
+    const helius = {
+      getTopHoldersBatch: vi.fn(async (mints: string[]) => {
+        return new Map(
+          mints.map((m) => [
+            m,
+            {
+              status: "found" as const,
+              supply: "1000000000",
+              holders: [{ owner: "rich", pct: 5, accounts: ["acc-rich"] }],
+            },
+          ]),
+        );
+      }),
+      getNativeSolLamports: vi.fn(async () => new Map([["rich", 1_000]])),
+    };
+    const groups: LinkedGroup[] = [{ mintAddress: "mReuse", holders: [] }];
+    const watched = new Set(["mReuse"]);
+    await readTopHolders(groups, helius, { maxReads: 0, maxWatchedReads: 1, watched, watchedRefreshMs: 60_000, nowMs: 0 });
+    await readTopHolders(groups, helius, {
+      maxReads: 0,
+      maxWatchedReads: 1,
+      watched,
+      watchedRefreshMs: 60_000,
+      nowMs: 60_000,
+    });
+    expect(helius.getNativeSolLamports).toHaveBeenCalledTimes(1);
+    expect(cachedTopHolders("mReuse", 60_000)?.[0]).toMatchObject({ owner: "rich", solLamports: 1_000 });
+    await readTopHolders(groups, helius, {
+      maxReads: 0,
+      maxWatchedReads: 1,
+      watched,
+      watchedRefreshMs: 60_000,
+      nowMs: 60_000 + 5 * 60_000,
+    });
+    expect(helius.getNativeSolLamports).toHaveBeenCalledTimes(2);
+  });
 });

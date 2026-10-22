@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import bs58 from "bs58";
 import { ed25519 } from "@noble/curves/ed25519";
 import { EXIT_PLAN, type ExitPlan } from "../curation/profitSim.js";
@@ -1188,6 +1188,46 @@ describe("Jupiter swap client", () => {
       400_000,
       2_000_000,
     ]);
+  });
+});
+
+describe("TradingRpc wallet balances", () => {
+  it("reads a Helius wallet from sliced pages and the mints' decimals", async () => {
+    const mint = bs58.encode(Buffer.alloc(32, 7));
+    const bytes = Buffer.alloc(72);
+    Buffer.from(bs58.decode(mint)).copy(bytes, 0);
+    bytes.writeBigUInt64LE(12n, 64);
+    const slice = { account: { data: [bytes.toString("base64"), "base64"] } };
+    const methods: string[] = [];
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body)) as {
+        method: string;
+        params: [unknown, { programId?: string }];
+      };
+      methods.push(body.method);
+      const tokenProgram = body.params?.[1]?.programId?.startsWith("Tokenkeg");
+      const result =
+        body.method === "getMultipleAccounts"
+          ? { value: [{ data: [Buffer.from([9]).toString("base64"), "base64"] }] }
+          : { value: tokenProgram ? [slice] : [] };
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    try {
+      const balances = await new TradingRpc({
+        rpcUrl: "https://mainnet.helius-rpc.com/?api-key=test",
+      }).getWalletBalances(OWNER);
+      expect(balances).toEqual([{ mint, raw: 12n, decimals: 9 }]);
+      expect(methods).toEqual([
+        "getTokenAccountsByOwnerV2",
+        "getTokenAccountsByOwnerV2",
+        "getMultipleAccounts",
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
