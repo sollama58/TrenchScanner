@@ -305,7 +305,7 @@ export function AlertCard({
                 {card.token.name}
               </span>
             )}
-            {show("time") && <span className="when">{ago(card.matchedAt, now)}</span>}
+            {show("time") && <span className="when age-chip">{ago(card.matchedAt, now)}</span>}
           </div>
           <div className="meta-row">
             {styled ? (
