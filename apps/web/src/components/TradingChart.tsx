@@ -36,7 +36,7 @@ import {
   autoTimeframe,
   buildSlots,
   closeTimeMs,
-  oneSecondChartNotice,
+  finestCoverMs,
   slotCandle,
   slotIndex,
   slotOfTime,
@@ -221,7 +221,9 @@ const MAX_TIP_MARKS = 6;
  * labeled wallets' trades, the trader's own trades and entry). The line is green above its
  * baseline and red below it: the trader's entry while they hold the coin, else the first marked
  * moment's market cap, else where the chart starts. A picked candle size stays as picked while
- * zooming (candles widen or thin, up to MAX_BAR_PX), and scrolling over the chart never scrolls
+ * zooming (candles widen or thin, up to MAX_BAR_PX), for this view only: it isn't saved, so a 1s
+ * picked on one coin doesn't open every coin after it on 1s (charts audit CH-2). Auto goes no finer
+ * than the candles that cover most of the view. Scrolling over the chart never scrolls
  * the page. On a phone a finger drags the chart along, two pinch it, and a tap reads a candle.
  */
 export function TradingChart({
@@ -290,7 +292,7 @@ export function TradingChart({
   height: number;
   kind: ChartKind;
   onKind: (kind: ChartKind) => void;
-  /** The candle size drawn, so the view reads candles fine enough for it. */
+  /** The candle size wanted (picked, or Auto's for the view), so the view reads candles fine enough for it. */
   onTimeframe?: (ms: number) => void;
   /** Experimental: the predicted price path from the latest reading, past the last candle. */
   path?: PathStep[];
@@ -355,17 +357,27 @@ export function TradingChart({
     [look.chartEvents, look.chartEventKinds, look.chartEventFirst],
   );
   const shownEvents = useMemo(() => chartFlagsToDraw(events, eventPrefs), [events, eventPrefs]);
-  const picked = look.chartTimeframeMs;
+  // The candle size picked here, for this coin's view only; null (Auto) until one is picked.
+  const [pick, setPick] = useState<{ mint: string; ms: number | null }>({ mint, ms: null });
+  const picked = pick.mint === mint ? pick.ms : null;
   const log = look.chartLogScale;
   const ind = useMemo(() => new Set(look.chartIndicators), [look.chartIndicators]);
   const viewMs = Math.max(1, extent.t1 - extent.t0);
   const plotW = Math.max(200, width - 64);
-  const autoMs = autoTimeframe(viewMs, plotW);
+  const finestMs = useMemo(
+    () => finestCoverMs(candles, extent.t0, extent.t1),
+    [candles, extent.t0, extent.t1],
+  );
+  const autoMs = autoTimeframe(viewMs, plotW, 6, finestMs);
   const tfMs = picked !== null && timeframeFits(picked, viewMs) ? picked : autoMs;
   const slots = useMemo(() => buildSlots(candles, ticks, tfMs), [candles, ticks, tfMs]);
+  // The view reads finer candles for the size the view alone would take, not only the one drawn:
+  // Auto draws no finer than the candles in hand, and those finer pages are only read when asked
+  // for, so a young coin would otherwise stay on minute candles.
+  const wantMs = picked !== null && timeframeFits(picked, viewMs) ? picked : autoTimeframe(viewMs, plotW);
   useEffect(() => {
-    onTimeframe?.(tfMs);
-  }, [tfMs, onTimeframe]);
+    onTimeframe?.(wantMs);
+  }, [wantMs, onTimeframe]);
   // A live trade is often read seconds before the candles reach it: drawn at its own time it fell
   // past the last candle, off the plot, and the bubble vanished until the next read (user report
   // 2026-10-19). It sits on the newest candle until then.
@@ -700,6 +712,7 @@ export function TradingChart({
           ...(b.flat ? { flat: true } : {}),
           ...(b.span ? { span: b.span } : {}),
           ...(b.under ? { under: b.under } : {}),
+          ...(b.coarse ? { coarse: true } : {}),
         })),
       );
       const last = bars[bars.length - 1];
@@ -1029,7 +1042,7 @@ export function TradingChart({
     return () => document.removeEventListener("keydown", onKey, true);
   }, [busy, drawings, drawTick]);
 
-  const pickTimeframe = (ms: number | null) => setAppearance({ chartTimeframeMs: ms });
+  const pickTimeframe = (ms: number | null) => setPick({ mint, ms });
   const toggle = (id: Indicator) => {
     const has = ind.has(id);
     setAppearance({
@@ -1120,7 +1133,6 @@ export function TradingChart({
   };
   const toggleExtend = () => setAppearance({ chartTrendExtend: !extendTrend });
   const plotH = height + TIME_AXIS_PX + (ind.has("rsi") ? Math.round(height * 0.3) : 0);
-  const secondNotice = oneSecondChartNotice(tfMs, candles.length, slots !== null);
 
   const rail = (
     <div className="tc-rail" role="toolbar" aria-label="Drawing tools">
@@ -1432,11 +1444,6 @@ export function TradingChart({
 
         <div className={`tc-wrap${tool ? " drawing" : ""}`} style={{ height: plotH }}>
           <div className="tc-plot" ref={plotRef} role="img" aria-label={ariaLabel} />
-          {secondNotice && (
-            <p className="tc-empty" role="status">
-              {secondNotice}
-            </p>
-          )}
           {cur && (
             <div className="tc-legend num" aria-live="off">
               <span className="faint">

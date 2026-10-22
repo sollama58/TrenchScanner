@@ -2512,8 +2512,8 @@ export function ChartCard({
   }, [served, backup, card.token.mintAddress]);
   const fromBackup = data !== served;
   const look = useAppearance();
-  // The candle size the chart draws, which decides how fine the candles read are; minute candles
-  // until it says.
+  // The candle size the chart wants (TradingChart onTimeframe), which decides how fine the candles
+  // read are; minute candles until it says.
   const [chartTf, setChartTf] = useState<number | null>(null);
 
   // Pro Mode: the signed-in wallet's position in the coin (read once by the token view) and the

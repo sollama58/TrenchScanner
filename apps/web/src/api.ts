@@ -1933,7 +1933,10 @@ export interface FeedAppearance {
    * Off draws every flag the same.
    */
   chartEventEmphasis: "off" | "brand" | "win" | "loss" | "mine";
-  /** Candle width in ms, or null for Auto (absent from older API builds: Auto). */
+  /**
+   * Candle width in ms, or null for Auto (absent from older API builds: Auto). No longer read: the
+   * chart's candle size is picked per view (charts audit CH-2). Kept so saved looks still parse.
+   */
   chartTimeframeMs: number | null;
   /** Log scale (absent from older API builds: off). */
   chartLogScale: boolean;

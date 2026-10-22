@@ -548,6 +548,8 @@ export interface OhlcBar {
   flat?: boolean;
   /** Slots it covers, from its own: more than one for a candle wider than a slot (slotOf). */
   span?: number;
+  /** A candle wider than a slot (where no finer candles reach): the chart shades it. */
+  coarse?: boolean;
 }
 
 /**
@@ -653,7 +655,16 @@ export function ohlcBars(
     const { i } = at;
     const b = out[i];
     if (!b)
-      out[i] = { from: k.t, to: k.t + w, o: k.o, h, l, c: k.c, ...(at.span > 1 ? { span: at.span } : {}) };
+      out[i] = {
+        from: k.t,
+        to: k.t + w,
+        o: k.o,
+        h,
+        l,
+        c: k.c,
+        ...(at.span > 1 ? { span: at.span } : {}),
+        ...(!k.tick && w > slotMs * 1.001 ? { coarse: true } : {}),
+      };
     else {
       b.to = k.t + w;
       b.c = k.c;
