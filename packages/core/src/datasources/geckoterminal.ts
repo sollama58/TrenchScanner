@@ -1,4 +1,4 @@
-import { fetchJson } from "./httpClient.js";
+import { fetchJson, HttpError } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError } from "./rateGate.js";
@@ -194,6 +194,34 @@ export class GeckoTerminalClient {
     return onCurrentSupplies(results, {
       waitMs: deadline === Infinity ? undefined : Math.max(0, deadline - Date.now()),
     });
+  }
+
+  /**
+   * One page of `pool`'s minute OHLCV before `beforeMs`, `token` priced (core's candles/
+   * parseGeckoOhlcv reads it), for the chart's candle backfill. On the background budget, so it
+   * shares the per-IP limit with every other lookup of this client; throws RateGateDeadlineError
+   * when no slot opens within `waitMs`. Null when GeckoTerminal doesn't know the pool.
+   */
+  async poolMinuteCandles(pool: string, token: string, beforeMs: number, waitMs = 10_000): Promise<unknown> {
+    const deadline = Date.now() + waitMs;
+    const gate = {
+      acquire: () => this.backgroundGate.acquire(deadline),
+      throttled: (delayMs: number) => {
+        this.priorityGate.throttled(delayMs);
+        this.backgroundGate.throttled(delayMs);
+      },
+    };
+    const before = Math.floor(beforeMs / 1_000);
+    try {
+      return await fetchJson<unknown>(
+        `${this.baseUrl}/networks/${SOLANA}/pools/${encodeURIComponent(pool)}/ohlcv/minute?aggregate=1` +
+          `&limit=1000&before_timestamp=${before}&currency=usd&token=${encodeURIComponent(token)}`,
+        { timeoutMs: 10_000, retries: 0, gate, headers: this.headers },
+      );
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return null;
+      throw err;
+    }
   }
 }
 

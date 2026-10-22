@@ -79,6 +79,7 @@ import {
   type StackedCuratorParams,
   type TrainedCuratorParams,
   aiReviewerState,
+  requestCandleBackfill,
 } from "@trenchscanner/core";
 import { carryHolderReadingOntoAlertRow } from "./holderListWrites.js";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
@@ -1418,6 +1419,11 @@ async function emitCuratedAlert(
   // After the create, never before - same contract as notifyMatchCreated: the row must exist by
   // the time a connected dashboard reacts to the nudge. Failure is its own logged non-event.
   await notifyCuratedAlert({ alertId: alert.id, model });
+  // The called coin's chart history back to its launch, saved once (candleBackfill.ts).
+  if (env.CANDLE_STORE)
+    void requestCandleBackfill(token.mintAddress, "call").catch((err: unknown) =>
+      logger.warn("candle backfill not asked", { mint: token.mintAddress, error: String(err) }),
+    );
 
   logger.info("curated alert emitted", {
     model,
