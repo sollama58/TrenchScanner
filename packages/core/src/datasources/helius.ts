@@ -572,7 +572,9 @@ export type TokenBalancesResult =
   { status: "found"; balances: Map<string, bigint>; truncated?: boolean } | { status: "failed" };
 
 /** getTokenAccountsByOwner's value (an array), or V2's, which can also come wrapped with context. */
-export function tokenAccountsPage(result: unknown): { accounts: TokenAccountSlice[]; more: boolean } | null {
+export function tokenAccountsPage(
+  result: unknown,
+): { accounts: TokenAccountSlice[]; more: boolean; key: string | null } | null {
   if (!result || typeof result !== "object") return null;
   const r = result as { value?: unknown; paginationKey?: unknown };
   const inner = r.value && !Array.isArray(r.value) && typeof r.value === "object" ? r.value : null;
@@ -585,10 +587,8 @@ export function tokenAccountsPage(result: unknown): { accounts: TokenAccountSlic
   const key = r.paginationKey ?? (inner as { paginationKey?: unknown } | null)?.paginationKey;
   // V2 can hand back a key on the last page too (its end is an empty page), so a key only means
   // more when the page came back full.
-  return {
-    accounts,
-    more: typeof key === "string" && key.length > 0 && accounts.length >= TOKEN_ACCOUNTS_PAGE_LIMIT,
-  };
+  const more = typeof key === "string" && key.length > 0 && accounts.length >= TOKEN_ACCOUNTS_PAGE_LIMIT;
+  return { accounts, more, key: more ? (key as string) : null };
 }
 
 /** One getTokenAccountsByOwner entry under a base64 dataSlice. */
