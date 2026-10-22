@@ -78,6 +78,7 @@ import {
   SAFETY_REJECT_LINKED_COUNT,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
   SniperTile,
+  BlockZeroTile,
   WalletStat,
   ageNow,
 } from "./AlertCard";
@@ -3731,6 +3732,11 @@ function StatsCard({ card, liquidity = false }: { card: Card; liquidity?: boolea
           />
         )}
         {pending && r.snipers === null ? waitTile("Snipers") : <SniperTile reading={r.snipers} />}
+        {pending && r.blockZeroPct === null ? (
+          waitTile("Block 0")
+        ) : (
+          <BlockZeroTile pct={r.blockZeroPct} buyers={r.blockZeroBuyers} atAlert={r.blockZeroAtAlert} />
+        )}
         <div
           className={
             r.linkedCount !== null &&

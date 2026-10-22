@@ -29,13 +29,16 @@ describe("young holder recheck", () => {
   beforeEach(() => resetYoungHolderRecheck());
 
   it("re-reads a young coin failing a holder cut every minute, and others on the default TTL", () => {
-    noteHolderCutVerdict("sniped", profile({ sniperTop10WalletPct: 90 }), minutesAgo(2), NOW);
+    noteHolderCutVerdict("sniped", profile({ emptyTop10WalletPct: 90 }), minutesAgo(2), NOW);
+    // Block 0 is read from the chain, not RugCheck: a fresh report would not change it.
+    noteHolderCutVerdict("blockZero", profile({ blockZeroHeldPct: 30 }), minutesAgo(2), NOW);
     noteHolderCutVerdict("heavy", profile({ top10HolderPct: 55 }), minutesAgo(1), NOW);
     noteHolderCutVerdict("clean", profile(), minutesAgo(2), NOW);
     const ttl = rugCheckTtlFor(5, NOW);
     expect(ttl("sniped")).toBe(1);
     expect(ttl("heavy")).toBe(1);
     expect(ttl("clean")).toBe(5);
+    expect(ttl("blockZero")).toBe(5);
     expect(ttl("never-seen")).toBe(5);
   });
 

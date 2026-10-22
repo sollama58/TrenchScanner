@@ -1,12 +1,15 @@
 import {
+  blockZeroHeldPct,
   countHoldingSupplyCut,
   countStillHolding,
   createLogger,
   devStillHolding,
   FIRST_BUYERS,
   launchFigures,
+  SAFETY_REJECT_BLOCK_ZERO_HELD_PCT,
   type HeliusClient,
   type LaunchBuyer,
+  type LaunchBuyersReading,
   type LaunchFigures,
 } from "@trenchscanner/core";
 
@@ -25,12 +28,19 @@ const logger = createLogger("launch-snipers");
  *    100 accounts, so four tokens per credit - refreshed on a TTL, faster for contenders.
  * New first-buyer reads are budgeted per cycle (env SNIPER_LAUNCH_LOOKUPS_PER_CYCLE), contenders
  * first, so a burst of new tokens spreads over a few cycles instead of spiking the bill.
+ *
+ * The same read gives block zero (every wallet that bought in the create transaction's slot, user
+ * ask 2026-10-22), whose share of the supply still held is read with the first buyers' balances.
+ * A read is saved (LaunchReadStore, the LaunchRead table) so a restart or deploy loads it instead
+ * of paying for it again (Helius audit 2026-10-22, H-3).
  */
 
 interface Entry {
   buyers: LaunchBuyer[];
   /** The token accounts the dev's launch buy landed in (LaunchBuyersReading.devAccounts). */
   devAccounts: LaunchBuyer[];
+  /** Block zero's wallets (LaunchBuyersReading.blockZeroBuyers); empty with none or no slots. */
+  blockZero: LaunchBuyer[];
   /** The launch's shape, from the same read (launchFigures). */
   figures: LaunchFigures;
   /** Block time of the create transaction, when the read gave one. */
@@ -46,10 +56,17 @@ interface Entry {
   supply: number;
   /** Whether the dev still holds their launch buy, from the same balance read as `holding`. */
   devHolding: boolean | null;
+  /** % of the supply block zero's wallets hold now, from the same balance read (blockZeroHeldPct). */
+  blockZeroHeld: number | null;
   holdingAt: number;
 }
 
-/** Process-local and bounded; losing it on a restart costs one re-read per token still in band. */
+/** The token accounts a holdings refresh reads for an entry, each once. */
+function accountsOf(e: Entry): string[] {
+  return [...new Set([...e.buyers, ...e.devAccounts, ...e.blockZero].map((b) => b.tokenAccount))];
+}
+
+/** Process-local and bounded; a restart loads saved reads back (LaunchReadStore) instead of re-reading. */
 const MAX_ENTRIES = 5_000;
 const entries = new Map<string, Entry>();
 /** Mints whose read failed, and when they may be tried again. */
@@ -96,6 +113,25 @@ export interface LaunchSnipers extends LaunchFigures {
    * their first minutes - exactly when they are called - so the card's Dev tile read "–".
    */
   devHolding: boolean | null;
+  /**
+   * % of the supply the wallets that bought in block zero (the create transaction's slot, the dev
+   * aside) hold now (core's blockZeroHeldPct): the card's, the filters' and the safety screen's
+   * "Block 0". Null with no slots or supply to go by, or when the balance read missed one.
+   */
+  blockZeroHeldPct: number | null;
+}
+
+/** A launch read as saved: what getLaunchBuyersBatch found, whether it was complete, and when. */
+export interface StoredLaunchRead {
+  reading: LaunchBuyersReading;
+  complete: boolean;
+  readAt: number;
+}
+
+/** Where launch reads are kept across restarts (launchReadStore.ts; tests pass their own or none). */
+export interface LaunchReadStore {
+  load(mints: readonly string[]): Promise<Map<string, StoredLaunchRead>>;
+  save(reads: ReadonlyMap<string, StoredLaunchRead>): Promise<void>;
 }
 
 export interface SniperGroup {
@@ -118,6 +154,8 @@ export interface ResolveLaunchSnipersOptions {
   contenderRefreshMs: number;
   /** Most token accounts re-read this call (each 100 is one credit). */
   maxRefreshAccounts: number;
+  /** Saved launch reads, loaded before paying for a read and written after one. */
+  store?: LaunchReadStore;
   now?: number;
 }
 
@@ -157,6 +195,7 @@ export function launchSnipersFromCache(
       holdingCut: e.holdingCut,
       seen: e.buyers.length,
       devHolding: e.devHolding,
+      blockZeroHeldPct: e.blockZeroHeld,
       ...e.figures,
     });
   }
@@ -179,6 +218,17 @@ export function sniperWalletsFromCache(mint: string, now = Date.now()): Readonly
   // The token accounts too: a holder list entry falls back to the token account when RugCheck
   // gives no owner for it (rugcheck.ts), and a sniper must not read as a later holder then.
   return new Set(e.buyers.flatMap((b) => [b.wallet, b.tokenAccount]));
+}
+
+/**
+ * The wallets that bought in the launch's block zero (the create transaction's slot, the dev
+ * aside), and their token accounts, for the holder list's "0" label. Undefined until the launch
+ * is read, and for a read with no slots to go by.
+ */
+export function blockZeroWalletsFromCache(mint: string): ReadonlySet<string> | undefined {
+  const e = entries.get(mint);
+  if (!e || e.figures.blockZeroBuyers === null) return undefined;
+  return new Set(e.blockZero.flatMap((b) => [b.wallet, b.tokenAccount]));
 }
 
 /**
@@ -208,6 +258,58 @@ export function sniperShareUnobtainable(mint: string): boolean {
   return e !== undefined && e.complete && e.buyers.length === 0;
 }
 
+/** A cache entry for a launch read, carrying over `prev`'s balances when its accounts are the same. */
+function entryOf(
+  reading: LaunchBuyersReading,
+  complete: boolean,
+  readAt: number,
+  prev: Entry | undefined,
+): Entry {
+  const blockZero = reading.blockZeroBuyers ?? [];
+  // A re-read that found more buyers makes the old holding count (over the shorter list) stale:
+  // unknown until the refresh reads the new list.
+  const sameAccounts = (a: readonly LaunchBuyer[], b: readonly LaunchBuyer[]) =>
+    a.length === b.length && a.every((x, i) => x.tokenAccount === b[i]?.tokenAccount);
+  const same =
+    prev !== undefined &&
+    sameAccounts(prev.buyers, reading.buyers) &&
+    sameAccounts(prev.blockZero, blockZero);
+  return {
+    buyers: reading.buyers,
+    devAccounts: reading.devAccounts ?? [],
+    blockZero,
+    figures: launchFigures(reading),
+    launchAt: reading.launchAt,
+    complete,
+    readAt,
+    rereads: prev ? prev.rereads + 1 : 0,
+    holding: same ? prev.holding : null,
+    holdingCut: same ? prev.holdingCut : null,
+    supply: reading.supply,
+    devHolding: same ? prev.devHolding : null,
+    blockZeroHeld: same ? prev.blockZeroHeld : null,
+    holdingAt: same ? prev.holdingAt : 0,
+  };
+}
+
+/**
+ * Loads saved reads for the mints with nothing cached. A store that fails is logged and skipped:
+ * the mints are read from the chain as before.
+ */
+async function loadStored(mints: readonly string[], store: LaunchReadStore | undefined): Promise<void> {
+  const missing = mints.filter((m) => !entries.has(m));
+  if (!store || missing.length === 0) return;
+  try {
+    const stored = await store.load(missing);
+    for (const [mint, s] of stored) {
+      if (!entries.has(mint)) remember(mint, entryOf(s.reading, s.complete, s.readAt, undefined));
+    }
+    if (stored.size > 0) logger.info("loaded saved launch reads", { count: stored.size });
+  } catch (err) {
+    logger.warn("loading saved launch reads failed", { error: String(err) });
+  }
+}
+
 /**
  * Reads what's missing or stale for `groups` (in priority order: contenders first) within the
  * budgets, then returns every mint with a usable figure. A mint without one reads as unknown -
@@ -220,6 +322,10 @@ export async function resolveLaunchSnipers(
 ): Promise<Map<string, LaunchSnipers>> {
   const now = opts.now ?? Date.now();
   for (const [mint, until] of failedUntil) if (until <= now) failedUntil.delete(mint);
+  await loadStored(
+    groups.map((g) => g.mintAddress),
+    opts.store,
+  );
 
   // 1. First buyers, for the mints that don't have them (or had fewer than 25 a while ago).
   // Contenders first, on their own budget: their decisions wait for the figure.
@@ -242,33 +348,16 @@ export async function resolveLaunchSnipers(
       .slice(0, Math.max(0, opts.maxNewLookups)),
   ].map((g) => g.mintAddress);
   const fresh = new Set<string>();
+  const toSave = new Map<string, StoredLaunchRead>();
   if (toRead.length > 0) {
     const results = await helius.getLaunchBuyersBatch(toRead, FIRST_BUYERS);
     let failed = 0;
     for (const mint of toRead) {
       const r = results.get(mint);
       if (r?.status === "found") {
-        const prev = entries.get(mint);
-        // A re-read that found more buyers makes the old holding count (over the shorter list)
-        // stale: unknown until the refresh below reads the new list.
-        const sameBuyers =
-          prev !== undefined &&
-          prev.buyers.length === r.buyers.length &&
-          prev.buyers.every((b, i) => b.tokenAccount === r.buyers[i]?.tokenAccount);
-        remember(mint, {
-          buyers: r.buyers,
-          devAccounts: r.devAccounts ?? [],
-          figures: launchFigures(r),
-          launchAt: r.launchAt,
-          complete: r.complete,
-          readAt: now,
-          rereads: prev ? prev.rereads + 1 : 0,
-          holding: sameBuyers ? prev.holding : null,
-          holdingCut: sameBuyers ? prev.holdingCut : null,
-          supply: r.supply,
-          devHolding: sameBuyers ? prev.devHolding : null,
-          holdingAt: sameBuyers ? prev.holdingAt : 0,
-        });
+        const { status: _status, complete, ...reading } = r;
+        remember(mint, entryOf(reading, complete, now, entries.get(mint)));
+        toSave.set(mint, { reading, complete, readAt: now });
         fresh.add(mint);
       } else if (r?.status !== "unsupported") {
         failedUntil.set(
@@ -282,6 +371,11 @@ export async function resolveLaunchSnipers(
     readStats.requested += toRead.length;
     readStats.found += fresh.size;
     readStats.failed += failed;
+    if (opts.store && toSave.size > 0) {
+      await opts.store
+        .save(toSave)
+        .catch((err: unknown) => logger.warn("saving launch reads failed", { error: String(err) }));
+    }
   }
 
   // 2. Whether they still hold, for newly read mints and stale readings, within the account cap.
@@ -290,10 +384,14 @@ export async function resolveLaunchSnipers(
   for (const g of groups) {
     const e = entries.get(g.mintAddress);
     if (!e || e.buyers.length === 0) continue;
-    const maxAge = g.contender ? opts.contenderRefreshMs : opts.refreshMs;
+    // A coin the safety screen holds on Block 0 is re-read as often as a contender: once its
+    // block-zero snipers sell below the cut it passes, and on the slower TTL it would sit rejected
+    // for minutes after they did - the hold that kept runners out under the old sniper cut.
+    const heldOnBlockZero = e.blockZeroHeld !== null && e.blockZeroHeld >= SAFETY_REJECT_BLOCK_ZERO_HELD_PCT;
+    const maxAge = g.contender || heldOnBlockZero ? opts.contenderRefreshMs : opts.refreshMs;
     if (!fresh.has(g.mintAddress) && e.holding !== null && now - e.holdingAt < maxAge) continue;
     // Past the cap this group waits for the next call; a smaller one behind it may still fit.
-    const size = e.buyers.length + e.devAccounts.length;
+    const size = accountsOf(e).length;
     if (accounts + size > opts.maxRefreshAccounts) continue;
     accounts += size;
     refresh.push(g.mintAddress);
@@ -302,7 +400,7 @@ export async function resolveLaunchSnipers(
     const balances = await helius.getTokenAccountBalances(
       refresh.flatMap((mint) => {
         const e = entries.get(mint)!;
-        return [...e.buyers, ...e.devAccounts].map((b) => b.tokenAccount);
+        return accountsOf(e);
       }),
     );
     for (const mint of refresh) {
@@ -312,6 +410,8 @@ export async function resolveLaunchSnipers(
         e.holding = holding;
         e.holdingCut = countHoldingSupplyCut(e.buyers, balances, e.supply);
         e.devHolding = devStillHolding(e.devAccounts, balances);
+        e.blockZeroHeld =
+          e.figures.blockZeroBuyers === null ? null : blockZeroHeldPct(e.blockZero, balances, e.supply);
         e.holdingAt = now;
       }
     }

@@ -39,6 +39,7 @@ export const CARD_FIELDS = [
   "empty",
   "snipers",
   "sniperTop10",
+  "blockZero",
   "linked",
   "cexFunded",
   "kolBundled",

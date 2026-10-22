@@ -828,7 +828,7 @@ function Screened({ s, span, days, since }: { s: ScreenedData; span: string; day
   const newest = buckets.reduce((at, b, i) => (b.graded > 0 ? i : at), latest);
   const shown = hover !== null && hover <= latest ? hover : newest;
   const focus = buckets[shown];
-  const summary = `A token counts once it passes the safety screen (authorities renounced, liquidity locked, not Mayhem Mode, no more than ${s.checks.freshWalletMaxPct}% fresh, under ${s.checks.emptyWalletRejectPct}% empty and under ${s.checks.sniperWalletRejectPct ?? 80}% launch-sniper top-10 wallets, top 10 owning under ${s.checks.top10HolderRejectPct ?? 40}%, no single holder over ${s.checks.largestHolderMaxPct ?? 10}%, under ${s.checks.linkedRejectCount ?? 20} of the top 25 linked and under ${s.checks.cexFundedRejectCount ?? 21} funded from an exchange${(s.checks.minPreBondSeconds ?? 5) > 0 ? `, bonding curve not filled inside ${s.checks.minPreBondSeconds ?? 5}s of launch` : ""}) and looks ready to decide on.`;
+  const summary = `A token counts once it passes the safety screen (authorities renounced, liquidity locked, not Mayhem Mode, no more than ${s.checks.freshWalletMaxPct}% fresh, under ${s.checks.emptyWalletRejectPct}% empty top-10 wallets, block-zero snipers holding under ${s.checks.blockZeroHeldRejectPct ?? 10}% of supply, top 10 owning under ${s.checks.top10HolderRejectPct ?? 40}%, no single holder over ${s.checks.largestHolderMaxPct ?? 10}%, under ${s.checks.linkedRejectCount ?? 20} of the top 25 linked and under ${s.checks.cexFundedRejectCount ?? 21} funded from an exchange${(s.checks.minPreBondSeconds ?? 5) > 0 ? `, bonding curve not filled inside ${s.checks.minPreBondSeconds ?? 5}s of launch` : ""}) and looks ready to decide on.`;
 
   return (
     <section className="lh-section lh-screened">
@@ -1206,8 +1206,8 @@ function PreChecks({ s }: { s: ScreenedData }) {
           </li>
           <li>Under {c.emptyWalletRejectPct}% of the top 10 holders on otherwise empty wallets.</li>
           <li>
-            Under {c.sniperWalletRejectPct ?? 80}% of the top 10 holders being the launch&apos;s first 25
-            buyers.
+            Block-zero snipers (wallets that bought in the launch&apos;s own slot) holding under{" "}
+            {c.blockZeroHeldRejectPct ?? 10}% of supply.
           </li>
           <li>The top 10 holders own under {c.top10HolderRejectPct ?? 40}% of supply, pool aside.</li>
           <li>No single holder owns more than {c.largestHolderMaxPct ?? 10}% of supply, pool aside.</li>

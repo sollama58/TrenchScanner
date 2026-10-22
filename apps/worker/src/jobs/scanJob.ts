@@ -177,10 +177,12 @@ import {
   resolveLaunchSnipers,
   sniperShareUnobtainable,
   sniperWalletsFromCache,
+  blockZeroWalletsFromCache,
   takeSniperReadStats,
   type LaunchSnipers,
   type SniperGroup,
 } from "./launchSnipers.js";
+import { prismaLaunchReadStore } from "./launchReadStore.js";
 import { absentTtlFor, resolveRugProfiles } from "./rugCheckProfiles.js";
 import { recordCandidateSample, takeSampleStats } from "./candidateOutcomeJob.js";
 import { holderCutRecheckTtlFor, noteHolderCutVerdict, rugCheckTtlFor } from "./youngHolderRecheck.js";
@@ -669,6 +671,7 @@ function startSniperStage(
     refreshMs: env.SNIPER_HOLDING_REFRESH_SECONDS * 1000,
     contenderRefreshMs: env.SNIPER_CONTENDER_REFRESH_SECONDS * 1000,
     maxRefreshAccounts: env.SNIPER_MAX_REFRESH_ACCOUNTS_PER_CYCLE,
+    store: prismaLaunchReadStore,
   }).catch((err: unknown) => {
     logger.warn("sniper reads failed - using cached figures", { error: String(err) });
     return launchSnipersFromCache(mints);
@@ -859,6 +862,24 @@ export function withChainDevHolding(
   const devHolding = snipers?.devHolding ?? null;
   if (!profile || devHolding === null) return profile;
   return { ...profile, creatorHolding: devHolding };
+}
+
+/**
+ * The profile with block zero from the launch read (LaunchSnipers.blockZeroHeldPct and friends,
+ * user ask 2026-10-22): what the safety screen's Block 0 cut, the card and the filters read. Left
+ * off while the read or its balance refresh hasn't landed.
+ */
+export function withBlockZero(
+  profile: OnChainProfile | null,
+  snipers: Pick<LaunchSnipers, "blockZeroHeldPct" | "blockZeroBuyers" | "blockZeroBoughtPct"> | undefined,
+): OnChainProfile | null {
+  if (!profile || !snipers || snipers.blockZeroBuyers === null) return profile;
+  return {
+    ...profile,
+    blockZeroBuyers: snipers.blockZeroBuyers,
+    ...(snipers.blockZeroBoughtPct !== null ? { blockZeroBoughtPct: snipers.blockZeroBoughtPct } : {}),
+    ...(snipers.blockZeroHeldPct !== null ? { blockZeroHeldPct: snipers.blockZeroHeldPct } : {}),
+  };
 }
 
 export function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleMeta> {
@@ -1955,8 +1976,11 @@ async function scanCycle(
           priors.get(candidate.mintAddress) ?? NO_PRIORS,
           firstSeenByMint.get(candidate.mintAddress),
           launchedAtByMint.get(candidate.mintAddress),
-          withChainDevHolding(
-            onChainByMint.get(candidate.mintAddress) ?? null,
+          withBlockZero(
+            withChainDevHolding(
+              onChainByMint.get(candidate.mintAddress) ?? null,
+              sniperByMint.get(candidate.mintAddress),
+            ),
             sniperByMint.get(candidate.mintAddress),
           ),
           activeFilters,
@@ -4145,7 +4169,8 @@ function withHolderSol(profile: OnChainProfile | null): OnChainProfile | null {
 
 /**
  * Each holder on the list marked with what the cycle read of its wallet (user ask 2026-10-15), for
- * the bubble map's icons: `sniper` (among the launch's first 25 buyers), `fresh` (first active
+ * the bubble map's icons: `sniper` (among the launch's first 25 buyers), `blockZero` (bought in the
+ * create transaction's slot: the "0" label, read from the launch read's cache unless passed), `fresh` (first active
  * within FRESH_WITHIN_HOURS) and `empty` (under WALLET_HOLDINGS_MIN_USD of anything besides this
  * coin). A wallet the cycle didn't read is left unmarked. Drawn only: no reading changes. Exported
  * for tests.
@@ -4157,6 +4182,9 @@ export function withHolderKinds(
   env: Pick<Env, "WALLET_HOLDINGS_MIN_USD">,
   sniperWallets?: ReadonlySet<string>,
   nowMs = Date.now(),
+  blockZeroWallets: ReadonlySet<string> | undefined = onChain?.mintAddress
+    ? blockZeroWalletsFromCache(onChain.mintAddress)
+    : undefined,
 ): OnChainProfile | null {
   if (!onChain?.linkedHolders?.length) return onChain;
   const freshCutoff = nowMs - FRESH_WITHIN_HOURS * 3_600_000;
@@ -4167,6 +4195,7 @@ export function withHolderKinds(
       const holdings = holdingsByAddress.get(h.wallet);
       const here = holdings?.perMintUsd[onChain.mintAddress];
       const sniper = !!sniperWallets?.has(h.wallet);
+      const blockZero = !!blockZeroWallets?.has(h.wallet);
       const fresh = !!earliest && earliest.getTime() >= freshCutoff;
       const empty =
         !!holdings && here !== undefined && holdings.otherHoldingsUsd - here < env.WALLET_HOLDINGS_MIN_USD;
@@ -4180,6 +4209,7 @@ export function withHolderKinds(
       return {
         ...h,
         ...(sniper ? { sniper: true } : {}),
+        ...(blockZero ? { blockZero: true } : {}),
         ...(fresh ? { fresh: true } : {}),
         ...(empty ? { empty: true } : {}),
         ...(portfolio !== undefined ? { portfolioUsd: portfolio } : {}),

@@ -306,6 +306,7 @@ const REFLECTION_COLUMNS: { key: string; label: string; fmt: (v: number) => stri
   { key: "freshTop10WalletPct", label: "top-10 fresh wallets %", fmt: (v) => v.toFixed(0) },
   { key: "emptyTop10WalletPct", label: "top-10 empty wallets %", fmt: (v) => v.toFixed(0) },
   { key: "sniperTop10WalletPct", label: "top-10 launch snipers %", fmt: (v) => v.toFixed(0) },
+  { key: "blockZeroHeldPct", label: "block-zero snipers hold %", fmt: (v) => v.toFixed(1) },
   { key: "freshLaunchBuyerPct", label: "launch buyers on fresh wallets %", fmt: (v) => v.toFixed(0) },
   { key: "earlyBuyerHoldPct", label: "launch snipers hold %", fmt: (v) => v.toFixed(1) },
   { key: "earlyBuyerSoldShare", label: "launch snipers sold %", fmt: (v) => (v * 100).toFixed(0) },

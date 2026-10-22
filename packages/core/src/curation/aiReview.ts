@@ -21,7 +21,7 @@ import {
   SAFETY_REJECT_CEX_FUNDED_COUNT,
   SAFETY_REJECT_EMPTY_WALLET_PCT,
   SAFETY_REJECT_LINKED_COUNT,
-  SAFETY_REJECT_SNIPER_WALLET_PCT,
+  SAFETY_REJECT_BLOCK_ZERO_HELD_PCT,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
 } from "../scoring/rugScreen.js";
 import { RISKY_WALLET_SCORE } from "../wallets/riskScore.js";
@@ -53,6 +53,13 @@ export interface AiReviewVerdict {
   risks: string[];
 }
 
+/** Block 0 for the brief: how many wallets sniped the create's block, and the supply they hold now. */
+function blockZeroText(scored: Pick<ScoredToken, "blockZeroBuyers" | "blockZeroHeldPct">): string {
+  if (scored.blockZeroBuyers === undefined) return "unknown";
+  if (scored.blockZeroBuyers === 0) return "none";
+  return `${scored.blockZeroBuyers} wallets, still holding ${fmtPct(scored.blockZeroHeldPct)} of supply`;
+}
+
 /**
  * What the safety screen guarantees about every alert, in words, built from the screen's own
  * cuts (scoring/rugScreen.ts) so the prompt can't drift from what the screen does: it used to
@@ -65,7 +72,8 @@ export function safetyScreenSummary(): string {
     "not a Pump.fun Mayhem Mode token",
     `bonding curve not bought out within ${SAFETY_MIN_PREBOND_SECONDS} seconds of launch`,
     `no more than ${SAFETY_MAX_FRESH_WALLET_PCT}% of the top holders on fresh wallets`,
-    `under ${SAFETY_REJECT_EMPTY_WALLET_PCT}% of the top-10 holders on empty wallets and under ${SAFETY_REJECT_SNIPER_WALLET_PCT}% launch snipers`,
+    `under ${SAFETY_REJECT_EMPTY_WALLET_PCT}% of the top-10 holders on empty wallets`,
+    `block-zero snipers (bought in the launch's own slot) holding under ${SAFETY_REJECT_BLOCK_ZERO_HELD_PCT}% of supply`,
     `top-10 holders owning under ${SAFETY_REJECT_TOP10_HOLDER_PCT}% of supply`,
     `no single holder over ${SAFETY_MAX_LARGEST_HOLDER_PCT}% of supply`,
     `fewer than ${SAFETY_REJECT_LINKED_COUNT} of the top ${SAFETY_COUNT_CUT_HOLDERS} holders linked by funding and fewer than ${SAFETY_REJECT_CEX_FUNDED_COUNT} funded from an exchange`,
@@ -258,6 +266,7 @@ export function buildAiReviewBrief(
     `- top-10 wallets that are brand new: ${fmtPct(scored.freshTop10WalletPct)}`,
     `- top-10 wallets holding almost nothing else: ${fmtPct(scored.emptyTop10WalletPct)}`,
     `- top-10 wallets that were among the launch's first 25 buyers: ${fmtPct(scored.sniperTop10WalletPct)}`,
+    `- block-zero snipers (wallets that bought in the launch's own block, the dev aside): ${blockZeroText(scored)}`,
     `- RugCheck risk score (higher is riskier): ${fmtNum(scored.riskScore)}`,
     `- RugCheck flags: ${scored.riskFlags && scored.riskFlags.length > 0 ? scored.riskFlags.map((f) => clip(f, 60)).join("; ") : "none"}`,
     ``,

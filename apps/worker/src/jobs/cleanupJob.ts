@@ -16,6 +16,13 @@ export const RUGCHECK_CACHE_RETENTION_DAYS = 2;
  */
 const RPC_CACHE_RETENTION_DAYS = 90;
 
+/**
+ * How long a LaunchRead row (launchReadStore.ts) is kept. It only spares a restart re-reading a coin
+ * still in band, and coins are read in their first minutes, so a few days is plenty; a coin back
+ * after that pays one read again.
+ */
+const LAUNCH_READ_RETENTION_DAYS = 3;
+
 /** How long retired/candidate CuratorModel rows are kept - see the sweep below. */
 const CURATOR_MODEL_RETENTION_DAYS = 90;
 /**
@@ -987,6 +994,12 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   );
   const deletedMintAuthorityCache = await sweepCache("MintAuthorityCache", "mintAddress");
   const deletedMayhemCache = await sweepCache("MayhemModeCache", "mintAddress");
+  // Launch reads (launchReadStore.ts) only spare a restart the re-read of coins still in band.
+  const deletedLaunchReads = await sweepCache(
+    "LaunchRead",
+    "mintAddress",
+    new Date(startedAt - LAUNCH_READ_RETENTION_DAYS * DAY_MS),
+  );
   // Linked wallets (linkedWallets.ts): a funder is final like a first transaction, kept as long.
   const deletedWalletFunders = await sweepCache("WalletFunder", "wallet");
   const deletedFunderActivity = await sweepCache("FunderActivity", "address");
@@ -1094,6 +1107,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedWalletCache: deletedWalletCache.count,
     deletedMintAuthorityCache: deletedMintAuthorityCache.count,
     deletedMayhemCache: deletedMayhemCache.count,
+    deletedLaunchReads: deletedLaunchReads.count,
     deletedRugCheckCache: deletedRugCheckCache.count,
     deletedNarratives: deletedNarratives.count,
     deletedOrphanNarratives,

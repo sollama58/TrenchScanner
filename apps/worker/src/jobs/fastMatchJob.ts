@@ -146,6 +146,9 @@ function profileFromSnapshot(
     sameTimeFundedCount?: number | null;
     sniperTopHolderCount?: number | null;
     sniperTopHoldersChecked?: number | null;
+    blockZeroHeldPct?: number | null;
+    blockZeroBuyers?: number | null;
+    blockZeroBoughtPct?: number | null;
     freshTopHolderCount?: number | null;
     freshTopHoldersChecked?: number | null;
     bundledWalletCount?: number | null;
@@ -202,6 +205,9 @@ function profileFromSnapshot(
     sameTimeFundedCount: snapshot.sameTimeFundedCount ?? undefined,
     sniperTopHolderCount: snapshot.sniperTopHolderCount ?? undefined,
     sniperTopHoldersChecked: snapshot.sniperTopHoldersChecked ?? undefined,
+    blockZeroHeldPct: snapshot.blockZeroHeldPct ?? undefined,
+    blockZeroBuyers: snapshot.blockZeroBuyers ?? undefined,
+    blockZeroBoughtPct: snapshot.blockZeroBoughtPct ?? undefined,
     freshTopHolderCount: snapshot.freshTopHolderCount ?? undefined,
     freshTopHoldersChecked: snapshot.freshTopHoldersChecked ?? undefined,
     bundledWalletCount: snapshot.bundledWalletCount ?? undefined,

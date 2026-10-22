@@ -60,11 +60,15 @@ function freshReason(f: FreshWalletFields): string | null {
 export const SAFETY_REJECT_EMPTY_WALLET_PCT = 80;
 
 /**
- * At or above this share of the top-10 holders (pool and LP aside) being the launch's own first 25
- * buyers, a token is never alerted (user decision 2026-10-08): the snipers still own the book, and
- * they sell into whoever buys next. "At or above" for the same 10%-steps reason as the empty cut.
+ * At or above this share of the supply held by the wallets that bought in block zero (the create
+ * transaction's own slot, the dev aside: the launch's snipers in the strict sense), a token is
+ * never alerted (user decision 2026-10-22). It replaced the cut at 80% of the top-10 holders being
+ * among the launch's first 25 buyers (user decision 2026-10-08), which fired on most coins in
+ * their first minutes, where the top ten are those buyers by default, and held runners longest:
+ * coins it rejected doubled as often as those it passed (notes/sniper-audit-2026-10-22). The
+ * first-buyer share stays a model input and a filter.
  */
-export const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
+export const SAFETY_REJECT_BLOCK_ZERO_HELD_PCT = 10;
 
 /**
  * At or above this share of the supply held by the top-10 holders (pool and LP aside), a token is
@@ -197,7 +201,7 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
     ...walletScreenReasons(
       profile,
       profile.emptyTop10WalletPct,
-      profile.sniperTop10WalletPct,
+      profile.blockZeroHeldPct,
       profile.top10HolderPct,
     ),
   );
@@ -226,9 +230,10 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
 }
 
 /**
- * The screen's top-10 cuts: three on who the wallets are, one on how much they hold. A holder list that is mostly fresh wallets (new, or woken after a week idle) is a sniper
+ * The screen's wallet cuts: two on who the top-10 wallets are, two on how much of the supply sits
+ * where it can be sold. A holder list that is mostly fresh wallets (new, or woken after a week idle) is a sniper
  * or insider farm, one that is mostly empty wallets (funded only to hold this launch) is a
- * bundled or farmed launch, and one that is mostly the launch's first buyers is still the snipers'
+ * bundled or farmed launch, and block zero's wallets still holding 10% of the supply is the snipers'
  * book - whatever anyone's filter says. A top ten owning 40% of the supply or more can sell it out from
  * under anyone. Each applies only once measured: until
  * the wallet lookups land the figure is unknown, and model calls wait for it anyway
@@ -237,7 +242,7 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
 function walletScreenReasons(
   fresh: FreshWalletFields,
   emptyPct: number | null | undefined,
-  sniperPct?: number | null,
+  blockZeroPct?: number | null,
   top10Pct?: number | null,
 ): string[] {
   const reasons: string[] = [];
@@ -248,9 +253,9 @@ function walletScreenReasons(
       `${emptyPct.toFixed(0)}% of top-10 holders are empty wallets (${SAFETY_REJECT_EMPTY_WALLET_PCT}% or more)`,
     );
   }
-  if (typeof sniperPct === "number" && sniperPct >= SAFETY_REJECT_SNIPER_WALLET_PCT) {
+  if (typeof blockZeroPct === "number" && blockZeroPct >= SAFETY_REJECT_BLOCK_ZERO_HELD_PCT) {
     reasons.push(
-      `${sniperPct.toFixed(0)}% of top-10 holders are launch snipers (${SAFETY_REJECT_SNIPER_WALLET_PCT}% or more)`,
+      `block-zero snipers hold ${blockZeroPct.toFixed(1)}% of supply (${SAFETY_REJECT_BLOCK_ZERO_HELD_PCT}% or more)`,
     );
   }
   if (typeof top10Pct === "number" && top10Pct >= SAFETY_REJECT_TOP10_HOLDER_PCT) {
@@ -277,7 +282,7 @@ export function passesWalletSafetyCuts(features: Record<string, number | null | 
     walletScreenReasons(
       features,
       features.emptyTop10WalletPct,
-      features.sniperTop10WalletPct,
+      features.blockZeroHeldPct,
       features.top10HolderPct,
     ).length === 0 &&
     !cexFails &&
@@ -351,7 +356,7 @@ export function walletSafetyCutsSql(features: Prisma.Sql = Prisma.raw('"features
       ) <= ${SAFETY_MAX_FRESH_WALLET_PCT},
       true
     )
-    AND COALESCE((${features}->>'sniperTop10WalletPct')::float8 < ${SAFETY_REJECT_SNIPER_WALLET_PCT}, true)
+    AND COALESCE((${features}->>'blockZeroHeldPct')::float8 < ${SAFETY_REJECT_BLOCK_ZERO_HELD_PCT}, true)
     AND COALESCE((${features}->>'top10HolderPct')::float8 < ${SAFETY_REJECT_TOP10_HOLDER_PCT}, true)
     AND COALESCE(
       (${features}->>'cexFundedCount')::float8 < ${countCutSql(SAFETY_REJECT_CEX_FUNDED_COUNT, Prisma.sql`(${features}->>'cexFundedHolders')::float8`)},

@@ -140,6 +140,14 @@ export function matchesFilter(
   }
 
   if (
+    filter.maxBlockZeroHeldPct != null &&
+    token.blockZeroHeldPct !== undefined &&
+    token.blockZeroHeldPct > filter.maxBlockZeroHeldPct
+  ) {
+    return false;
+  }
+
+  if (
     filter.maxSniperTopHolderCount != null &&
     token.sniperTopHolderCount !== undefined &&
     token.sniperTopHolderCount > filter.maxSniperTopHolderCount

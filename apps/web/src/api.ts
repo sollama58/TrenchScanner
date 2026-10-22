@@ -337,6 +337,10 @@ export interface Snapshot {
   /** How many of the top 25 holders (pools aside) were among the first 25 buyers, of how many read; null when not checked. */
   sniperTopHolderCount?: number | null;
   sniperTopHoldersChecked?: number | null;
+  /** % of supply the block-zero wallets (bought in the create's own slot) hold now, how many there were, and what they bought; null when not read. */
+  blockZeroHeldPct?: number | null;
+  blockZeroBuyers?: number | null;
+  blockZeroBoughtPct?: number | null;
   /** How many of the top 25 holders (pools and the creator aside) are on fresh wallets, of how many read; null when not checked. */
   freshTopHolderCount?: number | null;
   freshTopHoldersChecked?: number | null;
@@ -379,6 +383,8 @@ export interface Snapshot {
         cexFunder?: string;
         rank?: number;
         sniper?: boolean;
+        /** Bought in block zero, the launch's own slot: the "0" label. */
+        blockZero?: boolean;
         fresh?: boolean;
         empty?: boolean;
         /** Counted in linkedCreatorPct: tied to the creator, on scans since 2026-10-17. */
@@ -1197,6 +1203,7 @@ export interface FilterInput {
   maxEmptyTop10WalletPct: number | null;
   maxSniperTop10WalletPct: number | null;
   maxSniperTopHolderCount: number | null;
+  maxBlockZeroHeldPct: number | null;
   maxLinkedWalletPct: number | null;
   maxLinkedWalletCount: number | null;
   maxFlaggedBuySol: number | null;
@@ -1757,6 +1764,7 @@ export type CardField =
   | "empty"
   | "snipers"
   | "sniperTop10"
+  | "blockZero"
   | "linked"
   | "cexFunded"
   | "kolBundled"
@@ -2312,8 +2320,8 @@ export interface MarketLighthouse {
       freshWalletMaxPct: number;
       /** Rejected at this share of empty top-10 wallets or more. */
       emptyWalletRejectPct: number;
-      /** Rejected at this share of the top 10 holders being launch snipers or more. */
-      sniperWalletRejectPct?: number;
+      /** Rejected when block zero's wallets hold this share of supply or more. */
+      blockZeroHeldRejectPct?: number;
       /** Rejected when the top 10 holders own this share of supply or more. */
       top10HolderRejectPct?: number;
       /** Rejected when the largest single holder owns more than this share of supply. */
