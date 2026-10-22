@@ -1,8 +1,35 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
-import { afterAll, describe, expect, it } from "vitest";
-import { prisma, loadEnv, type CandidateToken, type Env, type RugCheckProfile } from "@trenchscanner/core";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import {
+  buildCandidateFeatures,
+  prisma,
+  loadEnv,
+  type CandidateToken,
+  type Env,
+  type RugCheckProfile,
+  type ScoredToken,
+} from "@trenchscanner/core";
+import type { CandidateSampleRef } from "./candidateOutcomeJob.js";
 import { runEntryScan, runScanCycle, type ScanDeps } from "./scanJob.js";
+
+/** Every coin put before the curators, with the decision moment it was put there on. */
+const decided = vi.hoisted(
+  () => [] as { mint: string; scored: unknown; moment: { id: string; created: boolean } | null }[],
+);
+vi.mock("./curatedAlerts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./curatedAlerts.js")>();
+  return {
+    ...actual,
+    collectCuratedContender: async (...args: Parameters<typeof actual.collectCuratedContender>) => {
+      decided.push({ mint: args[1].mintAddress, scored: args[2], moment: args[3] });
+      return actual.collectCuratedContender(...args);
+    },
+  };
+});
+
+const featuresOf = (scored: unknown) =>
+  buildCandidateFeatures(scored as ScoredToken) as unknown as Record<string, unknown>;
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -133,7 +160,7 @@ describe.skipIf(!dbAvailable)("the entry fast path's first scan", () => {
     await prisma.token.deleteMany({ where: { mintAddress: { in: created } } });
   });
 
-  it("screens, scores and decides a coin as the cycle does on the same readings", async () => {
+  it("screens, scores and decides a coin as the cycle does, and leaves its decision moments to the cycle", async () => {
     const env: Env = {
       ...loadEnv(),
       // The decision moment is banked on the market reading and the report alone: the wallet
@@ -178,24 +205,45 @@ describe.skipIf(!dbAvailable)("the entry fast path's first scan", () => {
     expectSameReadings(readings(fastSnapshot), readings(cycleSnapshot));
     expect(fastSnapshot.rugScreenPassed).toBe(true);
 
+    // Both went before the curators on the same model inputs: the cycle's coin on the event row it
+    // banked, the fast scan's on none.
+    const cycleDecision = decided.find((d) => d.mint === cycleMint);
+    const fastDecision = decided.find((d) => d.mint === fastMint);
+    expect(cycleDecision?.moment?.created).toBe(true);
+    expect(fastDecision).toBeDefined();
+    expect(fastDecision!.moment).toBeNull();
+    expectSameReadings(featuresOf(fastDecision!.scored), featuresOf(cycleDecision!.scored));
+
     const samples = (mint: string) =>
       prisma.candidateOutcome.findMany({
         where: { token: { mintAddress: mint } },
-        select: { sampleKind: true, anchorMcapUsd: true, features: true },
+        select: { id: true, sampleKind: true, anchorMcapUsd: true, features: true },
         orderBy: { sampleKind: "asc" },
       });
+    // The fast scan banked no row: the coin's decision moment is still the cycle's to take.
+    expect(await samples(fastMint)).toEqual([]);
+
+    // The next cycle reaches the coin on schedule and banks its decision moment (and its hourly
+    // training sample) as it would have without the fast scan, and every seat decides there again.
+    await runScanCycle(deps, env);
     const [cycleSamples, fastSamples] = await Promise.all([samples(cycleMint), samples(fastMint)]);
-    // A decision moment for each, on the same model inputs.
-    expect(fastSamples.map((s) => s.sampleKind)).toContain("event");
-    expect(fastSamples.map((s) => s.sampleKind)).toEqual(cycleSamples.map((s) => s.sampleKind));
+    expect(fastSamples.map((s) => s.sampleKind)).toEqual(["event", "hourly"]);
+    expect(cycleSamples.map((s) => s.sampleKind)).toEqual(["event", "hourly"]);
+    // On the coin's own readings, as the first coin's were; the market context (mkt*) counts both
+    // coins in the band now, where the first cycle had one.
+    const ownReadings = (features: unknown) =>
+      Object.fromEntries(
+        Object.entries(features as Record<string, unknown>).filter(([key]) => !key.startsWith("mkt")),
+      );
     fastSamples.forEach((s, i) => {
       expect(s.anchorMcapUsd).toBe(cycleSamples[i]!.anchorMcapUsd);
-      expectSameReadings(
-        s.features as Record<string, unknown>,
-        cycleSamples[i]!.features as Record<string, unknown>,
-      );
+      expectSameReadings(ownReadings(s.features), ownReadings(cycleSamples[i]!.features));
     });
-  }, 60_000);
+    const event = fastSamples.find((s) => s.sampleKind === "event")!;
+    const later = decided.filter((d) => d.mint === fastMint);
+    expect(later).toHaveLength(2);
+    expect(later[1]!.moment).toEqual<CandidateSampleRef>({ id: event.id, created: true });
+  }, 90_000);
 
   it("records a launch still buffered on the stream before scanning it", async () => {
     const env: Env = { ...loadEnv(), TOKENSAGE_ENABLED: false };

@@ -2356,6 +2356,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
                 ownTapes.get(candidate.mintAddress),
               ),
           devLaunchByMint.get(candidate.mintAddress) ?? null,
+          pass.kind,
         ),
       );
     } catch (err) {
@@ -3529,6 +3530,11 @@ async function processCandidate(
   walletScores: WalletScoreReading | null = null,
   winnerFollow: WinnerFollowReading | null = null,
   devLaunch: DevLaunchFeatures | null = null,
+  /**
+   * Whose pass this is: the cycle's, or the entry fast path's first scan of the coin. The fast scan
+   * decides on the coin but banks no training row, so the cycle's moments stay where they were.
+   */
+  pass: ScanPass["kind"] = "cycle",
 ): Promise<number> {
   const existingToken = prior.token;
   const withFlags = withLiveFlags(
@@ -3861,10 +3867,32 @@ async function processCandidate(
     // learned "missing" from background rows alone (notes/data-audit-2026-10-16, skew.md section
     // 4). Held this cycle, it is asked again next cycle: the spacing check stays open until it
     // is banked. No lookup is made for it that the cycle wouldn't make anyway.
-    if (!prior.recentHourlySample && inScanBand && inputsReady("hourly").ready) {
+    if (pass === "cycle" && !prior.recentHourlySample && inScanBand && inputsReady("hourly").ready) {
       await recordCandidateSample(token.id, scored, env);
     }
     const preGate = passesEventPreGate(scored, band);
+    if (pass === "entry") {
+      // The entry fast path's first scan (entryFastPath.ts) decides on the coin as a decision
+      // moment would, held to the same pre-gate and the same inputs, but banks nothing: no event
+      // row, no seat scores, no hourly sample, no second look. The coin's decision moments stay the
+      // cycle's, on the schedule they had before the fast path: its first event is banked by the
+      // first cycle to find it ready, and every seat decides there again on whatever has landed by
+      // then (TokenSage's read, the curve tape). Spent here, the event would have closed the coin's
+      // window for CANDIDATE_EVENT_SPACING_MINUTES (an hour) on a moment two seconds into the band,
+      // where TokenSage has read under a tenth of coins and the curve tape has nothing yet
+      // (notes/model-inputs-audit-2026-10-22) - every later input would land on no decision, and
+      // the seats would train on the youngest moment of each coin instead of the one they decide
+      // on live. A seat that calls here is graded from its own alert anchor (an "emission" row,
+      // as for any call sent without a fresh event) and is on its cooldown when the cycle decides,
+      // so a coin gets no second card from it; a seat that said no here can still call there. The
+      // deep read is asked for now, so it has the cycle's minute to land on the coin's event.
+      // Holds are not counted: the cycle counts its own, once per moment.
+      if (preGate && inputsReady("decision").ready) {
+        noteNarrativeWanted(token.mintAddress, "full", env, narrativeHints);
+        await collectCuratedContender(curatedCycle, token, scored, null, env, snapshot.id);
+      }
+      return matchCount;
+    }
     // Held by the pre-gate's price test alone (isCollapsing, or an older coin's 5-minute rise):
     // everything else about the moment was ready.
     if (!preGate && passesEventPreGate(scored, band, { skip5m: true })) {

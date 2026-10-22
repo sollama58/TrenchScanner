@@ -75,6 +75,10 @@ function median(values: number[]): number | undefined {
  * early for each crossing and so spent the cycle's per-cycle Helius budgets three or four times a
  * minute (notes/audit-2026-10-22, C1).
  *
+ * The fast scan decides on the coin but banks no decision moment or training row (processCandidate
+ * in scanJob.ts): the coin's moments stay the cycle's, on their old schedule, so the inputs that
+ * land in its first minute (TokenSage's read, the curve tape) still reach a decision.
+ *
  * Each coin gets one: the watch never hands a coin over twice, and the cycle owns it after. One
  * scan per coin at a time, and never one alongside a cycle deciding on the same coin
  * (scanClaims.ts). At most maxPerMinute start in any minute; a coin over the cap waits for the
