@@ -14,7 +14,6 @@ import {
   usd,
 } from "../format";
 import {
-  BoltIcon,
   BrainIcon,
   ChefHatIcon,
   CheckIcon,
@@ -360,7 +359,7 @@ export function AlertCard({
                   title="High conviction: in the model's top half-percent of decision moments"
                   aria-label="High conviction"
                 >
-                  <BoltIcon size={12} />
+                  ❗
                 </span>
               )}
             {curated?.narrative && showNarrative && show("modelPill") && (

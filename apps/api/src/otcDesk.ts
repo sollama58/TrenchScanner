@@ -5,7 +5,8 @@ import { feeDeskFromOtcCoin, feeDesksFromOtcRoster, otcRosterCoins, type OtcDesk
  * featured set. The launches themselves are the paginated list (`?page=`, 12 per page,
  * newest first). Page 1 often repeats that featured set; the repeat is not the end of the
  * launches. A pump coin that sends its creator reward to a wallet is matched when that
- * coin's mint is on either list. A failed read shows nothing until a later try succeeds.
+ * coin's mint is on either list, or when the creator-fee wallet equals one of those
+ * coins. A failed read shows nothing until a later try succeeds.
  *
  * A body that is not a roster is a failed page, not an empty final page. A failed page is
  * retried. Coins on pages after a real end page are not kept. A sweep that missed a page
@@ -16,10 +17,13 @@ import { feeDeskFromOtcCoin, feeDesksFromOtcRoster, otcRosterCoins, type OtcDesk
  * default network call, so it does not throw away a response that was already fetched.
  */
 const OTC_COINS_URL = "https://otcdesks.cash/api/coins";
-/** Upstream pages are 12 coins. A shorter page is the end of the list. */
+/** Upstream pages are 12 coins. A shorter page is the end, unless `total` names more coins. */
 const PAGE_SIZE = 12;
-/** Newest launches, the same page cap the public mirror sweeps. */
-const MAX_PAGES = 40;
+/**
+ * Newest launches per sweep. The public mirror stops at 40 and keeps an archive;
+ * this request has no archive, so it reads further while the roster budget lasts.
+ */
+const MAX_PAGES = 80;
 const PAGE_CONCURRENCY = 8;
 const PAGE_TIMEOUT_MS = 8_000;
 /** One retry. A failed page is not stored as a hole in a finished roster. */
@@ -52,6 +56,18 @@ function mintKey(coin: unknown): string | null {
   return typeof mint === "string" && mint.trim() ? mint.trim() : null;
 }
 
+interface RosterPage {
+  coins: unknown[];
+  /** Full catalog size when the body names one. A short page is not the end while this is larger. */
+  total: number | null;
+}
+
+function pageTotal(body: unknown): number | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const total = (body as { total?: unknown }).total;
+  return typeof total === "number" && Number.isInteger(total) && total >= 0 ? total : null;
+}
+
 /**
  * One page's coins, or null when the read failed. An empty list is a real end page.
  * A JSON body that is not a roster is a failure, the same as a network error: it is
@@ -61,7 +77,7 @@ async function readCoins(
   fetchImpl: typeof fetch,
   url: string,
   budget: AbortSignal,
-): Promise<unknown[] | null> {
+): Promise<RosterPage | null> {
   if (budget.aborted) return null;
   try {
     const res = await fetchImpl(url, {
@@ -69,8 +85,10 @@ async function readCoins(
       headers: { accept: "application/json" },
     });
     if (!res.ok) return null;
-    const coins = otcRosterCoins(await res.json());
-    return coins ?? null;
+    const body: unknown = await res.json();
+    const coins = otcRosterCoins(body);
+    if (!coins) return null;
+    return { coins, total: pageTotal(body) };
   } catch {
     return null;
   }
@@ -81,7 +99,7 @@ async function readPage(
   fetchImpl: typeof fetch,
   url: string,
   budget: AbortSignal,
-): Promise<unknown[] | null> {
+): Promise<RosterPage | null> {
   for (let attempt = 0; attempt < PAGE_ATTEMPTS; attempt++) {
     const page = await readCoins(fetchImpl, url, budget);
     if (page !== null) return page;
@@ -109,11 +127,12 @@ async function loadRoster(fetchImpl: typeof fetch, url: string): Promise<RosterL
   };
   // "stop" is a real end: an empty page, or a short page that added launches. ?page=1
   // repeating the featured mints is not an end. A failed page is skipped, not the end.
-  const take = (page: unknown[] | null, pageOne: boolean): "stop" | "more" | "skip" => {
+  // A short page is not the end when the body names a larger `total` than the coins kept.
+  const take = (page: RosterPage | null, pageOne: boolean): "stop" | "more" | "skip" => {
     if (!page) return "skip";
-    if (page.length === 0) return "stop";
+    if (page.coins.length === 0) return "stop";
     let fresh = 0;
-    for (const coin of page) {
+    for (const coin of page.coins) {
       const key = mintKey(coin) ?? JSON.stringify(coin);
       if (seen.has(key)) {
         // The featured row is often this mint with no reward fields. Keep the later
@@ -126,7 +145,8 @@ async function loadRoster(fetchImpl: typeof fetch, url: string): Promise<RosterL
       fresh += 1;
     }
     if (pageOne && fresh === 0) return "more";
-    if (fresh === 0 || page.length < PAGE_SIZE) return "stop";
+    if (fresh === 0) return "stop";
+    if (page.coins.length < PAGE_SIZE && !(page.total != null && page.total > seen.size)) return "stop";
     return "more";
   };
   if (take(await readPage(fetchImpl, url, budget), false) === "skip") incomplete = true;
@@ -203,17 +223,14 @@ export interface OtcDeskFeesOptions {
 }
 
 /**
- * Reward coins for these mints. `wait` holds for the roster (the token page).
- * The feed does not: it uses whatever is already cached and refreshes behind the request,
- * so a cold roster does not stall every card.
+ * The roster kept for fee matching, keyed by coin mint and by a wallet that belongs
+ * to exactly one rewarded coin. `wait` holds for it (the token page). The feed does not:
+ * it uses whatever is already cached and refreshes behind the request. A supplied fetch
+ * is the roster and skips the cache.
  */
-export async function otcDeskFees(
-  mints: readonly string[],
-  opts?: OtcDeskFeesOptions,
-): Promise<Map<string, OtcDeskFee>> {
-  if (mints.length === 0) return new Map();
+export async function otcDeskRoster(opts?: OtcDeskFeesOptions): Promise<Map<string, OtcDeskFee>> {
   // A supplied fetch is the roster. Do not drop it because the test runner is on.
-  if (opts?.fetch) return pick(await fetchOtcDeskRoster(opts.fetch), mints);
+  if (opts?.fetch) return fetchOtcDeskRoster(opts.fetch);
   // Card tests call this with no fetch. They must not reach otcdesks.cash.
   if (process.env.VITEST === "true") return new Map();
   if (!freshEnough()) {
@@ -228,7 +245,13 @@ export async function otcDeskFees(
       });
     }
   }
-  const fees = cached?.fees;
-  if (!fees || fees.size === 0) return new Map();
-  return pick(fees, mints);
+  return cached?.fees ?? new Map();
+}
+
+export async function otcDeskFees(
+  mints: readonly string[],
+  opts?: OtcDeskFeesOptions,
+): Promise<Map<string, OtcDeskFee>> {
+  if (mints.length === 0) return new Map();
+  return pick(await otcDeskRoster(opts), mints);
 }

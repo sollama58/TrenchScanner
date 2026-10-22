@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { resolveOtcDeskFee } from "./feeDesks.js";
 import { fetchOtcDeskRoster, otcDeskFees, otcRosterCacheMs } from "./otcDesk.js";
 
 const MINT = "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump";
@@ -174,6 +175,27 @@ describe("fetchOtcDeskRoster", () => {
     expect(seen.has("10")).toBe(false);
   });
 
+  it("keeps walking a short page when the body names a larger catalog", async () => {
+    const fetchImpl = async (input: string | URL | Request) => {
+      const page = new URL(String(input)).searchParams.get("page");
+      if (!page) return json({ coins: [{ mint: NVDA, symbol: "NVDAx" }], total: 30 });
+      if (page === "1") return json({ coins: fullPage(1).slice(0, 3), total: 30 });
+      if (page === "2") {
+        return json({
+          coins: [
+            { mint: MINT, rewardBasket: [NVDA, TSLA] },
+            { mint: TSLA, symbol: "TSLAx" },
+          ],
+          total: 30,
+        });
+      }
+      return json({ coins: [], total: 30 });
+    };
+    expect((await fetchOtcDeskRoster(fetchImpl as typeof fetch)).get(MINT)?.line).toBe(
+      "OTC Desks pays holder rewards in NVDAx and TSLAx.",
+    );
+  });
+
   it("stops on a short page of new launches", async () => {
     const late = `L${"1".repeat(31)}`;
     const fetchImpl = async (input: string | URL | Request) => {
@@ -194,6 +216,57 @@ describe("otcRosterCacheMs", () => {
     expect(otcRosterCacheMs({ complete: true, size: 4 })).toBe(5 * 60_000);
     expect(otcRosterCacheMs({ complete: false, size: 4 })).toBe(60_000);
     expect(otcRosterCacheMs({ complete: true, size: 0 })).toBe(60_000);
+  });
+});
+
+/** The gift tooltip, same joining as `creatorFeeLine` in the web fee badge. */
+function feeTooltip(summary: string | null, deskLine: string | null): string | null {
+  const sentence = (text: string | null): string | null => {
+    const t = text?.trim().replace(/\.$/, "");
+    return t ? `${t.charAt(0).toUpperCase()}${t.slice(1)}.` : null;
+  };
+  const lead = sentence(summary);
+  const desk = sentence(deskLine);
+  if (lead && desk && lead !== desk) return `${lead} ${desk}`;
+  return lead ?? desk;
+}
+
+describe("creator fee wallet on an OTC coin", () => {
+  it("names both stocks in the payload and tooltip instead of only the wallet sentence", async () => {
+    const pump = filler(80);
+    const wallet = MINT;
+    const fetchImpl = async () =>
+      json({
+        coins: [
+          { mint: wallet, rewardBasket: [NVDA, TSLA] },
+          { mint: NVDA, symbol: "NVDAx" },
+          { mint: TSLA, symbol: "TSLAx" },
+        ],
+      });
+    const roster = await fetchOtcDeskRoster(fetchImpl as typeof fetch);
+    const desk = resolveOtcDeskFee(pump, [wallet], roster);
+    const payload = {
+      destination: "wallet" as const,
+      summary: "creator fees go to a wallet",
+      deskLine: desk?.line ?? null,
+      deskRewards: desk?.rewards ?? null,
+    };
+    const tooltip = feeTooltip(payload.summary, payload.deskLine);
+    expect(payload.deskRewards).toEqual([
+      { label: "NVDAx", mint: NVDA },
+      { label: "TSLAx", mint: TSLA },
+    ]);
+    expect(tooltip).toBe("Creator fees go to a wallet. OTC Desks pays holder rewards in NVDAx and TSLAx.");
+    expect(tooltip).not.toBe("Creator fees go to a wallet.");
+    const flipped = `${wallet[0]!.toLowerCase()}${wallet.slice(1)}`;
+    expect(resolveOtcDeskFee(pump, [flipped], roster)?.line).toBe(
+      "OTC Desks pays holder rewards in NVDAx and TSLAx.",
+    );
+    const plain = feeTooltip(
+      "creator fees go to a wallet",
+      resolveOtcDeskFee(pump, [filler(81)], roster)?.line ?? null,
+    );
+    expect(plain).toBe("Creator fees go to a wallet.");
   });
 });
 
