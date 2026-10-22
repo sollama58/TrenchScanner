@@ -1474,7 +1474,7 @@ export function tradeCooldownLeft(owner: string, now = Date.now()): number {
  */
 type WalletSlot =
   | { kind: "preparing"; mint: string; id: number; prevPace: number | undefined; paced: boolean }
-  | { kind: "live"; mint: string; id: number; signature: string; blockhashAt: number };
+  | { kind: "live"; mint: string; id: number; signature: string; liveAt: number };
 
 const walletSlots = new Map<string, WalletSlot>();
 let walletSlotId = 0;
@@ -1513,10 +1513,16 @@ function releaseUnsent(owner: string, id: number): void {
   else lastSentAt.set(owner, slot.prevPace);
 }
 
-function markLive(owner: string, id: number, signature: string, blockhashAt: number): void {
+/**
+ * The lock's window starts on this browser's clock when the signature goes out. The build's
+ * blockhashAt is the API's clock: against Date.now() here, a browser running fast would skip the
+ * wait and drop the lock at once, and a slow one would hold it too long. The blockhash was fetched
+ * before the send, so counting from the send only ever waits a little longer than its life.
+ */
+function markLive(owner: string, id: number, signature: string): void {
   const slot = walletSlots.get(owner);
   if (!slot || slot.id !== id) return;
-  walletSlots.set(owner, { kind: "live", mint: slot.mint, id, signature, blockhashAt });
+  walletSlots.set(owner, { kind: "live", mint: slot.mint, id, signature, liveAt: Date.now() });
 }
 
 function clearSlot(owner: string, id: number): void {
@@ -1525,10 +1531,12 @@ function clearSlot(owner: string, id: number): void {
 }
 
 /** Keeps polling after the panel gives up, and drops the lock once the chain settles the signature. */
-function watchLive(owner: string, id: number, signature: string, blockhashAt: number): void {
+function watchLive(owner: string, id: number, signature: string): void {
   if (typeof window === "undefined") return;
+  const live = walletSlots.get(owner);
+  if (!live || live.kind !== "live" || live.id !== id) return;
   void (async () => {
-    const until = blockhashAt + 90_000;
+    const until = live.liveAt + 90_000;
     while (Date.now() < until) {
       await new Promise((r) => setTimeout(r, STATUS_POLL_MS));
       const slot = walletSlots.get(owner);
@@ -1892,8 +1900,7 @@ export async function runTrade(
       sent = { signature };
     }
     sentOut = true;
-    const blockhashAt = built.blockhashAt ?? Date.now();
-    markLive(asked.owner, slot, sent.signature, blockhashAt);
+    markLive(asked.owner, slot, sent.signature);
     onStage("confirming", built);
     try {
       const confirmed = await confirmTrade(sent.signature, uncertain, asked.side);
@@ -1903,11 +1910,11 @@ export async function runTrade(
       // Status 404 after a successful send: the signature stays, and it may still have landed.
       if (e instanceof ApiError && e.status === 404) {
         tradingUnavailable();
-        watchLive(asked.owner, slot, sent.signature, blockhashAt);
+        watchLive(asked.owner, slot, sent.signature);
         throw new TradeError(STATUS_MAYBE, sent.signature);
       }
       if (e instanceof TradeError && e.settled) clearSlot(asked.owner, slot);
-      else watchLive(asked.owner, slot, sent.signature, blockhashAt);
+      else watchLive(asked.owner, slot, sent.signature);
       throw e;
     }
   } catch (e) {
