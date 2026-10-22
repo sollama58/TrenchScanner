@@ -637,20 +637,6 @@ describe.skipIf(!dbAvailable)("model alert api keys and socket", () => {
     ws.close();
   });
 
-  it("closes a first-frame socket with 1011 when the key check fails on the database", async () => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/model-alerts`);
-    sockets.push(ws);
-    const closed = new Promise<number>((resolve) => ws.once("close", (code) => resolve(code)));
-    await opened(ws);
-    const spy = vi.spyOn(prisma.userApiKey, "findUnique").mockRejectedValueOnce(new Error("pool exhausted"));
-    try {
-      ws.send(`tsma_${"d".repeat(43)}`);
-      expect(await closed).toBe(1011);
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
   it("bounds failed key guesses", async () => {
     const secret = `tsma_${"c".repeat(43)}`;
     const codes: number[] = [];
@@ -668,9 +654,58 @@ describe.skipIf(!dbAvailable)("model alert api keys and socket", () => {
     expect(codes).not.toContain(101);
   });
 
-  function connect(secret: string, transport: "header" | "query" | "api-key" = "header"): Promise<WebSocket> {
+  it("refuses only the guessing address, and never a live key", async () => {
+    // The previous test left this address over the cap.
+    const guess = `tsma_${"c".repeat(43)}`;
+    await expect(connect(guess, "header")).rejects.toThrow("status 429");
+    // Another address with a wrong key is told it is wrong, not that there were too many.
+    await expect(connect(guess, "header", "203.0.113.9")).rejects.toThrow("status 401");
+
+    const user = await makeUser("locked-out-ip");
+    await subscribe(user.id, new Date(Date.now() + 86_400_000));
+    const secret = ((await generate(user.cookie)).json() as { secret: string }).secret;
+    const ws = await connect(secret, "header");
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close();
+
+    // The first-frame path too: a live key connects, and a wrong one is refused as too many.
+    const framed = new WebSocket(`ws://127.0.0.1:${port}/v1/model-alerts`);
+    sockets.push(framed);
+    let framedCode = 0;
+    framed.on("close", (code) => (framedCode = code));
+    await opened(framed);
+    framed.send(secret);
+    await delay(400);
+    expect(framed.readyState).toBe(WebSocket.OPEN);
+    framed.close();
+    const wrong = new WebSocket(`ws://127.0.0.1:${port}/v1/model-alerts`);
+    sockets.push(wrong);
+    const closed = new Promise<number>((resolve) => wrong.once("close", (code) => resolve(code)));
+    await opened(wrong);
+    wrong.send(guess);
+    expect(await closed).toBe(4429);
+    expect(framedCode).not.toBe(4429);
+  });
+
+  // Last in the describe: a Prisma spy, restored or not, leaves no working method behind.
+  it("closes a first-frame socket with 1011 when the key check fails on the database", async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/model-alerts`);
+    sockets.push(ws);
+    const closed = new Promise<number>((resolve) => ws.once("close", (code) => resolve(code)));
+    await opened(ws);
+    vi.spyOn(prisma.userApiKey, "findUnique").mockRejectedValue(new Error("pool exhausted"));
+    // This address is over the failure cap after the tests above; the key is still looked up.
+    ws.send(`tsma_${"d".repeat(43)}`);
+    expect(await closed).toBe(1011);
+  });
+
+  function connect(
+    secret: string,
+    transport: "header" | "query" | "api-key" = "header",
+    address?: string,
+  ): Promise<WebSocket> {
     const query = transport === "query" ? `?key=${encodeURIComponent(secret)}` : "";
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = address ? { "cf-connecting-ip": address } : {};
     if (transport === "header") headers.authorization = `Bearer ${secret}`;
     if (transport === "api-key") headers["x-api-key"] = secret;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/model-alerts${query}`, { headers });
