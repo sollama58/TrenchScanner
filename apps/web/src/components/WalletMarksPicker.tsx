@@ -153,9 +153,9 @@ export function WalletMarksPicker() {
         <div className="segmented small" role="radiogroup" aria-label="Distance from the candle">
           {(
             [
-              ["s", "Small", "Closer above the candles"],
-              ["m", "Medium", "The usual distance above the candles"],
-              ["l", "Large", "Farther above the candles"],
+              ["s", "Small", "One grid line above the candle"],
+              ["m", "Medium", "One and a half grid lines above the candle"],
+              ["l", "Large", "Two grid lines above the candle"],
             ] as const
           ).map(([id, label, title]) => (
             <button
@@ -174,12 +174,13 @@ export function WalletMarksPicker() {
         </div>
       </div>
       <p className="faint small check-hint">
-        Bubbles sit in a band above the candles, so they don&apos;t cover them, and stack upward when several
-        share a time. Bigger for more SOL. A filled mark is a buy, a hollow one a sale. Circle, square and
-        diamond are the lettered wallet marks; a KOL&apos;s picture stays round, and your own buys and sells
-        stay arrows. Mark size is small, medium or large. Medium is the size the chart already draws. Distance
-        is how far the band sits above the candles, separate from that size. The line to the candle is off
-        unless you turn it on. Click a mark to open the wallet. Never under {MIN_SOL_FLOOR} SOL.
+        Trade bubbles sit about one grid line above that candle&apos;s high, a little higher on medium and
+        large, and stack upward when several share a bar. Bigger for more SOL. A filled mark is a buy, a
+        hollow one a sale. Circle, square and diamond are the lettered wallet marks; a KOL&apos;s picture
+        stays round, and your own buys and sells are triangles just under the candle. Mark size is small,
+        medium or large. Medium is the size the chart already draws. Distance is how many grid lines the
+        bubbles sit above the candle, separate from that size. The line to the candle is off unless you turn
+        it on. Click a mark to open the wallet. Never under {MIN_SOL_FLOOR} SOL.
       </p>
     </div>
   );

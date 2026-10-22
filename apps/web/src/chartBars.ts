@@ -23,8 +23,11 @@ export interface SlotBar {
   h: number;
   l: number;
   c: number;
-  /** USD volume in the slot (a wider candle's, all in its first slot). */
-  vol: number;
+  /**
+   * USD volume in the slot (a wider candle's, all in its first slot). Null when the candles
+   * omitted volume. A flat slot and a reported 0 stay 0.
+   */
+  vol: number | null;
   /** No trades in the slot: the close before it, held. */
   flat?: boolean;
   /** A wider candle starts here and runs over this many slots. */
@@ -126,7 +129,7 @@ export function buildSlots(
       h: b.h,
       l: b.l,
       c: b.c,
-      vol: vols[i]?.usd ?? 0,
+      vol: vols[i] ? vols[i]!.usd : 0,
       ...(b.flat ? { flat: true } : {}),
       ...(span > 1 ? { span } : {}),
     };
@@ -154,9 +157,20 @@ export function slotCandle(slots: Slots, i: number): SlotBar | null {
   return b.under ? (slots.bars[i - b.under] ?? b) : b;
 }
 
-/** A time's place on the chart's bar scale (fractional): slot i runs from i - 0.5 to i + 0.5. */
-export function slotOfTime(slots: Slots, t: number): number {
-  return (t - slots.start) / slots.tfMs - 0.5;
+/**
+ * A time's place on the chart's bar scale (fractional).
+ * Candles centre slot i on logical i, so the slot runs from i - 0.5 to i + 0.5.
+ * The line chart draws each close at the bucket end (`closeAtEnd`): logical i is that end,
+ * so a trade at the close sits on this close and not already on the next one.
+ */
+export function slotOfTime(slots: Slots, t: number, closeAtEnd = false): number {
+  const raw = (t - slots.start) / slots.tfMs;
+  return closeAtEnd ? raw - 1 : raw - 0.5;
+}
+
+/** The line series' time for a slot: the close, at the end of the bucket, not the open. */
+export function closeTimeMs(slotStart: number, tfMs: number): number {
+  return slotStart + tfMs;
 }
 
 /** The slot a time falls in, clamped to the slots there are. */

@@ -101,6 +101,7 @@ export function resetLinkedWallets(): void {
   frozenAtAlert.clear();
   alertedMints = null;
   failureBackoff.clear();
+  appliedBalanceTx.clear();
   takeLinkedWalletStats();
 }
 
@@ -370,6 +371,9 @@ const TOP_HOLDERS_MAX_AGE_MS = 60 * 60_000;
  * Each mint's largest wallets from the chain (LINKED_TOP_N and one more, for the creator), when
  * read (or last found unchanged: see readTopHolders), and how long until it is read again.
  */
+/** Signatures already applied to a mint's holder list, so a replayed multi-account delta is not added twice. */
+const appliedBalanceTx = new Map<string, Set<string>>();
+
 const topHolderLists = new Map<
   string,
   {
@@ -381,6 +385,11 @@ const topHolderLists = new Map<
     /** When the shares were current (the chain read, or the last streamed balance). */
     balancesAtMs: number;
     refreshMs: number;
+    /**
+     * How long after `atMs` the next chain enumeration is due. A quiet keep moves `atMs` and
+     * leaves `readAtMs` where the chain read was. A balance tick moves neither.
+     */
+    readEveryMs: number;
   }
 >();
 const MAX_TOP_HOLDER_LISTS = 5_000;
@@ -507,7 +516,7 @@ export async function readTopHolders(
       const every = oldMints.has(g.mintAddress) ? TOP_HOLDERS_OLD_REFRESH_MS : TOP_HOLDERS_REFRESH_MS;
       if (ageOf(g.mintAddress) < every) return false;
       if (!quiet(g.mintAddress)) return true;
-      keepQuietList(g.mintAddress, now);
+      keepQuietList(g.mintAddress, now, every);
       return false;
     })
     .slice(0, Math.max(0, opts.maxReads));
@@ -518,15 +527,21 @@ export async function readTopHolders(
       ? opts.streamedRefreshMs
       : (opts.watchedRefreshMs ?? TOP_HOLDERS_REFRESH_MS);
   };
-  const watchedDue = groups
-    .filter(
-      (g) =>
-        watched.has(g.mintAddress) &&
-        !dueSet.has(g.mintAddress) &&
-        ageOf(g.mintAddress) >= watchedEvery(g) &&
-        !quiet(g.mintAddress),
-    )
-    .slice(0, Math.max(0, opts.maxWatchedReads ?? 0));
+  const watchedDue: LinkedGroup[] = [];
+  const watchedCap = Math.max(0, opts.maxWatchedReads ?? 0);
+  for (const g of groups) {
+    if (!watched.has(g.mintAddress) || dueSet.has(g.mintAddress)) continue;
+    const every = watchedEvery(g);
+    if (ageOf(g.mintAddress) < every) continue;
+    // Quiet: the schedule moves to now and the enumeration does not. The next chain read is
+    // `every` from this keep, not from the old enumeration, and this coin takes no read budget.
+    if (quiet(g.mintAddress)) {
+      keepQuietList(g.mintAddress, now, every);
+      continue;
+    }
+    if (watchedDue.length >= watchedCap) continue;
+    watchedDue.push(g);
+  }
   const counts = { reads: due.length, watchedReads: watchedDue.length };
   due.push(...watchedDue);
   if (due.length === 0) return counts;
@@ -547,12 +562,17 @@ export async function readTopHolders(
       if (oldest !== undefined) topHolderLists.delete(oldest);
     }
     topHolderLists.delete(g.mintAddress);
+    const refreshMs = oldMints.has(g.mintAddress) ? TOP_HOLDERS_OLD_REFRESH_MS : TOP_HOLDERS_REFRESH_MS;
     topHolderLists.set(g.mintAddress, {
       holders: top,
       atMs: now,
       readAtMs: now,
       balancesAtMs: now,
-      refreshMs: oldMints.has(g.mintAddress) ? TOP_HOLDERS_OLD_REFRESH_MS : TOP_HOLDERS_REFRESH_MS,
+      refreshMs,
+      // A watched coin's next chain read is its watch interval (5 minutes while the holder
+      // stream covers it, otherwise a minute), not the ten-minute cadence this read may have
+      // shared with the rest of the band.
+      readEveryMs: watched.has(g.mintAddress) ? watchedEvery(g) : refreshMs,
     });
     g.holders = top;
     if (wide.has(g.mintAddress)) {
@@ -568,13 +588,20 @@ export async function readTopHolders(
 }
 
 /**
- * A list found unchanged since its read (no trade since, readTopHolders): it is as current as a read
- * now would be, so it takes now as its read time, and the holder accounts read with it too, so
- * neither lapses (cachedTopHolders, cachedHolderAccounts) while the coin stays quiet.
+ * A list found unchanged since its read (no trade since, readTopHolders): the schedule moves to
+ * now, so the next chain read is a full interval away, and the holder accounts' schedule moves
+ * with it so they don't lapse (cachedTopHolders, cachedHolderAccounts). The enumeration
+ * (`readAtMs`) and the share time stay where the chain read and the last balance left them.
  */
-function keepQuietList(mintAddress: string, nowMs: number): void {
+function keepQuietList(mintAddress: string, nowMs: number, readEveryMs?: number): void {
   const entry = topHolderLists.get(mintAddress);
-  if (entry) topHolderLists.set(mintAddress, { ...entry, atMs: nowMs });
+  if (entry)
+    topHolderLists.set(mintAddress, {
+      ...entry,
+      atMs: nowMs,
+      // The enumeration (`readAtMs`) and the share time stay. Only the schedule moves.
+      ...(readEveryMs !== undefined && readEveryMs > 0 ? { readEveryMs } : {}),
+    });
   const accounts = holderAccountLists.get(mintAddress);
   if (accounts) holderAccountLists.set(mintAddress, { ...accounts, atMs: nowMs });
 }
@@ -632,25 +659,58 @@ export interface HolderBalanceMove {
   post: bigint;
 }
 
+const MAX_APPLIED_BALANCE_TX = 400;
+
+function alreadyAppliedBalance(mint: string, signature: string | undefined): boolean {
+  return !!signature && (appliedBalanceTx.get(mint)?.has(signature) ?? false);
+}
+
+function rememberAppliedBalance(mint: string, signature: string | undefined): void {
+  if (!signature) return;
+  let seen = appliedBalanceTx.get(mint);
+  if (!seen) {
+    seen = new Set();
+    appliedBalanceTx.set(mint, seen);
+  }
+  seen.add(signature);
+  while (seen.size > MAX_APPLIED_BALANCE_TX) {
+    const oldest = seen.values().next().value;
+    if (oldest === undefined) break;
+    seen.delete(oldest);
+  }
+}
+
+/** A displayed share of supply, never past the whole coin. */
+function clampShare(pct: number): number {
+  if (!Number.isFinite(pct) || pct <= 0) return 0;
+  return pct > 100 ? 100 : pct;
+}
+
 /**
  * Moves a coin's top-holder list (and its top 50, where kept) by the balances a streamed
  * transaction left token accounts with (user ask 2026-10-19: the top holders live, to the second,
  * between reads). A holder with one token account takes its new balance outright, so a transaction
- * the last read already counted changes nothing; one with several moves by the difference. A wallet
+ * the last read already counted changes nothing; one with several moves by the difference, and the
+ * same transaction delivered again does not add that difference a second time. A wallet
  * buying in from outside the list joins it when the balance it is left with outranks the smallest
  * holder, and whoever falls out of the list's length leaves. A program account (the curve, a pool)
  * never joins. The list keeps its read time (it says when to read again) and when its wallets were
- * enumerated; the share time moves to `nowMs`. Answers whether any share moved.
+ * enumerated; the share time moves to `nowMs`. The percent uses the mint's real supply from the
+ * holder read. Without that supply the move is skipped, not guessed at a billion tokens. Answers
+ * whether any share moved.
  */
 export function applyHolderBalances(
   mintAddress: string,
   moves: readonly HolderBalanceMove[],
   nowMs = Date.now(),
+  signature?: string,
 ): boolean {
+  if (alreadyAppliedBalance(mintAddress, signature)) return false;
   const read = holderAccountLists.get(mintAddress);
   const entry = topHolderLists.get(mintAddress);
+  // No real supply: skip the percent. Do not assume a 1 billion launch supply.
   if (!read || !entry || read.supply <= 0n || moves.length === 0) return false;
-  const pctOf = (raw: bigint) => Number((raw * 1_000_000n) / read.supply) / 10_000;
+  const pctOf = (raw: bigint) => clampShare(Number((raw * 1_000_000n) / read.supply) / 10_000);
   const wide = wideHolderLists.get(mintAddress);
   const knownPct = (owner: string) =>
     entry.holders.find((h) => h.owner === owner)?.pct ?? wide?.holders.find((h) => h.owner === owner)?.pct;
@@ -662,7 +722,7 @@ export function applyHolderBalances(
     if (base === undefined) continue;
     next.set(
       m.owner,
-      accounts.length === 1 ? pctOf(m.post) : Math.max(0, base + pctOf(m.post) - pctOf(m.pre)),
+      accounts.length === 1 ? pctOf(m.post) : clampShare(base + pctOf(m.post) - pctOf(m.pre)),
     );
   }
   // Buyers the list doesn't have yet, summed over the accounts this transaction touched. A later
@@ -704,6 +764,9 @@ export function applyHolderBalances(
   const wideHolders = wide ? ranked(wide.holders, wide.holders.length) : null;
   const topSame = unchanged(entry.holders, holders);
   const wideSame = !wide || !wideHolders || unchanged(wide.holders, wideHolders);
+  // Remember even when nothing moved, so a second delivery of this transaction cannot add the
+  // multi-account difference again.
+  rememberAppliedBalance(mintAddress, signature);
   if (topSame && wideSame) return false;
   if (!topSame) topHolderLists.set(mintAddress, { ...entry, holders, balancesAtMs: nowMs });
   const joined = [...incoming.keys()].filter(
@@ -723,6 +786,8 @@ export function applyHolderBalances(
 export interface HolderListClock {
   readAtMs: number;
   balancesAtMs: number;
+  /** When the next chain enumeration is due. Not moved by a balance tick. */
+  nextReadAtMs: number;
 }
 
 /**
@@ -741,7 +806,14 @@ export function adoptLiveHolders(
     const entry = topHolderLists.get(g.mintAddress);
     if (!entry || nowMs - entry.atMs >= TOP_HOLDERS_MAX_AGE_MS) continue;
     g.holders = entry.holders;
-    clocks.set(g.mintAddress, { readAtMs: entry.readAtMs, balancesAtMs: entry.balancesAtMs });
+    const every = entry.readEveryMs > 0 ? entry.readEveryMs : TOP_HOLDERS_REFRESH_MS;
+    clocks.set(g.mintAddress, {
+      readAtMs: entry.readAtMs,
+      balancesAtMs: entry.balancesAtMs,
+      // The schedule clock (`atMs`) plus the chain-read interval. A quiet keep moves `atMs`
+      // and not `readAtMs`; a balance tick moves only `balancesAtMs`.
+      nextReadAtMs: entry.atMs + every,
+    });
   }
   return clocks;
 }

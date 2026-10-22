@@ -28,6 +28,7 @@ import {
 } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
 import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
+import { charityNamesByMint } from "../curatedFeed.js";
 import { otcDeskFees } from "../otcDesk.js";
 import type { OtcDeskFee } from "../feeDesks.js";
 import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
@@ -57,6 +58,7 @@ import {
   onSupply,
   type CandleFetcher,
   markedWallets,
+  withDevChip,
   withSavedTrades,
   withTrackedMarks,
   type SavedTrade,
@@ -71,6 +73,7 @@ import {
   sageNarrative,
   sageRead,
   sageTrack,
+  withSageCharityName,
   type DayLabelRow,
   type NarrativeAlertRow,
   type SageView,
@@ -513,11 +516,10 @@ async function chartWallets(tokenId: string, mint: string, creator: string | nul
         }
       : null,
     live: liveSnaps[0] ? { readAt: liveSnaps[0].takenAt.getTime() } : null,
-    wallets: withLiveTrades(
-      markedWallets(rows, risk, clusters, opts, kols, knownSides, sides),
-      live,
-      risk,
-      opts,
+    wallets: withDevChip(
+      withLiveTrades(markedWallets(rows, risk, clusters, opts, kols, knownSides, sides), live, risk, opts),
+      listedWallets(listed?.linkedHolders),
+      creator,
     ),
     holderEntries: holderEntries(tapeRows, listedWallets(listed?.linkedHolders), tape),
     saved,
@@ -957,8 +959,11 @@ export async function registerTokenRoutes(
     // stamped; a map that slid out is cleared off the request path (allowHolderWatch).
     const userId = request.user?.userId;
     if (userId) {
-      const watch = allowHolderWatch(userId, mintAddress);
-      if (watch.stamp) opts.holderStamps?.record([mintAddress]);
+      const now = Date.now();
+      const watch = allowHolderWatch(userId, mintAddress, now);
+      // The same instant the watch stores. The flush writes holdersViewedAt a few seconds later;
+      // the release clears that written time, not this poll (viewStamps.ts).
+      if (watch.stamp) opts.holderStamps?.record([mintAddress], now);
       void releaseHolderStamps(opts.holderStamps, watch.released);
     }
     // Shorter than the view's 30-second poll, so each poll reaches here (and stamps the coin).
@@ -1412,7 +1417,11 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
       select: { id: true, symbol: true, name: true, imageUrl: true, firstSeenAt: true },
     }),
   ]);
-  const [snapshots, labels, judged, desks] = await Promise.all([
+  const feeDestination =
+    row?.status === "failed"
+      ? null
+      : (row?.analysis as TokenSageAnalysis | null)?.market?.creator_fee?.destination;
+  const [snapshots, labels, judged, desks, charityNames] = await Promise.all([
     token
       ? prisma.tokenSnapshot.findMany({
           where: { tokenId: token.id },
@@ -1453,14 +1462,20 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
         })
       : ([] as NarrativeAlertRow[]),
     otcDeskFees([mintAddress], { wait: true }).catch(() => new Map<string, OtcDeskFee>()),
+    feeDestination === "charity"
+      ? charityNamesByMint([mintAddress])
+      : Promise.resolve(new Map<string, string>()),
   ]);
-  const read =
+  const read = withSageCharityName(
     row?.status === "failed"
       ? null
       : sageRead(row?.analysis as TokenSageAnalysis | null, row?.depth ?? "basic", {
           trend: (row?.nowRead as { trend?: unknown } | null)?.trend ?? null,
           at: row?.nowAt ?? null,
-        });
+        }),
+    charityNames.get(mintAddress) ?? null,
+  );
+  const desk = desks.get(mintAddress);
   return {
     mint: mintAddress,
     token: token
@@ -1481,9 +1496,9 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
     failReason: row?.status === "failed" ? failCode(row.failReason) : null,
     read,
     /** OTC Desks reward routing, when their roster names it (user ask 2026-10-21). */
-    feeDesk: desks.get(mintAddress)?.line ?? null,
-    /** Each reward coin in feeDesk, so the card can render the mint as that token. */
-    feeRewards: desks.get(mintAddress)?.rewards ?? null,
+    feeDesk: desk?.line ?? null,
+    /** Each reward coin in feeDesk, the same roster row as feeDesk. */
+    feeRewards: desk?.rewards ?? null,
     marketCap: snapshots
       .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
       .reverse()

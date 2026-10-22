@@ -94,6 +94,7 @@ const CALL_SELECT = {
   confidence: true,
   tier: true,
   calibratedPct: true,
+  anchorMcapUsd: true,
 } as const;
 
 export async function loadGuestRows(models: readonly string[], page: number) {

@@ -1,7 +1,16 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { TokenSageAnalysis } from "@trenchscanner/core";
-import { sageCreatorFee, sageLogo, sageNarrative, sageRead, sageTrack, xUrl } from "./tokenSageView.js";
+import {
+  sageCharityLabel,
+  sageCreatorFee,
+  sageLogo,
+  sageNarrative,
+  sageRead,
+  sageTrack,
+  withSageCharityName,
+  xUrl,
+} from "./tokenSageView.js";
 
 const fixture = (name: string) =>
   JSON.parse(
@@ -184,6 +193,20 @@ describe("TokenSage view", () => {
     expect(sageCreatorFee(undefined)).toBeNull();
     expect(sageCreatorFee({ summary: "no destination" })).toBeNull();
     expect(sageRead(fixture("full").analysis, "full")!.creatorFee).toBeNull();
+  });
+
+  it("passes a Pump.fun charity name onto the fee and leaves other fees alone", () => {
+    const name = "St. Jude Children's Research Hospital";
+    const charity = sageCreatorFee({
+      destination: "charity",
+      summary: "creator fees go to charity",
+    })!;
+    expect(charity.charityName).toBeUndefined();
+    expect(withSageCharityName({ creatorFee: charity }, name)?.creatorFee?.charityName).toBe(name);
+    expect(withSageCharityName({ creatorFee: charity }, "   ")?.creatorFee).toEqual(charity);
+    expect(sageCharityLabel("1234")).toBeNull();
+    const dev = sageCreatorFee({ destination: "creator", summary: "creator fees go to the dev" })!;
+    expect(withSageCharityName({ creatorFee: dev }, name)?.creatorFee?.charityName).toBeUndefined();
   });
 
   it("only links to X over https", () => {

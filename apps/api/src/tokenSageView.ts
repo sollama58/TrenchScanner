@@ -232,6 +232,12 @@ export interface SageCreatorFee {
     /** GitHub: SOL claimed across all its coins. Charity: what this coin donated, in its quote token. */
     lifetimeReceived: number | null;
   }[];
+  /**
+   * The organization a Pump.fun charity coin names. Absent when this is not a charity
+   * coin, or Pump.fun's payload did not name one. TokenSage's summary stays generic
+   * either way.
+   */
+  charityName?: string | null;
 }
 
 export interface SageTrackDay {
@@ -335,6 +341,31 @@ export function sageCreatorFee(fee: unknown): SageCreatorFee | null {
     shares,
     recipients,
   };
+}
+
+/**
+ * A charity name safe to show on the fee card. The same shape as the heart's tooltip:
+ * a real name, cut at 80 characters. A blank or a name with no letter stays off the card.
+ */
+export function sageCharityLabel(name: unknown): string | null {
+  if (typeof name !== "string") return null;
+  const text = name.replace(/\s+/g, " ").trim();
+  if (!text || !/\p{L}/u.test(text)) return null;
+  return text.length > 80 ? `${text.slice(0, 79).trimEnd()}…` : text;
+}
+
+/**
+ * The read, with Pump.fun's charity name on a charity fee. Other destinations are left
+ * alone, and a blank name is not attached.
+ */
+export function withSageCharityName<T extends { creatorFee: SageCreatorFee | null }>(
+  read: T | null,
+  name: unknown,
+): T | null {
+  if (!read?.creatorFee || read.creatorFee.destination !== "charity") return read;
+  const charityName = sageCharityLabel(name);
+  if (!charityName) return read;
+  return { ...read, creatorFee: { ...read.creatorFee, charityName } };
 }
 
 function clip(text: unknown, max = MAX_TEXT): string | null {

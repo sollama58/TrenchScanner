@@ -10,8 +10,11 @@ export interface McapCandle {
   h: number;
   l: number;
   c: number;
-  /** The minute's traded volume in USD (0 when Pump.fun sent none). */
-  vol: number;
+  /**
+   * The minute's traded volume in USD. Null when the field was absent: that is not a trade of
+   * size 0. A bucket that reported 0 stays 0.
+   */
+  vol: number | null;
 }
 
 /** Minutes per answer of Pump.fun's candle API: its most recent minutes with a trade. */
@@ -53,7 +56,8 @@ export function parseMcapCandles(body: unknown, supply = PUMP_SUPPLY_TOKENS): Mc
     const h = num(raw?.high);
     const l = num(raw?.low);
     const c = num(raw?.close);
-    const vol = num(raw?.volume);
+    const hasVol = raw != null && Object.prototype.hasOwnProperty.call(raw, "volume") && raw.volume != null;
+    const vol = hasVol ? num(raw.volume) : Number.NaN;
     if (![t, o, h, l, c].every(Number.isFinite) || Math.min(o, h, l, c) <= 0) continue;
     out.push({
       t,
@@ -62,7 +66,9 @@ export function parseMcapCandles(body: unknown, supply = PUMP_SUPPLY_TOKENS): Mc
       h: Math.max(h, o, c) * supply,
       l: Math.min(l, o, c) * supply,
       c: c * supply,
-      vol: Number.isFinite(vol) && vol > 0 ? vol : 0,
+      // Absent volume is not a 0 print. A real 0 stays 0. A present but unreadable volume is 0
+      // so a broken field cannot blank the chart the way a NaN price used to.
+      vol: !hasVol ? null : Number.isFinite(vol) && vol >= 0 ? vol : 0,
     });
   }
   return out.sort((a, b) => a.t - b.t);
@@ -87,6 +93,10 @@ export function drawableCandles(candles: readonly McapCandle[]): McapCandle[] {
   const out: McapCandle[] = [];
   for (const k of candles) {
     if (![k.t, k.o, k.h, k.l, k.c].every(Number.isFinite) || Math.min(k.o, k.h, k.l, k.c) <= 0) continue;
+    if (k.vol == null) {
+      out.push({ ...k, vol: null });
+      continue;
+    }
     out.push(Number.isFinite(k.vol) && k.vol >= 0 ? k : { ...k, vol: 0 });
   }
   return out;
@@ -611,6 +621,43 @@ export function withSavedTrades(
     });
   }
   return out;
+}
+
+/**
+ * The dev chip when the creator's activity row has fallen out of the chart's newest rows. The
+ * chip stays only when that wallet is still on the holder list; an empty trade list adds no
+ * chart mark. A wallet already tagged from the tape is left as it is.
+ */
+export function withDevChip(
+  wallets: readonly MarkedWallet[],
+  listed: ReadonlySet<string>,
+  creator: string | null,
+): MarkedWallet[] {
+  if (!creator || !listed.has(creator)) return [...wallets];
+  const i = wallets.findIndex((w) => w.wallet === creator);
+  if (i >= 0) {
+    const w = wallets[i]!;
+    if (w.tags.includes("creator")) return [...wallets];
+    const out = [...wallets];
+    out[i] = { ...w, tags: ["creator", ...w.tags] };
+    return out;
+  }
+  return [
+    ...wallets,
+    {
+      wallet: creator,
+      tags: ["creator"],
+      score: null,
+      dumps: null,
+      coins: null,
+      funder: null,
+      kol: null,
+      solIn: 0,
+      solOut: 0,
+      heldPct: null,
+      trades: [],
+    },
+  ];
 }
 
 /** Riskiest first (creator, KOL and linked wallets ahead of unscored ones), within the caps. */

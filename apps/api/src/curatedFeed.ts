@@ -190,6 +190,8 @@ export async function creatorFeesByMint(
     otcDeskFees(unique, { wait: opts?.waitForDesk === true }).catch(() => new Map<string, OtcDeskFee>()),
   ]);
   const out = new Map<string, CardCreatorFee>();
+  // One roster row. The sentence and its coins are written together, including when
+  // the feed has not waited and both are still empty.
   const deskFields = (mint: string): Pick<CardCreatorFee, "deskLine" | "deskRewards"> => {
     const desk = desks.get(mint);
     return { deskLine: desk?.line ?? null, deskRewards: desk?.rewards ?? null };
@@ -237,18 +239,20 @@ export async function latestSnapshotsByToken(
       carriedAt: Date | null;
       carriedBalancesAt: Date | null;
       carriedChainReadAt: Date | null;
+      carriedNextReadAt: Date | null;
     })[]
   >`
     SELECT s.*, h."linkedHolders" AS "carriedHolders", h."linkedClusters" AS "carriedClusters",
            h."sameTimeClusters" AS "carriedSameTime", h."takenAt" AS "carriedAt",
-           h."holderBalancesAt" AS "carriedBalancesAt", h."holderChainReadAt" AS "carriedChainReadAt"
+           h."holderBalancesAt" AS "carriedBalancesAt", h."holderChainReadAt" AS "carriedChainReadAt",
+           h."holderNextReadAt" AS "carriedNextReadAt"
     FROM unnest(${ids}::text[]) AS t(id)
     CROSS JOIN LATERAL (
       SELECT * FROM "TokenSnapshot" WHERE "tokenId" = t.id ORDER BY "takenAt" DESC LIMIT 1
     ) s
     LEFT JOIN LATERAL (
       SELECT "linkedHolders", "linkedClusters", "sameTimeClusters", "takenAt",
-             "holderBalancesAt", "holderChainReadAt" FROM "TokenSnapshot"
+             "holderBalancesAt", "holderChainReadAt", "holderNextReadAt" FROM "TokenSnapshot"
       WHERE s."linkedHolders" IS NULL
         AND "tokenId" = t.id
         AND "takenAt" < s."takenAt"
@@ -266,6 +270,7 @@ export async function latestSnapshotsByToken(
         carriedAt,
         carriedBalancesAt,
         carriedChainReadAt,
+        carriedNextReadAt,
         ...s
       }) => [
         s.tokenId,
@@ -278,6 +283,7 @@ export async function latestSnapshotsByToken(
               ...(carriedAt ? { holdersAt: carriedChainReadAt ?? carriedAt } : {}),
               ...(carriedBalancesAt ? { holderBalancesAt: carriedBalancesAt } : {}),
               ...(carriedChainReadAt ? { holderChainReadAt: carriedChainReadAt } : {}),
+              ...(carriedNextReadAt ? { holderNextReadAt: carriedNextReadAt } : {}),
             }
           : s,
       ],
@@ -331,6 +337,7 @@ export async function withCarriedHolderList<
       takenAt: true,
       holderBalancesAt: true,
       holderChainReadAt: true,
+      holderNextReadAt: true,
     },
   });
   return carried === null
@@ -343,6 +350,7 @@ export async function withCarriedHolderList<
         holdersAt: carried.holderChainReadAt ?? carried.takenAt,
         ...(carried.holderBalancesAt ? { holderBalancesAt: carried.holderBalancesAt } : {}),
         ...(carried.holderChainReadAt ? { holderChainReadAt: carried.holderChainReadAt } : {}),
+        ...(carried.holderNextReadAt ? { holderNextReadAt: carried.holderNextReadAt } : {}),
       };
 }
 
@@ -369,15 +377,16 @@ export async function withCarriedHolderLists<
       takenAt: Date;
       holderBalancesAt: Date | null;
       holderChainReadAt: Date | null;
+      holderNextReadAt: Date | null;
     }[]
   >`
     SELECT s.id, h."linkedHolders", h."linkedClusters", h."sameTimeClusters", h."takenAt",
-           h."holderBalancesAt", h."holderChainReadAt"
+           h."holderBalancesAt", h."holderChainReadAt", h."holderNextReadAt"
     FROM unnest(${ids}::text[]) AS t(id)
     JOIN "TokenSnapshot" s ON s.id = t.id
     CROSS JOIN LATERAL (
       SELECT "linkedHolders", "linkedClusters", "sameTimeClusters", "takenAt",
-             "holderBalancesAt", "holderChainReadAt" FROM "TokenSnapshot"
+             "holderBalancesAt", "holderChainReadAt", "holderNextReadAt" FROM "TokenSnapshot"
       WHERE "tokenId" = s."tokenId"
         AND "takenAt" < s."takenAt"
         AND "takenAt" >= s."takenAt" - make_interval(secs => ${CARRIED_HOLDER_LIST_MS / 1000}::float8)
@@ -398,6 +407,7 @@ export async function withCarriedHolderLists<
           holdersAt: carried.holderChainReadAt ?? carried.takenAt,
           ...(carried.holderBalancesAt ? { holderBalancesAt: carried.holderBalancesAt } : {}),
           ...(carried.holderChainReadAt ? { holderChainReadAt: carried.holderChainReadAt } : {}),
+          ...(carried.holderNextReadAt ? { holderNextReadAt: carried.holderNextReadAt } : {}),
         };
   });
 }
@@ -832,6 +842,43 @@ export function cardSnapshot<S extends { flaggedTrades?: unknown }>(snapshot: S)
   return rest;
 }
 
+/**
+ * Age at the alert, from the newest scan, so the feed's Age tile still has a clock after the
+ * alert snapshot is dropped. The tile ages `ageMinutes` forward from the snapshot's own time,
+ * which for the stand-in is the alert.
+ */
+function ageMinutesAtAlert(
+  alertAt: Date,
+  latest: { ageMinutes?: number | null; takenAt?: Date | null } | null,
+): number | null {
+  if (!latest || latest.ageMinutes == null || !(latest.takenAt instanceof Date)) return null;
+  const age = latest.ageMinutes + (alertAt.getTime() - latest.takenAt.getTime()) / 60_000;
+  return Number.isFinite(age) && age >= 0 ? age : null;
+}
+
+/** Volume over the cap the card shows. A ratio stored against the scan cap is moved onto the anchor. */
+function anchorVolumeToMcap(
+  stored: { marketCapUsd?: number | null; volume24hUsd?: number | null; volumeToMcapRatio?: number | null },
+  anchorMcapUsd: number,
+): number | null {
+  const volume = stored.volume24hUsd;
+  if (typeof volume === "number" && Number.isFinite(volume) && anchorMcapUsd > 0)
+    return volume / anchorMcapUsd;
+  const ratio = stored.volumeToMcapRatio;
+  const scanCap = stored.marketCapUsd;
+  if (
+    typeof ratio === "number" &&
+    Number.isFinite(ratio) &&
+    typeof scanCap === "number" &&
+    scanCap > 0 &&
+    anchorMcapUsd > 0 &&
+    scanCap !== anchorMcapUsd
+  ) {
+    return (ratio * scanCap) / anchorMcapUsd;
+  }
+  return typeof ratio === "number" && Number.isFinite(ratio) ? ratio : null;
+}
+
 export function serializeCuratedAlert(
   alert: CuratedAlertWithRelations,
   currentMarketCap: (
@@ -909,7 +956,7 @@ export function serializeCuratedAlert(
     mintAuthorityActive: null,
     freezeAuthorityActive: null,
     lpBurned: null,
-    ageMinutes: null,
+    ageMinutes: ageMinutesAtAlert(alert.createdAt, latestSnapshot),
     // The token's composite score is a scan figure this synthesized snapshot doesn't hold (the
     // card shows it under "Score"); the model's own confidence is on `curated`.
     score: null,
@@ -928,6 +975,7 @@ export function serializeCuratedAlert(
     ...stored,
     priceUsd: alert.anchorPriceUsd,
     marketCapUsd: alert.anchorMcapUsd,
+    volumeToMcapRatio: anchorVolumeToMcap(stored, alert.anchorMcapUsd),
   });
 
   // The peak the card's ATH section shows. Derived from the outcome watcher's peak rather than
@@ -1028,6 +1076,8 @@ export interface ModelCall {
   tier: string | null;
   calibratedPct: number | null;
   alertedAt: Date;
+  /** The call's stored anchor cap. Null when that row did not carry one. */
+  mcapUsd: number | null;
 }
 
 /**
@@ -1068,6 +1118,7 @@ export function groupSameTokenCalls<
     confidence: number;
     tier?: string | null;
     calibratedPct?: number | null;
+    anchorMcapUsd?: number | null;
   },
 >(rowsNewestFirst: T[], windowMs: number): CallGroup<T>[] {
   const open = new Map<string, { newest: T; rows: T[] }>();
@@ -1098,6 +1149,7 @@ export function groupSameTokenCalls<
         tier: r.tier ?? null,
         calibratedPct: r.calibratedPct ?? null,
         alertedAt: r.createdAt,
+        mcapUsd: typeof r.anchorMcapUsd === "number" && r.anchorMcapUsd > 0 ? r.anchorMcapUsd : null,
       })),
     };
   });

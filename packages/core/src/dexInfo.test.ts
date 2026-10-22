@@ -3,6 +3,7 @@ import {
   DEX_INFO_ORDERS_PER_CYCLE,
   DEX_INFO_RECHECK_MS,
   dexInfoMintsToAsk,
+  nextDexPayment,
   pairHasTokenInfo,
   readDexInfoPayment,
 } from "./dexInfo.js";
@@ -54,6 +55,19 @@ describe("readDexInfoPayment", () => {
     expect(
       readDexInfoPayment([{ type: "communityTakeover", status: "on-hold", paymentTimestamp: String(SEC) }]),
     ).toEqual({ type: "communityTakeover", updated: false, paidAtMs: MS });
+  });
+});
+
+describe("nextDexPayment", () => {
+  it("keeps a missing read from becoming a payment, and drops a cancelled newest order", () => {
+    expect(nextDexPayment(undefined)).toBeUndefined();
+    expect(nextDexPayment(null)).toEqual({ paidAtMs: null, updated: false });
+    const older = { type: "tokenProfile" as const, paidAtMs: MS, updated: false };
+    expect(nextDexPayment(older)).toEqual({ paidAtMs: MS, updated: false });
+    expect(nextDexPayment({ ...older, updated: true, paidAtMs: MS - 3_600_000 })).toEqual({
+      paidAtMs: MS - 3_600_000,
+      updated: true,
+    });
   });
 });
 

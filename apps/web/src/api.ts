@@ -286,6 +286,11 @@ export interface Snapshot {
    * in after this isn't on the list until the next read. Absent on scans from before it.
    */
   holderChainReadAt?: string | null;
+  /**
+   * When the next chain enumeration is due. The holders countdown counts to this. A balance tick
+   * does not move it. Absent on rows from before it existed.
+   */
+  holderNextReadAt?: string | null;
   priceUsd: number;
   marketCapUsd: number;
   liquidityUsd: number | null;
@@ -516,6 +521,8 @@ export interface ModelCall {
   tier?: string | null;
   calibratedPct?: number | null;
   alertedAt: string;
+  /** The call's stored anchor cap. Absent from older API builds. */
+  mcapUsd?: number | null;
 }
 
 /** GET /live/market: current market data for the tokens on screen, seconds old. */

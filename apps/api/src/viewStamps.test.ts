@@ -1,7 +1,20 @@
 import "./bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
-import { releaseHolderStamps, ViewStampBuffer } from "./viewStamps.js";
+import { holderStampClearAt, releaseHolderStamps, ViewStampBuffer } from "./viewStamps.js";
+
+describe("holderStampClearAt", () => {
+  it("clears through the flush time, which is later than the poll the release stored", () => {
+    const pollAt = 1_700_000_000_000;
+    const writtenAt = pollAt + 4_000;
+    expect(holderStampClearAt(pollAt, { pollAt, writtenAt })).toBe(writtenAt);
+    // A stamp from a later poll is not this release's.
+    expect(holderStampClearAt(pollAt, { pollAt: pollAt + 30_000, writtenAt: pollAt + 34_000 })).toBe(pollAt);
+    // The previous flush, still the stamp in the column when a newer poll was dismissed unflushed.
+    expect(holderStampClearAt(pollAt + 30_000, { pollAt, writtenAt })).toBe(pollAt + 30_000);
+    expect(holderStampClearAt(pollAt, undefined)).toBe(pollAt);
+  });
+});
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `view-stamp-test-${Date.now()}`;
@@ -123,6 +136,40 @@ describe.skipIf(!dbAvailable)("ViewStampBuffer", () => {
     await buffer.stop();
 
     expect(await stampedCount()).toBe(3);
+  });
+
+  it("clears a flushed bubble-map stamp at the time that was written, not the earlier poll", async () => {
+    const tokens = await prisma.token.findMany({
+      where: { id: { in: tokenIds } },
+      select: { mintAddress: true },
+    });
+    const mint = tokens[0]!.mintAddress;
+    const kept = tokens[1]!.mintAddress;
+    const pollAt = Date.now() - 5_000;
+    const buffer = new ViewStampBuffer({ flushIntervalMs: 60_000, stamp: "holders" });
+    buffer.record([mint], pollAt);
+    await buffer.flush();
+    const stamped = await prisma.token.findUnique({
+      where: { mintAddress: mint },
+      select: { holdersViewedAt: true },
+    });
+    expect(stamped?.holdersViewedAt).not.toBeNull();
+    expect(stamped!.holdersViewedAt!.getTime()).toBeGreaterThan(pollAt);
+    // A later poll's stamp, written after this flush, must survive a release of the earlier poll.
+    const later = new Date(stamped!.holdersViewedAt!.getTime() + 60_000);
+    await prisma.token.update({ where: { mintAddress: kept }, data: { holdersViewedAt: later } });
+    await releaseHolderStamps(buffer, [
+      { mint, at: pollAt },
+      { mint: kept, at: pollAt },
+    ]);
+    const rows = await prisma.token.findMany({
+      where: { mintAddress: { in: [mint, kept] } },
+      select: { mintAddress: true, holdersViewedAt: true },
+    });
+    const at = (id: string) => rows.find((row) => row.mintAddress === id)?.holdersViewedAt ?? null;
+    expect(at(mint)).toBeNull();
+    expect(at(kept)?.toISOString()).toBe(later.toISOString());
+    await buffer.stop();
   });
 
   it("clears a released bubble-map stamp, and leaves a newer one", async () => {

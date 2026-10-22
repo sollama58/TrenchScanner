@@ -1209,7 +1209,9 @@ function standIn(
 ): StandIn {
   const r = kept?.reading;
   const takenAt = kept?.at ?? token.liveDataAt ?? new Date();
-  const marketCapUsd = r?.marketCapUsd ?? token.liveMarketCapUsd ?? 0;
+  // A missing cap stored as 0 is not a cap. A real reading on either side wins.
+  const cap = (n: number | null | undefined) => (typeof n === "number" && n > 0 ? n : null);
+  const marketCapUsd = cap(r?.marketCapUsd) ?? cap(token.liveMarketCapUsd) ?? 0;
   const created = r?.pairCreatedAt ?? token.firstSeenAt;
   return {
     takenAt,

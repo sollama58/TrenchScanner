@@ -378,9 +378,14 @@ export interface OnChainProfile {
   holderBalancesAt?: Date;
   /**
    * When the set of wallets on `linkedHolders` was last enumerated from the chain. A buyer from
-   * outside the list isn't on it until the next enumeration.
+   * outside the list isn't on it until the next enumeration. A balance tick does not move this.
    */
   holderChainReadAt?: Date;
+  /**
+   * When the next chain enumeration is due (the re-read schedule: a chain read or a quiet keep,
+   * not a balance tick). The holders countdown counts to this. Undefined on rows from before it.
+   */
+  holderNextReadAt?: Date;
   /**
    * Top holders funded within a minute of each other, whoever paid (core's sameTimeClusters): the
    * % of supply they hold, the group count, and the groups. Read with the linked reading.

@@ -16,7 +16,18 @@ import type {
 import { customSeriesDefaultOptions } from "lightweight-charts";
 import type { DrawColors, Drawings, DrawScale } from "../chartDrawings";
 import type { PathStep } from "../pricePathing";
-import { layoutMarks, type MarkSpot, type PlacedMark } from "../chartMarkLayout";
+import {
+  bubbleMoreCount,
+  collapseBubbleSpots,
+  layoutMarks,
+  OWN_TRADE_BASE,
+  ownTradeRadius,
+  ownTradeTop,
+  placeOwnTrades,
+  type MarkSpot,
+  type OwnTradeSpot,
+  type PlacedMark,
+} from "../chartMarkLayout";
 import { markRadius, type MarkShape, type WalletMark } from "../walletMarks";
 
 /** The canvas target the library hands its renderers (fancy-canvas's CanvasRenderingTarget2D). */
@@ -172,10 +183,19 @@ export interface OverlayState {
   /** The low and high there (the candle's; the price itself on the line). Marks clear the high. */
   rangeAt: (t: number) => { lo: number; hi: number } | null;
   /**
-   * Y of the highest candle in view (smaller is higher). The trade bubbles sit in a band above
-   * it (user ask 2026-10-21). Null: each mark clears its own candle high.
+   * Y of the highest candle in view (smaller is higher). Trade bubbles do not use it: they sit
+   * a grid line above their own candle. Kept so a caller can still measure the series.
    */
   seriesTop: () => number | null;
+  /** The bar a time falls in. Bubbles group wallets that share a bar, not every nearby trade. */
+  column: (t: number) => number;
+  /**
+   * One horizontal grid line, in price, at this candle high. 0 when the scale is not ready.
+   * On a log scale this is the chart's own scale at that price, not a linear tick of the pane.
+   */
+  gridStep: (atPrice: number) => number;
+  /** How many of those grid lines a trade bubble's bottom sits above the candle high. */
+  bubbleSteps: number;
   events: OverlayEvent[];
   /** How far down the plot the events' flags start (px), clear of the readout. */
   flagTop: number;
@@ -207,10 +227,11 @@ export interface OverlayState {
 /**
  * Everything the chart marks over its candles, as one series primitive: the alert and model lines
  * with their flags along the top, labeled wallets' trades as lettered marks (a circle, square or
- * diamond, filled for a buy, sized by SOL) or KOLs' pictures, the trader's own B and S arrows, a
- * DexScreener token-info bubble when its payment time is known, an optional line to the candle,
- * the predicted path, and the drawings. Trade bubbles sit in a band above the series
- * (chartMarkLayout.ts, user ask 2026-10-21).
+ * diamond, filled for a buy, sized by SOL) or KOLs' pictures, the trader's own B and S triangles
+ * just under the candle they traded, a DexScreener token-info bubble when its payment time is
+ * known, an optional line to the candle, the predicted path, and the drawings. Letter and picture
+ * bubbles sit a grid line or two above their own candle (chartMarkLayout.ts). The trader's own
+ * triangles do not: they anchor to the candle low.
  */
 export class ChartOverlay implements ISeriesPrimitive<Time> {
   state: OverlayState;
@@ -328,10 +349,10 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
       }
     }
 
-    // Trade bubbles sit in one band above the series (user ask 2026-10-21). The candle high is
-    // each mark's own ceiling; seriesTop is the highest candle in view, which wins when it is
-    // higher, so a bubble cannot cover a neighbouring candle. Size scales the radius. Distance
-    // moves the band off the series; marks in one stack stay a fixed gap apart (chartMarkLayout.ts).
+    // Letter and picture bubbles clear their own candle by a few grid lines, in price
+    // (chartMarkLayout.ts). The trader's triangles are placed under the candle low and are not
+    // given a candle high, so this distance does not move them. Size scales the radius. A stack
+    // is worked out at those prices, not in a band at the top of the pane.
     const spots: MarkSpot<MarkItem>[] = [];
     const spot = (item: MarkItem, t: number, side: "buy" | "sell", r: number) => {
       const x = s.x(t);
@@ -340,24 +361,61 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
       const priceY = v === null ? null : s.y(v);
       const edgeY = range === null ? priceY : s.y(range.hi);
       if (x === null || priceY === null || edgeY === null || x < -r || x > width + r) return;
-      spots.push({ item, side, x, priceY, edgeY, r });
+      const hi = range?.hi;
+      const gridStep = hi != null && hi > 0 ? s.gridStep(hi) : 0;
+      spots.push({
+        item,
+        side,
+        x,
+        priceY,
+        edgeY,
+        r,
+        column: s.column(t),
+        ...(hi != null && hi > 0 && gridStep > 0 ? { hi, gridStep } : {}),
+      });
     };
     const scale = s.markScale > 0 ? s.markScale : 1;
-    const gap = s.markGap > 0 ? s.markGap : 1;
-    // The trader's own first, so at a shared time they take the row nearest the candles.
-    for (const tr of s.trades) spot({ trade: tr }, tr.t, tr.side, 8 * scale);
+    const steps = s.bubbleSteps > 0 && Number.isFinite(s.bubbleSteps) ? s.bubbleSteps : 1;
     if (s.dexInfo) spot({ dex: s.dexInfo }, s.dexInfo.t, "buy", 12 * scale);
     for (const m of s.marks)
       spot({ mark: m }, m.t, m.side, (s.pic(m) ? picRadius(m.sol) : markRadius(m.sol)) * scale);
-    const seriesTop = s.seriesTop() ?? undefined;
-    const placed = layoutMarks(spots, MARK_PITCH * scale, height, gap, seriesTop);
-    this.placed = placed;
+    // One bubble per KOL (with that KOL's side wallets) on a bar. The detail still lists every wallet.
+    const bubbles = collapseBubbleSpots(spots, (item) => item.mark?.bubble ?? null);
+    const placed = layoutMarks(bubbles, MARK_PITCH * scale, height, 1, undefined, { steps, toY: s.y });
+    // The signed-in trader's own trades: a triangle just under that candle's low, in price
+    // space, not in the bubble band (placeOwnTrades).
+    const ownSpots: OwnTradeSpot<MarkItem>[] = [];
+    const reach = ownTradeRadius(scale);
+    for (const tr of s.trades) {
+      const x = s.x(tr.t);
+      const v = s.valueAt(tr.t);
+      const range = s.rangeAt(tr.t);
+      const priceY = v === null ? null : s.y(v);
+      const lowY = range === null ? priceY : s.y(range.lo);
+      if (x === null || priceY === null || lowY === null || x < -reach || x > width + reach) continue;
+      ownSpots.push({ item: { trade: tr }, side: tr.side, x, lowY, priceY });
+    }
+    const own = placeOwnTrades(ownSpots, scale);
+    const ownPlaced: PlacedMark<MarkItem>[] = own.map((p) => ({
+      item: p.item,
+      side: p.side,
+      x: p.x,
+      priceY: p.priceY,
+      edgeY: p.lowY,
+      r: p.r,
+      y: p.y,
+      level: p.level,
+      more: p.more,
+      grouped: [],
+    }));
+    this.placed = [...placed, ...ownPlaced];
     // The line to the candle, under every mark: from the price's dot to the mark. Off by default.
     if (s.markStem) {
-      for (const p of placed) {
+      for (const p of this.placed) {
         const color = p.item.dex ? c.dex : p.side === "buy" ? c.buy : c.sell;
-        // Every bubble is above the series, so the line meets the bottom of the bubble.
-        const toward = p.y + p.r;
+        // Bubbles are above the series, so the line meets the bottom of the bubble. An own-trade
+        // triangle is under the candle, so the line meets its top edge.
+        const toward = p.item.trade ? ownTradeTop(p.side, p.y, p.r) : p.y + p.r;
         ctx.strokeStyle = color;
         ctx.globalAlpha = 0.55;
         ctx.lineWidth = hr;
@@ -373,7 +431,7 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
       }
     }
     ctx.textAlign = "center";
-    for (const p of placed) {
+    for (const p of this.placed) {
       const { x, y, r } = p;
       if (p.item.dex) {
         // DexScreener token info. "DS" is this payment, not a dev's mark (letter D).
@@ -390,21 +448,31 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
         ctx.font = `800 ${Math.round(Math.max(7, r * 0.7) * vr)}px ${c.font}`;
         ctx.fillText("DS", x * hr, (y + 0.5) * vr);
       } else if (p.item.trade) {
-        // The trader's own: an arrow, B or S on it. Both sit in the band above the candles.
+        // The trader's own: a triangle on the candle, B or S on it. A buy points up at the
+        // candle; a sell points down. The light stroke keeps either one readable on the wick.
         const buy = p.side === "buy";
-        ctx.fillStyle = buy ? c.buy : c.sell;
         ctx.beginPath();
         ctx.moveTo(x * hr, (buy ? y - r : y + r) * vr);
-        ctx.lineTo((x - r) * hr, (buy ? y + r * 0.7 : y - r * 0.7) * vr);
-        ctx.lineTo((x + r) * hr, (buy ? y + r * 0.7 : y - r * 0.7) * vr);
+        ctx.lineTo((x - r) * hr, (buy ? y + OWN_TRADE_BASE * r : y - OWN_TRADE_BASE * r) * vr);
+        ctx.lineTo((x + r) * hr, (buy ? y + OWN_TRADE_BASE * r : y - OWN_TRADE_BASE * r) * vr);
         ctx.closePath();
+        ctx.fillStyle = buy ? c.buy : c.sell;
+        ctx.globalAlpha = 1;
         ctx.fill();
+        ctx.lineJoin = "round";
+        ctx.lineWidth = 2.25 * hr;
+        ctx.strokeStyle = c.eventText;
+        ctx.stroke();
+        ctx.lineJoin = "miter";
         ctx.fillStyle = c.page;
-        ctx.font = `800 ${Math.round(8.5 * vr)}px ${c.font}`;
-        ctx.fillText(buy ? "B" : "S", x * hr, (buy ? y + 1.5 : y - 1) * vr);
+        ctx.font = `800 ${Math.round(9.5 * vr)}px ${c.font}`;
+        ctx.fillText(buy ? "B" : "S", x * hr, (buy ? y + 2 : y - 1.5) * vr);
       } else {
         const m = p.item.mark!;
-        const hot = s.hot.has(m) || p.more.some((o) => !!o.mark && s.hot.has(o.mark));
+        const hot =
+          s.hot.has(m) ||
+          p.more.some((o) => !!o.mark && s.hot.has(o.mark)) ||
+          p.grouped.some((o) => !!o.mark && s.hot.has(o.mark));
         const pic = s.pic(m);
         if (pic) {
           // A KOL's picture in a ring of the trade's colour: green for a buy, red for a sale.
@@ -440,9 +508,10 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
           ctx.fillText(m.letter, x * hr, (y + 0.5) * vr);
         }
       }
-      if (p.more.length > 0) {
-        // The rest of a full stack, counted on its outermost mark.
-        const text = `+${p.more.length}`;
+      const extra = bubbleMoreCount(p);
+      if (extra > 0) {
+        // Grouped wallets and a stack that ran out of rows, counted on this bubble.
+        const text = `+${extra}`;
         ctx.font = `700 ${Math.round(9 * vr)}px ${c.font}`;
         const w = ctx.measureText(text).width / hr + 8;
         const bx = x + r * 0.55;

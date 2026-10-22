@@ -20419,7 +20419,7 @@ dialog.tm-modal.tm-terminal::backdrop {
 }
 .tm-modal.tm-terminal .tm-head > .tm-figs {
   grid-area: figs;
-  grid-template-columns: repeat(4, max-content);
+  grid-template-columns: repeat(5, max-content);
   justify-content: center;
   gap: 8px;
   margin: 0;

@@ -14,7 +14,7 @@ import { loadWalletNames, type WalletName } from "./walletNames.js";
 
 export interface LiveTraderLabel {
   /** A roster KOL ("kol") or one of its Known Sides ("kol-side"), named as /wallets/names names it. */
-  name?: { name: string; source: "kol" | "kol-side"; avatar?: string };
+  name?: { name: string; source: "kol" | "kol-side"; avatar?: string; kolWallet?: string };
   /** A KOL's funded wallet or Probable Side: its strongest tie, funded ahead of probable. */
   side?: { kolWallet: string; kolName: string | null; funded?: true; avatar?: string };
   /** The wallet book's flags: a risk score of RISKY_WALLET_SCORE or more, a known dumper, a winner. */
@@ -43,9 +43,15 @@ export function traderLabel(
   risk?: { score: number; dumper: boolean; winner: boolean },
 ): LiveTraderLabel | null {
   const out: LiveTraderLabel = {};
-  if (name && (name.source === "kol" || name.source === "kol-side"))
-    out.name = { name: name.name, source: name.source, ...(name.avatar ? { avatar: name.avatar } : {}) };
-  else {
+  if (name && (name.source === "kol" || name.source === "kol-side")) {
+    const kolWallet = name.source === "kol-side" ? sides.find((s) => s.known)?.kolWallet : undefined;
+    out.name = {
+      name: name.name,
+      source: name.source,
+      ...(name.avatar ? { avatar: name.avatar } : {}),
+      ...(kolWallet ? { kolWallet } : {}),
+    };
+  } else {
     // A Known Side comes named as one above; a KOL is never someone else's side.
     const others = sides.filter((s) => !s.known);
     const s = others.find((x) => x.funded) ?? others[0];

@@ -327,6 +327,16 @@ export class JupiterClient {
 const finite = (v: number | null | undefined): number | undefined =>
   typeof v === "number" && Number.isFinite(v) ? v : undefined;
 
+/** A missing or zero cap is not a cap. Zero must not hide a real fdv. */
+const positive = (v: number | null | undefined): number | undefined => {
+  const n = finite(v);
+  return n !== undefined && n > 0 ? n : undefined;
+};
+
+/** A two-sided total only when both sides were reported. One missing side is not zero. */
+const sumBoth = (a: number | undefined, b: number | undefined): number | undefined =>
+  a === undefined || b === undefined ? undefined : a + b;
+
 /**
  * Exported for tests. The launches in one of Jupiter's lists from a launchpad the scan takes
  * (SCANNED_LAUNCHPADS: Pump.fun and Stonks), as discovered coins: no description or socials (the
@@ -353,7 +363,8 @@ export function parseJupiterMovingLaunches(body: unknown): DiscoveredCoin[] {
           : undefined,
       graduated: Boolean(t.graduatedPool || t.graduatedAt),
       // On the coin's supply now (fdv: its price on the mint's supply, after burns - mintSupply.ts).
-      marketCapUsd: priceUsd === undefined || priceUsd <= 0 ? undefined : (finite(t.fdv) ?? finite(t.mcap)),
+      marketCapUsd:
+        priceUsd === undefined || priceUsd <= 0 ? undefined : (positive(t.fdv) ?? positive(t.mcap)),
       launchpad,
       // No socials on the list: left undefined (unknown), never false. The scan stored a false
       // here until 2026-10-16 and the models read "0 = unread" as a signal (data audit).
@@ -377,15 +388,12 @@ export function parseJupiterTokens(body: unknown, requested: Set<string>): Candi
       name: t.name,
       // No price reads as 0, the same "no price" DexScreener's parser gives a pair without one.
       priceUsd: finite(t.usdPrice) ?? 0,
-      marketCapUsd: finite(t.mcap) ?? finite(t.fdv) ?? 0,
+      marketCapUsd: positive(t.mcap) ?? positive(t.fdv) ?? 0,
       // Jupiter's liquidity reads about half of DexScreener's for the same pools (2026-10-08: 0.47
       // to 0.50 of it on four pumpswap pools), one side of the pool where DexScreener counts both.
       // Doubled, so the empty-wallet check's cap (half the liquidity) means what it always has.
       liquidityUsd: finite(t.liquidity) === undefined ? undefined : finite(t.liquidity)! * 2,
-      volume24hUsd:
-        buyVolume === undefined && sellVolume === undefined
-          ? undefined
-          : (buyVolume ?? 0) + (sellVolume ?? 0),
+      volume24hUsd: sumBoth(buyVolume, sellVolume),
       buys24h: finite(stats?.numBuys),
       sells24h: finite(stats?.numSells),
       priceChange24hPct: finite(stats?.priceChange),
@@ -394,9 +402,6 @@ export function parseJupiterTokens(body: unknown, requested: Set<string>): Candi
   }
   return [...out.values()];
 }
-
-const sumOrUndefined = (a: number | undefined, b: number | undefined): number | undefined =>
-  a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0);
 
 /**
  * DexScreener's venue id for a Jupiter launchpad. Pump.fun and Stonks as before. Meteora DBC
@@ -444,7 +449,7 @@ export function parseJupiterLaunches(
     const launchpad = normalizeLaunchpad(t.launchpad);
     // On the coin's supply now, after burns, as DexScreener counts it too (mintSupply.ts): fdv is
     // the price on the mint's whole supply, which burns take out of.
-    const marketCapUsd = finite(t.fdv) ?? finite(t.mcap);
+    const marketCapUsd = positive(t.fdv) ?? positive(t.mcap);
     if (priceUsd === undefined || priceUsd <= 0 || marketCapUsd === undefined || marketCapUsd <= 0) continue;
     // A Stonks coin's LaunchLab curve is "stonkfun" (GeckoTerminal's name: DexScreener lists no
     // curve), and it graduates into a Raydium pool. Meteora DBC and Raydium LaunchLab are the
@@ -472,15 +477,15 @@ export function parseJupiterLaunches(
       marketCapUsd,
       // Doubled, as parseJupiterTokens does: Jupiter counts one side of the pool.
       liquidityUsd: isCurveVenue(dexId) || liquidity === undefined ? undefined : liquidity * 2,
-      volume24hUsd: sumOrUndefined(finite(h24?.buyVolume), finite(h24?.sellVolume)),
+      volume24hUsd: sumBoth(finite(h24?.buyVolume), finite(h24?.sellVolume)),
       buys24h: finite(h24?.numBuys),
       sells24h: finite(h24?.numSells),
       priceChange5mPct: finite(m5?.priceChange),
       priceChange1hPct: finite(h1?.priceChange),
       priceChange6hPct: finite(t.stats6h?.priceChange),
       priceChange24hPct: finite(h24?.priceChange),
-      volume5mUsd: sumOrUndefined(finite(m5?.buyVolume), finite(m5?.sellVolume)),
-      volume1hUsd: sumOrUndefined(finite(h1?.buyVolume), finite(h1?.sellVolume)),
+      volume5mUsd: sumBoth(finite(m5?.buyVolume), finite(m5?.sellVolume)),
+      volume1hUsd: sumBoth(finite(h1?.buyVolume), finite(h1?.sellVolume)),
       buys5m: finite(m5?.numBuys),
       sells5m: finite(m5?.numSells),
       buys1h: finite(h1?.numBuys),
@@ -522,7 +527,7 @@ export function parseJupiterQuotes(
   for (const t of body as JupiterToken[]) {
     if (!t || typeof t.id !== "string" || !requested.has(t.id) || out.has(t.id)) continue;
     const priceUsd = finite(t.usdPrice);
-    const marketCapUsd = finite(t.mcap) ?? finite(t.fdv);
+    const marketCapUsd = positive(t.mcap) ?? positive(t.fdv);
     if (priceUsd === undefined || priceUsd <= 0 || marketCapUsd === undefined || marketCapUsd <= 0) continue;
     const updatedAt = typeof t.updatedAt === "string" ? new Date(t.updatedAt) : undefined;
     out.set(t.id, {

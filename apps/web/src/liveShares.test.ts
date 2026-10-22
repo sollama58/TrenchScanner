@@ -98,6 +98,14 @@ describe("withLiveShares", () => {
     expect(withLiveShares(reading, new Map())).toBe(reading);
   });
 
+  it("clamps a displayed share at 100", () => {
+    const live = withLiveShares(
+      { ...reading, linkedHolders: [{ wallet: "a", pct: 98 }] },
+      new Map([["a", 5]]),
+    );
+    expect(live.linkedHolders?.[0]?.pct).toBe(100);
+  });
+
   it("replaces a holder who sold down with the buyer who now outranks them", () => {
     const live = withLiveShares(
       reading,

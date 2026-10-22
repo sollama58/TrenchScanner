@@ -61,6 +61,22 @@ export function readDexInfoPayment(body: unknown): DexInfoPayment | null {
   return { type: latest.type, paidAtMs: latest.paidAtMs, updated: counted.length > 1 };
 }
 
+/**
+ * What one orders read does to the stored Dex bubble.
+ * `undefined` (the mint was not in the answer: the call failed) leaves the stored payment alone.
+ * A missing read is not a newer payment.
+ * `null` (the call answered and no token-info payment counts) clears the stored time, so a
+ * cancelled newest order does not leave the previous bubble forever.
+ * A payment replaces the stored time even when it is older than what we had saved.
+ */
+export function nextDexPayment(
+  payment: DexInfoPayment | null | undefined,
+): { paidAtMs: number | null; updated: boolean } | undefined {
+  if (payment === undefined) return undefined;
+  if (payment === null) return { paidAtMs: null, updated: false };
+  return { paidAtMs: payment.paidAtMs, updated: payment.updated };
+}
+
 /** True when a pair response carried an info block (the profile exists). No time comes with it. */
 export function pairHasTokenInfo(info: unknown): boolean {
   return !!info && typeof info === "object";

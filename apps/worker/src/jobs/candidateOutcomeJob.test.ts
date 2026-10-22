@@ -447,6 +447,42 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updatedAlert.simReturnPct).toBeCloseTo(updated.simReturnPct!);
   });
 
+  it("arms from the window peak when the fetched close is already through that peak's trail", async () => {
+    // The empty-fetch test above never puts 2.9 on a tick, so the close cannot arm the trail
+    // at itself. A real price does: 2.9 is above 2x and already under the 40% trail of the 12x
+    // peak (7.2). Arming at 2.9 would drop the 4x and 10x rungs and leave the share open.
+    const token = await createToken("trail-close-tick");
+    const anchorAt = new Date(Date.now() - 61 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      peak1hPriceUsd: 12,
+      peakBeforeStopPriceUsd: 12,
+      hit2xAt: new Date(anchorAt.getTime() + 8 * MINUTE),
+      lowBefore2xPriceUsd: 0.8,
+      low1hPriceUsd: 0.8,
+      peak24hPriceUsd: 12,
+    });
+    const alert = await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        candidateOutcomeId: row.id,
+        source: "heuristic-v1",
+        confidence: 80,
+        anchorPriceUsd: 1.0,
+        anchorMcapUsd: 100_000,
+      },
+    });
+
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 2.9 }), env);
+
+    const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(updated.trailHighPriceUsd).toBeCloseTo(12);
+    expect(updated.trailExitPriceUsd).toBeCloseTo(2.9);
+    expect(updated.trailExitAt).not.toBeNull();
+    expect(updated.simReturnPct).toBeCloseTo((0.35 * 2 + 0.3 * 4 + 0.25 * 10 + 0.1 * 2.9 - 1) * 100);
+    const updatedAlert = await prisma.curatedAlert.findUniqueOrThrow({ where: { id: alert.id } });
+    expect(updatedAlert.simReturnPct).toBeCloseTo(updated.simReturnPct!);
+  });
+
   it("grades a 2x after 15 minutes as a miss, but keeps watching its trailing share to the hold cap", async () => {
     const token = await createToken("slow-double");
     const anchorAt = new Date(Date.now() - 31 * MINUTE);

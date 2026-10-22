@@ -12,6 +12,7 @@ import {
   picWallets,
   withLabeledTraders,
   withLiveMarks,
+  type LiveTraderLabel,
   type MarkSource,
 } from "./walletMarks";
 
@@ -76,7 +77,38 @@ describe("walletMarks", () => {
 
   it("reads a Known Side as one, not as a KOL", () => {
     expect(kindsOf({ ...kol, knownSideOf: "Main" })).toEqual(["known"]);
+    expect(kindsOf({ ...kol, knownSide: true })).toEqual(["known"]);
     expect(kindsOf(devRisky)).toEqual(["dev", "risky"]);
+  });
+});
+
+describe("bubble identity", () => {
+  it("stamps a KOL, a known side and a plain side with that KOL's id and their own role", () => {
+    const known: MarkSource = {
+      wallet: "Known11111111111111111111111111111111111111",
+      tags: ["kol"],
+      kol: "Cupsey",
+      knownSideOf: kol.wallet,
+      trades: [[1_700, 1, 1]],
+    };
+    const out = walletMarks([devRisky, kol, side, known], defaults);
+    expect(out.map((m) => [m.kind, m.bubble])).toEqual([
+      ["dev", undefined],
+      ["kol", { role: "kol", id: kol.wallet }],
+      ["probable", { role: "side", id: kol.wallet }],
+      ["known", { role: "known", id: kol.wallet }],
+    ]);
+  });
+
+  it("does not treat a known side's own address as the KOL", () => {
+    const self: MarkSource = {
+      wallet: "Known11111111111111111111111111111111111111",
+      tags: ["kol"],
+      kol: "Cupsey",
+      knownSideOf: "Known11111111111111111111111111111111111111",
+      trades: [[1_700, 1, 1]],
+    };
+    expect(walletMarks([self], defaults)[0]?.bubble).toBeUndefined();
   });
 });
 
@@ -370,6 +402,32 @@ describe("withLabeledTraders", () => {
       ["A", "linked", "L"],
     ]);
     expect(marks[1]!.text).toBe("Cupsey Known Side bought 2.00 SOL");
+    expect(marks[1]!.bubble).toBeUndefined();
+  });
+  it("joins a live Known Side to the KOL wallet on the label, not to itself", () => {
+    const labels: Record<string, LiveTraderLabel> = {
+      S: { name: { name: "Cupsey Known Side", source: "kol-side", kolWallet: "K" } },
+    };
+    const wallets = withLabeledTraders([], labels);
+    expect(wallets[0]).toMatchObject({ knownSide: true, knownSideOf: "K" });
+    const marked = withLiveMarks(wallets, [{ wallet: "S", side: "buy", sol: 1, atMs: 5 }], {});
+    expect(marked[0]?.knownSideOf).toBe("K");
+    const marks = walletMarks(marked, { on: true, kinds: ["known"], minSol: 0.5 });
+    expect(marks[0]?.bubble).toEqual({ role: "known", id: "K" });
+  });
+  it("uses a known-side tie when the label has no KOL wallet, and never the side's own address", () => {
+    const out = withLiveMarks(
+      [],
+      [{ wallet: "S", side: "buy", sol: 1, atMs: 1 }],
+      { S: { name: "Cupsey Known Side", source: "kol-side" } },
+      { S: [{ kolWallet: "K", kolName: "Cupsey", known: true }] },
+    );
+    expect(out[0]).toMatchObject({ knownSide: true, knownSideOf: "K" });
+    const unnamed = withLiveMarks([], [{ wallet: "S", side: "buy", sol: 1, atMs: 1 }], {
+      S: { name: "Cupsey Known Side", source: "kol-side" },
+    });
+    expect(unnamed[0]?.knownSide).toBe(true);
+    expect(unnamed[0]?.knownSideOf).toBeUndefined();
   });
   it("gives the KOL pictures the labels carry, a side's under its KOL", () => {
     expect(labelAvatars(labels)).toEqual({ K: { avatar: "/kol-avatars/cupsey" } });

@@ -2483,7 +2483,7 @@ export function BubbleMapSection({
                 ? `${moment.title} The holders past the scan's top 25 were read ${ago(wide.readAt)}.`
                 : moment.title) +
               (drawn && moment.at !== undefined
-                ? ` Holders read at ${hms(drawn.listAt)}${drawn.tradeAt !== null && drawn.tradeAt > drawn.listAt ? `; shares moved by live trades since, the newest at ${hms(drawn.tradeAt)}` : ""}.`
+                ? ` Holders read at ${hms(drawn.at)}${drawn.tradeAt !== null && drawn.tradeAt > drawn.listAt ? `; shares moved by live trades since, the newest at ${hms(drawn.tradeAt)}` : ""}.`
                 : "")
             }
           >

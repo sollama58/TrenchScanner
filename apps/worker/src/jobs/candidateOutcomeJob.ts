@@ -9,6 +9,7 @@ import {
   tenXVerdict,
   simulateExitPlan,
   applyTrailTick,
+  foldWindowCloseTrail,
   exitPlanPositionOpen,
   cleanPeakPriceUsd,
   EXIT_PLAN,
@@ -602,15 +603,22 @@ export async function runCandidateWatchJob(
         Object.assign(aggUpdates, u);
       }
       // The exit plan's trailing exit: armed by the plan's first sale (a tick at the first rung
-      // before the stop) inside the window or at its close, then moved by every tick until it
-      // fires or the hold cap. An unarmed row past its close never arms: the ladder is graded on
-      // the window's peak, and this tick's price is not in it. And a trail the hold cap already
-      // closed (the return is written, the exit never fired) stops moving: a row kept on the 24h
-      // watch past the cap would otherwise go on raising its high and could book an exit hours
-      // after the return it no longer describes.
+      // before the stop) inside the window, then moved by every tick until it fires or the hold
+      // cap. A window-close price at or above 2x does not arm the trail while the window peak is
+      // higher; foldWindowCloseTrail applies that peak first, then the close. A trail the hold
+      // cap already closed stops moving: a row kept on the 24h watch past the cap would otherwise
+      // go on raising its high and could book an exit hours after the return it no longer describes.
       const trailUpdates: ReturnType<typeof applyTrailTick> = {};
       if (row.finalizedAt === null || (row.trailHighPriceUsd != null && row.simReturnPct === null)) {
+        // The window peak, after this sweep's in-window ticks. A close at or above 2x must not
+        // arm the trail at itself while that peak is higher: the 4x and 10x rungs would drop,
+        // and a close already through the peak's trail would stay open. The close is folded
+        // after the peak (foldWindowCloseTrail).
+        const windowPeak = cleanPeakPriceUsd(merged);
         for (const t of ticks) {
+          const closeTick =
+            closing && price !== undefined && t.priceUsd === price && t.at.getTime() === priceAt.getTime();
+          if (closeTick && merged.trailHighPriceUsd == null && windowPeak > t.priceUsd) continue;
           const u = applyTrailTick(merged, t.priceUsd, t.at);
           Object.assign(merged, u);
           Object.assign(trailUpdates, u);
@@ -693,28 +701,14 @@ export async function runCandidateWatchJob(
         data.labelValue = closedLabels.labelValue;
         // The call's return under the fixed exit plan. A call that never sold closes at this
         // tick's price (the first seen at or after the window closed) or, without one, the last
-        // price the row saw. A call that sold keeps its trailing share unless this close is
-        // already through the level of the high the trail arms from: then that share is out at
-        // the close. Otherwise the return lands when the share is out, and the row stays on watch.
-        let armedFromPeak = false;
-        if (merged.trailHighPriceUsd == null && exitPlanPositionOpen({ ...merged, simReturnPct: null })) {
-          // Sold inside the window on a tick this build never saw (a row open when the trail
-          // shipped): the trail arms now, from the window's peak, the highest price since the sale.
-          const high = cleanPeakPriceUsd(merged);
-          merged.trailHighPriceUsd = high;
-          data.trailHighPriceUsd = high;
-          armedFromPeak = true;
-        }
+        // price the row saw. The window peak arms an unarmed trail before that close can: a
+        // close already at or above 2x must not become the high, or the 4x and 10x rungs drop
+        // and a close through the peak's trail stays open. A close through the armed high fills
+        // at the price seen. A close still above the level leaves the share open.
         const closePrice = price ?? row.lastPriceUsd;
-        // 2026-10-21 user ask: those ticks ran before the arm, so a close already at or under the
-        // level of this peak never reached applyTrailTick. Fold it now. The exit is recorded on
-        // the row (training replays the stored exit, not the close). A close still above the level
-        // leaves the share open. A trail this sweep already armed does not get the close twice.
-        if (armedFromPeak && closePrice != null && closePrice > 0) {
-          const trailClose = applyTrailTick(merged, closePrice, priceAt);
-          Object.assign(merged, trailClose);
-          Object.assign(data, trailClose);
-        }
+        const trailClose = foldWindowCloseTrail(merged, closePrice, priceAt);
+        Object.assign(merged, trailClose);
+        Object.assign(data, trailClose);
         simReturnPct = simulateExitPlan(merged, closePrice);
         data.simReturnPct = simReturnPct;
         finalized += 1;

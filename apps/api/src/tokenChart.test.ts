@@ -7,6 +7,7 @@ import {
   KeyedCache,
   LastGood,
   markedWallets,
+  withDevChip,
   MAX_MARKED_TRADES,
   MAX_MARKED_WALLETS,
   parseLiveTrades,
@@ -47,7 +48,20 @@ describe("parseMcapCandles", () => {
     expect(out[1]!.c).toBeCloseTo(25_000);
     expect(out[1]!.h).toBeCloseTo(30_000);
     expect(out[1]!.vol).toBeCloseTo(412.5);
-    expect(out[0]!.vol).toBe(0);
+    // No volume field is not a trade of size 0.
+    expect(out[0]!.vol).toBeNull();
+  });
+
+  it("keeps a reported zero volume and does not treat an omitted one as zero", () => {
+    const out = parseMcapCandles(
+      [
+        { timestamp: 1, open: "1", high: "1", low: "1", close: "1", volume: "0" },
+        { timestamp: 2, open: "1", high: "1", low: "1", close: "1", volume: 0 },
+        { timestamp: 3, open: "1", high: "1", low: "1", close: "1" },
+      ],
+      1,
+    );
+    expect(out.map((c) => c.vol)).toEqual([0, 0, null]);
   });
 
   it("widens a high or low that doesn't bracket the open and close", () => {
@@ -628,5 +642,37 @@ describe("withTrackedMarks", () => {
 
   it("adds nothing without labels", () => {
     expect(withTrackedMarks(shared, [row("mine")], [], {})).toEqual(shared);
+  });
+});
+
+describe("withDevChip", () => {
+  const dev = "D".repeat(32);
+  const chip = {
+    wallet: dev,
+    tags: ["creator"],
+    score: null,
+    dumps: null,
+    coins: null,
+    funder: null,
+    kol: null,
+    solIn: 0,
+    solOut: 0,
+    heldPct: null,
+    trades: [],
+  };
+
+  it("keeps the dev chip when the holder list has the wallet and the tape window does not", () => {
+    expect(withDevChip([], new Set([dev]), dev)).toEqual([chip]);
+  });
+
+  it("does not invent a chip for a creator the holder list does not have, and adds no trades", () => {
+    expect(withDevChip([], new Set(), dev)).toEqual([]);
+    const kept = withDevChip([], new Set([dev]), dev);
+    expect(kept[0]?.trades).toEqual([]);
+  });
+
+  it("leaves a wallet the tape already tagged as the creator", () => {
+    const tagged = { ...chip, tags: ["creator" as const], trades: [[1, 1, 1] as [number, 1, number]] };
+    expect(withDevChip([tagged], new Set([dev]), dev)).toEqual([tagged]);
   });
 });

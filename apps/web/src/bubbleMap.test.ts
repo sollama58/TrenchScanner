@@ -35,6 +35,8 @@ import {
   firstReadAfter,
   holderBadgeAt,
   holderFreshness,
+  HOLDER_SCAN_GONE_MS,
+  HOLDER_STREAMED_READ_MS,
   layoutGraph,
   positionsOf,
   pickReading,
@@ -455,14 +457,16 @@ describe("holderFreshness", () => {
       ),
     ).toMatchObject({
       last: Date.parse(chain),
-      due: Date.parse(chain) + 60_000,
-      late: true,
+      // The stream has moved shares, so the next chain read is five minutes out, not a minute.
+      due: Date.parse(chain) + HOLDER_STREAMED_READ_MS,
+      late: false,
     });
     // The map's badge is the top-50 read, not a later balance or the scan row.
     expect(
       holderBadgeAt({ takenAt: scan, holderBalancesAt: balances, holderChainReadAt: chain }, chain),
     ).toBe(Date.parse(chain));
-    expect(holderBadgeAt({ takenAt: scan, holderBalancesAt: balances })).toBe(Date.parse(balances));
+    // A balance with no chain read is not the badge. The scan's own time is.
+    expect(holderBadgeAt({ takenAt: scan, holderBalancesAt: balances })).toBe(Date.parse(scan));
   });
   it("dates a list carried onto a later scan by when it was written", () => {
     const scan = "2026-10-13T23:04:00.000Z";
@@ -483,13 +487,49 @@ describe("holderFreshness", () => {
       late: false,
     });
   });
-  it("has no next update once the coin has gone unscanned for twelve minutes", () => {
-    expect(holderFreshness({ takenAt: at }, t + 12 * 60_000, reads(t + 12 * 60_000 + 1_000))).toEqual({
+  it("does not call a coin unscanned at twelve minutes while its scans are still inside the window", () => {
+    const fresh = holderFreshness({ takenAt: at }, t + 12 * 60_000, reads(t + 12 * 60_000 + 1_000));
+    expect(fresh.due).not.toBeNull();
+    expect(fresh.next).not.toBeNull();
+  });
+  it("has no next update once scans have stopped", () => {
+    expect(
+      holderFreshness({ takenAt: at }, t + HOLDER_SCAN_GONE_MS, reads(t + HOLDER_SCAN_GONE_MS + 1_000)),
+    ).toEqual({
       last: t,
       due: null,
       next: null,
       late: false,
     });
+  });
+  it("follows the chain-read schedule and does not move the shown time on a balance", () => {
+    const chain = at;
+    const balances = new Date(t + 4 * 60_000).toISOString();
+    const scan = new Date(t + 4 * 60_000).toISOString();
+    const next = new Date(t + HOLDER_STREAMED_READ_MS).toISOString();
+    const now = t + 4 * 60_000;
+    const fresh = holderFreshness(
+      { takenAt: scan, holderChainReadAt: chain, holderBalancesAt: balances, holderNextReadAt: next },
+      now,
+      reads(now + 4_000),
+    );
+    expect(fresh.last).toBe(t);
+    expect(fresh.due).toBe(t + HOLDER_STREAMED_READ_MS);
+    expect(fresh.late).toBe(false);
+  });
+  it("keeps a quiet coin on its schedule instead of saying it is no longer scanned", () => {
+    const chain = at;
+    const now = t + 20 * 60_000;
+    const scan = new Date(now).toISOString();
+    const next = new Date(now + HOLDER_STREAMED_READ_MS).toISOString();
+    const fresh = holderFreshness(
+      { takenAt: scan, holderChainReadAt: chain, holderBalancesAt: chain, holderNextReadAt: next },
+      now,
+      reads(now + 4_000),
+    );
+    expect(fresh.last).toBe(t);
+    expect(fresh.due).toBe(now + HOLDER_STREAMED_READ_MS);
+    expect(fresh.next).not.toBeNull();
   });
 });
 

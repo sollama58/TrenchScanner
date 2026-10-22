@@ -55,6 +55,18 @@ describe("groupSameTokenCalls", () => {
     expect(groups.map((g) => g.newest.id)).toEqual(["trees-A-20", "trees-B-10"]);
     expect(groups[0]!.calls.map((c) => c.model)).toEqual(["consensus", "trees"]);
     expect(groups[0]!.calls.map((c) => c.modelName)).toEqual(["CONSENSUS", "TREES"]);
+    expect(groups[0]!.calls.map((c) => c.mcapUsd)).toEqual([null, null]);
+  });
+
+  it("keeps each call's stored anchor cap", () => {
+    const groups = groupSameTokenCalls(
+      newestFirst([
+        { ...call("A", 0, "trees"), anchorMcapUsd: 11_400 },
+        { ...call("A", 20, "rules"), anchorMcapUsd: 0 },
+      ]),
+      WINDOW,
+    );
+    expect(groups[0]!.calls.map((c) => c.mcapUsd)).toEqual([11_400, null]);
   });
 
   it("groups each call by what came after it, so a read cut short only loses older calls", () => {
@@ -240,6 +252,15 @@ describe("serializeCuratedAlert", () => {
     expect(card.snapshot.graduated).toBeNull();
   });
 
+  it("keeps the Age tile on the latest scan after the alert snapshot is dropped", () => {
+    const row = alertRow() as any;
+    row.token.snapshots = [{ id: "s2", takenAt: at(30), marketCapUsd: 140_000, ageMinutes: 40 }];
+    const card = serializeCuratedAlert(row, currentMarketCap);
+    // 40 minutes old at a scan 30 minutes after the alert: 10 minutes old at the alert.
+    expect(card.snapshot.ageMinutes).toBeCloseTo(10);
+    expect(card.snapshot.takenAt).toEqual(at(0));
+  });
+
   it("shows the call's anchor as its alert figures, not the scan snapshot's staler price", () => {
     // CASINO: DexScreener's scan read $47.5k while the call was priced from a $11.4k Jupiter
     // quote; its 6.2x Peak on the snapshot's market cap made an ATH of $294k.
@@ -254,6 +275,21 @@ describe("serializeCuratedAlert", () => {
     expect(card.snapshot.priceUsd).toBe(0.0000114);
     // The scan's other readings stay.
     expect(card.snapshot.holderCount).toBe(120);
+    // The volume/cap figure uses the anchor the card shows, not the $47.5k scan cap.
+    const priced = alertRow({
+      anchorPriceUsd: 0.0000114,
+      anchorMcapUsd: 11_400,
+      snapshot: {
+        id: "snap1",
+        priceUsd: 0.0000475,
+        marketCapUsd: 47_500,
+        volume24hUsd: 95_000,
+        volumeToMcapRatio: 2,
+      },
+    });
+    expect(serializeCuratedAlert(priced as any, currentMarketCap).snapshot.volumeToMcapRatio).toBeCloseTo(
+      95_000 / 11_400,
+    );
     // The ATH the card draws: alert market cap at the Peak multiple.
     expect(card.snapshot.marketCapUsd * (1 + card.peakReturnPct! / 100)).toBeCloseTo(70_700);
   });

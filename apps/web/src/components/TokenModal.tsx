@@ -42,6 +42,7 @@ import { DevCard, FlowCard, SocialsCard, type TokenProfile } from "./TokenProfil
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
 import { CreatorFeeRich } from "./FeeRewards";
+import { cardWithOtcDesk, creatorRewardFigure } from "../creatorReward";
 import { QUICK_LINK_SITES, pumpFunHref, setAppearance, useAppearance } from "../appearance";
 import { useIsAdmin } from "../session";
 import { useShowNarrativeNote } from "../narrativeNote";
@@ -176,12 +177,12 @@ const OLDER_CANDLE_MS = 5 * 60_000;
 interface TokenChart {
   mint: string;
   /** Pump.fun's minute candles as market cap (apps/api/src/tokenChart.ts McapCandle). */
-  candles: { t: number; o: number; h: number; l: number; c: number; vol?: number }[] | null;
+  candles: { t: number; o: number; h: number; l: number; c: number; vol?: number | null }[] | null;
   /**
    * 5-minute candles before `candles`' first, when those no longer reach back to the launch (a coin
    * busy for more than Pump.fun's 1,000 minutes): the call's flag stays on the chart. Absent otherwise.
    */
-  older?: { t: number; o: number; h: number; l: number; c: number; vol?: number }[];
+  older?: { t: number; o: number; h: number; l: number; c: number; vol?: number | null }[];
   /** buys/sells: the 5-minute counts before the scan; absent from older API builds. */
   marketCap: { t: number; usd: number; buys?: number | null; sells?: number | null }[];
   /** Absent from an API older than this page. */
@@ -748,8 +749,8 @@ type DetectionSource = "first-scan" | "first-pass" | "earliest" | "none";
  *
  * A first stored scan that is not the alert uses that scan. A first screen pass that is not the
  * alert uses the pass, when that cap was stored. When detection and the alert are the same event,
- * the earliest stored cap is used, which is the alert's own when nothing earlier was kept. A
- * number that was not stored stays missing.
+ * the stored anchor is used, the same cap the card and At alert show. A raw scan within two
+ * minutes is not that anchor. A number that was not stored stays missing.
  */
 export function detectionMcap(input: {
   alertAt: number;
@@ -794,7 +795,9 @@ export function detectionMcap(input: {
     (input.kind === "stream" && !input.firstPass && seenKnown && !Number.isFinite(seen));
   if (!same) return { usd: null, source: "none" };
   const early = earliest && Math.abs(earliest.t - input.alertAt) <= FIRST_SCAN_SLACK_MS ? earliest.usd : null;
-  const usd = early ?? (stored(input.alertMcap) ? input.alertMcap : null);
+  // The same moment as the alert uses the stored anchor. A scan within two minutes is the raw
+  // Dex cap, which is a different number from the card and from At alert.
+  const usd = stored(input.alertMcap) ? input.alertMcap : early;
   return { usd, source: usd == null ? "none" : "earliest" };
 }
 
@@ -998,6 +1001,9 @@ function TokenBody({
   // A lookup asks TokenSage for a fresh read, which lands within minutes: check more often.
   const tokenApi = useTokenApi(mint);
   const sage = usePolling<SageView>(`${tokenApi}/sage`, utility ? 20_000 : 120_000);
+  // The feed card can be a poll ahead of the roster. The sage read waits for it, and the
+  // creator-reward square and the fee line read that copy.
+  const detailCard = useMemo(() => cardWithOtcDesk(card, sage.data), [card, sage.data]);
   // The Dev, Socials and Order flow cards' read (user ask 2026-10-16); the flow moves with each scan.
   const profile = usePolling<TokenProfile>(
     `${useTokenApi(mint)}/profile`,
@@ -1173,8 +1179,17 @@ function TokenBody({
       )}
     </div>
   );
+  const reward = creatorRewardFigure(detailCard.token.creatorFee);
+  const rewardPending = reward.empty && sage.data == null && sage.error == null;
   const figs = terminal ? (
     <section className="tm-figs" aria-label="Market">
+      <div className="tm-fig">
+        <label>Creator reward</label>
+        <span className={reward.empty ? "num none" : "num"} title={reward.title}>
+          {rewardPending ? <SkelValue width="3.2em" /> : reward.value}
+        </span>
+        {!rewardPending && reward.detail && <small className="num muted">{reward.detail}</small>}
+      </div>
       <div className="tm-fig">
         <label>At detection</label>
         <span className={detection.usd != null ? "num" : "num none"} title={detectionTitle}>
@@ -1471,7 +1486,7 @@ function TokenBody({
           <aside className="tm-term-rail" aria-label="Trade and checks">
             <div ref={setTradeSlot} className="tm-term-trade" />
             <section className="tm-term-market" aria-label="Market">
-              <StatsCard card={card} liquidity />
+              <StatsCard card={detailCard} liquidity />
             </section>
             <div id={`${ids}-safety`} className="tm-term-safety">
               {/* Open from the start here: the rail is where the checks are read at a glance. */}
@@ -1589,10 +1604,10 @@ function TokenBody({
         <GroupLabel id={`${ids}-call-h`}>{utility ? "Market" : "The alert"}</GroupLabel>
         {utility ? (
           // A lookup has no call to explain: the numbers take the full width.
-          <StatsCard card={card} />
+          <StatsCard card={detailCard} />
         ) : (
           <div className="tm-grid">
-            <StatsCard card={card} />
+            <StatsCard card={detailCard} />
             <CallCard card={card} />
           </div>
         )}
@@ -2208,7 +2223,7 @@ function useHoldersView(card: Card, linked: Snapshot | null | undefined, alertAt
         : canSwitch
           ? {
               label: "Now",
-              at: linked ? holderListAt(linked) : undefined,
+              at: linked ? holderShownAt(linked) : undefined,
               title:
                 "The latest scan's reading. Switch to an earlier moment for the holders as they stood then.",
             }
@@ -2521,13 +2536,18 @@ export function ChartCard({
     const calls = curated?.calledBy?.length
       ? curated.calledBy
       : card.kind === "match" && curated
-        ? [{ alertedAt: curated.alertedAt, modelName: curated.modelName ?? null }]
+        ? [{ alertedAt: curated.alertedAt, modelName: curated.modelName ?? null, mcapUsd: null }]
         : [];
     for (const c of calls) {
       const t = Date.parse(c.alertedAt);
       if (!Number.isFinite(t) || Math.abs(t - alertAt) < 30_000) continue;
       const label = c.modelName ?? "Model";
-      out.push({ t, label, kind: chartFlagKind(label, "model") });
+      out.push({
+        t,
+        label,
+        kind: chartFlagKind(label, "model"),
+        mcap: typeof c.mcapUsd === "number" && c.mcapUsd > 0 ? c.mcapUsd : null,
+      });
     }
     // Earliest first. The line is coloured from the earliest event, including a screen pass whose
     // flag is hidden. Which flags are drawn is separate (chartEvents.ts).
@@ -2662,7 +2682,7 @@ export function ChartCard({
         const candles = sane(raw);
         return {
           stepMs,
-          candles: candles.map((k) => ({ ...k, vol: k.vol ?? 0 })),
+          candles: candles.map((k) => ({ ...k, vol: k.vol ?? null })),
           points: candleCloses(candles, stepMs).map((p) => (p.t > now ? { ...p, t: now } : p)),
         };
       };
@@ -3595,14 +3615,26 @@ function StatsCard({ card, liquidity = false }: { card: Card; liquidity?: boolea
             })()}
           </dd>
         </div>
-        {liquidity && (
-          <div title="Liquidity in the pool now">
-            <dt>Liquidity</dt>
-            <dd className={(latest?.liquidityUsd ?? s.liquidityUsd) == null ? "muted" : "num"}>
-              {usd(latest?.liquidityUsd ?? s.liquidityUsd)}
-            </dd>
-          </div>
-        )}
+        {liquidity &&
+          (() => {
+            const liqNow = latest?.liquidityUsd;
+            const showingNow = liqNow != null;
+            const liq = showingNow ? liqNow : s.liquidityUsd;
+            return (
+              <div
+                title={
+                  showingNow
+                    ? "Liquidity in the pool now"
+                    : liq != null
+                      ? "Liquidity at the alert"
+                      : "Liquidity in the pool"
+                }
+              >
+                <dt>Liquidity</dt>
+                <dd className={liq == null ? "muted" : "num"}>{usd(liq ?? null)}</dd>
+              </div>
+            );
+          })()}
         <div>
           <dt>Vol 5m</dt>
           <dd className="num">{usd(s.volume5mUsd ?? null)}</dd>
