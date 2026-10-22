@@ -295,20 +295,43 @@ const PUBLIC_FALLBACK_RPC = "https://solana-rpc.publicnode.com";
  * HeliusClient (SolanaRpc), so their 429s pause the same endpoint and they wait out its pauses.
  */
 const rpcPauses = new Map<string, RateGate>();
+/**
+ * The shortest pause a Helius 429 sets. Without a Retry-After it was fetchJson's first backoff,
+ * 250-750 ms, and every queued batch went straight back into the limit (audit 2026-10-22, M1 / F6;
+ * DexScreener and Jupiter got theirs in #873).
+ */
+export const HELIUS_MIN_PAUSE_MS = 5_000;
+/**
+ * Five 429s within a minute and the endpoint's ordinary requests are refused locally for 30 s (a
+ * priority one - the burn scan's - still goes once the pause ends). The credits-out stand-down
+ * (apiUsage.ts) covers an exhausted plan; this covers a rate-limit wall, which it lets through.
+ */
+export const HELIUS_BREAKER = { after: 5, withinMs: 60_000, openMs: 30_000 };
+let pauseFloorMs = HELIUS_MIN_PAUSE_MS;
 
 export function rpcPauseFor(rpcUrl: string, lane?: string): RateGate {
   const key = lane ? `${rpcUrl}#${lane}` : rpcUrl;
   let gate = rpcPauses.get(key);
   if (!gate) {
-    gate = new RateGate({ name: lane ? `helius/${lane}` : "helius", perMinute: 600_000, burst: 10_000 });
+    gate = new RateGate({
+      name: lane ? `helius/${lane}` : "helius",
+      perMinute: 600_000,
+      burst: 10_000,
+      minPauseMs: pauseFloorMs,
+      breaker: HELIUS_BREAKER,
+    });
     rpcPauses.set(key, gate);
   }
   return gate;
 }
 
-/** Test hook: forgets every endpoint's pause. */
-export function resetRpcPauses(): void {
+/**
+ * Test hook: forgets every endpoint's pause; `minPauseMs` sets the floor of the gates built after it
+ * (a test against a real server can't sit out HELIUS_MIN_PAUSE_MS on every 429).
+ */
+export function resetRpcPauses({ minPauseMs = HELIUS_MIN_PAUSE_MS }: { minPauseMs?: number } = {}): void {
   rpcPauses.clear();
+  pauseFloorMs = minPauseMs;
 }
 
 /** How many JSON-RPC calls to put in one HTTP POST. Conservative enough that no provider rejects
@@ -747,7 +770,11 @@ export class HeliusClient {
         retries: 1,
         // A retry is another billed request: counted like the first.
         onRetry: count,
-        gate: this.pause,
+        // One token a call, not a request: a batch of 50 is 50 of the plan's calls.
+        gate: {
+          acquire: () => this.pause.acquire(Infinity, false, calls.length),
+          throttled: (ms) => this.pause.throttled(ms),
+        },
         // A timeout is billed whether or not the answer arrives. Retrying it pays twice
         // (user decision 2026-10-22). A 429 still retries: that request was refused.
         retryOnTimeout: false,
