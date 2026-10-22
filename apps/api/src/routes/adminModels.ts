@@ -4,6 +4,7 @@ import type { Env } from "@trenchscanner/core";
 import type { ReportCaches } from "./curated.js";
 import { explainCall, recentSeatCalls, type CallExplain } from "../modelExplain.js";
 import { registerAdminFeedSimRoutes } from "./adminFeedSim.js";
+import { registerAdminModelsDeskRoutes } from "./adminModelsDesk.js";
 
 /**
  * The Admin "Models" section (modelExplain.ts): every seat's recipe, inputs, member weights and
@@ -24,6 +25,8 @@ export async function registerAdminModelRoutes(
 ) {
   // The same fill the model detail view's weightings read (createReportCaches).
   app.get("/models/explain", async () => opts.reports.lineup());
+  // Schedule, caps, label rule, roster and the active models' training windows.
+  await registerAdminModelsDeskRoutes(app, opts);
   // The feed simulator: hit rate and coverage for any models and switched-on filters together.
   await registerAdminFeedSimRoutes(app, opts);
 
