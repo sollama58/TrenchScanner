@@ -20742,6 +20742,30 @@ body:has(.util-toast) .bug-fab {
     align-self: end;
   }
 }
+/* Phones stack the Dex pill and the age under the figures, which makes that column the row's
+   tallest: the avatar, the ticker line and the figures all start at the top, so the ticker lines
+   up with the market cap and the name with the line under it (user report 2026-10-22). */
+@media (max-width: 899px) {
+  .scope-row:has(.scope-fig-pills) > .scope-avatar,
+  .scope-row:has(.scope-fig-pills) > .scope-main,
+  .scope-row:has(.scope-fig-pills) > .scope-figs {
+    align-self: start;
+  }
+  .scope-row:has(.scope-fig-pills) > .scope-main {
+    align-content: flex-start;
+  }
+  /* The name gives way to its fee and link icons instead of sending them onto a third line. */
+  .scope-name {
+    flex: 1 1 0;
+    min-width: 3em;
+    max-width: max-content;
+  }
+  /* Narrower gap beside the avatar here: the pair badge stays clear of the name. */
+  .scope-avatar > .scope-quote-badge {
+    right: -3px;
+    bottom: -3px;
+  }
+}
 /* The search control sits beside the ticker now, where the Dex pill was. */
 .scope-ticker .scope-search {
   order: 0;
