@@ -13,8 +13,13 @@ import {
   cleanPeakPriceUsd,
   contestantSpec,
 } from "@trenchscanner/core";
-import { otcDeskFees } from "./otcDesk.js";
-import type { OtcDeskFee, OtcRewardCoin } from "./feeDesks.js";
+import { otcDeskRoster } from "./otcDesk.js";
+import {
+  creatorFeeWalletAddresses,
+  resolveOtcDeskFee,
+  type OtcDeskFee,
+  type OtcRewardCoin,
+} from "./feeDesks.js";
 
 /**
  * Turning a CuratedAlert into a feed card.
@@ -61,10 +66,10 @@ export async function withLatestSnapshots<T extends { token: { id: string; mintA
 
 /**
  * Where a card's coin sends its creator fee (TokenNarrative.feeDestination and feeSummary).
- * `deskLine` is set when OTC Desks' roster names the reward coins for this mint (user ask
- * 2026-10-21). `deskRewards` is those coins, each with the mint when the roster gave one, so a
- * surface that can render tokens can. Destination stays null when TokenSage has not said and
- * only the desk has.
+ * `deskLine` is set when OTC Desks' roster names the reward coins for this mint, or when a
+ * creator-fee wallet is one of those coins (user ask 2026-10-21). `deskRewards` is those coins,
+ * each with the mint when the roster gave one, so a surface that can render tokens can.
+ * Destination stays null when TokenSage has not said and only the desk has.
  */
 export interface CardCreatorFee {
   destination: string | null;
@@ -168,7 +173,7 @@ export async function creatorFeesByMint(
 ): Promise<Map<string, CardCreatorFee>> {
   const unique = [...new Set(mints.filter((m): m is string => typeof m === "string" && m !== ""))];
   if (unique.length === 0) return new Map();
-  const [rows, desks] = await Promise.all([
+  const [rows, roster] = await Promise.all([
     prisma.$queryRaw<
       {
         mintAddress: string;
@@ -176,6 +181,9 @@ export async function creatorFeesByMint(
         feeSummary: string | null;
         storedBps: number | null;
         analysisBps: string | null;
+        feeRecipients: unknown;
+        feeAdmin: string | null;
+        marketCreator: string | null;
       }[]
     >`
       SELECT "mintAddress", "feeDestination", "feeSummary", "feeCreatorBps" AS "storedBps",
@@ -183,17 +191,32 @@ export async function creatorFeesByMint(
                WHEN "feeCreatorBps" IS NULL AND "feeDestination" = 'holder_rewards'
                THEN "analysis" #>> '{market,creator_fee,creator_fee_bps}'
                ELSE NULL
-             END AS "analysisBps"
+             END AS "analysisBps",
+             "analysis" #> '{market,creator_fee,recipients}' AS "feeRecipients",
+             "analysis" #>> '{market,creator_fee,admin}' AS "feeAdmin",
+             "analysis" #>> '{market,creator}' AS "marketCreator"
       FROM "TokenNarrative"
       WHERE "mintAddress" = ANY(${unique}::text[])
         AND "feeDestination" IS NOT NULL`.catch(() => []),
-    otcDeskFees(unique, { wait: opts?.waitForDesk === true }).catch(() => new Map<string, OtcDeskFee>()),
+    otcDeskRoster({ wait: opts?.waitForDesk === true }).catch(() => new Map<string, OtcDeskFee>()),
   ]);
+  const walletsOf = new Map<string, string[]>();
+  for (const r of rows) {
+    if (r.feeDestination !== "wallet" && r.feeDestination !== "split") continue;
+    walletsOf.set(
+      r.mintAddress,
+      creatorFeeWalletAddresses(
+        { recipients: jsonValue(r.feeRecipients), admin: r.feeAdmin },
+        r.marketCreator,
+      ),
+    );
+  }
   const out = new Map<string, CardCreatorFee>();
   // One roster row. The sentence and its coins are written together, including when
-  // the feed has not waited and both are still empty.
+  // the feed has not waited and both are still empty. A creator-fee wallet that is an
+  // OTC coin supplies that coin's basket; the pump mint's own row still wins.
   const deskFields = (mint: string): Pick<CardCreatorFee, "deskLine" | "deskRewards"> => {
-    const desk = desks.get(mint);
+    const desk = resolveOtcDeskFee(mint, walletsOf.get(mint), roster);
     return { deskLine: desk?.line ?? null, deskRewards: desk?.rewards ?? null };
   };
   for (const r of rows) {
@@ -207,18 +230,29 @@ export async function creatorFeesByMint(
   }
   const charityMints = [...out].filter(([, fee]) => fee.destination === "charity").map(([mint]) => mint);
   if (charityMints.length > 0) applyCharityNames(out, await charityNamesByMint(charityMints));
-  for (const [mint, desk] of desks) {
-    if (!out.has(mint)) {
-      out.set(mint, {
-        destination: null,
-        summary: null,
-        bps: null,
-        deskLine: desk.line,
-        deskRewards: desk.rewards,
-      });
-    }
+  for (const mint of unique) {
+    if (out.has(mint)) continue;
+    const desk = resolveOtcDeskFee(mint, walletsOf.get(mint), roster);
+    if (!desk) continue;
+    out.set(mint, {
+      destination: null,
+      summary: null,
+      bps: null,
+      deskLine: desk.line,
+      deskRewards: desk.rewards,
+    });
   }
   return out;
+}
+
+/** jsonb from a raw query, including a driver that handed the column back as text. */
+function jsonValue(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 export async function latestSnapshotsByToken(
