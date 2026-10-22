@@ -29,6 +29,7 @@ import {
   fillFlat,
   liveCandles,
   lockedSpans,
+  newestCandleStart,
   autoTimeframe,
   barOver,
   timeframeLabel,
@@ -552,6 +553,13 @@ describe("the live candle view", () => {
     expect(out[1]).toMatchObject({ o: 11, c: 13, h: 15, l: 9 });
     // The closed candle is left alone.
     expect(out[0]).toEqual(k(0, 10, 11));
+  });
+
+  it("finds where the forming candle starts, the one reaching furthest whatever its width", () => {
+    expect(newestCandleStart([])).toBe(-Infinity);
+    // A 15-second candle at 1:30 ends before the 1:00 minute candle does.
+    expect(newestCandleStart([k(0, 10, 11), k(M, 11, 12), { ...k(1.5 * M, 12, 12), w: 15_000 }])).toBe(M);
+    expect(newestCandleStart([k(0, 10, 11), { ...k(M + 50_000, 12, 12), w: 15_000 }])).toBe(M + 50_000);
   });
 
   it("runs ticks past the newest candle's end on as candles of their own", () => {

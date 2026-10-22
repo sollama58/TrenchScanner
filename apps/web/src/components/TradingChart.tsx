@@ -253,7 +253,10 @@ export function TradingChart({
   mint: string;
   /** The view's candles, of mixed widths (the 5-minute backfill, minute, 15- and 1-second ones). */
   candles: VolumeCandle[];
-  /** Readings after the newest candle (the live curve's ticks), or all of them without candles. */
+  /**
+   * Readings from the newest candle's start on (the live curve's ticks, which move that forming
+   * candle and run on past it), or all of them without candles.
+   */
   ticks: Point[];
   events: ChartEvent[];
   /** The scans' 5-minute buy and sell counts: the readout gives the buy share where one covers. */

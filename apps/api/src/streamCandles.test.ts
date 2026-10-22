@@ -91,6 +91,24 @@ describe("mergeCandles", () => {
     expect(mergeCandles(null, [k(0, 2)])).toMatchObject({ candles: [k(0, 2)], source: "stream" });
     expect(mergeCandles([], null)).toEqual({ candles: null, added: 0 });
   });
+
+  it("puts the stream's version of Pump.fun's forming candle in its place when the stream covered it", () => {
+    const pump = [k(0), { ...k(60_000, 2), vol: 50 }];
+    const stream = [{ ...k(60_000, 5), h: 6, vol: 20 }, k(120_000, 3)];
+    expect(mergeCandles(pump, stream, 59_000)).toEqual({
+      candles: [k(0), { ...k(60_000, 5), h: 6, vol: 50 }, k(120_000, 3)],
+      source: "mixed",
+      added: 2,
+    });
+    // Covered only from inside that minute: Pump.fun's stands.
+    expect(mergeCandles(pump, stream, 61_000).candles?.[1]).toEqual({ ...k(60_000, 2), vol: 50 });
+    // Only the newest is replaced, and with nothing after it the answer is still mixed (not stale).
+    expect(mergeCandles(pump, [k(0, 9), { ...k(60_000, 4), vol: null }], 0)).toEqual({
+      candles: [k(0), { ...k(60_000, 4), vol: 50 }],
+      source: "mixed",
+      added: 1,
+    });
+  });
 });
 
 describe("streamCovers", () => {

@@ -165,17 +165,33 @@ export function streamCovers(
  * Pump.fun's candles with the stream's after them: Pump.fun's stand wherever they reach (its
  * volumes count every trade, the stream's only those it kept), and the stream's fill in the steps
  * after Pump.fun's newest, which is the recent stretch when Pump.fun's answer is old or missing.
- * `source` names what the answer holds; absent when there are no candles.
+ * Pump.fun's newest candle was still forming when it was read (up to a minute or more ago), so
+ * when the stream ran unbroken through all of that step (`coveredFrom` at or before its start)
+ * the stream's version of it, which saw the rest of the step, takes its place; the larger of the
+ * two volumes stays, as either may have missed trades. `source` names what the answer holds;
+ * absent when there are no candles.
  */
 export function mergeCandles(
   pump: readonly McapCandle[] | null,
   stream: readonly McapCandle[] | null,
+  coveredFrom: number | null = null,
 ): { candles: McapCandle[] | null; source?: CandleSource; added: number } {
   const base = drawableCandles(pump ?? []);
-  const last = base.at(-1)?.t ?? -Infinity;
+  const newest = base.at(-1);
+  const last = newest?.t ?? -Infinity;
+  const own =
+    newest && coveredFrom !== null && coveredFrom <= newest.t
+      ? drawableCandles((stream ?? []).filter((k) => k.t === newest.t))[0]
+      : undefined;
+  if (newest && own) {
+    const vol = newest.vol === null ? own.vol : own.vol === null ? newest.vol : Math.max(newest.vol, own.vol);
+    base[base.length - 1] = { ...own, vol };
+  }
   const extra = drawableCandles((stream ?? []).filter((k) => k.t > last));
+  // A replaced newest candle counts as added: the answer is no longer only the old Pump.fun read.
+  const added = extra.length + (own ? 1 : 0);
   if (base.length === 0 && extra.length === 0) return { candles: null, added: 0 };
-  if (extra.length === 0) return { candles: base, source: "pumpfun", added: 0 };
-  if (base.length === 0) return { candles: extra, source: "stream", added: extra.length };
-  return { candles: [...base, ...extra], source: "mixed", added: extra.length };
+  if (added === 0) return { candles: base, source: "pumpfun", added: 0 };
+  if (base.length === 0) return { candles: extra, source: "stream", added };
+  return { candles: [...base, ...extra], source: "mixed", added };
 }

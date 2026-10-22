@@ -51,6 +51,7 @@ import { scoreTone, scoreToneColor, useScoreWeights } from "../scoreWeights";
 import {
   candleCloses,
   linePoints,
+  newestCandleStart,
   stitch,
   stitchVolume,
   withCallPoint,
@@ -2769,7 +2770,14 @@ export function ChartCard({
       // The chart builds its candles from the candles themselves, and from the readings after the
       // newest one (the live curve's ticks, which move the forming candle); without candles, from
       // the scans' readings.
-      const ticks = source.filter((p) => p.t >= from && p.t <= to && (!fromCandles || p.t > candledTo));
+      // The readings count from the newest candle's start, not its end: that candle is still forming,
+      // and the live ticks inside it move its close, high and low (liveCandles). Cut at its end, the
+      // last candle kept the shape it had when Pump.fun was read, up to a minute or more before.
+      const volume = stitchVolume(runs);
+      const forming = newestCandleStart(volume);
+      const ticks = source.filter(
+        (p) => p.t >= from && p.t <= to && (!fromCandles || (p.t > forming && !survived.has(p))),
+      );
       // The predicted path, from the finest reading of the last minute: the 1-second candles and
       // the live curve's changes after them.
       // It is read afresh every PATH_EVERY_MS, not on every tick, so its shape holds steady between
@@ -2806,7 +2814,7 @@ export function ChartCard({
         latest: source[source.length - 1]!.v,
         latestAt: source[source.length - 1]!.t,
         // The candles in view for the volume lane, each stretch from one width only.
-        candles: stitchVolume(runs).filter((k) => k.t + (k.w ?? 60_000) >= from && k.t <= to),
+        candles: volume.filter((k) => k.t + (k.w ?? 60_000) >= from && k.t <= to),
       };
     };
     try {

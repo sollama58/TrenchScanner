@@ -570,6 +570,20 @@ export function fillFlat(bars: readonly (OhlcBar | null)[], start: number, ms: n
 }
 
 /**
+ * Where the newest candle (the one reaching furthest, as liveCandles takes it) starts, ms;
+ * -Infinity without candles. The live readings after it are folded into it.
+ */
+export function newestCandleStart(candles: readonly VolumeCandle[]): number {
+  let start = -Infinity;
+  let end = -Infinity;
+  for (const k of candles) {
+    const e = k.t + (k.w ?? MINUTE);
+    if (e > end) [start, end] = [k.t, e];
+  }
+  return start;
+}
+
+/**
  * Exported for tests. The candles with the line's readings after the newest one's start folded in
  * (the live curve's ticks): the newest candle is still forming, so a tick inside it moves its close,
  * high and low, as an exchange chart's last candle moves, rather than waiting for the next candle

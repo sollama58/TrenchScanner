@@ -1134,6 +1134,7 @@ export async function readTokenChart(
     const merged = mergeCandles(
       kept.candles ? onSupply(kept.candles, factors.get(mintAddress)) : null,
       stream?.candles ?? null,
+      stream?.coveredFrom ?? null,
     );
     return counted(
       "chart",
@@ -1170,9 +1171,11 @@ export async function readTokenChart(
   const pump = read.status === "fulfilled" ? read.value : { candles: null, stale: false };
   // Pump.fun's candles count the launch billion; the chart reads on the supply now (mintSupply.ts).
   const factor = factors.status === "fulfilled" ? factors.value.get(mintAddress) : undefined;
+  const stream = await own;
   const merged = mergeCandles(
     pump.candles ? onSupply(pump.candles, factor) : null,
-    (await own)?.candles ?? null,
+    stream?.candles ?? null,
+    stream?.coveredFrom ?? null,
   );
   // The minute candles stop short of the launch (a coin busy for more than 1,000 minutes): the
   // 5-minute ones before them, so the call and what came before it stay on the chart.
@@ -1365,6 +1368,7 @@ export async function readTokenFine(
   const merged = mergeCandles(
     read.candles ? onSupply(read.candles, factors.get(mintAddress)) : null,
     own?.candles ?? null,
+    own?.coveredFrom ?? null,
   );
   return counted<TokenFineCandles>(`fine${res}`, {
     mint: mintAddress,
