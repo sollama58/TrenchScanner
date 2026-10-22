@@ -70,12 +70,16 @@ describe("feeBadge", () => {
 
   it("names the charity on the heart's tooltip when Pump.fun loaded one (user ask 2026-10-21)", () => {
     const name = "St. Jude Children's Research Hospital";
+    const sentence = `Creator fees go to ${name}.`;
     expect(
       feeBadge({ destination: "charity", summary: "creator fees go to charity.", charityName: name })?.title,
-    ).toBe(`${name}. Creator fees go to charity.`);
-    expect(feeBadge({ destination: "charity", summary: null, charityName: name })?.title).toBe(
-      `Creator fees go to ${name}.`,
-    );
+    ).toBe(sentence);
+    expect(
+      creatorFeeLine({ destination: "charity", summary: "creator fees go to charity", charityName: name }),
+    ).toBe(sentence);
+    expect(feeBadge({ destination: "charity", summary: null, charityName: name })?.title).toBe(sentence);
+    expect(sentence).toContain(name);
+    expect(sentence).not.toBe("Creator fees go to charity.");
     expect(
       feeBadge({
         destination: "charity",
@@ -83,10 +87,14 @@ describe("feeBadge", () => {
         charityName: name,
         deskLine: "OTC Desks pays holder rewards in NVDAx.",
       })?.title,
-    ).toBe(`Creator fees go to ${name}. OTC Desks pays holder rewards in NVDAx.`);
+    ).toBe(`${sentence} OTC Desks pays holder rewards in NVDAx.`);
     // A name on any other destination is not the heart, and is not shown there.
     expect(feeBadge({ destination: "creator", summary: null, charityName: name })?.title).toBe(
       "Creator fees go to the dev.",
+    );
+    // No organization yet: the generic sentence stays.
+    expect(feeBadge({ destination: "charity", summary: "creator fees go to charity." })?.title).toBe(
+      "Creator fees go to charity.",
     );
   });
 });

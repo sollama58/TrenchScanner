@@ -3748,26 +3748,16 @@ function StatsCard({ card, liquidity = false }: { card: Card; liquidity?: boolea
                   : "–")}
           </dd>
         </div>
-        <div
-          title={
-            [r.charityName && `Charity: ${r.charityName}`, r.feeLine].filter(Boolean).join("\n") || undefined
-          }
-        >
+        <div title={r.feeLine || undefined}>
           <dt>Dev</dt>
           <dd>
             {wait(r.devHolding === null) ?? (r.devHolding === null ? "–" : r.devHolding ? "Holding" : "Sold")}
           </dd>
         </div>
       </dl>
-      {(r.charityName || r.feeLine) && (
+      {r.feeLine && card.token.creatorFee && (
         <p className="small muted tm-fee">
-          {r.charityName && <>Charity: {r.charityName}</>}
-          {r.charityName && r.feeLine && <br />}
-          {r.feeLine && card.token.creatorFee && (
-            <>
-              Creator fee: <CreatorFeeRich fee={card.token.creatorFee} />
-            </>
-          )}
+          Creator fee: <CreatorFeeRich fee={card.token.creatorFee} />
         </p>
       )}
     </section>

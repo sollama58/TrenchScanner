@@ -56,4 +56,25 @@ describe("charityNamesByMint", () => {
     expect((await charityNamesByMint([mint])).get(mint)).toBe("St. Jude Children's Research Hospital");
     expect(hits).toBe(1);
   });
+
+  it("sets charityName from a live pump payload that omits is_charity", async () => {
+    const name = "St. Jude Children's Research Hospital";
+    server = createServer((req, res) => {
+      const mint = decodeURIComponent((req.url ?? "").split("/").pop() ?? "");
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ mint, name: "KindnessCoin", charityName: name }));
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (typeof address === "string" || address === null) throw new Error("failed to bind test server");
+    process.env.PUMPFUN_BASE_URL = `http://127.0.0.1:${address.port}`;
+    const mint = "LiveCharityMint111111111111111111111111111";
+    const loaded = await charityNamesByMint([mint]);
+    expect(loaded.get(mint)).toBe(name);
+    const fees = new Map<string, CardCreatorFee>([
+      [mint, { destination: "charity", summary: "creator fees go to charity", bps: null }],
+    ]);
+    applyCharityNames(fees, loaded);
+    expect(fees.get(mint)?.charityName).toBe(name);
+  });
 });

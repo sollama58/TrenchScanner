@@ -90,6 +90,10 @@ type DeskReward = { label: string; mint: string | null };
 type DeskView = {
   feeDesk?: string | null;
   feeRewards?: DeskReward[] | null;
+  /** The token page's sage read. Its charity name is copied onto the card the square reads. */
+  read?: {
+    creatorFee?: { destination?: string | null; charityName?: string | null } | null;
+  } | null;
 } | null;
 
 interface DeskPair {
@@ -123,9 +127,18 @@ export function cardWithOtcDesk<T extends Card>(card: T, view: DeskView): T {
   const cardDesk = deskPair(fee?.deskLine, fee?.deskRewards);
   const sageDesk = deskPair(view?.feeDesk, view?.feeRewards);
   const desk = sageDesk ?? cardDesk;
-  if (!desk) return card;
-  if ((cardDesk?.line ?? null) === desk.line && sameRewards(cardDesk?.rewards ?? null, desk.rewards))
-    return card;
+  const charityName =
+    fee?.destination === "charity"
+      ? (shownCharityName(fee.charityName) ??
+        shownCharityName(view?.read?.creatorFee?.charityName) ??
+        fee.charityName ??
+        null)
+      : (fee?.charityName ?? null);
+  const sameCharity = (fee?.charityName ?? null) === (charityName ?? null);
+  const sameDesk =
+    (cardDesk?.line ?? null) === (desk?.line ?? null) &&
+    sameRewards(cardDesk?.rewards ?? null, desk?.rewards ?? null);
+  if (sameCharity && sameDesk) return card;
   return {
     ...card,
     token: {
@@ -134,9 +147,9 @@ export function cardWithOtcDesk<T extends Card>(card: T, view: DeskView): T {
         destination: fee?.destination ?? null,
         summary: fee?.summary ?? null,
         bps: fee?.bps ?? null,
-        charityName: fee?.charityName,
-        deskLine: desk.line,
-        deskRewards: desk.rewards,
+        charityName,
+        deskLine: desk?.line ?? null,
+        deskRewards: desk?.rewards ?? null,
       },
     },
   };

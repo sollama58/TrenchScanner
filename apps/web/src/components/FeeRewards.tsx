@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import type { Token } from "../api";
+import { creatorFeeSummary } from "./AlertCard";
 
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
@@ -86,7 +87,7 @@ function stopped(text: string | null | undefined): string | null {
  * are only a string; renders each reward mint as a token when the roster sent them.
  */
 export function CreatorFeeRich({ fee }: { fee: NonNullable<Token["creatorFee"]> }) {
-  const summary = stopped(fee.summary);
+  const summary = creatorFeeSummary(fee);
   const desk = stopped(fee.deskLine);
   const coins = deskRewards(fee.deskRewards);
   if (summary && desk && summary === desk) return <>{summary}</>;

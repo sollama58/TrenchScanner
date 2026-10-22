@@ -38,7 +38,8 @@ describe("creator reward square", () => {
     });
     expect(charity.value).toBe("Charity");
     expect(charity.detail).toBe("Red Cross");
-    expect(charity.title).toContain("Red Cross");
+    expect(charity.title).toBe("Creator fees go to Red Cross.");
+    expect(charity.title).not.toBe("Creator fees go to charity.");
   });
 
   it("shows a matched OTC basket in the square and in the tooltip", () => {
@@ -173,5 +174,19 @@ describe("creator reward square", () => {
     expect(cardWithOtcDesk(card, null).token.creatorFee?.deskLine).toBe(
       "OTC Desks pays holder rewards in NVDAx.",
     );
+  });
+
+  it("puts a sage charity name on the card the square reads", () => {
+    const card = {
+      token: {
+        creatorFee: { destination: "charity", summary: "creator fees go to charity" },
+      },
+    } as unknown as Card;
+    const next = cardWithOtcDesk(card, {
+      read: { creatorFee: { destination: "charity", charityName: "Red Cross" } },
+    });
+    expect(next.token.creatorFee?.charityName).toBe("Red Cross");
+    expect(creatorRewardFigure(next.token.creatorFee).title).toBe("Creator fees go to Red Cross.");
+    expect(creatorRewardFigure(next.token.creatorFee).title).not.toBe("Creator fees go to charity.");
   });
 });
