@@ -16,7 +16,8 @@ import { CopyIcon, LockIcon } from "./Icons";
  *
  * A key is created only when Generate is pressed, and only for a paid subscription, an admin, or
  * a whitelist entry. The secret is shown once, from that response. Later the list is the prefix.
- * The socket is `key` on the query string and sends alerts that arrive after it connects.
+ * The socket takes the secret as the first message, or as Authorization bearer / X-Api-Key on the
+ * upgrade. It is not a query parameter. Alerts that arrive after it connects are sent.
  */
 export function ModelAlertKeysPanel() {
   const settings = useSettings();
@@ -104,7 +105,8 @@ export function ModelAlertKeysPanel() {
       <p className="small muted">
         A paid subscription, an admin wallet, or a whitelist entry can open a websocket of Model Alerts. Free
         access cannot. A key is created only when you press Generate, up to {limit}. The secret is shown once.
-        Connect with it as the <span className="num">key</span> query parameter. Alerts that arrive after you
+        Connect to the socket below and send the secret as the first message, or set it on the upgrade as the
+        Authorization bearer or X-Api-Key header. It is not a query parameter. Alerts that arrive after you
         connect are sent; nothing from before you connect is replayed.
       </p>
       <p className="small">
@@ -127,9 +129,6 @@ export function ModelAlertKeysPanel() {
             <button type="button" className="small" onClick={copySecret}>
               <CopyIcon size={13} /> {copied ? "Copied" : "Copy secret"}
             </button>
-          </p>
-          <p className="small muted">
-            <code className="num">{socketUrl(secret.secret)}</code>
           </p>
         </div>
       )}
@@ -169,8 +168,8 @@ export function ModelAlertKeysPanel() {
   );
 }
 
-/** The socket URL. With a secret, the one-time connect string; otherwise a placeholder. */
-function socketUrl(secret?: string): string {
+/** The socket URL. The secret is not part of it. */
+function socketUrl(): string {
   const base = API_URL.replace(/\/$/, "").replace(/^http/, "ws");
-  return `${base}/v1/model-alerts?key=${secret ? encodeURIComponent(secret) : "YOUR_KEY"}`;
+  return `${base}/v1/model-alerts`;
 }

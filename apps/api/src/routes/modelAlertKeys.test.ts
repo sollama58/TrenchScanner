@@ -1,12 +1,21 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
+import { createHash } from "node:crypto";
 import { AccessSource } from "@prisma/client";
 import { loadEnv, prisma, type Env } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
-import { modelAlertKeyAccess } from "../modelAlertKey.js";
+import {
+  hashModelAlertKey,
+  isModelAlertKeyShape,
+  MAX_SOCKETS_PER_KEY,
+  MAX_SOCKETS_PER_USER,
+  modelAlertKeyAccess,
+  modelAlertKeyMatches,
+  newModelAlertKey,
+} from "../modelAlertKey.js";
 import { modelAlertArrivedAfterConnect } from "../modelAlertPayload.js";
 import { buildServer } from "../server.js";
 
@@ -27,6 +36,19 @@ describe("model alert key access", () => {
     expect(modelAlertArrivedAfterConnect(new Date(opened), opened)).toBe(true);
     expect(modelAlertArrivedAfterConnect(new Date(opened + 1), opened)).toBe(true);
   });
+
+  it("rejects a short token and peppers the hash with the server secret", () => {
+    const server = "p".repeat(32);
+    expect(isModelAlertKeyShape(`tsma_${"a".repeat(11)}`)).toBe(false);
+    expect(isModelAlertKeyShape(`tsma_${"a".repeat(43)}`)).toBe(true);
+    const minted = newModelAlertKey(server);
+    expect(isModelAlertKeyShape(minted.secret)).toBe(true);
+    expect(minted.secretHash).not.toBe(createHash("sha256").update(minted.secret).digest("hex"));
+    expect(minted.secretHash).toBe(hashModelAlertKey(minted.secret, server));
+    expect(modelAlertKeyMatches(minted.secret, minted.secretHash, server)).toBe(true);
+    expect(modelAlertKeyMatches(minted.secret, minted.secretHash, "q".repeat(32))).toBe(false);
+    expect(modelAlertKeyMatches(minted.secret, "ab", server)).toBe(false);
+  });
 });
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -40,6 +62,7 @@ describe.skipIf(!dbAvailable)("model alert api keys and socket", () => {
   let port = 0;
   const signer = createSessionSigner(loadEnv().JWT_SECRET, loadEnv().SESSION_TTL_HOURS);
   const sockets: WebSocket[] = [];
+  const closeCodes = new Map<WebSocket, number>();
 
   const wallet = (suffix: string) => `${TAG}-${suffix}`;
 
@@ -385,29 +408,289 @@ describe.skipIf(!dbAvailable)("model alert api keys and socket", () => {
     expect(messages).toEqual([]);
   });
 
-  function connect(secret: string): Promise<WebSocket> {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/model-alerts?key=${encodeURIComponent(secret)}`);
-    sockets.push(ws);
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        ws.terminate();
-        reject(new Error("open timeout"));
-      }, 4_000);
-      ws.once("open", () => {
-        clearTimeout(timer);
-        resolve(ws);
-      });
-      ws.once("unexpected-response", (_req, res) => {
-        clearTimeout(timer);
-        reject(new Error(`status ${res.statusCode}`));
-      });
-      ws.once("error", (err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
+  it("stores a peppered hash, not a bare SHA-256 of the secret", async () => {
+    const user = await makeUser("pepper");
+    await subscribe(user.id, new Date(Date.now() + 86_400_000));
+    const created = await generate(user.cookie);
+    expect(created.statusCode).toBe(200);
+    const secret = (created.json() as { secret: string }).secret;
+    const stored = await prisma.userApiKey.findFirstOrThrow({
+      where: { userId: user.id, revokedAt: null },
     });
+    expect(stored.secretHash).not.toBe(createHash("sha256").update(secret).digest("hex"));
+    expect(stored.secretHash).toBe(hashModelAlertKey(secret, loadEnv().JWT_SECRET));
+    expect(stored.secretHash).not.toContain(secret);
+    expect(secret.startsWith("tsma_")).toBe(true);
+    expect(secret.length).toBe(48);
+  });
+
+  it("rejects a short key and a full-length key stored as a bare SHA-256", async () => {
+    const user = await makeUser("weakhash");
+    await subscribe(user.id, new Date(Date.now() + 86_400_000));
+    const short = `tsma_${"a".repeat(11)}`;
+    const full = `tsma_${"b".repeat(43)}`;
+    await prisma.userApiKey.createMany({
+      data: [short, full].map((secret) => ({
+        userId: user.id,
+        prefix: secret.slice(0, 12),
+        secretHash: createHash("sha256").update(secret).digest("hex"),
+      })),
+    });
+    await expect(connect(short)).rejects.toThrow(/401/);
+    await expect(connect(full)).rejects.toThrow(/401/);
+  });
+
+  it("refuses a fourth generate with 409 and the next ones with 429", async () => {
+    const user = await makeUser("flood");
+    await subscribe(user.id, new Date(Date.now() + 86_400_000));
+    const codes: number[] = [];
+    for (let i = 0; i < 9; i += 1) codes.push((await generate(user.cookie)).statusCode);
+    expect(codes.slice(0, 3)).toEqual([200, 200, 200]);
+    expect(codes).toContain(409);
+    expect(codes).toContain(429);
+    expect(await prisma.userApiKey.count({ where: { userId: user.id, revokedAt: null } })).toBe(3);
+  });
+
+  it("refuses to generate a key from a cross-site origin", async () => {
+    const user = await makeUser("csrf");
+    await subscribe(user.id, new Date(Date.now() + 86_400_000));
+    const forged = await app.inject({
+      method: "POST",
+      url: "/settings/model-alert-keys",
+      headers: { origin: "https://evil.example" },
+      cookies: { [SESSION_COOKIE_NAME]: user.cookie },
+    });
+    expect(forged.statusCode).toBe(403);
+    expect(forged.json().error).toBe("origin_not_allowed");
+    expect(await prisma.userApiKey.count({ where: { userId: user.id } })).toBe(0);
+
+    const allowed = loadEnv().CORS_ORIGINS.split(",")[0]!.trim();
+    const own = await app.inject({
+      method: "POST",
+      url: "/settings/model-alert-keys",
+      headers: { origin: allowed },
+      cookies: { [SESSION_COOKIE_NAME]: user.cookie },
+    });
+    expect(own.statusCode).toBe(200);
+  });
+
+  it("caps concurrent sockets for one key", async () => {
+    const user = await makeUser("sockcap");
+    await subscribe(user.id, new Date(Date.now() + 86_400_000));
+    const secret = ((await generate(user.cookie)).json() as { secret: string }).secret;
+    const open: WebSocket[] = [];
+    for (let i = 0; i < MAX_SOCKETS_PER_KEY; i += 1) open.push(await connect(secret));
+    expect(open.every((ws) => ws.readyState === WebSocket.OPEN)).toBe(true);
+    const extra = await connect(secret);
+    expect(await waitFor(() => closeCodeOf(extra) === 4429, 1_500)).toBe(true);
+    expect(open[0]!.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it("caps concurrent sockets for one user across keys", async () => {
+    const user = await makeUser("usercap");
+    await subscribe(user.id, new Date(Date.now() + 86_400_000));
+    const keysNeeded = Math.ceil((MAX_SOCKETS_PER_USER + 1) / MAX_SOCKETS_PER_KEY);
+    expect(keysNeeded).toBeLessThanOrEqual(3);
+    const secrets: string[] = [];
+    for (let i = 0; i < keysNeeded; i += 1) {
+      const res = await generate(user.cookie);
+      expect(res.statusCode).toBe(200);
+      secrets.push((res.json() as { secret: string }).secret);
+    }
+    const open: WebSocket[] = [];
+    let left = MAX_SOCKETS_PER_USER;
+    for (let i = 0; i < secrets.length - 1; i += 1) {
+      const take = Math.min(MAX_SOCKETS_PER_KEY, left);
+      for (let n = 0; n < take; n += 1) open.push(await connect(secrets[i]!));
+      left -= take;
+    }
+    expect(open.every((ws) => ws.readyState === WebSocket.OPEN)).toBe(true);
+    const extra = await connect(secrets[secrets.length - 1]!);
+    expect(await waitFor(() => closeCodeOf(extra) === 4429, 1_500)).toBe(true);
+  });
+
+  it("closes a live socket when its key is revoked and drops a later alert", async () => {
+    const user = await makeUser("revoke-live");
+    await subscribe(user.id, new Date(Date.now() + 86_400_000));
+    const created = await generate(user.cookie);
+    expect(created.statusCode).toBe(200);
+    const body = created.json() as { id: string; secret: string };
+    const ws = await connect(body.secret);
+    const messages: string[] = [];
+    ws.on("message", (data) => messages.push(String(data)));
+    expect((await call(user.cookie, "DELETE", `/settings/model-alert-keys/${body.id}`)).statusCode).toBe(200);
+    expect(await waitFor(() => closeCodeOf(ws) === 4401, 2_000)).toBe(true);
+
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-revoke-live` } });
+    const alert = await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        source: "test",
+        model: "trees",
+        modelName: "Trees",
+        confidence: 50,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 1_000,
+        narrativeRationale: { note: RATIONALE },
+        createdAt: new Date(Date.now() + 60_000),
+      },
+    });
+    app.matchStream.dispatchCurated(JSON.stringify({ alertId: alert.id, model: "trees" }));
+    await delay(400);
+    expect(messages).toEqual([]);
+    expect(messages.join("")).not.toContain(RATIONALE);
+  });
+
+  it("closes a socket that sends an oversized frame and does not log or echo it", async () => {
+    const user = await makeUser("oversize");
+    await subscribe(user.id, new Date(Date.now() + 86_400_000));
+    const secret = ((await generate(user.cookie)).json() as { secret: string }).secret;
+    const ws = await connect(secret);
+    const lines: string[] = [];
+    const warn = console.warn;
+    const error = console.error;
+    console.warn = (line?: unknown) => {
+      lines.push(String(line));
+    };
+    console.error = (line?: unknown) => {
+      lines.push(String(line));
+    };
+    const sentinel = `OVERFLOW_${"z".repeat(4_000)}`;
+    try {
+      ws.send(sentinel);
+      expect(await waitFor(() => closeCodeOf(ws) !== 0, 2_000)).toBe(true);
+    } finally {
+      console.warn = warn;
+      console.error = error;
+    }
+    expect(lines.join("\n")).not.toContain(sentinel);
+    expect(lines.join("\n")).not.toContain(secret);
+  });
+
+  it("does not deliver alerts to a socket that put the key only in the query string", async () => {
+    const user = await makeUser("queryonly");
+    await subscribe(user.id, new Date(Date.now() + 86_400_000));
+    const secret = ((await generate(user.cookie)).json() as { secret: string }).secret;
+    const ws = await connect(secret, "query");
+    const messages: string[] = [];
+    ws.on("message", (data) => messages.push(String(data)));
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-queryonly` } });
+    const alert = await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        source: "test",
+        model: "trees",
+        modelName: "Trees",
+        confidence: 50,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 1_000,
+        createdAt: new Date(Date.now() + 60_000),
+      },
+    });
+    app.matchStream.dispatchCurated(JSON.stringify({ alertId: alert.id, model: "trees" }));
+    await delay(800);
+    expect(messages).toEqual([]);
+    ws.close();
+  });
+
+  it("accepts the key as the first frame and does not copy that frame into an alert", async () => {
+    const user = await makeUser("frame");
+    await subscribe(user.id, new Date(Date.now() + 86_400_000));
+    const secret = ((await generate(user.cookie)).json() as { secret: string }).secret;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/model-alerts`);
+    sockets.push(ws);
+    const messages: string[] = [];
+    ws.on("message", (data) => messages.push(String(data)));
+    await opened(ws);
+    const echoed = "CLIENT_FRAME_SENTINEL_do_not_echo";
+    ws.send(JSON.stringify({ key: secret, narrativeRationale: echoed }));
+    await delay(400);
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-frame` } });
+    const alert = await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        source: "test",
+        model: "trees",
+        modelName: "Trees",
+        confidence: 61,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 2_000,
+        narrativeRationale: { note: RATIONALE },
+        createdAt: new Date(Date.now() + 60_000),
+      },
+    });
+    app.matchStream.dispatchCurated(JSON.stringify({ alertId: alert.id, model: "trees" }));
+    expect(await waitFor(() => messages.length > 0, 5_000)).toBe(true);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).not.toContain(echoed);
+    expect(messages[0]).not.toContain(RATIONALE);
+    expect(messages[0]).not.toContain(secret);
+    ws.close();
+  });
+
+  it("accepts the key in the X-Api-Key header", async () => {
+    const user = await makeUser("xapi");
+    await subscribe(user.id, new Date(Date.now() + 86_400_000));
+    const secret = ((await generate(user.cookie)).json() as { secret: string }).secret;
+    const ws = await connect(secret, "api-key");
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close();
+  });
+
+  it("bounds failed key guesses", async () => {
+    const secret = `tsma_${"c".repeat(43)}`;
+    const codes: number[] = [];
+    for (let i = 0; i < 31; i += 1) {
+      try {
+        await connect(secret, "header");
+        codes.push(101);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const match = /status (\d+)/.exec(msg);
+        codes.push(match ? Number(match[1]) : 0);
+      }
+    }
+    expect(codes).toContain(429);
+    expect(codes).not.toContain(101);
+  });
+
+  function connect(secret: string, transport: "header" | "query" | "api-key" = "header"): Promise<WebSocket> {
+    const query = transport === "query" ? `?key=${encodeURIComponent(secret)}` : "";
+    const headers: Record<string, string> = {};
+    if (transport === "header") headers.authorization = `Bearer ${secret}`;
+    if (transport === "api-key") headers["x-api-key"] = secret;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/model-alerts${query}`, { headers });
+    sockets.push(ws);
+    closeCodes.set(ws, 0);
+    ws.on("close", (code) => closeCodes.set(ws, code));
+    return opened(ws);
+  }
+
+  function closeCodeOf(ws: WebSocket): number {
+    return closeCodes.get(ws) ?? 0;
   }
 });
+
+function opened(ws: WebSocket): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.terminate();
+      reject(new Error("open timeout"));
+    }, 4_000);
+    ws.once("open", () => {
+      clearTimeout(timer);
+      resolve(ws);
+    });
+    ws.once("unexpected-response", (_req, res) => {
+      clearTimeout(timer);
+      reject(new Error(`status ${res.statusCode}`));
+    });
+    ws.once("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

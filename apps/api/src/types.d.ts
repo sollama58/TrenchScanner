@@ -42,8 +42,10 @@ declare module "fastify" {
     sessionUser?: Pick<User, "id" | "walletAddress" | "createdAt" | "privyUserId">;
     /**
      * Set by the Model Alert socket's preHandler once the API key and paid access have both
-     * checked out. Absent when the upgrade was refused.
+     * checked out. Absent when the upgrade was refused or the key arrives on the first frame.
      */
-    modelAlertClient?: { userId: string; walletAddress: string; openedAt: number };
+    modelAlertClient?: { userId: string; walletAddress: string; keyId: string; openedAt: number };
+    /** Set when the upgrade carried no key header, so the first frame has to authenticate. */
+    modelAlertPending?: boolean;
   }
 }
