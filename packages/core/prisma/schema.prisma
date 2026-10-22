@@ -108,6 +108,8 @@ model User {
   telegramLinkCodes TelegramLinkCode[]
   telegramChats     TelegramChat[]
   webPushSubscriptions WebPushSubscription[]
+  /// Keys for the Model Alert websocket. The secret is shown once and stored only as a hash.
+  apiKeys           UserApiKey[]
   tradingWallet     TradingWallet?
   tradingBot        TradingBot?
   paperStrategies   PaperStrategy[]
@@ -2074,6 +2076,27 @@ model Subscription {
   updatedAt DateTime @updatedAt
 
   @@index([expiresAt])
+}
+
+/// A key for the Model Alert websocket (`GET /v1/model-alerts`).
+///
+/// Issued only when someone presses Generate, and only for an admin, a whitelist entry, or a live
+/// paid subscription. The full secret is returned once and never stored: `secretHash` is its
+/// SHA-256, and `prefix` is the start of the secret shown in Settings afterwards. At most three
+/// rows per user have `revokedAt` null.
+model UserApiKey {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// The visible start of the secret (not enough to authenticate).
+  prefix     String
+  /// SHA-256 hex of the full secret.
+  secretHash String    @unique
+  createdAt  DateTime  @default(now())
+  revokedAt  DateTime?
+
+  @@index([userId, revokedAt])
 }
 
 /// One on-chain burn of the subscription token, whether or not we have a user for it yet.

@@ -5495,6 +5495,34 @@ html:has(dialog.about-modal[open]) {
   }
 }
 
+/* Settings > Model Alert API keys (ModelAlertKeys). The one-time secret and the key list. */
+.mak-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.mak-key {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.mak-secret {
+  display: block;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  word-break: break-all;
+}
+
 /* ---------- Connect your phone (Settings) ---------- */
 .cp-pair {
   display: flex;

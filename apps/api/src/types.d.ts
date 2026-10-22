@@ -40,5 +40,10 @@ declare module "fastify" {
      * the session was validated some other way (device sessions, the subscriber gate's joined read).
      */
     sessionUser?: Pick<User, "id" | "walletAddress" | "createdAt" | "privyUserId">;
+    /**
+     * Set by the Model Alert socket's preHandler once the API key and paid access have both
+     * checked out. Absent when the upgrade was refused.
+     */
+    modelAlertClient?: { userId: string; walletAddress: string; openedAt: number };
   }
 }

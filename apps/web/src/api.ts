@@ -1937,6 +1937,25 @@ export interface ScoreWeightsInfo {
   }[];
 }
 
+/** One Model Alert key as Settings lists it. The secret is not included. */
+export interface ModelAlertKey {
+  id: string;
+  /** The start of the secret, so a key can be recognized after the secret is gone. */
+  prefix: string;
+  createdAt: string;
+}
+
+/** GET /settings/model-alert-keys. */
+export interface ModelAlertKeyList {
+  keys: ModelAlertKey[];
+  limit: number;
+}
+
+/** POST /settings/model-alert-keys. `secret` is shown once, in this response only. */
+export interface ModelAlertKeyCreated extends ModelAlertKey {
+  secret: string;
+}
+
 export interface Settings {
   alerts: AlertPrefs;
   /** Push notifications' VAPID key, null while push is off. Absent from API builds before push. */
