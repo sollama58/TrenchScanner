@@ -2159,7 +2159,9 @@ export class HeliusClient {
         txs.push(...res.result.data);
         const token = res.result.paginationToken ?? undefined;
         const historyEnds = res.result.data.length < LAUNCH_TX_PAGE || !token;
-        notePage(mint, res.result.data, historyEnds ? null : (token ?? null));
+        // The seed keeps the token even after a short page: a young coin's history has only ended
+        // so far, and the trade tape reads it after the window closed, so it continues from here.
+        notePage(mint, res.result.data, token ?? null);
         const reading = parseLaunchBuyers(mint, txs, maxBuyers);
         if (!reading) {
           if (txs.length === 0 || txs.some((tx) => !tx || !tx.meta)) {

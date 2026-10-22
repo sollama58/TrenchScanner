@@ -4,8 +4,10 @@ import type { ChainTx } from "../wallets/tradeTape.js";
  * The pages a launch-buyer read already paid for (getTransactionsForAddress, oldest first, the
  * same call the trade tape makes). The tape starts after them instead of buying those pages
  * again. Chain data does not change, so the trades are parsed when the tape takes the seed,
- * at the prices it would have used then. A pagination token is only kept while the history
- * continued; the tape drops a seed older than the tape's own look at it.
+ * at the prices it would have used then. The read runs while the coin is young, so a short page
+ * is only the end of the history so far, not of the coin's window; the tape decides from the
+ * seed's newest block time whether the seed covers the window. It drops a seed older than the
+ * tape's own look at it.
  *
  * Process memory, capped. A restart re-reads the pages. One mint keeps the latest read.
  */
@@ -17,8 +19,9 @@ export interface LaunchTapeSeed {
   /** Newest trade time of each page, milliseconds. 0 when a page had no block time. */
   pageEnds: number[];
   /**
-   * Pass to the next getMintTransactionsPage. Null when this read reached the end of the
-   * history (a short page, or no token).
+   * Pass to the next getMintTransactionsPage. Kept after a short page too, since the history
+   * goes on after the read. Null when the read got no token: the seed then reads as whole only
+   * when its pages already reach past the coin's window.
    */
   paginationToken: string | null;
   at: number;
