@@ -13672,6 +13672,8 @@ a.fee-reward:hover {
   --bm-kol-2: #34d399;
   /* Wallet traits' icons (user ask 2026-10-15): a sniper's bullseye, a fresh wallet's leaf, an empty one's ghost. */
   --bm-trait-sniper: #fb923c;
+  /* A block-zero sniper's "0" (user ask 2026-10-22). */
+  --bm-trait-block-zero: #f43f5e;
   --bm-trait-fresh: #22c55e;
   --bm-trait-empty: var(--ink-2);
 }
@@ -13785,6 +13787,9 @@ a.fee-reward:hover {
 }
 .bm-wt.wt-sniper {
   --wt: var(--bm-trait-sniper);
+}
+.bm-wt.wt-blockZero {
+  --wt: var(--bm-trait-block-zero);
 }
 .bm-wt.wt-empty {
   --wt: var(--bm-trait-empty);
@@ -14178,6 +14183,10 @@ button.bm-same {
 .bm-trait.trait-sniper,
 .bm-trait-icon.trait-sniper {
   color: var(--bm-trait-sniper);
+}
+.bm-trait.trait-blockZero,
+.bm-trait-icon.trait-blockZero {
+  color: var(--bm-trait-block-zero);
 }
 .bm-trait.trait-fresh,
 .bm-trait-icon.trait-fresh {

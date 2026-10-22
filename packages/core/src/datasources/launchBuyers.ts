@@ -46,6 +46,13 @@ export interface LaunchBuyersReading {
   devAccounts?: LaunchBuyer[];
   /** Slot of the create transaction, when the provider gave one. */
   createSlot: number | null;
+  /**
+   * Block zero: every wallet credited in the create transaction's own slot besides the dev and the
+   * curve (the launch's snipers in the strict sense, user ask 2026-10-22), with what each took
+   * there. Not capped at the first-buyer count, so a launch whose bundle runs past 25 wallets
+   * still counts them all. Empty with no slots to go by; absent on readings built without it.
+   */
+  blockZeroBuyers?: LaunchBuyer[];
 }
 
 /** The launch's shape as the models read it (features firstBuyersSupplyPct and friends). */
@@ -56,6 +63,12 @@ export interface LaunchFigures {
   launchBundledBuyers: number | null;
   /** % of the supply the dev bought in the create transaction. */
   devBuySupplyPct: number | null;
+  /**
+   * How many wallets bought in the create transaction's slot (block zero, the dev aside), and the
+   * % of the supply they bought there. Null with no slots to go by.
+   */
+  blockZeroBuyers: number | null;
+  blockZeroBoughtPct: number | null;
 }
 
 /**
@@ -63,12 +76,19 @@ export interface LaunchFigures {
  * launch); the bundle count is null when the provider gave no slots.
  */
 export function launchFigures(
-  reading: Pick<LaunchBuyersReading, "buyers" | "supply" | "devBought" | "createSlot">,
+  reading: Pick<LaunchBuyersReading, "buyers" | "supply" | "devBought" | "createSlot" | "blockZeroBuyers">,
 ): LaunchFigures {
   if (!(reading.supply > 0)) {
-    return { firstBuyersSupplyPct: null, launchBundledBuyers: null, devBuySupplyPct: null };
+    return {
+      firstBuyersSupplyPct: null,
+      launchBundledBuyers: null,
+      devBuySupplyPct: null,
+      blockZeroBuyers: null,
+      blockZeroBoughtPct: null,
+    };
   }
   const bought = reading.buyers.reduce((sum, b) => sum + b.bought, 0);
+  const blockZero = reading.createSlot === null ? undefined : reading.blockZeroBuyers;
   return {
     firstBuyersSupplyPct: (bought / reading.supply) * 100,
     launchBundledBuyers:
@@ -76,6 +96,10 @@ export function launchFigures(
         ? null
         : reading.buyers.filter((b) => b.slot !== null && b.slot === reading.createSlot).length,
     devBuySupplyPct: (reading.devBought / reading.supply) * 100,
+    blockZeroBuyers: blockZero ? blockZero.length : null,
+    blockZeroBoughtPct: blockZero
+      ? (blockZero.reduce((sum, b) => sum + b.bought, 0) / reading.supply) * 100
+      : null,
   };
 }
 
@@ -177,9 +201,23 @@ export function parseLaunchBuyers(
   const slotOf = (tx: RawLaunchTx): number | null =>
     typeof tx.slot === "number" && Number.isFinite(tx.slot) ? tx.slot : null;
   const buyers = new Map<string, LaunchBuyer>();
+  const createSlot = slotOf(create);
+  const blockZero = new Map<string, LaunchBuyer>();
   for (const tx of ok.slice(1)) {
+    const inBlockZero = createSlot !== null && slotOf(tx) === createSlot;
     for (const [owner, change] of balanceChanges(tx, mint).owners) {
       if (excluded.has(owner) || change.delta <= 0) continue;
+      if (inBlockZero && change.account) {
+        const known = blockZero.get(owner);
+        if (known) known.bought += change.delta;
+        else
+          blockZero.set(owner, {
+            wallet: owner,
+            tokenAccount: change.account,
+            bought: change.delta,
+            slot: createSlot,
+          });
+      }
       const known = buyers.get(owner);
       if (known) {
         known.bought += change.delta;
@@ -209,7 +247,8 @@ export function parseLaunchBuyers(
     supply,
     devBought: Math.max(0, supply - curveDelta),
     devAccounts,
-    createSlot: slotOf(create),
+    createSlot,
+    blockZeroBuyers: [...blockZero.values()],
   };
 }
 
@@ -249,6 +288,28 @@ export function devStillHolding(
     bought += a.bought;
   }
   return held > bought * LAUNCH_HOLDING_DUST_SHARE;
+}
+
+/**
+ * The % of `supply` block zero's wallets (LaunchBuyersReading.blockZeroBuyers) hold now, from
+ * their token accounts' current balances (base units, like `supply`; a closed account is 0): the
+ * card's, the filters' and the safety screen's "Block 0" (user ask 2026-10-22). 0 for a launch
+ * nobody sniped. Null when any balance is missing, as countStillHolding, or the supply is unknown.
+ * What they moved to other wallets is not followed.
+ */
+export function blockZeroHeldPct(
+  blockZero: readonly LaunchBuyer[],
+  balances: ReadonlyMap<string, number>,
+  supply: number,
+): number | null {
+  if (!(supply > 0)) return null;
+  let held = 0;
+  for (const b of blockZero) {
+    const balance = balances.get(b.tokenAccount);
+    if (balance === undefined) return null;
+    held += balance;
+  }
+  return (held / supply) * 100;
 }
 
 /**

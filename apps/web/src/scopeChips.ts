@@ -11,7 +11,8 @@ import {
   SAFETY_MAX_LARGEST_HOLDER_PCT,
   SAFETY_REJECT_EMPTY_WALLET_PCT,
   SAFETY_REJECT_LINKED_COUNT,
-  SAFETY_REJECT_SNIPER_WALLET_PCT,
+  SAFETY_REJECT_BLOCK_ZERO_HELD_PCT,
+  SNIPER_TILE_SCALE_PCT,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
   SAFETY_REJECT_CEX_FUNDED_COUNT,
   cexCountText,
@@ -36,6 +37,7 @@ export type ScopeChip =
   | "top10"
   | "fresh"
   | "snipers"
+  | "blockZero"
   | "linked"
   | "largest"
   | "empty"
@@ -196,8 +198,23 @@ export const SCOPE_CHIP_DEFS: {
         : {
             value: `${r.snipers.count}/${r.snipers.of}`,
             title: "Top holders who were among the launch's first 25 buyers",
-            tone: tileTone(r.snipers.top10Pct, SAFETY_REJECT_SNIPER_WALLET_PCT),
-            risky: (r.snipers.top10Pct ?? 0) >= SAFETY_REJECT_SNIPER_WALLET_PCT,
+            tone: tileTone(r.snipers.top10Pct, SNIPER_TILE_SCALE_PCT),
+            risky: false,
+          },
+  },
+  {
+    id: "blockZero",
+    label: "Block 0",
+    short: "B0",
+    group: "Wallets",
+    read: (_c, r) =>
+      r.blockZeroPct == null
+        ? null
+        : {
+            value: pct(r.blockZeroPct, 1),
+            title: "Supply held by the wallets that bought in the launch's own block (block-zero snipers)",
+            tone: tileTone(r.blockZeroPct, SAFETY_REJECT_BLOCK_ZERO_HELD_PCT),
+            risky: r.blockZeroPct >= SAFETY_REJECT_BLOCK_ZERO_HELD_PCT,
           },
   },
   {

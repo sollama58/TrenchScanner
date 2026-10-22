@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  blockZeroHeldPct,
   countHoldingSupplyCut,
   countStillHolding,
   devStillHolding,
@@ -56,6 +57,39 @@ const buy = (wallet: string, amount: number, curveBefore = 800) =>
     [wallet, `${wallet}-ata`, null, amount],
   ]);
 
+describe("blockZeroHeldPct", () => {
+  const b0 = [
+    { wallet: "a", tokenAccount: "a-ata", bought: 50, slot: 7 },
+    { wallet: "b", tokenAccount: "b-ata", bought: 50, slot: 7 },
+  ];
+  it("sums what block zero's accounts hold now against the supply", () => {
+    expect(
+      blockZeroHeldPct(
+        b0,
+        new Map([
+          ["a-ata", 30],
+          ["b-ata", 0],
+        ]),
+        1000,
+      ),
+    ).toBe(3);
+    expect(blockZeroHeldPct([], new Map(), 1000)).toBe(0);
+  });
+  it("is unknown with a balance missing or no supply", () => {
+    expect(blockZeroHeldPct(b0, new Map([["a-ata", 30]]), 1000)).toBeNull();
+    expect(
+      blockZeroHeldPct(
+        b0,
+        new Map([
+          ["a-ata", 30],
+          ["b-ata", 0],
+        ]),
+        0,
+      ),
+    ).toBeNull();
+  });
+});
+
 describe("parseLaunchBuyers", () => {
   it("lists the buyers after the create, in order, without the dev or the curve", () => {
     const sell = tx([
@@ -108,7 +142,10 @@ describe("parseLaunchBuyers", () => {
       firstBuyersSupplyPct: 5,
       launchBundledBuyers: 1,
       devBuySupplyPct: 20,
+      blockZeroBuyers: 1,
+      blockZeroBoughtPct: 1,
     });
+    expect(reading.blockZeroBuyers).toEqual([{ wallet: "a", tokenAccount: "a-ata", bought: 10, slot: 100 }]);
   });
 
   it("figures: no dev buy reads 0, no slots leave the bundle unknown, no supply leaves all unknown", () => {
@@ -119,12 +156,45 @@ describe("parseLaunchBuyers", () => {
       firstBuyersSupplyPct: 1,
       launchBundledBuyers: null,
       devBuySupplyPct: 0,
+      blockZeroBuyers: null,
+      blockZeroBoughtPct: null,
     });
     expect(launchFigures({ buyers: [], supply: 0, devBought: 0, createSlot: null })).toEqual({
       firstBuyersSupplyPct: null,
       launchBundledBuyers: null,
       devBuySupplyPct: null,
+      blockZeroBuyers: null,
+      blockZeroBoughtPct: null,
     });
+  });
+
+  it("counts every block-zero buyer past the first-buyer cap, and only the create's slot", () => {
+    const at = (slot: number, wallet: string, amount: number, before: number) =>
+      tx(
+        [
+          [CURVE, "curveAta", before, before - amount],
+          [wallet, `${wallet}-ata`, null, amount],
+        ],
+        { slot },
+      );
+    const createAt = tx(
+      [
+        [CURVE, "curveAta", null, 900],
+        [DEV, "devAta", null, 100],
+      ],
+      { slot: 7 },
+    );
+    const reading = parseLaunchBuyers(
+      MINT,
+      [createAt, at(7, "a", 10, 900), at(7, "b", 20, 890), at(7, "c", 30, 870), at(8, "d", 40, 840)],
+      2,
+    )!;
+    expect(reading.buyers.map((b) => b.wallet)).toEqual(["a", "b"]);
+    expect(reading.blockZeroBuyers?.map((b) => b.wallet)).toEqual(["a", "b", "c"]);
+    expect(launchFigures(reading)).toMatchObject({ blockZeroBuyers: 3, blockZeroBoughtPct: 6 });
+    // Nobody sniped: a known zero, not unknown.
+    const clean = parseLaunchBuyers(MINT, [createAt, at(9, "a", 10, 900)], 25)!;
+    expect(launchFigures(clean)).toMatchObject({ blockZeroBuyers: 0, blockZeroBoughtPct: 0 });
   });
 
   it("stops at the count asked for and skips failed transactions", () => {

@@ -6,7 +6,7 @@ import {
   SAFETY_REJECT_CEX_FUNDED_COUNT,
   SAFETY_REJECT_EMPTY_WALLET_PCT,
   SAFETY_REJECT_LINKED_COUNT,
-  SAFETY_REJECT_SNIPER_WALLET_PCT,
+  SAFETY_REJECT_BLOCK_ZERO_HELD_PCT,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
   countCutFor,
 } from "./components/AlertCard";
@@ -28,7 +28,8 @@ export interface SafetyVerdict {
 }
 
 /**
- * Fresh, empty, sniper and top-10 were not measured on this scan. The screen lets those through
+ * Fresh, empty, the launch read (Block 0, or on scans before it the first-buyer share from the
+ * same read) and top-10 were not measured on this scan. The screen lets those through
  * when they are unknown (fail-open); this only describes the reading, it does not re-judge it.
  */
 export function walletChecksUnmeasured(
@@ -38,6 +39,7 @@ export function walletChecksUnmeasured(
     | "freshTopHoldersChecked"
     | "freshTop10WalletPct"
     | "emptyTop10WalletPct"
+    | "blockZeroHeldPct"
     | "sniperTop10WalletPct"
     | "top10HolderPct"
   >,
@@ -48,7 +50,7 @@ export function walletChecksUnmeasured(
   return (
     !fresh ||
     typeof s.emptyTop10WalletPct !== "number" ||
-    typeof s.sniperTop10WalletPct !== "number" ||
+    (typeof s.blockZeroHeldPct !== "number" && typeof s.sniperTop10WalletPct !== "number") ||
     typeof s.top10HolderPct !== "number"
   );
 }
@@ -205,11 +207,11 @@ export function safetyChecks(s: Snapshot): SafetyCheck[] {
       `Fails at ${SAFETY_REJECT_EMPTY_WALLET_PCT}% of the top 10 or more`,
     ),
     measured(
-      "Launch snipers",
-      s.sniperTop10WalletPct,
-      (v) => pct(v),
-      (v) => v >= SAFETY_REJECT_SNIPER_WALLET_PCT,
-      `Fails at ${SAFETY_REJECT_SNIPER_WALLET_PCT}% of the top 10 or more`,
+      "Block 0 snipers",
+      s.blockZeroHeldPct,
+      (v) => pct(v, 1),
+      (v) => v >= SAFETY_REJECT_BLOCK_ZERO_HELD_PCT,
+      `Fails at ${SAFETY_REJECT_BLOCK_ZERO_HELD_PCT}% of supply or more`,
     ),
     measured(
       "Linked holders",

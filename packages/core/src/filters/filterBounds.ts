@@ -4,7 +4,7 @@ import {
   SAFETY_REJECT_CEX_FUNDED_COUNT,
   SAFETY_REJECT_EMPTY_WALLET_PCT,
   SAFETY_REJECT_LINKED_COUNT,
-  SAFETY_REJECT_SNIPER_WALLET_PCT,
+  SAFETY_REJECT_BLOCK_ZERO_HELD_PCT,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
 } from "../scoring/rugScreen.js";
 
@@ -20,7 +20,8 @@ import {
  * one under the count; its "over" cuts and the top-10 supply share at the cut itself. Fresh
  * wallets are an "over 70%" cut, which the editor shows as 17 of 25.
  *
- * Snipers in the top 25 and Bundled % have no screen rule of their own and take the user's caps
+ * The top-10 snipers share has had no screen rule since 2026-10-22 (Block 0 replaced it) and takes
+ * any value. Snipers in the top 25 and Bundled % have no screen rule of their own and take the user's caps
  * (below). Fields the screen has no rule for (dev wallet, RugCheck risk and the rest) are not here. Mirrored in the web's filterFields.ts.
  */
 export const FILTER_SAFETY_CEILINGS = {
@@ -28,7 +29,7 @@ export const FILTER_SAFETY_CEILINGS = {
   maxLargestHolderPct: SAFETY_MAX_LARGEST_HOLDER_PCT,
   maxFreshTop10WalletPct: SAFETY_MAX_FRESH_WALLET_PCT,
   maxEmptyTop10WalletPct: SAFETY_REJECT_EMPTY_WALLET_PCT - 10,
-  maxSniperTop10WalletPct: SAFETY_REJECT_SNIPER_WALLET_PCT - 10,
+  maxBlockZeroHeldPct: SAFETY_REJECT_BLOCK_ZERO_HELD_PCT,
   maxLinkedWalletCount: SAFETY_REJECT_LINKED_COUNT - 1,
   minCexFundedCount: SAFETY_REJECT_CEX_FUNDED_COUNT - 1,
   maxCexFundedCount: SAFETY_REJECT_CEX_FUNDED_COUNT - 1,
@@ -54,6 +55,7 @@ export const FILTER_SAFETY_DEFAULTS = {
   maxCexFundedCount: FILTER_SAFETY_CEILINGS.maxCexFundedCount,
   maxSniperTopHolderCount: FILTER_SAFETY_CEILINGS.maxSniperTopHolderCount,
   maxBundledSupplyPct: FILTER_SAFETY_CEILINGS.maxBundledSupplyPct,
+  maxBlockZeroHeldPct: FILTER_SAFETY_CEILINGS.maxBlockZeroHeldPct,
 } as const;
 
 /**

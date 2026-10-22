@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_TRADE_FLOW, type HeliusClient, type LaunchBuyersResult } from "@trenchscanner/core";
 import {
+  blockZeroWalletsFromCache,
   launchBuyersFromCache,
+  type LaunchReadStore,
+  type StoredLaunchRead,
   launchSnipersFromCache,
   resetLaunchSnipersCache,
   resolveLaunchSnipers,
@@ -99,6 +102,9 @@ describe("resolveLaunchSnipers", () => {
       firstBuyersSupplyPct: 25,
       launchBundledBuyers: 1,
       devBuySupplyPct: 2,
+      blockZeroHeldPct: null,
+      blockZeroBuyers: null,
+      blockZeroBoughtPct: null,
     });
     await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 60_000 });
     expect(f.getLaunchBuyersBatch).toHaveBeenCalledTimes(1);
@@ -155,6 +161,83 @@ describe("resolveLaunchSnipers", () => {
     expect(f.getLaunchBuyersBatch).toHaveBeenCalledTimes(1);
   });
 
+  it("reads block zero's held share with the first buyers' balances, re-reading a coin held on it faster", async () => {
+    const reading = (mint: string): LaunchBuyersResult => ({
+      status: "found",
+      complete: true,
+      buyers: buyers(mint, 25),
+      launchAt: null,
+      ...LAUNCH,
+      // Two block-zero wallets, one past the 25 first buyers.
+      blockZeroBuyers: [
+        { wallet: `${mint}-w0`, tokenAccount: `${mint}-a0`, bought: 1000, slot: 100 },
+        { wallet: `${mint}-z`, tokenAccount: `${mint}-z0`, bought: 9000, slot: 100 },
+      ],
+    });
+    let zHeld = 9000;
+    const getLaunchBuyersBatch = vi.fn(async (mints: string[]) => new Map(mints.map((m) => [m, reading(m)])));
+    const getTokenAccountBalances = vi.fn(
+      async (accounts: string[]) => new Map(accounts.map((a) => [a, a.endsWith("-z0") ? zHeld : 1000])),
+    );
+    const helius = { getLaunchBuyersBatch, getTokenAccountBalances } as unknown as HeliusClient;
+    const groups = [{ mintAddress: "A", contender: false }];
+    const first = (await resolveLaunchSnipers(groups, helius, { ...opts, now: 0 })).get("A")!;
+    expect(first).toMatchObject({ blockZeroHeldPct: 10, blockZeroBuyers: 2, blockZeroBoughtPct: 10 });
+    // The block-zero account outside the first buyers is read once, with them.
+    expect(getTokenAccountBalances.mock.calls[0]![0]).toContain("A-z0");
+    expect(blockZeroWalletsFromCache("A")).toEqual(new Set(["A-w0", "A-a0", "A-z", "A-z0"]));
+    // Held at the 10% cut: re-read on the contender TTL, not the 5-minute one.
+    zHeld = 0;
+    const later = (await resolveLaunchSnipers(groups, helius, { ...opts, now: 61_000 })).get("A")!;
+    expect(getTokenAccountBalances).toHaveBeenCalledTimes(2);
+    expect(later.blockZeroHeldPct).toBe(1);
+    // Under the cut now: back on the band's TTL.
+    await resolveLaunchSnipers(groups, helius, { ...opts, now: 122_000 });
+    expect(getTokenAccountBalances).toHaveBeenCalledTimes(2);
+  });
+
+  it("loads a saved read instead of paying for it, and saves a new one", async () => {
+    const f = fakeHelius({ found: { B: 25 } });
+    const saved = new Map<string, StoredLaunchRead>([
+      [
+        "A",
+        {
+          reading: { buyers: buyers("A", 25), launchAt: null, ...LAUNCH, blockZeroBuyers: [] },
+          complete: true,
+          readAt: 0,
+        },
+      ],
+    ]);
+    const store: LaunchReadStore = {
+      load: vi.fn(async (mints) => new Map([...saved].filter(([m]) => mints.includes(m)))),
+      save: vi.fn(async (reads) => {
+        for (const [m, r] of reads) saved.set(m, r);
+      }),
+    };
+    const groups = [
+      { mintAddress: "A", contender: false },
+      { mintAddress: "B", contender: false },
+    ];
+    const out = await resolveLaunchSnipers(groups, f.helius, { ...opts, store, now: 1_000 });
+    // A came from the store; only B was read from the chain, and saved.
+    expect(f.getLaunchBuyersBatch).toHaveBeenCalledWith(["B"], 25);
+    expect(out.get("A")).toMatchObject({ seen: 25, blockZeroBuyers: 0, blockZeroHeldPct: 0 });
+    expect(saved.get("B")?.complete).toBe(true);
+    // A store that fails costs nothing but the read.
+    resetLaunchSnipersCache();
+    const broken: LaunchReadStore = {
+      load: async () => {
+        throw new Error("db down");
+      },
+      save: async () => {
+        throw new Error("db down");
+      },
+    };
+    expect((await resolveLaunchSnipers(groups, f.helius, { ...opts, store: broken, now: 2_000 })).size).toBe(
+      1,
+    );
+  });
+
   it("re-reads a launch that had fewer than 25 buyers after a while", async () => {
     const f = fakeHelius({ found: { A: 10 } });
     const groups = [{ mintAddress: "A", contender: false }];
@@ -166,6 +249,9 @@ describe("resolveLaunchSnipers", () => {
       firstBuyersSupplyPct: 10,
       launchBundledBuyers: 1,
       devBuySupplyPct: 2,
+      blockZeroHeldPct: null,
+      blockZeroBuyers: null,
+      blockZeroBoughtPct: null,
     });
     await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 60_000 });
     expect(f.getLaunchBuyersBatch).toHaveBeenCalledTimes(1);
@@ -213,6 +299,9 @@ describe("withLaunchSnipers", () => {
       firstBuyersSupplyPct: 25,
       launchBundledBuyers: 3,
       devBuySupplyPct: 2,
+      blockZeroHeldPct: null,
+      blockZeroBuyers: null,
+      blockZeroBoughtPct: null,
     };
     expect(withLaunchSnipers(undefined, snipers)).toEqual({
       ...EMPTY_TRADE_FLOW,

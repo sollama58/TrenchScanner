@@ -234,6 +234,7 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
       { id: "empty", label: "Empty" },
       { id: "snipers", label: "First buyers holding" },
       { id: "sniperTop10", label: "Snipers in top holders" },
+      { id: "blockZero", label: "Block 0 snipers" },
       { id: "linked", label: "Linked wallets" },
       { id: "cexFunded", label: "CEX-funded holders" },
       { id: "kolBundled", label: "KOL Bundled %" },

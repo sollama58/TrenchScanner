@@ -56,6 +56,7 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     maxEmptyTop10WalletPct: SAFETY_CEILINGS.maxEmptyTop10WalletPct,
     maxSniperTop10WalletPct: null,
     maxSniperTopHolderCount: SAFETY_CEILINGS.maxSniperTopHolderCount,
+    maxBlockZeroHeldPct: SAFETY_CEILINGS.maxBlockZeroHeldPct,
     maxLinkedWalletPct: null,
     maxLinkedWalletCount: null,
     maxFlaggedBuySol: null,

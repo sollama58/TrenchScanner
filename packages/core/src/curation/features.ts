@@ -411,6 +411,19 @@ export const DEV_LAUNCH_FEATURES = [
 ] as const satisfies readonly (keyof DevLaunchFeatures)[];
 
 /**
+ * Added 2026-10-22 (user decision, notes/sniper-audit-2026-10-22): block zero, the wallets that
+ * bought in the create transaction's own slot (the dev aside), from the launch read the worker's
+ * launchSnipers.ts already makes (no new call). The % of the supply they hold now (the safety
+ * screen's Block 0 cut, the card and the filters), how many there were, and the % they bought
+ * there. Null until the read and its balance refresh land, with no slots to go by, and on every
+ * row banked before. Never backfilled.
+ *
+ * READ BY THE LEARNERS (user decision 2026-10-22), so none are in RETIRED_LEARNER_INPUTS. The
+ * onset guard (featureOnset.ts) keeps them out of a run until they cover enough of the exam's span.
+ */
+export const BLOCK_ZERO_FEATURES = ["blockZeroHeldPct", "blockZeroBuyers", "blockZeroBoughtPct"] as const;
+
+/**
  * The feature vector recorded on every CandidateOutcome row, and the ONLY input contract the
  * curated-alerts learner is allowed to see. Names here are load-bearing: a trained model stores
  * a coefficient per name, so renaming one silently orphans the weight it learned. Add new
@@ -675,6 +688,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   // The mislabeled window names they replace are retired below; their stored numbers are unchanged.
   ...CLOCK_HONEST_FEATURES,
   ...PATH_CLOCK_FEATURES,
+  ...BLOCK_ZERO_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -962,6 +976,7 @@ export const SAFETY_FEATURES: readonly CandidateFeatureName[] = learnerSubset([
   "devBuySupplyPct",
   "freshLaunchBuyerPct",
   "firstBuyersHoldingCut",
+  ...BLOCK_ZERO_FEATURES,
 ]);
 
 /** The order-flow features, in vector order - each is a TradeFlowFeatures field of the same name. */
@@ -1713,6 +1728,9 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   cexFundedCount: "exchange-funded top holders",
   cexFundedHolders: "top holders checked for exchange funding",
   sniperTopHolderCount: "launch snipers among the top 25",
+  blockZeroHeldPct: "supply held by block-zero snipers",
+  blockZeroBuyers: "wallets that bought in block zero",
+  blockZeroBoughtPct: "supply bought in block zero",
   sniperTopHoldersChecked: "top holders checked for snipers",
   top10WalletsChecked: "top-10 wallets checked",
   freshTopHolderCount: "fresh wallets among the top 25",
@@ -1819,6 +1837,9 @@ export function scoredFromFeatures(
     freshTop10WalletPct: num("freshTop10WalletPct"),
     emptyTop10WalletPct: num("emptyTop10WalletPct"),
     sniperTop10WalletPct: num("sniperTop10WalletPct"),
+    blockZeroHeldPct: num("blockZeroHeldPct"),
+    blockZeroBuyers: num("blockZeroBuyers"),
+    blockZeroBoughtPct: num("blockZeroBoughtPct"),
     // The top-25 fresh-wallet count the live cut reads first (freshWalletShare).
     freshTopHolderCount: num("freshTopHolderCount"),
     freshTopHoldersChecked: num("freshTopHoldersChecked"),
@@ -2011,6 +2032,9 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     cexFundedHolders: scored.cexFundedHolders ?? null,
     sniperTopHolderCount: scored.sniperTopHolderCount ?? null,
     sniperTopHoldersChecked: scored.sniperTopHoldersChecked ?? null,
+    blockZeroHeldPct: scored.blockZeroHeldPct ?? null,
+    blockZeroBuyers: scored.blockZeroBuyers ?? null,
+    blockZeroBoughtPct: scored.blockZeroBoughtPct ?? null,
     top10WalletsChecked: scored.top10WalletsChecked ?? null,
     freshTopHolderCount: scored.freshTopHolderCount ?? null,
     freshTopHoldersChecked: scored.freshTopHoldersChecked ?? null,
