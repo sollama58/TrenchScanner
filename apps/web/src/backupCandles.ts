@@ -33,6 +33,7 @@ export interface BackupCandle {
 
 interface DexPair {
   chainId?: string;
+  dexId?: string;
   pairAddress?: string;
   baseToken?: { address?: string };
   priceUsd?: string;
@@ -41,21 +42,34 @@ interface DexPair {
   liquidity?: { usd?: number };
 }
 
+/** DexScreener's names for the coin's own venues: its Pump.fun bonding curve and its PumpSwap pool. */
+const OWN_DEX_IDS = ["pumpfun", "pumpswap"];
+
 /**
- * The coin's busiest Solana pool with it as the base, and its supply (market cap over price);
- * null when DexScreener lists none.
+ * The coin's own Solana pool with it as the base, and its supply (market cap over price); null when
+ * DexScreener lists none. The coin's own pair is the pair its scans price it from (`pairAddress`,
+ * Token.pairAddress), else its Pump.fun curve or PumpSwap pool, else the busiest pool. Liquidity
+ * alone picked side pools: DexScreener gives the Pump.fun curve pair no liquidity at all, so a
+ * Meteora pool holding $6 won, with its own price, its own history and a wrong supply (charts
+ * audit CH-7).
  */
-export function pickPool(mint: string, body: unknown): { pool: string; supply: number } | null {
+export function pickPool(
+  mint: string,
+  body: unknown,
+  pairAddress: string | null = null,
+): { pool: string; supply: number } | null {
   const pairs = ((body as { pairs?: unknown } | null)?.pairs ?? []) as DexPair[];
   if (!Array.isArray(pairs)) return null;
-  let best: { pool: string; supply: number; liq: number } | null = null;
+  let best: { pool: string; supply: number; rank: number; liq: number } | null = null;
   for (const p of pairs) {
     if (p?.chainId !== "solana" || p.baseToken?.address !== mint || !p.pairAddress) continue;
     const price = Number(p.priceUsd);
     const cap = p.marketCap ?? p.fdv;
     if (!(price > 0) || !(typeof cap === "number" && cap > 0)) continue;
     const liq = p.liquidity?.usd ?? 0;
-    if (!best || liq > best.liq) best = { pool: p.pairAddress, supply: cap / price, liq };
+    const rank = p.pairAddress === pairAddress ? 2 : OWN_DEX_IDS.includes(p.dexId ?? "") ? 1 : 0;
+    if (!best || rank > best.rank || (rank === best.rank && liq > best.liq))
+      best = { pool: p.pairAddress, supply: cap / price, rank, liq };
   }
   return best ? { pool: best.pool, supply: best.supply } : null;
 }
@@ -95,7 +109,12 @@ async function getJson(url: string): Promise<unknown> {
  * BACKUP_POLL_MS while the tab is visible. Null until a read lands; the last good one stays up
  * through a failed read.
  */
-export function useBackupCandles(mint: string, enabled: boolean): BackupCandle[] | null {
+export function useBackupCandles(
+  mint: string,
+  enabled: boolean,
+  /** The coin's own pair (Token.pairAddress), which the pool is picked by first. */
+  pairAddress: string | null = null,
+): BackupCandle[] | null {
   const [held, setHeld] = useState<{ mint: string; candles: BackupCandle[] } | null>(null);
   useEffect(() => {
     if (!enabled) return;
@@ -109,6 +128,7 @@ export function useBackupCandles(mint: string, enabled: boolean): BackupCandle[]
           pool ??= pickPool(
             mint,
             await getJson(`${DEXSCREENER}/latest/dex/tokens/${encodeURIComponent(mint)}`),
+            pairAddress,
           );
           if (pool) {
             const body = await getJson(
@@ -133,6 +153,6 @@ export function useBackupCandles(mint: string, enabled: boolean): BackupCandle[]
       stopped = true;
       window.clearTimeout(timer);
     };
-  }, [mint, enabled]);
+  }, [mint, enabled, pairAddress]);
   return held && held.mint === mint ? held.candles : null;
 }

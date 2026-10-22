@@ -268,6 +268,8 @@ export interface Token {
   /** The coin's own X and website links as found at discovery (https only); null when it has none. */
   twitterUrl?: string | null;
   websiteUrl?: string | null;
+  /** The DexScreener pair the coin is priced from; null until a reading names it. */
+  pairAddress?: string | null;
   /** The coin the token's pair trades against (wrapped SOL for most); null until a reading names it. */
   quoteMint?: string | null;
   quoteSymbol?: string | null;

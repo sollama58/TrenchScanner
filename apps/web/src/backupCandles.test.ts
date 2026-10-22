@@ -46,6 +46,29 @@ describe("pickPool", () => {
     expect(p.supply).toBeCloseTo(1e9);
   });
 
+  it("prefers the coin's own pair, then its Pump.fun curve or PumpSwap pool, over a busier side pool", () => {
+    const pair = (pairAddress: string, dexId: string, liq?: number) => ({
+      chainId: "solana",
+      dexId,
+      pairAddress,
+      baseToken: { address: MINT },
+      priceUsd: "0.000003",
+      marketCap: 3_220,
+      ...(liq !== undefined ? { liquidity: { usd: liq } } : {}),
+    });
+    // DexScreener gives the curve pair no liquidity; a $6 Meteora pool used to win on it.
+    const body = {
+      pairs: [pair("side", "meteora", 6.39), pair("curve", "pumpfun"), pair("big", "raydium", 9e5)],
+    };
+    expect(pickPool(MINT, body)?.pool).toBe("curve");
+    expect(pickPool(MINT, body, "big")?.pool).toBe("big");
+    // The coin's pair not listed: the curve still wins.
+    expect(pickPool(MINT, body, "gone")?.pool).toBe("curve");
+    expect(pickPool(MINT, { pairs: [pair("side", "meteora", 6), pair("pool", "pumpswap", 1)] })?.pool).toBe(
+      "pool",
+    );
+  });
+
   it("is null without a priced pool", () => {
     expect(pickPool(MINT, { pairs: null })).toBeNull();
     expect(

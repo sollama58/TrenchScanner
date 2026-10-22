@@ -2502,6 +2502,7 @@ export function ChartCard({
   const backup = useBackupCandles(
     card.token.mintAddress,
     served ? !served.candles?.length : !!error && !(error instanceof ApiError && error.status < 500),
+    card.token.pairAddress ?? null,
   );
   const data = useMemo<TokenChart | null>(() => {
     if (!backup || served?.candles?.length) return served;
