@@ -511,7 +511,9 @@ export async function quoteInSol(
   preferOwnRoute?: () => Promise<boolean>,
 ): Promise<SwapQuote> {
   try {
-    return await jupiter.quote(input);
+    // Explicit true, not omitted: the client must not open the route on its own. A coin still on
+    // its SOL curve (preferOwnRoute) trades there, not through some other pool.
+    return await jupiter.quote({ ...input, restrictIntermediateTokens: true });
   } catch (err) {
     if (!(err instanceof NoRouteError)) throw err;
     if (preferOwnRoute && (await preferOwnRoute().catch(() => false))) throw err;
@@ -726,19 +728,26 @@ async function buildCurveHop(
   const hopSlippage = Math.min(req.slippageBps, HOP_SLIPPAGE_BPS);
   // One pool between SOL and the quote coin when there is one (the fewest accounts: the curve's
   // instruction needs room in the transaction too), else a short route, either within
-  // HOP_MAX_ACCOUNTS.
+  // HOP_MAX_ACCOUNTS. The cap is what Jupiter counts, not what fits: when it hides every route,
+  // ask once without it. A swap that will not fit is refused later as too large, not as no route.
   const hopQuote = async (input: {
     inputMint: string;
     outputMint: string;
     amount: bigint;
     slippageBps: number;
   }) => {
+    const capped = { ...input, maxAccounts: HOP_MAX_ACCOUNTS };
     try {
-      return await deps.jupiter.quote({ ...input, onlyDirectRoutes: true, maxAccounts: HOP_MAX_ACCOUNTS });
+      return await deps.jupiter.quote({ ...capped, onlyDirectRoutes: true });
     } catch (err) {
       if (!(err instanceof NoRouteError)) throw err;
-      return quoteInSol(deps.jupiter, { ...input, maxAccounts: HOP_MAX_ACCOUNTS });
     }
+    try {
+      return await quoteInSol(deps.jupiter, capped);
+    } catch (err) {
+      if (!(err instanceof NoRouteError)) throw err;
+    }
+    return deps.jupiter.quote({ ...input, restrictIntermediateTokens: false });
   };
   const jupiterIxs = (ixs: InstructionSpec[]) => ixs.filter((ix) => ix.programId !== PROGRAM.computeBudget);
   const unitsWith = (jupiterLimit: number | null, curveUnits: number) => {

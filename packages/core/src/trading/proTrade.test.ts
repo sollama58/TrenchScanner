@@ -937,7 +937,7 @@ describe("swap costs", () => {
       },
       { wallet: WALLET, mint: MINT, referenceLamports: 100_000_000n },
     );
-    expect(asked).toEqual([undefined, false]);
+    expect(asked).toEqual([true, false]);
     expect(costs.routeVia).toEqual([USDC, PUMP]);
     expect(costs.accountRentLamports).toBe(2n * TOKEN_2022_ACCOUNT_RENT_LAMPORTS);
   });
@@ -957,12 +957,12 @@ describe("quoteInSol", () => {
     await expect(quoteInSol(jupiter(asked), input, async () => false)).resolves.toMatchObject({
       outAmount: "5",
     });
-    expect(asked).toEqual([undefined, false]);
+    expect(asked).toEqual([true, false]);
   });
   it("leaves a coin still on its SOL curve to the curve, not an open route", async () => {
     const asked: (boolean | undefined)[] = [];
     await expect(quoteInSol(jupiter(asked), input, async () => true)).rejects.toBeInstanceOf(NoRouteError);
-    expect(asked).toEqual([undefined]);
+    expect(asked).toEqual([true]);
   });
 });
 
