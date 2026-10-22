@@ -1,3 +1,4 @@
+import { MAX_TRADES } from "./liveTrades.js";
 import { drawableCandles, type McapCandle } from "./tokenChart.js";
 
 /**
@@ -19,9 +20,13 @@ export type CandleSource = "pumpfun" | "stream" | "mixed";
 /** What the candles are built from: the live tail's ticks and the live trades. */
 export interface StreamFeeds {
   /** [ms, USD market cap on the supply now] per price change, oldest first (LiveCurves.history). */
-  history(
-    mint: string,
-  ): Promise<{ ticks: [number, number][]; coveredFrom: number | null; readAt: number | null } | null>;
+  history(mint: string): Promise<{
+    ticks: [number, number][];
+    coveredFrom: number | null;
+    /** From here the stream alone delivered every change (no RPC samples); absent: unknown. */
+    streamFrom?: number | null;
+    readAt: number | null;
+  } | null>;
   /** The trades kept for the coin (LiveTrades.recent): `sol` for volume, `mcapUsd` as a price. */
   recent(mint: string): Promise<{
     since: number | null;
@@ -36,6 +41,11 @@ export interface StreamCandleSet {
   candles: McapCandle[];
   /** From here (ms) the prices run without a gap; null when not known. */
   coveredFrom: number | null;
+  /**
+   * From here (ms) every change came off the stream itself, not an RPC read every few seconds:
+   * where its candles are true 1-second ones. Null when not known or off the stream.
+   */
+  streamFrom: number | null;
   /** The newest moment the price is known current (ms), null when not known. */
   readAt: number | null;
 }
@@ -53,11 +63,15 @@ export interface CandleTrade {
  * when the step began (the last change before it), so candles join up as Pump.fun's do. A step
  * with trades but no price change is drawn flat at the price then. With no ticks at all, the trades'
  * own market caps are the prices. Steps with neither are left out, as Pump.fun leaves them out.
+ * Steps starting before `volumeFrom` (ms) have volume null, unknown: the trades kept don't reach
+ * back over them (or there are none to read), and a 0 there would read as no trading (charts audit
+ * CH-10).
  */
 export function buildCandles(
   ticks: readonly [number, number][],
   trades: readonly CandleTrade[],
   stepMs: number,
+  volumeFrom = -Infinity,
 ): McapCandle[] {
   const points = (
     ticks.length > 0
@@ -97,6 +111,7 @@ export function buildCandles(
     const k = out.get(at);
     if (k) k.vol = usd;
   }
+  for (const k of out.values()) if (k.t < volumeFrom) k.vol = null;
   return drawableCandles([...out.values()].sort((a, b) => a.t - b.t));
 }
 
@@ -116,7 +131,9 @@ function lastBefore(points: readonly [number, number][], at: number): number | n
 
 /**
  * The coin's candles `stepMs` wide off what the stream holds for it, or null when it holds nothing
- * (the coin isn't followed). The trades' volume is their SOL at SOL's price now, 0 without one.
+ * (the coin isn't followed). The trades' volume is their SOL at SOL's price now. Volume is known
+ * (else null) only from when Live trades has followed the coin whole, and from its oldest kept trade
+ * once it holds all MAX_TRADES it keeps; not at all without a trade feed or SOL's price.
  */
 export async function streamCandles(
   feeds: StreamFeeds,
@@ -134,28 +151,48 @@ export async function streamCandles(
     usd: t.sol !== null && sol !== null ? t.sol * sol : null,
     mcapUsd: t.mcapUsd,
   }));
-  const candles = buildCandles(history?.ticks ?? [], trades, stepMs);
+  const kept = recent?.trades ?? [];
+  const volumeFrom =
+    recent?.since == null || (sol === null && kept.length > 0)
+      ? Infinity
+      : Math.max(recent.since, kept.length >= MAX_TRADES ? (kept[0]?.atMs ?? -Infinity) : -Infinity);
+  const candles = buildCandles(history?.ticks ?? [], trades, stepMs, volumeFrom);
   if (candles.length === 0) return null;
   return history
-    ? { candles, coveredFrom: history.coveredFrom, readAt: history.readAt }
-    : { candles, coveredFrom: recent?.since ?? null, readAt: trades.at(-1)?.atMs ?? null };
+    ? {
+        candles,
+        coveredFrom: history.coveredFrom,
+        streamFrom: history.streamFrom ?? null,
+        readAt: history.readAt,
+      }
+    : {
+        candles,
+        coveredFrom: recent?.since ?? null,
+        // Live trades come off their own stream (logs), each trade's own price.
+        streamFrom: recent?.since ?? null,
+        readAt: trades.at(-1)?.atMs ?? null,
+      };
 }
 
 /**
  * Whether the stream's candles alone can answer for the stretch from `from` (ms): they run without
- * a break from at or before it, and the price was known current within `currentMs` of `now`.
+ * a break from at or before it, and the price was known current within `currentMs` of `now`. With
+ * `streamOnly` (1-second candles), the stretch must have come off the stream itself (streamFrom):
+ * RPC reads every few seconds make 1-second candles that are flat four seconds in five.
  */
 export function streamCovers(
   set: StreamCandleSet | null,
   from: number,
   now: number,
   currentMs = 15_000,
+  streamOnly = false,
 ): set is StreamCandleSet {
+  const covered = set ? (streamOnly ? set.streamFrom : set.coveredFrom) : null;
   return (
     !!set &&
     set.candles.length > 0 &&
-    set.coveredFrom !== null &&
-    set.coveredFrom <= from &&
+    covered !== null &&
+    covered <= from &&
     set.readAt !== null &&
     now - set.readAt <= currentMs
   );
@@ -165,17 +202,33 @@ export function streamCovers(
  * Pump.fun's candles with the stream's after them: Pump.fun's stand wherever they reach (its
  * volumes count every trade, the stream's only those it kept), and the stream's fill in the steps
  * after Pump.fun's newest, which is the recent stretch when Pump.fun's answer is old or missing.
- * `source` names what the answer holds; absent when there are no candles.
+ * Pump.fun's newest candle was still forming when it was read (up to a minute or more ago), so
+ * when the stream ran unbroken through all of that step (`coveredFrom` at or before its start)
+ * the stream's version of it, which saw the rest of the step, takes its place; the larger of the
+ * two volumes stays, as either may have missed trades. `source` names what the answer holds;
+ * absent when there are no candles.
  */
 export function mergeCandles(
   pump: readonly McapCandle[] | null,
   stream: readonly McapCandle[] | null,
+  coveredFrom: number | null = null,
 ): { candles: McapCandle[] | null; source?: CandleSource; added: number } {
   const base = drawableCandles(pump ?? []);
-  const last = base.at(-1)?.t ?? -Infinity;
+  const newest = base.at(-1);
+  const last = newest?.t ?? -Infinity;
+  const own =
+    newest && coveredFrom !== null && coveredFrom <= newest.t
+      ? drawableCandles((stream ?? []).filter((k) => k.t === newest.t))[0]
+      : undefined;
+  if (newest && own) {
+    const vol = newest.vol === null ? own.vol : own.vol === null ? newest.vol : Math.max(newest.vol, own.vol);
+    base[base.length - 1] = { ...own, vol };
+  }
   const extra = drawableCandles((stream ?? []).filter((k) => k.t > last));
+  // A replaced newest candle counts as added: the answer is no longer only the old Pump.fun read.
+  const added = extra.length + (own ? 1 : 0);
   if (base.length === 0 && extra.length === 0) return { candles: null, added: 0 };
-  if (extra.length === 0) return { candles: base, source: "pumpfun", added: 0 };
-  if (base.length === 0) return { candles: extra, source: "stream", added: extra.length };
-  return { candles: [...base, ...extra], source: "mixed", added: extra.length };
+  if (added === 0) return { candles: base, source: "pumpfun", added: 0 };
+  if (base.length === 0) return { candles: extra, source: "stream", added };
+  return { candles: [...base, ...extra], source: "mixed", added };
 }

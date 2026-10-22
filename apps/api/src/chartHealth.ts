@@ -94,6 +94,11 @@ export interface ChartHealthSnapshot {
     bySource: Record<string, number>;
     null: number;
     stale: number;
+    /**
+     * Answers with candles short of the coin's history: the stream's alone (since a chart opened),
+     * or a first candle well after the launch (/chart only). They draw, so they aren't null.
+     */
+    partial: number;
     /** (null + stale) / answers, 0..1, or null under CANDLE_SHARE_MIN_ANSWERS answers. */
     nullOrStaleShare: number | null;
   };
@@ -120,6 +125,11 @@ export const CANDLE_SHARE_MIN_ANSWERS = 20;
 /** Null or stale candle answers: amber from this share, red (and the alert) from the next. */
 const CANDLE_SHARE_WARN = 0.1;
 export const CANDLE_SHARE_ALERT = 0.3;
+/**
+ * Answers short of the coin's history: amber from this share. Never red: non-Pump.fun coins only
+ * ever have the stream's candles, and the chart fills the rest from its backup.
+ */
+const PARTIAL_SHARE_WARN = 0.3;
 /** The chart socket silent this long is red, and alerts. */
 export const STREAM_STALL_ALERT_MS = 2 * MINUTE_MS;
 
@@ -172,14 +182,16 @@ export class ChartHealth {
   /**
    * One candle answer of the chart routes. `feed`: which one ("chart", "fine", "quarter"...);
    * `source`: where its candles came from ("pumpfun", "scan"...), null when it had none; `stale`:
-   * served from an expired entry because the refresh failed.
+   * served from an expired entry because the refresh failed; `partial`: candles short of the
+   * coin's history (the stream's alone, or starting well after the launch).
    */
-  recordCandleAnswer(feed: string, source: string | null, stale = false): void {
+  recordCandleAnswer(feed: string, source: string | null, stale = false, partial = false): void {
     this.add("candles.answers");
     const f = feed.replace(/[^\w-]/g, "").slice(0, 20) || "chart";
     if (source === null) this.add("candles.null");
     else this.add(`candles.source.${label(this.counts, "candles.source.", `${f}/${source}`)}`);
     if (stale) this.add("candles.stale");
+    if (partial) this.add("candles.partial");
   }
 
   /** One live tail answer, by its source ("stream", "rpc", "pending", "none"). */
@@ -267,6 +279,7 @@ export class ChartHealth {
           : share >= CANDLE_SHARE_WARN
             ? "warn"
             : "ok";
+    const partialShare = answers >= CANDLE_SHARE_MIN_ANSWERS ? get("candles.partial") / answers : null;
     const stallTone: HealthTone =
       this.stalledForMs >= STREAM_STALL_ALERT_MS ? "bad" : this.stalledForMs > 0 ? "warn" : "ok";
     const counted: [string, string, string][] = [
@@ -288,6 +301,14 @@ export class ChartHealth {
         sinceBoot: this.counts.total("candles.null") + this.counts.total("candles.stale"),
         tone: shareTone,
         threshold: `amber from ${CANDLE_SHARE_WARN * 100}%, red from ${CANDLE_SHARE_ALERT * 100}% of answers (at least ${CANDLE_SHARE_MIN_ANSWERS})`,
+      },
+      {
+        key: "candlesPartial",
+        label: "Candle answers short of the coin's history (stream only, or starting well after launch)",
+        window: get("candles.partial"),
+        sinceBoot: this.counts.total("candles.partial"),
+        tone: partialShare !== null && partialShare >= PARTIAL_SHARE_WARN ? "warn" : "ok",
+        threshold: `amber from ${PARTIAL_SHARE_WARN * 100}% of answers (at least ${CANDLE_SHARE_MIN_ANSWERS}); never red`,
       },
       {
         key: "streamStalled",
@@ -318,6 +339,7 @@ export class ChartHealth {
         bySource: byPrefix("candles.source."),
         null: get("candles.null"),
         stale: get("candles.stale"),
+        partial: get("candles.partial"),
         nullOrStaleShare: share === null ? null : Math.round(share * 1000) / 1000,
       },
       liveTail: { answers: get("liveTail.answers"), bySource: byPrefix("liveTail.source.") },
@@ -370,8 +392,13 @@ export function setChartHealth(health: ChartHealth): void {
  */
 
 /** One candle answer: `feed` "chart" | "fine" | "quarter"...; `source` null for no candles. */
-export function recordCandleAnswer(feed: string, source: string | null, stale = false): void {
-  shared.recordCandleAnswer(feed, source, stale);
+export function recordCandleAnswer(
+  feed: string,
+  source: string | null,
+  stale = false,
+  partial = false,
+): void {
+  shared.recordCandleAnswer(feed, source, stale, partial);
 }
 
 /** Every source for SOL's (or a quote coin's) USD price failed (solPrice.ts). */

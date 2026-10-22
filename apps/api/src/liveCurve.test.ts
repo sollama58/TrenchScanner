@@ -69,6 +69,8 @@ function setup(
   const states = [...(opts.states ?? [state(5e10)])];
   const watched = new Set<string>();
   let covered: number | null = null;
+  /** The slot feed's time for each slot (HeliusAccountStream.slotTime). */
+  const slotTimes = new Map<number, number>();
   let onAccount: ((key: string, data: string, slot: number | null) => void) | null = null;
   const poolReads: string[][] = [];
   const resubscribed: string[] = [];
@@ -86,6 +88,7 @@ function setup(
             unwatch: (key: string) => void watched.delete(key),
             coveredSince: (key: string) => (watched.has(key) ? covered : null),
             resubscribe: (key: string) => void resubscribed.push(key),
+            slotTime: (slot: number | null) => (slot === null ? null : (slotTimes.get(slot) ?? null)),
           };
         }
       : null,
@@ -127,7 +130,8 @@ function setup(
     /** What the RPC reads from now on (the stream may not have said). */
     next: (s: CurveState) => void states.splice(0, states.length, s),
     nextAmounts: (base: number, quote: number) => void amounts.splice(0, 2, base, quote),
-    push: (data: string) => onAccount!(`chart:${MINT}`, data, null),
+    slotTimes,
+    push: (data: string, slot: number | null = null) => onAccount!(`chart:${MINT}`, data, slot),
     pushVault: (side: "base" | "quote", amount: bigint, slot: number) =>
       onAccount!(`pool-${side}:${MINT}`, vaultData(amount), slot),
     pushPool: (virtualQuote: bigint) =>
@@ -454,6 +458,41 @@ describe("LiveCurves.history (the chart's own candles)", () => {
     const h = await t.curves.history(MINT);
     expect(h?.ticks).toEqual([[t.at(), curveMcapSol(state(5e10)) * 100]]);
     expect(h?.coveredFrom).toBe(t.at());
+    // Read by RPC alone: covered, but not by the stream itself.
+    expect(h?.streamFrom).toBeNull();
+    t.curves.stop();
+  });
+
+  it("says from when the stream alone delivered every change", async () => {
+    const t = setup({ stream: true });
+    await t.curves.read(MINT, 0);
+    const seeded = t.at();
+    t.tick(3_000);
+    // The subscription is confirmed after the seed read: the RPC read that follows starts the cover.
+    t.cover(t.at());
+    t.tick(READ_EVERY_MS);
+    await t.curves.round();
+    const h = await t.curves.history(MINT);
+    expect(h?.coveredFrom).toBe(seeded);
+    expect(h?.streamFrom).toBe(seeded + 3_000);
+    // A stall (or a dropped subscription) and it is off the stream: no stream-only stretch.
+    t.cover(null);
+    expect((await t.curves.history(MINT))?.streamFrom).toBeNull();
+    t.curves.stop();
+  });
+
+  it("stamps a streamed change with its slot's time where the slot feed has one", async () => {
+    const t = setup({ stream: true });
+    t.cover(t.at());
+    await t.curves.read(MINT, 0);
+    t.tick(2_000);
+    t.slotTimes.set(7, t.at() - 900);
+    t.push(curveData(1_000_000_000_000_000n, 70_000_000_000n), 7);
+    t.tick(1_000);
+    // A slot it has no time for: the arrival.
+    t.push(curveData(1_000_000_000_000_000n, 71_000_000_000n), 8);
+    const h = await t.curves.history(MINT);
+    expect(h?.ticks.map(([at]) => at)).toEqual([t.at() - 3_000, t.at() - 1_900, t.at()]);
     t.curves.stop();
   });
 });

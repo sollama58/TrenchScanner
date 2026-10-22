@@ -51,6 +51,8 @@ import { scoreTone, scoreToneColor, useScoreWeights } from "../scoreWeights";
 import {
   candleCloses,
   linePoints,
+  newestCandleStart,
+  withOpenPoint,
   stitch,
   stitchVolume,
   withCallPoint,
@@ -116,7 +118,7 @@ import { spendBalancesShown, useWalletBalance } from "../walletBalance";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
 import { lagsLead, preferLiveChartNow, scanReplacesMarketCap, type ChartNow } from "../marketClock";
 import { SectionBoundary } from "./SectionBoundary";
-import { useBackupCandles } from "../backupCandles";
+import { useBackupCandles, wantsBackup, withBackup } from "../backupCandles";
 import { reportClientError } from "../clientErrors";
 import { guessPath, pathFrom, type PathGuess, type PathStep } from "../pricePathing";
 import {
@@ -196,6 +198,10 @@ interface TokenChart {
   holderEntries?: Record<string, HolderEntry>;
   /** SOL's USD price already kept by the API. Absent when it has none in hand. */
   solUsd?: number;
+  /** Where `candles` came from (apps/api/src/streamCandles.ts CandleSource); absent from older API builds. */
+  source?: "pumpfun" | "stream" | "mixed";
+  /** When the coin launched (ms); absent from older API builds. */
+  launchAt?: number;
 }
 
 /** Mirrors apps/api/src/tokenChart.ts MarkedWallet. */
@@ -2495,23 +2501,24 @@ export function ChartCard({
 }) {
   const api = useTokenApi(card.token.mintAddress);
   // A second source of candles (user asks 2026-10-19): when the API has none for the coin (Pump.fun
-  // down or rate limited) or can't be reached, the browser reads GeckoTerminal's minute candles itself.
-  // Never for an answer that is the API's to give (a lookup to pay for, access ended, no such coin):
-  // only when it had no candles, or couldn't answer at all.
-  const backup = useBackupCandles(
-    card.token.mintAddress,
-    served ? !served.candles?.length : !!error && !(error instanceof ApiError && error.status < 500),
-  );
+  // down or rate limited), only the stream's since a chart opened, or none from near the launch, or
+  // can't be reached, the browser reads GeckoTerminal's minute candles itself (wantsBackup) and
+  // joins them to the API's (withBackup). Never for an answer that is the API's to give (a lookup to
+  // pay for, access ended, no such coin).
+  const backupWanted = served
+    ? wantsBackup(served)
+    : !!error && !(error instanceof ApiError && error.status < 500);
+  const backup = useBackupCandles(card.token.mintAddress, backupWanted, card.token.pairAddress ?? null);
   const data = useMemo<TokenChart | null>(() => {
-    if (!backup || served?.candles?.length) return served;
-    return served
-      ? { ...served, candles: backup }
-      : { mint: card.token.mintAddress, candles: backup, marketCap: [] };
-  }, [served, backup, card.token.mintAddress]);
+    if (!backup || !backupWanted) return served;
+    if (!served) return { mint: card.token.mintAddress, candles: backup, marketCap: [] };
+    const candles = withBackup(served.candles, served.source, backup);
+    return candles === served.candles ? served : { ...served, candles };
+  }, [served, backup, backupWanted, card.token.mintAddress]);
   const fromBackup = data !== served;
   const look = useAppearance();
-  // The candle size the chart draws, which decides how fine the candles read are; minute candles
-  // until it says.
+  // The candle size the chart wants (TradingChart onTimeframe), which decides how fine the candles
+  // read are; minute candles until it says.
   const [chartTf, setChartTf] = useState<number | null>(null);
 
   // Pro Mode: the signed-in wallet's position in the coin (read once by the token view) and the
@@ -2662,6 +2669,7 @@ export function ChartCard({
     api,
     wantSecond || pathing ? "1s" : null,
     bounds?.live ? FINE_LIVE_POLL_MS : FINE_POLL_MS,
+    bounds?.from ?? null,
   );
   const second = wantSecond ? secondRead : null;
   const secondReaches = !!second?.candles?.length && !!bounds && second.candles[0]!.t <= bounds.from + 60_000;
@@ -2749,22 +2757,28 @@ export function ChartCard({
           ? [...pts, { t: at, v: end.v }]
           : pts;
       };
-      const source = held(stitch(runs, bounds.live ? tail.ticks : []));
+      const stitched = held(stitch(runs, bounds.live ? tail.ticks : []));
+      const source = fromCandles
+        ? withOpenPoint(
+            stitched,
+            runs.find((r) => r.candles.length > 0),
+          )
+        : stitched;
       if (source.length < 2) return null;
       const last = source[source.length - 1]!.t;
       const from = bounds.from;
       const to = bounds.live ? last : bounds.to;
-      // Which widths the view is drawn from: a run is used where it wins (stitch's rule) in view.
-      const used = runs.filter((r, i) => {
-        const next = runs.slice(i + 1).find((n) => n.points.length > 0);
-        const until = next ? next.points[0]!.t - next.stepMs : Infinity;
-        return r.points.some((p) => p.t >= from && p.t <= to && p.t <= until);
-      });
+      // Which widths the view is drawn from: a run is used where its closes survived the stitch, in view.
+      const survived = new Set(candled);
+      const used = runs.filter((r) => r.points.some((p) => p.t >= from && p.t <= to && survived.has(p)));
       const candledTo = candled.length > 0 ? candled[candled.length - 1]!.t : -Infinity;
       const usesTail = bounds.live && tail.ticks.some((p) => p.t >= from && p.t > candledTo);
       const finest = usesTail ? 1_000 : Math.min(...used.map((r) => r.stepMs || 30_000), 60_000);
       const fullStep = pointWidthMs(Math.max(1_000, Math.min(to, last) - from), maxPoints(), finest);
-      const full = linePoints(source, from, fullStep, to);
+      const thinned = linePoints(source, from, fullStep, to);
+      // Thinned to one point (a single candle still forming, both its readings in one slot): the
+      // readings themselves.
+      const full = thinned.length < 2 ? source.filter((p) => p.t >= from && p.t <= to) : thinned;
       if (full.length < 2) return null;
       const extent = { t0: full[0]!.t, t1: full[full.length - 1]!.t };
       const step = fullStep;
@@ -2772,7 +2786,14 @@ export function ChartCard({
       // The chart builds its candles from the candles themselves, and from the readings after the
       // newest one (the live curve's ticks, which move the forming candle); without candles, from
       // the scans' readings.
-      const ticks = source.filter((p) => p.t >= from && p.t <= to && (!fromCandles || p.t > candledTo));
+      // The readings count from the newest candle's start, not its end: that candle is still forming,
+      // and the live ticks inside it move its close, high and low (liveCandles). Cut at its end, the
+      // last candle kept the shape it had when Pump.fun was read, up to a minute or more before.
+      const volume = stitchVolume(runs);
+      const forming = newestCandleStart(volume);
+      const ticks = source.filter(
+        (p) => p.t >= from && p.t <= to && (!fromCandles || (p.t > forming && !survived.has(p))),
+      );
       // The predicted path, from the finest reading of the last minute: the 1-second candles and
       // the live curve's changes after them.
       // It is read afresh every PATH_EVERY_MS, not on every tick, so its shape holds steady between
@@ -2809,7 +2830,7 @@ export function ChartCard({
         latest: source[source.length - 1]!.v,
         latestAt: source[source.length - 1]!.t,
         // The candles in view for the volume lane, each stretch from one width only.
-        candles: stitchVolume(runs).filter((k) => k.t + (k.w ?? 60_000) >= from && k.t <= to),
+        candles: volume.filter((k) => k.t + (k.w ?? 60_000) >= from && k.t <= to),
       };
     };
     try {

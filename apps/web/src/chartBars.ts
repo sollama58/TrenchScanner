@@ -12,9 +12,10 @@ import {
  * The token chart's candles at one timeframe (TradingChart, user ask 2026-10-19: the HolDEX chart
  * on our own candle sources). The chart library spaces its bars evenly, so the candles become one
  * slot per timeframe step from the first trade on: quiet slots drawn flat at the close before them
- * (fillFlat). A candle coarser than a wider timeframe (a minute candle on 15-second slots, where
- * the finer candles don't reach) is kept at its real width. A 1-second chart leaves those out
- * (candlesForResolution) instead of drawing a 5-second bucket on the 1-second scale.
+ * (fillFlat). A candle coarser than the timeframe (a minute candle on 15-second or 1-second slots,
+ * where the finer candles don't reach) is kept at its real width and marked `coarse`, so the chart
+ * shades it: the history stays on screen, and it doesn't pass for finer candles (charts audit CH-2:
+ * the 1-second chart used to drop it, leaving everything before the 1-second page blank).
  */
 export interface SlotBar {
   /** The slot's start (ms). */
@@ -34,6 +35,8 @@ export interface SlotBar {
   span?: number;
   /** Under a wider candle that started this many slots earlier (its values repeat here). */
   under?: number;
+  /** From a candle wider than the timeframe (where no finer ones reach): drawn shaded. */
+  coarse?: boolean;
 }
 
 export interface Slots {
@@ -49,43 +52,20 @@ export const MAX_SLOTS = 12_000;
 const SECOND_MS = 1_000;
 
 /**
- * Exported for tests. The candles a chart at `tfMs` may draw. On the 1-second chart, only 1-second
- * candles: a coarser bucket kept when 1-second history is missing (a 5-second candle, a 15-second
- * page, a minute backup) is omitted rather than painted on the 1-second scale. A live tick is one
- * price at one moment, so it becomes the single second it landed in. Nothing is invented inside a
- * coarser bar. Wider timeframes still receive every candle, including ones wider than a slot.
+ * Exported for tests. The candles a chart at `tfMs` draws. On the 1-second chart a live tick's step
+ * (one price at one moment) becomes the single second it landed in, rather than a candle as long as
+ * the quiet stretch before it. Candles wider than the timeframe stay at their real width (coarse).
  */
-/**
- * What to tell a reader when the 1-second chart has history, but none of it is 1 second wide.
- * Coarser candles are omitted (candlesForResolution) rather than painted on the 1-second scale,
- * which otherwise leaves a coin that only has minute bars looking like a blank chart.
- * Null when this timeframe draws something, or when there were no candles to begin with.
- */
-export function oneSecondChartNotice(tfMs: number, candleCount: number, drawn: boolean): string | null {
-  if (tfMs !== SECOND_MS || drawn || candleCount <= 0) return null;
-  return "No 1-second trades in this view. Coarser candles are not drawn on the 1-second chart.";
-}
-
 export function candlesForResolution(candles: readonly VolumeCandle[], tfMs: number): VolumeCandle[] {
   if (tfMs !== SECOND_MS) return candles as VolumeCandle[];
-  const out: VolumeCandle[] = [];
-  for (const k of candles) {
-    if (k.tick) {
-      const end = k.t + (k.w ?? tfMs);
-      out.push({ ...k, t: end - tfMs, w: tfMs });
-      continue;
-    }
-    const w = k.w ?? 60_000;
-    if (Math.abs(w - tfMs) <= 1) out.push(w === tfMs ? k : { ...k, w: tfMs });
-  }
-  return out;
+  return candles.map((k) => (k.tick ? { ...k, t: k.t + (k.w ?? tfMs) - tfMs, w: tfMs } : k));
 }
 
 /**
  * Exported for tests. The candles (and the live ticks after them) as slots `tfMs` wide on round
  * multiples of it, from the first candle to the last reading; null without any. A long history at a
- * fine timeframe keeps its newest `maxSlots`. A 1-second chart drops candles that are not 1 second
- * wide (candlesForResolution) before the slots are built.
+ * fine timeframe keeps its newest `maxSlots`. A candle wider than the timeframe runs over the slots
+ * it covers, marked coarse.
  */
 export function buildSlots(
   candles: readonly VolumeCandle[],
@@ -132,10 +112,20 @@ export function buildSlots(
       vol: vols[i] ? vols[i]!.usd : 0,
       ...(b.flat ? { flat: true } : {}),
       ...(span > 1 ? { span } : {}),
+      ...(b.coarse ? { coarse: true } : {}),
     };
     for (let j = 1; j < span; j++) {
       if (filled[i + j]) break;
-      bars[i + j - first] = { t: start + (i + j) * tfMs, o: b.o, h: b.h, l: b.l, c: b.c, vol: 0, under: j };
+      bars[i + j - first] = {
+        t: start + (i + j) * tfMs,
+        o: b.o,
+        h: b.h,
+        l: b.l,
+        c: b.c,
+        vol: 0,
+        under: j,
+        ...(b.coarse ? { coarse: true } : {}),
+      };
     }
   }
   if (first < 0) return null;
@@ -180,12 +170,39 @@ export function slotIndex(slots: Slots, t: number): number {
 
 /**
  * Exported for tests. Auto's timeframe for a view `spanMs` long on a chart `plotW` px wide: the
- * narrowest of TIMEFRAMES that keeps about `candlePx` a candle with the whole view on screen.
+ * narrowest of TIMEFRAMES that keeps about `candlePx` a candle with the whole view on screen, and
+ * never finer than `finestMs`, the finest candles that cover most of the view (finestCoverMs), as
+ * priceChart.ts autoTimeframe does: a young coin with only minute candles gets 1m, not a 1-second
+ * chart of shaded minute candles.
  */
-export function autoTimeframe(spanMs: number, plotW: number, candlePx = 6): number {
+export function autoTimeframe(spanMs: number, plotW: number, candlePx = 6, finestMs = 0): number {
   const fit = Math.max(8, Math.floor(plotW / candlePx));
-  const tf = TIMEFRAMES.find((f) => spanMs / f.ms <= fit);
+  const tf = TIMEFRAMES.find((f) => f.ms >= finestMs && spanMs / f.ms <= fit);
   return (tf ?? TIMEFRAMES[TIMEFRAMES.length - 1]!).ms;
+}
+
+/**
+ * Exported for tests. The finest candle width that, with the finer ones, covers at least half of
+ * [t0, t1], from the first such candle to the last (the finer pages hold only seconds with a trade,
+ * so their count says little); 0 without candles in the window. Live ticks don't count: they reach
+ * back only to when the chart opened.
+ */
+export function finestCoverMs(candles: readonly VolumeCandle[], t0: number, t1: number): number {
+  const real = candles.filter((k) => !k.tick && k.t + (k.w ?? 60_000) > t0 && k.t < t1);
+  if (real.length === 0 || !(t1 > t0)) return 0;
+  const widths = [...new Set(real.map((k) => k.w ?? 60_000))].sort((a, b) => a - b);
+  for (const w of widths) {
+    let from = Infinity;
+    let to = -Infinity;
+    for (const k of real) {
+      const kw = k.w ?? 60_000;
+      if (kw > w) continue;
+      from = Math.min(from, k.t);
+      to = Math.max(to, k.t + kw);
+    }
+    if (Math.min(to, t1) - Math.max(from, t0) >= (t1 - t0) / 2) return w;
+  }
+  return widths[widths.length - 1]!;
 }
 
 /**

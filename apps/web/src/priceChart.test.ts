@@ -29,6 +29,8 @@ import {
   fillFlat,
   liveCandles,
   lockedSpans,
+  newestCandleStart,
+  withOpenPoint,
   autoTimeframe,
   barOver,
   timeframeLabel,
@@ -69,6 +71,17 @@ describe("stitch", () => {
     expect(stitch([minute], ticks).map((p) => p.t / M)).toEqual([4, 5, 5.2, 5.5]);
   });
 
+  it("keeps the coarser closes after a finer run that is behind", () => {
+    // The 15-second page was read at 3:15; the minute candles reach 6:00.
+    const minute = { points: pts(1 * M, 2 * M, 3 * M, 4 * M, 5 * M, 6 * M), stepMs: M };
+    const quarter = { points: pts(2.75 * M, 3 * M, 3.25 * M), stepMs: 15_000 };
+    expect(stitch([minute, quarter]).map((p) => p.t / M)).toEqual([1, 2, 2.75, 3, 3.25, 4, 5, 6]);
+    // The ticks take over from the newest candle's start: the minute candle's, not the finer run's.
+    expect(stitch([minute, quarter], pts(5.5 * M)).map((p) => p.t / M)).toEqual([
+      1, 2, 2.75, 3, 3.25, 4, 5, 5.5,
+    ]);
+  });
+
   it("leaves the runs alone without finer ones", () => {
     expect(
       stitch([
@@ -76,6 +89,22 @@ describe("stitch", () => {
         { points: [], stepMs: 1_000 },
       ]),
     ).toEqual(pts(1, 2));
+  });
+});
+
+describe("withOpenPoint", () => {
+  it("runs a single candle's line from its open, and leaves longer lines alone", () => {
+    const run = { candles: [{ t: 0, o: 5 }] };
+    expect(withOpenPoint([{ t: M, v: 7 }], run)).toEqual([
+      { t: 0, v: 5 },
+      { t: M, v: 7 },
+    ]);
+    const two = [
+      { t: M, v: 7 },
+      { t: 2 * M, v: 8 },
+    ];
+    expect(withOpenPoint(two, run)).toBe(two);
+    expect(withOpenPoint([{ t: M, v: 7 }], undefined)).toEqual([{ t: M, v: 7 }]);
   });
 });
 
@@ -319,6 +348,61 @@ describe("volumeBars", () => {
     ]);
   });
 
+  it("keeps the coarser candles after a finer run that is behind", () => {
+    const vol = stitchVolume([
+      {
+        candles: [k(0, 1, 1, 60), k(60_000, 1, 1, 60), k(120_000, 1, 1, 60), k(180_000, 1, 1, 60)],
+        stepMs: 60_000,
+      },
+      { candles: [k(60_000, 1, 1, 30), k(75_000, 1, 1, 30)], stepMs: 15_000 },
+    ]);
+    expect(vol.map((c) => [c.t, c.w])).toEqual([
+      [0, 60_000],
+      [60_000, 15_000],
+      [75_000, 15_000],
+      [120_000, 60_000],
+      [180_000, 60_000],
+    ]);
+  });
+
+  it("keeps a coarser candle open at a finer run's end whole, without the finer candles inside it", () => {
+    const vol = stitchVolume([
+      { candles: [k(0, 1, 1, 60), k(60_000, 1, 1, 60), k(120_000, 1, 1, 60)], stepMs: 60_000 },
+      // The 15-second page runs from 0:00 to 1:30, ending inside the 1:00 minute.
+      {
+        candles: [0, 15_000, 30_000, 45_000, 60_000, 75_000].map((t) => k(t, 1, 1, 30)),
+        stepMs: 15_000,
+      },
+    ]);
+    expect(vol.map((c) => [c.t, c.w])).toEqual([
+      [0, 15_000],
+      [15_000, 15_000],
+      [30_000, 15_000],
+      [45_000, 15_000],
+      [60_000, 60_000],
+      [120_000, 60_000],
+    ]);
+  });
+
+  it("keeps the coarser candle open at a finer run's start, without the finer candles inside it", () => {
+    // The minute page starts at 7:00, inside the 5:00 five-minute bucket.
+    const fives = [
+      { ...k(0, 1, 1, 60), w: 5 * M },
+      { ...k(5 * M, 1, 1, 60), w: 5 * M },
+    ];
+    const minutes = [7, 8, 9, 10, 11].map((m) => k(m * M, 1, 1, 6));
+    const vol = stitchVolume([
+      { candles: fives, stepMs: 5 * M },
+      { candles: minutes, stepMs: M },
+    ]);
+    expect(vol.map((c) => [c.t / M, c.w! / M])).toEqual([
+      [0, 5],
+      [5, 5],
+      [10, 1],
+      [11, 1],
+    ]);
+  });
+
   it("leaves out minutes outside the view", () => {
     const bars = volumeBars([k(-600_000, 1, 1, 5), k(900_000, 1, 1, 5)], 0, 300_000, 2);
     expect(bars).toEqual([null, null]);
@@ -507,6 +591,13 @@ describe("the live candle view", () => {
     expect(out[1]).toMatchObject({ o: 11, c: 13, h: 15, l: 9 });
     // The closed candle is left alone.
     expect(out[0]).toEqual(k(0, 10, 11));
+  });
+
+  it("finds where the forming candle starts, the one reaching furthest whatever its width", () => {
+    expect(newestCandleStart([])).toBe(-Infinity);
+    // A 15-second candle at 1:30 ends before the 1:00 minute candle does.
+    expect(newestCandleStart([k(0, 10, 11), k(M, 11, 12), { ...k(1.5 * M, 12, 12), w: 15_000 }])).toBe(M);
+    expect(newestCandleStart([k(0, 10, 11), { ...k(M + 50_000, 12, 12), w: 15_000 }])).toBe(M + 50_000);
   });
 
   it("runs ticks past the newest candle's end on as candles of their own", () => {

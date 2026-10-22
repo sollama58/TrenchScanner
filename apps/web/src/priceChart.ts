@@ -28,10 +28,13 @@ export interface CloseRun {
 }
 
 /**
- * Exported for tests. The finest reading at every moment: each run (coarse to fine) wins from where
- * it starts, so the minute closes cover what Pump.fun's finer pages don't reach back to, the
+ * Exported for tests. The finest reading at every moment: each run (coarse to fine) wins over the
+ * stretch it covers, so the minute closes cover what Pump.fun's finer pages don't reach back to, the
  * 15-second ones the hours before the 1-second page, and the live curve ticks everything after the
- * newest candle. A finer run starts at its first candle's start (its first close less its width).
+ * newest candle. A finer run starts at its first candle's start (its first close less its width)
+ * and ends at its last close: a finer page read a while ago (the 15-second one is polled every
+ * minute, the 1-second one kept through empty answers) doesn't hide the newer coarser closes after
+ * it, which are the only readings of those minutes when the live tail isn't streaming.
  */
 export function stitch(runs: readonly CloseRun[], ticks: readonly Point[] = []): Point[] {
   let out: Point[] = [];
@@ -39,8 +42,14 @@ export function stitch(runs: readonly CloseRun[], ticks: readonly Point[] = []):
   for (const run of runs) {
     if (run.points.length === 0) continue;
     const from = run.points[0]!.t - run.stepMs;
-    out = out.filter((p) => p.t <= from).concat(run.points);
-    lastStep = run.stepMs;
+    const to = run.points[run.points.length - 1]!.t;
+    const after = out.filter((p) => p.t > to);
+    out = out
+      .filter((p) => p.t <= from)
+      .concat(run.points)
+      .concat(after);
+    // The newest point's own width, for where the ticks take over below.
+    if (after.length === 0) lastStep = run.stepMs;
   }
   // The ticks win from the newest candle's start: that candle may still be open (its close so far
   // drawn at now), and the curve's changes inside it are the finer reading.
@@ -49,6 +58,20 @@ export function stitch(runs: readonly CloseRun[], ticks: readonly Point[] = []):
   if (tail.length === 0) return out;
   const first = tail[0]!.t;
   return out.filter((p) => p.t < first).concat(tail);
+}
+
+/**
+ * Exported for tests. A line of one reading (a coin with a single candle and no live ticks after
+ * it) with that candle's open added at its start, so the chart draws the candle rather than "No
+ * trades to chart yet" (charts audit CH-11). Any other line as it is.
+ */
+export function withOpenPoint(
+  points: Point[],
+  first: { candles: readonly { t: number; o: number }[] } | undefined,
+): Point[] {
+  const k = first?.candles[0];
+  if (points.length !== 1 || !k || !(k.o > 0) || k.t >= points[0]!.t) return points;
+  return [{ t: k.t, v: k.o }, points[0]!];
 }
 
 /** Time-axis steps, in ms: round seconds, minutes, hours and days. */
@@ -472,8 +495,8 @@ export function volumeBars(
 }
 
 /**
- * Exported for tests. The volume lane's candles for a stitched view: each run's candles from where
- * that run takes over (the same rule as stitch), so a stretch is counted from one width only.
+ * Exported for tests. The volume lane's candles for a stitched view: each run's candles over the
+ * stretch that run covers (the same rule as stitch), so a stretch is counted from one width only.
  */
 export function stitchVolume(
   runs: readonly { candles: readonly VolumeCandle[]; stepMs: number }[],
@@ -482,9 +505,24 @@ export function stitchVolume(
   for (const run of runs) {
     if (run.candles.length === 0) continue;
     const from = run.candles[0]!.t;
-    out = out
-      .filter((k) => k.t + (k.w ?? MINUTE) <= from)
-      .concat(run.candles.map((k) => ({ ...k, w: run.stepMs })));
+    const lastEnd = run.candles[run.candles.length - 1]!.t + run.stepMs;
+    // A coarser candle still open at the finer run's end (the minute the 15-second page stopped
+    // in) keeps its whole stretch, and the finer candles inside it give way: the newer coarser
+    // candle saw more of it, and dropping it would leave a hole up to the next one.
+    const end = (k: VolumeCandle) => k.t + (k.w ?? MINUTE);
+    const straddle = out.find((k) => k.t > from && k.t < lastEnd && end(k) > lastEnd);
+    const until = straddle ? straddle.t : lastEnd;
+    // So does one open at its start (the 5-minute bucket the minute page starts inside): the finer
+    // page doesn't hold that bucket's minutes before its first, so without it they'd be drawn flat.
+    const before = out.filter((k) => k.t < from && (end(k) <= from || end(k) <= until));
+    const since = Math.max(from, ...before.map(end));
+    out = before
+      .concat(
+        run.candles
+          .filter((k) => k.t >= since && k.t + run.stepMs <= until)
+          .map((k) => ({ ...k, w: run.stepMs })),
+      )
+      .concat(out.filter((k) => k.t >= until));
   }
   return out;
 }
@@ -524,6 +562,8 @@ export interface OhlcBar {
   flat?: boolean;
   /** Slots it covers, from its own: more than one for a candle wider than a slot (slotOf). */
   span?: number;
+  /** A candle wider than a slot (where no finer candles reach): the chart shades it. */
+  coarse?: boolean;
 }
 
 /**
@@ -551,6 +591,20 @@ export function fillFlat(bars: readonly (OhlcBar | null)[], start: number, ms: n
     prevAt = i;
   }
   return out;
+}
+
+/**
+ * Where the newest candle (the one reaching furthest, as liveCandles takes it) starts, ms;
+ * -Infinity without candles. The live readings after it are folded into it.
+ */
+export function newestCandleStart(candles: readonly VolumeCandle[]): number {
+  let start = -Infinity;
+  let end = -Infinity;
+  for (const k of candles) {
+    const e = k.t + (k.w ?? MINUTE);
+    if (e > end) [start, end] = [k.t, e];
+  }
+  return start;
 }
 
 /**
@@ -615,7 +669,16 @@ export function ohlcBars(
     const { i } = at;
     const b = out[i];
     if (!b)
-      out[i] = { from: k.t, to: k.t + w, o: k.o, h, l, c: k.c, ...(at.span > 1 ? { span: at.span } : {}) };
+      out[i] = {
+        from: k.t,
+        to: k.t + w,
+        o: k.o,
+        h,
+        l,
+        c: k.c,
+        ...(at.span > 1 ? { span: at.span } : {}),
+        ...(!k.tick && w > slotMs * 1.001 ? { coarse: true } : {}),
+      };
     else {
       b.to = k.t + w;
       b.c = k.c;

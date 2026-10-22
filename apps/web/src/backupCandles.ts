@@ -33,6 +33,7 @@ export interface BackupCandle {
 
 interface DexPair {
   chainId?: string;
+  dexId?: string;
   pairAddress?: string;
   baseToken?: { address?: string };
   priceUsd?: string;
@@ -41,21 +42,34 @@ interface DexPair {
   liquidity?: { usd?: number };
 }
 
+/** DexScreener's names for the coin's own venues: its Pump.fun bonding curve and its PumpSwap pool. */
+const OWN_DEX_IDS = ["pumpfun", "pumpswap"];
+
 /**
- * The coin's busiest Solana pool with it as the base, and its supply (market cap over price);
- * null when DexScreener lists none.
+ * The coin's own Solana pool with it as the base, and its supply (market cap over price); null when
+ * DexScreener lists none. The coin's own pair is the pair its scans price it from (`pairAddress`,
+ * Token.pairAddress), else its Pump.fun curve or PumpSwap pool, else the busiest pool. Liquidity
+ * alone picked side pools: DexScreener gives the Pump.fun curve pair no liquidity at all, so a
+ * Meteora pool holding $6 won, with its own price, its own history and a wrong supply (charts
+ * audit CH-7).
  */
-export function pickPool(mint: string, body: unknown): { pool: string; supply: number } | null {
+export function pickPool(
+  mint: string,
+  body: unknown,
+  pairAddress: string | null = null,
+): { pool: string; supply: number } | null {
   const pairs = ((body as { pairs?: unknown } | null)?.pairs ?? []) as DexPair[];
   if (!Array.isArray(pairs)) return null;
-  let best: { pool: string; supply: number; liq: number } | null = null;
+  let best: { pool: string; supply: number; rank: number; liq: number } | null = null;
   for (const p of pairs) {
     if (p?.chainId !== "solana" || p.baseToken?.address !== mint || !p.pairAddress) continue;
     const price = Number(p.priceUsd);
     const cap = p.marketCap ?? p.fdv;
     if (!(price > 0) || !(typeof cap === "number" && cap > 0)) continue;
     const liq = p.liquidity?.usd ?? 0;
-    if (!best || liq > best.liq) best = { pool: p.pairAddress, supply: cap / price, liq };
+    const rank = p.pairAddress === pairAddress ? 2 : OWN_DEX_IDS.includes(p.dexId ?? "") ? 1 : 0;
+    if (!best || rank > best.rank || (rank === best.rank && liq > best.liq))
+      best = { pool: p.pairAddress, supply: cap / price, rank, liq };
   }
   return best ? { pool: best.pool, supply: best.supply } : null;
 }
@@ -84,6 +98,57 @@ export function parseOhlcv(body: unknown, supply: number): BackupCandle[] {
   return out.sort((a, b) => a.t - b.t);
 }
 
+/** Minute candles starting this long or more after the launch didn't reach back to it (the API's OLDER_AFTER_MS). */
+export const BACKUP_LATE_MS = 10 * 60_000;
+
+/** What of the API's chart answer decides on the backup (TokenModal.tsx TokenChart). */
+interface ServedCandles {
+  candles: readonly BackupCandleLike[] | null;
+  older?: readonly unknown[];
+  source?: "pumpfun" | "stream" | "mixed";
+  launchAt?: number;
+}
+type BackupCandleLike = { t: number; o: number; h: number; l: number; c: number; vol?: number | null };
+
+/**
+ * Exported for tests. Whether the chart wants the backup candles beside the API's answer: it has
+ * none; it has only the stream's, which reach back only to when a chart opened (20 minutes at
+ * most); or its first candle is well after the launch with no older ones before it (a coin Pump.fun
+ * doesn't serve, or doesn't serve now). It used to be read only when the API had no candles at all,
+ * so the first stream minutes switched it off and the chart's history shrank to them (charts audit
+ * CH-1).
+ */
+export function wantsBackup(served: ServedCandles): boolean {
+  const first = served.candles?.[0];
+  if (!first || served.source === "stream") return true;
+  return (
+    !served.older?.length && served.launchAt !== undefined && first.t >= served.launchAt + BACKUP_LATE_MS
+  );
+}
+
+/**
+ * Exported for tests. The API's minute candles with the backup's joined in. Beside the stream's
+ * alone, the backup's come first and the stream's carry on after its newest (GeckoTerminal counts
+ * every trade's volume, the stream only those it kept); beside Pump.fun's, only the backup's from
+ * before Pump.fun's first stay.
+ */
+export function withBackup<T extends BackupCandleLike>(
+  candles: T[] | null,
+  source: ServedCandles["source"],
+  backup: readonly T[],
+): T[] | null {
+  if (!candles?.length) return backup.length > 0 ? [...backup] : candles;
+  if (backup.length === 0) return candles;
+  if (source === "stream") {
+    const last = backup[backup.length - 1]!.t;
+    return [...backup, ...candles.filter((k) => k.t > last)];
+  }
+  const first = candles[0]!.t;
+  const before = backup.filter((k) => k.t < first);
+  // Nothing from before Pump.fun's first: the answer as it was.
+  return before.length > 0 ? [...before, ...candles] : candles;
+}
+
 async function getJson(url: string): Promise<unknown> {
   const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -95,7 +160,12 @@ async function getJson(url: string): Promise<unknown> {
  * BACKUP_POLL_MS while the tab is visible. Null until a read lands; the last good one stays up
  * through a failed read.
  */
-export function useBackupCandles(mint: string, enabled: boolean): BackupCandle[] | null {
+export function useBackupCandles(
+  mint: string,
+  enabled: boolean,
+  /** The coin's own pair (Token.pairAddress), which the pool is picked by first. */
+  pairAddress: string | null = null,
+): BackupCandle[] | null {
   const [held, setHeld] = useState<{ mint: string; candles: BackupCandle[] } | null>(null);
   useEffect(() => {
     if (!enabled) return;
@@ -109,6 +179,7 @@ export function useBackupCandles(mint: string, enabled: boolean): BackupCandle[]
           pool ??= pickPool(
             mint,
             await getJson(`${DEXSCREENER}/latest/dex/tokens/${encodeURIComponent(mint)}`),
+            pairAddress,
           );
           if (pool) {
             const body = await getJson(
@@ -133,6 +204,6 @@ export function useBackupCandles(mint: string, enabled: boolean): BackupCandle[]
       stopped = true;
       window.clearTimeout(timer);
     };
-  }, [mint, enabled]);
+  }, [mint, enabled, pairAddress]);
   return held && held.mint === mint ? held.candles : null;
 }

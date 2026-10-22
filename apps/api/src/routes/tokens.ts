@@ -50,7 +50,9 @@ import {
 } from "../streamCandles.js";
 import {
   CallBudget,
+  CANDLE_PAGE,
   CandleCache,
+  drawableCandles,
   FIRST_MINUTES_MS,
   KeyedCache,
   LastGood,
@@ -227,6 +229,12 @@ export interface TokenChart {
    * ask a price provider for it.
    */
   solUsd?: number;
+  /**
+   * When the coin launched (ms; its first scan when the launch isn't known), so the chart can tell
+   * candles that start well after it and fill the stretch before from its backup source. Absent
+   * when the coin couldn't be read, and from older API builds.
+   */
+  launchAt?: number;
 }
 
 /**
@@ -1138,6 +1146,7 @@ export async function readTokenChart(
     const merged = mergeCandles(
       kept.candles ? onSupply(kept.candles, factors.get(mintAddress)) : null,
       stream?.candles ?? null,
+      stream?.coveredFrom ?? null,
     );
     return counted(
       "chart",
@@ -1149,6 +1158,7 @@ export async function readTokenChart(
         marketCap: [],
         ...shareable(lastWallets.get(mintAddress) ?? noWallets),
       }),
+      merged.source === "stream",
     );
   }
   const token = found.token!;
@@ -1174,16 +1184,21 @@ export async function readTokenChart(
   const pump = read.status === "fulfilled" ? read.value : { candles: null, stale: false };
   // Pump.fun's candles count the launch billion; the chart reads on the supply now (mintSupply.ts).
   const factor = factors.status === "fulfilled" ? factors.value.get(mintAddress) : undefined;
+  const stream = await own;
   const merged = mergeCandles(
     pump.candles ? onSupply(pump.candles, factor) : null,
-    (await own)?.candles ?? null,
+    stream?.candles ?? null,
+    stream?.coveredFrom ?? null,
   );
   // The minute candles stop short of the launch (a coin busy for more than 1,000 minutes): the
   // 5-minute ones before them, so the call and what came before it stay on the chart.
   const launchAt = (token.launchedAt ?? token.firstSeenAt).getTime();
   const firstAt = merged.candles?.[0]?.t;
+  // Pump.fun's whole page of minutes: it stops short of the launch, however late the launch time
+  // here is (a coin first seen well after it).
+  const fullPage = (pump.candles?.length ?? 0) >= CANDLE_PAGE;
   const fives =
-    firstAt !== undefined && firstAt >= launchAt + OLDER_AFTER_MS
+    firstAt !== undefined && (fullPage || firstAt >= launchAt + OLDER_AFTER_MS)
       ? await olderCache.read(mintAddress).catch((err: unknown) => {
           logger.warn("chart part failed", { mint: mintAddress, part: "older", error: String(err) });
           return null;
@@ -1193,6 +1208,7 @@ export async function readTokenChart(
     merged.candles,
     fives?.candles ? onSupply(fives.candles, factor) : null,
     launchAt,
+    fullPage,
   );
   if (flagged.status === "fulfilled") {
     lastWallets.set(mintAddress, flagged.value);
@@ -1205,11 +1221,18 @@ export async function readTokenChart(
     tracked.length > 0
       ? await trackedMarks(token.id, marks.wallets, tracked, marks.saved).catch(() => marks.wallets)
       : marks.wallets;
+  // Short of the coin's history: the stream's candles alone (since a chart opened, 20 minutes at
+  // most), or a first candle well after the launch. The chart fills those from its backup source;
+  // chart health counts them, as they used to pass for healthy answers (charts audit CH-1).
+  const earliest = older?.[0]?.t ?? merged.candles?.[0]?.t;
+  const partial =
+    merged.source === "stream" || (earliest !== undefined && earliest >= launchAt + OLDER_AFTER_MS);
   return counted(
     "chart",
     withSolPrice({
       mint: mintAddress,
       candles: merged.candles,
+      launchAt,
       ...(older ? { older } : {}),
       ...sourceOf(merged),
       ...(pump.stale && merged.added === 0 && merged.candles ? { stale: true } : {}),
@@ -1220,6 +1243,7 @@ export async function readTokenChart(
       ...shareable(marks),
       wallets,
     }),
+    partial,
   );
 }
 
@@ -1231,13 +1255,20 @@ function withSolPrice<T extends object>(body: T): T & { solUsd?: number } {
 
 /**
  * Counts a candle answer for a coin on Token in chart health (chartHealth.ts): by its source, null
- * when it has no candles, and stale. A coin not on Token isn't counted: it never has candles here.
+ * when it has no candles, stale, and short of the coin's history (`partial`). A coin not on Token
+ * isn't counted: it never has candles here.
  */
 function counted<T extends { candles: unknown[] | null; source?: CandleSource; stale?: boolean }>(
   feed: string,
   answer: T,
+  partial = false,
 ): T {
-  recordCandleAnswer(feed, answer.candles ? (answer.source ?? "pumpfun") : null, answer.stale === true);
+  recordCandleAnswer(
+    feed,
+    answer.candles ? (answer.source ?? "pumpfun") : null,
+    answer.stale === true,
+    partial && answer.candles !== null,
+  );
   return answer;
 }
 
@@ -1355,13 +1386,23 @@ export async function readTokenFine(
   // Token first, as readTokenChart does: Pump.fun is only asked about a coin on Token.
   if (!(await isTracked(mintAddress))) return { mint: mintAddress, stepSec, candles: null };
   const own = await streamCandles(streamFeeds, mintAddress, stepSec * 1_000).catch(() => null);
-  if (res === "1s" && streamCovers(own, from ?? now - FINE_STREAM_SPAN_MS, now))
+  if (res === "1s" && streamCovers(own, from ?? now - FINE_STREAM_SPAN_MS, now, undefined, true)) {
+    // The stream reaches back only to when this chart opened (20 minutes at most); Pump.fun's page
+    // as last read (no call, whatever its age: closed seconds don't change) goes before it, so the
+    // answer doesn't lose the 1-second history it had a moment ago (charts audit CH-5).
+    const first = own.candles[0]!.t;
+    const kept = fineSecondCache.peek(mintAddress, Infinity).candles?.filter((k) => k.t < first) ?? [];
+    const factors = kept.length
+      ? await launchSupplyFactors([mintAddress]).catch(() => new Map<string, number>())
+      : null;
+    const before = kept.length ? drawableCandles(onSupply(kept, factors?.get(mintAddress))) : [];
     return counted<TokenFineCandles>(`fine${res}`, {
       mint: mintAddress,
       stepSec,
-      candles: own.candles,
-      source: "stream",
+      candles: [...before, ...own.candles],
+      source: before.length > 0 ? "mixed" : "stream",
     });
+  }
   const [read, factors] = await Promise.all([
     (res === "1s" ? fineSecondCache : quarterCache).read(mintAddress),
     launchSupplyFactors([mintAddress]).catch(() => new Map<string, number>()),
@@ -1369,6 +1410,8 @@ export async function readTokenFine(
   const merged = mergeCandles(
     read.candles ? onSupply(read.candles, factors.get(mintAddress)) : null,
     own?.candles ?? null,
+    // A 1-second candle of the stream's replaces Pump.fun's only where it came off the stream itself.
+    (res === "1s" ? own?.streamFrom : own?.coveredFrom) ?? null,
   );
   return counted<TokenFineCandles>(`fine${res}`, {
     mint: mintAddress,

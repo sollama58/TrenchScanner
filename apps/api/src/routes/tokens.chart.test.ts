@@ -252,6 +252,7 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
                   [sec(2), 31_000],
                 ],
                 coveredFrom: sec(400),
+                streamFrom: sec(400),
                 readAt: now,
               }
             : null,
@@ -264,6 +265,39 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
       expect(fetched.length).toBe(before);
     });
 
+    it("keeps Pump.fun's 1-second page, as last read, before the stream's own candles", async () => {
+      // Pump.fun's page is read once while the stream doesn't reach back far enough.
+      setStreamFeedsForTests({
+        history: async () => null,
+        recent: async () => null,
+        solUsd: async () => null,
+      });
+      const first = await readTokenFine(MINT, "1s", null, now);
+      expect(first.candles?.map((k) => k.t)).toEqual([60_000, 120_000]);
+      const before = fetched.length;
+      setStreamFeedsForTests({
+        history: async (mint) =>
+          mint === MINT
+            ? {
+                ticks: [
+                  [sec(400), 30_000],
+                  [sec(2), 31_000],
+                ],
+                coveredFrom: sec(400),
+                streamFrom: sec(400),
+                readAt: now,
+              }
+            : null,
+        recent: async () => null,
+        solUsd: async () => 150,
+      });
+      const fine = await readTokenFine(MINT, "1s", null, now);
+      expect(fine).toMatchObject({ stepSec: 1, source: "mixed" });
+      expect(fine.candles?.map((k) => k.c)).toEqual([11_000, 19_000, 30_000, 31_000]);
+      // Without a Pump.fun call.
+      expect(fetched.length).toBe(before);
+    });
+
     it("joins the stream's minute candles after Pump.fun's newest on /chart", async () => {
       setStreamFeedsForTests({
         history: async (mint) =>
@@ -273,6 +307,8 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
       });
       const body = (await get(MINT)).json<TokenChart>();
       expect(body.source).toBe("mixed");
+      // The launch (here the coin's first scan) rides along, for the chart's backup.
+      expect(typeof body.launchAt).toBe("number");
       expect(body.candles?.map((k) => k.t)).toEqual([60_000, 120_000, 180_000]);
     });
   });

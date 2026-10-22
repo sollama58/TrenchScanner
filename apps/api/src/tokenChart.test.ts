@@ -227,6 +227,9 @@ describe("CandleCache", () => {
     expect(await cache.read("a")).toEqual({ candles: [candle], stale: true });
     now = 40_000;
     expect(await cache.read("a")).toEqual({ candles: null, stale: false });
+    // A reader after only the closed candles can still peek at them, whatever their age.
+    expect(cache.peek("a")).toEqual({ candles: null, stale: false });
+    expect(cache.peek("a", Infinity)).toEqual({ candles: [candle], stale: true });
   });
 
   it("answers from the last good candles when the refresh is slow, without waiting it out", async () => {
@@ -487,9 +490,23 @@ describe("olderCandles", () => {
     expect(olderCandles(minutes, fives, 0)!.map((c) => c.t)).toEqual([0, 5 * MIN, 95 * MIN]);
   });
 
+  it("keeps the 5-minute bucket the minute page starts inside", () => {
+    const minutes = [k(102 * MIN), k(103 * MIN)];
+    const fives = [k(95 * MIN), k(100 * MIN), k(105 * MIN)];
+    expect(olderCandles(minutes, fives, 0)!.map((c) => c.t)).toEqual([95 * MIN, 100 * MIN]);
+  });
+
   it("reads none when the minute candles reach the launch", () => {
     expect(olderCandles([k(2 * MIN)], [k(0)], 0)).toBeNull();
     expect(olderCandles(null, [k(0)], 0)).toBeNull();
+  });
+
+  it("fills in before a full minute page even when the launch time says it reached it", () => {
+    // A coin first seen late: its "launch" is after the real one.
+    expect(olderCandles([k(10 * MIN)], [k(0), k(5 * MIN)], 5 * MIN, true)!.map((c) => c.t)).toEqual([
+      0,
+      5 * MIN,
+    ]);
   });
 });
 
