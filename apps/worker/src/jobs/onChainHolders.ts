@@ -1,5 +1,12 @@
-import { createLogger, type Env, type HeliusClient, type OnChainHolders } from "@trenchscanner/core";
+import {
+  createLogger,
+  type Env,
+  type HeliusClient,
+  type LargestHoldersResult,
+  type OnChainHolders,
+} from "@trenchscanner/core";
 import { FailureBackoff } from "./failureBackoff.js";
+import type { ScreenBackup } from "./screenBackup.js";
 
 const logger = createLogger("onchain-holders");
 
@@ -17,7 +24,7 @@ const logger = createLogger("onchain-holders");
  */
 const cache = new Map<string, { at: number; holders: OnChainHolders }>();
 const CACHE_MAX = 5_000;
-const failureBackoff = new FailureBackoff();
+const failureBackoff = new FailureBackoff(2, 20, { helius: true });
 
 /** Test hook. */
 export function resetOnChainHolders(): void {
@@ -32,6 +39,8 @@ export async function resolveOnChainHolders(
   now = Date.now(),
   ttlMinutesFor: (mintAddress: string) => number = () => env.RUGCHECK_CACHE_TTL_MINUTES,
   keepWhileQuiet?: (mintAddress: string, readAtMs: number) => boolean,
+  /** Asked for the mints Helius gave no answer for (screenBackup.ts). */
+  backup?: Pick<ScreenBackup, "holders">,
 ): Promise<Map<string, OnChainHolders>> {
   const out = new Map<string, OnChainHolders>();
   if (env.ONCHAIN_HOLDERS_MAX_PER_CYCLE === 0) return out;
@@ -50,13 +59,20 @@ export async function resolveOnChainHolders(
   }
   if (toRead.length === 0) return out;
 
-  let results;
+  let results: Map<string, LargestHoldersResult>;
   try {
     results = await helius.getLargestHoldersBatch(toRead);
   } catch (err) {
     logger.warn("on-chain holder read failed", { mints: toRead.length, error: String(err) });
-    for (const mint of toRead) failureBackoff.fail(mint, now);
-    return out;
+    results = new Map();
+  }
+  // Helius gave no answer: the same read on another provider, so the screen fails a coin closed
+  // only when both fail.
+  const unanswered = toRead.filter((mint) => results.get(mint)?.status !== "found");
+  if (backup && unanswered.length > 0) {
+    for (const [mint, holders] of await backup.holders(unanswered)) {
+      results.set(mint, { status: "found", holders });
+    }
   }
   if (cache.size >= CACHE_MAX) {
     for (const [mint, entry] of cache) if (now - entry.at >= ttl) cache.delete(mint);

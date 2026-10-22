@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { activityStretch, HeliusClient, WALLET_DORMANT_GAP_MS } from "./helius.js";
+import { activityStretch, HeliusClient, resetRpcPauses, WALLET_DORMANT_GAP_MS } from "./helius.js";
 import { ed25519 } from "@noble/curves/ed25519";
 import bs58 from "bs58";
 import { mayhemStateAddress } from "../solana.js";
@@ -569,6 +569,8 @@ describe("HeliusClient.getMintAuthorityStatusBatch", () => {
 
 describe("HeliusClient 429 pause", () => {
   it("holds every client on the same endpoint after a 429, not just the request that got it", async () => {
+    // A shorter floor than HELIUS_MIN_PAUSE_MS, so the test doesn't wait 5 s; it is still the floor.
+    resetRpcPauses({ minPauseMs: 400 });
     const arrivals: number[] = [];
     let limitedAt = 0;
     let started: Promise<unknown> | undefined;
@@ -598,9 +600,10 @@ describe("HeliusClient 429 pause", () => {
     expect(first.get("a")?.status).toBe("found");
     const second = (await started) as Map<string, { status: string }>;
     expect(second.get("b")?.status).toBe("found");
-    // fetchJson's first backoff is at least 250 ms: neither later request went out inside it.
+    // The pause's floor, not fetchJson's 250-750 ms backoff: neither later request went out inside it.
     expect(arrivals).toHaveLength(3);
-    for (const at of arrivals.slice(1)) expect(at - limitedAt).toBeGreaterThanOrEqual(240);
+    for (const at of arrivals.slice(1)) expect(at - limitedAt).toBeGreaterThanOrEqual(390);
+    resetRpcPauses();
   });
 });
 
@@ -1525,5 +1528,45 @@ describe("HeliusClient.getCpmmLpLockedBatch", () => {
     );
     const client = new HeliusClient({ rpcUrl: url });
     expect((await client.getCpmmLpLockedBatch(new Map([["Pool", MINT]]))).get("Pool")).toBe("failed");
+  });
+});
+
+describe("HeliusClient retry on timeout, by method", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** fetch that times out its first request and answers every later one with `reply`. */
+  function timesOutOnce(reply: (calls: { id: string }[]) => unknown) {
+    let sent = 0;
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      sent += 1;
+      if (sent === 1) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      const calls = JSON.parse(String(init.body)) as { id: string }[];
+      return new Response(JSON.stringify(reply(calls)), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    return () => sent;
+  }
+
+  it("retries a batch of cheap account reads once (the screen's Mayhem and authority reads)", async () => {
+    const sent = timesOutOnce((calls) =>
+      calls.map((c) => ({
+        jsonrpc: "2.0",
+        id: c.id,
+        result: { context: { slot: 1 }, value: [{ data: { parsed: { info: { mintAuthority: null } } } }] },
+      })),
+    );
+    const out = await new HeliusClient({ rpcUrl: "https://rpc.example/a" }).getMintAuthorityStatusBatch([
+      "m",
+    ]);
+    expect(sent()).toBe(2);
+    expect(out.get("m")?.status).toBe("found");
+  });
+
+  it("doesn't retry a timed-out batch of full transactions, which was most likely billed", async () => {
+    const sent = timesOutOnce((calls) => calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: null })));
+    await new HeliusClient({ rpcUrl: "https://rpc.example/b" }).getTransactionsBatch(["sig"]);
+    expect(sent()).toBe(1);
   });
 });

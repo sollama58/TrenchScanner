@@ -85,6 +85,13 @@ const envSchema = z.object({
   WALLET_TAG_SECRET: z.string().min(32).optional(),
 
   HELIUS_API_KEY: pastedKey,
+  // The Helius plan's credits a month, and the day of the month (UTC) its billing cycle starts.
+  // With the credits set, pipeline-watch tells the admins at 75%, 90% and 97% of the plan used and
+  // when the last day's rate would run it out before the cycle ends, and puts the projection on
+  // /health/worker (jobs/heliusBudget.ts). Unset: no budget alarm. A day past a short month's end
+  // is that month's last day.
+  HELIUS_MONTHLY_CREDITS: optionalPositive,
+  HELIUS_CYCLE_START_DAY: z.coerce.number().int().min(1).max(31).default(1),
   DEXSCREENER_BASE_URL: z.string().default("https://api.dexscreener.com"),
   // The worker's DexScreener token lookups a minute, shared by every job in the process (scan,
   // fast match, candidate watch, live prices, the empty-wallet check's pricing). DexScreener allows

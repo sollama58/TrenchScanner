@@ -8,7 +8,7 @@ const logger = createLogger("wallet-holdings");
  * Wallets whose lookup FAILED, backed off before they are tried again - escalating from a couple
  * of minutes, see FailureBackoff. Same reasoning as the identical guard in walletFreshness.ts.
  */
-const failureBackoff = new FailureBackoff();
+const failureBackoff = new FailureBackoff(2, 20, { helius: true });
 
 /** Test hook: forget every recorded failure so the next call retries immediately. */
 export function resetHoldingsFailureBackoff(): void {

@@ -1,4 +1,4 @@
-import { apiUsageMeter } from "../apiUsage.js";
+import { apiUsageMeter, heliusCreditsOut } from "../apiUsage.js";
 import { createLogger } from "../logger.js";
 import type { ChainTx } from "../wallets/tradeTape.js";
 
@@ -28,6 +28,11 @@ const logger = createLogger("helius-stream");
  * And their trades (user ask 2026-10-19: the token page's live trades): a "logs" key follows the
  * logs of every transaction that mentions its one account (logsSubscribe, ~6 KB a trade), which
  * carry the swap events core's pumpTradeEvents.ts reads (apps/api/src/liveTrades.ts).
+ *
+ * While Helius's credits are out (apiUsage.ts's stand-down, shared by every process) it neither
+ * connects nor subscribes: a socket is billed too, and each reconnect into an exhausted plan was
+ * another refusal the fetch stand-down never saw (audit 2026-10-22, H2). It connects again once
+ * the stand-down's pause is over, and a skipped subscription is asked for again like a refused one.
  */
 
 /** Silence after which the connection is presumed dead: the slot subscription speaks every ~0.4 s. */
@@ -554,6 +559,11 @@ export class HeliusAccountStream {
   }
 
   private connect(): void {
+    const out = heliusCreditsOut();
+    if (out) {
+      this.waitOutCreditsOut(out.until.getTime());
+      return;
+    }
     let socket: WebSocket;
     try {
       socket = new this.ctor!(this.url);
@@ -614,6 +624,11 @@ export class HeliusAccountStream {
   private subscribe(key: string, sub: Subscription): void {
     const socket = this.socket;
     if (!socket || socket.readyState !== 1) return;
+    // Standing down: kept uncovered and asked for again after REFUSED_RETRY_MS, as a refusal is.
+    if (heliusCreditsOut()) {
+      sub.refusedAt = Date.now();
+      return;
+    }
     const id = this.nextId++;
     sub.requestId = id;
     this.keyOfRequest.set(id, key);
@@ -689,6 +704,17 @@ export class HeliusAccountStream {
         params: [subId],
       }),
     );
+  }
+
+  /** Connects once the credits stand-down ending at `until` is over, not before. */
+  private waitOutCreditsOut(until: number): void {
+    if (this.stopped || this.reconnectTimer) return;
+    const delay = Math.max(1_000, until - Date.now()) + Math.round(Math.random() * 5_000);
+    logger.warn("Helius credits out - stream waits out the stand-down", { inMs: delay });
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
   }
 
   private scheduleReconnect(): void {

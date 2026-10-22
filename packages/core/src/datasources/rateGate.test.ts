@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RateGate, RateGateDeadlineError } from "./rateGate.js";
+import { RateGate, RateGateDeadlineError, RateGateOpenError } from "./rateGate.js";
 
 /** A gate on a fake clock: sleeping advances time instead of waiting. */
 function fakeGate(perMinute: number, burst: number, reserve?: number, minPauseMs?: number) {
@@ -100,5 +100,66 @@ describe("RateGate", () => {
     await gate.acquire();
     gate.takeStats();
     expect(gate.takeStats()).toEqual({ requests: 0, throttled: 0, waitedMs: 0, gaveUp: 0 });
+  });
+
+  it("takes a batch's cost in tokens, never more than the bucket", async () => {
+    const { gate, clock } = fakeGate(60, 10);
+    const start = clock();
+    await gate.acquire(Infinity, false, 8);
+    await gate.acquire(Infinity, false, 2);
+    expect(clock()).toBe(start);
+    // Empty now: 5 more tokens is 5 s at one a second.
+    await gate.acquire(Infinity, false, 5);
+    expect(clock() - start).toBe(5_000);
+    // A cost above the bucket waits for a full one, not forever.
+    await gate.acquire(Infinity, false, 50);
+    expect(clock() - start).toBe(15_000);
+  });
+
+  it("opens a breaker after enough 429s in its window, refusing ordinary requests but not priority ones", async () => {
+    let now = 1_000_000;
+    const gate = new RateGate({
+      name: "test",
+      perMinute: 600_000,
+      burst: 1_000,
+      minPauseMs: 5_000,
+      breaker: { after: 3, withinMs: 60_000, openMs: 30_000 },
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms;
+      },
+    });
+    gate.throttled(0);
+    now += 20_000;
+    gate.throttled(0);
+    expect(gate.isOpen()).toBe(false);
+    // Three within the minute: open.
+    now += 20_000;
+    gate.throttled(0);
+    expect(gate.isOpen()).toBe(true);
+    await expect(gate.acquire()).rejects.toBeInstanceOf(RateGateOpenError);
+    const at = now;
+    await gate.acquire(Infinity, true);
+    // The priority request still waited out the 5 s pause.
+    expect(now - at).toBeGreaterThanOrEqual(5_000);
+    now = at + 30_000;
+    await gate.acquire();
+    expect(gate.isOpen()).toBe(false);
+  });
+
+  it("doesn't open on 429s spread wider than its window", () => {
+    let now = 0;
+    const gate = new RateGate({
+      name: "test",
+      perMinute: 600,
+      burst: 10,
+      breaker: { after: 3, withinMs: 60_000, openMs: 30_000 },
+      now: () => now,
+    });
+    for (let i = 0; i < 5; i += 1) {
+      gate.throttled(0);
+      now += 31_000;
+    }
+    expect(gate.isOpen()).toBe(false);
   });
 });

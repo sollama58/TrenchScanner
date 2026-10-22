@@ -292,6 +292,34 @@ describe.skipIf(!dbAvailable)("resolveMayhemMode", () => {
     expect(first.get(mint)).toEqual({ status: "failed" });
     expect(second.get(mint)).toEqual({ status: "failed" });
   });
+
+  it("asks the backup for what Helius didn't answer, and caches its answer", async () => {
+    const answered = `${TAG}-via-backup`;
+    const pending = `${TAG}-pending`;
+    const { client } = stubHelius({
+      getMayhemModeBatch: async (mints: string[]) =>
+        new Map(
+          mints.map((m) => [
+            m,
+            m === pending ? { status: "failed" as const, mintPending: true } : { status: "failed" as const },
+          ]),
+        ),
+    });
+    const askedBackup: string[][] = [];
+    const backup = {
+      mayhem: async (mints: readonly string[]) => {
+        askedBackup.push([...mints]);
+        return new Map([[answered, false]]);
+      },
+    };
+
+    const result = await resolveMayhemMode([answered, pending], client, { backup });
+    expect(askedBackup).toEqual([[answered]]);
+    expect(result.get(answered)).toEqual({ status: "found", isMayhemMode: false });
+    expect(result.get(pending)).toMatchObject({ status: "failed" });
+    const row = await prisma.mayhemModeCache.findUnique({ where: { mintAddress: answered } });
+    expect(row?.isMayhemMode).toBe(false);
+  });
 });
 
 describe.skipIf(!dbAvailable)("ignoreMayhemMints", () => {
