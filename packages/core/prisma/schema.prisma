@@ -2081,9 +2081,10 @@ model Subscription {
 /// A key for the Model Alert websocket (`GET /v1/model-alerts`).
 ///
 /// Issued only when someone presses Generate, and only for an admin, a whitelist entry, or a live
-/// paid subscription. The full secret is returned once and never stored: `secretHash` is its
-/// SHA-256, and `prefix` is the start of the secret shown in Settings afterwards. At most three
-/// rows per user have `revokedAt` null.
+/// paid subscription. The full secret is returned once and never stored. `secretHash` is an HMAC
+/// of the secret keyed with a pepper derived from the server secret, so a copy of this table
+/// cannot be checked offline. `prefix` is the start of the secret shown in Settings afterwards.
+/// At most three rows per user have `revokedAt` null.
 model UserApiKey {
   id     String @id @default(cuid())
   userId String
@@ -2091,7 +2092,7 @@ model UserApiKey {
 
   /// The visible start of the secret (not enough to authenticate).
   prefix     String
-  /// SHA-256 hex of the full secret.
+  /// HMAC-SHA256 hex of the secret, peppered with the server secret. Not a bare hash.
   secretHash String    @unique
   createdAt  DateTime  @default(now())
   revokedAt  DateTime?

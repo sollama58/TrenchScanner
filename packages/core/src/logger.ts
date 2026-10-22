@@ -12,6 +12,13 @@ type Level = "debug" | "info" | "warn" | "error";
 const SECRET_KEY =
   /^(authorization|cookie|set-cookie|x-api-key|api[-_]?key|secret|secret[-_]?key|password|private[-_]?key)$/i;
 
+/**
+ * A Model Alert key embedded in a string (a URL, an error message). Header-named fields are
+ * redacted above; this covers the secret when it is not its own field. The visible prefix is
+ * twelve characters and does not match.
+ */
+const EMBEDDED_MODEL_ALERT_KEY = /tsma_[A-Za-z0-9_-]{20,}/g;
+
 function write(level: Level, scope: string, msg: string, meta?: Record<string, unknown>) {
   const entry = {
     ts: new Date().toISOString(),
@@ -24,9 +31,12 @@ function write(level: Level, scope: string, msg: string, meta?: Record<string, u
   try {
     // A BigInt (a raw count(*)) or a circular object in meta made JSON.stringify throw, turning a
     // log call inside a catch block into a new rejection.
-    line = JSON.stringify(entry, (key, value: unknown) =>
-      SECRET_KEY.test(key) ? "[redacted]" : typeof value === "bigint" ? value.toString() : value,
-    );
+    line = JSON.stringify(entry, (key, value: unknown) => {
+      if (SECRET_KEY.test(key)) return "[redacted]";
+      if (typeof value === "bigint") return value.toString();
+      if (typeof value === "string") return value.replace(EMBEDDED_MODEL_ALERT_KEY, "tsma_[redacted]");
+      return value;
+    });
   } catch {
     line = JSON.stringify({ ts: entry.ts, level, scope, msg, meta: "[unserializable]" });
   }

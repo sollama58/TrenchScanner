@@ -266,11 +266,26 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // hook the route's `websocket: true` depends on. Errors here must not log the request URL:
   // it can carry the API key.
   await app.register(websocket, {
+    // One inbound frame is an auth message of a few dozen bytes. The library's default is
+    // 100MB, which a client can make this process buffer. Over the cap the socket is closed.
+    options: { maxPayload: 1024 },
     errorHandler: (error, socket, request) => {
-      logger.warn("websocket error", {
+      // The route pattern, never the URL: a client can still put a key in the query string,
+      // and this log must not keep it. A too-large frame is a fixed line, not error.message,
+      // so the frame itself cannot ride along in the log.
+      const tooBig = (error as { code?: string }).code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH";
+      logger.warn(tooBig ? "websocket frame rejected" : "websocket error", {
         url: request.routeOptions?.url ?? request.url.split("?")[0],
-        error: error.message,
+        error: tooBig ? "frame_too_large" : error.message,
       });
+      if (tooBig) {
+        try {
+          socket.close(1009, "message_too_big");
+        } catch {
+          socket.terminate();
+        }
+        return;
+      }
       socket.terminate();
     },
   });
@@ -592,8 +607,18 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   app.decorate("matchStream", matchStream);
   // Curated NOTIFY ids, for sockets that authenticated with a Model Alert key. Stopped in the
   // same preClose as the LISTEN connection, before the HTTP server waits on open sockets.
-  const modelAlertHub = new ModelAlertHub(matchStream, loadModelAlert, async (wallet) =>
-    modelAlertKeyAccess(await resolveAccess(wallet, admins)),
+  const modelAlertHub = new ModelAlertHub(
+    matchStream,
+    loadModelAlert,
+    async (wallet) => modelAlertKeyAccess(await resolveAccess(wallet, admins)),
+    async (keyIds) => {
+      if (keyIds.length === 0) return new Set<string>();
+      const rows = await prisma.userApiKey.findMany({
+        where: { id: { in: [...keyIds] }, revokedAt: null },
+        select: { id: true },
+      });
+      return new Set(rows.map((row) => row.id));
+    },
   );
   app.addHook("preClose", async () => {
     modelAlertHub.stop();
@@ -765,7 +790,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // Hover previews of a coin's X link, read through FxTwitter so the browser never loads X.
   await app.register(registerXPreviewRoutes, { prefix: "/x-preview" });
   await app.register(registerSettingsRoutes, { prefix: "/settings", env });
-  await app.register(registerModelAlertKeyRoutes, { prefix: "/settings", env });
+  await app.register(registerModelAlertKeyRoutes, { prefix: "/settings", env, hub: modelAlertHub });
   await app.register(registerModelAlertSocket, { hub: modelAlertHub, env });
   // Telegram alerts: link codes and chats for the signed-in account, and the bot's webhook.
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env });

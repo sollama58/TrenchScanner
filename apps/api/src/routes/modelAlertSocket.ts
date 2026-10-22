@@ -1,20 +1,56 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { RawData, WebSocket } from "ws";
 import { adminWalletSet, prisma, resolveAccess, type Env } from "@trenchscanner/core";
-import type { ModelAlertHub } from "../modelAlertHub.js";
-import { hashModelAlertKey, modelAlertKeyAccess, modelAlertKeyDeniedMessage } from "../modelAlertKey.js";
+import { ipRateLimitKey } from "../clientIp.js";
+import type { ModelAlertClient, ModelAlertHub } from "../modelAlertHub.js";
+import {
+  hashModelAlertKey,
+  isModelAlertKeyShape,
+  modelAlertKeyAccess,
+  modelAlertKeyDeniedMessage,
+  modelAlertKeyMatches,
+} from "../modelAlertKey.js";
+
+/**
+ * Failed authentications remembered on this process, across source addresses.
+ *
+ * The route's per-IP limit is the first bound. It is not enough on its own: clientIp trusts
+ * CF-Connecting-IP, and a caller who can reach the origin directly can put a fresh value in
+ * that header per guess. This cap is the backstop. Past it, further attempts are refused
+ * without a database read, including a key that would otherwise have worked, until the window
+ * slides. Existing sockets stay up.
+ */
+const AUTH_FAILURE_WINDOW_MS = 60_000;
+export const MODEL_ALERT_AUTH_FAILURES_PER_MINUTE = 30;
+const authFailures: number[] = [];
+
+/** Sockets waiting for a first-frame key. They are not in the hub and must not accumulate. */
+const MAX_PENDING_AUTHS = 32;
+const AUTH_DEADLINE_MS = 5_000;
+let pendingAuths = 0;
+
+/** Stand-in HMAC so a missing row still pays for a constant-time compare. */
+const DUMMY_HASH = "0".repeat(64);
 
 /**
  * Model Alert websocket.
  *
- * Authenticate with the API key in the `key` query parameter:
- *   ws(s)://<api-host>/v1/model-alerts?key=tsma_...
- * The secret is not written to logs. A missing, unknown, or revoked key is rejected with 401
- * before the socket is used. A key whose user no longer has admin, whitelist, or paid
- * subscription access is rejected with 403. Later, a lapsed subscription closes the open socket
- * on the next alert or the hub's periodic check.
+ * The key is not read from the query string. This process does not write an access log
+ * (disableRequestLogging) and its error logs keep the route pattern, but the request target
+ * is what an edge access log stores, and the websocket plugin logs that target for an upgrade
+ * that hits no websocket route. A secret in the query would be copied into those logs.
  *
- * Messages are curated alerts that arrive after this connection. There is no backlog, and filter
- * matches are not sent.
+ * Clients authenticate in one of these ways:
+ *   - `Authorization: Bearer <key>` on the upgrade, or
+ *   - `X-Api-Key: <key>` on the upgrade, or
+ *   - the first text frame after connecting: the key alone, or JSON `{"key":"<key>"}`.
+ * The frame has a few seconds to arrive. One attempt. Later frames are ignored and are not
+ * copied into alerts. The key is never written to a log.
+ *
+ * A missing, unknown, or revoked key is rejected. A key whose user no longer has admin,
+ * whitelist, or paid subscription access is rejected. Later, a revoked key or a lapsed
+ * subscription closes the open socket. Messages are curated alerts that arrive after
+ * authentication. There is no backlog, and filter matches are not sent.
  */
 export async function registerModelAlertSocket(app: FastifyInstance, opts: { env: Env; hub: ModelAlertHub }) {
   const admins = adminWalletSet(opts.env);
@@ -23,52 +59,190 @@ export async function registerModelAlertSocket(app: FastifyInstance, opts: { env
     "/v1/model-alerts",
     {
       websocket: true,
-      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      config: {
+        rateLimit: { max: 60, timeWindow: "1 minute", keyGenerator: ipRateLimitKey },
+      },
       preHandler: async (request, reply) => {
-        const secret = keyFromQuery(request.query);
-        if (!secret) return reply.code(401).send({ error: "api_key_required" });
-
-        const row = await prisma.userApiKey.findUnique({
-          where: { secretHash: hashModelAlertKey(secret) },
-          select: {
-            revokedAt: true,
-            user: { select: { id: true, walletAddress: true } },
-          },
-        });
-        // Unknown and revoked are the same answer, so a revoked key does not connect.
-        if (!row || row.revokedAt) return reply.code(401).send({ error: "invalid_api_key" });
-
-        const access = await resolveAccess(row.user.walletAddress, admins);
-        if (!modelAlertKeyAccess(access)) {
-          return reply.code(403).send({ error: modelAlertKeyDeniedMessage(access.reason) });
+        const presented = keyFromHeaders(request.headers);
+        if (presented.kind === "absent") {
+          request.modelAlertPending = true;
+          return;
         }
-        request.modelAlertClient = {
-          userId: row.user.id,
-          walletAddress: row.user.walletAddress,
-          openedAt: Date.now(),
-        };
+        if (tooManyAuthFailures()) return reply.code(429).send({ error: "too_many_attempts" });
+        if (presented.kind === "malformed") {
+          recordAuthFailure();
+          return reply.code(401).send({ error: "invalid_api_key" });
+        }
+        const result = await authenticateKey(presented.key, admins, opts.env.JWT_SECRET);
+        if (!result.ok) {
+          if (result.status === 401) recordAuthFailure();
+          return reply.code(result.status).send({ error: result.error });
+        }
+        request.modelAlertClient = { ...result.client, openedAt: Date.now() };
       },
     },
     (socket, request) => {
       const client = request.modelAlertClient;
-      // preHandler already refused. If the upgrade still reached here, do not keep the socket.
-      if (!client) {
+      if (client) {
+        admit(opts.hub, socket, client);
+        ignoreClientFrames(socket);
+        return;
+      }
+      // preHandler refused and answered. Do not keep a socket the upgrade should not have.
+      if (!request.modelAlertPending) {
         socket.close(4401, "unauthorized");
         return;
       }
-      opts.hub.connect(socket, client);
+      if (pendingAuths >= MAX_PENDING_AUTHS) {
+        socket.close(4429, "too_many_sockets");
+        return;
+      }
+      pendingAuths += 1;
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        pendingAuths -= 1;
+        clearTimeout(timer);
+      };
+      const timer = setTimeout(() => {
+        finish();
+        try {
+          socket.close(4401, "unauthorized");
+        } catch {
+          // Already closed.
+        }
+      }, AUTH_DEADLINE_MS);
+      timer.unref?.();
+      socket.once("close", finish);
+      socket.on("message", (data) => {
+        // Authenticated or not, a client frame is never written back out.
+        if (settled) return;
+        finish();
+        void authenticateFrame(opts, admins, socket, data);
+      });
     },
   );
 }
 
-/** The `key` query parameter, or null when it is missing or not a key-shaped string. */
-function keyFromQuery(query: unknown): string | null {
-  if (typeof query !== "object" || query === null) return null;
-  const raw = (query as { key?: unknown }).key;
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  if (typeof value !== "string") return null;
-  const secret = value.trim();
-  // tsma_ plus 32 bytes of base64url. Anything longer is not a key we issued.
-  if (secret.length < 16 || secret.length > 200) return null;
-  return secret;
+function admit(hub: ModelAlertHub, socket: WebSocket, client: ModelAlertClient): void {
+  if (socket.readyState !== 1) return;
+  const admitted = hub.connect(socket, client);
+  if (admitted !== "ok") socket.close(4429, "too_many_sockets");
+}
+
+/** After the first frame, further frames are discarded. They are not alerts and not echoed. */
+function ignoreClientFrames(socket: WebSocket): void {
+  socket.on("message", () => {});
+}
+
+async function authenticateFrame(
+  opts: { env: Env; hub: ModelAlertHub },
+  admins: ReadonlySet<string>,
+  socket: WebSocket,
+  data: RawData,
+): Promise<void> {
+  if (tooManyAuthFailures()) {
+    socket.close(4429, "too_many_attempts");
+    return;
+  }
+  const secret = keyFromFrame(data);
+  if (!secret) {
+    recordAuthFailure();
+    socket.close(4401, "unauthorized");
+    return;
+  }
+  const result = await authenticateKey(secret, admins, opts.env.JWT_SECRET);
+  if (!result.ok) {
+    if (result.status === 401) recordAuthFailure();
+    socket.close(
+      result.status === 403 ? 4403 : 4401,
+      result.status === 403 ? "access_ended" : "unauthorized",
+    );
+    return;
+  }
+  admit(opts.hub, socket, { ...result.client, openedAt: Date.now() });
+  ignoreClientFrames(socket);
+}
+
+async function authenticateKey(
+  secret: string,
+  admins: ReadonlySet<string>,
+  serverSecret: string,
+): Promise<
+  { ok: true; client: Omit<ModelAlertClient, "openedAt"> } | { ok: false; status: 401 | 403; error: string }
+> {
+  if (!isModelAlertKeyShape(secret)) return { ok: false, status: 401, error: "invalid_api_key" };
+  const row = await prisma.userApiKey.findUnique({
+    where: { secretHash: hashModelAlertKey(secret, serverSecret) },
+    select: {
+      id: true,
+      revokedAt: true,
+      secretHash: true,
+      user: { select: { id: true, walletAddress: true } },
+    },
+  });
+  const matches = modelAlertKeyMatches(secret, row?.secretHash ?? DUMMY_HASH, serverSecret);
+  // Unknown and revoked are the same answer, so a revoked key does not connect.
+  if (!row || !matches || row.revokedAt) return { ok: false, status: 401, error: "invalid_api_key" };
+
+  const access = await resolveAccess(row.user.walletAddress, admins);
+  if (!modelAlertKeyAccess(access)) {
+    return { ok: false, status: 403, error: modelAlertKeyDeniedMessage(access.reason) };
+  }
+  return { ok: true, client: { userId: row.user.id, keyId: row.id, walletAddress: row.user.walletAddress } };
+}
+
+/** Header key, or absent when the client will send the first frame. The query string is not read. */
+function keyFromHeaders(
+  headers: FastifyRequest["headers"],
+): { kind: "key"; key: string } | { kind: "malformed" } | { kind: "absent" } {
+  const authorization = headers.authorization;
+  if (typeof authorization === "string" && authorization.trim() !== "") {
+    const match = /^Bearer\s+(\S+)$/i.exec(authorization.trim());
+    if (!match?.[1] || !isModelAlertKeyShape(match[1])) return { kind: "malformed" };
+    return { kind: "key", key: match[1] };
+  }
+  const header = headers["x-api-key"];
+  if (Array.isArray(header)) return { kind: "malformed" };
+  if (typeof header === "string" && header.trim() !== "") {
+    const key = header.trim();
+    if (!isModelAlertKeyShape(key)) return { kind: "malformed" };
+    return { kind: "key", key };
+  }
+  return { kind: "absent" };
+}
+
+/** The first frame: the key itself, or a JSON object whose only read field is `key`. */
+function keyFromFrame(data: RawData): string | null {
+  const text = frameText(data);
+  if (text === null || text.length > 512) return null;
+  const trimmed = text.trim();
+  if (isModelAlertKeyShape(trimmed)) return trimmed;
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const body = JSON.parse(trimmed) as { key?: unknown };
+    if (typeof body.key !== "string") return null;
+    const key = body.key.trim();
+    return isModelAlertKeyShape(key) ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+function frameText(data: RawData): string | null {
+  if (typeof data === "string") return data;
+  if (Buffer.isBuffer(data)) return data.toString("utf8");
+  if (Array.isArray(data)) return Buffer.concat(data).toString("utf8");
+  return Buffer.from(data).toString("utf8");
+}
+
+function tooManyAuthFailures(now = Date.now()): boolean {
+  const cutoff = now - AUTH_FAILURE_WINDOW_MS;
+  while (authFailures.length > 0 && authFailures[0]! <= cutoff) authFailures.shift();
+  return authFailures.length >= MODEL_ALERT_AUTH_FAILURES_PER_MINUTE;
+}
+
+function recordAuthFailure(now = Date.now()): void {
+  authFailures.push(now);
 }
