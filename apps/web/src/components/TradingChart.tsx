@@ -1121,12 +1121,7 @@ export function TradingChart({
 
   const rail = (
     <div className="tc-rail" role="toolbar" aria-label="Drawing tools">
-      <DrawButton
-        tool="trend"
-        active={tool}
-        onPick={pickTool}
-        title="Trendline: click two points"
-      >
+      <DrawButton tool="trend" active={tool} onPick={pickTool} title="Trendline: click two points">
         <line x1="5" y1="19" x2="19" y2="5" />
         <circle cx="5" cy="19" r="2" fill="currentColor" />
         <circle cx="19" cy="5" r="2" fill="currentColor" />
