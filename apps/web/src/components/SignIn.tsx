@@ -10,9 +10,10 @@ import {
   type WalletOption,
 } from "../wallet";
 import { privyConfig, privyOAuthReturn, type PrivyConfig } from "../privyBridge";
+import { cardHideSet, DEFAULT_APPEARANCE } from "../appearance";
 import { scopeSampleCard } from "../scopeSample";
 import { AlertCard } from "./AlertCard";
-import { ClockIcon, TrophyIcon } from "./Icons";
+import { ClockIcon, FlameIcon, TrophyIcon } from "./Icons";
 import { InstallAppButton } from "./InstallApp";
 import { usePolling, useNow } from "../hooks";
 import type { GuestPage } from "../tabs/GuestLiveTab";
@@ -39,8 +40,8 @@ const fmt = (iso: string) =>
     minute: "2-digit",
   });
 
-/** The grading goal already used on the guest feed. A target, never a claimed result. */
-const GOAL = "2x within 15 minutes on 75% of alerts, and 4x within 30 minutes on half";
+/** The feed's default card: Customize's starting field list, not a denser or expanded look. */
+const DEFAULT_CARD_HIDE = cardHideSet(DEFAULT_APPEARANCE);
 
 export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void; onGuest?: () => void }) {
   const [wallets, setWallets] = useState<WalletOption[]>(walletOptions);
@@ -143,31 +144,46 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
 function LandingIntro() {
   return (
     <div className="landing-intro">
-      <p className="eyebrow brand-eyebrow">Pump.fun on Solana</p>
-      <h1>Pump.fun alerts, graded in public.</h1>
+      <p className="eyebrow brand-eyebrow">
+        <FlameIcon size={13} /> Trading terminal
+      </p>
+      <h1>A trading terminal for Pump.fun.</h1>
       <p className="lead">
-        Models scan new launches and flag a few. Each alert is graded from the price at the alert. The goal is
-        a {GOAL}, measured from that price. Those figures are the target, not a record of results.
+        Screen a launch, open its chart, and trade from the coin window. Model alerts come with the terminal.
+        They are graded in public, and they are a bonus.
       </p>
       {/* Phones and tablets without the app installed only: up top, where it is seen first. */}
       <InstallAppButton />
+      <div className="landing-token">
+        <span className="landing-flame" aria-hidden>
+          <FlameIcon size={18} />
+        </span>
+        <div>
+          <p className="landing-token-name">$ASDFASDFA</p>
+          <p>
+            Burn it for access. You choose the length, the wallet shows the exact amount, and nothing burns
+            until you approve. Burned tokens are destroyed, not paid to anyone.
+          </p>
+          <p>
+            A separate burn buys Burn Credits for coin and wallet lookups, not time on the terminal. A credit
+            is taken only once a lookup works. Subscribers get 5 free credits a day.
+          </p>
+          <p>
+            The 250 largest holders have Pro Mode, and so does a wallet an admin grants. That mode trades from
+            the coin window, with no TrenchScanner fee.
+          </p>
+        </div>
+      </div>
       <ul className="landing-points">
         <li>
-          <span className="eyebrow">Scan</span>
-          <p>New Pump.fun tokens are screened first. A model flags only the few that pass.</p>
+          <span className="eyebrow">Terminal</span>
+          <p>The coin window and its chart. Filters, models, and utilities are part of the terminal.</p>
         </li>
         <li>
-          <span className="eyebrow">The card</span>
+          <span className="eyebrow">Alerts</span>
           <p>
-            You see the token, the market cap at the alert, the move since, and a grade when the window
-            closes.
-          </p>
-        </li>
-        <li>
-          <span className="eyebrow">Then you</span>
-          <p>
-            Guests see calls {GUEST_DELAY_MINUTES} minutes late. A wallet signature opens the live feed, your
-            filters, and alert delivery.
+            Models flag a few launches. Guests see those alerts {GUEST_DELAY_MINUTES} minutes late. A wallet
+            opens them live.
           </p>
         </li>
       </ul>
@@ -364,8 +380,8 @@ type ShowcaseBest = { match: Card | null; windowHours: number };
 type ShowcaseLatest = { matches: readonly Card[]; delayMinutes?: number };
 
 /**
- * The signed-out explainer: a made-up card so the layout is always on screen, then the real guest
- * showcase (the default models' best call of the last 24 hours, else the latest call) when it loads.
+ * The signed-out explainer: a made-up card in the default feed look, then the real guest showcase
+ * (the default models' best alert of the last 24 hours, else the latest alert) when it loads.
  */
 export function LandingShowcase({
   best,
@@ -385,34 +401,15 @@ export function LandingShowcase({
 
   return (
     <section className="landing-example" aria-labelledby="landing-example-title">
-      <p className="eyebrow">The alert</p>
+      <p className="eyebrow">Alerts</p>
       <h2 id="landing-example-title">What an alert looks like</h2>
-      <p className="muted">
-        One card is one call. The figures on the example below are made up, so you can see the layout before
-        the feed answers. A real call, when there is one, is shown under it and labeled as such.
-      </p>
-      <ul className="landing-reads">
-        <li>
-          <strong>Token</strong>
-          <span>Name, market cap at the alert, and which model flagged it.</span>
-        </li>
-        <li>
-          <strong>Move</strong>
-          <span>How far price went from the alert, and where it sits now.</span>
-        </li>
-        <li>
-          <strong>Grade</strong>
-          <span>A mark once a target hits or the window closes. An open call has no result yet.</span>
-        </li>
-      </ul>
-
       <div className="landing-sample">
         <p className="landing-flag" role="note">
           <strong>Example</strong>
-          <span>Made-up coin. The figures are not a result, and this is not a live call.</span>
+          <span>Made-up coin, in the default card. Not a live alert.</span>
         </p>
         <div className="cards signin-cards">
-          <AlertCard card={example} now={now} detail={false} links={false} atAlert />
+          <AlertCard card={example} now={now} hide={DEFAULT_CARD_HIDE} detail={false} links={false} />
         </div>
       </div>
 
@@ -422,17 +419,24 @@ export function LandingShowcase({
             <p className="signin-alerts-head small muted">
               {isBest ? (
                 <>
-                  <TrophyIcon size={13} /> A real call: best model alert of the last{" "}
-                  {best.data?.windowHours ?? 24} hours, with its stats at the alert
+                  <TrophyIcon size={13} /> Best model alert of the last {best.data?.windowHours ?? 24} hours,
+                  with its stats at the alert
                 </>
               ) : (
                 <>
-                  <ClockIcon size={13} /> A real call: latest alert, shown {delay} minutes late
+                  <ClockIcon size={13} /> Latest alert, shown {delay} minutes late
                 </>
               )}
             </p>
             <div className="cards signin-cards">
-              <AlertCard card={live} now={now} labelSource detail={false} atAlert={isBest} />
+              <AlertCard
+                card={live}
+                now={now}
+                hide={DEFAULT_CARD_HIDE}
+                detail={false}
+                links={false}
+                atAlert={isBest}
+              />
             </div>
           </>
         ) : (
@@ -440,9 +444,9 @@ export function LandingShowcase({
             {waiting
               ? "Checking the last 24 hours for a real alert. The card above is an example."
               : latestPending
-                ? "No standout call in that window yet. Checking the latest alert. The card above is an example."
+                ? "No standout alert in that window yet. Checking the latest alert. The card above is an example."
                 : best.error || latest.error
-                  ? "The live feed didn't answer. The card above is an example, not a recent call."
+                  ? "The live feed didn't answer. The card above is an example, not a recent alert."
                   : "Nothing to show from the guest feed right now. The card above is an example."}
           </p>
         )}
@@ -452,9 +456,9 @@ export function LandingShowcase({
 }
 
 /**
- * The signed-out page's showcase: the default models' best call of the last 24 hours by its Peak,
- * among calls that passed (user decision 2026-10-18). Falls back to the latest call, as guests see
- * it, while no call has passed in that window.
+ * The signed-out page's showcase: the default models' best alert of the last 24 hours by its Peak,
+ * among alerts that passed (user decision 2026-10-18). Falls back to the latest alert, as guests see
+ * it, while none have passed in that window.
  */
 function ShowcaseAlert() {
   const best = usePolling<ShowcaseBest>("/guest/best", 60_000);

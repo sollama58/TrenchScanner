@@ -2623,9 +2623,9 @@ legend {
 }
 .landing-points {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-  margin: 18px 0 0;
+  margin: 14px 0 0;
   padding: 0;
   list-style: none;
 }
@@ -2648,35 +2648,40 @@ legend {
 .landing-example > p {
   max-width: 68ch;
 }
-.landing-reads {
+.landing-token {
   display: grid;
-  margin: 14px 0 16px;
-  padding: 0;
-  list-style: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-s);
-  overflow: hidden;
-}
-.landing-reads li {
-  display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 12px;
-  align-items: baseline;
-  padding: 10px 12px;
-  border-top: 1px solid var(--border);
+  align-items: start;
+  margin-top: 4px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--brand-b) 45%, var(--border));
+  border-radius: var(--radius-s);
   background: var(--surface-2);
-  font-size: 13px;
+}
+.landing-token p {
+  margin: 0 0 8px;
   color: var(--ink-2);
+  font-size: 13px;
 }
-.landing-reads li:first-child {
-  border-top: 0;
+.landing-token p:last-child {
+  margin-bottom: 0;
 }
-.landing-reads strong {
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
+.landing-token .landing-token-name {
+  color: var(--ink);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.landing-flame {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-top: 1px;
+  border: 1px solid color-mix(in srgb, var(--brand-b) 55%, var(--border));
+  border-radius: 8px;
+  color: var(--brand-ink);
+  background: var(--surface-3);
 }
 .landing-flag {
   display: flex;
@@ -2716,11 +2721,6 @@ legend {
 .signin-cards {
   grid-template-columns: minmax(0, 1fr);
   min-width: 0;
-}
-/* The card sets --stat-cols inline (four across). In this column that chops labels such as
-   "Transferred", so the landing specimen uses two. */
-.signin-cards .card-stats {
-  --stat-cols: 2 !important;
 }
 .signin-cards .card {
   min-width: 0;
@@ -4902,10 +4902,6 @@ body.trades-open .util-drawer > * {
   }
   .signin h1 {
     font-size: 32px;
-  }
-  .landing-reads li {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 2px;
   }
   .kpis {
     gap: 12px;
