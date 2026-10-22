@@ -63,13 +63,19 @@ export interface ScheduleInput {
   nowMs: number;
   /** Heartbeat interval, else the configured one. Null when neither is known. */
   intervalMs: number | null;
+  /** When the last run finished (the heartbeat is written then). */
   lastRunAt: string | null;
+  /** How long that run took (the heartbeat's durationMs). Null when not on the heartbeat. */
+  durationMs: number | null;
   running: boolean;
   pending: boolean;
 }
 
 /**
  * When the next training run is due, from the heartbeat the scheduler actually writes.
+ * The scheduler times the next run from the last run's start (scheduleInterval), and the
+ * heartbeat is written at its finish, so the start is the heartbeat less its duration. A run
+ * that took longer than the interval is followed at once.
  * A run in flight or a queued retrain has no finish time, so the next slot stays unknown.
  */
 export function trainingScheduleView(input: ScheduleInput): { nextRunAt: string | null; basis: string } {
@@ -77,7 +83,7 @@ export function trainingScheduleView(input: ScheduleInput): { nextRunAt: string 
     return {
       nextRunAt: null,
       basis:
-        "A run is in progress. The next run is one interval after this one finishes. The finish time is not known.",
+        "A run is in progress. The next run is one interval after this one started, or right after it finishes if it runs longer than that.",
     };
   }
   if (input.pending) {
@@ -98,13 +104,14 @@ export function trainingScheduleView(input: ScheduleInput): { nextRunAt: string 
   }
   const last = new Date(input.lastRunAt).getTime();
   if (Number.isNaN(last)) return { nextRunAt: null, basis: "The last run time could not be read." };
-  const at = last + input.intervalMs;
+  const startedAt = last - Math.max(0, input.durationMs ?? 0);
+  const at = Math.max(last, startedAt + input.intervalMs);
   return {
     nextRunAt: new Date(at).toISOString(),
     basis:
       at <= input.nowMs
         ? "That slot has passed. The trainer starts the run when its process is up; this API cannot see that delay."
-        : "One interval after the last heartbeat, which is the slot the trainer schedules when a run finishes.",
+        : "One interval after the last run started (its heartbeat less its duration), which is the slot the trainer schedules.",
   };
 }
 

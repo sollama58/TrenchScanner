@@ -233,6 +233,22 @@ describe.skipIf(!dbAvailable)("subscription routes", () => {
     expect(res.json().holder).toMatchObject({ rank: null, of: 250 });
   });
 
+  it("reuses a wallet's balance for a few seconds, and reads it again after a POST", async () => {
+    const me = await signIn("balance-cached");
+    vi.spyOn(SolanaRpc.prototype, "getBalance").mockResolvedValue(1n);
+    const accounts = vi.spyOn(SolanaRpc.prototype, "getTokenAccountsByOwner").mockResolvedValue([]);
+    const read = () => app.inject({ method: "GET", url: "/subscription/balance", cookies: me.cookies });
+    // Two tabs at once share one read, and a poll right after is answered from it.
+    const [a, b] = await Promise.all([read(), read()]);
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+    expect((await read()).statusCode).toBe(200);
+    expect(accounts).toHaveBeenCalledTimes(1);
+    // A claim (refused here) may have changed the balance: the next read goes to the chain.
+    await app.inject({ method: "POST", url: "/subscription/claim", cookies: me.cookies, payload: {} });
+    expect((await read()).statusCode).toBe(200);
+    expect(accounts).toHaveBeenCalledTimes(2);
+  });
+
   it("says so when the balance can't be read", async () => {
     const me = await signIn("balance-down");
     vi.spyOn(SolanaRpc.prototype, "getBalance").mockResolvedValue(null);

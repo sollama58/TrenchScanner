@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { api } from "../api";
 import type { SearchMarketPatch } from "../cardSearch";
 import { deskRewardName, deskRewardTokenLabel, type DeskRewardView } from "../deskRewardDisplay";
+import { keptDeskRewardMeta, loadDeskRewardMeta } from "../deskRewardMeta";
 import { TokenImage } from "./TokenImage";
 
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -22,25 +22,33 @@ function mergePatch(reward: DeskRewardView, patch: SearchMarketPatch | undefined
   };
 }
 
+function keptPatches(mints: string): Map<string, SearchMarketPatch> {
+  const out = new Map<string, SearchMarketPatch>();
+  for (const mint of mints ? mints.split(",") : []) {
+    const patch = keptDeskRewardMeta(mint);
+    if (patch) out.set(mint, patch);
+  }
+  return out;
+}
+
 function useDeskRewardPatches(rewards: readonly DeskRewardView[]): DeskRewardView[] {
   const mints = useMemo(
     () => [...new Set(rewards.filter(needsMeta).map((r) => r.mint!.trim()))].slice(0, 30).join(","),
     [rewards],
   );
-  const [patches, setPatches] = useState<Map<string, SearchMarketPatch>>(() => new Map());
+  // What the page already has paints at once; a remounted card doesn't ask again (deskRewardMeta.ts).
+  const [patches, setPatches] = useState<Map<string, SearchMarketPatch>>(() => keptPatches(mints));
   useEffect(() => {
     if (!mints) return;
     let stop = false;
-    api<{ hits: SearchMarketPatch[] }>(`/tokens/search/markets?mints=${encodeURIComponent(mints)}`)
-      .then((res) => {
-        if (stop) return;
-        setPatches((prev) => {
-          const next = new Map(prev);
-          for (const hit of res.hits) next.set(hit.mint, hit);
-          return next;
-        });
-      })
-      .catch(() => undefined);
+    void loadDeskRewardMeta(mints.split(",")).then((found) => {
+      if (stop || found.size === 0) return;
+      setPatches((prev) => {
+        const next = new Map(prev);
+        for (const [mint, hit] of found) next.set(mint, hit);
+        return next;
+      });
+    });
     return () => {
       stop = true;
     };

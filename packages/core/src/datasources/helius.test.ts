@@ -1140,6 +1140,31 @@ describe("HeliusClient.getTopHoldersBatch", () => {
     expect(seen.filter((c) => c.method === "getProgramAccountsV2")).toHaveLength(3);
   });
 
+  it("drops expired mint accounts and keeps at most 5,000", async () => {
+    const { url } = await startServer((calls) =>
+      calls.map((c) =>
+        c.method === "getMultipleAccounts"
+          ? mintAccount(c)
+          : { jsonrpc: "2.0", id: c.id, result: { accounts: [row(WALLET, 150n)], paginationKey: null } },
+      ),
+    );
+    const client = new HeliusClient({ rpcUrl: url, isHelius: true });
+    const kept = (
+      client as unknown as { mintAccounts: Map<string, { program: string; supply: bigint; atMs: number }> }
+    ).mintAccounts;
+    await client.getTopHoldersBatch(["mintA"], 25, { nowMs: 0 });
+    expect([...kept.keys()]).toEqual(["mintA"]);
+    // Another mint read after mintA's five minutes ran out drops mintA.
+    await client.getTopHoldersBatch(["mintB"], 25, { nowMs: 6 * 60_000 });
+    expect([...kept.keys()]).toEqual(["mintB"]);
+    for (let i = 0; i < 5_000; i += 1)
+      kept.set(`filler${i}`, { program: TOKEN_2022, supply: 1n, atMs: 6 * 60_000 });
+    await client.getTopHoldersBatch(["mintA"], 25, { nowMs: 6 * 60_000 });
+    expect(kept.size).toBe(5_000);
+    expect(kept.has("mintB")).toBe(false);
+    expect(kept.has("mintA")).toBe(true);
+  });
+
   it("retries a mint whose account read failed instead of caching the failure", async () => {
     let failMint = true;
     const seen: string[] = [];

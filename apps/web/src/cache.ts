@@ -192,21 +192,25 @@ export function cachedGet<T>(path: string, maxAgeMs = 0): Promise<T> {
   // back the answer from before the change.
   const read = () => (maxAgeMs < 0 || recentlyInvalidated(path) ? api<T>(path, REVALIDATE) : api<T>(path));
   const p = ((maxAgeMs >= 0 && adoptBoot<T>(path)) || read()).then((data) => {
-    let next = data;
-    if (isChartPollPath(path) && e.data !== undefined) {
-      const prev = e.data as ChartPollBody;
-      const body = data as ChartPollBody;
-      if (prev.mint === body.mint) next = mergeTokenChart(prev, body) as T;
-    }
+    const newest = n > (e.n ?? 0);
     const accept =
-      n > (e.n ?? 0) ||
+      newest ||
       (isChartPollPath(path) &&
         e.data !== undefined &&
         chartHistoryExtended(e.data as ChartPollBody, data as ChartPollBody));
+    let next = data;
+    if (accept && isChartPollPath(path) && e.data !== undefined) {
+      const held = e.data as ChartPollBody;
+      const body = data as ChartPollBody;
+      // A late answer to an older request only adds the history it reaches back to: the data
+      // already held is newer, so its candles, wallets and flags win.
+      if (held.mint === body.mint)
+        next = (newest ? mergeTokenChart(held, body) : mergeTokenChart(body, held)) as T;
+    }
     if (accept) {
       e.data = next;
       e.at = Date.now();
-      e.n = n;
+      e.n = Math.max(e.n ?? 0, n);
       e.restored = false;
       if (persisted(path)) persistSoon();
     }

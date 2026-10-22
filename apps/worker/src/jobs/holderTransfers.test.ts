@@ -12,8 +12,10 @@ import {
   resetHolderTransfers,
   resolveHolderTransfers,
   setHolderTransferStream,
+  STREAM_READ_WAIT_MS,
   takeHolderTransferStats,
 } from "./holderTransfers.js";
+import { STREAM_SETTLE_MS } from "../discovery/heliusAccountStream.js";
 
 // Real wallet addresses: a transfer counts only between wallets on the ed25519 curve.
 const A = "HYi9a633brCmNtqLgat8fDo8huRYuYpUxsoJhuSzJiaP";
@@ -99,7 +101,13 @@ describe("holder transfers", () => {
     ).toEqual({ signatureReads: 3, txReads: 1 });
     expect(helius.getAccountSignaturesBatch).toHaveBeenCalledTimes(1);
     expect(helius.getTransactionsBatch.mock.calls[0]![0]).toEqual(["send"]);
-    expect(takeHolderTransferStats()).toEqual({ getSignaturesForAddress: 3, getTransaction: 1, credits: 4 });
+    expect(takeHolderTransferStats()).toEqual({
+      getSignaturesForAddress: 3,
+      getTransaction: 1,
+      streamSkipped: 0,
+      streamDeferred: 0,
+      credits: 4,
+    });
 
     const reading = holderTransfersOf(group, NOW)!;
     expect(reading.transfers).toEqual([{ from: A, to: B, pct: 3, count: 1, lastAtMs: NOW - 60_000 }]);
@@ -152,12 +160,17 @@ describe("holder transfers", () => {
   });
 
   describe("with the Helius stream", () => {
-    /** A stream that has followed every account since `since` (null: not following). */
-    function fakeStream(since: number | null) {
+    /**
+     * A stream that has followed every account since `since` (null: not following), or is waiting
+     * for Helius to confirm them (`awaiting`).
+     */
+    function fakeStream(since: number | null, awaiting = false) {
       const s = {
         since,
+        awaiting,
         watch: vi.fn(),
         coveredSince: vi.fn(() => s.since),
+        awaitingCover: vi.fn(() => s.since === null && s.awaiting),
         takeStats: vi.fn(() => ({
           connected: 1,
           subscriptions: 1,
@@ -199,13 +212,15 @@ describe("holder transfers", () => {
     });
 
     it("reads an account again when the stream started after its last read, or dropped", async () => {
-      // Subscribed just before the read: a transaction in between could be missed.
-      const stream = fakeStream(NOW - 10_000);
+      // Read while the socket was down; the subscription is confirmed just after: a transaction in
+      // between could be missed.
+      const stream = fakeStream(null);
       setHolderTransferStream(stream);
       const helius = fakeHelius({ "acc-a": ["x"], "acc-b": ["y"], "acc-c": ["z"] }, {});
       const group = { mintAddress: MINT, holders: [], creator: null };
       await readTopHolders([group], helius, { maxReads: 1, nowMs: NOW });
       await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: NOW });
+      stream.since = NOW + 1_000;
       // The stream's signature goes on the list, but the read point stays put until a read covers the gap.
       onHolderStreamTx(MINT, "live-send", streamed, NOW + 5_000);
       const later = NOW + ACCOUNT_REREAD_MS;
@@ -224,6 +239,145 @@ describe("holder transfers", () => {
       await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: after });
       expect(helius.getAccountSignaturesBatch).toHaveBeenCalledTimes(3);
     });
+    it("holds a new coin's first read until its subscription settles, then never re-reads it", async () => {
+      // Subscribed this cycle: Helius has yet to answer.
+      const stream = fakeStream(null, true);
+      setHolderTransferStream(stream);
+      const helius = fakeHelius({ "acc-a": ["x"], "acc-b": ["y"], "acc-c": ["z"] }, {});
+      const group = { mintAddress: MINT, holders: [], creator: null };
+      await readTopHolders([group], helius, { maxReads: 1, nowMs: NOW });
+      expect(
+        await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: NOW }),
+      ).toEqual({ signatureReads: 0, txReads: 0 });
+      expect(stream.watch).toHaveBeenCalledWith(MINT, ["acc-a", "acc-b", "acc-c"], NOW);
+      expect(helius.getAccountSignaturesBatch).not.toHaveBeenCalled();
+      expect(holderTransfersOf(group, NOW)).toBeNull();
+
+      // Confirmed a moment later; still settling on the next cycle.
+      stream.since = NOW + 1_000;
+      await resolveHolderTransfers([group], helius, {
+        maxSignatureReads: 3,
+        maxTxReads: 10,
+        nowMs: NOW + 15_000,
+      });
+      expect(helius.getAccountSignaturesBatch).not.toHaveBeenCalled();
+      expect(takeHolderTransferStats()).toMatchObject({ getSignaturesForAddress: 0, streamDeferred: 6 });
+
+      // Settled: one read, which starts the cover at once.
+      const settled = NOW + 1_000 + STREAM_SETTLE_MS;
+      await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: settled });
+      expect(helius.getAccountSignaturesBatch).toHaveBeenCalledTimes(1);
+      expect(holderTransfersOf(group, settled)?.transferredSupplyPct).toBe(0);
+
+      // A transfer arrives on the stream and moves the read point; no re-read at the 10-minute mark.
+      onHolderStreamTx(MINT, "live-send", streamed, settled + 5_000);
+      const later = settled + ACCOUNT_REREAD_MS;
+      await readTopHolders([group], helius, { maxReads: 1, nowMs: later });
+      await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: later });
+      expect(helius.getAccountSignaturesBatch).toHaveBeenCalledTimes(1);
+      expect(helius.getTransactionsBatch).not.toHaveBeenCalled();
+      expect(holderTransfersOf(group, later)?.transfers).toEqual([
+        { from: A, to: B, pct: 3, count: 1, lastAtMs: settled + 5_000 },
+      ]);
+      expect(takeHolderTransferStats()).toMatchObject({
+        getSignaturesForAddress: 3,
+        streamSkipped: 3,
+        streamDeferred: 0,
+      });
+    });
+
+    it("leaves the budget to the next coin while one waits for the stream", async () => {
+      const OTHER = "other-mint";
+      const stream = fakeStream(NOW - 60_000);
+      // The first coin was subscribed this cycle; the other has been followed for a minute.
+      stream.coveredSince.mockImplementation(((key: string) =>
+        key === MINT ? null : stream.since) as never);
+      stream.awaitingCover.mockImplementation(((key: string) => key === MINT) as never);
+      setHolderTransferStream(stream);
+      const base = fakeHelius({}, {});
+      const helius = {
+        ...base,
+        getTopHoldersBatch: vi.fn(
+          async (mints: string[]): Promise<Map<string, TopHoldersResult>> =>
+            new Map(
+              mints.map((m) => [
+                m,
+                {
+                  status: "found",
+                  supply: SUPPLY.toString(),
+                  holders: [{ owner: A, pct: 5, accounts: [`${m}-acc-a`] }],
+                },
+              ]),
+            ),
+        ),
+      };
+      const first = { mintAddress: MINT, holders: [], creator: null };
+      const second = { mintAddress: OTHER, holders: [], creator: null };
+      await readTopHolders([first, second], helius, { maxReads: 2, nowMs: NOW });
+      expect(
+        await resolveHolderTransfers([first, second], helius, {
+          maxSignatureReads: 1,
+          maxTxReads: 10,
+          nowMs: NOW,
+        }),
+      ).toEqual({ signatureReads: 1, txReads: 0 });
+      expect(helius.getAccountSignaturesBatch.mock.calls[0]![0]).toEqual([
+        { address: `${OTHER}-acc-a`, until: null },
+      ]);
+    });
+
+    it("reads anyway once Helius has left a subscription unanswered for STREAM_READ_WAIT_MS", async () => {
+      const stream = fakeStream(null, true);
+      setHolderTransferStream(stream);
+      const helius = fakeHelius({ "acc-a": ["x"], "acc-b": ["y"], "acc-c": ["z"] }, {});
+      const group = { mintAddress: MINT, holders: [], creator: null };
+      await readTopHolders([group], helius, { maxReads: 1, nowMs: NOW });
+      for (let t = NOW; t < NOW + STREAM_READ_WAIT_MS; t += 30_000) {
+        await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: t });
+      }
+      expect(helius.getAccountSignaturesBatch).not.toHaveBeenCalled();
+      await resolveHolderTransfers([group], helius, {
+        maxSignatureReads: 3,
+        maxTxReads: 10,
+        nowMs: NOW + STREAM_READ_WAIT_MS,
+      });
+      expect(helius.getAccountSignaturesBatch).toHaveBeenCalledTimes(1);
+      // Read before any cover: a transaction streamed now leaves the read point where it is.
+      stream.since = NOW + STREAM_READ_WAIT_MS + 1_000;
+      onHolderStreamTx(MINT, "live-send", streamed, NOW + STREAM_READ_WAIT_MS + 5_000);
+      const later = NOW + STREAM_READ_WAIT_MS + ACCOUNT_REREAD_MS;
+      await readTopHolders([group], helius, { maxReads: 1, nowMs: later });
+      await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: later });
+      expect(helius.getAccountSignaturesBatch.mock.calls[1]![0]).toEqual([
+        { address: "acc-a", until: "x" },
+        { address: "acc-b", until: "y" },
+        { address: "acc-c", until: "z" },
+      ]);
+    });
+
+    it("still reads when cycles come slower than STREAM_READ_WAIT_MS and Helius never answers", async () => {
+      setHolderTransferStream(fakeStream(null, true));
+      const helius = fakeHelius({ "acc-a": ["x"], "acc-b": ["y"], "acc-c": ["z"] }, {});
+      const group = { mintAddress: MINT, holders: [], creator: null };
+      await readTopHolders([group], helius, { maxReads: 1, nowMs: NOW });
+      await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: NOW });
+      expect(helius.getAccountSignaturesBatch).not.toHaveBeenCalled();
+      const slow = NOW + 2 * STREAM_READ_WAIT_MS;
+      await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: slow });
+      expect(helius.getAccountSignaturesBatch).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads at once while the stream is not on its way to cover the coin (capped, refused, down)", async () => {
+      // Not following and not awaiting an answer: polled as without the stream.
+      setHolderTransferStream(fakeStream(null, false));
+      const helius = fakeHelius({ "acc-a": ["x"], "acc-b": ["y"], "acc-c": ["z"] }, {});
+      const group = { mintAddress: MINT, holders: [], creator: null };
+      await readTopHolders([group], helius, { maxReads: 1, nowMs: NOW });
+      await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: NOW });
+      expect(helius.getAccountSignaturesBatch).toHaveBeenCalledTimes(1);
+      expect(takeHolderTransferStats()).toMatchObject({ streamDeferred: 0, streamSkipped: 0 });
+    });
+
     it("moves the top-holder list by the balances a streamed transaction left", async () => {
       setHolderTransferStream(fakeStream(NOW - 60_000));
       const helius = fakeHelius({}, {});

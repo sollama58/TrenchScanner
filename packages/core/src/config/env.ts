@@ -280,6 +280,10 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  // Most coins whose holder accounts that stream follows at once (one transactionSubscribe each,
+  // ~25 accounts). It sat at 200 of 200 with the contenders past it polling (audit 2026-10-22, H-4);
+  // keys bill by the bytes they bring, not by count, and Helius takes 50,000 addresses.
+  HELIUS_HOLDER_STREAM_MAX_KEYS: z.coerce.number().int().min(1).max(1_500).default(400),
   // The curve tape (worker's jobs/curveTape.ts, user ask 2026-10-17): every tracked Pump.fun coin
   // younger than CURVE_TAPE_MAX_AGE_MINUTES has its bonding curve followed on the Helius websocket
   // (accountSubscribe: an update per changed block, ~0.5 KB, 2 credits per 0.1 MB), and read by RPC

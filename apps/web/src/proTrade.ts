@@ -901,8 +901,10 @@ export interface BuiltTrade {
   sacrifice?: SacrificeView;
   /** The build, signed by the API: sent back with the signed trade, so any API instance takes it. */
   buildToken?: string;
-  /** When the blockhash was fetched (ms). Absent on older API builds. */
+  /** When the blockhash was fetched (ms), on the API's clock. Absent on older API builds. */
   blockhashAt?: number;
+  /** The blockhash's age as the answer left the API. Absent on older API builds. */
+  blockhashAgeMs?: number;
   /** The mint's decimals. Null when unknown; absent on older API builds. */
   decimals?: number | null;
   /** Rent this build opens, lamports. The sign line uses this, not an earlier preview. */
@@ -1474,7 +1476,7 @@ export function tradeCooldownLeft(owner: string, now = Date.now()): number {
  */
 type WalletSlot =
   | { kind: "preparing"; mint: string; id: number; prevPace: number | undefined; paced: boolean }
-  | { kind: "live"; mint: string; id: number; signature: string; blockhashAt: number };
+  | { kind: "live"; mint: string; id: number; signature: string; liveAt: number };
 
 const walletSlots = new Map<string, WalletSlot>();
 let walletSlotId = 0;
@@ -1513,10 +1515,16 @@ function releaseUnsent(owner: string, id: number): void {
   else lastSentAt.set(owner, slot.prevPace);
 }
 
-function markLive(owner: string, id: number, signature: string, blockhashAt: number): void {
+/**
+ * The lock's window starts on this browser's clock when the signature goes out. The build's
+ * blockhashAt is the API's clock: against Date.now() here, a browser running fast would skip the
+ * wait and drop the lock at once, and a slow one would hold it too long. The blockhash was fetched
+ * before the send, so counting from the send only ever waits a little longer than its life.
+ */
+function markLive(owner: string, id: number, signature: string): void {
   const slot = walletSlots.get(owner);
   if (!slot || slot.id !== id) return;
-  walletSlots.set(owner, { kind: "live", mint: slot.mint, id, signature, blockhashAt });
+  walletSlots.set(owner, { kind: "live", mint: slot.mint, id, signature, liveAt: Date.now() });
 }
 
 function clearSlot(owner: string, id: number): void {
@@ -1525,10 +1533,12 @@ function clearSlot(owner: string, id: number): void {
 }
 
 /** Keeps polling after the panel gives up, and drops the lock once the chain settles the signature. */
-function watchLive(owner: string, id: number, signature: string, blockhashAt: number): void {
+function watchLive(owner: string, id: number, signature: string): void {
   if (typeof window === "undefined") return;
+  const live = walletSlots.get(owner);
+  if (!live || live.kind !== "live" || live.id !== id) return;
   void (async () => {
-    const until = blockhashAt + 90_000;
+    const until = live.liveAt + 90_000;
     while (Date.now() < until) {
       await new Promise((r) => setTimeout(r, STATUS_POLL_MS));
       const slot = walletSlots.get(owner);
@@ -1717,8 +1727,19 @@ async function confirmTrade(
   }
 }
 
-function blockhashLate(built: { blockhashAt?: number }, now = Date.now()): boolean {
-  return typeof built.blockhashAt === "number" && now - built.blockhashAt > SIGN_FRESH_MS;
+/**
+ * When the build's blockhash was fetched, on this browser's clock: the build answer's arrival less
+ * the age the API reports. blockhashAt is the API's own clock, and against Date.now() here a
+ * browser clock off by more than SIGN_FRESH_MS would call every blockhash late (or none). An older
+ * API without the age counts from the arrival, which misses only the build's own few seconds.
+ */
+export function blockhashFetchedAt(built: { blockhashAgeMs?: number }, arrivedAt: number): number {
+  const age = built.blockhashAgeMs;
+  return typeof age === "number" && Number.isFinite(age) && age > 0 ? arrivedAt - age : arrivedAt;
+}
+
+function blockhashLate(fetchedAt: number, now = Date.now()): boolean {
+  return now - fetchedAt > SIGN_FRESH_MS;
 }
 
 function windowClosed(): TradeError {
@@ -1761,12 +1782,14 @@ export async function runTrade(
     // Built and signed again, once, when the blockhash is already late or the wallet took so long
     // that it is nearly spent: sent, it would only expire. The slippage is not widened.
     let built!: BuiltTrade;
+    let fetchedAt = 0;
     let signedBytes: Uint8Array | undefined;
     for (let attempt = 0; ; attempt++) {
       if (input.signal?.aborted) throw windowClosed();
       onStage("building");
       try {
         built = await buildTrade(asked);
+        fetchedAt = blockhashFetchedAt(built, Date.now());
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) {
           tradingUnavailable();
@@ -1810,7 +1833,7 @@ export async function runTrade(
         throw new TradeError(
           "This coin's decimals aren't known yet, so nothing was signed. Try again once the mint is known.",
         );
-      if (blockhashLate(built)) {
+      if (blockhashLate(fetchedAt)) {
         if (attempt > 0)
           throw new TradeError(
             "The quote's blockhash expired before it could be signed. Nothing was sent; try again.",
@@ -1846,7 +1869,7 @@ export async function runTrade(
       }
       if (input.signal?.aborted) throw windowClosed();
       if (!signedBytes) throw new TradeError(`${name} returned no signed transaction`);
-      if (!blockhashLate(built) && Date.now() - signingStarted <= SIGN_FRESH_MS) break;
+      if (!blockhashLate(fetchedAt) && Date.now() - signingStarted <= SIGN_FRESH_MS) break;
       if (attempt > 0)
         throw new TradeError(
           "That took too long to sign, so it would have expired. Nothing was sent; try again.",
@@ -1892,8 +1915,7 @@ export async function runTrade(
       sent = { signature };
     }
     sentOut = true;
-    const blockhashAt = built.blockhashAt ?? Date.now();
-    markLive(asked.owner, slot, sent.signature, blockhashAt);
+    markLive(asked.owner, slot, sent.signature);
     onStage("confirming", built);
     try {
       const confirmed = await confirmTrade(sent.signature, uncertain, asked.side);
@@ -1903,11 +1925,11 @@ export async function runTrade(
       // Status 404 after a successful send: the signature stays, and it may still have landed.
       if (e instanceof ApiError && e.status === 404) {
         tradingUnavailable();
-        watchLive(asked.owner, slot, sent.signature, blockhashAt);
+        watchLive(asked.owner, slot, sent.signature);
         throw new TradeError(STATUS_MAYBE, sent.signature);
       }
       if (e instanceof TradeError && e.settled) clearSlot(asked.owner, slot);
-      else watchLive(asked.owner, slot, sent.signature, blockhashAt);
+      else watchLive(asked.owner, slot, sent.signature);
       throw e;
     }
   } catch (e) {

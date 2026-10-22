@@ -89,6 +89,7 @@ function keepHistory(base: string, trades: LiveTokenTrade[]) {
     if (oldest === undefined) break;
     histories.delete(oldest);
     labelsKept.delete(oldest);
+    stoppedStates.delete(oldest);
   }
 }
 
@@ -118,6 +119,14 @@ const EMPTY: LiveTrades = {
 };
 /** Each coin's labels (LiveTrades.labels), kept with its history. */
 const labelsKept = new Map<string, Readonly<Record<string, LiveTraderLabel>>>();
+/** What a stopped feed last held (no status: nothing is followed), kept with its history. */
+const stoppedStates = new Map<string, LiveTrades>();
+/** Views that read a coin's feed without starting it (useLiveTradesIfFollowed), by base. */
+const watchers = new Map<string, Set<() => void>>();
+
+function tellWatchers(base: string): void {
+  for (const l of watchers.get(base) ?? []) l();
+}
 
 /** Starts `base`'s feed: asks for the trades since the last answer until stopped. */
 function startFeed(base: string): SharedFeed {
@@ -129,6 +138,7 @@ function startFeed(base: string): SharedFeed {
   const set = (next: LiveTrades) => {
     feed.state = next;
     for (const l of feed.listeners) l();
+    tellWatchers(base);
   };
   let after = 0;
   let stopped = false;
@@ -207,30 +217,72 @@ function startFeed(base: string): SharedFeed {
 }
 
 /**
+ * Follows `base`'s trades for `listener`: starts the shared feed if none runs, and stops it when
+ * its last follower leaves. Returns the unfollow. Exported for tests.
+ */
+export function followFeed(base: string, listener: () => void): () => void {
+  let feed = feeds.get(base);
+  if (!feed) {
+    feeds.set(base, (feed = startFeed(base)));
+    tellWatchers(base);
+  }
+  feed.listeners.add(listener);
+  return () => {
+    feed.listeners.delete(listener);
+    if (feed.listeners.size === 0 && feeds.get(base) === feed) {
+      feed.stop();
+      feeds.delete(base);
+      if (histories.has(base))
+        stoppedStates.set(base, { ...feed.state, trades: [], status: null, since: null });
+      tellWatchers(base);
+    }
+  };
+}
+
+/** Tells `listener` whenever `base`'s feed changes, starts or stops, without starting it. Exported for tests. */
+export function watchFeed(base: string, listener: () => void): () => void {
+  let set = watchers.get(base);
+  if (!set) watchers.set(base, (set = new Set()));
+  set.add(listener);
+  return () => {
+    set.delete(listener);
+    if (set.size === 0 && watchers.get(base) === set) watchers.delete(base);
+  };
+}
+
+/** What a view of `base` shows: the running feed, else what a stopped one read, else nothing. Exported for tests. */
+export function feedState(base: string): LiveTrades {
+  return feeds.get(base)?.state ?? stoppedStates.get(base) ?? EMPTY;
+}
+
+/**
  * A coin's live trades (user ask 2026-10-19): while `enabled`, asks `base`/trades/live for the
  * trades since the last answer, the API holding each ask until the next one lands. The API
  * follows the coin's trades on the chain stream only while someone asks, so nothing is read for a
  * closed view. Only while the tab is visible; a failure backs off and keeps trying. Every view of
- * the same coin shares one feed, so the Live trades tab and the chart's marks ask once.
+ * the same coin shares one feed. Only the Live trades tab starts it; the chart's marks and the
+ * holder shares read it with useLiveTradesIfFollowed.
  */
 export function useLiveTrades(base: string, enabled: boolean): LiveTrades {
   const subscribe = useCallback(
-    (listener: () => void) => {
-      if (!enabled) return () => {};
-      let feed = feeds.get(base);
-      if (!feed) feeds.set(base, (feed = startFeed(base)));
-      feed.listeners.add(listener);
-      return () => {
-        feed.listeners.delete(listener);
-        if (feed.listeners.size === 0 && feeds.get(base) === feed) {
-          feed.stop();
-          feeds.delete(base);
-        }
-      };
-    },
+    (listener: () => void) => (enabled ? followFeed(base, listener) : () => {}),
     [base, enabled],
   );
   return useSyncExternalStore(subscribe, () => (enabled ? (feeds.get(base)?.state ?? EMPTY) : EMPTY));
+}
+
+/**
+ * A coin's live trades as far as another view already follows them, without asking for them
+ * itself (Helius audit 2026-10-22 H-2: the follow is a paid chain stream, so only the Live trades
+ * tab starts it). While that tab runs, this is its feed; after it closes, what it read stays
+ * (`status` null), so the chart's marks of those trades don't vanish; before any, it is empty.
+ */
+export function useLiveTradesIfFollowed(base: string, enabled: boolean): LiveTrades {
+  const subscribe = useCallback(
+    (listener: () => void) => (enabled ? watchFeed(base, listener) : () => {}),
+    [base, enabled],
+  );
+  return useSyncExternalStore(subscribe, () => (enabled ? feedState(base) : EMPTY));
 }
 
 export interface TradeTally {

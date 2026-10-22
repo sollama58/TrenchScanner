@@ -135,7 +135,7 @@ describe.skipIf(!dbAvailable)("GET /portfolio", () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers["cache-control"]).toContain("no-store");
     // Still holding OPEN_MINT; SOLD_MINT sold out; UNTRACKED_MINT isn't a token the scanner has.
-    expect(res.json()).toEqual({ tokenIds: [tokenIds[0]], readAt: null });
+    expect(res.json()).toEqual({ tokenIds: [tokenIds[0]], readAt: null, truncated: false });
     expect((await as(OTHER, "/portfolio/held")).statusCode).toBe(404);
     expect((await app.inject({ method: "GET", url: "/portfolio/held" })).statusCode).toBe(401);
   });

@@ -2,7 +2,19 @@
 import "./bootstrap-env.js";
 import { describe, expect, it } from "vitest";
 import type { Env } from "@trenchscanner/core";
-import { asksFor, base32, matchTotp, openSecret, otpauthUrl, sealSecret, totpCode } from "./twoFactor.js";
+import {
+  asksFor,
+  base32,
+  failTwoFactorForTests,
+  matchTotp,
+  MAX_TRACKED_FAILURES,
+  openSecret,
+  otpauthUrl,
+  resetTwoFactorFailuresForTests,
+  sealSecret,
+  totpCode,
+  twoFactorLockedOutForTests,
+} from "./twoFactor.js";
 
 const env = { JWT_SECRET: "a".repeat(64) } as Env;
 // RFC 6238's SHA-1 test secret.
@@ -75,5 +87,20 @@ describe("asksFor", () => {
     expect(asksFor(over, "buy", { lamports: 999_999_999n })).toBe(false);
     expect(asksFor(over, "buy", { lamports: 1_000_000_000n })).toBe(true);
     expect(asksFor({ ...on, actions: ["buy"] }, "buy", { lamports: 1n })).toBe(true);
+  });
+});
+
+describe("wrong-try memory", () => {
+  it("drops only the oldest user past the cap, not every count in progress", () => {
+    resetTwoFactorFailuresForTests();
+    for (let i = 0; i < 5; i += 1) failTwoFactorForTests("locked");
+    expect(twoFactorLockedOutForTests("locked")).toBe(true);
+    failTwoFactorForTests("oldest");
+    // "locked" is first in the map; one more user past the cap drops it and nobody else.
+    for (let i = 0; i < MAX_TRACKED_FAILURES - 1; i += 1) failTwoFactorForTests(`u${i}`);
+    expect(twoFactorLockedOutForTests("locked")).toBe(false);
+    for (let i = 0; i < 4; i += 1) failTwoFactorForTests("oldest");
+    expect(twoFactorLockedOutForTests("oldest")).toBe(true);
+    resetTwoFactorFailuresForTests();
   });
 });

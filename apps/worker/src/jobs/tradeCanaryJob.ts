@@ -57,9 +57,10 @@ export type ProbeKey = "sol-usdc" | "graduated" | "curve" | "sender" | "rpc" | "
 
 export interface ProbeResult {
   key: ProbeKey;
-  status: "ok" | "failed" | "skipped";
+  /** Degraded: it answered, but not fully (Sender rate-limiting its ping). Not a failure. */
+  status: "ok" | "degraded" | "failed" | "skipped";
   ms: number;
-  /** Why it failed or was skipped; for a build, the coin it built on. */
+  /** Why it failed, was degraded or was skipped; for a build, the coin it built on. */
   detail?: string;
 }
 
@@ -67,7 +68,8 @@ export interface ProbeResult {
 export interface CanaryClients {
   /** buildManualTrade for the probe wallet: resolves when the build passed the guard. */
   build: (mint: string) => Promise<unknown>;
-  senderPing: () => Promise<void>;
+  /** "limited" when Sender answered the ping with a 429; throws when it did not answer. */
+  senderPing: () => Promise<"up" | "limited">;
   blockHeight: () => Promise<number | null>;
   /** Null when TRADING_BACKUP_RPC_URL is not set: the probe is skipped. */
   backupBlockHeight: (() => Promise<number | null>) | null;
@@ -114,7 +116,10 @@ export function canaryClients(env: Env): CanaryClients {
       // Sender's warm-up endpoint: free, no key, at the host's root.
       const url = new URL("/ping", env.HELIUS_SENDER_URL || DEFAULT_HELIUS_SENDER_URL);
       const res = await fetch(url, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+      // A 429 is Sender answering: it rate-limits the keyless ping while keyed sends still go out.
+      if (res.status === 429) return "limited";
       if (!res.ok) throw new Error(`Sender /ping answered ${res.status}`);
+      return "up";
     },
     blockHeight: () => primary.getBlockHeight(),
     backupBlockHeight: backup ? () => backup.getBlockHeight() : null,
@@ -220,6 +225,24 @@ async function buildProbe(
   return { key, status: "failed", ms: Date.now() - started, detail: refusals.join("; ") };
 }
 
+/** Sender's ping. A rate-limited answer is degraded, so it neither fails the run nor pages. */
+async function senderProbe(clients: CanaryClients, timeoutMs: number): Promise<ProbeResult> {
+  const started = Date.now();
+  try {
+    const answer = await withTimeout(clients.senderPing(), timeoutMs);
+    if (answer === "limited")
+      return {
+        key: "sender",
+        status: "degraded",
+        ms: Date.now() - started,
+        detail: "Sender /ping answered 429",
+      };
+    return { key: "sender", status: "ok", ms: Date.now() - started };
+  } catch (err) {
+    return { key: "sender", status: "failed", ms: Date.now() - started, detail: errText(err) };
+  }
+}
+
 /** Every probe of one run. The builds go one after another (Jupiter's rate limit); the rest alongside. */
 export async function runCanaryProbes(
   clients: CanaryClients,
@@ -227,10 +250,7 @@ export async function runCanaryProbes(
   timeoutMs = PROBE_TIMEOUT_MS,
 ): Promise<ProbeResult[]> {
   const side = Promise.all([
-    timed("sender", timeoutMs, async () => {
-      await clients.senderPing();
-      return undefined;
-    }),
+    senderProbe(clients, timeoutMs),
     timed("rpc", timeoutMs, async () => {
       const h = await clients.blockHeight();
       if (!h) throw new Error("no answer to getBlockHeight");
@@ -307,6 +327,12 @@ export async function runTradeCanary(env: Env, deps: TradeCanaryDeps = {}): Prom
     graduatedMint: built("graduated"),
     curveMint: built("curve"),
   };
+  // Degraded probes pass the run (no page) but are logged, and show as "degraded" in meta.probes.
+  const degraded = probes.filter((p) => p.status === "degraded");
+  if (degraded.length > 0)
+    logger.warn("trade canary degraded", {
+      degraded: degraded.map((p) => `${p.key}: ${p.detail ?? "degraded"}`).join("; "),
+    });
   if (failed.length > 0) {
     const text = failed.map((p) => `${p.key}: ${p.detail ?? "failed"}`).join("; ");
     logger.warn("trade canary failed", { consecutiveFailures, failed: text });
