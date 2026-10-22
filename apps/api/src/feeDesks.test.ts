@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { feeDeskFromOtcCoin, feeDeskLineFromOtcCoin, feeDesksFromOtcRoster } from "./feeDesks.js";
+import {
+  creatorFeeWalletAddresses,
+  feeDeskFromOtcCoin,
+  feeDeskLineFromOtcCoin,
+  feeDesksFromOtcRoster,
+  resolveOtcDeskFee,
+} from "./feeDesks.js";
 
 const MINT = "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump";
 const OTHER = "So11111111111111111111111111111111111111112";
@@ -122,6 +128,66 @@ describe("feeDesksFromOtcRoster", () => {
     });
     expect(fees.has(OTHER)).toBe(false);
     expect(fees.has(THIRD)).toBe(false);
+  });
+
+  it("reads a renamed basket and address fields, and a case-different reward mint", () => {
+    const flipped = `${OTHER[0]!.toLowerCase()}${OTHER.slice(1)}`;
+    expect(
+      feeDeskFromOtcCoin({
+        mint: MINT,
+        rewardBasket: [
+          { address: OTHER, ticker: "NVDAx" },
+          { address: THIRD, ticker: "TSLAx" },
+        ],
+      }),
+    ).toEqual({
+      line: "OTC Desks pays holder rewards in NVDAx and TSLAx.",
+      rewards: [
+        { label: "NVDAx", mint: OTHER },
+        { label: "TSLAx", mint: THIRD },
+      ],
+    });
+    const fees = feeDesksFromOtcRoster({
+      data: {
+        coins: [
+          { mint: MINT, rewards: [flipped, THIRD] },
+          { mint: OTHER, symbol: "NVDAx" },
+          { mint: THIRD, symbol: "TSLAx" },
+        ],
+      },
+    });
+    expect(fees.get(MINT)?.line).toBe("OTC Desks pays holder rewards in NVDAx and TSLAx.");
+  });
+
+  it("matches a creator-fee wallet listed once on the desk coin, and not a shared wallet", () => {
+    const wallet = "4NVt2u8V7YwQj3k6mP8sR2tU5vW7xY9zA1bC3dE5fG7";
+    const shared = "5KXDF6QnqhBj72hDtJNkkpFaQVUfbFXNybMsp3DiK6tD";
+    const otherCoin = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+    const fees = feeDesksFromOtcRoster({
+      coins: [
+        { mint: MINT, wallet, rewardBasket: [OTHER, THIRD] },
+        { mint: otherCoin, wallet: shared, rewardSymbol: "NVDAx" },
+        { mint: THIRD, symbol: "TSLAx", wallet: shared, rewardSymbol: "TSLAx" },
+        { mint: OTHER, symbol: "NVDAx" },
+      ],
+    });
+    expect(fees.get(wallet)?.line).toBe("OTC Desks pays holder rewards in NVDAx and TSLAx.");
+    expect(fees.has(shared)).toBe(false);
+    expect(resolveOtcDeskFee(otherCoin, [wallet], fees)?.line).toBe(
+      "OTC Desks pays holder rewards in NVDAx.",
+    );
+    expect(
+      creatorFeeWalletAddresses(
+        {
+          admin: wallet,
+          recipients: [
+            { address: MINT, kind: "creator", is_creator: true },
+            { address: wallet, kind: "wallet" },
+          ],
+        },
+        wallet,
+      ),
+    ).toEqual([wallet]);
   });
 
   it("prefers a later row that names reward coins over an earlier row that does not", () => {

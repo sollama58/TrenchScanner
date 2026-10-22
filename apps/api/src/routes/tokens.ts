@@ -29,8 +29,8 @@ import {
 import { SharedCache } from "../sharedCache.js";
 import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
 import { charityNamesByMint } from "../curatedFeed.js";
-import { otcDeskFees } from "../otcDesk.js";
-import type { OtcDeskFee } from "../feeDesks.js";
+import { otcDeskRoster } from "../otcDesk.js";
+import { creatorFeeWalletAddresses, resolveOtcDeskFee, type OtcDeskFee } from "../feeDesks.js";
 import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
 import { liveCurves, MAX_WAIT_MS, type LiveCurveAnswer } from "../liveCurve.js";
 import { recordCandleAnswer } from "../chartHealth.js";
@@ -1417,11 +1417,13 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
       select: { id: true, symbol: true, name: true, imageUrl: true, firstSeenAt: true },
     }),
   ]);
-  const feeDestination =
-    row?.status === "failed"
-      ? null
-      : (row?.analysis as TokenSageAnalysis | null)?.market?.creator_fee?.destination;
-  const [snapshots, labels, judged, desks, charityNames] = await Promise.all([
+  const analysis = row?.status === "failed" ? null : (row?.analysis as TokenSageAnalysis | null);
+  const feeDestination = analysis?.market?.creator_fee?.destination;
+  const feeWallets =
+    feeDestination === "wallet" || feeDestination === "split"
+      ? creatorFeeWalletAddresses(analysis?.market?.creator_fee, analysis?.market?.creator)
+      : [];
+  const [snapshots, labels, judged, roster, charityNames] = await Promise.all([
     token
       ? prisma.tokenSnapshot.findMany({
           where: { tokenId: token.id },
@@ -1461,7 +1463,7 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
           },
         })
       : ([] as NarrativeAlertRow[]),
-    otcDeskFees([mintAddress], { wait: true }).catch(() => new Map<string, OtcDeskFee>()),
+    otcDeskRoster({ wait: true }).catch(() => new Map<string, OtcDeskFee>()),
     feeDestination === "charity"
       ? charityNamesByMint([mintAddress])
       : Promise.resolve(new Map<string, string>()),
@@ -1475,7 +1477,7 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
         }),
     charityNames.get(mintAddress) ?? null,
   );
-  const desk = desks.get(mintAddress);
+  const desk = resolveOtcDeskFee(mintAddress, feeWallets, roster);
   return {
     mint: mintAddress,
     token: token
