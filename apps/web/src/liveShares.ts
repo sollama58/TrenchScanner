@@ -25,7 +25,8 @@ export interface LiveTradeShares {
   supply: number | null;
   /**
    * Whether the feed follows the coin's trades now (its status "live"): only then do shares move
-   * with each trade, and the holders say "Live" instead of their age and next update.
+   * with each trade. That is the holder status "Live", and only while no chain re-read is being
+   * counted down. A balance tick does not set this.
    */
   live?: boolean;
 }

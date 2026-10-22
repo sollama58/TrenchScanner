@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { countdown, nextBeat, nextUpdateText, secondsAgo } from "./Freshness";
+import { countdown, holderStatusText, nextBeat, nextUpdateText, secondsAgo } from "./Freshness";
 
 describe("freshness text", () => {
   const t = 1_000_000_000;
@@ -23,6 +23,18 @@ describe("freshness text", () => {
     expect(nextUpdateText(t - 5_000, t)).toBe("Updating…");
     // A read since the update was due found none: the countdown is to the next look for it.
     expect(nextUpdateText(t + 12_000, t, true)).toBe("Checking again in 0:12");
+  });
+
+  it("says Live only when the stream is pushing and nothing is scheduled", () => {
+    expect(holderStatusText(t, t - 42_000, null, { live: true })).toBe("Live");
+    expect(holderStatusText(t, t - 42_000, null, { live: true })).not.toMatch(/ago|Next update|Updating/);
+  });
+
+  it("counts down from the chain read when a next-read time exists, and does not say live", () => {
+    expect(holderStatusText(t, t - 42_000, t + 48_000)).toBe("42s ago · Next update in 0:48");
+    expect(holderStatusText(t, t - 42_000, t + 48_000, { live: true })).toBe("42s ago · Next update in 0:48");
+    expect(holderStatusText(t, t - 42_000, t + 500)).toBe("42s ago · Updating…");
+    expect(holderStatusText(t, t - 42_000, t + 48_000).toLowerCase()).not.toContain("live");
   });
 
   it("finds a poll's next beat from when its timer started", () => {

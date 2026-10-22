@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { holderStatusText } from "./components/Freshness";
 import {
   tiedHolders,
   clusterNumberText,
@@ -35,6 +36,7 @@ import {
   firstReadAfter,
   holderBadgeAt,
   holderFreshness,
+  holderShownAt,
   HOLDER_SCAN_GONE_MS,
   HOLDER_STREAMED_READ_MS,
   layoutGraph,
@@ -530,6 +532,26 @@ describe("holderFreshness", () => {
     expect(fresh.last).toBe(t);
     expect(fresh.due).toBe(now + HOLDER_STREAMED_READ_MS);
     expect(fresh.next).not.toBeNull();
+  });
+
+  it("does not let a balance tick read as live or reset the countdown age", () => {
+    const chain = at;
+    const balances = new Date(t + 4 * 60_000).toISOString();
+    const scan = balances;
+    const next = new Date(t + HOLDER_STREAMED_READ_MS).toISOString();
+    const now = t + 4 * 60_000 + 1_000;
+    const reading = {
+      takenAt: scan,
+      holderChainReadAt: chain,
+      holderBalancesAt: balances,
+      holderNextReadAt: next,
+    };
+    expect(holderShownAt(reading)).toBe(t);
+    const fresh = holderFreshness(reading, now, reads(now + 4_000));
+    const text = holderStatusText(now, fresh.last, fresh.due);
+    expect(text).toBe("4m 01s ago · Next update in 0:59");
+    expect(text.toLowerCase()).not.toContain("live");
+    expect(holderStatusText(now, fresh.last, null, { live: true })).toBe("Live");
   });
 });
 

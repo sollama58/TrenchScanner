@@ -16954,6 +16954,24 @@ body:has(.util-toast) .bug-fab {
 .th-entry > span + span {
   white-space: nowrap;
 }
+/* Portfolio, entry, exit and PnL already on the holder. A missing figure is absent, not a dash. */
+.th-stats {
+  min-width: 0;
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+/* Who funded the wallet, on the right of the row. */
+.th-fund {
+  flex-basis: 100%;
+  margin-left: auto;
+  text-align: right;
+  font-size: 11px;
+  line-height: 1.35;
+}
 
 /* Settings › Chaos Mode's per-minute cap. */
 .chaos-cap {

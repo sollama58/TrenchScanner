@@ -370,6 +370,24 @@ export interface OnChainProfile {
     empty?: boolean;
     /** Counted in linkedCreatorPct: tied to the creator (core's linkedWallets). */
     creatorTied?: boolean;
+    /**
+     * Who paid for the wallet's first SOL, and when (the linked reading's funder lookup).
+     * Absent when that lookup found nobody or the time was not kept.
+     */
+    funder?: string;
+    fundedAtMs?: number;
+    /**
+     * Non-SOL, non-stablecoin holdings in USD already priced for this wallet
+     * (WalletHoldings.otherHoldingsUsd). Absent when that check did not run, or a holding
+     * was left unpriced. Never a stand-in zero.
+     */
+    portfolioUsd?: number;
+    /**
+     * Native SOL in lamports, from the holder chain read's getMultipleAccounts of these
+     * wallets' system accounts. Absent when that batch failed or this wallet was not in it.
+     * Zero is a real empty account, not a stand-in for a miss.
+     */
+    solLamports?: number;
   }[];
   /**
    * When `linkedHolders`' shares were current (the chain read, or the last holder-stream update

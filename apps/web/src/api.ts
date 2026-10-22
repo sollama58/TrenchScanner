@@ -368,6 +368,19 @@ export interface Snapshot {
         empty?: boolean;
         /** Counted in linkedCreatorPct: tied to the creator, on scans since 2026-10-17. */
         creatorTied?: boolean;
+        /** Who paid for the wallet's first SOL, and when. Absent when the lookup had neither. */
+        funder?: string;
+        fundedAtMs?: number;
+        /**
+         * Priced non-SOL, non-stablecoin holdings in USD. Absent when that check did not run.
+         * Never filled with 0 to mean "not calculated".
+         */
+        portfolioUsd?: number;
+        /**
+         * Native SOL in lamports from the holder chain read. Absent when that batch failed or
+         * this wallet was not in it. Zero is a real empty account.
+         */
+        solLamports?: number;
       }[]
     | null;
   /**

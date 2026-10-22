@@ -38,9 +38,33 @@ describe("withHolderKinds (user ask 2026-10-15)", () => {
     )!;
     expect(out.linkedHolders).toEqual([
       { wallet: "A", pct: 5, fresh: true },
-      { wallet: "B", pct: 3, cexFunder: "EX", empty: true },
-      { wallet: "C", pct: 1, sniper: true },
-      { wallet: "D", pct: 0.5 },
+      { wallet: "B", pct: 3, cexFunder: "EX", empty: true, portfolioUsd: 400 },
+      { wallet: "C", pct: 1, sniper: true, portfolioUsd: 5000 },
+      { wallet: "D", pct: 0.5, portfolioUsd: 10 },
+    ]);
+  });
+
+  it("keeps a calculated zero portfolio and leaves an unpriced wallet without one", () => {
+    const out = withHolderKinds(
+      {
+        mintAddress: "MINT",
+        linkedHolders: [
+          { wallet: "A", pct: 1 },
+          { wallet: "B", pct: 1 },
+        ],
+      } as OnChainProfile,
+      new Map(),
+      new Map<string, WalletHoldings>([
+        ["A", { otherHoldingsUsd: 0, perMintUsd: { MINT: 0 } }],
+        ["B", { otherHoldingsUsd: 0, perMintUsd: {}, unpriced: true }],
+      ]),
+      { WALLET_HOLDINGS_MIN_USD: 25 },
+      undefined,
+      now,
+    )!;
+    expect(out.linkedHolders).toEqual([
+      { wallet: "A", pct: 1, portfolioUsd: 0, empty: true },
+      { wallet: "B", pct: 1 },
     ]);
   });
 
