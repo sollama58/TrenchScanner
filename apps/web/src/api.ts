@@ -248,7 +248,15 @@ export interface Token {
     destination: string | null;
     summary: string | null;
     deskLine?: string | null;
-    deskRewards?: { label: string; mint: string | null }[] | null;
+    deskRewards?:
+      | {
+          label: string;
+          mint: string | null;
+          name?: string | null;
+          symbol?: string | null;
+          imageUrl?: string | null;
+        }[]
+      | null;
     charityName?: string | null;
     /**
      * Each fee recipient: a name, or the address shortened when it has none, and its share in

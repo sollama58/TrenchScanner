@@ -28,6 +28,7 @@ import {
   XLogoIcon,
 } from "./Icons";
 import { CardSearchButton } from "./CardSearchButton";
+import { DeskRewardTokens } from "./DeskRewardTokens";
 import { DexInfoLabel } from "../dexInfoLabel";
 import { XLinkPreview } from "./XLinkPreview";
 import { useImagePreview } from "./ImagePreview";
@@ -1023,6 +1024,7 @@ export function feeRecipientSentence(
 
 /** What the fee icon shows beside itself: reward tokens, else each recipient. */
 export function feeBadgeCaption(fee: Card["token"]["creatorFee"]): string | null {
+  if (fee?.deskRewards?.length) return null;
   const coins = shownRewardLabels(fee);
   if (coins.length) return coins.join(" · ");
   if (!showsRecipientList(fee?.destination)) return null;
@@ -1048,6 +1050,8 @@ export function feeBadge(fee: Card["token"]["creatorFee"]): {
   tax: string | null;
   /** Reward tokens, or each charity and its percent, shown on the badge itself. */
   caption: string | null;
+  /** OTC Desks reward coins rendered with icons beside the gift. */
+  deskRewards: NonNullable<Card["token"]["creatorFee"]>["deskRewards"] | null;
 } | null {
   const coins = shownRewardLabels(fee);
   const kind = feeKind(fee?.destination) ?? (fee?.deskLine?.trim() || coins.length ? "rewards" : null);
@@ -1058,7 +1062,8 @@ export function feeBadge(fee: Card["token"]["creatorFee"]): {
   const title = creatorFeeLine(fee) ?? `Creator fees ${label}.`;
   const tax = fee?.destination === "holder_rewards" ? holderRewardTaxLabel(fee.bps) : null;
   const caption = feeBadgeCaption(fee);
-  return { kind, Icon, title, tax, caption };
+  const deskRewards = fee?.deskRewards?.length ? fee.deskRewards : null;
+  return { kind, Icon, title, tax, caption, deskRewards };
 }
 
 /**
@@ -1087,12 +1092,13 @@ export function FeeBadge({
     .join(" ");
   return (
     <span
-      className={`fee-badge fee-${fees.kind}${fees.tax ? " has-tax" : ""}${fees.caption ? " has-caption" : ""}${className ? ` ${className}` : ""}`}
+      className={`fee-badge fee-${fees.kind}${fees.tax ? " has-tax" : ""}${fees.deskRewards ? " has-desk-rewards" : fees.caption ? " has-caption" : ""}${className ? ` ${className}` : ""}`}
       title={fees.title}
       aria-label={aria}
     >
       {word && <span className="fee-word">FEES</span>}
       <fees.Icon size={icon} />
+      {fees.deskRewards && <DeskRewardTokens rewards={fees.deskRewards} compact maxVisible={2} />}
       {fees.caption && <span className="fee-caption num">{fees.caption}</span>}
       {fees.tax && <span className="fee-tax num">{fees.tax}</span>}
     </span>

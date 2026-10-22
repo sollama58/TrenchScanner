@@ -15,6 +15,8 @@ describe("creator reward square", () => {
       detail: null,
       title: "No creator reward is stored",
       empty: true,
+      squareLabel: "Creator reward",
+      otcDesk: false,
     });
     expect(creatorRewardFigure({ destination: null, summary: null })).toMatchObject({
       empty: true,
@@ -40,6 +42,20 @@ describe("creator reward square", () => {
     expect(charity.detail).toBe("Red Cross");
     expect(charity.title).toBe("Creator fees go to Red Cross.");
     expect(charity.title).not.toBe("Creator fees go to charity.");
+  });
+
+  it("labels an OTC desk square and keeps the tooltip sentence", () => {
+    const fee = {
+      destination: "holder_rewards" as const,
+      summary: null,
+      bps: 100,
+      deskLine: "OTC Desks pays holder rewards in NVDAx.",
+      deskRewards: [{ label: "NVDAx", mint: NVDA, symbol: "NVDA" }],
+    };
+    const fig = creatorRewardFigure(fee);
+    expect(fig.squareLabel).toBe("Holder Rewards: OTC Desks");
+    expect(fig.otcDesk).toBe(true);
+    expect(fig.value).toBe("$NVDA");
   });
 
   it("shows a matched OTC basket in the square and in the tooltip", () => {
@@ -100,12 +116,16 @@ describe("creator reward square", () => {
       detail: null,
       title: "Fee split; recipients unreadable.",
       empty: true,
+      squareLabel: "Creator reward",
+      otcDesk: false,
     });
     expect(creatorRewardFigure({ destination: "unknown", summary: null })).toEqual({
       value: "–",
       detail: null,
       title: "No creator reward is stored",
       empty: true,
+      squareLabel: "Creator reward",
+      otcDesk: false,
     });
     const fig = creatorRewardFigure({ destination: "unknown", summary: null });
     const html = renderToStaticMarkup(

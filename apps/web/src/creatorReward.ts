@@ -7,6 +7,7 @@ import {
   shownCharityName,
   shownRewardLabels,
 } from "./components/AlertCard";
+import { deskRewardTokenLabel, hasOtcDeskRewards } from "./deskRewardDisplay";
 
 type Fee = NonNullable<Token["creatorFee"]>;
 
@@ -18,9 +19,15 @@ export interface CreatorRewardFigure {
   /** The gift tooltip: TokenSage, the charity name, and the OTC desk sentence. */
   title: string;
   empty: boolean;
+  /** Pro token square label; OTC desk coins use a holder-rewards heading. */
+  squareLabel: string;
+  /** When true, the square renders icons and names instead of `value` alone. */
+  otcDesk: boolean;
 }
 
 function coinLabels(fee: Fee | null | undefined): string[] {
+  const rewards = fee?.deskRewards;
+  if (rewards?.length) return rewards.map((reward) => deskRewardTokenLabel(reward));
   return shownRewardLabels(fee);
 }
 
@@ -72,12 +79,15 @@ export function creatorRewardFigure(fee: Fee | null | undefined): CreatorRewardF
   // An unknown destination hides the gift. A summary alone is not a reward label: the
   // square uses the same dash as a missing detection cap. A real holder, dev, charity,
   // or OTC desk still has a badge or reward coins, and those stay.
+  const otcDesk = hasOtcDeskRewards(fee) && coins.length > 0;
   if (!badge && coins.length === 0) {
     return {
       value: "–",
       detail: null,
       title: line ?? "No creator reward is stored",
       empty: true,
+      squareLabel: "Creator reward",
+      otcDesk: false,
     };
   }
   const value = fee ? headline(fee, coins, tax) : coinValue(coins);
@@ -95,6 +105,8 @@ export function creatorRewardFigure(fee: Fee | null | undefined): CreatorRewardF
     detail: parts.length > 0 ? parts.join(" · ") : null,
     title: badge?.title ?? line ?? "Creator reward",
     empty: false,
+    squareLabel: otcDesk ? "Holder Rewards: OTC Desks" : "Creator reward",
+    otcDesk,
   };
 }
 

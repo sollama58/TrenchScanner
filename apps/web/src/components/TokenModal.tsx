@@ -43,6 +43,7 @@ import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
 import { CreatorFeeRich } from "./FeeRewards";
 import { cardWithOtcDesk, creatorRewardFigure } from "../creatorReward";
+import { DeskRewardTokens } from "./DeskRewardTokens";
 import { QUICK_LINK_SITES, pumpFunHref, setAppearance, useAppearance } from "../appearance";
 import { useIsAdmin } from "../session";
 import { useShowNarrativeNote } from "../narrativeNote";
@@ -1210,12 +1211,25 @@ function TokenBody({
   const rewardPending = reward.empty && sage.data == null && sage.error == null;
   const figs = terminal ? (
     <section className="tm-figs" aria-label="Market">
-      <div className="tm-fig">
-        <label>Creator reward</label>
-        <span className={reward.empty ? "num none" : "num"} title={reward.title}>
-          {rewardPending ? <SkelValue width="3.2em" /> : reward.value}
-        </span>
-        {!rewardPending && reward.detail && <small className="num muted">{reward.detail}</small>}
+      <div className={`tm-fig${reward.otcDesk ? " tm-fig-otc" : ""}`}>
+        <label>{reward.squareLabel}</label>
+        {rewardPending ? (
+          <span className="num">
+            <SkelValue width="3.2em" />
+          </span>
+        ) : reward.otcDesk && detailCard.token.creatorFee?.deskRewards?.length ? (
+          <>
+            <DeskRewardTokens rewards={detailCard.token.creatorFee.deskRewards} className="tm-desk-rewards" />
+            {reward.detail && <small className="num muted">{reward.detail}</small>}
+          </>
+        ) : (
+          <>
+            <span className={reward.empty ? "num none" : "num"} title={reward.title}>
+              {reward.value}
+            </span>
+            {reward.detail && <small className="num muted">{reward.detail}</small>}
+          </>
+        )}
       </div>
       <div className="tm-fig">
         <label>At detection</label>

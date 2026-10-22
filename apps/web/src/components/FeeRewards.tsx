@@ -9,6 +9,9 @@ const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 export interface DeskReward {
   label: string;
   mint: string | null;
+  name?: string | null;
+  symbol?: string | null;
+  imageUrl?: string | null;
 }
 
 /**
