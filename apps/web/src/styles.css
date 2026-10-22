@@ -10438,6 +10438,22 @@ button.link.exit-plan-link {
   font-size: 11px;
   font-weight: 600;
 }
+/* Charity names and OTC reward tokens, on the card and on a Scope row. */
+.fee-caption {
+  letter-spacing: 0;
+  font-size: 11px;
+  font-weight: 600;
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fee-charity .fee-caption {
+  color: var(--bad-ink);
+}
+.fee-rewards .fee-caption {
+  color: var(--good-ink);
+}
 .fee-rewards .fee-tax {
   color: var(--good-ink);
 }

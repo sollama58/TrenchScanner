@@ -805,17 +805,7 @@ export function AlertCard({
               ))}
             </span>
           )}
-          {fees && (
-            <span
-              className={`fee-badge fee-${fees.kind}${fees.tax ? " has-tax" : ""}`}
-              title={fees.title}
-              aria-label={fees.tax ? `${fees.title} Holder reward tax ${fees.tax}.` : fees.title}
-            >
-              <span className="fee-word">FEES</span>
-              <fees.Icon size={14} />
-              {fees.tax && <span className="fee-tax num">{fees.tax}</span>}
-            </span>
-          )}
+          {fees && <FeeBadge fee={card.token.creatorFee} word />}
           {(show("links") || trade.length > 0) && (
             <nav className="card-links">
               {trade.map((l) => (
@@ -946,8 +936,13 @@ export function creatorFeeSummary(
 }
 
 /** TokenSage's sentence and, when known, the desk's own sentence, each stopped once. */
+function showsRecipientList(destination: string | null | undefined): boolean {
+  return destination === "charity" || destination === "split";
+}
+
 export function creatorFeeLine(fee: Card["token"]["creatorFee"] | null | undefined): string | null {
-  const summary = creatorFeeSummary(fee);
+  const summary =
+    (showsRecipientList(fee?.destination) ? feeRecipientSentence(fee) : null) ?? creatorFeeSummary(fee);
   const desk = stopped(fee?.deskLine);
   if (summary && desk && summary !== desk) return `${summary} ${desk}`;
   return summary ?? desk;
@@ -961,6 +956,77 @@ export function holderRewardTaxLabel(bps: number | null | undefined): string | n
   if (typeof bps !== "number" || !Number.isInteger(bps) || bps <= 0 || bps > 10_000) return null;
   const text = (bps / 100).toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
   return `${text}%`;
+}
+
+const REWARD_MINT = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+export interface FeeRecipientShare {
+  label: string;
+  bps: number | null;
+}
+
+function joinFeeNames(names: readonly string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
+/** Reward-coin tickers. A mint with no ticker is shortened rather than dropped. */
+export function shownRewardLabels(
+  fee: { deskRewards?: { label?: string | null; mint?: string | null }[] | null } | null | undefined,
+): string[] {
+  const rewards = fee?.deskRewards;
+  if (!rewards?.length) return [];
+  return rewards.flatMap((reward) => {
+    const label = reward.label?.trim();
+    if (label) return [label];
+    const mint = reward.mint?.trim();
+    if (mint && REWARD_MINT.test(mint)) return [shortAddress(mint)];
+    return [];
+  });
+}
+
+/**
+ * "Red Cross 99% · AbCd…wxyz 1%". A recipient whose label is blank is skipped.
+ * Null when there is nobody to name.
+ */
+export function feeRecipientCaption(
+  recipients: readonly FeeRecipientShare[] | null | undefined,
+): string | null {
+  if (!recipients?.length) return null;
+  const parts = recipients.flatMap((recipient) => {
+    const label = recipient.label?.trim();
+    if (!label) return [];
+    const pct = holderRewardTaxLabel(recipient.bps);
+    return [pct ? `${label} ${pct}` : label];
+  });
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** "Creator fees go to Red Cross (99%) and AbCd…wxyz (1%)." */
+export function feeRecipientSentence(
+  fee: { recipients?: readonly FeeRecipientShare[] | null } | null | undefined,
+): string | null {
+  const recipients = fee?.recipients;
+  if (!recipients?.length) return null;
+  const parts = recipients.flatMap((recipient) => {
+    const label = recipient.label?.trim();
+    if (!label) return [];
+    const pct = holderRewardTaxLabel(recipient.bps);
+    return [pct ? `${label} (${pct})` : label];
+  });
+  return parts.length ? `Creator fees go to ${joinFeeNames(parts)}.` : null;
+}
+
+/** What the fee icon shows beside itself: reward tokens, else each recipient. */
+export function feeBadgeCaption(fee: Card["token"]["creatorFee"]): string | null {
+  const coins = shownRewardLabels(fee);
+  if (coins.length) return coins.join(" · ");
+  if (!showsRecipientList(fee?.destination)) return null;
+  return (
+    feeRecipientCaption(fee?.recipients) ??
+    (fee?.destination === "charity" ? shownCharityName(fee.charityName) : null)
+  );
 }
 
 /**
@@ -977,15 +1043,57 @@ export function feeBadge(fee: Card["token"]["creatorFee"]): {
   title: string;
   /** "0.05%" next to the gift on a holder-reward coin; null otherwise. */
   tax: string | null;
+  /** Reward tokens, or each charity and its percent, shown on the badge itself. */
+  caption: string | null;
 } | null {
-  const kind = feeKind(fee?.destination) ?? (fee?.deskLine?.trim() ? "rewards" : null);
+  const coins = shownRewardLabels(fee);
+  const kind = feeKind(fee?.destination) ?? (fee?.deskLine?.trim() || coins.length ? "rewards" : null);
   if (!kind) return null;
   const { Icon, label } = FEE_BADGES[kind];
   // TokenSage's sentence, with the charity's organization in that same sentence, and OTC Desks'
   // reward-coin sentence after it when the roster names one.
   const title = creatorFeeLine(fee) ?? `Creator fees ${label}.`;
   const tax = fee?.destination === "holder_rewards" ? holderRewardTaxLabel(fee.bps) : null;
-  return { kind, Icon, title, tax };
+  const caption = feeBadgeCaption(fee);
+  return { kind, Icon, title, tax, caption };
+}
+
+/**
+ * The fee icon on a token card (`word`) and on a Scope row. Both read `feeBadge`, so the
+ * charity names and the OTC reward tokens show in the same words.
+ */
+export function FeeBadge({
+  fee,
+  word = false,
+  icon = 14,
+  className = "",
+}: {
+  fee: Card["token"]["creatorFee"];
+  word?: boolean;
+  icon?: number;
+  className?: string;
+}) {
+  const fees = feeBadge(fee);
+  if (!fees) return null;
+  const aria = [
+    fees.title,
+    fees.caption && !fees.title.includes(fees.caption) ? fees.caption : null,
+    fees.tax ? `Holder reward tax ${fees.tax}.` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <span
+      className={`fee-badge fee-${fees.kind}${fees.tax ? " has-tax" : ""}${fees.caption ? " has-caption" : ""}${className ? ` ${className}` : ""}`}
+      title={fees.title}
+      aria-label={aria}
+    >
+      {word && <span className="fee-word">FEES</span>}
+      <fees.Icon size={icon} />
+      {fees.caption && <span className="fee-caption num">{fees.caption}</span>}
+      {fees.tax && <span className="fee-tax num">{fees.tax}</span>}
+    </span>
+  );
 }
 
 /** TokenSage's fee destination as a badge kind (packages/core/src/datasources/tokensage.ts). */
