@@ -901,8 +901,10 @@ export interface BuiltTrade {
   sacrifice?: SacrificeView;
   /** The build, signed by the API: sent back with the signed trade, so any API instance takes it. */
   buildToken?: string;
-  /** When the blockhash was fetched (ms). Absent on older API builds. */
+  /** When the blockhash was fetched (ms), on the API's clock. Absent on older API builds. */
   blockhashAt?: number;
+  /** The blockhash's age as the answer left the API. Absent on older API builds. */
+  blockhashAgeMs?: number;
   /** The mint's decimals. Null when unknown; absent on older API builds. */
   decimals?: number | null;
   /** Rent this build opens, lamports. The sign line uses this, not an earlier preview. */
@@ -1725,8 +1727,19 @@ async function confirmTrade(
   }
 }
 
-function blockhashLate(built: { blockhashAt?: number }, now = Date.now()): boolean {
-  return typeof built.blockhashAt === "number" && now - built.blockhashAt > SIGN_FRESH_MS;
+/**
+ * When the build's blockhash was fetched, on this browser's clock: the build answer's arrival less
+ * the age the API reports. blockhashAt is the API's own clock, and against Date.now() here a
+ * browser clock off by more than SIGN_FRESH_MS would call every blockhash late (or none). An older
+ * API without the age counts from the arrival, which misses only the build's own few seconds.
+ */
+export function blockhashFetchedAt(built: { blockhashAgeMs?: number }, arrivedAt: number): number {
+  const age = built.blockhashAgeMs;
+  return typeof age === "number" && Number.isFinite(age) && age > 0 ? arrivedAt - age : arrivedAt;
+}
+
+function blockhashLate(fetchedAt: number, now = Date.now()): boolean {
+  return now - fetchedAt > SIGN_FRESH_MS;
 }
 
 function windowClosed(): TradeError {
@@ -1769,12 +1782,14 @@ export async function runTrade(
     // Built and signed again, once, when the blockhash is already late or the wallet took so long
     // that it is nearly spent: sent, it would only expire. The slippage is not widened.
     let built!: BuiltTrade;
+    let fetchedAt = 0;
     let signedBytes: Uint8Array | undefined;
     for (let attempt = 0; ; attempt++) {
       if (input.signal?.aborted) throw windowClosed();
       onStage("building");
       try {
         built = await buildTrade(asked);
+        fetchedAt = blockhashFetchedAt(built, Date.now());
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) {
           tradingUnavailable();
@@ -1818,7 +1833,7 @@ export async function runTrade(
         throw new TradeError(
           "This coin's decimals aren't known yet, so nothing was signed. Try again once the mint is known.",
         );
-      if (blockhashLate(built)) {
+      if (blockhashLate(fetchedAt)) {
         if (attempt > 0)
           throw new TradeError(
             "The quote's blockhash expired before it could be signed. Nothing was sent; try again.",
@@ -1854,7 +1869,7 @@ export async function runTrade(
       }
       if (input.signal?.aborted) throw windowClosed();
       if (!signedBytes) throw new TradeError(`${name} returned no signed transaction`);
-      if (!blockhashLate(built) && Date.now() - signingStarted <= SIGN_FRESH_MS) break;
+      if (!blockhashLate(fetchedAt) && Date.now() - signingStarted <= SIGN_FRESH_MS) break;
       if (attempt > 0)
         throw new TradeError(
           "That took too long to sign, so it would have expired. Nothing was sent; try again.",

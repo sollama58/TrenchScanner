@@ -742,6 +742,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         buildToken,
         quietSign: await quietSign(rpc, wallet, body.mint, body.side),
         sacrifice: sacrificeView(sacrifice),
+        // How old the blockhash is as this answer leaves, on this server's clock. The page times
+        // the blockhash on its own clock from the answer's arrival, minus this, so a browser
+        // clock that differs from the server's doesn't make a fresh blockhash look late.
+        blockhashAgeMs: Math.max(0, Date.now() - built.blockhashAt),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
