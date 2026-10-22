@@ -227,6 +227,9 @@ describe("CandleCache", () => {
     expect(await cache.read("a")).toEqual({ candles: [candle], stale: true });
     now = 40_000;
     expect(await cache.read("a")).toEqual({ candles: null, stale: false });
+    // A reader after only the closed candles can still peek at them, whatever their age.
+    expect(cache.peek("a")).toEqual({ candles: null, stale: false });
+    expect(cache.peek("a", Infinity)).toEqual({ candles: [candle], stale: true });
   });
 
   it("answers from the last good candles when the refresh is slow, without waiting it out", async () => {

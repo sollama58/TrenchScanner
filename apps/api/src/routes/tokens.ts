@@ -50,6 +50,7 @@ import {
 import {
   CallBudget,
   CandleCache,
+  drawableCandles,
   FIRST_MINUTES_MS,
   KeyedCache,
   LastGood,
@@ -1354,13 +1355,23 @@ export async function readTokenFine(
   // Token first, as readTokenChart does: Pump.fun is only asked about a coin on Token.
   if (!(await isTracked(mintAddress))) return { mint: mintAddress, stepSec, candles: null };
   const own = await streamCandles(streamFeeds, mintAddress, stepSec * 1_000).catch(() => null);
-  if (res === "1s" && streamCovers(own, from ?? now - FINE_STREAM_SPAN_MS, now))
+  if (res === "1s" && streamCovers(own, from ?? now - FINE_STREAM_SPAN_MS, now)) {
+    // The stream reaches back only to when this chart opened (20 minutes at most); Pump.fun's page
+    // as last read (no call, whatever its age: closed seconds don't change) goes before it, so the
+    // answer doesn't lose the 1-second history it had a moment ago (charts audit CH-5).
+    const first = own.candles[0]!.t;
+    const kept = fineSecondCache.peek(mintAddress, Infinity).candles?.filter((k) => k.t < first) ?? [];
+    const factors = kept.length
+      ? await launchSupplyFactors([mintAddress]).catch(() => new Map<string, number>())
+      : null;
+    const before = kept.length ? drawableCandles(onSupply(kept, factors?.get(mintAddress))) : [];
     return counted<TokenFineCandles>(`fine${res}`, {
       mint: mintAddress,
       stepSec,
-      candles: own.candles,
-      source: "stream",
+      candles: [...before, ...own.candles],
+      source: before.length > 0 ? "mixed" : "stream",
     });
+  }
   const [read, factors] = await Promise.all([
     (res === "1s" ? fineSecondCache : quarterCache).read(mintAddress),
     launchSupplyFactors([mintAddress]).catch(() => new Map<string, number>()),

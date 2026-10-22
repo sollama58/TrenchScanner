@@ -257,18 +257,22 @@ export class CandleCache {
     return this.served(entry);
   }
 
-  /** The coin's last good candles without asking Pump.fun: for a reader that mustn't spend the budget. */
-  peek(mint: string): CandleRead {
+  /**
+   * The coin's last good candles without asking Pump.fun: for a reader that mustn't spend the budget.
+   * `maxStaleMs` past the cache's own: a reader after only the closed candles (which never change)
+   * can take an older answer.
+   */
+  peek(mint: string, maxStaleMs = this.maxStaleMs): CandleRead {
     const entry = this.entries.get(mint);
-    return entry ? this.served(entry) : { candles: null, stale: false };
+    return entry ? this.served(entry, maxStaleMs) : { candles: null, stale: false };
   }
 
-  private served(entry: CandleEntry): CandleRead {
+  private served(entry: CandleEntry, maxStaleMs = this.maxStaleMs): CandleRead {
     const good = entry.good;
     if (!good) return { candles: null, stale: false };
     const now = this.now();
     if (entry.expiresAt > now) return { candles: good.value, stale: false };
-    if (now - good.at > this.maxStaleMs) return { candles: null, stale: false };
+    if (now - good.at > maxStaleMs) return { candles: null, stale: false };
     return { candles: good.value, stale: good.value !== null };
   }
 

@@ -2664,6 +2664,7 @@ export function ChartCard({
     api,
     wantSecond || pathing ? "1s" : null,
     bounds?.live ? FINE_LIVE_POLL_MS : FINE_POLL_MS,
+    bounds?.from ?? null,
   );
   const second = wantSecond ? secondRead : null;
   const secondReaches = !!second?.candles?.length && !!bounds && second.candles[0]!.t <= bounds.from + 60_000;

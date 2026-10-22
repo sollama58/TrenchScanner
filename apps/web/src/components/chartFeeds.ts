@@ -144,17 +144,61 @@ export interface FineCandles {
   mint: string;
   stepSec: 1 | 15;
   candles: { t: number; o: number; h: number; l: number; c: number; vol?: number }[] | null;
+  /** "pumpfun", "stream" (the API's own, off the live tail) or "mixed"; absent from older API builds. */
+  source?: "pumpfun" | "stream" | "mixed";
+  /** Pump.fun's part is its last good answer, past its cache time. */
+  stale?: boolean;
+}
+
+/** How far before an answer's arrival its Pump.fun part is taken to be current (the API's cache, the browser's). */
+const FINE_FRESH_MARGIN_MS = 15_000;
+
+/** The most finer candles a chart keeps from its reads (the chart draws at most 12,000 slots). */
+const MAX_FINE_CANDLES = 20_000;
+
+type FineCandle = NonNullable<FineCandles["candles"]>[number];
+
+/**
+ * Exported for tests. Two reads of the finer candles as one, by time: the newer read's candle wins
+ * a step both hold, and the older read's steps the newer one no longer reaches stay (as
+ * chartPoll.ts mergeTokenChart does for the minute candles). The API's 1-second answer turns to the
+ * stream's own candles once those reach back far enough, which start only when the chart opened:
+ * replacing the page lost Pump.fun's older seconds the view was drawing (charts audit CH-5).
+ */
+export function mergeFine(prev: FineCandles | null, next: FineCandles): FineCandles {
+  if (!prev?.candles?.length || prev.stepSec !== next.stepSec) return next;
+  if (!next.candles?.length) return prev;
+  const byT = new Map<number, FineCandle>();
+  for (const k of prev.candles) byT.set(k.t, k);
+  for (const k of next.candles) byT.set(k.t, k);
+  const candles = [...byT.values()].sort((a, b) => a.t - b.t).slice(-MAX_FINE_CANDLES);
+  return { ...next, candles };
 }
 
 /**
  * The token chart's finer candles (GET `base`/chart/fine): Pump.fun's 1- or 15-second page, read
  * when `res` is set (the view is short enough for them to add detail) and every `everyMs` after.
- * The last answer for this `res` stays up through a failed read; a new `res` starts empty.
+ * Each read is joined to the ones before it (mergeFine), and they stay up through a failed read; a
+ * new `res` starts empty. The API answers 1-second candles from its own stream alone once they reach
+ * back to `from` without a break: that is where the Pump.fun pages held here are current to (a
+ * little before the last one arrived), so the stream's candles join them with no hole and the
+ * Pump.fun budget isn't spent again; with none held yet, the view's start (`from`), so Pump.fun's
+ * page is read first.
  */
-export function useFineCandles(base: string, res: "1s" | "15s" | null, everyMs: number): FineCandles | null {
+export function useFineCandles(
+  base: string,
+  res: "1s" | "15s" | null,
+  everyMs: number,
+  from: number | null = null,
+): FineCandles | null {
   const [held, setHeld] = useState<{ key: string; data: FineCandles } | null>(null);
   const key = `${base}|${res}`;
+  // Read at each poll, so a view start that moves doesn't restart the polling.
+  const fromRef = useRef(from);
+  fromRef.current = from;
   useEffect(() => {
+    // Where the Pump.fun pages read so far are current to (ms), null before one lands.
+    let through: number | null = null;
     if (!res) return;
     let stopped = false;
     let timer: number | undefined;
@@ -164,14 +208,16 @@ export function useFineCandles(base: string, res: "1s" | "15s" | null, everyMs: 
       busy = true;
       if (document.visibilityState === "visible") {
         try {
-          const data = await api<FineCandles>(`${base}/chart/fine?res=${res}`, {
-            timeoutMs: FEED_TIMEOUT_MS,
-          });
-          // An answer with no candles (over budget, upstream paused) keeps the last good page.
+          const at = through ?? fromRef.current;
+          const data = await api<FineCandles>(
+            `${base}/chart/fine?res=${res}${at !== null && at > 0 ? `&from=${Math.floor(at)}` : ""}`,
+            { timeoutMs: FEED_TIMEOUT_MS },
+          );
+          if (data.candles?.length && data.source !== "stream" && !data.stale)
+            through = Date.now() - FINE_FRESH_MARGIN_MS;
+          // An answer with no candles (over budget, upstream paused) keeps what was read before.
           if (!stopped)
-            setHeld((prev) =>
-              data.candles == null && prev?.key === key && prev.data.candles?.length ? prev : { key, data },
-            );
+            setHeld((prev) => ({ key, data: mergeFine(prev?.key === key ? prev.data : null, data) }));
         } catch {
           // The view keeps its minute candles meanwhile; the next round tries again.
         }
