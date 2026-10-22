@@ -27,6 +27,52 @@ export interface Loadable<T> {
 /** A cached response younger than this is shown without refetching when a view mounts. */
 const FRESH_ON_MOUNT_MS = 10_000;
 
+/** The path and key a poll answer belongs to. */
+export function pollWant(path: string, key: string): string {
+  return `${path}\n${key}`;
+}
+
+export interface PollHeld<T> {
+  data: T;
+  /** `pollWant` of the path and key this payload was read for. */
+  for: string;
+  saved: boolean;
+  at: number;
+}
+
+/**
+ * Fold one finished read into what is on screen. `want` is the path and key showing now;
+ * `result.for` is the path and key that were actually read. A read for anything else is left
+ * untouched, so a slow response for the previous coin cannot be stored as this coin's.
+ * An error for the coin now showing drops a held answer that belonged to another coin.
+ */
+export function applyPollResult<T>(
+  held: PollHeld<T> | null,
+  want: string,
+  result: { for: string; data?: T; at?: number; error?: boolean },
+): PollHeld<T> | null {
+  if (result.for !== want) return held;
+  if (result.error) return held && held.for !== want ? null : held;
+  return { data: result.data as T, for: result.for, saved: false, at: result.at ?? 0 };
+}
+
+/** True when `held` is not an answer for `want` (another path or key, or a copy from an earlier visit). */
+export function pollIsStale(held: { for: string; saved: boolean } | null, want: string): boolean {
+  return held !== null && (held.for !== want || held.saved);
+}
+
+/**
+ * A lookup's body, shown only for the mint now open. A stale read (the previous coin, still on
+ * screen until this one lands) or a payload for another mint is dropped.
+ */
+export function viewForMint<T extends { mint: string }>(
+  mint: string,
+  data: T | null,
+  stale: boolean,
+): T | null {
+  return data && !stale && data.mint === mint ? data : null;
+}
+
 /** After failures the poll stretches to `intervalMs` doubled per failure, up to this. */
 const MAX_BACKOFF_MS = 300_000;
 
@@ -39,15 +85,17 @@ const MAX_BACKOFF_MS = 300_000;
  * main.tsx started at boot, paints at once. Keeps showing the last good data while a refetch is in
  * flight or fails. When `path` or `key` changes and the cache has nothing for it, the previous
  * answer stays up, flagged `stale`, until the new one lands, so the view dims rather than blanking
- * to a skeleton and collapsing. Reloads that arrive while a request is in flight (SSE nudges in a burst) are
+ * to a skeleton and collapsing. A response is stored under the path it was read for, never the
+ * path current when it arrives, so a slow read of the previous coin cannot clear that flag.
+ * Reloads that arrive while a request is in flight (SSE nudges in a burst) are
  * coalesced into one follow-up request. While requests keep failing (API or database down), the
  * timed poll backs off so every open tab doesn't keep hitting it at full rate.
  */
 export function usePolling<T>(path: string, intervalMs: number, key = ""): Loadable<T> {
-  const want = `${path}\n${key}`;
+  const want = pollWant(path, key);
   // The data and the path+key it answers. An answer restored from an earlier visit (`saved`)
   // shows as stale until this visit's own lands, but stays up if the API can't be reached.
-  const [held, setHeld] = useState<{ data: T; for: string; saved: boolean; at: number } | null>(() => {
+  const [held, setHeld] = useState<PollHeld<T> | null>(() => {
     const cached = peek<T>(path);
     return cached ? { data: cached.data, for: want, saved: cached.restored, at: cached.at } : null;
   });
@@ -69,32 +117,35 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
 
   const run = useCallback((maxAgeMs: number) => {
     const mine = ++seq.current;
+    // Captured now. The refs move as soon as the next coin renders, which is before this
+    // request's effect cleans up, so a resolution must be filed under the path it asked for.
+    const requestedPath = pathRef.current;
+    const requested = wantRef.current;
     busy.current = true;
     setLoading(true);
-    cachedGet<T>(pathRef.current, maxAgeMs)
+    cachedGet<T>(requestedPath, maxAgeMs)
       .then((d) => {
         if (mine !== seq.current) return;
+        const at = peek<T>(requestedPath)?.at ?? Date.now();
+        setHeld((h) => applyPollResult(h, wantRef.current, { for: requested, data: d, at }));
+        // A response for a coin the reader has already left must not clear this coin's error
+        // or its backoff. The payload itself was ignored above.
+        if (requested !== wantRef.current) return;
         failures.current = 0;
         retryAt.current = 0;
-        setHeld({
-          data: d,
-          for: wantRef.current,
-          saved: false,
-          at: peek<T>(pathRef.current)?.at ?? Date.now(),
-        });
         setError(null);
       })
       .catch((e: unknown) => {
-        if (mine !== seq.current) return;
+        if (mine !== seq.current || requested !== wantRef.current) return;
         const every = intervalRef.current;
         const backoff = Math.max(every, Math.min(MAX_BACKOFF_MS, every * 2 ** failures.current++));
         retryAt.current = Date.now() + backoff - every;
         // An older path's data must not stand in for this one's error.
-        setHeld((h) => (h && h.for !== wantRef.current ? null : h));
+        setHeld((h) => applyPollResult(h, wantRef.current, { for: requested, error: true }));
         setError(e instanceof Error ? e : new Error(String(e)));
       })
       .finally(() => {
-        if (mine !== seq.current) return;
+        if (mine !== seq.current || requested !== wantRef.current) return;
         busy.current = false;
         if (again.current) {
           again.current = false;
@@ -121,7 +172,8 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
     firstKey.current = key;
     // A new path shows its own cached data if any; otherwise the previous answer stays up as stale.
     const cached = forced ? null : peek<T>(path);
-    if (cached) setHeld({ data: cached.data, for: `${path}\n${key}`, saved: cached.restored, at: cached.at });
+    if (cached)
+      setHeld({ data: cached.data, for: pollWant(path, key), saved: cached.restored, at: cached.at });
     setError(null);
     again.current = false;
     run(forced ? -1 : FRESH_ON_MOUNT_MS);
@@ -146,7 +198,7 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
   }, [path, key, intervalMs, run, poll]);
 
   const data = held?.data ?? null;
-  const stale = held !== null && (held.for !== want || held.saved);
+  const stale = pollIsStale(held, want);
   // Nothing current to show yet: the page's loading bar waits on this answer.
   const waiting = loading && (data === null || stale);
   useEffect(() => (waiting ? beginWait() : undefined), [waiting, want]);

@@ -172,32 +172,48 @@ export function reloadBubbleMaps(mint: string): void {
 const hasReading = (v: { reading: unknown }) => v.reading != null;
 
 /**
+ * Whether a bubble-map refresh should wait for the redraw interval. Only a later reading of the
+ * same coin waits. A different coin, or a frame that has nothing to draw, shows at once: the
+ * previous coin's bubbles must not stay up for the interval (user ask 2026-10-19 is the same-coin
+ * redraw, not a token switch).
+ */
+export function shouldHoldFrame(shownHasData: boolean, nextHasData: boolean, sameCoin: boolean): boolean {
+  return sameCoin && shownHasData && nextHasData;
+}
+
+/**
  * `value`, taking each change at most once every `ms`: the newest when it comes due, so a run of
  * changes redraws once (user ask 2026-10-19). A value without data (`hasData` false), or the first
- * with it, shows at once.
+ * with it, shows at once. `coin` is the mint: a change drops the previous coin before paint.
  */
-function useEvery<T>(value: T, ms: number, hasData: (v: T) => boolean): T {
-  const [shown, setShown] = useState(value);
+function useEvery<T>(value: T, ms: number, hasData: (v: T) => boolean, coin: string): T {
+  const [frame, setFrame] = useState({ coin, value });
   const latest = useRef(value);
   latest.current = value;
   const lastAt = useRef(Date.now());
+  // Adjusting state during render (React's previous-props pattern): the render that sees a new
+  // coin returns that coin's value, so the previous coin's map cannot paint for a frame.
+  if (frame.coin !== coin) {
+    lastAt.current = Date.now();
+    setFrame({ coin, value });
+  }
   useEffect(() => {
-    if (value === shown) return;
-    if (!hasData(shown) || !hasData(value)) {
+    if (frame.coin !== coin || value === frame.value) return;
+    if (!shouldHoldFrame(hasData(frame.value), hasData(value), true)) {
       lastAt.current = Date.now();
-      setShown(value);
+      setFrame({ coin, value });
       return;
     }
     const t = window.setTimeout(
       () => {
         lastAt.current = Date.now();
-        setShown(latest.current);
+        setFrame({ coin, value: latest.current });
       },
       Math.max(0, lastAt.current + ms - Date.now()),
     );
     return () => window.clearTimeout(t);
-  }, [value, shown, ms, hasData]);
-  return shown;
+  }, [value, frame, ms, hasData, coin]);
+  return frame.coin === coin ? frame.value : value;
 }
 
 /**
@@ -2366,7 +2382,7 @@ export function BubbleMapSection({
     () => ({ reading: snapshotIn, wide: chosenWide !== undefined ? chosenWide : liveWide, live }),
     [snapshotIn, chosenWide, liveWide, live],
   );
-  const held = useEvery(inputs, bubbleRefreshSeconds * 1000, hasReading);
+  const held = useEvery(inputs, bubbleRefreshSeconds * 1000, hasReading, mint);
   const { reading: heldReading, wide: wideIn, live: heldLive } = held;
   // Trades move shares from each reading's own read time: the scan's for its lists and figures,
   // the top 50's for its map.
