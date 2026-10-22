@@ -437,7 +437,11 @@ function releaseCreditsOut(): void {
   }
 }
 
-/** Ends a stand-down (a test, or an admin who topped up the plan), in every process sharing it. */
+/**
+ * Ends a stand-down (a test, or an admin who topped up the plan), in every process sharing it. Its
+ * end stays readable through heliusCreditsOut(earlier) for the watchers' grace; `now` 0 forgets it
+ * outright (tests).
+ */
 export function clearHeliusCreditsOut(now = Date.now()): void {
   heliusOut.until = Math.min(heliusOut.until, now);
   heliusOut.clearedAt = now;

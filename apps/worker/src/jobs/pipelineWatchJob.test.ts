@@ -1,10 +1,12 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { prisma, loadEnv, type Env } from "@trenchscanner/core";
+import { clearHeliusCreditsOut, meteredFetch, prisma, loadEnv, type Env } from "@trenchscanner/core";
 import { JobFailure, SHUTDOWN_INTERRUPTED_ERROR } from "../scheduler.js";
 import {
   clearedKeys,
+  CREDITS_OUT_BANNER,
+  creditsOutFlows,
   findCanaryProblems,
   findCapacityProblems,
   findCreditProblems,
@@ -157,6 +159,27 @@ describe("pipeline watch: what counts as stalled", () => {
     expect(out[0]!.side).toBe(true);
     expect(out[0]!.text).toContain("Helius credits used up since 04:05 UTC");
     expect(notificationText(out, [], out)).toMatch(/^<b>⚠️ TrenchScanner scanner jobs need a look<\/b>/);
+  });
+
+  it("puts quiet flows down to a Helius credits outage in or near their window, not to a stall", () => {
+    const quiet = findProblems(
+      [flow("decisions", 0, 40), flow("modelAlerts", 0, 9), flow("other", 0, 5)],
+      [],
+      NOW,
+    );
+    // Out until 20 minutes ago: within the model alerts' 90-minute window and the 15-minute grace.
+    const outUntil = NOW - 20 * MIN;
+    const marked = creditsOutFlows(quiet, (t) => t < outUntil, NOW);
+    expect(marked.map((p) => [p.key, !!p.side, !!p.creditsOut])).toEqual([
+      ["decisions", true, true],
+      ["modelAlerts", true, true],
+      ["other", false, false],
+    ]);
+    expect(marked[0]!.text).toContain("Helius credits exhausted");
+    // Out until 40 minutes ago: past the decisions' 30-minute window, inside the alerts' 90.
+    const later = creditsOutFlows(quiet, (t) => t < NOW - 40 * MIN, NOW);
+    expect(later.map((p) => !!p.side)).toEqual([false, true, false]);
+    expect(creditsOutFlows(quiet, () => false, NOW)).toEqual(quiet);
   });
 
   it("flags the database once it passes the disk warning line, and not with the check off", () => {
@@ -502,6 +525,54 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
         ? String(again.meta.stalledKeys)
         : String((again as { stalledKeys?: string }).stalledKeys);
     expect(keys).not.toContain("tokensage");
+  });
+
+  it("while Helius's credits are out, names them on a banner instead of warning of a restart", async () => {
+    const now = Date.now();
+    await prisma.tokenNarrative.create({
+      data: {
+        mintAddress: `${TAG}-c`,
+        depth: "basic",
+        status: "complete",
+        checkedAt: new Date(now - 60 * MIN),
+      },
+    });
+    await prisma.tokenNarrative.deleteMany({ where: { mintAddress: `${TAG}-b` } });
+    await jobsRanAt(now);
+    const f = meteredFetch(
+      (async () =>
+        new Response('{"jsonrpc":"2.0","error":{"code":-32429,"message":"max usage reached"}}', {
+          status: 429,
+        })) as typeof fetch,
+    );
+    await f("https://mainnet.helius-rpc.com/?api-key=k", {
+      method: "POST",
+      body: JSON.stringify({ jsonrpc: "2.0", id: "0", method: "getBalance", params: [] }),
+    });
+    try {
+      // Long enough for the 5-minute warning, had it been a stall.
+      await prisma.systemHeartbeat.upsert({
+        where: { job: "pipeline-watch" },
+        create: {
+          job: "pipeline-watch",
+          lastRunAt: new Date(now - MIN),
+          meta: { stalledKeys: "tokensage", stalledSince: new Date(now - 6 * MIN).toISOString() },
+        },
+        update: { meta: { stalledKeys: "tokensage", stalledSince: new Date(now - 6 * MIN).toISOString() } },
+      });
+      const err = await runPipelineWatch(env, { now, restart: vi.fn() }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(JobFailure);
+      expect((err as JobFailure).message).toContain("Helius credits exhausted");
+      expect((err as JobFailure).meta.warned).toBe(0);
+      const banners = await prisma.announcement.findMany({
+        where: { createdBy: WATCH_ANNOUNCER, endedAt: null },
+      });
+      expect(banners.map((b) => b.message)).toEqual([CREDITS_OUT_BANNER]);
+    } finally {
+      // At 0: forgotten outright, so the grace after a stand-down doesn't reach the tests below.
+      clearHeliusCreditsOut(0);
+      await prisma.tokenNarrative.deleteMany({ where: { mintAddress: `${TAG}-c` } });
+    }
   });
 
   it("warns once the database passes the disk line, and not with the check off", async () => {
