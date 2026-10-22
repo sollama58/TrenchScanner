@@ -12,17 +12,19 @@ import {
 } from "../modelAlertKey.js";
 
 /**
- * Failed authentications remembered on this process, across source addresses.
+ * Failed authentications remembered on this process, per source address (ipRateLimitKey).
  *
- * The route's per-IP limit is the first bound. It is not enough on its own: clientIp trusts
- * CF-Connecting-IP, and a caller who can reach the origin directly can put a fresh value in
- * that header per guess. This cap is the backstop. Past it, further attempts are refused
- * without a database read, including a key that would otherwise have worked, until the window
- * slides. Existing sockets stay up.
+ * Past the cap, an address's wrong or malformed keys are refused as too many attempts. A key
+ * whose hash matches a live row still connects: the cap is never a lockout for a real key.
+ * It used to be one window across every address, and then one caller sending 30 bad headers a
+ * minute refused every customer's reconnect (audit 2026-10-22, AT-2). Guessing is not what it
+ * guards against: a key is 32 random bytes. The route's per-IP rate limit bounds the reads.
  */
 const AUTH_FAILURE_WINDOW_MS = 60_000;
 export const MODEL_ALERT_AUTH_FAILURES_PER_MINUTE = 30;
-const authFailures: number[] = [];
+/** Addresses remembered. Past it the one whose window opened first is dropped. */
+const MAX_FAILURE_ADDRESSES = 10_000;
+const authFailures = new Map<string, number[]>();
 
 /** Sockets waiting for a first-frame key. They are not in the hub and must not accumulate. */
 const MAX_PENDING_AUTHS = 32;
@@ -68,14 +70,18 @@ export async function registerModelAlertSocket(app: FastifyInstance, opts: { env
           request.modelAlertPending = true;
           return;
         }
-        if (tooManyAuthFailures()) return reply.code(429).send({ error: "too_many_attempts" });
+        const address = ipRateLimitKey(request);
         if (presented.kind === "malformed") {
-          recordAuthFailure();
+          if (tooManyAuthFailures(address)) return reply.code(429).send({ error: "too_many_attempts" });
+          recordAuthFailure(address);
           return reply.code(401).send({ error: "invalid_api_key" });
         }
         const result = await authenticateKey(presented.key, admins, opts.env.JWT_SECRET);
         if (!result.ok) {
-          if (result.status === 401) recordAuthFailure();
+          if (result.status === 401) {
+            if (tooManyAuthFailures(address)) return reply.code(429).send({ error: "too_many_attempts" });
+            recordAuthFailure(address);
+          }
           return reply.code(result.status).send({ error: result.error });
         }
         request.modelAlertClient = { ...result.client, openedAt: Date.now() };
@@ -115,11 +121,14 @@ export async function registerModelAlertSocket(app: FastifyInstance, opts: { env
       }, AUTH_DEADLINE_MS);
       timer.unref?.();
       socket.once("close", finish);
+      let framed = false;
       socket.on("message", (data) => {
         // Authenticated or not, a client frame is never written back out.
-        if (settled) return;
-        finish();
-        void authenticateFrame(opts, admins, socket, data);
+        if (settled || framed) return;
+        framed = true;
+        // The deadline keeps running through the key check. A check that hangs on the database
+        // still closes the socket, and a late answer finds it closed and admits nothing.
+        void authenticateFrame(opts, admins, socket, data, ipRateLimitKey(request)).finally(finish);
       });
     },
   );
@@ -141,28 +150,37 @@ async function authenticateFrame(
   admins: ReadonlySet<string>,
   socket: WebSocket,
   data: RawData,
+  address: string,
 ): Promise<void> {
-  if (tooManyAuthFailures()) {
-    socket.close(4429, "too_many_attempts");
-    return;
-  }
   const secret = keyFromFrame(data);
   if (!secret) {
-    recordAuthFailure();
-    socket.close(4401, "unauthorized");
+    refuseGuess(socket, address);
     return;
   }
-  const result = await authenticateKey(secret, admins, opts.env.JWT_SECRET);
-  if (!result.ok) {
-    if (result.status === 401) recordAuthFailure();
-    socket.close(
-      result.status === 403 ? 4403 : 4401,
-      result.status === 403 ? "access_ended" : "unauthorized",
-    );
-    return;
+  try {
+    const result = await authenticateKey(secret, admins, opts.env.JWT_SECRET);
+    if (!result.ok) {
+      if (result.status === 401) {
+        refuseGuess(socket, address);
+        return;
+      }
+      socket.close(
+        result.status === 403 ? 4403 : 4401,
+        result.status === 403 ? "access_ended" : "unauthorized",
+      );
+      return;
+    }
+    admit(opts.hub, socket, { ...result.client, openedAt: Date.now() });
+    ignoreClientFrames(socket);
+  } catch {
+    // The key could not be checked (database error). Close so the client reconnects, instead
+    // of leaving it on a socket that is neither admitted nor timed. Not counted as a failure.
+    try {
+      socket.close(1011, "try_again");
+    } catch {
+      // Already closed.
+    }
   }
-  admit(opts.hub, socket, { ...result.client, openedAt: Date.now() });
-  ignoreClientFrames(socket);
 }
 
 async function authenticateKey(
@@ -237,12 +255,33 @@ function frameText(data: RawData): string | null {
   return Buffer.from(data).toString("utf8");
 }
 
-function tooManyAuthFailures(now = Date.now()): boolean {
-  const cutoff = now - AUTH_FAILURE_WINDOW_MS;
-  while (authFailures.length > 0 && authFailures[0]! <= cutoff) authFailures.shift();
-  return authFailures.length >= MODEL_ALERT_AUTH_FAILURES_PER_MINUTE;
+/** A wrong or malformed first-frame key: counted, and refused as too many past the address's cap. */
+function refuseGuess(socket: WebSocket, address: string): void {
+  if (tooManyAuthFailures(address)) {
+    socket.close(4429, "too_many_attempts");
+    return;
+  }
+  recordAuthFailure(address);
+  socket.close(4401, "unauthorized");
 }
 
-function recordAuthFailure(now = Date.now()): void {
-  authFailures.push(now);
+function tooManyAuthFailures(address: string, now = Date.now()): boolean {
+  const times = authFailures.get(address);
+  if (!times) return false;
+  const cutoff = now - AUTH_FAILURE_WINDOW_MS;
+  while (times.length > 0 && times[0]! <= cutoff) times.shift();
+  if (times.length === 0) authFailures.delete(address);
+  return times.length >= MODEL_ALERT_AUTH_FAILURES_PER_MINUTE;
+}
+
+function recordAuthFailure(address: string, now = Date.now()): void {
+  const times = authFailures.get(address);
+  if (times) {
+    // Only the cap's worth is needed to answer tooManyAuthFailures.
+    times.push(now);
+    if (times.length > MODEL_ALERT_AUTH_FAILURES_PER_MINUTE) times.shift();
+    return;
+  }
+  if (authFailures.size >= MAX_FAILURE_ADDRESSES) authFailures.delete(authFailures.keys().next().value!);
+  authFailures.set(address, [now]);
 }

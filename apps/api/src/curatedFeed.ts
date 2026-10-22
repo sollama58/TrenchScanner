@@ -52,25 +52,63 @@ import {
  * every poll. This asks for one row per token through the (tokenId, takenAt) index instead.
  *
  * Also attaches `token.creatorFee`: where the coin's creator fee goes, from its TokenSage read
- * (rules 0.19.0), for the card's Dev tile. Null when the read doesn't say.
+ * (rules 0.19.0), for the card's Dev tile. Null when the read doesn't say. And
+ * `token.quoteImageUrl`: the image of the coin it trades against when that isn't SOL, for the
+ * pair badge on the card's avatar (user ask 2026-10-22). Null when the quote has no Token row.
  */
-export async function withLatestSnapshots<T extends { token: { id: string; mintAddress?: string } }>(
+export async function withLatestSnapshots<
+  T extends { token: { id: string; mintAddress?: string; quoteMint?: string | null } },
+>(
   rows: T[],
   // A caller that already knows the page's tokens can start this lookup alongside its own row
   // load and pass the result in, instead of waiting for the rows first.
   latest?: Promise<Map<string, TokenSnapshot>>,
 ): Promise<
-  (T & { token: T["token"] & { snapshots: TokenSnapshot[]; creatorFee: CardCreatorFee | null } })[]
+  (T & {
+    token: T["token"] & {
+      snapshots: TokenSnapshot[];
+      creatorFee: CardCreatorFee | null;
+      quoteImageUrl: string | null;
+    };
+  })[]
 > {
-  const [byToken, fees] = await Promise.all([
+  const [byToken, fees, quoteImages] = await Promise.all([
     latest ?? latestSnapshotsByToken(rows.map((r) => r.token.id)),
     creatorFeesByMint(rows.map((r) => r.token.mintAddress)),
+    quoteImagesByMint(rows.map((r) => r.token.quoteMint)),
   ]);
   return rows.map((r) => {
     const snapshot = byToken.get(r.token.id);
     const creatorFee = (r.token.mintAddress && fees.get(r.token.mintAddress)) || null;
-    return { ...r, token: { ...r.token, snapshots: snapshot ? [snapshot] : [], creatorFee } };
+    const quoteImageUrl = (r.token.quoteMint && quoteImages.get(r.token.quoteMint)) || null;
+    return { ...r, token: { ...r.token, snapshots: snapshot ? [snapshot] : [], creatorFee, quoteImageUrl } };
   });
+}
+
+const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
+
+/**
+ * The image of each non-SOL quote coin, from its own Token row (most quotes are launches the scan
+ * tracks). One indexed read for the page's distinct quotes, and none when every pair is in SOL,
+ * which is nearly every page. A failed read leaves the badges without images, never the page.
+ */
+export async function quoteImagesByMint(
+  mints: readonly (string | null | undefined)[],
+): Promise<Map<string, string>> {
+  const unique = [
+    ...new Set(mints.filter((m): m is string => typeof m === "string" && m !== "" && m !== WRAPPED_SOL_MINT)),
+  ];
+  if (unique.length === 0) return new Map();
+  let rows: { mintAddress: string; imageUrl: string | null }[];
+  try {
+    rows = await prisma.token.findMany({
+      where: { mintAddress: { in: unique }, imageUrl: { startsWith: "https://" } },
+      select: { mintAddress: true, imageUrl: true },
+    });
+  } catch {
+    return new Map();
+  }
+  return new Map(rows.flatMap((r) => (r.imageUrl ? [[r.mintAddress, r.imageUrl] as const] : [])));
 }
 
 /**

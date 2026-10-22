@@ -131,15 +131,22 @@ async function sendOnce(url: string, base64Tx: string): Promise<SendAttempt> {
 }
 
 /**
+ * A ping's answer. `limited` is a 429: Sender is reachable but rate-limits the keyless ping, and
+ * keyed sends may still go through, so it is not `down`.
+ */
+export type SenderPing = "up" | "limited" | "down";
+
+/**
  * Whether Sender answers at all: its GET /ping on the endpoint's host, keyless and free. Never
  * throws. Only a health signal for the trade panel; a send's own answer says more.
  */
-export async function pingSender(base: string, timeoutMs = 3_000): Promise<boolean> {
+export async function pingSender(base: string, timeoutMs = 3_000): Promise<SenderPing> {
   try {
     const url = new URL("/ping", base || DEFAULT_HELIUS_SENDER_URL);
     const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-    return res.ok;
+    if (res.ok) return "up";
+    return res.status === 429 ? "limited" : "down";
   } catch {
-    return false;
+    return "down";
   }
 }

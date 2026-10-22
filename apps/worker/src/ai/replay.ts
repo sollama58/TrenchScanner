@@ -453,10 +453,15 @@ export async function pollReplayRuns(env: Env, signal?: AbortSignal): Promise<Sc
         const row = replayVerdictRow(run.id, run.playbookIds, result);
         if (row) buffer.push(row);
         if (buffer.length >= 500) {
+          if (signal?.aborted) return scored;
           await prisma.aiReplayVerdict.createMany({ data: buffer });
           buffer = [];
         }
       }
+      // The lock can be lost while the last results stream in, and the process that took it may
+      // already have cleared this run's verdicts: a write now would sit beside its own as
+      // duplicates (no unique key on a verdict), so every write checks first.
+      if (signal?.aborted) return scored;
       if (buffer.length > 0) await prisma.aiReplayVerdict.createMany({ data: buffer });
 
       if (signal?.aborted) return scored;

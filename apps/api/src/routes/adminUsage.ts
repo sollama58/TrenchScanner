@@ -1,6 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { fetchJson, prisma, Prisma, type Env } from "@trenchscanner/core";
+import {
+  endHeliusCreditsOutEverywhere,
+  fetchJson,
+  heliusCreditsOut,
+  prisma,
+  Prisma,
+  readSharedCreditsOut,
+  type Env,
+} from "@trenchscanner/core";
 import { ADMIN_STALE_ON_ERROR_MS, SharedCacheMap } from "../sharedCache.js";
 
 const HOUR_MS = 3_600_000;
@@ -295,6 +303,22 @@ export async function registerAdminUsageRoutes(app: FastifyInstance, opts: { env
     if (!parsed.success) return reply.code(400).send({ error: "invalid_query" });
     const { window } = parsed.data;
     return reports.for(window).get(() => buildApiUsageReport(window));
+  });
+
+  /**
+   * "Helius topped up": ends the credits-out stand-down in every process now (apiUsage.ts), instead
+   * of each waiting out its 15 minutes. Recorded in AdminAction like every admin write. If the
+   * credits are in fact still out, the next billed call is refused and the stand-down starts over.
+   */
+  app.post("/api-usage/helius-credits-restored", async (_request, reply) => {
+    const shared = await readSharedCreditsOut().catch(() => null);
+    const local = heliusCreditsOut();
+    const now = Date.now();
+    const wasOut = local !== null || (shared !== null && shared.until > now);
+    if (!(await endHeliusCreditsOutEverywhere(now))) {
+      return reply.code(503).send({ error: "the stand-down ended here, but not for the other processes" });
+    }
+    return { ended: true, wasOut };
   });
 
   app.get("/api-usage/tokensage", async (request, reply) => {

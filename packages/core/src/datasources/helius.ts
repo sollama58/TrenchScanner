@@ -295,21 +295,59 @@ const PUBLIC_FALLBACK_RPC = "https://solana-rpc.publicnode.com";
  * HeliusClient (SolanaRpc), so their 429s pause the same endpoint and they wait out its pauses.
  */
 const rpcPauses = new Map<string, RateGate>();
+/**
+ * The shortest pause a Helius 429 sets. Without a Retry-After it was fetchJson's first backoff,
+ * 250-750 ms, and every queued batch went straight back into the limit (audit 2026-10-22, M1 / F6;
+ * DexScreener and Jupiter got theirs in #873).
+ */
+export const HELIUS_MIN_PAUSE_MS = 5_000;
+/**
+ * Five 429s within a minute and the endpoint's ordinary requests are refused locally for 30 s (a
+ * priority one - the burn scan's - still goes once the pause ends). The credits-out stand-down
+ * (apiUsage.ts) covers an exhausted plan; this covers a rate-limit wall, which it lets through.
+ */
+export const HELIUS_BREAKER = { after: 5, withinMs: 60_000, openMs: 30_000 };
+let pauseFloorMs = HELIUS_MIN_PAUSE_MS;
 
 export function rpcPauseFor(rpcUrl: string, lane?: string): RateGate {
   const key = lane ? `${rpcUrl}#${lane}` : rpcUrl;
   let gate = rpcPauses.get(key);
   if (!gate) {
-    gate = new RateGate({ name: lane ? `helius/${lane}` : "helius", perMinute: 600_000, burst: 10_000 });
+    gate = new RateGate({
+      name: lane ? `helius/${lane}` : "helius",
+      perMinute: 600_000,
+      burst: 10_000,
+      minPauseMs: pauseFloorMs,
+      breaker: HELIUS_BREAKER,
+    });
     rpcPauses.set(key, gate);
   }
   return gate;
 }
 
-/** Test hook: forgets every endpoint's pause. */
-export function resetRpcPauses(): void {
+/**
+ * Test hook: forgets every endpoint's pause; `minPauseMs` sets the floor of the gates built after it
+ * (a test against a real server can't sit out HELIUS_MIN_PAUSE_MS on every 429).
+ */
+export function resetRpcPauses({ minPauseMs = HELIUS_MIN_PAUSE_MS }: { minPauseMs?: number } = {}): void {
   rpcPauses.clear();
+  pauseFloorMs = minPauseMs;
 }
+
+/**
+ * Methods whose batch is retried once after a timeout: 1-credit reads of a few accounts each, cheap
+ * to ask twice. Heavy pages (getTransactionsForAddress, getTransaction, getProgramAccounts, the
+ * signature lists) are not: by the time we stop waiting Helius has most likely served and billed
+ * them (worker-core audit 2026-10-22, F7).
+ */
+const RETRY_ON_TIMEOUT_METHODS = new Set([
+  "getMultipleAccounts",
+  "getAccountInfo",
+  "getBalance",
+  "getTokenSupply",
+  "getTokenLargestAccounts",
+  "getTokenAccountsByOwner",
+]);
 
 /** How many JSON-RPC calls to put in one HTTP POST. Conservative enough that no provider rejects
  *  the payload, large enough that a full cycle's wallet lookups collapse into a handful of trips. */
@@ -546,6 +584,8 @@ const TOKEN_PROGRAM_IDS = [
  * credit when the coin is read alone. The token-account enumeration still runs every call.
  */
 const MINT_ACCOUNT_REUSE_MS = 5 * 60_000;
+/** Mint accounts kept at once. The oldest read goes first. */
+const MAX_MINT_ACCOUNTS = 5_000;
 
 /** Wallets per getTokenAccountsByOwner POST - see getTokenBalancesBatch. */
 const BALANCE_WALLETS_PER_POST = 5;
@@ -572,7 +612,9 @@ export type TokenBalancesResult =
   { status: "found"; balances: Map<string, bigint>; truncated?: boolean } | { status: "failed" };
 
 /** getTokenAccountsByOwner's value (an array), or V2's, which can also come wrapped with context. */
-export function tokenAccountsPage(result: unknown): { accounts: TokenAccountSlice[]; more: boolean } | null {
+export function tokenAccountsPage(
+  result: unknown,
+): { accounts: TokenAccountSlice[]; more: boolean; key: string | null } | null {
   if (!result || typeof result !== "object") return null;
   const r = result as { value?: unknown; paginationKey?: unknown };
   const inner = r.value && !Array.isArray(r.value) && typeof r.value === "object" ? r.value : null;
@@ -585,10 +627,8 @@ export function tokenAccountsPage(result: unknown): { accounts: TokenAccountSlic
   const key = r.paginationKey ?? (inner as { paginationKey?: unknown } | null)?.paginationKey;
   // V2 can hand back a key on the last page too (its end is an empty page), so a key only means
   // more when the page came back full.
-  return {
-    accounts,
-    more: typeof key === "string" && key.length > 0 && accounts.length >= TOKEN_ACCOUNTS_PAGE_LIMIT,
-  };
+  const more = typeof key === "string" && key.length > 0 && accounts.length >= TOKEN_ACCOUNTS_PAGE_LIMIT;
+  return { accounts, more, key: more ? (key as string) : null };
 }
 
 /** One getTokenAccountsByOwner entry under a base64 dataSlice. */
@@ -617,7 +657,9 @@ export class HeliusClient {
   /**
    * Program id and raw supply from a successful mint-account read, kept for MINT_ACCOUNT_REUSE_MS.
    * The timestamp is that read, not the last reuse, so a coin re-read every minute pays for the
-   * mint account again once five minutes have passed. A failed read is not stored.
+   * mint account again once five minutes have passed. A failed read is not stored. Kept in read
+   * order: an expired entry is dropped when looked up or when it reaches the front, and the map
+   * holds at most MAX_MINT_ACCOUNTS.
    */
   private readonly mintAccounts = new Map<string, { program: string; supply: bigint; atMs: number }>();
   /** The endpoint's shared 429 pause - see rpcPauseFor. */
@@ -747,10 +789,16 @@ export class HeliusClient {
         retries: 1,
         // A retry is another billed request: counted like the first.
         onRetry: count,
-        gate: this.pause,
-        // A timeout is billed whether or not the answer arrives. Retrying it pays twice
-        // (user decision 2026-10-22). A 429 still retries: that request was refused.
-        retryOnTimeout: false,
+        // One token a call, not a request: a batch of 50 is 50 of the plan's calls.
+        gate: {
+          acquire: () => this.pause.acquire(Infinity, false, calls.length),
+          throttled: (ms) => this.pause.throttled(ms),
+        },
+        // A timeout is billed whether or not the answer arrives. Retrying a heavy page pays twice
+        // (user decision 2026-10-22), but a batch of small 1-credit reads is retried once: the
+        // fail-closed screen's Mayhem read is one, and losing it rejected every coin in it.
+        // A 429 still retries: that request was refused.
+        retryOnTimeout: calls.every((c) => RETRY_ON_TIMEOUT_METHODS.has(c.method)),
       });
 
       // A malformed batch can come back as a single error object rather than an array.
@@ -954,6 +1002,14 @@ export class HeliusClient {
     return out;
   }
 
+  /** Drops expired mint accounts from the front (the oldest reads), then the oldest past the cap. */
+  private pruneMintAccounts(now: number) {
+    for (const [mint, entry] of this.mintAccounts) {
+      if (now - entry.atMs < MINT_ACCOUNT_REUSE_MS && this.mintAccounts.size <= MAX_MINT_ACCOUNTS) break;
+      this.mintAccounts.delete(mint);
+    }
+  }
+
   /**
    * The `n` largest wallets of each mint, pools aside, and their % of supply: past the 20 token
    * accounts RugCheck and getTokenLargestAccounts stop at, of which the pool takes one to three
@@ -984,7 +1040,10 @@ export class HeliusClient {
       if (cached && now - cached.atMs < MINT_ACCOUNT_REUSE_MS) {
         programOf.set(mint, cached.program);
         supplyOf.set(mint, cached.supply);
-      } else unread.push(mint);
+      } else {
+        if (cached) this.mintAccounts.delete(mint);
+        unread.push(mint);
+      }
     }
     if (unread.length > 0) {
       const mints = await this.getMultipleAccounts<{
@@ -1010,8 +1069,10 @@ export class HeliusClient {
         const raw = BigInt(supply);
         programOf.set(mint, value.owner);
         supplyOf.set(mint, raw);
+        this.mintAccounts.delete(mint);
         this.mintAccounts.set(mint, { program: value.owner, supply: raw, atMs: now });
       }
+      this.pruneMintAccounts(now);
     }
     for (const mint of programOf.keys()) this.gpaErrors.delete(mint);
     const rowsByMint = await this.tokenAccountsOfMints(programOf);
@@ -2159,7 +2220,9 @@ export class HeliusClient {
         txs.push(...res.result.data);
         const token = res.result.paginationToken ?? undefined;
         const historyEnds = res.result.data.length < LAUNCH_TX_PAGE || !token;
-        notePage(mint, res.result.data, historyEnds ? null : (token ?? null));
+        // The seed keeps the token even after a short page: a young coin's history has only ended
+        // so far, and the trade tape reads it after the window closed, so it continues from here.
+        notePage(mint, res.result.data, token ?? null);
         const reading = parseLaunchBuyers(mint, txs, maxBuyers);
         if (!reading) {
           if (txs.length === 0 || txs.some((tx) => !tx || !tx.meta)) {

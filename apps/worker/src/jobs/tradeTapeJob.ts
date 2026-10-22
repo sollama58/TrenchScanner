@@ -735,6 +735,11 @@ async function nextNewestCoin(called: TapeCoin[], picks: NewestPicks, nowMs: num
  * Starts a from-launch read on the pages the launch-buyer read already paid for.
  * "done": those pages already cover the window, and the tape is stored. A Progress: the
  * next page continues from the seed's token. Null: no usable seed.
+ *
+ * The launch read ran while the coin was young, so a seed without a token is only the history up
+ * to that read. It covers the window only when its newest page already reaches past the window's
+ * end; otherwise it is dropped and the tape reads from the launch, as a stored tape cut at the
+ * launch read's time would miss every later trader.
  */
 async function seedFromLaunchBuyers(
   deps: TradeTapeDeps,
@@ -746,7 +751,9 @@ async function seedFromLaunchBuyers(
   if (!seed) return null;
   const parsed = await tradesFromChainTransactionsPriced(coin.mint, seed.txs, deps.solPrices);
   const lastAtMs = seed.pageEnds.length > 0 ? seed.pageEnds[seed.pageEnds.length - 1]! : 0;
-  const more = seed.paginationToken !== null && !(lastAtMs > coin.windowEndMs);
+  const coversWindow = lastAtMs > coin.windowEndMs;
+  if (seed.paginationToken === null && !coversWindow) return null;
+  const more = seed.paginationToken !== null && !coversWindow;
   const progress: Progress = {
     coin,
     trades: parsed.trades,

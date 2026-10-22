@@ -1,6 +1,7 @@
 import { SettledAnswers } from "./settledAnswers.js";
 import { prisma, createLogger, type HeliusClient, type MayhemModeResult } from "@trenchscanner/core";
 import { FailureBackoff } from "./failureBackoff.js";
+import type { ScreenBackup } from "./screenBackup.js";
 
 const logger = createLogger("mayhem-mode");
 
@@ -11,7 +12,7 @@ const logger = createLogger("mayhem-mode");
  * couple of minutes (see FailureBackoff): the screen rejects the mint for as long as it waits, so
  * one blip must not cost a fresh launch its first 20 minutes.
  */
-const failureBackoff = new FailureBackoff();
+const failureBackoff = new FailureBackoff(2, 20, { helius: true });
 /**
  * A mint the RPC doesn't see yet (confirmed-commitment lag on a seconds-old token) is a different
  * wait: the account appears within a slot or two, and a token that reached the band this fast is
@@ -65,7 +66,14 @@ export async function cachedMayhemMode(mintAddresses: string[]): Promise<Map<str
 export async function resolveMayhemMode(
   mintAddresses: string[],
   helius: HeliusClient,
-  { backOffFailures = true }: { backOffFailures?: boolean } = {},
+  {
+    backOffFailures = true,
+    backup,
+  }: {
+    backOffFailures?: boolean;
+    /** Asked for the mints Helius gave no answer for (screenBackup.ts); the scan's own lookup only. */
+    backup?: Pick<ScreenBackup, "mayhem">;
+  } = {},
 ): Promise<Map<string, MayhemModeResult>> {
   const unique = [...new Set(mintAddresses)];
   const result = new Map<string, MayhemModeResult>();
@@ -100,6 +108,19 @@ export async function resolveMayhemMode(
   }
 
   const fetched = await helius.getMayhemModeBatch(uncached);
+  // Helius gave no answer (a 429, credits out, a timeout): the same read on another provider. A mint
+  // the RPC doesn't see yet isn't asked: the backup lags the same way.
+  const unanswered = uncached.filter((mint) => {
+    const r = fetched.get(mint);
+    return r?.status !== "found" && !(r?.status === "failed" && r.mintPending);
+  });
+  let fromBackup = 0;
+  if (backup && unanswered.length > 0) {
+    for (const [mint, isMayhemMode] of await backup.mayhem(unanswered)) {
+      fetched.set(mint, { status: "found", isMayhemMode });
+      fromBackup += 1;
+    }
+  }
 
   const toCache: { mintAddress: string; isMayhemMode: boolean }[] = [];
   let failed = 0;
@@ -134,6 +155,7 @@ export async function resolveMayhemMode(
     backedOff,
     mayhemFound: toCache.filter((r) => r.isMayhemMode).length,
     failedWillRetryLater: failed,
+    fromBackup,
   });
 
   return result;

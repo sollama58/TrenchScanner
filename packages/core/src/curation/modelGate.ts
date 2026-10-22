@@ -130,8 +130,9 @@ export function gateCriteriaUncheckedOffline(gate: FilterCriteria): string[] {
  * unrelated X, trend match and late copies are applied once the row recorded the input they read,
  * the same way passesModelGate does. A category sub-label is not recorded, so that list stays
  * skipped. Linked-to-creator, KOL Bundled and Bundled % from before the transfer-counted reads
- * (HOLDER_TRANSFER_LINKS_READ_SINCE) stay masked: those figures are another definition, and the
- * gate does not treat them as today's.
+ * (HOLDER_TRANSFER_LINKS_READ_SINCE) are read as the row stored them (TrainingRow.gateInputs,
+ * user decision 2026-10-20): funding-only figures, close to but not the transfer-counted ones the
+ * live filter reads.
  *
  * `unrecorded` names the inputs the scan didn't record yet when the row was banked
  * (unrecordedGateInputs): a criterion on one of them is skipped like the unchecked ones, rather

@@ -74,6 +74,8 @@ const verifyBodySchema = z.discriminatedUnion("method", [
 // else; a legitimate user signing in a few times a minute is well within this.
 // Keyed by address, never by session: see ipRateLimitKey.
 const AUTH_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute", keyGenerator: ipRateLimitKey };
+/** How long the Privy account count behind `signupsOpen` is reused. */
+const PRIVY_COUNT_TTL_MS = 60_000;
 
 // Whether the session cookie has to survive a *cross-site* request, decided per request by
 // comparing the host this API was actually reached on against the dashboard's own domain
@@ -242,10 +244,25 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     return finishSignIn(request, reply, user, created);
   });
 
+  // The sign-in screen reads /privy/config on every load, so the count is kept a minute instead of
+  // read each time. An account made here, or a sign-up refused as full, drops it. A count up to a
+  // minute old only delays when the screen hides email sign-in: createPrivyUser holds the cap.
+  let privyAccounts: { at: number; count: Promise<number> } | null = null;
+  const privyAccountCount = (): Promise<number> => {
+    if (privyAccounts && Date.now() - privyAccounts.at < PRIVY_COUNT_TTL_MS) return privyAccounts.count;
+    const entry = { at: Date.now(), count: prisma.user.count({ where: { privyUserId: { not: null } } }) };
+    privyAccounts = entry;
+    // A failed read isn't kept.
+    entry.count.catch(() => {
+      if (privyAccounts === entry) privyAccounts = null;
+    });
+    return entry.count;
+  };
+
   /** Privy sign-in: on when PRIVY_APP_ID, its secret and its verification key are all set. */
   app.get("/privy/config", async () => {
     if (!privyEnabled(opts.env)) return { enabled: false, accessSwap: accessSwapOpen(opts.env) };
-    const accounts = await prisma.user.count({ where: { privyUserId: { not: null } } });
+    const accounts = await privyAccountCount();
     return {
       enabled: true,
       appId: opts.env.PRIVY_APP_ID,
@@ -294,11 +311,13 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
       // Admins sign in with their own wallet only (user decision 2026-10-18).
       if (adminWalletSet(opts.env).has(wallet)) return reply.code(403).send({ error: ADMIN_PRIVY_REFUSAL });
       const outcome = await createPrivyUser(did, wallet, opts.env.PRIVY_SIGNUP_CAP);
-      if (outcome === "full")
+      if (outcome === "full") {
+        privyAccounts = null;
         return reply.code(403).send({
           error: "Email sign-ups are full for now. You can still sign in with a Solana wallet.",
           signupsFull: true,
         });
+      }
       if (outcome === "taken")
         return reply.code(409).send({
           error:
@@ -306,6 +325,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
         });
       user = outcome.user;
       created = outcome.created;
+      if (created) privyAccounts = null;
       request.log.info(
         { wallet: walletTag(wallet) },
         created ? "privy account created" : "privy account found",

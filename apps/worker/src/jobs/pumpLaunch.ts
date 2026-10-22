@@ -26,7 +26,7 @@ const logger = createLogger("pump-launch");
  * TRADING_BACKUP_RPC_URL, then a free public endpoint.
  */
 const settled = new SettledAnswers<PumpLaunch | null>(20_000);
-const failureBackoff = new FailureBackoff();
+const failureBackoff = new FailureBackoff(2, 20, { helius: true });
 /** A mint the RPC doesn't see yet is checked again next cycle, as the Mayhem lookup does. */
 const MINT_PENDING_BACKOFF_MINUTES = 1;
 

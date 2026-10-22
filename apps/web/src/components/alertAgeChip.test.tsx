@@ -44,7 +44,7 @@ describe("alert age chip", () => {
     expect(modelHtml).toContain(ago(model.matchedAt, now));
   });
 
-  it("puts the same chip at the end of a Scope row and a Stream row", () => {
+  it("puts the same chip under the figures of a Scope row and a Stream row, with the search by the ticker", () => {
     const display = DEFAULT_SCOPE_SETTINGS.display;
     const tiles = tileMode(DEFAULT_APPEARANCE);
     const filter = scopeSampleCard(now);
@@ -55,11 +55,14 @@ describe("alert age chip", () => {
     expect(chipCount(filterHtml)).toBe(1);
     expect(filterHtml).toContain("scope-age age-chip");
     expect(filterHtml).toContain(shortAge(42_000));
+    // Under the figures beside the Dex pill, and the search beside the ticker (user ask 2026-10-22).
     const filterTicker = filterHtml.slice(
       filterHtml.indexOf("scope-ticker"),
       filterHtml.indexOf("scope-name"),
     );
-    expect(filterTicker).toContain("age-chip");
+    expect(filterTicker).not.toContain("age-chip");
+    expect(filterTicker).toContain("scope-search");
+    expect(filterHtml.slice(filterHtml.indexOf("scope-fig-pills"))).toContain("age-chip");
 
     const stream = scopeSampleCard(now);
     (stream as Card).kind = "stream";

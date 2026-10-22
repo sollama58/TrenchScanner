@@ -10,6 +10,17 @@ export class RateGateDeadlineError extends Error {
   }
 }
 
+/**
+ * Thrown by RateGate.acquire, without waiting, while its breaker is open (RateGateOptions.breaker):
+ * the provider refused us so often lately that another try now is only another refusal.
+ */
+export class RateGateOpenError extends Error {
+  constructor(name: string) {
+    super(`${name}: refused locally - the provider keeps rate-limiting us`);
+    this.name = "RateGateOpenError";
+  }
+}
+
 export interface RateGateStats {
   /** Requests let through since the last takeStats(). */
   requests: number;
@@ -37,6 +48,13 @@ export interface RateGateOptions {
    * (DexScreener's and Jupiter's limits are per second or per minute).
    */
   minPauseMs?: number;
+  /**
+   * A breaker on top of the pause: `after` 429s within `withinMs` open it for `openMs`, and while
+   * it is open an ordinary acquire throws RateGateOpenError at once (a priority one still waits out
+   * the pause and goes). A pause alone let every queued batch go back the moment it ended, each
+   * drawing another 429 (audit 2026-10-22, M1).
+   */
+  breaker?: { after: number; withinMs: number; openMs: number };
   /** Name used in the log line a throttle writes. */
   name: string;
   now?: () => number;
@@ -56,6 +74,8 @@ export class RateGate {
   private tokens: number;
   private refilledAt: number;
   private pausedUntil = 0;
+  private openUntil = 0;
+  private recent429s: number[] = [];
   private stats: RateGateStats = { requests: 0, throttled: 0, waitedMs: 0, gaveUp: 0 };
   private readonly msPerToken: number;
   private readonly reserve: number;
@@ -82,9 +102,12 @@ export class RateGate {
    * sustained rate - 8-10 s of a cycle on about one in six cycles (worker health, 2026-10-13).
    * With a reserve the background jobs leave that many slots, so a cycle's lookups go out at once.
    */
-  async acquire(deadline = Infinity, priority = false): Promise<void> {
+  async acquire(deadline = Infinity, priority = false, cost = 1): Promise<void> {
     const startedAt = this.now();
-    const needed = 1 + (priority ? 0 : this.reserve);
+    if (!priority && startedAt < this.openUntil) throw new RateGateOpenError(this.options.name);
+    // A cost (a JSON-RPC batch's calls) never above the bucket, or it could never be met.
+    const take = Math.min(Math.max(1, cost), Math.max(1, this.options.burst));
+    const needed = take + (priority ? 0 : this.reserve);
     for (;;) {
       const now = this.now();
       this.refill(now);
@@ -93,7 +116,7 @@ export class RateGate {
         this.tokens >= needed ? 0 : (needed - this.tokens) * this.msPerToken,
       );
       if (wait <= 0) {
-        this.tokens -= 1;
+        this.tokens -= take;
         this.stats.requests += 1;
         this.stats.waitedMs += now - startedAt;
         return;
@@ -126,6 +149,24 @@ export class RateGate {
       this.tokens = 0;
       this.refilledAt = until;
     }
+    const breaker = this.options.breaker;
+    if (breaker) {
+      this.recent429s = this.recent429s.filter((t) => now - t < breaker.withinMs);
+      this.recent429s.push(now);
+      if (this.recent429s.length >= breaker.after && now >= this.openUntil) {
+        this.openUntil = now + breaker.openMs;
+        this.recent429s = [];
+        logger.warn("provider keeps rate-limiting us - refusing ordinary requests locally", {
+          provider: this.options.name,
+          forMs: breaker.openMs,
+        });
+      }
+    }
+  }
+
+  /** Whether the breaker is open now: ordinary requests are refused without a call. */
+  isOpen(now = this.now()): boolean {
+    return now < this.openUntil;
   }
 
   /** Counts since the last call, then reset. */

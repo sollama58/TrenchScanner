@@ -1,4 +1,4 @@
-import { apiUsageMeter } from "../apiUsage.js";
+import { apiUsageMeter, heliusCreditsOut } from "../apiUsage.js";
 import { createLogger } from "../logger.js";
 import type { ChainTx } from "../wallets/tradeTape.js";
 
@@ -28,6 +28,11 @@ const logger = createLogger("helius-stream");
  * And their trades (user ask 2026-10-19: the token page's live trades): a "logs" key follows the
  * logs of every transaction that mentions its one account (logsSubscribe, ~6 KB a trade), which
  * carry the swap events core's pumpTradeEvents.ts reads (apps/api/src/liveTrades.ts).
+ *
+ * While Helius's credits are out (apiUsage.ts's stand-down, shared by every process) it neither
+ * connects nor subscribes: a socket is billed too, and each reconnect into an exhausted plan was
+ * another refusal the fetch stand-down never saw (audit 2026-10-22, H2). It connects again once
+ * the stand-down's pause is over, and a skipped subscription is asked for again like a refused one.
  */
 
 /** Silence after which the connection is presumed dead: the slot subscription speaks every ~0.4 s. */
@@ -44,7 +49,11 @@ const MAX_BACKOFF_MS = 5 * 60_000;
  * after can still miss it while it is unfinalized.
  */
 export const STREAM_SETTLE_MS = 30_000;
-/** Most transaction keys followed at once: the contenders, with room to spare. */
+/**
+ * Most transaction keys followed at once by default: the contenders, with room to spare. A socket
+ * can take another cap (maxTxKeys): the worker's holder stream sat at 200 of 200 (audit
+ * 2026-10-22, H-4).
+ */
 const MAX_KEYS = 200;
 /** Most account keys followed at once: the young coins' curves (CURVE_TAPE_MAX_MINTS caps it lower). */
 const MAX_ACCOUNT_KEYS = 1_000;
@@ -170,6 +179,8 @@ export class HeliusAccountStream {
   };
   /** Silence after which nothing counts as covered (stallAfter); null: only the reconnect's timeout. */
   private coverStallMs: number | null = null;
+  /** Each kind's cap on keys followed at once (maxTxKeys). */
+  private readonly maxKeysOf: Record<StreamKind, number> = { ...MAX_KEYS_OF };
   /** The feature this socket's credits go under in ApiUsage (metered); null leaves them out. */
   private meterFeature: string | null = null;
   /** Credits counted but not yet a whole one: ApiUsage keeps whole credits. */
@@ -203,6 +214,16 @@ export class HeliusAccountStream {
    */
   metered(feature: string): this {
     this.meterFeature = feature;
+    return this;
+  }
+
+  /**
+   * Follows up to `n` "tx" keys at once instead of MAX_KEYS. Keys bill by the bytes they bring, not
+   * by count, and Helius takes up to 50,000 addresses in accountInclude (helius.dev docs, read
+   * 2026-10-22), so a coin's ~25 accounts leave plenty of room.
+   */
+  maxTxKeys(n: number): this {
+    this.maxKeysOf.tx = n;
     return this;
   }
 
@@ -278,7 +299,7 @@ export class HeliusAccountStream {
       }
       return;
     }
-    if (!existing && this.countOf(kind) >= MAX_KEYS_OF[kind] && !this.evictStalest(kind, now)) {
+    if (!existing && this.countOf(kind) >= this.maxKeysOf[kind] && !this.evictStalest(kind, now)) {
       this.stats.capped += 1;
       return;
     }
@@ -367,6 +388,19 @@ export class HeliusAccountStream {
     const old = sub.retiring;
     if (old?.since == null || !old.accounts.has(account)) return null;
     return old.carried.get(account) ?? old.since;
+  }
+
+  /**
+   * Whether `account` is in `key`'s subscription on an open, speaking socket, with Helius's answer
+   * still to come: its cover starts once Helius confirms it (coveredSince). False once confirmed,
+   * and for a key turned away at the cap, refused, or waiting for a connection, whose cover is not
+   * on its way.
+   */
+  awaitingCover(key: string, account: string, now: number = Date.now()): boolean {
+    const sub = this.subs.get(key);
+    if (!sub || !sub.accounts.has(account) || this.socket?.readyState !== 1) return false;
+    if (this.stalledForMs(now) > 0) return false;
+    return sub.since === null && sub.requestId !== null;
   }
 
   /** Counts since the last call, for the scan's heartbeat. */
@@ -525,6 +559,11 @@ export class HeliusAccountStream {
   }
 
   private connect(): void {
+    const out = heliusCreditsOut();
+    if (out) {
+      this.waitOutCreditsOut(out.until.getTime());
+      return;
+    }
     let socket: WebSocket;
     try {
       socket = new this.ctor!(this.url);
@@ -585,6 +624,11 @@ export class HeliusAccountStream {
   private subscribe(key: string, sub: Subscription): void {
     const socket = this.socket;
     if (!socket || socket.readyState !== 1) return;
+    // Standing down: kept uncovered and asked for again after REFUSED_RETRY_MS, as a refusal is.
+    if (heliusCreditsOut()) {
+      sub.refusedAt = Date.now();
+      return;
+    }
     const id = this.nextId++;
     sub.requestId = id;
     this.keyOfRequest.set(id, key);
@@ -660,6 +704,17 @@ export class HeliusAccountStream {
         params: [subId],
       }),
     );
+  }
+
+  /** Connects once the credits stand-down ending at `until` is over, not before. */
+  private waitOutCreditsOut(until: number): void {
+    if (this.stopped || this.reconnectTimer) return;
+    const delay = Math.max(1_000, until - Date.now()) + Math.round(Math.random() * 5_000);
+    logger.warn("Helius credits out - stream waits out the stand-down", { inMs: delay });
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
   }
 
   private scheduleReconnect(): void {
