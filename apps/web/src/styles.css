@@ -2713,12 +2713,29 @@ legend {
   gap: 6px;
   margin: 0 0 10px;
 }
+.signin-cards {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+/* The card sets --stat-cols inline (four across). In this column that chops labels such as
+   "Transferred", so the landing specimen uses two. */
+.signin-cards .card-stats {
+  --stat-cols: 2 !important;
+}
 .signin-cards .card {
   min-width: 0;
   max-width: 100%;
 }
 .signin-cards .card-foot {
   flex-wrap: wrap;
+}
+.privy-btn .wallet-name {
+  flex: 1;
+  text-align: left;
+  text-wrap: balance;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
 }
 .signin-box {
   grid-area: login;
@@ -4885,9 +4902,6 @@ body.trades-open .util-drawer > * {
   }
   .signin h1 {
     font-size: 32px;
-  }
-  .signin-cards {
-    --stat-cols: 2;
   }
   .landing-reads li {
     grid-template-columns: minmax(0, 1fr);
