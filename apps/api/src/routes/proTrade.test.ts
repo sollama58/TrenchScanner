@@ -41,7 +41,7 @@ import {
 // The fee route pings Sender in the background: answered here, so no test reaches the network.
 vi.mock("@trenchscanner/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@trenchscanner/core")>()),
-  pingSender: vi.fn(async () => true),
+  pingSender: vi.fn(async () => "up" as const),
 }));
 
 describe("plainRefusal", () => {

@@ -468,7 +468,7 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   // pipeline-watch: the Pro trades sent in its window, and how many failed or expired.
   const tradeOutcomes = stageTimings(meta, "tradeOutcomes");
   if (tradeOutcomes) out.tradeOutcomes = tradeOutcomes;
-  // The trade canary: each probe's result ("ok", "failed", "skipped") and time, and the coins it
+  // The trade canary: each probe's result ("ok", "degraded", "failed", "skipped") and time, and the coins it
   // built on (public mints). Why a probe failed is the row's lastError.
   const probes = stringFields(meta, "probes");
   if (probes) out.probes = probes;

@@ -35,7 +35,7 @@ import {
   type GuardRpc,
   type TradeExpectation,
 } from "./txGuard.js";
-import { HELIUS_SENDER_TIP_ACCOUNTS, senderUrl, sendViaSender } from "./sender.js";
+import { HELIUS_SENDER_TIP_ACCOUNTS, pingSender, senderUrl, sendViaSender } from "./sender.js";
 import {
   dexScreenerPricesUsd,
   JupiterSwapClient,
@@ -1448,5 +1448,27 @@ describe("Helius Sender", () => {
     } finally {
       await new Promise((r) => server.close(r));
     }
+  });
+
+  it("reads a rate-limited ping as limited, not down", async () => {
+    const { createServer } = await import("node:http");
+    let status = 200;
+    const server = createServer((_req, res) => {
+      res.writeHead(status);
+      res.end();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    try {
+      expect(await pingSender(base)).toBe("up");
+      status = 429;
+      expect(await pingSender(base)).toBe("limited");
+      status = 503;
+      expect(await pingSender(base)).toBe("down");
+    } finally {
+      await new Promise((r) => server.close(r));
+    }
+    // Nothing listening: no answer at all.
+    expect(await pingSender(base, 500)).toBe("down");
   });
 });

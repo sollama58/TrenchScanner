@@ -794,7 +794,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const q = parsed.data;
     // Nothing sent lately says whether Sender is up: ask it, for the next read (never waited on).
     if (senderHealth.pingDue())
-      void pingSender(env.HELIUS_SENDER_URL).then((ok) => senderHealth.notePing(ok));
+      void pingSender(env.HELIUS_SENDER_URL).then((result) => senderHealth.notePing(result));
     const [fees, sacrifice] = await Promise.all([
       estimateManualFees(rpc, {
         mint: q.mint,
