@@ -495,11 +495,19 @@ export function stitchVolume(
     // A coarser candle still open at the finer run's end (the minute the 15-second page stopped
     // in) keeps its whole stretch, and the finer candles inside it give way: the newer coarser
     // candle saw more of it, and dropping it would leave a hole up to the next one.
-    const straddle = out.find((k) => k.t > from && k.t < lastEnd && k.t + (k.w ?? MINUTE) > lastEnd);
+    const end = (k: VolumeCandle) => k.t + (k.w ?? MINUTE);
+    const straddle = out.find((k) => k.t > from && k.t < lastEnd && end(k) > lastEnd);
     const until = straddle ? straddle.t : lastEnd;
-    out = out
-      .filter((k) => k.t + (k.w ?? MINUTE) <= from)
-      .concat(run.candles.filter((k) => k.t + run.stepMs <= until).map((k) => ({ ...k, w: run.stepMs })))
+    // So does one open at its start (the 5-minute bucket the minute page starts inside): the finer
+    // page doesn't hold that bucket's minutes before its first, so without it they'd be drawn flat.
+    const before = out.filter((k) => k.t < from && (end(k) <= from || end(k) <= until));
+    const since = Math.max(from, ...before.map(end));
+    out = before
+      .concat(
+        run.candles
+          .filter((k) => k.t >= since && k.t + run.stepMs <= until)
+          .map((k) => ({ ...k, w: run.stepMs })),
+      )
       .concat(out.filter((k) => k.t >= until));
   }
   return out;

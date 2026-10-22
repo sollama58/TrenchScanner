@@ -487,6 +487,12 @@ describe("olderCandles", () => {
     expect(olderCandles(minutes, fives, 0)!.map((c) => c.t)).toEqual([0, 5 * MIN, 95 * MIN]);
   });
 
+  it("keeps the 5-minute bucket the minute page starts inside", () => {
+    const minutes = [k(102 * MIN), k(103 * MIN)];
+    const fives = [k(95 * MIN), k(100 * MIN), k(105 * MIN)];
+    expect(olderCandles(minutes, fives, 0)!.map((c) => c.t)).toEqual([95 * MIN, 100 * MIN]);
+  });
+
   it("reads none when the minute candles reach the launch", () => {
     expect(olderCandles([k(2 * MIN)], [k(0)], 0)).toBeNull();
     expect(olderCandles(null, [k(0)], 0)).toBeNull();

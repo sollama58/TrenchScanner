@@ -351,17 +351,38 @@ describe("volumeBars", () => {
   it("keeps a coarser candle open at a finer run's end whole, without the finer candles inside it", () => {
     const vol = stitchVolume([
       { candles: [k(0, 1, 1, 60), k(60_000, 1, 1, 60), k(120_000, 1, 1, 60)], stepMs: 60_000 },
-      // The 15-second page runs from 0:30 to 1:30, ending inside the 1:00 minute.
+      // The 15-second page runs from 0:00 to 1:30, ending inside the 1:00 minute.
       {
-        candles: [k(30_000, 1, 1, 30), k(45_000, 1, 1, 30), k(60_000, 1, 1, 30), k(75_000, 1, 1, 30)],
+        candles: [0, 15_000, 30_000, 45_000, 60_000, 75_000].map((t) => k(t, 1, 1, 30)),
         stepMs: 15_000,
       },
     ]);
     expect(vol.map((c) => [c.t, c.w])).toEqual([
+      [0, 15_000],
+      [15_000, 15_000],
       [30_000, 15_000],
       [45_000, 15_000],
       [60_000, 60_000],
       [120_000, 60_000],
+    ]);
+  });
+
+  it("keeps the coarser candle open at a finer run's start, without the finer candles inside it", () => {
+    // The minute page starts at 7:00, inside the 5:00 five-minute bucket.
+    const fives = [
+      { ...k(0, 1, 1, 60), w: 5 * M },
+      { ...k(5 * M, 1, 1, 60), w: 5 * M },
+    ];
+    const minutes = [7, 8, 9, 10, 11].map((m) => k(m * M, 1, 1, 6));
+    const vol = stitchVolume([
+      { candles: fives, stepMs: 5 * M },
+      { candles: minutes, stepMs: M },
+    ]);
+    expect(vol.map((c) => [c.t / M, c.w! / M])).toEqual([
+      [0, 5],
+      [5, 5],
+      [10, 1],
+      [11, 1],
     ]);
   });
 

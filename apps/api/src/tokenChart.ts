@@ -25,10 +25,12 @@ export const OLDER_CANDLE_MS = 5 * 60_000;
 export const OLDER_AFTER_MS = 10 * 60_000;
 
 /**
- * Exported for tests. The coin's 5-minute candles that end by its first minute candle, for the
- * stretch the minute page no longer reaches (user ask 2026-10-19: on a coin that traded through
+ * Exported for tests. The coin's 5-minute candles that start before its first minute candle, for
+ * the stretch the minute page no longer reaches (user ask 2026-10-19: on a coin that traded through
  * more than 1,000 minutes, the call fell before the chart's first candle and its flag went with it).
- * Null when the minute candles reach back to the launch, or there are none older.
+ * The minute page starts mid-bucket, so the bucket it starts in is kept too: its minutes before the
+ * page's first are in no other answer (the chart draws that bucket whole, priceChart.ts
+ * stitchVolume). Null when the minute candles reach back to the launch, or there are none older.
  */
 export function olderCandles(
   minutes: readonly McapCandle[] | null,
@@ -38,7 +40,7 @@ export function olderCandles(
   const first = minutes?.[0]?.t;
   if (first === undefined || !fives?.length) return null;
   if (launchAt !== null && first < launchAt + OLDER_AFTER_MS) return null;
-  const out = drawableCandles(fives.filter((k) => k.t + OLDER_CANDLE_MS <= first));
+  const out = drawableCandles(fives.filter((k) => k.t < first));
   return out.length > 0 ? out : null;
 }
 
