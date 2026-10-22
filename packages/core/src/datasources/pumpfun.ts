@@ -279,7 +279,11 @@ export class PumpFunClient {
    * endpoint as coinDetails. Null when Pump.fun has no such coin or the payload names no charity.
    * Throws on a transport failure, including a 429 from our own budget.
    */
-  async charityName(mintAddress: string, timeoutMs = 2_500): Promise<string | null> {
+  /**
+   * Every charity this coin names, with the fee percent when the payload gave one.
+   * An empty list is "no charity named", including a 404. Throws on a transport failure.
+   */
+  async charityShares(mintAddress: string, timeoutMs = 2_500): Promise<PumpCharityShare[]> {
     try {
       const coin = await fetchJson<PumpFunCoin | null>(
         `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
@@ -289,15 +293,22 @@ export class PumpFunClient {
           retries: 0,
         },
       );
-      if (!coin || typeof coin !== "object" || Array.isArray(coin)) return null;
+      if (!coin || typeof coin !== "object" || Array.isArray(coin)) return [];
       // A different mint is someone else's coin. A payload that names the charity and leaves
       // mint off still belongs to this request: the path is already the mint.
-      if (typeof coin.mint === "string" && coin.mint !== mintAddress) return null;
-      return charityNameFromPumpCoin(coin);
+      if (typeof coin.mint === "string" && coin.mint !== mintAddress) return [];
+      return charitySharesFromPumpCoin(coin);
     } catch (err) {
-      if (err instanceof HttpError && err.status === 404) return null;
+      if (err instanceof HttpError && err.status === 404) return [];
       throw err;
     }
+  }
+
+  async charityName(mintAddress: string, timeoutMs = 2_500): Promise<string | null> {
+    const shares = await this.charityShares(mintAddress, timeoutMs);
+    // One organization is the name. Several organizations are not one name: callers that
+    // need each share use charityShares.
+    return shares.length === 1 ? shares[0]!.name : null;
   }
 
   /**
@@ -677,6 +688,146 @@ function clipCharityName(value: unknown): string | null {
   // A pubkey is the donate.gg config id, not the organization's name. A name needs a letter.
   if (!name || !/\p{L}/u.test(name) || looksLikeSolanaAddress(name)) return null;
   return name.length > MAX_CHARITY_NAME_CHARS ? name.slice(0, MAX_CHARITY_NAME_CHARS).trimEnd() : name;
+}
+
+/** One organization receiving a share of a charity coin's creator fee. */
+export interface PumpCharityShare {
+  name: string;
+  /** Basis points of the creator fee, when the payload gave a share. Null when it didn't. */
+  bps: number | null;
+  /** Wallet the share pays, when the payload gave one. Used to match a chain recipient. */
+  address: string | null;
+}
+
+function shortFeeAddress(address: string): string {
+  return address.length > 10 ? `${address.slice(0, 4)}…${address.slice(-4)}` : address;
+}
+
+function wholeBps(value: unknown): number | null {
+  const n =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^-?\d+$/.test(value.trim())
+        ? Number(value.trim())
+        : Number.NaN;
+  if (!Number.isInteger(n) || n <= 0 || n > 10_000) return null;
+  return n;
+}
+
+/** A share field as basis points. `share` of 0.99 is 99%. `percent` of 60 is 60%. */
+function readShareBps(row: Record<string, unknown>, keys?: readonly string[]): number | null {
+  const bpsKeys = keys ?? ["share_bps", "shareBps", "bps", "fee_bps", "feeBps"];
+  for (const key of bpsKeys) {
+    if (!(key in row)) continue;
+    const n = wholeBps(row[key]);
+    if (n != null) return n;
+  }
+  if (keys) return null;
+  for (const key of ["percent", "percentage", "pct"] as const) {
+    const n = row[key];
+    if (typeof n === "number" && n > 0 && n <= 100) return Math.round(n * 100);
+  }
+  const share = row.share;
+  if (typeof share !== "number" || !(share > 0)) return null;
+  if (share <= 1) return Math.round(share * 10_000);
+  if (share <= 100) return Math.round(share * 100);
+  return wholeBps(share);
+}
+
+function feeAddress(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const address = value.trim();
+  return looksLikeSolanaAddress(address) ? address : null;
+}
+
+/** One list entry: a name, or the address shortened when the payload named no organization. */
+function oneCharityShare(item: unknown): PumpCharityShare | null {
+  if (typeof item === "string") {
+    const name = clipCharityName(item);
+    if (name) return { name, bps: null, address: null };
+    const address = feeAddress(item);
+    return address ? { name: shortFeeAddress(address), bps: null, address } : null;
+  }
+  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+  const row = item as Record<string, unknown>;
+  const address = feeAddress(row.address) ?? feeAddress(row.wallet);
+  const name =
+    clipCharityName(row.charity_name) ??
+    clipCharityName(row.charityName) ??
+    clipCharityName(row.organization) ??
+    clipCharityName(row.name);
+  const label = name ?? (address ? shortFeeAddress(address) : null);
+  if (!label) return null;
+  return { name: label, bps: readShareBps(row), address };
+}
+
+function charityLists(coin: Record<string, unknown>): unknown[][] {
+  const lists: unknown[][] = [];
+  if (Array.isArray(coin.charity)) lists.push(coin.charity);
+  for (const key of ["charities", "charity_recipients", "charityRecipients"] as const) {
+    if (Array.isArray(coin[key])) lists.push(coin[key] as unknown[]);
+  }
+  // A fee-split list is only the charities when the coin is marked a charity coin.
+  // Otherwise it is some other split, and TokenSage's recipients are the source.
+  if (coin.is_charity === true || coin.isCharity === true) {
+    for (const key of ["shareholders", "fee_recipients", "feeRecipients"] as const) {
+      if (Array.isArray(coin[key])) lists.push(coin[key] as unknown[]);
+    }
+  }
+  return lists;
+}
+
+function sharesFromList(list: readonly unknown[]): PumpCharityShare[] {
+  const out: PumpCharityShare[] = [];
+  const seen = new Set<string>();
+  for (const item of list) {
+    const share = oneCharityShare(item);
+    if (!share) continue;
+    const key = `${share.address ?? ""}:${share.name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(share);
+    if (out.length >= 10) break;
+  }
+  return out;
+}
+
+function bpsOnSingleCharity(coin: Record<string, unknown>): number | null {
+  const direct = readShareBps(coin, ["charity_bps", "charityBps", "charity_share_bps", "charityShareBps"]);
+  if (direct != null) return direct;
+  if (coin.charity && typeof coin.charity === "object" && !Array.isArray(coin.charity)) {
+    return readShareBps(coin.charity as Record<string, unknown>);
+  }
+  return null;
+}
+
+/**
+ * Each charity a Pump.fun coin names, and the percent of the fee when the payload gave one.
+ * A list (`charities`, or `charity` as an array) is each entry. One name stays one entry.
+ * An address with no organization is shortened. Nothing is invented when the payload is silent.
+ */
+export function charitySharesFromPumpCoin(body: unknown): PumpCharityShare[] {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return [];
+  const coin = body as Record<string, unknown>;
+  if (coin.is_charity === false || coin.isCharity === false) return [];
+  let fromLists: PumpCharityShare[] = [];
+  for (const list of charityLists(coin)) {
+    const parsed = sharesFromList(list);
+    if (parsed.length) {
+      fromLists = parsed;
+      break;
+    }
+  }
+  if (fromLists.length > 1) return fromLists;
+  const single = charityNameFromPumpCoin(body);
+  if (single && fromLists.length === 1) {
+    return [
+      { name: single, bps: fromLists[0]!.bps ?? bpsOnSingleCharity(coin), address: fromLists[0]!.address },
+    ];
+  }
+  if (fromLists.length === 1) return fromLists;
+  if (!single) return [];
+  return [{ name: single, bps: bpsOnSingleCharity(coin), address: null }];
 }
 
 function launchDate(ms: unknown, now = Date.now()): Date | undefined {

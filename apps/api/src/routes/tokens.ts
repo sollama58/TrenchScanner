@@ -1442,7 +1442,7 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
   const analysis = row?.status === "failed" ? null : (row?.analysis as TokenSageAnalysis | null);
   const feeDestination = analysis?.market?.creator_fee?.destination;
   const feeWallets =
-    feeDestination === "wallet" || feeDestination === "split"
+    feeDestination === "wallet" || feeDestination === "split" || feeDestination === "holder_rewards"
       ? creatorFeeWalletAddresses(analysis?.market?.creator_fee, analysis?.market?.creator)
       : [];
   const [snapshots, labels, judged, roster, charityNames] = await Promise.all([

@@ -1,0 +1,145 @@
+import type { PumpCharityShare } from "@trenchscanner/core";
+
+const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+/** One fee recipient as a card shows it. `label` is a name or a shortened address, never blank. */
+export interface CardFeeRecipient {
+  label: string;
+  /** Basis points of the creator fee. Null when the read did not give a share. */
+  bps: number | null;
+}
+
+/** A TokenSage recipient before a Pump.fun charity name is applied. */
+export interface ParsedFeeRecipient extends CardFeeRecipient {
+  kind: string | null;
+  /** True when `label` is an organization or login, not a shortened address. */
+  named: boolean;
+  address: string | null;
+}
+
+function shortAddress(address: string): string {
+  return address.length > 10 ? `${address.slice(0, 4)}…${address.slice(-4)}` : address;
+}
+
+function text(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const name = value.replace(/\s+/g, " ").trim();
+  return name || null;
+}
+
+/** A display name. A pubkey is an address, not an organization. */
+function realName(value: unknown): string | null {
+  const name = text(value);
+  if (!name || !/\p{L}/u.test(name) || BASE58.test(name)) return null;
+  return name.length > 80 ? name.slice(0, 80).trimEnd() : name;
+}
+
+function wholeBps(value: unknown): number | null {
+  const n =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^-?\d+$/.test(value.trim())
+        ? Number(value.trim())
+        : Number.NaN;
+  if (!Number.isInteger(n) || n <= 0 || n > 10_000) return null;
+  return n;
+}
+
+function shareBps(row: Record<string, unknown>): number | null {
+  for (const key of ["share_bps", "shareBps", "bps"] as const) {
+    if (row[key] === 0 || row[key] === "0") return 0;
+    const n = wholeBps(row[key]);
+    if (n != null) return n;
+  }
+  const share = row.share;
+  if (share === 0) return 0;
+  if (typeof share !== "number" || !(share > 0)) return null;
+  if (share <= 1) return Math.round(share * 10_000);
+  if (share <= 100) return Math.round(share * 100);
+  return wholeBps(share);
+}
+
+/**
+ * TokenSage `market.creator_fee.recipients` as labels a card can show. A named field wins.
+ * A recipient with no name is the address shortened. A recipient with neither is left out,
+ * so the card never renders a blank name. A zero share is not a recipient.
+ */
+export function feeRecipientsFromAnalysis(value: unknown): ParsedFeeRecipient[] {
+  if (!Array.isArray(value)) return [];
+  const out: ParsedFeeRecipient[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    const bps = shareBps(row);
+    if (bps === 0) continue;
+    const address = typeof row.address === "string" && BASE58.test(row.address) ? row.address : null;
+    const name =
+      realName(row.name) ??
+      realName(row.charity_name) ??
+      realName(row.charityName) ??
+      realName(row.github_login) ??
+      realName(row.label);
+    const label = name ?? (address ? shortAddress(address) : null);
+    if (!label) continue;
+    const kind = text(row.kind);
+    out.push({ label, bps, kind: kind ? kind.slice(0, 20) : null, named: name !== null, address });
+    if (out.length >= 10) break;
+  }
+  return out;
+}
+
+export function cardFeeRecipients(list: readonly ParsedFeeRecipient[]): CardFeeRecipient[] {
+  return list.map(({ label, bps }) => ({ label, bps }));
+}
+
+function charitySlots(chain: readonly ParsedFeeRecipient[], used: ReadonlySet<number>): number[] {
+  return chain.flatMap((recipient, index) => {
+    if (used.has(index)) return [];
+    if (recipient.kind === "charity") return [index];
+    if (!recipient.named && recipient.kind !== "creator" && recipient.kind !== "github") return [index];
+    return [];
+  });
+}
+
+/**
+ * Pump.fun's charity names onto the chain recipients. An address match wins. Otherwise names
+ * fill charity slots only when the counts agree, so one name is never copied onto every
+ * recipient. Chain basis points stay when the read had them. No chain recipients yet: the
+ * pump list is the list.
+ */
+export function mergeCharityShares(
+  chain: readonly ParsedFeeRecipient[],
+  pump: readonly PumpCharityShare[],
+): CardFeeRecipient[] {
+  if (pump.length === 0) return cardFeeRecipients(chain);
+  if (chain.length === 0) return pump.map((share) => ({ label: share.name, bps: share.bps }));
+  const labels = chain.map((recipient) => recipient.label);
+  const bps = chain.map((recipient) => recipient.bps);
+  const used = new Set<number>();
+  const leftover: PumpCharityShare[] = [];
+  for (const share of pump) {
+    const index =
+      share.address === null
+        ? -1
+        : chain.findIndex(
+            (recipient, i) =>
+              !used.has(i) && recipient.address !== null && recipient.address === share.address,
+          );
+    if (index < 0) {
+      leftover.push(share);
+      continue;
+    }
+    used.add(index);
+    if (!chain[index]!.named) labels[index] = share.name;
+    if (bps[index] == null) bps[index] = share.bps;
+  }
+  const slots = charitySlots(chain, used);
+  if (leftover.length > 0 && leftover.length === slots.length) {
+    leftover.forEach((share, n) => {
+      const index = slots[n]!;
+      if (!chain[index]!.named) labels[index] = share.name;
+      if (bps[index] == null) bps[index] = share.bps;
+    });
+  }
+  return chain.map((_, index) => ({ label: labels[index]!, bps: bps[index] ?? null }));
+}

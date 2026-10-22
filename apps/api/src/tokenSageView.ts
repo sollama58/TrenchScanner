@@ -300,7 +300,6 @@ export function sageCreatorFee(fee: unknown): SageCreatorFee | null {
     .slice(0, MAX_FEE_RECIPIENTS)
     .map((r) => {
       const kind = clip(r.kind, 20) ?? "unresolved";
-      const own = r.is_creator === true || kind === "creator";
       const address = typeof r.address === "string" && BASE58.test(r.address) ? r.address : null;
       const github = typeof r.url === "string" && GITHUB_URL.test(r.url) ? r.url : null;
       const login = clip(r.github_login, 39);
@@ -310,26 +309,28 @@ export function sageCreatorFee(fee: unknown): SageCreatorFee | null {
           ? String(r.user_id)
           : null;
       const githubId = userId !== null && /^\d{1,15}$/.test(userId) ? userId : null;
+      const named = recipientName(r);
+      // A recipient with no organization is the address shortened. A blank label is not a name.
+      const label =
+        named ??
+        (login && /^[A-Za-z0-9-]+$/.test(login)
+          ? login
+          : githubId
+            ? `GitHub #${githubId}`
+            : address
+              ? `${address.slice(0, 4)}…${address.slice(-4)}`
+              : null);
       return {
         kind,
         share: num(r.share),
-        label: own
-          ? null
-          : login && /^[A-Za-z0-9-]+$/.test(login)
-            ? login
-            : githubId
-              ? `GitHub #${githubId}`
-              : address
-                ? `${address.slice(0, 4)}…${address.slice(-4)}`
-                : null,
-        url: own
-          ? null
-          : (github ??
-            (githubId
-              ? `https://api.github.com/user/${githubId}`
-              : address
-                ? `https://solscan.io/account/${address}`
-                : null)),
+        label,
+        url:
+          github ??
+          (githubId
+            ? `https://api.github.com/user/${githubId}`
+            : address
+              ? `https://solscan.io/account/${address}`
+              : null),
         lifetimeReceived: num(r.lifetime_received),
       };
     });
@@ -366,6 +367,16 @@ export function withSageCharityName<T extends { creatorFee: SageCreatorFee | nul
   const charityName = sageCharityLabel(name);
   if (!charityName) return read;
   return { ...read, creatorFee: { ...read.creatorFee, charityName } };
+}
+
+/** An organization on a fee recipient. A pubkey is the address, not the name. */
+function recipientName(recipient: object): string | null {
+  const row = recipient as { name?: unknown; charity_name?: unknown; charityName?: unknown };
+  for (const value of [row.name, row.charity_name, row.charityName]) {
+    const text = clip(value, 80);
+    if (text && /\p{L}/u.test(text) && !BASE58.test(text)) return text;
+  }
+  return null;
 }
 
 function clip(text: unknown, max = MAX_TEXT): string | null {

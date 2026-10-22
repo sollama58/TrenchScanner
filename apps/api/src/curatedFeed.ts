@@ -3,6 +3,7 @@ import {
   prisma,
   PumpFunClient,
   readCreatorFeeBps,
+  type PumpCharityShare,
   WIN_WINDOW_MINUTES,
   GOAL_WINDOW_MINUTES,
   TEN_X_WINDOW_MINUTES,
@@ -20,6 +21,13 @@ import {
   type OtcDeskFee,
   type OtcRewardCoin,
 } from "./feeDesks.js";
+import {
+  cardFeeRecipients,
+  feeRecipientsFromAnalysis,
+  mergeCharityShares,
+  type CardFeeRecipient,
+  type ParsedFeeRecipient,
+} from "./feeRecipients.js";
 
 /**
  * Turning a CuratedAlert into a feed card.
@@ -86,29 +94,52 @@ export interface CardCreatorFee {
   bps: number | null;
   /**
    * The charity's name for a Pump.fun charity coin (user ask 2026-10-21). Absent when the coin
-   * is not a charity coin, or Pump.fun's payload did not name one.
+   * is not a charity coin, or Pump.fun's payload did not name one. Several charities are named
+   * on `recipients` instead of being folded into this one string.
    */
   charityName?: string | null;
+  /**
+   * Each fee recipient: its name, or the address shortened when it has none, and its share of
+   * the fee in basis points when the read gave one.
+   */
+  recipients?: CardFeeRecipient[] | null;
 }
 
 /** A loaded charity name is kept this long: the organization on a coin does not move. */
 const CHARITY_NAME_OK_MS = 6 * 60 * 60_000;
 /** A coin that answered with no name is left alone this long, then asked again. */
 const CHARITY_NAME_MISS_MS = 10 * 60_000;
-const charityNameCache = new Map<string, { name: string | null; until: number }>();
+const charityNameCache = new Map<string, { shares: PumpCharityShare[]; until: number }>();
+
+/** One organization, for the heart's single-name sentence. Several stay on `recipients`. */
+function singleCharityName(shares: readonly PumpCharityShare[]): string | null {
+  return shares.length === 1 ? shares[0]!.name : null;
+}
 
 /**
  * Puts loaded charity names onto charity-fee rows (user ask 2026-10-21). Other destinations
- * are left as they were, and a blank name is not attached.
+ * are left as they were, and a blank name is not attached. `parsed` is the chain recipient
+ * list, so a Pump.fun name replaces a shortened address instead of being copied onto every
+ * recipient. `shares` is each organization and its percent.
  */
 export function applyCharityNames(
   fees: Map<string, CardCreatorFee>,
   names: ReadonlyMap<string, string | null>,
+  shares?: ReadonlyMap<string, PumpCharityShare[]>,
+  parsed?: ReadonlyMap<string, ParsedFeeRecipient[]>,
 ): void {
   for (const [mint, fee] of fees) {
     if (fee.destination !== "charity") continue;
-    const name = names.get(mint);
-    if (name) fees.set(mint, { ...fee, charityName: name });
+    const pump = shares?.get(mint) ?? [];
+    const chain = parsed?.get(mint) ?? [];
+    const merged = pump.length || chain.length ? mergeCharityShares(chain, pump) : [];
+    const name = names.get(mint) ?? singleCharityName(pump);
+    if (!name && merged.length === 0) continue;
+    fees.set(mint, {
+      ...fee,
+      ...(name ? { charityName: name } : {}),
+      ...(merged.length ? { recipients: merged } : {}),
+    });
   }
 }
 
@@ -117,14 +148,21 @@ export function applyCharityNames(
  * poll does not ask again. A transport failure or a budget hold is not remembered: the next
  * read can try. Never throws.
  */
-export async function charityNamesByMint(mints: readonly string[]): Promise<Map<string, string>> {
+/**
+ * Charity shares for these mints, from Pump.fun's single-coin endpoint, remembered so a feed
+ * poll does not ask again. A transport failure or a budget hold is not remembered: the next
+ * read can try. Never throws. An empty list is a coin that named no charity.
+ */
+export async function charitySharesByMint(
+  mints: readonly string[],
+): Promise<Map<string, PumpCharityShare[]>> {
   const now = Date.now();
-  const out = new Map<string, string>();
+  const out = new Map<string, PumpCharityShare[]>();
   const todo: string[] = [];
   for (const mint of mints) {
     const hit = charityNameCache.get(mint);
     if (hit && hit.until > now) {
-      if (hit.name) out.set(mint, hit.name);
+      if (hit.shares.length) out.set(mint, hit.shares);
       continue;
     }
     todo.push(mint);
@@ -134,12 +172,12 @@ export async function charityNamesByMint(mints: readonly string[]): Promise<Map<
   await Promise.all(
     todo.map(async (mint) => {
       try {
-        const name = await client.charityName(mint);
+        const shares = await client.charityShares(mint);
         charityNameCache.set(mint, {
-          name,
-          until: now + (name ? CHARITY_NAME_OK_MS : CHARITY_NAME_MISS_MS),
+          shares,
+          until: now + (shares.length ? CHARITY_NAME_OK_MS : CHARITY_NAME_MISS_MS),
         });
-        if (name) out.set(mint, name);
+        if (shares.length) out.set(mint, shares);
       } catch {
         // Pump.fun didn't answer. The cards still show the heart; the next read can try.
       }
@@ -153,6 +191,17 @@ export async function charityNamesByMint(mints: readonly string[]): Promise<Map<
       charityNameCache.delete(key);
       dropped += 1;
     }
+  }
+  return out;
+}
+
+/** The single charity name, when Pump.fun named exactly one. Several are on charitySharesByMint. */
+export async function charityNamesByMint(mints: readonly string[]): Promise<Map<string, string>> {
+  const shares = await charitySharesByMint(mints);
+  const out = new Map<string, string>();
+  for (const [mint, list] of shares) {
+    const name = singleCharityName(list);
+    if (name) out.set(mint, name);
   }
   return out;
 }
@@ -201,8 +250,18 @@ export async function creatorFeesByMint(
     otcDeskRoster({ wait: opts?.waitForDesk === true }).catch(() => new Map<string, OtcDeskFee>()),
   ]);
   const walletsOf = new Map<string, string[]>();
+  const parsedRecipients = new Map<string, ParsedFeeRecipient[]>();
   for (const r of rows) {
-    if (r.feeDestination !== "wallet" && r.feeDestination !== "split") continue;
+    const recipients = feeRecipientsFromAnalysis(jsonValue(r.feeRecipients));
+    if (recipients.length) parsedRecipients.set(r.mintAddress, recipients);
+    // Holder-reward coins pay a wallet too. Skipping them left an OTC desk's reward
+    // coins off the card, so the gift rendered with no token.
+    if (
+      r.feeDestination !== "wallet" &&
+      r.feeDestination !== "split" &&
+      r.feeDestination !== "holder_rewards"
+    )
+      continue;
     walletsOf.set(
       r.mintAddress,
       creatorFeeWalletAddresses(
@@ -221,15 +280,25 @@ export async function creatorFeesByMint(
   };
   for (const r of rows) {
     if (!r.feeDestination) continue;
+    const parsed = parsedRecipients.get(r.mintAddress) ?? [];
     out.set(r.mintAddress, {
       destination: r.feeDestination,
       summary: r.feeSummary,
       bps: readCreatorFeeBps(r.storedBps ?? r.analysisBps),
+      recipients: parsed.length ? cardFeeRecipients(parsed) : null,
       ...deskFields(r.mintAddress),
     });
   }
   const charityMints = [...out].filter(([, fee]) => fee.destination === "charity").map(([mint]) => mint);
-  if (charityMints.length > 0) applyCharityNames(out, await charityNamesByMint(charityMints));
+  if (charityMints.length > 0) {
+    const shares = await charitySharesByMint(charityMints);
+    const names = new Map<string, string>();
+    for (const [mint, list] of shares) {
+      const name = singleCharityName(list);
+      if (name) names.set(mint, name);
+    }
+    applyCharityNames(out, names, shares, parsedRecipients);
+  }
   for (const mint of unique) {
     if (out.has(mint)) continue;
     const desk = resolveOtcDeskFee(mint, walletsOf.get(mint), roster);

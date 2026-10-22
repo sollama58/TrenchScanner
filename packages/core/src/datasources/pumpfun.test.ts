@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   charityNameFromPumpCoin,
+  charitySharesFromPumpCoin,
   ipfsMetadataCid,
   LIST_BLOCK_BACKOFF_MS,
   parseLaunchMetadata,
@@ -189,6 +190,46 @@ describe("charityNameFromPumpCoin", () => {
     expect(charityNameFromPumpCoin({ charityName: hospital, charity: { name: "American Red Cross" } })).toBe(
       hospital,
     );
+  });
+
+  it("reads each charity in a list, with its percent, and shortens an unnamed address", () => {
+    const wallet = "CYoJ1Hs3Ldk7aa1wpZQ4KfqVQy9AzB9mT3x4Q8qWgyxC";
+    expect(
+      charitySharesFromPumpCoin({
+        is_charity: true,
+        charities: [
+          { name: "Red Cross", share_bps: 6000 },
+          { name: "Unicef", percent: 40 },
+        ],
+      }),
+    ).toEqual([
+      { name: "Red Cross", bps: 6000, address: null },
+      { name: "Unicef", bps: 4000, address: null },
+    ]);
+    expect(
+      charitySharesFromPumpCoin({
+        charity: [
+          { charity_name: hospital, share: 0.99 },
+          { address: wallet, bps: 100 },
+        ],
+      }),
+    ).toEqual([
+      { name: hospital, bps: 9900, address: null },
+      { name: "CYoJ…gyxC", bps: 100, address: wallet },
+    ]);
+    expect(
+      charitySharesFromPumpCoin({ is_charity: false, charities: [{ name: hospital, bps: 10_000 }] }),
+    ).toEqual([]);
+    expect(charitySharesFromPumpCoin({ charityName: hospital, charity_bps: 9900 })).toEqual([
+      { name: hospital, bps: 9900, address: null },
+    ]);
+    // One explicit name still wins over a different nested object, and keeps that object's share.
+    expect(
+      charitySharesFromPumpCoin({
+        charityName: hospital,
+        charity: { name: "American Red Cross", percent: 99 },
+      }),
+    ).toEqual([{ name: hospital, bps: 9900, address: null }]);
   });
 });
 
