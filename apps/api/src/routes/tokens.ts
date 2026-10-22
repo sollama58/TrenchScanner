@@ -227,6 +227,12 @@ export interface TokenChart {
    * ask a price provider for it.
    */
   solUsd?: number;
+  /**
+   * When the coin launched (ms; its first scan when the launch isn't known), so the chart can tell
+   * candles that start well after it and fill the stretch before from its backup source. Absent
+   * when the coin couldn't be read, and from older API builds.
+   */
+  launchAt?: number;
 }
 
 /**
@@ -1147,6 +1153,7 @@ export async function readTokenChart(
         marketCap: [],
         ...shareable(lastWallets.get(mintAddress) ?? noWallets),
       }),
+      merged.source === "stream",
     );
   }
   const token = found.token!;
@@ -1205,11 +1212,18 @@ export async function readTokenChart(
     tracked.length > 0
       ? await trackedMarks(token.id, marks.wallets, tracked, marks.saved).catch(() => marks.wallets)
       : marks.wallets;
+  // Short of the coin's history: the stream's candles alone (since a chart opened, 20 minutes at
+  // most), or a first candle well after the launch. The chart fills those from its backup source;
+  // chart health counts them, as they used to pass for healthy answers (charts audit CH-1).
+  const earliest = older?.[0]?.t ?? merged.candles?.[0]?.t;
+  const partial =
+    merged.source === "stream" || (earliest !== undefined && earliest >= launchAt + OLDER_AFTER_MS);
   return counted(
     "chart",
     withSolPrice({
       mint: mintAddress,
       candles: merged.candles,
+      launchAt,
       ...(older ? { older } : {}),
       ...sourceOf(merged),
       ...(pump.stale && merged.added === 0 && merged.candles ? { stale: true } : {}),
@@ -1220,6 +1234,7 @@ export async function readTokenChart(
       ...shareable(marks),
       wallets,
     }),
+    partial,
   );
 }
 
@@ -1231,13 +1246,20 @@ function withSolPrice<T extends object>(body: T): T & { solUsd?: number } {
 
 /**
  * Counts a candle answer for a coin on Token in chart health (chartHealth.ts): by its source, null
- * when it has no candles, and stale. A coin not on Token isn't counted: it never has candles here.
+ * when it has no candles, stale, and short of the coin's history (`partial`). A coin not on Token
+ * isn't counted: it never has candles here.
  */
 function counted<T extends { candles: unknown[] | null; source?: CandleSource; stale?: boolean }>(
   feed: string,
   answer: T,
+  partial = false,
 ): T {
-  recordCandleAnswer(feed, answer.candles ? (answer.source ?? "pumpfun") : null, answer.stale === true);
+  recordCandleAnswer(
+    feed,
+    answer.candles ? (answer.source ?? "pumpfun") : null,
+    answer.stale === true,
+    partial && answer.candles !== null,
+  );
   return answer;
 }
 

@@ -305,6 +305,8 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
       });
       const body = (await get(MINT)).json<TokenChart>();
       expect(body.source).toBe("mixed");
+      // The launch (here the coin's first scan) rides along, for the chart's backup.
+      expect(typeof body.launchAt).toBe("number");
       expect(body.candles?.map((k) => k.t)).toEqual([60_000, 120_000, 180_000]);
     });
   });

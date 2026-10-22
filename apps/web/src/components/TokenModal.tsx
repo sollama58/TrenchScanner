@@ -117,7 +117,7 @@ import { spendBalancesShown, useWalletBalance } from "../walletBalance";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
 import { lagsLead, preferLiveChartNow, scanReplacesMarketCap, type ChartNow } from "../marketClock";
 import { SectionBoundary } from "./SectionBoundary";
-import { useBackupCandles } from "../backupCandles";
+import { useBackupCandles, wantsBackup, withBackup } from "../backupCandles";
 import { reportClientError } from "../clientErrors";
 import { guessPath, pathFrom, type PathGuess, type PathStep } from "../pricePathing";
 import {
@@ -197,6 +197,10 @@ interface TokenChart {
   holderEntries?: Record<string, HolderEntry>;
   /** SOL's USD price already kept by the API. Absent when it has none in hand. */
   solUsd?: number;
+  /** Where `candles` came from (apps/api/src/streamCandles.ts CandleSource); absent from older API builds. */
+  source?: "pumpfun" | "stream" | "mixed";
+  /** When the coin launched (ms); absent from older API builds. */
+  launchAt?: number;
 }
 
 /** Mirrors apps/api/src/tokenChart.ts MarkedWallet. */
@@ -2496,20 +2500,20 @@ export function ChartCard({
 }) {
   const api = useTokenApi(card.token.mintAddress);
   // A second source of candles (user asks 2026-10-19): when the API has none for the coin (Pump.fun
-  // down or rate limited) or can't be reached, the browser reads GeckoTerminal's minute candles itself.
-  // Never for an answer that is the API's to give (a lookup to pay for, access ended, no such coin):
-  // only when it had no candles, or couldn't answer at all.
-  const backup = useBackupCandles(
-    card.token.mintAddress,
-    served ? !served.candles?.length : !!error && !(error instanceof ApiError && error.status < 500),
-    card.token.pairAddress ?? null,
-  );
+  // down or rate limited), only the stream's since a chart opened, or none from near the launch, or
+  // can't be reached, the browser reads GeckoTerminal's minute candles itself (wantsBackup) and
+  // joins them to the API's (withBackup). Never for an answer that is the API's to give (a lookup to
+  // pay for, access ended, no such coin).
+  const backupWanted = served
+    ? wantsBackup(served)
+    : !!error && !(error instanceof ApiError && error.status < 500);
+  const backup = useBackupCandles(card.token.mintAddress, backupWanted, card.token.pairAddress ?? null);
   const data = useMemo<TokenChart | null>(() => {
-    if (!backup || served?.candles?.length) return served;
-    return served
-      ? { ...served, candles: backup }
-      : { mint: card.token.mintAddress, candles: backup, marketCap: [] };
-  }, [served, backup, card.token.mintAddress]);
+    if (!backup || !backupWanted) return served;
+    if (!served) return { mint: card.token.mintAddress, candles: backup, marketCap: [] };
+    const candles = withBackup(served.candles, served.source, backup);
+    return candles === served.candles ? served : { ...served, candles };
+  }, [served, backup, backupWanted, card.token.mintAddress]);
   const fromBackup = data !== served;
   const look = useAppearance();
   // The candle size the chart wants (TradingChart onTimeframe), which decides how fine the candles

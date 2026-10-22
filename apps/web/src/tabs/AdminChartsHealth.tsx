@@ -14,6 +14,8 @@ interface ChartsHealthReport {
     bySource: Record<string, number>;
     null: number;
     stale: number;
+    /** Short of the coin's history (stream only, or starting well after launch); absent from older API builds. */
+    partial?: number;
     nullOrStaleShare: number | null;
   };
   liveTail: { answers: number; bySource: Record<string, number> };
@@ -56,7 +58,7 @@ export function ChartsHealth() {
               <Kpi
                 label="Candles null or stale"
                 value={h.candles.nullOrStaleShare === null ? "–" : pct(h.candles.nullOrStaleShare * 100)}
-                sub={`${n(h.candles.answers)} answers · ${n(h.candles.null)} null · ${n(h.candles.stale)} stale`}
+                sub={`${n(h.candles.answers)} answers · ${n(h.candles.null)} null · ${n(h.candles.stale)} stale${h.candles.partial !== undefined ? ` · ${n(h.candles.partial)} partial` : ""}`}
                 tone={
                   h.candles.nullOrStaleShare !== null && h.candles.nullOrStaleShare >= 0.1 ? "warn" : "ok"
                 }
