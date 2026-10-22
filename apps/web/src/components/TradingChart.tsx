@@ -17,8 +17,18 @@ import {
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { useAppearance } from "../appearance";
-import { chartEventsToDraw, type ChartEventKind } from "../chartEvents";
+import { setAppearance, useAppearance } from "../appearance";
+import {
+  CHART_INDICATOR_IDS,
+  chartColorReference,
+  chartFlagPrice,
+  chartFlagsToDraw,
+  eventEmphasisColor,
+  eventFlagMetrics,
+  horizontalFlagPrices,
+  type ChartEventKind,
+  type ChartIndicatorId,
+} from "../chartEvents";
 import { change, signedPct, usd } from "../format";
 import { flowApartFromCandle } from "../marketClock";
 import { ClockIcon } from "./Icons";
@@ -98,8 +108,8 @@ export interface ChartTrade {
 /** How the chart draws the market cap: a line (the default) or candles. */
 export type ChartKind = "line" | "candles";
 
-/** The indicators the toolbar turns on and off (HolDEX's set). */
-type Indicator = "vol" | "ma20" | "ema50" | "bb" | "rsi";
+/** The indicators the toolbar turns on and off (HolDEX's set). Ids match chartEvents.ts. */
+type Indicator = ChartIndicatorId;
 const INDICATORS: { id: Indicator; label: string; title: string }[] = [
   { id: "vol", label: "Vol", title: "Volume bars" },
   { id: "ma20", label: "MA 20", title: "20-candle simple moving average" },
@@ -112,66 +122,8 @@ const INDICATORS: { id: Indicator; label: string; title: string }[] = [
 const PIC_TRIES = 4;
 const PIC_RETRY_MS = 15_000;
 
-/** Per-device conveniences: the candle size, log scale, and the indicators shown. */
-const TIMEFRAME_KEY = "ts.chartTimeframe";
-const LOG_SCALE_KEY = "ts.chartLogScale";
-const INDICATORS_KEY = "ts.chartIndicators";
+/** Drawings are per coin on this device. Whether they show is the appearance. */
 const DRAWINGS_KEY = "ts.chartDrawings";
-const FIB_LEVELS_KEY = "ts.chartFibLevels";
-const TREND_EXTEND_KEY = "ts.chartTrendExtend";
-
-function readFibLevels(): number[] {
-  try {
-    const raw: unknown = JSON.parse(localStorage.getItem(FIB_LEVELS_KEY) ?? "null");
-    if (!Array.isArray(raw)) return [...FIB_LEVELS];
-    const on = FIB_LEVELS.filter((lv) => raw.some((n) => typeof n === "number" && Math.abs(n - lv) < 1e-6));
-    return on.length ? [...on] : [...FIB_LEVELS];
-  } catch {
-    return [...FIB_LEVELS];
-  }
-}
-function readTrendExtend(): boolean {
-  try {
-    return localStorage.getItem(TREND_EXTEND_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function readTimeframe(): number | null {
-  try {
-    const v = localStorage.getItem(TIMEFRAME_KEY);
-    if (v === null || v === "auto") return null;
-    const ms = Number(v);
-    return TIMEFRAMES.some((f) => f.ms === ms) ? ms : null;
-  } catch {
-    return null;
-  }
-}
-function keep(key: string, value: string | null): void {
-  try {
-    if (value === null) localStorage.removeItem(key);
-    else localStorage.setItem(key, value);
-  } catch {
-    // Private windows: the pick holds for this view only.
-  }
-}
-function readIndicators(): Set<Indicator> {
-  try {
-    const v: unknown = JSON.parse(localStorage.getItem(INDICATORS_KEY) ?? '["vol"]');
-    if (Array.isArray(v)) return new Set(v.filter((x): x is Indicator => INDICATORS.some((i) => i.id === x)));
-  } catch {
-    // Unreadable: the default.
-  }
-  return new Set(["vol"]);
-}
-function readLog(): boolean {
-  try {
-    return localStorage.getItem(LOG_SCALE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
 
 /** The site's phone breakpoint (styles.css). */
 const PHONE_QUERY = "(max-width: 640px)";
@@ -391,15 +343,17 @@ export function TradingChart({
   /** How the crosshair's time reads, set on each render (the chart's formatter reads it). */
   const fmtRef = useRef({ seconds: false, dated: false });
 
-  // Customize › Chart events: a kind that is off is not drawn, and only-first keeps the earliest.
+  // Customize › Chart events. Vertical flags and horizontal price lines share this list: a kind
+  // that is off, or the master switch, drops the flag from both.
   const look = useAppearance();
-  const shownEvents = useMemo(
-    () => chartEventsToDraw(events, { kinds: look.chartEventKinds, first: look.chartEventFirst }),
-    [events, look.chartEventKinds, look.chartEventFirst],
+  const eventPrefs = useMemo(
+    () => ({ on: look.chartEvents, kinds: look.chartEventKinds, first: look.chartEventFirst }),
+    [look.chartEvents, look.chartEventKinds, look.chartEventFirst],
   );
-  const [picked, setPicked] = useState<number | null>(readTimeframe);
-  const [log, setLog] = useState(readLog);
-  const [ind, setInd] = useState(readIndicators);
+  const shownEvents = useMemo(() => chartFlagsToDraw(events, eventPrefs), [events, eventPrefs]);
+  const picked = look.chartTimeframeMs;
+  const log = look.chartLogScale;
+  const ind = useMemo(() => new Set(look.chartIndicators), [look.chartIndicators]);
   const viewMs = Math.max(1, extent.t1 - extent.t0);
   const plotW = Math.max(200, width - 64);
   const autoMs = autoTimeframe(viewMs, plotW);
@@ -415,20 +369,27 @@ export function TradingChart({
   const marks = useMemo(() => atLiveEnd(marksIn, live ? slotsEnd : null), [marksIn, live, slotsEnd]);
   const trades = useMemo(() => atLiveEnd(tradesIn, live ? slotsEnd : null), [tradesIn, live, slotsEnd]);
 
-  // The baseline (#835): the trader's entry while they hold the coin, else the earliest event
-  // (a hidden screen pass still counts, so a graduated coin stays coloured from the pass) at its
-  // own market cap or the chart's then, else where the chart starts. The flag itself follows
-  // shownEvents.
-  const lead = useMemo(
-    () => events.reduce<ChartEvent | undefined>((a, e) => (a === undefined || e.t < a.t ? e : a), undefined),
-    [events],
+  // Horizontal price flags: the same events as the vertical flags. A kind that is off is in
+  // neither. The colour baseline and the "vs" readout (#835) are separate: a hidden screen pass
+  // still colours the line, and the readout still names it, with no flag and no price line.
+  const colorLead = useMemo(() => chartColorReference(events), [events]);
+  const priceFlags = useMemo(
+    () =>
+      horizontalFlagPrices(shownEvents, (e) =>
+        slots && e.t >= slots.start ? (slotCandle(slots, slotIndex(slots, e.t))?.c ?? null) : null,
+      ),
+    [shownEvents, slots],
   );
   const ref = useMemo(() => {
     if (entry !== null && entry > 0) return { v: entry, label: "your entry" };
-    if (!slots || !lead) return null;
-    const v = lead.mcap ?? (lead.t >= slots.start ? slotCandle(slots, slotIndex(slots, lead.t))?.c : null);
-    return v && v > 0 ? { v, label: lead.label.toLowerCase() } : null;
-  }, [entry, lead, slots]);
+    if (!colorLead) return null;
+    const close =
+      slots && colorLead.t >= slots.start
+        ? (slotCandle(slots, slotIndex(slots, colorLead.t))?.c ?? null)
+        : null;
+    const v = chartFlagPrice(colorLead.mcap, close);
+    return v !== null ? { v, label: colorLead.label.toLowerCase() } : null;
+  }, [entry, colorLead, slots]);
   const base = ref?.v ?? slots?.bars[0]?.o ?? 0;
 
   // ── The chart ──────────────────────────────────────────────────────────
@@ -437,9 +398,9 @@ export function TradingChart({
     vol: ISeriesApi<"Histogram"> | null;
     lines: ISeriesApi<"Line">[];
     rsi: ISeriesApi<"Line"> | null;
-    baseLine: IPriceLine | null;
+    priceLines: IPriceLine[];
     entryLine: IPriceLine | null;
-  }>({ main: null, vol: null, lines: [], rsi: null, baseLine: null, entryLine: null });
+  }>({ main: null, vol: null, lines: [], rsi: null, priceLines: [], entryLine: null });
   const overlayRef = useRef<ChartOverlay | null>(null);
   const [hover, setHover] = useState<number | null>(null);
   /** The mark under the mouse, or tapped (its stack: the mark and those folded into it). */
@@ -482,8 +443,8 @@ export function TradingChart({
     () => new Drawings(`${DRAWINGS_KEY}.${mint}`, () => setDrawTick((n) => n + 1)),
     [mint],
   );
-  const [fibOn, setFibOn] = useState(readFibLevels);
-  const [extendTrend, setExtendTrend] = useState(readTrendExtend);
+  const fibOn = look.chartFibLevels;
+  const extendTrend = look.chartTrendExtend;
   useEffect(() => {
     drawings.setFibLevels(fibOn);
   }, [drawings, fibOn]);
@@ -554,7 +515,7 @@ export function TradingChart({
       el.removeEventListener("wheel", onWheel);
       chart.remove();
       chartRef.current = null;
-      series.current = { main: null, vol: null, lines: [], rsi: null, baseLine: null, entryLine: null };
+      series.current = { main: null, vol: null, lines: [], rsi: null, priceLines: [], entryLine: null };
       overlayRef.current = null;
     };
   }, []);
@@ -569,7 +530,7 @@ export function TradingChart({
     s.lines = [];
     s.vol = null;
     s.rsi = null;
-    s.baseLine = null;
+    s.priceLines = [];
     s.entryLine = null;
     try {
       while (chart.panes().length > 1) chart.removePane(chart.panes().length - 1);
@@ -778,20 +739,33 @@ export function TradingChart({
     lineData.forEach((d, i) => s.lines[i]?.setData(asLine(d)));
     s.rsi?.setData(asLine(rsi(closes, 14)));
 
-    // The baseline and the trader's entry, as lines across the plot with their tags on the axis.
-    if (s.baseLine) s.main.removePriceLine(s.baseLine);
+    // Horizontal price flags: the same events as the vertical flags. A kind that is off is not
+    // here. The earliest shown one takes the lead colour; the rest stay quiet. Labels follow
+    // the same switch as the flags along the top.
+    for (const line of s.priceLines) s.main.removePriceLine(line);
     if (s.entryLine) s.main.removePriceLine(s.entryLine);
-    s.baseLine = null;
+    s.priceLines = [];
     s.entryLine = null;
-    if (ref && !(entry !== null && entry > 0))
-      s.baseLine = s.main.createPriceLine({
-        price: ref.v,
-        color: colors.muted,
-        lineWidth: 1,
-        lineStyle: LineStyle.Dotted,
-        axisLabelVisible: true,
-        title: phone ? "" : ref.label,
-      });
+    const emphasis = eventEmphasisColor(look.chartEventEmphasis, {
+      brand: colors.overlay.eventLead,
+      win: colors.up,
+      loss: colors.down,
+      mine: colors.series1,
+    });
+    const flagWidth = eventFlagMetrics(look.chartEventScale).line;
+    priceFlags.forEach((flag, i) => {
+      const lead = emphasis !== null && i === 0;
+      s.priceLines.push(
+        s.main!.createPriceLine({
+          price: flag.price,
+          color: lead ? emphasis : colors.muted,
+          lineWidth: flagWidth,
+          lineStyle: i === 0 ? LineStyle.Dotted : LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: look.chartEventLabels && !phone ? flag.event.label : "",
+        }),
+      );
+    });
     if (entry !== null && entry > 0)
       s.entryLine = s.main.createPriceLine({
         price: entry,
@@ -827,7 +801,20 @@ export function TradingChart({
       if (shift !== 0 || n !== prev.n) ts.setVisibleLogicalRange(next);
     }
     lastData.current = { start: slots.start, n, tf: slots.tfMs, scope };
-  }, [slots, built, base, ref, entry, phone, opened, kind]);
+  }, [
+    slots,
+    built,
+    base,
+    entry,
+    phone,
+    opened,
+    kind,
+    priceFlags,
+    look.chartEventLabels,
+    look.chartEventScale,
+    look.chartEventEmphasis,
+    colors,
+  ]);
 
   // The overlay: the marks, events, path and drawings, placed through the chart's own scales.
   const closeAtEnd = kind === "line";
@@ -887,11 +874,15 @@ export function TradingChart({
           chartRef.current?.paneSize(0).height ?? height,
         ),
       bubbleSteps,
-      // The flags go under the readout's lines.
+      // The flags go under the readout's lines. Lead colour matches the horizontal price line.
       flagTop: phone ? 34 : 20,
-      events: [...shownEvents]
-        .sort((a, b) => a.t - b.t)
-        .map((e, i) => ({ t: e.t, label: e.label, lead: i === 0 })),
+      events: shownEvents.map((e, i) => ({
+        t: e.t,
+        label: e.label,
+        lead: look.chartEventEmphasis !== "off" && i === 0,
+      })),
+      eventLabels: look.chartEventLabels,
+      eventScale: eventFlagMetrics(look.chartEventScale).factor,
       marks,
       trades,
       dexInfo: dexInfo ? (atLiveEnd([dexInfo], live ? slotsEnd : null)[0] ?? null) : null,
@@ -904,10 +895,21 @@ export function TradingChart({
       markShape,
       markStem,
       markGap: 1,
-      drawings,
+      // Hidden drawings stay on this device. A tool in hand still previews, or the click would
+      // land on nothing.
+      drawings: look.chartShowDrawings || drawings.tool || drawings.placing ? drawings : null,
       drawScale: dScale,
       label: axisUsd,
-      colors: colors.overlay,
+      colors: {
+        ...colors.overlay,
+        eventLead:
+          eventEmphasisColor(look.chartEventEmphasis, {
+            brand: colors.overlay.eventLead,
+            win: colors.up,
+            loss: colors.down,
+            mine: colors.series1,
+          }) ?? colors.overlay.event,
+      },
     };
     o.update();
   });
@@ -1014,16 +1016,12 @@ export function TradingChart({
     return () => document.removeEventListener("keydown", onKey, true);
   }, [busy, drawings, drawTick]);
 
-  const pickTimeframe = (ms: number | null) => {
-    setPicked(ms);
-    keep(TIMEFRAME_KEY, ms === null ? "auto" : String(ms));
-  };
+  const pickTimeframe = (ms: number | null) => setAppearance({ chartTimeframeMs: ms });
   const toggle = (id: Indicator) => {
-    const next = new Set(ind);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setInd(next);
-    keep(INDICATORS_KEY, JSON.stringify([...next]));
+    const has = ind.has(id);
+    setAppearance({
+      chartIndicators: CHART_INDICATOR_IDS.filter((k) => (k === id ? !has : ind.has(k))),
+    });
   };
   const reset = () => {
     chartRef.current?.priceScale("right").applyOptions({ autoScale: true });
@@ -1095,18 +1093,19 @@ export function TradingChart({
       : null;
   const showFib = tool === "fib" || drawings.selectedType === "fib";
   const showExtend = tool === "trend" || drawings.selectedType === "trend";
+  // Starting a drawing shows the saved ones. Otherwise the new line would vanish when the tool
+  // finished, and the click would look like it did nothing.
+  const pickTool = (t: DrawTool) => {
+    drawings.setTool(t);
+    if (drawings.tool && !look.chartShowDrawings) setAppearance({ chartShowDrawings: true });
+  };
   const toggleFib = (lv: number) => {
     const has = fibOn.some((n) => Math.abs(n - lv) < 1e-6);
     const next = has ? fibOn.filter((n) => Math.abs(n - lv) >= 1e-6) : [...fibOn, lv].sort((a, b) => a - b);
     if (!next.length) return;
-    setFibOn(next);
-    keep(FIB_LEVELS_KEY, JSON.stringify(next));
+    setAppearance({ chartFibLevels: next });
   };
-  const toggleExtend = () => {
-    const next = !extendTrend;
-    setExtendTrend(next);
-    keep(TREND_EXTEND_KEY, next ? "1" : null);
-  };
+  const toggleExtend = () => setAppearance({ chartTrendExtend: !extendTrend });
   const plotH = height + TIME_AXIS_PX + (ind.has("rsi") ? Math.round(height * 0.3) : 0);
   const secondNotice = oneSecondChartNotice(tfMs, candles.length, slots !== null);
 
@@ -1115,7 +1114,7 @@ export function TradingChart({
       <DrawButton
         tool="trend"
         active={tool}
-        onPick={(t) => drawings.setTool(t)}
+        onPick={pickTool}
         title="Trendline: click two points"
       >
         <line x1="5" y1="19" x2="19" y2="5" />
@@ -1125,7 +1124,7 @@ export function TradingChart({
       <DrawButton
         tool="level"
         active={tool}
-        onPick={(t) => drawings.setTool(t)}
+        onPick={pickTool}
         title={phone ? "Price level: tap the price" : "Price level: click the price"}
       >
         <line x1="3" y1="12" x2="21" y2="12" />
@@ -1134,7 +1133,7 @@ export function TradingChart({
       <DrawButton
         tool="fib"
         active={tool}
-        onPick={(t) => drawings.setTool(t)}
+        onPick={pickTool}
         title="Fibonacci retracement: click the start, then the end of a move"
       >
         <line x1="3" y1="4" x2="21" y2="4" />
@@ -1211,16 +1210,24 @@ export function TradingChart({
         className={`tc-chip${log ? " on" : ""}`}
         aria-pressed={log}
         title="Log scale: a big run doesn't flatten what came before it"
-        onClick={() => {
-          setLog(!log);
-          keep(LOG_SCALE_KEY, log ? null : "1");
-        }}
+        onClick={() => setAppearance({ chartLogScale: !log })}
       >
         Log
         {fold && <small>Log scale: a big run doesn&apos;t flatten what came before it</small>}
       </button>
+      <button
+        type="button"
+        className={`tc-chip${look.chartShowDrawings ? " on" : ""}`}
+        aria-pressed={look.chartShowDrawings}
+        title="Show trendlines, price levels and Fibonacci drawings"
+        onClick={() => setAppearance({ chartShowDrawings: !look.chartShowDrawings })}
+      >
+        Draw
+        {fold && <small>Show trendlines, price levels and Fibonacci drawings</small>}
+      </button>
     </>
   );
+  const toolCount = ind.size + (log ? 1 : 0) + (look.chartShowDrawings ? 1 : 0);
 
   return (
     <div className={`tc${phone ? " phone" : ""}${fold ? " fold" : ""}`} ref={boxRef}>
@@ -1298,14 +1305,14 @@ export function TradingChart({
             <div className="tc-menu-wrap" ref={menuRef}>
               <button
                 type="button"
-                className={`tc-chip tc-menu-btn${ind.size > 0 || log ? " on" : ""}`}
+                className={`tc-chip tc-menu-btn${toolCount > 0 ? " on" : ""}`}
                 aria-expanded={menu}
                 aria-haspopup="true"
-                title="Indicators and scale"
+                title="Indicators, scale and drawings"
                 onClick={() => setMenu(!menu)}
               >
                 Indicators
-                {ind.size + (log ? 1 : 0) > 0 && <span className="num">{ind.size + (log ? 1 : 0)}</span>}
+                {toolCount > 0 && <span className="num">{toolCount}</span>}
                 <svg
                   width="10"
                   height="10"
@@ -1708,6 +1715,8 @@ function emptyOverlay(): OverlayState {
     pic: () => null,
     events: [],
     flagTop: 20,
+    eventLabels: true,
+    eventScale: 1,
     marks: [],
     trades: [],
     dexInfo: null,

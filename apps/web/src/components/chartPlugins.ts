@@ -199,6 +199,10 @@ export interface OverlayState {
   events: OverlayEvent[];
   /** How far down the plot the events' flags start (px), clear of the readout. */
   flagTop: number;
+  /** The words on each flag. Off draws the vertical line only. */
+  eventLabels: boolean;
+  /** Size of those flags, as a factor of the medium size (chartEvents.ts eventFlagMetrics). */
+  eventScale: number;
   marks: WalletMark[];
   trades: OverlayTrade[];
   /** DexScreener token-info payment, when the orders response gave a time. */
@@ -273,16 +277,18 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
     ctx.textBaseline = "middle";
 
     // The alert and model lines, dashed top to bottom, each flagged along the top; flags that
-    // would touch move down a row.
+    // would touch move down a row. The same events the horizontal price lines use. Labels can
+    // be off; the line stays. Size is the reader's (medium is today's).
+    const factor = s.eventScale > 0 && Number.isFinite(s.eventScale) ? s.eventScale : 1;
     const rows: number[] = [];
-    ctx.font = `600 ${Math.round(10.5 * vr)}px ${c.font}`;
+    ctx.font = `600 ${Math.round(10.5 * factor * vr)}px ${c.font}`;
     const events = s.events
       .map((e) => ({ e, x: s.x(e.t) }))
       .filter((e): e is { e: OverlayEvent; x: number } => e.x !== null && e.x >= 0 && e.x <= width)
       .sort((a, b) => a.x - b.x);
     for (const { e, x } of events) {
       ctx.strokeStyle = e.lead ? c.eventLead : c.event;
-      ctx.lineWidth = (e.lead ? 1.5 : 1) * hr;
+      ctx.lineWidth = (e.lead ? 1.5 : 1) * factor * hr;
       ctx.setLineDash([4 * hr, 4 * hr]);
       ctx.beginPath();
       ctx.moveTo(Math.round(x * hr) + 0.5, 0);
@@ -290,23 +296,30 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
       ctx.stroke();
     }
     ctx.setLineDash([]);
-    for (const { e, x } of events) {
-      const w = ctx.measureText(e.label).width / hr + 12;
-      const left = Math.min(width - w - 2, Math.max(2, x - w / 2));
-      let row = rows.findIndex((end) => end + 4 <= left);
-      if (row < 0) row = rows.length < 3 ? rows.length : rows.indexOf(Math.min(...rows));
-      rows[row] = left + w;
-      const y = s.flagTop + row * 19;
-      ctx.fillStyle = e.lead ? c.eventLead : c.labelBg;
-      roundRect(ctx, left * hr, y * vr, w * hr, 16 * vr, 8 * hr);
-      ctx.fill();
-      if (!e.lead) {
-        ctx.strokeStyle = c.event;
-        ctx.lineWidth = hr;
-        ctx.stroke();
+    if (s.eventLabels) {
+      const pillH = 16 * factor;
+      const rowH = 19 * factor;
+      const padX = 12 * factor;
+      const textPad = 6 * factor;
+      for (const { e, x } of events) {
+        if (!e.label) continue;
+        const w = ctx.measureText(e.label).width / hr + padX;
+        const left = Math.min(width - w - 2, Math.max(2, x - w / 2));
+        let row = rows.findIndex((end) => end + 4 <= left);
+        if (row < 0) row = rows.length < 3 ? rows.length : rows.indexOf(Math.min(...rows));
+        rows[row] = left + w;
+        const y = s.flagTop + row * rowH;
+        ctx.fillStyle = e.lead ? c.eventLead : c.labelBg;
+        roundRect(ctx, left * hr, y * vr, w * hr, pillH * vr, 8 * factor * hr);
+        ctx.fill();
+        if (!e.lead) {
+          ctx.strokeStyle = c.event;
+          ctx.lineWidth = hr;
+          ctx.stroke();
+        }
+        ctx.fillStyle = e.lead ? c.page : c.eventText;
+        ctx.fillText(e.label, (left + textPad) * hr, (y + pillH / 2 + 0.5 * factor) * vr);
       }
-      ctx.fillStyle = e.lead ? c.page : c.eventText;
-      ctx.fillText(e.label, (left + 6) * hr, (y + 8.5) * vr);
     }
 
     // The predicted path: its band, the dotted guess and the zone's edge.
@@ -505,7 +518,7 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
           ctx.globalAlpha = 1;
           ctx.fillStyle = m.side === "buy" ? c.page : k.ink;
           ctx.font = `750 ${Math.round((r >= 8 ? 9.5 : 8) * vr)}px ${c.font}`;
-          ctx.fillText(m.letter, x * hr, (y + 0.5) * vr);
+          ctx.fillText(m.letter || "?", x * hr, (y + 0.5) * vr);
         }
       }
       const extra = bubbleMoreCount(p);

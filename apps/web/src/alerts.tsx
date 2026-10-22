@@ -57,7 +57,7 @@ export function loadSettings(force = false): Promise<void> {
       settings = savesInFlight > 0 && settings ? { ...s, alerts: settings.alerts } : s;
       loadedAt = Date.now();
       // The feed's look rides along; a change made on this device since the request wins.
-      adoptAppearance(s.appearance, lookVersion);
+      adoptAppearance(s.appearance, lookVersion, s.appearanceKeys);
       adoptHiddenTokens(s.hiddenTokens, hiddenVersion);
       adoptScopeSettings(s.scopeSettings, scopeVersion);
       emit();

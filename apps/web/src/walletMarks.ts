@@ -142,7 +142,7 @@ const isTrackedOnly = (w: MarkSource) => !!w.tracked && !w.tags.includes("kol");
 export function markLetter(w: MarkSource, kind: MarkKind): string {
   if (kind === "kol" && isTrackedOnly(w)) return "T";
   if ((kind === "funded" || kind === "probable") && w.side?.tracked === "tracked") return "T";
-  return MARK_KINDS.find((k) => k.kind === kind)!.letter;
+  return MARK_KINDS.find((k) => k.kind === kind)?.letter ?? "?";
 }
 
 /** One labeled wallet's trade, as the chart marks it. */

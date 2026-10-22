@@ -1749,8 +1749,9 @@ function ProCustomize({
   return (
     <div className="appearance-controls pro-customize">
       <p className="faint small">
-        Changes show here right away. Layout, chart and map choices are saved to your account; column sizes,
-        chart indicators and trade buttons are kept in this browser.
+        Changes show here right away. Layout, chart and map choices are saved to your account. Column sizes
+        and trade buttons stay in this browser. Drawings on a coin stay on this device; whether they show
+        is saved with the chart.
       </p>
       <fieldset>
         <legend>Layout</legend>
@@ -1796,7 +1797,8 @@ function ProCustomize({
         <legend>Chart</legend>
         <ChartControls />
         <p className="faint small check-hint">
-          Candle size, indicators, log scale and drawings are on the chart&apos;s own toolbar.
+          Candle size, indicators, log scale and drawings are here and on the chart&apos;s toolbar. Both
+          save to your account. A drawing&apos;s points stay on this device, for that coin.
         </p>
         <WalletMarksPicker />
         <ChartEventsPicker />
