@@ -17,6 +17,8 @@ describe.skipIf(!dbAvailable)("runCleanupJob: Mobile Connect debris", () => {
   const env = {
     SNAPSHOT_RETENTION_DAYS: 3650,
     PRICE_PATH_RETENTION_DAYS: 21,
+    CANDLE_FINE_RETENTION_DAYS: 30,
+    CANDLE_RETENTION_DAYS: 90,
     CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
     STALE_TOKEN_RETENTION_DAYS: 3650,
   } as never;
@@ -113,6 +115,8 @@ describe.skipIf(!dbAvailable)("runCleanupJob: stale tokens vs the curated record
   const env = {
     SNAPSHOT_RETENTION_DAYS: 3650,
     PRICE_PATH_RETENTION_DAYS: 21,
+    CANDLE_FINE_RETENTION_DAYS: 30,
+    CANDLE_RETENTION_DAYS: 90,
     CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
     STALE_TOKEN_RETENTION_DAYS: 90,
   } as never;
@@ -204,6 +208,8 @@ describe.skipIf(!dbAvailable)("runCleanupJob: AI reviewer ledger", () => {
   const env = {
     SNAPSHOT_RETENTION_DAYS: 3650,
     PRICE_PATH_RETENTION_DAYS: 21,
+    CANDLE_FINE_RETENTION_DAYS: 30,
+    CANDLE_RETENTION_DAYS: 90,
     CANDIDATE_OUTCOME_RETENTION_DAYS: 90,
     STALE_TOKEN_RETENTION_DAYS: 90,
   } as never;
@@ -269,6 +275,8 @@ describe.skipIf(!dbAvailable)("runCleanupJob: batched snapshot sweep", () => {
   const env = {
     SNAPSHOT_RETENTION_DAYS: 30,
     PRICE_PATH_RETENTION_DAYS: 21,
+    CANDLE_FINE_RETENTION_DAYS: 30,
+    CANDLE_RETENTION_DAYS: 90,
     CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
     STALE_TOKEN_RETENTION_DAYS: 3650,
   } as never;
@@ -379,6 +387,8 @@ describe.skipIf(!dbAvailable)("runCleanupJob: untracked snapshot horizon", () =>
   const env = {
     SNAPSHOT_RETENTION_DAYS: 30,
     PRICE_PATH_RETENTION_DAYS: 21,
+    CANDLE_FINE_RETENTION_DAYS: 30,
+    CANDLE_RETENTION_DAYS: 90,
     SNAPSHOT_UNTRACKED_RETENTION_HOURS: 48,
     CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
     STALE_TOKEN_RETENTION_DAYS: 3650,
@@ -453,6 +463,8 @@ describe.skipIf(!dbAvailable)("runCleanupJob: tracked snapshot downsampling", ()
   const env = {
     SNAPSHOT_RETENTION_DAYS: 30,
     PRICE_PATH_RETENTION_DAYS: 21,
+    CANDLE_FINE_RETENTION_DAYS: 30,
+    CANDLE_RETENTION_DAYS: 90,
     SNAPSHOT_UNTRACKED_RETENTION_HOURS: 0,
     SNAPSHOT_DOWNSAMPLE_AFTER_DAYS: 7,
     SNAPSHOT_DOWNSAMPLE_BUCKET_MINUTES: 5,
@@ -661,6 +673,8 @@ describe.skipIf(!dbAvailable)("runCleanupJob: graded filter-alert anchors", () =
   const env = {
     SNAPSHOT_RETENTION_DAYS: 3650,
     PRICE_PATH_RETENTION_DAYS: 21,
+    CANDLE_FINE_RETENTION_DAYS: 30,
+    CANDLE_RETENTION_DAYS: 90,
     CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
     STALE_TOKEN_RETENTION_DAYS: 3650,
     MATCH_OUTCOME_RETENTION_DAYS: 7,
@@ -808,6 +822,8 @@ describe.skipIf(!dbAvailable)("runCleanupJob: TokenSage narratives", () => {
   const env = {
     SNAPSHOT_RETENTION_DAYS: 3650,
     PRICE_PATH_RETENTION_DAYS: 21,
+    CANDLE_FINE_RETENTION_DAYS: 30,
+    CANDLE_RETENTION_DAYS: 90,
     CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
     STALE_TOKEN_RETENTION_DAYS: 3650,
   } as never;
@@ -905,6 +921,8 @@ describe.skipIf(!dbAvailable)("runCleanupJob: TokenSage narratives", () => {
     const shortTokens = {
       SNAPSHOT_RETENTION_DAYS: 3650,
       PRICE_PATH_RETENTION_DAYS: 21,
+      CANDLE_FINE_RETENTION_DAYS: 30,
+      CANDLE_RETENTION_DAYS: 90,
       CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
       STALE_TOKEN_RETENTION_DAYS: 14,
     } as never;
@@ -975,6 +993,8 @@ describe.skipIf(!dbAvailable)("runCleanupJob: match archive", () => {
   const env = {
     SNAPSHOT_RETENTION_DAYS: 30,
     PRICE_PATH_RETENTION_DAYS: 21,
+    CANDLE_FINE_RETENTION_DAYS: 30,
+    CANDLE_RETENTION_DAYS: 90,
     CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
     STALE_TOKEN_RETENTION_DAYS: 90,
     MATCH_ARCHIVE_DAYS: 60,
@@ -1115,6 +1135,8 @@ describe.skipIf(!dbAvailable)("runCleanupJob: retention tiers", () => {
   const env = {
     SNAPSHOT_RETENTION_DAYS: 30,
     PRICE_PATH_RETENTION_DAYS: 21,
+    CANDLE_FINE_RETENTION_DAYS: 30,
+    CANDLE_RETENTION_DAYS: 90,
     TWA_RETENTION_DAYS: 14,
     CANDIDATE_OUTCOME_RETENTION_DAYS: 90,
     CANDIDATE_OUTCOME_HIT_RETENTION_DAYS: 180,
@@ -1355,6 +1377,8 @@ describe.skipIf(!dbAvailable)("runCleanupJob: resuming a cut-off run", () => {
   const env = {
     SNAPSHOT_RETENTION_DAYS: 3650,
     PRICE_PATH_RETENTION_DAYS: 21,
+    CANDLE_FINE_RETENTION_DAYS: 30,
+    CANDLE_RETENTION_DAYS: 90,
     CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
     STALE_TOKEN_RETENTION_DAYS: 3650,
   } as never;

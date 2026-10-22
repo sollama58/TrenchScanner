@@ -394,6 +394,44 @@ export class CurveTape {
     return { coveredFrom: t.coveredFrom, quoteIsSol: t.quoteIsSol, ticks: t.ticks.map((k) => ({ ...k })) };
   }
 
+  /**
+   * A mint's changes after `after` (ms epoch), oldest first, with the one in force at `after`
+   * (`prior`, null when the cover starts later): what the worker's chart candles are built from
+   * each minute without copying the whole tape (curveCandles.ts). Null when the mint has none.
+   */
+  ticksAfter(
+    mint: string,
+    after: number,
+  ): {
+    coveredFrom: number;
+    confirmedAt: number;
+    /** Every change since here came from the stream; null when a read broke the run. */
+    streamFrom: number | null;
+    quoteIsSol: boolean;
+    prior: { at: number; price: number; realQuote: number } | null;
+    ticks: { at: number; price: number; realQuote: number }[];
+  } | null {
+    const t = this.tapes.get(mint);
+    if (!t || t.ticks.length === 0) return null;
+    // The first tick after `after`.
+    let lo = 0;
+    let hi = t.ticks.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (t.ticks[mid]!.at <= after) lo = mid + 1;
+      else hi = mid;
+    }
+    const prior = lo > 0 ? t.ticks[lo - 1]! : null;
+    return {
+      coveredFrom: t.coveredFrom,
+      confirmedAt: t.confirmedAt,
+      streamFrom: t.streamFrom,
+      quoteIsSol: t.quoteIsSol,
+      prior: prior ? { ...prior } : null,
+      ticks: t.ticks.slice(lo).map((k) => ({ ...k })),
+    };
+  }
+
   private evictOldest(): void {
     const oldest = this.tapes.keys().next().value;
     if (oldest !== undefined) this.tapes.delete(oldest);

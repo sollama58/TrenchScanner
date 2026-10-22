@@ -40,6 +40,18 @@ describe("ChartHealth", () => {
     expect(s.status).toBe("warn");
   });
 
+  it("counts answers short of the coin's history apart, amber from a share but never red", () => {
+    const { health } = clocked();
+    for (let i = 0; i < 12; i++) health.recordCandleAnswer("chart", "pumpfun");
+    for (let i = 0; i < 8; i++) health.recordCandleAnswer("chart", "stream", false, true);
+    const s = health.snapshot();
+    expect(s.candles).toMatchObject({ answers: 20, partial: 8, null: 0, nullOrStaleShare: 0 });
+    expect(s.metrics.find((m) => m.key === "candlesPartial")).toMatchObject({ window: 8, tone: "warn" });
+    for (let i = 0; i < 80; i++) health.recordCandleAnswer("chart", "stream", false, true);
+    expect(health.snapshot().metrics.find((m) => m.key === "candlesPartial")?.tone).toBe("warn");
+    expect(chartAlertProblems(health.snapshot())).toEqual([]);
+  });
+
   it("forgets counts older than the window, but keeps them since boot", () => {
     const { health, tick } = clocked();
     health.recordClientError("chart");

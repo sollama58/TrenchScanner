@@ -257,3 +257,32 @@ describe("HeliusAccountStream while Helius's credits are out", () => {
     stream.stop();
   });
 });
+
+describe("HeliusAccountStream slot times", () => {
+  const slotNote = (slot: number) =>
+    JSON.stringify({
+      jsonrpc: "2.0",
+      method: "slotNotification",
+      params: { subscription: 0, result: { slot, parent: slot - 1, root: slot - 32 } },
+    });
+
+  it("remembers when the slot feed first announced each slot", () => {
+    const { stream } = started();
+    stream.handleMessage(slotNote(100), 5_000);
+    stream.handleMessage(slotNote(100), 5_900);
+    stream.handleMessage(slotNote(101), 5_400);
+    expect(stream.slotTime(100)).toBe(5_000);
+    expect(stream.slotTime(101)).toBe(5_400);
+    expect(stream.slotTime(99)).toBeNull();
+    expect(stream.slotTime(null)).toBeNull();
+    stream.stop();
+  });
+
+  it("forgets the oldest slots past the ones it keeps", () => {
+    const { stream } = started();
+    for (let s = 0; s < 2_000; s++) stream.handleMessage(slotNote(s), s);
+    expect(stream.slotTime(0)).toBeNull();
+    expect(stream.slotTime(1_999)).toBe(1_999);
+    stream.stop();
+  });
+});

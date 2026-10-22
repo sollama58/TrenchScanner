@@ -268,6 +268,8 @@ export interface Token {
   /** The coin's own X and website links as found at discovery (https only); null when it has none. */
   twitterUrl?: string | null;
   websiteUrl?: string | null;
+  /** The DexScreener pair the coin is priced from; null until a reading names it. */
+  pairAddress?: string | null;
   /** The coin the token's pair trades against (wrapped SOL for most); null until a reading names it. */
   quoteMint?: string | null;
   quoteSymbol?: string | null;
@@ -1941,7 +1943,10 @@ export interface FeedAppearance {
    * Off draws every flag the same.
    */
   chartEventEmphasis: "off" | "brand" | "win" | "loss" | "mine";
-  /** Candle width in ms, or null for Auto (absent from older API builds: Auto). */
+  /**
+   * Candle width in ms, or null for Auto (absent from older API builds: Auto). No longer read: the
+   * chart's candle size is picked per view (charts audit CH-2). Kept so saved looks still parse.
+   */
   chartTimeframeMs: number | null;
   /** Log scale (absent from older API builds: off). */
   chartLogScale: boolean;

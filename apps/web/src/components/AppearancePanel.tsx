@@ -18,7 +18,6 @@ import {
 import { FIB_LEVELS } from "../chartDrawings";
 import { CHART_INDICATOR_IDS, type ChartIndicatorId } from "../chartEvents";
 import { useNarrativeNoteReadiness } from "../narrativeNote";
-import { TIMEFRAMES } from "../priceChart";
 import { useIsAdmin } from "../session";
 
 /** The bubble maps' names that can be shown or hidden kind by kind (user ask 2026-10-16). */
@@ -405,24 +404,6 @@ export function ChartControls() {
         ]}
         onChange={(chartStyle) => setAppearance({ chartStyle })}
       />
-      <label className="choice-row">
-        <span>Candle size</span>
-        <select
-          value={look.chartTimeframeMs === null ? "auto" : String(look.chartTimeframeMs)}
-          onChange={(e) =>
-            setAppearance({
-              chartTimeframeMs: e.target.value === "auto" ? null : Number(e.target.value),
-            })
-          }
-        >
-          <option value="auto">Auto</option>
-          {TIMEFRAMES.map((f) => (
-            <option key={f.ms} value={f.ms}>
-              {f.label}
-            </option>
-          ))}
-        </select>
-      </label>
       <div role="group" aria-label="Chart indicators">
         {CHART_INDICATOR_LABELS.map((i) => (
           <label key={i.id} className="check">

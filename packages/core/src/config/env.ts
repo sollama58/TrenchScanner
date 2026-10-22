@@ -144,6 +144,21 @@ const envSchema = z.object({
   // traffic one-for-one and was held at 7 minutes because of it. RUGCHECK_CACHE_TTL_MINUTES below
   // breaks that coupling, which is what makes a one-minute alert loop affordable.
   SCAN_INTERVAL_MINUTES: z.coerce.number().min(0.25).default(1),
+  // The entry fast path (worker's entryFastPath.ts, user decision 2026-10-22): a young launch that
+  // holds the band's floor for 2.5 seconds between cycles, on the curve tape or a Jupiter quote,
+  // gets its first scan at once, alone, through the cycle's own stages - so it can be called
+  // within seconds of crossing rather than with the next cycle. It replaced the band wake, which
+  // started a whole cycle early instead and ran the scan's per-cycle Helius budgets three or four
+  // times a minute. "false" leaves every coin to the cycle, and stops the watch's Jupiter checks
+  // too. Needs JUPITER_API_KEY, as the watch did.
+  ENTRY_FAST_PATH_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  // Fast scans started in any one minute; a crossing past it waits for the next cycle. Each is
+  // about two Jupiter calls (the band refresh and the fresh quote) on the shared 50-a-minute gate,
+  // and the Helius reads a contender's first cycle would have made.
+  ENTRY_FAST_PATH_MAX_PER_MINUTE: z.coerce.number().int().nonnegative().default(30),
   // How long a RugCheck report is reused before being re-fetched (see the worker's
   // rugCheckProfiles.ts). Short, because everything RugCheck reports is mutable - holder
   // distribution, dev wallet %, risk score - unlike mint authority revocation or Mayhem Mode,
@@ -319,6 +334,26 @@ const envSchema = z.object({
   // instead of CURVE_TAPE_MAX_AGE_MINUTES (user ask 2026-10-18).
   PRICE_PATH_FOLLOW_MINUTES: z.coerce.number().positive().default(30),
   PRICE_PATH_RETENTION_DAYS: z.coerce.number().int().positive().default(21),
+  // The closed-candle store (core's candles/, user decision 2026-10-22 "Store candles + backfill"):
+  // the worker saves its curve tape's 1-second bars each minute, and the API saves the closed
+  // Pump.fun pages it already reads, so a chart's history no longer ends at a source's newest
+  // 1,000 intervals. "false" stops every write and the backfill; GET /tokens/:mint/candles still
+  // serves what is stored.
+  CANDLE_STORE: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  // 1-second and 15-second bars are kept this many days; minute and wider ones for the coin's
+  // tracked life (while it is on Token), at most CANDLE_RETENTION_DAYS. Swept by the nightly cleanup.
+  CANDLE_FINE_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+  CANDLE_RETENTION_DAYS: z.coerce.number().int().positive().default(90),
+  // The one-time backfill to launch (worker's jobs/candleBackfill.ts) when a chart opens or a coin
+  // is called: Pump.fun's 5-minute page, then GeckoTerminal's minute pages back to the launch or
+  // the pool's creation. Its GeckoTerminal calls a minute, inside the worker's background budget
+  // (GeckoTerminal's free 30 a minute per IP is shared with the market-data fallback), and the
+  // pages one coin may take at most (1,000 minutes each).
+  CANDLE_BACKFILL_GECKO_PER_MINUTE: z.coerce.number().int().nonnegative().default(4),
+  CANDLE_BACKFILL_MAX_PAGES: z.coerce.number().int().positive().default(60),
   // The token chart's live tail (api's liveCurve.ts, user ask 2026-10-17: charts on the stream's
   // second-by-second updates): while a young coin's chart is open, the API follows its bonding curve
   // on its own Helius websocket (an update per changed block) and the chart draws every change,

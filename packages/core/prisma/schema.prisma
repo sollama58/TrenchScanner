@@ -3741,3 +3741,59 @@ model ChartMarkCoin {
 
   @@index([keepUntil])
 }
+
+/// Closed chart candles, saved once (charts audit 2026-10-22, CH-8, user decision "Store candles +
+/// backfill"): the token chart's history no longer ends at the newest 1,000 intervals a source
+/// serves. One row holds up to CANDLE_CHUNK_BARS consecutive bars of one width from one source,
+/// packed (core's candles/candleChunk.ts): a row per candle would be ~200 bytes with its index, and
+/// the curve tape alone makes thousands of 1-second bars a minute. Prices are USD market cap on
+/// Pump.fun's launch billion, as Pump.fun's candles are; the API puts them on the supply now.
+/// Written by the worker (its curve tape's 1-second bars, the backfill) and the API (Pump.fun pages
+/// it already read); read by GET /tokens/:mint/candles; pruned by the nightly cleanup.
+model CandleChunk {
+  mint      String
+  /// Bar width in seconds: 1, 15, 60 or 300.
+  res       Int
+  /// The chunk's start: a multiple of res x CANDLE_CHUNK_BARS seconds.
+  startAt   DateTime
+  /// "curve" (the worker's curve tape), "pumpfun" or "gecko" (GeckoTerminal).
+  source    String
+  /// The stretch inside the chunk the source covered without a break: a bar missing inside it is
+  /// an interval with no trade, not one nobody read.
+  coverFrom DateTime
+  coverTo   DateTime
+  bars      Int
+  /// Wider than a minute: kept only as the stand-in where no minute source reaches.
+  coarse    Boolean  @default(false)
+  data      Bytes
+  savedAt   DateTime @default(now())
+
+  @@id([mint, res, startAt, source])
+  /// The nightly sweep's: one width's chunks past its horizon.
+  @@index([res, startAt])
+}
+
+/// One coin's one-time candle backfill to its launch (worker's jobs/candleBackfill.ts): Pump.fun's
+/// 5-minute page, then GeckoTerminal's minute pages backwards on the coin's own pools. Asked for
+/// when a chart opens or the coin is called; one row per coin, stepped one upstream call at a time.
+model CandleBackfill {
+  mint        String    @id
+  /// "chart" or "call"; a call goes first.
+  reason      String
+  requestedAt DateTime  @default(now())
+  /// No step before this: the pace, or a failure's backoff.
+  nextAt      DateTime  @default(now())
+  /// One worker steps a coin at a time: the claim lapses here.
+  leaseUntil  DateTime?
+  pumpDone    Boolean   @default(false)
+  /// Which of the coin's pools (candleBackfill.ts poolsOf) is being paged, and the page's end.
+  poolIndex   Int       @default(0)
+  cursor      DateTime?
+  pages       Int       @default(0)
+  failures    Int       @default(0)
+  doneAt      DateTime?
+  error       String?
+
+  @@index([doneAt, nextAt])
+  @@index([requestedAt])
+}

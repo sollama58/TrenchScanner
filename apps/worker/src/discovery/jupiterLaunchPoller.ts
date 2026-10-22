@@ -78,9 +78,14 @@ export class JupiterLaunchPoller {
     return coins;
   }
 
-  /** The launches read since the last drain, left buffered: what BandEntryWatch checks between cycles. */
+  /** The launches read since the last drain, left buffered: what EntryWatch checks between cycles. */
   pendingLaunches(): string[] {
     return [...this.buffer.keys()].reverse();
+  }
+
+  /** One launch read since the last drain, left buffered: what the entry fast path records it from. */
+  pendingLaunch(mint: string): DiscoveredCoin | undefined {
+    return this.buffer.get(mint);
   }
 
   /** Reads and launches found since the last call, then reset. */

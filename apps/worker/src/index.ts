@@ -4,7 +4,6 @@ import {
   startEventLoopWatch,
   eventLoopReport,
   nameApiHost,
-  withApiFeature,
   loadEnv,
   PricePathBook,
   createLogger,
@@ -48,8 +47,10 @@ import {
   configureMintSupplies,
   MintSupplies,
 } from "@trenchscanner/core";
-import { BAND_ENTRY_CHECK_MS, BandEntryWatch } from "./bandEntryWatch.js";
-import { runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
+import { EntryWatch } from "./entryWatch.js";
+import { EntryFastPath } from "./jobs/entryFastPath.js";
+import { scanScheduleOptions } from "./scanSchedule.js";
+import { runEntryScan, runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
 import { pumpLaunchBackups } from "./jobs/pumpLaunch.js";
 import { chainBackupUrl, ScreenBackup } from "./jobs/screenBackup.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
@@ -105,11 +106,14 @@ import { HeliusAccountStream } from "./discovery/heliusAccountStream.js";
 import {
   CURVE_STREAM_KEY_PREFIX,
   curvePriceOf,
+  curveTapeView,
   onCurveStreamUpdate,
   seedCurveStreamSpend,
   startCurveTape,
 } from "./jobs/curveTape.js";
 import { startPricePathRecorder } from "./jobs/pricePathRecorder.js";
+import { startCurveCandles } from "./jobs/curveCandles.js";
+import { startCandleBackfill } from "./jobs/candleBackfill.js";
 import { onHolderStreamTx, setHolderTransferStream } from "./jobs/holderTransfers.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
 import { knownMayhem, knownNotMayhem, screenOutMayhem } from "./jobs/mayhemMode.js";
@@ -341,8 +345,8 @@ async function main() {
   // The per-mint price tape behind the price-path model inputs - in memory, bounded.
   const pricePath = new PricePathBook();
   // The launches created since the last cycle, but the ones already known to be Mayhem: never
-  // scanned, so never followed on the curve tape (which screens the rest first) nor allowed to wake
-  // the scan (which takes only the ones confirmed not Mayhem).
+  // scanned, so never followed on the curve tape (which screens the rest first) nor given a fast
+  // scan (the entry watch takes only the ones confirmed not Mayhem).
   const newLaunches = () =>
     [...new Set([...(stream?.pendingLaunches() ?? []), ...(launchPoller?.pendingLaunches() ?? [])])].filter(
       (mint) => !knownMayhem(mint),
@@ -354,16 +358,21 @@ async function main() {
     priceLookup: jupiter ? new JupiterFirstLookup(jupiter, dexScreener) : dexScreener,
     // The newest launches' live prices in the band refresh: Jupiter, CoinGecko for what it misses.
     liveLaunches: jupiter ? new LiveLaunchQuotes(jupiter, geckoTerminal) : undefined,
-    // Starts the scan early when a young launch crosses into the band between cycles.
-    bandEntryWatch: jupiter
-      ? new BandEntryWatch(
-          jupiter,
-          env.MCAP_FILTER_MIN,
-          () => newLaunches().filter((mint) => knownNotMayhem(mint)),
-          // The curve tape's live prices: a crossing is seen within a second of the trade.
-          curveTapeOn ? (mint, now) => curvePriceOf(mint, now) : undefined,
-        )
-      : undefined,
+    // Sees a young launch cross into the band between cycles and gives it its first scan at once
+    // (the entry fast path, below). Only in the process that scans, and off with the fast path
+    // (ENTRY_FAST_PATH_ENABLED), Jupiter checks and all.
+    entryWatch:
+      scans && jupiter && env.ENTRY_FAST_PATH_ENABLED
+        ? new EntryWatch(
+            jupiter,
+            env.MCAP_FILTER_MIN,
+            () => newLaunches().filter((mint) => knownNotMayhem(mint)),
+            // The curve tape's live prices: a crossing is seen within half a second of the trade.
+            curveTapeOn ? (mint: string, now: number) => curvePriceOf(mint, now) : undefined,
+            (mint, crossedAt) => void entryFastPath?.offer(mint, crossedAt),
+          )
+        : undefined,
+    entryFastPath: undefined as EntryFastPath | undefined,
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
     // The screen's Mayhem and holder reads when Helius gives no answer, so it doesn't reject every
@@ -376,6 +385,17 @@ async function main() {
     // Puts the last hour of that tape back from the scan's snapshots after a deploy.
     pricePathSeeder: new PricePathSeeder(pricePath),
   };
+  // A crossing coin's first scan, alone and at once, on the cycle's own stages (entryFastPath.ts,
+  // user decision 2026-10-22). It replaced the band wake, which started the whole cycle early.
+  const entryFastPath = deps.entryWatch
+    ? new EntryFastPath({
+        maxPerMinute: env.ENTRY_FAST_PATH_MAX_PER_MINUTE,
+        eligible: knownNotMayhem,
+        scan: (mint) => runEntryScan(deps, env, mint),
+      })
+    : undefined;
+  deps.entryFastPath = entryFastPath;
+  deps.entryWatch?.start();
   // Every market cap read on Pump.fun's launch billion is put on the coin's supply now (mintSupply.ts).
   configureMintSupplies(new MintSupplies(deps.helius));
   const stopCurveTape = curveTapeOn
@@ -413,6 +433,21 @@ async function main() {
     curveTapeOn && env.PRICE_PATH_RECORD
       ? startPricePathRecorder({ maxPerDay: env.PRICE_PATH_RECORD_MAX_PER_DAY })
       : undefined;
+  // The chart's candle store (core's candles/): the curve tape's 1-second bars each minute, and the
+  // one-time backfill to launch of each coin a chart opened or a call named (CANDLE_STORE).
+  const stopCurveCandles =
+    curveTapeOn && env.CANDLE_STORE
+      ? startCurveCandles({ view: curveTapeView, solUsd: () => dexScreener.solUsd() })
+      : undefined;
+  const stopCandleBackfill =
+    scans && env.CANDLE_STORE
+      ? startCandleBackfill({
+          geckoPage: (pool, mint, beforeMs) => geckoTerminal.poolMinuteCandles(pool, mint, beforeMs),
+          geckoPerMinute: env.CANDLE_BACKFILL_GECKO_PER_MINUTE,
+          maxPages: env.CANDLE_BACKFILL_MAX_PAGES,
+          keepDays: env.CANDLE_RETENTION_DAYS,
+        })
+      : undefined;
 
   // Reads the chain for the subscription gate. Its own client rather than `deps.helius` because
   // it insists on `finalized` commitment - money depends on these answers, not enrichment quality.
@@ -443,20 +478,9 @@ async function main() {
       // The process's event-loop stalls ride on the scan's row, so /health/worker shows them.
       async () => ({ ...(await runScanCycle(deps, env)), ...configMeta, loopStalls: loopStallMeta() }),
       env.SCAN_INTERVAL_MINUTES,
-      {
-        deadlineMinutes: 20,
-        failureMeta: () => ({ ...scanFailureMeta(), ...configMeta }),
-        // A young launch crossing into the band starts the next cycle now, not up to 30 s later.
-        ...(deps.bandEntryWatch
-          ? {
-              runEarly: {
-                everyMs: BAND_ENTRY_CHECK_MS,
-                quiet: true,
-                due: () => withApiFeature("band-entry-watch", () => deps.bandEntryWatch!.due()),
-              },
-            }
-          : {}),
-      },
+      // No early runs: a young launch crossing into the band gets its own first scan from the
+      // entry fast path instead of starting the whole cycle early (user decision 2026-10-22).
+      scanScheduleOptions(() => ({ ...scanFailureMeta(), ...configMeta })),
     ),
   );
   // Runs far more often than the scan cycle, but only touches tokens someone currently has open
@@ -1128,11 +1152,17 @@ async function main() {
     logger.info("shutting down", { signal, graceMs: SHUTDOWN_GRACE_MS, exitCode: code });
     for (const { job } of jobs) job.stop();
     stream?.stop();
+    deps.entryWatch?.stop();
+    // Before the tape stops: the final flush reads what it still holds.
+    const curveCandlesWritten = stopCurveCandles?.().catch((err: unknown) =>
+      logger.warn("curve candles not written", { error: String(err) }),
+    );
     stopCurveTape?.();
     // Written alongside the runs' settle, and awaited before the disconnect below.
     const pricePathsWritten = stopPricePaths?.().catch((err: unknown) =>
       logger.warn("price paths not written", { error: String(err) }),
     );
+    stopCandleBackfill?.();
     heliusStream?.stop();
     launchPoller?.stop();
     stopNarrativePolling?.();
@@ -1143,6 +1173,8 @@ async function main() {
         jobs.map(async ({ name, job }) => ({ name, outcome: await job.settle(SHUTDOWN_GRACE_MS) })),
       ),
       drainShadowReviews(reviewGraceMs),
+      // A fast scan in flight is a coin's first decision: given the runs' grace to finish.
+      entryFastPath?.settle(SHUTDOWN_GRACE_MS),
     ]);
     if (reviewsLeft > 0)
       logger.warn("shadow ai reviews still in flight at shutdown", { reviews: reviewsLeft });
@@ -1163,6 +1195,7 @@ async function main() {
       logger.warn("trade tape progress not saved", { error: String(err) }),
     );
     await pricePathsWritten;
+    await curveCandlesWritten;
     stopLoopWatch();
     await stopApiUsageMeter();
     await prisma.$disconnect().catch(() => {});

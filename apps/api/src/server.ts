@@ -40,6 +40,7 @@ import { registerMatchRoutes } from "./routes/matches.js";
 import { createReportCaches, registerCuratedRoutes } from "./routes/curated.js";
 import { registerGuestRoutes } from "./routes/guest.js";
 import { registerTokenRoutes } from "./routes/tokens.js";
+import { registerCandleRoutes } from "./routes/candles.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerKolAvatarRoutes } from "./routes/kolAvatars.js";
 import { registerAdminRoutes, registerAdminSubscriptionRoutes } from "./routes/admin.js";
@@ -765,6 +766,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     holderStamps,
     dexScreener,
   });
+  // GET /tokens/:mint/candles: the closed-candle store's bars, one timeframe (routes/candles.ts).
+  await app.register(registerCandleRoutes, { prefix: "/tokens", env });
   const walletLive = walletHelius ? new WalletLiveReader(walletHelius) : null;
   // Helius's name for it (exchanges, protocols, services): its identity API, on paid plans.
   const walletIdentity = env.HELIUS_API_KEY

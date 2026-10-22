@@ -18,27 +18,32 @@ export interface McapCandle {
 }
 
 /** Minutes per answer of Pump.fun's candle API: its most recent minutes with a trade. */
-const CANDLE_PAGE = 1000;
+export const CANDLE_PAGE = 1000;
 /** The older candles' width (TokenChart.older): Pump.fun's 5-minute page reaches back 5 times further. */
 export const OLDER_CANDLE_MS = 5 * 60_000;
 /** A minute page starting this long or more after the coin's launch didn't reach back to it. */
 export const OLDER_AFTER_MS = 10 * 60_000;
 
 /**
- * Exported for tests. The coin's 5-minute candles that end by its first minute candle, for the
- * stretch the minute page no longer reaches (user ask 2026-10-19: on a coin that traded through
+ * Exported for tests. The coin's 5-minute candles that start before its first minute candle, for
+ * the stretch the minute page no longer reaches (user ask 2026-10-19: on a coin that traded through
  * more than 1,000 minutes, the call fell before the chart's first candle and its flag went with it).
- * Null when the minute candles reach back to the launch, or there are none older.
+ * The minute page starts mid-bucket, so the bucket it starts in is kept too: its minutes before the
+ * page's first are in no other answer (the chart draws that bucket whole, priceChart.ts
+ * stitchVolume). Null when the minute candles reach back to the launch, or there are none older.
+ * A full minute page (`full`: all CANDLE_PAGE of them) is cut short whatever the launch says: the
+ * launch can be a late first scan (charts audit CH-11).
  */
 export function olderCandles(
   minutes: readonly McapCandle[] | null,
   fives: readonly McapCandle[] | null,
   launchAt: number | null,
+  full = false,
 ): McapCandle[] | null {
   const first = minutes?.[0]?.t;
   if (first === undefined || !fives?.length) return null;
-  if (launchAt !== null && first < launchAt + OLDER_AFTER_MS) return null;
-  const out = drawableCandles(fives.filter((k) => k.t + OLDER_CANDLE_MS <= first));
+  if (!full && launchAt !== null && first < launchAt + OLDER_AFTER_MS) return null;
+  const out = drawableCandles(fives.filter((k) => k.t < first));
   return out.length > 0 ? out : null;
 }
 
@@ -255,18 +260,22 @@ export class CandleCache {
     return this.served(entry);
   }
 
-  /** The coin's last good candles without asking Pump.fun: for a reader that mustn't spend the budget. */
-  peek(mint: string): CandleRead {
+  /**
+   * The coin's last good candles without asking Pump.fun: for a reader that mustn't spend the budget.
+   * `maxStaleMs` past the cache's own: a reader after only the closed candles (which never change)
+   * can take an older answer.
+   */
+  peek(mint: string, maxStaleMs = this.maxStaleMs): CandleRead {
     const entry = this.entries.get(mint);
-    return entry ? this.served(entry) : { candles: null, stale: false };
+    return entry ? this.served(entry, maxStaleMs) : { candles: null, stale: false };
   }
 
-  private served(entry: CandleEntry): CandleRead {
+  private served(entry: CandleEntry, maxStaleMs = this.maxStaleMs): CandleRead {
     const good = entry.good;
     if (!good) return { candles: null, stale: false };
     const now = this.now();
     if (entry.expiresAt > now) return { candles: good.value, stale: false };
-    if (now - good.at > this.maxStaleMs) return { candles: null, stale: false };
+    if (now - good.at > maxStaleMs) return { candles: null, stale: false };
     return { candles: good.value, stale: good.value !== null };
   }
 

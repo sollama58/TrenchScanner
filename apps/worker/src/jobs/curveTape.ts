@@ -10,6 +10,7 @@ import {
 } from "@trenchscanner/core";
 import { streamCredits, type HeliusAccountStream } from "../discovery/heliusAccountStream.js";
 import { recordPricePath } from "./pricePathRecorder.js";
+import { curveTapeDropped, type CurveTapeView } from "./curveCandles.js";
 
 const logger = createLogger("curve-tape");
 
@@ -49,7 +50,7 @@ export interface CurveTapeConfig {
   /**
    * The launches created since the last scan cycle (the PumpPortal stream's and Jupiter's newest),
    * followed from the next round rather than from the cycle that lists them, ~25 s later (user ask
-   * 2026-10-20: the band-entry watch reads their price off the curve, not Jupiter).
+   * 2026-10-20: the entry watch reads their price off the curve, not Jupiter).
    */
   newLaunches?: () => string[];
   /**
@@ -193,7 +194,7 @@ export function curvePathOf(mint: string, now = Date.now()): CurvePathFeatures {
 
 /**
  * A followed coin's curve price now (quote per token), from the stream's latest change; null when
- * the coin isn't followed or its tape is not current. Read by the band-entry watch.
+ * the coin isn't followed or its tape is not current. Read by the entry watch (entryWatch.ts).
  */
 export function curvePriceOf(mint: string, now = Date.now()): number | null {
   return followed.has(mint) ? tape.priceNow(mint, now) : null;
@@ -207,6 +208,12 @@ export function curvePriceOf(mint: string, now = Date.now()): number | null {
 export function curveLabelPrices(mint: string, afterMs: number, untilMs: number) {
   return tape.labelPrices(mint, afterMs, untilMs);
 }
+
+/** The coins followed and their changes, for the chart's 1-second candles (curveCandles.ts). */
+export const curveTapeView: CurveTapeView = {
+  mints: () => followed.keys(),
+  ticksAfter: (mint, after) => tape.ticksAfter(mint, after),
+};
 
 /** Counts since the last call, for the scan's heartbeat; null while the tape is off. */
 export function takeCurveTapeStats(now = Date.now()) {
@@ -232,6 +239,8 @@ function drop(mint: string, forGood: boolean): void {
   if (followed.delete(mint)) stream?.unwatch(keyOf(mint));
   // The path the tape held is saved as training data for predictive price pathing (when it is on).
   recordPricePath(mint, tape.snapshot(mint), forGood ? "graduated" : "aged");
+  // And its last 1-second chart candles (curveCandles.ts).
+  curveTapeDropped(mint, tape);
   tape.forget(mint);
   if (forGood) {
     if (done.size >= MAX_DONE) done.clear();

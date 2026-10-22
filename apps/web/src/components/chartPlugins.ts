@@ -42,6 +42,7 @@ export interface SlotCandleData extends CustomData<Time> {
   flat?: boolean;
   span?: number;
   under?: number;
+  coarse?: boolean;
 }
 
 export interface SlotCandleOptions extends CustomSeriesOptions {
@@ -53,8 +54,12 @@ export interface SlotCandleOptions extends CustomSeriesOptions {
 /**
  * The candle series: the library's own draws every candle one slot wide, so a candle coarser than
  * the timeframe (a minute candle where the 1-second ones don't reach) would squeeze into one slot
- * and leave a gap after it. This one draws it across the slots it covers, at its real width.
+ * and leave a gap after it. This one draws it across the slots it covers, at its real width,
+ * shaded (COARSE_ALPHA) so it doesn't pass for a candle of the timeframe picked.
  */
+/** How opaque a candle wider than the timeframe draws. */
+const COARSE_ALPHA = 0.4;
+
 export class SlotCandleSeries implements ICustomSeriesPaneView<Time, SlotCandleData, SlotCandleOptions> {
   private data: PaneRendererCustomData<Time, SlotCandleData> | null = null;
   private options: SlotCandleOptions | null = null;
@@ -109,6 +114,7 @@ export class SlotCandleSeries implements ICustomSeriesPaneView<Time, SlotCandleD
         const yl = toY(d.l);
         if (yo === null || yc === null || yh === null || yl === null) continue;
         ctx.fillStyle = d.flat ? opt.flatColor : d.c >= d.o ? opt.upColor : opt.downColor;
+        ctx.globalAlpha = d.coarse ? COARSE_ALPHA : 1;
         const wx = Math.round(cx * hr) - Math.floor(wickW / 2);
         ctx.fillRect(wx, Math.round(yh * vr), wickW, Math.max(1, Math.round((yl - yh) * vr)));
         const bx = Math.round((cx - bodyW / 2) * hr);
@@ -116,6 +122,7 @@ export class SlotCandleSeries implements ICustomSeriesPaneView<Time, SlotCandleD
         const top = Math.round(Math.min(yo, yc) * vr);
         ctx.fillRect(bx, top, bw, Math.max(1, Math.round(Math.abs(yc - yo) * vr)));
       }
+      ctx.globalAlpha = 1;
     });
   }
 }

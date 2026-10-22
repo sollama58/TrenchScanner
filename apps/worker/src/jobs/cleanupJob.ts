@@ -1,4 +1,4 @@
-import { prisma, createLogger, Prisma, type Env } from "@trenchscanner/core";
+import { prisma, createLogger, Prisma, pruneCandleStore, type Env } from "@trenchscanner/core";
 import { PartialJobFailure, type JobRunMeta } from "../scheduler.js";
 
 const logger = createLogger("cleanup-job");
@@ -794,6 +794,20 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     }),
   );
 
+  // The chart's candle store (core's candles/): 1 s and 15 s bars CANDLE_FINE_RETENTION_DAYS, minute
+  // and wider ones for the coin's tracked life (while it is on Token) up to CANDLE_RETENTION_DAYS.
+  const prunedCandles = await stage("candles", { chunks: 0, backfills: 0 }, () =>
+    pruneCandleStore(
+      {
+        fineDays: env.CANDLE_FINE_RETENTION_DAYS,
+        keepDays: env.CANDLE_RETENTION_DAYS,
+        rowsPerBatch: batch.rowsPerBatch,
+        pauseMs: batch.pauseMs,
+      },
+      startedAt,
+    ),
+  );
+
   // Bug reports: the screenshot goes first (a week after the report is done, or a month after it
   // was filed), the done report after a quarter. See FEEDBACK_SCREENSHOT_DONE_DAYS above.
   const screenshotDoneCutoff = new Date(startedAt - FEEDBACK_SCREENSHOT_DONE_DAYS * DAY_MS);
@@ -1090,6 +1104,8 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     strippedFeedbackScreenshots,
     deletedFeedbackReports: deletedFeedbackReports.count,
     deletedPricePaths: deletedPricePaths.count,
+    deletedCandleChunks: prunedCandles.chunks,
+    deletedCandleBackfills: prunedCandles.backfills,
     deletedAiReviews: deletedAiReviews.count,
     deletedCuratorModels: deletedCuratorModels.count,
     strippedCuratorModels,

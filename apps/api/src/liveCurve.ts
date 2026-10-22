@@ -122,7 +122,7 @@ export const MAX_WAIT_MS = 8_000;
 const SEED_WAIT_MS = 2_500;
 
 type Stream = Pick<HeliusAccountStream, "start" | "stop" | "watch" | "unwatch" | "coveredSince"> &
-  Partial<Pick<HeliusAccountStream, "takeStats" | "resubscribe" | "stalledForMs">>;
+  Partial<Pick<HeliusAccountStream, "takeStats" | "resubscribe" | "stalledForMs" | "slotTime">>;
 
 /** The chart socket's traffic since this process started, summed over every socket it opened. */
 export interface LiveCurveStreamTotals {
@@ -440,16 +440,24 @@ export class LiveCurves {
    * neither follows the coin nor counts as an ask, so it never keeps a follow alive: the chart's own
    * candles are built from these (streamCandles.ts, user ask 2026-10-19).
    */
-  async history(
-    mint: string,
-  ): Promise<{ ticks: [number, number][]; coveredFrom: number | null; readAt: number | null } | null> {
+  async history(mint: string): Promise<{
+    ticks: [number, number][];
+    coveredFrom: number | null;
+    streamFrom: number | null;
+    readAt: number | null;
+  } | null> {
     const f = this.followed.get(mint);
     if (!f || f.none || f.ticks.length === 0) return null;
     const [usd, factor] = await Promise.all([this.usdRate(f), this.supplyFactor(mint)]);
     if (usd === null) return null;
+    // `coveredFrom` counts RPC reads (every READ_EVERY_MS off the stream) as cover; `streamFrom` is
+    // where the stream alone has delivered every change, without a break, and is null off it: only
+    // that stretch makes true 1-second candles (charts audit CH-6).
+    const since = this.streamCoveredSince(mint, f);
     return {
       ticks: f.ticks.map(([t, sol]) => [t, sol * usd * factor]),
       coveredFrom: f.coveredFrom,
+      streamFrom: since === null || f.coveredFrom === null ? null : Math.max(since, f.coveredFrom),
       readAt: f.confirmedAt,
     };
   }
@@ -624,7 +632,7 @@ export class LiveCurves {
       const virtualQuote = decodePoolVirtualQuote(data);
       if (virtualQuote === pool.virtualQuote) return;
       pool.virtualQuote = virtualQuote;
-      this.recordPool(mint, f, pool, now);
+      this.recordPool(mint, f, pool, this.slotAt(f, slot, now));
       return;
     }
     if (key.startsWith(POOL_BASE_PREFIX) || key.startsWith(POOL_QUOTE_PREFIX)) {
@@ -642,11 +650,11 @@ export class LiveCurves {
       if (slot !== null && other === slot) {
         if (pool.timer) clearTimeout(pool.timer);
         pool.timer = null;
-        this.recordPool(mint, f, pool, this.now());
+        this.recordPool(mint, f, pool, this.slotAt(f, slot, this.now()));
       } else if (!pool.timer) {
         pool.timer = setTimeout(() => {
           pool.timer = null;
-          if (this.followed.get(mint) === f) this.recordPool(mint, f, pool, this.now());
+          if (this.followed.get(mint) === f) this.recordPool(mint, f, pool, this.slotAt(f, slot, this.now()));
         }, PAIR_WAIT_MS);
         pool.timer.unref?.();
       }
@@ -660,7 +668,7 @@ export class LiveCurves {
     if (!f || !state || f.readAt === null) return;
     const now = this.now();
     f.deliveredAt = now;
-    this.record(key.slice(KEY_PREFIX.length), f, state, now);
+    this.record(key.slice(KEY_PREFIX.length), f, state, this.slotAt(f, slot, now));
   }
 
   /**
@@ -1187,13 +1195,33 @@ export class LiveCurves {
   }
 
   private streamCovers(mint: string, f: Followed): boolean {
+    return this.streamCoveredSince(mint, f) !== null;
+  }
+
+  /**
+   * From when the stream has covered what prices `f` now (its curve, or its pool) without a break,
+   * with an RPC read since to start from, or null when it doesn't cover it.
+   */
+  private streamCoveredSince(mint: string, f: Followed): number | null {
     const pool = poolOf(f);
     if (pool) {
       const since = this.poolCoveredSince(mint, pool);
-      return since !== null && pool.readAt !== null && pool.readAt >= since;
+      return since !== null && pool.readAt !== null && pool.readAt >= since ? since : null;
     }
     const since = this.curveCoveredSince(mint, f);
-    return since !== null && f.readAt !== null && f.readAt >= since;
+    return since !== null && f.readAt !== null && f.readAt >= since ? since : null;
+  }
+
+  /**
+   * When an update the stream delivered at `slot` happened: the slot feed's time for it where it
+   * has one (ticks were stamped on arrival, a second or two after the block, so they sat off
+   * Pump.fun's 1-second buckets), else `now`. Never before the tape's newest tick, which would
+   * drop the price (recordMcap keeps the tape in order).
+   */
+  private slotAt(f: Followed, slot: number | null, now: number): number {
+    const at = this.stream?.slotTime?.(slot) ?? null;
+    if (at === null || at > now) return now;
+    return Math.max(at, f.ticks[f.ticks.length - 1]?.[0] ?? at);
   }
 
   private ensureRunning(): void {
