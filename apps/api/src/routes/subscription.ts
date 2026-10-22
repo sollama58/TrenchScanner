@@ -55,6 +55,12 @@ const SEND_ROUTE_RATE_LIMIT = { max: 10, timeWindow: "1 minute" };
 const RPC_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 /** How long one blockhash read answers every /blockhash caller. */
 const BLOCKHASH_REUSE_MS = 5_000;
+/**
+ * How long a wallet's /balance answer is reused. The page polls it every 15 s while a Pro coin is
+ * open (#889), and each read is two paid RPC calls; two tabs paid twice (audit 2026-10-22, H-9).
+ */
+const BALANCE_TTL_MS = 10_000;
+const MAX_CACHED_BALANCES = 2_000;
 
 /**
  * The transaction's own id - its first signature - read straight off the signed wire bytes.
@@ -99,6 +105,13 @@ export async function registerSubscriptionRoutes(
   ];
   // "Check now" presses by wallet: one a minute each. In memory, as a press only costs a scan.
   const lastProCheck = new Map<string, number>();
+  // /balance answers and reads in flight, by wallet. A POST here (a burn sent or claimed, a
+  // "Check now") drops the wallet's answer, so the next read sees what it changed.
+  const balances = new Map<string, { at: number; body: unknown }>();
+  const balanceReads = new Map<string, Promise<unknown>>();
+  app.addHook("onResponse", async (request) => {
+    if (request.method === "POST" && request.user) balances.delete(request.user.walletAddress);
+  });
 
   // Everything here needs a session but must NOT need a subscription - this is where someone
   // without one comes to get one. Gating it behind the paywall would be a locked door with the
@@ -200,17 +213,35 @@ export async function registerSubscriptionRoutes(
    */
   app.get("/balance", { config: { rateLimit: RPC_ROUTE_RATE_LIMIT } }, async (request, reply) => {
     const wallet = request.user!.walletAddress;
+    const cached = balances.get(wallet);
+    if (cached && Date.now() - cached.at < BALANCE_TTL_MS) return cached.body;
+    // One read per wallet at a time: a second tab's request waits for the first's answer.
+    let read = balanceReads.get(wallet);
+    if (!read) {
+      const mine: Promise<unknown> = readBalance(wallet).finally(() => {
+        if (balanceReads.get(wallet) === mine) balanceReads.delete(wallet);
+      });
+      read = mine;
+      balanceReads.set(wallet, read);
+    }
+    const body = await read;
+    if (!body) {
+      return reply
+        .code(503)
+        .send({ error: "Couldn't read your balance from Solana just now. Try again shortly." });
+    }
+    return body;
+  });
+
+  /** The /balance answer, kept for BALANCE_TTL_MS; null (not kept) when the chain read failed. */
+  async function readBalance(wallet: string): Promise<unknown> {
     const [accounts, lamports, holder] = await Promise.all([
       rpc.getTokenAccountsByOwner(wallet, SUBSCRIPTION_MINT),
       rpc.getBalance(wallet),
       // From the pro-holders scan's table, not the chain: a wallet's place among the top 250.
       proHolderRank(wallet).catch(() => null),
     ]);
-    if (!accounts) {
-      return reply
-        .code(503)
-        .send({ error: "Couldn't read your balance from Solana just now. Try again shortly." });
-    }
+    if (!accounts) return null;
     const burnable = accounts
       .filter((a) => a.programId === SPL_TOKEN_PROGRAM_ID && a.state === "initialized")
       .sort((a, b) =>
@@ -228,7 +259,7 @@ export async function registerSubscriptionRoutes(
             )
             .then((tier) => ({ mode: sacrificeSet.mode, freeRank: sacrificeSet.freeRank, ...tier }))
             .catch(() => null);
-    return {
+    const body = {
       mint: SUBSCRIPTION_MINT,
       decimals: SUBSCRIPTION_MINT_DECIMALS,
       tokenProgram: SPL_TOKEN_PROGRAM_ID,
@@ -247,7 +278,10 @@ export async function registerSubscriptionRoutes(
       sacrifice,
       accounts: burnable.map((a) => ({ address: a.address, rawAmount: a.rawAmount })),
     };
-  });
+    if (balances.size >= MAX_CACHED_BALANCES) balances.delete(balances.keys().next().value!);
+    balances.set(wallet, { at: Date.now(), body });
+    return body;
+  }
 
   /**
    * Settings' Pro Mode "Check now" (user ask 2026-10-18): reads the top holders again now rather

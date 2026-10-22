@@ -195,7 +195,10 @@ export async function registerProTradesRoutes(
     const portfolio = !brief && query.view === "portfolio";
     // Without a node of our own (tests, a local run) nothing is read: the public RPC would be asked.
     const due = canRead ? watcher.touch(wallet) : Promise.resolve();
-    const key = `${wallet}:${brief ? "brief" : portfolio ? "portfolio" : "full"}`;
+    const open = query.open === "1";
+    // An open panel's read stamps its coins (fullView). Under the closed panel's key, a poll with
+    // the panel open could be answered from that cache and skip the stamps.
+    const key = `${wallet}:${brief ? "brief" : portfolio ? "portfolio" : open ? "full-open" : "full"}`;
     const cached = answers.get(key);
     reply.header("Cache-Control", "no-store");
     if (cached && Date.now() - cached.at < ANSWER_TTL_MS) return cached.body;
@@ -204,7 +207,7 @@ export async function registerProTradesRoutes(
       ? await handleView(wallet)
       : portfolio
         ? await portfolioView(wallet)
-        : await fullView(wallet, query.open === "1");
+        : await fullView(wallet, open);
     answers.set(key, { at: Date.now(), body });
     if (answers.size > 2_000) answers.delete(answers.keys().next().value!);
     return body;
