@@ -5,9 +5,9 @@ const PAID = "2026-10-21T12:00:00.000Z";
 const NOW = Date.parse(PAID) + 2 * 60 * 60_000 + 1;
 
 describe("dexInfoLabel", () => {
-  it("says paid or updated with the payment time, and info alone when there is no time", () => {
+  it("shows DP for a paid order, keeps the payment time in the title, and info alone when there is no time", () => {
     expect(dexInfoLabel({ dexInfo: true, dexInfoPaidAt: PAID }, NOW)).toEqual({
-      text: "DS paid 2h ago",
+      text: "DP",
       title: "DexScreener token info paid 2h ago",
       paidAtMs: Date.parse(PAID),
     });
