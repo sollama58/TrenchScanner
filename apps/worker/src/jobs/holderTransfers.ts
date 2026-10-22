@@ -48,12 +48,25 @@ const logger = createLogger("holder-transfers");
  * read after its subscription settled is then kept fresh by the stream instead of being read again
  * every ACCOUNT_REREAD_MS, and a transfer between two holders arrives with its transaction, so it
  * needs no getTransaction either. Whatever the stream doesn't cover is read as before.
+ *
+ * A read only starts an account's cover when it comes after the subscription settled, so a read
+ * due while the stream is still confirming or settling the account waits for it (up to
+ * STREAM_READ_WAIT_MS): read in the same cycle as the subscribe, every new contender's accounts
+ * were read twice, the second time 10 minutes on, before the stream spared anything (audit
+ * 2026-10-22, H-4).
  */
 
 /** How long an account's signatures stand before a contender's are read again (newer ones only). */
 export const ACCOUNT_REREAD_MS = 10 * 60_000;
 /** How long an account read before can still give a reading from the caches. */
 export const ACCOUNT_MAX_AGE_MS = 2 * 3_600_000;
+/**
+ * Longest a due read waits for the stream to confirm and settle its account before it is read
+ * anyway: past this, Helius is slow to answer or the cover keeps restarting, and the account is
+ * polled as without the stream. A subscription Helius answers at once settles in STREAM_SETTLE_MS,
+ * read on the first cycle after.
+ */
+export const STREAM_READ_WAIT_MS = 3 * STREAM_SETTLE_MS;
 const MAX_ACCOUNTS = 25_000;
 const MAX_TXS = 50_000;
 
@@ -63,6 +76,8 @@ interface AccountSignatures {
   /** The newest signature seen, read from next time. */
   newest: string | null;
   atMs: number;
+  /** When the timer last had it due: read, or spared by the stream (streamSkipped). */
+  dueAtMs: number;
 }
 
 /** Each token account's signatures, by its address. */
@@ -70,9 +85,15 @@ const accountSigs = new Map<string, AccountSignatures>();
 /** Each read transaction's moves of its coin, by "mint:signature"; null when it is not a transfer. */
 const txMoves = new Map<string, { atMs: number | null; moves: TransferMove[]; signature: string } | null>();
 
-let calls = { getSignaturesForAddress: 0, getTransaction: 0 };
+/**
+ * Each account whose due read is waiting for the stream (streamWaits): when it started waiting,
+ * and when it was last found waiting.
+ */
+const waiting = new Map<string, { since: number; seenAt: number }>();
 
-type HolderStream = Pick<HeliusAccountStream, "watch" | "coveredSince" | "takeStats">;
+let calls = { getSignaturesForAddress: 0, getTransaction: 0, streamSkipped: 0, streamDeferred: 0 };
+
+type HolderStream = Pick<HeliusAccountStream, "watch" | "coveredSince" | "awaitingCover" | "takeStats">;
 let stream: HolderStream | null = null;
 
 /** Hands the module the Helius stream (null turns it off): see the note at the top. */
@@ -89,6 +110,41 @@ export function takeHolderStreamStats(): HeliusStreamStats | null {
 function streamCovers(mint: string, account: string, e: AccountSignatures): boolean {
   const since = stream?.coveredSince(mint, account) ?? null;
   return since !== null && e.atMs >= since + STREAM_SETTLE_MS;
+}
+
+/**
+ * Whether `account`'s due read should wait for the stream: Helius has yet to confirm its
+ * subscription, or confirmed it under STREAM_SETTLE_MS ago, so a read now would not start its
+ * cover (streamCovers) and would have to be made again. Never once the account has waited
+ * STREAM_READ_WAIT_MS, nor while the stream is off, disconnected, or turned the coin away (capped
+ * or refused): then the account is read as before.
+ */
+function streamWaits(mint: string, account: string, now: number): boolean {
+  if (!stream) return false;
+  const since = stream.coveredSince(mint, account, now);
+  const pending = since !== null ? now < since + STREAM_SETTLE_MS : stream.awaitingCover(mint, account, now);
+  if (!pending) {
+    waiting.delete(account);
+    return false;
+  }
+  const w = waiting.get(account);
+  // A wait not seen for ACCOUNT_REREAD_MS is an old one (the coin left and came back). Shorter, and
+  // a slow cycle would start the wait afresh every time and never read.
+  if (!w || now - w.seenAt > ACCOUNT_REREAD_MS) {
+    waiting.delete(account);
+    waiting.set(account, { since: now, seenAt: now });
+    if (waiting.size > MAX_ACCOUNTS) {
+      const oldest = waiting.keys().next().value;
+      if (oldest !== undefined) waiting.delete(oldest);
+    }
+    return true;
+  }
+  if (now - w.since >= STREAM_READ_WAIT_MS) {
+    waiting.delete(account);
+    return false;
+  }
+  w.seenAt = now;
+  return true;
 }
 
 /**
@@ -164,14 +220,20 @@ export function holderListStreamed(g: TransferGroup, listAtMs: number, nowMs = D
   return true;
 }
 
-/** Calls since the last call, for the scan's heartbeat: 1 credit each. */
+/**
+ * Calls since the last call, for the scan's heartbeat: 1 credit each. With them, the reads the
+ * stream spared (streamSkipped: one an account each ACCOUNT_REREAD_MS its cover stood in, a credit
+ * each) and the due reads held back for it to settle (streamDeferred, counted each cycle one waits).
+ */
 export function takeHolderTransferStats(): {
   getSignaturesForAddress: number;
   getTransaction: number;
+  streamSkipped: number;
+  streamDeferred: number;
   credits: number;
 } {
   const out = { ...calls, credits: calls.getSignaturesForAddress + calls.getTransaction };
-  calls = { getSignaturesForAddress: 0, getTransaction: 0 };
+  calls = { getSignaturesForAddress: 0, getTransaction: 0, streamSkipped: 0, streamDeferred: 0 };
   return out;
 }
 
@@ -180,6 +242,7 @@ export function resetHolderTransfers(): void {
   stream = null;
   accountSigs.clear();
   txMoves.clear();
+  waiting.clear();
   takeHolderTransferStats();
 }
 
@@ -218,8 +281,9 @@ function holdersOf(
  * Reads what the groups' readings still need, in their order (contenders first): each holder
  * account never read, or read more than ACCOUNT_REREAD_MS ago (only its newer signatures), a whole
  * coin at a time within `maxSignatureReads`; then the shared transactions not yet read, up to
- * `maxTxReads` (a coin left part-read finishes on a later cycle). Answers how many of each it sent,
- * so a caller reading in several passes can hold them all to one budget. Never rejects.
+ * `maxTxReads` (a coin left part-read finishes on a later cycle). An account the stream is about
+ * to cover waits for it (streamWaits) and leaves the budget to the next coin. Answers how many of
+ * each it sent, so a caller reading in several passes can hold them all to one budget. Never rejects.
  */
 export async function resolveHolderTransfers(
   groups: readonly TransferGroup[],
@@ -242,12 +306,21 @@ export async function resolveHolderTransfers(
     const accounts = all.filter((a) => {
       if (queued.has(a)) return false;
       const e = accountSigs.get(a);
-      if (!e) return true;
-      if (streamCovers(g.mintAddress, a, e)) {
+      if (e && streamCovers(g.mintAddress, a, e)) {
         e.atMs = now;
+        if (now - e.dueAtMs >= ACCOUNT_REREAD_MS) {
+          e.dueAtMs = now;
+          calls.streamSkipped += 1;
+        }
         return false;
       }
-      return now - e.atMs >= ACCOUNT_REREAD_MS;
+      if (e && now - e.atMs < ACCOUNT_REREAD_MS) return false;
+      // Due. Read once the stream's cover has settled, that read starts it, and no re-read follows.
+      if (streamWaits(g.mintAddress, a, now)) {
+        calls.streamDeferred += 1;
+        return false;
+      }
+      return true;
     });
     if (accounts.length === 0 || due.length + accounts.length > opts.maxSignatureReads) continue;
     for (const a of accounts) {
@@ -270,6 +343,7 @@ export async function resolveHolderTransfers(
           sigs,
           newest: page.signatures[0]?.signature ?? prev?.newest ?? null,
           atMs: now,
+          dueAtMs: now,
         });
         if (accountSigs.size > MAX_ACCOUNTS) {
           const oldest = accountSigs.keys().next().value;

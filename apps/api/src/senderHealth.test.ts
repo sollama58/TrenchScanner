@@ -34,7 +34,7 @@ describe("Sender's health", () => {
     expect(h.pingDue()).toBe(true);
     // One ping at a time.
     expect(h.pingDue()).toBe(false);
-    h.notePing(false);
+    h.notePing("down");
     expect(h.down).toBe(true);
     h.note(true);
     expect(h.down).toBe(false);
@@ -43,7 +43,17 @@ describe("Sender's health", () => {
     expect(h.pingDue()).toBe(false);
     c.t += SENDER_DOWN_WINDOW_MS;
     expect(h.pingDue()).toBe(true);
-    h.notePing(true);
+    h.notePing("up");
+    expect(h.down).toBe(false);
+  });
+
+  it("counts a rate-limited ping as an answer, not as down", () => {
+    const c = clock();
+    const h = new SenderHealth(c.now);
+    h.note(false);
+    h.notePing("limited");
+    expect(h.down).toBe(false);
+    h.note(false);
     expect(h.down).toBe(false);
   });
 });

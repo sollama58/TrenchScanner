@@ -6,6 +6,7 @@ import {
   prisma,
   Prisma,
   heldJobLocks,
+  HELIUS_CREDITS_OUT_ROW,
   readAiBudget,
   readAiReviewerSwitch,
   readWorkerConfig,
@@ -96,7 +97,7 @@ export async function registerAdminOpsRoutes(
       prisma.aiReview.count({ where: { createdAt: { gt: dayAgo } } }),
       prisma.burnEvent.count({ where: { createdAt: { gt: weekAgo } } }),
       prisma.$queryRaw<{ bytes: bigint }[]>`SELECT pg_database_size(current_database()) AS bytes`,
-      prisma.systemHeartbeat.findMany(),
+      prisma.systemHeartbeat.findMany({ where: { job: { not: HELIUS_CREDITS_OUT_ROW } } }),
       readAiBudget(env, now),
       prisma.tokenNarrative.count({ where: { checkedAt: { gt: dayAgo } } }),
       prisma.curatorChampion.findFirst({
@@ -135,7 +136,11 @@ export async function registerAdminOpsRoutes(
   /** /health/worker with the full error text - that route is public and truncates it. */
   app.get("/worker", async () => {
     const [heartbeats, heldLocks] = await Promise.all([
-      prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } }),
+      // Not the shared Helius stand-down (apiUsage.ts), which shares the table but is not a job.
+      prisma.systemHeartbeat.findMany({
+        where: { job: { not: HELIUS_CREDITS_OUT_ROW } },
+        orderBy: { job: "asc" },
+      }),
       heldJobLocks(),
     ]);
     const now = Date.now();

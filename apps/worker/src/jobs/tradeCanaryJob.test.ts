@@ -20,7 +20,7 @@ const CURVE_B = "CurveB11111111111111111111111111111111pump";
 /** Every dependency answering, unless a test says otherwise. */
 const clients = (over: Partial<CanaryClients> = {}): CanaryClients => ({
   build: vi.fn().mockResolvedValue({ transaction: "x" }),
-  senderPing: vi.fn().mockResolvedValue(undefined),
+  senderPing: vi.fn().mockResolvedValue("up"),
   blockHeight: vi.fn().mockResolvedValue(300_000_000),
   backupBlockHeight: vi.fn().mockResolvedValue(300_000_001),
   ...over,
@@ -71,8 +71,17 @@ describe("trade canary: the probes", () => {
     expect(build).not.toHaveBeenCalledWith(CURVE_B);
   });
 
+  it("reports a rate-limited Sender ping as degraded, not failed", async () => {
+    const senderPing = vi.fn().mockResolvedValue("limited");
+    const probes = await runCanaryProbes(clients({ senderPing }), { graduated: [], curve: [] });
+    expect(probes.find((p) => p.key === "sender")).toMatchObject({
+      status: "degraded",
+      detail: "Sender /ping answered 429",
+    });
+  });
+
   it("cuts a probe that doesn't answer off at its timeout", async () => {
-    const senderPing = vi.fn(() => new Promise<void>(() => undefined));
+    const senderPing = vi.fn(() => new Promise<"up">(() => undefined));
     const probes = await runCanaryProbes(clients({ senderPing }), { graduated: [], curve: [] }, 50);
     expect(probes.find((p) => p.key === "sender")).toMatchObject({
       status: "failed",
@@ -141,6 +150,16 @@ describe.skipIf(!dbAvailable)("trade canary against the database", () => {
     expect((second as { err: JobFailure }).err.meta.consecutiveFailures).toBe(2);
     // A run given up at its deadline still counts on.
     expect(canaryFailureMeta()).toEqual({ consecutiveFailures: 3 });
+
+    // A rate-limited ping is Sender answering: degraded, and the run passes.
+    const limited = clients({ senderPing: vi.fn().mockResolvedValue("limited") });
+    const degraded = await record(runTradeCanary(env, { clients: limited, mints }));
+    expect(degraded.ok).toBe(true);
+    expect((degraded as { meta: Record<string, unknown> }).meta).toMatchObject({
+      consecutiveFailures: 0,
+      failed: 0,
+      probes: { sender: "degraded" },
+    });
 
     const healed = await record(runTradeCanary(env, { clients: clients(), mints }));
     expect(healed.ok).toBe(true);

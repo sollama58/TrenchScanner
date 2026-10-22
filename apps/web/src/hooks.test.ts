@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   applyPollResult,
+  everyWhileVisible,
   pollIsStale,
   pollMountMaxAge,
   pollWant,
@@ -104,5 +105,40 @@ describe("a lookup view is only the mint that was opened", () => {
     expect(viewForMint("mintB", body("mintA"), false)).toBeNull();
     expect(viewForMint("mintB", null, false)).toBeNull();
     expect(viewForMint("mintB", body("mintB"), false)?.card.token.mintAddress).toBe("mintB");
+  });
+});
+
+describe("everyWhileVisible", () => {
+  it("skips ticks in a hidden tab and catches up on return", () => {
+    vi.useFakeTimers();
+    const listeners = new Set<() => void>();
+    const doc = {
+      visibilityState: "visible",
+      addEventListener: (_: string, fn: () => void) => listeners.add(fn),
+      removeEventListener: (_: string, fn: () => void) => listeners.delete(fn),
+    };
+    vi.stubGlobal("document", doc);
+    try {
+      let runs = 0;
+      const stop = everyWhileVisible(() => (runs += 1), 30_000);
+      vi.advanceTimersByTime(30_000);
+      expect(runs).toBe(1);
+      doc.visibilityState = "hidden";
+      vi.advanceTimersByTime(120_000);
+      expect(runs).toBe(1);
+      doc.visibilityState = "visible";
+      for (const fn of listeners) fn();
+      expect(runs).toBe(2);
+      // Back again before another run is due: nothing extra.
+      for (const fn of listeners) fn();
+      expect(runs).toBe(2);
+      stop();
+      expect(listeners.size).toBe(0);
+      vi.advanceTimersByTime(60_000);
+      expect(runs).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
   });
 });

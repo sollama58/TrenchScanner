@@ -120,6 +120,19 @@ export interface WalletBalance {
   decimals: number;
 }
 
+/** A wallet's coin balances. `truncated`: it holds more token accounts than the read pages through. */
+export interface WalletBalances {
+  balances: WalletBalance[];
+  truncated: boolean;
+}
+
+/**
+ * Pages of getTokenAccountsByOwnerV2 read per token program for one wallet's balances (1 credit
+ * each, up to 10,000 accounts). Empty accounts take page slots too, so a busy trader's wallet
+ * runs past the first page; past this cap the reading is marked truncated.
+ */
+const WALLET_BALANCE_MAX_PAGES = 10;
+
 /** A mint account's authorities and Token-2022 extensions. */
 export interface MintInfo {
   /** The token program that owns it. */
@@ -364,44 +377,56 @@ export class TradingRpc implements GuardRpc {
 
   /**
    * The wallet's coin balances, non-zero only, summed per mint (classic and Token-2022 accounts).
-   * On Helius: two sliced getTokenAccountsByOwnerV2 reads (1 credit each, one page, the same
-   * shape as the scan's empty-wallet read) plus one getMultipleAccounts for the mints' decimals
-   * (1 credit per 100). A whale's unpaged jsonParsed list used to time out and get billed again.
-   * Off Helius, or where V2 is not served: the unpaged jsonParsed read. Null when a read failed.
-   * A full page is a floor (truncated), not a failure.
+   * On Helius: sliced getTokenAccountsByOwnerV2 pages per program (1 credit each, the same shape
+   * as the scan's empty-wallet read), followed up to WALLET_BALANCE_MAX_PAGES, plus one
+   * getMultipleAccounts for the mints' decimals (1 credit per 100). A whale's unpaged jsonParsed
+   * list used to time out and get billed again. Off Helius, or where V2 is not served: the unpaged
+   * jsonParsed read. Null when a read failed. A wallet with more accounts than the cap reads is
+   * `truncated`, not failed.
    */
-  async getWalletBalances(owner: string): Promise<WalletBalance[] | null> {
+  async getWalletBalances(owner: string): Promise<WalletBalances | null> {
     if (!isHeliusRpcUrl(this.url)) return this.walletBalancesUnpaged(owner);
     const byMint = new Map<string, bigint>();
+    let truncated = false;
     for (const programId of [PROGRAM.token, PROGRAM.token2022]) {
-      let result: unknown;
-      try {
-        // retries 0: a timeout is already billed. The backup endpoint, when set, is the retry.
-        result = await this.call(
-          "getTokenAccountsByOwnerV2",
-          [
-            owner,
-            { programId },
-            {
-              encoding: "base64",
-              commitment: "confirmed",
-              dataSlice: { offset: 0, length: 72 },
-              limit: TOKEN_ACCOUNTS_PAGE_LIMIT,
-            },
-          ],
-          15_000,
-          0,
-        );
-      } catch (err) {
-        if (err instanceof RpcError && err.code === -32601) return this.walletBalancesUnpaged(owner);
-        return null;
-      }
-      const page = result ? tokenAccountsPage(result) : null;
-      if (!page) return null;
-      for (const entry of page.accounts) {
-        const parsed = parseTokenAccountSlice(entry);
-        if (!parsed || parsed.amount === 0n) continue;
-        byMint.set(parsed.mint, (byMint.get(parsed.mint) ?? 0n) + parsed.amount);
+      let paginationKey: string | null = null;
+      for (let pages = 0; ; pages += 1) {
+        if (pages >= WALLET_BALANCE_MAX_PAGES) {
+          truncated = true;
+          break;
+        }
+        let result: unknown;
+        try {
+          // retries 0: a timeout is already billed. The backup endpoint, when set, is the retry.
+          result = await this.call(
+            "getTokenAccountsByOwnerV2",
+            [
+              owner,
+              { programId },
+              {
+                encoding: "base64",
+                commitment: "confirmed",
+                dataSlice: { offset: 0, length: 72 },
+                limit: TOKEN_ACCOUNTS_PAGE_LIMIT,
+                ...(paginationKey ? { paginationKey } : {}),
+              },
+            ],
+            15_000,
+            0,
+          );
+        } catch (err) {
+          if (err instanceof RpcError && err.code === -32601) return this.walletBalancesUnpaged(owner);
+          return null;
+        }
+        const page = result ? tokenAccountsPage(result) : null;
+        if (!page) return null;
+        for (const entry of page.accounts) {
+          const parsed = parseTokenAccountSlice(entry);
+          if (!parsed || parsed.amount === 0n) continue;
+          byMint.set(parsed.mint, (byMint.get(parsed.mint) ?? 0n) + parsed.amount);
+        }
+        if (!page.key) break;
+        paginationKey = page.key;
       }
     }
     const decimals = await this.mintDecimals([...byMint.keys()]);
@@ -412,7 +437,7 @@ export class TradingRpc implements GuardRpc {
       if (places === undefined) continue;
       out.push({ mint, raw, decimals: places });
     }
-    return out;
+    return { balances: out, truncated };
   }
 
   /** Decimals byte of each mint (offset 44). Null when the read itself failed. */
@@ -438,7 +463,7 @@ export class TradingRpc implements GuardRpc {
   }
 
   /** Unpaged jsonParsed balances, for an endpoint that does not serve the V2 method. */
-  private async walletBalancesUnpaged(owner: string): Promise<WalletBalance[] | null> {
+  private async walletBalancesUnpaged(owner: string): Promise<WalletBalances | null> {
     const byMint = new Map<string, WalletBalance>();
     for (const programId of [PROGRAM.token, PROGRAM.token2022]) {
       const page = await this.read<{ value?: { account?: RawAccount }[] }>("getTokenAccountsByOwner", [
@@ -459,7 +484,7 @@ export class TradingRpc implements GuardRpc {
         else byMint.set(info.mint, { mint: info.mint, raw, decimals: info.tokenAmount?.decimals ?? 0 });
       }
     }
-    return [...byMint.values()];
+    return { balances: [...byMint.values()], truncated: false };
   }
 
   /**

@@ -156,6 +156,7 @@ import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolvePumpLaunches } from "./pumpLaunch.js";
 import { resolveStonksPoolLocks } from "./stonksPoolLock.js";
 import { resolveOnChainHolders } from "./onChainHolders.js";
+import type { ScreenBackup } from "./screenBackup.js";
 import {
   rememberGraduations,
   rememberLaunchTimes,
@@ -268,6 +269,11 @@ export interface ScanDeps {
   entryFastPath?: Pick<EntryFastPath, "takeStats">;
   rugCheck: RugCheckClient;
   helius: HeliusClient;
+  /**
+   * Another provider for the screen's Mayhem and top-holder reads when Helius gives no answer
+   * (screenBackup.ts). Optional: unset, those reads are Helius's alone.
+   */
+  screenBackup?: ScreenBackup;
   /** The live PumpPortal launch/graduation feed, drained once per cycle. Optional: off when unset. */
   stream?: {
     drain(): StreamEvent[];
@@ -1745,6 +1751,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
     deps.stream?.quietSince
       ? (mint, readAtMs) => recheckAgeByMint.has(mint) && deps.stream!.quietSince!(mint, readAtMs)
       : undefined,
+    deps.screenBackup,
   );
   // This cycle's chain read first, then the recent top-25 lists for the rest.
   for (const [mint, holders] of recentHolderLists) {
@@ -1767,7 +1774,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   const mayhemCandidates = candidates
     .filter((c) => passesLocalRugScreen(baseProfileByMint.get(c.mintAddress)))
     .map((c) => c.mintAddress);
-  const mayhemByMint = await resolveMayhemMode(mayhemCandidates, deps.helius);
+  const mayhemByMint = await resolveMayhemMode(mayhemCandidates, deps.helius, { backup: deps.screenBackup });
   lap("mayhem");
   // Every Mayhem coin known by now leaves the watchlist: this cycle rejects it, and none reads it again.
   void ignoreMayhemMints([

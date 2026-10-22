@@ -270,7 +270,9 @@ describe("runTrade", () => {
       builds++;
       return {
         ...built,
-        blockhashAt: builds === 1 ? h.now - SIGN_FRESH_MS - 1 : h.now,
+        blockhashAt: h.now,
+        // The API says the first blockhash was already past the signing window when it answered.
+        blockhashAgeMs: builds === 1 ? SIGN_FRESH_MS + 1 : 0,
         buildToken: `t-${builds}`,
       };
     });
@@ -279,6 +281,26 @@ describe("runTrade", () => {
     expect(builds).toBe(2);
     expect(h.signTransaction).toHaveBeenCalledTimes(1);
     expect((h.post.mock.calls[0]![1] as { buildToken?: string }).buildToken).toBe("t-2");
+  });
+
+  it("judges the blockhash's age on the browser's clock, whichever way the API's clock is off", async () => {
+    for (const skew of [-120_000, 120_000]) {
+      resetTradeSessionForTests();
+      h.now += 10_000;
+      let builds = 0;
+      h.api.mockImplementation(async (path: string) => {
+        if (path !== "/pro/trade/build") return { state: "confirmed" };
+        builds++;
+        return { ...built, blockhashAt: h.now + skew, blockhashAgeMs: 500 };
+      });
+      h.signTransaction.mockImplementation(async () => {
+        h.now += 5_000;
+        return [{ signedTransaction: signed(1) }];
+      });
+      await expect(runTrade(input, () => {})).resolves.toBe("sig");
+      expect(builds).toBe(1);
+    }
+    expect(h.signTransaction).toHaveBeenCalledTimes(2);
   });
 
   it("waits for the quote stage to finish before opening the wallet", async () => {
@@ -316,6 +338,30 @@ describe("runTrade", () => {
     expect(walletTradeBlock(owner)).toMatch(/still in flight/);
     expect(refreshed).toBe(1);
   });
+
+  it("times the in-flight lock on the browser's clock, not the API's blockhashAt", async () => {
+    // The API's clock is 35 s behind this browser's: counted from blockhashAt, the 90 s window
+    // would end 55 s after the send, while the blockhash itself is still live.
+    vi.stubGlobal("window", globalThis);
+    try {
+      h.signTransaction.mockImplementation(async () => [{ signedTransaction: signed(1) }]);
+      let statusReads = 0;
+      h.api.mockImplementation(async (path: string) => {
+        if (path === "/pro/trade/build") return { ...built, blockhashAt: h.now - 35_000 };
+        statusReads++;
+        throw new ApiError(404, "not found", { error: "not found" });
+      });
+      await expect(runTrade(input, () => {})).rejects.toThrow(STATUS_MAYBE);
+      h.now += 60_000;
+      await vi.waitFor(() => expect(statusReads).toBe(2), { timeout: 3_000 });
+      expect(walletTradeBlock(owner)).toMatch(/still in flight/);
+      // Past 90 s on this browser's clock since the send, the next poll lets it go.
+      h.now += 31_000;
+      await vi.waitFor(() => expect(walletTradeBlock(owner)).toBeNull(), { timeout: 3_000 });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 10_000);
 
   it("refreshes the session when the build says trading is off, and signs nothing", async () => {
     h.api.mockImplementation(async () => {

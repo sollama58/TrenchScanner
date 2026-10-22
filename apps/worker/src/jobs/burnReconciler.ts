@@ -6,7 +6,7 @@ import {
   parseBurnTransaction,
   parseCreditBurnTransaction,
   prisma,
-  SolanaRpc,
+  type SolanaRpc,
   SUBSCRIPTION_MINT,
   walletTag,
   type Env,
@@ -103,6 +103,40 @@ export interface ReconcileResult {
   recovered: number;
 }
 
+/** The two reads the reconciler makes, from SolanaRpc. */
+export type BurnRpc = Pick<SolanaRpc, "getSignaturesForAddress" | "getParsedTransactions">;
+
+/**
+ * `primary` with each read it doesn't answer asked of `backup` (another provider): a signature page
+ * that failed, and the transactions that came back missing. During a Helius outage, the credits
+ * running out on 2026-10-22 among them, the reconciler read only Helius and paid burns stopped
+ * granting access until it was back (audit 2026-10-22, M2). Both reads are standard methods at
+ * `finalized`, so any RPC answers them alike. A transaction confirmed but not yet finalized is
+ * missing from both, and the pass stops on it as before.
+ */
+export function withBurnBackup(primary: BurnRpc, backup: BurnRpc | null): BurnRpc {
+  if (!backup) return primary;
+  return {
+    async getSignaturesForAddress(address, options) {
+      const page = await primary.getSignaturesForAddress(address, options);
+      if (page !== null) return page;
+      logger.warn("signature page failed on the primary RPC - asking the backup");
+      return backup.getSignaturesForAddress(address, options);
+    },
+    async getParsedTransactions(signatures) {
+      const got = await primary.getParsedTransactions(signatures);
+      const missing = signatures.filter((sig) => (got.get(sig) ?? null) === null);
+      if (missing.length === 0) return got;
+      const more = await backup.getParsedTransactions(missing);
+      for (const sig of missing) {
+        const tx = more.get(sig) ?? null;
+        if (tx !== null) got.set(sig, tx);
+      }
+      return got;
+    },
+  };
+}
+
 /**
  * Find burns of the subscription token that nobody claimed, and credit them.
  *
@@ -120,7 +154,12 @@ export interface ReconcileResult {
  * unique constraint on the signature, so the worst case of two passes overlapping is some wasted
  * RPC calls.
  */
-export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<ReconcileResult> {
+export async function reconcileBurns(
+  env: Env,
+  primary: BurnRpc,
+  backup: BurnRpc | null = null,
+): Promise<ReconcileResult> {
+  const rpc = withBurnBackup(primary, backup);
   const result: ReconcileResult = {
     scanned: 0,
     burnsFound: 0,
@@ -306,7 +345,7 @@ async function trackStuck(
 
 /** One backwards walk over the mint's signatures, bounded by the page cap and optionally a floor. */
 async function collectSignatures(
-  rpc: SolanaRpc,
+  rpc: BurnRpc,
   opts: { until?: string; before?: string; stopAtFloor: Date | null },
 ): Promise<{
   pending: { signature: string; blockTime?: number | null }[];
@@ -398,7 +437,7 @@ async function collectSignatures(
  */
 async function processSignatures(
   collected: { signature: string; blockTime?: number | null }[],
-  rpc: SolanaRpc,
+  rpc: BurnRpc,
   result: ReconcileResult,
   order: "oldest-first" | "newest-first" = "oldest-first",
   /** Signatures given up on: one that still doesn't read is stepped over, not stopped on. */

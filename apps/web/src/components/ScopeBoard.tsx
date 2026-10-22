@@ -48,12 +48,13 @@ import {
   LINKS,
   nowReading,
   nowReadingAge,
+  QuoteBadge,
   QuotePill,
   recordedPeakOf,
   socialLinks,
 } from "./AlertCard";
 import { CardSearchButton } from "./CardSearchButton";
-import { DexInfoLabel } from "../dexInfoLabel";
+import { DexInfoLabel, dexInfoLabel } from "../dexInfoLabel";
 import { QuickBuyPill } from "./QuickBuyPill";
 import { TokenImage } from "./TokenImage";
 import { FilterGlyph } from "./FilterBadge";
@@ -617,6 +618,7 @@ export function ScopeRow({
   const chips = rowChips(card, d.chips, now);
   const showSource = d.showSource || marker;
   const img = d.imageSize === "s" ? 44 : d.imageSize === "l" ? 72 : 56;
+  const dexInfo = dexInfoLabel(card.token, now) && <DexInfoLabel token={card.token} now={now} />;
 
   return (
     <article
@@ -646,6 +648,7 @@ export function ScopeRow({
           preview={!preview}
           fallback={<span className="scope-img placeholder">{(card.token.symbol ?? "?").slice(0, 2)}</span>}
         />
+        <QuoteBadge token={card.token} className="scope-quote-badge" />
         {mark && d.showResult && (
           <span className={`scope-mark ${badge.tone}`} role="img" title={badge.text} aria-label={badge.text}>
             {mark}
@@ -675,15 +678,18 @@ export function ScopeRow({
               </button>
             )}
             <QuotePill token={card.token} className="scope-quote" />
-            <DexInfoLabel token={card.token} now={now} />
+            {/* Beside the ticker, where the Dex pill was (user ask 2026-10-22). */}
+            {d.showSearch && (
+              <CardSearchButton
+                className="scope-search"
+                symbol={card.token.symbol}
+                name={card.token.name}
+                mint={card.token.mintAddress}
+              />
+            )}
             {copied && (
               <span className="scope-copied" role="status">
                 Copied
-              </span>
-            )}
-            {d.showAge && (
-              <span className={`scope-age age-chip num${d.highlightNew && ageMs < 60_000 ? " new" : ""}`}>
-                {shortAge(ageMs)}
               </span>
             )}
           </div>
@@ -691,14 +697,6 @@ export function ScopeRow({
             <span className="scope-name" title={card.token.name}>
               {card.token.name}
             </span>
-          )}
-          {d.showSearch && (
-            <CardSearchButton
-              className="scope-search"
-              symbol={card.token.symbol}
-              name={card.token.name}
-              mint={card.token.mintAddress}
-            />
           )}
         </div>
         <div className="scope-meta">
@@ -768,6 +766,17 @@ export function ScopeRow({
           <div className="scope-fig" title="Peak since the alert">
             <span className="scope-fig-label">peak</span>
             <span className="num up">+{pct(peak)}</span>
+          </div>
+        )}
+        {/* The Dex pill and the age, under the figures (user ask 2026-10-22). */}
+        {(dexInfo || d.showAge) && (
+          <div className="scope-fig-pills">
+            {dexInfo}
+            {d.showAge && (
+              <span className={`scope-age age-chip num${d.highlightNew && ageMs < 60_000 ? " new" : ""}`}>
+                {shortAge(ageMs)}
+              </span>
+            )}
           </div>
         )}
       </div>

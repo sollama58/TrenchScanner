@@ -57,6 +57,26 @@ describe("resolveOnChainHolders", () => {
     expect(getLargestHoldersBatch).toHaveBeenCalledTimes(1);
   });
 
+  it("asks the backup for the mints Helius didn't answer, even when Helius threw", async () => {
+    const { helius } = fakeHelius((m) => (m === "a" ? { status: "found", holders } : { status: "failed" }));
+    const backup = {
+      holders: vi.fn(async (mints: readonly string[]) => new Map(mints.map((m) => [m, holders]))),
+    };
+    const out = await resolveOnChainHolders(["a", "b"], helius, env, 0, undefined, undefined, backup);
+    expect(backup.holders).toHaveBeenCalledWith(["b"]);
+    expect(out.get("b")).toEqual(holders);
+
+    resetOnChainHolders();
+    const throwing = {
+      getLargestHoldersBatch: async () => {
+        throw new Error("boom");
+      },
+    } as unknown as HeliusClient;
+    expect(
+      (await resolveOnChainHolders(["c"], throwing, env, 0, undefined, undefined, backup)).get("c"),
+    ).toEqual(holders);
+  });
+
   it("does nothing when switched off", async () => {
     const { helius, getLargestHoldersBatch } = fakeHelius(() => ({ status: "found", holders }));
     await resolveOnChainHolders(["a"], helius, { ...env, ONCHAIN_HOLDERS_MAX_PER_CYCLE: 0 }, 0);

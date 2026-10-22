@@ -15,6 +15,7 @@ import {
 } from "@trenchscanner/core";
 import { JobFailure, SHUTDOWN_INTERRUPTED_ERROR, STOPPED_ERROR, type JobRunMeta } from "../scheduler.js";
 import { exitForRestart } from "../processExit.js";
+import { checkHeliusPlan, readPlanState, type HeliusPlanState } from "./heliusBudget.js";
 
 const logger = createLogger("pipeline-watch");
 
@@ -45,7 +46,9 @@ const logger = createLogger("pipeline-watch");
  *
  * So are Helius's credits (findCreditProblems): when Helius answers "max usage reached" the
  * scanner stands its Helius calls down, and the admins hear once when that starts and once when it
- * clears; the heartbeat carries heliusCreditsOutUntil meanwhile.
+ * clears; the heartbeat carries heliusCreditsOutUntil meanwhile. The flows that outage empties
+ * (the screen fails closed without Helius) are put down to it, not to a stall: no restart, and a
+ * banner that names the cause instead (creditsOutFlows).
  *
  * And so is Pro trading (trading robustness audit 2026-10-19, #6): the trade canary's failed runs
  * in a row (findCanaryProblems - tradeCanaryJob.ts builds a trade every 5 minutes, never signing)
@@ -126,6 +129,8 @@ export interface Problem {
   side?: boolean;
   /** Pro trading's (the canary, trade outcomes): notified and failed like `side`, under its own heading. */
   trading?: boolean;
+  /** A quiet flow a Helius credits outage explains (creditsOutFlows): `side`, plus its own banner. */
+  creditsOut?: boolean;
 }
 
 /** The jobs the trainer process runs (see HEARTBEAT_JOB_ROLE), all watched from here. */
@@ -381,6 +386,31 @@ export function findCreditProblems(out: { since: Date; until: Date } | null): Pr
   ];
 }
 
+/**
+ * How long after a Helius stand-down a quiet flow is still put down to it, at the least: a flow is
+ * judged over its own window (FLOW_WINDOWS_MINUTES), so one whose window reaches back into the
+ * outage is the outage's for that long.
+ */
+export const CREDITS_OUT_FLOW_GRACE_MS = 15 * 60_000;
+const CREDITS_OUT_FLOW_NOTE = " - Helius credits exhausted";
+
+/**
+ * Pure: the quiet flows a Helius credits outage explains, made notify-only (`side`). While credits
+ * are out the screen fails closed on every new coin, so decisions and model alerts read zero; that
+ * counted as a stall, and the watcher put up "part of the scanner has stalled" and restarted the
+ * scanner, which mends nothing (audit 2026-10-22, H4). `outAt(t)` says whether credits were out at
+ * any time after `t` (heliusCreditsOut(t) !== null).
+ */
+export function creditsOutFlows(problems: Problem[], outAt: (t: number) => boolean, now: number): Problem[] {
+  const windows = FLOW_WINDOWS_MINUTES as Record<string, number>;
+  return problems.map((p) => {
+    const window = windows[p.key];
+    if (window === undefined || p.side) return p;
+    if (!outAt(now - Math.max(CREDITS_OUT_FLOW_GRACE_MS, window * 60_000))) return p;
+    return { ...p, text: `${p.text}${CREDITS_OUT_FLOW_NOTE}`, side: true, creditsOut: true };
+  });
+}
+
 /** What the trade canary's own heartbeat says (tradeCanaryJob.ts). */
 export interface CanaryCheck {
   lastRunAt: Date | null;
@@ -587,6 +617,8 @@ interface WatchState {
   /** 0 none, 1 the 5-minute warning is up, 2 the 1-minute warning is up (restart due), -1 restart capped. */
   warned: number;
   lastRestartAt: number | null;
+  /** The Helius plan's cycle so far (heliusBudget.ts); null with the alarm off. */
+  heliusPlan: HeliusPlanState | null;
 }
 
 async function previousState(): Promise<WatchState> {
@@ -602,6 +634,7 @@ async function previousState(): Promise<WatchState> {
     stalledSince: time("stalledSince"),
     warned: meta && typeof meta.warned === "number" ? meta.warned : 0,
     lastRestartAt: time("lastRestartAt"),
+    heliusPlan: readPlanState(meta?.heliusPlan),
   };
 }
 
@@ -695,11 +728,29 @@ export function restartStep(
   return warned >= 1 ? "none" : "warn5";
 }
 
+/** The visitors' banner while a Helius credits outage holds alerts back: the cause, not a stall. */
+export const CREDITS_OUT_BANNER =
+  "Alerts are paused: Helius credits exhausted (our chain-data provider). They resume on their own once the plan is topped up.";
+
 const BANNER: Record<"warn5" | "warn1", string> = {
   warn5:
     "Alerts are delayed: part of the scanner has stalled. If it doesn't recover, it restarts automatically in about 5 minutes, and alerts pause for a minute or two.",
   warn1: "The scanner restarts in about a minute to clear a stall. Alerts pause for a minute or two.",
 };
+
+/** Puts the credits-out banner up while `on` (again once one expires), and ends it when not. */
+async function creditsOutBanner(on: boolean, now: number): Promise<void> {
+  const open = { createdBy: WATCH_ANNOUNCER, message: CREDITS_OUT_BANNER, endedAt: null };
+  if (!on) {
+    await prisma.announcement.updateMany({ where: open, data: { endedAt: new Date(now) } });
+    return;
+  }
+  const up = await prisma.announcement.findFirst({
+    where: { ...open, expiresAt: { gt: new Date(now) } },
+    select: { id: true },
+  });
+  if (!up) await postBanner(CREDITS_OUT_BANNER, now);
+}
 
 async function postBanner(message: string, now: number): Promise<void> {
   await prisma.announcement.create({
@@ -747,6 +798,7 @@ function stateMeta(state: WatchState): JobRunMeta {
     stalledSince: state.stalledSince === null ? null : new Date(state.stalledSince).toISOString(),
     warned: state.warned,
     lastRestartAt: state.lastRestartAt === null ? null : new Date(state.lastRestartAt).toISOString(),
+    heliusPlan: state.heliusPlan,
   };
 }
 
@@ -778,6 +830,15 @@ async function watchOnce(
   const now = deps.now ?? Date.now();
   const before = await previousState();
   remember(before);
+  // The Helius plan against its cycle (HELIUS_MONTHLY_CREDITS): read about once an hour, notified
+  // once per threshold a cycle. A failed read keeps the last state and judges nothing new.
+  let heliusPlan = before.heliusPlan;
+  let planNotices: string[] = [];
+  try {
+    ({ state: heliusPlan, notices: planNotices } = await checkHeliusPlan(env, before.heliusPlan, now));
+  } catch (err) {
+    logger.warn("Helius plan not read", { error: String(err) });
+  }
   // Still out for a short while past the stand-down's end: it lifts at a fixed time and is only set
   // again by the next billed call refused, so a run in that gap read "flowing again" every cycle.
   const creditsOut = heliusCreditsOut(now - CREDITS_OUT_CLEAR_GRACE_MS);
@@ -793,7 +854,7 @@ async function watchOnce(
     countTradeOutcomes(now),
   ]);
   const problems = [
-    ...findProblems(flows, jobs, now, cursor),
+    ...creditsOutFlows(findProblems(flows, jobs, now, cursor), (t) => heliusCreditsOut(t) !== null, now),
     ...findSideJobProblems(sideJobs, now),
     ...findTrainerProblems(trainerJobs, now),
     ...findCapacityProblems(dbBytes, env.DB_DISK_ALERT_MB),
@@ -812,13 +873,17 @@ async function watchOnce(
   let warned = stalls.length === 0 ? 0 : before.warned;
   let lastRestartAt = before.lastRestartAt;
 
-  const notices: string[] = [];
+  const notices: string[] = [...planNotices];
   if (started.length > 0 || cleared.length > 0) notices.push(notificationText(started, cleared, problems));
   if (stalls.length === 0 && before.stalledSince !== null) await endBanners(now);
+  await creditsOutBanner(
+    problems.some((p) => p.creditsOut),
+    now,
+  );
 
   // From here on a failure keeps this run's warning level and any restart it scheduled. The
   // stalled keys stay the previous run's until the notices go out, so a failed send is retried.
-  remember({ keys: before.keys, stalledSince, warned, lastRestartAt });
+  remember({ keys: before.keys, stalledSince, warned, lastRestartAt, heliusPlan });
   const step = restartStep(stalledSince === null ? null : now - stalledSince, warned, lastRestartAt, now);
   if (step === "warn5" || step === "warn1") {
     warned = step === "warn5" ? 1 : 2;
@@ -827,11 +892,11 @@ async function watchOnce(
       notices.push("<b>🔄 Restarting the scanner in about a minute</b> to clear the stall.");
       (deps.restart ?? restartForStall)();
     }
-    remember({ keys: before.keys, stalledSince, warned, lastRestartAt });
+    remember({ keys: before.keys, stalledSince, warned, lastRestartAt, heliusPlan });
     await postBanner(BANNER[step], now);
   } else if (step === "capped") {
     warned = -1;
-    remember({ keys: before.keys, stalledSince, warned, lastRestartAt });
+    remember({ keys: before.keys, stalledSince, warned, lastRestartAt, heliusPlan });
     notices.push(
       "<b>Not restarting:</b> the scanner already restarted in the last hour, so this stall needs a look.",
     );
@@ -856,6 +921,7 @@ async function watchOnce(
     lastRestartAt: lastRestartAt === null ? null : new Date(lastRestartAt).toISOString(),
     databaseMb: dbBytes === null ? null : Math.round(dbBytes / 1_048_576),
     heliusCreditsOutUntil: creditsOut ? creditsOut.until.toISOString() : null,
+    heliusPlan,
     flows: Object.fromEntries(flows.map((f) => [f.key, f.recent])),
     tradeOutcomes: { ...trades },
   };

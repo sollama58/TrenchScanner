@@ -28,4 +28,25 @@ describe("quoteToken", () => {
   it("cuts a long symbol", () => {
     expect(quoteToken({ quoteMint: "x", quoteSymbol: "VERYLONGSYMBOL" })?.label).toBe("VERYLON…");
   });
+
+  it("gives the pair badge the quote's image, else its own colour and mark", () => {
+    const usdc = quoteToken({
+      quoteMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      quoteSymbol: "USDC",
+    });
+    expect(usdc?.images).toEqual([]);
+    expect(usdc?.tint).toBe("#2775ca");
+    expect(usdc?.mark).toBe("$");
+    const meme = quoteToken({
+      quoteMint: "Troll111",
+      quoteSymbol: "troll",
+      quoteImageUrl: "https://x.test/t.png",
+    });
+    expect(meme?.images).toContain("https://x.test/t.png");
+    expect(meme?.mark).toBe("T");
+    expect(meme?.tint).toBe(quoteToken({ quoteMint: "Troll111", quoteSymbol: "TROLL" })?.tint);
+    expect(
+      quoteToken({ quoteMint: "Troll111", quoteSymbol: "T", quoteImageUrl: "http://x.test/t.png" })?.images,
+    ).toEqual([]);
+  });
 });

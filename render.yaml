@@ -393,6 +393,13 @@ services:
       # Pump.fun launch proof falls back to when Helius is rate limited or down.
       - key: CHAIN_BACKUP_RPC_URLS
         sync: false
+      # Optional: the Helius plan's credits a month and the UTC day its billing cycle starts (1 by
+      # default). pipeline-watch (this service) tells the admins at 75/90/97% of the plan and when
+      # the last day's rate would run it out early; unset, the budget alarm is off.
+      - key: HELIUS_MONTHLY_CREDITS
+        sync: false
+      - key: HELIUS_CYCLE_START_DAY
+        sync: false
       # One minute (user decision 2026-10-22; it was thirty seconds). Every Helius budget in the
       # scan is per cycle, so the cadence sets Helius spend per minute: with the band wake (#874)
       # starting cycles early the scan ran ~3.6 times a minute and spent ~2.1M credits a day, which

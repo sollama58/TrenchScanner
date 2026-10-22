@@ -17,7 +17,7 @@ import {
 import { cachedGet } from "../cache";
 import { createPortal } from "react-dom";
 import { LiveTradesCard, useBatchedWallets } from "./LiveTrades";
-import { useLiveTrades } from "../liveTrades";
+import { useLiveTradesIfFollowed } from "../liveTrades";
 import { wideShareDeltas, withLiveShares, type LiveTradeShares } from "../liveShares";
 import { usePossibleSides } from "../possibleSides";
 import {
@@ -1220,7 +1220,7 @@ function TokenBody({
         ) : reward.otcDesk && detailCard.token.creatorFee?.deskRewards?.length ? (
           <>
             <DeskRewardTokens rewards={detailCard.token.creatorFee.deskRewards} className="tm-desk-rewards" />
-            {reward.detail && <small className="num muted">{reward.detail}</small>}
+            {reward.logoDetail && <small className="num muted">{reward.logoDetail}</small>}
           </>
         ) : (
           <>
@@ -2382,16 +2382,16 @@ function HolderFreshness({
 
 /**
  * The coin's live trades and supply for the holder shares between reads (user ask 2026-10-19):
- * the feed the chart's trade marks already follow, so the holders add no stream of their own (and
- * none with the marks off); none for a kept moment, which stands as it was.
+ * the Live trades tab's feed while it runs, so the holders add no stream of their own (Helius
+ * audit 2026-10-22 H-2: the follow is paid, so only that tab starts it). Without it the shares are
+ * the reading's; none for a kept moment, which stands as it was. A feed that stopped is not used:
+ * the trades since it stopped are missing.
  */
 function useLiveShares(mint: string, kept: boolean): LiveTradeShares | null {
-  const look = useAppearance();
-  const marksOn = look.chartMarks && look.chartMarkKinds.length > 0;
-  const feed = useLiveTrades(useTokenApi(mint), marksOn && !kept);
+  const feed = useLiveTradesIfFollowed(useTokenApi(mint), !kept);
   return useMemo(
     () =>
-      kept || feed.supply === null || feed.history.length === 0
+      kept || feed.status === null || feed.supply === null || feed.history.length === 0
         ? null
         : { trades: feed.history, supply: feed.supply, live: feed.status === "live" },
     [kept, feed.history, feed.supply, feed.status],
@@ -2606,10 +2606,12 @@ export function ChartCard({
     });
   const labeled = kept.mint === mint ? kept.wallets : (flagged ?? []);
   // The trader's own wallet is drawn as their own arrows, whatever its labels.
-  // Live, as they happen (user ask 2026-10-19): the coin's live trades (one feed with the Live
-  // trades tab) fold into the flagged wallets', and KOLs and tracked wallets the chart hasn't
-  // flagged yet join by name.
-  const liveFeed = useLiveTrades(api, markPrefs.on && markPrefs.kinds.length > 0);
+  // Live, as they happen (user ask 2026-10-19): while the Live trades tab follows the coin, its
+  // trades fold into the flagged wallets', and KOLs and tracked wallets the chart hasn't flagged
+  // yet join by name. The chart doesn't start that paid stream itself (Helius audit 2026-10-22
+  // H-2): without it, the flagged wallets' trades come with the chart's poll (the API reads an
+  // open chart's new trades every couple of minutes, chartMarkFill.ts).
+  const liveFeed = useLiveTradesIfFollowed(api, markPrefs.on && markPrefs.kinds.length > 0);
   // Every trade read this visit, not only the feed's newest 200: on a busy coin a KOL's buy was
   // pushed out of those within a minute or two, and its mark went with it (the trade tape only
   // reads the half hour after the call).

@@ -71,6 +71,7 @@ export async function buildModelsDesk(env: Env) {
     nowMs: now,
     intervalMs,
     lastRunAt: summary?.lastRunAt ? new Date(summary.lastRunAt).toISOString() : null,
+    durationMs: metaNumber(beat?.meta, "durationMs"),
     running,
     pending: pending !== null,
   });
