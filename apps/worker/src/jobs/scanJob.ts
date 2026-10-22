@@ -202,7 +202,9 @@ import {
   type CuratedCycle,
 } from "./curatedAlerts.js";
 
-import type { BandEntryWatch } from "../bandEntryWatch.js";
+import type { EntryWatch } from "../entryWatch.js";
+import type { EntryFastPath } from "./entryFastPath.js";
+import { cycleClaim, type CycleClaim } from "./scanClaims.js";
 
 const logger = createLogger("scan-job");
 
@@ -260,8 +262,13 @@ export interface ScanDeps {
    * misses (LiveLaunchQuotes). Optional: unset, every mint is read from DexScreener alone.
    */
   liveLaunches?: LaunchQuoteSource & { takeStats?(): LiveLaunchStats };
-  /** Starts the next cycle early when a young launch crosses into the band (BandEntryWatch). */
-  bandEntryWatch?: Pick<BandEntryWatch, "note" | "takeStats">;
+  /**
+   * Watches the young launches just under the band between cycles, for the entry fast path
+   * (EntryWatch): each cycle notes the ones it priced. Optional: no fast path without it.
+   */
+  entryWatch?: Pick<EntryWatch, "note" | "takeStats">;
+  /** The entry fast path's counters, for the cycle's heartbeat (entryFastPath.ts). Optional. */
+  entryFastPath?: Pick<EntryFastPath, "takeStats">;
   rugCheck: RugCheckClient;
   helius: HeliusClient;
   /**
@@ -278,9 +285,16 @@ export interface ScanDeps {
     tradeFlow?(mint: string): TradeFlowFeatures | undefined;
     /** Whether the mint has had no trade since then, as far as the stream can vouch (PumpPortalStream.quietSince). */
     quietSince?(mint: string, sinceMs: number): boolean;
+    /** A launch created since the last drain, still buffered: what a fast scan records it from. */
+    pendingLaunch?(mint: string): StreamEvent | undefined;
   };
   /** Jupiter's newest launches, read between cycles and drained once per cycle (JupiterLaunchPoller). Optional. */
-  launchPoller?: { drain(): DiscoveredCoin[]; takeStats?(): Record<string, number> };
+  launchPoller?: {
+    drain(): DiscoveredCoin[];
+    takeStats?(): Record<string, number>;
+    /** A launch read since the last drain, still buffered: what a fast scan records it from. */
+    pendingLaunch?(mint: string): DiscoveredCoin | undefined;
+  };
   /** The per-mint price tape the price-path features read from (curation/pricePath.ts). Optional. */
   pricePath?: PricePathBook;
   /** Refills that tape from stored snapshots after a restart (pricePathSeed.ts). Optional. */
@@ -307,10 +321,12 @@ export interface ScanCycleMeta {
 }
 
 /**
- * How long a cycle waits on the wallet stage - see the note at its call. A minute once; with the
- * scan every 30 seconds, a contender whose lookups run long is better decided on the next cycle
- * (the lookups carry on and cache what they find) than holding every other alert for a minute.
- * On 2026-10-04 contender-only lookups still took 20-60s whenever Helius slowed.
+ * How long a cycle waits on the wallet stage - see the note at its call. A minute once; set to
+ * this while the scan ran every 30 seconds, and kept with it back at a minute (2026-10-22): a
+ * contender whose lookups run long is better decided on the next cycle (the lookups carry on and
+ * cache what they find) than holding every other alert for a minute. On 2026-10-04 contender-only
+ * lookups still took 20-60s whenever Helius slowed. An entry fast scan (runEntryScan) waits on its
+ * one coin's lookups the same way.
  */
 const WALLET_STAGE_BUDGET_MS = 15_000;
 
@@ -404,13 +420,19 @@ let launchBuyerStageInFlight: Promise<unknown> | null = null;
 /**
  * Starts this cycle's lookups for the launch-buyer fresh-wallet share (launchBuyerFreshness.ts),
  * or answers from what is known while the previous cycle's are still running. Never rejects.
+ *
+ * `shared` is the cycle's: its reads are the one set in flight that the next cycle waits out. A
+ * fast scan's (entryFastPath.ts) are its one coin's own and run whatever the cycle's are doing -
+ * read from the cache instead, a coin seconds old would have nothing to read - and they land in
+ * the same caches. The other stages below take the same flag.
  */
 function startLaunchBuyerFreshness(
   mints: string[],
   helius: HeliusClient,
   env: Env,
+  shared = true,
 ): Promise<Map<string, number>> {
-  if (launchBuyerStageInFlight || env.LAUNCH_BUYER_FRESHNESS_LOOKUPS_PER_CYCLE <= 0) {
+  if ((shared && launchBuyerStageInFlight) || env.LAUNCH_BUYER_FRESHNESS_LOOKUPS_PER_CYCLE <= 0) {
     return Promise.resolve(launchBuyerFreshnessFromCache(mints));
   }
   const work = resolveLaunchBuyerFreshness(mints, helius, {
@@ -419,6 +441,7 @@ function startLaunchBuyerFreshness(
     logger.warn("launch-buyer wallet lookups failed - using known shares", { error: String(err) });
     return launchBuyerFreshnessFromCache(mints);
   });
+  if (!shared) return work;
   launchBuyerStageInFlight = work;
   void work.finally(() => {
     if (launchBuyerStageInFlight === work) launchBuyerStageInFlight = null;
@@ -660,9 +683,11 @@ function startSniperStage(
   groups: SniperGroup[],
   helius: HeliusClient,
   env: Env,
+  /** The cycle's, not a fast scan's - see startLaunchBuyerFreshness. */
+  shared = true,
 ): Promise<Map<string, LaunchSnipers>> {
   const mints = groups.map((g) => g.mintAddress);
-  if (sniperStageInFlight || !sniperReadsOn(env)) {
+  if ((shared && sniperStageInFlight) || !sniperReadsOn(env)) {
     return Promise.resolve(launchSnipersFromCache(mints));
   }
   const work = resolveLaunchSnipers(groups, helius, {
@@ -675,6 +700,7 @@ function startSniperStage(
     logger.warn("sniper reads failed - using cached figures", { error: String(err) });
     return launchSnipersFromCache(mints);
   });
+  if (!shared) return work;
   const settled = work.then(() => undefined);
   sniperStageInFlight = settled;
   void settled.then(() => {
@@ -697,16 +723,20 @@ function startLiveTapeStage(
   solPrices?: SolPriceLookup,
   /** Whether a coin has had no trade since then: a quiet coin's page stands without a re-read. */
   quietSince?: (mint: string, sinceMs: number) => boolean,
+  /** The cycle's, not a fast scan's - see startLaunchBuyerFreshness. */
+  shared = true,
 ): Promise<void> {
-  if (liveTapeInFlight || env.LIVE_TAPE_PAGES_PER_CYCLE <= 0 || mints.length === 0) {
-    return liveTapeInFlight ?? Promise.resolve();
+  if (env.LIVE_TAPE_PAGES_PER_CYCLE <= 0 || mints.length === 0) {
+    return (shared && liveTapeInFlight) || Promise.resolve();
   }
+  if (shared && liveTapeInFlight) return liveTapeInFlight;
   const work = readLiveTape(mints, helius, {
     maxPages: env.LIVE_TAPE_PAGES_PER_CYCLE,
     refreshMs: env.LIVE_TAPE_REFRESH_SECONDS * 1000,
     solPrices,
     quietSince,
   }).catch((err: unknown) => logger.warn("live tape reads failed", { error: String(err) }));
+  if (!shared) return work;
   liveTapeInFlight = work;
   void work.finally(() => {
     if (liveTapeInFlight === work) liveTapeInFlight = null;
@@ -741,8 +771,10 @@ function startLinkedWalletStage(
   quietSince?: (mint: string, sinceMs: number) => boolean,
   /** Old coins no decision is near (oldCoinMints): their top holders are re-read less often. */
   oldMints: ReadonlySet<string> = new Set(),
+  /** The cycle's, not a fast scan's - see startLaunchBuyerFreshness. */
+  shared = true,
 ): Promise<void> {
-  if (env.LINKED_WALLET_LOOKUPS_PER_CYCLE <= 0 || groups.length === 0 || linkedStageInFlight) {
+  if (env.LINKED_WALLET_LOOKUPS_PER_CYCLE <= 0 || groups.length === 0 || (shared && linkedStageInFlight)) {
     return Promise.resolve();
   }
   const waited = groups.slice(0, waitedCount);
@@ -808,6 +840,7 @@ function startLinkedWalletStage(
   };
   const first = pass(waited, true);
   const work = first.then(() => pass(rest, false));
+  if (!shared) return first;
   linkedStageInFlight = work;
   void work.finally(() => {
     if (linkedStageInFlight === work) linkedStageInFlight = null;
@@ -867,6 +900,159 @@ export function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleMeta> {
   // Each outside call is counted under the stage it was made in ("scan/wallets"), named as lap()
   // closes the stage - see withApiStages in core's apiUsage.ts.
   return withApiStages("scan", (apiStage) => scanCycle(deps, env, apiStage));
+}
+
+/** A watchlist row as the band refresh and the stages after it read it (selectWatchlist). */
+type TrackedToken = Awaited<ReturnType<typeof selectWatchlist>>["tracked"][number];
+
+/** One pass of scanTracked: the full cycle's, or the entry fast path's first scan of one coin. */
+interface ScanPass {
+  kind: "cycle" | "entry";
+  tracked: TrackedToken[];
+  /** The coins livestreaming on Pump.fun, from the cycle's discovery (null: unknown). */
+  liveStreams: ReadonlyMap<string, LiveStream> | null;
+  stagesMs: Record<string, number>;
+  lap: (stage: string) => void;
+  startedAt: number;
+  /** The cycle's: the watchlist's live count, for its log line. */
+  alive?: number;
+  /** The cycle's: its hold on the coins it reads (scanClaims.ts). */
+  claim?: CycleClaim;
+}
+
+type ScanPassResult =
+  | {
+      /** The band refresh failed, or nothing was left in band to read. */
+      stopped: "refreshFailed" | "empty";
+      lowCapHeld: number;
+    }
+  | {
+      stopped?: undefined;
+      candidates: CandidateToken[];
+      matchCount: number;
+      curatedEmitted: number;
+      settled: Map<string, unknown>;
+      rugCheckLookups: Record<string, number>;
+      lowCapHeld: number;
+    };
+
+/**
+ * The last cycle's discovery read of who is livestreaming, and its band count: a fast scan,
+ * which runs no discovery of its own, puts these on its coin's row as the cycle a few seconds
+ * later would (the livestream and mktInBandCount inputs). A minute old at most.
+ */
+let lastLiveStreams: ReadonlyMap<string, LiveStream> | null = null;
+let lastCycleInBand: number | null = null;
+
+/**
+ * The governor pass, one at a time: the cycle's and a fast scan's can now land together, and
+ * each counts its seats' trailing calls before sending, so side by side both could fill the same
+ * last slot. Each waits for the one before it, which takes a few hundred milliseconds.
+ */
+let governorTail: Promise<unknown> = Promise.resolve();
+
+function oneGovernorPassAtATime<T>(pass: () => Promise<T>): Promise<T> {
+  const run = governorTail.then(pass, pass);
+  governorTail = run.catch(() => undefined);
+  return run;
+}
+
+/** Counted as its own feature in the API usage panel ("entry-fast-path/rugCheck", ...). */
+export const ENTRY_FAST_PATH_FEATURE = "entry-fast-path";
+
+export interface EntryScanResult {
+  /** Why no first scan ran or decided: no watchlist row for the coin, set aside, or out of band now. */
+  skipped?: "noRow" | "ignored" | "refreshFailed" | "empty";
+  /** Model calls the scan's governor pass sent for the coin. */
+  called: number;
+  /** User-filter matches it made. */
+  matches: number;
+  stagesMs: Record<string, number>;
+}
+
+/**
+ * The entry fast path's first scan of one coin (entryFastPath.ts): what a full cycle does for a
+ * coin newly in the band - its discovery record, market data, mint authority, Mayhem, on-chain
+ * holders, the rug screen with RugCheck, wallets and linked wallets, TokenSage's first-scan read,
+ * scoring, the user filters, the curated decision and call, and the snapshot - run now for this
+ * coin alone, through the cycle's own stages (scanTracked) and on its caches and backoffs.
+ *
+ * A launch still buffered on the stream or Jupiter's launch poller is recorded from there first,
+ * as the cycle's discovery will record it when it drains them; a coin the cycle priced near the
+ * floor already has its row. The caller holds the coin's claim (scanClaims.ts).
+ */
+export function runEntryScan(deps: ScanDeps, env: Env, mint: string): Promise<EntryScanResult> {
+  return withApiStages(ENTRY_FAST_PATH_FEATURE, (apiStage) => entryScan(deps, env, mint, apiStage));
+}
+
+async function entryScan(
+  deps: ScanDeps,
+  env: Env,
+  mint: string,
+  apiStage: (stage: string) => void,
+): Promise<EntryScanResult> {
+  const startedAt = Date.now();
+  const stagesMs: Record<string, number> = {};
+  let lapStartedAt = startedAt;
+  const lap = (stage: string) => {
+    const now = Date.now();
+    stagesMs[stage] = now - lapStartedAt;
+    lapStartedAt = now;
+    apiStage(stage);
+  };
+  // The composite score's adopted weights (cached; the cycle keeps them fresh).
+  await refreshScoreWeights();
+  const streamed = deps.stream?.pendingLaunch?.(mint);
+  const polled = streamed ? undefined : deps.launchPoller?.pendingLaunch?.(mint);
+  if (streamed) {
+    await addNewMintsToWatchlist([
+      {
+        mintAddress: streamed.mintAddress,
+        symbol: streamed.symbol,
+        name: streamed.name,
+        discoverySource: "pumpportal",
+        launchpad: streamed.launchpad,
+        creator: streamed.creator,
+      },
+    ]);
+  } else if (polled) {
+    await addNewMintsToWatchlist([
+      {
+        mintAddress: polled.mintAddress,
+        symbol: polled.symbol,
+        name: polled.name,
+        imageUrl: polled.imageUrl,
+        createdAt: polled.createdAt,
+        discoverySource: "jupiter",
+        launchpad: polled.launchpad,
+      },
+    ]);
+    rememberLaunchTimes([polled]);
+  }
+  const row = await prisma.token.findUnique({
+    where: { mintAddress: mint },
+    select: {
+      id: true,
+      mintAddress: true,
+      firstSeenAt: true,
+      launchedAt: true,
+      launchpad: true,
+      ignoredAt: true,
+    },
+  });
+  lap("discovery");
+  if (!row || row.ignoredAt) return { skipped: row ? "ignored" : "noRow", called: 0, matches: 0, stagesMs };
+  const { ignoredAt: _ignored, ...tracked } = row;
+  const pass = await scanTracked(deps, env, {
+    kind: "entry",
+    tracked: [tracked],
+    liveStreams: lastLiveStreams,
+    stagesMs,
+    lap,
+    startedAt,
+  });
+  if (pass.stopped) return { skipped: pass.stopped, called: 0, matches: 0, stagesMs };
+  return { called: pass.curatedEmitted, matches: pass.matchCount, stagesMs };
 }
 
 async function scanCycle(
@@ -995,6 +1181,8 @@ async function scanCycle(
     rememberLaunchTimes(liveCoins);
     await reviveMovingMints(movingCoins(liveCoins), env);
   }
+  // For the fast scans until the next cycle (lastLiveStreams).
+  lastLiveStreams = liveStreams;
   const streamed = deps.stream?.drain() ?? [];
   // The description and socials of streamed launches the coin list didn't carry, read one coin at
   // a time behind the cycle (see launchDetails.ts); their rows are created bare below and filled
@@ -1080,6 +1268,152 @@ async function scanCycle(
     return { stagesMs, ...earlyExitMeta(env, deps.pumpFun) };
   }
 
+  // Everything from here reads and decides on the band, which the entry fast path does for one
+  // coin as well (scanTracked). The coins this cycle reads are claimed for it until it is done, so
+  // a fast scan never decides one of them alongside it (scanClaims.ts).
+  const claim = cycleClaim();
+  let pass: ScanPassResult;
+  try {
+    pass = await scanTracked(deps, env, {
+      kind: "cycle",
+      tracked,
+      liveStreams,
+      stagesMs,
+      lap,
+      startedAt,
+      alive,
+      claim,
+    });
+  } finally {
+    claim.release();
+  }
+  if (pass.stopped) return { stagesMs, lowCapHeld: pass.lowCapHeld, ...earlyExitMeta(env, deps.pumpFun) };
+  const { candidates, matchCount, curatedEmitted, settled, rugCheckLookups, lowCapHeld } = pass;
+
+  // Match peaks are no longer rolled forward here - they have their own job (createMatchPeaksRunner)
+  // so they stop holding up the next cycle.
+
+  // Data continuity: what the cycle banked for the models, and an alarm when nothing has been
+  // banked for a while (the process has to have been up that long first).
+  const samples = takeSampleStats();
+  const samplesBanked = (samples.banked.hourly ?? 0) + (samples.banked.event ?? 0);
+  const silentSince = samples.lastBankedAt?.getTime() ?? processStartedAt;
+  if (Date.now() - silentSince > SAMPLE_SILENCE_ALARM_MS) {
+    logger.error("no training samples banked for 30 minutes - the models are not learning", {
+      lastBankedAt: samples.lastBankedAt,
+      inBand: candidates.length,
+    });
+  }
+
+  // Per-METHOD invocation counts, which is what a metered RPC plan actually bills on - batching
+  // collapses these into far fewer HTTP requests, so nothing else reveals the real number. Reset
+  // each read, so this is everything the worker's Helius client sent since the last cycle ended
+  // (the wallet backfill behind a cycle lands in the next one). Served on GET /health/worker.
+  const rpcCalls = deps.helius.takeCallStats();
+  // Likewise for DexScreener: lookups every job in this process sent since the last cycle, the
+  // 429 pauses among them, and how long they queued for the shared budget.
+  // Plus the mints answered from its recent-quote cache instead of a lookup (QUOTE_CACHE_MS).
+  const dexScreenerStats = deps.dexScreener.takeCallStats?.();
+  const quoteCacheHits = deps.dexScreener.takeQuoteCacheHits?.();
+  const dexScreenerCalls =
+    dexScreenerStats && quoteCacheHits !== undefined
+      ? { ...dexScreenerStats, quoteCacheHits }
+      : dexScreenerStats;
+  const jupiterCalls = deps.jupiter?.takeCallStats();
+  // The linked-wallets reads among rpcCalls above, apart, with their credits (1 per call).
+  const linkedWalletCalls = takeLinkedWalletStats();
+  // The holder-to-holder transfer reads (holderTransfers.ts), apart, with their credits (1 per call).
+  const holderTransferCalls = takeHolderTransferStats();
+  // What the Helius holder stream received since the last cycle, and its estimated credits.
+  const heliusStream = takeHolderStreamStats();
+  // The young coins' curve tape: what its stream delivered, its RPC reads, and the day's stream spend.
+  const curveTape = takeCurveTapeStats();
+  // The price path recorder: paths saved, skipped as too quiet, over the day's cap, and written.
+  const pricePaths = takePricePathStats();
+  // The chart's candle store: the curve tape's 1-second rows written, and the backfill's steps.
+  const curveCandles = takeCurveCandleStats();
+  const candleBackfill = takeCandleBackfillStats();
+  // This process's Pump.fun budget (pumpfunGate.ts): requests let through, 429 pauses, held back.
+  const pumpfunGate = takePumpFunGateStats();
+  // The live tape's pages (10 credits each) since the last cycle, and the coins it holds a page for.
+  const liveTape = takeLiveTapeStats();
+  // Who priced the newest launches since the last cycle: Jupiter, its CoinGecko backup, or neither.
+  const liveLaunchQuotes = deps.liveLaunches?.takeStats?.();
+  // The entry fast path since the last cycle: crossings the watch saw (on the curve tape or from
+  // Jupiter), the first scans they started, the calls among them, those the cap or a cycle turned
+  // away, and how long a crossing took to its decision (entryWatch.ts, entryFastPath.ts).
+  const entryFastPath: Record<string, number> | undefined =
+    deps.entryWatch || deps.entryFastPath
+      ? { ...deps.entryWatch?.takeStats(), ...deps.entryFastPath?.takeStats() }
+      : undefined;
+  // Jupiter's newest-launch reads between cycles, and the launches they turned up.
+  const launchPoller = deps.launchPoller?.takeStats?.();
+  const holds = takeDecisionHolds();
+  logger.info("scan cycle complete", {
+    durationMs: Date.now() - startedAt,
+    tracked: tracked.length,
+    inBand: candidates.length,
+    matches: matchCount,
+    curated: curatedEmitted,
+    samplesBanked: samples.banked,
+    rpcCalls,
+    dexScreenerCalls,
+    jupiterCalls,
+    stagesMs,
+  });
+  return {
+    stagesMs,
+    ...discoveryMeta(deps.pumpFun),
+    rpcCalls,
+    linkedWalletCalls,
+    holderTransferCalls,
+    ...(heliusStream ? { heliusStream: { ...heliusStream } } : {}),
+    ...(curveTape ? { curveTape } : {}),
+    ...(pricePaths ? { pricePaths } : {}),
+    ...(curveCandles ? { curveCandles } : {}),
+    ...(candleBackfill ? { candleBackfill } : {}),
+    pumpfunGate,
+    liveTape,
+    ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
+    ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),
+    ...(liveLaunchQuotes ? { liveLaunchQuotes: { ...liveLaunchQuotes } } : {}),
+    ...(entryFastPath ? { entryFastPath } : {}),
+    ...(launchPoller ? { launchPoller: { ...launchPoller } } : {}),
+    tracked: tracked.length,
+    inBand: candidates.length,
+    // Coins under LOW_CAP_MCAP_USD this cycle kept to their market cap (lowCap.ts), not in inBand.
+    lowCapHeld,
+    matches: matchCount,
+    samplesBanked,
+    pricePathMints: deps.pricePath?.size ?? 0,
+    ...(tokenSageEnabled(env) ? { tokensage: takeTokenSageStats(), tokensageNow: takeNowStats() } : {}),
+    // Launch first-buyer reads (the top-10 snipers share) sent, landed and failed since last cycle.
+    sniperReads: takeSniperReadStats(),
+    // This cycle's RugCheck reports: cached, looked up while the cycle waited (fetched, failed,
+    // timedOut), and stale ones served while they refresh behind it - what the rugCheck stage is.
+    rugCheckLookups: { ...rugCheckLookups },
+    // In-band coins already rejected for good (Mayhem, an instant bond), kept on their last report.
+    settledRejects: settled.size,
+    // Epoch ms of the newest rug-screen (pre-check) pass: the header pill's "last passed pre-check".
+    ...(lastScreenPassAt > 0 ? { lastScreenPassAt } : {}),
+    // Ready coins held back from a decision, by what held them: this cycle's and since boot.
+    decisionHolds: holds.cycle,
+    decisionHoldsSinceBoot: holds.sinceBoot,
+  };
+}
+
+/**
+ * The band refresh and everything after it, for one pass: the full cycle's (its whole watchlist),
+ * or the entry fast path's first scan of the one coin that just crossed into the band
+ * (entryFastPath.ts). Both run the same stages and the same decision logic on the same caches and
+ * backoffs, so a coin first read by the fast path is screened, scored, matched and decided exactly
+ * as the cycle would have it on the same readings; what only the cycle does (the viewed coins, the
+ * entry watch's list, the filter settling pass, the counters on its heartbeat) is marked where it
+ * happens. Returns what the cycle's heartbeat reports, or why the pass stopped early.
+ */
+async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<ScanPassResult> {
+  const { tracked, stagesMs, lap, startedAt } = pass;
+  const cycle = pass.kind === "cycle";
   // Tokens someone currently has open on a Live Feed page (see the comment on
   // Token.lastViewedAt) keep getting re-scanned regardless of mcap band, so "Now"/% change
   // stays live for a genuine breakout winner instead of freezing the moment it leaves the
@@ -1094,17 +1428,22 @@ async function scanCycle(
   const viewCutoff = new Date(Date.now() - env.ACTIVE_VIEW_WINDOW_MINUTES * 60_000);
   // Bounded like the live-price job's read of the same rows: any subscriber can stamp tokens as
   // viewed (GET /live/market), and an unbounded read put their whole list into every cycle's
-  // DexScreener calls. The most recently viewed win.
-  const activelyViewed = await prisma.token.findMany({
-    where: { lastViewedAt: { gt: viewCutoff } },
-    select: { id: true, mintAddress: true, firstSeenAt: true, launchedAt: true },
-    orderBy: { lastViewedAt: "desc" },
-    take: env.LIVE_PRICE_MAX_TRACKED,
-  });
+  // DexScreener calls. The most recently viewed win. The cycle's alone: a fast scan reads its one
+  // coin, and the viewed coins are the next cycle's as ever.
+  const activelyViewed = cycle
+    ? await prisma.token.findMany({
+        where: { lastViewedAt: { gt: viewCutoff } },
+        select: { id: true, mintAddress: true, firstSeenAt: true, launchedAt: true },
+        orderBy: { lastViewedAt: "desc" },
+        take: env.LIVE_PRICE_MAX_TRACKED,
+      })
+    : [];
   // Coins looked up in the Utilities tab are among the viewed ones; each also wants a full read.
-  void noteUtilityLookups(env).catch((err: unknown) =>
-    logger.warn("failed to note looked-up tokens for TokenSage", { error: String(err) }),
-  );
+  if (cycle) {
+    void noteUtilityLookups(env).catch((err: unknown) =>
+      logger.warn("failed to note looked-up tokens for TokenSage", { error: String(err) }),
+    );
+  }
   const trackedMints = new Set(tracked.map((t) => t.mintAddress));
   const viewedOffWatchlist = activelyViewed.filter((t) => !trackedMints.has(t.mintAddress));
   // When each reading below was taken, so the live figures written from them carry that time.
@@ -1138,12 +1477,12 @@ async function scanCycle(
         liveLaunches: live,
       },
     );
-    // The young launches just under the floor, for the watch that starts the next cycle early when
-    // one crosses (see BandEntryWatch).
-    if (deps.bandEntryWatch && live) {
+    // The young launches just under the floor, for the watch that gives one its first scan the
+    // moment it crosses (see EntryWatch). The cycle's list only: a fast scan reads one coin.
+    if (cycle && deps.entryWatch && live) {
       const young = new Set(live.mints);
-      // Only coins confirmed not Mayhem: one is never scanned, so it never wakes the scan.
-      deps.bandEntryWatch.note(
+      // Only coins confirmed not Mayhem: one is never scanned, so it never gets a fast scan.
+      deps.entryWatch.note(
         refreshed.marketData.filter((t) => young.has(t.mintAddress) && knownNotMayhem(t.mintAddress)),
       );
     }
@@ -1162,16 +1501,20 @@ async function scanCycle(
     // rejectExtremes.ts). Never waited on: nothing in the cycle reads it.
     void foldRejectExtremes(refreshed.marketData, refreshed.seenAt);
   } catch (err) {
-    logger.error("dexscreener refresh failed, aborting cycle", { error: String(err) });
-    scheduleDexInfo(deps.dexScreener);
-    return { stagesMs, ...earlyExitMeta(env, deps.pumpFun) };
+    logger.error(`dexscreener refresh failed, aborting ${cycle ? "cycle" : "fast scan"}`, {
+      error: String(err),
+    });
+    if (cycle) scheduleDexInfo(deps.dexScreener);
+    return { stopped: "refreshFailed", lowCapHeld: 0 };
   }
   lap("marketRefresh");
-  logger.info("refreshed watchlist", {
-    tracked: tracked.length,
-    alive,
-    inBand: candidates.length,
-  });
+  if (cycle) {
+    logger.info("refreshed watchlist", {
+      tracked: tracked.length,
+      alive: pass.alive,
+      inBand: candidates.length,
+    });
+  }
 
   const alreadyCovered = new Set(candidates.map((c) => c.mintAddress));
   const viewedLookedUp = await viewedLookup;
@@ -1220,15 +1563,20 @@ async function scanCycle(
       }
     }
   }
+  // The band is the cycle's from here, less any coin a fast scan is reading now: that coin's
+  // first scan is this moment's reading of it (scanClaims.ts).
+  if (pass.claim) candidates = pass.claim.claim(candidates);
   lap("viewedRefresh");
 
   if (candidates.length === 0) {
-    scheduleDexInfo(deps.dexScreener);
-    logger.info("scan cycle complete (nothing in band or actively viewed)", {
-      durationMs: Date.now() - startedAt,
-      lowCapHeld,
-    });
-    return { stagesMs, lowCapHeld, ...earlyExitMeta(env, deps.pumpFun) };
+    if (cycle) {
+      scheduleDexInfo(deps.dexScreener);
+      logger.info("scan cycle complete (nothing in band or actively viewed)", {
+        durationMs: Date.now() - startedAt,
+        lowCapHeld,
+      });
+    }
+    return { stopped: "empty", lowCapHeld };
   }
 
   // The coins whose bubble map someone has open, among this cycle's candidates only: their top
@@ -1590,7 +1938,7 @@ async function scanCycle(
         b.churn - a.churn,
     );
   const sniperStageStartedAt = Date.now();
-  const sniperWork = startSniperStage(sniperGroups, deps.helius, env);
+  const sniperWork = startSniperStage(sniperGroups, deps.helius, env, cycle);
   // The linked-wallets reading: who paid for each top-25 holder and the creator, in the wallet
   // stage's order (contenders first), on its own budget and the same wait.
   const linkedGroups: LinkedGroup[] = walletGroups.map((g) => {
@@ -1640,6 +1988,7 @@ async function scanCycle(
     watchedHolders,
     deps.stream?.quietSince ? (mint, sinceMs) => deps.stream!.quietSince!(mint, sinceMs) : undefined,
     oldMints,
+    cycle,
   );
   // The live tape: the newest trades of each coin close to a call (contenders, then alerts held
   // for a wallet figure), for the flagged wallets trading it - on the same wait.
@@ -1650,6 +1999,7 @@ async function scanCycle(
     // Test doubles may stub the client without it.
     deps.dexScreener.solPricesOf ? (m) => deps.dexScreener.solPricesOf(m) : undefined,
     deps.stream?.quietSince ? (mint, sinceMs) => deps.stream!.quietSince!(mint, sinceMs) : undefined,
+    cycle,
   );
 
   // A user filter with a wallet criterion holds a match until the figure is in, up to
@@ -1686,7 +2036,8 @@ async function scanCycle(
   // budget the cycle goes on with what the caches already hold - wallets not yet looked up read
   // as unknown, as they would on a provider outage - and the lookups carry on in the background,
   // filling the caches for the next cycle. A cycle that finds the previous lookups still running doesn't
-  // start more on top of them.
+  // start more on top of them. A fast scan's are its own coin's (see startLaunchBuyerFreshness):
+  // it never waits out the cycle's, and leaves the backfill to the cycle.
   //
   // Only the contenders' lookups are waited on (unless a user filter needs them all - see
   // walletFiltersActive). Everyone else's wallets are read from the cache
@@ -1703,7 +2054,7 @@ async function scanCycle(
       resolveEarliestActivity(freshness.groups, deps.helius, { lookupGroups: 0 }),
       resolveWalletHoldings(walletGroups, deps.helius, env, { lookupGroups: 0 }),
     ]);
-  if (walletStageInFlight) {
+  if (cycle && walletStageInFlight) {
     logger.warn("previous wallet lookups still running - this cycle reads wallet signals from cache");
     walletResults = await fromCacheOnly();
   } else {
@@ -1722,21 +2073,26 @@ async function scanCycle(
         valuation,
       }),
     ]);
-    const settled = work.then(
-      () => undefined,
-      () => undefined,
-    );
-    walletStageInFlight = settled;
-    void settled.then(() => {
-      if (walletStageInFlight === settled) walletStageInFlight = null;
-    });
+    if (cycle) {
+      const settled = work.then(
+        () => undefined,
+        () => undefined,
+      );
+      walletStageInFlight = settled;
+      void settled.then(() => {
+        if (walletStageInFlight === settled) walletStageInFlight = null;
+      });
+    } else {
+      // Not waited past the budget below; a late failure is only the cache's loss.
+      work.catch(() => undefined);
+    }
     walletResults = await withinBudget(work, WALLET_STAGE_BUDGET_MS);
     if (!walletResults) {
       logger.warn("wallet lookups over budget - continuing with cached wallet signals", {
         budgetMs: WALLET_STAGE_BUDGET_MS,
       });
       walletResults = await fromCacheOnly();
-    } else {
+    } else if (cycle) {
       startWalletBackfill(
         // Not the old coins no decision is near: their top 10's empty-wallet check was re-run on the
         // 60-minute cache for as long as they stayed in band (user decision 2026-10-20 (Helius
@@ -1872,7 +2228,7 @@ async function scanCycle(
   // The launch buyers' fresh-wallet share, from the buyers the sniper stage just read: started
   // now so it overlaps the quotes and priors below, and waited on briefly before the decisions.
   const launchBuyerMints = sniperGroups.map((g) => g.mintAddress);
-  const launchBuyerWork = startLaunchBuyerFreshness(launchBuyerMints, deps.helius, env);
+  const launchBuyerWork = startLaunchBuyerFreshness(launchBuyerMints, deps.helius, env, cycle);
 
   // Summed after the fact rather than accumulated with `matchCount += await ...`: that reads the
   // counter BEFORE the await and writes it after, so two candidates finishing close together can
@@ -1899,8 +2255,14 @@ async function scanCycle(
   if ("error" in loaded) throw loaded.error;
   const { priors } = loaded;
 
-  // One reading of the market for the whole cycle - the same context on every sample.
-  const marketContext = await loadMarketContext(env, candidates.length);
+  // One reading of the market for the whole cycle - the same context on every sample. A fast scan
+  // takes the last cycle's band count, not its own one coin, so its row reads the market the cycle
+  // around it would have.
+  if (cycle) lastCycleInBand = candidates.length;
+  const marketContext = await loadMarketContext(
+    env,
+    cycle ? candidates.length : (lastCycleInBand ?? candidates.length),
+  );
   deps.pricePath?.prune(new Date(Date.now() - 2 * 3_600_000));
   deps.pricePathSeeder?.seed(
     candidates.map((c) => ({ mint: c.mintAddress, tokenId: priors.get(c.mintAddress)?.token?.id })),
@@ -1973,7 +2335,7 @@ async function scanCycle(
           ),
           deps.pricePath,
           marketContext,
-          liveStreams,
+          pass.liveStreams,
           sniperWalletsFromCache(candidate.mintAddress),
           sniperChainAvailable,
           freshQuotes.get(candidate.mintAddress),
@@ -2008,6 +2370,7 @@ async function scanCycle(
                 ownTapes.get(candidate.mintAddress),
               ),
           devLaunchByMint.get(candidate.mintAddress) ?? null,
+          pass.kind,
         ),
       );
     } catch (err) {
@@ -2022,7 +2385,9 @@ async function scanCycle(
   // within the feed's paced budget actually go out - see emitCuratedCycle. Never fails the cycle.
   const emitCurated = async (curatedCycle: CuratedCycle): Promise<number> => {
     try {
-      return await emitCuratedCycle(curatedCycle, env, (mint) => deps.pumpFun.liveMarketCap(mint));
+      return await oneGovernorPassAtATime(() =>
+        emitCuratedCycle(curatedCycle, env, (mint) => deps.pumpFun.liveMarketCap(mint)),
+      );
     } catch (err) {
       logger.error("curated emission pass failed", { error: String(err) });
       return 0;
@@ -2049,12 +2414,20 @@ async function scanCycle(
     forEachWithConcurrency(others, CANDIDATE_CONCURRENCY, processOne(lateCycle)),
   ]);
   const curatedEmitted = contenderEmitted + (await emitCurated(lateCycle));
-  // In-band tokens with DexScreener info, plus this cycle's profile feed. Capped inside.
-  scheduleDexInfo(deps.dexScreener);
   const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);
-  markScanVerdictsPopulated();
   // This cycle's first safety-screen rejections, which the next refreshes fold prices into.
   void flushScreenRejects();
+  // Sends the narrative requests this pass noted. Never awaited: nothing waits on TokenSage.
+  void flushNarrativeRequests(env);
+  void flushNowReads(env);
+  // The rest is the cycle's: it read the whole band, a fast scan one coin.
+  if (!cycle) {
+    lap("candidates");
+    return { candidates, matchCount, curatedEmitted, settled, rugCheckLookups, lowCapHeld };
+  }
+  // In-band tokens with DexScreener info, plus this cycle's profile feed. Capped inside.
+  scheduleDexInfo(deps.dexScreener);
+  markScanVerdictsPopulated();
   // Every in-band token has now been evaluated against these filters: a filter armed before
   // this cycle loaded them has its backlog baselined and alerts from here on. Unless the refresh
   // lost a batch (a DexScreener timeout past its deadline): the tokens in it were never looked
@@ -2069,114 +2442,7 @@ async function scanCycle(
     markFilterPassComplete(activeFilters);
   }
   lap("candidates");
-  // Sends the narrative requests this cycle noted. Never awaited: nothing waits on TokenSage.
-  void flushNarrativeRequests(env);
-  void flushNowReads(env);
-  // Match peaks are no longer rolled forward here - they have their own job (createMatchPeaksRunner)
-  // so they stop holding up the next cycle.
-
-  // Data continuity: what the cycle banked for the models, and an alarm when nothing has been
-  // banked for a while (the process has to have been up that long first).
-  const samples = takeSampleStats();
-  const samplesBanked = (samples.banked.hourly ?? 0) + (samples.banked.event ?? 0);
-  const silentSince = samples.lastBankedAt?.getTime() ?? processStartedAt;
-  if (Date.now() - silentSince > SAMPLE_SILENCE_ALARM_MS) {
-    logger.error("no training samples banked for 30 minutes - the models are not learning", {
-      lastBankedAt: samples.lastBankedAt,
-      inBand: candidates.length,
-    });
-  }
-
-  // Per-METHOD invocation counts, which is what a metered RPC plan actually bills on - batching
-  // collapses these into far fewer HTTP requests, so nothing else reveals the real number. Reset
-  // each read, so this is everything the worker's Helius client sent since the last cycle ended
-  // (the wallet backfill behind a cycle lands in the next one). Served on GET /health/worker.
-  const rpcCalls = deps.helius.takeCallStats();
-  // Likewise for DexScreener: lookups every job in this process sent since the last cycle, the
-  // 429 pauses among them, and how long they queued for the shared budget.
-  // Plus the mints answered from its recent-quote cache instead of a lookup (QUOTE_CACHE_MS).
-  const dexScreenerStats = deps.dexScreener.takeCallStats?.();
-  const quoteCacheHits = deps.dexScreener.takeQuoteCacheHits?.();
-  const dexScreenerCalls =
-    dexScreenerStats && quoteCacheHits !== undefined
-      ? { ...dexScreenerStats, quoteCacheHits }
-      : dexScreenerStats;
-  const jupiterCalls = deps.jupiter?.takeCallStats();
-  // The linked-wallets reads among rpcCalls above, apart, with their credits (1 per call).
-  const linkedWalletCalls = takeLinkedWalletStats();
-  // The holder-to-holder transfer reads (holderTransfers.ts), apart, with their credits (1 per call).
-  const holderTransferCalls = takeHolderTransferStats();
-  // What the Helius holder stream received since the last cycle, and its estimated credits.
-  const heliusStream = takeHolderStreamStats();
-  // The young coins' curve tape: what its stream delivered, its RPC reads, and the day's stream spend.
-  const curveTape = takeCurveTapeStats();
-  // The price path recorder: paths saved, skipped as too quiet, over the day's cap, and written.
-  const pricePaths = takePricePathStats();
-  // The chart's candle store: the curve tape's 1-second rows written, and the backfill's steps.
-  const curveCandles = takeCurveCandleStats();
-  const candleBackfill = takeCandleBackfillStats();
-  // This process's Pump.fun budget (pumpfunGate.ts): requests let through, 429 pauses, held back.
-  const pumpfunGate = takePumpFunGateStats();
-  // The live tape's pages (10 credits each) since the last cycle, and the coins it holds a page for.
-  const liveTape = takeLiveTapeStats();
-  // Who priced the newest launches since the last cycle: Jupiter, its CoinGecko backup, or neither.
-  const liveLaunchQuotes = deps.liveLaunches?.takeStats?.();
-  // Band-entry checks between cycles, and the cycles they started early (this one among them).
-  const bandEntryWatch = deps.bandEntryWatch?.takeStats();
-  // Jupiter's newest-launch reads between cycles, and the launches they turned up.
-  const launchPoller = deps.launchPoller?.takeStats?.();
-  const holds = takeDecisionHolds();
-  logger.info("scan cycle complete", {
-    durationMs: Date.now() - startedAt,
-    tracked: tracked.length,
-    inBand: candidates.length,
-    matches: matchCount,
-    curated: curatedEmitted,
-    samplesBanked: samples.banked,
-    rpcCalls,
-    dexScreenerCalls,
-    jupiterCalls,
-    stagesMs,
-  });
-  return {
-    stagesMs,
-    ...discoveryMeta(deps.pumpFun),
-    rpcCalls,
-    linkedWalletCalls,
-    holderTransferCalls,
-    ...(heliusStream ? { heliusStream: { ...heliusStream } } : {}),
-    ...(curveTape ? { curveTape } : {}),
-    ...(pricePaths ? { pricePaths } : {}),
-    ...(curveCandles ? { curveCandles } : {}),
-    ...(candleBackfill ? { candleBackfill } : {}),
-    pumpfunGate,
-    liveTape,
-    ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
-    ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),
-    ...(liveLaunchQuotes ? { liveLaunchQuotes: { ...liveLaunchQuotes } } : {}),
-    ...(bandEntryWatch ? { bandEntryWatch: { ...bandEntryWatch } } : {}),
-    ...(launchPoller ? { launchPoller: { ...launchPoller } } : {}),
-    tracked: tracked.length,
-    inBand: candidates.length,
-    // Coins under LOW_CAP_MCAP_USD this cycle kept to their market cap (lowCap.ts), not in inBand.
-    lowCapHeld,
-    matches: matchCount,
-    samplesBanked,
-    pricePathMints: deps.pricePath?.size ?? 0,
-    ...(tokenSageEnabled(env) ? { tokensage: takeTokenSageStats(), tokensageNow: takeNowStats() } : {}),
-    // Launch first-buyer reads (the top-10 snipers share) sent, landed and failed since last cycle.
-    sniperReads: takeSniperReadStats(),
-    // This cycle's RugCheck reports: cached, looked up while the cycle waited (fetched, failed,
-    // timedOut), and stale ones served while they refresh behind it - what the rugCheck stage is.
-    rugCheckLookups: { ...rugCheckLookups },
-    // In-band coins already rejected for good (Mayhem, an instant bond), kept on their last report.
-    settledRejects: settled.size,
-    // Epoch ms of the newest rug-screen (pre-check) pass: the header pill's "last passed pre-check".
-    ...(lastScreenPassAt > 0 ? { lastScreenPassAt } : {}),
-    // Ready coins held back from a decision, by what held them: this cycle's and since boot.
-    decisionHolds: holds.cycle,
-    decisionHoldsSinceBoot: holds.sinceBoot,
-  };
+  return { candidates, matchCount, curatedEmitted, settled, rugCheckLookups, lowCapHeld };
 }
 
 /**
@@ -3278,6 +3544,11 @@ async function processCandidate(
   walletScores: WalletScoreReading | null = null,
   winnerFollow: WinnerFollowReading | null = null,
   devLaunch: DevLaunchFeatures | null = null,
+  /**
+   * Whose pass this is: the cycle's, or the entry fast path's first scan of the coin. The fast scan
+   * decides on the coin but banks no training row, so the cycle's moments stay where they were.
+   */
+  pass: ScanPass["kind"] = "cycle",
 ): Promise<number> {
   const existingToken = prior.token;
   const withFlags = withLiveFlags(
@@ -3610,10 +3881,32 @@ async function processCandidate(
     // learned "missing" from background rows alone (notes/data-audit-2026-10-16, skew.md section
     // 4). Held this cycle, it is asked again next cycle: the spacing check stays open until it
     // is banked. No lookup is made for it that the cycle wouldn't make anyway.
-    if (!prior.recentHourlySample && inScanBand && inputsReady("hourly").ready) {
+    if (pass === "cycle" && !prior.recentHourlySample && inScanBand && inputsReady("hourly").ready) {
       await recordCandidateSample(token.id, scored, env);
     }
     const preGate = passesEventPreGate(scored, band);
+    if (pass === "entry") {
+      // The entry fast path's first scan (entryFastPath.ts) decides on the coin as a decision
+      // moment would, held to the same pre-gate and the same inputs, but banks nothing: no event
+      // row, no seat scores, no hourly sample, no second look. The coin's decision moments stay the
+      // cycle's, on the schedule they had before the fast path: its first event is banked by the
+      // first cycle to find it ready, and every seat decides there again on whatever has landed by
+      // then (TokenSage's read, the curve tape). Spent here, the event would have closed the coin's
+      // window for CANDIDATE_EVENT_SPACING_MINUTES (an hour) on a moment two seconds into the band,
+      // where TokenSage has read under a tenth of coins and the curve tape has nothing yet
+      // (notes/model-inputs-audit-2026-10-22) - every later input would land on no decision, and
+      // the seats would train on the youngest moment of each coin instead of the one they decide
+      // on live. A seat that calls here is graded from its own alert anchor (an "emission" row,
+      // as for any call sent without a fresh event) and is on its cooldown when the cycle decides,
+      // so a coin gets no second card from it; a seat that said no here can still call there. The
+      // deep read is asked for now, so it has the cycle's minute to land on the coin's event.
+      // Holds are not counted: the cycle counts its own, once per moment.
+      if (preGate && inputsReady("decision").ready) {
+        noteNarrativeWanted(token.mintAddress, "full", env, narrativeHints);
+        await collectCuratedContender(curatedCycle, token, scored, null, env, snapshot.id);
+      }
+      return matchCount;
+    }
     // Held by the pre-gate's price test alone (isCollapsing, or an older coin's 5-minute rise):
     // everything else about the moment was ready.
     if (!preGate && passesEventPreGate(scored, band, { skip5m: true })) {
