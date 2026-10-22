@@ -4146,11 +4146,19 @@ export function withHolderKinds(
       const fresh = !!earliest && earliest.getTime() >= freshCutoff;
       const empty =
         !!holdings && here !== undefined && holdings.otherHoldingsUsd - here < env.WALLET_HOLDINGS_MIN_USD;
+      // The priced portfolio already computed for the empty-wallet check. An unpriced wallet's
+      // floor is not that figure, and a wallet the check never reached has none. Zero is kept
+      // when the check priced the wallet at zero; it is not written in place of a miss.
+      const portfolio =
+        holdings && holdings.unpriced !== true && Number.isFinite(holdings.otherHoldingsUsd)
+          ? holdings.otherHoldingsUsd
+          : undefined;
       return {
         ...h,
         ...(sniper ? { sniper: true } : {}),
         ...(fresh ? { fresh: true } : {}),
         ...(empty ? { empty: true } : {}),
+        ...(portfolio !== undefined ? { portfolioUsd: portfolio } : {}),
       };
     }),
   };

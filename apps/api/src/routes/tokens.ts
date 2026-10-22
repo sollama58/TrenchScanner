@@ -220,6 +220,11 @@ export interface TokenChart {
    * newest holder list, and the tape's largest holders at its anchor. Empty until the tape is read.
    */
   holderEntries: Record<string, HolderEntry>;
+  /**
+   * SOL's USD price already kept for the charts. Absent when none is in hand: the route does not
+   * ask a price provider for it.
+   */
+  solUsd?: number;
 }
 
 /**
@@ -273,6 +278,9 @@ export interface HolderEntry {
   solOut: number;
   /** Share of what it bought that it has sold since, 0-1; null when it bought none. */
   soldShare: number | null;
+  /** Whole tokens bought and sold on the tape. 0 when the tape read none, not a stand-in for unread. */
+  tokensBought: number;
+  tokensSold: number;
 }
 
 /** The tape's largest holders at its anchor that get a holder entry, besides the newest list's. */
@@ -581,6 +589,8 @@ export function holderEntries(
       solIn: round(r.solIn, 3),
       solOut: round(r.solOut, 3),
       soldShare: r.tokensBought > 0 ? round(Math.min(1, r.tokensSold / r.tokensBought), 3) : null,
+      tokensBought: round(r.tokensBought, 3),
+      tokensSold: round(r.tokensSold, 3),
     };
   }
   return out;
@@ -1111,7 +1121,7 @@ export async function readTokenChart(
       return null;
     });
   if (found && !found.token)
-    return { mint: mintAddress, candles: null, marketCap: [], ...shareable(noWallets) };
+    return withSolPrice({ mint: mintAddress, candles: null, marketCap: [], ...shareable(noWallets) });
   const own = streamCandles(streamFeeds, mintAddress, 60_000).catch(() => null);
   if (!found) {
     // The database erring: what is already in memory, without a Pump.fun call.
@@ -1124,14 +1134,17 @@ export async function readTokenChart(
       kept.candles ? onSupply(kept.candles, factors.get(mintAddress)) : null,
       stream?.candles ?? null,
     );
-    return counted("chart", {
-      mint: mintAddress,
-      candles: merged.candles,
-      ...sourceOf(merged),
-      ...(kept.stale && merged.added === 0 && merged.candles ? { stale: true } : {}),
-      marketCap: [],
-      ...shareable(lastWallets.get(mintAddress) ?? noWallets),
-    });
+    return counted(
+      "chart",
+      withSolPrice({
+        mint: mintAddress,
+        candles: merged.candles,
+        ...sourceOf(merged),
+        ...(kept.stale && merged.added === 0 && merged.candles ? { stale: true } : {}),
+        marketCap: [],
+        ...shareable(lastWallets.get(mintAddress) ?? noWallets),
+      }),
+    );
   }
   const token = found.token!;
   const [read, snapshots, flagged, factors] = await Promise.allSettled([
@@ -1187,19 +1200,28 @@ export async function readTokenChart(
     tracked.length > 0
       ? await trackedMarks(token.id, marks.wallets, tracked, marks.saved).catch(() => marks.wallets)
       : marks.wallets;
-  return counted("chart", {
-    mint: mintAddress,
-    candles: merged.candles,
-    ...(older ? { older } : {}),
-    ...sourceOf(merged),
-    ...(pump.stale && merged.added === 0 && merged.candles ? { stale: true } : {}),
-    marketCap: (snapshots.status === "fulfilled" ? snapshots.value : [])
-      .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
-      .reverse()
-      .map((s) => ({ t: s.takenAt.getTime(), usd: s.marketCapUsd, buys: s.buys5m, sells: s.sells5m })),
-    ...shareable(marks),
-    wallets,
-  });
+  return counted(
+    "chart",
+    withSolPrice({
+      mint: mintAddress,
+      candles: merged.candles,
+      ...(older ? { older } : {}),
+      ...sourceOf(merged),
+      ...(pump.stale && merged.added === 0 && merged.candles ? { stale: true } : {}),
+      marketCap: (snapshots.status === "fulfilled" ? snapshots.value : [])
+        .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
+        .reverse()
+        .map((s) => ({ t: s.takenAt.getTime(), usd: s.marketCapUsd, buys: s.buys5m, sells: s.sells5m })),
+      ...shareable(marks),
+      wallets,
+    }),
+  );
+}
+
+/** Attaches the SOL price already in hand. A miss stays off the answer: this does not fetch one. */
+function withSolPrice<T extends object>(body: T): T & { solUsd?: number } {
+  const solUsd = sharedSolPrice.current();
+  return solUsd === null ? body : { ...body, solUsd };
 }
 
 /**

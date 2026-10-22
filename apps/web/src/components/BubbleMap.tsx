@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { LoadingNote, SkelValue } from "./Loading";
-import { SecondsAgo, hms } from "./Freshness";
+import { LiveStamp, SecondsAgo, hms } from "./Freshness";
 import type { Snapshot, Token } from "../api";
 import { usePolling } from "../hooks";
 import { invalidate } from "../cache";
@@ -2319,6 +2319,7 @@ export function BubbleMapSection({
   column = false,
   spread,
   live = null,
+  freshness,
 }: {
   token: Token;
   /** The reading to draw; undefined while it loads. */
@@ -2350,6 +2351,11 @@ export function BubbleMapSection({
    * moves its wallet's share on the map between reads (liveShares.ts). None for a kept moment.
    */
   live?: LiveTradeShares | null;
+  /**
+   * The same status as Top Holders. `live` with no `next` is exactly "Live". A `next` counts down
+   * to holderNextReadAt from holderShownAt and does not say live.
+   */
+  freshness?: { last: number; next: number | null; late?: boolean; live?: boolean };
 }) {
   const mint = token.mintAddress;
   const liveWide = liveWideFor(snapshotIn, useWideMap(mint));
@@ -2475,22 +2481,31 @@ export function BubbleMapSection({
     <section className={`sage-card bm-section${column ? " bm-col" : ""}`}>
       <h4>
         <BubblesIcon size={14} /> Bubble map
-        {moment && (
+        {(moment || freshness) && (
           <span
             className="sage-tag"
             title={
-              (chosenWide === undefined && wide
-                ? `${moment.title} The holders past the scan's top 25 were read ${ago(wide.readAt)}.`
-                : moment.title) +
-              (drawn && moment.at !== undefined
-                ? ` Holders read at ${hms(drawn.at)}${drawn.tradeAt !== null && drawn.tradeAt > drawn.listAt ? `; shares moved by live trades since, the newest at ${hms(drawn.tradeAt)}` : ""}.`
-                : "")
+              moment
+                ? (chosenWide === undefined && wide
+                    ? `${moment.title} The holders past the scan's top 25 were read ${ago(wide.readAt)}.`
+                    : moment.title) +
+                  (drawn && moment.at !== undefined
+                    ? ` Holders read at ${hms(drawn.at)}${drawn.tradeAt !== null && drawn.tradeAt > drawn.listAt ? `; shares moved by live trades since, the newest at ${hms(drawn.tradeAt)}` : ""}.`
+                    : "")
+                : undefined
             }
           >
-            {moment.at !== undefined && Number.isFinite(moment.at) ? (
+            {freshness ? (
+              <LiveStamp
+                last={freshness.last}
+                next={freshness.next}
+                late={freshness.late}
+                live={freshness.live}
+              />
+            ) : moment && moment.at !== undefined && Number.isFinite(moment.at) ? (
               <SecondsAgo at={drawn ? drawn.at : moment.at} />
             ) : (
-              moment.label
+              moment?.label
             )}
           </span>
         )}

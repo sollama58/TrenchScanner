@@ -190,6 +190,8 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
       solIn: 5,
       solOut: 1.5,
       soldShare: 0.4,
+      tokensBought: 1000,
+      tokensSold: 400,
     });
     // No buys on the tape: the coin came by transfer.
     expect(body.holderEntries[LINKED]).toMatchObject({ buys: 0, firstBuyAt: null, soldShare: null });

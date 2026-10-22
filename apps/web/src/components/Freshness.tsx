@@ -99,11 +99,29 @@ export function SecondsAgo({ at }: { at: number }) {
 }
 
 /**
+ * Top Holders and the bubble map share this. "Live" only when the stream is covering the coin and
+ * pushing updates, which is not a scheduled re-read: no age, no countdown, no "Updating…".
+ * A next-read time is a countdown instead, and that text does not say live. `last` is the chain
+ * read (holderShownAt). `next` is holderNextReadAt. A balance tick is neither input.
+ */
+export function holderStatusText(
+  now: number,
+  last: number,
+  next: number | null,
+  opts?: { live?: boolean; late?: boolean },
+): string {
+  if (opts?.live && next === null) return "Live";
+  const age = secondsAgo(last, now);
+  if (next === null) return age;
+  return `${age} · ${nextUpdateText(next, now, opts?.late ?? false)}`;
+}
+
+/**
  * A section's freshness beside its count: "12s ago · Next update in 0:48" (user ask 2026-10-19).
  * `next` is when the view reads again (the update shows then): a time, or a poll's beat; null
  * when no update is coming (the coin is no longer scanned), so only the age shows. `late`: see
- * nextUpdateText. `live`: shares also move with each trade. That does not replace the age or the
- * countdown: a trade is not a new holder read (user ask 2026-10-21).
+ * nextUpdateText. `live` with no `next`: the holder stream is pushing updates, so the status is
+ * exactly "Live". A `next` is a scheduled re-read and is never called live.
  */
 export function LiveStamp({
   last,
@@ -116,22 +134,23 @@ export function LiveStamp({
   next: number | { from: number; every: number } | null;
   late?: boolean;
   title?: string;
-  /** Shares move with each live trade between reads (user ask 2026-10-19): "Live" in place of the stamp. */
+  /** The stream is covering this coin and pushing updates, and nothing is waiting on a re-read. */
   live?: boolean;
 }) {
   const now = useSecondTick();
   const at = next === null ? null : typeof next === "number" ? next : nextBeat(next, now);
+  const streaming = live && at === null;
+  const text = holderStatusText(now, last, at, { live, late });
   return (
     <span
       className="tm-live-stamp small muted num"
       title={
-        (title ?? `Updated ${hms(last)}${at === null ? "" : `; next read ${hms(at)}`}`) +
-        (live ? ". Shares move with each trade until then; links and tags come with each read." : "")
+        streaming
+          ? "Holder updates are being pushed for this coin. This is not a scheduled re-read."
+          : (title ?? `Updated ${hms(last)}${at === null ? "" : `; next read ${hms(at)}`}`)
       }
     >
-      {live ? "Live · " : null}
-      {secondsAgo(last, now)}
-      {at !== null && <> · {nextUpdateText(at, now, late)}</>}
+      {text}
     </span>
   );
 }

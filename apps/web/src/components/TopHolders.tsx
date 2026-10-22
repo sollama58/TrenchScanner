@@ -2,6 +2,15 @@ import { Fragment, useId, useMemo, useState } from "react";
 import type { Snapshot } from "../api";
 import { buildGraph, CLOCK_ICON, nodeSlot, sameTimeSlot, type FlaggedHolder } from "../bubbleMap";
 import { entryParts, entryTitle, type HolderEntry } from "../holderEntry";
+import {
+  fundingLine,
+  fundingWho,
+  holderFunding,
+  holderStatLines,
+  portfolioUsdOf,
+  tradeStatsFor,
+  type HolderPrice,
+} from "../holderRow";
 import { possibleSideText, usePossibleSides } from "../possibleSides";
 import { openWallet } from "../walletModal";
 import { useWalletNames, walletText } from "../walletNames";
@@ -32,6 +41,7 @@ export function TopHolders({
   pending = false,
   defaultOpen = false,
   freshness,
+  solUsd = null,
 }: {
   snapshot: Snapshot | null | undefined;
   flagged: readonly FlaggedHolder[];
@@ -42,11 +52,13 @@ export function TopHolders({
   /** Open from the start: the Scope terminal's Holders tab, where the list is the tab's point. */
   defaultOpen?: boolean;
   /**
-   * When the live list was read and the next is due (null: no more coming), said beside the count
-   * (user ask 2026-10-19); none for a list kept as it stood.
+   * `last` is holderShownAt. `live` with no `next` is exactly "Live": the stream is pushing
+   * updates. A `next` is the chain-read countdown (holderNextReadAt) and is not called live.
+   * None for a list kept as it stood.
    */
-  /** `live`: shares move with the live trades between reads (liveShares.ts). */
   freshness?: { last: number; next: number | null; late?: boolean; live?: boolean };
+  /** SOL's USD price already on the chart. Null when the API has none in hand. */
+  solUsd?: number | null;
 }) {
   const [all, setAll] = useState(false);
   const [open, setOpen] = useState(defaultOpen);
@@ -57,10 +69,24 @@ export function TopHolders({
     [graph],
   );
   // One read names every holder and funder on the list (KOLs, exchanges, named services).
+  const funderWallets = useMemo(
+    () =>
+      snapshot
+        ? holders.flatMap((h) => {
+            const fund = h.wallet ? holderFunding(h.wallet, snapshot) : null;
+            return fund ? [fund.wallet] : [];
+          })
+        : [],
+    [holders, snapshot],
+  );
   const names = useWalletNames(
     useMemo(
-      () => [...holders.map((h) => h.wallet), ...(graph?.clusters.map((c) => c.funder) ?? [])],
-      [holders, graph],
+      () => [
+        ...holders.map((h) => h.wallet),
+        ...(graph?.clusters.map((c) => c.funder) ?? []),
+        ...funderWallets,
+      ],
+      [holders, graph, funderWallets],
     ),
   );
   // The bubble map reads the same wallets: one read, kept for the session, serves both.
@@ -131,6 +157,24 @@ export function TopHolders({
                 (typeof h.kol === "string" || named?.source === "kol" || named?.source === "tracked");
               const possible = (h.wallet ? (sides[h.wallet] ?? []) : []).filter((p) => !(side && p.known));
               const entry = h.wallet ? entries[h.wallet] : undefined;
+              const listed = h.wallet
+                ? snapshot?.linkedHolders?.find((row) => row.wallet === h.wallet)
+                : undefined;
+              const price: HolderPrice | null =
+                snapshot && solUsd && snapshot.priceUsd > 0 && snapshot.marketCapUsd > 0
+                  ? {
+                      priceUsd: snapshot.priceUsd,
+                      marketCapUsd: snapshot.marketCapUsd,
+                      solUsd,
+                      heldPct: h.pct,
+                    }
+                  : null;
+              const stats = holderStatLines({
+                portfolioUsd: portfolioUsdOf(listed),
+                ...tradeStatsFor(entry, price),
+              });
+              const fund = h.wallet && snapshot ? holderFunding(h.wallet, snapshot) : null;
+              const fundText = fund ? fundingLine(fundingWho(fund, names), fund.fundedAtMs) : null;
               return (
                 <li key={h.id} className="th-row">
                   <span className="th-rank num">{i + 1}</span>
@@ -260,6 +304,18 @@ export function TopHolders({
                             <span>{part}</span>
                           </Fragment>
                         ))}
+                      </span>
+                    )}
+                    {stats.length > 0 && (
+                      <span className="th-stats num">
+                        {stats.map((line) => (
+                          <span key={line}>{line}</span>
+                        ))}
+                      </span>
+                    )}
+                    {fundText && (
+                      <span className="th-fund muted" title="Who paid for this wallet, and when">
+                        {fundText}
                       </span>
                     )}
                   </span>
