@@ -9,7 +9,7 @@
 #
 # The worker and the trainer are the same build with a different WORKER_ROLE (see
 # HEARTBEAT_JOB_ROLE in packages/core/src/heartbeat.ts). They were one process until 2026-10-05:
-# a training run is minutes of a full CPU on the same single core as the 30-second scan, the
+# a training run is minutes of a full CPU on the same single core as the one-minute scan, the
 # training set's memory is what capped how much history the models could see, and a crashed
 # training run took the scanner down with it. GET /health/worker reports both, each job labelled
 # with the process that owns it.
@@ -393,14 +393,15 @@ services:
       # Pump.fun launch proof falls back to when Helius is rate limited or down.
       - key: CHAIN_BACKUP_RPC_URLS
         sync: false
-      # Thirty seconds, so a new alert reaches the dashboard within ~half a minute of the token
-      # qualifying. Affordable because nothing upstream scales with it: RugCheck requests follow
-      # RUGCHECK_CACHE_TTL_MINUTES below (see the worker's rugCheckProfiles.ts), snapshot and
-      # liveness writes are spaced in wall-clock time (scanJob.ts), and the wallet budgets below
-      # are halved to keep Helius spend per minute what it was at one minute. A full cycle took
-      # ~8s on 2026-10-04.
+      # One minute (user decision 2026-10-22; it was thirty seconds). Every Helius budget in the
+      # scan is per cycle, so the cadence sets Helius spend per minute: with the band wake (#874)
+      # starting cycles early the scan ran ~3.6 times a minute and spent ~2.1M credits a day, which
+      # ran the plan out (notes/audit-2026-10-22, C1). Speed for a coin entering the band comes from
+      # the entry fast path below instead, which scans that one coin as it crosses. RugCheck
+      # requests follow RUGCHECK_CACHE_TTL_MINUTES (the worker's rugCheckProfiles.ts), and snapshot
+      # and liveness writes are spaced in wall-clock time (scanJob.ts), so neither moves with it.
       - key: SCAN_INTERVAL_MINUTES
-        value: "0.5"
+        value: "1"
       # The entry fast path (worker's entryFastPath.ts, user decision 2026-10-22): a young launch
       # that holds the band's floor for 2.5 s between cycles gets its first scan at once, alone, on
       # the cycle's own stages, instead of starting the whole cycle early as the band wake did. At
@@ -410,13 +411,15 @@ services:
       - key: ENTRY_FAST_PATH_MAX_PER_MINUTE
         value: "30"
       # Per-CYCLE Helius budgets. Curated contenders' wallets are looked up first, the rest
-      # behind the cycle on what is left. Freshness is half its default (50) because the cycle
-      # above runs twice a minute. Holdings was cut from 15 to 10 on 2026-10-04 to save Helius
+      # behind the cycle on what is left. Freshness is back at its one-minute value, 50 (the env
+      # default), with the cycle back at a minute (user decision 2026-10-22): it was halved to 25
+      # while the cycle ran twice a minute, to keep spend per minute the same, so per-minute
+      # coverage is what it was. Holdings was cut from 15 to 10 on 2026-10-04 to save Helius
       # credits: each lookup costs 10 credits and the old budget filled every cycle (~88% of all
       # Helius spend). 10 is the floor - a top-10 holder group is all-or-nothing, so a smaller
       # budget could never complete a contender whose wallets are all uncached.
       - key: WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE
-        value: "25"
+        value: "50"
       - key: WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE
         value: "10"
       - key: RUGCHECK_CACHE_TTL_MINUTES

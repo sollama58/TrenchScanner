@@ -313,10 +313,12 @@ export interface ScanCycleMeta {
 }
 
 /**
- * How long a cycle waits on the wallet stage - see the note at its call. A minute once; with the
- * scan every 30 seconds, a contender whose lookups run long is better decided on the next cycle
- * (the lookups carry on and cache what they find) than holding every other alert for a minute.
- * On 2026-10-04 contender-only lookups still took 20-60s whenever Helius slowed.
+ * How long a cycle waits on the wallet stage - see the note at its call. A minute once; set to
+ * this while the scan ran every 30 seconds, and kept with it back at a minute (2026-10-22): a
+ * contender whose lookups run long is better decided on the next cycle (the lookups carry on and
+ * cache what they find) than holding every other alert for a minute. On 2026-10-04 contender-only
+ * lookups still took 20-60s whenever Helius slowed. An entry fast scan (runEntryScan) waits on its
+ * one coin's lookups the same way.
  */
 const WALLET_STAGE_BUDGET_MS = 15_000;
 
