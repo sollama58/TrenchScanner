@@ -280,6 +280,14 @@ describe("HeliusClient.getLaunchBuyersBatch", () => {
     expect(seed?.txs).toHaveLength(2);
   });
 
+  it("keeps the token of a short page in the seed, since a young coin's history goes on", async () => {
+    respond([{ data: [create, buy("a", 10)], paginationToken: "p2" }]);
+    const out = await client().getLaunchBuyersBatch([MINT], 25);
+    // The launch-buyer reading still ends here: the history has ended so far.
+    expect(out.get(MINT)).toMatchObject({ status: "found", complete: false });
+    expect(takeLaunchTapeSeed(MINT, 60_000)).toMatchObject({ pages: 1, paginationToken: "p2" });
+  });
+
   it("pages on while a full page hasn't reached the count, then calls it complete at the cap", async () => {
     const filler = Array.from({ length: 99 }, () => tx([[DEV, "devAta", 200, 200]]));
     const { bodies } = respond([

@@ -1,10 +1,28 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { prisma, loadEnv, WALLET_RISK_PERCENTILE_SINCE, type ScoredToken } from "@trenchscanner/core";
 import type { MessageBatchIndividualResponse } from "@anthropic-ai/sdk/resources/messages/batches";
-import { loadReplayItems, replayedMarket, replayVerdictRow } from "./replay.js";
-import { recordCandidateSample } from "../jobs/candidateOutcomeJob.js";
+
+/** The batch results the mocked client streams, and a hook run as the stream ends. */
+const batch: { results: MessageBatchIndividualResponse[]; onEnd?: () => void } = { results: [] };
+vi.mock("./client.js", async (importActual) => ({
+  ...(await importActual<typeof import("./client.js")>()),
+  anthropicClient: () => ({
+    messages: {
+      batches: {
+        retrieve: async () => ({ processing_status: "ended" }),
+        results: async () =>
+          (async function* () {
+            yield* batch.results;
+            batch.onEnd?.();
+          })(),
+      },
+    },
+  }),
+}));
+const { loadReplayItems, pollReplayRuns, replayedMarket, replayVerdictRow } = await import("./replay.js");
+const { recordCandidateSample } = await import("../jobs/candidateOutcomeJob.js");
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `ai-replay-test-${Date.now()}`;
@@ -233,5 +251,41 @@ describe("replayedMarket", () => {
     expect(scored.freshQuote).toBeUndefined();
     expect(scored.marketCapUsd).toBe(120_000);
     expect(replayedMarket({}, co).freshQuote).toBeUndefined();
+  });
+});
+
+describe.skipIf(!dbAvailable)("pollReplayRuns", () => {
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await prisma.aiReplayRun.deleteMany({ where: { batchId: { startsWith: TAG } } });
+  });
+
+  it("writes no verdict once the lock is lost while the last results stream in", async () => {
+    const run = await prisma.aiReplayRun.create({
+      data: {
+        purpose: "baseline",
+        status: "submitted",
+        batchId: `${TAG}-batch`,
+        model: "claude-sonnet-4-5",
+        playbookIds: ["pbA"],
+        windowStart: new Date(0),
+        windowEnd: new Date(0),
+        requestCount: 1,
+      },
+    });
+    const verdict = JSON.stringify({ decision: "buy", probability2x: 0.5, reasoning: "", risks: [] });
+    const stop = new AbortController();
+    batch.results = [succeeded("p0-co_1", verdict)];
+    // Lost after the last result came in, before the final flush.
+    batch.onEnd = () => stop.abort();
+    try {
+      expect(await pollReplayRuns(loadEnv(), stop.signal)).toEqual([]);
+    } finally {
+      batch.onEnd = undefined;
+    }
+    expect(await prisma.aiReplayVerdict.count({ where: { runId: run.id } })).toBe(0);
+    expect(await prisma.aiReplayRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({
+      status: "submitted",
+    });
   });
 });

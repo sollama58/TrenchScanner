@@ -33,6 +33,7 @@ import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
   passesWalletSafetyCuts,
   maskKnownBadInputs,
+  HOLDER_TRANSFER_LINKED_FEATURES,
   applyClockFeatures,
   isPreFeeWalletStonksRow,
   withLaunchAge,
@@ -1496,6 +1497,14 @@ async function loadRowsOfKind(
       // The row's anchor cap is the fresh one a regrade stored; the clock block must not rebuild
       // the decision cap from the raw scan cap instead.
       const features = applyClockFeatures(dated, r.anchorMcapUsd);
+      // The gated seats' filters read what the row stored for the transfer-linked inputs the mask
+      // cleared (TrainingRow.gateInputs, user decision 2026-10-20).
+      let gateInputs: Record<string, number | null> | undefined;
+      if (masked !== stored) {
+        for (const name of HOLDER_TRANSFER_LINKED_FEATURES) {
+          if (masked[name] == null && stored[name] != null) (gateInputs ??= {})[name] = stored[name];
+        }
+      }
       const row: TrainingRow = {
         tokenId: r.tokenId,
         anchorAt: r.anchorAt,
@@ -1522,6 +1531,7 @@ async function loadRowsOfKind(
         // the exit plan re-score replayed from candles takes that return (user ask 2026-10-18),
         // when it is graded from the same price the re-score replayed from.
         ...rowReturn(r, r.anchorPriceUsd === loaded.anchorPriceUsd ? loaded.rescoredReturnPct : null),
+        ...(gateInputs !== undefined ? { gateInputs } : {}),
       };
       // The decision pre-gate's old-coin momentum test (#567) re-applied, as the exam does: the
       // 1,942 older rows that fail it today doubled 1.8% and held 9.6% of the training weight.
