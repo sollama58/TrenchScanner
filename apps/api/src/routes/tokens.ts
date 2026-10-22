@@ -1377,7 +1377,7 @@ export async function readTokenFine(
   // Token first, as readTokenChart does: Pump.fun is only asked about a coin on Token.
   if (!(await isTracked(mintAddress))) return { mint: mintAddress, stepSec, candles: null };
   const own = await streamCandles(streamFeeds, mintAddress, stepSec * 1_000).catch(() => null);
-  if (res === "1s" && streamCovers(own, from ?? now - FINE_STREAM_SPAN_MS, now)) {
+  if (res === "1s" && streamCovers(own, from ?? now - FINE_STREAM_SPAN_MS, now, undefined, true)) {
     // The stream reaches back only to when this chart opened (20 minutes at most); Pump.fun's page
     // as last read (no call, whatever its age: closed seconds don't change) goes before it, so the
     // answer doesn't lose the 1-second history it had a moment ago (charts audit CH-5).
@@ -1401,7 +1401,8 @@ export async function readTokenFine(
   const merged = mergeCandles(
     read.candles ? onSupply(read.candles, factors.get(mintAddress)) : null,
     own?.candles ?? null,
-    own?.coveredFrom ?? null,
+    // A 1-second candle of the stream's replaces Pump.fun's only where it came off the stream itself.
+    (res === "1s" ? own?.streamFrom : own?.coveredFrom) ?? null,
   );
   return counted<TokenFineCandles>(`fine${res}`, {
     mint: mintAddress,

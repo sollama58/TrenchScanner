@@ -35,6 +35,8 @@ const logger = createLogger("helius-stream");
  * the stand-down's pause is over, and a skipped subscription is asked for again like a refused one.
  */
 
+/** Slots whose announce time slotTime remembers: about ten minutes of them. */
+const MAX_SLOT_TIMES = 1_500;
 /** Silence after which the connection is presumed dead: the slot subscription speaks every ~0.4 s. */
 const IDLE_TIMEOUT_MS = 60_000;
 const IDLE_CHECK_INTERVAL_MS = 15_000;
@@ -181,6 +183,8 @@ export class HeliusAccountStream {
   private coverStallMs: number | null = null;
   /** Each kind's cap on keys followed at once (maxTxKeys). */
   private readonly maxKeysOf: Record<StreamKind, number> = { ...MAX_KEYS_OF };
+  /** When the slot feed first announced each recent slot (ms), for slotTime. */
+  private readonly slotSeenAt = new Map<number, number>();
   /** The feature this socket's credits go under in ApiUsage (metered); null leaves them out. */
   private meterFeature: string | null = null;
   /** Credits counted but not yet a whole one: ApiUsage keeps whole credits. */
@@ -403,6 +407,15 @@ export class HeliusAccountStream {
     return sub.since === null && sub.requestId !== null;
   }
 
+  /**
+   * When the slot feed announced `slot` (ms epoch): about when its block was made, where an account
+   * update's own arrival can run a second or two later. Null for a slot it didn't announce (or one
+   * past the MAX_SLOT_TIMES it remembers), or with no slot.
+   */
+  slotTime(slot: number | null): number | null {
+    return slot === null ? null : (this.slotSeenAt.get(slot) ?? null);
+  }
+
   /** Counts since the last call, for the scan's heartbeat. */
   takeStats(): HeliusStreamStats {
     const out: HeliusStreamStats = {
@@ -487,6 +500,18 @@ export class HeliusAccountStream {
         sub.refusedAt = at;
         this.stats.refused += 1;
         logger.warn("subscription refused", { key, error: String(msg.error?.message ?? "unknown") });
+      }
+      return;
+    }
+    if (msg.method === "slotNotification") {
+      const slot = (msg.params?.result as { slot?: unknown } | undefined)?.slot;
+      if (typeof slot === "number" && !this.slotSeenAt.has(slot)) {
+        this.slotSeenAt.set(slot, at);
+        // Map order is insertion order: the oldest slots go first.
+        for (const old of this.slotSeenAt.keys()) {
+          if (this.slotSeenAt.size <= MAX_SLOT_TIMES) break;
+          this.slotSeenAt.delete(old);
+        }
       }
       return;
     }

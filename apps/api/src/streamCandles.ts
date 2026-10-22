@@ -19,9 +19,13 @@ export type CandleSource = "pumpfun" | "stream" | "mixed";
 /** What the candles are built from: the live tail's ticks and the live trades. */
 export interface StreamFeeds {
   /** [ms, USD market cap on the supply now] per price change, oldest first (LiveCurves.history). */
-  history(
-    mint: string,
-  ): Promise<{ ticks: [number, number][]; coveredFrom: number | null; readAt: number | null } | null>;
+  history(mint: string): Promise<{
+    ticks: [number, number][];
+    coveredFrom: number | null;
+    /** From here the stream alone delivered every change (no RPC samples); absent: unknown. */
+    streamFrom?: number | null;
+    readAt: number | null;
+  } | null>;
   /** The trades kept for the coin (LiveTrades.recent): `sol` for volume, `mcapUsd` as a price. */
   recent(mint: string): Promise<{
     since: number | null;
@@ -36,6 +40,11 @@ export interface StreamCandleSet {
   candles: McapCandle[];
   /** From here (ms) the prices run without a gap; null when not known. */
   coveredFrom: number | null;
+  /**
+   * From here (ms) every change came off the stream itself, not an RPC read every few seconds:
+   * where its candles are true 1-second ones. Null when not known or off the stream.
+   */
+  streamFrom: number | null;
   /** The newest moment the price is known current (ms), null when not known. */
   readAt: number | null;
 }
@@ -137,25 +146,40 @@ export async function streamCandles(
   const candles = buildCandles(history?.ticks ?? [], trades, stepMs);
   if (candles.length === 0) return null;
   return history
-    ? { candles, coveredFrom: history.coveredFrom, readAt: history.readAt }
-    : { candles, coveredFrom: recent?.since ?? null, readAt: trades.at(-1)?.atMs ?? null };
+    ? {
+        candles,
+        coveredFrom: history.coveredFrom,
+        streamFrom: history.streamFrom ?? null,
+        readAt: history.readAt,
+      }
+    : {
+        candles,
+        coveredFrom: recent?.since ?? null,
+        // Live trades come off their own stream (logs), each trade's own price.
+        streamFrom: recent?.since ?? null,
+        readAt: trades.at(-1)?.atMs ?? null,
+      };
 }
 
 /**
  * Whether the stream's candles alone can answer for the stretch from `from` (ms): they run without
- * a break from at or before it, and the price was known current within `currentMs` of `now`.
+ * a break from at or before it, and the price was known current within `currentMs` of `now`. With
+ * `streamOnly` (1-second candles), the stretch must have come off the stream itself (streamFrom):
+ * RPC reads every few seconds make 1-second candles that are flat four seconds in five.
  */
 export function streamCovers(
   set: StreamCandleSet | null,
   from: number,
   now: number,
   currentMs = 15_000,
+  streamOnly = false,
 ): set is StreamCandleSet {
+  const covered = set ? (streamOnly ? set.streamFrom : set.coveredFrom) : null;
   return (
     !!set &&
     set.candles.length > 0 &&
-    set.coveredFrom !== null &&
-    set.coveredFrom <= from &&
+    covered !== null &&
+    covered <= from &&
     set.readAt !== null &&
     now - set.readAt <= currentMs
   );

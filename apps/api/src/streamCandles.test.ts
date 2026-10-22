@@ -112,7 +112,12 @@ describe("mergeCandles", () => {
 });
 
 describe("streamCovers", () => {
-  const set = { candles: [{ t: 0, o: 1, h: 1, l: 1, c: 1, vol: 0 }], coveredFrom: 1_000, readAt: 50_000 };
+  const set = {
+    candles: [{ t: 0, o: 1, h: 1, l: 1, c: 1, vol: 0 }],
+    coveredFrom: 1_000,
+    streamFrom: 30_000,
+    readAt: 50_000,
+  };
 
   it("answers alone only when unbroken back to `from` and current", () => {
     expect(streamCovers(set, 2_000, 55_000)).toBe(true);
@@ -120,6 +125,13 @@ describe("streamCovers", () => {
     expect(streamCovers(set, 2_000, 70_000)).toBe(false);
     expect(streamCovers({ ...set, coveredFrom: null }, 2_000, 55_000)).toBe(false);
     expect(streamCovers(null, 2_000, 55_000)).toBe(false);
+  });
+
+  it("asks for the stream's own deliveries, not RPC samples, for 1-second candles", () => {
+    // Covered from 1 s by RPC reads every few seconds, by the stream itself only from 30 s.
+    expect(streamCovers(set, 2_000, 55_000, undefined, true)).toBe(false);
+    expect(streamCovers(set, 30_000, 55_000, undefined, true)).toBe(true);
+    expect(streamCovers({ ...set, streamFrom: null }, 40_000, 55_000, undefined, true)).toBe(false);
   });
 });
 
@@ -131,6 +143,7 @@ describe("streamCandles", () => {
         [1_500, 110],
       ],
       coveredFrom: 900,
+      streamFrom: 950,
       readAt: 2_000,
     }),
     recent: async () => ({ since: 800, trades: [{ atMs: 1_500, sol: 2, mcapUsd: 110 }] }),
@@ -142,6 +155,7 @@ describe("streamCandles", () => {
     expect(await streamCandles(feeds(), "M", 1_000)).toEqual({
       candles: [{ t: 1_000, o: 100, h: 110, l: 100, c: 110, vol: 300 }],
       coveredFrom: 900,
+      streamFrom: 950,
       readAt: 2_000,
     });
   });
@@ -167,6 +181,7 @@ describe("streamCandles", () => {
     expect(out).toEqual({
       candles: [{ t: 1_000, o: 110, h: 110, l: 110, c: 110, vol: 300 }],
       coveredFrom: 800,
+      streamFrom: 800,
       readAt: 1_500,
     });
   });

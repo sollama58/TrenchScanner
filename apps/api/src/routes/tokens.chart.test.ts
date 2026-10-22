@@ -252,6 +252,7 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
                   [sec(2), 31_000],
                 ],
                 coveredFrom: sec(400),
+                streamFrom: sec(400),
                 readAt: now,
               }
             : null,
@@ -283,6 +284,7 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
                   [sec(2), 31_000],
                 ],
                 coveredFrom: sec(400),
+                streamFrom: sec(400),
                 readAt: now,
               }
             : null,
