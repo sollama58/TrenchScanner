@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { applyPollResult, pollIsStale, pollWant, viewForMint, type PollHeld } from "./hooks";
+import {
+  applyPollResult,
+  pollIsStale,
+  pollMountMaxAge,
+  pollWant,
+  shouldPollOnVisible,
+  viewForMint,
+  type PollHeld,
+} from "./hooks";
 
 /** What the bubble map draws: a stale answer is the previous coin and is not shown. */
 function visibleMap<T>(held: PollHeld<T> | null, want: string): T | null {
@@ -73,6 +81,18 @@ describe("a token switch ignores in-flight holder reads", () => {
     const next = applyPollResult(first, a, { for: a, data: holders("mintA-new"), at: 2 });
     expect(visibleMap(next, a)).toEqual(holders("mintA-new"));
     expect(pollIsStale(next, a)).toBe(false);
+  });
+});
+
+describe("chart poll timing", () => {
+  it("always refetches the chart on mount and when the tab comes back", () => {
+    expect(pollMountMaxAge("/tokens/abc/chart", false)).toBe(0);
+    expect(pollMountMaxAge("/tokens/abc/chart", true)).toBe(-1);
+    expect(pollMountMaxAge("/tokens/abc/profile", false)).toBe(10_000);
+    const now = Date.now();
+    expect(shouldPollOnVisible("/tokens/abc/chart", now, 30_000)).toBe(true);
+    expect(shouldPollOnVisible("/tokens/abc/profile", now, 30_000)).toBe(false);
+    expect(shouldPollOnVisible("/tokens/abc/profile", now - 60_000, 30_000)).toBe(true);
   });
 });
 

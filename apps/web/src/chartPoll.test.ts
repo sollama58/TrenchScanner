@@ -1,11 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { chartForMint, chartHistoryExtended, mergeTokenChart, type ChartPollBody } from "./chartPoll";
+import {
+  chartForMint,
+  chartHistoryExtended,
+  isChartPollPath,
+  mergeTokenChart,
+  type ChartPollBody,
+} from "./chartPoll";
 
 const body = (mint: string, firstCandleT: number, tag = ""): ChartPollBody => ({
   mint,
   candles: [{ t: firstCandleT, o: 1, h: 1, l: 1, c: 1, vol: 0 }],
   marketCap: [{ t: firstCandleT, usd: 1 }],
   wallets: tag ? [{ wallet: tag }] : [],
+});
+
+describe("isChartPollPath", () => {
+  it("matches token chart GET paths only", () => {
+    expect(isChartPollPath("/tokens/x/chart")).toBe(true);
+    expect(isChartPollPath("/utilities/token/x/chart")).toBe(true);
+    expect(isChartPollPath("/tokens/x/chart/live")).toBe(false);
+    expect(isChartPollPath("/tokens/x/profile")).toBe(false);
+  });
 });
 
 describe("chartForMint", () => {

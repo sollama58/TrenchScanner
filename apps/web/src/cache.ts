@@ -1,7 +1,5 @@
 import { api, parse } from "./api";
-import { chartHistoryExtended, mergeTokenChart, type ChartPollBody } from "./chartPoll";
-
-const isChartPath = (path: string) => /\/chart$/.test(path);
+import { chartHistoryExtended, isChartPollPath, mergeTokenChart, type ChartPollBody } from "./chartPoll";
 
 /**
  * A small in-memory cache for the dashboard's GET calls, keyed by path.
@@ -195,14 +193,14 @@ export function cachedGet<T>(path: string, maxAgeMs = 0): Promise<T> {
   const read = () => (maxAgeMs < 0 || recentlyInvalidated(path) ? api<T>(path, REVALIDATE) : api<T>(path));
   const p = ((maxAgeMs >= 0 && adoptBoot<T>(path)) || read()).then((data) => {
     let next = data;
-    if (isChartPath(path) && e.data !== undefined) {
+    if (isChartPollPath(path) && e.data !== undefined) {
       const prev = e.data as ChartPollBody;
       const body = data as ChartPollBody;
       if (prev.mint === body.mint) next = mergeTokenChart(prev, body) as T;
     }
     const accept =
       n > (e.n ?? 0) ||
-      (isChartPath(path) &&
+      (isChartPollPath(path) &&
         e.data !== undefined &&
         chartHistoryExtended(e.data as ChartPollBody, data as ChartPollBody));
     if (accept) {
