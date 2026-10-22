@@ -30,6 +30,7 @@ import {
   liveCandles,
   lockedSpans,
   newestCandleStart,
+  withOpenPoint,
   autoTimeframe,
   barOver,
   timeframeLabel,
@@ -88,6 +89,22 @@ describe("stitch", () => {
         { points: [], stepMs: 1_000 },
       ]),
     ).toEqual(pts(1, 2));
+  });
+});
+
+describe("withOpenPoint", () => {
+  it("runs a single candle's line from its open, and leaves longer lines alone", () => {
+    const run = { candles: [{ t: 0, o: 5 }] };
+    expect(withOpenPoint([{ t: M, v: 7 }], run)).toEqual([
+      { t: 0, v: 5 },
+      { t: M, v: 7 },
+    ]);
+    const two = [
+      { t: M, v: 7 },
+      { t: 2 * M, v: 8 },
+    ];
+    expect(withOpenPoint(two, run)).toBe(two);
+    expect(withOpenPoint([{ t: M, v: 7 }], undefined)).toEqual([{ t: M, v: 7 }]);
   });
 });
 

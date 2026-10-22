@@ -60,6 +60,20 @@ export function stitch(runs: readonly CloseRun[], ticks: readonly Point[] = []):
   return out.filter((p) => p.t < first).concat(tail);
 }
 
+/**
+ * Exported for tests. A line of one reading (a coin with a single candle and no live ticks after
+ * it) with that candle's open added at its start, so the chart draws the candle rather than "No
+ * trades to chart yet" (charts audit CH-11). Any other line as it is.
+ */
+export function withOpenPoint(
+  points: Point[],
+  first: { candles: readonly { t: number; o: number }[] } | undefined,
+): Point[] {
+  const k = first?.candles[0];
+  if (points.length !== 1 || !k || !(k.o > 0) || k.t >= points[0]!.t) return points;
+  return [{ t: k.t, v: k.o }, points[0]!];
+}
+
 /** Time-axis steps, in ms: round seconds, minutes, hours and days. */
 const TIME_STEPS = [1, 2, 5, 10, 15, 30]
   .map((s) => s * SECOND)

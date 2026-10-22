@@ -52,6 +52,7 @@ import {
   candleCloses,
   linePoints,
   newestCandleStart,
+  withOpenPoint,
   stitch,
   stitchVolume,
   withCallPoint,
@@ -2756,7 +2757,13 @@ export function ChartCard({
           ? [...pts, { t: at, v: end.v }]
           : pts;
       };
-      const source = held(stitch(runs, bounds.live ? tail.ticks : []));
+      const stitched = held(stitch(runs, bounds.live ? tail.ticks : []));
+      const source = fromCandles
+        ? withOpenPoint(
+            stitched,
+            runs.find((r) => r.candles.length > 0),
+          )
+        : stitched;
       if (source.length < 2) return null;
       const last = source[source.length - 1]!.t;
       const from = bounds.from;
@@ -2768,7 +2775,10 @@ export function ChartCard({
       const usesTail = bounds.live && tail.ticks.some((p) => p.t >= from && p.t > candledTo);
       const finest = usesTail ? 1_000 : Math.min(...used.map((r) => r.stepMs || 30_000), 60_000);
       const fullStep = pointWidthMs(Math.max(1_000, Math.min(to, last) - from), maxPoints(), finest);
-      const full = linePoints(source, from, fullStep, to);
+      const thinned = linePoints(source, from, fullStep, to);
+      // Thinned to one point (a single candle still forming, both its readings in one slot): the
+      // readings themselves.
+      const full = thinned.length < 2 ? source.filter((p) => p.t >= from && p.t <= to) : thinned;
       if (full.length < 2) return null;
       const extent = { t0: full[0]!.t, t1: full[full.length - 1]!.t };
       const step = fullStep;

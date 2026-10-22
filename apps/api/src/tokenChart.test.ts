@@ -500,6 +500,14 @@ describe("olderCandles", () => {
     expect(olderCandles([k(2 * MIN)], [k(0)], 0)).toBeNull();
     expect(olderCandles(null, [k(0)], 0)).toBeNull();
   });
+
+  it("fills in before a full minute page even when the launch time says it reached it", () => {
+    // A coin first seen late: its "launch" is after the real one.
+    expect(olderCandles([k(10 * MIN)], [k(0), k(5 * MIN)], 5 * MIN, true)!.map((c) => c.t)).toEqual([
+      0,
+      5 * MIN,
+    ]);
+  });
 });
 
 describe("LastGood", () => {

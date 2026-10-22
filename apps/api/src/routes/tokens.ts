@@ -49,6 +49,7 @@ import {
 } from "../streamCandles.js";
 import {
   CallBudget,
+  CANDLE_PAGE,
   CandleCache,
   drawableCandles,
   FIRST_MINUTES_MS,
@@ -1189,8 +1190,11 @@ export async function readTokenChart(
   // 5-minute ones before them, so the call and what came before it stay on the chart.
   const launchAt = (token.launchedAt ?? token.firstSeenAt).getTime();
   const firstAt = merged.candles?.[0]?.t;
+  // Pump.fun's whole page of minutes: it stops short of the launch, however late the launch time
+  // here is (a coin first seen well after it).
+  const fullPage = (pump.candles?.length ?? 0) >= CANDLE_PAGE;
   const fives =
-    firstAt !== undefined && firstAt >= launchAt + OLDER_AFTER_MS
+    firstAt !== undefined && (fullPage || firstAt >= launchAt + OLDER_AFTER_MS)
       ? await olderCache.read(mintAddress).catch((err: unknown) => {
           logger.warn("chart part failed", { mint: mintAddress, part: "older", error: String(err) });
           return null;
@@ -1200,6 +1204,7 @@ export async function readTokenChart(
     merged.candles,
     fives?.candles ? onSupply(fives.candles, factor) : null,
     launchAt,
+    fullPage,
   );
   if (flagged.status === "fulfilled") {
     lastWallets.set(mintAddress, flagged.value);
