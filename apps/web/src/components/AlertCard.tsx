@@ -68,6 +68,7 @@ export function AlertCard({
   labelSource = false,
   hide,
   detail = true,
+  links = true,
   onHide,
   atAlert = false,
 }: {
@@ -80,6 +81,8 @@ export function AlertCard({
   hide?: ReadonlySet<CardField>;
   /** Clicking the card opens the token modal (off for the Customize preview). */
   detail?: boolean;
+  /** Dex, Pump, and trade links (off for a made-up example card, which has no coin to open). */
+  links?: boolean;
   /**
    * The stat tiles show the alert's own scan instead of the newest (the signed-out page's best
    * call: the stats that came before the run, user ask 2026-10-19).
@@ -816,7 +819,7 @@ export function AlertCard({
               {fees.tax && <span className="fee-tax num">{fees.tax}</span>}
             </span>
           )}
-          {(show("links") || trade.length > 0) && (
+          {links && (show("links") || trade.length > 0) && (
             <nav className="card-links">
               {trade.map((l) => (
                 <a key={l.id} className="trade" href={l.href(mint)} target="_blank" rel="noreferrer">

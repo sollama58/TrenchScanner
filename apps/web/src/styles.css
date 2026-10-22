@@ -2587,46 +2587,209 @@ legend {
   width: 16px;
 }
 
-/* ---------- Sign in / paywall ---------- */
+/* ---------- Sign in / landing ---------- */
 .signin {
   display: grid;
-  grid-template-columns: 1.25fr 1fr;
-  gap: 48px;
+  grid-template-columns: minmax(0, 1.45fr) minmax(300px, 0.85fr);
+  grid-template-areas:
+    "intro login"
+    "example login";
+  column-gap: 36px;
+  row-gap: 28px;
   /* Top-aligned: centering moved both columns each time one grew as its data landed. */
   align-items: start;
-  max-width: 1100px;
-  margin: 56px auto;
+  max-width: 1120px;
+  margin: 28px auto 48px;
+}
+.landing-intro {
+  grid-area: intro;
+  min-width: 0;
+}
+.landing-example {
+  grid-area: example;
+  min-width: 0;
+}
+.signin h1 {
+  font-size: 42px;
+  max-width: 14em;
+  margin-bottom: 12px;
 }
 .lead {
-  font-size: 17px;
-  max-width: 560px;
-  margin: 18px 0 26px;
+  font-size: 16px;
+  line-height: 1.55;
+  max-width: 62ch;
+  margin: 0 0 18px;
+  color: var(--ink-2);
 }
-/* Sign-in shows the product: the latest alerts, as guests see them. */
+.landing-points {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.landing-points li {
+  min-width: 0;
+  margin: 0;
+  padding: 12px 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.landing-points p {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.landing-points .eyebrow {
+  margin-bottom: 6px;
+}
+.landing-example > p {
+  max-width: 68ch;
+}
+.landing-reads {
+  display: grid;
+  margin: 14px 0 16px;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  overflow: hidden;
+}
+.landing-reads li {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.landing-reads li:first-child {
+  border-top: 0;
+}
+.landing-reads strong {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.landing-flag {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--border));
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface-2));
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.landing-flag strong {
+  color: var(--warn-ink);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.landing-live {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.landing-live-note {
+  margin: 0;
+}
+/* Sign-in shows the product: a real guest alert, under the labeled example. */
 .signin-alerts-head {
   display: flex;
   align-items: center;
   gap: 6px;
   margin: 0 0 10px;
 }
-.signin-cards {
-  grid-template-columns: minmax(0, 1fr);
+.signin-cards .card {
+  min-width: 0;
+  max-width: 100%;
 }
-/* About the height the showcase card takes, held while it loads. */
-.signin-alerts-pending {
-  min-height: 560px;
+.signin-cards .card-foot {
+  flex-wrap: wrap;
 }
 .signin-box {
-  padding: 28px;
+  grid-area: login;
+  min-width: 0;
+  padding: 22px 22px 18px;
+  border-top: 3px solid var(--brand-a);
+}
+.signin-head p:last-child {
+  margin-bottom: 0;
+}
+.signin-method {
+  margin-top: 16px;
+}
+.signin-method h3,
+.privy-entry h3,
+.guest-entry h3 {
+  margin-bottom: 4px;
+}
+.signin-steps {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.signin-steps li {
+  display: grid;
+  grid-template-columns: 1.6em minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.signin-steps .num {
+  color: var(--brand-ink);
+  font-weight: 650;
+}
+.signin-status {
+  margin: 14px 0 0;
+  padding: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  color: var(--ink-2);
+}
+.signin-error {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--border));
+  border-radius: var(--radius-s);
+  background: var(--bad-wash);
+}
+.signin-after {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+.signin-after p {
+  margin: 0;
 }
 .wallets {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 18px;
+  margin-top: 14px;
 }
 .wallet {
   justify-content: flex-start;
+  width: 100%;
+  min-width: 0;
   padding: 12px 14px;
   font-size: 15px;
   font-weight: 600;
@@ -2634,10 +2797,18 @@ legend {
 }
 .wallet img {
   border-radius: 7px;
+  flex: none;
+}
+.wallet-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .wallet-letter {
   display: inline-grid;
   place-items: center;
+  flex: none;
   width: 28px;
   height: 28px;
   border-radius: 7px;
@@ -4481,9 +4652,6 @@ body.trades-open .util-drawer > * {
     flex-direction: column;
   }
 }
-.signin-burn {
-  margin: 14px 0 0;
-}
 /* Free Access is open (or about to): the one line on the page that changes what signing in gets. */
 .signin-free {
   margin: 14px 0 0;
@@ -4501,7 +4669,7 @@ body.trades-open .util-drawer > * {
   margin-top: 16px;
   padding-top: 14px;
   border-top: 1px solid var(--border);
-  text-align: center;
+  text-align: left;
 }
 .guest-entry p {
   margin: 0;
@@ -4511,6 +4679,7 @@ body.trades-open .util-drawer > * {
   letter-spacing: 0.08em;
 }
 .guest-btn {
+  width: 100%;
   justify-content: center;
 }
 .tabs button.locked {
@@ -4671,18 +4840,19 @@ body.trades-open .util-drawer > * {
     grid-template-columns: minmax(0, 1fr);
   }
   .signin {
-    margin: 24px auto;
-    gap: 20px;
+    margin: 8px auto 28px;
+    row-gap: 22px;
+    column-gap: 0;
+    grid-template-areas:
+      "intro"
+      "login"
+      "example";
   }
-  /* One column: the heading, then sign-in, then the alerts below it. */
-  .signin-copy {
-    display: contents;
+  .landing-points {
+    grid-template-columns: 1fr;
   }
-  .signin-alerts {
-    order: 2;
-  }
-  .signin-cards {
-    grid-template-columns: minmax(0, 1fr);
+  .signin-box {
+    padding: 18px 16px 16px;
   }
   h1 {
     font-size: 34px;
@@ -4712,6 +4882,16 @@ body.trades-open .util-drawer > * {
   }
   .panel {
     padding: 16px;
+  }
+  .signin h1 {
+    font-size: 32px;
+  }
+  .signin-cards {
+    --stat-cols: 2;
+  }
+  .landing-reads li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
   }
   .kpis {
     gap: 12px;
