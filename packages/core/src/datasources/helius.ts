@@ -334,6 +334,21 @@ export function resetRpcPauses({ minPauseMs = HELIUS_MIN_PAUSE_MS }: { minPauseM
   pauseFloorMs = minPauseMs;
 }
 
+/**
+ * Methods whose batch is retried once after a timeout: 1-credit reads of a few accounts each, cheap
+ * to ask twice. Heavy pages (getTransactionsForAddress, getTransaction, getProgramAccounts, the
+ * signature lists) are not: by the time we stop waiting Helius has most likely served and billed
+ * them (worker-core audit 2026-10-22, F7).
+ */
+const RETRY_ON_TIMEOUT_METHODS = new Set([
+  "getMultipleAccounts",
+  "getAccountInfo",
+  "getBalance",
+  "getTokenSupply",
+  "getTokenLargestAccounts",
+  "getTokenAccountsByOwner",
+]);
+
 /** How many JSON-RPC calls to put in one HTTP POST. Conservative enough that no provider rejects
  *  the payload, large enough that a full cycle's wallet lookups collapse into a handful of trips. */
 const RPC_BATCH_SIZE = 50;
@@ -775,9 +790,11 @@ export class HeliusClient {
           acquire: () => this.pause.acquire(Infinity, false, calls.length),
           throttled: (ms) => this.pause.throttled(ms),
         },
-        // A timeout is billed whether or not the answer arrives. Retrying it pays twice
-        // (user decision 2026-10-22). A 429 still retries: that request was refused.
-        retryOnTimeout: false,
+        // A timeout is billed whether or not the answer arrives. Retrying a heavy page pays twice
+        // (user decision 2026-10-22), but a batch of small 1-credit reads is retried once: the
+        // fail-closed screen's Mayhem read is one, and losing it rejected every coin in it.
+        // A 429 still retries: that request was refused.
+        retryOnTimeout: calls.every((c) => RETRY_ON_TIMEOUT_METHODS.has(c.method)),
       });
 
       // A malformed batch can come back as a single error object rather than an array.
