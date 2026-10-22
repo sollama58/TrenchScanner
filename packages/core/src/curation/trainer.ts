@@ -120,10 +120,11 @@ export interface TrainingRow {
    */
   crashed?: boolean;
   /**
-   * Stored readings maskKnownBadInputs cleared that a gated seat may still read (gateView). The
-   * creator share, KOL Bundled % and Bundled % from before HOLDER_TRANSFER_LINKS_READ_SINCE are
-   * not put back: they are not today's transfer-counted figures, and a masked older row stays
-   * masked. The learners always read the masked vector. Omitted when nothing was cleared.
+   * The stored readings of the inputs maskKnownBadInputs cleared on this row as from another era
+   * that a gated seat's frozen filter still reads (HOLDER_TRANSFER_LINKED_FEATURES: the creator
+   * share, KOL Bundled % and Bundled % before HOLDER_TRANSFER_LINKS_READ_SINCE). The gate decides
+   * on what the row stored, so its population isn't widened by the mask (user decision
+   * 2026-10-20); the learners still read them as missing. Omitted when nothing was cleared.
    */
   gateInputs?: Record<string, number | null | undefined>;
 }
@@ -433,6 +434,12 @@ export const SAFE_LOSS_AVERSION = 2;
  * 10× name.
  */
 export const MIN_KNOWN_TEN_X_VERDICTS = 30;
+/**
+ * Fewest rows that did reach 10× before the 10× goal trains. Losses alone settle thousands of
+ * verdicts, so the floor above nearly always holds; a fit on a handful of winners is a near
+ * constant model under the 10× name, and the seat sits out instead.
+ */
+export const MIN_TEN_X_POSITIVES = 30;
 
 /** A row whose 10× tier is settled: a loss, or a winner with a hit10x verdict. */
 export function knownTenXVerdicts(rows: readonly { labelValue: number; hit10x?: boolean }[]): number {
@@ -441,13 +448,31 @@ export function knownTenXVerdicts(rows: readonly { labelValue: number; hit10x?: 
   return n;
 }
 
-/** Thrown when a 10× fit is asked for without enough settled verdicts. The seat skips instead. */
+/** Rows that reached 10×. */
+export function tenXPositives(rows: readonly { hit10x?: boolean }[]): number {
+  let n = 0;
+  for (const r of rows) if (r.hit10x === true) n += 1;
+  return n;
+}
+
+/**
+ * Why the 10× goal can't train on these rows, or null when it can. Both floors apply: enough
+ * settled verdicts, and enough of them winners.
+ */
+export function tenXSitOutReason(rows: readonly { labelValue: number; hit10x?: boolean }[]): string | null {
+  const known = knownTenXVerdicts(rows);
+  if (known < MIN_KNOWN_TEN_X_VERDICTS)
+    return `${known} rows have a known 10× verdict, need ${MIN_KNOWN_TEN_X_VERDICTS}`;
+  const positives = tenXPositives(rows);
+  if (positives < MIN_TEN_X_POSITIVES) return `${positives} rows reached 10×, need ${MIN_TEN_X_POSITIVES}`;
+  return null;
+}
+
+/** Thrown when a 10× fit is asked for without enough settled verdicts or winners. The seat skips instead. */
 export class TenXVerdictsTooFew extends Error {
-  readonly known: number;
-  constructor(known: number) {
-    super(`10× goal needs ${MIN_KNOWN_TEN_X_VERDICTS} rows with a known 10× verdict; this set has ${known}`);
+  constructor(reason: string) {
+    super(`10× goal can't train: ${reason}`);
     this.name = "TenXVerdictsTooFew";
-    this.known = known;
   }
 }
 
@@ -465,8 +490,8 @@ export async function trainCuratorModel(
       opts,
     );
   if (goal === "10x") {
-    const knownCount = knownTenXVerdicts(rows);
-    if (knownCount < MIN_KNOWN_TEN_X_VERDICTS) throw new TenXVerdictsTooFew(knownCount);
+    const sitOut = tenXSitOutReason(rows);
+    if (sitOut !== null) throw new TenXVerdictsTooFew(sitOut);
     const known = rows.filter((r) => r.labelValue <= 0 || r.hit10x !== undefined);
     return trainWinModel(
       relabel(known, (r) => r.hit10x === true),

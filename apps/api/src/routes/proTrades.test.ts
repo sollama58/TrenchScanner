@@ -1,11 +1,12 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { loadEnv, prisma, type Env } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
+import { ViewStampBuffer } from "../viewStamps.js";
 
 const ADMIN = "TradesPanelAdmin111111111111111111111111111";
 const OTHER = "TradesPanelOther111111111111111111111111111";
@@ -126,5 +127,17 @@ describe.skipIf(!dbAvailable)("GET /pro/trades", () => {
       closed: 0,
       entries: 1,
     });
+  });
+
+  it("stamps an open panel's coins even right after a closed panel's read", async () => {
+    const record = vi.spyOn(ViewStampBuffer.prototype, "record");
+    try {
+      // The previous test's full read is still cached; the open panel's read is not served from it.
+      expect((await as(ADMIN, "/pro/trades")).statusCode).toBe(200);
+      expect((await as(ADMIN, "/pro/trades?open=1")).statusCode).toBe(200);
+      expect(record).toHaveBeenCalledWith([tokenId]);
+    } finally {
+      record.mockRestore();
+    }
   });
 });

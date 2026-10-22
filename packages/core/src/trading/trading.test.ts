@@ -35,7 +35,7 @@ import {
   type GuardRpc,
   type TradeExpectation,
 } from "./txGuard.js";
-import { HELIUS_SENDER_TIP_ACCOUNTS, senderUrl, sendViaSender } from "./sender.js";
+import { HELIUS_SENDER_TIP_ACCOUNTS, pingSender, senderUrl, sendViaSender } from "./sender.js";
 import {
   dexScreenerPricesUsd,
   JupiterSwapClient,
@@ -1219,12 +1219,76 @@ describe("TradingRpc wallet balances", () => {
       const balances = await new TradingRpc({
         rpcUrl: "https://mainnet.helius-rpc.com/?api-key=test",
       }).getWalletBalances(OWNER);
-      expect(balances).toEqual([{ mint, raw: 12n, decimals: 9 }]);
+      expect(balances).toEqual({ balances: [{ mint, raw: 12n, decimals: 9 }], truncated: false });
       expect(methods).toEqual([
         "getTokenAccountsByOwnerV2",
         "getTokenAccountsByOwnerV2",
         "getMultipleAccounts",
       ]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("follows full pages by their key, and marks a wallet past the page cap truncated", async () => {
+    const held = bs58.encode(Buffer.alloc(32, 7));
+    const empty = bs58.encode(Buffer.alloc(32, 8));
+    const slice = (mint: string, amount: bigint) => {
+      const bytes = Buffer.alloc(72);
+      Buffer.from(bs58.decode(mint)).copy(bytes, 0);
+      bytes.writeBigUInt64LE(amount, 64);
+      return { account: { data: [bytes.toString("base64"), "base64"] } };
+    };
+    // A full page of empty accounts, then the held coin on the second page.
+    const fullOfEmpties = Array.from({ length: 1000 }, () => slice(empty, 0n));
+    const keys: (string | undefined)[] = [];
+    const respond = (endless: boolean) =>
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+        const body = JSON.parse(String((init as RequestInit).body)) as {
+          method: string;
+          params: [unknown, { programId?: string }, { paginationKey?: string }];
+        };
+        let result: unknown;
+        if (body.method === "getMultipleAccounts") {
+          result = { value: [{ data: [Buffer.from([6]).toString("base64"), "base64"] }] };
+        } else if (!body.params[1].programId?.startsWith("Tokenkeg")) {
+          result = { value: { accounts: [], paginationKey: null } };
+        } else {
+          const key = body.params[2].paginationKey;
+          keys.push(key);
+          const n = key ? Number(key.slice(1)) : 0;
+          result =
+            endless || n === 0
+              ? {
+                  value: {
+                    accounts: [...fullOfEmpties.slice(1), slice(held, 5n)],
+                    paginationKey: `k${n + 1}`,
+                  },
+                }
+              : { value: { accounts: [slice(held, 7n)], paginationKey: `k${n + 1}` } };
+        }
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+    const rpc = new TradingRpc({ rpcUrl: "https://mainnet.helius-rpc.com/?api-key=test" });
+    let spy = respond(false);
+    try {
+      expect(await rpc.getWalletBalances(OWNER)).toEqual({
+        balances: [{ mint: held, raw: 12n, decimals: 6 }],
+        truncated: false,
+      });
+      expect(keys).toEqual([undefined, "k1"]);
+    } finally {
+      spy.mockRestore();
+    }
+    keys.length = 0;
+    spy = respond(true);
+    try {
+      const capped = await rpc.getWalletBalances(OWNER);
+      expect(keys).toHaveLength(10);
+      expect(capped).toEqual({ balances: [{ mint: held, raw: 50n, decimals: 6 }], truncated: true });
     } finally {
       spy.mockRestore();
     }
@@ -1273,10 +1337,13 @@ describe("TradingRpc backup endpoint", () => {
     }));
     try {
       const balances = await new TradingRpc({ rpcUrl: node.url }).getWalletBalances(OWNER);
-      expect(balances).toEqual([
-        { mint: "MintA", raw: 12n, decimals: 6 },
-        { mint: "MintC", raw: 100n, decimals: 9 },
-      ]);
+      expect(balances).toEqual({
+        balances: [
+          { mint: "MintA", raw: 12n, decimals: 6 },
+          { mint: "MintC", raw: 100n, decimals: 9 },
+        ],
+        truncated: false,
+      });
       expect(node.seen).toEqual(["getTokenAccountsByOwner", "getTokenAccountsByOwner"]);
     } finally {
       await node.close();
@@ -1448,5 +1515,27 @@ describe("Helius Sender", () => {
     } finally {
       await new Promise((r) => server.close(r));
     }
+  });
+
+  it("reads a rate-limited ping as limited, not down", async () => {
+    const { createServer } = await import("node:http");
+    let status = 200;
+    const server = createServer((_req, res) => {
+      res.writeHead(status);
+      res.end();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    try {
+      expect(await pingSender(base)).toBe("up");
+      status = 429;
+      expect(await pingSender(base)).toBe("limited");
+      status = 503;
+      expect(await pingSender(base)).toBe("down");
+    } finally {
+      await new Promise((r) => server.close(r));
+    }
+    // Nothing listening: no answer at all.
+    expect(await pingSender(base, 500)).toBe("down");
   });
 });

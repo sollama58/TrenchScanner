@@ -249,4 +249,45 @@ describe("HeliusAccountStream", () => {
     expect(stream.takeStats()).toMatchObject({ capped: 1 });
     stream.stop();
   });
+
+  it("follows as many tx keys as maxTxKeys allows", () => {
+    const { stream, socket } = started();
+    stream.maxTxKeys(400);
+    for (let i = 0; i < 400; i += 1) stream.watch(`mint-${i}`, [`acc-${i}`], 290_000);
+    expect(subscribes(socket)).toHaveLength(400);
+    stream.watch("new-1", ["acc-new-1"], 300_000);
+    expect(subscribes(socket)).toHaveLength(400);
+    expect(stream.takeStats()).toMatchObject({ capped: 1 });
+    stream.stop();
+  });
+
+  it("says an account's cover is on its way only while Helius has yet to answer its subscribe", () => {
+    const { stream, socket } = started();
+    stream.watch("mint-1", ["acc-a"], 1_000);
+    expect(stream.awaitingCover("mint-1", "acc-a", 1_000)).toBe(true);
+    expect(stream.awaitingCover("mint-1", "acc-z", 1_000)).toBe(false);
+    expect(stream.awaitingCover("mint-2", "acc-a", 1_000)).toBe(false);
+    const id = subscribes(socket)[0]!.id;
+    stream.handleMessage(JSON.stringify({ jsonrpc: "2.0", id, result: 9 }), 2_000);
+    // Confirmed: coveredSince answers from here.
+    expect(stream.awaitingCover("mint-1", "acc-a", 2_000)).toBe(false);
+    expect(stream.coveredSince("mint-1", "acc-a", 2_000)).toBe(2_000);
+
+    // Refused: no cover is coming.
+    stream.watch("mint-3", ["acc-c"], 3_000);
+    const refused = subscribes(socket)[1]!.id;
+    stream.handleMessage(JSON.stringify({ jsonrpc: "2.0", id: refused, error: { message: "nope" } }), 3_000);
+    expect(stream.awaitingCover("mint-3", "acc-c", 3_000)).toBe(false);
+
+    // Turned away at the cap: no cover is coming either.
+    stream.maxTxKeys(2);
+    stream.watch("mint-4", ["acc-d"], 4_000);
+    expect(stream.awaitingCover("mint-4", "acc-d", 4_000)).toBe(false);
+
+    // Asked for while the socket is down: not on its way until a connection sends it.
+    stream.watch("mint-1", ["acc-a", "acc-b"], 5_000);
+    socket.close();
+    expect(stream.awaitingCover("mint-1", "acc-b", 5_000)).toBe(false);
+    stream.stop();
+  });
 });

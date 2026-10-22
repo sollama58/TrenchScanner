@@ -55,16 +55,30 @@ describe("trainingScheduleView", () => {
   const last = "2026-10-22T12:00:00.000Z";
   const hour = 3_600_000;
 
-  it("names the slot one interval after the last heartbeat", () => {
+  it("names the slot one interval after the last run started", () => {
     const view = trainingScheduleView({
       nowMs: Date.parse("2026-10-22T18:00:00.000Z"),
       intervalMs: 12 * hour,
       lastRunAt: last,
+      durationMs: 10 * 60_000,
       running: false,
       pending: false,
     });
-    expect(view.nextRunAt).toBe("2026-10-23T00:00:00.000Z");
-    expect(view.basis).toMatch(/one interval after the last heartbeat/i);
+    // The heartbeat lands at the finish; the scheduler counts from the start, ten minutes before.
+    expect(view.nextRunAt).toBe("2026-10-22T23:50:00.000Z");
+    expect(view.basis).toMatch(/one interval after the last run started/i);
+  });
+
+  it("follows a run that overran its interval at once", () => {
+    const view = trainingScheduleView({
+      nowMs: Date.parse("2026-10-22T12:00:00.000Z"),
+      intervalMs: hour,
+      lastRunAt: last,
+      durationMs: 2 * hour,
+      running: false,
+      pending: false,
+    });
+    expect(view.nextRunAt).toBe(last);
   });
 
   it("keeps the passed slot and says the delay is not visible", () => {
@@ -72,6 +86,7 @@ describe("trainingScheduleView", () => {
       nowMs: Date.parse("2026-10-23T02:00:00.000Z"),
       intervalMs: 12 * hour,
       lastRunAt: last,
+      durationMs: null,
       running: false,
       pending: false,
     });
@@ -81,23 +96,47 @@ describe("trainingScheduleView", () => {
 
   it("does not invent a finish time while a run is going or a retrain is queued", () => {
     expect(
-      trainingScheduleView({ nowMs: 0, intervalMs: hour, lastRunAt: last, running: true, pending: false })
-        .nextRunAt,
+      trainingScheduleView({
+        nowMs: 0,
+        intervalMs: hour,
+        lastRunAt: last,
+        durationMs: null,
+        running: true,
+        pending: false,
+      }).nextRunAt,
     ).toBeNull();
     expect(
-      trainingScheduleView({ nowMs: 0, intervalMs: hour, lastRunAt: last, running: false, pending: true })
-        .basis,
+      trainingScheduleView({
+        nowMs: 0,
+        intervalMs: hour,
+        lastRunAt: last,
+        durationMs: null,
+        running: false,
+        pending: true,
+      }).basis,
     ).toMatch(/queued/i);
   });
 
   it("says when the next run cannot be known", () => {
     expect(
-      trainingScheduleView({ nowMs: 0, intervalMs: hour, lastRunAt: null, running: false, pending: false })
-        .basis,
+      trainingScheduleView({
+        nowMs: 0,
+        intervalMs: hour,
+        lastRunAt: null,
+        durationMs: null,
+        running: false,
+        pending: false,
+      }).basis,
     ).toMatch(/no curator-training heartbeat/i);
     expect(
-      trainingScheduleView({ nowMs: 0, intervalMs: null, lastRunAt: last, running: false, pending: false })
-        .basis,
+      trainingScheduleView({
+        nowMs: 0,
+        intervalMs: null,
+        lastRunAt: last,
+        durationMs: null,
+        running: false,
+        pending: false,
+      }).basis,
     ).toMatch(/interval is not/i);
   });
 });

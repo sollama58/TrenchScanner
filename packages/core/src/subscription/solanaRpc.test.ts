@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
+import { resetRpcPauses } from "../datasources/helius.js";
 import { resolveSolanaRpcUrl, SolanaRpc } from "./solanaRpc.js";
 
 let server: Server | undefined;
@@ -102,6 +103,8 @@ describe("SolanaRpc", () => {
   });
 
   it("retries a rate-limited batch one at a time without latching", async () => {
+    // Helius's 5 s pause floor would hold this test for seconds a 429.
+    resetRpcPauses({ minPauseMs: 0 });
     let batches = 0;
     server = createServer((req, res) => {
       let raw = "";
@@ -132,6 +135,7 @@ describe("SolanaRpc", () => {
     const before = batches;
     await rpc.getParsedTransactions(["c"]);
     expect(batches).toBeGreaterThan(before);
+    resetRpcPauses();
   });
 
   it("asks for version 1 transactions, single and batched", async () => {

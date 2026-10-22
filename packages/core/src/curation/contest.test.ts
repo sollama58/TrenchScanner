@@ -340,12 +340,11 @@ describe("Gems", () => {
     }
   }, 120_000);
 
-  it("does not treat a pre-2026-10-19 bundle figure as today's transfer-counted reading", () => {
+  it("gates on the stored reading of an era-masked input, not the mask (user decision 2026-10-20)", () => {
     const gate = { mcapMin: 0, mcapMax: 1e12, maxBundledSupplyPct: 20 };
     const base = { mcapUsd: 50_000, bundledSupplyPct: 5 };
     const rows: TrainingRow[] = [
-      // Banked before the transfer-counted reads. Masked for the learners; the stored 60% is
-      // another definition and stays masked, so the cap is skipped.
+      // Banked before the transfer-linked reads: masked for the learners, 60% as stored.
       {
         anchorAt: new Date("2026-10-18T00:00:00Z"),
         features: { ...base, bundledSupplyPct: null },
@@ -354,7 +353,16 @@ describe("Gems", () => {
         anchorPriceUsd: 1,
         anchorMcapUsd: 50_000,
       },
-      // After the transfer-counted reads, 60% is today's figure and fails the cap.
+      // The same, under the cap.
+      {
+        anchorAt: new Date("2026-10-18T01:00:00Z"),
+        features: { ...base, bundledSupplyPct: null },
+        gateInputs: { bundledSupplyPct: 10 },
+        labelValue: 0,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 50_000,
+      },
+      // After the transfer-linked reads, a reading over the cap fails as it does live.
       {
         anchorAt: new Date("2026-10-19T12:00:00Z"),
         features: { ...base, bundledSupplyPct: 60 },
@@ -372,9 +380,10 @@ describe("Gems", () => {
     ];
     const gated = gatedTrainingSet(rows, gate);
     expect(gated.map((r) => r.anchorAt.toISOString())).toEqual([
-      "2026-10-18T00:00:00.000Z",
+      "2026-10-18T01:00:00.000Z",
       "2026-10-19T13:00:00.000Z",
     ]);
+    // The learners still read the masked input as missing.
     expect(gated[0]!.features.bundledSupplyPct).toBeNull();
   });
 });
@@ -510,6 +519,32 @@ describe("10x Hunter", () => {
     expect(outcome.skipped).toHaveLength(1);
     expect(outcome.skipped[0]).toMatchObject({ contestant: TEN_X_CONTESTANT, name: "10x Hunter" });
     expect(outcome.skipped[0]!.reason).toContain("Not trained as a 4× model");
+  });
+
+  it("skips the seat when every verdict is known but fewer than 30 rows reached 10x", async () => {
+    const spec = contestantSpec(TEN_X_CONTESTANT)!;
+    // Thousands of losses settle the tier; four winners are not enough to fit one.
+    const rows: TrainingRow[] = Array.from({ length: 400 }, (_, i) => ({
+      anchorAt: new Date(Date.UTC(2026, 9, 1, 0, i)),
+      features: { mcapUsd: 50_000, ageMinutes: 10 },
+      labelValue: i < 4 ? Math.log2(10) : 0,
+      hit10x: i < 4,
+      anchorPriceUsd: 1,
+      anchorMcapUsd: 50_000,
+      sampleKind: "event",
+    }));
+    const outcome = await runEvolvingContest(rows, {
+      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
+      targetPerHour: 6,
+      heuristicMinScore: 55,
+      minRowsToPromote: 500,
+      cooldownHours: 24,
+      heuristicPrecisionGate: true,
+      contestants: [spec],
+    });
+    expect(outcome.results.map((r) => r.contestant)).not.toContain(TEN_X_CONTESTANT);
+    expect(outcome.skipped).toHaveLength(1);
+    expect(outcome.skipped[0]!.reason).toContain("4 rows reached 10×, need 30");
   });
 });
 

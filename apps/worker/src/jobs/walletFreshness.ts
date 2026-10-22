@@ -16,7 +16,7 @@ export const FRESH_WITHIN_HOURS = 24;
  * Escalating from a couple of minutes (see FailureBackoff), so one blip doesn't hold every token
  * the wallet is a top-10 holder of for long.
  */
-const failureBackoff = new FailureBackoff();
+const failureBackoff = new FailureBackoff(2, 20, { helius: true });
 /**
  * A busy wallet the signatures-only path can't settle answers the same way every time it is
  * asked, so it waits the full stretch straight away.

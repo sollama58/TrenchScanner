@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { apiUsageMeter } from "../apiUsage.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { apiUsageMeter, clearHeliusCreditsOut, heliusCreditsOut, meteredFetch } from "../apiUsage.js";
 import { HeliusAccountStream } from "./heliusAccountStream.js";
 
 /*
@@ -203,6 +203,57 @@ describe("HeliusAccountStream stalls and resubscribes (the chart's live tail)", 
     expect(stream.coveredSince("chart:m", "chart:m-acc")).toBe(9_000);
     // An unknown key is a no-op.
     stream.resubscribe("nope");
+    stream.stop();
+  });
+});
+
+/** Trips this process's credits-out stand-down the way Helius does, with a 200 batch answer. */
+async function creditsRunOut() {
+  const f = meteredFetch(
+    (async () =>
+      new Response('[{"jsonrpc":"2.0","id":"0","error":{"code":-32429,"message":"max usage reached"}}]', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch,
+  );
+  await f("https://mainnet.helius-rpc.com/?api-key=k", {
+    method: "POST",
+    body: JSON.stringify([{ jsonrpc: "2.0", id: "0", method: "getBalance", params: [] }]),
+  });
+  expect(heliusCreditsOut()).not.toBeNull();
+}
+
+describe("HeliusAccountStream while Helius's credits are out", () => {
+  afterEach(() => {
+    clearHeliusCreditsOut();
+    vi.useRealTimers();
+  });
+
+  it("doesn't connect until the stand-down is over", async () => {
+    vi.useFakeTimers();
+    await creditsRunOut();
+    FakeSocket.last = null;
+    const stream = new HeliusAccountStream(
+      "wss://example",
+      vi.fn(),
+      FakeSocket as unknown as new (url: string) => WebSocket,
+    );
+    stream.start();
+    expect(FakeSocket.last).toBeNull();
+    clearHeliusCreditsOut();
+    vi.advanceTimersByTime(15 * 60_000 + 6_000);
+    expect(FakeSocket.last).not.toBeNull();
+    stream.stop();
+  });
+
+  it("doesn't subscribe on an open socket meanwhile, and asks again later", async () => {
+    const { stream, socket } = started();
+    await creditsRunOut();
+    stream.watch("logs:a", ["A"], Date.now(), "logs");
+    expect(socket.sent.filter((m) => m.method === "logsSubscribe")).toHaveLength(0);
+    clearHeliusCreditsOut();
+    stream.watch("logs:a", ["A"], Date.now() + 5 * 60_000, "logs");
+    expect(socket.sent.filter((m) => m.method === "logsSubscribe")).toHaveLength(1);
     stream.stop();
   });
 });
