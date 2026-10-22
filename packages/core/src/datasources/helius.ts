@@ -546,6 +546,8 @@ const TOKEN_PROGRAM_IDS = [
  * credit when the coin is read alone. The token-account enumeration still runs every call.
  */
 const MINT_ACCOUNT_REUSE_MS = 5 * 60_000;
+/** Mint accounts kept at once. The oldest read goes first. */
+const MAX_MINT_ACCOUNTS = 5_000;
 
 /** Wallets per getTokenAccountsByOwner POST - see getTokenBalancesBatch. */
 const BALANCE_WALLETS_PER_POST = 5;
@@ -617,7 +619,9 @@ export class HeliusClient {
   /**
    * Program id and raw supply from a successful mint-account read, kept for MINT_ACCOUNT_REUSE_MS.
    * The timestamp is that read, not the last reuse, so a coin re-read every minute pays for the
-   * mint account again once five minutes have passed. A failed read is not stored.
+   * mint account again once five minutes have passed. A failed read is not stored. Kept in read
+   * order: an expired entry is dropped when looked up or when it reaches the front, and the map
+   * holds at most MAX_MINT_ACCOUNTS.
    */
   private readonly mintAccounts = new Map<string, { program: string; supply: bigint; atMs: number }>();
   /** The endpoint's shared 429 pause - see rpcPauseFor. */
@@ -954,6 +958,14 @@ export class HeliusClient {
     return out;
   }
 
+  /** Drops expired mint accounts from the front (the oldest reads), then the oldest past the cap. */
+  private pruneMintAccounts(now: number) {
+    for (const [mint, entry] of this.mintAccounts) {
+      if (now - entry.atMs < MINT_ACCOUNT_REUSE_MS && this.mintAccounts.size <= MAX_MINT_ACCOUNTS) break;
+      this.mintAccounts.delete(mint);
+    }
+  }
+
   /**
    * The `n` largest wallets of each mint, pools aside, and their % of supply: past the 20 token
    * accounts RugCheck and getTokenLargestAccounts stop at, of which the pool takes one to three
@@ -984,7 +996,10 @@ export class HeliusClient {
       if (cached && now - cached.atMs < MINT_ACCOUNT_REUSE_MS) {
         programOf.set(mint, cached.program);
         supplyOf.set(mint, cached.supply);
-      } else unread.push(mint);
+      } else {
+        if (cached) this.mintAccounts.delete(mint);
+        unread.push(mint);
+      }
     }
     if (unread.length > 0) {
       const mints = await this.getMultipleAccounts<{
@@ -1010,8 +1025,10 @@ export class HeliusClient {
         const raw = BigInt(supply);
         programOf.set(mint, value.owner);
         supplyOf.set(mint, raw);
+        this.mintAccounts.delete(mint);
         this.mintAccounts.set(mint, { program: value.owner, supply: raw, atMs: now });
       }
+      this.pruneMintAccounts(now);
     }
     for (const mint of programOf.keys()) this.gpaErrors.delete(mint);
     const rowsByMint = await this.tokenAccountsOfMints(programOf);
