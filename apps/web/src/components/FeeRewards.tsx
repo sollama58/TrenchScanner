@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 import type { Token } from "../api";
-import { creatorFeeSummary } from "./AlertCard";
+import { shortAddress } from "../format";
+import { creatorFeeSummary, feeRecipientSentence } from "./AlertCard";
 
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
@@ -21,14 +22,14 @@ export function deskRewards(value: unknown): DeskReward[] | null {
   for (const item of value) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return null;
     const row = item as Record<string, unknown>;
-    for (const key of Object.keys(row)) {
-      if (key !== "label" && key !== "mint") return null;
-    }
-    if (typeof row.label !== "string" || !row.label.trim()) return null;
-    if (row.mint != null && (typeof row.mint !== "string" || !BASE58.test(row.mint))) return null;
-    rewards.push({ label: row.label.trim(), mint: typeof row.mint === "string" ? row.mint : null });
+    const mint = typeof row.mint === "string" && BASE58.test(row.mint) ? row.mint : null;
+    if (row.mint != null && row.mint !== "" && mint === null) return null;
+    const raw = typeof row.label === "string" ? row.label.trim() : "";
+    const label = raw || (mint ? shortAddress(mint) : "");
+    if (!label) continue;
+    rewards.push({ label, mint });
   }
-  return rewards;
+  return rewards.length ? rewards : null;
 }
 
 function joinGap(count: number, index: number): string {
@@ -87,7 +88,9 @@ function stopped(text: string | null | undefined): string | null {
  * are only a string; renders each reward mint as a token when the roster sent them.
  */
 export function CreatorFeeRich({ fee }: { fee: NonNullable<Token["creatorFee"]> }) {
-  const summary = creatorFeeSummary(fee);
+  const summary =
+    (fee.destination === "charity" || fee.destination === "split" ? feeRecipientSentence(fee) : null) ??
+    creatorFeeSummary(fee);
   const desk = stopped(fee.deskLine);
   const coins = deskRewards(fee.deskRewards);
   if (summary && desk && summary === desk) return <>{summary}</>;

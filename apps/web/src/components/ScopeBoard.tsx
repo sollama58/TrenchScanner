@@ -44,7 +44,7 @@ import {
   type ScopeHold,
 } from "../scope";
 import {
-  feeBadge,
+  FeeBadge,
   LINKS,
   nowReading,
   nowReadingAge,
@@ -602,7 +602,6 @@ export function ScopeRow({
   const alertedAt = curated?.alertedAt ?? card.matchedAt;
   const ageMs = now - Date.parse(card.kind === "match" ? card.matchedAt : alertedAt);
   const socials = d.showSocials ? socialLinks(card.token) : [];
-  const fees = d.showFees ? feeBadge(card.token.creatorFee) : null;
   const { quickLinks } = useAppearance();
   const tradeLinks = d.showTradeLinks
     ? [...QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id)), ...LINKS]
@@ -703,16 +702,7 @@ export function ScopeRow({
           )}
         </div>
         <div className="scope-meta">
-          {fees && (
-            <span
-              className={`fee-badge scope-fee fee-${fees.kind}${fees.tax ? " has-tax" : ""}`}
-              title={fees.title}
-              aria-label={fees.tax ? `${fees.title} Holder reward tax ${fees.tax}.` : fees.title}
-            >
-              <fees.Icon size={12} />
-              {fees.tax && <span className="fee-tax num">{fees.tax}</span>}
-            </span>
-          )}
+          {d.showFees && <FeeBadge fee={card.token.creatorFee} icon={12} className="scope-fee" />}
           {filter && showSource && (
             <span className="scope-src mine" title={`Caught by your filter “${filter.name}”`}>
               {filter.icon ? <FilterGlyph icon={filter.icon} size={11} /> : <SlidersIcon size={11} />}

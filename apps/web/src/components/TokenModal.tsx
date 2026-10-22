@@ -103,6 +103,7 @@ import {
   withLabeledTraders,
   withLiveMarks,
 } from "../walletMarks";
+import { chartForMint } from "../chartPoll";
 import { chartFlagKind } from "../chartEvents";
 import { DexInfoLabel, dexInfoChartMark } from "../dexInfoLabel";
 import { TradingChart, type ChartEvent, type ChartKind, type ChartTrade } from "./TradingChart";
@@ -943,7 +944,8 @@ function TokenBody({
   );
   // While the next coin's chart is in flight the previous coin's answer stays, flagged stale.
   // Its candles, flagged wallets and holder entries must not draw on this coin.
-  const chartShown = chart.stale ? { ...chart, data: null } : chart;
+  const chartData = chartForMint(mint, chart.data, chart.stale);
+  const chartShown = chartData ? { ...chart, data: chartData, stale: false } : { ...chart, data: null };
   // Kept as the same list while a poll brings the same wallets, so the map isn't rebuilt for nothing.
   const flaggedKey = JSON.stringify(chartShown.data?.wallets ?? []);
   const flagged = useMemo(() => JSON.parse(flaggedKey) as FlaggedWallet[], [flaggedKey]);
@@ -1749,8 +1751,9 @@ function ProCustomize({
   return (
     <div className="appearance-controls pro-customize">
       <p className="faint small">
-        Changes show here right away. Layout, chart and map choices are saved to your account; column sizes,
-        chart indicators and trade buttons are kept in this browser.
+        Changes show here right away. Layout, chart and map choices are saved to your account. Column sizes
+        and trade buttons stay in this browser. Drawings on a coin stay on this device; whether they show is
+        saved with the chart.
       </p>
       <fieldset>
         <legend>Layout</legend>
@@ -1796,7 +1799,8 @@ function ProCustomize({
         <legend>Chart</legend>
         <ChartControls />
         <p className="faint small check-hint">
-          Candle size, indicators, log scale and drawings are on the chart&apos;s own toolbar.
+          Candle size, indicators, log scale and drawings are here and on the chart&apos;s toolbar. Both save
+          to your account. A drawing&apos;s points stay on this device, for that coin.
         </p>
         <WalletMarksPicker />
         <ChartEventsPicker />

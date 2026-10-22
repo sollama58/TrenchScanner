@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { ApiError, api, del, downloadFile, patch, post } from "../api";
 import { ShieldIcon } from "../components/Icons";
 import { usePolling } from "../hooks";
@@ -17,7 +17,15 @@ import { RunNow } from "./AdminRunNow";
 import { AdminActionLog, DbDumps, TableBackups } from "./AdminSecurity";
 import { adminCall } from "../tradeConfirm";
 import { FeedSimAdmin } from "./AdminFeedSim";
-import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin, Training } from "./AdminInsights";
+import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin } from "./AdminInsights";
+import {
+  adminGroups,
+  adminHashFor,
+  adminSectionFromHash,
+  adminSectionMeta,
+  type AdminSection,
+} from "../adminNav";
+import { formatAdminTime } from "./adminTime";
 import { ago, multiple, pct, shortAddress, signedPct, stakes, until, usd } from "../format";
 import { ExitPlanInfo } from "../components/ExitPlanInfo";
 
@@ -31,86 +39,89 @@ const TradingBot = lazy(() => import("./TradingTab").then((m) => ({ default: m.T
  * storage report.
  */
 
-const SECTIONS = [
-  { id: "overview", label: "Overview" },
-  { id: "worker", label: "Worker" },
-  { id: "alerts", label: "Alerts" },
-  { id: "models", label: "Models" },
-  { id: "wallets", label: "Wallets" },
-  { id: "training", label: "Training" },
-  { id: "tokensage", label: "TokenSage" },
-  { id: "screen", label: "Safety screen" },
-  { id: "filters", label: "Filters" },
-  { id: "feedsim", label: "Feed simulator" },
-  { id: "users", label: "Users" },
-  { id: "access", label: "Access" },
-  { id: "credits", label: "Burn Credits" },
-  { id: "announce", label: "Announcements" },
-  { id: "reports", label: "Reports" },
-  { id: "ai", label: "AI" },
-  { id: "bot", label: "Trading bot" },
-  { id: "backups", label: "Backups" },
-  { id: "database", label: "Database" },
-  { id: "api", label: "API" },
-  { id: "usage", label: "API usage" },
-  { id: "config", label: "Config" },
-] as const;
-type Section = (typeof SECTIONS)[number]["id"];
+function AdminClock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+  return (
+    <time className="admin-clock" dateTime={now.toISOString()}>
+      {formatAdminTime(now)}
+    </time>
+  );
+}
 
 export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
-  // An old #trading link opens the trading bot's section.
-  const [section, setSection] = useState<Section>(() =>
-    typeof window !== "undefined" && window.location.hash === "#trading" ? "bot" : "overview",
+  const [section, setSection] = useState<AdminSection>(() =>
+    typeof window !== "undefined" ? adminSectionFromHash(window.location.hash) : "overview",
   );
+  useEffect(() => {
+    const sync = () => setSection(adminSectionFromHash(window.location.hash));
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
+  const open = (id: AdminSection) => {
+    setSection(id);
+    const next = adminHashFor(id);
+    if (window.location.hash !== next) window.history.pushState(null, "", next);
+  };
+  const meta = adminSectionMeta(section);
   return (
-    <div className="stack admin">
-      <section className="panel">
-        <header className="section-head admin-head">
+    <div className="admin-shell admin">
+      <details className="admin-nav-wrap" open>
+        <summary className="admin-nav-summary">
+          Sections <span className="faint">{meta.label}</span>
+        </summary>
+        <nav className="admin-nav" aria-label="Admin sections">
+          {adminGroups().map((g) => (
+            <div key={g.group}>
+              <div className="admin-nav-group">{g.group}</div>
+              {g.items.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  id={`admin-section-${s.id}`}
+                  aria-current={section === s.id ? "page" : undefined}
+                  className={section === s.id ? "on" : ""}
+                  onClick={() => open(s.id)}
+                >
+                  {s.label}
+                  {s.id === "reports" && <AdminReportsBadge />}
+                </button>
+              ))}
+            </div>
+          ))}
+        </nav>
+      </details>
+      <div className="admin-main stack" id="admin-section-panel" aria-labelledby={`admin-section-${section}`}>
+        <header className="admin-page-head">
           <div>
             <span className="eyebrow">
               <ShieldIcon size={13} /> Admin
             </span>
-            <h2>Admin panel</h2>
+            <h2>{meta.label}</h2>
             <p className="muted small">
-              The whole system at a glance. The model leaderboard, evolution and feature health are under{" "}
-              <strong>Models</strong> › Under the hood; the public view is the{" "}
-              <a href="#model" onClick={() => goTo("model")}>
-                Models tab
-              </a>
-              .
+              {meta.blurb}
+              {section === "models" && (
+                <>
+                  {" "}
+                  The public view is the{" "}
+                  <a href="#model" onClick={() => goTo("model")}>
+                    Models tab
+                  </a>
+                  .
+                </>
+              )}
             </p>
           </div>
+          <AdminClock />
         </header>
-        <div className="segmented admin-sections" role="tablist" aria-label="Admin section">
-          {SECTIONS.map((s) => (
-            <button
-              key={s.id}
-              id={`admin-section-${s.id}`}
-              role="tab"
-              aria-selected={section === s.id}
-              aria-controls={section === s.id ? "admin-section-panel" : undefined}
-              className={section === s.id ? "on" : ""}
-              onClick={() => setSection(s.id)}
-            >
-              {s.label}
-              {s.id === "reports" && <AdminReportsBadge />}
-            </button>
-          ))}
-        </div>
-      </section>
-      {/* One section at a time, labelled by its button above. */}
-      <div
-        className="stack"
-        role="tabpanel"
-        id="admin-section-panel"
-        aria-labelledby={`admin-section-${section}`}
-      >
         {section === "overview" && <Overview />}
         {section === "worker" && <Worker />}
         {section === "alerts" && <Alerts />}
         {section === "models" && <ModelsAdmin />}
         {section === "wallets" && <WalletsAdmin />}
-        {section === "training" && <Training />}
         {section === "tokensage" && <TokenSageAdmin />}
         {section === "screen" && <SafetyScreen />}
         {section === "filters" && <FiltersAdmin />}

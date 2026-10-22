@@ -15,7 +15,10 @@ import {
   useAppearanceSave,
   withPreset,
 } from "../appearance";
+import { FIB_LEVELS } from "../chartDrawings";
+import { CHART_INDICATOR_IDS, type ChartIndicatorId } from "../chartEvents";
 import { useNarrativeNoteReadiness } from "../narrativeNote";
+import { TIMEFRAMES } from "../priceChart";
 import { useIsAdmin } from "../session";
 
 /** The bubble maps' names that can be shown or hidden kind by kind (user ask 2026-10-16). */
@@ -362,10 +365,34 @@ export function BubbleMapControls() {
   );
 }
 
+const CHART_INDICATOR_LABELS: { id: ChartIndicatorId; label: string }[] = [
+  { id: "vol", label: "Volume" },
+  { id: "ma20", label: "MA 20" },
+  { id: "ema50", label: "EMA 50" },
+  { id: "bb", label: "Bollinger Bands" },
+  { id: "rsi", label: "RSI" },
+];
+
 /** The token chart's defaults (Customize, and the Pro coin window's own Customize). */
 export function ChartControls() {
   const look = useAppearance();
   const admin = useIsAdmin();
+  const toggleIndicator = (id: ChartIndicatorId) => {
+    const has = look.chartIndicators.includes(id);
+    setAppearance({
+      chartIndicators: CHART_INDICATOR_IDS.filter((k) =>
+        k === id ? !has : look.chartIndicators.includes(k),
+      ),
+    });
+  };
+  const toggleFib = (lv: number) => {
+    const has = look.chartFibLevels.some((n) => Math.abs(n - lv) < 1e-6);
+    const next = has
+      ? look.chartFibLevels.filter((n) => Math.abs(n - lv) >= 1e-6)
+      : [...look.chartFibLevels, lv].sort((a, b) => a - b);
+    if (!next.length) return;
+    setAppearance({ chartFibLevels: next });
+  };
   return (
     <div className="field-group">
       <h4>Token chart</h4>
@@ -378,6 +405,79 @@ export function ChartControls() {
         ]}
         onChange={(chartStyle) => setAppearance({ chartStyle })}
       />
+      <label className="choice-row">
+        <span>Candle size</span>
+        <select
+          value={look.chartTimeframeMs === null ? "auto" : String(look.chartTimeframeMs)}
+          onChange={(e) =>
+            setAppearance({
+              chartTimeframeMs: e.target.value === "auto" ? null : Number(e.target.value),
+            })
+          }
+        >
+          <option value="auto">Auto</option>
+          {TIMEFRAMES.map((f) => (
+            <option key={f.ms} value={f.ms}>
+              {f.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div role="group" aria-label="Chart indicators">
+        {CHART_INDICATOR_LABELS.map((i) => (
+          <label key={i.id} className="check">
+            <input
+              type="checkbox"
+              checked={look.chartIndicators.includes(i.id)}
+              onChange={() => toggleIndicator(i.id)}
+            />
+            {i.label}
+          </label>
+        ))}
+      </div>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={look.chartLogScale}
+          onChange={() => setAppearance({ chartLogScale: !look.chartLogScale })}
+        />
+        Log scale
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={look.chartShowDrawings}
+          onChange={() => setAppearance({ chartShowDrawings: !look.chartShowDrawings })}
+        />
+        Show drawings
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={look.chartTrendExtend}
+          onChange={() => setAppearance({ chartTrendExtend: !look.chartTrendExtend })}
+        />
+        Extend trendlines past their points
+      </label>
+      <div className="cm-scale">
+        <span>Fibonacci levels</span>
+        <div className="segmented small wrap" role="group" aria-label="Fibonacci levels">
+          {FIB_LEVELS.map((lv) => {
+            const on = look.chartFibLevels.some((n) => Math.abs(n - lv) < 1e-6);
+            return (
+              <button
+                key={lv}
+                type="button"
+                className={on ? "on" : ""}
+                aria-pressed={on}
+                onClick={() => toggleFib(lv)}
+              >
+                {lv}
+              </button>
+            );
+          })}
+        </div>
+      </div>
       {/* Admins only while it is tried out (user ask 2026-10-18). */}
       {admin && (
         <>

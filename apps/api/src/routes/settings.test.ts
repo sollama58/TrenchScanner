@@ -7,7 +7,12 @@ import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
 import { DEFAULT_ALERT_PREFS, parseAlertPrefs } from "../alertPrefs.js";
-import { DEFAULT_FEED_APPEARANCE, feedAppearanceSchema, parseFeedAppearance } from "../feedAppearance.js";
+import {
+  DEFAULT_FEED_APPEARANCE,
+  feedAppearanceSchema,
+  parseFeedAppearance,
+  storedAppearanceKeys,
+} from "../feedAppearance.js";
 import { DEFAULT_HIDDEN_TOKENS, MAX_HIDDEN_TOKENS, parseHiddenTokens } from "../hiddenTokens.js";
 
 /** The Settings tab's API: alert settings, access, and following the best performer. */
@@ -142,6 +147,52 @@ describe("parseFeedAppearance", () => {
     ]);
     expect(parseFeedAppearance({ chartEventFirst: ["alert"] }).chartEventFirst).toEqual(["alert"]);
     expect(parseFeedAppearance({ chartEventKinds: [] }).chartEventKinds).toEqual([]);
+    expect(parseFeedAppearance({})).toMatchObject({
+      chartEvents: true,
+      chartEventLabels: true,
+      chartEventScale: "m",
+      chartEventEmphasis: "brand",
+      chartTimeframeMs: null,
+      chartLogScale: false,
+      chartIndicators: ["vol"],
+      chartShowDrawings: true,
+      chartTrendExtend: false,
+    });
+    expect(parseFeedAppearance({}).chartFibLevels).toEqual([0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]);
+    expect(
+      parseFeedAppearance({
+        chartEvents: false,
+        chartEventLabels: false,
+        chartEventScale: "s",
+        chartEventEmphasis: "mine",
+        chartTimeframeMs: 15_000,
+        chartLogScale: true,
+        chartIndicators: ["rsi", "vol"],
+        chartShowDrawings: false,
+        chartFibLevels: [1, 0],
+        chartTrendExtend: true,
+      }),
+    ).toMatchObject({
+      chartEvents: false,
+      chartEventLabels: false,
+      chartEventScale: "s",
+      chartEventEmphasis: "mine",
+      chartTimeframeMs: 15_000,
+      chartLogScale: true,
+      chartIndicators: ["vol", "rsi"],
+      chartShowDrawings: false,
+      chartFibLevels: [0, 1],
+      chartTrendExtend: true,
+    });
+    expect(storedAppearanceKeys(null)).toEqual([]);
+    expect(storedAppearanceKeys([])).toEqual([]);
+    expect(storedAppearanceKeys({ chartLogScale: false, theme: "dark" })).toEqual(["chartLogScale", "theme"]);
+    expect(parseFeedAppearance({ chartTimeframeMs: 123 }).chartTimeframeMs).toBeNull();
+    expect(parseFeedAppearance({ chartIndicators: ["nope"] }).chartIndicators).toEqual(["vol"]);
+    expect(parseFeedAppearance({ chartIndicators: [] }).chartIndicators).toEqual([]);
+    expect(parseFeedAppearance({ chartFibLevels: [] }).chartFibLevels).toEqual([
+      0, 0.236, 0.382, 0.5, 0.618, 0.786, 1,
+    ]);
     for (const bad of ["nope", 1, ["alert", "nope"], ["filter", "filter"]]) {
       expect(parseFeedAppearance({ chartEventKinds: bad }).chartEventKinds).toEqual([
         "alert",
@@ -350,6 +401,7 @@ describe.skipIf(!dbAvailable)("settings routes", () => {
     const body = res.json();
     expect(body.alerts).toEqual(DEFAULT_ALERT_PREFS);
     expect(body.appearance).toEqual(DEFAULT_FEED_APPEARANCE);
+    expect(body.appearanceKeys).toEqual([]);
     expect(body.account.walletAddress).toBe(WALLET);
     expect(body.account.access).toMatchObject({
       hasAccess: true,
@@ -434,7 +486,11 @@ describe.skipIf(!dbAvailable)("settings routes", () => {
     expect(res.statusCode).toBe(200);
     const saved = { ...look, accent: "#ff00aa" };
     expect(res.json().appearance).toEqual(saved);
-    expect((await call("user", "GET", "/settings")).json().appearance).toEqual(saved);
+    const read = (await call("user", "GET", "/settings")).json();
+    expect(read.appearance).toEqual(saved);
+    expect(read.appearanceKeys).toEqual(
+      expect.arrayContaining(["theme", "chartLogScale", "chartEventKinds"]),
+    );
     // The alert settings live beside it and are untouched.
     expect((await call("user", "GET", "/settings")).json().alerts.sound).toBeDefined();
 

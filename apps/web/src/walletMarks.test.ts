@@ -5,6 +5,7 @@ import {
   keepMarkSources,
   kindsOf,
   labelAvatars,
+  markLetter,
   markPrefsOf,
   MIN_SOL_FLOOR,
   walletMarks,
@@ -13,6 +14,7 @@ import {
   withLabeledTraders,
   withLiveMarks,
   type LiveTraderLabel,
+  type MarkKind,
   type MarkSource,
 } from "./walletMarks";
 
@@ -431,5 +433,10 @@ describe("withLabeledTraders", () => {
   });
   it("gives the KOL pictures the labels carry, a side's under its KOL", () => {
     expect(labelAvatars(labels)).toEqual({ K: { avatar: "/kol-avatars/cupsey" } });
+  });
+  it("does not throw when a mark kind is not one the chart knows", () => {
+    const wallet: MarkSource = { wallet: "abc", tags: [], trades: [] };
+    expect(markLetter(wallet, "nope" as MarkKind)).toBe("?");
+    expect(walletMarks([wallet], { on: true, kinds: ["kol"], minSol: 0.25 })).toEqual([]);
   });
 });

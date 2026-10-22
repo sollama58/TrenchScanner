@@ -140,8 +140,12 @@ describe("TokenSage view", () => {
       { kind: "charity", share: 0.99 },
       { kind: "creator", share: 0.01 },
     ]);
-    // The creator's own wallet stays out; another recipient links to Solscan.
-    expect(fee.recipients[0]).toMatchObject({ kind: "creator", label: null, url: null });
+    // A recipient with no name is the address shortened, including the creator's own wallet.
+    expect(fee.recipients[0]).toMatchObject({
+      kind: "creator",
+      label: "8PQx…VP9z",
+      url: "https://solscan.io/account/8PQxd6VmfGPMyg8WPnfkT9jUTmtE7UsnDmvBKXeAVP9z",
+    });
     expect(fee.recipients[1]).toMatchObject({
       kind: "charity",
       label: "CYoJ…gyxC",

@@ -2586,23 +2586,136 @@ legend {
 .check input {
   width: 16px;
 }
+.check:has(input:disabled) {
+  opacity: 0.5;
+  cursor: default;
+}
 
-/* ---------- Sign in / paywall ---------- */
+/* ---------- Sign in / landing ---------- */
 .signin {
   display: grid;
-  grid-template-columns: 1.25fr 1fr;
-  gap: 48px;
+  grid-template-columns: minmax(0, 1.45fr) minmax(300px, 0.85fr);
+  grid-template-areas:
+    "intro login"
+    "example login";
+  column-gap: 36px;
+  row-gap: 28px;
   /* Top-aligned: centering moved both columns each time one grew as its data landed. */
   align-items: start;
-  max-width: 1100px;
-  margin: 56px auto;
+  max-width: 1120px;
+  margin: 28px auto 48px;
+}
+.landing-intro {
+  grid-area: intro;
+  min-width: 0;
+}
+.landing-example {
+  grid-area: example;
+  min-width: 0;
+}
+.signin h1 {
+  font-size: 42px;
+  max-width: 14em;
+  margin-bottom: 12px;
 }
 .lead {
-  font-size: 17px;
-  max-width: 560px;
-  margin: 18px 0 26px;
+  font-size: 16px;
+  line-height: 1.55;
+  max-width: 62ch;
+  margin: 0 0 18px;
+  color: var(--ink-2);
 }
-/* Sign-in shows the product: the latest alerts, as guests see them. */
+.landing-points {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.landing-points li {
+  min-width: 0;
+  margin: 0;
+  padding: 12px 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.landing-points p {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.landing-points .eyebrow {
+  margin-bottom: 6px;
+}
+.landing-example > p {
+  max-width: 68ch;
+}
+.landing-token {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  margin-top: 4px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--brand-b) 45%, var(--border));
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.landing-token p {
+  margin: 0 0 8px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.landing-token p:last-child {
+  margin-bottom: 0;
+}
+.landing-token .landing-token-name {
+  color: var(--ink);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.landing-flame {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-top: 1px;
+  border: 1px solid color-mix(in srgb, var(--brand-b) 55%, var(--border));
+  border-radius: 8px;
+  color: var(--brand-ink);
+  background: var(--surface-3);
+}
+.landing-flag {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--border));
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface-2));
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.landing-flag strong {
+  color: var(--warn-ink);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.landing-live {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.landing-live-note {
+  margin: 0;
+}
+/* Sign-in shows the product: a real guest alert, under the labeled example. */
 .signin-alerts-head {
   display: flex;
   align-items: center;
@@ -2611,22 +2724,93 @@ legend {
 }
 .signin-cards {
   grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
 }
-/* About the height the showcase card takes, held while it loads. */
-.signin-alerts-pending {
-  min-height: 560px;
+.signin-cards .card {
+  min-width: 0;
+  max-width: 100%;
+}
+.signin-cards .card-foot {
+  flex-wrap: wrap;
+}
+.privy-btn .wallet-name {
+  flex: 1;
+  text-align: left;
+  text-wrap: balance;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
 }
 .signin-box {
-  padding: 28px;
+  grid-area: login;
+  min-width: 0;
+  padding: 22px 22px 18px;
+  border-top: 3px solid var(--brand-a);
+}
+.signin-head p:last-child {
+  margin-bottom: 0;
+}
+.signin-method {
+  margin-top: 16px;
+}
+.signin-method h3,
+.privy-entry h3,
+.guest-entry h3 {
+  margin-bottom: 4px;
+}
+.signin-steps {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.signin-steps li {
+  display: grid;
+  grid-template-columns: 1.6em minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.signin-steps .num {
+  color: var(--brand-ink);
+  font-weight: 650;
+}
+.signin-status {
+  margin: 14px 0 0;
+  padding: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  color: var(--ink-2);
+}
+.signin-error {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--border));
+  border-radius: var(--radius-s);
+  background: var(--bad-wash);
+}
+.signin-after {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+.signin-after p {
+  margin: 0;
 }
 .wallets {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 18px;
+  margin-top: 14px;
 }
 .wallet {
   justify-content: flex-start;
+  width: 100%;
+  min-width: 0;
   padding: 12px 14px;
   font-size: 15px;
   font-weight: 600;
@@ -2634,10 +2818,18 @@ legend {
 }
 .wallet img {
   border-radius: 7px;
+  flex: none;
+}
+.wallet-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .wallet-letter {
   display: inline-grid;
   place-items: center;
+  flex: none;
   width: 28px;
   height: 28px;
   border-radius: 7px;
@@ -4481,9 +4673,6 @@ body.trades-open .util-drawer > * {
     flex-direction: column;
   }
 }
-.signin-burn {
-  margin: 14px 0 0;
-}
 /* Free Access is open (or about to): the one line on the page that changes what signing in gets. */
 .signin-free {
   margin: 14px 0 0;
@@ -4501,7 +4690,7 @@ body.trades-open .util-drawer > * {
   margin-top: 16px;
   padding-top: 14px;
   border-top: 1px solid var(--border);
-  text-align: center;
+  text-align: left;
 }
 .guest-entry p {
   margin: 0;
@@ -4511,6 +4700,7 @@ body.trades-open .util-drawer > * {
   letter-spacing: 0.08em;
 }
 .guest-btn {
+  width: 100%;
   justify-content: center;
 }
 .tabs button.locked {
@@ -4671,18 +4861,19 @@ body.trades-open .util-drawer > * {
     grid-template-columns: minmax(0, 1fr);
   }
   .signin {
-    margin: 24px auto;
-    gap: 20px;
+    margin: 8px auto 28px;
+    row-gap: 22px;
+    column-gap: 0;
+    grid-template-areas:
+      "intro"
+      "login"
+      "example";
   }
-  /* One column: the heading, then sign-in, then the alerts below it. */
-  .signin-copy {
-    display: contents;
+  .landing-points {
+    grid-template-columns: 1fr;
   }
-  .signin-alerts {
-    order: 2;
-  }
-  .signin-cards {
-    grid-template-columns: minmax(0, 1fr);
+  .signin-box {
+    padding: 18px 16px 16px;
   }
   h1 {
     font-size: 34px;
@@ -4712,6 +4903,9 @@ body.trades-open .util-drawer > * {
   }
   .panel {
     padding: 16px;
+  }
+  .signin h1 {
+    font-size: 32px;
   }
   .kpis {
     gap: 12px;
@@ -6417,11 +6611,297 @@ html:has(dialog.about-modal[open]) {
 .admin-head {
   margin-bottom: 12px;
 }
-.admin-sections {
+.admin-shell {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.admin-nav-wrap {
+  position: sticky;
+  top: 8px;
+}
+.admin-nav-summary {
+  display: none;
+}
+.admin-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.admin-nav-group {
+  margin: 10px 8px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.admin-nav-group:first-child {
+  margin-top: 4px;
+}
+.admin-nav button {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  color: var(--ink-2);
+  padding: 6px 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.admin-nav button:hover:not(:disabled) {
+  background: transparent;
+  color: var(--ink);
+  border-color: transparent;
+  border-left-color: var(--border-strong);
+}
+.admin-nav button.on {
+  color: var(--ink);
+  background: var(--surface-3);
+  border-left-color: var(--brand-b);
+}
+.admin-page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.admin-page-head h2 {
+  margin: 2px 0;
+}
+.admin-clock {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.admin-main {
+  min-width: 0;
+}
+.models-jump {
   display: flex;
   flex-wrap: wrap;
-  width: fit-content;
-  max-width: 100%;
+  gap: 6px;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  padding: 6px 0;
+  background: var(--page);
+}
+.models-jump button {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.admin-rail {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.admin-rail div {
+  min-width: 0;
+  padding: 10px 12px;
+  border-right: 1px solid var(--border);
+}
+.admin-rail div:last-child {
+  border-right: 0;
+}
+.admin-rail dt {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.admin-rail dd {
+  margin: 3px 0 0;
+  font-size: 13px;
+}
+.admin-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.admin-spec {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px 16px;
+  margin: 0;
+}
+.admin-spec div {
+  min-width: 0;
+}
+.admin-spec dt {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.admin-spec dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+}
+.admin-progress-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+.admin-progress {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.admin-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--brand-a);
+}
+.admin-progress-label {
+  font-size: 12px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.admin-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.admin-bar {
+  display: grid;
+  grid-template-columns: minmax(88px, 0.8fr) minmax(0, 2fr) 52px;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.admin-bar-name {
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-bar-track {
+  height: 8px;
+  background: var(--surface-3);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.admin-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--series-1);
+}
+.admin-bar-fill.neg {
+  background: var(--bad);
+}
+.admin-bar-value {
+  text-align: right;
+  color: var(--ink-2);
+}
+.admin-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.admin-chart .chart-grid {
+  stroke: var(--grid);
+}
+.admin-chart .chart-tick {
+  fill: var(--muted);
+  font-size: 11px;
+  font-family: var(--mono);
+}
+.admin-chart .chart-line {
+  fill: none;
+  stroke: var(--series-1);
+  stroke-width: 2;
+}
+.admin-chart circle.chart-line {
+  fill: var(--series-1);
+}
+.admin-chart .chart-line.alt {
+  stroke: var(--ink-2);
+  stroke-dasharray: 5 4;
+}
+.admin-chart circle.chart-line.alt {
+  fill: var(--ink-2);
+}
+.admin-chart .chart-mark {
+  stroke: var(--border-strong);
+}
+.admin-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 4px 0 0;
+  color: var(--ink-2);
+}
+.legend-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 0;
+  border-top: 2px solid var(--series-1);
+  margin-right: 4px;
+  vertical-align: middle;
+}
+.legend-swatch.alt {
+  border-top-style: dashed;
+  border-top-color: var(--ink-2);
+}
+@media (max-width: 900px) {
+  .admin-shell {
+    grid-template-columns: 1fr;
+  }
+  .admin-nav-wrap {
+    position: static;
+  }
+  .admin-nav-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface-2);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .admin-nav-wrap:not([open]) .admin-nav {
+    display: none;
+  }
+  .admin-nav-wrap[open] .admin-nav {
+    margin-top: 6px;
+  }
+  .admin-rail,
+  .admin-split {
+    grid-template-columns: 1fr;
+  }
+  .admin-rail div {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .admin-rail div:last-child {
+    border-bottom: 0;
+  }
 }
 .admin .kpi.admin-ok .kpi-value {
   color: var(--good-ink);
@@ -10437,6 +10917,22 @@ button.link.exit-plan-link {
   letter-spacing: 0;
   font-size: 11px;
   font-weight: 600;
+}
+/* Charity names and OTC reward tokens, on the card and on a Scope row. */
+.fee-caption {
+  letter-spacing: 0;
+  font-size: 11px;
+  font-weight: 600;
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fee-charity .fee-caption {
+  color: var(--bad-ink);
+}
+.fee-rewards .fee-caption {
+  color: var(--good-ink);
 }
 .fee-rewards .fee-tax {
   color: var(--good-ink);

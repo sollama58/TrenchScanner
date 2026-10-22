@@ -67,6 +67,19 @@ export const DEFAULT_CHART_EVENT_KINDS = CHART_EVENT_KINDS.filter((k) => k !== "
 export const CHART_EVENT_FIRST_KINDS = ["alert", "filter", "model"] as const;
 /** Only the first filter and the first model. Alerts are not collapsed unless the reader asks. */
 export const DEFAULT_CHART_EVENT_FIRST = ["filter", "model"] as const;
+/** How big an event flag draws (apps/web/src/chartEvents.ts CHART_EVENT_SCALES). Medium is today's size. */
+export const CHART_EVENT_SCALES = ["s", "m", "l"] as const;
+/** Lead-flag colour from the chart palette. Brand is how the earliest flag already draws. */
+export const CHART_EVENT_EMPHASIS = ["off", "brand", "win", "loss", "mine"] as const;
+/** Indicators the token chart draws (apps/web/src/chartEvents.ts). Volume on by default. */
+export const CHART_INDICATOR_IDS = ["vol", "ma20", "ema50", "bb", "rsi"] as const;
+export const DEFAULT_CHART_INDICATORS = ["vol"] as const;
+/** Candle widths the toolbar offers, in ms. Null is Auto. apps/web/src/chartEvents.ts has the same. */
+export const CHART_TIMEFRAME_MS = [
+  1_000, 5_000, 15_000, 30_000, 60_000, 300_000, 900_000, 1_800_000, 3_600_000, 14_400_000,
+] as const;
+/** Fibonacci levels (apps/web/src/chartDrawings.ts). All of them by default. */
+export const CHART_FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1] as const;
 /**
  * Which hideBelowMcap default a look was saved against (apps/web/src/appearance.ts has the same): a
  * look from before it went on at 6k that still holds the old default (off at 5k) was never changed,
@@ -294,6 +307,49 @@ export const feedAppearanceSchema = z
       .max(CHART_EVENT_FIRST_KINDS.length)
       .refine((k) => new Set(k).size === k.length, "chart event first repeats")
       .default([...DEFAULT_CHART_EVENT_FIRST]),
+    /**
+     * Master switch for event flags, vertical and horizontal. On by default. Missing on an older
+     * save: on, so a look that already chose kinds keeps drawing those kinds.
+     */
+    chartEvents: z.boolean().default(true),
+    /** The words on a flag and on its horizontal price line. On by default. */
+    chartEventLabels: z.boolean().default(true),
+    /** How big those flags draw. Medium is the size the chart already draws. */
+    chartEventScale: z.enum(CHART_EVENT_SCALES).default("m"),
+    /** The earliest flag's colour from the chart palette. Brand is the colour it already uses. */
+    chartEventEmphasis: z.enum(CHART_EVENT_EMPHASIS).default("brand"),
+    /**
+     * Candle width in ms, or null for Auto. A width the toolbar does not offer is rejected.
+     * Missing on an older save: Auto.
+     */
+    chartTimeframeMs: z
+      .number()
+      .int()
+      .nullable()
+      .refine((v) => v === null || (CHART_TIMEFRAME_MS as readonly number[]).includes(v), "not a candle size")
+      .default(null),
+    /** Log scale. Off by default (linear). */
+    chartLogScale: z.boolean().default(false),
+    /** Indicators drawn on the token chart. Volume by default. An empty list draws none. */
+    chartIndicators: z
+      .array(z.enum(CHART_INDICATOR_IDS))
+      .max(CHART_INDICATOR_IDS.length)
+      .refine((k) => new Set(k).size === k.length, "chart indicators repeat")
+      .default([...DEFAULT_CHART_INDICATORS]),
+    /** Draw the coin's saved drawings. On by default. The drawings themselves stay on this device. */
+    chartShowDrawings: z.boolean().default(true),
+    /** Fibonacci levels left on. All of them by default. At least one. */
+    chartFibLevels: z
+      .array(z.number())
+      .min(1)
+      .max(CHART_FIB_LEVELS.length)
+      .refine((levels) => {
+        if (new Set(levels).size !== levels.length) return false;
+        return levels.every((n) => CHART_FIB_LEVELS.some((lv) => Math.abs(lv - n) < 1e-6));
+      }, "not a fib level")
+      .default([...CHART_FIB_LEVELS]),
+    /** A trendline runs past both points. Off by default. */
+    chartTrendExtend: z.boolean().default(false),
     /** Card fields not shown. */
     hidden: z
       .array(z.enum(CARD_FIELDS))
@@ -368,8 +424,18 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   chartStyle: "line",
   chartView: "trading",
   chartPathing: false,
+  chartEvents: true,
   chartEventKinds: [...DEFAULT_CHART_EVENT_KINDS],
   chartEventFirst: [...DEFAULT_CHART_EVENT_FIRST],
+  chartEventLabels: true,
+  chartEventScale: "m",
+  chartEventEmphasis: "brand",
+  chartTimeframeMs: null,
+  chartLogScale: false,
+  chartIndicators: [...DEFAULT_CHART_INDICATORS],
+  chartShowDrawings: true,
+  chartFibLevels: [...CHART_FIB_LEVELS],
+  chartTrendExtend: false,
   // Off by default, switchable back on in Customize: the composite score tile, so the stat tiles
   // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own) and the 1st Buyers
   // Holding tile, which Snipers replaced (user asks 2026-10-14). The header's calibrated 2x pill
@@ -387,6 +453,15 @@ function chosenKinds<T extends string>(raw: unknown, allowed: readonly T[], fall
     return [...fallback];
   const picked = new Set(raw as T[]);
   return allowed.filter((k) => picked.has(k));
+}
+
+/**
+ * Keys actually stored on the account. The parsed appearance fills in defaults, so a missing chart
+ * pref and a saved default look the same unless the reader has this list. A non-object stores none.
+ */
+export function storedAppearanceKeys(stored: unknown): string[] {
+  if (typeof stored !== "object" || stored === null || Array.isArray(stored)) return [];
+  return Object.keys(stored as Record<string, unknown>);
 }
 
 /** The stored JSON as an appearance, field by field: a bad or missing field takes its default. */
@@ -433,6 +508,18 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
   // A bad or repeated kind falls back to the default list; a real list is kept, in the listed order.
   out.chartEventKinds = chosenKinds(raw.chartEventKinds, CHART_EVENT_KINDS, DEFAULT_CHART_EVENT_KINDS);
   out.chartEventFirst = chosenKinds(raw.chartEventFirst, CHART_EVENT_FIRST_KINDS, DEFAULT_CHART_EVENT_FIRST);
+  // The same order the web saves, so a look does not churn when it round-trips.
+  if (Array.isArray(out.chartIndicators)) {
+    const picked = new Set(out.chartIndicators as string[]);
+    out.chartIndicators = CHART_INDICATOR_IDS.filter((k) => picked.has(k));
+  }
+  if (Array.isArray(out.chartFibLevels)) {
+    const picked = out.chartFibLevels as number[];
+    const on = CHART_FIB_LEVELS.filter((lv) => picked.some((n) => Math.abs(lv - n) < 1e-6));
+    // A fib drawing with no level draws nothing. An empty result is every level, as the web's
+    // chartFibChoice does.
+    out.chartFibLevels = on.length > 0 ? on : [...CHART_FIB_LEVELS];
+  }
   // Saved before low market caps were hidden by default, still off at 5k: the old default, unchanged.
   if (
     raw.hideBelowMcapRev !== HIDE_BELOW_MCAP_REV &&

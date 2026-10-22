@@ -4,7 +4,9 @@ import { ApiError, post, type FilterCriteria } from "../api";
 import { usePolling } from "../hooks";
 import { invalidate } from "../cache";
 import { ago, pct, shortAddress, usd } from "../format";
-import { Kpi, Load, Panel, Table, Tag, Wallet, n, when } from "./adminShared";
+import { Kpi, Load, Panel, Table, Tag, Wallet, ms, n, when } from "./adminShared";
+import { examCells } from "./AdminModelsTraining";
+import { formatAdminDay } from "./adminTime";
 import {
   loadHiddenReasons,
   reasonCounts,
@@ -89,7 +91,8 @@ interface HeartbeatJob {
   stale: boolean;
   hung: boolean;
   runningForMs: number | null;
-  lastRun: { durationMs?: number } | null;
+  runningStep?: { step: string; since: string | null } | null;
+  lastRun: { durationMs?: number; stagesMs?: Record<string, number> } | null;
 }
 interface CallRecord {
   calls: number;
@@ -321,13 +324,16 @@ export function Training() {
           <RetrainNow />
           <Panel title="Trainer jobs" note="The trainer worker's scheduled jobs, from their heartbeats.">
             <Table
-              head={["Job", "State", "Last run", "Last success", "Error"]}
+              head={["Job", "State", "Last run", "Duration", "Last success", "Error"]}
               rows={t.jobs.map((j) => [
                 <b>{j.job}</b>,
                 j.hung ? (
                   <Tag tone="bad">hung</Tag>
                 ) : j.runningForMs !== null ? (
-                  <Tag tone="ok">running</Tag>
+                  <>
+                    <Tag tone="ok">running</Tag>
+                    {j.runningStep?.step ? <span className="small"> {j.runningStep.step}</span> : null}
+                  </>
                 ) : j.stale ? (
                   <Tag tone="warn">stale</Tag>
                 ) : j.lastError ? (
@@ -336,6 +342,7 @@ export function Training() {
                   <Tag tone="ok">ok</Tag>
                 ),
                 when(j.lastRunAt),
+                j.lastRun?.durationMs != null ? ms(j.lastRun.durationMs) : "–",
                 when(j.lastSuccessAt),
                 j.lastError ? (
                   <span className="admin-error">{j.lastError}</span>
@@ -348,7 +355,7 @@ export function Training() {
           </Panel>
           <Panel
             title="Training runs"
-            note="The newest 60 trained models, every seat. Exam = the walk-forward test on held-out rows; cutoff = the record at the hit-rate cutoff it ships with."
+            note="The newest 60 models the trainer saved. Exam rates are the walk-forward test. Return is the simulated exit-plan average when that exam stored it; peak is average doublings to the run peak, or label-window doublings when the peak was not stored. A failed run has no row here — its error is on the trainer heartbeat. Duration is not stored per model."
           >
             <Table
               head={[
@@ -358,7 +365,9 @@ export function Training() {
                 "Status",
                 "Rows",
                 "Data",
-                "Exam 2x / 4x",
+                "Exam 2x / 4x / 10x",
+                "Return",
+                "Peak",
                 "Cutoff 2x / 4x",
                 "High tier",
                 "Held inputs",
@@ -371,17 +380,9 @@ export function Training() {
                 <Tag tone={r.status === "active" ? "ok" : "muted"}>{r.status}</Tag>,
                 <span className="num">{n(r.trainingRows)}</span>,
                 <span className="small">
-                  {new Date(r.trainingFrom).toLocaleDateString()} to{" "}
-                  {new Date(r.trainingTo).toLocaleDateString()}
+                  {formatAdminDay(r.trainingFrom) ?? "–"} to {formatAdminDay(r.trainingTo) ?? "–"}
                 </span>,
-                r.exam ? (
-                  <span className="num" title={`${r.exam.graded} graded of ${r.exam.calls} alerts`}>
-                    {rate(r.exam.wins, r.exam.graded)} / {rate(r.exam.goals, r.exam.graded)}{" "}
-                    <span className="faint">({n(r.exam.graded)})</span>
-                  </span>
-                ) : (
-                  "–"
-                ),
+                ...examCells(r.exam),
                 r.calibration ? (
                   <span className="num" title={`${r.calibration.support ?? 0} alerts at the cutoff`}>
                     {pct(r.calibration.winRatePct, 1)} / {pct(r.calibration.goalRatePct, 1)}{" "}
