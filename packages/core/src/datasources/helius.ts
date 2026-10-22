@@ -539,6 +539,14 @@ const TOKEN_PROGRAM_IDS = [
   "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
 ] as const;
 
+/**
+ * How long getTopHoldersBatch reuses one mint's program and raw supply. The program does not
+ * change. Supply does, on a burn, and a holder-list re-read inside this window can miss that burn:
+ * burns of significant size are uncommon (user decision 2026-10-22). One getMultipleAccounts is 1
+ * credit when the coin is read alone. The token-account enumeration still runs every call.
+ */
+const MINT_ACCOUNT_REUSE_MS = 5 * 60_000;
+
 /** Wallets per getTokenAccountsByOwner POST - see getTokenBalancesBatch. */
 const BALANCE_WALLETS_PER_POST = 5;
 
@@ -606,6 +614,12 @@ export class HeliusClient {
   readonly usingHelius: boolean;
   /** Each mint's last token-account read error, for getTopHoldersBatch's failure reason. */
   private readonly gpaErrors = new Map<string, string>();
+  /**
+   * Program id and raw supply from a successful mint-account read, kept for MINT_ACCOUNT_REUSE_MS.
+   * The timestamp is that read, not the last reuse, so a coin re-read every minute pays for the
+   * mint account again once five minutes have passed. A failed read is not stored.
+   */
+  private readonly mintAccounts = new Map<string, { program: string; supply: bigint; atMs: number }>();
   /** The endpoint's shared 429 pause - see rpcPauseFor. */
   private readonly pause: RateGate;
 
@@ -949,37 +963,58 @@ export class HeliusClient {
    * (user ask 2026-10-13: linked wallets over the top 25 without the LP). Per mint, its token
    * accounts under its program, filtered to the mint and sliced to each account's owner and amount
    * (tokenAccountsOfMints: getProgramAccountsV2 on Helius, 1 credit a page of up to 10,000; the
-   * unpaged getProgramAccounts elsewhere), after one getMultipleAccounts for every mint's program
-   * and supply (1 credit per 100 mints).
+   * unpaged getProgramAccounts elsewhere). The mint account (program and supply) is one
+   * getMultipleAccounts for the mints not already read in the last MINT_ACCOUNT_REUSE_MS (1 credit
+   * per 100, or 1 when a coin is read alone). A re-read inside that window skips it and keeps the
+   * cached program and supply together. The token-account enumeration still runs every call.
+   *
+   * `nowMs` is the clock. Unset, it is Date.now().
    */
-  async getTopHoldersBatch(mintAddresses: string[], n: number): Promise<Map<string, TopHoldersResult>> {
+  async getTopHoldersBatch(
+    mintAddresses: string[],
+    n: number,
+    opts: { nowMs?: number } = {},
+  ): Promise<Map<string, TopHoldersResult>> {
     const unique = [...new Set(mintAddresses)];
     const out = new Map<string, TopHoldersResult>();
     if (unique.length === 0) return out;
-    const mints = await this.getMultipleAccounts<{
-      owner?: unknown;
-      data?: { parsed?: { info?: { supply?: unknown } } };
-    }>(unique, { encoding: "jsonParsed" });
+    const now = opts.nowMs ?? Date.now();
     const programOf = new Map<string, string>();
     const supplyOf = new Map<string, bigint>();
+    const unread: string[] = [];
     for (const mint of unique) {
-      const account = mints.get(mint);
-      const value = account && account !== "failed" ? account.value : null;
-      const supply = value?.data?.parsed?.info?.supply;
-      if (
-        typeof value?.owner !== "string" ||
-        !(TOKEN_PROGRAM_IDS as readonly string[]).includes(value.owner) ||
-        typeof supply !== "string" ||
-        !/^\d+$/.test(supply)
-      ) {
-        out.set(mint, {
-          status: "failed",
-          reason: account === "failed" ? "mint read failed" : "not a token mint",
-        });
-        continue;
+      const cached = this.mintAccounts.get(mint);
+      if (cached && now - cached.atMs < MINT_ACCOUNT_REUSE_MS) {
+        programOf.set(mint, cached.program);
+        supplyOf.set(mint, cached.supply);
+      } else unread.push(mint);
+    }
+    if (unread.length > 0) {
+      const mints = await this.getMultipleAccounts<{
+        owner?: unknown;
+        data?: { parsed?: { info?: { supply?: unknown } } };
+      }>(unread, { encoding: "jsonParsed" });
+      for (const mint of unread) {
+        const account = mints.get(mint);
+        const value = account && account !== "failed" ? account.value : null;
+        const supply = value?.data?.parsed?.info?.supply;
+        if (
+          typeof value?.owner !== "string" ||
+          !(TOKEN_PROGRAM_IDS as readonly string[]).includes(value.owner) ||
+          typeof supply !== "string" ||
+          !/^\d+$/.test(supply)
+        ) {
+          out.set(mint, {
+            status: "failed",
+            reason: account === "failed" ? "mint read failed" : "not a token mint",
+          });
+          continue;
+        }
+        const raw = BigInt(supply);
+        programOf.set(mint, value.owner);
+        supplyOf.set(mint, raw);
+        this.mintAccounts.set(mint, { program: value.owner, supply: raw, atMs: now });
       }
-      programOf.set(mint, value.owner);
-      supplyOf.set(mint, BigInt(supply));
     }
     for (const mint of programOf.keys()) this.gpaErrors.delete(mint);
     const rowsByMint = await this.tokenAccountsOfMints(programOf);
