@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "./db.js";
 import {
   answeredStatus,
@@ -7,7 +7,11 @@ import {
   clearHeliusCreditsOut,
   HELIUS_CREDITS_OUT_PAUSE_MS,
   heliusCreditsOut,
+  HELIUS_CREDITS_OUT_ROW,
   flushApiUsage,
+  onHeliusCreditsRestored,
+  saysCreditsOut,
+  syncHeliusCreditsOut,
   meteredFetch,
   nameApiHost,
   normalizePath,
@@ -256,6 +260,87 @@ describe("Helius out of credits", () => {
     clearHeliusCreditsOut();
     expect((await call()).status).toBe(200);
     expect(sent).toBe(5);
+  });
+});
+
+describe("saysCreditsOut", () => {
+  it("reads the plan's refusal in any of Helius's shapes, and not a rate limit", () => {
+    expect(saysCreditsOut("max usage reached")).toBe(true);
+    expect(
+      saysCreditsOut('{"jsonrpc":"2.0","error":{"code":-32429,"message":"plan credits exhausted"}}'),
+    ).toBe(true);
+    // Batched: one error per call.
+    expect(
+      saysCreditsOut(
+        '[{"id":"0","error":{"code":-32429,"message":"limit"}},{"id":"1","error":{"code":-32429}}]',
+      ),
+    ).toBe(true);
+    expect(saysCreditsOut('{"error":{"code":-32429,"message":"rate limited"}}')).toBe(false);
+    expect(saysCreditsOut('{"error":{"code":-32602,"message":"invalid params"}}')).toBe(false);
+    expect(saysCreditsOut('[{"id":"0","result":{"value":null}}]')).toBe(false);
+  });
+});
+
+describe("Helius out of credits, answered with HTTP 200", () => {
+  const json = (body: string) =>
+    new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+
+  it("stands down on a batch of -32429s, and runs the restored hooks once Helius answers again", async () => {
+    clearHeliusCreditsOut();
+    let restored = 0;
+    onHeliusCreditsRestored(() => {
+      restored += 1;
+    });
+    let reply = () => json('[{"jsonrpc":"2.0","id":"0","error":{"code":-32429,"message":"max usage"}}]');
+    const f = meteredFetch((async () => reply()) as typeof fetch);
+    apiUsageMeter.take();
+    await f(helius, { method: "POST", body: rpcBody("getBalance", "getBalance") });
+    const out = heliusCreditsOut()!;
+    expect(out).not.toBeNull();
+    // Not answered, so not billed.
+    const row = apiUsageMeter.take().find((r) => r.provider === "helius")!;
+    expect(row.counter).toMatchObject({ calls: 2, errors: 2, credits: 0 });
+
+    // An answer while still within the pause can't happen (the call isn't sent); one after it ends
+    // the stand-down.
+    vi.useFakeTimers({ now: out.until.getTime() });
+    try {
+      reply = () => json('[{"jsonrpc":"2.0","id":"0","result":1}]');
+      await f(helius, { method: "POST", body: rpcBody("getBalance") });
+      expect(restored).toBe(1);
+      await f(helius, { method: "POST", body: rpcBody("getBalance") });
+      expect(restored).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+    clearHeliusCreditsOut();
+    expect(restored).toBe(1);
+  });
+});
+
+describe.skipIf(!dbAvailable)("the stand-down shared through the database", () => {
+  afterAll(async () => {
+    await prisma.systemHeartbeat.deleteMany({ where: { job: HELIUS_CREDITS_OUT_ROW } });
+    clearHeliusCreditsOut();
+  });
+
+  it("takes on another process's stand-down, and its clear", async () => {
+    clearHeliusCreditsOut();
+    const now = Date.now();
+    // Set after this process last cleared its own.
+    const meta = { since: now - 1000, until: now + 600_000, setAt: now + 1, clearedAt: 0 };
+    await prisma.systemHeartbeat.upsert({
+      where: { job: HELIUS_CREDITS_OUT_ROW },
+      create: { job: HELIUS_CREDITS_OUT_ROW, lastRunAt: new Date(now), meta },
+      update: { meta },
+    });
+    await syncHeliusCreditsOut(now);
+    expect(heliusCreditsOut(now)?.until.getTime()).toBe(meta.until);
+
+    const cleared = { ...meta, until: now + 2, clearedAt: now + 2 };
+    await prisma.systemHeartbeat.update({ where: { job: HELIUS_CREDITS_OUT_ROW }, data: { meta: cleared } });
+    await syncHeliusCreditsOut(now + 3);
+    expect(heliusCreditsOut(now + 3)).toBeNull();
   });
 });
 

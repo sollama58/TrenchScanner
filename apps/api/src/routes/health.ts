@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
   HEARTBEAT_JOB_ROLE,
+  HELIUS_CREDITS_OUT_ROW,
   JOB_LOCKED_JOBS,
   heldJobLocks,
   lockLostDuringRun,
@@ -289,18 +290,20 @@ export async function registerHealthRoutes(
    * light defense-in-depth measure against dumping internal detail to an unauthenticated caller.
    */
   const readHeartbeats = async () => {
-    const [heartbeats, aiBudget, lastAlert, lastRead, lastDecision, lastSecondLook, heldLocks] =
-      await Promise.all([
-        prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } }),
-        readAiBudget(budgetEnv),
-        // Newest row of each, each one a backward step down its own index.
-        prisma.curatedAlert.aggregate({ _max: { createdAt: true } }),
-        prisma.tokenNarrative.aggregate({ _max: { checkedAt: true } }),
-        prisma.candidateOutcome.aggregate({ where: { sampleKind: "event" }, _max: { anchorAt: true } }),
-        // The Narrative seat's second look is a model considering a token too.
-        prisma.candidateOutcome.aggregate({ where: { sampleKind: "second" }, _max: { anchorAt: true } }),
-        heldJobLocks(),
-      ]);
+    const [rows, aiBudget, lastAlert, lastRead, lastDecision, lastSecondLook, heldLocks] = await Promise.all([
+      prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } }),
+      readAiBudget(budgetEnv),
+      // Newest row of each, each one a backward step down its own index.
+      prisma.curatedAlert.aggregate({ _max: { createdAt: true } }),
+      prisma.tokenNarrative.aggregate({ _max: { checkedAt: true } }),
+      prisma.candidateOutcome.aggregate({ where: { sampleKind: "event" }, _max: { anchorAt: true } }),
+      // The Narrative seat's second look is a model considering a token too.
+      prisma.candidateOutcome.aggregate({ where: { sampleKind: "second" }, _max: { anchorAt: true } }),
+      heldJobLocks(),
+    ]);
+    // The shared Helius stand-down (apiUsage.ts) lives in this table but is not a job.
+    const heartbeats = rows.filter((h) => h.job !== HELIUS_CREDITS_OUT_ROW);
+    const creditsOut = sharedCreditsOut(rows.find((h) => h.job === HELIUS_CREDITS_OUT_ROW)?.meta);
     const scanMeta = heartbeats.find((h) => h.job === "scan")?.meta as Record<string, unknown> | null;
     const screenPass = scanMeta?.lastScreenPassAt;
     // When each stage of the alert path last produced something (the header pill's tooltip).
@@ -310,7 +313,7 @@ export async function registerHealthRoutes(
       lastTokenSageAt: lastRead._max.checkedAt,
       lastDecisionAt: latest(lastDecision._max.anchorAt, lastSecondLook._max.anchorAt),
     };
-    return { heartbeats, aiBudget, pipeline, heldLocks };
+    return { heartbeats, aiBudget, pipeline, heldLocks, creditsOut };
   };
   const heartbeatCache = new SharedCache<Awaited<ReturnType<typeof readHeartbeats>>>(WORKER_HEALTH_CACHE_MS);
 
@@ -318,7 +321,8 @@ export async function registerHealthRoutes(
   // a monitor that only reads status codes can alert on it. Without it the route always answers
   // 200 and the dashboard reads the flags from the body, as it always has.
   app.get<{ Querystring: { strict?: string } }>("/worker", async (request, reply) => {
-    const { heartbeats, aiBudget, pipeline, heldLocks } = await heartbeatCache.get(readHeartbeats);
+    const { heartbeats, aiBudget, pipeline, heldLocks, creditsOut } =
+      await heartbeatCache.get(readHeartbeats);
     // Ages are measured now, not when the rows were read, so the cache never makes a job look fresher.
     const now = Date.now();
     const jobs = heartbeats.map((h) => summarizeHeartbeat(h, now, { heldLocks }));
@@ -330,6 +334,8 @@ export async function registerHealthRoutes(
       ...(strict ? { failing } : {}),
       jobs,
       pipeline,
+      // While Helius's credits are out, every process's stand-down (apiUsage.ts): since and until when.
+      heliusCreditsOut: creditsOut && creditsOut.until > now ? creditsOut : null,
       // Today's AI spend against the daily cap (AI_DAILY_BUDGET_USD): totals only here - the
       // per-source split is on the admin panel.
       aiBudget: {
@@ -346,6 +352,13 @@ export async function registerHealthRoutes(
 }
 
 type HeartbeatRow = Awaited<ReturnType<typeof prisma.systemHeartbeat.findMany>>[number];
+
+/** The shared Helius stand-down row's times (apiUsage.ts writes them as ms epochs), or null. */
+function sharedCreditsOut(meta: unknown): { since: number; until: number } | null {
+  if (typeof meta !== "object" || meta === null) return null;
+  const { since, until } = meta as Record<string, unknown>;
+  return typeof since === "number" && typeof until === "number" ? { since, until } : null;
+}
 
 /**
  * One job's row as /health/worker reports it. The admin panel's /admin/worker passes

@@ -386,12 +386,27 @@ function requestParts(input: Parameters<typeof fetch>[0], init?: RequestInit) {
 
 /**
  * How long every billed Helius call stands down once Helius says the plan's credits are used up
- * (a 429 "max usage reached"; a plain 429 is a rate limit and passes). Without it every stage kept
+ * (a "max usage reached" answer; a plain 429 is a rate limit and passes). Without it every stage kept
  * firing every 30 s into the same refusal and the scan still reported success. After the pause
  * calls go through again: answered, Helius is back; refused, the pause starts over.
+ *
+ * Shared between processes through one SystemHeartbeat row (HELIUS_CREDITS_OUT_ROW), read every
+ * SHARED_POLL_MS once the meter is installed: the API, the scanner and the trainer each found out
+ * on their own, and a restart (pipeline-watch's own among them) forgot it and bought its first
+ * reads again (audit 2026-10-22, H2).
  */
 export const HELIUS_CREDITS_OUT_PAUSE_MS = 15 * 60_000;
-const heliusOut = { since: 0, until: 0 };
+const heliusOut = {
+  since: 0,
+  until: 0,
+  /** When this process last set or adopted the stand-down; a clear older than this doesn't end it. */
+  setAt: 0,
+  /** The newest clear any process made (clearHeliusCreditsOut), as the shared row carries it. */
+  clearedAt: 0,
+  /** Set until the stand-down is over and its onHeliusCreditsRestored hooks have run. */
+  pending: false,
+};
+const restoredHooks: (() => void)[] = [];
 
 /** When this process last heard Helius's credits were out and until when it stands down; null if not now. */
 export function heliusCreditsOut(now = Date.now()): { since: Date; until: Date } | null {
@@ -400,10 +415,34 @@ export function heliusCreditsOut(now = Date.now()): { since: Date; until: Date }
     : null;
 }
 
-/** Ends a stand-down (a test, or an admin who topped up the plan). */
-export function clearHeliusCreditsOut(): void {
-  heliusOut.since = 0;
-  heliusOut.until = 0;
+/**
+ * Runs `fn` once each time a stand-down ends: Helius answered a billed call again after the pause,
+ * or someone cleared it. For the state a stand-down leaves behind that should not outlive it (the
+ * worker's per-mint failure backoffs).
+ */
+export function onHeliusCreditsRestored(fn: () => void): void {
+  restoredHooks.push(fn);
+}
+
+function releaseCreditsOut(): void {
+  if (!heliusOut.pending) return;
+  heliusOut.pending = false;
+  logger.info("Helius credits back; stand-down over");
+  for (const fn of restoredHooks) {
+    try {
+      fn();
+    } catch (err) {
+      logger.warn("credits-restored hook failed", { error: String(err) });
+    }
+  }
+}
+
+/** Ends a stand-down (a test, or an admin who topped up the plan), in every process sharing it. */
+export function clearHeliusCreditsOut(now = Date.now()): void {
+  heliusOut.until = Math.min(heliusOut.until, now);
+  heliusOut.clearedAt = now;
+  releaseCreditsOut();
+  if (installed) void publishCreditsOut();
 }
 
 function latchCreditsOut(now: number) {
@@ -414,15 +453,131 @@ function latchCreditsOut(now: number) {
     });
   }
   heliusOut.until = now + HELIUS_CREDITS_OUT_PAUSE_MS;
+  heliusOut.setAt = now;
+  heliusOut.pending = true;
+  if (installed) void publishCreditsOut();
 }
 
-/** Whether a 429 is Helius's "max usage reached" (credits out), read from a copy of the body. */
-async function saysCreditsOut(res: Response): Promise<boolean> {
+/** The SystemHeartbeat row the stand-down is shared through. Not a job: listings leave it out. */
+export const HELIUS_CREDITS_OUT_ROW = "helius-credits-out";
+/** How often a process reads the shared stand-down: the "about 30 s" a late process may still call. */
+const SHARED_POLL_MS = 30_000;
+
+interface SharedCreditsOut {
+  since: number;
+  until: number;
+  setAt: number;
+  clearedAt: number;
+}
+
+async function publishCreditsOut(): Promise<void> {
+  const { since, until, setAt, clearedAt } = heliusOut;
+  const meta: SharedCreditsOut = { since, until, setAt, clearedAt };
+  const at = new Date(Math.max(setAt, clearedAt) || Date.now());
   try {
-    return /max usage reached/i.test(await res.clone().text());
-  } catch {
-    return false;
+    await prisma.systemHeartbeat.upsert({
+      where: { job: HELIUS_CREDITS_OUT_ROW },
+      create: { job: HELIUS_CREDITS_OUT_ROW, lastRunAt: at, meta: { ...meta } },
+      update: { lastRunAt: at, meta: { ...meta } },
+    });
+  } catch (err) {
+    logger.warn("shared Helius stand-down not written", { error: String(err) });
   }
+}
+
+/** The shared row's stand-down, or null without one (or one that doesn't read). */
+export async function readSharedCreditsOut(): Promise<SharedCreditsOut | null> {
+  const row = await prisma.systemHeartbeat.findUnique({
+    where: { job: HELIUS_CREDITS_OUT_ROW },
+    select: { meta: true },
+  });
+  const m = row?.meta as Record<string, unknown> | null | undefined;
+  const n = (k: string) => (m && typeof m[k] === "number" ? (m[k] as number) : 0);
+  return m ? { since: n("since"), until: n("until"), setAt: n("setAt"), clearedAt: n("clearedAt") } : null;
+}
+
+/**
+ * Takes on what the other processes know: a stand-down set elsewhere that outlasts this process's,
+ * or a clear made after this process last set its own. Exported for tests; the meter runs it every
+ * SHARED_POLL_MS and once at start, so a restarted process keeps standing down.
+ */
+export async function syncHeliusCreditsOut(now = Date.now()): Promise<void> {
+  const shared = await readSharedCreditsOut();
+  if (!shared) return;
+  if (shared.clearedAt > heliusOut.clearedAt) {
+    heliusOut.clearedAt = shared.clearedAt;
+    if (shared.clearedAt >= heliusOut.setAt && now < heliusOut.until) {
+      heliusOut.until = Math.min(heliusOut.until, shared.clearedAt);
+      releaseCreditsOut();
+    }
+  }
+  if (shared.until > heliusOut.until && shared.until > now && shared.setAt > heliusOut.clearedAt) {
+    if (now >= heliusOut.until) {
+      heliusOut.since = shared.since;
+      logger.error("Helius credits used up (heard from another process); standing down Helius calls");
+    }
+    heliusOut.until = shared.until;
+    heliusOut.setAt = shared.setAt;
+    heliusOut.pending = true;
+  }
+}
+
+/**
+ * Whether a billed Helius answer says the plan's credits are used up. Helius sends it as an HTTP
+ * 429 "max usage reached", but also with HTTP 200 as a JSON-RPC error (code -32429), and inside a
+ * batch as one error per call (rpc.ts's isNotNowRpcError reads it that way): any of those counts.
+ * A -32429 that says "rate limited" is the per-second limit, not the plan, and does not.
+ */
+export function saysCreditsOut(text: string): boolean {
+  if (/max usage reached/i.test(text)) return true;
+  for (const m of text.matchAll(/"error"\s*:\s*\{([^{}]*)/g)) {
+    const inner = m[1]!;
+    const code = Number(/"code"\s*:\s*(-?\d+)/.exec(inner)?.[1]);
+    const message = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(inner)?.[1] ?? "";
+    if (/max usage|credits/i.test(message)) return true;
+    if (code === -32429 && !/rate limit|too many/i.test(message)) return true;
+  }
+  return false;
+}
+
+/**
+ * How much of an answered (2xx) body is read for saysCreditsOut. An out-of-credits answer is a few
+ * hundred bytes, and a batch of them repeats the error from its first item, so this is enough
+ * without reading a large page twice.
+ */
+const ANSWERED_BODY_PEEK_BYTES = 4096;
+
+/** The start of a copy of `res`'s body, up to `max` bytes (all of it when max is Infinity). */
+async function bodyText(res: Response, max = Infinity): Promise<string> {
+  try {
+    const copy = res.clone();
+    if (max === Infinity || !copy.body) return await copy.text();
+    const reader = copy.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      while (total < max) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        total += value.byteLength;
+      }
+    } finally {
+      void reader.cancel().catch(() => {});
+    }
+    return Buffer.concat(chunks).subarray(0, max).toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+/** Whether a billed Helius response says credits are out: a 429's body, or a JSON 2xx's first bytes. */
+async function responseSaysCreditsOut(res: Response): Promise<boolean> {
+  if (res.status === 429) return saysCreditsOut(await bodyText(res));
+  if (res.ok && /json/i.test(res.headers.get("content-type") ?? "")) {
+    return saysCreditsOut(await bodyText(res, ANSWERED_BODY_PEEK_BYTES));
+  }
+  return false;
 }
 
 /** What a billed Helius call gets while standing down: the same 429 Helius would send, unsent. */
@@ -453,11 +608,16 @@ export function meteredFetch(inner: typeof fetch): typeof fetch {
     if (billedHelius && startedAt < heliusOut.until) return standingDown();
     try {
       const res = await inner(input, init);
-      if (billedHelius && res.status === 429 && (await saysCreditsOut(res))) latchCreditsOut(Date.now());
+      const creditsOut = billedHelius && (await responseSaysCreditsOut(res));
+      if (creditsOut) latchCreditsOut(Date.now());
+      // Answered after a stand-down's pause: Helius is back, and what the stand-down left behind goes.
+      else if (billedHelius && res.ok && heliusOut.pending && Date.now() >= heliusOut.until)
+        releaseCreditsOut();
       if (lines) {
         apiUsageMeter.record(lines, {
           requests: 1,
-          ok: answeredStatus(lines, res.status),
+          // A 200 carrying the out-of-credits error answered nothing and was not billed.
+          ok: !creditsOut && answeredStatus(lines, res.status),
           rateLimited: res.status === 429,
           ms: Date.now() - startedAt,
         });
@@ -516,7 +676,7 @@ async function insertRows(processName: string, rows: ReturnType<ApiUsageMeter["t
         "msTotal" = "ApiUsage"."msTotal" + EXCLUDED."msTotal"`;
 }
 
-let installed: { processName: string; timer: NodeJS.Timeout } | null = null;
+let installed: { processName: string; timer: NodeJS.Timeout; sharedTimer: NodeJS.Timeout } | null = null;
 
 /**
  * Starts counting this process's outside calls: wraps globalThis.fetch and flushes every FLUSH_MS.
@@ -542,13 +702,21 @@ export function installApiUsageMeter(opts: { processName: string; feature?: stri
     })();
   }, FLUSH_MS);
   timer.unref?.();
-  installed = { processName: opts.processName, timer };
+  const sync = () =>
+    void syncHeliusCreditsOut().catch((err: unknown) =>
+      logger.warn("shared Helius stand-down not read", { error: String(err) }),
+    );
+  const sharedTimer = setInterval(sync, SHARED_POLL_MS);
+  sharedTimer.unref?.();
+  installed = { processName: opts.processName, timer, sharedTimer };
+  sync();
   return () => stopApiUsageMeter();
 }
 
 async function stopApiUsageMeter(): Promise<void> {
   if (!installed) return;
   clearInterval(installed.timer);
+  clearInterval(installed.sharedTimer);
   const { processName } = installed;
   installed = null;
   await flushApiUsage(processName).catch((err: unknown) =>
