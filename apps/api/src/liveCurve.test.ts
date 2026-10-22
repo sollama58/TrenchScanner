@@ -175,8 +175,9 @@ describe("LiveCurves", () => {
     expect(a.ticks).toHaveLength(2);
     // Known current as of the delivery, not the ask.
     expect(a.readAt).toBe(t.at() - 400);
-    // Covered by the stream: no polling.
-    t.tick(READ_EVERY_MS * 3);
+    // Covered by the stream: a poll interval passes and it is not read again. The verify
+    // read is later (VERIFY_EVERY_MS), and the ticks above already used part of that.
+    t.tick(READ_EVERY_MS);
     await t.curves.round();
     expect(t.reads).toHaveLength(1);
     t.curves.stop();
@@ -258,8 +259,8 @@ describe("LiveCurves", () => {
     const b = await t.curves.read(MINT, t.at() - 1);
     expect(b.ticks).toHaveLength(1);
     expect(b.ticks[0]![1]).toBeCloseTo(poolMcap(9e10, 1.9e14));
-    // Covered by the stream: no more vault reads.
-    t.tick(READ_EVERY_MS * 3);
+    // Covered by the stream: a poll interval passes and the vaults are not read again.
+    t.tick(READ_EVERY_MS);
     await t.curves.round();
     expect(t.poolReads).toHaveLength(1);
     t.curves.stop();

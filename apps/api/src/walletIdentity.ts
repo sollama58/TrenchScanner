@@ -13,10 +13,11 @@ import type { WalletLabel } from "./walletProfile.js";
 const logger = createLogger("wallet-identity");
 
 /**
- * How long an answer is kept, in memory and in the database (user decision 2026-10-18, was 12
- * hours in memory only): exchange and protocol names don't change, and a username rarely does.
+ * How long an answer is kept, in memory and in the database (user decision 2026-10-22, was 7
+ * days, and 12 hours in memory only before 2026-10-18): exchange and protocol names don't
+ * change, and a username rarely does. A rename can stay wrong for this long.
  */
-export const WALLET_IDENTITY_TTL_MS = 7 * 24 * 3_600_000;
+export const WALLET_IDENTITY_TTL_MS = 30 * 24 * 3_600_000;
 
 /** Where answers outlive the process: the WalletIdentity table, or a stand-in in tests. */
 export interface IdentityStore {

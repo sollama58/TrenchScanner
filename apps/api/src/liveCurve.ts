@@ -47,7 +47,7 @@ const logger = createLogger("live-curve");
  * nothing, so a stall falls back to RPC reads at once rather than after the reconnect's minute.
  *
  * Discovery (LaunchLab and CPMM pool scans, the PumpSwap pool lookup after bonding) runs in its own
- * loop with a time budget, so a slow program scan no longer holds the 2 s RPC reads or a chart's
+ * loop with a time budget, so a slow program scan no longer holds the 5 s RPC reads or a chart's
  * seed read (audit item 10).
  */
 
@@ -63,8 +63,11 @@ const MAX_LAUNCHLAB_POOLS = 2_000;
 const CPMM_RETRY_MS = LAUNCHLAB_RETRY_MS;
 /** A curve is let go once no chart has asked about it for this long. */
 const IDLE_MS = 30_000;
-/** Off the stream, a followed curve is read this often (1 credit per 100 curves a read). */
-export const READ_EVERY_MS = 2_000;
+/**
+ * Off the stream, a followed curve is read this often (1 credit per 100 curves a read).
+ * 5 seconds since 2026-10-22 (was 2). The stream path is unchanged: one read, then the socket.
+ */
+export const READ_EVERY_MS = 5_000;
 /** How much of a curve's changes are kept: the First 15m view's span, with room. */
 const KEEP_MS = 20 * 60_000;
 const MAX_TICKS = 6_000;
