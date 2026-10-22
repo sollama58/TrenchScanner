@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChartPollBody } from "./chartPoll";
 
 // The cache only needs `api` from ./api; each test hands it a request it can resolve by hand.
 const requests: { path: string; init?: RequestInit; resolve: (data: unknown) => void }[] = [];
@@ -210,10 +211,10 @@ describe("cachedGet: chart history", () => {
   });
 
   it("merges extended history into a cached tail answer", async () => {
-    const short = cachedGet(path, 0);
+    const short = cachedGet<ChartPollBody>(path, 0);
     requests[0]!.resolve(tail);
     await short;
-    const longer = cachedGet(path, 0);
+    const longer = cachedGet<ChartPollBody>(path, 0);
     requests[1]!.resolve(full);
     const merged = await longer;
     expect(merged.older?.[0]?.t).toBe(0);
