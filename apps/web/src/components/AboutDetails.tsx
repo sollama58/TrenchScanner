@@ -1,5 +1,5 @@
 import { Fragment } from "react";
-import { BoltIcon, BrainIcon, SlidersIcon } from "./Icons";
+import { BrainIcon, SlidersIcon } from "./Icons";
 import { ExitPlanDetails } from "./ExitPlanInfo";
 import { PRO_MODE_PERKS } from "./ProModeCard";
 
@@ -313,12 +313,12 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           </dd>
           <dt>
             <span className="pill pill-icon pill-conviction" aria-hidden="true">
-              <BoltIcon size={12} />
+              ❗
             </span>{" "}
             High conviction
           </dt>
           <dd>
-            The filled bolt beside the model&apos;s name: from the model&apos;s top half-percent most
+            The exclamation mark beside the model&apos;s name: from the model&apos;s top half-percent most
             confident moments. Tracked separately on Models.
           </dd>
           <dt>≈41% 2x</dt>
