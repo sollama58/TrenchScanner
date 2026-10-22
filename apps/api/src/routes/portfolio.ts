@@ -32,8 +32,9 @@ import { sharedSolPrice } from "../solPrice.js";
  * mintOnFeed's rule: on Token, and not only because someone looked it up), so nothing here gives
  * away a paid lookup. The rest of the wallet's coins are counted, never named.
  *
- * Credits (Helius): /held's holdings are the only chain read - getBalance and two
- * getTokenAccountsByOwner, a credit each - and one reading is reused for HOLDINGS_TTL_MS per wallet.
+ * Credits (Helius): /held's holdings are the only chain read - getBalance, two sliced
+ * getTokenAccountsByOwnerV2 pages, and one getMultipleAccounts for decimals - and one reading
+ * is reused for HOLDINGS_TTL_MS per wallet.
  * Prices come from the scanner's own rows; nothing else is asked of anyone.
  */
 

@@ -37,6 +37,7 @@ import {
   type PumpLaunchResult,
 } from "./pumpLaunch.js";
 import { parseLaunchBuyers, type LaunchBuyersReading, type RawLaunchTx } from "./launchBuyers.js";
+import { rememberLaunchTapeSeed } from "./launchTapeSeed.js";
 import type { ChainTx } from "../wallets/tradeTape.js";
 import { funderFromEarliestTransactions, FUNDER_TXS_WALKED } from "../wallets/linkedWallets.js";
 import {
@@ -538,6 +539,14 @@ const TOKEN_PROGRAM_IDS = [
   "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
 ] as const;
 
+/**
+ * How long getTopHoldersBatch reuses one mint's program and raw supply. The program does not
+ * change. Supply does, on a burn, and a holder-list re-read inside this window can miss that burn:
+ * burns of significant size are uncommon (user decision 2026-10-22). One getMultipleAccounts is 1
+ * credit when the coin is read alone. The token-account enumeration still runs every call.
+ */
+const MINT_ACCOUNT_REUSE_MS = 5 * 60_000;
+
 /** Wallets per getTokenAccountsByOwner POST - see getTokenBalancesBatch. */
 const BALANCE_WALLETS_PER_POST = 5;
 
@@ -563,7 +572,7 @@ export type TokenBalancesResult =
   { status: "found"; balances: Map<string, bigint>; truncated?: boolean } | { status: "failed" };
 
 /** getTokenAccountsByOwner's value (an array), or V2's, which can also come wrapped with context. */
-function tokenAccountsPage(result: unknown): { accounts: TokenAccountSlice[]; more: boolean } | null {
+export function tokenAccountsPage(result: unknown): { accounts: TokenAccountSlice[]; more: boolean } | null {
   if (!result || typeof result !== "object") return null;
   const r = result as { value?: unknown; paginationKey?: unknown };
   const inner = r.value && !Array.isArray(r.value) && typeof r.value === "object" ? r.value : null;
@@ -605,6 +614,12 @@ export class HeliusClient {
   readonly usingHelius: boolean;
   /** Each mint's last token-account read error, for getTopHoldersBatch's failure reason. */
   private readonly gpaErrors = new Map<string, string>();
+  /**
+   * Program id and raw supply from a successful mint-account read, kept for MINT_ACCOUNT_REUSE_MS.
+   * The timestamp is that read, not the last reuse, so a coin re-read every minute pays for the
+   * mint account again once five minutes have passed. A failed read is not stored.
+   */
+  private readonly mintAccounts = new Map<string, { program: string; supply: bigint; atMs: number }>();
   /** The endpoint's shared 429 pause - see rpcPauseFor. */
   private readonly pause: RateGate;
 
@@ -709,11 +724,7 @@ export class HeliusClient {
    * by position. An empty map means the whole request failed - callers treat that as "no answer
    * for any of these", not "no data for any of these".
    */
-  private async sendBatch<T>(
-    calls: RpcCall[],
-    timeoutMs: number,
-    opts: { retryOnTimeout?: boolean } = {},
-  ): Promise<Map<string, RpcResponse<T>>> {
+  private async sendBatch<T>(calls: RpcCall[], timeoutMs: number): Promise<Map<string, RpcResponse<T>>> {
     const byId = new Map<string, RpcResponse<T>>();
     if (calls.length === 0) return byId;
 
@@ -737,7 +748,9 @@ export class HeliusClient {
         // A retry is another billed request: counted like the first.
         onRetry: count,
         gate: this.pause,
-        ...(opts.retryOnTimeout === false ? { retryOnTimeout: false } : {}),
+        // A timeout is billed whether or not the answer arrives. Retrying it pays twice
+        // (user decision 2026-10-22). A 429 still retries: that request was refused.
+        retryOnTimeout: false,
       });
 
       // A malformed batch can come back as a single error object rather than an array.
@@ -764,7 +777,7 @@ export class HeliusClient {
   private async sendBatched<T>(
     calls: RpcCall[],
     timeoutMs: number,
-    opts: { batchSize?: number; concurrency?: number; retryOnTimeout?: boolean } = {},
+    opts: { batchSize?: number; concurrency?: number } = {},
   ): Promise<Map<string, RpcResponse<T>>> {
     const size = opts.batchSize ?? RPC_BATCH_SIZE;
     const chunks: RpcCall[][] = [];
@@ -774,7 +787,7 @@ export class HeliusClient {
 
     const merged = new Map<string, RpcResponse<T>>();
     await forEachWithConcurrency(chunks, opts.concurrency ?? BATCH_CONCURRENCY, async (chunk) => {
-      const result = await this.sendBatch<T>(chunk, timeoutMs, { retryOnTimeout: opts.retryOnTimeout });
+      const result = await this.sendBatch<T>(chunk, timeoutMs);
       for (const [id, res] of result) merged.set(id, res);
     });
     return merged;
@@ -947,37 +960,58 @@ export class HeliusClient {
    * (user ask 2026-10-13: linked wallets over the top 25 without the LP). Per mint, its token
    * accounts under its program, filtered to the mint and sliced to each account's owner and amount
    * (tokenAccountsOfMints: getProgramAccountsV2 on Helius, 1 credit a page of up to 10,000; the
-   * unpaged getProgramAccounts elsewhere), after one getMultipleAccounts for every mint's program
-   * and supply (1 credit per 100 mints).
+   * unpaged getProgramAccounts elsewhere). The mint account (program and supply) is one
+   * getMultipleAccounts for the mints not already read in the last MINT_ACCOUNT_REUSE_MS (1 credit
+   * per 100, or 1 when a coin is read alone). A re-read inside that window skips it and keeps the
+   * cached program and supply together. The token-account enumeration still runs every call.
+   *
+   * `nowMs` is the clock. Unset, it is Date.now().
    */
-  async getTopHoldersBatch(mintAddresses: string[], n: number): Promise<Map<string, TopHoldersResult>> {
+  async getTopHoldersBatch(
+    mintAddresses: string[],
+    n: number,
+    opts: { nowMs?: number } = {},
+  ): Promise<Map<string, TopHoldersResult>> {
     const unique = [...new Set(mintAddresses)];
     const out = new Map<string, TopHoldersResult>();
     if (unique.length === 0) return out;
-    const mints = await this.getMultipleAccounts<{
-      owner?: unknown;
-      data?: { parsed?: { info?: { supply?: unknown } } };
-    }>(unique, { encoding: "jsonParsed" });
+    const now = opts.nowMs ?? Date.now();
     const programOf = new Map<string, string>();
     const supplyOf = new Map<string, bigint>();
+    const unread: string[] = [];
     for (const mint of unique) {
-      const account = mints.get(mint);
-      const value = account && account !== "failed" ? account.value : null;
-      const supply = value?.data?.parsed?.info?.supply;
-      if (
-        typeof value?.owner !== "string" ||
-        !(TOKEN_PROGRAM_IDS as readonly string[]).includes(value.owner) ||
-        typeof supply !== "string" ||
-        !/^\d+$/.test(supply)
-      ) {
-        out.set(mint, {
-          status: "failed",
-          reason: account === "failed" ? "mint read failed" : "not a token mint",
-        });
-        continue;
+      const cached = this.mintAccounts.get(mint);
+      if (cached && now - cached.atMs < MINT_ACCOUNT_REUSE_MS) {
+        programOf.set(mint, cached.program);
+        supplyOf.set(mint, cached.supply);
+      } else unread.push(mint);
+    }
+    if (unread.length > 0) {
+      const mints = await this.getMultipleAccounts<{
+        owner?: unknown;
+        data?: { parsed?: { info?: { supply?: unknown } } };
+      }>(unread, { encoding: "jsonParsed" });
+      for (const mint of unread) {
+        const account = mints.get(mint);
+        const value = account && account !== "failed" ? account.value : null;
+        const supply = value?.data?.parsed?.info?.supply;
+        if (
+          typeof value?.owner !== "string" ||
+          !(TOKEN_PROGRAM_IDS as readonly string[]).includes(value.owner) ||
+          typeof supply !== "string" ||
+          !/^\d+$/.test(supply)
+        ) {
+          out.set(mint, {
+            status: "failed",
+            reason: account === "failed" ? "mint read failed" : "not a token mint",
+          });
+          continue;
+        }
+        const raw = BigInt(supply);
+        programOf.set(mint, value.owner);
+        supplyOf.set(mint, raw);
+        this.mintAccounts.set(mint, { program: value.owner, supply: raw, atMs: now });
       }
-      programOf.set(mint, value.owner);
-      supplyOf.set(mint, BigInt(supply));
     }
     for (const mint of programOf.keys()) this.gpaErrors.delete(mint);
     const rowsByMint = await this.tokenAccountsOfMints(programOf);
@@ -1516,8 +1550,6 @@ export class HeliusClient {
         ],
       })),
       20_000,
-      // Billed whether or not the answer arrives in time, as for the launch read.
-      { retryOnTimeout: false },
     );
     for (const wallet of wallets) {
       const res = responses.get(wallet);
@@ -2055,6 +2087,27 @@ export class HeliusClient {
 
     const txsByMint = new Map<string, RawLaunchTx[]>(unique.map((m) => [m, []]));
     const cursor = new Map<string, string | undefined>();
+    // Pages already paid for, so the trade tape can start after them (launchTapeSeed.ts).
+    const pageEnds = new Map<string, number[]>();
+    const seedToken = new Map<string, string | null>();
+    const notePage = (mint: string, data: RawLaunchTx[], nextToken: string | null) => {
+      const times = data.map((tx) => tx.blockTime).filter((t): t is number => typeof t === "number");
+      const ends = pageEnds.get(mint) ?? [];
+      ends.push(times.length > 0 ? Math.max(...times) * 1000 : 0);
+      pageEnds.set(mint, ends);
+      seedToken.set(mint, nextToken);
+    };
+    const publishSeed = (mint: string) => {
+      const ends = pageEnds.get(mint);
+      const txs = txsByMint.get(mint) ?? [];
+      if (!ends || ends.length === 0 || txs.length === 0) return;
+      rememberLaunchTapeSeed(mint, {
+        txs: txs as ChainTx[],
+        pages: ends.length,
+        pageEnds: ends,
+        paginationToken: seedToken.get(mint) ?? null,
+      });
+    };
     let pending = unique;
     for (let page = 1; page <= LAUNCH_MAX_PAGES && pending.length > 0; page += 1) {
       const calls: RpcCall[] = pending.map((mint) => ({
@@ -2080,8 +2133,8 @@ export class HeliusClient {
         calls,
         15_000,
         // A page of 100 full transactions that timed out was most likely served and billed
-        // anyway; the same request again pays twice. The mint is re-read on a later cycle.
-        { batchSize: 1, concurrency: LAUNCH_READ_CONCURRENCY, retryOnTimeout: false },
+        // anyway. Timeouts are not retried (sendBatch). The mint is re-read on a later cycle.
+        { batchSize: 1, concurrency: LAUNCH_READ_CONCURRENCY },
       );
 
       const next: string[] = [];
@@ -2099,10 +2152,14 @@ export class HeliusClient {
           // A later page failing doesn't lose the pages already paid for: what they hold is the
           // reading so far, incomplete, and the retry adds to it rather than starting over.
           const partial = txs.length > 0 ? parseLaunchBuyers(mint, txs, maxBuyers) : null;
+          if (partial) publishSeed(mint);
           out.set(mint, partial ? { status: "found", complete: false, ...partial } : { status: "failed" });
           continue;
         }
         txs.push(...res.result.data);
+        const token = res.result.paginationToken ?? undefined;
+        const historyEnds = res.result.data.length < LAUNCH_TX_PAGE || !token;
+        notePage(mint, res.result.data, historyEnds ? null : (token ?? null));
         const reading = parseLaunchBuyers(mint, txs, maxBuyers);
         if (!reading) {
           if (txs.length === 0 || txs.some((tx) => !tx || !tx.meta)) {
@@ -2117,6 +2174,7 @@ export class HeliusClient {
             // transaction is fixed. Reported as a complete reading with no buyers - which stays
             // "unknown" downstream - so the caller caches it instead of re-paying 10-30 credits
             // for the same answer every five minutes the token spends in band.
+            publishSeed(mint);
             out.set(mint, {
               status: "found",
               complete: true,
@@ -2129,9 +2187,8 @@ export class HeliusClient {
           }
           continue;
         }
-        const token = res.result.paginationToken ?? undefined;
-        const historyEnds = res.result.data.length < LAUNCH_TX_PAGE || !token;
         if (reading.buyers.length >= maxBuyers || historyEnds || page === LAUNCH_MAX_PAGES) {
+          publishSeed(mint);
           out.set(mint, {
             status: "found",
             complete: reading.buyers.length >= maxBuyers || !historyEnds,
@@ -2192,8 +2249,6 @@ export class HeliusClient {
         },
       ],
       20_000,
-      // A timed-out page of full transactions was most likely served and billed anyway.
-      { retryOnTimeout: false },
     );
     const res = responses.get(mint);
     if (res?.error?.code === RPC_METHOD_NOT_FOUND) {
@@ -2253,10 +2308,8 @@ export class HeliusClient {
       method: "getTransactionsForAddress",
       params: [address, { sortOrder: "asc", limit: 1, transactionDetails: "signatures" }],
     }));
-    // Not retried on a timeout, for the launch read's reason (10 credits an address, already billed).
-    const responses = await this.sendBatched<TransactionsForAddressResult>(calls, 15_000, {
-      retryOnTimeout: false,
-    });
+    // Not retried on a timeout (sendBatch): 10 credits an address, billed even when the answer is late.
+    const responses = await this.sendBatched<TransactionsForAddressResult>(calls, 15_000);
 
     let usable = 0;
     let answered = 0;

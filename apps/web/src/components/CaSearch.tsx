@@ -830,7 +830,7 @@ export function SearchModal({
       )}
       {lookedUp && (
         <Suspense fallback={null}>
-          <UtilityTokenModal mint={lookedUp} onClose={() => setLookedUp(null)} />
+          <UtilityTokenModal key={lookedUp} mint={lookedUp} onClose={() => setLookedUp(null)} />
         </Suspense>
       )}
     </dialog>

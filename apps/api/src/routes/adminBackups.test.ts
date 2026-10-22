@@ -332,20 +332,30 @@ describe.skipIf(!dbAvailable)("admin model backups", () => {
     ).toBe(404);
 
     // Each admin write lands in the action log, refused ones too, with the phone marked; a
-    // non-admin's never does.
+    // non-admin's never does. The row is written from an onResponse hook, which starts after
+    // inject resolves and is not finished by app.close(), so under load the newest row can still
+    // be in flight when it is first read.
     await call("other", restore);
-    const log = (
-      await prisma.adminAction.findMany({
-        where: { route: "/admin/model-backups/:id/restore", wallet: { in: [ADMIN_WALLET, OTHER_WALLET] } },
-        orderBy: { at: "asc" },
-      })
-    ).filter((r) => (r.detail as { params?: { id?: string } } | null)?.params?.id === "no-such-backup");
-    expect(log.map((r) => [r.statusCode, r.deviceId !== null])).toEqual([
+    const expected = [
       [428, false],
       [404, false],
       [403, false],
       [404, true],
-    ]);
+    ];
+    const readLog = async () =>
+      (
+        await prisma.adminAction.findMany({
+          where: { route: "/admin/model-backups/:id/restore", wallet: { in: [ADMIN_WALLET, OTHER_WALLET] } },
+          orderBy: { at: "asc" },
+        })
+      ).filter((r) => (r.detail as { params?: { id?: string } } | null)?.params?.id === "no-such-backup");
+    let log = await readLog();
+    const deadline = Date.now() + 2_000;
+    while (log.length < expected.length && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      log = await readLog();
+    }
+    expect(log.map((r) => [r.statusCode, r.deviceId !== null])).toEqual(expected);
     expect(log[0]!.detail).toMatchObject({ params: { id: "no-such-backup" }, body: { confirm: true } });
     expect(JSON.stringify(log.map((r) => r.detail))).not.toContain("signature");
   });

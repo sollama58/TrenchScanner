@@ -822,6 +822,7 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
 });
 
 describe("HeliusClient.getTopHoldersBatch", () => {
+  const TOKEN_2022 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
   const row = (owner: string, amount: bigint) => {
     const bytes = Buffer.alloc(40);
     Buffer.from(bs58.decode(owner)).copy(bytes, 0);
@@ -1017,9 +1018,10 @@ describe("HeliusClient.getTopHoldersBatch", () => {
       }),
     );
     const client = new HeliusClient({ rpcUrl: url });
-    expect((await client.getTopHoldersBatch(["mintA"], 25)).get("mintA")?.status).toBe("found");
+    // The second read is a new mint-account answer: inside five minutes the first program is reused.
+    expect((await client.getTopHoldersBatch(["mintA"], 25, { nowMs: 0 })).get("mintA")?.status).toBe("found");
     program = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
-    await client.getTopHoldersBatch(["mintA"], 25);
+    await client.getTopHoldersBatch(["mintA"], 25, { nowMs: 5 * 60_000 });
     expect(filters).toEqual([
       [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: "mintA" } }],
       [{ memcmp: { offset: 0, bytes: "mintA" } }],
@@ -1089,6 +1091,109 @@ describe("HeliusClient.getTopHoldersBatch", () => {
       status: "failed",
       reason: "not a token mint",
     });
+  });
+
+  it("reuses a mint's program and supply for five minutes and still enumerates token accounts", async () => {
+    let supply = "1000";
+    const seen: { method: string; params: unknown[] }[] = [];
+    const { url } = await startServer((calls) =>
+      calls.map((c) => {
+        seen.push({ method: c.method, params: c.params });
+        if (c.method === "getMultipleAccounts") {
+          const res = mintAccount(c);
+          res.result.value[0]!.data.parsed.info.supply = supply;
+          return res;
+        }
+        return {
+          jsonrpc: "2.0",
+          id: c.id,
+          result: { accounts: [row(CURVE, 800n), row(WALLET, 150n)], paginationKey: null },
+        };
+      }),
+    );
+    const client = new HeliusClient({ rpcUrl: url, isHelius: true });
+    const read = (nowMs: number) => client.getTopHoldersBatch(["mintA"], 25, { nowMs });
+    expect((await read(0)).get("mintA")).toMatchObject({
+      status: "found",
+      supply: "1000",
+      holders: [{ owner: WALLET, pct: 15 }],
+    });
+    supply = "500";
+    expect((await read(5 * 60_000 - 1)).get("mintA")).toMatchObject({
+      status: "found",
+      supply: "1000",
+      holders: [{ owner: WALLET, pct: 15 }],
+    });
+    expect(seen.filter((c) => c.method === "getMultipleAccounts")).toHaveLength(1);
+    const pages = seen.filter((c) => c.method === "getProgramAccountsV2");
+    expect(pages).toHaveLength(2);
+    expect(pages.every((c) => c.params[0] === TOKEN_2022)).toBe(true);
+    expect((await read(5 * 60_000)).get("mintA")).toMatchObject({
+      status: "found",
+      supply: "500",
+      holders: [{ owner: WALLET, pct: 30 }],
+    });
+    expect(seen.filter((c) => c.method === "getMultipleAccounts")).toHaveLength(2);
+    expect(seen.filter((c) => c.method === "getProgramAccountsV2")).toHaveLength(3);
+  });
+
+  it("retries a mint whose account read failed instead of caching the failure", async () => {
+    let failMint = true;
+    const seen: string[] = [];
+    const { url } = await startServer((calls) =>
+      calls.map((c) => {
+        seen.push(c.method);
+        if (c.method === "getMultipleAccounts") {
+          if (failMint) return { jsonrpc: "2.0", id: c.id, error: { code: -32000, message: "busy" } };
+          return mintAccount(c);
+        }
+        return {
+          jsonrpc: "2.0",
+          id: c.id,
+          result: { accounts: [row(WALLET, 150n)], paginationKey: null },
+        };
+      }),
+    );
+    const client = new HeliusClient({ rpcUrl: url, isHelius: true });
+    expect((await client.getTopHoldersBatch(["mintA"], 25, { nowMs: 0 })).get("mintA")).toEqual({
+      status: "failed",
+      reason: "mint read failed",
+    });
+    failMint = false;
+    expect((await client.getTopHoldersBatch(["mintA"], 25, { nowMs: 1_000 })).get("mintA")).toMatchObject({
+      status: "found",
+      supply: "1000",
+      holders: [{ owner: WALLET, pct: 15 }],
+    });
+    expect(seen.filter((m) => m === "getMultipleAccounts")).toHaveLength(2);
+    expect(seen.filter((m) => m === "getProgramAccountsV2")).toHaveLength(1);
+  });
+
+  it("asks getMultipleAccounts only for mints missing from the five-minute cache", async () => {
+    const gmaKeys: unknown[] = [];
+    const enumerated: string[] = [];
+    const { url } = await startServer((calls) =>
+      calls.map((c) => {
+        if (c.method === "getMultipleAccounts") {
+          gmaKeys.push(c.params[0]);
+          return mintAccount(c);
+        }
+        const filters = (c.params[1] as { filters: { memcmp?: { bytes: string } }[] }).filters;
+        const mint = filters.find((f) => f.memcmp)?.memcmp?.bytes;
+        if (mint) enumerated.push(mint);
+        return {
+          jsonrpc: "2.0",
+          id: c.id,
+          result: { accounts: [row(WALLET, 150n)], paginationKey: null },
+        };
+      }),
+    );
+    const client = new HeliusClient({ rpcUrl: url, isHelius: true });
+    await client.getTopHoldersBatch(["mintA"], 25, { nowMs: 0 });
+    enumerated.length = 0;
+    await client.getTopHoldersBatch(["mintA", "mintB"], 25, { nowMs: 60_000 });
+    expect(gmaKeys).toEqual([["mintA"], ["mintB"]]);
+    expect(enumerated.sort()).toEqual(["mintA", "mintB"]);
   });
 });
 

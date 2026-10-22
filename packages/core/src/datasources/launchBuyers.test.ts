@@ -9,6 +9,7 @@ import {
   type RawLaunchTx,
 } from "./launchBuyers.js";
 import { HeliusClient } from "./helius.js";
+import { resetLaunchTapeSeeds, takeLaunchTapeSeed } from "./launchTapeSeed.js";
 
 const MINT = "Mint1111111111111111111111111111111111111pump";
 const CURVE = "Curve11111111111111111111111111111111111111";
@@ -240,7 +241,10 @@ describe("countHoldingSupplyCut", () => {
 });
 
 describe("HeliusClient.getLaunchBuyersBatch", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    resetLaunchTapeSeeds();
+    vi.restoreAllMocks();
+  });
   const client = () => new HeliusClient({ rpcUrl: "https://mainnet.helius-rpc.com/?api-key=test" });
 
   function respond(pages: { data: RawLaunchTx[]; paginationToken?: string }[]) {
@@ -271,6 +275,9 @@ describe("HeliusClient.getLaunchBuyersBatch", () => {
       limit: 100,
       filters: { status: "succeeded" },
     });
+    const seed = takeLaunchTapeSeed(MINT, 60_000);
+    expect(seed).toMatchObject({ pages: 1, paginationToken: null });
+    expect(seed?.txs).toHaveLength(2);
   });
 
   it("pages on while a full page hasn't reached the count, then calls it complete at the cap", async () => {

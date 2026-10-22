@@ -1,4 +1,10 @@
 import { fetchJson } from "../datasources/httpClient.js";
+import {
+  parseTokenAccountSlice,
+  TOKEN_ACCOUNTS_PAGE_LIMIT,
+  tokenAccountsPage,
+} from "../datasources/helius.js";
+import { isHeliusRpcUrl } from "./heliusPriorityFee.js";
 import { resolveSolanaRpcUrl, type SolanaRpcOptions } from "../subscription/solanaRpc.js";
 import type { GuardRpc, ParsedAccountState, WalletTokenAccount } from "./txGuard.js";
 import { PROGRAM } from "./txGuard.js";
@@ -357,10 +363,82 @@ export class TradingRpc implements GuardRpc {
   }
 
   /**
-   * The wallet's coin balances, non-zero only, summed per mint (classic and Token-2022 accounts):
-   * two getTokenAccountsByOwner reads, a credit each on Helius. Null when either read failed.
+   * The wallet's coin balances, non-zero only, summed per mint (classic and Token-2022 accounts).
+   * On Helius: two sliced getTokenAccountsByOwnerV2 reads (1 credit each, one page, the same
+   * shape as the scan's empty-wallet read) plus one getMultipleAccounts for the mints' decimals
+   * (1 credit per 100). A whale's unpaged jsonParsed list used to time out and get billed again.
+   * Off Helius, or where V2 is not served: the unpaged jsonParsed read. Null when a read failed.
+   * A full page is a floor (truncated), not a failure.
    */
   async getWalletBalances(owner: string): Promise<WalletBalance[] | null> {
+    if (!isHeliusRpcUrl(this.url)) return this.walletBalancesUnpaged(owner);
+    const byMint = new Map<string, bigint>();
+    for (const programId of [PROGRAM.token, PROGRAM.token2022]) {
+      let result: unknown;
+      try {
+        // retries 0: a timeout is already billed. The backup endpoint, when set, is the retry.
+        result = await this.call(
+          "getTokenAccountsByOwnerV2",
+          [
+            owner,
+            { programId },
+            {
+              encoding: "base64",
+              commitment: "confirmed",
+              dataSlice: { offset: 0, length: 72 },
+              limit: TOKEN_ACCOUNTS_PAGE_LIMIT,
+            },
+          ],
+          15_000,
+          0,
+        );
+      } catch (err) {
+        if (err instanceof RpcError && err.code === -32601) return this.walletBalancesUnpaged(owner);
+        return null;
+      }
+      const page = result ? tokenAccountsPage(result) : null;
+      if (!page) return null;
+      for (const entry of page.accounts) {
+        const parsed = parseTokenAccountSlice(entry);
+        if (!parsed || parsed.amount === 0n) continue;
+        byMint.set(parsed.mint, (byMint.get(parsed.mint) ?? 0n) + parsed.amount);
+      }
+    }
+    const decimals = await this.mintDecimals([...byMint.keys()]);
+    if (!decimals) return null;
+    const out: WalletBalance[] = [];
+    for (const [mint, raw] of byMint) {
+      const places = decimals.get(mint);
+      if (places === undefined) continue;
+      out.push({ mint, raw, decimals: places });
+    }
+    return out;
+  }
+
+  /** Decimals byte of each mint (offset 44). Null when the read itself failed. */
+  private async mintDecimals(mints: string[]): Promise<Map<string, number> | null> {
+    const out = new Map<string, number>();
+    for (let i = 0; i < mints.length; i += 100) {
+      const keys = mints.slice(i, i + 100);
+      const page = await this.call<{ value?: ({ data?: unknown } | null)[] }>(
+        "getMultipleAccounts",
+        [keys, { encoding: "base64", commitment: "confirmed", dataSlice: { offset: 44, length: 1 } }],
+        15_000,
+        0,
+      ).catch(() => null);
+      if (!page?.value || page.value.length !== keys.length) return null;
+      keys.forEach((mint, j) => {
+        const data = page.value![j]?.data;
+        if (!Array.isArray(data) || typeof data[0] !== "string") return;
+        const bytes = Buffer.from(data[0], "base64");
+        if (bytes.length >= 1) out.set(mint, bytes[0]!);
+      });
+    }
+    return out;
+  }
+
+  /** Unpaged jsonParsed balances, for an endpoint that does not serve the V2 method. */
+  private async walletBalancesUnpaged(owner: string): Promise<WalletBalance[] | null> {
     const byMint = new Map<string, WalletBalance>();
     for (const programId of [PROGRAM.token, PROGRAM.token2022]) {
       const page = await this.read<{ value?: { account?: RawAccount }[] }>("getTokenAccountsByOwner", [

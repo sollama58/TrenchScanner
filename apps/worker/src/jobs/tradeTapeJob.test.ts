@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   HttpError,
   prisma,
+  rememberLaunchTapeSeed,
   tradesFromPumpFun,
   type ChainTx,
   type PumpFunTradesPage,
@@ -242,6 +243,59 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
     expect(tape).toMatchObject({ status: "done", source: "helius", creator: dev, trades: 3 });
     const outcome = await prisma.candidateOutcome.findUnique({ where: { id: row.id } });
     expect(outcome!.stopCause).toMatchObject({ sellers: 1, soldSol: 2.5, lead: "launchSnipers" });
+  });
+
+  it("starts a Helius tape after the launch-buyer pages already paid for", async () => {
+    const { token } = await seedCalled("seeded", new Date(ANCHOR + 5 * MIN));
+    const mint = token.mintAddress;
+    const dev = "HYi9a633brCmNtqLgat8fDo8huRYuYpUxsoJhuSzJiaP";
+    const sniper = "4WPT9wLwQWYS5zyX36ZgoY3ESxxLgDmE12upKXDAyYbL";
+    const bal = (accountIndex: number, owner: string, amount: number) => ({
+      accountIndex,
+      mint,
+      owner,
+      uiTokenAmount: { amount: String(amount * 1e6), decimals: 6 },
+    });
+    const tx = (atMs: number, owner: string, pre: number, post: number, lamports: number): ChainTx => ({
+      blockTime: atMs / 1000,
+      transaction: { signatures: [`${owner}-${atMs}`], message: { accountKeys: [owner, "ata"] } },
+      meta: {
+        err: null,
+        preTokenBalances: pre ? [bal(1, owner, pre)] : [],
+        postTokenBalances: [bal(1, owner, post)],
+        preBalances: [10e9, 0],
+        postBalances: [10e9 + lamports, 0],
+      },
+    });
+    rememberLaunchTapeSeed(mint, {
+      txs: [tx(LAUNCH, dev, 0, 30_000_000, -1e9)],
+      pages: 1,
+      pageEnds: [LAUNCH],
+      paginationToken: "1",
+    });
+    const asked: (string | undefined)[] = [];
+    const helius: TradeTapeDeps["helius"] = {
+      gtfaUsable: true,
+      takeCallStats: () => ({}),
+      getMintTransactionsPage: async (m, opts) => {
+        if (m !== mint) return { status: "failed" };
+        asked.push(opts?.paginationToken);
+        return {
+          status: "ok",
+          txs: [tx(ANCHOR + MIN, sniper, 0, 1, -1e9)],
+          paginationToken: null,
+        };
+      },
+    };
+    const { stub } = pumpFunStub("none", []);
+    const meta = await runTradeTapeJob(
+      { helius, pumpFun: stub },
+      { heliusPagesPerRun: 1, pumpFunCallsPerRun: 0, now: () => NOW },
+    );
+    expect(asked).toEqual(["1"]);
+    expect(meta.heliusPages).toBe(1);
+    const tape = await prisma.tokenTradeTape.findUnique({ where: { tokenId: token.id } });
+    expect(tape).toMatchObject({ status: "done", source: "helius", creator: dev, trades: 2 });
   });
 
   it("leaves a coin Helius failed on twice to Pump.fun", async () => {

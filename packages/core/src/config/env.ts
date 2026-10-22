@@ -289,7 +289,9 @@ const envSchema = z.object({
   // tenth of the day's cap of headroom) the curves come off the stream and the
   // CURVE_TAPE_POLL_MAX_MINTS nearest the band are read every CURVE_TAPE_POLL_SECONDS instead
   // (1 credit per 100 curves a read), until the spend is back under its share.
-  CURVE_TAPE_STREAM_CREDITS_PER_DAY: z.coerce.number().nonnegative().default(100_000),
+  // 50,000 since 2026-10-22 (was 100,000). Past the cap, only the 100 curves nearest the band
+  // are polled every CURVE_TAPE_POLL_SECONDS until the day's pace allows the stream again.
+  CURVE_TAPE_STREAM_CREDITS_PER_DAY: z.coerce.number().nonnegative().default(50_000),
   CURVE_TAPE_POLL_SECONDS: z.coerce.number().min(1).default(5),
   CURVE_TAPE_POLL_MAX_MINTS: z.coerce.number().int().nonnegative().default(100),
   // The price path recorder (worker's jobs/pricePathRecorder.ts, user ask 2026-10-18): when the curve
@@ -385,14 +387,15 @@ const envSchema = z.object({
   // The trade tape of called coins (the trainer's tradeTapeJob.ts): every trade from launch to 30
   // minutes past the call, for the wallet risk score and the stop causes. Helius pages
   // (getTransactionsForAddress, 10 credits each) per one-minute run, the main source for every new
-  // called coin (user decision 2026-10-13). ~600 coins are called a day at 20+ pages each, ~125k+
-  // credits a day. 15 (150 credits a minute) did not keep up: the backlog grew 575 -> 581 over 8
-  // runs, so 30 (300 credits a minute, ~432k a day at most; user decision 2026-10-19, performance
-  // audit). 0 leaves every coin to Pump.fun's API. Newest-first reads (busy called coins, and coins
-  // users trade or narrow filters match) take at most a third of these (rounded down: 10 of 30),
-  // after the from-launch reads of called coins, in that order: traded, busy called, narrow-matched
-  // (user decision 2026-10-20 (Helius audit); tradeTapeJob.ts HELIUS_NEWEST_SHARE).
-  TRADE_TAPE_HELIUS_PAGES_PER_RUN: z.coerce.number().int().nonnegative().default(30),
+  // called coin (user decision 2026-10-13). ~600 coins are called a day at 20+ pages each.
+  // 15 (150 credits a minute) did not keep up: the backlog grew 575 -> 581 over 8 runs, so 30
+  // (user decision 2026-10-19). 20 since 2026-10-22 (200 credits a minute, ~288k a day at most,
+  // was ~432k): called-coin history finishes later, and the newest-first share drops from 10
+  // pages to 6. 0 leaves every coin to Pump.fun's API. Newest-first reads (busy called coins,
+  // and coins users trade or narrow filters match) take at most a third of these (rounded down:
+  // 6 of 20), after the from-launch reads of called coins, in that order: traded, busy called,
+  // narrow-matched (user decision 2026-10-20 (Helius audit); tradeTapeJob.ts HELIUS_NEWEST_SHARE).
+  TRADE_TAPE_HELIUS_PAGES_PER_RUN: z.coerce.number().int().nonnegative().default(20),
   // Pump.fun trade API calls per run (free, spaced 8 s, but it answers 429 quickly): the backlog,
   // coins Helius couldn't read, and a sample of uncalled coins. 0 turns it off. 6 (was 4, at 12 s):
   // no 429 in 21 runs, and the busy backlog waits on this lane (audit 2026-10-19).
@@ -413,11 +416,14 @@ const envSchema = z.object({
   SNIPER_MAX_REFRESH_ACCOUNTS_PER_CYCLE: z.coerce.number().int().positive().default(500),
   // How long a holdings reading stays usable. Unlike wallet earliest-activity, this answer
   // decays - a portfolio changes with every trade - so it carries a TTL instead of being cached
-  // forever. An hour keeps a wallet from being re-priced on every one of the ~60 cycles it might
-  // appear in, while staying current enough for a signal about whether a wallet is a shell.
-  WALLET_HOLDINGS_CACHE_TTL_MINUTES: z.coerce.number().positive().default(60),
+  // forever. 3 hours (was 1, user decision 2026-10-22): a wallet that stays in a top 10 is
+  // re-priced a third as often. 6 hours would save little more (one more halving of those
+  // re-reads, on the order of 80 credits a day per long-watched coin) and would let a wallet
+  // that dumped its other bags still count as funded for most of a coin's life before a call.
+  WALLET_HOLDINGS_CACHE_TTL_MINUTES: z.coerce.number().positive().default(180),
   // How long the cleanup job keeps a WalletHoldingsCache row. A row past the TTL above is never
-  // read again, so this only needs slack over it. 0 keeps rows the 90 days the other RPC caches get. Owner-approved 2026-10-04.
+  // read again, so this only needs slack over it. 6 hours is twice the 3-hour TTL. 0 keeps rows
+  // the 90 days the other RPC caches get. Owner-approved 2026-10-04.
   WALLET_HOLDINGS_CACHE_RETENTION_HOURS: z.coerce.number().nonnegative().default(6),
   // How long a "mint/freeze authority still active" answer is trusted before being re-checked
   // (see the worker's mintAuthority.ts). Revocation is permanent and cached forever; this TTL
