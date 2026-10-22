@@ -276,6 +276,8 @@ interface CreditPick {
   lamports: string | null;
 }
 const MAX_CACHED_SWAP_COSTS = 2_000;
+/** Wallet-and-coin unit limits remembered for the fee preview. The oldest go first past this. */
+export const MAX_REMEMBERED_UNITS = 5_000;
 /** The reference buy when the panel names none: 0.1 SOL. */
 const DEFAULT_REF_LAMPORTS = 100_000_000n;
 const MAX_REF_LAMPORTS = 100_000_000_000n;
@@ -725,7 +727,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       const list = liveBuilds(wallet);
       list.push({ ...record, blockhash: message.recentBlockhash, at, message, sacrifice });
       const units = messageUnitLimit(message);
-      if (units !== null) lastUnits.set(`${wallet}:${body.mint}`, units);
+      if (units !== null) rememberUnits(lastUnits, `${wallet}:${body.mint}`, units);
       builds.set(wallet, list.slice(-MAX_BUILDS_PER_WALLET));
       if (builds.size > 5_000) builds.clear();
       const buildToken = signBuildToken(tokenSecret, {
@@ -1657,4 +1659,14 @@ export function chainTradeState(status: {
   if (status.error) return "failed";
   if (status.confirmed) return "confirmed";
   return "processed";
+}
+
+/**
+ * Keeps a build's unit limit, dropping the oldest entry once the map is full. A key built again
+ * moves to the back, so a coin still being traded is not the one dropped.
+ */
+export function rememberUnits(map: Map<string, number>, key: string, units: number): void {
+  map.delete(key);
+  if (map.size >= MAX_REMEMBERED_UNITS) map.delete(map.keys().next().value!);
+  map.set(key, units);
 }

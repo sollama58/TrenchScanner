@@ -24,7 +24,9 @@ import {
   freeAsdfBuy,
   chainTradeState,
   landedFailure,
+  MAX_REMEMBERED_UNITS,
   plainRefusal,
+  rememberUnits,
   quietSign,
   resendTarget,
   sellShare,
@@ -133,6 +135,19 @@ describe("freeAsdfBuy", () => {
     expect(freeAsdfBuy("buy", SUBSCRIPTION_MINT)).toBe(true);
     expect(freeAsdfBuy("sell", SUBSCRIPTION_MINT)).toBe(false);
     expect(freeAsdfBuy("buy", "So11111111111111111111111111111111111111112")).toBe(false);
+  });
+});
+
+describe("rememberUnits", () => {
+  it("drops the oldest unit limit past the cap and keeps one built again", () => {
+    const units = new Map<string, number>();
+    for (let i = 0; i < MAX_REMEMBERED_UNITS; i += 1) rememberUnits(units, `w:m${i}`, i);
+    rememberUnits(units, "w:m0", 7);
+    rememberUnits(units, "w:new", 1);
+    expect(units.size).toBe(MAX_REMEMBERED_UNITS);
+    expect(units.get("w:m0")).toBe(7);
+    expect(units.has("w:m1")).toBe(false);
+    expect(units.get("w:new")).toBe(1);
   });
 });
 
