@@ -1500,6 +1500,12 @@ img.avatar {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* "Holders · 12m" is wider than the tile once the age is on the label. Wrap at the age
+   rather than ellipsizing the word. */
+.card-stats dt:has(.fig-age) {
+  white-space: normal;
+  line-height: 1.15;
+}
 .card-stats dd {
   margin: 0;
   margin-top: auto;
@@ -4900,6 +4906,20 @@ button.small-btn {
     width: 100%;
   }
 }
+/* A short landscape phone is still wider than the phone layout, so the feed heading and its
+   controls stay on one row and the bug button covers the scanning pill. The controls take
+   their own line, inset from that button. */
+@media (max-height: 480px) and (min-width: 641px) {
+  .section-head:has(.feed-controls) {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    /* The bug button sits on this heading when the window is only a few hundred pixels tall. */
+    padding-right: 56px;
+  }
+  .feed-controls {
+    justify-content: flex-start;
+  }
+}
 
 /* Rules seat: the checks it runs, under its leaderboard row */
 .rules-in-use {
@@ -5616,6 +5636,10 @@ html:has(dialog.about-modal[open]) {
  * symbol is cut. The symbol doesn't flex-shrink: when it did, Chrome's sub-pixel rounding
  * ellipsized a five-letter symbol ("$TO…") on phone cards even though the text fit its box.
  */
+.title-row {
+  flex-wrap: wrap;
+  align-items: center;
+}
 .title-row .symbol {
   flex: 0 0 auto;
   max-width: 60%;
@@ -5623,9 +5647,17 @@ html:has(dialog.about-modal[open]) {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The Dex pill and the quote pill stay whole. A name that no longer fits beside them wraps
+   under the ticker instead of shrinking to a letter or painting over the result mark. */
+.title-row .pill.dex-info,
+.title-row .quote-pill {
+  flex: none;
+  align-self: center;
+}
 .title-row .token-name {
-  flex: 0 1000 auto;
-  min-width: 0;
+  flex: 1 1 auto;
+  min-width: min(6.5em, 100%);
+  max-width: 100%;
 }
 /* The result, top right of the card: the title column shrinks for it, never the other way. */
 .card-head .card-result {
@@ -5666,7 +5698,7 @@ html:has(dialog.about-modal[open]) {
   text-overflow: ellipsis;
 }
 .meta-row {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   min-height: 20px;
   min-width: 0;
 }
@@ -5679,9 +5711,12 @@ html:has(dialog.about-modal[open]) {
 .meta-row > .pill-calls {
   flex-shrink: 100;
 }
-/* "≈61% 2x" is short and means nothing cut. */
+/* The rate is a whole sentence ("58% of alerts like it 2x'd"). It does not shrink: when the
+   model pill has already given way and the sentence still does not fit, it wraps under the
+   icons with the alert age, instead of collapsing to a dot or pushing the age off the card. */
 .meta-row > .pill-rate {
   flex: none;
+  max-width: 100%;
 }
 .meta-row > .when {
   flex: none;
@@ -5725,9 +5760,10 @@ html:has(dialog.about-modal[open]) {
     display: none;
   }
 }
-/* Too narrow for the footer on one line (Customize's narrow cards, two to a phone row): it wraps
-   rather than lose a link, and the rows' shared height keeps the cards matching. */
-@container (max-width: 290px) {
+/* Too narrow for the footer on one line (three cards across a 1100px window, Customize's narrow
+   cards, two to a phone row): it wraps rather than lose a link, and the rows' shared height
+   keeps the cards matching. */
+@container (max-width: 320px) {
   .card-foot,
   .card-links {
     flex-wrap: wrap;
@@ -19256,7 +19292,8 @@ body:has(.util-toast) .bug-fab {
 }
 .scope-title {
   display: flex;
-  align-items: baseline;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
   min-width: 0;
 }
@@ -19269,17 +19306,27 @@ body:has(.util-toast) .bug-fab {
   font-weight: 700;
   white-space: nowrap;
   cursor: pointer;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .scope-symbol:hover {
   text-decoration: underline;
 }
 .scope-name {
-  min-width: 0;
+  flex: 1 1 auto;
+  min-width: min(6.5em, 100%);
+  max-width: 100%;
   overflow: hidden;
   color: var(--muted);
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.scope-title .pill.dex-info,
+.scope-title .quote-pill {
+  flex: none;
 }
 .scope-meta {
   display: flex;
@@ -20395,7 +20442,32 @@ dialog.tm-modal.tm-terminal::backdrop {
   background: var(--surface-solid);
 }
 .tm-modal.tm-terminal .tm-title-block {
-  max-width: 460px;
+  max-width: min(460px, 100%);
+  overflow: hidden;
+}
+.tm-modal.tm-terminal .tm-token {
+  overflow: hidden;
+}
+.tm-modal.tm-terminal .tm-sub,
+.tm-modal.tm-terminal .tm-title-block .tm-quick {
+  max-width: 100%;
+}
+/* Under 1280 the identity, five figures and the actions no longer share one row: the filter
+   pill and the site links were painting over the figures (seen at 1200). */
+@media (max-width: 1279px) {
+  .tm-modal.tm-terminal .tm-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "token actions"
+      "figs figs";
+    align-items: start;
+  }
+  .tm-modal.tm-terminal .tm-head > .tm-figs {
+    min-width: 0;
+    width: 100%;
+    justify-content: start;
+    grid-template-columns: repeat(auto-fit, minmax(108px, max-content));
+  }
 }
 .tm-modal.tm-terminal .tm-title-block .tm-quick {
   justify-content: flex-start;
