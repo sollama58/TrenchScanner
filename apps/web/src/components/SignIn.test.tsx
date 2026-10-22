@@ -224,12 +224,12 @@ describe("sign-in panel", () => {
 describe("SignIn page", () => {
   it("renders the landing, the example, and the wallet search together", () => {
     const html = renderToStaticMarkup(<SignIn onSignedIn={() => {}} onGuest={() => {}} />);
-    expect(html).toContain("A trading terminal for Pump.fun.");
-    expect(html).toContain("Burn it for access");
-    expect(html).toContain("Burn Credits");
-    expect(html).toContain("5 free credits a day");
-    expect(html).toContain("250 largest holders");
+    expect(html).toContain("A trading terminal for Solana tokens.");
+    expect(html).toContain("Screen a Solana token");
+    expect(html).toContain("Burn it for access. A separate burn buys Burn Credits");
+    expect(html).toContain("250 largest holders, and a wallet an admin grants");
     expect(html).toContain("no TrenchScanner fee");
+    expect(html).not.toContain("Pump.fun alerts");
     expect(html).not.toContain("not a live call");
     expect(html).toContain("Example Coin");
     expect(html).toContain("Made-up coin");

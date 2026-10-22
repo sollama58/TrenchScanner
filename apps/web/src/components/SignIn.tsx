@@ -147,10 +147,10 @@ function LandingIntro() {
       <p className="eyebrow brand-eyebrow">
         <FlameIcon size={13} /> Trading terminal
       </p>
-      <h1>A trading terminal for Pump.fun.</h1>
+      <h1>A trading terminal for Solana tokens.</h1>
       <p className="lead">
-        Screen a launch, open its chart, and trade from the coin window. Model alerts come with the terminal.
-        They are graded in public, and they are a bonus.
+        Screen a Solana token, open its chart, and trade from the coin window. Model alerts come with the
+        terminal. They are graded in public, and they are a bonus.
       </p>
       {/* Phones and tablets without the app installed only: up top, where it is seen first. */}
       <InstallAppButton />
@@ -160,17 +160,10 @@ function LandingIntro() {
         </span>
         <div>
           <p className="landing-token-name">$ASDFASDFA</p>
+          <p>Burn it for access. A separate burn buys Burn Credits for coin and wallet lookups.</p>
           <p>
-            Burn it for access. You choose the length, the wallet shows the exact amount, and nothing burns
-            until you approve. Burned tokens are destroyed, not paid to anyone.
-          </p>
-          <p>
-            A separate burn buys Burn Credits for coin and wallet lookups, not time on the terminal. A credit
-            is taken only once a lookup works. Subscribers get 5 free credits a day.
-          </p>
-          <p>
-            The 250 largest holders have Pro Mode, and so does a wallet an admin grants. That mode trades from
-            the coin window, with no TrenchScanner fee.
+            The 250 largest holders, and a wallet an admin grants, get Pro Mode: trade from the coin window,
+            with no TrenchScanner fee.
           </p>
         </div>
       </div>
@@ -182,8 +175,8 @@ function LandingIntro() {
         <li>
           <span className="eyebrow">Alerts</span>
           <p>
-            Models flag a few launches. Guests see those alerts {GUEST_DELAY_MINUTES} minutes late. A wallet
-            opens them live.
+            Models flag a few Solana tokens. Guests see those alerts {GUEST_DELAY_MINUTES} minutes late. A
+            wallet opens them live.
           </p>
         </li>
       </ul>
