@@ -414,6 +414,13 @@ async function main() {
     rpcUrl: env.SOLANA_RPC_URL || undefined,
     apiKey: env.HELIUS_API_KEY || undefined,
   });
+  // What the burn scan asks when that endpoint doesn't answer (Helius out of credits, say): the
+  // first paid CHAIN_BACKUP_RPC_URLS entry, else the public node the Pro holder check falls back to.
+  const burnBackupUrl =
+    env.CHAIN_BACKUP_RPC_URLS.split(",")
+      .map((u) => u.trim())
+      .find((u) => /^https:\/\//.test(u)) ?? PRO_HOLDER_BACKUP_RPC;
+  const burnBackupRpc = new SolanaRpc({ rpcUrl: burnBackupUrl });
 
   // Deadlines (see scheduleInterval): each is several times the slowest run production has
   // recorded, so only a run that is never coming back reaches one. Curator training has its own
@@ -620,7 +627,11 @@ async function main() {
     scheduleInterval(
       "burn-scan",
       takingRunNow("burn-scan", async () => {
-        const { stoppedEarly, ...result } = await reconcileBurns(env, rpc);
+        const { stoppedEarly, ...result } = await reconcileBurns(
+          env,
+          rpc,
+          burnBackupRpc.provider === rpc.provider ? null : burnBackupRpc,
+        );
         // Which endpoint answered (host only, never the key) and what the pass cost it, per
         // method - the same shape as the scan's rpcCalls, so Helius credits stay visible here too.
         const counts = {
@@ -628,6 +639,8 @@ async function main() {
           rpcProvider: rpc.provider,
           rpcCalls: rpc.takeCallStats(),
           rpcError: rpc.takeLastError(),
+          backupRpcProvider: burnBackupRpc.provider,
+          backupRpcCalls: burnBackupRpc.takeCallStats(),
         };
         // An RPC failure leaves the cursors where they were and returns normally, which used to
         // record a healthy heartbeat for a reconciler that was getting nowhere. Failing the run

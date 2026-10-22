@@ -8,7 +8,7 @@ import {
   type Env,
   type SolanaRpc,
 } from "@trenchscanner/core";
-import { reconcileBurns, STUCK_SIGNATURE_PASSES } from "./burnReconciler.js";
+import { reconcileBurns, STUCK_SIGNATURE_PASSES, withBurnBackup, type BurnRpc } from "./burnReconciler.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -91,6 +91,34 @@ describe.skipIf(!dbAvailable)("reconcileBurns: cold-start backfill", () => {
     const cursor = await prisma.burnScanCursor.findUniqueOrThrow({ where: { id: "burn-scan" } });
     expect(cursor.backfillBefore).toBeNull();
     expect(cursor.scanFloor).toBeNull();
+  });
+
+  it("walks the backfill on the backup RPC when the primary refuses", async () => {
+    await prisma.burnScanCursor.create({
+      data: {
+        id: "burn-scan",
+        lastSignature: "sig-tip",
+        backfillBefore: "sig-mid",
+        scanFloor: new Date(Date.now() - 400 * DAY),
+      },
+    });
+    const refusing = {
+      getSignaturesForAddress: async () => null,
+      getParsedTransactions: async (sigs: string[]) => new Map(sigs.map((s) => [s, null])),
+    } as unknown as BurnRpc;
+    const { rpc: backup } = stubRpc([
+      { signature: "sig-tip", ageDays: 1 },
+      { signature: "sig-mid", ageDays: 100 },
+      { signature: "sig-old", ageDays: 200 },
+      { signature: "sig-ancient", ageDays: 500 },
+    ]);
+
+    const result = await reconcileBurns(env, refusing, backup);
+
+    expect(result.stoppedEarly).toBe(false);
+    expect(result.scanned).toBe(1);
+    const cursor = await prisma.burnScanCursor.findUniqueOrThrow({ where: { id: "burn-scan" } });
+    expect(cursor.backfillBefore).toBeNull();
   });
 
   it("leaves the resume point alone when the RPC fails mid-backfill", async () => {
@@ -330,5 +358,33 @@ describe.skipIf(!dbAvailable)("reconcileBurns: Burn Credits burns", () => {
     const entry = await prisma.burnCreditEntry.findUniqueOrThrow({ where: { burnSignature: SIG } });
     expect(entry.wallet).toBe(WALLET);
     expect(entry.delta).toBeGreaterThan(0);
+  });
+});
+
+describe("withBurnBackup", () => {
+  const tx = (s: string) => ({ meta: { err: null }, transaction: { signatures: [s] } });
+
+  it("asks the backup only for what the primary didn't answer", async () => {
+    const asked: string[][] = [];
+    const primary = {
+      getSignaturesForAddress: async () => [{ signature: "p", slot: 1, err: null }],
+      getParsedTransactions: async (sigs: string[]) =>
+        new Map(sigs.map((s) => [s, s === "a" ? tx(s) : null])),
+    } as unknown as BurnRpc;
+    const backup = {
+      getSignaturesForAddress: async () => [{ signature: "b", slot: 1, err: null }],
+      getParsedTransactions: async (sigs: string[]) => {
+        asked.push(sigs);
+        return new Map(sigs.map((s) => [s, s === "b" ? tx(s) : null]));
+      },
+    } as unknown as BurnRpc;
+    const rpc = withBurnBackup(primary, backup);
+    expect((await rpc.getSignaturesForAddress("mint"))?.[0]?.signature).toBe("p");
+    const got = await rpc.getParsedTransactions(["a", "b", "c"]);
+    expect(asked).toEqual([["b", "c"]]);
+    expect(got.get("a")).toEqual(tx("a"));
+    expect(got.get("b")).toEqual(tx("b"));
+    expect(got.get("c")).toBeNull();
+    expect(withBurnBackup(primary, null)).toBe(primary);
   });
 });
