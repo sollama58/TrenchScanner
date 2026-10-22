@@ -16,7 +16,7 @@ const logger = createLogger("mint-authority");
  * cached (below), and without this a mint whose RPC read errors was re-queried every cycle for as
  * long as it stayed in band - the same escalating backoff the Mayhem and wallet lookups keep.
  */
-const failureBackoff = new FailureBackoff();
+const failureBackoff = new FailureBackoff(2, 20, { helius: true });
 
 /** Test hook: forget every recorded failure so the next call retries immediately. */
 export function resetMintAuthorityFailureBackoff(): void {

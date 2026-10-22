@@ -17,7 +17,7 @@ const logger = createLogger("onchain-holders");
  */
 const cache = new Map<string, { at: number; holders: OnChainHolders }>();
 const CACHE_MAX = 5_000;
-const failureBackoff = new FailureBackoff();
+const failureBackoff = new FailureBackoff(2, 20, { helius: true });
 
 /** Test hook. */
 export function resetOnChainHolders(): void {

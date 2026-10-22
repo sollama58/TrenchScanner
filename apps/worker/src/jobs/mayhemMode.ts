@@ -11,7 +11,7 @@ const logger = createLogger("mayhem-mode");
  * couple of minutes (see FailureBackoff): the screen rejects the mint for as long as it waits, so
  * one blip must not cost a fresh launch its first 20 minutes.
  */
-const failureBackoff = new FailureBackoff();
+const failureBackoff = new FailureBackoff(2, 20, { helius: true });
 /**
  * A mint the RPC doesn't see yet (confirmed-commitment lag on a seconds-old token) is a different
  * wait: the account appears within a slot or two, and a token that reached the band this fast is

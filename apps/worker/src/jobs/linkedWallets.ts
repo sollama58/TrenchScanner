@@ -67,7 +67,7 @@ function validUntil(lastActivityAt: Date | null | undefined): number {
 /** Each funder's hot verdict and when it was read. */
 const hotFunders = new Map<string, { hot: boolean; atMs: number }>();
 const MAX_HOT_ENTRIES = 50_000;
-const failureBackoff = new FailureBackoff();
+const failureBackoff = new FailureBackoff(2, 20, { helius: true });
 
 /** Calls sent since the last takeLinkedWalletStats(), by method. */
 let calls = { getSignaturesForAddress: 0, getTransaction: 0, getTransactionsForAddress: 0 };

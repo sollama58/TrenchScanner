@@ -458,6 +458,23 @@ function latchCreditsOut(now: number) {
   if (installed) void publishCreditsOut();
 }
 
+/**
+ * How long after Helius last answered a billed call with a 429 its failures still count as the
+ * provider's own refusal rather than a key's (heliusRefusing).
+ */
+export const HELIUS_REFUSING_MS = 60_000;
+let heliusLast429At = 0;
+
+/**
+ * Whether Helius is refusing calls across the board: credits out, or a 429 within the last
+ * HELIUS_REFUSING_MS. A per-key backoff (the worker's FailureBackoff) should not count a failure
+ * then as that key's: every key fails alike, and the strikes outlived the outage by up to 20
+ * minutes (audit 2026-10-22, H1 and worker-core F1).
+ */
+export function heliusRefusing(now = Date.now()): boolean {
+  return heliusCreditsOut(now) !== null || now - heliusLast429At < HELIUS_REFUSING_MS;
+}
+
 /** The SystemHeartbeat row the stand-down is shared through. Not a job: listings leave it out. */
 export const HELIUS_CREDITS_OUT_ROW = "helius-credits-out";
 /** How often a process reads the shared stand-down: the "about 30 s" a late process may still call. */
@@ -608,6 +625,7 @@ export function meteredFetch(inner: typeof fetch): typeof fetch {
     if (billedHelius && startedAt < heliusOut.until) return standingDown();
     try {
       const res = await inner(input, init);
+      if (billedHelius && res.status === 429) heliusLast429At = Date.now();
       const creditsOut = billedHelius && (await responseSaysCreditsOut(res));
       if (creditsOut) latchCreditsOut(Date.now());
       // Answered after a stand-down's pause: Helius is back, and what the stand-down left behind goes.
