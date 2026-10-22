@@ -42,6 +42,7 @@ describe("charity and OTC rewards on every fee surface", () => {
     const scope = renderToStaticMarkup(<FeeBadge fee={otc} className="scope-fee" />);
     for (const html of [card, scope]) {
       expect(html).toContain("NVDAx");
+      expect(html).toContain("desk-reward-tokens");
       expect(html).toContain("1%");
     }
     const blank = {

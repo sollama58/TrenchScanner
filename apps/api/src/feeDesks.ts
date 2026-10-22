@@ -52,6 +52,10 @@ export function shortRewardMint(mint: string): string {
 export interface OtcRewardCoin {
   label: string;
   mint: string | null;
+  /** Filled from Token when the scanner has stored the reward mint. */
+  name?: string | null;
+  symbol?: string | null;
+  imageUrl?: string | null;
 }
 
 /** The tooltip sentence, plus each reward coin so a surface that can render tokens can. */

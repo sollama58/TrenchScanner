@@ -14,6 +14,7 @@ import {
   cleanPeakPriceUsd,
   contestantSpec,
 } from "@trenchscanner/core";
+import { enrichCreatorFeeDeskRewards } from "./deskRewardMeta.js";
 import { otcDeskRoster } from "./otcDesk.js";
 import {
   creatorFeeWalletAddresses,
@@ -311,6 +312,7 @@ export async function creatorFeesByMint(
       deskRewards: desk.rewards,
     });
   }
+  await enrichCreatorFeeDeskRewards(out);
   return out;
 }
 

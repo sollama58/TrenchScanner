@@ -30,6 +30,7 @@ import { SharedCache } from "../sharedCache.js";
 import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
 import { charityNamesByMint } from "../curatedFeed.js";
 import { otcDeskRoster } from "../otcDesk.js";
+import { enrichDeskRewards } from "../deskRewardMeta.js";
 import { creatorFeeWalletAddresses, resolveOtcDeskFee, type OtcDeskFee } from "../feeDesks.js";
 import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
 import { liveCurves, MAX_WAIT_MS, type LiveCurveAnswer } from "../liveCurve.js";
@@ -1500,6 +1501,7 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
     charityNames.get(mintAddress) ?? null,
   );
   const desk = resolveOtcDeskFee(mintAddress, feeWallets, roster);
+  const feeRewards = await enrichDeskRewards(desk?.rewards ?? null);
   return {
     mint: mintAddress,
     token: token
@@ -1522,7 +1524,7 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
     /** OTC Desks reward routing, when their roster names it (user ask 2026-10-21). */
     feeDesk: desk?.line ?? null,
     /** Each reward coin in feeDesk, the same roster row as feeDesk. */
-    feeRewards: desk?.rewards ?? null,
+    feeRewards,
     marketCap: snapshots
       .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
       .reverse()

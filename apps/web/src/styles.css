@@ -10947,6 +10947,105 @@ button.link.exit-plan-link {
 .fee-rewards .fee-tax {
   color: var(--good-ink);
 }
+/* OTC Desks reward tokens beside the gift and in the pro token square. */
+.fee-badge.has-desk-rewards {
+  max-width: 100%;
+}
+.fee-badge.has-desk-rewards .desk-reward-tokens.compact {
+  min-width: 0;
+}
+.desk-reward-tokens {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.desk-reward-tokens.compact {
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+.desk-reward-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 0;
+}
+a.desk-reward-token:hover {
+  text-decoration: underline;
+}
+.desk-reward-avatar {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+.desk-reward-tokens:not(.compact) .desk-reward-avatar {
+  width: 16px;
+  height: 16px;
+}
+.desk-reward-avatar.placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 700;
+  background: var(--surface-3);
+  color: var(--muted);
+}
+.desk-reward-name {
+  max-width: 6rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.desk-reward-more-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.desk-reward-more {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--good-ink);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 999px;
+  cursor: default;
+}
+.desk-reward-more-menu {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 10rem;
+  padding: 6px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-2);
+  flex-direction: column;
+  gap: 6px;
+}
+.desk-reward-more-wrap:hover .desk-reward-more-menu,
+.desk-reward-more-wrap:focus-within .desk-reward-more-menu {
+  display: flex;
+}
+.desk-reward-more-menu .desk-reward-token {
+  width: 100%;
+}
+.tm-fig-otc .tm-desk-rewards {
+  margin-top: 2px;
+}
+.tm-fig-otc .desk-reward-name {
+  max-width: 9rem;
+}
 
 /* The Live tab's picture tour (AboutModal, TourArt) */
 .tour-modal {
