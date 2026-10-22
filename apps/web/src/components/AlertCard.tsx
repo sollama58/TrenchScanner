@@ -306,6 +306,7 @@ export function AlertCard({
                 {card.token.name}
               </span>
             )}
+            {show("time") && <span className="when">{ago(card.matchedAt, now)}</span>}
           </div>
           <div className="meta-row">
             {styled ? (
@@ -384,30 +385,31 @@ export function AlertCard({
                 <span className="pill-text">{calibratedRateLabel(cardCalibratedRate(curated, calls))}</span>
               </span>
             )}
-            {show("time") && <span className="when">{ago(card.matchedAt, now)}</span>}
           </div>
         </div>
-        {quickBuy("top-right")}
-        {resultMark && show("result") && (
-          <span
-            className={`badge card-result ${badge.tone}`}
-            role="img"
-            title={badge.text}
-            aria-label={badge.text}
-          >
-            {/* Inter has no ⊘, and the fallback font draws it larger than the other marks. */}
-            {resultMark === "⊘" ? <span className="result-stop">⊘</span> : resultMark}
-          </span>
-        )}
-        {detail && look.cardSearch && (
-          <CardSearchButton
-            className="card-search"
-            symbol={card.token.symbol}
-            name={card.token.name}
-            mint={card.token.mintAddress}
-          />
-        )}
-        {!hideInAlert && hideButton}
+        <div className="card-tools">
+          {quickBuy("top-right")}
+          {resultMark && show("result") && (
+            <span
+              className={`badge card-result ${badge.tone}`}
+              role="img"
+              title={badge.text}
+              aria-label={badge.text}
+            >
+              {/* Inter has no ⊘, and the fallback font draws it larger than the other marks. */}
+              {resultMark === "⊘" ? <span className="result-stop">⊘</span> : resultMark}
+            </span>
+          )}
+          {detail && look.cardSearch && (
+            <CardSearchButton
+              className="card-search"
+              symbol={card.token.symbol}
+              name={card.token.name}
+              mint={card.token.mintAddress}
+            />
+          )}
+          {!hideInAlert && hideButton}
+        </div>
       </header>
 
       {figCount > 0 && (
