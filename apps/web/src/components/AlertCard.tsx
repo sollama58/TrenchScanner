@@ -1096,7 +1096,7 @@ export function feeBadge(fee: Card["token"]["creatorFee"]): {
   tax: string | null;
   /** Reward tokens, or each charity and its percent, shown on the badge itself. */
   caption: string | null;
-  /** OTC Desks reward coins rendered with icons beside the gift. */
+  /** OTC Desks reward coins, shown as logos tucked behind the gift. */
   deskRewards: NonNullable<Card["token"]["creatorFee"]>["deskRewards"] | null;
 } | null {
   const coins = shownRewardLabels(fee);
@@ -1144,7 +1144,7 @@ export function FeeBadge({
     >
       {word && <span className="fee-word">FEES</span>}
       <fees.Icon size={icon} />
-      {fees.deskRewards && <DeskRewardTokens rewards={fees.deskRewards} compact maxVisible={2} />}
+      {fees.deskRewards && <DeskRewardTokens rewards={fees.deskRewards} compact />}
       {fees.caption && <span className="fee-caption num">{fees.caption}</span>}
       {fees.tax && <span className="fee-tax num">{fees.tax}</span>}
     </span>

@@ -16,6 +16,9 @@ export interface CreatorRewardFigure {
   value: string;
   /** A second line, the way At alert shows Peak. Null when the value already says it. */
   detail: string | null;
+  /** The second line under the OTC Desks logos: `detail` without the coin names, which the logos'
+   * tooltips carry (user ask 2026-10-22). */
+  logoDetail: string | null;
   /** The gift tooltip: TokenSage, the charity name, and the OTC desk sentence. */
   title: string;
   empty: boolean;
@@ -84,6 +87,7 @@ export function creatorRewardFigure(fee: Fee | null | undefined): CreatorRewardF
     return {
       value: "–",
       detail: null,
+      logoDetail: null,
       title: line ?? "No creator reward is stored",
       empty: true,
       squareLabel: "Creator reward",
@@ -98,11 +102,16 @@ export function creatorRewardFigure(fee: Fee | null | undefined): CreatorRewardF
       : null;
   if (recipients && recipients !== value) parts.push(recipients);
   else if (charity && !value.includes(charity)) parts.push(charity);
+  const logoParts = [...parts];
   if (coins.length > 0 && !value.includes(coins[0]!)) parts.push(coins.join(", "));
-  if (tax && coins.length > 0 && !value.includes(tax)) parts.push(tax);
+  if (tax && coins.length > 0 && !value.includes(tax)) {
+    parts.push(tax);
+    logoParts.push(tax);
+  }
   return {
     value,
     detail: parts.length > 0 ? parts.join(" · ") : null,
+    logoDetail: logoParts.length > 0 ? logoParts.join(" · ") : null,
     title: badge?.title ?? line ?? "Creator reward",
     empty: false,
     squareLabel: otcDesk ? "Holder Rewards: OTC Desks" : "Creator reward",
