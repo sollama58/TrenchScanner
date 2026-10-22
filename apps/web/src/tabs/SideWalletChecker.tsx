@@ -568,7 +568,7 @@ function SideRulesCard({ rules, labels }: { rules: SideRules; labels: SideLabels
                 <span className="switch-thumb" />
               </span>
             </button>
-            <span className="small">Include BWAM_DEV side wallets ({bwamCount.toLocaleString("en-US")})</span>
+            <span className="small">Include BWAM sides? ({bwamCount.toLocaleString("en-US")})</span>
           </label>
         )}
         <SideLabelsExport labels={labels} includeBwamDev={includeBwamDev} />
