@@ -283,6 +283,7 @@ export function AlertCard({
       <header className="card-head">
         <div className={`avatar-wrap tone-${badge.tone}`}>
           <TokenAvatar url={card.token.imageUrl} symbol={card.token.symbol} />
+          <QuoteBadge token={card.token} />
         </div>
         <div className="card-title">
           <div className="title-row">
@@ -855,7 +856,8 @@ export function socialLinks(token: Pick<Card["token"], "twitterUrl" | "websiteUr
 
 /**
  * The coin the token trades against, beside its ticker, when that isn't SOL (user ask
- * 2026-10-18): "$FOO /USDC" reads as the pair. Nothing for SOL or an unknown quote.
+ * 2026-10-18): "$FOO ⚭ USDC" reads as the pair. Nothing for SOL or an unknown quote. The pair
+ * badge on the avatar (QuoteBadge) shows the same coin's image (user ask 2026-10-22).
  */
 export function QuotePill({
   token,
@@ -872,10 +874,54 @@ export function QuotePill({
       title={quote.title}
       aria-label={`Trades against ${quote.label}`}
     >
-      <span className="quote-slash" aria-hidden="true">
-        /
-      </span>
+      <svg className="quote-glyph" viewBox="0 0 14 10" width="12" height="9" aria-hidden="true">
+        <circle cx="4.5" cy="5" r="3.6" />
+        <circle cx="9.5" cy="5" r="3.6" />
+      </svg>
       {quote.label}
+    </span>
+  );
+}
+
+/**
+ * The quote coin as a small round badge tucked under the corner of the token's avatar (user ask
+ * 2026-10-22): its image when its Token row has one, else its own colour and mark. Nothing for
+ * SOL, as with the pill.
+ */
+export function QuoteBadge({
+  token,
+  className = "",
+}: {
+  token: Pick<Card["token"], "quoteMint" | "quoteSymbol" | "quoteImageUrl">;
+  className?: string;
+}) {
+  // An index into the quote's image candidates; past its end, the mark.
+  const [attempt, setAttempt] = useState(0);
+  const quote = quoteToken(token);
+  if (!quote) return null;
+  const src = quote.images[attempt] ?? null;
+  return (
+    <span
+      className={`quote-badge ${className}`}
+      style={{ "--quote-tint": quote.tint } as React.CSSProperties}
+      title={quote.title}
+      role="img"
+      aria-label={`Paired with ${quote.label}`}
+    >
+      {src ? (
+        <img
+          src={src}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          onError={() => setAttempt((a) => a + 1)}
+        />
+      ) : (
+        <span className="quote-badge-mark" aria-hidden="true">
+          {quote.mark}
+        </span>
+      )}
     </span>
   );
 }
