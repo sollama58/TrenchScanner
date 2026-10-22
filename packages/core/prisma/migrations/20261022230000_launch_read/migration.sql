@@ -1,6 +1,9 @@
 -- Launch reads kept across restarts (worker launchReadStore.ts), and block zero (user ask 2026-10-22):
 -- the % of supply its wallets hold on each scan, how many there were and what they bought, and the
--- filter ceiling on the held share.
+-- filter ceiling on the held share. The TokenSnapshot ALTERs wait at most five seconds for the lock;
+-- migrate deploy retries on a timeout.
+SET LOCAL lock_timeout = '5s';
+
 CREATE TABLE IF NOT EXISTS "LaunchRead" (
     "mintAddress" TEXT NOT NULL,
     "reading" JSONB NOT NULL,
