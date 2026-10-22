@@ -1,7 +1,16 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { loadEnv, prisma, type Env } from "@trenchscanner/core";
+import {
+  clearHeliusCreditsOut,
+  HELIUS_CREDITS_OUT_ROW,
+  heliusCreditsOut,
+  loadEnv,
+  meteredFetch,
+  prisma,
+  readSharedCreditsOut,
+  type Env,
+} from "@trenchscanner/core";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { buildApiUsageReport, readTokenSageUsage } from "./adminUsage.js";
@@ -13,7 +22,7 @@ const PROCESS = "test-admin-usage";
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const userIds: Record<"admin" | "other", string> = { admin: "", other: "" };
 
-async function call(url: string, as: "admin" | "other") {
+async function call(url: string, as: "admin" | "other", method: "GET" | "POST" = "GET") {
   const env: Env = { ...loadEnv(), ADMIN_WALLET_ADDRESSES: ADMIN_WALLET };
   const app = await buildServer(env);
   try {
@@ -21,7 +30,7 @@ async function call(url: string, as: "admin" | "other") {
       userId: userIds[as],
       walletAddress: as === "admin" ? ADMIN_WALLET : OTHER_WALLET,
     });
-    return await app.inject({ method: "GET", url, cookies: { [SESSION_COOKIE_NAME]: cookie } });
+    return await app.inject({ method, url, cookies: { [SESSION_COOKIE_NAME]: cookie } });
   } finally {
     await app.close();
   }
@@ -107,6 +116,36 @@ describe.skipIf(!dbAvailable)("admin API usage", () => {
   it("serves admins only", async () => {
     expect((await call("/admin/api-usage", "other")).statusCode).toBe(403);
     expect((await call("/admin/api-usage?window=1y", "admin")).statusCode).toBe(400);
+  });
+
+  it("ends the Helius credits stand-down for every process on an admin's word", async () => {
+    const restored = "/admin/api-usage/helius-credits-restored";
+    expect((await call(restored, "other", "POST")).statusCode).toBe(403);
+    // Helius's 429 for an exhausted plan trips it here.
+    const f = meteredFetch(
+      (async () =>
+        new Response('{"jsonrpc":"2.0","error":{"code":-32429,"message":"max usage reached"},"id":"1"}', {
+          status: 429,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch,
+    );
+    await f("https://mainnet.helius-rpc.com/?api-key=k", {
+      method: "POST",
+      body: JSON.stringify({ jsonrpc: "2.0", id: "1", method: "getBalance", params: [] }),
+    });
+    expect(heliusCreditsOut()).not.toBeNull();
+    try {
+      const res = await call(restored, "admin", "POST");
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ended: true, wasOut: true });
+      expect(heliusCreditsOut()).toBeNull();
+      const shared = await readSharedCreditsOut();
+      expect(shared!.clearedAt).toBeGreaterThan(0);
+      expect(shared!.until).toBeLessThanOrEqual(Date.now());
+    } finally {
+      clearHeliusCreditsOut(0);
+      await prisma.systemHeartbeat.deleteMany({ where: { job: HELIUS_CREDITS_OUT_ROW } });
+    }
   });
 
   it("sums each window by provider, endpoint and feature, with Helius credits apart", async () => {

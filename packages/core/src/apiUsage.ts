@@ -491,7 +491,7 @@ interface SharedCreditsOut {
   clearedAt: number;
 }
 
-async function publishCreditsOut(): Promise<void> {
+async function publishCreditsOut(): Promise<boolean> {
   const { since, until, setAt, clearedAt } = heliusOut;
   const meta: SharedCreditsOut = { since, until, setAt, clearedAt };
   const at = new Date(Math.max(setAt, clearedAt) || Date.now());
@@ -501,9 +501,23 @@ async function publishCreditsOut(): Promise<void> {
       create: { job: HELIUS_CREDITS_OUT_ROW, lastRunAt: at, meta: { ...meta } },
       update: { lastRunAt: at, meta: { ...meta } },
     });
+    return true;
   } catch (err) {
     logger.warn("shared Helius stand-down not written", { error: String(err) });
+    return false;
   }
+}
+
+/**
+ * An admin's "Helius topped up": ends the stand-down here and, through the shared row, in every
+ * other process within SHARED_POLL_MS, rather than leaving each to sit out up to 15 minutes of a
+ * plan that has credits again (audit 2026-10-22, helius-usage H-6). Whether the row was written.
+ */
+export async function endHeliusCreditsOutEverywhere(now = Date.now()): Promise<boolean> {
+  heliusOut.until = Math.min(heliusOut.until, now);
+  heliusOut.clearedAt = now;
+  releaseCreditsOut();
+  return publishCreditsOut();
 }
 
 /** The shared row's stand-down, or null without one (or one that doesn't read). */
@@ -592,9 +606,21 @@ async function bodyText(res: Response, max = Infinity): Promise<string> {
   }
 }
 
+/** When a 429 body that didn't read as credits out was last logged: once a day is enough to check by. */
+let unmatched429LoggedAt = 0;
+
 /** Whether a billed Helius response says credits are out: a 429's body, or a JSON 2xx's first bytes. */
 async function responseSaysCreditsOut(res: Response): Promise<boolean> {
-  if (res.status === 429) return saysCreditsOut(await bodyText(res));
+  if (res.status === 429) {
+    const text = await bodyText(res);
+    const out = saysCreditsOut(text);
+    // The matcher has only seen the documented shapes: a day's first other 429 is kept to check it by.
+    if (!out && Date.now() - unmatched429LoggedAt > 86_400_000) {
+      unmatched429LoggedAt = Date.now();
+      logger.warn("Helius 429 not read as credits out", { body: text.slice(0, 300) });
+    }
+    return out;
+  }
   if (res.ok && /json/i.test(res.headers.get("content-type") ?? "")) {
     return saysCreditsOut(await bodyText(res, ANSWERED_BODY_PEEK_BYTES));
   }

@@ -266,6 +266,13 @@ describe("Helius out of credits", () => {
 describe("saysCreditsOut", () => {
   it("reads the plan's refusal in any of Helius's shapes, and not a rate limit", () => {
     expect(saysCreditsOut("max usage reached")).toBe(true);
+    // Helius's whole answers: the JSON-RPC envelope a 429 (or a 200) carries for an exhausted plan.
+    expect(
+      saysCreditsOut('{"jsonrpc":"2.0","error":{"code":-32429,"message":"max usage reached"},"id":"1"}'),
+    ).toBe(true);
+    expect(
+      saysCreditsOut('{"jsonrpc":"2.0","id":1,"error":{"code":-32429,"message":"Max usage reached"}}'),
+    ).toBe(true);
     expect(
       saysCreditsOut('{"jsonrpc":"2.0","error":{"code":-32429,"message":"plan credits exhausted"}}'),
     ).toBe(true);
