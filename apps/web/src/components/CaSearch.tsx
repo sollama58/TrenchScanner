@@ -12,6 +12,7 @@ import { ago, multiple, shortAddress, usd } from "../format";
 import { parseSearch, searchParam } from "../caSearch";
 import { openTokenModal } from "../tokenModal";
 import { overlaySearchMarket, type SearchMarketPatch } from "../cardSearch";
+import { everyWhileVisible } from "../hooks";
 import {
   ANY_FACETS,
   arrangeHits,
@@ -436,11 +437,13 @@ export function SearchModal({
     };
     // A row that came back blank is asked again once the search's own fill has had a moment.
     const soon = missingMints ? window.setTimeout(() => refresh(missingMints), 2_000) : undefined;
-    const timer = window.setInterval(() => refresh(visibleMints), 30_000);
+    // Not while the tab is hidden: a search window left open would otherwise keep asking (and
+    // DexScreener behind it) every 30 s all day. Back on the tab, a refresh that is due runs at once.
+    const stopRefresh = everyWhileVisible(() => refresh(visibleMints), 30_000);
     return () => {
       stop = true;
       if (soon !== undefined) window.clearTimeout(soon);
-      window.clearInterval(timer);
+      stopRefresh();
     };
   }, [open, visibleMints, missingMints]);
   useEffect(() => setExpanded({ tracked: false, outside: false }), [search]);

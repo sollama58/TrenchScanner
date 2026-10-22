@@ -27,6 +27,11 @@ const logger = createLogger("chart-mark-fill");
  *    the span read so far, so an open reads only what is new since the last one, then works back
  *    toward the start on later opens. A coin Pump.fun doesn't have is marked read and left.
  * Both happen once an hour per coin and process at most; the queue is one coin at a time.
+ *
+ * While the chart stays open (its poll reads it again within OPEN_POLL_GAP_MS), what is new is read
+ * every REFRESH_EVERY_MS too: the page follows the live trades stream only on the Live trades tab
+ * (Helius audit 2026-10-22 H-2), so without this a flagged wallet's trade made while the chart is
+ * open would wait for the next hourly open to be marked.
  */
 
 /** A coin's marks are kept this long after its chart was last opened. */
@@ -38,6 +43,12 @@ const OPEN_EVERY_MS = 3_600_000;
 const MAX_REMEMBERED = 5_000;
 /** A fill read up to this close to now counts as current. */
 export const FRESH_MS = 10 * 60_000;
+/** A chart read again within this long of its last read is still open (it polls every 30 s). */
+export const OPEN_POLL_GAP_MS = 90_000;
+/** An open chart's new trades are read this often at most. */
+export const REFRESH_EVERY_MS = 2 * 60_000;
+/** For that read, a fill up to this close to now counts as current. */
+export const REFRESH_FRESH_MS = 60_000;
 /** Pump.fun pages (100 trades each) one fill reads at most. */
 export const PAGES_PER_FILL = 30;
 /** The fills' share of the swap host's budget (pumpfunGate.ts: 240 a minute). */
@@ -62,9 +73,9 @@ export interface FillPlan {
 }
 
 /** Exported for tests. The next read for a coin whose marks start at `startMs`, or null when it is current. */
-export function planFill(startMs: number, span: FillSpan, now: number): FillPlan | null {
+export function planFill(startMs: number, span: FillSpan, now: number, freshMs = FRESH_MS): FillPlan | null {
   if (span.from === null || span.to === null) return { kind: "first", cursorAt: now, stopAt: startMs };
-  if (now - span.to > FRESH_MS) return { kind: "newer", cursorAt: now, stopAt: span.to };
+  if (now - span.to > freshMs) return { kind: "newer", cursorAt: now, stopAt: span.to };
   if (span.from > startMs) return { kind: "older", cursorAt: span.from, stopAt: startMs };
   return null;
 }
@@ -99,10 +110,14 @@ interface Job {
   mint: string;
   startMs: number;
   onFilled: () => void;
+  /** An open chart's refresh: only what is new since the last read. */
+  refresh?: boolean;
 }
 
 export class ChartMarkFiller {
   private readonly opened = new Map<string, number>();
+  /** Each coin's last chart read and last refresh, for the refresh of an open chart. */
+  private readonly polled = new Map<string, { at: number; refreshedAt: number }>();
   private readonly queue: Job[] = [];
   private running = false;
   private stopped = false;
@@ -129,7 +144,13 @@ export class ChartMarkFiller {
     if (this.stopped) return;
     const now = this.now();
     const last = this.opened.get(mint);
-    if (last !== undefined && now - last < OPEN_EVERY_MS) return;
+    if (last !== undefined && now - last < OPEN_EVERY_MS) {
+      this.refreshOpen(mint, startMs, onFilled, now);
+      return;
+    }
+    this.polled.delete(mint);
+    this.polled.set(mint, { at: now, refreshedAt: now });
+    if (this.polled.size > MAX_REMEMBERED) this.polled.delete(this.polled.keys().next().value!);
     this.opened.delete(mint);
     this.opened.set(mint, now);
     if (this.opened.size > MAX_REMEMBERED) this.opened.delete(this.opened.keys().next().value!);
@@ -145,6 +166,19 @@ export class ChartMarkFiller {
     );
   }
 
+  /** Queues a read of what is new for a chart still open since its last read, every REFRESH_EVERY_MS. */
+  private refreshOpen(mint: string, startMs: number, onFilled: () => void, now: number): void {
+    const seen = this.polled.get(mint);
+    this.polled.delete(mint);
+    const open = seen !== undefined && now - seen.at <= OPEN_POLL_GAP_MS;
+    const due = open && now - seen.refreshedAt >= REFRESH_EVERY_MS;
+    this.polled.set(mint, { at: now, refreshedAt: due || !seen ? now : seen.refreshedAt });
+    if (this.polled.size > MAX_REMEMBERED) this.polled.delete(this.polled.keys().next().value!);
+    if (!due || this.queue.length >= MAX_QUEUED || this.queue.some((j) => j.mint === mint)) return;
+    this.queue.push({ mint, startMs, onFilled, refresh: true });
+    void this.drain();
+  }
+
   stop(): void {
     this.stopped = true;
     this.queue.length = 0;
@@ -156,7 +190,7 @@ export class ChartMarkFiller {
     this.running = true;
     try {
       for (let job = this.queue.shift(); job && !this.stopped; job = this.queue.shift()) {
-        const saved = await this.fill(job.mint, job.startMs).catch((err: unknown) => {
+        const saved = await this.fill(job.mint, job.startMs, job.refresh).catch((err: unknown) => {
           logger.warn("chart marks fill failed", { mint: job!.mint, error: String(err) });
           return 0;
         });
@@ -168,7 +202,7 @@ export class ChartMarkFiller {
   }
 
   /** Visible for tests: one fill of one coin; the flagged trades saved. */
-  async fill(mint: string, startMs: number): Promise<number> {
+  async fill(mint: string, startMs: number, refresh = false): Promise<number> {
     const now = this.now();
     const span = await this.store.claim(mint, new Date(now), new Date(now + LEASE_MS));
     if (!span) return 0;
@@ -176,8 +210,9 @@ export class ChartMarkFiller {
     let calls = 0;
     let saved = 0;
     try {
-      const plan = planFill(startMs, span, now);
-      if (!plan) return 0;
+      const plan = planFill(startMs, span, now, refresh ? REFRESH_FRESH_MS : FRESH_MS);
+      // A refresh reads only what is new: going back toward the start is the hourly open's work.
+      if (!plan || (refresh && plan.kind === "older")) return 0;
       const trades: { sig: string; wallet: string; side: "buy" | "sell"; sol: number; atMs: number }[] = [];
       // +1: the trades at the span's own millisecond are read again rather than missed.
       let cursor = pumpFunCursorBefore(plan.cursorAt + 1);

@@ -59,19 +59,19 @@ export function chartHistoryExtended(prev: ChartPollBody | null, next: ChartPoll
 
 /**
  * Fold two answers for the same mint into one: union candles and scans by time (newer field wins on
- * a tie), keep the longer wallet list, and carry solUsd from whichever has it.
+ * a tie), and carry solUsd from whichever has it. `next` must be the newer answer.
+ *
+ * The flagged wallets and holder entries are not a time series: they are the server's whole list as
+ * of that read, and it can shrink (the tape window moves on, the capped list is reshuffled), so the
+ * newer answer's list replaces the older one. The older list is kept only when `next` has none.
  */
 export function mergeTokenChart(prev: ChartPollBody, next: ChartPollBody): ChartPollBody {
   if (prev.mint !== next.mint) return next;
   const candles = mergeCandles(prev.candles, next.candles);
   const older = mergeCandles(prev.older, next.older) ?? undefined;
   const marketCap = mergeMcap(prev.marketCap, next.marketCap);
-  const wallets = (next.wallets?.length ?? 0) >= (prev.wallets?.length ?? 0) ? next.wallets : prev.wallets;
-  const holderEntries =
-    next.holderEntries &&
-    Object.keys(next.holderEntries).length >= Object.keys(prev.holderEntries ?? {}).length
-      ? next.holderEntries
-      : (prev.holderEntries ?? next.holderEntries);
+  const wallets = next.wallets ?? prev.wallets;
+  const holderEntries = next.holderEntries ?? prev.holderEntries;
   return {
     ...next,
     candles,
