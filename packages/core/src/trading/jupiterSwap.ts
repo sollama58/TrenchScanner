@@ -245,6 +245,41 @@ interface JupiterRoute {
 
 const KEYED_HOST = "https://api.jup.ag";
 const KEYLESS_HOST = "https://lite-api.jup.ag";
+
+/** What one quote asks Jupiter for. */
+interface JupiterQuoteInput {
+  inputMint: string;
+  outputMint: string;
+  amount: bigint;
+  slippageBps: number;
+  /**
+   * False lets the route hop through any token, not just Jupiter's liquid ones. Unset means try the
+   * liquid ones first: an explicit true is a caller that must see the miss (a coin still on its SOL
+   * curve trades there, not through some other pool).
+   */
+  restrictIntermediateTokens?: boolean;
+  /** The most accounts the route may name: room left for other instructions in the transaction. */
+  maxAccounts?: number;
+  /** One pool, no hops: the fewest accounts, for a transaction that has other instructions too. */
+  onlyDirectRoutes?: boolean;
+}
+
+/**
+ * The next quote after NO_ROUTES_FOUND, or null when this one was already as open as it may be.
+ * A direct-only flag goes first: a hop is still this pair. The liquid-intermediate flag goes only
+ * when the caller left it unset, and never for a pump.fun mint. Quoting one of those as an open
+ * market would fill it through a side pool; the trade path uses the miss to trade the coin's own
+ * curve or PumpSwap pool instead.
+ */
+function nextJupiterQuote(input: JupiterQuoteInput): JupiterQuoteInput | null {
+  if (input.onlyDirectRoutes) return { ...input, onlyDirectRoutes: false };
+  const pump = input.inputMint.endsWith("pump") || input.outputMint.endsWith("pump");
+  if (input.restrictIntermediateTokens === undefined && !pump) {
+    return { ...input, restrictIntermediateTokens: false };
+  }
+  return null;
+}
+
 /** How long a host that answered 429 is tried last: Jupiter's limits are per second or per minute. */
 const RATE_LIMIT_COOLDOWN_MS = 10_000;
 /** A refused key stays refused for a while: tried last for this long. */
@@ -324,24 +359,36 @@ export class JupiterSwapClient implements SwapClient {
     );
   }
 
-  async quote(input: {
-    inputMint: string;
-    outputMint: string;
-    amount: bigint;
-    slippageBps: number;
-    /** False lets the route hop through any token, not just Jupiter's liquid ones (default true). */
-    restrictIntermediateTokens?: boolean;
-    /** The most accounts the route may name: room left for other instructions in the transaction. */
-    maxAccounts?: number;
-    /** One pool, no hops: the fewest accounts, for a transaction that has other instructions too. */
-    onlyDirectRoutes?: boolean;
-  }) {
+  /**
+   * One quote. A zero amount is refused here: Jupiter answers that with NO_ROUTES_FOUND, which
+   * would read as "this token has no pool". A direct-only miss, and a liquid-only miss the caller
+   * didn't insist on, is asked again in a shape Jupiter can fill (a hop, then any intermediate).
+   * A pump.fun mint is not asked again as an open market. When every shape misses, the error is
+   * still Jupiter's no-route.
+   */
+  async quote(input: JupiterQuoteInput) {
+    if (input.amount <= 0n) throw new Error("Jupiter quote: amount must be more than zero");
+    let req = input;
+    for (;;) {
+      try {
+        return await this.quoteOnce(req);
+      } catch (err) {
+        if (!(err instanceof NoRouteError)) throw err;
+        const next = nextJupiterQuote(req);
+        if (!next) throw err;
+        req = next;
+      }
+    }
+  }
+
+  private async quoteOnce(input: JupiterQuoteInput) {
     const params = new URLSearchParams({
       inputMint: input.inputMint,
       outputMint: input.outputMint,
       amount: input.amount.toString(),
       slippageBps: String(input.slippageBps),
       // Fewer hops through thin intermediate tokens: fewer ways for a memecoin route to fail.
+      // False is the string "false": omitting the flag is Jupiter's default, which is true.
       restrictIntermediateTokens: String(input.restrictIntermediateTokens ?? true),
       // The route instruction both guards can read (checkJupiterFloor, the browser's tradeProblem):
       // V2 is live and a change of Jupiter's default would otherwise refuse every Jupiter trade.
