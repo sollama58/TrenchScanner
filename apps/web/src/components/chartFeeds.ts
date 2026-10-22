@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, FEED_TIMEOUT_MS } from "../api";
-import type { Point } from "../priceChart";
+import type { Point, VolumeCandle } from "../priceChart";
 
 /** Mirrors apps/api/src/liveCurve.ts LiveCurveAnswer. */
 export interface LiveCurveAnswer {
@@ -139,67 +139,150 @@ export function useLiveTail(base: string, enabled: boolean): LiveTail {
   return tail;
 }
 
-/** Mirrors apps/api/src/routes/tokens.ts TokenFineCandles. */
-export interface FineCandles {
+/** One bar of GET /tokens/:mint/candles (core's SeriesBar): market cap in USD on the supply now. */
+export interface StoredBar {
+  /** The bar's start (ms). */
+  t: number;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  /** USD volume; null where the source didn't say. */
+  vol: number | null;
+  /** Wider than the timeframe asked for (only coarser data covers its stretch): `w` is its width. */
+  coarse?: true;
+  /** A coarse bar's real width, in seconds. */
+  w?: number;
+}
+
+/** Mirrors apps/api/src/tokenCandles.ts TokenCandlesAnswer. */
+export interface StoredCandles {
   mint: string;
-  stepSec: 1 | 15;
-  candles: { t: number; o: number; h: number; l: number; c: number; vol?: number }[] | null;
-  /** "pumpfun", "stream" (the API's own, off the live tail) or "mixed"; absent from older API builds. */
-  source?: "pumpfun" | "stream" | "mixed";
-  /** Pump.fun's part is its last good answer, past its cache time. */
-  stale?: boolean;
+  tf: string;
+  /** Oldest first. */
+  bars: StoredBar[];
+  /** Pass as `before` for the page before this one; null when nothing older is stored. */
+  next: number | null;
 }
 
-/** How far before an answer's arrival its Pump.fun part is taken to be current (the API's cache, the browser's). */
-const FINE_FRESH_MARGIN_MS = 15_000;
+/** The timeframes the candles route serves, by width (ms): the chart's own (priceChart.ts TIMEFRAMES). */
+const CANDLE_TF_PARAM = new Map<number, string>([
+  [1_000, "1s"],
+  [5_000, "5s"],
+  [15_000, "15s"],
+  [30_000, "30s"],
+  [60_000, "1m"],
+  [300_000, "5m"],
+  [900_000, "15m"],
+  [1_800_000, "30m"],
+  [3_600_000, "1h"],
+  [14_400_000, "4h"],
+]);
 
-/** The most finer candles a chart keeps from its reads (the chart draws at most 12,000 slots). */
-const MAX_FINE_CANDLES = 20_000;
-
-type FineCandle = NonNullable<FineCandles["candles"]>[number];
-
-/**
- * Exported for tests. Two reads of the finer candles as one, by time: the newer read's candle wins
- * a step both hold, and the older read's steps the newer one no longer reaches stay (as
- * chartPoll.ts mergeTokenChart does for the minute candles). The API's 1-second answer turns to the
- * stream's own candles once those reach back far enough, which start only when the chart opened:
- * replacing the page lost Pump.fun's older seconds the view was drawing (charts audit CH-5).
- */
-export function mergeFine(prev: FineCandles | null, next: FineCandles): FineCandles {
-  if (!prev?.candles?.length || prev.stepSec !== next.stepSec) return next;
-  if (!next.candles?.length) return prev;
-  const byT = new Map<number, FineCandle>();
-  for (const k of prev.candles) byT.set(k.t, k);
-  for (const k of next.candles) byT.set(k.t, k);
-  const candles = [...byT.values()].sort((a, b) => a.t - b.t).slice(-MAX_FINE_CANDLES);
-  return { ...next, candles };
+/** Exported for tests. The route's `tf` for a width: the narrowest it serves at least that wide. */
+export function candleTfParam(tfMs: number): { tf: string; ms: number } {
+  for (const [ms, tf] of CANDLE_TF_PARAM) if (ms >= tfMs) return { tf, ms };
+  return { tf: "4h", ms: 14_400_000 };
 }
 
 /**
- * The token chart's finer candles (GET `base`/chart/fine): Pump.fun's 1- or 15-second page, read
- * when `res` is set (the view is short enough for them to add detail) and every `everyMs` after.
- * Each read is joined to the ones before it (mergeFine), and they stay up through a failed read; a
- * new `res` starts empty. The API answers 1-second candles from its own stream alone once they reach
- * back to `from` without a break: that is where the Pump.fun pages held here are current to (a
- * little before the last one arrived), so the stream's candles join them with no hole and the
- * Pump.fun budget isn't spent again; with none held yet, the view's start (`from`), so Pump.fun's
- * page is read first.
+ * How often an open chart re-reads its newest page of candles: every few seconds on the finest
+ * timeframes (the route keeps that page 3 s), less often wider. The live tail moves the forming
+ * candle in between; this poll only settles the closed ones.
  */
-export function useFineCandles(
+export function candlePollMs(tfMs: number): number {
+  return tfMs <= 5_000 ? 5_000 : tfMs < 60_000 ? 15_000 : 30_000;
+}
+
+/**
+ * Exported for tests. A page's bars as the chart's candles at `tfMs`, the bad ones (a value that
+ * isn't a positive number) left out. A coarse bar keeps its real width, so the chart draws it that
+ * wide and shaded (chartBars.ts buildSlots); one that would run into the next bar (the seam between
+ * two pages) is cut at that bar's start.
+ */
+export function storedCandles(bars: readonly StoredBar[], tfMs: number): VolumeCandle[] {
+  const ok = bars.filter(
+    (b) => Number.isFinite(b.t) && [b.o, b.h, b.l, b.c].every((n) => Number.isFinite(n) && n > 0),
+  );
+  return ok.map((b, i) => {
+    let w = b.coarse && b.w ? b.w * 1_000 : tfMs;
+    const next = ok[i + 1];
+    if (next && b.t + w > next.t) w = Math.max(tfMs, next.t - b.t);
+    return { t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, vol: b.vol ?? null, w };
+  });
+}
+
+/**
+ * Exported for tests. Candles held with a newer page joined: the page stands from its first bar on
+ * (its stretch was read afresh, the forming bar included), the held ones before it stay.
+ */
+export function withNewest(held: readonly VolumeCandle[], page: readonly VolumeCandle[]): VolumeCandle[] {
+  if (page.length === 0) return [...held];
+  const from = page[0]!.t;
+  return held.filter((k) => k.t < from).concat(page);
+}
+
+/**
+ * Exported for tests. Candles held with an older page joined before them. A coarse bar of the page
+ * running past the held first one is cut at its start, as storedCandles cuts a page's own seams.
+ */
+export function withOlder(held: readonly VolumeCandle[], page: readonly VolumeCandle[]): VolumeCandle[] {
+  if (held.length === 0) return [...page];
+  const first = held[0]!.t;
+  return page
+    .filter((k) => k.t < first)
+    .map((k) => (k.t + (k.w ?? 0) > first ? { ...k, w: first - k.t } : k))
+    .concat(held);
+}
+
+/** A coin's candles at one timeframe, as read from the candle store (useStoredCandles). */
+export interface CandleHistory {
+  tfMs: number;
+  /** Oldest first, each with its width (`w`, ms): the timeframe's, or a coarse bar's own. */
+  candles: VolumeCandle[];
+  /** The `before` for the next older page; null once the store has nothing older. */
+  next: number | null;
+}
+
+/** An older page that came back empty is asked again after this, on a scroll back to it (a backfill may land). */
+const OLDER_RETRY_MS = 60_000;
+/** Candles starting this long after the launch don't reach it: worth asking again later. */
+const LAUNCH_SLACK_MS = 10 * 60_000;
+
+/**
+ * The token chart's candles (GET /tokens/:mint/candles, charts audit 2026-10-22 target design): one
+ * timeframe's bars from the server's candle store, which holds each stretch of the coin's history
+ * at the finest width it has and backfills to the launch, so the chart no longer stitches widths
+ * itself. While `tfMs` is set, the newest page is read now and every candlePollMs after (only while
+ * the tab is visible); `older()` reads the page before the oldest held (the chart calls it as the
+ * reader scrolls back), so the whole history down to the launch is reachable at any timeframe. A
+ * new timeframe keeps the old one's candles up until its first page lands; a failed read keeps
+ * what was held and says so in `error`.
+ */
+export function useStoredCandles(
   base: string,
-  res: "1s" | "15s" | null,
-  everyMs: number,
-  from: number | null = null,
-): FineCandles | null {
-  const [held, setHeld] = useState<{ key: string; data: FineCandles } | null>(null);
-  const key = `${base}|${res}`;
-  // Read at each poll, so a view start that moves doesn't restart the polling.
-  const fromRef = useRef(from);
-  fromRef.current = from;
+  tfMs: number | null,
+  launchAt: number | null = null,
+  limit: number | null = null,
+): { history: CandleHistory | null; error: Error | null; at: number | null; older: () => void } {
+  const [held, setHeld] = useState<{ base: string; history: CandleHistory } | null>(null);
+  const [error, setError] = useState<{ base: string; error: Error } | null>(null);
+  const [at, setAt] = useState<number | null>(null);
+  const tf = tfMs === null ? null : candleTfParam(tfMs);
+  const key = tf ? `${base}|${tf.tf}|${limit ?? ""}` : null;
+  // What the paging reads: the candles held for this key, kept current on every render.
+  const live = useRef<{ key: string | null; history: CandleHistory | null }>({ key: null, history: null });
+  const paging = useRef<{ key: string | null; busy: boolean; emptyAt: number }>({
+    key: null,
+    busy: false,
+    emptyAt: 0,
+  });
+  const launchRef = useRef(launchAt);
+  launchRef.current = launchAt;
+
   useEffect(() => {
-    // Where the Pump.fun pages read so far are current to (ms), null before one lands.
-    let through: number | null = null;
-    if (!res) return;
+    if (!key || !tf) return;
+    paging.current = { key, busy: false, emptyAt: 0 };
     let stopped = false;
     let timer: number | undefined;
     let busy = false;
@@ -208,24 +291,31 @@ export function useFineCandles(
       busy = true;
       if (document.visibilityState === "visible") {
         try {
-          const at = through ?? fromRef.current;
-          const data = await api<FineCandles>(
-            `${base}/chart/fine?res=${res}${at !== null && at > 0 ? `&from=${Math.floor(at)}` : ""}`,
+          const a = await api<StoredCandles>(
+            `${base}/candles?tf=${tf.tf}${limit !== null ? `&limit=${limit}` : ""}`,
             { timeoutMs: FEED_TIMEOUT_MS },
           );
-          if (data.candles?.length && data.source !== "stream" && !data.stale)
-            through = Date.now() - FINE_FRESH_MARGIN_MS;
-          // An answer with no candles (over budget, upstream paused) keeps what was read before.
-          if (!stopped)
-            setHeld((prev) => ({ key, data: mergeFine(prev?.key === key ? prev.data : null, data) }));
-        } catch {
-          // The view keeps its minute candles meanwhile; the next round tries again.
+          if (!stopped) {
+            const page = storedCandles(a.bars ?? [], tf.ms);
+            setHeld((prev) => {
+              const mine = prev && prev.base === base && prev.history.tfMs === tf.ms ? prev.history : null;
+              const candles = mine ? withNewest(mine.candles, page) : page;
+              // Older pages already held keep their own `next`; otherwise the newest page's.
+              const pagedBack = !!mine && page.length > 0 && candles[0]!.t < page[0]!.t;
+              const next = pagedBack ? mine.next : (a.next ?? null);
+              return { base, history: { tfMs: tf.ms, candles, next } };
+            });
+            setError(null);
+            setAt(Date.now());
+          }
+        } catch (e) {
+          if (!stopped) setError({ base, error: e instanceof Error ? e : new Error(String(e)) });
         }
       }
       busy = false;
-      if (!stopped) timer = window.setTimeout(() => void poll(), everyMs);
+      if (!stopped) timer = window.setTimeout(() => void poll(), candlePollMs(tf.ms));
     };
-    // Back online: read at once rather than at the next round.
+    // Back online, or the tab shown again: read at once rather than at the next round.
     const resume = () => {
       if (!busy && !stopped) void poll();
     };
@@ -241,6 +331,55 @@ export function useFineCandles(
       window.removeEventListener("online", resume);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [base, res, key, everyMs]);
-  return held && held.key === key ? held.data : null;
+    // `tf` is derived from `key`.
+  }, [key, base, limit]);
+
+  const history = held && held.base === base ? held.history : null;
+  live.current = { key, history: history && tf && history.tfMs === tf.ms ? history : null };
+
+  const older = useCallback(() => {
+    const { key: k, history: h } = live.current;
+    const p = paging.current;
+    if (!k || !h || h.candles.length === 0 || p.key !== k || p.busy) return;
+    const oldest = h.candles[0]!.t;
+    let before = h.next;
+    if (before === null) {
+      // The store had nothing older when last asked. A coin still being backfilled gets more: ask
+      // again now and then, while the candles held stop well short of the launch.
+      const launch = launchRef.current;
+      const short = launch === null || oldest > launch + LAUNCH_SLACK_MS;
+      if (!short || Date.now() - p.emptyAt < OLDER_RETRY_MS) return;
+      before = oldest;
+    }
+    const tfMsNow = h.tfMs;
+    const param = candleTfParam(tfMsNow).tf;
+    p.busy = true;
+    void api<StoredCandles>(`${base}/candles?tf=${param}&before=${Math.floor(before)}`, {
+      timeoutMs: FEED_TIMEOUT_MS,
+    })
+      .then((a) => {
+        if (paging.current !== p) return;
+        const page = storedCandles(a.bars ?? [], tfMsNow);
+        if (page.length === 0 || a.next === null) p.emptyAt = Date.now();
+        setHeld((prev) => {
+          if (!prev || prev.base !== base || prev.history.tfMs !== tfMsNow) return prev;
+          return {
+            base,
+            history: {
+              tfMs: tfMsNow,
+              candles: withOlder(prev.history.candles, page),
+              next: page.length > 0 ? (a.next ?? null) : null,
+            },
+          };
+        });
+      })
+      .catch(() => {
+        // Tried again on the next scroll back.
+      })
+      .finally(() => {
+        p.busy = false;
+      });
+  }, [base]);
+
+  return { history, error: error && error.base === base ? error.error : null, at, older };
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   autoTimeframe,
   buildSlots,
+  candleReadings,
   finestCoverMs,
   slotCandle,
   slotIndex,
@@ -9,7 +10,6 @@ import {
   slotOfTime,
   timeframeFits,
 } from "./chartBars";
-import { stitchVolume } from "./priceChart";
 
 const k = (t: number, o: number, c: number, w = 60_000, vol = 10) => ({
   t,
@@ -85,13 +85,13 @@ describe("buildSlots", () => {
     expect(s.bars[30]).toMatchObject({ under: 30, coarse: true });
   });
 
-  it("keeps the coarser candles where the 1-second page doesn't reach, marked coarse", () => {
-    // The stitch keeps the 5s bucket for the stretch the 1s page does not reach.
-    const merged = stitchVolume([
-      { candles: [k(0, 10, 12, 5_000, 40)], stepMs: 5_000 },
-      { candles: [k(5_000, 12, 13, 1_000, 4), k(8_000, 13, 11, 1_000, 2)], stepMs: 1_000 },
-    ]);
-    const slots = buildSlots(merged, [], 1_000)!;
+  it("draws a store page's coarse bars at their width, shaded, beside the timeframe's own", () => {
+    // A 1s page where only a 5-second bar covers the first stretch (core's candleSeries).
+    const slots = buildSlots(
+      [k(0, 10, 12, 5_000, 40), k(5_000, 12, 13, 1_000, 4), k(8_000, 13, 11, 1_000, 2)],
+      [],
+      1_000,
+    )!;
     expect(slots.start).toBe(0);
     expect(slots.bars[0]).toMatchObject({ span: 5, coarse: true, c: 12 });
     expect(slots.bars.filter((b) => !b.flat && !b.under).map((b) => [b.t, b.c, !!b.coarse])).toEqual([
@@ -105,6 +105,30 @@ describe("buildSlots", () => {
     expect(live.bars.every((b) => (b.span ?? 1) === 1 && !b.coarse)).toBe(true);
     expect(live.bars.find((b) => b.t === 0)).toMatchObject({ c: 2 });
     expect(live.bars.find((b) => b.t === 6_000)).toMatchObject({ c: 4, o: 2 });
+  });
+});
+
+describe("candleReadings", () => {
+  it("puts each close at its candle's end, the forming one's at now", () => {
+    expect(candleReadings([k(0, 1, 2), k(60_000, 2, 3)], [], 90_000)).toEqual([
+      { t: 60_000, v: 2 },
+      { t: 90_000, v: 3 },
+    ]);
+  });
+  it("lets the live ticks take over from the newest candle's start", () => {
+    const ticks = [
+      { t: 30_000, v: 9 },
+      { t: 70_000, v: 4 },
+      { t: 130_000, v: 5 },
+    ];
+    expect(candleReadings([k(0, 1, 2), k(60_000, 2, 3)], ticks, 140_000)).toEqual([
+      { t: 60_000, v: 2 },
+      { t: 70_000, v: 4 },
+      { t: 130_000, v: 5 },
+    ]);
+  });
+  it("is the ticks alone without candles", () => {
+    expect(candleReadings([], [{ t: 5, v: 1 }], 10)).toEqual([{ t: 5, v: 1 }]);
   });
 });
 

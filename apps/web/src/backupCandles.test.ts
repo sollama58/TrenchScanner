@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BACKUP_LATE_MS, parseOhlcv, pickPool, wantsBackup, withBackup } from "./backupCandles";
+import { parseOhlcv, pickPool } from "./backupCandles";
 
 const MINT = "EHVELTZNzTNpxeArcUdTJH1sp5tVHSUTVrU3Favdpump";
 
@@ -102,44 +102,5 @@ describe("parseOhlcv", () => {
   it("is empty for anything else", () => {
     expect(parseOhlcv({ errors: [] }, 1e9)).toEqual([]);
     expect(parseOhlcv({ data: { attributes: { ohlcv_list: [[1, 1, 1, 1, 1]] } } }, 0)).toEqual([]);
-  });
-});
-
-describe("wantsBackup", () => {
-  const k = (t: number, c = 1) => ({ t, o: c, h: c, l: c, c, vol: 1 });
-  it("wants it beside no candles, the stream's alone, or candles starting well after the launch", () => {
-    expect(wantsBackup({ candles: null })).toBe(true);
-    expect(wantsBackup({ candles: [k(0)], source: "stream" })).toBe(true);
-    expect(wantsBackup({ candles: [k(BACKUP_LATE_MS)], source: "pumpfun", launchAt: 0 })).toBe(true);
-    // Pump.fun's from near the launch, or with older candles before them, or no launch known.
-    expect(wantsBackup({ candles: [k(60_000)], source: "mixed", launchAt: 0 })).toBe(false);
-    expect(wantsBackup({ candles: [k(BACKUP_LATE_MS)], older: [k(0)], source: "pumpfun", launchAt: 0 })).toBe(
-      false,
-    );
-    expect(wantsBackup({ candles: [k(BACKUP_LATE_MS)], source: "pumpfun" })).toBe(false);
-  });
-});
-
-describe("withBackup", () => {
-  const k = (t: number, c = 1) => ({ t, o: c, h: c, l: c, c, vol: 1 });
-  it("puts the backup first and the stream's after its newest", () => {
-    const out = withBackup([k(120_000, 5), k(180_000, 6)], "stream", [k(0), k(60_000), k(120_000, 2)]);
-    expect(out?.map((x) => [x.t, x.c])).toEqual([
-      [0, 1],
-      [60_000, 1],
-      [120_000, 2],
-      [180_000, 6],
-    ]);
-  });
-
-  it("adds only the backup's from before Pump.fun's first, and leaves the answer alone otherwise", () => {
-    const pump = [k(600_000, 5), k(660_000, 6)];
-    expect(withBackup(pump, "pumpfun", [k(540_000), k(600_000, 2)])?.map((x) => [x.t, x.c])).toEqual([
-      [540_000, 1],
-      [600_000, 5],
-      [660_000, 6],
-    ]);
-    expect(withBackup(pump, "pumpfun", [k(600_000, 2)])).toBe(pump);
-    expect(withBackup(null, undefined, [k(0)])).toEqual([k(0)]);
   });
 });
