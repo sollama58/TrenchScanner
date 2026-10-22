@@ -250,6 +250,11 @@ export interface Token {
     deskLine?: string | null;
     deskRewards?: { label: string; mint: string | null }[] | null;
     charityName?: string | null;
+    /**
+     * Each fee recipient: a name, or the address shortened when it has none, and its share in
+     * basis points when the read gave one (9900 is 99%).
+     */
+    recipients?: { label: string; bps: number | null }[] | null;
     bps?: number | null;
   } | null;
   /** The coin's own X and website links as found at discovery (https only); null when it has none. */

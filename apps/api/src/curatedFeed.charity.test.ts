@@ -30,6 +30,44 @@ describe("applyCharityNames", () => {
     expect(fees.get("charityMint")?.charityName).toBe("National Breast Cancer Foundation");
     expect(fees.get("devMint")?.charityName).toBeUndefined();
   });
+
+  it("names each charity with its percent and does not copy one name onto every recipient", () => {
+    const creator = "8PQxd6VmfGPMyg8WPnfkT9jUTmtE7UsnDmvBKXeAVP9z";
+    const first = "CYoJ1Hs3Ldk7aa1wpZQ4KfqVQy9AzB9mT3x4Q8qWgyxC";
+    const second = "4NVt2u8V7YwQj3k6mP8sR2tU5vW7xY9zA1bC3dE5fG7";
+    const fees = new Map<string, CardCreatorFee>([
+      ["mint", { destination: "charity", summary: "creator fees go to charity", bps: null }],
+    ]);
+    applyCharityNames(
+      fees,
+      new Map(),
+      new Map([
+        [
+          "mint",
+          [
+            { name: "Red Cross", bps: 6000, address: first },
+            { name: "Unicef", bps: 4000, address: second },
+          ],
+        ],
+      ]),
+      new Map([
+        [
+          "mint",
+          [
+            { label: "8PQx…VP9z", bps: 100, kind: "creator", named: false, address: creator },
+            { label: "CYoJ…gyxC", bps: 6000, kind: "charity", named: false, address: first },
+            { label: "4NVt…5fG7", bps: 4000, kind: "charity", named: false, address: second },
+          ],
+        ],
+      ]),
+    );
+    expect(fees.get("mint")?.charityName).toBeUndefined();
+    expect(fees.get("mint")?.recipients).toEqual([
+      { label: "8PQx…VP9z", bps: 100 },
+      { label: "Red Cross", bps: 6000 },
+      { label: "Unicef", bps: 4000 },
+    ]);
+  });
 });
 
 describe("charityNamesByMint", () => {

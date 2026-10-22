@@ -1,5 +1,12 @@
 import type { Card, Token } from "./api";
-import { creatorFeeLine, feeBadge, holderRewardTaxLabel, shownCharityName } from "./components/AlertCard";
+import {
+  creatorFeeLine,
+  feeBadge,
+  feeRecipientCaption,
+  holderRewardTaxLabel,
+  shownCharityName,
+  shownRewardLabels,
+} from "./components/AlertCard";
 
 type Fee = NonNullable<Token["creatorFee"]>;
 
@@ -14,12 +21,7 @@ export interface CreatorRewardFigure {
 }
 
 function coinLabels(fee: Fee | null | undefined): string[] {
-  const rewards = fee?.deskRewards;
-  if (!rewards?.length) return [];
-  return rewards.flatMap((reward) => {
-    const label = reward.label?.trim();
-    return label ? [label] : [];
-  });
+  return shownRewardLabels(fee);
 }
 
 function coinValue(labels: readonly string[]): string {
@@ -30,6 +32,8 @@ function coinValue(labels: readonly string[]): string {
 function headline(fee: Fee, coins: readonly string[], tax: string | null): string {
   switch (fee.destination) {
     case "holder_rewards":
+      // The reward token is the holder reward. "Holders" with nothing beside it is a blank slot.
+      if (coins.length) return coinValue(coins);
       return tax ? `Holders ${tax}` : "Holders";
     case "cashback":
       return "Cashback";
@@ -41,8 +45,11 @@ function headline(fee: Fee, coins: readonly string[], tax: string | null): strin
     case "x":
     case "x_account":
       return "Social";
-    case "charity":
+    case "charity": {
+      const named = feeRecipientCaption(fee.recipients) ?? null;
+      if (named && named.length <= 42) return named;
       return "Charity";
+    }
     case "github":
       return "GitHub";
     case "creator":
@@ -75,8 +82,14 @@ export function creatorRewardFigure(fee: Fee | null | undefined): CreatorRewardF
   }
   const value = fee ? headline(fee, coins, tax) : coinValue(coins);
   const parts: string[] = [];
-  if (charity) parts.push(charity);
+  const recipients =
+    fee?.destination === "charity" || fee?.destination === "split"
+      ? feeRecipientCaption(fee.recipients)
+      : null;
+  if (recipients && recipients !== value) parts.push(recipients);
+  else if (charity && !value.includes(charity)) parts.push(charity);
   if (coins.length > 0 && !value.includes(coins[0]!)) parts.push(coins.join(", "));
+  if (tax && coins.length > 0 && !value.includes(tax)) parts.push(tax);
   return {
     value,
     detail: parts.length > 0 ? parts.join(" · ") : null,
@@ -86,13 +99,18 @@ export function creatorRewardFigure(fee: Fee | null | undefined): CreatorRewardF
 }
 
 type DeskReward = { label: string; mint: string | null };
+type FeeRecipient = { label: string; bps: number | null };
 
 type DeskView = {
   feeDesk?: string | null;
   feeRewards?: DeskReward[] | null;
   /** The token page's sage read. Its charity name is copied onto the card the square reads. */
   read?: {
-    creatorFee?: { destination?: string | null; charityName?: string | null } | null;
+    creatorFee?: {
+      destination?: string | null;
+      charityName?: string | null;
+      recipients?: { label?: string | null; share?: number | null }[] | null;
+    } | null;
   } | null;
 } | null;
 
@@ -117,6 +135,26 @@ function sameRewards(a: DeskReward[] | null, b: DeskReward[] | null): boolean {
   return a.every((reward, i) => reward.label === b[i]?.label && reward.mint === b[i]?.mint);
 }
 
+function sameRecipients(a: FeeRecipient[] | null, b: FeeRecipient[] | null): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((recipient, i) => recipient.label === b[i]?.label && recipient.bps === b[i]?.bps);
+}
+
+/** Sage shares are fractions (0.99 is 99%). A blank label is not a recipient. */
+function recipientsFromSage(view: DeskView): FeeRecipient[] | null {
+  const list = view?.read?.creatorFee?.recipients;
+  if (!list?.length) return null;
+  const recipients = list.flatMap((recipient) => {
+    const label = recipient.label?.trim();
+    if (!label) return [];
+    const share = recipient.share;
+    const bps = typeof share === "number" && share > 0 && share <= 1 ? Math.round(share * 10_000) : null;
+    return [{ label, bps }];
+  });
+  return recipients.length ? recipients : null;
+}
+
 /**
  * The token view's card, with OTC Desks' reward coins from the sage read when the feed card
  * was built before the roster was cached. The sentence and its coins always come from the
@@ -134,11 +172,13 @@ export function cardWithOtcDesk<T extends Card>(card: T, view: DeskView): T {
         fee.charityName ??
         null)
       : (fee?.charityName ?? null);
+  const recipients = fee?.recipients?.length ? fee.recipients : recipientsFromSage(view);
   const sameCharity = (fee?.charityName ?? null) === (charityName ?? null);
   const sameDesk =
     (cardDesk?.line ?? null) === (desk?.line ?? null) &&
     sameRewards(cardDesk?.rewards ?? null, desk?.rewards ?? null);
-  if (sameCharity && sameDesk) return card;
+  const samePeople = sameRecipients(fee?.recipients ?? null, recipients);
+  if (sameCharity && sameDesk && samePeople) return card;
   return {
     ...card,
     token: {
@@ -148,6 +188,7 @@ export function cardWithOtcDesk<T extends Card>(card: T, view: DeskView): T {
         summary: fee?.summary ?? null,
         bps: fee?.bps ?? null,
         charityName,
+        recipients,
         deskLine: desk?.line ?? null,
         deskRewards: desk?.rewards ?? null,
       },
