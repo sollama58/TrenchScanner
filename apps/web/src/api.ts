@@ -273,6 +273,8 @@ export interface Token {
   /** The coin the token's pair trades against (wrapped SOL for most); null until a reading names it. */
   quoteMint?: string | null;
   quoteSymbol?: string | null;
+  /** The quote coin's image, from its own Token row (https); null or absent when it has none. */
+  quoteImageUrl?: string | null;
   /**
    * DexScreener enhanced token info (profile, links, images). True once a pair info block or a
    * token-info payment was seen. Absent on API builds from before 2026-10-21.

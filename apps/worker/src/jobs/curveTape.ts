@@ -10,6 +10,7 @@ import {
 } from "@trenchscanner/core";
 import { streamCredits, type HeliusAccountStream } from "../discovery/heliusAccountStream.js";
 import { recordPricePath } from "./pricePathRecorder.js";
+import { curveTapeDropped, type CurveTapeView } from "./curveCandles.js";
 
 const logger = createLogger("curve-tape");
 
@@ -208,6 +209,12 @@ export function curveLabelPrices(mint: string, afterMs: number, untilMs: number)
   return tape.labelPrices(mint, afterMs, untilMs);
 }
 
+/** The coins followed and their changes, for the chart's 1-second candles (curveCandles.ts). */
+export const curveTapeView: CurveTapeView = {
+  mints: () => followed.keys(),
+  ticksAfter: (mint, after) => tape.ticksAfter(mint, after),
+};
+
 /** Counts since the last call, for the scan's heartbeat; null while the tape is off. */
 export function takeCurveTapeStats(now = Date.now()) {
   if (!cfg) return null;
@@ -232,6 +239,8 @@ function drop(mint: string, forGood: boolean): void {
   if (followed.delete(mint)) stream?.unwatch(keyOf(mint));
   // The path the tape held is saved as training data for predictive price pathing (when it is on).
   recordPricePath(mint, tape.snapshot(mint), forGood ? "graduated" : "aged");
+  // And its last 1-second chart candles (curveCandles.ts).
+  curveTapeDropped(mint, tape);
   tape.forget(mint);
   if (forGood) {
     if (done.size >= MAX_DONE) done.clear();

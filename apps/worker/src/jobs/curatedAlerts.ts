@@ -37,6 +37,7 @@ import {
   TOP_SLICE_MODEL_KIND,
   calibratedWinRate,
   calibratedWinRateAtRank,
+  cappedCalibratedRate,
   convictionTier,
   EMPTY_LIVE_SCALES,
   loadLiveScales,
@@ -50,6 +51,7 @@ import {
   RULES_CONTESTANT,
   RULES_GATE_SIGNAL,
   NARRATIVE_CONTESTANT,
+  loadNarrativeAlertsPause,
   CONTESTANTS,
   RULES_MODEL_KIND,
   STACKED_MODEL_KIND,
@@ -77,6 +79,7 @@ import {
   type StackedCuratorParams,
   type TrainedCuratorParams,
   aiReviewerState,
+  requestCandleBackfill,
 } from "@trenchscanner/core";
 import { carryHolderReadingOntoAlertRow } from "./holderListWrites.js";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
@@ -508,7 +511,6 @@ function decideCurations(
   /** Filled with every learner's probability, the retired ones scoring for a combiner included. */
   memberScores: Map<string, number> = new Map(),
 ): Map<string, CurationDecision> {
-  const { lines } = live;
   const features = buildCandidateFeatures(scored);
   const decisions = new Map<string, CurationDecision>();
   const probabilities = new Map<string, number>();
@@ -531,7 +533,7 @@ function decideCurations(
         reasons: curate ? topModelReasons(params, features) : [],
         rationale: modelRationale(params, features),
         source: id,
-        ...servedFields(params, probability, lines.get(entry.spec.id), own),
+        ...servedFields(params, probability, entry.spec.id, live, own),
       });
       continue;
     }
@@ -564,7 +566,7 @@ function decideCurations(
         confidence: probability * 100,
         reasons: curate ? topModelReasons(params, features) : [],
         source: id,
-        ...servedFields(params, probability, lines.get(entry.spec.id), own),
+        ...servedFields(params, probability, entry.spec.id, live, own),
       });
     }
   }
@@ -621,7 +623,7 @@ function decideCurations(
         confidence: probability * 100,
         reasons,
         source: id,
-        ...servedFields(params, probability, lines.get(entry.spec.id)),
+        ...servedFields(params, probability, entry.spec.id, live),
       });
       continue;
     }
@@ -651,7 +653,7 @@ function decideCurations(
         confidence: probability * 100,
         reasons,
         source: id,
-        ...servedFields(params, probability, lines.get(entry.spec.id)),
+        ...servedFields(params, probability, entry.spec.id, live),
       });
       continue;
     }
@@ -686,7 +688,7 @@ function decideCurations(
       confidence: probability * 100,
       reasons,
       source: id,
-      ...servedFields(params, probability, lines.get(entry.spec.id)),
+      ...servedFields(params, probability, entry.spec.id, live),
     });
   }
   return decisions;
@@ -700,17 +702,23 @@ function decideCurations(
 function servedFields(
   params: ServedCuratorExtras,
   probability: number,
-  liveLine: number | undefined,
+  seat: string,
+  live: LiveScales,
   /** The seat's own live scores, when its rank is read on them (learners - see liveScale.ts). */
   liveScores?: readonly number[],
 ): Pick<CurationDecision, "tier" | "calibratedPct"> {
   const out: Pick<CurationDecision, "tier" | "calibratedPct"> = {};
-  const tier = convictionTier(probability, params.highConvictionThreshold, liveLine);
+  const tier = convictionTier(probability, params.highConvictionThreshold, live.lines.get(seat));
   if (tier !== undefined) out.tier = tier;
-  const rate =
+  let rate =
     liveScores === undefined
       ? calibratedWinRate(params.calibration, probability)
       : calibratedWinRateAtRank(params.calibration, rankAmong(liveScores, probability));
+  // Never above what the seat's live moments at this rank did (curation/liveRankRates.ts).
+  const ranked = liveScores ?? usableLiveScores(live.scores, seat);
+  if (ranked !== undefined) {
+    rate = cappedCalibratedRate(rate, live.rankRates?.get(seat), rankAmong(ranked, probability));
+  }
   if (rate !== null) out.calibratedPct = Math.round(rate * 1000) / 10;
   return out;
 }
@@ -1134,6 +1142,16 @@ async function emitForModel(
       ])
     : [0, 0];
   const capacity = governorCapacity({ lastHour, lastBurstWindow }, env.CURATED_TARGET_PER_HOUR);
+  // A failed read leaves the seat calling, as it did before the pause existed.
+  const narrativePaused =
+    model === NARRATIVE_CONTESTANT &&
+    (await loadNarrativeAlertsPause().then(
+      (p) => {
+        if (p.paused) logger.info("narrative seat's own cards paused", { lift: p.lift, graded: p.graded });
+        return p.paused;
+      },
+      () => false,
+    ));
   // Every seat's picks can be reviewed: which ones is reviewPriority's call (the high-conviction
   // tier, user decision 2026-10-14), not the seat's.
   // The Admin panel's AI reviewer switch sits on top of the key and the mode: "off" asks
@@ -1227,6 +1245,9 @@ async function emitForModel(
       );
       continue;
     }
+    // While the Narrative seat runs below the market it sends no cards of its own; its notes on
+    // other seats' cards (above) still land (curation/narrativeNote.ts, loadNarrativeAlertsPause).
+    if (narrativePaused) continue;
     // One pick's write failing (a pool timeout, say) must not take the rest of the cycle's picks
     // down with it. The failed pick tries again next cycle.
     let result: Awaited<ReturnType<typeof emitCuratedAlert>>;
@@ -1398,6 +1419,11 @@ async function emitCuratedAlert(
   // After the create, never before - same contract as notifyMatchCreated: the row must exist by
   // the time a connected dashboard reacts to the nudge. Failure is its own logged non-event.
   await notifyCuratedAlert({ alertId: alert.id, model });
+  // The called coin's chart history back to its launch, saved once (candleBackfill.ts).
+  if (env.CANDLE_STORE)
+    void requestCandleBackfill(token.mintAddress, "call").catch((err: unknown) =>
+      logger.warn("candle backfill not asked", { mint: token.mintAddress, error: String(err) }),
+    );
 
   logger.info("curated alert emitted", {
     model,

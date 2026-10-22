@@ -1226,7 +1226,7 @@ function TokenBody({
         ) : reward.otcDesk && detailCard.token.creatorFee?.deskRewards?.length ? (
           <>
             <DeskRewardTokens rewards={detailCard.token.creatorFee.deskRewards} className="tm-desk-rewards" />
-            {reward.detail && <small className="num muted">{reward.detail}</small>}
+            {reward.logoDetail && <small className="num muted">{reward.logoDetail}</small>}
           </>
         ) : (
           <>

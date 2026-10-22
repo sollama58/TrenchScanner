@@ -35,6 +35,7 @@ import { creatorFeeWalletAddresses, resolveOtcDeskFee, type OtcDeskFee } from ".
 import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
 import { liveCurves, MAX_WAIT_MS, type LiveCurveAnswer } from "../liveCurve.js";
 import { recordCandleAnswer } from "../chartHealth.js";
+import { storingFetcher } from "../candleStore.js";
 import { chartOpened } from "../chartMarkFill.js";
 import { liveTrades, type LiveTradesAnswer } from "../liveTrades.js";
 import { liveTraderLabels } from "../liveTraderLabels.js";
@@ -311,7 +312,10 @@ export const CHART_CALLS_PER_MINUTE = 200;
 let chartBudget = new CallBudget(CHART_CALLS_PER_MINUTE);
 
 /** One per process: every reader of a coin shares its Pump.fun call and the call budget. */
-let candleCache = new CandleCache(pumpFunCandleFetcher(), { callsPerMinute: 80, shared: chartBudget });
+let candleCache = new CandleCache(storingFetcher(pumpFunCandleFetcher(), 60), {
+  callsPerMinute: 80,
+  shared: chartBudget,
+});
 
 /**
  * The first-minutes view's candles: 1-second ones while a coin is inside its first minutes (a
@@ -324,7 +328,7 @@ let secondCache = new CandleCache(pumpFunCandleFetcher(undefined, "1s"), {
   shared: chartBudget,
   maxEntries: 100,
 });
-let quarterCache = new CandleCache(pumpFunCandleFetcher(undefined, "15s"), {
+let quarterCache = new CandleCache(storingFetcher(pumpFunCandleFetcher(undefined, "15s"), 15), {
   ttlMs: 60_000,
   callsPerMinute: 40,
   shared: chartBudget,
@@ -346,7 +350,7 @@ let fineSecondCache = new CandleCache(pumpFunCandleFetcher(undefined, "1s"), {
  * The 5-minute candles before the minute page's first (TokenChart.older): read only for a coin
  * whose minute page no longer reaches its launch, and kept a good while, since that stretch is over.
  */
-let olderCache = new CandleCache(pumpFunCandleFetcher(undefined, "5m"), {
+let olderCache = new CandleCache(storingFetcher(pumpFunCandleFetcher(undefined, "5m"), 300), {
   ttlMs: 10 * 60_000,
   callsPerMinute: 20,
   shared: chartBudget,

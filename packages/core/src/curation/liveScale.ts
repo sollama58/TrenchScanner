@@ -20,6 +20,7 @@
  * cutoff and tables. Live scores don't depend on any cutoff, so there is no feedback loop: the
  * cutoff only follows the market's own flow of moments, as the exam's share did.
  */
+import type { RankRateBand } from "./liveRankRates.js";
 import type { IsotonicCalibration } from "./calibration.js";
 import { quantileTable, rankFromQuantiles } from "./stacking.js";
 import { NEVER_EMIT_THRESHOLD } from "./trainingRun.js";
@@ -173,6 +174,11 @@ export interface LiveScales {
   tables: ReadonlyMap<string, number[]>;
   /** Each seat's high-conviction line on its live scores, where it has enough of them. */
   lines: ReadonlyMap<string, number>;
+  /**
+   * Each seat's measured 2x rate by live rank band (curation/liveRankRates.ts), which caps the
+   * calibrated rate a card shows. Absent when it couldn't be read: the run's rate stands.
+   */
+  rankRates?: ReadonlyMap<string, readonly RankRateBand[]>;
 }
 
 export const EMPTY_LIVE_SCALES: LiveScales = { scores: new Map(), tables: new Map(), lines: new Map() };

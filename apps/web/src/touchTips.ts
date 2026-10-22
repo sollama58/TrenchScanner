@@ -64,8 +64,11 @@ export function installTouchTips(doc: Document = document): () => void {
   };
 }
 
-/** Above the element when there is room, else below it; kept inside the window either way. */
-function place(el: Element, tip: HTMLElement, win: Window) {
+/**
+ * Above the element when there is room, else below it; kept inside the window either way. The
+ * OTC reward coins' tooltip (DeskRewardTokens.tsx) places itself the same way.
+ */
+export function place(el: Element, tip: HTMLElement, win: Window) {
   const r = el.getBoundingClientRect();
   const margin = 8;
   const vw = win.innerWidth;
