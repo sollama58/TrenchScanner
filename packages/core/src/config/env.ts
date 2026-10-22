@@ -308,6 +308,26 @@ const envSchema = z.object({
   // instead of CURVE_TAPE_MAX_AGE_MINUTES (user ask 2026-10-18).
   PRICE_PATH_FOLLOW_MINUTES: z.coerce.number().positive().default(30),
   PRICE_PATH_RETENTION_DAYS: z.coerce.number().int().positive().default(21),
+  // The closed-candle store (core's candles/, user decision 2026-10-22 "Store candles + backfill"):
+  // the worker saves its curve tape's 1-second bars each minute, and the API saves the closed
+  // Pump.fun pages it already reads, so a chart's history no longer ends at a source's newest
+  // 1,000 intervals. "false" stops every write and the backfill; GET /tokens/:mint/candles still
+  // serves what is stored.
+  CANDLE_STORE: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  // 1-second and 15-second bars are kept this many days; minute and wider ones for the coin's
+  // tracked life (while it is on Token), at most CANDLE_RETENTION_DAYS. Swept by the nightly cleanup.
+  CANDLE_FINE_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+  CANDLE_RETENTION_DAYS: z.coerce.number().int().positive().default(90),
+  // The one-time backfill to launch (worker's jobs/candleBackfill.ts) when a chart opens or a coin
+  // is called: Pump.fun's 5-minute page, then GeckoTerminal's minute pages back to the launch or
+  // the pool's creation. Its GeckoTerminal calls a minute, inside the worker's background budget
+  // (GeckoTerminal's free 30 a minute per IP is shared with the market-data fallback), and the
+  // pages one coin may take at most (1,000 minutes each).
+  CANDLE_BACKFILL_GECKO_PER_MINUTE: z.coerce.number().int().nonnegative().default(4),
+  CANDLE_BACKFILL_MAX_PAGES: z.coerce.number().int().positive().default(60),
   // The token chart's live tail (api's liveCurve.ts, user ask 2026-10-17: charts on the stream's
   // second-by-second updates): while a young coin's chart is open, the API follows its bonding curve
   // on its own Helius websocket (an update per changed block) and the chart draws every change,
