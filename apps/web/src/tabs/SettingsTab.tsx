@@ -9,6 +9,7 @@ import { ProModeCard } from "../components/ProModeCard";
 import { FeedPanel } from "../components/FeedPanel";
 import { ConnectPhonePanel } from "../components/ConnectPhonePanel";
 import { TwoFactorPanel } from "../components/TwoFactorPanel";
+import { ModelAlertKeysPanel } from "../components/ModelAlertKeys";
 import { PrivyWalletPanel } from "../components/PrivyWalletPanel";
 import { TradingSettingsPanel } from "../components/TradingSettingsPanel";
 import { TrackedWalletsPanel } from "../components/TrackedWallets";
@@ -81,6 +82,7 @@ export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live"
       {/* Phone pairing by QR is for wallet sign-ins only (user rule 2026-10-18). */}
       {me?.signInMethod === "privy" ? <PrivyWalletPanel /> : <ConnectPhonePanel />}
       <TwoFactorPanel />
+      <ModelAlertKeysPanel />
     </div>
   );
 }

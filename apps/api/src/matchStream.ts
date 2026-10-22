@@ -111,6 +111,11 @@ export class MatchStream {
   private readonly subscribers = new Set<Subscriber>();
   /** Work to run on this instance when a curated alert is announced - see onCuratedAlert. */
   private readonly curatedListeners = new Set<(model?: string) => void>();
+  /**
+   * Work that needs the new alert's id (the Model Alert websocket). Not invoked on a LISTEN
+   * reconnect: catchUp has no id, and replaying whatever is already stored would be a backlog.
+   */
+  private readonly curatedIdListeners = new Set<(alertId: string) => void>();
   /** Set after the first successful LISTEN, so a later one is known to be a reconnect. */
   private hasListened = false;
   /** Work to run on this instance when a match is announced, given its user - see onMatch. */
@@ -347,6 +352,14 @@ export class MatchStream {
     }
     if (!notification?.alertId) return;
 
+    for (const listener of this.curatedIdListeners) {
+      try {
+        listener(notification.alertId);
+      } catch (err) {
+        logger.warn("curated alert id listener failed", { error: String(err) });
+      }
+    }
+
     // Before the nudge goes out, not after: the clients this wakes will refetch within
     // milliseconds, and this instance holds a few seconds of cached feed pages. Serving those
     // the pre-alert rows made the push pointless - the new card then waited out the client's
@@ -388,6 +401,17 @@ export class MatchStream {
   onCuratedAlert(listener: (model?: string) => void): () => void {
     this.curatedListeners.add(listener);
     return () => this.curatedListeners.delete(listener);
+  }
+
+  /**
+   * Runs `listener` with the new CuratedAlert id when a curated NOTIFY arrives.
+   *
+   * Unlike onCuratedAlert(), this is not called on a LISTEN reconnect. Callers that push the
+   * alert itself (the Model Alert websocket) use it so they send that id and nothing older.
+   */
+  onCuratedAlertId(listener: (alertId: string) => void): () => void {
+    this.curatedIdListeners.add(listener);
+    return () => this.curatedIdListeners.delete(listener);
   }
 
   /** As onCuratedAlert(), for a match: called with the user it belongs to, before their nudge. */

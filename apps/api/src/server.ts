@@ -4,6 +4,7 @@ import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import compress from "@fastify/compress";
+import websocket from "@fastify/websocket";
 import {
   type Env,
   corsOriginList,
@@ -61,6 +62,8 @@ import { registerSubscriptionRoutes } from "./routes/subscription.js";
 import { registerStatsRoutes } from "./routes/stats.js";
 import { registerStatsModelRoutes } from "./routes/statsModels.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
+import { registerModelAlertKeyRoutes } from "./routes/modelAlertKeys.js";
+import { registerModelAlertSocket } from "./routes/modelAlertSocket.js";
 import { registerTelegramRoutes } from "./routes/telegram.js";
 import { registerUtilityRoutes } from "./routes/utilities.js";
 import { registerXPreviewRoutes } from "./routes/xPreview.js";
@@ -73,6 +76,9 @@ import { registerPortfolioRoutes } from "./routes/portfolio.js";
 import { registerProTradesRoutes } from "./routes/proTrades.js";
 import { registerAdminProModeRoutes } from "./routes/adminProMode.js";
 import { MatchStream } from "./matchStream.js";
+import { ModelAlertHub } from "./modelAlertHub.js";
+import { loadModelAlert } from "./modelAlertPayload.js";
+import { modelAlertKeyAccess } from "./modelAlertKey.js";
 import { ViewStampBuffer } from "./viewStamps.js";
 import { OnDemandLiveRefresher } from "./liveRefresh.js";
 import { registerLiveRoutes, LIVE_TICK_MAX_TOKENS } from "./routes/live.js";
@@ -168,6 +174,9 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // route in Admin > API usage - see withApiFeature in core's apiUsage.ts. Added before any route
   // is registered, so every plugin's routes inherit it.
   app.addHook("onRoute", (route) => {
+    // The websocket handler is (socket, request), not (request, reply). Wrapping it would hand
+    // the socket to withApiFeature as if it were a request. @fastify/websocket reads route.handler.
+    if ((route as { websocket?: boolean }).websocket) return;
     const handler = route.handler;
     const feature = `api ${route.url}`;
     route.handler = function (this: FastifyInstance, request, reply) {
@@ -187,7 +196,9 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   });
   app.addHook("onResponse", async (request, reply) => {
     const route = routeKey(request);
-    if (route.endsWith("/stream")) return;
+    // Streams and the Model Alert socket stay open for the life of the connection. Timing them
+    // would record that whole life as one slow request.
+    if (route.endsWith("/stream") || route.endsWith("/v1/model-alerts")) return;
     const ms = reply.elapsedTime;
     timings.record(route, ms, reply.statusCode);
     if (ms >= SLOW_REQUEST_LOG_MS)
@@ -251,6 +262,18 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // switched off to avoid meaningless header bloat. Everything else (nosniff, frame-deny, HSTS,
   // referrer-policy, ...) still applies.
   await app.register(helmet, { contentSecurityPolicy: false });
+  // Before any route: the Model Alert socket is a later plugin, and this one adds the upgrade
+  // hook the route's `websocket: true` depends on. Errors here must not log the request URL:
+  // it can carry the API key.
+  await app.register(websocket, {
+    errorHandler: (error, socket, request) => {
+      logger.warn("websocket error", {
+        url: request.routeOptions?.url ?? request.url.split("?")[0],
+        error: error.message,
+      });
+      socket.terminate();
+    },
+  });
 
   /**
    * Registered globally so every route gets a sane default; individual routes (see auth.ts's
@@ -567,7 +590,13 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   const matchStream = new MatchStream(env.DATABASE_URL);
   matchStream.start();
   app.decorate("matchStream", matchStream);
+  // Curated NOTIFY ids, for sockets that authenticated with a Model Alert key. Stopped in the
+  // same preClose as the LISTEN connection, before the HTTP server waits on open sockets.
+  const modelAlertHub = new ModelAlertHub(matchStream, loadModelAlert, async (wallet) =>
+    modelAlertKeyAccess(await resolveAccess(wallet, admins)),
+  );
   app.addHook("preClose", async () => {
+    modelAlertHub.stop();
     await matchStream.stop();
   });
 
@@ -736,6 +765,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // Hover previews of a coin's X link, read through FxTwitter so the browser never loads X.
   await app.register(registerXPreviewRoutes, { prefix: "/x-preview" });
   await app.register(registerSettingsRoutes, { prefix: "/settings", env });
+  await app.register(registerModelAlertKeyRoutes, { prefix: "/settings", env });
+  await app.register(registerModelAlertSocket, { hub: modelAlertHub, env });
   // Telegram alerts: link codes and chats for the signed-in account, and the bot's webhook.
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env });
   // The trading bot (admin-only; nothing is registered without TRADING_BOT_ENABLED).
