@@ -21,6 +21,7 @@ import {
   sendViaSender,
   signedMatchesBuild,
   messageUnitLimit,
+  MintInfoReuse,
   sellableAfterTransferFee,
   splitTokenBalance,
   solShortfall,
@@ -333,6 +334,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   const tradeCache = new Map<string, WalletTrade | null>();
   const positions = new Map<string, { at: number; body: unknown }>();
   const supplies = new Map<string, { at: number; raw: bigint; decimals: number }>();
+  // The position poll's mint reads, kept while they can't change (Helius audit 2026-10-23, N-2).
+  const positionMints = new MintInfoReuse((mint) => rpc.getMintInfo(mint));
   const swapCosts = new Map<string, { at: number; costs: SwapCosts | null }>();
   /** The swap costs for a wallet's buy of `ref` lamports of `mint`, cached; null when they can't be read. */
   const swapCostsFor = async (wallet: string, mint: string, ref: bigint): Promise<SwapCosts | null> => {
@@ -1311,10 +1314,13 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const epoch = positionEpochs.get(wallet) ?? 0;
     const [balance, history, supply, solUsd, mintInfo] = await Promise.all([
       rpc.getTokenBalance(wallet, mint),
-      walletTokenTrades(rpc, wallet, mint, tradeCache),
+      // Once the mint is known to stay under its program, only that program's account is read.
+      walletTokenTrades(rpc, wallet, mint, tradeCache, undefined, {
+        program: positionMints.fixedProgram(mint),
+      }),
       supplyOf(mint),
       solPrice.get().catch(() => null),
-      rpc.getMintInfo(mint).catch(() => null),
+      positionMints.get(mint),
     ]);
     if (!balance) return null;
     const split = mintInfo

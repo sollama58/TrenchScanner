@@ -7,6 +7,7 @@ import {
   clearedKeys,
   CREDITS_OUT_BANNER,
   creditsOutFlows,
+  canaryQuietMs,
   findCanaryProblems,
   findCapacityProblems,
   findCreditProblems,
@@ -203,10 +204,10 @@ describe("pipeline watch: what counts as stalled", () => {
       lastError,
     });
     // Never ran (switched off, not deployed), healthy, or one failure: nothing to tell.
-    expect(findCanaryProblems(null, NOW)).toEqual([]);
-    expect(findCanaryProblems(canary(0), NOW)).toEqual([]);
-    expect(findCanaryProblems(canary(1, MIN, "trade canary: sender: 503"), NOW)).toEqual([]);
-    const out = findCanaryProblems(canary(2, MIN, "trade canary: curve: CurveA…: no route\nstack"), NOW);
+    expect(findCanaryProblems(null, NOW, 15)).toEqual([]);
+    expect(findCanaryProblems(canary(0), NOW, 15)).toEqual([]);
+    expect(findCanaryProblems(canary(1, MIN, "trade canary: sender: 503"), NOW, 15)).toEqual([]);
+    const out = findCanaryProblems(canary(2, MIN, "trade canary: curve: CurveA…: no route\nstack"), NOW, 15);
     expect(out).toEqual([
       {
         key: "trade-canary",
@@ -215,10 +216,19 @@ describe("pipeline watch: what counts as stalled", () => {
         trading: true,
       },
     ]);
-    // Silent for half an hour: the same key, so a stop and a failure are one notice.
-    expect(findCanaryProblems(canary(0, 30 * MIN), NOW)).toMatchObject([
+    // Silent for half an hour at the old 5-minute cadence: the same key, so a stop and a failure
+    // are one notice.
+    expect(findCanaryProblems(canary(0, 30 * MIN), NOW, 5)).toMatchObject([
       { key: "trade-canary", text: "Pro trade canary: no run for 30 min" },
     ]);
+    // At 15 minutes (user ask 2026-10-23) half an hour is one late run, not a stop; three
+    // intervals without a run is.
+    expect(findCanaryProblems(canary(0, 30 * MIN), NOW, 15)).toEqual([]);
+    expect(findCanaryProblems(canary(0, 46 * MIN), NOW, 15)).toMatchObject([
+      { key: "trade-canary", text: "Pro trade canary: no run for 46 min" },
+    ]);
+    expect(canaryQuietMs(5)).toBe(25 * MIN);
+    expect(canaryQuietMs(15)).toBe(45 * MIN);
     const text = notificationText(out, [], out);
     expect(text).toMatch(/^<b>⚠️ TrenchScanner Pro trading needs a look<\/b>\n• Pro trade canary: 2 runs/);
     expect(text).not.toContain("scanner jobs");

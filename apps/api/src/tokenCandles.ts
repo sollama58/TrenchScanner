@@ -40,11 +40,21 @@ const WIDENINGS = 4;
 /**
  * How far each source is trusted: of two sources' bars at the same width and start the higher's
  * stands, and of two that both fold into the timeframe the higher's cover is read (core's
- * baseSegments). Pump.fun's pages count every trade; the curve tape every curve change (after
- * graduation, every change of the coin's PumpSwap pool); GeckoTerminal lags and has gaps of its
- * own; the live tail's stream has no volume and keeps 20 minutes.
+ * baseSegments). Pump.fun's pages and the trade tape's chain reads count every trade; the curve
+ * tape every curve change (after graduation, every change of the coin's PumpSwap pool), as does
+ * the API's own stream once saved ("chart"); GeckoTerminal lags and has gaps of its own; the live
+ * tail's stream, unsaved, has no volume and keeps 20 minutes.
  */
-export const SOURCE_PRIORITY = { live: 5, pumpfun: 4, curve: 3, pool: 3, gecko: 2, stream: 1 } as const;
+export const SOURCE_PRIORITY = {
+  live: 5,
+  pumpfun: 4,
+  tape: 4,
+  curve: 3,
+  pool: 3,
+  chart: 3,
+  gecko: 2,
+  stream: 1,
+} as const;
 
 export interface TokenCandlesAnswer {
   mint: string;

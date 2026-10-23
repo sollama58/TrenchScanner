@@ -69,6 +69,11 @@ export interface CurveTapeConfig {
    * null for coins past it. Defaults to maxAgeMinutes.
    */
   featureMaxAgeMinutes?: number;
+  /**
+   * Age to which a coin a seat alerted on is followed, on the watchlist or not, for the chart's
+   * 1-second candles (CURVE_TAPE_ALERTED_MINUTES, user decision 2026-10-23). Defaults to maxAgeMinutes.
+   */
+  alertedMaxAgeMinutes?: number;
   maxMints: number;
   streamCreditsPerDay: number;
   pollSeconds: number;
@@ -94,6 +99,8 @@ interface Followed {
   readAt: number | null;
   /** The coin's launch (or first sighting), ms epoch. */
   bornAt: number;
+  /** Followed to this age (ms): longer for an alerted coin. */
+  maxAgeMs: number;
 }
 
 type PoolPart = "base" | "quote" | "account";
@@ -283,7 +290,7 @@ function graduate(mint: string, state: CurveState, now: number): void {
   pools.set(mint, {
     address,
     vaults: null,
-    until: Math.max(f.bornAt + cfg.maxAgeMinutes * 60_000, now + POOL_FOLLOW_MS),
+    until: Math.max(f.bornAt + f.maxAgeMs, now + POOL_FOLLOW_MS),
     readAt: null,
     base: null,
     quote: null,
@@ -328,29 +335,38 @@ function dropPool(mint: string, save = true): void {
   poolTape.forget(mint);
 }
 
+/** A coin as followYoungCurves reads it. */
+interface TrackedCoin {
+  mintAddress: string;
+  launchedAt: Date | null;
+  firstSeenAt: Date;
+  launchpad: string | null;
+}
+
 /**
  * The scan's watchlist this cycle, in its order: the young Pump.fun coins in it are followed (up
- * to CURVE_TAPE_MAX_MINTS), and the ones that left it or aged out are dropped.
+ * to CURVE_TAPE_MAX_MINTS), and the ones that left it or aged out are dropped. `alerted`: coins a
+ * seat alerted on lately, followed to alertedMaxAgeMinutes whether on the watchlist or not, after it.
  */
 export function followYoungCurves(
-  tracked: readonly {
-    mintAddress: string;
-    launchedAt: Date | null;
-    firstSeenAt: Date;
-    launchpad: string | null;
-  }[],
+  tracked: readonly TrackedCoin[],
   now = Date.now(),
+  alerted: readonly TrackedCoin[] = [],
 ): void {
   if (!cfg) return;
   const maxAgeMs = cfg.maxAgeMinutes * 60_000;
+  const alertedAgeMs = Math.max(maxAgeMs, (cfg.alertedMaxAgeMinutes ?? 0) * 60_000);
+  const isAlerted = new Set(alerted.map((t) => t.mintAddress));
   const wanted = new Map<string, number>();
   const bornAtOf = new Map<string, number>();
-  for (const t of tracked) {
+  for (const t of [...tracked, ...alerted]) {
     if (wanted.size >= cfg.maxMints) break;
+    if (wanted.has(t.mintAddress)) continue;
     if (t.launchpad === STONKS_LAUNCHPAD || done.has(t.mintAddress)) continue;
-    if (now - (t.launchedAt ?? t.firstSeenAt).getTime() > maxAgeMs) continue;
+    const bornAt = (t.launchedAt ?? t.firstSeenAt).getTime();
+    if (now - bornAt > (isAlerted.has(t.mintAddress) ? alertedAgeMs : maxAgeMs)) continue;
     wanted.set(t.mintAddress, wanted.size);
-    bornAtOf.set(t.mintAddress, (t.launchedAt ?? t.firstSeenAt).getTime());
+    bornAtOf.set(t.mintAddress, bornAt);
   }
   for (const mint of followed.keys()) if (!wanted.has(mint)) drop(mint, false);
   for (const [mint, rank] of wanted) {
@@ -358,10 +374,11 @@ export function followYoungCurves(
     if (!f) {
       const curve = pumpCurveAddressOf(mint);
       if (!curve) continue;
-      f = { curve, rank, readAt: null, bornAt: bornAtOf.get(mint) ?? now };
+      f = { curve, rank, readAt: null, bornAt: bornAtOf.get(mint) ?? now, maxAgeMs };
       followed.set(mint, f);
     }
     f.rank = rank;
+    f.maxAgeMs = isAlerted.has(mint) ? alertedAgeMs : maxAgeMs;
     // Again every cycle: it keeps the subscription from being evicted as unwatched.
     if (!paused) stream?.watch(keyOf(mint), [f.curve], now, "account");
   }
@@ -384,7 +401,7 @@ function followNewLaunches(mints: readonly string[], now: number): void {
     if (followed.has(mint) || done.has(mint)) continue;
     const curve = pumpCurveAddressOf(mint);
     if (!curve) continue;
-    followed.set(mint, { curve, rank: 0, readAt: null, bornAt: now });
+    followed.set(mint, { curve, rank: 0, readAt: null, bornAt: now, maxAgeMs: cfg.maxAgeMinutes * 60_000 });
     if (!paused) stream?.watch(keyOf(mint), [curve], now, "account");
   }
 }

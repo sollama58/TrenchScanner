@@ -211,6 +211,11 @@ export interface KnownFunder {
   fundedAt: Date | null;
 }
 
+/** A stored answer as part of an in-flight key: two reads share only when they hand in the same one. */
+function knownFunderKey(known: KnownFunder | undefined): string {
+  return known ? JSON.stringify([known.funder, known.amountSol, known.fundedAt?.getTime() ?? null]) : "";
+}
+
 /**
  * One wallet as the chain has it now, for the wallet modal (getWalletOverview): its SOL balance and
  * its newest page of signatures. `txCount` is exact when `complete` (the page is its whole history,
@@ -394,10 +399,24 @@ const GPA_V2_MAX_PAGES = 5;
  * fuller page still yields a usable upper bound rather than a shrug - see EarliestActivityResult
  * and the "older-than" case. The residual blind spot is a wallet with 200+ transactions inside
  * the freshness window, which was equally unresolvable at 1000 for a busier wallet.
+ *
+ * Since the Helius audit of 2026-10-23 (N-1) the request itself is the funder reads' 1000 page,
+ * shared with them, and only its first 200 rows are read here: the funders read most of these
+ * wallets in the same cycle, so one 1000 page is fewer bytes than a 200 page plus a 1000 page, and
+ * one credit instead of two. The answer is still the 200 page's.
  */
 const SIGNATURES_PAGE_LIMIT = 200;
 /** getSignaturesForAddress's largest page - still one credit - for the funder reads. */
 const FUNDER_SIGNATURES_LIMIT = 1000;
+/**
+ * How long one wallet's newest signatures page (FUNDER_SIGNATURES_LIMIT, finalized) is reused by
+ * the other readers of the same page: freshness, funders and the hot-funder check run side by side
+ * in a cycle over the same top holders, and each used to pay its own credit for it (Helius audit
+ * 2026-10-23, N-1). Well under a cycle, so a reused page is never older than the stages that share it.
+ */
+const SIGNATURES_PAGE_REUSE_MS = 30_000;
+/** Pages kept at once; the oldest goes first. Each is up to 1,000 trimmed rows. */
+const MAX_REUSED_SIGNATURE_PAGES = 1_000;
 
 /**
  * How many consecutive rounds where the Helius-only path returns NOTHING usable before we stop
@@ -716,6 +735,23 @@ export class HeliusClient {
   private taboV2StoodDownUntil = 0;
   /** RPC method invocations issued since the last takeCallStats() - the number a plan bills on. */
   private readonly callCounts = new Map<string, number>();
+  /**
+   * Newest signatures pages read in the last SIGNATURES_PAGE_REUSE_MS, by wallet, in read order,
+   * and the reads still in flight (signaturePages). A failed read is not kept.
+   */
+  private readonly signaturePagesRead = new Map<string, { page: WalletSignaturesPage; atMs: number }>();
+  private readonly signaturePagesInFlight = new Map<
+    string,
+    Promise<RpcResponse<SignaturesResult> | undefined>
+  >();
+  /**
+   * Reads in flight by key, so an entry fast scan and the cycle asking the same thing at once share
+   * one request (Helius audit 2026-10-23, N-3): the fast scan's stages run outside the cycle's
+   * whole-stage guards. See shareInFlight.
+   */
+  private readonly fundersInFlight = new Map<string, Promise<FunderResult | undefined>>();
+  private readonly launchReadsInFlight = new Map<string, Promise<LaunchBuyersResult | undefined>>();
+  private readonly exactEarliestInFlight = new Map<string, Promise<EarliestActivityResult | undefined>>();
 
   constructor(options: HeliusClientOptions = {}) {
     if (options.rpcUrl) {
@@ -839,6 +875,115 @@ export class HeliusClient {
       for (const [id, res] of result) merged.set(id, res);
     });
     return merged;
+  }
+
+  /**
+   * Runs `read` for the items no other call is already reading, and waits on the reads in flight
+   * for the rest: an item whose key (keyOf) is being read joins that read and takes its answer.
+   * Null from keyOf: the item's answer depends on more than the key, so it is read on its own.
+   * The answer is the one the joining call would have got by asking at the same moment; nothing
+   * is kept once the read ends. An item the shared read had no answer for is left out, which every
+   * caller reads as "failed", as it would its own unanswered call.
+   */
+  private async shareInFlight<V>(
+    inFlight: Map<string, Promise<V | undefined>>,
+    items: readonly string[],
+    keyOf: (item: string) => string | null,
+    read: (items: string[]) => Promise<Map<string, V>>,
+  ): Promise<Map<string, V>> {
+    const joined: [string, Promise<V | undefined>][] = [];
+    const own: string[] = [];
+    for (const item of items) {
+      const key = keyOf(item);
+      const pending = key === null ? undefined : inFlight.get(key);
+      if (pending) joined.push([item, pending]);
+      else own.push(item);
+    }
+    const out = new Map<string, V>();
+    if (own.length > 0) {
+      const mine = read(own);
+      const registered: [string, Promise<V | undefined>][] = [];
+      for (const item of own) {
+        const key = keyOf(item);
+        if (key === null) continue;
+        const answer = mine.then(
+          (m) => m.get(item),
+          () => undefined,
+        );
+        inFlight.set(key, answer);
+        registered.push([key, answer]);
+      }
+      try {
+        for (const [item, v] of await mine) out.set(item, v);
+      } finally {
+        for (const [key, answer] of registered) if (inFlight.get(key) === answer) inFlight.delete(key);
+      }
+    }
+    for (const [item, answer] of joined) {
+      const v = await answer;
+      if (v !== undefined) out.set(item, v);
+    }
+    return out;
+  }
+
+  /**
+   * Each address's newest FUNDER_SIGNATURES_LIMIT signatures (finalized, the default), as
+   * sendBatched answers them: from a page read in the last SIGNATURES_PAGE_REUSE_MS, from a read
+   * of it already in flight, or read now. One page answers every reader (Helius audit 2026-10-23,
+   * N-1): freshness takes its first SIGNATURES_PAGE_LIMIT rows, which are exactly the page a
+   * request for that many returns - the list is newest first from the same tip, failed
+   * transactions included either way - and funders and the hot-funder check read it whole.
+   * Rows keep only what those readers use (signature, block time, error).
+   */
+  private async signaturePages(addresses: string[]): Promise<Map<string, RpcResponse<SignaturesResult>>> {
+    const now = Date.now();
+    const out = new Map<string, RpcResponse<SignaturesResult>>();
+    const toRead: string[] = [];
+    for (const address of addresses) {
+      const hit = this.signaturePagesRead.get(address);
+      if (hit && now - hit.atMs <= SIGNATURES_PAGE_REUSE_MS) out.set(address, { result: hit.page });
+      else toRead.push(address);
+    }
+    const read = await this.shareInFlight(
+      this.signaturePagesInFlight,
+      toRead,
+      (address) => address,
+      async (own) => {
+        const responses = await this.sendBatched<SignaturesResult>(
+          own.map((address) => ({
+            id: address,
+            method: "getSignaturesForAddress",
+            params: [address, { limit: FUNDER_SIGNATURES_LIMIT }],
+          })),
+          15_000,
+        );
+        const atMs = Date.now();
+        for (const [address, res] of responses) {
+          if (res.error || !Array.isArray(res.result)) continue;
+          const page = res.result.map((s) => ({
+            signature: s.signature,
+            blockTime: s.blockTime,
+            err: s.err,
+          }));
+          this.keepSignaturePage(address, page, atMs);
+          responses.set(address, { result: page });
+        }
+        return responses;
+      },
+    );
+    for (const [address, res] of read) out.set(address, res);
+    return out;
+  }
+
+  private keepSignaturePage(address: string, page: WalletSignaturesPage, atMs: number): void {
+    this.signaturePagesRead.delete(address);
+    this.signaturePagesRead.set(address, { page, atMs });
+    // In read order: the expired go from the front, then the oldest past the cap.
+    for (const [key, entry] of this.signaturePagesRead) {
+      const expired = atMs - entry.atMs > SIGNATURES_PAGE_REUSE_MS;
+      if (!expired && this.signaturePagesRead.size <= MAX_REUSED_SIGNATURE_PAGES) break;
+      this.signaturePagesRead.delete(key);
+    }
   }
 
   /**
@@ -1329,13 +1474,20 @@ export class HeliusClient {
         return r?.status === "older-than" && r.boundAt.getTime() >= sufficientMs && !r.activeSince;
       });
       if (unsettled.length === 0) return cheap;
-      const exact = await this.earliestViaGetTransactionsForAddress(unsettled);
+      // A wallet another call is already looking up (a fast scan beside the cycle) takes that
+      // answer: the sorted lookup doesn't depend on the cutoff (Helius audit 2026-10-23, N-3).
+      const exact = await this.shareInFlight(
+        this.exactEarliestInFlight,
+        unsettled,
+        (address) => address,
+        async (own) => (await this.earliestViaGetTransactionsForAddress(own)) ?? new Map(),
+      );
       // An unsettled address takes the exact answer or none. Its cheap result is a bound INSIDE
       // the window, which says only "busy", and handing it on when the exact lookup failed had
       // the caller cache a recently funded busy wallet as "not fresh" for good, off one 429.
       // Failed, it is retried on a later cycle instead. The page's newest transaction rides along.
       for (const address of unsettled) {
-        const r = exact?.get(address);
+        const r = exact.get(address);
         const before = cheap.get(address);
         const lastActivityAt = before?.status === "older-than" ? before.lastActivityAt : undefined;
         cheap.set(address, r?.status === "found" ? { ...r, lastActivityAt } : (r ?? { status: "failed" }));
@@ -1366,15 +1518,14 @@ export class HeliusClient {
    * getSignaturesForAddress path for getEarliestActivityBatch: one page of the newest
    * SIGNATURES_PAGE_LIMIT signatures per address. A partial page is the wallet's whole history,
    * so its oldest entry is exact; a full page only bounds it ("older-than").
+   *
+   * Read as the first SIGNATURES_PAGE_LIMIT rows of the funder reads' larger page (signaturePages):
+   * the same credit, shared with them instead of paid twice (Helius audit 2026-10-23, N-1). The
+   * answer is the one the smaller request gave.
    */
   private async earliestViaSignatures(addresses: string[]): Promise<Map<string, EarliestActivityResult>> {
     const out = new Map<string, EarliestActivityResult>();
-    const calls: RpcCall[] = addresses.map((address) => ({
-      id: address,
-      method: "getSignaturesForAddress",
-      params: [address, { limit: SIGNATURES_PAGE_LIMIT }],
-    }));
-    const responses = await this.sendBatched<SignaturesResult>(calls, 15_000);
+    const responses = await this.signaturePages(addresses);
 
     for (const address of addresses) {
       const res = responses.get(address);
@@ -1383,7 +1534,7 @@ export class HeliusClient {
         out.set(address, { status: "failed" });
         continue;
       }
-      const sigs = res.result;
+      const sigs = Array.isArray(res.result) ? res.result.slice(0, SIGNATURES_PAGE_LIMIT) : res.result;
       if (!sigs || sigs.length === 0) {
         out.set(address, { status: "indeterminate" });
         continue;
@@ -1425,6 +1576,10 @@ export class HeliusClient {
    * trader, a bot, a dev's long-used wallet) has its oldest transactions read with the sorted lookup
    * instead, 10 credits for all of them (user decision 2026-10-13: busy wallets count too). Every
    * answer but "failed" and "busy" is final and cached by the caller.
+   *
+   * The page is shared with the freshness read of the same wallet (signaturePages), and a wallet
+   * another call is already reading with the same stored answer joins that read (Helius audit
+   * 2026-10-23, N-1 and N-3).
    */
   async getFundersBatch(
     wallets: string[],
@@ -1435,22 +1590,33 @@ export class HeliusClient {
       pagesOf?: ReadonlyMap<string, WalletSignaturesPage>;
     } = {},
   ): Promise<Map<string, FunderResult>> {
+    const unique = [...new Set(wallets)];
+    if (unique.length === 0) return new Map();
+    return this.shareInFlight(
+      this.fundersInFlight,
+      unique,
+      // A page handed in is the caller's own (read at "confirmed"): that wallet is read alone.
+      (wallet) =>
+        opts.pagesOf?.has(wallet) ? null : `${wallet}|${knownFunderKey(opts.knownOf?.get(wallet))}`,
+      (own) => this.readFunders(own, opts),
+    );
+  }
+
+  private async readFunders(
+    unique: string[],
+    opts: {
+      nowMs?: number;
+      knownOf?: ReadonlyMap<string, KnownFunder>;
+      pagesOf?: ReadonlyMap<string, WalletSignaturesPage>;
+    },
+  ): Promise<Map<string, FunderResult>> {
     const nowMs = opts.nowMs ?? Date.now();
     const knownOf = opts.knownOf ?? new Map<string, KnownFunder>();
-    const unique = [...new Set(wallets)];
     const out = new Map<string, FunderResult>();
-    if (unique.length === 0) return out;
     const toRead = unique.filter((address) => !opts.pagesOf?.has(address));
     const pages =
       toRead.length > 0
-        ? await this.sendBatched<SignaturesResult>(
-            toRead.map((address) => ({
-              id: address,
-              method: "getSignaturesForAddress",
-              params: [address, { limit: FUNDER_SIGNATURES_LIMIT }],
-            })),
-            15_000,
-          )
+        ? await this.signaturePages(toRead)
         : new Map<string, RpcResponse<SignaturesResult>>();
     for (const [address, page] of opts.pagesOf ?? [])
       if (unique.includes(address)) pages.set(address, { result: page });
@@ -1638,14 +1804,8 @@ export class HeliusClient {
     const unique = [...new Set(funders)];
     const out = new Map<string, FunderActivityResult>();
     if (unique.length === 0) return out;
-    const pages = await this.sendBatched<SignaturesResult>(
-      unique.map((address) => ({
-        id: address,
-        method: "getSignaturesForAddress",
-        params: [address, { limit: FUNDER_SIGNATURES_LIMIT }],
-      })),
-      15_000,
-    );
+    // The same page as the wallet reads' (signaturePages): a funder that is also a holder pays once.
+    const pages = await this.signaturePages(unique);
     for (const funder of unique) {
       const res = pages.get(funder);
       if (!res || res.error || !Array.isArray(res.result)) {
@@ -2139,6 +2299,10 @@ export class HeliusClient {
    * seeds for every launch read turned the cache over in 10-25 minutes, so nearly every seed was
    * evicted unused while up to 150 pages of raw transactions sat in memory (Helius audit
    * 2026-10-22, H-7).
+   *
+   * A mint another call is already reading for the same count and seed joins that read: a fast
+   * scan and the cycle reaching the same launch at once pay for it once (Helius audit 2026-10-23,
+   * N-3).
    */
   async getLaunchBuyersBatch(
     mintAddresses: string[],
@@ -2146,8 +2310,21 @@ export class HeliusClient {
     opts: { tapeSeeds?: ReadonlySet<string> } = {},
   ): Promise<Map<string, LaunchBuyersResult>> {
     const unique = [...new Set(mintAddresses)];
+    if (unique.length === 0) return new Map();
+    return this.shareInFlight(
+      this.launchReadsInFlight,
+      unique,
+      (mint) => `${mint}|${maxBuyers}|${opts.tapeSeeds?.has(mint) ? "seed" : ""}`,
+      (own) => this.readLaunchBuyers(own, maxBuyers, opts),
+    );
+  }
+
+  private async readLaunchBuyers(
+    unique: string[],
+    maxBuyers: number,
+    opts: { tapeSeeds?: ReadonlySet<string> },
+  ): Promise<Map<string, LaunchBuyersResult>> {
     const out = new Map<string, LaunchBuyersResult>();
-    if (unique.length === 0) return out;
     if (!this.gtfaUsable) {
       for (const mint of unique) out.set(mint, { status: "unsupported" });
       return out;
@@ -2280,15 +2457,17 @@ export class HeliusClient {
    * (apps/worker/src/jobs/tradeTapeJob.ts). getTransactionsForAddress on the mint, failed ones
    * filtered out server-side, up to 100 a page for 10 credits, from `paginationToken` when given.
    * `untilBlockTime` (unix seconds) asks the server to stop there; the caller still filters by time,
-   * so a server that ignores it costs pages, not correctness. `newest`: the newest page instead,
-   * newest first (the live tape before a call, apps/worker/src/jobs/liveTape.ts). Helius-only:
-   * "unsupported" elsewhere.
+   * so a server that ignores it costs pages, not correctness. `fromBlockTime` (unix seconds) starts
+   * the read there instead of at the launch (the chart's chain fill, candleChainFill.ts). `newest`:
+   * the newest page instead, newest first (the live tape before a call,
+   * apps/worker/src/jobs/liveTape.ts). Helius-only: "unsupported" elsewhere.
    */
   async getMintTransactionsPage(
     mint: string,
     opts: {
       paginationToken?: string;
       untilBlockTime?: number;
+      fromBlockTime?: number;
       newest?: boolean;
     } = {},
   ): Promise<
@@ -2312,7 +2491,14 @@ export class HeliusClient {
               maxSupportedTransactionVersion: MAX_TRANSACTION_VERSION,
               filters: {
                 status: "succeeded",
-                ...(opts.untilBlockTime !== undefined ? { blockTime: { lte: opts.untilBlockTime } } : {}),
+                ...(opts.untilBlockTime !== undefined || opts.fromBlockTime !== undefined
+                  ? {
+                      blockTime: {
+                        ...(opts.fromBlockTime !== undefined ? { gte: opts.fromBlockTime } : {}),
+                        ...(opts.untilBlockTime !== undefined ? { lte: opts.untilBlockTime } : {}),
+                      },
+                    }
+                  : {}),
               },
               ...(opts.paginationToken ? { paginationToken: opts.paginationToken } : {}),
             },

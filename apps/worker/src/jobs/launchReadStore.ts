@@ -5,7 +5,8 @@ import type { LaunchReadStore, StoredLaunchRead } from "./launchSnipers.js";
  * Launch reads kept in the LaunchRead table (launchSnipers.ts), so a restart or a deploy loads the
  * band's first buyers and block zero back instead of paying 10-30 credits a coin to read them
  * again (Helius audit 2026-10-22, H-3). One row per mint, replaced by a later read; the cleanup
- * job drops rows past LAUNCH_READ_RETENTION_DAYS (cleanupJob.ts).
+ * job drops rows past LAUNCH_READ_RETENTION_DAYS (cleanupJob.ts), but keeps a complete read while
+ * its coin is still tracked.
  */
 export const prismaLaunchReadStore: LaunchReadStore = {
   async load(mints) {

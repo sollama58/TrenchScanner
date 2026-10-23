@@ -69,7 +69,11 @@ const hotFunders = new Map<string, { hot: boolean; atMs: number }>();
 const MAX_HOT_ENTRIES = 50_000;
 const failureBackoff = new FailureBackoff(2, 20, { helius: true });
 
-/** Calls sent since the last takeLinkedWalletStats(), by method. */
+/**
+ * Calls asked for since the last takeLinkedWalletStats(), by method. A signatures page the client
+ * shares with the freshness read or another call (HeliusClient.signaturePages, Helius audit
+ * 2026-10-23, N-1) is counted here as asked; the scan's rpcCalls has what was sent.
+ */
 let calls = { getSignaturesForAddress: 0, getTransaction: 0, getTransactionsForAddress: 0 };
 
 /**

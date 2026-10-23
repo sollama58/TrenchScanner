@@ -11,7 +11,13 @@ import {
   type SeriesInput,
 } from "@trenchscanner/core";
 import { allowLookupRead } from "../lookupGate.js";
-import { askBackfill, configureCandleStore, latestPage, storingFetcher } from "../candleStore.js";
+import {
+  askBackfill,
+  configureCandleStore,
+  keepStreamBars,
+  latestPage,
+  storingFetcher,
+} from "../candleStore.js";
 import { liveCurves } from "../liveCurve.js";
 import { liveTrades } from "../liveTrades.js";
 import { sharedSolPrice } from "../solPrice.js";
@@ -107,6 +113,17 @@ async function liveInputs(
     // On the finest timeframes only what the stream itself delivered: RPC reads every few seconds
     // make 1-second bars that sit flat four seconds in five (charts audit CH-6).
     const from = tfSec < 5 ? stream.streamFrom : (stream.coveredFrom ?? stream.candles[0]!.t);
+    // What the stream itself delivered is saved, on the launch billion, for the next chart.
+    if (stream.streamFrom !== null && stream.readAt !== null && factor > 0) {
+      const saveFrom = stream.streamFrom;
+      keepStreamBars(
+        mint,
+        stream.candles
+          .filter((k) => k.t >= saveFrom)
+          .map((k) => ({ ...k, o: k.o / factor, h: k.h / factor, l: k.l / factor, c: k.c / factor })),
+        { from: saveFrom, to: stream.readAt },
+      );
+    }
     if (from !== null) {
       out.push({
         res: 1,

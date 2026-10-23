@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveOtcDeskFee } from "./feeDesks.js";
+import { feeDesksFromOtcRoster, resolveOtcDeskFee } from "./feeDesks.js";
 import {
   clearOtcDeskSingles,
   fetchOtcDeskRoster,
@@ -7,6 +7,8 @@ import {
   otcDeskFees,
   otcDeskRosterFor,
   otcRosterCacheMs,
+  sweepOtcRoster,
+  type OtcRosterSweep,
 } from "./otcDesk.js";
 
 const MINT = "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump";
@@ -219,10 +221,125 @@ describe("fetchOtcDeskRoster", () => {
 });
 
 describe("otcRosterCacheMs", () => {
-  it("does not treat a partial roster as a five-minute hit", () => {
-    expect(otcRosterCacheMs({ complete: true, size: 4 })).toBe(5 * 60_000);
+  it("does not treat a partial roster as a fifteen-minute hit", () => {
+    expect(otcRosterCacheMs({ complete: true, size: 4 })).toBe(15 * 60_000);
     expect(otcRosterCacheMs({ complete: false, size: 4 })).toBe(60_000);
     expect(otcRosterCacheMs({ complete: true, size: 0 })).toBe(60_000);
+  });
+});
+
+/**
+ * A host with `launches` (newest first) in 12-coin pages, the newest 3 as the featured set. Each
+ * request is logged by page ("featured" for the bare GET); `failing` pages answer 503.
+ */
+function host(launches: { mint: string; symbol?: string; rewardSymbol?: string }[]) {
+  const asked: string[] = [];
+  const failing = new Set<string>();
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const page = new URL(String(input)).searchParams.get("page") ?? "featured";
+    asked.push(page);
+    if (failing.has(page)) return new Response("down", { status: 503 });
+    if (page === "featured") return json({ coins: launches.slice(0, 3) });
+    const n = Number(page);
+    return json({ coins: launches.slice((n - 1) * 12, n * 12), total: launches.length });
+  }) as typeof fetch;
+  return { fetchImpl, asked, failing };
+}
+
+const launch = (n: number): { mint: string; symbol: string; rewardSymbol?: string } => ({
+  mint: filler(n),
+  symbol: `C${n}`,
+});
+
+describe("sweepOtcRoster (user ask 2026-10-23: API audit bundle)", () => {
+  const T0 = 1_000_000_000;
+
+  it("reads only the newest pages once the roster is filled, and adds new launches on top", async () => {
+    const launches = Array.from({ length: 50 }, (_, i) => launch(i));
+    launches[40] = { ...launches[40]!, rewardSymbol: "NVDAx" };
+    const h = host(launches);
+    const first = await sweepOtcRoster(null, h.fetchImpl, T0);
+    expect(first.complete).toBe(true);
+    expect(feeDesksFromOtcRoster({ coins: first.coins }).get(filler(40))?.line).toBe(
+      "OTC Desks pays holder rewards in NVDAx.",
+    );
+    // Nothing new: the featured set and page 1, which holds only coins already kept.
+    h.asked.length = 0;
+    const quiet = await sweepOtcRoster(first.state, h.fetchImpl, T0 + 15 * 60_000);
+    expect(h.asked).toEqual(["featured", "1"]);
+    expect(quiet.complete).toBe(true);
+    // Fifteen new launches push the old ones two pages down: pages 1 and 2 hold new coins, page 3
+    // none, and the older coins (the rewarded one included) are kept without being read again.
+    launches.unshift(
+      ...Array.from({ length: 15 }, (_, i) => ({ ...launch(100 + i), rewardSymbol: "TSLAx" })),
+    );
+    h.asked.length = 0;
+    const grown = await sweepOtcRoster(quiet.state, h.fetchImpl, T0 + 30 * 60_000);
+    // (Pages go out one, then two at a time: page 4 rides along with page 3, where the read stops.)
+    expect(h.asked).toEqual(["featured", "1", "2", "3", "4"]);
+    const fees = feeDesksFromOtcRoster({ coins: grown.coins });
+    expect(fees.get(filler(114))?.line).toBe("OTC Desks pays holder rewards in TSLAx.");
+    expect(fees.get(filler(40))?.line).toBe("OTC Desks pays holder rewards in NVDAx.");
+    expect(grown.complete).toBe(true);
+  });
+
+  it("keeps a partial full sweep and carries on from the page it missed", async () => {
+    const launches = Array.from({ length: 60 }, (_, i) => launch(i));
+    launches[30] = { ...launches[30]!, rewardSymbol: "NVDAx" };
+    launches[55] = { ...launches[55]!, rewardSymbol: "TSLAx" };
+    const h = host(launches);
+    h.failing.add("3");
+    const first = await sweepOtcRoster(null, h.fetchImpl, T0);
+    expect(first.complete).toBe(false);
+    expect(first.state.resume).toBe(3);
+    const partial = feeDesksFromOtcRoster({ coins: first.coins });
+    expect(partial.has(filler(30))).toBe(false);
+    expect(partial.has(filler(55))).toBe(true);
+    // The host answers again: the head stops at page 1, and the sweep reads from page 3 only.
+    h.failing.clear();
+    h.asked.length = 0;
+    const next = await sweepOtcRoster(first.state, h.fetchImpl, T0 + 60_000);
+    // Pages 3 to 10 go out as one batch, as in any sweep; page 2, already read, is not asked again.
+    expect(h.asked.slice(0, 3)).toEqual(["featured", "1", "3"]);
+    expect(h.asked).not.toContain("2");
+    expect(next.complete).toBe(true);
+    expect(next.state.resume).toBeNull();
+    const fees = feeDesksFromOtcRoster({ coins: next.coins });
+    expect(fees.has(filler(30))).toBe(true);
+    expect(fees.has(filler(55))).toBe(true);
+  });
+
+  it("reads the head again after it missed a page, so a launch there is not skipped", async () => {
+    const launches = Array.from({ length: 30 }, (_, i) => launch(i));
+    const h = host(launches);
+    const first = await sweepOtcRoster(null, h.fetchImpl, T0);
+    launches.unshift(
+      ...Array.from({ length: 20 }, (_, i) => ({ ...launch(200 + i), rewardSymbol: "TSLAx" })),
+    );
+    h.failing.add("2");
+    const missed = await sweepOtcRoster(first.state, h.fetchImpl, T0 + 15 * 60_000);
+    expect(missed.complete).toBe(false);
+    expect(feeDesksFromOtcRoster({ coins: missed.coins }).has(filler(200))).toBe(true);
+    expect(feeDesksFromOtcRoster({ coins: missed.coins }).has(filler(215))).toBe(false);
+    h.failing.clear();
+    const healed = await sweepOtcRoster(missed.state, h.fetchImpl, T0 + 16 * 60_000);
+    expect(healed.complete).toBe(true);
+    expect(feeDesksFromOtcRoster({ coins: healed.coins }).has(filler(215))).toBe(true);
+  });
+
+  it("reads the whole list again every six hours, for a basket changed on an older coin", async () => {
+    const launches = Array.from({ length: 40 }, (_, i) => launch(i));
+    const h = host(launches);
+    let state: OtcRosterSweep = (await sweepOtcRoster(null, h.fetchImpl, T0)).state;
+    launches[35] = { ...launches[35]!, rewardSymbol: "NVDAx" };
+    const soon = await sweepOtcRoster(state, h.fetchImpl, T0 + 60 * 60_000);
+    expect(feeDesksFromOtcRoster({ coins: soon.coins }).has(filler(35))).toBe(false);
+    state = soon.state;
+    const later = await sweepOtcRoster(state, h.fetchImpl, T0 + 6 * 60 * 60_000);
+    expect(feeDesksFromOtcRoster({ coins: later.coins }).get(filler(35))?.line).toBe(
+      "OTC Desks pays holder rewards in NVDAx.",
+    );
+    expect(later.complete).toBe(true);
   });
 });
 
