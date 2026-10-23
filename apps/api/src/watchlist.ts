@@ -204,26 +204,37 @@ export async function addToWatchlist(
   });
   const reading = (await readingsFor([token.id])).get(token.id);
   if (existing) return { kind: "already", entry: toEntry(existing, reading) };
-  const { _count, _min } = await prisma.watchlistItem.aggregate({
-    where: { userId },
-    _count: { _all: true },
-    _min: { position: true },
+  // Count and insert under the account's watchlist lock, as filters do (lockUserFilters): parallel
+  // stars on different tokens each passed a bare count and landed past the cap (audit 2026-10-23,
+  // AS-4 / WB-4).
+  const added = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"watchlist:" + userId}))`;
+    // Two quick taps on the same token: the second, behind the lock, finds the first's row.
+    const raced = await tx.watchlistItem.findUnique({
+      where: { userId_tokenId: { userId, tokenId: token.id } },
+      select: ITEM_SELECT,
+    });
+    if (raced) return { kind: "already" as const, item: raced };
+    const { _count, _min } = await tx.watchlistItem.aggregate({
+      where: { userId },
+      _count: { _all: true },
+      _min: { position: true },
+    });
+    if (_count._all >= WATCHLIST_CAP) return null;
+    const item = await tx.watchlistItem.create({
+      data: {
+        userId,
+        tokenId: token.id,
+        position: _min.position === null ? 0 : _min.position - 1,
+        addedMarketCapUsd: reading?.marketCapUsd ?? null,
+        addedPriceUsd: reading?.priceUsd ?? null,
+      },
+      select: ITEM_SELECT,
+    });
+    return { kind: "added" as const, item };
   });
-  if (_count._all >= WATCHLIST_CAP) return { kind: "full" };
-  // Two quick taps race on the primary key; the second finds the first's row.
-  const item = await prisma.watchlistItem.upsert({
-    where: { userId_tokenId: { userId, tokenId: token.id } },
-    update: {},
-    create: {
-      userId,
-      tokenId: token.id,
-      position: _min.position === null ? 0 : _min.position - 1,
-      addedMarketCapUsd: reading?.marketCapUsd ?? null,
-      addedPriceUsd: reading?.priceUsd ?? null,
-    },
-    select: ITEM_SELECT,
-  });
-  return { kind: "added", entry: toEntry(item, reading) };
+  if (!added) return { kind: "full" };
+  return { kind: added.kind, entry: toEntry(added.item, reading) };
 }
 
 /** Unstars a token; false when it wasn't starred. */

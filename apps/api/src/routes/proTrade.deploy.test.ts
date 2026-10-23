@@ -370,6 +370,37 @@ describe.skipIf(!dbAvailable)("Pro trades across API instances", () => {
     expect(await prisma.platformTrade.count({ where: { wallet: TRADER.address } })).toBe(1);
   });
 
+  it("settles a trade the resend loop sees confirmed, so the wallet's next trade isn't held (audit 2026-10-23, TW-1)", async () => {
+    const app = await instance();
+    const t = trade();
+    const res = await send(app, {
+      transaction: t.first.base64,
+      buildToken: tokenFor(t.message, { closing: false }),
+    });
+    expect(res.statusCode).toBe(200);
+    // It lands, and no panel polls /status: the resend loop alone settles it.
+    chain.seen.add(t.first.signature);
+    await vi.waitFor(
+      async () =>
+        expect(
+          (await prisma.platformTrade.findUniqueOrThrow({ where: { signature: t.first.signature } })).status,
+        ).toBe("confirmed"),
+      { timeout: 6_000, interval: 100 },
+    );
+  });
+
+  it("answers a re-POST of the same paced trade on another instance with its signature (audit 2026-10-23, TW-1)", async () => {
+    const t = trade();
+    const token = tokenFor(t.message, { closing: false });
+    const first = await send(await instance(), { transaction: t.first.base64, buildToken: token });
+    expect(first.statusCode).toBe(200);
+    // Its own row is neither the pace nor the one in flight: it re-attaches, nothing new goes out.
+    const again = await send(await instance(), { transaction: t.first.base64, buildToken: token });
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toEqual({ signature: t.first.signature });
+    expect(senderCalls(t.first.base64)).toBe(1);
+  });
+
   describe("when Sender stops answering (user decision 2026-10-19: RPC fallback only with MEV Protect off)", () => {
     it("resends a trade with MEV Protect off through the RPC too after two silent Sender sends", async () => {
       vi.mocked(sendViaSender).mockImplementation(SENDER_SILENT);

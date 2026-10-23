@@ -7,6 +7,8 @@ import { feedAppearanceSchema, parseFeedAppearance, storedAppearanceKeys } from 
 import { hiddenTokensSchema, parseHiddenTokens } from "../hiddenTokens.js";
 import { parseScopeSettings, scopeSettingsSchema } from "../scopeSettings.js";
 
+const HIDDEN_TOKENS_BODY_LIMIT = 512 * 1024;
+
 /**
  * The Settings tab: how alerts reach this user, how their feed looks, and their account and access. Needs a session but
  * not a subscription - someone whose access lapsed can still see when it ended and change how
@@ -184,9 +186,11 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
 
   /**
    * Replaces the tokens hidden from the Live feed and the auto-unhide switch. The dashboard sends
-   * the whole list each time, as it does the appearance, so the last save wins.
+   * the whole list each time, as it does the appearance, so the last save wins. Its own body limit:
+   * the global 64 KB refused every save past about 200 tokens (audit 2026-10-23, AS-1), and a full
+   * list (MAX_HIDDEN_TOKENS entries, every field at the schema's maximum) is about 490 KB.
    */
-  app.put("/hidden-tokens", async (request, reply) => {
+  app.put("/hidden-tokens", { bodyLimit: HIDDEN_TOKENS_BODY_LIMIT }, async (request, reply) => {
     const parsed = hiddenTokensSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
