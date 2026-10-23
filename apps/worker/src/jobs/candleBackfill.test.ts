@@ -255,10 +255,11 @@ describe("stepBackfill", () => {
     expect(covers[0]![0]).toBe(NOW - 110 * M);
     for (let i = 1; i < covers.length; i++) expect(covers[i]![0]).toBeLessThanOrEqual(covers[i - 1]![1]);
     expect(Math.max(...covers.map((c) => c[1]))).toBe(NOW - 3 * M);
-    // An older page (the cursor set) vouches only to its own newest bar: the next page holds the rest.
+    // An older page (the cursor set) was read for everything before the cursor: the quiet minutes
+    // between its newest bar and the cursor are vouched for too, so its covers join the next page's.
     const older = deps({ geckoPage: vi.fn(async (_p, _m, before) => quiet(before)) });
     await stepBackfill(job({ mint: OTHER_MINT, cursor: new Date(NOW - 200 * M) }), token, older.d, NOW);
-    expect(Math.max(...older.saved.map((r) => r.coverTo))).toBe(NOW - 210 * M);
+    expect(Math.max(...older.saved.map((r) => r.coverTo))).toBe(NOW - 200 * M);
   });
 
   it("pages a non-Pump coin from now, not the hour start: no live page holds its newest stretch", async () => {

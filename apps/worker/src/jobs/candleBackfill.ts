@@ -238,13 +238,15 @@ export async function stepBackfill(
   try {
     const closed = bars.filter((b) => b.t + MINUTE_MS <= now);
     const newestEnd = closed.length > 0 ? closed[closed.length - 1]!.t + MINUTE_MS : bars[0]!.t;
-    // The page vouches to its newest bar's end (as the API's pageCoverEnd), so a late minute is
-    // asked again by the next top-up rather than stored as a quiet one; the newest page on the
-    // coin's own pair, read from now, vouches on to GECKO_SETTLE_MS ago: the minutes since its
-    // newest bar were quiet. Each chunk's cover runs on to the next one's start, so the quiet
-    // minutes between a page's bars read as quiet too (candleChunk.ts runCoversOn).
+    // The page was read for everything before the cursor, and GeckoTerminal leaves a minute with no
+    // trade out, so the minutes between its newest bar and the cursor were quiet: the page vouches
+    // for them (prod 2026-10-23: a page ending one quiet minute before the next page's start left
+    // its covers apart, and its bars outside the stored cover). The coin's newest page, read from
+    // now, vouches to its newest bar's end or GECKO_SETTLE_MS ago, whichever is later, so a minute
+    // GeckoTerminal is late with is asked again by the next top-up rather than stored as quiet.
+    // Each chunk's cover runs on to the next one's start (candleChunk.ts runCoversOn).
     const settled = Math.floor((now - GECKO_SETTLE_MS) / MINUTE_MS) * MINUTE_MS;
-    const quietTo = job.cursor === null && job.poolIndex === 0 ? Math.max(newestEnd, settled) : newestEnd;
+    const quietTo = job.cursor === null ? Math.max(newestEnd, settled) : cursor;
     const to = Math.min(cursor, Math.floor(now / MINUTE_MS) * MINUTE_MS, quietTo);
     const rows = runCoversOn(chunkBars(job.mint, 60, "gecko", closed, { from: bars[0]!.t, to }), to);
     if (rows.length > 0) await deps.save(rows);
