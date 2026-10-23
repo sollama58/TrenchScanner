@@ -46,6 +46,7 @@ import {
 } from "../scope";
 import {
   FeeBadge,
+  feeBadge,
   LINKS,
   nowReading,
   nowReadingAge,
@@ -750,6 +751,11 @@ export function ScopeRow({
   const chips = rowChips(card, d.chips, now);
   const showSource = d.showSource || marker;
   const img = d.imageSize === "s" ? 44 : d.imageSize === "l" ? 72 : 56;
+  const hasFoot =
+    (d.showFees && feeBadge(card.token.creatorFee) !== null) ||
+    (showSource && (filter !== null || curated != null || high)) ||
+    socials.length > 0 ||
+    tradeLinks.length > 0;
   const dexInfo = dexInfoLabel(card.token, now) && <DexInfoLabel token={card.token} now={now} />;
 
   return (
@@ -840,44 +846,6 @@ export function ScopeRow({
             </span>
           )}
         </div>
-        <div className="scope-meta">
-          {d.showFees && <FeeBadge fee={card.token.creatorFee} icon={12} className="scope-fee" />}
-          {filter && showSource && (
-            <span className="scope-src mine" title={`Caught by your filter “${filter.name}”`}>
-              {filter.icon ? <FilterGlyph icon={filter.icon} size={11} /> : <SlidersIcon size={11} />}
-              {marker && <span className="scope-src-text">{filter.name}</span>}
-            </span>
-          )}
-          {curated && showSource && (
-            <span className="scope-src model" title={models.join(" + ")}>
-              <BrainIcon size={11} />
-              <span className="scope-src-text">
-                {models.length > 1 ? `${models[0]} +${models.length - 1}` : models[0]}
-              </span>
-            </span>
-          )}
-          {high && showSource && (
-            <span
-              className="scope-src model"
-              title="High conviction: the model's top half-percent of moments"
-            >
-              HC
-            </span>
-          )}
-          <SocialLinks links={socials} className="scope-socials" />
-          {tradeLinks.map((l) => (
-            <a
-              key={l.label}
-              className="scope-trade-link"
-              href={l.href(card.token.mintAddress)}
-              target="_blank"
-              rel="noreferrer noopener"
-              title={`Open ${label} on ${l.label}`}
-            >
-              {l.label}
-            </a>
-          ))}
-        </div>
       </div>
       <div className="scope-figs">
         <div className={`scope-fig scope-now${nowAge !== null ? " stale" : ""}`} title={nowTitle}>
@@ -921,22 +889,68 @@ export function ScopeRow({
           </div>
         )}
       </div>
-      {chips.length > 0 && (
-        <div className="scope-chips">
-          {chips.map((c) => {
-            const tl = tileLook(tiles, c.tone, c.risky);
-            return (
-              <span
-                key={c.id}
-                className={`scope-chip ${tl.className ?? ""}${c.aged ? " aged" : ""}`}
-                style={tl.style}
-                title={c.title}
-              >
-                <span className="scope-chip-label">{c.short}</span>
-                <span className="num">{c.value}</span>
-              </span>
-            );
-          })}
+      {/* The chips, then the fee, source and link icons at the row's bottom right, left of the
+          quick-buy pill, so the name has its line to itself (user ask 2026-10-23). */}
+      {(chips.length > 0 || hasFoot) && (
+        <div className="scope-bottom">
+          {chips.length > 0 && (
+            <div className="scope-chips">
+              {chips.map((c) => {
+                const tl = tileLook(tiles, c.tone, c.risky);
+                return (
+                  <span
+                    key={c.id}
+                    className={`scope-chip ${tl.className ?? ""}${c.aged ? " aged" : ""}`}
+                    style={tl.style}
+                    title={c.title}
+                  >
+                    <span className="scope-chip-label">{c.short}</span>
+                    <span className="num">{c.value}</span>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          {hasFoot && (
+            <div className="scope-foot">
+              {d.showFees && <FeeBadge fee={card.token.creatorFee} icon={12} className="scope-fee" />}
+              {filter && showSource && (
+                <span className="scope-src mine" title={`Caught by your filter “${filter.name}”`}>
+                  {filter.icon ? <FilterGlyph icon={filter.icon} size={11} /> : <SlidersIcon size={11} />}
+                  {marker && <span className="scope-src-text">{filter.name}</span>}
+                </span>
+              )}
+              {curated && showSource && (
+                <span className="scope-src model" title={models.join(" + ")}>
+                  <BrainIcon size={11} />
+                  <span className="scope-src-text">
+                    {models.length > 1 ? `${models[0]} +${models.length - 1}` : models[0]}
+                  </span>
+                </span>
+              )}
+              {high && showSource && (
+                <span
+                  className="scope-src model"
+                  title="High conviction: the model's top half-percent of moments"
+                >
+                  HC
+                </span>
+              )}
+              <SocialLinks links={socials} className="scope-socials" />
+              {tradeLinks.map((l) => (
+                <a
+                  key={l.label}
+                  className="scope-trade-link"
+                  href={l.href(card.token.mintAddress)}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  title={`Open ${label} on ${l.label}`}
+                >
+                  {l.label}
+                </a>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </article>

@@ -20552,14 +20552,6 @@ body:has(.util-toast) .bug-fab {
 .scope-title .quote-pill {
   flex: none;
 }
-.scope-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-  margin-top: 3px;
-  font-size: 12px;
-}
 .scope-age {
   color: var(--muted);
   font-weight: 600;
@@ -20615,14 +20607,42 @@ body:has(.util-toast) .bug-fab {
 .scope-now .num.down {
   color: var(--bad-ink);
 }
-.scope-chips {
+/* The chips, then the fee, source and link icons in the bottom-right corner, left of the
+   quick-buy pill (user ask 2026-10-23). They share the chips' last line while the chips keep at
+   least half the width, and take a line of their own under them otherwise. */
+.scope-bottom {
   grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  align-items: flex-end;
+  gap: 4px 6px;
+  min-width: 0;
 }
-.scope-row:has(> .quick-buy) .scope-chips {
-  padding-right: 84px;
+.scope-chips {
+  display: flex;
+  flex: 1 1 50%;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+.scope-foot {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 100%;
+  margin-left: auto;
+  font-size: calc(12px * var(--scope-t, 1));
+}
+/* Room for the quick-buy pill at the end of the last line only (the icons' last line when there
+   are icons), so the chips above keep the row's full width. */
+.scope-row:has(> .quick-buy) .scope-bottom:not(:has(> .scope-foot))::after,
+.scope-row:has(> .quick-buy) .scope-foot::after {
+  content: "";
+  flex: none;
+  width: 78px;
 }
 .scope-chip {
   display: inline-flex;
@@ -20738,7 +20758,12 @@ body:has(.util-toast) .bug-fab {
   .scope-new {
     padding: 6px 14px;
   }
+  /* Phones keep the chips to one clipped line, with the icons at its end. */
+  .scope-bottom {
+    flex-wrap: nowrap;
+  }
   .scope-chips {
+    flex: 1 1 0;
     flex-wrap: nowrap;
     gap: 3px;
     overflow: hidden;
@@ -21002,8 +21027,7 @@ body:has(.util-toast) .bug-fab {
   row-gap: 2px;
   min-width: 0;
 }
-.scope-title,
-.scope-meta {
+.scope-title {
   display: contents;
 }
 .scope-ticker {
@@ -21027,12 +21051,9 @@ body:has(.util-toast) .bug-fab {
   flex: none;
   align-self: center;
 }
-/* The name sits with the icons on the next line. The ticker line is the symbol, the Dex pill and the age. */
+/* The name has the next line to itself: its icons sit at the row's bottom right. */
 .scope-name {
   order: 2;
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 14em;
 }
 .scope-age {
   order: 0;
@@ -21045,17 +21066,11 @@ body:has(.util-toast) .bug-fab {
   min-width: 0;
   max-width: 46%;
 }
-.scope-meta > :not(.scope-age),
 .scope-search {
   order: 2;
 }
 .scope-main::after {
   content: none;
-}
-.scope-meta {
-  margin-top: 0;
-  gap: 6px;
-  font-size: calc(12px * var(--scope-t));
 }
 .scope-symbol {
   font-size: calc(15px * var(--scope-t));
@@ -21112,13 +21127,14 @@ body:has(.util-toast) .bug-fab {
     grid-row: 1 / span 2;
     align-self: start;
   }
-  .scope-row:has(.scope-fig-pills) > .scope-chips {
+  .scope-row:has(.scope-fig-pills) > .scope-bottom {
     grid-column: 1 / 3;
     grid-row: 2;
     align-self: start;
   }
-  .scope-row:has(.scope-fig-pills):has(> .quick-buy) .scope-chips {
-    padding-right: 0;
+  .scope-row:has(.scope-fig-pills):has(> .quick-buy) .scope-bottom::after,
+  .scope-row:has(.scope-fig-pills):has(> .quick-buy) .scope-foot::after {
+    content: none;
   }
   /* The quick-buy pill's height, under the figures (bottom: 6px, plus a little air). */
   .scope-row:has(.scope-fig-pills):has(> .quick-buy.qb-s) > .scope-figs {
@@ -21138,7 +21154,7 @@ body:has(.util-toast) .bug-fab {
     grid-row: 1;
   }
   .scope-row:not(:has(> .quick-buy)):has(.scope-fig-pills):not(:has(.scope-figs > .scope-fig:not(.scope-now)))
-    > .scope-chips {
+    > .scope-bottom {
     grid-column: 1 / -1;
   }
 }
@@ -21154,20 +21170,22 @@ body:has(.util-toast) .bug-fab {
 .scope-row:has(.scope-fig-pills) > .scope-main {
   align-content: flex-start;
 }
-/* The name gives way to its fee and link icons instead of sending them onto a line of their own
-   (a wide market cap or a result mark narrows the column on a computer too). */
+/* The whole name matters (user ask 2026-10-23): the full line under the ticker, and a second
+   line before it is cut short. */
 .scope-name {
-  flex: 1 1 0;
-  min-width: 3em;
-  max-width: max-content;
+  display: -webkit-box;
+  flex: 1 1 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 @media (max-width: 899px) {
-  /* The name gives way to its fee and link icons instead of sending them onto a third line. */
-  .scope-name {
-    flex: 1 1 0;
-    min-width: 3em;
-    max-width: max-content;
-  }
   /* Narrower gap beside the avatar here: the pair badge stays clear of the name. */
   .scope-avatar > .scope-quote-badge {
     right: -3px;
@@ -25221,15 +25239,14 @@ button.wlm-remove:hover:not(:disabled) {
   .scope-row:not(#_) > .scope-figs .scope-fig-pills {
     margin: 0 0 0 auto;
   }
-  .scope-row:not(#_) > .scope-chips {
+  .scope-row:not(#_) > .scope-bottom {
     grid-column: 1 / -1;
     grid-row: 3;
   }
-  .scope-row:not(#_):has(> .quick-buy) > .scope-chips {
-    padding-right: 78px;
-  }
-  .scope-row:not(#_) .scope-meta {
-    min-width: 0;
+  .scope-row:not(#_):has(> .quick-buy) > .scope-bottom:not(:has(> .scope-foot))::after,
+  .scope-row:not(#_):has(> .quick-buy) .scope-foot::after {
+    content: "";
+    width: 72px;
   }
   .scope-row:not(#_) .scope-src {
     max-width: 100%;
