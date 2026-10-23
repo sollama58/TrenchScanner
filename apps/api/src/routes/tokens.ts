@@ -29,7 +29,7 @@ import {
 import { SharedCache } from "../sharedCache.js";
 import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
 import { charityNamesByMint } from "../curatedFeed.js";
-import { otcDeskRoster } from "../otcDesk.js";
+import { otcDeskRosterFor } from "../otcDesk.js";
 import { enrichDeskRewards } from "../deskRewardMeta.js";
 import { creatorFeeWalletAddresses, resolveOtcDeskFee, type OtcDeskFee } from "../feeDesks.js";
 import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
@@ -959,6 +959,7 @@ export async function registerTokenRoutes(
         liveAfter(request.query),
         liveWait(request.query),
         closedSignal(reply),
+        request.user?.userId,
       );
     },
   );
@@ -1449,16 +1450,20 @@ export async function readTokenLive(
   return liveCurves().read(mintAddress, after, waitMs, signal);
 }
 
-/** The token page's live trades (LiveTradesAnswer); as the live tail, only a coin on Token is followed. */
+/**
+ * The token page's live trades (LiveTradesAnswer); as the live tail, only a coin on Token is
+ * followed. `who` is the account asking: it may follow LIVE_TRADES_PER_USER coins at once.
+ */
 export async function readTokenTradesLive(
   mintAddress: string,
   after: number,
   waitMs = 0,
   signal?: AbortSignal,
+  who?: string,
 ): Promise<LiveTradesAnswer> {
   if (!(await isTracked(mintAddress)))
     return { status: "unavailable", since: null, cursor: 0, trades: [], held: false };
-  const answer = await liveTrades().read(mintAddress, after, waitMs, signal);
+  const answer = await liveTrades().read(mintAddress, after, waitMs, signal, who);
   if (answer.trades.length === 0) return answer;
   const labels = await liveTraderLabels(answer.trades.map((t) => t.wallet));
   return Object.keys(labels).length > 0 ? { ...answer, labels } : answer;
@@ -1533,7 +1538,8 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
           },
         })
       : ([] as NarrativeAlertRow[]),
-    otcDeskRoster({ wait: true }).catch(() => new Map<string, OtcDeskFee>()),
+    // A coin past the sweep's newest pages is looked up on its own (otcDeskRosterFor).
+    otcDeskRosterFor(mintAddress, { wait: true }).catch(() => new Map<string, OtcDeskFee>()),
     feeDestination === "charity"
       ? charityNamesByMint([mintAddress])
       : Promise.resolve(new Map<string, string>()),

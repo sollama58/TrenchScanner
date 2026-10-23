@@ -783,6 +783,7 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
         liveAfter(request.query),
         liveWait(request.query),
         closedSignal(reply),
+        request.user?.userId,
       );
     },
   );
