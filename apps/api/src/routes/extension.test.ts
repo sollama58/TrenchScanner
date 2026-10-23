@@ -150,6 +150,36 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     expect((await ext(`tsma_${"a".repeat(43)}`, "GET", "/ext/v1/me")).statusCode).toBe(401);
   });
 
+  it("buckets made-up keys by address, so they can't flush a proven key's limit", async () => {
+    const user = await makeUser("junk", true);
+    const real = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    // An address of its own, so the other tests' buckets are untouched.
+    const from = (key: string) =>
+      app.inject({
+        method: "GET",
+        url: "/ext/v1/me",
+        headers: {
+          origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+          authorization: `Bearer ${key}`,
+          "cf-connecting-ip": "203.0.113.7",
+        },
+      });
+    resetExtensionAuthState();
+    expect((await from(real)).statusCode).toBe(200);
+    try {
+      const codes: number[] = [];
+      for (let i = 0; i < 25; i++)
+        codes.push((await from(newExtensionKey(String(i).padStart(32, "j")).secret)).statusCode);
+      // The address's one bucket: the real key's first (unproven) request, then 19 made-up keys.
+      expect(codes.slice(0, 19).every((c) => c === 401)).toBe(true);
+      expect(codes.slice(19).every((c) => c === 429)).toBe(true);
+      // The key proven before the junk has its own bucket and still works.
+      expect((await from(real)).statusCode).toBe(200);
+    } finally {
+      resetExtensionAuthState();
+    }
+  });
+
   it("never reads a session cookie on /ext/v1", async () => {
     const user = await makeUser("cookie", true);
     const res = await app.inject({

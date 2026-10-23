@@ -80,9 +80,19 @@ describe("poolsOf", () => {
     expect(poolsOf(OTHER_MINT, { launchpad: null, launchedAt: null, pairAddress: null })).toEqual([]);
   });
 
-  it("skips the PumpSwap pool of a coin still priced on its curve: it has not graduated", () => {
+  it("skips the PumpSwap pool of a young coin still priced on its curve: it has not graduated", () => {
     const curve = pumpCurveAddressOf(PUMP_MINT)!;
-    expect(poolsOf(PUMP_MINT, { ...pumpToken, pairAddress: curve })).toEqual([curve]);
+    const young = { ...pumpToken, launchedAt: new Date(NOW - 3_600_000), pairAddress: curve };
+    expect(poolsOf(PUMP_MINT, young, NOW)).toEqual([curve]);
+    // Past the scan's watchlist the curve address may be stale: the pool is asked too (TB-1).
+    expect(poolsOf(PUMP_MINT, { ...pumpToken, pairAddress: curve }, NOW)).toEqual([
+      pumpSwapPoolOf(PUMP_MINT),
+      curve,
+    ]);
+    expect(poolsOf(PUMP_MINT, { ...young, launchedAt: null }, NOW)).toEqual([
+      pumpSwapPoolOf(PUMP_MINT),
+      curve,
+    ]);
     // No pair known: graduated or not, both are asked.
     expect(poolsOf(PUMP_MINT, { ...pumpToken, pairAddress: null })).toEqual([
       pumpSwapPoolOf(PUMP_MINT),

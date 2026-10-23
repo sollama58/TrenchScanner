@@ -88,8 +88,16 @@ declare module "fastify" {
 
 export async function registerExtensionRoutes(app: FastifyInstance, opts: { env: Env }) {
   const admins = adminWalletSet(opts.env);
-  const bucket = (request: FastifyRequest) =>
-    extensionRateLimitBucket(request.headers.authorization, ipRateLimitKey(request));
+  // A key's own bucket only once it has been proven (in authCache): rotating made-up keys would
+  // otherwise get a fresh bucket per request and flush real keys' buckets (audit CE-2).
+  const bucket = (request: FastifyRequest) => {
+    const secret = extensionKeyFromHeader(request.headers.authorization);
+    if (secret === null || !isExtensionKeyShape(secret)) return ipRateLimitKey(request);
+    const cached = authCache.get(hashExtensionKey(secret, opts.env.JWT_SECRET));
+    return cached && Date.now() - cached.at < AUTH_CACHE_MS
+      ? extensionRateLimitBucket(request.headers.authorization, ipRateLimitKey(request))
+      : ipRateLimitKey(request);
+  };
 
   app.addHook("preHandler", async (request, reply) => {
     const now = Date.now();
@@ -110,7 +118,9 @@ export async function registerExtensionRoutes(app: FastifyInstance, opts: { env:
       request.extensionClient = cached.client;
       return;
     }
-    // A real key is never refused for its address's failures: the cap only answers wrong ones.
+    // An address past the failure cap is turned away before the key read, not after it, so junk
+    // keys cost no DB read (audit CE-2). A key proven within AUTH_CACHE_MS (above) stays exempt;
+    // an unproven one from that address waits out the minute like the junk.
     const row = await prisma.extensionKey.findUnique({
       where: { secretHash: hash },
       select: {
