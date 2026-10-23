@@ -3,6 +3,7 @@ import {
   prisma,
   pumpCurveAddressOf,
   pumpSwapPoolOf,
+  HttpError,
   RateGateDeadlineError,
   type CandleChunkRow,
   type StoredBar,
@@ -162,6 +163,18 @@ describe("stepBackfill", () => {
     const waited = await stepBackfill(job(), pumpToken, gated.d, NOW);
     expect(waited.failures).toBeUndefined();
     expect(waited.nextAt.getTime()).toBe(NOW + 15_000);
+  });
+
+  it("waits a minute on a 429 without counting it against the coin", async () => {
+    const { d } = deps({
+      geckoPage: vi.fn(async () => {
+        throw new HttpError(429, "https://pro-api.coingecko.com/x");
+      }),
+    });
+    const patch = await stepBackfill(job({ failures: 4 }), pumpToken, d, NOW);
+    expect(patch.failures).toBeUndefined();
+    expect(patch.done).toBeUndefined();
+    expect(patch.nextAt.getTime()).toBe(NOW + 60_000);
   });
 
   it("goes on to GeckoTerminal when Pump.fun's 5-minute page fails", async () => {
