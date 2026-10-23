@@ -1,6 +1,6 @@
 import { SectionBoundary } from "./SectionBoundary";
 import { ScopeRowSkeletons } from "./Skeleton";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Card, CuratedPage, Filter, LaunchPage, Leaderboard, MatchPage } from "../api";
 import {
   passesColumnFilter,
@@ -30,7 +30,9 @@ import {
   emptyColumns,
   frameOf,
   holdFrame,
+  keptCards,
   kindDef,
+  rowClock,
   SCOPE_MODEL_PAGES,
   SCOPE_PAGES,
   SCOPE_STREAM_PAGES,
@@ -92,8 +94,10 @@ const STREAM_PATH = "/launches";
  * look, apart from the Cards view's Customize) and the Live feed's token window. The board
  * holds still while a mouse rests on it or a list is scrolled down; new alerts wait behind a "N new"
  * pill. On phones one column shows at a time under sticky tabs: tap a tab or swipe sideways.
+ * Memoized, so the Live tab's own re-renders (its clock, its header) skip the board (audit
+ * 2026-10-23, WB-1): every prop it is given is stable.
  */
-export function ScopeBoard({
+export const ScopeBoard = memo(function ScopeBoard({
   feedPath,
   modelsOn,
   heldTokenIds = NO_TOKENS,
@@ -206,9 +210,12 @@ export function ScopeBoard({
   useEffect(() => {
     if (visible) unhideTokens(dueToUnhide(hiddenTokens, visible, gradTokens));
   }, [visible, hiddenTokens, gradTokens]);
+  // Read at the click, so the rows' memo isn't broken by every live tick (audit 2026-10-23, WB-3).
+  const hideFrom = useRef({ visible, gradTokens });
+  hideFrom.current = { visible, gradTokens };
   const onHide = useCallback(
-    (card: Card) => hideToken(card, visible ?? [], gradTokens),
-    [visible, gradTokens],
+    (card: Card) => hideToken(card, hideFrom.current.visible ?? [], hideFrom.current.gradTokens),
+    [],
   );
   // Every column before its filters: what the settings window offers to pick from.
   const unfiltered = useMemo(() => {
@@ -267,8 +274,8 @@ export function ScopeBoard({
   const [frame, setFrame] = useState<ScopeFrame | null>(null);
   const lastCards = useRef(new Map<string, Card>());
   useEffect(() => {
-    for (const c of visible ?? []) lastCards.current.set(c.id, c);
-  }, [visible]);
+    lastCards.current = keptCards(lastCards.current, visible ?? [], frame);
+  }, [visible, frame]);
   const held = useMemo(
     () => (fresh && frame ? holdFrame(frame, fresh, lastCards.current) : null),
     [fresh, frame],
@@ -567,7 +574,7 @@ export function ScopeBoard({
                     <ScopeRow
                       index={i}
                       card={card}
-                      now={now}
+                      now={rowClock(now, card)}
                       display={display}
                       tiles={tiles}
                       marker={c.kind === "graduated" || c.kind === "model"}
@@ -582,7 +589,7 @@ export function ScopeBoard({
       </div>
     </div>
   );
-}
+});
 
 /** Past this many columns, the board widens past the page's width into the window's (user ask 2026-10-23). */
 const WIDE_FROM_COLS = 3;
@@ -669,7 +676,12 @@ export function scopeLookClass(d: ScopeDisplay): string {
 }
 
 /** One alert as a row: avatar, ticker and age, where it came from, the figures, and data chips. */
-export function ScopeRow({
+/**
+ * Memoized (audit 2026-10-23, WB-3): a board holds 100-200 rows, and its live tick and clock change
+ * only some of them; the props are stable otherwise (onHide is a callback, display and tiles are
+ * settings, a card keeps its object until its figures change, and `now` steps per rowClock).
+ */
+export const ScopeRow = memo(function ScopeRow({
   card,
   now,
   display: d,
@@ -941,4 +953,4 @@ export function ScopeRow({
       )}
     </article>
   );
-}
+});

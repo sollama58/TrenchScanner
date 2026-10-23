@@ -45,6 +45,7 @@ import {
 import { AlertNotifier, dropPush, resetSettings } from "./alerts";
 import { resetHiddenTokens } from "./hiddenTokens";
 import { resetScopeSettings } from "./scopeSettings";
+import { resetWatchlist } from "./watchlist";
 import { AnnouncementBar } from "./components/AnnouncementBar";
 import { currentSignIn, hasPendingLink, mayReplaceSignIn, redeemLinkCode, takeLinkCode } from "./deviceLink";
 import { closeSage, useSageMint } from "./sage";
@@ -138,13 +139,17 @@ const SESSION_ENDED_RECHECK_MS = 5_000;
 
 /**
  * Forgets everything this page holds for one account, when it signs out or another takes its
- * place: two-factor passes, cached answers, settings and the open token view (which sits above
- * the feed, so it would outlive the session it was read in).
+ * place: two-factor passes, cached answers, settings, the watchlist and the open token view (which
+ * sits above the feed, so it would outlive the session it was read in).
  */
 function resetAccountState(): void {
   clearPasses();
   invalidate();
   resetSettings();
+  // The market bar and stars stay mounted across an account switch, so the store's own forget
+  // (after every consumer unmounts) never runs; the next poll loads the new account's (audit
+  // 2026-10-23, WB-6).
+  resetWatchlist();
   closeTokenModal();
 }
 

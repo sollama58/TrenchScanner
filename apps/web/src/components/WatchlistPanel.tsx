@@ -1,11 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ago, signedPct, usd } from "../format";
 import { useWatchlist, type WatchlistItem } from "../watchlist";
 import { changeTone, hourChange, isStale, openWatched, watchLabel } from "../watchlistView";
 import { CloseIcon, PlusIcon, StarIcon } from "./Icons";
 import { Spinner } from "./Loading";
 import { TokenImage } from "./TokenImage";
-import { WatchlistDialog } from "./WatchlistManager";
+import { WatchlistDialog } from "../livePanels";
 
 /** A row's height and the gap under it (styles.css .watchlist-row), and the "+N" button's. */
 const ROW_PX = 33;
@@ -178,7 +178,11 @@ export function WatchlistPanel({
           )}
         </div>
       )}
-      {!onMore && dialog && <WatchlistDialog onClose={() => setDialog(false)} />}
+      {!onMore && dialog && (
+        <Suspense fallback={null}>
+          <WatchlistDialog onClose={() => setDialog(false)} />
+        </Suspense>
+      )}
     </section>
   );
 }

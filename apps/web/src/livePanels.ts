@@ -11,6 +11,8 @@ export const loadFeedStatsModal = () => import("./components/FeedStatsModal");
 export const loadCustomizeDrawer = () => import("./components/CustomizeDrawer");
 export const loadSearchModal = () => import("./components/CaSearch");
 export const loadScopeBoard = () => import("./components/ScopeBoard");
+/** The Watchlist manager behind the market bar's "+N" (audit 2026-10-23: only a click opens it). */
+export const loadWatchlistManager = () => import("./components/WatchlistManager");
 
 export const AboutModal = lazy(() => loadAboutModal().then((m) => ({ default: m.AboutModal })));
 export const FeedStatsModal = lazy(() => loadFeedStatsModal().then((m) => ({ default: m.FeedStatsModal })));
@@ -19,6 +21,9 @@ export const CustomizeDrawer = lazy(() =>
 );
 export const SearchModal = lazy(() => loadSearchModal().then((m) => ({ default: m.SearchModal })));
 export const ScopeBoard = lazy(() => loadScopeBoard().then((m) => ({ default: m.ScopeBoard })));
+export const WatchlistDialog = lazy(() =>
+  loadWatchlistManager().then((m) => ({ default: m.WatchlistDialog })),
+);
 
 /** Warms the code behind the Live tab's buttons (main.tsx, once the first screen is idle). */
 export function warmLivePanels() {
@@ -26,6 +31,7 @@ export function warmLivePanels() {
   void loadCustomizeDrawer();
   void loadSearchModal();
   void loadScopeBoard();
+  void loadWatchlistManager();
 }
 
 /**
