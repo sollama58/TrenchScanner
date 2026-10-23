@@ -421,6 +421,13 @@ const envSchema = z.object({
   // FLOOR (unpriced assets count as nothing), so a bar set high would misread illiquid-bag
   // holders as empty.
   WALLET_HOLDINGS_MIN_USD: z.coerce.number().positive().default(25),
+  // Launches found through Jupiter's lists carry no metadata URI, so while Pump.fun refuses they
+  // reach the models with no description, socials or creator. For the coins in the band each
+  // cycle, at most this many on-chain URI reads (DAS getAsset, 10 credits each), then the launch
+  // JSON through the IPFS gateways as the stream's launches get (launchDetails.ts). In-band coins
+  // only (user decision 2026-10-23): every Jupiter launch would be about 0.5 M credits a day.
+  // 0 turns it off.
+  LAUNCH_METADATA_DAS_PER_CYCLE: z.coerce.number().int().nonnegative().default(20),
   // Cap on UNCACHED holdings lookups per scan cycle. Sized against the DAS rate limit rather
   // than the RPC one - DAS is billed and throttled separately, and far more tightly (10 req/s
   // against 50 on the tier this runs on), so this budget is the guard that keeps a busy cycle

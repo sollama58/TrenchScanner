@@ -2805,6 +2805,21 @@ export class HeliusClient {
   }
 
   /**
+   * A token's on-chain metadata URI (its Metaplex `uri`, the launch's IPFS JSON) through the DAS
+   * getAsset method, 10 credits. For launches found through Jupiter's lists, which carry no URI,
+   * while Pump.fun's own endpoints refuse (user decision 2026-10-23: in-band coins only; see the
+   * worker's launchDetails.ts). Null when the asset has no URI; "failed" when nothing answered or
+   * this endpoint doesn't serve DAS.
+   */
+  async getAssetMetadataUri(mint: string): Promise<string | null | "failed"> {
+    if (!this.holdingsLookupAvailable) return "failed";
+    const res = await this.sendSingle<{ content?: { json_uri?: unknown } }>("getAsset", { id: mint }, 10_000);
+    if (!res || res.error) return "failed";
+    const uri = res.result?.content?.json_uri;
+    return typeof uri === "string" && uri.length > 0 ? uri : null;
+  }
+
+  /**
    * The USD value each wallet holds in tokens that are neither cash nor gas - the "is this a real
    * trader or a freshly-funded shell?" signal behind the empty-top-10-wallet filter.
    *
