@@ -263,6 +263,27 @@ export function frameOf(cols: ScopeColumns): ScopeFrame {
 }
 
 /**
+ * The last card seen for each id, as `holdFrame` reads it: the cards on the board now and, while
+ * it holds still, the ones its frame still draws. Anything else is dropped, so a board left open
+ * on the Stream all day doesn't keep every card it ever showed (audit 2026-10-23, WB-2).
+ */
+export function keptCards(
+  last: ReadonlyMap<string, Card>,
+  visible: readonly Card[],
+  frame: ScopeFrame | null,
+): Map<string, Card> {
+  const out = new Map<string, Card>();
+  if (frame)
+    for (const ids of Object.values(frame))
+      for (const id of ids) {
+        const card = last.get(id);
+        if (card) out.set(id, card);
+      }
+  for (const c of visible) out.set(c.id, c);
+  return out;
+}
+
+/**
  * A paused board: every row stays where it was (fresh figures, same place), so nothing moves
  * under a pointer or thumb about to tap it. A row whose alert left the feed keeps its last card.
  * `fresh` is the board as it would be now; `pending` counts its alerts the frame hasn't drawn.
@@ -324,6 +345,20 @@ export function shortAge(ms: number): string {
   if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
   return h < 48 ? `${h}h` : `${Math.floor(h / 24)}d`;
+}
+
+/** Rows a minute old or more read their age in minutes, so their clock moves at the Cards view's pace. */
+export const ROW_SLOW_CLOCK_MS = 15_000;
+
+/**
+ * The clock a row is drawn with: the board's own (5 s) while its age reads in seconds, then one
+ * that moves every ROW_SLOW_CLOCK_MS, so the memoized rows past their first minute re-render a
+ * third as often instead of every row on every tick (audit 2026-10-23, WB-3).
+ */
+export function rowClock(now: number, card: Card): number {
+  const at = Date.parse(card.kind === "match" ? card.matchedAt : (card.curated?.alertedAt ?? card.matchedAt));
+  const slow = Math.floor(now / ROW_SLOW_CLOCK_MS) * ROW_SLOW_CLOCK_MS;
+  return Number.isFinite(at) && slow - at >= 60_000 ? slow : now;
 }
 
 /** Board-wide reasons to hold still. Only a pointer resting on it or a scrolled list say "Paused". */

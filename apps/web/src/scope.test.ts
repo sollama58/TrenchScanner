@@ -4,7 +4,10 @@ import {
   columnLabel,
   frameOf,
   holdFrame,
+  keptCards,
   mergeCalls,
+  rowClock,
+  ROW_SLOW_CLOCK_MS,
   scopeTickIds,
   shortAge,
   splitScope,
@@ -250,6 +253,54 @@ describe("holdFrame", () => {
     const frame = frameOf(split([gone], []));
     const cols = holdFrame(frame, split([], []), new Map([["m1", gone]])).cols as Fixed;
     expect(cols.filters).toEqual([gone]);
+  });
+});
+
+describe("keptCards", () => {
+  it("keeps only the cards on the board and, while held, the ones its frame draws", () => {
+    const a = card("a", "match");
+    const b = card("b", "match");
+    const gone = card("gone", "match");
+    const old = new Map([
+      ["a", a],
+      ["gone", gone],
+      ["long-gone", card("long-gone", "match")],
+    ]);
+    // Live: only what is on the board now.
+    expect([...keptCards(old, [a, b], null).keys()]).toEqual(["a", "b"]);
+    // Held: the frame's rows stay, from their last card, even once they leave the feed.
+    const held = keptCards(old, [b], { filters: ["a", "gone"], models: [] });
+    expect([...held.keys()].sort()).toEqual(["a", "b", "gone"]);
+    expect(held.get("gone")).toBe(gone);
+    // A newer card wins over the last one kept.
+    const a2 = { ...a, snapshot: { marketCapUsd: 2 } } as Card;
+    expect(keptCards(old, [a2], { filters: ["a"] }).get("a")).toBe(a2);
+  });
+});
+
+describe("rowClock", () => {
+  const at = (iso: string, kind: Card["kind"] = "match") => ({ ...card("r", kind), matchedAt: iso }) as Card;
+  const t0 = Date.parse("2026-10-23T12:00:00.000Z");
+
+  it("keeps the board's clock while a row's age reads in seconds", () => {
+    const row = at(new Date(t0 - 30_000).toISOString());
+    expect(rowClock(t0 + 5_000, row)).toBe(t0 + 5_000);
+  });
+
+  it("moves an older row's clock in steps, so it skips most ticks", () => {
+    const row = at(new Date(t0 - 10 * 60_000).toISOString());
+    const ticks = [0, 5_000, 10_000, 15_000, 20_000, 25_000].map((d) => rowClock(t0 + d, row));
+    expect(new Set(ticks).size).toBe(2);
+    expect(ticks.every((n, i) => n <= t0 + i * 5_000 && t0 + i * 5_000 - n < ROW_SLOW_CLOCK_MS)).toBe(true);
+  });
+
+  it("goes by a model call's alert time, and an unparsable time keeps the board's clock", () => {
+    const call = {
+      ...at(new Date(t0).toISOString(), "curated"),
+      curated: { alertedAt: new Date(t0 - 5 * 60_000).toISOString() },
+    } as Card;
+    expect(rowClock(t0 + 5_000, call)).toBe(t0);
+    expect(rowClock(t0 + 5_000, at("not a date"))).toBe(t0 + 5_000);
   });
 });
 

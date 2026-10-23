@@ -2,7 +2,16 @@ import { MarketBar } from "../components/MarketBar";
 import { WatchlistChips } from "../components/WatchlistChips";
 import { WatchlistPanel } from "../components/WatchlistPanel";
 import { SectionBoundary } from "../components/SectionBoundary";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { type CuratedStats, type Leaderboard, type MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { ScopeRowSkeletons, SkeletonCards } from "../components/Skeleton";
@@ -43,6 +52,8 @@ const SHOW_HIGH_CONVICTION = false;
  * at once, from the cache where it has them, instead of growing one round trip at a time again.
  */
 const filledDepth = new Map<string, number>();
+
+const noop = () => {};
 
 /** This browser's pick of Cards or Scope for the Live feed (user decision 2026-10-18: a toggle, not a tab). */
 const VIEW_KEY = "ts-live-view";
@@ -92,7 +103,6 @@ export function LiveTab({
   };
   // Tokens the user hid from Cards and Scope (user ask 2026-10-19), and the list to bring them back.
   const hiddenTokens = useHiddenTokens();
-  const hiddenTokenIds = useHiddenTokenIds();
   // Pro: coins the wallet holds skip the filters below and Scope's (user ask 2026-10-19).
   const heldTokenIds = useHeldTokenIds();
   const [hiddenOpen, setHiddenOpen] = useState(false);
@@ -112,7 +122,6 @@ export function LiveTab({
   const [customizing, setCustomizing] = useState(false);
   const closeCustomize = useCallback(() => setCustomizing(false), []);
   const look = useAppearance();
-  const hidden = useMemo(() => cardHideSet(look), [look]);
   // The search (address, ticker or name) opens its own window over the feed (user ask
   // 2026-10-19), in both views; the feed underneath carries on as it was.
   const [searchOpen, setSearchOpen] = useState(false);
@@ -130,112 +139,23 @@ export function LiveTab({
   // "saved": the API mixes in model calls per this user's own switch and checked models; with
   // highConviction those calls are every model's high-conviction tier instead.
   const hc = highConviction ? "&highConviction=1" : "";
-  const feedPath = (n: number) => `/matches?page=${n}&includeCurated=saved${hc}`;
-  // The API's pages can come up short (a model call folded into your filter's card for the same
-  // token, a card whose token was pruned), and hiding low market caps takes more cards out, so the
-  // feed reads the API's pages from the first and lays out full pages of its own here: page 1
-  // below, and `depth - 1` more after it, read as far as the page on screen needs.
-  const [depth, setDepth] = useState(() => filledDepth.get(`${hc}|1`) ?? 1);
-  const feedPage = usePolling<MatchPage>(feedPath(1), 30_000);
-  const morePaths = Array.from({ length: depth - 1 }, (_, i) => feedPath(i + 2));
-  const morePages = usePollingAll<MatchPage>(morePaths, 30_000);
+  // Stable per feed, so the memoized Scope board skips this tab's own re-renders (audit 2026-10-23, WB-1).
+  const feedPath = useCallback((n: number) => `/matches?page=${n}&includeCurated=saved${hc}`, [hc]);
   const stats = usePolling<CuratedStats>("/curated/stats", 60_000);
   const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000);
   const lb = board.data;
   const modelsOn = lb?.showModelAlerts ?? true;
   // Settings' "Only alerts both caught": the API narrows the feed and its stats; this only words it.
   const bothOn = modelsOn && (lb?.bothOnly ?? false);
-  // Only the first page refetches on a nudge: the ones read ahead catch up on their own poll, and
-  // a burst of alerts must not refetch all of them each time.
-  const nudged = () => feedPage.reload();
-  const curatedLive = useNudgeStream("/curated/stream", nudged, modelsOn);
-  const matchesLive = useNudgeStream("/matches/stream", nudged);
-  const loadedPages = [feedPage.data, ...morePages.data];
-  const buffer = useMemo(
-    () => (feedPage.data ? joinPages(loadedPages) : undefined),
-    // loadedPages is rebuilt every render; its parts are what change.
-    [feedPage.data, morePages.data],
-  );
-  // The live tick covers the page on screen and the hidden cards among it (which can climb back),
-  // not every alert read ahead. Which those are depends on the tick itself, so it follows a render.
-  const [tickIds, setTickIds] = useState<string[] | undefined>(undefined);
-  // "Now" on each card, seconds old rather than as old as the last feed poll.
-  const cards = useLiveMarketCaps(buffer, tickIds);
-  // Hidden tokens come off the page like the low market caps below, older alerts moving up. With
-  // auto-unhide on, one that graduated or reached a new 2x, 4x or 10x comes back. One the wallet
-  // holds stays.
-  const unhiddenCards = useMemo(
-    () =>
-      cards && hiddenTokenIds.size > 0
-        ? cards.filter((c) => !hiddenTokenIds.has(c.tokenId) || heldTokenIds.has(c.tokenId))
-        : cards,
-    [cards, hiddenTokenIds, heldTokenIds],
-  );
-  useEffect(() => {
-    if (cards) unhideTokens(dueToUnhide(hiddenTokens, cards));
-  }, [cards, hiddenTokens]);
-  // The "hide below this market cap" setting only takes cards off the screen: the feed's stats and
-  // grading are the API's, unchanged. Older alerts move up into the gaps, and a card that climbs
-  // back over the line (with a margin, so a coin trading at the line doesn't flicker) takes its own
-  // place again. Which cards were hidden last time carries over for that margin.
-  const wasHidden = useRef<ReadonlySet<string>>(new Set());
-  const filled = useMemo(
-    () =>
-      unhiddenCards ? fillPage(unhiddenCards, look, page, wasHidden.current, undefined, heldTokenIds) : null,
-    [unhiddenCards, look, page, heldTokenIds],
-  );
-  useEffect(() => {
-    wasHidden.current = filled?.hidden ?? new Set();
-  }, [filled]);
-  const tickKey = filled?.tickTokenIds.join(",") ?? "";
-  useEffect(() => setTickIds(tickKey ? tickKey.split(",") : undefined), [tickKey]);
-  const lastLoaded = loadedPages[loadedPages.length - 1] ?? null;
-  // Paging further back reads further: as many API pages as the page on screen, plus room to fill.
-  const maxDepth = Math.min(page + MAX_FILL_PAGES - 1, MAX_READ_PAGES);
-  const allLoaded = loadedPages.every((p) => p !== null);
-  const apiHasMore = lastLoaded ? (lastLoaded.hasMore ?? false) : false;
-  // Read more API pages while this one is short and the API has older alerts: as many as it looks
-  // to need at the rate the pages so far showed cards, all at once.
-  useEffect(() => {
-    if (!filled || !allLoaded) return;
-    if (filled.moreLoaded) filledDepth.set(`${hc}|${page}`, depth);
-    else if (apiHasMore && depth < maxDepth)
-      setDepth(nextDepth(depth, filled.visible, page * FEED_PAGE_SIZE, maxDepth));
-  }, [filled, allLoaded, apiHasMore, depth, maxDepth, hc, page]);
-  // Back to the new feed's own depth when it changes. Not on mount: this ran after the effect above
-  // and undid its first step, so a feed coming back from the cache sat short until the next poll.
-  const lastHc = useRef(hc);
-  useEffect(() => {
-    if (hc === lastHc.current) return;
-    lastHc.current = hc;
-    setDepth(filledDepth.get(`${hc}|1`) ?? 1);
-  }, [hc]);
-  // Paged back: read only as deep as the page on screen took last time, growing again (above) if it
-  // comes up short. Kept at its depth, every page read on the way out stayed polled for good.
-  const lastPage = useRef(page);
-  useEffect(() => {
-    if (page < lastPage.current) setDepth((d) => Math.min(d, filledDepth.get(`${hc}|${page}`) ?? page));
-    lastPage.current = page;
-  }, [page, hc]);
-  // The API pages the next page looks to need, started on hover/focus of Older so the click usually
-  // finds them all here rather than filling in a few cards per round trip.
-  const prefetchOlder = () => {
-    const ahead = filled
-      ? nextDepth(
-          depth,
-          filled.visible,
-          (page + 1) * FEED_PAGE_SIZE,
-          Math.min(page + MAX_FILL_PAGES, MAX_READ_PAGES),
-        )
-      : depth + 1;
-    for (let n = depth + 1; n <= ahead; n++) prefetch(feedPath(n));
-  };
-  const shownCards = filled?.shown;
-  const hiddenCount = filled?.hiddenHere ?? 0;
+  // Only the streams' state, for the Scanning pill: each view refetches its own pages on a nudge.
+  const curatedLive = useNudgeStream("/curated/stream", noop, modelsOn);
+  const matchesLive = useNudgeStream("/matches/stream", noop);
+  // Whether the Cards feed's reads are failing, for the Scanning pill (Scope reports its own).
+  const [cardsFailing, setCardsFailing] = useState(false);
+  const customizeCards = useCallback(() => setCustomizing(true), []);
 
   const t = lb?.targets ?? { hitRate2xPct: 75, hitRate4xPct: 50 };
   const chosen = lb ? lb.entries.filter((e) => lb.selectedModels.includes(e.id)) : [];
-  const hasMore = filled ? filled.moreLoaded || (apiHasMore && depth < maxDepth) : false;
   const chosenNames =
     chosen.length === 0
       ? "–"
@@ -375,20 +295,11 @@ export function LiveTab({
                 live: streamLive,
                 idle: "Polling",
                 paused: scope && scopeStatus.paused,
-                failing: scope ? scopeStatus.failing : !!feedPage.error,
+                failing: scope ? scopeStatus.failing : cardsFailing,
               }}
             />
           </div>
         </header>
-        {!scope && feedPage.error && !feedPage.data && (
-          <p className="error">Couldn&apos;t load your feed: {feedPage.error.message}</p>
-        )}
-        {!scope && feedPage.error && feedPage.data && (
-          <p className="muted small center feed-refresh-note" role="status">
-            Couldn&apos;t refresh your feed, showing it from{" "}
-            {feedPage.at !== null ? ago(new Date(feedPage.at), now) : "earlier"}. Trying again.
-          </p>
-        )}
         {scope && (
           <Suspense fallback={<ScopeRowSkeletons />}>
             <ScopeBoard
@@ -402,70 +313,21 @@ export function LiveTab({
           </Suspense>
         )}
         {!scope && (
-          <>
-            {!feedPage.data && !feedPage.error && <SkeletonCards count={4} />}
-            {feedPage.data && feedPage.data.matches.length === 0 && page === 1 && (
-              <div className="empty-state">
-                <RadarIcon size={28} />
-                <p>
-                  {bothOn
-                    ? `Nothing yet that your filter and ${chosenNames} both caught. Only alerts both caught is on in Settings, so tokens only one side caught are left out.`
-                    : modelsOn
-                      ? `Nothing yet from your filter or ${highConviction ? "the high-conviction alerts" : chosenNames}. Alerts land here the moment one comes in.`
-                      : "Nothing caught by your filter yet. Turn on Model alerts in Settings to see the models' alerts here too."}
-                </p>
-                <button className="ghost" onClick={() => goTo("filters")}>
-                  Tune your filter <ArrowRightIcon size={13} />
-                </button>
-              </div>
-            )}
-            <div
-              className={`cards${feedPage.stale || (feedPage.error && feedPage.data) ? " stale" : ""}`}
-              aria-busy={feedPage.stale}
-              {...feedGridProps(look)}
-            >
-              {shownCards?.map((card) => (
-                <SectionBoundary key={card.id} label="This card" size="card" resetKey={card}>
-                  <AlertCard
-                    card={card}
-                    now={now}
-                    labelSource
-                    hide={hidden}
-                    onHide={() => hideToken(card, cards ?? [])}
-                  />
-                </SectionBoundary>
-              ))}
-            </div>
-            {hiddenCount > 0 && (
-              <p className="muted small center mcap-hidden-note">
-                {hiddenCount === 1 ? "1 alert" : `${hiddenCount} alerts`} now under $
-                {look.hideBelowMcapUsd / 1000}K market cap {hiddenCount === 1 ? "is" : "are"} hidden here,
-                with older alerts moved up in {hiddenCount === 1 ? "its" : "their"} place.{" "}
-                <button type="button" className="link" onClick={() => setCustomizing(true)}>
-                  Change
-                </button>
-              </p>
-            )}
-            {feedPage.data && (shownCards?.length ?? 0) === 0 && page > 1 && (
-              <p className="muted small center">Nothing older here.</p>
-            )}
-            {(page > 1 || hasMore) && (
-              <nav className="pager">
-                <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-                  ← Newer
-                </button>
-                <span className="muted small num">Page {page}</span>
-                <button
-                  disabled={!hasMore || feedPage.stale}
-                  onPointerEnter={prefetchOlder}
-                  onFocus={prefetchOlder}
-                  onClick={() => setPage((p) => p + 1)}
-                >
-                  Older →
-                </button>
-              </nav>
-            )}
-          </>
+          <CardsFeed
+            feedPath={feedPath}
+            hc={hc}
+            page={page}
+            setPage={setPage}
+            now={now}
+            heldTokenIds={heldTokenIds}
+            modelsOn={modelsOn}
+            bothOn={bothOn}
+            highConviction={highConviction}
+            chosenNames={chosenNames}
+            goTo={goTo}
+            onCustomize={customizeCards}
+            onFailing={setCardsFailing}
+          />
         )}
         {stats.data && look.learningNote && (
           <div className={`learning-note${stats.stale ? " stale" : ""}`}>
@@ -482,5 +344,221 @@ export function LiveTab({
         )}
       </section>
     </div>
+  );
+}
+
+/**
+ * The Cards view's feed: its pages, live market caps and pager. Mounted only while Cards is the
+ * view, so in Scope (which reads the same pages and runs its own tick) the hidden cards no longer
+ * poll every page a second time, send their own GET /live/market, or re-render the board (audit
+ * 2026-10-23, WB-1).
+ */
+function CardsFeed({
+  feedPath,
+  hc,
+  page,
+  setPage,
+  now,
+  heldTokenIds,
+  modelsOn,
+  bothOn,
+  highConviction,
+  chosenNames,
+  goTo,
+  onCustomize,
+  onFailing,
+}: {
+  feedPath: (n: number) => string;
+  /** The high-conviction part of the path, which keys the depth each page took. */
+  hc: string;
+  page: number;
+  setPage: Dispatch<SetStateAction<number>>;
+  now: number;
+  heldTokenIds: ReadonlySet<string>;
+  modelsOn: boolean;
+  bothOn: boolean;
+  highConviction: boolean;
+  chosenNames: string;
+  goTo: (tab: "model" | "filters" | "settings") => void;
+  onCustomize: () => void;
+  onFailing: (failing: boolean) => void;
+}) {
+  const look = useAppearance();
+  const hidden = useMemo(() => cardHideSet(look), [look]);
+  const hiddenTokens = useHiddenTokens();
+  const hiddenTokenIds = useHiddenTokenIds();
+  // The API's pages can come up short (a model call folded into your filter's card for the same
+  // token, a card whose token was pruned), and hiding low market caps takes more cards out, so the
+  // feed reads the API's pages from the first and lays out full pages of its own here: page 1
+  // below, and `depth - 1` more after it, read as far as the page on screen needs.
+  const [depth, setDepth] = useState(() => filledDepth.get(`${hc}|1`) ?? 1);
+  const feedPage = usePolling<MatchPage>(feedPath(1), 30_000);
+  const morePaths = Array.from({ length: depth - 1 }, (_, i) => feedPath(i + 2));
+  const morePages = usePollingAll<MatchPage>(morePaths, 30_000);
+  // Only the first page refetches on a nudge: the ones read ahead catch up on their own poll, and
+  // a burst of alerts must not refetch all of them each time.
+  const nudged = () => feedPage.reload();
+  useNudgeStream("/curated/stream", nudged, modelsOn);
+  useNudgeStream("/matches/stream", nudged);
+  const loadedPages = [feedPage.data, ...morePages.data];
+  const buffer = useMemo(
+    () => (feedPage.data ? joinPages(loadedPages) : undefined),
+    // loadedPages is rebuilt every render; its parts are what change.
+    [feedPage.data, morePages.data],
+  );
+  // The live tick covers the page on screen and the hidden cards among it (which can climb back),
+  // not every alert read ahead. Which those are depends on the tick itself, so it follows a render.
+  const [tickIds, setTickIds] = useState<string[] | undefined>(undefined);
+  // "Now" on each card, seconds old rather than as old as the last feed poll.
+  const cards = useLiveMarketCaps(buffer, tickIds);
+  // Hidden tokens come off the page like the low market caps below, older alerts moving up. With
+  // auto-unhide on, one that graduated or reached a new 2x, 4x or 10x comes back. One the wallet
+  // holds stays.
+  const unhiddenCards = useMemo(
+    () =>
+      cards && hiddenTokenIds.size > 0
+        ? cards.filter((c) => !hiddenTokenIds.has(c.tokenId) || heldTokenIds.has(c.tokenId))
+        : cards,
+    [cards, hiddenTokenIds, heldTokenIds],
+  );
+  useEffect(() => {
+    if (cards) unhideTokens(dueToUnhide(hiddenTokens, cards));
+  }, [cards, hiddenTokens]);
+  // The "hide below this market cap" setting only takes cards off the screen: the feed's stats and
+  // grading are the API's, unchanged. Older alerts move up into the gaps, and a card that climbs
+  // back over the line (with a margin, so a coin trading at the line doesn't flicker) takes its own
+  // place again. Which cards were hidden last time carries over for that margin.
+  const wasHidden = useRef<ReadonlySet<string>>(new Set());
+  const filled = useMemo(
+    () =>
+      unhiddenCards ? fillPage(unhiddenCards, look, page, wasHidden.current, undefined, heldTokenIds) : null,
+    [unhiddenCards, look, page, heldTokenIds],
+  );
+  useEffect(() => {
+    wasHidden.current = filled?.hidden ?? new Set();
+  }, [filled]);
+  const tickKey = filled?.tickTokenIds.join(",") ?? "";
+  useEffect(() => setTickIds(tickKey ? tickKey.split(",") : undefined), [tickKey]);
+  const lastLoaded = loadedPages[loadedPages.length - 1] ?? null;
+  // Paging further back reads further: as many API pages as the page on screen, plus room to fill.
+  const maxDepth = Math.min(page + MAX_FILL_PAGES - 1, MAX_READ_PAGES);
+  const allLoaded = loadedPages.every((p) => p !== null);
+  const apiHasMore = lastLoaded ? (lastLoaded.hasMore ?? false) : false;
+  // Read more API pages while this one is short and the API has older alerts: as many as it looks
+  // to need at the rate the pages so far showed cards, all at once.
+  useEffect(() => {
+    if (!filled || !allLoaded) return;
+    if (filled.moreLoaded) filledDepth.set(`${hc}|${page}`, depth);
+    else if (apiHasMore && depth < maxDepth)
+      setDepth(nextDepth(depth, filled.visible, page * FEED_PAGE_SIZE, maxDepth));
+  }, [filled, allLoaded, apiHasMore, depth, maxDepth, hc, page]);
+  // Back to the new feed's own depth when it changes. Not on mount: this ran after the effect above
+  // and undid its first step, so a feed coming back from the cache sat short until the next poll.
+  const lastHc = useRef(hc);
+  useEffect(() => {
+    if (hc === lastHc.current) return;
+    lastHc.current = hc;
+    setDepth(filledDepth.get(`${hc}|1`) ?? 1);
+  }, [hc]);
+  // Paged back: read only as deep as the page on screen took last time, growing again (above) if it
+  // comes up short. Kept at its depth, every page read on the way out stayed polled for good.
+  const lastPage = useRef(page);
+  useEffect(() => {
+    if (page < lastPage.current) setDepth((d) => Math.min(d, filledDepth.get(`${hc}|${page}`) ?? page));
+    lastPage.current = page;
+  }, [page, hc]);
+  // The API pages the next page looks to need, started on hover/focus of Older so the click usually
+  // finds them all here rather than filling in a few cards per round trip.
+  const prefetchOlder = () => {
+    const ahead = filled
+      ? nextDepth(
+          depth,
+          filled.visible,
+          (page + 1) * FEED_PAGE_SIZE,
+          Math.min(page + MAX_FILL_PAGES, MAX_READ_PAGES),
+        )
+      : depth + 1;
+    for (let n = depth + 1; n <= ahead; n++) prefetch(feedPath(n));
+  };
+  const shownCards = filled?.shown;
+  const hiddenCount = filled?.hiddenHere ?? 0;
+  const hasMore = filled ? filled.moreLoaded || (apiHasMore && depth < maxDepth) : false;
+  const failing = !!feedPage.error;
+  useEffect(() => onFailing(failing), [failing, onFailing]);
+
+  return (
+    <>
+      {feedPage.error && !feedPage.data && (
+        <p className="error">Couldn&apos;t load your feed: {feedPage.error.message}</p>
+      )}
+      {feedPage.error && feedPage.data && (
+        <p className="muted small center feed-refresh-note" role="status">
+          Couldn&apos;t refresh your feed, showing it from{" "}
+          {feedPage.at !== null ? ago(new Date(feedPage.at), now) : "earlier"}. Trying again.
+        </p>
+      )}
+      {!feedPage.data && !feedPage.error && <SkeletonCards count={4} />}
+      {feedPage.data && feedPage.data.matches.length === 0 && page === 1 && (
+        <div className="empty-state">
+          <RadarIcon size={28} />
+          <p>
+            {bothOn
+              ? `Nothing yet that your filter and ${chosenNames} both caught. Only alerts both caught is on in Settings, so tokens only one side caught are left out.`
+              : modelsOn
+                ? `Nothing yet from your filter or ${highConviction ? "the high-conviction alerts" : chosenNames}. Alerts land here the moment one comes in.`
+                : "Nothing caught by your filter yet. Turn on Model alerts in Settings to see the models' alerts here too."}
+          </p>
+          <button className="ghost" onClick={() => goTo("filters")}>
+            Tune your filter <ArrowRightIcon size={13} />
+          </button>
+        </div>
+      )}
+      <div
+        className={`cards${feedPage.stale || (feedPage.error && feedPage.data) ? " stale" : ""}`}
+        aria-busy={feedPage.stale}
+        {...feedGridProps(look)}
+      >
+        {shownCards?.map((card) => (
+          <SectionBoundary key={card.id} label="This card" size="card" resetKey={card}>
+            <AlertCard
+              card={card}
+              now={now}
+              labelSource
+              hide={hidden}
+              onHide={() => hideToken(card, cards ?? [])}
+            />
+          </SectionBoundary>
+        ))}
+      </div>
+      {hiddenCount > 0 && (
+        <p className="muted small center mcap-hidden-note">
+          {hiddenCount === 1 ? "1 alert" : `${hiddenCount} alerts`} now under ${look.hideBelowMcapUsd / 1000}K
+          market cap {hiddenCount === 1 ? "is" : "are"} hidden here, with older alerts moved up in{" "}
+          {hiddenCount === 1 ? "its" : "their"} place.{" "}
+          <button type="button" className="link" onClick={onCustomize}>
+            Change
+          </button>
+        </p>
+      )}
+      {feedPage.data && (shownCards?.length ?? 0) === 0 && page > 1 && (
+        <p className="muted small center">Nothing older here.</p>
+      )}
+      {(page > 1 || hasMore) && (
+        <nav className="pager">
+          <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+            ← Newer
+          </button>
+          <span className="muted small num">Page {page}</span>
+          <button
+            disabled={!hasMore || feedPage.stale}
+            onPointerEnter={prefetchOlder}
+            onFocus={prefetchOlder}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Older →
+          </button>
+        </nav>
+      )}
+    </>
   );
 }

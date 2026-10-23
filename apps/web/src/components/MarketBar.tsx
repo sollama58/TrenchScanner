@@ -428,11 +428,11 @@ function TrenchStats({ data, failed }: { data: TrenchAnswer | null; failed: bool
     <div
       ref={ref}
       className={`mkt-trench${shown ? " open" : ""}`}
-      onMouseEnter={(e) => {
-        if (e.nativeEvent instanceof PointerEvent && e.nativeEvent.pointerType === "touch") return;
-        setOpen(true);
-      }}
-      onMouseLeave={() => setOpen(false)}
+      // Pointer events, so a tap can be told apart: its compatibility mouseenter is a plain
+      // MouseEvent, which opened the card on hover and left a second tap unable to close it
+      // (audit 2026-10-23, WB-9). A tap only pins and unpins.
+      onPointerEnter={(e) => hoverOpens(e.pointerType) && setOpen(true)}
+      onPointerLeave={(e) => hoverOpens(e.pointerType) && setOpen(false)}
     >
       <div
         className="mkt-trench-face"
@@ -867,9 +867,15 @@ function MiniPosition({ c }: { c: TradeCoin }) {
   );
 }
 
+/** Whether resting this pointer on the trench stats opens their card: a mouse, not a finger or pen. */
+export function hoverOpens(pointerType: string): boolean {
+  return pointerType === "mouse";
+}
+
 /**
  * A row of chips that shows as many as fit its width whole, then `more(hidden)`: measured after
- * layout and again on resize, so a chip is never cut or wrapped.
+ * layout and again whenever the row or any chip changes size (a market cap gaining a digit, the
+ * web font landing), so a chip is never cut or wrapped.
  */
 export function FitRow({ children, more }: { children: ReactNode; more: (hidden: number) => ReactNode }) {
   const items = Children.toArray(children);
@@ -897,6 +903,9 @@ export function FitRow({ children, more }: { children: ReactNode; more: (hidden:
     measure();
     const ro = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
     ro?.observe(row);
+    // Each chip too: watching only the row missed a chip that grew in place (audit 2026-10-23, WB-8).
+    for (const el of row.querySelectorAll<HTMLElement>(":scope > .fit-item, :scope > .fit-more"))
+      ro?.observe(el);
     return () => ro?.disconnect();
   }, [items.length]);
   return (
