@@ -318,6 +318,10 @@ const envSchema = z.object({
     .default("true")
     .transform((v) => v === "true"),
   CURVE_TAPE_MAX_AGE_MINUTES: z.coerce.number().positive().default(15),
+  // Coins a seat alerted on are followed to this age instead, on the watchlist or not, so their
+  // charts hold 1-second candles for the stretch people look at (user decision 2026-10-23: about
+  // 600 alerts a day, a few dozen followed at once). After graduation their pool is followed to it too.
+  CURVE_TAPE_ALERTED_MINUTES: z.coerce.number().positive().default(120),
   // 500 was full on the first cycles live (2026-10-17) at ~6.6 stream credits a scan for the whole
   // socket: the cost follows how often curves change, not how many are followed.
   CURVE_TAPE_MAX_MINTS: z.coerce.number().int().positive().default(1_000),

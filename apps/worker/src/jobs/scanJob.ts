@@ -1306,8 +1306,9 @@ async function scanCycle(
   // 2. Re-check the active watchlist against live market data, and keep only the mints currently
   // sitting in (or near) the target band.
   const { tracked, alive } = await selectWatchlist(env);
-  // The young Pump.fun coins in it have their curves followed change by change (curveTape.ts).
-  followYoungCurves(tracked);
+  // The young Pump.fun coins in it have their curves followed change by change (curveTape.ts), and
+  // the coins alerted on lately for longer, for their charts.
+  followYoungCurves(tracked, Date.now(), await recentlyAlertedCoins(env.CURVE_TAPE_ALERTED_MINUTES));
   lap("watchlist");
 
   if (tracked.length === 0) {
@@ -4659,4 +4660,19 @@ function walletRiskSignals(
     walletWinHighSupplyPct: w.walletWinHighSupplyPct ?? undefined,
     knownWinnerFirstBuyers: w.knownWinnerFirstBuyers ?? undefined,
   };
+}
+
+/** The coins a seat alerted on within `minutes`, for the curve tape's longer follow (curveTape.ts). */
+async function recentlyAlertedCoins(minutes: number, now = Date.now()) {
+  const rows = await prisma.curatedAlert
+    .findMany({
+      where: { createdAt: { gte: new Date(now - minutes * 60_000) } },
+      select: {
+        token: { select: { mintAddress: true, launchedAt: true, firstSeenAt: true, launchpad: true } },
+      },
+      distinct: ["tokenId"],
+      take: 500,
+    })
+    .catch(() => []);
+  return rows.map((r) => r.token);
 }
