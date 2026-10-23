@@ -1,6 +1,8 @@
 import {
+  Children,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -8,7 +10,7 @@ import {
 } from "react";
 import { ApiError } from "../api";
 import { usePolling, useNow } from "../hooks";
-import { ago, shortAddress, signedPct } from "../format";
+import { ago, shortAddress, signedPct, usd } from "../format";
 import { openTokenModal } from "../tokenModal";
 import { useProWallet } from "../proTrade";
 import {
@@ -24,7 +26,7 @@ import {
 } from "../marketBar";
 import type { TradeCoin } from "./TradesDrawer";
 import { TokenImage } from "./TokenImage";
-import { ChartIcon, ChevronDownIcon, LighthouseIcon, StarIcon, WalletIcon } from "./Icons";
+import { ChartIcon, ChevronDownIcon, LighthouseIcon, PlusIcon, StarIcon, WalletIcon } from "./Icons";
 
 /** Prices move every minute (one shared DexScreener read); the trench sums once an hour. */
 const PRICES_POLL_MS = 60_000;
@@ -53,6 +55,12 @@ export interface MarketBarProps {
    * its place at the same height.
    */
   left?: ReactNode;
+  /**
+   * The watchlist in the thin bar that stays under the top nav once the full bar has scrolled
+   * away: its tokens side by side (market cap and 24h change). Without one, a Watchlist chip that
+   * scrolls back up to the full bar.
+   */
+  leftMini?: ReactNode;
   /** Where the bar reads its figures: "/curated" for subscribers, "/guest" for visitors. */
   base?: "/curated" | "/guest";
 }
@@ -62,40 +70,190 @@ export interface MarketBarProps {
  * the majors' prices and the trenches' last two hours in the middle, and the wallet's open Pro
  * Mode positions on the right. Three columns on a desktop; the middle over the two sides on a
  * tablet; on a phone the middle alone, with the sides folded into two disclosures under it.
+ * Scrolled past, a thin copy (MiniBar) stays pinned under the top nav.
  */
-export function MarketBar({ left, base = "/curated" }: MarketBarProps) {
+export function MarketBar(props: MarketBarProps) {
+  const wallet = useProWallet();
+  const guest = (props.base ?? "/curated") === "/guest";
+  if (guest) return <Bar {...props} positions={{ kind: "guest" }} />;
+  if (!wallet) return <Bar {...props} positions={{ kind: "off" }} />;
+  return (
+    <PolledPositions wallet={wallet}>
+      {(positions) => <Bar {...props} positions={positions} />}
+    </PolledPositions>
+  );
+}
+
+/** The open positions as both bars show them, read once for the two. */
+type Positions =
+  | { kind: "guest" }
+  | { kind: "off" }
+  | { kind: "loading" }
+  | { kind: "error" }
+  | { kind: "ok"; open: TradeCoin[] };
+
+function PolledPositions({ wallet, children }: { wallet: string; children: (p: Positions) => ReactNode }) {
+  const { data, error } = usePolling<PortfolioTrades>(
+    "/pro/trades?view=portfolio",
+    POSITIONS_POLL_MS,
+    wallet,
+  );
+  let p: Positions;
+  if (data) p = { kind: "ok", open: data.open.filter((c) => !c.closed && c.held > 0) };
+  // A wallet the API doesn't count as Pro answers 404: the same as Pro Mode off.
+  else if (error instanceof ApiError && error.status === 404) p = { kind: "off" };
+  else if (error) p = { kind: "error" };
+  else p = { kind: "loading" };
+  return <>{children(p)}</>;
+}
+
+/** The Portfolio tab, where every position is (the bars show the ones that fit). */
+function openPortfolio() {
+  window.location.hash = "portfolio";
+  window.scrollTo({ top: 0 });
+}
+
+/** Whether the reader last left the full bar open; it starts collapsed (user ask 2026-10-23). */
+const OPEN_KEY = "ts-market-bar-open";
+
+function readOpen(): boolean {
+  try {
+    return localStorage.getItem(OPEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function Bar({ left, leftMini, base = "/curated", positions }: MarketBarProps & { positions: Positions }) {
   const phone = useMatches(PHONE_QUERY);
   const guest = base === "/guest";
+  const prices = usePolling<MarketPrices>(`${base}/market/prices`, PRICES_POLL_MS);
+  const trench = usePolling<TrenchAnswer>(`${base}/market/trench`, TRENCH_POLL_MS);
+  const [open, setOpenState] = useState(readOpen);
+  const setOpen = (v: boolean) => {
+    setOpenState(v);
+    try {
+      localStorage.setItem(OPEN_KEY, v ? "1" : "0");
+    } catch {
+      // A private window: the choice lasts this visit.
+    }
+  };
+  const ref = useRef<HTMLElement>(null);
+  const pinned = usePinnedPast(ref, open);
   const watch = left ?? <WatchlistPlaceholder guest={guest} />;
-  const positions = <PositionsCell guest={guest} />;
-  if (phone) {
-    return (
-      <section className="mkt-bar phone" aria-label="Market">
-        <MiddleCell base={base} />
-        <div className="mkt-folds">
-          <details className="mkt-fold">
-            <summary>
-              <StarIcon size={13} /> Watchlist <ChevronDownIcon size={13} className="mkt-fold-chev" />
-            </summary>
-            <div className="mkt-fold-body">{watch}</div>
-          </details>
-          <details className="mkt-fold">
-            <summary>
-              <WalletIcon size={13} /> Positions <ChevronDownIcon size={13} className="mkt-fold-chev" />
-            </summary>
-            <div className="mkt-fold-body">{positions}</div>
-          </details>
-        </div>
-      </section>
-    );
-  }
-  return (
-    <section className="mkt-bar" aria-label="Market">
+  const posCell = <PositionsCell positions={positions} />;
+  const middle = (
+    <MiddleCell
+      prices={prices.data}
+      trench={trench.data}
+      trenchFailed={!trench.data && trench.error !== null}
+    />
+  );
+  const miniProps = { watch: leftMini, prices: prices.data, trench: trench.data, positions };
+  const full = phone ? (
+    <section ref={ref} className="mkt-bar phone" aria-label="Market" id="market-bar">
+      {middle}
+      <div className="mkt-folds">
+        <details className="mkt-fold">
+          <summary>
+            <StarIcon size={13} /> Watchlist <ChevronDownIcon size={13} className="mkt-fold-chev" />
+          </summary>
+          <div className="mkt-fold-body">{watch}</div>
+        </details>
+        <details className="mkt-fold">
+          <summary>
+            <WalletIcon size={13} /> Positions <ChevronDownIcon size={13} className="mkt-fold-chev" />
+          </summary>
+          <div className="mkt-fold-body">{posCell}</div>
+        </details>
+      </div>
+    </section>
+  ) : (
+    <section ref={ref} className="mkt-bar" aria-label="Market" id="market-bar">
       <div className="mkt-cell mkt-left">{watch}</div>
-      <MiddleCell base={base} />
-      <div className="mkt-cell mkt-right">{positions}</div>
+      {middle}
+      <div className="mkt-cell mkt-right">{posCell}</div>
     </section>
   );
+  return (
+    <>
+      {/* Collapsed: the thin bar in the page, sticking under the top nav as the page scrolls (a
+          child of the tab's stack, so it sticks the whole way down). */}
+      {!open && <MiniBar mode="sticky" shown onExpand={() => setOpen(true)} {...miniProps} />}
+      {/* Open: the full bar, folding away into the thin one pinned under the nav once scrolled past. */}
+      <div className={`mkt-full-slot${open ? " open" : ""}`} inert={!open}>
+        <div>
+          {full}
+          <button
+            type="button"
+            className="mkt-collapse"
+            onClick={() => setOpen(false)}
+            aria-controls="market-bar"
+            aria-expanded={open}
+            title="Collapse to the thin bar"
+          >
+            <ChevronDownIcon size={13} className="flip" /> Collapse
+          </button>
+        </div>
+      </div>
+      <MiniBar mode="fixed" shown={open && pinned} onExpand={() => scrollToBar(ref.current)} {...miniProps} />
+    </>
+  );
+}
+
+/** The top nav's height, which the pinned bar sits under (it grows on phones with a notch). */
+function useTopbarHeight(): number {
+  const [h, setH] = useState(0);
+  useEffect(() => {
+    const top = document.querySelector<HTMLElement>(".topbar");
+    if (!top) return;
+    const fit = () => setH(top.offsetHeight);
+    fit();
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(fit) : null;
+    ro?.observe(top);
+    return () => ro?.disconnect();
+  }, []);
+  return h;
+}
+
+/** True once the element has scrolled up past the top nav (and only then: not while below the fold). */
+function usePinnedPast(ref: React.RefObject<HTMLElement | null>, on: boolean): boolean {
+  const [past, setPast] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !on) {
+      setPast(false);
+      return;
+    }
+    let raf = 0;
+    const check = () => {
+      raf = 0;
+      const top = document.querySelector<HTMLElement>(".topbar")?.offsetHeight ?? 0;
+      // Past once all but its last few pixels are under the nav: the thin bar takes over as it leaves.
+      setPast(el.getBoundingClientRect().bottom < top + 24);
+    };
+    const onScroll = () => {
+      if (!raf) raf = window.requestAnimationFrame(check);
+    };
+    check();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+      window.cancelAnimationFrame(raf);
+    };
+  }, [ref, on]);
+  return past;
+}
+
+function scrollToBar(el: HTMLElement | null) {
+  if (!el) return;
+  const top = document.querySelector<HTMLElement>(".topbar")?.offsetHeight ?? 0;
+  window.scrollTo({
+    top: Math.max(0, window.scrollY + el.getBoundingClientRect().top - top - 12),
+    behavior: "smooth",
+  });
 }
 
 // ---------- Left: the watchlist's slot ----------
@@ -129,17 +287,23 @@ function WatchlistPlaceholder({ guest }: { guest: boolean }) {
 
 // ---------- Middle: prices and the trenches ----------
 
-function MiddleCell({ base }: { base: string }) {
-  const prices = usePolling<MarketPrices>(`${base}/market/prices`, PRICES_POLL_MS);
-  const trench = usePolling<TrenchAnswer>(`${base}/market/trench`, TRENCH_POLL_MS);
+function MiddleCell({
+  prices,
+  trench,
+  trenchFailed,
+}: {
+  prices: MarketPrices | null;
+  trench: TrenchAnswer | null;
+  trenchFailed: boolean;
+}) {
   return (
     <div className="mkt-cell mkt-mid">
       <div className="mkt-prices" role="list" aria-label="Prices">
-        {(prices.data?.prices ?? PLACEHOLDER_TICKERS).map((p) => (
-          <Ticker key={p.symbol} p={p} loading={!prices.data} />
+        {(prices?.prices ?? PLACEHOLDER_TICKERS).map((p) => (
+          <Ticker key={p.symbol} p={p} loading={!prices} />
         ))}
       </div>
-      <TrenchStats data={trench.data} failed={!trench.data && trench.error !== null} />
+      <TrenchStats data={trench} failed={trenchFailed} />
     </div>
   );
 }
@@ -396,26 +560,49 @@ interface PortfolioTrades {
   openTotal: number;
 }
 
-function PositionsCell({ guest }: { guest: boolean }) {
-  const wallet = useProWallet();
+/** How many open positions the full bar's cell has room for; the rest are a "+N" to Portfolio. */
+const POSITIONS_SHOWN = 3;
+
+function PositionsCell({ positions }: { positions: Positions }) {
+  const more = positions.kind === "ok" ? Math.max(0, positions.open.length - POSITIONS_SHOWN) : 0;
   return (
     <div className="mkt-pane">
       <header className="mkt-head">
         <span className="eyebrow">
           <WalletIcon size={12} /> Open positions
+          {positions.kind === "ok" && positions.open.length > 0 && (
+            <span className="mkt-count num">{positions.open.length}</span>
+          )}
         </span>
+        {(positions.kind === "ok" || positions.kind === "loading" || positions.kind === "error") && (
+          <MoreButton
+            more={more}
+            onClick={openPortfolio}
+            title="Open Portfolio: every position, with its trades"
+          />
+        )}
       </header>
-      {guest ? (
+      {positions.kind === "guest" ? (
         <Empty
           title="Sign in to see your positions"
           text="With Pro Mode on, the coins you hold show here with their live PnL."
         />
-      ) : wallet ? (
-        <PositionsList wallet={wallet} />
-      ) : (
+      ) : positions.kind === "off" ? (
         <ProOff />
+      ) : (
+        <PositionsList positions={positions} />
       )}
     </div>
+  );
+}
+
+/** "+3" when there are more than show, a bare "+" otherwise: either way, to the full list. */
+function MoreButton({ more, onClick, title }: { more: number; onClick: () => void; title: string }) {
+  return (
+    <button type="button" className={`mkt-more${more > 0 ? " has" : ""}`} onClick={onClick} title={title}>
+      <PlusIcon size={12} />
+      {more > 0 && <span className="num">{more}</span>}
+    </button>
   );
 }
 
@@ -448,23 +635,16 @@ const solText = (n: number | null) =>
     ? "–"
     : `${n > 0 ? "+" : n < 0 ? "-" : ""}${Math.abs(n) >= 10 ? Math.abs(n).toFixed(1) : Math.abs(n).toFixed(2)} SOL`;
 
-function PositionsList({ wallet }: { wallet: string }) {
-  const { data, error } = usePolling<PortfolioTrades>(
-    "/pro/trades?view=portfolio",
-    POSITIONS_POLL_MS,
-    wallet,
-  );
+function PositionsList({ positions }: { positions: Positions }) {
   const now = useNow(30_000);
-  if (!data) {
-    // A wallet the API doesn't count as Pro answers 404: the same as Pro Mode off.
-    if (error instanceof ApiError && error.status === 404) return <ProOff />;
-    if (error)
-      return (
-        <Empty
-          title="Positions unavailable"
-          text="Couldn't load your positions just now. They'll be back on the next refresh."
-        />
-      );
+  if (positions.kind === "error")
+    return (
+      <Empty
+        title="Positions unavailable"
+        text="Couldn't load your positions just now. They'll be back on the next refresh."
+      />
+    );
+  if (positions.kind !== "ok")
     return (
       <ul className="mkt-pos">
         {[0, 1, 2].map((i) => (
@@ -475,13 +655,12 @@ function PositionsList({ wallet }: { wallet: string }) {
         ))}
       </ul>
     );
-  }
-  const open = data.open.filter((c) => !c.closed && c.held > 0);
+  const { open } = positions;
   if (open.length === 0)
     return <Empty title="No open positions" text="Coins you buy show up here with their live PnL." />;
   return (
     <ul className="mkt-pos" aria-label={`${open.length} open position${open.length === 1 ? "" : "s"}`}>
-      {open.map((c) => (
+      {open.slice(0, POSITIONS_SHOWN).map((c) => (
         <Position key={c.mint} c={c} now={now} />
       ))}
     </ul>
@@ -521,5 +700,213 @@ function Position({ c, now }: { c: TradeCoin; now: number }) {
         </span>
       </button>
     </li>
+  );
+}
+
+// ---------- The thin bar, pinned under the top nav once the full one scrolls away ----------
+
+/** The 24h change's tone, for a price's colour in the thin bar. */
+const chgTone = (v: number | null) => (v === null || Math.abs(v) < 0.05 ? "" : v > 0 ? " up" : " down");
+
+function MiniBar({
+  mode,
+  shown,
+  onExpand,
+  watch,
+  prices,
+  trench,
+  positions,
+}: {
+  /** "sticky": the collapsed bar, in the page; "fixed": over the page once the full bar has scrolled away. */
+  mode: "sticky" | "fixed";
+  shown: boolean;
+  /** Open the full bar (or, pinned, scroll back up to it). */
+  onExpand: () => void;
+  watch?: ReactNode;
+  prices: MarketPrices | null;
+  trench: TrenchAnswer | null;
+  positions: Positions;
+}) {
+  const topbar = useTopbarHeight();
+  const onTop = onExpand;
+  const vs = trench?.compare.find((c) => c.hoursAgo === ARROW_HOURS_AGO) ?? null;
+  const stat = (key: "hit2xPct" | "avgReturnPct", label: string) => {
+    const s = TRENCH_STATS.find((t) => t.key === key)!;
+    const now = trench?.current.stats[key] ?? null;
+    const d = statDelta(s, now, vs?.stats[key] ?? null);
+    return (
+      <span className="mkt-mini-stat" title={`${s.title}: ${deltaWords(d, ARROW_HOURS_AGO)}`}>
+        <span className="mkt-mini-label">{label}</span>
+        <span className="num">{statText(s, now)}</span>
+        <Arrow d={d} />
+      </span>
+    );
+  };
+  return (
+    <div
+      className={`mkt-mini ${mode}${shown ? " on" : ""}`}
+      // In the page it keeps a little air under the nav; pinned, its own padding does.
+      style={{ top: mode === "sticky" ? topbar + 8 : topbar }}
+      aria-hidden={!shown}
+      inert={!shown}
+      role="region"
+      aria-label="Market, pinned"
+    >
+      <div className="mkt-mini-inner">
+        <div className="mkt-mini-scroll">
+          <div className="mkt-mini-group mkt-mini-watch">
+            {watch ?? (
+              <button
+                type="button"
+                className="mkt-mini-chip ghost"
+                onClick={onTop}
+                title="Back to the market bar"
+              >
+                <StarIcon size={12} /> Watchlist
+              </button>
+            )}
+          </div>
+          <span className="mkt-mini-sep" aria-hidden />
+          <button
+            type="button"
+            className="mkt-mini-group mkt-mini-mid"
+            onClick={onTop}
+            title="Back to the full market bar"
+          >
+            {(prices?.prices ?? PLACEHOLDER_TICKERS).map((p) => (
+              <span
+                key={p.symbol}
+                className="mkt-mini-price"
+                title={`${p.symbol}: 24h ${signedPct(p.change24hPct, 1)}`}
+              >
+                <TokenImage
+                  url={p.imageUrl}
+                  size={32}
+                  width={16}
+                  height={16}
+                  className="mkt-logo"
+                  fallback={
+                    <span className={`mkt-logo mono t-${p.symbol.toLowerCase()}`}>
+                      {p.symbol === "BTC" ? "₿" : p.symbol.slice(0, 1)}
+                    </span>
+                  }
+                />
+                <span className={`num${chgTone(p.change24hPct)}`}>
+                  {prices ? priceText(p.priceUsd) : "–"}
+                </span>
+              </span>
+            ))}
+            <span className="mkt-mini-sep" aria-hidden />
+            {stat("hit2xPct", "2x")}
+            {stat("avgReturnPct", "Avg")}
+          </button>
+          {positions.kind !== "guest" && positions.kind !== "off" && (
+            <>
+              <span className="mkt-mini-sep" aria-hidden />
+              <div className="mkt-mini-group mkt-mini-pos">
+                <WalletIcon size={12} className="mkt-mini-icon" />
+                {positions.kind === "ok" ? (
+                  positions.open.length > 0 ? (
+                    <FitRow
+                      more={(n) => (
+                        <MoreButton more={n} onClick={openPortfolio} title="Open Portfolio: every position" />
+                      )}
+                    >
+                      {positions.open.map((c) => (
+                        <MiniPosition key={c.mint} c={c} />
+                      ))}
+                    </FitRow>
+                  ) : (
+                    <span className="faint mkt-mini-none">No open positions</span>
+                  )
+                ) : (
+                  <span className="skeleton mkt-skel" />
+                )}
+              </div>
+            </>
+          )}
+        </div>
+        <button
+          type="button"
+          className="mkt-mini-expand"
+          onClick={onExpand}
+          aria-controls="market-bar"
+          aria-expanded={false}
+          title={mode === "sticky" ? "Expand the market bar" : "Back to the full market bar"}
+        >
+          <ChevronDownIcon size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MiniPosition({ c }: { c: TradeCoin }) {
+  const label = c.symbol ? `$${c.symbol}` : shortAddress(c.mint);
+  const card = c.card;
+  const mcap = card?.currentMarketCapUsd ?? null;
+  return (
+    <button
+      type="button"
+      className="mkt-mini-chip"
+      onClick={() => card && openTokenModal(card, Date.now())}
+      disabled={!card}
+      title={`${label}: ${signedPct(c.pnlPct, 1)} · ${solText(c.pnlSol)}`}
+    >
+      <TokenImage
+        url={c.imageUrl}
+        size={32}
+        width={16}
+        height={16}
+        className="avatar mkt-mini-img"
+        fallback={<span className="avatar mkt-mini-img placeholder">{(c.symbol ?? "?").slice(0, 1)}</span>}
+      />
+      <span className="num">{mcap !== null ? usd(mcap) : label}</span>
+      <span className={`num mkt-mini-pct${tone(c.pnlPct)}`}>{signedPct(c.pnlPct, 0)}</span>
+    </button>
+  );
+}
+
+/**
+ * A row of chips that shows as many as fit its width whole, then `more(hidden)`: measured after
+ * layout and again on resize, so a chip is never cut or wrapped.
+ */
+export function FitRow({ children, more }: { children: ReactNode; more: (hidden: number) => ReactNode }) {
+  const items = Children.toArray(children);
+  const ref = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState(items.length);
+  useLayoutEffect(() => {
+    const row = ref.current;
+    if (!row) return;
+    const measure = () => {
+      // Hidden chips are taken out of the flow but keep their size, so every width is known.
+      const kids = [...row.querySelectorAll<HTMLElement>(":scope > .fit-item")];
+      const moreEl = row.querySelector<HTMLElement>(":scope > .fit-more");
+      const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
+      const room = row.clientWidth - (moreEl?.offsetWidth ?? 0) - gap;
+      let used = 0;
+      let n = 0;
+      for (const k of kids) {
+        const next = used + (n > 0 ? gap : 0) + k.offsetWidth;
+        if (next > room && n > 0) break;
+        used = next;
+        n++;
+      }
+      setFit(n);
+    };
+    measure();
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    ro?.observe(row);
+    return () => ro?.disconnect();
+  }, [items.length]);
+  return (
+    <div className="fit-row" ref={ref}>
+      {items.map((it, i) => (
+        <span key={i} className={`fit-item${i < fit ? "" : " hidden"}`} aria-hidden={i >= fit}>
+          {it}
+        </span>
+      ))}
+      <span className="fit-more">{more(items.length - fit)}</span>
+    </div>
   );
 }
