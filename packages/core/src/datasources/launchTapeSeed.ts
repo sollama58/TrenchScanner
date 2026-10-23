@@ -9,6 +9,10 @@ import type { ChainTx } from "../wallets/tradeTape.js";
  * seed's newest block time whether the seed covers the window. It drops a seed older than the
  * tape's own look at it.
  *
+ * Kept only for contenders' reads (getLaunchBuyersBatch's tapeSeeds): the tape reads a called coin
+ * 30+ minutes after its call, and seeds for every launch read were evicted long before (Helius
+ * audit 2026-10-22, H-7). The tape's run meta counts the seeds it starts on (`seeded`).
+ *
  * Process memory, capped. A restart re-reads the pages. One mint keeps the latest read.
  */
 

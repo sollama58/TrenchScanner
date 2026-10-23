@@ -3,10 +3,12 @@ import {
   countHoldingSupplyCut,
   countStillHolding,
   createLogger,
+  CreditTally,
   devStillHolding,
   FIRST_BUYERS,
   launchFigures,
   SAFETY_REJECT_BLOCK_ZERO_HELD_PCT,
+  tallyHeliusCredits,
   type HeliusClient,
   type LaunchBuyer,
   type LaunchBuyersReading,
@@ -164,13 +166,17 @@ export function resetLaunchSnipersCache(): void {
   entries.clear();
   failedUntil.clear();
   readStats = { requested: 0, found: 0, failed: 0 };
+  credits.take();
 }
 
 /** First-buyer reads since the last take - on the scan heartbeat, to see whether they land. */
 let readStats = { requested: 0, found: 0, failed: 0 };
+/** The Helius credits the launch reads and balance refreshes were billed (answered calls only). */
+const credits = new CreditTally();
 
-export function takeSniperReadStats(): { requested: number; found: number; failed: number } {
-  const out = readStats;
+/** The reads since the last take, and their credits (launch pages at 10, balances 1 per 100). */
+export function takeSniperReadStats(): { requested: number; found: number; failed: number; credits: number } {
+  const out = { ...readStats, credits: credits.take() };
   readStats = { requested: 0, found: 0, failed: 0 };
   return out;
 }
@@ -350,7 +356,10 @@ export async function resolveLaunchSnipers(
   const fresh = new Set<string>();
   const toSave = new Map<string, StoredLaunchRead>();
   if (toRead.length > 0) {
-    const results = await helius.getLaunchBuyersBatch(toRead, FIRST_BUYERS);
+    // A contender's pages are kept for the trade tape, which reads a called coin from its launch.
+    const results = await tallyHeliusCredits(credits, () =>
+      helius.getLaunchBuyersBatch(toRead, FIRST_BUYERS, { tapeSeeds: contenderMints }),
+    );
     let failed = 0;
     for (const mint of toRead) {
       const r = results.get(mint);
@@ -397,11 +406,13 @@ export async function resolveLaunchSnipers(
     refresh.push(g.mintAddress);
   }
   if (refresh.length > 0) {
-    const balances = await helius.getTokenAccountBalances(
-      refresh.flatMap((mint) => {
-        const e = entries.get(mint)!;
-        return accountsOf(e);
-      }),
+    const balances = await tallyHeliusCredits(credits, () =>
+      helius.getTokenAccountBalances(
+        refresh.flatMap((mint) => {
+          const e = entries.get(mint)!;
+          return accountsOf(e);
+        }),
+      ),
     );
     for (const mint of refresh) {
       const e = entries.get(mint)!;

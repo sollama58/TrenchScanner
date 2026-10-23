@@ -17,8 +17,11 @@ import {
   normalizePath,
   providerOf,
   rpcMethods,
+  CreditTally,
+  tallyHeliusCredits,
   withApiFeature,
   withApiStages,
+  withOwnApiFeature,
 } from "./apiUsage.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -151,6 +154,49 @@ describe("feature attribution", () => {
     });
     const byFeature = Object.fromEntries(apiUsageMeter.take().map((r) => [r.feature, r.counter.calls]));
     expect(byFeature).toEqual({ "trade-tape": 1, "scan/wallets": 2, "scan/linkedWallets": 1, scan: 1 });
+  });
+
+  it("counts a timer's calls under its own name, not the request that started it", async () => {
+    apiUsageMeter.take();
+    const line = { provider: "helius", endpoint: "getMultipleAccounts", calls: 1, credits: 1 };
+    await withApiFeature("api /tokens/:mint", async () => {
+      apiUsageMeter.record([line], ok);
+      await withOwnApiFeature("live-curves", async () => apiUsageMeter.record([line], ok));
+    });
+    const byFeature = Object.fromEntries(apiUsageMeter.take().map((r) => [r.feature, r.counter.calls]));
+    expect(byFeature).toEqual({ "api /tokens/:mint": 1, "live-curves": 1 });
+  });
+
+  it("tallies a stage's answered Helius credits, under the feature it would have had", async () => {
+    apiUsageMeter.take();
+    const gtfa = { provider: "helius", endpoint: "getTransactionsForAddress", calls: 1, credits: 10 };
+    const dex = { provider: "dexscreener", endpoint: "GET /x", calls: 1, credits: 0 };
+    const snipers = new CreditTally();
+    const all = new CreditTally();
+    await withApiStages("scan", async (stage) => {
+      await tallyHeliusCredits(all, () =>
+        tallyHeliusCredits(snipers, async () => {
+          apiUsageMeter.record([gtfa], ok);
+          // A failed answer is not billed, and other providers are not Helius credits.
+          apiUsageMeter.record([gtfa], { ...ok, ok: false });
+          apiUsageMeter.record([dex], ok);
+          // Nested under a feature of its own, still the stage's.
+          await withApiFeature("inner", async () => apiUsageMeter.record([gtfa], ok));
+        }),
+      );
+      apiUsageMeter.record([gtfa], ok);
+      stage("snipers");
+    });
+    expect(snipers.take()).toBe(20);
+    expect(snipers.take()).toBe(0);
+    expect(all.take()).toBe(20);
+    const byFeature = Object.fromEntries(
+      apiUsageMeter
+        .take()
+        .filter((r) => r.provider === "helius")
+        .map((r) => [r.feature, r.counter.calls]),
+    );
+    expect(byFeature).toEqual({ "scan/snipers": 3, "scan/inner": 1 });
   });
 
   it("counts every attempt through the fetch wrapper, failures as errors", async () => {

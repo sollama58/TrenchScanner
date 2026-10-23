@@ -185,6 +185,7 @@ import {
   type SniperGroup,
 } from "./launchSnipers.js";
 import { prismaLaunchReadStore } from "./launchReadStore.js";
+import { takeHeliusStageCredits } from "./heliusStageCredits.js";
 import { absentTtlFor, resolveRugProfiles } from "./rugCheckProfiles.js";
 import { recordCandidateSample, takeSampleStats } from "./candidateOutcomeJob.js";
 import { holderCutRecheckTtlFor, noteHolderCutVerdict, rugCheckTtlFor } from "./youngHolderRecheck.js";
@@ -217,18 +218,36 @@ const logger = createLogger("scan-job");
  */
 const dexInfoQueue: string[] = [];
 
-function rememberDexInfo(mint: string, checkedAt?: Date | null): void {
+/** Visible for tests. */
+export function rememberDexInfo(mint: string, checkedAt?: Date | null): void {
   if (!mint || dexInfoQueue.length >= 48 || dexInfoQueue.includes(mint)) return;
   if (checkedAt && Date.now() - checkedAt.getTime() < DEX_INFO_RECHECK_MS) return;
   dexInfoQueue.push(mint);
 }
 
-function scheduleDexInfo(dex: DexScreenerClient): void {
-  if (typeof dex.readTokenInfoOrders !== "function" || dexInfoQueue.length === 0) return;
+/**
+ * The orders read in flight. One at a time: each read also fetches the takeover feed and shares
+ * the discovery budget with the scan's own reads, and four call sites a cycle used to stack them
+ * up behind a slow one (audit 2026-10-22, F8c). Mints queued meanwhile wait for the next call.
+ */
+let dexInfoInFlight: Promise<void> | null = null;
+
+/** Starts an orders read of the queued mints unless one is running. Returns it (for tests). */
+export function scheduleDexInfo(
+  dex: Pick<DexScreenerClient, "readTokenInfoOrders"> &
+    Partial<Pick<DexScreenerClient, "communityTakeoverMints">>,
+): Promise<void> | null {
+  if (typeof dex.readTokenInfoOrders !== "function" || dexInfoQueue.length === 0) return null;
+  if (dexInfoInFlight) return null;
   const mints = dexInfoQueue.splice(0, dexInfoQueue.length);
-  void recordDexInfoOrders(dex, mints).catch((err: unknown) =>
-    logger.warn("dexscreener token info orders failed", { error: String(err) }),
-  );
+  const run = recordDexInfoOrders(dex, mints)
+    .then(() => undefined)
+    .catch((err: unknown) => logger.warn("dexscreener token info orders failed", { error: String(err) }))
+    .finally(() => {
+      if (dexInfoInFlight === run) dexInfoInFlight = null;
+    });
+  dexInfoInFlight = run;
+  return run;
 }
 
 /** How many candidates get their own DB writes + rug/match processing in flight at once. Safe to
@@ -1358,6 +1377,8 @@ async function scanCycle(
   const pumpfunGate = takePumpFunGateStats();
   // The live tape's pages (10 credits each) since the last cycle, and the coins it holds a page for.
   const liveTape = takeLiveTapeStats();
+  // The Helius credits of the stages with no counter of their own: freshness, balances, holders.
+  const heliusStageCredits = takeHeliusStageCredits();
   // Who priced the newest launches since the last cycle: Jupiter, its CoinGecko backup, or neither.
   const liveLaunchQuotes = deps.liveLaunches?.takeStats?.();
   // The entry fast path since the last cycle: crossings the watch saw (on the curve tape or from
@@ -1395,6 +1416,7 @@ async function scanCycle(
     ...(candleBackfill ? { candleBackfill } : {}),
     pumpfunGate,
     liveTape,
+    heliusStageCredits,
     ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
     ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),
     ...(liveLaunchQuotes ? { liveLaunchQuotes: { ...liveLaunchQuotes } } : {}),
@@ -1408,7 +1430,8 @@ async function scanCycle(
     samplesBanked,
     pricePathMints: deps.pricePath?.size ?? 0,
     ...(tokenSageEnabled(env) ? { tokensage: takeTokenSageStats(), tokensageNow: takeNowStats() } : {}),
-    // Launch first-buyer reads (the top-10 snipers share) sent, landed and failed since last cycle.
+    // Launch first-buyer reads (the top-10 snipers share) sent, landed and failed since last cycle,
+    // and the credits they and the holdings refreshes were billed.
     sniperReads: takeSniperReadStats(),
     // This cycle's RugCheck reports: cached, looked up while the cycle waited (fetched, failed,
     // timedOut), and stale ones served while they refresh behind it - what the rugCheck stage is.

@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { HeliusIdentity, IdentityRead } from "@trenchscanner/core";
+import {
+  currentApiFeature,
+  withApiFeature,
+  type HeliusIdentity,
+  type IdentityRead,
+} from "@trenchscanner/core";
 import { identityLabels, type IdentityStore, WalletIdentityReader } from "./walletIdentity.js";
 
 describe("identityLabels", () => {
@@ -161,6 +166,28 @@ describe("WalletIdentityReader", () => {
     expect(await after.labels("b", 2_000)).toEqual([]);
     expect(single).not.toHaveBeenCalled();
     expect(batch).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts the timer's read under wallet-names, not the route that queued the miss", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const features: string[] = [];
+      const batch = vi.fn(async (wallets: readonly string[]) => {
+        features.push(currentApiFeature());
+        return named(wallets);
+      });
+      const reader = new WalletIdentityReader(
+        { identity: vi.fn(), batchIdentity: batch },
+        { batchWaitMs: 60_000, askNowAt: 5 },
+      );
+      await withApiFeature("api /tokens/:mint/holders", () => reader.identities(["a"], 0));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(features).toEqual(["wallet-names"]);
+      reader.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("queues a list's few misses and reads them together once the oldest has waited", async () => {

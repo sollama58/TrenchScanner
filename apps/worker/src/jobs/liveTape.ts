@@ -40,12 +40,15 @@ const pages = new Map<string, { atMs: number; trades: TapeTrade[]; complete: boo
 let pagesRead = 0;
 let pagesFailed = 0;
 
-/** Pages read and failed since the last call, for the scan's heartbeat (10 credits a page read). */
+/**
+ * Pages read and failed since the last call, for the scan's heartbeat: 10 credits a page read.
+ * A failed page costs nothing, as Helius bills no failed getTransactionsForAddress answer.
+ */
 export function takeLiveTapeStats(): { pages: number; failed: number; credits: number; coins: number } {
   const out = {
     pages: pagesRead,
     failed: pagesFailed,
-    credits: 10 * (pagesRead + pagesFailed),
+    credits: 10 * pagesRead,
     coins: pages.size,
   };
   pagesRead = 0;
