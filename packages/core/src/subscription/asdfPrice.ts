@@ -1,5 +1,6 @@
 import { prisma } from "../db.js";
 import { SUBSCRIPTION_MINT, SUBSCRIPTION_MINT_DECIMALS } from "./constants.js";
+import type { SacrificeMode } from "./sacrifice.js";
 
 /**
  * The smoothed $ASDFASDFA price the Sacrifice is charged at (ASDF fee plan, Build guide step 2).
@@ -20,9 +21,18 @@ import { SUBSCRIPTION_MINT, SUBSCRIPTION_MINT_DECIMALS } from "./constants.js";
  * When the sampler pauses (every worker deploy does, for a minute or more), the price as of its
  * newest sample stands for ASDF_PRICE_MAX_AGE_MS: it is a 24-hour / 5-minute smoothing, so a few
  * minutes change nothing material, and fee-paying trades shouldn't stop at each worker restart.
+ *
+ * While the Sacrifice is off no trade reads this price, so the worker samples only every
+ * ASDF_PRICE_OFF_SAMPLE_MS (user ask 2026-10-23: API audit bundle, A8): still some 1,440 samples a
+ * day for the 24-hour median, and 8,640 fewer Jupiter calls. The guards the admin panel reads are
+ * scaled to that slower cadence while off (ASDF_PRICE_OFF_GUARDS), so it does not read "few
+ * samples" or "source down" for samples that are only further apart.
  */
 
+/** The sampler's cadence while the Sacrifice is "shadow" or "on" (the worker job's tick). */
 export const ASDF_PRICE_SAMPLE_MS = 15_000;
+/** The sampler's cadence while the Sacrifice is "off". */
+export const ASDF_PRICE_OFF_SAMPLE_MS = 60_000;
 export const ASDF_PRICE_SHORT_MS = 5 * 60_000;
 export const ASDF_PRICE_LONG_MS = 24 * 60 * 60_000;
 /** Samples older than this are pruned: the long window plus an hour. */
@@ -32,6 +42,50 @@ export const ASDF_PRICE_MAX_AGE_MS = 10 * 60_000;
 /** Each source's newest sample must be this close to the newest of all: both were answering. */
 export const ASDF_PRICE_SOURCE_MAX_AGE_MS = 60_000;
 export const ASDF_PRICE_MAX_SPREAD = 0.05;
+/** Old samples are pruned at most this often, not on every sample. */
+const PRUNE_EVERY_MS = 60_000;
+
+/** The guards that depend on how far apart the samples are. */
+export interface AsdfPriceGuards {
+  /** Samples (both sources counted) the 5-minute window needs. */
+  minSamples: number;
+  /** How far each source's newest sample may lag the newest of all. */
+  sourceMaxAgeMs: number;
+}
+
+/** At the 15-second cadence (shadow and on): what a trade is charged under. */
+export const ASDF_PRICE_GUARDS: AsdfPriceGuards = {
+  minSamples: ASDF_PRICE_MIN_SAMPLES,
+  sourceMaxAgeMs: ASDF_PRICE_SOURCE_MAX_AGE_MS,
+};
+/**
+ * At the 60-second cadence (off): 5 minutes hold about 10 samples, not 40, so the 15-second
+ * guards would sit on the edge. Two readings from each source, and a source may miss one sample
+ * (plus timer slack) before it reads as down. Only the admin panel reads the price while off.
+ */
+export const ASDF_PRICE_OFF_GUARDS: AsdfPriceGuards = {
+  minSamples: 4,
+  sourceMaxAgeMs: 2.5 * ASDF_PRICE_OFF_SAMPLE_MS,
+};
+
+/** The sampler's cadence for the Sacrifice's mode. */
+export function asdfPriceSampleMs(mode: SacrificeMode): number {
+  return mode === "off" ? ASDF_PRICE_OFF_SAMPLE_MS : ASDF_PRICE_SAMPLE_MS;
+}
+
+/** The guards for the Sacrifice's mode: the slower cadence's while off. */
+export function asdfPriceGuards(mode: SacrificeMode): AsdfPriceGuards {
+  return mode === "off" ? ASDF_PRICE_OFF_GUARDS : ASDF_PRICE_GUARDS;
+}
+
+/**
+ * Whether the worker's tick (every ASDF_PRICE_SAMPLE_MS) should sample now, given the last sample
+ * it took at `lastAt` (0: none yet). Half a tick of slack, so a timer that fires a little early
+ * does not push an off-mode sample a whole tick late.
+ */
+export function asdfPriceSampleDue(mode: SacrificeMode, lastAt: number, now: number): boolean {
+  return now - lastAt >= asdfPriceSampleMs(mode) - ASDF_PRICE_SAMPLE_MS / 2;
+}
 
 export type AsdfPriceSource = "quote" | "price";
 
@@ -49,9 +103,12 @@ export interface AsdfPriceReader {
   pricesUsd(mints: string[]): Promise<Map<string, number>>;
 }
 
+let lastPruneAt: number | null = null;
+
 /**
  * One sample from each source that answers, written to AsdfPriceSample, and samples past
- * ASDF_PRICE_KEEP_MS pruned. Throws when neither source answers, so the heartbeat says so.
+ * ASDF_PRICE_KEEP_MS pruned (at most every PRUNE_EVERY_MS: a statement per sample bought nothing).
+ * Throws when neither source answers, so the heartbeat says so.
  */
 export async function sampleAsdfPrice(
   reader: AsdfPriceReader,
@@ -82,9 +139,12 @@ export async function sampleAsdfPrice(
     ] as const
   ).flatMap(([source, asdfPerSol]) => (asdfPerSol === null ? [] : [{ at: now, source, asdfPerSol }]));
   if (rows.length > 0) await prisma.asdfPriceSample.createMany({ data: rows });
-  await prisma.asdfPriceSample.deleteMany({
-    where: { at: { lt: new Date(now.getTime() - ASDF_PRICE_KEEP_MS) } },
-  });
+  if (lastPruneAt === null || Math.abs(now.getTime() - lastPruneAt) >= PRUNE_EVERY_MS) {
+    lastPruneAt = now.getTime();
+    await prisma.asdfPriceSample.deleteMany({
+      where: { at: { lt: new Date(now.getTime() - ASDF_PRICE_KEEP_MS) } },
+    });
+  }
   if (rows.length === 0) throw new Error("neither the Jupiter quote nor the price sources priced ASDF");
   return { quote, price };
 }
@@ -120,8 +180,15 @@ function median(values: number[]): number | null {
   return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
-/** The guards and medians over `rows` (pure: the tests and smoothedAsdfPerSol share it). */
-export function asdfPriceFrom(rows: readonly AsdfPriceSampleRow[], now: Date): AsdfPriceState {
+/**
+ * The guards and medians over `rows` (pure: the tests and smoothedAsdfPerSol share it). `guards`
+ * are the 15-second cadence's unless the caller knows the Sacrifice is off (asdfPriceGuards).
+ */
+export function asdfPriceFrom(
+  rows: readonly AsdfPriceSampleRow[],
+  now: Date,
+  guards: AsdfPriceGuards = ASDF_PRICE_GUARDS,
+): AsdfPriceState {
   const t = now.getTime();
   const long = rows.filter((r) => r.at.getTime() > t - ASDF_PRICE_LONG_MS && r.at.getTime() <= t);
   // The 5-minute window ends at the newest sample, not now: a paused sampler keeps the price it
@@ -137,9 +204,8 @@ export function asdfPriceFrom(rows: readonly AsdfPriceSampleRow[], now: Date): A
   const longMedian = median(long.map((r) => r.asdfPerSol));
   const newestAt = short.reduce<Date | null>((best, r) => (!best || r.at > best ? r.at : best), null);
   let refusal: AsdfPriceRefusal | null = null;
-  const fresh = (r: AsdfPriceSampleRow | null) =>
-    !!r && anchor - r.at.getTime() <= ASDF_PRICE_SOURCE_MAX_AGE_MS;
-  if (short.length < ASDF_PRICE_MIN_SAMPLES) refusal = "few_samples";
+  const fresh = (r: AsdfPriceSampleRow | null) => !!r && anchor - r.at.getTime() <= guards.sourceMaxAgeMs;
+  if (short.length < guards.minSamples) refusal = "few_samples";
   else if (!newestAt || t - newestAt.getTime() > ASDF_PRICE_MAX_AGE_MS) refusal = "stale";
   else if (!fresh(spot.quote) || !fresh(spot.price)) refusal = "source_down";
   else {
@@ -162,19 +228,25 @@ export function asdfPriceFrom(rows: readonly AsdfPriceSampleRow[], now: Date): A
   };
 }
 
-let cache: { at: number; state: AsdfPriceState } | null = null;
+let cache: { at: number; guards: AsdfPriceGuards; state: AsdfPriceState } | null = null;
 /** The samples change every ASDF_PRICE_SAMPLE_MS: a build reads at most this stale a state. */
 const CACHE_MS = 5_000;
 
-/** The smoothed ASDF price now, or why it can't be used (see asdfPriceFrom). */
-export async function smoothedAsdfPerSol(now = new Date()): Promise<AsdfPriceState> {
-  if (cache && Math.abs(now.getTime() - cache.at) < CACHE_MS) return cache.state;
+/**
+ * The smoothed ASDF price now, or why it can't be used (see asdfPriceFrom). A trade's build uses
+ * the default guards; the admin panel passes the off mode's while the Sacrifice is off.
+ */
+export async function smoothedAsdfPerSol(
+  now = new Date(),
+  guards: AsdfPriceGuards = ASDF_PRICE_GUARDS,
+): Promise<AsdfPriceState> {
+  if (cache && cache.guards === guards && Math.abs(now.getTime() - cache.at) < CACHE_MS) return cache.state;
   const rows = await prisma.asdfPriceSample.findMany({
     where: { at: { gt: new Date(now.getTime() - ASDF_PRICE_LONG_MS) } },
     select: { at: true, source: true, asdfPerSol: true },
   });
-  const state = asdfPriceFrom(rows, now);
-  cache = { at: now.getTime(), state };
+  const state = asdfPriceFrom(rows, now, guards);
+  cache = { at: now.getTime(), guards, state };
   return state;
 }
 

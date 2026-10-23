@@ -1320,15 +1320,20 @@ const envSchema = z.object({
         return false;
       }
     }, "HELIUS_SENDER_URL must be an https URL on a helius-rpc.com host"),
-  // The trade canary (worker's tradeCanaryJob.ts, on the scanner): every 5 minutes it builds a Pro
-  // trade - never signed, never sent - for the preflight's probe wallet on SOL->USDC, a graduated
-  // Pump.fun coin and a curve coin, pings Sender and asks the trading RPCs for a block height;
-  // pipeline-watch tells the admins after two failed runs in a row. About 30 Helius credits a run.
-  // "false" switches it off.
+  // The trade canary (worker's tradeCanaryJob.ts, on the scanner): every
+  // TRADE_CANARY_INTERVAL_MINUTES it builds a Pro trade - never signed, never sent - for the
+  // preflight's probe wallet on SOL->USDC, a graduated Pump.fun coin and a curve coin, pings Sender
+  // and asks the trading RPCs for a block height; pipeline-watch tells the admins after two failed
+  // runs in a row. About 30 Helius credits a run. "false" switches it off.
   TRADE_CANARY_ENABLED: z
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  // 15, not 5 (user ask 2026-10-23: API audit bundle, B1): two thirds of the canary's ~8.6k Helius
+  // credits and ~1.7k Jupiter calls a day. A broken trade path now reaches the admins after up to
+  // 30 minutes (two failed runs) instead of 10. pipeline-watch's "no run" notice and /health's
+  // staleness scale with it.
+  TRADE_CANARY_INTERVAL_MINUTES: z.coerce.number().min(1).default(15),
   // The graduated coin the canary buys when recent data names none (a quiet day): any liquid
   // Pump.fun coin's mint. Empty: that probe is skipped then.
   TRADE_CANARY_PUMP_MINT: z.string().optional().default(""),

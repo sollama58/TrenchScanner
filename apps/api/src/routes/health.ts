@@ -64,8 +64,9 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   // Every TRADING_BOT_INTERVAL_SECONDS (5 by default) when the trading bot is on; while it is down
   // open positions are not watched for their exits.
   "trading-bot": 5 * 60_000,
-  // Every 5 minutes: builds a Pro trade without signing it (tradeCanaryJob.ts). pipeline-watch
-  // tells the admins after two failed runs; this only says it stopped running.
+  // Every TRADE_CANARY_INTERVAL_MINUTES (15 by default; its heartbeat interval raises this to 45
+  // min): builds a Pro trade without signing it (tradeCanaryJob.ts). pipeline-watch tells the
+  // admins after two failed runs; this only says it stopped running.
   "trade-canary": 30 * 60_000,
   // Every PAPER_TRADING_INTERVAL_MS (10s): admins' paper strategies; nothing else waits on it.
   "paper-trading": 10 * 60_000,
