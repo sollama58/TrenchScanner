@@ -1,9 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import {
+  baseSegments,
   createLogger,
   launchSupplyFactors,
   oldestCandleCover,
   prisma,
+  PUMPFUN_LAUNCHPAD,
   readCandleChunks,
   type Env,
   type SeriesInput,
@@ -19,6 +21,7 @@ import {
   CANDLE_TIMEFRAMES,
   SOURCE_PRIORITY,
   candlesQuery,
+  chunkInputs,
   pageInput,
   readTokenCandles,
   type CandleReadDeps,
@@ -53,12 +56,24 @@ const feeds: StreamFeeds = {
   solUsd: () => sharedSolPrice.get(),
 };
 
-/** The newest stretch, not stored yet: the newest Pump.fun pages, then the stream's 1-second bars. */
-async function liveInputs(mint: string, tfSec: number, factor: number): Promise<SeriesInput[]> {
+/** A page held this long still stands in for an older page's stretch the store hasn't saved yet. */
+const PAGE_HELD_MS = 15 * 60_000;
+
+/**
+ * The stretch not stored yet: the newest Pump.fun pages, then the stream's 1-second bars. The
+ * newest page (`newest`) may read Pump.fun; an older one takes only the pages held.
+ */
+async function liveInputs(
+  mint: string,
+  tfSec: number,
+  factor: number,
+  newest: boolean,
+): Promise<SeriesInput[]> {
   const out: SeriesInput[] = [];
   const page = async (res: 15 | 60, cache: CandleCache) => {
-    const kept = latestPage(mint, res, PAGE_FRESH_MS);
+    const kept = latestPage(mint, res, newest ? PAGE_FRESH_MS : PAGE_HELD_MS);
     if (kept) return pageInput(kept.candles, res, kept.at, factor);
+    if (!newest) return null;
     const read = await cache.read(mint).catch(() => null);
     const fresh = latestPage(mint, res, PAGE_FRESH_MS);
     if (fresh) return pageInput(fresh.candles, res, fresh.at, factor);
@@ -72,18 +87,23 @@ async function liveInputs(mint: string, tfSec: number, factor: number): Promise<
     page(60, minuteCache),
     tfSec < 60 ? page(15, quarterCache) : Promise.resolve(null),
     // Already on the supply now (LiveCurves.history).
-    streamCandles(feeds, mint, 1_000).catch(() => null),
+    newest ? streamCandles(feeds, mint, 1_000).catch(() => null) : Promise.resolve(null),
   ]);
   if (minutes) out.push(minutes);
   if (quarters) out.push(quarters);
   if (stream?.candles.length) {
-    out.push({
-      res: 1,
-      coverFrom: stream.coveredFrom ?? stream.candles[0]!.t,
-      coverTo: stream.readAt ?? stream.candles[stream.candles.length - 1]!.t + 1_000,
-      bars: stream.candles,
-      priority: SOURCE_PRIORITY.stream,
-    });
+    // On the finest timeframes only what the stream itself delivered: RPC reads every few seconds
+    // make 1-second bars that sit flat four seconds in five (charts audit CH-6).
+    const from = tfSec < 5 ? stream.streamFrom : (stream.coveredFrom ?? stream.candles[0]!.t);
+    if (from !== null) {
+      out.push({
+        res: 1,
+        coverFrom: from,
+        coverTo: stream.readAt ?? stream.candles[stream.candles.length - 1]!.t + 1_000,
+        bars: stream.candles.filter((k) => k.t + 1_000 > from),
+        priority: SOURCE_PRIORITY.stream,
+      });
+    }
   }
   return out;
 }
@@ -99,8 +119,8 @@ const deps: CandleReadDeps = {
 /** Answers are shared by every reader for a few seconds (the newest page) or a minute (older ones). */
 const newestAnswers = new KeyedCache<TokenCandlesAnswer>(5_000, 500);
 const olderAnswers = new KeyedCache<TokenCandlesAnswer>(60_000, 500);
-/** Whether a mint is on Token, reused a while (the chart polls). */
-const onToken = new KeyedCache<boolean>(5 * 60_000, 2_000);
+/** Whether a mint is on Token and is a Pump.fun coin, reused a while (the chart polls). */
+const onToken = new KeyedCache<{ pump: boolean } | null>(5 * 60_000, 2_000);
 
 /**
  * GET /tokens/:mint/candles?tf=&before=&limit= (charts audit 2026-10-22 target design): bars of
@@ -126,17 +146,21 @@ export async function registerCandleRoutes(app: FastifyInstance, opts: { env?: E
     const empty: TokenCandlesAnswer = { mint: mintAddress, tf: q.tf, bars: [], next: null };
     const known = await onToken
       .get(mintAddress, async () => {
-        const row = await prisma.token.findUnique({ where: { mintAddress }, select: { id: true } });
-        return row !== null;
+        const row = await prisma.token.findUnique({
+          where: { mintAddress },
+          select: { launchpad: true },
+        });
+        return row ? { pump: row.launchpad === PUMPFUN_LAUNCHPAD || mintAddress.endsWith("pump") } : null;
       })
-      .catch(() => false);
+      .catch(() => null);
     if (!known) {
       onToken.forget(mintAddress);
       reply.header("Cache-Control", "private, max-age=15");
       return empty;
     }
-    // Opening a chart queues the coin's history back to launch, once (the worker's candleBackfill.ts).
-    askBackfill(mintAddress);
+    // Opening a chart queues the coin's history back to launch, once (the worker's candleBackfill.ts);
+    // a coin Pump.fun has no candles for is topped up to now on each open (askBackfill).
+    askBackfill(mintAddress, Date.now(), !known.pump);
     const key = `${mintAddress}:${q.tf}:${q.before ?? "now"}:${q.limit}`;
     const cache = q.before === null ? newestAnswers : olderAnswers;
     const answer = await cache
@@ -151,4 +175,90 @@ export async function registerCandleRoutes(app: FastifyInstance, opts: { env?: E
     reply.header("Cache-Control", `private, max-age=${maxAge}`);
     return answer;
   });
+}
+
+/** A summary of one series input, for the diagnosis. */
+function inputSummary(i: SeriesInput & { source?: string; startAt?: number }) {
+  return {
+    res: i.res,
+    ...(i.source ? { source: i.source } : {}),
+    priority: i.priority,
+    coverFrom: i.coverFrom,
+    coverTo: i.coverTo,
+    bars: i.bars.length,
+    firstBar: i.bars[0]?.t ?? null,
+    lastBar: i.bars[i.bars.length - 1]?.t ?? null,
+  };
+}
+
+/**
+ * GET /stats/candles/:mint's report (routes/stats.ts, behind STATS_API_TOKEN; chart gaps audit
+ * 2026-10-23): the page a chart gets, with what it was built from (the stored chunks, the live
+ * pages and the stream), which source each stretch was read from, and every stretch of the page
+ * with no bar where some source does hold a bar: a gap the chart draws flat over real trades.
+ * Read-only, apart from the newest page's usual Pump.fun read; asks for no backfill.
+ */
+export async function candleDiagnosis(mint: string, query: unknown) {
+  if (!MINT_RE.test(mint)) return { error: "not a valid mint" };
+  const q = candlesQuery(query);
+  if ("error" in q) return q;
+  const now = Date.now();
+  const tfSec = CANDLE_TIMEFRAMES[q.tf];
+  const tfMs = tfSec * 1_000;
+  const factor = (await deps.factor(mint)) ?? 1;
+  const live = await liveInputs(mint, tfSec, factor > 0 ? factor : 1, q.before === null);
+  const answer = await readTokenCandles(mint, q.tf, q.before, q.limit, {
+    ...deps,
+    live: async () => live,
+  });
+  const end = q.before ?? Math.floor(now / tfMs) * tfMs + tfMs;
+  const from = answer.bars[0]?.t ?? end - q.limit * tfMs;
+  const chunks = await readCandleChunks(mint, from, end);
+  const inputs = [
+    ...chunks.map((c) => ({
+      ...inputSummary({ ...c, priority: SOURCE_PRIORITY[c.source] }),
+      source: c.source,
+      startAt: c.startAt,
+    })),
+    ...live.map((i) => ({
+      ...inputSummary(i),
+      source: i.priority === SOURCE_PRIORITY.stream ? "stream" : "live",
+    })),
+  ];
+  const all = [...chunkInputs(chunks, factor > 0 ? factor : 1), ...live];
+  const segments = baseSegments(all, from, end, tfSec);
+  // Stretches between the page's bars (each bar's own width) where some source holds a bar.
+  const sourceBars = all.flatMap((i) => i.bars.map((b) => ({ t: b.t, res: i.res })));
+  const gaps: { from: number; to: number; minutes: number; barsInSources: number }[] = [];
+  for (let k = 1; k < answer.bars.length; k++) {
+    const prev = answer.bars[k - 1]!;
+    const gapFrom = prev.t + (prev.w ?? tfSec) * 1_000;
+    const gapTo = answer.bars[k]!.t;
+    if (gapTo <= gapFrom) continue;
+    const held = sourceBars.filter((b) => b.t >= gapFrom && b.t + b.res * 1_000 <= gapTo).length;
+    if (held > 0)
+      gaps.push({ from: gapFrom, to: gapTo, minutes: (gapTo - gapFrom) / 60_000, barsInSources: held });
+  }
+  const backfill = await prisma.candleBackfill.findUnique({ where: { mint } }).catch(() => null);
+  return {
+    mint,
+    tf: q.tf,
+    now,
+    factor,
+    bars: answer.bars.length,
+    firstBar: answer.bars[0]?.t ?? null,
+    lastBar: answer.bars[answer.bars.length - 1]?.t ?? null,
+    next: answer.next,
+    coarseBars: answer.bars.filter((b) => b.coarse).length,
+    gaps,
+    segments,
+    inputs,
+    backfill,
+    answer: answer.bars,
+  };
+}
+
+/** GET /stats/candles: the coins charts asked the store about lately, newest first. */
+export async function recentCandleCoins(limit = 30) {
+  return prisma.candleBackfill.findMany({ orderBy: { requestedAt: "desc" }, take: limit });
 }

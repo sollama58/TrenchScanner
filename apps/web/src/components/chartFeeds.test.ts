@@ -75,9 +75,19 @@ describe("withNewest", () => {
       [180_000, 6],
     ]);
   });
-  it("drops a held bar the newest page no longer has (read finer since)", () => {
+  it("keeps a held bar a thinner newest page left out", () => {
     const page = storedCandles([bar(60_000, 7), bar(180_000, 8)], 60_000);
-    expect(withNewest(held, page).map((k) => k.t)).toEqual([0, 60_000, 180_000]);
+    expect(withNewest(held, page).map((k) => [k.t, k.c])).toEqual([
+      [0, 1],
+      [60_000, 7],
+      [120_000, 3],
+      [180_000, 8],
+    ]);
+  });
+  it("drops a held bar a page bar overlaps (read finer since)", () => {
+    const coarse = storedCandles([bar(0, 1, { coarse: true, w: 300 })], 60_000);
+    const page = storedCandles([bar(120_000, 4), bar(180_000, 5)], 60_000);
+    expect(withNewest(coarse, page).map((k) => k.t)).toEqual([120_000, 180_000]);
   });
   it("keeps what it held through an empty page", () => {
     expect(withNewest(held, [])).toEqual(held);

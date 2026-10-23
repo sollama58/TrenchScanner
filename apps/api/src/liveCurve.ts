@@ -1189,7 +1189,14 @@ export class LiveCurves {
     let cut = 0;
     while (cut < f.ticks.length - 1 && f.ticks[cut]![0] < at - KEEP_MS) cut += 1;
     if (f.ticks.length - cut > MAX_TICKS) cut = f.ticks.length - MAX_TICKS;
-    if (cut > 0) f.ticks.splice(0, cut);
+    if (cut > 0) {
+      f.ticks.splice(0, cut);
+      // The cover reaches back no further than the oldest tick still held. It used to stay where
+      // the follow began, so a coin followed for an hour claimed the whole hour with 20 minutes of
+      // ticks, and the chart drew the rest flat over Pump.fun's real candles (chart gaps audit
+      // 2026-10-23).
+      f.coveredFrom = Math.max(f.coveredFrom ?? -Infinity, f.ticks[0]![0]);
+    }
     if (changed) this.wake(mint);
     return changed;
   }

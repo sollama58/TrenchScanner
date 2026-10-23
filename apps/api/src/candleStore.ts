@@ -1,4 +1,5 @@
 import {
+  BACKFILL_TOP_UP_AFTER_MS,
   chunkBars,
   createLogger,
   requestCandleBackfill,
@@ -7,6 +8,7 @@ import {
   type CandleRes,
 } from "@trenchscanner/core";
 import type { CandleFetcher, McapCandle } from "./tokenChart.js";
+import { pageCoverEnd } from "./tokenCandles.js";
 
 const logger = createLogger("candle-store");
 
@@ -20,26 +22,30 @@ const logger = createLogger("candle-store");
  * Wraps a cache's fetcher (storingFetcher), so no extra Pump.fun call is made for any of this.
  */
 
-/** Saved chunks remembered, so a page read every 30 s writes each closed chunk once. */
+/**
+ * Saved chunks remembered with their bar count, so a page read every 30 s writes each closed chunk
+ * once, and again only when a later page holds more of its bars (a candle Pump.fun was late with).
+ */
 const MAX_SAVED_KEYS = 50_000;
 /** Chunk rows waiting at most; past it the newest are dropped (a stalled database must not grow memory). */
 const MAX_QUEUED = 2_000;
 const FLUSH_MS = 5_000;
 /** Newest pages kept per width. */
 const MAX_PAGES = 300;
-/** A coin's backfill is asked for at most this often from one process. */
+/** A coin's backfill is asked for at most this often from one process (a top-up's: its own redo). */
 const ASK_EVERY_MS = 60 * 60_000;
 const MAX_ASKED = 5_000;
 
 let enabled = true;
-const saved = new Set<string>();
+const saved = new Map<string, number>();
 let queue: CandleChunkRow[] = [];
 let timer: ReturnType<typeof setInterval> | null = null;
 let flushing: Promise<void> | null = null;
 const pages = new Map<string, { at: number; candles: McapCandle[] }>();
 const asked = new Map<string, number>();
 let save: (rows: CandleChunkRow[]) => Promise<unknown> = saveCandleChunks;
-let ask: (mint: string) => Promise<unknown> = (mint) => requestCandleBackfill(mint, "chart");
+let ask: (mint: string, redoAfterMs?: number) => Promise<unknown> = (mint, redoAfterMs) =>
+  requestCandleBackfill(mint, "chart", Date.now(), redoAfterMs);
 
 /** CANDLE_STORE: off, nothing is written or asked (the newest pages are still kept). */
 export function configureCandleStore(opts: { enabled: boolean }): void {
@@ -81,20 +87,23 @@ export function keepPage(mint: string, res: CandleRes, candles: McapCandle[], no
   const step = res * 1_000;
   const closed = candles.filter((k) => k.t + step <= now);
   if (closed.length === 0) return;
-  // The page holds every trading interval from its first to the read: no gap inside.
+  // The page holds every trading interval from its first to its newest (pageCoverEnd): no gap
+  // inside. Only chunks that end by then are saved, so a minute Pump.fun was late with is never
+  // stored as a quiet one.
+  const coverTo = Math.floor(pageCoverEnd(candles[candles.length - 1]!.t, res, now) / step) * step;
   const rows = chunkBars(
     mint,
     res,
     "pumpfun",
     closed,
-    { from: closed[0]!.t, to: Math.floor(now / step) * step },
-    { onlyClosed: true, now },
+    { from: closed[0]!.t, to: coverTo },
+    { onlyClosed: true, now: coverTo },
   );
   for (const row of rows) {
     const id = `${mint}:${res}:${row.startAt}`;
-    if (saved.has(id) || queue.length >= MAX_QUEUED) continue;
+    if ((saved.get(id) ?? 0) >= row.bars.length || queue.length >= MAX_QUEUED) continue;
     if (saved.size >= MAX_SAVED_KEYS) saved.clear();
-    saved.add(id);
+    saved.set(id, row.bars.length);
     queue.push(row);
   }
   if (queue.length > 0 && !timer) {
@@ -103,14 +112,19 @@ export function keepPage(mint: string, res: CandleRes, candles: McapCandle[], no
   }
 }
 
-/** Asks for the coin's backfill, once an hour at most from this process. */
-export function askBackfill(mint: string, now = Date.now()): void {
+/**
+ * Asks for the coin's backfill, once an hour at most from this process. `topUp`: a coin Pump.fun has
+ * no candles for, whose newest stretch only the backfill brings (BACKFILL_TOP_UP_AFTER_MS): asked
+ * as often as that, and queued again once its last run is that old.
+ */
+export function askBackfill(mint: string, now = Date.now(), topUp = false): void {
   if (!enabled) return;
   const last = asked.get(mint);
-  if (last !== undefined && now - last < ASK_EVERY_MS) return;
+  const every = topUp ? BACKFILL_TOP_UP_AFTER_MS : ASK_EVERY_MS;
+  if (last !== undefined && now - last < every) return;
   if (asked.size >= MAX_ASKED) asked.clear();
   asked.set(mint, now);
-  void ask(mint).catch((err: unknown) => {
+  void ask(mint, topUp ? BACKFILL_TOP_UP_AFTER_MS : undefined).catch((err: unknown) => {
     asked.delete(mint);
     logger.warn("candle backfill not asked", { mint, error: String(err) });
   });
@@ -142,7 +156,7 @@ export function flushCandleStore(): Promise<void> {
 export function resetCandleStoreForTests(
   opts: {
     save?: (rows: CandleChunkRow[]) => Promise<unknown>;
-    ask?: (mint: string) => Promise<unknown>;
+    ask?: (mint: string, redoAfterMs?: number) => Promise<unknown>;
   } = {},
 ): void {
   if (timer) clearInterval(timer);
@@ -154,5 +168,5 @@ export function resetCandleStoreForTests(
   pages.clear();
   asked.clear();
   save = opts.save ?? saveCandleChunks;
-  ask = opts.ask ?? ((mint) => requestCandleBackfill(mint, "chart"));
+  ask = opts.ask ?? ((mint, redoAfterMs) => requestCandleBackfill(mint, "chart", Date.now(), redoAfterMs));
 }

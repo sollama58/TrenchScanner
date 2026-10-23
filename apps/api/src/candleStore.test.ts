@@ -33,6 +33,23 @@ describe("candle store (API)", () => {
     expect(latestPage("X", 60, 60_000, NOW + 200_000)).toBeNull();
   });
 
+  it("saves a chunk again when a later page holds more of its bars, and none past the newest", async () => {
+    const saved: CandleChunkRow[] = [];
+    resetCandleStoreForTests({ save: async (rows) => void saved.push(...rows), ask: async () => {} });
+    // Read at 12:30, Pump.fun late: its newest minute is 11:57. The 11:00 hour can't be vouched
+    // for past 11:58, so it isn't saved yet.
+    keepPage("X", 60, minutes(NOW - 150 * M, 117), NOW);
+    await flushCandleStore();
+    expect(saved.map((r) => [r.startAt, r.bars.length])).toEqual([[NOW - 150 * M, 60]]);
+    // Caught up: the 11:00 hour is saved whole, the 10:00 one not again.
+    keepPage("X", 60, minutes(NOW - 150 * M, 150), NOW + 30_000);
+    await flushCandleStore();
+    expect(saved.map((r) => [r.startAt, r.bars.length])).toEqual([
+      [NOW - 150 * M, 60],
+      [NOW - 90 * M, 60],
+    ]);
+  });
+
   it("queues a failed write again on the next read", async () => {
     let fail = true;
     const saved: CandleChunkRow[] = [];

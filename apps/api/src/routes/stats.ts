@@ -28,6 +28,7 @@ import { marketCounts } from "../marketRows.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { exportQuerySchema, exportWindow, startExport } from "./statsExport.js";
 import { buildScreenFunnel, SCREEN_FUNNEL_MAX_HOURS } from "../screenFunnel.js";
+import { candleDiagnosis, recentCandleCoins } from "./candles.js";
 
 const logger = createLogger("stats");
 
@@ -548,6 +549,30 @@ export async function registerStatsRoutes(
     async (_request, reply) => {
       reply.header("cache-control", "no-store");
       return buildLiveFreshnessReport(opts.liveRefresher);
+    },
+  );
+  /**
+   * The token chart's candles as a subscriber's chart gets them, with what they were built from and
+   * any stretch drawn flat over a source's bars (routes/candles.ts candleDiagnosis), so a cloud
+   * session can check the charts without a subscriber's sign-in. No mint: the coins charts asked
+   * the candle store about lately.
+   */
+  app.get(
+    "/candles",
+    { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard },
+    async (_request, reply) => {
+      reply.header("cache-control", "no-store");
+      return recentCandleCoins();
+    },
+  );
+  app.get(
+    "/candles/:mint",
+    { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard },
+    async (request, reply) => {
+      reply.header("cache-control", "no-store");
+      const out = await candleDiagnosis((request.params as { mint: string }).mint, request.query);
+      if ("error" in out) reply.code(400);
+      return out;
     },
   );
 }

@@ -3,6 +3,7 @@ import { prisma } from "../db.js";
 import { chunkBars, type CandleChunkRow, type StoredBar } from "./candleChunk.js";
 import {
   BACKFILL_REDO_AFTER_MS,
+  BACKFILL_TOP_UP_AFTER_MS,
   minuteCoversBefore,
   oldestCandleCover,
   pruneCandleStore,
@@ -72,6 +73,17 @@ describe.skipIf(!dbAvailable)("candle store", () => {
     row = await prisma.candleBackfill.findUniqueOrThrow({ where: { mint: KEPT } });
     expect(row.doneAt).toBeNull();
     expect([row.pages, row.pumpDone, row.cursor]).toEqual([0, false, null]);
+  });
+
+  it("tops a finished coin up after BACKFILL_TOP_UP_AFTER_MS when asked to", async () => {
+    await requestCandleBackfill(GONE, "chart", NOW);
+    await prisma.candleBackfill.update({ where: { mint: GONE }, data: { doneAt: new Date(NOW) } });
+    await requestCandleBackfill(GONE, "chart", NOW + 60_000, BACKFILL_TOP_UP_AFTER_MS);
+    let row = await prisma.candleBackfill.findUniqueOrThrow({ where: { mint: GONE } });
+    expect(row.doneAt).not.toBeNull();
+    await requestCandleBackfill(GONE, "chart", NOW + BACKFILL_TOP_UP_AFTER_MS + 1, BACKFILL_TOP_UP_AFTER_MS);
+    row = await prisma.candleBackfill.findUniqueOrThrow({ where: { mint: GONE } });
+    expect(row.doneAt).toBeNull();
   });
 
   it("prunes fine bars past their days, wider ones past the horizon, and coins gone from Token", async () => {
