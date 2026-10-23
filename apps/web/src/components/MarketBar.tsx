@@ -10,7 +10,7 @@ import {
 } from "react";
 import { ApiError } from "../api";
 import { usePolling, useNow } from "../hooks";
-import { ago, shortAddress, signedPct } from "../format";
+import { ago, shortAddress, signedPct, usd } from "../format";
 import { openTokenModal } from "../tokenModal";
 import { useProWallet } from "../proTrade";
 import {
