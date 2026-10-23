@@ -126,9 +126,9 @@ jobs:
             workspaces: -w @trenchscanner/core -- --shard=2/2
           - name: api
             workspaces: -w @trenchscanner/api
-          # web's tests take seconds and need no database; they ride with worker's.
+          # web's and the extension's tests take seconds and need no database; they ride with worker's.
           - name: worker and web
-            workspaces: -w @trenchscanner/worker -w @trenchscanner/web
+            workspaces: -w @trenchscanner/worker -w @trenchscanner/web -w @trenchscanner/extension
 
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/trenchscanner
