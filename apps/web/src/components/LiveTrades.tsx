@@ -248,7 +248,13 @@ export function LiveTradesCard({
               : undefined
           }
         >
-          {feed.status === "live" ? "Live" : feed.status === "unavailable" ? "Off" : "Connecting"}
+          {feed.status === "live"
+            ? "Live"
+            : feed.status === "unavailable"
+              ? feed.busy
+                ? "Waiting"
+                : "Off"
+              : "Connecting"}
         </span>
         <span className="segmented small lt-filter" role="radiogroup" aria-label="Show">
           {(["all", "buy", "sell"] as const).map((s) => (
@@ -276,7 +282,12 @@ export function LiveTradesCard({
         </button>
       </h4>
       {panel && <FilterPanel filter={filter} onChange={setFilter} id={panelId} />}
-      {feed.status === "unavailable" ? (
+      {feed.status === "unavailable" && feed.busy ? (
+        <p className="muted small lt-empty">
+          Live trades are following as many coins as they can just now (four open at once per account). This
+          one starts by itself once another coin's page has been closed for a little while.
+        </p>
+      ) : feed.status === "unavailable" ? (
         <p className="muted small lt-empty">
           Live trades follow Pump.fun coins, on their bonding curve and after it on PumpSwap. This coin trades
           elsewhere, so there's nothing to follow here.

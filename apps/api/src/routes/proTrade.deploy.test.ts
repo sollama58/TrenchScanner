@@ -288,8 +288,23 @@ describe.skipIf(!dbAvailable)("Pro trades across API instances", () => {
     // so the refusal below is the sender's, not that pace.
     await new Promise((r) => setTimeout(r, 1_100));
 
-    // Sender refusing a trade sends nothing, so the next one isn't held back by it.
+    // Past the pace, the trade still unsettled holds the wallet on any instance (one in flight).
     const other = await instance();
+    const e = trade();
+    const held = await send(other, {
+      transaction: e.first.base64,
+      buildToken: tokenFor(e.message, { closing: false }),
+    });
+    expect(held.statusCode).toBe(429);
+    expect(held.json()).toMatchObject({ notSent: true, error: expect.stringContaining("still in flight") });
+    expect(vi.mocked(sendViaSender)).toHaveBeenCalledTimes(1);
+    // It lands.
+    await prisma.platformTrade.updateMany({
+      where: { wallet: TRADER.address, status: "sent" },
+      data: { status: "confirmed" },
+    });
+
+    // Sender refusing a trade sends nothing, so the next one isn't held back by it.
     vi.mocked(sendViaSender).mockImplementationOnce(async () => ({
       ok: false as const,
       refused: true,

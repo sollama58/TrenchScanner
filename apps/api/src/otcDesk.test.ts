@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolveOtcDeskFee } from "./feeDesks.js";
-import { fetchOtcDeskRoster, otcDeskFees, otcRosterCacheMs } from "./otcDesk.js";
+import {
+  clearOtcDeskSingles,
+  fetchOtcDeskRoster,
+  otcDeskFeeForMint,
+  otcDeskFees,
+  otcDeskRosterFor,
+  otcRosterCacheMs,
+} from "./otcDesk.js";
 
 const MINT = "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump";
 const NVDA = "So11111111111111111111111111111111111111112";
@@ -302,5 +309,70 @@ describe("otcDeskFees", () => {
       { label: "NVDAx", mint: NVDA },
       { label: "TSLAx", mint: TSLA },
     ]);
+  });
+});
+
+describe("otcDeskFeeForMint", () => {
+  const OLD = "GHrjR2VJismiT4UpFY3FQH6LA64btVwVnGXW3KdUpump";
+
+  it("asks the host about one coin past the sweep, and keeps the answer, a miss included", async () => {
+    clearOtcDeskSingles();
+    const asked: string[] = [];
+    const fetchImpl = async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      asked.push(url.searchParams.get("mint") ?? "");
+      if (url.searchParams.get("mint") === OLD)
+        return json({ coins: [{ mint: OLD, rewardSymbol: "", rewardBasket: [NVDA, TSLA] }] });
+      return json({ coins: [] });
+    };
+    const f = fetchImpl as typeof fetch;
+    const now = 1_000_000;
+    expect((await otcDeskFeeForMint(OLD, { fetch: f, now }))?.rewards.map((r) => r.mint)).toEqual([
+      NVDA,
+      TSLA,
+    ]);
+    expect(await otcDeskFeeForMint(MINT, { fetch: f, now })).toBeNull();
+    // Both answers are kept: neither asks again within its window.
+    expect(await otcDeskFeeForMint(OLD, { fetch: f, now: now + 60_000 })).not.toBeNull();
+    expect(await otcDeskFeeForMint(MINT, { fetch: f, now: now + 20 * 60_000 })).toBeNull();
+    expect(asked).toEqual([OLD, MINT]);
+    // The miss is asked about again once its window has passed.
+    await otcDeskFeeForMint(MINT, { fetch: f, now: now + 31 * 60_000 });
+    expect(asked).toEqual([OLD, MINT, MINT]);
+  });
+
+  it("does not take another coin's row from a host that ignored the filter", async () => {
+    clearOtcDeskSingles();
+    const fetchImpl = async () => json({ coins: [{ mint: MINT, rewardSymbol: "NVDAx" }], total: 49_000 });
+    expect(await otcDeskFeeForMint(OLD, { fetch: fetchImpl as typeof fetch, now: 1 })).toBeNull();
+  });
+
+  it("sends at most 30 lookups a minute", async () => {
+    clearOtcDeskSingles();
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      return json({ coins: [] });
+    };
+    const f = fetchImpl as typeof fetch;
+    for (let i = 0; i < 40; i++) await otcDeskFeeForMint(filler(i), { fetch: f, now: 5_000 });
+    expect(calls).toBe(30);
+    await otcDeskFeeForMint(filler(39), { fetch: f, now: 65_000 });
+    expect(calls).toBe(31);
+  });
+
+  it("adds a looked-up coin to the roster only for a path that holds for one coin", async () => {
+    clearOtcDeskSingles();
+    const fetchImpl = async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.searchParams.get("mint") === OLD)
+        return json({ coins: [{ mint: OLD, rewardSymbol: "NVDAx" }] });
+      return json({ coins: [{ mint: MINT, rewardSymbol: "TSLAx" }] });
+    };
+    const f = fetchImpl as typeof fetch;
+    const held = await otcDeskRosterFor(OLD, { wait: true, fetch: f });
+    expect(held.get(OLD)?.line).toBe("OTC Desks pays holder rewards in NVDAx.");
+    expect(held.get(MINT)?.line).toBe("OTC Desks pays holder rewards in TSLAx.");
+    expect((await otcDeskRosterFor(OLD, { fetch: f })).has(OLD)).toBe(false);
   });
 });

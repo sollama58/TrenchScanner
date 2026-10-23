@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import bs58 from "bs58";
 import { pumpCurveAddressOf, pumpSwapPoolOf } from "@trenchscanner/core";
-import { LiveTrades, MAX_TRADES, quotedInSol, type LiveTradesDeps } from "./liveTrades.js";
+import {
+  LIVE_TRADES_PER_USER,
+  LiveTrades,
+  MAX_FOLLOWED,
+  MAX_TRADES,
+  quotedInSol,
+  type LiveTradesDeps,
+} from "./liveTrades.js";
 
 const MINT = "BfWF6DxxfjdZPqjc2dPQvMd4CJh8Xr7ZPeP3iLh2pump";
 const OTHER = "EMRjzAdUDeKZi6w32yGJiERb7W9spV6UuL7827zUpump";
@@ -287,16 +294,50 @@ describe("LiveTrades", () => {
     t.trades.stop();
   });
 
-  it("follows at most 50 coins, letting the least recently asked go", async () => {
+  it("never lets a watched coin go for a new one: past 50 the new one is busy until one idles", async () => {
     const t = setup();
     const mints = Array.from({ length: 51 }, (_, i) => bs58.encode(Buffer.alloc(32, i + 1)));
-    for (const m of mints) {
+    for (const m of mints.slice(0, 50)) {
       await t.trades.read(m, 0);
       t.tick(10);
     }
-    expect(t.trades.stats().followed).toBe(50);
+    expect(t.trades.stats().followed).toBe(MAX_FOLLOWED);
+    expect(await t.trades.read(mints[50]!, 0, 5_000)).toMatchObject({
+      status: "unavailable",
+      reason: "busy",
+      held: false,
+    });
+    expect(t.watched.has(`trades-curve:${mints[0]}`)).toBe(true);
+    expect(t.watched.has(`trades-curve:${mints[50]}`)).toBe(false);
+    // The first coin's page closed: once it has gone unasked past IDLE_MS, its slot is free.
+    t.tick(20_000);
+    for (const m of mints.slice(1, 50)) await t.trades.read(m, 0);
+    t.tick(15_000);
+    expect((await t.trades.read(mints[50]!, 0)).status).not.toBe("unavailable");
     expect(t.watched.has(`trades-curve:${mints[0]}`)).toBe(false);
-    expect(t.watched.has(`trades-curve:${mints[50]}`)).toBe(true);
+    expect(t.trades.stats().followed).toBe(MAX_FOLLOWED);
+    t.trades.stop();
+  });
+
+  it("lets one account follow at most four coins at once, and a fifth once one idles", async () => {
+    const t = setup();
+    const mints = Array.from({ length: 6 }, (_, i) => bs58.encode(Buffer.alloc(32, i + 1)));
+    for (const m of mints.slice(0, LIVE_TRADES_PER_USER))
+      expect((await t.trades.read(m, 0, 0, undefined, "u1")).status).not.toBe("unavailable");
+    expect(await t.trades.read(mints[4]!, 0, 0, undefined, "u1")).toMatchObject({
+      status: "unavailable",
+      reason: "busy",
+    });
+    expect(t.watched.has(`trades-curve:${mints[4]}`)).toBe(false);
+    // A coin it already follows still answers, and another account isn't held by its cap.
+    expect((await t.trades.read(mints[0]!, 0, 0, undefined, "u1")).status).not.toBe("unavailable");
+    expect((await t.trades.read(mints[4]!, 0, 0, undefined, "u2")).status).not.toBe("unavailable");
+    // Its other three tabs go on asking; the second coin's closed. Past IDLE_MS it frees a slot.
+    t.tick(20_000);
+    for (const m of [mints[0]!, mints[2]!, mints[3]!]) await t.trades.read(m, 0, 0, undefined, "u1");
+    t.tick(11_000);
+    expect((await t.trades.read(mints[5]!, 0, 0, undefined, "u1")).status).not.toBe("unavailable");
+    expect(await t.trades.read(mints[1]!, 0, 0, undefined, "u1")).toMatchObject({ reason: "busy" });
     t.trades.stop();
   });
 

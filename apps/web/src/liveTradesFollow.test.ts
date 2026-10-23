@@ -3,6 +3,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // The follow is the paid chain stream on the API (Helius audit 2026-10-22 H-2): each ask for
 // /trades/live is recorded here, and answered by hand.
 const asks: { path: string; resolve: (a: unknown) => void }[] = [];
+/** Each wait the feed set before its next ask. */
+const delays: number[] = [];
 vi.mock("./api", () => ({
   FEED_TIMEOUT_MS: 30_000,
   api: (path: string) => new Promise((resolve) => asks.push({ path, resolve })),
@@ -12,7 +14,10 @@ const { feedState, followFeed, watchFeed } = await import("./liveTrades");
 
 beforeAll(() => {
   vi.stubGlobal("window", {
-    setTimeout: () => 0,
+    setTimeout: (_fn: () => void, ms: number) => {
+      delays.push(ms);
+      return 0;
+    },
     clearTimeout: () => {},
     addEventListener: () => {},
     removeEventListener: () => {},
@@ -61,5 +66,16 @@ describe("following a coin's live trades", () => {
     expect(after.history.map((t) => t.sig)).toEqual(["s1"]);
     expect(after.supply).toBe(1_000);
     unwatch();
+  });
+
+  it("says a busy coin is waiting for a slot, not off, and asks again sooner", async () => {
+    const unfollow = followFeed("/tokens/c", () => {});
+    const ask = asks.find((a) => a.path.startsWith("/tokens/c/"))!;
+    delays.length = 0;
+    ask.resolve({ status: "unavailable", reason: "busy", since: null, cursor: 0, trades: [], held: false });
+    await flush();
+    expect(feedState("/tokens/c")).toMatchObject({ status: "unavailable", busy: true });
+    expect(delays).toEqual([15_000]);
+    unfollow();
   });
 });
