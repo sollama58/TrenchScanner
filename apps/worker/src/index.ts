@@ -41,8 +41,10 @@ import {
   publishEnvReport,
   type HeartbeatJob,
   ASDF_PRICE_SAMPLE_MS,
+  asdfPriceSampleDue,
   TRADE_SETTLEMENT_INTERVAL_MS,
   JupiterSwapClient,
+  sacrificeSettings,
   sampleAsdfPrice,
   settleOpenTrades,
   TradingRpc,
@@ -74,7 +76,7 @@ import { drainShadowReviews } from "./jobs/curatedAlerts.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { BurnStreamWake, reconcileBurns } from "./jobs/burnReconciler.js";
 import { runPipelineWatch } from "./jobs/pipelineWatchJob.js";
-import { canaryFailureMeta, runTradeCanary, TRADE_CANARY_INTERVAL_MINUTES } from "./jobs/tradeCanaryJob.js";
+import { canaryFailureMeta, runTradeCanary } from "./jobs/tradeCanaryJob.js";
 import { createTradingBotRunner } from "./jobs/tradingBotJob.js";
 import { createPaperTradingRunner } from "./jobs/paperTradingJob.js";
 import {
@@ -639,7 +641,7 @@ async function main() {
   // two failed runs in a row. Never in tests: it calls mainnet.
   if (env.TRADE_CANARY_ENABLED && process.env.NODE_ENV !== "test") {
     schedule("trade-canary", () =>
-      scheduleInterval("trade-canary", () => runTradeCanary(env), TRADE_CANARY_INTERVAL_MINUTES, {
+      scheduleInterval("trade-canary", () => runTradeCanary(env), env.TRADE_CANARY_INTERVAL_MINUTES, {
         deadlineMinutes: 4,
         abandonOnDeadline: true,
         failureMeta: canaryFailureMeta,
@@ -743,14 +745,24 @@ async function main() {
   // Price API ratio every 15 seconds. On while Pro trading is open beyond the admins, as the holder
   // scan is, so a day of samples is there before the Sacrifice is switched on. The trading key when
   // this service has one, else Jupiter's keyless host: never the scan's JUPITER_API_KEY budget.
+  // While the Sacrifice is off no trade reads the price, so the tick samples only once a minute
+  // (asdfPriceSampleDue; user ask 2026-10-23: API audit bundle). The mode is read through
+  // sacrificeSettings' 30 s cache, so switching it to shadow or on brings 15 s back within that.
   if (env.PRO_TRADING_ENABLED && env.PRO_TRADING_PUBLIC) {
     const asdfPriceReader = new JupiterSwapClient({ apiKey: env.PRO_TRADING_JUPITER_API_KEY || undefined });
+    let asdfSampledAt = 0;
     schedule("asdf-price", () =>
       scheduleInterval(
         "asdf-price",
-        async () => ({ ...(await sampleAsdfPrice(asdfPriceReader)) }),
+        async (): Promise<JobRunMeta> => {
+          const { mode } = await sacrificeSettings();
+          const now = Date.now();
+          if (!asdfPriceSampleDue(mode, asdfSampledAt, now)) return { skipped: true, mode };
+          asdfSampledAt = now;
+          return { ...(await sampleAsdfPrice(asdfPriceReader)), mode };
+        },
         ASDF_PRICE_SAMPLE_MS / 60_000,
-        // One quote that never returns is given up, not a scanner restart: samples are 15 s apart.
+        // One quote that never returns is given up, not a scanner restart: ticks are 15 s apart.
         { deadlineMinutes: 1, abandonOnDeadline: true },
       ),
     );

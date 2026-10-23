@@ -2,7 +2,11 @@ import { describe, it, expect, afterAll } from "vitest";
 import { prisma } from "../db.js";
 import {
   ASDF_PRICE_KEEP_MS,
+  ASDF_PRICE_OFF_GUARDS,
   asdfPriceFrom,
+  asdfPriceGuards,
+  asdfPriceSampleDue,
+  asdfPriceSampleMs,
   asdfRawPerSol,
   sampleAsdfPrice,
   type AsdfPriceReader,
@@ -101,6 +105,56 @@ describe("asdfPriceFrom", () => {
   });
 });
 
+/** A sample from each source every 60 s (the Sacrifice off) over the last `minutes`. */
+function slow(minutes: number, asdfPerSol: number): AsdfPriceSampleRow[] {
+  const rows: AsdfPriceSampleRow[] = [];
+  for (let ms = 0; ms < minutes * 60_000; ms += 60_000) {
+    rows.push({ at: ago(ms), source: "quote", asdfPerSol }, { at: ago(ms), source: "price", asdfPerSol });
+  }
+  return rows;
+}
+
+describe("the off mode's slower sampler (user ask 2026-10-23: API audit bundle)", () => {
+  it("samples every 15 s in shadow and on, every minute while off", () => {
+    expect(asdfPriceSampleMs("on")).toBe(15_000);
+    expect(asdfPriceSampleMs("shadow")).toBe(15_000);
+    expect(asdfPriceSampleMs("off")).toBe(60_000);
+    // The worker ticks every 15 s: while off, only every fourth tick samples.
+    const ticks = Array.from({ length: 8 }, (_, i) => 1_000_000 + i * 15_000);
+    let last = 0;
+    const sampled = ticks.filter((t) => {
+      if (!asdfPriceSampleDue("off", last, t)) return false;
+      last = t;
+      return true;
+    });
+    expect(sampled).toEqual([ticks[0], ticks[4]]);
+    // A timer a little early does not cost a whole tick; switching on samples at the next tick.
+    expect(asdfPriceSampleDue("off", 1_000_000, 1_000_000 + 59_000)).toBe(true);
+    expect(asdfPriceSampleDue("on", 1_000_000, 1_000_000 + 15_000)).toBe(true);
+  });
+
+  it("does not read a healthy off-mode sampler as too few samples or a source down", () => {
+    const rows = slow(60, 740_000);
+    // The 15-second guards sit on the edge at this cadence; one missed price read trips them.
+    const missed = rows.filter((r) => !(r.source === "price" && r.at.getTime() === NOW.getTime()));
+    expect(asdfPriceFrom(missed, NOW).refusal).toBe("few_samples");
+    expect(asdfPriceFrom(missed, NOW, asdfPriceGuards("off"))).toMatchObject({
+      asdfPerSol: 740_000,
+      refusal: null,
+    });
+    expect(asdfPriceGuards("off")).toBe(ASDF_PRICE_OFF_GUARDS);
+    // Still a refusal when the sampler has really stopped, or a source has.
+    expect(asdfPriceFrom(slow(1, 740_000), NOW, ASDF_PRICE_OFF_GUARDS).refusal).toBe("few_samples");
+    const quoteOnly = rows.filter((r) => r.source === "quote" || r.at.getTime() < NOW.getTime() - 3 * 60_000);
+    expect(asdfPriceFrom(quoteOnly, NOW, ASDF_PRICE_OFF_GUARDS).refusal).toBe("source_down");
+  });
+
+  it("keeps the 15-second guards for a trade in shadow or on", () => {
+    expect(asdfPriceGuards("on")).toEqual({ minSamples: 10, sourceMaxAgeMs: 60_000 });
+    expect(asdfPriceGuards("shadow")).toEqual({ minSamples: 10, sourceMaxAgeMs: 60_000 });
+  });
+});
+
 describe("asdfRawPerSol", () => {
   it("is base units of ASDF per SOL", () => {
     expect(asdfRawPerSol(740_000)).toBe(740_000_000_000n);
@@ -149,5 +203,21 @@ describe.skipIf(!dbAvailable)("sampleAsdfPrice", () => {
     const later = new Date(at.getTime() - 15_000);
     expect(await sampleAsdfPrice(reader({ quote: true }), later)).toEqual({ quote: 740_000, price: null });
     await expect(sampleAsdfPrice(reader({}), later)).rejects.toThrow(/neither/);
+  });
+
+  it("prunes at most once a minute", async () => {
+    const base = new Date("2001-01-01T00:00:00Z").getTime() - 10 * 60_000;
+    const old = () =>
+      prisma.asdfPriceSample.create({
+        data: { at: new Date(base - ASDF_PRICE_KEEP_MS - 1), source: "price", asdfPerSol: 1 },
+      });
+    const oldCount = () =>
+      prisma.asdfPriceSample.count({ where: { at: { lt: new Date(base - ASDF_PRICE_KEEP_MS) } } });
+    await sampleAsdfPrice(reader({ quote: true }), new Date(base));
+    await old();
+    await sampleAsdfPrice(reader({ quote: true }), new Date(base + 30_000));
+    expect(await oldCount()).toBe(1);
+    await sampleAsdfPrice(reader({ quote: true }), new Date(base + 61_000));
+    expect(await oldCount()).toBe(0);
   });
 });

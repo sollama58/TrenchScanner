@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   adminWalletSet,
+  asdfPriceGuards,
   isWalletAddress,
   prisma,
   proHolderSummary,
@@ -38,8 +39,11 @@ const sacrificeSchema = z.object({
 export async function registerAdminProModeRoutes(app: FastifyInstance, opts: { env: Env }) {
   // The Sacrifice on Admin > Pro Mode (sacrifice.ts): its mode and free cut-off, and the ASDF
   // price it is charged at (asdfPrice.ts) with each source's spot price and the guard state.
+  // While the Sacrifice is off the worker samples every minute, not every 15 seconds, so the
+  // guards shown are the slower cadence's (user ask 2026-10-23: API audit bundle).
   app.get("/pro-mode/sacrifice", async () => {
-    const [settings, price] = await Promise.all([sacrificeSettings(), smoothedAsdfPerSol()]);
+    const settings = await sacrificeSettings();
+    const price = await smoothedAsdfPerSol(new Date(), asdfPriceGuards(settings.mode));
     return { settings, price };
   });
 

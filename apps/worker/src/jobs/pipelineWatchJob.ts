@@ -51,7 +51,7 @@ const logger = createLogger("pipeline-watch");
  * banner that names the cause instead (creditsOutFlows).
  *
  * And so is Pro trading (trading robustness audit 2026-10-19, #6): the trade canary's failed runs
- * in a row (findCanaryProblems - tradeCanaryJob.ts builds a trade every 5 minutes, never signing)
+ * in a row (findCanaryProblems - tradeCanaryJob.ts builds a trade every 15 minutes, never signing)
  * and the share of recent Pro trades that failed or expired (findTradeOutcomeProblems). Both only
  * notify: a restart mends neither Jupiter nor the chain, and alerts still flow meanwhile.
  */
@@ -421,18 +421,25 @@ export interface CanaryCheck {
 
 /** The canary is told about after this many failed runs in a row: one slow answer is not a page. */
 export const CANARY_ALERT_AFTER_FAILURES = 2;
-/** The canary is quiet after this long without a run (five of its 5-minute intervals). */
-const CANARY_QUIET_MS = 25 * 60_000;
+/**
+ * The canary is quiet after this long without a run: three of its intervals, and never under the
+ * 25 minutes that were five of its old 5-minute intervals. Scaled to TRADE_CANARY_INTERVAL_MINUTES
+ * (user ask 2026-10-23: API audit bundle): a fixed 25 minutes would call a healthy 15-minute
+ * canary that is one run late "no run".
+ */
+export function canaryQuietMs(intervalMinutes: number): number {
+  return Math.max(25 * 60_000, 3 * intervalMinutes * 60_000);
+}
 
 /**
  * Pure: the trade canary failing run after run, or no longer running. One key for both, so the
  * admins hear once when it starts and once when it clears. A canary that never ran (switched off,
  * or not deployed here) is not judged.
  */
-export function findCanaryProblems(c: CanaryCheck | null, now: number): Problem[] {
+export function findCanaryProblems(c: CanaryCheck | null, now: number, intervalMinutes: number): Problem[] {
   if (!c || c.lastRunAt === null) return [];
   const since = now - c.lastRunAt.getTime();
-  if (since > CANARY_QUIET_MS) {
+  if (since > canaryQuietMs(intervalMinutes)) {
     return [
       {
         key: "trade-canary",
@@ -859,7 +866,7 @@ async function watchOnce(
     ...findTrainerProblems(trainerJobs, now),
     ...findCapacityProblems(dbBytes, env.DB_DISK_ALERT_MB),
     ...findCreditProblems(creditsOut),
-    ...findCanaryProblems(canary, now),
+    ...findCanaryProblems(canary, now, env.TRADE_CANARY_INTERVAL_MINUTES),
     ...findTradeOutcomeProblems(trades),
   ];
   // Only the alert path's own problems are a stall: they alone start the clock towards the

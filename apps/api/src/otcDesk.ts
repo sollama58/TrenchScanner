@@ -24,9 +24,20 @@ import {
  * coin's row or none) by the paths that ask about one coin: the token page and a lookup's card
  * (otcDeskRosterFor). Those answers are cached, a miss included, under a per-minute budget.
  *
+ * The sweep is incremental (user ask 2026-10-23: API audit bundle, B3). Reading all ~80 pages every
+ * five minutes (every minute after a partial sweep) re-read the same old launches some 24,000-118,000
+ * times a day. Now one full sweep fills the roster; each later refresh reads the featured set and the
+ * newest pages only until a page holds nothing it did not already have, and adds what is new on
+ * top. A refresh is kept OTC_ROSTER_FRESH_MS (15 min), so a new launch shows up within about that.
+ * A full sweep that missed a page keeps what it read and carries on from that page at the next
+ * refresh, instead of starting again from the top. Once every FULL_SWEEP_MS the whole list is read
+ * again behind the incremental refreshes, so a reward basket changed on an older coin is picked up
+ * then; the token page's own one-coin lookup still refreshes its coin every SINGLE_HIT_MS.
+ *
  * The test runner does not call the host. `fetchOtcDeskRoster` and `otcDeskFees({ fetch })`
  * are what the tests drive: a roster those return is kept. The Vitest flag only skips the
  * default network call, so it does not throw away a response that was already fetched.
+ * `sweepOtcRoster` is the incremental refresh with its state passed in, for the tests.
  */
 const OTC_COINS_URL = "https://otcdesks.cash/api/coins";
 /** Upstream pages are 12 coins. A shorter page is the end, unless `total` names more coins. */
@@ -42,11 +53,19 @@ const PAGE_TIMEOUT_MS = 8_000;
 const PAGE_ATTEMPTS = 2;
 /** The token page waits, but not past this. Coins read before the budget are kept. */
 const ROSTER_BUDGET_MS = 12_000;
-const FRESH_MS = 5 * 60_000;
+/** A finished refresh is reused this long (5 min until the user ask 2026-10-23). */
+export const OTC_ROSTER_FRESH_MS = 15 * 60_000;
 const FAILURE_MS = 60_000;
+/** How often the whole list is read again, for reward baskets changed on coins past the newest pages. */
+const FULL_SWEEP_MS = 6 * 60 * 60_000;
+/** Coins kept across refreshes: about what one full sweep reads. The oldest go first. */
+const KEEP_COINS = (MAX_PAGES + 2) * PAGE_SIZE;
 
-/** A coin's own lookup that found its desk row is kept as long as the roster. */
-const SINGLE_HIT_MS = FRESH_MS;
+/**
+ * A coin's own lookup that found its desk row is kept 5 minutes: the token page's coin stays as
+ * fresh as before the roster's longer cache.
+ */
+const SINGLE_HIT_MS = 5 * 60_000;
 /** A coin the host says is not a desk coin is asked about again only after this. */
 const SINGLE_MISS_MS = 30 * 60_000;
 /** One-coin lookups sent a minute, per process; past it the coin goes without until the next. */
@@ -66,10 +85,10 @@ let inflight: Promise<Map<string, OtcDeskFee>> | null = null;
 
 /**
  * How long a roster may be reused. A partial sweep still answers, but it is not a
- * five-minute hit: the next read retries the page that failed.
+ * fifteen-minute hit: the next read retries the page that failed.
  */
 export function otcRosterCacheMs(roster: { complete: boolean; size: number }): number {
-  return roster.complete && roster.size > 0 ? FRESH_MS : FAILURE_MS;
+  return roster.complete && roster.size > 0 ? OTC_ROSTER_FRESH_MS : FAILURE_MS;
 }
 
 function pageUrl(url: string, page: number): string {
@@ -82,6 +101,11 @@ function mintKey(coin: unknown): string | null {
   if (!coin || typeof coin !== "object" || Array.isArray(coin)) return null;
   const mint = (coin as { mint?: unknown }).mint;
   return typeof mint === "string" && mint.trim() ? mint.trim() : null;
+}
+
+/** The key a coin is deduplicated and remembered by. */
+function coinKey(coin: unknown): string {
+  return mintKey(coin) ?? JSON.stringify(coin);
 }
 
 interface RosterPage {
@@ -137,19 +161,39 @@ async function readPage(
 }
 
 interface RosterLoad {
-  fees: Map<string, OtcDeskFee>;
-  names: Map<string, string>;
+  /** The rows kept, in the order read (a mint's featured row, then the row naming its basket). */
+  coins: unknown[];
   /** False when a page failed or the budget cut the sweep off before the list ended. */
   complete: boolean;
+  /**
+   * The first page this sweep did not read (it failed, or the budget ran out before it); null when
+   * every page up to the end, or up to the known coins, was read. The featured set is not counted.
+   */
+  resume: number | null;
 }
 
-async function loadRoster(fetchImpl: typeof fetch, url: string): Promise<RosterLoad> {
-  const budget = AbortSignal.timeout(ROSTER_BUDGET_MS);
+interface LoadOptions {
+  budget?: AbortSignal;
+  /** First page read; 1 (the default) also reads the featured set first. */
+  from?: number;
+  /** Stop after the first page whose coins are all in here: the rest were read before. */
+  known?: ReadonlySet<string>;
+}
+
+async function loadRoster(fetchImpl: typeof fetch, url: string, opts: LoadOptions = {}): Promise<RosterLoad> {
+  const budget = opts.budget ?? AbortSignal.timeout(ROSTER_BUDGET_MS);
+  const from = opts.from ?? 1;
+  const known = opts.known;
   const coins: unknown[] = [];
   const seen = new Set<string>();
   /** Mints whose stored row already names reward coins. A later empty row does not replace it. */
   const rewarded = new Set<string>();
   let incomplete = false;
+  let resume: number | null = null;
+  const missed = (page: number): void => {
+    incomplete = true;
+    if (resume === null || page < resume) resume = page;
+  };
   const keep = (coin: unknown, key: string): void => {
     if (feeDeskFromOtcCoin(coin)) rewarded.add(key);
     coins.push(coin);
@@ -157,12 +201,13 @@ async function loadRoster(fetchImpl: typeof fetch, url: string): Promise<RosterL
   // "stop" is a real end: an empty page, or a short page that added launches. ?page=1
   // repeating the featured mints is not an end. A failed page is skipped, not the end.
   // A short page is not the end when the body names a larger `total` than the coins kept.
+  // With `known`, a page of coins all read before is where this incremental read stops.
   const take = (page: RosterPage | null, pageOne: boolean): "stop" | "more" | "skip" => {
     if (!page) return "skip";
     if (page.coins.length === 0) return "stop";
     let fresh = 0;
     for (const coin of page.coins) {
-      const key = mintKey(coin) ?? JSON.stringify(coin);
+      const key = coinKey(coin);
       if (seen.has(key)) {
         // The featured row is often this mint with no reward fields. Keep the later
         // row that actually names the basket.
@@ -173,36 +218,45 @@ async function loadRoster(fetchImpl: typeof fetch, url: string): Promise<RosterL
       keep(coin, key);
       fresh += 1;
     }
+    if (known && page.coins.every((coin) => known.has(coinKey(coin)))) return "stop";
     if (pageOne && fresh === 0) return "more";
     if (fresh === 0) return "stop";
     if (page.coins.length < PAGE_SIZE && !(page.total != null && page.total > seen.size)) return "stop";
     return "more";
   };
-  if (take(await readPage(fetchImpl, url, budget), false) === "skip") incomplete = true;
-  // A short page of new launches is the whole list. A page-1 copy of the featured set is not.
-  // A failed first page still tries the next ones.
-  const first = take(await readPage(fetchImpl, pageUrl(url, 1), budget), true);
-  if (first === "skip") incomplete = true;
-  let ended = first === "stop";
-  if (!ended) {
-    for (let start = 2; start <= MAX_PAGES && !budget.aborted; start += PAGE_CONCURRENCY) {
-      const pages: number[] = [];
-      for (let page = start; page < start + PAGE_CONCURRENCY && page <= MAX_PAGES; page++) pages.push(page);
-      const batch = await Promise.all(pages.map((page) => readPage(fetchImpl, pageUrl(url, page), budget)));
-      for (const page of batch) {
-        if (ended) break;
-        const result = take(page, false);
-        if (result === "skip") incomplete = true;
-        if (result === "stop") ended = true;
+  let ended = false;
+  let next = from;
+  if (from === 1) {
+    if (take(await readPage(fetchImpl, url, budget), false) === "skip") incomplete = true;
+    // A short page of new launches is the whole list. A page-1 copy of the featured set is not.
+    // A failed first page still tries the next ones.
+    const first = take(await readPage(fetchImpl, pageUrl(url, 1), budget), true);
+    if (first === "skip") missed(1);
+    ended = first === "stop";
+    next = 2;
+  }
+  // An incremental read usually ends a page or two in: it asks one page at a time, then more at
+  // once (up to PAGE_CONCURRENCY) only while the new launches go on.
+  let width = known ? 1 : PAGE_CONCURRENCY;
+  while (!ended && next <= MAX_PAGES && !budget.aborted) {
+    const pages: number[] = [];
+    for (let page = next; page < next + width && page <= MAX_PAGES; page++) pages.push(page);
+    width = Math.min(width * 2, PAGE_CONCURRENCY);
+    const batch = await Promise.all(pages.map((page) => readPage(fetchImpl, pageUrl(url, page), budget)));
+    for (const [i, page] of batch.entries()) {
+      const result = take(page, false);
+      if (result === "skip") missed(pages[i]!);
+      if (result === "stop") {
+        ended = true;
+        break;
       }
-      if (ended) break;
     }
+    next += pages.length;
   }
   // The budget cut the list off before it ended. Coins already read are kept, but this
   // is not a finished roster. A failed page earlier set the same flag.
-  if (budget.aborted && !ended) incomplete = true;
-  const fees = coins.length === 0 ? new Map<string, OtcDeskFee>() : feeDesksFromOtcRoster({ coins });
-  return { fees, complete: !incomplete, names: otcRosterNames(coins) };
+  if (!ended && next <= MAX_PAGES) missed(next);
+  return { coins, complete: !incomplete, resume };
 }
 
 /**
@@ -213,8 +267,103 @@ export async function fetchOtcDeskRoster(
   fetchImpl: typeof fetch = fetch,
   url = OTC_COINS_URL,
 ): Promise<Map<string, OtcDeskFee>> {
-  return (await loadRoster(fetchImpl, url)).fees;
+  return feesOf((await loadRoster(fetchImpl, url)).coins);
 }
+
+function feesOf(coins: unknown[]): Map<string, OtcDeskFee> {
+  return coins.length === 0 ? new Map<string, OtcDeskFee>() : feeDesksFromOtcRoster({ coins });
+}
+
+/** A roster's rows by coin key, newest first. A key holds its featured row and its basket row. */
+type RosterRows = Map<string, unknown[]>;
+
+function rowsOf(coins: readonly unknown[]): RosterRows {
+  const rows: RosterRows = new Map();
+  for (const coin of coins) {
+    const key = coinKey(coin);
+    const list = rows.get(key);
+    if (list) list.push(coin);
+    else rows.set(key, [coin]);
+  }
+  return rows;
+}
+
+/**
+ * `newer` (just read) over `older` (kept): a key read again takes its new rows, except that rows
+ * naming no basket do not drop a basket kept from before (the same rule as within one sweep).
+ * `newerFirst` puts the new keys in front (new launches); otherwise they go after the kept ones.
+ */
+function mergeRows(newer: RosterRows, older: RosterRows, newerFirst: boolean): RosterRows {
+  const pick = (key: string): unknown[] => {
+    const fresh = newer.get(key);
+    const kept = older.get(key);
+    if (!fresh) return kept!;
+    if (!kept || fresh.some((coin) => feeDeskFromOtcCoin(coin))) return fresh;
+    return [...fresh, ...kept.filter((coin) => feeDeskFromOtcCoin(coin))];
+  };
+  const out: RosterRows = new Map();
+  for (const key of newerFirst ? [...newer.keys(), ...older.keys()] : [...older.keys(), ...newer.keys()]) {
+    if (!out.has(key)) out.set(key, pick(key));
+  }
+  for (const oldest of [...out.keys()].slice(KEEP_COINS)) out.delete(oldest);
+  return out;
+}
+
+/** What the incremental refresh keeps between calls. */
+export interface OtcRosterSweep {
+  rows: RosterRows;
+  /** The page an unfinished full sweep carries on from; null when it reached the end. */
+  resume: number | null;
+  /** When the newest full sweep began. */
+  fullAt: number;
+}
+
+/**
+ * One incremental refresh. With no state, a full sweep. Otherwise the featured set and the newest
+ * pages down to the first page of coins already kept; when that read was whole, the coins it found
+ * go in front of the kept ones and an unfinished full sweep carries on from its page with the
+ * budget left. A head read that missed a page is shown but not kept: the next refresh reads the
+ * head again against the same coins, so a launch on the missed page is not skipped over for good.
+ * `complete` says whether this roster is a fifteen-minute one.
+ */
+export async function sweepOtcRoster(
+  state: OtcRosterSweep | null,
+  fetchImpl: typeof fetch,
+  now: number,
+  url = OTC_COINS_URL,
+): Promise<{ state: OtcRosterSweep; coins: unknown[]; complete: boolean }> {
+  const budget = AbortSignal.timeout(ROSTER_BUDGET_MS);
+  if (!state) {
+    const full = await loadRoster(fetchImpl, url, { budget });
+    const rows = mergeRows(rowsOf(full.coins), new Map(), true);
+    return {
+      state: { rows, resume: full.resume, fullAt: now },
+      coins: [...rows.values()].flat(),
+      complete: full.complete,
+    };
+  }
+  let { rows, resume, fullAt } = state;
+  if (resume === null && now - fullAt >= FULL_SWEEP_MS) {
+    resume = 1;
+    fullAt = now;
+  }
+  const head = await loadRoster(fetchImpl, url, { budget, known: new Set(rows.keys()) });
+  if (!head.complete) {
+    const shown = mergeRows(rowsOf(head.coins), rows, true);
+    return { state: { rows, resume, fullAt }, coins: [...shown.values()].flat(), complete: false };
+  }
+  rows = mergeRows(rowsOf(head.coins), rows, true);
+  if (resume !== null && !budget.aborted) {
+    // Pages only move down as launches are added, so carrying on from the page number the last
+    // sweep stopped at re-reads a few coins at worst; it never skips one.
+    const rest = await loadRoster(fetchImpl, url, { budget, from: resume });
+    rows = mergeRows(rowsOf(rest.coins), rows, false);
+    resume = rest.resume;
+  }
+  return { state: { rows, resume, fullAt }, coins: [...rows.values()].flat(), complete: resume === null };
+}
+
+let sweep: OtcRosterSweep | null = null;
 
 function freshEnough(): boolean {
   if (!cached) return false;
@@ -223,9 +372,11 @@ function freshEnough(): boolean {
 
 async function refresh(): Promise<Map<string, OtcDeskFee>> {
   try {
-    const loaded = await loadRoster(fetch, OTC_COINS_URL);
-    cached = { at: Date.now(), fees: loaded.fees, complete: loaded.complete, names: loaded.names };
-    return loaded.fees;
+    const result = await sweepOtcRoster(sweep, fetch, Date.now());
+    sweep = result.state;
+    const fees = feesOf(result.coins);
+    cached = { at: Date.now(), fees, complete: result.complete, names: otcRosterNames(result.coins) };
+    return fees;
   } catch {
     cached = {
       at: Date.now(),
