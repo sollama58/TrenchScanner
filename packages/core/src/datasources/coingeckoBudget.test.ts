@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withApiFeature, withOwnApiFeature } from "../apiUsage.js";
 import { prisma } from "../db.js";
 import {
@@ -94,9 +94,6 @@ describe("GeckoTerminalClient with a paid key", () => {
     await expect(
       withApiFeature("candle-peaks", () => client.poolMinuteCandles("POOL", "MINT", Date.now())),
     ).rejects.toBeInstanceOf(CoinGeckoBudgetSpentError);
-    await expect(
-      withOwnApiFeature("candle-backfill", () => client.poolMinuteCandles("POOL", "MINT", Date.now())),
-    ).rejects.toBeInstanceOf(CoinGeckoBudgetSpentError);
     const failed = new Set<string>();
     coinGeckoBudget.configure({ dailyCredits: 0, peakDailyCredits: 0, chartDailyCredits: 0 });
     const found = await withApiFeature("scan", () =>
@@ -104,6 +101,47 @@ describe("GeckoTerminalClient with a paid key", () => {
     );
     expect(found).toEqual([]);
     expect([...failed]).toEqual(["MINT"]);
+  });
+});
+
+describe("the chart backfill past its paid budget", () => {
+  afterEach(() => {
+    coinGeckoBudget.reset();
+    vi.restoreAllMocks();
+  });
+
+  // 9q57, 2026-10-23: a chart opened after the charts lane ran out had no candles at all.
+  it("reads GeckoTerminal's free API, without the key, rather than wait for the next day", async () => {
+    coinGeckoBudget.configure({ dailyCredits: 100, peakDailyCredits: 0, chartDailyCredits: 0 });
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+    const client = new GeckoTerminalClient({ apiKey: "k" });
+    await withOwnApiFeature("candle-backfill", () => client.poolMinuteCandles("POOL", "MINT", Date.now()));
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(String(url)).toMatch(
+      /^https:\/\/api\.geckoterminal\.com\/api\/v2\/networks\/solana\/pools\/POOL\/ohlcv\/minute/,
+    );
+    expect(JSON.stringify(init?.headers ?? {})).not.toContain("x-cg-pro-api-key");
+    expect(coinGeckoBudget.spent().charts).toBe(0);
+  });
+});
+
+describe("the chart backfill with paid budget left", () => {
+  afterEach(() => {
+    coinGeckoBudget.reset();
+    vi.restoreAllMocks();
+  });
+
+  it("reads the free API first and keeps the paid credit", async () => {
+    coinGeckoBudget.configure(config);
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+    const client = new GeckoTerminalClient({ apiKey: "k" });
+    await withOwnApiFeature("candle-backfill", () => client.poolMinuteCandles("POOL", "MINT", Date.now()));
+    expect(String(fetch.mock.calls[0]![0])).toMatch(/^https:\/\/api\.geckoterminal\.com\//);
+    expect(coinGeckoBudget.spent().charts).toBe(0);
   });
 });
 
