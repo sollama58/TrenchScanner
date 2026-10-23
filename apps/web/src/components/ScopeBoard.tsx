@@ -52,7 +52,6 @@ import {
   QuoteBadge,
   QuotePill,
   recordedPeakOf,
-  socialLinks,
 } from "./AlertCard";
 import { CardSearchButton } from "./CardSearchButton";
 import { DexInfoLabel, dexInfoLabel } from "../dexInfoLabel";
@@ -61,7 +60,7 @@ import { TokenImage } from "./TokenImage";
 import { FilterGlyph } from "./FilterBadge";
 import { BrainIcon, EyeOffIcon, FunnelIcon, SlidersIcon } from "./Icons";
 import { dueToUnhide, hideToken, unhideTokens, useHiddenTokenIds, useHiddenTokens } from "../hiddenTokens";
-import { XLinkPreview } from "./XLinkPreview";
+import { SocialLinks, socialLinks } from "./SocialLinks";
 
 /** After a finger lifts, the board stays still this long, so a tap lands on the row it aimed at. */
 const TOUCH_HOLD_MS = 1_000;
@@ -671,7 +670,12 @@ export function ScopeRow({
   const filter = card.kind === "match" ? card.filter : null;
   const outcome = cardOutcome(card, now);
   const badge = outcomeBadge(outcome);
-  const mark = outcome && badge.tone !== "neutral" && badge.tone !== "info" ? badge.text.split(" ")[0] : null;
+  // As on the card: a mark once a target hit or the window closed (✓ 2x, ✓✓ 4x, ✓✓✓ 10x, ↗ ran
+  // later, ⊘ stopped out, ✕ missed), nothing while grading. Its words stay in the tooltip.
+  const graded = outcome !== null && !(outcome.status === "watching" && !outcome.hit2x);
+  const mark = graded && badge.tone !== "neutral" ? badge.text.split(" ")[0] : null;
+  // Green for a win, red for a miss, muted for a stop-out or a late run (user ask 2026-10-23).
+  const markTone = mark === "⊘" || badge.tone === "info" ? "muted" : badge.tone;
   const alertMcap = card.snapshot.marketCapUsd;
   const nowMcap = nowReading(card);
   const move = change(alertMcap, nowMcap);
@@ -735,11 +739,6 @@ export function ScopeRow({
           fallback={<span className="scope-img placeholder">{(card.token.symbol ?? "?").slice(0, 2)}</span>}
         />
         <QuoteBadge token={card.token} className="scope-quote-badge" />
-        {mark && d.showResult && (
-          <span className={`scope-mark ${badge.tone}`} role="img" title={badge.text} aria-label={badge.text}>
-            {mark}
-          </span>
-        )}
       </div>
       <div className="scope-main">
         <div className="scope-title">
@@ -809,19 +808,7 @@ export function ScopeRow({
               HC
             </span>
           )}
-          {socials.map((l) => (
-            <XLinkPreview
-              key={l.key}
-              className="scope-link"
-              href={l.url}
-              target="_blank"
-              rel="noreferrer noopener"
-              title={`${l.label}: ${l.url.replace(/^https:\/\//, "").replace(/\/$/, "")}`}
-              aria-label={`Open the coin's ${l.label}`}
-            >
-              <l.Icon size={11} />
-            </XLinkPreview>
-          ))}
+          <SocialLinks links={socials} className="scope-socials" />
           {tradeLinks.map((l) => (
             <a
               key={l.label}
@@ -838,6 +825,18 @@ export function ScopeRow({
       </div>
       <div className="scope-figs">
         <div className={`scope-fig scope-now${nowAge !== null ? " stale" : ""}`} title={nowTitle}>
+          {/* The result, left of the market cap rather than over the image (user ask 2026-10-23). */}
+          {mark && d.showResult && (
+            <span
+              className={`scope-result ${markTone}`}
+              role="img"
+              title={badge.text}
+              aria-label={badge.text}
+            >
+              {/* Inter has no ⊘, and the fallback font draws it larger than the other marks. */}
+              {mark === "⊘" ? <span className="result-stop">⊘</span> : mark}
+            </span>
+          )}
           <span className={`num${move === null ? "" : move >= 0 ? " up" : " down"}`}>
             {usd(nowMcap ?? alertMcap)}
           </span>

@@ -39,6 +39,7 @@ import { TokenImage } from "./TokenImage";
 import { FoldHead } from "./Fold";
 import { LiveStamp, hms } from "./Freshness";
 import { DevCard, FlowCard, SocialsCard, type TokenProfile } from "./TokenProfileCards";
+import { SocialLinks, socialLinks } from "./SocialLinks";
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
 import { CreatorFeeRich } from "./FeeRewards";
@@ -525,55 +526,22 @@ function MintChip({ mint }: { mint: string }) {
 
 /**
  * The coin on the trading sites (Settings › Quick links) and the explorers, as pills under the
- * title, and the coin's own X, Telegram and website. The terminal keeps the trading sites with
- * the title and puts the coin's own links in the header's corner.
+ * title. The coin's own X, Telegram and website are icons on the line under its name instead
+ * (SocialLinks), in both views.
  */
-function QuickLinks({
-  mint,
-  socials,
-  trade = true,
-  own = true,
-}: {
-  mint: string;
-  socials?: TokenProfile["socials"] | null;
-  /** Trading sites and explorers. */
-  trade?: boolean;
-  /** The coin's own X, Telegram and website. */
-  own?: boolean;
-}) {
+function QuickLinks({ mint }: { mint: string }) {
   const { quickLinks } = useAppearance();
-  // The coin's own X, Telegram and website (user ask 2026-10-16), launcher-supplied, https only.
-  const social = own
-    ? socials
-      ? [
-          { label: "X", href: socials.x },
-          { label: "Telegram", href: socials.telegram },
-          { label: "Website", href: socials.website },
-        ].filter((l): l is { label: string; href: string } => !!l.href)
-      : []
-    : [];
-  const sites = trade ? QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id)) : [];
-  const explorers = trade ? LINKS : [];
-  if (sites.length === 0 && explorers.length === 0 && social.length === 0) return null;
+  const sites = QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id));
   return (
-    <nav
-      className={`tm-quick${trade ? "" : " tm-own"}`}
-      aria-label={trade ? "Open this coin elsewhere" : "This coin's social links"}
-    >
+    <nav className="tm-quick" aria-label="Open this coin elsewhere">
       {sites.map((l) => (
         <a key={l.id} className="trade" href={l.href(mint)} target="_blank" rel="noreferrer">
           {l.label}
           <ExternalIcon size={11} />
         </a>
       ))}
-      {explorers.map((l) => (
+      {LINKS.map((l) => (
         <a key={l.label} href={l.href(mint)} target="_blank" rel="noreferrer">
-          {l.label}
-          <ExternalIcon size={11} />
-        </a>
-      ))}
-      {social.map((l) => (
-        <a key={l.label} className="social" href={l.href} target="_blank" rel="noopener noreferrer nofollow">
           {l.label}
           <ExternalIcon size={11} />
         </a>
@@ -1030,6 +998,13 @@ function TokenBody({
   );
   // The moment the scan lands, re-read what it feeds (the flagged wallets, the read) rather than
   // waiting for their next poll.
+  // The coin's own links, from the profile read once it lands and from the feed card until then.
+  const own = profile.data?.socials;
+  const socials = socialLinks({
+    twitterUrl: own?.x ?? card.token.twitterUrl,
+    telegramUrl: own?.telegram,
+    websiteUrl: own?.website ?? card.token.websiteUrl,
+  });
   const wasScanning = useRef(scanning);
   const { reload: reloadChart } = chart;
   const { reload: reloadSage } = sage;
@@ -1087,8 +1062,9 @@ function TokenBody({
                 {card.filter.name}
               </span>
             )}
+            <SocialLinks links={socials} className="tm-socials-inline" />
           </div>
-          {terminal && <QuickLinks mint={mint} socials={profile.data?.socials} own={false} />}
+          {terminal && <QuickLinks mint={mint} />}
         </div>
       </div>
       <div className="tm-actions">
@@ -1123,20 +1099,11 @@ function TokenBody({
             Customize
           </button>
         )}
-        {terminal ? (
-          <span className="tm-corner">
-            <QuickLinks mint={mint} socials={profile.data?.socials} trade={false} />
-            <button type="button" className="ghost icon-btn tm-close" onClick={onClose} aria-label="Close">
-              <CloseIcon size={16} />
-            </button>
-          </span>
-        ) : (
-          <button type="button" className="ghost icon-btn tm-close" onClick={onClose} aria-label="Close">
-            <CloseIcon size={16} />
-          </button>
-        )}
+        <button type="button" className="ghost icon-btn tm-close" onClick={onClose} aria-label="Close">
+          <CloseIcon size={16} />
+        </button>
       </div>
-      {!terminal && <QuickLinks mint={mint} socials={profile.data?.socials} />}
+      {!terminal && <QuickLinks mint={mint} />}
     </>
   );
   const latestSnap = card.latestSnapshot;
