@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  CHART_CANDLE_CAP,
+  CHART_SCAN_CAP,
   chartForMint,
   chartHistoryExtended,
   isChartPollPath,
@@ -73,5 +75,32 @@ describe("flagged wallets and holder entries", () => {
     const merged = mergeTokenChart(prev, next);
     expect(merged.wallets).toEqual(prev.wallets);
     expect(merged.holderEntries).toEqual(prev.holderEntries);
+  });
+});
+
+describe("a coin left open", () => {
+  it("keeps the newest candles and scans, not every answer it was ever sent", () => {
+    const M = 60_000;
+    const page = (from: number): ChartPollBody => ({
+      mint: "m",
+      // The server's page: its newest 1,000 minutes, sliding forward.
+      candles: Array.from({ length: 1_000 }, (_, i) => ({ t: (from + i) * M, o: 1, h: 1, l: 1, c: 1 })),
+      older: Array.from({ length: 200 }, (_, i) => ({
+        t: (from - 1_000 + i * 5) * M,
+        o: 1,
+        h: 1,
+        l: 1,
+        c: 1,
+      })),
+      marketCap: Array.from({ length: CHART_SCAN_CAP }, (_, i) => ({ t: (from + i * 4) * M, usd: 1 })),
+    });
+    let held = page(0);
+    for (let from = 60; from <= 6_000; from += 60) held = mergeTokenChart(held, page(from));
+    expect(held.candles).toHaveLength(CHART_CANDLE_CAP);
+    expect(held.candles!.at(-1)!.t).toBe(6_999 * M);
+    expect(held.older!.length).toBeLessThanOrEqual(CHART_CANDLE_CAP);
+    expect(held.older!.at(-1)!.t).toBe((5_000 + 199 * 5) * M);
+    expect(held.marketCap).toHaveLength(CHART_SCAN_CAP);
+    expect(held.marketCap.at(-1)!.t).toBe((6_000 + (CHART_SCAN_CAP - 1) * 4) * M);
   });
 });

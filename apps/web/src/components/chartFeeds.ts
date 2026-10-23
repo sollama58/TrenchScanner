@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, FEED_TIMEOUT_MS } from "../api";
+import { MAX_SLOTS } from "../chartBars";
 import type { Point, VolumeCandle } from "../priceChart";
 
 /** Mirrors apps/api/src/liveCurve.ts LiveCurveAnswer. */
@@ -223,6 +224,22 @@ export function withNewest(held: readonly VolumeCandle[], page: readonly VolumeC
 }
 
 /**
+ * Exported for tests. The newest `cap` candles held, and the `before` that reads the page before
+ * them: each candle is at least a slot wide, so the chart (MAX_SLOTS) draws none of the ones left
+ * out, and a coin left open no longer piles up a candle every poll for as long as it stays open.
+ * The cut ones come back as an older page if the reader scrolls back to them.
+ */
+export function newestHeld(
+  candles: VolumeCandle[],
+  next: number | null,
+  cap = MAX_SLOTS,
+): { candles: VolumeCandle[]; next: number | null } {
+  if (candles.length <= cap) return { candles, next };
+  const kept = candles.slice(-cap);
+  return { candles: kept, next: kept[0]!.t };
+}
+
+/**
  * Exported for tests. Candles held with an older page joined before them. A coarse bar of the page
  * running past the held first one is cut at its start, as storedCandles cuts a page's own seams.
  */
@@ -299,11 +316,11 @@ export function useStoredCandles(
             const page = storedCandles(a.bars ?? [], tf.ms);
             setHeld((prev) => {
               const mine = prev && prev.base === base && prev.history.tfMs === tf.ms ? prev.history : null;
-              const candles = mine ? withNewest(mine.candles, page) : page;
+              const joined = mine ? withNewest(mine.candles, page) : page;
               // Older pages already held keep their own `next`; otherwise the newest page's.
-              const pagedBack = !!mine && page.length > 0 && candles[0]!.t < page[0]!.t;
-              const next = pagedBack ? mine.next : (a.next ?? null);
-              return { base, history: { tfMs: tf.ms, candles, next } };
+              const pagedBack = !!mine && page.length > 0 && joined[0]!.t < page[0]!.t;
+              const held = newestHeld(joined, pagedBack ? mine.next : (a.next ?? null));
+              return { base, history: { tfMs: tf.ms, ...held } };
             });
             setError(null);
             setAt(Date.now());
