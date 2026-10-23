@@ -1,3 +1,4 @@
+import { MarketBar } from "../components/MarketBar";
 import { SectionBoundary } from "../components/SectionBoundary";
 import { Suspense, useMemo, useState } from "react";
 import type { MatchPage } from "../api";
@@ -54,6 +55,7 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
 
   return (
     <div className="stack">
+      <MarketBar base="/guest" />
       <Suspense fallback={null}>
         {aboutMounted && (
           <AboutModal

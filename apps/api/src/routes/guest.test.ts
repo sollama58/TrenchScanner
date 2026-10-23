@@ -81,6 +81,22 @@ describe.skipIf(!dbAvailable)("guest feed", () => {
     expect(body.trailingDays).toBeGreaterThan(0);
   });
 
+  it("reads the market bar's trench stats without a session", async () => {
+    const res = await app.inject({ method: "GET", url: "/guest/market/trench" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      windowHours: number;
+      current: { from: string; to: string; stats: Record<string, number | null> };
+      compare: { hoursAgo: number }[];
+      computedAt: string;
+    };
+    expect(body.windowHours).toBe(2);
+    expect(Object.keys(body.current.stats).sort()).toEqual(
+      ["avgReturnPct", "hit10xPct", "hit2xPct", "hit4xPct", "rejectedPct", "volumeUsd"].sort(),
+    );
+    expect(body.compare.map((c) => c.hoursAgo)).toEqual([2, 6, 24, 48]);
+  });
+
   it("answers without a session, with only the default model's calls past the delay", async () => {
     const res = await app.inject({ method: "GET", url: "/guest/feed?page=1" });
     expect(res.statusCode).toBe(200);
