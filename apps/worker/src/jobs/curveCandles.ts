@@ -5,6 +5,7 @@ import {
   CURVE_GAP_MS,
   saveCandleChunks,
   type CandleChunkRow,
+  type CandleStoreSource,
   type CurveTape,
   type StoredBar,
 } from "@trenchscanner/core";
@@ -21,7 +22,8 @@ const logger = createLogger("curve-candles");
  *
  * Only a stretch the stream delivered is saved: a tape read by RPC every few seconds would make
  * "1-second" bars of 5-second samples (charts audit CH-6). A curve quoted in another coin is left
- * out (its reserve is not SOL).
+ * out (its reserve is not SOL). After graduation the tape follows the coin's PumpSwap pool, whose
+ * bars are saved the same way under "pool" (curveTape.ts).
  */
 
 /** Pump.fun's curve price is lamports per raw token unit: times this, SOL per whole token x one billion. */
@@ -37,7 +39,12 @@ type Tick = { at: number; price: number; realQuote: number };
 export interface CurveTapeView {
   mints(): Iterable<string>;
   ticksAfter(mint: string, after: number): TapeTicks;
+  /** What a coin's changes are read off: its curve, or after graduation its pool. Absent: the curve. */
+  sourceOf?(mint: string): TapeSource;
 }
+
+/** The store sources the tape's bars are saved under. */
+type TapeSource = Extract<CandleStoreSource, "curve" | "pool">;
 
 /**
  * Exported for tests. 1-second market-cap bars (USD, on the launch billion) over [from, to) from a
@@ -75,10 +82,21 @@ export function curveBars(ticks: readonly Tick[], from: number, to: number, solU
 }
 
 /**
+ * A quiet stretch after a coin's last bar is vouched for by that bar's chunk, its cover run on over
+ * it, for at most this long: the chunk is rebuilt from the tape each flush, which keeps half an hour.
+ */
+const QUIET_COVER_MS = 25 * 60_000;
+
+/**
  * Exported for tests. A coin's chunk rows from what the tape holds after `flushedTo` (null: nothing
  * saved yet), up to `closeAt`, and where the next flush picks up. The chunk `flushedTo` is in is
  * built again whole, so a minute saved in part is rewritten with all its bars (the store keeps the
  * fuller reading). Null when there is nothing to save.
+ *
+ * Minutes with no change have no bars, so no chunk of their own: the last chunk's cover runs on to
+ * the close instead (the store reads a chunk's cover past its own minute), and the next flush picks
+ * up at that chunk, so a quiet minute reads as quiet, not as a stretch nobody read (the chart draws
+ * those blank: GET /tokens/:mint/candles `holes`).
  */
 export function curveCandleRows(
   mint: string,
@@ -86,6 +104,7 @@ export function curveCandleRows(
   flushedTo: number | null,
   closeAt: number,
   solUsd: number,
+  source: TapeSource = "curve",
 ): { rows: CandleChunkRow[]; flushedTo: number } | null {
   if (!tape || !tape.quoteIsSol || tape.streamFrom === null) return null;
   const covered = Math.max(tape.coveredFrom, tape.streamFrom);
@@ -94,7 +113,12 @@ export function curveCandleRows(
   if (!(to > from)) return null;
   const ticks = tape.prior ? [tape.prior, ...tape.ticks] : tape.ticks;
   const bars = curveBars(ticks, from, to, solUsd);
-  return { rows: chunkBars(mint, 1, "curve", bars, { from, to }), flushedTo: to };
+  const rows = chunkBars(mint, 1, source, bars, { from, to });
+  const last = rows[rows.length - 1];
+  if (!last || last.coverTo >= to) return { rows, flushedTo: to };
+  if (to - last.startAt > QUIET_COVER_MS) return { rows, flushedTo: to };
+  last.coverTo = to;
+  return { rows, flushedTo: last.startAt };
 }
 
 /** Where a coin's tape is read from: the start of the chunk its saved bars end in (all of it at first). */
@@ -114,6 +138,17 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let flushing: Promise<void> | null = null;
 /** Per followed coin, where its saved bars end (ms). */
 const flushed = new Map<string, number>();
+/** Per followed coin, the last chunk written: rebuilt unchanged, it isn't written again. */
+const lastWritten = new Map<string, { startAt: number; coverFrom: number; coverTo: number; bars: number }>();
+const sameRow = (
+  a: CandleChunkRow,
+  b: { startAt: number; coverFrom: number; coverTo: number; bars: number } | undefined,
+) =>
+  !!b &&
+  a.startAt === b.startAt &&
+  a.coverFrom === b.coverFrom &&
+  a.coverTo === b.coverTo &&
+  a.bars.length === b.bars;
 /** The last bars of coins the tape let go of, written with the next flush. */
 let dropped: CandleChunkRow[] = [];
 let lastSolUsd: number | null = null;
@@ -139,14 +174,20 @@ export function startCurveCandles(config: WriterConfig) {
  * The tape is letting go of `mint` (aged out, off the watchlist, graduated): its bars since the
  * last flush are queued for the next one. Called by curveTape.ts before it forgets the coin.
  */
-export function curveTapeDropped(mint: string, tape: Pick<CurveTape, "ticksAfter">, now = Date.now()): void {
+export function curveTapeDropped(
+  mint: string,
+  tape: Pick<CurveTape, "ticksAfter">,
+  now = Date.now(),
+  source: TapeSource = "curve",
+): void {
   const done = flushed.get(mint) ?? null;
   flushed.delete(mint);
+  lastWritten.delete(mint);
   if (!cfg || lastSolUsd === null) return;
   const held = tape.ticksAfter(mint, readAfter(done));
   // Let go of now: what it held is known through now, when the tape was current lately.
   const known = held && now - held.confirmedAt <= CURVE_GAP_MS ? { ...held, confirmedAt: now } : held;
-  const out = curveCandleRows(mint, known, done, now, lastSolUsd);
+  const out = curveCandleRows(mint, known, done, now, lastSolUsd, source);
   if (out && dropped.length + out.rows.length <= MAX_DROPPED) dropped.push(...out.rows);
 }
 
@@ -165,9 +206,11 @@ export function flushCurveCandles(now = Date.now(), all = false): Promise<void> 
   const followed = new Set(config.view.mints());
   const tapes = [...followed].map((mint) => {
     const done = flushed.get(mint) ?? null;
-    return { mint, done, tape: config.view.ticksAfter(mint, readAfter(done)) };
+    const source = config.view.sourceOf?.(mint) ?? "curve";
+    return { mint, done, source, tape: config.view.ticksAfter(mint, readAfter(done)) };
   });
   for (const mint of flushed.keys()) if (!followed.has(mint)) flushed.delete(mint);
+  for (const mint of lastWritten.keys()) if (!followed.has(mint)) lastWritten.delete(mint);
   const run = (async () => {
     if (before) await before;
     const sol = await config.solUsd().catch(() => null);
@@ -177,16 +220,31 @@ export function flushCurveCandles(now = Date.now(), all = false): Promise<void> 
     const rows: CandleChunkRow[] = dropped;
     dropped = [];
     const next = new Map<string, number>();
-    for (const { mint, done, tape } of tapes) {
-      const out = curveCandleRows(mint, tape, done, closeAt, lastSolUsd);
+    const newest = new Map<string, CandleChunkRow>();
+    for (const { mint, done, source, tape } of tapes) {
+      const out = curveCandleRows(mint, tape, done, closeAt, lastSolUsd, source);
       if (!out) continue;
-      rows.push(...out.rows);
+      // The chunk picked up from, rebuilt as it was written: not written again.
+      const fresh = out.rows.filter((r) => !sameRow(r, lastWritten.get(mint)));
+      rows.push(...fresh);
       next.set(mint, out.flushedTo);
+      const last = out.rows[out.rows.length - 1];
+      if (last) newest.set(mint, last);
     }
-    if (rows.length === 0) return;
+    if (rows.length === 0) {
+      for (const [mint, to] of next) flushed.set(mint, to);
+      return;
+    }
     try {
       await (config.save ?? saveCandleChunks)(rows);
       for (const [mint, to] of next) flushed.set(mint, to);
+      for (const [mint, r] of newest)
+        lastWritten.set(mint, {
+          startAt: r.startAt,
+          coverFrom: r.coverFrom,
+          coverTo: r.coverTo,
+          bars: r.bars.length,
+        });
       stats.coins += next.size;
       stats.rows += rows.length;
     } catch (err) {
@@ -215,6 +273,7 @@ export function resetCurveCandles(): void {
   cfg = null;
   flushing = null;
   flushed.clear();
+  lastWritten.clear();
   dropped = [];
   lastSolUsd = null;
   stats = { coins: 0, rows: 0, failed: 0 };

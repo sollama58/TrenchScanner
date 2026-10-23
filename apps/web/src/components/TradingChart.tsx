@@ -219,6 +219,7 @@ const ICON_TOOLS_PX = 520;
 
 const NO_MARKS: WalletMark[] = [];
 const NO_TRADES: ChartTrade[] = [];
+const NO_HOLES: readonly (readonly [number, number])[] = [];
 
 /** Labeled trades the readout lists by name at most; the rest are counted. */
 const MAX_TIP_MARKS = 6;
@@ -239,6 +240,7 @@ export function TradingChart({
   mint,
   candles,
   ticks,
+  holes = NO_HOLES,
   events,
   flow = [],
   marks: marksIn = NO_MARKS,
@@ -273,6 +275,11 @@ export function TradingChart({
    * candle and run on past it), or all of them without candles.
    */
   ticks: Point[];
+  /**
+   * Stretches the candle store says nobody read, [from, to) in ms (GET /tokens/:mint/candles
+   * `holes`): drawn blank, never flat across trades nobody recorded.
+   */
+  holes?: readonly (readonly [number, number])[];
   events: ChartEvent[];
   /** The scans' 5-minute buy and sell counts: the readout gives the buy share where one covers. */
   flow?: ScanFlow[];
@@ -391,7 +398,10 @@ export function TradingChart({
   );
   const autoMs = autoTimeframe(viewMs, plotW, 6, finestMs);
   const tfMs = picked !== null && timeframeFits(picked, viewMs) ? picked : autoMs;
-  const slots = useMemo(() => buildSlots(candles, ticks, tfMs), [candles, ticks, tfMs]);
+  const slots = useMemo(
+    () => buildSlots(candles, ticks, tfMs, undefined, holes),
+    [candles, ticks, tfMs, holes],
+  );
   // The view reads its candles at the size the view alone would take, not only the one drawn: the
   // store answers each stretch at that size, or coarse where it holds only wider bars, so Auto
   // draws the finest size whose candles mostly aren't coarse (finestMs). Read at the size drawn,
@@ -745,17 +755,22 @@ export function TradingChart({
     const barTime = (t: number) => time(kind === "line" ? closeTimeMs(t, slots.tfMs) : t);
     if (kind === "candles") {
       (s.main as unknown as ISeriesApi<"Custom", Time, SlotCandleData>).setData(
-        bars.map((b) => ({
-          time: time(b.t),
-          o: b.o,
-          h: b.h,
-          l: b.l,
-          c: b.c,
-          ...(b.flat ? { flat: true } : {}),
-          ...(b.span ? { span: b.span } : {}),
-          ...(b.under ? { under: b.under } : {}),
-          ...(b.coarse ? { coarse: true } : {}),
-        })),
+        bars.map((b) =>
+          b.unknown
+            ? // Nobody read it: blank (whitespace), not a flat candle.
+              ({ time: time(b.t) } as SlotCandleData)
+            : {
+                time: time(b.t),
+                o: b.o,
+                h: b.h,
+                l: b.l,
+                c: b.c,
+                ...(b.flat ? { flat: true } : {}),
+                ...(b.span ? { span: b.span } : {}),
+                ...(b.under ? { under: b.under } : {}),
+                ...(b.coarse ? { coarse: true } : {}),
+              },
+        ),
       );
       const last = bars[bars.length - 1];
       if (last) s.main.applyOptions({ color: last.c >= last.o ? colors.up : colors.down });
@@ -767,7 +782,8 @@ export function TradingChart({
         bars.map((b, i) => {
           const parent = b.under ? bars[i - b.under] : b;
           const last = !bars[i + 1]?.under;
-          return parent && (b.span ?? 1) === 1 && last
+          // An unread slot breaks the line rather than drawing it flat.
+          return parent && (b.span ?? 1) === 1 && last && !b.unknown
             ? { time: barTime(b.t), value: parent.c }
             : { time: barTime(b.t) };
         }),
@@ -776,7 +792,7 @@ export function TradingChart({
     }
     s.vol?.setData(
       bars.flatMap((b) =>
-        b.vol == null
+        b.vol == null || b.unknown
           ? []
           : [
               {
@@ -1492,7 +1508,9 @@ export function TradingChart({
                 {clock(lineCloseLabel ? curTo : curFrom, fine, dated)}
                 {legendSpan ? `–${clock(curTo, fine, false)}` : ""}
               </span>
-              {cur.flat ? (
+              {cur.unknown ? (
+                <span className="faint">No data recorded</span>
+              ) : cur.flat ? (
                 <span className="faint">
                   No trades · <b>{axisUsd(cur.c)}</b>
                 </span>

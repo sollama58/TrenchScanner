@@ -82,6 +82,21 @@ describe("curveCandleRows", () => {
     expect(out.rows[0]!.res).toBe(1);
   });
 
+  // Quiet minutes had no chunk, so the chart couldn't tell them from minutes nobody read.
+  it("runs the last chunk's cover on over the quiet minutes after it, and picks up there", () => {
+    const t = streamedTape([[T0 + 1_500, 2e-5, 2]], T0 + 200_000);
+    const out = curveCandleRows("M", t.ticksAfter("M", -1), null, T0 + 180_000, SOL)!;
+    expect(out.rows.map((r) => [r.startAt - T0, r.coverTo - T0])).toEqual([[0, 180_000]]);
+    expect(out.flushedTo).toBe(T0);
+    const next = curveCandleRows("M", t.ticksAfter("M", T0 - 1), out.flushedTo, T0 + 200_000, SOL)!;
+    expect(next.rows.map((r) => [r.startAt - T0, r.coverTo - T0, r.bars.length])).toEqual([[0, 200_000, 1]]);
+  });
+
+  it("saves a graduated coin's pool tape under its own source", () => {
+    const out = curveCandleRows("M", tape().ticksAfter("M", -1), null, T0 + 60_000, SOL, "pool")!;
+    expect(out.rows.map((r) => r.source)).toEqual(["pool"]);
+  });
+
   it("leaves out a tape read by RPC (5-second samples are not 1-second bars)", () => {
     const t = new CurveTape();
     t.record("M", T0, state(1e-5, 1), "read");

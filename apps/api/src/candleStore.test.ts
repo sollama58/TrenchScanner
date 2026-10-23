@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CandleChunkRow } from "@trenchscanner/core";
+import { BACKFILL_TOP_UP_AFTER_MS, type CandleChunkRow } from "@trenchscanner/core";
 import {
   askBackfill,
   flushCandleStore,
@@ -78,5 +78,21 @@ describe("candle store (API)", () => {
     expect(ask).toHaveBeenCalledTimes(2);
     await storingFetcher(async () => null, 15)("Y");
     expect(ask).toHaveBeenCalledTimes(2);
+  });
+
+  // The hourly ask a chart's open made first used to hold the top-up back for an hour (8WNk,
+  // 2026-10-23: nothing stored after it graduated, drawn flat until a live tail started).
+  it("asks a top-up apart from the hourly ask, every minute at most", () => {
+    const ask = vi.fn(async (_mint: string, _redo?: number) => {});
+    resetCandleStoreForTests({ save: async () => {}, ask });
+    askBackfill("X", NOW);
+    askBackfill("X", NOW + 1_000, true);
+    askBackfill("X", NOW + 30_000, true);
+    askBackfill("X", NOW + 61_000, true);
+    expect(ask.mock.calls).toEqual([
+      ["X", undefined],
+      ["X", BACKFILL_TOP_UP_AFTER_MS],
+      ["X", BACKFILL_TOP_UP_AFTER_MS],
+    ]);
   });
 });

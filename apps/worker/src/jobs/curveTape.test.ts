@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { pumpCurveAddressOf, type CurveState } from "@trenchscanner/core";
+import { pumpCurveAddressOf, pumpSwapPoolOf, type CurveState } from "@trenchscanner/core";
 import {
   followYoungCurves,
   curveLabelPrices,
   curvePathOf,
   curvePriceOf,
+  curveTapeView,
   onCurveStreamUpdate,
+  onPoolStreamUpdate,
+  POOL_FOLLOW_MS,
+  poolCurveState,
   overStreamPace,
   resetCurveTape,
   round,
@@ -203,6 +207,156 @@ describe("curve tape", () => {
     // A lower figure never lowers what is counted.
     seedCurveStreamSpend(10_000, new Date(NOW - 30_000), NOW);
     expect(takeCurveTapeStats(NOW)?.streamCreditsToday).toBe(70_000);
+  });
+
+  describe("after graduation", () => {
+    const POOL = pumpSwapPoolOf(MINT)!;
+    const VAULTS = {
+      base: "Base111111111111111111111111111111111111111",
+      quote: "Quote11111111111111111111111111111111111111",
+    };
+    /** A token account's data with `amount` (base units) where SPL keeps it. */
+    const tokenAccount = (amount: number) => {
+      const data = Buffer.alloc(72);
+      data.writeBigUInt64LE(BigInt(amount), 64);
+      return data.toString("base64");
+    };
+
+    function graduated(coveredSince: number | null, poolCreated = true) {
+      const s = setup(coveredSince);
+      let complete = false;
+      s.reader.getCurveStatesBatch.mockImplementation(async (curves: string[]) => {
+        s.reads.push(curves);
+        return new Map(
+          curves.map((c) => [c, complete ? { ...state(0), complete: true } : state(1)] as const),
+        );
+      });
+      const created = { now: poolCreated };
+      const pools = {
+        getPoolVaultsBatch: vi.fn(
+          async (asked: ReadonlyMap<string, unknown>) =>
+            new Map(
+              [...asked.keys()].map((a) => [a, created.now ? { ...VAULTS, virtualQuote: 0 } : null] as const),
+            ),
+        ),
+        getTokenAmountsBatch: vi.fn(
+          async (accounts: string[]) =>
+            new Map(accounts.map((a) => [a, a === VAULTS.base ? 1e15 : 2e15] as const)),
+        ),
+      };
+      Object.assign(s.reader, pools);
+      return { ...s, ...pools, created, complete: () => (complete = true) };
+    }
+
+    it("follows the coin's PumpSwap pool, seeds it, and pairs the vaults' updates by slot", async () => {
+      const s = graduated(NOW + 1_000);
+      stop = s.stop;
+      followYoungCurves([young], NOW);
+      await round(NOW);
+      s.complete();
+      await round(NOW + 5_000);
+      // Let go as a curve: no curve price, its key unwatched.
+      expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
+      expect(curvePriceOf(MINT, NOW + 5_000)).toBeNull();
+      // The next round reads the pool, follows its vaults and account, and seeds the price.
+      await round(NOW + 10_000);
+      expect(s.getPoolVaultsBatch).toHaveBeenCalledWith(
+        new Map([[POOL, { mint: MINT, quoteMint: "So11111111111111111111111111111111111111112" }]]),
+      );
+      expect(s.stream.watch).toHaveBeenCalledWith(
+        `curve-pool:base:${MINT}`,
+        [VAULTS.base],
+        NOW + 10_000,
+        "account",
+      );
+      expect(s.stream.watch).toHaveBeenCalledWith(
+        `curve-pool:quote:${MINT}`,
+        [VAULTS.quote],
+        NOW + 10_000,
+        "account",
+      );
+      expect(s.stream.watch).toHaveBeenCalledWith(
+        `curve-pool:account:${MINT}`,
+        [POOL],
+        NOW + 10_000,
+        "account",
+      );
+      expect([...curveTapeView.mints()]).toEqual([MINT]);
+      expect(curveTapeView.sourceOf?.(MINT)).toBe("pool");
+      // Streamed since NOW + 1 s and read since: carried on the stream from here.
+      await round(NOW + 15_000);
+      expect(s.getTokenAmountsBatch).toHaveBeenCalledTimes(1);
+      // A swap: the coin's vault down, the SOL vault up, one slot. Recorded once both are in.
+      onPoolStreamUpdate(`curve-pool:base:${MINT}`, tokenAccount(0.5e15), 300, 7, NOW + 16_000);
+      expect(curveTapeView.ticksAfter(MINT, NOW + 15_000)?.ticks).toEqual([]);
+      onPoolStreamUpdate(`curve-pool:quote:${MINT}`, tokenAccount(4e15), 300, 7, NOW + 16_200);
+      const tape = curveTapeView.ticksAfter(MINT, NOW + 15_000)!;
+      expect(tape.ticks).toEqual([{ at: NOW + 16_000, price: 8, realQuote: 4e15 }]);
+      expect(tape.prior).toMatchObject({ at: NOW + 10_000, price: 2 });
+      expect(tape.streamFrom).toBe(NOW + 10_000);
+      expect(takeCurveTapeStats(NOW + 17_000)).toMatchObject({ pools: 1, poolsStreamed: 1, poolUpdates: 2 });
+    });
+
+    it("records one side alone after a moment, and asks again until the pool exists", async () => {
+      vi.useFakeTimers({ now: NOW });
+      try {
+        const s = graduated(null, false);
+        stop = s.stop;
+        followYoungCurves([young], NOW);
+        await round(NOW);
+        s.complete();
+        await round(NOW + 5_000);
+        await round(NOW + 10_000);
+        expect(s.stream.watch).not.toHaveBeenCalledWith(
+          `curve-pool:base:${MINT}`,
+          expect.anything(),
+          expect.anything(),
+          "account",
+        );
+        s.created.now = true;
+        await round(NOW + 15_000);
+        expect(s.getPoolVaultsBatch).toHaveBeenCalledTimes(2);
+        // Off the stream: polled each round.
+        await round(NOW + 20_000);
+        expect(s.getTokenAmountsBatch).toHaveBeenCalledTimes(2);
+        onPoolStreamUpdate(`curve-pool:quote:${MINT}`, tokenAccount(3e15), 300, 9, NOW + 21_000);
+        vi.advanceTimersByTime(500);
+        expect(curveTapeView.ticksAfter(MINT, NOW + 20_000)?.ticks).toEqual([
+          { at: NOW + 21_000, price: 3, realQuote: 3e15 },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("lets the pool go past the tape's age or POOL_FOLLOW_MS after graduating, whichever is later", async () => {
+      const s = graduated(NOW + 1_000);
+      stop = s.stop;
+      followYoungCurves([young], NOW);
+      await round(NOW);
+      s.complete();
+      await round(NOW + 5_000);
+      await round(NOW + 10_000);
+      // Launched a minute before NOW with a 15-minute tape: graduating at NOW + 5 s, the pool's own
+      // 15 minutes run later.
+      followYoungCurves([], NOW + 5_000 + POOL_FOLLOW_MS);
+      expect([...curveTapeView.mints()]).toEqual([MINT]);
+      followYoungCurves([], NOW + 5_001 + POOL_FOLLOW_MS);
+      expect([...curveTapeView.mints()]).toEqual([]);
+      expect(s.stream.unwatch).toHaveBeenCalledWith(`curve-pool:base:${MINT}`);
+    });
+
+    it("prices the pool as PumpSwap does: the SOL vault plus the virtual reserve, over the coin's vault", () => {
+      expect(poolCurveState(1_000, 3_000, 1_000)).toEqual({
+        virtualToken: 1_000,
+        virtualQuote: 4_000,
+        realQuote: 3_000,
+        complete: false,
+        quoteIsSol: true,
+      });
+      expect(poolCurveState(null, 3_000, 0)).toBeNull();
+      expect(poolCurveState(0, 3_000, 0)).toBeNull();
+    });
   });
 
   it("paces the stream's spend through the day", () => {

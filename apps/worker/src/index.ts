@@ -110,6 +110,8 @@ import {
   curvePriceOf,
   curveTapeView,
   onCurveStreamUpdate,
+  onPoolStreamUpdate,
+  POOL_STREAM_KEY_PREFIX,
   seedCurveStreamSpend,
   startCurveTape,
 } from "./jobs/curveTape.js";
@@ -296,8 +298,9 @@ async function main() {
             else onHolderStreamTx(key, signature, tx);
           },
           undefined,
-          (key, data, bytes) => {
+          (key, data, bytes, slot) => {
             if (key.startsWith(CURVE_STREAM_KEY_PREFIX)) onCurveStreamUpdate(key, data, bytes);
+            else if (key.startsWith(POOL_STREAM_KEY_PREFIX)) onPoolStreamUpdate(key, data, bytes, slot);
           },
         )
           .metered("stream/holders-curves-burns")

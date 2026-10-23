@@ -164,6 +164,43 @@ export interface StoredCandles {
   bars: StoredBar[];
   /** Pass as `before` for the page before this one; null when nothing older is stored. */
   next: number | null;
+  /**
+   * Stretches from the first bar on that no source read, [from, to) in ms; absent from older API
+   * builds and when there are none. The chart leaves them blank rather than flat (chartBars.ts).
+   */
+  holes?: [number, number][];
+}
+
+/** A stretch nobody read: [from, to) in ms. */
+export type Hole = [number, number];
+
+/**
+ * Exported for tests. The holes held with a newer page's joined: the page's own stand over its
+ * span (from its first bar on: a hole a later read filled is gone), the held ones before it stay.
+ */
+export function holesWithNewest(
+  held: readonly Hole[],
+  page: readonly Hole[],
+  pageFrom: number | null,
+): Hole[] {
+  if (pageFrom === null) return [...held];
+  return held
+    .filter(([a]) => a < pageFrom)
+    .map(([a, b]): Hole => [a, Math.min(b, pageFrom)])
+    .concat(page);
+}
+
+/** Exported for tests. The holes held with an older page's joined before them. */
+export function holesWithOlder(
+  held: readonly Hole[],
+  page: readonly Hole[],
+  heldFrom: number | null,
+): Hole[] {
+  if (heldFrom === null) return [...held];
+  return page
+    .filter(([a]) => a < heldFrom)
+    .map(([a, b]): Hole => [a, Math.min(b, heldFrom)])
+    .concat(held);
 }
 
 /** The timeframes the candles route serves, by width (ms): the chart's own (priceChart.ts TIMEFRAMES). */
@@ -271,6 +308,8 @@ export interface CandleHistory {
   candles: VolumeCandle[];
   /** The `before` for the next older page; null once the store has nothing older. */
   next: number | null;
+  /** Stretches no source read, oldest first: drawn blank, not flat. */
+  holes: Hole[];
 }
 
 /** An older page that came back empty is asked again after this, on a scroll back to it (a backfill may land). */
@@ -332,7 +371,8 @@ export function useStoredCandles(
               // Older pages already held keep their own `next`; otherwise the newest page's.
               const pagedBack = !!mine && page.length > 0 && joined[0]!.t < page[0]!.t;
               const held = newestHeld(joined, pagedBack ? mine.next : (a.next ?? null));
-              return { base, history: { tfMs: tf.ms, ...held } };
+              const holes = holesWithNewest(mine?.holes ?? [], a.holes ?? [], page[0]?.t ?? null);
+              return { base, history: { tfMs: tf.ms, ...held, holes } };
             });
             setError(null);
             setAt(Date.now());
@@ -398,6 +438,7 @@ export function useStoredCandles(
               tfMs: tfMsNow,
               candles: withOlder(prev.history.candles, page),
               next: page.length > 0 ? (a.next ?? null) : null,
+              holes: holesWithOlder(prev.history.holes, a.holes ?? [], prev.history.candles[0]?.t ?? null),
             },
           };
         });

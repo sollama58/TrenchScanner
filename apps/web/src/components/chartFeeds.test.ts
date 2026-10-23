@@ -5,6 +5,8 @@ import {
   newestHeld,
   storedCandles,
   withNewest,
+  holesWithNewest,
+  holesWithOlder,
   withOlder,
   type StoredBar,
 } from "./chartFeeds";
@@ -61,6 +63,45 @@ describe("storedCandles", () => {
 
   it("keeps unknown volume unknown", () => {
     expect(storedCandles([bar(0, 1, { vol: null })], 1_000)[0]!.vol).toBeNull();
+  });
+});
+
+describe("holes held", () => {
+  it("takes a newer page's holes over its span, and keeps older ones before it", () => {
+    expect(
+      holesWithNewest(
+        [
+          [0, 10],
+          [50, 80],
+        ],
+        [[90, 100]],
+        60,
+      ),
+    ).toEqual([
+      [0, 10],
+      [50, 60],
+      [90, 100],
+    ]);
+    // A hole a later read filled is gone.
+    expect(holesWithNewest([[50, 80]], [], 40)).toEqual([]);
+    expect(holesWithNewest([[50, 80]], [], null)).toEqual([[50, 80]]);
+  });
+
+  it("joins an older page's holes before the held ones", () => {
+    expect(
+      holesWithOlder(
+        [[100, 120]],
+        [
+          [10, 20],
+          [90, 130],
+        ],
+        95,
+      ),
+    ).toEqual([
+      [10, 20],
+      [90, 95],
+      [100, 120],
+    ]);
   });
 });
 

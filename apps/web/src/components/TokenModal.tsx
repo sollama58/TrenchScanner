@@ -2937,6 +2937,7 @@ export function ChartCard({
                 mint={mint}
                 candles={view.candles}
                 ticks={view.ticks}
+                holes={candleSource === "store" ? stored.history?.holes : undefined}
                 events={events}
                 flow={flow}
                 marks={marks}
