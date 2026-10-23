@@ -11,6 +11,7 @@ import {
 import { GRADE_FIELDS, gradeOfReplay } from "./labelRegradeJob.js";
 import { QUOTE_REGRADE_MINTS } from "./quoteRegradeMints.js";
 import { CandlesUnavailableError } from "./minuteCandleReader.js";
+import { CandleRetry, givesUp, PUMP_PAUSED_STOP_AFTER, pumpPausedNoKey } from "./candleRetry.js";
 
 const logger = createLogger("quote-regrade");
 
@@ -40,10 +41,13 @@ export const QUOTE_REGRADE_COINS_PER_RUN = 30;
 const CALL_SPACING_MS = 400;
 
 let finished = false;
+/** Coins no candle source could answer, and when to ask again (candleRetry.ts). */
+const retry = new CandleRetry();
 
 /** Test hook. */
 export function resetQuoteRegrade(): void {
   finished = false;
+  retry.clear();
 }
 
 const ROW_SELECT = {
@@ -113,6 +117,8 @@ export async function runQuoteRegrade(
     return null;
   }
 
+  // Backed-off coins are left out until their wait ends (audit 2026-10-23, WC-1).
+  const blocked = new Set(retry.blocked(now()));
   const counts: Record<string, number> = {
     coins: 0,
     regraded: 0,
@@ -120,27 +126,54 @@ export async function runQuoteRegrade(
     skipped: 0,
     wins: 0,
     winsBefore: 0,
+    unavailable: 0,
+    backedOff: blocked.size,
   };
   let throttled = false;
-  for (const [i, [tokenId, tokenRows]] of [...byToken].slice(0, coinsPerRun).entries()) {
+  let pumpPaused = false;
+  let pausedInARow = 0;
+  const picked = [...byToken].filter(([tokenId]) => !blocked.has(tokenId)).slice(0, coinsPerRun);
+  for (const [i, [tokenId, tokenRows]] of picked.entries()) {
     if (i > 0) await sleep(spacingMs);
     const token = await prisma.token.findUnique({ where: { id: tokenId }, select: { mintAddress: true } });
     if (!token) continue;
-    let candles: MinuteCandle[] | null;
+    let candles: MinuteCandle[] | null = null;
+    /** Set when no source could answer: the coin's misses so far. */
+    let tries: number | null = null;
     try {
       candles = await pumpFun.minuteCandles(token.mintAddress);
+      retry.forget(tokenId);
     } catch (err) {
       if (err instanceof HttpError && err.status === 429) {
         throttled = true;
         break;
       }
-      if (!(err instanceof CandlesUnavailableError))
+      if (pumpPausedNoKey(err)) {
+        // Not the coin's miss: nothing answers any coin until the pause ends.
+        pausedInARow += 1;
+        if (pausedInARow >= PUMP_PAUSED_STOP_AFTER) {
+          pumpPaused = true;
+          break;
+        }
+        continue;
+      }
+      pausedInARow = 0;
+      if (!(err instanceof CandlesUnavailableError)) {
         logger.warn("candle read failed", { mint: token.mintAddress, error: String(err) });
-      continue;
+        continue;
+      }
+      counts.unavailable! += 1;
+      tries = retry.miss(tokenId, now());
     }
-    counts.coins! += 1;
+    pausedInARow = 0;
+    if (tries === null) counts.coins! += 1;
     const nowMs = now();
+    let waiting = 0;
     for (const row of tokenRows) {
+      if (tries !== null && !givesUp(tries)) {
+        waiting += 1;
+        continue;
+      }
       const current = row as unknown as Record<string, unknown>;
       const previous = {
         ...Object.fromEntries(GRADE_FIELDS.map((f) => [f, current[f] ?? null])),
@@ -149,17 +182,19 @@ export async function runQuoteRegrade(
         rule3Grade: row.rule3Grade,
         rule4Grade: row.rule4Grade,
       };
-      const result = candles
-        ? regradeFromCandles(
-            {
-              anchorAt: row.anchorAt,
-              anchorPriceUsd: row.anchorPriceUsd,
-              startsExtended: row.curatedAlerts.length > 0,
-            },
-            candles,
-            nowMs,
-          )
-        : ({ skip: "no-candles" } as const);
+      // Unanswered too often or too old: recorded as "no-candles", as the pre-#988 null answer was.
+      const result =
+        tries === null && candles
+          ? regradeFromCandles(
+              {
+                anchorAt: row.anchorAt,
+                anchorPriceUsd: row.anchorPriceUsd,
+                startsExtended: row.curatedAlerts.length > 0,
+              },
+              candles,
+              nowMs,
+            )
+          : ({ skip: "no-candles" } as const);
       const record = (outcome: string) =>
         prisma.quoteRegrade.create({
           data: { outcomeId: row.id, previous: previous as Prisma.InputJsonValue, result: outcome },
@@ -214,12 +249,15 @@ export async function runQuoteRegrade(
         }),
       ]);
     }
+    if (tries !== null && waiting === 0) retry.forget(tokenId);
   }
   if (throttled) logger.warn("pump.fun throttled the candle reads - the rest wait for the next run");
+  if (pumpPaused) logger.warn("Pump.fun paused and no CoinGecko key - the rest wait for the next run");
   logger.info("quote re-grade run", {
     ...counts,
     coinsLeft: byToken.size - counts.coins!,
     throttled: Number(throttled),
+    pumpPaused: Number(pumpPaused),
   });
   return counts;
 }
