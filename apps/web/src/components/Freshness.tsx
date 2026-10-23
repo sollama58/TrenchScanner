@@ -19,13 +19,17 @@ function onClockVisible(): void {
   if (document.visibilityState === "visible") syncClock();
 }
 
-function subscribeClock(listener: () => void): () => void {
+/** Exported for tests. Starts the one clock with its first listener and stops it with its last. */
+export function subscribeClock(listener: () => void): () => void {
   clockListeners.add(listener);
   if (clockListeners.size === 1) {
     clock = Date.now();
-    // Keep ticking while hidden too. Skipping those ticks left `clock` at the last visible
-    // second, so "12s ago" and the countdown stayed there until the next tick after returning.
-    clockTimer = window.setInterval(syncClock, 1_000);
+    // A hidden tab skips the ticks: nothing there is read, and each tick re-renders every stamp
+    // and countdown. onClockVisible catches the clock up the moment the tab is shown again.
+    clockTimer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      syncClock();
+    }, 1_000);
     if (typeof document !== "undefined") document.addEventListener("visibilitychange", onClockVisible);
   }
   return () => {

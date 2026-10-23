@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { countdown, holderStatusText, nextBeat, nextUpdateText, secondsAgo } from "./Freshness";
+import { describe, expect, it, vi } from "vitest";
+import {
+  countdown,
+  holderStatusText,
+  nextBeat,
+  nextUpdateText,
+  secondsAgo,
+  subscribeClock,
+} from "./Freshness";
 
 describe("freshness text", () => {
   const t = 1_000_000_000;
@@ -43,5 +50,41 @@ describe("freshness text", () => {
     expect(nextBeat(schedule, t + 1)).toBe(t + 30_000);
     expect(nextBeat(schedule, t + 30_000)).toBe(t + 30_000);
     expect(nextBeat(schedule, t + 61_000)).toBe(t + 90_000);
+  });
+});
+
+describe("the one-second clock", () => {
+  it("skips ticks in a hidden tab and catches up on return", () => {
+    vi.useFakeTimers();
+    const listeners = new Set<() => void>();
+    const doc = {
+      visibilityState: "visible",
+      addEventListener: (_: string, fn: () => void) => listeners.add(fn),
+      removeEventListener: (_: string, fn: () => void) => listeners.delete(fn),
+    };
+    vi.stubGlobal("window", globalThis);
+    vi.stubGlobal("document", doc);
+    try {
+      let ticks = 0;
+      const stop = subscribeClock(() => (ticks += 1));
+      vi.advanceTimersByTime(3_000);
+      expect(ticks).toBe(3);
+      doc.visibilityState = "hidden";
+      vi.advanceTimersByTime(60_000);
+      expect(ticks).toBe(3);
+      // Shown again: the clock catches up at once, not at the next tick.
+      doc.visibilityState = "visible";
+      for (const fn of listeners) fn();
+      expect(ticks).toBe(4);
+      vi.advanceTimersByTime(1_000);
+      expect(ticks).toBe(5);
+      stop();
+      expect(listeners.size).toBe(0);
+      vi.advanceTimersByTime(5_000);
+      expect(ticks).toBe(5);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
   });
 });

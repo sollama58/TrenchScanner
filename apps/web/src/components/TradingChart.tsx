@@ -760,7 +760,7 @@ export function TradingChart({
       const last = bars[bars.length - 1];
       if (last) s.main.applyOptions({ color: last.c >= last.o ? colors.up : colors.down });
     } else {
-      // The line runs through each candle's close at the end of its bucket (candleCloses). A wider
+      // The line runs through each candle's close at the end of its bucket. A wider
       // candle's close is at the end of its last slot. Plotting the close at the open put the next
       // close under a mark that sits on the real trade time.
       (s.main as ISeriesApi<"Baseline">).setData(
