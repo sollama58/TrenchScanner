@@ -127,6 +127,24 @@ describe("the chart backfill past its paid budget", () => {
   });
 });
 
+describe("the chart backfill with paid budget left", () => {
+  afterEach(() => {
+    coinGeckoBudget.reset();
+    vi.restoreAllMocks();
+  });
+
+  it("reads the free API first and keeps the paid credit", async () => {
+    coinGeckoBudget.configure(config);
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+    const client = new GeckoTerminalClient({ apiKey: "k" });
+    await withOwnApiFeature("candle-backfill", () => client.poolMinuteCandles("POOL", "MINT", Date.now()));
+    expect(String(fetch.mock.calls[0]![0])).toMatch(/^https:\/\/api\.geckoterminal\.com\//);
+    expect(coinGeckoBudget.spent().charts).toBe(0);
+  });
+});
+
 describe("CoinGeckoBudget.sync", () => {
   const PROCESS = "coingecko-budget-test";
   afterEach(async () => {
