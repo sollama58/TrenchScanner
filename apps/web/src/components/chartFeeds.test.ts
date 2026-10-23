@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   candlePollMs,
   candleTfParam,
+  newestHeld,
   storedCandles,
   withNewest,
   withOlder,
@@ -80,6 +81,18 @@ describe("withNewest", () => {
   });
   it("keeps what it held through an empty page", () => {
     expect(withNewest(held, [])).toEqual(held);
+  });
+});
+
+describe("newestHeld", () => {
+  const held = storedCandles([bar(0, 1), bar(60_000, 2), bar(120_000, 3), bar(180_000, 4)], 60_000);
+  it("keeps everything, and its own next, under the cap", () => {
+    expect(newestHeld(held, 7, 4)).toEqual({ candles: held, next: 7 });
+  });
+  it("keeps the newest past the cap, the next older page read from the first kept", () => {
+    const kept = newestHeld(held, null, 2);
+    expect(kept.candles.map((k) => k.t)).toEqual([120_000, 180_000]);
+    expect(kept.next).toBe(120_000);
   });
 });
 
