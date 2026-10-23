@@ -314,6 +314,28 @@ describe("curve tape", () => {
       expect(takeCurveTapeStats(NOW + 17_000)).toMatchObject({ pools: 1, poolsStreamed: 1, poolUpdates: 2 });
     });
 
+    it("lets the pools go before the curves when the stream nears its pace", async () => {
+      const s = graduated(NOW + 1_000);
+      stop = s.stop;
+      followYoungCurves([young], NOW);
+      await round(NOW);
+      s.complete();
+      await round(NOW + 5_000);
+      await round(NOW + 10_000);
+      expect(s.stream.watch).toHaveBeenCalledWith(
+        `curve-pool:base:${MINT}`,
+        [VAULTS.base],
+        NOW + 10_000,
+        "account",
+      );
+      // Noon, 45k of a 100k day: under the curves' pace (60k), past the pools' share of it (36k).
+      seedCurveStreamSpend(45_000, new Date(NOW + 10_000), NOW + 10_000);
+      await round(NOW + 15_000);
+      expect(s.stream.unwatch).toHaveBeenCalledWith(`curve-pool:base:${MINT}`);
+      expect(s.stream.unwatch).toHaveBeenCalledWith(`curve-pool:account:${MINT}`);
+      expect(takeCurveTapeStats(NOW + 15_000)).toMatchObject({ paused: 0, poolsPaused: 1 });
+    });
+
     it("records one side alone after a moment, and asks again until the pool exists", async () => {
       vi.useFakeTimers({ now: NOW });
       try {

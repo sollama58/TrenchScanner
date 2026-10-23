@@ -84,6 +84,10 @@ export function answeredStatus(lines: readonly ApiCallLine[], status: number): b
   if (provider === "helius") return status === 404 && HELIUS_IDENTITY_ENDPOINT.test(endpoint);
   if (provider === "rugcheck")
     return (status === 400 || status === 404) && RUGCHECK_REPORT_ENDPOINT.test(endpoint);
+  // CoinGecko's paid on-chain API bills a pool it doesn't know (404) like any answer, and the day's
+  // budget (coingeckoBudget.ts) is read back from the credits counted here: uncounted, a run of
+  // unknown pools spent the plan unseen (API audit 2026-10-23).
+  if (provider === "coingecko") return status === 404 && lines[0]!.credits > 0;
   return false;
 }
 /**

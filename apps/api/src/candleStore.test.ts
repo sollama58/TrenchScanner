@@ -112,5 +112,19 @@ describe("candle store (API)", () => {
       ["chart", 1, NOW - 3 * M, from, NOW - M, 2],
       ["chart", 1, NOW - M, NOW - M, NOW, 1],
     ]);
+    // The stream pruned its oldest ticks: the 12:27 minute comes back with one bar and a later
+    // start. Nothing to add, so nothing is queued; a saved cover never shrinks.
+    keepStreamBars("X", [bar(from + 1_000), bar(NOW - 30_000)], { from: from + 1_000, to: NOW + 50_000 });
+    await flushCandleStore();
+    expect(saved).toHaveLength(2);
+    // A later tick in the 12:29 minute: that chunk alone is saved again, its cover kept.
+    keepStreamBars("X", [bar(from), bar(from + 1_000), bar(NOW - 30_000), bar(NOW - 20_000)], {
+      from: from + 1_000,
+      to: NOW + 50_000,
+    });
+    await flushCandleStore();
+    expect(saved.slice(2).map((r) => [r.startAt, r.coverFrom, r.coverTo, r.bars.length])).toEqual([
+      [NOW - M, NOW - M, NOW, 2],
+    ]);
   });
 });

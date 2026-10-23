@@ -115,30 +115,43 @@ export function candleSeries(
   to = Infinity,
 ): SeriesBar[] {
   const tf = tfSec * 1_000;
-  // Per width, one bar per start: the highest priority's.
-  const byRes = new Map<number, Map<number, { bar: StoredBar; priority: number }>>();
+  // Per width, one bar per start: the highest priority's, with the cover of the input it came from.
+  type Held = { bar: StoredBar; priority: number; coverTo: number };
+  const byRes = new Map<number, Map<number, Held>>();
   for (const input of inputs) {
     let slots = byRes.get(input.res);
     if (!slots) byRes.set(input.res, (slots = new Map()));
     for (const bar of input.bars) {
       if (!isDrawableBar(bar)) continue;
       const held = slots.get(bar.t);
-      if (!held || input.priority > held.priority) slots.set(bar.t, { bar, priority: input.priority });
+      if (!held || input.priority > held.priority)
+        slots.set(bar.t, { bar, priority: input.priority, coverTo: input.coverTo });
     }
   }
-  const buckets = new Map<number, StoredBar[]>();
+  const buckets = new Map<number, { bar: StoredBar; width: number; shadowTo: number }[]>();
   const coarse = new Map<number, SeriesBar>();
+  const taken = new Set<string>();
   for (const seg of baseSegments(inputs, from, to, tfSec)) {
     const slots = byRes.get(seg.res);
     if (!slots) continue;
     const width = seg.res * 1_000;
-    for (const { bar } of slots.values()) {
+    for (const { bar, coverTo } of slots.values()) {
       if (width <= tf) {
-        if (bar.t < seg.from || bar.t >= seg.to) continue;
+        // A bar belongs to every stretch its span reaches into (once): a minute bar whose stretch
+        // starts inside it is still the minute's whole reading, not to be dropped (API audit
+        // 2026-10-23: the minute after a trade-tape cover ended mid-minute was lost).
+        if (bar.t + width <= seg.from || bar.t >= seg.to) continue;
+        if (bar.t < from || bar.t >= to) continue;
+        const id = `${seg.res}:${bar.t}`;
+        if (taken.has(id)) continue;
+        taken.add(id);
         const at = Math.floor(bar.t / tf) * tf;
+        // What of this bar's span its source itself covered: finer bars there are the same trades
+        // counted again. Past its cover (the page's forming minute, read mid-way) they are new.
+        const entry = { bar, width, shadowTo: Math.min(bar.t + width, Math.max(coverTo, bar.t)) };
         const list = buckets.get(at);
-        if (list) list.push(bar);
-        else buckets.set(at, [bar]);
+        if (list) list.push(entry);
+        else buckets.set(at, [entry]);
         continue;
       }
       if (bar.t >= seg.to || bar.t + width <= seg.from) continue;
@@ -151,13 +164,20 @@ export function candleSeries(
     }
   }
   const out: SeriesBar[] = [];
-  for (const [at, list] of buckets)
+  for (const [at, list] of buckets) {
+    // Within a bucket, a finer bar inside a wider bar's own cover duplicates it (a trade-tape
+    // second inside Pump.fun's minute: the minute already holds that trade), so it is left out;
+    // a wider bar's open-to-close stands for its span. Finer bars past the wider one's cover stand.
+    const kept = list.filter(
+      (e) => !list.some((w) => w.width > e.width && e.bar.t >= w.bar.t && e.bar.t < w.shadowTo),
+    );
     out.push(
       fold(
         at,
-        list.sort((a, b) => a.t - b.t),
+        kept.map((e) => e.bar).sort((a, b) => a.t - b.t),
       ),
     );
+  }
   for (const [at, bar] of coarse) if (!buckets.has(at)) out.push(bar);
   return out.sort((a, b) => a.t - b.t);
 }

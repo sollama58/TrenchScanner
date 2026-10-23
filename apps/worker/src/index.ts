@@ -120,7 +120,7 @@ import {
 } from "./jobs/curveTape.js";
 import { startPricePathRecorder } from "./jobs/pricePathRecorder.js";
 import { startCurveCandles } from "./jobs/curveCandles.js";
-import { startCandleChainFill } from "./jobs/candleChainFill.js";
+import { seedCandleChainFillSpend, startCandleChainFill } from "./jobs/candleChainFill.js";
 import { startCandleBackfill } from "./jobs/candleBackfill.js";
 import { onHolderStreamTx, setHolderTransferStream } from "./jobs/holderTransfers.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
@@ -435,9 +435,15 @@ async function main() {
     void prisma.systemHeartbeat
       .findUnique({ where: { job: "scan" }, select: { lastRunAt: true, meta: true } })
       .then((row) => {
-        const curve = (row?.meta as { curveTape?: { streamCreditsToday?: unknown } } | null)?.curveTape;
-        const credits = curve?.streamCreditsToday;
+        const meta = row?.meta as {
+          curveTape?: { streamCreditsToday?: unknown };
+          candleChainFill?: { creditsToday?: unknown };
+        } | null;
+        const credits = meta?.curveTape?.streamCreditsToday;
         if (row && typeof credits === "number") seedCurveStreamSpend(credits, row.lastRunAt);
+        // The chart's chain fill's day too (candleChainFill.ts), before its first run.
+        const fill = meta?.candleChainFill?.creditsToday;
+        if (row && typeof fill === "number") seedCandleChainFillSpend(fill, row.lastRunAt);
       })
       .catch((err: unknown) =>
         logger.warn("curve tape: the day's stream spend not read", { error: String(err) }),
