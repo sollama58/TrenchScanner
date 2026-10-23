@@ -3,6 +3,7 @@ import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, type MinuteCandle } from "@trenchscanner/core";
 import { resetQuoteRegrade, runQuoteRegrade } from "./quoteRegrade.js";
+import { CandlesUnavailableError, PUMP_PAUSED_NO_KEY } from "./minuteCandleReader.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -118,5 +119,43 @@ describe.skipIf(!dbAvailable)("quote re-grade", () => {
     expect((await prisma.quoteRegrade.findUniqueOrThrow({ where: { outcomeId: row.id } })).result).toBe(
       "no-candles",
     );
+  });
+
+  it("backs off a coin no source can answer, and marks it no-candles once its row is a week old", async () => {
+    const { token, row } = await seed("unavailable");
+    let asked = 0;
+    const stub = {
+      minuteCandles: async (mint: string): Promise<MinuteCandle[]> => {
+        asked += 1;
+        throw new CandlesUnavailableError(mint, "GeckoTerminal knows none of the coin's pools");
+      },
+    };
+    const run = (at: number) =>
+      runQuoteRegrade(stub, { spacingMs: 0, now: () => at, mints: [token.mintAddress] });
+    expect(await run(NOW)).toMatchObject({ coins: 0, unavailable: 1 });
+    expect(await prisma.quoteRegrade.findUnique({ where: { outcomeId: row.id } })).toBeNull();
+    // Backed off: not asked, and not finished either.
+    expect(await run(NOW + 5 * MIN)).toMatchObject({ backedOff: 1, unavailable: 0 });
+    expect(asked).toBe(1);
+    await run(ANCHOR + 8 * 86_400_000);
+    expect(asked).toBe(2);
+    expect((await prisma.quoteRegrade.findUniqueOrThrow({ where: { outcomeId: row.id } })).result).toBe(
+      "no-candles",
+    );
+  });
+
+  it("stops the run once a few coins in a row find Pump.fun paused with no CoinGecko key", async () => {
+    const seeded = await Promise.all([1, 2, 3, 4].map((n) => seed(`paused-${n}`)));
+    let calls = 0;
+    await runQuoteRegrade(
+      {
+        minuteCandles: async (mint) => {
+          calls += 1;
+          throw new CandlesUnavailableError(mint, PUMP_PAUSED_NO_KEY);
+        },
+      },
+      { spacingMs: 0, now: () => NOW, mints: seeded.map((s) => s.token.mintAddress) },
+    );
+    expect(calls).toBe(3);
   });
 });

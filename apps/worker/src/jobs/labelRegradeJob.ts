@@ -12,6 +12,7 @@ import {
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
 import { CandlesUnavailableError } from "./minuteCandleReader.js";
+import { CandleRetry, givesUp, PUMP_PAUSED_STOP_AFTER, pumpPausedNoKey } from "./candleRetry.js";
 
 const logger = createLogger("label-regrade");
 
@@ -49,13 +50,17 @@ const CALL_SPACING_MS = 400;
 /**
  * Where the oldest pending row was last run: pending rows only ever get older than it by a coin's
  * read failing, which leaves its rows at or after it anyway. Saves each run walking every row
- * already re-graded. Per process; a restart starts from RULE_3_SINCE again.
+ * already re-graded. Per process; a restart starts from RULE_3_SINCE again. Coins backed off by
+ * `retry` are left out of the pick but not passed by the cursor: their rows are still pending.
  */
 let cursor = RULE_3_SINCE;
+/** Coins no candle source could answer, and when to ask again (candleRetry.ts). */
+const retry = new CandleRetry();
 
 /** Test hook. */
 export function resetRegradeCursor(): void {
   cursor = RULE_3_SINCE;
+  retry.clear();
 }
 
 /** The fields a re-grade rewrites, which rule3Grade keeps the old values of. */
@@ -222,16 +227,34 @@ export async function runLabelRegradeJob(
   const spacingMs = opts.spacingMs ?? CALL_SPACING_MS;
   const restored = await restoreAlertRows();
   // The oldest pending rows name the next coins; each coin's pending rows are then done together
-  // from one candle read.
+  // from one candle read. Backed-off coins are left out, so the rows after them fill the run
+  // (audit 2026-10-23, WC-1), but the cursor stays at the oldest pending row, theirs included.
+  const blocked = retry.blocked(now());
+  if (blocked.length > 0) {
+    const oldest = await prisma.candidateOutcome.findFirst({
+      where: pendingWhere(now(), cursor),
+      orderBy: { anchorAt: "asc" },
+      select: { anchorAt: true },
+    });
+    if (oldest) cursor = oldest.anchorAt;
+  }
   const next = await prisma.candidateOutcome.findMany({
-    where: pendingWhere(now(), cursor),
+    where: { ...pendingWhere(now(), cursor), ...(blocked.length > 0 ? { tokenId: { notIn: blocked } } : {}) },
     orderBy: { anchorAt: "asc" },
     take: coinsPerRun * 20,
     select: { tokenId: true, anchorAt: true },
   });
-  if (next[0]) cursor = next[0].anchorAt;
+  if (blocked.length === 0 && next[0]) cursor = next[0].anchorAt;
   const tokenIds = [...new Set(next.map((r) => r.tokenId))].slice(0, coinsPerRun);
-  const counts: Record<string, number> = { coins: 0, regraded: 0, alertRows: 0, wins: 0, winsBefore: 0 };
+  const counts: Record<string, number> = {
+    coins: 0,
+    regraded: 0,
+    alertRows: 0,
+    wins: 0,
+    winsBefore: 0,
+    unavailable: 0,
+    backedOff: blocked.length,
+  };
   const skips: Record<RegradeSkip | "no-coin", number> = {
     "no-candles": 0,
     "not-covered": 0,
@@ -240,42 +263,70 @@ export async function runLabelRegradeJob(
     "no-coin": 0,
   };
   let throttled = false;
+  let pumpPaused = false;
+  let pausedInARow = 0;
   for (const [i, tokenId] of tokenIds.entries()) {
     if (i > 0) await sleep(spacingMs);
     const token = await prisma.token.findUnique({ where: { id: tokenId }, select: { mintAddress: true } });
     if (!token) continue;
-    let candles: MinuteCandle[] | null;
+    let candles: MinuteCandle[] | null = null;
+    /** Set when no source could answer: the coin's misses so far. */
+    let tries: number | null = null;
     try {
       candles = await pumpFun.minuteCandles(token.mintAddress);
+      retry.forget(tokenId);
     } catch (err) {
       if (err instanceof HttpError && err.status === 429) {
         throttled = true;
         break;
       }
+      if (pumpPausedNoKey(err)) {
+        // Not the coin's miss: nothing answers any coin until the pause ends.
+        pausedInARow += 1;
+        if (pausedInARow >= PUMP_PAUSED_STOP_AFTER) {
+          pumpPaused = true;
+          break;
+        }
+        continue;
+      }
+      pausedInARow = 0;
       // A transport failure: the coin's rows stay pending for a later run.
-      if (!(err instanceof CandlesUnavailableError))
+      if (!(err instanceof CandlesUnavailableError)) {
         logger.warn("candle read failed", { mint: token.mintAddress, error: String(err) });
-      continue;
+        continue;
+      }
+      counts.unavailable! += 1;
+      tries = retry.miss(tokenId, now());
     }
-    counts.coins! += 1;
+    pausedInARow = 0;
+    if (tries === null) counts.coins! += 1;
     const nowMs = now();
     const rows = (await prisma.candidateOutcome.findMany({
       where: { ...pendingWhere(nowMs), tokenId },
       select: ROW_SELECT,
     })) as unknown as GradeRow[];
+    let waiting = 0;
     for (const row of rows) {
       const regradedAt = new Date(nowMs);
-      const result = candles
-        ? regradeFromCandles(
-            {
-              anchorAt: row.anchorAt,
-              anchorPriceUsd: row.anchorPriceUsd,
-              startsExtended: false,
-            },
-            candles,
-            nowMs,
-          )
-        : ({ skip: "no-coin" } as const);
+      if (tries !== null && !givesUp(tries, row.anchorAt, nowMs)) {
+        waiting += 1;
+        continue;
+      }
+      // Unanswered too often or too old: stamped as the pre-#988 null answer was, grade kept.
+      const result =
+        tries !== null
+          ? ({ skip: "no-candles" } as const)
+          : candles
+            ? regradeFromCandles(
+                {
+                  anchorAt: row.anchorAt,
+                  anchorPriceUsd: row.anchorPriceUsd,
+                  startsExtended: false,
+                },
+                candles,
+                nowMs,
+              )
+            : ({ skip: "no-coin" } as const);
       if ("skip" in result) {
         skips[result.skip] += 1;
         await prisma.candidateOutcome.updateMany({
@@ -311,9 +362,11 @@ export async function runLabelRegradeJob(
         },
       });
     }
+    if (tries !== null && waiting === 0) retry.forget(tokenId);
   }
   const remaining = await prisma.candidateOutcome.count({ where: pendingWhere(now(), cursor) });
   if (throttled) logger.warn("pump.fun throttled the candle reads - the rest wait for the next run");
-  logger.info("label regrade run", { ...counts, ...skips, remaining, throttled });
-  return { ...counts, restored, skipped: skips, remaining, throttled };
+  if (pumpPaused) logger.warn("Pump.fun paused and no CoinGecko key - the rest wait for the next run");
+  logger.info("label regrade run", { ...counts, ...skips, remaining, throttled, pumpPaused });
+  return { ...counts, restored, skipped: skips, remaining, throttled, pumpPaused };
 }
