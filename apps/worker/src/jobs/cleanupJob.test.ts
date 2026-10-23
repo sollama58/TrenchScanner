@@ -1151,11 +1151,33 @@ describe.skipIf(!dbAvailable)("runCleanupJob: retention tiers", () => {
     await prisma.feedbackReport.deleteMany({ where: { submitterKey: TAG } });
     await prisma.chartFlaggedTrade.deleteMany({ where: { mint: { startsWith: TAG } } });
     await prisma.chartMarkCoin.deleteMany({ where: { mint: { startsWith: TAG } } });
+    await prisma.launchRead.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
     await prisma.user.deleteMany({ where: { walletAddress: WALLET } });
   };
   beforeEach(cleanUp);
   afterAll(cleanUp);
+
+  it("keeps a tracked coin's complete launch read past three days, and sweeps the rest", async () => {
+    // Helius audit 2026-10-23, N-5: a deploy re-read old coins back in band for 10-30 credits each.
+    await prisma.token.create({ data: { mintAddress: `${TAG}-tracked` } });
+    await prisma.token.create({ data: { mintAddress: `${TAG}-tracked-incomplete` } });
+    const read = (suffix: string, ageDays: number, complete = true) =>
+      prisma.launchRead.create({
+        data: { mintAddress: `${TAG}-${suffix}`, reading: {}, complete, checkedAt: ago(ageDays) },
+      });
+    await read("tracked", 5);
+    await read("tracked-incomplete", 5, false);
+    await read("gone", 5);
+    await read("gone-recent", 1);
+
+    await runCleanupJob(env, { rowsPerBatch: 1, pauseMs: 0 });
+    const left = await prisma.launchRead.findMany({
+      where: { mintAddress: { startsWith: TAG } },
+      select: { mintAddress: true },
+    });
+    expect(left.map((r) => r.mintAddress).sort()).toEqual([`${TAG}-gone-recent`, `${TAG}-tracked`]);
+  });
 
   it("keeps the archived runners to 180 days and lets the rest go at 90", async () => {
     const user = await prisma.user.create({ data: { walletAddress: WALLET } });

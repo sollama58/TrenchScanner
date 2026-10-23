@@ -19,7 +19,8 @@ const RPC_CACHE_RETENTION_DAYS = 90;
 /**
  * How long a LaunchRead row (launchReadStore.ts) is kept. It only spares a restart re-reading a coin
  * still in band, and coins are read in their first minutes, so a few days is plenty; a coin back
- * after that pays one read again.
+ * after that pays one read again. A complete read of a coin still tracked is kept past this (see
+ * the sweep).
  */
 const LAUNCH_READ_RETENTION_DAYS = 3;
 
@@ -1008,12 +1009,22 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   );
   const deletedMintAuthorityCache = await sweepCache("MintAuthorityCache", "mintAddress");
   const deletedMayhemCache = await sweepCache("MayhemModeCache", "mintAddress");
-  // Launch reads (launchReadStore.ts) only spare a restart the re-read of coins still in band.
-  const deletedLaunchReads = await sweepCache(
-    "LaunchRead",
-    "mintAddress",
-    new Date(startedAt - LAUNCH_READ_RETENTION_DAYS * DAY_MS),
-  );
+  // Launch reads (launchReadStore.ts) only spare a restart the re-read of coins still in band. A
+  // complete read is kept past the retention while its coin is still tracked (a Token row): its
+  // first buyers never change, and a deploy re-read an old coin back in band for 10-30 credits
+  // (Helius audit 2026-10-23, N-5). An incomplete one is read again anyway, so it goes as before.
+  const deletedLaunchReads = {
+    count: await stage("LaunchRead", 0, () =>
+      deleteInBatches(
+        `SELECT l."mintAddress" FROM "LaunchRead" l WHERE l."checkedAt" < $1 AND (NOT l."complete"
+           OR NOT EXISTS (SELECT 1 FROM "Token" t WHERE t."mintAddress" = l."mintAddress"))`,
+        "LaunchRead",
+        [new Date(startedAt - LAUNCH_READ_RETENTION_DAYS * DAY_MS)],
+        batch,
+        "mintAddress",
+      ),
+    ),
+  };
   // Linked wallets (linkedWallets.ts): a funder is final like a first transaction, kept as long.
   const deletedWalletFunders = await sweepCache("WalletFunder", "wallet");
   const deletedFunderActivity = await sweepCache("FunderActivity", "address");
