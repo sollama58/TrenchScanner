@@ -103,7 +103,11 @@ export function creatorRewardFigure(fee: Fee | null | undefined): CreatorRewardF
   const value = fee ? headline(fee, coins, tax) : coinValue(coins);
   const parts: string[] = [];
   const charities = feeCharities(fee);
-  const recipients = fee?.destination === "split" ? feeRecipientCaption(fee.recipients) : null;
+  // A wallet's addresses show here and in the tooltip, not on the card (user ask 2026-10-23).
+  const recipients =
+    fee?.destination === "split" || fee?.destination === "wallet"
+      ? feeRecipientCaption(fee.recipients)
+      : null;
   if (recipients && recipients !== value) parts.push(recipients);
   else if (charities.length > 1) parts.push(`${charities.length} charities`);
   else if (charities.length === 0 && charity && !value.includes(charity)) parts.push(charity);
