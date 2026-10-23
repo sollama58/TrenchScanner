@@ -22,6 +22,7 @@ import {
 } from "@trenchscanner/core";
 import { clientIp } from "../clientIp.js";
 import { contestState, resolveFeedModels, SAVED_FEED_SELECT, toSavedFeed } from "../contest.js";
+import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { createTelegramBoards } from "../telegramBoards.js";
 
 /**
@@ -89,12 +90,17 @@ export function secretMatches(header: string | string[] | undefined, secret: str
   return timingSafeEqual(a, b);
 }
 
-export async function registerTelegramRoutes(app: FastifyInstance, { env }: { env: Env }) {
+export async function registerTelegramRoutes(
+  app: FastifyInstance,
+  { env, liveRefresher }: { env: Env; liveRefresher?: OnDemandLiveRefresher },
+) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const configured = telegramConfigured(token);
   const api = configured ? new TelegramApi(token) : null;
   const secret = configured ? webhookSecret(token) : "";
-  const boards = createTelegramBoards();
+  // A Refresh press under an alert waits briefly for a fresh DexScreener reading (free, under the
+  // same call budget as the dashboard's live tick) before reading the database.
+  const boards = createTelegramBoards(Date.now, { liveRefresher });
   // /alerts and /trenchboard answer only for a chat whose owner still has access, by the same
   // rule the worker applies before sending it alerts.
   const admins = adminWalletSet(env);

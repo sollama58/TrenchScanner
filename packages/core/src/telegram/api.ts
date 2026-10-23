@@ -174,6 +174,8 @@ export interface TelegramMessage {
   entities?: { type: string; offset: number; length: number }[];
   /** A service message in a group that became a supergroup: the supergroup's new chat id. */
   migrate_to_chat_id?: number;
+  /** A photo message's caption: an alert sent with its token's picture. */
+  caption?: string;
 }
 
 export interface TelegramChatMemberUpdated {
@@ -367,6 +369,22 @@ export class TelegramApi {
     });
   }
 
+  /** Rewrites the caption of one of the bot's photo messages in place, buttons and all. */
+  editMessageCaption(
+    chatId: number | bigint,
+    messageId: number,
+    captionHtml: string,
+    opts: { keyboard?: InlineKeyboard } = {},
+  ): Promise<TelegramResult<TelegramMessage | true>> {
+    return this.call<TelegramMessage | true>("editMessageCaption", {
+      chat_id: String(chatId),
+      message_id: messageId,
+      caption: captionHtml,
+      parse_mode: "HTML",
+      ...(opts.keyboard ? { reply_markup: opts.keyboard } : {}),
+    });
+  }
+
   /** Stops the button's spinner; `text` shows as a small toast. Telegram wants one per press. */
   answerCallbackQuery(id: string, text?: string): Promise<TelegramResult<boolean>> {
     return this.call<boolean>("answerCallbackQuery", {
@@ -383,7 +401,7 @@ export class TelegramApi {
     chatId: number | bigint,
     photo: string | FetchedImage,
     captionHtml: string,
-    opts: { silent?: boolean } = {},
+    opts: { silent?: boolean; keyboard?: InlineKeyboard } = {},
   ): Promise<TelegramResult<TelegramMessage>> {
     return this.call<TelegramMessage>("sendPhoto", {
       chat_id: String(chatId),
@@ -391,6 +409,7 @@ export class TelegramApi {
       caption: captionHtml,
       parse_mode: "HTML",
       disable_notification: opts.silent === true,
+      ...(opts.keyboard ? { reply_markup: opts.keyboard } : {}),
     });
   }
 
@@ -468,7 +487,7 @@ export class TelegramApi {
   async sendAlert(
     chatId: number | bigint,
     message: { html: string; imageUrl: string | null; imageFallbacks?: string[] },
-    opts: { silent?: boolean; photos?: PhotoCache } = {},
+    opts: { silent?: boolean; photos?: PhotoCache; keyboard?: InlineKeyboard } = {},
   ): Promise<TelegramResult<TelegramMessage>> {
     const { photos, ...sendOpts } = opts;
     const url = message.imageUrl;

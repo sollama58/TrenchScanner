@@ -342,6 +342,12 @@ model TelegramAlertSent {
   /// sendKey). The row is written as a claim before the message goes out, so a pass run twice, or
   /// a send whose answer was lost, can't put the same alert in a chat again. Null on older rows.
   dedupeKey      String?      @unique
+  /// What a single alert's card said (its calls and filters, and the numbers at the alert), so the
+  /// Refresh button under it can rebuild the card with fresh numbers (telegram/refresh.ts). Null on
+  /// digests and on rows from before the button.
+  card           Json?
+  /// When the Refresh button under this alert last rewrote it: one press per 15 s per message.
+  refreshedAt    DateTime?
 
   @@id([chatId, tokenId, sentAt])
   @@index([sentAt])

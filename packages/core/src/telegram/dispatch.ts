@@ -26,6 +26,7 @@ import {
   type AlertCard,
   type AlertLinks,
 } from "./format.js";
+import { refreshKeyboard, storedCard } from "./refresh.js";
 
 /**
  * The scanner worker's telegram-dispatch job: every few seconds, send each linked chat the
@@ -750,6 +751,9 @@ async function dispatchPass(
     // /trenchboard credit and grade (apps/api/src/telegramBoards.ts), a re-alert included.
     const keys = item.sends.map((a) => sendKey(q.chat.id, a, item.through));
     const claimedAt = new Date();
+    // A single alert keeps its card on its row, which the Refresh button under it rebuilds from
+    // (refresh.ts); a digest has no button.
+    const single = !isDigest(item.card) && item.sends.length === 1;
     const claimed = new Set(
       (
         await prisma.telegramAlertSent.createManyAndReturn({
@@ -758,6 +762,7 @@ async function dispatchPass(
             sentAt: claimedAt,
             ...a,
             dedupeKey: keys[i],
+            ...(single ? { card: storedCard(item.card) } : {}),
           })),
           skipDuplicates: true,
           select: { dedupeKey: true },
@@ -799,7 +804,8 @@ async function dispatchPass(
     const message = isDigest(item.card)
       ? digestMessage(item.card.digest, links, parts, style)
       : alertMessage(item.card, links, now(), parts, style);
-    const result = await api.sendAlert(q.chat.chatId, message, { photos });
+    const keyboard = single ? refreshKeyboard(item.tokenIds[0]!, claimedAt) : null;
+    const result = await api.sendAlert(q.chat.chatId, message, { photos, ...(keyboard ? { keyboard } : {}) });
     if (result.ok) {
       q.pending.shift();
       q.nextAt = now() + spacing;

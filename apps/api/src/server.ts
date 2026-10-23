@@ -811,7 +811,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerExtensionKeyRoutes, { prefix: "/settings", env });
   await app.register(registerExtensionRoutes, { prefix: "/ext/v1", env });
   // Telegram alerts: link codes and chats for the signed-in account, and the bot's webhook.
-  await app.register(registerTelegramRoutes, { prefix: "/telegram", env });
+  await app.register(registerTelegramRoutes, { prefix: "/telegram", env, liveRefresher });
   // The trading bot (admin-only; nothing is registered without TRADING_BOT_ENABLED).
   await app.register(registerTradingRoutes, { prefix: "/trading", env });
   // Pro Mode trades from the token modal: the trader's own wallet signs; nothing custodial.

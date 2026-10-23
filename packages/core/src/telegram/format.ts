@@ -52,6 +52,21 @@ export interface AlertCard {
   raisedAt: Date;
 }
 
+/**
+ * What a Refresh press adds to an alert (telegram/refresh.ts): how the market moved since, from
+ * the freshest reading the database holds.
+ */
+export interface AlertLive {
+  /** The market cap the alert's returns count from; null to use the card's own. */
+  alertMcapUsd: number | null;
+  /** The market cap now; null when there is no recent reading. */
+  nowMcapUsd: number | null;
+  /** The highest it has gone above the alert's market cap, in percent; null when unknown. */
+  peakPct: number | null;
+  /** When the card was rewritten. */
+  refreshedAt: Date;
+}
+
 export interface AlertLinks {
   /** The dashboard, e.g. https://trenchscanner.app; empty for no link. */
   dashboardUrl: string;
@@ -339,14 +354,45 @@ export const LATE_SEND_MINUTES = 2;
 /** A holder count read this many minutes or more before the send says how old it is. */
 export const OLD_HOLDER_COUNT_MINUTES = 5;
 
+/** A move in percent, signed: "+52%", "-31%", and "+110% (2.1x)" from a double on. */
+export function movePct(pct: number): string {
+  const rounded = Math.round(pct);
+  const sign = rounded > 0 ? "+" : rounded < 0 ? "-" : "";
+  const x = pct >= 100 ? ` (${Number((1 + pct / 100).toFixed(1))}x)` : "";
+  return `${sign}${Math.abs(rounded)}%${x}`;
+}
+
+/** A refreshed card's "now" and "peak" facts, against the alert's market cap. */
+function liveFacts(card: AlertCard, live: AlertLive): string[] {
+  const facts: string[] = [];
+  const base = live.alertMcapUsd ?? card.snapshot?.marketCapUsd ?? null;
+  if (live.nowMcapUsd !== null && live.nowMcapUsd > 0) {
+    const move = base !== null && base > 0 ? ` ${movePct((live.nowMcapUsd / base - 1) * 100)}` : "";
+    facts.push(`📈 Now <b>${usd(live.nowMcapUsd)}</b>${move}`);
+  } else {
+    facts.push("📈 Now <i>no fresh reading</i>");
+  }
+  if (live.peakPct !== null && Number.isFinite(live.peakPct) && live.peakPct > 0)
+    facts.push(`🏔 Peak <b>${movePct(live.peakPct)}</b>`);
+  return facts;
+}
+
 /** The numbers, two to a line so they read as a small grid on a phone. */
-function factsLines(card: AlertCard, now: number, parts: AlertParts, compact: boolean): string | null {
+function factsLines(
+  card: AlertCard,
+  now: number,
+  parts: AlertParts,
+  compact: boolean,
+  live?: AlertLive,
+): string | null {
   const facts: string[] = [];
   // The numbers are the alert's own; an alert that goes out late (a backed-up send, a retry, a
-  // restart) says how long ago it was raised, so its MC isn't read as the market now.
+  // restart) says how long ago it was raised, so its MC isn't read as the market now. A refreshed
+  // card always says so: its "now" sits right beside it.
   const lateMin = Math.floor((now - card.raisedAt.getTime()) / 60_000);
-  const late = lateMin >= LATE_SEND_MINUTES ? ` at alert, ${lateMin}m ago` : "";
+  const late = live ? " at alert" : lateMin >= LATE_SEND_MINUTES ? ` at alert, ${lateMin}m ago` : "";
   if (parts.stats && card.snapshot) facts.push(`💰 MC <b>${usd(card.snapshot.marketCapUsd)}</b>${late}`);
+  if (parts.stats && live) facts.push(...liveFacts(card, live));
   if (parts.holders && card.snapshot?.holderCount != null) {
     const readAt = card.snapshot.holderCountAt;
     const readMin = readAt ? Math.floor((now - readAt.getTime()) / 60_000) : 0;
@@ -401,6 +447,7 @@ export function formatAlert(
   now = Date.now(),
   parts: AlertParts = ALL_PARTS,
   style: AlertStyle = DEFAULT_STYLE,
+  live?: AlertLive,
 ): string {
   const compact = style.layout === "compact";
   const c = strongestFirst(card);
@@ -416,7 +463,7 @@ export function formatAlert(
       : `${title}\n<i>${escapeHtml(headline(c))}</i>\n${DIVIDER}`,
   ];
 
-  const facts = factsLines(c, now, parts, compact);
+  const facts = factsLines(c, now, parts, compact, live);
   if (facts) sections.push(facts);
 
   // The strongest call carries the reasons; the others go without, which keeps the whole
@@ -449,10 +496,16 @@ export function formatAlert(
   if (sage) reads.push(`🔮 ${sage}`);
   if (reads.length > 0) tail.push(reads.join("   "));
   if (tail.length > 0) sections.push(tail.join("\n"));
+  if (live) sections.push(`🔄 <i>Refreshed ${utcTime(live.refreshedAt)}</i>`);
   // The rule closes the title block, so the numbers sit right under it; blank lines elsewhere.
   const [head, ...body] = sections;
   if (compact) return sections.join("\n");
   return body.length > 0 ? `${head}\n${body.join("\n\n")}` : head!;
+}
+
+/** "23:05:12 UTC". */
+export function utcTime(at: Date): string {
+  return `${at.toISOString().slice(11, 19)} UTC`;
 }
 
 /** One alert, with the token's picture above it when there is one. */

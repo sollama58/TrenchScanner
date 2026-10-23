@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { FakeTelegramApi } from "./fakeApi.js";
 import { issueTelegramLinkCode } from "./link.js";
@@ -12,6 +13,7 @@ import {
 } from "./updates.js";
 import type { TelegramUpdate } from "./api.js";
 import type { TelegramBoards } from "./boards.js";
+import { refreshCallbackData, refreshKeyboard, storedCard } from "./refresh.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `tgupd-test-${Date.now()}`;
@@ -372,6 +374,114 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     // An unknown button is answered and otherwise ignored.
     const odd = { ...press, callback_query: { ...press.callback_query!, data: "zz" } };
     expect((await handleTelegramUpdate(api, odd, opts)).action).toBe("ignored");
+  });
+
+  it("refreshes a single alert in place, once per 15 s, and only an alert this chat was sent", async () => {
+    const api = new FakeTelegramApi();
+    const chatId = nextChat--;
+    const { code } = await issueTelegramLinkCode(userId);
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`), { now: tick });
+    const row = (await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } }))!;
+    const tokenId = `${TAG}-refresh-token`;
+    const sentAt = new Date(Date.now() - 60_000);
+    const card = {
+      token: { mintAddress: "MintRefresh", symbol: "DOG", name: "Dog", firstSeenAt: null, imageUrl: null },
+      snapshot: { marketCapUsd: 40_000, holderCount: 120, holderCountAt: null, volume1hUsd: 9_000 },
+      filters: [{ name: "Mine", score: 71 }],
+      calls: [],
+      raisedAt: sentAt,
+    };
+    await prisma.telegramAlertSent.create({
+      data: { chatId: row.id, tokenId, sentAt, card: storedCard(card) },
+    });
+    const asked: { chat: string; token: string; at: number }[] = [];
+    const boards: TelegramBoards = {
+      activeAlerts: async () => [],
+      board: async () => {
+        throw new Error("not asked");
+      },
+      alertNow: async (chat, token, at) => {
+        asked.push({ chat, token, at: at.getTime() });
+        return {
+          token: card.token,
+          holderCount: 300,
+          holderCountAt: new Date(),
+          volume1hUsd: 52_000,
+          alertMcapUsd: 40_000,
+          nowMcapUsd: 80_000,
+          peakPct: 150,
+        };
+      },
+    };
+    let t = clock + 1_000_000;
+    const opts = { boards, hasAccess: async () => true, now: () => t };
+    const press = (data: string, photo = true): TelegramUpdate => ({
+      update_id: 11,
+      callback_query: {
+        id: "cb-refresh",
+        from: me,
+        data,
+        message: {
+          message_id: 77,
+          chat: { id: chatId, type: "private", first_name: "Ada" },
+          date: 0,
+          ...(photo ? { photo: [{ file_id: "f", width: 1, height: 1 }] } : {}),
+        },
+      },
+    });
+    const data = refreshCallbackData(tokenId, sentAt)!;
+
+    // A photo alert's caption is rewritten, the button kept, and the press answered.
+    expect((await handleTelegramUpdate(api, press(data), opts)).action).toBe("refreshed");
+    expect(asked).toEqual([{ chat: row.id, token: tokenId, at: sentAt.getTime() }]);
+    const edit = api.calls.find((c) => c.method === "editMessageCaption")!;
+    expect(edit.params.message_id).toBe(77);
+    expect(String(edit.params.caption)).toContain("📈 Now <b>$80.0k</b> +100% (2x)");
+    expect(String(edit.params.caption)).toContain("👥 <b>300</b> holders");
+    expect(edit.params.reply_markup).toEqual(refreshKeyboard(tokenId, sentAt));
+    expect(api.calls.at(-1)).toMatchObject({
+      method: "answerCallbackQuery",
+      params: { text: "🔄 Updated with the latest numbers" },
+    });
+
+    // Pressed again 6 s on: told when it can be, nothing read or rewritten.
+    t += 6_000;
+    expect((await handleTelegramUpdate(api, press(data), opts)).action).toBe("throttled");
+    expect(api.calls.at(-1)!.params.text).toBe("⏳ Just refreshed. Fresh numbers again in 9s.");
+    expect(asked).toHaveLength(1);
+
+    // Past the 15 s, a text alert is rewritten as text.
+    t += 10_000;
+    expect((await handleTelegramUpdate(api, press(data, false), opts)).action).toBe("refreshed");
+    expect(String(api.calls.find((c) => c.method === "editMessageText")!.params.text)).toContain("📈 Now");
+
+    // A send this chat never got, a forged key, or a send with no card: nothing is read.
+    t += 20_000;
+    const other = refreshCallbackData(`${TAG}-not-sent`, sentAt)!;
+    expect((await handleTelegramUpdate(api, press(other), opts)).action).toBe("ignored");
+    expect(api.calls.at(-1)!.params.text).toBe("This alert is too old to refresh.");
+    t += 20_000;
+    expect((await handleTelegramUpdate(api, press("rf:../../x:1"), opts)).action).toBe("ignored");
+    await prisma.telegramAlertSent.updateMany({ where: { chatId: row.id }, data: { card: Prisma.DbNull } });
+    t += 20_000;
+    expect((await handleTelegramUpdate(api, press(data), opts)).action).toBe("ignored");
+    expect(asked).toHaveLength(2);
+
+    // Telegram no longer has the message: said plainly.
+    await prisma.telegramAlertSent.updateMany({
+      where: { chatId: row.id },
+      data: { card: storedCard(card) },
+    });
+    api.answers.set("editMessageCaption", {
+      ok: false,
+      code: 400,
+      description: "Bad Request: message to edit not found",
+    });
+    t += 20_000;
+    expect((await handleTelegramUpdate(api, press(data), opts)).action).toBe("ignored");
+    expect(api.calls.at(-1)!.params.text).toBe("This alert is too old to refresh.");
+    // Unlinked straight away: the dispatcher's tests, running beside these, count linked chats.
+    await prisma.telegramChat.updateMany({ where: { id: row.id }, data: { revokedAt: new Date() } });
   });
 
   it("drops board commands inside the per-chat cooldown, and a button there only stops the spinner", async () => {

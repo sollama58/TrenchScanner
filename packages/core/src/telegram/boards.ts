@@ -8,6 +8,7 @@ import {
   usd,
   type AlertLinks,
   type AlertStyle,
+  type AlertToken,
 } from "./format.js";
 
 /**
@@ -65,11 +66,33 @@ export interface BoardStats {
   recordedSince: Date | null;
 }
 
+/**
+ * One alert the chat was sent, as it stands now: what the Refresh button under it rewrites the
+ * card with. Every figure is the freshest the database holds; null where it holds none.
+ */
+export interface AlertNow {
+  /** The token's row now (its name or picture may have filled in since the alert). */
+  token: AlertToken;
+  holderCount: number | null;
+  holderCountAt: Date | null;
+  volume1hUsd: number | null;
+  /** The market cap the alert is graded from, as /alerts uses it. */
+  alertMcapUsd: number | null;
+  nowMcapUsd: number | null;
+  /** The highest it went above the alert's market cap, in percent. */
+  peakPct: number | null;
+}
+
 /** What the API hands the bot: the reads behind the two commands, for one linked chat. */
 export interface TelegramBoards {
   /** `chatId` is the TelegramChat row's id. */
   activeAlerts(chatId: string): Promise<ActiveAlert[]>;
   board(chatId: string, hours: number): Promise<BoardStats>;
+  /**
+   * The alert sent to the chat at `sentAt` about `tokenId`, with fresh numbers; null when the chat
+   * has no such send or the token is gone. Without it the Refresh button is not answered.
+   */
+  alertNow?(chatId: string, tokenId: string, sentAt: Date): Promise<AlertNow | null>;
 }
 
 export const BOARD_WINDOWS = [
