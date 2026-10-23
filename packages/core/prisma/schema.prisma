@@ -128,6 +128,8 @@ model User {
   twoFactor         TwoFactorSettings?
   passkeys          TwoFactorPasskey[]
   backupCodes       TwoFactorBackupCode[]
+  /// Tokens starred for the Live tab's Watchlist.
+  watchlist         WatchlistItem[]
 }
 
 /// Optional two-factor (user ask 2026-10-18): an authenticator app, passkeys, or both, and which
@@ -725,6 +727,7 @@ model Token {
   curatedShadowEmissions CuratedShadowEmission[]
   aiReviews              AiReview[]
   peakWatch              PeakWatch?
+  watchlistItems         WatchlistItem[]
 
   // The watchlist selection (selectWatchlist in apps/worker/src/jobs/scanJob.ts) ranges and orders
   // on this every scan cycle. Without it all three of its queries scanned and sorted the whole
@@ -3476,6 +3479,25 @@ model UserTrackedWallet {
 
   @@id([userId, wallet])
   @@index([wallet])
+}
+
+/// A token a user starred for the Live tab's Watchlist (user ask 2026-10-23): the panel shows its
+/// market cap now and its change since it was added. Per user, and never read by the scan, the
+/// models, the filters or alerts. Not the scan's own "watchlist" (the mints selectWatchlist keeps
+/// refreshing). At most WATCHLIST_CAP per user, held by the API (apps/api/src/watchlist.ts).
+model WatchlistItem {
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenId           String
+  token             Token    @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  addedAt           DateTime @default(now())
+  /// The token's market cap and price when it was added, from the readings the API already held
+  /// (Token.live* or its newest snapshot). Null when it had none. "Since added" counts from these.
+  addedMarketCapUsd Float?
+  addedPriceUsd     Float?
+
+  @@id([userId, tokenId])
+  @@index([tokenId])
 }
 
 /// Probable sides of the wallets users labeled (UserTrackedWallet), by the same rules and hourly run

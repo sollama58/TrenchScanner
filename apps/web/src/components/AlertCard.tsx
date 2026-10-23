@@ -29,6 +29,7 @@ import {
   XLogoIcon,
 } from "./Icons";
 import { CardSearchButton } from "./CardSearchButton";
+import { WatchStar } from "./WatchStar";
 import { DeskRewardTokens } from "./DeskRewardTokens";
 import { FeeKolAvatar, FeeWalletTip, kolPictures } from "./FeeWalletTip";
 import { DexInfoLabel } from "../dexInfoLabel";
@@ -410,13 +411,28 @@ export function AlertCard({
               {resultMark === "⊘" ? <span className="result-stop">⊘</span> : resultMark}
             </span>
           )}
-          {detail && look.cardSearch && (
-            <CardSearchButton
-              className="card-search"
-              symbol={card.token.symbol}
-              name={card.token.name}
-              mint={card.token.mintAddress}
-            />
+          {detail && (
+            // The Watchlist star beside the search button: one box, so a narrow card moves both to
+            // the second row together.
+            <div className="card-search card-watch-group">
+              <WatchStar
+                token={{
+                  tokenId: card.tokenId,
+                  mint: card.token.mintAddress,
+                  symbol: card.token.symbol,
+                  name: card.token.name,
+                  imageUrl: card.token.imageUrl,
+                  marketCapUsd: nowMcap,
+                }}
+              />
+              {look.cardSearch && (
+                <CardSearchButton
+                  symbol={card.token.symbol}
+                  name={card.token.name}
+                  mint={card.token.mintAddress}
+                />
+              )}
+            </div>
           )}
           {!hideInAlert && hideButton}
         </div>

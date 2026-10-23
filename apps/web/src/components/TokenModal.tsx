@@ -159,6 +159,7 @@ import {
   ShieldIcon,
   SlidersIcon,
 } from "./Icons";
+import { WatchStar } from "./WatchStar";
 import { XLinkPreview } from "./XLinkPreview";
 import { calibratedRateLabel } from "../rates";
 import {
@@ -1100,6 +1101,18 @@ function TokenBody({
             stale={!!((funds.error && funds.balance) || (position.error && position.data))}
           />
         )}
+        <WatchStar
+          className="tm-watch"
+          size={14}
+          token={{
+            tokenId: card.tokenId,
+            mint,
+            symbol: card.token.symbol,
+            name: card.token.name,
+            imageUrl: card.token.imageUrl,
+            marketCapUsd: nowMcap,
+          }}
+        />
         {!hideSafetyPill && <SafetyPill verdict={safety} onClick={openSafety} />}
         <button
           type="button"
