@@ -6,6 +6,7 @@ import {
   prisma,
   rememberLaunchTapeSeed,
   tradesFromPumpFun,
+  type CandleChunkRow,
   type ChainTx,
   type PumpFunTradesPage,
 } from "@trenchscanner/core";
@@ -243,6 +244,91 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
     expect(tape).toMatchObject({ status: "done", source: "helius", creator: dev, trades: 3 });
     const outcome = await prisma.candidateOutcome.findUnique({ where: { id: row.id } });
     expect(outcome!.stopCause).toMatchObject({ sellers: 1, soldSol: 2.5, lead: "launchSnipers" });
+  });
+
+  it("saves a Helius read's trades as 1-second candles, priced off their swap events", async () => {
+    const { token } = await seedCalled("candles", new Date(ANCHOR + 5 * MIN));
+    // A real-shaped mint, 32 bytes of 7: the swap events name the coin by its key.
+    const mint = "US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx";
+    await prisma.token.update({ where: { id: token.id }, data: { mintAddress: mint } });
+    try {
+      const dev = "HYi9a633brCmNtqLgat8fDo8huRYuYpUxsoJhuSzJiaP";
+      const sniper = "4WPT9wLwQWYS5zyX36ZgoY3ESxxLgDmE12upKXDAyYbL";
+      /** Pump.fun's curve TradeEvent for `mint`, leaving `vSol` lamports over `vTokens` base units. */
+      const event = (atMs: number, vSol: number, vTokens: number) => {
+        const b = Buffer.alloc(113);
+        Buffer.from([189, 219, 127, 211, 78, 230, 97, 238]).copy(b, 0);
+        Buffer.alloc(32, 7).copy(b, 8);
+        b.writeBigUInt64LE(1_000_000_000n, 40);
+        b.writeBigUInt64LE(1_000_000n, 48);
+        b.writeUInt8(1, 56);
+        b.writeBigInt64LE(BigInt(atMs / 1000), 89);
+        b.writeBigUInt64LE(BigInt(vSol), 97);
+        b.writeBigUInt64LE(BigInt(vTokens), 105);
+        const pump = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+        return [
+          `Program ${pump} invoke [1]`,
+          `Program data: ${b.toString("base64")}`,
+          `Program ${pump} success`,
+        ];
+      };
+      const bal = (owner: string, amount: number) => ({
+        accountIndex: 1,
+        mint,
+        owner,
+        uiTokenAmount: { amount: String(amount * 1e6), decimals: 6 },
+      });
+      const tx = (atMs: number, owner: string, post: number, vSol: number): ChainTx => ({
+        blockTime: atMs / 1000,
+        transaction: { signatures: [`${owner}-${atMs}`], message: { accountKeys: [owner, "ata"] } },
+        meta: {
+          err: null,
+          preTokenBalances: [],
+          postTokenBalances: [bal(owner, post)],
+          preBalances: [10e9, 0],
+          postBalances: [9e9, 0],
+          logMessages: event(atMs, vSol, 1e15),
+        },
+      });
+      const page = [tx(LAUNCH, dev, 1_000, 30e9), tx(LAUNCH + 1_000, sniper, 2_000, 40e9)];
+      const helius: TradeTapeDeps["helius"] = {
+        gtfaUsable: true,
+        takeCallStats: () => ({}),
+        getMintTransactionsPage: async (m) =>
+          m === mint ? { status: "ok", txs: page, paginationToken: null } : { status: "failed" },
+      };
+      const saved: CandleChunkRow[] = [];
+      const meta = await runTradeTapeJob(
+        {
+          helius,
+          pumpFun: pumpFunStub("none", []).stub,
+          candles: { solUsd: async () => 200, save: async (rows) => saved.push(...rows) },
+        },
+        { heliusPagesPerRun: 5, pumpFunCallsPerRun: 0, now: () => NOW },
+      );
+      expect(meta.candleRows).toBe(1);
+      // 30 SOL over a billion tokens, then 40: market caps of 30 and 40 SOL at $200.
+      expect(saved).toEqual([
+        expect.objectContaining({
+          mint,
+          res: 1,
+          source: "tape",
+          startAt: LAUNCH,
+          coverFrom: LAUNCH,
+          // Quiet after the last trade through the window's end: read, so covered.
+          coverTo: ANCHOR + 30 * MIN,
+        }),
+      ]);
+      const round = (v: number | null) => (v === null ? v : Math.round(v));
+      expect(saved[0]!.bars.map((b) => [b.t, round(b.o), round(b.h), round(b.l), round(b.c), b.vol])).toEqual(
+        [
+          [LAUNCH, 6_000, 6_000, 6_000, 6_000, 200],
+          [LAUNCH + 1_000, 6_000, 8_000, 6_000, 8_000, 200],
+        ],
+      );
+    } finally {
+      await prisma.token.deleteMany({ where: { id: token.id } });
+    }
   });
 
   const SEED_DEV = "HYi9a633brCmNtqLgat8fDo8huRYuYpUxsoJhuSzJiaP";

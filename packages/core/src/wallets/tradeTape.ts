@@ -42,7 +42,16 @@ export interface TapeTrade {
   atMs: number;
   /** Signature, for de-duplication. */
   tx: string;
+  /** The price the trade left, off its transaction's swap event (candles/tapeCandles.ts). */
+  mark?: TradeMark;
 }
+
+/**
+ * The price a trade left, read off its transaction's swap event (pumpTradeEvents.ts): on the curve,
+ * SOL per whole token; on PumpSwap, the pool's vaults after the swap (lamports and the coin's base
+ * units), its virtual quote reserve left out, as the events leave it out.
+ */
+export type TradeMark = { curve: number } | { quote: number; base: number };
 
 export interface ChainTx extends RawLaunchTx {
   meta?:
@@ -51,6 +60,7 @@ export interface ChainTx extends RawLaunchTx {
         postBalances?: number[] | null;
         /** The network fee in lamports, priority fee included. */
         fee?: number | null;
+        logMessages?: string[] | null;
       })
     | null;
   transaction?: {
