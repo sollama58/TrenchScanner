@@ -27,6 +27,7 @@ import { SharedCache } from "../sharedCache.js";
 import { lighthouseQuerySchema, lighthouseSignalsQuerySchema } from "../marketLighthouse.js";
 import { lighthouseHistoryQuerySchema } from "../lighthouseHistory.js";
 import { loadMarketWeather } from "../marketWeather.js";
+import type { MarketBar } from "../marketBar.js";
 
 /**
  * The guest feed: what a visitor who hasn't connected a wallet sees - the default feed's calls (the
@@ -182,7 +183,7 @@ function belowAlert(card: {
 
 export async function registerGuestRoutes(
   app: FastifyInstance,
-  opts: { env: Env; viewStamps: ViewStampBuffer; reports: ReportCaches },
+  opts: { env: Env; viewStamps: ViewStampBuffer; reports: ReportCaches; marketBar?: MarketBar },
 ) {
   // Keyed by the default models and page; bounded by GUEST_MAX_PAGES per set, and the models come
   // from the roster, never the request. Entries for a set that is no longer the default are dropped
@@ -316,6 +317,16 @@ export async function registerGuestRoutes(
     }
     return opts.reports.lighthouse(opts.env, parsed.data.days, parsed.data.tz);
   });
+
+  /**
+   * The Live tab's market bar (marketBar.ts), the same answers subscribers get: the majors' public
+   * prices, and the trenches' last two hours as aggregates that name no token.
+   */
+  const marketBar = opts.marketBar;
+  if (marketBar) {
+    app.get("/market/prices", { config: { rateLimit: GUEST_RATE_LIMIT } }, async () => marketBar.prices());
+    app.get("/market/trench", { config: { rateLimit: GUEST_RATE_LIMIT } }, async () => marketBar.trench());
+  }
 
   /** The Lighthouse's weather gauge, the same market-wide reading subscribers get. */
   app.get("/weather", { config: { rateLimit: GUEST_RATE_LIMIT } }, async () =>

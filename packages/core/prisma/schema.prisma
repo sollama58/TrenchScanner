@@ -2042,6 +2042,14 @@ model LighthouseHour {
   screenAccepted Int @default(0)
   screenRejected Int @default(0)
 
+  /// The USD volume the tokens the scan follows traded in the hour (the Live tab's market bar):
+  /// each token's last snapshot in the hour, its volume1hUsd scaled to the part of that trailing
+  /// hour inside this one (lighthouseRollupJob.ts volumeHours). Re-summed only while those
+  /// snapshots are kept (VOLUME_RECOMPUTE_HOURS), then frozen. Null = never summed (hours from
+  /// before the column existed, or past snapshot retention). scanVolumeTokens: how many it sums.
+  scanVolumeUsd    Float?
+  scanVolumeTokens Int?
+
   /// The summing rules the screened counts were last summed under (lighthouseRollupJob.ts
   /// LIGHTHOUSE_ROLLUP_VERSION): an hour below it is re-summed once, while its rows are all kept.
   rollupVersion Int @default(0)

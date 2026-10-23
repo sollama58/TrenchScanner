@@ -40,6 +40,7 @@ import { registerFilterRoutes } from "./routes/filters.js";
 import { registerMatchRoutes } from "./routes/matches.js";
 import { createReportCaches, registerCuratedRoutes } from "./routes/curated.js";
 import { registerGuestRoutes } from "./routes/guest.js";
+import { createMarketBar } from "./marketBar.js";
 import { registerTokenRoutes } from "./routes/tokens.js";
 import { registerCandleRoutes } from "./routes/candles.js";
 import { registerHealthRoutes } from "./routes/health.js";
@@ -695,9 +696,12 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
 
   // The Models tab's reports, read by subscribers (/curated) and guests (/guest) from one fill.
   const reports = createReportCaches(env);
+  // The Live tab's market bar: one price lookup a minute on the shared DexScreener budget.
+  const marketBar = createMarketBar(dexScreener);
   await app.register(registerCuratedRoutes, {
     prefix: "/curated",
     reports,
+    marketBar,
     env,
     liveRefresher,
     matchStream,
@@ -706,7 +710,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     ready: warmed,
   });
   // The read-only feed for visitors without a wallet: its own route, so no paid route's gate is loosened.
-  await app.register(registerGuestRoutes, { prefix: "/guest", env, viewStamps, reports });
+  await app.register(registerGuestRoutes, { prefix: "/guest", env, viewStamps, reports, marketBar });
   // The wallet modal. Its chain read (balance, history, a missing funder) needs a Helius key;
   // without one the modal shows what the database knows. The token modal's Stonk fee card reads
   // through the same client.

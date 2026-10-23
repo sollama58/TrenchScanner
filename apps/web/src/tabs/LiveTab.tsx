@@ -1,3 +1,4 @@
+import { MarketBar } from "../components/MarketBar";
 import { SectionBoundary } from "../components/SectionBoundary";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type CuratedStats, type Leaderboard, type MatchPage } from "../api";
@@ -254,6 +255,7 @@ export function LiveTab({
 
   return (
     <div className="stack">
+      <MarketBar />
       <Suspense fallback={null}>
         {customizeMounted && <CustomizeDrawer open={customizing} onClose={closeCustomize} />}
       </Suspense>

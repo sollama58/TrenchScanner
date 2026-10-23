@@ -321,3 +321,81 @@ describe.skipIf(!dbAvailable)("lighthouse rollup", () => {
     expect(await run()).not.toHaveProperty("catchUp");
   });
 });
+
+/**
+ * The scan volume (the Live tab's market bar): each token's last snapshot in an hour, its trailing
+ * hour's volume scaled to the part inside the hour and never before the token existed.
+ */
+describe.skipIf(!dbAvailable)("lighthouse rollup scan volume", () => {
+  const VOL_DAY = new Date(DAY.getTime() + 3 * 24 * HOUR_MS);
+  const at = (h: number, m = 0) => new Date(VOL_DAY.getTime() + h * HOUR_MS + m * 60_000);
+  const VOL_MINTS = [
+    "RollVol11111111111111111111111111111111111111",
+    "RollVol21111111111111111111111111111111111111",
+    "RollVol31111111111111111111111111111111111111",
+  ];
+
+  const clean = async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { in: VOL_MINTS } } });
+    // The re-sum run below starts from the trailing hours behind the newest one, so back to DAY.
+    await prisma.lighthouseHour.deleteMany({ where: { hour: { gte: DAY, lt: at(24) } } });
+  };
+
+  beforeAll(async () => {
+    await clean();
+    // Launched at 11:30 and followed into hour 12; first scanned at 09:00 and last read at 11:10;
+    // never seen live (no market), so never counted whatever its snapshots say.
+    const [young, old, dead] = await Promise.all([
+      prisma.token.create({
+        data: { mintAddress: VOL_MINTS[0]!, firstSeenAt: at(11, 30), lastLiveAt: at(13) },
+      }),
+      prisma.token.create({
+        data: { mintAddress: VOL_MINTS[1]!, firstSeenAt: at(9), lastLiveAt: at(11, 10) },
+      }),
+      prisma.token.create({ data: { mintAddress: VOL_MINTS[2]!, firstSeenAt: at(11) } }),
+    ]);
+    const snap = { priceUsd: 1, marketCapUsd: 50_000 };
+    await prisma.tokenSnapshot.createMany({
+      data: [
+        { ...snap, tokenId: young.id, takenAt: at(11, 40), volume1hUsd: 500 },
+        // The hour's last reading, 20 minutes after launch: all of it inside hour 11.
+        { ...snap, tokenId: young.id, takenAt: at(11, 50), volume1hUsd: 1_200 },
+        // 12:55: its trailing hour reaches back to 11:55, so 55 of its 60 minutes are hour 12's.
+        { ...snap, tokenId: young.id, takenAt: at(12, 55), volume1hUsd: 600 },
+        { ...snap, tokenId: old.id, takenAt: at(10, 30), volume1hUsd: 3_000 },
+        // 11:10: only its last 10 minutes are hour 11's; the rest was hour 10's own reading.
+        { ...snap, tokenId: old.id, takenAt: at(11, 10), volume1hUsd: 900 },
+        { ...snap, tokenId: dead.id, takenAt: at(11, 20), volume1hUsd: 10_000 },
+      ],
+    });
+  });
+
+  afterAll(async () => {
+    if (dbAvailable) await clean();
+  });
+
+  it("sums each hour's last reading per token, scaled to the hour", async () => {
+    await runLighthouseRollupJob({ from: at(10), now: at(14, 5) });
+    const rows = await prisma.lighthouseHour.findMany({
+      where: { hour: { gte: at(10), lt: at(15) } },
+      orderBy: { hour: "asc" },
+      select: { hour: true, scanVolumeUsd: true, scanVolumeTokens: true },
+    });
+    const by = new Map(rows.map((r) => [r.hour.getTime(), r]));
+    // 10:30: half of its trailing hour (09:30-10:30) is hour 10's.
+    expect(by.get(at(10).getTime())).toMatchObject({ scanVolumeUsd: 1_500, scanVolumeTokens: 1 });
+    expect(by.get(at(11).getTime())!.scanVolumeUsd).toBeCloseTo(1_200 + 150, 6);
+    expect(by.get(at(11).getTime())!.scanVolumeTokens).toBe(2);
+    expect(by.get(at(12).getTime())!.scanVolumeUsd).toBeCloseTo(550, 6);
+    // Summed and quiet: zero, not null.
+    expect(by.get(at(13).getTime())).toMatchObject({ scanVolumeUsd: 0, scanVolumeTokens: 0 });
+  });
+
+  it("leaves an hour's volume alone once it is past the re-sum window", async () => {
+    await prisma.lighthouseHour.update({ where: { hour: at(10) }, data: { scanVolumeUsd: 42 } });
+    // Some hour carries a volume, so a run re-sums only the trailing VOLUME_RECOMPUTE_HOURS.
+    await runLighthouseRollupJob({ now: at(14, 5) });
+    const hour = await prisma.lighthouseHour.findUniqueOrThrow({ where: { hour: at(10) } });
+    expect(hour.scanVolumeUsd).toBe(42);
+  });
+});

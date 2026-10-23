@@ -63,6 +63,25 @@ export const SCREEN_RECOMPUTE_HOURS = 24;
  */
 export const SCREEN_BACKFILL_HOURS = 46;
 
+/**
+ * Hours whose scan volume (scanVolumeUsd / scanVolumeTokens) is re-summed on every run: the
+ * current, partial hour and the two before it, so an hour still filling at one run is summed whole
+ * at the next (the rollup runs hourly). Older hours keep what they were summed with: the volume
+ * reads TokenSnapshot, and untracked tokens' snapshots are deleted after
+ * SNAPSHOT_UNTRACKED_RETENTION_HOURS.
+ */
+export const VOLUME_RECOMPUTE_HOURS = 3;
+
+/** How far back the scan volume is summed when no hour carries any yet, as for the screen counts. */
+export const VOLUME_BACKFILL_HOURS = SCREEN_BACKFILL_HOURS;
+
+/**
+ * Tokens counted toward an hour's volume: first scanned at most this long before it. The scan's
+ * watchlist follows a token for WATCHLIST_TTL_HOURS (24) at most, so an older one has no snapshot
+ * to read anyway; bounding it keeps the population an index range on Token.firstSeenAt.
+ */
+export const VOLUME_LOOKBACK_HOURS = 24;
+
 /** The label breakdowns kept per day; LighthouseDayLabel.dimension takes these values. */
 export const LABEL_DIMENSIONS = [
   "category",
@@ -165,6 +184,78 @@ async function screenStart(now: Date): Promise<Date> {
   });
   const hours = any ? SCREEN_RECOMPUTE_HOURS : SCREEN_BACKFILL_HOURS;
   return floorHour(now.getTime() - hours * HOUR_MS);
+}
+
+/**
+ * Where a run starts re-summing the scan volume: the trailing VOLUME_RECOMPUTE_HOURS, or
+ * VOLUME_BACKFILL_HOURS while no hour carries any yet.
+ */
+async function volumeStart(now: Date): Promise<Date> {
+  const any = await prisma.lighthouseHour.findFirst({
+    where: { scanVolumeUsd: { not: null } },
+    select: { hour: true },
+  });
+  const hours = any ? VOLUME_RECOMPUTE_HOURS : VOLUME_BACKFILL_HOURS;
+  return floorHour(now.getTime() - hours * HOUR_MS);
+}
+
+interface VolumeHourRow {
+  hour: Date;
+  volume: number | null;
+  tokens: bigint;
+}
+
+/**
+ * The USD volume the scan's tokens traded per hour of [from, to). For each token first scanned up
+ * to VOLUME_LOOKBACK_HOURS before an hour and seen live (Token.lastLiveAt) in it or after, its
+ * last snapshot in the hour: DexScreener's trailing-hour volume (volume1hUsd) at that moment,
+ * scaled to the part of that trailing hour inside this one (spread evenly, and never before the
+ * token existed). The last reading of an hour covers nearly all of it, and a token whose last
+ * reading came early in the hour (it left the watchlist) adds only that early part, so no trade
+ * is counted in two hours. One index probe per token and hour on TokenSnapshot(tokenId, takenAt),
+ * over tokens found by Token(firstSeenAt): never a walk of the snapshot table by time.
+ *
+ * JIT is off for it: the planner can't size generate_series per token (it guesses 1000 rows), so
+ * it priced this in the millions and spent over a second compiling a query that runs in well
+ * under 100 ms (EXPLAIN ANALYZE, 2026-10-23: 3 hours over a day of 1000 tokens an hour, 84 ms
+ * with JIT off against 1.3 s of JIT compilation with it on).
+ */
+async function volumeHours(from: Date, to: Date): Promise<VolumeHourRow[]> {
+  const [, rows] = await prisma.$transaction([
+    prisma.$executeRaw`SET LOCAL jit = off`,
+    prisma.$queryRaw<VolumeHourRow[]>`
+      SELECT h.hour AS hour,
+             sum(v.volume)::float8 AS volume,
+             count(v.volume) AS tokens
+      FROM "Token" t
+      CROSS JOIN LATERAL generate_series(
+        greatest(${from}::timestamp, date_trunc('hour', t."firstSeenAt")),
+        least(${to}::timestamp - interval '1 hour', date_trunc('hour', t."lastLiveAt")),
+        interval '1 hour'
+      ) AS h(hour)
+      CROSS JOIN LATERAL (
+        SELECT s."volume1hUsd" * CASE
+                 WHEN s."takenAt" <= b.born THEN 1
+                 ELSE LEAST(1, GREATEST(0,
+                   extract(epoch FROM s."takenAt" - GREATEST(h.hour, b.born))
+                   / extract(epoch FROM s."takenAt" - b.born)))
+               END AS volume
+        FROM "TokenSnapshot" s
+        CROSS JOIN LATERAL (
+          SELECT GREATEST(s."takenAt" - interval '1 hour',
+                          LEAST(COALESCE(t."launchedAt", t."firstSeenAt"), t."firstSeenAt")) AS born
+        ) b
+        WHERE s."tokenId" = t.id AND s."takenAt" >= h.hour AND s."takenAt" < h.hour + interval '1 hour'
+          AND s."volume1hUsd" IS NOT NULL
+        ORDER BY s."takenAt" DESC
+        LIMIT 1
+      ) v
+      WHERE t."firstSeenAt" >= ${from}::timestamp - make_interval(hours => ${VOLUME_LOOKBACK_HOURS}::int)
+        AND t."firstSeenAt" < ${to}::timestamp
+        AND t."lastLiveAt" >= ${from}::timestamp
+      GROUP BY 1`,
+  ]);
+  return rows;
 }
 
 interface ScreenedHourRow {
@@ -379,21 +470,38 @@ async function sumHours(from: Date, to: Date, screenFrom: Date): Promise<Map<num
 
 /**
  * Writes every hour in [from, to): the summed row, or zeros, so a quiet hour reads as quiet, not
- * missing. An hour before `screenFrom` keeps the screen counts it already has.
+ * missing. An hour before `screenFrom` keeps the screen counts it already has, and one before
+ * `volumeFrom` the scan volume.
  */
-async function writeHours(from: Date, to: Date, screenFrom: Date): Promise<number> {
-  const sums = await sumHours(from, to, screenFrom);
+async function writeHours(from: Date, to: Date, screenFrom: Date, volumeFrom: Date): Promise<number> {
+  const volumeFirst = volumeFrom > from ? volumeFrom : from;
+  const [sums, volumes] = await Promise.all([
+    sumHours(from, to, screenFrom),
+    volumeFirst < to ? volumeHours(volumeFirst, to) : Promise.resolve([] as VolumeHourRow[]),
+  ]);
+  const volumeBy = new Map(volumes.map((r) => [r.hour.getTime(), r]));
   const computedAt = new Date();
   const writes: Prisma.PrismaPromise<unknown>[] = [];
   for (let t = from.getTime(); t < to.getTime(); t += HOUR_MS) {
     const row = sums.get(t) ?? emptyHour();
     const { screenAccepted: _accepted, screenRejected: _rejected, ...unscreened } = row;
+    // An hour summed for volume with nothing traded is a quiet hour (0), not an unsummed one (null).
+    const v = volumeBy.get(t);
+    const volume =
+      t >= volumeFirst.getTime() ? { scanVolumeUsd: v?.volume ?? 0, scanVolumeTokens: n(v?.tokens) } : {};
     writes.push(
       prisma.lighthouseHour.upsert({
         where: { hour: new Date(t) },
-        create: { hour: new Date(t), ...row, rollupVersion: LIGHTHOUSE_ROLLUP_VERSION, computedAt },
+        create: {
+          hour: new Date(t),
+          ...row,
+          ...volume,
+          rollupVersion: LIGHTHOUSE_ROLLUP_VERSION,
+          computedAt,
+        },
         update: {
           ...(t >= screenFrom.getTime() ? row : unscreened),
+          ...volume,
           rollupVersion: LIGHTHOUSE_ROLLUP_VERSION,
           computedAt,
         },
@@ -714,6 +822,9 @@ export async function runLighthouseRollupJob(opts: LighthouseRollupOptions = {})
   // re-sum would drop most rejected tokens and overwrite the counts those hours were frozen with.
   const screenFloor = floorHour(now.getTime() - SCREEN_BACKFILL_HOURS * HOUR_MS);
   const screenFrom = opts.from ? (from > screenFloor ? from : screenFloor) : await screenStart(now);
+  // The scan volume reads the same snapshots, under the same floor.
+  const volumeFloor = floorHour(now.getTime() - VOLUME_BACKFILL_HOURS * HOUR_MS);
+  const volumeFrom = opts.from ? (from > volumeFloor ? from : volumeFloor) : await volumeStart(now);
 
   // A day at a time: its hours, then at once its labels. Writing every hour first and every
   // label after meant a first-run backfill cut short (a deadline exit, a deploy) left the label
@@ -729,6 +840,7 @@ export async function runLighthouseRollupJob(opts: LighthouseRollupOptions = {})
       new Date(hoursFrom),
       new Date(Math.min(d + DAY_MS, to.getTime())),
       screenFrom,
+      volumeFrom,
     );
     labelRows += await writeDay(new Date(d));
     daysWritten += 1;
@@ -743,6 +855,7 @@ export async function runLighthouseRollupJob(opts: LighthouseRollupOptions = {})
     to: to.toISOString(),
     backfill: start.backfill,
     screenFrom: screenFrom.toISOString(),
+    volumeFrom: volumeFrom.toISOString(),
     hoursWritten,
     daysWritten,
     labelRows,
