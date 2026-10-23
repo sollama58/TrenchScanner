@@ -34,6 +34,7 @@ function setup(
   ages: {
     maxAgeMinutes?: number;
     featureMaxAgeMinutes?: number;
+    alertedMaxAgeMinutes?: number;
     newLaunches?: () => string[];
     screenLaunches?: (mints: string[]) => Promise<string[]>;
   } = {},
@@ -188,6 +189,22 @@ describe("curve tape", () => {
     expect(s.stream.watch).toHaveBeenCalledTimes(1);
     onCurveStreamUpdate(`curve:${MINT}`, Buffer.alloc(10).toString("base64"), 500, NOW + 6_000);
     expect(curvePathOf(MINT, NOW + 6_000).curveCoveredSec).toBeNull();
+  });
+
+  it("follows an alerted coin to its own longer age, on the watchlist or not", () => {
+    const s = setup(NOW - 1_000, { alertedMaxAgeMinutes: 120 });
+    stop = s.stop;
+    const hourOld = { ...young, launchedAt: new Date(NOW - 60 * 60_000) };
+    // An hour old and only on the watchlist: past the tape's 15 minutes.
+    followYoungCurves([hourOld], NOW);
+    expect(s.stream.watch).not.toHaveBeenCalled();
+    // Alerted on: followed, off the watchlist too.
+    followYoungCurves([], NOW, [hourOld]);
+    expect(s.stream.watch).toHaveBeenCalledWith(`curve:${MINT}`, [expect.any(String)], NOW, "account");
+    expect([...curveTapeView.mints()]).toEqual([MINT]);
+    // Past the alerted age: let go.
+    followYoungCurves([], NOW + 61 * 60_000, [hourOld]);
+    expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
   });
 
   // A deploy used to start the day's count over, handing the stream its whole share again.

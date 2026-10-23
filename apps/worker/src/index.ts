@@ -120,6 +120,7 @@ import {
 } from "./jobs/curveTape.js";
 import { startPricePathRecorder } from "./jobs/pricePathRecorder.js";
 import { startCurveCandles } from "./jobs/curveCandles.js";
+import { startCandleChainFill } from "./jobs/candleChainFill.js";
 import { startCandleBackfill } from "./jobs/candleBackfill.js";
 import { onHolderStreamTx, setHolderTransferStream } from "./jobs/holderTransfers.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
@@ -419,6 +420,7 @@ async function main() {
           : env.CURVE_TAPE_MAX_AGE_MINUTES,
         // The scoring features keep their 15 minutes: coins past it read null, as in training.
         featureMaxAgeMinutes: env.CURVE_TAPE_MAX_AGE_MINUTES,
+        alertedMaxAgeMinutes: env.CURVE_TAPE_ALERTED_MINUTES,
         maxMints: env.CURVE_TAPE_MAX_MINTS,
         streamCreditsPerDay: env.CURVE_TAPE_STREAM_CREDITS_PER_DAY,
         pollSeconds: env.CURVE_TAPE_POLL_SECONDS,
@@ -463,6 +465,24 @@ async function main() {
           maxPages: env.CANDLE_BACKFILL_MAX_PAGES,
           keepDays: env.CANDLE_RETENTION_DAYS,
         })
+      : undefined;
+
+  // The chart's chain fill (candleChainFill.ts): 1-second holes in charted coins' first hours, read
+  // off the chain within a day's Helius credits. Its own client, so its credits are its own.
+  const stopCandleChainFill =
+    scans && env.CANDLE_STORE && env.CANDLE_CHAIN_FILL_CREDITS_PER_DAY > 0
+      ? startCandleChainFill(
+          {
+            helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
+            sink: { solUsd: () => dexScreener.solUsd() },
+          },
+          {
+            creditsPerDay: env.CANDLE_CHAIN_FILL_CREDITS_PER_DAY,
+            pagesPerRun: env.CANDLE_CHAIN_FILL_PAGES_PER_RUN,
+            maxPagesPerCoin: env.CANDLE_CHAIN_FILL_MAX_PAGES_PER_COIN,
+            windowMinutes: env.CANDLE_CHAIN_FILL_WINDOW_MINUTES,
+          },
+        )
       : undefined;
 
   // Reads the chain for the subscription gate. Its own client rather than `deps.helius` because
@@ -1201,6 +1221,7 @@ async function main() {
       logger.warn("price paths not written", { error: String(err) }),
     );
     stopCandleBackfill?.();
+    stopCandleChainFill?.();
     heliusStream?.stop();
     launchPoller?.stop();
     stopNarrativePolling?.();

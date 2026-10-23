@@ -15,11 +15,6 @@ import {
   takeLaunchTapeSeed,
   resetLaunchTapeSeeds,
   markTapeTrades,
-  pumpSwapPoolOf,
-  saveCandleChunks,
-  tapeCandleRows,
-  WRAPPED_SOL_MINT,
-  type CandleChunkRow,
   type HeliusClient,
   type PumpFunClient,
   type SolPriceLookup,
@@ -27,6 +22,7 @@ import {
   type ChainTx,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
+import { saveChainCandles, type TapeCandleSink } from "./chainCandles.js";
 import {
   resetClosingState,
   runClosingLane,
@@ -650,11 +646,6 @@ export interface TradeTapeDeps {
   candles?: TapeCandleSink;
 }
 
-export interface TapeCandleSink {
-  solUsd: () => Promise<number | null>;
-  save?: (rows: CandleChunkRow[]) => Promise<unknown>;
-}
-
 export interface TradeTapeOptions {
   heliusPagesPerRun: number;
   pumpFunCallsPerRun: number;
@@ -730,9 +721,8 @@ async function finish(
 let candleSink: (TapeCandleSink & { helius: TradeTapeDeps["helius"] }) | null = null;
 
 /**
- * Saves a read's marked trades over `cover` as candles (core's tapeCandles.ts). A coin that traded
- * on its PumpSwap pool needs the pool's virtual quote reserve for its price (one account read):
- * without it only the stretch before the pool is saved. Never throws: candles are a by-product.
+ * Saves a read's marked trades over `cover` as candles (chainCandles.ts). Never throws: candles are
+ * a by-product.
  */
 async function saveTapeCandles(
   mint: string,
@@ -741,28 +731,9 @@ async function saveTapeCandles(
   counts: RunCounts,
 ) {
   const sink = candleSink;
-  if (!sink || !trades.some((t) => t.mark)) return;
+  if (!sink) return;
   try {
-    const solUsd = await sink.solUsd();
-    if (solUsd === null || !(solUsd > 0)) return;
-    const ordered = orderTrades(trades);
-    const firstPool = ordered.find((t) => t.mark && !("curve" in t.mark));
-    let virtualQuote = 0;
-    if (firstPool) {
-      const pool = pumpSwapPoolOf(mint);
-      const read =
-        pool && sink.helius.getPoolVaultsBatch
-          ? (
-              await sink.helius.getPoolVaultsBatch(new Map([[pool, { mint, quoteMint: WRAPPED_SOL_MINT }]]))
-            ).get(pool)
-          : undefined;
-      if (read && read !== "failed") virtualQuote = read.virtualQuote;
-      else cover = { from: cover.from, to: Math.min(cover.to, Math.floor(firstPool.atMs / 1_000) * 1_000) };
-    }
-    const rows = tapeCandleRows(mint, ordered, cover, solUsd, virtualQuote);
-    if (rows.length === 0) return;
-    await (sink.save ?? saveCandleChunks)(rows);
-    counts.candleRows += rows.length;
+    counts.candleRows += (await saveChainCandles(mint, trades, cover, sink, sink.helius)).length;
   } catch (err) {
     counts.candleFailed += 1;
     logger.warn("trade tape candles not saved", { mint, error: String(err) });
