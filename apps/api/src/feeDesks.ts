@@ -312,6 +312,11 @@ function rosterCoins(body: unknown, depth = 0): unknown[] | null {
 }
 
 /** mint -> ticker or short name, from coins on this roster. The first coin for a mint wins. */
+/** Each roster coin's own symbol (or name), by mint: what a reward basket's coin is called. */
+export function otcRosterNames(coins: readonly unknown[]): Map<string, string> {
+  return rewardNamesByMint(coins);
+}
+
 function rewardNamesByMint(coins: readonly unknown[]): Map<string, string> {
   const names = new Map<string, string>();
   for (const coin of coins) {

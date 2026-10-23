@@ -15,7 +15,7 @@ import {
   contestantSpec,
 } from "@trenchscanner/core";
 import { enrichCreatorFeeDeskRewards } from "./deskRewardMeta.js";
-import { otcDeskRoster } from "./otcDesk.js";
+import { otcDeskRoster, otcDeskRosterFor } from "./otcDesk.js";
 import {
   creatorFeeWalletAddresses,
   resolveOtcDeskFee,
@@ -286,7 +286,12 @@ export async function creatorFeesByMint(
       FROM "TokenNarrative"
       WHERE "mintAddress" = ANY(${unique}::text[])
         AND "feeDestination" IS NOT NULL`.catch(() => []),
-    otcDeskRoster({ wait: opts?.waitForDesk === true }).catch(() => new Map<string, OtcDeskFee>()),
+    // One coin's card on the token page (a lookup) also asks the host about that coin alone when
+    // the sweep did not reach it (otcDeskRosterFor). A feed's many cards use the roster in hand.
+    (opts?.waitForDesk === true && unique.length === 1
+      ? otcDeskRosterFor(unique[0]!, { wait: true })
+      : otcDeskRoster({ wait: opts?.waitForDesk === true })
+    ).catch(() => new Map<string, OtcDeskFee>()),
   ]);
   const walletsOf = new Map<string, string[]>();
   const parsedRecipients = new Map<string, ParsedFeeRecipient[]>();

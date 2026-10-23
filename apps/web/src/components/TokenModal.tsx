@@ -99,7 +99,7 @@ import {
   withLabeledTraders,
   withLiveMarks,
 } from "../walletMarks";
-import { chartForMint } from "../chartPoll";
+import { CHART_SCAN_CAP, chartForMint } from "../chartPoll";
 import { chartFlagKind } from "../chartEvents";
 import { DexInfoLabel, dexInfoChartMark } from "../dexInfoLabel";
 import { TradingChart, type ChartEvent, type ChartKind, type ChartTrade } from "./TradingChart";
@@ -749,8 +749,6 @@ const SAME_MOMENT_MS = 30_000;
  * point in a truncated chart series is not that reading.
  */
 const FIRST_SCAN_SLACK_MS = 2 * 60_000;
-/** GET /tokens/:mint/chart keeps this many newest scans (routes/tokens.ts CHART_SNAPSHOT_POINTS). */
-const CHART_SCAN_CAP = 240;
 
 type DetectionSource = "first-scan" | "first-pass" | "earliest" | "none";
 

@@ -1,4 +1,11 @@
-import { feeDeskFromOtcCoin, feeDesksFromOtcRoster, otcRosterCoins, type OtcDeskFee } from "./feeDesks.js";
+import {
+  feeDeskFromOtcCoin,
+  feeDesksFromOtcRoster,
+  lookupOtcDeskFee,
+  otcRosterCoins,
+  otcRosterNames,
+  type OtcDeskFee,
+} from "./feeDesks.js";
 
 /**
  * OTC Desks' public launch roster (user ask 2026-10-21). The bare GET is only the small
@@ -11,6 +18,11 @@ import { feeDeskFromOtcCoin, feeDesksFromOtcRoster, otcRosterCoins, type OtcDesk
  * A body that is not a roster is a failed page, not an empty final page. A failed page is
  * retried. Coins on pages after a real end page are not kept. A sweep that missed a page
  * is not cached as a full roster.
+ *
+ * The sweep reads only the newest MAX_PAGES pages of a list some 50,000 launches long (audit
+ * 2026-10-22, RC-9). A coin it did not reach is looked up on its own (`?mint=`, which answers that
+ * coin's row or none) by the paths that ask about one coin: the token page and a lookup's card
+ * (otcDeskRosterFor). Those answers are cached, a miss included, under a per-minute budget.
  *
  * The test runner does not call the host. `fetchOtcDeskRoster` and `otcDeskFees({ fetch })`
  * are what the tests drive: a roster those return is kept. The Vitest flag only skips the
@@ -33,7 +45,23 @@ const ROSTER_BUDGET_MS = 12_000;
 const FRESH_MS = 5 * 60_000;
 const FAILURE_MS = 60_000;
 
-let cached: { at: number; fees: Map<string, OtcDeskFee>; complete: boolean } | null = null;
+/** A coin's own lookup that found its desk row is kept as long as the roster. */
+const SINGLE_HIT_MS = FRESH_MS;
+/** A coin the host says is not a desk coin is asked about again only after this. */
+const SINGLE_MISS_MS = 30 * 60_000;
+/** One-coin lookups sent a minute, per process; past it the coin goes without until the next. */
+const SINGLE_PER_MINUTE = 30;
+/** One-coin answers kept (the oldest first out). */
+const SINGLE_KEEP = 5_000;
+const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+let cached: {
+  at: number;
+  fees: Map<string, OtcDeskFee>;
+  complete: boolean;
+  /** The swept coins' own symbols, so a looked-up coin's basket is named as the sweep names it. */
+  names: Map<string, string>;
+} | null = null;
 let inflight: Promise<Map<string, OtcDeskFee>> | null = null;
 
 /**
@@ -110,6 +138,7 @@ async function readPage(
 
 interface RosterLoad {
   fees: Map<string, OtcDeskFee>;
+  names: Map<string, string>;
   /** False when a page failed or the budget cut the sweep off before the list ended. */
   complete: boolean;
 }
@@ -173,7 +202,7 @@ async function loadRoster(fetchImpl: typeof fetch, url: string): Promise<RosterL
   // is not a finished roster. A failed page earlier set the same flag.
   if (budget.aborted && !ended) incomplete = true;
   const fees = coins.length === 0 ? new Map<string, OtcDeskFee>() : feeDesksFromOtcRoster({ coins });
-  return { fees, complete: !incomplete };
+  return { fees, complete: !incomplete, names: otcRosterNames(coins) };
 }
 
 /**
@@ -195,10 +224,15 @@ function freshEnough(): boolean {
 async function refresh(): Promise<Map<string, OtcDeskFee>> {
   try {
     const loaded = await loadRoster(fetch, OTC_COINS_URL);
-    cached = { at: Date.now(), fees: loaded.fees, complete: loaded.complete };
+    cached = { at: Date.now(), fees: loaded.fees, complete: loaded.complete, names: loaded.names };
     return loaded.fees;
   } catch {
-    cached = { at: Date.now(), fees: cached?.fees ?? new Map(), complete: false };
+    cached = {
+      at: Date.now(),
+      fees: cached?.fees ?? new Map(),
+      complete: false,
+      names: cached?.names ?? new Map(),
+    };
     return cached.fees;
   }
 }
@@ -254,4 +288,87 @@ export async function otcDeskFees(
 ): Promise<Map<string, OtcDeskFee>> {
   if (mints.length === 0) return new Map();
   return pick(await otcDeskRoster(opts), mints);
+}
+
+/** One-coin answers by mint: the desk row, null for none, or "failed" (kept FAILURE_MS). */
+const singles = new Map<string, { at: number; fee: OtcDeskFee | null | "failed" }>();
+const singleReads = new Map<string, Promise<OtcDeskFee | null>>();
+let singleWindow = { start: 0, count: 0 };
+
+function singleFresh(entry: { at: number; fee: OtcDeskFee | null | "failed" }, now: number): boolean {
+  const keep = entry.fee === "failed" ? FAILURE_MS : entry.fee ? SINGLE_HIT_MS : SINGLE_MISS_MS;
+  return now - entry.at < keep;
+}
+
+async function readSingle(
+  fetchImpl: typeof fetch,
+  mint: string,
+  names: ReadonlyMap<string, string> | undefined,
+): Promise<OtcDeskFee | null | "failed"> {
+  const url = new URL(OTC_COINS_URL);
+  url.searchParams.set("mint", mint);
+  const page = await readPage(fetchImpl, url.toString(), AbortSignal.timeout(PAGE_TIMEOUT_MS));
+  if (!page) return "failed";
+  // Only the coin's own row: a host that ignored the filter answers the newest page instead.
+  for (const coin of page.coins) if (mintKey(coin) === mint) return feeDeskFromOtcCoin(coin, names);
+  return null;
+}
+
+/**
+ * `mint`'s desk row from the host's one-coin answer (`?mint=`), for a coin the sweep did not
+ * reach, or null. Cached as SINGLE_HIT_MS / SINGLE_MISS_MS / FAILURE_MS; past SINGLE_PER_MINUTE
+ * lookups a minute it answers null without asking (and keeps nothing, so the next minute asks).
+ * A supplied fetch is the host (tests); the test runner otherwise never calls it.
+ */
+export async function otcDeskFeeForMint(
+  mint: string,
+  opts?: { fetch?: typeof fetch; now?: number },
+): Promise<OtcDeskFee | null> {
+  if (!BASE58.test(mint)) return null;
+  if (!opts?.fetch && process.env.VITEST === "true") return null;
+  const now = opts?.now ?? Date.now();
+  const kept = singles.get(mint);
+  if (kept && singleFresh(kept, now)) return kept.fee === "failed" ? null : kept.fee;
+  const pending = singleReads.get(mint);
+  if (pending) return pending;
+  if (now - singleWindow.start >= 60_000) singleWindow = { start: now, count: 0 };
+  if (singleWindow.count >= SINGLE_PER_MINUTE) return null;
+  singleWindow.count += 1;
+  const read = readSingle(opts?.fetch ?? fetch, mint, cached?.names)
+    .catch(() => "failed" as const)
+    .then((fee) => {
+      singles.delete(mint);
+      singles.set(mint, { at: now, fee });
+      while (singles.size > SINGLE_KEEP) {
+        const oldest = singles.keys().next().value;
+        if (oldest === undefined) break;
+        singles.delete(oldest);
+      }
+      return fee === "failed" ? null : fee;
+    })
+    .finally(() => singleReads.delete(mint));
+  singleReads.set(mint, read);
+  return read;
+}
+
+/**
+ * The roster as otcDeskRoster answers it, with `mint`'s own row added when the sweep did not
+ * reach it and the host's one-coin answer has it (otcDeskFeeForMint). Only with `wait`: the
+ * paths that hold for one coin (the token page, a lookup's card). A feed never asks per coin.
+ */
+export async function otcDeskRosterFor(
+  mint: string,
+  opts?: OtcDeskFeesOptions,
+): Promise<ReadonlyMap<string, OtcDeskFee>> {
+  const roster = await otcDeskRoster(opts);
+  if (!opts?.wait || lookupOtcDeskFee(roster, mint)) return roster;
+  const own = await otcDeskFeeForMint(mint, { fetch: opts.fetch });
+  return own ? new Map(roster).set(mint, own) : roster;
+}
+
+/** Test seam: forget the one-coin answers and their budget. */
+export function clearOtcDeskSingles(): void {
+  singles.clear();
+  singleReads.clear();
+  singleWindow = { start: 0, count: 0 };
 }

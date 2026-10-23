@@ -17,6 +17,17 @@ export interface ChartPollBody {
 type Candle = NonNullable<ChartPollBody["candles"]>[number];
 type Mcap = ChartPollBody["marketCap"][number];
 
+/** GET /tokens/:mint/chart keeps this many newest scans (routes/tokens.ts CHART_SNAPSHOT_POINTS). */
+export const CHART_SCAN_CAP = 240;
+/**
+ * The most minute candles, and 5-minute `older` ones, a merged answer keeps. The server's minute
+ * page is its newest 1,000 and slides forward, so a union of every answer grew for as long as the
+ * coin stayed open; this keeps three pages' worth.
+ */
+export const CHART_CANDLE_CAP = 3_000;
+
+const newest = <T>(rows: T[], cap: number): T[] => (rows.length > cap ? rows.slice(-cap) : rows);
+
 const candleStart = (rows: readonly Candle[] | null | undefined): number | null =>
   rows?.length ? rows[0]!.t : null;
 
@@ -29,7 +40,10 @@ const mergeCandles = (
   const byT = new Map<number, Candle>();
   for (const k of a) byT.set(k.t, k);
   for (const k of b) byT.set(k.t, k);
-  return [...byT.values()].sort((x, y) => x.t - y.t);
+  return newest(
+    [...byT.values()].sort((x, y) => x.t - y.t),
+    CHART_CANDLE_CAP,
+  );
 };
 
 const mergeMcap = (a: readonly Mcap[], b: readonly Mcap[]): Mcap[] => {
@@ -38,7 +52,10 @@ const mergeMcap = (a: readonly Mcap[], b: readonly Mcap[]): Mcap[] => {
   const byT = new Map<number, Mcap>();
   for (const p of a) byT.set(p.t, p);
   for (const p of b) byT.set(p.t, p);
-  return [...byT.values()].sort((x, y) => x.t - y.t);
+  return newest(
+    [...byT.values()].sort((x, y) => x.t - y.t),
+    CHART_SCAN_CAP,
+  );
 };
 
 /** True when `next` reaches further back in time than `prev` on the same mint. */
@@ -59,7 +76,8 @@ export function chartHistoryExtended(prev: ChartPollBody | null, next: ChartPoll
 
 /**
  * Fold two answers for the same mint into one: union candles and scans by time (newer field wins on
- * a tie), and carry solUsd from whichever has it. `next` must be the newer answer.
+ * a tie), keeping the newest CHART_CANDLE_CAP candles and CHART_SCAN_CAP scans, and carry solUsd
+ * from whichever has it. `next` must be the newer answer.
  *
  * The flagged wallets and holder entries are not a time series: they are the server's whole list as
  * of that read, and it can shrink (the tape window moves on, the capped list is reshuffled), so the

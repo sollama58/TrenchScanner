@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  candleCloses,
   clipPoints,
   ohlcBars,
   panBy,
@@ -10,19 +9,16 @@ import {
   openingSpanMs,
   flowAt,
   linearTicks,
-  linePoints,
   logTicks,
   mcapAxis,
   panValue,
   valueWindow,
   windowAxis,
   zoomValue,
-  pointWidthMs,
   sinceLabel,
   timeTicks,
   valueAt,
   volumeBars,
-  withCallPoint,
   candleTimeframe,
   fillFlat,
   liveCandles,
@@ -35,40 +31,6 @@ import {
 } from "./priceChart";
 
 const M = 60_000;
-
-describe("pointWidthMs", () => {
-  it("picks the narrowest spacing that fits the span", () => {
-    expect(pointWidthMs(60 * M, 120)).toBe(M);
-    expect(pointWidthMs(6 * 60 * M, 120)).toBe(3 * M);
-    expect(pointWidthMs(16 * 60 * M, 90)).toBe(15 * M);
-  });
-
-  it("goes down to seconds when finer candles are in view, never finer than them", () => {
-    expect(pointWidthMs(10 * M, 240, 1_000)).toBe(5_000);
-    expect(pointWidthMs(2 * M, 240, 1_000)).toBe(1_000);
-    expect(pointWidthMs(2 * M, 240, 15_000)).toBe(15_000);
-  });
-});
-
-describe("candleCloses", () => {
-  it("holds the price across the quiet seconds between second candles", () => {
-    expect(
-      candleCloses(
-        [
-          { t: 0, c: 5 },
-          { t: 1_000, c: 6 },
-          { t: 5_000, c: 7 },
-        ],
-        1_000,
-      ),
-    ).toEqual([
-      { t: 1_000, v: 5 },
-      { t: 2_000, v: 6 },
-      { t: 5_000, v: 6 },
-      { t: 6_000, v: 7 },
-    ]);
-  });
-});
 
 describe("timeTicks", () => {
   it("falls on round times and on round times since an origin", () => {
@@ -98,79 +60,6 @@ describe("sinceLabel", () => {
     expect(sinceLabel(0)).toBe("0:00");
     expect(sinceLabel(185_000)).toBe("3:05");
     expect(sinceLabel(3_725_000)).toBe("1:02:05");
-  });
-});
-
-describe("candleCloses", () => {
-  it("puts each close at its minute's end, not the start Pump.fun stamps it with", () => {
-    expect(
-      candleCloses([
-        { t: 0, c: 5 },
-        { t: 2 * M, c: 8 },
-      ]),
-    ).toEqual([
-      { t: M, v: 5 },
-      { t: 3 * M, v: 8 },
-    ]);
-  });
-});
-
-describe("withCallPoint", () => {
-  const line = [
-    { t: M, v: 10 },
-    { t: 2 * M, v: 14 },
-    { t: 3 * M, v: 9 },
-  ];
-
-  it("adds the call's price at its time, in order", () => {
-    expect(withCallPoint(line, { t: 2.5 * M, v: 12 })).toEqual([
-      { t: M, v: 10 },
-      { t: 2 * M, v: 14 },
-      { t: 2.5 * M, v: 12 },
-      { t: 3 * M, v: 9 },
-    ]);
-  });
-
-  it("replaces a close at the call's exact time", () => {
-    expect(withCallPoint(line, { t: 2 * M, v: 12 }).map((p) => p.v)).toEqual([10, 12, 9]);
-  });
-
-  it("leaves the line alone when the call is outside it or has no price", () => {
-    expect(withCallPoint(line, { t: 5 * M, v: 12 })).toEqual(line);
-    expect(withCallPoint(line, { t: 0, v: 12 })).toEqual(line);
-    expect(withCallPoint(line, { t: 2.5 * M, v: 0 })).toEqual(line);
-  });
-});
-
-describe("linePoints", () => {
-  it("stops at the end of the window when given one", () => {
-    const pts = linePoints(
-      [0, 1, 2, 3, 4].map((m) => ({ t: m * 60_000, v: m })),
-      60_000,
-      60_000,
-      3 * 60_000,
-    );
-    expect(pts.map((p) => p.v)).toEqual([1, 2, 3]);
-  });
-
-  it("keeps each slot's last close at its own time, and its higher close before it, from the view's start on", () => {
-    const pts = linePoints(
-      [
-        { t: 0, v: 10 },
-        { t: M, v: 18 },
-        { t: 2 * M, v: 6 },
-        { t: 5 * M, v: 7 },
-        { t: 7 * M, v: 9 },
-      ],
-      M,
-      3 * M,
-    );
-    expect(pts).toEqual([
-      { t: M, v: 18 },
-      { t: 2 * M, v: 6 },
-      { t: 5 * M, v: 7 },
-      { t: 7 * M, v: 9 },
-    ]);
   });
 });
 

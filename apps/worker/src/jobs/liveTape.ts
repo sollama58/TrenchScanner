@@ -64,7 +64,7 @@ export function resetLiveTape(): void {
 
 /**
  * Reads the newest page for the first `maxPages` of `mints` (priority order) whose page is
- * missing or older than `refreshMs`. A page due whose coin `quietSince` says has had no trade since
+ * missing or older than `refreshMs`, the missing ones first. A page due whose coin `quietSince` says has had no trade since
  * it was read is still the coin's newest: it is kept, as of now, so it doesn't age out of
  * livePageOf while the coin stays quiet. Never rejects.
  */
@@ -83,16 +83,19 @@ export async function readLiveTape(
 ): Promise<void> {
   if (!helius.gtfaUsable || opts.maxPages <= 0) return;
   const now = opts.nowMs ?? Date.now();
-  const due = mints
-    .filter((m) => {
-      const page = pages.get(m);
-      if (!page) return true;
-      if (now - page.atMs < opts.refreshMs) return false;
-      if (!opts.quietSince?.(m, page.atMs)) return true;
-      pages.set(m, { ...page, atMs: now });
-      return false;
-    })
-    .slice(0, opts.maxPages);
+  const missing: string[] = [];
+  const stale: string[] = [];
+  for (const m of mints) {
+    const page = pages.get(m);
+    if (!page) missing.push(m);
+    else if (now - page.atMs < opts.refreshMs) continue;
+    else if (!opts.quietSince?.(m, page.atMs)) stale.push(m);
+    else pages.set(m, { ...page, atMs: now });
+  }
+  // A coin with no page yet goes before a re-read: without one its decision has no winner or
+  // flagged-wallet reading at all (and the Winners seat skips it), where a re-read only makes a
+  // reading fresher. Most decisions are a coin's first (2026-10-23 thread "Winners model signal").
+  const due = [...missing, ...stale].slice(0, opts.maxPages);
   await Promise.all(
     due.map(async (mint) => {
       try {
