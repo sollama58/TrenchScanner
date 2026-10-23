@@ -579,7 +579,10 @@ export async function readTopHolders(
     const top = holders.length > LINKED_TOP_N + 1 ? holders.slice(0, LINKED_TOP_N + 1) : holders;
     if (topHolderLists.size >= MAX_TOP_HOLDER_LISTS) {
       const oldest = topHolderLists.keys().next().value;
-      if (oldest !== undefined) topHolderLists.delete(oldest);
+      if (oldest !== undefined) {
+        topHolderLists.delete(oldest);
+        appliedBalanceTx.delete(oldest);
+      }
     }
     topHolderLists.delete(g.mintAddress);
     const refreshMs = oldMints.has(g.mintAddress) ? TOP_HOLDERS_OLD_REFRESH_MS : TOP_HOLDERS_REFRESH_MS;
@@ -764,6 +767,11 @@ function rememberAppliedBalance(mint: string, signature: string | undefined): vo
   if (!signature) return;
   let seen = appliedBalanceTx.get(mint);
   if (!seen) {
+    // Bounded like the lists themselves: a mint whose list was never kept must not stay forever.
+    if (appliedBalanceTx.size >= MAX_TOP_HOLDER_LISTS) {
+      const oldest = appliedBalanceTx.keys().next().value;
+      if (oldest !== undefined) appliedBalanceTx.delete(oldest);
+    }
     seen = new Set();
     appliedBalanceTx.set(mint, seen);
   }

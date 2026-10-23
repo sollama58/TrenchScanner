@@ -208,6 +208,24 @@ describe("curve tape", () => {
     expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
   });
 
+  // Audit 2026-10-23 (WC-2): grading only the asked coins on intra-minute wicks would tie the
+  // label to the model's own picks and to later attention.
+  it("gives the label no prints past the uniform age, for a coin followed because it was asked", async () => {
+    const s = setup(NOW - 1_000, { alertedMaxAgeMinutes: 120 });
+    stop = s.stop;
+    const hourOld = { ...young, launchedAt: new Date(NOW - 60 * 60_000), askedAt: new Date(NOW - 60_000) };
+    followYoungCurves([], NOW, [hourOld]);
+    await round(NOW);
+    expect(curvePriceOf(MINT, NOW)).toBe(1);
+    expect([...curveTapeView.mints()]).toEqual([MINT]);
+    expect(curveLabelPrices(MINT, NOW - 1, NOW)).toEqual({
+      basis: null,
+      changes: [],
+      quoteIsSol: false,
+      coveredMs: 0,
+    });
+  });
+
   it("follows a coin called or charted long after its launch, for the asked age from the ask", () => {
     const s = setup(NOW - 1_000, { alertedMaxAgeMinutes: 120 });
     stop = s.stop;
