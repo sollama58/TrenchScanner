@@ -235,7 +235,7 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
       expect(tapedAfter.hit2xAt).not.toBeNull();
       expect(tapedAfter.peak1hPriceUsd).toBeCloseTo(2.2);
       expect(tapedAfter.lowBefore2xPriceUsd).toBeGreaterThan(0.5);
-      expect(tapedAfter.labelRule).toBe(5);
+      expect(tapedAfter.labelRule).toBe(6);
       expect(tapedAfter.finalizedAt).toBeNull();
       expect(plainAfter.hit2xAt).toBeNull();
       expect(plainAfter.peak1hPriceUsd).toBeCloseTo(1.05);
@@ -307,7 +307,7 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
       expect(after.low1hPriceUsd).toBeCloseTo(0.5);
       expect(after.lowBefore2xPriceUsd).toBeCloseTo(0.5);
       expect(after.peak1hPriceUsd).toBeCloseTo(1);
-      expect(after.labelRule).toBe(5);
+      expect(after.labelRule).toBe(6);
       // The dollar print stays the scale basis. The curve's $0.50 is not written there.
       expect(after.lastDollarPriceUsd).toBeCloseTo(1);
       expect(after.curveTapeCoveredMs).toBeGreaterThan(0);
