@@ -8,6 +8,7 @@ import {
   type TokenSageAnalysis,
 } from "@trenchscanner/core";
 import { topCategory } from "./routes/adminInsights.js";
+import type { DonateCharity } from "./donateGg.js";
 
 /**
  * TokenSage's read of one token, shaped for the dashboard's TokenSage view (GET
@@ -367,6 +368,50 @@ export function withSageCharityName<T extends { creatorFee: SageCreatorFee | nul
   const charityName = sageCharityLabel(name);
   if (!charityName) return read;
   return { ...read, creatorFee: { ...read.creatorFee, charityName } };
+}
+
+/**
+ * The read, with each charity recipient replaced by the charities on its donate.gg config
+ * (user ask 2026-10-23): named, and split by the config's weights. `rawFee` is the same
+ * market.creator_fee the read was built from, so its recipients line up with the read's.
+ * One charity in all also becomes `charityName` when Pump.fun did not name one.
+ */
+export function withSageCharities<T extends { creatorFee: SageCreatorFee | null }>(
+  read: T | null,
+  rawFee: unknown,
+  configs: ReadonlyMap<string, DonateCharity[]>,
+): T | null {
+  const fee = read?.creatorFee;
+  if (!fee || fee.destination !== "charity" || configs.size === 0) return read;
+  const raw = (rawFee as { recipients?: unknown } | null)?.recipients;
+  const rows = (Array.isArray(raw) ? raw : [])
+    .filter((r) => r && typeof r === "object")
+    .slice(0, MAX_FEE_RECIPIENTS);
+  let changed = false;
+  const recipients = fee.recipients.flatMap((recipient, i) => {
+    const configId = (rows[i] as { charity_config_id?: unknown } | undefined)?.charity_config_id;
+    const charities = typeof configId === "string" ? configs.get(configId) : undefined;
+    if (recipient.kind !== "charity" || !charities?.length) return [recipient];
+    changed = true;
+    return charities.map((charity) => ({
+      ...recipient,
+      label: charity.name,
+      share: recipient.share == null ? null : (recipient.share * charity.bps) / 10_000,
+      // What the PDA donated is the whole config's, not one charity's.
+      lifetimeReceived: charities.length === 1 ? recipient.lifetimeReceived : null,
+    }));
+  });
+  if (!changed) return read;
+  const charities = recipients.filter((r) => r.kind === "charity");
+  const single = charities.length === 1 ? sageCharityLabel(charities[0]!.label) : null;
+  return {
+    ...read!,
+    creatorFee: {
+      ...fee,
+      recipients: recipients.slice(0, MAX_FEE_RECIPIENTS),
+      ...(fee.charityName || !single ? {} : { charityName: single }),
+    },
+  };
 }
 
 /** An organization on a fee recipient. A pubkey is the address, not the name. */

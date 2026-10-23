@@ -35,7 +35,7 @@ describe("mergeCharityShares", () => {
     ]);
     expect(mergeCharityShares(one, [{ name: "Red Cross", bps: null, address: null }])).toEqual([
       { label: "8PQx…VP9z", bps: 100 },
-      { label: "Red Cross", bps: 9900 },
+      { label: "Red Cross", bps: 9900, charity: true },
     ]);
   });
 
@@ -47,13 +47,13 @@ describe("mergeCharityShares", () => {
       ]),
     ).toEqual([
       { label: "8PQx…VP9z", bps: 100 },
-      { label: "Red Cross", bps: 6000 },
-      { label: "Unicef", bps: 3900 },
+      { label: "Red Cross", bps: 6000, charity: true },
+      { label: "Unicef", bps: 3900, charity: true },
     ]);
     expect(mergeCharityShares(chain, [{ name: "Red Cross", bps: null, address: null }])).toEqual([
       { label: "8PQx…VP9z", bps: 100 },
-      { label: "CYoJ…gyxC", bps: 6000 },
-      { label: "4NVt…5fG7", bps: 3900 },
+      { label: "CYoJ…gyxC", bps: 6000, charity: true },
+      { label: "4NVt…5fG7", bps: 3900, charity: true },
     ]);
   });
 
@@ -65,8 +65,8 @@ describe("mergeCharityShares", () => {
       ]),
     ).toEqual([
       { label: "8PQx…VP9z", bps: 100 },
-      { label: "Red Cross", bps: 6000 },
-      { label: "Unicef", bps: 3900 },
+      { label: "Red Cross", bps: 6000, charity: true },
+      { label: "Unicef", bps: 3900, charity: true },
     ]);
   });
 
@@ -80,8 +80,8 @@ describe("mergeCharityShares", () => {
         ],
       ),
     ).toEqual([
-      { label: "Red Cross", bps: 6000 },
-      { label: "Unicef", bps: 4000 },
+      { label: "Red Cross", bps: 6000, charity: true },
+      { label: "Unicef", bps: 4000, charity: true },
     ]);
   });
 });

@@ -39,8 +39,8 @@ describe("creator reward square", () => {
       summary: "creator fees go to charity",
       charityName: "Red Cross",
     });
-    expect(charity.value).toBe("Charity");
-    expect(charity.detail).toBe("Red Cross");
+    expect(charity.value).toBe("Red Cross");
+    expect(charity.detail).toBeNull();
     expect(charity.title).toBe("Creator fees go to Red Cross.");
     expect(charity.title).not.toBe("Creator fees go to charity.");
   });
@@ -149,7 +149,7 @@ describe("creator reward square", () => {
     expect(creatorRewardFigure({ destination: "creator", summary: null }).value).toBe("Dev");
     expect(
       creatorRewardFigure({ destination: "charity", summary: null, charityName: "Red Cross" }).value,
-    ).toBe("Charity");
+    ).toBe("Red Cross");
     const otc = creatorRewardFigure({
       destination: "unknown",
       summary: "fee split; recipients unreadable",

@@ -7,6 +7,8 @@ export interface CardFeeRecipient {
   label: string;
   /** Basis points of the creator fee. Null when the read did not give a share. */
   bps: number | null;
+  /** Present and true on a charity's share, so a card can name the charities apart from wallets. */
+  charity?: boolean;
 }
 
 /** A TokenSage recipient before a Pump.fun charity name is applied. */
@@ -15,6 +17,8 @@ export interface ParsedFeeRecipient extends CardFeeRecipient {
   /** True when `label` is an organization or login, not a shortened address. */
   named: boolean;
   address: string | null;
+  /** A donation PDA's donate.gg config id (TokenSage `charity_config_id`), for its charity names. */
+  configId?: string | null;
 }
 
 function shortAddress(address: string): string {
@@ -82,14 +86,29 @@ export function feeRecipientsFromAnalysis(value: unknown): ParsedFeeRecipient[] 
     const label = name ?? (address ? shortAddress(address) : null);
     if (!label) continue;
     const kind = text(row.kind);
-    out.push({ label, bps, kind: kind ? kind.slice(0, 20) : null, named: name !== null, address });
+    const configId =
+      typeof row.charity_config_id === "string" && BASE58.test(row.charity_config_id)
+        ? row.charity_config_id
+        : null;
+    out.push({
+      label,
+      bps,
+      kind: kind ? kind.slice(0, 20) : null,
+      named: name !== null,
+      address,
+      ...(configId ? { configId } : {}),
+    });
     if (out.length >= 10) break;
   }
   return out;
 }
 
+function cardRecipient(label: string, bps: number | null, charity: boolean): CardFeeRecipient {
+  return charity ? { label, bps, charity: true } : { label, bps };
+}
+
 export function cardFeeRecipients(list: readonly ParsedFeeRecipient[]): CardFeeRecipient[] {
-  return list.map(({ label, bps }) => ({ label, bps }));
+  return list.map(({ label, bps, kind }) => cardRecipient(label, bps, kind === "charity"));
 }
 
 function charitySlots(chain: readonly ParsedFeeRecipient[], used: ReadonlySet<number>): number[] {
@@ -112,9 +131,10 @@ export function mergeCharityShares(
   pump: readonly PumpCharityShare[],
 ): CardFeeRecipient[] {
   if (pump.length === 0) return cardFeeRecipients(chain);
-  if (chain.length === 0) return pump.map((share) => ({ label: share.name, bps: share.bps }));
+  if (chain.length === 0) return pump.map((share) => cardRecipient(share.name, share.bps, true));
   const labels = chain.map((recipient) => recipient.label);
   const bps = chain.map((recipient) => recipient.bps);
+  const charity = chain.map((recipient) => recipient.kind === "charity");
   const used = new Set<number>();
   const leftover: PumpCharityShare[] = [];
   for (const share of pump) {
@@ -130,6 +150,7 @@ export function mergeCharityShares(
       continue;
     }
     used.add(index);
+    charity[index] = true;
     if (!chain[index]!.named) labels[index] = share.name;
     if (bps[index] == null) bps[index] = share.bps;
   }
@@ -137,9 +158,10 @@ export function mergeCharityShares(
   if (leftover.length > 0 && leftover.length === slots.length) {
     leftover.forEach((share, n) => {
       const index = slots[n]!;
+      charity[index] = true;
       if (!chain[index]!.named) labels[index] = share.name;
       if (bps[index] == null) bps[index] = share.bps;
     });
   }
-  return chain.map((_, index) => ({ label: labels[index]!, bps: bps[index] ?? null }));
+  return chain.map((_, index) => cardRecipient(labels[index]!, bps[index] ?? null, charity[index]!));
 }

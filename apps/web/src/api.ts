@@ -260,9 +260,10 @@ export interface Token {
     charityName?: string | null;
     /**
      * Each fee recipient: a name, or the address shortened when it has none, and its share in
-     * basis points when the read gave one (9900 is 99%).
+     * basis points when the read gave one (9900 is 99%). `charity` is true on a charity's share,
+     * named from its donate.gg config when that loaded.
      */
-    recipients?: { label: string; bps: number | null }[] | null;
+    recipients?: { label: string; bps: number | null; charity?: boolean }[] | null;
     bps?: number | null;
   } | null;
   /** The coin's own X and website links as found at discovery (https only); null when it has none. */

@@ -94,3 +94,48 @@ describe("charity and OTC rewards on every fee surface", () => {
     expect(named.title).toContain("AbCd…wxyz (40%)");
   });
 });
+
+describe("charity names from donate.gg (user ask 2026-10-23)", () => {
+  const one = {
+    destination: "charity" as const,
+    summary: "creator fees go to charity",
+    charityName: "St. Jude Children's Research Hospital",
+    recipients: [
+      { label: "8PQx…VP9z", bps: 100 },
+      { label: "St. Jude Children's Research Hospital", bps: 9900, charity: true },
+    ],
+  };
+  const two = {
+    destination: "charity" as const,
+    summary: "creator fees go to charity",
+    recipients: [
+      { label: "Pandas International", bps: 6000, charity: true },
+      { label: "St. Jude Children's Research Hospital", bps: 4000, charity: true },
+    ],
+  };
+
+  it("names the one charity on the card and the square, with the split in the tooltip", () => {
+    const card = renderToStaticMarkup(<FeeBadge fee={one} word />);
+    expect(card).toContain(">St. Jude Children&#x27;s Research Hospital</span>");
+    expect(card).not.toContain(">8PQx…VP9z");
+    expect(card).toContain("8PQx…VP9z (1%)");
+    const square = creatorRewardFigure(one);
+    expect(square.value).toBe("St. Jude Children's Research Hospital");
+    expect(square.title).toBe(
+      "Creator fees go to 8PQx…VP9z (1%) and St. Jude Children's Research Hospital (99%).",
+    );
+  });
+
+  it("shows 2️⃣ for two charities and lists both with their split in the tooltip", () => {
+    const card = renderToStaticMarkup(<FeeBadge fee={two} word />);
+    expect(card).toContain(">2️⃣</span>");
+    expect(card).toContain(
+      'title="Creator fees go to Pandas International (60%) and St. Jude Children&#x27;s Research Hospital (40%)."',
+    );
+    const square = creatorRewardFigure(two);
+    expect(square.value).toBe("2️⃣");
+    expect(square.detail).toBe("2 charities");
+    expect(square.title).toContain("Pandas International (60%)");
+    expect(square.title).toContain("St. Jude Children's Research Hospital (40%)");
+  });
+});

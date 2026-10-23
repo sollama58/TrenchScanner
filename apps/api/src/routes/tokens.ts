@@ -29,6 +29,8 @@ import {
 import { SharedCache } from "../sharedCache.js";
 import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
 import { charityNamesByMint } from "../curatedFeed.js";
+import { donateConfigCharities, type DonateCharity } from "../donateGg.js";
+import { feeRecipientsFromAnalysis } from "../feeRecipients.js";
 import { otcDeskRosterFor } from "../otcDesk.js";
 import { enrichDeskRewards } from "../deskRewardMeta.js";
 import { creatorFeeWalletAddresses, resolveOtcDeskFee, type OtcDeskFee } from "../feeDesks.js";
@@ -77,6 +79,7 @@ import {
   sageNarrative,
   sageRead,
   sageTrack,
+  withSageCharities,
   withSageCharityName,
   type DayLabelRow,
   type NarrativeAlertRow,
@@ -1498,7 +1501,13 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
     feeDestination === "wallet" || feeDestination === "split" || feeDestination === "holder_rewards"
       ? creatorFeeWalletAddresses(analysis?.market?.creator_fee, analysis?.market?.creator)
       : [];
-  const [snapshots, labels, judged, roster, charityNames] = await Promise.all([
+  const charityConfigs =
+    feeDestination === "charity"
+      ? feeRecipientsFromAnalysis(analysis?.market?.creator_fee?.recipients).flatMap((r) =>
+          r.configId ? [r.configId] : [],
+        )
+      : [];
+  const [snapshots, labels, judged, roster, charityNames, donateConfigs] = await Promise.all([
     token
       ? prisma.tokenSnapshot.findMany({
           where: { tokenId: token.id },
@@ -1543,8 +1552,12 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
     feeDestination === "charity"
       ? charityNamesByMint([mintAddress])
       : Promise.resolve(new Map<string, string>()),
+    // The charities on each donation PDA's donate.gg config (user ask 2026-10-23).
+    charityConfigs.length
+      ? donateConfigCharities(charityConfigs)
+      : Promise.resolve(new Map<string, DonateCharity[]>()),
   ]);
-  const read = withSageCharityName(
+  const namedRead = withSageCharityName(
     row?.status === "failed"
       ? null
       : sageRead(row?.analysis as TokenSageAnalysis | null, row?.depth ?? "basic", {
@@ -1553,6 +1566,7 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
         }),
     charityNames.get(mintAddress) ?? null,
   );
+  const read = withSageCharities(namedRead, analysis?.market?.creator_fee, donateConfigs);
   const desk = resolveOtcDeskFee(mintAddress, feeWallets, roster);
   const feeRewards = await enrichDeskRewards(desk?.rewards ?? null);
   return {

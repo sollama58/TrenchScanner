@@ -12363,6 +12363,11 @@ img.tm-avatar {
   font-weight: 650;
   white-space: nowrap;
 }
+.tm-fig > span.num.tm-fig-clip {
+  /* A long charity name is cut to the square; the tooltip has it whole. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .tm-fig small {
   font-size: 11.5px;
 }

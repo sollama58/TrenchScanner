@@ -1,6 +1,8 @@
 import type { Card, Token } from "./api";
 import {
+  charityCompact,
   creatorFeeLine,
+  feeCharities,
   feeBadge,
   feeRecipientCaption,
   holderRewardTaxLabel,
@@ -56,6 +58,10 @@ function headline(fee: Fee, coins: readonly string[], tax: string | null): strin
     case "x_account":
       return "Social";
     case "charity": {
+      // The one charity's name, cut to fit by the square, or 2️⃣ for two; the tooltip names
+      // each and its split (user ask 2026-10-23).
+      const compact = charityCompact(fee);
+      if (compact) return compact;
       const named = feeRecipientCaption(fee.recipients) ?? null;
       if (named && named.length <= 42) return named;
       return "Charity";
@@ -96,12 +102,11 @@ export function creatorRewardFigure(fee: Fee | null | undefined): CreatorRewardF
   }
   const value = fee ? headline(fee, coins, tax) : coinValue(coins);
   const parts: string[] = [];
-  const recipients =
-    fee?.destination === "charity" || fee?.destination === "split"
-      ? feeRecipientCaption(fee.recipients)
-      : null;
+  const charities = feeCharities(fee);
+  const recipients = fee?.destination === "split" ? feeRecipientCaption(fee.recipients) : null;
   if (recipients && recipients !== value) parts.push(recipients);
-  else if (charity && !value.includes(charity)) parts.push(charity);
+  else if (charities.length > 1) parts.push(`${charities.length} charities`);
+  else if (charities.length === 0 && charity && !value.includes(charity)) parts.push(charity);
   const logoParts = [...parts];
   if (coins.length > 0 && !value.includes(coins[0]!)) parts.push(coins.join(", "));
   if (tax && coins.length > 0 && !value.includes(tax)) {
@@ -120,7 +125,7 @@ export function creatorRewardFigure(fee: Fee | null | undefined): CreatorRewardF
 }
 
 type DeskReward = { label: string; mint: string | null };
-type FeeRecipient = { label: string; bps: number | null };
+type FeeRecipient = { label: string; bps: number | null; charity?: boolean };
 
 type DeskView = {
   feeDesk?: string | null;
@@ -130,7 +135,7 @@ type DeskView = {
     creatorFee?: {
       destination?: string | null;
       charityName?: string | null;
-      recipients?: { label?: string | null; share?: number | null }[] | null;
+      recipients?: { label?: string | null; share?: number | null; kind?: string | null }[] | null;
     } | null;
   } | null;
 } | null;
@@ -159,7 +164,12 @@ function sameRewards(a: DeskReward[] | null, b: DeskReward[] | null): boolean {
 function sameRecipients(a: FeeRecipient[] | null, b: FeeRecipient[] | null): boolean {
   if (a === b) return true;
   if (!a || !b || a.length !== b.length) return false;
-  return a.every((recipient, i) => recipient.label === b[i]?.label && recipient.bps === b[i]?.bps);
+  return a.every(
+    (recipient, i) =>
+      recipient.label === b[i]?.label &&
+      recipient.bps === b[i]?.bps &&
+      Boolean(recipient.charity) === Boolean(b[i]?.charity),
+  );
 }
 
 /** Sage shares are fractions (0.99 is 99%). A blank label is not a recipient. */
@@ -171,7 +181,7 @@ function recipientsFromSage(view: DeskView): FeeRecipient[] | null {
     if (!label) return [];
     const share = recipient.share;
     const bps = typeof share === "number" && share > 0 && share <= 1 ? Math.round(share * 10_000) : null;
-    return [{ label, bps }];
+    return [recipient.kind === "charity" ? { label, bps, charity: true } : { label, bps }];
   });
   return recipients.length ? recipients : null;
 }

@@ -8,6 +8,7 @@ import {
   sageNarrative,
   sageRead,
   sageTrack,
+  withSageCharities,
   withSageCharityName,
   xUrl,
 } from "./tokenSageView.js";
@@ -369,5 +370,40 @@ describe("sageNarrative", () => {
       ...rationale,
     });
     expect(sageNarrative([own])).toMatchObject({ verdict: "calls", at: "2026-10-08T10:02:00.000Z" });
+  });
+});
+
+describe("withSageCharities (user ask 2026-10-23)", () => {
+  const PDA = "CYoJ4CC1oGt1Hk1y2XZQ9aDJHsh7kZSFSHMWvChAgyxC";
+  const CONFIG = "JCZBhPewgvoAYHCmirP3vvXe3VpXiXVY1gSsj1o2ZsCw";
+  const raw = {
+    destination: "charity",
+    summary: "creator fees go to charity",
+    recipients: [{ address: PDA, kind: "charity", share: 1, charity_config_id: CONFIG }],
+  };
+
+  it("names the donation PDA's charities with their split", () => {
+    const read = { creatorFee: sageCreatorFee(raw) };
+    const two = withSageCharities(
+      read,
+      raw,
+      new Map([
+        [
+          CONFIG,
+          [
+            { name: "Pandas International", bps: 7500 },
+            { name: "St. Jude", bps: 2500 },
+          ],
+        ],
+      ]),
+    );
+    expect(two?.creatorFee?.recipients.map((r) => [r.label, r.share])).toEqual([
+      ["Pandas International", 0.75],
+      ["St. Jude", 0.25],
+    ]);
+    expect(two?.creatorFee?.charityName).toBeUndefined();
+    const one = withSageCharities(read, raw, new Map([[CONFIG, [{ name: "St. Jude", bps: 10000 }]]]));
+    expect(one?.creatorFee?.charityName).toBe("St. Jude");
+    expect(withSageCharities(read, raw, new Map())).toBe(read);
   });
 });
