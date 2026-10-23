@@ -87,7 +87,7 @@ describe("creator reward square", () => {
       </div>,
     );
     expect(html).toContain("Creator reward");
-    expect(html).toContain("Wallet");
+    expect(html).toContain("OTC Desks");
     expect(html).toContain("NVDAx, TSLAx");
     expect(html).toContain("OTC Desks pays holder rewards in NVDAx and TSLAx.");
   });
