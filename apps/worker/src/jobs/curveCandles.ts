@@ -1,6 +1,7 @@
 import {
   chunkBars,
   chunkStartOf,
+  runCoversOn,
   createLogger,
   CURVE_GAP_MS,
   saveCandleChunks,
@@ -114,8 +115,20 @@ export function curveCandleRows(
   const ticks = tape.prior ? [tape.prior, ...tape.ticks] : tape.ticks;
   const bars = curveBars(ticks, from, to, solUsd);
   const rows = chunkBars(mint, 1, source, bars, { from, to });
+  const first = rows[0];
   const last = rows[rows.length - 1];
-  if (!last || last.coverTo >= to) return { rows, flushedTo: to };
+  if (!first || !last) {
+    // No change at all over [from, to): quiet, but with no chunk to hang the cover on. The next
+    // flush reads from the same place, and the first bar's chunk then vouches back to `from`
+    // (below); a stretch quiet for longer than the cover may run is given up (prod 2026-10-23: a
+    // minute with no change had no chunk, and the chart drew it blank between two busy ones).
+    return to - from > QUIET_COVER_MS ? { rows, flushedTo: to } : { rows, flushedTo: flushedTo ?? from };
+  }
+  // The stream delivered every change since `from`: the stretch before the first bar, and each one
+  // between two chunks, was quiet. A cover may start before its chunk and run on past it.
+  if (first.coverFrom > from && first.startAt - from <= QUIET_COVER_MS) first.coverFrom = from;
+  runCoversOn(rows.slice(0, -1), last.startAt, QUIET_COVER_MS);
+  if (last.coverTo >= to) return { rows, flushedTo: to };
   if (to - last.startAt > QUIET_COVER_MS) return { rows, flushedTo: to };
   last.coverTo = to;
   return { rows, flushedTo: last.startAt };

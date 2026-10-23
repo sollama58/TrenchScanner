@@ -33,7 +33,9 @@ const SAVE_BATCH = 200;
 export async function saveCandleChunks(rows: readonly CandleChunkRow[]): Promise<number> {
   let written = 0;
   for (let i = 0; i < rows.length; i += SAVE_BATCH) {
-    const batch = rows.slice(i, i + SAVE_BATCH).filter((r) => r.bars.length > 0);
+    // A row with no bar stands only for its cover: a quiet stretch a read went through (the chain
+    // fill's, candleChainFill.ts); one with neither is nothing.
+    const batch = rows.slice(i, i + SAVE_BATCH).filter((r) => r.bars.length > 0 || r.coverTo > r.coverFrom);
     if (batch.length === 0) continue;
     written += await prisma.$transaction(
       async (tx) => {

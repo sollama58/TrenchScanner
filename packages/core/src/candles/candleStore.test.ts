@@ -74,6 +74,30 @@ describe.skipIf(!dbAvailable)("candle store", () => {
     expect([again!.coverFrom, again!.coverTo]).toEqual([hour, hour + 60 * M]);
   });
 
+  it("keeps a chunk with no bar for the quiet stretch its cover vouches for", async () => {
+    const quiet = {
+      mint: KEPT,
+      res: 1 as const,
+      startAt: NOW - 10 * M,
+      source: "tape" as const,
+      coarse: false,
+    };
+    await saveCandleChunks([{ ...quiet, coverFrom: NOW - 10 * M, coverTo: NOW - 5 * M, bars: [] }]);
+    const [row] = await readCandleChunks(KEPT, NOW - 10 * M, NOW);
+    expect(row).toMatchObject({ coverFrom: NOW - 10 * M, coverTo: NOW - 5 * M, bars: [] });
+    // A later bar in the same chunk (its minute) joins it, the cover kept.
+    const at = NOW - 10 * M + 30_000;
+    await saveCandleChunks([{ ...quiet, coverFrom: at, coverTo: at + 1_000, bars: [bar(at, 2)] }]);
+    const [again] = await readCandleChunks(KEPT, NOW - 10 * M, NOW);
+    expect(again).toMatchObject({ coverFrom: NOW - 10 * M, coverTo: NOW - 5 * M });
+    expect(again!.bars.map((b) => b.t)).toEqual([at]);
+    // Neither a bar nor a cover: nothing to keep.
+    await saveCandleChunks([
+      { ...quiet, startAt: NOW - 3 * M, coverFrom: NOW - 3 * M, coverTo: NOW - 3 * M, bars: [] },
+    ]);
+    expect(await readCandleChunks(KEPT, NOW - 3 * M, NOW)).toEqual([]);
+  });
+
   it("finds a minute chunk whose cover runs on from far back over the window, not a 1-second one", async () => {
     const far = NOW - 8 * 3_600_000;
     // A quiet night: the last minute bar's chunk vouches for the hours after it.
