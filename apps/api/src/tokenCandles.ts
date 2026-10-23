@@ -1,5 +1,7 @@
 import {
+  baseSegments,
   candleSeries,
+  subtractSpans,
   type CandleChunkRow,
   type SeriesBar,
   type SeriesInput,
@@ -38,10 +40,11 @@ const WIDENINGS = 4;
 /**
  * How far each source is trusted: of two sources' bars at the same width and start the higher's
  * stands, and of two that both fold into the timeframe the higher's cover is read (core's
- * baseSegments). Pump.fun's pages count every trade; the curve tape every curve change; GeckoTerminal
- * lags and has gaps of its own; the live tail's stream has no volume and keeps 20 minutes.
+ * baseSegments). Pump.fun's pages count every trade; the curve tape every curve change (after
+ * graduation, every change of the coin's PumpSwap pool); GeckoTerminal lags and has gaps of its
+ * own; the live tail's stream has no volume and keeps 20 minutes.
  */
-export const SOURCE_PRIORITY = { live: 5, pumpfun: 4, curve: 3, gecko: 2, stream: 1 } as const;
+export const SOURCE_PRIORITY = { live: 5, pumpfun: 4, curve: 3, pool: 3, gecko: 2, stream: 1 } as const;
 
 export interface TokenCandlesAnswer {
   mint: string;
@@ -50,6 +53,31 @@ export interface TokenCandlesAnswer {
   bars: SeriesBar[];
   /** Pass as `before` for the page before this one; null when nothing older is stored. */
   next: number | null;
+  /**
+   * The stretches from the first bar on that no source covered, [from, to) in ms, oldest first;
+   * absent when there are none. A missing bar inside a covered stretch had no trade; inside one
+   * of these, nobody read it, so the chart leaves it blank instead of drawing the price flat
+   * across it (user report 2026-10-23: a graduated coin's 8 unrecorded minutes drawn flat).
+   */
+  holes?: [number, number][];
+}
+
+/** A trailing hole shorter than this is the live edge between reads, not a stretch nobody read. */
+export const HOLE_EDGE_MS = 15_000;
+/** Holes reported per page at most (the newest kept). */
+const MAX_HOLES = 200;
+
+/**
+ * Exported for tests. The stretches of [from, to) no input covers, oldest first. A trailing one
+ * shorter than HOLE_EDGE_MS is left out: the stream's cover ends at its last read, a moment ago.
+ */
+export function uncovered(inputs: readonly SeriesInput[], from: number, to: number): [number, number][] {
+  if (!(to > from)) return [];
+  const covered = baseSegments(inputs, from, to).map((g) => [g.from, g.to] as [number, number]);
+  const holes = subtractSpans([[from, to]], covered);
+  const last = holes[holes.length - 1];
+  if (last && last[1] >= to && last[1] - last[0] < HOLE_EDGE_MS) holes.pop();
+  return holes.slice(-MAX_HOLES);
 }
 
 export interface CandleReadDeps {
@@ -105,17 +133,27 @@ export async function readTokenCandles(
   const floor = Math.min(oldest ?? Infinity, liveOldest);
   let span = limit * tfMs;
   let bars: SeriesBar[] = [];
+  let inputs: SeriesInput[] = [];
   for (let i = 0; i <= WIDENINGS; i++) {
     const from = Math.floor((end - span) / tfMs) * tfMs;
     const chunks = oldest !== null && oldest < end ? await deps.readChunks(mint, from, end) : [];
-    bars = candleSeries([...chunkInputs(chunks, factor), ...live], tfSec, from, end);
+    inputs = [...chunkInputs(chunks, factor), ...live];
+    bars = candleSeries(inputs, tfSec, from, end);
     if (bars.length >= limit || !(floor < from)) break;
     span *= 8;
   }
   bars = bars.slice(-limit);
   const first = bars[0]?.t;
+  // From the first bar to the page's end, or to now on the newest page (its last bar still forming).
+  const holes = first === undefined ? [] : uncovered(inputs, first, Math.min(end, now));
   // Older bars are there to read when the store, or a page held, reaches before the first one.
-  return { mint, tf, bars, next: first !== undefined && floor < first ? first : null };
+  return {
+    mint,
+    tf,
+    bars,
+    next: first !== undefined && floor < first ? first : null,
+    ...(holes.length > 0 ? { holes } : {}),
+  };
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   prisma,
   DexScreenerClient,
   GeckoTerminalClient,
+  configureCoinGeckoBudget,
   JupiterClient,
   LiveLaunchQuotes,
   JupiterFirstLookup,
@@ -110,6 +111,8 @@ import {
   curvePriceOf,
   curveTapeView,
   onCurveStreamUpdate,
+  onPoolStreamUpdate,
+  POOL_STREAM_KEY_PREFIX,
   seedCurveStreamSpend,
   startCurveTape,
 } from "./jobs/curveTape.js";
@@ -296,8 +299,9 @@ async function main() {
             else onHolderStreamTx(key, signature, tx);
           },
           undefined,
-          (key, data, bytes) => {
+          (key, data, bytes, slot) => {
             if (key.startsWith(CURVE_STREAM_KEY_PREFIX)) onCurveStreamUpdate(key, data, bytes);
+            else if (key.startsWith(POOL_STREAM_KEY_PREFIX)) onPoolStreamUpdate(key, data, bytes, slot);
           },
         )
           .metered("stream/holders-curves-burns")
@@ -310,6 +314,8 @@ async function main() {
   // startNarrativePolling. The queue lives in the scanning process.
   const stopNarrativePolling = scans ? startNarrativePolling(env) : undefined;
 
+  // The day's paid CoinGecko credits, shared with the other processes (coingeckoBudget.ts).
+  configureCoinGeckoBudget(env);
   // One client, so its rate budget is shared by both of its uses below.
   const geckoTerminal = new GeckoTerminalClient(
     env.COINGECKO_API_KEY

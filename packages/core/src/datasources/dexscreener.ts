@@ -146,6 +146,18 @@ export interface StalePriceSource {
 const BLANK_MIN_MINTS = 25;
 /** The longest the fallback is waited on for unpriced or not-yet-listed mints - see fillFromFallback. */
 const FALLBACK_FILL_DEADLINE_MS = 4_000;
+/**
+ * The fallback fill (fillFromFallback) is asked at most this often per client. The scan's refresh
+ * (~4 a minute) and fast-match (every 15 s) each asked it on nearly every pass, a paid CoinGecko
+ * call each time for the same few coins (credit audit 2026-10-23).
+ */
+export const FALLBACK_FILL_EVERY_MS = 60_000;
+/**
+ * A coin DexScreener prices without volume, or not at all, is asked of the fallback at most this
+ * often: its answer barely moves from one cycle to the next. A launch DexScreener hasn't listed yet
+ * is not held back by this (it lists within a minute, and until then the fallback is its price).
+ */
+export const FALLBACK_REASK_MS = 3 * 60_000;
 /** How long a blank DexScreener is routed around before it must prove blank again. */
 const BLANK_HOLD_MS = 10 * 60_000;
 /**
@@ -245,6 +257,9 @@ export class DexScreenerClient {
   private readonly quoteUsd = new Map<string, { usd: number; at: number }>();
   /** Mints last priced through their quote coin, so with no USD volume yet - see fillFromFallback. */
   private readonly quotePriced = new Set<string>();
+  /** When fillFromFallback last asked about each mint, and when it last asked at all. */
+  private readonly fillAskedAt = new Map<string, number>();
+  private lastFillAt = 0;
   /** Re-prices readings that look stale - see correctStalePrices. */
   private readonly staleCheck?: StalePriceSource;
   /** Each mint's last DexScreener price and since when it has been exactly that. */
@@ -580,15 +595,29 @@ export class DexScreenerClient {
     const startedAt = Date.now();
     const unlisted = options.fallbackIfUnlisted ? await options.fallbackIfUnlisted : [];
     if (remainingMs !== undefined) remainingMs -= Date.now() - startedAt;
+    const now = Date.now();
+    if (now - this.lastFillAt < FALLBACK_FILL_EVERY_MS) return results;
+    const due = (mint: string) => now - (this.fillAskedAt.get(mint) ?? 0) >= FALLBACK_REASK_MS;
     const ask = [
-      ...results.filter((t) => t.priceUsd <= 0 && t.marketCapUsd <= 0).map((t) => t.mintAddress),
+      // The newest launches first: a coin's first minutes are when its price matters most.
       ...unlisted.filter((m) => answered.has(m) && !listed.has(m)),
+      ...results
+        .filter((t) => t.priceUsd <= 0 && t.marketCapUsd <= 0)
+        .map((t) => t.mintAddress)
+        .filter(due),
       // Priced through its quote coin (priceInQuoteToken), but with no volume or price change.
       ...results
         .filter((t) => this.quotePriced.has(t.mintAddress) && t.volume1hUsd === undefined)
-        .map((t) => t.mintAddress),
+        .map((t) => t.mintAddress)
+        .filter(due),
     ].slice(0, BATCH_SIZE);
     if (ask.length === 0 || (remainingMs !== undefined && remainingMs <= 0)) return results;
+    this.lastFillAt = now;
+    for (const mint of ask) {
+      this.fillAskedAt.delete(mint);
+      this.fillAskedAt.set(mint, now);
+    }
+    trimOldest(this.fillAskedAt, STALE_TRACK_MAX_MINTS);
     const priced = await fallback
       .getTokensByAddresses(ask, {
         priority: true,

@@ -12,6 +12,7 @@ import {
   createLogger,
   DexScreenerClient,
   GeckoTerminalClient,
+  configureCoinGeckoBudget,
   HeliusClient,
   HeliusIdentityClient,
   JupiterClient,
@@ -546,6 +547,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // The API's only outbound data sources. Used for one thing: refreshing the market caps on a page
   // the moment it's opened, instead of leaving them until the worker's next tick - see
   // liveRefresh.ts for how that's kept from becoming a per-request upstream call.
+  // The day's paid CoinGecko credits, shared with the workers (core's coingeckoBudget.ts).
+  configureCoinGeckoBudget(env);
   const dexScreener = new DexScreenerClient({
     baseUrl: env.DEXSCREENER_BASE_URL,
     requestsPerMinute: LIVE_REFRESH_CALLS_PER_MINUTE,

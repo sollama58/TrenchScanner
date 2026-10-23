@@ -5,6 +5,7 @@ import {
   pumpSwapPoolOf,
   HttpError,
   RateGateDeadlineError,
+  CoinGeckoBudgetSpentError,
   type CandleChunkRow,
   type StoredBar,
 } from "@trenchscanner/core";
@@ -77,6 +78,16 @@ describe("poolsOf", () => {
     ]);
     expect(poolsOf(OTHER_MINT, { launchpad: null, launchedAt: null, pairAddress: "POOL" })).toEqual(["POOL"]);
     expect(poolsOf(OTHER_MINT, { launchpad: null, launchedAt: null, pairAddress: null })).toEqual([]);
+  });
+
+  it("skips the PumpSwap pool of a coin still priced on its curve: it has not graduated", () => {
+    const curve = pumpCurveAddressOf(PUMP_MINT)!;
+    expect(poolsOf(PUMP_MINT, { ...pumpToken, pairAddress: curve })).toEqual([curve]);
+    // No pair known: graduated or not, both are asked.
+    expect(poolsOf(PUMP_MINT, { ...pumpToken, pairAddress: null })).toEqual([
+      pumpSwapPoolOf(PUMP_MINT),
+      curve,
+    ]);
   });
 });
 
@@ -163,6 +174,18 @@ describe("stepBackfill", () => {
     const waited = await stepBackfill(job(), pumpToken, gated.d, NOW);
     expect(waited.failures).toBeUndefined();
     expect(waited.nextAt.getTime()).toBe(NOW + 15_000);
+  });
+
+  it("waits half an hour when the day's CoinGecko budget for charts is spent, keeping the coin", async () => {
+    const { d } = deps({
+      geckoPage: vi.fn(async () => {
+        throw new CoinGeckoBudgetSpentError("charts");
+      }),
+    });
+    const held = await stepBackfill(job({ failures: 2 }), pumpToken, d, NOW);
+    expect(held.failures).toBeUndefined();
+    expect(held.done).toBeUndefined();
+    expect(held.nextAt.getTime()).toBe(NOW + 30 * M);
   });
 
   it("waits a minute on a 429 without counting it against the coin", async () => {

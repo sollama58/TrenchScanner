@@ -22,6 +22,35 @@ const k = (t: number, o: number, c: number, w = 60_000, vol = 10) => ({
 });
 
 describe("buildSlots", () => {
+  // 8WNk, 2026-10-23: the store's 1-second bars stopped at graduation, nothing was recorded for 8
+  // minutes, then the live tail started; the chart drew the 8 minutes flat at the last price.
+  it("leaves a stretch nobody read blank, up to the first live reading in it", () => {
+    const s = buildSlots(
+      [k(0, 1, 2, 1_000)],
+      [
+        { t: 8_500, v: 9 },
+        { t: 9_500, v: 10 },
+      ],
+      1_000,
+      undefined,
+      [[1_000, 12_000]],
+    )!;
+    expect(s.bars.map((b) => (b.unknown ? "?" : b.flat ? "-" : "k")).join("")).toBe("k???????kk");
+    // The values are still held, for whatever reads a price off the slot.
+    expect(s.bars[3]).toMatchObject({ c: 2, flat: true, unknown: true });
+  });
+
+  it("keeps quiet slots flat outside the holes, and partial slots at a hole's edges", () => {
+    const s = buildSlots([k(0, 1, 2), k(240_000, 3, 4)], [], 60_000, undefined, [[90_000, 200_000]])!;
+    expect(s.bars.map((b) => [!!b.flat, !!b.unknown])).toEqual([
+      [false, false],
+      [true, false],
+      [true, true],
+      [true, false],
+      [false, false],
+    ]);
+  });
+
   it("lays candles one slot each from the first, quiet slots flat at the close before", () => {
     const s = buildSlots([k(0, 1, 2), k(120_000, 3, 4)], [], 60_000)!;
     expect(s.start).toBe(0);

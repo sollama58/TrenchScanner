@@ -49,8 +49,11 @@ function headline(fee: Fee, coins: readonly string[], tax: string | null): strin
       return tax ? `Holders ${tax}` : "Holders";
     case "cashback":
       return "Cashback";
-    case "wallet":
-      return "Wallet";
+    case "wallet": {
+      // One wallet we know by name: its name, the way a holder list shows it (user ask 2026-10-23).
+      const named = fee.recipients?.length === 1 ? fee.recipients[0]!.name?.trim() : null;
+      return named || "Wallet";
+    }
     case "split":
       return "Split";
     case "social":
@@ -103,7 +106,11 @@ export function creatorRewardFigure(fee: Fee | null | undefined): CreatorRewardF
   const value = fee ? headline(fee, coins, tax) : coinValue(coins);
   const parts: string[] = [];
   const charities = feeCharities(fee);
-  const recipients = fee?.destination === "split" ? feeRecipientCaption(fee.recipients) : null;
+  // A wallet's addresses show here and in the tooltip, not on the card (user ask 2026-10-23).
+  const recipients =
+    fee?.destination === "split" || fee?.destination === "wallet"
+      ? feeRecipientCaption(fee.recipients)
+      : null;
   if (recipients && recipients !== value) parts.push(recipients);
   else if (charities.length > 1) parts.push(`${charities.length} charities`);
   else if (charities.length === 0 && charity && !value.includes(charity)) parts.push(charity);

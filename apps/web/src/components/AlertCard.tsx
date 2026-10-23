@@ -23,12 +23,14 @@ import {
   GiftIcon,
   GlobeIcon,
   HeartIcon,
+  WalletIcon,
   RobotIcon,
   SlidersIcon,
   XLogoIcon,
 } from "./Icons";
 import { CardSearchButton } from "./CardSearchButton";
 import { DeskRewardTokens } from "./DeskRewardTokens";
+import { FeeKolAvatar, FeeWalletTip, kolPictures } from "./FeeWalletTip";
 import { DexInfoLabel } from "../dexInfoLabel";
 import { XLinkPreview } from "./XLinkPreview";
 import { useImagePreview } from "./ImagePreview";
@@ -941,6 +943,7 @@ export function QuoteBadge({
 
 const FEE_BADGES = {
   charity: { Icon: HeartIcon, label: "go to a charity" },
+  wallet: { Icon: WalletIcon, label: "go to another wallet" },
   rewards: { Icon: GiftIcon, label: "go to holders or another wallet" },
   github: { Icon: RobotIcon, label: "go to a GitHub account" },
   dev: { Icon: ChefHatIcon, label: "go to the dev" },
@@ -1027,6 +1030,18 @@ export interface FeeRecipientShare {
   label: string;
   bps: number | null;
   charity?: boolean;
+  /** TrenchScanner's own name for the wallet: a KOL, an exchange, a known identity. */
+  name?: string;
+  /** A KOL's picture, as a path on the API. */
+  avatar?: string;
+  kol?: boolean;
+}
+
+/** "Cupsey (8PQx…VP9z)" when the wallet has a name we know, else its label. */
+function recipientText(recipient: FeeRecipientShare): string {
+  const label = recipient.label?.trim() ?? "";
+  const name = recipient.name?.trim();
+  return name && label && name !== label ? `${name} (${label})` : name || label;
 }
 
 const KEYCAPS = ["0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
@@ -1101,7 +1116,7 @@ export function feeRecipientCaption(
 ): string | null {
   if (!recipients?.length) return null;
   const parts = recipients.flatMap((recipient) => {
-    const label = recipient.label?.trim();
+    const label = recipientText(recipient);
     if (!label) return [];
     const pct = holderRewardTaxLabel(recipient.bps);
     return [pct ? `${label} ${pct}` : label];
@@ -1116,10 +1131,11 @@ export function feeRecipientSentence(
   const recipients = fee?.recipients;
   if (!recipients?.length) return null;
   const parts = recipients.flatMap((recipient) => {
-    const label = recipient.label?.trim();
+    const label = recipientText(recipient);
     if (!label) return [];
     const pct = holderRewardTaxLabel(recipient.bps);
-    return [pct ? `${label} (${pct})` : label];
+    if (!pct) return [label];
+    return [label.endsWith(")") ? `${label.slice(0, -1)}, ${pct})` : `${label} (${pct})`];
   });
   return parts.length ? `Creator fees go to ${joinFeeNames(parts)}.` : null;
 }
@@ -1160,14 +1176,16 @@ export function feeBadge(fee: Card["token"]["creatorFee"]): {
   deskRewards: NonNullable<Card["token"]["creatorFee"]>["deskRewards"] | null;
 } | null {
   const coins = shownRewardLabels(fee);
-  const kind = feeKind(fee?.destination) ?? (fee?.deskLine?.trim() || coins.length ? "rewards" : null);
-  if (!kind) return null;
+  const grouped = feeKind(fee?.destination) ?? (fee?.deskLine?.trim() || coins.length ? "rewards" : null);
+  if (!grouped) return null;
+  const kind: keyof typeof FEE_BADGES = walletFee(fee) ? "wallet" : grouped;
   const { Icon, label } = FEE_BADGES[kind];
   // TokenSage's sentence, with the charity's organization in that same sentence, and OTC Desks'
   // reward-coin sentence after it when the roster names one.
   const title = creatorFeeLine(fee) ?? `Creator fees ${label}.`;
   const tax = fee?.destination === "holder_rewards" ? holderRewardTaxLabel(fee.bps) : null;
-  const caption = feeBadgeCaption(fee);
+  // A wallet's addresses stay in the tooltip, off the card (user ask 2026-10-23).
+  const caption = kind === "wallet" ? null : feeBadgeCaption(fee);
   const deskRewards = fee?.deskRewards?.length ? fee.deskRewards : null;
   return { kind, Icon, title, tax, caption, deskRewards };
 }
@@ -1196,6 +1214,28 @@ export function FeeBadge({
   ]
     .filter(Boolean)
     .join(" ");
+  if (fees.kind === "wallet") {
+    // A wallet fee (user ask 2026-10-23): the wallet icon, each KOL's picture beside it, and a
+    // styled tooltip naming every wallet we know, with its address and share.
+    const kols = kolPictures(fee?.recipients).slice(0, 3);
+    return (
+      <FeeWalletTip
+        recipients={fee?.recipients}
+        fallback={fees.title}
+        className={`fee-badge fee-wallet${kols.length ? " has-kols" : ""}${className ? ` ${className}` : ""}`}
+      >
+        {word && <span className="fee-word">FEES</span>}
+        <fees.Icon size={icon} />
+        {kols.length > 0 && (
+          <span className="fee-kols" aria-hidden="true">
+            {kols.map((r, i) => (
+              <FeeKolAvatar key={`${r.label}-${i}`} recipient={r} px={icon + 2} />
+            ))}
+          </span>
+        )}
+      </FeeWalletTip>
+    );
+  }
   return (
     <span
       className={`fee-badge fee-${fees.kind}${fees.tax ? " has-tax" : ""}${fees.deskRewards ? " has-desk-rewards" : fees.caption ? " has-caption" : ""}${className ? ` ${className}` : ""}`}
@@ -1211,8 +1251,19 @@ export function FeeBadge({
   );
 }
 
+/**
+ * Fees paid to a plain wallet, or split among wallets, with no OTC Desks reward coin behind them
+ * (user ask 2026-10-23): the badge is a wallet, not the holder-reward gift.
+ */
+export function walletFee(fee: Card["token"]["creatorFee"] | null | undefined): boolean {
+  if (fee?.destination !== "wallet" && fee?.destination !== "split") return false;
+  return !fee.deskLine?.trim() && !fee.deskRewards?.length;
+}
+
 /** TokenSage's fee destination as a badge kind (packages/core/src/datasources/tokensage.ts). */
-export function feeKind(destination: string | null | undefined): keyof typeof FEE_BADGES | null {
+export function feeKind(
+  destination: string | null | undefined,
+): Exclude<keyof typeof FEE_BADGES, "wallet"> | null {
   switch (destination) {
     case "charity":
       return "charity";

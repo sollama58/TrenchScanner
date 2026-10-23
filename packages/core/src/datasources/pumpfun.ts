@@ -590,21 +590,42 @@ function listErrorText(err: unknown): string {
 /**
  * The launch's metadata JSON (the token's on-chain URI, which the PumpPortal stream carries as
  * `uri`): name, symbol, description, image and the launcher's socials, written once at launch.
- * The fallback when Pump.fun's own endpoints don't answer. Only IPFS-hosted metadata is read,
- * through Pump.fun's own Pinata gateway (ipfs.io answers 429 to repeated reads): the URI is
- * whatever the launcher wrote, and the worker fetches nothing else a stranger names. Null when the
- * URI isn't an IPFS one or the JSON has nothing usable; throws on a transport failure.
+ * The fallback when Pump.fun's own endpoints don't answer. Only IPFS-hosted metadata is read, by
+ * its CID through fixed gateways (LAUNCH_METADATA_GATEWAYS): the URI is whatever the launcher
+ * wrote, and the worker fetches nothing else a stranger names. Pump.fun's own Pinata gateway comes
+ * first, but it serves only what Pump.fun pinned (other launchers' CIDs answer 403), and on
+ * 2026-10-23, with the rest of Pump.fun refusing this service, it answered none of the worker's
+ * reads: launches reached the models with no description or socials; the public gateways after it are slower or rate limited
+ * (ipfs.io answers 429 to repeated reads; gateway.pinata.cloud took about 4 s a read on
+ * 2026-10-23, so each gets 8 s) but answer for any CID. Null when the URI isn't an IPFS
+ * one or the JSON has nothing usable; throws the last gateway's failure when none answered.
  */
 export async function fetchLaunchMetadata(
   mintAddress: string,
   uri: string,
-  timeoutMs = 4_000,
+  timeoutMs = 8_000,
 ): Promise<DiscoveredCoin | null> {
   const cid = ipfsMetadataCid(uri);
   if (!cid) return null;
-  const body = await fetchJson<unknown>(`https://pump.mypinata.cloud/ipfs/${cid}`, { timeoutMs, retries: 0 });
-  return parseLaunchMetadata(mintAddress, body);
+  let lastError: unknown;
+  for (const gateway of LAUNCH_METADATA_GATEWAYS) {
+    try {
+      const body = await fetchJson<unknown>(`${gateway}/ipfs/${cid}`, { timeoutMs, retries: 0 });
+      return parseLaunchMetadata(mintAddress, body);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
 }
+
+/** The IPFS gateways fetchLaunchMetadata tries, in order - see its note. Exported for tests. */
+export const LAUNCH_METADATA_GATEWAYS = [
+  "https://pump.mypinata.cloud",
+  "https://gateway.pinata.cloud",
+  "https://ipfs.io",
+  "https://dweb.link",
+] as const;
 
 /** The IPFS CID an https metadata URI points at, or undefined for any other URI. Exported for tests. */
 export function ipfsMetadataCid(uri: string): string | undefined {

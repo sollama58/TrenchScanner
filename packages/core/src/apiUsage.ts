@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db.js";
 import { createLogger } from "./logger.js";
+import { coinGeckoBudget } from "./datasources/coingeckoBudget.js";
 
 const logger = createLogger("api-usage");
 
@@ -790,6 +791,8 @@ export function installApiUsageMeter(opts: { processName: string; feature?: stri
     void (async () => {
       try {
         await flushApiUsage(opts.processName);
+        // Right after this process's own counts land: the day's CoinGecko spend across processes.
+        await coinGeckoBudget.sync();
         if (Date.now() - lastPrune > PRUNE_EVERY_MS) {
           lastPrune = Date.now();
           await prisma.$executeRaw`DELETE FROM "ApiUsage" WHERE "bucket" < ${new Date(Date.now() - RETENTION_MS)}`;

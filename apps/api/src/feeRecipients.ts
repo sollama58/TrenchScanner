@@ -9,7 +9,19 @@ export interface CardFeeRecipient {
   bps: number | null;
   /** Present and true on a charity's share, so a card can name the charities apart from wallets. */
   charity?: boolean;
+  /**
+   * The name TrenchScanner already has for this wallet (user ask 2026-10-23): a KOL, a known
+   * side, an exchange, or a cached Helius identity. Absent when it has none.
+   */
+  name?: string;
+  /** A KOL's X picture, as a path on this API (kolRoster.ts). Absent otherwise. */
+  avatar?: string;
+  /** Present and true when `name` is a KOL's or a KOL's known side. */
+  kol?: boolean;
 }
+
+/** What TrenchScanner calls a fee wallet: walletNames.ts `feeWalletNames`. */
+export type FeeWalletName = Pick<CardFeeRecipient, "name" | "avatar" | "kol">;
 
 /** A TokenSage recipient before a Pump.fun charity name is applied. */
 export interface ParsedFeeRecipient extends CardFeeRecipient {
@@ -103,12 +115,38 @@ export function feeRecipientsFromAnalysis(value: unknown): ParsedFeeRecipient[] 
   return out;
 }
 
-function cardRecipient(label: string, bps: number | null, charity: boolean): CardFeeRecipient {
-  return charity ? { label, bps, charity: true } : { label, bps };
+function cardRecipient(
+  label: string,
+  bps: number | null,
+  charity: boolean,
+  wallet?: FeeWalletName,
+): CardFeeRecipient {
+  return {
+    label,
+    bps,
+    ...(charity ? { charity: true } : {}),
+    ...(!charity && wallet?.name ? { name: wallet.name } : {}),
+    ...(!charity && wallet?.name && wallet.avatar ? { avatar: wallet.avatar } : {}),
+    ...(!charity && wallet?.name && wallet.kol ? { kol: true } : {}),
+  };
 }
 
 export function cardFeeRecipients(list: readonly ParsedFeeRecipient[]): CardFeeRecipient[] {
-  return list.map(({ label, bps, kind }) => cardRecipient(label, bps, kind === "charity"));
+  return list.map((r) => cardRecipient(r.label, r.bps, r.kind === "charity", r));
+}
+
+/**
+ * Each recipient with TrenchScanner's own name for its wallet (user ask 2026-10-23). A recipient
+ * that already carries an organization or login, or a charity's share, keeps what it has.
+ */
+export function withFeeWalletNames(
+  list: readonly ParsedFeeRecipient[],
+  names: ReadonlyMap<string, FeeWalletName>,
+): ParsedFeeRecipient[] {
+  return list.map((r) => {
+    const known = r.address && !r.named && r.kind !== "charity" ? names.get(r.address) : undefined;
+    return known?.name ? { ...r, ...known } : r;
+  });
 }
 
 function charitySlots(chain: readonly ParsedFeeRecipient[], used: ReadonlySet<number>): number[] {
@@ -163,5 +201,7 @@ export function mergeCharityShares(
       if (bps[index] == null) bps[index] = share.bps;
     });
   }
-  return chain.map((_, index) => cardRecipient(labels[index]!, bps[index] ?? null, charity[index]!));
+  return chain.map((recipient, index) =>
+    cardRecipient(labels[index]!, bps[index] ?? null, charity[index]!, recipient),
+  );
 }

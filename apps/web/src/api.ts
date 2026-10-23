@@ -263,7 +263,18 @@ export interface Token {
      * basis points when the read gave one (9900 is 99%). `charity` is true on a charity's share,
      * named from its donate.gg config when that loaded.
      */
-    recipients?: { label: string; bps: number | null; charity?: boolean }[] | null;
+    recipients?:
+      | {
+          label: string;
+          bps: number | null;
+          charity?: boolean;
+          /** TrenchScanner's own name for the wallet (a KOL, an exchange, a known identity). */
+          name?: string;
+          /** A KOL's picture, as a path on this API. */
+          avatar?: string;
+          kol?: boolean;
+        }[]
+      | null;
     bps?: number | null;
   } | null;
   /** The coin's own X and website links as found at discovery (https only); null when it has none. */

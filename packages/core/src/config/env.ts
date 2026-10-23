@@ -104,6 +104,16 @@ const envSchema = z.object({
   // The worker's share of the plan's calls a minute (the API process takes a small fixed share on
   // top). Only read with COINGECKO_API_KEY. 250 is the Basic plan's limit, less the API's.
   COINGECKO_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(200),
+  // The plan's credits a UTC day, shared by every process with the key (one call, one credit;
+  // datasources/coingeckoBudget.ts). The Basic plan's 100,000 a month is ~3,300 a day; the default
+  // keeps a month under ~90,000 even when every day reaches it. Past the cap no CoinGecko call goes
+  // out until midnight UTC; the background lanes below stop at 85% of it, leaving the rest to the
+  // market-data fallback.
+  COINGECKO_DAILY_CREDITS: z.coerce.number().int().nonnegative().default(2_900),
+  // Of those, at most this many for Peaks and the label/quote re-grades when Pump.fun refuses
+  // (minuteCandleReader.ts), and for the chart's candle backfill (candleBackfill.ts).
+  COINGECKO_PEAK_DAILY_CREDITS: z.coerce.number().int().nonnegative().default(600),
+  COINGECKO_CHART_DAILY_CREDITS: z.coerce.number().int().nonnegative().default(1_000),
   // A Jupiter API key (portal.jup.ag). With one, the jobs that only need a price - the outcome
   // watcher and the empty-wallet check - ask Jupiter first and DexScreener only for what it missed,
   // leaving DexScreener's per-IP budget to the scan and fast-match, and the scan reads young

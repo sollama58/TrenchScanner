@@ -1,5 +1,7 @@
 import {
+  CANDLE_BACKFILL_FEATURE,
   chunkBars,
+  CoinGeckoBudgetSpentError,
   createLogger,
   fetchPumpCandles,
   GECKO_CANDLE_PAGE,
@@ -14,6 +16,7 @@ import {
   saveCandleChunks,
   type CandleChunkRow,
   type StoredBar,
+  withOwnApiFeature,
 } from "@trenchscanner/core";
 
 const logger = createLogger("candle-backfill");
@@ -44,6 +47,11 @@ const LEASE_MS = 2 * 60_000;
 const BUDGET_WAIT_MS = 15_000;
 /** A page CoinGecko answered 429 is asked again after this; the coin is not counted as failing. */
 const THROTTLED_WAIT_MS = 60_000;
+/**
+ * A step the day's CoinGecko budget for charts has no room for (coingeckoBudget.ts) waits this
+ * long, not BUDGET_WAIT_MS: the budget comes back at midnight UTC, not in seconds.
+ */
+const DAY_BUDGET_WAIT_MS = 30 * 60_000;
 /** Failed steps a coin may take before it is given up. */
 const MAX_FAILURES = 5;
 /** Stored covers this close are one unbroken stretch (a minute source omits quiet minutes). */
@@ -113,7 +121,14 @@ export function isPumpCoin(mint: string, token: Pick<BackfillToken, "launchpad">
  */
 export function poolsOf(mint: string, token: BackfillToken): string[] {
   const out = [token.pairAddress];
-  if (isPumpCoin(mint, token)) out.push(pumpSwapPoolOf(mint) ?? null, pumpCurveAddressOf(mint) ?? null);
+  if (isPumpCoin(mint, token)) {
+    const curve = pumpCurveAddressOf(mint) ?? null;
+    // A coin still priced on its curve has not graduated: its PumpSwap pool doesn't exist yet, and
+    // asking for it cost a paid CoinGecko call per coin that answered nothing (credit audit
+    // 2026-10-23: about half the backfill's calls). The curve is still asked.
+    if (token.pairAddress !== curve) out.push(pumpSwapPoolOf(mint) ?? null);
+    out.push(curve);
+  }
   return [...new Set(out.filter((p): p is string => !!p))];
 }
 
@@ -194,6 +209,8 @@ export async function stepBackfill(
     deps.budget.spend();
     body = await deps.geckoPage(pool, job.mint, cursor);
   } catch (err) {
+    if (err instanceof CoinGeckoBudgetSpentError)
+      return { cursor: at(cursor), nextAt: at(now + DAY_BUDGET_WAIT_MS) };
     if (err instanceof RateGateDeadlineError) return { cursor: at(cursor), nextAt: at(now + BUDGET_WAIT_MS) };
     // The provider's limit, not the coin: five 429s in a row (CoinGecko answered every call 429
     // for half an hour on 2026-10-23) used to give the coin up with nothing saved.
@@ -304,7 +321,11 @@ export function startCandleBackfill(
     maxPages: config.maxPages,
     keepDays: config.keepDays,
   };
-  timer = setInterval(() => void tick(deps), config.tickMs ?? TICK_MS);
+  // Its own feature, so its CoinGecko calls spend the charts lane of the day's budget, not the market's.
+  timer = setInterval(
+    () => void withOwnApiFeature(CANDLE_BACKFILL_FEATURE, () => tick(deps)),
+    config.tickMs ?? TICK_MS,
+  );
   timer.unref?.();
   return () => {
     if (timer) clearInterval(timer);

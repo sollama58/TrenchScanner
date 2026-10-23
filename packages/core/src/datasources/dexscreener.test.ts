@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DexScreenerClient,
+  FALLBACK_FILL_EVERY_MS,
+  FALLBACK_REASK_MS,
   canonicalPairCreatedAt,
   pickCanonicalPair,
   pumpSwapPoolCreatedAt,
@@ -1370,7 +1372,7 @@ describe("getTokensByAddresses: the fallback prices what DexScreener can't", () 
       priority: true,
       fallbackIfUnlisted: ["newLaunch"],
     });
-    expect(asked).toEqual([["pepeQuoted", "newLaunch"]]);
+    expect(asked).toEqual([["newLaunch", "pepeQuoted"]]);
     const by = new Map(tokens.map((t) => [t.mintAddress, t]));
     expect(by.get("pepeQuoted")).toMatchObject({
       marketCapUsd: 12_000,
@@ -1380,6 +1382,36 @@ describe("getTokensByAddresses: the fallback prices what DexScreener can't", () 
     expect(by.get("newLaunch")).toMatchObject({ marketCapUsd: 12_000 });
     expect(by.get("listed")).toMatchObject({ marketCapUsd: 9_000 });
     expect(by.has("oldDead")).toBe(false);
+  });
+
+  it("asks at most once a minute, and the same quoted coin at most every three minutes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const asked: string[][] = [];
+      stub(asked);
+      const c = client();
+      const lookup = (unlisted: string[] = []) =>
+        c.getTokensByAddresses(["listed", "pepeQuoted", ...unlisted], 5, {
+          retries: 0,
+          priority: true,
+          fallbackIfUnlisted: unlisted,
+        });
+      await lookup();
+      expect(asked).toEqual([["pepeQuoted"]]);
+      // The next pass, seconds later: nothing asked.
+      vi.advanceTimersByTime(15_000);
+      await lookup(["newLaunch"]);
+      expect(asked).toHaveLength(1);
+      // A minute on, a new launch is asked; the quoted coin isn't due for another two minutes.
+      vi.advanceTimersByTime(FALLBACK_FILL_EVERY_MS);
+      await lookup(["newLaunch"]);
+      expect(asked[1]).toEqual(["newLaunch"]);
+      vi.advanceTimersByTime(FALLBACK_REASK_MS);
+      await lookup();
+      expect(asked[2]).toEqual(["pepeQuoted"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("prices a pair quoted in another coin off that coin's USD price, for every lookup", async () => {

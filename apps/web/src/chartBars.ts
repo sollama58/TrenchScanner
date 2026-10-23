@@ -32,6 +32,12 @@ export interface SlotBar {
   vol: number | null;
   /** No trades in the slot: the close before it, held. */
   flat?: boolean;
+  /**
+   * Nobody read the slot (inside a hole the candle store reported, before any live reading in it):
+   * drawn blank, not flat, as there may well have been trades (user report 2026-10-23). Its values
+   * are the close before it, held, for whatever reads a price off it.
+   */
+  unknown?: boolean;
   /** A wider candle starts here and runs over this many slots. */
   span?: number;
   /** Under a wider candle that started this many slots earlier (its values repeat here). */
@@ -64,6 +70,7 @@ export function buildSlots(
   ticks: readonly Point[],
   tfMs: number,
   maxSlots = MAX_SLOTS,
+  holes: readonly (readonly [number, number])[] = [],
 ): Slots | null {
   const all = liveCandles(candles, ticks).filter((k) => [k.o, k.c].every((v) => Number.isFinite(v) && v > 0));
   if (all.length === 0) return null;
@@ -126,7 +133,35 @@ export function buildSlots(
     const v = bars[k - 1]!.c;
     bars[k] = { t: s0 + k * tfMs, o: v, h: v, l: v, c: v, vol: 0, flat: true };
   }
+  markUnknown(bars, holes, ticks, tfMs);
   return { tfMs, start: s0, bars };
+}
+
+/**
+ * Exported for tests. Marks the flat slots lying wholly inside a hole as unknown. A hole ends at the
+ * first live reading inside it: the live tail runs on unbroken from its first reading, so from there
+ * a flat slot is a quiet one.
+ */
+export function markUnknown(
+  bars: SlotBar[],
+  holes: readonly (readonly [number, number])[],
+  ticks: readonly Point[],
+  tfMs: number,
+): void {
+  if (holes.length === 0 || bars.length === 0) return;
+  const firstTick = ticks.length > 0 ? ticks[0]!.t : Infinity;
+  for (const [a, b0] of holes) {
+    // The tail's readings are oldest first and run on unbroken from the first.
+    const b = Math.min(b0, Math.max(a, firstTick));
+    if (!(b - a >= tfMs)) continue;
+    const s0 = bars[0]!.t;
+    const from = Math.max(0, Math.ceil((a - s0) / tfMs));
+    const to = Math.min(bars.length, Math.floor((b - s0) / tfMs));
+    for (let i = from; i < to; i++) {
+      const bar = bars[i];
+      if (bar?.flat) bar.unknown = true;
+    }
+  }
 }
 
 /** The candle a slot shows: its own, or the wider one it sits under. */
