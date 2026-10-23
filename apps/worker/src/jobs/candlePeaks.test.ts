@@ -258,10 +258,31 @@ describe.skipIf(!dbAvailable)("runCandlePeaksJob", () => {
     expect((await callOf(call.id)).peakCheckedAt).toBeNull();
     candlesByMint.set(token.mintAddress, new Error("socket hang up"));
     const now = Date.now();
-    await run(now);
+    // A failed run when this was the only coin due (every read failed).
+    await run(now).catch((err: unknown) => {
+      if (!(err instanceof JobFailure)) throw err;
+    });
     const watch = await prisma.peakWatch.findUniqueOrThrow({ where: { tokenId: token.id } });
     expect(watch.nextCheckAt.getTime()).toBeGreaterThan(now);
     candlesByMint.set(token.mintAddress, null);
+  });
+
+  it("fails the run when every read fails (Pump.fun's Cloudflare answering 403)", async () => {
+    const { call } = await seedCoin("blocked", 1, { callPeak: 12_000 });
+    const blocked = {
+      minuteCandles: async (): Promise<MinuteCandle[] | null> => {
+        throw new HttpError(403, "blocked - likely a Cloudflare challenge");
+      },
+    };
+    const failure = await runCandlePeaksJob(blocked, {
+      trackingDays: 14,
+      coinsPerRun: 500,
+      spacingMs: 0,
+    }).catch((err: unknown) => err);
+    expect(failure).toBeInstanceOf(JobFailure);
+    expect((failure as JobFailure).message).toContain("403");
+    expect((failure as JobFailure).meta).toMatchObject({ coins: 0 });
+    expect((await callOf(call.id)).peakCheckedAt).toBeNull();
   });
 
   it("parks a coin past its tracking window, so the due reads stop walking it", async () => {

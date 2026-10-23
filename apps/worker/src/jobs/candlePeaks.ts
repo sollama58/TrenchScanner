@@ -181,8 +181,10 @@ export async function runCandlePeaksJob(
     raised: 0,
     noCandles: 0,
     implausible: 0,
+    failed: 0,
   };
   let throttled = false;
+  let lastError: string | null = null;
   for (const [i, watch] of due.entries()) {
     if (i > 0) await sleep(spacingMs);
     let candles: MinuteCandle[] | null;
@@ -194,6 +196,8 @@ export async function runCandlePeaksJob(
         throttled = true;
         break;
       }
+      counts.failed += 1;
+      lastError = String(err).slice(0, 200);
       logger.warn("candle read failed", { mint: watch.token.mintAddress, error: String(err) });
       await prisma.peakWatch.update({
         where: { tokenId: watch.tokenId },
@@ -255,6 +259,15 @@ export async function runCandlePeaksJob(
   // success while no Peak moved.
   if (throttled && counts.coins === 0 && counts.noCandles === 0) {
     throw new JobFailure("Pump.fun throttled the candle reads (429) before any coin was read", meta);
+  }
+  // Every read failed: no Peak moved, so the run failed. Pump.fun's Cloudflare answered every read
+  // 403 from 2026-10-23 and the job kept recording successes while its backlog grew; the Peaks fall
+  // back to the readings' (matchPeaks.ts, curatedPeaks.ts) meanwhile.
+  if (counts.failed > 0 && counts.failed === counts.calls) {
+    throw new JobFailure(`Every Pump.fun candle read failed (${lastError ?? "unknown"})`, {
+      ...meta,
+      lastError,
+    });
   }
   return meta;
 }
