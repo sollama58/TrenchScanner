@@ -20854,47 +20854,74 @@ body:has(.util-toast) .bug-fab {
 .scope-now .num.down {
   color: var(--bad-ink);
 }
-/* The chips, then the fee, source and link icons in the bottom-right corner, left of the
-   quick-buy pill (user ask 2026-10-23). They share the chips' last line while the chips keep at
-   least half the width, and take a line of their own under them otherwise. */
-.scope-bottom {
-  grid-column: 1 / -1;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 4px 6px;
-  min-width: 0;
-}
+/* The chips in even columns, as many as the row's width fits (user ask 2026-10-23), so they
+   line up in rows and columns rather than wrapping raggedly. */
 .scope-chips {
-  display: flex;
-  flex: 1 1 50%;
-  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(84px * var(--scope-t, 1)), 1fr));
   gap: 4px;
   min-width: 0;
 }
+/* One line under the chips: where the alert came from and the fee on the left, the coin's links
+   on the right, and the quick-buy pill after them, on the same line (user asks 2026-10-23). */
 .scope-foot {
+  grid-column: 1 / -1;
   display: flex;
-  flex: 0 1 auto;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  max-width: 100%;
-  margin-left: auto;
+  gap: 4px 6px;
+  min-width: 0;
+  min-height: 24px;
   font-size: calc(12px * var(--scope-t, 1));
 }
-/* Room for the quick-buy pill at the end of the last line only (the icons' last line when there
-   are icons), so the chips above keep the row's full width. */
-.scope-row:has(> .quick-buy) .scope-bottom:not(:has(> .scope-foot))::after,
-.scope-row:has(> .quick-buy) .scope-foot::after {
-  content: "";
+.scope-foot:empty {
+  display: none;
+}
+.scope-foot-from,
+.scope-foot-links {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.scope-foot-from {
+  flex: 0 1 auto;
+}
+.scope-foot-links {
   flex: none;
-  width: 78px;
+  margin-left: auto;
+}
+/* Where the sources don't fit beside the links, they take the line above them, cutting a long
+   filter or model name short. */
+.scope-foot .scope-src {
+  flex: 0 1 auto;
+  min-width: 26px;
+  overflow: hidden;
+}
+.scope-foot .scope-src:not(:has(.scope-src-text)) {
+  flex: none;
+}
+.scope-row .scope-foot > .quick-buy {
+  position: relative;
+  inset: auto;
+  flex: none;
+  margin-left: auto;
+}
+.scope-row .scope-foot-links + .quick-buy {
+  margin-left: 0;
+}
+.scope-foot .scope-src > svg,
+.scope-foot .scope-fee {
+  flex: none;
 }
 .scope-chip {
   display: inline-flex;
   align-items: baseline;
+  justify-content: space-between;
   gap: 4px;
+  min-width: 0;
   padding: 1px 6px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -20903,7 +20930,15 @@ body:has(.util-toast) .bug-fab {
   font-size: 11px;
 }
 .scope-chip-label {
+  min-width: 0;
+  overflow: hidden;
   color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope-chip > .num {
+  flex: none;
+  white-space: nowrap;
 }
 .scope-chip.risky {
   color: var(--bad-ink);
@@ -20914,12 +20949,6 @@ body:has(.util-toast) .bug-fab {
 }
 .scope-chip.toned-box {
   background: color-mix(in srgb, var(--tile-c) 14%, transparent);
-}
-.scope-row > .quick-buy {
-  top: auto;
-  left: auto;
-  right: 8px;
-  bottom: 6px;
 }
 @media (max-width: 899px) {
   .scope-tabs {
@@ -21005,17 +21034,15 @@ body:has(.util-toast) .bug-fab {
   .scope-new {
     padding: 6px 14px;
   }
-  /* Phones keep the chips to one clipped line, with the icons at its end. */
-  .scope-bottom {
-    flex-wrap: nowrap;
-  }
+  /* Phones keep the chips to one clipped line. */
   .scope-chips {
-    flex: 1 1 0;
+    display: flex;
     flex-wrap: nowrap;
     gap: 3px;
     overflow: hidden;
   }
   .scope-chip {
+    flex: none;
     padding: 1px 4px;
     font-size: 10.5px;
     gap: 3px;
@@ -21359,8 +21386,7 @@ body:has(.util-toast) .bug-fab {
 }
 /* With the pills there, the figures run down beside the chips rather than making the row taller,
    and the chips sit right under the name line: the figures column used to push them down, leaving
-   an empty band under the name (user report 2026-10-23). A quick-buy pill sits in the bottom
-   corner under the figures, which keep room for it. Not on phones, whose chips keep to one clipped
+   an empty band under the name (user report 2026-10-23). Not on phones, whose chips keep to one clipped
    line and would lose one to the figures. */
 @media (min-width: 900px) {
   .scope-row:has(.scope-fig-pills) > .scope-avatar {
@@ -21374,39 +21400,29 @@ body:has(.util-toast) .bug-fab {
     grid-row: 1 / span 2;
     align-self: start;
   }
-  .scope-row:has(.scope-fig-pills) > .scope-bottom {
+  .scope-row:has(.scope-fig-pills) > .scope-chips {
     grid-column: 1 / 3;
     grid-row: 2;
     align-self: start;
   }
-  .scope-row:has(.scope-fig-pills):has(> .quick-buy) .scope-bottom::after,
-  .scope-row:has(.scope-fig-pills):has(> .quick-buy) .scope-foot::after {
-    content: none;
-  }
-  /* The quick-buy pill's height, under the figures (bottom: 6px, plus a little air). */
-  .scope-row:has(.scope-fig-pills):has(> .quick-buy.qb-s) > .scope-figs {
-    padding-bottom: 22px;
-  }
-  .scope-row:has(.scope-fig-pills):has(> .quick-buy.qb-m) > .scope-figs {
-    padding-bottom: 26px;
-  }
-  .scope-row:has(.scope-fig-pills):has(> .quick-buy.qb-l) > .scope-figs {
-    padding-bottom: 32px;
+  /* The icon line, with the quick-buy pill at its end, runs the row's full width under the chips
+     and the figures. */
+  .scope-row:has(.scope-fig-pills) > .scope-foot {
+    grid-column: 1 / -1;
+    grid-row: 3;
   }
   /* With only the market cap and its pills (no At or Peak lines) the figures fit beside the
      ticker and name, so the chips take the row's full width rather than wrapping beside an
      empty corner (the result mark beside the market cap widens that column). */
-  .scope-row:not(:has(> .quick-buy)):has(.scope-fig-pills):not(:has(.scope-figs > .scope-fig:not(.scope-now)))
-    > .scope-figs {
+  .scope-row:has(.scope-fig-pills):not(:has(.scope-figs > .scope-fig:not(.scope-now))) > .scope-figs {
     grid-row: 1;
   }
-  .scope-row:not(:has(> .quick-buy)):has(.scope-fig-pills):not(:has(.scope-figs > .scope-fig:not(.scope-now)))
-    > .scope-bottom {
+  .scope-row:has(.scope-fig-pills):not(:has(.scope-figs > .scope-fig:not(.scope-now))) > .scope-chips {
     grid-column: 1 / -1;
   }
 }
 /* The Dex pill and the age under the figures make that column the row's tallest wherever it
-   doesn't run down beside the chips (phones, and rows with a quick-buy pill): the avatar, the
+   doesn't run down beside the chips (phones): the avatar, the
    ticker line and the figures all start at the top, so the ticker lines up with the market cap
    and the name with the line under it (user reports 2026-10-22). */
 .scope-row:has(.scope-fig-pills) > .scope-avatar,
@@ -25486,18 +25502,16 @@ button.wlm-remove:hover:not(:disabled) {
   .scope-row:not(#_) > .scope-figs .scope-fig-pills {
     margin: 0 0 0 auto;
   }
-  .scope-row:not(#_) > .scope-bottom {
+  .scope-row:not(#_) > .scope-chips {
     grid-column: 1 / -1;
     grid-row: 3;
   }
-  .scope-row:not(#_):has(> .quick-buy) > .scope-bottom:not(:has(> .scope-foot))::after,
-  .scope-row:not(#_):has(> .quick-buy) .scope-foot::after {
-    content: "";
-    width: 72px;
+  .scope-row:not(#_) > .scope-foot {
+    grid-column: 1 / -1;
+    grid-row: 4;
   }
   .scope-row:not(#_) .scope-src {
     max-width: 100%;
-    min-width: 0;
   }
   /* The pair's pill gives the ticker its room; the badge on the avatar still names the pair. */
   .scope-row:not(#_) .scope-title .scope-quote {

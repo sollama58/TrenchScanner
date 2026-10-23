@@ -752,11 +752,10 @@ export const ScopeRow = memo(function ScopeRow({
   const chips = rowChips(card, d.chips, now);
   const showSource = d.showSource || marker;
   const img = d.imageSize === "s" ? 44 : d.imageSize === "l" ? 72 : 56;
-  const hasFoot =
+  const hasFrom =
     (d.showFees && feeBadge(card.token.creatorFee) !== null) ||
-    (showSource && (filter !== null || curated != null || high)) ||
-    socials.length > 0 ||
-    tradeLinks.length > 0;
+    (showSource && (filter !== null || curated != null || high));
+  const hasLinks = socials.length > 0 || tradeLinks.length > 0;
   const dexInfo = dexInfoLabel(card.token, now) && <DexInfoLabel token={card.token} now={now} />;
 
   return (
@@ -765,7 +764,6 @@ export const ScopeRow = memo(function ScopeRow({
       style={{ "--i": Math.min(index, 10) } as React.CSSProperties}
       onClick={onClick}
     >
-      {!preview && <QuickBuyPill mint={card.token.mintAddress} symbol={label} onNeedsPanel={open} />}
       {!preview && onHide && (
         <button
           type="button"
@@ -891,31 +889,31 @@ export const ScopeRow = memo(function ScopeRow({
           </div>
         )}
       </div>
-      {/* The chips, then the fee, source and link icons at the row's bottom right, left of the
-          quick-buy pill, so the name has its line to itself (user ask 2026-10-23). */}
-      {(chips.length > 0 || hasFoot) && (
-        <div className="scope-bottom">
-          {chips.length > 0 && (
-            <div className="scope-chips">
-              {chips.map((c) => {
-                const tl = tileLook(tiles, c.tone, c.risky);
-                return (
-                  <span
-                    key={c.id}
-                    className={`scope-chip ${tl.className ?? ""}${c.aged ? " aged" : ""}`}
-                    style={tl.style}
-                    title={c.title}
-                  >
-                    <span className="scope-chip-label">{c.short}</span>
-                    <span className="num">{c.value}</span>
-                  </span>
-                );
-              })}
-            </div>
-          )}
-          {hasFoot && (
-            <div className="scope-foot">
-              {d.showFees && <FeeBadge fee={card.token.creatorFee} icon={12} className="scope-fee" />}
+      {/* The chips in even columns that fill the row's width (user ask 2026-10-23). */}
+      {chips.length > 0 && (
+        <div className="scope-chips">
+          {chips.map((c) => {
+            const tl = tileLook(tiles, c.tone, c.risky);
+            return (
+              <span
+                key={c.id}
+                className={`scope-chip ${tl.className ?? ""}${c.aged ? " aged" : ""}`}
+                style={tl.style}
+                title={c.title}
+              >
+                <span className="scope-chip-label">{c.short}</span>
+                <span className="num">{c.value}</span>
+              </span>
+            );
+          })}
+        </div>
+      )}
+      {/* One line under the chips: where the alert came from and the fee on the left, the coin's
+          links on the right, then the quick-buy pill (user asks 2026-10-23). Hidden while empty. */}
+      {(hasFrom || hasLinks || !preview) && (
+        <div className="scope-foot">
+          {hasFrom && (
+            <span className="scope-foot-from">
               {filter && showSource && (
                 <span className="scope-src mine" title={`Caught by your filter “${filter.name}”`}>
                   {filter.icon ? <FilterGlyph icon={filter.icon} size={11} /> : <SlidersIcon size={11} />}
@@ -938,6 +936,11 @@ export const ScopeRow = memo(function ScopeRow({
                   HC
                 </span>
               )}
+              {d.showFees && <FeeBadge fee={card.token.creatorFee} icon={12} className="scope-fee" />}
+            </span>
+          )}
+          {hasLinks && (
+            <span className="scope-foot-links">
               <SocialLinks links={socials} className="scope-socials" />
               {tradeLinks.map((l) => (
                 <a
@@ -951,8 +954,9 @@ export const ScopeRow = memo(function ScopeRow({
                   {l.label}
                 </a>
               ))}
-            </div>
+            </span>
           )}
+          {!preview && <QuickBuyPill mint={card.token.mintAddress} symbol={label} onNeedsPanel={open} />}
         </div>
       )}
     </article>
