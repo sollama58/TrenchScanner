@@ -1,12 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import {
   baseSegments,
+  chunkSourceSummary,
   createLogger,
   launchSupplyFactors,
   oldestCandleCover,
   prisma,
   PUMPFUN_LAUNCHPAD,
   readCandleChunks,
+  recentChunksBySource,
   type Env,
   type SeriesInput,
 } from "@trenchscanner/core";
@@ -276,12 +278,33 @@ export async function candleDiagnosis(mint: string, query: unknown) {
     if (held > 0)
       gaps.push({ from: gapFrom, to: gapTo, minutes: (gapTo - gapFrom) / 60_000, barsInSources: held });
   }
-  const backfill = await prisma.candleBackfill.findUnique({ where: { mint } }).catch(() => null);
+  const [backfill, token, alerts, sources] = await Promise.all([
+    prisma.candleBackfill.findUnique({ where: { mint } }).catch(() => null),
+    prisma.token
+      .findUnique({
+        where: { mintAddress: mint },
+        select: { launchedAt: true, firstSeenAt: true, launchpad: true, pairAddress: true },
+      })
+      .catch(() => null),
+    prisma.curatedAlert
+      .findMany({
+        where: { token: { mintAddress: mint } },
+        select: { createdAt: true },
+        orderBy: { createdAt: "asc" },
+        take: 20,
+      })
+      .then((rows) => rows.map((r) => r.createdAt.getTime()))
+      .catch(() => []),
+    chunkSourceSummary(mint).catch(() => []),
+  ]);
   return {
     mint,
     tf: q.tf,
     now,
     factor,
+    token,
+    alerts,
+    sources,
     bars: answer.bars.length,
     firstBar: answer.bars[0]?.t ?? null,
     lastBar: answer.bars[answer.bars.length - 1]?.t ?? null,
@@ -298,4 +321,14 @@ export async function candleDiagnosis(mint: string, query: unknown) {
 /** GET /stats/candles: the coins charts asked the store about lately, newest first. */
 export async function recentCandleCoins(limit = 30) {
   return prisma.candleBackfill.findMany({ orderBy: { requestedAt: "desc" }, take: limit });
+}
+
+/**
+ * GET /stats/candles/sources: what each source wrote to the candle store within `minutes`, per
+ * width (chunks, coins, when it last wrote), so a cloud session can see which writers are alive
+ * (the worker's curve tape, the API's stream save, the backfill) without the worker's heartbeat.
+ */
+export async function recentCandleSources(minutes = 60) {
+  const m = Number.isFinite(minutes) && minutes > 0 ? Math.min(minutes, 24 * 60) : 60;
+  return { minutes: m, sources: await recentChunksBySource(m * 60_000) };
 }

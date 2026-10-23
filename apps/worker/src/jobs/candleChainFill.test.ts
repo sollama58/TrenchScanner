@@ -130,6 +130,30 @@ describe.skipIf(!dbAvailable)("chart chain fill", () => {
     expect(asked[1]).toEqual({ from: (LAUNCH + 3 * MIN) / 1000, until: (LAUNCH + 120 * MIN) / 1000 });
   });
 
+  it("lets the newest ask's coin take a burst of pages a run, the holes read again after each", async () => {
+    const { helius, asked } = stub([
+      [buy(LAUNCH + 2 * MIN, 30e9), buy(LAUNCH + 3 * MIN, 31e9)],
+      [buy(LAUNCH + 4 * MIN, 30e9), buy(LAUNCH + 5 * MIN, 31e9)],
+      [buy(LAUNCH + 6 * MIN, 30e9), buy(LAUNCH + 7 * MIN, 31e9)],
+      [buy(LAUNCH + 8 * MIN, 30e9), buy(LAUNCH + 9 * MIN, 31e9)],
+    ]);
+    await runCandleChainFill({ helius, sink: { solUsd: async () => 200 } }, { ...opts, burstPages: 3 });
+    expect(asked.map((a) => a.from)).toEqual([
+      (LAUNCH + MIN) / 1000,
+      (LAUNCH + 3 * MIN) / 1000,
+      (LAUNCH + 5 * MIN) / 1000,
+    ]);
+    expect(await oneSecondHoles(MINT, LAUNCH, LAUNCH + 120 * MIN)).toEqual([
+      [LAUNCH + 7 * MIN, LAUNCH + 120 * MIN],
+    ]);
+    // The run's pages cap the burst too.
+    await runCandleChainFill(
+      { helius, sink: { solUsd: async () => 200 } },
+      { ...opts, burstPages: 3, pagesPerRun: 1 },
+    );
+    expect(asked).toHaveLength(4);
+  });
+
   it("fills a hole no chunk ends exactly at, vouching for the quiet lead-in with the chunk it saved", async () => {
     // Born two minutes before the curve tape's first chunk: the first hole starts where no
     // 1-second cover ends. Before 2026-10-23 that parked the coin for the day.

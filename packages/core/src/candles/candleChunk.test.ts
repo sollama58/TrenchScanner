@@ -4,6 +4,7 @@ import {
   chunkStartOf,
   mergeChunks,
   packBars,
+  runCoversOn,
   unpackBars,
   type CandleChunkRow,
   type StoredBar,
@@ -115,5 +116,29 @@ describe("mergeChunks", () => {
     const out = mergeChunks(row([bar(0, 1)], 0, 600_000), row([bar(1_800_000, 2)], 1_800_000, 1_860_000));
     expect([out.coverFrom, out.coverTo]).toEqual([0, 600_000]);
     expect(out.bars).toHaveLength(2);
+  });
+});
+
+describe("runCoversOn", () => {
+  const row = (startAt: number, from: number, to: number): CandleChunkRow => ({
+    mint: "M",
+    res: 60,
+    startAt,
+    source: "gecko",
+    coverFrom: from,
+    coverTo: to,
+    bars: [],
+    coarse: false,
+  });
+  const H = 3_600_000;
+  it("runs each cover on to the next chunk's start and the last to the end, within the run limit", () => {
+    const rows = runCoversOn([row(0, 0, 600_000), row(3 * H, 3 * H, 3 * H + 60_000)], 4 * H, 2 * H);
+    // The first chunk's quiet hours run on to the limit, the last chunk's to the end.
+    expect(rows.map((r) => [r.coverFrom, r.coverTo])).toEqual([
+      [0, 2 * H],
+      [3 * H, 4 * H],
+    ]);
+    // A cover already further is kept.
+    expect(runCoversOn([row(0, 0, 5 * H)], 4 * H)[0]!.coverTo).toBe(5 * H);
   });
 });

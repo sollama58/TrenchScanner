@@ -9,6 +9,7 @@ import {
   onCurveStreamUpdate,
   onPoolStreamUpdate,
   POOL_FOLLOW_MS,
+  POOL_MISS_LIMIT,
   poolCurveState,
   overStreamPace,
   resetCurveTape,
@@ -207,6 +208,22 @@ describe("curve tape", () => {
     expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
   });
 
+  it("follows a coin called or charted long after its launch, for the asked age from the ask", () => {
+    const s = setup(NOW - 1_000, { alertedMaxAgeMinutes: 120 });
+    stop = s.stop;
+    // Five hours old when a seat called it (user report 2026-10-23: 2TKD, called two hours after
+    // its launch, was never followed, so its chart had nothing of ours).
+    const old = { ...young, launchedAt: new Date(NOW - 5 * 3_600_000), askedAt: new Date(NOW - 60_000) };
+    followYoungCurves([], NOW, [old]);
+    expect(s.stream.watch).toHaveBeenCalledWith(`curve:${MINT}`, [expect.any(String)], NOW, "account");
+    followYoungCurves([], NOW + 118 * 60_000, [old]);
+    expect([...curveTapeView.mints()]).toEqual([MINT]);
+    // Two hours after the ask: let go.
+    followYoungCurves([], NOW + 120 * 60_000, [old]);
+    expect([...curveTapeView.mints()]).toEqual([]);
+    expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
+  });
+
   // A deploy used to start the day's count over, handing the stream its whole share again.
   it("carries the day's stream spend a previous process recorded, from today only", async () => {
     const s = setup(NOW - 1_000);
@@ -383,6 +400,52 @@ describe("curve tape", () => {
       followYoungCurves([], NOW + 5_001 + POOL_FOLLOW_MS);
       expect([...curveTapeView.mints()]).toEqual([]);
       expect(s.stream.unwatch).toHaveBeenCalledWith(`curve-pool:base:${MINT}`);
+    });
+
+    it("follows the pool of a graduated coin again when a call or a chart asks about it", async () => {
+      const s = graduated(NOW + 1_000);
+      stop = s.stop;
+      followYoungCurves([young], NOW);
+      await round(NOW);
+      s.complete();
+      await round(NOW + 5_000);
+      await round(NOW + 10_000);
+      const gone = NOW + 5_001 + POOL_FOLLOW_MS;
+      followYoungCurves([], gone);
+      expect([...curveTapeView.mints()]).toEqual([]);
+      // An hour on, a seat calls it: its curve is done, so its pool is followed, to the ask's horizon.
+      const askedAt = gone + 3_600_000;
+      followYoungCurves([], askedAt, [{ ...young, askedAt: new Date(askedAt) }]);
+      expect([...curveTapeView.mints()]).toEqual([MINT]);
+      expect(curveTapeView.sourceOf?.(MINT)).toBe("pool");
+      await round(askedAt + 5_000);
+      expect(s.stream.watch).toHaveBeenCalledWith(
+        `curve-pool:base:${MINT}`,
+        [VAULTS.base],
+        askedAt + 5_000,
+        "account",
+      );
+      followYoungCurves([], askedAt + POOL_FOLLOW_MS - 1, [{ ...young, askedAt: new Date(askedAt) }]);
+      expect([...curveTapeView.mints()]).toEqual([MINT]);
+      followYoungCurves([], askedAt + POOL_FOLLOW_MS + 1, [{ ...young, askedAt: new Date(askedAt) }]);
+      expect([...curveTapeView.mints()]).toEqual([]);
+    });
+
+    it("gives up on a pool that never appears after POOL_MISS_LIMIT rounds, and doesn't ask again", async () => {
+      const s = graduated(null, false);
+      stop = s.stop;
+      followYoungCurves([young], NOW);
+      await round(NOW);
+      s.complete();
+      await round(NOW + 5_000);
+      for (let i = 0; i < POOL_MISS_LIMIT; i++) await round(NOW + 10_000 + i * 1_000);
+      expect(s.getPoolVaultsBatch).toHaveBeenCalledTimes(POOL_MISS_LIMIT);
+      expect([...curveTapeView.mints()]).toEqual([]);
+      // Asked about again: no pool to follow.
+      followYoungCurves([], NOW + 80_000, [{ ...young, askedAt: new Date(NOW + 80_000) }]);
+      await round(NOW + 81_000);
+      expect(s.getPoolVaultsBatch).toHaveBeenCalledTimes(POOL_MISS_LIMIT);
+      expect([...curveTapeView.mints()]).toEqual([]);
     });
 
     it("prices the pool as PumpSwap does: the SOL vault plus the virtual reserve, over the coin's vault", () => {

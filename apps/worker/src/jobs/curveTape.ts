@@ -99,8 +99,8 @@ interface Followed {
   readAt: number | null;
   /** The coin's launch (or first sighting), ms epoch. */
   bornAt: number;
-  /** Followed to this age (ms): longer for an alerted coin. */
-  maxAgeMs: number;
+  /** Followed until this moment (ms epoch): longer for a coin called or charted (followYoungCurves). */
+  until: number;
 }
 
 type PoolPart = "base" | "quote" | "account";
@@ -126,7 +126,16 @@ interface PoolFollowed {
   /** One side of a slot came alone at this time: recorded when the other comes, or PAIR_WAIT_MS on. */
   pendingAt: number | null;
   timer: ReturnType<typeof setTimeout> | null;
+  /** Rounds that found no pool account yet: let go after POOL_MISS_LIMIT (the coin has no pool). */
+  misses: number;
 }
+
+/**
+ * Rounds a pool is asked for before the coin is taken to have none: a graduating coin's pool
+ * appears within seconds of its curve completing, and a coin asked about long after (a chart
+ * opened on it) has its pool at once or not at all.
+ */
+export const POOL_MISS_LIMIT = 60;
 
 // Kept long enough for the price path recorder's 30 minutes (the features still read 16). Memory
 // follows the stream's update rate, which its daily credit cap bounds, not the number of coins.
@@ -138,6 +147,8 @@ const pools = new Map<string, PoolFollowed>();
 /** Mints whose curve address holds no curve (not Pump.fun) or a graduated one: not asked again. */
 const done = new Set<string>();
 const MAX_DONE = 20_000;
+/** Mints whose PumpSwap pool was asked for POOL_MISS_LIMIT rounds and never appeared. */
+const noPool = new Set<string>();
 
 let stream: CurveStream | null = null;
 let reader: CurveReader | null = null;
@@ -294,12 +305,31 @@ function graduate(mint: string, state: CurveState, now: number): void {
   const quoteIsSol = tape.ticksAfter(mint, Infinity)?.quoteIsSol ?? state.quoteIsSol;
   drop(mint, true);
   if (!f || !cfg || !quoteIsSol || !reader?.getPoolVaultsBatch || !reader.getTokenAmountsBatch) return;
+  // The curve just completed: its pool is about to exist, whatever an earlier ask found.
+  noPool.delete(mint);
+  followPool(mint, Math.max(f.until, now + POOL_FOLLOW_MS));
+}
+
+/**
+ * Follows the coin's PumpSwap pool for the chart's 1-second bars until `until` (longer if it is
+ * followed already): at graduation, and for a coin called or charted after it graduated (its curve
+ * is done; user report 2026-10-23: a coin called after graduating, and one whose chart was
+ * opened an hour later, had nothing of ours recorded). The pool's account is read on the next
+ * round (poolRound); a coin found to have no pool is not asked again.
+ */
+function followPool(mint: string, until: number): void {
+  const p = pools.get(mint);
+  if (p) {
+    p.until = Math.max(p.until, until);
+    return;
+  }
+  if (noPool.has(mint) || !reader?.getPoolVaultsBatch || !reader.getTokenAmountsBatch) return;
   const address = pumpSwapPoolOf(mint);
-  if (!address || pools.has(mint)) return;
+  if (!address) return;
   pools.set(mint, {
     address,
     vaults: null,
-    until: Math.max(f.bornAt + f.maxAgeMs, now + POOL_FOLLOW_MS),
+    until,
     readAt: null,
     base: null,
     quote: null,
@@ -308,6 +338,7 @@ function graduate(mint: string, state: CurveState, now: number): void {
     quoteSlot: null,
     pendingAt: null,
     timer: null,
+    misses: 0,
   });
 }
 
@@ -353,44 +384,70 @@ interface TrackedCoin {
 }
 
 /**
+ * A coin a seat alerted on, a call queued or a chart opened (`askedAt`: when): followed from the
+ * ask for alertedMaxAgeMinutes whatever its age. Without `askedAt`, to that age from its launch.
+ */
+export interface AskedCoin extends TrackedCoin {
+  askedAt?: Date;
+}
+
+/**
  * The scan's watchlist this cycle, in its order: the young Pump.fun coins in it are followed (up
- * to CURVE_TAPE_MAX_MINTS), and the ones that left it or aged out are dropped. `alerted`: coins a
- * seat alerted on lately, followed to alertedMaxAgeMinutes whether on the watchlist or not, after it.
+ * to CURVE_TAPE_MAX_MINTS), and the ones that left it or aged out are dropped. `asked`: coins a
+ * seat alerted on, a call queued or a chart opened lately (curatedAlerts, the candle store's
+ * backfill asks), followed for alertedMaxAgeMinutes from the ask, on the watchlist or not and
+ * whatever their age (user report 2026-10-23: a coin called two hours after its launch, or
+ * charted later still, was never followed, so its chart had nothing of ours). A coin whose curve
+ * is done (graduated, or no curve) is followed on its PumpSwap pool instead when asked.
  */
 export function followYoungCurves(
   tracked: readonly TrackedCoin[],
   now = Date.now(),
-  alerted: readonly TrackedCoin[] = [],
+  asked: readonly AskedCoin[] = [],
 ): void {
   if (!cfg) return;
   const maxAgeMs = cfg.maxAgeMinutes * 60_000;
-  const alertedAgeMs = Math.max(maxAgeMs, (cfg.alertedMaxAgeMinutes ?? 0) * 60_000);
-  const isAlerted = new Set(alerted.map((t) => t.mintAddress));
-  const wanted = new Map<string, number>();
-  const bornAtOf = new Map<string, number>();
-  for (const t of [...tracked, ...alerted]) {
+  const askedForMs = Math.max(maxAgeMs, (cfg.alertedMaxAgeMinutes ?? 0) * 60_000);
+  const wanted = new Map<string, { rank: number; bornAt: number; until: number; asked: boolean }>();
+  const askedPools = new Map<string, number>();
+  // The asked coins first: they must not wait behind the watchlist for a seat under the cap.
+  const all: { coin: AskedCoin; isAsked: boolean }[] = [
+    ...asked.map((coin) => ({ coin, isAsked: true })),
+    ...tracked.map((coin) => ({ coin, isAsked: false })),
+  ];
+  for (const { coin: t, isAsked } of all) {
     if (wanted.size >= cfg.maxMints) break;
-    if (wanted.has(t.mintAddress)) continue;
-    if (t.launchpad === STONKS_LAUNCHPAD || done.has(t.mintAddress)) continue;
+    if (wanted.has(t.mintAddress) || t.launchpad === STONKS_LAUNCHPAD) continue;
     const bornAt = (t.launchedAt ?? t.firstSeenAt).getTime();
-    if (now - bornAt > (isAlerted.has(t.mintAddress) ? alertedAgeMs : maxAgeMs)) continue;
-    wanted.set(t.mintAddress, wanted.size);
-    bornAtOf.set(t.mintAddress, bornAt);
+    const askedAt = isAsked ? t.askedAt?.getTime() : undefined;
+    const until = !isAsked
+      ? bornAt + maxAgeMs
+      : askedAt !== undefined
+        ? Math.max(bornAt + maxAgeMs, askedAt + askedForMs)
+        : bornAt + askedForMs;
+    if (now > until) continue;
+    if (done.has(t.mintAddress)) {
+      if (isAsked) askedPools.set(t.mintAddress, Math.max(askedPools.get(t.mintAddress) ?? 0, until));
+      continue;
+    }
+    wanted.set(t.mintAddress, { rank: wanted.size, bornAt, until, asked: isAsked });
   }
   for (const mint of followed.keys()) if (!wanted.has(mint)) drop(mint, false);
-  for (const [mint, rank] of wanted) {
+  for (const [mint, w] of wanted) {
     let f = followed.get(mint);
     if (!f) {
       const curve = pumpCurveAddressOf(mint);
       if (!curve) continue;
-      f = { curve, rank, readAt: null, bornAt: bornAtOf.get(mint) ?? now, maxAgeMs };
+      f = { curve, rank: w.rank, readAt: null, bornAt: w.bornAt, until: w.until };
       followed.set(mint, f);
     }
-    f.rank = rank;
-    f.maxAgeMs = isAlerted.has(mint) ? alertedAgeMs : maxAgeMs;
+    f.rank = w.rank;
+    f.until = Math.max(w.until, w.asked ? w.until : f.bornAt + maxAgeMs);
     // Again every cycle: it keeps the subscription from being evicted as unwatched.
     if (!paused) stream?.watch(keyOf(mint), [f.curve], now, "account");
   }
+  // Graduated (or curveless) coins asked about: their pools, to the ask's horizon.
+  for (const [mint, until] of askedPools) followPool(mint, until);
   // Graduated coins' pools are kept to their own horizon, on the watchlist or not.
   for (const [mint, p] of pools) {
     if (now > p.until) dropPool(mint);
@@ -410,7 +467,13 @@ function followNewLaunches(mints: readonly string[], now: number): void {
     if (followed.has(mint) || done.has(mint)) continue;
     const curve = pumpCurveAddressOf(mint);
     if (!curve) continue;
-    followed.set(mint, { curve, rank: 0, readAt: null, bornAt: now, maxAgeMs: cfg.maxAgeMinutes * 60_000 });
+    followed.set(mint, {
+      curve,
+      rank: 0,
+      readAt: null,
+      bornAt: now,
+      until: now + cfg.maxAgeMinutes * 60_000,
+    });
     if (!paused) stream?.watch(keyOf(mint), [curve], now, "account");
   }
 }
@@ -623,7 +686,18 @@ async function poolRound(now: number): Promise<void> {
   for (const [address, { mint }] of toRead) {
     const p = pools.get(mint);
     const vaults = accounts.get(address);
-    if (!p || !vaults || vaults === "failed") continue;
+    if (!p) continue;
+    if (vaults === null && p.vaults === null) {
+      // No pool account there (yet). A coin without one for POOL_MISS_LIMIT rounds has none.
+      p.misses += 1;
+      if (p.misses >= POOL_MISS_LIMIT) {
+        dropPool(mint, false);
+        if (noPool.size >= MAX_DONE) noPool.clear();
+        noPool.add(mint);
+      }
+      continue;
+    }
+    if (!vaults || vaults === "failed") continue;
     if (p.vaults === null) {
       p.vaults = vaults;
       watchPool(mint, p, now);
@@ -669,6 +743,7 @@ export function resetCurveTape(): void {
   followed.clear();
   for (const mint of [...pools.keys()]) dropPool(mint, false);
   done.clear();
+  noPool.clear();
   paused = false;
   poolsPaused = false;
   day = "";

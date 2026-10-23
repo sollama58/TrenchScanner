@@ -80,6 +80,7 @@ import {
   type NarrativeRead,
   takePumpFunGateStats,
   withApiFeature,
+  recentlyAskedCoins,
 } from "@trenchscanner/core";
 import type { Token } from "@prisma/client";
 import { requestTextScores } from "../ai/textScorer.js";
@@ -1309,8 +1310,11 @@ async function scanCycle(
   // sitting in (or near) the target band.
   const { tracked, alive } = await selectWatchlist(env);
   // The young Pump.fun coins in it have their curves followed change by change (curveTape.ts), and
-  // the coins alerted on lately for longer, for their charts.
-  followYoungCurves(tracked, Date.now(), await recentlyAlertedCoins(env.CURVE_TAPE_ALERTED_MINUTES));
+  // the coins alerted on, called or charted lately for longer from the ask, for their charts.
+  followYoungCurves(tracked, Date.now(), [
+    ...(await recentlyAlertedCoins(env.CURVE_TAPE_ALERTED_MINUTES)),
+    ...(await recentlyAskedCoins(env.CURVE_TAPE_ALERTED_MINUTES * 60_000).catch(() => [])),
+  ]);
   lap("watchlist");
 
   if (tracked.length === 0) {
@@ -4683,17 +4687,22 @@ function walletRiskSignals(
   };
 }
 
-/** The coins a seat alerted on within `minutes`, for the curve tape's longer follow (curveTape.ts). */
+/**
+ * The coins a seat alerted on within `minutes`, newest alert first, each with when it was alerted
+ * on: the curve tape follows them for that long from the alert (curveTape.ts).
+ */
 async function recentlyAlertedCoins(minutes: number, now = Date.now()) {
   const rows = await prisma.curatedAlert
     .findMany({
       where: { createdAt: { gte: new Date(now - minutes * 60_000) } },
       select: {
+        createdAt: true,
         token: { select: { mintAddress: true, launchedAt: true, firstSeenAt: true, launchpad: true } },
       },
+      orderBy: { createdAt: "desc" },
       distinct: ["tokenId"],
       take: 500,
     })
     .catch(() => []);
-  return rows.map((r) => r.token);
+  return rows.map((r) => ({ ...r.token, askedAt: r.createdAt }));
 }

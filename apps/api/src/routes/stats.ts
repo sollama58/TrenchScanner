@@ -28,7 +28,7 @@ import { marketCounts } from "../marketRows.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { exportQuerySchema, exportWindow, startExport } from "./statsExport.js";
 import { buildScreenFunnel, SCREEN_FUNNEL_MAX_HOURS } from "../screenFunnel.js";
-import { candleDiagnosis, recentCandleCoins } from "./candles.js";
+import { candleDiagnosis, recentCandleCoins, recentCandleSources } from "./candles.js";
 
 const logger = createLogger("stats");
 
@@ -563,6 +563,14 @@ export async function registerStatsRoutes(
     async (_request, reply) => {
       reply.header("cache-control", "no-store");
       return recentCandleCoins();
+    },
+  );
+  app.get(
+    "/candles/sources",
+    { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard },
+    async (request, reply) => {
+      reply.header("cache-control", "no-store");
+      return recentCandleSources(Number((request.query as { minutes?: string }).minutes ?? 60));
     },
   );
   app.get(

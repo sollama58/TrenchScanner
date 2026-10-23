@@ -236,6 +236,31 @@ describe("stepBackfill", () => {
     expect(patch.poolIndex).toBe(1);
   });
 
+  it("vouches for the quiet minutes a page leaves out, and the newest page's tail up to three minutes ago", async () => {
+    const token = { launchpad: null, launchedAt: null, pairAddress: "POOL" };
+    // A page whose bars end ten minutes ago with no bar from 50 to 40 minutes ago: GeckoTerminal
+    // leaves a minute with no trade out, so those minutes were quiet, not unread (user report
+    // 2026-10-23: a quiet stretch inside a page was drawn as a hole).
+    const quiet = (before: number) => {
+      const body = geckoBody(before - 10 * M, 100);
+      body.data.attributes.ohlcv_list = body.data.attributes.ohlcv_list.filter(
+        ([ts]) => ts! * 1_000 < before - 50 * M || ts! * 1_000 >= before - 40 * M,
+      );
+      return body;
+    };
+    const first = deps({ geckoPage: vi.fn(async (_p, _m, before) => quiet(before)) });
+    await stepBackfill(job({ mint: OTHER_MINT, pumpDone: false }), token, first.d, NOW);
+    const covers = first.saved.map((r) => [r.coverFrom, r.coverTo] as const).sort((a, b) => a[0] - b[0]);
+    // One cover after another with no break between the page's first bar and three minutes ago.
+    expect(covers[0]![0]).toBe(NOW - 110 * M);
+    for (let i = 1; i < covers.length; i++) expect(covers[i]![0]).toBeLessThanOrEqual(covers[i - 1]![1]);
+    expect(Math.max(...covers.map((c) => c[1]))).toBe(NOW - 3 * M);
+    // An older page (the cursor set) vouches only to its own newest bar: the next page holds the rest.
+    const older = deps({ geckoPage: vi.fn(async (_p, _m, before) => quiet(before)) });
+    await stepBackfill(job({ mint: OTHER_MINT, cursor: new Date(NOW - 200 * M) }), token, older.d, NOW);
+    expect(Math.max(...older.saved.map((r) => r.coverTo))).toBe(NOW - 210 * M);
+  });
+
   it("pages a non-Pump coin from now, not the hour start: no live page holds its newest stretch", async () => {
     const token = { launchpad: null, launchedAt: null, pairAddress: "POOL" };
     // GeckoTerminal two minutes late: the store is vouched for only to its newest bar.

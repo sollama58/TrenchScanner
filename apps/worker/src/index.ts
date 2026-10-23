@@ -487,6 +487,7 @@ async function main() {
             pagesPerRun: env.CANDLE_CHAIN_FILL_PAGES_PER_RUN,
             maxPagesPerCoin: env.CANDLE_CHAIN_FILL_MAX_PAGES_PER_COIN,
             windowMinutes: env.CANDLE_CHAIN_FILL_WINDOW_MINUTES,
+            burstPages: env.CANDLE_CHAIN_FILL_BURST_PAGES,
           },
         )
       : undefined;
