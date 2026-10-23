@@ -96,10 +96,20 @@ export interface GeckoTerminalClientOptions {
  * Its free tier is a tenth of DexScreener's budget, so a lookup gets through only what its
  * deadline and budget allow - callers already put the mints that matter most first.
  */
+/** GeckoTerminal's free API: no key, no credits, ~30 calls a minute per IP. */
+const FREE_BASE_URL = "https://api.geckoterminal.com/api/v2";
+/**
+ * The chart backfill's calls a minute on the free API once the day's paid budget for it is spent
+ * (a keyed client sends nothing else there, so the IP's free limit is all its own).
+ */
+export const GECKOTERMINAL_FREE_FALLBACK_PER_MINUTE = 10;
+
 export class GeckoTerminalClient {
   private readonly baseUrl: string;
   private readonly priorityGate: RateGate;
   private readonly backgroundGate: RateGate;
+  /** The free API's gate, for a keyed client's candle pages past the day's paid budget. */
+  private readonly freeGate: RateGate;
   private readonly headers: Record<string, string>;
   private readonly backgroundMaxMints: number;
   private readonly launchHomeClock: boolean;
@@ -109,8 +119,7 @@ export class GeckoTerminalClient {
     const keyed = Boolean(options.apiKey);
     this.keyed = keyed;
     this.baseUrl =
-      options.baseUrl ??
-      (keyed ? "https://pro-api.coingecko.com/api/v3/onchain" : "https://api.geckoterminal.com/api/v2");
+      options.baseUrl ?? (keyed ? "https://pro-api.coingecko.com/api/v3/onchain" : FREE_BASE_URL);
     this.headers = keyed
       ? { accept: "application/json", "x-cg-pro-api-key": options.apiKey! }
       : { accept: "application/json" };
@@ -124,6 +133,11 @@ export class GeckoTerminalClient {
     this.backgroundGate = new RateGate({
       name: "geckoterminal-background",
       perMinute: options.backgroundPerMinute ?? DEFAULT_GECKOTERMINAL_BACKGROUND_PER_MINUTE,
+      burst: GATE_BURST,
+    });
+    this.freeGate = new RateGate({
+      name: "geckoterminal-free",
+      perMinute: GECKOTERMINAL_FREE_FALLBACK_PER_MINUTE,
       burst: GATE_BURST,
     });
   }
@@ -216,6 +230,11 @@ export class GeckoTerminalClient {
    * shares the per-IP limit with every other lookup of this client; throws RateGateDeadlineError
    * when no slot opens within `waitMs`. Null when GeckoTerminal doesn't know the pool. `aggregate`
    * 5 asks for five-minute candles instead, which reach five times further back.
+   *
+   * A keyed client whose day's CoinGecko budget for the chart backfill is spent reads
+   * GeckoTerminal's free API instead, on a gate of its own (user report 2026-10-23, 9q57: a chart opened after the
+   * charts lane ran out had no candles at all, the backfill waiting out the day). The same pages,
+   * no credits.
    */
   async poolMinuteCandles(
     pool: string,
@@ -225,20 +244,33 @@ export class GeckoTerminalClient {
     aggregate: 1 | 5 = 1,
   ): Promise<unknown> {
     const deadline = Date.now() + waitMs;
-    const gate = {
-      acquire: () => this.backgroundGate.acquire(deadline),
-      throttled: (delayMs: number) => {
-        this.priorityGate.throttled(delayMs);
-        this.backgroundGate.throttled(delayMs);
-      },
-    };
+    const lane = coinGeckoLaneOf(currentApiFeature());
+    // The charts lane only: Peaks' reads wait for their budget rather than take the free API's.
+    const free = this.keyed && lane === "charts" && !coinGeckoBudget.allows(lane);
+    const gate = free
+      ? {
+          acquire: () => this.freeGate.acquire(deadline),
+          throttled: (ms: number) => this.freeGate.throttled(ms),
+        }
+      : {
+          acquire: () => this.backgroundGate.acquire(deadline),
+          throttled: (delayMs: number) => {
+            this.priorityGate.throttled(delayMs);
+            this.backgroundGate.throttled(delayMs);
+          },
+        };
     const before = Math.floor(beforeMs / 1_000);
-    this.takeCredit();
+    if (!free) this.takeCredit();
     try {
       return await fetchJson<unknown>(
-        `${this.baseUrl}/networks/${SOLANA}/pools/${encodeURIComponent(pool)}/ohlcv/minute?aggregate=${aggregate}` +
+        `${free ? FREE_BASE_URL : this.baseUrl}/networks/${SOLANA}/pools/${encodeURIComponent(pool)}/ohlcv/minute?aggregate=${aggregate}` +
           `&limit=1000&before_timestamp=${before}&currency=usd&token=${encodeURIComponent(token)}`,
-        { timeoutMs: 10_000, retries: 0, gate, headers: this.headers },
+        {
+          timeoutMs: 10_000,
+          retries: 0,
+          gate,
+          headers: free ? { accept: "application/json" } : this.headers,
+        },
       );
     } catch (err) {
       if (err instanceof HttpError && err.status === 404) return null;
