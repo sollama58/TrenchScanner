@@ -3,6 +3,7 @@ import { adminWalletSet, prisma, resolveAccess, resolveFeedCalls, type Env } fro
 import { clientIp, ipRateLimitKey } from "../clientIp.js";
 import { contestState, resolveFeedModels, SAVED_FEED_SELECT, toSavedFeed } from "../contest.js";
 import {
+  extensionKeyAccess,
   extensionKeyDeniedMessage,
   extensionKeyFromHeader,
   extensionKeyMatches,
@@ -11,7 +12,6 @@ import {
   isExtensionKeyShape,
 } from "../extensionKey.js";
 import { recentOverlay } from "../extensionLookup.js";
-import { modelAlertKeyAccess } from "../modelAlertKey.js";
 import { overlaySettingsSchema, parseOverlaySettings } from "../overlaySettings.js";
 
 /**
@@ -57,6 +57,11 @@ const lastUsedWritten = new Map<string, number>();
 /** Drops a key's cached check, so a revoke on this process takes effect on the next request. */
 export function forgetExtensionKey(keyId: string): void {
   for (const [hash, entry] of authCache) if (entry.client.keyId === keyId) authCache.delete(hash);
+}
+
+/** Drops every cached check of one user's keys: their sign-out everywhere revoked them. */
+export function forgetExtensionKeysOf(userId: string): void {
+  for (const [hash, entry] of authCache) if (entry.client.userId === userId) authCache.delete(hash);
 }
 
 export function resetExtensionAuthState(): void {
@@ -141,7 +146,7 @@ export async function registerExtensionRoutes(app: FastifyInstance, opts: { env:
       return reply.code(401).send({ error: "invalid_api_key" });
     }
     const access = await resolveAccess(row.user.walletAddress, admins);
-    if (!modelAlertKeyAccess(access)) {
+    if (!extensionKeyAccess(access)) {
       authCache.delete(hash);
       return reply.code(403).send({ error: extensionKeyDeniedMessage(access.reason) });
     }

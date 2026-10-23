@@ -1,4 +1,5 @@
 import {
+  CANDIDATE_WATCH_WINDOW_MINUTES,
   createLogger,
   prisma,
   REPORTED_LABEL_RULE,
@@ -173,10 +174,13 @@ export function trenchWindow(
   from: number,
   to: number,
   runnerMoments?: readonly RunnerMoment[],
+  runnersTo = to,
 ): TrenchWindow {
+  const until = Math.min(to, runnersTo);
   const runners = runnerMoments
-    ? new Set(runnerMoments.filter((m) => m.at.getTime() >= from && m.at.getTime() < to).map((m) => m.token))
-        .size
+    ? new Set(
+        runnerMoments.filter((m) => m.at.getTime() >= from && m.at.getTime() < until).map((m) => m.token),
+      ).size
     : null;
   const inside = hours.filter((h) => h.hour.getTime() >= from && h.hour.getTime() < to);
   const sum = (pick: (h: TrenchHour) => number) => inside.reduce((s, h) => s + pick(h), 0);
@@ -240,13 +244,17 @@ export function buildTrenchStats(
 ) {
   const end = trenchWindowEnd(hours, now);
   const span = TRENCH_WINDOW_HOURS * HOUR_MS;
+  // Runners count only moments old enough to be graded: a label lands when its window closes
+  // (CANDIDATE_WATCH_WINDOW_MINUTES). Each comparison window is cut the same distance back, so the
+  // current count isn't measured against fully graded ones (user decision 2026-10-23, audit WB-5).
+  const graded = now - CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
   return {
     windowHours: TRENCH_WINDOW_HOURS,
     minSample: TRENCH_MIN_SAMPLE,
-    current: trenchWindow(hours, end - span, end, runnerMoments),
+    current: trenchWindow(hours, end - span, end, runnerMoments, graded),
     compare: TRENCH_COMPARE_HOURS_AGO.map((hoursAgo) => {
       const to = end - hoursAgo * HOUR_MS;
-      return { hoursAgo, ...trenchWindow(hours, to - span, to, runnerMoments) };
+      return { hoursAgo, ...trenchWindow(hours, to - span, to, runnerMoments, graded - hoursAgo * HOUR_MS) };
     }),
   };
 }
