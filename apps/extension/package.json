@@ -1,0 +1,18 @@
+{
+  "name": "@trenchscanner/extension",
+  "version": "0.1.0",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "description": "Trench Overlay: rings TrenchScanner alerts on Axiom, Terminal and GMGN",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit && node build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.24",
+    "esbuild": "^0.28.2",
+    "jsdom": "^25.0.1"
+  }
+}

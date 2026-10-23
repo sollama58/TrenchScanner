@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "Trench Overlay",
+  "short_name": "Trench Overlay",
+  "version": "0.1.0",
+  "description": "Rings the tokens your TrenchScanner filters and models alerted on Axiom, Terminal and GMGN.",
+  "minimum_chrome_version": "116",
+  "permissions": ["storage"],
+  "host_permissions": ["https://api.trenchscanner.app/*"],
+  "background": { "service_worker": "sw.js", "type": "module" },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://axiom.trade/*",
+        "https://*.axiom.trade/*",
+        "https://*.padre.gg/*",
+        "https://gmgn.ai/*",
+        "https://*.gmgn.ai/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    }
+  ],
+  "action": {
+    "default_title": "Trench Overlay",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'" }
+}
