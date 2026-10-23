@@ -242,6 +242,24 @@ describe("public worker health: Pump.fun list and launch details", () => {
   });
 });
 
+/** The chart's candle store writers reach it: the curve tape's rows, the backfill and the chain fill. */
+describe("public worker health: candle store", () => {
+  it("carries curveCandles, candleBackfill and candleChainFill", () => {
+    const curveCandles = { coins: 3, rows: 40, failed: 0, following: 12 };
+    const candleBackfill = { steps: 5, pages: 4, done: 2, failed: 0, geckoPerMinute: 4 };
+    const candleChainFill = { pages: 5, rows: 9, coins: 2, failed: 0, creditsToday: 120 };
+    const row = {
+      job: "scan",
+      lastRunAt: new Date(1_000),
+      lastSuccessAt: null,
+      lastError: null,
+      meta: { durationMs: 900, curveCandles, candleBackfill, candleChainFill },
+    };
+    const s = summarizeHeartbeat(row as unknown as Parameters<typeof summarizeHeartbeat>[0], 2_000);
+    expect(s.lastRun).toMatchObject({ curveCandles, candleBackfill, candleChainFill });
+  });
+});
+
 /** A run that did nothing says why, so a reviewer with no key doesn't read as a healthy success. */
 describe("public worker health: skipped runs", () => {
   it("carries the job's skipped reason", () => {

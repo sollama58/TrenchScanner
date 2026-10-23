@@ -475,7 +475,9 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   // scans, calls, skips and crossing-to-decision times (entryFastPath). The cycle's RugCheck reports: cached, and
   // looked up while it waited (rugCheckLookups). The linked-wallet funder reads and their credits
   // (linkedWalletCalls), and the holder-transfer reads (holderTransferCalls) with the Helius stream that spares them (heliusStream). The young coins' curve tape and its spend (curveTape). The live tape's pages before a call (liveTape). The Helius credits of the freshness, balance and on-chain holder stages (heliusStageCredits). Jupiter's newest-launch
-  // reads between cycles and the launches they found (launchPoller).
+  // reads between cycles and the launches they found (launchPoller). The chart's candle store: the
+  // curve tape's 1-second rows (curveCandles), the backfill to launch (candleBackfill), and the
+  // chain fill's pages, rows and day's credits (candleChainFill).
   for (const key of [
     "dexScreenerCalls",
     "jupiterCalls",
@@ -492,6 +494,9 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
     "pumpfunList",
     "launchDetails",
     "launchPoller",
+    "curveCandles",
+    "candleBackfill",
+    "candleChainFill",
   ] as const) {
     const calls = stageTimings(meta, key);
     if (calls) out[key] = calls;
