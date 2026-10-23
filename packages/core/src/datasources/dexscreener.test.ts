@@ -546,6 +546,22 @@ describe("token info orders", () => {
     expect(urls.every((url) => url.includes("/orders/v1/solana/"))).toBe(true);
   });
 
+  it("gives up on the orders and takeover reads, instead of queueing, while the discovery budget is paused", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      urls.push(url);
+      return Promise.resolve(new Response("[]"));
+    });
+    const client = new DexScreenerClient();
+    // A 429 paused the budget for longer than these reads wait (DEX_INFO_GATE_WAIT_MS).
+    (client as unknown as { discoveryGate: { throttled(ms: number): void } }).discoveryGate.throttled(60_000);
+    const startedAt = Date.now();
+    expect(await client.readTokenInfoOrders(["a", "b"])).toEqual([]);
+    expect(await client.communityTakeoverMints()).toEqual([]);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(urls).toEqual([]);
+  });
+
   it("marks a profile feed mint as token info and a boost-only mint as not", async () => {
     vi.stubGlobal("fetch", (url: string) => {
       const body = url.includes("token-profiles")

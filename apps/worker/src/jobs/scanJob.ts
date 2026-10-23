@@ -218,18 +218,36 @@ const logger = createLogger("scan-job");
  */
 const dexInfoQueue: string[] = [];
 
-function rememberDexInfo(mint: string, checkedAt?: Date | null): void {
+/** Visible for tests. */
+export function rememberDexInfo(mint: string, checkedAt?: Date | null): void {
   if (!mint || dexInfoQueue.length >= 48 || dexInfoQueue.includes(mint)) return;
   if (checkedAt && Date.now() - checkedAt.getTime() < DEX_INFO_RECHECK_MS) return;
   dexInfoQueue.push(mint);
 }
 
-function scheduleDexInfo(dex: DexScreenerClient): void {
-  if (typeof dex.readTokenInfoOrders !== "function" || dexInfoQueue.length === 0) return;
+/**
+ * The orders read in flight. One at a time: each read also fetches the takeover feed and shares
+ * the discovery budget with the scan's own reads, and four call sites a cycle used to stack them
+ * up behind a slow one (audit 2026-10-22, F8c). Mints queued meanwhile wait for the next call.
+ */
+let dexInfoInFlight: Promise<void> | null = null;
+
+/** Starts an orders read of the queued mints unless one is running. Returns it (for tests). */
+export function scheduleDexInfo(
+  dex: Pick<DexScreenerClient, "readTokenInfoOrders"> &
+    Partial<Pick<DexScreenerClient, "communityTakeoverMints">>,
+): Promise<void> | null {
+  if (typeof dex.readTokenInfoOrders !== "function" || dexInfoQueue.length === 0) return null;
+  if (dexInfoInFlight) return null;
   const mints = dexInfoQueue.splice(0, dexInfoQueue.length);
-  void recordDexInfoOrders(dex, mints).catch((err: unknown) =>
-    logger.warn("dexscreener token info orders failed", { error: String(err) }),
-  );
+  const run = recordDexInfoOrders(dex, mints)
+    .then(() => undefined)
+    .catch((err: unknown) => logger.warn("dexscreener token info orders failed", { error: String(err) }))
+    .finally(() => {
+      if (dexInfoInFlight === run) dexInfoInFlight = null;
+    });
+  dexInfoInFlight = run;
+  return run;
 }
 
 /** How many candidates get their own DB writes + rug/match processing in flight at once. Safe to
