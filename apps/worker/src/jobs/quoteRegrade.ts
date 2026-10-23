@@ -170,7 +170,7 @@ export async function runQuoteRegrade(
     const nowMs = now();
     let waiting = 0;
     for (const row of tokenRows) {
-      if (tries !== null && !givesUp(tries, row.anchorAt, nowMs)) {
+      if (tries !== null && !givesUp(tries)) {
         waiting += 1;
         continue;
       }

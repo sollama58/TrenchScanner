@@ -3,6 +3,7 @@ import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, replayOutcome, type MinuteCandle } from "@trenchscanner/core";
 import { CandlesUnavailableError, PUMP_PAUSED_NO_KEY } from "./minuteCandleReader.js";
+import { GIVE_UP_TRIES, RETRY_MAX_MS } from "./candleRetry.js";
 import {
   LIGHTHOUSE_MARKER,
   mergeCandles,
@@ -241,7 +242,7 @@ describe.skipIf(!dbAvailable)("exit plan re-score", () => {
     await prisma.lighthouseHour.delete({ where: { hour } });
   });
 
-  it("backs off a coin no source can answer without finishing, and skips its week-old rows", async () => {
+  it("backs off a coin no source can answer without finishing, and skips its rows once its misses run out", async () => {
     // A window of its own, so the finish only waits on this coin.
     const anchor = Date.parse("2020-05-01T12:00:00Z");
     const own = { since: new Date("2020-05-01T00:00:00Z"), until: new Date("2020-05-03T00:00:00Z") };
@@ -260,8 +261,13 @@ describe.skipIf(!dbAvailable)("exit plan re-score", () => {
     // Only backed-off coins left: neither asked nor finished.
     expect(await run(anchor + 30 * 3_600_000 + 5 * MIN)).toEqual({ backedOff: 1, remaining: 1 });
     expect(asked).toBe(1);
-    expect(await run(anchor + 8 * 86_400_000)).toMatchObject({ skipped: 1, remaining: 0 });
-    expect(asked).toBe(2);
+    let at = anchor + 30 * 3_600_000;
+    for (let i = 2; i < GIVE_UP_TRIES; i++) {
+      at += RETRY_MAX_MS + 1;
+      expect(await run(at)).toMatchObject({ unavailable: 1, remaining: 1 });
+    }
+    expect(await run(at + RETRY_MAX_MS + 1)).toMatchObject({ skipped: 1, remaining: 0 });
+    expect(asked).toBe(GIVE_UP_TRIES);
     expect((await prisma.exitPlanRescore.findUniqueOrThrow({ where: { outcomeId: row.id } })).result).toBe(
       "no-candles",
     );

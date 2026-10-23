@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  CandleRetry,
-  GIVE_UP_AGE_MS,
-  GIVE_UP_TRIES,
-  givesUp,
-  pumpPausedNoKey,
-  RETRY_FIRST_MS,
-} from "./candleRetry.js";
+import { CandleRetry, GIVE_UP_TRIES, givesUp, pumpPausedNoKey, RETRY_FIRST_MS } from "./candleRetry.js";
 import { CandlesUnavailableError, PUMP_PAUSED_NO_KEY } from "./minuteCandleReader.js";
 
 const MIN = 60_000;
@@ -30,11 +23,9 @@ describe("CandleRetry", () => {
     expect(retry.blocked(now + RETRY_FIRST_MS - 1)).toEqual(["t"]);
   });
 
-  it("gives up after GIVE_UP_TRIES misses or on a row more than a week past its anchor", () => {
-    const anchor = new Date(0);
-    expect(givesUp(GIVE_UP_TRIES - 1, anchor, GIVE_UP_AGE_MS)).toBe(false);
-    expect(givesUp(GIVE_UP_TRIES, anchor, 0)).toBe(true);
-    expect(givesUp(1, anchor, GIVE_UP_AGE_MS + 1)).toBe(true);
+  it("gives up after GIVE_UP_TRIES misses, however old the row", () => {
+    expect(givesUp(GIVE_UP_TRIES - 1)).toBe(false);
+    expect(givesUp(GIVE_UP_TRIES)).toBe(true);
   });
 
   it("tells Pump.fun's pause without a CoinGecko key from a coin's own miss", () => {

@@ -308,7 +308,7 @@ export async function runLabelRegradeJob(
     let waiting = 0;
     for (const row of rows) {
       const regradedAt = new Date(nowMs);
-      if (tries !== null && !givesUp(tries, row.anchorAt, nowMs)) {
+      if (tries !== null && !givesUp(tries)) {
         waiting += 1;
         continue;
       }

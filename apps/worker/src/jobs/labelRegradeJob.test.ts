@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { HttpError, prisma, type MinuteCandle } from "@trenchscanner/core";
 import { resetRegradeCursor, runLabelRegradeJob } from "./labelRegradeJob.js";
 import { CandlesUnavailableError, PUMP_PAUSED_NO_KEY } from "./minuteCandleReader.js";
+import { GIVE_UP_TRIES, RETRY_MAX_MS } from "./candleRetry.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -222,21 +223,25 @@ describe.skipIf(!dbAvailable)("label regrade job", () => {
     expect(after).toMatchObject({ labelRule: 3, hit2xIn1h: true, rule3Grade: null });
   });
 
-  it("stamps a row more than a week past its anchor at its first miss", async () => {
+  it("keeps asking about a row more than a week past its anchor until its misses run out", async () => {
     const { token, row } = await seed("old-stuck");
-    const meta = await runLabelRegradeJob(
-      {
-        minuteCandles: async (mint) => {
-          if (mint === token.mintAddress) throw new CandlesUnavailableError(mint, "no pools to ask");
-          return [];
-        },
+    const stub = {
+      minuteCandles: async (mint: string): Promise<MinuteCandle[]> => {
+        if (mint === token.mintAddress) throw new CandlesUnavailableError(mint, "no pools to ask");
+        return [];
       },
-      { spacingMs: 0, now: () => ANCHOR + 8 * 86_400_000, coinsPerRun: 1000 },
-    );
+    };
+    let at = ANCHOR + 8 * 86_400_000;
+    const regradedAt = async () =>
+      (await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } })).regradedAt;
+    for (let i = 1; i < GIVE_UP_TRIES; i++) {
+      await runLabelRegradeJob(stub, { spacingMs: 0, now: () => at, coinsPerRun: 1000 });
+      expect(await regradedAt()).toBeNull();
+      at += RETRY_MAX_MS + 1;
+    }
+    const meta = await runLabelRegradeJob(stub, { spacingMs: 0, now: () => at, coinsPerRun: 1000 });
     expect((meta.skipped as Record<string, number>)["no-candles"]).toBeGreaterThanOrEqual(1);
-    expect(
-      (await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } })).regradedAt,
-    ).not.toBeNull();
+    expect(await regradedAt()).not.toBeNull();
   });
 
   it("stops the run once a few coins in a row find Pump.fun paused with no CoinGecko key", async () => {

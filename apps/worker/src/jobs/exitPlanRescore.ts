@@ -269,7 +269,7 @@ export async function runExitPlanRescore(
     const nowMs = now();
     let waiting = 0;
     for (const row of rows) {
-      if (tries !== null && !givesUp(tries, row.anchorAt, nowMs)) {
+      if (tries !== null && !givesUp(tries)) {
         waiting += 1;
         continue;
       }

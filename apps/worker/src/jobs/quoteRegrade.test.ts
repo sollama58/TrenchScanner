@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, type MinuteCandle } from "@trenchscanner/core";
 import { resetQuoteRegrade, runQuoteRegrade } from "./quoteRegrade.js";
 import { CandlesUnavailableError, PUMP_PAUSED_NO_KEY } from "./minuteCandleReader.js";
+import { GIVE_UP_TRIES, RETRY_MAX_MS } from "./candleRetry.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -121,7 +122,7 @@ describe.skipIf(!dbAvailable)("quote re-grade", () => {
     );
   });
 
-  it("backs off a coin no source can answer, and marks it no-candles once its row is a week old", async () => {
+  it("backs off a coin no source can answer, and marks it no-candles once its misses run out", async () => {
     const { token, row } = await seed("unavailable");
     let asked = 0;
     const stub = {
@@ -137,8 +138,12 @@ describe.skipIf(!dbAvailable)("quote re-grade", () => {
     // Backed off: not asked, and not finished either.
     expect(await run(NOW + 5 * MIN)).toMatchObject({ backedOff: 1, unavailable: 0 });
     expect(asked).toBe(1);
-    await run(ANCHOR + 8 * 86_400_000);
-    expect(asked).toBe(2);
+    let at = NOW;
+    for (let i = 2; i <= GIVE_UP_TRIES; i++) {
+      at += RETRY_MAX_MS + 1;
+      await run(at);
+    }
+    expect(asked).toBe(GIVE_UP_TRIES);
     expect((await prisma.quoteRegrade.findUniqueOrThrow({ where: { outcomeId: row.id } })).result).toBe(
       "no-candles",
     );
