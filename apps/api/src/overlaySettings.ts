@@ -87,7 +87,7 @@ function section<T extends Record<string, unknown>>(
   const raw = record(stored);
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(fallback)) {
-    const parsed = schema.shape[key]!.safeParse(raw[key]);
+    const parsed = (schema.shape[key] as z.ZodType).safeParse(raw[key]);
     out[key] = parsed.success ? parsed.data : fallback[key];
   }
   return out as T;

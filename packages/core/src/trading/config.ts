@@ -70,7 +70,7 @@ export const tradingBotConfigSchema = z.object({
       /** With requireAiBuy: also skip a "buy" whose own 2x estimate is under this (0-1; 0 = any). */
       minAiProbability2x: z.number().min(0).max(1).default(0),
     })
-    .default({}),
+    .prefault({}),
   /** SOL spent per entry. */
   buySol: z.number().positive().default(0.05),
   /** Positions held (or being bought) at once; signals past it are skipped, not queued. */

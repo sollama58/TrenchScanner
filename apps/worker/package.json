@@ -19,7 +19,7 @@
     "@trenchscanner/core": "*",
     "dotenv": "^16.4.5",
     "pg": "^8.13.1",
-    "zod": "^3.23.8"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
