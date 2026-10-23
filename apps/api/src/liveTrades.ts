@@ -27,15 +27,25 @@ const logger = createLogger("live-trades");
  * its live tail (liveCurve.ts).
  *
  * Only while someone is looking: a coin nobody has asked about for IDLE_MS is let go, at most
- * MAX_FOLLOWED are followed (the least recently asked goes first), and the socket closes once
- * nothing has been followed for SOCKET_IDLE_MS. Nothing is stored: a coin's newest MAX_TRADES are
+ * MAX_FOLLOWED are followed, and the socket closes once nothing has been followed for
+ * SOCKET_IDLE_MS. A coin asked about within IDLE_MS is never let go for another: once every slot is
+ * held, a new coin is "unavailable" (busy) until one goes idle, and one account may hold at most
+ * LIVE_TRADES_PER_USER coins (audit 2026-10-22, AT-4: a 51st coin used to evict a watched one, so a
+ * script cycling coins churned everyone's feed). Nothing is stored: a coin's newest MAX_TRADES are
  * kept in memory while it is followed, and the feed starts when the follow does.
  */
 
 /** A coin is let go once no page has asked about it for this long. */
 const IDLE_MS = 30_000;
-/** Coins followed at once (two logs keys each); past it the least recently asked is let go. */
-const MAX_FOLLOWED = 50;
+/** Coins followed at once (two logs keys each); past it only a coin gone idle is let go for a new one. */
+export const MAX_FOLLOWED = 50;
+/**
+ * Distinct coins one account may have followed at once (asked within IDLE_MS), as bubble maps
+ * (HOLDER_WATCHES_PER_USER): a few tabs' worth. A fifth is "unavailable" (busy) until one idles.
+ */
+export const LIVE_TRADES_PER_USER = 4;
+/** Accounts whose asks are kept for that cap (the least recently asking first out). */
+const MAX_ASKERS = 10_000;
 /** A coin's newest trades kept, and so the most one answer carries. */
 export const MAX_TRADES = 200;
 /** The socket closes after nothing has been followed for this long. */
@@ -58,6 +68,11 @@ type Stream = Pick<HeliusAccountStream, "start" | "stop" | "watch" | "unwatch" |
 export interface LiveTradesAnswer {
   /** "live": followed now, trades since `since`; "pending": subscribing; "unavailable": can't follow this coin here. */
   status: "live" | "pending" | "unavailable";
+  /**
+   * With "unavailable": "busy" when the coin could be followed but every slot is held (this
+   * account's LIVE_TRADES_PER_USER, or MAX_FOLLOWED here), so it is worth asking again soon.
+   */
+  reason?: "busy";
   /** When the follow began (ms epoch): trades before it aren't in the feed. Null unless live. */
   since: number | null;
   /** Pass back as `after`; 0 before any trade. */
@@ -168,6 +183,8 @@ export class LiveTrades {
   private readonly waiters = new Map<string, Set<() => void>>();
   /** The curve and pool read out now, if one is: the next waits for it to finish. */
   private reading: Promise<void> | null = null;
+  /** Each account's coins, by when it last asked (LIVE_TRADES_PER_USER). Oldest account first. */
+  private readonly asks = new Map<string, Map<string, number>>();
 
   constructor(private readonly deps: LiveTradesDeps) {
     this.now = deps.now ?? Date.now;
@@ -178,13 +195,20 @@ export class LiveTrades {
    * `mint`'s trades after `after` (a cursor from an earlier answer), following the coin from now
    * on if it wasn't. With `waitMs` (at most MAX_WAIT_MS), an ask with nothing new is held until the
    * next trade lands, so the page shows it the moment it does; `signal` lets go of it early.
+   * `who` (the account asking) counts the coin toward its LIVE_TRADES_PER_USER.
    */
-  async read(mint: string, after: number, waitMs = 0, signal?: AbortSignal): Promise<LiveTradesAnswer> {
-    const first = await this.answer(mint, after);
+  async read(
+    mint: string,
+    after: number,
+    waitMs = 0,
+    signal?: AbortSignal,
+    who?: string,
+  ): Promise<LiveTradesAnswer> {
+    const first = await this.answer(mint, after, who);
     if (waitMs <= 0 || first.status === "unavailable") return first;
     if (first.trades.length > 0 || signal?.aborted) return { ...first, held: true };
     await this.next(mint, Math.min(waitMs, MAX_WAIT_MS), signal);
-    return { ...(await this.answer(mint, after)), held: true };
+    return { ...(await this.answer(mint, after, who)), held: true };
   }
 
   /** Resolves on `mint`'s next trade or its going live, after `ms`, or when `signal` aborts. */
@@ -228,10 +252,37 @@ export class LiveTrades {
     return [...this.followed.keys()];
   }
 
-  private async answer(mint: string, after: number): Promise<LiveTradesAnswer> {
-    const f = this.follow(mint, this.now());
-    if (!f) return { status: "unavailable", since: null, cursor: 0, trades: [], held: false };
+  private async answer(mint: string, after: number, who?: string): Promise<LiveTradesAnswer> {
+    const now = this.now();
+    const coins = who === undefined ? undefined : this.asksOf(who, now);
+    const f =
+      coins && !coins.has(mint) && coins.size >= LIVE_TRADES_PER_USER ? "busy" : this.follow(mint, now);
+    if (f === null) return { status: "unavailable", since: null, cursor: 0, trades: [], held: false };
+    if (f === "busy")
+      return { status: "unavailable", reason: "busy", since: null, cursor: 0, trades: [], held: false };
+    if (who !== undefined && coins) {
+      coins.delete(mint);
+      coins.set(mint, now);
+      this.asks.set(who, coins);
+    }
     return this.priced(mint, f, after);
+  }
+
+  /**
+   * The coins `who` asked about within IDLE_MS, oldest ask first, with the account moved to the
+   * newest end of the asks (an account with none is forgotten until it follows one).
+   */
+  private asksOf(who: string, now: number): Map<string, number> {
+    const coins = this.asks.get(who) ?? new Map<string, number>();
+    this.asks.delete(who);
+    for (const [mint, at] of coins) if (now - at > IDLE_MS) coins.delete(mint);
+    if (coins.size > 0) this.asks.set(who, coins);
+    while (this.asks.size > MAX_ASKERS) {
+      const oldest = this.asks.keys().next().value;
+      if (oldest === undefined) break;
+      this.asks.delete(oldest);
+    }
+    return coins;
   }
 
   private async priced(mint: string, f: Followed, after: number): Promise<LiveTradesAnswer> {
@@ -298,13 +349,16 @@ export class LiveTrades {
     };
   }
 
-  /** Starts following `mint` if it wasn't; null when it can't be followed here. */
-  private follow(mint: string, now: number): Followed | null {
+  /**
+   * Starts following `mint` if it wasn't; null when it can't be followed here, "busy" when every
+   * slot is held by a coin asked about within IDLE_MS.
+   */
+  private follow(mint: string, now: number): Followed | "busy" | null {
     let f = this.followed.get(mint);
     if (!f) {
       const curve = pumpCurveAddressOf(mint);
       if (!curve || !this.deps.makeStream) return null;
-      if (this.followed.size >= MAX_FOLLOWED) this.dropLeastAsked();
+      if (this.followed.size >= MAX_FOLLOWED && !this.dropIdle(now)) return "busy";
       f = {
         curve,
         pool: pumpSwapPoolOf(mint) ?? null,
@@ -542,7 +596,12 @@ export class LiveTrades {
     this.followed.delete(mint);
   }
 
-  private dropLeastAsked(): void {
+  /**
+   * Lets go of the least recently asked coin if no page has asked about it within IDLE_MS (the
+   * round would let it go anyway); a coin still being watched is never let go for another. Whether
+   * a slot was freed.
+   */
+  private dropIdle(now: number): boolean {
     let oldest: string | null = null;
     let at = Infinity;
     for (const [mint, f] of this.followed)
@@ -550,7 +609,9 @@ export class LiveTrades {
         at = f.askedAt;
         oldest = mint;
       }
-    if (oldest !== null) this.drop(oldest);
+    if (oldest === null || now - at <= IDLE_MS) return false;
+    this.drop(oldest);
+    return true;
   }
 }
 

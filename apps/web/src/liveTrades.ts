@@ -19,6 +19,8 @@ export interface LiveTokenTrade {
 /** Mirrors apps/api/src/liveTrades.ts LiveTradesAnswer. */
 export interface LiveTradesAnswer {
   status: "live" | "pending" | "unavailable";
+  /** With "unavailable": every follow slot is held just now (the account's four coins, or the server's). */
+  reason?: "busy";
   since: number | null;
   cursor: number;
   trades: LiveTokenTrade[];
@@ -34,6 +36,8 @@ export interface LiveTrades {
   trades: LiveTokenTrade[];
   /** null before the first answer. */
   status: LiveTradesAnswer["status"] | null;
+  /** "unavailable" only because every follow slot is held just now: it starts once one frees. */
+  busy?: boolean;
   /** From when the feed holds every trade (ms); null until it is live. */
   since: number | null;
   /**
@@ -100,6 +104,8 @@ const HELD_GAP_MS = 750;
 const MAX_BACKOFF_MS = 30_000;
 /** How often a coin answered "unavailable" for is asked again. */
 const UNAVAILABLE_RECHECK_MS = 60_000;
+/** Sooner when it was only busy: a slot frees once another coin's page has been closed 30 s. */
+const BUSY_RECHECK_MS = 15_000;
 
 /** One coin's feed, shared by every view of it on the page (the Live trades tab, the chart's marks). */
 interface SharedFeed {
@@ -180,6 +186,7 @@ function startFeed(base: string): SharedFeed {
             ? prev.trades.concat(fresh).slice(-MAX_TRADES)
             : prev.trades,
         status: a.status,
+        busy: a.status === "unavailable" && a.reason === "busy",
         since: a.since,
         history,
         supply: typeof a.supply === "number" && a.supply > 0 ? a.supply : prev.supply,
@@ -188,7 +195,9 @@ function startFeed(base: string): SharedFeed {
       // "Unavailable" can pass (the coin reaches Token, a follow slot frees up), so ask again now and then.
       next(
         a.status === "unavailable"
-          ? UNAVAILABLE_RECHECK_MS
+          ? a.reason === "busy"
+            ? BUSY_RECHECK_MS
+            : UNAVAILABLE_RECHECK_MS
           : a.held
             ? Math.max(0, HELD_GAP_MS - (Date.now() - sent))
             : POLL_MS,
