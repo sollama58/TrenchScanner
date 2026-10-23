@@ -116,17 +116,30 @@ describe("HeliusClient.getEarliestActivityBatch (non-Helius endpoint)", () => {
     expect((await client.getEarliestActivityBatch(["a"])).get("a")).toEqual({ status: "indeterminate" });
   });
 
-  it("asks for a bounded page rather than the method's 1000 maximum", async () => {
-    // The answer extracted is only "is the first transaction recent?", and a signature is ~120
-    // bytes on the wire - a full 1000 page ran ~120KB per wallet for two fields.
+  it("reads the funders' 1000 page but answers from its first 200 rows, as the 200 page did", async () => {
+    // One page shared with the funder read (Helius audit 2026-10-23, N-1). A wallet with 500
+    // signatures is still a full 200 page: bounded at its 200th newest, not exact at its 500th.
+    const page = Array.from({ length: 500 }, (_, i) => ({
+      signature: `s${i}`,
+      blockTime: SECONDS + 500 - i,
+    }));
     const { url, requests } = await startServer((calls) =>
-      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: [{ signature: "s", blockTime: SECONDS }] })),
+      calls.map((c) => ({
+        jsonrpc: "2.0",
+        id: c.id,
+        result: page.slice(0, (c.params[1] as { limit: number }).limit),
+      })),
     );
     const client = new HeliusClient({ rpcUrl: url });
-    await client.getEarliestActivityBatch(["a"]);
+    const result = await client.getEarliestActivityBatch(["a"]);
 
     const calls = requests[0]!.body as { params: [string, { limit: number }] }[];
-    expect(calls[0]!.params[1].limit).toBeLessThanOrEqual(200);
+    expect(calls[0]!.params[1]).toEqual({ limit: 1000 });
+    expect(result.get("a")).toEqual({
+      status: "older-than",
+      boundAt: new Date((SECONDS + 301) * 1000),
+      lastActivityAt: new Date((SECONDS + 500) * 1000),
+    });
   });
 
   it("returns a usable upper bound - not a shrug - when the page comes back full", async () => {
