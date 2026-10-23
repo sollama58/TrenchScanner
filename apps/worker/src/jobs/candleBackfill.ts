@@ -3,6 +3,7 @@ import {
   createLogger,
   fetchPumpCandles,
   GECKO_CANDLE_PAGE,
+  HttpError,
   minuteCoversBefore,
   parseGeckoOhlcv,
   prisma,
@@ -41,6 +42,8 @@ const TICK_MS = 3_000;
 const LEASE_MS = 2 * 60_000;
 /** A step held back by the budget is tried again after this; other coins go meanwhile. */
 const BUDGET_WAIT_MS = 15_000;
+/** A page CoinGecko answered 429 is asked again after this; the coin is not counted as failing. */
+const THROTTLED_WAIT_MS = 60_000;
 /** Failed steps a coin may take before it is given up. */
 const MAX_FAILURES = 5;
 /** Stored covers this close are one unbroken stretch (a minute source omits quiet minutes). */
@@ -192,6 +195,11 @@ export async function stepBackfill(
     body = await deps.geckoPage(pool, job.mint, cursor);
   } catch (err) {
     if (err instanceof RateGateDeadlineError) return { cursor: at(cursor), nextAt: at(now + BUDGET_WAIT_MS) };
+    // The provider's limit, not the coin: five 429s in a row (CoinGecko answered every call 429
+    // for half an hour on 2026-10-23) used to give the coin up with nothing saved.
+    if (err instanceof HttpError && err.status === 429) {
+      return { cursor: at(cursor), nextAt: at(now + THROTTLED_WAIT_MS), error: String(err).slice(0, 300) };
+    }
     return { cursor: at(cursor), ...failed(err) };
   }
   const bars = body === null ? [] : parseGeckoOhlcv(body).filter((b) => b.t < cursor);
