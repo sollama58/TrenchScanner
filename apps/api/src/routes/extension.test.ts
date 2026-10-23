@@ -75,7 +75,11 @@ const TAG = `ext-${Date.now()}`;
 
 describe.skipIf(!dbAvailable)("extension overlay api", () => {
   let app: FastifyInstance;
-  const env: Env = dbAvailable ? loadEnv() : (undefined as never);
+  // Extension keys are admin-only until the extension is listed (user decision 2026-10-23).
+  const ADMINS = ["cap", "junk", "cookie", "feed", "other", "settings", "revoke", "origin", "signout"];
+  const env: Env = dbAvailable
+    ? { ...loadEnv(), ADMIN_WALLET_ADDRESSES: ADMINS.map((s) => `${TAG}-${s}`).join(",") }
+    : (undefined as never);
   const signer = dbAvailable
     ? createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS)
     : (undefined as never);
@@ -123,11 +127,16 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
   }, 30_000);
 
-  it("creates keys for paid access only, up to the cap, and lists prefixes", async () => {
-    const free = await makeUser("free", false);
-    const refused = await session(free.cookie, "POST", "/settings/extension-keys");
-    expect(refused.statusCode).toBe(403);
-    expect(refused.json().error).toMatch(/browser extension/);
+  it("creates keys for admins only, up to the cap, and lists prefixes", async () => {
+    for (const [suffix, paid] of [
+      ["free", false],
+      ["paidonly", true],
+    ] as const) {
+      const user = await makeUser(suffix, paid);
+      const refused = await session(user.cookie, "POST", "/settings/extension-keys");
+      expect(refused.statusCode).toBe(403);
+      expect(refused.json().error).toMatch(/browser extension/);
+    }
 
     const paid = await makeUser("cap", true);
     const secrets: string[] = [];
@@ -308,7 +317,7 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     expect((await ext(key, "PUT", "/ext/v1/settings", { ...next, extra: 1 })).statusCode).toBe(400);
   });
 
-  it("stops a revoked key at once, and a key whose access lapsed", async () => {
+  it("stops a revoked key at once, and a key its owner may no longer hold", async () => {
     const user = await makeUser("revoke", true);
     const created = (await session(user.cookie, "POST", "/settings/extension-keys")).json() as {
       id: string;
@@ -320,16 +329,24 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     );
     expect((await ext(created.secret, "GET", "/ext/v1/me")).statusCode).toBe(401);
 
-    const lapsing = await makeUser("lapse", true);
-    const live = (await session(lapsing.cookie, "POST", "/settings/extension-keys")).json() as {
-      secret: string;
-    };
-    await prisma.subscription.update({
-      where: { userId: lapsing.id },
-      data: { expiresAt: new Date(Date.now() - 1_000) },
+    // A key a paid non-admin made before keys went admin-only is cut off on its next request.
+    const paid = await makeUser("lapse", true);
+    const old = newExtensionKey(env.JWT_SECRET);
+    await prisma.extensionKey.create({
+      data: { userId: paid.id, prefix: old.prefix, secretHash: old.secretHash },
     });
     resetExtensionAuthState();
-    expect((await ext(live.secret, "GET", "/ext/v1/me")).statusCode).toBe(403);
+    expect((await ext(old.secret, "GET", "/ext/v1/me")).statusCode).toBe(403);
+  });
+
+  it("revokes the account's extension keys when it signs out everywhere", async () => {
+    const user = await makeUser("signout", true);
+    const { secret } = (await session(user.cookie, "POST", "/settings/extension-keys")).json() as {
+      secret: string;
+    };
+    expect((await ext(secret, "GET", "/ext/v1/me")).statusCode).toBe(200);
+    expect((await session(user.cookie, "POST", "/auth/logout")).statusCode).toBe(200);
+    expect((await ext(secret, "GET", "/ext/v1/me")).statusCode).toBe(401);
   });
 
   it("keeps the Origin check on cookie routes while letting the extension's origin through", async () => {

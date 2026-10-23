@@ -2,12 +2,12 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { adminWalletSet, prisma, resolveAccess, type Env } from "@trenchscanner/core";
 import {
+  extensionKeyAccess,
   extensionKeyDeniedMessage,
   extensionKeyLock,
   MAX_EXTENSION_KEYS,
   newExtensionKey,
 } from "../extensionKey.js";
-import { modelAlertKeyAccess } from "../modelAlertKey.js";
 import { forgetExtensionKey } from "./extension.js";
 
 /** Generates per user per minute. The cap stops a fourth active key; this stops revoke-and-mint. */
@@ -34,7 +34,7 @@ export async function registerExtensionKeyRoutes(app: FastifyInstance, { env }: 
   app.post("/extension-keys", { config: { rateLimit: GENERATE_RATE_LIMIT } }, async (request, reply) => {
     const { userId, walletAddress } = request.user!;
     const access = await resolveAccess(walletAddress, admins);
-    if (!modelAlertKeyAccess(access)) {
+    if (!extensionKeyAccess(access)) {
       return reply.code(403).send({ error: extensionKeyDeniedMessage(access.reason) });
     }
     const minted = newExtensionKey(env.JWT_SECRET);

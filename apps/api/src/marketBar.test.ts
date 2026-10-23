@@ -127,6 +127,20 @@ describe("trenchWindow runners", () => {
     expect(trenchWindow([hour(0), hour(1)], at(0).getTime(), at(2).getTime(), moments).stats.runners).toBe(2);
     expect(trenchWindow([hour(0), hour(1)], at(0).getTime(), at(2).getTime(), []).stats.runners).toBe(0);
   });
+
+  it("counts only moments old enough to be graded, in the current window and the earlier ones alike", () => {
+    const hours = [0, 1, 2, 3, 4, 5, 6].map((h) => hour(h));
+    // Two runners 10 min and 50 min before now, and the same two 2 hours earlier.
+    const now = at(6).getTime() + 5 * 60_000;
+    const moments = [-10, -50, -130, -170].map((min, i) => ({
+      token: `t${i}`,
+      at: new Date(now + min * 60_000),
+    }));
+    const stats = buildTrenchStats(hours, now, moments);
+    // The 10-minute-old one has no label yet, and its twin 2 h back is cut the same way.
+    expect(stats.current.stats.runners).toBe(1);
+    expect(stats.compare.find((c) => c.hoursAgo === 2)!.stats.runners).toBe(1);
+  });
 });
 
 describe("trenchWindowEnd", () => {

@@ -6,8 +6,9 @@ import type { AccessState } from "@trenchscanner/core";
  *
  * The same construction as Model Alert keys (modelAlertKey.ts): 32 random bytes behind a prefix,
  * shown once, stored as an HMAC peppered with the server secret. A different prefix and a
- * different pepper, so a key of one kind can never pass as the other. Who may hold one is the
- * Model Alert rule (modelAlertKeyAccess): paid access only, by user decision 2026-10-23.
+ * different pepper, so a key of one kind can never pass as the other. Who may hold one is
+ * extensionKeyAccess: admins only until the extension is listed (user decision 2026-10-23, audit
+ * CE-1). The feed carries the AI reviewer's verdict and reasoning, which the site shows admins only.
  *
  * What a key can do is the /ext/v1 routes and nothing else: read the owner's alerts, token stats
  * and overlay settings, and save the overlay settings. It is never a session.
@@ -62,12 +63,17 @@ export function newExtensionKey(serverSecret: string): {
   };
 }
 
+/**
+ * Who may hold and use an extension key: admins, until the extension is listed (user decision
+ * 2026-10-23). Checked when a key is made and on every request, so a key made before is cut off too.
+ */
+export function extensionKeyAccess(access: AccessState): boolean {
+  return access.reason === "admin";
+}
+
 /** The 403 body for a wallet that may use the site but not the extension. */
-export function extensionKeyDeniedMessage(reason: AccessState["reason"]): string {
-  if (reason === "free_access") {
-    return "Free access does not include the browser extension. A paid subscription, admin wallet, or whitelist entry is required.";
-  }
-  return "The browser extension needs a paid subscription, an admin wallet, or a whitelist entry.";
+export function extensionKeyDeniedMessage(_reason: AccessState["reason"]): string {
+  return "The browser extension is open to admins only until it is listed.";
 }
 
 /** The advisory-lock key for issuing or revoking one user's extension keys, so the cap holds. */

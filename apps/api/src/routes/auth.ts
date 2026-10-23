@@ -15,6 +15,7 @@ import {
 } from "@trenchscanner/core";
 import { issueNonce, verifyAndConsumeNonce, verifySignInAndConsumeNonce } from "../auth/siws.js";
 import { SESSION_COOKIE_NAME, verifyRequestSessions } from "../auth/session.js";
+import { forgetExtensionKeysOf } from "./extension.js";
 import { PRO_OFF, proStatus } from "../proMode.js";
 import { PrivyUnavailable, privyEmbeddedSolanaWallet, privyEnabled, verifyPrivyToken } from "../privy.js";
 import {
@@ -490,6 +491,14 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
             where: { userId: session.userId, revokedAt: null },
             data: { revokedAt: new Date() },
           });
+          // The browser extension's keys go with it (user decision 2026-10-23, audit CE-3): a key
+          // made from a stolen session must not outlive the owner's sign-out. Other API processes
+          // drop their cached check within its 30 s.
+          await prisma.extensionKey.updateMany({
+            where: { userId: session.userId, revokedAt: null },
+            data: { revokedAt: new Date() },
+          });
+          forgetExtensionKeysOf(session.userId);
         }
       }
     }
