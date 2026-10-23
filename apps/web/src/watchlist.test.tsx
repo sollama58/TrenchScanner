@@ -17,6 +17,7 @@ vi.mock("./api", async (importOriginal) => {
     api: (path: string) => run("GET", path),
     post: (path: string, body?: unknown) => run("POST", path, body),
     del: (path: string) => run("DELETE", path),
+    put: (path: string, body?: unknown) => run("PUT", path, body),
   };
 });
 vi.mock("./session", () => ({ isGuest: () => false }));
@@ -25,6 +26,9 @@ const { ApiError } = await import("./api");
 const store = await import("./watchlist");
 const { WatchlistPanel } = await import("./components/WatchlistPanel");
 const { WatchStar } = await import("./components/WatchStar");
+const { rowsThatFit } = await import("./components/WatchlistPanel");
+const { WatchlistChips, chipsThatFit } = await import("./components/WatchlistChips");
+const { WatchlistManager } = await import("./components/WatchlistManager");
 
 const item = (tokenId: string, over: Partial<import("./watchlist").WatchlistItem> = {}) => ({
   tokenId,
@@ -143,7 +147,7 @@ describe("WatchlistPanel", () => {
     expect(html).toContain('class="num watchlist-chg down"');
     expect(html).toContain("-12%");
     expect(html).toContain('aria-label="Remove $DOG from your watchlist"');
-    expect(html).toMatch(/watchlist-count[^>]*>2</);
+    expect(html).toMatch(/watchlist-count[^>]*>2\/50</);
   });
 
   it("marks a watched token's star", async () => {
@@ -153,5 +157,104 @@ describe("WatchlistPanel", () => {
     expect(renderToStaticMarkup(<WatchStar token={token("z")} />)).toContain(
       'aria-label="Add $Z to your watchlist"',
     );
+  });
+});
+
+describe("the cap", () => {
+  it("refuses an eleventh star and says why on the star", async () => {
+    const ten = Array.from({ length: 10 }, (_, i) => item(`t${i}`));
+    answer = () => ({ cap: 10, items: ten });
+    await store.loadWatchlist();
+    const html = renderToStaticMarkup(<WatchStar token={token("new")} />);
+    expect(html).toContain('aria-disabled="true"');
+    expect(html).toContain('title="Watchlist is full (10)"');
+    // A watched token's star still unstars it.
+    expect(renderToStaticMarkup(<WatchStar token={token("t1")} />)).not.toContain("aria-disabled");
+    calls.length = 0;
+    await store.watchToken(token("new"));
+    expect(calls).toEqual([]);
+    expect(state().notice).toMatch(/Watchlist is full \(10\)/);
+    expect(renderToStaticMarkup(<WatchlistPanel />)).toMatch(/watchlist-count num full[^>]*>10\/10</);
+  });
+});
+
+describe("order, clear and add by address", () => {
+  it("reorders at once and keeps the server's answer", async () => {
+    answer = () => ({ cap: 10, items: [item("a"), item("b"), item("c")] });
+    await store.loadWatchlist();
+    answer = (method, _path, body) =>
+      method === "PUT"
+        ? { cap: 10, items: (body as { tokenIds: string[] }).tokenIds.map((id) => item(id)) }
+        : null;
+    store.moveWatched("c", -1);
+    expect(state().items.map((i) => i.tokenId)).toEqual(["a", "c", "b"]);
+    await Promise.resolve();
+    expect(calls.at(-1)).toEqual({
+      method: "PUT",
+      path: "/watchlist/order",
+      body: { tokenIds: ["a", "c", "b"] },
+    });
+  });
+
+  it("puts the order back when its save fails", async () => {
+    answer = () => ({ cap: 10, items: [item("a"), item("b")] });
+    await store.loadWatchlist();
+    answer = () => new Error("offline");
+    await store.reorderWatchlist(["b", "a"]);
+    expect(state().items.map((i) => i.tokenId)).toEqual(["a", "b"]);
+  });
+
+  it("clears the list", async () => {
+    answer = () => ({ cap: 10, items: [item("a"), item("b")] });
+    await store.loadWatchlist();
+    answer = () => ({ removed: 2 });
+    await store.clearWatchlist();
+    expect(state().items).toEqual([]);
+    expect(calls.at(-1)).toMatchObject({ method: "DELETE", path: "/watchlist" });
+  });
+
+  it("adds by contract address, or says why not", async () => {
+    await store.loadWatchlist();
+    answer = (method) => (method === "POST" ? { item: item("m") } : null);
+    expect(await store.watchMint("mMint1111111111111111111111111111111")).toBeNull();
+    expect(state().items[0]?.tokenId).toBe("m");
+    answer = () => new ApiError(404, "TrenchScanner doesn't track this token yet.", null);
+    expect(await store.watchMint("Other111111111111111111111111111111")).toMatch(/doesn't track/);
+  });
+});
+
+describe("fitting", () => {
+  it("shows the rows that fit whole, keeping room for +N", () => {
+    expect(rowsThatFit(3, null)).toBe(3);
+    // 3 rows (99px) and the button (28px) fit in 130px.
+    expect(rowsThatFit(3, 130)).toBe(3);
+    expect(rowsThatFit(10, 160)).toBe(4);
+    expect(rowsThatFit(10, 20)).toBe(1);
+  });
+
+  it("fits chips on one line before the +N button", () => {
+    expect(chipsThatFit([80, 80, 80], 400, 30)).toBe(3);
+    expect(chipsThatFit([80, 80, 80], 210, 30)).toBe(2);
+    expect(chipsThatFit([300], 100, 30)).toBe(1);
+    expect(chipsThatFit([], 100, 30)).toBe(0);
+  });
+
+  it("renders chips with ticker, market cap and 24h change", async () => {
+    answer = () => ({ cap: 10, items: [item("pepe", { priceChange24hPct: 33 })] });
+    await store.loadWatchlist();
+    const html = renderToStaticMarkup(<WatchlistChips onMore={() => undefined} />);
+    expect(html).toContain("$PEPE");
+    expect(html).toContain("$50.0K");
+    expect(html).toContain('class="num wl-chip-chg up"');
+    expect(html).toContain('aria-label="Open your watchlist"');
+  });
+
+  it("renders the manager's rows and meter", async () => {
+    answer = () => ({ cap: 10, items: [item("pepe"), item("dog")] });
+    await store.loadWatchlist();
+    const html = renderToStaticMarkup(<WatchlistManager />);
+    expect(html).toContain('aria-label="Move $PEPE up"');
+    expect(html).toContain('aria-valuenow="2"');
+    expect(html).toContain("Clear all");
   });
 });

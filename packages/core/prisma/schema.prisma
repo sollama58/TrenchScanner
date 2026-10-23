@@ -3489,8 +3489,8 @@ model UserTrackedWallet {
   @@index([wallet])
 }
 
-/// A token a user starred for the Live tab's Watchlist (user ask 2026-10-23): the panel shows its
-/// market cap now and its change since it was added. Per user, and never read by the scan, the
+/// A token a user starred for their Watchlist (user ask 2026-10-23): the Live tab's market bar and
+/// the Utilities tab show its market cap now and its change since it was added. Per user, and never read by the scan, the
 /// models, the filters or alerts. Not the scan's own "watchlist" (the mints selectWatchlist keeps
 /// refreshing). At most WATCHLIST_CAP per user, held by the API (apps/api/src/watchlist.ts).
 model WatchlistItem {
@@ -3503,6 +3503,8 @@ model WatchlistItem {
   /// (Token.live* or its newest snapshot). Null when it had none. "Since added" counts from these.
   addedMarketCapUsd Float?
   addedPriceUsd     Float?
+  /// The user's order, lowest first (a new star goes on top). Ties read newest star first.
+  position          Int      @default(0)
 
   @@id([userId, tokenId])
   @@index([tokenId])

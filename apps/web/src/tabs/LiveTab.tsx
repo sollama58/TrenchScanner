@@ -256,7 +256,7 @@ export function LiveTab({
 
   return (
     <div className="stack">
-      <MarketBar left={<WatchlistPanel />} />
+      <MarketBar left={<WatchlistPanel fit />} />
       <Suspense fallback={null}>
         {customizeMounted && <CustomizeDrawer open={customizing} onClose={closeCustomize} />}
       </Suspense>

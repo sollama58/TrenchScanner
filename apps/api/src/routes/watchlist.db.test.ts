@@ -25,7 +25,7 @@ describe.skipIf(!dbAvailable)("watchlist routes", () => {
   const mints = [MINT, ...Array.from({ length: WATCHLIST_CAP }, (_, i) => extraMint(i))];
   let tokenId = "";
 
-  const as = (who: string, method: "GET" | "POST" | "DELETE", url: string, payload?: object) =>
+  const as = (who: string, method: "GET" | "POST" | "PUT" | "DELETE", url: string, payload?: object) =>
     app.inject({ method, url, payload, cookies: { [SESSION_COOKIE_NAME]: cookies[who]! } });
 
   beforeAll(async () => {
@@ -143,7 +143,33 @@ describe.skipIf(!dbAvailable)("watchlist routes", () => {
     });
     const full = await as(ADMIN, "POST", "/watchlist", { tokenId });
     expect(full.statusCode).toBe(409);
-    expect(full.json().cap).toBe(WATCHLIST_CAP);
+    expect(full.json()).toEqual({
+      error: `Watchlist is full (${WATCHLIST_CAP}). Remove a token to add another.`,
+      cap: WATCHLIST_CAP,
+    });
     expect((await as(ADMIN, "GET", "/watchlist")).json().items).toHaveLength(WATCHLIST_CAP);
+  });
+
+  it("puts new stars on top and keeps the order the user sets", async () => {
+    const ids = (await as(ADMIN, "GET", "/watchlist"))
+      .json()
+      .items.map((i: { tokenId: string }) => i.tokenId);
+    const wanted = [ids[3], ids[0], "not-mine"];
+    const res = await as(ADMIN, "PUT", "/watchlist/order", { tokenIds: wanted });
+    expect(res.statusCode).toBe(200);
+    const order = res.json().items.map((i: { tokenId: string }) => i.tokenId);
+    expect(order.slice(0, 2)).toEqual([ids[3], ids[0]]);
+    expect(order.slice(2)).toEqual(ids.filter((id: string) => id !== ids[3] && id !== ids[0]));
+    expect((await as(ADMIN, "PUT", "/watchlist/order", { tokenIds: [] })).statusCode).toBe(400);
+
+    // Room for one: the new star goes first.
+    await as(ADMIN, "DELETE", `/watchlist/${ids[5]}`);
+    expect((await as(ADMIN, "POST", "/watchlist", { tokenId })).statusCode).toBe(201);
+    expect((await as(ADMIN, "GET", "/watchlist")).json().items[0].tokenId).toBe(tokenId);
+  });
+
+  it("clears the whole list", async () => {
+    expect((await as(ADMIN, "DELETE", "/watchlist")).json()).toEqual({ removed: WATCHLIST_CAP });
+    expect((await as(ADMIN, "GET", "/watchlist")).json().items).toEqual([]);
   });
 });

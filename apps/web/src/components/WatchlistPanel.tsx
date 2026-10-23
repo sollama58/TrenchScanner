@@ -1,31 +1,52 @@
-import { useEffect, useState } from "react";
-import { api, type Card } from "../api";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ago, signedPct, usd } from "../format";
-import { openTokenModal } from "../tokenModal";
 import { useWatchlist, type WatchlistItem } from "../watchlist";
-import { CloseIcon, StarIcon } from "./Icons";
+import { changeTone, hourChange, isStale, openWatched, watchLabel } from "../watchlistView";
+import { CloseIcon, PlusIcon, StarIcon } from "./Icons";
 import { Spinner } from "./Loading";
 import { TokenImage } from "./TokenImage";
+import { WatchlistDialog } from "./WatchlistManager";
 
-/** A reading older than this shows dimmed, with its age in the tooltip. */
-const STALE_MS = 30 * 60_000;
-/** The scan's 1h change shows only while the snapshot it came from is this fresh. */
-const HOUR_CHANGE_FRESH_MS = 20 * 60_000;
+/** A row's height and the gap under it (styles.css .watchlist-row), and the "+N" button's. */
+const ROW_PX = 33;
+const MORE_PX = 28;
+
+/** How many of `count` rows to show in `room` px with the "+N" button under them. */
+export function rowsThatFit(count: number, room: number | null): number {
+  if (room === null || room <= 0) return count;
+  if (count * ROW_PX + MORE_PX <= room + 1) return count;
+  return Math.min(count, Math.max(1, Math.floor((room + 1 - MORE_PX) / ROW_PX)));
+}
 
 /**
  * The Watchlist (user ask 2026-10-23): the tokens this account starred, each with its market cap
- * now, its change since it was starred and the scan's 1h change. Built to fill the left third of
- * the Live tab's market bar: it takes its parent's height (at most --watchlist-max-h, 170px by
- * default) and scrolls past four or five rows. A row opens the token view; its x unstars it.
+ * now, its change since it was starred and the scan's 1h change. Built for the left third of the
+ * Live tab's market bar: it takes its parent's height (at most --watchlist-max-h, 170px by default).
  *
- *   <WatchlistPanel />                      // standalone: up to 170px tall
- *   <div style={{ height: 180 }}><WatchlistPanel /></div>   // fills a fixed slot
+ * With `fit`, it shows only the rows that fit that height whole, then a "+N" button for the rest
+ * (or "+" when all fit), which opens the full list (`onMore`, else its own Watchlist dialog).
+ * Without it, the list scrolls. A row opens the token view; its x unstars it.
+ *
+ *   <MarketBar left={<WatchlistPanel fit />} />
+ *   <div style={{ height: 180 }}><WatchlistPanel /></div>
  */
-export function WatchlistPanel({ className }: { className?: string }) {
+export function WatchlistPanel({
+  className,
+  fit = false,
+  onMore,
+}: {
+  className?: string;
+  fit?: boolean;
+  onMore?: () => void;
+}) {
   const { status, items, cap, notice, unwatch } = useWatchlist();
   const [now, setNow] = useState(() => Date.now());
   const [opening, setOpening] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
+  const [dialog, setDialog] = useState(false);
+  const listBox = useRef<HTMLDivElement>(null);
+  const [room, setRoom] = useState<number | null>(null);
+  const count = items.length;
 
   // "As of 5m ago" and the stale dimming move with the clock, not only with each poll.
   useEffect(() => {
@@ -34,33 +55,54 @@ export function WatchlistPanel({ className }: { className?: string }) {
   }, []);
   useEffect(() => setNow(Date.now()), [items]);
 
+  // How tall the list's box is, for `fit`.
+  const hasRows = count > 0;
+  useLayoutEffect(() => {
+    const el = listBox.current;
+    if (!fit || !el || typeof ResizeObserver === "undefined") return;
+    const measure = () => setRoom(el.clientHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [fit, hasRows]);
+
   const open = async (item: WatchlistItem) => {
     if (opening) return;
     setOpening(item.tokenId);
     setOpenError(null);
     try {
-      const card = await api<Card>(`/tokens/${encodeURIComponent(item.mint)}/card`);
-      openTokenModal(card, Date.now());
+      await openWatched(item);
     } catch (e) {
-      setOpenError(`Couldn't open ${label(item)}${e instanceof Error && e.message ? `: ${e.message}` : ""}`);
+      setOpenError(
+        `Couldn't open ${watchLabel(item)}${e instanceof Error && e.message ? `: ${e.message}` : ""}`,
+      );
     } finally {
       setOpening(null);
     }
   };
+  const more = () => (onMore ? onMore() : setDialog(true));
 
   const message = openError ?? notice;
-  const count = items.length;
+  const shown = fit ? rowsThatFit(count, room) : count;
+  const hidden = count - shown;
 
   return (
-    <section className={`watchlist-panel${className ? ` ${className}` : ""}`} aria-label="Watchlist">
+    <section
+      className={`watchlist-panel${fit ? " fit" : ""}${className ? ` ${className}` : ""}`}
+      aria-label="Watchlist"
+    >
       <header className="watchlist-head">
         <h3 className="watchlist-title">
           <StarIcon size={12} className="watchlist-title-icon" />
           Watchlist
         </h3>
-        {status !== "off" && count > 0 && (
-          <span className="pill watchlist-count num" title={`${count} of ${cap} tokens`}>
-            {count}
+        {status !== "off" && (status === "ready" || count > 0) && (
+          <span
+            className={`pill watchlist-count num${count >= cap ? " full" : ""}`}
+            title={count >= cap ? `Watchlist is full (${cap})` : `${count} of ${cap} tokens`}
+          >
+            {`${count}/${cap}`}
           </span>
         )}
         {(status === "loading" || status === "idle") && count === 0 && <Spinner size={10} />}
@@ -93,35 +135,52 @@ export function WatchlistPanel({ className }: { className?: string }) {
                 ? "Couldn't load your watchlist"
                 : "Star a token on any card to watch it here"}
             </span>
+            {status !== "error" && (
+              <button type="button" className="watchlist-empty-add" onClick={more}>
+                <PlusIcon size={12} /> Add by address or ticker
+              </button>
+            )}
           </div>
         )
       ) : (
-        <ul className="watchlist-list">
-          {items.map((item) => (
-            <WatchRow
-              key={item.tokenId}
-              item={item}
-              now={now}
-              opening={opening === item.tokenId}
-              onOpen={() => void open(item)}
-              onRemove={() => unwatch(item.tokenId)}
-            />
-          ))}
-        </ul>
+        <div className="watchlist-list-box" ref={listBox}>
+          <ul className="watchlist-list">
+            {items.slice(0, shown).map((item) => (
+              <WatchRow
+                key={item.tokenId}
+                item={item}
+                now={now}
+                opening={opening === item.tokenId}
+                onOpen={() => void open(item)}
+                onRemove={() => unwatch(item.tokenId)}
+              />
+            ))}
+          </ul>
+          {fit && (
+            <button
+              type="button"
+              className="watchlist-more"
+              onClick={more}
+              title={hidden > 0 ? `See all ${count} watched tokens` : "Manage your watchlist"}
+              aria-label={
+                hidden > 0 ? `${hidden} more: see all ${count} watched tokens` : "Manage your watchlist"
+              }
+            >
+              {hidden > 0 ? (
+                <span className="num">+{hidden} more</span>
+              ) : (
+                <>
+                  <PlusIcon size={12} />
+                  <span>{count < cap ? "Add or manage" : "Manage"}</span>
+                </>
+              )}
+            </button>
+          )}
+        </div>
       )}
+      {!onMore && dialog && <WatchlistDialog onClose={() => setDialog(false)} />}
     </section>
   );
-}
-
-function label(item: Pick<WatchlistItem, "symbol" | "name" | "mint">): string {
-  const sym = item.symbol?.trim().replace(/^\$+/, "");
-  if (sym) return `$${sym}`;
-  return item.name?.trim() || `${item.mint.slice(0, 4)}…${item.mint.slice(-4)}`;
-}
-
-function tone(v: number | null): string {
-  if (v === null || Math.abs(v) < 0.5) return "flat";
-  return v > 0 ? "up" : "down";
 }
 
 function WatchRow({
@@ -137,14 +196,10 @@ function WatchRow({
   onOpen: () => void;
   onRemove: () => void;
 }) {
-  const name = label(item);
+  const name = watchLabel(item);
   const readAt = item.at ? Date.parse(item.at) : NaN;
-  const stale = Number.isFinite(readAt) && now - readAt > STALE_MS;
-  const changeAt = item.changeAt ? Date.parse(item.changeAt) : NaN;
-  const hour =
-    item.priceChange1hPct !== null && Number.isFinite(changeAt) && now - changeAt <= HOUR_CHANGE_FRESH_MS
-      ? item.priceChange1hPct
-      : null;
+  const stale = isStale(item, now);
+  const hour = hourChange(item, now);
   const since = item.changeSinceAddedPct;
   const title = [
     item.name && item.symbol ? `${name} · ${item.name}` : name,
@@ -175,14 +230,14 @@ function WatchRow({
         <span className={`num watchlist-mc${stale ? " stale" : ""}`}>{usd(item.marketCapUsd)}</span>
         <span className="watchlist-changes">
           <span
-            className={`num watchlist-chg ${tone(since)}`}
+            className={`num watchlist-chg ${changeTone(since)}`}
             aria-label={since === null ? "No change since added" : `${signedPct(since, 1)} since added`}
           >
             {since === null ? "–" : signedPct(since, Math.abs(since) < 10 ? 1 : 0)}
           </span>
           {hour !== null && (
             <span
-              className={`num watchlist-hour ${tone(hour)}`}
+              className={`num watchlist-hour ${changeTone(hour)}`}
               aria-label={`${signedPct(hour, 1)} in the last hour`}
             >
               1h {signedPct(hour, 0)}

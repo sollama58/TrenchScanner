@@ -23,6 +23,7 @@ describe("readingOf", () => {
     marketCapUsd: 50_000,
     priceUsd: 0.00005,
     priceChange1hPct: 12.5,
+    priceChange24hPct: -30,
   };
 
   it("takes the live price when it is the newer reading", () => {
@@ -47,6 +48,7 @@ describe("readingOf", () => {
       priceUsd: null,
       at: null,
       priceChange1hPct: null,
+      priceChange24hPct: null,
       changeAt: null,
     });
   });
@@ -67,6 +69,7 @@ describe("toEntry", () => {
         priceUsd: 0.00005,
         at: at("2026-10-23T10:00:00Z"),
         priceChange1hPct: -3,
+        priceChange24hPct: 7,
         changeAt: at("2026-10-23T10:00:00Z"),
       },
     );
