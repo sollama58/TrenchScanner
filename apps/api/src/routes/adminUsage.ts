@@ -234,28 +234,33 @@ interface TsHelius {
 }
 
 /**
- * TokenSage's own meter (its /admin/v1 monitor), read with TOKENSAGE_MONITOR_KEY, or the deprecated
- * TOKENSAGE_ADMIN_KEY while only that is set.
+ * Where TokenSage's /admin/v1 monitor is and the key that reads it: TOKENSAGE_MONITOR_KEY, or the
+ * deprecated TOKENSAGE_ADMIN_KEY while only that is set. Null when either is missing.
  */
-export async function readTokenSageUsage(
+export function tokenSageMonitor(
   env: Pick<Env, "TOKENSAGE_API_URL" | "TOKENSAGE_MONITOR_KEY" | "TOKENSAGE_ADMIN_KEY">,
-  hours: number,
-): Promise<TokenSageUsage> {
+): { base: string; opts: { headers: { authorization: string }; timeoutMs: number; retries: number } } | null {
   const key = env.TOKENSAGE_MONITOR_KEY || env.TOKENSAGE_ADMIN_KEY;
-  if (!env.TOKENSAGE_API_URL || !key) {
-    return { configured: false, error: null, sources: [], helius: null };
-  }
+  if (!env.TOKENSAGE_API_URL || !key) return null;
   const trimmed = env.TOKENSAGE_API_URL.trim().replace(/\/+$/, "");
   // As TokenSageClient does: an http:// URL would send the key in cleartext (and a redirect to
   // https drops the header), so it is upgraded, except for a local TokenSage.
   const base = /^https?:\/\//i.test(trimmed)
     ? trimmed.replace(/^http:\/\/(?!localhost|127\.0\.0\.1)/i, "https://")
     : `https://${trimmed}`;
-  const opts = {
-    headers: { authorization: `Bearer ${key}` },
-    timeoutMs: 6_000,
-    retries: 0,
-  };
+  return { base, opts: { headers: { authorization: `Bearer ${key}` }, timeoutMs: 6_000, retries: 0 } };
+}
+
+/** TokenSage's own meter (its /admin/v1 monitor). */
+export async function readTokenSageUsage(
+  env: Pick<Env, "TOKENSAGE_API_URL" | "TOKENSAGE_MONITOR_KEY" | "TOKENSAGE_ADMIN_KEY">,
+  hours: number,
+): Promise<TokenSageUsage> {
+  const monitor = tokenSageMonitor(env);
+  if (!monitor) {
+    return { configured: false, error: null, sources: [], helius: null };
+  }
+  const { base, opts } = monitor;
   const [up, helius] = await Promise.allSettled([
     fetchJson<TsUpstreams>(`${base}/admin/v1/upstreams?hours=${hours}`, opts),
     fetchJson<TsHelius>(`${base}/admin/v1/helius`, opts),

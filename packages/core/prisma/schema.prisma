@@ -22,6 +22,18 @@ model SystemHeartbeat {
   updatedAt     DateTime  @updatedAt
 }
 
+/// Which of the env vars Admin > Environment checks each worker process has set, written by the
+/// process itself at boot (packages/core/src/config/envReport.ts). Never a value that could be a
+/// credential: a secret is its length and a fingerprint, a URL its host. The api reports live.
+model ServiceEnvReport {
+  /// The process's WORKER_ROLE: "scanner", "trainer", "trader" or "all".
+  service    String   @id
+  vars       Json
+  /// RENDER_GIT_COMMIT's first 12 characters, so a report from an old deploy reads as one.
+  commit     String?
+  reportedAt DateTime
+}
+
 /// One run of the composite score's weight fit (packages/core/src/scoring/scoreWeights.ts). The
 /// newest adopted row is the set every process scores with; rows that weren't adopted stay as
 /// the record of what the data said.

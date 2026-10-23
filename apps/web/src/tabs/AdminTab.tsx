@@ -14,6 +14,7 @@ import { CreditsAdmin } from "./AdminCredits";
 import { FreeAccessAdmin } from "./AdminFreeAccess";
 import { ProModeAdmin, SacrificeAdmin } from "./AdminProMode";
 import { RunNow } from "./AdminRunNow";
+import { EnvAdmin } from "./AdminEnv";
 import { AdminActionLog, DbDumps, TableBackups } from "./AdminSecurity";
 import { adminCall } from "../tradeConfirm";
 import { FeedSimAdmin } from "./AdminFeedSim";
@@ -142,6 +143,7 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
         {section === "api" && <ApiInstance />}
         {section === "usage" && <UsageAdmin />}
         {section === "config" && <Config />}
+        {section === "env" && <EnvAdmin />}
       </div>
     </div>
   );

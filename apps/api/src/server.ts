@@ -47,6 +47,7 @@ import { registerAdminRoutes, registerAdminSubscriptionRoutes } from "./routes/a
 import { registerAdminOpsRoutes } from "./routes/adminOps.js";
 import { registerAdminCreditRoutes } from "./routes/adminCredits.js";
 import { registerAdminUsageRoutes } from "./routes/adminUsage.js";
+import { registerAdminEnvRoutes } from "./routes/adminEnv.js";
 import { registerAdminRetrainRoutes } from "./routes/adminRetrain.js";
 import { registerAdminJobRunRoutes } from "./routes/adminJobRuns.js";
 import { registerAdminInsightRoutes } from "./routes/adminInsights.js";
@@ -848,6 +849,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       await registerAdminJobRunRoutes(instance);
       // Outside API calls and Helius credits per provider, endpoint and feature.
       await registerAdminUsageRoutes(instance, { env });
+      // Which expected env vars each service (and TokenSage's) has set, never their values.
+      await registerAdminEnvRoutes(instance, { env });
     },
     { prefix: "/admin" },
   );
