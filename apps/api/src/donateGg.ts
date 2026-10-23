@@ -16,6 +16,12 @@ const MAX_NAME_CHARS = 80;
 const CONFIG_OK_MS = 24 * 60 * 60_000;
 /** A config that answered with no charity, or a 404, is asked again after this. */
 const CONFIG_MISS_MS = 10 * 60_000;
+/**
+ * A failed load (timeout, transport error, an answer other than 200 or 404) is not asked again
+ * for this long. Every feed poll showing a charity coin awaits this lookup, so with nothing kept
+ * each one re-waited the whole timeout while donate.gg was down (audit 2026-10-23, PF-2).
+ */
+const CONFIG_FAIL_MS = 60_000;
 const MAX_CACHED = 2_000;
 
 /** One charity on a donate.gg config: its name and its share of the config, in basis points. */
@@ -29,7 +35,8 @@ const cache = new Map<string, { charities: DonateCharity[]; until: number }>();
 /**
  * Configs being loaded: a reader that asks while another's request is out shares it (misc audit
  * 2026-10-23, A2). A feed poll and a token page, or two feed polls, on a cold cache each sent the
- * same request. Null: not remembered (a transport failure, or an answer other than 200 or 404).
+ * same request. Null: a failed load (a transport failure, or an answer other than 200 or 404),
+ * kept as no charities for CONFIG_FAIL_MS.
  */
 const pending = new Map<string, Promise<DonateCharity[] | null>>();
 
@@ -79,7 +86,7 @@ export function charitiesFromDonateConfig(body: unknown): DonateCharity[] {
 
 /**
  * The charities on each of these donate.gg configs, remembered so a feed poll does not ask
- * again. A transport failure is not remembered: the next read can try. Never throws.
+ * again. A failed load is kept as no charities for a minute, then tried again. Never throws.
  */
 export async function donateConfigCharities(
   configIds: readonly string[],
@@ -120,7 +127,7 @@ export async function donateConfigCharities(
   return out;
 }
 
-/** One config from donate.gg, remembered; null when not (see `pending`). Never throws. */
+/** One config from donate.gg, remembered; null when it failed (see `pending`). Never throws. */
 async function loadConfig(
   base: string,
   id: string,
@@ -132,14 +139,19 @@ async function loadConfig(
       headers: { accept: "application/json" },
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (res.status !== 200 && res.status !== 404) return null;
+    if (res.status !== 200 && res.status !== 404) return failed(id, now);
     const charities = res.status === 200 ? charitiesFromDonateConfig(await res.json()) : [];
     cache.set(id, { charities, until: now + (charities.length ? CONFIG_OK_MS : CONFIG_MISS_MS) });
     return charities;
   } catch {
-    // donate.gg didn't answer. The card keeps the address; the next read can try.
-    return null;
+    // donate.gg didn't answer. The card keeps the address; a read after CONFIG_FAIL_MS can try.
+    return failed(id, now);
   }
+}
+
+function failed(id: string, now: number): null {
+  cache.set(id, { charities: [], until: now + CONFIG_FAIL_MS });
+  return null;
 }
 
 /** Test hook: forget every loaded config. */

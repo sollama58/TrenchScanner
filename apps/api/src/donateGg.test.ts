@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyCharityNames, type CardCreatorFee } from "./curatedFeed.js";
 import {
   charitiesFromDonateConfig,
@@ -160,5 +160,32 @@ describe("donateConfigCharities", () => {
   it("does not throw when donate.gg is down", async () => {
     process.env.DONATE_GG_BASE_URL = "http://127.0.0.1:1/api/v1";
     expect((await donateConfigCharities([CONFIG], 500)).size).toBe(0);
+  });
+
+  it("keeps a failed load for a minute, so feed polls do not each wait on a down donate.gg", async () => {
+    let hits = 0;
+    let status = 503;
+    server = createServer((_req, res) => {
+      hits += 1;
+      res.statusCode = status;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ charities: [{ name: "Pandas International", weight: "1" }] }));
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", () => resolve()));
+    const port = (server.address() as { port: number }).port;
+    process.env.DONATE_GG_BASE_URL = `http://127.0.0.1:${port}/api/v1`;
+    const start = Date.now();
+    vi.useFakeTimers({ toFake: ["Date"], now: start });
+    try {
+      expect((await donateConfigCharities([CONFIG])).size).toBe(0);
+      expect((await donateConfigCharities([CONFIG])).size).toBe(0);
+      expect(hits).toBe(1);
+      status = 200;
+      vi.setSystemTime(start + 61_000);
+      expect((await donateConfigCharities([CONFIG])).get(CONFIG)?.[0]?.name).toBe("Pandas International");
+      expect(hits).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
