@@ -276,6 +276,8 @@ export interface Token {
         }[]
       | null;
     bps?: number | null;
+    /** Who pays the holder rewards when it is not OTC Desks: "Stonk" on a Stonks reward launch. */
+    rewardHost?: string | null;
   } | null;
   /** The coin's own X and website links as found at discovery (https only); null when it has none. */
   twitterUrl?: string | null;
