@@ -11,6 +11,7 @@ import {
   type ReplayedOutcome,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
+import { CandlesUnavailableError } from "./minuteCandleReader.js";
 
 const logger = createLogger("label-regrade");
 
@@ -252,7 +253,8 @@ export async function runLabelRegradeJob(
         break;
       }
       // A transport failure: the coin's rows stay pending for a later run.
-      logger.warn("candle read failed", { mint: token.mintAddress, error: String(err) });
+      if (!(err instanceof CandlesUnavailableError))
+        logger.warn("candle read failed", { mint: token.mintAddress, error: String(err) });
       continue;
     }
     counts.coins! += 1;
