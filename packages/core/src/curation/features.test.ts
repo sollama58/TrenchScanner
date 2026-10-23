@@ -7,6 +7,10 @@ import {
   RETIRED_LEARNER_INPUTS,
   learnerSubset,
   maskKnownBadInputs,
+  maskTokenSageXReuseLoss,
+  tokenSageXReuseLost,
+  TOKENSAGE_XREUSE_LOST_FROM,
+  TOKENSAGE_XREUSE_FEATURES,
   withLaunchAge,
   withoutPreCanonicalPairAge,
   applyClockFeatures,
@@ -1288,6 +1292,63 @@ describe("maskKnownBadInputs", () => {
     for (const name of ["nsReferentNamed", "nsXContentMismatch", "devInitialBuySol"] as const) {
       expect(LEARNER_FEATURE_NAMES).not.toContain(name);
     }
+  });
+});
+
+describe("maskTokenSageXReuseLoss", () => {
+  const from = TOKENSAGE_XREUSE_LOST_FROM;
+  const restored = new Date("2026-10-25T00:00:00Z");
+  const row = {
+    nsXReuseCount: 0,
+    nsXReuseRank: 1,
+    nsWaveLaunches1h: 1,
+    nsWaveLaunches6h: 1,
+    nsWaveLaunches24h: 1,
+    nsWaveRank24h: 1,
+    nsSiblings1h: 3,
+    nsDepthFull: 1,
+    mcapUsd: 40_000,
+  };
+  const masked = {
+    ...row,
+    nsXReuseCount: null,
+    nsXReuseRank: null,
+    nsWaveLaunches1h: null,
+    nsWaveLaunches6h: null,
+    nsWaveLaunches24h: null,
+    nsWaveRank24h: null,
+  };
+
+  it("starts at TokenSage #81's merge", () => {
+    expect(from.toISOString()).toBe("2026-10-20T16:38:56.000Z");
+    expect(TOKENSAGE_XREUSE_FEATURES).toHaveLength(6);
+  });
+
+  it("reads the X-reuse and wave counts as missing from #81 on, with no end while the restore time is unset", () => {
+    expect(maskTokenSageXReuseLoss(new Date(from.getTime() - 1), row, null)).toBe(row);
+    expect(maskTokenSageXReuseLoss(from, row, null)).toEqual(masked);
+    expect(maskTokenSageXReuseLoss(new Date("2027-01-01T00:00:00Z"), row, null)).toEqual(masked);
+    // The stored vector is never changed: the mask is read-time only.
+    expect(row.nsXReuseCount).toBe(0);
+  });
+
+  it("closes the window at the restore time", () => {
+    expect(maskTokenSageXReuseLoss(new Date(restored.getTime() - 1), row, restored)).toEqual(masked);
+    expect(maskTokenSageXReuseLoss(restored, row, restored)).toBe(row);
+    expect(tokenSageXReuseLost(new Date(from.getTime() - 1), restored)).toBe(false);
+    expect(tokenSageXReuseLost(from, restored)).toBe(true);
+    expect(tokenSageXReuseLost(restored, restored)).toBe(false);
+    // A restore time set before #81 leaves no window at all.
+    expect(tokenSageXReuseLost(from, new Date(from.getTime() - 60_000))).toBe(false);
+  });
+
+  it("masks a non-zero count too (an undercount), and returns a row with none of them as it is", () => {
+    expect(maskTokenSageXReuseLoss(from, { nsXReuseCount: 4, mcapUsd: 1 }, null)).toEqual({
+      nsXReuseCount: null,
+      mcapUsd: 1,
+    });
+    const noRead = { nsXReuseCount: null, nsWaveLaunches1h: undefined, mcapUsd: 40_000 };
+    expect(maskTokenSageXReuseLoss(from, noRead, null)).toBe(noRead);
   });
 });
 

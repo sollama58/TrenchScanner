@@ -1529,6 +1529,64 @@ export function withCurrentNarrativeTiming<
   });
 }
 
+/**
+ * When TokenSage stopped counting the coins we read toward X-link reuse and referent waves.
+ * TokenSage #81 (SG-003, merge a2d83dd at 2026-10-20 16:38:56 UTC; Render deploys main a few
+ * minutes after a merge) made every read that carries our hints private to our key, so it writes
+ * no x_ref and no token_read row. Those two tables are what x.reuse_count / reuse_rank and the
+ * referent wave count from, and we are nearly all of TokenSage's reads, so from here on the
+ * counts come back about 0 (the wave's own coin, rank 1) where they used to say 7
+ * (notes/audit-2026-10-22/tokensage.md, TS-1). The merge time, not the deploy: the few minutes
+ * between are masked too, so no row of the broken counts reads as real. TokenSage #85 fixes it
+ * once TRUSTED_HINT_KEYS is set on its worker; the owner then sets TOKENSAGE_XREUSE_RESTORED_AT
+ * and the window closes there (tokenSageXReuseLost).
+ */
+export const TOKENSAGE_XREUSE_LOST_FROM = new Date("2026-10-20T16:38:56Z");
+/** The inputs counted from x_ref and token_read (see TOKENSAGE_XREUSE_LOST_FROM). */
+export const TOKENSAGE_XREUSE_FEATURES = [
+  "nsXReuseCount",
+  "nsXReuseRank",
+  "nsWaveLaunches1h",
+  "nsWaveLaunches6h",
+  "nsWaveLaunches24h",
+  "nsWaveRank24h",
+] as const satisfies readonly CandidateFeatureName[];
+
+/**
+ * True when a reading taken at `at` falls in the window TokenSage's X-reuse and wave counts were
+ * lost: from TOKENSAGE_XREUSE_LOST_FROM until `restoredAt` (TOKENSAGE_XREUSE_RESTORED_AT), or
+ * with no end while that is unset.
+ */
+export function tokenSageXReuseLost(at: Date, restoredAt: Date | null): boolean {
+  const t = at.getTime();
+  if (t < TOKENSAGE_XREUSE_LOST_FROM.getTime()) return false;
+  return restoredAt === null || t < restoredAt.getTime();
+}
+
+/**
+ * A vector with the X-reuse and wave inputs read as missing when it was taken inside the lost
+ * window (tokenSageXReuseLost): those readings are the broken counts, a false "nobody else
+ * links this post" and "no wave", not a measurement. Missing is what the learners already read
+ * when the post or the referent wasn't read. Applied where a vector is read (training rows, the
+ * live decision, the live scales' rescore), never written back, so moving or clearing
+ * TOKENSAGE_XREUSE_RESTORED_AT takes effect on the next read. Returns the same object when
+ * nothing applies.
+ */
+export function maskTokenSageXReuseLoss<T extends Record<string, number | null | undefined>>(
+  at: Date,
+  features: T,
+  restoredAt: Date | null,
+): T {
+  if (!tokenSageXReuseLost(at, restoredAt)) return features;
+  let masked: Record<string, number | null | undefined> | null = null;
+  for (const name of TOKENSAGE_XREUSE_FEATURES) {
+    if (features[name] === null || features[name] === undefined) continue;
+    masked ??= { ...features };
+    masked[name] = null;
+  }
+  return (masked ?? features) as T;
+}
+
 /** The price-path features, in vector order - each a PricePathFeatures field of the same name. */
 export const PRICE_PATH_FEATURES = [
   "pathRet1mPct",

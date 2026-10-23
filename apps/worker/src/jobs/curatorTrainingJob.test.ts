@@ -9,6 +9,7 @@ import {
   HOURLY_ROWS_WAIT_SINCE,
   AGE_FROM_LAUNCH_SINCE,
   HOLDER_TRANSFER_LINKS_READ_SINCE,
+  TOKENSAGE_XREUSE_LOST_FROM,
   type Env,
   RULES_MODEL_KIND,
   STACKED_MODEL_KIND,
@@ -16,6 +17,7 @@ import {
   type StackedCuratorParams,
   type TrainedCuratorParams,
   type ScoredToken,
+  type TrainingRow,
 } from "@trenchscanner/core";
 import {
   applyContestResults,
@@ -518,6 +520,72 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
     expect(before!.gateInputs).toEqual({ bundledSupplyPct: 60, linkedCreatorPct: 12 });
     expect(after!.features).toMatchObject({ bundledSupplyPct: 60, linkedCreatorPct: 12 });
     expect(after!.gateInputs).toBeUndefined();
+  });
+
+  it("reads TokenSage's X-reuse and wave counts as missing in their lost window, the stored rows untouched", async () => {
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-load-xreuse` } });
+    const at = (m: number) => new Date(TOKENSAGE_XREUSE_LOST_FROM.getTime() + m * 60_000);
+    const restoredAt = at(180);
+    const row = (m: number, sampleKind: string) => ({
+      tokenId: token.id,
+      anchorAt: at(m),
+      finalizedAt: at(m),
+      sampleKind,
+      labelRule: 4,
+      anchorPriceUsd: 1 + m / 1000,
+      anchorMcapUsd: 50_000,
+      features: {
+        mcapUsd: 50_000,
+        ageMinutes: 4,
+        nsDepthFull: 1,
+        nsRulesVersion: 1,
+        nsXReuseCount: 0,
+        nsWaveLaunches1h: 1,
+        nsSiblings1h: 2,
+      },
+      score: 50,
+      nextCheckAt: at(m),
+      labelValue: 0,
+      peak1hPriceUsd: 1,
+      low1hPriceUsd: 1,
+      lowBefore2xPriceUsd: 1,
+      peak24hPriceUsd: 1,
+    });
+    await prisma.candidateOutcome.createMany({
+      data: [row(-60, "event"), row(60, "event"), row(240, "event"), row(61, "second")],
+    });
+    const counts = (rows: { features: Record<string, number | null | undefined> }[]) =>
+      rows.map((r) => [r.features.nsXReuseCount, r.features.nsWaveLaunches1h, r.features.nsSiblings1h]);
+    const mine = (rows: TrainingRow[]) => rows.filter((r) => r.tokenId === token.id);
+
+    // Restore time set: only the rows inside the window lose the two counts; other inputs stay.
+    const closed = mine(
+      await loadTrainingRows(at(-90), 5_000, 500, undefined, { tokenSageXReuseRestoredAt: restoredAt }),
+    );
+    expect(closed.map((r) => r.anchorAt)).toEqual([at(240), at(60), at(-60)]);
+    expect(counts(closed)).toEqual([
+      [0, 1, 2],
+      [null, null, 2],
+      [0, 1, 2],
+    ]);
+    // Unset: the window is open, every row from #81 on is masked.
+    const open = mine(await loadTrainingRows(at(-90), 5_000, 500));
+    expect(counts(open)).toEqual([
+      [null, null, 2],
+      [null, null, 2],
+      [0, 1, 2],
+    ]);
+    // The Narrative seat's second looks read the same way.
+    const seconds = mine(
+      await narrativeTrainingRows(at(-90), 100, 50, { tokenSageXReuseRestoredAt: restoredAt }),
+    );
+    expect(counts(seconds)).toEqual([[null, null, 2]]);
+    // Nothing was written back.
+    const stored = await prisma.candidateOutcome.findMany({
+      where: { tokenId: token.id },
+      select: { features: true },
+    });
+    for (const s of stored) expect(s.features).toMatchObject({ nsXReuseCount: 0, nsWaveLaunches1h: 1 });
   });
 
   it("rebuilds an older graduated row's age from the launch, caps it, and cuts on the inputs as they mean today", async () => {

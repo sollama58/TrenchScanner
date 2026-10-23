@@ -33,6 +33,7 @@ import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
   passesWalletSafetyCuts,
   maskKnownBadInputs,
+  maskTokenSageXReuseLoss,
   HOLDER_TRANSFER_LINKED_FEATURES,
   applyClockFeatures,
   isPreFeeWalletStonksRow,
@@ -153,7 +154,10 @@ async function trainCurators(
       min: env.MCAP_FILTER_MIN,
       max: env.MCAP_FILTER_MAX,
     },
-    { excludeFineTickLabels: env.CURATOR_EXCLUDE_FINE_TICK_LABELS },
+    {
+      excludeFineTickLabels: env.CURATOR_EXCLUDE_FINE_TICK_LABELS,
+      tokenSageXReuseRestoredAt: env.TOKENSAGE_XREUSE_RESTORED_AT,
+    },
   );
   if (trainingRows.length < MIN_ROWS_TO_TRAIN) {
     logger.info("not enough finalized samples to train yet", {
@@ -213,7 +217,9 @@ async function trainCurators(
   // The Narrative seat's second looks (see narrativeTrainingRows). Only loaded while the seat is
   // on the roster.
   const narrativeRows = contestants.some((c) => c.role === "narrative")
-    ? await narrativeTrainingRows(windowStart, env.CURATOR_TRAINING_MAX_ROWS)
+    ? await narrativeTrainingRows(windowStart, env.CURATOR_TRAINING_MAX_ROWS, LOAD_PAGE_ROWS, {
+        tokenSageXReuseRestoredAt: env.TOKENSAGE_XREUSE_RESTORED_AT,
+      })
     : [];
   // The gated seats' frozen filters (Gems, curation/modelGate.ts). Only read while one is on the roster.
   const storedGates = contestants.some((c) => c.gate !== undefined) ? await loadModelGates() : [];
@@ -950,9 +956,10 @@ export async function loadTrainingRows(
   band?: { min: number; max: number },
   /**
    * excludeFineTickLabels: drop rule-5 rows (CURATOR_EXCLUDE_FINE_TICK_LABELS). Default keeps
-   * them, the same fit as before the flag existed.
+   * them, the same fit as before the flag existed. tokenSageXReuseRestoredAt: where the
+   * X-reuse and wave inputs' lost window ends (TOKENSAGE_XREUSE_RESTORED_AT); unset, it is open.
    */
-  opts?: { excludeFineTickLabels?: boolean },
+  opts?: LoadRowsOptions,
 ): Promise<TrainingRow[]> {
   const [events, alerted] = await Promise.all([
     loadRowsOfKind("event", windowStart, maxRows, pageRows, undefined, opts),
@@ -1040,9 +1047,10 @@ export async function narrativeTrainingRows(
   windowStart: Date,
   maxRows: number,
   pageRows = LOAD_PAGE_ROWS,
+  opts?: Pick<LoadRowsOptions, "tokenSageXReuseRestoredAt">,
 ): Promise<TrainingRow[]> {
   return (
-    (await loadRowsOfKind("second", windowStart, maxRows, pageRows))
+    (await loadRowsOfKind("second", windowStart, maxRows, pageRows, undefined, opts))
       .filter((r) => r.features.nsDepthFull === 1)
       .map((r) => ({ ...r, sampleKind: "event" }))
       // Held to today's decision pre-gate as an event row is (the 3h age cap, the old-coin
@@ -1384,13 +1392,19 @@ export function withFixedShape<T>(stored: T): T {
 /** The row's token's launch time, as a scalar subquery on the unaliased CandidateOutcome row. */
 const launchedAtSql = Prisma.sql`SELECT t."launchedAt" FROM "Token" t WHERE t."id" = "CandidateOutcome"."tokenId"`;
 
+/** What loadTrainingRows and narrativeTrainingRows take from the run's settings. */
+interface LoadRowsOptions {
+  excludeFineTickLabels?: boolean;
+  tokenSageXReuseRestoredAt?: Date | null;
+}
+
 async function loadRowsOfKind(
   sampleKind: "hourly" | "event" | "second",
   windowStart: Date,
   maxRows: number,
   pageRows: number,
   band?: { min: number; max: number },
-  opts?: { excludeFineTickLabels?: boolean },
+  opts?: LoadRowsOptions,
 ): Promise<TrainingRow[]> {
   // Background rows are banked across the padded scan band, but no call is ever made outside the
   // curated band: half of them sat under its floor (2026-10-08), teaching a market nobody trades.
@@ -1463,7 +1477,13 @@ async function loadRowsOfKind(
       // Inputs known to be wrong on old rows (fake order-flow zeros, the inputs hourly rows were
       // banked ahead of until HOURLY_ROWS_WAIT_SINCE) read as missing.
       const stored = withFixedShape(r.features as Record<string, number | null>);
-      const masked = maskKnownBadInputs(r.anchorAt, stored, sampleKind);
+      // And TokenSage's X-reuse and wave counts while they were lost (TOKENSAGE_XREUSE_LOST_FROM):
+      // a false 0 there would teach "no wave" and fix the cutoffs on it.
+      const masked = maskTokenSageXReuseLoss(
+        r.anchorAt,
+        maskKnownBadInputs(r.anchorAt, stored, sampleKind),
+        opts?.tokenSageXReuseRestoredAt ?? null,
+      );
       // A token the safety screen rejects today never reaches a curator, so a row banked before
       // the cut was tightened (mostly farm launches that pump, then rug) neither trains nor grades.
       // Judged on the inputs as they mean today (an era-masked input is unknown, and the screen
