@@ -23273,6 +23273,271 @@ dialog.tm-modal.tm-terminal::backdrop {
   }
 }
 
+/* ---- Watchlist (user ask 2026-10-23) ----
+   The star beside a card's search button, on Scope rows and in the token view's header (WatchStar),
+   and the panel the Live tab's market bar shows on its left (WatchlistPanel). Gold and filled while
+   watched: --warn fills it, --warn-ink draws its edge, so it holds on the light theme's white. */
+button.watch-star {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-solid);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s;
+}
+button.watch-star:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--border-strong);
+  background: var(--highlight);
+}
+button.watch-star.on,
+button.watch-star.on:hover:not(:disabled) {
+  color: var(--warn-ink);
+  border-color: color-mix(in srgb, var(--warn) 50%, transparent);
+  background: color-mix(in srgb, var(--warn) 14%, var(--surface-solid));
+}
+button.watch-star.on .icon {
+  fill: var(--warn);
+}
+.card-watch-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.card-watch-group:empty {
+  display: none;
+}
+.scope-ticker .scope-watch {
+  order: 0;
+  align-self: center;
+  width: 20px;
+  height: 20px;
+}
+button.tm-watch {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+}
+
+.watchlist-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  max-height: var(--watchlist-max-h, 170px);
+  container-type: inline-size;
+}
+.watchlist-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 0 4px 4px;
+}
+.watchlist-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.watchlist-title-icon {
+  color: var(--warn-ink);
+  fill: var(--warn);
+}
+.watchlist-count.pill {
+  padding: 0 6px;
+  font-size: 10.5px;
+  line-height: 16px;
+}
+.watchlist-notice {
+  flex: none;
+  margin: 0 4px 4px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--bad-ink);
+}
+.watchlist-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.watchlist-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 32px;
+  border-radius: 8px;
+}
+.watchlist-row + .watchlist-row {
+  margin-top: 1px;
+}
+.watchlist-row:hover,
+.watchlist-row:focus-within {
+  background: var(--highlight);
+}
+.watchlist-row.opening {
+  opacity: 0.6;
+}
+button.watchlist-open {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+  align-items: center;
+  column-gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 26px 0 5px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+button.watchlist-open:hover:not(:disabled) {
+  background: none;
+}
+button.watchlist-open:active:not(:disabled) {
+  transform: none;
+}
+.watchlist-avatar {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface-3);
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--ink-2);
+  text-transform: uppercase;
+}
+.watchlist-row.is-skel {
+  gap: 8px;
+  padding: 0 5px;
+}
+.watchlist-skel-text {
+  flex: 1;
+  max-width: 60%;
+  height: 10px;
+}
+.watchlist-sym {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.watchlist-mc {
+  font-size: 12px;
+  text-align: right;
+  color: var(--ink);
+}
+.watchlist-mc.stale {
+  opacity: 0.55;
+}
+.watchlist-changes {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 46px;
+  line-height: 1.15;
+}
+.watchlist-chg {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.watchlist-hour {
+  font-size: 9.5px;
+  opacity: 0.85;
+}
+.watchlist-changes .flat {
+  color: var(--muted);
+}
+button.watchlist-remove {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  transform: translateY(-50%);
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+.watchlist-row:hover button.watchlist-remove,
+.watchlist-row:focus-within button.watchlist-remove {
+  opacity: 1;
+}
+button.watchlist-remove:hover:not(:disabled) {
+  border: 0;
+  color: var(--bad-ink);
+  background: var(--bad-wash);
+}
+button.watchlist-remove:active:not(:disabled) {
+  transform: translateY(-50%);
+}
+/* No hover on a phone: the x stays in view, quietly. */
+@media (hover: none), (pointer: coarse) {
+  button.watchlist-remove {
+    opacity: 0.7;
+  }
+}
+.watchlist-empty {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 88px;
+  padding: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+  color: var(--muted);
+}
+.watchlist-empty .icon {
+  color: var(--warn-ink);
+}
+@container (max-width: 280px) {
+  button.watchlist-open {
+    column-gap: 6px;
+  }
+  .watchlist-hour {
+    display: none;
+  }
+}
 /* ---------- Market bar (Live tab, user ask 2026-10-23): watchlist | prices + trench stats | positions ---------- */
 .mkt-bar {
   display: grid;
@@ -23906,6 +24171,18 @@ dialog.tm-modal.tm-terminal::backdrop {
 .mkt-fold-body .mkt-empty {
   min-height: 120px;
 }
+/* The Watchlist in the bar's left third: the cell's height, scrolling past it. In a phone's fold
+   the disclosure already names it. */
+.mkt-left > .watchlist-panel {
+  flex: 1 1 auto;
+  --watchlist-max-h: 190px;
+}
+.mkt-fold-body .watchlist-head {
+  display: none;
+}
+.mkt-fold-body .watchlist-panel {
+  --watchlist-max-h: 220px;
+}
 /* The Feed stats button beside a section's main action (Filters) and over the Models hero. */
 .section-actions {
   display: flex;
@@ -24064,6 +24341,493 @@ dialog.tm-modal.tm-terminal::backdrop {
   .scope-colset-picks {
     margin-left: 0;
   }
+}
+
+/* ---- Watchlist, round two (user ask 2026-10-23): the cap, the fitted panel, the manager, chips ---- */
+button.watch-star.full {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+button.watch-star.full:hover:not(:disabled) {
+  color: var(--ink-2);
+  border-color: var(--border);
+  background: var(--surface-solid);
+}
+.watchlist-count.full {
+  color: var(--warn-ink);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.watchlist-list-box {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.watchlist-panel:not(.fit) .watchlist-list-box > .watchlist-list {
+  flex: 1 1 auto;
+}
+/* Fitted: a definite height (the cell's, else --watchlist-fit-h), whole rows only, no scroll. */
+.watchlist-panel.fit {
+  height: var(--watchlist-fit-h, 170px);
+  max-height: none;
+}
+.watchlist-panel.fit .watchlist-list-box {
+  flex: 1 1 0;
+  overflow: hidden;
+}
+.watchlist-panel.fit .watchlist-list {
+  flex: none;
+  overflow: visible;
+}
+button.watchlist-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: none;
+  height: 24px;
+  margin-top: 4px;
+  padding: 0 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+button.watchlist-more:hover:not(:disabled) {
+  color: var(--ink);
+  border-style: solid;
+  background: var(--highlight);
+}
+button.watchlist-empty-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: var(--surface-2);
+}
+.mkt-left > .watchlist-panel.fit {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 0;
+}
+.mkt-fold-body .watchlist-panel.fit {
+  height: auto;
+}
+.mkt-fold-body .watchlist-panel.fit .watchlist-list-box {
+  flex: none;
+}
+.watchlist-dialog-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.watchlist-modal {
+  width: min(760px, calc(100vw - 32px));
+}
+
+/* The manager: the Utilities tab's section and the market bar's dialog. */
+.wlm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  container-type: inline-size;
+}
+.wlm-off,
+.wlm-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 120px;
+  padding: 18px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  color: var(--muted);
+  text-align: center;
+}
+.wlm-off p {
+  margin: 0;
+}
+.wlm-empty .icon,
+.wlm-off .icon {
+  color: var(--warn-ink);
+}
+.wlm-empty strong {
+  color: var(--ink);
+}
+.wlm-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.wlm-add {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.wlm-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.wlm-search:focus-within {
+  border-color: var(--brand-b);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-b) 25%, transparent);
+}
+.wlm-search input,
+.wlm-search input:focus {
+  border-radius: 0;
+  box-shadow: none;
+}
+.wlm-search-icon {
+  flex: none;
+  color: var(--muted);
+}
+.wlm-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+.wlm-search input:disabled {
+  cursor: not-allowed;
+}
+.wlm-search button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+}
+.wlm-add-msg {
+  margin: 6px 2px 0;
+  font-size: 12px;
+  color: var(--bad-ink);
+}
+.wlm-hits {
+  margin: 6px 0 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-solid);
+}
+.wlm-hit,
+.wlm-hit-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 4px 8px;
+  border-radius: 8px;
+}
+.wlm-hit:hover {
+  background: var(--highlight);
+}
+.wlm-hit-names {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.2;
+}
+.wlm-hit-names > * {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.wlm-hit button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 4px 10px;
+}
+.wlm-meter {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  flex: none;
+  width: 76px;
+  padding-top: 4px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.wlm-meter-bar {
+  display: block;
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+.wlm-meter-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--warn);
+  transition: width 0.2s;
+}
+.wlm-meter.full {
+  color: var(--warn-ink);
+}
+.wlm-notice {
+  margin: 0;
+  font-size: 12px;
+  color: var(--bad-ink);
+}
+.wlm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.wlm-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) repeat(4, 76px) auto;
+  align-items: center;
+  column-gap: 10px;
+  min-height: 48px;
+  padding: 4px 6px;
+  border-radius: var(--radius-s);
+}
+.wlm-row:nth-child(odd) {
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+}
+.wlm-row:hover {
+  background: var(--highlight);
+}
+.wlm-rank {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+}
+button.wlm-token {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+button.wlm-token:hover:not(:disabled) {
+  background: none;
+}
+button.wlm-token:hover strong {
+  text-decoration: underline;
+}
+.wlm-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface-3);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-2);
+  text-transform: uppercase;
+}
+.wlm-names {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+.wlm-names > * {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.wlm-fig {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.2;
+}
+.wlm-fig .num {
+  font-size: 13px;
+  font-weight: 600;
+}
+.wlm-fig .num.stale {
+  opacity: 0.55;
+}
+.wlm-fig .flat {
+  color: var(--muted);
+}
+.wlm-fig-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.wlm-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+button.wlm-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+}
+button.wlm-icon:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--border);
+  background: var(--surface-2);
+}
+button.wlm-icon:disabled {
+  opacity: 0.25;
+}
+.wlm-up .icon {
+  transform: rotate(180deg);
+}
+button.wlm-remove:hover:not(:disabled) {
+  color: var(--bad-ink);
+  background: var(--bad-wash);
+}
+.wlm-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.wlm-clear,
+.wlm-confirm button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.wlm-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Narrower: 24h goes, then 1h, then the figures take a second line. */
+@container (max-width: 640px) {
+  .wlm-row {
+    grid-template-columns: 18px minmax(0, 1fr) repeat(3, 70px) auto;
+  }
+  .wlm-fig-h24 {
+    display: none;
+  }
+}
+@container (max-width: 520px) {
+  .wlm-row {
+    grid-template-columns: minmax(0, 1fr) 64px 64px auto;
+    column-gap: 8px;
+  }
+  .wlm-rank,
+  .wlm-fig-h1 {
+    display: none;
+  }
+}
+@container (max-width: 380px) {
+  .wlm-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 4px;
+  }
+  .wlm-token {
+    grid-column: 1;
+  }
+  .wlm-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .wlm-fig {
+    grid-row: 2;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 5px;
+  }
+  .wlm-fig-mc {
+    grid-column: 1;
+    justify-self: start;
+    padding-left: 44px;
+  }
+  .wlm-fig-since {
+    grid-column: 2;
+    justify-self: end;
+  }
+  .wlm-top {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+  .wlm-meter {
+    width: 100%;
+    flex-direction: row-reverse;
+    align-items: center;
+    gap: 8px;
+  }
+}
+
+/* WatchlistChips: the thin bar's watchlist slot, on its FitRow and .mkt-mini-chip (one line, the
+   chips that fit whole, then +N). */
+.wl-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.wl-chips > .fit-row {
+  justify-content: flex-start;
+}
+.wl-chip-sym {
+  font-weight: 700;
+}
+.wl-chip-mc {
+  color: var(--ink-2);
+  font-weight: 500;
+}
+.wl-chip-chg.flat {
+  color: var(--muted);
+}
+.wl-chips-empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 /* ---------- The market bar's thin form (user asks 2026-10-23) ----------

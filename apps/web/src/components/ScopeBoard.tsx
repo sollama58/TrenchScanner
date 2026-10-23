@@ -54,6 +54,7 @@ import {
   recordedPeakOf,
 } from "./AlertCard";
 import { CardSearchButton } from "./CardSearchButton";
+import { WatchStar } from "./WatchStar";
 import { DexInfoLabel, dexInfoLabel } from "../dexInfoLabel";
 import { QuickBuyPill } from "./QuickBuyPill";
 import { TokenImage } from "./TokenImage";
@@ -811,6 +812,20 @@ export function ScopeRow({
                 symbol={card.token.symbol}
                 name={card.token.name}
                 mint={card.token.mintAddress}
+              />
+            )}
+            {!preview && (
+              <WatchStar
+                className="scope-watch"
+                size={12}
+                token={{
+                  tokenId: card.tokenId,
+                  mint: card.token.mintAddress,
+                  symbol: card.token.symbol,
+                  name: card.token.name,
+                  imageUrl: card.token.imageUrl,
+                  marketCapUsd: nowMcap,
+                }}
               />
             )}
             {copied && (

@@ -66,6 +66,7 @@ import { registerSubscriptionRoutes } from "./routes/subscription.js";
 import { registerStatsRoutes } from "./routes/stats.js";
 import { registerStatsModelRoutes } from "./routes/statsModels.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
+import { registerWatchlistRoutes } from "./routes/watchlist.js";
 import { registerModelAlertKeyRoutes } from "./routes/modelAlertKeys.js";
 import { registerModelAlertSocket } from "./routes/modelAlertSocket.js";
 import { registerTelegramRoutes } from "./routes/telegram.js";
@@ -801,6 +802,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // Hover previews of a coin's X link, read through FxTwitter so the browser never loads X.
   await app.register(registerXPreviewRoutes, { prefix: "/x-preview" });
   await app.register(registerSettingsRoutes, { prefix: "/settings", env });
+  // The Live tab's Watchlist: tokens this account starred (watchlist.ts).
+  await app.register(registerWatchlistRoutes, { prefix: "/watchlist" });
   await app.register(registerModelAlertKeyRoutes, { prefix: "/settings", env, hub: modelAlertHub });
   await app.register(registerModelAlertSocket, { hub: modelAlertHub, env });
   // Telegram alerts: link codes and chats for the signed-in account, and the bot's webhook.

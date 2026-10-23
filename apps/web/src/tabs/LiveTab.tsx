@@ -1,4 +1,6 @@
 import { MarketBar } from "../components/MarketBar";
+import { WatchlistChips } from "../components/WatchlistChips";
+import { WatchlistPanel } from "../components/WatchlistPanel";
 import { SectionBoundary } from "../components/SectionBoundary";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type CuratedStats, type Leaderboard, type MatchPage } from "../api";
@@ -255,7 +257,7 @@ export function LiveTab({
 
   return (
     <div className="stack">
-      <MarketBar />
+      <MarketBar left={<WatchlistPanel fit />} leftMini={<WatchlistChips />} />
       <Suspense fallback={null}>
         {customizeMounted && <CustomizeDrawer open={customizing} onClose={closeCustomize} />}
       </Suspense>
