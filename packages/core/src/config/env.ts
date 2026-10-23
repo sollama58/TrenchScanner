@@ -351,8 +351,9 @@ const envSchema = z.object({
   // is called: Pump.fun's 5-minute page, then GeckoTerminal's minute pages back to the launch or
   // the pool's creation. Its GeckoTerminal calls a minute, inside the worker's background budget
   // (GeckoTerminal's free 30 a minute per IP is shared with the market-data fallback), and the
-  // pages one coin may take at most (1,000 minutes each).
-  CANDLE_BACKFILL_GECKO_PER_MINUTE: z.coerce.number().int().nonnegative().default(4),
+  // pages one coin may take at most (1,000 minutes each). Unset, 4 a minute on the free tier and
+  // a third of the worker's background budget with COINGECKO_API_KEY (26 at the default 200).
+  CANDLE_BACKFILL_GECKO_PER_MINUTE: z.coerce.number().int().nonnegative().optional(),
   CANDLE_BACKFILL_MAX_PAGES: z.coerce.number().int().positive().default(60),
   // The token chart's live tail (api's liveCurve.ts, user ask 2026-10-17: charts on the stream's
   // second-by-second updates): while a young coin's chart is open, the API follows its bonding curve

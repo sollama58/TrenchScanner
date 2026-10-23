@@ -49,6 +49,7 @@ export function workerConfigMeta(env: Env): {
       heliusApiKey: env.HELIUS_API_KEY.length > 0,
       anthropicApiKey: env.ANTHROPIC_API_KEY.length > 0,
       solanaRpcUrl: env.SOLANA_RPC_URL.length > 0,
+      coingeckoApiKey: env.COINGECKO_API_KEY.length > 0,
     },
   };
 }

@@ -253,6 +253,7 @@ export async function registerAdminRoutes(
         anthropicApiKey: env.ANTHROPIC_API_KEY.length > 0,
         statsApiToken: env.STATS_API_TOKEN.length > 0,
         solanaRpcUrl: env.SOLANA_RPC_URL.length > 0,
+        coingeckoApiKey: env.COINGECKO_API_KEY.length > 0,
       },
       adminWallets: env.ADMIN_WALLET_ADDRESSES.split(",")
         .map((a) => a.trim())

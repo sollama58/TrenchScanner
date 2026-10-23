@@ -29,7 +29,9 @@ const logger = createLogger("candle-peaks");
  *
  * A coin is read every ten minutes while it trades, hourly for a day after, then twice a day
  * (nextPeakCheckDelayMs), so a coin that wakes up a week after its alert is seen within half a day.
- * Coins Pump.fun has no candles for (not a Pump.fun launch) keep the readings' peaks.
+ * Coins Pump.fun has no candles for (not a Pump.fun launch) keep the readings' peaks. With
+ * COINGECKO_API_KEY the reads go through minuteCandleReader.ts, which asks GeckoTerminal on the
+ * coin's own pools when Pump.fun refuses (its 403s from 2026-10-23) or has no such coin.
  *
  * Training is untouched: the labels, the run peak and runPeakMinutes live on CandidateOutcome,
  * which this never writes. What it adds for learning is the record: each alert's ATH and when it
@@ -134,7 +136,14 @@ const LEADERBOARD_RETURN_PCT = 100;
 
 export async function runCandlePeaksJob(
   pumpFun: Pick<PumpFunClient, "minuteCandles">,
-  opts: { trackingDays: number; coinsPerRun?: number; spacingMs?: number; now?: () => number },
+  opts: {
+    trackingDays: number;
+    coinsPerRun?: number;
+    spacingMs?: number;
+    now?: () => number;
+    /** Which source answered the reads since the last run (minuteCandleReader's takeStats). */
+    candleSources?: () => Record<string, number>;
+  },
 ): Promise<JobRunMeta> {
   const now = opts.now ?? Date.now;
   const coinsPerRun = opts.coinsPerRun ?? PEAK_COINS_PER_RUN;
@@ -253,6 +262,7 @@ export async function runCandlePeaksJob(
     swapRequests: swap.requests,
     swapThrottled: swap.throttled,
     swapHeldBack: swap.heldBack,
+    ...(opts.candleSources ? { sources: opts.candleSources() } : {}),
   };
   if (counts.coins > 0 || enrolled > 0) logger.info("candle peaks", meta);
   // Throttled before a single coin was read: a failed run, not a quiet one - it used to record a
@@ -264,7 +274,7 @@ export async function runCandlePeaksJob(
   // 403 from 2026-10-23 and the job kept recording successes while its backlog grew; the Peaks fall
   // back to the readings' (matchPeaks.ts, curatedPeaks.ts) meanwhile.
   if (counts.failed > 0 && counts.failed === counts.calls) {
-    throw new JobFailure(`Every Pump.fun candle read failed (${lastError ?? "unknown"})`, {
+    throw new JobFailure(`Every candle read failed (${lastError ?? "unknown"})`, {
       ...meta,
       lastError,
     });
