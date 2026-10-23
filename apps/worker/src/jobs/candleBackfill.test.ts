@@ -187,6 +187,20 @@ describe("stepBackfill", () => {
     expect(pages.map((p) => p.pool)).toEqual(["POOL"]);
     expect(patch.poolIndex).toBe(1);
   });
+
+  it("pages a non-Pump coin from now, not the hour start: no live page holds its newest stretch", async () => {
+    const token = { launchpad: null, launchedAt: null, pairAddress: "POOL" };
+    // GeckoTerminal two minutes late: the store is vouched for only to its newest bar.
+    const { d, saved, pages } = deps({
+      geckoPage: vi.fn(async (pool, _m, before) => {
+        pages.push({ pool, before });
+        return geckoBody(before - 2 * M, 100);
+      }),
+    });
+    await stepBackfill(job({ mint: OTHER_MINT, pumpDone: false }), token, d, NOW);
+    expect(pages).toEqual([{ pool: "POOL", before: NOW }]);
+    expect(Math.max(...saved.map((r) => r.coverTo))).toBe(NOW - 2 * M);
+  });
 });
 
 describe("MinuteBudget", () => {

@@ -56,24 +56,32 @@ export function subtractSpans(spans: readonly Span[], cut: readonly Span[]): Spa
 }
 
 /**
- * Which width each stretch is read from: for every width, finest first, the part of its cover no
- * finer width covers. Clipped to [from, to).
+ * Which width each stretch is read from, clipped to [from, to). Sources no wider than the
+ * timeframe (`tfSec`) claim their covers first, the most trusted (priority) first and, among
+ * equals, the finest: any of them folds into the same `tf` bars, so the one whose bars are complete
+ * should stand, not the finest. A finer source that is not complete used to win anyway: the live
+ * tail's 1-second bars, with no volume and only the last 20 minutes of ticks, took a whole open
+ * chart's stretch from Pump.fun's minute page and left it flat (chart gaps audit 2026-10-23). What
+ * is left then goes to the wider sources, finest first, to be served coarse.
  */
 export function baseSegments(
   inputs: readonly SeriesInput[],
   from = -Infinity,
   to = Infinity,
+  tfSec = Infinity,
 ): { res: number; from: number; to: number }[] {
-  const widths = [...new Set(inputs.map((i) => i.res))].sort((a, b) => a - b);
+  const order = [...inputs].sort((a, b) => {
+    const fitA = a.res <= tfSec;
+    const fitB = b.res <= tfSec;
+    if (fitA !== fitB) return fitA ? -1 : 1;
+    if (fitA && a.priority !== b.priority) return b.priority - a.priority;
+    return a.res - b.res || b.priority - a.priority;
+  });
   let claimed: Span[] = [];
   const out: { res: number; from: number; to: number }[] = [];
-  for (const res of widths) {
-    const cover = unionSpans(
-      inputs
-        .filter((i) => i.res === res)
-        .map((i): Span => [Math.max(i.coverFrom, from), Math.min(i.coverTo, to)]),
-    );
-    for (const [a, b] of subtractSpans(cover, claimed)) out.push({ res, from: a, to: b });
+  for (const input of order) {
+    const cover: Span[] = unionSpans([[Math.max(input.coverFrom, from), Math.min(input.coverTo, to)]]);
+    for (const [a, b] of subtractSpans(cover, claimed)) out.push({ res: input.res, from: a, to: b });
     claimed = unionSpans([...claimed, ...cover]);
   }
   return out.sort((x, y) => x.from - y.from);
@@ -94,7 +102,8 @@ function fold(t: number, bars: readonly StoredBar[]): StoredBar {
 
 /**
  * The `tfSec`-wide bars over [from, to) (bar starts), oldest first. Each stretch is read from the
- * finest width covering it (baseSegments); a width no wider than `tf` is folded into `tf` buckets
+ * source baseSegments picks for it, and every source's bars of that width fill it (one source's
+ * missing interval is another's bar); a width no wider than `tf` is folded into `tf` buckets
  * (every stored width divides the timeframes it is folded into), a wider one is passed through
  * marked coarse with its width. Where a coarse bar and a folded one would start together, the
  * folded one stands.
@@ -119,19 +128,26 @@ export function candleSeries(
   }
   const buckets = new Map<number, StoredBar[]>();
   const coarse = new Map<number, SeriesBar>();
-  for (const seg of baseSegments(inputs, from, to)) {
+  for (const seg of baseSegments(inputs, from, to, tfSec)) {
     const slots = byRes.get(seg.res);
     if (!slots) continue;
+    const width = seg.res * 1_000;
     for (const { bar } of slots.values()) {
-      if (bar.t < seg.from || bar.t >= seg.to) continue;
-      if (seg.res * 1_000 <= tf) {
+      if (width <= tf) {
+        if (bar.t < seg.from || bar.t >= seg.to) continue;
         const at = Math.floor(bar.t / tf) * tf;
         const list = buckets.get(at);
         if (list) list.push(bar);
         else buckets.set(at, [bar]);
-      } else {
-        coarse.set(bar.t, { ...bar, coarse: true, w: seg.res });
+        continue;
       }
+      if (bar.t >= seg.to || bar.t + width <= seg.from) continue;
+      // A wide bar the stretch starts inside of (a finer source's cover ended mid-bar) is served
+      // from the stretch's start, the rest of its width: dropped, its minutes were drawn flat.
+      const at = bar.t >= seg.from ? bar.t : Math.ceil(seg.from / tf) * tf;
+      const w = (bar.t + width - at) / 1_000;
+      if (w <= 0) continue;
+      coarse.set(at, { ...bar, t: at, coarse: true, w });
     }
   }
   const out: SeriesBar[] = [];

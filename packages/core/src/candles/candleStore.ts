@@ -102,19 +102,28 @@ export type CandleBackfillReason = "chart" | "call";
 
 /** A finished backfill is started again when asked this long after it ended (newer gaps to fill). */
 export const BACKFILL_REDO_AFTER_MS = 6 * 3_600_000;
+/**
+ * The same for a coin Pump.fun has no candles for (another launchpad, a Raydium or Meteora pool):
+ * its newest stretch comes only from GeckoTerminal, so a chart opened on it tops the store up from
+ * now back to what is saved, a page or two, rather than leaving hours since the last backfill to
+ * the live tail, which starts when the chart opened (chart gaps audit 2026-10-23).
+ */
+export const BACKFILL_TOP_UP_AFTER_MS = 10 * 60_000;
 
 /**
  * Asks for the coin's one-time backfill (one statement). A coin already queued is left as it is,
- * except that a call moves a chart's ask ahead; one finished more than BACKFILL_REDO_AFTER_MS ago
- * is queued again from the start.
+ * except that a call moves a chart's ask ahead; one finished more than `redoAfterMs` ago
+ * (BACKFILL_REDO_AFTER_MS, or BACKFILL_TOP_UP_AFTER_MS for a coin with no Pump.fun candles) is
+ * queued again from the start.
  */
 export async function requestCandleBackfill(
   mint: string,
   reason: CandleBackfillReason,
   now = Date.now(),
+  redoAfterMs = BACKFILL_REDO_AFTER_MS,
 ): Promise<void> {
   const at = new Date(now);
-  const redoBefore = new Date(now - BACKFILL_REDO_AFTER_MS);
+  const redoBefore = new Date(now - redoAfterMs);
   await prisma.$executeRaw`
     INSERT INTO "CandleBackfill" ("mint", "reason", "requestedAt", "nextAt")
     VALUES (${mint}, ${reason}, ${at}, ${at})

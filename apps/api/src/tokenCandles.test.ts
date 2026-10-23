@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { chunkBars, type CandleChunkRow, type SeriesInput, type StoredBar } from "@trenchscanner/core";
-import { candlesQuery, pageInput, readTokenCandles, type CandleReadDeps } from "./tokenCandles.js";
+import {
+  candlesQuery,
+  pageCoverEnd,
+  pageInput,
+  readTokenCandles,
+  type CandleReadDeps,
+} from "./tokenCandles.js";
 
 const M = 60_000;
 const NOW = Date.UTC(2026, 9, 22, 12, 30, 20);
@@ -81,6 +87,31 @@ describe("readTokenCandles", () => {
     expect(out.bars.at(-2)!.c).toBe((1_000 + 179) * 0.5);
   });
 
+  it("pages back over a held page the store hasn't saved yet", async () => {
+    const from = Math.floor(NOW / M) * M - 300 * M;
+    const held = pageInput(
+      Array.from({ length: 300 }, (_, i) => bar(from + i * M, 10 + i)),
+      60,
+      NOW,
+      1,
+    )!;
+    const asked: boolean[] = [];
+    const d: CandleReadDeps = {
+      ...deps([]).d,
+      live: async (_m, _tf, _f, newest) => {
+        asked.push(newest);
+        return [held];
+      },
+    };
+    const first = await readTokenCandles("X", "1m", null, 100, d, NOW);
+    expect(first.bars).toHaveLength(100);
+    // Nothing stored, but the page reaches back further: there is an older page to read.
+    expect(first.next).toBe(first.bars[0]!.t);
+    const older = await readTokenCandles("X", "1m", first.next, 100, d, NOW);
+    expect(older.bars.at(-1)!.t).toBe(first.bars[0]!.t - M);
+    expect(asked).toEqual([true, false]);
+  });
+
   it("answers no bars and no next for a coin with nothing stored", async () => {
     const { d } = deps([]);
     expect(await readTokenCandles("X", "1m", null, 100, d, NOW)).toEqual({
@@ -89,6 +120,17 @@ describe("readTokenCandles", () => {
       bars: [],
       next: null,
     });
+  });
+});
+
+describe("pageCoverEnd", () => {
+  const at = Math.floor(NOW / M) * M + 20_000;
+  it("vouches to the read for a page whose newest candle is current", () => {
+    expect(pageCoverEnd(at - 20_000, 60, at)).toBe(at);
+  });
+  it("stops at the newest candle's end when the page is late, so the stream can fill the rest", () => {
+    // Trades in the last 5 minutes the page hasn't caught up with yet.
+    expect(pageCoverEnd(at - 20_000 - 5 * M, 60, at)).toBe(at - 20_000 - 4 * M);
   });
 });
 

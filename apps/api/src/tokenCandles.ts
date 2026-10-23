@@ -35,8 +35,13 @@ export const MAX_CANDLE_LIMIT = 1_500;
 /** Times the window widens (x8 each) looking for `limit` bars over a sparse stretch. */
 const WIDENINGS = 4;
 
-/** Of two sources' bars at the same width and start, the higher's stands. */
-export const SOURCE_PRIORITY = { live: 4, pumpfun: 3, curve: 3, gecko: 2, stream: 1 } as const;
+/**
+ * How far each source is trusted: of two sources' bars at the same width and start the higher's
+ * stands, and of two that both fold into the timeframe the higher's cover is read (core's
+ * baseSegments). Pump.fun's pages count every trade; the curve tape every curve change; GeckoTerminal
+ * lags and has gaps of its own; the live tail's stream has no volume and keeps 20 minutes.
+ */
+export const SOURCE_PRIORITY = { live: 5, pumpfun: 4, curve: 3, gecko: 2, stream: 1 } as const;
 
 export interface TokenCandlesAnswer {
   mint: string;
@@ -52,8 +57,12 @@ export interface CandleReadDeps {
   oldestCover(mint: string): Promise<number | null>;
   /** The coin's supply now over the launch billion (mintSupply.ts); undefined: the billion. */
   factor(mint: string): Promise<number | undefined>;
-  /** What is not stored yet (newest pages, the stream), already on the supply now. Newest page only. */
-  live(mint: string, tfSec: number, factor: number): Promise<SeriesInput[]>;
+  /**
+   * What is not stored yet (newest pages, the stream), already on the supply now. `newest`: the
+   * newest page, which may read upstream; an older page takes only the pages already held, which
+   * reach back further than the store until their closed hours are saved.
+   */
+  live(mint: string, tfSec: number, factor: number, newest: boolean): Promise<SeriesInput[]>;
 }
 
 /** Bars on the launch billion put on the supply now (as onSupply does for the chart's candles). */
@@ -91,7 +100,7 @@ export async function readTokenCandles(
   const end = before ?? Math.floor(now / tfMs) * tfMs + tfMs;
   const [factorRaw, oldest] = await Promise.all([deps.factor(mint), deps.oldestCover(mint)]);
   const factor = factorRaw !== undefined && factorRaw > 0 ? factorRaw : 1;
-  const live = before === null ? await deps.live(mint, tfSec, factor) : [];
+  const live = await deps.live(mint, tfSec, factor, before === null);
   const liveOldest = Math.min(...live.map((i) => i.coverFrom));
   const floor = Math.min(oldest ?? Infinity, liveOldest);
   let span = limit * tfMs;
@@ -105,12 +114,19 @@ export async function readTokenCandles(
   }
   bars = bars.slice(-limit);
   const first = bars[0]?.t;
-  return {
-    mint,
-    tf,
-    bars,
-    next: first !== undefined && oldest !== null && oldest < first ? first : null,
-  };
+  // Older bars are there to read when the store, or a page held, reaches before the first one.
+  return { mint, tf, bars, next: first !== undefined && floor < first ? first : null };
+}
+
+/**
+ * Where a page read at `at` stops vouching for the stretch: its newest candle's end, never past the
+ * read. Pump.fun's (and GeckoTerminal's) newest candles can trail a read by a minute or more, and a
+ * page taken to cover to its read claimed those minutes too, so they drew flat where the stream had
+ * trades. After the newest candle the other sources answer; on a coin quiet since, they have no
+ * bars either, which draws the same.
+ */
+export function pageCoverEnd(newestT: number, res: number, at: number): number {
+  return Math.min(at, newestT + res * 1_000);
 }
 
 /** A Pump.fun page (launch billion) read at `at`, as a series input on the supply now. */
@@ -124,7 +140,7 @@ export function pageInput(
   return {
     res,
     coverFrom: candles[0]!.t,
-    coverTo: at,
+    coverTo: pageCoverEnd(candles[candles.length - 1]!.t, res, at),
     bars: scaleBars(candles, factor),
     priority: SOURCE_PRIORITY.live,
   };

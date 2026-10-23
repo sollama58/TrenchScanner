@@ -172,8 +172,10 @@ export async function stepBackfill(
     now - deps.keepDays * DAY_MS,
     pump && token.launchedAt ? token.launchedAt.getTime() - MINUTE_MS : -Infinity,
   );
-  // The newest hour is the live page's (the API reads it every chart poll); the store is for history.
-  const start = job.cursor?.getTime() ?? chunkStartOf(now, 60);
+  // A Pump.fun coin's newest hour is the live page's (the API reads it every chart poll); the store
+  // is for history. Any other coin has no live page: its pages run to now (a chart's top-up).
+  const start =
+    job.cursor?.getTime() ?? (pump ? chunkStartOf(now, 60) : Math.floor(now / MINUTE_MS) * MINUTE_MS);
   const cursor = coveredBack(start, await deps.covers(job.mint, start));
   const pools = poolsOf(job.mint, token);
   if (cursor <= stopAt || job.pages >= deps.maxPages || job.poolIndex >= pools.length)
@@ -198,7 +200,13 @@ export async function stepBackfill(
         60,
         "gecko",
         bars.filter((b) => b.t + MINUTE_MS <= now),
-        { from: bars[0]!.t, to: Math.min(cursor, Math.floor(now / MINUTE_MS) * MINUTE_MS) },
+        // GeckoTerminal's newest minutes can trail by a minute or two: a page vouches only to its
+        // newest bar's end (as the API's pageCoverEnd), so a late minute is asked again by the next
+        // top-up rather than stored as a quiet one.
+        {
+          from: bars[0]!.t,
+          to: Math.min(cursor, Math.floor(now / MINUTE_MS) * MINUTE_MS, bars[bars.length - 1]!.t + MINUTE_MS),
+        },
       ),
     );
   } catch (err) {

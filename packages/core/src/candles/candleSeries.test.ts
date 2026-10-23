@@ -124,6 +124,39 @@ describe("candleSeries", () => {
     expect(out[0]!.c).toBe(5);
   });
 
+  it("reads a stretch from the most trusted source that folds into the timeframe, not the finest", () => {
+    // Pump.fun's minute page (complete) and the live tail's 1-second bars, which claim the whole
+    // hour but hold only its last minutes: the minutes stand where the page has them.
+    const minutes = Array.from({ length: 10 }, (_, i) => bar(T0 + i * M, i + 1, i + 2, 5));
+    const seconds = [bar(T0 + 9 * M + 30 * S, 10, 20, null), bar(T0 + 10 * M + 5 * S, 20, 21, null)];
+    const out = candleSeries(
+      [input(60, T0, T0 + 9 * M + 30 * S, minutes, 5), input(1, T0, T0 + 11 * M, seconds, 1)],
+      60,
+    );
+    expect(out.map((b) => (b.t - T0) / M)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    // The forming minute: the page's bar, then the stream's seconds after the page's read.
+    expect(out[9]).toMatchObject({ o: 10, c: 20, vol: 5 });
+    expect(out[10]).toMatchObject({ o: 20, c: 21 });
+    // On a 1-second view the minutes are wider than the timeframe: the seconds stand where they reach.
+    const fine = candleSeries(
+      [input(60, T0, T0 + 9 * M + 30 * S, minutes, 5), input(1, T0 + 9 * M, T0 + 11 * M, seconds, 1)],
+      1,
+    );
+    expect(fine.filter((b) => !b.coarse).map((b) => (b.t - T0) / S)).toEqual([570, 605]);
+  });
+
+  it("serves the rest of a wide bar a stretch starts inside of, instead of dropping it", () => {
+    const fives = [bar(T0, 1, 2), bar(T0 + 5 * M, 2, 3)];
+    const minutes = [bar(T0, 1, 1), bar(T0 + 2 * M, 1, 2)];
+    const out = candleSeries([input(300, T0, T0 + 10 * M, fives), input(60, T0, T0 + 3 * M, minutes)], 60);
+    expect(out.map((b) => [(b.t - T0) / M, b.coarse ?? false, b.w ?? 60])).toEqual([
+      [0, false, 60],
+      [2, false, 60],
+      [3, true, 120],
+      [5, true, 300],
+    ]);
+  });
+
   it("clips to the asked window", () => {
     const bars = Array.from({ length: 10 }, (_, i) => bar(T0 + i * M, i + 1, i + 2));
     const out = candleSeries([input(60, T0, T0 + 10 * M, bars)], 60, T0 + 3 * M, T0 + 5 * M);

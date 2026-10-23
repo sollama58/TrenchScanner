@@ -481,6 +481,26 @@ describe("LiveCurves.history (the chart's own candles)", () => {
     t.curves.stop();
   });
 
+  it("reaches back no further than the oldest tick it still keeps", async () => {
+    const t = setup({ stream: true });
+    t.cover(t.at());
+    await t.curves.read(MINT, 0);
+    const opened = t.at();
+    // Half an hour followed, a change every 10 s: only the last 20 minutes of ticks are kept.
+    for (let i = 1; i <= 180; i++) {
+      t.tick(10_000);
+      t.push(curveData(1_000_000_000_000_000n, BigInt(70_000_000_000 + i * 1_000_000_000)));
+      await t.curves.read(MINT, 0);
+    }
+    const h = await t.curves.history(MINT);
+    expect(h!.ticks[0]![0]).toBeGreaterThan(opened);
+    // The cover starts at the oldest tick kept, not at the follow's start: before it the prices
+    // are gone, and a chart must read that stretch from its other sources.
+    expect(h!.coveredFrom).toBe(h!.ticks[0]![0]);
+    expect(h!.streamFrom).toBe(h!.ticks[0]![0]);
+    t.curves.stop();
+  });
+
   it("stamps a streamed change with its slot's time where the slot feed has one", async () => {
     const t = setup({ stream: true });
     t.cover(t.at());

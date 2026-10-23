@@ -214,13 +214,25 @@ export function storedCandles(bars: readonly StoredBar[], tfMs: number): VolumeC
 }
 
 /**
- * Exported for tests. Candles held with a newer page joined: the page stands from its first bar on
- * (its stretch was read afresh, the forming bar included), the held ones before it stay.
+ * Exported for tests. Candles held with a newer page joined: the page's bars stand (their stretch
+ * was read afresh, the forming bar included), and a held bar stays wherever no bar of the page
+ * overlaps it. A page that came back thinner (a source that answered a moment ago didn't this
+ * time) no longer takes bars already drawn off the chart: that left stretches flat until the next
+ * poll (chart gaps audit 2026-10-23). A trade that happened stays happened.
  */
 export function withNewest(held: readonly VolumeCandle[], page: readonly VolumeCandle[]): VolumeCandle[] {
   if (page.length === 0) return [...held];
-  const from = page[0]!.t;
-  return held.filter((k) => k.t < from).concat(page);
+  if (held.length === 0) return [...page];
+  const out: VolumeCandle[] = [];
+  let j = 0;
+  for (const k of held) {
+    const end = k.t + (k.w ?? 60_000);
+    // Page bars are oldest first and don't overlap each other: skip those ending by this one's start.
+    while (j < page.length && page[j]!.t + (page[j]!.w ?? 60_000) <= k.t) j++;
+    const p = page[j];
+    if (!p || p.t >= end) out.push(k);
+  }
+  return out.concat(page).sort((a, b) => a.t - b.t);
 }
 
 /**
