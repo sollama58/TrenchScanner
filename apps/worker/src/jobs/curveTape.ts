@@ -146,6 +146,15 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let busy = false;
 /** The stream is off for the rest of the pace: its credits ran past their share of the day. */
 let paused = false;
+/**
+ * The pools' subscriptions are off: the stream is past POOL_PACE_SHARE of its pace. A graduated
+ * coin's pool (three accounts, most of the stream's bytes; #974 and #983 follow alerted coins' pools
+ * for two hours) is let go before the curves are, so the young curves' 1-second bars and the
+ * scoring that reads them keep going (API audit 2026-10-23).
+ */
+let poolsPaused = false;
+/** The share of the stream's pace the pools may take before they are let go. */
+export const POOL_PACE_SHARE = 0.6;
 let day = "";
 /** The stream's bytes today: credits are figured on the total, as a single update rounds to none. */
 let dayStreamBytes = 0;
@@ -303,7 +312,7 @@ function graduate(mint: string, state: CurveState, now: number): void {
 }
 
 function watchPool(mint: string, p: PoolFollowed, now: number): void {
-  if (!p.vaults || paused) return;
+  if (!p.vaults || poolsPaused) return;
   stream?.watch(poolKeyOf("base", mint), [p.vaults.base], now, "account");
   stream?.watch(poolKeyOf("quote", mint), [p.vaults.quote], now, "account");
   stream?.watch(poolKeyOf("account", mint), [p.address], now, "account");
@@ -315,7 +324,7 @@ function unwatchPool(mint: string): void {
 
 /** From when the stream has covered all of a pool (both vaults and the account), or null. */
 function poolCoveredSince(mint: string, p: PoolFollowed, now: number): number | null {
-  if (!p.vaults || paused || !stream) return null;
+  if (!p.vaults || poolsPaused || !stream) return null;
   const since = [
     stream.coveredSince(poolKeyOf("base", mint), p.vaults.base, now),
     stream.coveredSince(poolKeyOf("quote", mint), p.vaults.quote, now),
@@ -463,6 +472,7 @@ export function takeCurveTapeStats(now = Date.now()) {
     readCredits: stats.readCalls,
     streamCreditsToday: Math.round(streamCredits(dayStreamBytes)),
     paused: paused ? 1 : 0,
+    poolsPaused: poolsPaused ? 1 : 0,
   };
   stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0, poolUpdates: 0 };
   return out;
@@ -509,19 +519,31 @@ export async function round(now = Date.now()): Promise<void> {
   busy = true;
   try {
     rollDay(now);
-    const over = overStreamPace(streamCredits(dayStreamBytes), cfg.streamCreditsPerDay, now);
+    const credits = streamCredits(dayStreamBytes);
+    const over = overStreamPace(credits, cfg.streamCreditsPerDay, now);
+    const poolsOver = over || overStreamPace(credits, cfg.streamCreditsPerDay * POOL_PACE_SHARE, now);
+    if (poolsOver !== poolsPaused) {
+      poolsPaused = poolsOver;
+      logger.info(
+        poolsOver ? "pool stream paused: past its share of the credit pace" : "pool stream resumed",
+        {
+          streamCreditsToday: Math.round(credits),
+          pools: pools.size,
+        },
+      );
+      for (const [mint, p] of pools) {
+        if (poolsOver) unwatchPool(mint);
+        else watchPool(mint, p, now);
+      }
+    }
     if (over !== paused) {
       paused = over;
       logger.info(over ? "curve stream paused: past its credit pace" : "curve stream resumed", {
-        streamCreditsToday: Math.round(streamCredits(dayStreamBytes)),
+        streamCreditsToday: Math.round(credits),
       });
       for (const [mint, f] of followed) {
         if (over) stream?.unwatch(keyOf(mint));
         else stream?.watch(keyOf(mint), [f.curve], now, "account");
-      }
-      for (const [mint, p] of pools) {
-        if (over) unwatchPool(mint);
-        else watchPool(mint, p, now);
       }
     }
     const unseen = (cfg.newLaunches?.() ?? []).filter((m) => !followed.has(m) && !done.has(m));
@@ -648,6 +670,7 @@ export function resetCurveTape(): void {
   for (const mint of [...pools.keys()]) dropPool(mint, false);
   done.clear();
   paused = false;
+  poolsPaused = false;
   day = "";
   dayStreamBytes = 0;
   stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0, poolUpdates: 0 };

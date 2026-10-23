@@ -3,6 +3,7 @@ import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, saveCandleChunks, type ChainTx } from "@trenchscanner/core";
 import {
+  seedCandleChainFillSpend,
   oneSecondHoles,
   resetCandleChainFill,
   runCandleChainFill,
@@ -127,6 +128,39 @@ describe.skipIf(!dbAvailable)("chart chain fill", () => {
     ]);
     await runCandleChainFill({ helius, sink: { solUsd: async () => 200 } }, opts);
     expect(asked[1]).toEqual({ from: (LAUNCH + 3 * MIN) / 1000, until: (LAUNCH + 120 * MIN) / 1000 });
+  });
+
+  it("fills a hole no chunk ends exactly at, vouching for the quiet lead-in with the chunk it saved", async () => {
+    // Born two minutes before the curve tape's first chunk: the first hole starts where no
+    // 1-second cover ends. Before 2026-10-23 that parked the coin for the day.
+    await prisma.token.update({
+      where: { mintAddress: MINT },
+      data: { launchedAt: new Date(LAUNCH - 2 * MIN) },
+    });
+    expect(await oneSecondHoles(MINT, LAUNCH - 2 * MIN, LAUNCH + 120 * MIN)).toEqual([
+      [LAUNCH - 2 * MIN, LAUNCH],
+      [LAUNCH + MIN, LAUNCH + 120 * MIN],
+    ]);
+    const { helius, asked } = stub([[buy(LAUNCH - MIN, 30e9)], [buy(LAUNCH + 5 * MIN, 31e9)]]);
+    await runCandleChainFill({ helius, sink: { solUsd: async () => 200 } }, opts);
+    // The first hole closed whole, so the coin's next one was read in the same run.
+    expect(asked).toEqual([
+      { from: (LAUNCH - 2 * MIN) / 1000, until: LAUNCH / 1000 },
+      { from: (LAUNCH + MIN) / 1000, until: (LAUNCH + 118 * MIN) / 1000 },
+    ]);
+    expect(await oneSecondHoles(MINT, LAUNCH - 2 * MIN, LAUNCH + 118 * MIN)).toEqual([]);
+  });
+
+  it("carries the day's spend over from the scan heartbeat", async () => {
+    const { helius, asked } = stub([[buy(LAUNCH + 2 * MIN, 30e9)]]);
+    seedCandleChainFillSpend(995, new Date(NOW), NOW);
+    await runCandleChainFill({ helius, sink: { solUsd: async () => 200 } }, opts);
+    expect(asked).toHaveLength(0);
+    // Another day's reading is not today's.
+    resetCandleChainFill();
+    seedCandleChainFillSpend(995, new Date(NOW - 86_400_000), NOW);
+    await runCandleChainFill({ helius, sink: { solUsd: async () => 200 } }, opts);
+    expect(asked).toHaveLength(1);
   });
 
   it("stops at the day's credits", async () => {

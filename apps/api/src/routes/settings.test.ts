@@ -568,6 +568,28 @@ describe.skipIf(!dbAvailable)("settings routes", () => {
     ];
     for (const b of bad) expect((await call("user", "PUT", "/settings/scope", b)).statusCode).toBe(400);
     expect((await call("user", "GET", "/settings")).json().scopeSettings).toEqual(scope);
+
+    // Chosen columns (user ask 2026-10-23): up to six, up to three picks each.
+    const col = (id: string, kind: string, picks: string[] = []) => ({
+      id,
+      kind,
+      picks,
+      filter: { hideMissed: true },
+    });
+    const board = {
+      display: { density: "cozy" },
+      board: [col("new", "new"), col("model", "model", ["m1", "m2"])],
+    };
+    expect((await call("user", "PUT", "/settings/scope", board)).statusCode).toBe(200);
+    expect((await call("user", "GET", "/settings")).json().scopeSettings).toEqual(board);
+    const badBoards = [
+      { ...board, board: [] },
+      { ...board, board: Array.from({ length: 7 }, (_, i) => col(`c${i}`, "new")) },
+      { ...board, board: [col("m", "model", ["a", "b", "c", "d"])] },
+      { ...board, board: [{ ...col("n", "new"), extra: 1 }] },
+    ];
+    for (const b of badBoards) expect((await call("user", "PUT", "/settings/scope", b)).statusCode).toBe(400);
+    expect((await call("user", "GET", "/settings")).json().scopeSettings).toEqual(board);
     expect((await app.inject({ method: "PUT", url: "/settings/scope", payload: scope })).statusCode).toBe(
       401,
     );
