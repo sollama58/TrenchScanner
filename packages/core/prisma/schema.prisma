@@ -105,6 +105,9 @@ model User {
   /// paper strategies reach their private Telegram chats - see trading/tradeAlerts.ts in core for
   /// the shape. Null = all of them, as before the setting existed.
   tradeAlerts     Json?
+  /// What the browser extension overlay shows on Axiom, Terminal and GMGN (rings, stat flags,
+  /// sites, style) - see overlaySettings.ts in apps/api for the shape. Null = the defaults.
+  overlaySettings Json?
   /// Set for an account made by signing in with Privy (email or Google/X): its Privy DID. The
   /// account's walletAddress is then the Privy wallet Privy made for it. Privy accounts and wallet
   /// accounts stay separate (user decision 2026-10-18), and Privy accounts can't pair a phone.
@@ -122,6 +125,8 @@ model User {
   webPushSubscriptions WebPushSubscription[]
   /// Keys for the Model Alert websocket. The secret is shown once and stored only as a hash.
   apiKeys           UserApiKey[]
+  /// Read-only keys for the browser extension overlay. The secret is shown once and stored only as a hash.
+  extensionKeys     ExtensionKey[]
   tradingWallet     TradingWallet?
   tradingBot        TradingBot?
   paperStrategies   PaperStrategy[]
@@ -2143,6 +2148,26 @@ model UserApiKey {
   /// HMAC-SHA256 hex of the secret, peppered with the server secret. Not a bare hash.
   secretHash String    @unique
   createdAt  DateTime  @default(now())
+  revokedAt  DateTime?
+
+  @@index([userId, revokedAt])
+}
+
+/// A browser extension overlay key: read-only access to the owner's alerts, token stats and overlay
+/// settings, and nothing else (no trading, wallets, filters or sessions). Shown once, stored as a
+/// peppered HMAC like UserApiKey, and revocable from Settings.
+model ExtensionKey {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// The visible start of the secret (not enough to authenticate).
+  prefix     String
+  /// HMAC-SHA256 hex of the secret, peppered with the server secret. Not a bare hash.
+  secretHash String    @unique
+  createdAt  DateTime  @default(now())
+  /// Throttled: written at most every few minutes, not on every request.
+  lastUsedAt DateTime?
   revokedAt  DateTime?
 
   @@index([userId, revokedAt])

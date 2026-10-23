@@ -2039,6 +2039,25 @@ export interface ModelAlertKeyCreated extends ModelAlertKey {
   secret: string;
 }
 
+/** One browser extension key as Settings lists it. The secret is not included. */
+export interface ExtensionKey {
+  id: string;
+  prefix: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+/** GET /settings/extension-keys. */
+export interface ExtensionKeyList {
+  keys: ExtensionKey[];
+  limit: number;
+}
+
+/** POST /settings/extension-keys. `secret` is shown once, in this response only. */
+export interface ExtensionKeyCreated extends ExtensionKey {
+  secret: string;
+}
+
 export interface Settings {
   alerts: AlertPrefs;
   /** Push notifications' VAPID key, null while push is off. Absent from API builds before push. */

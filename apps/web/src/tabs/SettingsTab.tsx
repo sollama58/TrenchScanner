@@ -10,6 +10,7 @@ import { FeedPanel } from "../components/FeedPanel";
 import { ConnectPhonePanel } from "../components/ConnectPhonePanel";
 import { TwoFactorPanel } from "../components/TwoFactorPanel";
 import { ModelAlertKeysPanel } from "../components/ModelAlertKeys";
+import { ExtensionKeysPanel } from "../components/ExtensionKeys";
 import { PrivyWalletPanel } from "../components/PrivyWalletPanel";
 import { TradingSettingsPanel } from "../components/TradingSettingsPanel";
 import { TrackedWalletsPanel } from "../components/TrackedWallets";
@@ -83,6 +84,7 @@ export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live"
       {me?.signInMethod === "privy" ? <PrivyWalletPanel /> : <ConnectPhonePanel />}
       <TwoFactorPanel />
       <ModelAlertKeysPanel />
+      <ExtensionKeysPanel />
     </div>
   );
 }
