@@ -30,8 +30,10 @@
  *
  * Granularity: the watcher's own price fetch is still about once a minute. Where the worker's
  * in-memory bonding-curve tape has prints inside that minute, those are folded in through
- * applyPriceTick (dollarTicksFromCurve) and the row is stamped FINE_TICK_LABEL_RULE. A coin with
- * no curve tape is graded on the minute sample alone, the same question as rule 4.
+ * applyPriceTick (dollarTicksFromCurve) and the row is stamped SMOOTHED_FINE_TICK_LABEL_RULE.
+ * Each print is read as the curve's 5-second time-weighted price (smoothedCurvePrices), so one
+ * trade cannot make, stop or top a call on its own. A coin with no curve
+ * tape is graded on the minute sample alone, the same question as rule 4.
  */
 
 /**
@@ -44,6 +46,9 @@
  *       which runs 45-60 s behind the market (user decision 2026-10-12; decisionAnchor below).
  *       History from rule 3 was re-graded to it from Pump.fun's minute candles where they could
  *       vouch for the price (labelRegradeJob in the worker); the rest stays on rule 3.
+ *   6 - rule 5, with each curve print read as a 5-second time-weighted price, for the 2x, the
+ *       tiers, the stop and the peaks alike (SMOOTHED_FINE_TICK_LABEL_RULE, 2026-10-23).
+ *       Current like rule 5.
  *   5 - rule 4's anchor, with sub-minute bonding-curve prints folded in when the worker's curve
  *       tape had them (FINE_TICK_LABEL_RULE, 2026-10-21). The bar is unchanged (2x / 15m, stop at
  *       50% before the 2x, 4x / 30m, log2 of the clean peak). A row the tape never priced stays
@@ -62,6 +67,14 @@ export const CURRENT_LABEL_RULE = 4;
  * rule list above. Not CURRENT_LABEL_RULE: bumping that would drop every rule-4 row from the fit.
  */
 export const FINE_TICK_LABEL_RULE = 5;
+/**
+ * Rule 5 with each curve print read as a FINE_TICK_SMOOTHING_MS time-weighted price (user
+ * request 2026-10-23): one trade can no longer trip the 2x, the tiers or the stop, or set the
+ * peaks, on its own. Current like rule 5; rows stamped 5 before it keep their rule.
+ */
+export const SMOOTHED_FINE_TICK_LABEL_RULE = 6;
+/** How far back the smoothed curve price averages, in ms. */
+export const FINE_TICK_SMOOTHING_MS = 5_000;
 /** The rule a decision anchored on DexScreener's price is graded under (no usable fresh quote). */
 export const DEXSCREENER_ANCHOR_LABEL_RULE = 3;
 /**
@@ -150,7 +163,7 @@ export function isCurrentLabelRule(row: { labelRule?: number }): boolean {
  */
 export function trainsOnLabelRule(labelRule: number | undefined, excludeFineTickLabels = false): boolean {
   if (!isCurrentLabelRule({ labelRule })) return false;
-  if (excludeFineTickLabels && labelRule === FINE_TICK_LABEL_RULE) return false;
+  if (excludeFineTickLabels && labelRule !== undefined && labelRule >= FINE_TICK_LABEL_RULE) return false;
   return true;
 }
 
@@ -495,6 +508,7 @@ export function dollarTicksFromCurve(
   prices: CurveLabelPrices,
   usd: { at: Date; priceUsd: number },
   usdPerCurveUnit?: number,
+  smoothing?: { afterMs: number; untilMs: number; windowMs?: number },
 ): { priceUsd: number; at: Date }[] {
   if (!(usd.priceUsd > 0) || !Number.isFinite(usd.priceUsd)) return [];
   const usdMs = usd.at.getTime();
@@ -514,6 +528,16 @@ export function dollarTicksFromCurve(
     scale = usd.priceUsd / curveAtUsd;
   }
   const ticks: { priceUsd: number; at: Date }[] = [];
+  if (smoothing) {
+    const windowMs = smoothing.windowMs ?? FINE_TICK_SMOOTHING_MS;
+    for (const point of smoothedCurvePrices(prices, smoothing.afterMs, smoothing.untilMs, windowMs)) {
+      if (point.at === usdMs) continue;
+      const priceUsd = point.price * scale;
+      if (!Number.isFinite(priceUsd) || priceUsd <= 0) continue;
+      ticks.push({ priceUsd, at: new Date(point.at) });
+    }
+    return ticks;
+  }
   for (const change of prices.changes) {
     if (change.at === usdMs || !(change.price > 0) || !Number.isFinite(change.price)) continue;
     const priceUsd = change.price * scale;
@@ -521,6 +545,57 @@ export function dollarTicksFromCurve(
     ticks.push({ priceUsd, at: new Date(change.at) });
   }
   return ticks;
+}
+
+/**
+ * The curve's time-weighted price over the `windowMs` before each moment it can turn: every
+ * print, and `windowMs` after every print (when that print has filled the window). The average
+ * of a step price is piecewise linear between those moments, so its highs and lows are all here.
+ * A print's own moment does not yet include it: one trade that is undone inside the window moves
+ * the average by its share of the window, not to its own price.
+ *
+ * `prices` should reach `windowMs` before `afterMs`, so the first average has its history. Only
+ * moments in (`afterMs`, `untilMs`] are returned, oldest first. Before the first known price the
+ * average is over the stretch the curve was known.
+ */
+export function smoothedCurvePrices(
+  prices: CurveLabelPrices,
+  afterMs: number,
+  untilMs: number,
+  windowMs = FINE_TICK_SMOOTHING_MS,
+): { at: number; price: number }[] {
+  const steps: { at: number; price: number }[] = [];
+  if (prices.basis && prices.basis.price > 0 && Number.isFinite(prices.basis.price)) steps.push(prices.basis);
+  for (const c of prices.changes) {
+    if (!(c.price > 0) || !Number.isFinite(c.price)) continue;
+    if (steps.length > 0 && c.at < steps[steps.length - 1]!.at) continue;
+    steps.push(c);
+  }
+  if (steps.length === 0) return [];
+  const moments = new Set<number>();
+  for (const step of steps) {
+    if (step.at > afterMs && step.at <= untilMs) moments.add(step.at);
+    const filled = step.at + windowMs;
+    if (filled > afterMs && filled <= untilMs) moments.add(filled);
+  }
+  const out: { at: number; price: number }[] = [];
+  for (const at of [...moments].sort((a, b) => a - b)) {
+    const from = Math.max(at - windowMs, steps[0]!.at);
+    let area = 0;
+    let last: number | null = null;
+    for (let i = 0; i < steps.length; i++) {
+      const start = steps[i]!.at;
+      if (start > at) break;
+      const end = Math.min(steps[i + 1]?.at ?? at, at);
+      last = steps[i]!.price;
+      const span = end - Math.max(start, from);
+      if (span > 0) area += span * steps[i]!.price;
+    }
+    const price = at > from ? area / (at - from) : last;
+    if (price === null || !(price > 0)) continue;
+    out.push({ at, price });
+  }
+  return out;
 }
 
 export interface OutcomeLabels {
