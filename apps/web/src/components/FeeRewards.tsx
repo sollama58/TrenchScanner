@@ -46,10 +46,10 @@ function joinGap(count: number, index: number): string {
  * Solscan link when the mint is known (the same host other token rows already use). Tooltips stay
  * the plain sentence.
  */
-export function FeeRewards({ rewards }: { rewards: DeskReward[] }) {
+export function FeeRewards({ rewards, host = "OTC Desks" }: { rewards: DeskReward[]; host?: string }) {
   return (
     <>
-      OTC Desks pays holder rewards in{" "}
+      {host} pays holder rewards in{" "}
       {rewards.map((reward, index) => (
         <Fragment key={`${reward.mint ?? reward.label}-${index}`}>
           {joinGap(rewards.length, index)}
@@ -97,7 +97,7 @@ export function CreatorFeeRich({ fee }: { fee: NonNullable<Token["creatorFee"]> 
   const desk = stopped(fee.deskLine);
   const coins = deskRewards(fee.deskRewards);
   if (summary && desk && summary === desk) return <>{summary}</>;
-  const deskNode = coins ? <FeeRewards rewards={coins} /> : desk;
+  const deskNode = coins ? <FeeRewards rewards={coins} host={fee.rewardHost?.trim() || undefined} /> : desk;
   if (summary && deskNode)
     return (
       <>

@@ -9,7 +9,7 @@ import {
   shownCharityName,
   shownRewardLabels,
 } from "./components/AlertCard";
-import { deskRewardTokenLabel, hasOtcDeskRewards } from "./deskRewardDisplay";
+import { deskRewardTokenLabel, hasOtcDeskRewards, rewardHost } from "./deskRewardDisplay";
 
 type Fee = NonNullable<Token["creatorFee"]>;
 
@@ -109,8 +109,9 @@ export function creatorRewardFigure(fee: Fee | null | undefined): CreatorRewardF
   const parts: string[] = [];
   const charities = feeCharities(fee);
   // A wallet's addresses show here and in the tooltip, not on the card (user ask 2026-10-23).
+  // A Stonks dev-fee coin names its creator wallet the same way (user ask 2026-10-23).
   const recipients =
-    fee?.destination === "split" || fee?.destination === "wallet"
+    fee?.destination === "split" || fee?.destination === "wallet" || fee?.destination === "creator"
       ? feeRecipientCaption(fee.recipients)
       : null;
   if (recipients && recipients !== value) parts.push(recipients);
@@ -128,7 +129,7 @@ export function creatorRewardFigure(fee: Fee | null | undefined): CreatorRewardF
     logoDetail: logoParts.length > 0 ? logoParts.join(" · ") : null,
     title: badge?.title ?? line ?? "Creator reward",
     empty: false,
-    squareLabel: otcDesk ? "Holder Rewards: OTC Desks" : "Creator reward",
+    squareLabel: otcDesk ? `Holder Rewards: ${rewardHost(fee)}` : "Creator reward",
     otcDesk,
   };
 }
@@ -231,6 +232,8 @@ export function cardWithOtcDesk<T extends Card>(card: T, view: DeskView): T {
         recipients,
         deskLine: desk?.line ?? null,
         deskRewards: desk?.rewards ?? null,
+        // The sage read's desk is OTC Desks'; the card's own may be Stonk's.
+        rewardHost: sageDesk ? null : (fee?.rewardHost ?? null),
       },
     },
   };

@@ -16,6 +16,7 @@ import {
 } from "@trenchscanner/core";
 import { donateConfigCharities, expandCharityRecipients } from "./donateGg.js";
 import { feeWalletNames } from "./walletNames.js";
+import { stonkCardFee, stonkLaunchFees, type StonkLaunchFee } from "./stonkLaunch.js";
 import { enrichCreatorFeeDeskRewards } from "./deskRewardMeta.js";
 import { keptOtcDeskFeeForMint, otcDeskFeeForMint, otcDeskRoster, otcDeskRosterFor } from "./otcDesk.js";
 import {
@@ -32,6 +33,7 @@ import {
   mergeCharityShares,
   withFeeWalletNames,
   type CardFeeRecipient,
+  type FeeWalletName,
   type ParsedFeeRecipient,
 } from "./feeRecipients.js";
 
@@ -147,6 +149,11 @@ export interface CardCreatorFee {
    * the fee in basis points when the read gave one.
    */
   recipients?: CardFeeRecipient[] | null;
+  /**
+   * Who pays the holder rewards in `deskLine` and `deskRewards` when it is not OTC Desks: "Stonk"
+   * on a Stonks reward launch (user ask 2026-10-23). Absent means OTC Desks.
+   */
+  rewardHost?: string | null;
 }
 
 /** A loaded charity name is kept this long: the organization on a coin does not move. */
@@ -272,7 +279,7 @@ export async function creatorFeesByMint(
 ): Promise<Map<string, CardCreatorFee>> {
   const unique = [...new Set(mints.filter((m): m is string => typeof m === "string" && m !== ""))];
   if (unique.length === 0) return new Map();
-  const [rows, roster] = await Promise.all([
+  const [rows, roster, stonkMints] = await Promise.all([
     prisma.$queryRaw<
       {
         mintAddress: string;
@@ -303,7 +310,22 @@ export async function creatorFeesByMint(
       ? otcDeskRosterFor(unique[0]!, { wait: true })
       : otcDeskRoster({ wait: opts?.waitForDesk === true })
     ).catch(() => new Map<string, OtcDeskFee>()),
+    // Stonks coins: TokenSage reads Pump.fun's fee config only, so StonkFun says where theirs go.
+    prisma.token
+      .findMany({
+        where: { mintAddress: { in: unique }, launchpad: "stonks" },
+        select: { mintAddress: true },
+      })
+      .then((list) => list.map((t) => t.mintAddress))
+      .catch(() => [] as string[]),
   ]);
+  // Kept answers on a feed (the rest are read behind the request); the token page waits.
+  const stonkFees =
+    stonkMints.length > 0
+      ? await stonkLaunchFees(stonkMints, { wait: opts?.waitForDesk === true }).catch(
+          () => new Map<string, StonkLaunchFee>(),
+        )
+      : new Map<string, StonkLaunchFee>();
   const walletsOf = new Map<string, string[]>();
   const parsedRecipients = new Map<string, ParsedFeeRecipient[]>();
   for (const r of rows) {
@@ -345,8 +367,12 @@ export async function creatorFeesByMint(
   const feeWallets = [...parsedRecipients.values()].flatMap((list) =>
     list.flatMap((r) => (r.address && !r.named && r.kind !== "charity" ? [r.address] : [])),
   );
-  if (feeWallets.length > 0) {
-    const walletNames = await feeWalletNames(feeWallets);
+  const stonkDevs = [...stonkFees.values()].flatMap((fee) =>
+    fee.mode === "standard" && fee.creator ? [fee.creator] : [],
+  );
+  let walletNames = new Map<string, FeeWalletName>();
+  if (feeWallets.length + stonkDevs.length > 0) {
+    walletNames = await feeWalletNames([...feeWallets, ...stonkDevs]);
     if (walletNames.size > 0) {
       for (const [mint, list] of parsedRecipients) {
         parsedRecipients.set(mint, withFeeWalletNames(list, walletNames));
@@ -395,6 +421,11 @@ export async function creatorFeesByMint(
       if (name) names.set(mint, name);
     }
     applyCharityNames(out, names, shares, parsedRecipients);
+  }
+  // A Stonks coin's own routing, unless TokenSage already read one (user ask 2026-10-23).
+  for (const [mint, fee] of stonkFees) {
+    if (out.get(mint)?.destination) continue;
+    out.set(mint, stonkCardFee(fee, fee.creator ? walletNames.get(fee.creator) : undefined));
   }
   for (const mint of unique) {
     if (out.has(mint)) continue;

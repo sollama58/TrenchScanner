@@ -170,6 +170,7 @@ const CLOSE_DELAY_MS = 140;
 function RewardTip({
   id,
   rewards,
+  host,
   anchor,
   onEnter,
   onLeave,
@@ -178,6 +179,7 @@ function RewardTip({
 }: {
   id: string;
   rewards: readonly DeskRewardView[];
+  host: string;
   anchor: HTMLElement;
   onEnter: () => void;
   onLeave: () => void;
@@ -228,7 +230,9 @@ function RewardTip({
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <span className="desk-reward-tip-head">OTC Desks {rewards.length > 1 ? "rewards" : "reward"}</span>
+      <span className="desk-reward-tip-head">
+        {host} {rewards.length > 1 ? "rewards" : "reward"}
+      </span>
       {rewards.map((reward, index) => (
         <RewardTipRow key={`${reward.mint ?? reward.label}-${index}`} reward={reward} />
       ))}
@@ -249,9 +253,12 @@ export function DeskRewardTokens({
   compact = false,
   maxVisible = 3,
   className = "",
+  host = "OTC Desks",
 }: {
   rewards: readonly DeskRewardView[];
   compact?: boolean;
+  /** Who pays these rewards: OTC Desks, or Stonk on a Stonks reward launch. */
+  host?: string;
   maxVisible?: number;
   className?: string;
 }) {
@@ -340,7 +347,7 @@ export function DeskRewardTokens({
     <span
       className={`desk-reward-tokens${compact ? " compact" : ""}${className ? ` ${className}` : ""}`}
       role="group"
-      aria-label="OTC Desks reward tokens"
+      aria-label={`${host} reward tokens`}
     >
       {visible.map((reward, index) => (
         <button
@@ -366,6 +373,7 @@ export function DeskRewardTokens({
           <RewardTip
             id={tipId}
             rewards={shown}
+            host={host}
             anchor={anchor}
             onEnter={clear}
             onLeave={() => open.how === "hover" && leave()}

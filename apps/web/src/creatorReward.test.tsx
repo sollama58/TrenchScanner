@@ -59,6 +59,40 @@ describe("creator reward square", () => {
     expect(fig.value).toBe("$NVDA");
   });
 
+  it("names Stonk on a Stonks reward launch and the dev on a Stonks dev-fee coin (user ask 2026-10-23)", () => {
+    const stonk = {
+      destination: "holder_rewards" as const,
+      summary: "a 3% transfer tax pays holders",
+      bps: 300,
+      deskLine: "Stonk pays holder rewards in SPYX.",
+      deskRewards: [{ label: "SPYX", mint: NVDA }],
+      rewardHost: "Stonk",
+    };
+    const fig = creatorRewardFigure(stonk);
+    expect(fig.squareLabel).toBe("Holder Rewards: Stonk");
+    expect(fig.otcDesk).toBe(true);
+    expect(fig.title).toBe("A 3% transfer tax pays holders. Stonk pays holder rewards in SPYX.");
+    expect(feeBadge(stonk)).toMatchObject({ kind: "rewards", tax: "3%" });
+    const card = { token: { creatorFee: stonk } } as unknown as Card;
+    expect(cardWithOtcDesk(card, null).token.creatorFee?.rewardHost).toBe("Stonk");
+
+    const dev = {
+      destination: "creator" as const,
+      summary: "creator fees go to the dev, Cupsey (8PQx…VP9z)",
+      bps: null,
+      recipients: [{ label: "8PQx…VP9z", bps: null, name: "Cupsey", kol: true }],
+    };
+    expect(feeBadge(dev)).toMatchObject({
+      kind: "dev",
+      title: "Creator fees go to the dev, Cupsey (8PQx…VP9z).",
+    });
+    expect(creatorRewardFigure(dev)).toMatchObject({
+      value: "Dev",
+      detail: "Cupsey (8PQx…VP9z)",
+      squareLabel: "Creator reward",
+    });
+  });
+
   it("shows a matched OTC basket in the square and in the tooltip", () => {
     const fee = {
       destination: "wallet" as const,
