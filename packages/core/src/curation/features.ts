@@ -1287,6 +1287,13 @@ const SOCIALS_UNREAD_FEATURES = [
 export const EMPTY_WALLETS_UNPRICED_NULL_SINCE = new Date("2026-10-16T19:30:00Z");
 
 /**
+ * From when a wallet's holdings reading behind emptyTop10WalletPct may be up to 6 hours old
+ * (WALLET_HOLDINGS_CACHE_TTL_MINUTES 180 -> 360, user decision 2026-10-23). Provenance only, no
+ * mask: the input is at chance for the learners and the share moves a few wallets' worth at most.
+ */
+export const EMPTY_WALLETS_TTL_6H_SINCE = new Date("2026-10-23T18:00:00Z");
+
+/**
  * Rows anchored in this window stored a RugCheck holder reading of 0 where the report was not
  * indexed yet (data-correctness audit 2026-10-16). From 2026-10-14 13:00 UTC a cached "not found"
  * (#599) stood in for a young coin: holder count, risk and the growth built on RugCheck's count
