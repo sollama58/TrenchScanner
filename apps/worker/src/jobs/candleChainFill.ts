@@ -59,6 +59,12 @@ export interface ChainFillOptions {
   maxPagesPerCoin: number;
   /** From the launch, how much of a coin's life is filled. */
   windowMinutes: number;
+  /**
+   * Pages the newest ask's coin may take a run while its holes stay open (default 1): the chart
+   * just opened, or the call just went out, is the one being looked at, so its first hours fill
+   * in minutes, not one page a minute (charts audit 2026-10-23). The others take one.
+   */
+  burstPages?: number;
   now?: () => number;
 }
 
@@ -145,28 +151,37 @@ async function run(deps: ChainFillDeps, opts: ChainFillOptions): Promise<void> {
   }
   if (!deps.helius.gtfaUsable || opts.creditsPerDay <= 0) return;
   let pages = 0;
+  const outOfPages = () => pages >= opts.pagesPerRun || spent + PAGE_CREDITS > opts.creditsPerDay;
   try {
+    let newest = true;
     for (const coin of await candidates(now)) {
-      if (pages >= opts.pagesPerRun || spent + PAGE_CREDITS > opts.creditsPerDay) break;
+      if (outOfPages()) break;
       const end = Math.min(coin.bornAt + opts.windowMinutes * 60_000, now - SETTLE_MS);
-      const holes = await oneSecondHoles(coin.mint, coin.bornAt, end);
+      // The newest ask's coin may take a few pages a run (burstPages), the holes read again after
+      // each; the others one page a coin a run: the next run sees what is left.
+      const burst = newest ? Math.max(1, opts.burstPages ?? 1) : 1;
+      newest = false;
       let filled = false;
-      for (const [from, to] of holes) {
-        if (pages >= opts.pagesPerRun || spent + PAGE_CREDITS > opts.creditsPerDay) break;
-        if ((coinPages.get(coin.mint) ?? 0) >= opts.maxPagesPerCoin) break;
-        // A hole a page couldn't move waits a day; the coin's later holes are still read.
-        if (stuck.has(`${coin.mint}:${from}`)) continue;
-        const moved = await fillPage(deps, coin.mint, from, to);
-        pages += 1;
-        // Helius bills no failed answer.
-        if (moved !== "failed") spent += PAGE_CREDITS;
-        coinPages.set(coin.mint, (coinPages.get(coin.mint) ?? 0) + 1);
-        filled = true;
-        // One page a coin a run unless it closed the hole whole: the next run sees what is left.
-        if (moved !== "closed") {
+      for (let moves = 0; moves < burst && !outOfPages(); moves += 1) {
+        const holes = await oneSecondHoles(coin.mint, coin.bornAt, end);
+        let moved: "closed" | "moved" | "failed" | "stuck" | null = null;
+        for (const [from, to] of holes) {
+          if (outOfPages()) break;
+          if ((coinPages.get(coin.mint) ?? 0) >= opts.maxPagesPerCoin) break;
+          // A hole a page couldn't move waits a day; the coin's later holes are still read.
+          if (stuck.has(`${coin.mint}:${from}`)) continue;
+          moved = await fillPage(deps, coin.mint, from, to);
+          pages += 1;
+          // Helius bills no failed answer.
+          if (moved !== "failed") spent += PAGE_CREDITS;
+          coinPages.set(coin.mint, (coinPages.get(coin.mint) ?? 0) + 1);
+          filled = true;
+          // A hole closed whole costs the coin nothing: its next hole is read in the same run.
+          if (moved === "closed") continue;
           if (moved === "stuck") stuck.add(`${coin.mint}:${from}`);
           break;
         }
+        if (moved !== "moved") break;
       }
       if (filled) stats.coins += 1;
     }

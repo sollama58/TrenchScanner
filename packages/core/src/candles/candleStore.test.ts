@@ -52,6 +52,60 @@ describe.skipIf(!dbAvailable)("candle store", () => {
     expect(await minuteCoversBefore(KEPT, hour + 3_600_000)).toEqual([{ from: hour, to: hour + 3_600_000 }]);
   });
 
+  it("merges two pages of the same chunk: both halves' bars stay and their covers join", async () => {
+    const hour = Math.floor(NOW / 3_600_000) * 3_600_000 - 3_600_000;
+    // A backfill's two GeckoTerminal pages each hold half the hour (user report 2026-10-23: the
+    // second page, no fuller than the first, used to be dropped whole, a 3-minute run with it).
+    const late = chunkBars(KEPT, 60, "gecko", minutes(hour + 30 * M, 30), {
+      from: hour + 30 * M,
+      to: hour + 60 * M,
+    });
+    const early = chunkBars(KEPT, 60, "gecko", minutes(hour, 30), { from: hour, to: hour + 30 * M });
+    await saveCandleChunks(late);
+    await saveCandleChunks(early);
+    const [row] = await readCandleChunks(KEPT, hour, hour + 3_600_000);
+    expect(row!.bars).toHaveLength(60);
+    expect([row!.coverFrom, row!.coverTo]).toEqual([hour, hour + 60 * M]);
+    // Two pages of one chunk in one save merge too.
+    await prisma.candleChunk.deleteMany({ where: { mint: KEPT } });
+    await saveCandleChunks([...late, ...early]);
+    const [again] = await readCandleChunks(KEPT, hour, hour + 3_600_000);
+    expect(again!.bars).toHaveLength(60);
+    expect([again!.coverFrom, again!.coverTo]).toEqual([hour, hour + 60 * M]);
+  });
+
+  it("finds a minute chunk whose cover runs on from far back over the window, not a 1-second one", async () => {
+    const far = NOW - 8 * 3_600_000;
+    // A quiet night: the last minute bar's chunk vouches for the hours after it.
+    await saveCandleChunks([
+      {
+        mint: KEPT,
+        res: 60,
+        startAt: far,
+        source: "gecko",
+        coverFrom: far,
+        coverTo: NOW,
+        coarse: false,
+        bars: [bar(far, 1)],
+      },
+      {
+        mint: KEPT,
+        res: 1,
+        startAt: far,
+        source: "tape",
+        coverFrom: far,
+        coverTo: NOW,
+        coarse: false,
+        bars: [bar(far, 1)],
+      },
+    ]);
+    const rows = await readCandleChunks(KEPT, NOW - 3_600_000, NOW);
+    expect(rows.map((r) => [r.res, r.coverTo])).toEqual([[60, NOW]]);
+    // Asked for one width, that width alone.
+    expect((await readCandleChunks(KEPT, NOW - 3_600_000, NOW, { res: 60 })).map((r) => r.res)).toEqual([60]);
+    expect(await readCandleChunks(KEPT, NOW - 3_600_000, NOW, { res: 1 })).toEqual([]);
+  });
+
   it("queues a backfill once, moves a chart's ask ahead on a call, and redoes a long-finished one", async () => {
     await requestCandleBackfill(KEPT, "chart", NOW);
     await requestCandleBackfill(KEPT, "chart", NOW + 1_000);

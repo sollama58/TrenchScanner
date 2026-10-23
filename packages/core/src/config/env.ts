@@ -376,10 +376,13 @@ const envSchema = z.object({
   // The chart's chain fill (worker's jobs/candleChainFill.ts, user decision 2026-10-23): the
   // stretches of a charted or called coin's first CANDLE_CHAIN_FILL_WINDOW_MINUTES no source holds at
   // 1 second are read off the chain (Helius getTransactionsForAddress, 10 credits a page of 100
-  // trades), up to the day's credits (0 turns it off), pages a one-minute run, and pages a coin a day.
+  // trades), up to the day's credits (0 turns it off), pages a one-minute run, pages a coin a day,
+  // and pages the newest ask's coin may take in one run while its holes stay open (the chart just
+  // opened fills in minutes, not a page a minute; charts audit 2026-10-23).
   CANDLE_CHAIN_FILL_CREDITS_PER_DAY: z.coerce.number().int().nonnegative().default(20_000),
   CANDLE_CHAIN_FILL_PAGES_PER_RUN: z.coerce.number().int().positive().default(5),
-  CANDLE_CHAIN_FILL_MAX_PAGES_PER_COIN: z.coerce.number().int().positive().default(30),
+  CANDLE_CHAIN_FILL_MAX_PAGES_PER_COIN: z.coerce.number().int().positive().default(60),
+  CANDLE_CHAIN_FILL_BURST_PAGES: z.coerce.number().int().positive().default(3),
   CANDLE_CHAIN_FILL_WINDOW_MINUTES: z.coerce.number().positive().default(120),
   // The token chart's live tail (api's liveCurve.ts, user ask 2026-10-17: charts on the stream's
   // second-by-second updates): while a young coin's chart is open, the API follows its bonding curve

@@ -12,7 +12,9 @@ import {
   pumpCurveAddressOf,
   pumpSwapPoolOf,
   PUMPFUN_LAUNCHPAD,
+  queueBackfillsForRecentCalls,
   RateGateDeadlineError,
+  runCoversOn,
   saveCandleChunks,
   type CandleChunkRow,
   type StoredBar,
@@ -59,6 +61,17 @@ const JOIN_GAP_MS = 60_000;
 const MINUTE_MS = 60_000;
 const FIVE_MIN_MS = 5 * 60_000;
 const DAY_MS = 86_400_000;
+/**
+ * GeckoTerminal's newest minutes can trail a read by a minute or two. The page read from now on
+ * the coin's own pair vouches for the minutes after its newest bar as quiet up to this long ago:
+ * a coin that stopped trading hours ago draws flat at its last price from then, not as "No data
+ * recorded" (user report 2026-10-23). A minute reported later still lands: the next top-up's page
+ * is merged into the stored chunk (core's saveCandleChunks).
+ */
+export const GECKO_SETTLE_MS = 3 * MINUTE_MS;
+/** Ticks between sweeps for called coins whose own ask was lost (queueBackfillsForRecentCalls). */
+const CALL_SWEEP_EVERY_TICKS = 20;
+const CALL_SWEEP_SINCE_MS = 60 * MINUTE_MS;
 
 /** The CandleBackfill row as a step reads it. */
 export interface BackfillJob {
@@ -223,21 +236,18 @@ export async function stepBackfill(
   // An unknown pool, or one with nothing older: the next pool from the same place.
   if (bars.length === 0) return { cursor: at(cursor), poolIndex: job.poolIndex + 1, nextAt: at(now) };
   try {
-    await deps.save(
-      chunkBars(
-        job.mint,
-        60,
-        "gecko",
-        bars.filter((b) => b.t + MINUTE_MS <= now),
-        // GeckoTerminal's newest minutes can trail by a minute or two: a page vouches only to its
-        // newest bar's end (as the API's pageCoverEnd), so a late minute is asked again by the next
-        // top-up rather than stored as a quiet one.
-        {
-          from: bars[0]!.t,
-          to: Math.min(cursor, Math.floor(now / MINUTE_MS) * MINUTE_MS, bars[bars.length - 1]!.t + MINUTE_MS),
-        },
-      ),
-    );
+    const closed = bars.filter((b) => b.t + MINUTE_MS <= now);
+    const newestEnd = closed.length > 0 ? closed[closed.length - 1]!.t + MINUTE_MS : bars[0]!.t;
+    // The page vouches to its newest bar's end (as the API's pageCoverEnd), so a late minute is
+    // asked again by the next top-up rather than stored as a quiet one; the newest page on the
+    // coin's own pair, read from now, vouches on to GECKO_SETTLE_MS ago: the minutes since its
+    // newest bar were quiet. Each chunk's cover runs on to the next one's start, so the quiet
+    // minutes between a page's bars read as quiet too (candleChunk.ts runCoversOn).
+    const settled = Math.floor((now - GECKO_SETTLE_MS) / MINUTE_MS) * MINUTE_MS;
+    const quietTo = job.cursor === null && job.poolIndex === 0 ? Math.max(newestEnd, settled) : newestEnd;
+    const to = Math.min(cursor, Math.floor(now / MINUTE_MS) * MINUTE_MS, quietTo);
+    const rows = runCoversOn(chunkBars(job.mint, 60, "gecko", closed, { from: bars[0]!.t, to }), to);
+    if (rows.length > 0) await deps.save(rows);
   } catch (err) {
     return { cursor: at(cursor), ...failed(err) };
   }
@@ -296,6 +306,7 @@ async function applyPatch(mint: string, patch: BackfillPatch, now: number): Prom
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let busy = false;
+let ticks = 0;
 let stats = { steps: 0, pages: 0, done: 0, failed: 0 };
 /** The running backfill's GeckoTerminal calls a minute, reported with the counts. */
 let perMinute = 0;
@@ -338,6 +349,14 @@ export async function tick(deps: BackfillDeps, now = Date.now()): Promise<void> 
   if (busy) return;
   busy = true;
   try {
+    // Now and then, the called coins whose own ask never landed (a busy database at the call).
+    if (ticks++ % CALL_SWEEP_EVERY_TICKS === 0) {
+      const queued = await queueBackfillsForRecentCalls(CALL_SWEEP_SINCE_MS, now).catch((err: unknown) => {
+        logger.warn("called coins not swept for backfills", { error: String(err) });
+        return 0;
+      });
+      if (queued > 0) logger.info("backfills queued for called coins whose ask was lost", { queued });
+    }
     const job = await claimJob(now);
     if (!job) return;
     const token = await prisma.token.findUnique({

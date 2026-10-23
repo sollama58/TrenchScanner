@@ -177,3 +177,18 @@ export function mergeChunks(older: CandleChunkRow, newer: CandleChunkRow): Candl
     bars: [...slots.values()].sort((a, b) => a.t - b.t),
   };
 }
+
+/**
+ * Runs each chunk's cover on to the next chunk's start, and the last one's to `to`, so a quiet
+ * stretch inside what a source read through (a minute with no trade, which every candle source
+ * leaves out) reads as quiet, not as a stretch nobody read. `maxRunMs`: how far past its own start
+ * a chunk's cover may run (the store reads chunks starting up to five hours before a window, and
+ * past that only the minute-or-wider ones: candleStore.ts readCandleChunks).
+ */
+export function runCoversOn(rows: CandleChunkRow[], to: number, maxRunMs = Infinity): CandleChunkRow[] {
+  rows.forEach((row, i) => {
+    const next = rows[i + 1]?.startAt ?? to;
+    row.coverTo = Math.max(row.coverTo, Math.min(next, to, row.startAt + maxRunMs));
+  });
+  return rows;
+}
