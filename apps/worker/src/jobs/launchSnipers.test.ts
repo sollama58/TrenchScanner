@@ -127,7 +127,10 @@ describe("resolveLaunchSnipers", () => {
       maxContenderLookups: 1,
       now: 0,
     });
-    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["C", "A"], 25);
+    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["C", "A"], 25, {
+      // Only the contender's pages are kept for the trade tape.
+      tapeSeeds: new Set(["C"]),
+    });
     expect([...first.keys()].sort()).toEqual(["A", "C"]);
     await resolveLaunchSnipers(groups, f.helius, {
       ...opts,
@@ -135,7 +138,7 @@ describe("resolveLaunchSnipers", () => {
       maxContenderLookups: 1,
       now: 61_000,
     });
-    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["B"], 25);
+    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["B"], 25, expect.anything());
     // C (contender, 61s old) and B (new) refreshed; A (61s, not a contender) not.
     expect(f.getTokenAccountBalances.mock.lastCall![0]).toHaveLength(50);
   });
@@ -220,7 +223,7 @@ describe("resolveLaunchSnipers", () => {
     ];
     const out = await resolveLaunchSnipers(groups, f.helius, { ...opts, store, now: 1_000 });
     // A came from the store; only B was read from the chain, and saved.
-    expect(f.getLaunchBuyersBatch).toHaveBeenCalledWith(["B"], 25);
+    expect(f.getLaunchBuyersBatch).toHaveBeenCalledWith(["B"], 25, expect.anything());
     expect(out.get("A")).toMatchObject({ seen: 25, blockZeroBuyers: 0, blockZeroHeldPct: 0 });
     expect(saved.get("B")?.complete).toBe(true);
     // A store that fails costs nothing but the read.
@@ -410,7 +413,7 @@ describe("snipers in the top 10", () => {
       maxContenderLookups: 2,
       now: 0,
     });
-    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["A", "B", "C"], 25);
+    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["A", "B", "C"], 25, expect.anything());
   });
 
   it("reads a contender with no list before re-reading one with an incomplete list", async () => {
@@ -422,7 +425,7 @@ describe("snipers in the top 10", () => {
     ];
     // A's 10-buyer list is due a re-read, but B has no list at all and its decision waits on one.
     await resolveLaunchSnipers(groups, f.helius, { ...opts, maxContenderLookups: 1, now: 180_000 });
-    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["B"], 25);
+    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["B"], 25, expect.anything());
   });
 
   it("retries a contender's failed read after a minute, the rest after five", async () => {
@@ -433,7 +436,7 @@ describe("snipers in the top 10", () => {
     ];
     await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 0 });
     await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 61_000 });
-    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["A"], 25);
+    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["A"], 25, expect.anything());
   });
 
   it("re-reads a contender's incomplete list within two minutes", async () => {

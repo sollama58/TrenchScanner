@@ -309,6 +309,7 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
     );
     expect(asked).toEqual(["1"]);
     expect(meta.heliusPages).toBe(1);
+    expect(meta.seeded).toBe(1);
     const tape = await prisma.tokenTradeTape.findUnique({ where: { tokenId: token.id } });
     expect(tape).toMatchObject({ status: "done", source: "helius", creator: dev, trades: 2 });
   });

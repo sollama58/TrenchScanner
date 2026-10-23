@@ -350,7 +350,8 @@ export async function resolveLaunchSnipers(
   const fresh = new Set<string>();
   const toSave = new Map<string, StoredLaunchRead>();
   if (toRead.length > 0) {
-    const results = await helius.getLaunchBuyersBatch(toRead, FIRST_BUYERS);
+    // A contender's pages are kept for the trade tape, which reads a called coin from its launch.
+    const results = await helius.getLaunchBuyersBatch(toRead, FIRST_BUYERS, { tapeSeeds: contenderMints });
     let failed = 0;
     for (const mint of toRead) {
       const r = results.get(mint);

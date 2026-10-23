@@ -334,7 +334,7 @@ describe("HeliusClient.getLaunchBuyersBatch", () => {
 
   it("reads one page oldest-first, successful only, and stops once the history ends", async () => {
     const { bodies } = respond([{ data: [create, buy("a", 10)] }]);
-    const out = await client().getLaunchBuyersBatch([MINT], 25);
+    const out = await client().getLaunchBuyersBatch([MINT], 25, { tapeSeeds: new Set([MINT]) });
     expect(out.get(MINT)).toMatchObject({ status: "found", complete: false, buyers: [{ wallet: "a" }] });
     expect(bodies).toHaveLength(1);
     const params = (bodies[0] as { params: [string, Record<string, unknown>] }[])[0]!.params;
@@ -352,10 +352,17 @@ describe("HeliusClient.getLaunchBuyersBatch", () => {
 
   it("keeps the token of a short page in the seed, since a young coin's history goes on", async () => {
     respond([{ data: [create, buy("a", 10)], paginationToken: "p2" }]);
-    const out = await client().getLaunchBuyersBatch([MINT], 25);
+    const out = await client().getLaunchBuyersBatch([MINT], 25, { tapeSeeds: new Set([MINT]) });
     // The launch-buyer reading still ends here: the history has ended so far.
     expect(out.get(MINT)).toMatchObject({ status: "found", complete: false });
     expect(takeLaunchTapeSeed(MINT, 60_000)).toMatchObject({ pages: 1, paginationToken: "p2" });
+  });
+
+  it("keeps no tape seed for a mint the caller didn't name", async () => {
+    respond([{ data: [create, buy("a", 10)] }]);
+    const out = await client().getLaunchBuyersBatch([MINT], 25);
+    expect(out.get(MINT)).toMatchObject({ status: "found" });
+    expect(takeLaunchTapeSeed(MINT, 60_000)).toBeUndefined();
   });
 
   it("pages on while a full page hasn't reached the count, then calls it complete at the cap", async () => {
