@@ -160,6 +160,12 @@ export interface CardCreatorFee {
 const CHARITY_NAME_OK_MS = 6 * 60 * 60_000;
 /** A coin that answered with no name is left alone this long, then asked again. */
 const CHARITY_NAME_MISS_MS = 10 * 60_000;
+/**
+ * A coin whose lookup failed (a timeout, an error, a budget hold) is not asked again for this
+ * long: the feed awaits this lookup, so a slow Pump.fun would otherwise cost every poll its full
+ * timeout (audit 2026-10-23, PF-2).
+ */
+const CHARITY_NAME_FAIL_MS = 60_000;
 const charityNameCache = new Map<string, { shares: PumpCharityShare[]; until: number }>();
 
 /** One organization, for the heart's single-name sentence. Several stay on `recipients`. */
@@ -207,8 +213,9 @@ export function applyCharityNames(
  */
 /**
  * Charity shares for these mints, from Pump.fun's single-coin endpoint, remembered so a feed
- * poll does not ask again. A transport failure or a budget hold is not remembered: the next
- * read can try. Never throws. An empty list is a coin that named no charity.
+ * poll does not ask again. A transport failure or a budget hold is kept as no shares for
+ * CHARITY_NAME_FAIL_MS, then tried again. Never throws. An empty list is a coin that named no
+ * charity.
  */
 export async function charitySharesByMint(
   mints: readonly string[],
@@ -236,7 +243,8 @@ export async function charitySharesByMint(
         });
         if (shares.length) out.set(mint, shares);
       } catch {
-        // Pump.fun didn't answer. The cards still show the heart; the next read can try.
+        // Pump.fun didn't answer. The cards still show the heart; a read in a minute can try.
+        charityNameCache.set(mint, { shares: [], until: now + CHARITY_NAME_FAIL_MS });
       }
     }),
   );

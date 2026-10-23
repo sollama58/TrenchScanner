@@ -228,12 +228,23 @@ async function dueForSocials(now: Date, limit: number): Promise<string[]> {
   return rows.map((r) => r.mintAddress);
 }
 
-async function storedSageSocials(mints: string[]): Promise<MintSocials[]> {
-  const rows = await prisma.tokenNarrative.findMany({
-    where: { mintAddress: { in: mints }, status: { not: "failed" } },
-    select: { mintAddress: true, analysis: true },
-  });
-  return rows.map((r) => ({ mintAddress: r.mintAddress, ...tokenSageSocials(r.analysis) }));
+/**
+ * Only the three link fields of each stored analysis, picked out in SQL: the whole document is
+ * ~3 KB, and parsing 200 of them a minute on the scanner's event loop bought nothing (audit
+ * 2026-10-23, PF-3). tokenSageSocials reads the same `raw` fields, so the links are the same.
+ */
+export async function storedSageSocials(mints: string[]): Promise<MintSocials[]> {
+  if (mints.length === 0) return [];
+  const rows = await prisma.$queryRaw<{ mintAddress: string; raw: unknown }[]>`
+    SELECT n."mintAddress",
+           CASE WHEN jsonb_typeof(n."analysis" -> 'raw') = 'object' THEN jsonb_build_object(
+             'twitter', n."analysis" #> '{raw,twitter}',
+             'telegram', n."analysis" #> '{raw,telegram}',
+             'website', n."analysis" #> '{raw,website}'
+           ) END AS raw
+    FROM "TokenNarrative" n
+    WHERE n."mintAddress" = ANY(${mints}) AND n."status" <> 'failed'`;
+  return rows.map((r) => ({ mintAddress: r.mintAddress, ...tokenSageSocials({ raw: r.raw }) }));
 }
 
 async function markSocialsChecked(mints: string[], at: Date): Promise<void> {

@@ -151,7 +151,10 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     GROUP BY kol."wallet"`,
   );
 
-  // Every (KOL, wallet) pair that bought the same coins within the gap, counted per window.
+  // Every (KOL, wallet) pair that bought the same coins within the gap, counted per window. The
+  // pairs that can reach a list are picked on counts alone first, and only theirs are sorted for
+  // the median gaps: most pairs are a coin or two in common, and sorting all of them for
+  // percentile_cont was the bulk of the job (audit 2026-10-23, PF-1). Same rows as one GROUP BY.
   const pairs = await withLongReads(
     (tx) => tx.$queryRaw<
       {
@@ -167,7 +170,7 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
         g30: number | null;
       }[]
     >`
-    WITH kol AS (${kolBuys(since["30d"])}), pair AS (
+    WITH kol AS (${kolBuys(since["30d"])}), pair AS MATERIALIZED (
       SELECT kol."wallet" AS kol, o."wallet" AS side, kol."firstBuyAt" AS at,
              EXTRACT(EPOCH FROM (o."firstBuyAt" - kol."firstBuyAt")) AS gap
       FROM kol
@@ -178,23 +181,28 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
        AND o."firstBuyAt" BETWEEN kol."firstBuyAt" - make_interval(secs => ${gapSeconds})
                               AND kol."firstBuyAt" + make_interval(secs => ${gapSeconds})
       WHERE NOT EXISTS (SELECT 1 FROM "KolWallet" k2 WHERE k2."wallet" = o."wallet")
+    ), listed AS (
+      SELECT kol, side,
+             COUNT(*) FILTER (WHERE at >= ${since["24h"]}) AS s24,
+             COUNT(*) FILTER (WHERE at >= ${since48}) AS s48,
+             COUNT(*) FILTER (WHERE at >= ${since72}) AS s72,
+             COUNT(*) FILTER (WHERE at >= ${since["7d"]}) AS s7,
+             COUNT(*) AS s30
+      FROM pair
+      GROUP BY kol, side
+      -- Only pairs that can reach a list. The tiers' spans sit inside 7 days and ask for no fewer
+      -- coins than the 24-hour or 7-day lists do, so a pair a tier labels always passes here.
+      HAVING COUNT(*) FILTER (WHERE at >= ${since["24h"]}) >= ${SIDE_MIN_SHARED["24h"]}
+          OR COUNT(*) FILTER (WHERE at >= ${since["7d"]}) >= ${SIDE_MIN_SHARED["7d"]}
+          OR COUNT(*) >= ${SIDE_MIN_SHARED["30d"]}
     )
-    SELECT kol, side,
-           COUNT(*) FILTER (WHERE at >= ${since["24h"]}) AS s24,
-           COUNT(*) FILTER (WHERE at >= ${since48}) AS s48,
-           COUNT(*) FILTER (WHERE at >= ${since72}) AS s72,
-           COUNT(*) FILTER (WHERE at >= ${since["7d"]}) AS s7,
-           COUNT(*) AS s30,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY gap) FILTER (WHERE at >= ${since["24h"]}) AS g24,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY gap) FILTER (WHERE at >= ${since["7d"]}) AS g7,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY gap) AS g30
-    FROM pair
-    GROUP BY kol, side
-    -- Only pairs that can reach a list. The tiers' spans sit inside 7 days and ask for no fewer
-    -- coins than the 24-hour or 7-day lists do, so a pair a tier labels always passes here.
-    HAVING COUNT(*) FILTER (WHERE at >= ${since["24h"]}) >= ${SIDE_MIN_SHARED["24h"]}
-        OR COUNT(*) FILTER (WHERE at >= ${since["7d"]}) >= ${SIDE_MIN_SHARED["7d"]}
-        OR COUNT(*) >= ${SIDE_MIN_SHARED["30d"]}`,
+    SELECT l.kol, l.side, l.s24, l.s48, l.s72, l.s7, l.s30,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY p.gap) FILTER (WHERE p.at >= ${since["24h"]}) AS g24,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY p.gap) FILTER (WHERE p.at >= ${since["7d"]}) AS g7,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY p.gap) AS g30
+    FROM listed l
+    JOIN pair p ON p.kol = l.kol AND p.side = l.side
+    GROUP BY l.kol, l.side, l.s24, l.s48, l.s72, l.s7, l.s30`,
   );
 
   // The listed wallets' own coin counts, and every tracked coin's, for the bot rule and the lists.
