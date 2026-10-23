@@ -108,6 +108,7 @@ export function QuickTrade({
         <header className="about-head quick-trade-head">
           <TokenImage
             url={hit?.imageUrl?.startsWith("https://") ? hit.imageUrl : null}
+            mint={hit?.mint}
             size={80}
             width={40}
             height={40}

@@ -332,6 +332,7 @@ export function SideMatch({
                 <span className="sm-coin" role="cell">
                   <TokenImage
                     url={t.imageUrl}
+                    mint={t.mint}
                     size={48}
                     width={24}
                     height={24}
@@ -431,6 +432,7 @@ export function SideMatch({
                 <span className="sm-coin">
                   <TokenImage
                     url={t.imageUrl}
+                    mint={t.mint}
                     size={48}
                     width={22}
                     height={22}

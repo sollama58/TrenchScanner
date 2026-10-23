@@ -785,6 +785,7 @@ export const ScopeRow = memo(function ScopeRow({
       <div className="scope-avatar">
         <TokenImage
           url={card.token.imageUrl?.startsWith("https://") ? card.token.imageUrl : null}
+          mint={card.token.mintAddress}
           size={img * 2}
           width={img}
           height={img}

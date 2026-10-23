@@ -416,6 +416,7 @@ function OpeningBody({ mint, token, error, onRetry, onClose }: OpeningView & { o
           <div className="avatar-wrap tone-neutral">
             <TokenImage
               url={token?.imageUrl ?? null}
+              mint={mint}
               size={160}
               className="avatar tm-avatar"
               width={56}
@@ -1025,6 +1026,7 @@ function TokenBody({
         <div className={`avatar-wrap tone-${badge.tone}`}>
           <TokenImage
             url={card.token.imageUrl}
+            mint={card.token.mintAddress}
             size={160}
             className="avatar tm-avatar"
             width={56}

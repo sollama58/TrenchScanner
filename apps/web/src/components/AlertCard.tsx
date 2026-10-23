@@ -2,17 +2,7 @@ import { useEffect, useState } from "react";
 import { QuickBuyPill } from "./QuickBuyPill";
 import { quickBuyShown, useProState, useTradeSettings, type QuickBuySettings } from "../proTrade";
 import type { Card, CardField, FeedAppearance, Snapshot } from "../api";
-import {
-  ago,
-  change,
-  minutes,
-  multiple,
-  pct,
-  shortAddress,
-  tokenImageSources,
-  tokenLabel,
-  usd,
-} from "../format";
+import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
 import {
   BrainIcon,
   ChefHatIcon,
@@ -33,7 +23,7 @@ import { rewardHost } from "../deskRewardDisplay";
 import { FeeKolAvatar, FeeWalletTip, kolPictures } from "./FeeWalletTip";
 import { DexInfoLabel } from "../dexInfoLabel";
 import { SocialLinks, socialLinks } from "./SocialLinks";
-import { useImagePreview } from "./ImagePreview";
+import { TokenImage } from "./TokenImage";
 import { linkedCount, linkedCountText } from "../linkedCount";
 import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
 import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
@@ -290,7 +280,7 @@ export function AlertCard({
     >
       <header className="card-head">
         <div className={`avatar-wrap tone-${badge.tone}`}>
-          <TokenAvatar url={card.token.imageUrl} symbol={card.token.symbol} />
+          <TokenAvatar url={card.token.imageUrl} mint={card.token.mintAddress} symbol={card.token.symbol} />
           <QuoteBadge token={card.token} />
         </div>
         <div className="card-title">
@@ -1860,39 +1850,22 @@ function LinkedTile({
 const THUMB_PX = 128;
 
 /**
- * The token's image as a small thumbnail, falling back through tokenImageSources (the original
- * URL, a second IPFS gateway), then to its initials.
+ * The token's image as a small thumbnail, falling back through tokenImageSources (Pump.fun's CDN,
+ * a fast IPFS gateway, the original URL), then to its initials.
  * On desktop, hovering it shows a large preview; phones get a bigger avatar instead.
  */
-function TokenAvatar({ url, symbol }: { url: string | null; symbol: string | null }) {
-  // An index into tokenImageSources; past its end, the initials.
-  const [attempt, setAttempt] = useState(0);
-  const safe = url?.startsWith("https://") ? url : null;
-  const src = tokenImageSources(safe, THUMB_PX)[attempt] ?? null;
-  const preview = useImagePreview(safe, src);
-
-  if (!src) return <span className="avatar placeholder">{(symbol ?? "?").slice(0, 2)}</span>;
-
+function TokenAvatar({ url, mint, symbol }: { url: string | null; mint: string; symbol: string | null }) {
   return (
-    <>
-      {/* Launcher-supplied URL: https only, and no referrer sent to whoever hosts it. */}
-      <img
-        className="avatar"
-        src={src}
-        alt=""
-        width={44}
-        height={44}
-        loading="lazy"
-        decoding="async"
-        referrerPolicy="no-referrer"
-        onError={() => {
-          preview.close();
-          setAttempt((a) => a + 1);
-        }}
-        {...preview.bind}
-      />
-      {preview.node}
-    </>
+    <TokenImage
+      className="avatar"
+      url={url?.startsWith("https://") ? url : null}
+      mint={mint}
+      size={THUMB_PX}
+      width={44}
+      height={44}
+      preview
+      fallback={<span className="avatar placeholder">{(symbol ?? "?").slice(0, 2)}</span>}
+    />
   );
 }
 

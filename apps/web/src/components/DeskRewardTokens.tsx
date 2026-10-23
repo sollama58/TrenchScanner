@@ -95,6 +95,7 @@ function RewardAvatar({ reward, px }: { reward: DeskRewardView; px: number }) {
   return (
     <TokenImage
       url={reward.imageUrl}
+      mint={reward.mint}
       size={px * 2}
       className="desk-reward-avatar"
       width={px}

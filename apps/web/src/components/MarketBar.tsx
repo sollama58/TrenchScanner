@@ -341,6 +341,7 @@ function Ticker({ p, loading }: { p: MarketPrice; loading: boolean }) {
       <div className="mkt-ticker-top">
         <TokenImage
           url={p.imageUrl}
+          mint={p.mint}
           size={40}
           width={18}
           height={18}
@@ -684,6 +685,7 @@ function Position({ c, now }: { c: TradeCoin; now: number }) {
       >
         <TokenImage
           url={c.imageUrl}
+          mint={c.mint}
           size={56}
           width={28}
           height={28}
@@ -781,6 +783,7 @@ function MiniBar({
               >
                 <TokenImage
                   url={p.imageUrl}
+                  mint={p.mint}
                   size={32}
                   width={16}
                   height={16}
@@ -855,6 +858,7 @@ function MiniPosition({ c }: { c: TradeCoin }) {
     >
       <TokenImage
         url={c.imageUrl}
+        mint={c.mint}
         size={32}
         width={16}
         height={16}
