@@ -1026,6 +1026,49 @@ const REWARD_MINT = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 export interface FeeRecipientShare {
   label: string;
   bps: number | null;
+  charity?: boolean;
+}
+
+const KEYCAPS = ["0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
+
+/** A count as its keycap emoji, 2 as 2️⃣; past ten, the digits. */
+export function keycapCount(n: number): string {
+  return KEYCAPS[n] ?? String(n);
+}
+
+/**
+ * The charities a charity coin pays, by name (user ask 2026-10-23). Recipients the API marked
+ * as a charity's share; else the single charity name; else nobody.
+ */
+export function feeCharities(
+  fee:
+    | {
+        destination?: string | null;
+        charityName?: string | null;
+        recipients?: readonly FeeRecipientShare[] | null;
+      }
+    | null
+    | undefined,
+): string[] {
+  if (fee?.destination !== "charity") return [];
+  const marked = (fee.recipients ?? []).flatMap((recipient) => {
+    const label = recipient.charity ? recipient.label?.trim() : "";
+    return label ? [label] : [];
+  });
+  if (marked.length) return marked;
+  const named = shownCharityName(fee.charityName);
+  return named ? [named] : [];
+}
+
+/**
+ * What a charity coin shows in a small spot beside its heart (user ask 2026-10-23): the one
+ * charity's name, which the spot cuts to fit, or a keycap count (2️⃣) when there are several.
+ * The tooltip names each charity and its split. Null when no charity is known.
+ */
+export function charityCompact(fee: Parameters<typeof feeCharities>[0]): string | null {
+  const charities = feeCharities(fee);
+  if (charities.length === 0) return null;
+  return charities.length === 1 ? charities[0]! : keycapCount(charities.length);
 }
 
 function joinFeeNames(names: readonly string[]): string {
@@ -1087,6 +1130,10 @@ export function feeBadgeCaption(fee: Card["token"]["creatorFee"]): string | null
   const coins = shownRewardLabels(fee);
   if (coins.length) return coins.join(" · ");
   if (!showsRecipientList(fee?.destination)) return null;
+  if (fee?.destination === "charity") {
+    const compact = charityCompact(fee);
+    if (compact) return compact;
+  }
   return (
     feeRecipientCaption(fee?.recipients) ??
     (fee?.destination === "charity" ? shownCharityName(fee.charityName) : null)

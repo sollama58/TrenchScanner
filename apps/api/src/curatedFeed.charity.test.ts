@@ -64,8 +64,8 @@ describe("applyCharityNames", () => {
     expect(fees.get("mint")?.charityName).toBeUndefined();
     expect(fees.get("mint")?.recipients).toEqual([
       { label: "8PQx…VP9z", bps: 100 },
-      { label: "Red Cross", bps: 6000 },
-      { label: "Unicef", bps: 4000 },
+      { label: "Red Cross", bps: 6000, charity: true },
+      { label: "Unicef", bps: 4000, charity: true },
     ]);
   });
 });

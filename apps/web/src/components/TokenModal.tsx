@@ -1213,7 +1213,7 @@ function TokenBody({
           </>
         ) : (
           <>
-            <span className={reward.empty ? "num none" : "num"} title={reward.title}>
+            <span className={reward.empty ? "num none" : "num tm-fig-clip"} title={reward.title}>
               {reward.value}
             </span>
             {reward.detail && <small className="num muted">{reward.detail}</small>}

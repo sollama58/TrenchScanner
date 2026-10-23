@@ -14,6 +14,7 @@ import {
   cleanPeakPriceUsd,
   contestantSpec,
 } from "@trenchscanner/core";
+import { donateConfigCharities, expandCharityRecipients } from "./donateGg.js";
 import { enrichCreatorFeeDeskRewards } from "./deskRewardMeta.js";
 import { otcDeskRoster, otcDeskRosterFor } from "./otcDesk.js";
 import {
@@ -155,6 +156,12 @@ function singleCharityName(shares: readonly PumpCharityShare[]): string | null {
   return shares.length === 1 ? shares[0]!.name : null;
 }
 
+/** The one charity's name when the chain has exactly one charity share and donate.gg named it. */
+function singleNamedCharity(chain: readonly ParsedFeeRecipient[]): string | null {
+  const charities = chain.filter((recipient) => recipient.kind === "charity");
+  return charities.length === 1 && charities[0]!.named ? charities[0]!.label : null;
+}
+
 /**
  * Puts loaded charity names onto charity-fee rows (user ask 2026-10-21). Other destinations
  * are left as they were, and a blank name is not attached. `parsed` is the chain recipient
@@ -172,7 +179,7 @@ export function applyCharityNames(
     const pump = shares?.get(mint) ?? [];
     const chain = parsed?.get(mint) ?? [];
     const merged = pump.length || chain.length ? mergeCharityShares(chain, pump) : [];
-    const name = names.get(mint) ?? singleCharityName(pump);
+    const name = names.get(mint) ?? singleCharityName(pump) ?? singleNamedCharity(chain);
     if (!name && merged.length === 0) continue;
     fees.set(mint, {
       ...fee,
@@ -314,6 +321,22 @@ export async function creatorFeesByMint(
       ),
     );
   }
+  // Each donation PDA as the charities on its donate.gg config, named and split (user ask
+  // 2026-10-23). Pump.fun is asked below only for a charity coin donate.gg did not name.
+  const charityConfigs = rows.flatMap((r) =>
+    r.feeDestination === "charity"
+      ? (parsedRecipients.get(r.mintAddress) ?? []).flatMap((p) => (p.configId ? [p.configId] : []))
+      : [],
+  );
+  if (charityConfigs.length > 0) {
+    const configs = await donateConfigCharities(charityConfigs);
+    for (const r of rows) {
+      const parsed = parsedRecipients.get(r.mintAddress);
+      if (r.feeDestination === "charity" && parsed) {
+        parsedRecipients.set(r.mintAddress, expandCharityRecipients(parsed, configs));
+      }
+    }
+  }
   const out = new Map<string, CardCreatorFee>();
   // One roster row. The sentence and its coins are written together, including when
   // the feed has not waited and both are still empty. A creator-fee wallet that is an
@@ -335,7 +358,12 @@ export async function creatorFeesByMint(
   }
   const charityMints = [...out].filter(([, fee]) => fee.destination === "charity").map(([mint]) => mint);
   if (charityMints.length > 0) {
-    const shares = await charitySharesByMint(charityMints);
+    const unnamed = charityMints.filter((mint) => {
+      const charities = (parsedRecipients.get(mint) ?? []).filter((p) => p.kind === "charity");
+      return charities.length === 0 || charities.some((p) => !p.named);
+    });
+    const shares =
+      unnamed.length > 0 ? await charitySharesByMint(unnamed) : new Map<string, PumpCharityShare[]>();
     const names = new Map<string, string>();
     for (const [mint, list] of shares) {
       const name = singleCharityName(list);
