@@ -37,6 +37,7 @@ import {
   onAlertWritten,
   COMMIT_GRACE_MS,
   workerConfigMeta,
+  publishEnvReport,
   type HeartbeatJob,
   ASDF_PRICE_SAMPLE_MS,
   TRADE_SETTLEMENT_INTERVAL_MS,
@@ -261,6 +262,9 @@ async function main() {
       `TRADING_SERVER_WALLET_SECRET_KEY is set on the ${role} worker. Remove it: it belongs on trenchscanner-trader only.`,
     );
   }
+  // Admin > Environment reads which expected env vars this process has (never their values): a
+  // worker has no port the api could ask, so it writes its report once now (config/envReport.ts).
+  publishEnvReport(role).catch((err) => logger.warn("env report not written", { error: String(err) }));
   const jobs: { name: HeartbeatJob; job: ScheduledJob }[] = [];
   /** Starts a schedule only when this process's role owns the job. */
   const schedule = (job: HeartbeatJob, start: () => ScheduledJob) => {

@@ -3,6 +3,7 @@ export * from "./logger.js";
 export * from "./eventLoopWatch.js";
 export * from "./config/env.js";
 export * from "./config/workerConfig.js";
+export * from "./config/envReport.js";
 export * from "./db.js";
 export * from "./heartbeat.js";
 export * from "./manualRuns.js";

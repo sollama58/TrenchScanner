@@ -18,6 +18,12 @@ export const ADMIN_SECTIONS = [
   { id: "usage", label: "API usage", group: "Operations", blurb: "Outside calls and Helius credits." },
   { id: "config", label: "Config", group: "Operations", blurb: "The env the API booted with." },
   {
+    id: "env",
+    label: "Environment",
+    group: "Operations",
+    blurb: "Which env vars each service has set, TokenSage's too. Never the values.",
+  },
+  {
     id: "models",
     label: "Models + Training",
     group: "Models",
