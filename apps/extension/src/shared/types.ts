@@ -1,6 +1,7 @@
 /**
  * The API's shapes (apps/api/src/extensionLookup.ts and overlaySettings.ts), as the extension
- * reads them. Kept by hand: the extension imports nothing from the monorepo at runtime.
+ * reads them. `sites` picks which sites the panel offers to open a token on; `style` is kept for
+ * the account's stored shape and not used by the panel. Kept by hand: the extension imports nothing from the monorepo at runtime.
  */
 export const SITES = ["axiom", "terminal", "gmgn"] as const;
 export type Site = (typeof SITES)[number];
@@ -61,36 +62,26 @@ export interface OverlayToken {
   ai: { decision: string; probability2x: number | null; reasoning: string | null; at: string } | null;
 }
 
-export interface OverlayLookup {
-  tokens: OverlayToken[];
-  untracked: string[];
-}
-
-/** What a content script may ask the service worker. Nothing else is answered. */
-export type ContentRequest =
-  | { type: "lookup"; mints: string[] }
-  | { type: "settings" }
-  | { type: "health"; site: Site; rows: number; mints: number; paused: boolean };
-
-/** What the popup may ask the service worker. Only the extension's own pages can send these. */
-export type PopupRequest =
+/** What the side panel may ask the service worker. Only the extension's own pages can send these. */
+export type PanelRequest =
   | { type: "status" }
+  | { type: "feed" }
   | { type: "connect"; key: string }
   | { type: "disconnect" }
   | { type: "saveSettings"; settings: OverlaySettings };
 
-export interface LookupAnswer {
-  /** Tracked tokens by mint. A mint absent here was untracked or not answered. */
-  tokens: Record<string, OverlayToken>;
-  /** Why nothing could be read: not connected, the key was refused, or the network failed. */
-  problem: "disconnected" | "refused" | "offline" | null;
+/** Why nothing could be read: not connected, the key was refused, or the network failed. */
+export type Problem = "disconnected" | "refused" | "offline" | null;
+
+export interface FeedAnswer {
+  /** The reader's latest alerted tokens, newest first; the last good list when a read fails. */
+  tokens: OverlayToken[];
+  problem: Problem;
 }
 
 export interface Status {
   connected: boolean;
   wallet: string | null;
   settings: OverlaySettings;
-  problem: LookupAnswer["problem"];
-  /** The active tab's overlay, when it is on one of the three sites. */
-  page: { site: Site; rows: number; mints: number; paused: boolean } | null;
+  problem: Problem;
 }
