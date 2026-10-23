@@ -46,6 +46,7 @@ import { CreatorFeeRich } from "./FeeRewards";
 import { cardWithOtcDesk, creatorRewardFigure } from "../creatorReward";
 import { FeeKolAvatar, FeeWalletTip, kolPictures } from "./FeeWalletTip";
 import { DeskRewardTokens } from "./DeskRewardTokens";
+import { rewardHost } from "../deskRewardDisplay";
 import { QUICK_LINK_SITES, pumpFunHref, setAppearance, useAppearance } from "../appearance";
 import { useIsAdmin } from "../session";
 import { useShowNarrativeNote } from "../narrativeNote";
@@ -1178,7 +1179,11 @@ function TokenBody({
           </span>
         ) : reward.otcDesk && detailCard.token.creatorFee?.deskRewards?.length ? (
           <>
-            <DeskRewardTokens rewards={detailCard.token.creatorFee.deskRewards} className="tm-desk-rewards" />
+            <DeskRewardTokens
+              rewards={detailCard.token.creatorFee.deskRewards}
+              host={rewardHost(detailCard.token.creatorFee)}
+              className="tm-desk-rewards"
+            />
             {reward.logoDetail && <small className="num muted">{reward.logoDetail}</small>}
           </>
         ) : (

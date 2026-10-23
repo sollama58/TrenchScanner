@@ -16,6 +16,11 @@ export function hasOtcDeskRewards(
   return Boolean(fee?.deskRewards?.length || fee?.deskLine?.trim());
 }
 
+/** Who pays a coin's holder rewards: Stonk on a Stonks reward launch, else OTC Desks. */
+export function rewardHost(fee: { rewardHost?: string | null } | null | undefined): string {
+  return fee?.rewardHost?.trim() || "OTC Desks";
+}
+
 /** The name beside an icon: tracked symbol/name, else roster label, else shortened mint. */
 export function deskRewardName(reward: DeskRewardView): string {
   const mint = reward.mint?.trim();

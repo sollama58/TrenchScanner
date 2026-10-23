@@ -46,6 +46,11 @@ describe("DeskRewardTokens", () => {
     expect(html).toContain('role="group" aria-label="OTC Desks reward tokens"');
   });
 
+  it("names Stonk as the host on a Stonks reward launch (user ask 2026-10-23)", () => {
+    const html = renderToStaticMarkup(<DeskRewardTokens compact rewards={FOUR.slice(0, 1)} host="Stonk" />);
+    expect(html).toContain('role="group" aria-label="Stonk reward tokens"');
+  });
+
   it("shows every coin in the pro token square", () => {
     const html = renderToStaticMarkup(<DeskRewardTokens rewards={FOUR} className="tm-desk-rewards" />);
     expect(html.match(/class="desk-reward-coin"/g)).toHaveLength(4);
