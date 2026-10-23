@@ -62,6 +62,17 @@ describe("live tape", () => {
     expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(2);
   });
 
+  it("reads a coin with no page before re-reading one that has a page", async () => {
+    const helius = fakeHelius();
+    await readLiveTape([MINT], helius, { maxPages: 1, refreshMs: 60_000, nowMs: 0 });
+    // MINT is due for a re-read and first in priority, but "fresh" has no page yet.
+    await readLiveTape([MINT, "fresh"], helius, { maxPages: 1, refreshMs: 60_000, nowMs: 61_000 });
+    expect(helius.getMintTransactionsPage).toHaveBeenLastCalledWith("fresh", { newest: true });
+    // With room for both, both are read.
+    await readLiveTape([MINT, "third"], helius, { maxPages: 2, refreshMs: 60_000, nowMs: 62_000 });
+    expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(4);
+  });
+
   it("keeps a quiet coin's page instead of re-reading it (user decision 2026-10-20)", async () => {
     const helius = fakeHelius();
     const lastTrade = { at: 0 };
