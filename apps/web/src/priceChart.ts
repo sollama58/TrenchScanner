@@ -1,26 +1,13 @@
 /**
  * The token modal's price chart, the parts that are plain arithmetic (so they are unit-tested in
- * priceChart.test.ts): candles and the live curve ticks as slots and points, thinning a line, and
- * the market-cap and time axes. Candles of one timeframe come from the server's candle store
+ * priceChart.test.ts): candles and the live curve ticks as slots and points, and the market-cap
+ * and time axes. Candles of one timeframe come from the server's candle store
  * (GET /tokens/:mint/candles), which picks the finest width for each stretch itself.
  */
 
 const SECOND = 1_000;
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
-/** Point spacings the chart picks from, in ms: seconds for the short views the fine candles fill. */
-const POINT_MS = [1, 2, 5, 10, 15, 30]
-  .map((s) => s * SECOND)
-  .concat([1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 480, 1440].map((m) => m * MINUTE));
-
-/**
- * The narrowest spacing that fits `spanMs` into at most `maxPoints` points, in ms, and never finer
- * than `minMs` (the finest candles in view: thinner than them adds no detail).
- */
-export function pointWidthMs(spanMs: number, maxPoints: number, minMs = MINUTE): number {
-  const need = Math.max(minMs, spanMs / Math.max(1, maxPoints));
-  return POINT_MS.find((b) => b >= need) ?? POINT_MS[POINT_MS.length - 1]!;
-}
 
 /** Time-axis steps, in ms: round seconds, minutes, hours and days. */
 const TIME_STEPS = [1, 2, 5, 10, 15, 30]
@@ -68,74 +55,6 @@ export function sinceLabel(ms: number): string {
 export interface Point {
   t: number;
   v: number;
-}
-
-/**
- * Candles (a minute wide unless `stepMs` says) as the line's readings: each close at its end, when
- * that price held.
- * Pump.fun stamps a candle with its minute's start, so a close drawn there runs the line a minute
- * ahead of time: at a call's marker it showed where the price went in the minute after the call.
- */
-export function candleCloses(candles: readonly { t: number; c: number }[], stepMs = MINUTE): Point[] {
-  const out: Point[] = [];
-  for (const k of candles) {
-    const prev = out[out.length - 1];
-    // Pump.fun sends only candles with a trade: across a gap the price held, so the line holds it
-    // to the next candle's start rather than ramping across the quiet seconds.
-    if (stepMs < MINUTE && prev && k.t > prev.t) out.push({ t: k.t, v: prev.v });
-    out.push({ t: k.t + stepMs, v: k.c });
-  }
-  return out;
-}
-
-/**
- * The line with the call's own price added at its time, so the line meets the baseline at the call
- * marker instead of cutting between two minute closes on either side of it. Left as it is when the
- * call is outside the line's span.
- */
-export function withCallPoint(points: readonly Point[], call: Point): Point[] {
-  if (points.length < 2 || !(call.v > 0)) return [...points];
-  if (call.t < points[0]!.t || call.t > points[points.length - 1]!.t) return [...points];
-  const out = points.filter((p) => p.t !== call.t);
-  const i = out.findIndex((p) => p.t > call.t);
-  out.splice(i < 0 ? out.length : i, 0, { t: call.t, v: call.v });
-  return out;
-}
-
-/**
- * The closes from `fromMs` on (up to `toMs`, when given), thinned to one point per `widthMs` (aligned to the epoch, so a point
- * keeps its place as new minutes arrive): each point is its slot's last close, at that close's
- * time, so the line ends exactly on the latest reading. A slot whose highest close came before its
- * last keeps that close too, at its own time, so the line's highest point - the chart's Peak - is
- * the highest minute close in view, as the card's Peak is, not the highest last-of-slot close.
- */
-export function linePoints(
-  closes: readonly Point[],
-  fromMs: number,
-  widthMs: number,
-  toMs = Infinity,
-): Point[] {
-  const out: Point[] = [];
-  let slot = Number.NaN;
-  let hi: Point | null = null;
-  let last: Point | null = null;
-  const flush = () => {
-    if (hi !== null && last !== null && hi.t < last.t) out.push(hi);
-    if (last !== null) out.push(last);
-  };
-  for (const p of closes) {
-    if (p.t < fromMs || p.t > toMs) continue;
-    const s = Math.floor(p.t / widthMs);
-    if (s !== slot) {
-      flush();
-      hi = null;
-      slot = s;
-    }
-    last = { t: p.t, v: p.v };
-    if (hi === null || p.v > hi.v) hi = last;
-  }
-  flush();
-  return out;
 }
 
 export interface Axis {
