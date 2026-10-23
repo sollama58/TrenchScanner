@@ -2,11 +2,13 @@ import {
   CASH_EQUIVALENT_MINTS,
   COMPLETE_BREAKDOWN_MAX,
   createLogger,
+  tallyHeliusCredits,
   type CandidateToken,
   type DexScreenerClient,
   type HeliusClient,
   type WalletHoldingsResult,
 } from "@trenchscanner/core";
+import { heliusStageCredits } from "./heliusStageCredits.js";
 
 const logger = createLogger("wallet-valuation");
 
@@ -174,7 +176,10 @@ export async function valueWalletsFromBalances(
     if (hit && now - hit.at <= DEFERRED_BALANCES_TTL_MS) kept.set(address, hit.reading);
   }
   const toRead = unique.filter((address) => !kept.has(address));
-  const balances = toRead.length > 0 ? await deps.helius.getTokenBalancesBatch(toRead) : new Map();
+  const balances =
+    toRead.length > 0
+      ? await tallyHeliusCredits(heliusStageCredits.balances, () => deps.helius.getTokenBalancesBatch(toRead))
+      : new Map();
   for (const [address, reading] of kept) balances.set(address, reading);
   const readAt = new Map(unique.map((a) => [a, kept.has(a) ? null : now]));
   const plans: WalletPlan[] = [];
@@ -291,7 +296,9 @@ async function readMissingDecimals(plans: WalletPlan[], deps: ValuationDeps, now
     }
   }
   if (need.size === 0) return 0;
-  const read = await deps.helius.getMintDecimals([...need]);
+  const read = await tallyHeliusCredits(heliusStageCredits.balances, () =>
+    deps.helius.getMintDecimals([...need]),
+  );
   for (const [mint, decimals] of read) decimalsCache.set(mint, decimals);
   trimOldest(decimalsCache, MAX_DECIMALS_CACHE);
   return need.size;

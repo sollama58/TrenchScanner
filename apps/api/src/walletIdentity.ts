@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { createLogger, IDENTITY_BATCH_MAX, prisma } from "@trenchscanner/core";
+import { createLogger, IDENTITY_BATCH_MAX, prisma, withOwnApiFeature } from "@trenchscanner/core";
 import type { HeliusIdentity, HeliusIdentityClient, IdentityRead } from "@trenchscanner/core";
 import type { WalletLabel } from "./walletProfile.js";
 
@@ -318,7 +318,8 @@ export class WalletIdentityReader {
     this.timer = setTimeout(
       () => {
         this.timer = null;
-        void this.flush(Date.now());
+        // The queue holds every caller's misses: its reads are wallet-names', whoever queued first.
+        void withOwnApiFeature("wallet-names", () => this.flush(Date.now()));
       },
       Math.max(0, at - Date.now()),
     );

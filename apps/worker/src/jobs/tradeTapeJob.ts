@@ -662,6 +662,8 @@ interface RunCounts {
   handedOff: number;
   /** Of heliusPages, the newest-first reads' (at most a third, HELIUS_NEWEST_SHARE). */
   heliusNewestPages: number;
+  /** Coins whose from-launch read started on a launch-buyer seed (launchTapeSeed.ts): its hit rate. */
+  seeded: number;
 }
 
 async function finish(
@@ -764,8 +766,12 @@ async function seedFromLaunchBuyers(
     started: true,
     pageEnds: [...seed.pageEnds],
   };
-  if (more) return progress;
+  if (more) {
+    counts.seeded += 1;
+    return progress;
+  }
   if (parsed.trades.length === 0) return null;
+  counts.seeded += 1;
   await finish(progress, "helius", parsed.launch !== null, counts, now());
   return "done";
 }
@@ -1040,6 +1046,7 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
     throttled: 0,
     handedOff: 0,
     heliusNewestPages: 0,
+    seeded: 0,
   };
   const waiting = await pendingCalledCoins(now());
   // The reads a shutdown saved go back to their lanes.

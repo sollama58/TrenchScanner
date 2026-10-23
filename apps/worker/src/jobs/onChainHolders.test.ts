@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Env, HeliusClient, LargestHoldersResult } from "@trenchscanner/core";
+import { apiUsageMeter, type Env, type HeliusClient, type LargestHoldersResult } from "@trenchscanner/core";
+import { takeHeliusStageCredits } from "./heliusStageCredits.js";
 import { resetOnChainHolders, resolveOnChainHolders } from "./onChainHolders.js";
 
 const env = { ONCHAIN_HOLDERS_MAX_PER_CYCLE: 2, RUGCHECK_CACHE_TTL_MINUTES: 5 } as Env;
@@ -22,6 +23,30 @@ describe("resolveOnChainHolders", () => {
     const second = await resolveOnChainHolders(["a", "b", "c"], helius, env, 60_000);
     expect([...second.keys()].sort()).toEqual(["a", "b", "c"]);
     expect(getLargestHoldersBatch.mock.calls.map((c) => c[0])).toEqual([["a", "b"], ["c"]]);
+  });
+
+  it("puts the reads' billed Helius credits on the heartbeat's onChainHolders", async () => {
+    takeHeliusStageCredits();
+    const { helius } = fakeHelius(() => ({ status: "found", holders }));
+    const read = helius.getLargestHoldersBatch.bind(helius);
+    // What the metered fetch records for the read: a largest-accounts and a supply call per mint.
+    helius.getLargestHoldersBatch = async (mints: string[]) => {
+      apiUsageMeter.record(
+        [
+          {
+            provider: "helius",
+            endpoint: "getTokenLargestAccounts",
+            calls: mints.length,
+            credits: mints.length,
+          },
+        ],
+        { requests: 1, ok: true, rateLimited: false, ms: 1 },
+      );
+      return read(mints);
+    };
+    await resolveOnChainHolders(["a", "b"], helius, env, 0);
+    expect(takeHeliusStageCredits()).toEqual({ freshness: 0, balances: 0, onChainHolders: 2 });
+    expect(takeHeliusStageCredits().onChainHolders).toBe(0);
   });
 
   it("re-reads a mint on its own shorter TTL (a young coin failing a holder cut)", async () => {

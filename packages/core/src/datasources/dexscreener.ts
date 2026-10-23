@@ -98,6 +98,13 @@ const THROTTLE_MIN_PAUSE_MS = 2_000;
  * leaves the API process room if it ever reads them too.
  */
 const DISCOVERY_REQUESTS_PER_MINUTE = 30;
+/**
+ * Longest the token-info orders read (and the takeover feed it reads first) waits on the
+ * discovery budget. It runs behind the scan and shares that budget with the scan's own trending
+ * and profile reads: waiting without end, a paused gate stacked it up in front of them (audit
+ * 2026-10-22, F8c). Past this a mint is left unchecked and tried on a later cycle.
+ */
+const DEX_INFO_GATE_WAIT_MS = 20_000;
 /** Mints held at once; far above a cycle's working set, so pruning is the TTL's job. */
 const QUOTE_CACHE_MAX = 5_000;
 
@@ -1043,7 +1050,10 @@ export class DexScreenerClient {
    * the feed can't be read. Not used as discovery: a takeover of a mint we don't track is ignored.
    */
   async communityTakeoverMints(): Promise<string[]> {
-    const rows = await this.fetchDiscoveryEndpoint("/community-takeovers/latest/v1");
+    const rows = await this.fetchDiscoveryEndpoint(
+      "/community-takeovers/latest/v1",
+      Date.now() + DEX_INFO_GATE_WAIT_MS,
+    );
     return [
       ...new Set(
         rows.filter((r) => r.chainId === SOLANA_CHAIN_ID && r.tokenAddress).map((r) => r.tokenAddress),
@@ -1059,11 +1069,12 @@ export class DexScreenerClient {
   async readTokenInfoOrders(mints: readonly string[]): Promise<DexInfoOrderRead[]> {
     const unique = [...new Set(mints.filter((m) => m.length > 0))].slice(0, DEX_INFO_ORDERS_PER_CYCLE);
     const out: DexInfoOrderRead[] = [];
+    const gate = this.discoveryGateBy(Date.now() + DEX_INFO_GATE_WAIT_MS);
     await forEachWithConcurrency(unique, 2, async (mint) => {
       try {
         const body = await fetchJson<unknown>(
           `${this.baseUrl}/orders/v1/${SOLANA_CHAIN_ID}/${encodeURIComponent(mint)}`,
-          { timeoutMs: 8000, retries: 0, gate: this.discoveryGate },
+          { timeoutMs: 8000, retries: 0, gate },
         );
         out.push({ mint, payment: readDexInfoPayment(body) });
       } catch (err) {
@@ -1073,12 +1084,23 @@ export class DexScreenerClient {
     return out;
   }
 
-  private async fetchDiscoveryEndpoint(path: string): Promise<DexScreenerDiscoveryEntry[]> {
+  /** The discovery budget for a caller that gives up once a slot would open only after `deadline`. */
+  private discoveryGateBy(deadline: number) {
+    return {
+      acquire: () => this.discoveryGate.acquire(deadline),
+      throttled: (delayMs: number) => this.discoveryGate.throttled(delayMs),
+    };
+  }
+
+  private async fetchDiscoveryEndpoint(
+    path: string,
+    deadline = Infinity,
+  ): Promise<DexScreenerDiscoveryEntry[]> {
     try {
       return await fetchJson<DexScreenerDiscoveryEntry[]>(`${this.baseUrl}${path}`, {
         timeoutMs: 8000,
         retries: 1,
-        gate: this.discoveryGate,
+        gate: this.discoveryGateBy(deadline),
       });
     } catch (err) {
       logger.warn("discovery endpoint failed", { path, error: String(err) });

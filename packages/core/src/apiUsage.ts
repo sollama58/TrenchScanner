@@ -236,6 +236,8 @@ interface FeatureContext {
   feature: string;
   /** Lines counted since the stage last closed, labelled with the stage when it does. */
   pending: Pending[] | null;
+  /** Where the Helius credits of calls made here are also added up (tallyHeliusCredits). */
+  tallies?: readonly CreditTally[];
 }
 interface Pending {
   at: number;
@@ -259,7 +261,49 @@ let defaultFeature = "unattributed";
 export function withApiFeature<T>(feature: string, fn: () => T): T {
   const parent = featureStore.getStore();
   const name = parent ? `${parent.feature}/${feature}` : feature;
-  return featureStore.run({ feature: name, pending: null }, fn);
+  return featureStore.run({ feature: name, pending: null, tallies: parent?.tallies }, fn);
+}
+
+/**
+ * Runs `fn` with its outside calls counted under `feature` alone, whatever started it. For a
+ * timer a request starts (the API's live-curve and live-trades loops, the wallet-name queue): it
+ * outlives that request and serves every viewer, and under withApiFeature its reads were filed
+ * under whichever route happened to start it (Helius audit 2026-10-22, H-8).
+ */
+export function withOwnApiFeature<T>(feature: string, fn: () => T): T {
+  return featureStore.run({ feature, pending: null }, fn);
+}
+
+/** Helius credits added up by tallyHeliusCredits, read and reset by take(). */
+export class CreditTally {
+  private credits = 0;
+
+  add(credits: number): void {
+    this.credits += credits;
+  }
+
+  /** The credits since the last take. */
+  take(): number {
+    const out = this.credits;
+    this.credits = 0;
+    return out;
+  }
+}
+
+/**
+ * Runs `fn` with the Helius credits of every call inside it (awaited or not) also added to
+ * `tally`, as the meter bills them (answered calls only). Counted under the same feature as
+ * without it. For a stage's own credits on a job's heartbeat, where the scan's stages run side by
+ * side and its per-method call counts can't tell them apart.
+ */
+export function tallyHeliusCredits<T>(tally: CreditTally, fn: () => T): T {
+  const parent = featureStore.getStore();
+  if (!parent) return featureStore.run({ feature: defaultFeature, pending: null, tallies: [tally] }, fn);
+  // The parent's own fields stay its own (a stage's held lines, which withApiStages swaps out).
+  const ctx = Object.create(parent, {
+    tallies: { value: [...(parent.tallies ?? []), tally] },
+  }) as FeatureContext;
+  return featureStore.run(ctx, fn);
 }
 
 /**
@@ -271,7 +315,7 @@ export async function withApiStages<T>(
   feature: string,
   fn: (stage: (name: string) => void) => Promise<T>,
 ): Promise<T> {
-  const ctx: FeatureContext = { feature, pending: [] };
+  const ctx: FeatureContext = { feature, pending: [], tallies: featureStore.getStore()?.tallies };
   const release = (label: string) => {
     const held = ctx.pending ?? [];
     ctx.pending = [];
@@ -311,6 +355,12 @@ export class ApiUsageMeter {
   /** Counts one HTTP request's lines (the request, its latency, on the first line only). */
   record(lines: ApiCallLine[], outcome: Outcome, at = Date.now()): void {
     const ctx = featureStore.getStore();
+    if (ctx?.tallies && outcome.ok) {
+      for (const line of lines) {
+        if (line.provider !== "helius") continue;
+        for (const tally of ctx.tallies) tally.add(line.credits);
+      }
+    }
     lines.forEach((line, i) => {
       const o = i === 0 ? outcome : { ...outcome, requests: 0, ms: 0 };
       if (ctx?.pending) ctx.pending.push({ at, line, outcome: o });

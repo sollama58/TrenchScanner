@@ -1317,15 +1317,6 @@ export function freshUnfilledAnchorPatch(): { extended24h: true } {
 }
 
 /**
- * The moment the 15-minute 2× window and the exit-plan return start from. A later send does not
- * become that moment; the features were built at `decisionAnchorAt`.
- */
-export function labelAnchor(decisionAnchorAt: Date, sentAt: Date): Date {
-  void sentAt;
-  return decisionAnchorAt;
-}
-
-/**
  * Writes one live alert: anchors its outcome tracking, creates the row, and nudges connected
  * dashboards. A sample created THIS cycle is anchored seconds ago and serves as-is (just
  * flipped onto the 24h watch); a reused older one gets a fresh row instead, because the alert's
@@ -1365,7 +1356,7 @@ async function emitCuratedAlert(
       let anchor = sharedAnchor ?? (pick.cycleSample?.created ? pick.cycleSample : null);
       if (anchor && !sharedAnchor) {
         // The 15-minute 2× window and the exit-plan return start at the anchor the features were
-        // built for. Sending later does not move that clock (labelAnchor). The price on the row
+        // built for. Sending later does not move that clock. The price on the row
         // is already the decision price. Only while the row has seen no price yet: once it has,
         // that price predates this send, and the alert gets a fresh row like a stale sample would.
         const moved = await tx.candidateOutcome.updateMany({

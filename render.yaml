@@ -89,10 +89,10 @@
 # DATABASE_CONNECTION_LIMIT is set (not sync: false - it ships with a value) on all three Node
 # services below. Verify the three values, plus the connections held outside the pools - the API's
 # one LISTEN connection (its SSE push, apps/api/src/matchStream.ts) and one per batch job running
-# under its job lock (apps/worker/src/jobLock.ts: up to two on the scanner, up to six on the
-# trainer) - against the actual connection ceiling on the Postgres plan you deploy to (Render
-# dashboard -> the database -> Info tab; the Admin tab's Database panel shows the live count against
-# it). The live ceiling read 103 (max_connections, /stats/db, 2026-10-19 database audit), not the
+# under its job lock (apps/worker/src/jobLock.ts: up to three on the scanner - pro-holders,
+# trade-tape, kol-wallets - and up to eight on the trainer) - against the actual connection
+# ceiling on the Postgres plan you deploy to (Render dashboard -> the database -> Info tab; the
+# Admin tab's Database panel shows the live count against it). The live ceiling read 103 (max_connections, /stats/db, 2026-10-19 database audit), not the
 # 200 assumed before: ~45 steady, so the ~2x overlap of a deploy reaches ~90 of the 100 usable.
 # Adjust downward if you move to a plan with a lower ceiling,
 # or if you scale any service to more than one instance - every instance opens its own pool, and

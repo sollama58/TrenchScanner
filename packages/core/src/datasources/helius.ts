@@ -2133,10 +2133,17 @@ export class HeliusClient {
    * holds fewer buyers than asked - a create buried under failed sniper attempts and bot noise -
    * reads a further page, up to LAUNCH_MAX_PAGES. Helius-only: elsewhere every mint reports
    * "unsupported".
+   *
+   * The pages of the mints in `tapeSeeds` are kept for the trade tape (launchTapeSeed.ts). Only
+   * coins close to a call are worth it: the tape reads a coin 30+ minutes after its call, and
+   * seeds for every launch read turned the cache over in 10-25 minutes, so nearly every seed was
+   * evicted unused while up to 150 pages of raw transactions sat in memory (Helius audit
+   * 2026-10-22, H-7).
    */
   async getLaunchBuyersBatch(
     mintAddresses: string[],
     maxBuyers: number,
+    opts: { tapeSeeds?: ReadonlySet<string> } = {},
   ): Promise<Map<string, LaunchBuyersResult>> {
     const unique = [...new Set(mintAddresses)];
     const out = new Map<string, LaunchBuyersResult>();
@@ -2159,6 +2166,7 @@ export class HeliusClient {
       seedToken.set(mint, nextToken);
     };
     const publishSeed = (mint: string) => {
+      if (!opts.tapeSeeds?.has(mint)) return;
       const ends = pageEnds.get(mint);
       const txs = txsByMint.get(mint) ?? [];
       if (!ends || ends.length === 0 || txs.length === 0) return;

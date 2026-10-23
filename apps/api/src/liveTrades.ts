@@ -9,6 +9,7 @@ import {
   tradesFromLogs,
   type DecodedTrade,
   type HeliusClient,
+  withOwnApiFeature,
 } from "@trenchscanner/core";
 import { MAX_WAIT_MS } from "./liveCurve.js";
 import type { LiveTraderLabel } from "./liveTraderLabels.js";
@@ -568,9 +569,10 @@ export class LiveTrades {
       this.stream.start();
     }
     if (!this.timer) {
+      // Its pool reads are the live trades', not the route of the page that happened to start it.
       this.timer = setInterval(() => {
         try {
-          this.round();
+          withOwnApiFeature("live-trades", () => this.round());
         } catch (err) {
           logger.warn("live trades round failed", { error: String(err) });
         }

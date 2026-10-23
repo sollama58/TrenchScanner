@@ -20,18 +20,19 @@ export const prismaLaunchReadStore: LaunchReadStore = {
     return out;
   },
   async save(reads) {
-    for (const [mintAddress, r] of reads) {
-      const data = {
-        reading: r.reading as unknown as Prisma.InputJsonValue,
-        complete: r.complete,
-        checkedAt: new Date(r.readAt),
-      };
-      await prisma.launchRead.upsert({
-        where: { mintAddress },
-        create: { mintAddress, ...data },
-        update: data,
-      });
-    }
+    if (reads.size === 0) return;
+    // One statement for the cycle's reads (up to the per-cycle lookup budgets), not one upsert each.
+    const rows = [...reads].map(
+      ([mintAddress, r]) =>
+        Prisma.sql`(${mintAddress}, ${JSON.stringify(r.reading)}::jsonb, ${r.complete}, ${new Date(r.readAt)})`,
+    );
+    await prisma.$executeRaw`
+      INSERT INTO "LaunchRead" ("mintAddress", "reading", "complete", "checkedAt")
+      VALUES ${Prisma.join(rows)}
+      ON CONFLICT ("mintAddress") DO UPDATE SET
+        "reading" = EXCLUDED."reading",
+        "complete" = EXCLUDED."complete",
+        "checkedAt" = EXCLUDED."checkedAt"`;
   },
 };
 
