@@ -36,6 +36,15 @@ export interface FetchJsonOptions extends RequestInit {
   gate?: {
     acquire(): Promise<void>;
     throttled(delayMs: number): void;
+    /**
+     * A refusal breaker (PumpFunGate): true while this URL's endpoint answered 403 a moment ago,
+     * and the request then fails as that same 403 without being sent.
+     */
+    refusedRecently?(url: string): boolean;
+    /** The provider answered this URL 403. */
+    refused?(url: string): void;
+    /** The provider answered this URL with anything but a 403 (a probe got through). */
+    answered?(url: string): void;
   };
 }
 
@@ -101,6 +110,10 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
   } = options;
   const safeUrl = redactUrl(url);
 
+  if (gate?.refusedRecently?.(url)) {
+    throw new HttpError(403, safeUrl, `HTTP 403 for ${safeUrl} (held back: refused moments ago)`);
+  }
+
   let attempt = 0;
   while (true) {
     await gate?.acquire();
@@ -112,6 +125,8 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
       // The timer stays armed through the body read: clearing it once headers arrived left
       // res.json() with no deadline, so a provider stalling mid-body hung the calling job forever
       // (and the scheduler's overlap guard then skipped every later tick of it).
+      if (res.status === 403) gate?.refused?.(url);
+      else gate?.answered?.(url);
       if (res.ok) {
         onHeaders?.(res.headers);
         return JSON.parse(await readCappedText(res, safeUrl)) as T;

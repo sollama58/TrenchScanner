@@ -10,6 +10,10 @@ export interface PumpFunGateStats {
   throttled: number;
   /** Requests turned away without being sent: paused, or the minute's budget spent. */
   heldBack: number;
+  /** Times an endpoint answered 403 (a Cloudflare block) and was left alone for REFUSED_PAUSE_MS. */
+  refused: number;
+  /** Requests failed as that 403 without being sent, while their endpoint was refusing. */
+  heldBackRefused: number;
 }
 
 /**
@@ -28,8 +32,10 @@ export class PumpFunGate {
   private tokens: number;
   private refilledAt: number;
   private pausedUntil = 0;
-  private stats: PumpFunGateStats = { requests: 0, throttled: 0, heldBack: 0 };
+  private stats: PumpFunGateStats = emptyStats();
   private readonly msPerToken: number;
+  /** Per endpoint (endpointOf): until when a 403 holds it back, or a probe is out asking. */
+  private readonly refusedUntil = new Map<string, number>();
 
   constructor(
     private readonly name: string,
@@ -37,6 +43,7 @@ export class PumpFunGate {
     private readonly burst: number,
     private readonly pauseMs = PAUSE_MS,
     private readonly now: () => number = Date.now,
+    private readonly refusedPauseMs = REFUSED_PAUSE_MS,
   ) {
     this.msPerToken = 60_000 / Math.max(1, perMinute);
     this.tokens = Math.max(1, burst);
@@ -83,13 +90,91 @@ export class PumpFunGate {
     }
   }
 
+  /**
+   * Whether a request to `url` should fail as a 403 without being sent (see fetchJson's gate):
+   * its endpoint answered 403 less than REFUSED_PAUSE_MS ago. Once that has passed one request
+   * goes out to ask whether the block has lifted, and the rest wait PROBE_MS for its answer.
+   *
+   * Pump.fun's Cloudflare refuses Render's addresses for hours at a time (2026-10-22, -23), and
+   * before this every launch lookup, launch time, live market cap, charity name and chart cache
+   * still sent its request and got the 403 back. The caller gets the same 403 either way, so
+   * nothing it does changes; a lifted block is noticed within REFUSED_PAUSE_MS. Kept per endpoint
+   * because Pump.fun has blocked one (the coin list) while another (currently-live) answered.
+   */
+  refusedRecently(url: string): boolean {
+    const key = endpointOf(url);
+    const until = this.refusedUntil.get(key);
+    if (until === undefined) return false;
+    const now = this.now();
+    if (now < until) {
+      this.stats.heldBackRefused += 1;
+      return true;
+    }
+    this.refusedUntil.set(key, now + PROBE_MS);
+    return false;
+  }
+
+  /** The endpoint answered 403: hold its requests back for REFUSED_PAUSE_MS. */
+  refused(url: string): void {
+    const key = endpointOf(url);
+    if (!this.refusedUntil.has(key)) {
+      logger.warn("Pump.fun refused us (403) - holding that endpoint back", {
+        host: this.name,
+        endpoint: key,
+        pauseMs: this.refusedPauseMs,
+      });
+    }
+    this.stats.refused += 1;
+    this.refusedUntil.set(key, this.now() + this.refusedPauseMs);
+  }
+
+  /** The endpoint answered something other than 403: it is no longer refusing. */
+  answered(url: string): void {
+    if (this.refusedUntil.size === 0) return;
+    const key = endpointOf(url);
+    if (this.refusedUntil.delete(key))
+      logger.info("Pump.fun answered again", { host: this.name, endpoint: key });
+  }
+
   /** Counts since the last call, then reset. */
   takeStats(): PumpFunGateStats {
     const out = this.stats;
-    this.stats = { requests: 0, throttled: 0, heldBack: 0 };
+    this.stats = emptyStats();
     return out;
   }
 }
+
+function emptyStats(): PumpFunGateStats {
+  return { requests: 0, throttled: 0, heldBack: 0, refused: 0, heldBackRefused: 0 };
+}
+
+/**
+ * The endpoint a URL asks, as its host and path with the coin left out: `/coins-v2/<mint>` and
+ * `/coins-v2/<other mint>` are one endpoint, `/coins` and `/coins/currently-live` are two.
+ */
+export function endpointOf(url: string): string {
+  try {
+    const { host, pathname } = new URL(url);
+    return (
+      host +
+      pathname
+        .split("/")
+        .map((segment) => (segment.length >= MINT_LIKE_SEGMENT ? "*" : segment))
+        .join("/")
+    );
+  } catch {
+    return url;
+  }
+}
+
+/** Path segments at least this long are a mint or wallet (base58, 32-44 characters). */
+const MINT_LIKE_SEGMENT = 32;
+
+/** How long a 403 holds back its endpoint before one request asks again. */
+const REFUSED_PAUSE_MS = 60_000;
+
+/** How long the one request asking after a block has to answer before another may ask. */
+const PROBE_MS = 15_000;
 
 /** How long a 429 holds every request to the host. */
 const PAUSE_MS = 30_000;
@@ -113,5 +198,9 @@ export function takePumpFunGateStats(): Record<string, number> {
     swapRequests: swap.requests,
     swapThrottled: swap.throttled,
     swapHeldBack: swap.heldBack,
+    frontendRefused: frontend.refused,
+    frontendHeldBackRefused: frontend.heldBackRefused,
+    swapRefused: swap.refused,
+    swapHeldBackRefused: swap.heldBackRefused,
   };
 }

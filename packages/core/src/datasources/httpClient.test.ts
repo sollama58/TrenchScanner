@@ -125,3 +125,37 @@ describe("backoffDelay", () => {
     }
   });
 });
+
+describe("fetchJson refusal breaker", () => {
+  it("tells the gate about a 403, then fails as that 403 without sending while it holds back", async () => {
+    const { createServer } = await import("node:http");
+    let hits = 0;
+    let status = 403;
+    const server = createServer((_req, res) => {
+      hits += 1;
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end("{}");
+    });
+    await new Promise<void>((r) => server.listen(0, r));
+    const { port } = server.address() as { port: number };
+    const url = `http://127.0.0.1:${port}/coins-v2/x`;
+    const { PumpFunGate } = await import("./pumpfunGate.js");
+    let now = 0;
+    const gate = new PumpFunGate("test", 600, 10, 30_000, () => now, 60_000);
+    try {
+      await expect(fetchJson(url, { retries: 0, gate })).rejects.toMatchObject({ status: 403 });
+      await expect(fetchJson(url, { retries: 0, gate })).rejects.toMatchObject({ status: 403 });
+      expect(hits).toBe(1);
+
+      now = 60_000; // the probe goes out and the endpoint answers again
+      status = 200;
+      await expect(fetchJson(url, { retries: 0, gate })).resolves.toEqual({});
+      await expect(fetchJson(url, { retries: 0, gate })).resolves.toEqual({});
+      expect(hits).toBe(3);
+      expect(gate.takeStats()).toMatchObject({ refused: 1, heldBackRefused: 1 });
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+});
