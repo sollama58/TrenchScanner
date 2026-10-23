@@ -135,7 +135,7 @@ export function isPumpCoin(mint: string, token: Pick<BackfillToken, "launchpad">
  * (charts audit CH-7: a $6 Meteora pool's price and history are not the coin's).
  */
 export function poolsOf(mint: string, token: BackfillToken, now = Date.now()): string[] {
-  const out = [token.pairAddress];
+  const out: (string | null)[] = [];
   if (isPumpCoin(mint, token)) {
     const curve = pumpCurveAddressOf(mint) ?? null;
     // A coin still priced on its curve has not graduated: its PumpSwap pool doesn't exist yet, and
@@ -143,10 +143,14 @@ export function poolsOf(mint: string, token: BackfillToken, now = Date.now()): s
     // 2026-10-23: about half the backfill's calls). The curve is still asked. Only the scan keeps
     // pairAddress current, and only while the coin is on its watchlist, so past PAIR_TRUSTED_MS a
     // curve address may be stale: a coin that graduated later still has its pool asked (TB-1).
+    // The pool goes first then: the curve has bars too, and a reader stops at the first pool that
+    // answers.
     const pairTrusted = token.launchedAt !== null && now - token.launchedAt.getTime() < PAIR_TRUSTED_MS;
-    if (token.pairAddress !== curve || !pairTrusted) out.push(pumpSwapPoolOf(mint) ?? null);
+    const pool = pumpSwapPoolOf(mint) ?? null;
+    if (token.pairAddress !== curve) out.push(token.pairAddress, pool);
+    else if (!pairTrusted) out.push(pool);
     out.push(curve);
-  }
+  } else out.push(token.pairAddress);
   return [...new Set(out.filter((p): p is string => !!p))];
 }
 
