@@ -1,6 +1,7 @@
 import {
   fillFlat,
   liveCandles,
+  newestCandleStart,
   ohlcBars,
   TIMEFRAMES,
   volumeBars,
@@ -46,20 +47,11 @@ export interface Slots {
   bars: SlotBar[];
 }
 
-/** The most slots the chart is handed: past it, a fine timeframe starts later than the first trade. */
-export const MAX_SLOTS = 12_000;
-
-const SECOND_MS = 1_000;
-
 /**
- * Exported for tests. The candles a chart at `tfMs` draws. On the 1-second chart a live tick's step
- * (one price at one moment) becomes the single second it landed in, rather than a candle as long as
- * the quiet stretch before it. Candles wider than the timeframe stay at their real width (coarse).
+ * The most slots the chart is handed: past it, a fine timeframe starts later than the first trade
+ * (8 hours at 1s), and the chart stops asking for older pages (TradingChart onOlder).
  */
-export function candlesForResolution(candles: readonly VolumeCandle[], tfMs: number): VolumeCandle[] {
-  if (tfMs !== SECOND_MS) return candles as VolumeCandle[];
-  return candles.map((k) => (k.tick ? { ...k, t: k.t + (k.w ?? tfMs) - tfMs, w: tfMs } : k));
-}
+export const MAX_SLOTS = 30_000;
 
 /**
  * Exported for tests. The candles (and the live ticks after them) as slots `tfMs` wide on round
@@ -73,10 +65,7 @@ export function buildSlots(
   tfMs: number,
   maxSlots = MAX_SLOTS,
 ): Slots | null {
-  const all = candlesForResolution(
-    liveCandles(candles, ticks).filter((k) => [k.o, k.c].every((v) => Number.isFinite(v) && v > 0)),
-    tfMs,
-  );
+  const all = liveCandles(candles, ticks).filter((k) => [k.o, k.c].every((v) => Number.isFinite(v) && v > 0));
   if (all.length === 0) return null;
   let t0 = Infinity;
   let t1 = -Infinity;
@@ -95,7 +84,7 @@ export function buildSlots(
   }
   const end = start + n * tfMs;
   const filled = fillFlat(ohlcBars(all, start, end, n), start, tfMs);
-  const vols = volumeBars(candlesForResolution(candles, tfMs), start, end, n);
+  const vols = volumeBars(candles, start, end, n);
   const bars: SlotBar[] = [];
   let first = -1;
   for (let i = 0; i < n; i++) {
@@ -211,4 +200,23 @@ export function finestCoverMs(candles: readonly VolumeCandle[], t0: number, t1: 
  */
 export function timeframeFits(ms: number, viewMs: number): boolean {
   return ms * 3 <= viewMs;
+}
+
+/**
+ * Exported for tests. The line's readings from the candles: each candle's close at its end (the
+ * forming one's, still open, at `now`), then the live ticks from the newest candle's start on,
+ * which read that candle finer. Without candles, the ticks alone.
+ */
+export function candleReadings(
+  candles: readonly VolumeCandle[],
+  ticks: readonly Point[],
+  now: number,
+): Point[] {
+  const forming = newestCandleStart(candles);
+  const tail = ticks.filter((p) => p.t > forming);
+  const cut = tail.length > 0 ? tail[0]!.t : Infinity;
+  const closes = candles
+    .map((k) => ({ t: Math.min(k.t + (k.w ?? 60_000), now), v: k.c }))
+    .filter((p) => p.t < cut && p.v > 0);
+  return closes.concat(tail);
 }

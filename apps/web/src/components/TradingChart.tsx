@@ -160,10 +160,19 @@ const MAX_BAR_PX = 48;
 const MIN_BAR_PX = 0.5;
 /** A view opens with candles about this wide (px), on its newest candles when they all won't fit. */
 const OPEN_BAR_PX = 4;
+/** Scrolled to within this many candles (or a quarter of the view) of the oldest, the page before it is read. */
+const OLDER_EDGE_BARS = 20;
 /** The space past the last candle (px), and the predicted path's zone there. */
 const RIGHT_PX = 24;
 function pathZoneW(plotW: number): number {
   return Math.round(Math.min(160, Math.max(56, plotW * 0.16)));
+}
+
+/** The earliest candle start (ms). */
+function firstStart(candles: readonly VolumeCandle[]): number {
+  let t = Infinity;
+  for (const k of candles) if (k.t < t) t = k.t;
+  return t;
 }
 
 /** The price axis's labels: none below zero, where the axis's padding can reach. */
@@ -247,13 +256,17 @@ export function TradingChart({
   kind,
   onKind,
   onTimeframe,
+  onOlder,
   path = [],
   fileName = "chart",
   ariaLabel,
 }: {
   /** The coin, whose drawings are kept on this device. */
   mint: string;
-  /** The view's candles, of mixed widths (the 5-minute backfill, minute, 15- and 1-second ones). */
+  /**
+   * The view's candles at the timeframe read (GET /tokens/:mint/candles), each with its width:
+   * the timeframe's, or wider where only coarser data covers a stretch (drawn shaded at that width).
+   */
   candles: VolumeCandle[];
   /**
    * Readings from the newest candle's start on (the live curve's ticks, which move that forming
@@ -292,8 +305,16 @@ export function TradingChart({
   height: number;
   kind: ChartKind;
   onKind: (kind: ChartKind) => void;
-  /** The candle size wanted (picked, or Auto's for the view), so the view reads candles fine enough for it. */
+  /**
+   * The candle size wanted (picked, or Auto's by the view's span alone), which the view reads its
+   * candles at: Auto then draws no finer than the candles of that read that aren't coarse.
+   */
   onTimeframe?: (ms: number) => void;
+  /**
+   * The reader scrolled back near the oldest candle held: read the page before it. Called again
+   * on each move there; the reader drops calls while a page is on its way or none is left.
+   */
+  onOlder?: () => void;
   /** Experimental: the predicted price path from the latest reading, past the last candle. */
   path?: PathStep[];
   /** The saved image's name. */
@@ -371,13 +392,22 @@ export function TradingChart({
   const autoMs = autoTimeframe(viewMs, plotW, 6, finestMs);
   const tfMs = picked !== null && timeframeFits(picked, viewMs) ? picked : autoMs;
   const slots = useMemo(() => buildSlots(candles, ticks, tfMs), [candles, ticks, tfMs]);
-  // The view reads finer candles for the size the view alone would take, not only the one drawn:
-  // Auto draws no finer than the candles in hand, and those finer pages are only read when asked
-  // for, so a young coin would otherwise stay on minute candles.
+  // The view reads its candles at the size the view alone would take, not only the one drawn: the
+  // store answers each stretch at that size, or coarse where it holds only wider bars, so Auto
+  // draws the finest size whose candles mostly aren't coarse (finestMs). Read at the size drawn,
+  // a coin whose finer candles land later would stay on the wider size.
   const wantMs = picked !== null && timeframeFits(picked, viewMs) ? picked : autoTimeframe(viewMs, plotW);
   useEffect(() => {
     onTimeframe?.(wantMs);
   }, [wantMs, onTimeframe]);
+  // Scrolled back near the oldest candle: the page before it (full history at any timeframe, charts
+  // audit 2026-10-22). Not once the slots stop short of the oldest candle (MAX_SLOTS): what came
+  // before them couldn't be drawn.
+  const olderRef = useRef<{ ask?: () => void; whole: boolean }>({ whole: false });
+  olderRef.current = {
+    ask: onOlder,
+    whole: !!slots && candles.length > 0 && slots.start <= Math.floor(firstStart(candles) / tfMs) * tfMs,
+  };
   // A live trade is often read seconds before the candles reach it: drawn at its own time it fell
   // past the last candle, off the plot, and the bubble vanished until the next read (user report
   // 2026-10-19). It sits on the newest candle until then.
@@ -537,6 +567,18 @@ export function TradingChart({
       overlayRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const ts = chartRef.current?.timeScale();
+    if (!ts) return;
+    const onRange = (r: LogicalRange | null) => {
+      const { ask, whole } = olderRef.current;
+      if (!r || !ask || !whole) return;
+      if (r.from < Math.max(OLDER_EDGE_BARS, (r.to - r.from) * 0.25)) ask();
+    };
+    ts.subscribeVisibleLogicalRangeChange(onRange);
+    return () => ts.unsubscribeVisibleLogicalRangeChange(onRange);
+  }, [mounted]);
 
   const indKey = [...ind].sort().join(",");
   // The theme's colours, the style and the indicators: the series are made afresh.

@@ -3,9 +3,10 @@ import { useEffect, useState } from "react";
 /**
  * The token chart's backup candles, read in the browser (user asks 2026-10-19: "can we change any
  * of the calls to be client-side? especially for the chart", "can we have multiple data
- * sources?"). When the API has no candles for a coin (Pump.fun down, rate limited, or over the
- * API's call budget) or can't be reached at all, the chart reads GeckoTerminal's minute candles
- * itself, on the reader's own connection and its own rate limit rather than the API's shared one.
+ * sources?"). The server's candle store backfills every coin's history itself (GeckoTerminal
+ * included), so this is the last resort only: when neither the store nor the chart's answer has
+ * any candles for a coin, or the API can't be reached at all, the chart reads GeckoTerminal's
+ * minute candles itself, on the reader's own connection and its own rate limit.
  * Pump.fun's own candle API refuses other sites' pages (CORS), so it can't be read from here.
  *
  * GeckoTerminal prices a pool's token, so the pool and the coin's supply come from DexScreener's
@@ -156,7 +157,7 @@ async function getJson(url: string): Promise<unknown> {
 }
 
 /**
- * The backup candles for `mint` while `enabled` (the API gave the chart none), read now and every
+ * The backup candles for `mint` while `enabled` (the API has none for the chart), read now and every
  * BACKUP_POLL_MS while the tab is visible. Null until a read lands; the last good one stays up
  * through a failed read.
  */
