@@ -17,9 +17,11 @@ import {
 import { donateConfigCharities, expandCharityRecipients } from "./donateGg.js";
 import { feeWalletNames } from "./walletNames.js";
 import { enrichCreatorFeeDeskRewards } from "./deskRewardMeta.js";
-import { otcDeskRoster, otcDeskRosterFor } from "./otcDesk.js";
+import { keptOtcDeskFeeForMint, otcDeskFeeForMint, otcDeskRoster, otcDeskRosterFor } from "./otcDesk.js";
 import {
   creatorFeeWalletAddresses,
+  OTC_DESKS_LINE,
+  paysOtcDesks,
   resolveOtcDeskFee,
   type OtcDeskFee,
   type OtcRewardCoin,
@@ -355,9 +357,18 @@ export async function creatorFeesByMint(
   // One roster row. The sentence and its coins are written together, including when
   // the feed has not waited and both are still empty. A creator-fee wallet that is an
   // OTC coin supplies that coin's basket; the pump mint's own row still wins.
+  // A coin paying OTC Desks' own fee wallet past the roster sweep (user report 2026-10-23):
+  // its kept one-coin answer, else the desk sentence alone, so the card shows the desk's gift
+  // and not a wallet. Its reward coins are asked for behind the request, for the next poll.
   const deskFields = (mint: string): Pick<CardCreatorFee, "deskLine" | "deskRewards"> => {
-    const desk = resolveOtcDeskFee(mint, walletsOf.get(mint), roster);
-    return { deskLine: desk?.line ?? null, deskRewards: desk?.rewards ?? null };
+    const wallets = walletsOf.get(mint);
+    const desk = resolveOtcDeskFee(mint, wallets, roster);
+    if (desk) return { deskLine: desk.line, deskRewards: desk.rewards };
+    if (!paysOtcDesks(wallets)) return { deskLine: null, deskRewards: null };
+    const kept = keptOtcDeskFeeForMint(mint);
+    if (kept) return { deskLine: kept.line, deskRewards: kept.rewards };
+    if (kept === undefined) void otcDeskFeeForMint(mint).catch(() => null);
+    return { deskLine: OTC_DESKS_LINE, deskRewards: null };
   };
   for (const r of rows) {
     if (!r.feeDestination) continue;

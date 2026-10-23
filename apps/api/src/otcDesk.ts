@@ -352,6 +352,17 @@ export async function otcDeskFeeForMint(
 }
 
 /**
+ * `mint`'s one-coin answer when one is already kept: the desk row, or null for a coin the host
+ * does not list. Undefined when nothing fresh is kept. Never asks the host: a feed reads this,
+ * and starts otcDeskFeeForMint behind the request for the next poll.
+ */
+export function keptOtcDeskFeeForMint(mint: string, now = Date.now()): OtcDeskFee | null | undefined {
+  const kept = singles.get(mint);
+  if (!kept || !singleFresh(kept, now)) return undefined;
+  return kept.fee === "failed" ? undefined : kept.fee;
+}
+
+/**
  * The roster as otcDeskRoster answers it, with `mint`'s own row added when the sweep did not
  * reach it and the host's one-coin answer has it (otcDeskFeeForMint). Only with `wait`: the
  * paths that hold for one coin (the token page, a lookup's card). A feed never asks per coin.
