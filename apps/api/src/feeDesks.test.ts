@@ -4,6 +4,8 @@ import {
   feeDeskFromOtcCoin,
   feeDeskLineFromOtcCoin,
   feeDesksFromOtcRoster,
+  OTC_DESKS_FEE_WALLET,
+  paysOtcDesks,
   resolveOtcDeskFee,
 } from "./feeDesks.js";
 
@@ -206,5 +208,13 @@ describe("feeDesksFromOtcRoster", () => {
         { label: "TSLAx", mint: THIRD },
       ],
     });
+  });
+});
+
+describe("paysOtcDesks (user report 2026-10-23)", () => {
+  it("knows OTC Desks' own fee wallet", () => {
+    expect(paysOtcDesks([OTC_DESKS_FEE_WALLET])).toBe(true);
+    expect(paysOtcDesks(["8PQxd6VmfGPMyg8WPnfkT9jUTmtE7UsnDmvBKXeAVP9z"])).toBe(false);
+    expect(paysOtcDesks(null)).toBe(false);
   });
 });

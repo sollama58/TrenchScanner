@@ -158,3 +158,16 @@ describe("named fee wallets and KOL pictures (user ask 2026-10-23)", () => {
     expect(renderToStaticMarkup(<FeeBadge fee={one} />)).not.toContain("fee-kol");
   });
 });
+
+describe("OTC Desks coins past the roster sweep (user report 2026-10-23)", () => {
+  it("keeps the gift and names OTC Desks when only the desk sentence is known", () => {
+    const fee = {
+      destination: "wallet",
+      summary: null,
+      deskLine: "Creator fees go to OTC Desks, which pays holder rewards.",
+      recipients: [{ label: "2k5h…pP5y", bps: 10000, name: "OTC Desks" }],
+    };
+    expect(feeBadge(fee)?.kind).toBe("rewards");
+    expect(creatorRewardFigure(fee).value).toBe("OTC Desks");
+  });
+});

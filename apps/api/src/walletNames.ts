@@ -7,6 +7,7 @@ import {
   withoutHandle,
   type HeliusIdentity,
 } from "@trenchscanner/core";
+import { OTC_DESKS_FEE_WALLET } from "./feeDesks.js";
 import type { FeeWalletName } from "./feeRecipients.js";
 import {
   prismaIdentityStore,
@@ -162,6 +163,10 @@ export async function feeWalletNames(wallets: readonly string[]): Promise<Map<st
   ]);
   const out = new Map<string, FeeWalletName>();
   for (const w of unique) {
+    if (w === OTC_DESKS_FEE_WALLET) {
+      out.set(w, { name: "OTC Desks" });
+      continue;
+    }
     const kol = kols.get(w);
     const name = pickWalletName({
       kol: kol?.main ? null : kol?.name,

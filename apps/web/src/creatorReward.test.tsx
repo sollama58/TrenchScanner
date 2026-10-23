@@ -70,7 +70,7 @@ describe("creator reward square", () => {
       ],
     };
     const fig = creatorRewardFigure(fee);
-    expect(fig.value).toBe("Wallet");
+    expect(fig.value).toBe("OTC Desks");
     expect(fig.detail).toContain("NVDAx");
     expect(fig.detail).toContain("TSLAx");
     expect(fig.title).toBe(deskLine ? feeBadge(fee)?.title : null);

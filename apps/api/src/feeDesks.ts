@@ -19,6 +19,22 @@
  */
 
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+/**
+ * OTC Desks' own creator-fee wallet (user report 2026-10-23). Every OTC Desks coin checked on
+ * chain that day, from the newest page of its roster back to page 4000 of 50,000+ coins, shares
+ * its fee 100% to this wallet. A coin paying it is an OTC Desks coin even when the roster sweep
+ * (the newest ~960 coins) has not reached it.
+ */
+export const OTC_DESKS_FEE_WALLET = "2k5hrzuykwyTbUe8L7UriYAQhr5hijNLgBvEB4B9pP5y";
+
+/** The tooltip sentence for an OTC Desks coin whose reward coins are not loaded yet. */
+export const OTC_DESKS_LINE = "Creator fees go to OTC Desks, which pays holder rewards.";
+
+/** True when a creator-fee wallet is OTC Desks' own. */
+export function paysOtcDesks(wallets: readonly string[] | null | undefined): boolean {
+  return (wallets ?? []).includes(OTC_DESKS_FEE_WALLET);
+}
 /** A reward ticker as the OTC roster prints it: NVDAx, OTC, $WIF. Not a sentence. */
 const REWARD_SYMBOL = /^\$?[A-Za-z][A-Za-z0-9]{0,19}$/;
 
