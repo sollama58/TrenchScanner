@@ -7,8 +7,14 @@ import {
   withoutHandle,
   type HeliusIdentity,
 } from "@trenchscanner/core";
-import type { IdentityUserKey, WalletIdentityReader } from "./walletIdentity.js";
-import { knownSideName, readKolRows } from "./kolRoster.js";
+import type { FeeWalletName } from "./feeRecipients.js";
+import {
+  prismaIdentityStore,
+  WALLET_IDENTITY_TTL_MS,
+  type IdentityUserKey,
+  type WalletIdentityReader,
+} from "./walletIdentity.js";
+import { knownSideName, readKolRows, type KolRow } from "./kolRoster.js";
 
 /**
  * The name a holder list shows for a wallet in place of its address (POST /wallets/names): a
@@ -136,4 +142,41 @@ export async function loadWalletNames(
       };
   }
   return { names, unread: ask.filter((w) => !identities.has(w)) };
+}
+
+const identityStore = prismaIdentityStore();
+
+/**
+ * The names TrenchScanner already has for creator-fee wallets (user ask 2026-10-23): the KOL
+ * roster with its pictures, cached Helius identities, and its own exchange and launchpad labels.
+ * Read only from the database: a feed never asks Helius. A failed read names nobody.
+ */
+export async function feeWalletNames(wallets: readonly string[]): Promise<Map<string, FeeWalletName>> {
+  const unique = [...new Set(wallets)];
+  if (unique.length === 0) return new Map();
+  const [kols, identities] = await Promise.all([
+    readKolRows(unique).catch(() => new Map<string, KolRow>()),
+    identityStore
+      .read(unique, new Date(Date.now() - WALLET_IDENTITY_TTL_MS))
+      .catch(() => new Map<string, { at: number; value: HeliusIdentity | null }>()),
+  ]);
+  const out = new Map<string, FeeWalletName>();
+  for (const w of unique) {
+    const kol = kols.get(w);
+    const name = pickWalletName({
+      kol: kol?.main ? null : kol?.name,
+      kolSide: kol?.main ? knownSideName(kol.main) : null,
+      identity: identities.get(w)?.value,
+      exchange: KNOWN_EXCHANGE_WALLETS.get(w),
+      platform: PLATFORM_WALLETS.get(w),
+    });
+    if (!name) continue;
+    const isKol = name.source === "kol" || name.source === "kol-side";
+    out.set(w, {
+      name: name.name,
+      ...(isKol ? { kol: true } : {}),
+      ...(isKol && kol?.avatar ? { avatar: kol.avatar } : {}),
+    });
+  }
+  return out;
 }

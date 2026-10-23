@@ -30,6 +30,7 @@ import {
 } from "./Icons";
 import { CardSearchButton } from "./CardSearchButton";
 import { DeskRewardTokens } from "./DeskRewardTokens";
+import { FeeKolAvatar, FeeWalletTip, kolPictures } from "./FeeWalletTip";
 import { DexInfoLabel } from "../dexInfoLabel";
 import { XLinkPreview } from "./XLinkPreview";
 import { useImagePreview } from "./ImagePreview";
@@ -1029,6 +1030,18 @@ export interface FeeRecipientShare {
   label: string;
   bps: number | null;
   charity?: boolean;
+  /** TrenchScanner's own name for the wallet: a KOL, an exchange, a known identity. */
+  name?: string;
+  /** A KOL's picture, as a path on the API. */
+  avatar?: string;
+  kol?: boolean;
+}
+
+/** "Cupsey (8PQx…VP9z)" when the wallet has a name we know, else its label. */
+function recipientText(recipient: FeeRecipientShare): string {
+  const label = recipient.label?.trim() ?? "";
+  const name = recipient.name?.trim();
+  return name && label && name !== label ? `${name} (${label})` : name || label;
 }
 
 const KEYCAPS = ["0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
@@ -1103,7 +1116,7 @@ export function feeRecipientCaption(
 ): string | null {
   if (!recipients?.length) return null;
   const parts = recipients.flatMap((recipient) => {
-    const label = recipient.label?.trim();
+    const label = recipientText(recipient);
     if (!label) return [];
     const pct = holderRewardTaxLabel(recipient.bps);
     return [pct ? `${label} ${pct}` : label];
@@ -1118,10 +1131,11 @@ export function feeRecipientSentence(
   const recipients = fee?.recipients;
   if (!recipients?.length) return null;
   const parts = recipients.flatMap((recipient) => {
-    const label = recipient.label?.trim();
+    const label = recipientText(recipient);
     if (!label) return [];
     const pct = holderRewardTaxLabel(recipient.bps);
-    return [pct ? `${label} (${pct})` : label];
+    if (!pct) return [label];
+    return [label.endsWith(")") ? `${label.slice(0, -1)}, ${pct})` : `${label} (${pct})`];
   });
   return parts.length ? `Creator fees go to ${joinFeeNames(parts)}.` : null;
 }
@@ -1200,6 +1214,28 @@ export function FeeBadge({
   ]
     .filter(Boolean)
     .join(" ");
+  if (fees.kind === "wallet") {
+    // A wallet fee (user ask 2026-10-23): the wallet icon, each KOL's picture beside it, and a
+    // styled tooltip naming every wallet we know, with its address and share.
+    const kols = kolPictures(fee?.recipients).slice(0, 3);
+    return (
+      <FeeWalletTip
+        recipients={fee?.recipients}
+        fallback={fees.title}
+        className={`fee-badge fee-wallet${kols.length ? " has-kols" : ""}${className ? ` ${className}` : ""}`}
+      >
+        {word && <span className="fee-word">FEES</span>}
+        <fees.Icon size={icon} />
+        {kols.length > 0 && (
+          <span className="fee-kols" aria-hidden="true">
+            {kols.map((r, i) => (
+              <FeeKolAvatar key={`${r.label}-${i}`} recipient={r} px={icon + 2} />
+            ))}
+          </span>
+        )}
+      </FeeWalletTip>
+    );
+  }
   return (
     <span
       className={`fee-badge fee-${fees.kind}${fees.tax ? " has-tax" : ""}${fees.deskRewards ? " has-desk-rewards" : fees.caption ? " has-caption" : ""}${className ? ` ${className}` : ""}`}

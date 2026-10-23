@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { feeRecipientsFromAnalysis, mergeCharityShares } from "./feeRecipients.js";
+import {
+  cardFeeRecipients,
+  feeRecipientsFromAnalysis,
+  mergeCharityShares,
+  withFeeWalletNames,
+} from "./feeRecipients.js";
 
 const CHARITY = "CYoJ1Hs3Ldk7aa1wpZQ4KfqVQy9AzB9mT3x4Q8qWgyxC";
 const CREATOR = "8PQxd6VmfGPMyg8WPnfkT9jUTmtE7UsnDmvBKXeAVP9z";
@@ -82,6 +87,28 @@ describe("mergeCharityShares", () => {
     ).toEqual([
       { label: "Red Cross", bps: 6000, charity: true },
       { label: "Unicef", bps: 4000, charity: true },
+    ]);
+  });
+});
+
+describe("withFeeWalletNames (user ask 2026-10-23)", () => {
+  it("names known wallets and carries a KOL's picture, leaving charities and named rows alone", () => {
+    const chain = feeRecipientsFromAnalysis([
+      { address: CREATOR, share_bps: 7000, kind: "wallet" },
+      { address: CHARITY, share_bps: 2000, kind: "charity" },
+      { address: OTHER, share_bps: 1000, kind: "wallet" },
+    ]);
+    const named = withFeeWalletNames(
+      chain,
+      new Map([
+        [CREATOR, { name: "Cupsey", avatar: "/kol-avatars/cupseyy", kol: true }],
+        [CHARITY, { name: "Not a charity name" }],
+      ]),
+    );
+    expect(cardFeeRecipients(named)).toEqual([
+      { label: "8PQx…VP9z", bps: 7000, name: "Cupsey", avatar: "/kol-avatars/cupseyy", kol: true },
+      { label: "CYoJ…gyxC", bps: 2000, charity: true },
+      { label: "4NVt…5fG7", bps: 1000 },
     ]);
   });
 });

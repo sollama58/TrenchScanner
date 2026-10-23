@@ -128,3 +128,33 @@ describe("feeBadge", () => {
     );
   });
 });
+
+describe("named fee wallets and KOL pictures (user ask 2026-10-23)", () => {
+  const fee = {
+    destination: "split",
+    summary: null,
+    recipients: [
+      { label: "8PQx…VP9z", bps: 7000, name: "Cupsey", avatar: "/kol-avatars/cupseyy?v=1", kol: true },
+      { label: "AbCd…wxyz", bps: 3000 },
+    ],
+  };
+
+  it("puts the KOL's picture beside the wallet icon and their name first in the tooltip text", () => {
+    const html = renderToStaticMarkup(<FeeBadge fee={fee} word />);
+    expect(html).toContain("fee-kol");
+    expect(html).toContain("/kol-avatars/cupseyy?v=1");
+    expect(html).not.toContain("fee-caption");
+    expect(feeBadge(fee)?.title).toBe("Creator fees go to Cupsey (8PQx…VP9z, 70%) and AbCd…wxyz (30%).");
+    expect(creatorRewardFigure(fee).detail).toBe("Cupsey (8PQx…VP9z) 70% · AbCd…wxyz 30%");
+  });
+
+  it("shows one named wallet's name in the Pro square", () => {
+    const one = {
+      destination: "wallet",
+      summary: null,
+      recipients: [{ label: "8PQx…VP9z", bps: 10000, name: "Binance 2" }],
+    };
+    expect(creatorRewardFigure(one).value).toBe("Binance 2");
+    expect(renderToStaticMarkup(<FeeBadge fee={one} />)).not.toContain("fee-kol");
+  });
+});

@@ -43,6 +43,7 @@ import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
 import { CreatorFeeRich } from "./FeeRewards";
 import { cardWithOtcDesk, creatorRewardFigure } from "../creatorReward";
+import { FeeKolAvatar, FeeWalletTip, kolPictures } from "./FeeWalletTip";
 import { DeskRewardTokens } from "./DeskRewardTokens";
 import { QUICK_LINK_SITES, pumpFunHref, setAppearance, useAppearance } from "../appearance";
 import { useIsAdmin } from "../session";
@@ -75,6 +76,7 @@ import {
   BlockZeroTile,
   WalletStat,
   ageNow,
+  walletFee,
 } from "./AlertCard";
 import { ChartEventsPicker } from "./ChartEventsPicker";
 import { CHART_MARKS_SECTION, WalletMarksPicker } from "./WalletMarksPicker";
@@ -1213,9 +1215,25 @@ function TokenBody({
           </>
         ) : (
           <>
-            <span className={reward.empty ? "num none" : "num tm-fig-clip"} title={reward.title}>
-              {reward.value}
-            </span>
+            {walletFee(detailCard.token.creatorFee) ? (
+              // A wallet fee (user ask 2026-10-23): each KOL's picture, and the styled tooltip.
+              <FeeWalletTip
+                recipients={detailCard.token.creatorFee?.recipients}
+                fallback={reward.title}
+                className="tm-fig-wallet"
+              >
+                {kolPictures(detailCard.token.creatorFee?.recipients)
+                  .slice(0, 3)
+                  .map((r, i) => (
+                    <FeeKolAvatar key={`${r.label}-${i}`} recipient={r} px={22} />
+                  ))}
+                <span className="num tm-fig-clip">{reward.value}</span>
+              </FeeWalletTip>
+            ) : (
+              <span className={reward.empty ? "num none" : "num tm-fig-clip"} title={reward.title}>
+                {reward.value}
+              </span>
+            )}
             {reward.detail && <small className="num muted">{reward.detail}</small>}
           </>
         )}
