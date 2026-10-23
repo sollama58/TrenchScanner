@@ -2280,15 +2280,17 @@ export class HeliusClient {
    * (apps/worker/src/jobs/tradeTapeJob.ts). getTransactionsForAddress on the mint, failed ones
    * filtered out server-side, up to 100 a page for 10 credits, from `paginationToken` when given.
    * `untilBlockTime` (unix seconds) asks the server to stop there; the caller still filters by time,
-   * so a server that ignores it costs pages, not correctness. `newest`: the newest page instead,
-   * newest first (the live tape before a call, apps/worker/src/jobs/liveTape.ts). Helius-only:
-   * "unsupported" elsewhere.
+   * so a server that ignores it costs pages, not correctness. `fromBlockTime` (unix seconds) starts
+   * the read there instead of at the launch (the chart's chain fill, candleChainFill.ts). `newest`:
+   * the newest page instead, newest first (the live tape before a call,
+   * apps/worker/src/jobs/liveTape.ts). Helius-only: "unsupported" elsewhere.
    */
   async getMintTransactionsPage(
     mint: string,
     opts: {
       paginationToken?: string;
       untilBlockTime?: number;
+      fromBlockTime?: number;
       newest?: boolean;
     } = {},
   ): Promise<
@@ -2312,7 +2314,14 @@ export class HeliusClient {
               maxSupportedTransactionVersion: MAX_TRANSACTION_VERSION,
               filters: {
                 status: "succeeded",
-                ...(opts.untilBlockTime !== undefined ? { blockTime: { lte: opts.untilBlockTime } } : {}),
+                ...(opts.untilBlockTime !== undefined || opts.fromBlockTime !== undefined
+                  ? {
+                      blockTime: {
+                        ...(opts.fromBlockTime !== undefined ? { gte: opts.fromBlockTime } : {}),
+                        ...(opts.untilBlockTime !== undefined ? { lte: opts.untilBlockTime } : {}),
+                      },
+                    }
+                  : {}),
               },
               ...(opts.paginationToken ? { paginationToken: opts.paginationToken } : {}),
             },
