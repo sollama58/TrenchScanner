@@ -27,7 +27,7 @@ const store = await import("./watchlist");
 const { WatchlistPanel } = await import("./components/WatchlistPanel");
 const { WatchStar } = await import("./components/WatchStar");
 const { rowsThatFit } = await import("./components/WatchlistPanel");
-const { WatchlistChips, chipsThatFit } = await import("./components/WatchlistChips");
+const { WatchlistChips } = await import("./components/WatchlistChips");
 const { WatchlistManager } = await import("./components/WatchlistManager");
 
 const item = (tokenId: string, over: Partial<import("./watchlist").WatchlistItem> = {}) => ({
@@ -232,21 +232,24 @@ describe("fitting", () => {
     expect(rowsThatFit(10, 20)).toBe(1);
   });
 
-  it("fits chips on one line before the +N button", () => {
-    expect(chipsThatFit([80, 80, 80], 400, 30)).toBe(3);
-    expect(chipsThatFit([80, 80, 80], 210, 30)).toBe(2);
-    expect(chipsThatFit([300], 100, 30)).toBe(1);
-    expect(chipsThatFit([], 100, 30)).toBe(0);
-  });
-
   it("renders chips with ticker, market cap and 24h change", async () => {
     answer = () => ({ cap: 10, items: [item("pepe", { priceChange24hPct: 33 })] });
     await store.loadWatchlist();
     const html = renderToStaticMarkup(<WatchlistChips onMore={() => undefined} />);
+    expect(html).toContain('class="mkt-mini-chip wl-chip"');
     expect(html).toContain("$PEPE");
     expect(html).toContain("$50.0K");
     expect(html).toContain('class="num wl-chip-chg up"');
     expect(html).toContain('aria-label="Open your watchlist"');
+  });
+
+  it("counts the chips left out by max on its +N", async () => {
+    answer = () => ({ cap: 10, items: [item("a"), item("b"), item("c")] });
+    await store.loadWatchlist();
+    const html = renderToStaticMarkup(<WatchlistChips max={1} onMore={() => undefined} />);
+    expect(html).toContain("$A");
+    expect(html).not.toContain("$B");
+    expect(html).toContain('aria-label="2 more watched tokens"');
   });
 
   it("renders the manager's rows and meter", async () => {
