@@ -67,23 +67,18 @@ function panel(
 }
 
 describe("signed-out landing", () => {
-  it("shows the product and a labeled example before any feed answer", () => {
+  it("shows no made-up card before any feed answer", () => {
     const html = renderToStaticMarkup(
       <LandingShowcase now={now} best={{ data: null, error: null }} latest={{ data: null, error: null }} />,
     );
     expect(html).toContain("What an alert looks like");
-    expect(html).toContain("Made-up coin");
-    expect(html).toContain("Not a live alert");
-    expect(html).toContain("Example Coin");
-    expect(html).not.toContain("stat-score");
-    expect(html).not.toContain("KOL bundled");
-    expect(html).toContain("Checking the last 24 hours for a real alert");
-    expect(html).not.toContain("trade.padre.gg");
-    expect(html).not.toContain("https://x.com/example");
-    expect(html).not.toContain("https://example.com");
+    expect(html).not.toContain("Made-up coin");
+    expect(html).not.toContain("Example Coin");
+    expect(html).toContain("Checking the last 24 hours for a real alert.");
+    expect(html).not.toContain("is an example");
   });
 
-  it("keeps the example when a real best alert is shown beside it", () => {
+  it("shows the best alert alone, in the default card", () => {
     const html = renderToStaticMarkup(
       <LandingShowcase
         now={now}
@@ -91,11 +86,13 @@ describe("signed-out landing", () => {
         latest={{ data: { matches: [] }, error: null }}
       />,
     );
-    expect(html).toContain("Example Coin");
-    expect(html).toContain("Made-up coin");
+    expect(html).not.toContain("Made-up coin");
     expect(html).toContain("Best model alert of the last 24 hours");
     expect(html).toContain("LIVECOIN");
-    expect(html).not.toContain("The card above is an example.");
+    expect(html.match(/class="card[ "]/g)?.length ?? 0).toBe(1);
+    expect(html).not.toContain("stat-score");
+    expect(html).not.toContain("KOL bundled");
+    expect(html).not.toContain("trade.padre.gg");
   });
 
   it("labels a latest-alert fallback as a real delayed alert", () => {
@@ -108,10 +105,9 @@ describe("signed-out landing", () => {
     );
     expect(html).toContain("Latest alert, shown 5 minutes late");
     expect(html).toContain("LATEST");
-    expect(html).toContain("Example Coin");
   });
 
-  it("says the feed is empty without dropping the example", () => {
+  it("says the feed is empty", () => {
     const html = renderToStaticMarkup(
       <LandingShowcase
         now={now}
@@ -119,12 +115,12 @@ describe("signed-out landing", () => {
         latest={{ data: { matches: [] }, error: null }}
       />,
     );
-    expect(html).toContain("Nothing to show from the guest feed right now");
-    expect(html).toContain("The card above is an example.");
+    expect(html).toContain("Nothing to show from the guest feed right now.");
+    expect(html).not.toContain("is an example");
     expect(html).not.toContain("Best model alert of the last");
   });
 
-  it("says the feed didn't answer, and still shows the example", () => {
+  it("says the feed didn't answer", () => {
     const html = renderToStaticMarkup(
       <LandingShowcase
         now={now}
@@ -133,8 +129,7 @@ describe("signed-out landing", () => {
       />,
     );
     expect(html).toContain("The live feed didn");
-    expect(html).toContain("not a recent alert");
-    expect(html).toContain("Example Coin");
+    expect(html).toContain("Try again in a minute.");
   });
 
   it("waits for the latest alert when the best window is empty", () => {
@@ -222,17 +217,21 @@ describe("sign-in panel", () => {
 });
 
 describe("SignIn page", () => {
-  it("renders the landing, the example, and the wallet search together", () => {
+  it("renders the landing and the wallet search together, with no made-up card", () => {
     const html = renderToStaticMarkup(<SignIn onSignedIn={() => {}} onGuest={() => {}} />);
-    expect(html).toContain("A trading terminal for Solana tokens.");
+    expect(html).toContain("A trading app for the average Joe.");
+    expect(html).toContain("THIS IS FINE");
     expect(html).toContain("Screen a Solana token");
-    expect(html).toContain("Burn it for access. A separate burn buys Burn Credits");
-    expect(html).toContain("250 largest holders, and a wallet an admin grants");
+    expect(html).toContain("Burn it for access.");
+    expect(html).toContain("The 250 largest holders get Pro Mode");
     expect(html).toContain("no TrenchScanner fee");
+    expect(html).not.toContain("graded in public");
+    expect(html).not.toContain("a wallet an admin grants");
+    expect(html).not.toContain("Burn Credits");
     expect(html).not.toContain("Pump.fun alerts");
     expect(html).not.toContain("not a live call");
-    expect(html).toContain("Example Coin");
-    expect(html).toContain("Made-up coin");
+    expect(html).not.toContain("Example Coin");
+    expect(html).not.toContain("Made-up coin");
     expect(html).toContain("Looking for wallets in this browser");
     expect(html).toContain("Continue as guest");
   });

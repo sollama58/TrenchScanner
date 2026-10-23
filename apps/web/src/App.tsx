@@ -472,7 +472,7 @@ export function App() {
           <a className="brand" href="#" onClick={() => goTo("live")}>
             <LogoMark />
             <span className="brand-name">
-              Trench<span>Scanner</span>
+              Trench<span>Scanner</span> <small className="brand-by">by ASDFASDFA</small>
             </span>
           </a>
           {guest && (
