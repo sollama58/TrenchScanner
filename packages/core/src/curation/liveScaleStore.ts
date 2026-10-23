@@ -5,6 +5,7 @@ import { LiveRescorer, type LiveSeatModel, type RescoreFeatures } from "./liveRe
 import { CONTESTANTS } from "./contestants.js";
 import { gatesById, loadModelGates } from "./modelGateStore.js";
 import { LIVE_SCORE_WINDOW_HOURS, type LiveScales } from "./liveScale.js";
+import { maskTokenSageXReuseLoss } from "./features.js";
 import { buildRankRates, RANK_RATE_WINDOW_HOURS, type RankRateBand } from "./liveRankRates.js";
 
 /** Rows read per feature query: a retrain re-reads the whole window's feature vectors once. */
@@ -25,9 +26,15 @@ export function resetLiveRescoreCache(): void {
  * The seats' live scales as of now (curation/liveScale.ts): the last LIVE_SCORE_WINDOW_HOURS of
  * decision moments, each scored by the model each seat calls on now (curation/liveRescore.ts),
  * each slot's counted from its current lane's handover. The worker decides on these and the API
- * explains its cutoffs with the same read.
+ * explains its cutoffs with the same read. A model with no stored score on a moment scores it with
+ * TokenSage's X-reuse and wave counts read as missing inside their lost window (`xReuseRestoredAt`
+ * is TOKENSAGE_XREUSE_RESTORED_AT), as the live decision read them.
  */
-export async function loadLiveScales(highConvictionRank: number, now = new Date()): Promise<LiveScales> {
+export async function loadLiveScales(
+  highConvictionRank: number,
+  xReuseRestoredAt: Date | null,
+  now = new Date(),
+): Promise<LiveScales> {
   const [rows, lanes] = await Promise.all([
     prisma.candidateOutcome.findMany({
       where: {
@@ -56,13 +63,17 @@ export async function loadLiveScales(highConvictionRank: number, now = new Date(
   for (let i = 0; i < missing.length; i += FEATURE_BATCH) {
     const batch = await prisma.candidateOutcome.findMany({
       where: { id: { in: missing.slice(i, i + FEATURE_BATCH) } },
-      select: { id: true, features: true, anchorPriceUsd: true, anchorMcapUsd: true },
+      select: { id: true, anchorAt: true, features: true, anchorPriceUsd: true, anchorMcapUsd: true },
     });
     for (const row of batch) {
       rescorer.fill(
         row.id,
         {
-          features: (row.features ?? {}) as RescoreFeatures["features"],
+          features: maskTokenSageXReuseLoss(
+            row.anchorAt,
+            (row.features ?? {}) as RescoreFeatures["features"],
+            xReuseRestoredAt,
+          ),
           anchorPriceUsd: row.anchorPriceUsd,
           anchorMcapUsd: row.anchorMcapUsd,
         },

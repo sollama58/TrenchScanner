@@ -1062,6 +1062,29 @@ const envSchema = z.object({
   TOKENSAGE_MAX_BATCHES_PER_CYCLE: z.coerce.number().int().min(0).default(4),
   TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES: z.coerce.number().min(0).default(10),
   TOKENSAGE_POLL_SECONDS: z.coerce.number().min(0).default(8),
+  // When TokenSage's X-reuse and referent-wave counts are whole again (ISO time, e.g.
+  // "2026-10-24T12:00:00Z"). From TokenSage #81 (TOKENSAGE_XREUSE_LOST_FROM in
+  // curation/features.ts) our reads stopped feeding them and they read about 0; TokenSage #85
+  // fixes it once TRUSTED_HINT_KEYS is set on TokenSage's worker. Until this is set, every reading
+  // since #81 of those inputs is read as missing by training, the live scales and the live
+  // decision; the rows keep what they stored. Set it to the time TRUSTED_HINT_KEYS went live
+  // plus a day: the 24 h wave counts only fill back in once the day before holds our reads again.
+  // Set it on the worker, the trainer and the api alike, or they read the same row differently.
+  TOKENSAGE_XREUSE_RESTORED_AT: z
+    .string()
+    .optional()
+    .transform((v, ctx) => {
+      if (v === undefined) return null;
+      const at = new Date(v.trim());
+      if (Number.isNaN(at.getTime())) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "must be an ISO time, e.g. 2026-10-24T12:00:00Z",
+        });
+        return z.NEVER;
+      }
+      return at;
+    }),
   // The hard daily cap on everything the AI spends (curation/aiSpend.ts): the reviewer, the text
   // reads and the playbook evolution share AI_DAILY_BUDGET_USD per UTC day. Every call reserves
   // its estimated cost before it runs and is trued up to the real cost afterwards; once the next

@@ -39,6 +39,10 @@
 #         it decides whether the Narrative model seat is on the roster in each process
 #         (packages/core/src/config/env.ts), so a flag set on the worker alone has the scanner
 #         wait on a seat the trainer never trains.
+#   - TOKENSAGE_XREUSE_RESTORED_AT (api, worker AND trainer)  leave empty until TokenSage's X-reuse
+#         and wave counts are whole again (TokenSage #85 with TRUSTED_HINT_KEYS set), then the ISO
+#         time that went live plus a day. Until then the models read those inputs as missing on
+#         rows and decisions since TokenSage #81 (TOKENSAGE_XREUSE_LOST_FROM, curation/features.ts).
 #   - TOKENSAGE_API_URL, TOKENSAGE_MONITOR_KEY (api)  optional: TokenSage's read-only MONITOR_KEY
 #         Admin > API usage then shows TokenSage's own outside calls and Helius credits next to
 #         ours (apps/api/src/routes/adminUsage.ts). Unset, that panel says so.
@@ -202,6 +206,12 @@ services:
       - key: TOKENSAGE_API_URL
         sync: false
       - key: TOKENSAGE_MONITOR_KEY
+        sync: false
+      # Empty until TokenSage's X-reuse and wave counts are whole again (TokenSage #85 with
+      # TRUSTED_HINT_KEYS set on its worker): then the ISO time that went live plus a day. Until set,
+      # the model explanations read those inputs as missing since #81, as the worker scores them.
+      # Set it the same on the api, worker and trainer (packages/core/src/config/env.ts).
+      - key: TOKENSAGE_XREUSE_RESTORED_AT
         sync: false
       - key: TOKENSAGE_ADMIN_KEY
         sync: false
@@ -369,6 +379,12 @@ services:
       - key: TOKENSAGE_API_URL
         sync: false
       - key: TOKENSAGE_API_KEY
+        sync: false
+      # Empty until TokenSage's X-reuse and wave counts are whole again (TokenSage #85 with
+      # TRUSTED_HINT_KEYS set on its worker): then the ISO time that went live plus a day. Until set,
+      # the seats score those inputs as missing on live decisions since #81 (curatedAlerts.ts).
+      # Set it the same on the api, worker and trainer (packages/core/src/config/env.ts).
+      - key: TOKENSAGE_XREUSE_RESTORED_AT
         sync: false
       - key: HELIUS_API_KEY
         sync: false
@@ -638,6 +654,12 @@ services:
       - key: DEXSCREENER_REQUESTS_PER_MINUTE
         value: "60"
       - key: ANTHROPIC_API_KEY
+        sync: false
+      # Empty until TokenSage's X-reuse and wave counts are whole again (TokenSage #85 with
+      # TRUSTED_HINT_KEYS set on its worker): then the ISO time that went live plus a day. Until set,
+      # training reads those inputs as missing on every row since #81 (maskTokenSageXReuseLoss).
+      # Set it the same on the api, worker and trainer (packages/core/src/config/env.ts).
+      - key: TOKENSAGE_XREUSE_RESTORED_AT
         sync: false
       # Optional: the same CoinGecko key as on the api and worker. The nightly outcome sweep
       # (outcome-tracking) looks up thousands of mints on DexScreener, with GeckoTerminal behind it

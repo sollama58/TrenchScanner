@@ -118,6 +118,27 @@ describe("loadEnv", () => {
     resetEnvCacheForTests();
   });
 
+  it("reads TOKENSAGE_XREUSE_RESTORED_AT as a time, null while unset, and refuses one it can't read", () => {
+    resetEnvCacheForTests();
+    expect(loadEnv({ DATABASE_URL: "postgres://x" }).TOKENSAGE_XREUSE_RESTORED_AT).toBeNull();
+    resetEnvCacheForTests();
+    // Empty is unset, as for every other key.
+    expect(
+      loadEnv({ DATABASE_URL: "postgres://x", TOKENSAGE_XREUSE_RESTORED_AT: " " })
+        .TOKENSAGE_XREUSE_RESTORED_AT,
+    ).toBeNull();
+    resetEnvCacheForTests();
+    expect(
+      loadEnv({ DATABASE_URL: "postgres://x", TOKENSAGE_XREUSE_RESTORED_AT: " 2026-10-24T12:00:00Z " })
+        .TOKENSAGE_XREUSE_RESTORED_AT,
+    ).toEqual(new Date("2026-10-24T12:00:00Z"));
+    resetEnvCacheForTests();
+    expect(() => loadEnv({ DATABASE_URL: "postgres://x", TOKENSAGE_XREUSE_RESTORED_AT: "tomorrow" })).toThrow(
+      /TOKENSAGE_XREUSE_RESTORED_AT/,
+    );
+    resetEnvCacheForTests();
+  });
+
   it("seats the Narrative model on the TokenSage flag alone, so the trainer and the scanner agree", () => {
     resetEnvCacheForTests();
     const off = loadEnv({ DATABASE_URL: "postgres://x" }).CURATOR_CONTESTANTS;

@@ -630,6 +630,44 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     expect(alert.tier).toBe("high");
   });
 
+  it("scores TokenSage's X-reuse count as missing while it is lost, and banks what the read said", async () => {
+    // A seat that only cares whether nsXReuseCount is missing: sigmoid(5) missing, sigmoid(-5) present.
+    const n = CANDIDATE_FEATURE_NAMES.length;
+    const weights = new Array(2 * n).fill(0);
+    weights[n + CANDIDATE_FEATURE_NAMES.indexOf("nsXReuseCount")] = 10;
+    await activeModel("linear", CURATOR_MODEL_KIND, {
+      kind: CURATOR_MODEL_KIND,
+      featureNames: [...CANDIDATE_FEATURE_NAMES],
+      means: new Array(n).fill(0),
+      stdevs: new Array(n).fill(1),
+      weights,
+      bias: -5,
+      threshold: 0.5,
+    });
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-xreuse-lost` } });
+    // The post was read and TokenSage said nobody else links it: since #81, that 0 is the bug.
+    const narrative: NarrativeRead = { ...deepRead(), xRelation: "narrative_reference", xReuseCount: 0 };
+    const banked = async (restoredAt: Date | null): Promise<number> => {
+      resetCuratorModelCache();
+      const scored = curatableFixture(token.mintAddress, { narrative });
+      const sample = await recordCandidateSample(token.id, scored, env);
+      const cycle = newCuratedCycle();
+      await collectCuratedContender(cycle, token, scored, sample, {
+        ...env,
+        TOKENSAGE_XREUSE_RESTORED_AT: restoredAt,
+      });
+      const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: sample!.id } });
+      // The row keeps the reading; only the score reads it as missing.
+      expect((row.features as Record<string, unknown>).nsXReuseCount).toBe(0);
+      await prisma.candidateOutcome.delete({ where: { id: sample!.id } });
+      return (row.seatScores as Record<string, number>).linear!;
+    };
+    // Unset: the window is open, so a decision now reads the count as missing.
+    expect(await banked(null)).toBeCloseTo(0.9933, 3);
+    // Restored a minute ago: the count is real again.
+    expect(await banked(new Date(Date.now() - 60_000))).toBeCloseTo(0.0067, 3);
+  });
+
   /**
    * A day of earlier decision moments the seats' current models score `score(i)`, newest first.
    * Their stored scores are an older model's (0.5 each): the live scales re-score the moments with
