@@ -48,6 +48,66 @@ export function olderCandles(
 }
 
 /**
+ * Bars of slack under CANDLE_PAGE before the store stands in for Pump.fun's 5-minute page: the
+ * count of the page's bars after the minute page's first is read off the minute candles, and the
+ * cached page could be up to its TTL (10 minutes) behind; near a full page Pump.fun is asked.
+ */
+const OLDER_STORE_SLACK_BARS = 12;
+
+/** A stored chunk, as storedOlderFives reads it (core's CandleChunkRow). */
+interface StoredChunk {
+  res: number;
+  source: string;
+  coverFrom: number;
+  coverTo: number;
+  bars: McapCandle[];
+}
+
+/**
+ * Exported for tests. Pump.fun's 5-minute candles before the minute candles' first, from the
+ * candle store instead of another read of the 5-minute page (price-market audit 2026-10-23, 4a-3):
+ * the API and the backfill save that page's closed chunks (source pumpfun, res 300), so the same
+ * bars are there once the store reaches back that far. Only when the answer is the page's own:
+ * the stored chunks cover the coin from its launch's 5 minutes to the end of the bucket the minute
+ * candles start in without a break, and the page (the newest CANDLE_PAGE 5-minute candles with a
+ * trade) would have reached back to the launch too, so it would hold the same bars and no more.
+ * Null otherwise: then Pump.fun's page is read, as before. Prices to float32 precision (packBars).
+ */
+export function storedOlderFives(
+  chunks: readonly StoredChunk[],
+  minutes: readonly McapCandle[],
+  launchAt: number,
+): McapCandle[] | null {
+  const first = minutes[0]?.t;
+  if (first === undefined) return null;
+  const own = chunks
+    .filter((c) => c.res === 300 && c.source === "pumpfun")
+    .sort((a, b) => a.coverFrom - b.coverFrom);
+  if (own.length === 0 || own[0]!.coverFrom > Math.floor(launchAt / OLDER_CANDLE_MS) * OLDER_CANDLE_MS)
+    return null;
+  // The end of the last bucket that starts before the first minute, which olderCandles keeps whole.
+  const needTo = Math.floor((first - 1) / OLDER_CANDLE_MS) * OLDER_CANDLE_MS + OLDER_CANDLE_MS;
+  let reach = own[0]!.coverFrom;
+  for (const c of own) {
+    if (c.coverFrom > reach) return null;
+    reach = Math.max(reach, c.coverTo);
+    if (reach >= needTo) break;
+  }
+  if (reach < needTo) return null;
+  const bySlot = new Map(
+    own
+      .flatMap((c) => c.bars)
+      .filter((k) => k.t < first)
+      .map((k) => [k.t, k]),
+  );
+  // The page's bars from needTo on: one per 5 minutes with a trade, as the minute candles show them.
+  const after = new Set(minutes.filter((k) => k.t >= needTo).map((k) => Math.floor(k.t / OLDER_CANDLE_MS)))
+    .size;
+  if (bySlot.size + after > CANDLE_PAGE - OLDER_STORE_SLACK_BARS) return null;
+  return [...bySlot.values()].sort((a, b) => a.t - b.t);
+}
+
+/**
  * Exported for tests. Pump.fun's one-minute USD candles as market-cap candles, oldest first;
  * candles with a missing or non-positive price are dropped. Prices arrive as decimal strings.
  */
@@ -168,8 +228,13 @@ export interface CandleCacheOptions {
   callsPerMinute?: number;
   /** A budget shared with the other chart caches, checked as well as this cache's own. */
   shared?: CallBudget;
-  /** Coins kept; the least recently read one goes first. */
+  /** Coins kept; the least recently read one goes first. Unused with `entries` (the store's own). */
   maxEntries?: number;
+  /**
+   * The coins' answers, shared with every other cache given the same store (CandleEntries): one
+   * Pump.fun page read for whichever of them asks first. Each cache keeps its own TTL and budgets.
+   */
+  entries?: CandleEntries;
   /**
    * How long a reader of an expired answer waits on its refresh before taking the last good answer
    * (marked stale) instead, so a slow Pump.fun never holds a chart for its whole timeout.
@@ -192,10 +257,45 @@ const FAILED_RETRY_MS = 5_000;
 interface CandleEntry {
   /** The last good answer (null: Pump.fun has no such coin) and when it was read; unset before one. */
   good?: { value: McapCandle[] | null; at: number };
-  expiresAt: number;
   /** No refresh before this: a failure's backoff. */
   retryAt: number;
   refreshing: Promise<void> | null;
+}
+
+/**
+ * One interval's answers per coin, which several CandleCaches can share (price-market audit
+ * 2026-10-23, 4a-2): the token chart and GET /tokens/:mint/candles each kept their own cache of the
+ * same Pump.fun page, as did the first-minutes and fine 1-second views, so a coin open in both read
+ * the same page twice. Least recently read first, `maxEntries` at most.
+ */
+export class CandleEntries {
+  private readonly map = new Map<string, CandleEntry>();
+
+  constructor(readonly maxEntries = 300) {}
+
+  /** The coin's entry, made when it has none, and marked most recently read. */
+  touch(mint: string): CandleEntry {
+    let entry = this.map.get(mint);
+    if (entry) {
+      // Re-inserted so the Map's order stays least-recently-read first.
+      this.map.delete(mint);
+      this.map.set(mint, entry);
+      return entry;
+    }
+    entry = { retryAt: 0, refreshing: null };
+    this.map.set(mint, entry);
+    while (this.map.size > this.maxEntries) {
+      const oldest = this.map.keys().next().value;
+      if (oldest === undefined) break;
+      this.map.delete(oldest);
+    }
+    return entry;
+  }
+
+  /** The coin's entry without marking it read. */
+  peek(mint: string): CandleEntry | undefined {
+    return this.map.get(mint);
+  }
 }
 
 /**
@@ -210,11 +310,10 @@ interface CandleEntry {
  * never read gets null, and the routes fill that from the stream (streamCandles.ts).
  */
 export class CandleCache {
-  private readonly entries = new Map<string, CandleEntry>();
+  private readonly entries: CandleEntries;
   private readonly budget: CallBudget;
   private readonly shared: CallBudget | undefined;
   private readonly ttlMs: number;
-  private readonly maxEntries: number;
   private readonly refreshWaitMs: number;
   private readonly maxStaleMs: number;
   private readonly now: () => number;
@@ -227,7 +326,7 @@ export class CandleCache {
     this.now = opts.now ?? Date.now;
     this.budget = new CallBudget(opts.callsPerMinute ?? 60, this.now);
     this.shared = opts.shared;
-    this.maxEntries = opts.maxEntries ?? 300;
+    this.entries = opts.entries ?? new CandleEntries(opts.maxEntries ?? 300);
     this.refreshWaitMs = opts.refreshWaitMs ?? 2_000;
     this.maxStaleMs = opts.maxStaleMs ?? 15 * 60_000;
   }
@@ -244,17 +343,8 @@ export class CandleCache {
    */
   async read(mint: string): Promise<CandleRead> {
     const now = this.now();
-    let entry = this.entries.get(mint);
-    if (entry) {
-      // Re-inserted so the Map's order stays least-recently-read first.
-      this.entries.delete(mint);
-      this.entries.set(mint, entry);
-      if (entry.good && entry.expiresAt > now) return { candles: entry.good.value, stale: false };
-    } else {
-      entry = { expiresAt: 0, retryAt: 0, refreshing: null };
-      this.entries.set(mint, entry);
-      this.evict();
-    }
+    const entry = this.entries.touch(mint);
+    if (entry.good && this.fresh(entry.good, now)) return { candles: entry.good.value, stale: false };
     const refresh = this.refresh(mint, entry, now);
     if (refresh) await (entry.good ? within(refresh, this.refreshWaitMs) : refresh);
     return this.served(entry);
@@ -266,15 +356,20 @@ export class CandleCache {
    * can take an older answer.
    */
   peek(mint: string, maxStaleMs = this.maxStaleMs): CandleRead {
-    const entry = this.entries.get(mint);
+    const entry = this.entries.peek(mint);
     return entry ? this.served(entry, maxStaleMs) : { candles: null, stale: false };
+  }
+
+  /** Whether an answer is inside this cache's TTL (another cache sharing the store may have read it). */
+  private fresh(good: { at: number }, now: number): boolean {
+    return now - good.at < this.ttlMs;
   }
 
   private served(entry: CandleEntry, maxStaleMs = this.maxStaleMs): CandleRead {
     const good = entry.good;
     if (!good) return { candles: null, stale: false };
     const now = this.now();
-    if (entry.expiresAt > now) return { candles: good.value, stale: false };
+    if (this.fresh(good, now)) return { candles: good.value, stale: false };
     if (now - good.at > maxStaleMs) return { candles: null, stale: false };
     return { candles: good.value, stale: good.value !== null };
   }
@@ -296,7 +391,6 @@ export class CandleCache {
           return;
         }
         entry.good = { value, at };
-        entry.expiresAt = at + this.ttlMs;
       })
       .catch((err: unknown) => {
         logger.warn("candles failed", { mint, error: String(err) });
@@ -309,15 +403,18 @@ export class CandleCache {
     entry.refreshing = run;
     return run;
   }
-
-  private evict(): void {
-    while (this.entries.size > this.maxEntries) {
-      const oldest = this.entries.keys().next().value;
-      if (oldest === undefined) break;
-      this.entries.delete(oldest);
-    }
-  }
 }
+
+/**
+ * The process's Pump.fun pages per interval, shared by the token chart's caches (routes/tokens.ts)
+ * and GET /tokens/:mint/candles's (routes/candles.ts), and by the first-minutes and fine 1-second
+ * views. Each store holds what its caches held apart before, so none is evicted sooner.
+ */
+export const pumpFunPages = {
+  minute: new CandleEntries(600),
+  quarter: new CandleEntries(600),
+  second: new CandleEntries(200),
+};
 
 /** Resolves when `p` settles or after `ms`, whichever is first. */
 function within(p: Promise<unknown>, ms: number): Promise<void> {

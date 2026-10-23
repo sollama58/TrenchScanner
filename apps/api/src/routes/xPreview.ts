@@ -91,6 +91,10 @@ export async function registerXPreviewRoutes(app: FastifyInstance, opts: XPrevie
         })
         .catch((err: unknown) => {
           logger.warn("x picture read failed", { error: String(err) });
+          // Held as briefly as a failed preview (misc audit 2026-10-23, A6): every card showing
+          // the picture asked pbs.twimg.com again while it was failing. The 404 sent meanwhile
+          // is the one a failure answers anyway.
+          pictures.set(url, null, FAILED_TTL_MS);
           return null;
         })
         .finally(() => pictureFills.delete(url));

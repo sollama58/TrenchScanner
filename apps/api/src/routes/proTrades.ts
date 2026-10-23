@@ -19,6 +19,7 @@ import {
   tradeStats,
   type Position,
   type TradeStats,
+  liveUsdPrices,
 } from "../proTrades.js";
 import { sharedSolPrice } from "../solPrice.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
@@ -116,35 +117,17 @@ export async function registerProTradesRoutes(
     backupApiKey: env.JUPITER_API_KEY || undefined,
   });
   const askLivePrices = opts.livePricesUsd ?? ((mints: string[]) => jupiter.pricesUsd(mints));
-  const livePrices = new Map<string, { at: number; usd: number }>();
   /**
    * The held coins' prices now (user report 2026-10-19: the cards' Now and PnL were off). The
    * stored price is a scan's or the last viewer's tick, which can be hours old for a coin nobody
    * else watches; a held coin's card is priced from a live read instead, like the token page.
    * Empty when nothing could be read in time (the stored prices stand in), and off in tests.
    */
-  async function livePricesFor(mints: string[]): Promise<Map<string, number>> {
-    const now = Date.now();
-    const out = new Map<string, number>();
-    const due: string[] = [];
-    for (const m of mints) {
-      const hit = livePrices.get(m);
-      if (hit && now - hit.at < LIVE_PRICE_TTL_MS) out.set(m, hit.usd);
-      else due.push(m);
-    }
-    if (due.length === 0 || !(canRead || opts.livePricesUsd)) return out;
-    const read = await Promise.race([
-      askLivePrices(due).catch(() => null),
-      new Promise<null>((r) => setTimeout(() => r(null), LIVE_PRICE_WAIT_MS).unref?.()),
-    ]);
-    for (const [m, usd] of read ?? []) {
-      if (!(usd > 0)) continue;
-      out.set(m, usd);
-      livePrices.set(m, { at: now, usd });
-    }
-    if (livePrices.size > 5_000) livePrices.clear();
-    return out;
-  }
+  const livePricesFor = liveUsdPrices(askLivePrices, {
+    enabled: canRead || !!opts.livePricesUsd,
+    ttlMs: LIVE_PRICE_TTL_MS,
+    waitMs: LIVE_PRICE_WAIT_MS,
+  });
 
   /** The coin's scan, once per entry: a Utilities lookup without the credit. */
   async function scanEntry(_wallet: string, mint: string): Promise<void> {

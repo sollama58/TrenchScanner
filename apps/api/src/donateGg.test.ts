@@ -137,6 +137,26 @@ describe("donateConfigCharities", () => {
     expect(hits).toBe(2);
   });
 
+  it("shares one request between readers asking for the same config at once", async () => {
+    let hits = 0;
+    server = createServer((_req, res) => {
+      hits += 1;
+      res.setHeader("content-type", "application/json");
+      // Slow enough that the second reader asks while the first's request is out.
+      setTimeout(
+        () => res.end(JSON.stringify({ charities: [{ name: "Pandas International", weight: "1" }] })),
+        50,
+      );
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", () => resolve()));
+    const port = (server.address() as { port: number }).port;
+    process.env.DONATE_GG_BASE_URL = `http://127.0.0.1:${port}/api/v1`;
+    const [one, two] = await Promise.all([donateConfigCharities([CONFIG]), donateConfigCharities([CONFIG])]);
+    expect(hits).toBe(1);
+    expect(one.get(CONFIG)).toEqual([{ name: "Pandas International", bps: 10000 }]);
+    expect(two.get(CONFIG)).toEqual(one.get(CONFIG));
+  });
+
   it("does not throw when donate.gg is down", async () => {
     process.env.DONATE_GG_BASE_URL = "http://127.0.0.1:1/api/v1";
     expect((await donateConfigCharities([CONFIG], 500)).size).toBe(0);

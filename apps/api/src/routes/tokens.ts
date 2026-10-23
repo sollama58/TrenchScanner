@@ -18,9 +18,11 @@ import {
   Prisma,
   launchSupplyFactors,
   prisma,
+  readCandleChunks,
   RISKY_WALLET_SCORE,
   STONKS_FEE_WALLET,
   STONKS_FEE_WALLET_LABEL,
+  type CandleChunkRow,
   type DexScreenerClient,
   type Env,
   type HeliusClient,
@@ -54,12 +56,14 @@ import {
   CallBudget,
   CANDLE_PAGE,
   CandleCache,
+  CandleEntries,
   drawableCandles,
   FIRST_MINUTES_MS,
   KeyedCache,
   LastGood,
   OLDER_AFTER_MS,
   olderCandles,
+  storedOlderFives,
   firstMinutes,
   onSupply,
   type CandleFetcher,
@@ -70,6 +74,7 @@ import {
   type SavedTrade,
   parseLiveTrades,
   pumpFunCandleFetcher,
+  pumpFunPages,
   withLiveTrades,
   type MarkedWallet,
   type SideLabel,
@@ -314,10 +319,14 @@ const WALLETS_CACHE_MS = 60_000;
 export const CHART_CALLS_PER_MINUTE = 200;
 let chartBudget = new CallBudget(CHART_CALLS_PER_MINUTE);
 
-/** One per process: every reader of a coin shares its Pump.fun call and the call budget. */
+/**
+ * One per process: every reader of a coin shares its Pump.fun call and the call budget. Its answers
+ * are GET /tokens/:mint/candles's too (pumpFunPages), so a coin open in both reads one page.
+ */
 let candleCache = new CandleCache(storingFetcher(pumpFunCandleFetcher(), 60), {
   callsPerMinute: 80,
   shared: chartBudget,
+  entries: pumpFunPages.minute,
 });
 
 /**
@@ -329,24 +338,26 @@ let secondCache = new CandleCache(pumpFunCandleFetcher(undefined, "1s"), {
   ttlMs: 4_000,
   callsPerMinute: 60,
   shared: chartBudget,
-  maxEntries: 100,
+  entries: pumpFunPages.second,
 });
 let quarterCache = new CandleCache(storingFetcher(pumpFunCandleFetcher(undefined, "15s"), 15), {
   ttlMs: 60_000,
   callsPerMinute: 40,
   shared: chartBudget,
+  entries: pumpFunPages.quarter,
 });
 /**
  * The token chart's 1-second candles, on a budget of their own: every short view polls them, and
  * sharing the first-minutes one let a handful of open charts starve a brand-new launch's view.
  * Most open charts now take theirs from the stream (readTokenFine), so this mostly serves charts
- * opened a moment ago.
+ * opened a moment ago. The page itself is the first-minutes view's (pumpFunPages.second): a coin
+ * open in both read the same 1-second page twice (price-market audit 2026-10-23, 4a-2).
  */
 let fineSecondCache = new CandleCache(pumpFunCandleFetcher(undefined, "1s"), {
   ttlMs: 6_000,
   callsPerMinute: 60,
   shared: chartBudget,
-  maxEntries: 100,
+  entries: pumpFunPages.second,
 });
 
 /**
@@ -358,6 +369,12 @@ let olderCache = new CandleCache(storingFetcher(pumpFunCandleFetcher(undefined, 
   callsPerMinute: 20,
   shared: chartBudget,
 });
+/**
+ * The coin's stored Pump.fun 5-minute chunks, which stand in for olderCache's page once they hold
+ * all of it (storedOlderFives): kept as long as that page is, so a polling chart doesn't read the
+ * store every time. A failed read is held a few seconds, and the page is asked for meanwhile.
+ */
+const storedFives = new KeyedCache<CandleChunkRow[]>(10 * 60_000, 300, Date.now, 5_000);
 
 /** The live tail's ticks and Live trades' trades, which the chart's own candles are built from. */
 let streamFeeds: StreamFeeds = {
@@ -385,10 +402,13 @@ export function setCandleFetcherForTests(
 ): void {
   chartBudget = new CallBudget(CHART_CALLS_PER_MINUTE);
   candleCache = new CandleCache(fetcher, { shared: chartBudget });
-  secondCache = new CandleCache(secondsFetcher, { shared: chartBudget });
+  // The two 1-second views share their page, as in production.
+  const seconds = new CandleEntries(100);
+  secondCache = new CandleCache(secondsFetcher, { shared: chartBudget, entries: seconds });
   quarterCache = new CandleCache(secondsFetcher, { shared: chartBudget });
-  fineSecondCache = new CandleCache(secondsFetcher, { shared: chartBudget });
+  fineSecondCache = new CandleCache(secondsFetcher, { shared: chartBudget, entries: seconds });
   olderCache = new CandleCache(olderFetcher, { shared: chartBudget });
+  storedFives.clear();
 }
 
 /** Tests: what the chart's own candles are built from, instead of the live tail and Live trades. */
@@ -1203,17 +1223,9 @@ export async function readTokenChart(
   const fullPage = (pump.candles?.length ?? 0) >= CANDLE_PAGE;
   const fives =
     firstAt !== undefined && (fullPage || firstAt >= launchAt + OLDER_AFTER_MS)
-      ? await olderCache.read(mintAddress).catch((err: unknown) => {
-          logger.warn("chart part failed", { mint: mintAddress, part: "older", error: String(err) });
-          return null;
-        })
+      ? await olderFives(mintAddress, merged.candles!, launchAt)
       : null;
-  const older = olderCandles(
-    merged.candles,
-    fives?.candles ? onSupply(fives.candles, factor) : null,
-    launchAt,
-    fullPage,
-  );
+  const older = olderCandles(merged.candles, fives ? onSupply(fives, factor) : null, launchAt, fullPage);
   if (flagged.status === "fulfilled") {
     lastWallets.set(mintAddress, flagged.value);
     // Keeps the coin's saved marks 14 more days and fills in the ones nobody had it open for, from
@@ -1249,6 +1261,32 @@ export async function readTokenChart(
     }),
     partial,
   );
+}
+
+/**
+ * The 5-minute candles for TokenChart.older, on the launch billion: the candle store's when they
+ * are all of what Pump.fun's 5-minute page would answer (storedOlderFives; the backfill and the
+ * chart's own reads saved that page), so the page is read only for a coin the store doesn't hold
+ * yet (price-market audit 2026-10-23, 4a-3).
+ */
+async function olderFives(
+  mint: string,
+  minutes: McapCandle[],
+  launchAt: number,
+): Promise<McapCandle[] | null> {
+  const chunks = await storedFives
+    .get(mint, () => readCandleChunks(mint, 0, Date.now(), { res: 300, source: "pumpfun" }))
+    .catch((err: unknown) => {
+      logger.warn("chart part failed", { mint, part: "older store", error: String(err) });
+      return [];
+    });
+  const stored = storedOlderFives(chunks, minutes, launchAt);
+  if (stored) return stored;
+  const read = await olderCache.read(mint).catch((err: unknown) => {
+    logger.warn("chart part failed", { mint, part: "older", error: String(err) });
+    return null;
+  });
+  return read?.candles ?? null;
 }
 
 /** Attaches the SOL price already in hand. A miss stays off the answer: this does not fetch one. */

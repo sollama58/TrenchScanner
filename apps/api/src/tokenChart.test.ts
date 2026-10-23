@@ -3,6 +3,8 @@ import {
   firstMinutes,
   CallBudget,
   CandleCache,
+  CandleEntries,
+  CANDLE_PAGE,
   drawableCandles,
   KeyedCache,
   LastGood,
@@ -17,6 +19,8 @@ import {
   withSavedTrades,
   withTrackedMarks,
   olderCandles,
+  pumpFunPages,
+  storedOlderFives,
   type ActivityRow,
   type McapCandle,
 } from "./tokenChart.js";
@@ -270,6 +274,36 @@ describe("CandleCache", () => {
     expect(calls).toBe(2);
   });
 
+  it("shares one call per coin between caches on one store, each on its own TTL and budget", async () => {
+    let calls = 0;
+    let now = 0;
+    const fetch = async () => {
+      calls += 1;
+      return [candle];
+    };
+    const entries = new CandleEntries();
+    const chart = new CandleCache(fetch, { ttlMs: 4_000, entries, now: () => now });
+    const fine = new CandleCache(fetch, { ttlMs: 6_000, callsPerMinute: 1, entries, now: () => now });
+    await chart.get("a");
+    await fine.get("a");
+    expect(calls).toBe(1);
+    // Past the 4 s TTL, inside the 6 s one: only the shorter one reads again.
+    now = 5_000;
+    expect(await fine.read("a")).toEqual({ candles: [candle], stale: false });
+    expect(calls).toBe(1);
+    await chart.get("a");
+    expect(calls).toBe(2);
+    // The fine cache's own budget (one a minute) was never spent by the other's reads.
+    now = 12_000;
+    await fine.get("a");
+    expect(calls).toBe(3);
+    expect(chart.peek("a")).toEqual({ candles: [candle], stale: false });
+  });
+
+  it("gives the chart and the candles route one store per interval", () => {
+    expect(new Set([pumpFunPages.minute, pumpFunPages.quarter, pumpFunPages.second]).size).toBe(3);
+  });
+
   it("peeks at the kept candles without a call", async () => {
     let calls = 0;
     const cache = new CandleCache(async () => {
@@ -280,6 +314,70 @@ describe("CandleCache", () => {
     await cache.get("a");
     expect(cache.peek("a")).toEqual({ candles: [candle], stale: false });
     expect(calls).toBe(1);
+  });
+});
+
+describe("storedOlderFives", () => {
+  const FIVE = 5 * 60_000;
+  const launch = 100 * FIVE;
+  const bar = (t: number): McapCandle => ({ t, o: 1, h: 2, l: 1, c: 2, vol: 3 });
+  const chunk = (from: number, to: number, bars: McapCandle[], over: object = {}) => ({
+    res: 300,
+    source: "pumpfun",
+    coverFrom: from,
+    coverTo: to,
+    bars,
+    ...over,
+  });
+  // Minute candles from 200 five-minute buckets after the launch, two minutes into a bucket.
+  const first = launch + 200 * FIVE + 2 * 60_000;
+  const minutes = [first, first + 60_000, first + 10 * 60_000].map(bar);
+  const fives = Array.from({ length: 201 }, (_, i) => bar(launch + i * FIVE));
+
+  it("answers the bars before the minute page's first when the store holds them all from the launch", () => {
+    const out = storedOlderFives(
+      [
+        chunk(launch, launch + 60 * FIVE, fives.slice(0, 60)),
+        chunk(launch + 60 * FIVE, first + FIVE, fives.slice(60)),
+      ],
+      minutes,
+      launch,
+    );
+    expect(out).toEqual(fives);
+    // What Pump.fun's page would have made of it: the same older candles.
+    expect(olderCandles(minutes, out, launch)).toEqual(
+      olderCandles(minutes, [...fives, bar(first + 8 * 60_000)], launch),
+    );
+  });
+
+  it("asks Pump.fun when the store has a gap, stops short, misses the launch or is someone else's", () => {
+    const whole = chunk(launch, first + FIVE, fives);
+    expect(
+      storedOlderFives(
+        [
+          chunk(launch, launch + 50 * FIVE, fives.slice(0, 50)),
+          chunk(launch + 60 * FIVE, first + FIVE, fives.slice(60)),
+        ],
+        minutes,
+        launch,
+      ),
+    ).toBeNull();
+    expect(
+      storedOlderFives([chunk(launch, first - 2 * 60_000, fives.slice(0, 200))], minutes, launch),
+    ).toBeNull();
+    expect(
+      storedOlderFives([chunk(launch + FIVE, first + FIVE, fives.slice(1))], minutes, launch),
+    ).toBeNull();
+    expect(storedOlderFives([{ ...whole, source: "gecko" }], minutes, launch)).toBeNull();
+    expect(storedOlderFives([{ ...whole, res: 60 }], minutes, launch)).toBeNull();
+    expect(storedOlderFives([], minutes, launch)).toBeNull();
+    expect(storedOlderFives([whole], [], launch)).toBeNull();
+  });
+
+  it("asks Pump.fun when its page would no longer reach back to the launch", () => {
+    const many = Array.from({ length: CANDLE_PAGE }, (_, i) => bar(launch + i * FIVE));
+    const late = launch + CANDLE_PAGE * FIVE - 3 * 60_000;
+    expect(storedOlderFives([chunk(launch, late + FIVE, many)], [bar(late)], launch)).toBeNull();
   });
 });
 

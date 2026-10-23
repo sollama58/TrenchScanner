@@ -30,15 +30,21 @@ const MAX_BUFFERED = 2_000;
 export class JupiterLaunchPoller {
   private readonly buffer = new Map<string, DiscoveredCoin>();
   private timer: ReturnType<typeof setInterval> | null = null;
-  private inFlight = false;
+  private intervalMs = LAUNCH_POLL_INTERVAL_MS;
+  private inFlight: Promise<DiscoveredCoin[]> | null = null;
   private stats = { polls: 0, failed: 0, found: 0 };
 
   constructor(private readonly jupiter: Pick<JupiterClient, "recentLaunches">) {}
 
   start(intervalMs = LAUNCH_POLL_INTERVAL_MS): void {
     if (this.timer) return;
+    this.intervalMs = intervalMs;
     void this.poll();
-    this.timer = setInterval(() => void this.poll(), intervalMs);
+    this.schedule();
+  }
+
+  private schedule(): void {
+    this.timer = setInterval(() => void this.poll(), this.intervalMs);
     this.timer.unref?.();
   }
 
@@ -49,11 +55,41 @@ export class JupiterLaunchPoller {
 
   /** One read of the list into the buffer. Visible for tests. */
   async poll(): Promise<void> {
-    if (this.inFlight) return;
-    this.inFlight = true;
+    await this.read();
+  }
+
+  /**
+   * A read of the list now, for the scan's moving-coins discovery (JupiterClient
+   * discoverMovingLaunches `recent`), which read the same list a call of its own before
+   * (price-market audit 2026-10-23, 4a-4): the coins it read, held for the drain as well. The next
+   * timed read is a whole interval after it, so the list is read no less often than before. A
+   * read already under way is joined. A failed read gives none (logged here), as the scan's own
+   * failed call did.
+   */
+  async pollNow(): Promise<DiscoveredCoin[]> {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.schedule();
+    }
+    return this.read();
+  }
+
+  /** The read under way, or a new one: the coins read, none when the read failed. */
+  private read(): Promise<DiscoveredCoin[]> {
+    if (this.inFlight) return this.inFlight;
     this.stats.polls += 1;
+    const run = this.readOnce();
+    this.inFlight = run;
+    void run.finally(() => {
+      if (this.inFlight === run) this.inFlight = null;
+    });
+    return run;
+  }
+
+  private async readOnce(): Promise<DiscoveredCoin[]> {
     try {
-      for (const coin of await this.jupiter.recentLaunches()) {
+      const coins = await this.jupiter.recentLaunches();
+      for (const coin of coins) {
         if (this.buffer.has(coin.mintAddress)) {
           this.buffer.set(coin.mintAddress, coin);
           continue;
@@ -62,12 +98,12 @@ export class JupiterLaunchPoller {
         this.buffer.set(coin.mintAddress, coin);
         this.stats.found += 1;
       }
+      return coins;
     } catch (err) {
       this.stats.failed += 1;
       if (!(err instanceof RateGateDeadlineError))
         logger.warn("recent launches read failed", { error: String(err) });
-    } finally {
-      this.inFlight = false;
+      return [];
     }
   }
 
