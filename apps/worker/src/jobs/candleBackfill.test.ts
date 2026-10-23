@@ -106,19 +106,19 @@ describe("stepBackfill", () => {
     expect(saved.every((r) => r.res === 300 && r.coarse)).toBe(true);
   });
 
-  it("pages GeckoTerminal back from the last whole hour, a page a step", async () => {
+  it("pages GeckoTerminal back from now, a page a step", async () => {
     const { d, saved, pages } = deps();
     const patch = await stepBackfill(job(), pumpToken, d, NOW);
-    expect(pages).toEqual([{ pool: "PAIR", before: HOUR_START }]);
+    expect(pages).toEqual([{ pool: "PAIR", before: NOW }]);
     expect(patch.pages).toBe(1);
-    expect(patch.cursor!.getTime()).toBe(HOUR_START - 1_000 * M);
+    expect(patch.cursor!.getTime()).toBe(NOW - 1_000 * M);
     expect(patch.poolIndex).toBeUndefined();
     expect(saved.every((r) => r.source === "gecko" && r.res === 60)).toBe(true);
     expect(saved.reduce((n, r) => n + r.bars.length, 0)).toBe(1_000);
   });
 
   it("steps over what the store already covers instead of asking for it again", async () => {
-    const { d, pages } = deps({ covers: async () => [{ from: HOUR_START - 600 * M, to: HOUR_START }] });
+    const { d, pages } = deps({ covers: async () => [{ from: HOUR_START - 600 * M, to: NOW }] });
     await stepBackfill(job(), pumpToken, d, NOW);
     expect(pages[0]!.before).toBe(HOUR_START - 600 * M);
   });
@@ -162,6 +162,18 @@ describe("stepBackfill", () => {
     const waited = await stepBackfill(job(), pumpToken, gated.d, NOW);
     expect(waited.failures).toBeUndefined();
     expect(waited.nextAt.getTime()).toBe(NOW + 15_000);
+  });
+
+  it("goes on to GeckoTerminal when Pump.fun's 5-minute page fails", async () => {
+    const { d } = deps({
+      pumpFiveMinute: vi.fn(async () => {
+        throw new Error("HTTP 403");
+      }),
+    });
+    const patch = await stepBackfill(job({ pumpDone: false }), pumpToken, d, NOW);
+    expect(patch).toMatchObject({ pumpDone: true, nextAt: new Date(NOW) });
+    expect(patch.failures).toBeUndefined();
+    expect(patch.done).toBeUndefined();
   });
 
   it("backs off a failing coin and gives it up after five failures", async () => {
@@ -237,7 +249,7 @@ describe.skipIf(!dbAvailable)("tick", () => {
     await tick(d, NOW);
     row = await prisma.candleBackfill.findUniqueOrThrow({ where: { mint: MINT } });
     expect(row.pages).toBe(1);
-    expect(row.cursor!.getTime()).toBe(HOUR_START - 1_000 * M);
+    expect(row.cursor!.getTime()).toBe(NOW - 1_000 * M);
     expect(saved.length).toBeGreaterThan(0);
   });
 });
