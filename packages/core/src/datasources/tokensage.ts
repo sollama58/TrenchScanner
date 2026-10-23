@@ -534,6 +534,7 @@ export interface TokenSageHints {
   description?: string;
   image_url?: string;
   twitter?: string;
+  telegram?: string;
   website?: string;
   /** ISO 8601. */
   created_at?: string;
@@ -719,6 +720,13 @@ function clipHint(text: string, max: number): string {
  * created_at is the launch time only (launchedAt): firstSeenAt is when we first saw the mint,
  * which for a coin found late is far after its launch, and TokenSage keeps the hint for good
  * when it has no launch time of its own (a non-pump.fun mint).
+ *
+ * Any metadata hint makes TokenSage take the hints as the coin's metadata and skip its own read
+ * of the metadata URI. A row whose launch details were never read (no description recorded and
+ * no link) has only the name and ticker every list gives, so those are left out and TokenSage
+ * reads the on-chain metadata itself: with Pump.fun refusing (2026-10-22 on), hinting the bare
+ * name sent most coins in without their X link, and the X inputs (nsX*) fell from about 38% of
+ * rows to 8%.
  */
 export function tokenSageHints(token: {
   name?: string | null;
@@ -726,18 +734,24 @@ export function tokenSageHints(token: {
   description?: string | null;
   imageUrl?: string | null;
   twitterUrl?: string | null;
+  telegramUrl?: string | null;
   websiteUrl?: string | null;
   launchedAt?: Date | null;
 }): TokenSageHints | undefined {
   const hints: TokenSageHints = {};
   const url = (value: string | null | undefined): value is string =>
     !!value && value.length <= MAX_HINT_URL_CHARS;
-  if (token.name) hints.name = clipHint(token.name, 200);
-  if (token.symbol) hints.symbol = clipHint(token.symbol, 50);
-  if (token.description) hints.description = clipHint(token.description, 2_000);
-  if (url(token.imageUrl) && token.imageUrl.startsWith("https://")) hints.image_url = token.imageUrl;
-  if (url(token.twitterUrl)) hints.twitter = token.twitterUrl;
-  if (url(token.websiteUrl)) hints.website = token.websiteUrl;
+  const detailsRead =
+    token.description != null || !!token.twitterUrl || !!token.telegramUrl || !!token.websiteUrl;
+  if (detailsRead) {
+    if (token.name) hints.name = clipHint(token.name, 200);
+    if (token.symbol) hints.symbol = clipHint(token.symbol, 50);
+    if (token.description) hints.description = clipHint(token.description, 2_000);
+    if (url(token.imageUrl) && token.imageUrl.startsWith("https://")) hints.image_url = token.imageUrl;
+    if (url(token.twitterUrl)) hints.twitter = token.twitterUrl;
+    if (url(token.telegramUrl)) hints.telegram = token.telegramUrl;
+    if (url(token.websiteUrl)) hints.website = token.websiteUrl;
+  }
   if (token.launchedAt && !Number.isNaN(token.launchedAt.getTime())) {
     hints.created_at = token.launchedAt.toISOString();
   }
@@ -1513,21 +1527,26 @@ export function narrativeDepthCovers(have: string | null | undefined, want: Toke
 }
 
 const X_HOSTS = new Set(["x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"]);
+const TELEGRAM_HOSTS = new Set(["t.me", "www.t.me", "telegram.me", "www.telegram.me"]);
 
 /**
  * A launcher-written social link, made safe to store: only absolute https URLs are kept, and a
- * bare X handle ("@foo" or "foo", which Pump.fun allows in its `twitter` field) becomes its
- * https://x.com/ URL. Anything else is null.
+ * bare X or Telegram handle ("@foo" or "foo", which Pump.fun allows in its `twitter` and
+ * `telegram` fields) becomes its https://x.com/ or https://t.me/ URL. An X link must be on X (or
+ * t.co), a Telegram link on t.me. Anything else is null.
  */
 export function normalizeSocialUrl(
   raw: string | null | undefined,
-  kind: "twitter" | "website",
+  kind: "twitter" | "telegram" | "website",
 ): string | null {
   if (typeof raw !== "string") return null;
   const value = raw.trim();
   if (value === "" || value.length > 300) return null;
   if (kind === "twitter" && /^@?[A-Za-z0-9_]{1,15}$/.test(value)) {
     return `https://x.com/${value.replace(/^@/, "")}`;
+  }
+  if (kind === "telegram" && /^@?[A-Za-z0-9_]{4,32}$/.test(value)) {
+    return `https://t.me/${value.replace(/^@/, "")}`;
   }
   let url: URL;
   try {
@@ -1537,14 +1556,43 @@ export function normalizeSocialUrl(
   }
   if (url.protocol === "http:") url.protocol = "https:";
   if (url.protocol !== "https:" || url.username || url.password || !url.hostname.includes(".")) return null;
-  if (
-    kind === "twitter" &&
-    !X_HOSTS.has(url.hostname.toLowerCase()) &&
-    url.hostname.toLowerCase() !== "t.co"
-  ) {
-    return null;
-  }
+  const host = url.hostname.toLowerCase();
+  if (kind === "twitter" && !X_HOSTS.has(host) && host !== "t.co") return null;
+  if (kind === "telegram" && !TELEGRAM_HOSTS.has(host)) return null;
   return url.toString();
+}
+
+/** A coin's own links, https only (normalizeSocialUrl); a missing one is unknown, not "none". */
+export interface CoinSocials {
+  twitterUrl?: string;
+  telegramUrl?: string;
+  websiteUrl?: string;
+}
+
+/** The links in a source's raw `twitter` / `telegram` / `website` fields, cleaned. */
+export function coinSocialsOf(raw: {
+  twitter?: unknown;
+  telegram?: unknown;
+  website?: unknown;
+}): CoinSocials {
+  const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+  const out: CoinSocials = {};
+  const twitter = normalizeSocialUrl(str(raw.twitter), "twitter");
+  const telegram = normalizeSocialUrl(str(raw.telegram), "telegram");
+  const website = normalizeSocialUrl(str(raw.website), "website");
+  if (twitter) out.twitterUrl = twitter;
+  if (telegram) out.telegramUrl = telegram;
+  if (website) out.websiteUrl = website;
+  return out;
+}
+
+/**
+ * The links TokenSage's own read of the coin's metadata found (the document's `raw` block): the
+ * on-chain metadata JSON when TokenSage fetched it, our hints when it took those instead.
+ */
+export function tokenSageSocials(analysis: unknown): CoinSocials {
+  const raw = asRecord(asRecord(analysis)?.raw);
+  return raw ? coinSocialsOf(raw) : {};
 }
 
 /**

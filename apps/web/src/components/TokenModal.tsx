@@ -1004,7 +1004,7 @@ function TokenBody({
   const own = profile.data?.socials;
   const socials = socialLinks({
     twitterUrl: own?.x ?? card.token.twitterUrl,
-    telegramUrl: own?.telegram,
+    telegramUrl: own?.telegram ?? card.token.telegramUrl,
     websiteUrl: own?.website ?? card.token.websiteUrl,
   });
   const wasScanning = useRef(scanning);

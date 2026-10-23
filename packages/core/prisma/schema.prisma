@@ -600,12 +600,19 @@ model Token {
   hasTwitter              Boolean?
   hasTelegram             Boolean   @default(false)
   hasWebsite              Boolean?
-  /// The launcher's X/Twitter and website links as found at discovery (Pump.fun's `twitter` /
-  /// `website`, or DexScreener's profile links). Only https URLs are kept; a bare X handle is
-  /// stored as its https://x.com/ URL. Null when the source had none. Kept so the AI reviewer,
-  /// the cards and TokenSage (see TokenNarrative) can look at what the coin links to.
+  /// The launcher's X/Twitter, Telegram and website links, from the first source that had each:
+  /// Pump.fun's coin or the launch metadata JSON, Jupiter's token metadata, DexScreener's profile
+  /// links, or TokenSage's own metadata read. Only https URLs are kept; a bare X or Telegram
+  /// handle is stored as its https://x.com/ or https://t.me/ URL. A stored link is never replaced.
+  /// Null when no source has had one. Kept so the AI reviewer, the cards and TokenSage (see
+  /// TokenNarrative) can look at what the coin links to.
   twitterUrl              String?
+  telegramUrl             String?
   websiteUrl              String?
+  /// When the socials fill (apps/worker jobs/socialsFill.ts) last asked about a coin that had no
+  /// link at all, so it asks again on a backoff: a link added after launch (a DexScreener paid
+  /// profile, Jupiter indexing the metadata late) is picked up. Null = never asked.
+  socialsCheckedAt        DateTime?
   narrativeTags           String[]  @default([])
   /// The launcher-written description from Pump.fun, captured at discovery. Re-scans come from
   /// DexScreener, which has none, so this is the only copy - it feeds narrative tags and the AI
