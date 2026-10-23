@@ -33,17 +33,23 @@ function since(iso: string | null | undefined, now: number): string {
  * Stream, guest feed) with a card of when each stage of the alert path last produced. The card
  * opens on hover, keyboard focus, or a tap on touch screens (a tap elsewhere closes it).
  *
+ * The pill says one of three things (user ask 2026-10-23, folding in Scope's own Live/Paused
+ * label): green "Scanning" while the feed is live, amber "Updates Paused" while the feed holds
+ * still for the reader, red "Feed Stopped" when the server can't be reached or the scanner has
+ * stopped producing.
+ *
  * `showJobs`: the per-job rows, for admin wallets only - everyone else sees the alert pipeline.
- * `feed`: how this feed itself is updating (pushed live, or polling), as a row in the card.
+ * `feed`: how this feed itself is updating (pushed live, or polling), whether it is held still, and
+ * whether its own reads are failing, as a row in the card and in the pill's state.
  */
 export function ScanStatus({
   showJobs = false,
   feed,
 }: {
   showJobs?: boolean;
-  feed?: { live: boolean; idle: string };
+  feed?: { live: boolean; idle: string; paused?: boolean; failing?: boolean };
 }) {
-  const { data } = usePolling<WorkerHealth>("/health/worker", 30_000);
+  const { data, error } = usePolling<WorkerHealth>("/health/worker", 30_000);
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
   const tipId = useId();
@@ -78,7 +84,7 @@ export function ScanStatus({
   const scan = data?.jobs.find((j) => j.job === "scan");
   // Until the heartbeat lands, an invisible pill of the usual size holds its place, so the feed's
   // controls don't shift when the real one appears.
-  if (!data)
+  if (!data && !error)
     return (
       <span className="status-wrap" aria-hidden style={{ visibility: "hidden" }}>
         <span className="status-pill">
@@ -95,8 +101,21 @@ export function ScanStatus({
   // against the same threshold.
   const past = (iso: string | null) =>
     scan?.staleAfterMs != null && (!iso || now - new Date(iso).getTime() > scan.staleAfterMs);
-  const bad = !scan || scan.stale || scan.hung || past(scan.lastRunAt) || past(scan.lastSuccessAt);
-  const p = data.pipeline;
+  const lagging = !scan || scan.stale || scan.hung || past(scan.lastRunAt) || past(scan.lastSuccessAt);
+  // The heartbeat itself failing to load counts too: whatever the held answer says, the server
+  // isn't answering now.
+  const stopped = lagging || !!error || !!feed?.failing;
+  const paused = !stopped && !!feed?.paused;
+  const state = stopped ? "bad" : paused ? "warn" : "ok";
+  const label = stopped ? "Feed Stopped" : paused ? "Updates Paused" : "Scanning";
+  const updates = feed?.failing
+    ? "Can't reach the server"
+    : paused
+      ? "Paused while you read"
+      : feed?.live
+        ? "Live"
+        : (feed?.idle ?? "");
+  const p = data?.pipeline;
   const stages = p
     ? [
         { label: "Last alert by any model", at: p.lastAlertAt, staleMs: STAGE_STALE_MS.alert },
@@ -121,10 +140,10 @@ export function ScanStatus({
       <span
         role="button"
         tabIndex={0}
-        aria-label={bad ? "Scanner lagging" : "Scanning"}
+        aria-label={label}
         aria-describedby={tipId}
         aria-expanded={open}
-        className={`status-pill ${bad ? "warn" : "ok"}`}
+        className={`status-pill ${state}`}
         onPointerDown={(e) => {
           pointer.current = e.pointerType;
         }}
@@ -141,8 +160,8 @@ export function ScanStatus({
           }
         }}
       >
-        <span className="pulse" />
-        {bad ? "Scanner lagging" : "Scanning"}
+        <span className={paused ? "pulse still" : "pulse"} />
+        {label}
         {scan && <span className="faint"> · {ago(scan.lastSuccessAt, now)}</span>}
       </span>
       <span
@@ -156,9 +175,20 @@ export function ScanStatus({
           <>
             <span className="status-tip-head">This feed</span>
             <span className="status-tip-row">
-              <span className={`status-tip-dot ${feed.live ? "ok" : "idle"}`} />
+              <span
+                className={`status-tip-dot ${feed.failing ? "bad" : paused ? "warn" : feed.live ? "ok" : "idle"}`}
+              />
               <span className="status-tip-label">Updates</span>
-              <span className="status-tip-val">{feed.live ? "Live" : feed.idle}</span>
+              <span className={`status-tip-val${feed.failing ? " bad" : paused ? " warn" : ""}`}>
+                {updates}
+              </span>
+            </span>
+            <span className="status-tip-row">
+              <span className={`status-tip-dot ${lagging ? "bad" : "ok"}`} />
+              <span className="status-tip-label">Scanner</span>
+              <span className={`status-tip-val${lagging ? " bad" : ""}`}>
+                {error ? "Not answering" : lagging ? "Stopped" : "Running"}
+              </span>
             </span>
           </>
         )}
@@ -180,7 +210,7 @@ export function ScanStatus({
         {showJobs && (
           <>
             <span className="status-tip-head">Jobs</span>
-            {data.jobs.map((j) => {
+            {(data?.jobs ?? []).map((j) => {
               const late = j.stale || j.hung || j.failing === true;
               return (
                 <span key={j.job} className="status-tip-row">
