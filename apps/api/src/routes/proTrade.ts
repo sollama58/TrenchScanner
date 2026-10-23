@@ -1425,6 +1425,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       if (!st?.seen) return true;
       inFlight.delete(signature);
       forgetPositions(f.wallet);
+      // Confirmed: settle it here too, or with no panel polling /status the row stays "sent" and
+      // holds the wallet's next trade from another device (audit 2026-10-23, TW-1). A processed
+      // sighting is left to /status and the worker.
+      if (st.confirmed) void settle(signature, "confirmed");
       return false;
     });
     for (let i = 0; i < unseen.length; i += RESEND_BATCH)

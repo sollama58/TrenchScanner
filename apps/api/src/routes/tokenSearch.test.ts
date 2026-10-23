@@ -213,4 +213,12 @@ describe.skipIf(!dbAvailable)("GET /tokens/search", () => {
     );
     expect(calls).toBe(2);
   });
+
+  // Last: it spends this reader's outside-search budget for the minute.
+  it("spends the reader's search budget on outside mint searches too (audit 2026-10-23, AS-2)", async () => {
+    const codes: number[] = [];
+    for (let i = 0; i < 31; i++) codes.push((await get(`/utilities/search?mint=${MINTS.nobody}`)).statusCode);
+    expect(codes).toContain(429);
+    expect(codes.slice(codes.indexOf(429)).every((c) => c === 429)).toBe(true);
+  });
 });

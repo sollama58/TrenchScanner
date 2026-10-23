@@ -172,4 +172,12 @@ describe.skipIf(!dbAvailable)("watchlist routes", () => {
     expect((await as(ADMIN, "DELETE", "/watchlist")).json()).toEqual({ removed: WATCHLIST_CAP });
     expect((await as(ADMIN, "GET", "/watchlist")).json().items).toEqual([]);
   });
+
+  it("holds the cap against parallel stars on different tokens (audit 2026-10-23, AS-4)", async () => {
+    // One more token than the cap, all starred at once: exactly the cap lands, the rest are full.
+    const res = await Promise.all(mints.map((mint) => as(ADMIN, "POST", "/watchlist", { mint })));
+    expect(res.filter((r) => r.statusCode === 409)).toHaveLength(mints.length - WATCHLIST_CAP);
+    expect(await prisma.watchlistItem.count({ where: { userId: userIds[0]! } })).toBe(WATCHLIST_CAP);
+    await as(ADMIN, "DELETE", "/watchlist");
+  });
 });

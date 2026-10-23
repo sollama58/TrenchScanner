@@ -550,6 +550,29 @@ describe.skipIf(!dbAvailable)("settings routes", () => {
     ).toBe(401);
   });
 
+  it("saves a full list of hidden tokens past the global 64 KB body limit (audit 2026-10-23, AS-1)", async () => {
+    const full = {
+      autoUnhide: true,
+      tokens: Array.from({ length: MAX_HIDDEN_TOKENS }, (_, i) => ({
+        // Every text field at the schema's maximum.
+        tokenId: `tok${i}`.padEnd(64, "x"),
+        mintAddress: `${i}`.padEnd(64, "M"),
+        symbol: "FOO".padEnd(64, "O"),
+        name: "Foo".padEnd(128, "o"),
+        imageUrl: `https://example.com/${i}/`.padEnd(512, "i"),
+        hiddenAt: "2026-10-19T00:00:00.000Z",
+        baseMcapUsd: 12_000,
+        reachedX: 0,
+        graduated: false,
+      })),
+    };
+    expect(JSON.stringify(full).length).toBeGreaterThan(450 * 1024);
+    const res = await call("user", "PUT", "/settings/hidden-tokens", full);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().hiddenTokens.tokens).toHaveLength(MAX_HIDDEN_TOKENS);
+    await call("user", "PUT", "/settings/hidden-tokens", DEFAULT_HIDDEN_TOKENS);
+  });
+
   it("saves Scope's settings whole and rejects anything out of bounds", async () => {
     expect((await call("user", "GET", "/settings")).json().scopeSettings).toBeNull();
     const scope = {

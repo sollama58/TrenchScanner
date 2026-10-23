@@ -57,6 +57,17 @@ describe("isPushEndpoint", () => {
     expect(isPushEndpoint("https://user:pw@fcm.googleapis.com/x")).toBe(false);
     expect(isPushEndpoint("not a url")).toBe(false);
   });
+  it("takes only the real push services on the default port (audit 2026-10-23, SD-2)", () => {
+    expect(isPushEndpoint("https://updates.push.services.mozilla.com/wpush/v2/abc")).toBe(true);
+    expect(isPushEndpoint("https://wns2-bl2p.notify.windows.com/w/?token=abc")).toBe(true);
+    expect(isPushEndpoint("https://fcm.googleapis.com:443/fcm/send/abc")).toBe(true);
+    expect(isPushEndpoint("https://fcm.googleapis.com:8443/fcm/send/abc")).toBe(false);
+    expect(isPushEndpoint("https://169-254-169-254.nip.io/x")).toBe(false);
+    expect(isPushEndpoint("https://example.com/push")).toBe(false);
+    expect(isPushEndpoint("https://evilpush.apple.com.attacker.io/x")).toBe(false);
+    expect(isPushEndpoint("https://notpush.apple.com/x")).toBe(false);
+    expect(isPushEndpoint("https://fcm.googleapis.com.evil.io/x")).toBe(false);
+  });
 });
 
 describe("describeCard", () => {
@@ -217,6 +228,34 @@ describe.skipIf(!dbAvailable)("runWebPushDispatch", () => {
       data: { sentThrough: new Date(Date.now() - 60_000), sentTokens: {} },
     });
     expect((await run([], false)).sent).toHaveLength(0);
+  });
+
+  it("never sends to a saved endpoint that isn't a push service, and drops it (audit 2026-10-23, SD-2)", async () => {
+    const bad = `https://10-0-0-1.nip.io:8443/${TAG}`;
+    await prisma.webPushSubscription.updateMany({ where: { endpoint }, data: { endpoint: bad } });
+    const token3 = await prisma.token.create({ data: { mintAddress: `${TAG}-bad`, symbol: "BAD" } });
+    await prisma.match.create({
+      data: {
+        userId,
+        filterId,
+        tokenId: token3.id,
+        snapshotId,
+        matchedAt: new Date(Date.now() - 10_000),
+        score: 71,
+      },
+    });
+    const targets: string[] = [];
+    await runWebPushDispatch(env, {
+      send: async (target) => {
+        targets.push(target.endpoint);
+        return { ok: true };
+      },
+      hasAccess: async () => true,
+      oldestOpenTransaction: async () => null,
+      feedModelState: async () => state,
+    });
+    expect(targets).not.toContain(bad);
+    expect(await prisma.webPushSubscription.count({ where: { endpoint: bad } })).toBe(0);
   });
 
   it("drops a subscription the push service says is gone", async () => {

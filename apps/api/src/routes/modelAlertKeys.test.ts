@@ -18,6 +18,7 @@ import {
 } from "../modelAlertKey.js";
 import { modelAlertArrivedAfterConnect } from "../modelAlertPayload.js";
 import { buildServer } from "../server.js";
+import { MODEL_ALERT_AUTH_FAILURES_PER_MINUTE } from "./modelAlertSocket.js";
 
 describe("model alert key access", () => {
   const at = new Date("2026-10-22T00:00:00Z");
@@ -686,6 +687,48 @@ describe.skipIf(!dbAvailable)("model alert api keys and socket", () => {
     expect(await closed).toBe(4429);
     expect(framedCode).not.toBe(4429);
   });
+
+  it("holds only a few keyless sockets per address, and leaves room for another (audit 2026-10-23, AS-3)", async () => {
+    const keyless = async (address: string) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/model-alerts`, {
+        headers: { "cf-connecting-ip": address },
+      });
+      sockets.push(ws);
+      closeCodes.set(ws, 0);
+      ws.on("close", (code) => closeCodes.set(ws, code));
+      return opened(ws);
+    };
+    const held = [];
+    for (let i = 0; i < 4; i += 1) held.push(await keyless("203.0.113.40"));
+    const fifth = await keyless("203.0.113.40");
+    expect(await waitFor(() => closeCodeOf(fifth) === 4429, 1_500)).toBe(true);
+    // Another address still gets a pending socket, and can authenticate on it.
+    const user = await makeUser("pending-room");
+    await subscribe(user.id, new Date(Date.now() + 86_400_000));
+    const secret = ((await generate(user.cookie)).json() as { secret: string }).secret;
+    const other = await keyless("203.0.113.41");
+    other.send(secret);
+    await delay(400);
+    expect(other.readyState).toBe(WebSocket.OPEN);
+    other.close();
+    for (const ws of held) ws.close();
+  });
+
+  it("counts a keyless socket that sends nothing as a failed attempt (audit 2026-10-23, AS-3)", async () => {
+    const address = "203.0.113.42";
+    const guess = `tsma_${"e".repeat(43)}`;
+    for (let i = 0; i < MODEL_ALERT_AUTH_FAILURES_PER_MINUTE - 1; i += 1)
+      await expect(connect(guess, "header", address)).rejects.toThrow("status 401");
+    const silent = new WebSocket(`ws://127.0.0.1:${port}/v1/model-alerts`, {
+      headers: { "cf-connecting-ip": address },
+    });
+    sockets.push(silent);
+    const closed = new Promise<number>((resolve) => silent.once("close", (code) => resolve(code)));
+    await opened(silent);
+    expect(await closed).toBe(4401);
+    // That timeout was the address's last allowed failure.
+    await expect(connect(guess, "header", address)).rejects.toThrow("status 429");
+  }, 15_000);
 
   // Last in the describe: a Prisma spy, restored or not, leaves no working method behind.
   it("closes a first-frame socket with 1011 when the key check fails on the database", async () => {

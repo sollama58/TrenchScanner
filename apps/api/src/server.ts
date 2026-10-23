@@ -91,6 +91,7 @@ import { OnDemandLiveRefresher } from "./liveRefresh.js";
 import { registerLiveRoutes, LIVE_TICK_MAX_TOKENS } from "./routes/live.js";
 import { registerLaunchRoutes } from "./routes/launches.js";
 import { clientIp } from "./clientIp.js";
+import { RATE_LIMIT_BUCKETS, sizeRouteRateLimits } from "./rateLimitBuckets.js";
 import { RouteTimings } from "./routeTimings.js";
 import { fastifyLogger } from "./fastifyLogger.js";
 import { liveCurves, liveCurvesFor, setLiveCurves } from "./liveCurve.js";
@@ -143,14 +144,6 @@ const BODY_LIMIT_BYTES = 64 * 1024;
  * the live streams stay open as long as the tab does.
  */
 const REQUEST_TIMEOUT_MS = 120_000;
-/**
- * Rate-limit buckets held in memory, across every route (one entry per caller per route). The
- * plugin's default of 5,000 is a least-recently-used map: a few thousand rotating source addresses
- * pushed every real caller's bucket out, and an evicted bucket starts again at zero, so every
- * limit - the sign-in ones and the per-user Helius budgets alike - stopped holding exactly when
- * it mattered. An entry is a couple of hundred bytes, so this is ~20MB at the worst.
- */
-const RATE_LIMIT_BUCKETS = 100_000;
 
 export async function buildServer(env: Env): Promise<FastifyInstance> {
   const app = Fastify({
@@ -359,6 +352,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   };
   // Routes that key their own limit finer (the charts' long polls, per coin: longPollLimit.ts) start from it.
   app.decorate("rateLimitKey", rateLimitKey);
+  sizeRouteRateLimits(app);
   await app.register(rateLimit, {
     max: 300,
     timeWindow: "1 minute",
