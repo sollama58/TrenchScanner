@@ -1,6 +1,5 @@
 import {
   chunkBars,
-  chunkStartOf,
   createLogger,
   fetchPumpCandles,
   GECKO_CANDLE_PAGE,
@@ -163,7 +162,11 @@ export async function stepBackfill(
       }
       return { pumpDone: true, nextAt: at(now) };
     } catch (err) {
-      return failed(err);
+      // The 5-minute page is only the stand-in where no minute source reaches: a Pump.fun that
+      // won't answer (its Cloudflare answers the worker 403, seen 2026-10-23) must not hold the
+      // GeckoTerminal minutes back. Five failed tries used to give the coin up with nothing saved.
+      if (err instanceof RateGateDeadlineError) return { nextAt: at(now + BUDGET_WAIT_MS) };
+      return { pumpDone: true, nextAt: at(now), error: String(err).slice(0, 300) };
     }
   }
 
@@ -172,10 +175,10 @@ export async function stepBackfill(
     now - deps.keepDays * DAY_MS,
     pump && token.launchedAt ? token.launchedAt.getTime() - MINUTE_MS : -Infinity,
   );
-  // A Pump.fun coin's newest hour is the live page's (the API reads it every chart poll); the store
-  // is for history. Any other coin has no live page: its pages run to now (a chart's top-up).
-  const start =
-    job.cursor?.getTime() ?? (pump ? chunkStartOf(now, 60) : Math.floor(now / MINUTE_MS) * MINUTE_MS);
+  // From now back: the API's live Pump.fun page holds a coin's newest stretch only while Pump.fun
+  // answers it, and another launchpad's coin has none, so the store takes the newest minutes too
+  // (a page joins up with what is already stored, so this costs no extra call).
+  const start = job.cursor?.getTime() ?? Math.floor(now / MINUTE_MS) * MINUTE_MS;
   const cursor = coveredBack(start, await deps.covers(job.mint, start));
   const pools = poolsOf(job.mint, token);
   if (cursor <= stopAt || job.pages >= deps.maxPages || job.poolIndex >= pools.length)

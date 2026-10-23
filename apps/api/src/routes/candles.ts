@@ -90,6 +90,10 @@ async function liveInputs(
     newest ? streamCandles(feeds, mint, 1_000).catch(() => null) : Promise.resolve(null),
   ]);
   if (minutes) out.push(minutes);
+  // No minute page (Pump.fun has no such coin, or won't answer: its Cloudflare answered Render 403
+  // on 2026-10-23): the store's newest minutes come from the backfill, topped up to now from
+  // GeckoTerminal on each open, at most every BACKFILL_TOP_UP_AFTER_MS.
+  else if (newest) askBackfill(mint, Date.now(), true);
   if (quarters) out.push(quarters);
   if (stream?.candles.length) {
     // On the finest timeframes only what the stream itself delivered: RPC reads every few seconds
