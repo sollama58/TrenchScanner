@@ -473,7 +473,7 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   // Who priced the newest launches (liveLaunchQuotes), and the entry fast path's crossings, first
   // scans, calls, skips and crossing-to-decision times (entryFastPath). The cycle's RugCheck reports: cached, and
   // looked up while it waited (rugCheckLookups). The linked-wallet funder reads and their credits
-  // (linkedWalletCalls), and the holder-transfer reads (holderTransferCalls) with the Helius stream that spares them (heliusStream). The young coins' curve tape and its spend (curveTape). The live tape's pages before a call (liveTape). Jupiter's newest-launch
+  // (linkedWalletCalls), and the holder-transfer reads (holderTransferCalls) with the Helius stream that spares them (heliusStream). The young coins' curve tape and its spend (curveTape). The live tape's pages before a call (liveTape). The Helius credits of the freshness, balance and on-chain holder stages (heliusStageCredits). Jupiter's newest-launch
   // reads between cycles and the launches they found (launchPoller).
   for (const key of [
     "dexScreenerCalls",
@@ -487,6 +487,7 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
     "curveTape",
     "pumpfunGate",
     "liveTape",
+    "heliusStageCredits",
     "pumpfunList",
     "launchDetails",
     "launchPoller",

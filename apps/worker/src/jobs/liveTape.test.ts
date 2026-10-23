@@ -62,6 +62,13 @@ describe("live tape", () => {
     expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(2);
   });
 
+  it("counts a failed page, but no credits for it", async () => {
+    const helius = fakeHelius();
+    helius.getMintTransactionsPage.mockResolvedValueOnce({ status: "failed" } as never);
+    await readLiveTape([MINT, "other"], helius, { maxPages: 2, refreshMs: 60_000, nowMs: 1000 });
+    expect(takeLiveTapeStats()).toMatchObject({ pages: 1, failed: 1, credits: 10 });
+  });
+
   it("keeps a quiet coin's page instead of re-reading it (user decision 2026-10-20)", async () => {
     const helius = fakeHelius();
     const lastTrade = { at: 0 };

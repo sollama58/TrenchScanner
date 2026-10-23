@@ -185,6 +185,7 @@ import {
   type SniperGroup,
 } from "./launchSnipers.js";
 import { prismaLaunchReadStore } from "./launchReadStore.js";
+import { takeHeliusStageCredits } from "./heliusStageCredits.js";
 import { absentTtlFor, resolveRugProfiles } from "./rugCheckProfiles.js";
 import { recordCandidateSample, takeSampleStats } from "./candidateOutcomeJob.js";
 import { holderCutRecheckTtlFor, noteHolderCutVerdict, rugCheckTtlFor } from "./youngHolderRecheck.js";
@@ -1358,6 +1359,8 @@ async function scanCycle(
   const pumpfunGate = takePumpFunGateStats();
   // The live tape's pages (10 credits each) since the last cycle, and the coins it holds a page for.
   const liveTape = takeLiveTapeStats();
+  // The Helius credits of the stages with no counter of their own: freshness, balances, holders.
+  const heliusStageCredits = takeHeliusStageCredits();
   // Who priced the newest launches since the last cycle: Jupiter, its CoinGecko backup, or neither.
   const liveLaunchQuotes = deps.liveLaunches?.takeStats?.();
   // The entry fast path since the last cycle: crossings the watch saw (on the curve tape or from
@@ -1395,6 +1398,7 @@ async function scanCycle(
     ...(candleBackfill ? { candleBackfill } : {}),
     pumpfunGate,
     liveTape,
+    heliusStageCredits,
     ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
     ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),
     ...(liveLaunchQuotes ? { liveLaunchQuotes: { ...liveLaunchQuotes } } : {}),
@@ -1408,7 +1412,8 @@ async function scanCycle(
     samplesBanked,
     pricePathMints: deps.pricePath?.size ?? 0,
     ...(tokenSageEnabled(env) ? { tokensage: takeTokenSageStats(), tokensageNow: takeNowStats() } : {}),
-    // Launch first-buyer reads (the top-10 snipers share) sent, landed and failed since last cycle.
+    // Launch first-buyer reads (the top-10 snipers share) sent, landed and failed since last cycle,
+    // and the credits they and the holdings refreshes were billed.
     sniperReads: takeSniperReadStats(),
     // This cycle's RugCheck reports: cached, looked up while the cycle waited (fetched, failed,
     // timedOut), and stale ones served while they refresh behind it - what the rugCheck stage is.

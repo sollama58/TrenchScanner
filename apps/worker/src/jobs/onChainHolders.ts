@@ -1,11 +1,13 @@
 import {
   createLogger,
+  tallyHeliusCredits,
   type Env,
   type HeliusClient,
   type LargestHoldersResult,
   type OnChainHolders,
 } from "@trenchscanner/core";
 import { FailureBackoff } from "./failureBackoff.js";
+import { heliusStageCredits } from "./heliusStageCredits.js";
 import type { ScreenBackup } from "./screenBackup.js";
 
 const logger = createLogger("onchain-holders");
@@ -61,7 +63,9 @@ export async function resolveOnChainHolders(
 
   let results: Map<string, LargestHoldersResult>;
   try {
-    results = await helius.getLargestHoldersBatch(toRead);
+    results = await tallyHeliusCredits(heliusStageCredits.onChainHolders, () =>
+      helius.getLargestHoldersBatch(toRead),
+    );
   } catch (err) {
     logger.warn("on-chain holder read failed", { mints: toRead.length, error: String(err) });
     results = new Map();

@@ -13,6 +13,7 @@ import {
   type MintSupplySource,
   type PoolVaults,
   WRAPPED_SOL_MINT,
+  withOwnApiFeature,
 } from "@trenchscanner/core";
 import type { QuotePrice, SolPrice } from "./solPrice.js";
 import { chartHealth, type ChartHealth } from "./chartHealth.js";
@@ -1230,7 +1231,8 @@ export class LiveCurves {
       this.stream.start();
     }
     if (!this.timer) {
-      this.timer = setInterval(() => this.tick(), 1_000);
+      // Its RPC reads are the live curves', not the route of the chart that happened to start it.
+      this.timer = setInterval(() => withOwnApiFeature("live-curves", () => this.tick()), 1_000);
       this.timer.unref?.();
     }
   }

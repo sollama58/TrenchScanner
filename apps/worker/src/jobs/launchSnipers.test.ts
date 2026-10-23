@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { EMPTY_TRADE_FLOW, type HeliusClient, type LaunchBuyersResult } from "@trenchscanner/core";
+import {
+  apiUsageMeter,
+  EMPTY_TRADE_FLOW,
+  type HeliusClient,
+  type LaunchBuyersResult,
+} from "@trenchscanner/core";
 import {
   blockZeroWalletsFromCache,
   launchBuyersFromCache,
@@ -10,6 +15,7 @@ import {
   resolveLaunchSnipers,
   sniperShareUnobtainable,
   sniperWalletsFromCache,
+  takeSniperReadStats,
 } from "./launchSnipers.js";
 import {
   decisionInputsReady,
@@ -112,6 +118,27 @@ describe("resolveLaunchSnipers", () => {
     await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 301_000 });
     expect(f.getLaunchBuyersBatch).toHaveBeenCalledTimes(1);
     expect(f.getTokenAccountBalances).toHaveBeenCalledTimes(2);
+  });
+
+  it("puts the reads' billed Helius credits on the heartbeat's sniperReads", async () => {
+    const f = fakeHelius({ found: { A: 25 } });
+    const answered = { requests: 1, ok: true, rateLimited: false, ms: 1 };
+    // What the metered fetch records: two launch pages (one refused, unbilled) and one balance read.
+    f.getLaunchBuyersBatch.mockImplementationOnce(async (mints: string[]) => {
+      const gtfa = { provider: "helius", endpoint: "getTransactionsForAddress", calls: 1, credits: 10 };
+      apiUsageMeter.record([gtfa], answered);
+      apiUsageMeter.record([gtfa], { ...answered, ok: false });
+      return fakeHelius({ found: { A: 25 } }).getLaunchBuyersBatch(mints);
+    });
+    f.getTokenAccountBalances.mockImplementationOnce(async () => {
+      apiUsageMeter.record(
+        [{ provider: "helius", endpoint: "getMultipleAccounts", calls: 1, credits: 1 }],
+        answered,
+      );
+      return new Map();
+    });
+    await resolveLaunchSnipers([{ mintAddress: "A", contender: false }], f.helius, { ...opts, now: 0 });
+    expect(takeSniperReadStats()).toEqual({ requested: 1, found: 1, failed: 0, credits: 11 });
   });
 
   it("keeps contenders fresher and reads them first within the budget", async () => {

@@ -1,6 +1,13 @@
 import { SettledAnswers } from "./settledAnswers.js";
-import { prisma, createLogger, WALLET_DORMANT_GAP_MS, type HeliusClient } from "@trenchscanner/core";
+import {
+  prisma,
+  createLogger,
+  tallyHeliusCredits,
+  WALLET_DORMANT_GAP_MS,
+  type HeliusClient,
+} from "@trenchscanner/core";
 import { FailureBackoff } from "./failureBackoff.js";
+import { heliusStageCredits } from "./heliusStageCredits.js";
 
 const logger = createLogger("wallet-freshness");
 
@@ -177,9 +184,11 @@ export async function resolveEarliestActivity(
   const freshCutoffMs = now - FRESH_WITHIN_HOURS * 3_600_000;
   // Freshness only asks whether a wallet is older than the window, so a bound past it settles a
   // wallet as well as its exact first transaction does - and costs a tenth as much to get.
-  const fetched = await helius.getEarliestActivityBatch(toFetch, {
-    boundSufficientBefore: new Date(freshCutoffMs),
-  });
+  const fetched = await tallyHeliusCredits(heliusStageCredits.freshness, () =>
+    helius.getEarliestActivityBatch(toFetch, {
+      boundSufficientBefore: new Date(freshCutoffMs),
+    }),
+  );
   // A "found" or settled "older-than" answer is cached with its stretch. Without the newest
   // transaction (only the exact method without a signatures page answers that way) the read
   // time stands in for it: these are holders who just bought, so it is minutes off at most.
