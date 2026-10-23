@@ -154,6 +154,9 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
       200,
     );
     expect((await board()).ranked.map((e) => e.id)).toContain(strong.id);
+    // A one-field PATCH leaves every other field as it was (no defaults filled in).
+    const renamed = await prisma.userFilter.findUniqueOrThrow({ where: { id: strong.id } });
+    expect({ ...renamed, name: strong.name, updatedAt: strong.updatedAt }).toEqual(strong);
     // The same value again is not a change either.
     await call(ownerCookie, "PATCH", `/filters/${strong.id}`, { maxFreshTop10WalletPct: 40 });
     expect((await board()).ranked.map((e) => e.id)).toContain(strong.id);

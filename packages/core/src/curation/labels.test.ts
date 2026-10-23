@@ -6,6 +6,9 @@ import {
   DEXSCREENER_ANCHOR_LABEL_RULE,
   decisionAnchor,
   dollarTicksFromCurve,
+  FINE_TICK_SMOOTHING_MS,
+  smoothedCurvePrices,
+  SMOOTHED_FINE_TICK_LABEL_RULE,
   freshQuoteMcapUsd,
   dollarScaleBasis,
   fineTickWindow,
@@ -634,5 +637,115 @@ describe("curve label window and scale basis", () => {
     expect(nextCurveTapeCoveredMs(null, 10_000)).toBe(10_000);
     expect(nextCurveTapeCoveredMs(windowMs - 1_000, 5_000)).toBe(windowMs);
     expect(nextCurveTapeCoveredMs(12_000, 0)).toBe(12_000);
+  });
+});
+
+describe("5-second smoothing of curve prints (rule 6)", () => {
+  const at = (s: number) => T0.getTime() + s * 1_000;
+  const minute = new Date(at(60));
+  /** Folds smoothed curve ticks and the minute print, the way the watcher does. */
+  const fold = (curve: {
+    basis: { at: number; price: number } | null;
+    changes: { at: number; price: number }[];
+  }) => {
+    let agg = initialOutcomeAggregates(1, T0);
+    const ticks = [
+      ...dollarTicksFromCurve(curve, { priceUsd: 1, at: minute }, 0.1, { afterMs: at(0), untilMs: at(60) }),
+      { priceUsd: 1, at: minute },
+    ].sort((a, b) => a.at.getTime() - b.at.getTime());
+    for (const t of ticks) agg = { ...agg, ...applyPriceTick(agg, t.priceUsd, t.at) };
+    return agg;
+  };
+
+  it("averages the step price over the 5 seconds before each turn", () => {
+    // $1 (curve 10), one trade to $3 for a second, back to $1.
+    const points = smoothedCurvePrices(
+      {
+        basis: { at: at(0), price: 10 },
+        changes: [
+          { at: at(20), price: 30 },
+          { at: at(21), price: 10 },
+        ],
+      },
+      at(0),
+      at(60),
+    );
+    expect(FINE_TICK_SMOOTHING_MS).toBe(5_000);
+    expect(points.map((p) => [p.at - T0.getTime(), p.price])).toEqual([
+      [5_000, 10],
+      [20_000, 10],
+      [21_000, 14],
+      [25_000, 14],
+      [26_000, 10],
+    ]);
+  });
+
+  it("does not count a one-trade wick to 3x as a 2x or as the peak", () => {
+    const agg = fold({
+      basis: { at: at(0), price: 10 },
+      changes: [
+        { at: at(20), price: 30 },
+        { at: at(21), price: 10 },
+      ],
+    });
+    const labels = computeOutcomeLabels(agg);
+    expect(agg.hit2xAt).toBeNull();
+    expect(labels.hit2xIn1h).toBe(false);
+    expect(labels.labelValue).toBe(0);
+    // The high is the 5-second average's: $1.40, not the $3 print.
+    expect(agg.peak1hPriceUsd).toBeCloseTo(1.4);
+    expect(agg.peak24hPriceUsd).toBeCloseTo(1.4);
+    expect(labels.peak1hReturnPct).toBeCloseTo(40);
+  });
+
+  it("does not stop a call on a one-trade dip through 50%", () => {
+    const agg = fold({
+      basis: { at: at(0), price: 10 },
+      changes: [
+        { at: at(10), price: 3 },
+        { at: at(11), price: 10 },
+      ],
+    });
+    expect(agg.lowBefore2xPriceUsd).toBeCloseTo(0.86);
+    expect(agg.stoppedAt).toBeNull();
+    expect(computeOutcomeLabels({ ...agg, hit2xAt: minutes(5) }).disqualified).toBe(false);
+  });
+
+  it("counts a 2x that holds, timed when the 5-second average gets there", () => {
+    const agg = fold({
+      basis: { at: at(0), price: 10 },
+      changes: [
+        { at: at(20), price: 22 },
+        { at: at(40), price: 10 },
+      ],
+    });
+    const labels = computeOutcomeLabels(agg);
+    expect(labels.hit2xIn1h).toBe(true);
+    expect(agg.hit2xAt).toEqual(new Date(at(25)));
+    expect(labels.labelValue).toBeCloseTo(Math.log2(2.2));
+    expect(SMOOTHED_FINE_TICK_LABEL_RULE).toBe(6);
+  });
+
+  it("averages across the start of the slice from the history before it", () => {
+    // A sweep that starts at 22s still sees the 3x from 20-21s in its first average.
+    const points = smoothedCurvePrices(
+      {
+        basis: { at: at(0), price: 10 },
+        changes: [
+          { at: at(20), price: 30 },
+          { at: at(21), price: 10 },
+        ],
+      },
+      at(22),
+      at(60),
+    );
+    expect(points[0]).toEqual({ at: at(25), price: 14 });
+  });
+
+  it("keeps fine-tick rows out of the fit only when asked, rule 6 with rule 5", () => {
+    expect(trainsOnLabelRule(6)).toBe(true);
+    expect(trainsOnLabelRule(6, true)).toBe(false);
+    expect(trainsOnLabelRule(5, true)).toBe(false);
+    expect(trainsOnLabelRule(4, true)).toBe(true);
   });
 });

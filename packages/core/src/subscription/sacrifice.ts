@@ -273,6 +273,9 @@ export async function recordPlatformTrade(r: PlatformTradeRecord): Promise<Recor
           wallet: r.wallet,
           status: { not: "failed" },
           sentAt: { gt: new Date(now - r.paceMs) },
+          // Not this trade's own row: a re-POST of the same signed bytes then reaches the create,
+          // whose P2002 the caller re-attaches, instead of "nothing was sent" (audit 2026-10-23, TW-1).
+          signature: { not: r.signature },
         },
         orderBy: { sentAt: "desc" },
         select: { sentAt: true },
@@ -284,7 +287,12 @@ export async function recordPlatformTrade(r: PlatformTradeRecord): Promise<Recor
         };
       }
       const open = await tx.platformTrade.findFirst({
-        where: { wallet: r.wallet, status: "sent", sentAt: { gt: new Date(now - TRADE_IN_FLIGHT_MS) } },
+        where: {
+          wallet: r.wallet,
+          status: "sent",
+          sentAt: { gt: new Date(now - TRADE_IN_FLIGHT_MS) },
+          signature: { not: r.signature },
+        },
         orderBy: { sentAt: "desc" },
         select: { sentAt: true },
       });

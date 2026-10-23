@@ -1,0 +1,11 @@
+-- The trainer's hourly kol-side-wallets and tracked-sides jobs pair each KOL buy with the coin's
+-- other buys within the side gap (kolSideWalletsJob.ts, trackedSidesJob.ts). With only
+-- (tokenId, wallet) to go on, each probe read every row of the coin; this reads the window alone
+-- (audit 2026-10-23, PF-1). Partial on "buys" > 0, the only rows those reads take. Prisma 5 has no
+-- syntax for the predicate and its diff skips partial indexes, so schema.prisma only notes it in a
+-- comment. CONCURRENTLY, alone in its file, as
+-- 20261019200200_token_holders_viewed_at_index: no write lock on the live table, and Prisma sends a
+-- single-statement migration on its own. IF NOT EXISTS makes a retry safe; an interrupted build can
+-- leave an INVALID index, which `DROP INDEX CONCURRENTLY "TokenWalletActivity_tokenId_firstBuyAt_idx"`
+-- clears before re-running.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "TokenWalletActivity_tokenId_firstBuyAt_idx" ON "TokenWalletActivity"("tokenId", "firstBuyAt") WHERE "buys" > 0;

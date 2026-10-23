@@ -76,6 +76,19 @@ afterEach(() => {
 });
 
 describe("watchlist store", () => {
+  it("forgets the last account's list at once, and its load in flight (WB-6)", async () => {
+    answer = () => ({ cap: 50, items: [item("a")] });
+    await store.loadWatchlist();
+    expect(state().items).toHaveLength(1);
+    // Another tab signs in as someone else: App's resetAccountState resets the store while the
+    // market bar and stars stay mounted, and a load still in flight for the last account is dropped.
+    const late = store.loadWatchlist();
+    store.resetWatchlist();
+    await late;
+    expect(state().status).toBe("idle");
+    expect(state().items).toEqual([]);
+  });
+
   it("loads the account's list", async () => {
     answer = () => ({ cap: 50, items: [item("a"), item("b")] });
     await store.loadWatchlist();

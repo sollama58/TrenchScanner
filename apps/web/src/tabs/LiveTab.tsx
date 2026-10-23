@@ -2,7 +2,16 @@ import { MarketBar } from "../components/MarketBar";
 import { WatchlistChips } from "../components/WatchlistChips";
 import { WatchlistPanel } from "../components/WatchlistPanel";
 import { SectionBoundary } from "../components/SectionBoundary";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { type CuratedStats, type Leaderboard, type MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { ScopeRowSkeletons, SkeletonCards } from "../components/Skeleton";
@@ -16,19 +25,13 @@ import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { registerCardSearch } from "../cardSearch";
 import { CaSearchButton } from "../components/CaSearchButton";
 import { ScanStatus } from "../components/ScanStatus";
-import type { ScopeSettingsSection } from "../components/ScopeSettingsModal";
 import { HiddenTokensDialog } from "../components/HiddenTokensDialog";
 import { AsOf } from "../components/AsOf";
 import { dueToUnhide, hideToken, unhideTokens, useHiddenTokenIds, useHiddenTokens } from "../hiddenTokens";
 import { useHeldTokenIds } from "../heldTokens";
-import {
-  AboutModal,
-  CustomizeDrawer,
-  loadAboutModal,
-  ScopeBoard,
-  SearchModal,
-  useOpenedOnce,
-} from "../livePanels";
+import { openCustomize, useCustomize } from "../customize";
+import { setLayoutPrefs, useLayoutPrefs, type LiveView } from "../layoutPrefs";
+import { AboutModal, loadAboutModal, ScopeBoard, SearchModal, useOpenedOnce } from "../livePanels";
 
 /** This browser's "High conviction only" switch (the API takes it per request, not as a saved setting). */
 const HIGH_CONVICTION_KEY = "ts-feed-high-conviction";
@@ -44,17 +47,7 @@ const SHOW_HIGH_CONVICTION = false;
  */
 const filledDepth = new Map<string, number>();
 
-/** This browser's pick of Cards or Scope for the Live feed (user decision 2026-10-18: a toggle, not a tab). */
-const VIEW_KEY = "ts-live-view";
-type FeedView = "cards" | "scope";
-
-function readView(): FeedView {
-  try {
-    return localStorage.getItem(VIEW_KEY) === "scope" ? "scope" : "cards";
-  } catch {
-    return "cards";
-  }
-}
+const noop = () => {};
 
 function readHighConviction(): boolean {
   if (!SHOW_HIGH_CONVICTION) return false;
@@ -78,29 +71,18 @@ export function LiveTab({
 }) {
   const now = useNow(15_000);
   const [page, setPage] = useState(1);
-  const [view, setViewState] = useState<FeedView>(readView);
-  const setView = (next: FeedView) => {
-    try {
-      localStorage.setItem(VIEW_KEY, next);
-    } catch {
-      // Private mode or blocked storage: the pick still applies for this visit.
-    }
-    setViewState(next);
-    // Each view has its own settings; the other's shouldn't stay open over it.
-    setCustomizing(false);
-    setScopeSettings(null);
-  };
+  // Cards or Scope (user decision 2026-10-18: a toggle, not a tab), synced to the account and also
+  // set in Customize › Tabs, top bar and lists (layoutPrefs.ts).
+  const view = useLayoutPrefs().liveView;
+  const setView = (liveView: LiveView) => setLayoutPrefs({ liveView });
   // Tokens the user hid from Cards and Scope (user ask 2026-10-19), and the list to bring them back.
   const hiddenTokens = useHiddenTokens();
-  const hiddenTokenIds = useHiddenTokenIds();
   // Pro: coins the wallet holds skip the filters below and Scope's (user ask 2026-10-19).
   const heldTokenIds = useHeldTokenIds();
   const [hiddenOpen, setHiddenOpen] = useState(false);
   const scope = view === "scope";
   // Scope's held-still and failing reads, for the Scanning pill (user ask 2026-10-23).
   const [scopeStatus, setScopeStatus] = useState({ paused: false, failing: false });
-  // Scope has its own settings window (user ask 2026-10-18): Customize opens it while in Scope.
-  const [scopeSettings, setScopeSettings] = useState<ScopeSettingsSection | null>(null);
   // Model calls narrowed to every model's high-conviction tier instead of the followed models.
   const [highConviction, setHighConviction] = useState(readHighConviction);
   // The tour opens by itself the first time this wallet lands here.
@@ -109,10 +91,10 @@ export function LiveTab({
     setAboutOpen(false);
     markIntroSeen(walletAddress);
   };
-  const [customizing, setCustomizing] = useState(false);
-  const closeCustomize = useCallback(() => setCustomizing(false), []);
+  // The one Customize window (customize.ts), opened here at Cards or Scope.
+  const customize = useCustomize();
+  const customizing = customize.open && (customize.section === "scope" || customize.section === "cards");
   const look = useAppearance();
-  const hidden = useMemo(() => cardHideSet(look), [look]);
   // The search (address, ticker or name) opens its own window over the feed (user ask
   // 2026-10-19), in both views; the feed underneath carries on as it was.
   const [searchOpen, setSearchOpen] = useState(false);
@@ -125,12 +107,252 @@ export function LiveTab({
   useEffect(() => registerCardSearch(openSearchQuery), [openSearchQuery]);
   // The windows' code loads on their first opening (livePanels.ts), and they stay mounted after.
   const aboutMounted = useOpenedOnce(aboutOpen);
-  const customizeMounted = useOpenedOnce(customizing);
   const searchMounted = useOpenedOnce(searchOpen);
   // "saved": the API mixes in model calls per this user's own switch and checked models; with
   // highConviction those calls are every model's high-conviction tier instead.
   const hc = highConviction ? "&highConviction=1" : "";
-  const feedPath = (n: number) => `/matches?page=${n}&includeCurated=saved${hc}`;
+  // Stable per feed, so the memoized Scope board skips this tab's own re-renders (audit 2026-10-23, WB-1).
+  const feedPath = useCallback((n: number) => `/matches?page=${n}&includeCurated=saved${hc}`, [hc]);
+  const stats = usePolling<CuratedStats>("/curated/stats", 60_000);
+  const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000);
+  const lb = board.data;
+  const modelsOn = lb?.showModelAlerts ?? true;
+  // Settings' "Only alerts both caught": the API narrows the feed and its stats; this only words it.
+  const bothOn = modelsOn && (lb?.bothOnly ?? false);
+  // Only the streams' state, for the Scanning pill: each view refetches its own pages on a nudge.
+  const curatedLive = useNudgeStream("/curated/stream", noop, modelsOn);
+  const matchesLive = useNudgeStream("/matches/stream", noop);
+  // Whether the Cards feed's reads are failing, for the Scanning pill (Scope reports its own).
+  const [cardsFailing, setCardsFailing] = useState(false);
+  const customizeCards = useCallback(() => openCustomize("cards"), []);
+
+  const t = lb?.targets ?? { hitRate2xPct: 75, hitRate4xPct: 50 };
+  const chosen = lb ? lb.entries.filter((e) => lb.selectedModels.includes(e.id)) : [];
+  const chosenNames =
+    chosen.length === 0
+      ? "–"
+      : chosen.length <= 2
+        ? chosen.map((e) => e.name).join(" + ")
+        : `${chosen[0]!.name} +${chosen.length - 1}`;
+  const streamLive = matchesLive && (!modelsOn || curatedLive);
+
+  const toggleHighConviction = () => {
+    const next = !highConviction;
+    try {
+      localStorage.setItem(HIGH_CONVICTION_KEY, next ? "1" : "0");
+    } catch {
+      // Private mode or blocked storage: the switch still applies for this visit.
+    }
+    setHighConviction(next);
+    setPage(1);
+  };
+
+  return (
+    <div className="stack">
+      <MarketBar left={<WatchlistPanel fit />} leftMini={<WatchlistChips />} />
+      <SectionBoundary label="Hidden tokens" resetKey={hiddenOpen} onClose={() => setHiddenOpen(false)}>
+        <HiddenTokensDialog open={hiddenOpen} onClose={() => setHiddenOpen(false)} now={now} />
+      </SectionBoundary>
+      <Suspense fallback={null}>
+        {aboutMounted && <AboutModal open={aboutOpen} onClose={closeAbout} targets={t} />}
+      </Suspense>
+      <SectionBoundary label="The search window" resetKey={searchOpen} onClose={() => setSearchOpen(false)}>
+        <Suspense fallback={null}>
+          {searchMounted && (
+            <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} now={now} seed={searchSeed} />
+          )}
+        </Suspense>
+      </SectionBoundary>
+      <section className="panel feed">
+        <header className="section-head">
+          <div>
+            <span className="eyebrow">Live feed</span>
+            <div className="heading-row">
+              <h2>
+                {bothOn
+                  ? "Alerts your filter and models both caught"
+                  : `Your alerts${modelsOn ? (highConviction ? " and high-conviction alerts" : " and model alerts") : ""}`}
+              </h2>
+              <button
+                type="button"
+                className="ghost icon-btn"
+                onClick={() => setAboutOpen(true)}
+                onPointerEnter={() => void loadAboutModal()}
+                onFocus={() => void loadAboutModal()}
+                aria-label="How this works"
+                title="How this works"
+              >
+                <InfoIcon size={16} />
+              </button>
+            </div>
+          </div>
+          <div className="feed-controls">
+            <div className="segmented small feed-view" role="radiogroup" aria-label="Feed view">
+              {(["cards", "scope"] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  role="radio"
+                  aria-checked={view === v}
+                  className={view === v ? "on" : ""}
+                  onClick={() => setView(v)}
+                  title={
+                    v === "cards"
+                      ? "Your feed as full alert cards, a page at a time"
+                      : "Your feed as a dense board: your filters, models and graduated tokens side by side"
+                  }
+                >
+                  {v === "cards" ? "Cards" : "Scope"}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className={`ghost stats-btn${customizing ? " on" : ""}`}
+              aria-expanded={customizing}
+              aria-haspopup="dialog"
+              onClick={() => openCustomize(scope ? "scope" : "cards")}
+              title={
+                scope
+                  ? "Customize Scope: how the rows look and what each column shows, plus every other option"
+                  : "Customize your feed: colors, spacing, columns and what each card shows, plus every other option"
+              }
+            >
+              <PaletteIcon size={14} />
+              Customize
+            </button>
+            {hiddenTokens.tokens.length > 0 && (
+              <button
+                type="button"
+                className={`ghost stats-btn${hiddenOpen ? " on" : ""}`}
+                aria-expanded={hiddenOpen}
+                onClick={() => setHiddenOpen(true)}
+                title="Tokens you hid from Cards and Scope: bring them back, or choose whether they come back by themselves"
+              >
+                <EyeOffIcon size={14} />
+                Hidden <span className="num">{hiddenTokens.tokens.length}</span>
+              </button>
+            )}
+            {SHOW_HIGH_CONVICTION && (
+              <button
+                type="button"
+                role="switch"
+                aria-checked={highConviction}
+                className={`switch${highConviction ? " on" : ""}`}
+                disabled={!modelsOn}
+                onClick={toggleHighConviction}
+                title={
+                  modelsOn
+                    ? "Show only the alerts that cleared each model's high-conviction line, from every model, in place of the models you follow. Your filter's alerts still show."
+                    : "Turn on model alerts to narrow them to the high-conviction tier"
+                }
+              >
+                <span className="switch-track">
+                  <span className="switch-thumb" />
+                </span>
+                High conviction only
+              </button>
+            )}
+            <CaSearchButton
+              onOpen={openSearch}
+              title="Find any token TrenchScanner tracks by its contract address, ticker or name. Press / to open."
+            />
+            <ScanStatus
+              showJobs={isAdmin}
+              feed={{
+                live: streamLive,
+                idle: "Polling",
+                paused: scope && scopeStatus.paused,
+                failing: scope ? scopeStatus.failing : cardsFailing,
+              }}
+            />
+          </div>
+        </header>
+        {scope && (
+          <Suspense fallback={<ScopeRowSkeletons />}>
+            <ScopeBoard
+              feedPath={feedPath}
+              modelsOn={modelsOn}
+              heldTokenIds={heldTokenIds}
+              onStatus={setScopeStatus}
+            />
+          </Suspense>
+        )}
+        {!scope && (
+          <CardsFeed
+            feedPath={feedPath}
+            hc={hc}
+            page={page}
+            setPage={setPage}
+            now={now}
+            heldTokenIds={heldTokenIds}
+            modelsOn={modelsOn}
+            bothOn={bothOn}
+            highConviction={highConviction}
+            chosenNames={chosenNames}
+            goTo={goTo}
+            onCustomize={customizeCards}
+            onFailing={setCardsFailing}
+          />
+        )}
+        {stats.data && look.learningNote && (
+          <div className={`learning-note${stats.stale ? " stale" : ""}`}>
+            <BrainIcon size={14} />
+            <span>
+              Learning from{" "}
+              <strong className="num">{stats.data.training.finalizedSamples.toLocaleString()}</strong> graded
+              moments. Base 2x rate {pct(stats.data.training.baseWinRatePct, 1)}
+              {stats.data.curator.modelTrainedAt &&
+                `, model last trained ${ago(stats.data.curator.modelTrainedAt, now)}`}
+              . <AsOf computedAt={stats.data.computedAt} now={now} />
+            </span>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+/**
+ * The Cards view's feed: its pages, live market caps and pager. Mounted only while Cards is the
+ * view, so in Scope (which reads the same pages and runs its own tick) the hidden cards no longer
+ * poll every page a second time, send their own GET /live/market, or re-render the board (audit
+ * 2026-10-23, WB-1).
+ */
+function CardsFeed({
+  feedPath,
+  hc,
+  page,
+  setPage,
+  now,
+  heldTokenIds,
+  modelsOn,
+  bothOn,
+  highConviction,
+  chosenNames,
+  goTo,
+  onCustomize,
+  onFailing,
+}: {
+  feedPath: (n: number) => string;
+  /** The high-conviction part of the path, which keys the depth each page took. */
+  hc: string;
+  page: number;
+  setPage: Dispatch<SetStateAction<number>>;
+  now: number;
+  heldTokenIds: ReadonlySet<string>;
+  modelsOn: boolean;
+  bothOn: boolean;
+  highConviction: boolean;
+  chosenNames: string;
+  goTo: (tab: "model" | "filters" | "settings") => void;
+  onCustomize: () => void;
+  onFailing: (failing: boolean) => void;
+}) {
+  const look = useAppearance();
+  const hidden = useMemo(() => cardHideSet(look), [look]);
+  const hiddenTokens = useHiddenTokens();
+  const hiddenTokenIds = useHiddenTokenIds();
   // The API's pages can come up short (a model call folded into your filter's card for the same
   // token, a card whose token was pruned), and hiding low market caps takes more cards out, so the
   // feed reads the API's pages from the first and lays out full pages of its own here: page 1
@@ -139,17 +361,11 @@ export function LiveTab({
   const feedPage = usePolling<MatchPage>(feedPath(1), 30_000);
   const morePaths = Array.from({ length: depth - 1 }, (_, i) => feedPath(i + 2));
   const morePages = usePollingAll<MatchPage>(morePaths, 30_000);
-  const stats = usePolling<CuratedStats>("/curated/stats", 60_000);
-  const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000);
-  const lb = board.data;
-  const modelsOn = lb?.showModelAlerts ?? true;
-  // Settings' "Only alerts both caught": the API narrows the feed and its stats; this only words it.
-  const bothOn = modelsOn && (lb?.bothOnly ?? false);
   // Only the first page refetches on a nudge: the ones read ahead catch up on their own poll, and
   // a burst of alerts must not refetch all of them each time.
   const nudged = () => feedPage.reload();
-  const curatedLive = useNudgeStream("/curated/stream", nudged, modelsOn);
-  const matchesLive = useNudgeStream("/matches/stream", nudged);
+  useNudgeStream("/curated/stream", nudged, modelsOn);
+  useNudgeStream("/matches/stream", nudged);
   const loadedPages = [feedPage.data, ...morePages.data];
   const buffer = useMemo(
     () => (feedPage.data ? joinPages(loadedPages) : undefined),
@@ -232,255 +448,83 @@ export function LiveTab({
   };
   const shownCards = filled?.shown;
   const hiddenCount = filled?.hiddenHere ?? 0;
-
-  const t = lb?.targets ?? { hitRate2xPct: 75, hitRate4xPct: 50 };
-  const chosen = lb ? lb.entries.filter((e) => lb.selectedModels.includes(e.id)) : [];
   const hasMore = filled ? filled.moreLoaded || (apiHasMore && depth < maxDepth) : false;
-  const chosenNames =
-    chosen.length === 0
-      ? "–"
-      : chosen.length <= 2
-        ? chosen.map((e) => e.name).join(" + ")
-        : `${chosen[0]!.name} +${chosen.length - 1}`;
-  const streamLive = matchesLive && (!modelsOn || curatedLive);
-
-  const toggleHighConviction = () => {
-    const next = !highConviction;
-    try {
-      localStorage.setItem(HIGH_CONVICTION_KEY, next ? "1" : "0");
-    } catch {
-      // Private mode or blocked storage: the switch still applies for this visit.
-    }
-    setHighConviction(next);
-    setPage(1);
-  };
+  const failing = !!feedPage.error;
+  useEffect(() => onFailing(failing), [failing, onFailing]);
 
   return (
-    <div className="stack">
-      <MarketBar left={<WatchlistPanel fit />} leftMini={<WatchlistChips />} />
-      <Suspense fallback={null}>
-        {customizeMounted && <CustomizeDrawer open={customizing} onClose={closeCustomize} />}
-      </Suspense>
-      <SectionBoundary label="Hidden tokens" resetKey={hiddenOpen} onClose={() => setHiddenOpen(false)}>
-        <HiddenTokensDialog open={hiddenOpen} onClose={() => setHiddenOpen(false)} now={now} />
-      </SectionBoundary>
-      <Suspense fallback={null}>
-        {aboutMounted && <AboutModal open={aboutOpen} onClose={closeAbout} targets={t} />}
-      </Suspense>
-      <SectionBoundary label="The search window" resetKey={searchOpen} onClose={() => setSearchOpen(false)}>
-        <Suspense fallback={null}>
-          {searchMounted && (
-            <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} now={now} seed={searchSeed} />
-          )}
-        </Suspense>
-      </SectionBoundary>
-      <section className="panel feed">
-        <header className="section-head">
-          <div>
-            <span className="eyebrow">Live feed</span>
-            <div className="heading-row">
-              <h2>
-                {bothOn
-                  ? "Alerts your filter and models both caught"
-                  : `Your alerts${modelsOn ? (highConviction ? " and high-conviction alerts" : " and model alerts") : ""}`}
-              </h2>
-              <button
-                type="button"
-                className="ghost icon-btn"
-                onClick={() => setAboutOpen(true)}
-                onPointerEnter={() => void loadAboutModal()}
-                onFocus={() => void loadAboutModal()}
-                aria-label="How this works"
-                title="How this works"
-              >
-                <InfoIcon size={16} />
-              </button>
-            </div>
-          </div>
-          <div className="feed-controls">
-            <div className="segmented small feed-view" role="radiogroup" aria-label="Feed view">
-              {(["cards", "scope"] as const).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  role="radio"
-                  aria-checked={view === v}
-                  className={view === v ? "on" : ""}
-                  onClick={() => setView(v)}
-                  title={
-                    v === "cards"
-                      ? "Your feed as full alert cards, a page at a time"
-                      : "Your feed as a dense board: your filters, models and graduated tokens side by side"
-                  }
-                >
-                  {v === "cards" ? "Cards" : "Scope"}
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              className={`ghost stats-btn${(scope ? scopeSettings !== null : customizing) ? " on" : ""}`}
-              aria-expanded={scope ? scopeSettings !== null : customizing}
-              onClick={() =>
-                scope ? setScopeSettings((o) => (o === null ? "display" : null)) : setCustomizing((o) => !o)
-              }
-              title={
-                scope
-                  ? "Scope's own settings: how the rows look and what each column shows"
-                  : "Colors, spacing, columns and what each card shows, changed right here on your feed"
-              }
-            >
-              <PaletteIcon size={14} />
-              Customize
-            </button>
-            {hiddenTokens.tokens.length > 0 && (
-              <button
-                type="button"
-                className={`ghost stats-btn${hiddenOpen ? " on" : ""}`}
-                aria-expanded={hiddenOpen}
-                onClick={() => setHiddenOpen(true)}
-                title="Tokens you hid from Cards and Scope: bring them back, or choose whether they come back by themselves"
-              >
-                <EyeOffIcon size={14} />
-                Hidden <span className="num">{hiddenTokens.tokens.length}</span>
-              </button>
-            )}
-            {SHOW_HIGH_CONVICTION && (
-              <button
-                type="button"
-                role="switch"
-                aria-checked={highConviction}
-                className={`switch${highConviction ? " on" : ""}`}
-                disabled={!modelsOn}
-                onClick={toggleHighConviction}
-                title={
-                  modelsOn
-                    ? "Show only the alerts that cleared each model's high-conviction line, from every model, in place of the models you follow. Your filter's alerts still show."
-                    : "Turn on model alerts to narrow them to the high-conviction tier"
-                }
-              >
-                <span className="switch-track">
-                  <span className="switch-thumb" />
-                </span>
-                High conviction only
-              </button>
-            )}
-            <CaSearchButton
-              onOpen={openSearch}
-              title="Find any token TrenchScanner tracks by its contract address, ticker or name. Press / to open."
-            />
-            <ScanStatus
-              showJobs={isAdmin}
-              feed={{
-                live: streamLive,
-                idle: "Polling",
-                paused: scope && scopeStatus.paused,
-                failing: scope ? scopeStatus.failing : !!feedPage.error,
-              }}
-            />
-          </div>
-        </header>
-        {!scope && feedPage.error && !feedPage.data && (
-          <p className="error">Couldn&apos;t load your feed: {feedPage.error.message}</p>
-        )}
-        {!scope && feedPage.error && feedPage.data && (
-          <p className="muted small center feed-refresh-note" role="status">
-            Couldn&apos;t refresh your feed, showing it from{" "}
-            {feedPage.at !== null ? ago(new Date(feedPage.at), now) : "earlier"}. Trying again.
+    <>
+      {feedPage.error && !feedPage.data && (
+        <p className="error">Couldn&apos;t load your feed: {feedPage.error.message}</p>
+      )}
+      {feedPage.error && feedPage.data && (
+        <p className="muted small center feed-refresh-note" role="status">
+          Couldn&apos;t refresh your feed, showing it from{" "}
+          {feedPage.at !== null ? ago(new Date(feedPage.at), now) : "earlier"}. Trying again.
+        </p>
+      )}
+      {!feedPage.data && !feedPage.error && <SkeletonCards count={4} />}
+      {feedPage.data && feedPage.data.matches.length === 0 && page === 1 && (
+        <div className="empty-state">
+          <RadarIcon size={28} />
+          <p>
+            {bothOn
+              ? `Nothing yet that your filter and ${chosenNames} both caught. Only alerts both caught is on in Settings, so tokens only one side caught are left out.`
+              : modelsOn
+                ? `Nothing yet from your filter or ${highConviction ? "the high-conviction alerts" : chosenNames}. Alerts land here the moment one comes in.`
+                : "Nothing caught by your filter yet. Turn on Model alerts in Settings to see the models' alerts here too."}
           </p>
-        )}
-        {scope && (
-          <Suspense fallback={<ScopeRowSkeletons />}>
-            <ScopeBoard
-              feedPath={feedPath}
-              modelsOn={modelsOn}
-              heldTokenIds={heldTokenIds}
-              settingsSection={scopeSettings}
-              onSettings={setScopeSettings}
-              onStatus={setScopeStatus}
+          <button className="ghost" onClick={() => goTo("filters")}>
+            Tune your filter <ArrowRightIcon size={13} />
+          </button>
+        </div>
+      )}
+      <div
+        className={`cards${feedPage.stale || (feedPage.error && feedPage.data) ? " stale" : ""}`}
+        aria-busy={feedPage.stale}
+        {...feedGridProps(look)}
+      >
+        {shownCards?.map((card) => (
+          <SectionBoundary key={card.id} label="This card" size="card" resetKey={card}>
+            <AlertCard
+              card={card}
+              now={now}
+              labelSource
+              hide={hidden}
+              onHide={() => hideToken(card, cards ?? [])}
             />
-          </Suspense>
-        )}
-        {!scope && (
-          <>
-            {!feedPage.data && !feedPage.error && <SkeletonCards count={4} />}
-            {feedPage.data && feedPage.data.matches.length === 0 && page === 1 && (
-              <div className="empty-state">
-                <RadarIcon size={28} />
-                <p>
-                  {bothOn
-                    ? `Nothing yet that your filter and ${chosenNames} both caught. Only alerts both caught is on in Settings, so tokens only one side caught are left out.`
-                    : modelsOn
-                      ? `Nothing yet from your filter or ${highConviction ? "the high-conviction alerts" : chosenNames}. Alerts land here the moment one comes in.`
-                      : "Nothing caught by your filter yet. Turn on Model alerts in Settings to see the models' alerts here too."}
-                </p>
-                <button className="ghost" onClick={() => goTo("filters")}>
-                  Tune your filter <ArrowRightIcon size={13} />
-                </button>
-              </div>
-            )}
-            <div
-              className={`cards${feedPage.stale || (feedPage.error && feedPage.data) ? " stale" : ""}`}
-              aria-busy={feedPage.stale}
-              {...feedGridProps(look)}
-            >
-              {shownCards?.map((card) => (
-                <SectionBoundary key={card.id} label="This card" size="card" resetKey={card}>
-                  <AlertCard
-                    card={card}
-                    now={now}
-                    labelSource
-                    hide={hidden}
-                    onHide={() => hideToken(card, cards ?? [])}
-                  />
-                </SectionBoundary>
-              ))}
-            </div>
-            {hiddenCount > 0 && (
-              <p className="muted small center mcap-hidden-note">
-                {hiddenCount === 1 ? "1 alert" : `${hiddenCount} alerts`} now under $
-                {look.hideBelowMcapUsd / 1000}K market cap {hiddenCount === 1 ? "is" : "are"} hidden here,
-                with older alerts moved up in {hiddenCount === 1 ? "its" : "their"} place.{" "}
-                <button type="button" className="link" onClick={() => setCustomizing(true)}>
-                  Change
-                </button>
-              </p>
-            )}
-            {feedPage.data && (shownCards?.length ?? 0) === 0 && page > 1 && (
-              <p className="muted small center">Nothing older here.</p>
-            )}
-            {(page > 1 || hasMore) && (
-              <nav className="pager">
-                <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-                  ← Newer
-                </button>
-                <span className="muted small num">Page {page}</span>
-                <button
-                  disabled={!hasMore || feedPage.stale}
-                  onPointerEnter={prefetchOlder}
-                  onFocus={prefetchOlder}
-                  onClick={() => setPage((p) => p + 1)}
-                >
-                  Older →
-                </button>
-              </nav>
-            )}
-          </>
-        )}
-        {stats.data && look.learningNote && (
-          <div className={`learning-note${stats.stale ? " stale" : ""}`}>
-            <BrainIcon size={14} />
-            <span>
-              Learning from{" "}
-              <strong className="num">{stats.data.training.finalizedSamples.toLocaleString()}</strong> graded
-              moments. Base 2x rate {pct(stats.data.training.baseWinRatePct, 1)}
-              {stats.data.curator.modelTrainedAt &&
-                `, model last trained ${ago(stats.data.curator.modelTrainedAt, now)}`}
-              . <AsOf computedAt={stats.data.computedAt} now={now} />
-            </span>
-          </div>
-        )}
-      </section>
-    </div>
+          </SectionBoundary>
+        ))}
+      </div>
+      {hiddenCount > 0 && (
+        <p className="muted small center mcap-hidden-note">
+          {hiddenCount === 1 ? "1 alert" : `${hiddenCount} alerts`} now under ${look.hideBelowMcapUsd / 1000}K
+          market cap {hiddenCount === 1 ? "is" : "are"} hidden here, with older alerts moved up in{" "}
+          {hiddenCount === 1 ? "its" : "their"} place.{" "}
+          <button type="button" className="link" onClick={onCustomize}>
+            Change
+          </button>
+        </p>
+      )}
+      {feedPage.data && (shownCards?.length ?? 0) === 0 && page > 1 && (
+        <p className="muted small center">Nothing older here.</p>
+      )}
+      {(page > 1 || hasMore) && (
+        <nav className="pager">
+          <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+            ← Newer
+          </button>
+          <span className="muted small num">Page {page}</span>
+          <button
+            disabled={!hasMore || feedPage.stale}
+            onPointerEnter={prefetchOlder}
+            onFocus={prefetchOlder}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Older →
+          </button>
+        </nav>
+      )}
+    </>
   );
 }

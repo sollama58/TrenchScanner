@@ -3,6 +3,8 @@ import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { HttpError, prisma, type MinuteCandle } from "@trenchscanner/core";
 import { resetRegradeCursor, runLabelRegradeJob } from "./labelRegradeJob.js";
+import { CandlesUnavailableError, PUMP_PAUSED_NO_KEY } from "./minuteCandleReader.js";
+import { GIVE_UP_TRIES, RETRY_MAX_MS } from "./candleRetry.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -16,12 +18,15 @@ const NOW = ANCHOR + 30 * 3_600_000;
 const path = (fromMinute: number, prices: number[]): MinuteCandle[] =>
   prices.map((close, i) => ({ startMs: ANCHOR + (fromMinute + i) * MIN, close }));
 
-async function seed(label: string, extra: { labelRule?: number; sampleKind?: string } = {}) {
+async function seed(
+  label: string,
+  extra: { labelRule?: number; sampleKind?: string; anchorAt?: number } = {},
+) {
   const token = await prisma.token.create({ data: { mintAddress: `${TAG}-${label}`, symbol: "T" } });
   const row = await prisma.candidateOutcome.create({
     data: {
       tokenId: token.id,
-      anchorAt: new Date(ANCHOR),
+      anchorAt: new Date(extra.anchorAt ?? ANCHOR),
       anchorPriceUsd: 1,
       anchorMcapUsd: 1_000_000_000,
       features: { mcapUsd: 1_000_000_000 },
@@ -170,5 +175,93 @@ describe.skipIf(!dbAvailable)("label regrade job", () => {
     expect(
       (await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } })).regradedAt,
     ).toBeNull();
+  });
+
+  it("backs off a coin no source can answer without passing its rows, and stamps them after 8 misses", async () => {
+    // Older than every other test row: the head of the pick, as the stuck coins were.
+    const stuck = await seed("stuck", { anchorAt: ANCHOR - 60 * MIN });
+    const fine = await seed("fine");
+    const asked: string[] = [];
+    const stub = {
+      minuteCandles: async (mint: string) => {
+        asked.push(mint);
+        if (mint === stuck.token.mintAddress) throw new CandlesUnavailableError(mint, "no pools to ask");
+        return [];
+      },
+    };
+    const opts = (at: number) => ({ spacingMs: 0, now: () => at, coinsPerRun: 1000 });
+    const pending = async () =>
+      (await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: stuck.row.id } })).regradedAt;
+
+    let meta = await runLabelRegradeJob(stub, opts(NOW));
+    expect(meta.unavailable).toBeGreaterThanOrEqual(1);
+    expect(await pending()).toBeNull();
+    // The coin after it is still reached.
+    expect(
+      (await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: fine.row.id } })).regradedAt,
+    ).not.toBeNull();
+
+    // Within its wait the coin is left out; after it, asked again (the cursor didn't pass its row).
+    const count = () => asked.filter((m) => m === stuck.token.mintAddress).length;
+    await runLabelRegradeJob(stub, opts(NOW + 5 * MIN));
+    expect(count()).toBe(1);
+    let at = NOW;
+    let wait = 10 * MIN;
+    for (let miss = 2; miss <= 7; miss += 1) {
+      at += wait + MIN;
+      wait = Math.min(2 * wait, 6 * 60 * MIN);
+      await runLabelRegradeJob(stub, opts(at));
+      expect(count()).toBe(miss);
+      expect(await pending()).toBeNull();
+    }
+    at += wait + MIN;
+    meta = await runLabelRegradeJob(stub, opts(at));
+    expect(count()).toBe(8);
+    expect(await pending()).not.toBeNull();
+    expect((meta.skipped as Record<string, number>)["no-candles"]).toBeGreaterThanOrEqual(1);
+    const after = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: stuck.row.id } });
+    expect(after).toMatchObject({ labelRule: 3, hit2xIn1h: true, rule3Grade: null });
+  });
+
+  it("keeps asking about a row more than a week past its anchor until its misses run out", async () => {
+    const { token, row } = await seed("old-stuck");
+    const stub = {
+      minuteCandles: async (mint: string): Promise<MinuteCandle[]> => {
+        if (mint === token.mintAddress) throw new CandlesUnavailableError(mint, "no pools to ask");
+        return [];
+      },
+    };
+    let at = ANCHOR + 8 * 86_400_000;
+    const regradedAt = async () =>
+      (await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } })).regradedAt;
+    for (let i = 1; i < GIVE_UP_TRIES; i++) {
+      await runLabelRegradeJob(stub, { spacingMs: 0, now: () => at, coinsPerRun: 1000 });
+      expect(await regradedAt()).toBeNull();
+      at += RETRY_MAX_MS + 1;
+    }
+    const meta = await runLabelRegradeJob(stub, { spacingMs: 0, now: () => at, coinsPerRun: 1000 });
+    expect((meta.skipped as Record<string, number>)["no-candles"]).toBeGreaterThanOrEqual(1);
+    expect(await regradedAt()).not.toBeNull();
+  });
+
+  it("stops the run once a few coins in a row find Pump.fun paused with no CoinGecko key", async () => {
+    const seeded = await Promise.all([1, 2, 3, 4].map((n) => seed(`paused-${n}`)));
+    let calls = 0;
+    const meta = await runLabelRegradeJob(
+      {
+        minuteCandles: async (mint) => {
+          calls += 1;
+          throw new CandlesUnavailableError(mint, PUMP_PAUSED_NO_KEY);
+        },
+      },
+      { spacingMs: 0, now: () => NOW, coinsPerRun: 1000 },
+    );
+    expect(meta.pumpPaused).toBe(true);
+    expect(calls).toBe(3);
+    for (const { row } of seeded) {
+      expect(
+        (await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } })).regradedAt,
+      ).toBeNull();
+    }
   });
 });

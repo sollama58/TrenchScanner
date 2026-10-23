@@ -861,7 +861,10 @@ export async function registerTokenRoutes(
       if (!parsed.success)
         return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "bad search" });
       const shells = await loadSearchMarketHits(parsed.data.mints);
-      const hits = opts.dexScreener ? await fillSearchMarketHits(shells, opts.dexScreener) : shells;
+      // Any 30 mints, tracked or not: the reader's own share of search's DexScreener batches (AS-5).
+      const hits = opts.dexScreener
+        ? await fillSearchMarketHits(shells, opts.dexScreener, Date.now(), request.user!.userId)
+        : shells;
       reply.header("Cache-Control", "no-store");
       return { hits };
     },

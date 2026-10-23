@@ -1,6 +1,11 @@
 import { createServer, type Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
-import { applyCharityNames, charityNamesByMint, type CardCreatorFee } from "./curatedFeed.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  applyCharityNames,
+  charityNamesByMint,
+  charitySharesByMint,
+  type CardCreatorFee,
+} from "./curatedFeed.js";
 
 let server: Server | undefined;
 const previousBase = process.env.PUMPFUN_BASE_URL;
@@ -114,5 +119,42 @@ describe("charityNamesByMint", () => {
     ]);
     applyCharityNames(fees, loaded);
     expect(fees.get(mint)?.charityName).toBe(name);
+  });
+
+  // Last in the file: a failing host can hold the shared Pump.fun gate for the reads after it.
+  it("keeps a failed lookup for a minute, then asks again", async () => {
+    let hits = 0;
+    let fail = true;
+    const name = "St. Jude Children's Research Hospital";
+    server = createServer((req, res) => {
+      hits += 1;
+      const mint = decodeURIComponent((req.url ?? "").split("/").pop() ?? "");
+      if (fail) {
+        res.statusCode = 500;
+        res.end("{}");
+        return;
+      }
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ mint, is_charity: true, charity_name: name }));
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (typeof address === "string" || address === null) throw new Error("failed to bind test server");
+    process.env.PUMPFUN_BASE_URL = `http://127.0.0.1:${address.port}`;
+    const mint = "FailingCharityMint11111111111111111111111";
+    const start = Date.now();
+    vi.useFakeTimers({ toFake: ["Date"], now: start });
+    try {
+      expect((await charitySharesByMint([mint])).has(mint)).toBe(false);
+      const asked = hits;
+      expect(asked).toBeGreaterThan(0);
+      expect((await charitySharesByMint([mint])).has(mint)).toBe(false);
+      expect(hits).toBe(asked);
+      fail = false;
+      vi.setSystemTime(start + 61_000);
+      expect((await charityNamesByMint([mint])).get(mint)).toBe(name);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

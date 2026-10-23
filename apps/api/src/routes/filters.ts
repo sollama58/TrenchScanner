@@ -53,6 +53,17 @@ export const FILTER_ICONS = [
   "radar",
 ] as const;
 
+/**
+ * The same fields with their defaults taken off. Zod 4 fills a default inside an optional key, so
+ * a plain .partial() would turn a one-field PATCH into a reset of every other field.
+ */
+function withoutDefaults<S extends z.ZodRawShape>(schema: z.ZodObject<S>) {
+  const shape = Object.fromEntries(
+    Object.entries(schema.shape).map(([k, v]) => [k, v instanceof z.ZodDefault ? v.unwrap() : v]),
+  );
+  return z.object(shape as { [K in keyof S]: S[K] extends z.ZodDefault<infer T> ? T : S[K] });
+}
+
 function buildFilterInputSchema(env: Env) {
   return z.object({
     name: z.string().min(1).max(60).default("Default"),
@@ -131,7 +142,7 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
   app.addHook("preHandler", app.authenticateSubscriber);
 
   const filterInputSchema = buildFilterInputSchema(opts.env);
-  const filterUpdateSchema = filterInputSchema.partial();
+  const filterUpdateSchema = withoutDefaults(filterInputSchema).partial();
 
   // The true range a token could ever be scanned/matched at - see scanBand()'s own doc comment.
   // A user's mcapMin/mcapMax outside this can never match anything regardless of what they set,

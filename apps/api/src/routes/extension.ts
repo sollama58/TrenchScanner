@@ -1,5 +1,4 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { z } from "zod";
 import { adminWalletSet, prisma, resolveAccess, resolveFeedCalls, type Env } from "@trenchscanner/core";
 import { clientIp, ipRateLimitKey } from "../clientIp.js";
 import { contestState, resolveFeedModels, SAVED_FEED_SELECT, toSavedFeed } from "../contest.js";
@@ -11,12 +10,13 @@ import {
   hashExtensionKey,
   isExtensionKeyShape,
 } from "../extensionKey.js";
-import { isMintAddress, lookupOverlay, MAX_LOOKUP_MINTS } from "../extensionLookup.js";
+import { recentOverlay } from "../extensionLookup.js";
 import { modelAlertKeyAccess } from "../modelAlertKey.js";
 import { overlaySettingsSchema, parseOverlaySettings } from "../overlaySettings.js";
 
 /**
- * The browser extension overlay's API (/ext/v1). Every route takes an extension key as
+ * The browser extension's API (/ext/v1). The extension is a side panel with no access to any
+ * trading site, so nothing here takes addresses from a page: it lists the reader's own alerts. Every route takes an extension key as
  * `Authorization: Bearer tsx_...` and nothing else: no cookie is read here, which is why
  * server.ts lets these routes through its Origin check (an extension's requests carry a
  * chrome-extension:// origin, and a page elsewhere cannot make a browser attach this header).
@@ -35,8 +35,8 @@ const MAX_FAILURE_ADDRESSES = 10_000;
 /** How often lastUsedAt is written for one key. */
 const LAST_USED_EVERY_MS = 10 * 60_000;
 
-/** Lookups a key may make a minute: a busy board polls every 10-15 s, plus scrolling. */
-const LOOKUP_RATE_LIMIT = { max: 60, timeWindow: "1 minute" };
+/** Feed reads a key may make a minute: an open panel polls every 15 s, plus refreshes. */
+const FEED_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 const SETTINGS_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 
 export interface ExtensionClient {
@@ -86,12 +86,18 @@ declare module "fastify" {
   }
 }
 
-const lookupBody = z.object({ mints: z.array(z.string().max(64)).min(1).max(MAX_LOOKUP_MINTS) }).strict();
-
 export async function registerExtensionRoutes(app: FastifyInstance, opts: { env: Env }) {
   const admins = adminWalletSet(opts.env);
-  const bucket = (request: FastifyRequest) =>
-    extensionRateLimitBucket(request.headers.authorization, ipRateLimitKey(request));
+  // A key's own bucket only once it has been proven (in authCache): rotating made-up keys would
+  // otherwise get a fresh bucket per request and flush real keys' buckets (audit CE-2).
+  const bucket = (request: FastifyRequest) => {
+    const secret = extensionKeyFromHeader(request.headers.authorization);
+    if (secret === null || !isExtensionKeyShape(secret)) return ipRateLimitKey(request);
+    const cached = authCache.get(hashExtensionKey(secret, opts.env.JWT_SECRET));
+    return cached && Date.now() - cached.at < AUTH_CACHE_MS
+      ? extensionRateLimitBucket(request.headers.authorization, ipRateLimitKey(request))
+      : ipRateLimitKey(request);
+  };
 
   app.addHook("preHandler", async (request, reply) => {
     const now = Date.now();
@@ -112,7 +118,9 @@ export async function registerExtensionRoutes(app: FastifyInstance, opts: { env:
       request.extensionClient = cached.client;
       return;
     }
-    // A real key is never refused for its address's failures: the cap only answers wrong ones.
+    // An address past the failure cap is turned away before the key read, not after it, so junk
+    // keys cost no DB read (audit CE-2). A key proven within AUTH_CACHE_MS (above) stays exempt;
+    // an unproven one from that address waits out the minute like the junk.
     const row = await prisma.extensionKey.findUnique({
       where: { secretHash: hash },
       select: {
@@ -194,18 +202,11 @@ export async function registerExtensionRoutes(app: FastifyInstance, opts: { env:
     },
   );
 
-  /**
-   * The rows on screen. Database only: an unknown mint is answered as untracked and never
-   * looked up anywhere else. Invalid addresses are dropped, not refused, so one odd row on a
-   * board doesn't cost the rest their rings.
-   */
-  app.post(
-    "/lookup",
-    { config: { rateLimit: { ...LOOKUP_RATE_LIMIT, keyGenerator: bucket } } },
-    async (request, reply) => {
-      const parsed = lookupBody.safeParse(request.body);
-      if (!parsed.success) return reply.code(400).send({ error: `send 1 to ${MAX_LOOKUP_MINTS} mints` });
-      const mints = [...new Set(parsed.data.mints)].filter(isMintAddress);
+  /** The reader's latest alerts, newest first. Database only, as the lookup always was. */
+  app.get(
+    "/feed",
+    { config: { rateLimit: { ...FEED_RATE_LIMIT, keyGenerator: bucket } } },
+    async (request) => {
       const { userId } = request.extensionClient!;
       const user = await prisma.user.findUnique({ where: { id: userId }, select: SAVED_FEED_SELECT });
       const state = await contestState(opts.env);
@@ -215,7 +216,7 @@ export async function registerExtensionRoutes(app: FastifyInstance, opts: { env:
         saved ? resolveFeedModels(state, saved).models : [...state.defaultModels],
         false,
       );
-      return lookupOverlay(userId, mints, calls);
+      return { tokens: await recentOverlay(userId, calls) };
     },
   );
 }

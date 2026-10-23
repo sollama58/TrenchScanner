@@ -13,6 +13,7 @@ import { usePolling, useNow } from "../hooks";
 import { ago, shortAddress, signedPct, usd } from "../format";
 import { openTokenModal } from "../tokenModal";
 import { useProWallet } from "../proTrade";
+import { setMarketBarOpen, useMarketBarOpen } from "../layoutPrefs";
 import {
   deltaText,
   priceText,
@@ -113,31 +114,14 @@ function openPortfolio() {
   window.scrollTo({ top: 0 });
 }
 
-/** Whether the reader last left the full bar open; it starts collapsed (user ask 2026-10-23). */
-const OPEN_KEY = "ts-market-bar-open";
-
-function readOpen(): boolean {
-  try {
-    return localStorage.getItem(OPEN_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 function Bar({ left, leftMini, base = "/curated", positions }: MarketBarProps & { positions: Positions }) {
   const phone = useMatches(PHONE_QUERY);
   const guest = base === "/guest";
   const prices = usePolling<MarketPrices>(`${base}/market/prices`, PRICES_POLL_MS);
   const trench = usePolling<TrenchAnswer>(`${base}/market/trench`, TRENCH_POLL_MS);
-  const [open, setOpenState] = useState(readOpen);
-  const setOpen = (v: boolean) => {
-    setOpenState(v);
-    try {
-      localStorage.setItem(OPEN_KEY, v ? "1" : "0");
-    } catch {
-      // A private window: the choice lasts this visit.
-    }
-  };
+  // Whether the reader last left the full bar open, shared with Customize (layoutPrefs.ts).
+  const open = useMarketBarOpen();
+  const setOpen = setMarketBarOpen;
   const ref = useRef<HTMLElement>(null);
   const pinned = usePinnedPast(ref, open);
   const watch = left ?? <WatchlistPlaceholder guest={guest} />;
@@ -341,6 +325,7 @@ function Ticker({ p, loading }: { p: MarketPrice; loading: boolean }) {
       <div className="mkt-ticker-top">
         <TokenImage
           url={p.imageUrl}
+          mint={p.mint}
           size={40}
           width={18}
           height={18}
@@ -428,11 +413,11 @@ function TrenchStats({ data, failed }: { data: TrenchAnswer | null; failed: bool
     <div
       ref={ref}
       className={`mkt-trench${shown ? " open" : ""}`}
-      onMouseEnter={(e) => {
-        if (e.nativeEvent instanceof PointerEvent && e.nativeEvent.pointerType === "touch") return;
-        setOpen(true);
-      }}
-      onMouseLeave={() => setOpen(false)}
+      // Pointer events, so a tap can be told apart: its compatibility mouseenter is a plain
+      // MouseEvent, which opened the card on hover and left a second tap unable to close it
+      // (audit 2026-10-23, WB-9). A tap only pins and unpins.
+      onPointerEnter={(e) => hoverOpens(e.pointerType) && setOpen(true)}
+      onPointerLeave={(e) => hoverOpens(e.pointerType) && setOpen(false)}
     >
       <div
         className="mkt-trench-face"
@@ -684,6 +669,7 @@ function Position({ c, now }: { c: TradeCoin; now: number }) {
       >
         <TokenImage
           url={c.imageUrl}
+          mint={c.mint}
           size={56}
           width={28}
           height={28}
@@ -781,6 +767,7 @@ function MiniBar({
               >
                 <TokenImage
                   url={p.imageUrl}
+                  mint={p.mint}
                   size={32}
                   width={16}
                   height={16}
@@ -855,6 +842,7 @@ function MiniPosition({ c }: { c: TradeCoin }) {
     >
       <TokenImage
         url={c.imageUrl}
+        mint={c.mint}
         size={32}
         width={16}
         height={16}
@@ -867,9 +855,15 @@ function MiniPosition({ c }: { c: TradeCoin }) {
   );
 }
 
+/** Whether resting this pointer on the trench stats opens their card: a mouse, not a finger or pen. */
+export function hoverOpens(pointerType: string): boolean {
+  return pointerType === "mouse";
+}
+
 /**
  * A row of chips that shows as many as fit its width whole, then `more(hidden)`: measured after
- * layout and again on resize, so a chip is never cut or wrapped.
+ * layout and again whenever the row or any chip changes size (a market cap gaining a digit, the
+ * web font landing), so a chip is never cut or wrapped.
  */
 export function FitRow({ children, more }: { children: ReactNode; more: (hidden: number) => ReactNode }) {
   const items = Children.toArray(children);
@@ -897,6 +891,9 @@ export function FitRow({ children, more }: { children: ReactNode; more: (hidden:
     measure();
     const ro = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
     ro?.observe(row);
+    // Each chip too: watching only the row missed a chip that grew in place (audit 2026-10-23, WB-8).
+    for (const el of row.querySelectorAll<HTMLElement>(":scope > .fit-item, :scope > .fit-more"))
+      ro?.observe(el);
     return () => ro?.disconnect();
   }, [items.length]);
   return (

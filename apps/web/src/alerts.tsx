@@ -7,6 +7,8 @@ import { tokenThumb, usd } from "./format";
 import { adoptAppearance, appearanceVersion, useAppearance } from "./appearance";
 import { adoptHiddenTokens, hiddenTokensVersion } from "./hiddenTokens";
 import { adoptScopeSettings, scopeSettingsVersion } from "./scopeSettings";
+import { tradeSettingsSync } from "./proTrade";
+import { layoutPrefsSync } from "./layoutPrefs";
 import { openChaosTabs, thisBrowserIsDesktop } from "./chaosMode";
 import { belowMcapLine } from "./components/AlertCard";
 
@@ -51,6 +53,8 @@ export function loadSettings(force = false): Promise<void> {
   const lookVersion = appearanceVersion();
   const hiddenVersion = hiddenTokensVersion();
   const scopeVersion = scopeSettingsVersion();
+  const tradeVersion = tradeSettingsSync.version();
+  const layoutVersion = layoutPrefsSync.version();
   loading = cachedGet<Settings>(SETTINGS_PATH, force ? -1 : 0)
     .then((s) => {
       // An alert-pref save made while this was in flight is newer than its answer: keep those.
@@ -60,6 +64,9 @@ export function loadSettings(force = false): Promise<void> {
       adoptAppearance(s.appearance, lookVersion, s.appearanceKeys);
       adoptHiddenTokens(s.hiddenTokens, hiddenVersion);
       adoptScopeSettings(s.scopeSettings, scopeVersion);
+      // Customize's other synced sections; an API build without them sends no `prefs`.
+      tradeSettingsSync.adopt(s.prefs === undefined ? undefined : s.prefs.trade, tradeVersion);
+      layoutPrefsSync.adopt(s.prefs === undefined ? undefined : s.prefs.layout, layoutVersion);
       emit();
     })
     .finally(() => {
@@ -81,16 +88,18 @@ let loadedAt = 0;
 let savesInFlight = 0;
 /** How old the settings may get before a returning or long-open tab reads them again. */
 const SETTINGS_REFRESH_MS = 5 * 60_000;
+const SETTINGS_RETURN_MS = 20_000;
 let refreshHooked = false;
 
 /**
- * Re-reads the settings once they are SETTINGS_REFRESH_MS old, so a change made on another device
- * (sound, notifications, Chaos Mode) reaches a tab that stays open. Checked when the tab comes back
- * and on a timer while it is visible; skipped while a save here is in flight.
+ * Re-reads the settings once they are old, so a change made on another device (sound,
+ * notifications, Chaos Mode, anything in Customize) reaches a tab that stays open: SETTINGS_REFRESH_MS
+ * on a timer while the tab is visible, SETTINGS_RETURN_MS when the tab comes back into view (the
+ * reader has likely just been on another device). Skipped while a save here is in flight.
  */
-function refreshSettingsIfOld(): void {
+function refreshSettingsIfOld(maxAgeMs: number): void {
   if (document.visibilityState !== "visible" || settings === null || savesInFlight > 0) return;
-  if (Date.now() - loadedAt < SETTINGS_REFRESH_MS) return;
+  if (Date.now() - loadedAt < maxAgeMs) return;
   void loadSettings(true).catch(() => undefined);
 }
 
@@ -100,8 +109,8 @@ export function useSettings(): Settings | null {
     void loadSettings().catch(() => undefined);
     if (!refreshHooked) {
       refreshHooked = true;
-      document.addEventListener("visibilitychange", refreshSettingsIfOld);
-      window.setInterval(refreshSettingsIfOld, 60_000);
+      document.addEventListener("visibilitychange", () => refreshSettingsIfOld(SETTINGS_RETURN_MS));
+      window.setInterval(() => refreshSettingsIfOld(SETTINGS_REFRESH_MS), 60_000);
     }
   }, []);
   return s;

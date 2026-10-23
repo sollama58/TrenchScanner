@@ -500,9 +500,15 @@ export function curvePriceOf(mint: string, now = Date.now()): number | null {
  * Curve prices the candidate watcher can grade from between `afterMs` and `untilMs`. The tape
  * and the watcher run in this process; nothing is written for the label. Empty when this mint
  * has no cover (an older coin, a graduate already dropped, a restart).
+ *
+ * Only up to the uniform follow age (maxAgeMinutes from the coin's birth): past it the tape still
+ * follows coins a seat alerted on or a chart opened, and grading only those on intra-minute wicks
+ * would tie the label to the model's own picks and to later attention (audit 2026-10-23, WC-2).
  */
 export function curveLabelPrices(mint: string, afterMs: number, untilMs: number) {
-  return tape.labelPrices(mint, afterMs, untilMs);
+  const f = followed.get(mint);
+  const until = f && cfg ? Math.min(untilMs, f.bornAt + cfg.maxAgeMinutes * 60_000) : untilMs;
+  return tape.labelPrices(mint, afterMs, Math.max(afterMs, until));
 }
 
 /**

@@ -342,8 +342,10 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     const { mint, q } = parsed.data;
     if (!mint && !q) return reply.code(400).send({ error: "search by q or mint" });
     const wallet = request.user!.walletAddress;
-    // The feed's text search budget: the same box asks this alongside GET /tokens/search.
-    if (!mint && !allowTextSearch(`${request.user!.userId}:external`)) {
+    // The feed's search budget: the same box asks this alongside GET /tokens/search. A mint spends
+    // it too: each new one is a DexScreener search on the API's one shared gate (audit 2026-10-23,
+    // AS-2, as /tokens/search on 2026-10-21).
+    if (!allowTextSearch(`${request.user!.userId}:external`)) {
       return reply.code(429).send({ error: "Too many searches; wait a few seconds and try again." });
     }
     const [found, prices, balance, daily] = await Promise.all([

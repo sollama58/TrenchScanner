@@ -24,11 +24,13 @@ import {
   nextCurveTapeCoveredMs,
   pumpCurveUsdPerUnit,
   FINE_TICK_LABEL_RULE,
+  FINE_TICK_SMOOTHING_MS,
   FRESH_ANCHOR_LABEL_RULE,
   type Env,
   type DexScreenerClient,
   type ScoredToken,
   type OutcomeAggregates,
+  SMOOTHED_FINE_TICK_LABEL_RULE,
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
 import { curveLabelPrices } from "./curveTape.js";
@@ -567,6 +569,12 @@ export async function runCandidateWatchJob(
       if (slice) {
         const prices = curveLabelPrices(row.token.mintAddress, slice.afterMs, slice.untilMs);
         coveredAdd = prices.coveredMs;
+        // The same prints with the smoothing window's history before the slice (rule 6).
+        const history = curveLabelPrices(
+          row.token.mintAddress,
+          slice.afterMs - FINE_TICK_SMOOTHING_MS,
+          slice.untilMs,
+        );
         const scaleAt =
           dollar ??
           (curveUsdPerUnit !== null && prices.quoteIsSol
@@ -576,9 +584,10 @@ export async function runCandidateWatchJob(
           // Only a SOL quote uses the SOL/USD scale. A coin-quoted curve stays on the dollar
           // print's own ratio: that scale is not lamports per raw token.
           const fine = dollarTicksFromCurve(
-            prices,
+            history,
             scaleAt,
             prices.quoteIsSol ? (curveUsdPerUnit ?? undefined) : undefined,
+            { afterMs: slice.afterMs, untilMs: slice.untilMs },
           );
           if (fine.length > 0) {
             usedFineTicks = true;
@@ -642,11 +651,12 @@ export async function runCandidateWatchJob(
         data.lastDollarPriceUsd = candidate.priceUsd;
         data.lastDollarAt = candidate.at;
       }
-      // Rule 5 is rule 4's anchor plus these prints. A rule-3 row keeps rule 3: its anchor is the
-      // scan price, and a higher rule would start restamping DexScreener's lag. History on rule 4
-      // is not rewritten; only a row that actually folded a curve print moves.
+      // Rule 6 is rule 4's anchor plus these prints, smoothed. A rule-3 row keeps rule 3: its anchor
+      // is the scan price, and a higher rule would start restamping DexScreener's lag. History on
+      // rule 4 is not rewritten; only a row that actually folded a curve print moves. A row stamped
+      // 5 before smoothing shipped keeps 5: some of its prints were folded in raw.
       if (usedFineTicks && row.labelRule >= FRESH_ANCHOR_LABEL_RULE && row.labelRule < FINE_TICK_LABEL_RULE) {
-        data.labelRule = FINE_TICK_LABEL_RULE;
+        data.labelRule = SMOOTHED_FINE_TICK_LABEL_RULE;
       }
 
       const elapsedMs = tickAt.getTime() - row.anchorAt.getTime();

@@ -881,6 +881,7 @@ export function LookupWhat({ lookup: l, detail }: { lookup: Lookup; detail?: Rea
     <>
       <TokenImage
         url={l.token?.imageUrl}
+        mint={l.token?.mintAddress}
         size={64}
         className="avatar util-avatar"
         width={28}

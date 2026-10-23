@@ -1,5 +1,6 @@
 /**
- * Solana addresses, without a dependency: the content script ships with none.
+ * Solana addresses, without a dependency. The panel builds site links only from a valid one, so a
+ * bad answer from the API can never become a link anywhere else.
  *
  * A candidate is accepted only if it is base58 and decodes to exactly 32 bytes, so a shortened
  * label ("GPs…pump"), a ticker or a transaction signature never passes for a mint.
@@ -31,16 +32,4 @@ export function base58Length(value: string): number {
 
 export function isMintAddress(value: string): boolean {
   return value.length >= 32 && value.length <= 44 && base58Length(value) === 32;
-}
-
-const CANDIDATE = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
-
-/** Every valid address inside a string (a URL, an attribute), in order, without repeats. */
-export function mintsIn(text: string): string[] {
-  const out: string[] = [];
-  for (const match of text.matchAll(CANDIDATE)) {
-    const value = match[0];
-    if (isMintAddress(value) && !out.includes(value)) out.push(value);
-  }
-  return out;
 }

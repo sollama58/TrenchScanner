@@ -12,7 +12,7 @@ import { TwoFactorPanel } from "../components/TwoFactorPanel";
 import { ModelAlertKeysPanel } from "../components/ModelAlertKeys";
 import { ExtensionKeysPanel } from "../components/ExtensionKeys";
 import { PrivyWalletPanel } from "../components/PrivyWalletPanel";
-import { TradingSettingsPanel } from "../components/TradingSettingsPanel";
+import { openCustomize, type CustomizeSection } from "../customize";
 import { TrackedWalletsPanel } from "../components/TrackedWallets";
 import { SETTINGS_ACCOUNT_ID } from "../components/WalletMenu";
 import { InstallAppPanel } from "../components/InstallApp";
@@ -21,9 +21,9 @@ import {
   BoltIcon,
   ClockIcon,
   FlameIcon,
+  PaletteIcon,
   ShieldIcon,
   SlidersIcon,
-  StreamIcon,
   WalletIcon,
 } from "../components/Icons";
 import { Switch } from "../components/AlertDeliveryPanels";
@@ -36,7 +36,7 @@ import {
   thisBrowserIsDesktop,
   useChaosStatus,
 } from "../chaosMode";
-import { setAppearance, useAppearance } from "../appearance";
+import { useAppearance } from "../appearance";
 import { useNow, usePolling } from "../hooks";
 import { useWalletBalance } from "../walletBalance";
 import { ago, shortAddress } from "../format";
@@ -45,7 +45,7 @@ import { ago, shortAddress } from "../format";
  * Settings: your subscription and wallet balances (first, user ask 2026-10-18), your feed's Model
  * alerts switch, extra tabs, and your phones. How alerts reach you (sound, browser notifications, Telegram) lives on
  * the Filters tab, next to the filters they apply to; which models' calls you get is picked on the
- * Models tab; how the feed looks is the Live feed's Customize button.
+ * Models tab; how the dashboard looks is the Customize window.
  */
 export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live") => void }) {
   const settings = useSettings();
@@ -64,9 +64,9 @@ export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live"
           <button type="button" className="link" onClick={() => goTo("model")}>
             Models tab
           </button>
-          , and how your feed looks under <strong>Customize</strong> on the{" "}
-          <button type="button" className="link" onClick={() => goTo("live")}>
-            Live feed
+          , and how everything looks under{" "}
+          <button type="button" className="link" onClick={() => openCustomize("look")}>
+            Customize
           </button>
           .
         </span>
@@ -76,9 +76,7 @@ export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live"
       <InstallAppPanel />
       <FeedPanel goTo={goTo} />
       <ChaosPanel prefs={settings?.alerts ?? null} />
-      <TabsPanel />
-      <TokenViewPanel />
-      <TradingSettingsPanel />
+      <CustomizePanel />
       <TrackedWalletsPanel />
       {/* Phone pairing by QR is for wallet sign-ins only (user rule 2026-10-18). */}
       {me?.signInMethod === "privy" ? <PrivyWalletPanel /> : <ConnectPhonePanel />}
@@ -234,103 +232,44 @@ function ChaosPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
   );
 }
 
-/** Optional tabs, off until switched on here. Saved with the feed appearance, so it follows the wallet. */
-function TabsPanel() {
-  const { hideLighthouseTab } = useAppearance();
-  return (
-    <section className="panel">
-      <header className="section-head">
-        <div>
-          <span className="eyebrow">
-            <StreamIcon size={13} /> Tabs
-          </span>
-          <h2>Extra tabs</h2>
-        </div>
-      </header>
-      <div className="tab-option">
-        <button
-          type="button"
-          role="switch"
-          aria-checked={!hideLighthouseTab}
-          className={`switch${hideLighthouseTab ? "" : " on"}`}
-          onClick={() => setAppearance({ hideLighthouseTab: !hideLighthouseTab })}
-        >
-          <span className="switch-track">
-            <span className="switch-thumb" />
-          </span>
-          Lighthouse
-        </button>
-        <p className="muted small">
-          A tab with the Market Lighthouse in full: how screened tokens are doing, and its trends over time.
-        </p>
-      </div>
-    </section>
-  );
-}
-
 /**
- * The token view: its desktop layout (user ask 2026-10-19) and its header (user ask 2026-10-16).
- * Saved with the feed appearance, so it follows the wallet.
+ * Customize (user ask 2026-10-23): every option that shapes the dashboard is in the one Customize
+ * window. Its sections, to open it at any one of them from here.
  */
-function TokenViewPanel() {
-  const { hideSafetyPill, tokenView } = useAppearance();
+function CustomizePanel() {
+  const links: [CustomizeSection, string, string][] = [
+    ["look", "Theme and colors", "Dark or light, and the colors cards and Scope use"],
+    ["cards", "Cards", "Presets, spacing, columns and the market cap line"],
+    ["card-fields", "Card pills and tiles", "What every alert card shows"],
+    ["scope", "Scope", "Rows, chips and columns"],
+    ["token", "Token window", "Pro or Classic, what sits beside the chart, the safety pill"],
+    ["chart", "Chart and bubble map", "Indicators, wallet trades, event flags"],
+    ["trading", "Trading", "Quick links, trade buttons, fees and quick buy"],
+    ["app", "Tabs, top bar and lists", "Extra tabs, the market bar, watchlist, hidden tokens"],
+  ];
   return (
     <section className="panel">
       <header className="section-head">
         <div>
           <span className="eyebrow">
-            <ShieldIcon size={13} /> Token view
+            <PaletteIcon size={13} /> Customize
           </span>
-          <h2>Coin window</h2>
+          <h2>Make it yours</h2>
         </div>
-      </header>
-      <div className="tab-option">
-        <div className="choice-row">
-          <span className="small">Opens in</span>
-          <div className="segmented small" role="radiogroup" aria-label="Coin window opens in">
-            {(
-              [
-                ["pro", "Pro"],
-                ["classic", "Classic"],
-              ] as const
-            ).map(([v, text]) => (
-              <button
-                key={v}
-                type="button"
-                role="radio"
-                aria-checked={tokenView === v}
-                className={tokenView === v ? "on" : ""}
-                onClick={() => setAppearance({ tokenView: v })}
-              >
-                {text}
-              </button>
-            ))}
-          </div>
-        </div>
-        <p className="muted small">
-          {tokenView === "pro"
-            ? "Pro lays the chart, bubble map and Trade panel side by side, with the rest in tabs below."
-            : "Classic is one page you scroll through, section by section."}{" "}
-          On a desktop-wide window only: phones and narrow windows always get the Classic page.
-        </p>
-      </div>
-      <div className="tab-option">
-        <button
-          type="button"
-          role="switch"
-          aria-checked={!hideSafetyPill}
-          className={`switch${hideSafetyPill ? "" : " on"}`}
-          onClick={() => setAppearance({ hideSafetyPill: !hideSafetyPill })}
-        >
-          <span className="switch-track">
-            <span className="switch-thumb" />
-          </span>
-          Safety pill
+        <button type="button" className="button ghost small" onClick={() => openCustomize("look")}>
+          Open Customize
         </button>
-        <p className="muted small">
-          The safety screen&apos;s Passed or Failed pill beside Sage in a coin&apos;s header. Its Safety
-          section always shows.
-        </p>
+      </header>
+      <p className="muted small">
+        Saved to your account, so every device you sign in on looks and trades the same.
+      </p>
+      <div className="cz-links">
+        {links.map(([id, title, hint]) => (
+          <button key={id} type="button" className="cz-link" onClick={() => openCustomize(id)}>
+            <strong>{title}</strong>
+            <span className="muted small">{hint}</span>
+          </button>
+        ))}
       </div>
     </section>
   );

@@ -6,6 +6,9 @@ import { alertPrefsPatchSchema, applyAlertPrefsPatch, parseAlertPrefs } from "..
 import { feedAppearanceSchema, parseFeedAppearance, storedAppearanceKeys } from "../feedAppearance.js";
 import { hiddenTokensSchema, parseHiddenTokens } from "../hiddenTokens.js";
 import { parseScopeSettings, scopeSettingsSchema } from "../scopeSettings.js";
+import { isUserPrefSection, parseUserPrefs, USER_PREF_SECTIONS } from "../userPrefs.js";
+
+const HIDDEN_TOKENS_BODY_LIMIT = 512 * 1024;
 
 /**
  * The Settings tab: how alerts reach this user, how their feed looks, and their account and access. Needs a session but
@@ -27,6 +30,7 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
           feedAppearance: true,
           hiddenTokens: true,
           scopeSettings: true,
+          uiPrefs: true,
           subscription: { select: { createdAt: true, expiresAt: true, source: true } },
           _count: { select: { burns: true } },
         },
@@ -54,6 +58,8 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
       hiddenTokens: parseHiddenTokens(user.hiddenTokens),
       // Null until Scope is first customized: the dashboard then uses its defaults.
       scopeSettings: parseScopeSettings(user.scopeSettings),
+      // Customize's other synced sections (trade defaults, layout); null each until first saved.
+      prefs: parseUserPrefs(user.uiPrefs),
       account: {
         walletAddress,
         memberSince: user.createdAt,
@@ -184,9 +190,11 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
 
   /**
    * Replaces the tokens hidden from the Live feed and the auto-unhide switch. The dashboard sends
-   * the whole list each time, as it does the appearance, so the last save wins.
+   * the whole list each time, as it does the appearance, so the last save wins. Its own body limit:
+   * the global 64 KB refused every save past about 200 tokens (audit 2026-10-23, AS-1), and a full
+   * list (MAX_HIDDEN_TOKENS entries, every field at the schema's maximum) is about 490 KB.
    */
-  app.put("/hidden-tokens", async (request, reply) => {
+  app.put("/hidden-tokens", { bodyLimit: HIDDEN_TOKENS_BODY_LIMIT }, async (request, reply) => {
     const parsed = hiddenTokensSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
@@ -216,7 +224,56 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
     if (count === 0) return reply.code(401).send({ error: "unauthenticated" });
     return { scopeSettings: parsed.data };
   });
+
+  /**
+   * The synced preferences alone (userPrefs.ts), for a client that needs nothing else of the
+   * account's settings (the browser extension).
+   */
+  app.get("/prefs", async (request, reply) => {
+    const user = await prisma.user.findUnique({
+      where: { id: request.user!.userId },
+      select: { uiPrefs: true },
+    });
+    if (!user) return reply.code(401).send({ error: "unauthenticated" });
+    return { prefs: parseUserPrefs(user.uiPrefs) };
+  });
+
+  /**
+   * Replaces one section of the synced preferences. Each section is sent whole; the others are
+   * kept, merged under the user's row lock so two sections saved at once both land.
+   */
+  app.put<{ Params: { section: string } }>(
+    "/prefs/:section",
+    { config: { rateLimit: PREFS_RATE_LIMIT } },
+    async (request, reply) => {
+      const { section } = request.params;
+      if (!isUserPrefSection(section)) return reply.code(404).send({ error: "unknown section" });
+      const parsed = USER_PREF_SECTIONS[section].safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+      }
+      const userId = request.user!.userId;
+      const next = await prisma.$transaction(async (tx) => {
+        const rows = await tx.$queryRaw<{ uiPrefs: unknown }[]>`
+          SELECT "uiPrefs" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+        if (rows.length === 0) return null;
+        // Re-parsed, so a section stored by an older build that no longer passes is dropped.
+        const merged = { ...parseUserPrefs(rows[0]!.uiPrefs), [section]: parsed.data };
+        const stored = Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== null));
+        await tx.user.update({
+          where: { id: userId },
+          data: { uiPrefs: stored as unknown as Prisma.InputJsonValue },
+        });
+        return merged;
+      });
+      if (!next) return reply.code(401).send({ error: "unauthenticated" });
+      return { prefs: next };
+    },
+  );
 }
+
+/** Customize saves a section a moment after each change settles: well above that, well below abuse. */
+const PREFS_RATE_LIMIT = { max: 60, timeWindow: "1 minute" };
 
 /** Every page load re-sends the subscription; well above that, well below abuse. */
 const PUSH_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };

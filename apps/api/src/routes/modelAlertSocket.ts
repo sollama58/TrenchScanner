@@ -26,10 +26,18 @@ export const MODEL_ALERT_AUTH_FAILURES_PER_MINUTE = 30;
 const MAX_FAILURE_ADDRESSES = 10_000;
 const authFailures = new Map<string, number[]>();
 
-/** Sockets waiting for a first-frame key. They are not in the hub and must not accumulate. */
-const MAX_PENDING_AUTHS = 32;
+/**
+ * Sockets waiting for a first-frame key. They are not in the hub and must not accumulate. Each
+ * address holds only a few of them, and one that sends nothing by the deadline counts as a failed
+ * attempt: a handful of keyless connects from a few addresses used to keep the whole pool of 32
+ * full, and every browser-style client was closed with 4429 (audit 2026-10-23, AS-3). A pending
+ * socket costs one timer, so the pool itself can be larger.
+ */
+const MAX_PENDING_AUTHS = 256;
+const MAX_PENDING_AUTHS_PER_ADDRESS = 4;
 const AUTH_DEADLINE_MS = 5_000;
 let pendingAuths = 0;
+const pendingByAddress = new Map<string, number>();
 
 /** Stand-in HMAC so a missing row still pays for a constant-time compare. */
 const DUMMY_HASH = "0".repeat(64);
@@ -99,20 +107,28 @@ export async function registerModelAlertSocket(app: FastifyInstance, opts: { env
         socket.close(4401, "unauthorized");
         return;
       }
-      if (pendingAuths >= MAX_PENDING_AUTHS) {
+      const address = ipRateLimitKey(request);
+      const mine = pendingByAddress.get(address) ?? 0;
+      if (pendingAuths >= MAX_PENDING_AUTHS || mine >= MAX_PENDING_AUTHS_PER_ADDRESS) {
         socket.close(4429, "too_many_sockets");
         return;
       }
       pendingAuths += 1;
+      pendingByAddress.set(address, mine + 1);
       let settled = false;
       const finish = () => {
         if (settled) return;
         settled = true;
         pendingAuths -= 1;
+        const left = (pendingByAddress.get(address) ?? 1) - 1;
+        if (left > 0) pendingByAddress.set(address, left);
+        else pendingByAddress.delete(address);
         clearTimeout(timer);
       };
       const timer = setTimeout(() => {
         finish();
+        // No key by the deadline: a failed attempt for this address, like a wrong one.
+        recordAuthFailure(address);
         try {
           socket.close(4401, "unauthorized");
         } catch {
@@ -128,7 +144,7 @@ export async function registerModelAlertSocket(app: FastifyInstance, opts: { env
         framed = true;
         // The deadline keeps running through the key check. A check that hangs on the database
         // still closes the socket, and a late answer finds it closed and admits nothing.
-        void authenticateFrame(opts, admins, socket, data, ipRateLimitKey(request)).finally(finish);
+        void authenticateFrame(opts, admins, socket, data, address).finally(finish);
       });
     },
   );

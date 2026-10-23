@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import { useNow } from "../hooks";
 import { signedPct, usd } from "../format";
 import { useWatchlist, type WatchlistItem } from "../watchlist";
 import { changeTone, dayChange, openWatched, watchLabel } from "../watchlistView";
 import { PlusIcon, StarIcon } from "./Icons";
 import { FitRow } from "./MarketBar";
 import { TokenImage } from "./TokenImage";
-import { WatchlistDialog } from "./WatchlistManager";
+import { WatchlistDialog } from "../livePanels";
 
 /**
  * The watched tokens side by side as small chips (image, $TICKER, market cap, the scan's 24h
@@ -30,7 +31,9 @@ export function WatchlistChips({
 }) {
   const { status, items } = useWatchlist();
   const [dialog, setDialog] = useState(false);
-  const [now] = useState(() => Date.now());
+  // The bar stays mounted while Live is open, so a clock frozen at mount kept a stale 24h change up
+  // long after the panel and manager dropped it (audit 2026-10-23, WB-7).
+  const now = useNow(30_000);
   if (status === "off") return null;
   const list = max !== undefined ? items.slice(0, Math.max(0, max)) : items;
   const capped = items.length - list.length;
@@ -69,7 +72,11 @@ export function WatchlistChips({
           {more(0)}
         </>
       )}
-      {!onMore && dialog && <WatchlistDialog onClose={() => setDialog(false)} />}
+      {!onMore && dialog && (
+        <Suspense fallback={null}>
+          <WatchlistDialog onClose={() => setDialog(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }
@@ -86,6 +93,7 @@ function Chip({ item, now }: { item: WatchlistItem; now: number }) {
     >
       <TokenImage
         url={item.imageUrl}
+        mint={item.mint}
         size={40}
         width={20}
         height={20}

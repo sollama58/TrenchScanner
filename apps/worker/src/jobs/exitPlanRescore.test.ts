@@ -2,6 +2,8 @@
 import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, replayOutcome, type MinuteCandle } from "@trenchscanner/core";
+import { CandlesUnavailableError, PUMP_PAUSED_NO_KEY } from "./minuteCandleReader.js";
+import { GIVE_UP_TRIES, RETRY_MAX_MS } from "./candleRetry.js";
 import {
   LIGHTHOUSE_MARKER,
   mergeCandles,
@@ -238,5 +240,55 @@ describe.skipIf(!dbAvailable)("exit plan re-score", () => {
       (await prisma.exitPlanRescore.findUniqueOrThrow({ where: { outcomeId: LIGHTHOUSE_MARKER } })).result,
     ).toBe("2020-03-01T00:00:00.000Z");
     await prisma.lighthouseHour.delete({ where: { hour } });
+  });
+
+  it("backs off a coin no source can answer without finishing, and skips its rows once its misses run out", async () => {
+    // A window of its own, so the finish only waits on this coin.
+    const anchor = Date.parse("2020-05-01T12:00:00Z");
+    const own = { since: new Date("2020-05-01T00:00:00Z"), until: new Date("2020-05-03T00:00:00Z") };
+    const { row } = await seed("unavailable", { anchorAt: anchor });
+    let asked = 0;
+    const stub = {
+      minuteCandles: async (mint: string): Promise<MinuteCandle[]> => {
+        asked += 1;
+        throw new CandlesUnavailableError(mint, "no pools to ask");
+      },
+      fiveMinuteCandles: async () => [],
+    };
+    const run = (at: number) => runExitPlanRescore(stub, { ...own, spacingMs: 0, now: () => at });
+    expect(await run(anchor + 30 * 3_600_000)).toMatchObject({ unavailable: 1, remaining: 1 });
+    expect(await prisma.exitPlanRescore.findUnique({ where: { outcomeId: row.id } })).toBeNull();
+    // Only backed-off coins left: neither asked nor finished.
+    expect(await run(anchor + 30 * 3_600_000 + 5 * MIN)).toEqual({ backedOff: 1, remaining: 1 });
+    expect(asked).toBe(1);
+    let at = anchor + 30 * 3_600_000;
+    for (let i = 2; i < GIVE_UP_TRIES; i++) {
+      at += RETRY_MAX_MS + 1;
+      expect(await run(at)).toMatchObject({ unavailable: 1, remaining: 1 });
+    }
+    expect(await run(at + RETRY_MAX_MS + 1)).toMatchObject({ skipped: 1, remaining: 0 });
+    expect(asked).toBe(GIVE_UP_TRIES);
+    expect((await prisma.exitPlanRescore.findUniqueOrThrow({ where: { outcomeId: row.id } })).result).toBe(
+      "no-candles",
+    );
+  });
+
+  it("stops the run once a few coins in a row find Pump.fun paused with no CoinGecko key", async () => {
+    const anchor = Date.parse("2020-06-01T12:00:00Z");
+    const own = { since: new Date("2020-06-01T00:00:00Z"), until: new Date("2020-06-03T00:00:00Z") };
+    for (const n of [1, 2, 3, 4]) await seed(`paused-${n}`, { anchorAt: anchor + n * MIN });
+    let calls = 0;
+    const meta = await runExitPlanRescore(
+      {
+        minuteCandles: async (mint) => {
+          calls += 1;
+          throw new CandlesUnavailableError(mint, PUMP_PAUSED_NO_KEY);
+        },
+        fiveMinuteCandles: async () => [],
+      },
+      { ...own, spacingMs: 0, now: () => anchor + 30 * 3_600_000 },
+    );
+    expect(meta).toMatchObject({ pumpPaused: true, remaining: 4 });
+    expect(calls).toBe(3);
   });
 });

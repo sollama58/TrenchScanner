@@ -84,6 +84,7 @@ async function liveInputs(
   tfSec: number,
   factor: number,
   newest: boolean,
+  ask = true,
 ): Promise<SeriesInput[]> {
   const out: SeriesInput[] = [];
   const page = async (res: 15 | 60, cache: CandleCache) => {
@@ -109,7 +110,7 @@ async function liveInputs(
   // No minute page, or only an old one (Pump.fun has no such coin, or won't answer: its Cloudflare
   // answered Render 403 on 2026-10-23): the store's newest minutes come from the backfill, topped
   // up to now from GeckoTerminal while a chart is open, at most every BACKFILL_TOP_UP_AFTER_MS.
-  if (newest && (!minutes || minutes.coverTo < Date.now() - STALE_MINUTES_MS))
+  if (ask && newest && (!minutes || minutes.coverTo < Date.now() - STALE_MINUTES_MS))
     askBackfill(mint, Date.now(), true);
   if (quarters) out.push(quarters);
   if (stream?.candles.length) {
@@ -245,7 +246,8 @@ export async function candleDiagnosis(mint: string, query: unknown) {
   const tfSec = CANDLE_TIMEFRAMES[q.tf];
   const tfMs = tfSec * 1_000;
   const factor = (await deps.factor(mint)) ?? 1;
-  const live = await liveInputs(mint, tfSec, factor > 0 ? factor : 1, q.before === null);
+  // A diagnosis is a look, not a chart open: no backfill ask, which would move the coin up the queue.
+  const live = await liveInputs(mint, tfSec, factor > 0 ? factor : 1, q.before === null, false);
   const answer = await readTokenCandles(mint, q.tf, q.before, q.limit, {
     ...deps,
     live: async () => live,

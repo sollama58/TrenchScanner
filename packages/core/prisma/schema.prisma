@@ -101,6 +101,9 @@ model User {
   /// The Live feed's Scope view settings (row look, columns, Stream, column filters), so they follow
   /// the account - see scopeSettings.ts in apps/api. Null = the defaults.
   scopeSettings   Json?
+  /// The rest of Customize that follows the account (Pro trade defaults, layout choices), one
+  /// section per key - see userPrefs.ts in apps/api. Null, or a missing section = the defaults.
+  uiPrefs         Json?
   /// Which trade notes (buys, sales by exit reason, loss-limit stops) from this user's live bot and
   /// paper strategies reach their private Telegram chats - see trading/tradeAlerts.ts in core for
   /// the shape. Null = all of them, as before the setting existed.
@@ -3249,6 +3252,10 @@ model TokenWalletActivity {
   @@unique([tokenId, wallet])
   @@index([wallet])
   @@index([createdAt])
+  // Also "TokenWalletActivity_tokenId_firstBuyAt_idx" on (tokenId, firstBuyAt) WHERE "buys" > 0,
+  // the side jobs' probe of a coin's buys (migration 20261024004700, audit 2026-10-23, PF-1). Not
+  // listed here: Prisma 5 can't express a partial index, and its diff skips partial ones, so an
+  // @@index would read as missing.
 }
 
 /// Each wallet's composite risk score (0-100), from what it did in the coins whose trade tape was
