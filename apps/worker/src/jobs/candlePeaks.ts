@@ -10,6 +10,7 @@ import {
   type PumpFunClient,
 } from "@trenchscanner/core";
 import { JobFailure, type JobRunMeta } from "../scheduler.js";
+import { COINGECKO_DAY_SPENT } from "./minuteCandleReader.js";
 
 const logger = createLogger("candle-peaks");
 
@@ -193,6 +194,8 @@ export async function runCandlePeaksJob(
     failed: 0,
   };
   let throttled = false;
+  /** Stopped by the day's CoinGecko budget for Peaks, not by a provider. */
+  let budgetSpent = false;
   let lastError: string | null = null;
   for (const [i, watch] of due.entries()) {
     if (i > 0) await sleep(spacingMs);
@@ -203,6 +206,7 @@ export async function runCandlePeaksJob(
     } catch (err) {
       if (err instanceof HttpError && err.status === 429) {
         throttled = true;
+        budgetSpent = err.url === COINGECKO_DAY_SPENT;
         break;
       }
       counts.failed += 1;
@@ -259,6 +263,7 @@ export async function runCandlePeaksJob(
     backlog,
     oldestDueMinutes: oldestDue ? Math.round((startedAt - oldestDue.nextCheckAt.getTime()) / 60_000) : 0,
     throttled,
+    ...(budgetSpent ? { skipped: "CoinGecko daily budget for Peaks spent" } : {}),
     swapRequests: swap.requests,
     swapThrottled: swap.throttled,
     swapHeldBack: swap.heldBack,
@@ -267,7 +272,9 @@ export async function runCandlePeaksJob(
   if (counts.coins > 0 || enrolled > 0) logger.info("candle peaks", meta);
   // Throttled before a single coin was read: a failed run, not a quiet one - it used to record a
   // success while no Peak moved.
-  if (throttled && counts.coins === 0 && counts.noCandles === 0) {
+  // The day's CoinGecko budget for Peaks is spent while Pump.fun refuses: expected, not a failure;
+  // the Peaks fall back to the readings' until midnight UTC or until Pump.fun answers again.
+  if (throttled && !budgetSpent && counts.coins === 0 && counts.noCandles === 0) {
     throw new JobFailure("Pump.fun throttled the candle reads (429) before any coin was read", meta);
   }
   // Every read failed: no Peak moved, so the run failed. Pump.fun's Cloudflare answered every read

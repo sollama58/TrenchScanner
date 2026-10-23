@@ -10,6 +10,7 @@ import {
   prisma,
   DexScreenerClient,
   GeckoTerminalClient,
+  configureCoinGeckoBudget,
   JupiterClient,
   LiveLaunchQuotes,
   JupiterFirstLookup,
@@ -310,6 +311,8 @@ async function main() {
   // startNarrativePolling. The queue lives in the scanning process.
   const stopNarrativePolling = scans ? startNarrativePolling(env) : undefined;
 
+  // The day's paid CoinGecko credits, shared with the other processes (coingeckoBudget.ts).
+  configureCoinGeckoBudget(env);
   // One client, so its rate budget is shared by both of its uses below.
   const geckoTerminal = new GeckoTerminalClient(
     env.COINGECKO_API_KEY
