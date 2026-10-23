@@ -56,9 +56,12 @@ describe("parseFeedAppearance", () => {
     });
     expect(saved.reasons).toBe(false);
     expect(saved.quickLinks).toEqual(["terminal"]);
-    // The Snipers tile is on by default (in place of 1st Buyers Holding), and can be switched off.
-    expect(saved.sniperTop10).toBe(true);
-    expect(DEFAULT_FEED_APPEARANCE.sniperTop10).toBe(true);
+    // The Snipers tile is off by default (Block 0 in its place). A look saved on before that reads
+    // off; one switched on since stays on.
+    expect(saved.sniperTop10).toBe(false);
+    expect(DEFAULT_FEED_APPEARANCE.sniperTop10).toBe(false);
+    expect(parseFeedAppearance({ sniperTop10: true }).sniperTop10).toBe(false);
+    expect(parseFeedAppearance({ sniperTop10: true, sniperTop10Rev: 2 }).sniperTop10).toBe(true);
     expect(parseFeedAppearance({ sniperTop10: false }).sniperTop10).toBe(false);
     // CEX-funded took the Dev tile's default place: Dev is opt-in, for older accounts too, and the
     // old CEX-funded switch is ignored.

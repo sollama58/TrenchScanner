@@ -1850,6 +1850,8 @@ export interface FeedAppearance {
   cardSearch: boolean;
   /** Which default feesBadge it was saved against (appearance.ts FEES_BADGE_REV). */
   feesBadgeRev: number;
+  /** Which default sniperTop10 it was saved against (appearance.ts SNIPER_TOP10_REV). */
+  sniperTop10Rev: number;
   /** Bubble maps open with same-exchange ties drawn; off by default (absent from older API builds: off). */
   bubbleCexLinks: boolean;
   /** Bubble maps name the wallets that fund clusters on a label by their diamond; off by default (absent from older API builds: off). */

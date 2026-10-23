@@ -49,6 +49,12 @@ export const HIDE_BELOW_MCAP_REV = 2;
  * as on (user ask 2026-10-19).
  */
 export const FEES_BADGE_REV = 2;
+/**
+ * Which sniperTop10 default a look was saved against (apps/api/src/feedAppearance.ts has the same):
+ * a look from before Block 0 took the Snipers tile's default place that still holds it on never
+ * changed it, and reads as off (user ask 2026-10-23).
+ */
+export const SNIPER_TOP10_REV = 2;
 
 export const DEFAULT_APPEARANCE: FeedAppearance = {
   // Dark until the user picks (user ask 2026-10-14); "auto" (Match device) stays a choice.
@@ -77,7 +83,9 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   tileMid: null,
   tileHigh: null,
   reasons: false,
-  sniperTop10: true,
+  // Off by default, Block 0 in its place (user ask 2026-10-23); Customize switches it back on.
+  sniperTop10: false,
+  sniperTop10Rev: SNIPER_TOP10_REV,
   devTile: false,
   largest: false,
   kolBundled: false,
@@ -378,7 +386,12 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     tileMid: hex(r.tileMid),
     tileHigh: hex(r.tileHigh),
     reasons: typeof r.reasons === "boolean" ? r.reasons : d.reasons,
-    sniperTop10: typeof r.sniperTop10 === "boolean" ? r.sniperTop10 : d.sniperTop10,
+    // Saved before Block 0 took its default place, still on: the old default, unchanged.
+    sniperTop10:
+      typeof r.sniperTop10 === "boolean" && (!r.sniperTop10 || r.sniperTop10Rev === SNIPER_TOP10_REV)
+        ? r.sniperTop10
+        : d.sniperTop10,
+    sniperTop10Rev: SNIPER_TOP10_REV,
     devTile: typeof r.devTile === "boolean" ? r.devTile : d.devTile,
     largest: typeof r.largest === "boolean" ? r.largest : d.largest,
     kolBundled: typeof r.kolBundled === "boolean" ? r.kolBundled : d.kolBundled,

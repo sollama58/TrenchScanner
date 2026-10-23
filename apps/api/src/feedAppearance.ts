@@ -93,6 +93,12 @@ export const HIDE_BELOW_MCAP_REV = 2;
  * as on (user ask 2026-10-19).
  */
 export const FEES_BADGE_REV = 2;
+/**
+ * Which sniperTop10 default a look was saved against (apps/web/src/appearance.ts has the same): a
+ * look from before Block 0 took the Snipers tile's default place that still holds it on never
+ * changed it, and reads as off (user ask 2026-10-23).
+ */
+export const SNIPER_TOP10_REV = 2;
 /** The chart marks no trade under this many SOL, whatever the setting (user ask 2026-10-18). */
 /**
  * How often an open bubble map may redraw, in seconds (user ask 2026-10-19): the choices
@@ -156,8 +162,10 @@ export const feedAppearanceSchema = z
     tileHigh: color.default(null),
     /** The model's reasons under a model call; hidden by default, as are accounts saved before it. */
     reasons: z.boolean().default(false),
-    /** The Snipers tile (launch snipers in the top holders); on by default since 2026-10-14, in place of 1st Buyers Holding. */
-    sniperTop10: z.boolean().default(true),
+    /** The Snipers tile (launch snipers in the top holders); off by default since 2026-10-23, Block 0 in its place. */
+    sniperTop10: z.boolean().default(false),
+    /** Which default sniperTop10 was saved against; see SNIPER_TOP10_REV and parseFeedAppearance. */
+    sniperTop10Rev: z.literal(SNIPER_TOP10_REV).default(SNIPER_TOP10_REV),
     /**
      * The opt-in CEX-funded switch from before the tile took the Dev tile's default place (user ask
      * 2026-10-13): accepted from older tabs, ignored. CEX-funded is a default tile now, hidden like
@@ -385,7 +393,8 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   tileMid: null,
   tileHigh: null,
   reasons: false,
-  sniperTop10: true,
+  sniperTop10: false,
+  sniperTop10Rev: SNIPER_TOP10_REV,
   devTile: false,
   largest: false,
   kolBundled: false,
@@ -478,7 +487,8 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
       key === "chartEventKinds" ||
       key === "chartEventFirst" ||
       key === "hideBelowMcapRev" ||
-      key === "feesBadgeRev"
+      key === "feesBadgeRev" ||
+      key === "sniperTop10Rev"
     )
       continue;
     const parsed = feedAppearanceSchema.shape[key].safeParse(raw[key]);
@@ -534,5 +544,8 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
   // Saved before the fees badge showed by default, still off: the old default, unchanged.
   if (raw.feesBadgeRev !== FEES_BADGE_REV && out.feesBadge === false) out.feesBadge = true;
   out.feesBadgeRev = FEES_BADGE_REV;
+  // Saved before Block 0 took the Snipers tile's default place, still on: the old default, unchanged.
+  if (raw.sniperTop10Rev !== SNIPER_TOP10_REV && out.sniperTop10 === true) out.sniperTop10 = false;
+  out.sniperTop10Rev = SNIPER_TOP10_REV;
   return out as FeedAppearance;
 }
