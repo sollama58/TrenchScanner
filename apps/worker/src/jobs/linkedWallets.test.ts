@@ -199,7 +199,8 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
     const off = fakeHelius({}, {}, false);
     const without = await resolveLinkedWallets([group], off, { maxNewLookups: 10 });
     expect(off.getFundersBatch).not.toHaveBeenCalled();
-    expect(without.funderOf.get(w("old"))).toBeNull();
+    // Its funder is unknown, not "none": the coin's reading is missing (user decision 2026-10-23).
+    expect(without.funderOf.has(w("old"))).toBe(false);
 
     const on = fakeHelius({ [w("old")]: { ...found(w("H")), sorted: true } });
     const lookups = await resolveLinkedWallets([group], on, { maxNewLookups: 10 });

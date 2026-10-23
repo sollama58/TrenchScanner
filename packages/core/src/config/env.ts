@@ -329,9 +329,13 @@ const envSchema = z.object({
   // tenth of the day's cap of headroom) the curves come off the stream and the
   // CURVE_TAPE_POLL_MAX_MINTS nearest the band are read every CURVE_TAPE_POLL_SECONDS instead
   // (1 credit per 100 curves a read), until the spend is back under its share.
-  // 50,000 since 2026-10-22 (was 100,000). Past the cap, only the 100 curves nearest the band
-  // are polled every CURVE_TAPE_POLL_SECONDS until the day's pace allows the stream again.
-  CURVE_TAPE_STREAM_CREDITS_PER_DAY: z.coerce.number().nonnegative().default(50_000),
+  // 100,000 since 2026-10-23 (user decision, API audit): 50,000 from 2026-10-22 was the binding
+  // limit once the tape followed graduated and alerted coins' PumpSwap pools (#974, #983; the
+  // pools are most of the stream's bytes, ~55 credits a minute in prod), and the pools come off
+  // the stream at 60% of the pace (curveTape.ts POOL_PACE_SHARE) before the curves do. Past the
+  // cap, only the 100 curves nearest the band are polled every CURVE_TAPE_POLL_SECONDS until the
+  // day's pace allows the stream again.
+  CURVE_TAPE_STREAM_CREDITS_PER_DAY: z.coerce.number().nonnegative().default(100_000),
   CURVE_TAPE_POLL_SECONDS: z.coerce.number().min(1).default(5),
   CURVE_TAPE_POLL_MAX_MINTS: z.coerce.number().int().nonnegative().default(100),
   // The price path recorder (worker's jobs/pricePathRecorder.ts, user ask 2026-10-18): when the curve
@@ -485,15 +489,16 @@ const envSchema = z.object({
   SNIPER_MAX_REFRESH_ACCOUNTS_PER_CYCLE: z.coerce.number().int().positive().default(500),
   // How long a holdings reading stays usable. Unlike wallet earliest-activity, this answer
   // decays - a portfolio changes with every trade - so it carries a TTL instead of being cached
-  // forever. 3 hours (was 1, user decision 2026-10-22): a wallet that stays in a top 10 is
-  // re-priced a third as often. 6 hours would save little more (one more halving of those
-  // re-reads, on the order of 80 credits a day per long-watched coin) and would let a wallet
-  // that dumped its other bags still count as funded for most of a coin's life before a call.
-  WALLET_HOLDINGS_CACHE_TTL_MINUTES: z.coerce.number().positive().default(180),
+  // forever. 6 hours (was 3 from 2026-10-22, 1 before; user decision 2026-10-23, API audit): the
+  // 40-wallet cap below binds every cycle, so the longer TTL buys coverage, not credits: freed
+  // slots go to the next group, more coins get known wallet checks and more event moments open.
+  // A wallet that dumped its other bags can count as funded up to 6 hours on; the input is at
+  // chance for the learners (AUC 0.51), and the 70% empty-wallet gate moves a point or two.
+  WALLET_HOLDINGS_CACHE_TTL_MINUTES: z.coerce.number().positive().default(360),
   // How long the cleanup job keeps a WalletHoldingsCache row. A row past the TTL above is never
-  // read again, so this only needs slack over it. 6 hours is twice the 3-hour TTL. 0 keeps rows
+  // read again, so this only needs slack over it. 12 hours is twice the 6-hour TTL. 0 keeps rows
   // the 90 days the other RPC caches get. Owner-approved 2026-10-04.
-  WALLET_HOLDINGS_CACHE_RETENTION_HOURS: z.coerce.number().nonnegative().default(6),
+  WALLET_HOLDINGS_CACHE_RETENTION_HOURS: z.coerce.number().nonnegative().default(12),
   // How long a "mint/freeze authority still active" answer is trusted before being re-checked
   // (see the worker's mintAuthority.ts). Revocation is permanent and cached forever; this TTL
   // covers only the reversible direction, which used to be re-queried every single scan cycle
