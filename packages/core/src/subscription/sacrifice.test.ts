@@ -8,6 +8,7 @@ import {
   settleOpenTrades,
   settlePlatformTrade,
   tradeOutcome,
+  TRADE_IN_FLIGHT_MS,
   freeBufferRank,
   resetSacrificeSettingsCacheForTests,
   sacrificeFor,
@@ -265,6 +266,8 @@ describe.skipIf(!dbAvailable)("taking the Sacrifice at send", () => {
     const row = await prisma.platformTrade.findUniqueOrThrow({
       where: { signature: trade(10, "off").signature },
     });
+    // Landed: the pace alone holds the next one.
+    await settlePlatformTrade(trade(10, "off").signature, "confirmed");
     const again = await recordPlatformTrade({
       ...trade(11, "off"),
       wallet,
@@ -319,6 +322,58 @@ describe.skipIf(!dbAvailable)("taking the Sacrifice at send", () => {
         now: row.sentAt.getTime() + 1_000,
       }),
     ).toMatchObject({ status: "too-soon" });
+  });
+
+  it("refuses a paced trade while another from the wallet is still in flight, for its blockhash's life", async () => {
+    const wallet = `${PACE}-flight`;
+    expect(await recordPlatformTrade({ ...trade(20, "off"), wallet, paceMs: 1_000 })).toMatchObject({
+      status: "recorded",
+    });
+    const sentAt = (
+      await prisma.platformTrade.findUniqueOrThrow({ where: { signature: trade(20, "off").signature } })
+    ).sentAt.getTime();
+    // Past the pace, the first still "sent": another tab's or device's trade is refused.
+    const held = await recordPlatformTrade({
+      ...trade(21, "off"),
+      wallet,
+      paceMs: 1_000,
+      now: sentAt + 5_000,
+    });
+    expect(held).toEqual({ status: "in-flight", retryAfterMs: TRADE_IN_FLIGHT_MS - 5_000 });
+    expect(await prisma.platformTrade.count({ where: { wallet } })).toBe(1);
+    // A closing sale is never refused.
+    expect(await recordPlatformTrade({ ...trade(22, "off"), wallet, now: sentAt + 5_000 })).toMatchObject({
+      status: "recorded",
+    });
+    // A row nobody settled stops holding the wallet once its blockhash is done.
+    expect(
+      await recordPlatformTrade({
+        ...trade(23, "off"),
+        wallet,
+        paceMs: 1_000,
+        now: sentAt + TRADE_IN_FLIGHT_MS + 60_000,
+      }),
+    ).toMatchObject({ status: "recorded" });
+  });
+
+  it("does not let a confirmed, failed or expired trade hold the next one", async () => {
+    for (const [n, outcome] of [
+      [30, "confirmed"],
+      [32, "failed"],
+      [34, "expired"],
+    ] as const) {
+      const wallet = `${PACE}-settled-${outcome}`;
+      expect(await recordPlatformTrade({ ...trade(n, "off"), wallet, paceMs: 1_000 })).toMatchObject({
+        status: "recorded",
+      });
+      const sentAt = (
+        await prisma.platformTrade.findUniqueOrThrow({ where: { signature: trade(n, "off").signature } })
+      ).sentAt.getTime();
+      await settlePlatformTrade(trade(n, "off").signature, outcome);
+      expect(
+        await recordPlatformTrade({ ...trade(n + 1, "off"), wallet, paceMs: 1_000, now: sentAt + 2_000 }),
+      ).toMatchObject({ status: "recorded" });
+    }
   });
 
   it("refunds a trade's Sacrifice once, however many times it is asked", async () => {

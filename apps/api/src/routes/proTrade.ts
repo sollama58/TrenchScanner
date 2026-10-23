@@ -1012,6 +1012,17 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           giveBack();
           return tooSoon(reply, recorded.retryAfterMs);
         }
+        // Another trade from this wallet (another tab, device or instance) hasn't settled yet. Its
+        // row holds the wallet only for about its blockhash's life, so this can't stick.
+        if (recorded.status === "in-flight") {
+          giveBack();
+          return reply.code(429).send({
+            error:
+              "A trade from this wallet is still in flight. Wait for it to land before trading again. Nothing was sent.",
+            retryAfterMs: recorded.retryAfterMs,
+            notSent: true,
+          });
+        }
       } catch (err) {
         // Recorded already: this signature (a retried request, maybe on another instance) is out and
         // being resent; anything else signed from the same build is not sent a second time.

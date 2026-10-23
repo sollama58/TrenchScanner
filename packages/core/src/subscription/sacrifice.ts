@@ -221,7 +221,7 @@ export interface PlatformTradeRecord {
    */
   paceMs?: number;
   /**
-   * Clock for the pace check, milliseconds since the epoch. Tests pass it. The send path leaves
+   * Clock for the pace and in-flight checks, milliseconds since the epoch. Tests pass it. The send path leaves
    * it unset and the check uses Date.now().
    */
   now?: number;
@@ -232,7 +232,19 @@ export type RecordTradeOutcome =
   /** "on", a fee payer, and the burned pot no longer covers it: nothing was written. */
   | { status: "short"; burnedRaw: bigint; asdfRaw: bigint }
   /** A paced trade, and this wallet already sent one inside `paceMs`: nothing was written. */
-  | { status: "too-soon"; retryAfterMs: number };
+  | { status: "too-soon"; retryAfterMs: number }
+  /**
+   * A paced trade, and this wallet has another still "sent" inside TRADE_IN_FLIGHT_MS: nothing was
+   * written.
+   */
+  | { status: "in-flight"; retryAfterMs: number };
+
+/**
+ * How long a "sent" trade holds the wallet's next paced trade: about its blockhash's life. Past it
+ * the trade has landed or never will, even if no one has settled its row yet, so a row left "sent"
+ * (a closed tab, a settlement job behind) can't hold the wallet for good.
+ */
+export const TRADE_IN_FLIGHT_MS = 90_000;
 
 /**
  * The send's one database transaction (Build guide step 5), before the trade goes to Sender:
@@ -244,6 +256,10 @@ export type RecordTradeOutcome =
  * Every insert, paced or not, takes the wallet's pace lock first. A closing sale omits `paceMs`
  * and is never refused, but a paced trade behind it waits out the window: the two cannot pass
  * each other. The in-memory cooldown on one API process is only the fast path.
+ *
+ * A paced trade is also refused while the wallet has another trade still "sent" (one trade in
+ * flight per wallet, across tabs, devices and API instances): only TRADE_IN_FLIGHT_MS after it
+ * went out, and confirmed, failed and expired rows never count.
  */
 export async function recordPlatformTrade(r: PlatformTradeRecord): Promise<RecordTradeOutcome> {
   const s = r.sacrifice;
@@ -265,6 +281,17 @@ export async function recordPlatformTrade(r: PlatformTradeRecord): Promise<Recor
         return {
           status: "too-soon" as const,
           retryAfterMs: Math.max(1, recent.sentAt.getTime() + r.paceMs - now),
+        };
+      }
+      const open = await tx.platformTrade.findFirst({
+        where: { wallet: r.wallet, status: "sent", sentAt: { gt: new Date(now - TRADE_IN_FLIGHT_MS) } },
+        orderBy: { sentAt: "desc" },
+        select: { sentAt: true },
+      });
+      if (open) {
+        return {
+          status: "in-flight" as const,
+          retryAfterMs: Math.max(1, open.sentAt.getTime() + TRADE_IN_FLIGHT_MS - now),
         };
       }
     }
