@@ -23060,3 +23060,637 @@ dialog.tm-modal.tm-terminal::backdrop {
     font-size: 8.5px;
   }
 }
+
+/* ---------- Market bar (Live tab, user ask 2026-10-23): watchlist | prices + trench stats | positions ---------- */
+.mkt-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+.mkt-cell {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+}
+/* The side cells hold a ~170px content area under their heading (WatchlistPanel fits it). */
+.mkt-left,
+.mkt-right {
+  min-height: 214px;
+}
+.mkt-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.mkt-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.mkt-head .eyebrow {
+  margin: 0;
+  min-width: 0;
+}
+.mkt-window {
+  font-family: var(--mono);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.mkt-window::before {
+  content: "·";
+  margin-right: 6px;
+}
+.mkt-vs {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Empty states and the watchlist's placeholder. */
+.mkt-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  padding: 8px 10px 4px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
+.mkt-empty p {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 260px;
+}
+.mkt-empty strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+.mkt-empty .faint {
+  font-size: 12px;
+  line-height: 1.4;
+}
+.mkt-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--muted);
+}
+.mkt-ghost {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: min(180px, 80%);
+}
+.mkt-ghost span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 14px;
+}
+.mkt-ghost span::before {
+  content: "★";
+  font-size: 11px;
+  line-height: 1;
+  color: var(--series-4);
+  opacity: 0.55;
+}
+.mkt-ghost span::after {
+  content: "";
+  flex: 1;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--surface-3);
+}
+.mkt-ghost span:nth-child(2)::after {
+  margin-right: 22%;
+}
+.mkt-ghost span:nth-child(3)::after {
+  margin-right: 40%;
+}
+
+/* Middle: the four tickers over the trench stats. */
+.mkt-mid {
+  padding: 10px 12px 8px;
+  gap: 8px;
+}
+.mkt-prices {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.mkt-ticker {
+  min-width: 0;
+  padding: 7px 8px 6px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.mkt-ticker-top {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 6px;
+  align-items: center;
+}
+.mkt-logo {
+  grid-row: 1;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.mkt-logo.mono {
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 800;
+  color: #fff;
+  background: var(--surface-3);
+}
+.mkt-logo.t-btc {
+  background: #f7931a;
+}
+.mkt-logo.t-sol {
+  background: linear-gradient(135deg, #9945ff, #14f195);
+}
+.mkt-logo.t-pump {
+  background: #53d38c;
+}
+.mkt-logo.t-stonk {
+  background: var(--series-1);
+}
+.mkt-sym {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mkt-price {
+  grid-column: 1 / -1;
+  font-size: 14px;
+  font-weight: 650;
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mkt-ticker-chg {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 2px;
+}
+.mkt-chg {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+.mkt-chg .num {
+  font-weight: 600;
+}
+.mkt-chg-label {
+  color: var(--muted);
+  font-size: 10px;
+}
+.mkt-chg.up .num {
+  color: var(--good-ink);
+}
+.mkt-chg.down .num {
+  color: var(--bad-ink);
+}
+.mkt-skel {
+  display: inline-block;
+  width: 58px;
+  height: 12px;
+  vertical-align: middle;
+}
+
+.mkt-trench {
+  position: relative;
+}
+.mkt-trench-face {
+  border-radius: var(--radius-s);
+  padding: 6px 4px 2px;
+  margin: 0 -4px;
+  cursor: help;
+  outline: none;
+  transition: background 0.15s;
+}
+.mkt-trench.open .mkt-trench-face,
+.mkt-trench-face:hover {
+  background: var(--highlight);
+}
+.mkt-trench-face:focus-visible {
+  box-shadow: 0 0 0 2px var(--brand-b);
+}
+.mkt-trench .mkt-head {
+  margin-bottom: 4px;
+  padding: 0 4px;
+}
+.mkt-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  gap: 2px 6px;
+}
+.mkt-stat {
+  min-width: 0;
+  padding: 3px 4px;
+}
+.mkt-stat dt {
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.mkt-stat dd {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.mkt-stat-v {
+  font-size: 15px;
+  font-weight: 650;
+}
+.mkt-arrow {
+  font-size: 9px;
+  line-height: 1;
+  color: var(--muted);
+}
+.mkt-arrow.good {
+  color: var(--good-ink);
+}
+.mkt-arrow.bad {
+  color: var(--bad-ink);
+}
+
+/* The trench stats' in-depth view. */
+.mkt-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 45;
+  width: min(540px, calc(100vw - 24px));
+  padding: 14px 16px 12px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow:
+    0 1px 0 var(--highlight) inset,
+    0 24px 48px -16px rgba(0, 0, 0, 0.55);
+  animation: mkt-pop-in 0.14s ease-out;
+}
+.mkt-pop::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  transform: translateX(-50%) rotate(45deg);
+  background: var(--surface-solid);
+  border-left: 1px solid var(--border-strong);
+  border-top: 1px solid var(--border-strong);
+}
+@keyframes mkt-pop-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -4px);
+  }
+}
+.mkt-pop-head div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 10px;
+}
+.mkt-pop-head strong {
+  font-size: 13.5px;
+}
+.mkt-pop-head .faint {
+  font-size: 11.5px;
+}
+.mkt-pop-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.mkt-pop-table th,
+.mkt-pop-table td {
+  padding: 6px 4px;
+  text-align: right;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.mkt-pop-table thead th {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-top: 0;
+  border-bottom: 1px solid var(--border-strong);
+}
+.mkt-pop-table tbody th {
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-2);
+}
+.mkt-pop-table tbody tr:hover {
+  background: none;
+}
+.mkt-pop-table tbody th,
+.mkt-pop-table tbody td {
+  border-bottom: 0;
+}
+.mkt-pop-table tbody tr + tr > * {
+  border-top: 1px solid var(--grid);
+}
+.mkt-pop-table td.now {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--ink);
+  padding-right: 10px;
+}
+.mkt-pop-table thead th.now {
+  color: var(--ink-2);
+  padding-right: 10px;
+}
+.mkt-delta {
+  color: var(--ink-2);
+}
+.mkt-delta > :first-child,
+.mkt-delta-arrow {
+  font-weight: 650;
+}
+.mkt-delta.good,
+.mkt-delta.bad {
+  font-weight: 650;
+}
+.mkt-delta.good {
+  color: var(--good-ink);
+}
+.mkt-delta.bad {
+  color: var(--bad-ink);
+}
+.mkt-delta-arrow {
+  font-size: 8.5px;
+  margin-right: 3px;
+  vertical-align: 1px;
+}
+.mkt-delta-then {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.mkt-pop-foot {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* Right: the open positions. */
+.mkt-pos {
+  list-style: none;
+  margin: 0 -6px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 172px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.mkt-pos-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mkt-pos-row:hover:not(:disabled) {
+  background: var(--highlight);
+}
+.mkt-pos-row:disabled {
+  cursor: default;
+}
+.mkt-pos-row.skel {
+  cursor: default;
+}
+.mkt-pos-img {
+  width: 30px;
+  height: 30px;
+  border-width: 1px;
+  cursor: pointer;
+}
+.mkt-pos-img.placeholder {
+  font-size: 10.5px;
+}
+.mkt-pos-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.mkt-pos-name strong {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mkt-pos-name .faint {
+  font-size: 11px;
+}
+.mkt-pos-pnl {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.25;
+}
+.mkt-pos-pct {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.mkt-pos-sol {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* A tablet: the prices and stats across the top, the two sides under them. */
+@media (max-width: 1099px) {
+  .mkt-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .mkt-mid {
+    grid-column: 1 / -1;
+    order: -1;
+  }
+  .mkt-trench {
+    display: block;
+  }
+  .mkt-stats {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+/* A phone: the middle alone, compact, and the sides folded under it. */
+.mkt-bar.phone {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mkt-bar.phone .mkt-mid {
+  padding: 8px 8px 4px;
+  gap: 4px;
+}
+.mkt-bar.phone .mkt-prices {
+  gap: 4px;
+}
+.mkt-bar.phone .mkt-ticker {
+  padding: 5px 6px 4px;
+}
+.mkt-bar.phone .mkt-ticker-top {
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: 4px;
+}
+.mkt-bar.phone .mkt-logo {
+  width: 14px;
+  height: 14px;
+  font-size: 8px;
+}
+.mkt-bar.phone .mkt-sym {
+  font-size: 10px;
+}
+.mkt-bar.phone .mkt-price {
+  font-size: 12.5px;
+  margin-top: 1px;
+}
+.mkt-bar.phone .mkt-chg {
+  font-size: 10px;
+  line-height: 1.35;
+}
+.mkt-bar.phone .mkt-chg-label {
+  font-size: 9px;
+}
+.mkt-bar.phone .mkt-stats {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 4px;
+}
+.mkt-bar.phone .mkt-stat {
+  padding: 2px 4px;
+}
+.mkt-bar.phone .mkt-stat dt {
+  font-size: 10px;
+}
+.mkt-bar.phone .mkt-stat-v {
+  font-size: 13.5px;
+}
+.mkt-bar.phone .mkt-vs {
+  display: none;
+}
+.mkt-bar.phone .mkt-pop {
+  position: fixed;
+  top: auto;
+  bottom: 12px;
+  left: 12px;
+  right: 12px;
+  width: auto;
+  transform: none;
+  max-height: 70vh;
+  overflow-y: auto;
+  animation: none;
+}
+.mkt-bar.phone .mkt-pop::before {
+  display: none;
+}
+.mkt-bar.phone .mkt-pop-table th,
+.mkt-bar.phone .mkt-pop-table td {
+  padding: 5px 3px;
+}
+.mkt-bar.phone .mkt-pop-table {
+  font-size: 11.5px;
+}
+.mkt-folds {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+.mkt-fold {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+}
+/* Side by side while folded; an opened one takes the full width, and so does the other. */
+.mkt-folds:has(.mkt-fold[open]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.mkt-fold summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+  cursor: pointer;
+  list-style: none;
+}
+.mkt-fold summary::-webkit-details-marker {
+  display: none;
+}
+.mkt-fold-chev {
+  margin-left: auto;
+  transition: transform 0.15s;
+}
+.mkt-fold[open] .mkt-fold-chev {
+  transform: rotate(180deg);
+}
+.mkt-fold-body {
+  padding: 0 10px 10px;
+}
+.mkt-fold-body .mkt-head {
+  display: none;
+}
+.mkt-fold-body .mkt-empty {
+  min-height: 120px;
+}

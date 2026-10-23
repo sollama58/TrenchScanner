@@ -1,3 +1,4 @@
+import { MarketBar } from "../components/MarketBar";
 import { SectionBoundary } from "../components/SectionBoundary";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type CuratedStats, type FeedStats, type Leaderboard, type MatchPage } from "../api";
@@ -276,6 +277,7 @@ export function LiveTab({
 
   return (
     <div className="stack">
+      <MarketBar />
       <Suspense fallback={null}>
         {statsMounted && (
           <FeedStatsModal

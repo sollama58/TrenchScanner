@@ -46,6 +46,7 @@ import { createLighthouseHistoryCache, lighthouseHistoryQuerySchema } from "../l
 import { createWalletScorecardsCache, walletScorecardsQuerySchema } from "../walletScorecards.js";
 import { createTokenSageShowcaseCache } from "../tokenSageShowcase.js";
 import { loadMarketWeather, type MarketWeather } from "../marketWeather.js";
+import type { MarketBar } from "../marketBar.js";
 import {
   buildLeaderboard,
   contestState,
@@ -460,6 +461,8 @@ export async function registerCuratedRoutes(
     viewStamps: ViewStampBuffer;
     /** The Models tab's report caches, shared with the guest routes. */
     reports: ReportCaches;
+    /** The Live tab's market bar (marketBar.ts), shared with the guest routes. */
+    marketBar?: MarketBar;
     /** Started once the server listens: the report keeper's first pass and its timer. */
     warmers?: (() => void)[];
     /** Called once the keeper's first pass has filled the tabs' reports (or failed trying). */
@@ -1028,6 +1031,13 @@ export async function registerCuratedRoutes(
     }
     return opts.reports.lighthouse(opts.env, parsed.data.days, parsed.data.tz);
   });
+
+  /** The Live tab's market bar: the majors' prices, and the trenches' last two hours (marketBar.ts). */
+  const marketBar = opts.marketBar;
+  if (marketBar) {
+    app.get("/market/prices", async () => marketBar.prices());
+    app.get("/market/trench", async () => marketBar.trench());
+  }
 
   /** The Lighthouse's weather gauge: how often launches are doubling now against the last week. */
   app.get("/weather", async () => opts.reports.weather.get(() => loadMarketWeather(opts.env)));
