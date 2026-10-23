@@ -15,6 +15,7 @@ import {
   tokenSageFlagSeverity,
   tokenSageRulesAtLeast,
   normalizeSocialUrl,
+  tokenSageSocials,
   storableAnalysis,
   STORED_ANALYSIS_MAX_BYTES,
   narrativeDetails,
@@ -45,6 +46,31 @@ describe("normalizeSocialUrl", () => {
 
   it("keeps a website", () => {
     expect(normalizeSocialUrl("frog.xyz", "website")).toBe("https://frog.xyz/");
+  });
+});
+describe("normalizeSocialUrl - Telegram", () => {
+  it("keeps t.me links and turns a bare handle into one", () => {
+    expect(normalizeSocialUrl("@dogchat", "telegram")).toBe("https://t.me/dogchat");
+    expect(normalizeSocialUrl("t.me/dogchat", "telegram")).toBe("https://t.me/dogchat");
+    expect(normalizeSocialUrl("http://telegram.me/dogchat", "telegram")).toBe("https://telegram.me/dogchat");
+    expect(normalizeSocialUrl("https://example.com/dogchat", "telegram")).toBeNull();
+    expect(normalizeSocialUrl("ab", "telegram")).toBeNull();
+  });
+});
+
+describe("tokenSageSocials", () => {
+  it("reads the links TokenSage's metadata read found, cleaned", () => {
+    expect(
+      tokenSageSocials({
+        raw: { twitter: "@dog", telegram: "https://t.me/dog", website: "dog.xyz", other: 1 },
+      }),
+    ).toEqual({
+      twitterUrl: "https://x.com/dog",
+      telegramUrl: "https://t.me/dog",
+      websiteUrl: "https://dog.xyz/",
+    });
+    expect(tokenSageSocials({ raw: { twitter: "https://evil.com/x" } })).toEqual({});
+    expect(tokenSageSocials(null)).toEqual({});
   });
 });
 
@@ -276,8 +302,35 @@ describe("tokenSageHints", () => {
   });
 
   it("sends created_at only from the launch time, never from when we first saw the mint", () => {
-    const row = { name: "Dog", firstSeenAt: new Date("2026-10-06T18:00:00Z"), launchedAt: null };
+    const row = {
+      name: "Dog",
+      description: "",
+      firstSeenAt: new Date("2026-10-06T18:00:00Z"),
+      launchedAt: null,
+    };
     expect(tokenSageHints(row)).toEqual({ name: "Dog" });
+  });
+
+  it("sends no metadata for a row whose launch details were never read, so TokenSage reads the chain", () => {
+    const launchedAt = new Date("2026-10-23T18:00:00Z");
+    // Name and ticker alone (a Jupiter-list launch with Pump.fun refusing): TokenSage would take
+    // them as the coin's metadata and never see its X link.
+    expect(
+      tokenSageHints({
+        name: "Dog",
+        symbol: "DOG",
+        imageUrl: "https://ipfs.io/ipfs/x",
+        description: null,
+        launchedAt,
+      }),
+    ).toEqual({ created_at: "2026-10-23T18:00:00.000Z" });
+    expect(tokenSageHints({ name: "Dog", symbol: "DOG" })).toBeUndefined();
+    // A known "none" (an empty description) or any link is a read: hinted as before.
+    expect(tokenSageHints({ name: "Dog", description: "" })).toEqual({ name: "Dog" });
+    expect(tokenSageHints({ name: "Dog", telegramUrl: "https://t.me/dog" })).toEqual({
+      name: "Dog",
+      telegram: "https://t.me/dog",
+    });
   });
 
   it("never cuts a hint through an emoji, which TokenSage refuses as invalid text", () => {
@@ -291,7 +344,7 @@ describe("tokenSageHints", () => {
     expect(hints.description).toBe("x".repeat(1_999));
     expect(JSON.stringify(hints)).not.toMatch(/\\ud83d/i);
     // a pair that fits whole is kept
-    expect(tokenSageHints({ name: "Dog 😀" })!.name).toBe("Dog 😀");
+    expect(tokenSageHints({ name: "Dog 😀", description: "" })!.name).toBe("Dog 😀");
   });
 
   it("leaves out a URL longer than TokenSage accepts, which would 422 the whole batch", () => {

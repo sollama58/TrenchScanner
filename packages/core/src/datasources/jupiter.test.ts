@@ -523,10 +523,32 @@ describe("parseJupiterMovingLaunches", () => {
       createdAt: new Date("2026-10-15T12:00:00Z"),
     });
     expect(coins[0]!.description).toBeUndefined();
-    // The lists carry no socials: unknown, never a false the row would store as "none".
+    // No links listed: unknown, never a false the row would store as "none".
     expect(coins[0]!.hasTwitter).toBeUndefined();
     expect(coins[0]!.hasWebsite).toBeUndefined();
     expect(parseJupiterMovingLaunches({ error: "x" })).toEqual([]);
+  });
+
+  it("carries the links a coin lists, cleaned, with their bits set", () => {
+    const [coin] = parseJupiterMovingLaunches([
+      {
+        id: "pumpMint",
+        usdPrice: 0.00005,
+        mcap: 46_000,
+        launchpad: "pump.fun",
+        twitter: "https://x.com/dog/status/1",
+        telegram: "dogchat",
+        website: "javascript:alert(1)",
+      },
+    ]);
+    expect(coin).toMatchObject({
+      twitterUrl: "https://x.com/dog/status/1",
+      telegramUrl: "https://t.me/dogchat",
+      hasTwitter: true,
+      hasTelegram: true,
+    });
+    expect(coin!.websiteUrl).toBeUndefined();
+    expect(coin!.hasWebsite).toBeUndefined();
   });
 });
 

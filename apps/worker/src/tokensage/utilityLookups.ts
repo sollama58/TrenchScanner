@@ -61,6 +61,7 @@ export async function noteUtilityLookups(env: Env, now = Date.now()): Promise<nu
       description: true,
       imageUrl: true,
       twitterUrl: true,
+      telegramUrl: true,
       websiteUrl: true,
       launchedAt: true,
     },

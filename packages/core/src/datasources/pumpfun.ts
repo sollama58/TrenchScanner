@@ -110,8 +110,9 @@ export interface DiscoveredCoin {
   hasTwitter?: boolean;
   hasTelegram?: boolean;
   hasWebsite?: boolean;
-  /** The launcher's X link and website, https only (normalizeSocialUrl). */
+  /** The launcher's X, Telegram and website links, https only (normalizeSocialUrl). */
   twitterUrl?: string;
+  telegramUrl?: string;
   websiteUrl?: string;
   /** Launched in Mayhem Mode, per Pump.fun's own flag; undefined when the coin carries none. */
   mayhemMode?: true;
@@ -874,6 +875,7 @@ function toDiscoveredCoin(coin: PumpFunCoin): DiscoveredCoin {
     hasTelegram: Boolean(coin.telegram),
     hasWebsite: Boolean(coin.website),
     twitterUrl: normalizeSocialUrl(coin.twitter, "twitter") ?? undefined,
+    telegramUrl: normalizeSocialUrl(coin.telegram, "telegram") ?? undefined,
     websiteUrl: normalizeSocialUrl(coin.website, "website") ?? undefined,
     ...(typeof coin.mayhem_state === "string" && coin.mayhem_state !== ""
       ? { mayhemMode: true as const }

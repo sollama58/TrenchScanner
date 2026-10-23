@@ -11,6 +11,7 @@ import {
   tokenSageEnabled,
   tokenSageImageUrl,
   tokenSageReadIsStale,
+  tokenSageSocials,
   type Env,
   type TokenSageAnalysis,
   type TokenSageDepth,
@@ -20,6 +21,7 @@ import {
 import { Prisma } from "@prisma/client";
 import { forgetNarrativeRead } from "./heldNarrativeReads.js";
 import { flushNowReads } from "./nowReads.js";
+import { recordSocialLinks } from "../jobs/socialsFill.js";
 
 const logger = createLogger("tokensage");
 
@@ -495,6 +497,10 @@ async function storeAnalysis(
     logger.info("TokenSage basic X caveat", { mint, caveats });
   }
   await backfillTokenImage(mint, analysis);
+  // The links TokenSage's own metadata read found, on a row still missing them (socialsFill.ts).
+  await recordSocialLinks([{ mintAddress: mint, ...tokenSageSocials(analysis) }]).catch((err: unknown) =>
+    logger.warn("token socials backfill failed", { mint, error: String(err) }),
+  );
 }
 
 /**

@@ -14,6 +14,7 @@ import { RateGate, RateGateDeadlineError, type RateGateStats } from "./rateGate.
 import { canonicalPairCreatedAt, type DexScreenerClient, type TokenLookupOptions } from "./dexscreener.js";
 import type { CandidateToken, FreshQuote, FreshQuoteStats } from "../types.js";
 import type { DiscoveredCoin } from "./pumpfun.js";
+import { coinSocialsOf } from "./tokensage.js";
 
 const logger = createLogger("jupiter");
 
@@ -56,6 +57,26 @@ interface JupiterToken {
   firstPool?: { id?: string; createdAt?: string | null } | null;
   holderCount?: number | null;
   icon?: string | null;
+  /** The coin's links from its metadata, as Jupiter indexed them; absent when it has none (or not yet). */
+  twitter?: string | null;
+  telegram?: string | null;
+  website?: string | null;
+}
+
+/**
+ * The links a Jupiter token carries, with the matching has* bits set true. Jupiter reads the
+ * coin's metadata JSON, so its lists and searches carry the launcher's X, Telegram and website for
+ * any launchpad, free of Pump.fun (which refuses our servers since 2026-10-22). A link it doesn't
+ * list is left unknown, never false: Jupiter may not have indexed a seconds-old coin's metadata.
+ */
+function jupiterSocials(t: JupiterToken) {
+  const links = coinSocialsOf(t);
+  return {
+    ...links,
+    ...(links.twitterUrl ? { hasTwitter: true } : {}),
+    ...(links.telegramUrl ? { hasTelegram: true } : {}),
+    ...(links.websiteUrl ? { hasWebsite: true } : {}),
+  };
 }
 
 /** The search endpoint takes up to 100 comma-separated mints a call. */
@@ -352,9 +373,9 @@ const sumBoth = (a: number | undefined, b: number | undefined): number | undefin
 
 /**
  * Exported for tests. The launches in one of Jupiter's lists from a launchpad the scan takes
- * (SCANNED_LAUNCHPADS: Pump.fun and Stonks), as discovered coins: no description or socials (the
- * lists carry none - left unknown, not "none"), the market cap on the coin's supply now
- * (Jupiter's fdv, after burns).
+ * (SCANNED_LAUNCHPADS: Pump.fun and Stonks), as discovered coins: no description, the links the
+ * coin lists (jupiterSocials; one it doesn't is left unknown, not "none"), the market cap on the
+ * coin's supply now (Jupiter's fdv, after burns).
  */
 export function parseJupiterMovingLaunches(body: unknown): DiscoveredCoin[] {
   if (!Array.isArray(body)) return [];
@@ -379,8 +400,9 @@ export function parseJupiterMovingLaunches(body: unknown): DiscoveredCoin[] {
       marketCapUsd:
         priceUsd === undefined || priceUsd <= 0 ? undefined : (positive(t.fdv) ?? positive(t.mcap)),
       launchpad,
-      // No socials on the list: left undefined (unknown), never false. The scan stored a false
-      // here until 2026-10-16 and the models read "0 = unread" as a signal (data audit).
+      // Only the links it lists: a missing one stays undefined (unknown), never false. The scan
+      // stored a false here until 2026-10-16 and the models read "0 = unread" as a signal.
+      ...jupiterSocials(t),
     });
   }
   return out;
@@ -410,6 +432,7 @@ export function parseJupiterTokens(body: unknown, requested: Set<string>): Candi
       buys24h: finite(stats?.numBuys),
       sells24h: finite(stats?.numSells),
       priceChange24hPct: finite(stats?.priceChange),
+      ...jupiterSocials(t),
       marketSource: MARKET_SOURCE.jupiter,
     });
   }
@@ -507,6 +530,7 @@ export function parseJupiterLaunches(
       dexId,
       graduatedAt: graduatedAt && !Number.isNaN(graduatedAt.getTime()) ? graduatedAt : undefined,
       launchpad,
+      ...jupiterSocials(t),
       marketSource: MARKET_SOURCE.jupiter,
     });
   }

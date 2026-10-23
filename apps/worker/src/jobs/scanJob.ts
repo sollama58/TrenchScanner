@@ -176,6 +176,7 @@ import {
 } from "./mayhemMode.js";
 import { resolveRelaunchSiblings } from "./relaunchFarms.js";
 import { fillBandMetadata, fillLaunchDetails, takeLaunchDetailStats } from "./launchDetails.js";
+import { fillMissingSocials, recordSocialLinks, takeSocialsFillStats } from "./socialsFill.js";
 import {
   launchSnipersFromCache,
   resolveLaunchSnipers,
@@ -279,7 +280,7 @@ export interface ScanDeps {
    * leave it out: then no quote, and every row anchors on DexScreener's price.
    */
   jupiter?: Pick<JupiterClient, "takeCallStats"> &
-    Partial<Pick<JupiterClient, "getFreshQuotes" | "discoverMovingLaunches">>;
+    Partial<Pick<JupiterClient, "getFreshQuotes" | "discoverMovingLaunches" | "getTokensByAddresses">>;
   /**
    * Live prices for the newest launches in the band refresh: Jupiter, then CoinGecko for what it
    * misses (LiveLaunchQuotes). Optional: unset, every mint is read from DexScreener alone.
@@ -1568,6 +1569,11 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
           },
         ),
       ).catch((err: unknown) => logger.warn("launch metadata failed to save", { error: String(err) }));
+      // Coins shown with no link at all: Jupiter's token search and TokenSage's reads, on a
+      // backoff, the last two days of band coins included (socialsFill.ts). Once a minute at most.
+      void withApiFeature("socials-fill", () => fillMissingSocials({ jupiter: deps.jupiter })).catch(
+        (err: unknown) => logger.warn("socials fill failed", { error: String(err) }),
+      );
     }
     // The stamp the liveness-prioritized selection above runs on.
     await stampLiveMarketCaps(refreshed.liveMarketCaps, env);
@@ -2569,6 +2575,7 @@ function discoveryMeta(pumpFun: Partial<Pick<PumpFunClient, "takeListStats">>): 
   return {
     ...(list ? { pumpfunList: { ...list } } : {}),
     launchDetails: { ...takeLaunchDetailStats() },
+    socialsFill: { ...takeSocialsFillStats() },
   };
 }
 
@@ -2909,6 +2916,7 @@ function toWatchlistCandidate(coin: DiscoveredCoin, discoverySource: string): Wa
     hasTelegram: coin.hasTelegram,
     hasWebsite: coin.hasWebsite,
     twitterUrl: coin.twitterUrl,
+    telegramUrl: coin.telegramUrl,
     websiteUrl: coin.websiteUrl,
     // Kept even when empty: on a Pump.fun launch an empty description is a known "none", which
     // the hasDescription feature distinguishes from "this source never had one".
@@ -3128,6 +3136,7 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
       hasTelegram: coin.hasTelegram ?? false,
       hasWebsite: coin.hasWebsite,
       twitterUrl: coin.twitterUrl,
+      telegramUrl: coin.telegramUrl,
       websiteUrl: coin.websiteUrl,
       description: coin.description?.slice(0, 2_000),
       discoverySource: coin.discoverySource,
@@ -3250,25 +3259,11 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
     if (bare.length > 0) logger.info("filled in launch details", { count: bare.length });
   }
 
-  // Same for the launcher's X link, recorded since the TokenSage groundwork: mints discovered
-  // before then pick it up the next time a source reports them. Touches only rows still missing it.
-  const linkBackfill = valid.filter((coin) => coin.twitterUrl);
-  if (linkBackfill.length > 0) {
-    const missing = await prisma.token.findMany({
-      where: { mintAddress: { in: linkBackfill.map((c) => c.mintAddress) }, twitterUrl: null },
-      select: { id: true, mintAddress: true },
-    });
-    const byMint = new Map(linkBackfill.map((c) => [c.mintAddress, c]));
-    await forEachWithConcurrency(missing, 4, async (token) => {
-      const coin = byMint.get(token.mintAddress);
-      await prisma.token
-        .update({
-          where: { id: token.id },
-          data: { twitterUrl: coin?.twitterUrl, websiteUrl: coin?.websiteUrl },
-        })
-        .catch(() => undefined);
-    });
-  }
+  // The links themselves, on rows still missing each one: a mint discovered bare, or before the
+  // columns, picks them up the next time a source reports them (socialsFill.ts).
+  await recordSocialLinks(valid).catch((err: unknown) =>
+    logger.warn("failed to record social links", { error: String(err) }),
+  );
 }
 
 /**
@@ -3440,6 +3435,9 @@ interface TokenScanFields {
   hasTwitter?: boolean;
   hasTelegram?: boolean;
   hasWebsite?: boolean;
+  twitterUrl?: string;
+  telegramUrl?: string;
+  websiteUrl?: string;
   firstInBandAt?: Date;
   narrativeTags: string[];
   emptyTop10WalletPct?: number;
@@ -3461,6 +3459,9 @@ interface TokenScanFields {
  *    re-scan - the badges vanished from the card and the scoring's social component silently lost
  *    its input. A candidate that did read them (a pair with an info block) settles a row still
  *    null to its false; an unread candidate leaves the row as it is.
+ *  - A link (twitterUrl, telegramUrl, websiteUrl) is written only on a row still without one:
+ *    the reading's link (a Jupiter token's metadata, a DexScreener info block) fills it in, and
+ *    a stored link is never replaced or cleared.
  *  - firstInBandAt is stamped once and kept.
  * Exported for tests.
  */
@@ -3493,6 +3494,9 @@ export function tokenChanges(existing: Token | null, f: TokenScanFields): Prisma
   if (f.hasTelegram && !existing?.hasTelegram) out.hasTelegram = true;
   const website = social(f.hasWebsite, existing?.hasWebsite);
   if (website !== undefined) out.hasWebsite = website;
+  if (f.twitterUrl && !existing?.twitterUrl) out.twitterUrl = f.twitterUrl;
+  if (f.telegramUrl && !existing?.telegramUrl) out.telegramUrl = f.telegramUrl;
+  if (f.websiteUrl && !existing?.websiteUrl) out.websiteUrl = f.websiteUrl;
   if (f.firstInBandAt && !existing?.firstInBandAt) out.firstInBandAt = f.firstInBandAt;
   // DexScreener token info sticks once a pair's info block (or a profile feed) has said so.
   // A reading without one leaves the row alone. Not a model input (user ask 2026-10-21).
@@ -3778,6 +3782,9 @@ async function processCandidate(
     hasTwitter: candidate.hasTwitter,
     hasTelegram: candidate.hasTelegram,
     hasWebsite: candidate.hasWebsite,
+    twitterUrl: candidate.twitterUrl,
+    telegramUrl: candidate.telegramUrl,
+    websiteUrl: candidate.websiteUrl,
     firstInBandAt,
     narrativeTags: scored.narrativeTags,
     emptyTop10WalletPct: scored.emptyTop10WalletPct,
@@ -3800,6 +3807,9 @@ async function processCandidate(
             hasTwitter: candidate.hasTwitter,
             hasTelegram: candidate.hasTelegram ?? false,
             hasWebsite: candidate.hasWebsite,
+            twitterUrl: candidate.twitterUrl,
+            telegramUrl: candidate.telegramUrl,
+            websiteUrl: candidate.websiteUrl,
             firstInBandAt,
             narrativeTags: scored.narrativeTags,
             lastEmptyTop10WalletPct: scored.emptyTop10WalletPct,

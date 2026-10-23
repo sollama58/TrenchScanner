@@ -279,8 +279,9 @@ export interface Token {
     /** Who pays the holder rewards when it is not OTC Desks: "Stonk" on a Stonks reward launch. */
     rewardHost?: string | null;
   } | null;
-  /** The coin's own X and website links as found at discovery (https only); null when it has none. */
+  /** The coin's own X, Telegram and website links (https only); null when no source has had one. */
   twitterUrl?: string | null;
+  telegramUrl?: string | null;
   websiteUrl?: string | null;
   /** The DexScreener pair the coin is priced from; null until a reading names it. */
   pairAddress?: string | null;

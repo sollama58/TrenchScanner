@@ -141,4 +141,21 @@ describe("tokenChanges - socials on a row no source has read", () => {
   it("leaves it unread when the re-scan's candidate carried no socials either", () => {
     expect(tokenChanges(unread, base)).toEqual({});
   });
+
+  it("fills a missing link from the reading, and never replaces a stored one", () => {
+    const linked = {
+      ...existing,
+      twitterUrl: "https://x.com/kept",
+      telegramUrl: null,
+      websiteUrl: null,
+    } as Token;
+    expect(
+      tokenChanges(linked, {
+        ...base,
+        twitterUrl: "https://x.com/new",
+        telegramUrl: "https://t.me/dog",
+      }),
+    ).toEqual({ telegramUrl: "https://t.me/dog" });
+    expect(tokenChanges(linked, base)).toEqual({});
+  });
 });

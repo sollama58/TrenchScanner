@@ -120,6 +120,7 @@ export async function readTokenProfile(mintAddress: string): Promise<TokenProfil
       hasTelegram: true,
       hasWebsite: true,
       twitterUrl: true,
+      telegramUrl: true,
       websiteUrl: true,
       creator: true,
     },
@@ -257,7 +258,7 @@ export async function readTokenProfile(mintAddress: string): Promise<TokenProfil
   const byToken = new Map(firstGrades.map((o) => [o.tokenId, o]));
 
   const x = safeLink(token.twitterUrl, "x") ?? safeLink(doc?.raw?.twitter, "x");
-  const telegram = safeLink(doc?.raw?.telegram, "telegram");
+  const telegram = safeLink(token.telegramUrl, "telegram") ?? safeLink(doc?.raw?.telegram, "telegram");
   const website = safeLink(token.websiteUrl, "website") ?? safeLink(doc?.raw?.website, "website");
 
   return {

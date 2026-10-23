@@ -2,7 +2,7 @@ import { fetchJson } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError, type RateGateStats } from "./rateGate.js";
-import { normalizeSocialUrl } from "./tokensage.js";
+import { coinSocialsOf, normalizeSocialUrl } from "./tokensage.js";
 import { isCurveVenue, isLaunchHomeCurve } from "../launchpads.js";
 import { MARKET_SOURCE } from "../marketSource.js";
 import { mintSupplies } from "../mintSupply.js";
@@ -642,6 +642,9 @@ export class DexScreenerClient {
         hasTwitter: t.hasTwitter ?? dex?.hasTwitter,
         hasTelegram: t.hasTelegram ?? dex?.hasTelegram,
         hasWebsite: t.hasWebsite ?? dex?.hasWebsite,
+        twitterUrl: t.twitterUrl ?? dex?.twitterUrl,
+        telegramUrl: t.telegramUrl ?? dex?.telegramUrl,
+        websiteUrl: t.websiteUrl ?? dex?.websiteUrl,
         imageUrl: t.imageUrl ?? dex?.imageUrl,
         graduatedAt: t.graduatedAt ?? dex?.graduatedAt,
       });
@@ -1063,6 +1066,8 @@ export class DexScreenerClient {
         hasTelegram: links?.some((l) => l.type === "telegram"),
         hasWebsite: links?.some((l) => !l.type || l.type === "website"),
         twitterUrl: normalizeSocialUrl(links?.find((l) => l.type === "twitter")?.url, "twitter") ?? undefined,
+        telegramUrl:
+          normalizeSocialUrl(links?.find((l) => l.type === "telegram")?.url, "telegram") ?? undefined,
         websiteUrl:
           normalizeSocialUrl(links?.find((l) => !l.type || l.type === "website")?.url, "website") ??
           undefined,
@@ -1410,6 +1415,12 @@ function toCandidateToken(pair: DexScreenerPair, launchHomeClock = false): Candi
     hasTwitter: info ? socials.some((s) => s.type === "twitter") : undefined,
     hasTelegram: info ? socials.some((s) => s.type === "telegram") : undefined,
     hasWebsite: info ? (info.websites?.length ?? 0) > 0 : undefined,
+    // The links themselves, for a row still missing them (a paid profile bought after launch).
+    ...coinSocialsOf({
+      twitter: socials.find((s) => s.type === "twitter")?.url,
+      telegram: socials.find((s) => s.type === "telegram")?.url,
+      website: info?.websites?.[0]?.url,
+    }),
     imageUrl: info?.imageUrl,
     // The info block is the paid profile. Absent on a pair that has none; no time comes with it.
     ...(pairHasTokenInfo(info) ? { dexInfo: true } : {}),

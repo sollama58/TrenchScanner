@@ -47,6 +47,14 @@ export interface CandidateToken {
   hasTwitter?: boolean;
   hasTelegram?: boolean;
   hasWebsite?: boolean;
+  /**
+   * The coin's own links when this reading carries them (a DexScreener pair's info block, a
+   * Jupiter token's metadata), https only (normalizeSocialUrl). Recorded on Token rows still
+   * missing them; an absent one says nothing.
+   */
+  twitterUrl?: string;
+  telegramUrl?: string;
+  websiteUrl?: string;
   description?: string;
   /**
    * The token's logo.
@@ -127,8 +135,9 @@ export interface WatchlistCandidate {
   hasTwitter?: boolean;
   hasTelegram?: boolean;
   hasWebsite?: boolean;
-  /** The launcher's X link and website, https only - recorded as Token.twitterUrl/websiteUrl. */
+  /** The launcher's X, Telegram and website links, https only - Token.twitterUrl/telegramUrl/websiteUrl. */
   twitterUrl?: string;
+  telegramUrl?: string;
   websiteUrl?: string;
   /** The launcher-written description, when the source has one (Pump.fun does). */
   description?: string;
