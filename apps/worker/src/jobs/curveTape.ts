@@ -2,11 +2,17 @@ import {
   CurveTape,
   EMPTY_CURVE_PATH,
   STONKS_LAUNCHPAD,
+  WRAPPED_SOL_MINT,
   createLogger,
   decodeCurve,
+  decodePoolVirtualQuote,
+  decodeTokenAmount,
   pumpCurveAddressOf,
+  pumpSwapPoolOf,
   type CurvePathFeatures,
+  type CurveState,
   type HeliusClient,
+  type PoolVaults,
 } from "@trenchscanner/core";
 import { streamCredits, type HeliusAccountStream } from "../discovery/heliusAccountStream.js";
 import { recordPricePath } from "./pricePathRecorder.js";
@@ -28,12 +34,32 @@ const logger = createLogger("curve-tape");
  * (no stream, a refused subscription, a dropped connection, or the day's credit pace spent) are
  * read every CURVE_TAPE_POLL_SECONDS instead, the CURVE_TAPE_POLL_MAX_MINTS nearest the band
  * first. Nothing is written to the database: the features ride on the decision's row.
+ *
+ * Graduation doesn't end the chart's record (user report 2026-10-23: a coin that bonded at 14:22
+ * had no candles from then until a chart opened at 14:30, drawn flat across a 2x). When a followed
+ * curve completes, the coin's PumpSwap pool is followed in its place on the same socket (its two
+ * vaults and the pool account, read once by RPC when the subscriptions start, polled by RPC where
+ * the stream doesn't reach), until the coin is past the tape's age or POOL_FOLLOW_MS after it
+ * graduated, whichever is later. Its changes go on a tape of their own (the curve's features and
+ * prices stay the curve's), which the chart's candle writer saves as "pool" bars (curveCandles.ts).
  */
 
 export const CURVE_STREAM_KEY_PREFIX = "curve:";
+/** The stream keys of a graduated coin's pool: `curve-pool:base:<mint>`, `:quote:`, `:account:`. */
+export const POOL_STREAM_KEY_PREFIX = "curve-pool:";
+/** A graduated coin's pool is followed at least this long after it graduated. */
+export const POOL_FOLLOW_MS = 15 * 60_000;
+/**
+ * A swap changes both vaults in one slot, delivered as two updates: the price is recorded once
+ * both sides of a slot are in, or this long after one side came alone (a plain transfer in). One
+ * side alone would draw a spike: the coin's vault moved, the SOL against it not yet.
+ */
+const PAIR_WAIT_MS = 400;
 
 type CurveStream = Pick<HeliusAccountStream, "watch" | "unwatch" | "coveredSince">;
-type CurveReader = Pick<HeliusClient, "getCurveStatesBatch">;
+/** The pool reads are optional: without them, a graduated coin is let go as before. */
+type CurveReader = Pick<HeliusClient, "getCurveStatesBatch"> &
+  Partial<Pick<HeliusClient, "getPoolVaultsBatch" | "getTokenAmountsBatch">>;
 
 export interface CurveTapeConfig {
   maxAgeMinutes: number;
@@ -70,10 +96,38 @@ interface Followed {
   bornAt: number;
 }
 
+type PoolPart = "base" | "quote" | "account";
+const POOL_PARTS: readonly PoolPart[] = ["base", "quote", "account"];
+
+/** A graduated coin's PumpSwap pool, followed for the chart's candles. */
+interface PoolFollowed {
+  /** The pool account (pumpSwapPoolOf: the canonical SOL pool its curve migrated to). */
+  address: string;
+  /** Its vaults, null until the pool's account is read (it is created at migration). */
+  vaults: PoolVaults | null;
+  /** Let go after this (ms epoch). */
+  until: number;
+  /** When the pool was last read by RPC (ms epoch), null before the first read. */
+  readAt: number | null;
+  /** The vaults' balances (base units) and the pool's virtual quote reserve, as last read. */
+  base: number | null;
+  quote: number | null;
+  virtualQuote: number;
+  /** The slot each vault's newest stream update was read at. */
+  baseSlot: number | null;
+  quoteSlot: number | null;
+  /** One side of a slot came alone at this time: recorded when the other comes, or PAIR_WAIT_MS on. */
+  pendingAt: number | null;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
 // Kept long enough for the price path recorder's 30 minutes (the features still read 16). Memory
 // follows the stream's update rate, which its daily credit cap bounds, not the number of coins.
 const tape = new CurveTape({ keepMs: 31 * 60_000, maxTicks: 6_000 });
 const followed = new Map<string, Followed>();
+/** Graduated coins' pools and their own tape: the curve's features and prices never read them. */
+const poolTape = new CurveTape({ keepMs: 31 * 60_000, maxTicks: 6_000 });
+const pools = new Map<string, PoolFollowed>();
 /** Mints whose curve address holds no curve (not Pump.fun) or a graduated one: not asked again. */
 const done = new Set<string>();
 const MAX_DONE = 20_000;
@@ -88,9 +142,10 @@ let paused = false;
 let day = "";
 /** The stream's bytes today: credits are figured on the total, as a single update rounds to none. */
 let dayStreamBytes = 0;
-let stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0 };
+let stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0, poolUpdates: 0 };
 
 const keyOf = (mint: string) => `${CURVE_STREAM_KEY_PREFIX}${mint}`;
+const poolKeyOf = (part: PoolPart, mint: string) => `${POOL_STREAM_KEY_PREFIX}${part}:${mint}`;
 
 /** Starts the curve tape; returns its stop. `helius` reads the curves, `heliusStream` follows them (null: polls only). */
 export function startCurveTape(
@@ -108,6 +163,7 @@ export function startCurveTape(
     timer = null;
     for (const mint of followed.keys()) stream?.unwatch(keyOf(mint));
     followed.clear();
+    for (const mint of [...pools.keys()]) dropPool(mint, false);
     reader = null;
     stream = null;
     cfg = null;
@@ -123,7 +179,153 @@ export function onCurveStreamUpdate(key: string, data: string, bytes: number, no
   const state = decodeCurve(data);
   if (!state) return;
   tape.record(mint, now, state, "stream");
-  if (state.complete) drop(mint, true);
+  if (state.complete) graduate(mint, state, now);
+}
+
+/**
+ * An account update the Helius stream delivered under a pool key (POOL_STREAM_KEY_PREFIX), with the
+ * slot it was read at: a vault's balance, or the pool's virtual quote reserve.
+ */
+export function onPoolStreamUpdate(
+  key: string,
+  data: string,
+  bytes: number,
+  slot: number | null = null,
+  now = Date.now(),
+): void {
+  const rest = key.slice(POOL_STREAM_KEY_PREFIX.length);
+  const cut = rest.indexOf(":");
+  const part = rest.slice(0, cut) as PoolPart;
+  const mint = rest.slice(cut + 1);
+  stats.updates += 1;
+  stats.poolUpdates += 1;
+  stats.bytes += bytes;
+  dayStreamBytes += bytes;
+  const p = pools.get(mint);
+  if (!p || cut < 0) return;
+  if (part === "account") {
+    const virtualQuote = decodePoolVirtualQuote(data);
+    if (virtualQuote === p.virtualQuote) return;
+    p.virtualQuote = virtualQuote;
+    recordPool(mint, p, now, "stream");
+    return;
+  }
+  const amount = decodeTokenAmount(data);
+  if (amount === null) return;
+  if (part === "base") {
+    p.base = amount;
+    p.baseSlot = slot;
+  } else {
+    p.quote = amount;
+    p.quoteSlot = slot;
+  }
+  // Both sides of the slot are in: the price is whole.
+  if (slot !== null && p.baseSlot === slot && p.quoteSlot === slot) {
+    flushPair(mint, p, p.pendingAt ?? now);
+    return;
+  }
+  if (p.pendingAt === null) {
+    p.pendingAt = now;
+    p.timer = setTimeout(() => {
+      if (pools.get(mint) === p) flushPair(mint, p, p.pendingAt ?? Date.now());
+    }, PAIR_WAIT_MS);
+    p.timer.unref?.();
+  }
+}
+
+/** Records a pool's price as its vaults stand, the pending side waited on no longer. */
+function flushPair(mint: string, p: PoolFollowed, at: number): void {
+  if (p.timer) clearTimeout(p.timer);
+  p.timer = null;
+  p.pendingAt = null;
+  recordPool(mint, p, at, "stream");
+}
+
+/**
+ * The pool as a curve state for the tape: PumpSwap prices the quote vault plus the pool's virtual
+ * quote reserve over the coin's vault (pumpSwapPool.ts), in the curve's units (lamports per raw
+ * token unit), so its bars come out on the same market cap scale; its SOL vault moves as the
+ * curve's real reserve did. Null until both vaults are read.
+ */
+export function poolCurveState(
+  base: number | null,
+  quote: number | null,
+  virtualQuote: number,
+): CurveState | null {
+  if (base === null || quote === null || !(base > 0) || !(quote + virtualQuote > 0)) return null;
+  return {
+    virtualToken: base,
+    virtualQuote: quote + virtualQuote,
+    realQuote: quote,
+    complete: false,
+    quoteIsSol: true,
+  };
+}
+
+function recordPool(mint: string, p: PoolFollowed, at: number, source: "stream" | "read"): void {
+  const state = poolCurveState(p.base, p.quote, p.virtualQuote);
+  if (state) poolTape.record(mint, at, state, source);
+}
+
+/**
+ * A followed curve completed: the coin is let go as a curve (its path saved, its last bars
+ * queued), and its PumpSwap pool followed in its place for the chart, when its curve was quoted in
+ * SOL and the pool reads are there.
+ */
+function graduate(mint: string, state: CurveState, now: number): void {
+  const f = followed.get(mint);
+  // The emptied curve may not say what it was quoted in any more: the tape held it.
+  const quoteIsSol = tape.ticksAfter(mint, Infinity)?.quoteIsSol ?? state.quoteIsSol;
+  drop(mint, true);
+  if (!f || !cfg || !quoteIsSol || !reader?.getPoolVaultsBatch || !reader.getTokenAmountsBatch) return;
+  const address = pumpSwapPoolOf(mint);
+  if (!address || pools.has(mint)) return;
+  pools.set(mint, {
+    address,
+    vaults: null,
+    until: Math.max(f.bornAt + cfg.maxAgeMinutes * 60_000, now + POOL_FOLLOW_MS),
+    readAt: null,
+    base: null,
+    quote: null,
+    virtualQuote: 0,
+    baseSlot: null,
+    quoteSlot: null,
+    pendingAt: null,
+    timer: null,
+  });
+}
+
+function watchPool(mint: string, p: PoolFollowed, now: number): void {
+  if (!p.vaults || paused) return;
+  stream?.watch(poolKeyOf("base", mint), [p.vaults.base], now, "account");
+  stream?.watch(poolKeyOf("quote", mint), [p.vaults.quote], now, "account");
+  stream?.watch(poolKeyOf("account", mint), [p.address], now, "account");
+}
+
+function unwatchPool(mint: string): void {
+  for (const part of POOL_PARTS) stream?.unwatch(poolKeyOf(part, mint));
+}
+
+/** From when the stream has covered all of a pool (both vaults and the account), or null. */
+function poolCoveredSince(mint: string, p: PoolFollowed, now: number): number | null {
+  if (!p.vaults || paused || !stream) return null;
+  const since = [
+    stream.coveredSince(poolKeyOf("base", mint), p.vaults.base, now),
+    stream.coveredSince(poolKeyOf("quote", mint), p.vaults.quote, now),
+    stream.coveredSince(poolKeyOf("account", mint), p.address, now),
+  ];
+  return since.some((s) => s == null) ? null : Math.max(...(since as number[]));
+}
+
+/** Lets go of a pool: its last bars queued for the candle writer when `save`. */
+function dropPool(mint: string, save = true): void {
+  const p = pools.get(mint);
+  if (!p) return;
+  if (p.timer) clearTimeout(p.timer);
+  pools.delete(mint);
+  unwatchPool(mint);
+  if (save) curveTapeDropped(mint, poolTape, Date.now(), "pool");
+  poolTape.forget(mint);
 }
 
 /**
@@ -162,6 +364,11 @@ export function followYoungCurves(
     f.rank = rank;
     // Again every cycle: it keeps the subscription from being evicted as unwatched.
     if (!paused) stream?.watch(keyOf(mint), [f.curve], now, "account");
+  }
+  // Graduated coins' pools are kept to their own horizon, on the watchlist or not.
+  for (const [mint, p] of pools) {
+    if (now > p.until) dropPool(mint);
+    else watchPool(mint, p, now);
   }
 }
 
@@ -209,10 +416,15 @@ export function curveLabelPrices(mint: string, afterMs: number, untilMs: number)
   return tape.labelPrices(mint, afterMs, untilMs);
 }
 
-/** The coins followed and their changes, for the chart's 1-second candles (curveCandles.ts). */
+/**
+ * The coins followed and their changes, for the chart's 1-second candles (curveCandles.ts): the
+ * curves, then the graduated coins' pools.
+ */
 export const curveTapeView: CurveTapeView = {
-  mints: () => followed.keys(),
-  ticksAfter: (mint, after) => tape.ticksAfter(mint, after),
+  mints: () => [...followed.keys(), ...[...pools.keys()].filter((m) => !followed.has(m))],
+  ticksAfter: (mint, after) =>
+    followed.has(mint) ? tape.ticksAfter(mint, after) : poolTape.ticksAfter(mint, after),
+  sourceOf: (mint) => (!followed.has(mint) && pools.has(mint) ? "pool" : "curve"),
 };
 
 /** Counts since the last call, for the scan's heartbeat; null while the tape is off. */
@@ -220,10 +432,14 @@ export function takeCurveTapeStats(now = Date.now()) {
   if (!cfg) return null;
   let streamed = 0;
   for (const [mint, f] of followed) if (stream?.coveredSince(keyOf(mint), f.curve) != null) streamed += 1;
+  let poolsStreamed = 0;
+  for (const [mint, p] of pools) if (poolCoveredSince(mint, p, now) !== null) poolsStreamed += 1;
   rollDay(now);
   const out = {
     following: followed.size,
     streamed,
+    pools: pools.size,
+    poolsStreamed,
     ...stats,
     streamCredits: streamCredits(stats.bytes),
     // getMultipleAccounts: 1 credit per call of up to 100 curves.
@@ -231,7 +447,7 @@ export function takeCurveTapeStats(now = Date.now()) {
     streamCreditsToday: Math.round(streamCredits(dayStreamBytes)),
     paused: paused ? 1 : 0,
   };
-  stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0 };
+  stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0, poolUpdates: 0 };
   return out;
 }
 
@@ -286,12 +502,17 @@ export async function round(now = Date.now()): Promise<void> {
         if (over) stream?.unwatch(keyOf(mint));
         else stream?.watch(keyOf(mint), [f.curve], now, "account");
       }
+      for (const [mint, p] of pools) {
+        if (over) unwatchPool(mint);
+        else watchPool(mint, p, now);
+      }
     }
     const unseen = (cfg.newLaunches?.() ?? []).filter((m) => !followed.has(m) && !done.has(m));
     followNewLaunches(
       cfg.screenLaunches && unseen.length > 0 ? await cfg.screenLaunches(unseen) : unseen,
       now,
     );
+    await poolRound(now);
     const toRead: string[] = [];
     let polls = 0;
     let seeds = 0;
@@ -327,12 +548,63 @@ export async function round(now = Date.now()): Promise<void> {
       // flight is newer, and the read doesn't overwrite it.
       tape.record(mint, now, state, "read");
       f.readAt = now;
-      if (state.complete) drop(mint, true);
+      if (state.complete) graduate(mint, state, now);
     });
   } catch (err) {
     logger.warn("curve read failed", { error: String(err) });
   } finally {
     busy = false;
+  }
+}
+
+/**
+ * The pools' part of a round: the expired let go, the new ones' accounts read for their vaults
+ * (the pool appears at migration, a moment after the curve completes, so it is asked each round
+ * until it does), and one batched read of the vaults to seed the streamed pools and poll the rest.
+ */
+async function poolRound(now: number): Promise<void> {
+  if (pools.size === 0 || !reader?.getPoolVaultsBatch || !reader.getTokenAmountsBatch) return;
+  for (const [mint, p] of pools) if (now > p.until) dropPool(mint);
+  const toRead = new Map<string, { mint: string; quoteMint: string }>();
+  for (const [mint, p] of pools) {
+    if (p.vaults === null) toRead.set(p.address, { mint, quoteMint: WRAPPED_SOL_MINT });
+    else {
+      const since = poolCoveredSince(mint, p, now);
+      // Streamed and read since its subscriptions began: the stream carries it.
+      if (since !== null && p.readAt !== null && p.readAt >= since)
+        poolTape.confirmStreamed(mint, since, now);
+      else toRead.set(p.address, { mint, quoteMint: WRAPPED_SOL_MINT });
+    }
+  }
+  if (toRead.size === 0) return;
+  // The pool accounts first (their vaults and virtual reserve), then the vaults' balances.
+  const accounts = await reader.getPoolVaultsBatch(toRead);
+  stats.readCalls += Math.ceil(toRead.size / 100);
+  const vaultsOf = new Map<string, PoolVaults>();
+  for (const [address, { mint }] of toRead) {
+    const p = pools.get(mint);
+    const vaults = accounts.get(address);
+    if (!p || !vaults || vaults === "failed") continue;
+    if (p.vaults === null) {
+      p.vaults = vaults;
+      watchPool(mint, p, now);
+    }
+    p.virtualQuote = vaults.virtualQuote;
+    vaultsOf.set(mint, p.vaults);
+  }
+  if (vaultsOf.size === 0) return;
+  const amounts = await reader.getTokenAmountsBatch([...vaultsOf.values()].flatMap((v) => [v.base, v.quote]));
+  stats.readCalls += Math.ceil((vaultsOf.size * 2) / 100);
+  for (const [mint, vaults] of vaultsOf) {
+    const p = pools.get(mint);
+    const base = amounts.get(vaults.base);
+    const quote = amounts.get(vaults.quote);
+    if (!p || typeof base !== "number" || typeof quote !== "number") continue;
+    p.base = base;
+    p.quote = quote;
+    // Stamped with when the read went out, as the curves' reads are.
+    recordPool(mint, p, now, "read");
+    p.readAt = now;
   }
 }
 
@@ -356,9 +628,10 @@ export function seedCurveStreamSpend(creditsToday: number, at: Date, now = Date.
 export function resetCurveTape(): void {
   for (const mint of [...followed.keys()]) tape.forget(mint);
   followed.clear();
+  for (const mint of [...pools.keys()]) dropPool(mint, false);
   done.clear();
   paused = false;
   day = "";
   dayStreamBytes = 0;
-  stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0 };
+  stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0, poolUpdates: 0 };
 }

@@ -5,6 +5,8 @@ import {
   pageCoverEnd,
   pageInput,
   readTokenCandles,
+  uncovered,
+  HOLE_EDGE_MS,
   type CandleReadDeps,
 } from "./tokenCandles.js";
 
@@ -26,6 +28,52 @@ function deps(rows: CandleChunkRow[], live: SeriesInput[] = [], factor?: number)
   };
   return { d, reads };
 }
+
+describe("holes", () => {
+  // 8WNk on 2026-10-23: the curve tape's 1-second bars to its graduation at 14:22:11, nothing
+  // stored after, and a chart read at 14:30. The page said nothing of the 8 minutes, and the chart
+  // drew them flat at the last price.
+  const grad = Date.UTC(2026, 9, 23, 14, 22, 11);
+  const start = grad - 3 * M - 11_000;
+  const secs = Array.from({ length: 191 }, (_, i) => bar(start + i * 1_000, 30_000 + i));
+  const curve = chunkBars("X", 1, "curve", secs, { from: start, to: grad });
+
+  it("reports the stretch after the curve's last bar that nothing covers", async () => {
+    const now = Date.UTC(2026, 9, 23, 14, 30, 8);
+    const { d } = deps(curve);
+    const out = await readTokenCandles("X", "1s", null, 1_500, d, now);
+    expect(out.bars[out.bars.length - 1]!.t).toBe(grad - 1_000);
+    expect(out.holes).toEqual([[grad, now]]);
+  });
+
+  it("reports none once a source covers it, and none for the live edge between reads", async () => {
+    const now = grad + 5 * M;
+    const pool = chunkBars("X", 1, "pool", [bar(grad + 4_000, 60_000), bar(grad + 4 * M, 62_000)], {
+      from: grad + 2_000,
+      to: now - HOLE_EDGE_MS + 1,
+    });
+    // Quiet minutes between have no chunk: the one before runs its cover on over them (the
+    // worker's curveCandleRows).
+    pool[0]!.coverTo = pool[1]!.coverFrom;
+    const { d } = deps([...curve, ...pool]);
+    const out = await readTokenCandles("X", "1s", null, 1_500, d, now);
+    // The two seconds before the pool's stream began are nobody's; the last few are the edge.
+    expect(out.holes).toEqual([[grad, grad + 2_000]]);
+  });
+
+  it("leaves out a trailing hole shorter than the live edge, and keeps one inside", () => {
+    const input = (from: number, to: number): SeriesInput => ({
+      res: 1,
+      coverFrom: from,
+      coverTo: to,
+      bars: [],
+      priority: 1,
+    });
+    expect(uncovered([input(0, 10_000), input(20_000, 30_000)], 0, 40_000)).toEqual([[10_000, 20_000]]);
+    expect(uncovered([input(0, 10_000)], 0, 40_000)).toEqual([[10_000, 40_000]]);
+    expect(uncovered([], 5, 5)).toEqual([]);
+  });
+});
 
 describe("readTokenCandles", () => {
   // Two days of 5-minute bars, then the last 3 hours in minutes.

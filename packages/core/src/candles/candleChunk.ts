@@ -21,8 +21,11 @@ export interface StoredBar {
 export const CANDLE_RESOLUTIONS = [1, 15, 60, 300] as const;
 export type CandleRes = (typeof CANDLE_RESOLUTIONS)[number];
 
-/** Where stored bars came from. */
-export type CandleStoreSource = "curve" | "pumpfun" | "gecko";
+/**
+ * Where stored bars came from: the worker's curve tape on the bonding curve ("curve") and, after
+ * graduation, on the coin's PumpSwap pool ("pool"), Pump.fun's pages, or GeckoTerminal's.
+ */
+export type CandleStoreSource = "curve" | "pool" | "pumpfun" | "gecko";
 
 /** Bars per chunk: a minute of 1 s bars, 15 minutes of 15 s, an hour of 1 m, five hours of 5 m. */
 export const CANDLE_CHUNK_BARS = 60;
@@ -36,7 +39,11 @@ export interface CandleChunkRow {
   res: CandleRes;
   startAt: number;
   source: CandleStoreSource;
-  /** The stretch inside the chunk the source covered without a break, [coverFrom, coverTo). */
+  /**
+   * The stretch the source covered without a break, [coverFrom, coverTo): inside the chunk, except
+   * that the curve tape runs its last chunk's cover on over the quiet minutes after it (up to half
+   * an hour; readCandleChunks reaches back five hours).
+   */
   coverFrom: number;
   coverTo: number;
   /** Oldest first, each starting inside the chunk on a multiple of `res`. */

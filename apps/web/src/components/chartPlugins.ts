@@ -102,6 +102,8 @@ export class SlotCandleSeries implements ICustomSeriesPaneView<Time, SlotCandleD
         lastDrawn = pi;
         const p = bars[pi] ?? own;
         const d = p.originalData;
+        // A slot nobody read is whitespace: nothing to draw (chartBars.ts `unknown`).
+        if (d.c === undefined) continue;
         const span = d.span ?? 1;
         const x0 = p.x - barSpacing / 2;
         const total = barSpacing * span;

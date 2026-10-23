@@ -32,8 +32,13 @@ const MAX_QUEUED = 2_000;
 const FLUSH_MS = 5_000;
 /** Newest pages kept per width. */
 const MAX_PAGES = 300;
-/** A coin's backfill is asked for at most this often from one process (a top-up's: its own redo). */
+/** A coin's backfill is asked for at most this often from one process. */
 const ASK_EVERY_MS = 60 * 60_000;
+/**
+ * A top-up is asked at most this often from one process; the database's own redo rule
+ * (BACKFILL_TOP_UP_AFTER_MS since the coin's last run) decides whether it runs again.
+ */
+const TOP_UP_ASK_MS = 60_000;
 const MAX_ASKED = 5_000;
 
 let enabled = true;
@@ -43,6 +48,8 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let flushing: Promise<void> | null = null;
 const pages = new Map<string, { at: number; candles: McapCandle[] }>();
 const asked = new Map<string, number>();
+/** Top-ups apart: the hourly ask a chart's open makes must not hold back the top-up it needs. */
+const toppedUp = new Map<string, number>();
 let save: (rows: CandleChunkRow[]) => Promise<unknown> = saveCandleChunks;
 let ask: (mint: string, redoAfterMs?: number) => Promise<unknown> = (mint, redoAfterMs) =>
   requestCandleBackfill(mint, "chart", Date.now(), redoAfterMs);
@@ -113,19 +120,22 @@ export function keepPage(mint: string, res: CandleRes, candles: McapCandle[], no
 }
 
 /**
- * Asks for the coin's backfill, once an hour at most from this process. `topUp`: a coin Pump.fun has
- * no candles for, whose newest stretch only the backfill brings (BACKFILL_TOP_UP_AFTER_MS): asked
- * as often as that, and queued again once its last run is that old.
+ * Asks for the coin's backfill, once an hour at most from this process. `topUp`: a coin whose newest
+ * stretch only the backfill brings (no Pump.fun minutes, or none lately): asked every TOP_UP_ASK_MS,
+ * and queued again once its last run is BACKFILL_TOP_UP_AFTER_MS old.
  */
 export function askBackfill(mint: string, now = Date.now(), topUp = false): void {
   if (!enabled) return;
-  const last = asked.get(mint);
-  const every = topUp ? BACKFILL_TOP_UP_AFTER_MS : ASK_EVERY_MS;
-  if (last !== undefined && now - last < every) return;
-  if (asked.size >= MAX_ASKED) asked.clear();
-  asked.set(mint, now);
+  // One map each: they shared one, so the hourly ask every chart open makes first left the top-up
+  // after it waiting an hour, and a graduated coin Pump.fun won't answer for drew its newest
+  // minutes flat (user report 2026-10-23, 8WNk: nothing stored after it graduated at 14:22).
+  const seen = topUp ? toppedUp : asked;
+  const last = seen.get(mint);
+  if (last !== undefined && now - last < (topUp ? TOP_UP_ASK_MS : ASK_EVERY_MS)) return;
+  if (seen.size >= MAX_ASKED) seen.clear();
+  seen.set(mint, now);
   void ask(mint, topUp ? BACKFILL_TOP_UP_AFTER_MS : undefined).catch((err: unknown) => {
-    asked.delete(mint);
+    seen.delete(mint);
     logger.warn("candle backfill not asked", { mint, error: String(err) });
   });
 }
@@ -167,6 +177,7 @@ export function resetCandleStoreForTests(
   queue = [];
   pages.clear();
   asked.clear();
+  toppedUp.clear();
   save = opts.save ?? saveCandleChunks;
   ask = opts.ask ?? ((mint, redoAfterMs) => requestCandleBackfill(mint, "chart", Date.now(), redoAfterMs));
 }

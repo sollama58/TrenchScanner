@@ -3768,10 +3768,12 @@ model CandleChunk {
   res       Int
   /// The chunk's start: a multiple of res x CANDLE_CHUNK_BARS seconds.
   startAt   DateTime
-  /// "curve" (the worker's curve tape), "pumpfun" or "gecko" (GeckoTerminal).
+  /// "curve" (the worker's curve tape), "pool" (the tape on the PumpSwap pool after graduation),
+  /// "pumpfun" or "gecko" (GeckoTerminal).
   source    String
-  /// The stretch inside the chunk the source covered without a break: a bar missing inside it is
-  /// an interval with no trade, not one nobody read.
+  /// The stretch the source covered without a break: a bar missing inside it is an interval with
+  /// no trade, not one nobody read. Inside the chunk, except the curve tape's last chunk, whose
+  /// cover runs on over the quiet minutes after it.
   coverFrom DateTime
   coverTo   DateTime
   bars      Int
