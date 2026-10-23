@@ -1,127 +1,28 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { columnLabel, isModelSide, kindDef, type ScopeColumn, type ScopeColumnKind } from "../scope";
+import { useEffect, useMemo, useState } from "react";
+import { isModelSide, kindDef, type ScopeColumnKind } from "../scope";
 import {
   activeFilterCount,
   resetColumnFilter,
   resetScopeDisplay,
   setColumnFilter,
   setScopeDisplay,
-  useScopeSettings,
   type ScopeBoardColumn,
   type ScopeColumnFilter,
   type ScopeDisplay,
   type ScopeSize,
 } from "../scopeSettings";
-import { ScopeColumnsPanel } from "./ScopeColumnsPanel";
 import { SCOPE_CHIP_DEFS } from "../scopeChips";
 import { scopeSampleCard } from "../scopeSample";
 import { useNow } from "../hooks";
 import type { TileMode } from "../tileTone";
-import { CloseIcon } from "./Icons";
-import { QuickLinkChecks, ThemeAndColors } from "./AppearancePanel";
 import { ScopeRow, scopeLookClass } from "./ScopeBoard";
 
-export type ScopeSettingsSection = "display" | "columns" | ScopeColumn;
-
 /**
- * Scope's own settings window (user ask 2026-10-18), apart from the Cards view's Customize: how
- * the rows look, which columns the board has (user ask 2026-10-23), and each column's filters. A
- * column's filter icon opens it on that column.
+ * Scope's settings (user ask 2026-10-18), shown in Customize's Scope sections: how the rows look
+ * (with an example row that stays in view), which columns the board has (user ask 2026-10-23,
+ * ScopeColumnsPanel), and each column's filters. A column's filter icon opens Customize on them.
  */
-export function ScopeSettingsModal({
-  open,
-  section,
-  onClose,
-  names,
-  tiles,
-}: {
-  open: boolean;
-  section: ScopeSettingsSection;
-  onClose: () => void;
-  /** Filter and model names by id, for the columns' titles. */
-  names: ReadonlyMap<string, string>;
-  /** How the board colors its chips, for the example row. */
-  tiles: TileMode;
-}) {
-  const ref = useRef<HTMLDialogElement>(null);
-  const [tab, setTab] = useState<ScopeSettingsSection>(section);
-  useEffect(() => {
-    if (open) setTab(section);
-  }, [open, section]);
-  useEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
-    if (!open && dialog.open) dialog.close();
-  }, [open]);
-  const settings = useScopeSettings();
-  const column = settings.board.find((c) => c.id === tab);
-  // A column taken off the board while its tab was open: back to the columns.
-  useEffect(() => {
-    if (tab !== "display" && tab !== "columns" && !column) setTab("columns");
-  }, [tab, column]);
-
-  return (
-    <dialog
-      ref={ref}
-      className="about-modal sheet-modal scope-settings"
-      aria-labelledby="scope-settings-title"
-      onClose={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="about-body">
-        <header className="about-head">
-          <h2 id="scope-settings-title">Scope settings</h2>
-          <button className="ghost icon-btn" onClick={onClose} aria-label="Close">
-            <CloseIcon size={16} />
-          </button>
-        </header>
-        <div className="segmented small scope-settings-tabs" role="tablist" aria-label="Scope settings">
-          {(["display", "columns", ...settings.board.map((c) => c.id)] as ScopeSettingsSection[]).map(
-            (id) => {
-              const col = settings.board.find((c) => c.id === id);
-              const count = col ? activeFilterCount(col.filter) : 0;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  role="tab"
-                  aria-selected={tab === id}
-                  className={tab === id ? "on" : ""}
-                  onClick={() => setTab(id)}
-                  title={col ? `What shows in ${columnLabel(col, names)}` : undefined}
-                >
-                  {col ? (
-                    <span className="scope-tab-name">{columnLabel(col, names)}</span>
-                  ) : id === "display" ? (
-                    "Display"
-                  ) : (
-                    "Columns"
-                  )}
-                  {count > 0 && <span className="scope-filter-count num">{count}</span>}
-                </button>
-              );
-            },
-          )}
-        </div>
-        {open &&
-          (tab === "display" ? (
-            <DisplaySettings display={settings.display} tiles={tiles} />
-          ) : tab === "columns" || !column ? (
-            <ScopeColumnsPanel board={settings.board} onFilters={(id) => setTab(id)} />
-          ) : (
-            <ColumnFilters col={column} label={columnLabel(column, names)} />
-          ))}
-      </div>
-    </dialog>
-  );
-}
-
-function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: TileMode }) {
+export function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: TileMode }) {
   const now = useNow(5_000);
   const sample = useMemo(() => scopeSampleCard(Date.now()), []);
   const flip = (key: BoolKey) => setScopeDisplay({ [key]: !d[key] });
@@ -238,17 +139,9 @@ function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: 
           "New rows wait behind a pill while your mouse is on the board or you've scrolled down a list",
         )}
       </section>
-      {/* What Scope shows from the shared look, so it's all set from here too (user ask 2026-10-19). */}
-      <section className="scope-section appearance-controls">
-        <h3>Theme and colors</h3>
-        <p className="muted small">The same as in Cards&apos; Customize, and saved to your account.</p>
-        <ThemeAndColors cards={false} />
-      </section>
-      <section className="scope-section appearance-controls">
-        <h3>Trade links</h3>
-        <p className="muted small">Sites shown with Trade links, as on the cards.</p>
-        <QuickLinkChecks />
-      </section>
+      <p className="muted small">
+        Theme, colors and the trade-link sites are shared with Cards, under Look and Trading.
+      </p>
       <div className="scope-settings-foot">
         <button type="button" className="ghost small-btn" onClick={resetScopeDisplay}>
           Back to defaults
@@ -271,7 +164,7 @@ const SIZES: [ScopeSize, string][] = [
 const CHIP_GROUPS = [...new Set(SCOPE_CHIP_DEFS.map((c) => c.group))];
 
 /** A labelled row of segmented choices. */
-function Seg<T extends string>({
+export function Seg<T extends string>({
   label,
   value,
   options,
@@ -304,7 +197,7 @@ function Seg<T extends string>({
 }
 
 /** An on/off switch with its label and an optional line under it. */
-function Switch({
+export function Switch({
   label,
   hint,
   on,
@@ -329,7 +222,7 @@ function Switch({
   );
 }
 
-function ColumnFilters({ col: column, label }: { col: ScopeBoardColumn; label: string }) {
+export function ColumnFilters({ col: column, label }: { col: ScopeBoardColumn; label: string }) {
   const col: ScopeColumnKind = column.kind;
   const f: ScopeColumnFilter = column.filter;
   const set = (change: Partial<ScopeColumnFilter>) => setColumnFilter(column.id, change);

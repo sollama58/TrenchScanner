@@ -10,7 +10,7 @@ import {
   type ScopeDisplay,
 } from "../scopeSettings";
 import { rowChips } from "../scopeChips";
-import { ScopeSettingsModal, type ScopeSettingsSection } from "./ScopeSettingsModal";
+import { openCustomize } from "../customize";
 import {
   usePolling,
   usePollingAll,
@@ -97,8 +97,6 @@ export function ScopeBoard({
   feedPath,
   modelsOn,
   heldTokenIds = NO_TOKENS,
-  settingsSection,
-  onSettings,
   onStatus,
 }: {
   /** The Live feed's page `n`, so Scope reads exactly what the cards view does. */
@@ -109,9 +107,6 @@ export function ScopeBoard({
    * "older than", and keep the column and place they'd have anyway.
    */
   heldTokenIds?: ReadonlySet<string>;
-  /** The Scope settings window's open section (the Live header's Customize opens Display), or null. */
-  settingsSection: ScopeSettingsSection | null;
-  onSettings: (section: ScopeSettingsSection | null) => void;
   /**
    * Whether the board is held still and whether its feed reads are failing, for the Live header's
    * Scanning pill, which says Live / Paused for Scope (user ask 2026-10-23).
@@ -447,7 +442,7 @@ export function ScopeBoard({
       <button
         type="button"
         className={`ghost icon-btn scope-filter-btn${count > 0 ? " on" : ""}`}
-        onClick={() => onSettings(id)}
+        onClick={() => openCustomize("scope-columns", { column: id })}
         title={`Filter what shows in ${label}${count > 0 ? ` (${count} on)` : ""}`}
         aria-label={`Filter ${label}${count > 0 ? `, ${count} filters on` : ""}`}
       >
@@ -457,15 +452,6 @@ export function ScopeBoard({
     );
   };
   const tiles = tileMode(look);
-  const modal = (
-    <ScopeSettingsModal
-      open={settingsSection !== null}
-      section={settingsSection ?? "display"}
-      onClose={() => onSettings(null)}
-      names={names}
-      tiles={tiles}
-    />
-  );
 
   if (first.error && !first.data && !gradPage && !streamFirst)
     return <p className="error">Couldn&apos;t load your feed: {first.error.message}</p>;
@@ -479,7 +465,6 @@ export function ScopeBoard({
       onTouchEnd={touchEnd}
       onTouchCancel={touchEnd}
     >
-      {modal}
       <div
         className={`scope-bar${paused && pending > 0 ? "" : " quiet"}`}
         ref={bar}
@@ -542,7 +527,11 @@ export function ScopeBoard({
                   <p className="muted small">
                     Pick up to three {c.kind === "filter" ? "of your filters" : "models"} for this column.
                   </p>
-                  <button type="button" className="ghost small-btn" onClick={() => onSettings("columns")}>
+                  <button
+                    type="button"
+                    className="ghost small-btn"
+                    onClick={() => openCustomize("scope-columns")}
+                  >
                     Choose {c.kind === "filter" ? "filters" : "models"}
                   </button>
                 </div>

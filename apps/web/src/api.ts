@@ -2074,6 +2074,11 @@ export interface Settings {
   hiddenTokens?: unknown;
   /** The Scope view's settings (scopeSettings.ts reads them), null before any; absent from older API builds. */
   scopeSettings?: unknown;
+  /**
+   * Customize's other synced sections (apps/api/src/userPrefs.ts), each null until first saved;
+   * proTrade.ts and layoutPrefs.ts read them. Absent from older API builds.
+   */
+  prefs?: { trade: unknown; layout: unknown };
   account: {
     walletAddress: string;
     memberSince: string;

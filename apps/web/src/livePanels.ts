@@ -8,22 +8,20 @@ import { lazy, useState } from "react";
  */
 export const loadAboutModal = () => import("./components/AboutModal");
 export const loadFeedStatsModal = () => import("./components/FeedStatsModal");
-export const loadCustomizeDrawer = () => import("./components/CustomizeDrawer");
+export const loadCustomizeModal = () => import("./components/CustomizeModal");
 export const loadSearchModal = () => import("./components/CaSearch");
 export const loadScopeBoard = () => import("./components/ScopeBoard");
 
 export const AboutModal = lazy(() => loadAboutModal().then((m) => ({ default: m.AboutModal })));
 export const FeedStatsModal = lazy(() => loadFeedStatsModal().then((m) => ({ default: m.FeedStatsModal })));
-export const CustomizeDrawer = lazy(() =>
-  loadCustomizeDrawer().then((m) => ({ default: m.CustomizeDrawer })),
-);
+export const CustomizeModal = lazy(() => loadCustomizeModal().then((m) => ({ default: m.CustomizeModal })));
 export const SearchModal = lazy(() => loadSearchModal().then((m) => ({ default: m.SearchModal })));
 export const ScopeBoard = lazy(() => loadScopeBoard().then((m) => ({ default: m.ScopeBoard })));
 
 /** Warms the code behind the Live tab's buttons (main.tsx, once the first screen is idle). */
 export function warmLivePanels() {
   void loadFeedStatsModal();
-  void loadCustomizeDrawer();
+  void loadCustomizeModal();
   void loadSearchModal();
   void loadScopeBoard();
 }

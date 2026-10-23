@@ -16,19 +16,13 @@ import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { registerCardSearch } from "../cardSearch";
 import { CaSearchButton } from "../components/CaSearchButton";
 import { ScanStatus } from "../components/ScanStatus";
-import type { ScopeSettingsSection } from "../components/ScopeSettingsModal";
 import { HiddenTokensDialog } from "../components/HiddenTokensDialog";
 import { AsOf } from "../components/AsOf";
 import { dueToUnhide, hideToken, unhideTokens, useHiddenTokenIds, useHiddenTokens } from "../hiddenTokens";
 import { useHeldTokenIds } from "../heldTokens";
-import {
-  AboutModal,
-  CustomizeDrawer,
-  loadAboutModal,
-  ScopeBoard,
-  SearchModal,
-  useOpenedOnce,
-} from "../livePanels";
+import { openCustomize, useCustomize } from "../customize";
+import { setLayoutPrefs, useLayoutPrefs, type LiveView } from "../layoutPrefs";
+import { AboutModal, loadAboutModal, ScopeBoard, SearchModal, useOpenedOnce } from "../livePanels";
 
 /** This browser's "High conviction only" switch (the API takes it per request, not as a saved setting). */
 const HIGH_CONVICTION_KEY = "ts-feed-high-conviction";
@@ -43,18 +37,6 @@ const SHOW_HIGH_CONVICTION = false;
  * at once, from the cache where it has them, instead of growing one round trip at a time again.
  */
 const filledDepth = new Map<string, number>();
-
-/** This browser's pick of Cards or Scope for the Live feed (user decision 2026-10-18: a toggle, not a tab). */
-const VIEW_KEY = "ts-live-view";
-type FeedView = "cards" | "scope";
-
-function readView(): FeedView {
-  try {
-    return localStorage.getItem(VIEW_KEY) === "scope" ? "scope" : "cards";
-  } catch {
-    return "cards";
-  }
-}
 
 function readHighConviction(): boolean {
   if (!SHOW_HIGH_CONVICTION) return false;
@@ -78,18 +60,10 @@ export function LiveTab({
 }) {
   const now = useNow(15_000);
   const [page, setPage] = useState(1);
-  const [view, setViewState] = useState<FeedView>(readView);
-  const setView = (next: FeedView) => {
-    try {
-      localStorage.setItem(VIEW_KEY, next);
-    } catch {
-      // Private mode or blocked storage: the pick still applies for this visit.
-    }
-    setViewState(next);
-    // Each view has its own settings; the other's shouldn't stay open over it.
-    setCustomizing(false);
-    setScopeSettings(null);
-  };
+  // Cards or Scope (user decision 2026-10-18: a toggle, not a tab), synced to the account and also
+  // set in Customize › Tabs, top bar and lists (layoutPrefs.ts).
+  const view = useLayoutPrefs().liveView;
+  const setView = (liveView: LiveView) => setLayoutPrefs({ liveView });
   // Tokens the user hid from Cards and Scope (user ask 2026-10-19), and the list to bring them back.
   const hiddenTokens = useHiddenTokens();
   const hiddenTokenIds = useHiddenTokenIds();
@@ -99,8 +73,6 @@ export function LiveTab({
   const scope = view === "scope";
   // Scope's held-still and failing reads, for the Scanning pill (user ask 2026-10-23).
   const [scopeStatus, setScopeStatus] = useState({ paused: false, failing: false });
-  // Scope has its own settings window (user ask 2026-10-18): Customize opens it while in Scope.
-  const [scopeSettings, setScopeSettings] = useState<ScopeSettingsSection | null>(null);
   // Model calls narrowed to every model's high-conviction tier instead of the followed models.
   const [highConviction, setHighConviction] = useState(readHighConviction);
   // The tour opens by itself the first time this wallet lands here.
@@ -109,8 +81,9 @@ export function LiveTab({
     setAboutOpen(false);
     markIntroSeen(walletAddress);
   };
-  const [customizing, setCustomizing] = useState(false);
-  const closeCustomize = useCallback(() => setCustomizing(false), []);
+  // The one Customize window (customize.ts), opened here at Cards or Scope.
+  const customize = useCustomize();
+  const customizing = customize.open && (customize.section === "scope" || customize.section === "cards");
   const look = useAppearance();
   const hidden = useMemo(() => cardHideSet(look), [look]);
   // The search (address, ticker or name) opens its own window over the feed (user ask
@@ -125,7 +98,6 @@ export function LiveTab({
   useEffect(() => registerCardSearch(openSearchQuery), [openSearchQuery]);
   // The windows' code loads on their first opening (livePanels.ts), and they stay mounted after.
   const aboutMounted = useOpenedOnce(aboutOpen);
-  const customizeMounted = useOpenedOnce(customizing);
   const searchMounted = useOpenedOnce(searchOpen);
   // "saved": the API mixes in model calls per this user's own switch and checked models; with
   // highConviction those calls are every model's high-conviction tier instead.
@@ -258,9 +230,6 @@ export function LiveTab({
   return (
     <div className="stack">
       <MarketBar left={<WatchlistPanel fit />} leftMini={<WatchlistChips />} />
-      <Suspense fallback={null}>
-        {customizeMounted && <CustomizeDrawer open={customizing} onClose={closeCustomize} />}
-      </Suspense>
       <SectionBoundary label="Hidden tokens" resetKey={hiddenOpen} onClose={() => setHiddenOpen(false)}>
         <HiddenTokensDialog open={hiddenOpen} onClose={() => setHiddenOpen(false)} now={now} />
       </SectionBoundary>
@@ -319,15 +288,14 @@ export function LiveTab({
             </div>
             <button
               type="button"
-              className={`ghost stats-btn${(scope ? scopeSettings !== null : customizing) ? " on" : ""}`}
-              aria-expanded={scope ? scopeSettings !== null : customizing}
-              onClick={() =>
-                scope ? setScopeSettings((o) => (o === null ? "display" : null)) : setCustomizing((o) => !o)
-              }
+              className={`ghost stats-btn${customizing ? " on" : ""}`}
+              aria-expanded={customizing}
+              aria-haspopup="dialog"
+              onClick={() => openCustomize(scope ? "scope" : "cards")}
               title={
                 scope
-                  ? "Scope's own settings: how the rows look and what each column shows"
-                  : "Colors, spacing, columns and what each card shows, changed right here on your feed"
+                  ? "Customize Scope: how the rows look and what each column shows, plus every other option"
+                  : "Customize your feed: colors, spacing, columns and what each card shows, plus every other option"
               }
             >
               <PaletteIcon size={14} />
@@ -395,8 +363,6 @@ export function LiveTab({
               feedPath={feedPath}
               modelsOn={modelsOn}
               heldTokenIds={heldTokenIds}
-              settingsSection={scopeSettings}
-              onSettings={setScopeSettings}
               onStatus={setScopeStatus}
             />
           </Suspense>
@@ -441,7 +407,7 @@ export function LiveTab({
                 {hiddenCount === 1 ? "1 alert" : `${hiddenCount} alerts`} now under $
                 {look.hideBelowMcapUsd / 1000}K market cap {hiddenCount === 1 ? "is" : "are"} hidden here,
                 with older alerts moved up in {hiddenCount === 1 ? "its" : "their"} place.{" "}
-                <button type="button" className="link" onClick={() => setCustomizing(true)}>
+                <button type="button" className="link" onClick={() => openCustomize("cards")}>
                   Change
                 </button>
               </p>
