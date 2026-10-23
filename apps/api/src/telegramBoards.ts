@@ -3,6 +3,7 @@ import {
   MAX_ALERT_AGE_MS,
   prisma,
   type ActiveAlert,
+  type AlertNow,
   type BoardStats,
   type TelegramBoards,
 } from "@trenchscanner/core";
@@ -14,6 +15,7 @@ import {
   resolveOutcome,
 } from "./curatedFeed.js";
 import { summarizeFeed, type FeedStatsCard } from "./feedStats.js";
+import type { OnDemandLiveRefresher } from "./liveRefresh.js";
 import { MATCH_OUTCOME_SELECT, currentMarketCap, matchOutcome } from "./routes/matches.js";
 
 /**
@@ -107,14 +109,17 @@ export function alertFor<T extends { tokenId: string }>(
   return best;
 }
 
-async function gradedAlerts(chatRowId: string, since: Date) {
+/** `only` narrows it to one send: the alert a Refresh press names. */
+async function gradedAlerts(chatRowId: string, since: Date, only?: { tokenId: string; sentAt: Date }) {
   const chat = await prisma.telegramChat.findUnique({
     where: { id: chatRowId },
     select: { userId: true, createdAt: true },
   });
   if (!chat) return { chat: null, alerts: [] as GradedAlert[] };
   const sent = await prisma.telegramAlertSent.findMany({
-    where: { chatId: chatRowId, sentAt: { gte: since } },
+    where: only
+      ? { chatId: chatRowId, tokenId: only.tokenId, sentAt: only.sentAt }
+      : { chatId: chatRowId, sentAt: { gte: since } },
     orderBy: { sentAt: "desc" },
     take: MAX_SENT_ROWS,
     select: { tokenId: true, sentAt: true, curatedAlertId: true, matchId: true },
@@ -297,8 +302,75 @@ export function activePeakPct(
 /** The longest any alert is tracked: a clean winner's 24-hour watch. */
 const ACTIVE_LOOKBACK_MS = 25 * 3_600_000;
 
-export function createTelegramBoards(now: () => number = Date.now): TelegramBoards {
+/**
+ * How old a token's market cap may be before a Refresh press asks DexScreener (free, and shared
+ * with the dashboard's live tick under one call budget) for a newer one, and how long the press
+ * waits for it before answering with what the database already has.
+ */
+export const REFRESH_LIVE_MAX_AGE_MS = 10_000;
+export const REFRESH_LIVE_WAIT_MS = 2_500;
+
+export interface TelegramBoardsOptions {
+  /** The API's on-demand live refresher; without it a press reads only what is stored. */
+  liveRefresher?: Pick<OnDemandLiveRefresher, "refreshAndWait">;
+}
+
+export function createTelegramBoards(
+  now: () => number = Date.now,
+  opts: TelegramBoardsOptions = {},
+): TelegramBoards {
   return {
+    async alertNow(chatRowId, tokenId, sentAt): Promise<AlertNow | null> {
+      const token = await prisma.token.findUnique({
+        where: { id: tokenId },
+        select: {
+          id: true,
+          mintAddress: true,
+          symbol: true,
+          name: true,
+          firstSeenAt: true,
+          imageUrl: true,
+          liveDataAt: true,
+        },
+      });
+      if (!token) return null;
+      if (opts.liveRefresher) {
+        await opts.liveRefresher.refreshAndWait([token], {
+          maxAgeMs: REFRESH_LIVE_MAX_AGE_MS,
+          timeoutMs: REFRESH_LIVE_WAIT_MS,
+          userKey: `telegram:${chatRowId}`,
+        });
+      }
+      const t = now();
+      const [{ alerts }, snapshot, mcaps] = await Promise.all([
+        gradedAlerts(chatRowId, sentAt, { tokenId, sentAt }),
+        prisma.tokenSnapshot.findFirst({
+          where: { tokenId },
+          orderBy: { takenAt: "desc" },
+          select: { holderCount: true, holderCountAt: true, takenAt: true, volume1hUsd: true },
+        }),
+        marketCapsNow([tokenId], t),
+      ]);
+      const alert = alerts[0];
+      if (!alert) return null;
+      const nowMcapUsd = nowMcapFor(alert, mcaps.get(tokenId));
+      return {
+        token: {
+          mintAddress: token.mintAddress,
+          symbol: token.symbol,
+          name: token.name,
+          firstSeenAt: token.firstSeenAt,
+          imageUrl: token.imageUrl,
+        },
+        holderCount: snapshot?.holderCount ?? null,
+        holderCountAt: snapshot?.holderCount != null ? (snapshot.holderCountAt ?? snapshot.takenAt) : null,
+        volume1hUsd: snapshot?.volume1hUsd ?? null,
+        alertMcapUsd: alert.alertMcapUsd,
+        nowMcapUsd,
+        peakPct: activePeakPct(alert.peakPct, alert.alertMcapUsd, nowMcapUsd),
+      };
+    },
+
     async activeAlerts(chatRowId) {
       const t = now();
       const { alerts } = await gradedAlerts(chatRowId, new Date(t - ACTIVE_LOOKBACK_MS));

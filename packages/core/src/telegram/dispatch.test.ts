@@ -18,6 +18,7 @@ import {
   sendKey,
   TELEGRAM_DISPATCH_LOCK,
 } from "./dispatch.js";
+import { refreshKeyboard } from "./refresh.js";
 import { FakeTelegramApi } from "./fakeApi.js";
 import type { TelegramResult } from "./api.js";
 
@@ -276,9 +277,18 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       where: { tokenId, model: "rules", createdAt: { gt: at } },
     });
     const match = await prisma.match.findFirst({ where: { userId, tokenId, matchedAt: at } });
-    expect(await prisma.telegramAlertSent.findMany({ where: { chatId: chatRowId } })).toEqual([
+    const sentRows = await prisma.telegramAlertSent.findMany({ where: { chatId: chatRowId } });
+    expect(sentRows).toEqual([
       expect.objectContaining({ tokenId, curatedAlertId: rules!.id, matchId: match!.id }),
     ]);
+    // It carries a Refresh button naming its send, and keeps its card for the button to rebuild.
+    const photo = api.calls.find((c) => c.method === "sendPhoto")!;
+    expect(photo.params.reply_markup).toEqual(refreshKeyboard(tokenId, sentRows[0]!.sentAt));
+    expect(sentRows[0]!.card).toMatchObject({
+      v: 1,
+      filters: [{ name: "Mine", score: 71 }],
+      calls: [expect.objectContaining({ modelName: "Rules", reasons: ["because"] })],
+    });
 
     // A second pass finds nothing new and sends nothing.
     const again = await run(api);
@@ -702,6 +712,10 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     const text = api.sent()[0]!.text;
     expect(text).toMatch(/^⚡ <b>\d+ new alerts<\/b>/);
     for (let i = 0; i <= DIGEST_THRESHOLD; i++) expect(text).toContain(`<b>$B${i}</b>`);
+    // A digest has no Refresh button.
+    expect(
+      api.calls.find((c) => c.method === "sendMessage" || c.method === "sendPhoto")!.params,
+    ).not.toHaveProperty("reply_markup");
   });
 
   it("falls back to plain text when Telegram refuses the photo", async () => {

@@ -41,6 +41,15 @@ import {
   type ChatSettings,
 } from "./settings.js";
 import { looksLikeTelegramCode, redeemTelegramLinkCode } from "./link.js";
+import {
+  REFRESH_CALLBACK_PREFIX,
+  REFRESH_COOLDOWN_MS,
+  formatRefreshedAlert,
+  parseRefreshCallback,
+  readStoredCard,
+  refreshKeyboard,
+  refreshWaitSeconds,
+} from "./refresh.js";
 import { resolveAccess } from "../subscription/access.js";
 
 /**
@@ -72,7 +81,8 @@ export interface UpdateOutcome {
     | "board"
     | "settings"
     | "expired"
-    | "throttled";
+    | "throttled"
+    | "refreshed";
 }
 
 function shortWallet(address: string): string {
@@ -125,7 +135,11 @@ const lastReplyAt = new Map<string, number>();
  * A group admin's changes (/mincap 10k, /show x) take the "admin" lane, checked after the admin
  * check, so a member sending /alerts every few seconds can't swallow them.
  */
-export function takeReplySlot(chatId: bigint | number, t: number, lane: "" | "admin" = ""): boolean {
+export function takeReplySlot(
+  chatId: bigint | number,
+  t: number,
+  lane: "" | "admin" | "refresh" = "",
+): boolean {
   const key = lane ? `${chatId}:${lane}` : String(chatId);
   const last = lastReplyAt.get(key);
   if (last !== undefined && t - last >= 0 && t - last < CHAT_REPLY_COOLDOWN_MS) return false;
@@ -497,6 +511,7 @@ async function handleButton(
   const isBoard = data.startsWith(BOARD_CALLBACK_PREFIX);
   const isSettings = data.startsWith(SETTINGS_CALLBACK_PREFIX);
   const isAlerts = data === ALERTS_REFRESH_CALLBACK;
+  if (data.startsWith(REFRESH_CALLBACK_PREFIX)) return refreshButton(api, query, opts);
   if (!message || !(isSettings || ((isBoard || isAlerts) && opts.boards))) {
     await api.answerCallbackQuery(query.id);
     return { action: "ignored" };
@@ -547,12 +562,110 @@ async function handleButton(
   return { action: isBoard ? "board" : "alerts" };
 }
 
+const REFRESH_GONE_TEXT = "This alert is too old to refresh.";
+
+/**
+ * A press on Refresh under a single alert (refresh.ts): the card is rebuilt from what it was sent
+ * with and the freshest numbers on record, and the message rewritten in place. One press per
+ * message per REFRESH_COOLDOWN_MS, whoever presses, held on the send's row so every API instance
+ * sees it; the chat's own lane of the reply cooldown and the bot-wide cap still apply, since each
+ * rewrite spends the chat's share of Telegram's limits.
+ */
+async function refreshButton(
+  api: TelegramApi,
+  query: NonNullable<TelegramUpdate["callback_query"]>,
+  opts: UpdateOptions,
+): Promise<UpdateOutcome> {
+  const press = parseRefreshCallback(query.data ?? "");
+  const message = query.message;
+  if (!press || !opts.boards?.alertNow) {
+    await api.answerCallbackQuery(query.id);
+    return { action: "ignored" };
+  }
+  // Too old for Telegram to say which message the button was under: nothing to rewrite.
+  if (!message) {
+    await api.answerCallbackQuery(query.id, REFRESH_GONE_TEXT);
+    return { action: "ignored" };
+  }
+  const chatId = BigInt(message.chat.id);
+  const t = (opts.now ?? Date.now)();
+  if (!takeReplySlot(chatId, t, "refresh")) {
+    await api.answerCallbackQuery(query.id, "Slow down a moment, then try again.");
+    return { action: "throttled" };
+  }
+  const row = await prisma.telegramChat.findFirst({
+    where: { chatId, revokedAt: null },
+    select: { id: true, ...SETTINGS_SELECT, user: { select: { walletAddress: true } } },
+  });
+  if (!row) {
+    await api.answerCallbackQuery(query.id, "This chat isn't linked any more.");
+    return { action: "refused" };
+  }
+  // The send is looked up under this chat's own row, so a press can only ever reach an alert this
+  // chat was sent.
+  const key = { chatId_tokenId_sentAt: { chatId: row.id, tokenId: press.tokenId, sentAt: press.sentAt } };
+  const sent = await prisma.telegramAlertSent.findUnique({
+    where: key,
+    select: { card: true, refreshedAt: true },
+  });
+  if (!sent || sent.card === null) {
+    await api.answerCallbackQuery(query.id, REFRESH_GONE_TEXT);
+    return { action: "ignored" };
+  }
+  if (!(await ownerHasAccess(opts, row.user.walletAddress))) {
+    await api.answerCallbackQuery(query.id, "The subscription on the account linked here has expired.");
+    return { action: "expired" };
+  }
+  // Taken atomically, so two presses at once (or on two API instances) refresh once.
+  const taken = await prisma.telegramAlertSent.updateMany({
+    where: {
+      chatId: row.id,
+      tokenId: press.tokenId,
+      sentAt: press.sentAt,
+      OR: [{ refreshedAt: null }, { refreshedAt: { lte: new Date(t - REFRESH_COOLDOWN_MS) } }],
+    },
+    data: { refreshedAt: new Date(t) },
+  });
+  if (taken.count === 0) {
+    const wait = sent.refreshedAt ? refreshWaitSeconds(sent.refreshedAt, t) : 1;
+    await api.answerCallbackQuery(query.id, `⏳ Just refreshed. Fresh numbers again in ${wait}s.`);
+    return { action: "throttled" };
+  }
+  const fresh = await opts.boards.alertNow(row.id, press.tokenId, press.sentAt);
+  const card = fresh ? readStoredCard(sent.card, fresh.token) : null;
+  if (!fresh || !card) {
+    await api.answerCallbackQuery(query.id, REFRESH_GONE_TEXT);
+    return { action: "ignored" };
+  }
+  const asCaption = message.photo !== undefined;
+  const html = formatRefreshedAlert(
+    card,
+    fresh,
+    opts.links ?? { dashboardUrl: "" },
+    (opts.now ?? Date.now)(),
+    alertParts(row.hidden),
+    alertStyle(row),
+    asCaption,
+  );
+  const keyboard = refreshKeyboard(press.tokenId, press.sentAt) ?? undefined;
+  const edited = asCaption
+    ? await api.editMessageCaption(chatId, message.message_id, html, { keyboard })
+    : await api.editMessageText(chatId, message.message_id, html, { keyboard });
+  if (!edited.ok && /message to edit not found|message can't be edited/i.test(edited.description)) {
+    await api.answerCallbackQuery(query.id, REFRESH_GONE_TEXT);
+    return { action: "ignored" };
+  }
+  await answerAfterEdit(api, query.id, chatId, edited, "🔄 Updated with the latest numbers");
+  return { action: "refreshed" };
+}
+
 /** Pressing the window already shown, with nothing moved since, is "message is not modified". */
 async function answerAfterEdit(
   api: TelegramApi,
   queryId: string,
   chatId: bigint,
   edited: Awaited<ReturnType<TelegramApi["editMessageText"]>>,
+  doneText?: string,
 ) {
   const unchanged = !edited.ok && /not modified/i.test(edited.description);
   if (!edited.ok && !unchanged) {
@@ -565,7 +678,7 @@ async function answerAfterEdit(
     unchanged
       ? "Up to date"
       : edited.ok
-        ? undefined
+        ? doneText
         : "Couldn't refresh this just now. Try again in a moment.",
   );
 }
