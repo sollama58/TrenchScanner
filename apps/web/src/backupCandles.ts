@@ -99,6 +99,57 @@ export function parseOhlcv(body: unknown, supply: number): BackupCandle[] {
   return out.sort((a, b) => a.t - b.t);
 }
 
+/** Minute candles starting this long or more after the launch didn't reach back to it (the API's OLDER_AFTER_MS). */
+export const BACKUP_LATE_MS = 10 * 60_000;
+
+/** What of the API's chart answer decides on the backup (TokenModal.tsx TokenChart). */
+interface ServedCandles {
+  candles: readonly BackupCandleLike[] | null;
+  older?: readonly unknown[];
+  source?: "pumpfun" | "stream" | "mixed";
+  launchAt?: number;
+}
+type BackupCandleLike = { t: number; o: number; h: number; l: number; c: number; vol?: number | null };
+
+/**
+ * Exported for tests. Whether the chart wants the backup candles beside the API's answer: it has
+ * none; it has only the stream's, which reach back only to when a chart opened (20 minutes at
+ * most); or its first candle is well after the launch with no older ones before it (a coin Pump.fun
+ * doesn't serve, or doesn't serve now). It used to be read only when the API had no candles at all,
+ * so the first stream minutes switched it off and the chart's history shrank to them (charts audit
+ * CH-1).
+ */
+export function wantsBackup(served: ServedCandles): boolean {
+  const first = served.candles?.[0];
+  if (!first || served.source === "stream") return true;
+  return (
+    !served.older?.length && served.launchAt !== undefined && first.t >= served.launchAt + BACKUP_LATE_MS
+  );
+}
+
+/**
+ * Exported for tests. The API's minute candles with the backup's joined in. Beside the stream's
+ * alone, the backup's come first and the stream's carry on after its newest (GeckoTerminal counts
+ * every trade's volume, the stream only those it kept); beside Pump.fun's, only the backup's from
+ * before Pump.fun's first stay.
+ */
+export function withBackup<T extends BackupCandleLike>(
+  candles: T[] | null,
+  source: ServedCandles["source"],
+  backup: readonly T[],
+): T[] | null {
+  if (!candles?.length) return backup.length > 0 ? [...backup] : candles;
+  if (backup.length === 0) return candles;
+  if (source === "stream") {
+    const last = backup[backup.length - 1]!.t;
+    return [...backup, ...candles.filter((k) => k.t > last)];
+  }
+  const first = candles[0]!.t;
+  const before = backup.filter((k) => k.t < first);
+  // Nothing from before Pump.fun's first: the answer as it was.
+  return before.length > 0 ? [...before, ...candles] : candles;
+}
+
 async function getJson(url: string): Promise<unknown> {
   const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);

@@ -16,6 +16,7 @@ import {
   sniperReading,
   sniperTileMark,
   sniperTileTitle,
+  blockZeroTileTitle,
   walletCountText,
 } from "./AlertCard";
 
@@ -263,7 +264,7 @@ describe("holder counts", () => {
     expect(sniperReading({}, true)).toBeNull();
   });
 
-  it("does not mark a top-25 sniper count risky from the top-10 cut", () => {
+  it("never marks a sniper count risky: the screen has no sniper-share cut since Block 0", () => {
     const top25 = sniperReading(
       {
         sniperTopHolderCount: 6,
@@ -276,7 +277,7 @@ describe("holder counts", () => {
     expect(sniperTileMark(top25)).toEqual({ risky: false, share: null });
     expect(sniperTileTitle(top25, "later")).not.toContain("(top 10 only on this scan)");
     const only10 = sniperReading({ sniperTop10WalletPct: 80, top10WalletsChecked: 10 }, false);
-    expect(sniperTileMark(only10)).toEqual({ risky: true, share: 80 });
+    expect(sniperTileMark(only10)).toEqual({ risky: false, share: 80 });
     expect(sniperTileTitle(only10, "later")).toContain("(top 10 only on this scan)");
     expect(
       sniperTileMark(sniperReading({ sniperTop10WalletPct: 30, top10WalletsChecked: 10 }, true)),
@@ -284,6 +285,30 @@ describe("holder counts", () => {
       risky: false,
       share: 30,
     });
+  });
+
+  it("titles the Block 0 tile by what was read and the screen's cut", () => {
+    expect(blockZeroTileTitle(null, null, true, "later")).toContain("not checked yet");
+    expect(blockZeroTileTitle(0, 0, true, "later")).toContain("Nobody bought in the launch's own block");
+    const t = blockZeroTileTitle(12.34, 3, false, "on the newest scan");
+    expect(t).toContain("The 3 wallets that bought in the launch's own block");
+    expect(t).toContain("12.3% of the supply, on the newest scan");
+    expect(t).toContain("rejects 10% or more");
+  });
+
+  it("reads Block 0 from the alert's scan, else a later one", () => {
+    const at = (snapshot: object, latest: object | null = null) =>
+      cardReadings({ snapshot, latestSnapshot: latest, token: {} } as unknown as Card);
+    expect(at({ blockZeroHeldPct: 4, blockZeroBuyers: 2 })).toMatchObject({
+      blockZeroPct: 4,
+      blockZeroBuyers: 2,
+      blockZeroAtAlert: true,
+    });
+    expect(at({}, { blockZeroHeldPct: 1.5, blockZeroBuyers: 1 })).toMatchObject({
+      blockZeroPct: 1.5,
+      blockZeroAtAlert: false,
+    });
+    expect(at({})).toMatchObject({ blockZeroPct: null, blockZeroBuyers: null });
   });
 
   it("reads Fresh over the top 25 where the scan counted it, else the top 10", () => {

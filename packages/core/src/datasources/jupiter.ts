@@ -97,7 +97,7 @@ export const DEFAULT_JUPITER_REQUESTS_PER_MINUTE = jupiterRequestsPerMinute(
 /**
  * Of a burst, the slots only the scan's own reads (`priority`: the band refresh's launch prices
  * and the decision's fresh quotes) may take: half, at least 2. The outcome watcher, wallet
- * valuation and the band-entry checks share this budget, and on 2026-10-13 a cycle's fresh quotes
+ * valuation and the entry watch share this budget, and on 2026-10-13 a cycle's fresh quotes
  * queued up to 2.5 s behind them - every decision in that cycle waiting with them.
  */
 export function jupiterPriorityReserve(burst: number): number {

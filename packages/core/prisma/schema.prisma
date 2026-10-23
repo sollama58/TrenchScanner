@@ -406,6 +406,9 @@ model UserFilter {
   /// Max how many of the top-25 holders (pools aside) were among the launch's first 25 buyers
   /// (TokenSnapshot.sniperTopHolderCount, "N/25"). Skipped while unknown.
   maxSniperTopHolderCount    Int?
+  /// Max % of supply held by the wallets that bought in block zero, the create transaction's slot
+  /// (TokenSnapshot.blockZeroHeldPct, "Block 0"). Skipped while unknown.
+  maxBlockZeroHeldPct        Float?
   /// Max % of supply held by linked top holders: wallets one funder paid for, or that funded each
   /// other (TokenSnapshot.linkedWalletPct, core's wallets/linkedWallets.ts). Skipped while unknown.
   /// Off the Filters tab since 2026-10-13 (maxLinkedWalletCount replaced it); a saved value still
@@ -1442,6 +1445,14 @@ model TokenSnapshot {
   /// buyers are read, and on scans before 2026-10-14.
   sniperTopHolderCount    Int?
   sniperTopHoldersChecked Int?
+  /// Block zero (user ask 2026-10-22): the wallets that bought in the create transaction's own slot,
+  /// the dev aside - the launch's snipers in the strict sense. The % of supply they hold now (the
+  /// card's "Block 0", the filters' and the safety screen's), how many there were, and the % of
+  /// supply they bought there. From the worker's launchSnipers.ts read; null until it lands, with
+  /// no slots to go by, and on scans before then.
+  blockZeroHeldPct        Float?
+  blockZeroBuyers         Int?
+  blockZeroBoughtPct      Float?
   /// How many of the chain's top 25 holders (pools and the creator aside) are on fresh wallets, of
   /// how many holders read (Fresh as "N/25", user decision 2026-10-14). Null until the top-25 list
   /// and every one of its wallets is read, and on scans before then; freshTop10WalletPct stands in.
@@ -1704,6 +1715,20 @@ model WalletActivityCache {
 /// forever, which also means the hit rate here is structurally lower than the activity cache's.
 /// What still makes it pay is overlap: the same wallets recur as top holders across many
 /// different launches within any one TTL window.
+/// A launch's first buyers and block zero as the worker's launchSnipers.ts read them from the chain
+/// (one Helius getTransactionsForAddress, 10-30 credits), kept so a restart loads them back instead
+/// of reading the band again (Helius audit 2026-10-22, H-3). The cleanup job drops old rows.
+model LaunchRead {
+  mintAddress String   @id
+  /// LaunchBuyersReading (core's datasources/launchBuyers.ts), launchAt as an ISO string.
+  reading     Json
+  /// Whether the read had every first buyer (or the whole history); an incomplete one is re-read.
+  complete    Boolean
+  checkedAt   DateTime
+
+  @@index([checkedAt])
+}
+
 model WalletHoldingsCache {
   address String @id
 

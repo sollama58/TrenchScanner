@@ -33,6 +33,7 @@ export interface WideHolder {
   rank?: number;
   cexFunder?: string;
   sniper?: boolean;
+  blockZero?: boolean;
   fresh?: boolean;
   empty?: boolean;
   creatorTied?: boolean;
@@ -272,6 +273,7 @@ function withTraits(holders: WideHolder[], read: Snapshot["linkedHolders"] | und
     return {
       ...h,
       ...(r.sniper ? { sniper: true } : {}),
+      ...(r.blockZero ? { blockZero: true } : {}),
       ...(r.fresh ? { fresh: true } : {}),
       ...(r.empty ? { empty: true } : {}),
       ...(r.creatorTied ? { creatorTied: true } : {}),
@@ -325,20 +327,27 @@ export type FlagsRead = "loading" | "ok" | "failed";
 export type Flag = "risky" | "dumper" | "creator";
 
 /**
- * What the scan read of a holder's wallet (user ask 2026-10-15), one per bubble: a launch sniper
+ * What the scan read of a holder's wallet (user ask 2026-10-15), one per bubble: a block-zero sniper
+ * (bought in the launch's own slot, user ask 2026-10-22: the "0" label), else a launch sniper
  * (among its first 25 buyers), else a fresh wallet, else an otherwise empty one.
  */
-export type WalletTrait = "sniper" | "fresh" | "empty";
-export const WALLET_TRAITS: readonly WalletTrait[] = ["sniper", "fresh", "empty"];
+export type WalletTrait = "blockZero" | "sniper" | "fresh" | "empty";
+export const WALLET_TRAITS: readonly WalletTrait[] = ["blockZero", "sniper", "fresh", "empty"];
 
 /** Each trait's word, for the legends. */
-export const TRAIT_LABEL: Record<WalletTrait, string> = { sniper: "Sniper", fresh: "Fresh", empty: "Empty" };
+export const TRAIT_LABEL: Record<WalletTrait, string> = {
+  blockZero: "Block 0",
+  sniper: "Sniper",
+  fresh: "Fresh",
+  empty: "Empty",
+};
 
 /**
  * Each trait's icon as stroke paths on a 24px grid, shared by the map's SVG and the share image's
- * canvas (Path2D): a bullseye, a leaf, a ghost.
+ * canvas (Path2D): a zero, a bullseye, a leaf, a ghost.
  */
 export const TRAIT_ICON: Record<WalletTrait, readonly string[]> = {
+  blockZero: ["M12 3c-3.3 0-5.5 4-5.5 9s2.2 9 5.5 9 5.5-4 5.5-9-2.2-9-5.5-9Z", "M9 17.5 15 6.5"],
   sniper: [
     "M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0Z",
     "M17 12a5 5 0 1 1-10 0a5 5 0 1 1 10 0Z",
@@ -443,12 +452,12 @@ export function riskyShare(graph: Pick<BubbleGraph, "nodes">): { count: number; 
   return { count: nodes.length, pct: Math.round(nodes.reduce((t, n) => t + n.pct, 0) * 100) / 100 };
 }
 
-/** A holder's trait from the scan's marks: sniper first, then fresh, then empty; null for none. */
+/** A holder's trait from the scan's marks: block zero first, then sniper, fresh, empty; null for none. */
 export function traitOf(
-  h: { sniper?: boolean; fresh?: boolean; empty?: boolean } | undefined,
+  h: { blockZero?: boolean; sniper?: boolean; fresh?: boolean; empty?: boolean } | undefined,
 ): WalletTrait | null {
   if (!h) return null;
-  return h.sniper ? "sniper" : h.fresh ? "fresh" : h.empty ? "empty" : null;
+  return h.blockZero ? "blockZero" : h.sniper ? "sniper" : h.fresh ? "fresh" : h.empty ? "empty" : null;
 }
 
 /** Each trait on the map with its holders' count and share of supply together; in WALLET_TRAITS order. */

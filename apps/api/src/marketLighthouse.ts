@@ -15,7 +15,7 @@ import {
   Prisma,
   REPORTED_LABEL_RULE,
   SAFETY_REJECT_EMPTY_WALLET_PCT,
-  SAFETY_REJECT_SNIPER_WALLET_PCT,
+  SAFETY_REJECT_BLOCK_ZERO_HELD_PCT,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
   SAFETY_MAX_LARGEST_HOLDER_PCT,
   SAFETY_REJECT_CEX_FUNDED_COUNT,
@@ -232,7 +232,7 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
     checks: {
       freshWalletMaxPct: SAFETY_MAX_FRESH_WALLET_PCT,
       emptyWalletRejectPct: SAFETY_REJECT_EMPTY_WALLET_PCT,
-      sniperWalletRejectPct: SAFETY_REJECT_SNIPER_WALLET_PCT,
+      blockZeroHeldRejectPct: SAFETY_REJECT_BLOCK_ZERO_HELD_PCT,
       top10HolderRejectPct: SAFETY_REJECT_TOP10_HOLDER_PCT,
       largestHolderMaxPct: SAFETY_MAX_LARGEST_HOLDER_PCT,
       cexFundedRejectCount: SAFETY_REJECT_CEX_FUNDED_COUNT,

@@ -44,6 +44,9 @@ describe("withLaunchSnipers and the launch-buyer share", () => {
     firstBuyersSupplyPct: 25,
     launchBundledBuyers: 3,
     devBuySupplyPct: 2,
+    blockZeroHeldPct: null,
+    blockZeroBuyers: null,
+    blockZeroBoughtPct: null,
   };
 
   it("carries the share with the launch shape", () => {

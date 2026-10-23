@@ -61,6 +61,7 @@ export function awaitsWalletFigure(
     | "emptyTop10WalletPct"
     | "sniperTop10WalletPct"
     | "sniperTopHolderCount"
+    | "blockZeroHeldPct"
     | "linkedWalletPct"
     | "linkedWalletCount"
     | "flaggedBuySol"
@@ -78,6 +79,7 @@ export function awaitsWalletFigure(
     | "maxEmptyTop10WalletPct"
     | "maxSniperTop10WalletPct"
     | "maxSniperTopHolderCount"
+    | "maxBlockZeroHeldPct"
     | "maxLinkedWalletPct"
     | "maxLinkedWalletCount"
     | "maxFlaggedBuySol"
@@ -96,6 +98,7 @@ export function awaitsWalletFigure(
     (filter.maxEmptyTop10WalletPct != null && scored.emptyTop10WalletPct === undefined) ||
     (filter.maxSniperTop10WalletPct != null && scored.sniperTop10WalletPct === undefined) ||
     (filter.maxSniperTopHolderCount != null && scored.sniperTopHolderCount === undefined) ||
+    (filter.maxBlockZeroHeldPct != null && scored.blockZeroHeldPct === undefined) ||
     (filter.maxLinkedWalletPct != null && scored.linkedWalletPct === undefined) ||
     (filter.maxLinkedWalletCount != null && scored.linkedWalletCount === undefined) ||
     (filter.maxFlaggedBuySol != null && scored.flaggedBuySol === undefined) ||

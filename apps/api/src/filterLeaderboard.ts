@@ -77,6 +77,7 @@ export const FILTER_CRITERIA_KEYS = [
   "maxEmptyTop10WalletPct",
   "maxSniperTop10WalletPct",
   "maxSniperTopHolderCount",
+  "maxBlockZeroHeldPct",
   "maxLinkedWalletPct",
   "maxLinkedWalletCount",
   "maxFlaggedBuySol",

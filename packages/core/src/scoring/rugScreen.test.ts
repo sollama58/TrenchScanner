@@ -317,18 +317,22 @@ describe("passesWalletSafetyCuts", () => {
       }),
     ).toBe(true);
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 70, freshTop10WalletPct: 70 })).toBe(true);
-    expect(passesWalletSafetyCuts({ sniperTop10WalletPct: 80 })).toBe(false);
-    expect(passesWalletSafetyCuts({ sniperTop10WalletPct: 70 })).toBe(true);
+    // No cut on the first-buyer share since 2026-10-22; Block 0 held at 10% or more instead.
+    expect(passesWalletSafetyCuts({ sniperTop10WalletPct: 100 })).toBe(true);
+    expect(passesWalletSafetyCuts({ blockZeroHeldPct: 10 })).toBe(false);
+    expect(passesWalletSafetyCuts({ blockZeroHeldPct: 9.9 })).toBe(true);
     expect(passesWalletSafetyCuts({ top10HolderPct: 40 })).toBe(false);
     expect(passesWalletSafetyCuts({ top10HolderPct: 35 })).toBe(true);
   });
 
-  it("rejects a live token when 80% or more of its top 10 are the launch's first buyers", () => {
-    const sniped = runRugScreen({ ...safeProfile, sniperTop10WalletPct: 80 });
+  it("rejects a live token when block zero's wallets hold 10% of the supply or more", () => {
+    const sniped = runRugScreen({ ...safeProfile, blockZeroHeldPct: 12.34 });
     expect(sniped.passed).toBe(false);
-    expect(sniped.reasons).toEqual(["80% of top-10 holders are launch snipers (80% or more)"]);
-    expect(runRugScreen({ ...safeProfile, sniperTop10WalletPct: 70 }).passed).toBe(true);
-    expect(runRugScreen({ ...safeProfile, sniperTop10WalletPct: undefined }).passed).toBe(true);
+    expect(sniped.reasons).toEqual(["block-zero snipers hold 12.3% of supply (10% or more)"]);
+    expect(runRugScreen({ ...safeProfile, blockZeroHeldPct: 9.99 }).passed).toBe(true);
+    expect(runRugScreen({ ...safeProfile, blockZeroHeldPct: undefined }).passed).toBe(true);
+    // The first-buyer share no longer cuts (user decision 2026-10-22).
+    expect(runRugScreen({ ...safeProfile, sniperTop10WalletPct: 100 }).passed).toBe(true);
   });
 
   it("keeps a row whose wallet checks were never measured", () => {

@@ -168,6 +168,9 @@ export function AlertCard({
     emptyAtAlert,
     emptyFromScan,
     snipers,
+    blockZeroPct,
+    blockZeroBuyers,
+    blockZeroAtAlert,
     largestPct,
     largestAtAlert,
     linkedPct,
@@ -221,6 +224,7 @@ export function AlertCard({
         "empty",
         "snipers",
         "sniperTop10",
+        "blockZero",
         "linked",
         "cexFunded",
         "kolBundled",
@@ -636,6 +640,15 @@ export function AlertCard({
                   : `${a.sniperTopHolderCount}/${a.sniperTopHoldersChecked ?? SAFETY_COUNT_CUT_HOLDERS}`,
                 snipers ? `${snipers.count}/${snipers.of}` : null,
               )}
+            />
+          )}
+          {show("blockZero") && (
+            <BlockZeroTile
+              pct={blockZeroPct}
+              buyers={blockZeroBuyers}
+              atAlert={blockZeroAtAlert}
+              tiles={tiles}
+              later={laterWith(pctOr(a.blockZeroHeldPct), pctOr(blockZeroPct))}
             />
           )}
           {show("linked") && (
@@ -1209,6 +1222,8 @@ export function cardReadings(card: Card, prefer: "alert" | "newest" = "alert") {
   // Launch snipers among the top holders: the top-25 count where the scan kept it, else the top-10
   // share as a count; at alert time or from a later scan.
   const sniperFrom = pick((x) => x.sniperTopHolderCount != null || x.sniperTop10WalletPct != null);
+  // Block 0: the supply block zero's wallets hold, the same way.
+  const blockZeroFrom = pick((x) => x.blockZeroHeldPct != null);
   // Linked wallets: top holders one funder paid for (or that funded each other), at alert time or
   // from a later scan, with the clusters behind the share for the list under the tiles.
   const linkedFrom = pick((x) => x.linkedWalletPct != null) ?? latest;
@@ -1245,6 +1260,9 @@ export function cardReadings(card: Card, prefer: "alert" | "newest" = "alert") {
     emptyFromScan: emptyFrom !== null,
     freshFromScan: freshFrom !== null,
     snipers: sniperFrom ? sniperReading(sniperFrom, sniperFrom === s) : null,
+    blockZeroPct: blockZeroFrom?.blockZeroHeldPct ?? null,
+    blockZeroBuyers: blockZeroFrom?.blockZeroBuyers ?? null,
+    blockZeroAtAlert: blockZeroFrom === s,
     largestPct: pick((x) => x.largestHolderPct != null)?.largestHolderPct ?? null,
     largestAtAlert: pick((x) => x.largestHolderPct != null) === s,
     ...linkedTileReading(linkedFrom),
@@ -1359,13 +1377,19 @@ export function oldFirstBuyersText(holding: number, seen: number | null): string
 
 /**
  * The safety screen's wallet cuts (packages/core/src/scoring/rugScreen.ts, SAFETY_MAX_FRESH_WALLET_PCT,
- * SAFETY_REJECT_EMPTY_WALLET_PCT and SAFETY_REJECT_SNIPER_WALLET_PCT): fresh wallets fail over 70%,
- * empty wallets and launch snipers each fail at 80% or more. A tile turns red only when its reading
- * would fail the screen. SAFETY_REJECT_TOP10_HOLDER_PCT: a top ten owning 40% or more fails too.
+ * SAFETY_REJECT_EMPTY_WALLET_PCT and SAFETY_REJECT_BLOCK_ZERO_HELD_PCT): fresh wallets fail over
+ * 70%, empty wallets at 80% or more, and block zero's wallets holding 10% of the supply or more.
+ * A tile turns red only when its reading would fail the screen. SAFETY_REJECT_TOP10_HOLDER_PCT: a
+ * top ten owning 40% or more fails too.
  */
 export const SAFETY_MAX_FRESH_WALLET_PCT = 70;
 export const SAFETY_REJECT_EMPTY_WALLET_PCT = 80;
-export const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
+export const SAFETY_REJECT_BLOCK_ZERO_HELD_PCT = 10;
+/**
+ * The top-10 snipers share the Snipers tile's color scale runs up to. The screen cut there until
+ * 2026-10-22 (Block 0 replaced it); the tile keeps the scale, red no longer.
+ */
+export const SNIPER_TILE_SCALE_PCT = 80;
 export const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
 /** SAFETY_MAX_LARGEST_HOLDER_PCT: one holder owning over 10% of supply (pools aside) fails. */
 export const SAFETY_MAX_LARGEST_HOLDER_PCT = 10;
@@ -1483,13 +1507,13 @@ export function sniperReading(
 }
 
 /**
- * Red and the color scale follow the number on the tile. A top-25 count is not judged by the
- * screen's top-10 sniper cut. A scan that only kept the top-10 share uses that cut on that share.
+ * The color scale follows the number on the tile: a scan that only kept the top-10 share is
+ * scaled on that share. Never red: the screen has no sniper-share cut since 2026-10-22.
  */
 export function sniperTileMark(reading: SniperReading | null): { risky: boolean; share: number | null } {
   if (!reading || reading.top25) return { risky: false, share: null };
   const share = reading.top10Pct ?? (reading.of > 0 ? (reading.count * 100) / reading.of : null);
-  return { risky: share != null && share >= SAFETY_REJECT_SNIPER_WALLET_PCT, share };
+  return { risky: false, share };
 }
 
 /** The tile's tooltip. A top-10-only scan keeps the "(top 10 only on this scan)" label. */
@@ -1499,9 +1523,7 @@ export function sniperTileTitle(reading: SniperReading | null, later: string): s
   const top10 =
     reading.top10Pct != null ? ` In the top 10: ${walletCountText(reading.top10Pct, reading.top10Of)}.` : "";
   const when = reading.atAlert ? "at alert time" : later;
-  const cut = reading.top25
-    ? " The safety screen's sniper cut is on the top 10, not this count."
-    : ` The safety screen rejects ${SAFETY_REJECT_SNIPER_WALLET_PCT / 10} or more of the top 10.`;
+  const cut = ` The safety screen's sniper cut is on Block 0 (supply held by block-zero snipers), not this count.`;
   return `Snipers: ${reading.count} of the ${reading.of} largest holders${which} were among the first 25 buyers after launch, ${when}.${top10}${cut}`;
 }
 
@@ -1524,12 +1546,63 @@ export function SniperTile({
   const { risky, share } = sniperTileMark(reading);
   return (
     <div
-      {...tileLook(tiles, tileTone(share, SAFETY_REJECT_SNIPER_WALLET_PCT), risky)}
+      {...tileLook(tiles, tileTone(share, SNIPER_TILE_SCALE_PCT), risky)}
       title={sniperTileTitle(reading, later)}
     >
       <dt>Snipers</dt>
       <dd className={reading === null ? "muted" : "num"}>
         {reading === null ? "Not checked" : `${reading.count}/${reading.of}`}
+      </dd>
+    </div>
+  );
+}
+
+/** The Block 0 tile's tooltip. */
+export function blockZeroTileTitle(
+  pct: number | null,
+  buyers: number | null,
+  atAlert: boolean,
+  later: string,
+): string {
+  if (pct === null) {
+    return "Block 0: not checked yet. Block zero is read with the launch's first buyers, a few tokens per scan.";
+  }
+  const who =
+    buyers === 0
+      ? "Nobody bought in the launch's own block (block zero), the dev aside"
+      : `The ${buyers ?? "?"} wallet${buyers === 1 ? "" : "s"} that bought in the launch's own block (block-zero snipers, the dev aside) hold ${pct.toFixed(1)}% of the supply`;
+  return `Block 0: ${who}, ${atAlert ? "at alert time" : later}. They carry the "0" label on the holder list. The safety screen rejects ${SAFETY_REJECT_BLOCK_ZERO_HELD_PCT}% or more.`;
+}
+
+/**
+ * The Block 0 tile (user ask 2026-10-22): the % of supply held by the wallets that bought in block
+ * zero, the create transaction's own slot. Red at the safety screen's cut.
+ */
+export function BlockZeroTile({
+  pct,
+  buyers,
+  atAlert,
+  tiles = "off",
+  later = LATER_SCAN,
+}: {
+  pct: number | null;
+  buyers: number | null;
+  atAlert: boolean;
+  tiles?: TileMode;
+  later?: string;
+}) {
+  return (
+    <div
+      {...tileLook(
+        tiles,
+        tileTone(pct, SAFETY_REJECT_BLOCK_ZERO_HELD_PCT),
+        pct !== null && pct >= SAFETY_REJECT_BLOCK_ZERO_HELD_PCT,
+      )}
+      title={blockZeroTileTitle(pct, buyers, atAlert, later)}
+    >
+      <dt>Block 0</dt>
+      <dd className={pct === null ? "muted" : "num"}>
+        {pct === null ? "Not checked" : pct.toFixed(1) + "%"}
       </dd>
     </div>
   );

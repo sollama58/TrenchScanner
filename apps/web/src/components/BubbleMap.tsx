@@ -2044,7 +2044,7 @@ export function TraitIcon({ trait, size = 13 }: { trait: WalletTrait; size?: num
 }
 
 /** The order the stat tile lists the traits in (user ask 2026-10-15). */
-const TRAIT_ORDER: readonly WalletTrait[] = ["fresh", "sniper", "empty"];
+const TRAIT_ORDER: readonly WalletTrait[] = ["fresh", "blockZero", "sniper", "empty"];
 
 /** One wallet type in the Wallet types row: its icon on a tinted badge, count, name and supply. */
 function WalletTypeItem({
@@ -2091,6 +2091,7 @@ const RISKY_WORDS = "Risky: flagged risky or a known dumper";
 
 /** What each trait means, for its bubble's tooltip. */
 export const TRAIT_WORDS: Record<WalletTrait, string> = {
+  blockZero: "Block 0: bought in the launch's own block (a block-zero sniper)",
   sniper: "Sniper: among the launch's first 25 buyers",
   fresh: "Fresh wallet: first active within the last 24 hours",
   empty: "Empty wallet: under $25 in anything besides this coin",

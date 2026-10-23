@@ -144,6 +144,21 @@ const envSchema = z.object({
   // traffic one-for-one and was held at 7 minutes because of it. RUGCHECK_CACHE_TTL_MINUTES below
   // breaks that coupling, which is what makes a one-minute alert loop affordable.
   SCAN_INTERVAL_MINUTES: z.coerce.number().min(0.25).default(1),
+  // The entry fast path (worker's entryFastPath.ts, user decision 2026-10-22): a young launch that
+  // holds the band's floor for 2.5 seconds between cycles, on the curve tape or a Jupiter quote,
+  // gets its first scan at once, alone, through the cycle's own stages - so it can be called
+  // within seconds of crossing rather than with the next cycle. It replaced the band wake, which
+  // started a whole cycle early instead and ran the scan's per-cycle Helius budgets three or four
+  // times a minute. "false" leaves every coin to the cycle, and stops the watch's Jupiter checks
+  // too. Needs JUPITER_API_KEY, as the watch did.
+  ENTRY_FAST_PATH_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  // Fast scans started in any one minute; a crossing past it waits for the next cycle. Each is
+  // about two Jupiter calls (the band refresh and the fresh quote) on the shared 50-a-minute gate,
+  // and the Helius reads a contender's first cycle would have made.
+  ENTRY_FAST_PATH_MAX_PER_MINUTE: z.coerce.number().int().nonnegative().default(30),
   // How long a RugCheck report is reused before being re-fetched (see the worker's
   // rugCheckProfiles.ts). Short, because everything RugCheck reports is mutable - holder
   // distribution, dev wallet %, risk score - unlike mint authority revocation or Mayhem Mode,

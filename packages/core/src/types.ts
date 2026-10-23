@@ -221,6 +221,15 @@ export interface OnChainProfile {
   sniperTopHolderCount?: number;
   sniperTopHoldersChecked?: number;
   /**
+   * Block zero (user ask 2026-10-22): the wallets that bought in the create transaction's own slot,
+   * the dev aside. The % of supply they hold now (the card's "Block 0", the filters' and the
+   * safety screen's), how many there were, and the % they bought there. From the worker's
+   * launchSnipers.ts read; undefined until it lands, and with no slots to go by.
+   */
+  blockZeroHeldPct?: number;
+  blockZeroBuyers?: number;
+  blockZeroBoughtPct?: number;
+  /**
    * How many of the chain's top 25 holders (pools and the creator aside) are on fresh wallets
    * (first used, or used again after a week idle, within the last day), and how many holders that
    * read (user decision 2026-10-14: Fresh as "N/25"). Undefined until the top-25 list is in and
@@ -366,6 +375,8 @@ export interface OnChainProfile {
     pct: number;
     cexFunder?: string;
     sniper?: boolean;
+    /** Bought in block zero, the create transaction's own slot: the holder list's "0" label. */
+    blockZero?: boolean;
     fresh?: boolean;
     empty?: boolean;
     /** Counted in linkedCreatorPct: tied to the creator (core's linkedWallets). */
@@ -594,6 +605,8 @@ export interface FilterCriteria {
   maxSniperTop10WalletPct?: number | null;
   /** Max how many of the top-25 holders were among the launch's first 25 buyers (sniperTopHolderCount). Skipped while unknown. */
   maxSniperTopHolderCount?: number | null;
+  /** Max % of supply held by block zero's wallets (blockZeroHeldPct). Skipped while unknown. */
+  maxBlockZeroHeldPct?: number | null;
   /** Max % of supply held by linked top holders (one funder, or funded each other). */
   maxLinkedWalletPct?: number | null;
   /** Max how many of the top-25 holders are linked (linkedWalletCount). Skipped while unknown. */

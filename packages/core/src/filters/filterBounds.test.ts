@@ -9,7 +9,7 @@ describe("filter safety bounds", () => {
       maxLargestHolderPct: 10,
       maxFreshTop10WalletPct: 70,
       maxEmptyTop10WalletPct: 70,
-      maxSniperTop10WalletPct: 70,
+      maxBlockZeroHeldPct: 10,
       maxLinkedWalletCount: 19,
       minCexFundedCount: 20,
       maxCexFundedCount: 20,
@@ -21,6 +21,7 @@ describe("filter safety bounds", () => {
   it("defaults every ceiling but the minimum and the retired fields", () => {
     expect(Object.keys(FILTER_SAFETY_DEFAULTS).sort()).toEqual(
       [
+        "maxBlockZeroHeldPct",
         "maxBundledSupplyPct",
         "maxCexFundedCount",
         "maxEmptyTop10WalletPct",

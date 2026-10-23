@@ -72,7 +72,12 @@ const CLUSTER = ["#3987e5", "#199e70", "#d95926", "#8b5cf6", "#06b6d4", "#84cc16
 const RISK = "#ef4444";
 const DEV = "#fab219";
 /** Each wallet trait's icon colour (styles.css --bm-trait-*, on the card's dark ground). */
-const TRAIT_INK: Record<WalletTrait, string> = { sniper: "#fb923c", fresh: "#4ade80", empty: "#cbd5e1" };
+const TRAIT_INK: Record<WalletTrait, string> = {
+  blockZero: "#fb7185",
+  sniper: "#fb923c",
+  fresh: "#4ade80",
+  empty: "#cbd5e1",
+};
 
 /** A wallet trait's icon, `size` across, centred on x, y (TRAIT_ICON's 24px grid). */
 function drawTraitIcon(
