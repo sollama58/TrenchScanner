@@ -160,8 +160,8 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it("looks up visible mints from the database: alerts, followed calls, AI verdict and flags", async () => {
-    const user = await makeUser("lookup", true);
+  it("lists the reader's recent alerts: matches, followed calls, AI verdict and flags", async () => {
+    const user = await makeUser("feed", true);
     const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
 
     const trackedMint = mint();
@@ -228,9 +228,10 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
       },
     });
 
-    const res = await ext(key, "POST", "/ext/v1/lookup", {
-      mints: [trackedMint, untrackedMint, "GPs…pump", trackedMint],
-    });
+    // A token nobody alerted on stays out of the list.
+    await prisma.token.create({ data: { mintAddress: untrackedMint, symbol: "QUIET" } });
+
+    const res = await ext(key, "GET", "/ext/v1/feed");
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
       tokens: {
@@ -240,29 +241,27 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
         filterMatches: { filterName: string }[];
         ai: { decision: string; reasoning: string };
       }[];
-      untracked: string[];
     };
-    expect(body.untracked).toEqual([untrackedMint]);
-    expect(body.tokens).toHaveLength(1);
-    const [t] = body.tokens;
-    expect(t!.mint).toBe(trackedMint);
+    const t = body.tokens.find((x) => x.mint === trackedMint);
+    expect(body.tokens.some((x) => x.mint === untrackedMint)).toBe(false);
     expect(t!.stats).toMatchObject({ marketCapUsd: 6_100, bundledSupplyPct: 2, linkedWalletPct: 14 });
     expect(t!.filterMatches.map((m) => m.filterName)).toEqual(["Clean launch"]);
     expect(t!.modelCalls.map((c) => c.model)).toEqual(["rules"]);
     expect(t!.ai.decision).toBe("buy");
     expect(t!.ai.reasoning.length).toBe(280);
 
-    // Another reader shares the cached token half but never sees this reader's filter match.
+    // Another reader following the same model sees the call but never this reader's filter match.
     const other = await makeUser("other", true);
     const otherKey = (await session(other.cookie, "POST", "/settings/extension-keys")).json()
       .secret as string;
-    const otherRes = await ext(otherKey, "POST", "/ext/v1/lookup", { mints: [trackedMint] });
-    expect(otherRes.json().tokens[0].filterMatches).toEqual([]);
+    const otherRes = await ext(otherKey, "GET", "/ext/v1/feed");
+    const seen = (otherRes.json().tokens as { mint: string; filterMatches: unknown[] }[]).find(
+      (x) => x.mint === trackedMint,
+    );
+    expect(seen!.filterMatches).toEqual([]);
 
-    expect((await ext(key, "POST", "/ext/v1/lookup", { mints: [] })).statusCode).toBe(400);
-    expect(
-      (await ext(key, "POST", "/ext/v1/lookup", { mints: Array.from({ length: 101 }, mint) })).statusCode,
-    ).toBe(400);
+    // The old row lookup is gone: nothing takes addresses from a page.
+    expect((await ext(key, "POST", "/ext/v1/lookup", { mints: [trackedMint] })).statusCode).toBe(404);
   });
 
   it("saves and reads overlay settings, and refuses a bad shape", async () => {

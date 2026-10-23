@@ -4,8 +4,8 @@ import { useSettings } from "../alerts";
 import { CopyIcon, GlobeIcon } from "./Icons";
 
 /**
- * Settings, at the bottom: keys for the Trench Overlay browser extension, which rings alerted
- * tokens on Axiom, Terminal and GMGN. A key reads alerts, token stats and the overlay's settings
+ * Settings, at the bottom: keys for the Trench Overlay browser extension, a side panel listing
+ * the reader's alerts with links to Axiom, Terminal and GMGN. A key reads alerts, token stats and the overlay's settings
  * and nothing else. Paid access only, the Model Alert rule (user decision 2026-10-23).
  *
  * Admins only until the extension is listed on the Chrome Web Store; until then there is nothing
@@ -103,10 +103,10 @@ function ExtensionKeysBody() {
         </button>
       </header>
       <p className="small muted">
-        The extension rings the tokens your filters and models alerted on Axiom, Terminal and GMGN, with the
-        stat flags you pick. Each browser gets its own key, up to {limit}. A key can read your alerts, token
-        stats and overlay settings. It cannot trade, see wallets, or change your filters. Revoke it here at
-        any time.
+        The extension lists the tokens your filters and models alert on in a side panel, with the stat flags
+        you pick and links to open each on Axiom, Terminal or GMGN. It never runs on those sites. Each browser
+        gets its own key, up to {limit}. A key can read your alerts, token stats and overlay settings. It
+        cannot trade, see wallets, or change your filters. Revoke it here at any time.
       </p>
       {secret && (
         <div>

@@ -1,12 +1,13 @@
 import { z } from "zod";
 
 /**
- * What the browser extension overlay shows on Axiom, Terminal and GMGN. Stored on
+ * What the browser extension's side panel shows: which alerts, which flags, and which sites it
+ * offers to open a token on (`sites`). `style` is the in-page ring's, kept for stored settings. Stored on
  * User.overlaySettings as JSON so a new setting needs no migration; read through
  * parseOverlaySettings, which fills anything missing or unreadable with the defaults.
  *
  * The flag ids are the contract with the extension: each names a TokenSnapshot field the lookup
- * returns (extensionLookup.ts), and `threshold` is the value past which the row gets the risk ring.
+ * returns (extensionLookup.ts), and `threshold` is the value past which the token is marked risky.
  */
 export const OVERLAY_SITES = ["axiom", "terminal", "gmgn"] as const;
 export const OVERLAY_RING_STYLES = ["halo", "brackets", "rail"] as const;

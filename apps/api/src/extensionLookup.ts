@@ -3,8 +3,8 @@ import { Prisma } from "@prisma/client";
 import { isFeedCall, prisma, type FeedCalls } from "@trenchscanner/core";
 
 /**
- * What the browser extension overlay draws for the token rows on screen: the reader's filter
- * matches and followed models' calls, the AI reviewer's verdict, and the stat flags.
+ * What the browser extension's side panel lists: the reader's recent filter matches and followed
+ * models' calls, each token with the AI reviewer's verdict and the stat flags.
  *
  * Database only, by design. A mint the scanner never stored comes back in `untracked`; nothing
  * here may start a scan, a price fetch or a holder read, so the overlay costs no Helius or
@@ -310,4 +310,51 @@ export async function lookupOverlay(
     }),
     untracked: mints.filter((m) => !shared.get(m)),
   };
+}
+
+/** How far back the side panel's list reaches, and how many tokens it holds. */
+export const FEED_WINDOW_MS = 6 * 60 * 60_000;
+export const FEED_MAX = 50;
+
+/**
+ * The reader's latest alerts for the side panel, newest first: tokens their filters matched and
+ * tokens their followed models called, each answered as lookupOverlay answers it.
+ */
+export async function recentOverlay(
+  userId: string,
+  calls: FeedCalls,
+  now = Date.now(),
+): Promise<OverlayToken[]> {
+  const since = new Date(now - FEED_WINDOW_MS);
+  const [matches, alerts] = await Promise.all([
+    prisma.match.findMany({
+      where: { userId, matchedAt: { gte: since } },
+      orderBy: { matchedAt: "desc" },
+      take: FEED_MAX * 4,
+      select: { matchedAt: true, token: { select: { mintAddress: true } } },
+    }),
+    calls.models.length === 0
+      ? []
+      : prisma.curatedAlert.findMany({
+          where: {
+            createdAt: { gte: since },
+            model: { in: calls.models },
+            ...(calls.tier === null ? {} : { tier: calls.tier }),
+          },
+          orderBy: { createdAt: "desc" },
+          take: FEED_MAX * 4,
+          select: { createdAt: true, token: { select: { mintAddress: true } } },
+        }),
+  ]);
+  const latest = new Map<string, number>();
+  const note = (mint: string, at: Date) => latest.set(mint, Math.max(latest.get(mint) ?? 0, at.getTime()));
+  for (const m of matches) note(m.token.mintAddress, m.matchedAt);
+  for (const a of alerts) note(a.token.mintAddress, a.createdAt);
+  const mints = [...latest]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, FEED_MAX)
+    .map(([mint]) => mint);
+  const { tokens } = await lookupOverlay(userId, mints, calls, now);
+  const byMint = new Map(tokens.map((t) => [t.mint, t]));
+  return mints.flatMap((m) => byMint.get(m) ?? []);
 }

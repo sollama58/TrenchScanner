@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chunk, LookupCache, TRACKED_TTL_MS, UNTRACKED_TTL_MS } from "./lookupCache";
-import { base58Length, isMintAddress, mintsIn } from "./mint";
+import { base58Length, isMintAddress } from "./mint";
 import { DEFAULT_SETTINGS } from "./settings";
 import { token } from "./testToken";
 import type { OverlaySettings } from "./types";
@@ -29,11 +28,6 @@ describe("mint addresses", () => {
     expect(isMintAddress("0OIl".repeat(10))).toBe(false);
     // A transaction signature is base58 too, but 64 bytes and too long.
     expect(isMintAddress("5".repeat(88))).toBe(false);
-  });
-
-  it("finds addresses inside URLs without repeats", () => {
-    expect(mintsIn(`/sol/token/abc_${PUMP}?x=${PUMP}`)).toEqual([PUMP]);
-    expect(mintsIn("/trenches?tab=new")).toEqual([]);
   });
 });
 
@@ -84,22 +78,5 @@ describe("row verdicts", () => {
       rings: { ...DEFAULT_SETTINGS.rings, riskRing: false },
     };
     expect(verdictFor(risky, noRisk).ring).toBeNull();
-  });
-});
-
-describe("lookup cache", () => {
-  it("asks only for what it doesn't know, and remembers untracked mints longer", () => {
-    const cache = new LookupCache();
-    expect(cache.missing([MINT, PUMP, MINT], 0)).toEqual([MINT, PUMP]);
-    const tracked = token();
-    cache.store([MINT, PUMP], [tracked], 0);
-    expect(cache.missing([MINT, PUMP], 1_000)).toEqual([]);
-    expect(cache.answer([MINT, PUMP])).toEqual({ [PUMP]: tracked });
-    expect(cache.missing([MINT, PUMP], TRACKED_TTL_MS)).toEqual([PUMP]);
-    expect(cache.missing([MINT, PUMP], UNTRACKED_TTL_MS)).toEqual([MINT, PUMP]);
-  });
-
-  it("splits into the API's batch size", () => {
-    expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
   });
 });

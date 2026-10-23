@@ -1,29 +1,25 @@
 import { api, ApiError } from "./shared/api";
-import { chunk, LOOKUP_CHUNK, LookupCache } from "./shared/lookupCache";
-import { isMintAddress } from "./shared/mint";
 import { DEFAULT_SETTINGS } from "./shared/settings";
-import {
-  SITES,
-  type ContentRequest,
-  type LookupAnswer,
-  type OverlaySettings,
-  type PopupRequest,
-  type Site,
-  type Status,
+import type {
+  FeedAnswer,
+  OverlaySettings,
+  OverlayToken,
+  PanelRequest,
+  Problem,
+  Status,
 } from "./shared/types";
 
 /**
  * The service worker: the only part that holds the key or touches the network, and only
- * api.trenchscanner.app. Content scripts may ask it to look up addresses and read settings;
- * the popup may connect, disconnect and save settings. Nothing else is answered.
+ * api.trenchscanner.app. Only the extension's own side panel is answered.
+ *
+ * The extension has no access to Axiom, Terminal, GMGN or any other site: no content scripts, no
+ * host permissions beyond the API, no tabs, scripting or cookies. It never runs inside a trading
+ * site, so nothing it ships (or a bad update of it) can read a site's page or login. The panel
+ * lists the reader's alerts and opens a token on a site as an ordinary link.
  */
 
 const KEY_SHAPE = /^tsx_[A-Za-z0-9_-]{43}$/;
-const SITE_HOSTS: Record<Site, RegExp> = {
-  axiom: /(^|\.)axiom\.trade$/,
-  terminal: /(^|\.)padre\.gg$/,
-  gmgn: /(^|\.)gmgn\.ai$/,
-};
 /** The account's settings are re-read this often, so a change from another browser arrives. */
 const SETTINGS_REFRESH_MS = 5 * 60_000;
 
@@ -33,11 +29,12 @@ interface Stored {
   settings?: OverlaySettings;
 }
 
-const cache = new LookupCache();
-const inFlight = new Map<string, Promise<void>>();
-const health = new Map<number, { site: Site; rows: number; mints: number; paused: boolean }>();
-let problem: LookupAnswer["problem"] = null;
+let problem: Problem = null;
 let settingsReadAt = 0;
+let lastTokens: OverlayToken[] = [];
+
+// The toolbar icon (and its shortcut) opens the panel beside the page.
+void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => undefined);
 
 async function stored(): Promise<Stored> {
   return (await chrome.storage.local.get(["key", "wallet", "settings"])) as Stored;
@@ -49,10 +46,7 @@ async function currentSettings(): Promise<OverlaySettings> {
     settingsReadAt = Date.now();
     void api
       .me(key)
-      .then(async (me) => {
-        await chrome.storage.local.set({ wallet: me.wallet, settings: me.settings });
-        broadcast(me.settings);
-      })
+      .then((me) => chrome.storage.local.set({ wallet: me.wallet, settings: me.settings }))
       .catch((e: unknown) => noteFailure(e));
   }
   return settings ?? DEFAULT_SETTINGS;
@@ -62,99 +56,34 @@ function noteFailure(e: unknown): void {
   problem = e instanceof ApiError && (e.status === 401 || e.status === 403) ? "refused" : "offline";
 }
 
-function broadcast(settings: OverlaySettings): void {
-  for (const tabId of health.keys()) {
-    chrome.tabs.sendMessage(tabId, { type: "settingsChanged", settings }).catch(() => health.delete(tabId));
-  }
-}
-
-async function lookup(mints: string[]): Promise<LookupAnswer> {
+async function feed(): Promise<FeedAnswer> {
   const { key } = await stored();
-  if (!key) return { tokens: {}, problem: "disconnected" };
-  const now = Date.now();
-  const waits: Promise<void>[] = [];
-  const fresh: string[] = [];
-  for (const mint of cache.missing(mints, now)) {
-    const pending = inFlight.get(mint);
-    if (pending) waits.push(pending);
-    else fresh.push(mint);
-  }
-  for (const part of chunk(fresh, LOOKUP_CHUNK)) {
-    const request = api.lookup(key, part).then(
-      (result) => {
-        problem = null;
-        cache.store(part, result.tokens, Date.now());
-      },
-      (e: unknown) => noteFailure(e),
-    );
-    const settled = request.finally(() => part.forEach((m) => inFlight.delete(m)));
-    for (const mint of part) inFlight.set(mint, settled);
-    waits.push(settled);
-  }
-  await Promise.all(waits);
-  return { tokens: cache.answer(mints), problem };
-}
-
-function fromSite(sender: chrome.runtime.MessageSender): Site | null {
-  if (!sender.tab || !sender.url) return null;
-  let host: string;
+  if (!key) return { tokens: [], problem: "disconnected" };
   try {
-    const url = new URL(sender.url);
-    if (url.protocol !== "https:") return null;
-    host = url.hostname;
-  } catch {
-    return null;
+    lastTokens = (await api.feed(key)).tokens;
+    problem = null;
+  } catch (e) {
+    noteFailure(e);
   }
-  return SITES.find((site) => SITE_HOSTS[site].test(host)) ?? null;
-}
-
-/** The extension's own pages (the popup, or the popup opened in a tab). Content scripts carry the site's URL. */
-function fromPopup(sender: chrome.runtime.MessageSender): boolean {
-  return typeof sender.url === "string" && sender.url.startsWith(chrome.runtime.getURL(""));
-}
-
-async function handleContent(request: ContentRequest, tabId: number): Promise<unknown> {
-  switch (request.type) {
-    case "lookup": {
-      if (!Array.isArray(request.mints)) return null;
-      const mints = request.mints
-        .filter((m): m is string => typeof m === "string" && isMintAddress(m))
-        .slice(0, LOOKUP_CHUNK);
-      return lookup(mints);
-    }
-    case "settings":
-      return currentSettings();
-    case "health":
-      if (SITES.includes(request.site)) {
-        health.set(tabId, {
-          site: request.site,
-          rows: Number(request.rows) || 0,
-          mints: Number(request.mints) || 0,
-          paused: request.paused === true,
-        });
-      }
-      return null;
-    default:
-      return null;
-  }
+  return { tokens: lastTokens, problem };
 }
 
 async function status(): Promise<Status> {
   const { key, wallet } = await stored();
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
   return {
     connected: Boolean(key),
     wallet: wallet ?? null,
     settings: await currentSettings(),
     problem: key ? problem : "disconnected",
-    page: tab?.id === undefined ? null : (health.get(tab.id) ?? null),
   };
 }
 
-async function handlePopup(request: PopupRequest): Promise<unknown> {
+async function handle(request: PanelRequest): Promise<unknown> {
   switch (request.type) {
     case "status":
       return status();
+    case "feed":
+      return feed();
     case "connect": {
       const key = typeof request.key === "string" ? request.key.trim() : "";
       if (!KEY_SHAPE.test(key))
@@ -164,8 +93,7 @@ async function handlePopup(request: PopupRequest): Promise<unknown> {
         await chrome.storage.local.set({ key, wallet: me.wallet, settings: me.settings });
         settingsReadAt = Date.now();
         problem = null;
-        cache.clear();
-        broadcast(me.settings);
+        lastTokens = [];
         return { ok: true };
       } catch (e) {
         if (e instanceof ApiError && e.status === 403)
@@ -177,14 +105,12 @@ async function handlePopup(request: PopupRequest): Promise<unknown> {
     }
     case "disconnect":
       await chrome.storage.local.remove(["key", "wallet"]);
-      cache.clear();
+      lastTokens = [];
       problem = "disconnected";
-      broadcast(await currentSettings());
       return { ok: true };
     case "saveSettings": {
       const { key } = await stored();
       await chrome.storage.local.set({ settings: request.settings });
-      broadcast(request.settings);
       if (key) await api.saveSettings(key, request.settings).catch((e: unknown) => noteFailure(e));
       return { ok: true };
     }
@@ -193,18 +119,14 @@ async function handlePopup(request: PopupRequest): Promise<unknown> {
   }
 }
 
+/** The extension's own pages: the side panel, or the panel opened in a tab. */
+function fromPanel(sender: chrome.runtime.MessageSender): boolean {
+  return typeof sender.url === "string" && sender.url.startsWith(chrome.runtime.getURL(""));
+}
+
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
-  if (sender.id !== chrome.runtime.id || typeof message !== "object" || message === null) return false;
-  const site = fromSite(sender);
-  const work =
-    site !== null && sender.tab?.id !== undefined
-      ? handleContent(message as ContentRequest, sender.tab.id)
-      : fromPopup(sender)
-        ? handlePopup(message as PopupRequest)
-        : null;
-  if (!work) return false;
-  work.then(sendResponse, () => sendResponse(null));
+  if (sender.id !== chrome.runtime.id || !fromPanel(sender)) return false;
+  if (typeof message !== "object" || message === null) return false;
+  handle(message as PanelRequest).then(sendResponse, () => sendResponse(null));
   return true;
 });
-
-chrome.tabs.onRemoved.addListener((tabId) => health.delete(tabId));
