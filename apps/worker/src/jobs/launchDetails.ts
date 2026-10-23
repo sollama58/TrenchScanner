@@ -11,7 +11,8 @@ const logger = createLogger("launch-details");
 
 /** Lookups waiting or running at once; launches past it are left as the stream gave them. */
 const MAX_IN_FLIGHT = 300;
-const CONCURRENCY = 4;
+// Eight: with Pump.fun refusing, a read goes to the public IPFS gateways, a few seconds each.
+const CONCURRENCY = 8;
 
 export interface LaunchDetailStats {
   /** Streamed launches the coin list didn't carry, looked up. */
