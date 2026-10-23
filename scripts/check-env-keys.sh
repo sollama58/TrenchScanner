@@ -45,6 +45,8 @@ DIRECT_READS=(
   # Set by Vitest itself. otcDeskLines skips the live OTC roster while tests run
   # (apps/api/src/otcDesk.ts) so a card render does not call otcdesks.cash.
   VITEST
+  # Optional override of donate.gg's API base (apps/api/src/donateGg.ts), for tests; unset in prod.
+  DONATE_GG_BASE_URL
 )
 
 # "service KEY" pairs: the service reads KEY, so render.yaml must declare it there (point 2).
