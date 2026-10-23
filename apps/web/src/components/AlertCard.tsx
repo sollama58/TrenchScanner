@@ -29,6 +29,7 @@ import {
 import { CardSearchButton } from "./CardSearchButton";
 import { WatchStar } from "./WatchStar";
 import { DeskRewardTokens } from "./DeskRewardTokens";
+import { rewardHost } from "../deskRewardDisplay";
 import { FeeKolAvatar, FeeWalletTip, kolPictures } from "./FeeWalletTip";
 import { DexInfoLabel } from "../dexInfoLabel";
 import { SocialLinks, socialLinks } from "./SocialLinks";
@@ -1268,7 +1269,7 @@ export function FeeBadge({
     >
       {word && <span className="fee-word">FEES</span>}
       <fees.Icon size={icon} />
-      {fees.deskRewards && <DeskRewardTokens rewards={fees.deskRewards} compact />}
+      {fees.deskRewards && <DeskRewardTokens rewards={fees.deskRewards} host={rewardHost(fee)} compact />}
       {fees.caption && <span className="fee-caption num">{fees.caption}</span>}
       {fees.tax && <span className="fee-tax num">{fees.tax}</span>}
     </span>

@@ -1,6 +1,6 @@
 import { SectionBoundary } from "./SectionBoundary";
 import { ScopeRowSkeletons } from "./Skeleton";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Card, CuratedPage, Filter, LaunchPage, Leaderboard, MatchPage } from "../api";
 import {
   passesColumnFilter,
@@ -366,6 +366,7 @@ export function ScopeBoard({
   // Phones: the page scrolls the rows under a bar that sticks below the top bar. Scrolled into the
   // list, the board holds still; back at its top, it is live again.
   const root = useRef<HTMLDivElement>(null);
+  const bleed = useWideBleed(root, !phone && board.length > WIDE_FROM_COLS);
   const bar = useRef<HTMLDivElement>(null);
   const strip = useRef<HTMLDivElement>(null);
   const scrolledInto = useCallback(() => {
@@ -472,7 +473,7 @@ export function ScopeBoard({
   return (
     <div
       ref={root}
-      className={`scope${paused ? " held" : ""}${first.stale ? " stale" : ""} ${scopeLookClass(display)}`}
+      className={`scope${paused ? " held" : ""}${first.stale ? " stale" : ""}${bleed > 0 ? " wide" : ""} ${scopeLookClass(display)}`}
       style={{ "--scope-cols": shownCols.length } as React.CSSProperties}
       onTouchStart={touchStart}
       onTouchEnd={touchEnd}
@@ -581,6 +582,46 @@ export function ScopeBoard({
       </div>
     </div>
   );
+}
+
+/** Past this many columns, the board widens past the page's width into the window's (user ask 2026-10-23). */
+const WIDE_FROM_COLS = 3;
+/** Room kept clear at each side of the window: the Trades and Utility drawer handles sit on the right. */
+const WIDE_GUTTER_PX = 56;
+
+/**
+ * How far the Live feed's panel may reach past each side of the page's column into the window, so
+ * four to six columns sit side by side without a sideways scroll: the window's spare width beyond
+ * the column at the narrower side, less a gutter, measured on resize. The panel (LiveTab's
+ * `.panel.feed`) gets it as negative side margins while the board is wide, and loses them after.
+ */
+function useWideBleed(root: React.RefObject<HTMLDivElement | null>, on: boolean): number {
+  const [bleed, setBleed] = useState(0);
+  useLayoutEffect(() => {
+    const panel = root.current?.closest<HTMLElement>(".panel");
+    const column = panel?.parentElement;
+    if (!on || !panel || !column) {
+      setBleed(0);
+      return;
+    }
+    const fit = () => {
+      const page = document.documentElement.clientWidth;
+      const box = column.getBoundingClientRect();
+      const side = Math.max(0, Math.floor(Math.min(box.left, page - box.right) - WIDE_GUTTER_PX));
+      panel.style.marginInline = side > 0 ? `${-side}px` : "";
+      setBleed(side);
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(fit) : null;
+    ro?.observe(column);
+    return () => {
+      window.removeEventListener("resize", fit);
+      ro?.disconnect();
+      panel.style.marginInline = "";
+    };
+  }, [root, on]);
+  return bleed;
 }
 
 function emptyText(
