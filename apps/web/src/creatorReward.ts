@@ -49,8 +49,11 @@ function headline(fee: Fee, coins: readonly string[], tax: string | null): strin
       return tax ? `Holders ${tax}` : "Holders";
     case "cashback":
       return "Cashback";
-    case "wallet":
-      return "Wallet";
+    case "wallet": {
+      // One wallet we know by name: its name, the way a holder list shows it (user ask 2026-10-23).
+      const named = fee.recipients?.length === 1 ? fee.recipients[0]!.name?.trim() : null;
+      return named || "Wallet";
+    }
     case "split":
       return "Split";
     case "social":

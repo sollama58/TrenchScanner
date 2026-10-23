@@ -15,6 +15,7 @@ import {
   contestantSpec,
 } from "@trenchscanner/core";
 import { donateConfigCharities, expandCharityRecipients } from "./donateGg.js";
+import { feeWalletNames } from "./walletNames.js";
 import { enrichCreatorFeeDeskRewards } from "./deskRewardMeta.js";
 import { otcDeskRoster, otcDeskRosterFor } from "./otcDesk.js";
 import {
@@ -27,6 +28,7 @@ import {
   cardFeeRecipients,
   feeRecipientsFromAnalysis,
   mergeCharityShares,
+  withFeeWalletNames,
   type CardFeeRecipient,
   type ParsedFeeRecipient,
 } from "./feeRecipients.js";
@@ -334,6 +336,18 @@ export async function creatorFeesByMint(
       const parsed = parsedRecipients.get(r.mintAddress);
       if (r.feeDestination === "charity" && parsed) {
         parsedRecipients.set(r.mintAddress, expandCharityRecipients(parsed, configs));
+      }
+    }
+  }
+  // TrenchScanner's own name for each fee wallet, and a KOL's picture (user ask 2026-10-23).
+  const feeWallets = [...parsedRecipients.values()].flatMap((list) =>
+    list.flatMap((r) => (r.address && !r.named && r.kind !== "charity" ? [r.address] : [])),
+  );
+  if (feeWallets.length > 0) {
+    const walletNames = await feeWalletNames(feeWallets);
+    if (walletNames.size > 0) {
+      for (const [mint, list] of parsedRecipients) {
+        parsedRecipients.set(mint, withFeeWalletNames(list, walletNames));
       }
     }
   }
