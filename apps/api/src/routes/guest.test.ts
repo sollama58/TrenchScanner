@@ -92,7 +92,7 @@ describe.skipIf(!dbAvailable)("guest feed", () => {
     };
     expect(body.windowHours).toBe(2);
     expect(Object.keys(body.current.stats).sort()).toEqual(
-      ["avgReturnPct", "hit10xPct", "hit2xPct", "hit4xPct", "rejectedPct", "volumeUsd"].sort(),
+      ["avgReturnPct", "hit10xPct", "hit2xPct", "hit4xPct", "rejectedPct", "runners", "volumeUsd"].sort(),
     );
     expect(body.compare.map((c) => c.hoursAgo)).toEqual([2, 6, 24, 48]);
   });

@@ -18,6 +18,7 @@ export interface MarketPrices {
 }
 
 export interface TrenchStats {
+  runners: number | null;
   volumeUsd: number | null;
   hit2xPct: number | null;
   hit4xPct: number | null;
@@ -47,26 +48,27 @@ export interface TrenchAnswer {
   computedAt: string;
 }
 
-export type StatKey = keyof TrenchStats;
+/** The stats the bar shows (volume is still answered, but the bar counts runners instead). */
+export type StatKey = Exclude<keyof TrenchStats, "volumeUsd">;
 
 /**
- * How a stat is read and compared. "usd" moves by its relative change (%); a rate or a return by
- * its difference in percentage points. `inverse`: a rise is bad news (more rugs rejected).
+ * How a stat is read and compared. "count" moves by its difference in units; a rate or a return
+ * by its difference in percentage points. `inverse`: a rise is bad news (more rugs rejected).
  */
 export interface StatSpec {
   key: StatKey;
   label: string;
-  kind: "usd" | "rate" | "return";
+  kind: "count" | "rate" | "return";
   inverse?: boolean;
   title: string;
 }
 
 export const TRENCH_STATS: readonly StatSpec[] = [
   {
-    key: "volumeUsd",
-    label: "Volume",
-    kind: "usd",
-    title: "USD traded by the tokens the scan follows, over the window",
+    key: "runners",
+    label: "Runners",
+    kind: "count",
+    title: "Screened tokens that doubled within the hour, counted once each, over the window",
   },
   {
     key: "hit2xPct",
@@ -97,45 +99,39 @@ export const TRENCH_STATS: readonly StatSpec[] = [
 ];
 
 export interface StatDelta {
-  /** The change: percent for "usd", percentage points otherwise. Null when either side is unknown. */
+  /** The change: runners for "count", percentage points otherwise. Null when either side is unknown. */
   value: number | null;
-  unit: "%" | "pt";
+  unit: "" | "pt";
   /** up/down/flat by sign; "good"/"bad" by what the stat means (flat and unknown are neither). */
   dir: "up" | "down" | "flat" | null;
   tone: "good" | "bad" | null;
 }
 
 /** Changes smaller than this (in the stat's own unit) read as flat. */
-const FLAT = { usd: 0.5, rate: 0.05, return: 0.05 } as const;
+const FLAT = { count: 0.5, rate: 0.05, return: 0.05 } as const;
 
 export function statDelta(spec: StatSpec, now: number | null, then: number | null): StatDelta {
-  const unit = spec.kind === "usd" ? "%" : "pt";
+  const unit = spec.kind === "count" ? "" : "pt";
   if (now === null || then === null) return { value: null, unit, dir: null, tone: null };
-  let value: number;
-  if (spec.kind === "usd") {
-    if (then === 0) return { value: null, unit, dir: now > 0 ? "up" : "flat", tone: now > 0 ? "good" : null };
-    value = ((now - then) / then) * 100;
-  } else {
-    value = now - then;
-  }
+  const value = now - then;
   if (Math.abs(value) < FLAT[spec.kind]) return { value, unit, dir: "flat", tone: null };
   const dir = value > 0 ? "up" : "down";
   const goodWhenUp = !spec.inverse;
   return { value, unit, dir, tone: (dir === "up") === goodWhenUp ? "good" : "bad" };
 }
 
-/** The delta as the bar prints it: "12%", "3.4pt", "0.6pt" (sign shown by the arrow). */
+/** The delta as the bar prints it: "3", "3.4pt", "0.6pt" (sign shown by the arrow). */
 export function deltaText(d: StatDelta): string {
   if (d.value === null) return "–";
   const abs = Math.abs(d.value);
-  if (d.unit === "%") return `${abs >= 100 ? abs.toFixed(0) : abs >= 10 ? abs.toFixed(0) : abs.toFixed(1)}%`;
+  if (d.unit === "") return Math.round(abs).toLocaleString("en-US");
   return `${abs >= 10 ? abs.toFixed(0) : abs.toFixed(1)}pt`;
 }
 
 /** A stat's value as the bar prints it. */
-export function statText(spec: StatSpec, v: number | null, usd: (n: number) => string): string {
+export function statText(spec: StatSpec, v: number | null): string {
   if (v === null || !Number.isFinite(v)) return "–";
-  if (spec.kind === "usd") return usd(v);
+  if (spec.kind === "count") return Math.round(v).toLocaleString("en-US");
   if (spec.kind === "return") {
     const t = Math.abs(v) >= 10 ? Math.abs(v).toFixed(0) : Math.abs(v).toFixed(1);
     return Number(t) === 0 ? "0%" : `${v > 0 ? "+" : "-"}${t}%`;
