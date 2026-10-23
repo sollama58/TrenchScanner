@@ -23190,3 +23190,156 @@ dialog.tm-modal.tm-terminal::backdrop {
   align-items: flex-start;
   flex-shrink: 0;
 }
+/* Scope's chosen columns (user ask 2026-10-23): up to six side by side, scrolling sideways when
+   they don't fit at a readable width; phones keep one at a time under the tabs. */
+@media (min-width: 900px) {
+  .scope-strip {
+    grid-template-columns: repeat(var(--scope-cols, 3), minmax(320px, 1fr));
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  .scope-col {
+    scroll-snap-align: start;
+  }
+}
+.scope-col-head h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope-tabs button {
+  max-width: 16em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Phones: the tabs keep their names and scroll sideways, with the filter button beside them. */
+@media (max-width: 899px) {
+  .scope-bar {
+    flex-wrap: nowrap;
+  }
+  .scope-tabs {
+    flex: 1 1 0;
+  }
+  .scope-tabs button {
+    flex: 1 0 auto;
+    max-width: 11em;
+  }
+  .scope-bar-filter,
+  .scope-new {
+    flex: none;
+  }
+}
+.scope-empty-pick {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.scope-empty-pick p {
+  margin: 0;
+}
+.scope-tab-name {
+  display: inline-block;
+  max-width: 11em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+/* The Columns tab of Scope settings: one card per column, in board order. */
+.scope-colset {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.scope-colset-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.scope-colset-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.scope-colset-num {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--link) 16%, transparent);
+  color: var(--link);
+  font-size: 12px;
+  font-weight: 700;
+}
+.scope-colset-kind {
+  flex: 1;
+  min-width: 0;
+}
+.scope-colset-kind select {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.scope-colset-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.scope-colset-tools .icon-btn:disabled {
+  opacity: 0.35;
+}
+.scope-colset-remove:hover:not(:disabled) {
+  color: var(--bad-ink);
+}
+.scope-colset-hint {
+  margin: 0 0 0 34px;
+}
+.scope-colset-picks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-left: 34px;
+}
+.scope-colset-picks > p {
+  margin: 0;
+}
+.scope-pill-note {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.scope-colset-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.scope-colset-add .small-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+@media (max-width: 420px) {
+  .scope-colset-hint,
+  .scope-colset-picks {
+    margin-left: 0;
+  }
+}
