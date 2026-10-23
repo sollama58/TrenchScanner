@@ -63,7 +63,7 @@ function headline(fee: Fee, coins: readonly string[], tax: string | null): strin
     case "x_account":
       return "Social";
     case "charity": {
-      // The one charity's name, cut to fit by the square, or 2️⃣ for two; the tooltip names
+      // The first charity's name, cut to fit by the square, and "+1" for a second; the tooltip names
       // each and its split (user ask 2026-10-23).
       const compact = charityCompact(fee);
       if (compact) return compact;

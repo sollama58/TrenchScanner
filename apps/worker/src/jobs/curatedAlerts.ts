@@ -1283,16 +1283,13 @@ async function emitForModel(
       // Shadow mode: the alert is already out; the review is bookkeeping and must never hold
       // up the scan cycle, so it runs detached - tracked, so a shutdown can wait for it.
       // The decision clock is the scan's, not the moment this detached review actually runs.
-      const shared = reviewOnce(pick, env, { isDefault, decisionAt: new Date(clock.now) });
-      if (shared.fresh) {
-        trackShadowReview(
-          shared.result
-            .then((r) =>
-              r ? recordAiReview(pick, r, "shadow", result.anchor, result.alertId, env) : undefined,
-            )
-            .catch((err) => logger.warn("failed to record shadow ai review", { error: String(err) })),
-        );
-      }
+      trackShadowReview(
+        shadowReviewOnce(pick, env, { isDefault, decisionAt: new Date(clock.now) })
+          .then((r) =>
+            r ? recordAiReview(pick, r, "shadow", result.anchor, result.alertId, env) : undefined,
+          )
+          .catch((err) => logger.warn("failed to record shadow ai review", { error: String(err) })),
+      );
     }
   }
 
@@ -1479,6 +1476,53 @@ function reviewOnce(
   );
   sharedReviews.set(tokenId, { at: now, result });
   return { result, fresh: true };
+}
+
+/**
+ * Whether the token already has a review with a verdict on record from within
+ * CURATED_ALERT_COOLDOWN_HOURS - any seat's, any process's, before a restart included.
+ */
+async function hasStoredReview(tokenId: string, env: Env): Promise<boolean> {
+  const row = await prisma.aiReview.findFirst({
+    where: {
+      tokenId,
+      decision: { not: null },
+      createdAt: { gt: new Date(Date.now() - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000) },
+    },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
+/**
+ * Shadow mode's review: the new one to record, or null when another seat's review covers the
+ * token - the in-process share first (reviewOnce), then a review stored in Postgres within
+ * CURATED_ALERT_COOLDOWN_HOURS (user ask 2026-10-23: API audit bundle, A4). The share lasted only
+ * AI_REVIEW_VETO_COOLDOWN_MINUTES and a restart, so a seat calling the coin later bought a second
+ * $0.07 review the record never counts: grading takes the first review per token
+ * (firstReviewPerToken), and a shadow verdict never holds an alert. So reuse changes nothing but
+ * the duplicate rows on the admin view.
+ *
+ * Shadow only. In gate mode the verdict decides whether the alert goes out, and a verdict up to a
+ * day old would judge a coin whose market has moved since (audit B4); gate keeps the half-hour
+ * in-process share alone. A failed lookup asks the reviewer, as before.
+ */
+async function shadowReviewOnce(
+  pick: CuratedContender,
+  env: Env,
+  opts: { isDefault: boolean; decisionAt: Date },
+): Promise<AiReviewResult | null> {
+  if (!sharedReviews.has(pick.token.id)) {
+    const stored = await hasStoredReview(pick.token.id, env).catch((err: unknown) => {
+      logger.warn("stored ai review lookup failed - reviewing", { error: String(err) });
+      return false;
+    });
+    if (stored) return null;
+  }
+  // After the lookup: a seat that got here first while this one waited has its review in the
+  // share by now, so the second seat reuses it rather than buying another.
+  const shared = reviewOnce(pick, env, opts);
+  return shared.fresh ? shared.result : null;
 }
 
 /** Shadow reviews still running detached - a shutdown waits for them (drainShadowReviews). */

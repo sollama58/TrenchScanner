@@ -11,7 +11,14 @@ import {
   type SeriesInput,
 } from "@trenchscanner/core";
 import { allowLookupRead } from "../lookupGate.js";
-import { askBackfill, configureCandleStore, latestPage, storingFetcher } from "../candleStore.js";
+import {
+  askBackfill,
+  configureCandleStore,
+  keepStreamBars,
+  latestPage,
+  storingFetcher,
+} from "../candleStore.js";
+import { recordCandleAnswer } from "../chartHealth.js";
 import { liveCurves } from "../liveCurve.js";
 import { liveTrades } from "../liveTrades.js";
 import { sharedSolPrice } from "../solPrice.js";
@@ -107,6 +114,17 @@ async function liveInputs(
     // On the finest timeframes only what the stream itself delivered: RPC reads every few seconds
     // make 1-second bars that sit flat four seconds in five (charts audit CH-6).
     const from = tfSec < 5 ? stream.streamFrom : (stream.coveredFrom ?? stream.candles[0]!.t);
+    // What the stream itself delivered is saved, on the launch billion, for the next chart.
+    if (stream.streamFrom !== null && stream.readAt !== null && factor > 0) {
+      const saveFrom = stream.streamFrom;
+      keepStreamBars(
+        mint,
+        stream.candles
+          .filter((k) => k.t >= saveFrom)
+          .map((k) => ({ ...k, o: k.o / factor, h: k.h / factor, l: k.l / factor, c: k.c / factor })),
+        { from: saveFrom, to: stream.readAt },
+      );
+    }
     if (from !== null) {
       out.push({
         res: 1,
@@ -181,6 +199,13 @@ export async function registerCandleRoutes(app: FastifyInstance, opts: { env?: E
         logger.warn("candles failed", { mint: mintAddress, tf: q.tf, error: String(err) });
         return empty;
       });
+    // Chart health (/health charts.candles) counts this route's answers as the legacy /chart's:
+    // no bars at all is a null answer; a page whose holes take a good part of its span is partial.
+    if (q.before === null) {
+      const span = (answer.bars.at(-1)?.t ?? 0) - (answer.bars[0]?.t ?? 0) + CANDLE_TIMEFRAMES[q.tf] * 1_000;
+      const holeMs = (answer.holes ?? []).reduce((sum, [a, b]) => sum + (b - a), 0);
+      recordCandleAnswer("candles", answer.bars.length > 0 ? "store" : null, false, holeMs > span * 0.3);
+    }
     // As the chart's: the newest page a few seconds (3 on the finest timeframes, as /chart/fine's
     // 1-second answer), older pages, which hold only closed candles, a minute.
     const maxAge = q.before !== null ? 60 : CANDLE_TIMEFRAMES[q.tf] < 15 ? 3 : 15;

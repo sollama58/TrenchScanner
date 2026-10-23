@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { FeeBadge } from "./components/AlertCard";
+import { charityTipRows, FeeBadge } from "./components/AlertCard";
 import { CreatorFeeRich } from "./components/FeeRewards";
 import { creatorRewardFigure } from "./creatorReward";
 
@@ -28,10 +28,12 @@ describe("charity and OTC rewards on every fee surface", () => {
     const card = renderToStaticMarkup(<FeeBadge fee={charity} word />);
     const scope = renderToStaticMarkup(<FeeBadge fee={charity} icon={12} className="scope-fee" />);
     for (const html of [card, scope]) {
-      expect(html).toContain("Red Cross 60%");
-      expect(html).toContain("AbCd…wxyz 40%");
-      expect(html).toContain("fee-caption");
+      // One pill; the shares are in its tooltip (user ask 2026-10-23).
+      expect(html).toContain("charity-pill");
+      expect(html).toContain('aria-label="Creator fees go to Red Cross (60%) and AbCd…wxyz (40%)."');
+      expect(html).not.toContain("fee-caption");
     }
+    expect(charityTipRows(charity).map((r) => r.label)).toEqual(["Red Cross", "AbCd…wxyz"]);
     expect(card).toContain("FEES");
     expect(scope).toContain("scope-fee");
     expect(scope).not.toContain("FEES");
@@ -114,11 +116,19 @@ describe("charity names from donate.gg (user ask 2026-10-23)", () => {
     ],
   };
 
-  it("names the one charity on the card and the square, with the split in the tooltip", () => {
+  it("names the one charity in its own pill, with the split in the tooltip", () => {
     const card = renderToStaticMarkup(<FeeBadge fee={one} word />);
-    expect(card).toContain(">St. Jude Children&#x27;s Research Hospital</span>");
+    expect(card).toContain("FEES");
+    expect(card).toContain('<span class="charity-heart" aria-hidden="true">❤️</span>');
+    expect(card).toContain('<span class="charity-name">St. Jude Children&#x27;s Research Hospital</span>');
+    expect(card).not.toContain("charity-more");
     expect(card).not.toContain(">8PQx…VP9z");
     expect(card).toContain("8PQx…VP9z (1%)");
+    // The charity leads the tooltip, then the other wallet the fee pays.
+    expect(charityTipRows(one).map((r) => r.label)).toEqual([
+      "St. Jude Children's Research Hospital",
+      "8PQx…VP9z",
+    ]);
     const square = creatorRewardFigure(one);
     expect(square.value).toBe("St. Jude Children's Research Hospital");
     expect(square.title).toBe(
@@ -126,14 +136,20 @@ describe("charity names from donate.gg (user ask 2026-10-23)", () => {
     );
   });
 
-  it("shows 2️⃣ for two charities and lists both with their split in the tooltip", () => {
+  it("shows the first of several charities and +N, and lists each with its split in the tooltip", () => {
     const card = renderToStaticMarkup(<FeeBadge fee={two} word />);
-    expect(card).toContain(">2️⃣</span>");
-    expect(card).toContain(
-      'title="Creator fees go to Pandas International (60%) and St. Jude Children&#x27;s Research Hospital (40%)."',
-    );
+    const scope = renderToStaticMarkup(<FeeBadge fee={two} icon={12} className="scope-fee" />);
+    for (const html of [card, scope]) {
+      expect(html).toContain('<span class="charity-name">Pandas International</span>');
+      expect(html).toContain('<span class="charity-more">+1</span>');
+      expect(html).toContain(
+        'aria-label="Creator fees go to Pandas International (60%) and St. Jude Children&#x27;s Research Hospital (40%)."',
+      );
+    }
+    expect(scope).toContain("scope-fee");
+    expect(charityTipRows(two).every((r) => r.charity)).toBe(true);
     const square = creatorRewardFigure(two);
-    expect(square.value).toBe("2️⃣");
+    expect(square.value).toBe("Pandas International +1");
     expect(square.detail).toBe("2 charities");
     expect(square.title).toContain("Pandas International (60%)");
     expect(square.title).toContain("St. Jude Children's Research Hospital (40%)");

@@ -1,18 +1,12 @@
+import { MarketBar } from "../components/MarketBar";
+import { WatchlistPanel } from "../components/WatchlistPanel";
 import { SectionBoundary } from "../components/SectionBoundary";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type CuratedStats, type FeedStats, type Leaderboard, type MatchPage } from "../api";
+import { type CuratedStats, type Leaderboard, type MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { ScopeRowSkeletons, SkeletonCards } from "../components/Skeleton";
 import { introSeen, markIntroSeen } from "../intro";
-import {
-  ArrowRightIcon,
-  BrainIcon,
-  ChartIcon,
-  EyeOffIcon,
-  InfoIcon,
-  PaletteIcon,
-  RadarIcon,
-} from "../components/Icons";
+import { ArrowRightIcon, BrainIcon, EyeOffIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";
 import { prefetch } from "../cache";
 import { useLiveMarketCaps, usePolling, usePollingAll, useNow, useNudgeStream } from "../hooks";
 import { FEED_PAGE_SIZE, fillPage, joinPages, MAX_FILL_PAGES, MAX_READ_PAGES, nextDepth } from "../feedFill";
@@ -29,18 +23,11 @@ import { useHeldTokenIds } from "../heldTokens";
 import {
   AboutModal,
   CustomizeDrawer,
-  FeedStatsModal,
   loadAboutModal,
   ScopeBoard,
   SearchModal,
   useOpenedOnce,
 } from "../livePanels";
-
-/** Graded alerts below which the Stats button doesn't show a 2x rate (too early to mean much). */
-const MIN_TEASER = 10;
-
-/** The window the feed stats cover. */
-const STATS_HOURS = 24;
 
 /** This browser's "High conviction only" switch (the API takes it per request, not as a saved setting). */
 const HIGH_CONVICTION_KEY = "ts-feed-high-conviction";
@@ -109,6 +96,8 @@ export function LiveTab({
   const heldTokenIds = useHeldTokenIds();
   const [hiddenOpen, setHiddenOpen] = useState(false);
   const scope = view === "scope";
+  // Scope's held-still and failing reads, for the Scanning pill (user ask 2026-10-23).
+  const [scopeStatus, setScopeStatus] = useState({ paused: false, failing: false });
   // Scope has its own settings window (user ask 2026-10-18): Customize opens it while in Scope.
   const [scopeSettings, setScopeSettings] = useState<ScopeSettingsSection | null>(null);
   // Model calls narrowed to every model's high-conviction tier instead of the followed models.
@@ -119,7 +108,6 @@ export function LiveTab({
     setAboutOpen(false);
     markIntroSeen(walletAddress);
   };
-  const [statsOpen, setStatsOpen] = useState(false);
   const [customizing, setCustomizing] = useState(false);
   const closeCustomize = useCallback(() => setCustomizing(false), []);
   const look = useAppearance();
@@ -136,7 +124,6 @@ export function LiveTab({
   useEffect(() => registerCardSearch(openSearchQuery), [openSearchQuery]);
   // The windows' code loads on their first opening (livePanels.ts), and they stay mounted after.
   const aboutMounted = useOpenedOnce(aboutOpen);
-  const statsMounted = useOpenedOnce(statsOpen);
   const customizeMounted = useOpenedOnce(customizing);
   const searchMounted = useOpenedOnce(searchOpen);
   // "saved": the API mixes in model calls per this user's own switch and checked models; with
@@ -152,21 +139,14 @@ export function LiveTab({
   const morePaths = Array.from({ length: depth - 1 }, (_, i) => feedPath(i + 2));
   const morePages = usePollingAll<MatchPage>(morePaths, 30_000);
   const stats = usePolling<CuratedStats>("/curated/stats", 60_000);
-  const feedStats = usePolling<FeedStats>(`/matches/stats?hours=${STATS_HOURS}${hc}`, 30_000);
-  const fs = feedStats.data;
-  const hours = fs?.hours ?? STATS_HOURS;
   const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000);
   const lb = board.data;
   const modelsOn = lb?.showModelAlerts ?? true;
   // Settings' "Only alerts both caught": the API narrows the feed and its stats; this only words it.
   const bothOn = modelsOn && (lb?.bothOnly ?? false);
-  // A new alert changes the stats as well as the cards, so both refetch on a nudge.
-  const nudged = () => {
-    // Only the first page: the ones read ahead catch up on their own poll, and a burst of alerts
-    // must not refetch all of them each time.
-    feedPage.reload();
-    feedStats.reload();
-  };
+  // Only the first page refetches on a nudge: the ones read ahead catch up on their own poll, and
+  // a burst of alerts must not refetch all of them each time.
+  const nudged = () => feedPage.reload();
   const curatedLive = useNudgeStream("/curated/stream", nudged, modelsOn);
   const matchesLive = useNudgeStream("/matches/stream", nudged);
   const loadedPages = [feedPage.data, ...morePages.data];
@@ -276,19 +256,7 @@ export function LiveTab({
 
   return (
     <div className="stack">
-      <Suspense fallback={null}>
-        {statsMounted && (
-          <FeedStatsModal
-            open={statsOpen}
-            onClose={() => setStatsOpen(false)}
-            stats={fs ?? null}
-            hours={hours}
-            targets={t}
-            pollKey=""
-            highConviction={highConviction}
-          />
-        )}
-      </Suspense>
+      <MarketBar left={<WatchlistPanel />} />
       <Suspense fallback={null}>
         {customizeMounted && <CustomizeDrawer open={customizing} onClose={closeCustomize} />}
       </Suspense>
@@ -350,20 +318,6 @@ export function LiveTab({
             </div>
             <button
               type="button"
-              className="ghost stats-btn"
-              onClick={() => setStatsOpen(true)}
-              title={`Your feed's hit rates and best run over the last ${hours} hours`}
-            >
-              <ChartIcon size={14} />
-              Stats
-              {fs && fs.graded >= MIN_TEASER && fs.hit2xPct !== null && (
-                <span className={`num stats-teaser${feedStats.stale ? " stale" : ""}`}>
-                  2x {pct(fs.hit2xPct, 0)}
-                </span>
-              )}
-            </button>
-            <button
-              type="button"
               className={`ghost stats-btn${(scope ? scopeSettings !== null : customizing) ? " on" : ""}`}
               aria-expanded={scope ? scopeSettings !== null : customizing}
               onClick={() =>
@@ -414,7 +368,15 @@ export function LiveTab({
               onOpen={openSearch}
               title="Find any token TrenchScanner tracks by its contract address, ticker or name. Press / to open."
             />
-            <ScanStatus showJobs={isAdmin} feed={{ live: streamLive, idle: "Polling" }} />
+            <ScanStatus
+              showJobs={isAdmin}
+              feed={{
+                live: streamLive,
+                idle: "Polling",
+                paused: scope && scopeStatus.paused,
+                failing: scope ? scopeStatus.failing : !!feedPage.error,
+              }}
+            />
           </div>
         </header>
         {!scope && feedPage.error && !feedPage.data && (
@@ -434,6 +396,7 @@ export function LiveTab({
               heldTokenIds={heldTokenIds}
               settingsSection={scopeSettings}
               onSettings={setScopeSettings}
+              onStatus={setScopeStatus}
             />
           </Suspense>
         )}

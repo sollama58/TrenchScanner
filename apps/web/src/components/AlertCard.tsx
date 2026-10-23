@@ -21,19 +21,17 @@ import {
   ExternalIcon,
   EyeOffIcon,
   GiftIcon,
-  GlobeIcon,
   HeartIcon,
   WalletIcon,
   RobotIcon,
   SlidersIcon,
-  XLogoIcon,
 } from "./Icons";
 import { CardSearchButton } from "./CardSearchButton";
 import { WatchStar } from "./WatchStar";
 import { DeskRewardTokens } from "./DeskRewardTokens";
 import { FeeKolAvatar, FeeWalletTip, kolPictures } from "./FeeWalletTip";
 import { DexInfoLabel } from "../dexInfoLabel";
-import { XLinkPreview } from "./XLinkPreview";
+import { SocialLinks, socialLinks } from "./SocialLinks";
 import { useImagePreview } from "./ImagePreview";
 import { linkedCount, linkedCountText } from "../linkedCount";
 import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
@@ -55,6 +53,8 @@ import {
 } from "../tileTone";
 import { FilterGlyph } from "./FilterBadge";
 import { openTokenModal, refreshTokenModal } from "../tokenModal";
+
+export { socialLinks };
 
 /** Clicks on these inside a card do their own thing rather than open the token modal. */
 const OWN_CLICK = "a, button, input, select, textarea, label, summary, [role='button']";
@@ -824,23 +824,7 @@ export function AlertCard({
           )}
           {quickBuy("bottom-left")}
           {/* The coin's X and website, beside the copy button (user ask 2026-10-18). */}
-          {socials.length > 0 && (
-            <span className="card-socials">
-              {socials.map((l) => (
-                <XLinkPreview
-                  key={l.key}
-                  className="pill pill-icon pill-social"
-                  href={l.url}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  title={`${l.label}: ${l.url.replace(/^https:\/\//, "").replace(/\/$/, "")}`}
-                  aria-label={`Open the coin's ${l.label}`}
-                >
-                  <l.Icon size={11} />
-                </XLinkPreview>
-              ))}
-            </span>
-          )}
+          <SocialLinks links={socials} className="card-socials" />
           {fees && <FeeBadge fee={card.token.creatorFee} word />}
           {links && (show("links") || trade.length > 0) && (
             <nav className="card-links">
@@ -864,25 +848,6 @@ export function AlertCard({
       )}
     </article>
   );
-}
-
-/**
- * The coin's own X and website as the card footer's link pills (user ask 2026-10-18): only the
- * links it has, and only https ones, whatever the source stored.
- */
-export function socialLinks(token: Pick<Card["token"], "twitterUrl" | "websiteUrl">) {
-  const https = (u: string | null | undefined) => {
-    if (!u) return null;
-    try {
-      return new URL(u).protocol === "https:" ? u : null;
-    } catch {
-      return null;
-    }
-  };
-  return [
-    { key: "x", label: "X", Icon: XLogoIcon, url: https(token.twitterUrl) },
-    { key: "web", label: "Website", Icon: GlobeIcon, url: https(token.websiteUrl) },
-  ].filter((l): l is typeof l & { url: string } => l.url !== null);
 }
 
 /**
@@ -1060,13 +1025,6 @@ function recipientText(recipient: FeeRecipientShare): string {
   return name && label && name !== label ? `${name} (${label})` : name || label;
 }
 
-const KEYCAPS = ["0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
-
-/** A count as its keycap emoji, 2 as 2️⃣; past ten, the digits. */
-export function keycapCount(n: number): string {
-  return KEYCAPS[n] ?? String(n);
-}
-
 /**
  * The charities a charity coin pays, by name (user ask 2026-10-23). Recipients the API marked
  * as a charity's share; else the single charity name; else nobody.
@@ -1092,14 +1050,55 @@ export function feeCharities(
 }
 
 /**
- * What a charity coin shows in a small spot beside its heart (user ask 2026-10-23): the one
- * charity's name, which the spot cuts to fit, or a keycap count (2️⃣) when there are several.
- * The tooltip names each charity and its split. Null when no charity is known.
+ * What a charity coin shows beside its heart (user ask 2026-10-23): the first charity's name,
+ * which the spot cuts to fit, and "+2" for the others when there are several. The tooltip names
+ * each charity and its split. Null when no charity is known.
  */
 export function charityCompact(fee: Parameters<typeof feeCharities>[0]): string | null {
   const charities = feeCharities(fee);
   if (charities.length === 0) return null;
-  return charities.length === 1 ? charities[0]! : keycapCount(charities.length);
+  return charities.length === 1 ? charities[0]! : `${charities[0]} +${charities.length - 1}`;
+}
+
+/**
+ * The rows of a charity coin's styled tooltip: each charity first (with its share when the read
+ * gave one), then any other wallet the fee pays. A name with no recipient list is one row.
+ */
+export function charityTipRows(fee: Parameters<typeof feeCharities>[0]): FeeRecipientShare[] {
+  const listed = (fee?.recipients ?? []).filter((r) => r.label?.trim());
+  if (listed.length) return [...listed.filter((r) => r.charity), ...listed.filter((r) => !r.charity)];
+  return feeCharities(fee).map((label) => ({ label, bps: null, charity: true }));
+}
+
+/**
+ * A charity coin's pill (user ask 2026-10-23): a heart and the charity's name on one line, cut
+ * with an ellipsis where the row is short, "+2" when it pays several. Hover, focus or a tap
+ * opens a tooltip naming each charity in full with its share.
+ */
+export function CharityPill({
+  fee,
+  title,
+  className = "",
+}: {
+  fee: Parameters<typeof feeCharities>[0];
+  title: string;
+  className?: string;
+}) {
+  const names = feeCharities(fee);
+  const rows = charityTipRows(fee);
+  return (
+    <FeeWalletTip
+      recipients={rows}
+      fallback={title}
+      className={`charity-pill${className ? ` ${className}` : ""}`}
+    >
+      <span className="charity-heart" aria-hidden="true">
+        ❤️
+      </span>
+      <span className="charity-name">{names[0] ?? "Charity"}</span>
+      {names.length > 1 && <span className="charity-more">+{names.length - 1}</span>}
+    </FeeWalletTip>
+  );
 }
 
 function joinFeeNames(names: readonly string[]): string {
@@ -1230,6 +1229,15 @@ export function FeeBadge({
   ]
     .filter(Boolean)
     .join(" ");
+  if (fees.kind === "charity") {
+    // Its own pill: the heart and the charity's name (user ask 2026-10-23).
+    return (
+      <span className={`fee-badge fee-charity has-pill${className ? ` ${className}` : ""}`}>
+        {word && <span className="fee-word">FEES</span>}
+        <CharityPill fee={fee} title={fees.title} />
+      </span>
+    );
+  }
   if (fees.kind === "wallet") {
     // A wallet fee (user ask 2026-10-23): the wallet icon, each KOL's picture beside it, and a
     // styled tooltip naming every wallet we know, with its address and share.

@@ -274,9 +274,11 @@ interface SacrificeReport {
 }
 
 const PRICE_REFUSAL: Record<NonNullable<SacrificeReport["price"]["refusal"]>, string> = {
-  few_samples: "fewer than 10 samples in the last 5 minutes",
-  stale: "no sample in the last minute",
-  source_down: "one source has no sample in the last minute",
+  // The thresholds follow the mode: 10 samples and a minute at the 15-second cadence, fewer and
+  // longer while off, when the worker samples once a minute (user ask 2026-10-23: API audit bundle).
+  few_samples: "too few samples in the last 5 minutes",
+  stale: "no sample in the last 10 minutes",
+  source_down: "one source has no recent sample",
   sources_apart: "the two sources are more than 5% apart",
 };
 

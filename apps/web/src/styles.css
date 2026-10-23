@@ -43,6 +43,9 @@
   --bad: #d03b3b;
   --bad-ink: #ff8080;
   --bad-wash: rgba(239, 68, 68, 0.1);
+  /* A charity's pill (the creator fee goes to one): rose, apart from the red of a loss. */
+  --charity: #e05a8f;
+  --charity-ink: #f6a5c4;
   --info-wash: rgba(57, 135, 229, 0.12);
   --shadow: 0 1px 0 var(--highlight) inset, 0 12px 32px -18px rgba(0, 0, 0, 0.7);
   --radius: 16px;
@@ -86,6 +89,8 @@
     --bad-ink: #b42626;
     --warn-ink: #9a6700;
     --bad-wash: rgba(208, 59, 59, 0.08);
+    --charity: #d6467f;
+    --charity-ink: #a3235a;
     --info-wash: rgba(42, 120, 214, 0.09);
     --shadow: 0 1px 2px rgba(12, 14, 20, 0.04), 0 12px 32px -20px rgba(12, 14, 20, 0.25);
   }
@@ -122,6 +127,8 @@
   --bad-ink: #b42626;
   --warn-ink: #9a6700;
   --bad-wash: rgba(208, 59, 59, 0.08);
+  --charity: #d6467f;
+  --charity-ink: #a3235a;
   --info-wash: rgba(42, 120, 214, 0.09);
   --shadow: 0 1px 2px rgba(12, 14, 20, 0.04), 0 12px 32px -20px rgba(12, 14, 20, 0.25);
 }
@@ -419,6 +426,12 @@ input[type="checkbox"] {
   color: var(--ink-2);
   font-weight: 600;
 }
+.brand-name .brand-by {
+  color: var(--muted);
+  font-size: 0.72em;
+  font-weight: 600;
+  letter-spacing: 0;
+}
 .logo-mark {
   display: block;
 }
@@ -497,6 +510,13 @@ input[type="checkbox"] {
 }
 .status-pill.warn {
   color: var(--warn-ink);
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--border));
+  background: color-mix(in srgb, var(--warn) 9%, var(--surface-2));
+}
+.status-pill.bad {
+  color: var(--bad-ink);
+  border-color: color-mix(in srgb, var(--bad) 45%, var(--border));
+  background: var(--bad-wash);
 }
 /* The Scanning pill in each feed's header (components/ScanStatus.tsx) and its card: how the feed is
    updating, when each stage of the alert path last produced, then each job. */
@@ -578,11 +598,17 @@ input[type="checkbox"] {
 .status-tip-dot.idle {
   background: var(--muted);
 }
+.status-tip-dot.bad {
+  background: var(--bad);
+}
 .status-tip-val {
   text-align: right;
 }
 .status-tip-val.warn {
   color: var(--warn-ink);
+}
+.status-tip-val.bad {
+  color: var(--bad-ink);
 }
 .pulse {
   width: 7px;
@@ -590,6 +616,10 @@ input[type="checkbox"] {
   border-radius: 50%;
   background: currentColor;
   animation: pulse 2s infinite;
+}
+/* Held still: a steady dot, not a heartbeat. */
+.pulse.still {
+  animation: none;
 }
 /* Opacity only, so it runs on the compositor. An animated box-shadow repainted the blurred topbar
    on every frame, for as long as the page was open. */
@@ -2687,30 +2717,62 @@ legend {
   color: var(--brand-ink);
   background: var(--surface-3);
 }
-.landing-flag {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px 12px;
-  margin: 0 0 10px;
-  padding: 8px 12px;
-  border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--border));
-  border-radius: var(--radius-s);
-  background: color-mix(in srgb, var(--warn) 8%, var(--surface-2));
-  color: var(--ink-2);
-  font-size: 13px;
-}
-.landing-flag strong {
-  color: var(--warn-ink);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
 .landing-live {
-  margin-top: 22px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+/* The hero's flame, with "This is Fine" turning around it (user ask 2026-10-23). */
+.this-is-fine {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  margin: 0 0 10px -6px;
+}
+.this-is-fine-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  animation: this-is-fine-spin 14s linear infinite;
+}
+.this-is-fine-ring text {
+  fill: var(--brand-ink);
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+.this-is-fine-flame {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 40px;
+  line-height: 1;
+  transform-origin: 50% 80%;
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--brand-b) 55%, transparent));
+  animation: this-is-fine-flicker 1.6s ease-in-out infinite alternate;
+}
+@keyframes this-is-fine-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes this-is-fine-flicker {
+  0% {
+    transform: scale(1) rotate(-3deg);
+  }
+  50% {
+    transform: scale(1.07, 1.12) rotate(2deg);
+  }
+  100% {
+    transform: scale(0.97, 1.03) rotate(-1deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .this-is-fine-ring,
+  .this-is-fine-flame {
+    animation: none;
+  }
 }
 .landing-live-note {
   margin: 0;
@@ -5235,15 +5297,6 @@ button.small-btn {
 }
 .pill-icon {
   padding: 3px 6px;
-}
-/* The coin's own X and website on a card's title row: quiet until hovered. */
-a.pill-social {
-  text-decoration: none;
-}
-a.pill-social:hover,
-a.pill-social:focus-visible {
-  color: var(--brand-ink);
-  border-color: color-mix(in srgb, var(--brand-a) 40%, transparent);
 }
 
 /* Model alerts on/off */
@@ -10888,12 +10941,62 @@ button.link.exit-plan-link {
   gap: 6px;
   flex: none;
 }
-/* The coin's X and website, beside the copy and Sage buttons. */
-.card-socials {
-  display: flex;
+/* The coin's own X, Telegram and website (SocialLinks): the same quiet square icon buttons on a
+   feed card, a Scope row and the token view. One box, one icon size, one gap, centred on the line
+   beside them; never shrunk or wrapped apart. */
+.social-links {
+  --social-box: 24px;
+  display: inline-flex;
   align-items: center;
+  align-self: center;
   gap: 4px;
   flex: none;
+  line-height: 0;
+}
+.social-link {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  box-sizing: border-box;
+  width: var(--social-box);
+  height: var(--social-box);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--muted);
+  text-decoration: none;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+.social-link .icon,
+.social-link svg {
+  display: block;
+  flex: none;
+}
+.social-link:hover,
+.social-link:focus-visible {
+  color: var(--ink);
+  text-decoration: none;
+  border-color: color-mix(in srgb, var(--brand-a) 45%, var(--border));
+}
+/* Scope rows are denser: a smaller box, the same icon. */
+.scope-socials {
+  --social-box: 22px;
+}
+/* On a feed card the box is the copy button's height, so the footer reads as one row of chips. */
+.card-socials {
+  --social-box: 25px;
+}
+@media (max-width: 640px) {
+  .card-socials {
+    --social-box: 31px;
+  }
+  .cards[data-phone-cols="2"] .card-socials {
+    --social-box: 27px;
+  }
 }
 /* Where the creator fee goes, in the theme's (or the reader's own) colors. */
 .fee-badge {
@@ -10911,7 +11014,7 @@ button.link.exit-plan-link {
   stroke-width: 1.75;
 }
 .fee-charity .icon {
-  color: var(--bad-ink);
+  color: var(--charity-ink);
 }
 .fee-rewards .icon {
   color: var(--good-ink);
@@ -10941,8 +11044,89 @@ button.link.exit-plan-link {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.fee-charity .fee-caption {
-  color: var(--bad-ink);
+/* A charity coin's pill (user ask 2026-10-23): a heart and the charity's name on one line, in a
+   rose wash. The name is the part that gives way: it ends in an ellipsis before the trade links
+   or the token's name are cut, and the tooltip has it whole. */
+.fee-badge.has-pill {
+  flex: 0 100 auto;
+  /* Room for the heart and a few letters (and the +2): a name on one line has no smaller
+     natural size to stop at. */
+  min-width: 5.6em;
+  max-width: 100%;
+}
+.fee-badge.has-pill:has(.charity-more) {
+  min-width: 7.8em;
+}
+.charity-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 7px 0 5px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--charity) 32%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--charity) 17%, transparent),
+    color-mix(in srgb, var(--charity) 7%, transparent)
+  );
+  color: var(--charity-ink);
+  font-family: var(--font);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 16px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.charity-pill:hover {
+  border-color: color-mix(in srgb, var(--charity) 55%, transparent);
+}
+.charity-heart {
+  flex: none;
+  font-size: 9.5px;
+  line-height: 1;
+}
+.charity-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 13em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.charity-more {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--charity) 20%, transparent);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 13px;
+  font-variant-numeric: tabular-nums;
+}
+/* The links take a zero basis on feed cards, so the pill does too: the pill takes most of the
+   room the row has left, up to its whole name (never below the heart and a few letters), and
+   the first trade link keeps room for its whole word ("Terminal", not "Termina"). */
+.cards .card-foot > .fee-badge.has-pill {
+  flex: 3 1 0;
+  max-width: max-content;
+}
+.cards .card-foot > .fee-badge.has-pill ~ .card-links {
+  min-width: 5.5em;
+}
+/* The Pro view's Creator reward square on a charity coin: the heart and the name, in rose. */
+.tm-fig-charity {
+  color: var(--charity-ink);
+}
+.tm-fig-charity > .charity-heart {
+  font-size: 15px;
+}
+.fee-wallet-tip-row.charity .fee-wallet-tip-icon {
+  background: color-mix(in srgb, var(--charity) 16%, var(--surface-2));
+  font-size: 13px;
+}
+.fee-wallet-tip-row.charity .fee-wallet-tip-pct {
+  color: var(--charity-ink);
 }
 .fee-rewards .fee-caption {
   color: var(--good-ink);
@@ -19370,11 +19554,13 @@ body:has(.util-toast) .bug-fab {
   /* Small chips keep their look; an invisible margin takes the tap. */
   .mint,
   .tm-quick a,
+  .social-link,
   .wm-address {
     position: relative;
   }
   .mint::after,
   .tm-quick a::after,
+  .social-link::after,
   .wm-address::after,
   .quick-buy::after {
     content: "";
@@ -20190,26 +20376,15 @@ body:has(.util-toast) .bug-fab {
 .scope-tabs {
   display: none;
 }
+/* Wide screens: the bar only carries the New pill (the Live/Paused state is the header's Scanning
+   pill), so it takes no room while there is nothing new. */
+@media (min-width: 900px) {
+  .scope-bar.quiet {
+    display: none;
+  }
+}
 .scope-tabs .num {
   margin-left: 2px;
-}
-.scope-hold {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.scope-hold::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--good);
-}
-.scope.held .scope-hold {
-  color: var(--warn-ink);
-}
-.scope.held .scope-hold::before {
-  background: var(--warn);
 }
 .scope-new {
   margin-left: auto;
@@ -20298,25 +20473,43 @@ body:has(.util-toast) .bug-fab {
   font-weight: 700;
   text-transform: uppercase;
 }
-.scope-mark {
-  position: absolute;
-  right: -5px;
-  top: 50%;
-  bottom: auto;
-  transform: translateY(-50%);
-  padding: 1px 4px;
+/* The result mark, left of the market cap on the same line (user ask 2026-10-23): a compact pill
+   in the result's colour, centred on the figure. */
+.scope-fig.scope-now {
+  align-items: center;
+}
+.scope-result {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  box-sizing: border-box;
+  min-width: calc(18px * var(--scope-t, 1));
+  height: calc(18px * var(--scope-t, 1));
+  padding: 0 4px;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface-solid);
-  font-size: 10px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: calc(10px * var(--scope-t, 1));
   font-weight: 700;
-  line-height: 1.2;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  white-space: nowrap;
 }
-.scope-mark.good {
+.scope-result.good {
   color: var(--good-ink);
+  border-color: color-mix(in srgb, var(--good) 40%, transparent);
+  background: var(--good-wash);
 }
-.scope-mark.bad {
+.scope-result.bad {
   color: var(--bad-ink);
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+  background: var(--bad-wash);
+}
+.scope-result .result-stop {
+  font-size: 1.15em;
+  line-height: 1;
 }
 .scope-main {
   min-width: 0;
@@ -20465,9 +20658,6 @@ body:has(.util-toast) .bug-fab {
   .scope-tabs {
     display: inline-flex;
   }
-  .scope-hold {
-    font-size: 11px;
-  }
   /* One column at a time (user report 2026-10-19): the page scrolls its rows rather than a box
      inside the page, under a bar of tabs that sticks below the top bar. Swipe for the next. */
   .scope-bar {
@@ -20544,10 +20734,6 @@ body:has(.util-toast) .bug-fab {
     flex: 1;
     white-space: nowrap;
     min-height: 36px;
-  }
-  /* Its own line under the tabs, with the New pill at its end. */
-  .scope-hold {
-    flex: 1 1 60%;
   }
   .scope-new {
     padding: 6px 14px;
@@ -20889,18 +21075,6 @@ body:has(.util-toast) .bug-fab {
   background: var(--good-wash);
   font-weight: 600;
 }
-.scope-link {
-  display: inline-grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  color: var(--muted);
-}
-.scope-link:hover {
-  color: var(--ink);
-  background: var(--surface-3);
-}
 .scope-figs {
   justify-content: center;
   gap: 2px;
@@ -20921,25 +21095,51 @@ body:has(.util-toast) .bug-fab {
   margin-left: 0;
   max-width: none;
 }
-/* With the pills there, the figures run down beside the chips rather than making the row taller.
-   Not with a quick-buy pill, which sits in that bottom corner, and not on phones, whose chips
-   keep to one clipped line and would lose one to the figures. */
+/* With the pills there, the figures run down beside the chips rather than making the row taller,
+   and the chips sit right under the name line: the figures column used to push them down, leaving
+   an empty band under the name (user report 2026-10-23). A quick-buy pill sits in the bottom
+   corner under the figures, which keep room for it. Not on phones, whose chips keep to one clipped
+   line and would lose one to the figures. */
 @media (min-width: 900px) {
-  .scope-row:not(:has(> .quick-buy)):has(.scope-fig-pills) > .scope-avatar {
+  .scope-row:has(.scope-fig-pills) > .scope-avatar {
     grid-area: 1 / 1;
   }
-  .scope-row:not(:has(> .quick-buy)):has(.scope-fig-pills) > .scope-main {
+  .scope-row:has(.scope-fig-pills) > .scope-main {
     grid-area: 1 / 2;
   }
-  .scope-row:not(:has(> .quick-buy)):has(.scope-fig-pills) > .scope-figs {
+  .scope-row:has(.scope-fig-pills) > .scope-figs {
     grid-column: 3;
     grid-row: 1 / span 2;
     align-self: start;
   }
-  .scope-row:not(:has(> .quick-buy)):has(.scope-fig-pills) > .scope-chips {
+  .scope-row:has(.scope-fig-pills) > .scope-chips {
     grid-column: 1 / 3;
     grid-row: 2;
-    align-self: end;
+    align-self: start;
+  }
+  .scope-row:has(.scope-fig-pills):has(> .quick-buy) .scope-chips {
+    padding-right: 0;
+  }
+  /* The quick-buy pill's height, under the figures (bottom: 6px, plus a little air). */
+  .scope-row:has(.scope-fig-pills):has(> .quick-buy.qb-s) > .scope-figs {
+    padding-bottom: 22px;
+  }
+  .scope-row:has(.scope-fig-pills):has(> .quick-buy.qb-m) > .scope-figs {
+    padding-bottom: 26px;
+  }
+  .scope-row:has(.scope-fig-pills):has(> .quick-buy.qb-l) > .scope-figs {
+    padding-bottom: 32px;
+  }
+  /* With only the market cap and its pills (no At or Peak lines) the figures fit beside the
+     ticker and name, so the chips take the row's full width rather than wrapping beside an
+     empty corner (the result mark beside the market cap widens that column). */
+  .scope-row:not(:has(> .quick-buy)):has(.scope-fig-pills):not(:has(.scope-figs > .scope-fig:not(.scope-now)))
+    > .scope-figs {
+    grid-row: 1;
+  }
+  .scope-row:not(:has(> .quick-buy)):has(.scope-fig-pills):not(:has(.scope-figs > .scope-fig:not(.scope-now)))
+    > .scope-chips {
+    grid-column: 1 / -1;
   }
 }
 /* The Dex pill and the age under the figures make that column the row's tallest wherever it
@@ -20953,6 +21153,13 @@ body:has(.util-toast) .bug-fab {
 }
 .scope-row:has(.scope-fig-pills) > .scope-main {
   align-content: flex-start;
+}
+/* The name gives way to its fee and link icons instead of sending them onto a line of their own
+   (a wide market cap or a result mark narrows the column on a computer too). */
+.scope-name {
+  flex: 1 1 0;
+  min-width: 3em;
+  max-width: max-content;
 }
 @media (max-width: 899px) {
   /* The name gives way to its fee and link icons instead of sending them onto a third line. */
@@ -21718,17 +21925,6 @@ dialog.tm-modal.tm-terminal::backdrop {
   justify-content: flex-end;
   flex-wrap: nowrap;
   align-self: center;
-}
-/* The coin's own socials and Exit, together at the header's corner. */
-.tm-modal.tm-terminal .tm-corner {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.tm-modal.tm-terminal .tm-corner .tm-quick {
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  margin: 0;
 }
 .tm-modal.tm-terminal .tm-head > .tm-figs {
   grid-area: figs;
@@ -22906,6 +23102,22 @@ dialog.tm-modal.tm-terminal::backdrop {
   width: auto;
   gap: 4px;
 }
+/* A charity's pill (user ask 2026-10-23) sits on the name's line. A zero basis keeps it on that
+   line however long the charity's name is: it takes the room the line has left, up to its whole
+   name, and cuts the name short (never below the heart and a few letters) rather than wrap. */
+.scope-fee.has-pill {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  height: auto;
+  flex: 1 1 0;
+  max-width: max-content;
+  font-size: calc(10px * var(--scope-t, 1));
+}
+.scope-fee .charity-pill {
+  font-size: calc(10px * var(--scope-t, 1));
+  line-height: calc(15px * var(--scope-t, 1));
+}
 
 /* "as of 14:05" on a cached report (components/AsOf.tsx). */
 .as-of {
@@ -23324,5 +23536,815 @@ button.watchlist-remove:active:not(:disabled) {
   }
   .watchlist-hour {
     display: none;
+  }
+}
+/* ---------- Market bar (Live tab, user ask 2026-10-23): watchlist | prices + trench stats | positions ---------- */
+.mkt-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+.mkt-cell {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+}
+/* The side cells hold a ~170px content area under their heading (WatchlistPanel fits it). */
+.mkt-left,
+.mkt-right {
+  min-height: 214px;
+}
+.mkt-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.mkt-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.mkt-head .eyebrow {
+  margin: 0;
+  min-width: 0;
+}
+.mkt-window {
+  font-family: var(--mono);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.mkt-window::before {
+  content: "·";
+  margin-right: 6px;
+}
+.mkt-vs {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Empty states and the watchlist's placeholder. */
+.mkt-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  padding: 8px 10px 4px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
+.mkt-empty p {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 260px;
+}
+.mkt-empty strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+.mkt-empty .faint {
+  font-size: 12px;
+  line-height: 1.4;
+}
+.mkt-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--muted);
+}
+.mkt-ghost {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: min(180px, 80%);
+}
+.mkt-ghost span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 14px;
+}
+.mkt-ghost span::before {
+  content: "★";
+  font-size: 11px;
+  line-height: 1;
+  color: var(--series-4);
+  opacity: 0.55;
+}
+.mkt-ghost span::after {
+  content: "";
+  flex: 1;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--surface-3);
+}
+.mkt-ghost span:nth-child(2)::after {
+  margin-right: 22%;
+}
+.mkt-ghost span:nth-child(3)::after {
+  margin-right: 40%;
+}
+
+/* Middle: the four tickers over the trench stats. */
+.mkt-mid {
+  padding: 10px 12px 8px;
+  gap: 8px;
+}
+.mkt-prices {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.mkt-ticker {
+  min-width: 0;
+  padding: 7px 8px 6px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.mkt-ticker-top {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 6px;
+  align-items: center;
+}
+.mkt-logo {
+  grid-row: 1;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.mkt-logo.mono {
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 800;
+  color: #fff;
+  background: var(--surface-3);
+}
+.mkt-logo.t-btc {
+  background: #f7931a;
+}
+.mkt-logo.t-sol {
+  background: linear-gradient(135deg, #9945ff, #14f195);
+}
+.mkt-logo.t-pump {
+  background: #53d38c;
+}
+.mkt-logo.t-stonk {
+  background: var(--series-1);
+}
+.mkt-sym {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mkt-price {
+  grid-column: 1 / -1;
+  font-size: 14px;
+  font-weight: 650;
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mkt-ticker-chg {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 2px;
+}
+.mkt-chg {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+.mkt-chg .num {
+  font-weight: 600;
+}
+.mkt-chg-label {
+  color: var(--muted);
+  font-size: 10px;
+}
+.mkt-chg.up .num {
+  color: var(--good-ink);
+}
+.mkt-chg.down .num {
+  color: var(--bad-ink);
+}
+.mkt-skel {
+  display: inline-block;
+  width: 58px;
+  height: 12px;
+  vertical-align: middle;
+}
+
+.mkt-trench {
+  position: relative;
+}
+.mkt-trench-face {
+  border-radius: var(--radius-s);
+  padding: 6px 4px 2px;
+  margin: 0 -4px;
+  cursor: help;
+  outline: none;
+  transition: background 0.15s;
+}
+.mkt-trench.open .mkt-trench-face,
+.mkt-trench-face:hover {
+  background: var(--highlight);
+}
+.mkt-trench-face:focus-visible {
+  box-shadow: 0 0 0 2px var(--brand-b);
+}
+.mkt-trench .mkt-head {
+  margin-bottom: 4px;
+  padding: 0 4px;
+}
+.mkt-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  gap: 2px 6px;
+}
+.mkt-stat {
+  min-width: 0;
+  padding: 3px 4px;
+}
+.mkt-stat dt {
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.mkt-stat dd {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.mkt-stat-v {
+  font-size: 15px;
+  font-weight: 650;
+}
+.mkt-arrow {
+  font-size: 9px;
+  line-height: 1;
+  color: var(--muted);
+}
+.mkt-arrow.good {
+  color: var(--good-ink);
+}
+.mkt-arrow.bad {
+  color: var(--bad-ink);
+}
+
+/* The trench stats' in-depth view. */
+.mkt-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 45;
+  width: min(540px, calc(100vw - 24px));
+  padding: 14px 16px 12px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow:
+    0 1px 0 var(--highlight) inset,
+    0 24px 48px -16px rgba(0, 0, 0, 0.55);
+  animation: mkt-pop-in 0.14s ease-out;
+}
+.mkt-pop::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  transform: translateX(-50%) rotate(45deg);
+  background: var(--surface-solid);
+  border-left: 1px solid var(--border-strong);
+  border-top: 1px solid var(--border-strong);
+}
+@keyframes mkt-pop-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -4px);
+  }
+}
+.mkt-pop-head div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 10px;
+}
+.mkt-pop-head strong {
+  font-size: 13.5px;
+}
+.mkt-pop-head .faint {
+  font-size: 11.5px;
+}
+.mkt-pop-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.mkt-pop-table th,
+.mkt-pop-table td {
+  padding: 6px 4px;
+  text-align: right;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.mkt-pop-table thead th {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-top: 0;
+  border-bottom: 1px solid var(--border-strong);
+}
+.mkt-pop-table tbody th {
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-2);
+}
+.mkt-pop-table tbody tr:hover {
+  background: none;
+}
+.mkt-pop-table tbody th,
+.mkt-pop-table tbody td {
+  border-bottom: 0;
+}
+.mkt-pop-table tbody tr + tr > * {
+  border-top: 1px solid var(--grid);
+}
+.mkt-pop-table td.now {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--ink);
+  padding-right: 10px;
+}
+.mkt-pop-table thead th.now {
+  color: var(--ink-2);
+  padding-right: 10px;
+}
+.mkt-delta {
+  color: var(--ink-2);
+}
+.mkt-delta > :first-child,
+.mkt-delta-arrow {
+  font-weight: 650;
+}
+.mkt-delta.good,
+.mkt-delta.bad {
+  font-weight: 650;
+}
+.mkt-delta.good {
+  color: var(--good-ink);
+}
+.mkt-delta.bad {
+  color: var(--bad-ink);
+}
+.mkt-delta-arrow {
+  font-size: 8.5px;
+  margin-right: 3px;
+  vertical-align: 1px;
+}
+.mkt-delta-then {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.mkt-pop-foot {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* Right: the open positions. */
+.mkt-pos {
+  list-style: none;
+  margin: 0 -6px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 172px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.mkt-pos-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mkt-pos-row:hover:not(:disabled) {
+  background: var(--highlight);
+}
+.mkt-pos-row:disabled {
+  cursor: default;
+}
+.mkt-pos-row.skel {
+  cursor: default;
+}
+.mkt-pos-img {
+  width: 30px;
+  height: 30px;
+  border-width: 1px;
+  cursor: pointer;
+}
+.mkt-pos-img.placeholder {
+  font-size: 10.5px;
+}
+.mkt-pos-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.mkt-pos-name strong {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mkt-pos-name .faint {
+  font-size: 11px;
+}
+.mkt-pos-pnl {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.25;
+}
+.mkt-pos-pct {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.mkt-pos-sol {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* A tablet: the prices and stats across the top, the two sides under them. */
+@media (max-width: 1099px) {
+  .mkt-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .mkt-mid {
+    grid-column: 1 / -1;
+    order: -1;
+  }
+  .mkt-trench {
+    display: block;
+  }
+  .mkt-stats {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+/* A phone: the middle alone, compact, and the sides folded under it. */
+.mkt-bar.phone {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mkt-bar.phone .mkt-mid {
+  padding: 8px 8px 4px;
+  gap: 4px;
+}
+.mkt-bar.phone .mkt-prices {
+  gap: 4px;
+}
+.mkt-bar.phone .mkt-ticker {
+  padding: 5px 6px 4px;
+}
+.mkt-bar.phone .mkt-ticker-top {
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: 4px;
+}
+.mkt-bar.phone .mkt-logo {
+  width: 14px;
+  height: 14px;
+  font-size: 8px;
+}
+.mkt-bar.phone .mkt-sym {
+  font-size: 10px;
+}
+.mkt-bar.phone .mkt-price {
+  font-size: 12.5px;
+  margin-top: 1px;
+}
+.mkt-bar.phone .mkt-chg {
+  font-size: 10px;
+  line-height: 1.35;
+}
+.mkt-bar.phone .mkt-chg-label {
+  font-size: 9px;
+}
+.mkt-bar.phone .mkt-stats {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 4px;
+}
+.mkt-bar.phone .mkt-stat {
+  padding: 2px 4px;
+}
+.mkt-bar.phone .mkt-stat dt {
+  font-size: 10px;
+}
+.mkt-bar.phone .mkt-stat-v {
+  font-size: 13.5px;
+}
+.mkt-bar.phone .mkt-vs {
+  display: none;
+}
+.mkt-bar.phone .mkt-pop {
+  position: fixed;
+  top: auto;
+  bottom: 12px;
+  left: 12px;
+  right: 12px;
+  width: auto;
+  transform: none;
+  max-height: 70vh;
+  overflow-y: auto;
+  animation: none;
+}
+.mkt-bar.phone .mkt-pop::before {
+  display: none;
+}
+.mkt-bar.phone .mkt-pop-table th,
+.mkt-bar.phone .mkt-pop-table td {
+  padding: 5px 3px;
+}
+.mkt-bar.phone .mkt-pop-table {
+  font-size: 11.5px;
+}
+.mkt-folds {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+.mkt-fold {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+}
+/* Side by side while folded; an opened one takes the full width, and so does the other. */
+.mkt-folds:has(.mkt-fold[open]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.mkt-fold summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+  cursor: pointer;
+  list-style: none;
+}
+.mkt-fold summary::-webkit-details-marker {
+  display: none;
+}
+.mkt-fold-chev {
+  margin-left: auto;
+  transition: transform 0.15s;
+}
+.mkt-fold[open] .mkt-fold-chev {
+  transform: rotate(180deg);
+}
+.mkt-fold-body {
+  padding: 0 10px 10px;
+}
+.mkt-fold-body .mkt-head {
+  display: none;
+}
+.mkt-fold-body .mkt-empty {
+  min-height: 120px;
+}
+/* The Watchlist in the bar's left third: the cell's height, scrolling past it. In a phone's fold
+   the disclosure already names it. */
+.mkt-left > .watchlist-panel {
+  flex: 1 1 auto;
+  --watchlist-max-h: 190px;
+}
+.mkt-fold-body .watchlist-head {
+  display: none;
+}
+.mkt-fold-body .watchlist-panel {
+  --watchlist-max-h: 220px;
+}
+/* The Feed stats button beside a section's main action (Filters) and over the Models hero. */
+.section-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 8px;
+}
+.hero-actions {
+  display: flex;
+  align-items: flex-start;
+  flex-shrink: 0;
+}
+/* Scope's chosen columns (user ask 2026-10-23): up to six side by side, scrolling sideways when
+   they don't fit at a readable width; phones keep one at a time under the tabs. */
+@media (min-width: 900px) {
+  .scope-strip {
+    grid-template-columns: repeat(var(--scope-cols, 3), minmax(320px, 1fr));
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  .scope-col {
+    scroll-snap-align: start;
+  }
+}
+.scope-col-head h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope-tabs button {
+  max-width: 16em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Phones: the tabs keep their names and scroll sideways, with the filter button beside them. */
+@media (max-width: 899px) {
+  .scope-bar {
+    flex-wrap: nowrap;
+  }
+  .scope-tabs {
+    flex: 1 1 0;
+  }
+  .scope-tabs button {
+    flex: 1 0 auto;
+    max-width: 11em;
+  }
+  .scope-bar-filter,
+  .scope-new {
+    flex: none;
+  }
+}
+.scope-empty-pick {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.scope-empty-pick p {
+  margin: 0;
+}
+.scope-tab-name {
+  display: inline-block;
+  max-width: 11em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+/* The Columns tab of Scope settings: one card per column, in board order. */
+.scope-colset {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.scope-colset-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.scope-colset-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.scope-colset-num {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--link) 16%, transparent);
+  color: var(--link);
+  font-size: 12px;
+  font-weight: 700;
+}
+.scope-colset-kind {
+  flex: 1;
+  min-width: 0;
+}
+.scope-colset-kind select {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.scope-colset-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.scope-colset-tools .icon-btn:disabled {
+  opacity: 0.35;
+}
+.scope-colset-remove:hover:not(:disabled) {
+  color: var(--bad-ink);
+}
+.scope-colset-hint {
+  margin: 0 0 0 34px;
+}
+.scope-colset-picks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-left: 34px;
+}
+.scope-colset-picks > p {
+  margin: 0;
+}
+.scope-pill-note {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.scope-colset-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.scope-colset-add .small-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+@media (max-width: 420px) {
+  .scope-colset-hint,
+  .scope-colset-picks {
+    margin-left: 0;
   }
 }

@@ -106,9 +106,9 @@ export const MANUAL_RUN_EXCLUDED: Readonly<Partial<Record<HeartbeatJob, string>>
   "label-regrade": "Already runs every minute until history is re-graded.",
   "candle-peaks": "Already runs every minute.",
   "trade-tape": "Already runs every minute.",
-  "asdf-price": "Already runs every 15 seconds.",
+  "asdf-price": "Already runs every 15 seconds (once a minute while the Sacrifice is off).",
   "trade-settlement": "Already runs every 30 seconds.",
-  "trade-canary": "Already runs every 5 minutes.",
+  "trade-canary": "Already runs every 15 minutes.",
   "free-access":
     "Deletes accounts for good. It runs every few minutes, an hour after a period ends or is switched off.",
 };

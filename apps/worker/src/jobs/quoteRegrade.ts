@@ -10,6 +10,7 @@ import {
 } from "@trenchscanner/core";
 import { GRADE_FIELDS, gradeOfReplay } from "./labelRegradeJob.js";
 import { QUOTE_REGRADE_MINTS } from "./quoteRegradeMints.js";
+import { CandlesUnavailableError } from "./minuteCandleReader.js";
 
 const logger = createLogger("quote-regrade");
 
@@ -133,7 +134,8 @@ export async function runQuoteRegrade(
         throttled = true;
         break;
       }
-      logger.warn("candle read failed", { mint: token.mintAddress, error: String(err) });
+      if (!(err instanceof CandlesUnavailableError))
+        logger.warn("candle read failed", { mint: token.mintAddress, error: String(err) });
       continue;
     }
     counts.coins! += 1;

@@ -236,7 +236,9 @@ export class GeckoTerminalClient {
    * (GECKOTERMINAL_FREE_PER_MINUTE), and spends a paid credit only when that gate has no
    * slot right now; with the day's paid budget spent, it waits for the free one (user report
    * 2026-10-23, 9q57: a chart opened after the charts lane ran out had no candles at all, the
-   * backfill waiting out the day). The same pages either way. Peaks' reads stay paid.
+   * backfill waiting out the day). The same pages either way. Peaks and the re-grades too (API
+   * audit 2026-10-23): their store-first read still bought a paid top-up for every quiet coin, so
+   * the Peaks lane was spent minutes into each day and the job skipped the rest of it.
    */
   async poolMinuteCandles(
     pool: string,
@@ -248,7 +250,7 @@ export class GeckoTerminalClient {
     const deadline = Date.now() + waitMs;
     const lane = coinGeckoLaneOf(currentApiFeature());
     let free = false;
-    if (this.keyed && lane === "charts") {
+    if (this.keyed && (lane === "charts" || lane === "peaks")) {
       free = await this.freeGate.acquire(Date.now()).then(
         () => true,
         () => false,

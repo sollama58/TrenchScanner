@@ -318,6 +318,10 @@ const envSchema = z.object({
     .default("true")
     .transform((v) => v === "true"),
   CURVE_TAPE_MAX_AGE_MINUTES: z.coerce.number().positive().default(15),
+  // Coins a seat alerted on are followed to this age instead, on the watchlist or not, so their
+  // charts hold 1-second candles for the stretch people look at (user decision 2026-10-23: about
+  // 600 alerts a day, a few dozen followed at once). After graduation their pool is followed to it too.
+  CURVE_TAPE_ALERTED_MINUTES: z.coerce.number().positive().default(120),
   // 500 was full on the first cycles live (2026-10-17) at ~6.6 stream credits a scan for the whole
   // socket: the cost follows how often curves change, not how many are followed.
   CURVE_TAPE_MAX_MINTS: z.coerce.number().int().positive().default(1_000),
@@ -325,9 +329,13 @@ const envSchema = z.object({
   // tenth of the day's cap of headroom) the curves come off the stream and the
   // CURVE_TAPE_POLL_MAX_MINTS nearest the band are read every CURVE_TAPE_POLL_SECONDS instead
   // (1 credit per 100 curves a read), until the spend is back under its share.
-  // 50,000 since 2026-10-22 (was 100,000). Past the cap, only the 100 curves nearest the band
-  // are polled every CURVE_TAPE_POLL_SECONDS until the day's pace allows the stream again.
-  CURVE_TAPE_STREAM_CREDITS_PER_DAY: z.coerce.number().nonnegative().default(50_000),
+  // 100,000 since 2026-10-23 (user decision, API audit): 50,000 from 2026-10-22 was the binding
+  // limit once the tape followed graduated and alerted coins' PumpSwap pools (#974, #983; the
+  // pools are most of the stream's bytes, ~55 credits a minute in prod), and the pools come off
+  // the stream at 60% of the pace (curveTape.ts POOL_PACE_SHARE) before the curves do. Past the
+  // cap, only the 100 curves nearest the band are polled every CURVE_TAPE_POLL_SECONDS until the
+  // day's pace allows the stream again.
+  CURVE_TAPE_STREAM_CREDITS_PER_DAY: z.coerce.number().nonnegative().default(100_000),
   CURVE_TAPE_POLL_SECONDS: z.coerce.number().min(1).default(5),
   CURVE_TAPE_POLL_MAX_MINTS: z.coerce.number().int().nonnegative().default(100),
   // The price path recorder (worker's jobs/pricePathRecorder.ts, user ask 2026-10-18): when the curve
@@ -365,6 +373,14 @@ const envSchema = z.object({
   // a third of the worker's background budget with COINGECKO_API_KEY (26 at the default 200).
   CANDLE_BACKFILL_GECKO_PER_MINUTE: z.coerce.number().int().nonnegative().optional(),
   CANDLE_BACKFILL_MAX_PAGES: z.coerce.number().int().positive().default(60),
+  // The chart's chain fill (worker's jobs/candleChainFill.ts, user decision 2026-10-23): the
+  // stretches of a charted or called coin's first CANDLE_CHAIN_FILL_WINDOW_MINUTES no source holds at
+  // 1 second are read off the chain (Helius getTransactionsForAddress, 10 credits a page of 100
+  // trades), up to the day's credits (0 turns it off), pages a one-minute run, and pages a coin a day.
+  CANDLE_CHAIN_FILL_CREDITS_PER_DAY: z.coerce.number().int().nonnegative().default(20_000),
+  CANDLE_CHAIN_FILL_PAGES_PER_RUN: z.coerce.number().int().positive().default(5),
+  CANDLE_CHAIN_FILL_MAX_PAGES_PER_COIN: z.coerce.number().int().positive().default(30),
+  CANDLE_CHAIN_FILL_WINDOW_MINUTES: z.coerce.number().positive().default(120),
   // The token chart's live tail (api's liveCurve.ts, user ask 2026-10-17: charts on the stream's
   // second-by-second updates): while a young coin's chart is open, the API follows its bonding curve
   // on its own Helius websocket (an update per changed block) and the chart draws every change,
@@ -405,6 +421,13 @@ const envSchema = z.object({
   // FLOOR (unpriced assets count as nothing), so a bar set high would misread illiquid-bag
   // holders as empty.
   WALLET_HOLDINGS_MIN_USD: z.coerce.number().positive().default(25),
+  // Launches found through Jupiter's lists carry no metadata URI, so while Pump.fun refuses they
+  // reach the models with no description, socials or creator. For the coins in the band each
+  // cycle, at most this many on-chain URI reads (DAS getAsset, 10 credits each), then the launch
+  // JSON through the IPFS gateways as the stream's launches get (launchDetails.ts). In-band coins
+  // only (user decision 2026-10-23): every Jupiter launch would be about 0.5 M credits a day.
+  // 0 turns it off.
+  LAUNCH_METADATA_DAS_PER_CYCLE: z.coerce.number().int().nonnegative().default(20),
   // Cap on UNCACHED holdings lookups per scan cycle. Sized against the DAS rate limit rather
   // than the RPC one - DAS is billed and throttled separately, and far more tightly (10 req/s
   // against 50 on the tier this runs on), so this budget is the guard that keeps a busy cycle
@@ -473,15 +496,16 @@ const envSchema = z.object({
   SNIPER_MAX_REFRESH_ACCOUNTS_PER_CYCLE: z.coerce.number().int().positive().default(500),
   // How long a holdings reading stays usable. Unlike wallet earliest-activity, this answer
   // decays - a portfolio changes with every trade - so it carries a TTL instead of being cached
-  // forever. 3 hours (was 1, user decision 2026-10-22): a wallet that stays in a top 10 is
-  // re-priced a third as often. 6 hours would save little more (one more halving of those
-  // re-reads, on the order of 80 credits a day per long-watched coin) and would let a wallet
-  // that dumped its other bags still count as funded for most of a coin's life before a call.
-  WALLET_HOLDINGS_CACHE_TTL_MINUTES: z.coerce.number().positive().default(180),
+  // forever. 6 hours (was 3 from 2026-10-22, 1 before; user decision 2026-10-23, API audit): the
+  // 40-wallet cap below binds every cycle, so the longer TTL buys coverage, not credits: freed
+  // slots go to the next group, more coins get known wallet checks and more event moments open.
+  // A wallet that dumped its other bags can count as funded up to 6 hours on; the input is at
+  // chance for the learners (AUC 0.51), and the 70% empty-wallet gate moves a point or two.
+  WALLET_HOLDINGS_CACHE_TTL_MINUTES: z.coerce.number().positive().default(360),
   // How long the cleanup job keeps a WalletHoldingsCache row. A row past the TTL above is never
-  // read again, so this only needs slack over it. 6 hours is twice the 3-hour TTL. 0 keeps rows
+  // read again, so this only needs slack over it. 12 hours is twice the 6-hour TTL. 0 keeps rows
   // the 90 days the other RPC caches get. Owner-approved 2026-10-04.
-  WALLET_HOLDINGS_CACHE_RETENTION_HOURS: z.coerce.number().nonnegative().default(6),
+  WALLET_HOLDINGS_CACHE_RETENTION_HOURS: z.coerce.number().nonnegative().default(12),
   // How long a "mint/freeze authority still active" answer is trusted before being re-checked
   // (see the worker's mintAuthority.ts). Revocation is permanent and cached forever; this TTL
   // covers only the reversible direction, which used to be re-queried every single scan cycle
@@ -1320,15 +1344,20 @@ const envSchema = z.object({
         return false;
       }
     }, "HELIUS_SENDER_URL must be an https URL on a helius-rpc.com host"),
-  // The trade canary (worker's tradeCanaryJob.ts, on the scanner): every 5 minutes it builds a Pro
-  // trade - never signed, never sent - for the preflight's probe wallet on SOL->USDC, a graduated
-  // Pump.fun coin and a curve coin, pings Sender and asks the trading RPCs for a block height;
-  // pipeline-watch tells the admins after two failed runs in a row. About 30 Helius credits a run.
-  // "false" switches it off.
+  // The trade canary (worker's tradeCanaryJob.ts, on the scanner): every
+  // TRADE_CANARY_INTERVAL_MINUTES it builds a Pro trade - never signed, never sent - for the
+  // preflight's probe wallet on SOL->USDC, a graduated Pump.fun coin and a curve coin, pings Sender
+  // and asks the trading RPCs for a block height; pipeline-watch tells the admins after two failed
+  // runs in a row. About 30 Helius credits a run. "false" switches it off.
   TRADE_CANARY_ENABLED: z
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  // 15, not 5 (user ask 2026-10-23: API audit bundle, B1): two thirds of the canary's ~8.6k Helius
+  // credits and ~1.7k Jupiter calls a day. A broken trade path now reaches the admins after up to
+  // 30 minutes (two failed runs) instead of 10. pipeline-watch's "no run" notice and /health's
+  // staleness scale with it.
+  TRADE_CANARY_INTERVAL_MINUTES: z.coerce.number().min(1).default(15),
   // The graduated coin the canary buys when recent data names none (a quiet day): any liquid
   // Pump.fun coin's mint. Empty: that probe is skipped then.
   TRADE_CANARY_PUMP_MINT: z.string().optional().default(""),

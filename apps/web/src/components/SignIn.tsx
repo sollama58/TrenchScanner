@@ -11,7 +11,6 @@ import {
 } from "../wallet";
 import { privyConfig, privyOAuthReturn, type PrivyConfig } from "../privyBridge";
 import { cardHideSet, DEFAULT_APPEARANCE } from "../appearance";
-import { scopeSampleCard } from "../scopeSample";
 import { AlertCard } from "./AlertCard";
 import { ClockIcon, FlameIcon, TrophyIcon } from "./Icons";
 import { InstallAppButton } from "./InstallApp";
@@ -144,13 +143,11 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
 function LandingIntro() {
   return (
     <div className="landing-intro">
-      <p className="eyebrow brand-eyebrow">
-        <FlameIcon size={13} /> Trading terminal
-      </p>
-      <h1>A trading terminal for Solana tokens.</h1>
+      <ThisIsFine />
+      <h1>A trading app for the average Joe.</h1>
       <p className="lead">
         Screen a Solana token, open its chart, and trade from the coin window. Model alerts come with the
-        terminal. They are graded in public, and they are a bonus.
+        terminal.
       </p>
       {/* Phones and tablets without the app installed only: up top, where it is seen first. */}
       <InstallAppButton />
@@ -160,11 +157,8 @@ function LandingIntro() {
         </span>
         <div>
           <p className="landing-token-name">$ASDFASDFA</p>
-          <p>Burn it for access. A separate burn buys Burn Credits for coin and wallet lookups.</p>
-          <p>
-            The 250 largest holders, and a wallet an admin grants, get Pro Mode: trade from the coin window,
-            with no TrenchScanner fee.
-          </p>
+          <p>Burn it for access.</p>
+          <p>The 250 largest holders get Pro Mode: trade from the coin window, with no TrenchScanner fee.</p>
         </div>
       </div>
       <ul className="landing-points">
@@ -180,6 +174,30 @@ function LandingIntro() {
           </p>
         </li>
       </ul>
+    </div>
+  );
+}
+
+/**
+ * The hero's mark (user ask 2026-10-23): a flickering flame with "This is Fine" circling it. Still
+ * under reduced motion (styles.css).
+ */
+function ThisIsFine() {
+  return (
+    <div className="this-is-fine" role="img" aria-label="This is fine">
+      <svg className="this-is-fine-ring" viewBox="0 0 100 100" aria-hidden>
+        <defs>
+          <path id="this-is-fine-path" d="M50,50 m-37,0 a37,37 0 1,1 74,0 a37,37 0 1,1 -74,0" />
+        </defs>
+        <text>
+          <textPath href="#this-is-fine-path" textLength="230" lengthAdjust="spacing">
+            THIS IS FINE • THIS IS FINE •
+          </textPath>
+        </text>
+      </svg>
+      <span className="this-is-fine-flame" aria-hidden>
+        🔥
+      </span>
     </div>
   );
 }
@@ -358,23 +376,12 @@ export function SignInPanel({
   );
 }
 
-/**
- * The settings sample (scopeSample.ts), with its outbound links removed so the landing example
- * cannot be mistaken for a coin you can open.
- */
-function exampleAlertCard(now: number): Card {
-  const card = scopeSampleCard(now);
-  card.token.twitterUrl = null;
-  card.token.websiteUrl = null;
-  return card;
-}
-
 type ShowcaseBest = { match: Card | null; windowHours: number };
 type ShowcaseLatest = { matches: readonly Card[]; delayMinutes?: number };
 
 /**
- * The signed-out explainer: a made-up card in the default feed look, then the real guest showcase
- * (the default models' best alert of the last 24 hours, else the latest alert) when it loads.
+ * The signed-out explainer: the real guest showcase (the default models' best alert of the last 24
+ * hours, else the latest alert) in the default feed look. No made-up card (user ask 2026-10-23).
  */
 export function LandingShowcase({
   best,
@@ -385,7 +392,6 @@ export function LandingShowcase({
   latest: { data: ShowcaseLatest | null; error: Error | null };
   now: number;
 }) {
-  const example = exampleAlertCard(now);
   const live = best.data ? (best.data.match ?? latest.data?.matches[0] ?? null) : null;
   const isBest = live !== null && live === best.data?.match;
   const waiting = !best.data && !best.error;
@@ -396,16 +402,6 @@ export function LandingShowcase({
     <section className="landing-example" aria-labelledby="landing-example-title">
       <p className="eyebrow">Alerts</p>
       <h2 id="landing-example-title">What an alert looks like</h2>
-      <div className="landing-sample">
-        <p className="landing-flag" role="note">
-          <strong>Example</strong>
-          <span>Made-up coin, in the default card. Not a live alert.</span>
-        </p>
-        <div className="cards signin-cards">
-          <AlertCard card={example} now={now} hide={DEFAULT_CARD_HIDE} detail={false} links={false} />
-        </div>
-      </div>
-
       <div className="landing-live">
         {live ? (
           <>
@@ -435,12 +431,12 @@ export function LandingShowcase({
         ) : (
           <p className="muted small landing-live-note" role="status">
             {waiting
-              ? "Checking the last 24 hours for a real alert. The card above is an example."
+              ? "Checking the last 24 hours for a real alert."
               : latestPending
-                ? "No standout alert in that window yet. Checking the latest alert. The card above is an example."
+                ? "No standout alert in that window yet. Checking the latest alert."
                 : best.error || latest.error
-                  ? "The live feed didn't answer. The card above is an example, not a recent alert."
-                  : "Nothing to show from the guest feed right now. The card above is an example."}
+                  ? "The live feed didn't answer. Try again in a minute."
+                  : "Nothing to show from the guest feed right now."}
           </p>
         )}
       </div>

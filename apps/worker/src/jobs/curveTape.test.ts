@@ -34,6 +34,7 @@ function setup(
   ages: {
     maxAgeMinutes?: number;
     featureMaxAgeMinutes?: number;
+    alertedMaxAgeMinutes?: number;
     newLaunches?: () => string[];
     screenLaunches?: (mints: string[]) => Promise<string[]>;
   } = {},
@@ -190,6 +191,22 @@ describe("curve tape", () => {
     expect(curvePathOf(MINT, NOW + 6_000).curveCoveredSec).toBeNull();
   });
 
+  it("follows an alerted coin to its own longer age, on the watchlist or not", () => {
+    const s = setup(NOW - 1_000, { alertedMaxAgeMinutes: 120 });
+    stop = s.stop;
+    const hourOld = { ...young, launchedAt: new Date(NOW - 60 * 60_000) };
+    // An hour old and only on the watchlist: past the tape's 15 minutes.
+    followYoungCurves([hourOld], NOW);
+    expect(s.stream.watch).not.toHaveBeenCalled();
+    // Alerted on: followed, off the watchlist too.
+    followYoungCurves([], NOW, [hourOld]);
+    expect(s.stream.watch).toHaveBeenCalledWith(`curve:${MINT}`, [expect.any(String)], NOW, "account");
+    expect([...curveTapeView.mints()]).toEqual([MINT]);
+    // Past the alerted age: let go.
+    followYoungCurves([], NOW + 61 * 60_000, [hourOld]);
+    expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
+  });
+
   // A deploy used to start the day's count over, handing the stream its whole share again.
   it("carries the day's stream spend a previous process recorded, from today only", async () => {
     const s = setup(NOW - 1_000);
@@ -295,6 +312,28 @@ describe("curve tape", () => {
       expect(tape.prior).toMatchObject({ at: NOW + 10_000, price: 2 });
       expect(tape.streamFrom).toBe(NOW + 10_000);
       expect(takeCurveTapeStats(NOW + 17_000)).toMatchObject({ pools: 1, poolsStreamed: 1, poolUpdates: 2 });
+    });
+
+    it("lets the pools go before the curves when the stream nears its pace", async () => {
+      const s = graduated(NOW + 1_000);
+      stop = s.stop;
+      followYoungCurves([young], NOW);
+      await round(NOW);
+      s.complete();
+      await round(NOW + 5_000);
+      await round(NOW + 10_000);
+      expect(s.stream.watch).toHaveBeenCalledWith(
+        `curve-pool:base:${MINT}`,
+        [VAULTS.base],
+        NOW + 10_000,
+        "account",
+      );
+      // Noon, 45k of a 100k day: under the curves' pace (60k), past the pools' share of it (36k).
+      seedCurveStreamSpend(45_000, new Date(NOW + 10_000), NOW + 10_000);
+      await round(NOW + 15_000);
+      expect(s.stream.unwatch).toHaveBeenCalledWith(`curve-pool:base:${MINT}`);
+      expect(s.stream.unwatch).toHaveBeenCalledWith(`curve-pool:account:${MINT}`);
+      expect(takeCurveTapeStats(NOW + 15_000)).toMatchObject({ paused: 0, poolsPaused: 1 });
     });
 
     it("records one side alone after a moment, and asks again until the pool exists", async () => {

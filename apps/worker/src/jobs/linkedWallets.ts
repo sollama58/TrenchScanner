@@ -49,7 +49,8 @@ const FUNDER_RECHECK_MS = 7 * DAY_MS;
 const NONE_READ_AGAIN_BEFORE = new Date("2026-10-13T22:00:00Z");
 
 /**
- * A wallet's funder, null when it has none ("none", "empty", or "busy" while unreadable), when it
+ * A wallet's funder, null when it has none ("none" or "empty"; a "busy" wallet the sorted lookup
+ * can't reach is left out, so the reading is missing), when it
  * was funded (ms epoch, null when not known), and until when that holds: its newest transaction at
  * the read plus WALLET_DORMANT_GAP_MS, the earliest it could sit idle and be paid again by someone
  * new (the revived farm on mdj29p8m...pump, 2026-10-13).
@@ -69,7 +70,11 @@ const hotFunders = new Map<string, { hot: boolean; atMs: number }>();
 const MAX_HOT_ENTRIES = 50_000;
 const failureBackoff = new FailureBackoff(2, 20, { helius: true });
 
-/** Calls sent since the last takeLinkedWalletStats(), by method. */
+/**
+ * Calls asked for since the last takeLinkedWalletStats(), by method. A signatures page the client
+ * shares with the freshness read or another call (HeliusClient.signaturePages, Helius audit
+ * 2026-10-23, N-1) is counted here as asked; the scan's rpcCalls has what was sent.
+ */
 let calls = { getSignaturesForAddress: 0, getTransaction: 0, getTransactionsForAddress: 0 };
 
 /**
@@ -146,6 +151,8 @@ export async function resolveLinkedWallets(
   // that did not revive are what they were, so the stored answer is handed to the read and only
   // the 1-credit page is paid for it (getFundersBatch knownOf).
   const knownOf = new Map<string, KnownFunder>();
+  /** Stored as busy while the sorted lookup is unusable: not read, not in the map. */
+  const busyUnreadable = new Set<string>();
   if (fromTable.length > 0) {
     const rows = await prisma.walletFunder.findMany({
       where: { wallet: { in: fromTable } },
@@ -161,15 +168,20 @@ export async function resolveLinkedWallets(
     });
     // A wallet stored as "busy" (more history than one signatures page) is read again whenever
     // the sorted lookup can reach its first transaction: busy wallets count too (user decision
-    // 2026-10-13). Without that lookup it stays unlinked, as before.
+    // 2026-10-13). Without that lookup its funder is unknown, so it is left out of the map and the
+    // coin's reading is missing rather than a number (user decision 2026-10-23): it used to read
+    // as unlinked and not exchange-funded, biased low on the bots and traders busy wallets mostly
+    // are, through every Helius stand-down. Reading it again now would only answer busy.
     const rereadBusy = helius.gtfaUsable;
     for (const r of rows) {
-      if (r.status === "busy" && rereadBusy) continue;
+      if (r.status === "busy") {
+        if (!rereadBusy) busyUnreadable.add(r.wallet);
+        continue;
+      }
       if (r.status === "none" && r.checkedAt < NONE_READ_AGAIN_BEFORE) continue;
       // Idle a week since the read (or read before that was kept): it may have been paid again.
-      // A busy row without the sorted lookup stays as it is: reading it again would answer busy.
       const validUntilMs = validUntil(r.lastActivityAt);
-      if (validUntilMs <= now && (r.status !== "busy" || rereadBusy)) {
+      if (validUntilMs <= now) {
         if (r.status === "found" || r.status === "none")
           knownOf.set(r.wallet, { funder: r.funder, amountSol: r.amountSol, fundedAt: r.fundedAt });
         continue;
@@ -177,8 +189,7 @@ export async function resolveLinkedWallets(
       const fundedAtMs = r.fundedAt?.getTime() ?? null;
       funderOf.set(r.wallet, r.funder);
       fundedAtOf.set(r.wallet, fundedAtMs);
-      if (r.status !== "busy")
-        settledFunders.remember(r.wallet, { funder: r.funder, fundedAtMs, validUntilMs });
+      settledFunders.remember(r.wallet, { funder: r.funder, fundedAtMs, validUntilMs });
     }
   }
 
@@ -188,6 +199,8 @@ export async function resolveLinkedWallets(
   for (const g of groups) {
     const needed = walletsOf(g).filter((w) => !funderOf.has(w) && !queued.has(w));
     if (needed.length === 0) continue;
+    // A group with a wallet nobody can read now stays unread: its reading is missing either way.
+    if (needed.some((w) => busyUnreadable.has(w))) continue;
     if (needed.some((w) => failureBackoff.blocked(w, now))) continue;
     if (toFetch.length + needed.length > opts.maxNewLookups) continue;
     for (const w of needed) {
@@ -219,13 +232,14 @@ export async function resolveLinkedWallets(
       failureBackoff.succeed(wallet);
       const funder = r.status === "found" ? r.funder : null;
       const fundedAtMs = r.status === "found" ? (r.fundedAt?.getTime() ?? null) : null;
-      funderOf.set(wallet, funder);
-      fundedAtOf.set(wallet, fundedAtMs);
       // Without its newest transaction (the sorted lookup alone, or an empty history) the read
       // time stands in: these are holders, so it is minutes off at most.
       const lastActivityAt = ("lastActivityAt" in r ? r.lastActivityAt : undefined) ?? new Date(now);
-      // A "busy" answer is only for now: read again once the sorted lookup is back.
+      // A "busy" answer is only for now: the wallet's funder is unknown, so it stays out of the map
+      // (the reading is missing) and is read again once the sorted lookup is back.
       if (r.status !== "busy") {
+        funderOf.set(wallet, funder);
+        fundedAtOf.set(wallet, fundedAtMs);
         settledFunders.remember(wallet, { funder, fundedAtMs, validUntilMs: validUntil(lastActivityAt) });
       }
       rows.push({

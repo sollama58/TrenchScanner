@@ -2,7 +2,9 @@ import {
   createLogger,
   fetchLaunchMetadata,
   forEachWithConcurrency,
+  prisma,
   type DiscoveredCoin,
+  type HeliusClient,
   type PumpFunClient,
 } from "@trenchscanner/core";
 import type { StreamEvent } from "../discovery/pumpPortalStream.js";
@@ -20,6 +22,8 @@ export interface LaunchDetailStats {
   fromPumpFun: number;
   /** Pump.fun's single-coin read failed or had no such coin; the launch's metadata JSON answered. */
   fromMetadata: number;
+  /** In-band coins whose URI came off the chain (DAS getAsset) and whose metadata JSON answered. */
+  fromDas: number;
   /** Neither answered. */
   missing: number;
   /** Not looked up: too many already in flight. */
@@ -30,6 +34,7 @@ const emptyStats = (): LaunchDetailStats => ({
   asked: 0,
   fromPumpFun: 0,
   fromMetadata: 0,
+  fromDas: 0,
   missing: 0,
   dropped: 0,
 });
@@ -43,6 +48,7 @@ const ASKED_MAX = 20_000;
 /** Test hook. */
 export function resetLaunchDetails(): void {
   asked.clear();
+  askedOnChain.clear();
   inFlight = 0;
   stats = emptyStats();
 }
@@ -130,4 +136,76 @@ async function lookUp(
   } catch {
     return null;
   }
+}
+
+/** In-band coins whose URI was read off the chain, each once (a miss stays a miss). */
+const askedOnChain = new Set<string>();
+
+export interface BandMetadataDeps {
+  helius: Pick<HeliusClient, "getAssetMetadataUri">;
+  /** Of `mints`, the coins whose description was never recorded (the Token row's is null). */
+  pending?: (
+    mints: readonly string[],
+  ) => Promise<{ mintAddress: string; symbol: string | null; name: string | null }[]>;
+  fetchMetadata?: typeof fetchLaunchMetadata;
+}
+
+/**
+ * The description, socials and creator of in-band coins that have none recorded, through their
+ * on-chain metadata URI (Helius DAS getAsset, 10 credits) and the launch JSON on the IPFS gateways.
+ * Launches found through Jupiter's lists carry no URI, so with Pump.fun refusing (2026-10-22 on)
+ * they reached the models with none of this (41 of 43 launch-detail asks a cycle "missing"). In-band
+ * coins only, `perCycle` at most, each mint once (user decision 2026-10-23). Not awaited by the
+ * scan: the rows are filled in when the answers land (addNewMintsToWatchlist's detail backfill).
+ */
+export async function fillBandMetadata(
+  mints: readonly string[],
+  perCycle: number,
+  deps: BandMetadataDeps,
+  save: (coins: DiscoveredCoin[]) => Promise<unknown>,
+): Promise<void> {
+  if (perCycle <= 0 || mints.length === 0) return;
+  const fresh = [...new Set(mints)].filter((m) => !askedOnChain.has(m));
+  if (fresh.length === 0) return;
+  const pending = await (deps.pending ?? pendingTokens)(fresh);
+  const todo = pending.slice(0, perCycle);
+  if (todo.length === 0) return;
+  if (askedOnChain.size + todo.length > ASKED_MAX) askedOnChain.clear();
+  for (const t of todo) askedOnChain.add(t.mintAddress);
+  stats.asked += todo.length;
+  const fetchMetadata = deps.fetchMetadata ?? fetchLaunchMetadata;
+  const found: DiscoveredCoin[] = [];
+  await forEachWithConcurrency(todo, CONCURRENCY, async (token) => {
+    const uri = await deps.helius.getAssetMetadataUri(token.mintAddress);
+    if (uri === "failed") {
+      // Nothing answered: ask again another cycle.
+      askedOnChain.delete(token.mintAddress);
+      stats.missing += 1;
+      return;
+    }
+    if (uri === null) {
+      stats.missing += 1;
+      return;
+    }
+    try {
+      const coin = await fetchMetadata(token.mintAddress, uri);
+      if (!coin) {
+        stats.missing += 1;
+        return;
+      }
+      stats.fromDas += 1;
+      found.push({ ...coin, symbol: token.symbol ?? coin.symbol, name: token.name ?? coin.name });
+    } catch (err) {
+      logger.debug("launch metadata read failed", { mint: token.mintAddress, error: String(err) });
+      stats.missing += 1;
+    }
+  });
+  if (found.length > 0) await save(found);
+}
+
+async function pendingTokens(mints: readonly string[]) {
+  return prisma.token.findMany({
+    where: { mintAddress: { in: [...mints] }, description: null },
+    select: { mintAddress: true, symbol: true, name: true },
+  });
 }

@@ -28,6 +28,19 @@ export type MinuteCandleReader = Pick<PumpFunClient, "minuteCandles" | "fiveMinu
  */
 export const COINGECKO_DAY_SPENT = "coingecko-daily-budget";
 
+/**
+ * No source could say whether the coin has candles: Pump.fun was paused or failed, the store holds
+ * nothing and GeckoTerminal was absent or knew none of the coin's pools. Callers retry later; it is
+ * not Pump.fun's "not a Pump.fun coin" null, which the Peaks job used to take it for and parked the
+ * coin for good (28 of 30 coins a run on 2026-10-23, with the trainer missing the CoinGecko key).
+ */
+export class CandlesUnavailableError extends Error {
+  constructor(mint: string, why: string) {
+    super(`no candle source could answer for ${mint}: ${why}`);
+    this.name = "CandlesUnavailableError";
+  }
+}
+
 /** After Pump.fun refuses a read (403), its candles are not asked again for this long. */
 export const PUMP_REFUSED_PAUSE_MS = 10 * 60_000;
 /** How long a GeckoTerminal page may wait for its budget before the read counts as throttled. */
@@ -102,6 +115,8 @@ export function minuteCandleReader(deps: MinuteCandleReaderDeps): MinuteCandleRe
     const pump = () => (five ? deps.pumpFun.fiveMinuteCandles(mint) : deps.pumpFun.minuteCandles(mint));
     const gecko = deps.gecko;
     let pumpError: unknown = null;
+    /** Pump.fun answered, and said the coin is not one of its own. */
+    let pumpSaysNoCoin = false;
     if (now() >= refusedUntil) {
       try {
         const candles = await pump();
@@ -110,6 +125,7 @@ export function minuteCandleReader(deps: MinuteCandleReaderDeps): MinuteCandleRe
           return candles;
         }
         // Not a Pump.fun coin: the store or its own pair on GeckoTerminal may still have it.
+        pumpSaysNoCoin = true;
       } catch (err) {
         if (err instanceof HttpError && err.status === 403) {
           refusedUntil = now() + PUMP_REFUSED_PAUSE_MS;
@@ -139,18 +155,25 @@ export function minuteCandleReader(deps: MinuteCandleReaderDeps): MinuteCandleRe
       stats.store += 1;
       return toCandles(stored.closes, five);
     }
+    // Only Pump.fun's own answer says a coin has no candles; without it, nothing answering is a
+    // read to retry, not a verdict.
+    const none = (why: string): null => {
+      if (pumpSaysNoCoin) return null;
+      throw new CandlesUnavailableError(mint, why);
+    };
     if (!gecko) {
       // Nothing stored and nothing else to ask: Pump.fun's refusal stands, as before.
       if (pumpError) throw pumpError;
-      return null;
+      return none("Pump.fun paused after a 403, the store empty, no CoinGecko key");
     }
     const token = await tokenOf(mint);
     const pools = poolsOf(mint, token ?? { launchpad: null, launchedAt: null, pairAddress: null });
-    if (pools.length === 0) return stored.closes.size > 0 ? toCandles(stored.closes, five) : null;
+    if (pools.length === 0)
+      return stored.closes.size > 0 ? toCandles(stored.closes, five) : none("no pools to ask");
     if (stored.closes.size === 0) {
       const candles = await geckoCandles(gecko, mint, pools, five ? 5 : 1, nowMs);
       if (candles !== null) stats.gecko += 1;
-      return candles;
+      return candles ?? none("GeckoTerminal knows none of the coin's pools");
     }
     // The store's history, its newest stretch from one page on the coin's own pool.
     for (const pool of pools) {

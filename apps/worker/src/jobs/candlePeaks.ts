@@ -10,7 +10,7 @@ import {
   type PumpFunClient,
 } from "@trenchscanner/core";
 import { JobFailure, type JobRunMeta } from "../scheduler.js";
-import { COINGECKO_DAY_SPENT } from "./minuteCandleReader.js";
+import { CandlesUnavailableError, COINGECKO_DAY_SPENT } from "./minuteCandleReader.js";
 
 const logger = createLogger("candle-peaks");
 
@@ -190,6 +190,8 @@ export async function runCandlePeaksJob(
     lowered: 0,
     raised: 0,
     noCandles: 0,
+    /** No source could answer now (CandlesUnavailableError): read again next time, not parked. */
+    unavailable: 0,
     implausible: 0,
     failed: 0,
   };
@@ -209,9 +211,12 @@ export async function runCandlePeaksJob(
         budgetSpent = err.url === COINGECKO_DAY_SPENT;
         break;
       }
-      counts.failed += 1;
-      lastError = String(err).slice(0, 200);
-      logger.warn("candle read failed", { mint: watch.token.mintAddress, error: String(err) });
+      if (err instanceof CandlesUnavailableError) counts.unavailable += 1;
+      else {
+        counts.failed += 1;
+        lastError = String(err).slice(0, 200);
+        logger.warn("candle read failed", { mint: watch.token.mintAddress, error: String(err) });
+      }
       await prisma.peakWatch.update({
         where: { tokenId: watch.tokenId },
         data: { nextCheckAt: new Date(now() + RETRY_MS) },

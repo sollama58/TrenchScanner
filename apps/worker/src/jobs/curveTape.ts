@@ -69,6 +69,11 @@ export interface CurveTapeConfig {
    * null for coins past it. Defaults to maxAgeMinutes.
    */
   featureMaxAgeMinutes?: number;
+  /**
+   * Age to which a coin a seat alerted on is followed, on the watchlist or not, for the chart's
+   * 1-second candles (CURVE_TAPE_ALERTED_MINUTES, user decision 2026-10-23). Defaults to maxAgeMinutes.
+   */
+  alertedMaxAgeMinutes?: number;
   maxMints: number;
   streamCreditsPerDay: number;
   pollSeconds: number;
@@ -94,6 +99,8 @@ interface Followed {
   readAt: number | null;
   /** The coin's launch (or first sighting), ms epoch. */
   bornAt: number;
+  /** Followed to this age (ms): longer for an alerted coin. */
+  maxAgeMs: number;
 }
 
 type PoolPart = "base" | "quote" | "account";
@@ -139,6 +146,15 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let busy = false;
 /** The stream is off for the rest of the pace: its credits ran past their share of the day. */
 let paused = false;
+/**
+ * The pools' subscriptions are off: the stream is past POOL_PACE_SHARE of its pace. A graduated
+ * coin's pool (three accounts, most of the stream's bytes; #974 and #983 follow alerted coins' pools
+ * for two hours) is let go before the curves are, so the young curves' 1-second bars and the
+ * scoring that reads them keep going (API audit 2026-10-23).
+ */
+let poolsPaused = false;
+/** The share of the stream's pace the pools may take before they are let go. */
+export const POOL_PACE_SHARE = 0.6;
 let day = "";
 /** The stream's bytes today: credits are figured on the total, as a single update rounds to none. */
 let dayStreamBytes = 0;
@@ -283,7 +299,7 @@ function graduate(mint: string, state: CurveState, now: number): void {
   pools.set(mint, {
     address,
     vaults: null,
-    until: Math.max(f.bornAt + cfg.maxAgeMinutes * 60_000, now + POOL_FOLLOW_MS),
+    until: Math.max(f.bornAt + f.maxAgeMs, now + POOL_FOLLOW_MS),
     readAt: null,
     base: null,
     quote: null,
@@ -296,7 +312,7 @@ function graduate(mint: string, state: CurveState, now: number): void {
 }
 
 function watchPool(mint: string, p: PoolFollowed, now: number): void {
-  if (!p.vaults || paused) return;
+  if (!p.vaults || poolsPaused) return;
   stream?.watch(poolKeyOf("base", mint), [p.vaults.base], now, "account");
   stream?.watch(poolKeyOf("quote", mint), [p.vaults.quote], now, "account");
   stream?.watch(poolKeyOf("account", mint), [p.address], now, "account");
@@ -308,7 +324,7 @@ function unwatchPool(mint: string): void {
 
 /** From when the stream has covered all of a pool (both vaults and the account), or null. */
 function poolCoveredSince(mint: string, p: PoolFollowed, now: number): number | null {
-  if (!p.vaults || paused || !stream) return null;
+  if (!p.vaults || poolsPaused || !stream) return null;
   const since = [
     stream.coveredSince(poolKeyOf("base", mint), p.vaults.base, now),
     stream.coveredSince(poolKeyOf("quote", mint), p.vaults.quote, now),
@@ -328,29 +344,38 @@ function dropPool(mint: string, save = true): void {
   poolTape.forget(mint);
 }
 
+/** A coin as followYoungCurves reads it. */
+interface TrackedCoin {
+  mintAddress: string;
+  launchedAt: Date | null;
+  firstSeenAt: Date;
+  launchpad: string | null;
+}
+
 /**
  * The scan's watchlist this cycle, in its order: the young Pump.fun coins in it are followed (up
- * to CURVE_TAPE_MAX_MINTS), and the ones that left it or aged out are dropped.
+ * to CURVE_TAPE_MAX_MINTS), and the ones that left it or aged out are dropped. `alerted`: coins a
+ * seat alerted on lately, followed to alertedMaxAgeMinutes whether on the watchlist or not, after it.
  */
 export function followYoungCurves(
-  tracked: readonly {
-    mintAddress: string;
-    launchedAt: Date | null;
-    firstSeenAt: Date;
-    launchpad: string | null;
-  }[],
+  tracked: readonly TrackedCoin[],
   now = Date.now(),
+  alerted: readonly TrackedCoin[] = [],
 ): void {
   if (!cfg) return;
   const maxAgeMs = cfg.maxAgeMinutes * 60_000;
+  const alertedAgeMs = Math.max(maxAgeMs, (cfg.alertedMaxAgeMinutes ?? 0) * 60_000);
+  const isAlerted = new Set(alerted.map((t) => t.mintAddress));
   const wanted = new Map<string, number>();
   const bornAtOf = new Map<string, number>();
-  for (const t of tracked) {
+  for (const t of [...tracked, ...alerted]) {
     if (wanted.size >= cfg.maxMints) break;
+    if (wanted.has(t.mintAddress)) continue;
     if (t.launchpad === STONKS_LAUNCHPAD || done.has(t.mintAddress)) continue;
-    if (now - (t.launchedAt ?? t.firstSeenAt).getTime() > maxAgeMs) continue;
+    const bornAt = (t.launchedAt ?? t.firstSeenAt).getTime();
+    if (now - bornAt > (isAlerted.has(t.mintAddress) ? alertedAgeMs : maxAgeMs)) continue;
     wanted.set(t.mintAddress, wanted.size);
-    bornAtOf.set(t.mintAddress, (t.launchedAt ?? t.firstSeenAt).getTime());
+    bornAtOf.set(t.mintAddress, bornAt);
   }
   for (const mint of followed.keys()) if (!wanted.has(mint)) drop(mint, false);
   for (const [mint, rank] of wanted) {
@@ -358,10 +383,11 @@ export function followYoungCurves(
     if (!f) {
       const curve = pumpCurveAddressOf(mint);
       if (!curve) continue;
-      f = { curve, rank, readAt: null, bornAt: bornAtOf.get(mint) ?? now };
+      f = { curve, rank, readAt: null, bornAt: bornAtOf.get(mint) ?? now, maxAgeMs };
       followed.set(mint, f);
     }
     f.rank = rank;
+    f.maxAgeMs = isAlerted.has(mint) ? alertedAgeMs : maxAgeMs;
     // Again every cycle: it keeps the subscription from being evicted as unwatched.
     if (!paused) stream?.watch(keyOf(mint), [f.curve], now, "account");
   }
@@ -384,7 +410,7 @@ function followNewLaunches(mints: readonly string[], now: number): void {
     if (followed.has(mint) || done.has(mint)) continue;
     const curve = pumpCurveAddressOf(mint);
     if (!curve) continue;
-    followed.set(mint, { curve, rank: 0, readAt: null, bornAt: now });
+    followed.set(mint, { curve, rank: 0, readAt: null, bornAt: now, maxAgeMs: cfg.maxAgeMinutes * 60_000 });
     if (!paused) stream?.watch(keyOf(mint), [curve], now, "account");
   }
 }
@@ -446,6 +472,7 @@ export function takeCurveTapeStats(now = Date.now()) {
     readCredits: stats.readCalls,
     streamCreditsToday: Math.round(streamCredits(dayStreamBytes)),
     paused: paused ? 1 : 0,
+    poolsPaused: poolsPaused ? 1 : 0,
   };
   stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0, poolUpdates: 0 };
   return out;
@@ -492,19 +519,31 @@ export async function round(now = Date.now()): Promise<void> {
   busy = true;
   try {
     rollDay(now);
-    const over = overStreamPace(streamCredits(dayStreamBytes), cfg.streamCreditsPerDay, now);
+    const credits = streamCredits(dayStreamBytes);
+    const over = overStreamPace(credits, cfg.streamCreditsPerDay, now);
+    const poolsOver = over || overStreamPace(credits, cfg.streamCreditsPerDay * POOL_PACE_SHARE, now);
+    if (poolsOver !== poolsPaused) {
+      poolsPaused = poolsOver;
+      logger.info(
+        poolsOver ? "pool stream paused: past its share of the credit pace" : "pool stream resumed",
+        {
+          streamCreditsToday: Math.round(credits),
+          pools: pools.size,
+        },
+      );
+      for (const [mint, p] of pools) {
+        if (poolsOver) unwatchPool(mint);
+        else watchPool(mint, p, now);
+      }
+    }
     if (over !== paused) {
       paused = over;
       logger.info(over ? "curve stream paused: past its credit pace" : "curve stream resumed", {
-        streamCreditsToday: Math.round(streamCredits(dayStreamBytes)),
+        streamCreditsToday: Math.round(credits),
       });
       for (const [mint, f] of followed) {
         if (over) stream?.unwatch(keyOf(mint));
         else stream?.watch(keyOf(mint), [f.curve], now, "account");
-      }
-      for (const [mint, p] of pools) {
-        if (over) unwatchPool(mint);
-        else watchPool(mint, p, now);
       }
     }
     const unseen = (cfg.newLaunches?.() ?? []).filter((m) => !followed.has(m) && !done.has(m));
@@ -631,6 +670,7 @@ export function resetCurveTape(): void {
   for (const mint of [...pools.keys()]) dropPool(mint, false);
   done.clear();
   paused = false;
+  poolsPaused = false;
   day = "";
   dayStreamBytes = 0;
   stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0, poolUpdates: 0 };

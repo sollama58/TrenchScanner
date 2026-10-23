@@ -235,6 +235,19 @@ describe("feature attribution", () => {
     expect(answeredStatus(one, 404)).toBe(true);
     expect(answeredStatus(one, 500)).toBe(false);
     expect(answeredStatus(batch, 404)).toBe(false);
+    // CoinGecko's paid API bills an unknown pool; the free host bills nothing to count.
+    const paidPool = classifyApiRequest(
+      "https://pro-api.coingecko.com/api/v3/onchain/networks/solana/pools/x/ohlcv/minute",
+      "GET",
+      undefined,
+    );
+    expect(answeredStatus(paidPool, 404)).toBe(true);
+    expect(
+      answeredStatus(
+        classifyApiRequest("https://api.coingecko.com/api/v3/simple/price", "GET", undefined),
+        404,
+      ),
+    ).toBe(false);
     expect(answeredStatus(classifyApiRequest("https://api.rugcheck.xyz/v1/x", "GET", undefined), 404)).toBe(
       false,
     );

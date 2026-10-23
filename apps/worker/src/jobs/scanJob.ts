@@ -2,6 +2,7 @@ import { curvePathOf, followYoungCurves, takeCurveTapeStats } from "./curveTape.
 import { takePricePathStats } from "./pricePathRecorder.js";
 import { takeCurveCandleStats } from "./curveCandles.js";
 import { takeCandleBackfillStats } from "./candleBackfill.js";
+import { takeCandleChainFillStats } from "./candleChainFill.js";
 import {
   tokenSageHints,
   recordRunProgress,
@@ -78,6 +79,7 @@ import {
   LINKED_TOP_N,
   type NarrativeRead,
   takePumpFunGateStats,
+  withApiFeature,
 } from "@trenchscanner/core";
 import type { Token } from "@prisma/client";
 import { requestTextScores } from "../ai/textScorer.js";
@@ -173,7 +175,7 @@ import {
   setAsideMayhemLaunches,
 } from "./mayhemMode.js";
 import { resolveRelaunchSiblings } from "./relaunchFarms.js";
-import { fillLaunchDetails, takeLaunchDetailStats } from "./launchDetails.js";
+import { fillBandMetadata, fillLaunchDetails, takeLaunchDetailStats } from "./launchDetails.js";
 import {
   launchSnipersFromCache,
   resolveLaunchSnipers,
@@ -1306,8 +1308,9 @@ async function scanCycle(
   // 2. Re-check the active watchlist against live market data, and keep only the mints currently
   // sitting in (or near) the target band.
   const { tracked, alive } = await selectWatchlist(env);
-  // The young Pump.fun coins in it have their curves followed change by change (curveTape.ts).
-  followYoungCurves(tracked);
+  // The young Pump.fun coins in it have their curves followed change by change (curveTape.ts), and
+  // the coins alerted on lately for longer, for their charts.
+  followYoungCurves(tracked, Date.now(), await recentlyAlertedCoins(env.CURVE_TAPE_ALERTED_MINUTES));
   lap("watchlist");
 
   if (tracked.length === 0) {
@@ -1381,6 +1384,7 @@ async function scanCycle(
   // The chart's candle store: the curve tape's 1-second rows written, and the backfill's steps.
   const curveCandles = takeCurveCandleStats();
   const candleBackfill = takeCandleBackfillStats();
+  const candleChainFill = takeCandleChainFillStats();
   // This process's Pump.fun budget (pumpfunGate.ts): requests let through, 429 pauses, held back.
   const pumpfunGate = takePumpFunGateStats();
   // The live tape's pages (10 credits each) since the last cycle, and the coins it holds a page for.
@@ -1422,6 +1426,7 @@ async function scanCycle(
     ...(pricePaths ? { pricePaths } : {}),
     ...(curveCandles ? { curveCandles } : {}),
     ...(candleBackfill ? { candleBackfill } : {}),
+    ...(candleChainFill ? { candleChainFill } : {}),
     pumpfunGate,
     liveTape,
     heliusStageCredits,
@@ -1547,6 +1552,23 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
     refreshPartial = refreshed.partial;
     refreshedMarketData = refreshed.marketData;
     for (const [mint, at] of refreshed.seenAt) readingSeenAt.set(mint, at);
+    // In-band coins with no description or socials recorded (Jupiter-list launches carry no
+    // metadata URI, and Pump.fun refuses the coin page): their URI off the chain through Helius DAS,
+    // then the launch JSON, a bounded few a cycle behind the cycle. The rows fill in when the
+    // answers land, so the next scan's models see them (user decision 2026-10-23).
+    if (cycle) {
+      void withApiFeature("launch-metadata", () =>
+        fillBandMetadata(
+          candidates.map((c) => c.mintAddress),
+          env.LAUNCH_METADATA_DAS_PER_CYCLE,
+          { helius: deps.helius },
+          async (coins) => {
+            await addNewMintsToWatchlist(coins.map((c) => toWatchlistCandidate(c, "jupiter")));
+            rememberLaunchTimes(coins);
+          },
+        ),
+      ).catch((err: unknown) => logger.warn("launch metadata failed to save", { error: String(err) }));
+    }
     // The stamp the liveness-prioritized selection above runs on.
     await stampLiveMarketCaps(refreshed.liveMarketCaps, env);
     // Rejected coins' 60-minute peak and low, from the readings just taken (measurement only; see
@@ -4659,4 +4681,19 @@ function walletRiskSignals(
     walletWinHighSupplyPct: w.walletWinHighSupplyPct ?? undefined,
     knownWinnerFirstBuyers: w.knownWinnerFirstBuyers ?? undefined,
   };
+}
+
+/** The coins a seat alerted on within `minutes`, for the curve tape's longer follow (curveTape.ts). */
+async function recentlyAlertedCoins(minutes: number, now = Date.now()) {
+  const rows = await prisma.curatedAlert
+    .findMany({
+      where: { createdAt: { gte: new Date(now - minutes * 60_000) } },
+      select: {
+        token: { select: { mintAddress: true, launchedAt: true, firstSeenAt: true, launchpad: true } },
+      },
+      distinct: ["tokenId"],
+      take: 500,
+    })
+    .catch(() => []);
+  return rows.map((r) => r.token);
 }

@@ -14,6 +14,7 @@ import {
   TAPE_WINDOW_AFTER_ANCHOR_MS,
   takeLaunchTapeSeed,
   resetLaunchTapeSeeds,
+  markTapeTrades,
   type HeliusClient,
   type PumpFunClient,
   type SolPriceLookup,
@@ -21,6 +22,7 @@ import {
   type ChainTx,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
+import { saveChainCandles, type TapeCandleSink } from "./chainCandles.js";
 import {
   resetClosingState,
   runClosingLane,
@@ -628,7 +630,8 @@ export async function storeTape(
 }
 
 export interface TradeTapeDeps {
-  helius: Pick<HeliusClient, "getMintTransactionsPage" | "gtfaUsable" | "takeCallStats">;
+  helius: Pick<HeliusClient, "getMintTransactionsPage" | "gtfaUsable" | "takeCallStats"> &
+    Partial<Pick<HeliusClient, "getPoolVaultsBatch">>;
   pumpFun: Pick<PumpFunClient, "coinTrades" | "coinOrigin">;
   /** Prices the coins a trade was paid in other than SOL (a coin-paired launch's quote coin). */
   solPrices?: SolPriceLookup;
@@ -636,6 +639,11 @@ export interface TradeTapeDeps {
   closingHelius?: ClosingHelius;
   /** Current market caps, for the closing read's "still dead?". */
   marketCaps?: MarketCapLookup;
+  /**
+   * Where a read's trades are saved as candles (core's tapeCandles.ts, user decision 2026-10-23):
+   * SOL's USD price, and the store's write. Without it no candles are saved.
+   */
+  candles?: TapeCandleSink;
 }
 
 export interface TradeTapeOptions {
@@ -664,6 +672,9 @@ interface RunCounts {
   heliusNewestPages: number;
   /** Coins whose from-launch read started on a launch-buyer seed (launchTapeSeed.ts): its hit rate. */
   seeded: number;
+  /** Candle store rows saved from the reads' trades (tapeCandles.ts), and saves that failed. */
+  candleRows: number;
+  candleFailed: number;
 }
 
 async function finish(
@@ -699,6 +710,34 @@ async function finish(
   counts[complete ? "done" : "partial"] += 1;
   counts.wallets += stored.wallets;
   counts.stopCauses += stored.stopCauses;
+  if (source === "helius") {
+    const first = p.trades.reduce((min, t) => Math.min(min, t.atMs), Infinity);
+    const from = complete ? Math.min(p.launch?.atMs ?? first, first) : first;
+    await saveTapeCandles(p.coin.mint, p.trades, { from, to: Math.min(p.coin.windowEndMs, nowMs) }, counts);
+  }
+}
+
+/** Set for a run from its deps: where the reads' candles go (TradeTapeDeps.candles). */
+let candleSink: (TapeCandleSink & { helius: TradeTapeDeps["helius"] }) | null = null;
+
+/**
+ * Saves a read's marked trades over `cover` as candles (chainCandles.ts). Never throws: candles are
+ * a by-product.
+ */
+async function saveTapeCandles(
+  mint: string,
+  trades: TapeTrade[],
+  cover: { from: number; to: number },
+  counts: RunCounts,
+) {
+  const sink = candleSink;
+  if (!sink) return;
+  try {
+    counts.candleRows += (await saveChainCandles(mint, trades, cover, sink, sink.helius)).length;
+  } catch (err) {
+    counts.candleFailed += 1;
+    logger.warn("trade tape candles not saved", { mint, error: String(err) });
+  }
 }
 
 /**
@@ -752,6 +791,7 @@ async function seedFromLaunchBuyers(
   const seed = takeLaunchTapeSeed(coin.mint, LAUNCH_SEED_MAX_AGE_MS, now());
   if (!seed) return null;
   const parsed = await tradesFromChainTransactionsPriced(coin.mint, seed.txs, deps.solPrices);
+  markTapeTrades(coin.mint, seed.txs, parsed.trades);
   const lastAtMs = seed.pageEnds.length > 0 ? seed.pageEnds[seed.pageEnds.length - 1]! : 0;
   const coversWindow = lastAtMs > coin.windowEndMs;
   if (seed.paginationToken === null && !coversWindow) return null;
@@ -865,6 +905,7 @@ async function readHeliusPage(
   // Three failures in a row fail the coin; spread over a long read they no longer throw it away.
   p.errors = 0;
   const parsed = await tradesFromChainTransactionsPriced(p.coin.mint, page.txs, deps.solPrices);
+  markTapeTrades(p.coin.mint, page.txs, parsed.trades);
   if (p.newest) {
     await readNewestPage(p, page, parsed, counts, now);
     return true;
@@ -890,6 +931,14 @@ async function readHeliusPage(
     // Too busy to read in full within the cap: Pump.fun's from the next run on, or this lane's
     // newest first, which keeps what was read here to meet.
     keepHandoff(p.coin.tokenId, { trades: p.trades, launch: p.launch, throughMs: lastAtMs });
+    // The launch side it read is real either way: its candles are kept (to its last whole second).
+    const first = p.trades.reduce((min, t) => Math.min(min, t.atMs), Infinity);
+    await saveTapeCandles(
+      p.coin.mint,
+      p.trades,
+      { from: Math.min(p.launch?.atMs ?? first, first), to: Math.floor(lastAtMs / 1_000) * 1_000 },
+      counts,
+    );
     await markFailed(p.coin, BUSY_SOURCE, p.calls, 0, now());
     counts.failed += 1;
     counts.handedOff += 1;
@@ -1047,7 +1096,10 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
     handedOff: 0,
     heliusNewestPages: 0,
     seeded: 0,
+    candleRows: 0,
+    candleFailed: 0,
   };
+  candleSink = deps.candles ? { ...deps.candles, helius: deps.helius } : null;
   const waiting = await pendingCalledCoins(now());
   // The reads a shutdown saved go back to their lanes.
   await restoreProgress(waiting);

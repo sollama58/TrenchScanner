@@ -171,3 +171,25 @@ describe("OTC Desks coins past the roster sweep (user report 2026-10-23)", () =>
     expect(creatorRewardFigure(fee).value).toBe("OTC Desks");
   });
 });
+
+describe("charity pill (user ask 2026-10-23)", () => {
+  it("shows a heart and the name in one pill, the full sentence in the tooltip", () => {
+    const fee = { destination: "charity", summary: null, charityName: "Pauseai US" };
+    const html = renderToStaticMarkup(<FeeBadge fee={fee} icon={12} className="scope-fee" />);
+    expect(html).toContain("charity-pill");
+    expect(html).toContain("❤️");
+    expect(html).toContain('<span class="charity-name">Pauseai US</span>');
+    expect(html).toContain('aria-label="Creator fees go to Pauseai US."');
+    // No outline heart icon or loose caption under it.
+    expect(html).not.toContain("<svg");
+    expect(html).not.toContain("fee-caption");
+  });
+
+  it("says Charity in the pill when no name has loaded, with TokenSage's sentence as its title", () => {
+    const html = renderToStaticMarkup(
+      <FeeBadge fee={{ destination: "charity", summary: "creator fees go to charity" }} />,
+    );
+    expect(html).toContain('<span class="charity-name">Charity</span>');
+    expect(html).toContain('title="Creator fees go to charity."');
+  });
+});

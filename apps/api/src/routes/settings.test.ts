@@ -56,9 +56,12 @@ describe("parseFeedAppearance", () => {
     });
     expect(saved.reasons).toBe(false);
     expect(saved.quickLinks).toEqual(["terminal"]);
-    // The Snipers tile is on by default (in place of 1st Buyers Holding), and can be switched off.
-    expect(saved.sniperTop10).toBe(true);
-    expect(DEFAULT_FEED_APPEARANCE.sniperTop10).toBe(true);
+    // The Snipers tile is off by default (Block 0 in its place). A look saved on before that reads
+    // off; one switched on since stays on.
+    expect(saved.sniperTop10).toBe(false);
+    expect(DEFAULT_FEED_APPEARANCE.sniperTop10).toBe(false);
+    expect(parseFeedAppearance({ sniperTop10: true }).sniperTop10).toBe(false);
+    expect(parseFeedAppearance({ sniperTop10: true, sniperTop10Rev: 2 }).sniperTop10).toBe(true);
     expect(parseFeedAppearance({ sniperTop10: false }).sniperTop10).toBe(false);
     // CEX-funded took the Dev tile's default place: Dev is opt-in, for older accounts too, and the
     // old CEX-funded switch is ignored.
@@ -568,6 +571,28 @@ describe.skipIf(!dbAvailable)("settings routes", () => {
     ];
     for (const b of bad) expect((await call("user", "PUT", "/settings/scope", b)).statusCode).toBe(400);
     expect((await call("user", "GET", "/settings")).json().scopeSettings).toEqual(scope);
+
+    // Chosen columns (user ask 2026-10-23): up to six, up to three picks each.
+    const col = (id: string, kind: string, picks: string[] = []) => ({
+      id,
+      kind,
+      picks,
+      filter: { hideMissed: true },
+    });
+    const board = {
+      display: { density: "cozy" },
+      board: [col("new", "new"), col("model", "model", ["m1", "m2"])],
+    };
+    expect((await call("user", "PUT", "/settings/scope", board)).statusCode).toBe(200);
+    expect((await call("user", "GET", "/settings")).json().scopeSettings).toEqual(board);
+    const badBoards = [
+      { ...board, board: [] },
+      { ...board, board: Array.from({ length: 7 }, (_, i) => col(`c${i}`, "new")) },
+      { ...board, board: [col("m", "model", ["a", "b", "c", "d"])] },
+      { ...board, board: [{ ...col("n", "new"), extra: 1 }] },
+    ];
+    for (const b of badBoards) expect((await call("user", "PUT", "/settings/scope", b)).statusCode).toBe(400);
+    expect((await call("user", "GET", "/settings")).json().scopeSettings).toEqual(board);
     expect((await app.inject({ method: "PUT", url: "/settings/scope", payload: scope })).statusCode).toBe(
       401,
     );

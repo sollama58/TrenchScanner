@@ -145,6 +145,34 @@ describe("candleSeries", () => {
     expect(fine.filter((b) => !b.coarse).map((b) => (b.t - T0) / S)).toEqual([570, 605]);
   });
 
+  it("counts a trade once where a finer cover sits inside a minute source's cover (seams)", () => {
+    // Pump.fun's minutes (complete, whole minutes) and the trade tape's seconds (same priority,
+    // finer) for a stretch starting and ending mid-minute: the minute bars stand whole, the tape's
+    // seconds inside them are the same trades and are not added again; the minute the tape's cover
+    // ends inside of is not lost.
+    const minutes = [bar(T0, 10, 11, 100), bar(T0 + M, 11, 15, 200), bar(T0 + 2 * M, 15, 16, 300)];
+    const tape = [bar(T0 + 20 * S, 10, 12, 50), bar(T0 + 65 * S, 12, 10, 5)];
+    const out = candleSeries(
+      [input(60, T0, T0 + 3 * M, minutes, 4), input(1, T0 + 20 * S, T0 + 70 * S, tape, 4)],
+      60,
+    );
+    expect(out.map((b) => [(b.t - T0) / M, b.c, b.vol])).toEqual([
+      [0, 11, 100],
+      [1, 15, 200],
+      [2, 16, 300],
+    ]);
+    // Where the tape alone covers (the launch minute, before Pump.fun's first bar), its seconds stand.
+    const early = candleSeries(
+      [input(60, T0 + M, T0 + 3 * M, minutes.slice(1), 4), input(1, T0 + 20 * S, T0 + 70 * S, tape, 4)],
+      60,
+    );
+    expect(early.map((b) => [(b.t - T0) / M, b.c, b.vol])).toEqual([
+      [0, 12, 50],
+      [1, 15, 200],
+      [2, 16, 300],
+    ]);
+  });
+
   it("serves the rest of a wide bar a stretch starts inside of, instead of dropping it", () => {
     const fives = [bar(T0, 1, 2), bar(T0 + 5 * M, 2, 3)];
     const minutes = [bar(T0, 1, 1), bar(T0 + 2 * M, 1, 2)];

@@ -41,8 +41,10 @@ import {
   publishEnvReport,
   type HeartbeatJob,
   ASDF_PRICE_SAMPLE_MS,
+  asdfPriceSampleDue,
   TRADE_SETTLEMENT_INTERVAL_MS,
   JupiterSwapClient,
+  sacrificeSettings,
   sampleAsdfPrice,
   settleOpenTrades,
   TradingRpc,
@@ -74,7 +76,7 @@ import { drainShadowReviews } from "./jobs/curatedAlerts.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { BurnStreamWake, reconcileBurns } from "./jobs/burnReconciler.js";
 import { runPipelineWatch } from "./jobs/pipelineWatchJob.js";
-import { canaryFailureMeta, runTradeCanary, TRADE_CANARY_INTERVAL_MINUTES } from "./jobs/tradeCanaryJob.js";
+import { canaryFailureMeta, runTradeCanary } from "./jobs/tradeCanaryJob.js";
 import { createTradingBotRunner } from "./jobs/tradingBotJob.js";
 import { createPaperTradingRunner } from "./jobs/paperTradingJob.js";
 import {
@@ -118,6 +120,7 @@ import {
 } from "./jobs/curveTape.js";
 import { startPricePathRecorder } from "./jobs/pricePathRecorder.js";
 import { startCurveCandles } from "./jobs/curveCandles.js";
+import { seedCandleChainFillSpend, startCandleChainFill } from "./jobs/candleChainFill.js";
 import { startCandleBackfill } from "./jobs/candleBackfill.js";
 import { onHolderStreamTx, setHolderTransferStream } from "./jobs/holderTransfers.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
@@ -417,6 +420,7 @@ async function main() {
           : env.CURVE_TAPE_MAX_AGE_MINUTES,
         // The scoring features keep their 15 minutes: coins past it read null, as in training.
         featureMaxAgeMinutes: env.CURVE_TAPE_MAX_AGE_MINUTES,
+        alertedMaxAgeMinutes: env.CURVE_TAPE_ALERTED_MINUTES,
         maxMints: env.CURVE_TAPE_MAX_MINTS,
         streamCreditsPerDay: env.CURVE_TAPE_STREAM_CREDITS_PER_DAY,
         pollSeconds: env.CURVE_TAPE_POLL_SECONDS,
@@ -431,9 +435,15 @@ async function main() {
     void prisma.systemHeartbeat
       .findUnique({ where: { job: "scan" }, select: { lastRunAt: true, meta: true } })
       .then((row) => {
-        const curve = (row?.meta as { curveTape?: { streamCreditsToday?: unknown } } | null)?.curveTape;
-        const credits = curve?.streamCreditsToday;
+        const meta = row?.meta as {
+          curveTape?: { streamCreditsToday?: unknown };
+          candleChainFill?: { creditsToday?: unknown };
+        } | null;
+        const credits = meta?.curveTape?.streamCreditsToday;
         if (row && typeof credits === "number") seedCurveStreamSpend(credits, row.lastRunAt);
+        // The chart's chain fill's day too (candleChainFill.ts), before its first run.
+        const fill = meta?.candleChainFill?.creditsToday;
+        if (row && typeof fill === "number") seedCandleChainFillSpend(fill, row.lastRunAt);
       })
       .catch((err: unknown) =>
         logger.warn("curve tape: the day's stream spend not read", { error: String(err) }),
@@ -461,6 +471,24 @@ async function main() {
           maxPages: env.CANDLE_BACKFILL_MAX_PAGES,
           keepDays: env.CANDLE_RETENTION_DAYS,
         })
+      : undefined;
+
+  // The chart's chain fill (candleChainFill.ts): 1-second holes in charted coins' first hours, read
+  // off the chain within a day's Helius credits. Its own client, so its credits are its own.
+  const stopCandleChainFill =
+    scans && env.CANDLE_STORE && env.CANDLE_CHAIN_FILL_CREDITS_PER_DAY > 0
+      ? startCandleChainFill(
+          {
+            helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
+            sink: { solUsd: () => dexScreener.solUsd() },
+          },
+          {
+            creditsPerDay: env.CANDLE_CHAIN_FILL_CREDITS_PER_DAY,
+            pagesPerRun: env.CANDLE_CHAIN_FILL_PAGES_PER_RUN,
+            maxPagesPerCoin: env.CANDLE_CHAIN_FILL_MAX_PAGES_PER_COIN,
+            windowMinutes: env.CANDLE_CHAIN_FILL_WINDOW_MINUTES,
+          },
+        )
       : undefined;
 
   // Reads the chain for the subscription gate. Its own client rather than `deps.helius` because
@@ -639,7 +667,7 @@ async function main() {
   // two failed runs in a row. Never in tests: it calls mainnet.
   if (env.TRADE_CANARY_ENABLED && process.env.NODE_ENV !== "test") {
     schedule("trade-canary", () =>
-      scheduleInterval("trade-canary", () => runTradeCanary(env), TRADE_CANARY_INTERVAL_MINUTES, {
+      scheduleInterval("trade-canary", () => runTradeCanary(env), env.TRADE_CANARY_INTERVAL_MINUTES, {
         deadlineMinutes: 4,
         abandonOnDeadline: true,
         failureMeta: canaryFailureMeta,
@@ -743,14 +771,24 @@ async function main() {
   // Price API ratio every 15 seconds. On while Pro trading is open beyond the admins, as the holder
   // scan is, so a day of samples is there before the Sacrifice is switched on. The trading key when
   // this service has one, else Jupiter's keyless host: never the scan's JUPITER_API_KEY budget.
+  // While the Sacrifice is off no trade reads the price, so the tick samples only once a minute
+  // (asdfPriceSampleDue; user ask 2026-10-23: API audit bundle). The mode is read through
+  // sacrificeSettings' 30 s cache, so switching it to shadow or on brings 15 s back within that.
   if (env.PRO_TRADING_ENABLED && env.PRO_TRADING_PUBLIC) {
     const asdfPriceReader = new JupiterSwapClient({ apiKey: env.PRO_TRADING_JUPITER_API_KEY || undefined });
+    let asdfSampledAt = 0;
     schedule("asdf-price", () =>
       scheduleInterval(
         "asdf-price",
-        async () => ({ ...(await sampleAsdfPrice(asdfPriceReader)) }),
+        async (): Promise<JobRunMeta> => {
+          const { mode } = await sacrificeSettings();
+          const now = Date.now();
+          if (!asdfPriceSampleDue(mode, asdfSampledAt, now)) return { skipped: true, mode };
+          asdfSampledAt = now;
+          return { ...(await sampleAsdfPrice(asdfPriceReader)), mode };
+        },
         ASDF_PRICE_SAMPLE_MS / 60_000,
-        // One quote that never returns is given up, not a scanner restart: samples are 15 s apart.
+        // One quote that never returns is given up, not a scanner restart: ticks are 15 s apart.
         { deadlineMinutes: 1, abandonOnDeadline: true },
       ),
     );
@@ -871,6 +909,8 @@ async function main() {
       closingHelius: tapeHelius,
       pumpFun: deps.pumpFun,
       solPrices: (mints: string[]) => deps.dexScreener.solPricesOf(mints),
+      // Each read's trades as 1-second candles in the chart's store (core's tapeCandles.ts).
+      ...(env.CANDLE_STORE ? { candles: { solUsd: () => deps.dexScreener.solUsd() } } : {}),
       // The closing read's market caps: null for a coin with no market, a failed batch left out.
       marketCaps: async (mints: string[]) => {
         const failed = new Set<string>();
@@ -1187,6 +1227,7 @@ async function main() {
       logger.warn("price paths not written", { error: String(err) }),
     );
     stopCandleBackfill?.();
+    stopCandleChainFill?.();
     heliusStream?.stop();
     launchPoller?.stop();
     stopNarrativePolling?.();

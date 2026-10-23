@@ -34,7 +34,7 @@ import { DEFAULT_PROBE_WALLET, USDC_MINT } from "./jobs/tradeCanaryJob.js";
  * Exit code 0 when everything passed; 1 when anything failed.
  */
 
-// Shared with the trade canary (tradeCanaryJob.ts), which runs a few of these checks every 5 minutes.
+// Shared with the trade canary (tradeCanaryJob.ts), which runs a few of these checks every 15 minutes.
 const USDC = USDC_MINT;
 
 let failures = 0;
