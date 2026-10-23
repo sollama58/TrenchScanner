@@ -148,6 +148,7 @@ function Drawer() {
               <TokenImage
                 key={c.mint}
                 url={c.imageUrl}
+                mint={c.mint}
                 size={48}
                 width={24}
                 height={24}
@@ -352,6 +353,7 @@ export function TradeCard({ coin, now }: { coin: TradeCoin; now: number }) {
         >
           <TokenImage
             url={coin.imageUrl}
+            mint={coin.mint}
             size={72}
             width={34}
             height={34}

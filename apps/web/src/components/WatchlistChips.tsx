@@ -86,6 +86,7 @@ function Chip({ item, now }: { item: WatchlistItem; now: number }) {
     >
       <TokenImage
         url={item.imageUrl}
+        mint={item.mint}
         size={40}
         width={20}
         height={20}

@@ -132,6 +132,7 @@ export function WatchlistManager({
                 >
                   <TokenImage
                     url={item.imageUrl}
+                    mint={item.mint}
                     size={64}
                     width={30}
                     height={30}
@@ -341,6 +342,7 @@ function WatchlistAdd({ full, cap, watched }: { full: boolean; cap: number; watc
                 <li key={h.mint} className="wlm-hit">
                   <TokenImage
                     url={h.imageUrl}
+                    mint={h.mint}
                     size={48}
                     width={22}
                     height={22}

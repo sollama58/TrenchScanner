@@ -1232,6 +1232,21 @@ input[type="checkbox"] {
   background: var(--surface-solid);
   border: 2px solid var(--surface-2);
 }
+/* A token image still on its way (TokenImage): a soft pulse in the avatar's place, not a blank. */
+img[data-loading] {
+  background-color: var(--surface-3);
+  animation: token-img-pulse 1.2s ease-in-out infinite;
+}
+@keyframes token-img-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  img[data-loading] {
+    animation: none;
+  }
+}
 .avatar.placeholder {
   font-weight: 700;
   font-size: 13px;

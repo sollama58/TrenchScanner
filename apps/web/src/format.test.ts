@@ -90,17 +90,38 @@ describe("tokenImageSources", () => {
   const cid = "bafkreihxafgbuv2tw7icchpr27buj42hltprkndct4544qkrtsylsxqovy";
   const thumb = `https://pump.mypinata.cloud/ipfs/${cid}?img-width=96&img-height=96&img-fit=cover`;
 
-  it("tries the thumbnail, the original, then a second IPFS gateway", () => {
+  it("tries the thumbnail, a fast gateway, the original, then a second IPFS gateway", () => {
     expect(tokenImageSources(`https://ipfs.io/ipfs/${cid}`)).toEqual([
       thumb,
+      `https://ipfs.filebase.io/ipfs/${cid}`,
       `https://ipfs.io/ipfs/${cid}`,
       `https://dweb.link/ipfs/${cid}`,
     ]);
     expect(tokenImageSources(`https://gateway.pinata.cloud/ipfs/${cid}`)).toEqual([
       thumb,
+      `https://ipfs.filebase.io/ipfs/${cid}`,
       `https://gateway.pinata.cloud/ipfs/${cid}`,
       `https://ipfs.io/ipfs/${cid}`,
     ]);
+  });
+
+  it("adds Pump.fun's CDN for a Pump.fun mint, even with no URL", () => {
+    const mint = "2bjLxGw7HYx47ir6RJq8ijXjMJnVFtFCgBFzTN9Gpump";
+    const cdn = `https://images.pump.fun/coin-image/${mint}?variant=96x96`;
+    expect(tokenImageSources(`https://ipfs.io/ipfs/${cid}`, 96, mint)).toEqual([
+      thumb,
+      cdn,
+      `https://ipfs.filebase.io/ipfs/${cid}`,
+      `https://ipfs.io/ipfs/${cid}`,
+      `https://dweb.link/ipfs/${cid}`,
+    ]);
+    expect(tokenImageSources(null, 96, mint)).toEqual([cdn]);
+    // The smallest variant it serves that covers the size, and 400 past its largest.
+    expect(tokenImageSources(null, 160, mint)).toEqual([cdn.replace("96x96", "256x256")]);
+    expect(tokenImageSources(null, 512, mint)).toEqual([cdn.replace("96x96", "400x400")]);
+    // Any other mint: the CDN answers an unknown coin with a stock picture, so it is left out.
+    expect(tokenImageSources(null, 96, "4sF5F6jxjj1MTPbc379n7rchnrxUdC38y3RMmcDXvNsi")).toEqual([]);
+    expect(tokenImageSources(null, 96, "../../pump")).toEqual([]);
   });
 
   it("has just the original for other hosts, and nothing for non-https", () => {

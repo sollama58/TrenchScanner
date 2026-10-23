@@ -146,21 +146,42 @@ function ipfsCid(url: string): string | undefined {
 
 /**
  * Where to load a token's image from, in order, for an `<img>` that moves to the next on error
- * (TokenImage), and shows the initials when none loads. First the small thumbnail (tokenThumb);
- * then the launcher's own URL; for an IPFS image, then the file on a second public gateway, so
- * one gateway's 429s or a pin it has not picked up yet leave the picture missing only when
- * neither has it. Empty for anything but https.
+ * or when it stalls (TokenImage), and shows the initials when none loads. First the small
+ * thumbnail (tokenThumb); then, for a Pump.fun mint, Pump.fun's own image CDN (it has every coin
+ * it launched, small and cached, even when we never got the launcher's URL); for an IPFS image,
+ * then Filebase's gateway, which has the CIDs Pump.fun's Pinata gateway refuses (403, "not
+ * pinned") in ~0.4 s; then the launcher's own URL; then a second public gateway. ipfs.io and
+ * dweb.link answer most reads with 429s (checked 2026-10-23), so they come last. Empty for
+ * anything but https when the mint is not a Pump.fun one.
  */
-export function tokenImageSources(url: string | null | undefined, size = 96): string[] {
+export function tokenImageSources(url: string | null | undefined, size = 96, mint?: string | null): string[] {
   const safe = url?.trim() ?? "";
-  if (!/^https:\/\/\S+$/.test(safe)) return [];
-  const out = [tokenThumb(safe, size), safe];
+  const pump = pumpCdnImage(mint, size);
+  if (!/^https:\/\/\S+$/.test(safe)) return pump ? [pump] : [];
+  const out = [tokenThumb(safe, size)];
+  if (pump) out.push(pump);
   const cid = ipfsCid(safe);
+  if (cid) out.push(`https://ipfs.filebase.io/ipfs/${cid}`);
+  out.push(safe);
   if (cid) {
     const host = new URL(safe).hostname;
     out.push(host === "ipfs.io" ? `https://dweb.link/ipfs/${cid}` : `https://ipfs.io/ipfs/${cid}`);
   }
   return [...new Set(out)];
+}
+
+/** The square variants images.pump.fun serves (checked 2026-10-23; 100, 160, 200 and 512 are refused). */
+const PUMP_CDN_SIZES = [32, 40, 48, 64, 86, 96, 128, 256, 300, 400];
+
+/**
+ * A Pump.fun coin's image on Pump.fun's CDN, resized to the smallest variant that covers `size`.
+ * Only for mints ending in "pump": for a mint it does not know, the CDN answers with a stock
+ * placeholder picture rather than an error, which would hide the initials.
+ */
+function pumpCdnImage(mint: string | null | undefined, size: number): string | null {
+  if (!mint || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint) || !mint.endsWith("pump")) return null;
+  const fit = PUMP_CDN_SIZES.find((s) => s >= size) ?? 400;
+  return `https://images.pump.fun/coin-image/${mint}?variant=${fit}x${fit}`;
 }
 
 /** The square sizes cdn.dexscreener.com resizes to (checked 2026-10-14; 96, 200, 512 and others are refused). */

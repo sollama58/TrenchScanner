@@ -220,6 +220,7 @@ function WatchRow({
       <button type="button" className="watchlist-open" onClick={onOpen} title={title} aria-busy={opening}>
         <TokenImage
           url={item.imageUrl}
+          mint={item.mint}
           size={48}
           className="watchlist-avatar"
           width={22}
