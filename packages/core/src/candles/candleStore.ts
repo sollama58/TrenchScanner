@@ -39,6 +39,12 @@ export async function saveCandleChunks(rows: readonly CandleChunkRow[]): Promise
     if (batch.length === 0) continue;
     written += await prisma.$transaction(
       async (tx) => {
+        // One writer per coin at a time: the row lock below holds only rows that exist, so two
+        // writers inserting the same new chunk at once would each see nothing stored and the
+        // second's upsert would stand alone, the first's bars gone (audit 2026-10-23 CE-8: the
+        // chain fill and the trade tape both write a coin's "tape" chunks). Taken in one order.
+        for (const mint of [...new Set(batch.map((r) => r.mint))].sort())
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"candles:" + mint}))`;
         const keys = batch.map(
           (r) => Prisma.sql`(${r.mint}, ${r.res}, ${new Date(r.startAt)}::timestamptz, ${r.source})`,
         );
