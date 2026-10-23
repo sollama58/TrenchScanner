@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { FeedStatsButton } from "../components/FeedStatsButton";
 import {
   type EvolutionEvent,
   type GradedRates,
@@ -143,6 +144,11 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
               <AsOf computedAt={olderStamp(lb.computedAt, data.computedAt)} now={now} />
             </p>
           </div>
+          {!guest && (
+            <div className="hero-actions">
+              <FeedStatsButton />
+            </div>
+          )}
         </div>
       </section>
 

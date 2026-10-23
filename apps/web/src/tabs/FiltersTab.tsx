@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { FeedStatsButton } from "../components/FeedStatsButton";
 import {
   del,
   patch,
@@ -175,16 +176,19 @@ export function FiltersTab() {
                 that&apos;s on alerts; switch one off to pause it without losing its settings.
               </p>
             </div>
-            <button
-              className="primary"
-              disabled={full || busy}
-              title={full ? "Delete a filter to add another" : undefined}
-              onClick={() =>
-                setEditing({ id: null, draft: blankFilter(config.data, list.length), opened: Date.now() })
-              }
-            >
-              <PlusIcon size={15} /> New filter
-            </button>
+            <div className="section-actions">
+              <FeedStatsButton />
+              <button
+                className="primary"
+                disabled={full || busy}
+                title={full ? "Delete a filter to add another" : undefined}
+                onClick={() =>
+                  setEditing({ id: null, draft: blankFilter(config.data, list.length), opened: Date.now() })
+                }
+              >
+                <PlusIcon size={15} /> New filter
+              </button>
+            </div>
           </header>
           {message && <p className="notice">{message}</p>}
           {filters.error && !filters.data && (

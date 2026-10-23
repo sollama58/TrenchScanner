@@ -98,6 +98,7 @@ export function ScopeBoard({
   heldTokenIds = NO_TOKENS,
   settingsSection,
   onSettings,
+  onStatus,
 }: {
   /** The Live feed's page `n`, so Scope reads exactly what the cards view does. */
   feedPath: (n: number) => string;
@@ -110,6 +111,11 @@ export function ScopeBoard({
   /** The Scope settings window's open section (the Live header's Customize opens Display), or null. */
   settingsSection: ScopeSettingsSection | null;
   onSettings: (section: ScopeSettingsSection | null) => void;
+  /**
+   * Whether the board is held still and whether its feed reads are failing, for the Live header's
+   * Scanning pill, which says Live / Paused for Scope (user ask 2026-10-23).
+   */
+  onStatus?: (status: { paused: boolean; failing: boolean }) => void;
 }) {
   // Rows say their age in seconds at first, so the board ticks faster than the cards view.
   const now = useNow(5_000);
@@ -281,6 +287,8 @@ export function ScopeBoard({
   };
   useEffect(() => () => window.clearTimeout(touchTimer.current), []);
   const paused = frame !== null && (holdsBy.has("pointer") || holdsBy.has("scroll"));
+  const failing = !!first.error;
+  useEffect(() => onStatus?.({ paused, failing }), [onStatus, paused, failing]);
   // New filters show at once, even on a held board: it holds still from the filtered rows.
   const columnFilters = settings.columns;
   useEffect(() => {
@@ -413,7 +421,7 @@ export function ScopeBoard({
       onTouchCancel={touchEnd}
     >
       {modal}
-      <div className="scope-bar" ref={bar}>
+      <div className={`scope-bar${paused && pending > 0 ? "" : " quiet"}`} ref={bar}>
         <div className="segmented small scope-tabs" role="tablist" aria-label="Scope columns">
           {shownCols.map((c) => (
             <button
@@ -430,19 +438,6 @@ export function ScopeBoard({
         </div>
         <span className="scope-bar-filter">
           {filterButton(activeCol, SCOPE_COLUMNS.find((c) => c.id === activeCol)!.label)}
-        </span>
-        <span
-          className="scope-hold muted small"
-          aria-live="polite"
-          title={
-            paused
-              ? phone
-                ? "Held still while you're scrolled down: new rows wait behind the New pill"
-                : "Held still while you read: new rows wait behind the New pill"
-              : "New rows land as they come"
-          }
-        >
-          {paused ? "Paused" : "Live"}
         </span>
         {paused && pending > 0 && (
           <button
