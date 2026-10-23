@@ -871,6 +871,8 @@ async function main() {
       closingHelius: tapeHelius,
       pumpFun: deps.pumpFun,
       solPrices: (mints: string[]) => deps.dexScreener.solPricesOf(mints),
+      // Each read's trades as 1-second candles in the chart's store (core's tapeCandles.ts).
+      ...(env.CANDLE_STORE ? { candles: { solUsd: () => deps.dexScreener.solUsd() } } : {}),
       // The closing read's market caps: null for a coin with no market, a failed batch left out.
       marketCaps: async (mints: string[]) => {
         const failed = new Set<string>();
