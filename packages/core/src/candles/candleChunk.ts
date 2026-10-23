@@ -23,10 +23,11 @@ export type CandleRes = (typeof CANDLE_RESOLUTIONS)[number];
 
 /**
  * Where stored bars came from: the worker's curve tape on the bonding curve ("curve") and, after
- * graduation, on the coin's PumpSwap pool ("pool"), the trade tape's chain reads ("tape",
- * tapeCandles.ts), Pump.fun's pages, or GeckoTerminal's.
+ * graduation, on the coin's PumpSwap pool ("pool"), the API's live stream while a chart is open
+ * ("chart", apps/api candleStore.ts), the trade tape's chain reads ("tape", tapeCandles.ts),
+ * Pump.fun's pages, or GeckoTerminal's.
  */
-export type CandleStoreSource = "curve" | "pool" | "tape" | "pumpfun" | "gecko";
+export type CandleStoreSource = "curve" | "pool" | "chart" | "tape" | "pumpfun" | "gecko";
 
 /** Bars per chunk: a minute of 1 s bars, 15 minutes of 15 s, an hour of 1 m, five hours of 5 m. */
 export const CANDLE_CHUNK_BARS = 60;

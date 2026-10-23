@@ -6,6 +6,7 @@ import {
   saveCandleChunks,
   type CandleChunkRow,
   type CandleRes,
+  type StoredBar,
 } from "@trenchscanner/core";
 import type { CandleFetcher, McapCandle } from "./tokenChart.js";
 import { pageCoverEnd } from "./tokenCandles.js";
@@ -47,6 +48,8 @@ let queue: CandleChunkRow[] = [];
 let timer: ReturnType<typeof setInterval> | null = null;
 let flushing: Promise<void> | null = null;
 const pages = new Map<string, { at: number; candles: McapCandle[] }>();
+/** Stream chunks queued, by `${mint}:${startAt}`, with their bar count and cover end: each once. */
+const streamSaved = new Map<string, string>();
 const asked = new Map<string, number>();
 /** Top-ups apart: the hourly ask a chart's open makes must not hold back the top-up it needs. */
 const toppedUp = new Map<string, number>();
@@ -120,6 +123,40 @@ export function keepPage(mint: string, res: CandleRes, candles: McapCandle[], no
 }
 
 /**
+ * Saves the live stream's 1-second bars while a chart is open (user decision 2026-10-23, "Free steps
+ * first"): the stream already follows the coin for the chart (liveCurve.ts), and its bars were
+ * drawn and then lost, so the next visitor's chart had nothing there. `bars` are on the launch
+ * billion, as the store keeps them, over `cover` ([from, to) ms: what the stream itself delivered).
+ * Only closed minutes are saved, each chunk's cover run on to the next one's start so a quiet minute
+ * reads as quiet, and a chunk is queued again only when it changed (more bars, or a longer cover).
+ */
+export function keepStreamBars(
+  mint: string,
+  bars: readonly StoredBar[],
+  cover: { from: number; to: number },
+): void {
+  if (!enabled || bars.length === 0) return;
+  const to = Math.floor(cover.to / 60_000) * 60_000;
+  if (!(to > cover.from)) return;
+  const rows = chunkBars(mint, 1, "chart", bars, { from: cover.from, to }, { onlyClosed: true, now: to });
+  rows.forEach((row, i) => {
+    row.coverTo = Math.max(row.coverTo, Math.min(rows[i + 1]?.startAt ?? to, to));
+  });
+  for (const row of rows) {
+    const id = `${mint}:${row.startAt}`;
+    const sig = `${row.bars.length}:${row.coverFrom}:${row.coverTo}`;
+    if (streamSaved.get(id) === sig || queue.length >= MAX_QUEUED) continue;
+    if (streamSaved.size >= MAX_SAVED_KEYS) streamSaved.clear();
+    streamSaved.set(id, sig);
+    queue.push(row);
+  }
+  if (queue.length > 0 && !timer) {
+    timer = setInterval(() => void flushCandleStore(), FLUSH_MS);
+    timer.unref?.();
+  }
+}
+
+/**
  * Asks for the coin's backfill, once an hour at most from this process. `topUp`: a coin whose newest
  * stretch only the backfill brings (no Pump.fun minutes, or none lately): asked every TOP_UP_ASK_MS,
  * and queued again once its last run is BACKFILL_TOP_UP_AFTER_MS old.
@@ -153,7 +190,10 @@ export function flushCandleStore(): Promise<void> {
     try {
       await save(batch);
     } catch (err) {
-      for (const row of batch) saved.delete(`${row.mint}:${row.res}:${row.startAt}`);
+      for (const row of batch) {
+        saved.delete(`${row.mint}:${row.res}:${row.startAt}`);
+        streamSaved.delete(`${row.mint}:${row.startAt}`);
+      }
       logger.warn("candle chunks not saved", { rows: batch.length, error: String(err) });
     } finally {
       flushing = null;
@@ -174,6 +214,7 @@ export function resetCandleStoreForTests(
   flushing = null;
   enabled = true;
   saved.clear();
+  streamSaved.clear();
   queue = [];
   pages.clear();
   asked.clear();
