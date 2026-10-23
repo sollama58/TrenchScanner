@@ -1,4 +1,11 @@
-import { createLogger, prisma, type CandidateToken, type DexScreenerClient } from "@trenchscanner/core";
+import {
+  createLogger,
+  prisma,
+  REPORTED_LABEL_RULE,
+  walletSafetyCutsSql,
+  type CandidateToken,
+  type DexScreenerClient,
+} from "@trenchscanner/core";
 import { SharedCache, withComputedAt } from "./sharedCache.js";
 
 /**
@@ -118,7 +125,18 @@ export interface TrenchHour {
   scanVolumeTokens: number | null;
 }
 
+/** One clean double from a screened decision moment: a runner, at that moment (see loadRunnerMoments). */
+export interface RunnerMoment {
+  token: string;
+  at: Date;
+}
+
 export interface TrenchStats {
+  /**
+   * Runners: distinct tokens that doubled cleanly within the hour from a screened decision moment
+   * in the window (the Lighthouse's 2x count, by token). Null when the moments weren't read.
+   */
+  runners: number | null;
   /** USD the scan's tokens traded in the window; null while any of its hours is unsummed. */
   volumeUsd: number | null;
   /** Percent of graded screened calls that reached 2x / 4x in their hour, and 10x. */
@@ -150,7 +168,16 @@ export interface TrenchWindow {
 const pct = (part: number, whole: number) => (whole >= TRENCH_MIN_SAMPLE ? (part / whole) * 100 : null);
 
 /** One window's stats from the rollup hours in [from, to); a missing hour counts as unsummed. */
-export function trenchWindow(hours: readonly TrenchHour[], from: number, to: number): TrenchWindow {
+export function trenchWindow(
+  hours: readonly TrenchHour[],
+  from: number,
+  to: number,
+  runnerMoments?: readonly RunnerMoment[],
+): TrenchWindow {
+  const runners = runnerMoments
+    ? new Set(runnerMoments.filter((m) => m.at.getTime() >= from && m.at.getTime() < to).map((m) => m.token))
+        .size
+    : null;
   const inside = hours.filter((h) => h.hour.getTime() >= from && h.hour.getTime() < to);
   const sum = (pick: (h: TrenchHour) => number) => inside.reduce((s, h) => s + pick(h), 0);
   const graded = sum((h) => h.screenedGraded);
@@ -164,6 +191,7 @@ export function trenchWindow(hours: readonly TrenchHour[], from: number, to: num
     from: new Date(from).toISOString(),
     to: new Date(to).toISOString(),
     stats: {
+      runners,
       volumeUsd: volumeSummed ? sum((h) => h.scanVolumeUsd ?? 0) : null,
       hit2xPct: pct(
         sum((h) => h.screenedWon2x),
@@ -205,43 +233,67 @@ export function trenchWindowEnd(hours: readonly TrenchHour[], now: number): numb
 }
 
 /** The bar's trench stats: the last two summed hours, and the same two hours 2/6/24/48 hours earlier. */
-export function buildTrenchStats(hours: readonly TrenchHour[], now: number) {
+export function buildTrenchStats(
+  hours: readonly TrenchHour[],
+  now: number,
+  runnerMoments?: readonly RunnerMoment[],
+) {
   const end = trenchWindowEnd(hours, now);
   const span = TRENCH_WINDOW_HOURS * HOUR_MS;
   return {
     windowHours: TRENCH_WINDOW_HOURS,
     minSample: TRENCH_MIN_SAMPLE,
-    current: trenchWindow(hours, end - span, end),
+    current: trenchWindow(hours, end - span, end, runnerMoments),
     compare: TRENCH_COMPARE_HOURS_AGO.map((hoursAgo) => {
       const to = end - hoursAgo * HOUR_MS;
-      return { hoursAgo, ...trenchWindow(hours, to - span, to) };
+      return { hoursAgo, ...trenchWindow(hours, to - span, to, runnerMoments) };
     }),
   };
 }
 export type TrenchStatsAnswer = ReturnType<typeof buildTrenchStats>;
 
-/** The rollup hours the bar reads: about two days, by the primary key. */
+/**
+ * The clean doubles since `since`: screened decision moments that hit 2x within their hour, under
+ * the same population as the rollup's screenedWon2x (lighthouseRollupJob.ts screenedHours) and
+ * the leaderboards' market runners. Winners only, on the (sampleKind, anchorAt) index.
+ */
+export function loadRunnerMoments(since: Date): Promise<RunnerMoment[]> {
+  return prisma.$queryRaw<RunnerMoment[]>`
+    SELECT "tokenId" AS token, "anchorAt" AS at
+    FROM "CandidateOutcome"
+    WHERE "sampleKind" = 'event'
+      AND "anchorAt" >= ${since}
+      AND "hit2xIn1h" AND NOT COALESCE("disqualified", false)
+      AND "labelRule" >= ${REPORTED_LABEL_RULE}
+      AND ${walletSafetyCutsSql()}`;
+}
+
+/** The rollup hours the bar reads (about two days, by the primary key) and the runners in them. */
 export async function loadTrenchStats(now = new Date()): Promise<TrenchStatsAnswer> {
   const back = Math.max(...TRENCH_COMPARE_HOURS_AGO) + TRENCH_WINDOW_HOURS + 2;
-  const hours = await prisma.lighthouseHour.findMany({
-    where: { hour: { gte: new Date(Math.floor(now.getTime() / HOUR_MS) * HOUR_MS - back * HOUR_MS) } },
-    select: {
-      hour: true,
-      computedAt: true,
-      screenedGraded: true,
-      screenedWon2x: true,
-      screenedWon4x: true,
-      screenedWon10x: true,
-      screenedTenXGraded: true,
-      screenedReturnN: true,
-      screenedReturnSum: true,
-      screenAccepted: true,
-      screenRejected: true,
-      scanVolumeUsd: true,
-      scanVolumeTokens: true,
-    },
-  });
-  return buildTrenchStats(hours, now.getTime());
+  const since = new Date(Math.floor(now.getTime() / HOUR_MS) * HOUR_MS - back * HOUR_MS);
+  const [hours, runnerMoments] = await Promise.all([
+    prisma.lighthouseHour.findMany({
+      where: { hour: { gte: since } },
+      select: {
+        hour: true,
+        computedAt: true,
+        screenedGraded: true,
+        screenedWon2x: true,
+        screenedWon4x: true,
+        screenedWon10x: true,
+        screenedTenXGraded: true,
+        screenedReturnN: true,
+        screenedReturnSum: true,
+        screenAccepted: true,
+        screenRejected: true,
+        scanVolumeUsd: true,
+        scanVolumeTokens: true,
+      },
+    }),
+    loadRunnerMoments(since),
+  ]);
+  return buildTrenchStats(hours, now.getTime(), runnerMoments);
 }
 
 /** One price cache and one trench-stats cache per process, shared by the subscriber and guest routes. */

@@ -8,7 +8,7 @@ import {
 } from "react";
 import { ApiError } from "../api";
 import { usePolling, useNow } from "../hooks";
-import { ago, shortAddress, signedPct, usd } from "../format";
+import { ago, shortAddress, signedPct } from "../format";
 import { openTokenModal } from "../tokenModal";
 import { useProWallet } from "../proTrade";
 import {
@@ -31,7 +31,7 @@ const PRICES_POLL_MS = 60_000;
 const TRENCH_POLL_MS = 5 * 60_000;
 const POSITIONS_POLL_MS = 30_000;
 /** The comparison the bar's arrows show; the popover shows all of them. */
-const ARROW_HOURS_AGO = 6;
+const ARROW_HOURS_AGO = 2;
 /** Phones get the prices and trench stats, with the side panels folded away. */
 const PHONE_QUERY = "(max-width: 640px)";
 
@@ -304,7 +304,7 @@ function TrenchStats({ data, failed }: { data: TrenchAnswer | null; failed: bool
                 <dt>{s.label}</dt>
                 <dd>
                   <span className="num mkt-stat-v">
-                    {data ? statText(s, now, usd) : failed ? "–" : <span className="skeleton mkt-skel" />}
+                    {data ? statText(s, now) : failed ? "–" : <span className="skeleton mkt-skel" />}
                   </span>
                   {data && <Arrow d={d} />}
                 </dd>
@@ -352,7 +352,7 @@ function TrenchPopover({ id, data }: { id: string; data: TrenchAnswer }) {
                 <th scope="row" title={s.title}>
                   {s.label}
                 </th>
-                <td className="num now">{statText(s, now, usd)}</td>
+                <td className="num now">{statText(s, now)}</td>
                 {data.compare.map((c) => {
                   const then = c.stats[s.key];
                   const d = statDelta(s, now, then);
@@ -360,7 +360,7 @@ function TrenchPopover({ id, data }: { id: string; data: TrenchAnswer }) {
                     <td
                       key={c.hoursAgo}
                       className={`num mkt-delta ${d.tone ?? ""}`}
-                      title={`${hhmm(c.from)}–${hhmm(c.to)}: ${statText(s, then, usd)}`}
+                      title={`${hhmm(c.from)}–${hhmm(c.to)}: ${statText(s, then)}`}
                     >
                       {d.dir === null ? (
                         <span className="faint">–</span>
@@ -372,7 +372,7 @@ function TrenchPopover({ id, data }: { id: string; data: TrenchAnswer }) {
                           {deltaText(d)}
                         </>
                       )}
-                      <span className="mkt-delta-then">{statText(s, then, usd)}</span>
+                      <span className="mkt-delta-then">{statText(s, then)}</span>
                     </td>
                   );
                 })}
@@ -382,9 +382,8 @@ function TrenchPopover({ id, data }: { id: string; data: TrenchAnswer }) {
         </tbody>
       </table>
       <p className="mkt-pop-foot faint">
-        {cur.samples.graded} graded calls · {cur.samples.screened.toLocaleString()} tokens screened
-        {cur.samples.volumeTokens !== null ? ` · ${cur.samples.volumeTokens.toLocaleString()} trading` : ""}.
-        Rates need {data.minSample}+ graded calls; the newest hours keep grading for an hour.
+        {cur.samples.graded} graded calls · {cur.samples.screened.toLocaleString()} tokens screened. Rates
+        need {data.minSample}+ graded calls; the newest hours keep grading for an hour.
       </p>
     </div>
   );

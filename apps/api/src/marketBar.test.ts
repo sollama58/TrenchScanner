@@ -72,6 +72,7 @@ describe("trenchWindow", () => {
       at(2).getTime(),
     );
     expect(w.stats).toEqual({
+      runners: null,
       volumeUsd: 2_000_000,
       hit2xPct: 30,
       hit4xPct: 10,
@@ -112,6 +113,19 @@ describe("trenchWindow", () => {
         at(2).getTime(),
       ).stats.volumeUsd,
     ).toBe(0);
+  });
+});
+
+describe("trenchWindow runners", () => {
+  it("counts each token that doubled in the window once", () => {
+    const moments = [
+      { token: "a", at: new Date(at(0).getTime() + 60_000) },
+      { token: "a", at: new Date(at(1).getTime() + 60_000) },
+      { token: "b", at: new Date(at(1).getTime() + 120_000) },
+      { token: "c", at: at(2) },
+    ];
+    expect(trenchWindow([hour(0), hour(1)], at(0).getTime(), at(2).getTime(), moments).stats.runners).toBe(2);
+    expect(trenchWindow([hour(0), hour(1)], at(0).getTime(), at(2).getTime(), []).stats.runners).toBe(0);
   });
 });
 
