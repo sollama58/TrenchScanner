@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   BUY_PRESETS_PER_ROW,
   DEFAULT_TRADE_SETTINGS,
@@ -22,9 +22,9 @@ import { Switch } from "./AlertDeliveryPanels";
 import { BoltIcon } from "./Icons";
 
 /**
- * Settings > Trading (user ask 2026-10-18): the Trade panel's defaults in one place, plus the
- * quick-buy pill for alert and stream cards. Shown only to a wallet with Pro Mode. Kept in this
- * browser, shared live with every open Trade panel (useTradeSettings).
+ * Customize › Trading (user ask 2026-10-18): the Trade panel's defaults in one place, plus the
+ * quick-buy pill for alert and stream cards. Shown only to a wallet with Pro Mode. Synced to the
+ * account and shared live with every open Trade panel (useTradeSettings).
  */
 
 const POSITION_LABEL: Record<QuickBuySettings["position"], string> = {
@@ -51,46 +51,49 @@ export function quickAmountText(amountSol: number): string {
   return quickBuyAmountOk(amountSol) ? String(amountSol) : "";
 }
 
-export function TradingSettingsPanel() {
+export function TradingSettingsPanel({ embedded = false }: { embedded?: boolean }) {
   const pro = useProState();
   const settings = useTradeSettings();
   if (!pro?.pro) return null;
-  return <Panel settings={settings} />;
+  return <Panel settings={settings} embedded={embedded} />;
 }
 
-function Panel({ settings }: { settings: TradeSettings }) {
+function Panel({ settings, embedded }: { settings: TradeSettings; embedded: boolean }) {
   const update = (patch: Partial<TradeSettings>) => saveTradeSettings({ ...settings, ...patch });
   const updateQuick = (patch: Partial<QuickBuySettings>) =>
     update({ quickBuy: { ...settings.quickBuy, ...patch } });
   const q = settings.quickBuy;
   const [quickAmount, setQuickAmount] = useState(quickAmountText(q.amountSol));
+  // A change from another device or tab (or Reset) shows in the box too.
+  useEffect(() => setQuickAmount(quickAmountText(q.amountSol)), [q.amountSol]);
   const maxBuys = BUY_PRESETS_PER_ROW * settings.buyRows;
   // One row holds five: going back to one row keeps the first five.
   const setRows = (rows: 1 | 2) =>
     update({ buyRows: rows, buyPresets: settings.buyPresets.slice(0, BUY_PRESETS_PER_ROW * rows) });
 
+  const Tag = embedded ? "div" : "section";
   return (
-    <section className="panel trading-settings">
+    <Tag className={embedded ? "trading-settings embedded" : "panel trading-settings"}>
       <header className="section-head">
         <div>
-          <span className="eyebrow">
-            <BoltIcon size={13} /> Trading
-          </span>
-          <h2>Trade defaults</h2>
+          {!embedded && (
+            <span className="eyebrow">
+              <BoltIcon size={13} /> Trading
+            </span>
+          )}
+          {embedded ? <h4>Trade defaults</h4> : <h2>Trade defaults</h2>}
         </div>
         <button
           type="button"
           className="button ghost small"
-          onClick={() => {
-            saveTradeSettings(DEFAULT_TRADE_SETTINGS);
-            setQuickAmount(quickAmountText(DEFAULT_TRADE_SETTINGS.quickBuy.amountSol));
-          }}
+          onClick={() => saveTradeSettings(DEFAULT_TRADE_SETTINGS)}
         >
           Reset
         </button>
       </header>
       <p className="muted small">
-        Used by the Trade section under the token chart and by quick buy. Saved in this browser.
+        Used by the Trade section under the token chart and by quick buy. Saved to your account, so every
+        device you sign in on trades the same way.
       </p>
 
       <div className="preset-editor-head">
@@ -149,6 +152,7 @@ function Panel({ settings }: { settings: TradeSettings }) {
           <input
             inputMode="decimal"
             autoComplete="off"
+            key={settings.slippagePct}
             defaultValue={settings.slippagePct}
             onBlur={(e) => {
               const v = parseDecimal(e.target.value);
@@ -198,6 +202,7 @@ function Panel({ settings }: { settings: TradeSettings }) {
             <input
               inputMode="decimal"
               autoComplete="off"
+              key={settings.customPrioritySol}
               defaultValue={settings.customPrioritySol}
               onBlur={(e) => {
                 const v = parseDecimal(e.target.value);
@@ -214,6 +219,7 @@ function Panel({ settings }: { settings: TradeSettings }) {
             inputMode="decimal"
             autoComplete="off"
             placeholder={String(MIN_TIP_SOL[settings.speed])}
+            key={settings.customTipSol ?? "min"}
             defaultValue={settings.customTipSol ?? ""}
             onBlur={(e) => {
               if (e.target.value.trim() === "") return update({ customTipSol: null });
@@ -344,6 +350,6 @@ function Panel({ settings }: { settings: TradeSettings }) {
           </div>
         </div>
       )}
-    </section>
+    </Tag>
   );
 }

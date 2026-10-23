@@ -13,6 +13,7 @@ import { usePolling, useNow } from "../hooks";
 import { ago, shortAddress, signedPct, usd } from "../format";
 import { openTokenModal } from "../tokenModal";
 import { useProWallet } from "../proTrade";
+import { setMarketBarOpen, useMarketBarOpen } from "../layoutPrefs";
 import {
   deltaText,
   priceText,
@@ -113,31 +114,14 @@ function openPortfolio() {
   window.scrollTo({ top: 0 });
 }
 
-/** Whether the reader last left the full bar open; it starts collapsed (user ask 2026-10-23). */
-const OPEN_KEY = "ts-market-bar-open";
-
-function readOpen(): boolean {
-  try {
-    return localStorage.getItem(OPEN_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 function Bar({ left, leftMini, base = "/curated", positions }: MarketBarProps & { positions: Positions }) {
   const phone = useMatches(PHONE_QUERY);
   const guest = base === "/guest";
   const prices = usePolling<MarketPrices>(`${base}/market/prices`, PRICES_POLL_MS);
   const trench = usePolling<TrenchAnswer>(`${base}/market/trench`, TRENCH_POLL_MS);
-  const [open, setOpenState] = useState(readOpen);
-  const setOpen = (v: boolean) => {
-    setOpenState(v);
-    try {
-      localStorage.setItem(OPEN_KEY, v ? "1" : "0");
-    } catch {
-      // A private window: the choice lasts this visit.
-    }
-  };
+  // Whether the reader last left the full bar open, shared with Customize (layoutPrefs.ts).
+  const open = useMarketBarOpen();
+  const setOpen = setMarketBarOpen;
   const ref = useRef<HTMLElement>(null);
   const pinned = usePinnedPast(ref, open);
   const watch = left ?? <WatchlistPlaceholder guest={guest} />;

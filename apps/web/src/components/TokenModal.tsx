@@ -47,7 +47,7 @@ import { cardWithOtcDesk, creatorRewardFigure } from "../creatorReward";
 import { FeeKolAvatar, FeeWalletTip, kolPictures } from "./FeeWalletTip";
 import { DeskRewardTokens } from "./DeskRewardTokens";
 import { rewardHost } from "../deskRewardDisplay";
-import { QUICK_LINK_SITES, pumpFunHref, setAppearance, useAppearance } from "../appearance";
+import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
 import { useIsAdmin } from "../session";
 import { useShowNarrativeNote } from "../narrativeNote";
 import { scoreTone, scoreToneColor, useScoreWeights } from "../scoreWeights";
@@ -81,11 +81,9 @@ import {
   ageNow,
   walletFee,
 } from "./AlertCard";
-import { ChartEventsPicker } from "./ChartEventsPicker";
-import { CHART_MARKS_SECTION, WalletMarksPicker } from "./WalletMarksPicker";
-import { BubbleMapControls, ChartControls, Choice, QuickLinkChecks } from "./AppearancePanel";
-import { TradingSettingsPanel } from "./TradingSettingsPanel";
-import { CustomizeDrawer } from "./CustomizeDrawer";
+import { CHART_MARKS_SECTION } from "./WalletMarksPicker";
+import { openCustomize, useCustomize } from "../customize";
+import { setLayoutPrefs, useLayoutPrefs, type TokenSide } from "../layoutPrefs";
 import {
   CHART_MIN_H_PX,
   CHART_MIN_W_PX,
@@ -969,7 +967,8 @@ function TokenBody({
   const safetyOpen = safetyOpenSet ?? safety.state !== "passed";
   // The terminal's column view and tab under the chart, and the rail's slot the chart's Trade panel
   // is drawn into. A tab that is now the column's shows the first of the others instead.
-  const [side, setSide] = useTermSide();
+  // Synced to the account and set in Customize › Token window (layoutPrefs.ts).
+  const side: TermSide = useLayoutPrefs().tokenSide;
   // The column's width and the chart's height, dragged by the reader (user ask 2026-10-19).
   const [layout, setLayout] = useTermLayout();
   const sideRef = useRef<HTMLElement>(null);
@@ -978,12 +977,16 @@ function TokenBody({
   const [tabPicked, setTab] = useState<TermTab>(side === "map" ? "holders" : "map");
   const tabRow = useTabRowScroll(terminal ? side : null);
   const tab = tabPicked === side ? (side === "holders" ? "map" : "holders") : tabPicked;
+  // The map moved out of the column (Customize › Token window) shows first in the tabs.
+  const sideWas = useRef(side);
+  useEffect(() => {
+    if (sideWas.current === "map" && side !== "map") setTab("map");
+    sideWas.current = side;
+  }, [side]);
   const [tradeSlot, setTradeSlot] = useState<HTMLDivElement | null>(null);
-  // The Pro window's own Customize (user ask 2026-10-19): every option of this page in one place.
-  // Opened at the chart's wallet marks from the chart's own Wallet trades link.
-  const [customizing, setCustomizing] = useState<false | "all" | "marks">(false);
-  const closeCustomize = useCallback(() => setCustomizing(false), []);
-  const customizeMarks = useCallback(() => setCustomizing((o) => (o ? false : "marks")), []);
+  // This page's options are Customize's Token window section (user ask 2026-10-23: one window).
+  const customizing = useCustomize();
+  const customizingHere = customizing.open && customizing.section === "token";
   const openSafety = () => {
     setSafetyOpen(true);
     goTo("safety");
@@ -1106,9 +1109,9 @@ function TokenBody({
         {terminal && (
           <button
             type="button"
-            className={`tm-custom-pill${customizing ? " on" : ""}`}
-            aria-expanded={!!customizing}
-            onClick={() => setCustomizing((o) => (o ? false : "all"))}
+            className={`tm-custom-pill${customizingHere ? " on" : ""}`}
+            aria-expanded={customizingHere}
+            onClick={() => openCustomize("token")}
             title="Customize this page: layout, chart, wallet trades, bubble map, quick links and trade buttons"
           >
             <SlidersIcon size={13} />
@@ -1450,7 +1453,6 @@ function TokenBody({
                   what={what}
                   tradeSlot={tradeSlot}
                   plotHeight={plotH}
-                  onCustomize={customizeMarks}
                   onChartNow={setChartNow}
                   position={position}
                 />
@@ -1515,12 +1517,9 @@ function TokenBody({
                 <select
                   id={`${ids}-side`}
                   value={side}
-                  onChange={(e) => {
-                    const next = e.target.value as TermSide;
-                    // The map moved down to the tabs opens there, so it doesn't seem to vanish.
-                    if (side === "map" && next !== "map") setTab("map");
-                    setSide(next);
-                  }}
+                  // The map moved down to the tabs opens there (the effect above), so it doesn't
+                  // seem to vanish.
+                  onChange={(e) => setLayoutPrefs({ tokenSide: e.target.value as TermSide })}
                 >
                   <option value="none">None</option>
                   {TERM_VIEWS.map((x) => (
@@ -1555,23 +1554,6 @@ function TokenBody({
             {!utility && <CallCard card={card} />}
           </aside>
         </div>
-        <CustomizeDrawer
-          open={!!customizing}
-          onClose={closeCustomize}
-          title="Customize Pro"
-          section={customizing === "marks" ? CHART_MARKS_SECTION : undefined}
-          nested
-        >
-          <ProCustomize
-            side={side}
-            onSide={(next) => {
-              if (side === "map" && next !== "map") setTab("map");
-              setSide(next);
-            }}
-            sized={layout.sideW !== null || layout.chartH !== null}
-            onResetSizes={() => setLayout({ sideW: null, chartH: null })}
-          />
-        </CustomizeDrawer>
       </div>
     );
   }
@@ -1753,124 +1735,8 @@ const TERM_VIEWS: readonly { id: TermTab; label: string }[] = [
   { id: "dev", label: "Dev & socials" },
   { id: "sage", label: "TokenSage" },
 ];
-/**
- * The Pro coin window's Customize (user ask 2026-10-19): every option that shapes this page, from
- * its layout to the chart, its wallet marks, the bubble map, the quick links and the Trade panel's
- * buttons. The account's appearance holds most; the sizes and trade buttons are this browser's.
- */
-function ProCustomize({
-  side,
-  onSide,
-  sized,
-  onResetSizes,
-}: {
-  side: TermSide;
-  onSide: (side: TermSide) => void;
-  sized: boolean;
-  onResetSizes: () => void;
-}) {
-  const look = useAppearance();
-  return (
-    <div className="appearance-controls pro-customize">
-      <p className="faint small">
-        Changes show here right away. Layout, chart and map choices are saved to your account. Column sizes
-        and trade buttons stay in this browser. Drawings on a coin stay on this device; whether they show is
-        saved with the chart.
-      </p>
-      <fieldset>
-        <legend>Layout</legend>
-        <Choice
-          label="Coin window opens in"
-          value={look.tokenView}
-          options={[
-            ["pro", "Pro"],
-            ["classic", "Classic"],
-          ]}
-          onChange={(tokenView) => setAppearance({ tokenView })}
-        />
-        <label className="choice-row pro-customize-pick">
-          <span className="small">Beside the chart</span>
-          <select value={side} onChange={(e) => onSide(e.target.value as TermSide)}>
-            <option value="none">None</option>
-            {TERM_VIEWS.map((x) => (
-              <option key={x.id} value={x.id}>
-                {x.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="choice-row">
-          <span className="small">Column width and chart height</span>
-          <button type="button" className="ghost small-btn" disabled={!sized} onClick={onResetSizes}>
-            {sized ? "Reset sizes" : "Default sizes"}
-          </button>
-        </div>
-        <p className="faint small check-hint">
-          Drag the column&apos;s edge or the chart&apos;s foot to resize them.
-        </p>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={!look.hideSafetyPill}
-            onChange={() => setAppearance({ hideSafetyPill: !look.hideSafetyPill })}
-          />
-          Safety pill in the header
-        </label>
-      </fieldset>
-      <fieldset>
-        <legend>Chart</legend>
-        <ChartControls />
-        <p className="faint small check-hint">
-          Candle size, indicators, log scale and drawings are here and on the chart&apos;s toolbar. Both save
-          to your account. A drawing&apos;s points stay on this device, for that coin.
-        </p>
-        <WalletMarksPicker />
-        <ChartEventsPicker />
-      </fieldset>
-      <fieldset>
-        <legend>Bubble map</legend>
-        <BubbleMapControls />
-      </fieldset>
-      <fieldset>
-        <legend>Quick links</legend>
-        <QuickLinkChecks />
-      </fieldset>
-      <TradingSettingsPanel />
-    </div>
-  );
-}
-
 /** What sits beside the chart: a view, or none so the chart takes the row. */
-type TermSide = TermTab | "none";
-/** The column's view, kept in this browser for every coin. */
-const TERM_SIDE_KEY = "ts-scope-side";
-
-function readTermSide(): TermSide {
-  try {
-    const v = localStorage.getItem(TERM_SIDE_KEY);
-    return v === "none" || TERM_VIEWS.some((x) => x.id === v) ? (v as TermSide) : "map";
-  } catch {
-    return "map";
-  }
-}
-
-/**
- * What sits beside the chart, the reader's pick: the bubble map until they choose another view,
- * or none so the chart takes the full row and the map is one of the tabs (user asks 2026-10-19).
- */
-function useTermSide(): [TermSide, (v: TermSide) => void] {
-  const [side, setSide] = useState<TermSide>(readTermSide);
-  const pick = (v: TermSide) => {
-    setSide(v);
-    try {
-      localStorage.setItem(TERM_SIDE_KEY, v);
-    } catch {
-      // Private mode: the pick holds for this window only.
-    }
-  };
-  return [side, pick];
-}
-
+type TermSide = TokenSide;
 /**
  * The section the reader is in: the last one whose top has passed under the sticky header, as the
  * modal scrolls (the dialog itself is the scroller).
@@ -2475,7 +2341,6 @@ export function ChartCard({
   what,
   tradeSlot,
   plotHeight,
-  onCustomize,
   onChartNow,
   position,
 }: {
@@ -2491,8 +2356,6 @@ export function ChartCard({
   tradeSlot?: HTMLElement | null;
   /** The terminal's plot height the reader dragged it to; absent, the window sets it. */
   plotHeight?: number;
-  /** The page's own Customize, opened at the wallet marks (Pro); absent, the feed's opens here. */
-  onCustomize?: () => void;
   /**
    * The chart's live clock, for the header's "Now". `adopt` only while the tail is the line drawn,
    * so the header doesn't take a minute candle whose close was clamped to now.
@@ -2635,8 +2498,8 @@ export function ChartCard({
   // Line or candles: Customize › Token chart sets the default, the switch under the chart this view.
   const [kindPicked, setKind] = useState<ChartKind | null>(null);
   const kind = kindPicked ?? look.chartStyle;
-  const [customizing, setCustomizing] = useState(false);
-  const closeCustomize = useCallback(() => setCustomizing(false), []);
+  const customize = useCustomize();
+  const customizing = customize.open && customize.anchor === CHART_MARKS_SECTION;
   // The flagged wallets of every read of this coin, not only the newest: the API sends its 40
   // strongest each time, and a wallet near the cut came and went with each read (user report
   // 2026-10-20: marks that disappear).
@@ -2919,14 +2782,13 @@ export function ChartCard({
               className={`cm-link${customizing ? " on" : ""}`}
               aria-expanded={customizing}
               title="Choose which labeled wallets' trades the chart marks (Customize › Chart wallet trades)"
-              onClick={() => (onCustomize ? onCustomize() : setCustomizing((o) => !o))}
+              onClick={() => openCustomize("chart", { anchor: CHART_MARKS_SECTION })}
             >
               <SlidersIcon size={12} /> Wallet trades
               <span className="num">{markPrefs.on ? marks.length : "off"}</span>
             </button>
           )}
         </h4>
-        <CustomizeDrawer open={customizing} onClose={closeCustomize} section={CHART_MARKS_SECTION} nested />
         {!view && ((!served && !error) || (tfRead !== null && !storeSettled)) && (
           <ChartSkeleton height={height + CHART_CHROME_PX}>Loading the chart…</ChartSkeleton>
         )}

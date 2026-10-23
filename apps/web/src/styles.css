@@ -3316,10 +3316,6 @@ legend {
 .util-drawer > * {
   pointer-events: auto;
 }
-/* The Customize drawer takes the right edge while it is open. */
-body.drawer-open .util-drawer {
-  display: none;
-}
 @media (max-width: 899px) {
   .util-drawer {
     display: none;
@@ -3592,9 +3588,6 @@ body.drawer-open .util-drawer {
 }
 .trades-drawer > * {
   pointer-events: auto;
-}
-body.drawer-open .trades-drawer {
-  display: none;
 }
 @media (max-width: 899px) {
   .trades-drawer {
@@ -8650,109 +8643,351 @@ html:has(dialog.about-modal[open]) {
   }
 }
 
-/* ---------- Live tab: Customize panel (CustomizeDrawer) ---------- */
+/* ---------- Customize (CustomizeModal.tsx) ----------
+   One window for every option: sections down the side, the open one on the right, a search above.
+   Phones get a full-height sheet with the sections as a row of chips. */
 .stats-btn.on {
   border-color: color-mix(in srgb, var(--brand-a) 60%, transparent);
   background: color-mix(in srgb, var(--brand-a) 14%, var(--surface-2));
 }
-.customize-drawer {
-  position: fixed;
-  z-index: 40;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 400px;
+dialog.cz-modal {
+  width: min(980px, calc(100vw - 32px));
+  height: min(760px, calc(100dvh - 48px));
+  max-height: calc(100dvh - 48px);
+  overflow: hidden;
+}
+.cz-shell {
   display: flex;
   flex-direction: column;
-  background: var(--surface-solid);
-  border-left: 1px solid var(--border-strong);
-  box-shadow: -24px 0 48px -24px rgba(0, 0, 0, 0.5);
-  animation: drawer-in 0.16s ease-out;
-  outline: none;
+  height: 100%;
+  min-height: 0;
 }
-@keyframes drawer-in {
-  from {
-    transform: translateX(24px);
-    opacity: 0.6;
-  }
-}
-.drawer-head {
+.cz-head {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 16px 18px 12px;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px 14px 20px;
   border-bottom: 1px solid var(--border);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--brand-a) 9%, var(--surface-solid)),
+    var(--surface-solid)
+  );
 }
-.drawer-head h2 {
+.cz-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.cz-title h2 {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 17px;
-  margin: 0 0 2px;
+  margin: 0;
+  font-size: 18px;
 }
-.drawer-actions {
-  display: flex;
+.cz-sync {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.cz-sync::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--good);
+}
+.cz-sync.saving::before,
+.cz-sync.local::before {
+  background: var(--warn);
+}
+.cz-sync.error {
+  color: var(--bad-ink);
+}
+.cz-sync.error::before {
+  background: var(--bad);
+}
+.cz-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  max-width: 340px;
+  margin-left: auto;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.cz-search:focus-within {
+  border-color: var(--link);
+}
+.cz-search input:focus,
+.cz-search input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+.cz-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  outline: none;
+}
+.cz-close {
   flex: none;
 }
-.drawer-body {
+.cz-main {
+  display: grid;
+  grid-template-columns: 228px minmax(0, 1fr);
   flex: 1;
+  min-height: 0;
+}
+.cz-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 10px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.cz-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cz-nav-label {
+  padding: 0 10px 4px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.cz-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.cz-nav-item svg {
+  flex: none;
+  color: var(--muted);
+}
+.cz-nav-item:hover {
+  background: var(--highlight);
+  color: var(--ink);
+}
+.cz-nav-item.on {
+  border-color: color-mix(in srgb, var(--brand-b) 45%, transparent);
+  background: color-mix(in srgb, var(--brand-a) 18%, var(--surface-3));
+  color: var(--ink);
+  font-weight: 600;
+}
+.cz-nav-item.on svg {
+  color: var(--brand-ink);
+}
+.cz-nav-none {
+  padding: 0 10px;
+}
+.cz-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0 22px 28px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 12px 18px 24px;
+  animation: cz-in 0.14s ease-out;
 }
-/* The narrow panel stacks each label over its choices. */
-.drawer-body .choice-row,
-.drawer-body .color-row {
+@keyframes cz-in {
+  from {
+    opacity: 0.4;
+    transform: translateY(4px);
+  }
+}
+.cz-section-head {
+  padding-top: 18px;
+}
+.cz-section-head h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 2px;
+  font-size: 16px;
+}
+.cz-section-head p {
+  margin: 0;
+}
+.cz-guest {
+  margin: 0;
+}
+.cz-preview {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  gap: 6px;
+  margin: 0 -22px;
+  padding: 12px 22px;
+  background: var(--surface-solid);
+  border-bottom: 1px solid var(--border);
 }
-.drawer-body .preset-options {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.cz-preview-cards.cards {
+  grid-template-columns: minmax(0, 420px);
+  max-height: 240px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, #000 78%, transparent);
+  mask-image: linear-gradient(180deg, #000 78%, transparent);
 }
-.drawer-body .field-groups {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.cz-preview + .cz-section-head {
+  padding-top: 4px;
 }
-/* Wide screens: the page makes room so the drawer sits beside the cards, not over them. */
-@media (min-width: 900px) {
-  body.drawer-open .content,
-  body.drawer-open .topbar-inner {
-    margin-right: 400px;
+.cz-group {
+  scroll-margin-top: 12px;
+}
+.cz-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.cz-group-head h3 {
+  float: none;
+  width: auto;
+}
+.cz-group .field-groups {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+.cz-group .field-group h4 {
+  margin: 4px 0 6px;
+}
+.cz-group.lit {
+  animation: cm-lit 1.6s ease-out;
+}
+.cz-select select {
+  max-width: 100%;
+}
+.cz-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+}
+.cz-sub {
+  margin: 0;
+}
+.trading-settings.embedded .section-head {
+  margin-bottom: 4px;
+}
+.trading-settings.embedded h4 {
+  margin: 0;
+}
+/* Settings › Customize: a tile per section. */
+.cz-links {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.cz-link {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cz-link:hover {
+  border-color: color-mix(in srgb, var(--brand-b) 50%, transparent);
+}
+@media (max-width: 760px) {
+  dialog.cz-modal {
+    height: 92dvh;
+    max-height: 92dvh;
   }
-}
-/* Narrower screens and phones: a short sheet along the bottom, the feed visible above it. */
-@media (max-width: 899px) {
-  .customize-drawer {
-    top: auto;
-    left: 0;
+  .cz-head {
+    flex-wrap: wrap;
+    padding: 12px 14px;
+    gap: 10px;
+  }
+  .cz-search {
+    order: 3;
+    flex-basis: 100%;
+    max-width: none;
+    margin-left: 0;
+  }
+  .cz-close {
+    margin-left: auto;
+  }
+  .cz-main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .cz-nav {
+    flex-direction: row;
+    gap: 6px;
+    padding: 8px 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    scrollbar-width: none;
+  }
+  .cz-nav-group {
+    flex-direction: row;
+    gap: 6px;
+  }
+  .cz-nav-label {
+    display: none;
+  }
+  .cz-nav-item {
     width: auto;
-    height: 50dvh;
-    border-left: none;
-    border-top: 1px solid var(--border-strong);
-    border-radius: 18px 18px 0 0;
-    box-shadow: 0 -24px 48px -24px rgba(0, 0, 0, 0.5);
-    animation: sheet-up 0.18s ease-out;
+    white-space: nowrap;
+    padding: 6px 12px;
+    border-color: var(--border);
+    border-radius: 999px;
+    font-size: 13px;
   }
-  .drawer-head {
-    padding: 12px 16px 8px;
+  .cz-pane {
+    padding: 0 14px 24px;
   }
-  .drawer-body {
-    padding: 10px 16px 20px;
+  .cz-preview {
+    margin: 0 -14px;
+    padding: 10px 14px;
   }
-  body.drawer-open {
-    padding-bottom: 50dvh;
+  .cz-preview-cards.cards {
+    max-height: 170px;
   }
 }
 @media (max-width: 640px) {
-  /* Above the bottom tab bar. */
-  .customize-drawer {
-    bottom: calc(64px + env(safe-area-inset-bottom));
-    height: 46dvh;
-  }
-  body.drawer-open {
-    padding-bottom: calc(46dvh + 64px + env(safe-area-inset-bottom));
+  /* The sheet-modal bottom sheet, full width. */
+  dialog.cz-modal {
+    width: 100vw;
+    max-width: 100vw;
   }
 }
 
@@ -16526,9 +16761,6 @@ dialog.search-modal::backdrop {
 }
 .bug-fab:focus-visible {
   opacity: 1;
-}
-body.drawer-open .bug-fab {
-  display: none;
 }
 /* Clear of the "new version" banner and the utility toast, which centre at the bottom. */
 body:has(.update-banner) .bug-fab,

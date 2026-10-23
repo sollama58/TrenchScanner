@@ -1,9 +1,9 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 
 /**
  * The Pro token view's sizes, the reader's own (user ask 2026-10-19): the width of the column beside
  * the chart and the chart's height, which sets how much of the window the tabs under it get. Null is
- * the layout's own size. Kept in this browser for every coin, like the column's view.
+ * the layout's own size. Kept in this browser for every coin, as screens differ.
  */
 export type TermLayout = { sideW: number | null; chartH: number | null };
 const TERM_LAYOUT_KEY = "ts-scope-layout";
@@ -32,26 +32,36 @@ export function chartMaxHeight(): number {
   return Math.max(CHART_MIN_H_PX, window.innerHeight - TABS_MIN_PX);
 }
 
+let termLayout: TermLayout | null = null;
+const termListeners = new Set<() => void>();
+
 /**
- * The reader's sizes and a setter for each: a drag shows as it moves and is kept when it ends;
- * null puts the layout's own size back.
+ * Changes the sizes: a drag shows as it moves and is kept (in this browser) when it ends; null puts
+ * the layout's own size back. Customize's Reset sizes and every open token window share one copy.
  */
+export function setTermLayout(patch: Partial<TermLayout>, keep = true): void {
+  const next = { ...(termLayout ??= readTermLayout()), ...patch };
+  termLayout = next;
+  if (keep) {
+    try {
+      localStorage.setItem(TERM_LAYOUT_KEY, JSON.stringify(next));
+    } catch {
+      // Private mode: the sizes hold for this window only.
+    }
+  }
+  for (const l of termListeners) l();
+}
+
+/** The reader's sizes and their setter. */
 export function useTermLayout(): [TermLayout, (patch: Partial<TermLayout>, keep?: boolean) => void] {
-  const [layout, setLayout] = useState<TermLayout>(readTermLayout);
-  const set = (patch: Partial<TermLayout>, keep = true) => {
-    setLayout((was) => {
-      const next = { ...was, ...patch };
-      if (keep) {
-        try {
-          localStorage.setItem(TERM_LAYOUT_KEY, JSON.stringify(next));
-        } catch {
-          // Private mode: the sizes hold for this window only.
-        }
-      }
-      return next;
-    });
-  };
-  return [layout, set];
+  const layout = useSyncExternalStore(
+    (l) => {
+      termListeners.add(l);
+      return () => termListeners.delete(l);
+    },
+    () => (termLayout ??= readTermLayout()),
+  );
+  return [layout, setTermLayout];
 }
 
 /**

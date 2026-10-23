@@ -46,16 +46,19 @@ import { AlertNotifier, dropPush, resetSettings } from "./alerts";
 import { resetHiddenTokens } from "./hiddenTokens";
 import { resetScopeSettings } from "./scopeSettings";
 import { resetWatchlist } from "./watchlist";
+import { closeCustomize, useCustomize } from "./customize";
+import { CustomizeModal, useOpenedOnce } from "./livePanels";
+import { layoutPrefsSync } from "./layoutPrefs";
 import { AnnouncementBar } from "./components/AnnouncementBar";
 import { currentSignIn, hasPendingLink, mayReplaceSignIn, redeemLinkCode, takeLinkCode } from "./deviceLink";
 import { closeSage, useSageMint } from "./sage";
 import { closeWallet, useWalletAddress } from "./walletModal";
 import { PageLoader } from "./components/PageLoader";
 import { beginWait, markNavigation } from "./loadTracker";
-import { useAppearance } from "./appearance";
+import { unbindAppearance, useAppearance } from "./appearance";
 import { TokenModalHost } from "./components/TokenModalHost";
 import { closeTokenModal } from "./tokenModal";
-import { onTradingSessionRefresh, setProState, proStateOf } from "./proTrade";
+import { onTradingSessionRefresh, setProState, proStateOf, tradeSettingsSync } from "./proTrade";
 import { setTrackedAccount } from "./trackedWallets";
 import { ProGraceBanner } from "./components/ProGraceBanner";
 import { BugButton } from "./components/BugButton";
@@ -156,13 +159,34 @@ function resetAccountState(): void {
 /**
  * What this device keeps for an account beyond the page, dropped when that account leaves it (a
  * sign-out, or another account signing in): its push subscription, which would otherwise go on
- * bringing its alerts here, and its hidden tokens and Scope settings, which the next account to
- * sign in would otherwise take as its own. Not on a guest signing in: a guest's are theirs to keep.
+ * bringing its alerts here, and its hidden tokens, Scope settings, trade defaults and layout, which
+ * the next account to sign in would otherwise take as its own. The feed's look stays as this
+ * browser's, but stops saving to the account. Not on a guest signing in: a guest's are theirs to keep.
  */
 function forgetAccountOnDevice(): void {
   void dropPush();
   resetHiddenTokens();
   resetScopeSettings();
+  tradeSettingsSync.reset();
+  layoutPrefsSync.reset();
+  unbindAppearance();
+}
+
+/**
+ * The one Customize window (customize.ts), over every tab: its code loads on its first opening and
+ * it stays mounted after, as the Live tab's windows do.
+ */
+function CustomizeHost({ guest, onAlerts }: { guest: boolean; onAlerts?: () => void }) {
+  const open = useCustomize().open;
+  const mounted = useOpenedOnce(open);
+  if (!mounted) return null;
+  return (
+    <Suspense fallback={null}>
+      <SectionBoundary label="Customize" onClose={closeCustomize}>
+        <CustomizeModal guest={guest} onAlerts={onAlerts} />
+      </SectionBoundary>
+    </Suspense>
+  );
 }
 
 export function App() {
@@ -359,6 +383,8 @@ export function App() {
 
   const enterGuest = () => {
     setGuest(true);
+    // A guest's Customize changes stay on this device.
+    unbindAppearance();
     invalidate();
     resetSettings();
     closeTokenModal();
@@ -705,6 +731,9 @@ export function App() {
               </Suspense>
             )}
           </AccessGate>
+        )}
+        {(signedIn || guest) && (
+          <CustomizeHost guest={guest} onAlerts={signedIn ? () => goTo("filters") : undefined} />
         )}
       </main>
 
