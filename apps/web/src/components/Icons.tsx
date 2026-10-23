@@ -342,6 +342,12 @@ export const ChevronLeftIcon = (p: IconProps) => (
   </Svg>
 );
 
+export const ChevronRightIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M9 6l6 6-6 6" />
+  </Svg>
+);
+
 /** An arrow leaving a tray: share. */
 export const ShareIcon = (p: IconProps) => (
   <Svg {...p}>

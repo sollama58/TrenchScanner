@@ -4,7 +4,17 @@ import { DEFAULT_SCOPE_CHIPS, SCOPE_CHIP_IDS, type ScopeChip } from "./scopeChip
 import { cardReadings, newestStats, nowReading, recordedPeakOf, socialLinks } from "./components/AlertCard";
 import { cardOutcome, outcomeResult } from "./outcome";
 import { change } from "./format";
-import type { ScopeColumn } from "./scope";
+import {
+  DEFAULT_SCOPE_BOARD,
+  isModelSide,
+  kindDef,
+  MAX_SCOPE_COLUMNS,
+  MAX_SCOPE_PICKS,
+  SCOPE_KINDS,
+  type ScopeColumn,
+  type ScopeColumnKind,
+  type ScopeColumnSpec,
+} from "./scope";
 
 /**
  * Scope's own settings (user ask 2026-10-18): what each column lets through and how the rows look,
@@ -37,12 +47,8 @@ export interface ScopeColumnFilter {
    * the Graduated column, with their filter or model marker (user ask 2026-10-18).
    */
   showGraduated: boolean;
-  /** Models column: only high-conviction calls. */
+  /** Model columns: only high-conviction calls. */
   highOnly: boolean;
-  /** Models column: only these models' calls (empty: every model you follow). */
-  models: string[];
-  /** Your filters column: only these filters' alerts (empty: every filter). */
-  filters: string[];
 }
 
 export type { ScopeChip };
@@ -86,15 +92,17 @@ export interface ScopeDisplay {
   highlightNew: boolean;
   /** Hold the board still while a pointer or finger is on it. */
   pauseOnHover: boolean;
-  /** Columns left off the board. */
-  hiddenColumns: ScopeColumn[];
-  /** The Stream's New and About to graduate columns in place of Your filters and Models. */
-  stream: boolean;
+}
+
+/** One column of the board: what it shows, and its own filters. */
+export interface ScopeBoardColumn extends ScopeColumnSpec {
+  filter: ScopeColumnFilter;
 }
 
 export interface ScopeSettings {
   display: ScopeDisplay;
-  columns: Record<ScopeColumn, ScopeColumnFilter>;
+  /** The board's columns, left to right: one to MAX_SCOPE_COLUMNS (user ask 2026-10-23). */
+  board: ScopeBoardColumn[];
 }
 
 export const DEFAULT_COLUMN_FILTER: ScopeColumnFilter = {
@@ -111,8 +119,6 @@ export const DEFAULT_COLUMN_FILTER: ScopeColumnFilter = {
   hideMissed: false,
   showGraduated: false,
   highOnly: false,
-  models: [],
-  filters: [],
 };
 
 export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
@@ -137,20 +143,14 @@ export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
     colorMcap: true,
     highlightNew: true,
     pauseOnHover: true,
-    hiddenColumns: [],
-    stream: false,
   },
-  columns: {
-    filters: DEFAULT_COLUMN_FILTER,
-    models: DEFAULT_COLUMN_FILTER,
-    new: DEFAULT_COLUMN_FILTER,
-    soon: DEFAULT_COLUMN_FILTER,
-    graduated: DEFAULT_COLUMN_FILTER,
-  },
+  board: DEFAULT_SCOPE_BOARD.map((c) => ({ ...c, filter: DEFAULT_COLUMN_FILTER })),
 };
 
 const SCOPE_SETTINGS_KEY = "ts-scope-settings";
-const COLUMNS: ScopeColumn[] = ["filters", "models", "new", "soon", "graduated"];
+/** The fixed columns of boards saved before columns could be chosen. */
+const LEGACY_COLUMNS: ScopeColumnKind[] = ["filters", "models", "new", "soon", "graduated"];
+const KINDS = SCOPE_KINDS.map((k) => k.kind);
 const SOCIALS = ["any", "x", "website", "either", "both"] as const;
 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null);
@@ -176,9 +176,54 @@ function normalizeFilter(raw: unknown): ScopeColumnFilter {
     hideMissed: bool(r.hideMissed, d.hideMissed),
     showGraduated: bool(r.showGraduated, d.showGraduated),
     highOnly: bool(r.highOnly, d.highOnly),
-    models: strings(r.models),
-    filters: strings(r.filters),
   };
+}
+
+/** A fresh column id: the kind, then a suffix when the board already has one by that name. */
+export function newColumnId(kind: ScopeColumnKind, taken: ReadonlySet<string>): ScopeColumn {
+  if (!taken.has(kind)) return kind;
+  for (let i = 2; ; i++) if (!taken.has(`${kind}-${i}`)) return `${kind}-${i}`;
+}
+
+/** A saved board as this build reads it: known kinds, unique ids, picks only where they belong. */
+function normalizeBoard(raw: unknown[]): ScopeBoardColumn[] {
+  const out: ScopeBoardColumn[] = [];
+  const ids = new Set<string>();
+  for (const item of raw) {
+    if (out.length >= MAX_SCOPE_COLUMNS) break;
+    const r = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
+    if (!KINDS.includes(r.kind as ScopeColumnKind)) continue;
+    const kind = r.kind as ScopeColumnKind;
+    const id =
+      typeof r.id === "string" && /^[\w-]{1,40}$/.test(r.id) && !ids.has(r.id)
+        ? r.id
+        : newColumnId(kind, ids);
+    ids.add(id);
+    const picks = kindDef(kind).picks ? [...new Set(strings(r.picks))].slice(0, MAX_SCOPE_PICKS) : [];
+    out.push({ id, kind, picks, filter: normalizeFilter(r.filter) });
+  }
+  return out;
+}
+
+/**
+ * The board of settings saved before columns could be chosen: Your filters, Models and Graduated,
+ * or New, About to graduate and Graduated with Stream on, less the hidden ones, each with its
+ * filters. Their "only these" name lists don't carry over: a specific filter or model column
+ * does that now.
+ */
+function legacyBoard(disp: Record<string, unknown>, cols: Record<string, unknown>): ScopeBoardColumn[] {
+  const kinds: ScopeColumnKind[] =
+    disp.stream === true ? ["new", "soon", "graduated"] : ["filters", "models", "graduated"];
+  const hidden = Array.isArray(disp.hiddenColumns)
+    ? LEGACY_COLUMNS.filter((c) => (disp.hiddenColumns as unknown[]).includes(c))
+    : [];
+  const shown = kinds.filter((k) => !hidden.includes(k));
+  return (shown.length > 0 ? shown : (["graduated"] as ScopeColumnKind[])).map((kind) => ({
+    id: kind,
+    kind,
+    picks: [],
+    filter: normalizeFilter(cols[kind]),
+  }));
 }
 
 /** Saved settings as this build reads them: unknown or broken fields fall back to the defaults. */
@@ -219,30 +264,17 @@ export function normalizeScopeSettings(raw: unknown): ScopeSettings {
       colorMcap: bool(disp.colorMcap, d.colorMcap),
       highlightNew: bool(disp.highlightNew, d.highlightNew),
       pauseOnHover: bool(disp.pauseOnHover, d.pauseOnHover),
-      hiddenColumns: Array.isArray(disp.hiddenColumns)
-        ? keepOneColumn(COLUMNS.filter((c) => (disp.hiddenColumns as unknown[]).includes(c)))
-        : d.hiddenColumns,
-      stream: bool(disp.stream, d.stream),
     },
-    columns: {
-      filters: normalizeFilter(cols.filters),
-      models: normalizeFilter(cols.models),
-      new: normalizeFilter(cols.new),
-      soon: normalizeFilter(cols.soon),
-      graduated: normalizeFilter(cols.graduated),
-    },
+    board: Array.isArray(r.board)
+      ? (() => {
+          const board = normalizeBoard(r.board as unknown[]);
+          // Never an empty board: it would show nothing with no way to tell why.
+          return board.length > 0 ? board : DEFAULT_SCOPE_SETTINGS.board;
+        })()
+      : r.display || r.columns
+        ? legacyBoard(disp, cols)
+        : DEFAULT_SCOPE_SETTINGS.board,
   };
-}
-
-/**
- * Never every column of a board, with Stream off or on: it would be empty with no way to tell
- * why. Graduated, on both boards, comes back.
- */
-function keepOneColumn(hidden: ScopeColumn[]): ScopeColumn[] {
-  const all = (ids: ScopeColumn[]) => ids.every((c) => hidden.includes(c));
-  return all(["filters", "models", "graduated"]) || all(["new", "soon", "graduated"])
-    ? hidden.filter((c) => c !== "graduated")
-    : hidden;
 }
 
 let current: ScopeSettings = load();
@@ -356,13 +388,54 @@ export function setScopeDisplay(change: Partial<ScopeDisplay>): void {
   save(normalizeScopeSettings({ ...current, display: { ...current.display, ...change } }));
 }
 
+function setBoard(board: ScopeBoardColumn[]): void {
+  save(normalizeScopeSettings({ ...current, board }));
+}
+
+const editColumn = (col: ScopeColumn, edit: (c: ScopeBoardColumn) => ScopeBoardColumn) =>
+  setBoard(current.board.map((c) => (c.id === col ? edit(c) : c)));
+
 export function setColumnFilter(col: ScopeColumn, change: Partial<ScopeColumnFilter>): void {
-  save(
-    normalizeScopeSettings({
-      ...current,
-      columns: { ...current.columns, [col]: { ...current.columns[col], ...change } },
-    }),
-  );
+  editColumn(col, (c) => ({ ...c, filter: { ...c.filter, ...change } }));
+}
+
+/** Adds a column at the board's right end; the new column's id, or null when the board is full. */
+export function addScopeColumn(kind: ScopeColumnKind, picks: string[] = []): ScopeColumn | null {
+  if (current.board.length >= MAX_SCOPE_COLUMNS) return null;
+  const id = newColumnId(kind, new Set(current.board.map((c) => c.id)));
+  setBoard([...current.board, { id, kind, picks, filter: DEFAULT_COLUMN_FILTER }]);
+  return id;
+}
+
+/** Takes a column off the board; the last one stays. */
+export function removeScopeColumn(col: ScopeColumn): void {
+  if (current.board.length <= 1) return;
+  setBoard(current.board.filter((c) => c.id !== col));
+}
+
+/** Moves a column one place left (-1) or right (1). */
+export function moveScopeColumn(col: ScopeColumn, step: -1 | 1): void {
+  const i = current.board.findIndex((c) => c.id === col);
+  const j = i + step;
+  if (i < 0 || j < 0 || j >= current.board.length) return;
+  const board = [...current.board];
+  [board[i], board[j]] = [board[j]!, board[i]!];
+  setBoard(board);
+}
+
+/** What a column shows: a new kind starts with no picks; its filters stay. */
+export function setColumnKind(col: ScopeColumn, kind: ScopeColumnKind): void {
+  editColumn(col, (c) => (c.kind === kind ? c : { ...c, kind, picks: [] }));
+}
+
+/** A specific filters or models column's picks, at most MAX_SCOPE_PICKS. */
+export function setColumnPicks(col: ScopeColumn, picks: string[]): void {
+  editColumn(col, (c) => ({ ...c, picks: picks.slice(0, MAX_SCOPE_PICKS) }));
+}
+
+/** Back to the board new accounts start with; the look stays. */
+export function resetScopeBoard(): void {
+  setBoard(DEFAULT_SCOPE_SETTINGS.board);
 }
 
 export function resetColumnFilter(col: ScopeColumn): void {
@@ -391,9 +464,7 @@ export function activeFilterCount(f: ScopeColumnFilter): number {
     (f.socials !== "any" ? 1 : 0) +
     (f.hideMissed ? 1 : 0) +
     (f.showGraduated ? 1 : 0) +
-    (f.highOnly ? 1 : 0) +
-    (f.models.length > 0 ? 1 : 0) +
-    (f.filters.length > 0 ? 1 : 0)
+    (f.highOnly ? 1 : 0)
   );
 }
 
@@ -419,7 +490,12 @@ export function withinMaxAge(card: Card, f: ScopeColumnFilter, now: number): boo
  * Whether a card gets through a column's filters at `now`. A reading the card doesn't have never
  * hides it: a filter only judges what is known.
  */
-export function passesColumnFilter(card: Card, f: ScopeColumnFilter, col: ScopeColumn, now: number): boolean {
+export function passesColumnFilter(
+  card: Card,
+  f: ScopeColumnFilter,
+  kind: ScopeColumnKind,
+  now: number,
+): boolean {
   const alertMcap = card.snapshot.marketCapUsd;
   const nowMcap = nowReading(card) ?? alertMcap;
   if (f.mcapMin !== null && nowMcap < f.mcapMin) return false;
@@ -449,13 +525,9 @@ export function passesColumnFilter(card: Card, f: ScopeColumnFilter, col: ScopeC
     if (!ok) return false;
   }
   if (f.hideMissed && outcomeResult(cardOutcome(card, now)) === "fail") return false;
-  if (col === "models") {
+  if (isModelSide(kind) && f.highOnly) {
     const c = card.curated;
-    if (f.highOnly && !(c?.tier === "high" || c?.calledBy?.some((m) => m.tier === "high"))) return false;
-    if (f.models.length > 0 && !cardModelNames(card).some((n) => f.models.includes(n))) return false;
-  }
-  if (col === "filters" && f.filters.length > 0) {
-    if (!card.filter || !f.filters.includes(card.filter.name)) return false;
+    if (!(c?.tier === "high" || c?.calledBy?.some((m) => m.tier === "high"))) return false;
   }
   return true;
 }
