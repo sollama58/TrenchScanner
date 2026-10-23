@@ -92,6 +92,50 @@ describe("curveCandleRows", () => {
     expect(next.rows.map((r) => [r.startAt - T0, r.coverTo - T0, r.bars.length])).toEqual([[0, 200_000, 1]]);
   });
 
+  // A minute with no change had no chunk of its own, so the chart drew it blank between two busy
+  // ones (prod 2026-10-23, 84WJ: 19:53, 19:59 and 20:06 blank on a coin streamed throughout).
+  it("vouches for a quiet minute between two busy ones, in one flush or across flushes", () => {
+    const t = streamedTape(
+      [
+        [T0 + 1_500, 2e-5, 2],
+        [T0 + 125_000, 3e-5, 3],
+      ],
+      T0 + 200_000,
+    );
+    // One flush: the first chunk vouches back to where the stream began (10 s before T0), and its
+    // cover runs on to the next chunk.
+    const whole = curveCandleRows("M", t.ticksAfter("M", -1), null, T0 + 180_000, SOL)!;
+    expect(whole.rows.map((r) => [r.coverFrom - T0, r.coverTo - T0])).toEqual([
+      [-10_000, 120_000],
+      [120_000, 180_000],
+    ]);
+    expect(whole.flushedTo).toBe(T0 + 180_000);
+    // Minute by minute: the quiet minute's flush writes nothing and keeps its place, and the next
+    // bar's chunk vouches back over it.
+    const m1 = curveCandleRows("M", t.ticksAfter("M", -1), null, T0 + 60_000, SOL)!;
+    expect(m1.rows.map((r) => [r.coverFrom - T0, r.coverTo - T0])).toEqual([[-10_000, 60_000]]);
+    expect(m1.flushedTo).toBe(T0 + 60_000);
+    const m2 = curveCandleRows("M", t.ticksAfter("M", T0 + 59_999), m1.flushedTo, T0 + 120_000, SOL)!;
+    expect(m2.rows).toEqual([]);
+    expect(m2.flushedTo).toBe(T0 + 60_000);
+    const m3 = curveCandleRows("M", t.ticksAfter("M", T0 + 59_999), m2.flushedTo, T0 + 180_000, SOL)!;
+    expect(m3.rows.map((r) => [r.startAt - T0, r.coverFrom - T0, r.coverTo - T0])).toEqual([
+      [120_000, 60_000, 180_000],
+    ]);
+    // Quiet for longer than a cover may run: given up, the flush moves on.
+    const long = streamedTape([[T0 + 1_500, 2e-5, 2]], T0 + 40 * 60_000);
+    const first = curveCandleRows("M", long.ticksAfter("M", -1), null, T0 + 60_000, SOL)!;
+    const quiet = curveCandleRows(
+      "M",
+      long.ticksAfter("M", T0 + 59_999),
+      first.flushedTo,
+      T0 + 30 * 60_000,
+      SOL,
+    )!;
+    expect(quiet.rows).toEqual([]);
+    expect(quiet.flushedTo).toBe(T0 + 30 * 60_000);
+  });
+
   it("saves a graduated coin's pool tape under its own source", () => {
     const out = curveCandleRows("M", tape().ticksAfter("M", -1), null, T0 + 60_000, SOL, "pool")!;
     expect(out.rows.map((r) => r.source)).toEqual(["pool"]);

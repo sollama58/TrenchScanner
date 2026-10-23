@@ -14,6 +14,7 @@ import {
   storedAppearanceKeys,
 } from "../feedAppearance.js";
 import { DEFAULT_HIDDEN_TOKENS, MAX_HIDDEN_TOKENS, parseHiddenTokens } from "../hiddenTokens.js";
+import { parseUserPrefs } from "../userPrefs.js";
 
 /** The Settings tab's API: alert settings, access, and following the best performer. */
 
@@ -364,6 +365,33 @@ describe("parseHiddenTokens", () => {
   });
 });
 
+const TRADE_PREFS = {
+  buyPresets: [0.1, 0.5, 1],
+  sellPresets: [25, 50, 100],
+  slippagePct: 20,
+  speed: "turbo",
+  mevProtect: false,
+  priorityMode: "custom",
+  customPrioritySol: 0.0005,
+  customTipSol: null,
+  buyRows: 1,
+  quickBuy: { enabled: true, amountSol: 0.2, position: "bottom-left", size: "l", color: "blue" },
+  alwaysShowHeld: true,
+};
+
+describe("parseUserPrefs", () => {
+  it("reads each section on its own, and a missing or broken one as null", () => {
+    expect(parseUserPrefs(null)).toEqual({ trade: null, layout: null });
+    expect(parseUserPrefs([1, 2])).toEqual({ trade: null, layout: null });
+    const layout = { liveView: "scope", tokenSide: "trades" };
+    expect(parseUserPrefs({ layout, trade: { ...TRADE_PREFS, slippagePct: 900 } })).toEqual({
+      trade: null,
+      layout,
+    });
+    expect(parseUserPrefs({ trade: TRADE_PREFS, other: 1 })).toEqual({ trade: TRADE_PREFS, layout: null });
+  });
+});
+
 describe.skipIf(!dbAvailable)("settings routes", () => {
   const env: Env = dbAvailable
     ? { ...loadEnv(), ADMIN_WALLET_ADDRESSES: ADMIN_WALLET, WEB_PUSH_PUBLIC_KEY: "BPublicKeyForTests" }
@@ -550,6 +578,29 @@ describe.skipIf(!dbAvailable)("settings routes", () => {
     ).toBe(401);
   });
 
+  it("saves a full list of hidden tokens past the global 64 KB body limit (audit 2026-10-23, AS-1)", async () => {
+    const full = {
+      autoUnhide: true,
+      tokens: Array.from({ length: MAX_HIDDEN_TOKENS }, (_, i) => ({
+        // Every text field at the schema's maximum.
+        tokenId: `tok${i}`.padEnd(64, "x"),
+        mintAddress: `${i}`.padEnd(64, "M"),
+        symbol: "FOO".padEnd(64, "O"),
+        name: "Foo".padEnd(128, "o"),
+        imageUrl: `https://example.com/${i}/`.padEnd(512, "i"),
+        hiddenAt: "2026-10-19T00:00:00.000Z",
+        baseMcapUsd: 12_000,
+        reachedX: 0,
+        graduated: false,
+      })),
+    };
+    expect(JSON.stringify(full).length).toBeGreaterThan(450 * 1024);
+    const res = await call("user", "PUT", "/settings/hidden-tokens", full);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().hiddenTokens.tokens).toHaveLength(MAX_HIDDEN_TOKENS);
+    await call("user", "PUT", "/settings/hidden-tokens", DEFAULT_HIDDEN_TOKENS);
+  });
+
   it("saves Scope's settings whole and rejects anything out of bounds", async () => {
     expect((await call("user", "GET", "/settings")).json().scopeSettings).toBeNull();
     const scope = {
@@ -596,6 +647,58 @@ describe.skipIf(!dbAvailable)("settings routes", () => {
     expect((await app.inject({ method: "PUT", url: "/settings/scope", payload: scope })).statusCode).toBe(
       401,
     );
+  });
+
+  it("saves each synced section whole, keeps the others, and keeps accounts apart", async () => {
+    expect((await call("user", "GET", "/settings")).json().prefs).toEqual({ trade: null, layout: null });
+    const layout = { liveView: "scope", tokenSide: "holders" };
+    expect((await call("user", "PUT", "/settings/prefs/layout", layout)).statusCode).toBe(200);
+    const res = await call("user", "PUT", "/settings/prefs/trade", TRADE_PREFS);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().prefs).toEqual({ trade: TRADE_PREFS, layout });
+    expect((await call("user", "GET", "/settings/prefs")).json().prefs).toEqual({
+      trade: TRADE_PREFS,
+      layout,
+    });
+    expect((await call("user", "GET", "/settings")).json().prefs).toEqual({ trade: TRADE_PREFS, layout });
+    // Another account sees only its own.
+    expect((await call("admin", "GET", "/settings/prefs")).json().prefs).toEqual({
+      trade: null,
+      layout: null,
+    });
+
+    const bad: [string, unknown][] = [
+      ["trade", { ...TRADE_PREFS, slippagePct: 51 }],
+      ["trade", { ...TRADE_PREFS, customPrioritySol: 0.5 }],
+      ["trade", { ...TRADE_PREFS, buyPresets: Array.from({ length: 11 }, () => 1) }],
+      ["trade", { ...TRADE_PREFS, quickBuy: { ...TRADE_PREFS.quickBuy, color: "<script>" } }],
+      ["trade", { ...TRADE_PREFS, extra: 1 }],
+      ["layout", { ...layout, tokenSide: "elsewhere" }],
+      ["layout", { liveView: "list", tokenSide: "map" }],
+    ];
+    for (const [section, body] of bad) {
+      expect((await call("user", "PUT", `/settings/prefs/${section}`, body)).statusCode).toBe(400);
+    }
+    expect((await call("user", "PUT", "/settings/prefs/nope", {})).statusCode).toBe(404);
+    expect((await call("user", "GET", "/settings/prefs")).json().prefs).toEqual({
+      trade: TRADE_PREFS,
+      layout,
+    });
+    expect(
+      (await app.inject({ method: "PUT", url: "/settings/prefs/layout", payload: layout })).statusCode,
+    ).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/settings/prefs" })).statusCode).toBe(401);
+  });
+
+  it("keeps both sections when they are saved at once", async () => {
+    const layout = { liveView: "cards", tokenSide: "none" };
+    const trade = { ...TRADE_PREFS, slippagePct: 12 };
+    const [a, b] = await Promise.all([
+      call("admin", "PUT", "/settings/prefs/layout", layout),
+      call("admin", "PUT", "/settings/prefs/trade", trade),
+    ]);
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+    expect((await call("admin", "GET", "/settings/prefs")).json().prefs).toEqual({ trade, layout });
   });
 
   it("needs a session", async () => {

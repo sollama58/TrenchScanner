@@ -1,7 +1,9 @@
 import {
+  chunkStartOf,
   createLogger,
   markTapeTrades,
   prisma,
+  saveCandleChunks,
   subtractSpans,
   tradesFromChainTransactions,
   withOwnApiFeature,
@@ -46,6 +48,12 @@ const COVER_LOOKBACK_MS = 5 * 3_600_000;
 const DAY_MS = 86_400_000;
 /** As tapeCandles.ts: a cover runs on at most this far past its chunk's start. */
 const QUIET_COVER_MAX_MS = 4 * 3_600_000;
+/**
+ * A coin whose page held no trade at all is left be this long before its next hole is read: its
+ * hole grows a minute a minute while its window is open, and a dead coin is not worth a page a
+ * minute (10 credits) to confirm dead.
+ */
+const QUIET_RETRY_MS = 30 * 60_000;
 
 export interface ChainFillDeps {
   helius: Pick<HeliusClient, "getMintTransactionsPage" | "gtfaUsable"> &
@@ -73,6 +81,8 @@ let spent = 0;
 /** Pages read today per coin, and holes (`mint:from`) left for the day: a page moved them nowhere. */
 const coinPages = new Map<string, number>();
 const stuck = new Set<string>();
+/** Coins whose last page held no trade, and when they may be read again. */
+const quietUntil = new Map<string, number>();
 
 /**
  * The day's credits another process (or this one before a restart) already spent, from the last
@@ -88,6 +98,7 @@ export function seedCandleChainFillSpend(creditsToday: number, at: Date, now = D
     spent = 0;
     coinPages.clear();
     stuck.clear();
+    quietUntil.clear();
   }
   spent = Math.max(spent, creditsToday);
 }
@@ -148,6 +159,7 @@ async function run(deps: ChainFillDeps, opts: ChainFillOptions): Promise<void> {
     spent = 0;
     coinPages.clear();
     stuck.clear();
+    quietUntil.clear();
   }
   if (!deps.helius.gtfaUsable || opts.creditsPerDay <= 0) return;
   let pages = 0;
@@ -161,20 +173,24 @@ async function run(deps: ChainFillDeps, opts: ChainFillOptions): Promise<void> {
       // each; the others one page a coin a run: the next run sees what is left.
       const burst = newest ? Math.max(1, opts.burstPages ?? 1) : 1;
       newest = false;
+      // Read lately and found dead: its hole grows a minute a minute, not worth a page each.
+      if ((quietUntil.get(coin.mint) ?? 0) > now) continue;
       let filled = false;
       for (let moves = 0; moves < burst && !outOfPages(); moves += 1) {
         const holes = await oneSecondHoles(coin.mint, coin.bornAt, end);
-        let moved: "closed" | "moved" | "failed" | "stuck" | null = null;
+        let moved: PageOutcome["moved"] | null = null;
         for (const [from, to] of holes) {
           if (outOfPages()) break;
           if ((coinPages.get(coin.mint) ?? 0) >= opts.maxPagesPerCoin) break;
           // A hole a page couldn't move waits a day; the coin's later holes are still read.
           if (stuck.has(`${coin.mint}:${from}`)) continue;
-          moved = await fillPage(deps, coin.mint, from, to);
+          const page = await fillPage(deps, coin.mint, from, to);
+          moved = page.moved;
           pages += 1;
           // Helius bills no failed answer.
           if (moved !== "failed") spent += PAGE_CREDITS;
           coinPages.set(coin.mint, (coinPages.get(coin.mint) ?? 0) + 1);
+          if (moved !== "failed" && page.trades === 0) quietUntil.set(coin.mint, now + QUIET_RETRY_MS);
           filled = true;
           // A hole closed whole costs the coin nothing: its next hole is read in the same run.
           if (moved === "closed") continue;
@@ -192,34 +208,39 @@ async function run(deps: ChainFillDeps, opts: ChainFillOptions): Promise<void> {
   stats.pages += pages;
 }
 
+interface PageOutcome {
+  /**
+   * "closed": the hole is filled; "moved": part of it; "failed": no answer; "stuck": nothing
+   * could be saved from where the hole starts, so that hole waits a day.
+   */
+  moved: "closed" | "moved" | "failed" | "stuck";
+  /** Trades of the coin the page held (0 on a quiet stretch, or a failed read). */
+  trades: number;
+}
+
 /**
  * Reads one page of the coin's trades from `from` and saves them over what it read: to the hole's
  * end when the page held the rest, else to the newest second it reached. A stretch with no trade
  * (before the first bar it saved, or the whole page) is vouched for by the first chunk it saved,
  * its cover run back to the hole's start, else by the chunk the hole starts after, its cover run on
- * over it. "closed": the hole is filled; "moved": part of it; "failed": no answer; "stuck": nothing
- * could be saved from where the hole starts, so that hole waits a day.
+ * over it, else by a chunk of its own with no bar (quietChunk).
  */
-async function fillPage(
-  deps: ChainFillDeps,
-  mint: string,
-  from: number,
-  to: number,
-): Promise<"closed" | "moved" | "failed" | "stuck"> {
+async function fillPage(deps: ChainFillDeps, mint: string, from: number, to: number): Promise<PageOutcome> {
   const page = await deps.helius.getMintTransactionsPage(mint, {
     fromBlockTime: Math.floor(from / 1_000),
     untilBlockTime: Math.ceil(to / 1_000),
   });
-  if (page.status !== "ok") return "failed";
+  if (page.status !== "ok") return { moved: "failed", trades: 0 };
   const txs = page.txs.filter((t) => typeof t.blockTime === "number");
   const newest = Math.max(0, ...txs.map((t) => t.blockTime! * 1_000));
   const whole = page.paginationToken === null || newest >= to;
   const coverTo = whole ? to : newest;
-  if (!(coverTo > from)) return "stuck";
+  if (!(coverTo > from)) return { moved: "stuck", trades: txs.length };
   const { trades } = tradesFromChainTransactions(mint, txs);
   markTapeTrades(mint, txs, trades);
   const rows = await saveChainCandles(mint, trades, { from, to: coverTo }, deps.sink, deps.helius);
   stats.rows += rows.length;
+  const outcome = (moved: PageOutcome["moved"]): PageOutcome => ({ moved, trades: trades.length });
   const first = rows[0];
   if (first && first.coverFrom > from) {
     // The page read [from, coverTo) and found no trade before its first bar: the saved chunk
@@ -237,11 +258,33 @@ async function fillPage(
       },
       data: { coverFrom: new Date(back) },
     });
-    if (back > from && !(await coverQuiet(mint, from, back))) return "stuck";
-    return whole ? "closed" : "moved";
+    if (back > from) await vouchQuiet(mint, from, back);
+    return outcome(whole ? "closed" : "moved");
   }
-  if (!first && !(await coverQuiet(mint, from, coverTo))) return "stuck";
-  return whole ? "closed" : "moved";
+  if (!first) await vouchQuiet(mint, from, coverTo);
+  return outcome(whole ? "closed" : "moved");
+}
+
+/**
+ * The chain holds no trade over [from, to): the 1-second chunk ending where it starts vouches for
+ * it (coverQuiet), else a chunk of its own with no bar does (prod 2026-10-23: a coin dead since its
+ * launch minute, with only GeckoTerminal's one minute bar, was drawn blank for two hours, and the
+ * fill parked it for the day instead of saying so).
+ */
+async function vouchQuiet(mint: string, from: number, to: number): Promise<void> {
+  if (await coverQuiet(mint, from, to)) return;
+  await saveCandleChunks([
+    {
+      mint,
+      res: 1,
+      startAt: chunkStartOf(from, 1),
+      source: "tape",
+      coverFrom: from,
+      coverTo: Math.min(to, from + QUIET_COVER_MAX_MS),
+      bars: [],
+      coarse: false,
+    },
+  ]);
 }
 
 /**
@@ -298,5 +341,6 @@ export function resetCandleChainFill(): void {
   spent = 0;
   coinPages.clear();
   stuck.clear();
+  quietUntil.clear();
   stats = { pages: 0, rows: 0, coins: 0, failed: 0 };
 }

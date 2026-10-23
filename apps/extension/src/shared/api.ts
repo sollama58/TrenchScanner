@@ -1,4 +1,4 @@
-import type { OverlayLookup, OverlaySettings } from "./types";
+import type { OverlaySettings, OverlayToken } from "./types";
 
 /** The only host the extension talks to (manifest host_permissions). */
 export const API_BASE = "https://api.trenchscanner.app";
@@ -33,5 +33,5 @@ export const api = {
   me: (key: string) => call<{ wallet: string; settings: OverlaySettings }>(key, "GET", "/me"),
   saveSettings: (key: string, settings: OverlaySettings) =>
     call<OverlaySettings>(key, "PUT", "/settings", settings),
-  lookup: (key: string, mints: string[]) => call<OverlayLookup>(key, "POST", "/lookup", { mints }),
+  feed: (key: string) => call<{ tokens: OverlayToken[] }>(key, "GET", "/feed"),
 };

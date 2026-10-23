@@ -79,6 +79,7 @@ export function HiddenTokensDialog({
                   <li key={t.tokenId} className="hidden-token">
                     <TokenImage
                       url={t.imageUrl?.startsWith("https://") ? t.imageUrl : null}
+                      mint={t.mintAddress}
                       size={64}
                       width={32}
                       height={32}

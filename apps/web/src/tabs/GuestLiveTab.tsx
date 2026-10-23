@@ -10,6 +10,7 @@ import { prefetch } from "../cache";
 import { usePolling, useNow } from "../hooks";
 import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { GUEST_DELAY_MINUTES } from "../session";
+import { openCustomize } from "../customize";
 import { introSeen, markIntroSeen } from "../intro";
 import { AboutModal, loadAboutModal, useOpenedOnce } from "../livePanels";
 
@@ -51,7 +52,6 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
   const modelName = models.length > 0 ? models.map((m) => m.name).join(", ") : "the top models";
   const many = models.length > 1;
   const delay = data?.delayMinutes ?? GUEST_DELAY_MINUTES;
-  const lockTitle = "Connect a wallet to use this";
 
   return (
     <div className="stack">
@@ -105,7 +105,13 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
             </div>
           </div>
           <div className="feed-controls">
-            <button type="button" className="ghost stats-btn" disabled title={lockTitle}>
+            <button
+              type="button"
+              className="ghost stats-btn"
+              aria-haspopup="dialog"
+              onClick={() => openCustomize("look")}
+              title="Theme, colors, card layout and what each card shows, kept on this device until you connect a wallet"
+            >
               <PaletteIcon size={14} />
               Customize
             </button>

@@ -80,9 +80,19 @@ describe("poolsOf", () => {
     expect(poolsOf(OTHER_MINT, { launchpad: null, launchedAt: null, pairAddress: null })).toEqual([]);
   });
 
-  it("skips the PumpSwap pool of a coin still priced on its curve: it has not graduated", () => {
+  it("skips the PumpSwap pool of a young coin still priced on its curve: it has not graduated", () => {
     const curve = pumpCurveAddressOf(PUMP_MINT)!;
-    expect(poolsOf(PUMP_MINT, { ...pumpToken, pairAddress: curve })).toEqual([curve]);
+    const young = { ...pumpToken, launchedAt: new Date(NOW - 3_600_000), pairAddress: curve };
+    expect(poolsOf(PUMP_MINT, young, NOW)).toEqual([curve]);
+    // Past the scan's watchlist the curve address may be stale: the pool is asked too (TB-1).
+    expect(poolsOf(PUMP_MINT, { ...pumpToken, pairAddress: curve }, NOW)).toEqual([
+      pumpSwapPoolOf(PUMP_MINT),
+      curve,
+    ]);
+    expect(poolsOf(PUMP_MINT, { ...young, launchedAt: null }, NOW)).toEqual([
+      pumpSwapPoolOf(PUMP_MINT),
+      curve,
+    ]);
     // No pair known: graduated or not, both are asked.
     expect(poolsOf(PUMP_MINT, { ...pumpToken, pairAddress: null })).toEqual([
       pumpSwapPoolOf(PUMP_MINT),
@@ -255,10 +265,11 @@ describe("stepBackfill", () => {
     expect(covers[0]![0]).toBe(NOW - 110 * M);
     for (let i = 1; i < covers.length; i++) expect(covers[i]![0]).toBeLessThanOrEqual(covers[i - 1]![1]);
     expect(Math.max(...covers.map((c) => c[1]))).toBe(NOW - 3 * M);
-    // An older page (the cursor set) vouches only to its own newest bar: the next page holds the rest.
+    // An older page (the cursor set) was read for everything before the cursor: the quiet minutes
+    // between its newest bar and the cursor are vouched for too, so its covers join the next page's.
     const older = deps({ geckoPage: vi.fn(async (_p, _m, before) => quiet(before)) });
     await stepBackfill(job({ mint: OTHER_MINT, cursor: new Date(NOW - 200 * M) }), token, older.d, NOW);
-    expect(Math.max(...older.saved.map((r) => r.coverTo))).toBe(NOW - 210 * M);
+    expect(Math.max(...older.saved.map((r) => r.coverTo))).toBe(NOW - 200 * M);
   });
 
   it("pages a non-Pump coin from now, not the hour start: no live page holds its newest stretch", async () => {

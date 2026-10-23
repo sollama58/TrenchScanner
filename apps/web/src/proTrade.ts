@@ -10,6 +10,7 @@ import { toBase64 } from "./burnTx";
 import { shortAddress } from "./format";
 import { onWalletsChanged, withTimeout } from "./wallet";
 import { PRIVY_WALLET_NAME, privyControls } from "./privyBridge";
+import { syncedSection } from "./syncedPrefs";
 
 /**
  * Pro Mode trades from the token modal (user decision 2026-10-17): the API builds a swap for the
@@ -102,7 +103,7 @@ export function graceLeftText(endsAt: number, now = Date.now()): string {
   return h > 0 ? `${h}h ${mins % 60}m` : `${mins}m`;
 }
 
-// ---- The trader's settings (this browser only) ----
+// ---- The trader's settings (synced to the account) ----
 
 export interface TradeSettings {
   /** Buy buttons, in SOL. */
@@ -189,21 +190,19 @@ export const DEFAULT_TRADE_SETTINGS: TradeSettings = {
 
 const SETTINGS_KEY = "ts-pro-trade-settings";
 
-/** Read once per page, then kept here: every panel and card shares one copy (useTradeSettings). */
-let current: TradeSettings | null = null;
-const settingsListeners = new Set<() => void>();
+/**
+ * One copy for every panel and card (useTradeSettings), kept in this browser and synced to the
+ * account (syncedPrefs.ts; apps/api/src/userPrefs.ts has the same names and bounds).
+ */
+export const tradeSettingsSync = syncedSection<TradeSettings>({
+  section: "trade",
+  storageKey: SETTINGS_KEY,
+  defaults: DEFAULT_TRADE_SETTINGS,
+  parse: (raw) => parseTradeSettings(raw == null ? null : JSON.stringify(raw)),
+});
 
 export function readTradeSettings(): TradeSettings {
-  current ??= parseTradeSettings(readStoredSettings());
-  return current;
-}
-
-function readStoredSettings(): string | null {
-  try {
-    return localStorage.getItem(SETTINGS_KEY);
-  } catch {
-    return null;
-  }
+  return tradeSettingsSync.get();
 }
 
 /** The settings as saved, with anything missing or out of range back at its default. */
@@ -293,31 +292,12 @@ export function acceptDisclaimer(wallet: string): void {
 }
 
 export function saveTradeSettings(s: TradeSettings): void {
-  current = s;
-  try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
-  } catch {
-    // Blocked storage: the settings hold for this page load.
-  }
-  for (const l of settingsListeners) l();
+  tradeSettingsSync.set(s);
 }
 
-/** The trading settings, re-rendering on any change (Settings tab, Trade panel, another tab). */
+/** The trading settings, re-rendering on any change (Customize, the Trade panel, another tab or device). */
 export function useTradeSettings(): TradeSettings {
-  return useSyncExternalStore((l) => {
-    settingsListeners.add(l);
-    // Another browser tab saved: read it again.
-    const onStorage = (e: StorageEvent) => {
-      if (e.key !== SETTINGS_KEY) return;
-      current = parseTradeSettings(e.newValue);
-      l();
-    };
-    window.addEventListener("storage", onStorage);
-    return () => {
-      settingsListeners.delete(l);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, readTradeSettings);
+  return tradeSettingsSync.use();
 }
 
 /** The settings' custom fees as the API takes them: lamport strings, left out when not set. */

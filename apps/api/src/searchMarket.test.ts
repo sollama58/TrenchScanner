@@ -6,6 +6,7 @@ import {
   coalesceMarketReadings,
   fillSearchMarketHits,
   SEARCH_DEX_CALLS_PER_MINUTE,
+  SEARCH_DEX_CALLS_PER_READER_MINUTE,
   SEARCH_MARKET_FRESH_MS,
   SEARCH_MARKET_FETCH_WAIT_MS,
   type SearchMarketHit,
@@ -216,6 +217,17 @@ describe("fillSearchMarketHits", () => {
     );
     expect(dex.calls).toEqual([]);
     expect(filled?.marketCapUsd).toBe(4_000);
+  });
+
+  it("gives one reader only a share of the minute's batches (audit 2026-10-23, AS-5)", () => {
+    for (let i = 0; i < SEARCH_DEX_CALLS_PER_READER_MINUTE; i++)
+      expect(allowSearchDexCall(NOW + i, "reader-a")).toBe(true);
+    expect(allowSearchDexCall(NOW + 10, "reader-a")).toBe(false);
+    // Another reader, and a search with no reader, still have the rest of the process's budget.
+    expect(allowSearchDexCall(NOW + 10, "reader-b")).toBe(true);
+    expect(allowSearchDexCall(NOW + 10)).toBe(true);
+    // A minute on, the share is back.
+    expect(allowSearchDexCall(NOW + 60_010, "reader-a")).toBe(true);
   });
 
   it("asks with the 2s deadline and answers without waiting out a hung fetch", async () => {

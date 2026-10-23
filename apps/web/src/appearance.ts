@@ -5,6 +5,7 @@ import {
   DEFAULT_CHART_MARK_KINDS,
   reviseChartMarkKinds,
 } from "@trenchscanner/core/chartMarks";
+import { isGuest } from "./session";
 import { put, type CardField, type FeedAppearance, type QuickLink } from "./api";
 import {
   CHART_EVENT_EMPHASIS,
@@ -618,7 +619,9 @@ export function sameAppearance(a: FeedAppearance, b: FeedAppearance): boolean {
 export const APPEARANCE_KEY = "ts.feedAppearance";
 const SAVE_DELAY_MS = 600;
 
-export type SaveState = { state: "idle" | "saving" | "saved" } | { state: "error"; message: string };
+/** "local": kept on this device only (a guest, or before the account's settings have loaded). */
+export type SaveState =
+  { state: "idle" | "saving" | "saved" | "local" } | { state: "error"; message: string };
 
 /**
  * Fields that used to live only in this browser. When a saved look (this device or the account)
@@ -693,6 +696,14 @@ let saveState: SaveState = { state: "idle" };
 let version = 0;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let inflight = 0;
+/**
+ * Whether changes go to an account: set once a signed-in settings load lands (adoptAppearance),
+ * cleared on sign-out or guest mode (unbindAppearance). Until then the look stays on this device,
+ * so a guest's choices never meet a 401 and nothing is saved to whoever signs in next.
+ */
+let bound = false;
+/** A change made while signed in but before the account's look loaded: it goes to the account. */
+let pendingLocal = false;
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -747,7 +758,15 @@ export function adoptAppearance(
   sinceVersion: number,
   storedKeys?: readonly string[] | null,
 ): void {
-  if (saved === undefined || version !== sinceVersion || timer !== null || inflight > 0) return;
+  if (saved === undefined) return;
+  const wasBound = bound;
+  bound = true;
+  if (pendingLocal || version !== sinceVersion || timer !== null || inflight > 0) {
+    // Changed on this device before the account was known: that change goes to the account now.
+    if ((!wasBound || pendingLocal) && timer === null && inflight === 0) scheduleSave();
+    pendingLocal = false;
+    return;
+  }
   // A chart pref this device already chose stays when the account has not stored that key. A key
   // the account did store wins, including when the stored value is the default. The next change
   // of the look saves the whole thing.
@@ -765,6 +784,17 @@ export function setAppearance(change: Partial<FeedAppearance>): void {
   version++;
   writeLocal(current);
   applyTheme(current);
+  if (!bound) {
+    // A guest's look is this device's alone; a signed-in page still loading saves it once it can.
+    if (!isGuest()) pendingLocal = true;
+    saveState = { state: "local" };
+    emit();
+    return;
+  }
+  scheduleSave();
+}
+
+function scheduleSave() {
   saveState = { state: "saving" };
   emit();
   if (timer) clearTimeout(timer);
@@ -773,6 +803,24 @@ export function setAppearance(change: Partial<FeedAppearance>): void {
     timer = null;
     void save();
   }, SAVE_DELAY_MS);
+}
+
+/**
+ * Stops saving to an account (signed out, or browsing as a guest). The look stays on this device:
+ * it is how this browser looks, and the next account's own look replaces it when it loads.
+ */
+export function unbindAppearance(): void {
+  bound = false;
+  pendingLocal = false;
+  if (timer) clearTimeout(timer);
+  timer = null;
+  saveState = { state: "idle" };
+  emit();
+}
+
+/** Whether appearance changes are being saved to an account. */
+export function appearanceSynced(): boolean {
+  return bound;
 }
 
 async function save() {

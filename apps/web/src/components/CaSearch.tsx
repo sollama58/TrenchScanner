@@ -241,6 +241,7 @@ function HitRow({
     >
       <TokenImage
         url={hit.imageUrl?.startsWith("https://") ? hit.imageUrl : null}
+        mint={hit.mint}
         size={80}
         width={40}
         height={40}

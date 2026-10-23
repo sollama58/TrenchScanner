@@ -128,14 +128,31 @@ export function candleSeries(
         slots.set(bar.t, { bar, priority: input.priority, coverTo: input.coverTo });
     }
   }
+  // Each width's held bars by start, so a stretch reads only the bars it reaches (CE-4: walking
+  // every bar for every stretch was stretches x bars, about a second at 24 h of 1 s chunks).
+  const sorted = new Map<number, Held[]>();
+  for (const [res, slots] of byRes)
+    sorted.set(
+      res,
+      [...slots.values()].sort((a, b) => a.bar.t - b.bar.t),
+    );
   const buckets = new Map<number, { bar: StoredBar; width: number; shadowTo: number }[]>();
   const coarse = new Map<number, SeriesBar>();
   const taken = new Set<string>();
   for (const seg of baseSegments(inputs, from, to, tfSec)) {
-    const slots = byRes.get(seg.res);
-    if (!slots) continue;
+    const held = sorted.get(seg.res);
+    if (!held) continue;
     const width = seg.res * 1_000;
-    for (const { bar, coverTo } of slots.values()) {
+    // The first bar whose span can reach the stretch: it starts after seg.from - width.
+    let lo = 0;
+    let hi = held.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (held[mid]!.bar.t + width <= seg.from) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo; i < held.length && held[i]!.bar.t < seg.to; i++) {
+      const { bar, coverTo } = held[i]!;
       if (width <= tf) {
         // A bar belongs to every stretch its span reaches into (once): a minute bar whose stretch
         // starts inside it is still the minute's whole reading, not to be dropped (API audit
@@ -168,9 +185,7 @@ export function candleSeries(
     // Within a bucket, a finer bar inside a wider bar's own cover duplicates it (a trade-tape
     // second inside Pump.fun's minute: the minute already holds that trade), so it is left out;
     // a wider bar's open-to-close stands for its span. Finer bars past the wider one's cover stand.
-    const kept = list.filter(
-      (e) => !list.some((w) => w.width > e.width && e.bar.t >= w.bar.t && e.bar.t < w.shadowTo),
-    );
+    const kept = list.length > 1 ? unshadowed(list) : list;
     out.push(
       fold(
         at,
@@ -180,4 +195,34 @@ export function candleSeries(
   }
   for (const [at, bar] of coarse) if (!buckets.has(at)) out.push(bar);
   return out.sort((a, b) => a.t - b.t);
+}
+
+/**
+ * The entries no wider entry's own cover holds: `e` is dropped when some entry of a greater
+ * width has `w.bar.t <= e.bar.t < w.shadowTo`. Widths are walked widest first against the merged
+ * covers of every wider one, so a bucket costs n log n rather than n².
+ */
+function unshadowed<E extends { bar: StoredBar; width: number; shadowTo: number }>(list: readonly E[]): E[] {
+  const widths = [...new Set(list.map((e) => e.width))].sort((a, b) => b - a);
+  if (widths.length === 1) return [...list];
+  let covers: Span[] = [];
+  const kept = new Set<E>();
+  for (const width of widths) {
+    const group = list.filter((e) => e.width === width);
+    for (const e of group) if (!insideSpans(covers, e.bar.t)) kept.add(e);
+    covers = unionSpans([...covers, ...group.map((e): Span => [e.bar.t, e.shadowTo])]);
+  }
+  return list.filter((e) => kept.has(e));
+}
+
+/** Whether `t` falls in one of `spans` (sorted, disjoint, half-open). */
+function insideSpans(spans: readonly Span[], t: number): boolean {
+  let lo = 0;
+  let hi = spans.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (spans[mid]![1] <= t) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < spans.length && spans[lo]![0] <= t;
 }

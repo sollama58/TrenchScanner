@@ -123,8 +123,8 @@ export function labelRuleSummary(input: {
   excludeFineTick: boolean;
 }): string {
   const fine = input.excludeFineTick
-    ? `Rule ${input.fineTickRule} (fine-tick) rows are excluded.`
-    : `Rule ${input.fineTickRule} (fine-tick) rows are included.`;
+    ? `Rule ${input.fineTickRule} and newer (fine-tick) rows are excluded.`
+    : `Rule ${input.fineTickRule} and newer (fine-tick) rows are included.`;
   return `The trainer loads finalized rows on label rule ${input.fitRule} or newer. ${fine} Rules below ${input.fitRule} are not loaded. Live charts count rule ${input.reportedRule} and newer. Which rule a given model was fit on is not stored on the model row.`;
 }
 

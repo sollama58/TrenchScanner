@@ -35,11 +35,20 @@ export const COINGECKO_DAY_SPENT = "coingecko-daily-budget";
  * coin for good (28 of 30 coins a run on 2026-10-23, with the trainer missing the CoinGecko key).
  */
 export class CandlesUnavailableError extends Error {
-  constructor(mint: string, why: string) {
+  constructor(
+    mint: string,
+    readonly why: string,
+  ) {
     super(`no candle source could answer for ${mint}: ${why}`);
     this.name = "CandlesUnavailableError";
   }
 }
+
+/**
+ * CandlesUnavailableError's `why` while Pump.fun is paused and there is no CoinGecko key: no coin
+ * can be answered until the pause ends, so the re-grades stop their run (candleRetry.ts).
+ */
+export const PUMP_PAUSED_NO_KEY = "Pump.fun paused after a 403, the store empty, no CoinGecko key";
 
 /** After Pump.fun refuses a read (403), its candles are not asked again for this long. */
 export const PUMP_REFUSED_PAUSE_MS = 10 * 60_000;
@@ -164,7 +173,7 @@ export function minuteCandleReader(deps: MinuteCandleReaderDeps): MinuteCandleRe
     if (!gecko) {
       // Nothing stored and nothing else to ask: Pump.fun's refusal stands, as before.
       if (pumpError) throw pumpError;
-      return none("Pump.fun paused after a 403, the store empty, no CoinGecko key");
+      return none(PUMP_PAUSED_NO_KEY);
     }
     const token = await tokenOf(mint);
     const pools = poolsOf(mint, token ?? { launchpad: null, launchedAt: null, pairAddress: null });

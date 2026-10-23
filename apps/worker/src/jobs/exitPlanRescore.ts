@@ -12,6 +12,7 @@ import {
 } from "@trenchscanner/core";
 import { resumLighthouseReturns } from "./lighthouseRollupJob.js";
 import { CandlesUnavailableError } from "./minuteCandleReader.js";
+import { CandleRetry, givesUp, PUMP_PAUSED_STOP_AFTER, pumpPausedNoKey } from "./candleRetry.js";
 
 const logger = createLogger("exit-plan-rescore");
 
@@ -55,10 +56,13 @@ const WATCH_MAX_MS = 26 * 3_600_000;
 export const LIGHTHOUSE_MARKER = "lighthouse";
 
 let finished = false;
+/** Coins no candle source could answer, and when to ask again (candleRetry.ts). */
+const retry = new CandleRetry();
 
 /** Test hook. */
 export function resetExitPlanRescore(): void {
   finished = false;
+  retry.clear();
 }
 
 /** Why a row was left on its old return. */
@@ -169,11 +173,20 @@ export async function runExitPlanRescore(
     AND co."simReturnPct" IS NOT NULL AND co."finalized24hAt" IS NOT NULL`;
 
   // The oldest pending rows name the next coins; each coin's pending rows are then done together
-  // from one candle read.
+  // from one candle read. Backed-off coins are left out, so the rows after them fill the run
+  // (audit 2026-10-23, WC-1).
+  const blocked = retry.blocked(now());
   const next = await prisma.$queryRaw<{ tokenId: string }[]>`
     SELECT co."tokenId" FROM "CandidateOutcome" co WHERE ${pendingSql}
+      ${blocked.length > 0 ? Prisma.sql`AND co."tokenId" NOT IN (${Prisma.join(blocked)})` : Prisma.empty}
     ORDER BY co."anchorAt" ASC LIMIT ${coinsPerRun * 20}`;
   const tokenIds = [...new Set(next.map((r) => r.tokenId))].slice(0, coinsPerRun);
+  if (tokenIds.length === 0 && blocked.length > 0) {
+    // Only backed-off coins are left: not finished, they are asked again when their wait ends.
+    const [counted] = await prisma.$queryRaw<{ remaining: number }[]>`
+      SELECT count(*)::int AS remaining FROM "CandidateOutcome" co WHERE ${pendingSql}`;
+    if ((counted?.remaining ?? 0) > 0) return { backedOff: blocked.length, remaining: counted!.remaining };
+  }
   if (tokenIds.length === 0) {
     // The window's last rows sit on their 24-hour watch until a day after it ends: the Lighthouse
     // re-sum and the finish wait for them, or their returns would never be re-scored or summed.
@@ -191,9 +204,19 @@ export async function runExitPlanRescore(
     return lighthouse;
   }
 
-  const counts: Record<string, number> = { coins: 0, fiveMinuteReads: 0, rescored: 0, alerts: 0, skipped: 0 };
+  const counts: Record<string, number> = {
+    coins: 0,
+    fiveMinuteReads: 0,
+    rescored: 0,
+    alerts: 0,
+    skipped: 0,
+    unavailable: 0,
+    backedOff: blocked.length,
+  };
   let earliestRescored: Date | null = null;
   let throttled = false;
+  let pumpPaused = false;
+  let pausedInARow = 0;
   for (const [i, tokenId] of tokenIds.entries()) {
     if (i > 0) await sleep(spacingMs);
     const token = await prisma.token.findUnique({ where: { id: tokenId }, select: { mintAddress: true } });
@@ -203,7 +226,9 @@ export async function runExitPlanRescore(
       FROM "CandidateOutcome" co WHERE ${pendingSql} AND co."tokenId" = ${tokenId}
       ORDER BY co."anchorAt" ASC`;
     if (rows.length === 0) continue;
-    let candles: MinuteCandle[] | null;
+    let candles: MinuteCandle[] | null = null;
+    /** Set when no source could answer: the coin's misses so far. */
+    let tries: number | null = null;
     try {
       candles = await pumpFun.minuteCandles(token.mintAddress);
       // Minute candles that stop short of the coin's first pending call: read the five-minute ones.
@@ -218,15 +243,39 @@ export async function runExitPlanRescore(
         throttled = true;
         break;
       }
+      if (pumpPausedNoKey(err)) {
+        // Not the coin's miss: nothing answers any coin until the pause ends.
+        pausedInARow += 1;
+        if (pausedInARow >= PUMP_PAUSED_STOP_AFTER) {
+          pumpPaused = true;
+          break;
+        }
+        continue;
+      }
+      pausedInARow = 0;
       // A transport failure: the coin's rows stay pending for a later run.
-      if (!(err instanceof CandlesUnavailableError))
+      if (!(err instanceof CandlesUnavailableError)) {
         logger.warn("candle read failed", { mint: token.mintAddress, error: String(err) });
-      continue;
+        continue;
+      }
+      counts.unavailable! += 1;
+      tries = retry.miss(tokenId, now());
     }
-    counts.coins! += 1;
+    pausedInARow = 0;
+    if (tries === null) {
+      retry.forget(tokenId);
+      counts.coins! += 1;
+    }
     const nowMs = now();
+    let waiting = 0;
     for (const row of rows) {
-      const result = rescoreFromCandles(row, candles, nowMs);
+      if (tries !== null && !givesUp(tries)) {
+        waiting += 1;
+        continue;
+      }
+      // Unanswered too often or too old: recorded as skipped, as the pre-#988 null answer was.
+      const result =
+        tries !== null ? ({ skip: "no-candles" } as const) : rescoreFromCandles(row, candles, nowMs);
       if ("skip" in result || result.simReturnPct === null) {
         counts.skipped! += 1;
         await prisma.exitPlanRescore.create({
@@ -261,12 +310,14 @@ export async function runExitPlanRescore(
       counts.alerts! += alerts.count;
       if (!earliestRescored || row.anchorAt < earliestRescored) earliestRescored = row.anchorAt;
     }
+    if (tries !== null && waiting === 0) retry.forget(tokenId);
   }
   if (earliestRescored) await rewindLighthouse(earliestRescored, since);
   const [counted] = await prisma.$queryRaw<{ remaining: number }[]>`
     SELECT count(*)::int AS remaining FROM "CandidateOutcome" co WHERE ${pendingSql}`;
   const remaining = counted?.remaining ?? 0;
   if (throttled) logger.warn("pump.fun throttled the candle reads - the rest wait for the next run");
-  logger.info("exit plan re-score run", { ...counts, remaining, throttled });
-  return { ...counts, remaining, throttled };
+  if (pumpPaused) logger.warn("Pump.fun paused and no CoinGecko key - the rest wait for the next run");
+  logger.info("exit plan re-score run", { ...counts, remaining, throttled, pumpPaused });
+  return { ...counts, remaining, throttled, pumpPaused };
 }

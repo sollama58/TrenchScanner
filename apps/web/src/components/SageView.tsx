@@ -404,6 +404,7 @@ function SageBody({ mint, onClose }: { mint: string; onClose: () => void }) {
         <div className="sage-token">
           <TokenImage
             url={t?.imageUrl}
+            mint={mint}
             size={128}
             className="avatar"
             width={44}

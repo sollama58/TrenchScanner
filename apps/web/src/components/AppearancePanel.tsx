@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChartEventsPicker } from "./ChartEventsPicker";
-import { WalletMarksPicker } from "./WalletMarksPicker";
 import type { CardField, NarrativeNoteReadiness, QuickLink } from "../api";
 import {
   CARD_FIELD_GROUPS,
@@ -27,17 +25,143 @@ const NAME_KINDS = [
   ["bubbleNamesFomo", "FOMO names"],
 ] as const;
 
-/**
- * Every appearance control (presets, theme and colors, layout, card fields), in the Live and Stream
- * tabs' Customize panel, where the feed itself is the preview. Every change shows at once and is
- * saved to the wallet's account, so the look follows the user to their other devices.
- */
-export function AppearanceControls() {
+/** The card presets: a starting point for spacing, layout and fields that keeps theme and colors. */
+export function PresetPicker() {
+  const look = useAppearance();
+  const activePreset = PRESETS.find((p) => sameAppearance(withPreset(look, p.look), look))?.id ?? null;
+  return (
+    <>
+      <div className="preset-options">
+        {PRESETS.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            className={`sound-option${activePreset === p.id ? " on" : ""}`}
+            aria-pressed={activePreset === p.id}
+            onClick={() => setAppearance(withPreset(look, p.look))}
+          >
+            <strong>{p.label}</strong>
+            <small className="muted">{p.hint}</small>
+          </button>
+        ))}
+      </div>
+      <p className="faint small">Presets keep your theme and colors.</p>
+    </>
+  );
+}
+
+/** The cards' spacing, columns, sizes and corners. */
+export function CardLayoutControls() {
+  const look = useAppearance();
+  return (
+    <>
+      <Choice
+        label="Spacing"
+        value={look.density}
+        options={[
+          ["compact", "Compact"],
+          ["cozy", "Standard"],
+          ["roomy", "Roomy"],
+        ]}
+        onChange={(density) => setAppearance({ density })}
+      />
+      <Choice
+        label="Columns on a computer"
+        value={String(look.columns)}
+        options={[
+          ["0", "Auto"],
+          ["1", "1"],
+          ["2", "2"],
+          ["3", "3"],
+          ["4", "4"],
+        ]}
+        onChange={(c) => setAppearance({ columns: Number(c) })}
+      />
+      {look.columns === 0 && (
+        <Choice
+          label="Card width"
+          value={look.cardWidth}
+          options={[
+            ["narrow", "Narrow"],
+            ["normal", "Standard"],
+            ["wide", "Wide"],
+          ]}
+          onChange={(cardWidth) => setAppearance({ cardWidth })}
+        />
+      )}
+      <Choice
+        label="Columns on a phone"
+        value={String(look.phoneColumns)}
+        options={[
+          ["1", "1"],
+          ["2", "2"],
+        ]}
+        onChange={(c) => setAppearance({ phoneColumns: Number(c) })}
+      />
+      <TextSize value={look.textSize} onCommit={(textSize) => setAppearance({ textSize })} />
+      <Choice
+        label="Corners"
+        value={look.corners}
+        options={[
+          ["square", "Square"],
+          ["rounded", "Rounded"],
+          ["round", "Round"],
+        ]}
+        onChange={(corners) => setAppearance({ corners })}
+      />
+      <Choice
+        label="Token image"
+        value={look.avatar}
+        options={[
+          ["small", "Small"],
+          ["normal", "Standard"],
+          ["large", "Large"],
+        ]}
+        onChange={(avatar) => setAppearance({ avatar })}
+      />
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={look.learningNote}
+          onChange={() => setAppearance({ learningNote: !look.learningNote })}
+        />
+        &ldquo;Learning from…&rdquo; note under the feed
+      </label>
+    </>
+  );
+}
+
+/** The Live feed's market cap line: alerts that fell below it are hidden from view. */
+export function HideAlertsControls() {
+  const look = useAppearance();
+  return (
+    <>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={look.hideBelowMcap}
+          onChange={() => setAppearance({ hideBelowMcap: !look.hideBelowMcap })}
+        />
+        Hide alerts on the Live feed whose market cap has fallen below
+      </label>
+      <McapLine
+        value={look.hideBelowMcapUsd}
+        on={look.hideBelowMcap}
+        onCommit={(hideBelowMcapUsd) => setAppearance({ hideBelowMcapUsd })}
+      />
+      <p className="faint small check-hint">
+        Only hides them from view. Stats, hit rates and grading still count every alert.
+      </p>
+    </>
+  );
+}
+
+/** What each card shows: its pills, stat tiles, links and extras. */
+export function CardFieldControls() {
   const look = useAppearance();
   const narrative = useNarrativeNoteReadiness();
   const narrativeShown = look.narrativeNote ?? narrative?.ready ?? false;
   const hidden = useMemo(() => new Set(look.hidden), [look.hidden]);
-  const activePreset = PRESETS.find((p) => sameAppearance(withPreset(look, p.look), look))?.id ?? null;
   const shown = (f: CardField) =>
     !hidden.has(f) &&
     (f !== "reasons" || look.reasons) &&
@@ -63,205 +187,84 @@ export function AppearanceControls() {
       : setAppearance({ hidden: hidden.has(f) ? look.hidden.filter((x) => x !== f) : [...look.hidden, f] });
 
   return (
-    <div className="appearance-controls">
-      <fieldset>
-        <legend>Presets</legend>
-        <div className="preset-options">
-          {PRESETS.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              className={`sound-option${activePreset === p.id ? " on" : ""}`}
-              aria-pressed={activePreset === p.id}
-              onClick={() => setAppearance(withPreset(look, p.look))}
-            >
-              <strong>{p.label}</strong>
-              <small className="muted">{p.hint}</small>
-            </button>
-          ))}
-        </div>
-        <p className="faint small">Presets keep your theme and colors.</p>
-      </fieldset>
-
-      <fieldset>
-        <legend>Theme and colors</legend>
-        <ThemeAndColors />
-      </fieldset>
-
-      <fieldset>
-        <legend>Layout and spacing</legend>
-        <Choice
-          label="Spacing"
-          value={look.density}
-          options={[
-            ["compact", "Compact"],
-            ["cozy", "Standard"],
-            ["roomy", "Roomy"],
-          ]}
-          onChange={(density) => setAppearance({ density })}
-        />
-        <Choice
-          label="Columns on a computer"
-          value={String(look.columns)}
-          options={[
-            ["0", "Auto"],
-            ["1", "1"],
-            ["2", "2"],
-            ["3", "3"],
-            ["4", "4"],
-          ]}
-          onChange={(c) => setAppearance({ columns: Number(c) })}
-        />
-        {look.columns === 0 && (
-          <Choice
-            label="Card width"
-            value={look.cardWidth}
-            options={[
-              ["narrow", "Narrow"],
-              ["normal", "Standard"],
-              ["wide", "Wide"],
-            ]}
-            onChange={(cardWidth) => setAppearance({ cardWidth })}
-          />
-        )}
-        <Choice
-          label="Columns on a phone"
-          value={String(look.phoneColumns)}
-          options={[
-            ["1", "1"],
-            ["2", "2"],
-          ]}
-          onChange={(c) => setAppearance({ phoneColumns: Number(c) })}
-        />
-        <TextSize value={look.textSize} onCommit={(textSize) => setAppearance({ textSize })} />
-        <Choice
-          label="Corners"
-          value={look.corners}
-          options={[
-            ["square", "Square"],
-            ["rounded", "Rounded"],
-            ["round", "Round"],
-          ]}
-          onChange={(corners) => setAppearance({ corners })}
-        />
-        <Choice
-          label="Token image"
-          value={look.avatar}
-          options={[
-            ["small", "Small"],
-            ["normal", "Standard"],
-            ["large", "Large"],
-          ]}
-          onChange={(avatar) => setAppearance({ avatar })}
-        />
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={look.learningNote}
-            onChange={() => setAppearance({ learningNote: !look.learningNote })}
-          />
-          &ldquo;Learning from…&rdquo; note under the feed
-        </label>
-      </fieldset>
-
-      <fieldset>
-        <legend>Hide alerts</legend>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={look.hideBelowMcap}
-            onChange={() => setAppearance({ hideBelowMcap: !look.hideBelowMcap })}
-          />
-          Hide alerts on the Live feed whose market cap has fallen below
-        </label>
-        <McapLine
-          value={look.hideBelowMcapUsd}
-          on={look.hideBelowMcap}
-          onCommit={(hideBelowMcapUsd) => setAppearance({ hideBelowMcapUsd })}
-        />
-        <p className="faint small check-hint">
-          Only hides them from view. Stats, hit rates and grading still count every alert.
-        </p>
-      </fieldset>
-
-      <fieldset>
-        <legend>What cards show</legend>
-        <div className="field-groups">
-          {CARD_FIELD_GROUPS.map((g) => (
-            <div key={g.title} className="field-group">
-              <h4>{g.title}</h4>
-              {g.fields.map((f) => (
-                <label key={f.id} className="check">
-                  <input type="checkbox" checked={shown(f.id)} onChange={() => toggleField(f.id)} />
-                  {f.label}
-                </label>
-              ))}
+    <>
+      <div className="field-groups">
+        {CARD_FIELD_GROUPS.map((g) => (
+          <div key={g.title} className="field-group">
+            <h4>{g.title}</h4>
+            <div className="scope-pills">
+              {g.fields.map((f) => {
+                const on = shown(f.id);
+                return (
+                  <button
+                    key={f.id}
+                    type="button"
+                    className={`scope-pill${on ? " on" : ""}`}
+                    aria-pressed={on}
+                    onClick={() => toggleField(f.id)}
+                  >
+                    {f.label}
+                  </button>
+                );
+              })}
             </div>
-          ))}
-        </div>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={look.cardSearch}
-            onChange={() => setAppearance({ cardSearch: !look.cardSearch })}
-          />
-          Search button on each card
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={look.volume}
-            // Switching volume on also unhides it, in case an older preset hid the old tile.
-            onChange={() =>
-              setAppearance({ volume: !look.volume, hidden: look.hidden.filter((x) => x !== "vol") })
-            }
-          />
-          Volume tiles: 5m, 1h and 24h
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={look.scoreColor}
-            onChange={() => setAppearance({ scoreColor: !look.scoreColor })}
-          />
-          Color the score: red for the lowest 10% of recent alerts, green for the top 10%
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={narrativeShown}
-            onChange={() => setAppearance({ narrativeNote: !narrativeShown })}
-          />
-          Narrative model&rsquo;s &ldquo;agrees&rdquo; / &ldquo;warns&rdquo; on other models&rsquo; alerts
-        </label>
-        <p className="faint small check-hint">
-          {look.narrativeNote === null ? (
-            <>Automatic: {narrativeAutoHint(narrative)}</>
-          ) : (
-            <>
-              Set by you.{" "}
-              <button type="button" className="link" onClick={() => setAppearance({ narrativeNote: null })}>
-                Go back to automatic
-              </button>{" "}
-              ({narrativeAutoHint(narrative)})
-            </>
-          )}
-        </p>
-        <BubbleMapControls />
-        <ChartControls />
-        <WalletMarksPicker />
-        <ChartEventsPicker />
-        <div className="field-group">
-          <h4>Quick links</h4>
-          <QuickLinkChecks />
-        </div>
-        {look.hidden.length > 0 && (
-          <button type="button" className="ghost small-btn" onClick={() => setAppearance({ hidden: [] })}>
-            Show everything
-          </button>
+          </div>
+        ))}
+      </div>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={look.cardSearch}
+          onChange={() => setAppearance({ cardSearch: !look.cardSearch })}
+        />
+        Search button on each card
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={look.volume}
+          // Switching volume on also unhides it, in case an older preset hid the old tile.
+          onChange={() =>
+            setAppearance({ volume: !look.volume, hidden: look.hidden.filter((x) => x !== "vol") })
+          }
+        />
+        Volume tiles: 5m, 1h and 24h
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={look.scoreColor}
+          onChange={() => setAppearance({ scoreColor: !look.scoreColor })}
+        />
+        Color the score: red for the lowest 10% of recent alerts, green for the top 10%
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={narrativeShown}
+          onChange={() => setAppearance({ narrativeNote: !narrativeShown })}
+        />
+        Narrative model&rsquo;s &ldquo;agrees&rdquo; / &ldquo;warns&rdquo; on other models&rsquo; alerts
+      </label>
+      <p className="faint small check-hint">
+        {look.narrativeNote === null ? (
+          <>Automatic: {narrativeAutoHint(narrative)}</>
+        ) : (
+          <>
+            Set by you.{" "}
+            <button type="button" className="link" onClick={() => setAppearance({ narrativeNote: null })}>
+              Go back to automatic
+            </button>{" "}
+            ({narrativeAutoHint(narrative)})
+          </>
         )}
-      </fieldset>
-    </div>
+      </p>
+      {look.hidden.length > 0 && (
+        <button type="button" className="ghost small-btn" onClick={() => setAppearance({ hidden: [] })}>
+          Show everything
+        </button>
+      )}
+    </>
   );
 }
 

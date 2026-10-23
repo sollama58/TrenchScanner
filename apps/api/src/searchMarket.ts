@@ -22,12 +22,38 @@ export const SEARCH_MARKET_FETCH_WAIT_MS = 2_000;
 export const SEARCH_DEX_CALLS_PER_MINUTE = 24;
 const searchDexCalls: number[] = [];
 
-/** Whether search may start another DexScreener batch now. Records it when so. */
-export function allowSearchDexCall(now = Date.now()): boolean {
+/**
+ * One reader's share of those batches, where a route names the reader (GET /tokens/search/markets
+ * takes any 30 mints, tracked or not): one reader can no longer spend the whole minute's budget and
+ * leave everyone else's search rows on their snapshot (audit 2026-10-23, AS-5).
+ */
+export const SEARCH_DEX_CALLS_PER_READER_MINUTE = 6;
+const readerDexCalls = new Map<string, number[]>();
+
+/**
+ * Whether search may start another DexScreener batch now, within the process's budget and, given a
+ * reader, within that reader's share. Records it when so.
+ */
+export function allowSearchDexCall(now = Date.now(), reader?: string): boolean {
   const recent = searchDexCalls.filter((t) => now - t < 60_000);
   searchDexCalls.length = 0;
   searchDexCalls.push(...recent);
   if (searchDexCalls.length >= SEARCH_DEX_CALLS_PER_MINUTE) return false;
+  if (reader !== undefined) {
+    const mine = (readerDexCalls.get(reader) ?? []).filter((t) => now - t < 60_000);
+    readerDexCalls.delete(reader);
+    if (mine.length >= SEARCH_DEX_CALLS_PER_READER_MINUTE) {
+      readerDexCalls.set(reader, mine);
+      return false;
+    }
+    mine.push(now);
+    readerDexCalls.set(reader, mine);
+    while (readerDexCalls.size > 10_000) {
+      const oldest = readerDexCalls.keys().next().value;
+      if (oldest === undefined) break;
+      readerDexCalls.delete(oldest);
+    }
+  }
   searchDexCalls.push(now);
   return true;
 }
@@ -164,6 +190,7 @@ export function clearSearchMarketMemory(): void {
   remembered.clear();
   inflight.clear();
   searchDexCalls.length = 0;
+  readerDexCalls.clear();
 }
 
 function remember(mint: string, token: CandidateToken | null, at: number): void {
@@ -251,15 +278,17 @@ function apply<T extends SearchMarketHit>(hit: T, merged: CoalescedMarket): T {
 /**
  * Fills each hit from the freshest quote this process already holds, then asks DexScreener once
  * for the mints whose newest reading is older than the window (at most one batch). A mint read
- * inside the window, including a read that came back empty, is not asked again.
+ * inside the window, including a read that came back empty, is not asked again. With `reader`, a
+ * batch also spends that reader's share (allowSearchDexCall).
  */
 export async function fillSearchMarketHits<T extends SearchMarketHit>(
   hits: readonly T[],
   dex: SearchQuoteSource,
   now = Date.now(),
+  reader?: string,
 ): Promise<T[]> {
   try {
-    return await fillSearchMarketHitsInner(hits, dex, now);
+    return await fillSearchMarketHitsInner(hits, dex, now, reader);
   } catch {
     // A quote read must not fail the search. The rows keep the snapshot they already had.
     return [...hits];
@@ -270,6 +299,7 @@ async function fillSearchMarketHitsInner<T extends SearchMarketHit>(
   hits: readonly T[],
   dex: SearchQuoteSource,
   now: number,
+  reader: string | undefined,
 ): Promise<T[]> {
   if (hits.length === 0) return [];
   const mints = hits.map((h) => h.mint);
@@ -291,7 +321,7 @@ async function fillSearchMarketHitsInner<T extends SearchMarketHit>(
     .slice(0, SEARCH_MARKET_FETCH_MAX)
     .map((p) => p.hit.mint);
 
-  if (need.length > 0) await fetchFresh(dex, need, now);
+  if (need.length > 0) await fetchFresh(dex, need, now, reader);
 
   return plan.map(({ hit }) => {
     const merged = coalesceMarketReadings(
@@ -328,7 +358,12 @@ function settleWithin(p: Promise<void>, ms: number): Promise<void> {
   });
 }
 
-async function fetchFresh(dex: SearchQuoteSource, mints: string[], now: number): Promise<void> {
+async function fetchFresh(
+  dex: SearchQuoteSource,
+  mints: string[],
+  now: number,
+  reader: string | undefined,
+): Promise<void> {
   const wait: Promise<void>[] = [];
   const start: string[] = [];
   for (const mint of mints) {
@@ -337,7 +372,7 @@ async function fetchFresh(dex: SearchQuoteSource, mints: string[], now: number):
     else start.push(mint);
   }
   // Past search's share of the DexScreener budget, keep the snapshot. An in-flight batch still finishes.
-  if (start.length > 0 && allowSearchDexCall(now)) {
+  if (start.length > 0 && allowSearchDexCall(now, reader)) {
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       release = resolve;

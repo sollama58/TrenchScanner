@@ -1,12 +1,13 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { prisma, type CandidateToken } from "@trenchscanner/core";
+import { Prisma, prisma, tokenSageSocials, type CandidateToken } from "@trenchscanner/core";
 import {
   fillMissingSocials,
   mergeSocials,
   recordSocialLinks,
   resetSocialsFill,
+  storedSageSocials,
   takeSocialsFillStats,
 } from "./socialsFill.js";
 
@@ -168,5 +169,65 @@ describe.skipIf(!dbAvailable)("socials on the Token table", () => {
       { mintAddress: mint("recent"), websiteUrl: null, socialsCheckedAt: minsAgo(20) },
       { mintAddress: mint("stale"), websiteUrl: null, socialsCheckedAt: new Date(now) },
     ]);
+  });
+});
+
+describe.skipIf(!dbAvailable)("storedSageSocials", () => {
+  const mint = (s: string) => `${TAG}-sage-${s}`;
+  afterAll(async () => {
+    await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { startsWith: `${TAG}-sage-` } } });
+  });
+
+  it("reads the same links as tokenSageSocials over the whole stored analysis", async () => {
+    const analyses: Record<string, Prisma.InputJsonValue | typeof Prisma.DbNull> = {
+      full: {
+        verdict: "ok",
+        raw: {
+          name: "Coin",
+          twitter: "https://x.com/coin",
+          telegram: "t.me/coin",
+          website: "coin.xyz",
+          description: "x".repeat(3000),
+        },
+      },
+      partial: { raw: { twitter: "@coin", telegram: null, website: 42 } },
+      junk: { raw: { twitter: "not a link", website: ["https://a.xyz"] } },
+      rawArray: { raw: ["https://x.com/coin"] },
+      rawString: { raw: "https://x.com/coin" },
+      noRaw: { twitter: "https://x.com/top" },
+      array: ["https://x.com/coin"],
+      none: Prisma.DbNull,
+    };
+    await prisma.tokenNarrative.createMany({
+      data: [
+        ...Object.entries(analyses).map(([k, analysis]) => ({
+          mintAddress: mint(k),
+          depth: "fast",
+          status: "done",
+          analysis,
+        })),
+        {
+          mintAddress: mint("failed"),
+          depth: "fast",
+          status: "failed",
+          analysis: { raw: { twitter: "https://x.com/failed" } },
+        },
+      ],
+    });
+    const mints = [...Object.keys(analyses), "failed", "missing"].map(mint);
+    const whole = await prisma.tokenNarrative.findMany({
+      where: { mintAddress: { in: mints }, status: { not: "failed" } },
+      select: { mintAddress: true, analysis: true },
+    });
+    const expected = whole
+      .map((r) => ({ mintAddress: r.mintAddress, ...tokenSageSocials(r.analysis) }))
+      .sort((a, b) => a.mintAddress.localeCompare(b.mintAddress));
+    const got = (await storedSageSocials(mints)).sort((a, b) => a.mintAddress.localeCompare(b.mintAddress));
+    expect(got).toEqual(expected);
+    expect(got).toHaveLength(Object.keys(analyses).length);
+    expect(got.find((r) => r.mintAddress === mint("full"))).toMatchObject({
+      twitterUrl: "https://x.com/coin",
+    });
+    expect(await storedSageSocials([])).toEqual([]);
   });
 });

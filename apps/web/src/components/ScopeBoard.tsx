@@ -1,6 +1,6 @@
 import { SectionBoundary } from "./SectionBoundary";
 import { ScopeRowSkeletons } from "./Skeleton";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Card, CuratedPage, Filter, LaunchPage, Leaderboard, MatchPage } from "../api";
 import {
   passesColumnFilter,
@@ -10,7 +10,7 @@ import {
   type ScopeDisplay,
 } from "../scopeSettings";
 import { rowChips } from "../scopeChips";
-import { ScopeSettingsModal, type ScopeSettingsSection } from "./ScopeSettingsModal";
+import { openCustomize } from "../customize";
 import {
   usePolling,
   usePollingAll,
@@ -30,7 +30,9 @@ import {
   emptyColumns,
   frameOf,
   holdFrame,
+  keptCards,
   kindDef,
+  rowClock,
   SCOPE_MODEL_PAGES,
   SCOPE_PAGES,
   SCOPE_STREAM_PAGES,
@@ -46,6 +48,7 @@ import {
 } from "../scope";
 import {
   FeeBadge,
+  feeBadge,
   LINKS,
   nowReading,
   nowReadingAge,
@@ -92,13 +95,13 @@ const STREAM_PATH = "/launches";
  * look, apart from the Cards view's Customize) and the Live feed's token window. The board
  * holds still while a mouse rests on it or a list is scrolled down; new alerts wait behind a "N new"
  * pill. On phones one column shows at a time under sticky tabs: tap a tab or swipe sideways.
+ * Memoized, so the Live tab's own re-renders (its clock, its header) skip the board (audit
+ * 2026-10-23, WB-1): every prop it is given is stable.
  */
-export function ScopeBoard({
+export const ScopeBoard = memo(function ScopeBoard({
   feedPath,
   modelsOn,
   heldTokenIds = NO_TOKENS,
-  settingsSection,
-  onSettings,
   onStatus,
 }: {
   /** The Live feed's page `n`, so Scope reads exactly what the cards view does. */
@@ -109,9 +112,6 @@ export function ScopeBoard({
    * "older than", and keep the column and place they'd have anyway.
    */
   heldTokenIds?: ReadonlySet<string>;
-  /** The Scope settings window's open section (the Live header's Customize opens Display), or null. */
-  settingsSection: ScopeSettingsSection | null;
-  onSettings: (section: ScopeSettingsSection | null) => void;
   /**
    * Whether the board is held still and whether its feed reads are failing, for the Live header's
    * Scanning pill, which says Live / Paused for Scope (user ask 2026-10-23).
@@ -206,9 +206,12 @@ export function ScopeBoard({
   useEffect(() => {
     if (visible) unhideTokens(dueToUnhide(hiddenTokens, visible, gradTokens));
   }, [visible, hiddenTokens, gradTokens]);
+  // Read at the click, so the rows' memo isn't broken by every live tick (audit 2026-10-23, WB-3).
+  const hideFrom = useRef({ visible, gradTokens });
+  hideFrom.current = { visible, gradTokens };
   const onHide = useCallback(
-    (card: Card) => hideToken(card, visible ?? [], gradTokens),
-    [visible, gradTokens],
+    (card: Card) => hideToken(card, hideFrom.current.visible ?? [], hideFrom.current.gradTokens),
+    [],
   );
   // Every column before its filters: what the settings window offers to pick from.
   const unfiltered = useMemo(() => {
@@ -267,8 +270,8 @@ export function ScopeBoard({
   const [frame, setFrame] = useState<ScopeFrame | null>(null);
   const lastCards = useRef(new Map<string, Card>());
   useEffect(() => {
-    for (const c of visible ?? []) lastCards.current.set(c.id, c);
-  }, [visible]);
+    lastCards.current = keptCards(lastCards.current, visible ?? [], frame);
+  }, [visible, frame]);
   const held = useMemo(
     () => (fresh && frame ? holdFrame(frame, fresh, lastCards.current) : null),
     [fresh, frame],
@@ -447,7 +450,7 @@ export function ScopeBoard({
       <button
         type="button"
         className={`ghost icon-btn scope-filter-btn${count > 0 ? " on" : ""}`}
-        onClick={() => onSettings(id)}
+        onClick={() => openCustomize("scope-columns", { column: id })}
         title={`Filter what shows in ${label}${count > 0 ? ` (${count} on)` : ""}`}
         aria-label={`Filter ${label}${count > 0 ? `, ${count} filters on` : ""}`}
       >
@@ -457,15 +460,6 @@ export function ScopeBoard({
     );
   };
   const tiles = tileMode(look);
-  const modal = (
-    <ScopeSettingsModal
-      open={settingsSection !== null}
-      section={settingsSection ?? "display"}
-      onClose={() => onSettings(null)}
-      names={names}
-      tiles={tiles}
-    />
-  );
 
   if (first.error && !first.data && !gradPage && !streamFirst)
     return <p className="error">Couldn&apos;t load your feed: {first.error.message}</p>;
@@ -479,7 +473,6 @@ export function ScopeBoard({
       onTouchEnd={touchEnd}
       onTouchCancel={touchEnd}
     >
-      {modal}
       <div
         className={`scope-bar${paused && pending > 0 ? "" : " quiet"}`}
         ref={bar}
@@ -542,7 +535,11 @@ export function ScopeBoard({
                   <p className="muted small">
                     Pick up to three {c.kind === "filter" ? "of your filters" : "models"} for this column.
                   </p>
-                  <button type="button" className="ghost small-btn" onClick={() => onSettings("columns")}>
+                  <button
+                    type="button"
+                    className="ghost small-btn"
+                    onClick={() => openCustomize("scope-columns")}
+                  >
                     Choose {c.kind === "filter" ? "filters" : "models"}
                   </button>
                 </div>
@@ -567,7 +564,7 @@ export function ScopeBoard({
                     <ScopeRow
                       index={i}
                       card={card}
-                      now={now}
+                      now={rowClock(now, card)}
                       display={display}
                       tiles={tiles}
                       marker={c.kind === "graduated" || c.kind === "model"}
@@ -582,7 +579,7 @@ export function ScopeBoard({
       </div>
     </div>
   );
-}
+});
 
 /** Past this many columns, the board widens past the page's width into the window's (user ask 2026-10-23). */
 const WIDE_FROM_COLS = 3;
@@ -669,7 +666,12 @@ export function scopeLookClass(d: ScopeDisplay): string {
 }
 
 /** One alert as a row: avatar, ticker and age, where it came from, the figures, and data chips. */
-export function ScopeRow({
+/**
+ * Memoized (audit 2026-10-23, WB-3): a board holds 100-200 rows, and its live tick and clock change
+ * only some of them; the props are stable otherwise (onHide is a callback, display and tiles are
+ * settings, a card keeps its object until its figures change, and `now` steps per rowClock).
+ */
+export const ScopeRow = memo(function ScopeRow({
   card,
   now,
   display: d,
@@ -750,6 +752,11 @@ export function ScopeRow({
   const chips = rowChips(card, d.chips, now);
   const showSource = d.showSource || marker;
   const img = d.imageSize === "s" ? 44 : d.imageSize === "l" ? 72 : 56;
+  const hasFoot =
+    (d.showFees && feeBadge(card.token.creatorFee) !== null) ||
+    (showSource && (filter !== null || curated != null || high)) ||
+    socials.length > 0 ||
+    tradeLinks.length > 0;
   const dexInfo = dexInfoLabel(card.token, now) && <DexInfoLabel token={card.token} now={now} />;
 
   return (
@@ -773,6 +780,7 @@ export function ScopeRow({
       <div className="scope-avatar">
         <TokenImage
           url={card.token.imageUrl?.startsWith("https://") ? card.token.imageUrl : null}
+          mint={card.token.mintAddress}
           size={img * 2}
           width={img}
           height={img}
@@ -840,44 +848,6 @@ export function ScopeRow({
             </span>
           )}
         </div>
-        <div className="scope-meta">
-          {d.showFees && <FeeBadge fee={card.token.creatorFee} icon={12} className="scope-fee" />}
-          {filter && showSource && (
-            <span className="scope-src mine" title={`Caught by your filter “${filter.name}”`}>
-              {filter.icon ? <FilterGlyph icon={filter.icon} size={11} /> : <SlidersIcon size={11} />}
-              {marker && <span className="scope-src-text">{filter.name}</span>}
-            </span>
-          )}
-          {curated && showSource && (
-            <span className="scope-src model" title={models.join(" + ")}>
-              <BrainIcon size={11} />
-              <span className="scope-src-text">
-                {models.length > 1 ? `${models[0]} +${models.length - 1}` : models[0]}
-              </span>
-            </span>
-          )}
-          {high && showSource && (
-            <span
-              className="scope-src model"
-              title="High conviction: the model's top half-percent of moments"
-            >
-              HC
-            </span>
-          )}
-          <SocialLinks links={socials} className="scope-socials" />
-          {tradeLinks.map((l) => (
-            <a
-              key={l.label}
-              className="scope-trade-link"
-              href={l.href(card.token.mintAddress)}
-              target="_blank"
-              rel="noreferrer noopener"
-              title={`Open ${label} on ${l.label}`}
-            >
-              {l.label}
-            </a>
-          ))}
-        </div>
       </div>
       <div className="scope-figs">
         <div className={`scope-fig scope-now${nowAge !== null ? " stale" : ""}`} title={nowTitle}>
@@ -921,24 +891,70 @@ export function ScopeRow({
           </div>
         )}
       </div>
-      {chips.length > 0 && (
-        <div className="scope-chips">
-          {chips.map((c) => {
-            const tl = tileLook(tiles, c.tone, c.risky);
-            return (
-              <span
-                key={c.id}
-                className={`scope-chip ${tl.className ?? ""}${c.aged ? " aged" : ""}`}
-                style={tl.style}
-                title={c.title}
-              >
-                <span className="scope-chip-label">{c.short}</span>
-                <span className="num">{c.value}</span>
-              </span>
-            );
-          })}
+      {/* The chips, then the fee, source and link icons at the row's bottom right, left of the
+          quick-buy pill, so the name has its line to itself (user ask 2026-10-23). */}
+      {(chips.length > 0 || hasFoot) && (
+        <div className="scope-bottom">
+          {chips.length > 0 && (
+            <div className="scope-chips">
+              {chips.map((c) => {
+                const tl = tileLook(tiles, c.tone, c.risky);
+                return (
+                  <span
+                    key={c.id}
+                    className={`scope-chip ${tl.className ?? ""}${c.aged ? " aged" : ""}`}
+                    style={tl.style}
+                    title={c.title}
+                  >
+                    <span className="scope-chip-label">{c.short}</span>
+                    <span className="num">{c.value}</span>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          {hasFoot && (
+            <div className="scope-foot">
+              {d.showFees && <FeeBadge fee={card.token.creatorFee} icon={12} className="scope-fee" />}
+              {filter && showSource && (
+                <span className="scope-src mine" title={`Caught by your filter “${filter.name}”`}>
+                  {filter.icon ? <FilterGlyph icon={filter.icon} size={11} /> : <SlidersIcon size={11} />}
+                  {marker && <span className="scope-src-text">{filter.name}</span>}
+                </span>
+              )}
+              {curated && showSource && (
+                <span className="scope-src model" title={models.join(" + ")}>
+                  <BrainIcon size={11} />
+                  <span className="scope-src-text">
+                    {models.length > 1 ? `${models[0]} +${models.length - 1}` : models[0]}
+                  </span>
+                </span>
+              )}
+              {high && showSource && (
+                <span
+                  className="scope-src model"
+                  title="High conviction: the model's top half-percent of moments"
+                >
+                  HC
+                </span>
+              )}
+              <SocialLinks links={socials} className="scope-socials" />
+              {tradeLinks.map((l) => (
+                <a
+                  key={l.label}
+                  className="scope-trade-link"
+                  href={l.href(card.token.mintAddress)}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  title={`Open ${label} on ${l.label}`}
+                >
+                  {l.label}
+                </a>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </article>
   );
-}
+});

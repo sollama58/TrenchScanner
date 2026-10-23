@@ -175,6 +175,37 @@ describe.skipIf(!dbAvailable)("chart chain fill", () => {
     expect(await oneSecondHoles(MINT, LAUNCH - 2 * MIN, LAUNCH + 118 * MIN)).toEqual([]);
   });
 
+  it("vouches for a dead coin's quiet stretch with a chunk of its own, then leaves it be for a while", async () => {
+    // Born two minutes before the curve tape's first chunk, and no trade on the chain at all.
+    await prisma.token.update({
+      where: { mintAddress: MINT },
+      data: { launchedAt: new Date(LAUNCH - 2 * MIN) },
+    });
+    const { helius, asked } = stub([[], []]);
+    await runCandleChainFill({ helius, sink: { solUsd: async () => 200 } }, opts);
+    // The first hole, which no 1-second chunk ends at, got a chunk with no bar; the second ran the
+    // curve chunk's cover on. Both closed in one run.
+    expect(asked).toHaveLength(2);
+    expect(await oneSecondHoles(MINT, LAUNCH - 2 * MIN, LAUNCH + 118 * MIN)).toEqual([]);
+    const quiet = await prisma.candleChunk.findMany({ where: { mint: MINT, source: "tape" } });
+    expect(quiet.map((r) => [r.coverFrom.getTime(), r.coverTo.getTime(), r.bars])).toEqual([
+      [LAUNCH - 2 * MIN, LAUNCH, 0],
+    ]);
+    // Its window grows a minute a minute, but a dead coin is not read again for a while.
+    const wider = { ...opts, windowMinutes: 130 };
+    await runCandleChainFill(
+      { helius, sink: { solUsd: async () => 200 } },
+      { ...wider, now: () => NOW + 5 * MIN },
+    );
+    expect(asked).toHaveLength(2);
+    await runCandleChainFill(
+      { helius, sink: { solUsd: async () => 200 } },
+      { ...wider, now: () => NOW + 31 * MIN },
+    );
+    expect(asked).toHaveLength(3);
+    expect(await oneSecondHoles(MINT, LAUNCH - 2 * MIN, LAUNCH + 128 * MIN)).toEqual([]);
+  });
+
   it("carries the day's spend over from the scan heartbeat", async () => {
     const { helius, asked } = stub([[buy(LAUNCH + 2 * MIN, 30e9)]]);
     seedCandleChainFillSpend(995, new Date(NOW), NOW);

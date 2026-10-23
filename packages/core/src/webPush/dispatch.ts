@@ -108,7 +108,25 @@ function pushSubject(env: Env): string {
   return url.startsWith("https://") ? url : "mailto:admin@trenchscanner.app";
 }
 
-/** Whether the endpoint a browser handed over is one we may POST to: https on a public host. */
+/**
+ * The push services browsers hand out endpoints on: Chrome, Edge-on-Android, Samsung, Opera and
+ * Brave use FCM, Firefox Mozilla's autopush, Safari Apple's, Edge on Windows WNS. An exact host, or
+ * a ".suffix" any subdomain of which matches.
+ */
+const PUSH_SERVICE_HOSTS = [
+  "fcm.googleapis.com",
+  "updates.push.services.mozilla.com",
+  ".push.services.mozilla.com",
+  ".push.apple.com",
+  ".notify.windows.com",
+] as const;
+
+/**
+ * Whether the endpoint a browser handed over is one we may POST to: https on the default port, at
+ * one of the real push services. Checked at subscribe and again before each send, so a row saved
+ * earlier can't aim the worker's POSTs at a private address either (audit 2026-10-23, SD-2: the
+ * spelling check alone allowed any port and any name, which may resolve anywhere).
+ */
 export function isPushEndpoint(endpoint: string): boolean {
   let url: URL;
   try {
@@ -117,11 +135,10 @@ export function isPushEndpoint(endpoint: string): boolean {
     return false;
   }
   if (url.protocol !== "https:" || url.username || url.password) return false;
+  // URL drops the default port, so any port left is another one.
+  if (url.port !== "") return false;
   const host = url.hostname.toLowerCase();
-  if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal")) return false;
-  // No IP literals: every real push service (FCM, Mozilla, Apple, Windows) is a DNS name.
-  if (/^[\d.]+$/.test(host) || host.startsWith("[")) return false;
-  return host.includes(".");
+  return PUSH_SERVICE_HOSTS.some((h) => (h.startsWith(".") ? host.endsWith(h) : host === h));
 }
 
 /** The two alert settings the dispatcher reads, from User.alertPrefs (apps/api/src/alertPrefs.ts). */
@@ -452,6 +469,12 @@ async function deliver(
   send: PushSender,
   summary: WebPushSummary,
 ): Promise<void> {
+  // Saved before the push-service allow-list (or edited by hand): never sent to, and dropped.
+  if (!isPushEndpoint(sub.endpoint)) {
+    summary.removed += 1;
+    await prisma.webPushSubscription.deleteMany({ where: { id: sub.id } });
+    return;
+  }
   const target = { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } };
   let lastError: string | null = null;
   let delivered = false;

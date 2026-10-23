@@ -682,13 +682,14 @@ export function useLiveMarketCaps(
   }, [cards, live]);
 }
 
-/** Re-renders every `ms` - for countdowns and "3m ago" labels. */
+/**
+ * Re-renders every `ms` - for countdowns and "3m ago" labels. Not in a hidden tab, where it
+ * re-rendered whole feeds for nobody; back in view it catches up at once if a tick was missed, as
+ * the one-second clock does since #957 (audit 2026-10-23, WB-10).
+ */
 export function useNow(ms = 30_000): number {
   const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const t = window.setInterval(() => setNow(Date.now()), ms);
-    return () => window.clearInterval(t);
-  }, [ms]);
+  useEffect(() => everyWhileVisible(() => setNow(Date.now()), ms), [ms]);
   return now;
 }
 

@@ -37,6 +37,11 @@ export const UNHIDE_MULTIPLES = [2, 4, 10] as const;
 export const DEFAULT_HIDDEN_TOKENS: HiddenTokens = { autoUnhide: true, tokens: [] };
 
 const HIDDEN_KEY = "ts-hidden-tokens";
+/**
+ * Set while this device's list failed to reach the account (a 413 past the body limit, a network
+ * error), so a later load doesn't adopt the account's older copy over it (audit 2026-10-23, AS-1).
+ */
+const UNSAVED_KEY = "ts-hidden-tokens-unsaved";
 const SAVE_DELAY_MS = 600;
 
 const str = (v: unknown, max: number): string | null => (typeof v === "string" && v.length <= max ? v : null);
@@ -192,6 +197,23 @@ function writeLocal(h: HiddenTokens) {
   }
 }
 
+function markUnsaved(on: boolean) {
+  try {
+    if (on) localStorage.setItem(UNSAVED_KEY, "1");
+    else localStorage.removeItem(UNSAVED_KEY);
+  } catch {
+    // Storage blocked: a reload then adopts the account's copy, as before.
+  }
+}
+
+function isUnsaved(): boolean {
+  try {
+    return localStorage.getItem(UNSAVED_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
 let current: HiddenTokens = readLocal();
 /** Bumped by every local change, so a settings load that started before it doesn't undo it. */
 let version = 0;
@@ -238,6 +260,11 @@ export function hiddenTokensVersion(): number {
  */
 export function adoptHiddenTokens(saved: unknown, sinceVersion: number): void {
   if (saved === undefined || version !== sinceVersion || timer !== null || inflight > 0) return;
+  // The last save failed: this device's list is the newer one, so send it again instead.
+  if (isUnsaved()) {
+    void save();
+    return;
+  }
   const next = normalizeHiddenTokens(saved);
   if (JSON.stringify(next) === JSON.stringify(current)) return;
   current = next;
@@ -262,8 +289,11 @@ async function save() {
   inflight++;
   try {
     await put<{ hiddenTokens: HiddenTokens }>("/settings/hidden-tokens", current);
-  } catch {
-    // Kept on this device either way; the next change tries the account again.
+    markUnsaved(false);
+  } catch (err) {
+    // Kept on this device either way; the next change or settings load tries the account again.
+    console.warn("hidden tokens not saved to the account", err);
+    markUnsaved(true);
   } finally {
     inflight--;
   }
@@ -300,6 +330,7 @@ export function resetHiddenTokens(): void {
   current = DEFAULT_HIDDEN_TOKENS;
   try {
     localStorage.removeItem(HIDDEN_KEY);
+    localStorage.removeItem(UNSAVED_KEY);
   } catch {
     // Storage blocked: nothing was kept there either.
   }
