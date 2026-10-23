@@ -6,6 +6,8 @@ import { isCurveVenue } from "../launchpads.js";
 import { canonicalPairCreatedAt, pickCanonicalPair } from "./dexscreener.js";
 import { MARKET_SOURCE } from "../marketSource.js";
 import { onCurrentSupplies } from "../mintSupply.js";
+import { currentApiFeature } from "../apiUsage.js";
+import { coinGeckoBudget, coinGeckoLaneOf } from "./coingeckoBudget.js";
 import type { CandidateToken } from "../types.js";
 
 const logger = createLogger("geckoterminal");
@@ -101,9 +103,11 @@ export class GeckoTerminalClient {
   private readonly headers: Record<string, string>;
   private readonly backgroundMaxMints: number;
   private readonly launchHomeClock: boolean;
+  private readonly keyed: boolean;
 
   constructor(options: GeckoTerminalClientOptions = {}) {
     const keyed = Boolean(options.apiKey);
+    this.keyed = keyed;
     this.baseUrl =
       options.baseUrl ??
       (keyed ? "https://pro-api.coingecko.com/api/v3/onchain" : "https://api.geckoterminal.com/api/v2");
@@ -163,6 +167,7 @@ export class GeckoTerminalClient {
     const work = forEachWithConcurrency(chunks, 3, async (chunk) => {
       if (Date.now() >= deadline) return;
       try {
+        this.takeCredit();
         const body = await fetchJson<GeckoMultiResponse>(
           `${this.baseUrl}/networks/${SOLANA}/tokens/multi/${chunk.join(",")}?include=top_pools`,
           { ...fetchOptions, gate, headers: this.headers },
@@ -197,6 +202,15 @@ export class GeckoTerminalClient {
   }
 
   /**
+   * Counts one paid call against the day's CoinGecko budget (coingeckoBudget.ts), in the lane of
+   * the feature the call is made under; throws CoinGeckoBudgetSpentError (a RateGateDeadlineError)
+   * when it has no room. The free API bills nothing, so it is never held back.
+   */
+  private takeCredit(): void {
+    if (this.keyed) coinGeckoBudget.take(coinGeckoLaneOf(currentApiFeature()));
+  }
+
+  /**
    * One page of `pool`'s minute OHLCV before `beforeMs`, `token` priced (core's candles/
    * parseGeckoOhlcv reads it), for the chart's candle backfill. On the background budget, so it
    * shares the per-IP limit with every other lookup of this client; throws RateGateDeadlineError
@@ -219,6 +233,7 @@ export class GeckoTerminalClient {
       },
     };
     const before = Math.floor(beforeMs / 1_000);
+    this.takeCredit();
     try {
       return await fetchJson<unknown>(
         `${this.baseUrl}/networks/${SOLANA}/pools/${encodeURIComponent(pool)}/ohlcv/minute?aggregate=${aggregate}` +
