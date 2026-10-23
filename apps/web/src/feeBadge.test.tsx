@@ -1,16 +1,46 @@
 import { describe, expect, it } from "vitest";
-import { creatorFeeLine, feeBadge } from "./components/AlertCard";
+import { renderToStaticMarkup } from "react-dom/server";
+import { creatorFeeLine, FeeBadge, feeBadge } from "./components/AlertCard";
+import { creatorRewardFigure } from "./creatorReward";
 
 describe("feeBadge", () => {
   it("names where the creator fee goes, one kind per destination", () => {
     const kind = (destination: string) => feeBadge({ destination, summary: null })?.kind ?? null;
     expect(kind("charity")).toBe("charity");
     expect(kind("holder_rewards")).toBe("rewards");
-    expect(kind("wallet")).toBe("rewards");
-    expect(kind("split")).toBe("rewards");
+    expect(kind("wallet")).toBe("wallet");
+    expect(kind("split")).toBe("wallet");
     expect(kind("cashback")).toBe("rewards");
     expect(kind("github")).toBe("github");
     expect(kind("creator")).toBe("dev");
+  });
+
+  it("shows a wallet with no address on the card, and the addresses in the tooltip and Pro square", () => {
+    const fee = {
+      destination: "split",
+      summary: null,
+      recipients: [
+        { label: "8PQx…VP9z", bps: 5000 },
+        { label: "AbCd…wxyz", bps: 5000 },
+      ],
+    };
+    const badge = feeBadge(fee);
+    expect(badge?.kind).toBe("wallet");
+    expect(badge?.caption).toBeNull();
+    expect(badge?.title).toBe("Creator fees go to 8PQx…VP9z (50%) and AbCd…wxyz (50%).");
+    const html = renderToStaticMarkup(<FeeBadge fee={fee} word />);
+    expect(html).not.toContain("fee-caption");
+    expect(creatorRewardFigure(fee).detail).toBe("8PQx…VP9z 50% · AbCd…wxyz 50%");
+    expect(creatorRewardFigure({ ...fee, destination: "wallet" }).detail).toBe(
+      "8PQx…VP9z 50% · AbCd…wxyz 50%",
+    );
+  });
+
+  it("keeps the gift on a wallet fee that pays OTC Desks reward coins", () => {
+    expect(
+      feeBadge({ destination: "wallet", summary: null, deskLine: "OTC Desks pays holder rewards in NVDAx." })
+        ?.kind,
+    ).toBe("rewards");
   });
 
   it("shows nothing when the destination is unread or unknown", () => {

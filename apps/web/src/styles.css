@@ -10916,6 +10916,9 @@ button.link.exit-plan-link {
 .fee-rewards .icon {
   color: var(--good-ink);
 }
+.fee-wallet .icon {
+  color: var(--good-ink);
+}
 .fee-github .icon {
   color: var(--brand-ink);
 }

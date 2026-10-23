@@ -4,6 +4,8 @@ import {
   charityNameFromPumpCoin,
   charitySharesFromPumpCoin,
   ipfsMetadataCid,
+  fetchLaunchMetadata,
+  LAUNCH_METADATA_GATEWAYS,
   LIST_BLOCK_BACKOFF_MS,
   parseLaunchMetadata,
   PumpFunClient,
@@ -434,5 +436,44 @@ describe("launch metadata", () => {
     });
     expect(parseLaunchMetadata("M", [])).toBeNull();
     expect(parseLaunchMetadata("M", "nope")).toBeNull();
+  });
+
+  it("tries the next gateway when Pump.fun's refuses the CID (2026-10-23)", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      asked.push(url);
+      return Promise.resolve(
+        url.startsWith(LAUNCH_METADATA_GATEWAYS[0])
+          ? new Response("not pinned", { status: 403 })
+          : new Response(JSON.stringify({ name: "SMS", description: "On-chain messaging" })),
+      );
+    });
+    try {
+      const coin = await fetchLaunchMetadata("M", `https://ipfs.io/ipfs/${cid}`);
+      expect(coin).toMatchObject({ mintAddress: "M", description: "On-chain messaging" });
+      expect(asked).toEqual([
+        `${LAUNCH_METADATA_GATEWAYS[0]}/ipfs/${cid}`,
+        `${LAUNCH_METADATA_GATEWAYS[1]}/ipfs/${cid}`,
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("throws when no gateway answers, and reads nothing for a non-IPFS URI", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      asked.push(url);
+      return Promise.resolve(new Response("nope", { status: 403 }));
+    });
+    try {
+      await expect(fetchLaunchMetadata("M", `https://ipfs.io/ipfs/${cid}`)).rejects.toThrow();
+      expect(asked).toHaveLength(LAUNCH_METADATA_GATEWAYS.length);
+      asked.length = 0;
+      expect(await fetchLaunchMetadata("M", "https://meta.uxento.io/data/33304f82")).toBeNull();
+      expect(asked).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

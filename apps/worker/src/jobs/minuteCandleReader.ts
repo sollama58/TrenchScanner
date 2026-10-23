@@ -1,4 +1,5 @@
 import {
+  CoinGeckoBudgetSpentError,
   createLogger,
   HttpError,
   MINUTE_CANDLE_PAGE,
@@ -15,6 +16,12 @@ const logger = createLogger("minute-candles");
 
 /** What the Peak and re-grade jobs read a coin's minute candles through. */
 export type MinuteCandleReader = Pick<PumpFunClient, "minuteCandles" | "fiveMinuteCandles">;
+
+/**
+ * The url of the 429 a read gets when the day's CoinGecko budget for Peaks and re-grades is spent
+ * (coingeckoBudget.ts): a run stops there like on any 429, and says why.
+ */
+export const COINGECKO_DAY_SPENT = "coingecko-daily-budget";
 
 /** After Pump.fun refuses a read (403), its candles are not asked again for this long. */
 export const PUMP_REFUSED_PAUSE_MS = 10 * 60_000;
@@ -122,6 +129,9 @@ export async function geckoCandles(
     try {
       body = await gecko.poolMinuteCandles(pool, mint, nowMs, GECKO_WAIT_MS, aggregate);
     } catch (err) {
+      if (err instanceof CoinGeckoBudgetSpentError) {
+        throw new HttpError(429, COINGECKO_DAY_SPENT, err.message);
+      }
       if (err instanceof RateGateDeadlineError) {
         throw new HttpError(429, "geckoterminal", "GeckoTerminal budget spent (rate gate)");
       }
