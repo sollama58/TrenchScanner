@@ -208,7 +208,7 @@ async function buildWhy(env: Env, tokenId: string, at: number | null): Promise<T
   const scores = (moment.seatScores ?? {}) as Record<string, unknown>;
   const [state, live] = await Promise.all([
     contestState(env),
-    liveCache.get(() => loadLiveScales(env.CURATED_HIGH_CONVICTION_RANK)),
+    liveCache.get(() => loadLiveScales(env.CURATED_HIGH_CONVICTION_RANK, env.TOKENSAGE_XREUSE_RESTORED_AT)),
   ]);
   // The seats that call on a probability of their own: the learners and the narrative seats.
   const specs = state.roster.filter(

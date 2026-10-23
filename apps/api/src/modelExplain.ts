@@ -23,6 +23,7 @@ import {
   NEVER_EMIT_THRESHOLD,
   rankFromQuantiles,
   loadLiveScales,
+  maskTokenSageXReuseLoss,
   onLiveMembers,
   seatLiveCutoff,
   type LiveScales,
@@ -478,9 +479,16 @@ export async function buildModelLineup(env: Env): Promise<ModelLineup> {
       where: { sampleKind: "event", anchorAt: { gte: new Date(Date.now() - 24 * HOUR_MS) } },
     }),
     // The cutoffs and member ranks the worker decides on (curation/liveScale.ts).
-    loadLiveScales(env.CURATED_HIGH_CONVICTION_RANK),
+    loadLiveScales(env.CURATED_HIGH_CONVICTION_RANK, env.TOKENSAGE_XREUSE_RESTORED_AT),
   ]);
-  const sample = sampleRows.map((r) => asFeatures(r.features)).filter((f): f is Features => f !== null);
+  // Read as the worker scored them: TokenSage's X-reuse and wave counts are missing in their
+  // lost window (maskTokenSageXReuseLoss).
+  const sample = sampleRows
+    .map((r) => {
+      const f = asFeatures(r.features);
+      return f && maskTokenSageXReuseLoss(r.anchorAt, f, env.TOKENSAGE_XREUSE_RESTORED_AT);
+    })
+    .filter((f): f is Features => f !== null);
   const deepRead = sample.filter((f) => f.nsDepthFull === 1);
   const names = new Map(state.roster.map((c) => [c.id, c.name]));
   // The gated seats (Gems) are read on the moments their frozen filter lets through.
@@ -785,7 +793,7 @@ export async function explainCall(env: Env, alertId: string): Promise<CallExplai
       calibratedPct: true,
       reasons: true,
       token: { select: { mintAddress: true, symbol: true } },
-      candidateOutcome: { select: { features: true } },
+      candidateOutcome: { select: { anchorAt: true, features: true } },
     },
   });
   if (!alert) return null;
@@ -812,7 +820,12 @@ export async function explainCall(env: Env, alertId: string): Promise<CallExplai
     members: null,
     strongestMember: null,
   };
-  const features = asFeatures(alert.candidateOutcome?.features);
+  const stored = asFeatures(alert.candidateOutcome?.features);
+  // As the worker scored the moment (maskTokenSageXReuseLoss).
+  const features =
+    stored && alert.candidateOutcome
+      ? maskTokenSageXReuseLoss(alert.candidateOutcome.anchorAt, stored, env.TOKENSAGE_XREUSE_RESTORED_AT)
+      : null;
   if (!features) {
     out.note =
       "This alert's decision-moment inputs are no longer stored, so only its recorded reasons remain.";
@@ -827,7 +840,10 @@ export async function explainCall(env: Env, alertId: string): Promise<CallExplai
     return out;
   }
   // Read on today's live scales, as the worker decides now (curation/liveScale.ts).
-  const live: LiveScales = await loadLiveScales(env.CURATED_HIGH_CONVICTION_RANK);
+  const live: LiveScales = await loadLiveScales(
+    env.CURATED_HIGH_CONVICTION_RANK,
+    env.TOKENSAGE_XREUSE_RESTORED_AT,
+  );
   if (isLearnerParams(params)) {
     const p = scoreCandidateWithModel(params, features);
     const pushed = pushes(params, features);

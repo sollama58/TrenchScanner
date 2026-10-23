@@ -6,6 +6,7 @@ import {
   inMcapBand,
   notifyCuratedAlert,
   buildCandidateFeatures,
+  maskTokenSageXReuseLoss,
   decisionAnchor,
   freshQuoteMcapUsd,
   scoreCandidateWithModel,
@@ -198,7 +199,7 @@ async function liveScales(env: Env): Promise<LiveScales> {
 async function loadLiveScalesKeeping(env: Env): Promise<LiveScales> {
   const previous = scaleCache?.scales ?? EMPTY_LIVE_SCALES;
   try {
-    const scales = await loadLiveScales(env.CURATED_HIGH_CONVICTION_RANK);
+    const scales = await loadLiveScales(env.CURATED_HIGH_CONVICTION_RANK, env.TOKENSAGE_XREUSE_RESTORED_AT);
     scaleCache = { fetchedAt: Date.now(), scales };
     return scales;
   } catch (err) {
@@ -511,7 +512,13 @@ function decideCurations(
   /** Filled with every learner's probability, the retired ones scoring for a combiner included. */
   memberScores: Map<string, number> = new Map(),
 ): Map<string, CurationDecision> {
-  const features = buildCandidateFeatures(scored);
+  // The seats score TokenSage's X-reuse and wave counts as missing while they read a false 0
+  // (TOKENSAGE_XREUSE_LOST_FROM), as they were trained; the row banks what the read said.
+  const features = maskTokenSageXReuseLoss(
+    new Date(),
+    buildCandidateFeatures(scored),
+    env.TOKENSAGE_XREUSE_RESTORED_AT,
+  );
   const decisions = new Map<string, CurationDecision>();
   const probabilities = new Map<string, number>();
   const learners = new Map<string, ModelRef<TrainedCuratorParams>>();
