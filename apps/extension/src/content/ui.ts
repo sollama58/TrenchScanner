@@ -1,5 +1,6 @@
 import type { RingStyle, OverlayToken } from "../shared/types";
 import type { RowVerdict } from "../shared/verdict";
+import { findSpot, obstaclesIn } from "./placement";
 
 /**
  * What the overlay draws: a ring and a badge inside each tracked row, and one shared tooltip.
@@ -37,6 +38,8 @@ const RING_CSS = `
   font: 500 10.5px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; padding: 1px 7px 1px 5px; border-radius: 999px;
   background: rgba(13, 14, 18, 0.92); border: 1px solid var(--a); color: #eef0f6; white-space: nowrap; max-width: 60%; overflow: hidden; text-overflow: ellipsis; }
 .badge i { width: 7px; height: 7px; border-radius: 50%; background: var(--a); box-shadow: 0 0 6px var(--a); flex: none; }
+.badge.dot { padding: 3px; gap: 0; }
+.badge.dot > span, .badge.dot b { display: none; }
 .badge b { width: 6px; height: 6px; border-radius: 50%; background: #ff4d6a; flex: none; }
 `;
 
@@ -54,6 +57,9 @@ export class Decoration {
   private readonly badgeText: HTMLSpanElement;
   private readonly riskDot: HTMLElement;
   private madeRelative = false;
+  private placedFor = "";
+  private placedAt = 0;
+  private placeFrame = 0;
 
   constructor(
     private readonly row: HTMLElement,
@@ -82,10 +88,53 @@ export class Decoration {
     }
     this.ring.className = `ring ${verdict.ring} ${style}${calm ? " calm" : ""}`;
     this.badge.className = `badge ${verdict.ring}`;
-    this.badgeText.textContent = verdict.badge ?? "";
+    const text = verdict.badge ?? "";
+    const changed = this.badgeText.textContent !== text;
+    this.badgeText.textContent = text;
     if (verdict.risky && verdict.ring !== "risk") this.badge.append(this.riskDot);
     else this.riskDot.remove();
     this.attach();
+    if (changed) this.placedFor = "";
+    this.schedulePlace();
+  }
+
+  /** Re-place after the next layout; cheap to call often (rows re-render all the time). */
+  schedulePlace(): void {
+    if (this.placeFrame) return;
+    this.placeFrame = requestAnimationFrame(() => {
+      this.placeFrame = 0;
+      this.place();
+    });
+  }
+
+  /**
+   * Moves the badge into the row's first empty space; falls back to the dot alone when the
+   * label fits nowhere, and to the top-right corner when even the dot doesn't. Re-measured when
+   * the row's size changes, and at most once a second otherwise.
+   */
+  private place(): void {
+    if (!this.attached) return;
+    const rect = this.row.getBoundingClientRect();
+    const key = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
+    const now = performance.now();
+    if (key === this.placedFor && now - this.placedAt < 1000) return;
+    this.placedFor = key;
+    this.placedAt = now;
+
+    const obstacles = obstaclesIn(this.row, this.host);
+    const row = { w: rect.width, h: rect.height };
+    this.badge.classList.remove("dot");
+    let spot = findSpot(row, obstacles, this.badge.offsetWidth, this.badge.offsetHeight);
+    if (!spot) {
+      this.badge.classList.add("dot");
+      spot = findSpot(row, obstacles, this.badge.offsetWidth, this.badge.offsetHeight);
+    }
+    // The host sits inside the row's border; the boxes are measured from its outer edge.
+    const x = (spot?.x ?? rect.width - this.badge.offsetWidth - 4) - this.row.clientLeft;
+    const y = (spot?.y ?? 4) - this.row.clientTop;
+    this.badge.style.left = `${Math.round(x)}px`;
+    this.badge.style.top = `${Math.round(y)}px`;
+    this.badge.style.right = "auto";
   }
 
   attach(): void {
@@ -99,6 +148,9 @@ export class Decoration {
   }
 
   remove(): void {
+    cancelAnimationFrame(this.placeFrame);
+    this.placeFrame = 0;
+    this.placedFor = "";
     this.host.remove();
     if (this.madeRelative) {
       this.row.style.position = "";

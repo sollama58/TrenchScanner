@@ -91,9 +91,10 @@ describe("lookup cache", () => {
   it("asks only for what it doesn't know, and remembers untracked mints longer", () => {
     const cache = new LookupCache();
     expect(cache.missing([MINT, PUMP, MINT], 0)).toEqual([MINT, PUMP]);
-    cache.store([MINT, PUMP], [token()], 0);
+    const tracked = token();
+    cache.store([MINT, PUMP], [tracked], 0);
     expect(cache.missing([MINT, PUMP], 1_000)).toEqual([]);
-    expect(cache.answer([MINT, PUMP])).toEqual({ [PUMP]: token() });
+    expect(cache.answer([MINT, PUMP])).toEqual({ [PUMP]: tracked });
     expect(cache.missing([MINT, PUMP], TRACKED_TTL_MS)).toEqual([PUMP]);
     expect(cache.missing([MINT, PUMP], UNTRACKED_TTL_MS)).toEqual([MINT, PUMP]);
   });
