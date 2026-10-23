@@ -66,7 +66,10 @@ import { registerSubscriptionRoutes } from "./routes/subscription.js";
 import { registerStatsRoutes } from "./routes/stats.js";
 import { registerStatsModelRoutes } from "./routes/statsModels.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
+import { registerWatchlistRoutes } from "./routes/watchlist.js";
 import { registerModelAlertKeyRoutes } from "./routes/modelAlertKeys.js";
+import { registerExtensionKeyRoutes } from "./routes/extensionKeys.js";
+import { registerExtensionRoutes } from "./routes/extension.js";
 import { registerModelAlertSocket } from "./routes/modelAlertSocket.js";
 import { registerTelegramRoutes } from "./routes/telegram.js";
 import { registerUtilityRoutes } from "./routes/utilities.js";
@@ -230,8 +233,13 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
    * Requests with no Origin (scripts, curl, server-to-server) are not browser CSRF and pass.
    */
   const allowedOrigins = new Set(corsOriginList(env));
+  const EXTENSION_ROUTE_PREFIX = "/ext/v1/";
   app.addHook("onRequest", async (request, reply) => {
     if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") return;
+    // The extension overlay's routes authenticate by an Authorization bearer key alone and never
+    // read a cookie (routes/extension.ts), so there is no ambient credential to forge, and their
+    // caller is an extension whose Origin is chrome-extension://<id>.
+    if (request.url.startsWith(EXTENSION_ROUTE_PREFIX)) return;
     const origin = request.headers.origin;
     if (origin === undefined || allowedOrigins.has(origin)) return;
     return reply.code(403).send({ error: "origin_not_allowed" });
@@ -801,8 +809,13 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // Hover previews of a coin's X link, read through FxTwitter so the browser never loads X.
   await app.register(registerXPreviewRoutes, { prefix: "/x-preview" });
   await app.register(registerSettingsRoutes, { prefix: "/settings", env });
+  // The Live tab's Watchlist: tokens this account starred (watchlist.ts).
+  await app.register(registerWatchlistRoutes, { prefix: "/watchlist" });
   await app.register(registerModelAlertKeyRoutes, { prefix: "/settings", env, hub: modelAlertHub });
   await app.register(registerModelAlertSocket, { hub: modelAlertHub, env });
+  // The browser extension overlay: Settings mints and revokes its keys, /ext/v1 is what it reads.
+  await app.register(registerExtensionKeyRoutes, { prefix: "/settings", env });
+  await app.register(registerExtensionRoutes, { prefix: "/ext/v1", env });
   // Telegram alerts: link codes and chats for the signed-in account, and the bot's webhook.
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env });
   // The trading bot (admin-only; nothing is registered without TRADING_BOT_ENABLED).

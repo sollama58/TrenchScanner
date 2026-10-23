@@ -28,11 +28,14 @@ import {
   EditIcon,
   FlameIcon,
   SearchIcon,
+  StarIcon,
   ToolsIcon,
   UsersIcon,
   WalletIcon,
   type IconProps,
 } from "../components/Icons";
+import { WatchlistManager } from "../components/WatchlistManager";
+import { WATCHLIST_CAP } from "../watchlist";
 import { WalletsToWatch } from "../components/WalletsToWatch";
 import { TrackedWalletsPanel } from "../components/TrackedWallets";
 import { GetAsdfCard } from "../components/GetAsdf";
@@ -223,6 +226,24 @@ export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
           </div>
         </div>
 
+        <div id="util-watchlist" className="util-anchor">
+          <section className="panel util-watchlist">
+            <header className="section-head">
+              <div>
+                <span className="eyebrow">
+                  <StarIcon size={13} /> Watchlist
+                </span>
+                <h2>Your watchlist</h2>
+                <p className="faint small">
+                  Up to {WATCHLIST_CAP} tokens, shown on the Live tab&apos;s market bar. Star them on any card
+                  or add them here, and put them in the order you want. Free.
+                </p>
+              </div>
+            </header>
+            <WatchlistManager />
+          </section>
+        </div>
+
         <div id="util-sides" className="util-anchor">
           <SideWalletChecker />
         </div>
@@ -264,6 +285,7 @@ const TOOLS: { id: string; label: string; short: string; Icon: (p: IconProps) =>
   { id: "util-credits", label: "Burn Credits", short: "Credits", Icon: FlameIcon },
   { id: "util-token", label: "Coin lookup", short: "Coin", Icon: ChartIcon },
   { id: "util-wallet", label: "Wallet lookup", short: "Wallet", Icon: SearchIcon },
+  { id: "util-watchlist", label: "Watchlist", short: "Watchlist", Icon: StarIcon },
   { id: "util-sides", label: "Side Wallet Checker", short: "Sides", Icon: UsersIcon },
   { id: "util-watch", label: "Wallets to watch", short: "Watch", Icon: WalletIcon },
   { id: "util-labels", label: "Wallet labels", short: "Labels", Icon: EditIcon },

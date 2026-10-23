@@ -105,6 +105,9 @@ model User {
   /// paper strategies reach their private Telegram chats - see trading/tradeAlerts.ts in core for
   /// the shape. Null = all of them, as before the setting existed.
   tradeAlerts     Json?
+  /// What the browser extension overlay shows on Axiom, Terminal and GMGN (rings, stat flags,
+  /// sites, style) - see overlaySettings.ts in apps/api for the shape. Null = the defaults.
+  overlaySettings Json?
   /// Set for an account made by signing in with Privy (email or Google/X): its Privy DID. The
   /// account's walletAddress is then the Privy wallet Privy made for it. Privy accounts and wallet
   /// accounts stay separate (user decision 2026-10-18), and Privy accounts can't pair a phone.
@@ -122,12 +125,16 @@ model User {
   webPushSubscriptions WebPushSubscription[]
   /// Keys for the Model Alert websocket. The secret is shown once and stored only as a hash.
   apiKeys           UserApiKey[]
+  /// Read-only keys for the browser extension overlay. The secret is shown once and stored only as a hash.
+  extensionKeys     ExtensionKey[]
   tradingWallet     TradingWallet?
   tradingBot        TradingBot?
   paperStrategies   PaperStrategy[]
   twoFactor         TwoFactorSettings?
   passkeys          TwoFactorPasskey[]
   backupCodes       TwoFactorBackupCode[]
+  /// Tokens starred for the Live tab's Watchlist.
+  watchlist         WatchlistItem[]
 }
 
 /// Optional two-factor (user ask 2026-10-18): an authenticator app, passkeys, or both, and which
@@ -725,6 +732,7 @@ model Token {
   curatedShadowEmissions CuratedShadowEmission[]
   aiReviews              AiReview[]
   peakWatch              PeakWatch?
+  watchlistItems         WatchlistItem[]
 
   // The watchlist selection (selectWatchlist in apps/worker/src/jobs/scanJob.ts) ranges and orders
   // on this every scan cycle. Without it all three of its queries scanned and sorted the whole
@@ -2145,6 +2153,26 @@ model UserApiKey {
   @@index([userId, revokedAt])
 }
 
+/// A browser extension overlay key: read-only access to the owner's alerts, token stats and overlay
+/// settings, and nothing else (no trading, wallets, filters or sessions). Shown once, stored as a
+/// peppered HMAC like UserApiKey, and revocable from Settings.
+model ExtensionKey {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// The visible start of the secret (not enough to authenticate).
+  prefix     String
+  /// HMAC-SHA256 hex of the secret, peppered with the server secret. Not a bare hash.
+  secretHash String    @unique
+  createdAt  DateTime  @default(now())
+  /// Throttled: written at most every few minutes, not on every request.
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+
+  @@index([userId, revokedAt])
+}
+
 /// One on-chain burn of the subscription token, whether or not we have a user for it yet.
 ///
 /// This is the ledger, and the chain is its source of truth: every burn the reconciler finds gets
@@ -3484,6 +3512,27 @@ model UserTrackedWallet {
 
   @@id([userId, wallet])
   @@index([wallet])
+}
+
+/// A token a user starred for their Watchlist (user ask 2026-10-23): the Live tab's market bar and
+/// the Utilities tab show its market cap now and its change since it was added. Per user, and never read by the scan, the
+/// models, the filters or alerts. Not the scan's own "watchlist" (the mints selectWatchlist keeps
+/// refreshing). At most WATCHLIST_CAP per user, held by the API (apps/api/src/watchlist.ts).
+model WatchlistItem {
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenId           String
+  token             Token    @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  addedAt           DateTime @default(now())
+  /// The token's market cap and price when it was added, from the readings the API already held
+  /// (Token.live* or its newest snapshot). Null when it had none. "Since added" counts from these.
+  addedMarketCapUsd Float?
+  addedPriceUsd     Float?
+  /// The user's order, lowest first (a new star goes on top). Ties read newest star first.
+  position          Int      @default(0)
+
+  @@id([userId, tokenId])
+  @@index([tokenId])
 }
 
 /// Probable sides of the wallets users labeled (UserTrackedWallet), by the same rules and hourly run
