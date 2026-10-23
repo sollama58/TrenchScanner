@@ -21,18 +21,16 @@ import {
   ExternalIcon,
   EyeOffIcon,
   GiftIcon,
-  GlobeIcon,
   HeartIcon,
   WalletIcon,
   RobotIcon,
   SlidersIcon,
-  XLogoIcon,
 } from "./Icons";
 import { CardSearchButton } from "./CardSearchButton";
 import { DeskRewardTokens } from "./DeskRewardTokens";
 import { FeeKolAvatar, FeeWalletTip, kolPictures } from "./FeeWalletTip";
 import { DexInfoLabel } from "../dexInfoLabel";
-import { XLinkPreview } from "./XLinkPreview";
+import { SocialLinks, socialLinks } from "./SocialLinks";
 import { useImagePreview } from "./ImagePreview";
 import { linkedCount, linkedCountText } from "../linkedCount";
 import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
@@ -54,6 +52,8 @@ import {
 } from "../tileTone";
 import { FilterGlyph } from "./FilterBadge";
 import { openTokenModal, refreshTokenModal } from "../tokenModal";
+
+export { socialLinks };
 
 /** Clicks on these inside a card do their own thing rather than open the token modal. */
 const OWN_CLICK = "a, button, input, select, textarea, label, summary, [role='button']";
@@ -808,23 +808,7 @@ export function AlertCard({
           )}
           {quickBuy("bottom-left")}
           {/* The coin's X and website, beside the copy button (user ask 2026-10-18). */}
-          {socials.length > 0 && (
-            <span className="card-socials">
-              {socials.map((l) => (
-                <XLinkPreview
-                  key={l.key}
-                  className="pill pill-icon pill-social"
-                  href={l.url}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  title={`${l.label}: ${l.url.replace(/^https:\/\//, "").replace(/\/$/, "")}`}
-                  aria-label={`Open the coin's ${l.label}`}
-                >
-                  <l.Icon size={11} />
-                </XLinkPreview>
-              ))}
-            </span>
-          )}
+          <SocialLinks links={socials} className="card-socials" />
           {fees && <FeeBadge fee={card.token.creatorFee} word />}
           {links && (show("links") || trade.length > 0) && (
             <nav className="card-links">
@@ -848,25 +832,6 @@ export function AlertCard({
       )}
     </article>
   );
-}
-
-/**
- * The coin's own X and website as the card footer's link pills (user ask 2026-10-18): only the
- * links it has, and only https ones, whatever the source stored.
- */
-export function socialLinks(token: Pick<Card["token"], "twitterUrl" | "websiteUrl">) {
-  const https = (u: string | null | undefined) => {
-    if (!u) return null;
-    try {
-      return new URL(u).protocol === "https:" ? u : null;
-    } catch {
-      return null;
-    }
-  };
-  return [
-    { key: "x", label: "X", Icon: XLogoIcon, url: https(token.twitterUrl) },
-    { key: "web", label: "Website", Icon: GlobeIcon, url: https(token.websiteUrl) },
-  ].filter((l): l is typeof l & { url: string } => l.url !== null);
 }
 
 /**

@@ -2,7 +2,7 @@ import { ago, pct, signedPct, usd } from "../format";
 import { openSage } from "../sage";
 import { openWallet } from "../walletModal";
 import { useWalletNames } from "../walletNames";
-import { ExternalIcon, LinkIcon, SendIcon, WalletIcon, XLogoIcon } from "./Icons";
+import { ExternalIcon, GlobeIcon, SendIcon, WalletIcon, XLogoIcon } from "./Icons";
 import { XLinkPreview } from "./XLinkPreview";
 import type { SageRead } from "./SageView";
 import { WalletText } from "./WalletText";
@@ -290,7 +290,7 @@ export function SocialsCard({
   const rows = [
     { key: "x", label: "X", icon: <XLogoIcon size={13} />, url: xUrl },
     { key: "tg", label: "Telegram", icon: <SendIcon size={13} />, url: socials.telegram },
-    { key: "web", label: "Website", icon: <LinkIcon size={13} />, url: socials.website },
+    { key: "web", label: "Website", icon: <GlobeIcon size={13} />, url: socials.website },
   ];
   const found = rows.filter((r) => r.url).length;
   const facts: string[] = [];

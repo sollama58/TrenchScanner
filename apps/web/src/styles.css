@@ -5260,15 +5260,6 @@ button.small-btn {
 .pill-icon {
   padding: 3px 6px;
 }
-/* The coin's own X and website on a card's title row: quiet until hovered. */
-a.pill-social {
-  text-decoration: none;
-}
-a.pill-social:hover,
-a.pill-social:focus-visible {
-  color: var(--brand-ink);
-  border-color: color-mix(in srgb, var(--brand-a) 40%, transparent);
-}
 
 /* Model alerts on/off */
 .switch {
@@ -10912,12 +10903,62 @@ button.link.exit-plan-link {
   gap: 6px;
   flex: none;
 }
-/* The coin's X and website, beside the copy and Sage buttons. */
-.card-socials {
-  display: flex;
+/* The coin's own X, Telegram and website (SocialLinks): the same quiet square icon buttons on a
+   feed card, a Scope row and the token view. One box, one icon size, one gap, centred on the line
+   beside them; never shrunk or wrapped apart. */
+.social-links {
+  --social-box: 24px;
+  display: inline-flex;
   align-items: center;
+  align-self: center;
   gap: 4px;
   flex: none;
+  line-height: 0;
+}
+.social-link {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  box-sizing: border-box;
+  width: var(--social-box);
+  height: var(--social-box);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--muted);
+  text-decoration: none;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+.social-link .icon,
+.social-link svg {
+  display: block;
+  flex: none;
+}
+.social-link:hover,
+.social-link:focus-visible {
+  color: var(--ink);
+  text-decoration: none;
+  border-color: color-mix(in srgb, var(--brand-a) 45%, var(--border));
+}
+/* Scope rows are denser: a smaller box, the same icon. */
+.scope-socials {
+  --social-box: 22px;
+}
+/* On a feed card the box is the copy button's height, so the footer reads as one row of chips. */
+.card-socials {
+  --social-box: 25px;
+}
+@media (max-width: 640px) {
+  .card-socials {
+    --social-box: 31px;
+  }
+  .cards[data-phone-cols="2"] .card-socials {
+    --social-box: 27px;
+  }
 }
 /* Where the creator fee goes, in the theme's (or the reader's own) colors. */
 .fee-badge {
@@ -19475,11 +19516,13 @@ body:has(.util-toast) .bug-fab {
   /* Small chips keep their look; an invisible margin takes the tap. */
   .mint,
   .tm-quick a,
+  .social-link,
   .wm-address {
     position: relative;
   }
   .mint::after,
   .tm-quick a::after,
+  .social-link::after,
   .wm-address::after,
   .quick-buy::after {
     content: "";
@@ -20392,25 +20435,43 @@ body:has(.util-toast) .bug-fab {
   font-weight: 700;
   text-transform: uppercase;
 }
-.scope-mark {
-  position: absolute;
-  right: -5px;
-  top: 50%;
-  bottom: auto;
-  transform: translateY(-50%);
-  padding: 1px 4px;
+/* The result mark, left of the market cap on the same line (user ask 2026-10-23): a compact pill
+   in the result's colour, centred on the figure. */
+.scope-fig.scope-now {
+  align-items: center;
+}
+.scope-result {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  box-sizing: border-box;
+  min-width: calc(18px * var(--scope-t, 1));
+  height: calc(18px * var(--scope-t, 1));
+  padding: 0 4px;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface-solid);
-  font-size: 10px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: calc(10px * var(--scope-t, 1));
   font-weight: 700;
-  line-height: 1.2;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  white-space: nowrap;
 }
-.scope-mark.good {
+.scope-result.good {
   color: var(--good-ink);
+  border-color: color-mix(in srgb, var(--good) 40%, transparent);
+  background: var(--good-wash);
 }
-.scope-mark.bad {
+.scope-result.bad {
   color: var(--bad-ink);
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+  background: var(--bad-wash);
+}
+.scope-result .result-stop {
+  font-size: 1.15em;
+  line-height: 1;
 }
 .scope-main {
   min-width: 0;
@@ -20976,18 +21037,6 @@ body:has(.util-toast) .bug-fab {
   background: var(--good-wash);
   font-weight: 600;
 }
-.scope-link {
-  display: inline-grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  color: var(--muted);
-}
-.scope-link:hover {
-  color: var(--ink);
-  background: var(--surface-3);
-}
 .scope-figs {
   justify-content: center;
   gap: 2px;
@@ -21043,6 +21092,17 @@ body:has(.util-toast) .bug-fab {
   .scope-row:has(.scope-fig-pills):has(> .quick-buy.qb-l) > .scope-figs {
     padding-bottom: 32px;
   }
+  /* With only the market cap and its pills (no At or Peak lines) the figures fit beside the
+     ticker and name, so the chips take the row's full width rather than wrapping beside an
+     empty corner (the result mark beside the market cap widens that column). */
+  .scope-row:not(:has(> .quick-buy)):has(.scope-fig-pills):not(:has(.scope-figs > .scope-fig:not(.scope-now)))
+    > .scope-figs {
+    grid-row: 1;
+  }
+  .scope-row:not(:has(> .quick-buy)):has(.scope-fig-pills):not(:has(.scope-figs > .scope-fig:not(.scope-now)))
+    > .scope-chips {
+    grid-column: 1 / -1;
+  }
 }
 /* The Dex pill and the age under the figures make that column the row's tallest wherever it
    doesn't run down beside the chips (phones, and rows with a quick-buy pill): the avatar, the
@@ -21055,6 +21115,13 @@ body:has(.util-toast) .bug-fab {
 }
 .scope-row:has(.scope-fig-pills) > .scope-main {
   align-content: flex-start;
+}
+/* The name gives way to its fee and link icons instead of sending them onto a line of their own
+   (a wide market cap or a result mark narrows the column on a computer too). */
+.scope-name {
+  flex: 1 1 0;
+  min-width: 3em;
+  max-width: max-content;
 }
 @media (max-width: 899px) {
   /* The name gives way to its fee and link icons instead of sending them onto a third line. */
@@ -21820,17 +21887,6 @@ dialog.tm-modal.tm-terminal::backdrop {
   justify-content: flex-end;
   flex-wrap: nowrap;
   align-self: center;
-}
-/* The coin's own socials and Exit, together at the header's corner. */
-.tm-modal.tm-terminal .tm-corner {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.tm-modal.tm-terminal .tm-corner .tm-quick {
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  margin: 0;
 }
 .tm-modal.tm-terminal .tm-head > .tm-figs {
   grid-area: figs;
