@@ -40,9 +40,13 @@ function WalletTipBody({ head, recipients }: { head: string; recipients: readonl
       {recipients.map((r, i) => {
         const pct = holderRewardTaxLabel(r.bps);
         return (
-          <div className="fee-wallet-tip-row" key={`${r.label}-${i}`}>
+          <div className={`fee-wallet-tip-row${r.charity ? " charity" : ""}`} key={`${r.label}-${i}`}>
             {r.kol && r.avatar ? (
               <FeeKolAvatar recipient={r} px={28} />
+            ) : r.charity ? (
+              <span className="fee-wallet-tip-icon" aria-hidden="true">
+                ❤️
+              </span>
             ) : (
               <span className="fee-wallet-tip-icon" aria-hidden="true">
                 <WalletIcon size={15} />

@@ -43,6 +43,9 @@
   --bad: #d03b3b;
   --bad-ink: #ff8080;
   --bad-wash: rgba(239, 68, 68, 0.1);
+  /* A charity's pill (the creator fee goes to one): rose, apart from the red of a loss. */
+  --charity: #e05a8f;
+  --charity-ink: #f6a5c4;
   --info-wash: rgba(57, 135, 229, 0.12);
   --shadow: 0 1px 0 var(--highlight) inset, 0 12px 32px -18px rgba(0, 0, 0, 0.7);
   --radius: 16px;
@@ -86,6 +89,8 @@
     --bad-ink: #b42626;
     --warn-ink: #9a6700;
     --bad-wash: rgba(208, 59, 59, 0.08);
+    --charity: #d6467f;
+    --charity-ink: #a3235a;
     --info-wash: rgba(42, 120, 214, 0.09);
     --shadow: 0 1px 2px rgba(12, 14, 20, 0.04), 0 12px 32px -20px rgba(12, 14, 20, 0.25);
   }
@@ -122,6 +127,8 @@
   --bad-ink: #b42626;
   --warn-ink: #9a6700;
   --bad-wash: rgba(208, 59, 59, 0.08);
+  --charity: #d6467f;
+  --charity-ink: #a3235a;
   --info-wash: rgba(42, 120, 214, 0.09);
   --shadow: 0 1px 2px rgba(12, 14, 20, 0.04), 0 12px 32px -20px rgba(12, 14, 20, 0.25);
 }
@@ -10928,7 +10935,7 @@ button.link.exit-plan-link {
   stroke-width: 1.75;
 }
 .fee-charity .icon {
-  color: var(--bad-ink);
+  color: var(--charity-ink);
 }
 .fee-rewards .icon {
   color: var(--good-ink);
@@ -10958,8 +10965,89 @@ button.link.exit-plan-link {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.fee-charity .fee-caption {
-  color: var(--bad-ink);
+/* A charity coin's pill (user ask 2026-10-23): a heart and the charity's name on one line, in a
+   rose wash. The name is the part that gives way: it ends in an ellipsis before the trade links
+   or the token's name are cut, and the tooltip has it whole. */
+.fee-badge.has-pill {
+  flex: 0 100 auto;
+  /* Room for the heart and a few letters (and the +2): a name on one line has no smaller
+     natural size to stop at. */
+  min-width: 5.6em;
+  max-width: 100%;
+}
+.fee-badge.has-pill:has(.charity-more) {
+  min-width: 7.8em;
+}
+.charity-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 7px 0 5px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--charity) 32%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--charity) 17%, transparent),
+    color-mix(in srgb, var(--charity) 7%, transparent)
+  );
+  color: var(--charity-ink);
+  font-family: var(--font);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 16px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.charity-pill:hover {
+  border-color: color-mix(in srgb, var(--charity) 55%, transparent);
+}
+.charity-heart {
+  flex: none;
+  font-size: 9.5px;
+  line-height: 1;
+}
+.charity-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 13em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.charity-more {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--charity) 20%, transparent);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 13px;
+  font-variant-numeric: tabular-nums;
+}
+/* The links take a zero basis on feed cards, so the pill does too: the pill takes most of the
+   room the row has left, up to its whole name (never below the heart and a few letters), and
+   the first trade link keeps room for its whole word ("Terminal", not "Termina"). */
+.cards .card-foot > .fee-badge.has-pill {
+  flex: 3 1 0;
+  max-width: max-content;
+}
+.cards .card-foot > .fee-badge.has-pill ~ .card-links {
+  min-width: 5.5em;
+}
+/* The Pro view's Creator reward square on a charity coin: the heart and the name, in rose. */
+.tm-fig-charity {
+  color: var(--charity-ink);
+}
+.tm-fig-charity > .charity-heart {
+  font-size: 15px;
+}
+.fee-wallet-tip-row.charity .fee-wallet-tip-icon {
+  background: color-mix(in srgb, var(--charity) 16%, var(--surface-2));
+  font-size: 13px;
+}
+.fee-wallet-tip-row.charity .fee-wallet-tip-pct {
+  color: var(--charity-ink);
 }
 .fee-rewards .fee-caption {
   color: var(--good-ink);
@@ -22919,6 +23007,22 @@ dialog.tm-modal.tm-terminal::backdrop {
   align-items: center;
   width: auto;
   gap: 4px;
+}
+/* A charity's pill (user ask 2026-10-23) sits on the name's line. A zero basis keeps it on that
+   line however long the charity's name is: it takes the room the line has left, up to its whole
+   name, and cuts the name short (never below the heart and a few letters) rather than wrap. */
+.scope-fee.has-pill {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  height: auto;
+  flex: 1 1 0;
+  max-width: max-content;
+  font-size: calc(10px * var(--scope-t, 1));
+}
+.scope-fee .charity-pill {
+  font-size: calc(10px * var(--scope-t, 1));
+  line-height: calc(15px * var(--scope-t, 1));
 }
 
 /* "as of 14:05" on a cached report (components/AsOf.tsx). */

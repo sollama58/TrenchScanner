@@ -58,6 +58,7 @@ import {
 } from "../priceChart";
 import {
   cardReadings,
+  charityTipRows,
   oldFirstBuyersText,
   cexCountText,
   countCutFor,
@@ -1227,6 +1228,19 @@ function TokenBody({
                   .map((r, i) => (
                     <FeeKolAvatar key={`${r.label}-${i}`} recipient={r} px={22} />
                   ))}
+                <span className="num tm-fig-clip">{reward.value}</span>
+              </FeeWalletTip>
+            ) : detailCard.token.creatorFee?.destination === "charity" && !reward.empty ? (
+              // A charity coin (user ask 2026-10-23): the heart and the name, and the same styled
+              // tooltip as the card's pill, naming each charity in full with its share.
+              <FeeWalletTip
+                recipients={charityTipRows(detailCard.token.creatorFee)}
+                fallback={reward.title}
+                className="tm-fig-wallet tm-fig-charity"
+              >
+                <span className="charity-heart" aria-hidden="true">
+                  ❤️
+                </span>
                 <span className="num tm-fig-clip">{reward.value}</span>
               </FeeWalletTip>
             ) : (
