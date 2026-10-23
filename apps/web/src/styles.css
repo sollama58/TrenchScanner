@@ -504,6 +504,13 @@ input[type="checkbox"] {
 }
 .status-pill.warn {
   color: var(--warn-ink);
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--border));
+  background: color-mix(in srgb, var(--warn) 9%, var(--surface-2));
+}
+.status-pill.bad {
+  color: var(--bad-ink);
+  border-color: color-mix(in srgb, var(--bad) 45%, var(--border));
+  background: var(--bad-wash);
 }
 /* The Scanning pill in each feed's header (components/ScanStatus.tsx) and its card: how the feed is
    updating, when each stage of the alert path last produced, then each job. */
@@ -585,11 +592,17 @@ input[type="checkbox"] {
 .status-tip-dot.idle {
   background: var(--muted);
 }
+.status-tip-dot.bad {
+  background: var(--bad);
+}
 .status-tip-val {
   text-align: right;
 }
 .status-tip-val.warn {
   color: var(--warn-ink);
+}
+.status-tip-val.bad {
+  color: var(--bad-ink);
 }
 .pulse {
   width: 7px;
@@ -597,6 +610,10 @@ input[type="checkbox"] {
   border-radius: 50%;
   background: currentColor;
   animation: pulse 2s infinite;
+}
+/* Held still: a steady dot, not a heartbeat. */
+.pulse.still {
+  animation: none;
 }
 /* Opacity only, so it runs on the compositor. An animated box-shadow repainted the blurred topbar
    on every frame, for as long as the page was open. */
@@ -20278,26 +20295,15 @@ body:has(.util-toast) .bug-fab {
 .scope-tabs {
   display: none;
 }
+/* Wide screens: the bar only carries the New pill (the Live/Paused state is the header's Scanning
+   pill), so it takes no room while there is nothing new. */
+@media (min-width: 900px) {
+  .scope-bar.quiet {
+    display: none;
+  }
+}
 .scope-tabs .num {
   margin-left: 2px;
-}
-.scope-hold {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.scope-hold::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--good);
-}
-.scope.held .scope-hold {
-  color: var(--warn-ink);
-}
-.scope.held .scope-hold::before {
-  background: var(--warn);
 }
 .scope-new {
   margin-left: auto;
@@ -20553,9 +20559,6 @@ body:has(.util-toast) .bug-fab {
   .scope-tabs {
     display: inline-flex;
   }
-  .scope-hold {
-    font-size: 11px;
-  }
   /* One column at a time (user report 2026-10-19): the page scrolls its rows rather than a box
      inside the page, under a bar of tabs that sticks below the top bar. Swipe for the next. */
   .scope-bar {
@@ -20632,10 +20635,6 @@ body:has(.util-toast) .bug-fab {
     flex: 1;
     white-space: nowrap;
     min-height: 36px;
-  }
-  /* Its own line under the tabs, with the New pill at its end. */
-  .scope-hold {
-    flex: 1 1 60%;
   }
   .scope-new {
     padding: 6px 14px;
@@ -21009,25 +21008,40 @@ body:has(.util-toast) .bug-fab {
   margin-left: 0;
   max-width: none;
 }
-/* With the pills there, the figures run down beside the chips rather than making the row taller.
-   Not with a quick-buy pill, which sits in that bottom corner, and not on phones, whose chips
-   keep to one clipped line and would lose one to the figures. */
+/* With the pills there, the figures run down beside the chips rather than making the row taller,
+   and the chips sit right under the name line: the figures column used to push them down, leaving
+   an empty band under the name (user report 2026-10-23). A quick-buy pill sits in the bottom
+   corner under the figures, which keep room for it. Not on phones, whose chips keep to one clipped
+   line and would lose one to the figures. */
 @media (min-width: 900px) {
-  .scope-row:not(:has(> .quick-buy)):has(.scope-fig-pills) > .scope-avatar {
+  .scope-row:has(.scope-fig-pills) > .scope-avatar {
     grid-area: 1 / 1;
   }
-  .scope-row:not(:has(> .quick-buy)):has(.scope-fig-pills) > .scope-main {
+  .scope-row:has(.scope-fig-pills) > .scope-main {
     grid-area: 1 / 2;
   }
-  .scope-row:not(:has(> .quick-buy)):has(.scope-fig-pills) > .scope-figs {
+  .scope-row:has(.scope-fig-pills) > .scope-figs {
     grid-column: 3;
     grid-row: 1 / span 2;
     align-self: start;
   }
-  .scope-row:not(:has(> .quick-buy)):has(.scope-fig-pills) > .scope-chips {
+  .scope-row:has(.scope-fig-pills) > .scope-chips {
     grid-column: 1 / 3;
     grid-row: 2;
-    align-self: end;
+    align-self: start;
+  }
+  .scope-row:has(.scope-fig-pills):has(> .quick-buy) .scope-chips {
+    padding-right: 0;
+  }
+  /* The quick-buy pill's height, under the figures (bottom: 6px, plus a little air). */
+  .scope-row:has(.scope-fig-pills):has(> .quick-buy.qb-s) > .scope-figs {
+    padding-bottom: 22px;
+  }
+  .scope-row:has(.scope-fig-pills):has(> .quick-buy.qb-m) > .scope-figs {
+    padding-bottom: 26px;
+  }
+  .scope-row:has(.scope-fig-pills):has(> .quick-buy.qb-l) > .scope-figs {
+    padding-bottom: 32px;
   }
 }
 /* The Dex pill and the age under the figures make that column the row's tallest wherever it
@@ -23163,4 +23177,16 @@ dialog.tm-modal.tm-terminal::backdrop {
   .header-balances small {
     font-size: 8.5px;
   }
+}
+/* The Feed stats button beside a section's main action (Filters) and over the Models hero. */
+.section-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 8px;
+}
+.hero-actions {
+  display: flex;
+  align-items: flex-start;
+  flex-shrink: 0;
 }

@@ -89,13 +89,13 @@ describe("GeckoTerminalClient with a paid key", () => {
   afterEach(() => coinGeckoBudget.reset());
 
   it("sends no call its feature's lane has no room for", async () => {
-    coinGeckoBudget.configure({ dailyCredits: 100, peakDailyCredits: 0, chartDailyCredits: 0 });
+    // The market lane has no free API to fall back on (the chart and Peaks lanes do).
+    coinGeckoBudget.configure({ dailyCredits: 0, peakDailyCredits: 0, chartDailyCredits: 0 });
     const client = new GeckoTerminalClient({ apiKey: "k", baseUrl: "http://127.0.0.1:9" });
     await expect(
-      withApiFeature("candle-peaks", () => client.poolMinuteCandles("POOL", "MINT", Date.now())),
+      withApiFeature("scan", () => client.poolMinuteCandles("POOL", "MINT", Date.now())),
     ).rejects.toBeInstanceOf(CoinGeckoBudgetSpentError);
     const failed = new Set<string>();
-    coinGeckoBudget.configure({ dailyCredits: 0, peakDailyCredits: 0, chartDailyCredits: 0 });
     const found = await withApiFeature("scan", () =>
       client.getTokensByAddresses(["MINT"], { failed, priority: true }),
     );
@@ -115,9 +115,13 @@ describe("the chart backfill past its paid budget", () => {
     coinGeckoBudget.configure({ dailyCredits: 100, peakDailyCredits: 0, chartDailyCredits: 0 });
     const fetch = vi
       .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+      .mockImplementation(async () => new Response(JSON.stringify({ data: {} }), { status: 200 }));
     const client = new GeckoTerminalClient({ apiKey: "k" });
     await withOwnApiFeature("candle-backfill", () => client.poolMinuteCandles("POOL", "MINT", Date.now()));
+    // Peaks' top-ups the same (API audit 2026-10-23): their lane was spent minutes into each day.
+    await withOwnApiFeature("candle-peaks", () => client.poolMinuteCandles("POOL", "MINT", Date.now()));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(String(fetch.mock.calls[1]![0])).toMatch(/^https:\/\/api\.geckoterminal\.com\//);
     const [url, init] = fetch.mock.calls[0]!;
     expect(String(url)).toMatch(
       /^https:\/\/api\.geckoterminal\.com\/api\/v2\/networks\/solana\/pools\/POOL\/ohlcv\/minute/,
@@ -137,7 +141,7 @@ describe("the chart backfill with paid budget left", () => {
     coinGeckoBudget.configure(config);
     const fetch = vi
       .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+      .mockImplementation(async () => new Response(JSON.stringify({ data: {} }), { status: 200 }));
     const client = new GeckoTerminalClient({ apiKey: "k" });
     await withOwnApiFeature("candle-backfill", () => client.poolMinuteCandles("POOL", "MINT", Date.now()));
     expect(String(fetch.mock.calls[0]![0])).toMatch(/^https:\/\/api\.geckoterminal\.com\//);

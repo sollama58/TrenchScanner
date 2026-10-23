@@ -18,6 +18,7 @@ import {
   latestPage,
   storingFetcher,
 } from "../candleStore.js";
+import { recordCandleAnswer } from "../chartHealth.js";
 import { liveCurves } from "../liveCurve.js";
 import { liveTrades } from "../liveTrades.js";
 import { sharedSolPrice } from "../solPrice.js";
@@ -198,6 +199,13 @@ export async function registerCandleRoutes(app: FastifyInstance, opts: { env?: E
         logger.warn("candles failed", { mint: mintAddress, tf: q.tf, error: String(err) });
         return empty;
       });
+    // Chart health (/health charts.candles) counts this route's answers as the legacy /chart's:
+    // no bars at all is a null answer; a page whose holes take a good part of its span is partial.
+    if (q.before === null) {
+      const span = (answer.bars.at(-1)?.t ?? 0) - (answer.bars[0]?.t ?? 0) + CANDLE_TIMEFRAMES[q.tf] * 1_000;
+      const holeMs = (answer.holes ?? []).reduce((sum, [a, b]) => sum + (b - a), 0);
+      recordCandleAnswer("candles", answer.bars.length > 0 ? "store" : null, false, holeMs > span * 0.3);
+    }
     // As the chart's: the newest page a few seconds (3 on the finest timeframes, as /chart/fine's
     // 1-second answer), older pages, which hold only closed candles, a minute.
     const maxAge = q.before !== null ? 60 : CANDLE_TIMEFRAMES[q.tf] < 15 ? 3 : 15;

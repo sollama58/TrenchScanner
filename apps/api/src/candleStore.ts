@@ -49,7 +49,7 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let flushing: Promise<void> | null = null;
 const pages = new Map<string, { at: number; candles: McapCandle[] }>();
 /** Stream chunks queued, by `${mint}:${startAt}`, with their bar count and cover end: each once. */
-const streamSaved = new Map<string, string>();
+const streamSaved = new Map<string, { bars: number; coverFrom: number; coverTo: number }>();
 const asked = new Map<string, number>();
 /** Top-ups apart: the hourly ask a chart's open makes must not hold back the top-up it needs. */
 const toppedUp = new Map<string, number>();
@@ -144,10 +144,20 @@ export function keepStreamBars(
   });
   for (const row of rows) {
     const id = `${mint}:${row.startAt}`;
-    const sig = `${row.bars.length}:${row.coverFrom}:${row.coverTo}`;
-    if (streamSaved.get(id) === sig || queue.length >= MAX_QUEUED) continue;
+    const held = streamSaved.get(id);
+    if (held) {
+      // The stream keeps only its last 20 minutes of ticks, so the chunk at that edge comes back
+      // every poll with fewer bars and a later start: nothing to add, and a cover never shrinks
+      // (the store's upsert would keep the bars and take the shorter cover; API audit 2026-10-23).
+      if (row.bars.length < held.bars) continue;
+      row.coverFrom = Math.min(row.coverFrom, held.coverFrom);
+      row.coverTo = Math.max(row.coverTo, held.coverTo);
+      if (row.bars.length === held.bars && row.coverFrom === held.coverFrom && row.coverTo === held.coverTo)
+        continue;
+    }
+    if (queue.length >= MAX_QUEUED) continue;
     if (streamSaved.size >= MAX_SAVED_KEYS) streamSaved.clear();
-    streamSaved.set(id, sig);
+    streamSaved.set(id, { bars: row.bars.length, coverFrom: row.coverFrom, coverTo: row.coverTo });
     queue.push(row);
   }
   if (queue.length > 0 && !timer) {

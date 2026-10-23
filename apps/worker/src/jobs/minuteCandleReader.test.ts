@@ -9,6 +9,7 @@ import {
 } from "@trenchscanner/core";
 import {
   geckoCandles,
+  CandlesUnavailableError,
   minuteCandleReader,
   PUMP_REFUSED_PAUSE_MS,
   storedCloses,
@@ -106,6 +107,28 @@ describe("minuteCandleReader", () => {
     const { reader } = setup({ pump: async () => null, pages: {} });
     expect(await reader.minuteCandles(MINT)).toBeNull();
     expect(reader.takeStats().gecko).toBe(0);
+  });
+
+  it("is a retry, not a verdict, when Pump.fun is paused and nothing else answers", async () => {
+    // Pump.fun refused and is paused; the store is empty; GeckoTerminal knows none of the pools.
+    const { reader } = setup({
+      pump: async () => {
+        throw refused();
+      },
+      pages: {},
+    });
+    await expect(reader.minuteCandles(MINT)).rejects.toBeInstanceOf(CandlesUnavailableError);
+    await expect(reader.minuteCandles(MINT)).rejects.toBeInstanceOf(CandlesUnavailableError);
+    // Without a CoinGecko key the paused read has no one to ask either.
+    const { reader: keyless, advance } = setup({
+      pump: async () => {
+        throw refused();
+      },
+      gecko: false,
+    });
+    await expect(keyless.minuteCandles(MINT)).rejects.toMatchObject({ status: 403 });
+    advance(1_000);
+    await expect(keyless.minuteCandles(MINT)).rejects.toBeInstanceOf(CandlesUnavailableError);
   });
 
   it("puts a five-minute candle on its last minute, as Pump.fun's are", async () => {
