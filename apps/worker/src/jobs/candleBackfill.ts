@@ -32,7 +32,8 @@ const logger = createLogger("candle-backfill");
  *
  * GeckoTerminal's free API allows 30 calls a minute per IP, shared with the worker's market-data
  * fallback: the pages go through that client's background budget and take at most
- * CANDLE_BACKFILL_GECKO_PER_MINUTE of it. Closed candles never change, so a coin is done once.
+ * CANDLE_BACKFILL_GECKO_PER_MINUTE of it (more by default with COINGECKO_API_KEY, which also
+ * steps every second rather than TICK_MS). Closed candles never change, so a coin is done once.
  */
 
 const TICK_MS = 3_000;
@@ -271,14 +272,21 @@ async function applyPatch(mint: string, patch: BackfillPatch, now: number): Prom
 let timer: ReturnType<typeof setInterval> | null = null;
 let busy = false;
 let stats = { steps: 0, pages: 0, done: 0, failed: 0 };
+/** The running backfill's GeckoTerminal calls a minute, reported with the counts. */
+let perMinute = 0;
 
 /**
  * Starts the backfill (a step every TICK_MS when one is due); returns its stop. `geckoPage` is the
  * worker's GeckoTerminal client (GeckoTerminalClient.poolMinuteCandles), so its budget is shared.
  */
 export function startCandleBackfill(
-  config: Pick<BackfillDeps, "geckoPage" | "maxPages" | "keepDays"> & { geckoPerMinute: number },
+  config: Pick<BackfillDeps, "geckoPage" | "maxPages" | "keepDays"> & {
+    geckoPerMinute: number;
+    /** How often a step is taken; a paid plan's budget needs more than TICK_MS allows. */
+    tickMs?: number;
+  },
 ) {
+  perMinute = config.geckoPerMinute;
   const deps: BackfillDeps = {
     pumpFiveMinute: (mint) => fetchPumpCandles(mint, "5m"),
     geckoPage: config.geckoPage,
@@ -288,7 +296,7 @@ export function startCandleBackfill(
     maxPages: config.maxPages,
     keepDays: config.keepDays,
   };
-  timer = setInterval(() => void tick(deps), TICK_MS);
+  timer = setInterval(() => void tick(deps), config.tickMs ?? TICK_MS);
   timer.unref?.();
   return () => {
     if (timer) clearInterval(timer);
@@ -333,7 +341,7 @@ export async function tick(deps: BackfillDeps, now = Date.now()): Promise<void> 
 /** Counts since the last call, for the scan's heartbeat; null while the backfill is off. */
 export function takeCandleBackfillStats() {
   if (!timer) return null;
-  const out = stats;
+  const out = { ...stats, geckoPerMinute: perMinute };
   stats = { steps: 0, pages: 0, done: 0, failed: 0 };
   return out;
 }

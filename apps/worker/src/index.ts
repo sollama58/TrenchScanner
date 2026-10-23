@@ -89,6 +89,7 @@ import { withJobLock } from "./jobLock.js";
 import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
 import { runExitPlanRescore } from "./jobs/exitPlanRescore.js";
 import { runCandlePeaksJob } from "./jobs/candlePeaks.js";
+import { minuteCandleReader } from "./jobs/minuteCandleReader.js";
 import { runBundledSupplyBackfill } from "./jobs/bundledSupplyBackfill.js";
 import { runWalletScoreBackfill } from "./jobs/walletScoreBackfill.js";
 import { runWinnerFollowBackfill } from "./jobs/winnerFollowBackfill.js";
@@ -443,7 +444,10 @@ async function main() {
     scans && env.CANDLE_STORE
       ? startCandleBackfill({
           geckoPage: (pool, mint, beforeMs) => geckoTerminal.poolMinuteCandles(pool, mint, beforeMs),
-          geckoPerMinute: env.CANDLE_BACKFILL_GECKO_PER_MINUTE,
+          geckoPerMinute:
+            env.CANDLE_BACKFILL_GECKO_PER_MINUTE ??
+            (env.COINGECKO_API_KEY ? Math.floor((env.COINGECKO_REQUESTS_PER_MINUTE * 0.4) / 3) : 4),
+          tickMs: env.COINGECKO_API_KEY ? 1_000 : undefined,
           maxPages: env.CANDLE_BACKFILL_MAX_PAGES,
           keepDays: env.CANDLE_RETENTION_DAYS,
         })
@@ -772,10 +776,19 @@ async function main() {
   );
   // Every alert's Peak/ATH from the coin's own minute candles, for PEAK_TRACKING_DAYS after the
   // coin's latest alert (candlePeaks.ts): a few dozen Pump.fun calls a minute at most.
+  // Pump.fun's minute candles, GeckoTerminal's on the coin's pools when Pump.fun refuses (its 403s
+  // from 2026-10-23) and COINGECKO_API_KEY gives the budget for it (minuteCandleReader.ts).
+  const candleGecko = env.COINGECKO_API_KEY ? geckoTerminal : null;
+  const peakCandles = minuteCandleReader({ pumpFun: deps.pumpFun, gecko: candleGecko });
+  const regradeCandles = minuteCandleReader({ pumpFun: deps.pumpFun, gecko: candleGecko });
   schedule("candle-peaks", () =>
     scheduleInterval(
       "candle-peaks",
-      () => runCandlePeaksJob(deps.pumpFun, { trackingDays: env.PEAK_TRACKING_DAYS }),
+      () =>
+        runCandlePeaksJob(peakCandles, {
+          trackingDays: env.PEAK_TRACKING_DAYS,
+          candleSources: () => peakCandles.takeStats(),
+        }),
       1,
       { deadlineMinutes: 10 },
     ),
@@ -814,11 +827,11 @@ async function main() {
       "label-regrade",
       () =>
         withJobLock("label-regrade", async () => {
-          const meta = await runLabelRegradeJob(deps.pumpFun);
+          const meta = await runLabelRegradeJob(regradeCandles);
           // The one-time re-grade of coins paired with another coin (quoteRegrade.ts), same lock.
-          const quote = await runQuoteRegrade(deps.pumpFun);
+          const quote = await runQuoteRegrade(regradeCandles);
           // The one-time re-score of returns under the 2026-10-17 exit plan (exitPlanRescore.ts), same lock.
-          const rescore = await runExitPlanRescore(deps.pumpFun);
+          const rescore = await runExitPlanRescore(regradeCandles);
           // The one-time Bundled % backfill (bundledSupplyBackfill.ts), same lock: database only.
           const bundled = await runBundledSupplyBackfill();
           // The one-time Wallet Score backfill (walletScoreBackfill.ts), same lock: database only.
@@ -827,6 +840,7 @@ async function main() {
           const winnerFollow = await runWinnerFollowBackfill();
           return {
             ...meta,
+            candleSources: regradeCandles.takeStats(),
             ...(quote ? { quoteRegrade: quote } : {}),
             ...(rescore ? { exitPlanRescore: rescore } : {}),
             ...(bundled ? { bundledSupplyBackfill: bundled } : {}),
