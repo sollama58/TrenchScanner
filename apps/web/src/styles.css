@@ -24071,3 +24071,361 @@ dialog.tm-modal.tm-terminal::backdrop {
     margin-left: 0;
   }
 }
+
+/* ---------- The market bar's thin form (user asks 2026-10-23) ----------
+   It starts collapsed: one thin line in the page that sticks under the top nav as the page
+   scrolls, with a chevron that opens the full bar. Opened, the full bar folds in from above, and
+   once it scrolls away a copy of the thin line slides down under the nav. */
+.mkt-full-slot {
+  display: grid;
+  grid-template-rows: 0fr;
+  margin-top: -18px; /* the stack's gap, so a folded bar takes no room */
+  opacity: 0;
+  transition:
+    grid-template-rows 0.32s cubic-bezier(0.2, 0.8, 0.2, 1),
+    margin-top 0.32s cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 0.22s ease;
+}
+.mkt-full-slot > div {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+.mkt-full-slot.open {
+  grid-template-rows: 1fr;
+  margin-top: 0;
+  opacity: 1;
+}
+.mkt-full-slot.open > div {
+  /* Room for the Collapse handle that hangs off the bar's bottom edge. */
+  padding-bottom: 14px;
+  overflow: visible;
+  animation: mkt-unclip 0.32s step-end;
+}
+@keyframes mkt-unclip {
+  from {
+    overflow: hidden;
+  }
+}
+.mkt-collapse {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 12px 3px 9px;
+  transform: translateX(-50%);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+.mkt-collapse:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+.mkt-collapse .flip {
+  transform: rotate(180deg);
+}
+
+.mkt-mini {
+  z-index: 9;
+}
+.mkt-mini.sticky {
+  position: sticky;
+  animation: mkt-mini-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.mkt-mini.fixed {
+  position: fixed;
+  left: 0;
+  right: 0;
+  padding: 6px 24px 0;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-10px);
+  transition:
+    opacity 0.2s ease,
+    transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.mkt-mini.fixed.on {
+  opacity: 1;
+  transform: none;
+}
+.mkt-mini.fixed .mkt-mini-inner {
+  max-width: 1312px;
+  margin: 0 auto;
+  pointer-events: auto;
+}
+@keyframes mkt-mini-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+.mkt-mini-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 5px 6px 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  -webkit-backdrop-filter: saturate(1.4) blur(12px);
+  backdrop-filter: saturate(1.4) blur(12px);
+  box-shadow: var(--shadow);
+}
+.mkt-mini-scroll {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.mkt-mini-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.mkt-mini-watch {
+  flex: 1 1 0;
+}
+.mkt-mini-mid {
+  flex: none;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.mkt-mini-mid:hover {
+  background: var(--highlight);
+}
+.mkt-mini-pos {
+  flex: 1 1 0;
+  justify-content: flex-end;
+}
+.mkt-mini-sep {
+  flex: none;
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+}
+.mkt-mini-price,
+.mkt-mini-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.mkt-mini-price .mkt-logo {
+  width: 16px;
+  height: 16px;
+}
+.mkt-mini-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.mkt-mini .up {
+  color: var(--good-ink);
+}
+.mkt-mini .down {
+  color: var(--bad-ink);
+}
+.mkt-mini-icon {
+  flex: none;
+  color: var(--muted);
+}
+.mkt-mini-none {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.mkt-mini-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background-color 0.15s;
+}
+.mkt-mini-chip:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+.mkt-mini-chip:disabled {
+  cursor: default;
+}
+.mkt-mini-chip.ghost {
+  padding: 0 11px;
+  color: var(--muted);
+  background: none;
+}
+.mkt-mini-img {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.mkt-mini-img.placeholder {
+  display: grid;
+  place-items: center;
+  background: var(--surface-3);
+  color: var(--muted);
+  font-size: 10px;
+}
+.mkt-mini-pct {
+  font-weight: 700;
+}
+.mkt-mini-expand {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    transform 0.2s;
+}
+.mkt-mini-expand:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+  transform: translateY(1px);
+}
+/* "+N" (or a bare +) after the positions that fit, and in the full bar's heading: to Portfolio. */
+.mkt-more {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 24px;
+  min-width: 24px;
+  padding: 0 6px;
+  justify-content: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.mkt-more.has {
+  border-style: solid;
+  color: var(--link);
+}
+.mkt-more:hover {
+  color: var(--ink);
+  border-color: var(--link);
+}
+.mkt-count {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--ink-2);
+  font-size: 10.5px;
+}
+.fit-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+  justify-content: flex-end;
+}
+.fit-item {
+  flex: none;
+  display: inline-flex;
+}
+.fit-item.hidden {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+}
+.fit-more {
+  flex: none;
+  display: inline-flex;
+}
+/* Tablets: the stats give way first. */
+@media (max-width: 1099px) {
+  .mkt-mini-stat:last-child {
+    display: none;
+  }
+}
+/* Phones: one line that scrolls sideways under a soft fade, the chevron fixed at its end. */
+@media (max-width: 640px) {
+  .mkt-mini.fixed {
+    padding: 4px 12px 0;
+  }
+  /* The folds sit at the phone bar's bottom edge: the handle goes under them, not over. */
+  .mkt-full-slot.open > div {
+    padding-bottom: 34px;
+  }
+  .mkt-mini-inner {
+    gap: 8px;
+    min-height: 40px;
+    padding: 4px 4px 4px 8px;
+    border-radius: 12px;
+  }
+  .mkt-mini-scroll {
+    gap: 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
+    mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
+  }
+  .mkt-mini-scroll::-webkit-scrollbar {
+    display: none;
+  }
+  .mkt-mini-watch,
+  .mkt-mini-pos {
+    flex: none;
+  }
+  .mkt-mini-price,
+  .mkt-mini-stat {
+    font-size: 12px;
+  }
+  .mkt-mini-stat:last-child {
+    display: inline-flex;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mkt-full-slot,
+  .mkt-mini.fixed,
+  .mkt-mini.sticky,
+  .mkt-mini-expand {
+    transition: none;
+    animation: none;
+  }
+}
