@@ -29,7 +29,7 @@ import {
 import { SharedCache } from "../sharedCache.js";
 import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
 import { charityNamesByMint } from "../curatedFeed.js";
-import { otcDeskRoster } from "../otcDesk.js";
+import { otcDeskRosterFor } from "../otcDesk.js";
 import { enrichDeskRewards } from "../deskRewardMeta.js";
 import { creatorFeeWalletAddresses, resolveOtcDeskFee, type OtcDeskFee } from "../feeDesks.js";
 import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
@@ -1538,7 +1538,8 @@ export async function readTokenSage(mintAddress: string): Promise<SageView> {
           },
         })
       : ([] as NarrativeAlertRow[]),
-    otcDeskRoster({ wait: true }).catch(() => new Map<string, OtcDeskFee>()),
+    // A coin past the sweep's newest pages is looked up on its own (otcDeskRosterFor).
+    otcDeskRosterFor(mintAddress, { wait: true }).catch(() => new Map<string, OtcDeskFee>()),
     feeDestination === "charity"
       ? charityNamesByMint([mintAddress])
       : Promise.resolve(new Map<string, string>()),
