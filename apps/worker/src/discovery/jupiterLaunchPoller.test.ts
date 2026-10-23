@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DiscoveredCoin } from "@trenchscanner/core";
 import { JupiterLaunchPoller } from "./jupiterLaunchPoller.js";
 
@@ -41,5 +41,59 @@ describe("JupiterLaunchPoller", () => {
     await poller.poll();
     expect(poller.drain().map((c) => c.mintAddress)).toEqual(["A"]);
     expect(poller.takeStats()).toMatchObject({ polls: 2, failed: 1 });
+  });
+
+  it("reads now for the scan, holds what it read, and joins a read under way", async () => {
+    let release: (coins: DiscoveredCoin[]) => void = () => {};
+    let reads = 0;
+    const poller = new JupiterLaunchPoller({
+      recentLaunches: () => {
+        reads += 1;
+        return new Promise((r) => (release = r));
+      },
+    });
+    const timed = poller.poll();
+    const now = poller.pollNow();
+    release([coin("A")]);
+    await timed;
+    expect((await now).map((c) => c.mintAddress)).toEqual(["A"]);
+    expect(reads).toBe(1);
+    expect(poller.drain().map((c) => c.mintAddress)).toEqual(["A"]);
+  });
+
+  it("gives none for a failed read", async () => {
+    const poller = new JupiterLaunchPoller({
+      recentLaunches: async () => {
+        throw new Error("503");
+      },
+    });
+    expect(await poller.pollNow()).toEqual([]);
+    expect(poller.takeStats()).toMatchObject({ polls: 1, failed: 1 });
+  });
+
+  it("puts the next timed read a whole interval after the scan's", async () => {
+    vi.useFakeTimers();
+    try {
+      let reads = 0;
+      const poller = new JupiterLaunchPoller({
+        recentLaunches: async () => {
+          reads += 1;
+          return [];
+        },
+      });
+      poller.start(15_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(reads).toBe(1);
+      await poller.pollNow();
+      expect(reads).toBe(2);
+      // The old schedule would have read at 15 s; the next read is 15 s after the scan's.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(reads).toBe(2);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(reads).toBe(3);
+      poller.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

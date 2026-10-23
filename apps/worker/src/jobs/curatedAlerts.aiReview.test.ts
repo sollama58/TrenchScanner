@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { prisma, loadEnv, resetAiReviewerSwitchCache, type Env, type ScoredToken } from "@trenchscanner/core";
 import {
   collectCuratedContender,
+  drainShadowReviews,
   emitCuratedCycle,
   newCuratedCycle,
   resetCuratorModelCache,
@@ -196,6 +197,57 @@ describe.skipIf(!dbAvailable)("AI reviewer at the emission site", () => {
       const review = await prisma.aiReview.findFirstOrThrow({ where: { tokenId: token.id } });
       expect(review.mode).toBe("shadow");
       expect(review.decision).toBe("no_buy");
+    });
+  });
+
+  // User ask 2026-10-23 (API audit bundle, A4): a coin another seat or an earlier process already
+  // had reviewed is not bought a second review in shadow mode; only the first counts anyway.
+  describe("a review already stored for the token", () => {
+    async function seeded(name: string, hoursAgo: number) {
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-${name}` } });
+      await prisma.aiReview.create({
+        data: {
+          tokenId: token.id,
+          createdAt: new Date(Date.now() - hoursAgo * 3_600_000),
+          mode: "shadow",
+          model: "claude-opus-5-5",
+          decision: "buy",
+          latencyMs: 1,
+          anchorPriceUsd: 0.0001,
+          anchorMcapUsd: 150_000,
+        },
+      });
+      return token;
+    }
+    async function emit(token: { id: string; mintAddress: string }, env: Env) {
+      const cycle = newCuratedCycle();
+      await collectCuratedContender(cycle, token, fixture(token.mintAddress), null, env);
+      const emitted = await emitCuratedCycle(cycle, env);
+      await drainShadowReviews(10_000);
+      return emitted;
+    }
+
+    it("shadow mode: reuses one from within the alert cooldown, past the in-process share", async () => {
+      reviewPick.mockResolvedValue(verdict("no_buy"));
+      const token = await seeded("stored-shadow", 2);
+      expect(await emit(token, shadow)).toBe(1);
+      expect(reviewPick).not.toHaveBeenCalled();
+      expect(await prisma.aiReview.count({ where: { tokenId: token.id } })).toBe(1);
+    });
+
+    it("shadow mode: asks again once the stored one is older than the alert cooldown", async () => {
+      reviewPick.mockResolvedValue(verdict("no_buy"));
+      const token = await seeded("stored-old", shadow.CURATED_ALERT_COOLDOWN_HOURS + 1);
+      expect(await emit(token, shadow)).toBe(1);
+      expect(reviewPick).toHaveBeenCalledTimes(1);
+      expect(await prisma.aiReview.count({ where: { tokenId: token.id } })).toBe(2);
+    });
+
+    it("gate mode: does not let a stored verdict past the half-hour share decide the pick", async () => {
+      reviewPick.mockResolvedValue(verdict("no_buy"));
+      const token = await seeded("stored-gate", 2);
+      expect(await emit(token, gate)).toBe(0);
+      expect(reviewPick).toHaveBeenCalledTimes(1);
     });
   });
 

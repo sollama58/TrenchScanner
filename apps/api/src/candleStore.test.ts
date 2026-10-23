@@ -4,6 +4,7 @@ import {
   askBackfill,
   flushCandleStore,
   keepPage,
+  keepStreamBars,
   latestPage,
   resetCandleStoreForTests,
   storingFetcher,
@@ -93,6 +94,23 @@ describe("candle store (API)", () => {
       ["X", undefined],
       ["X", BACKFILL_TOP_UP_AFTER_MS],
       ["X", BACKFILL_TOP_UP_AFTER_MS],
+    ]);
+  });
+
+  it("saves the stream's closed minutes of 1s bars once, covers run on over quiet minutes", async () => {
+    const saved: CandleChunkRow[] = [];
+    resetCandleStoreForTests({ save: async (rows) => void saved.push(...rows), ask: async () => {} });
+    const bar = (t: number) => ({ t, o: 1, h: 2, l: 1, c: 2, vol: null });
+    const from = NOW - 3 * M + 20_000;
+    const bars = [bar(from), bar(from + 1_000), bar(NOW - 30_000)];
+    keepStreamBars("X", bars, { from, to: NOW + 25_000 });
+    keepStreamBars("X", bars, { from, to: NOW + 40_000 });
+    await flushCandleStore();
+    // 12:27:20 to 12:30:25: the 12:27 minute holds two bars and vouches for the quiet 12:28; the
+    // 12:29 minute is closed; the forming 12:30 is left for later.
+    expect(saved.map((r) => [r.source, r.res, r.startAt, r.coverFrom, r.coverTo, r.bars.length])).toEqual([
+      ["chart", 1, NOW - 3 * M, from, NOW - M, 2],
+      ["chart", 1, NOW - M, NOW - M, NOW, 1],
     ]);
   });
 });

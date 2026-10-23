@@ -550,6 +550,31 @@ describe("JupiterClient.discoverMovingLaunches", () => {
     await client.discoverMovingLaunches({ now: 1_061_000 });
     expect(urls).toHaveLength(6);
   });
+
+  it("takes the newest pools from the reader given instead of a call of its own", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      urls.push(url);
+      return Promise.resolve(
+        new Response(JSON.stringify([{ id: "old", usdPrice: 0.0001, launchpad: "pump.fun" }])),
+      );
+    });
+    const client = new JupiterClient({ apiKey: "k", requestsPerMinute: 6000 });
+    const polled = await client.recentLaunches().catch(() => []);
+    urls.length = 0;
+    let reads = 0;
+    const coins = await client.discoverMovingLaunches({
+      now: 1_000_000,
+      recent: async () => {
+        reads += 1;
+        return [{ ...polled[0]!, mintAddress: "new" }];
+      },
+    });
+    expect(reads).toBe(1);
+    expect(urls.some((u) => u.includes("/recent"))).toBe(false);
+    expect(urls).toHaveLength(2);
+    expect(coins.map((c) => c.mintAddress).sort()).toEqual(["new", "old"]);
+  });
 });
 
 describe("JupiterClient.recentLaunches", () => {

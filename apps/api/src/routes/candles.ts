@@ -11,12 +11,18 @@ import {
   type SeriesInput,
 } from "@trenchscanner/core";
 import { allowLookupRead } from "../lookupGate.js";
-import { askBackfill, configureCandleStore, latestPage, storingFetcher } from "../candleStore.js";
+import {
+  askBackfill,
+  configureCandleStore,
+  keepStreamBars,
+  latestPage,
+  storingFetcher,
+} from "../candleStore.js";
 import { liveCurves } from "../liveCurve.js";
 import { liveTrades } from "../liveTrades.js";
 import { sharedSolPrice } from "../solPrice.js";
 import { streamCandles, type StreamFeeds } from "../streamCandles.js";
-import { CandleCache, KeyedCache, pumpFunCandleFetcher } from "../tokenChart.js";
+import { CandleCache, KeyedCache, pumpFunCandleFetcher, pumpFunPages } from "../tokenChart.js";
 import {
   CANDLE_TIMEFRAMES,
   SOURCE_PRIORITY,
@@ -38,15 +44,19 @@ const PAGE_FRESH_MS = 90_000;
 /**
  * The newest pages when no chart cache read the coin lately (the store holds only closed chunks).
  * Small budgets of their own: with the chart's 200 a minute they stay under the process's swap-api
- * gate (240, pumpfunGate.ts). Their reads are saved like the chart's (storingFetcher).
+ * gate (240, pumpfunGate.ts). Their reads are saved like the chart's (storingFetcher). The answers
+ * are the token chart's own (pumpFunPages, price-market audit 2026-10-23, 4a-2): a coin open in both
+ * read the same page twice within the TTL, which is the same here and there.
  */
 const minuteCache = new CandleCache(storingFetcher(pumpFunCandleFetcher(), 60), {
   callsPerMinute: 20,
   ttlMs: 30_000,
+  entries: pumpFunPages.minute,
 });
 const quarterCache = new CandleCache(storingFetcher(pumpFunCandleFetcher(undefined, "15s"), 15), {
   callsPerMinute: 10,
   ttlMs: 60_000,
+  entries: pumpFunPages.quarter,
 });
 
 /** The live tail's ticks and Live trades', as the chart's own stream candles read them. */
@@ -103,6 +113,17 @@ async function liveInputs(
     // On the finest timeframes only what the stream itself delivered: RPC reads every few seconds
     // make 1-second bars that sit flat four seconds in five (charts audit CH-6).
     const from = tfSec < 5 ? stream.streamFrom : (stream.coveredFrom ?? stream.candles[0]!.t);
+    // What the stream itself delivered is saved, on the launch billion, for the next chart.
+    if (stream.streamFrom !== null && stream.readAt !== null && factor > 0) {
+      const saveFrom = stream.streamFrom;
+      keepStreamBars(
+        mint,
+        stream.candles
+          .filter((k) => k.t >= saveFrom)
+          .map((k) => ({ ...k, o: k.o / factor, h: k.h / factor, l: k.l / factor, c: k.c / factor })),
+        { from: saveFrom, to: stream.readAt },
+      );
+    }
     if (from !== null) {
       out.push({
         res: 1,

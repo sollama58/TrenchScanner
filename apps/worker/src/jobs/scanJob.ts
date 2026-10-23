@@ -2,6 +2,7 @@ import { curvePathOf, followYoungCurves, takeCurveTapeStats } from "./curveTape.
 import { takePricePathStats } from "./pricePathRecorder.js";
 import { takeCurveCandleStats } from "./curveCandles.js";
 import { takeCandleBackfillStats } from "./candleBackfill.js";
+import { takeCandleChainFillStats } from "./candleChainFill.js";
 import {
   tokenSageHints,
   recordRunProgress,
@@ -312,6 +313,8 @@ export interface ScanDeps {
   /** Jupiter's newest launches, read between cycles and drained once per cycle (JupiterLaunchPoller). Optional. */
   launchPoller?: {
     drain(): DiscoveredCoin[];
+    /** A read of the newest pools now, kept for the drain too: the moving-coins discovery's `recent`. */
+    pollNow?(): Promise<DiscoveredCoin[]>;
     takeStats?(): Record<string, number>;
     /** A launch read since the last drain, still buffered: what a fast scan records it from. */
     pendingLaunch?(mint: string): DiscoveredCoin | undefined;
@@ -1194,9 +1197,15 @@ async function scanCycle(
     // Jupiter's most traded, trending and newest Pump.fun coins: the same job as Pump.fun's
     // recently-traded list and newest page, from a source that does not depend on Pump.fun's API
     // (blocked from 2026-10-14 about 21:00 UTC). Asked at most once a minute; see saveMovingLaunches.
+    // The newest pools are the launch poller's read, made now, when it runs: it reads that same
+    // list every 15 s (price-market audit 2026-10-23, 4a-4).
     discoverWithin(
       "jupiter-moving",
-      (deps.jupiter?.discoverMovingLaunches?.() ?? Promise.resolve([])).catch((err) => {
+      (
+        deps.jupiter?.discoverMovingLaunches?.(
+          deps.launchPoller?.pollNow ? { recent: () => deps.launchPoller!.pollNow!() } : undefined,
+        ) ?? Promise.resolve([])
+      ).catch((err) => {
         logger.warn("jupiter moving-coins discovery failed", { error: String(err) });
         return [] as DiscoveredCoin[];
       }),
@@ -1298,8 +1307,9 @@ async function scanCycle(
   // 2. Re-check the active watchlist against live market data, and keep only the mints currently
   // sitting in (or near) the target band.
   const { tracked, alive } = await selectWatchlist(env);
-  // The young Pump.fun coins in it have their curves followed change by change (curveTape.ts).
-  followYoungCurves(tracked);
+  // The young Pump.fun coins in it have their curves followed change by change (curveTape.ts), and
+  // the coins alerted on lately for longer, for their charts.
+  followYoungCurves(tracked, Date.now(), await recentlyAlertedCoins(env.CURVE_TAPE_ALERTED_MINUTES));
   lap("watchlist");
 
   if (tracked.length === 0) {
@@ -1373,6 +1383,7 @@ async function scanCycle(
   // The chart's candle store: the curve tape's 1-second rows written, and the backfill's steps.
   const curveCandles = takeCurveCandleStats();
   const candleBackfill = takeCandleBackfillStats();
+  const candleChainFill = takeCandleChainFillStats();
   // This process's Pump.fun budget (pumpfunGate.ts): requests let through, 429 pauses, held back.
   const pumpfunGate = takePumpFunGateStats();
   // The live tape's pages (10 credits each) since the last cycle, and the coins it holds a page for.
@@ -1414,6 +1425,7 @@ async function scanCycle(
     ...(pricePaths ? { pricePaths } : {}),
     ...(curveCandles ? { curveCandles } : {}),
     ...(candleBackfill ? { candleBackfill } : {}),
+    ...(candleChainFill ? { candleChainFill } : {}),
     pumpfunGate,
     liveTape,
     heliusStageCredits,
@@ -4651,4 +4663,19 @@ function walletRiskSignals(
     walletWinHighSupplyPct: w.walletWinHighSupplyPct ?? undefined,
     knownWinnerFirstBuyers: w.knownWinnerFirstBuyers ?? undefined,
   };
+}
+
+/** The coins a seat alerted on within `minutes`, for the curve tape's longer follow (curveTape.ts). */
+async function recentlyAlertedCoins(minutes: number, now = Date.now()) {
+  const rows = await prisma.curatedAlert
+    .findMany({
+      where: { createdAt: { gte: new Date(now - minutes * 60_000) } },
+      select: {
+        token: { select: { mintAddress: true, launchedAt: true, firstSeenAt: true, launchpad: true } },
+      },
+      distinct: ["tokenId"],
+      take: 500,
+    })
+    .catch(() => []);
+  return rows.map((r) => r.token);
 }

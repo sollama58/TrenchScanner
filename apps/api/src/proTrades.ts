@@ -746,3 +746,58 @@ export function tradeStats(
     entries: entries.length,
   };
 }
+
+/**
+ * Coins' live USD prices, each reused `ttlMs`, read through `ask` (the Pro cards' livePricesFor,
+ * routes/proTrades.ts). A reader waits `waitMs` at most, then has what came back in time. A coin
+ * already being asked about joins that ask (misc audit 2026-10-23, A9): a reader's cards and
+ * positions poll together, and each asked Jupiter for the same coins at once. Off (`enabled`
+ * false): nothing is asked.
+ */
+export function liveUsdPrices(
+  ask: (mints: string[]) => Promise<Map<string, number>>,
+  opts: { enabled: boolean; ttlMs: number; waitMs: number; now?: () => number },
+): (mints: string[]) => Promise<Map<string, number>> {
+  const clock = opts.now ?? Date.now;
+  const prices = new Map<string, { at: number; usd: number }>();
+  /** Each coin's ask while it is out, shared by the readers who want it meanwhile. */
+  const pending = new Map<string, Promise<Map<string, number> | null>>();
+  return async (mints) => {
+    const now = clock();
+    const out = new Map<string, number>();
+    const due: string[] = [];
+    for (const m of mints) {
+      const hit = prices.get(m);
+      if (hit && now - hit.at < opts.ttlMs) out.set(m, hit.usd);
+      else due.push(m);
+    }
+    if (due.length === 0 || !opts.enabled) return out;
+    const asks = new Set<Promise<Map<string, number> | null>>();
+    const fresh: string[] = [];
+    for (const m of due) {
+      const joined = pending.get(m);
+      if (joined) asks.add(joined);
+      else fresh.push(m);
+    }
+    if (fresh.length > 0) {
+      const read = ask(fresh).catch(() => null);
+      for (const m of fresh) pending.set(m, read);
+      void read.finally(() => {
+        for (const m of fresh) if (pending.get(m) === read) pending.delete(m);
+      });
+      asks.add(read);
+    }
+    const timeout = new Promise<null>((r) => setTimeout(() => r(null), opts.waitMs).unref?.());
+    const reads = await Promise.all([...asks].map((read) => Promise.race([read, timeout])));
+    const wanted = new Set(due);
+    for (const read of reads) {
+      for (const [m, usd] of read ?? []) {
+        if (!wanted.has(m) || !(usd > 0)) continue;
+        out.set(m, usd);
+        prices.set(m, { at: now, usd });
+      }
+    }
+    if (prices.size > 5_000) prices.clear();
+    return out;
+  };
+}

@@ -1,5 +1,5 @@
 import { PROGRAM, associatedTokenAddress } from "./txGuard.js";
-import type { RawTransaction, TokenBalanceEntry } from "./rpc.js";
+import type { MintInfo, RawTransaction, TokenBalanceEntry } from "./rpc.js";
 
 /**
  * A wallet's trades in one coin, read from the chain: what the token modal's Pro chart marks
@@ -147,6 +147,10 @@ export function tradeOf(
  * programs. `cache` keeps each transaction's reading for this wallet and coin (a landed transaction
  * never changes) across calls.
  * Null when the chain couldn't be read; `truncated` when older history was left out.
+ *
+ * `program`: the mint's token program, when it can never be another (MintInfoReuse.fixedProgram):
+ * only that program's account is read. The other program's can't be opened for the mint at all,
+ * so its signatures were a credit a poll for nothing (Helius audit 2026-10-23, N-2).
  */
 export async function walletTokenTrades(
   rpc: WalletTradesRpc,
@@ -154,8 +158,10 @@ export async function walletTokenTrades(
   mint: string,
   cache: Map<string, WalletTrade | null>,
   limit = WALLET_TRADES_LIMIT,
+  opts: { program?: string } = {},
 ): Promise<{ trades: WalletTrade[]; truncated: boolean } | null> {
-  const accounts = [PROGRAM.token, PROGRAM.token2022].map((p) => associatedTokenAddress(wallet, mint, p));
+  const programs = opts.program ? [opts.program] : [PROGRAM.token, PROGRAM.token2022];
+  const accounts = programs.map((p) => associatedTokenAddress(wallet, mint, p));
   const lists = await Promise.all(accounts.map((a) => rpc.getSignaturesForAddress(a, limit)));
   if (lists.some((l) => l === null)) return null;
   const truncated = lists.some((l) => l!.length >= limit);
@@ -179,4 +185,69 @@ export async function walletTokenTrades(
     .filter((t): t is WalletTrade => !!t)
     .sort((a, b) => a.t - b.t);
   return { trades, truncated };
+}
+
+/** What the Pro position read takes from a mint (MintInfoReuse). */
+export type PositionMintInfo = Pick<MintInfo, "program" | "decimals" | "transferFeeBps">;
+
+/**
+ * How long a mint read whose figures can change is reused: a Token-2022 transfer fee can be set
+ * again, and a closable mint can be closed and made again under the other program.
+ */
+export const CHANGEABLE_MINT_INFO_MS = 60_000;
+/** Mints kept at once; the oldest read goes first. */
+const MAX_MINT_INFOS = 5_000;
+
+/**
+ * The Pro position poll's mint reads (Helius audit 2026-10-23, N-2): the panel polls every 15
+ * seconds, and each poll read the mint account again. A mint's program and decimals never change,
+ * nor does a transfer fee it was made without (an extension can't be added to a mint later), so
+ * those are kept for good. A mint with a transfer fee, or one its authority can close (and the
+ * address then be made again under the other program), is read again after
+ * CHANGEABLE_MINT_INFO_MS. A read that failed is not kept, and answers null as before.
+ */
+export class MintInfoReuse {
+  private readonly mints = new Map<string, { info: PositionMintInfo; atMs: number; fixed: boolean }>();
+
+  constructor(private readonly read: (mint: string) => Promise<MintInfo | null>) {}
+
+  async get(mint: string, nowMs = Date.now()): Promise<PositionMintInfo | null> {
+    const hit = this.mints.get(mint);
+    if (hit && (hit.fixed || nowMs - hit.atMs < CHANGEABLE_MINT_INFO_MS)) return hit.info;
+    const info = await this.read(mint).catch(() => null);
+    if (!info) return null;
+    const kept: PositionMintInfo = {
+      program: info.program,
+      ...(info.decimals !== undefined ? { decimals: info.decimals } : {}),
+      ...(info.transferFeeBps !== undefined ? { transferFeeBps: info.transferFeeBps } : {}),
+    };
+    this.mints.delete(mint);
+    const oldest = this.mints.keys().next();
+    if (this.mints.size >= MAX_MINT_INFOS && !oldest.done) this.mints.delete(oldest.value);
+    this.mints.set(mint, { info: kept, atMs: nowMs, fixed: fixedMint(info) });
+    return kept;
+  }
+
+  /**
+   * The mint's token program, only when it can never be the other one: the mint's other-program
+   * token accounts can't exist, so walletTokenTrades reads just this one. Undefined until read.
+   */
+  fixedProgram(mint: string): string | undefined {
+    const hit = this.mints.get(mint);
+    return hit?.fixed ? hit.info.program : undefined;
+  }
+}
+
+/**
+ * Whether nothing the position reads of this mint can change: a classic SPL mint (it can't be
+ * closed, and has no extensions), or a Token-2022 one with neither a transfer fee nor a close
+ * authority.
+ */
+function fixedMint(info: MintInfo): boolean {
+  if (info.program === PROGRAM.token) return true;
+  return (
+    info.program === PROGRAM.token2022 &&
+    !info.extensions.includes("transferFeeConfig") &&
+    !info.extensions.includes("mintCloseAuthority")
+  );
 }

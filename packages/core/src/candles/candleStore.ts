@@ -51,13 +51,23 @@ export async function saveCandleChunks(rows: readonly CandleChunkRow[]): Promise
 /** The widest chunk span (5 m bars), how far before `from` a chunk can start and still reach it. */
 const WIDEST_SPAN_MS = 300 * 1_000 * CANDLE_CHUNK_BARS;
 
-/** A coin's stored chunks that reach into [from, to), decoded, oldest first. */
-export async function readCandleChunks(mint: string, from: number, to: number): Promise<CandleChunkRow[]> {
+/**
+ * A coin's stored chunks that reach into [from, to), decoded, oldest first. `only`: those of one
+ * width and/or source alone, so a reader after one kind doesn't decode every other.
+ */
+export async function readCandleChunks(
+  mint: string,
+  from: number,
+  to: number,
+  only: { res?: CandleRes; source?: CandleStoreSource } = {},
+): Promise<CandleChunkRow[]> {
   const rows = await prisma.candleChunk.findMany({
     where: {
       mint,
       startAt: { gte: new Date(from - WIDEST_SPAN_MS), lt: new Date(to) },
       coverTo: { gt: new Date(from) },
+      ...(only.res !== undefined ? { res: only.res } : {}),
+      ...(only.source !== undefined ? { source: only.source } : {}),
     },
     orderBy: { startAt: "asc" },
   });

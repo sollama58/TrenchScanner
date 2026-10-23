@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CATCH_UP_COVERED_MS,
   CATCH_UP_UNCOVERED_MS,
+  liveUsdPrices,
   LazyTradeStream,
   streamKey,
   positionPnl,
@@ -442,5 +443,54 @@ describe("LazyTradeStream", () => {
     lazy.watch("k", ["a"]);
     expect(made).toBe(2);
     lazy.stop();
+  });
+});
+
+describe("liveUsdPrices", () => {
+  it("shares one ask between readers wanting the same coin at once, and reuses it a while", async () => {
+    const asked: string[][] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    let now = 0;
+    const prices = liveUsdPrices(
+      async (mints) => {
+        asked.push(mints);
+        await gate;
+        return new Map(mints.map((m) => [m, m === "A" ? 2 : 3]));
+      },
+      { enabled: true, ttlMs: 15_000, waitMs: 2_500, now: () => now },
+    );
+    const one = prices(["A"]);
+    const two = prices(["A", "B"]);
+    release();
+    expect(await one).toEqual(new Map([["A", 2]]));
+    expect(await two).toEqual(
+      new Map([
+        ["A", 2],
+        ["B", 3],
+      ]),
+    );
+    // B alone was asked by the second reader: A was already being asked about.
+    expect(asked).toEqual([["A"], ["B"]]);
+    now = 10_000;
+    expect(await prices(["A", "B"])).toEqual(
+      new Map([
+        ["A", 2],
+        ["B", 3],
+      ]),
+    );
+    expect(asked).toHaveLength(2);
+  });
+
+  it("asks nothing when off, and gives none for a failed ask", async () => {
+    let asks = 0;
+    const ask = async () => {
+      asks += 1;
+      throw new Error("down");
+    };
+    expect(await liveUsdPrices(ask, { enabled: false, ttlMs: 1, waitMs: 10 })(["A"])).toEqual(new Map());
+    expect(asks).toBe(0);
+    expect(await liveUsdPrices(ask, { enabled: true, ttlMs: 1, waitMs: 10 })(["A"])).toEqual(new Map());
+    expect(asks).toBe(1);
   });
 });

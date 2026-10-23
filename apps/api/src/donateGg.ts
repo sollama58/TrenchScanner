@@ -26,6 +26,12 @@ export interface DonateCharity {
 }
 
 const cache = new Map<string, { charities: DonateCharity[]; until: number }>();
+/**
+ * Configs being loaded: a reader that asks while another's request is out shares it (misc audit
+ * 2026-10-23, A2). A feed poll and a token page, or two feed polls, on a cold cache each sent the
+ * same request. Null: not remembered (a transport failure, or an answer other than 200 or 404).
+ */
+const pending = new Map<string, Promise<DonateCharity[] | null>>();
 
 function charityName(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -95,18 +101,13 @@ export async function donateConfigCharities(
   const base = (process.env.DONATE_GG_BASE_URL || DEFAULT_BASE).replace(/\/+$/, "");
   await Promise.all(
     todo.map(async (id) => {
-      try {
-        const res = await fetch(`${base}/configs/${encodeURIComponent(id)}`, {
-          headers: { accept: "application/json" },
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-        if (res.status !== 200 && res.status !== 404) return;
-        const charities = res.status === 200 ? charitiesFromDonateConfig(await res.json()) : [];
-        cache.set(id, { charities, until: now + (charities.length ? CONFIG_OK_MS : CONFIG_MISS_MS) });
-        if (charities.length) out.set(id, charities);
-      } catch {
-        // donate.gg didn't answer. The card keeps the address; the next read can try.
+      let load = pending.get(id);
+      if (!load) {
+        load = loadConfig(base, id, timeoutMs, now).finally(() => pending.delete(id));
+        pending.set(id, load);
       }
+      const charities = await load;
+      if (charities?.length) out.set(id, charities);
     }),
   );
   if (cache.size > MAX_CACHED) {
@@ -119,9 +120,32 @@ export async function donateConfigCharities(
   return out;
 }
 
+/** One config from donate.gg, remembered; null when not (see `pending`). Never throws. */
+async function loadConfig(
+  base: string,
+  id: string,
+  timeoutMs: number,
+  now: number,
+): Promise<DonateCharity[] | null> {
+  try {
+    const res = await fetch(`${base}/configs/${encodeURIComponent(id)}`, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (res.status !== 200 && res.status !== 404) return null;
+    const charities = res.status === 200 ? charitiesFromDonateConfig(await res.json()) : [];
+    cache.set(id, { charities, until: now + (charities.length ? CONFIG_OK_MS : CONFIG_MISS_MS) });
+    return charities;
+  } catch {
+    // donate.gg didn't answer. The card keeps the address; the next read can try.
+    return null;
+  }
+}
+
 /** Test hook: forget every loaded config. */
 export function clearDonateConfigCache(): void {
   cache.clear();
+  pending.clear();
 }
 
 /**

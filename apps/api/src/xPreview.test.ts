@@ -209,4 +209,18 @@ describe("GET /x-preview", () => {
     expect((await a.inject("/x-preview/image/x.evil/avatar")).statusCode).toBe(404);
     expect((await a.inject("/x-preview/image/p.coin/other")).statusCode).toBe(404);
   });
+
+  it("asks X again for a picture that failed only after a while", async () => {
+    let pictureReads = 0;
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const u = String(input);
+      if (u.startsWith("https://api.fxtwitter.com/")) return json(PROFILE);
+      pictureReads += 1;
+      return new Response("busy", { status: 503 });
+    }) as unknown as typeof fetch;
+    const a = await app(fetchImpl);
+    expect((await a.inject("/x-preview/image/p.coin/avatar")).statusCode).toBe(404);
+    expect((await a.inject("/x-preview/image/p.coin/avatar")).statusCode).toBe(404);
+    expect(pictureReads).toBe(1);
+  });
 });

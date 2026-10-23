@@ -163,9 +163,19 @@ export class JupiterClient {
    * Asked at most once every `minIntervalMs` (the lists move by the minute, and the calls share
    * the scan's Jupiter budget); a call inside it, or one the budget can't fit before `deadlineMs`,
    * returns nothing. A failed list is skipped; the others still count.
+   *
+   * `recent`: where the newest pools come from instead of a call of this one's own. The worker's
+   * launch poller reads that same list every 15 s (recentLaunches), so the scan takes the poller's
+   * read, made then, rather than reading it a fifth time a minute (price-market audit 2026-10-23,
+   * 4a-4).
    */
   async discoverMovingLaunches(
-    options: { deadlineMs?: number; minIntervalMs?: number; now?: number } = {},
+    options: {
+      deadlineMs?: number;
+      minIntervalMs?: number;
+      now?: number;
+      recent?: () => Promise<DiscoveredCoin[]>;
+    } = {},
   ): Promise<DiscoveredCoin[]> {
     const now = options.now ?? Date.now();
     if (now - this.lastMovingAt < (options.minIntervalMs ?? 60_000)) return [];
@@ -176,14 +186,17 @@ export class JupiterClient {
       throttled: (delayMs: number) => this.gate.throttled(delayMs),
     };
     const paths = ["toptraded/5m?limit=100", "toptrending/5m?limit=100", "recent"];
+    const recent = options.recent;
     const lists = await Promise.allSettled(
       paths.map((path) =>
-        fetchJson<unknown>(`${this.baseUrl}/tokens/v2/${path}`, {
-          gate,
-          headers: this.headers,
-          timeoutMs: Math.max(500, deadline - Date.now()),
-          retries: 0,
-        }),
+        path === "recent" && recent
+          ? recent()
+          : fetchJson<unknown>(`${this.baseUrl}/tokens/v2/${path}`, {
+              gate,
+              headers: this.headers,
+              timeoutMs: Math.max(500, deadline - Date.now()),
+              retries: 0,
+            }).then(parseJupiterMovingLaunches),
       ),
     );
     const out = new Map<string, DiscoveredCoin>();
@@ -194,7 +207,7 @@ export class JupiterClient {
         }
         return;
       }
-      for (const coin of parseJupiterMovingLaunches(result.value)) out.set(coin.mintAddress, coin);
+      for (const coin of result.value) out.set(coin.mintAddress, coin);
     });
     return [...out.values()];
   }

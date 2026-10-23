@@ -14,7 +14,8 @@ import { JobFailure, type JobRunMeta } from "../scheduler.js";
 const logger = createLogger("trade-canary");
 
 /**
- * The trade canary (trading robustness audit 2026-10-19, #6): every 5 minutes, the Pro trade
+ * The trade canary (trading robustness audit 2026-10-19, #6): every TRADE_CANARY_INTERVAL_MINUTES
+ * (env, 15 by default since the user ask 2026-10-23: API audit bundle; it was 5), the Pro trade
  * path end to end short of a signature. Nothing else watched it: a build failure, a Sender outage
  * or a dead RPC only reached the logs, and the first to hear was a trader whose click failed.
  *
@@ -27,7 +28,7 @@ const logger = createLogger("trade-canary");
  * wallets' Telegram after two, and once when it clears (findCanaryProblems), so one slow Jupiter
  * answer is not a page. The latest result is this job's row on /health/worker.
  *
- * Cheap on purpose: one run every 5 minutes, each probe cut off at PROBE_TIMEOUT_MS. A run costs
+ * Cheap on purpose: one run every 15 minutes, each probe cut off at PROBE_TIMEOUT_MS. A run costs
  * about thirty Helius credits (mint, curve and lookup-table reads, fee estimate, blockhash, three
  * simulations, two block heights) and six Jupiter calls. TRADE_CANARY_ENABLED=false switches it off.
  */
@@ -39,8 +40,6 @@ export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
  */
 export const DEFAULT_PROBE_WALLET = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
 
-/** How often the canary runs (and what pipeline-watch judges its silence by). */
-export const TRADE_CANARY_INTERVAL_MINUTES = 5;
 /** Each probe's limit: past it the probe failed, whatever it was waiting on. */
 export const PROBE_TIMEOUT_MS = 20_000;
 /** The buy each build probes: the smallest Pro trade the API takes (MIN_TRADE_LAMPORTS). */
