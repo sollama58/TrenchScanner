@@ -2,12 +2,119 @@ import type { Card } from "./api";
 import { nowReading } from "./components/AlertCard";
 
 /**
- * Scope: the Live feed as a three-column board of compact rows (user ask 2026-10-18): your own
- * filters' alerts, the models' calls, and every graduated token that passes the safety screen.
- * Its Stream switch (user ask 2026-10-18, in place of the old Stream tab) swaps the first two for
- * the Stream's new tokens and the ones about to graduate.
+ * Scope: the Live feed as a board of compact rows (user ask 2026-10-18). Its columns are the
+ * user's own (user ask 2026-10-23): up to six, each one of the kinds below - the Stream's New and
+ * About to graduate, Graduated, your filters' alerts (all, or up to three filters), and model
+ * calls (the models you follow, or up to three models of your choosing).
  */
-export type ScopeColumn = "filters" | "models" | "new" | "soon" | "graduated";
+export type ScopeColumnKind = "filters" | "filter" | "models" | "model" | "new" | "soon" | "graduated";
+
+/** A column's id on the board: unique per board, kept as the column is edited or moved. */
+export type ScopeColumn = string;
+
+export interface ScopeColumnSpec {
+  id: ScopeColumn;
+  kind: ScopeColumnKind;
+  /** Specific filters' ids ("filter") or models' ids ("model"), at most MAX_SCOPE_PICKS. */
+  picks: string[];
+}
+
+export const MAX_SCOPE_COLUMNS = 6;
+export const MAX_SCOPE_PICKS = 3;
+
+export interface ScopeKindDef {
+  kind: ScopeColumnKind;
+  label: string;
+  short: string;
+  hint: string;
+  /** What a column of this kind picks: specific filters or models. */
+  picks?: "filter" | "model";
+}
+
+export const SCOPE_KINDS: ScopeKindDef[] = [
+  {
+    kind: "new",
+    label: "New",
+    short: "New",
+    hint: "New tokens the moment they pass the safety screen in the band, newest first",
+  },
+  {
+    kind: "soon",
+    label: "About to graduate",
+    short: "Soon",
+    hint: "The same tokens as New, closest to graduating first",
+  },
+  {
+    kind: "graduated",
+    label: "Graduated",
+    short: "Graduated",
+    hint: "Every token that graduated and passes the safety screen, and your alerts once their coin graduates",
+  },
+  {
+    kind: "filters",
+    label: "Your filters",
+    short: "Filters",
+    hint: "Alerts any of your filters caught, newest first",
+  },
+  {
+    kind: "filter",
+    label: "Specific filters",
+    short: "Filter",
+    hint: "Alerts from up to three of your filters, newest first",
+    picks: "filter",
+  },
+  {
+    kind: "models",
+    label: "Your models",
+    short: "Models",
+    hint: "Calls from the models you follow, newest first",
+  },
+  {
+    kind: "model",
+    label: "Specific models",
+    short: "Model",
+    hint: "Calls from up to three models of your choosing, followed or not, newest first",
+    picks: "model",
+  },
+];
+
+export const kindDef = (kind: ScopeColumnKind): ScopeKindDef => SCOPE_KINDS.find((k) => k.kind === kind)!;
+
+/** Columns of your filters' alerts, and of model calls: a token both caught shows on one side only. */
+export const isFilterSide = (k: ScopeColumnKind): boolean => k === "filters" || k === "filter";
+export const isModelSide = (k: ScopeColumnKind): boolean => k === "models" || k === "model";
+export const isAlertKind = (k: ScopeColumnKind): boolean => isFilterSide(k) || isModelSide(k);
+
+/** The board new accounts start with: your filters, your models and Graduated. */
+export const DEFAULT_SCOPE_BOARD: ScopeColumnSpec[] = [
+  { id: "filters", kind: "filters", picks: [] },
+  { id: "models", kind: "models", picks: [] },
+  { id: "graduated", kind: "graduated", picks: [] },
+];
+
+/**
+ * A column's name on the board: its kind, or for specific filters and models the picked ones'
+ * names ("Fast + Deep", "Atlas +2"), from `names` (id to name) where known.
+ */
+export function columnLabel(col: ScopeColumnSpec, names: ReadonlyMap<string, string>): string {
+  const def = kindDef(col.kind);
+  if (!def.picks) return def.label;
+  const picked = col.picks.map((id) => names.get(id)).filter((n): n is string => !!n);
+  if (picked.length === 0) return col.picks.length === 0 ? def.label : def.short;
+  return picked.length <= 2 ? picked.join(" + ") : `${picked[0]} +${picked.length - 1}`;
+}
+
+/** API pages of the Stream Scope reads when a column shows New or About to graduate. */
+export const SCOPE_STREAM_PAGES = 3;
+
+/** API pages of the Live feed Scope reads: the newest alerts, enough to fill its alert columns. */
+export const SCOPE_PAGES = 5;
+
+/** API pages of each picked model's calls (GET /curated?model=, 12 a page). */
+export const SCOPE_MODEL_PAGES = 2;
+
+/** The live tick's limit on tokens per request (LIVE_TICK_MAX_TOKENS in the API). */
+const MAX_TICK_TOKENS = 30;
 
 /**
  * A card's market cap now, else at its scan: how close a coin still on its curve is to graduating,
@@ -15,58 +122,11 @@ export type ScopeColumn = "filters" | "models" | "new" | "soon" | "graduated";
  */
 const mcapOf = (card: Card): number => nowReading(card) ?? card.snapshot.marketCapUsd ?? 0;
 
-export const SCOPE_COLUMNS: { id: ScopeColumn; label: string; short: string; hint: string }[] = [
-  {
-    id: "filters",
-    label: "Your filters",
-    short: "Filters",
-    hint: "Alerts your own filters caught, newest first",
-  },
-  { id: "models", label: "Models", short: "Models", hint: "Calls from the models you follow, newest first" },
-  {
-    id: "new",
-    label: "New",
-    short: "New",
-    hint: "New tokens the moment they pass the safety screen in the band, newest first",
-  },
-  {
-    id: "soon",
-    label: "About to graduate",
-    short: "Soon",
-    hint: "The same tokens as New, closest to graduating first",
-  },
-  {
-    id: "graduated",
-    label: "Graduated",
-    short: "Graduated",
-    hint: "Every token that graduated and passes the safety screen, and your alerts once their coin graduates",
-  },
-];
-
-/** The columns on the board: the Stream's two in place of the alerts' two when Stream is on. */
-export function scopeColumnsFor(stream: boolean): typeof SCOPE_COLUMNS {
-  const ids: ScopeColumn[] = stream ? ["new", "soon", "graduated"] : ["filters", "models", "graduated"];
-  return SCOPE_COLUMNS.filter((c) => ids.includes(c.id));
-}
-
-/** API pages of the Stream Scope reads when Stream is on, for New and About to graduate. */
-export const SCOPE_STREAM_PAGES = 3;
-
-/** API pages of the Live feed Scope reads: the newest alerts, enough to fill both its columns. */
-export const SCOPE_PAGES = 5;
-
-/** The live tick's limit on tokens per request (LIVE_TICK_MAX_TOKENS in the API). */
-const MAX_TICK_TOKENS = 30;
-
+/** Each column's rows, by column id. */
 export type ScopeColumns = Record<ScopeColumn, Card[]>;
 
-export const emptyColumns = (): ScopeColumns => ({
-  filters: [],
-  models: [],
-  new: [],
-  soon: [],
-  graduated: [],
-});
+export const emptyColumns = (cols: readonly { id: ScopeColumn }[]): ScopeColumns =>
+  Object.fromEntries(cols.map((c) => [c.id, []]));
 
 /** Whether an alert's coin has graduated, by its own scans or by a Graduated column entry. */
 export function cardGraduated(card: Card, gradTokens: ReadonlySet<string>): boolean {
@@ -83,70 +143,115 @@ function timeOf(iso: string | null | undefined): number {
   return Number.isFinite(t) ? t : Infinity;
 }
 
+/** When the card's alert was made: a model's call time, else the filter match's. */
+const alertTime = (card: Card): number =>
+  Date.parse(card.curated && card.kind !== "match" ? card.curated.alertedAt : card.matchedAt);
+
+/** Several models' calls as one list, newest first, each token once (its newest call). */
+export function mergeCalls(lists: readonly (readonly Card[])[]): Card[] {
+  const all = lists.flat().sort((a, b) => (alertTime(b) || 0) - (alertTime(a) || 0));
+  const seen = new Set<string>();
+  return all.filter((c) => !seen.has(c.tokenId) && (seen.add(c.tokenId), true));
+}
+
+/** What the board's columns are made from. */
+export interface ScopeSources {
+  /** The Live feed: your filters' alerts and the followed models' calls, newest first. */
+  feed: readonly Card[];
+  /** The Stream's graduated tokens, newest first. */
+  graduated: readonly Card[];
+  /** The Stream's tokens still on their curve. */
+  stream?: readonly Card[];
+  /** Picked models' own calls, by model id, newest first. */
+  modelCalls?: ReadonlyMap<string, readonly Card[]>;
+}
+
 /**
- * The Live feed's cards in their columns, each keeping the feed's newest-first order, next to the
- * graduated tokens. A filter alert a model call folded into is in both: it is your alert and the
- * model's call. An alert whose coin has graduated moves to the Graduated column (user ask
- * 2026-10-18), in its coin's place there or by its alert time, keeping its filter or model marker;
- * `keepGraduated` leaves it in its own column too. New and About to graduate hold the same Stream
+ * The board's columns, each keeping its source's newest-first order. An alert whose coin has
+ * graduated moves to the Graduated column when the board has one (user ask 2026-10-18), in its
+ * coin's place there or by its alert time, keeping its filter or model marker; a column with
+ * `keepGraduated` keeps it too. Without a Graduated column it stays where it is. A token both a
+ * filter and a model alerted on sits only on the side that alerted first (user ask 2026-10-19); a
+ * tie, or no times to go by, goes to the filters' side. New and About to graduate hold the Stream's
  * tokens still on their curve (user ask 2026-10-19), New newest first and About to graduate by
  * market cap, biggest (closest to graduating) first.
  */
 export function splitScope(
-  feed: readonly Card[],
-  graduated: readonly Card[],
-  keepGraduated: { filters: boolean; models: boolean } = { filters: false, models: false },
-  stream: readonly Card[] = [],
+  columns: readonly (ScopeColumnSpec & { keepGraduated?: boolean })[],
+  src: ScopeSources,
 ): ScopeColumns {
-  const out = emptyColumns();
-  const gradTokens = new Set(graduated.map((c) => c.tokenId));
+  const out = emptyColumns(columns);
+  const gradTokens = new Set(src.graduated.map((c) => c.tokenId));
+  const hasGrad = columns.some((c) => c.kind === "graduated");
+  const fresh: Card[] = [];
   const seen = new Set<string>();
-  for (const card of stream) {
+  for (const card of src.stream ?? []) {
     if (seen.has(card.tokenId) || cardGraduated(card, gradTokens)) continue;
     seen.add(card.tokenId);
-    out.new.push(card);
+    fresh.push(card);
   }
-  out.soon = [...out.new].sort((a, b) => mcapOf(b) - mcapOf(a));
+  const soon = [...fresh].sort((a, b) => mcapOf(b) - mcapOf(a));
+
+  const sourceOf = (col: ScopeColumnSpec): readonly Card[] => {
+    switch (col.kind) {
+      case "filters":
+        return src.feed.filter((c) => c.kind === "match");
+      case "filter":
+        return src.feed.filter((c) => c.kind === "match" && !!c.filter && col.picks.includes(c.filter.id));
+      case "models":
+        return src.feed.filter((c) => c.curated !== null);
+      case "model":
+        return mergeCalls(col.picks.map((id) => src.modelCalls?.get(id) ?? []));
+      default:
+        return [];
+    }
+  };
   const moved = new Map<string, Card>();
-  // A token both a filter and a model alerted on sits only in the column that alerted first (user
-  // ask 2026-10-19); a tie, or no times to go by, goes to Your filters.
-  const inFilters = (card: Card, grad: boolean) => card.kind === "match" && (!grad || keepGraduated.filters);
-  const inModels = (card: Card, grad: boolean) => card.curated !== null && (!grad || keepGraduated.models);
+  // Each token's first alert on each side, among the cards the board's columns would show.
   const first = new Map<string, { filters: number | null; models: number | null }>();
-  for (const card of feed) {
-    const grad = cardGraduated(card, gradTokens);
-    const t = first.get(card.tokenId) ?? { filters: null, models: null };
-    if (inFilters(card, grad)) t.filters = Math.min(t.filters ?? Infinity, timeOf(card.matchedAt));
-    if (inModels(card, grad)) t.models = Math.min(t.models ?? Infinity, timeOf(card.curated?.alertedAt));
-    first.set(card.tokenId, t);
+  const lists = new Map<ScopeColumn, Card[]>();
+  for (const col of columns) {
+    if (!isAlertKind(col.kind)) continue;
+    const list: Card[] = [];
+    for (const card of sourceOf(col)) {
+      if (hasGrad && cardGraduated(card, gradTokens)) {
+        if (!moved.has(card.tokenId)) moved.set(card.tokenId, card);
+        if (!col.keepGraduated) continue;
+      }
+      list.push(card);
+      const t = first.get(card.tokenId) ?? { filters: null, models: null };
+      if (isFilterSide(col.kind)) t.filters = Math.min(t.filters ?? Infinity, timeOf(card.matchedAt));
+      else t.models = Math.min(t.models ?? Infinity, timeOf(card.curated?.alertedAt));
+      first.set(card.tokenId, t);
+    }
+    lists.set(col.id, list);
   }
   const filtersFirst = (tokenId: string) => {
     const t = first.get(tokenId);
     return t?.filters != null && (t.models == null || t.filters <= t.models);
   };
-  for (const card of feed) {
-    const grad = cardGraduated(card, gradTokens);
-    if (grad && !moved.has(card.tokenId)) moved.set(card.tokenId, card);
-    if (filtersFirst(card.tokenId)) {
-      if (inFilters(card, grad)) out.filters.push(card);
-    } else if (inModels(card, grad)) out.models.push(card);
-  }
-  if (moved.size === 0) {
-    out.graduated = [...graduated];
-    return out;
-  }
-  // Each row with the time it sorts by: an entry's own, which its alert takes over in place.
-  const rows = graduated.map((c) => {
-    const alert = moved.get(c.tokenId);
-    moved.delete(c.tokenId);
-    return { card: alert ?? c, at: Date.parse(c.matchedAt) };
-  });
-  for (const card of moved.values())
-    rows.push({
-      card,
-      at: Date.parse(card.curated && card.kind !== "match" ? card.curated.alertedAt : card.matchedAt),
+
+  let graduated: Card[] = [...src.graduated];
+  if (moved.size > 0) {
+    // Each row with the time it sorts by: an entry's own, which its alert takes over in place.
+    const rows = src.graduated.map((c) => {
+      const alert = moved.get(c.tokenId);
+      moved.delete(c.tokenId);
+      return { card: alert ?? c, at: Date.parse(c.matchedAt) };
     });
-  out.graduated = rows.sort((a, b) => (b.at || 0) - (a.at || 0)).map((r) => r.card);
+    for (const card of moved.values()) rows.push({ card, at: alertTime(card) });
+    graduated = rows.sort((a, b) => (b.at || 0) - (a.at || 0)).map((r) => r.card);
+  }
+
+  for (const col of columns) {
+    if (col.kind === "new") out[col.id] = [...fresh];
+    else if (col.kind === "soon") out[col.id] = [...soon];
+    else if (col.kind === "graduated") out[col.id] = [...graduated];
+    else {
+      const filterSide = isFilterSide(col.kind);
+      out[col.id] = (lists.get(col.id) ?? []).filter((c) => filtersFirst(c.tokenId) === filterSide);
+    }
+  }
   return out;
 }
 
@@ -154,14 +259,7 @@ export function splitScope(
 export type ScopeFrame = Record<ScopeColumn, string[]>;
 
 export function frameOf(cols: ScopeColumns): ScopeFrame {
-  const ids = (col: ScopeColumn) => cols[col].map((c) => c.id);
-  return {
-    filters: ids("filters"),
-    models: ids("models"),
-    new: ids("new"),
-    soon: ids("soon"),
-    graduated: ids("graduated"),
-  };
+  return Object.fromEntries(Object.entries(cols).map(([id, cards]) => [id, cards.map((c) => c.id)]));
 }
 
 /**
@@ -175,27 +273,28 @@ export function holdFrame(
   last: ReadonlyMap<string, Card>,
 ): { cols: ScopeColumns; pending: number } {
   const byId = new Map<string, Card>();
-  for (const col of SCOPE_COLUMNS) for (const c of fresh[col.id]) byId.set(c.id, c);
-  const cols = emptyColumns();
-  // A column the frame drew empty (its data hadn't arrived yet, say) fills in as it comes: there
-  // are no rows on screen to shift, so nothing to hold back.
-  const open = new Set(SCOPE_COLUMNS.filter((c) => frame[c.id].length === 0).map((c) => c.id));
-  for (const { id: col } of SCOPE_COLUMNS) {
-    if (open.has(col)) {
-      cols[col] = [...fresh[col]];
+  for (const cards of Object.values(fresh)) for (const c of cards) byId.set(c.id, c);
+  const cols: ScopeColumns = {};
+  // A column the frame drew empty (its data hadn't arrived yet, say), or one added since, fills in
+  // as it comes: there are no rows on screen to shift, so nothing to hold back.
+  const open = (col: ScopeColumn) => (frame[col]?.length ?? 0) === 0;
+  for (const col of Object.keys(fresh)) {
+    if (open(col)) {
+      cols[col] = [...fresh[col]!];
       continue;
     }
-    for (const id of frame[col]) {
+    cols[col] = [];
+    for (const id of frame[col]!) {
       const card = byId.get(id) ?? last.get(id);
       if (card) cols[col].push(card);
     }
   }
   // New rows: one a column hasn't drawn yet (a folded alert counts once).
   const waiting = new Set<string>();
-  for (const { id: col } of SCOPE_COLUMNS) {
-    if (open.has(col)) continue;
+  for (const col of Object.keys(fresh)) {
+    if (open(col)) continue;
     const drawn = new Set(frame[col]);
-    for (const c of fresh[col]) if (!drawn.has(c.id)) waiting.add(c.id);
+    for (const c of fresh[col]!) if (!drawn.has(c.id)) waiting.add(c.id);
   }
   return { cols, pending: waiting.size };
 }
@@ -206,10 +305,11 @@ export function holdFrame(
  */
 export function scopeTickIds(cols: ScopeColumns): string[] {
   const out = new Set<string>();
-  const depth = Math.max(...SCOPE_COLUMNS.map((c) => cols[c.id].length));
+  const lists = Object.values(cols);
+  const depth = Math.max(0, ...lists.map((l) => l.length));
   for (let i = 0; i < depth && out.size < MAX_TICK_TOKENS; i++) {
-    for (const { id } of SCOPE_COLUMNS) {
-      const card = cols[id][i];
+    for (const list of lists) {
+      const card = list[i];
       if (card && out.size < MAX_TICK_TOKENS) out.add(card.tokenId);
     }
   }

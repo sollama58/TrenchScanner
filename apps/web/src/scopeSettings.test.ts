@@ -104,20 +104,13 @@ describe("passesColumnFilter", () => {
     ).toBe(false);
   });
 
-  it("narrows the Models column by tier and model", () => {
+  it("narrows model columns to high-conviction calls", () => {
     expect(passesColumnFilter(card({ model: "Atlas" }), f({ highOnly: true }), "models", NOW)).toBe(false);
     expect(
-      passesColumnFilter(card({ model: "Atlas", tier: "high" }), f({ highOnly: true }), "models", NOW),
+      passesColumnFilter(card({ model: "Atlas", tier: "high" }), f({ highOnly: true }), "model", NOW),
     ).toBe(true);
-    expect(passesColumnFilter(card({ model: "Atlas" }), f({ models: ["Orion"] }), "models", NOW)).toBe(false);
-    expect(passesColumnFilter(card({ model: "Orion" }), f({ models: ["Orion"] }), "models", NOW)).toBe(true);
-  });
-
-  it("narrows Your filters to the picked filters", () => {
-    expect(passesColumnFilter(card({ filter: "Main" }), f({ filters: ["Fast"] }), "filters", NOW)).toBe(
-      false,
-    );
-    expect(passesColumnFilter(card({ filter: "Fast" }), f({ filters: ["Fast"] }), "filters", NOW)).toBe(true);
+    // Not a filter's alerts: high conviction is about model calls.
+    expect(passesColumnFilter(card({}), f({ highOnly: true }), "filters", NOW)).toBe(true);
   });
 });
 
@@ -130,32 +123,56 @@ describe("normalizeScopeSettings", () => {
     });
     expect(s.display.density).toBe("roomy");
     expect(s.display.chips).toEqual(["top10"]);
-    expect(s.columns.models).toMatchObject({
-      mcapMin: null,
-      maxAgeMin: 30,
-      socials: "any",
-      models: ["Atlas"],
-    });
+    expect(s.board.map((c) => c.kind)).toEqual(["filters", "models", "graduated"]);
+    expect(s.board[1]!.filter).toMatchObject({ mcapMin: null, maxAgeMin: 30, socials: "any" });
   });
 
-  it("keeps a column on the Stream board too", () => {
+  it("turns an old Stream board into New, About to graduate and Graduated, less the hidden ones", () => {
     const s = normalizeScopeSettings({
       display: { hiddenColumns: ["new", "soon", "graduated"], stream: true },
+      columns: { soon: { minHolders: 20 } },
     });
-    expect(s.display.hiddenColumns).toEqual(["new", "soon"]);
-    expect(s.display.stream).toBe(true);
+    expect(s.board.map((c) => c.id)).toEqual(["graduated"]);
+    const t = normalizeScopeSettings({
+      display: { hiddenColumns: ["new"], stream: true },
+      columns: { soon: { minHolders: 20 } },
+    });
+    expect(t.board.map((c) => c.kind)).toEqual(["soon", "graduated"]);
+    expect(t.board[0]!.filter.minHolders).toBe(20);
   });
 
-  it("never hides every column", () => {
-    const s = normalizeScopeSettings({ display: { hiddenColumns: ["filters", "models", "graduated"] } });
-    expect(s.display.hiddenColumns).toHaveLength(2);
+  it("keeps a saved board within six columns, three picks, known kinds and unique ids", () => {
+    const col = (id: unknown, kind: unknown, picks: unknown = []) => ({ id, kind, picks, filter: {} });
+    const s = normalizeScopeSettings({
+      display: {},
+      board: [
+        col("a", "model", ["m1", "m2", "m3", "m4"]),
+        col("a", "new", ["x"]),
+        col("b", "nope"),
+        col("bad id!", "graduated"),
+        col("c", "filters"),
+        col("d", "soon"),
+        col("e", "filter", ["f1", "f1"]),
+        col("f", "models"),
+      ],
+    });
+    expect(s.board).toHaveLength(6);
+    expect(s.board[0]!.picks).toEqual(["m1", "m2", "m3"]);
+    expect(s.board[1]).toMatchObject({ id: "new", kind: "new", picks: [] });
+    expect(s.board[2]).toMatchObject({ id: "graduated", kind: "graduated" });
+    expect(s.board[5]).toMatchObject({ kind: "filter", picks: ["f1"] });
+    expect(new Set(s.board.map((c) => c.id)).size).toBe(6);
+  });
+
+  it("never keeps an empty board", () => {
+    expect(normalizeScopeSettings({ display: {}, board: [] }).board).toEqual(DEFAULT_SCOPE_SETTINGS.board);
   });
 });
 
 describe("activeFilterCount", () => {
   it("counts the filters that are on", () => {
     expect(activeFilterCount(DEFAULT_COLUMN_FILTER)).toBe(0);
-    expect(activeFilterCount(f({ mcapMin: 1, socials: "x", models: ["A"] }))).toBe(3);
+    expect(activeFilterCount(f({ mcapMin: 1, socials: "x", highOnly: true }))).toBe(3);
   });
 
   it("reads an old saved compact setting as compact density", () => {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { SCOPE_COLUMNS, scopeColumnsFor, type ScopeColumn } from "../scope";
+import { columnLabel, isModelSide, kindDef, type ScopeColumn, type ScopeColumnKind } from "../scope";
 import {
   activeFilterCount,
   resetColumnFilter,
@@ -7,10 +7,12 @@ import {
   setColumnFilter,
   setScopeDisplay,
   useScopeSettings,
+  type ScopeBoardColumn,
   type ScopeColumnFilter,
   type ScopeDisplay,
   type ScopeSize,
 } from "../scopeSettings";
+import { ScopeColumnsPanel } from "./ScopeColumnsPanel";
 import { SCOPE_CHIP_DEFS } from "../scopeChips";
 import { scopeSampleCard } from "../scopeSample";
 import { useNow } from "../hooks";
@@ -19,27 +21,25 @@ import { CloseIcon } from "./Icons";
 import { QuickLinkChecks, ThemeAndColors } from "./AppearancePanel";
 import { ScopeRow, scopeLookClass } from "./ScopeBoard";
 
-export type ScopeSettingsSection = "display" | ScopeColumn;
+export type ScopeSettingsSection = "display" | "columns" | ScopeColumn;
 
 /**
  * Scope's own settings window (user ask 2026-10-18), apart from the Cards view's Customize: how
- * the rows look, and each column's filters. A column's filter icon opens it on that column.
+ * the rows look, which columns the board has (user ask 2026-10-23), and each column's filters. A
+ * column's filter icon opens it on that column.
  */
 export function ScopeSettingsModal({
   open,
   section,
   onClose,
-  modelNames,
-  filterNames,
+  names,
   tiles,
 }: {
   open: boolean;
   section: ScopeSettingsSection;
   onClose: () => void;
-  /** Models seen on the board, for the Models column's pick list. */
-  modelNames: string[];
-  /** Your filters seen on the board, for the Your filters column's pick list. */
-  filterNames: string[];
+  /** Filter and model names by id, for the columns' titles. */
+  names: ReadonlyMap<string, string>;
   /** How the board colors its chips, for the example row. */
   tiles: TileMode;
 }) {
@@ -55,6 +55,11 @@ export function ScopeSettingsModal({
     if (!open && dialog.open) dialog.close();
   }, [open]);
   const settings = useScopeSettings();
+  const column = settings.board.find((c) => c.id === tab);
+  // A column taken off the board while its tab was open: back to the columns.
+  useEffect(() => {
+    if (tab !== "display" && tab !== "columns" && !column) setTab("columns");
+  }, [tab, column]);
 
   return (
     <dialog
@@ -76,39 +81,40 @@ export function ScopeSettingsModal({
           </button>
         </header>
         <div className="segmented small scope-settings-tabs" role="tablist" aria-label="Scope settings">
-          {(
-            [
-              "display",
-              ...scopeColumnsFor(settings.display.stream).map((c) => c.id),
-            ] as ScopeSettingsSection[]
-          ).map((id) => {
-            const col = SCOPE_COLUMNS.find((c) => c.id === id);
-            const count = col ? activeFilterCount(settings.columns[col.id]) : 0;
-            return (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={tab === id}
-                className={tab === id ? "on" : ""}
-                onClick={() => setTab(id)}
-              >
-                {col ? col.short : "Display"}
-                {count > 0 && <span className="scope-filter-count num">{count}</span>}
-              </button>
-            );
-          })}
+          {(["display", "columns", ...settings.board.map((c) => c.id)] as ScopeSettingsSection[]).map(
+            (id) => {
+              const col = settings.board.find((c) => c.id === id);
+              const count = col ? activeFilterCount(col.filter) : 0;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === id}
+                  className={tab === id ? "on" : ""}
+                  onClick={() => setTab(id)}
+                  title={col ? `What shows in ${columnLabel(col, names)}` : undefined}
+                >
+                  {col ? (
+                    <span className="scope-tab-name">{columnLabel(col, names)}</span>
+                  ) : id === "display" ? (
+                    "Display"
+                  ) : (
+                    "Columns"
+                  )}
+                  {count > 0 && <span className="scope-filter-count num">{count}</span>}
+                </button>
+              );
+            },
+          )}
         </div>
         {open &&
           (tab === "display" ? (
             <DisplaySettings display={settings.display} tiles={tiles} />
+          ) : tab === "columns" || !column ? (
+            <ScopeColumnsPanel board={settings.board} onFilters={(id) => setTab(id)} />
           ) : (
-            <ColumnFilters
-              col={tab}
-              f={settings.columns[tab]}
-              modelNames={modelNames}
-              filterNames={filterNames}
-            />
+            <ColumnFilters col={column} label={columnLabel(column, names)} />
           ))}
       </div>
     </dialog>
@@ -124,14 +130,6 @@ function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: 
   );
   return (
     <div className="scope-settings-body">
-      {/* First, as the switch that changes the board most (user ask 2026-10-19). */}
-      <section className="scope-section">
-        {sw(
-          "stream",
-          "Stream",
-          "New and About to graduate, from every token that passes the safety screen, in place of Your filters and Models",
-        )}
-      </section>
       <div className="scope-preview">
         <span className="scope-preview-label">Preview</span>
         <div className={`scope scope-preview-board ${scopeLookClass(d)}`}>
@@ -239,34 +237,6 @@ function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: 
           "Hold still while I'm reading",
           "New rows wait behind a pill while your mouse is on the board or you've scrolled down a list",
         )}
-        <div className="scope-pick-group">
-          <span className="scope-pick-label">Columns</span>
-          <div className="scope-pills">
-            {scopeColumnsFor(d.stream).map((c, _, board) => {
-              const shown = !d.hiddenColumns.includes(c.id);
-              const last = shown && board.filter((b) => !d.hiddenColumns.includes(b.id)).length <= 1;
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  className={`scope-pill${shown ? " on" : ""}`}
-                  aria-pressed={shown}
-                  disabled={last}
-                  title={last ? "One column always shows" : undefined}
-                  onClick={() =>
-                    setScopeDisplay({
-                      hiddenColumns: shown
-                        ? [...d.hiddenColumns, c.id]
-                        : d.hiddenColumns.filter((x) => x !== c.id),
-                    })
-                  }
-                >
-                  {c.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
       </section>
       {/* What Scope shows from the shared look, so it's all set from here too (user ask 2026-10-19). */}
       <section className="scope-section appearance-controls">
@@ -359,24 +329,11 @@ function Switch({
   );
 }
 
-function ColumnFilters({
-  col,
-  f,
-  modelNames,
-  filterNames,
-}: {
-  col: ScopeColumn;
-  f: ScopeColumnFilter;
-  modelNames: string[];
-  filterNames: string[];
-}) {
-  const set = (change: Partial<ScopeColumnFilter>) => setColumnFilter(col, change);
-  const label = SCOPE_COLUMNS.find((c) => c.id === col)!.label;
-  // Names already picked stay listed even when none of their alerts are on the board right now.
-  const models = [...new Set([...modelNames, ...f.models])].sort();
-  const filters = [...new Set([...filterNames, ...f.filters])].sort();
-  const pick = (list: string[], name: string) =>
-    list.includes(name) ? list.filter((n) => n !== name) : [...list, name];
+function ColumnFilters({ col: column, label }: { col: ScopeBoardColumn; label: string }) {
+  const col: ScopeColumnKind = column.kind;
+  const f: ScopeColumnFilter = column.filter;
+  const set = (change: Partial<ScopeColumnFilter>) => setColumnFilter(column.id, change);
+  const alerts = col === "filters" || col === "filter" || isModelSide(col);
   return (
     <div className="scope-settings-body">
       <p className="muted small scope-settings-intro">
@@ -462,15 +419,15 @@ function ColumnFilters({
             ))}
           </div>
         </div>
-        {(col === "filters" || col === "models") && (
+        {alerts && (
           <Switch
             label="Show graduated alerts here too"
-            hint="Alerts whose coin graduated move to the Graduated column, marked with their source"
+            hint="With a Graduated column on the board, alerts whose coin graduated move there, marked with their source"
             on={f.showGraduated}
             onChange={() => set({ showGraduated: !f.showGraduated })}
           />
         )}
-        {(col === "filters" || col === "models") && (
+        {alerts && (
           <Switch
             label="Hide alerts that missed"
             hint="Missed 2x or stopped out"
@@ -479,64 +436,24 @@ function ColumnFilters({
           />
         )}
       </fieldset>
-      {col === "models" && (
+      {isModelSide(col) && (
         <fieldset className="scope-fieldset">
-          <legend>Models</legend>
+          <legend>Calls</legend>
           <Switch
             label="High-conviction calls only"
             on={f.highOnly}
             onChange={() => set({ highOnly: !f.highOnly })}
           />
-          {models.length === 0 ? (
-            <p className="muted small">No model calls on the board yet to pick from.</p>
-          ) : (
-            <>
-              <span className="scope-pick-label">Only these models (none picked: all of them)</span>
-              <div className="scope-pills">
-                {models.map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    className={`scope-pill${f.models.includes(m) ? " on" : ""}`}
-                    aria-pressed={f.models.includes(m)}
-                    onClick={() => set({ models: pick(f.models, m) })}
-                  >
-                    {m}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
         </fieldset>
       )}
-      {col === "filters" && (
-        <fieldset className="scope-fieldset">
-          <legend>Your filters</legend>
-          {filters.length === 0 ? (
-            <p className="muted small">No filter alerts on the board yet to pick from.</p>
-          ) : (
-            <>
-              <span className="scope-pick-label">Only these filters (none picked: all of them)</span>
-              <div className="scope-pills">
-                {filters.map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    className={`scope-pill${f.filters.includes(n) ? " on" : ""}`}
-                    aria-pressed={f.filters.includes(n)}
-                    onClick={() => set({ filters: pick(f.filters, n) })}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </fieldset>
+      {kindDef(col).picks && (
+        <p className="muted small">
+          Which {col === "filter" ? "filters" : "models"} it shows is set under Columns.
+        </p>
       )}
       {activeFilterCount(f) > 0 && (
         <div className="scope-settings-foot">
-          <button type="button" className="ghost small-btn" onClick={() => resetColumnFilter(col)}>
+          <button type="button" className="ghost small-btn" onClick={() => resetColumnFilter(column.id)}>
             Clear {label} filters
           </button>
         </div>
