@@ -1,4 +1,17 @@
-import { CARD_H, CARD_W, FONT, INK, INK2, MUTED, PAD, cardCanvas, clip, frame, pill } from "../shareCard";
+import { API_URL } from "../api";
+import {
+  BRAND_A,
+  CARD_H,
+  CARD_W,
+  FONT,
+  INK,
+  INK2,
+  MUTED,
+  cardCanvas,
+  clip,
+  roundRect,
+  stamp,
+} from "../shareCard";
 import {
   DEFAULT_TIME_LABELS,
   EDGE_KINDS,
@@ -13,29 +26,31 @@ import {
   type TimeLabels,
   type TimedKind,
 } from "./graph";
-import { EDGE_COLOUR, EDGE_STYLE, CLUSTER_COLOUR, radiusOf, type EdgeHead } from "./GraphView";
+import { EDGE_COLOUR, EDGE_STYLE, CLUSTER_COLOUR, imageSources, radiusOf, type EdgeHead } from "./GraphView";
 import { newLayout, settle, type LayoutState } from "./layout";
 import { TILE, wallMarks } from "./scrawl";
 
 /**
- * Asyl's share image (user ask 2026-10-24: shareables keep TrenchScanner's background, or Asyl's
- * take on it): the card frame every TrenchScanner image has, with Asyl's wall marks faint in its
- * dark, and the whole map drawn on it as the reader laid it out: every bubble, link, time and
- * drawing. A map too spread out to read at the image's size is laid out afresh for the image alone
+ * Asyl's share image (user asks 2026-10-24: shareables keep TrenchScanner's background, or Asyl's
+ * take on it; the map is the focus and has to look great). The map fills the card edge to edge,
+ * as the reader laid it out: every bubble with its picture, link, time and drawing. The brand,
+ * title, legend and link sit in thin rows above and below it, over Asyl's faint wall marks. A map too spread out to read at the image's size is laid out afresh for the image alone
  * (fitMap), and the card says so through `onNote`.
  */
 
-/** The map's box: under a compact title, over the legend row and footer. */
-const MAP_TOP = 196;
-const MAP_BOTTOM = CARD_H - 96;
-const LEGEND_H = 30;
+/** The map's box: nearly the whole card, between a thin title row and a thin footer row. */
+const EDGE = 24;
+const MAP_TOP = 84;
+const MAP_BOTTOM = CARD_H - 50;
 /** Room kept around the map for labels under bubbles and at the edges, in card units. */
 const LABEL_BELOW = 20;
-const SIDE = 46;
+const SIDE = 40;
 /** Below this many card units per map unit, bubbles and text are too small to read. */
 const LEGIBLE = 0.62;
+/** Room for a name under its bubble: a full wallet label (up to 40 characters) fits whole. */
+const NAME_W = 300;
 /** The most a map is enlarged: a small map isn't blown up past this. */
-const MAX_SCALE = 2;
+const MAX_SCALE = 2.2;
 /** How far the two axes may be scaled apart to fill the image's shape. */
 const STRETCH = 1.7;
 
@@ -265,6 +280,50 @@ function compactLayout(
   return { pos: lay.pos, drawings: drawings ? { ...drawings, texts } : drawings };
 }
 
+/** A picture the canvas can read back: loaded with CORS, or not at all. */
+function loadImage(src: string, ms = 3500): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.referrerPolicy = "no-referrer";
+    const t = setTimeout(() => resolve(null), ms);
+    img.onload = () => {
+      clearTimeout(t);
+      resolve(img.naturalWidth > 0 ? img : null);
+    };
+    img.onerror = () => {
+      clearTimeout(t);
+      resolve(null);
+    };
+    img.src = src;
+  });
+}
+
+/**
+ * Each bubble's picture, trying its sources in turn as the map does. Avatars come through the
+ * API's CORS copy (as the chart's do); a coin whose hosts all refuse a CORS read keeps its plain
+ * tile rather than leaving the image unsaveable.
+ */
+async function loadPictures(g: AsylGraph): Promise<Map<string, HTMLImageElement>> {
+  const out = new Map<string, HTMLImageElement>();
+  await Promise.all(
+    g.nodes.slice(0, 120).map(async (n) => {
+      const sources =
+        n.kind === "wallet" && n.avatar
+          ? [`${API_URL}${n.avatar}${n.avatar.includes("?") ? "&" : "?"}cors=1`]
+          : imageSources(n);
+      for (const src of sources.slice(0, 3)) {
+        const img = await loadImage(src);
+        if (img) {
+          out.set(n.id, img);
+          return;
+        }
+      }
+    }),
+  );
+  return out;
+}
+
 /**
  * How crowded a fit draws: pairs of bubbles, or of the names under them, that land on one another
  * at the image's size. A layout that reads on a zoomable screen can still pile up in the image.
@@ -279,7 +338,7 @@ export function crowding(g: AsylGraph, pos: Pos, fit: Fit, radius: (id: string) 
     const y = fit.oy + p.y * fit.sy;
     const r = Math.max(4, radius(n.id) * fit.size);
     boxes.push({ x0: x - r, y0: y - r, x1: x + r, y1: y + r });
-    const w = Math.min(150, nodeName(n).length * (small ? 6 : 7.2)) / 2;
+    const w = Math.min(NAME_W, nodeName(n).length * (small ? 6 : 7.2)) / 2;
     boxes.push({ x0: x - w, y0: y + r + 4, x1: x + w, y1: y + r + (small ? 17 : 20) });
   }
   let n = 0;
@@ -295,6 +354,106 @@ export function crowding(g: AsylGraph, pos: Pos, fit: Fit, radius: (id: string) 
   return n;
 }
 
+type Rect = { x0: number; y0: number; x1: number; y1: number };
+const overlap = (a: Rect, b: Rect) =>
+  Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) > 0 && Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) > 0;
+
+/** Where a bubble and the name under it sit in the image. */
+function nodeRects(g: AsylGraph, at: (id: string) => { x: number; y: number }, r: (id: string) => number) {
+  const small = g.nodes.length > 25;
+  const out = new Map<string, { bubble: Rect; name: Rect }>();
+  for (const n of g.nodes) {
+    const p = at(n.id);
+    const rr = r(n.id);
+    const w = Math.min(NAME_W, nodeName(n).length * (small ? 6 : 7.2)) / 2 + 2;
+    out.set(n.id, {
+      bubble: { x0: p.x - rr, y0: p.y - rr, x1: p.x + rr, y1: p.y + rr },
+      name: { x0: p.x - w, y0: p.y + rr + 3, x1: p.x + w, y1: p.y + rr + (small ? 17 : 20) },
+    });
+  }
+  return out;
+}
+
+/**
+ * The last touch before drawing: bubbles, or their names, that still touch in the image are nudged
+ * apart a few pixels at a time, and out from under the reader's text boxes, so every one reads.
+ * Works in image pixels and hands back map units; returns how many bubbles moved visibly.
+ */
+function declutter(
+  g: AsylGraph,
+  pos: Pos,
+  fit: Fit,
+  radius: (id: string) => number,
+  texts: Rect[],
+  box: Box,
+): { pos: Pos; moved: number } {
+  const ids = g.nodes.map((n) => n.id).filter((id) => pos.has(id));
+  if (ids.length > 150) return { pos, moved: 0 };
+  const px = new Map(
+    ids.map((id) => [id, { x: fit.ox + pos.get(id)!.x * fit.sx, y: fit.oy + pos.get(id)!.y * fit.sy }]),
+  );
+  const start = new Map([...px].map(([id, p]) => [id, { ...p }]));
+  const r = (id: string) => Math.max(4, radius(id) * fit.size);
+  const push = (id: string, dx: number, dy: number) => {
+    const p = px.get(id)!;
+    const rr = r(id);
+    p.x = Math.min(box.x + box.w - rr, Math.max(box.x + rr, p.x + dx));
+    p.y = Math.min(box.y + box.h - rr - LABEL_BELOW, Math.max(box.y + rr, p.y + dy));
+  };
+  // The way to slide two rectangles apart: along whichever axis needs less, split between them.
+  const apart = (a: Rect, b: Rect) => {
+    const ox = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
+    const oy = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+    const ca = (a.x0 + a.x1) / 2 - (b.x0 + b.x1) / 2;
+    const cb = (a.y0 + a.y1) / 2 - (b.y0 + b.y1) / 2;
+    return ox < oy
+      ? { dx: (ca >= 0 ? 1 : -1) * (ox + 2), dy: 0 }
+      : { dx: 0, dy: (cb >= 0 ? 1 : -1) * (oy + 2) };
+  };
+  for (let round = 0; round < 80; round++) {
+    let any = false;
+    const rects = nodeRects(g, (id) => px.get(id) ?? { x: 0, y: 0 }, r);
+    for (let i = 0; i < ids.length; i++) {
+      const a = rects.get(ids[i]!)!;
+      for (let j = i + 1; j < ids.length; j++) {
+        const b = rects.get(ids[j]!)!;
+        for (const [ra, rb] of [
+          [a.bubble, b.bubble],
+          [a.name, b.name],
+          [a.name, b.bubble],
+          [a.bubble, b.name],
+        ] as const) {
+          if (!overlap(ra, rb)) continue;
+          const { dx, dy } = apart(ra, rb);
+          push(ids[i]!, dx / 2, dy / 2);
+          push(ids[j]!, -dx / 2, -dy / 2);
+          any = true;
+          break;
+        }
+      }
+      for (const t of texts) {
+        for (const ra of [a.bubble, a.name]) {
+          if (!overlap(ra, t)) continue;
+          const { dx, dy } = apart(ra, t);
+          push(ids[i]!, dx, dy);
+          any = true;
+          break;
+        }
+      }
+    }
+    if (!any) break;
+  }
+  let moved = 0;
+  const out: Pos = new Map(pos);
+  for (const id of ids) {
+    const p = px.get(id)!;
+    const s = start.get(id)!;
+    if (Math.hypot(p.x - s.x, p.y - s.y) > 4) moved++;
+    out.set(id, { x: (p.x - fit.ox) / fit.sx, y: (p.y - fit.oy) / fit.sy });
+  }
+  return { pos: out, moved };
+}
+
 export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElement> {
   const { canvas, ctx, icon } = await cardCanvas(2);
   if (!ctx) return canvas;
@@ -308,53 +467,73 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
     settle(layout, g, radius);
   }
 
-  // The frame's own title is left empty: a compact one is drawn below, to leave the map more room.
-  frame(ctx, icon, "", "", {
-    badge: (c, right, cy) => pill(c, right, cy, "Asyl map"),
-    footer: "Wallet links from TrenchScanner's own reads and the chain",
-    link: "asyl.trenchscanner.app",
-    disclaimer: "Links show money or trades that moved between wallets, not who owns them.",
-  });
-  ctx.textBaseline = "alphabetic";
+  // The card: dark, the brand's flame bar along the top, Asyl's marks faint over all of it.
+  ctx.fillStyle = "#0c0d12";
+  ctx.fillRect(0, 0, CARD_W, CARD_H);
+  drawWall(ctx);
+  const glow = ctx.createRadialGradient(CARD_W / 2, CARD_H / 2, 80, CARD_W / 2, CARD_H / 2, CARD_W * 0.62);
+  glow.addColorStop(0, "rgba(255, 122, 47, 0.07)");
+  glow.addColorStop(1, "rgba(255, 122, 47, 0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, CARD_W, CARD_H);
+  ctx.fillStyle = BRAND_A;
+  ctx.fillRect(0, 0, CARD_W, 5);
+
+  // Title row: icon, ASYL in marker, the map's title and what is on it; TrenchScanner on the right.
+  const iconS = 38;
+  if (icon) {
+    ctx.save();
+    roundRect(ctx, EDGE, 22, iconS, iconS, 10);
+    ctx.clip();
+    ctx.drawImage(icon, EDGE, 22, iconS, iconS);
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.font = `400 30px "Permanent Marker", ${FONT}`;
+  ctx.fillStyle = "#ff7a2f";
+  ctx.textBaseline = "middle";
+  ctx.translate(EDGE + iconS + 12, 42);
+  ctx.rotate(-0.05);
+  ctx.fillText("ASYL", 0, 0);
+  ctx.restore();
+  const titleX = EDGE + iconS + 104;
+  ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
+  ctx.fillRect(titleX - 14, 26, 1.5, 32);
   ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
   ctx.fillStyle = INK;
-  ctx.font = `750 34px ${FONT}`;
-  ctx.fillText(clip(ctx, input.title, CARD_W - PAD * 2), PAD, 152);
-  ctx.fillStyle = INK2;
-  ctx.font = `500 18px ${FONT}`;
+  ctx.font = `750 22px ${FONT}`;
+  ctx.fillText(clip(ctx, input.title, 560), titleX, 41);
   const drawnCount = (input.drawings?.lines.length ?? 0) + (input.drawings?.texts.length ?? 0);
+  ctx.fillStyle = INK2;
+  ctx.font = `500 14px ${FONT}`;
   ctx.fillText(
     clip(
       ctx,
-      mapCardSub(g) + (drawnCount ? ` · ${drawnCount} note${drawnCount === 1 ? "" : "s"} drawn` : ""),
-      CARD_W - PAD * 2,
+      mapCardSub(g) + (drawnCount ? ` · ${drawnCount} drawn note${drawnCount === 1 ? "" : "s"}` : ""),
+      560,
     ),
-    PAD,
-    180,
+    titleX,
+    61,
   );
-  // Under the title, so the marks sit in the background of the map.
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(0, MAP_TOP - 8, CARD_W, MAP_BOTTOM - MAP_TOP + 16);
-  ctx.clip();
-  drawWall(ctx);
-  ctx.restore();
-  // "ASYL" in marker, by the brand row.
-  ctx.save();
-  ctx.font = `400 34px "Permanent Marker", ${FONT}`;
-  ctx.fillStyle = "#ff7a2f";
-  ctx.textBaseline = "middle";
-  ctx.translate(PAD + 290, 70);
-  ctx.rotate(-0.06);
-  ctx.fillText("ASYL", 0, 0);
-  ctx.restore();
+  ctx.textAlign = "right";
+  ctx.fillStyle = INK;
+  ctx.font = `700 17px ${FONT}`;
+  ctx.fillText("TrenchScanner", CARD_W - EDGE, 40);
+  ctx.fillStyle = MUTED;
+  ctx.font = `500 13px ${FONT}`;
+  ctx.fillText("by ASDFASDFA", CARD_W - EDGE, 59);
+  ctx.textAlign = "left";
+
+  // Pictures for the bubbles, each from the first of its sources that loads readable.
+  const pictures = await loadPictures(g);
 
   // Fit the whole map, as laid out, into the box; lay it out afresh only when that can't be read.
   const box: Box = {
-    x: PAD + SIDE,
-    y: MAP_TOP + 6,
-    w: CARD_W - (PAD + SIDE) * 2,
-    h: MAP_BOTTOM - MAP_TOP - LEGEND_H - LABEL_BELOW - 6,
+    x: EDGE + SIDE,
+    y: MAP_TOP + 10,
+    w: CARD_W - (EDGE + SIDE) * 2,
+    h: MAP_BOTTOM - MAP_TOP - LABEL_BELOW - 10,
   };
   const ids = g.nodes.map((n) => n.id);
   let pos: Pos = layout.pos;
@@ -379,6 +558,22 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
   }
   if (fit.size < LEGIBLE * 0.6 && !note?.startsWith("Your map"))
     note = "A big map: the image shows all of it, small. Take some bubbles off for a clearer image.";
+  // Text boxes as the image draws them, which bubbles keep clear of.
+  const textRects = (drawings?.texts ?? [])
+    .filter((t) => t.text.trim())
+    .map((t) => {
+      const { w, h } = textBoxSize(t.text);
+      const x = fit.ox + t.x * fit.sx;
+      const y = fit.oy + t.y * fit.sy;
+      return { x0: x - 4, y0: y - 4, x1: x + w * fit.size + 4, y1: y + h * fit.size + 4 };
+    });
+  const tidy = declutter(g, pos, fit, radius, textRects, box);
+  pos = tidy.pos;
+  if (tidy.moved > 0 && !note)
+    note =
+      tidy.moved === 1
+        ? "One bubble is nudged a little in the image so nothing sits on top of it. Your map itself is unchanged."
+        : `${tidy.moved} bubbles are nudged a little in the image so none sit on top of another. Your map itself is unchanged.`;
   input.onNote?.(note);
 
   const at = (id: string) => {
@@ -523,6 +718,25 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
     ctx.fillStyle =
       n.kind === "token" ? "#2a2018" : cl >= 0 ? CLUSTER_COLOUR[cl % CLUSTER_COLOUR.length]! : "#4a4440";
     ctx.fill();
+    // Its picture inside, as on the map: a coin's image, a wallet's avatar.
+    const pic = pictures.get(n.id);
+    if (pic && r >= 7) {
+      ctx.save();
+      ctx.beginPath();
+      const ir = r - 2;
+      if (n.kind === "token") ctx.roundRect(p.x - ir, p.y - ir, ir * 2, ir * 2, ir * 0.44);
+      else ctx.arc(p.x, p.y, ir, 0, Math.PI * 2);
+      ctx.clip();
+      // Cover the bubble, cropping the longer side.
+      const s = Math.max((ir * 2) / pic.naturalWidth, (ir * 2) / pic.naturalHeight);
+      const w = pic.naturalWidth * s;
+      const h = pic.naturalHeight * s;
+      ctx.drawImage(pic, p.x - w / 2, p.y - h / 2, w, h);
+      ctx.restore();
+      ctx.beginPath();
+      if (n.kind === "token") ctx.roundRect(p.x - r, p.y - r, r * 2, r * 2, r * 0.44);
+      else ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    }
     ctx.lineWidth = n.id === input.focus ? 3 : n.kind === "token" ? 2 : 1.5;
     ctx.strokeStyle =
       n.id === input.focus
@@ -559,19 +773,43 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
       ctx.lineWidth = 3;
       ctx.lineJoin = "round";
       ctx.strokeStyle = "rgba(12, 13, 18, 0.9)";
-      const text = clip(ctx, nodeName(n), 150);
+      const text = clip(ctx, nodeName(n), NAME_W);
       ctx.strokeText(text, p.x, p.y + r + 4);
       ctx.fillStyle = INK;
       ctx.fillText(text, p.x, p.y + r + 4);
     }
   }
 
+  // Each label at the point along its line that covers the fewest bubbles, names and other labels.
+  const taken: Rect[] = [...nodeRects(g, at, rOf).values()].flatMap((n) => [n.bubble, n.name]);
   for (const { q, label, colour } of lineLabels) {
-    const mx = 0.25 * q.sx + 0.5 * q.mx + 0.25 * q.ex;
-    const my = 0.25 * q.sy + 0.5 * q.my + 0.25 * q.ey;
     ctx.font = `400 14px "Permanent Marker", ${FONT}`;
     const text = clip(ctx, label, 260);
     const w = ctx.measureText(text).width + 20;
+    let mx = 0;
+    let my = 0;
+    let fewest = Infinity;
+    // Along the line first; then just off it, either side, if every point on it is taken.
+    const nx = -(q.ey - q.sy);
+    const ny = q.ex - q.sx;
+    const nl = Math.hypot(nx, ny) || 1;
+    search: for (const off of [0, 18, -18]) {
+      for (const t of [0.5, 0.4, 0.6, 0.3, 0.7, 0.22, 0.78]) {
+        const u = 1 - t;
+        const x = u * u * q.sx + 2 * u * t * q.mx + t * t * q.ex + (nx / nl) * off;
+        const y = u * u * q.sy + 2 * u * t * q.my + t * t * q.ey + (ny / nl) * off;
+        const me = { x0: x - w / 2, y0: y - 12, x1: x + w / 2, y1: y + 12 };
+        // An off-line spot counts one worse, so it wins only when it clears something.
+        const n = taken.filter((o) => overlap(me, o)).length + (off ? 0.5 : 0);
+        if (n < fewest) {
+          fewest = n;
+          mx = x;
+          my = y;
+        }
+        if (n === 0) break search;
+      }
+    }
+    taken.push({ x0: mx - w / 2, y0: my - 12, x1: mx + w / 2, y1: my + 12 });
     ctx.beginPath();
     ctx.roundRect(mx - w / 2, my - 12, w, 24, 12);
     ctx.fillStyle = "#120c09";
@@ -607,38 +845,69 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
   }
   ctx.textAlign = "left";
 
-  // Legend: only the kinds this map has, and the reader's lines when there are any.
-  const kinds = EDGE_KINDS.filter((kd) => g.edges.some((e) => e.kind === kd));
-  let lx = PAD;
-  const ly = MAP_BOTTOM - 10;
-  ctx.font = `500 15px ${FONT}`;
+  // Footer row: the legend (only the kinds this map has, and the reader's lines), the link and date.
+  const fy = CARD_H - 30;
+  ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+  ctx.fillRect(EDGE, CARD_H - 50, CARD_W - EDGE * 2, 1);
+  ctx.textAlign = "right";
   ctx.textBaseline = "middle";
-  for (const kd of kinds) {
-    const st = EDGE_STYLE[kd];
-    ctx.strokeStyle = EDGE_COLOUR[kd];
-    ctx.lineWidth = 3;
-    ctx.lineCap = kd === "cotrade" ? "round" : "butt";
-    ctx.setLineDash(dashOf(st.dash));
-    ctx.beginPath();
-    ctx.moveTo(lx, ly);
-    ctx.lineTo(lx + (st.head ? 22 : 30), ly);
-    ctx.stroke();
-    if (st.head) drawHead(ctx, st.head, lx + 31, ly, 0, EDGE_COLOUR[kd]);
-    ctx.setLineDash([]);
-    ctx.fillStyle = MUTED;
-    ctx.fillText(EDGE_LABEL[kd], lx + 38, ly);
-    lx += 50 + ctx.measureText(EDGE_LABEL[kd]).width;
+  ctx.fillStyle = INK;
+  ctx.font = `700 17px ${FONT}`;
+  ctx.fillText("asyl.trenchscanner.app", CARD_W - EDGE, fy - 4);
+  const linkW = ctx.measureText("asyl.trenchscanner.app").width;
+  ctx.fillStyle = MUTED;
+  ctx.font = `500 11px ${FONT}`;
+  ctx.fillText(stamp(new Date()), CARD_W - EDGE, fy + 13);
+  ctx.textAlign = "left";
+  const kinds = EDGE_KINDS.filter((kd) => g.edges.some((e) => e.kind === kd));
+  const legendEnd = CARD_W - EDGE - linkW - 28;
+  let lx = EDGE;
+  const ly = fy - 4;
+  ctx.font = `500 13px ${FONT}`;
+  const entries: { label: string; draw: (x: number) => void }[] = kinds.map((kd) => ({
+    label: EDGE_LABEL[kd],
+    draw: (x: number) => {
+      const st = EDGE_STYLE[kd];
+      ctx.strokeStyle = EDGE_COLOUR[kd];
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = kd === "cotrade" ? "round" : "butt";
+      ctx.setLineDash(dashOf(st.dash));
+      ctx.beginPath();
+      ctx.moveTo(x, ly);
+      ctx.lineTo(x + (st.head ? 16 : 22), ly);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (st.head) drawHead(ctx, st.head, x + 24, ly, 0, EDGE_COLOUR[kd]);
+    },
+  }));
+  if (drawings?.lines.length || drawings?.texts.length)
+    entries.push({
+      label: "Drawn by the map's author",
+      draw: (x: number) => {
+        ctx.strokeStyle = "#fff3e6";
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(x + 2, ly);
+        ctx.lineTo(x + 22, ly);
+        ctx.stroke();
+      },
+    });
+  for (const en of entries) {
+    const w = 30 + ctx.measureText(en.label).width;
+    if (lx + w > legendEnd) break;
+    en.draw(lx);
+    ctx.fillStyle = INK2;
+    ctx.textBaseline = "middle";
+    ctx.fillText(en.label, lx + 30, ly);
+    lx += w + 16;
   }
-  if (drawings?.lines.length) {
-    ctx.strokeStyle = "#fff3e6";
-    ctx.lineWidth = 2.6;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(lx + 3, ly);
-    ctx.lineTo(lx + 27, ly);
-    ctx.stroke();
-    ctx.fillStyle = MUTED;
-    ctx.fillText("Drawn by the map's author", lx + 38, ly);
-  }
+  ctx.fillStyle = "rgba(255, 255, 255, 0.34)";
+  ctx.font = `500 10.5px ${FONT}`;
+  ctx.fillText(
+    "Links show money or trades that moved between wallets, not who owns them. From TrenchScanner's reads and the chain.",
+    EDGE,
+    fy + 14,
+  );
   return canvas;
 }

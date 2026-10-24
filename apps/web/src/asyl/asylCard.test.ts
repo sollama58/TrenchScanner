@@ -3,10 +3,10 @@ import { fitBox } from "./asylCard";
 
 describe("fitBox", () => {
   const box = { x: 0, y: 0, w: 1000, h: 300 };
-  it("fits a small map at one scale, centred, and never blows it up past 2×", () => {
+  it("fits a small map at one scale, centred, and never blows it up past its cap", () => {
     const f = fitBox({ minX: 0, minY: 0, maxX: 100, maxY: 100 }, box);
-    expect(f.sx).toBe(2);
-    expect(f.sy).toBe(2);
+    expect(f.sx).toBe(2.2);
+    expect(f.sy).toBe(2.2);
     expect(f.stretched).toBe(false);
     expect(f.ox + 50 * f.sx).toBeCloseTo(500);
   });
