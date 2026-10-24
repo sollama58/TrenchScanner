@@ -15,10 +15,10 @@ const MAP_BOTTOM = CARD_H - 96;
 
 /** Faint orange marker over the card's dark, as on the map itself. */
 function drawWall(ctx: CanvasRenderingContext2D) {
-  const marks = wallMarks({ seed: 1985, density: 110, notes: false });
+  const marks = wallMarks({ seed: 1985, density: 60, notes: false });
   const paths = marks.strokes.map((m) => ({ p: new Path2D(m.d), w: m.width }));
   ctx.save();
-  ctx.strokeStyle = "rgba(255, 122, 47, 0.07)";
+  ctx.strokeStyle = "rgba(255, 122, 47, 0.03)";
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   for (let ox = 0; ox < CARD_W; ox += TILE) {
@@ -89,7 +89,7 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
   ctx.restore();
 
   // The map, fitted into the box between the title and the footer, with room for a legend row.
-  const legendH = 26;
+  const legendH = 46;
   const box = { x: PAD, y: MAP_TOP, w: CARD_W - PAD * 2, h: MAP_BOTTOM - MAP_TOP - legendH };
   const b = bounds(
     layout,

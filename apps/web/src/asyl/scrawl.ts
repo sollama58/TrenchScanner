@@ -191,6 +191,6 @@ export function paintWalls(root: HTMLElement = document.documentElement): void {
   );
   root.style.setProperty(
     "--asyl-wall-dark",
-    wallUrl({ ink: "#ff7a2f", opacity: 0.07, note: null, seed: 1985, density: 110 }),
+    wallUrl({ ink: "#ff7a2f", opacity: 0.025, note: null, seed: 1985, density: 60 }),
   );
 }
