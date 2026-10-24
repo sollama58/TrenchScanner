@@ -269,8 +269,8 @@ export function feedState(base: string): LiveTrades {
  * trades since the last answer, the API holding each ask until the next one lands. The API
  * follows the coin's trades on the chain stream only while someone asks, so nothing is read for a
  * closed view. Only while the tab is visible; a failure backs off and keeps trying. Every view of
- * the same coin shares one feed. Only the Live trades tab starts it; the chart's marks and the
- * holder shares read it with useLiveTradesIfFollowed.
+ * the same coin shares one feed. The Live trades tab and the token view's holder shares start it
+ * (user decision 2026-10-24); the chart's marks read it with useLiveTradesIfFollowed.
  */
 export function useLiveTrades(base: string, enabled: boolean): LiveTrades {
   const subscribe = useCallback(
@@ -283,7 +283,7 @@ export function useLiveTrades(base: string, enabled: boolean): LiveTrades {
 /**
  * A coin's live trades as far as another view already follows them, without asking for them
  * itself (Helius audit 2026-10-22 H-2: the follow is a paid chain stream, so only the Live trades
- * tab starts it). While that tab runs, this is its feed; after it closes, what it read stays
+ * tab and an open token view start it). While one runs, this is its feed; after it closes, what it read stays
  * (`status` null), so the chart's marks of those trades don't vanish; before any, it is empty.
  */
 export function useLiveTradesIfFollowed(base: string, enabled: boolean): LiveTrades {

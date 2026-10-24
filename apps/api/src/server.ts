@@ -786,6 +786,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     stonkFees: walletHelius,
     holderStamps,
     dexScreener,
+    holderWrites: matchStream,
   });
   // GET /tokens/:mint/candles: the closed-candle store's bars, one timeframe (routes/candles.ts).
   await app.register(registerCandleRoutes, { prefix: "/tokens", env });

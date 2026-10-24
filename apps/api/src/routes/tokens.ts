@@ -6,6 +6,7 @@ import { fillSearchMarketHits, loadSearchMarketHits, SEARCH_MARKET_FETCH_MAX } f
 import { allowTextSearch, tokenSearchParam } from "./matches.js";
 import { allowHolderWatch } from "./live.js";
 import { releaseHolderStamps } from "../viewStamps.js";
+import { HOLDER_WAIT_MS, HolderWaits, type HolderWaitAnswer } from "../holderWaits.js";
 import { tokenView } from "./utilities.js";
 import { keepFilterMoment, readBubbleMoments, type BubbleMomentView } from "../bubbleMoments.js";
 import { readKolRows } from "../kolRoster.js";
@@ -836,8 +837,20 @@ export async function registerTokenRoutes(
     holderStamps?: ViewStampBuffer;
     /** Fills search rows from the quote cache before any new DexScreener call. */
     dexScreener?: DexScreenerClient;
+    /** The scanner's holder-reading announcements (MatchStream.onHolders), for /holders/wait. */
+    holderWrites?: { onHolders(listener: (mint: string | null) => void): () => void };
   } = {},
 ) {
+  // A token view's held ask for its coin's next holder reading (user decision 2026-10-24). A
+  // written reading drops the coin's shared ?reading=1 answer first, so the view's read that the
+  // wake starts gets the new list rather than one cached up to 10 s before it.
+  const holderWaits = new HolderWaits();
+  const stopHolderWrites = opts.holderWrites?.onHolders((mint) => {
+    if (mint !== null) tokenReadings.forget(mint);
+    holderWaits.wake(mint);
+  });
+  if (stopHolderWrites) app.addHook("onClose", async () => stopHolderWrites());
+
   // Token detail is reached from the paid feed. Behind the paywall - see authenticateSubscriber in server.ts.
   app.addHook("preHandler", app.authenticateSubscriber);
 
@@ -1038,6 +1051,28 @@ export async function registerTokenRoutes(
       moments,
     };
   });
+
+  /**
+   * Held until the scanner writes the coin's next holder reading, or HOLDER_WAIT_MS (user decision
+   * 2026-10-24): the open token view then reads the coin's scans at once. Only coins whose bubble
+   * map is open are announced (every token view polls /bubble-holders, which marks it open).
+   */
+  app.get(
+    "/:mintAddress/holders/wait",
+    { config: { rateLimit: longPollRateLimit(app, "mintAddress") } },
+    async (request, reply): Promise<HolderWaitAnswer | undefined> => {
+      const { mintAddress } = request.params as { mintAddress: string };
+      if (!MINT_RE.test(mintAddress)) {
+        reply.code(400).send({ error: "not a valid mint" });
+        return;
+      }
+      if (!withinLongPollCeiling(request, reply, "holders-wait")) return;
+      if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
+      reply.header("Cache-Control", "no-store");
+      if (!opts.holderWrites) return { changed: false, pushed: false };
+      return holderWaits.wait(mintAddress, HOLDER_WAIT_MS, closedSignal(reply));
+    },
+  );
 
   /**
    * The reader opened one of their filter's alerts on the coin (`matchId`): keeps the coin's map at

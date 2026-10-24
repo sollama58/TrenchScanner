@@ -2383,7 +2383,7 @@ export function BubbleMapSection({
 }) {
   const mint = token.mintAddress;
   const liveWide = liveWideFor(snapshotIn, useWideMap(mint));
-  // The map redraws on the reader's interval (Customize, every 5 s by default, user ask
+  // The map redraws on the reader's interval (Customize, every 2 s by default, user ask
   // 2026-10-19): the reading, the top 50 and the trades since, held together until it is due.
   const { bubbleRefreshSeconds } = useAppearance();
   const inputs = useMemo(

@@ -69,7 +69,7 @@ const ceiling = new LongPollCeiling();
 export function withinLongPollCeiling(
   request: FastifyRequest,
   reply: FastifyReply,
-  feed: "chart-live" | "trades-live",
+  feed: "chart-live" | "trades-live" | "holders-wait",
 ): boolean {
   const user = request.user?.userId;
   if (!user || ceiling.allow(`${feed}:${user}`)) return true;

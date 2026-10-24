@@ -5,6 +5,7 @@ import { takeCandleBackfillStats } from "./candleBackfill.js";
 import { takeCandleChainFillStats } from "./candleChainFill.js";
 import {
   tokenSageHints,
+  notifyHolderReadingWritten,
   recordRunProgress,
   withApiStages,
   floatArrayParam,
@@ -778,8 +779,9 @@ let linkedStageInFlight: Promise<unknown> | null = null;
 /**
  * Starts this cycle's funder reads for the linked-wallets reading (linkedWallets.ts), unless the
  * previous cycle's are still running. Resolves once the first `waitedCount` groups (the coins about
- * to be decided on, first in order) are read; the rest are read behind the cycle on what budget
- * those left, and land in the caches for the next one. The reading itself comes from the caches
+ * to be decided on, first in order) and the coins whose bubble map is open (`watched`) are read;
+ * the rest are read behind the cycle on what budget those left, and land in the caches for the
+ * next one. The reading itself comes from the caches
  * afterwards. Never rejects.
  *
  * The cycle used to wait on every group's reads: 1.4-2.9 s of each cycle on 2026-10-13 (worker
@@ -806,9 +808,16 @@ function startLinkedWalletStage(
     return Promise.resolve();
   }
   const waited = groups.slice(0, waitedCount);
+  // Coins whose bubble map is open are read inside the cycle too, after the contenders and before
+  // the cycle's holder readings are taken (user decision 2026-10-24): read behind the cycle, their
+  // new list waited a whole cycle for the next one to write it. Same budgets as before.
+  const watchedNow = groups.slice(waitedCount).filter((g) => watched.has(g.mintAddress));
   // Copies: the reads behind the cycle put new holder lists on their groups (readTopHolders), and
   // the cycle is reading these groups at the same time.
-  const rest = groups.slice(waitedCount).map((g) => ({ ...g, holders: [...g.holders] }));
+  const rest = groups
+    .slice(waitedCount)
+    .filter((g) => !watched.has(g.mintAddress))
+    .map((g) => ({ ...g, holders: [...g.holders] }));
   let readsLeft = env.LINKED_HOLDER_READS_PER_CYCLE;
   let lookupsLeft = env.LINKED_WALLET_LOOKUPS_PER_CYCLE;
   // Contenders' own extra (LINKED_WALLET_CONTENDER_LOOKUPS_PER_CYCLE), spent before the shared
@@ -866,7 +875,7 @@ function startLinkedWalletStage(
     );
     await Promise.all([funders, transfers]);
   };
-  const first = pass(waited, true);
+  const first = pass(waited, true).then(() => pass(watchedNow, false));
   const work = first.then(() => pass(rest, false));
   if (!shared) return first;
   linkedStageInFlight = work;
@@ -3871,7 +3880,13 @@ async function processCandidate(
   const snapshot = await prisma.tokenSnapshot.create({
     data: snapshotDataFor(token.id, scored, "scan", { holderReading: writeHolderReading }),
   });
-  if (writeHolderReading) noteHolderReadingWritten(token.id, scored);
+  if (writeHolderReading) {
+    noteHolderReadingWritten(token.id, scored);
+    // A coin whose bubble map is open: its token views read the new list now, not on their next
+    // poll (user decision 2026-10-24, the API's GET /tokens/:mint/holders/wait).
+    if (watchedHolderRewriteMs(token.mintAddress) !== undefined)
+      void notifyHolderReadingWritten(token.mintAddress);
+  }
   noteSnapshotWritten(token.id, snapshot.takenAt.getTime());
   noteFreshMarketData([token.id]);
   // Passing or failing - the fast-match lane goes by the newest verdict. See vettedTokens.ts.

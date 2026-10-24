@@ -105,7 +105,7 @@ export const SNIPER_TOP10_REV = 2;
  * Customize offers, 5 seconds to a day (web appearance.ts BUBBLE_REFRESH_CHOICES has the same).
  */
 export const BUBBLE_REFRESH_SECONDS = [
-  5, 10, 15, 30, 60, 120, 300, 900, 1800, 3600, 21600, 43200, 86400,
+  2, 5, 10, 15, 30, 60, 120, 300, 900, 1800, 3600, 21600, 43200, 86400,
 ] as const;
 export const CHART_MARK_MIN_SOL = 0.25;
 export const CHART_MARK_MAX_SOL = 1_000;
@@ -194,12 +194,12 @@ export const feedAppearanceSchema = z
     bubbleSideLinks: z.boolean().default(true),
     /** On bubble maps, arrows between holders that sent the coin to each other (drawn only); on by default. */
     bubbleTransferLinks: z.boolean().default(true),
-    /** How often an open bubble map redraws, in seconds (BUBBLE_REFRESH_SECONDS); every 5 by default. */
+    /** How often an open bubble map redraws, in seconds (BUBBLE_REFRESH_SECONDS); every 2 by default (user decision 2026-10-24). */
     bubbleRefreshSeconds: z
       .number()
       .int()
       .refine((v) => (BUBBLE_REFRESH_SECONDS as readonly number[]).includes(v), "not an offered interval")
-      .default(5),
+      .default(2),
     /** On bubble maps, Pump.fun, FOMO and Helius names on the wallets (KOLs' always show); off by default. */
     bubbleNameLabels: z.boolean().default(false),
     /**
@@ -406,7 +406,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   bubbleFunderLabels: false,
   bubbleSideLinks: true,
   bubbleTransferLinks: true,
-  bubbleRefreshSeconds: 5,
+  bubbleRefreshSeconds: 2,
   bubbleNameLabels: false,
   bubbleNamesPumpfun: null,
   bubbleNamesFomo: null,
