@@ -58,6 +58,7 @@ import { beginWait, markNavigation } from "./loadTracker";
 import { unbindAppearance, useAppearance } from "./appearance";
 import { TokenModalHost } from "./components/TokenModalHost";
 import { closeTokenModal } from "./tokenModal";
+import { useExtensionReconnect } from "./extensionReconnect";
 import { onTradingSessionRefresh, setProState, proStateOf, tradeSettingsSync } from "./proTrade";
 import { setTrackedAccount } from "./trackedWallets";
 import { ProGraceBanner } from "./components/ProGraceBanner";
@@ -797,6 +798,8 @@ function AccessGate({
   // The Buy $ASDFASDFA popup, from the burn panel's "Get $ASDFASDFA" (with a credit pick's SOL).
   const [buying, setBuying] = useState<{ sol?: number } | null>(null);
   const hasAccess = data?.hasAccess === true;
+  // A Trench Overlay this account's sign-out disconnected gets a new key without a click.
+  useExtensionReconnect(walletAddress, data?.reason);
   // A gated route said access has ended (api.ts): look again now rather than at the next poll,
   // so the paywall replaces the failing tabs. At most every 10 s, as every open tab's poll says so.
   const lastRecheck = useRef(0);

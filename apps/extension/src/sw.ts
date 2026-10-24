@@ -165,7 +165,10 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
 
 /**
  * TrenchScanner's site: "ping" says the extension is here (and whether it has a key the API still
- * takes), so Settings can offer one-click connect, also to replace a refused key; "connect" hands over a key Settings just made for it.
+ * takes), so Settings can offer one-click connect, also to replace a refused key. A refused key
+ * also names its account (the shortened wallet the panel shows), so the site, signed in again as
+ * that account, reconnects without a click (user ask 2026-10-24). Disconnecting in the panel
+ * forgets the account, so a browser disconnected on purpose stays disconnected; "connect" hands over a key Settings just made for it.
  */
 chrome.runtime.onMessageExternal.addListener((message: unknown, sender, sendResponse) => {
   if (typeof sender.origin !== "string" || !WEB_ORIGINS.has(sender.origin)) return false;
@@ -173,9 +176,10 @@ chrome.runtime.onMessageExternal.addListener((message: unknown, sender, sendResp
   const m = message as { type?: unknown; key?: unknown };
   const work =
     m.type === "ping"
-      ? stored().then(({ key, refused }) => ({
+      ? stored().then(({ key, refused, wallet }) => ({
           ok: true,
           connected: Boolean(key) && !refused,
+          refusedAccount: key && refused ? (wallet ?? null) : null,
           version: chrome.runtime.getManifest().version,
         }))
       : m.type === "connect"

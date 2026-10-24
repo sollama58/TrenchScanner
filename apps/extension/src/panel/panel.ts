@@ -280,9 +280,10 @@ function draw(): void {
     renderDisconnected();
     return;
   }
-  account.textContent =
-    status.problem === "refused" ? "Reconnect needed" : `Connected · ${status.wallet ?? ""}`;
-  account.className = status.problem === "refused" ? "account warn" : "account on";
+  // Either answer may be the first to see a refused key.
+  const refused = status.problem === "refused" || feed?.problem === "refused";
+  account.textContent = refused ? "Reconnect needed" : `Connected · ${status.wallet ?? ""}`;
+  account.className = refused ? "account warn" : "account on";
   const settings = status.settings;
   app.replaceChildren(tabs(), ...(view === "alerts" ? alertsView(settings) : settingsView(settings)));
 }

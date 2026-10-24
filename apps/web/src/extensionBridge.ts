@@ -65,6 +65,12 @@ export interface InstalledExtension {
   id: string;
   connected: boolean;
   version: string | null;
+  /**
+   * When TrenchScanner refused the extension's key (signing out revokes every key): the account
+   * it was connected to, as the panel shows it ("7xQ1…k2Ab"). Null otherwise, and after the reader
+   * disconnected it themselves.
+   */
+  refusedAccount: string | null;
 }
 
 const REMEMBERED = "trench.extensionId";
@@ -103,6 +109,7 @@ export async function findExtension(hint?: string | null): Promise<InstalledExte
       ok?: unknown;
       connected?: unknown;
       version?: unknown;
+      refusedAccount?: unknown;
     } | null;
     if (reply?.ok === true) {
       remember(id);
@@ -110,6 +117,7 @@ export async function findExtension(hint?: string | null): Promise<InstalledExte
         id,
         connected: reply.connected === true,
         version: typeof reply.version === "string" ? reply.version : null,
+        refusedAccount: typeof reply.refusedAccount === "string" ? reply.refusedAccount : null,
       };
     }
   }
