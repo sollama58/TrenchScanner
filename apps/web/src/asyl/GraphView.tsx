@@ -11,6 +11,7 @@ import {
 } from "./graph";
 import { bounds, placeNew, step, type LayoutState } from "./layout";
 import { avatarUrl } from "./asylApi";
+import { tokenImageSources } from "../format";
 
 /**
  * The map: every node a bubble (a wallet) or a tile (a coin), every link a line coloured by its
@@ -73,6 +74,36 @@ function ringOf(n: AsylNode): string | null {
   if (n.tags.includes("exchange") || n.tags.includes("bot")) return "#9b948f";
   if (n.tags.includes("dev")) return "#ffe066";
   return null;
+}
+
+/**
+ * Where a node's picture can load from, in order: a coin's thumbnail and its fallbacks (the token
+ * cards' own list, format.ts tokenImageSources, Pump.fun's CDN by mint included), a KOL's X picture.
+ */
+export function imageSources(n: AsylNode): string[] {
+  if (n.kind === "token") return tokenImageSources(n.image, 64, n.id);
+  return n.avatar ? [avatarUrl(n.avatar)] : [];
+}
+
+/** A node's picture, moving to the next source when one fails, and drawing nothing when none loads. */
+function NodeImage({ sources, r, tile }: { sources: string[]; r: number; tile: boolean }) {
+  const key = sources.join("|");
+  const [failed, setFailed] = useState<{ key: string; n: number }>({ key, n: 0 });
+  const n = failed.key === key ? failed.n : 0;
+  const href = sources[n];
+  if (!href) return null;
+  return (
+    <image
+      href={href}
+      x={-r + 2}
+      y={-r + 2}
+      width={r * 2 - 4}
+      height={r * 2 - 4}
+      clipPath={`url(#asyl-clip-${tile ? "tile" : "circle"})`}
+      preserveAspectRatio="xMidYMid slice"
+      onError={() => setFailed({ key, n: n + 1 })}
+    />
+  );
 }
 
 export interface View {
@@ -383,7 +414,7 @@ export function GraphView({
                   : n.tags.map((t) => TAG_LABEL[t]).join(" · ") || "Wallet",
                 n.risk != null ? `Risk ${n.risk} · Win ${n.win ?? 0}` : "",
               ].filter(Boolean);
-              const img = n.kind === "token" ? n.image : n.avatar ? avatarUrl(n.avatar) : null;
+              const imgs = imageSources(n);
               return (
                 <g
                   key={n.id}
@@ -427,17 +458,7 @@ export function GraphView({
                       strokeWidth={ring ? 3 : 1.5}
                     />
                   )}
-                  {img && (
-                    <image
-                      href={img}
-                      x={-r + 2}
-                      y={-r + 2}
-                      width={r * 2 - 4}
-                      height={r * 2 - 4}
-                      clipPath={`url(#asyl-clip-${n.kind === "token" ? "tile" : "circle"})`}
-                      preserveAspectRatio="xMidYMid slice"
-                    />
-                  )}
+                  {imgs.length > 0 && <NodeImage sources={imgs} r={r} tile={n.kind === "token"} />}
                   {n.tags.includes("mine") && (
                     <text className="asyl-node-star" y={-r - 4} textAnchor="middle">
                       ★
