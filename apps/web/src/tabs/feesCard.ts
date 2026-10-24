@@ -31,6 +31,56 @@ export interface FeesCardData {
   /** ISO date the rates were checked; absent from older API builds. */
   ratesAsOf?: string;
   solUsd: number | null;
+  /** Set when the savings count other platforms' gas and priority fee: theirs per trade, SOL. */
+  otherNetwork?: { gasSol: number; priorityFeeSol: number };
+}
+
+/** A platform as GET /pro/trade/fees and GET /admin/pro-mode/fees-saved send it. */
+export interface FeesPlatform {
+  id: string;
+  name: string;
+  buyBps: number;
+  sellBps: number;
+  sourceUrl?: string;
+  estimate?: boolean;
+  feeSol: number;
+  savedSol: number;
+  /** With other platforms' gas and priority fee on their side; absent from older API builds. */
+  feeWithNetworkSol?: number;
+  savedWithNetworkSol?: number;
+}
+
+const OTHER_NETWORK_KEY = "trenchscanner.fees.otherNetwork";
+
+/** The gas and priority fee toggle (user ask 2026-10-24): on unless the viewer turned it off here. */
+export function readOtherNetwork(): boolean {
+  try {
+    return localStorage.getItem(OTHER_NETWORK_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+export function saveOtherNetwork(on: boolean) {
+  try {
+    localStorage.setItem(OTHER_NETWORK_KEY, on ? "on" : "off");
+  } catch {
+    // Private mode: the choice lasts for this visit.
+  }
+}
+
+/**
+ * The platforms with the gas and priority fee toggle applied (user ask 2026-10-24): on, each one's
+ * fee and saving carry its 0.002 SOL gas and 0.003 SOL priority fee per trade. An older API that
+ * sends no such figures keeps the platform-fee-only ones.
+ */
+export function withOtherNetwork<P extends FeesPlatform>(platforms: readonly P[], on: boolean): P[] {
+  if (!on) return [...platforms];
+  return platforms.map((p) => ({
+    ...p,
+    feeSol: p.feeWithNetworkSol ?? p.feeSol,
+    savedSol: p.savedWithNetworkSol ?? p.savedSol,
+  }));
 }
 
 const UP = "#34d399";
@@ -62,9 +112,11 @@ export function asOfText(iso: string | undefined): string | null {
 export function feesCardTerms(d: FeesCardData): { footer: string; disclaimer: string } {
   const asOf = asOfText(d.ratesAsOf);
   const estimated = d.platforms.filter((p) => p.estimate).map((p) => p.name);
+  const net = d.otherNetwork;
   const footer = [
     "Estimates",
     asOf ? `rates as published ${asOf}` : null,
+    net ? `incl. ${net.gasSol} SOL gas + ${net.priorityFeeSol} SOL priority fee per trade elsewhere` : null,
     estimated.length ? `${estimated.join(", ")} rate estimated` : null,
   ]
     .filter(Boolean)
@@ -172,24 +224,33 @@ function table(ctx: CanvasRenderingContext2D, d: FeesCardData, x0: number) {
   ctx.textAlign = "left";
 }
 
-export async function renderFeesCard(d: FeesCardData): Promise<HTMLCanvasElement> {
+/** The card's heading: the wallet's own by default, the all-traders total on Admin. */
+export interface FeesCardText {
+  title: string;
+  subtitle: string;
+  badge?: string;
+}
+
+export const OWN_FEES_TEXT: FeesCardText = {
+  title: "What trading here saved me",
+  subtitle: "My trades on TrenchScanner, against the fees the same trades would pay elsewhere.",
+};
+
+export async function renderFeesCard(
+  d: FeesCardData,
+  text: FeesCardText = OWN_FEES_TEXT,
+): Promise<HTMLCanvasElement> {
   const { canvas, ctx, icon } = await cardCanvas();
   if (!ctx) return canvas;
   const trades = d.buys + d.sells;
   const { footer, disclaimer } = feesCardTerms(d);
-  frame(
-    ctx,
-    icon,
-    "What trading here saved me",
-    "My trades on TrenchScanner, against the platform fees the same trades would pay elsewhere.",
-    {
-      badge: (c, right, cy) =>
-        pill(c, right, cy, `${trades.toLocaleString("en-US")} trade${trades === 1 ? "" : "s"}`),
-      footer,
-      link: "trenchscanner.app",
-      disclaimer,
-    },
-  );
+  const badge = text.badge ?? `${trades.toLocaleString("en-US")} trade${trades === 1 ? "" : "s"}`;
+  frame(ctx, icon, text.title, text.subtitle, {
+    badge: (c, right, cy) => pill(c, right, cy, badge),
+    footer,
+    link: "trenchscanner.app",
+    disclaimer,
+  });
   const split = CARD_W - PAD - 470;
   hero(ctx, d, PAD, split - 40);
   table(ctx, d, split);

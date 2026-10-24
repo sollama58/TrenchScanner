@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asOfText, feeText, feesCardTerms, type FeesCardData } from "./feesCard";
+import { asOfText, feeText, feesCardTerms, withOtherNetwork, type FeesCardData } from "./feesCard";
 
 const data: FeesCardData = {
   buys: 3,
@@ -17,6 +17,20 @@ const data: FeesCardData = {
 };
 
 describe("fees share card", () => {
+  it("swaps in the gas and priority fee figures when the toggle is on, and keeps older APIs' figures", () => {
+    const p = { id: "fomo", name: "Fomo", buyBps: 50, sellBps: 50, feeSol: 0.03, savedSol: 0.03 };
+    const net = { ...p, feeWithNetworkSol: 0.04, savedWithNetworkSol: 0.04 };
+    expect(withOtherNetwork([net], true)[0]).toMatchObject({ feeSol: 0.04, savedSol: 0.04 });
+    expect(withOtherNetwork([net], false)[0]).toMatchObject({ feeSol: 0.03, savedSol: 0.03 });
+    expect(withOtherNetwork([p], true)[0]).toMatchObject({ savedSol: 0.03 });
+  });
+
+  it("says on the footer when gas and priority fee are counted", () => {
+    expect(
+      feesCardTerms({ ...data, otherNetwork: { gasSol: 0.002, priorityFeeSol: 0.003 } }).footer,
+    ).toContain("incl. 0.002 SOL gas + 0.003 SOL priority fee per trade elsewhere");
+  });
+
   it("shows fees to four decimals below 1 SOL, signed when asked", () => {
     expect(feeText(0.057, true)).toBe("+0.0570 SOL");
     expect(feeText(-0.0012, true)).toBe("-0.0012 SOL");
