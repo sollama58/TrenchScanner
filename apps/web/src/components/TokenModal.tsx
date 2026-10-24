@@ -161,6 +161,7 @@ import {
   SlidersIcon,
 } from "./Icons";
 import { WatchStar } from "./WatchStar";
+import { subtract, useBrowserFill, withFilled, type Span } from "../browserFill";
 import { XLinkPreview } from "./XLinkPreview";
 import { calibratedRateLabel } from "../rates";
 import {
@@ -2463,7 +2464,30 @@ export function ChartCard({
   // only when the store can't be read (an API without the route, or failing).
   const candleBase = `/tokens/${encodeURIComponent(card.token.mintAddress)}`;
   const stored = useStoredCandles(candleBase, tfRead, launchAt);
-  const storedList = stored.history?.candles;
+  // The stretches the store has nothing for, read by the browser itself (browserFill.ts): the
+  // holes, and the time from the launch to the first candle once the store has nothing older.
+  const fillHoles = useMemo<Span[]>(() => {
+    const h = stored.history;
+    if (!h) return [];
+    const first = h.candles[0]?.t;
+    const before: Span[] =
+      h.next === null && launchAt !== null && first !== undefined && first > launchAt
+        ? [[launchAt, first]]
+        : [];
+    return [...before, ...h.holes];
+  }, [stored.history, launchAt]);
+  const fill = useBrowserFill(card.token.mintAddress, fillHoles, stored.history?.fill ?? null);
+  const storedHeld = stored.history?.candles;
+  const storedList = useMemo(
+    () =>
+      storedHeld && stored.history ? withFilled(storedHeld, stored.history.tfMs, fill.bars) : storedHeld,
+    [storedHeld, stored.history, fill.bars],
+  );
+  // What is still missing: the holes the fill hasn't vouched for yet, or found empty.
+  const openHoles = useMemo(
+    () => (stored.history ? subtract(stored.history.holes, fill.covered) : undefined),
+    [stored.history, fill.covered],
+  );
   const chartCandles = useMemo(() => servedCandles(served), [served]);
   // The last resort (user asks 2026-10-19): GeckoTerminal's minute candles read by the browser
   // itself, only when neither the store nor the chart's answer has any candles for the coin and
@@ -2892,8 +2916,8 @@ export function ChartCard({
                 candles={view.candles}
                 candlesMs={candleSource === "store" ? stored.history?.tfMs : undefined}
                 ticks={view.ticks}
-                holes={candleSource === "store" ? stored.history?.holes : undefined}
-                backfill={candleSource === "store" ? (stored.history?.backfill ?? null) : null}
+                holes={candleSource === "store" ? openHoles : undefined}
+                fill={candleSource === "store" ? fill : null}
                 events={events}
                 flow={flow}
                 marks={marks}

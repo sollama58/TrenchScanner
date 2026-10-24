@@ -177,26 +177,25 @@ export interface OverlayColors {
   font: string;
   /** DexScreener token-info bubble. Distinct from a dev's mark. */
   dex: string;
-  /** A stretch with no data: its shading, its edges, and the backfilling label's bar. */
+  /** A stretch with no data yet: its shading and its edges (the browser's fill is reading it). */
   gap: string;
   gapEdge: string;
-  gapBar: string;
+  /** A stretch no source had: its shading and its edges. */
+  gapDead: string;
+  gapDeadEdge: string;
   /** A wallet mark's colour and its text's, by kind (walletMarks.ts MarkKind). */
   wk: (kind: string) => { fill: string; ink: string };
   draw: DrawColors;
 }
 
-/** A stretch of slots with no data, by its edges' times (ms): the first slot's start, the last's end. */
+/**
+ * A stretch of slots with no data, by its edges' times (ms): the first slot's start, the last's
+ * end. `dead`: no source had it ("No data recorded"); otherwise it is still being read.
+ */
 export interface OverlayGap {
   t0: number;
   t1: number;
-}
-
-/** The label over a gap: its line, a second one, and its bar's fill (0 to 1; null: no bar). */
-export interface GapNote {
-  title: string;
-  sub: string | null;
-  fill: number | null;
+  dead: boolean;
 }
 
 /** What the overlay draws, set by the chart on each render. */
@@ -256,8 +255,6 @@ export interface OverlayState {
   gaps: OverlayGap[];
   /** A slot edge's time (ms) to x (CSS px). */
   edgeX: (t: number) => number | null;
-  /** The label each gap in view shows, read as it draws (its ETA counts down). */
-  gapNote: () => GapNote;
 }
 
 /**
@@ -301,9 +298,9 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
   }
 
   /**
-   * The stretches with no data: shaded top to bottom between dashed edges, each with a label
-   * centred on the part of it in view (so a reader who sees any of it sees the label): that its
-   * history is being backfilled, with a bar and an ETA, or that no source had it.
+   * The stretches with no data: shaded top to bottom between dashed edges. One no source had is
+   * labelled "No data recorded" along the bottom, on the part of it in view; one still being read
+   * is shaded only (the chart's one progress bar, top left, is its label: user ask 2026-10-24).
    */
   private drawGaps(
     ctx: CanvasRenderingContext2D,
@@ -314,17 +311,15 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
     c: OverlayColors,
   ): void {
     const s = this.state;
-    if (s.gaps.length === 0) return;
-    let note: GapNote | null = null;
     for (const g of s.gaps) {
       const a = s.edgeX(g.t0);
       const b = s.edgeX(g.t1);
       if (a === null || b === null || b < 0 || a > width || !(b > a)) continue;
       const left = Math.max(0, a);
       const right = Math.min(width, b);
-      ctx.fillStyle = c.gap;
+      ctx.fillStyle = g.dead ? c.gapDead : c.gap;
       ctx.fillRect(left * hr, 0, (right - left) * hr, height * vr);
-      ctx.strokeStyle = c.gapEdge;
+      ctx.strokeStyle = g.dead ? c.gapDeadEdge : c.gapEdge;
       ctx.lineWidth = hr;
       ctx.setLineDash([3 * hr, 3 * hr]);
       for (const x of [a, b]) {
@@ -335,44 +330,23 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
         ctx.stroke();
       }
       ctx.setLineDash([]);
-      note ??= s.gapNote();
-      // A narrow gap in view gets its label too: drawn over its middle, kept on the plot.
-      ctx.font = `700 ${Math.round(11 * vr)}px ${c.font}`;
-      const plain = note.fill === null && !note.sub;
-      const w = Math.min(plain ? ctx.measureText(note.title).width / hr + 20 : GAP_LABEL_W, width - 8);
+      if (!g.dead) continue;
+      ctx.font = `700 ${Math.round(10.5 * vr)}px ${c.font}`;
+      const w = Math.min(ctx.measureText(DEAD_LABEL).width / hr + 18, width - 8);
       const x = Math.min(width - w - 4, Math.max(4, (left + right) / 2 - w / 2));
-      const h = plain ? 26 : GAP_LABEL_H;
-      const y = Math.max(4, height / 2 - h / 2);
+      const h = 22;
+      const y = Math.max(4, height - h - 8);
       ctx.fillStyle = c.labelBg;
-      roundRect(ctx, x * hr, y * vr, w * hr, h * vr, 8 * hr);
+      roundRect(ctx, x * hr, y * vr, w * hr, h * vr, 7 * hr);
       ctx.fill();
-      ctx.strokeStyle = c.gapEdge;
+      ctx.strokeStyle = c.gapDeadEdge;
       ctx.lineWidth = hr;
       ctx.stroke();
       ctx.textBaseline = "middle";
-      ctx.textAlign = "left";
+      ctx.textAlign = "center";
       ctx.fillStyle = c.eventText;
-      ctx.font = `700 ${Math.round(11 * vr)}px ${c.font}`;
-      ctx.fillText(clip(ctx, note.title, (w - 20) * hr), (x + 10) * hr, (y + 13) * vr);
-      if (note.sub) {
-        ctx.font = `500 ${Math.round(10 * vr)}px ${c.font}`;
-        ctx.globalAlpha = 0.75;
-        ctx.textAlign = "right";
-        ctx.fillText(note.sub, (x + w - 10) * hr, (y + 13) * vr);
-        ctx.textAlign = "left";
-        ctx.globalAlpha = 1;
-      }
-      if (note.fill !== null) {
-        const bx = x + 10;
-        const bw = w - 20;
-        const by = y + h - 15;
-        ctx.fillStyle = c.gap;
-        roundRect(ctx, bx * hr, by * vr, bw * hr, 6 * vr, 3 * hr);
-        ctx.fill();
-        ctx.fillStyle = c.gapBar;
-        roundRect(ctx, bx * hr, by * vr, Math.max(6, bw * note.fill) * hr, 6 * vr, 3 * hr);
-        ctx.fill();
-      }
+      ctx.fillText(clip(ctx, DEAD_LABEL, (w - 12) * hr), (x + w / 2) * hr, (y + h / 2 + 0.5) * vr);
+      ctx.textAlign = "left";
     }
   }
 
@@ -673,9 +647,8 @@ function markOutline(ctx: CanvasRenderingContext2D, shape: MarkShape, x: number,
   ctx.arc(x, y, r, 0, Math.PI * 2);
 }
 
-/** The backfilling label's size (CSS px). */
-const GAP_LABEL_W = 176;
-const GAP_LABEL_H = 46;
+/** The label of a stretch no source had. */
+const DEAD_LABEL = "No data recorded";
 
 /** `text` cut with an ellipsis to fit `maxW` (bitmap px) in the context's font. */
 function clip(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
