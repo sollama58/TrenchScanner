@@ -251,6 +251,8 @@ export class ProTradeWatcher {
       stream: TradeStream | null;
       rpc: TradeRpc;
       onEntry: OnEntry;
+      /** A new trade was written for the wallet (its positions changed). */
+      onRecorded?: (wallet: string) => void;
       now?: () => number;
     },
   ) {}
@@ -310,7 +312,7 @@ export class ProTradeWatcher {
     const cursor = await prisma.proTradeCursor.findUnique({ where: { wallet } });
     const now = this.now();
     let list = first;
-    let fresh = list;
+    let fresh: typeof list;
     if (cursor?.lastSignature) {
       let at = list.findIndex((s) => s.signature === cursor.lastSignature);
       // Page back until the cursor turns up (or the pages run out, or the wallet's history does).
@@ -328,7 +330,10 @@ export class ProTradeWatcher {
         list = [...list, ...older];
         at = list.findIndex((s) => s.signature === cursor.lastSignature);
       }
-      if (at >= 0) fresh = list.slice(0, at);
+      // Not found within the pages: everything read is new. Reading only the first page here
+      // moved the cursor past the rest, and those trades were never recorded (positions stuck
+      // open). Older gaps are filled per coin by the balance check (routes/proTrades.ts).
+      fresh = at >= 0 ? list.slice(0, at) : list;
     } else {
       fresh = list.filter((s) => s.blockTime === null || s.blockTime * 1000 >= now - FIRST_LOOK_BACK_MS);
     }
@@ -426,6 +431,7 @@ export class ProTradeWatcher {
         ],
         skipDuplicates: true,
       });
+      if (written.count > 0) this.deps.onRecorded?.(wallet);
       if (written.count > 0 && entry && this.mayScan(wallet)) {
         // Marked first: the worker's TokenSage read follows only scanned entries, so the hourly
         // cap here holds for it too (apps/worker tokensage/utilityLookups.ts).

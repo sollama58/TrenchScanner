@@ -1,7 +1,14 @@
 import { useState } from "react";
 import { Skeleton } from "../components/Skeleton";
 import { ChartIcon, GiftIcon, InfoIcon, RobotIcon, TransferIcon, WalletIcon } from "../components/Icons";
-import { sol, StatsStrip, TradeCard, type TradeCoin, type TradeStats } from "../components/TradesDrawer";
+import {
+  sol,
+  StatsStrip,
+  TradeCard,
+  updatedText,
+  type TradeCoin,
+  type TradeStats,
+} from "../components/TradesDrawer";
 import { WalletHoldings } from "../components/WalletHoldings";
 import { useNow, usePolling } from "../hooks";
 import { ago, pricedAgeText, shortAddress, usd } from "../format";
@@ -10,7 +17,8 @@ import { ShareButton } from "../components/ShareImageDialog";
 import { renderFeesCard } from "./feesCard";
 
 const PORTFOLIO_POLL_MS = 60_000;
-const TRADES_POLL_MS = 30_000;
+/** The token page's position cadence (POSITION_POLL_MS): the API reuses an answer 8 s. */
+const TRADES_POLL_MS = 15_000;
 const FEES_POLL_MS = 60_000;
 
 interface Portfolio {
@@ -72,6 +80,9 @@ interface PortfolioTrades {
   solUsd: number | null;
   /** When solUsd was read (ISO). Absent from older API builds. */
   solUsdAt?: string | null;
+  /** When the API worked this answer out, and last read the coins' balances from the chain (ISO). */
+  readAt?: string;
+  chainAt?: string | null;
 }
 
 /** GET /pro/trade/fees (apps/api/src/tradeFees.ts). */
@@ -137,8 +148,8 @@ export function PortfolioTab() {
           are counted but not shown, unless a section says otherwise. Only you can see this page.
         </span>
       </p>
-      <BalancesPanel />
-      <TradesPanel now={now} />
+      <BalancesPanel solUsd={data.solUsd} />
+      <TradesPanel />
       <FeesPanel />
       {data.botPositions.length > 0 && <BotPanel positions={data.botPositions} now={now} />}
       <TapePanel tape={data.tape} now={now} />
@@ -147,7 +158,7 @@ export function PortfolioTab() {
 }
 
 /** The wallet's SOL and $ASDFASDFA (user ask 2026-10-19), the same row Settings shows. */
-function BalancesPanel() {
+function BalancesPanel({ solUsd }: { solUsd: number | null }) {
   const funds = useWalletBalance();
   return (
     <section className="panel">
@@ -159,15 +170,18 @@ function BalancesPanel() {
           <h2>Your wallet</h2>
         </div>
       </header>
-      <WalletHoldings funds={funds} />
+      <WalletHoldings funds={funds} solUsd={solUsd} />
     </section>
   );
 }
 
 /** Pro Mode only: the wallet's own buys and sells, as the TRADES panel follows them. */
-function TradesPanel({ now }: { now: number }) {
+function TradesPanel() {
   const { data, error } = usePolling<PortfolioTrades>("/pro/trades?view=portfolio", TRADES_POLL_MS);
+  // Its own clock: the "Updated" line and the cards' price ages move between polls.
+  const now = useNow(10_000);
   const [span, setSpan] = useState(0);
+  const updated = updatedText(data?.readAt, !!(error && data), now);
   const stats = data?.stats[span] ?? null;
   return (
     <section className="panel portfolio-trades">
@@ -180,8 +194,22 @@ function TradesPanel({ now }: { now: number }) {
           <p className="muted small">
             Every buy and sale this wallet makes, here or anywhere else. Each coin you buy is scanned on your
             buy, so these include coins TrenchScanner wouldn&apos;t otherwise track. The last{" "}
-            {data?.days ?? 30} days.
+            {data?.days ?? 30} days, and anything still held from before. Holdings are checked against your
+            wallet on the chain.
           </p>
+          {updated && (
+            <p
+              className={`small portfolio-updated${error && data ? " warn" : " faint"}`}
+              title={
+                data?.chainAt
+                  ? `Balances read from the chain ${new Date(data.chainAt).toLocaleString()}`
+                  : undefined
+              }
+            >
+              <span className={`trades-live-dot${error && data ? " off" : ""}`} aria-hidden="true" />{" "}
+              {updated}
+            </p>
+          )}
         </div>
         {data && (
           <div className="segmented small" role="group" aria-label="Statistics window">

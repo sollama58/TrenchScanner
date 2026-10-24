@@ -205,4 +205,69 @@ describe.skipIf(!dbAvailable)("ProTradeWatcher on the database", () => {
       await prisma.proTradeCursor.deleteMany({ where: { wallet } });
     }
   });
+
+  it("records every page it read when the cursor is further back than the pages go", async () => {
+    const wallet = `${W}-far`;
+    const now = Date.now();
+    const t0 = Math.floor(now / 1000) - 9_000;
+    // Newest first: 60 dust transfers, a buy on the third page, 60 more, then the cursor.
+    const dust = (from: number) =>
+      Array.from({ length: 60 }, (_, i) => ({
+        signature: `far-dust${from + i}`,
+        blockTime: t0 + 1_000 - from - i,
+        failed: false,
+      }));
+    const all = [
+      ...dust(0),
+      { signature: "far-buy", blockTime: t0 + 500, failed: false },
+      ...dust(100),
+      { signature: "far-old", blockTime: t0, failed: false },
+    ];
+    const buy = swap("far-buy", "buy", t0 + 500, ["0", "9"]);
+    const watcher = new ProTradeWatcher({
+      stream: null,
+      rpc: {
+        getSignaturesForAddress: async (_a, limit, before) => {
+          const from = before ? all.findIndex((s) => s.signature === before) + 1 : 0;
+          return all.slice(from, from + limit);
+        },
+        getTransactionJson: async (s) =>
+          s === "far-buy"
+            ? {
+                ...buy,
+                transaction: { message: { accountKeys: [wallet] } },
+                meta: {
+                  ...buy.meta!,
+                  preTokenBalances: [],
+                  postTokenBalances: [
+                    {
+                      accountIndex: 1,
+                      mint: MINT,
+                      owner: wallet,
+                      uiTokenAmount: { amount: "9", decimals: 6 },
+                    },
+                  ],
+                },
+              }
+            : {
+                blockTime: t0,
+                meta: { err: null, preBalances: [1], postBalances: [1] },
+                transaction: { message: { accountKeys: [wallet] } },
+              },
+      },
+      onEntry: async () => {},
+      now: () => now,
+    });
+    try {
+      await prisma.proTradeCursor.create({ data: { wallet, lastSignature: "far-old" } });
+      await watcher.catchUp(wallet);
+      // Reading only the first page moved the cursor past this buy for good.
+      expect((await prisma.proTrade.findMany({ where: { wallet } })).map((r) => r.signature)).toEqual([
+        "far-buy",
+      ]);
+    } finally {
+      await prisma.proTrade.deleteMany({ where: { wallet } });
+      await prisma.proTradeCursor.deleteMany({ where: { wallet } });
+    }
+  });
 });

@@ -44,6 +44,16 @@ export interface TradeCoin {
   entryMcapUsd: number | null;
   pnlSol: number | null;
   pnlPct: number | null;
+  /**
+   * When the open coin's price was known current (ISO) and where it came from; absent from older
+   * API builds. "stored" is the last scan's or viewer's price, which can be old.
+   */
+  priceAt?: string | null;
+  priceSource?: "curve" | "market" | "stored" | null;
+  /** What the chain says the wallet holds (whole coins), when read; absent from older API builds. */
+  chainHeld?: number | null;
+  /** The wallet's balance still disagrees with the trades read: no PnL can be told. */
+  mismatch?: boolean;
   calledBefore: { at: string; modelName: string | null; confidence: number } | null;
   card: Card | null;
   scan: "scanning" | "scanned" | "none";
@@ -73,6 +83,34 @@ interface PanelView {
   solUsd: number | null;
   /** When solUsd was read (ISO). Absent from older API builds. */
   solUsdAt?: string | null;
+  /** When the API worked this answer out (ISO). Absent from older API builds. */
+  readAt?: string;
+}
+
+/** An open coin's price this old (or a stored one) is named on its card. */
+export const TRADE_PRICE_STALE_MS = 2 * 60_000;
+
+/**
+ * The line an open coin's card adds under its result: why it has no PnL, or how old its price is.
+ * Null for a sold-out coin, and for one priced live just now.
+ */
+export function tradeCardNote(coin: TradeCoin, now: number): string | null {
+  if (coin.mismatch)
+    return coin.chainHeld === 0
+      ? "Your wallet no longer holds it, and the sale couldn't be read"
+      : "Your wallet's balance doesn't match the trades read";
+  if (coin.closed || coin.priceSource === undefined) return null;
+  if (coin.priceSource === null) return coin.pnlSol === null ? "No price yet" : null;
+  if (!coin.priceAt) return "Price time unknown";
+  const old = now - Date.parse(coin.priceAt) >= TRADE_PRICE_STALE_MS;
+  if (!old && coin.priceSource !== "stored") return null;
+  return `Price as of ${ago(coin.priceAt, now)}`;
+}
+
+/** "Updated just now / 3m ago" for an answer's readAt, with a failed refresh named. */
+export function updatedText(readAt: string | undefined, failed: boolean, now: number): string | null {
+  if (!readAt) return null;
+  return failed ? `Couldn't refresh · as of ${ago(readAt, now)}` : `Updated ${ago(readAt, now)}`;
 }
 
 /**
@@ -191,8 +229,12 @@ function PanelBody({ open, onClose }: { open: boolean; onClose: () => void }) {
           <h2>Your last trades</h2>
         </div>
         <div className="drawer-actions">
-          <span className="faint small trades-live">
-            <span className="trades-live-dot" /> Following this wallet
+          <span
+            className="faint small trades-live"
+            title={data?.readAt ? new Date(data.readAt).toLocaleString() : undefined}
+          >
+            <span className={`trades-live-dot${error && data ? " off" : ""}`} />{" "}
+            {updatedText(data?.readAt, !!(error && data), now) ?? "Following this wallet"}
           </span>
           <button type="button" className="ghost icon-btn" onClick={onClose} aria-label="Close your trades">
             <CloseIcon size={16} />
@@ -332,6 +374,7 @@ export function TradeCard({ coin, now }: { coin: TradeCoin; now: number }) {
   };
   const scanText =
     coin.scan === "scanned" ? "Scanned" : coin.scan === "scanning" ? "Scanning…" : "Not scanned";
+  const note = tradeCardNote(coin, now);
   return (
     <article
       className={`card compact trade-card${card ? " opens" : ""}${coin.closed ? " closed" : ""}`}
@@ -380,8 +423,13 @@ export function TradeCard({ coin, now }: { coin: TradeCoin; now: number }) {
             )}
           </div>
           <div className="meta-row">
-            <span className={`pill trade-state${coin.closed ? "" : " holding"}`}>
-              <span className="pill-text">{coin.closed ? "Sold" : "Holding"}</span>
+            {/* The chain's word wins: a coin the recorded trades call held, but the wallet doesn't hold. */}
+            <span
+              className={`pill trade-state${coin.mismatch && coin.chainHeld === 0 ? " gone" : coin.closed ? "" : " holding"}`}
+            >
+              <span className="pill-text">
+                {coin.mismatch && coin.chainHeld === 0 ? "Not held" : coin.closed ? "Sold" : "Holding"}
+              </span>
             </span>
             <span className="when" title={new Date(coin.entryAt).toLocaleString()}>
               {ago(coin.entryAt, now)}
@@ -411,6 +459,14 @@ export function TradeCard({ coin, now }: { coin: TradeCoin; now: number }) {
         <span className={`num trade-pnl${tone(coin.pnlSol)}`}>{sol(coin.pnlSol, true)}</span>
         <span className={`num trade-pnl-pct${tone(coin.pnlPct)}`}>{signedPct(coin.pnlPct)}</span>
       </div>
+      {note && (
+        <p
+          className={`trade-note${coin.mismatch ? " warn" : ""}`}
+          title={coin.priceAt ? `Priced ${new Date(coin.priceAt).toLocaleString()}` : undefined}
+        >
+          {note}
+        </p>
+      )}
       <div className="trade-foot">
         <span
           className="faint num"

@@ -117,7 +117,12 @@ describe.skipIf(!dbAvailable)("GET /pro/trades", () => {
       held: 5_000_000,
       closed: false,
       card: expect.objectContaining({ kind: "stream", tokenId }),
+      // No live read in tests: the stored price stands in, and says so.
+      priceSource: "stored",
+      chainHeld: null,
+      mismatch: false,
     });
+    expect(typeof body.readAt).toBe("string");
     expect(body.stats).toMatchObject({
       trades: 2,
       buys: 1,
