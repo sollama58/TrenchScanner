@@ -563,7 +563,7 @@ describe("holderFreshness", () => {
     const text = holderStatusText(now, fresh.last, fresh.due);
     expect(text).toBe("4m 01s ago · Next update in 0:59");
     expect(text.toLowerCase()).not.toContain("live");
-    expect(holderStatusText(now, fresh.last, null, { live: true })).toBe("Live");
+    expect(holderStatusText(now, fresh.last, null, { live: true })).toBe("Live · 4m 01s ago");
   });
 });
 
@@ -1374,11 +1374,19 @@ describe("bubble map badge on a held map", () => {
     expect(mapBadgeFreshness(fresh, 100_000, { shownAt: 101_000, everyMs: 5_000 }).next).toBe(160_000);
   });
 
-  it("says Live only while the map redraws within seconds", () => {
+  it("says Live only while the map redraws within seconds, with the list's deadline", () => {
     const live = { last: 100_000, next: null, live: true };
     expect(mapBadgeFreshness(live, 100_000, { shownAt: 101_000, everyMs: 5_000 })).toMatchObject({
       live: true,
       next: null,
+    });
+    const until = { last: 100_000, next: 160_000, live: true, liveUntil: 190_000 };
+    expect(mapBadgeFreshness(until, 90_000, { shownAt: 101_000, everyMs: 2_000 })).toEqual({
+      last: 90_000,
+      next: 160_000,
+      late: false,
+      live: true,
+      liveUntil: 190_000,
     });
     expect(mapBadgeFreshness(live, 100_000, { shownAt: 101_000, everyMs: 300_000 })).toMatchObject({
       live: false,

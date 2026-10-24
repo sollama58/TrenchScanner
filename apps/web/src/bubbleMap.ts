@@ -2674,24 +2674,44 @@ export function holderChainReadAt(
 export const MAP_LIVE_REDRAW_MS = 15_000;
 
 /**
+ * How long past a holder list's next read it still counts as "Live": the read, its write and the
+ * push to the page. Past it the list is late, and the status shows its age and the countdown.
+ */
+export const HOLDER_LIVE_GRACE_MS = 30_000;
+
+/**
  * The bubble map badge's status, for the map on screen. The map is held for the reader's redraw
  * interval (Customize, 5 s to 12 h), so the holder list's own status (`fresh`, Top holders') would
  * say "4s ago · Next update in 0:56" over a map drawn from a reading an hour old. `drawnAt` is when
- * the holders drawn were read (holderBadgeAt of the held reading). The next update is the list's
- * next read or the next redraw, whichever is later, and "Live" only while the map redraws within
+ * the holders drawn were read (holderBadgeAt of the held reading), and that age always shows. The
+ * next update is the list's next read or the next redraw, whichever is later, and "Live" only
+ * while the list is (`fresh.live`, until `liveUntil`) and the map redraws within
  * MAP_LIVE_REDRAW_MS; past that a live coin counts down to its next redraw instead.
  */
 export function mapBadgeFreshness(
-  fresh: { last: number; next: number | null; late?: boolean; live?: boolean },
+  fresh: { last: number; next: number | null; late?: boolean; live?: boolean; liveUntil?: number | null },
   drawnAt: number,
   redraw: { shownAt: number; everyMs: number },
-): { last: number; next: number | null; late: boolean; live: boolean } {
+): { last: number; next: number | null; late: boolean; live: boolean; liveUntil: number | null } {
   const nextRedraw = redraw.shownAt + redraw.everyMs;
-  const live = !!fresh.live && fresh.next === null && redraw.everyMs <= MAP_LIVE_REDRAW_MS;
-  if (live) return { last: drawnAt, next: null, late: false, live: true };
-  if (fresh.live && fresh.next === null) return { last: drawnAt, next: nextRedraw, late: false, live: false };
-  if (fresh.next === null) return { last: drawnAt, next: null, late: false, live: false };
-  return { last: drawnAt, next: Math.max(fresh.next, nextRedraw), late: !!fresh.late, live: false };
+  const liveUntil = fresh.liveUntil ?? null;
+  if (fresh.live && redraw.everyMs <= MAP_LIVE_REDRAW_MS)
+    return {
+      last: drawnAt,
+      next: fresh.next === null ? null : Math.max(fresh.next, nextRedraw),
+      late: !!fresh.late,
+      live: true,
+      liveUntil,
+    };
+  if (fresh.next === null)
+    return { last: drawnAt, next: fresh.live ? nextRedraw : null, late: false, live: false, liveUntil: null };
+  return {
+    last: drawnAt,
+    next: Math.max(fresh.next, nextRedraw),
+    late: !!fresh.late,
+    live: false,
+    liveUntil: null,
+  };
 }
 
 /** The first of a view's reads, every `everyMs` from `nextRead`, at or after `at`. */

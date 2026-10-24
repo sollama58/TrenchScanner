@@ -103,10 +103,11 @@ export function SecondsAgo({ at }: { at: number }) {
 }
 
 /**
- * Top Holders and the bubble map share this. "Live" only when the stream is covering the coin and
- * pushing updates, which is not a scheduled re-read: no age, no countdown, no "Updating…".
- * A next-read time is a countdown instead, and that text does not say live. `last` is the chain
- * read (holderShownAt). `next` is holderNextReadAt. A balance tick is neither input.
+ * Top Holders and the bubble map share this. The age of the holder list always shows (user ask
+ * 2026-10-24: never old data without its time). "Live · 12s ago" while the shares move with every
+ * trade and the list is not past its next read: no countdown then. Otherwise the age and the
+ * countdown to the next read, which does not say live. `last` is the chain read (holderShownAt).
+ * `next` is holderNextReadAt. A balance tick is neither input.
  */
 export function holderStatusText(
   now: number,
@@ -114,18 +115,25 @@ export function holderStatusText(
   next: number | null,
   opts?: { live?: boolean; late?: boolean },
 ): string {
-  if (opts?.live && next === null) return "Live";
   const age = secondsAgo(last, now);
+  if (opts?.live) return `Live · ${age}`;
   if (next === null) return age;
   return `${age} · ${nextUpdateText(next, now, opts?.late ?? false)}`;
+}
+
+/**
+ * Whether a holder status reads "Live" at `now`: `live`, and `liveUntil` (the list's next read and
+ * a grace for it to land) not passed. Past it the list is late and the status shows its countdown.
+ */
+export function liveAt(now: number, live: boolean, liveUntil: number | null | undefined): boolean {
+  return live && (liveUntil == null || now < liveUntil);
 }
 
 /**
  * A section's freshness beside its count: "12s ago · Next update in 0:48" (user ask 2026-10-19).
  * `next` is when the view reads again (the update shows then): a time, or a poll's beat; null
  * when no update is coming (the coin is no longer scanned), so only the age shows. `late`: see
- * nextUpdateText. `live` with no `next`: the holder stream is pushing updates, so the status is
- * exactly "Live". A `next` is a scheduled re-read and is never called live.
+ * nextUpdateText. `live`: the shares move with every trade, "Live · 12s ago" until `liveUntil`.
  */
 export function LiveStamp({
   last,
@@ -133,24 +141,27 @@ export function LiveStamp({
   late = false,
   title,
   live = false,
+  liveUntil,
 }: {
   last: number;
   next: number | { from: number; every: number } | null;
   late?: boolean;
   title?: string;
-  /** The stream is covering this coin and pushing updates, and nothing is waiting on a re-read. */
+  /** The shares move with each trade of the coin as it lands (liveShares.ts). */
   live?: boolean;
+  /** When "Live" ends if no newer list has come: the list's next read and its grace. */
+  liveUntil?: number | null;
 }) {
   const now = useSecondTick();
   const at = next === null ? null : typeof next === "number" ? next : nextBeat(next, now);
-  const streaming = live && at === null;
-  const text = holderStatusText(now, last, at, { live, late });
+  const streaming = liveAt(now, live, liveUntil);
+  const text = holderStatusText(now, last, at, { live: streaming, late });
   return (
     <span
       className="tm-live-stamp small muted num"
       title={
         streaming
-          ? "Holder updates are being pushed for this coin. This is not a scheduled re-read."
+          ? `Holder list read ${hms(last)}; each trade since moves its holders' shares as it lands`
           : (title ?? `Updated ${hms(last)}${at === null ? "" : `; next read ${hms(at)}`}`)
       }
     >

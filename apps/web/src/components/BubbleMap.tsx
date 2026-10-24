@@ -31,7 +31,6 @@ import {
   buildGraph,
   HOLDER_POLL_MS,
   holderBadgeAt,
-  holderChainReadAt,
   holderListAt,
   liveWideFor,
   mapBadgeFreshness,
@@ -79,8 +78,8 @@ import {
 } from "../bubbleMap";
 import { renderBubbleCard } from "../bubbleMapCard";
 import {
-  liveShareDeltas,
-  wideShareDeltas,
+  coversFrom,
+  listedShareDeltas,
   wideWithLiveShares,
   withLiveShares,
   type LiveTradeShares,
@@ -2371,15 +2370,21 @@ export function BubbleMapSection({
   /** How far sideways the map may spread to fill a wide stage (Scope's tab, user ask 2026-10-19). */
   spread?: number;
   /**
-   * The coin's live trades and supply: each trade since the reading (and since the top 50's read)
-   * moves its wallet's share on the map between reads (liveShares.ts). None for a kept moment.
+   * The coin's live trades and supply: each trade since the reading's balances (and the top 50's)
+   * moves a listed wallet's share on the map between reads (liveShares.ts). None for a kept moment.
    */
   live?: LiveTradeShares | null;
   /**
-   * The same status as Top Holders. `live` with no `next` is exactly "Live". A `next` counts down
-   * to holderNextReadAt from holderShownAt and does not say live.
+   * The same status as Top Holders: the age always, "Live" only while `live` and before
+   * `liveUntil`, else the countdown to holderNextReadAt (mapBadgeFreshness).
    */
-  freshness?: { last: number; next: number | null; late?: boolean; live?: boolean };
+  freshness?: {
+    last: number;
+    next: number | null;
+    late?: boolean;
+    live?: boolean;
+    liveUntil?: number | null;
+  };
 }) {
   const mint = token.mintAddress;
   const liveWide = liveWideFor(snapshotIn, useWideMap(mint));
@@ -2393,45 +2398,33 @@ export function BubbleMapSection({
   const redrawMs = bubbleRefreshSeconds * 1000;
   const { value: held, at: heldAt } = useEvery(inputs, redrawMs, hasReading, mint);
   const { reading: heldReading, wide: wideIn, live: heldLive } = held;
-  // Trades move shares from each reading's own read time: the scan's for its lists and figures,
-  // the top 50's for its map.
+  // Trades move the listed wallets' shares from each list's own balance time: the scan's for its
+  // lists and figures, the top 50's for its map. Only when the feed holds every trade since then
+  // (liveShares.ts); otherwise that list is drawn as read.
   const snapshot = useMemo(
     () =>
       heldReading && heldLive
         ? withLiveShares(
             heldReading,
-            wideShareDeltas(
-              heldLive.trades,
-              heldLive.supply,
+            listedShareDeltas(
+              heldLive,
               new Set((heldReading.linkedHolders ?? []).map((h) => h.wallet)),
               holderListAt(heldReading),
-              holderChainReadAt(heldReading),
             ),
           )
         : heldReading,
     [heldReading, heldLive],
   );
+  const wideFrom = wideIn ? Date.parse(wideIn.balancesAt ?? wideIn.readAt) : NaN;
   const wide = useMemo(
     () =>
       wideIn && heldLive
         ? wideWithLiveShares(
             wideIn,
-            heldReading
-              ? wideShareDeltas(
-                  heldLive.trades,
-                  heldLive.supply,
-                  new Set(wideIn.holders.map((h) => h.wallet)),
-                  wideIn.balancesAt ? Date.parse(wideIn.balancesAt) : holderListAt(heldReading),
-                  Date.parse(wideIn.readAt),
-                )
-              : liveShareDeltas(
-                  heldLive.trades,
-                  heldLive.supply,
-                  Date.parse(wideIn.balancesAt ?? wideIn.readAt),
-                ),
+            listedShareDeltas(heldLive, new Set(wideIn.holders.map((h) => h.wallet)), wideFrom),
           )
         : wideIn,
-    [wideIn, heldLive, heldReading],
+    [wideIn, heldLive, wideFrom],
   );
   // The badge is when the holder set on screen was read (the top 50's enumeration, else the
   // scan's chain read). A later streamed balance or a live trade moves a share and stays in the
@@ -2441,16 +2434,21 @@ export function BubbleMapSection({
     const listAt = holderListAt(heldReading);
     const at = holderBadgeAt(heldReading, wideIn?.readAt);
     let tradeAt: number | null = null;
-    if (heldLive?.supply)
+    if (coversFrom(heldLive, listAt))
       for (const t of heldLive.trades)
-        if (t.tokens > 0 && t.atMs > Math.min(listAt, at) && (tradeAt === null || t.atMs > tradeAt))
-          tradeAt = t.atMs;
+        if (t.tokens > 0 && t.atMs > listAt && (tradeAt === null || t.atMs > tradeAt)) tradeAt = t.atMs;
     return { listAt, at, tradeAt };
   }, [heldReading, wideIn, heldLive]);
   // The badge describes the map on screen, which is held for the redraw interval: its read time
   // and the next update it will draw, not the newest reading behind it.
-  const badge = freshness
-    ? mapBadgeFreshness(freshness, drawn?.at ?? freshness.last, { shownAt: heldAt, everyMs: redrawMs })
+  // "Live" also needs the top 50 drawn to move with the trades: one the feed doesn't cover since
+  // its balances is drawn as read, so the badge shows its age and countdown instead.
+  const mapFresh =
+    freshness?.live && wideIn && !coversFrom(heldLive, wideFrom)
+      ? { ...freshness, live: false, liveUntil: null }
+      : freshness;
+  const badge = mapFresh
+    ? mapBadgeFreshness(mapFresh, drawn?.at ?? mapFresh.last, { shownAt: heldAt, everyMs: redrawMs })
     : undefined;
   const { showTransfers, setTransfersOn } = useTransferToggle(snapshot);
   const { bubbleFunderLabels } = useAppearance();
@@ -2526,7 +2524,13 @@ export function BubbleMapSection({
             }
           >
             {badge ? (
-              <LiveStamp last={badge.last} next={badge.next} late={badge.late} live={badge.live} />
+              <LiveStamp
+                last={badge.last}
+                next={badge.next}
+                late={badge.late}
+                live={badge.live}
+                liveUntil={badge.liveUntil}
+              />
             ) : moment && moment.at !== undefined && Number.isFinite(moment.at) ? (
               <SecondsAgo at={drawn ? drawn.at : moment.at} />
             ) : (

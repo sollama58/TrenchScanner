@@ -527,6 +527,30 @@ describe("readTopHolders", () => {
     expect(helius.getTopHoldersBatch).toHaveBeenCalledTimes(1);
   });
 
+  it("stamps a chain read when it came back, not when it was asked", async () => {
+    // A trade that lands while the read is in flight is in its balances: the page counts trades
+    // after the list's time, so stamping the ask counted it twice.
+    vi.useFakeTimers({ now: 1_000_000 });
+    try {
+      const helius = {
+        getTopHoldersBatch: vi.fn(async (mints: string[]) => {
+          vi.setSystemTime(1_002_500);
+          return new Map(
+            mints.map((m) => [m, { status: "found" as const, holders: [{ owner: "h0", pct: 10 }] }]),
+          );
+        }),
+      };
+      const groups: LinkedGroup[] = [{ mintAddress: "mF", holders: [] }];
+      await readTopHolders(groups, helius, { maxReads: 1 });
+      expect(adoptLiveHolders(groups, 1_003_000).get("mF")).toMatchObject({
+        readAtMs: 1_002_500,
+        balancesAtMs: 1_002_500,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a watched coin's list while the trade stream says it hasn't traded since", async () => {
     const top = [{ owner: "h0", pct: 10 }];
     const helius = {
