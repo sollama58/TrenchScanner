@@ -282,6 +282,8 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
     expect((await as(TRADER, "GET", "/pro/trade/fees")).statusCode).toBe(404);
     await prisma.platformTrade.deleteMany({ where: { wallet: ADMIN } });
     expect((await as(ADMIN, "GET", "/pro/trade/fees")).json()).toMatchObject({ trades: 0, since: null });
+    // Other test files may leave trades of their own: the admin total is checked by what this adds.
+    const before = (await as(ADMIN, "GET", "/admin/pro-mode/fees-saved")).json();
     const sig = (n: number) => `fees-test-${n}`;
     await prisma.platformTrade.createMany({
       data: [
@@ -326,6 +328,16 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
         terminal: 0.03,
         axiom: 0.057,
       });
+      // Admin's total: every wallet's confirmed trades, with the gas and priority fee per trade.
+      expect((await as(TRADER, "GET", "/admin/pro-mode/fees-saved")).statusCode).toBe(403);
+      const total = (await as(ADMIN, "GET", "/admin/pro-mode/fees-saved")).json();
+      expect(total.trades - before.trades).toBe(2);
+      expect(total.wallets - before.wallets).toBe(1);
+      expect(total.otherNetwork.totalSol - before.otherNetwork.totalSol).toBeCloseTo(0.01);
+      const axiom = (r: { platforms: { id: string; savedSol: number; savedWithNetworkSol: number }[] }) =>
+        r.platforms.find((p) => p.id === "axiom")!;
+      expect(axiom(total).savedSol - axiom(before).savedSol).toBeCloseTo(0.057);
+      expect(axiom(total).savedWithNetworkSol - axiom(before).savedWithNetworkSol).toBeCloseTo(0.067);
     } finally {
       await prisma.platformTrade.deleteMany({ where: { wallet: ADMIN } });
     }

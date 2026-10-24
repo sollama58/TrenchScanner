@@ -10,6 +10,23 @@ const trade = (side: "buy" | "sell", sol: bigint, networkFeeLamports = 100_000n)
 });
 
 describe("feeSummary", () => {
+  it("adds other platforms' gas and priority fee per buy and sale to the savings with the toggle on", () => {
+    const s = feeSummary([trade("buy", 2n), trade("sell", 4n)]);
+    expect(s.otherNetwork).toEqual({
+      gasSol: 0.002,
+      priorityFeeSol: 0.003,
+      perTradeSol: 0.005,
+      totalSol: 0.01,
+    });
+    const fomo = s.platforms.find((p) => p.id === "fomo")!;
+    expect(fomo).toMatchObject({
+      feeSol: 0.03,
+      savedSol: 0.03,
+      feeWithNetworkSol: 0.04,
+      savedWithNetworkSol: 0.04,
+    });
+  });
+
   it("prices each platform's fee on the same trades, buys and sales at their own rates", () => {
     const s = feeSummary([trade("buy", 2n), trade("sell", 4n)]);
     expect(s).toMatchObject({

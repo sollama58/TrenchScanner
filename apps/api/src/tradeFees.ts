@@ -15,6 +15,12 @@
  * burned credits for everyone else once it is on, recorded per trade as its SOL value in
  * platformFeeLamports. A saving can go negative (the Sacrifice against a lower fee elsewhere): it is
  * reported as it is, never clamped to zero.
+ *
+ * Gas and priority fee (user ask 2026-10-24): the Portfolio page and the admin total can also
+ * count what another platform's trade pays the network at its usual settings, 0.002 SOL gas and
+ * 0.003 SOL priority fee on every buy and every sale. It is a flat amount per trade, so it covers
+ * every trade already recorded as well as new ones: each platform carries the saving both without
+ * it (savedSol) and with it (savedWithNetworkSol), and the page's toggle picks one.
  */
 
 export interface PlatformFeeRate {
@@ -57,6 +63,10 @@ export const OTHER_PLATFORMS: readonly PlatformFeeRate[] = [
   },
 ];
 
+/** What another platform's trade pays the network at its usual settings, per buy and per sale. */
+export const OTHER_GAS_LAMPORTS = 2_000_000n;
+export const OTHER_PRIORITY_FEE_LAMPORTS = 3_000_000n;
+
 export interface FeeTrade {
   side: string;
   lamports: bigint;
@@ -75,6 +85,8 @@ export interface FeeSummary {
   networkFeeSol: number;
   /** When the platforms' rates were last checked (RATES_AS_OF). */
   ratesAsOf: string;
+  /** The gas and priority fee counted per trade elsewhere when the toggle is on, and their total. */
+  otherNetwork: { gasSol: number; priorityFeeSol: number; perTradeSol: number; totalSol: number };
   /** Each other platform's fee on the same trades, and what trading here saved against it. */
   platforms: {
     id: string;
@@ -85,41 +97,75 @@ export interface FeeSummary {
     estimate?: boolean;
     feeSol: number;
     savedSol: number;
+    /** The same with the gas and priority fee above added to their side. */
+    feeWithNetworkSol: number;
+    savedWithNetworkSol: number;
   }[];
+}
+
+/** Confirmed trades summed by side: what feeSummary needs, from rows or from a grouped query. */
+export interface FeeTotals {
+  buys: number;
+  sells: number;
+  buyLamports: bigint;
+  sellLamports: bigint;
+  platformFeeLamports: bigint;
+  networkFeeLamports: bigint;
 }
 
 const LAMPORTS_PER_SOL = 1e9;
 const toSol = (lamports: bigint) => Number(lamports) / LAMPORTS_PER_SOL;
 
 export function feeSummary(trades: readonly FeeTrade[], platforms = OTHER_PLATFORMS): FeeSummary {
-  let buyLamports = 0n;
-  let sellLamports = 0n;
-  let platformFee = 0n;
-  let networkFee = 0n;
-  let buys = 0;
-  let sells = 0;
+  const totals: FeeTotals = {
+    buys: 0,
+    sells: 0,
+    buyLamports: 0n,
+    sellLamports: 0n,
+    platformFeeLamports: 0n,
+    networkFeeLamports: 0n,
+  };
   for (const t of trades) {
     if (t.side === "buy") {
-      buys++;
-      buyLamports += t.lamports;
+      totals.buys++;
+      totals.buyLamports += t.lamports;
     } else {
-      sells++;
-      sellLamports += t.lamports;
+      totals.sells++;
+      totals.sellLamports += t.lamports;
     }
-    platformFee += t.platformFeeLamports;
-    networkFee += t.networkFeeLamports;
+    totals.platformFeeLamports += t.platformFeeLamports;
+    totals.networkFeeLamports += t.networkFeeLamports;
   }
+  return feeSummaryOf(totals, platforms);
+}
+
+export function feeSummaryOf(t: FeeTotals, platforms = OTHER_PLATFORMS): FeeSummary {
+  const trades = t.buys + t.sells;
+  const perTrade = OTHER_GAS_LAMPORTS + OTHER_PRIORITY_FEE_LAMPORTS;
+  const otherNetwork = perTrade * BigInt(trades);
   return {
-    trades: buys + sells,
-    buys,
-    sells,
-    volumeSol: toSol(buyLamports + sellLamports),
-    platformFeeSol: toSol(platformFee),
-    networkFeeSol: toSol(networkFee),
+    trades,
+    buys: t.buys,
+    sells: t.sells,
+    volumeSol: toSol(t.buyLamports + t.sellLamports),
+    platformFeeSol: toSol(t.platformFeeLamports),
+    networkFeeSol: toSol(t.networkFeeLamports),
     ratesAsOf: RATES_AS_OF,
+    otherNetwork: {
+      gasSol: toSol(OTHER_GAS_LAMPORTS),
+      priorityFeeSol: toSol(OTHER_PRIORITY_FEE_LAMPORTS),
+      perTradeSol: toSol(perTrade),
+      totalSol: toSol(otherNetwork),
+    },
     platforms: platforms.map((p) => {
-      const fee = (buyLamports * BigInt(p.buyBps) + sellLamports * BigInt(p.sellBps)) / 10_000n;
-      return { ...p, feeSol: toSol(fee), savedSol: toSol(fee - platformFee) };
+      const fee = (t.buyLamports * BigInt(p.buyBps) + t.sellLamports * BigInt(p.sellBps)) / 10_000n;
+      return {
+        ...p,
+        feeSol: toSol(fee),
+        savedSol: toSol(fee - t.platformFeeLamports),
+        feeWithNetworkSol: toSol(fee + otherNetwork),
+        savedWithNetworkSol: toSol(fee + otherNetwork - t.platformFeeLamports),
+      };
     }),
   };
 }

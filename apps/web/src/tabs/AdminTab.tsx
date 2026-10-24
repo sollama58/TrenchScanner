@@ -12,6 +12,7 @@ import { UsageAdmin } from "./AdminUsage";
 import { ChartsHealth } from "./AdminChartsHealth";
 import { CreditsAdmin } from "./AdminCredits";
 import { FreeAccessAdmin } from "./AdminFreeAccess";
+import { FeesSavedAdmin } from "./AdminFeesSaved";
 import { ProModeAdmin, SacrificeAdmin } from "./AdminProMode";
 import { RunNow } from "./AdminRunNow";
 import { EnvAdmin } from "./AdminEnv";
@@ -1199,6 +1200,7 @@ function Access() {
       <FreeAccessAdmin onChanged={reloadAll} />
       <ProModeAdmin />
       <SacrificeAdmin />
+      <FeesSavedAdmin />
       <Panel title="Subscriptions">
         <Load q={subs}>
           {(rows) => (

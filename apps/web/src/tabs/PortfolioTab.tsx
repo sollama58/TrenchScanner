@@ -14,7 +14,13 @@ import { useNow, usePolling } from "../hooks";
 import { ago, pricedAgeText, shortAddress, usd } from "../format";
 import { useWalletBalance } from "../walletBalance";
 import { ShareButton } from "../components/ShareImageDialog";
-import { renderFeesCard } from "./feesCard";
+import {
+  readOtherNetwork,
+  renderFeesCard,
+  saveOtherNetwork,
+  withOtherNetwork,
+  type FeesPlatform,
+} from "./feesCard";
 
 const PORTFOLIO_POLL_MS = 60_000;
 /** The token page's position cadence (POSITION_POLL_MS): the API reuses an answer 8 s. */
@@ -95,17 +101,9 @@ interface FeesSaved {
   networkFeeSol: number;
   /** The Sacrifice's mode and free cut-off (ASDF fee plan); absent from older APIs. */
   sacrifice?: { mode: "off" | "shadow" | "on"; freeRank: number };
-  platforms: {
-    id: string;
-    name: string;
-    buyBps: number;
-    sellBps: number;
-    /** Absent from older API builds. */
-    sourceUrl?: string;
-    estimate?: boolean;
-    feeSol: number;
-    savedSol: number;
-  }[];
+  /** Other platforms' gas and priority fee per trade, and on all these trades; absent from older APIs. */
+  otherNetwork?: { gasSol: number; priorityFeeSol: number; perTradeSol: number; totalSol: number };
+  platforms: FeesPlatform[];
   /** When the rates were last checked (ISO date); absent from older API builds. */
   ratesAsOf?: string;
   since: string | null;
@@ -293,7 +291,16 @@ const pct = (bps: number) => (bps === 0 ? "none" : `${bps / 100}%`);
 
 /** Fees saved (user ask 2026-10-18): trades made here against other platforms' fees on the same trades. */
 function FeesPanel() {
-  const { data, error } = usePolling<FeesSaved>("/pro/trade/fees", FEES_POLL_MS);
+  const { data: raw, error } = usePolling<FeesSaved>("/pro/trade/fees", FEES_POLL_MS);
+  const [withNetwork, setWithNetwork] = useState(readOtherNetwork);
+  const toggleNetwork = (on: boolean) => {
+    setWithNetwork(on);
+    saveOtherNetwork(on);
+  };
+  // The toggle needs the API's per-trade figures: an older build without them counts platform fees only.
+  const net = raw?.otherNetwork;
+  const counting = withNetwork && !!net;
+  const data = raw && { ...raw, platforms: withOtherNetwork(raw.platforms, counting) };
   const best = data?.platforms.reduce((a, b) => (b.savedSol > a.savedSol ? b : a), data.platforms[0]!);
   const inUsd = (n: number) =>
     data?.solUsd ? <span className="faint small"> · {usd(n * data.solUsd)}</span> : null;
@@ -317,8 +324,17 @@ function FeesPanel() {
             ) : (
               <>TrenchScanner charges no platform fee.</>
             )}{" "}
-            Every platform also pays the network (priority fee and tip), so that part isn&apos;t counted as
-            saved.
+            {counting ? (
+              <>
+                Each trade elsewhere is also counted with {net.gasSol} SOL gas and {net.priorityFeeSol} SOL
+                priority fee, the usual settings there, on every buy and sale.
+              </>
+            ) : (
+              <>
+                Every platform also pays the network (priority fee and tip), so that part isn&apos;t counted
+                as saved.
+              </>
+            )}
             {data?.since && <> Counted since {new Date(data.since).toLocaleDateString()}.</>}
           </p>
         </div>
@@ -327,10 +343,24 @@ function FeesPanel() {
             title="What trading here saved you"
             fileName="trenchscanner-fees-saved"
             caption="What trading on TrenchScanner saved me in fees"
-            render={() => renderFeesCard(data)}
+            render={() =>
+              renderFeesCard({
+                ...data,
+                otherNetwork: counting
+                  ? { gasSol: net.gasSol, priorityFeeSol: net.priorityFeeSol }
+                  : undefined,
+              })
+            }
           />
         )}
       </header>
+      {net && (
+        <label className="check small">
+          <input type="checkbox" checked={withNetwork} onChange={(e) => toggleNetwork(e.target.checked)} />{" "}
+          Include gas ({net.gasSol} SOL) and priority fee ({net.priorityFeeSol} SOL) on each buy and sale
+          elsewhere
+        </label>
+      )}
       {error && !data && (
         <p className="error small" role="alert">
           Couldn&apos;t load your fees: {error.message}

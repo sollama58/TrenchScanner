@@ -15,6 +15,8 @@ import {
   walletTag,
 } from "@trenchscanner/core";
 import { forgetProStatus } from "../proMode.js";
+import { sharedSolPrice } from "../solPrice.js";
+import { feeSummaryOf } from "../tradeFees.js";
 
 /**
  * Admin > Access > Pro Mode: which wallets see the token modal's Trade panel (proMode.ts). The
@@ -56,6 +58,54 @@ export async function registerAdminProModeRoutes(app: FastifyInstance, opts: { e
     const settings = await saveSacrificeSettings(parsed.data, by);
     request.log.info({ settings, by: walletTag(by) }, "sacrifice settings changed");
     return { settings };
+  });
+
+  // Total fees saved (user ask 2026-10-24): every wallet's confirmed Trade panel trades together,
+  // summed in the database (tradeFees.ts prices them as the Portfolio page does for one wallet).
+  app.get("/pro-mode/fees-saved", async () => {
+    const [bySide, wallets, first, solUsd] = await Promise.all([
+      prisma.platformTrade.groupBy({
+        by: ["side"],
+        where: { status: "confirmed" },
+        _count: { _all: true },
+        _sum: { lamports: true, platformFeeLamports: true, networkFeeLamports: true },
+      }),
+      prisma.platformTrade.findMany({
+        where: { status: "confirmed" },
+        distinct: ["wallet"],
+        select: { wallet: true },
+      }),
+      prisma.platformTrade.findFirst({
+        where: { status: "confirmed" },
+        orderBy: { sentAt: "asc" },
+        select: { sentAt: true },
+      }),
+      sharedSolPrice.get().catch(() => null),
+    ]);
+    const totals = {
+      buys: 0,
+      sells: 0,
+      buyLamports: 0n,
+      sellLamports: 0n,
+      platformFeeLamports: 0n,
+      networkFeeLamports: 0n,
+    };
+    for (const g of bySide) {
+      const buy = g.side === "buy";
+      if (buy) totals.buys += g._count._all;
+      else totals.sells += g._count._all;
+      const lamports = g._sum.lamports ?? 0n;
+      if (buy) totals.buyLamports += lamports;
+      else totals.sellLamports += lamports;
+      totals.platformFeeLamports += g._sum.platformFeeLamports ?? 0n;
+      totals.networkFeeLamports += g._sum.networkFeeLamports ?? 0n;
+    }
+    return {
+      ...feeSummaryOf(totals),
+      wallets: wallets.length,
+      since: first?.sentAt ?? null,
+      solUsd,
+    };
   });
 
   app.get("/pro-mode", async () => {
