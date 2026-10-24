@@ -2,10 +2,13 @@ import {
   prisma,
   createLogger,
   candlePeakSince,
+  coinGeckoBudget,
   nextPeakCheckDelayMs,
   HttpError,
   PEAK_CHECK_ACTIVE_MS,
+  PEAK_CHECK_QUIET_MS,
   pumpFunSwapGate,
+  type CandidateToken,
   type MinuteCandle,
   type PumpFunClient,
 } from "@trenchscanner/core";
@@ -41,6 +44,15 @@ const logger = createLogger("candle-peaks");
 
 /** Coins read per run (one Pump.fun call each). Pump.fun answers 429 quickly; see the spacing. */
 export const PEAK_COINS_PER_RUN = 30;
+/**
+ * Coins whose candles were read before that a run triages on DexScreener first (ten batches of 30,
+ * free: triagePeakReads). Every alerted coin used to be read again every twelve hours for two
+ * weeks from a paid GeckoTerminal page, ~24,000 coins against a Peaks budget of 600 credits a day,
+ * so by 2026-10-24 the due reads were 33 hours behind and each run died at its second or third
+ * read (user ask 2026-10-24). A coin DexScreener shows no trade for since its last read has no new
+ * peak to find, and waits its usual turn without a read; only the ones that traded are read.
+ */
+export const TRIAGE_COINS_PER_RUN = 300;
 /** Pause between Pump.fun calls. */
 const CALL_SPACING_MS = 300;
 /** A coin's first read after a new alert: the readings cover the first minutes meanwhile. */
@@ -132,6 +144,163 @@ export function alertPeakFromCandles(
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** The triage's DexScreener reading of due coins (DexScreenerClient.getTokensByAddresses). */
+export interface PeakTriage {
+  /**
+   * The coins' current readings; a coin with no pair anywhere is left out, one DexScreener
+   * couldn't answer now (a timeout, a 429) is added to `failed`.
+   */
+  lookup: (mints: string[], failed: Set<string>) => Promise<CandidateToken[]>;
+  coinsPerRun?: number;
+}
+
+/**
+ * Exported for tests. Whether a coin last read `idleMs` ago has traded since, by DexScreener's
+ * reading of it: its volume over the smallest window that covers the idle time (5 minutes, an
+ * hour, a day). Null when the reading has no such figure, so the coin is read as before. A coin
+ * idle longer than a day is judged on its last day alone: a trade before that and none since is
+ * missed, once (the catch-up of 2026-10-24).
+ */
+export function tradedSince(token: CandidateToken, idleMs: number): boolean | null {
+  const volume =
+    idleMs <= 5 * MINUTE_MS
+      ? token.volume5mUsd
+      : idleMs <= 60 * MINUTE_MS
+        ? token.volume1hUsd
+        : token.volume24hUsd;
+  if (volume === undefined || !Number.isFinite(volume)) return null;
+  return volume > 0;
+}
+
+const MINUTE_MS = 60_000;
+
+interface DueWatch {
+  tokenId: string;
+  candlesTrusted: boolean | null;
+  athMcapUsd: number | null;
+  firstAlertAt: Date;
+  lastCheckedAt: Date | null;
+  lastTradeAt: Date | null;
+  token: { mintAddress: string };
+}
+
+const DUE_SELECT = {
+  tokenId: true,
+  candlesTrusted: true,
+  athMcapUsd: true,
+  firstAlertAt: true,
+  lastCheckedAt: true,
+  lastTradeAt: true,
+  token: { select: { mintAddress: true } },
+} as const;
+
+/** What the triage did with the due coins it looked at. */
+export interface TriageCounts {
+  /** Coins read before whose DexScreener reading was asked for. */
+  triaged: number;
+  /** No trade since the last read: wait the usual turn, no candle read. */
+  quiet: number;
+  /** Traded since: read now (the busiest first), or next run. */
+  traded: number;
+  /** No pair on DexScreener at all: nothing trades, wait the quiet turn. */
+  unlisted: number;
+  /** DexScreener couldn't answer now: left due, asked again next run. */
+  unanswered: number;
+}
+
+/**
+ * Exported for tests. The coins a run reads candles for, up to `coinsPerRun`: the coins never read
+ * first (their peaks are the readings' until a read reaches back over their alerts), then, of the
+ * due coins read before, the ones DexScreener shows a trade for since their last read, busiest
+ * first. The quiet ones are given their next turn without a read (nextPeakCheckDelayMs on their
+ * last trade), a coin with no pair at all the quiet turn, and one DexScreener couldn't answer is
+ * left due. Without a triage every due coin is read, oldest due first, as before.
+ */
+export async function triagePeakReads(
+  dueWhere: { nextCheckAt: { lte: Date }; lastAlertAt: { gt: Date }; noCandles: false },
+  coinsPerRun: number,
+  triage: PeakTriage | undefined,
+  now: () => number,
+): Promise<{ due: DueWatch[]; triage: TriageCounts }> {
+  const counts: TriageCounts = { triaged: 0, quiet: 0, traded: 0, unlisted: 0, unanswered: 0 };
+  if (!triage) {
+    const due = await prisma.peakWatch.findMany({
+      where: dueWhere,
+      orderBy: { nextCheckAt: "asc" },
+      take: coinsPerRun,
+      select: DUE_SELECT,
+    });
+    return { due, triage: counts };
+  }
+  const unread = await prisma.peakWatch.findMany({
+    where: { ...dueWhere, lastCheckedAt: null },
+    orderBy: { nextCheckAt: "asc" },
+    take: coinsPerRun,
+    select: DUE_SELECT,
+  });
+  const room = coinsPerRun - unread.length;
+  if (room <= 0) return { due: unread, triage: counts };
+  const read = await prisma.peakWatch.findMany({
+    where: { ...dueWhere, lastCheckedAt: { not: null } },
+    orderBy: { nextCheckAt: "asc" },
+    take: triage.coinsPerRun ?? TRIAGE_COINS_PER_RUN,
+    select: DUE_SELECT,
+  });
+  if (read.length === 0) return { due: unread, triage: counts };
+  counts.triaged = read.length;
+  const failed = new Set<string>();
+  let tokens: CandidateToken[];
+  try {
+    tokens = await triage.lookup(
+      read.map((w) => w.token.mintAddress),
+      failed,
+    );
+  } catch (err) {
+    // DexScreener down: the oldest due are read as before, so the Peaks don't wait on it.
+    logger.warn("peak triage lookup failed; reading the oldest due coins", { error: String(err) });
+    counts.unanswered = read.length;
+    return { due: [...unread, ...read.slice(0, room)], triage: counts };
+  }
+  const byMint = new Map(tokens.map((t) => [t.mintAddress, t]));
+  const traded: { watch: DueWatch; volume: number }[] = [];
+  const at = now();
+  /** Coins given their next turn without a read, by when. */
+  const waits = new Map<number, string[]>();
+  const wait = (watch: DueWatch, delayMs: number) => {
+    const ids = waits.get(at + delayMs) ?? [];
+    ids.push(watch.tokenId);
+    waits.set(at + delayMs, ids);
+  };
+  for (const watch of read) {
+    const mint = watch.token.mintAddress;
+    const token = byMint.get(mint);
+    if (!token) {
+      if (failed.has(mint)) counts.unanswered += 1;
+      else {
+        counts.unlisted += 1;
+        wait(watch, PEAK_CHECK_QUIET_MS);
+      }
+      continue;
+    }
+    const moved = tradedSince(token, at - (watch.lastCheckedAt?.getTime() ?? 0));
+    if (moved === false) {
+      counts.quiet += 1;
+      wait(watch, nextPeakCheckDelayMs(watch.lastTradeAt, at));
+      continue;
+    }
+    counts.traded += 1;
+    traded.push({ watch, volume: token.volume24hUsd ?? Infinity });
+  }
+  for (const [at, ids] of waits) {
+    await prisma.peakWatch.updateMany({
+      where: { tokenId: { in: ids } },
+      data: { nextCheckAt: new Date(at) },
+    });
+  }
+  traded.sort((a, b) => b.volume - a.volume);
+  return { due: [...unread, ...traded.slice(0, room).map((t) => t.watch)], triage: counts };
+}
+
 /** The Match columns derived from its peak (outcomeTrackingJob.ts keeps the same rule). */
 const LEADERBOARD_RETURN_PCT = 100;
 
@@ -144,6 +313,8 @@ export async function runCandlePeaksJob(
     now?: () => number;
     /** Which source answered the reads since the last run (minuteCandleReader's takeStats). */
     candleSources?: () => Record<string, number>;
+    /** DexScreener's readings, to read candles only for the coins that traded (triagePeakReads). */
+    triage?: PeakTriage;
   },
 ): Promise<JobRunMeta> {
   const now = opts.now ?? Date.now;
@@ -169,18 +340,12 @@ export async function runCandlePeaksJob(
     parkedAt = startedAt;
   }
 
-  const due = await prisma.peakWatch.findMany({
-    where: { nextCheckAt: { lte: new Date(startedAt) }, lastAlertAt: { gt: horizon }, noCandles: false },
-    orderBy: { nextCheckAt: "asc" },
-    take: coinsPerRun,
-    select: {
-      tokenId: true,
-      candlesTrusted: true,
-      athMcapUsd: true,
-      firstAlertAt: true,
-      token: { select: { mintAddress: true } },
-    },
-  });
+  const dueWhere = {
+    nextCheckAt: { lte: new Date(startedAt) },
+    lastAlertAt: { gt: horizon },
+    noCandles: false as const,
+  };
+  const { due, triage } = await triagePeakReads(dueWhere, coinsPerRun, opts.triage, now);
 
   const counts = {
     coins: 0,
@@ -247,11 +412,10 @@ export async function runCandlePeaksJob(
   // The backlog: coins whose read is due and still waiting, and how late the oldest is. A run
   // reads PEAK_COINS_PER_RUN, so a backlog that only grows says the reads fall behind (Pump.fun
   // throttling) while the Peaks they own go stale.
-  const backlogWhere = {
-    nextCheckAt: { lte: new Date(startedAt) },
-    lastAlertAt: { gt: horizon },
-    noCandles: false,
-  };
+  const backlogWhere = dueWhere;
+  // The day's Peaks credits spent (coingeckoBudget.ts): the reads fall to GeckoTerminal's free
+  // tier, whose shared slot a run rarely gets, and that 429 is the budget's, not a provider's.
+  if (throttled && !coinGeckoBudget.allows("peaks", now())) budgetSpent = true;
   const [backlog, oldestDue] = await Promise.all([
     prisma.peakWatch.count({ where: backlogWhere }),
     prisma.peakWatch.findFirst({
@@ -268,6 +432,8 @@ export async function runCandlePeaksJob(
     backlog,
     oldestDueMinutes: oldestDue ? Math.round((startedAt - oldestDue.nextCheckAt.getTime()) / 60_000) : 0,
     throttled,
+    ...triage,
+    coinGeckoPeaksCredits: coinGeckoBudget.spent(now()).peaks,
     ...(budgetSpent ? { skipped: "CoinGecko daily budget for Peaks spent" } : {}),
     swapRequests: swap.requests,
     swapThrottled: swap.throttled,
