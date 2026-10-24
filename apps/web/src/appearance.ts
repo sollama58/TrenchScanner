@@ -100,8 +100,9 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   bubbleFunderLabels: false,
   bubbleSideLinks: true,
   bubbleTransferLinks: true,
-  // Every 5 seconds by default (user ask 2026-10-19); the holder list beside it moves with each trade.
-  bubbleRefreshSeconds: 5,
+  // Every 2 seconds by default (user decision 2026-10-24, was 5); the holder list beside it moves
+  // with each trade.
+  bubbleRefreshSeconds: 2,
   // Off by default (user ask 2026-10-16); KOLs' and exchanges' names always show.
   bubbleNameLabels: false,
   bubbleNamesPumpfun: null,
@@ -183,10 +184,11 @@ export const QUICK_LINK_SITES: { id: QuickLink; label: string; href: (mint: stri
   { id: "gmgn", label: "GMGN", href: (m) => `https://gmgn.ai/sol/token/${m}` },
 ];
 /**
- * How often an open bubble map may redraw (user ask 2026-10-19): 5 seconds to a day, as Customize
+ * How often an open bubble map may redraw (user ask 2026-10-19): 2 seconds to a day, as Customize
  * offers them (apps/api/src/feedAppearance.ts BUBBLE_REFRESH_SECONDS has the same seconds).
  */
 export const BUBBLE_REFRESH_CHOICES: readonly { seconds: number; label: string }[] = [
+  { seconds: 2, label: "2 seconds" },
   { seconds: 5, label: "5 seconds" },
   { seconds: 10, label: "10 seconds" },
   { seconds: 15, label: "15 seconds" },

@@ -3,6 +3,8 @@ import {
   createLogger,
   MATCH_CHANNEL,
   CURATED_CHANNEL,
+  HOLDERS_CHANNEL,
+  type HoldersNotification,
   type MatchNotification,
   type CuratedAlertNotification,
 } from "@trenchscanner/core";
@@ -120,6 +122,8 @@ export class MatchStream {
   private hasListened = false;
   /** Work to run on this instance when a match is announced, given its user - see onMatch. */
   private readonly matchListeners = new Set<(userId: string) => void>();
+  /** Work to run when a coin's holder reading is written (onHolders); null: any coin (reconnect). */
+  private readonly holderListeners = new Set<(mint: string | null) => void>();
   private client: Client | undefined;
   private heartbeat: NodeJS.Timeout | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
@@ -183,6 +187,7 @@ export class MatchStream {
       if (!msg.payload) return;
       if (msg.channel === MATCH_CHANNEL) this.dispatch(msg.payload);
       else if (msg.channel === CURATED_CHANNEL) this.dispatchCurated(msg.payload);
+      else if (msg.channel === HOLDERS_CHANNEL) this.dispatchHolders(msg.payload);
     });
     // A dropped LISTEN connection is silent by nature - no request fails, clients just stop
     // receiving - so it has to be actively noticed and rebuilt.
@@ -196,6 +201,7 @@ export class MatchStream {
       await client.connect();
       await client.query(`LISTEN ${MATCH_CHANNEL}`);
       await client.query(`LISTEN ${CURATED_CHANNEL}`);
+      await client.query(`LISTEN ${HOLDERS_CHANNEL}`);
       // stop() may have run while those awaits were outstanding - a window seconds wide when the
       // database is slow or briefly unreachable at boot, which is exactly when a shutdown is
       // likely. Without this the process ends up stopped with a fully open, LISTENing connection
@@ -208,7 +214,7 @@ export class MatchStream {
       this.client = client;
       this.reconnectDelay = RECONNECT_BASE_MS;
       logger.info("listening for match + curated notifications", {
-        channels: [MATCH_CHANNEL, CURATED_CHANNEL],
+        channels: [MATCH_CHANNEL, CURATED_CHANNEL, HOLDERS_CHANNEL],
       });
       if (this.hasListened) this.catchUp();
       this.hasListened = true;
@@ -230,6 +236,7 @@ export class MatchStream {
    */
   catchUp(): void {
     this.runCuratedListeners();
+    this.runHolderListeners(null);
     const users = new Set<string>();
     for (const subscriber of this.subscribers) if (subscriber.kind === "match") users.add(subscriber.userId);
     for (const userId of users) {
@@ -335,6 +342,40 @@ export class MatchStream {
       if (subscriber.kind !== "match" || subscriber.userId !== notification.userId) continue;
       this.writeTo(subscriber, frame);
     }
+  }
+
+  /** Runs the holder listeners for `mint` (null: any coin). */
+  private runHolderListeners(mint: string | null): void {
+    for (const listener of this.holderListeners) {
+      try {
+        listener(mint);
+      } catch (err) {
+        logger.warn("holder notification listener failed", { error: String(err) });
+      }
+    }
+  }
+
+  /** One holder-reading NOTIFY: tells the holder listeners which coin. Public for the same reason as dispatch(). */
+  dispatchHolders(payload: string): void {
+    let notification: HoldersNotification;
+    try {
+      notification = JSON.parse(payload) as HoldersNotification;
+    } catch {
+      logger.warn("ignoring unparseable holder reading notification");
+      return;
+    }
+    if (typeof notification?.mint !== "string" || notification.mint.length === 0) return;
+    this.runHolderListeners(notification.mint);
+  }
+
+  /**
+   * Runs `listener` whenever the scanner writes a holder reading for a coin whose bubble map is
+   * open (core's notifyHolderReadingWritten), with its mint; with null after a LISTEN reconnect,
+   * when any coin may have changed. Returns the unsubscribe.
+   */
+  onHolders(listener: (mint: string | null) => void): () => void {
+    this.holderListeners.add(listener);
+    return () => this.holderListeners.delete(listener);
   }
 
   /**

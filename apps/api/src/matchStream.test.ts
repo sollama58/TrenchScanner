@@ -487,3 +487,18 @@ describe.skipIf(!dbAvailable)("server close with a stream open", () => {
     expect(await streamEnded).toContain("event: ready");
   });
 });
+
+describe("MatchStream.dispatchHolders", () => {
+  it("tells holder listeners which coin's reading was written, and any coin on a reconnect", () => {
+    const s = stream();
+    const seen: (string | null)[] = [];
+    const stop = s.onHolders((mint) => seen.push(mint));
+    s.dispatchHolders(JSON.stringify({ mint: "M1" }));
+    s.dispatchHolders("not json");
+    s.dispatchHolders(JSON.stringify({}));
+    s.catchUp();
+    stop();
+    s.dispatchHolders(JSON.stringify({ mint: "M2" }));
+    expect(seen).toEqual(["M1", null]);
+  });
+});

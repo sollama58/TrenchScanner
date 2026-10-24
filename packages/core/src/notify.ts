@@ -112,3 +112,25 @@ export async function notifyMatchesCreated(notifications: readonly MatchNotifica
     logger.warn("failed to publish match notifications", { error: String(err), count: notifications.length });
   }
 }
+
+/**
+ * Channel the scanner announces a newly written holder reading on, for coins whose bubble map
+ * someone has open (user decision 2026-10-24): the API wakes those token views' held asks so they
+ * read the new list at once instead of on their next 15-second poll. Same contract as the others:
+ * only the mint, best effort, and the view's poll covers a missed one.
+ */
+export const HOLDERS_CHANNEL = "trenchscanner_holders";
+
+export interface HoldersNotification {
+  mint: string;
+}
+
+/** Announces a holder reading written for `mint`. Never throws. */
+export async function notifyHolderReadingWritten(mint: string): Promise<void> {
+  try {
+    const payload = JSON.stringify({ mint } satisfies HoldersNotification);
+    await prisma.$executeRaw`SELECT pg_notify(${HOLDERS_CHANNEL}, ${payload})`;
+  } catch (err) {
+    logger.warn("failed to publish holder reading notification", { error: String(err) });
+  }
+}

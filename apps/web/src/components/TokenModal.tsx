@@ -17,7 +17,7 @@ import {
 import { cachedGet } from "../cache";
 import { createPortal } from "react-dom";
 import { LiveTradesCard, useBatchedWallets } from "./LiveTrades";
-import { useLiveTradesIfFollowed } from "../liveTrades";
+import { useLiveTrades, useLiveTradesIfFollowed } from "../liveTrades";
 import { wideShareDeltas, withLiveShares, type LiveTradeShares } from "../liveShares";
 import { usePossibleSides } from "../possibleSides";
 import {
@@ -32,7 +32,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ApiError, lookupRequired, post, type Card, type ScanVerdict, type Snapshot } from "../api";
+import { api, ApiError, lookupRequired, post, type Card, type ScanVerdict, type Snapshot } from "../api";
 import { useLiveMarketCaps, usePolling } from "../hooks";
 import { MIN_WIN_SOL, ago, change, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
 import { TokenImage } from "./TokenImage";
@@ -629,6 +629,10 @@ function HoldersPlaceholder({ children }: { children: ReactNode }) {
  * view's "Next update" countdowns count to it (user ask 2026-10-19).
  */
 const SCAN_READ_MS = 15_000;
+/** The API holds a holder wait up to 20 s (holderWaits.ts HOLDER_WAIT_MS); the ask gives up after this. */
+const HOLDER_WAIT_TIMEOUT_MS = 30_000;
+/** Before asking again when the page is hidden, the API had no wait to hold, or asks keep failing. */
+const HOLDER_WAIT_IDLE_MS = 60_000;
 
 /**
  * GET /tokens/:mint?reading=1 (api routes/tokens.ts readTokenReading): of the coin's 50 newest
@@ -668,17 +672,20 @@ function useCoinScans(mint: string, follow: boolean): CoinScans {
     let live = true;
     let timer = 0;
     let generation = 0;
-    const tick = () => {
+    const tick = (pushed = false) => {
       window.clearTimeout(timer);
       const started = Date.now();
       const mine = ++generation;
       const asked = mint;
       if (document.visibilityState === "visible")
-        // A read in the last few seconds (a quick return to the page) is reused.
-        // nextRead moves only once this read has landed. Setting it to the following poll
-        // before that made the countdown skip the read in flight and keep calling an old list
-        // current (user ask 2026-10-21).
-        cachedGet<CoinReading>(`/tokens/${encodeURIComponent(asked)}?reading=1`, SCAN_READ_MS / 3)
+        // A read in the last few seconds (a quick return to the page) is reused, unless the
+        // scanner just announced a new holder reading. nextRead moves only once this read has
+        // landed. Setting it to the following poll before that made the countdown skip the read
+        // in flight and keep calling an old list current (user ask 2026-10-21).
+        cachedGet<CoinReading>(
+          `/tokens/${encodeURIComponent(asked)}?reading=1`,
+          pushed ? -1 : SCAN_READ_MS / 3,
+        )
           .then((d) => {
             // `mintRef` moves on the render that switches coins, before this effect cleans up.
             // A response for the coin just left must not land on the one now open.
@@ -692,13 +699,48 @@ function useCoinScans(mint: string, follow: boolean): CoinScans {
       timer = window.setTimeout(tick, SCAN_READ_MS);
     };
     tick();
+    // The holder wait below sleeps while the page is hidden; showing it again resumes it at once.
+    let holding = false;
     const onVisible = () => {
-      if (document.visibilityState === "visible") tick();
+      if (document.visibilityState !== "visible") return;
+      tick();
+      if (!holding) waitNext(0);
     };
     document.addEventListener("visibilitychange", onVisible);
+    // The scanner's word that a new holder reading was written (user decision 2026-10-24): a held
+    // ask that answers the moment one is, so the list shows without waiting out the poll above.
+    const abort = new AbortController();
+    let waitTimer = 0;
+    let failures = 0;
+    const waitNext = (ms: number) => {
+      window.clearTimeout(waitTimer);
+      if (live) waitTimer = window.setTimeout(() => void wait(), ms);
+    };
+    const wait = async () => {
+      if (document.visibilityState !== "visible") return waitNext(HOLDER_WAIT_IDLE_MS);
+      holding = true;
+      try {
+        const a = await api<{ changed: boolean; pushed: boolean }>(
+          `/tokens/${encodeURIComponent(mint)}/holders/wait`,
+          { signal: abort.signal, timeoutMs: HOLDER_WAIT_TIMEOUT_MS },
+        );
+        if (!live) return;
+        failures = 0;
+        if (a.changed) tick(true);
+        // No wait could be held (the API at capacity, or an older build): the poll covers it.
+        waitNext(a.pushed ? 0 : HOLDER_WAIT_IDLE_MS);
+      } catch {
+        if (live) waitNext(Math.min(HOLDER_WAIT_IDLE_MS, 2_000 * 2 ** ++failures));
+      } finally {
+        holding = false;
+      }
+    };
+    void wait();
     return () => {
       live = false;
+      abort.abort();
       window.clearTimeout(timer);
+      window.clearTimeout(waitTimer);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [follow, mint]);
@@ -2256,18 +2298,20 @@ function HolderFreshness({
 
 /**
  * The coin's live trades and supply for the holder shares between reads (user ask 2026-10-19):
- * the Live trades tab's feed while it runs, so the holders add no stream of their own (Helius
- * audit 2026-10-22 H-2: the follow is paid, so only that tab starts it). Without it the shares are
- * the reading's; none for a kept moment, which stands as it was. A feed that stopped is not used:
- * the trades since it stopped are missing.
+ * the token view follows the coin's trades while it is open (user decision 2026-10-24: every open
+ * view, not only the Live trades tab), so the bubble map and Top holders move within a second or
+ * two of each trade. The API shares one follow per coin and caps them (4 an account, 50 in all);
+ * a coin past the cap reads "unavailable" and its shares stay the reading's. None for a kept
+ * moment, which stands as it was. A feed that stopped is not used: the trades since it stopped are
+ * missing.
  */
 function useLiveShares(mint: string, kept: boolean): LiveTradeShares | null {
-  const feed = useLiveTradesIfFollowed(useTokenApi(mint), !kept);
+  const feed = useLiveTrades(useTokenApi(mint), !kept);
   return useMemo(
     () =>
-      kept || feed.status === null || feed.supply === null || feed.history.length === 0
+      kept || feed.status !== "live" || feed.supply === null
         ? null
-        : { trades: feed.history, supply: feed.supply, live: feed.status === "live" },
+        : { trades: feed.history, supply: feed.supply, live: true },
     [kept, feed.history, feed.supply, feed.status],
   );
 }
