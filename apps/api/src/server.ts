@@ -75,6 +75,7 @@ import { registerTelegramRoutes } from "./routes/telegram.js";
 import { registerUtilityRoutes } from "./routes/utilities.js";
 import { registerXPreviewRoutes } from "./routes/xPreview.js";
 import { registerWalletRoutes } from "./routes/wallets.js";
+import { registerAsylRoutes } from "./routes/asyl.js";
 import { WalletLiveReader } from "./walletProfile.js";
 import { prismaIdentityStore, WalletIdentityReader } from "./walletIdentity.js";
 import { registerTradingRoutes } from "./routes/trading.js";
@@ -799,6 +800,14 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerWalletRoutes, {
     prefix: "/wallets",
     env,
+    live: walletLive,
+    identity: walletIdentity,
+  });
+  // Asyl (asyl.trenchscanner.app): wallet-link maps for every signed-in user, chain reads for Pro.
+  await app.register(registerAsylRoutes, {
+    prefix: "/asyl",
+    env,
+    helius: walletHelius,
     live: walletLive,
     identity: walletIdentity,
   });

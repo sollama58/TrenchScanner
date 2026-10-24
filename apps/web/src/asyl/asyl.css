@@ -1,0 +1,763 @@
+/*
+ * Asyl's look (user ask 2026-10-24): an orange-lit room covered in black marker, as a vector take.
+ * The page around the map is the lit wall (--asyl-wall, scrawl.ts); the map itself is the dark,
+ * with faint orange marks (--asyl-wall-dark), so the links stay readable. One theme, dark.
+ */
+
+:root {
+  --asyl-orange: #ff7a2f;
+  --asyl-orange-hi: #ffb067;
+  --asyl-wall-base: #d9631f;
+  --asyl-ink: #140805;
+  --asyl-paper: #f7e4cc;
+  --asyl-dark: #120c09;
+  --asyl-panel: rgba(20, 12, 9, 0.94);
+  --asyl-line: rgba(255, 176, 103, 0.18);
+  --asyl-text: #f6ebe0;
+  --asyl-muted: #c7ab95;
+  --asyl-good: #3ee08f;
+  --asyl-bad: #ff5a4a;
+  --asyl-marker: "Permanent Marker", "Inter Variable", system-ui, sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+  background-color: var(--asyl-wall-base);
+  background-image:
+    radial-gradient(ellipse at 30% 20%, rgba(255, 190, 110, 0.55), transparent 60%),
+    radial-gradient(ellipse at 80% 90%, rgba(90, 20, 0, 0.55), transparent 65%), var(--asyl-wall, none);
+  background-size:
+    100% 100%,
+    100% 100%,
+    900px 900px;
+  background-attachment: fixed;
+  color: var(--asyl-text);
+}
+
+#root {
+  min-height: 100%;
+}
+
+.asyl-muted {
+  color: var(--asyl-muted);
+}
+.asyl-small {
+  font-size: 12px;
+}
+.asyl-error {
+  color: var(--asyl-bad);
+  font-size: 13px;
+}
+
+/* ---- the wordmark: marker on the wall ---- */
+
+.asyl-wordmark {
+  font-family: var(--asyl-marker);
+  font-weight: 400;
+  font-size: 64px;
+  line-height: 1;
+  margin: 0;
+  color: var(--asyl-ink);
+  transform: rotate(-4deg);
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  display: inline-block;
+}
+.asyl-wordmark.small {
+  font-size: 30px;
+  color: var(--asyl-ink);
+}
+.asyl-loading {
+  display: grid;
+  place-items: center;
+  height: 100vh;
+  font-family: var(--asyl-marker);
+  font-size: 56px;
+  color: var(--asyl-ink);
+  animation: asyl-pulse 1.4s ease-in-out infinite;
+}
+@keyframes asyl-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .asyl-loading {
+    animation: none;
+  }
+}
+
+/* ---- buttons and fields ---- */
+
+.asyl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--asyl-line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--asyl-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.asyl-btn:hover:not(:disabled) {
+  border-color: var(--asyl-orange);
+}
+.asyl-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.asyl-btn.primary {
+  background: var(--asyl-orange);
+  border-color: var(--asyl-orange);
+  color: #1b0a02;
+}
+.asyl-btn.ghost {
+  background: transparent;
+}
+.asyl-btn.chain {
+  border-style: dashed;
+}
+.asyl-btn:focus-visible,
+.asyl-link:focus-visible,
+.asyl-icon-btn:focus-visible,
+.asyl-input:focus-visible {
+  outline: 2px solid var(--asyl-orange-hi);
+  outline-offset: 2px;
+}
+.asyl-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--asyl-orange-hi);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.asyl-link:hover {
+  text-decoration: underline;
+}
+.asyl-link.danger {
+  color: var(--asyl-bad);
+}
+.asyl-icon-btn {
+  background: none;
+  border: 0;
+  color: var(--asyl-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.asyl-icon-btn:hover {
+  color: var(--asyl-text);
+}
+.asyl-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--asyl-line);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--asyl-text);
+  font: inherit;
+  font-size: 14px;
+}
+.asyl-note {
+  resize: vertical;
+  font-size: 13px;
+}
+.asyl-check {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 13px;
+  margin-top: 6px;
+}
+.asyl-pro-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--asyl-orange);
+  color: #1b0a02;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* ---- sign-in and errors: a sticky note on the wall ---- */
+
+.asyl-gate {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  box-sizing: border-box;
+}
+.asyl-gate-card {
+  max-width: 440px;
+  width: 100%;
+  background: var(--asyl-paper);
+  color: #2a1408;
+  padding: 32px 28px;
+  border-radius: 4px;
+  box-shadow: 0 18px 40px rgba(40, 10, 0, 0.45);
+  transform: rotate(-1deg);
+}
+.asyl-gate-card .asyl-muted {
+  color: #6b4a33;
+}
+.asyl-gate-card a {
+  color: #a8400c;
+}
+.asyl-gate-lede {
+  font-size: 15px;
+  line-height: 1.5;
+}
+.asyl-gate-note {
+  font-weight: 600;
+}
+.asyl-gate-wallets {
+  display: grid;
+  gap: 8px;
+  margin: 20px 0;
+}
+.asyl-wallet-btn {
+  justify-content: center;
+  background: #1b0e07;
+  color: #fff;
+  padding: 12px 14px;
+  font-size: 14px;
+}
+.asyl-wallet-btn img {
+  border-radius: 5px;
+}
+
+/* ---- the app frame ---- */
+
+.asyl-app {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+.asyl-top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  flex-wrap: wrap;
+}
+.asyl-search {
+  flex: 1 1 320px;
+  display: flex;
+  gap: 8px;
+  max-width: 640px;
+}
+.asyl-search .asyl-input {
+  background: rgba(20, 10, 6, 0.85);
+}
+.asyl-me {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  background: rgba(20, 10, 6, 0.8);
+  padding: 6px 12px;
+  border-radius: 10px;
+}
+.asyl-meter {
+  position: relative;
+  width: 130px;
+  height: 22px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  font-size: 11px;
+}
+.asyl-meter-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: rgba(255, 122, 47, 0.55);
+}
+.asyl-meter span {
+  position: relative;
+  display: block;
+  text-align: center;
+  line-height: 22px;
+}
+.asyl-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+  padding: 0 16px 16px;
+}
+
+/* ---- left rail ---- */
+
+.asyl-rail {
+  width: 250px;
+  flex: none;
+  background: var(--asyl-panel);
+  border: 1px solid var(--asyl-line);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.asyl-rail-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--asyl-line);
+}
+.asyl-rail-tabs button {
+  flex: 1;
+  background: none;
+  border: 0;
+  color: var(--asyl-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 10px 0;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.asyl-rail-tabs button.on {
+  color: var(--asyl-text);
+  border-bottom-color: var(--asyl-orange);
+}
+.asyl-rail-body {
+  padding: 12px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.asyl-rail-body h3,
+.asyl-insp-section h3 {
+  margin: 6px 0 0;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--asyl-muted);
+}
+.asyl-title-input {
+  font-weight: 700;
+}
+.asyl-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+.asyl-legend label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.asyl-legend label.off {
+  opacity: 0.45;
+}
+.asyl-legend i,
+.asyl-shared-legend i {
+  display: inline-block;
+  width: 18px;
+  height: 4px;
+  border-radius: 2px;
+}
+.asyl-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.asyl-list li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.asyl-list li.on {
+  background: rgba(255, 122, 47, 0.12);
+}
+.asyl-list li .asyl-small {
+  grid-column: 1;
+}
+.asyl-list li .asyl-icon-btn {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+.asyl-rail-toggle {
+  display: none;
+}
+
+/* ---- the map ---- */
+
+.asyl-stage {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.55);
+  background-color: var(--asyl-dark);
+  background-image: var(--asyl-wall-dark, none);
+  background-size: 900px 900px;
+  box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.6);
+}
+.asyl-toolbar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  pointer-events: none;
+}
+.asyl-toolbar > * {
+  pointer-events: auto;
+  background: rgba(18, 12, 9, 0.85);
+}
+.asyl-graph,
+.asyl-graph-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.asyl-graph-svg {
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+}
+.asyl-graph-svg:active {
+  cursor: grabbing;
+}
+.asyl-edge {
+  fill: none;
+  opacity: 0.7;
+}
+.asyl-node {
+  cursor: pointer;
+}
+.asyl-node.selected circle,
+.asyl-node.selected rect {
+  filter: drop-shadow(0 0 6px rgba(255, 176, 103, 0.9));
+}
+.asyl-node-label {
+  fill: var(--asyl-text);
+  paint-order: stroke;
+  stroke: rgba(10, 6, 4, 0.9);
+  stroke-width: 3px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.asyl-node-star {
+  fill: #fff;
+  font-size: 12px;
+  pointer-events: none;
+}
+.asyl-tip {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  background: rgba(10, 6, 4, 0.95);
+  border: 1px solid var(--asyl-line);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  max-width: 280px;
+  color: var(--asyl-muted);
+}
+.asyl-tip-head {
+  color: var(--asyl-text);
+  font-weight: 700;
+}
+.asyl-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  padding: 24px;
+  max-width: 520px;
+  margin: 0 auto;
+}
+.asyl-empty h2 {
+  font-family: var(--asyl-marker);
+  font-weight: 400;
+  font-size: 40px;
+  margin: 0 0 12px;
+  color: var(--asyl-orange);
+  transform: rotate(-2deg);
+}
+.asyl-empty p {
+  line-height: 1.55;
+}
+.asyl-status {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 3;
+  max-width: min(640px, calc(100% - 28px));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 10px;
+  background: rgba(10, 6, 4, 0.94);
+  border: 1px solid var(--asyl-line);
+  font-size: 13px;
+}
+.asyl-status.error {
+  border-color: var(--asyl-bad);
+}
+
+/* ---- inspector ---- */
+
+.asyl-inspector {
+  width: 330px;
+  flex: none;
+  background: var(--asyl-panel);
+  border: 1px solid var(--asyl-line);
+  border-radius: 12px;
+  padding: 14px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 13px;
+}
+.asyl-insp-head {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.asyl-insp-img {
+  border-radius: 8px;
+  object-fit: cover;
+}
+.asyl-insp-img.round {
+  border-radius: 50%;
+}
+.asyl-insp-title {
+  flex: 1;
+  min-width: 0;
+}
+.asyl-insp-title h2 {
+  margin: 0;
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+.asyl-addr {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--asyl-muted);
+  cursor: copy;
+}
+.asyl-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.asyl-tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.08);
+}
+.asyl-tag.tag-mine {
+  background: #fff;
+  color: #1b0a02;
+}
+.asyl-tag.tag-kol,
+.asyl-tag.tag-kol-side {
+  background: rgba(255, 211, 77, 0.2);
+  color: #ffd34d;
+}
+.asyl-tag.tag-risky,
+.asyl-tag.tag-dumper,
+.asyl-tag.tag-farm,
+.asyl-tag.tone-bad {
+  background: rgba(255, 90, 74, 0.18);
+  color: var(--asyl-bad);
+}
+.asyl-tag.tag-winner,
+.asyl-tag.tone-good {
+  background: rgba(62, 224, 143, 0.15);
+  color: var(--asyl-good);
+}
+.asyl-tag.tone-warn {
+  background: rgba(255, 176, 103, 0.18);
+  color: var(--asyl-orange-hi);
+}
+.asyl-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+.asyl-facts dt {
+  color: var(--asyl-muted);
+}
+.asyl-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.asyl-facts .good {
+  color: var(--asyl-good);
+}
+.asyl-facts .bad {
+  color: var(--asyl-bad);
+}
+.asyl-insp-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--asyl-line);
+  padding-top: 10px;
+}
+.asyl-chain-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.asyl-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.asyl-label-row {
+  display: flex;
+  gap: 6px;
+}
+.asyl-links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  max-height: 260px;
+  overflow: auto;
+}
+.asyl-insp-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  border-top: 1px solid var(--asyl-line);
+  padding-top: 10px;
+}
+.asyl-insp-foot a {
+  color: var(--asyl-orange-hi);
+}
+
+/* ---- a shared map ---- */
+
+.asyl-shared-title h1 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--asyl-ink);
+}
+.asyl-shared-title .asyl-muted {
+  color: #3a1a08;
+}
+.asyl-shared-legend {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  background: rgba(10, 6, 4, 0.85);
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+.asyl-shared-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.asyl-shared-note {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  max-width: 360px;
+  margin: 0;
+  background: var(--asyl-paper);
+  color: #2a1408;
+  padding: 10px 12px;
+  border-radius: 3px;
+  transform: rotate(-1deg);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+.asyl-inspector .asyl-shared-note {
+  position: static;
+  transform: none;
+}
+
+/* ---- phones: the rail slides over, the inspector is a sheet ---- */
+
+@media (max-width: 900px) {
+  .asyl-top {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+  .asyl-me {
+    margin-left: 0;
+    flex-wrap: wrap;
+  }
+  .asyl-body {
+    padding: 0 8px 8px;
+    position: relative;
+  }
+  .asyl-rail-toggle {
+    display: inline-flex;
+  }
+  .asyl-rail {
+    display: none;
+    position: absolute;
+    z-index: 5;
+    left: 8px;
+    top: 52px;
+    bottom: 8px;
+    width: min(300px, calc(100% - 16px));
+  }
+  .asyl-rail.open {
+    display: flex;
+  }
+  .asyl-inspector {
+    position: fixed;
+    z-index: 6;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-height: 62vh;
+    border-radius: 14px 14px 0 0;
+    padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  }
+}
