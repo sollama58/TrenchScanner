@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   countdown,
   holderStatusText,
+  liveAt,
   nextBeat,
   nextUpdateText,
   secondsAgo,
@@ -32,14 +33,21 @@ describe("freshness text", () => {
     expect(nextUpdateText(t + 12_000, t, true)).toBe("Checking again in 0:12");
   });
 
-  it("says Live only when the stream is pushing and nothing is scheduled", () => {
-    expect(holderStatusText(t, t - 42_000, null, { live: true })).toBe("Live");
-    expect(holderStatusText(t, t - 42_000, null, { live: true })).not.toMatch(/ago|Next update|Updating/);
+  it("says Live with the list's age, never Live alone (user ask 2026-10-24)", () => {
+    expect(holderStatusText(t, t - 42_000, null, { live: true })).toBe("Live · 42s ago");
+    expect(holderStatusText(t, t - 42_000, t + 48_000, { live: true })).toBe("Live · 42s ago");
+    expect(holderStatusText(t, t - 4 * 60_000, null, { live: true })).toBe("Live · 4m 00s ago");
   });
 
-  it("counts down from the chain read when a next-read time exists, and does not say live", () => {
+  it("is live only until liveUntil", () => {
+    expect(liveAt(t, true, t + 1)).toBe(true);
+    expect(liveAt(t, true, t)).toBe(false);
+    expect(liveAt(t, true, null)).toBe(true);
+    expect(liveAt(t, false, t + 1)).toBe(false);
+  });
+
+  it("counts down from the chain read when it is not live, and does not say live", () => {
     expect(holderStatusText(t, t - 42_000, t + 48_000)).toBe("42s ago · Next update in 0:48");
-    expect(holderStatusText(t, t - 42_000, t + 48_000, { live: true })).toBe("42s ago · Next update in 0:48");
     expect(holderStatusText(t, t - 42_000, t + 500)).toBe("42s ago · Updating…");
     expect(holderStatusText(t, t - 42_000, t + 48_000).toLowerCase()).not.toContain("live");
   });

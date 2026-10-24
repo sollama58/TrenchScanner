@@ -584,6 +584,10 @@ export async function readTopHolders(
     due.map((g) => g.mintAddress),
     (anyWide ? BUBBLE_WIDE_TOP_N : LINKED_TOP_N) + 1,
   );
+  // The lists' time is when the read came back, not when it was asked. The page moves listed
+  // shares by the trades after it (web liveShares.ts), and a trade that landed while the read was
+  // in flight is already in its balances: stamped at the ask, it was counted twice.
+  const readAt = opts.nowMs ?? Date.now();
   for (const g of due) {
     const r = read.get(g.mintAddress);
     if (r?.status !== "found" || r.holders.length === 0) continue;
@@ -602,9 +606,9 @@ export async function readTopHolders(
     const refreshMs = oldMints.has(g.mintAddress) ? TOP_HOLDERS_OLD_REFRESH_MS : TOP_HOLDERS_REFRESH_MS;
     topHolderLists.set(g.mintAddress, {
       holders: top,
-      atMs: now,
-      readAtMs: now,
-      balancesAtMs: now,
+      atMs: readAt,
+      readAtMs: readAt,
+      balancesAtMs: readAt,
       refreshMs,
       // A watched coin's next chain read is its watch interval (5 minutes while the holder
       // stream covers it, otherwise a minute), not the ten-minute cadence this read may have
@@ -618,10 +622,10 @@ export async function readTopHolders(
         if (oldest !== undefined) wideHolderLists.delete(oldest);
       }
       wideHolderLists.delete(g.mintAddress);
-      wideHolderLists.set(g.mintAddress, { holders, atMs: now, balancesAtMs: now });
+      wideHolderLists.set(g.mintAddress, { holders, atMs: readAt, balancesAtMs: readAt });
     }
   }
-  await rememberNativeSol(due, helius, now);
+  await rememberNativeSol(due, helius, readAt);
   return counts;
 }
 

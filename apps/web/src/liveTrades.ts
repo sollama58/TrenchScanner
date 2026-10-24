@@ -41,6 +41,14 @@ export interface LiveTrades {
   /** From when the feed holds every trade (ms); null until it is live. */
   since: number | null;
   /**
+   * From when this page holds every trade of the coin (ms); null until the feed is live. Later
+   * than `since` when an answer may have left trades out: the API keeps a coin's newest
+   * MAX_TRADES, so a first ask on a busy coin, or one after a hidden tab paused the asks, can come
+   * back with a full window that starts after trades the page never got. Holder shares move by the
+   * trades after a list only when this is at or before the list's time (liveShares.ts).
+   */
+  wholeFrom: number | null;
+  /**
    * Every trade read for the coin on this page so far, oldest first, the newest MAX_HISTORY: kept
    * past `trades`' window and across the feed stopping and starting again, so the chart's marks
    * of a flagged wallet's trade don't vanish once a busy coin's next 200 trades push it out.
@@ -85,6 +93,22 @@ export function mergeHistory(
   return out.length > max ? out.slice(-max) : out;
 }
 
+/**
+ * Exported for tests. From when the page holds every trade after answer `a`: its `since`, no
+ * earlier than before (`prev`, null on a fresh start), and no earlier than the answer's oldest
+ * trade when it came back with the API's whole window, which may have dropped older ones.
+ */
+export function wholeFromAfter(
+  prev: number | null,
+  a: Pick<LiveTradesAnswer, "status" | "since" | "trades">,
+): number | null {
+  if (a.status !== "live" || a.since === null) return null;
+  let from = prev === null ? a.since : Math.max(prev, a.since);
+  const oldest = a.trades[0];
+  if (a.trades.length >= MAX_TRADES && oldest) from = Math.max(from, oldest.atMs);
+  return from;
+}
+
 function keepHistory(base: string, trades: LiveTokenTrade[]) {
   histories.delete(base);
   histories.set(base, trades);
@@ -119,6 +143,7 @@ const EMPTY: LiveTrades = {
   trades: [],
   status: null,
   since: null,
+  wholeFrom: null,
   history: [],
   supply: null,
   labels: NO_LABELS,
@@ -188,6 +213,7 @@ function startFeed(base: string): SharedFeed {
         status: a.status,
         busy: a.status === "unavailable" && a.reason === "busy",
         since: a.since,
+        wholeFrom: wholeFromAfter(restarted ? null : prev.wholeFrom, a),
         history,
         supply: typeof a.supply === "number" && a.supply > 0 ? a.supply : prev.supply,
         labels,
@@ -242,7 +268,7 @@ export function followFeed(base: string, listener: () => void): () => void {
       feed.stop();
       feeds.delete(base);
       if (histories.has(base))
-        stoppedStates.set(base, { ...feed.state, trades: [], status: null, since: null });
+        stoppedStates.set(base, { ...feed.state, trades: [], status: null, since: null, wholeFrom: null });
       tellWatchers(base);
     }
   };

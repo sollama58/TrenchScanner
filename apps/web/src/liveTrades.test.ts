@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   coinLabels,
   filterTrades,
+  MAX_TRADES,
   mergeHistory,
   NO_FILTER,
   parseFilter,
@@ -9,6 +10,7 @@ import {
   solText,
   tallyTrades,
   traderLabels,
+  wholeFromAfter,
   type LiveTokenTrade,
 } from "./liveTrades";
 
@@ -45,6 +47,28 @@ describe("mergeHistory", () => {
       "s4",
     ]);
     expect(mergeHistory(kept, [trade(1, "buy", 1, "a", 100)])).toBe(kept);
+  });
+});
+
+describe("wholeFromAfter", () => {
+  const window = (from: number) =>
+    Array.from({ length: MAX_TRADES }, (_, i) => trade(i + 1, "buy", 1, "a", from + i));
+
+  it("is the follow's start while the answers left nothing out", () => {
+    expect(wholeFromAfter(null, { status: "live", since: 100, trades: [trade(1, "buy", 1, "a", 150)] })).toBe(
+      100,
+    );
+    expect(wholeFromAfter(null, { status: "pending", since: null, trades: [] })).toBeNull();
+  });
+
+  it("starts at the oldest trade of a full window, which may have dropped older ones", () => {
+    expect(wholeFromAfter(null, { status: "live", since: 100, trades: window(5_000) })).toBe(5_000);
+  });
+
+  it("never moves back over a gap an earlier answer showed", () => {
+    expect(wholeFromAfter(5_000, { status: "live", since: 100, trades: [] })).toBe(5_000);
+    // The follow started over (a dropped connection): later than anything before.
+    expect(wholeFromAfter(5_000, { status: "live", since: 9_000, trades: [] })).toBe(9_000);
   });
 });
 
