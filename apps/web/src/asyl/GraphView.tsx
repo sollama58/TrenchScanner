@@ -251,6 +251,8 @@ export interface GraphViewHandle {
   fit: () => void;
   view: () => View;
   size: () => { w: number; h: number };
+  /** Draws again, after the page changed the layout's positions itself (an undo). */
+  redraw: () => void;
 }
 
 export function GraphView({
@@ -261,6 +263,7 @@ export function GraphView({
   onSelect,
   onOpen,
   onMoved,
+  onMoveStart,
   layoutKey,
   handle,
   readOnly = false,
@@ -273,6 +276,8 @@ export function GraphView({
   onOpen?: (id: string) => void;
   /** A node was dragged to a new place. */
   onMoved?: () => void;
+  /** A bubble is about to move under a drag, so the page can keep where things were. */
+  onMoveStart?: () => void;
   /** Changes whenever the map's nodes change, to restart the layout. */
   layoutKey: string;
   handle?: Ref<GraphViewHandle>;
@@ -315,7 +320,11 @@ export function GraphView({
     setView({ k, x: w / 2 - ((b.minX + b.maxX) / 2) * k, y: h / 2 - ((b.minY + b.maxY) / 2) * k });
   }, [graph, layout, radius]);
 
-  useImperativeHandle(handle, () => ({ fit, view: () => viewRef.current, size: sizeOf }), [fit]);
+  useImperativeHandle(
+    handle,
+    () => ({ fit, view: () => viewRef.current, size: sizeOf, redraw: () => setFrame((f) => f + 1) }),
+    [fit],
+  );
 
   // The simulation, a step per frame until it settles: after the map changes, and while a bubble
   // is dragged, so what is tied to it follows (user ask 2026-10-24).
@@ -433,7 +442,10 @@ export function GraphView({
     }
     const d = drag.current;
     if (!d) return;
-    if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > 3) d.moved = true;
+    if (!d.moved && Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > 3) {
+      d.moved = true;
+      if (d.id && !readOnly) onMoveStart?.();
+    }
     if (!d.moved) return;
     if (d.id && !readOnly) {
       const w = toWorld(e.clientX, e.clientY);

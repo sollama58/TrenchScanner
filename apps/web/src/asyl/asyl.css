@@ -1297,3 +1297,17 @@ body {
     height: 360px;
   }
 }
+
+/* Undo and redo, joined as one control. */
+.asyl-btn-group {
+  display: inline-flex;
+}
+.asyl-btn-group .asyl-btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.asyl-btn-group .asyl-btn:last-child {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  margin-left: -1px;
+}
