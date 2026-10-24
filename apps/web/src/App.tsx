@@ -739,7 +739,10 @@ export function App() {
       </main>
 
       <footer className="site-foot faint small">
-        <span>Alerts are for research, not financial advice. Memecoins can go to zero in minutes.</span>
+        <span>
+          Alerts are for research, not financial advice. Memecoins can go to zero in minutes.{" "}
+          <a href="/legal.html">Legal disclaimer</a> · <a href="/privacy.html">Privacy</a>
+        </span>
         {/* Links out, each opening in a new browser tab. */}
         <span className="foot-links">
           <a
