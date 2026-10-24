@@ -252,7 +252,7 @@ services:
       # each answer on both apex and www, plus trenchscanner-web's own onrender.com host. An origin
       # missing here is silently blocked by the browser.
       - key: CORS_ORIGINS
-        value: https://trenchscanner.app,https://www.trenchscanner.app,https://holdex.live,https://www.holdex.live,https://trenchscanner-web.onrender.com
+        value: https://trenchscanner.app,https://www.trenchscanner.app,https://holdex.live,https://www.holdex.live,https://trenchscanner-web.onrender.com,https://asyl.trenchscanner.app
       # Anti-phishing anchor for Sign-In With Solana - the canonical host of each dashboard, no
       # protocol, comma-separated. Each sign-in is bound to the listed host its request came from;
       # anything else gets the first entry, which its wallet refuses to sign. A missing host breaks
@@ -267,7 +267,7 @@ services:
       # and get SameSite=Lax automatically. See the comment above sessionCookieAttrs in
       # apps/api/src/routes/auth.ts.
       - key: PUBLIC_APP_DOMAIN
-        value: trenchscanner.app,www.trenchscanner.app,holdex.live,trenchscanner-web.onrender.com
+        value: trenchscanner.app,www.trenchscanner.app,holdex.live,trenchscanner-web.onrender.com,asyl.trenchscanner.app
       # Comma-separated base58 wallet addresses allowed into the Admin Panel - set this to your
       # own wallet's address after the first deploy. Empty means the Admin Panel 403s everyone.
       - key: ADMIN_WALLET_ADDRESSES
@@ -832,6 +832,68 @@ services:
         value: no-cache
     envVars:
       # The API for every host except trenchscanner.app (see SAME_SITE_APIS in apps/web/src/api.ts).
+      - key: VITE_API_URL
+        value: https://trenchscanner-api.onrender.com
+
+  # Asyl (user ask 2026-10-24), the wallet-link explorer, on its own subdomain
+  # asyl.trenchscanner.app. The same web build as trenchscanner-web (Asyl is apps/web/asyl/index.html
+  # and src/asyl), published as its own copy with Asyl's page as the index, so every path on this
+  # host opens Asyl (/w/<wallet>, /t/<coin>, /m/<map>, /s/<shared map>: apps/web/src/asyl/route.ts).
+  # It calls api.trenchscanner.app (same site, SAME_SITE_APIS), so a session made on
+  # trenchscanner.app carries over. Its host is in the api's CORS_ORIGINS and PUBLIC_APP_DOMAIN.
+  - type: web
+    runtime: static
+    name: trenchscanner-asyl
+    buildCommand: >-
+      npm ci --include=dev && npm run build -w @trenchscanner/web &&
+      rm -rf apps/web/dist-asyl && cp -r apps/web/dist apps/web/dist-asyl &&
+      cp apps/web/dist/asyl/index.html apps/web/dist-asyl/index.html &&
+      rm -rf apps/web/dist-asyl/tokensage apps/web/dist-asyl/sw.js
+    autoDeployTrigger: checksPass
+    buildFilter:
+      paths:
+        - apps/web/**
+        - packages/core/package.json
+        - packages/core/src/chartMarks.ts
+        - package.json
+        - package-lock.json
+        - .node-version
+        - render.yaml
+      ignoredPaths:
+        - "**/*.test.ts"
+        - "**/*.test.tsx"
+        - "**/*.md"
+    staticPublishPath: apps/web/dist-asyl
+    domains:
+      - asyl.trenchscanner.app
+    # Files that exist (the bundles, version.json, icons) are served as they are; every other path
+    # is the page.
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    # As the dashboard's, without its inline scripts (Asyl's page has none) or Privy (no email
+    # sign-in here: a session made on trenchscanner.app carries over). Nothing may frame it.
+    headers:
+      - path: /*
+        name: Content-Security-Policy
+        value: "script-src 'self'; connect-src 'self' https://api.trenchscanner.app https://trenchscanner-api.onrender.com; frame-src 'none'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+      - path: /*
+        name: Strict-Transport-Security
+        value: max-age=31536000
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      - path: /version.json
+        name: Cache-Control
+        value: no-store
+    envVars:
       - key: VITE_API_URL
         value: https://trenchscanner-api.onrender.com
 

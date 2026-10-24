@@ -375,6 +375,8 @@ const LAUNCH_MAX_PAGES = 3;
 const MAX_TRANSACTION_VERSION = 1;
 
 /** JSON-RPC's standard "Method not found" - what a non-Helius endpoint returns for a Helius-only method. */
+/** JSON-RPC's "invalid params": a node that doesn't know an optional filter. */
+const RPC_INVALID_PARAMS = -32602;
 const RPC_METHOD_NOT_FOUND = -32601;
 
 /** One token account row of getProgramAccounts(V2), sliced to TOKEN_ACCOUNT_OWNER_AMOUNT_SLICE. */
@@ -2514,6 +2516,63 @@ export class HeliusClient {
     }
     if (!res || res.error || !Array.isArray(res.result?.data)) {
       if (res?.error) logger.warn("rpc error on mint transactions page", { mint, error: res.error });
+      return { status: "failed" };
+    }
+    const data = res.result.data;
+    const token = res.result.paginationToken ?? null;
+    return { status: "ok", txs: data, paginationToken: data.length < LAUNCH_TX_PAGE ? null : token };
+  }
+
+  /**
+   * One page of a wallet's own transactions, newest first, with full details, its token accounts'
+   * included (filters.tokenAccounts "balanceChanged"): Asyl's flow read (apps/api/src/asyl/chain.ts,
+   * core's wallets/walletFlows.ts). getTransactionsForAddress, failed ones filtered out, up to 100
+   * a page for 10 credits. Helius-only: "unsupported" elsewhere.
+   */
+  async getWalletTransactionsPage(
+    wallet: string,
+    opts: { paginationToken?: string } = {},
+  ): Promise<
+    | { status: "ok"; txs: ChainTx[]; paginationToken: string | null }
+    | { status: "unsupported" }
+    | { status: "failed" }
+  > {
+    if (!this.gtfaUsable) return { status: "unsupported" };
+    const ask = (tokenAccounts: boolean) =>
+      this.sendBatch<{ data?: ChainTx[]; paginationToken?: string | null }>(
+        [
+          {
+            id: wallet,
+            method: "getTransactionsForAddress",
+            params: [
+              wallet,
+              {
+                transactionDetails: "full",
+                sortOrder: "desc",
+                limit: LAUNCH_TX_PAGE,
+                encoding: "json",
+                maxSupportedTransactionVersion: MAX_TRANSACTION_VERSION,
+                filters: {
+                  status: "succeeded",
+                  ...(tokenAccounts ? { tokenAccounts: "balanceChanged" } : {}),
+                },
+                ...(opts.paginationToken ? { paginationToken: opts.paginationToken } : {}),
+              },
+            ],
+          },
+        ],
+        20_000,
+      );
+    let res = (await ask(true)).get(wallet);
+    // A node that doesn't know the token-account filter refuses the params: ask without it, and
+    // read the wallet's own transactions only (SOL moves and the trades it signed).
+    if (res?.error?.code === RPC_INVALID_PARAMS) res = (await ask(false)).get(wallet);
+    if (res?.error?.code === RPC_METHOD_NOT_FOUND) {
+      this.gtfaUnavailable = true;
+      return { status: "unsupported" };
+    }
+    if (!res || res.error || !Array.isArray(res.result?.data)) {
+      if (res?.error) logger.warn("rpc error on wallet transactions page", { error: res.error });
       return { status: "failed" };
     }
     const data = res.result.data;

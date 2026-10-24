@@ -1,0 +1,201 @@
+import type { AsylGraph } from "./graph";
+
+/**
+ * The map's force layout: linked nodes pull together, every pair pushes apart, and a weak pull to
+ * the centre keeps islands on screen. Plain O(n²) repulsion: a map holds a few hundred nodes at
+ * most (MAP_NODES_MAX on the API). Positions are kept between runs, so a merge only moves what is
+ * new and its neighbours; a node the user dragged stays pinned where it was put.
+ */
+
+export type Point = { x: number; y: number };
+
+export interface LayoutState {
+  pos: Map<string, Point>;
+  vel: Map<string, Point>;
+  pinned: Set<string>;
+}
+
+export function newLayout(): LayoutState {
+  return { pos: new Map(), vel: new Map(), pinned: new Set() };
+}
+
+/** A small seeded random, so the same map lays out the same way each time. */
+export function seeded(seed: number): () => number {
+  let s = seed >>> 0 || 1;
+  return () => {
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    return ((s >>> 0) % 100_000) / 100_000;
+  };
+}
+
+function hash(id: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
+
+/**
+ * Places nodes the layout hasn't seen yet: near an already placed neighbour when they have one,
+ * on a ring around it; otherwise around the centre.
+ */
+export function placeNew(state: LayoutState, g: AsylGraph): string[] {
+  const added: string[] = [];
+  const adj = new Map<string, string[]>();
+  for (const e of g.edges) {
+    adj.set(e.a, [...(adj.get(e.a) ?? []), e.b]);
+    adj.set(e.b, [...(adj.get(e.b) ?? []), e.a]);
+  }
+  const ringCount = new Map<string, number>();
+  // Twice over: a new node whose only neighbour is also new is placed on the second pass.
+  for (let pass = 0; pass < 2; pass++) {
+    for (const n of g.nodes) {
+      if (state.pos.has(n.id)) continue;
+      const anchor = (adj.get(n.id) ?? []).find((id) => state.pos.has(id));
+      if (!anchor && pass === 0 && (adj.get(n.id) ?? []).length > 0 && state.pos.size > 0) continue;
+      const rnd = seeded(hash(n.id));
+      if (anchor) {
+        const k = ringCount.get(anchor) ?? 0;
+        ringCount.set(anchor, k + 1);
+        const a = state.pos.get(anchor)!;
+        const angle = k * 2.399963 + rnd() * 0.4;
+        const r = 70 + 14 * Math.sqrt(k);
+        state.pos.set(n.id, { x: a.x + Math.cos(angle) * r, y: a.y + Math.sin(angle) * r });
+      } else {
+        const angle = rnd() * Math.PI * 2;
+        const r = 40 + rnd() * 160;
+        state.pos.set(n.id, { x: Math.cos(angle) * r, y: Math.sin(angle) * r });
+      }
+      state.vel.set(n.id, { x: 0, y: 0 });
+      added.push(n.id);
+    }
+  }
+  // Forget nodes that left the map.
+  const ids = new Set(g.nodes.map((n) => n.id));
+  for (const id of [...state.pos.keys()]) {
+    if (ids.has(id)) continue;
+    state.pos.delete(id);
+    state.vel.delete(id);
+    state.pinned.delete(id);
+  }
+  return added;
+}
+
+export interface LayoutForces {
+  /** Pairwise push. */
+  repel: number;
+  /** Rest length of a link. */
+  linkLength: number;
+  link: number;
+  centre: number;
+  damping: number;
+}
+
+export const FORCES: LayoutForces = { repel: 2600, linkLength: 90, link: 0.04, centre: 0.004, damping: 0.82 };
+
+/**
+ * One step of the simulation, scaled by `alpha` (1 at a start, easing to 0). Returns the largest
+ * move, so the caller can stop once the map has settled.
+ */
+export function step(
+  state: LayoutState,
+  g: AsylGraph,
+  alpha: number,
+  radius: (id: string) => number = () => 12,
+  forces: LayoutForces = FORCES,
+): number {
+  const ids = g.nodes.map((n) => n.id).filter((id) => state.pos.has(id));
+  const force = new Map<string, Point>(ids.map((id) => [id, { x: 0, y: 0 }]));
+  for (let i = 0; i < ids.length; i++) {
+    const a = state.pos.get(ids[i]!)!;
+    const fa = force.get(ids[i]!)!;
+    for (let j = i + 1; j < ids.length; j++) {
+      const b = state.pos.get(ids[j]!)!;
+      let dx = a.x - b.x;
+      let dy = a.y - b.y;
+      let d2 = dx * dx + dy * dy;
+      if (d2 < 0.01) {
+        dx = (i - j) * 0.1;
+        dy = 0.1;
+        d2 = dx * dx + dy * dy;
+      }
+      const minD = radius(ids[i]!) + radius(ids[j]!) + 6;
+      const push = forces.repel / d2 + (d2 < minD * minD ? (minD - Math.sqrt(d2)) * 0.5 : 0);
+      const d = Math.sqrt(d2);
+      const fx = (dx / d) * push;
+      const fy = (dy / d) * push;
+      fa.x += fx;
+      fa.y += fy;
+      const fb = force.get(ids[j]!)!;
+      fb.x -= fx;
+      fb.y -= fy;
+    }
+  }
+  for (const e of g.edges) {
+    const a = state.pos.get(e.a);
+    const b = state.pos.get(e.b);
+    if (!a || !b) continue;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+    const rest = forces.linkLength + radius(e.a) + radius(e.b);
+    const pull = (d - rest) * forces.link;
+    const fx = (dx / d) * pull;
+    const fy = (dy / d) * pull;
+    force.get(e.a)!.x += fx;
+    force.get(e.a)!.y += fy;
+    force.get(e.b)!.x -= fx;
+    force.get(e.b)!.y -= fy;
+  }
+  let moved = 0;
+  for (const id of ids) {
+    if (state.pinned.has(id)) continue;
+    const p = state.pos.get(id)!;
+    const v = state.vel.get(id) ?? { x: 0, y: 0 };
+    const f = force.get(id)!;
+    f.x -= p.x * forces.centre * 10;
+    f.y -= p.y * forces.centre * 10;
+    v.x = (v.x + f.x * alpha) * forces.damping;
+    v.y = (v.y + f.y * alpha) * forces.damping;
+    // A cap on one step, so a node dropped onto another doesn't fly off the map.
+    const speed = Math.hypot(v.x, v.y);
+    if (speed > 40) {
+      v.x = (v.x / speed) * 40;
+      v.y = (v.y / speed) * 40;
+    }
+    p.x += v.x;
+    p.y += v.y;
+    state.vel.set(id, v);
+    moved = Math.max(moved, Math.hypot(v.x, v.y));
+  }
+  return moved;
+}
+
+/** Runs the layout to rest, at most `ticks` steps: for a share image or a saved map's first draw. */
+export function settle(state: LayoutState, g: AsylGraph, radius?: (id: string) => number, ticks = 300): void {
+  placeNew(state, g);
+  for (let t = 0; t < ticks; t++) {
+    const alpha = 1 - t / ticks;
+    if (step(state, g, alpha, radius) < 0.05 && t > 20) break;
+  }
+}
+
+/** The box around every placed node, padded by their radius. */
+export function bounds(state: LayoutState, ids: Iterable<string>, radius: (id: string) => number = () => 12) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const id of ids) {
+    const p = state.pos.get(id);
+    if (!p) continue;
+    const r = radius(id);
+    minX = Math.min(minX, p.x - r);
+    minY = Math.min(minY, p.y - r);
+    maxX = Math.max(maxX, p.x + r);
+    maxY = Math.max(maxY, p.y + r);
+  }
+  if (!Number.isFinite(minX)) return { minX: -100, minY: -100, maxX: 100, maxY: 100 };
+  return { minX, minY, maxX, maxY };
+}

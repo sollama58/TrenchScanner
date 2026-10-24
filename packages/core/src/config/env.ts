@@ -1342,6 +1342,11 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  // Asyl (asyl.trenchscanner.app, user decision 2026-10-24): the Helius credits a Pro user's
+  // chain reads there may take in a UTC day, and all users' together. Stored-data maps cost none
+  // and are open to every signed-in user. 0 turns Asyl's chain reads off.
+  ASYL_USER_DAILY_CREDITS: z.coerce.number().int().min(0).default(3_000),
+  ASYL_DAILY_CREDITS: z.coerce.number().int().min(0).default(150_000),
   // Jupiter key for Pro trades' quotes and swap instructions. Empty: the scan's JUPITER_API_KEY, then
   // Jupiter's keyless host, each the next one's fallback on a 429. Never the bot's
   // TRADING_JUPITER_API_KEY, so a burst of clicks can't rate-limit a stop-loss.

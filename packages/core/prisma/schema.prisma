@@ -138,6 +138,8 @@ model User {
   backupCodes       TwoFactorBackupCode[]
   /// Tokens starred for the Live tab's Watchlist.
   watchlist         WatchlistItem[]
+  /// Asyl's saved maps (asyl.trenchscanner.app, apps/api/src/asyl/maps.ts).
+  asylMaps          AsylMap[]
 }
 
 /// Optional two-factor (user ask 2026-10-18): an authenticator app, passkeys, or both, and which
@@ -3887,4 +3889,52 @@ model CandleBackfill {
 
   @@index([doneAt, nextAt])
   @@index([requestedAt])
+}
+
+/// A map saved on Asyl (asyl.trenchscanner.app, user ask 2026-10-24): the wallets and coins on it,
+/// how they were laid out, and the user's notes (AsylMapDoc in apps/api/src/asyl/maps.ts). Reopened
+/// with fresh data around the same nodes. `sharedDoc` is the copy frozen when its owner shared it:
+/// GET /asyl/shared/:slug serves only that, to anyone, and never reads the chain.
+model AsylMap {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  doc       Json
+  /// The public link's key; null while the map is private.
+  shareSlug String?   @unique
+  sharedDoc Json?
+  sharedAt  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([userId, updatedAt])
+}
+
+/// Helius credits each user's Asyl chain reads took, per UTC day (apps/api/src/asyl/credits.ts):
+/// what holds a Pro user to ASYL_USER_DAILY_CREDITS and everyone together to ASYL_DAILY_CREDITS.
+/// `day` is the UTC date as "YYYY-MM-DD". Rows older than a week are deleted by the API.
+model AsylCreditUse {
+  userId    String
+  day       String
+  credits   Int      @default(0)
+  reads     Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@id([userId, day])
+  @@index([day])
+}
+
+/// One wallet's recent transfers and trades as an Asyl flow read parsed them (core's
+/// wallets/walletFlows.ts), kept ASYL_FLOW_TTL_MS so a second look, by anyone, costs nothing.
+/// Shown only: never read by the scan, the models or the filters. Rows past a week are deleted.
+model AsylFlowRead {
+  wallet  String   @id
+  readAt  DateTime
+  /// WalletFlows: transfers by counterparty and trades by coin.
+  flows   Json
+  /// Transactions read.
+  txs     Int
+
+  @@index([readAt])
 }

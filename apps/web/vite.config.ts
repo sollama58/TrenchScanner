@@ -70,11 +70,12 @@ export default defineConfig(({ command }) => ({
   server: { port: 5173 },
   build: {
     rollupOptions: {
-      // The dashboard, and the /tokensage page (unlisted for now), which shares its styles but
-      // not its code.
+      // The dashboard, the /tokensage page (unlisted for now), and Asyl (asyl.trenchscanner.app,
+      // its own static site in render.yaml), which share its styles but not its code.
       input: {
         main: resolve(import.meta.dirname, "index.html"),
         tokensage: resolve(import.meta.dirname, "tokensage/index.html"),
+        asyl: resolve(import.meta.dirname, "asyl/index.html"),
       },
     },
   },
