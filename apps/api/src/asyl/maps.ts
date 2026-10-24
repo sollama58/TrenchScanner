@@ -64,6 +64,35 @@ const cutoffsSchema = z.object({
   pct: finite.min(0).default(0),
 });
 
+/** What the reader drew on the map: their own labelled lines between two bubbles, and text boxes. */
+const drawColour = z.string().regex(/^#[0-9a-f]{6}$/);
+const drawingsSchema = z.object({
+  lines: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(16),
+        a: address,
+        b: address,
+        label: z.string().max(80),
+        colour: drawColour,
+      }),
+    )
+    .max(200)
+    .default([]),
+  texts: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(16),
+        x: finite,
+        y: finite,
+        text: z.string().max(400),
+        colour: drawColour,
+      }),
+    )
+    .max(100)
+    .default([]),
+});
+
 export const mapDocSchema = z.object({
   v: z.literal(1),
   nodes: z.array(nodeSchema).max(MAP_NODES_MAX),
@@ -80,6 +109,8 @@ export const mapDocSchema = z.object({
   removed: z.array(address).max(MAP_NODES_MAX).default([]),
   /** Single links the user hid, by "kind|a|b|mint" (the web's edgeKey). */
   cut: z.array(z.string().max(160)).max(MAP_EDGES_MAX).default([]),
+  /** The reader's own lines and text boxes. */
+  drawings: drawingsSchema.optional(),
   /** The amount sliders when it was saved. */
   cutoffs: cutoffsSchema.optional(),
   /** The node it was opened around. */
@@ -100,6 +131,14 @@ export function cleanDoc(doc: AsylMapDoc): AsylMapDoc {
     edges: doc.edges.filter((e) => ids.has(e.a) && ids.has(e.b)),
     positions: Object.fromEntries(Object.entries(doc.positions).filter(([id]) => ids.has(id))),
     notes: Object.fromEntries(Object.entries(doc.notes).filter(([id, note]) => ids.has(id) && note.trim())),
+    ...(doc.drawings
+      ? {
+          drawings: {
+            ...doc.drawings,
+            lines: doc.drawings.lines.filter((l) => ids.has(l.a) && ids.has(l.b)),
+          },
+        }
+      : {}),
   };
 }
 

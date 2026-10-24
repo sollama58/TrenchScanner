@@ -9,6 +9,8 @@ import {
   nodeName,
   TAG_LABEL,
   TIMED_KINDS,
+  textBoxSize,
+  type Drawings,
   type TimeLabels,
   type TimedKind,
   type AsylEdge,
@@ -253,6 +255,16 @@ export interface View {
   k: number;
 }
 
+/** What drawing on the map asks of the page (user ask 2026-10-24). */
+export interface DrawHandlers {
+  addLine: (a: string, b: string) => void;
+  addText: (x: number, y: number) => void;
+  select: (id: string | null) => void;
+  moveText: (id: string, x: number, y: number) => void;
+}
+
+export type DrawTool = "line" | "text" | null;
+
 export interface GraphViewHandle {
   fit: () => void;
   view: () => View;
@@ -274,6 +286,10 @@ export function GraphView({
   handle,
   readOnly = false,
   timeLabels = DEFAULT_TIME_LABELS,
+  drawings,
+  tool = null,
+  drawingSelected = null,
+  onDraw,
 }: {
   graph: AsylGraph;
   layout: LayoutState;
@@ -291,6 +307,12 @@ export function GraphView({
   readOnly?: boolean;
   /** Which kinds of line carry their time along them. */
   timeLabels?: TimeLabels;
+  /** The reader's own lines and text boxes, drawn over the map. */
+  drawings?: Drawings;
+  /** A drawing tool in hand: "line" joins the next two bubbles clicked, "text" places a box. */
+  tool?: DrawTool;
+  drawingSelected?: string | null;
+  onDraw?: DrawHandlers;
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [, setFrame] = useState(0);
@@ -298,6 +320,15 @@ export function GraphView({
   const viewRef = useRef(view);
   viewRef.current = view;
   const [hover, setHover] = useState<{ x: number; y: number; text: string[] } | null>(null);
+  // The line tool's first bubble, and where the pointer is, for the line being drawn.
+  const [pending, setPending] = useState<string | null>(null);
+  const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (tool !== "line") {
+      setPending(null);
+      setGhost(null);
+    }
+  }, [tool]);
   const radius = useMemo(() => radiusOf(graph), [graph]);
   const clusters = useMemo(() => clusterOf(graph), [graph]);
   const maxByKind = useMemo(() => {
@@ -404,6 +435,8 @@ export function GraphView({
     dy: number;
     /** What it carries along, and how much: its own leaves wholly, its other neighbours half. */
     carry: Map<string, number>;
+    /** A drawing grabbed instead of a bubble: a text box (moved) or a line (picked). */
+    drawn?: { id: string; text: boolean };
   } | null>(null);
   const pinch = useRef<{ d: number; k: number } | null>(null);
 
@@ -423,6 +456,19 @@ export function GraphView({
       drag.current = null;
       return;
     }
+    if (tool === "line" && !readOnly && id) {
+      // No mouse-down focus change after this: the label editor it opens keeps the cursor.
+      e.preventDefault();
+      // The line tool: the first bubble, then the second makes the line.
+      if (!pending) setPending(id);
+      else if (pending !== id) {
+        onDraw?.addLine(pending, id);
+        setPending(null);
+        setGhost(null);
+      }
+      return;
+    }
+    if (tool === "line") setPending(null);
     // On a read-only map a node can still be picked; dragging it pans instead of moving it.
     const at = id ? layout.pos.get(id) : undefined;
     const w = at ? toWorld(e.clientX, e.clientY) : null;
@@ -438,7 +484,28 @@ export function GraphView({
     };
   };
 
+  /** A drawing grabbed: a text box can be dragged; either is picked by a click. */
+  const onDrawnDown = (e: React.PointerEvent, id: string, text: boolean) => {
+    e.stopPropagation();
+    if (readOnly) return;
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const box = text ? drawings?.texts.find((t) => t.id === id) : undefined;
+    const w = toWorld(e.clientX, e.clientY);
+    drag.current = {
+      id: null,
+      moved: false,
+      startX: e.clientX,
+      startY: e.clientY,
+      dx: box ? box.x - w.x : 0,
+      dy: box ? box.y - w.y : 0,
+      carry: new Map(),
+      drawn: { id, text },
+    };
+  };
+
   const onPointerMove = (e: React.PointerEvent) => {
+    if (pending) setGhost(toWorld(e.clientX, e.clientY));
     const prev = pointers.current.get(e.pointerId);
     if (!prev) return;
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -453,9 +520,16 @@ export function GraphView({
     if (!d) return;
     if (!d.moved && Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > 3) {
       d.moved = true;
-      if (d.id && !readOnly) onMoveStart?.();
+      if ((d.id || d.drawn?.text) && !readOnly) onMoveStart?.();
     }
     if (!d.moved) return;
+    if (d.drawn) {
+      if (d.drawn.text) {
+        const w = toWorld(e.clientX, e.clientY);
+        onDraw?.moveText(d.drawn.id, w.x + d.dx, w.y + d.dy);
+      }
+      return;
+    }
     if (d.id && !readOnly) {
       const w = toWorld(e.clientX, e.clientY);
       const from = layout.pos.get(d.id) ?? w;
@@ -480,8 +554,20 @@ export function GraphView({
     const d = drag.current;
     drag.current = null;
     if (!d) return;
-    if (!d.moved) onSelect(d.id);
-    else if (d.id && !readOnly) onMoved?.();
+    if (d.drawn) {
+      if (!d.moved) onDraw?.select(d.drawn.id);
+      else onMoved?.();
+      return;
+    }
+    if (!d.moved && !d.id && tool === "text" && !readOnly) {
+      const w = toWorld(e.clientX, e.clientY);
+      onDraw?.addText(w.x, w.y);
+      return;
+    }
+    if (!d.moved) {
+      onDraw?.select(null);
+      onSelect(d.id);
+    } else if (d.id && !readOnly) onMoved?.();
   };
 
   const zoomAt = (px: number, py: number, k: number) => {
@@ -527,7 +613,7 @@ export function GraphView({
     <div className="asyl-graph">
       <svg
         ref={svgRef}
-        className="asyl-graph-svg"
+        className={`asyl-graph-svg${tool && !readOnly ? ` tool-${tool}` : ""}`}
         role="img"
         aria-label={`Map of ${graph.nodes.length} wallets and coins with ${graph.edges.length} links`}
         onPointerDown={(e) => onPointerDown(e, null)}
@@ -707,6 +793,73 @@ export function GraphView({
               );
             })}
           </g>
+          {drawings && drawings.lines.length > 0 && (
+            <g className="asyl-drawn-lines">
+              {drawings.lines.map((l) => {
+                const a = layout.pos.get(l.a);
+                const b = layout.pos.get(l.b);
+                if (!a || !b || !byId.has(l.a) || !byId.has(l.b)) return null;
+                const dx = b.x - a.x;
+                const dy = b.y - a.y;
+                const d = Math.hypot(dx, dy) || 1;
+                const ra = radius(l.a) + 2;
+                const rb = radius(l.b) + 2;
+                const sx = a.x + (dx / d) * ra;
+                const sy = a.y + (dy / d) * ra;
+                const ex = b.x - (dx / d) * rb;
+                const ey = b.y - (dy / d) * rb;
+                // Bowed the other way from the map's own links, so the two never sit on one another.
+                const mx = (sx + ex) / 2 + dy * 0.18;
+                const my = (sy + ey) / 2 - dx * 0.18;
+                const z = 1 / view.k;
+                const on = drawingSelected === l.id;
+                const path = `M${sx} ${sy} Q${mx} ${my} ${ex} ${ey}`;
+                return (
+                  <g key={l.id} className={`asyl-drawn-line${on ? " on" : ""}`}>
+                    {on && (
+                      <path
+                        d={path}
+                        fill="none"
+                        stroke={l.colour}
+                        strokeOpacity={0.25}
+                        strokeWidth={10 * z}
+                      />
+                    )}
+                    <path
+                      d={path}
+                      fill="none"
+                      stroke={l.colour}
+                      strokeWidth={2.6 * z}
+                      strokeLinecap="round"
+                      pointerEvents="none"
+                    />
+                    <circle cx={sx} cy={sy} r={3.4 * z} fill={l.colour} pointerEvents="none" />
+                    <circle cx={ex} cy={ey} r={3.4 * z} fill={l.colour} pointerEvents="none" />
+                    <path
+                      d={path}
+                      fill="none"
+                      stroke="transparent"
+                      strokeWidth={14 * z}
+                      className="asyl-drawn-hit"
+                      onPointerDown={(ev) => onDrawnDown(ev, l.id, false)}
+                    />
+                  </g>
+                );
+              })}
+            </g>
+          )}
+          {pending && ghost && layout.pos.get(pending) && (
+            <line
+              x1={layout.pos.get(pending)!.x}
+              y1={layout.pos.get(pending)!.y}
+              x2={ghost.x}
+              y2={ghost.y}
+              stroke="#fff3e6"
+              strokeWidth={2 / view.k}
+              strokeDasharray={`${6 / view.k} ${5 / view.k}`}
+              pointerEvents="none"
+            />
+          )}
           <g className="asyl-nodes">
             {graph.nodes.map((n) => {
               const p = layout.pos.get(n.id);
@@ -745,7 +898,7 @@ export function GraphView({
                   onPointerEnter={(e) => showHover(e, hoverText)}
                   onPointerLeave={() => setHover(null)}
                 >
-                  {(isSel || isFocus) && (
+                  {(isSel || isFocus || n.id === pending) && (
                     <circle
                       r={r + 7}
                       fill="none"
@@ -802,6 +955,85 @@ export function GraphView({
               );
             })}
           </g>
+          {drawings && drawings.lines.some((l) => l.label) && (
+            <g className="asyl-drawn-labels">
+              {drawings.lines.map((l) => {
+                const a = layout.pos.get(l.a);
+                const b = layout.pos.get(l.b);
+                if (!l.label || !a || !b || !byId.has(l.a) || !byId.has(l.b)) return null;
+                // The middle of the line as drawn under the bubbles, its label over them.
+                const dx = b.x - a.x;
+                const dy = b.y - a.y;
+                const d = Math.hypot(dx, dy) || 1;
+                const ra = radius(l.a) + 2;
+                const rb = radius(l.b) + 2;
+                const sx = a.x + (dx / d) * ra;
+                const sy = a.y + (dy / d) * ra;
+                const ex = b.x - (dx / d) * rb;
+                const ey = b.y - (dy / d) * rb;
+                const midX = 0.25 * sx + 0.5 * ((sx + ex) / 2 + dy * 0.18) + 0.25 * ex;
+                const midY = 0.25 * sy + 0.5 * ((sy + ey) / 2 - dx * 0.18) + 0.25 * ey;
+                const z = 1 / view.k;
+                const on = drawingSelected === l.id;
+                return (
+                  <g key={l.id}>
+                    <g
+                      transform={`translate(${midX} ${midY}) scale(${z})`}
+                      onPointerDown={(ev) => onDrawnDown(ev, l.id, false)}
+                      className="asyl-drawn-label"
+                    >
+                      <rect
+                        x={-(l.label.length * 4.4 + 10)}
+                        y={-12}
+                        width={l.label.length * 8.8 + 20}
+                        height={24}
+                        rx={12}
+                        fill="#120c09"
+                        stroke={l.colour}
+                        strokeWidth={on ? 2 : 1.2}
+                      />
+                      <text y={5} textAnchor="middle" fill={l.colour}>
+                        {l.label}
+                      </text>
+                    </g>
+                  </g>
+                );
+              })}
+            </g>
+          )}
+          {drawings && drawings.texts.length > 0 && (
+            <g className="asyl-drawn-texts">
+              {drawings.texts.map((t) => {
+                const { w, h } = textBoxSize(t.text);
+                const on = drawingSelected === t.id;
+                return (
+                  <g
+                    key={t.id}
+                    transform={`translate(${t.x} ${t.y})`}
+                    className={`asyl-drawn-text${on ? " on" : ""}${readOnly ? "" : " movable"}`}
+                    onPointerDown={(ev) => onDrawnDown(ev, t.id, true)}
+                  >
+                    <rect
+                      width={w}
+                      height={h}
+                      rx={8}
+                      fill="rgba(18, 12, 9, 0.92)"
+                      stroke={t.colour}
+                      strokeWidth={on ? 2 : 1.2}
+                      strokeDasharray={on ? "5 3" : undefined}
+                    />
+                    <text x={12} y={8} fill={t.colour}>
+                      {(t.text || "Text").split("\n").map((line, i) => (
+                        <tspan key={i} x={12} dy={i === 0 ? 15 : 20}>
+                          {line || " "}
+                        </tspan>
+                      ))}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+          )}
         </g>
       </svg>
       {hover && (

@@ -86,6 +86,7 @@ export function SharedView({ slug }: { slug: string }) {
             layoutKey={`${graph.nodes.length}`}
             handle={view}
             readOnly
+            drawings={map.doc.drawings}
           />
           <MapLegend graph={graph} />
           {map.doc.note && <p className="asyl-shared-note">{map.doc.note}</p>}
@@ -132,7 +133,13 @@ export function SharedView({ slug }: { slug: string }) {
           link={sharedLink(slug)}
           wide
           render={() =>
-            renderMapCard({ title: map.title, graph, layout: layout.current, focus: map.doc.focus })
+            renderMapCard({
+              title: map.title,
+              graph,
+              layout: layout.current,
+              focus: map.doc.focus,
+              drawings: map.doc.drawings,
+            })
           }
           onClose={() => setSharing(false)}
         />
