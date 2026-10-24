@@ -20390,6 +20390,20 @@ body:has(.util-toast) .bug-fab {
 .privy-holdings {
   margin: 4px 0 12px;
 }
+.privy-backup {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin: 0 0 12px;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.privy-backup p {
+  margin: 0;
+}
+.privy-backup strong {
+  color: var(--warn-ink);
+}
 .privy-mfa {
   display: grid;
   gap: 8px;

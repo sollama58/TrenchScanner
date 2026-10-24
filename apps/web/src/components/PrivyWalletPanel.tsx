@@ -115,6 +115,17 @@ export function PrivyWalletPanel({ compact = false }: { compact?: boolean }) {
           {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
         </button>
       </div>
+      {/* Before any funds go in: back the key up first, so the wallet survives losing the sign-in. */}
+      <div className="notice small privy-backup" role="note">
+        <p>
+          <strong>Back up your private key before adding funds.</strong> Privy holds this wallet for you. If
+          you lose access to your email or social account, the key is the only way back to your funds. Export
+          it and keep it somewhere safe and offline.
+        </p>
+        <button className="button" disabled={busy !== null} onClick={() => void act("export")}>
+          {busy === "export" ? "Opening…" : "Export key now"}
+        </button>
+      </div>
       {mfa?.available && !mfa.enrolled && (
         <div className="notice small privy-mfa">
           <p>
