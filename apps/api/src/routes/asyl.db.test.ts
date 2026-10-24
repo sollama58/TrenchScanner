@@ -180,6 +180,31 @@ describe.skipIf(!dbAvailable)("asyl routes", () => {
     expect(graph.nodes.find((n) => n.id === MINT1)?.name).toBe("$ONE");
   });
 
+  it("links what is on the map already, with each coin's deployer when asked", async () => {
+    type Read = { graph: { nodes: { id: string; deployer?: string | null }[]; edges: Edge[] } };
+    type Edge = { a: string; b: string; kind: string; label: string };
+    const has = (r: Read, a: string, b: string, kind: string) =>
+      r.graph.edges.some((e) => e.a === a && e.b === b && e.kind === kind);
+    const among = (
+      await as(PLAIN, "POST", "/asyl/links", { wallets: [A, B, C], tokens: [MINT1] })
+    ).json() as Read;
+    expect(has(among, A, B, "transfer")).toBe(true);
+    expect(has(among, A, C, "funded")).toBe(true);
+    expect(has(among, A, MINT1, "traded")).toBe(true);
+    // FUNDER and DEV aren't on the map: nothing ties to them.
+    expect(among.graph.edges.some((e) => e.a === FUNDER || e.a === DEV)).toBe(false);
+    expect(among.graph.nodes.find((n) => n.id === MINT1)?.deployer).toBe(DEV);
+
+    const withDev = (
+      await as(PLAIN, "POST", "/asyl/links", { wallets: [A], tokens: [MINT1, MINT2], deployers: true })
+    ).json() as Read;
+    expect(withDev.graph.edges.find((e) => e.a === DEV && e.b === MINT1)).toMatchObject({
+      kind: "created",
+      label: expect.stringMatching(/^Deployed/),
+    });
+    expect((await as(PLAIN, "POST", "/asyl/links", { wallets: ["nope"] })).statusCode).toBe(400);
+  });
+
   it("keeps chain reads and labels to Pro Mode", async () => {
     expect((await as(PLAIN, "POST", `/asyl/chain/flows/${A}`)).statusCode).toBe(403);
     expect((await as(PLAIN, "PUT", `/asyl/labels/${B}`, { name: "Beta" })).statusCode).toBe(403);
@@ -211,7 +236,15 @@ describe.skipIf(!dbAvailable)("asyl routes", () => {
     );
     expect((await as(ADMIN, "GET", `/asyl/maps/${id}`)).statusCode).toBe(404);
 
+    // Taken off the map: kept in the saved map, left out of the shared copy.
+    await as(PLAIN, "PUT", `/asyl/maps/${id}`, { title: "Case one", doc: { ...doc, removed: [B] } });
+    expect((await as(PLAIN, "GET", `/asyl/maps/${id}`)).json()).toMatchObject({ doc: { removed: [B] } });
     const { slug } = (await as(PLAIN, "POST", `/asyl/maps/${id}/share`)).json() as { slug: string };
+    const frozen = (await as(null, "GET", `/asyl/shared/${slug}`)).json() as {
+      doc: { nodes: { id: string }[]; edges: unknown[] };
+    };
+    expect(frozen.doc.nodes.map((n) => n.id)).toEqual([A]);
+    expect(frozen.doc.edges).toEqual([]);
     expect(slug).toMatch(/^[A-Za-z0-9]{12}$/);
     await as(PLAIN, "PUT", `/asyl/maps/${id}`, { title: "Case one, edited", doc: { ...doc, notes: {} } });
     const shared = await as(null, "GET", `/asyl/shared/${slug}`);

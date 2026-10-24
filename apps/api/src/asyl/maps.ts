@@ -38,6 +38,7 @@ const nodeSchema = z.object({
   mcapUsd: finite.nullable().optional(),
   athUsd: finite.nullable().optional(),
   launchedAt: z.string().max(40).nullable().optional(),
+  deployer: address.nullable().optional(),
 });
 
 const edgeSchema = z.object({
@@ -63,6 +64,8 @@ export const mapDocSchema = z.object({
   note: z.string().max(MAP_NOTE_MAX).default(""),
   /** Hidden edge kinds when it was saved. */
   hidden: z.array(z.string().max(16)).max(10).default([]),
+  /** Nodes the user took off the map: kept in it, so they can be brought back one by one. */
+  removed: z.array(address).max(MAP_NODES_MAX).default([]),
   /** The node it was opened around. */
   focus: address.nullable().default(null),
 });
@@ -82,6 +85,13 @@ export function cleanDoc(doc: AsylMapDoc): AsylMapDoc {
     positions: Object.fromEntries(Object.entries(doc.positions).filter(([id]) => ids.has(id))),
     notes: Object.fromEntries(Object.entries(doc.notes).filter(([id, note]) => ids.has(id) && note.trim())),
   };
+}
+
+/** The copy a public link serves: what the user took off the map is left out of it altogether. */
+export function publicDoc(doc: AsylMapDoc): AsylMapDoc {
+  const removed = new Set(doc.removed ?? []);
+  if (removed.size === 0) return doc;
+  return cleanDoc({ ...doc, nodes: doc.nodes.filter((n) => !removed.has(n.id)), removed: [] });
 }
 
 export interface MapSummary {
@@ -166,7 +176,11 @@ export async function shareMap(userId: string, id: string): Promise<{ slug: stri
   const slug = row.shareSlug ?? newSlug();
   await prisma.asylMap.update({
     where: { id },
-    data: { shareSlug: slug, sharedDoc: row.doc as Prisma.InputJsonValue, sharedAt: new Date() },
+    data: {
+      shareSlug: slug,
+      sharedDoc: publicDoc(row.doc as unknown as AsylMapDoc) as unknown as Prisma.InputJsonValue,
+      sharedAt: new Date(),
+    },
   });
   return { slug };
 }

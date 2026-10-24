@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import {
   clusterOf,
-  DIRECTED,
+  EDGE_KINDS,
+  EDGE_LABEL,
   nodeName,
   TAG_LABEL,
   type AsylEdge,
@@ -22,13 +23,112 @@ import { tokenImageSources } from "../format";
 
 export const EDGE_COLOUR: Record<AsylEdgeKind, string> = {
   funded: "#ffb547",
-  transfer: "#ff5533",
+  transfer: "#ff4d4d",
   side: "#e38cff",
   cotrade: "#6fd6c4",
-  created: "#ffe066",
+  created: "#fff27a",
   traded: "#79a8ff",
   holds: "#8f8a86",
 };
+
+export type EdgeHead = "arrow" | "open" | "diamond" | "dot";
+
+/**
+ * How each kind of link is drawn, so no two read alike even without their colours (user ask
+ * 2026-10-24): a line pattern and a mark at the far end, and what it means, for the legend.
+ */
+export const EDGE_STYLE: Record<AsylEdgeKind, { dash?: string; head?: EdgeHead; meaning: string }> = {
+  funded: { head: "arrow", meaning: "Paid the wallet its first SOL" },
+  transfer: { dash: "10 4", head: "arrow", meaning: "Sent it SOL or coins" },
+  side: { dash: "12 4 2 4", head: "open", meaning: "A side wallet of the same person" },
+  cotrade: { dash: "1.5 4", meaning: "Bought the same coins within minutes" },
+  created: { head: "diamond", meaning: "Deployed the coin" },
+  traded: { meaning: "Bought or sold the coin" },
+  holds: { head: "dot", meaning: "Holds the coin now" },
+};
+
+/** The mark at a link's far end, in a 10×10 box pointing right. */
+export function HeadShape({ head, colour }: { head: EdgeHead; colour: string }) {
+  switch (head) {
+    case "arrow":
+      return <path d="M0 0 L10 5 L0 10 z" fill={colour} />;
+    case "open":
+      return <path d="M1 1 L9 5 L1 9" fill="none" stroke={colour} strokeWidth={2} />;
+    case "diamond":
+      return <path d="M0 5 L5 0.5 L10 5 L5 9.5 z" fill={colour} />;
+    case "dot":
+      return <circle cx={5} cy={5} r={4} fill={colour} />;
+  }
+}
+
+/** A short sample of a kind of link, as the map draws it. */
+export function LinkSwatch({ kind, chain = false }: { kind: AsylEdgeKind; chain?: boolean }) {
+  const st = EDGE_STYLE[kind];
+  const c = EDGE_COLOUR[kind];
+  return (
+    <svg className="asyl-swatch" width={40} height={12} viewBox="0 0 40 12" aria-hidden="true">
+      <line
+        x1={1}
+        y1={6}
+        x2={st.head ? 31 : 39}
+        y2={6}
+        stroke={c}
+        strokeWidth={2.4}
+        strokeDasharray={st.dash}
+        strokeLinecap={kind === "cotrade" ? "round" : "butt"}
+      />
+      {st.head && (
+        <g transform="translate(30 1)">
+          <HeadShape head={st.head} colour={c} />
+        </g>
+      )}
+      {chain && <circle cx={16} cy={6} r={3.2} fill="#120c09" stroke="#fff" strokeWidth={1.5} />}
+    </svg>
+  );
+}
+
+/** The map's key, in its bottom corner: the links on it, and the marks on its wallets. */
+export function MapLegend({ graph }: { graph: AsylGraph }) {
+  const [open, setOpen] = useState(() => typeof window === "undefined" || window.innerWidth > 700);
+  const kinds = EDGE_KINDS.filter((k) => graph.edges.some((e) => e.kind === k));
+  const chain = graph.edges.some((e) => e.source === "chain");
+  const devs = graph.nodes.some((n) => n.kind === "wallet" && n.tags.includes("dev"));
+  if (kinds.length === 0) return null;
+  return (
+    <div className={`asyl-map-legend${open ? " open" : ""}`}>
+      <button className="asyl-map-legend-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        Legend {open ? "▾" : "▸"}
+      </button>
+      {open && (
+        <ul>
+          {kinds.map((k) => (
+            <li key={k}>
+              <LinkSwatch kind={k} />
+              <b>{EDGE_LABEL[k]}</b>
+              <span>{EDGE_STYLE[k].meaning}</span>
+            </li>
+          ))}
+          {chain && (
+            <li>
+              <LinkSwatch kind="traded" chain />
+              <b>Chain read</b>
+              <span>A ringed dot: read live from the chain</span>
+            </li>
+          )}
+          {devs && (
+            <li>
+              <span className="asyl-legend-dev" aria-hidden="true">
+                D
+              </span>
+              <b>Deployer</b>
+              <span>A wallet that deployed a coin</span>
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 /** Cluster tints: warm and cool alternating, so neighbouring groups tell apart on the dark map. */
 export const CLUSTER_COLOUR = [
@@ -312,7 +412,7 @@ export function GraphView({
     return s;
   }, [graph, selected]);
 
-  const markerKinds = [...DIRECTED];
+  const markerKinds = EDGE_KINDS.filter((k) => EDGE_STYLE[k].head);
 
   return (
     <div className="asyl-graph">
@@ -330,15 +430,16 @@ export function GraphView({
           {markerKinds.map((k) => (
             <marker
               key={k}
-              id={`asyl-arrow-${k}`}
+              id={`asyl-head-${k}`}
               viewBox="0 0 10 10"
               refX="9"
               refY="5"
               markerWidth="7"
               markerHeight="7"
+              markerUnits="userSpaceOnUse"
               orient="auto-start-reverse"
             >
-              <path d="M0 0 L10 5 L0 10 z" fill={EDGE_COLOUR[k]} />
+              <HeadShape head={EDGE_STYLE[k].head!} colour={EDGE_COLOUR[k]} />
             </marker>
           ))}
           <clipPath id="asyl-clip-circle" clipPathUnits="objectBoundingBox">
@@ -374,20 +475,39 @@ export function GraphView({
                 e.label,
                 e.source === "chain" ? "From a chain read" : "",
               ].filter(Boolean);
-              return (
+              const st = EDGE_STYLE[e.kind];
+              const key = `${e.kind}|${e.a}|${e.b}|${e.mint ?? ""}`;
+              const path = (
                 <path
-                  key={`${e.kind}|${e.a}|${e.b}|${e.mint ?? ""}`}
+                  key={key}
                   d={`M${sx} ${sy} Q${mx} ${my} ${ex} ${ey}`}
                   fill="none"
                   stroke={EDGE_COLOUR[e.kind]}
                   strokeWidth={widthOf(e, maxByKind) / Math.sqrt(view.k)}
-                  strokeOpacity={dim ? 0.12 : e.kind === "holds" ? 0.45 : 0.85}
-                  strokeDasharray={e.source === "chain" ? "6 4" : e.kind === "cotrade" ? "2 4" : undefined}
-                  markerEnd={DIRECTED.has(e.kind) ? `url(#asyl-arrow-${e.kind})` : undefined}
+                  strokeOpacity={dim ? 0.12 : e.kind === "holds" ? 0.5 : 0.88}
+                  strokeDasharray={st.dash}
+                  strokeLinecap={e.kind === "cotrade" ? "round" : undefined}
+                  markerEnd={st.head ? `url(#asyl-head-${e.kind})` : undefined}
                   className="asyl-edge"
                   onPointerEnter={(ev) => showHover(ev, label)}
                   onPointerLeave={() => setHover(null)}
                 />
+              );
+              if (e.source !== "chain") return path;
+              // A chain read: a ringed dot halfway along, whatever the kind's own pattern.
+              return (
+                <g key={key} opacity={dim ? 0.2 : 1}>
+                  {path}
+                  <circle
+                    cx={0.25 * sx + 0.5 * mx + 0.25 * ex}
+                    cy={0.25 * sy + 0.5 * my + 0.25 * ey}
+                    r={3.4 / Math.sqrt(view.k)}
+                    fill="#120c09"
+                    stroke="#fff"
+                    strokeWidth={1.5 / Math.sqrt(view.k)}
+                    pointerEvents="none"
+                  />
+                </g>
               );
             })}
           </g>
@@ -463,6 +583,14 @@ export function GraphView({
                     <text className="asyl-node-star" y={-r - 4} textAnchor="middle">
                       ★
                     </text>
+                  )}
+                  {n.kind === "wallet" && n.tags.includes("dev") && (
+                    <g className="asyl-dev-mark" transform={`translate(${r * 0.74} ${-r * 0.74})`}>
+                      <circle r={6.5} />
+                      <text y={3.2} textAnchor="middle">
+                        D
+                      </text>
+                    </g>
                   )}
                   {(isSel || isFocus || (!dim && (n.name || lit || dense < 1 || view.k > 1.1 * dense))) && (
                     <text

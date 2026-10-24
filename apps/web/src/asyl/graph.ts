@@ -32,6 +32,8 @@ export interface AsylNode {
   mcapUsd?: number | null;
   athUsd?: number | null;
   launchedAt?: string | null;
+  /** Coins: the wallet that deployed it, when TrenchScanner knows it. */
+  deployer?: string | null;
 }
 
 export type AsylEdgeKind = "funded" | "transfer" | "cotrade" | "side" | "created" | "holds" | "traded";
@@ -67,7 +69,7 @@ export const EDGE_LABEL: Record<AsylEdgeKind, string> = {
   transfer: "Transfers",
   side: "Side wallets",
   cotrade: "Bought together",
-  created: "Launched",
+  created: "Deployed",
   traded: "Traded",
   holds: "Holds",
 };
@@ -80,7 +82,7 @@ export const TAG_LABEL: Record<AsylTag, string> = {
   kol: "KOL",
   "kol-side": "KOL side",
   exchange: "Exchange",
-  dev: "Dev",
+  dev: "Deployer",
   dumper: "Dumper",
   winner: "Winner",
   sniper: "Sniper",
@@ -123,6 +125,39 @@ export function mergeGraph(base: AsylGraph, next: AsylGraph): AsylGraph {
       edges.set(edgeKey(e), e);
   }
   return { nodes: [...nodes.values()], edges: [...edges.values()] };
+}
+
+/**
+ * The map with a "Deployed" line from each coin's deployer to the coin wherever both are on it,
+ * whichever read brought each one (user ask 2026-10-24: deployer markers and lines).
+ */
+export function withDeployLines(g: AsylGraph): AsylGraph {
+  const wallets = new Set(g.nodes.filter((n) => n.kind === "wallet").map((n) => n.id));
+  const have = new Set(g.edges.filter((e) => e.kind === "created").map((e) => `${e.a}|${e.b}`));
+  const lines: AsylEdge[] = [];
+  for (const n of g.nodes) {
+    if (n.kind !== "token" || !n.deployer || !wallets.has(n.deployer)) continue;
+    if (have.has(`${n.deployer}|${n.id}`)) continue;
+    lines.push({
+      a: n.deployer,
+      b: n.id,
+      kind: "created",
+      weight: 1,
+      label: "Deployed it",
+      source: "stored",
+      mint: n.id,
+      at: n.launchedAt ?? null,
+    });
+  }
+  if (lines.length === 0) return g;
+  // Whoever deployed a coin on the map is marked as a deployer.
+  const devs = new Set(lines.map((e) => e.a));
+  return {
+    nodes: g.nodes.map((n) =>
+      devs.has(n.id) && !n.tags.includes("dev") ? { ...n, tags: [...n.tags, "dev" as const] } : n,
+    ),
+    edges: [...g.edges, ...lines],
+  };
 }
 
 /** The map without `ids`, and without edges left hanging. */

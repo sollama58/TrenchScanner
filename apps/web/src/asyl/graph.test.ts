@@ -6,6 +6,7 @@ import {
   mergeGraph,
   removeNodes,
   visibleGraph,
+  withDeployLines,
   type AsylGraph,
 } from "./graph";
 import { bounds, newLayout, placeNew, settle } from "./layout";
@@ -128,5 +129,23 @@ describe("layout", () => {
     expect(state.pos.get("a")).toEqual({ x: 500, y: 500 });
     placeNew(state, { nodes: [W("b")], edges: [] });
     expect(state.pos.has("a")).toBe(false);
+  });
+});
+
+describe("withDeployLines", () => {
+  const coin = { id: "c", kind: "token" as const, name: "$C", tags: [], deployer: "dev" };
+
+  it("draws a Deployed line once the deployer is on the map, and marks it", () => {
+    expect(withDeployLines({ nodes: [coin, W("x")], edges: [] }).edges).toEqual([]);
+    const g = withDeployLines({ nodes: [coin, W("dev")], edges: [] });
+    expect(g.edges).toEqual([expect.objectContaining({ a: "dev", b: "c", kind: "created" })]);
+    expect(g.nodes.find((n) => n.id === "dev")?.tags).toEqual(["dev"]);
+    // Never twice.
+    expect(withDeployLines(g).edges).toHaveLength(1);
+  });
+
+  it("keeps a line the API already drew", () => {
+    const g: AsylGraph = { nodes: [coin, W("dev", { tags: ["dev"] })], edges: [E("dev", "c", "created")] };
+    expect(withDeployLines(g)).toBe(g);
   });
 });

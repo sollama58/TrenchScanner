@@ -46,6 +46,8 @@ export interface AsylNode {
   mcapUsd?: number | null;
   athUsd?: number | null;
   launchedAt?: string | null;
+  /** Coins: the wallet that deployed it (Token.creator), when TrenchScanner knows it. */
+  deployer?: string | null;
 }
 
 /**

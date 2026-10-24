@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ShareImageDialog } from "../components/ShareImageDialog";
 import { asylApi, type MapDoc } from "./asylApi";
 import { renderMapCard } from "./asylCard";
-import { EDGE_COLOUR, GraphView, type GraphViewHandle } from "./GraphView";
-import { EDGE_KINDS, EDGE_LABEL, TAG_LABEL, nodeName, shortAddr } from "./graph";
+import { GraphView, MapLegend, type GraphViewHandle } from "./GraphView";
+import { TAG_LABEL, nodeName, shortAddr } from "./graph";
 import { newLayout } from "./layout";
 import { basePath, sharedLink } from "./route";
 
@@ -87,14 +87,7 @@ export function SharedView({ slug }: { slug: string }) {
             handle={view}
             readOnly
           />
-          <div className="asyl-shared-legend">
-            {EDGE_KINDS.filter((k) => graph.edges.some((e) => e.kind === k)).map((k) => (
-              <span key={k}>
-                <i style={{ background: EDGE_COLOUR[k] }} />
-                {EDGE_LABEL[k]}
-              </span>
-            ))}
-          </div>
+          <MapLegend graph={graph} />
           {map.doc.note && <p className="asyl-shared-note">{map.doc.note}</p>}
         </main>
         {node && (

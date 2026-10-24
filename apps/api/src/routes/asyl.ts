@@ -21,9 +21,13 @@ import {
   addFunding,
   addHolders,
   addHolderTransfers,
+  addLinksAmong,
   addSides,
   decorate,
+  deployedEdge,
   GraphBuilder,
+  LINKS_TOKENS_MAX,
+  LINKS_WALLETS_MAX,
   loadCoTraders,
   loadStoredHolders,
   STORED_DAYS,
@@ -75,6 +79,11 @@ const labelBody = z.object({
   kol: z.boolean().default(false),
 });
 const fundersBody = z.object({ wallets: z.array(address).min(1).max(20) });
+const linksBody = z.object({
+  wallets: z.array(address).max(LINKS_WALLETS_MAX).default([]),
+  tokens: z.array(address).max(LINKS_TOKENS_MAX).default([]),
+  deployers: z.boolean().default(false),
+});
 
 /** Each map read is a handful of indexed queries: well above what a person clicks. */
 const READ_LIMIT = { max: 60, timeWindow: "1 minute" };
@@ -236,19 +245,11 @@ export async function registerAsylRoutes(
       await addHolders(g, mint, stored.holders, "stored");
       const creator = await prisma.token.findUnique({
         where: { mintAddress: mint },
-        select: { creator: true },
+        select: { creator: true, launchedAt: true, firstSeenAt: true },
       });
       if (creator?.creator) {
         g.node(creator.creator, "wallet");
-        g.edge({
-          a: creator.creator,
-          b: mint,
-          kind: "created",
-          weight: 1,
-          label: "Launched it",
-          source: "stored",
-          mint,
-        });
+        deployedEdge(g, creator.creator, mint, creator.launchedAt ?? creator.firstSeenAt);
       }
       const pro = await isPro(request);
       const coverage: AsylCoverage = {
@@ -267,6 +268,16 @@ export async function registerAsylRoutes(
         coverage,
         readAt: stored.readAt?.toISOString() ?? null,
       };
+    });
+
+    /** Stored links among what is on the map already, and with `deployers` each coin's deployer. */
+    priv.post("/links", { config: { rateLimit: READ_LIMIT } }, async (request, reply) => {
+      const b = linksBody.safeParse(request.body);
+      if (!b.success) return bad(reply, b.error);
+      const g = new GraphBuilder();
+      await addLinksAmong(g, b.data.wallets, b.data.tokens, { deployers: b.data.deployers });
+      reply.header("Cache-Control", "private, no-store");
+      return { focus: null, graph: await decorate(g, await trackedOf(request)) };
     });
 
     // ---------- the reader's own labels (Pro Mode) ----------

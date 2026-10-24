@@ -19,6 +19,8 @@ export interface InspectorActions {
   flows: (wallet: string) => void;
   funders: (wallets: string[]) => void;
   chainToken: (mint: string) => void;
+  /** Puts each coin's deployer on the map, with its Deployed line. */
+  deployers: (mints: string[]) => void;
   hide: (id: string) => void;
   select: (id: string) => void;
   saveLabel: (wallet: string, name: string, kol: boolean) => Promise<void>;
@@ -152,6 +154,29 @@ export function Inspector({
             <>
               <dt>Launched</dt>
               <dd>{ago(node.launchedAt)}</dd>
+            </>
+          )}
+          {node.deployer && (
+            <>
+              <dt>Deployed by</dt>
+              <dd>
+                {byId.has(node.deployer) ? (
+                  <button className="asyl-link" onClick={() => actions.select(node.deployer!)}>
+                    {nodeName(byId.get(node.deployer)!)}
+                  </button>
+                ) : (
+                  <>
+                    {shortAddr(node.deployer)}{" "}
+                    <button
+                      className="asyl-link"
+                      disabled={!!busy}
+                      onClick={() => actions.deployers([node.id])}
+                    >
+                      · put on the map
+                    </button>
+                  </>
+                )}
+              </dd>
             </>
           )}
         </dl>
@@ -381,7 +406,7 @@ export function Inspector({
             DexScreener
           </a>
         )}
-        <button className="asyl-link danger" onClick={() => actions.hide(node.id)}>
+        <button className="asyl-link danger" title="Key: Del" onClick={() => actions.hide(node.id)}>
           Take off the map
         </button>
       </footer>
