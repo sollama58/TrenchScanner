@@ -75,6 +75,14 @@ export interface CurveTapeConfig {
    */
   alertedMaxAgeMinutes?: number;
   /**
+   * Past the first alertedAlwaysMinutes from the ask, an asked coin is followed on to
+   * alertedMaxAgeMinutes only while it traded within alertedIdleMinutes (user decision 2026-10-24:
+   * "6 hours, only while there is active trading within the last 5 min"). A coin let go idle is not
+   * followed again until a new ask. Defaults: always, and never idle.
+   */
+  alertedAlwaysMinutes?: number;
+  alertedIdleMinutes?: number;
+  /**
    * Age to which a watchlist coin still near the band is followed (CURVE_TAPE_NEAR_BAND_MINUTES,
    * user report 2026-10-24: a coin that climbed into the feed after half an hour had no 1-second
    * bars between then and its detection). Defaults to maxAgeMinutes.
@@ -113,6 +121,13 @@ interface Followed {
   pathSaved?: boolean;
 }
 
+/**
+ * Asked coins let go for trading no more (followYoungCurves), by the ask's time (ms epoch): not
+ * followed again until a new ask.
+ */
+const idleDropped = new Map<string, number>();
+const MAX_IDLE_DROPPED = 20_000;
+
 type PoolPart = "base" | "quote" | "account";
 const POOL_PARTS: readonly PoolPart[] = ["base", "quote", "account"];
 
@@ -124,6 +139,8 @@ interface PoolFollowed {
   vaults: PoolVaults | null;
   /** Let go after this (ms epoch). */
   until: number;
+  /** When it was first followed (ms epoch). */
+  followedAt: number;
   /** When the pool was last read by RPC (ms epoch), null before the first read. */
   readAt: number | null;
   /** The vaults' balances (base units) and the pool's virtual quote reserve, as last read. */
@@ -340,6 +357,7 @@ function followPool(mint: string, until: number): void {
     address,
     vaults: null,
     until,
+    followedAt: Date.now(),
     readAt: null,
     base: null,
     quote: null,
@@ -423,8 +441,35 @@ export function followYoungCurves(
   const maxAgeMs = cfg.maxAgeMinutes * 60_000;
   const askedForMs = Math.max(maxAgeMs, (cfg.alertedMaxAgeMinutes ?? 0) * 60_000);
   const nearBandMs = Math.max(maxAgeMs, (cfg.nearBandMaxAgeMinutes ?? 0) * 60_000);
+  const alwaysMs = (cfg.alertedAlwaysMinutes ?? Infinity) * 60_000;
+  const idleMs = (cfg.alertedIdleMinutes ?? Infinity) * 60_000;
+  // Its last trade (the tape's newest change), or when it was first followed: none yet is a grace.
+  const lastActive = (mint: string): number | null => {
+    const f = followed.get(mint);
+    const p = pools.get(mint);
+    const at = Math.max(
+      tape.lastAt(mint) ?? -Infinity,
+      poolTape.lastAt(mint) ?? -Infinity,
+      f?.followedAt ?? -Infinity,
+      p?.followedAt ?? -Infinity,
+    );
+    return Number.isFinite(at) ? at : null;
+  };
+  // Past the ask's first alwaysMs, an asked coin stays followed only while it trades. One not
+  // followed now (a restart, or a ask past its first hours) gets idleMs to show a trade.
+  const idle = (mint: string, askedAt: number): boolean => {
+    if (idleDropped.get(mint) === askedAt) return true;
+    if (now <= askedAt + alwaysMs) return false;
+    const at = lastActive(mint);
+    if (at === null || now - at <= idleMs) return false;
+    if (idleDropped.size >= MAX_IDLE_DROPPED) idleDropped.clear();
+    idleDropped.set(mint, askedAt);
+    return true;
+  };
   const wanted = new Map<string, { rank: number; bornAt: number; until: number; asked: boolean }>();
   const askedPools = new Map<string, number>();
+  /** Pools asked about that went idle: let go now rather than at their horizon. */
+  const idlePools = new Set<string>();
   // The asked coins first: they must not wait behind the watchlist for a seat under the cap.
   const all: { coin: AskedCoin; isAsked: boolean }[] = [
     ...asked.map((coin) => ({ coin, isAsked: true })),
@@ -441,6 +486,13 @@ export function followYoungCurves(
         ? Math.max(bornAt + maxAgeMs, askedAt + askedForMs)
         : bornAt + askedForMs;
     if (now > until) continue;
+    // Past what its age alone would give it (the watchlist's, or the young age), the ask's hours
+    // only while it trades.
+    const ownUntil = bornAt + (nearBand.has(t.mintAddress) ? nearBandMs : maxAgeMs);
+    if (askedAt !== undefined && now > ownUntil && idle(t.mintAddress, askedAt)) {
+      if (done.has(t.mintAddress)) idlePools.add(t.mintAddress);
+      continue;
+    }
     if (done.has(t.mintAddress)) {
       if (isAsked) askedPools.set(t.mintAddress, Math.max(askedPools.get(t.mintAddress) ?? 0, until));
       continue;
@@ -470,9 +522,10 @@ export function followYoungCurves(
   }
   // Graduated (or curveless) coins asked about: their pools, to the ask's horizon.
   for (const [mint, until] of askedPools) followPool(mint, until);
-  // Graduated coins' pools are kept to their own horizon, on the watchlist or not.
+  // Graduated coins' pools are kept to their own horizon, on the watchlist or not: an asked
+  // coin's no longer once it stopped trading.
   for (const [mint, p] of pools) {
-    if (now > p.until) dropPool(mint);
+    if (now > p.until || (idlePools.has(mint) && !askedPools.has(mint))) dropPool(mint);
     else watchPool(mint, p, now);
   }
 }
@@ -775,6 +828,7 @@ export function resetCurveTape(): void {
   for (const mint of [...pools.keys()]) dropPool(mint, false);
   done.clear();
   noPool.clear();
+  idleDropped.clear();
   paused = false;
   poolsPaused = false;
   day = "";

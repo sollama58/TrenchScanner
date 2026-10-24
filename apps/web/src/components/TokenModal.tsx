@@ -2861,8 +2861,10 @@ export function ChartCard({
               <TradingChart
                 mint={mint}
                 candles={view.candles}
+                candlesMs={candleSource === "store" ? stored.history?.tfMs : undefined}
                 ticks={view.ticks}
                 holes={candleSource === "store" ? stored.history?.holes : undefined}
+                backfill={candleSource === "store" ? (stored.history?.backfill ?? null) : null}
                 events={events}
                 flow={flow}
                 marks={marks}

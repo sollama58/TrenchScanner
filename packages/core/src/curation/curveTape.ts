@@ -125,6 +125,8 @@ interface Tape {
   /** Every change since here came from the stream (null: a read since, or never streamed). */
   streamFrom: number | null;
   quoteIsSol: boolean;
+  /** What a coin-quoted curve pairs with; null for SOL, or when no reading said. */
+  quoteMint: string | null;
   complete: boolean;
 }
 
@@ -195,6 +197,7 @@ export class CurveTape {
         confirmedAt: at,
         streamFrom: null,
         quoteIsSol: state.quoteIsSol,
+        quoteMint: state.quoteIsSol ? null : (state.quoteMint ?? null),
         complete: false,
       };
     } else {
@@ -213,6 +216,7 @@ export class CurveTape {
     }
     tape.confirmedAt = Math.max(tape.confirmedAt, at);
     tape.complete ||= state.complete;
+    if (!tape.quoteIsSol && tape.quoteMint === null) tape.quoteMint = state.quoteMint ?? null;
     if (source === "read") tape.streamFrom = null;
     const last = tape.ticks[tape.ticks.length - 1];
     if (!last || last.price !== price || last.realQuote !== state.realQuote) {
@@ -408,6 +412,8 @@ export class CurveTape {
     /** Every change since here came from the stream; null when a read broke the run. */
     streamFrom: number | null;
     quoteIsSol: boolean;
+    /** What a coin-quoted curve pairs with (null for SOL, or not known). */
+    quoteMint: string | null;
     prior: { at: number; price: number; realQuote: number } | null;
     ticks: { at: number; price: number; realQuote: number }[];
   } | null {
@@ -427,6 +433,7 @@ export class CurveTape {
       confirmedAt: t.confirmedAt,
       streamFrom: t.streamFrom,
       quoteIsSol: t.quoteIsSol,
+      quoteMint: t.quoteMint,
       prior: prior ? { ...prior } : null,
       ticks: t.ticks.slice(lo).map((k) => ({ ...k })),
     };

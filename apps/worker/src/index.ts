@@ -15,6 +15,8 @@ import {
   LiveLaunchQuotes,
   JupiterFirstLookup,
   jupiterRequestsPerMinute,
+  candleBackfillPerMinute,
+  keylessQuoteUsd,
   PumpFunClient,
   RugCheckClient,
   HeliusClient,
@@ -121,6 +123,7 @@ import {
 import { startPricePathRecorder } from "./jobs/pricePathRecorder.js";
 import { startCurveCandles } from "./jobs/curveCandles.js";
 import { seedCandleChainFillSpend, startCandleChainFill } from "./jobs/candleChainFill.js";
+import { SolUsdHistory } from "./jobs/solUsdHistory.js";
 import { startCandleBackfill } from "./jobs/candleBackfill.js";
 import { onHolderStreamTx, setHolderTransferStream } from "./jobs/holderTransfers.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
@@ -128,6 +131,8 @@ import { knownMayhem, knownNotMayhem, screenOutMayhem } from "./jobs/mayhemMode.
 import { startNarrativePolling } from "./tokensage/prefetch.js";
 
 const logger = createLogger("worker");
+/** SOL's USD price minute by minute, shared by the chain-read candles (chainCandles.ts). */
+const solUsdHistory = new SolUsdHistory();
 
 /** A day plus slack: a daily job whose last run is older than this missed its slot. */
 const DAILY_CATCH_UP_AFTER_HOURS = 26;
@@ -421,6 +426,8 @@ async function main() {
         // The scoring features keep their 15 minutes: coins past it read null, as in training.
         featureMaxAgeMinutes: env.CURVE_TAPE_MAX_AGE_MINUTES,
         alertedMaxAgeMinutes: env.CURVE_TAPE_ALERTED_MINUTES,
+        alertedAlwaysMinutes: env.CURVE_TAPE_ALERTED_ALWAYS_MINUTES,
+        alertedIdleMinutes: env.CURVE_TAPE_ALERTED_IDLE_MINUTES,
         nearBandMaxAgeMinutes: env.CURVE_TAPE_NEAR_BAND_MINUTES,
         maxMints: env.CURVE_TAPE_MAX_MINTS,
         streamCreditsPerDay: env.CURVE_TAPE_STREAM_CREDITS_PER_DAY,
@@ -459,15 +466,19 @@ async function main() {
   // one-time backfill to launch of each coin a chart opened or a call named (CANDLE_STORE).
   const stopCurveCandles =
     curveTapeOn && env.CANDLE_STORE
-      ? startCurveCandles({ view: curveTapeView, solUsd: () => dexScreener.solUsd() })
+      ? startCurveCandles({
+          view: curveTapeView,
+          solUsd: () => dexScreener.solUsd(),
+          // A coin-quoted curve's quote coin (DJT, ORE, USD1...): Jupiter's keyless price, as the
+          // API's live chart reads it. A few distinct coins a minute; it bills nothing.
+          quoteUsd: keylessQuoteUsd,
+        })
       : undefined;
   const stopCandleBackfill =
     scans && env.CANDLE_STORE
       ? startCandleBackfill({
           geckoPage: (pool, mint, beforeMs) => geckoTerminal.poolMinuteCandles(pool, mint, beforeMs),
-          geckoPerMinute:
-            env.CANDLE_BACKFILL_GECKO_PER_MINUTE ??
-            (env.COINGECKO_API_KEY ? Math.floor((env.COINGECKO_REQUESTS_PER_MINUTE * 0.4) / 3) : 4),
+          geckoPerMinute: candleBackfillPerMinute(env),
           tickMs: env.COINGECKO_API_KEY ? 1_000 : undefined,
           maxPages: env.CANDLE_BACKFILL_MAX_PAGES,
           keepDays: env.CANDLE_RETENTION_DAYS,
@@ -481,7 +492,7 @@ async function main() {
       ? startCandleChainFill(
           {
             helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
-            sink: { solUsd: () => dexScreener.solUsd() },
+            sink: { solUsd: () => dexScreener.solUsd(), solHistory: solUsdHistory },
           },
           {
             creditsPerDay: env.CANDLE_CHAIN_FILL_CREDITS_PER_DAY,
@@ -912,7 +923,9 @@ async function main() {
       pumpFun: deps.pumpFun,
       solPrices: (mints: string[]) => deps.dexScreener.solPricesOf(mints),
       // Each read's trades as 1-second candles in the chart's store (core's tapeCandles.ts).
-      ...(env.CANDLE_STORE ? { candles: { solUsd: () => deps.dexScreener.solUsd() } } : {}),
+      ...(env.CANDLE_STORE
+        ? { candles: { solUsd: () => deps.dexScreener.solUsd(), solHistory: solUsdHistory } }
+        : {}),
       // The closing read's market caps: null for a coin with no market, a failed batch left out.
       marketCaps: async (mints: string[]) => {
         const failed = new Set<string>();

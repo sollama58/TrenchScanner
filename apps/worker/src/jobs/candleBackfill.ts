@@ -1,6 +1,10 @@
 import {
   CANDLE_BACKFILL_FEATURE,
   chunkBars,
+  GECKO_SETTLE_MS,
+  geckoPageRows,
+  isPumpCoin,
+  poolsOf,
   CoinGeckoBudgetSpentError,
   createLogger,
   fetchPumpCandles,
@@ -9,13 +13,10 @@ import {
   minuteCoversBefore,
   parseGeckoOhlcv,
   prisma,
-  pumpCurveAddressOf,
-  pumpSwapPoolOf,
-  PUMPFUN_LAUNCHPAD,
   queueBackfillsForRecentCalls,
   RateGateDeadlineError,
-  runCoversOn,
   saveCandleChunks,
+  type BackfillToken,
   type CandleChunkRow,
   type StoredBar,
   withOwnApiFeature,
@@ -54,8 +55,6 @@ const THROTTLED_WAIT_MS = 60_000;
  * long, not BUDGET_WAIT_MS: the budget comes back at midnight UTC, not in seconds.
  */
 const DAY_BUDGET_WAIT_MS = 30 * 60_000;
-/** How long a coin's stored pairAddress is kept current by the scan (its watchlist, 24 h). */
-const PAIR_TRUSTED_MS = 24 * 3_600_000;
 /** Failed steps a coin may take before it is given up. */
 const MAX_FAILURES = 5;
 /** Stored covers this close are one unbroken stretch (a minute source omits quiet minutes). */
@@ -63,14 +62,6 @@ const JOIN_GAP_MS = 60_000;
 const MINUTE_MS = 60_000;
 const FIVE_MIN_MS = 5 * 60_000;
 const DAY_MS = 86_400_000;
-/**
- * GeckoTerminal's newest minutes can trail a read by a minute or two. The page read from now on
- * the coin's own pair vouches for the minutes after its newest bar as quiet up to this long ago:
- * a coin that stopped trading hours ago draws flat at its last price from then, not as "No data
- * recorded" (user report 2026-10-23). A minute reported later still lands: the next top-up's page
- * is merged into the stored chunk (core's saveCandleChunks).
- */
-export const GECKO_SETTLE_MS = 3 * MINUTE_MS;
 /** Ticks between sweeps for called coins whose own ask was lost (queueBackfillsForRecentCalls). */
 const CALL_SWEEP_EVERY_TICKS = 20;
 const CALL_SWEEP_SINCE_MS = 60 * MINUTE_MS;
@@ -83,13 +74,6 @@ export interface BackfillJob {
   cursor: Date | null;
   pages: number;
   failures: number;
-}
-
-/** The coin's Token fields a step reads. */
-export interface BackfillToken {
-  launchpad: string | null;
-  launchedAt: Date | null;
-  pairAddress: string | null;
 }
 
 /** What a step changes on the row; `done` ends the coin. */
@@ -123,36 +107,7 @@ export interface BackfillDeps {
   keepDays: number;
 }
 
-/** A Pump.fun coin: its launchpad says so, or its address does. */
-export function isPumpCoin(mint: string, token: Pick<BackfillToken, "launchpad">): boolean {
-  return token.launchpad === PUMPFUN_LAUNCHPAD || mint.endsWith("pump");
-}
-
-/**
- * The pools a coin's minute history is paged on, in order: its own pair (Token.pairAddress, the one
- * its card is priced on), then for a Pump.fun coin its PumpSwap pool and its bonding curve, which is
- * where a graduated coin's history before the pool lives. A side pool is never picked by depth
- * (charts audit CH-7: a $6 Meteora pool's price and history are not the coin's).
- */
-export function poolsOf(mint: string, token: BackfillToken, now = Date.now()): string[] {
-  const out: (string | null)[] = [];
-  if (isPumpCoin(mint, token)) {
-    const curve = pumpCurveAddressOf(mint) ?? null;
-    // A coin still priced on its curve has not graduated: its PumpSwap pool doesn't exist yet, and
-    // asking for it cost a paid CoinGecko call per coin that answered nothing (credit audit
-    // 2026-10-23: about half the backfill's calls). The curve is still asked. Only the scan keeps
-    // pairAddress current, and only while the coin is on its watchlist, so past PAIR_TRUSTED_MS a
-    // curve address may be stale: a coin that graduated later still has its pool asked (TB-1).
-    // The pool goes first then: the curve has bars too, and a reader stops at the first pool that
-    // answers.
-    const pairTrusted = token.launchedAt !== null && now - token.launchedAt.getTime() < PAIR_TRUSTED_MS;
-    const pool = pumpSwapPoolOf(mint) ?? null;
-    if (token.pairAddress !== curve) out.push(token.pairAddress, pool);
-    else if (!pairTrusted) out.push(pool);
-    out.push(curve);
-  } else out.push(token.pairAddress);
-  return [...new Set(out.filter((p): p is string => !!p))];
-}
+export { GECKO_SETTLE_MS, isPumpCoin, poolsOf, type BackfillToken };
 
 /**
  * Exported for tests. How far back from `cursor` the store already covers without a break, given
@@ -245,19 +200,8 @@ export async function stepBackfill(
   // An unknown pool, or one with nothing older: the next pool from the same place.
   if (bars.length === 0) return { cursor: at(cursor), poolIndex: job.poolIndex + 1, nextAt: at(now) };
   try {
-    const closed = bars.filter((b) => b.t + MINUTE_MS <= now);
-    const newestEnd = closed.length > 0 ? closed[closed.length - 1]!.t + MINUTE_MS : bars[0]!.t;
-    // The page was read for everything before the cursor, and GeckoTerminal leaves a minute with no
-    // trade out, so the minutes between its newest bar and the cursor were quiet: the page vouches
-    // for them (prod 2026-10-23: a page ending one quiet minute before the next page's start left
-    // its covers apart, and its bars outside the stored cover). The coin's newest page, read from
-    // now, vouches to its newest bar's end or GECKO_SETTLE_MS ago, whichever is later, so a minute
-    // GeckoTerminal is late with is asked again by the next top-up rather than stored as quiet.
-    // Each chunk's cover runs on to the next one's start (candleChunk.ts runCoversOn).
-    const settled = Math.floor((now - GECKO_SETTLE_MS) / MINUTE_MS) * MINUTE_MS;
-    const quietTo = job.cursor === null ? Math.max(newestEnd, settled) : cursor;
-    const to = Math.min(cursor, Math.floor(now / MINUTE_MS) * MINUTE_MS, quietTo);
-    const rows = runCoversOn(chunkBars(job.mint, 60, "gecko", closed, { from: bars[0]!.t, to }), to);
+    // From now back, the coin's newest page vouches for its quiet minutes to GECKO_SETTLE_MS ago.
+    const rows = geckoPageRows(job.mint, bars, cursor, now, job.cursor === null);
     if (rows.length > 0) await deps.save(rows);
   } catch (err) {
     return { cursor: at(cursor), ...failed(err) };

@@ -638,3 +638,27 @@ export class JupiterFirstLookup {
     return [...byMint.values()];
   }
 }
+
+/** A quote coin's USD price and its decimals. */
+export interface QuoteUsd {
+  usd: number;
+  decimals: number;
+}
+
+/**
+ * A coin's USD price and decimals from Jupiter's keyless price API (lite-api, which bills nothing),
+ * for what a coin-quoted curve or pool pairs with (USD1, a tokenized stock, another coin): the API's
+ * live chart and the worker's curve candles. Decimals are never guessed: a tokenized stock has 8
+ * where most coins have 6, and a wrong guess is a 100x wrong market cap. Null without both.
+ */
+export async function keylessQuoteUsd(mint: string): Promise<QuoteUsd | null> {
+  const body = await fetchJson<Record<string, { usdPrice?: unknown; decimals?: unknown }>>(
+    `https://lite-api.jup.ag/price/v3?ids=${encodeURIComponent(mint)}`,
+    { timeoutMs: 4_000, retries: 0 },
+  );
+  const usd = Number(body?.[mint]?.usdPrice);
+  const decimals = Number(body?.[mint]?.decimals);
+  return Number.isFinite(usd) && usd > 0 && Number.isInteger(decimals) && decimals >= 0 && decimals <= 18
+    ? { usd, decimals }
+    : null;
+}

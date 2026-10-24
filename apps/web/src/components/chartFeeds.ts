@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, FEED_TIMEOUT_MS } from "../api";
-import { MAX_SLOTS } from "../chartBars";
+import { MAX_SLOTS, type Slots } from "../chartBars";
 import type { Point, VolumeCandle } from "../priceChart";
 
 /** Mirrors apps/api/src/liveCurve.ts LiveCurveAnswer. */
@@ -169,6 +169,11 @@ export interface StoredCandles {
    * builds and when there are none. The chart leaves them blank rather than flat (chartBars.ts).
    */
   holes?: [number, number][];
+  /**
+   * The newest page only, while something will still fill its holes: about how long until it
+   * does (ms) and how far back the coin's backfill has got (0 to 1); either null when not known.
+   */
+  backfill?: { etaMs: number | null; progress: number | null };
 }
 
 /** A stretch nobody read: [from, to) in ms. */
@@ -230,6 +235,39 @@ export function candleTfParam(tfMs: number): { tf: string; ms: number } {
  */
 export function candlePollMs(tfMs: number): number {
   return tfMs <= 5_000 ? 5_000 : tfMs < 60_000 ? 15_000 : 30_000;
+}
+
+/** A newest page's hole at least this long is filled by the API's top-up on the chart's open. */
+const TOP_UP_HOLE_MS = 2 * 60_000;
+/** How soon the chart reads again while that top-up may still be landing, and how many times. */
+export const QUICK_POLL_MS = 3_000;
+export const QUICK_POLLS = 3;
+
+/**
+ * Exported for tests. When the chart reads its newest page again: soon while the API's top-up may
+ * still be landing; just after the backfill's ETA while one is coming (`etaMs`), within the usual
+ * round.
+ */
+export function nextPollMs(tfMs: number, quick: boolean, etaMs: number | null): number {
+  const round = candlePollMs(tfMs);
+  if (quick) return Math.min(round, QUICK_POLL_MS);
+  if (etaMs === null) return round;
+  return Math.min(round, Math.max(QUICK_POLL_MS, etaMs + 1_000));
+}
+
+/**
+ * Exported for tests. Whether the newest page still waits on the API's top-up (apps/api
+ * candleTopUp.ts): no bars, or a long hole in its last 1,000 minutes. The API waits a few seconds
+ * for that read and saves it after; the chart reads again in QUICK_POLL_MS then, not its usual
+ * round (30 s at 1m: user ask 2026-10-24).
+ */
+export function awaitsTopUp(
+  bars: readonly unknown[],
+  holes: readonly (readonly [number, number])[],
+  now = Date.now(),
+): boolean {
+  if (bars.length === 0) return true;
+  return holes.some(([a, b]) => b - a >= TOP_UP_HOLE_MS && b > now - 1_000 * 60_000);
 }
 
 /**
@@ -310,6 +348,29 @@ export interface CandleHistory {
   next: number | null;
   /** Stretches no source read, oldest first: drawn blank, not flat. */
   holes: Hole[];
+  /** While the holes are being filled (the newest page's `backfill`); null once nothing will. */
+  backfill: Backfilling | null;
+}
+
+/** What the chart's backfilling label shows (TradingChart), as of the read at `at`. */
+export interface Backfilling {
+  etaMs: number | null;
+  progress: number | null;
+  /** When the read that said so landed (ms). */
+  at: number;
+  /** When the chart first saw the holes being filled: a progress bar with no progress of its own runs from here. */
+  since: number;
+}
+
+/**
+ * Exported for tests. The label's ETA left and its bar's fill (0 to 1) at `now`: the backfill's own
+ * progress where known, otherwise the share of the wait since the chart first saw it that is past.
+ */
+export function backfillShown(b: Backfilling, now = Date.now()): { leftMs: number | null; fill: number } {
+  const leftMs = b.etaMs === null ? null : Math.max(0, b.etaMs - (now - b.at));
+  const waited = Math.max(0, now - b.since);
+  const timed = leftMs === null ? 0 : waited / Math.max(1, waited + leftMs);
+  return { leftMs, fill: Math.min(0.99, Math.max(b.progress ?? 0, timed)) };
 }
 
 /** An older page that came back empty is asked again after this, on a scroll back to it (a backfill may land). */
@@ -354,9 +415,12 @@ export function useStoredCandles(
     let stopped = false;
     let timer: number | undefined;
     let busy = false;
+    let quickLeft = QUICK_POLLS;
     const poll = async () => {
       window.clearTimeout(timer);
       busy = true;
+      let quick = false;
+      let soon: number | null = null;
       if (document.visibilityState === "visible") {
         try {
           const a = await api<StoredCandles>(
@@ -365,6 +429,9 @@ export function useStoredCandles(
           );
           if (!stopped) {
             const page = storedCandles(a.bars ?? [], tf.ms);
+            quick = quickLeft > 0 && awaitsTopUp(a.bars ?? [], a.holes ?? []);
+            if (quick) quickLeft -= 1;
+            soon = a.backfill?.etaMs ?? null;
             setHeld((prev) => {
               const mine = prev && prev.base === base && prev.history.tfMs === tf.ms ? prev.history : null;
               const joined = mine ? withNewest(mine.candles, page) : page;
@@ -372,7 +439,11 @@ export function useStoredCandles(
               const pagedBack = !!mine && page.length > 0 && joined[0]!.t < page[0]!.t;
               const held = newestHeld(joined, pagedBack ? mine.next : (a.next ?? null));
               const holes = holesWithNewest(mine?.holes ?? [], a.holes ?? [], page[0]?.t ?? null);
-              return { base, history: { tfMs: tf.ms, ...held, holes } };
+              const now = Date.now();
+              const backfill = a.backfill
+                ? { ...a.backfill, at: now, since: mine?.backfill?.since ?? now }
+                : null;
+              return { base, history: { tfMs: tf.ms, ...held, holes, backfill } };
             });
             setError(null);
             setAt(Date.now());
@@ -382,7 +453,7 @@ export function useStoredCandles(
         }
       }
       busy = false;
-      if (!stopped) timer = window.setTimeout(() => void poll(), candlePollMs(tf.ms));
+      if (!stopped) timer = window.setTimeout(() => void poll(), nextPollMs(tf.ms, quick, soon));
     };
     // Back online, or the tab shown again: read at once rather than at the next round.
     const resume = () => {
@@ -439,6 +510,7 @@ export function useStoredCandles(
               candles: withOlder(prev.history.candles, page),
               next: page.length > 0 ? (a.next ?? null) : null,
               holes: holesWithOlder(prev.history.holes, a.holes ?? [], prev.history.candles[0]?.t ?? null),
+              backfill: prev.history.backfill,
             },
           };
         });
@@ -452,4 +524,40 @@ export function useStoredCandles(
   }, [base]);
 
   return { history, error: error && error.base === base ? error.error : null, at, older };
+}
+
+/**
+ * Exported for tests. The slots' runs of unknown ones (no source read them), by their edges' times.
+ */
+export function slotGaps(slots: Slots): { t0: number; t1: number }[] {
+  const out: { t0: number; t1: number }[] = [];
+  let from: number | null = null;
+  slots.bars.forEach((b, i) => {
+    if (b.unknown && from === null) from = i;
+    if (!b.unknown && from !== null) {
+      out.push({ t0: slots.start + from * slots.tfMs, t1: slots.start + i * slots.tfMs });
+      from = null;
+    }
+  });
+  if (from !== null)
+    out.push({ t0: slots.start + from * slots.tfMs, t1: slots.start + slots.bars.length * slots.tfMs });
+  return out;
+}
+
+/** Exported for tests. A gap's label: being backfilled, with its ETA and bar, or no source had it. */
+export function gapNote(
+  backfill: Backfilling | null,
+  now = Date.now(),
+): { title: string; sub: string | null; fill: number | null } {
+  if (!backfill) return { title: "No data recorded", sub: null, fill: null };
+  const { leftMs, fill } = backfillShown(backfill, now);
+  return { title: "Backfilling data…", sub: leftMs === null ? null : etaLabel(leftMs), fill };
+}
+
+/** An ETA as the label shows it: "~12s", "~3m", "~1h", or "any moment" once it's due. */
+export function etaLabel(ms: number): string {
+  if (ms < 1_500) return "any moment";
+  if (ms < 60_000) return `~${Math.ceil(ms / 1_000)}s`;
+  if (ms < 3_600_000) return `~${Math.ceil(ms / 60_000)}m`;
+  return `~${Math.round(ms / 3_600_000)}h`;
 }

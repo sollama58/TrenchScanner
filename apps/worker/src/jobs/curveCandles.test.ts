@@ -5,6 +5,7 @@ import {
   curveCandleRows,
   curveTapeDropped,
   flushCurveCandles,
+  quoteUsdRate,
   resetCurveCandles,
   startCurveCandles,
 } from "./curveCandles.js";
@@ -184,6 +185,47 @@ describe("the minute flush", () => {
     curveTapeDropped("M", t, T0 + 127_000);
     await flushCurveCandles(T0 + 127_000);
     expect(writes[2]!.map((r) => r.bars.map((b) => b.t - T0))).toEqual([[126_000]]);
+  });
+
+  it("prices a curve quoted in another coin at that coin's USD price, and leaves it out without one", async () => {
+    // Quoted in a 6-decimal coin at $2: its price and reserve are in that coin's base units.
+    const quoted = (price: number, units: number): CurveState => ({
+      ...state(price, 0),
+      realQuote: units * 1e6,
+      quoteIsSol: false,
+      quoteMint: "Q",
+    });
+    const t = new CurveTape({ keepMs: 31 * 60_000 });
+    t.record("M", T0 - 10_000, quoted(1e-5, 100), "read");
+    t.confirmStreamed("M", T0 - 10_000, T0 - 5_000);
+    t.confirmStreamed("M", T0 - 10_000, T0);
+    t.record("M", T0 + 1_500, quoted(2e-5, 150), "stream");
+    for (let at = T0 + 5_000; at <= T0 + 60_000; at += 5_000) t.confirmStreamed("M", T0 - 10_000, at);
+    const writes: CandleChunkRow[][] = [];
+    const asked: string[] = [];
+    startCurveCandles({
+      view: { mints: () => ["M"], ticksAfter: (m, a) => t.ticksAfter(m, a) },
+      solUsd: async () => SOL,
+      quoteUsd: async (mint) => (asked.push(mint), { usd: 2, decimals: 6 }),
+      save: async (rows) => void writes.push(rows),
+    });
+    await flushCurveCandles(T0 + 60_500);
+    expect(asked).toEqual(["Q"]);
+    const bar = writes[0]![0]!.bars[0]!;
+    // 2e-5 coin units per raw token: 0.00002 coin a token at $2, $40K on the billion.
+    expect(bar.c).toBeCloseTo(2e-5 * 1e6 * quoteUsdRate({ usd: 2, decimals: 6 }));
+    expect(bar.c).toBeCloseTo(40_000);
+    // 50 coins through the curve at $2.
+    expect(bar.vol).toBeCloseTo(100);
+    resetCurveCandles();
+    const none: CandleChunkRow[][] = [];
+    startCurveCandles({
+      view: { mints: () => ["M"], ticksAfter: (m, a) => t.ticksAfter(m, a) },
+      solUsd: async () => SOL,
+      save: async (rows) => void none.push(rows),
+    });
+    await flushCurveCandles(T0 + 60_500);
+    expect(none).toEqual([]);
   });
 
   it("keeps a coin's place when the write fails, and tries again", async () => {

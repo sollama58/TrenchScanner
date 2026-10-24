@@ -3,15 +3,20 @@ import {
   baseSegments,
   chunkSourceSummary,
   createLogger,
+  candleBackfillPerMinute,
+  GeckoTerminalClient,
   launchSupplyFactors,
   oldestCandleCover,
   prisma,
   PUMPFUN_LAUNCHPAD,
   readCandleChunks,
   recentChunksBySource,
+  type BackfillToken,
   type Env,
   type SeriesInput,
 } from "@trenchscanner/core";
+import { backfillStatus } from "../backfillStatus.js";
+import { TOP_UP_WAIT_MS, topUpNow, wantsTopUp } from "../candleTopUp.js";
 import { allowLookupRead } from "../lookupGate.js";
 import {
   askBackfill,
@@ -152,8 +157,8 @@ const deps: CandleReadDeps = {
 /** Answers are shared by every reader for a few seconds (the newest page) or a minute (older ones). */
 const newestAnswers = new KeyedCache<TokenCandlesAnswer>(5_000, 500);
 const olderAnswers = new KeyedCache<TokenCandlesAnswer>(60_000, 500);
-/** Whether a mint is on Token and is a Pump.fun coin, reused a while (the chart polls). */
-const onToken = new KeyedCache<{ pump: boolean } | null>(5 * 60_000, 2_000);
+/** Whether a mint is on Token and is a Pump.fun coin, with its pools' fields, reused a while (the chart polls). */
+const onToken = new KeyedCache<{ pump: boolean; token: BackfillToken } | null>(5 * 60_000, 2_000);
 
 /**
  * GET /tokens/:mint/candles?tf=&before=&limit= (charts audit 2026-10-22 target design): bars of
@@ -162,6 +167,28 @@ const onToken = new KeyedCache<{ pump: boolean } | null>(5 * 60_000, 2_000);
  */
 export async function registerCandleRoutes(app: FastifyInstance, opts: { env?: Env } = {}) {
   configureCandleStore({ enabled: opts.env?.CANDLE_STORE ?? true });
+  // The chart's own GeckoTerminal top-up on open (candleTopUp.ts): its free API first, as the
+  // worker's backfill reads it, and a paid credit from the charts lane only when that has no slot.
+  const env = opts.env;
+  const gecko =
+    env && env.CANDLE_STORE
+      ? new GeckoTerminalClient(
+          env.COINGECKO_API_KEY
+            ? { apiKey: env.COINGECKO_API_KEY, priorityPerMinute: 1, backgroundPerMinute: 10 }
+            : { priorityPerMinute: 1, backgroundPerMinute: 10 },
+        )
+      : null;
+  // The worker backfill's pace, for the ETA a waiting chart is shown (backfillStatus.ts).
+  const backfillPace =
+    env && env.CANDLE_STORE
+      ? {
+          stepMs: Math.max(
+            env.COINGECKO_API_KEY ? 1_000 : 3_000,
+            60_000 / Math.max(1, candleBackfillPerMinute(env)),
+          ),
+          maxPages: env.CANDLE_BACKFILL_MAX_PAGES,
+        }
+      : null;
   app.addHook("preHandler", app.authenticateSubscriber);
 
   app.get("/:mintAddress/candles", async (request, reply): Promise<TokenCandlesAnswer | undefined> => {
@@ -181,9 +208,11 @@ export async function registerCandleRoutes(app: FastifyInstance, opts: { env?: E
       .get(mintAddress, async () => {
         const row = await prisma.token.findUnique({
           where: { mintAddress },
-          select: { launchpad: true },
+          select: { launchpad: true, launchedAt: true, pairAddress: true },
         });
-        return row ? { pump: row.launchpad === PUMPFUN_LAUNCHPAD || mintAddress.endsWith("pump") } : null;
+        return row
+          ? { pump: row.launchpad === PUMPFUN_LAUNCHPAD || mintAddress.endsWith("pump"), token: row }
+          : null;
       })
       .catch(() => null);
     if (!known) {
@@ -196,12 +225,36 @@ export async function registerCandleRoutes(app: FastifyInstance, opts: { env?: E
     askBackfill(mintAddress, Date.now(), !known.pump);
     const key = `${mintAddress}:${q.tf}:${q.before ?? "now"}:${q.limit}`;
     const cache = q.before === null ? newestAnswers : olderAnswers;
-    const answer = await cache
-      .get(key, () => readTokenCandles(mintAddress, q.tf, q.before, q.limit, deps))
-      .catch((err: unknown) => {
-        logger.warn("candles failed", { mint: mintAddress, tf: q.tf, error: String(err) });
-        return empty;
-      });
+    const read = () =>
+      cache
+        .get(key, () => readTokenCandles(mintAddress, q.tf, q.before, q.limit, deps))
+        .catch((err: unknown) => {
+          logger.warn("candles failed", { mint: mintAddress, tf: q.tf, error: String(err) });
+          return empty;
+        });
+    let answer = await read();
+    // A stretch nobody recorded in the newest page (the coin past its 1-second follow, or never
+    // followed): its GeckoTerminal minutes are read and saved now, and the page read again, rather
+    // than left to the worker's queue and the chart's next poll (user ask 2026-10-24). A read that
+    // takes longer than TOP_UP_WAIT_MS still saves, for the next poll.
+    if (gecko && q.before === null && wantsTopUp(answer)) {
+      const saved = await Promise.race([
+        topUpNow(mintAddress, known.token, { gecko }),
+        new Promise<false>((r) => setTimeout(() => r(false), TOP_UP_WAIT_MS).unref?.()),
+      ]);
+      if (saved) {
+        cache.forget(key);
+        answer = await read();
+      }
+    }
+    // The holes still left: what will fill them, and about when (the chart's backfilling label).
+    if (backfillPace && q.before === null && (answer.bars.length === 0 || (answer.holes?.length ?? 0) > 0)) {
+      const status = await backfillStatus(mintAddress, known.token.launchedAt, {
+        ...backfillPace,
+        topUp: gecko !== null && wantsTopUp(answer),
+      }).catch(() => null);
+      if (status) answer = { ...answer, backfill: status };
+    }
     // Chart health (/health charts.candles) counts this route's answers as the legacy /chart's:
     // no bars at all is a null answer; a page whose holes take a good part of its span is partial.
     if (q.before === null) {

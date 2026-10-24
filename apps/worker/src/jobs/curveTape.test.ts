@@ -39,6 +39,8 @@ function setup(
     maxAgeMinutes?: number;
     featureMaxAgeMinutes?: number;
     alertedMaxAgeMinutes?: number;
+    alertedAlwaysMinutes?: number;
+    alertedIdleMinutes?: number;
     nearBandMaxAgeMinutes?: number;
     newLaunches?: () => string[];
     screenLaunches?: (mints: string[]) => Promise<string[]>;
@@ -295,6 +297,64 @@ describe("curve tape", () => {
     followYoungCurves([], NOW + 120 * 60_000, [old]);
     expect([...curveTapeView.mints()]).toEqual([]);
     expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
+  });
+
+  // User decision 2026-10-24: alerted coins followed 6 hours, only while they trade.
+  describe("past an ask's first two hours", () => {
+    const M = 60_000;
+    const old = { ...young, launchedAt: new Date(NOW - 5 * 3_600_000), askedAt: new Date(NOW) };
+    const ages = { alertedMaxAgeMinutes: 360, alertedAlwaysMinutes: 120, alertedIdleMinutes: 5 };
+    const trade = async (s: ReturnType<typeof setup>, at: number, price: number) => {
+      s.reader.getCurveStatesBatch.mockImplementation(
+        async (curves: string[]) => new Map(curves.map((c) => [c, state(price)] as const)),
+      );
+      await round(at);
+    };
+
+    it("follows a coin on while it trades, to six hours from the ask", async () => {
+      const s = setup(null, ages);
+      stop = s.stop;
+      for (let m = 0; m < 360; m += 4) {
+        followYoungCurves([], NOW + m * M, [old]);
+        expect([...curveTapeView.mints()]).toEqual([MINT]);
+        await trade(s, NOW + m * M, 1 + (m % 8 === 0 ? 0 : 1));
+      }
+      followYoungCurves([], NOW + 361 * M, [old]);
+      expect([...curveTapeView.mints()]).toEqual([]);
+    });
+
+    it("lets a coin go once it hasn't traded for five minutes, until it is asked again", async () => {
+      const s = setup(null, ages);
+      stop = s.stop;
+      followYoungCurves([], NOW, [old]);
+      await trade(s, NOW, 1);
+      // Quiet through its first two hours: followed anyway.
+      followYoungCurves([], NOW + 117 * M, [old]);
+      await trade(s, NOW + 117 * M, 2);
+      followYoungCurves([], NOW + 121 * M, [old]);
+      expect([...curveTapeView.mints()]).toEqual([MINT]);
+      // Its last trade six minutes ago: let go, and not followed again for the same ask.
+      followYoungCurves([], NOW + 123 * M, [old]);
+      expect([...curveTapeView.mints()]).toEqual([]);
+      expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
+      followYoungCurves([], NOW + 130 * M, [old]);
+      expect([...curveTapeView.mints()]).toEqual([]);
+      // A new call or chart open: followed from that ask.
+      const again = { ...old, askedAt: new Date(NOW + 131 * M) };
+      followYoungCurves([], NOW + 131 * M, [again]);
+      expect([...curveTapeView.mints()]).toEqual([MINT]);
+    });
+
+    it("gives a coin first followed late a few minutes to show a trade", () => {
+      const s = setup(null, ages);
+      stop = s.stop;
+      followYoungCurves([], NOW + 200 * M, [old]);
+      expect([...curveTapeView.mints()]).toEqual([MINT]);
+      followYoungCurves([], NOW + 204 * M, [old]);
+      expect([...curveTapeView.mints()]).toEqual([MINT]);
+      followYoungCurves([], NOW + 206 * M, [old]);
+      expect([...curveTapeView.mints()]).toEqual([]);
+    });
   });
 
   // A deploy used to start the day's count over, handing the stream its whole share again.

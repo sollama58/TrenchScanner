@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  drawTimeframe,
   autoTimeframe,
   buildSlots,
   candleReadings,
@@ -204,5 +205,23 @@ describe("autoTimeframe", () => {
   it("fits a timeframe three times or not at all", () => {
     expect(timeframeFits(60_000, 180_000)).toBe(true);
     expect(timeframeFits(60_000, 179_999)).toBe(false);
+  });
+});
+
+describe("drawTimeframe", () => {
+  const M = 60_000;
+  it("draws the size shown once the candles held were read at the size wanted", () => {
+    expect(drawTimeframe(M, M, M, 5 * M)).toBe(M);
+    // Auto drawing wider than it reads (only coarser candles cover the view).
+    expect(drawTimeframe(5 * M, M, M, null)).toBe(5 * M);
+    expect(drawTimeframe(M, M, undefined, 5 * M)).toBe(M);
+  });
+
+  it("keeps the last size drawn while the newly picked size's page is on its way", () => {
+    // 5m picked over 1m candles, and 1m picked over 5m ones.
+    expect(drawTimeframe(5 * M, 5 * M, M, M)).toBe(M);
+    expect(drawTimeframe(M, M, 5 * M, 5 * M)).toBe(5 * M);
+    // Nothing drawn yet: the wider of the two, never the old candles cut finer.
+    expect(drawTimeframe(M, M, 5 * M, null)).toBe(5 * M);
   });
 });

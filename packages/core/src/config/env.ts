@@ -321,7 +321,12 @@ const envSchema = z.object({
   // Coins a seat alerted on are followed to this age instead, on the watchlist or not, so their
   // charts hold 1-second candles for the stretch people look at (user decision 2026-10-23: about
   // 600 alerts a day, a few dozen followed at once). After graduation their pool is followed to it too.
-  CURVE_TAPE_ALERTED_MINUTES: z.coerce.number().positive().default(120),
+  // 360 since 2026-10-24 (user decision: 6 hours, only while the coin trades): past the first
+  // CURVE_TAPE_ALERTED_ALWAYS_MINUTES from the ask, a coin is followed on only while it traded within
+  // CURVE_TAPE_ALERTED_IDLE_MINUTES, and one let go idle waits for a new ask.
+  CURVE_TAPE_ALERTED_MINUTES: z.coerce.number().positive().default(360),
+  CURVE_TAPE_ALERTED_ALWAYS_MINUTES: z.coerce.number().positive().default(120),
+  CURVE_TAPE_ALERTED_IDLE_MINUTES: z.coerce.number().positive().default(5),
   // Watchlist coins last seen near the band (WATCHLIST_NEAR_BAND_MIN_MCAP_USD up) are followed to
   // this age from launch while they stay there, instead of PRICE_PATH_FOLLOW_MINUTES, so a coin
   // that climbs into the feed after its first half hour has 1-second bars from launch to its
@@ -342,7 +347,9 @@ const envSchema = z.object({
   // the stream at 60% of the pace (curveTape.ts POOL_PACE_SHARE) before the curves do. Past the
   // cap, only the 100 curves nearest the band are polled every CURVE_TAPE_POLL_SECONDS until the
   // day's pace allows the stream again.
-  CURVE_TAPE_STREAM_CREDITS_PER_DAY: z.coerce.number().nonnegative().default(100_000),
+  // 150,000 since 2026-10-24 (user decision: alerted coins followed 6 hours while they trade, the
+  // stream was at ~95k a day under the 100k cap before it).
+  CURVE_TAPE_STREAM_CREDITS_PER_DAY: z.coerce.number().nonnegative().default(150_000),
   CURVE_TAPE_POLL_SECONDS: z.coerce.number().min(1).default(5),
   CURVE_TAPE_POLL_MAX_MINTS: z.coerce.number().int().nonnegative().default(100),
   // The price path recorder (worker's jobs/pricePathRecorder.ts, user ask 2026-10-18): when the curve

@@ -188,7 +188,7 @@ async function run(deps: ChainFillDeps, opts: ChainFillOptions): Promise<void> {
           moved = page.moved;
           pages += 1;
           // Helius bills no failed answer.
-          if (moved !== "failed") spent += PAGE_CREDITS;
+          if (page.billed) spent += PAGE_CREDITS;
           coinPages.set(coin.mint, (coinPages.get(coin.mint) ?? 0) + 1);
           if (moved !== "failed" && page.trades === 0) quietUntil.set(coin.mint, now + QUIET_RETRY_MS);
           filled = true;
@@ -210,12 +210,15 @@ async function run(deps: ChainFillDeps, opts: ChainFillOptions): Promise<void> {
 
 interface PageOutcome {
   /**
-   * "closed": the hole is filled; "moved": part of it; "failed": no answer; "stuck": nothing
-   * could be saved from where the hole starts, so that hole waits a day.
+   * "closed": the hole is filled; "moved": part of it; "failed": no answer, or no SOL price to
+   * save it at; "stuck": nothing could be saved from where the hole starts, so that hole waits a
+   * day.
    */
   moved: "closed" | "moved" | "failed" | "stuck";
   /** Trades of the coin the page held (0 on a quiet stretch, or a failed read). */
   trades: number;
+  /** Helius answered the page, so its credits were spent. */
+  billed: boolean;
 }
 
 /**
@@ -230,17 +233,29 @@ async function fillPage(deps: ChainFillDeps, mint: string, from: number, to: num
     fromBlockTime: Math.floor(from / 1_000),
     untilBlockTime: Math.ceil(to / 1_000),
   });
-  if (page.status !== "ok") return { moved: "failed", trades: 0 };
+  if (page.status !== "ok") return { moved: "failed", trades: 0, billed: false };
   const txs = page.txs.filter((t) => typeof t.blockTime === "number");
   const newest = Math.max(0, ...txs.map((t) => t.blockTime! * 1_000));
   const whole = page.paginationToken === null || newest >= to;
   const coverTo = whole ? to : newest;
-  if (!(coverTo > from)) return { moved: "stuck", trades: txs.length };
+  if (!(coverTo > from)) return { moved: "stuck", trades: txs.length, billed: true };
   const { trades } = tradesFromChainTransactions(mint, txs);
   markTapeTrades(mint, txs, trades);
   const rows = await saveChainCandles(mint, trades, { from, to: coverTo }, deps.sink, deps.helius);
   stats.rows += rows.length;
-  const outcome = (moved: PageOutcome["moved"]): PageOutcome => ({ moved, trades: trades.length });
+  const outcome = (moved: PageOutcome["moved"]): PageOutcome => ({
+    moved,
+    trades: trades.length,
+    billed: true,
+  });
+  if (rows.length === 0 && trades.length > 0) {
+    // The page held trades and saved no bar: they are not a quiet stretch, so nothing may vouch
+    // for it. A coin quoted in another coin (DJT, ORE, USD1...) logs no SOL in its swap events and
+    // can't be priced here: until 2026-10-24 its first hours were vouched for as quiet, which hid
+    // GeckoTerminal's minutes there and drew its chart flat across hundreds of trades (prod, DohB:
+    // called at $8.9K, one bar). That hole waits a day. With no SOL price yet, the next run asks again.
+    return outcome(trades.some((t) => t.mark) ? "failed" : "stuck");
+  }
   const first = rows[0];
   if (first && first.coverFrom > from) {
     // The page read [from, coverTo) and found no trade before its first bar: the saved chunk
