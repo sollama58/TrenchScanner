@@ -1,6 +1,6 @@
 import { CARD_H, CARD_W, FONT, INK, MUTED, PAD, cardCanvas, clip, frame, pill } from "../shareCard";
-import { DIRECTED, EDGE_KINDS, EDGE_LABEL, clusterOf, nodeName, type AsylGraph } from "./graph";
-import { EDGE_COLOUR, CLUSTER_COLOUR, radiusOf } from "./GraphView";
+import { EDGE_KINDS, EDGE_LABEL, clusterOf, nodeName, type AsylGraph } from "./graph";
+import { EDGE_COLOUR, EDGE_STYLE, CLUSTER_COLOUR, radiusOf, type EdgeHead } from "./GraphView";
 import { bounds, newLayout, settle, type LayoutState } from "./layout";
 import { TILE, wallMarks } from "./scrawl";
 
@@ -34,6 +34,50 @@ function drawWall(ctx: CanvasRenderingContext2D) {
   }
   ctx.restore();
 }
+
+/** A link's end mark, as the map draws it, at (x, y) pointing along `ang`. */
+function drawHead(
+  ctx: CanvasRenderingContext2D,
+  head: EdgeHead,
+  x: number,
+  y: number,
+  ang: number,
+  colour: string,
+) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(ang);
+  ctx.setLineDash([]);
+  ctx.fillStyle = colour;
+  ctx.strokeStyle = colour;
+  ctx.beginPath();
+  if (head === "arrow") {
+    ctx.moveTo(0, 0);
+    ctx.lineTo(-9, -4.5);
+    ctx.lineTo(-9, 4.5);
+    ctx.closePath();
+    ctx.fill();
+  } else if (head === "open") {
+    ctx.lineWidth = 2;
+    ctx.moveTo(-8, -4);
+    ctx.lineTo(0, 0);
+    ctx.lineTo(-8, 4);
+    ctx.stroke();
+  } else if (head === "diamond") {
+    ctx.moveTo(0, 0);
+    ctx.lineTo(-4.5, -4);
+    ctx.lineTo(-9, 0);
+    ctx.lineTo(-4.5, 4);
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    ctx.arc(-4, 0, 3.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+const dashOf = (dash: string | undefined) => (dash ? dash.split(" ").map(Number) : []);
 
 export interface MapCardInput {
   title: string;
@@ -115,24 +159,30 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
     ctx.strokeStyle = EDGE_COLOUR[e.kind];
     ctx.globalAlpha = 0.75;
     ctx.lineWidth = Math.max(1, (1 + t * 3) * Math.min(1, k));
-    ctx.setLineDash(e.source === "chain" ? [6, 4] : e.kind === "cotrade" ? [2, 4] : []);
+    const st = EDGE_STYLE[e.kind];
+    ctx.setLineDash(dashOf(st.dash));
+    ctx.lineCap = e.kind === "cotrade" ? "round" : "butt";
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(c.x, c.y);
     ctx.stroke();
-    if (DIRECTED.has(e.kind)) {
-      const ang = Math.atan2(c.y - a.y, c.x - a.x);
+    const ang = Math.atan2(c.y - a.y, c.x - a.x);
+    if (st.head) {
       const r = radius(e.b) * k + 3;
-      const tx = c.x - Math.cos(ang) * r;
-      const ty = c.y - Math.sin(ang) * r;
+      drawHead(ctx, st.head, c.x - Math.cos(ang) * r, c.y - Math.sin(ang) * r, ang, EDGE_COLOUR[e.kind]);
+    }
+    if (e.source === "chain") {
+      // A chain read: the ringed dot halfway along.
       ctx.setLineDash([]);
-      ctx.fillStyle = EDGE_COLOUR[e.kind];
+      ctx.globalAlpha = 1;
       ctx.beginPath();
-      ctx.moveTo(tx, ty);
-      ctx.lineTo(tx - Math.cos(ang - 0.45) * 8, ty - Math.sin(ang - 0.45) * 8);
-      ctx.lineTo(tx - Math.cos(ang + 0.45) * 8, ty - Math.sin(ang + 0.45) * 8);
-      ctx.closePath();
+      ctx.arc((a.x + c.x) / 2, (a.y + c.y) / 2, 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = "#120c09";
       ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "#ffffff";
+      ctx.stroke();
+      ctx.globalAlpha = 0.75;
     }
   }
   ctx.setLineDash([]);
@@ -166,6 +216,23 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
             ? "#ff3b30"
             : "rgba(0,0,0,0.5)";
     ctx.stroke();
+    if (n.kind === "wallet" && n.tags.includes("dev")) {
+      // The deployer's yellow D, as on the map.
+      const bx = p.x + r * 0.74;
+      const by = p.y - r * 0.74;
+      ctx.beginPath();
+      ctx.arc(bx, by, 7, 0, Math.PI * 2);
+      ctx.fillStyle = "#ffe066";
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "#120402";
+      ctx.stroke();
+      ctx.font = `800 10px ${FONT}`;
+      ctx.fillStyle = "#120402";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("D", bx, by + 0.5);
+    }
     if (labelled.has(n.id)) {
       ctx.font = `600 13px ${FONT}`;
       ctx.textAlign = "center";
@@ -187,11 +254,20 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
   ctx.font = `500 15px ${FONT}`;
   ctx.textBaseline = "middle";
   for (const kd of kinds) {
-    ctx.fillStyle = EDGE_COLOUR[kd];
-    ctx.fillRect(lx, ly - 2, 18, 4);
+    const st = EDGE_STYLE[kd];
+    ctx.strokeStyle = EDGE_COLOUR[kd];
+    ctx.lineWidth = 3;
+    ctx.lineCap = kd === "cotrade" ? "round" : "butt";
+    ctx.setLineDash(dashOf(st.dash));
+    ctx.beginPath();
+    ctx.moveTo(lx, ly);
+    ctx.lineTo(lx + (st.head ? 22 : 30), ly);
+    ctx.stroke();
+    if (st.head) drawHead(ctx, st.head, lx + 31, ly, 0, EDGE_COLOUR[kd]);
+    ctx.setLineDash([]);
     ctx.fillStyle = MUTED;
-    ctx.fillText(EDGE_LABEL[kd], lx + 24, ly);
-    lx += 34 + ctx.measureText(EDGE_LABEL[kd]).width;
+    ctx.fillText(EDGE_LABEL[kd], lx + 38, ly);
+    lx += 50 + ctx.measureText(EDGE_LABEL[kd]).width;
   }
   return canvas;
 }

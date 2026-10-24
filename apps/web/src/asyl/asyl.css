@@ -370,12 +370,8 @@ body {
 .asyl-legend label.off {
   opacity: 0.45;
 }
-.asyl-legend i,
-.asyl-shared-legend i {
-  display: inline-block;
-  width: 18px;
-  height: 4px;
-  border-radius: 2px;
+.asyl-swatch {
+  flex: none;
 }
 .asyl-list {
   list-style: none;
@@ -473,6 +469,87 @@ body {
   fill: #fff;
   font-size: 12px;
   pointer-events: none;
+}
+/* A deployer's badge: yellow, as its "Deployed" lines. */
+.asyl-dev-mark {
+  pointer-events: none;
+}
+.asyl-dev-mark circle {
+  fill: #ffe066;
+  stroke: #120402;
+  stroke-width: 1.5px;
+}
+.asyl-dev-mark text {
+  fill: #120402;
+  font-size: 9px;
+  font-weight: 800;
+}
+/* Wallets taken off the map, to bring back one by one. */
+.asyl-hidden-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.asyl-hidden-list label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 13px;
+  cursor: pointer;
+}
+.asyl-hidden-list .asyl-muted {
+  margin-left: auto;
+  font-size: 11px;
+}
+/* The keyboard shortcuts card. */
+.asyl-keys {
+  position: absolute;
+  top: 52px;
+  right: 12px;
+  z-index: 4;
+  width: min(320px, calc(100% - 24px));
+  background: var(--asyl-panel);
+  border: 1px solid var(--asyl-line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13px;
+}
+.asyl-keys h3 {
+  margin: 0 0 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.asyl-keys dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 12px;
+  margin: 0;
+}
+.asyl-keys dt {
+  text-align: right;
+  white-space: nowrap;
+}
+.asyl-keys dd {
+  margin: 0;
+  color: var(--asyl-muted);
+}
+.asyl-keys kbd,
+.asyl-kbd {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0 5px;
+  border: 1px solid var(--asyl-line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font:
+    600 11px/1.6 ui-monospace,
+    monospace;
+  text-align: center;
+  color: var(--asyl-text);
 }
 .asyl-tip {
   position: absolute;
@@ -685,22 +762,71 @@ body {
   font-size: 18px;
   color: var(--asyl-text);
 }
-.asyl-shared-legend {
+/* The map's key, bottom left of the map. */
+.asyl-map-legend {
   position: absolute;
   left: 12px;
   bottom: 12px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
+  z-index: 2;
+  max-width: min(330px, calc(100% - 24px));
+  background: rgba(10, 6, 4, 0.9);
+  border: 1px solid var(--asyl-line);
+  border-radius: 10px;
   font-size: 12px;
-  background: rgba(10, 6, 4, 0.85);
-  padding: 6px 10px;
-  border-radius: 8px;
 }
-.asyl-shared-legend span {
-  display: inline-flex;
+.asyl-map-legend-toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  color: var(--asyl-muted);
+  font: 700 11px/1 inherit;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.asyl-map-legend ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 10px 8px;
+  display: grid;
+  gap: 4px;
+}
+.asyl-map-legend li {
+  display: grid;
+  grid-template-columns: 40px auto 1fr;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+}
+.asyl-map-legend b {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.asyl-map-legend li span {
+  color: var(--asyl-muted);
+}
+.asyl-legend-dev {
+  justify-self: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffe066;
+  color: #120402 !important;
+  font-size: 9px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid #120402;
+}
+@media (max-width: 700px) {
+  .asyl-map-legend li {
+    grid-template-columns: 40px 1fr;
+  }
+  .asyl-map-legend li span {
+    grid-column: 2;
+  }
 }
 .asyl-shared-note {
   position: absolute;
@@ -762,5 +888,125 @@ body {
     background: #160e0a;
     border-radius: 14px 14px 0 0;
     padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  }
+}
+
+/* ---- Asyl's own sign-in page (user ask 2026-10-24): TrenchScanner's page, reskinned. The intro
+   is marker on the wall, the sign-in a sticky note, and the example map the dark map tile. ---- */
+
+.asyl-signin {
+  min-height: 100vh;
+  padding: 0 16px;
+  box-sizing: border-box;
+}
+.asyl-signin .signin {
+  margin: 28px auto 48px;
+}
+.asyl-signin-intro h1.asyl-wordmark {
+  font-size: 76px;
+  max-width: none;
+  margin: 4px 0 14px;
+}
+.asyl-signin .lead {
+  color: var(--asyl-ink);
+  font-size: 19px;
+  font-weight: 650;
+}
+.asyl-signin .landing-points {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.asyl-signin .landing-points li {
+  background: var(--asyl-panel);
+  border-color: var(--asyl-line);
+}
+.asyl-signin .landing-points p {
+  color: var(--asyl-text);
+}
+.asyl-signin .eyebrow {
+  color: var(--asyl-orange-hi);
+}
+.asyl-signin-intro > .faint {
+  margin-top: 14px;
+  color: var(--asyl-ink);
+}
+.asyl-signin-intro .asyl-link {
+  color: var(--asyl-ink);
+  font-weight: 700;
+  text-decoration: underline;
+}
+.asyl-signin .signin-box {
+  background: var(--asyl-paper);
+  color: #2a1408;
+  border: 0;
+  border-radius: 4px;
+  box-shadow: 0 18px 40px rgba(40, 10, 0, 0.45);
+  transform: rotate(-0.6deg);
+}
+.asyl-signin .signin-box h2,
+.asyl-signin .signin-box h3 {
+  color: #1b0e07;
+}
+.asyl-signin .signin-box h2 {
+  font-family: var(--asyl-marker);
+  font-weight: 400;
+  font-size: 30px;
+}
+.asyl-signin .signin-box .eyebrow,
+.asyl-signin .signin-box .signin-steps .num,
+.asyl-signin .signin-box a {
+  color: #a8400c;
+}
+.asyl-signin .signin-box .muted,
+.asyl-signin .signin-box .faint,
+.asyl-signin .signin-box .signin-steps,
+.asyl-signin .signin-box .signin-steps li span,
+.asyl-signin .signin-box .signin-status {
+  color: #5c3c27;
+}
+.asyl-signin .signin-box .wallet {
+  background: #1b0e07;
+  color: #fff;
+  border: 0;
+}
+.asyl-signin .signin-box .wallet:hover:not(:disabled) {
+  background: #3a1d0e;
+}
+.asyl-signin .signin-box .wallet-go {
+  color: var(--asyl-orange);
+}
+.asyl-signin .signin-box .empty-state {
+  background: rgba(27, 14, 7, 0.06);
+  border-color: rgba(27, 14, 7, 0.2);
+  color: #2a1408;
+}
+.asyl-signin .signin-box .error {
+  color: #b3200c;
+}
+.asyl-signin-example > .eyebrow,
+.asyl-signin-example h2,
+.asyl-signin-example > .muted {
+  color: var(--asyl-ink);
+}
+.asyl-signin-map {
+  position: relative;
+  height: 420px;
+  margin-top: 12px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.55);
+  background-color: var(--asyl-dark);
+  background-image: var(--asyl-wall-dark, none);
+  background-size: 900px 900px;
+  box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.6);
+}
+@media (max-width: 700px) {
+  .asyl-signin-intro h1.asyl-wordmark {
+    font-size: 56px;
+  }
+  .asyl-signin .landing-points {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .asyl-signin-map {
+    height: 360px;
   }
 }

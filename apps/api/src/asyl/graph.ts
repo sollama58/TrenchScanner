@@ -110,6 +110,42 @@ export class GraphBuilder {
   }
 }
 
+/** A "funded" edge: `funder` paid `wallet` its first SOL. */
+function fundedEdge(
+  g: GraphBuilder,
+  funder: string,
+  wallet: string,
+  f: { amountSol: number | null; fundedAt: Date | null },
+): void {
+  g.edge({
+    a: funder,
+    b: wallet,
+    kind: "funded",
+    weight: f.amountSol ?? 0.01,
+    label: ["Funded", fmtSol(f.amountSol), fmtDay(f.fundedAt)].filter(Boolean).join(" · "),
+    source: "stored",
+    at: f.fundedAt?.toISOString() ?? null,
+  });
+}
+
+/** A "transfer" edge: holder transfers of `mint` from one wallet to another (HolderTransferEvent). */
+function transferEdge(
+  g: GraphBuilder,
+  t: { fromWallet: string; toWallet: string; n: number; pct: number; last: Date },
+  mint: string,
+): void {
+  g.edge({
+    a: t.fromWallet,
+    b: t.toWallet,
+    kind: "transfer",
+    weight: t.pct,
+    label: `Sent ${fmtPct(t.pct)} of supply${t.n > 1 ? ` · ${t.n}×` : ""} · ${fmtDay(t.last)}`,
+    source: "stored",
+    mint,
+    at: t.last.toISOString(),
+  });
+}
+
 /** Whether a funder is a service (an exchange, a bridge, a bot paying thousands), not a person. */
 export async function hotFunders(funders: readonly string[]): Promise<Set<string>> {
   const unique = [...new Set(funders)];
@@ -144,29 +180,13 @@ export async function addFunding(g: GraphBuilder, wallet: string): Promise<void>
   ]);
   for (const p of paid) {
     g.node(p.wallet, "wallet");
-    g.edge({
-      a: wallet,
-      b: p.wallet,
-      kind: "funded",
-      weight: p.amountSol ?? 0.01,
-      label: ["Funded", fmtSol(p.amountSol), fmtDay(p.fundedAt)].filter(Boolean).join(" · "),
-      source: "stored",
-      at: p.fundedAt?.toISOString() ?? null,
-    });
+    fundedEdge(g, wallet, p.wallet, p);
   }
   if (own?.status !== "found" || !own.funder) return;
   const funder = own.funder;
   const hot = (await hotFunders([funder])).has(funder);
   g.node(funder, "wallet", hot ? { tags: ["exchange"] } : {});
-  g.edge({
-    a: funder,
-    b: wallet,
-    kind: "funded",
-    weight: own.amountSol ?? 0.01,
-    label: ["Funded", fmtSol(own.amountSol), fmtDay(own.fundedAt)].filter(Boolean).join(" · "),
-    source: "stored",
-    at: own.fundedAt?.toISOString() ?? null,
-  });
+  fundedEdge(g, funder, wallet, own);
   if (hot) return;
   const siblings = await prisma.walletFunder.findMany({
     where: { funder, wallet: { not: wallet } },
@@ -176,15 +196,7 @@ export async function addFunding(g: GraphBuilder, wallet: string): Promise<void>
   });
   for (const s of siblings) {
     g.node(s.wallet, "wallet");
-    g.edge({
-      a: funder,
-      b: s.wallet,
-      kind: "funded",
-      weight: s.amountSol ?? 0.01,
-      label: ["Funded", fmtSol(s.amountSol), fmtDay(s.fundedAt)].filter(Boolean).join(" · "),
-      source: "stored",
-      at: s.fundedAt?.toISOString() ?? null,
-    });
+    fundedEdge(g, funder, s.wallet, s);
   }
 }
 
@@ -203,16 +215,7 @@ export async function addHolderTransfers(g: GraphBuilder, wallet: string): Promi
     g.node(r.fromWallet, "wallet");
     g.node(r.toWallet, "wallet");
     g.node(r.mintAddress, "token");
-    g.edge({
-      a: r.fromWallet,
-      b: r.toWallet,
-      kind: "transfer",
-      weight: r.pct,
-      label: `Sent ${fmtPct(r.pct)} of supply${r.n > 1 ? ` · ${r.n}×` : ""} · ${fmtDay(r.last)}`,
-      source: "stored",
-      mint: r.mintAddress,
-      at: r.last.toISOString(),
-    });
+    transferEdge(g, r, r.mintAddress);
   }
 }
 
@@ -243,41 +246,58 @@ export async function addCoins(g: GraphBuilder, wallet: string): Promise<number>
     prisma.tokenWalletActivity.count({ where: { wallet } }),
   ]);
   for (const t of traded) {
-    const mint = t.token.mintAddress;
-    g.node(mint, "token");
-    const net = t.solOut - t.solIn;
-    g.edge({
-      a: wallet,
-      b: mint,
-      kind: "traded",
-      weight: Math.max(t.solIn, t.solOut, 0.01),
-      label: [
-        `${t.buys} buy${t.buys === 1 ? "" : "s"}, ${t.sells} sell${t.sells === 1 ? "" : "s"}`,
-        t.sells > 0 ? `${net >= 0 ? "+" : ""}${net.toFixed(2)} SOL` : `in ${t.solIn.toFixed(2)} SOL`,
-        t.launchSniper ? "sniped" : null,
-      ]
-        .filter(Boolean)
-        .join(" · "),
-      source: "stored",
-      mint,
-      at: t.firstBuyAt?.toISOString() ?? null,
-    });
+    g.node(t.token.mintAddress, "token");
+    tradedEdge(g, wallet, t.token.mintAddress, t);
   }
   for (const t of launched) {
     g.node(t.mintAddress, "token");
-    const at = t.launchedAt ?? t.firstSeenAt;
-    g.edge({
-      a: wallet,
-      b: t.mintAddress,
-      kind: "created",
-      weight: 1,
-      label: `Launched · ${fmtDay(at)}`,
-      source: "stored",
-      mint: t.mintAddress,
-      at: at.toISOString(),
-    });
+    deployedEdge(g, wallet, t.mintAddress, t.launchedAt ?? t.firstSeenAt);
   }
   return seen;
+}
+
+/** A "created" edge: `wallet` deployed `mint`. */
+export function deployedEdge(g: GraphBuilder, wallet: string, mint: string, at: Date | null): void {
+  g.edge({
+    a: wallet,
+    b: mint,
+    kind: "created",
+    weight: 1,
+    label: at ? `Deployed · ${fmtDay(at)}` : "Deployed it",
+    source: "stored",
+    mint,
+    at: at?.toISOString() ?? null,
+  });
+}
+
+interface TradeRow {
+  buys: number;
+  sells: number;
+  solIn: number;
+  solOut: number;
+  firstBuyAt: Date | null;
+  launchSniper: boolean;
+}
+
+/** A "traded" edge: what `wallet` bought and sold of `mint`. */
+function tradedEdge(g: GraphBuilder, wallet: string, mint: string, t: TradeRow): void {
+  const net = t.solOut - t.solIn;
+  g.edge({
+    a: wallet,
+    b: mint,
+    kind: "traded",
+    weight: Math.max(t.solIn, t.solOut, 0.01),
+    label: [
+      `${t.buys} buy${t.buys === 1 ? "" : "s"}, ${t.sells} sell${t.sells === 1 ? "" : "s"}`,
+      t.sells > 0 ? `${net >= 0 ? "+" : ""}${net.toFixed(2)} SOL` : `in ${t.solIn.toFixed(2)} SOL`,
+      t.launchSniper ? "sniped" : null,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    source: "stored",
+    mint,
+    at: t.firstBuyAt?.toISOString() ?? null,
+  });
 }
 
 export interface CoTrader {
@@ -492,28 +512,85 @@ export async function addHolders(
   for (const [funder, paid] of byFunder) {
     if (paid.length < 2 && !onMap.has(funder)) continue;
     g.node(funder, "wallet");
-    for (const p of paid)
-      g.edge({
-        a: funder,
-        b: p.wallet,
-        kind: "funded",
-        weight: p.amountSol ?? 0.01,
-        label: ["Funded", fmtSol(p.amountSol), fmtDay(p.fundedAt)].filter(Boolean).join(" · "),
-        source: "stored",
-        at: p.fundedAt?.toISOString() ?? null,
-      });
+    for (const p of paid) fundedEdge(g, funder, p.wallet, p);
   }
-  for (const t of transfers)
-    g.edge({
-      a: t.fromWallet,
-      b: t.toWallet,
-      kind: "transfer",
-      weight: t.pct,
-      label: `Sent ${fmtPct(t.pct)} of supply${t.n > 1 ? ` · ${t.n}×` : ""} · ${fmtDay(t.last)}`,
-      source: "stored",
-      mint,
-      at: t.last.toISOString(),
-    });
+  for (const t of transfers) transferEdge(g, t, mint);
+}
+
+/** Wallets and coins a "links among" read takes: a full map's worth. */
+export const LINKS_WALLETS_MAX = 400;
+export const LINKS_TOKENS_MAX = 200;
+/** Rows each of its lookups returns, at most. */
+export const LINKS_ROWS_MAX = 1_000;
+
+/**
+ * Every stored link between wallets and coins already on a map (user ask 2026-10-24: "show
+ * transfers between visible wallets/tokens"): who funded whom, holder transfers, who deployed and
+ * who traded which coin, among those alone. With `deployers`, each coin's deployer joins the map
+ * too, so its lines can be drawn. Database only, so free of credits.
+ */
+export async function addLinksAmong(
+  g: GraphBuilder,
+  wallets: readonly string[],
+  tokens: readonly string[],
+  opts: { deployers: boolean },
+): Promise<void> {
+  for (const w of wallets) g.node(w, "wallet");
+  for (const t of tokens) g.node(t, "token");
+  const pairs = wallets.length > 1;
+  const [funders, transfers, coins] = await Promise.all([
+    pairs
+      ? prisma.walletFunder.findMany({
+          where: { wallet: { in: [...wallets] }, funder: { in: [...wallets] }, status: "found" },
+          select: { wallet: true, funder: true, amountSol: true, fundedAt: true },
+          take: LINKS_ROWS_MAX,
+        })
+      : Promise.resolve([]),
+    pairs
+      ? prisma.$queryRaw<
+          { fromWallet: string; toWallet: string; mintAddress: string; n: number; pct: number; last: Date }[]
+        >`
+          SELECT "fromWallet", "toWallet", "mintAddress", COUNT(*)::int AS n, SUM("pct")::float AS pct, MAX("at") AS last
+            FROM "HolderTransferEvent"
+           WHERE "fromWallet" = ANY(${[...wallets]}) AND "toWallet" = ANY(${[...wallets]})
+           GROUP BY 1, 2, 3
+           ORDER BY n DESC, pct DESC
+           LIMIT ${LINKS_ROWS_MAX}`
+      : Promise.resolve([]),
+    tokens.length
+      ? prisma.token.findMany({
+          where: { mintAddress: { in: [...tokens] } },
+          select: { id: true, mintAddress: true, creator: true, launchedAt: true, firstSeenAt: true },
+        })
+      : Promise.resolve([]),
+  ]);
+  for (const f of funders) if (f.funder) fundedEdge(g, f.funder, f.wallet, f);
+  for (const t of transfers) {
+    g.node(t.mintAddress, "token");
+    transferEdge(g, t, t.mintAddress);
+  }
+  const onMap = new Set(wallets);
+  for (const c of coins) {
+    if (!c.creator || !(onMap.has(c.creator) || opts.deployers)) continue;
+    g.node(c.creator, "wallet");
+    deployedEdge(g, c.creator, c.mintAddress, c.launchedAt ?? c.firstSeenAt);
+  }
+  if (wallets.length === 0 || coins.length === 0) return;
+  const trades = await prisma.tokenWalletActivity.findMany({
+    where: { tokenId: { in: coins.map((c) => c.id) }, wallet: { in: [...wallets] } },
+    select: {
+      wallet: true,
+      buys: true,
+      sells: true,
+      solIn: true,
+      solOut: true,
+      firstBuyAt: true,
+      launchSniper: true,
+      token: { select: { mintAddress: true } },
+    },
+    take: LINKS_ROWS_MAX,
+  });
+  for (const t of trades) tradedEdge(g, t.wallet, t.token.mintAddress, t);
 }
 
 /** The tags TrenchScanner's own tables give a wallet, from its scores and the lists it is on. */
@@ -627,6 +704,7 @@ export async function decorate(g: GraphBuilder, tracked: readonly TrackedWallet[
     n.mcapUsd = c.liveMarketCapUsd ?? c.lastMcapUsd;
     n.athUsd = c.peakWatch?.athMcapUsd ?? null;
     n.launchedAt = c.launchedAt?.toISOString() ?? null;
+    n.deployer = c.creator;
   }
   return g.graph();
 }

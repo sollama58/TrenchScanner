@@ -70,10 +70,14 @@ export function hasReturnTo(): boolean {
   }
 }
 
-/** The dashboard's sign-in page, set to come back to `back`. */
-export function signInUrl(back: string, host = location.hostname, origin = location.origin): string {
+/** The dashboard's home on this page's site (the page's own origin under `vite`). */
+export function dashboardUrl(host = location.hostname, origin = location.origin): string {
   const h = host.toLowerCase();
   const site = Object.keys(SAME_SITE_APIS).find((s) => h === s || h.endsWith(`.${s}`));
-  const base = site ? `https://${site}/` : `${origin}/`;
-  return `${base}?return=${encodeURIComponent(back)}`;
+  return site ? `https://${site}/` : `${origin}/`;
+}
+
+/** The dashboard's sign-in page, set to come back to `back`. */
+export function signInUrl(back: string, host = location.hostname, origin = location.origin): string {
+  return `${dashboardUrl(host, origin)}?return=${encodeURIComponent(back)}`;
 }

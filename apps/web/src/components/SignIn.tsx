@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { type Card, type User } from "../api";
 import { cachedGet } from "../cache";
 import { GUEST_DELAY_MINUTES } from "../session";
@@ -42,7 +42,24 @@ const fmt = (iso: string) =>
 /** The feed's default card: Customize's starting field list, not a denser or expanded look. */
 const DEFAULT_CARD_HIDE = cardHideSet(DEFAULT_APPEARANCE);
 
-export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void; onGuest?: () => void }) {
+/**
+ * The sign-in page. Asyl (asyl.trenchscanner.app, user ask 2026-10-24) shows the same page in its
+ * own look: its own `intro` and `showcase` (an example map rather than an alert), with `site` set so
+ * the panel speaks of Asyl. Both sites share the one session, so signing in on either works on both.
+ */
+export function SignIn({
+  onSignedIn,
+  onGuest,
+  site = "dashboard",
+  intro,
+  showcase,
+}: {
+  onSignedIn: (u: User) => void;
+  onGuest?: () => void;
+  site?: SignInSite;
+  intro?: ReactNode;
+  showcase?: ReactNode;
+}) {
   const [wallets, setWallets] = useState<WalletOption[]>(walletOptions);
   const [searching, setSearching] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -122,8 +139,9 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
 
   return (
     <section className="signin">
-      <LandingIntro />
+      {intro ?? <LandingIntro />}
       <SignInPanel
+        site={site}
         wallets={wallets}
         searching={searching}
         busy={busy}
@@ -134,7 +152,7 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
         onEmail={() => void emailSignIn()}
         onGuest={onGuest}
       />
-      <ShowcaseAlert />
+      {showcase ?? <ShowcaseAlert />}
     </section>
   );
 }
@@ -202,7 +220,10 @@ function ThisIsFine() {
   );
 }
 
+export type SignInSite = "dashboard" | "asyl";
+
 export function SignInPanel({
+  site = "dashboard",
   wallets,
   searching,
   busy,
@@ -213,6 +234,7 @@ export function SignInPanel({
   onEmail,
   onGuest,
 }: {
+  site?: SignInSite;
   wallets: WalletOption[];
   searching: boolean;
   busy: string | null;
@@ -250,7 +272,9 @@ export function SignInPanel({
           <li>
             <span className="num">3</span>
             <span>
-              You are signed in. If access is not open yet, the next screen asks you to burn $ASDFASDFA.
+              {site === "asyl"
+                ? "You are signed in, here and on TrenchScanner: one sign-in for both."
+                : "You are signed in. If access is not open yet, the next screen asks you to burn $ASDFASDFA."}
             </span>
           </li>
         </ol>
@@ -346,17 +370,27 @@ export function SignInPanel({
         </p>
       )}
 
-      <div className="signin-after">
-        <p className="eyebrow">After you sign in</p>
-        <p className="faint small">
-          No subscription yet? Sign in, then burn $ASDFASDFA on the next screen to get access. Your wallet
-          shows the exact amount and asks before anything is burned.
-        </p>
-        <p className="faint small">
-          On your phone? Open Settings on your signed-in desktop, choose &quot;Show QR code&quot; and scan it.
-          No wallet needed on the phone. (For wallet sign-ins; with email, sign in on the phone too.)
-        </p>
-      </div>
+      {site === "asyl" ? (
+        <div className="signin-after">
+          <p className="eyebrow">After you sign in</p>
+          <p className="faint small">
+            Every signed-in wallet maps from TrenchScanner&apos;s own reads. Pro Mode adds live reads from the
+            chain and your own wallet labels.
+          </p>
+        </div>
+      ) : (
+        <div className="signin-after">
+          <p className="eyebrow">After you sign in</p>
+          <p className="faint small">
+            No subscription yet? Sign in, then burn $ASDFASDFA on the next screen to get access. Your wallet
+            shows the exact amount and asks before anything is burned.
+          </p>
+          <p className="faint small">
+            On your phone? Open Settings on your signed-in desktop, choose &quot;Show QR code&quot; and scan
+            it. No wallet needed on the phone. (For wallet sign-ins; with email, sign in on the phone too.)
+          </p>
+        </div>
+      )}
 
       {onGuest && (
         <div className="guest-entry">

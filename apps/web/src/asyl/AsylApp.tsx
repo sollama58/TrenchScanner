@@ -1,20 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, SESSION_ENDED_EVENT, post } from "../api";
+import { dashboardUrl } from "../returnTo";
 import { ShareImageDialog } from "../components/ShareImageDialog";
 import { asylApi, type AsylMe, type ChainRead, type Label, type MapDoc, type MapSummary } from "./asylApi";
 import { renderMapCard } from "./asylCard";
 import { AsylSignIn } from "./AsylSignIn";
-import { EDGE_COLOUR, GraphView, type GraphViewHandle } from "./GraphView";
+import { GraphView, LinkSwatch, MapLegend, type GraphViewHandle } from "./GraphView";
 import {
   EDGE_KINDS,
   EDGE_LABEL,
   addressIn,
+  edgeKey,
   graphCsv,
   mergeGraph,
   nodeName,
   removeNodes,
   shortAddr,
   visibleGraph,
+  withDeployLines,
   type AsylEdgeKind,
   type AsylGraph,
   type AsylNode,
@@ -42,6 +45,30 @@ function go(r: AsylRoute) {
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** What the links read takes from the map: as many wallets and coins as the API allows. */
+const LINKS_WALLETS = 400;
+const LINKS_TOKENS = 200;
+
+/** Keyboard shortcuts (user ask 2026-10-24), as the help card lists them. */
+const KEYS: [string, string][] = [
+  ["Del", "Take the selected wallet or coin off the map"],
+  ["Z", "Bring back the last one taken off"],
+  ["H", "List what is taken off, to bring back"],
+  ["N / Shift+N", "Select the next / previous one on the map"],
+  ["Enter", "Expand the selected one's links"],
+  ["S", "Wallets that trade like the selected one"],
+  ["L", "Links between everything shown"],
+  ["D", "Deployers of the coins shown"],
+  ["F", "Fit the map to the screen"],
+  ["/", "Search"],
+  ["Ctrl+S", "Save the map"],
+  ["Esc", "Clear the selection"],
+  ["?", "Show or hide these keys"],
+];
+
+const typing = (t: EventTarget | null) =>
+  t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+
 export function AsylApp() {
   const [session, setSession] = useState<Session>("loading");
   const [graph, setGraph] = useState<AsylGraph>(EMPTY);
@@ -63,7 +90,10 @@ export function AsylApp() {
   const [rail, setRail] = useState<"maps" | "labels" | "legend">("legend");
   const [railOpen, setRailOpen] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [keysOpen, setKeysOpen] = useState(false);
+  const [unhidePick, setUnhidePick] = useState<Set<string>>(new Set());
   const view = useRef<GraphViewHandle>(null);
+  const searchBox = useRef<HTMLInputElement>(null);
   const started = useRef(false);
 
   const me = typeof session === "object" ? session : null;
@@ -101,14 +131,14 @@ export function AsylApp() {
     if (me) refreshLists();
   }, [me?.wallet, refreshLists]);
 
-  /** Adds an answer to the map, leaving out what the reader took off it. */
-  const add = useCallback(
-    (next: AsylGraph) => {
-      setGraph((g) => removeNodes(mergeGraph(g, next), removed));
-      setDirty(true);
-    },
-    [removed],
-  );
+  /**
+   * Adds an answer to the map. What the reader took off stays in it, out of view (`removed`), so
+   * it can be brought back.
+   */
+  const add = useCallback((next: AsylGraph) => {
+    setGraph((g) => withDeployLines(mergeGraph(g, next)));
+    setDirty(true);
+  }, []);
 
   const run = useCallback(async (label: string, fn: () => Promise<string | void>) => {
     setBusy(label);
@@ -183,10 +213,11 @@ export function AsylApp() {
           layout.current.pos.set(nid, { x, y });
           layout.current.vel.set(nid, { x: 0, y: 0 });
         }
-        setGraph({ nodes: m.doc.nodes, edges: m.doc.edges });
+        setGraph(withDeployLines({ nodes: m.doc.nodes, edges: m.doc.edges }));
         setNotes(m.doc.notes);
         setMapNote(m.doc.note);
-        setRemoved(new Set(m.doc.hidden));
+        setRemoved(new Set(m.doc.removed ?? []));
+        setHiddenKinds(new Set(EDGE_KINDS.filter((k) => m.doc.hidden.includes(k))));
         setFocus(m.doc.focus);
         setSelected(null);
         setTitle(m.title);
@@ -228,6 +259,38 @@ export function AsylApp() {
     go({ kind: "home" });
   };
 
+  const kept = useMemo(() => removeNodes(graph, removed), [graph, removed]);
+
+  /**
+   * Every stored link between the wallets and coins shown (user ask 2026-10-24: "show transfers
+   * between visible wallets/tokens"), free of credits; with `deployers`, each shown coin's
+   * deployer too. `wallets` and `tokens` default to what is shown.
+   */
+  function linksAmong(wallets?: string[], tokens?: string[], deployers = false) {
+    const ws = wallets ?? shown.nodes.filter((n) => n.kind === "wallet").map((n) => n.id);
+    const ts = tokens ?? shown.nodes.filter((n) => n.kind === "token").map((n) => n.id);
+    if (deployers ? ts.length === 0 : ws.length === 0) return Promise.resolve();
+    return run(deployers ? "Finding the deployers…" : "Finding links between what's shown…", async () => {
+      const r = await asylApi.links(ws.slice(0, LINKS_WALLETS), ts.slice(0, LINKS_TOKENS), deployers);
+      const known = new Set(graph.edges.map(edgeKey));
+      const fresh = r.graph.edges.filter((e) => !known.has(edgeKey(e)));
+      add(r.graph);
+      const off = [...new Set(fresh.map((e) => e.kind))].filter((k) => hiddenKinds.has(k));
+      const offNote = off.length
+        ? ` Some are ${off.map((k) => EDGE_LABEL[k]).join(", ")}, switched off in Links.`
+        : "";
+      if (deployers) {
+        const devs = new Set(fresh.filter((e) => e.kind === "created").map((e) => e.a));
+        return devs.size
+          ? `${devs.size} deployer${devs.size === 1 ? "" : "s"} added, with their lines.${offNote}`
+          : "TrenchScanner doesn't know a deployer for these coins that isn't already shown.";
+      }
+      return fresh.length
+        ? `${fresh.length} new link${fresh.length === 1 ? "" : "s"} between what's shown.${offNote}`
+        : "No more links between what's shown in TrenchScanner's reads.";
+    });
+  }
+
   const docOf = (): MapDoc => {
     const positions: Record<string, [number, number]> = {};
     for (const n of graph.nodes) {
@@ -244,7 +307,8 @@ export function AsylApp() {
       positions,
       notes: kept,
       note: mapNote,
-      hidden: [...removed],
+      hidden: [...hiddenKinds],
+      removed: [...removed].filter((id) => graph.nodes.some((n) => n.id === id)),
       focus,
     };
   };
@@ -288,7 +352,7 @@ export function AsylApp() {
     });
 
   const exportCsv = () => {
-    const blob = new Blob([graphCsv(graph)], { type: "text/csv" });
+    const blob = new Blob([graphCsv(kept)], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -333,11 +397,15 @@ export function AsylApp() {
         return afterChain(r, "Live holders read");
       }),
     hide: (id) => {
-      setRemoved((s) => new Set(s).add(id));
-      setGraph((g) => removeNodes(g, new Set([id])));
+      setRemoved((s) => {
+        const n = new Set(s);
+        n.delete(id);
+        return n.add(id);
+      });
       setSelected(null);
       setDirty(true);
     },
+    deployers: (mints) => void linksAmong(undefined, mints, true),
     select: (id) => setSelected(id),
     saveLabel: async (wallet, name, kol) => {
       const r = await asylApi.saveLabel(wallet, name, kol);
@@ -370,16 +438,113 @@ export function AsylApp() {
   };
 
   const keep = useMemo(() => new Set([focus, selected].filter((x): x is string => !!x)), [focus, selected]);
-  const shown = useMemo(() => visibleGraph(graph, hiddenKinds, keep), [graph, hiddenKinds, keep]);
+  const shown = useMemo(() => visibleGraph(kept, hiddenKinds, keep), [kept, hiddenKinds, keep]);
   const layoutKey = `${shown.nodes.length}:${shown.edges.length}:${shown.nodes.at(-1)?.id ?? ""}`;
-  const selectedNode = selected ? (graph.nodes.find((n) => n.id === selected) ?? null) : null;
+  const selectedNode = selected ? (kept.nodes.find((n) => n.id === selected) ?? null) : null;
   const unfunded = useMemo(() => {
-    const funded = new Set(graph.edges.filter((e) => e.kind === "funded").map((e) => e.b));
-    return graph.nodes
+    const funded = new Set(kept.edges.filter((e) => e.kind === "funded").map((e) => e.b));
+    return kept.nodes
       .filter((n) => n.kind === "wallet" && !funded.has(n.id) && !n.tags.includes("exchange"))
       .map((n) => n.id)
       .slice(0, 20);
-  }, [graph]);
+  }, [kept]);
+  // Taken off the map, newest first, with what the map knows of each.
+  const hiddenNodes = useMemo(() => {
+    const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+    return [...removed]
+      .reverse()
+      .map((id) => byId.get(id))
+      .filter((n): n is AsylNode => !!n);
+  }, [graph, removed]);
+
+  const unhide = (ids: Iterable<string>) => {
+    const back = new Set(ids);
+    if (back.size === 0) return;
+    setRemoved((s) => new Set([...s].filter((id) => !back.has(id))));
+    setUnhidePick((s) => new Set([...s].filter((id) => !back.has(id))));
+    setDirty(true);
+  };
+
+  // The latest state, for the one key listener.
+  const onKey = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  onKey.current = (e: KeyboardEvent) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      if (kept.nodes.length > 0 && !busy) void run("Saving…", async () => (await save(), "Saved."));
+      return;
+    }
+    if (typing(e.target)) {
+      if (e.key === "Escape") (e.target as HTMLElement).blur();
+      return;
+    }
+    if (mod && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      const last = [...removed].at(-1);
+      if (last) unhide([last]);
+      return;
+    }
+    if (mod || e.altKey) return;
+    const sel = selectedNode;
+    switch (e.key) {
+      case "Delete":
+      case "Backspace":
+        if (!sel) return;
+        e.preventDefault();
+        actions.hide(sel.id);
+        return;
+      case "Escape":
+        if (keysOpen) setKeysOpen(false);
+        else setSelected(null);
+        return;
+      case "Enter":
+        if (sel && !busy) actions.expand(sel);
+        return;
+      case "?":
+        setKeysOpen((o) => !o);
+        return;
+      case "/":
+        e.preventDefault();
+        searchBox.current?.focus();
+        return;
+    }
+    switch (e.key.toLowerCase()) {
+      case "z": {
+        const last = [...removed].at(-1);
+        if (last) unhide([last]);
+        return;
+      }
+      case "h":
+        setRail("legend");
+        setRailOpen(true);
+        return;
+      case "n": {
+        const ids = shown.nodes.map((n) => n.id);
+        if (ids.length === 0) return;
+        const at = sel ? ids.indexOf(sel.id) : -1;
+        const next = e.shiftKey ? (at <= 0 ? ids.length - 1 : at - 1) : (at + 1) % ids.length;
+        setSelected(ids[next]!);
+        return;
+      }
+      case "f":
+        view.current?.fit();
+        return;
+      case "s":
+        if (sel?.kind === "wallet" && !busy) actions.similar(sel.id);
+        return;
+      case "l":
+        if (!busy) void linksAmong();
+        return;
+      case "d":
+        if (!busy) void linksAmong(undefined, undefined, true);
+        return;
+    }
+  };
+  useEffect(() => {
+    const listener = (e: KeyboardEvent) => onKey.current(e);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
 
   if (parseRoute(location.pathname).kind === "shared") return null;
   if (session === "loading") return <div className="asyl-loading">ASYL</div>;
@@ -401,7 +566,15 @@ export function AsylApp() {
         </div>
       </div>
     );
-  if (session === "out") return <AsylSignIn />;
+  if (session === "out")
+    return (
+      <AsylSignIn
+        onSignedIn={() => {
+          setSession("loading");
+          loadMe();
+        }}
+      />
+    );
 
   const chain = session.chain;
 
@@ -419,6 +592,7 @@ export function AsylApp() {
           }}
         >
           <input
+            ref={searchBox}
             className="asyl-input"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -438,6 +612,9 @@ export function AsylApp() {
           </button>
         </form>
         <div className="asyl-me">
+          <a className="asyl-btn ghost asyl-back" href={dashboardUrl()} title="Back to TrenchScanner">
+            ← TrenchScanner
+          </a>
           {session.pro ? (
             <span className="asyl-pro-chip" title="Pro Mode: chain reads and your own labels">
               Pro
@@ -527,7 +704,7 @@ export function AsylApp() {
                             })
                           }
                         />
-                        <i style={{ background: EDGE_COLOUR[k] }} />
+                        <LinkSwatch kind={k} />
                         {EDGE_LABEL[k]} <span className="asyl-muted">{count || ""}</span>
                       </label>
                     </li>
@@ -535,20 +712,48 @@ export function AsylApp() {
                 })}
               </ul>
               <p className="asyl-muted asyl-small">
-                Dashed lines come from the chain; the rest from TrenchScanner&apos;s reads of the last 30
-                days. Colours group wallets tied by funding or transfers. Rings: white your label, gold KOL,
-                red risky, green winner.
+                Lines with a ringed dot come from the chain; the rest from TrenchScanner&apos;s reads of the
+                last 30 days. Colours group wallets tied by funding or transfers. Rings: white your label,
+                gold KOL, red risky, green winner. A yellow D marks a deployer.
               </p>
-              {removed.size > 0 && (
-                <button
-                  className="asyl-link"
-                  onClick={() => {
-                    setRemoved(new Set());
-                    setDirty(true);
-                  }}
-                >
-                  Let {removed.size} wallet{removed.size === 1 ? "" : "s"} you took off come back
-                </button>
+              {hiddenNodes.length > 0 && (
+                <>
+                  <h3>Taken off ({hiddenNodes.length})</h3>
+                  <ul className="asyl-hidden-list">
+                    {hiddenNodes.map((n) => (
+                      <li key={n.id}>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={unhidePick.has(n.id)}
+                            onChange={() =>
+                              setUnhidePick((s) => {
+                                const next = new Set(s);
+                                if (next.has(n.id)) next.delete(n.id);
+                                else next.add(n.id);
+                                return next;
+                              })
+                            }
+                          />
+                          {nodeName(n)}
+                          <span className="asyl-muted">{n.kind === "token" ? "coin" : "wallet"}</span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="asyl-actions">
+                    <button
+                      className="asyl-btn"
+                      disabled={unhidePick.size === 0}
+                      onClick={() => unhide(unhidePick)}
+                    >
+                      Bring back {unhidePick.size || ""}
+                    </button>
+                    <button className="asyl-link" onClick={() => unhide(removed)}>
+                      Bring back all
+                    </button>
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -672,8 +877,32 @@ export function AsylApp() {
             >
               Image
             </button>
-            <button className="asyl-btn ghost" disabled={graph.edges.length === 0} onClick={exportCsv}>
+            <button className="asyl-btn ghost" disabled={kept.edges.length === 0} onClick={exportCsv}>
               CSV
+            </button>
+            <button
+              className="asyl-btn ghost"
+              disabled={!!busy || !shown.nodes.some((n) => n.kind === "wallet")}
+              title="Funding, transfers, deploys and trades between the wallets and coins shown, from TrenchScanner's reads (no credits). Key: L"
+              onClick={() => void linksAmong()}
+            >
+              Links between shown
+            </button>
+            <button
+              className="asyl-btn ghost"
+              disabled={!!busy || !shown.nodes.some((n) => n.kind === "token")}
+              title="Adds the wallet that deployed each coin shown, with its Deployed line (no credits). Key: D"
+              onClick={() => void linksAmong(undefined, undefined, true)}
+            >
+              Deployers
+            </button>
+            <button
+              className="asyl-btn ghost"
+              aria-expanded={keysOpen}
+              title="Keyboard shortcuts (?)"
+              onClick={() => setKeysOpen((o) => !o)}
+            >
+              ⌨
             </button>
             {session.pro && unfunded.length > 0 && (
               <button
@@ -714,6 +943,28 @@ export function AsylApp() {
               handle={view}
             />
           )}
+          {shown.edges.length > 0 && <MapLegend graph={shown} />}
+
+          {keysOpen && (
+            <div className="asyl-keys" role="dialog" aria-label="Keyboard shortcuts">
+              <h3>
+                Keys
+                <button className="asyl-icon-btn" onClick={() => setKeysOpen(false)} aria-label="Close">
+                  ×
+                </button>
+              </h3>
+              <dl>
+                {KEYS.map(([k, what]) => (
+                  <div key={k} style={{ display: "contents" }}>
+                    <dt>
+                      <kbd>{k}</kbd>
+                    </dt>
+                    <dd>{what}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          )}
 
           {(busy || status) && (
             <div className={`asyl-status ${status?.tone ?? "info"}`} role="status">
@@ -730,7 +981,7 @@ export function AsylApp() {
         {selectedNode && (
           <Inspector
             node={selectedNode}
-            graph={graph}
+            graph={kept}
             me={session}
             busy={busy}
             note={notes[selectedNode.id] ?? ""}

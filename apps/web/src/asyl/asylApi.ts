@@ -74,7 +74,10 @@ export interface MapDoc {
   positions: Record<string, [number, number]>;
   notes: Record<string, string>;
   note: string;
+  /** Link kinds switched off. */
   hidden: string[];
+  /** Nodes taken off the map, kept so they can be brought back. */
+  removed?: string[];
   focus: string | null;
 }
 
@@ -128,6 +131,8 @@ export const asylApi = {
   dossier: (wallet: string) => api<Dossier>(`/asyl/wallet/${enc(wallet)}/dossier`),
   similar: (wallet: string) => api<SimilarRead>(`/asyl/wallet/${enc(wallet)}/similar`),
   token: (mint: string) => api<GraphRead & { readAt: string | null }>(`/asyl/token/${enc(mint)}`),
+  links: (wallets: string[], tokens: string[], deployers = false) =>
+    post<GraphRead>("/asyl/links", { wallets, tokens, deployers }),
   labels: () => api<{ pro: boolean; cap: number; nameMax: number; wallets: Label[] }>("/asyl/labels"),
   labelsMap: () => api<GraphRead>("/asyl/labels/map"),
   saveLabel: (wallet: string, name: string, kol: boolean) =>
