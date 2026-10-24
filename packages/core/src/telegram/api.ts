@@ -263,6 +263,15 @@ export function neverSent(err: unknown): boolean {
   return typeof code === "string" && NOT_CONNECTED.has(code);
 }
 
+/**
+ * Whether a sendPhoto failure is about the photo (so the alert goes out as text instead): a 4xx
+ * other than the chat refusing the bot (403) or a rate limit (429), both of which a text would
+ * meet too.
+ */
+export function photoRefused(code: number): boolean {
+  return code >= 400 && code < 500 && code !== 403 && code !== 429;
+}
+
 export class TelegramApi {
   constructor(
     private readonly token: string,
@@ -499,10 +508,15 @@ export class TelegramApi {
         // A file_id Telegram no longer takes: forget it and go the long way.
         photos!.fileIds.delete(url);
       }
-      let fetched = await this.fetchImageOnce(url, photos);
-      for (const fallback of message.imageFallbacks ?? []) {
+      // The main URL and its fallbacks are read at once, taken in order: read one after the
+      // other, each gateway's timeout added up, and an alert whose picture no gateway served
+      // waited out all of them (18 s) before Telegram was even asked.
+      const fallbacks = message.imageFallbacks ?? [];
+      const reads = [url, ...fallbacks].map((u) => this.fetchImageOnce(u, photos));
+      let fetched = await reads[0]!;
+      for (const [i, fallback] of fallbacks.entries()) {
         if (fetched) break;
-        const got = await this.fetchImageOnce(fallback, photos);
+        const got = await reads[i + 1]!;
         if (got && PHOTO_TYPES.has(got.contentType)) {
           logger.info("token artwork read from a fallback", { url, fallback });
           fetched = got;
@@ -514,7 +528,10 @@ export class TelegramApi {
         if (photos && fileId) photos.fileIds.set(url, fileId);
         return withPhoto;
       }
-      if (withPhoto.code !== 400) return withPhoto;
+      // Any refusal of the photo itself (a 400, a 413 for an upload too big, anything else in
+      // the 4xx range that isn't the chat refusing the bot or a rate limit) is worth the retry
+      // as text: the alert is the text, the picture is decoration.
+      if (!photoRefused(withPhoto.code)) return withPhoto;
       logger.warn("telegram refused the photo, sending the alert as text", {
         url,
         uploaded: fetched !== null,

@@ -84,6 +84,14 @@ const ACCESS_CHECK_BATCH = 8;
 const MAX_RETRY_AFTER_MS = 20_000;
 /** Consecutive failed passes before a chat is switched off rather than retried forever. */
 const MAX_FAILURES = 100;
+/**
+ * Failed sends of the same alert to the same chat before the chat steps over it. A send that
+ * fails the same way every pass (Telegram refusing it with a code the dispatcher doesn't know,
+ * a connection that never opens for it) used to hold the chat's whole queue behind it until the
+ * alert aged out of the window: on 2026-10-24 two chats fell 45 minutes behind that way, on
+ * passes of 41 s each.
+ */
+export const STUCK_SEND_ATTEMPTS = 3;
 
 export interface DispatchDeps {
   api?: TelegramApi;
@@ -148,9 +156,16 @@ const noArtworkUntil = new Map<string, number>();
 const NO_ARTWORK_RETRY_MS = 30 * 60_000;
 const NO_ARTWORK_MAX = 2_000;
 
+/**
+ * Chat row id -> the alert (its `through` stamp) whose send failed last pass, and how many passes
+ * running it has: a send failing STUCK_SEND_ATTEMPTS times is stepped over (see send).
+ */
+const stuckSends = new Map<string, { through: number; failures: number }>();
+
 /** For tests. */
 export function resetArtworkMisses(): void {
   noArtworkUntil.clear();
+  stuckSends.clear();
 }
 
 /**
@@ -214,6 +229,10 @@ export interface DispatchSummary {
   unconfirmed: number;
   /** Sends skipped because their claim was already taken: the alert had gone out already. */
   duplicates: number;
+  /** Alerts a chat stepped over after STUCK_SEND_ATTEMPTS failed sends (counted in chatErrors too). */
+  stepped: number;
+  /** What Telegram said to the last send left for the next pass, for the heartbeat. */
+  failure?: string;
   /**
    * How far the pass read (alerts stamped at or before this). The worker keeps a wake-up for an
    * alert written after it, so a pass the open-transaction bound held back is followed up soon.
@@ -459,7 +478,8 @@ export function dispatchFailure(summary: DispatchSummary): string | null {
   // A subscriber who blocked the bot fails only their own chat: with no other alert in the pass,
   // counting it would report the whole dispatcher down.
   if (summary.failed - summary.chatErrors <= 0 || summary.sent + summary.digests > 0) return null;
-  return `every Telegram send failed (${summary.failed} of ${summary.failed} this pass)`;
+  const what = summary.failure ? `: ${summary.failure}` : "";
+  return `every Telegram send failed (${summary.failed} of ${summary.failed} this pass)${what}`;
 }
 
 export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Promise<DispatchSummary> {
@@ -473,6 +493,7 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
     accessErrors: 0,
     unconfirmed: 0,
     duplicates: 0,
+    stepped: 0,
   };
   if (!telegramConfigured(env.TELEGRAM_BOT_TOKEN)) return summary;
   // A deploy runs the old scanner and the new one side by side, and two passes reading the same
@@ -809,6 +830,7 @@ async function dispatchPass(
     if (result.ok) {
       q.pending.shift();
       q.nextAt = now() + spacing;
+      stuckSends.delete(q.chat.id);
       if (isDigest(item.card)) summary.digests += 1;
       else summary.sent += 1;
       // If this write fails, the next pass re-reads these and the claims above skip them.
@@ -898,8 +920,33 @@ async function dispatchPass(
       });
       return;
     }
-    // Telegram unreachable, a 5xx or a 401: leave the cursor, try again next pass.
-    logger.warn("telegram send failed", { chat: q.chat.id, what });
+    // Telegram unreachable, a 5xx or a 401: leave the cursor, try again next pass - but not
+    // forever. The same alert failing STUCK_SEND_ATTEMPTS passes running is stepped over, so
+    // one send Telegram won't take doesn't hold the chat's every later alert behind it.
+    const through = item.through.getTime();
+    const stuck = stuckSends.get(q.chat.id);
+    const attempts = stuck && stuck.through === through ? stuck.failures + 1 : 1;
+    if (attempts >= STUCK_SEND_ATTEMPTS) {
+      logger.warn("telegram send failed again, stepping over the alert", {
+        chat: q.chat.id,
+        tokens: item.tokenIds,
+        attempts,
+        what,
+      });
+      stuckSends.delete(q.chat.id);
+      summary.stepped += 1;
+      summary.chatErrors += 1;
+      q.pending.shift();
+      q.nextAt = now() + spacing;
+      await prisma.telegramChat.updateMany({
+        where: { id: q.chat.id, revokedAt: null },
+        data: { sentThrough: item.through, lastError: `skipped after ${attempts} failed sends: ${what}` },
+      });
+      return;
+    }
+    stuckSends.set(q.chat.id, { through, failures: attempts });
+    logger.warn("telegram send failed", { chat: q.chat.id, attempts, what });
+    summary.failure = what;
     failed.push({ chat: q.chat, what });
     q.pending = [];
   };

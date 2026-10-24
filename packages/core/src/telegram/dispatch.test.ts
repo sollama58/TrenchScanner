@@ -64,6 +64,7 @@ describe("dispatchFailure", () => {
     accessErrors: 0,
     unconfirmed: 0,
     duplicates: 0,
+    stepped: 0,
     ...over,
   });
   it("fails a pass whose every send failed, and no other", () => {
@@ -79,6 +80,11 @@ describe("dispatchFailure", () => {
     // A systemic failure alongside one still fails it.
     expect(dispatchFailure(pass({ failed: 3, chatErrors: 1 }))).toBe(
       "every Telegram send failed (3 of 3 this pass)",
+    );
+  });
+  it("names what Telegram said, so the heartbeat shows the cause and not only the count", () => {
+    expect(dispatchFailure(pass({ failed: 2, failure: "413: Request Entity Too Large" }))).toBe(
+      "every Telegram send failed (2 of 2 this pass): 413: Request Entity Too Large",
     );
   });
 });
@@ -223,6 +229,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       accessErrors: 0,
       unconfirmed: 0,
       duplicates: 0,
+      stepped: 0,
     });
     expect(api.calls).toHaveLength(0);
   });
@@ -926,6 +933,43 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(row?.lastError).toContain("blocked");
   });
 
+  it("steps over an alert after three failed sends, so one bad send can't hold a chat's queue", async () => {
+    const api = new FakeTelegramApi();
+    // Linked again after the test above unlinked it.
+    await prisma.telegramChat.update({
+      where: { id: chatRowId },
+      data: { revokedAt: null, enabled: true, failures: 0, lastError: null },
+    });
+    await rewind();
+    const at = new Date(Date.now() - 15_000);
+    await prisma.match.create({ data: { userId, filterId, tokenId, snapshotId, matchedAt: at, score: 71 } });
+    const refused = { ok: false as const, code: 413, description: "Request Entity Too Large" };
+    // Text is refused too (the photo path already falls back to text on a 4xx, in api.ts).
+    api.answers.set("sendPhoto", refused);
+    api.answers.set("sendMessage", refused);
+    // Two passes: left for the next pass each time, the cursor held, what Telegram said kept.
+    for (const attempt of [1, 2]) {
+      const summary = await run(api);
+      expect(summary).toMatchObject({ failed: 1, stepped: 0, failure: "413: Request Entity Too Large" });
+      expect(dispatchFailure(summary)).toBe(
+        "every Telegram send failed (1 of 1 this pass): 413: Request Entity Too Large",
+      );
+      const row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
+      expect(row?.sentThrough.getTime(), `attempt ${attempt}`).toBeLessThan(at.getTime());
+    }
+    // The third: stepped over. The cursor moves past it and the chat says why; the pass is not a
+    // failed dispatcher (the chat's own trouble), and a later pass doesn't send it again.
+    const third = await run(api);
+    expect(third).toMatchObject({ failed: 1, chatErrors: 1, stepped: 1 });
+    expect(dispatchFailure(third)).toBeNull();
+    const row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
+    expect(row?.sentThrough.getTime()).toBeGreaterThanOrEqual(at.getTime());
+    expect(row?.lastError).toBe("skipped after 3 failed sends: 413: Request Entity Too Large");
+    api.calls.length = 0;
+    await run(api);
+    expect(api.sent()).toHaveLength(0);
+  });
+
   it("retires an upgraded group's row when the supergroup was linked again", async () => {
     const api = new FakeTelegramApi();
     const oldId = BigInt(nextChat--);
@@ -982,6 +1026,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       accessErrors: 0,
       unconfirmed: 0,
       duplicates: 0,
+      stepped: 0,
     });
     expect(api.calls).toHaveLength(0);
   });
