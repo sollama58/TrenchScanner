@@ -39,6 +39,7 @@ const nodeSchema = z.object({
   athUsd: finite.nullable().optional(),
   launchedAt: z.string().max(40).nullable().optional(),
   deployer: address.nullable().optional(),
+  deployerVerified: z.boolean().nullable().optional(),
 });
 
 const edgeSchema = z.object({
@@ -50,6 +51,17 @@ const edgeSchema = z.object({
   source: z.enum(["stored", "chain"]),
   mint: address.nullable().optional(),
   at: z.string().max(40).nullable().optional(),
+  sol: finite.nullable().optional(),
+  tokens: finite.nullable().optional(),
+  pct: finite.nullable().optional(),
+});
+
+/** The least a money link must carry to be drawn; 0 draws them all. */
+const cutoffsSchema = z.object({
+  sol: finite.min(0).default(0),
+  usd: finite.min(0).default(0),
+  tokens: finite.min(0).default(0),
+  pct: finite.min(0).default(0),
 });
 
 export const mapDocSchema = z.object({
@@ -66,6 +78,10 @@ export const mapDocSchema = z.object({
   hidden: z.array(z.string().max(16)).max(10).default([]),
   /** Nodes the user took off the map: kept in it, so they can be brought back one by one. */
   removed: z.array(address).max(MAP_NODES_MAX).default([]),
+  /** Single links the user hid, by "kind|a|b|mint" (the web's edgeKey). */
+  cut: z.array(z.string().max(160)).max(MAP_EDGES_MAX).default([]),
+  /** The amount sliders when it was saved. */
+  cutoffs: cutoffsSchema.optional(),
   /** The node it was opened around. */
   focus: address.nullable().default(null),
 });
@@ -90,8 +106,16 @@ export function cleanDoc(doc: AsylMapDoc): AsylMapDoc {
 /** The copy a public link serves: what the user took off the map is left out of it altogether. */
 export function publicDoc(doc: AsylMapDoc): AsylMapDoc {
   const removed = new Set(doc.removed ?? []);
-  if (removed.size === 0) return doc;
-  return cleanDoc({ ...doc, nodes: doc.nodes.filter((n) => !removed.has(n.id)), removed: [] });
+  // Links the owner hid one by one leave the shared copy too.
+  const cut = new Set(doc.cut ?? []);
+  if (removed.size === 0 && cut.size === 0) return doc;
+  return cleanDoc({
+    ...doc,
+    nodes: doc.nodes.filter((n) => !removed.has(n.id)),
+    edges: doc.edges.filter((e) => !cut.has(`${e.kind}|${e.a}|${e.b}|${e.mint ?? ""}`)),
+    removed: [],
+    cut: [],
+  });
 }
 
 export interface MapSummary {

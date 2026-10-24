@@ -39,10 +39,10 @@ export type EdgeHead = "arrow" | "open" | "diamond" | "dot";
  */
 export const EDGE_STYLE: Record<AsylEdgeKind, { dash?: string; head?: EdgeHead; meaning: string }> = {
   funded: { head: "arrow", meaning: "Paid the wallet its first SOL" },
-  transfer: { dash: "10 4", head: "arrow", meaning: "Sent it SOL or coins" },
+  transfer: { dash: "6 3", head: "arrow", meaning: "Sent it SOL or coins" },
   side: { dash: "12 4 2 4", head: "open", meaning: "A side wallet of the same person" },
   cotrade: { dash: "1.5 4", meaning: "Bought the same coins within minutes" },
-  created: { head: "diamond", meaning: "Deployed the coin" },
+  created: { dash: "10 4", head: "diamond", meaning: "Deployed the coin: a gold, glowing line" },
   traded: { meaning: "Bought or sold the coin" },
   holds: { head: "dot", meaning: "Holds the coin now" },
 };
@@ -67,6 +67,18 @@ export function LinkSwatch({ kind, chain = false }: { kind: AsylEdgeKind; chain?
   const c = EDGE_COLOUR[kind];
   return (
     <svg className="asyl-swatch" width={40} height={12} viewBox="0 0 40 12" aria-hidden="true">
+      {kind === "created" && (
+        <line
+          x1={2}
+          y1={6}
+          x2={30}
+          y2={6}
+          stroke={c}
+          strokeWidth={7}
+          strokeOpacity={0.3}
+          strokeLinecap="round"
+        />
+      )}
       <line
         x1={1}
         y1={6}
@@ -143,6 +155,27 @@ export const CLUSTER_COLOUR = [
   "#9ad14b",
   "#ffa0d8",
 ];
+
+/**
+ * What a dragged bubble carries along: neighbours tied to nothing else move with it wholly, its
+ * other neighbours half way, so a hub drags its cluster and a shared wallet stretches between two.
+ * Bubbles the user placed (pinned) stay put.
+ */
+export function carriedBy(g: AsylGraph, id: string, pinned: ReadonlySet<string>): Map<string, number> {
+  const adj = new Map<string, Set<string>>();
+  for (const e of g.edges) {
+    if (!adj.has(e.a)) adj.set(e.a, new Set());
+    if (!adj.has(e.b)) adj.set(e.b, new Set());
+    adj.get(e.a)!.add(e.b);
+    adj.get(e.b)!.add(e.a);
+  }
+  const out = new Map<string, number>();
+  for (const n of adj.get(id) ?? []) {
+    if (pinned.has(n)) continue;
+    out.set(n, (adj.get(n)?.size ?? 0) <= 1 ? 1 : 0.45);
+  }
+  return out;
+}
 
 export function radiusOf(g: AsylGraph): (id: string) => number {
   const degree = new Map<string, number>();
@@ -284,13 +317,50 @@ export function GraphView({
 
   useImperativeHandle(handle, () => ({ fit, view: () => viewRef.current, size: sizeOf }), [fit]);
 
-  // Lay out new nodes, then run the simulation a step per frame until it settles.
+  // The simulation, a step per frame until it settles: after the map changes, and while a bubble
+  // is dragged, so what is tied to it follows (user ask 2026-10-24).
+  const sim = useRef<{ raf: number; alpha: number; ticks: number }>({ raf: 0, alpha: 0, ticks: 0 });
+  const graphRef = useRef(graph);
+  graphRef.current = graph;
+  const radiusRef = useRef(radius);
+  radiusRef.current = radius;
+  const fitRef = useRef(fit);
+  fitRef.current = fit;
+  const runSim = useCallback(
+    (alpha: number) => {
+      const st = sim.current;
+      st.alpha = Math.max(st.alpha, alpha);
+      st.ticks = 0;
+      if (st.raf) return;
+      const tick = () => {
+        const moved = step(layout, graphRef.current, st.alpha, radiusRef.current);
+        st.alpha = Math.max(0.02, st.alpha * 0.985);
+        st.ticks += 1;
+        setFrame((f) => f + 1);
+        if (!fittedOnce.current && st.ticks === 60) {
+          fittedOnce.current = true;
+          fitRef.current();
+        }
+        const dragging = !!drag.current?.moved && !!drag.current.id;
+        st.raf = dragging || (moved > 0.08 && st.ticks < 600) ? requestAnimationFrame(tick) : 0;
+      };
+      st.raf = requestAnimationFrame(tick);
+    },
+    [layout],
+  );
+  useEffect(
+    () => () => {
+      cancelAnimationFrame(sim.current.raf);
+      sim.current.raf = 0;
+    },
+    [],
+  );
+
+  // Lay out new nodes, then let the simulation settle them.
   const fittedOnce = useRef(false);
   useEffect(() => {
     const added = placeNew(layout, graph);
-    let alpha = added.length > 0 || !fittedOnce.current ? 1 : 0.3;
-    let raf = 0;
-    let ticks = 0;
+    const alpha = added.length > 0 || !fittedOnce.current ? 1 : 0.3;
     if (reduceMotion) {
       for (let t = 0; t < 300; t++) if (step(layout, graph, 1 - t / 300, radius) < 0.05 && t > 20) break;
       setFrame((f) => f + 1);
@@ -300,25 +370,23 @@ export function GraphView({
       }
       return;
     }
-    const tick = () => {
-      const moved = step(layout, graph, alpha, radius);
-      alpha = Math.max(0.02, alpha * 0.985);
-      ticks += 1;
-      setFrame((f) => f + 1);
-      if (!fittedOnce.current && ticks === 60) {
-        fittedOnce.current = true;
-        fit();
-      }
-      if (moved > 0.08 && ticks < 600) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    runSim(alpha);
     // layoutKey stands for the graph's node set; fit and radius follow the graph.
   }, [layoutKey]);
 
   // Pointer handling: pan the background, drag a node, pinch to zoom.
   const pointers = useRef(new Map<number, { x: number; y: number }>());
-  const drag = useRef<{ id: string | null; moved: boolean; startX: number; startY: number } | null>(null);
+  const drag = useRef<{
+    id: string | null;
+    moved: boolean;
+    startX: number;
+    startY: number;
+    /** Where on the bubble it was grabbed, so it doesn't jump to the pointer. */
+    dx: number;
+    dy: number;
+    /** What it carries along, and how much: its own leaves wholly, its other neighbours half. */
+    carry: Map<string, number>;
+  } | null>(null);
   const pinch = useRef<{ d: number; k: number } | null>(null);
 
   const toWorld = (cx: number, cy: number) => {
@@ -338,7 +406,18 @@ export function GraphView({
       return;
     }
     // On a read-only map a node can still be picked; dragging it pans instead of moving it.
-    drag.current = { id, moved: false, startX: e.clientX, startY: e.clientY };
+    const at = id ? layout.pos.get(id) : undefined;
+    const w = at ? toWorld(e.clientX, e.clientY) : null;
+    drag.current = {
+      id,
+      moved: false,
+      startX: e.clientX,
+      startY: e.clientY,
+      dx: at && w ? at.x - w.x : 0,
+      dy: at && w ? at.y - w.y : 0,
+      // Shift drags the bubble alone.
+      carry: id && !e.shiftKey ? carriedBy(graph, id, layout.pinned) : new Map(),
+    };
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -358,9 +437,16 @@ export function GraphView({
     if (!d.moved) return;
     if (d.id && !readOnly) {
       const w = toWorld(e.clientX, e.clientY);
-      layout.pos.set(d.id, w);
+      const from = layout.pos.get(d.id) ?? w;
+      const to = { x: w.x + d.dx, y: w.y + d.dy };
+      for (const [id, share] of d.carry) {
+        const p = layout.pos.get(id);
+        if (p) layout.pos.set(id, { x: p.x + (to.x - from.x) * share, y: p.y + (to.y - from.y) * share });
+      }
+      layout.pos.set(d.id, to);
       layout.pinned.add(d.id);
       layout.vel.set(d.id, { x: 0, y: 0 });
+      if (!reduceMotion) runSim(0.25);
       setFrame((f) => f + 1);
     } else {
       setView((v) => ({ ...v, x: v.x + e.clientX - prev.x, y: v.y + e.clientY - prev.y }));
@@ -495,20 +581,60 @@ export function GraphView({
                   onPointerLeave={() => setHover(null)}
                 />
               );
-              if (e.source !== "chain") return path;
-              // A chain read: a ringed dot halfway along, whatever the kind's own pattern.
+              const mid = { x: 0.25 * sx + 0.5 * mx + 0.25 * ex, y: 0.25 * sy + 0.5 * my + 0.25 * ey };
+              const z = 1 / Math.sqrt(view.k);
+              const deploy = e.kind === "created";
+              if (!deploy && e.source !== "chain") return path;
               return (
-                <g key={key} opacity={dim ? 0.2 : 1}>
-                  {path}
-                  <circle
-                    cx={0.25 * sx + 0.5 * mx + 0.25 * ex}
-                    cy={0.25 * sy + 0.5 * my + 0.25 * ey}
-                    r={3.4 / Math.sqrt(view.k)}
-                    fill="#120c09"
-                    stroke="#fff"
-                    strokeWidth={1.5 / Math.sqrt(view.k)}
-                    pointerEvents="none"
-                  />
+                <g key={key} opacity={dim ? (deploy ? 0.25 : 0.2) : 1}>
+                  {deploy && (
+                    // The Deployed line (user ask 2026-10-24: much more its own): a gold glow under
+                    // a marching line, and the deployer's D halfway along.
+                    <path
+                      d={`M${sx} ${sy} Q${mx} ${my} ${ex} ${ey}`}
+                      className="asyl-edge-glow"
+                      fill="none"
+                      stroke={EDGE_COLOUR.created}
+                      strokeWidth={9 * z}
+                      strokeLinecap="round"
+                      pointerEvents="none"
+                    />
+                  )}
+                  {deploy ? (
+                    <path
+                      d={`M${sx} ${sy} Q${mx} ${my} ${ex} ${ey}`}
+                      fill="none"
+                      stroke={EDGE_COLOUR.created}
+                      strokeWidth={3 * z}
+                      strokeDasharray={`${10 * z} ${4 * z}`}
+                      markerEnd={`url(#asyl-head-created)`}
+                      className="asyl-edge asyl-edge-deploy"
+                      onPointerEnter={(ev) => showHover(ev, label)}
+                      onPointerLeave={() => setHover(null)}
+                    />
+                  ) : (
+                    path
+                  )}
+                  {deploy ? (
+                    <g transform={`translate(${mid.x} ${mid.y}) scale(${z})`} className="asyl-dev-mark">
+                      <circle r={7} />
+                      <text y={3.4} textAnchor="middle">
+                        D
+                      </text>
+                    </g>
+                  ) : null}
+                  {e.source === "chain" && (
+                    // A chain read: a ringed dot halfway along, whatever the kind's own pattern.
+                    <circle
+                      cx={mid.x}
+                      cy={mid.y}
+                      r={3.4 * z}
+                      fill="#120c09"
+                      stroke="#fff"
+                      strokeWidth={1.5 * z}
+                      pointerEvents="none"
+                    />
+                  )}
                 </g>
               );
             })}

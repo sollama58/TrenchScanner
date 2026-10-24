@@ -34,6 +34,8 @@ export interface AsylNode {
   launchedAt?: string | null;
   /** Coins: the wallet that deployed it, when TrenchScanner knows it. */
   deployer?: string | null;
+  /** Whether `deployer` was read off the create transaction, or is a creator a takeover can move. */
+  deployerVerified?: boolean | null;
 }
 
 export type AsylEdgeKind = "funded" | "transfer" | "cotrade" | "side" | "created" | "holds" | "traded";
@@ -47,6 +49,12 @@ export interface AsylEdge {
   source: "stored" | "chain";
   mint?: string | null;
   at?: string | null;
+  /** SOL paid, moved or traded, when the link is money. */
+  sol?: number | null;
+  /** Coins moved, for a coin transfer read from the chain. */
+  tokens?: number | null;
+  /** % of the coin's supply held or moved. */
+  pct?: number | null;
 }
 
 export interface AsylGraph {
@@ -112,6 +120,9 @@ export function mergeGraph(base: AsylGraph, next: AsylGraph): AsylGraph {
       if (k === "tags") continue;
       // The newer name wins when it is the reader's own label; otherwise the first one stays.
       if (k === "name" && have.name && !n.tags.includes("mine")) continue;
+      // A deployer read off the create transaction is never replaced by an unconfirmed one.
+      if ((k === "deployer" || k === "deployerVerified") && have.deployerVerified && !n.deployerVerified)
+        continue;
       (merged as unknown as Record<string, unknown>)[k] = v;
     }
     merged.tags = [...new Set([...have.tags, ...n.tags])];
@@ -132,6 +143,20 @@ export function mergeGraph(base: AsylGraph, next: AsylGraph): AsylGraph {
  * whichever read brought each one (user ask 2026-10-24: deployer markers and lines).
  */
 export function withDeployLines(g: AsylGraph): AsylGraph {
+  // A confirmed deployer replaces any other wallet drawn as the coin's deployer (a takeover's).
+  const confirmed = new Map(
+    g.nodes
+      .filter((n) => n.kind === "token" && n.deployer && n.deployerVerified)
+      .map((n) => [n.id, n.deployer]),
+  );
+  const stale = g.edges.some((e) => e.kind === "created" && confirmed.has(e.b) && confirmed.get(e.b) !== e.a);
+  if (stale)
+    g = {
+      ...g,
+      edges: g.edges.filter(
+        (e) => !(e.kind === "created" && confirmed.has(e.b) && confirmed.get(e.b) !== e.a),
+      ),
+    };
   const wallets = new Set(g.nodes.filter((n) => n.kind === "wallet").map((n) => n.id));
   const have = new Set(g.edges.filter((e) => e.kind === "created").map((e) => `${e.a}|${e.b}`));
   const lines: AsylEdge[] = [];
@@ -150,6 +175,7 @@ export function withDeployLines(g: AsylGraph): AsylGraph {
     });
   }
   if (lines.length === 0) return g;
+
   // Whoever deployed a coin on the map is marked as a deployer.
   const devs = new Set(lines.map((e) => e.a));
   return {
@@ -173,10 +199,60 @@ export function visibleGraph(
   g: AsylGraph,
   hidden: ReadonlySet<AsylEdgeKind>,
   keep: ReadonlySet<string>,
+  filter: LinkFilter = {},
 ): AsylGraph {
-  const edges = g.edges.filter((e) => !hidden.has(e.kind));
+  const edges = g.edges.filter(
+    (e) =>
+      !hidden.has(e.kind) &&
+      !filter.cut?.has(edgeKey(e)) &&
+      (!filter.cutoffs || clearsCutoffs(e, filter.cutoffs, filter.solUsd ?? null)),
+  );
   const touched = new Set(edges.flatMap((e) => [e.a, e.b]));
   return { nodes: g.nodes.filter((n) => touched.has(n.id) || keep.has(n.id)), edges };
+}
+
+/**
+ * The amount sliders (user ask 2026-10-24): the least SOL, USD, coins or % of supply a money link
+ * (funding, a transfer, a trade) must carry to be drawn. 0 draws them all.
+ */
+export interface Cutoffs {
+  sol: number;
+  usd: number;
+  tokens: number;
+  pct: number;
+}
+
+export const NO_CUTOFFS: Cutoffs = { sol: 0, usd: 0, tokens: 0, pct: 0 };
+
+/** What else keeps a link off the map: links hidden one by one (by edgeKey), and the sliders. */
+export interface LinkFilter {
+  cut?: ReadonlySet<string>;
+  cutoffs?: Cutoffs;
+  /** SOL's price, for the USD slider; without one the USD slider cuts nothing. */
+  solUsd?: number | null;
+}
+
+/** The link kinds that carry money, which the sliders cut. */
+export const MONEY_KINDS: readonly AsylEdgeKind[] = ["funded", "transfer", "traded"];
+
+/** A money link's SOL: its own, or, on maps saved before links carried it, its weight. */
+export function edgeSol(e: AsylEdge): number | null {
+  if (e.sol !== undefined && e.sol !== null) return e.sol;
+  if (e.kind === "funded" || e.kind === "traded") return e.weight;
+  return null;
+}
+
+/** Whether a link clears the sliders. A link that isn't money, or carries no amount, always does. */
+export function clearsCutoffs(e: AsylEdge, c: Cutoffs, solUsd: number | null): boolean {
+  if (!MONEY_KINDS.includes(e.kind)) return true;
+  const s = edgeSol(e);
+  if (s !== null) {
+    if (s < c.sol) return false;
+    if (solUsd && s * solUsd < c.usd) return false;
+  }
+  if (e.tokens !== undefined && e.tokens !== null && e.tokens < c.tokens) return false;
+  if (e.pct !== undefined && e.pct !== null && e.pct < c.pct) return false;
+  return true;
 }
 
 /** Each node's neighbours, by edge. */

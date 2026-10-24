@@ -306,69 +306,322 @@ body {
 /* ---- left rail ---- */
 
 .asyl-rail {
-  width: 250px;
+  width: 278px;
   flex: none;
-  background: var(--asyl-panel);
+  background: linear-gradient(180deg, rgba(255, 122, 47, 0.07), transparent 140px), var(--asyl-panel);
   border: 1px solid var(--asyl-line);
-  border-radius: 12px;
+  border-radius: 14px;
+  box-shadow:
+    0 18px 40px rgba(20, 6, 0, 0.45),
+    inset 0 1px 0 rgba(255, 210, 160, 0.06);
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
 }
+/* The tabs: one segmented control, so no tab hangs off the rail's rounded edge. */
 .asyl-rail-tabs {
-  display: flex;
-  border-bottom: 1px solid var(--asyl-line);
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 3px;
+  margin: 10px 10px 0;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--asyl-line);
 }
 .asyl-rail-tabs button {
-  flex: 1;
-  background: none;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-width: 0;
+  margin: 0;
+  padding: 7px 4px;
   border: 0;
+  border-radius: 7px;
+  background: transparent;
   color: var(--asyl-muted);
   font: inherit;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
-  padding: 10px 0;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
   cursor: pointer;
-  border-bottom: 2px solid transparent;
+  transform: none;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+.asyl-rail-tabs button:hover:not(.on) {
+  background: rgba(255, 176, 103, 0.08);
+  color: var(--asyl-text);
+  border: 0;
+}
+.asyl-rail-tabs button:active:not(:disabled) {
+  transform: none;
 }
 .asyl-rail-tabs button.on {
-  color: var(--asyl-text);
-  border-bottom-color: var(--asyl-orange);
+  background: linear-gradient(180deg, #ff8a45, var(--asyl-orange));
+  color: #1b0a02;
+  box-shadow: 0 2px 10px rgba(255, 122, 47, 0.35);
+}
+.asyl-tab-dot {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--asyl-orange-hi);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.5);
+}
+.asyl-rail-tabs button.on .asyl-tab-dot {
+  background: #1b0a02;
+  box-shadow: none;
 }
 .asyl-rail-body {
-  padding: 12px;
+  padding: 10px;
   overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 176, 103, 0.3) transparent;
+}
+/* Each part of a tab: a card on the rail. */
+.asyl-rail-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 176, 103, 0.1);
+}
+.asyl-rail-card h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.asyl-rail-card h3 .asyl-link {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
 }
 .asyl-rail-body h3,
 .asyl-insp-section h3 {
-  margin: 6px 0 0;
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--asyl-muted);
+  color: var(--asyl-orange-hi);
+  opacity: 0.85;
 }
 .asyl-title-input {
   font-weight: 700;
+}
+.asyl-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.asyl-stats span {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 0;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  font-size: 11px;
+  color: var(--asyl-muted);
+}
+.asyl-stats b {
+  font-size: 16px;
+  color: var(--asyl-text);
+  font-variant-numeric: tabular-nums;
 }
 .asyl-legend {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 4px;
+  gap: 2px;
   font-size: 13px;
 }
 .asyl-legend label {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 4px 6px;
+  border-radius: 7px;
   cursor: pointer;
 }
+.asyl-legend label:hover {
+  background: rgba(255, 176, 103, 0.07);
+}
 .asyl-legend label.off {
+  opacity: 0.4;
+}
+.asyl-legend-name {
+  flex: 1;
+  min-width: 0;
+}
+.asyl-count {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 176, 103, 0.14);
+  color: var(--asyl-orange-hi);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+/* A small on/off switch in place of a checkbox. */
+.asyl-switch {
+  appearance: none;
+  flex: none;
+  position: relative;
+  width: 26px;
+  height: 15px;
+  margin: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.asyl-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--asyl-muted);
+  transition:
+    transform 0.15s,
+    background 0.15s;
+}
+.asyl-switch:checked {
+  background: rgba(255, 122, 47, 0.55);
+}
+.asyl-switch:checked::after {
+  transform: translateX(11px);
+  background: #fff3e6;
+}
+.asyl-switch:focus-visible {
+  outline: 2px solid var(--asyl-orange-hi);
+  outline-offset: 2px;
+}
+/* The amount sliders. */
+.asyl-slider {
+  display: grid;
+  gap: 4px;
+}
+.asyl-slider.off {
   opacity: 0.45;
+}
+.asyl-slider-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+  font-weight: 600;
+}
+.asyl-slider-val {
+  font-size: 12px;
+  color: var(--asyl-muted);
+  font-variant-numeric: tabular-nums;
+}
+.asyl-slider-val.on {
+  color: var(--asyl-orange-hi);
+}
+.asyl-slider input[type="range"] {
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.asyl-slider input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--asyl-orange) var(--fill, 0%),
+    rgba(255, 255, 255, 0.14) var(--fill, 0%)
+  );
+}
+.asyl-slider input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+}
+.asyl-slider input[type="range"]::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--asyl-orange);
+}
+.asyl-slider input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: #fff3e6;
+  border: 2px solid var(--asyl-orange);
+  box-shadow: 0 0 0 3px rgba(255, 122, 47, 0.2);
+}
+.asyl-slider input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff3e6;
+  border: 2px solid var(--asyl-orange);
+}
+.asyl-slider input[type="range"]:focus-visible {
+  outline: 2px solid var(--asyl-orange-hi);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.asyl-slider-foot {
+  font-size: 11px;
+  color: var(--asyl-muted);
+}
+.asyl-slider-foot span {
+  color: var(--asyl-orange-hi);
+}
+/* Links hidden one by one. */
+.asyl-cut-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.asyl-cut-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.asyl-cut-what {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.asyl-cut-list .asyl-icon-btn {
+  font-size: 15px;
 }
 .asyl-swatch {
   flex: none;
@@ -450,6 +703,24 @@ body {
   fill: none;
   opacity: 0.7;
 }
+.asyl-edge-glow {
+  opacity: 0.22;
+  filter: blur(2px);
+}
+.asyl-edge.asyl-edge-deploy {
+  opacity: 1;
+  animation: asyl-march 1.6s linear infinite;
+}
+@keyframes asyl-march {
+  to {
+    stroke-dashoffset: -28;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .asyl-edge.asyl-edge-deploy {
+    animation: none;
+  }
+}
 .asyl-node {
   cursor: pointer;
 }
@@ -487,7 +758,7 @@ body {
 /* Wallets taken off the map, to bring back one by one. */
 .asyl-hidden-list {
   list-style: none;
-  margin: 0 0 8px;
+  margin: 0;
   padding: 0;
   max-height: 220px;
   overflow-y: auto;
@@ -738,6 +1009,22 @@ body {
   gap: 4px;
   max-height: 260px;
   overflow: auto;
+}
+.asyl-links li {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+.asyl-link-text {
+  flex: 1;
+  min-width: 0;
+}
+.asyl-links .asyl-icon-btn {
+  font-size: 15px;
+  opacity: 0.5;
+}
+.asyl-links li:hover .asyl-icon-btn {
+  opacity: 1;
 }
 .asyl-insp-foot {
   display: flex;

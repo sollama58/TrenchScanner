@@ -39,6 +39,7 @@ import {
 import { parseLaunchBuyers, type LaunchBuyersReading, type RawLaunchTx } from "./launchBuyers.js";
 import { rememberLaunchTapeSeed } from "./launchTapeSeed.js";
 import type { ChainTx } from "../wallets/tradeTape.js";
+import { deployerFromTransactions } from "../wallets/deployer.js";
 import { funderFromEarliestTransactions, FUNDER_TXS_WALKED } from "../wallets/linkedWallets.js";
 import {
   holdersFromLargestAccounts,
@@ -175,6 +176,18 @@ export type LaunchBuyersResult =
  * not at its first transaction ever. `lastActivityAt`: its newest transaction, when the page was
  * read; the answer holds until that plus WALLET_DORMANT_GAP_MS, the earliest it could revive.
  */
+/** A coin's deployer, read off its first transaction (wallets/deployer.ts). */
+export type MintDeployerResult =
+  | { status: "found"; deployer: string; at: Date | null; signature: string | null }
+  /** Its first transactions name no wallet as signer. */
+  | { status: "none" }
+  | { status: "failed" }
+  /** Not Helius, or getTransactionsForAddress stood down: nothing was asked. */
+  | { status: "unsupported" };
+
+/** Transactions a deployer read asks for: the create is the first; a few cover failed attempts. */
+const DEPLOYER_TXS = 5;
+
 export type FunderResult =
   | {
       status: "found";
@@ -2284,6 +2297,55 @@ export class HeliusClient {
         continue;
       }
       out.set(mint, { status: "found", isMayhemMode: pdaAccount.value !== null });
+    }
+    return out;
+  }
+
+  /**
+   * Each mint's deployer: the wallet that signed its first transaction that went through, from
+   * getTransactionsForAddress sorted oldest first (10 credits a mint). Unlike Pump.fun's
+   * `creator`, which a community takeover moves, this never changes. Helius-only: elsewhere every
+   * mint reports "unsupported".
+   */
+  async getMintDeployersBatch(mintAddresses: string[]): Promise<Map<string, MintDeployerResult>> {
+    const out = new Map<string, MintDeployerResult>();
+    const mints = [...new Set(mintAddresses)];
+    if (mints.length === 0) return out;
+    if (!this.gtfaUsable) {
+      for (const mint of mints) out.set(mint, { status: "unsupported" });
+      return out;
+    }
+    const responses = await this.sendBatched<{ data?: ChainTx[] }>(
+      mints.map((mint) => ({
+        id: mint,
+        method: "getTransactionsForAddress",
+        params: [
+          mint,
+          {
+            transactionDetails: "full",
+            sortOrder: "asc",
+            limit: DEPLOYER_TXS,
+            encoding: "json",
+            maxSupportedTransactionVersion: MAX_TRANSACTION_VERSION,
+            filters: { status: "succeeded" },
+          },
+        ],
+      })),
+      20_000,
+    );
+    for (const mint of mints) {
+      const res = responses.get(mint);
+      if (res?.error?.code === RPC_METHOD_NOT_FOUND) {
+        this.gtfaUnavailable = true;
+        out.set(mint, { status: "unsupported" });
+        continue;
+      }
+      if (!res || res.error || !Array.isArray(res.result?.data)) {
+        out.set(mint, { status: "failed" });
+        continue;
+      }
+      const found = deployerFromTransactions(mint, res.result.data);
+      out.set(mint, found ? { status: "found", ...found } : { status: "none" });
     }
     return out;
   }

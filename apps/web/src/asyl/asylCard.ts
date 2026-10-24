@@ -160,6 +160,20 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
     ctx.globalAlpha = 0.75;
     ctx.lineWidth = Math.max(1, (1 + t * 3) * Math.min(1, k));
     const st = EDGE_STYLE[e.kind];
+    if (e.kind === "created") {
+      // The Deployed line's gold glow, as on the map.
+      ctx.save();
+      ctx.globalAlpha = 0.25;
+      ctx.lineWidth = 9;
+      ctx.lineCap = "round";
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(c.x, c.y);
+      ctx.stroke();
+      ctx.restore();
+      ctx.lineWidth = 3;
+    }
     ctx.setLineDash(dashOf(st.dash));
     ctx.lineCap = e.kind === "cotrade" ? "round" : "butt";
     ctx.beginPath();

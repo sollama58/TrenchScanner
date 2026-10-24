@@ -85,6 +85,7 @@ export async function labelsGraph(g: GraphBuilder, tracked: readonly TrackedWall
         label: `Funded${p.amountSol ? ` ${p.amountSol.toPrecision(2)} SOL` : ""}`,
         source: "stored",
         at: p.fundedAt?.toISOString() ?? null,
+        sol: p.amountSol,
       });
   }
   for (const t of transfers)
@@ -96,6 +97,7 @@ export async function labelsGraph(g: GraphBuilder, tracked: readonly TrackedWall
       label: `Sent coins ${t.n}×`,
       source: "stored",
       at: t.last.toISOString(),
+      pct: t.pct,
     });
   const perLabel = new Map<string, number>();
   for (const s of sides) {

@@ -205,6 +205,32 @@ describe.skipIf(!dbAvailable)("asyl routes", () => {
     expect((await as(PLAIN, "POST", "/asyl/links", { wallets: ["nope"] })).statusCode).toBe(400);
   });
 
+  it("names the wallet that deployed a coin, not a takeover's creator", async () => {
+    type Read = {
+      graph: {
+        nodes: { id: string; deployer?: string | null; deployerVerified?: boolean | null }[];
+        edges: { a: string; b: string; kind: string }[];
+      };
+      deployer: { wallet: string; verified: boolean } | null;
+    };
+    // MINT2's creator moved to A (a takeover); the create transaction was DEV's.
+    await prisma.token.update({ where: { mintAddress: MINT2 }, data: { creator: A, deployer: DEV } });
+    const coin = (await as(PLAIN, "GET", `/asyl/token/${MINT2}`)).json() as Read;
+    expect(coin.graph.edges.filter((e) => e.kind === "created").map((e) => e.a)).toEqual([DEV]);
+    const shown = (await as(PLAIN, "POST", `/asyl/deployer/${MINT2}`)).json() as Read;
+    expect(shown.deployer).toEqual({ wallet: DEV, verified: true });
+    expect(shown.graph.nodes.find((n) => n.id === MINT2)).toMatchObject({
+      deployer: DEV,
+      deployerVerified: true,
+    });
+    // A's own map doesn't count MINT2 among its launches.
+    const wallet = (await as(PLAIN, "GET", `/asyl/wallet/${A}`)).json() as Read;
+    expect(wallet.graph.edges.some((e) => e.a === A && e.b === MINT2 && e.kind === "created")).toBe(false);
+    // Only the creator TrenchScanner was told: shown, marked unverified (no chain read without Pro).
+    const told = (await as(PLAIN, "POST", `/asyl/deployer/${MINT1}`)).json() as Read;
+    expect(told.deployer).toEqual({ wallet: DEV, verified: false });
+  });
+
   it("keeps chain reads and labels to Pro Mode", async () => {
     expect((await as(PLAIN, "POST", `/asyl/chain/flows/${A}`)).statusCode).toBe(403);
     expect((await as(PLAIN, "PUT", `/asyl/labels/${B}`, { name: "Beta" })).statusCode).toBe(403);

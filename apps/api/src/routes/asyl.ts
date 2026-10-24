@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { prisma, withApiFeature, type Env, type HeliusClient } from "@trenchscanner/core";
 import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
+import { sharedSolPrice } from "../solPrice.js";
 import type { WalletIdentityReader } from "../walletIdentity.js";
 import { proStatus } from "../proMode.js";
 import {
@@ -27,6 +28,7 @@ import {
   deployedEdge,
   GraphBuilder,
   LINKS_TOKENS_MAX,
+  loadDeployers,
   LINKS_WALLETS_MAX,
   loadCoTraders,
   loadStoredHolders,
@@ -36,6 +38,7 @@ import { labelsGraph, loadSimilarCoins } from "../asyl/similar.js";
 import { readAllowance } from "../asyl/credits.js";
 import {
   addFlows,
+  readDeployer,
   readFunders,
   readTokenHolders,
   readWalletFlows,
@@ -155,6 +158,8 @@ export async function registerAsylRoutes(
         wallet: request.user!.walletAddress,
         pro,
         chain: pro ? await readAllowance(env, request.user!.userId) : null,
+        // For the USD slider: SOL amounts on the map shown in dollars.
+        solUsd: await sharedSolPrice.get().catch(() => null),
         labels: { cap: TRACKED_WALLET_CAP, nameMax: TRACKED_NAME_MAX },
       };
     });
@@ -243,13 +248,10 @@ export async function registerAsylRoutes(
       const g = new GraphBuilder();
       g.node(mint, "token");
       await addHolders(g, mint, stored.holders, "stored");
-      const creator = await prisma.token.findUnique({
-        where: { mintAddress: mint },
-        select: { creator: true, launchedAt: true, firstSeenAt: true },
-      });
-      if (creator?.creator) {
-        g.node(creator.creator, "wallet");
-        deployedEdge(g, creator.creator, mint, creator.launchedAt ?? creator.firstSeenAt);
+      const deployer = (await loadDeployers([mint])).get(mint);
+      if (deployer) {
+        g.node(deployer.wallet, "wallet");
+        deployedEdge(g, deployer.wallet, mint, deployer.at);
       }
       const pro = await isPro(request);
       const coverage: AsylCoverage = {
@@ -343,6 +345,41 @@ export async function registerAsylRoutes(
       }
       return true;
     };
+
+    /**
+     * A coin's deployer (user ask 2026-10-24: "Show deployer"): the create transaction's signer when
+     * the tables have it, free; else, for Pro Mode, read from the chain (10 credits) and kept for
+     * everyone; else the creator TrenchScanner was told, marked unverified.
+     */
+    priv.post("/deployer/:mint", { config: { rateLimit: READ_LIMIT } }, async (request, reply) => {
+      const p = mintParams.safeParse(request.params);
+      if (!p.success) return bad(reply, p.error);
+      const mint = p.data.mint;
+      let known = (await loadDeployers([mint])).get(mint) ?? null;
+      let chain: { credits: number; cached: boolean; allowance: unknown } | null = null;
+      if (!known?.verified && opts.helius && (await isPro(request))) {
+        const res = await readDeployer(env, opts.helius, request.user!.userId, mint);
+        if ("refused" in res) {
+          if (!known) return refusal(reply, res);
+        } else {
+          chain = { credits: res.credits, cached: res.cached, allowance: res.allowance };
+          if (res.value) known = res.value;
+        }
+      }
+      const g = new GraphBuilder();
+      g.node(mint, "token");
+      if (known) {
+        g.node(known.wallet, "wallet");
+        deployedEdge(g, known.wallet, mint, known.at);
+      }
+      reply.header("Cache-Control", "private, no-store");
+      return {
+        focus: mint,
+        graph: await decorate(g, await trackedOf(request)),
+        deployer: known ? { wallet: known.wallet, verified: known.verified } : null,
+        ...(chain ?? {}),
+      };
+    });
 
     /** A wallet's recent SOL and coin transfers and its trades, from its own transactions. */
     priv.post("/chain/flows/:wallet", { config: { rateLimit: CHAIN_LIMIT } }, async (request, reply) => {
