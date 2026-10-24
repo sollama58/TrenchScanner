@@ -53,6 +53,15 @@ export const PEAK_COINS_PER_RUN = 30;
  * peak to find, and waits its usual turn without a read; only the ones that traded are read.
  */
 export const TRIAGE_COINS_PER_RUN = 300;
+/**
+ * How long a coin that traded, but that a run had no read left for (PEAK_COINS_PER_RUN, or the
+ * day's CoinGecko credits spent), waits for its next turn. It used to keep its place at the head
+ * of the queue, so every run triaged the same unread coins again and the rest of the backlog was
+ * never looked at: 265 of the 300 triaged a run by 2026-10-24 evening, with the day's credits
+ * spent and the backlog at 18,000. Two hours moves the triage on through the backlog; the coin is
+ * judged again, on DexScreener, when its turn comes back.
+ */
+export const TRADED_WAIT_MS = 2 * 60 * 60_000;
 /** Pause between Pump.fun calls. */
 const CALL_SPACING_MS = 300;
 /** A coin's first read after a new alert: the readings cover the first minutes meanwhile. */
@@ -290,17 +299,19 @@ export async function triagePeakReads(
     counts.traded += 1;
     traded.push({ watch, volume: token.volume24hUsd ?? Infinity });
   }
+  traded.sort((a, b) => {
+    const unreadA = a.watch.lastCheckedAt === null ? 0 : 1;
+    const unreadB = b.watch.lastCheckedAt === null ? 0 : 1;
+    return unreadA - unreadB || b.volume - a.volume;
+  });
+  // The traded coins this run has no read for take their turn again later, not next run.
+  for (const { watch } of traded.slice(coinsPerRun)) wait(watch, TRADED_WAIT_MS);
   for (const [when, ids] of waits) {
     await prisma.peakWatch.updateMany({
       where: { tokenId: { in: ids } },
       data: { nextCheckAt: new Date(when) },
     });
   }
-  traded.sort((a, b) => {
-    const unreadA = a.watch.lastCheckedAt === null ? 0 : 1;
-    const unreadB = b.watch.lastCheckedAt === null ? 0 : 1;
-    return unreadA - unreadB || b.volume - a.volume;
-  });
   return { due: traded.slice(0, coinsPerRun).map((t) => t.watch), triage: counts };
 }
 
@@ -367,6 +378,8 @@ export async function runCandlePeaksJob(
   /** Stopped by the day's CoinGecko budget for Peaks, not by a provider. */
   let budgetSpent = false;
   let lastError: string | null = null;
+  /** The due coins from this one on were left unread by a 429. */
+  let unreadFrom = due.length;
   for (const [i, watch] of due.entries()) {
     if (i > 0) await sleep(spacingMs);
     let candles: MinuteCandle[] | null;
@@ -377,6 +390,7 @@ export async function runCandlePeaksJob(
       if (err instanceof HttpError && err.status === 429) {
         throttled = true;
         budgetSpent = err.url === COINGECKO_DAY_SPENT;
+        unreadFrom = i;
         break;
       }
       if (err instanceof CandlesUnavailableError) counts.unavailable += 1;
@@ -419,6 +433,14 @@ export async function runCandlePeaksJob(
   // The day's Peaks credits spent (coingeckoBudget.ts): the reads fall to GeckoTerminal's free
   // tier, whose shared slot a run rarely gets, and that 429 is the budget's, not a provider's.
   if (throttled && !coinGeckoBudget.allows("peaks", now())) budgetSpent = true;
+  // No read will answer until the UTC day turns: the coins left unread take their turn again
+  // later (TRADED_WAIT_MS) instead of heading every run's triage until then.
+  if (budgetSpent && unreadFrom < due.length) {
+    await prisma.peakWatch.updateMany({
+      where: { tokenId: { in: due.slice(unreadFrom).map((w) => w.tokenId) } },
+      data: { nextCheckAt: new Date(now() + TRADED_WAIT_MS) },
+    });
+  }
   const [backlog, oldestDue] = await Promise.all([
     prisma.peakWatch.count({ where: backlogWhere }),
     prisma.peakWatch.findFirst({
