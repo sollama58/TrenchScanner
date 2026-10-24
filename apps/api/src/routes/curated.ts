@@ -1037,6 +1037,8 @@ export async function registerCuratedRoutes(
   if (marketBar) {
     app.get("/market/prices", async () => marketBar.prices());
     app.get("/market/trench", async () => marketBar.trench());
+    /** The Lighthouse's market weather: the same stats against up to a week earlier, and the week's trend. */
+    app.get("/market/trench/week", async () => marketBar.week());
   }
 
   /** The Lighthouse's weather gauge: how often launches are doubling now against the last week. */

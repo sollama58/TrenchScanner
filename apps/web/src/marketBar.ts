@@ -48,6 +48,29 @@ export interface TrenchAnswer {
   computedAt: string;
 }
 
+/**
+ * GET {base}/market/trench/week: the Lighthouse's market weather. The bar's answer compared further
+ * back (2, 6, 24, 48, 72 and 168 hours), and the week as back-to-back windows of the same length,
+ * oldest first: the week-ago window to the current one.
+ */
+export interface TrenchWeekAnswer extends TrenchAnswer {
+  seriesHours: number;
+  series: { from: string; to: string; stats: TrenchStats; graded: number }[];
+}
+
+/** "2h", "48h", "1w": a comparison's short name. */
+export function agoLabel(hoursAgo: number): string {
+  if (hoursAgo % 168 === 0) return hoursAgo === 168 ? "1w" : `${hoursAgo / 168}w`;
+  return `${hoursAgo}h`;
+}
+
+/** "2 hours", "3 days", "a week": a comparison in words. */
+export function agoWords(hoursAgo: number): string {
+  if (hoursAgo === 168) return "a week";
+  if (hoursAgo >= 48 && hoursAgo % 24 === 0) return `${hoursAgo / 24} days`;
+  return hoursAgo === 1 ? "an hour" : `${hoursAgo} hours`;
+}
+
 /** The stats the bar shows (volume is still answered, but the bar counts runners instead). */
 export type StatKey = Exclude<keyof TrenchStats, "volumeUsd">;
 
@@ -145,4 +168,62 @@ export function priceText(v: number | null): string {
   if (v >= 1000) return `$${Math.round(v).toLocaleString("en-US")}`;
   if (v >= 1) return `$${v.toFixed(2)}`;
   return `$${v.toPrecision(4)}`;
+}
+
+/**
+ * A trend line through `values` across a `w` x `h` box (y down), broken where a value is unknown:
+ * the line as one SVG path ("M..L..M.."), the area under each unbroken run closed to the box's
+ * floor, and the scale. Counts sit on a zero floor; rates and returns are scaled to their own
+ * range, padded so the line never touches the edges. A lone point between gaps draws as a
+ * dot-length segment, so it still shows.
+ */
+export function sparkPath(
+  values: readonly (number | null)[],
+  w: number,
+  h: number,
+  zeroFloor = false,
+): {
+  d: string;
+  area: string;
+  lo: number;
+  hi: number;
+  y: (v: number) => number;
+  x: (i: number) => number;
+} {
+  const known = values.filter((v): v is number => v !== null && Number.isFinite(v));
+  let lo = known.length ? Math.min(...known) : 0;
+  let hi = known.length ? Math.max(...known) : 1;
+  if (zeroFloor) lo = Math.min(0, lo);
+  if (hi - lo < 1e-9) {
+    hi += 1;
+    lo -= zeroFloor && lo === 0 ? 0 : 1;
+  }
+  const pad = h * 0.1;
+  const x = (i: number) => (values.length > 1 ? (i / (values.length - 1)) * w : w / 2);
+  const y = (v: number) => pad + (1 - (v - lo) / (hi - lo)) * (h - pad * 2);
+  const runs: [string, string][][] = [];
+  let run: [string, string][] | null = null;
+  values.forEach((v, i) => {
+    if (v === null || !Number.isFinite(v)) {
+      run = null;
+      return;
+    }
+    if (!run) runs.push((run = []));
+    run.push([x(i).toFixed(1), y(v).toFixed(1)]);
+  });
+  const d = runs
+    .map(
+      (r) =>
+        r.map(([px, py], i) => `${i ? "L" : "M"}${px} ${py}`).join("") + (r.length === 1 ? "l0.01 0" : ""),
+    )
+    .join("");
+  const floor = h.toFixed(1);
+  const area = runs
+    .filter((r) => r.length > 1)
+    .map(
+      (r) =>
+        `${r.map(([px, py], i) => `${i ? "L" : "M"}${px} ${py}`).join("")}L${r.at(-1)![0]} ${floor}L${r[0]![0]} ${floor}Z`,
+    )
+    .join("");
+  return { d, area, lo, hi, x, y };
 }
