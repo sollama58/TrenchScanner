@@ -4928,8 +4928,8 @@ body.trades-open .util-drawer > * {
 }
 /* Narrow desktop windows: once brand, tabs and wallet no longer fit one row, the tabs take their
    own row as on tablets. How wide that is depends on how many tabs show (Stream and Admin add one
-   each), so each count gets its own breakpoint. */
-@media (min-width: 981px) and (max-width: 1059px) {
+   each, and Intel, outside the tablist, is always there), so each count gets its own breakpoint. */
+@media (min-width: 981px) and (max-width: 1139px) {
   .topbar-inner:has(.tablist > :nth-child(6)) {
     flex-wrap: wrap;
     row-gap: 10px;
@@ -4939,7 +4939,7 @@ body.trades-open .util-drawer > * {
     width: 100%;
   }
 }
-@media (min-width: 981px) and (max-width: 1139px) {
+@media (min-width: 981px) and (max-width: 1219px) {
   .topbar-inner:has(.tablist > :nth-child(7)) {
     flex-wrap: wrap;
     row-gap: 10px;
@@ -4949,7 +4949,7 @@ body.trades-open .util-drawer > * {
     width: 100%;
   }
 }
-@media (min-width: 981px) and (max-width: 1239px) {
+@media (min-width: 981px) and (max-width: 1319px) {
   .topbar-inner:has(.tablist > :nth-child(8)) {
     flex-wrap: wrap;
     row-gap: 10px;
@@ -4959,7 +4959,7 @@ body.trades-open .util-drawer > * {
     width: 100%;
   }
 }
-@media (min-width: 981px) and (max-width: 1239px) {
+@media (min-width: 981px) and (max-width: 1319px) {
   .topbar-inner:has(.tablist > :nth-child(6)) > .tabs button,
   .topbar-inner:has(.tablist > :nth-child(6)) > .tabs .tab-link {
     flex: 1;

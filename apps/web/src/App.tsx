@@ -135,6 +135,24 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
 const PORTFOLIO_TAB = { id: "portfolio" as Tab, label: "Portfolio", Icon: WalletIcon };
 /** Only shown to admin wallets; the /admin routes behind it check the wallet again server-side. */
 const ADMIN_TAB = { id: "admin" as Tab, label: "Admin", Icon: ShieldIcon };
+/** Asyl, the wallet-link explorer: the tab bar's "Intel" opens it (user ask 2026-10-24). */
+const ASYL_URL = "https://asyl.trenchscanner.app";
+
+/** The tab bar's way into Asyl: a tab to look at, a link to what it does. */
+function IntelTab() {
+  return (
+    <button
+      type="button"
+      className="intel-tab"
+      title="Open Asyl: who funds, pays and trades with whom"
+      onClick={() => window.location.assign(ASYL_URL)}
+    >
+      <BubblesIcon size={15} />
+      <span>Intel</span>
+    </button>
+  );
+}
+
 /** The open tab's view, which the selected tab button controls. */
 const TAB_PANEL_ID = "tab-panel";
 
@@ -572,6 +590,7 @@ export function App() {
                   </button>
                 );
               })}
+              <IntelTab />
             </nav>
           )}
           {signedIn && (
@@ -594,6 +613,7 @@ export function App() {
                   </button>
                 ))}
               </div>
+              <IntelTab />
             </nav>
           )}
           <div className="topbar-right">
@@ -789,7 +809,7 @@ export function App() {
         <span className="foot-links">
           <a
             className="foot-link"
-            href="https://asyl.trenchscanner.app"
+            href={ASYL_URL}
             target="_blank"
             rel="noopener noreferrer"
             title="Open Asyl, the wallet-link explorer, in a new tab"

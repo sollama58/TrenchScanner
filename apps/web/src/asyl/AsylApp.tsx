@@ -566,7 +566,15 @@ export function AsylApp() {
         </div>
       </div>
     );
-  if (session === "out") return <AsylSignIn />;
+  if (session === "out")
+    return (
+      <AsylSignIn
+        onSignedIn={() => {
+          setSession("loading");
+          loadMe();
+        }}
+      />
+    );
 
   const chain = session.chain;
 

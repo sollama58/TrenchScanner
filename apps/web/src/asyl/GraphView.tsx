@@ -88,8 +88,10 @@ export function LinkSwatch({ kind, chain = false }: { kind: AsylEdgeKind; chain?
 }
 
 /** The map's key, in its bottom corner: the links on it, and the marks on its wallets. */
-export function MapLegend({ graph }: { graph: AsylGraph }) {
-  const [open, setOpen] = useState(() => typeof window === "undefined" || window.innerWidth > 700);
+export function MapLegend({ graph, startOpen }: { graph: AsylGraph; startOpen?: boolean }) {
+  const [open, setOpen] = useState(
+    () => startOpen ?? (typeof window === "undefined" || window.innerWidth > 700),
+  );
   const kinds = EDGE_KINDS.filter((k) => graph.edges.some((e) => e.kind === k));
   const chain = graph.edges.some((e) => e.source === "chain");
   const devs = graph.nodes.some((n) => n.kind === "wallet" && n.tags.includes("dev"));
