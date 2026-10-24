@@ -1,21 +1,24 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, del, post, type ExtensionKey, type ExtensionKeyCreated, type ExtensionKeyList } from "../api";
 import { useSettings } from "../alerts";
+import { findExtension, handOverKey, type InstalledExtension } from "../extensionBridge";
 import { CopyIcon, GlobeIcon } from "./Icons";
 
 /**
  * Settings, at the bottom: keys for the Trench Overlay browser extension, a side panel listing
- * the reader's alerts with links to Axiom, Terminal and GMGN. A key reads alerts, token stats and the overlay's settings
- * and nothing else. Paid access only, the Model Alert rule (user decision 2026-10-23).
+ * the reader's alerts with links to Axiom, Terminal and GMGN. A key reads alerts, token stats and
+ * the overlay's settings and nothing else. Paid access, the Model Alert rule (user decision
+ * 2026-10-24).
  *
- * Admins only until the extension is listed on the Chrome Web Store; until then there is nothing
- * for anyone else to connect. The extension will receive its key from this page directly, so the
- * secret shown here is the manual fallback.
+ * When this browser has the extension, "Connect this browser" makes a key and hands it straight to
+ * the extension (extensionBridge.ts): the secret is never shown. "Show a key" is the fallback for
+ * another browser, or when the hand-over fails. The extension's own "Connect with TrenchScanner"
+ * opens this page with ?connect=extension, which scrolls here.
  */
 export function ExtensionKeysPanel() {
   const settings = useSettings();
   const level = settings?.account.access.level ?? null;
-  if (level !== "admin") return null;
+  if (level !== "admin" && level !== "whitelist" && level !== "subscription") return null;
   return <ExtensionKeysBody />;
 }
 
@@ -26,6 +29,20 @@ function ExtensionKeysBody() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>("load");
   const [copied, setCopied] = useState(false);
+  const [installed, setInstalled] = useState<InstalledExtension | null>(null);
+  const [handedOver, setHandedOver] = useState(false);
+  const panel = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    let live = true;
+    void findExtension().then((found) => live && setInstalled(found));
+    if (new URLSearchParams(window.location.search).get("connect") === "extension") {
+      panel.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -45,17 +62,28 @@ function ExtensionKeysBody() {
   }, [load]);
 
   const atCap = (keys?.length ?? 0) >= limit;
-  const connect = () => {
+  /** Makes a key; hands it to this browser's extension when there is one, else shows it once. */
+  const connect = (handOver: boolean) => {
     setBusy("connect");
     setError(null);
     setCopied(false);
+    setHandedOver(false);
     post<ExtensionKeyCreated>("/settings/extension-keys")
-      .then((created) => {
-        setSecret(created);
+      .then(async (created) => {
         setKeys((current) => [
           ...(current ?? []),
           { id: created.id, prefix: created.prefix, createdAt: created.createdAt, lastUsedAt: null },
         ]);
+        if (handOver && installed) {
+          const result = await handOverKey(installed.id, created.secret);
+          if (result.ok) {
+            setHandedOver(true);
+            setInstalled({ ...installed, connected: true });
+            return;
+          }
+          setError(`${result.error ?? "The extension didn't take the key."} Paste the key below instead.`);
+        }
+        setSecret(created);
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(null));
@@ -85,7 +113,7 @@ function ExtensionKeysBody() {
     new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 
   return (
-    <section className="panel" id="extension-keys">
+    <section className="panel" id="extension-keys" ref={panel}>
       <header className="section-head">
         <div>
           <span className="eyebrow">
@@ -93,14 +121,25 @@ function ExtensionKeysBody() {
           </span>
           <h2>Browser extension</h2>
         </div>
-        <button
-          type="button"
-          className="primary"
-          disabled={atCap || busy !== null || keys === null}
-          onClick={connect}
-        >
-          Connect a browser
-        </button>
+        {installed && !installed.connected ? (
+          <button
+            type="button"
+            className="primary"
+            disabled={atCap || busy !== null || keys === null}
+            onClick={() => connect(true)}
+          >
+            Connect this browser
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={installed ? "small" : "primary"}
+            disabled={atCap || busy !== null || keys === null}
+            onClick={() => connect(false)}
+          >
+            Show a key
+          </button>
+        )}
       </header>
       <p className="small muted">
         The extension lists the tokens your filters and models alert on in a side panel, with the stat flags
@@ -108,6 +147,14 @@ function ExtensionKeysBody() {
         gets its own key, up to {limit}. A key can read your alerts, token stats and overlay settings. It
         cannot trade, see wallets, or change your filters. Revoke it here at any time.
       </p>
+      {installed?.connected && (
+        <p className="small">
+          {handedOver
+            ? "Connected. The panel in this browser is ready."
+            : "This browser's extension is connected."}{" "}
+          Use Show a key to connect another browser.
+        </p>
+      )}
       {secret && (
         <div>
           <p className="small">Paste this key into the extension. It is not shown again.</p>

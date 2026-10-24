@@ -47,6 +47,8 @@ export interface OverlayToken {
   mint: string;
   symbol: string | null;
   name: string | null;
+  /** The token's logo URL as the API stored it; checked before use (panel/card.ts). */
+  image: string | null;
   liveMcapUsd: number | null;
   stats: OverlayStats | null;
   modelCalls: {
@@ -82,6 +84,8 @@ export interface FeedAnswer {
 export interface Status {
   connected: boolean;
   wallet: string | null;
+  /** The account sees the AI reviewer's verdicts (admins only, as on the site). */
+  aiReviews: boolean;
   settings: OverlaySettings;
   problem: Problem;
 }

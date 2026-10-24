@@ -11,7 +11,7 @@ import {
   hashExtensionKey,
   isExtensionKeyShape,
 } from "../extensionKey.js";
-import { recentOverlay } from "../extensionLookup.js";
+import { recentOverlay, type OverlayToken } from "../extensionLookup.js";
 import { overlaySettingsSchema, parseOverlaySettings } from "../overlaySettings.js";
 
 /**
@@ -35,14 +35,19 @@ const MAX_FAILURE_ADDRESSES = 10_000;
 /** How often lastUsedAt is written for one key. */
 const LAST_USED_EVERY_MS = 10 * 60_000;
 
-/** Feed reads a key may make a minute: an open panel polls every 15 s, plus refreshes. */
-const FEED_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
+/** Feed reads a key may make a minute: an open panel polls every 5 s, plus a second window. */
+const FEED_RATE_LIMIT = { max: 90, timeWindow: "1 minute" };
+/** One reader's feed is reused this long, so two open windows (or a burst of polls) cost one read. */
+const FEED_CACHE_MS = 4_000;
+const FEED_CACHE_MAX = 5_000;
 const SETTINGS_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 
 export interface ExtensionClient {
   keyId: string;
   userId: string;
   walletAddress: string;
+  /** The AI reviewer's verdicts are admin-only on the site, and so in the feed (audit CE-1). */
+  aiReviews: boolean;
 }
 
 interface CachedAuth {
@@ -53,6 +58,7 @@ interface CachedAuth {
 const authCache = new Map<string, CachedAuth>();
 const authFailures = new Map<string, number[]>();
 const lastUsedWritten = new Map<string, number>();
+const feedCache = new Map<string, { at: number; tokens: OverlayToken[] }>();
 
 /** Drops a key's cached check, so a revoke on this process takes effect on the next request. */
 export function forgetExtensionKey(keyId: string): void {
@@ -67,6 +73,7 @@ export function forgetExtensionKeysOf(userId: string): void {
 export function resetExtensionAuthState(): void {
   authCache.clear();
   authFailures.clear();
+  feedCache.clear();
   lastUsedWritten.clear();
 }
 
@@ -150,7 +157,12 @@ export async function registerExtensionRoutes(app: FastifyInstance, opts: { env:
       authCache.delete(hash);
       return reply.code(403).send({ error: extensionKeyDeniedMessage(access.reason) });
     }
-    const client = { keyId: row.id, userId: row.user.id, walletAddress: row.user.walletAddress };
+    const client = {
+      keyId: row.id,
+      userId: row.user.id,
+      walletAddress: row.user.walletAddress,
+      aiReviews: access.reason === "admin",
+    };
     if (!authCache.has(hash) && authCache.size >= AUTH_CACHE_MAX) {
       const oldest = authCache.keys().next().value;
       if (oldest !== undefined) authCache.delete(oldest);
@@ -171,11 +183,12 @@ export async function registerExtensionRoutes(app: FastifyInstance, opts: { env:
     "/me",
     { config: { rateLimit: { ...SETTINGS_RATE_LIMIT, keyGenerator: bucket } } },
     async (request) => {
-      const { userId, walletAddress } = request.extensionClient!;
+      const { userId, walletAddress, aiReviews } = request.extensionClient!;
       const user = await prisma.user.findUnique({ where: { id: userId }, select: { overlaySettings: true } });
       return {
         wallet: `${walletAddress.slice(0, 4)}…${walletAddress.slice(-4)}`,
         settings: parseOverlaySettings(user?.overlaySettings ?? null),
+        aiReviews,
       };
     },
   );
@@ -212,7 +225,10 @@ export async function registerExtensionRoutes(app: FastifyInstance, opts: { env:
     "/feed",
     { config: { rateLimit: { ...FEED_RATE_LIMIT, keyGenerator: bucket } } },
     async (request) => {
-      const { userId } = request.extensionClient!;
+      const { userId, aiReviews } = request.extensionClient!;
+      const now = Date.now();
+      const hit = feedCache.get(userId);
+      if (hit && now - hit.at < FEED_CACHE_MS) return { tokens: hit.tokens };
       const user = await prisma.user.findUnique({ where: { id: userId }, select: SAVED_FEED_SELECT });
       const state = await contestState(opts.env);
       const saved = user ? toSavedFeed(user) : null;
@@ -221,7 +237,16 @@ export async function registerExtensionRoutes(app: FastifyInstance, opts: { env:
         saved ? resolveFeedModels(state, saved).models : [...state.defaultModels],
         false,
       );
-      return { tokens: await recentOverlay(userId, calls) };
+      const tokens = (await recentOverlay(userId, calls, now)).map((t) =>
+        aiReviews ? t : { ...t, ai: null },
+      );
+      if (!feedCache.has(userId) && feedCache.size >= FEED_CACHE_MAX) {
+        const oldest = feedCache.keys().next().value;
+        if (oldest !== undefined) feedCache.delete(oldest);
+      }
+      feedCache.delete(userId);
+      feedCache.set(userId, { at: now, tokens });
+      return { tokens };
     },
   );
 }

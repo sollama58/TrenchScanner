@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Trench Overlay privacy · TrenchScanner</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- The Chrome Web Store listing's privacy policy for the Trench Overlay extension
+         (apps/extension). No scripts: the site's CSP allows only hashed inline ones. Keep it in
+         step with what the extension does (apps/extension/README.md, STORE.md). -->
+    <style>
+      body {
+        margin: 0;
+        background: #101116;
+        color: #eef0f6;
+        font:
+          15px/1.6 system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+      }
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 40px 20px 64px;
+      }
+      h1 {
+        font-size: 26px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 17px;
+        margin: 28px 0 6px;
+      }
+      p,
+      li {
+        color: #c7cbd8;
+      }
+      .muted {
+        color: #7d8396;
+        font-size: 13px;
+      }
+      a {
+        color: #3fd7c9;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Trench Overlay privacy policy</h1>
+      <p class="muted">Effective 24 October 2026</p>
+      <p>
+        Trench Overlay is TrenchScanner's Chrome extension. It shows your own TrenchScanner alerts in a side
+        panel. This page explains what it handles and why.
+      </p>
+
+      <h2>What it can't see</h2>
+      <p>
+        The extension never runs on any website. It has no access to the pages you visit, including Axiom,
+        Terminal (Padre) and GMGN. It can't read their content, cookies, logins or wallets, and it doesn't
+        record your browsing history. Its only Chrome permissions are storage and the side panel, plus network
+        access to <code>api.trenchscanner.app</code>.
+      </p>
+
+      <h2>What it stores, on your computer only</h2>
+      <ul>
+        <li>
+          Your extension key, which TrenchScanner Settings creates for this browser. It is used as an
+          authentication token.
+        </li>
+        <li>A shortened form of your wallet address, shown in the panel's header.</li>
+        <li>Your overlay settings: which alerts and flags to show, and which sites to link to.</li>
+      </ul>
+      <p>
+        These stay in Chrome's extension storage on your device. Disconnecting in the panel or uninstalling
+        the extension removes them.
+      </p>
+
+      <h2>What it sends, and to whom</h2>
+      <ul>
+        <li>
+          To TrenchScanner (<code>api.trenchscanner.app</code>): your key, to read your recent alerts, token
+          stats and overlay settings, and to save those settings when you change them. TrenchScanner records
+          when each key was last used, so you can see it in Settings.
+        </li>
+        <li>
+          Token images load from where the token's launcher or DexScreener hosts them, for example
+          <code>cdn.dexscreener.com</code> or <code>images.pump.fun</code>. Those hosts see your IP address,
+          as they would if you opened the image on TrenchScanner's site.
+        </li>
+      </ul>
+      <p>
+        The extension sends nothing else to anyone. It has no analytics, no tracking and no ads. Your data is
+        not sold or shared, and it is not used for anything except showing you your own alerts.
+      </p>
+
+      <h2>Your key</h2>
+      <p>
+        A key can read only your alerts, token stats and overlay settings, and save the overlay settings. It
+        can't trade, move funds, see wallets or change your account. You can revoke any key at any time in
+        TrenchScanner Settings, under Browser extension. Signing out everywhere revokes them all.
+      </p>
+
+      <h2>Changes</h2>
+      <p>
+        If what the extension handles changes, this page is updated first and the date above changes with it.
+      </p>
+
+      <p class="muted"><a href="/">Back to TrenchScanner</a></p>
+    </main>
+  </body>
+</html>

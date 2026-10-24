@@ -52,6 +52,12 @@ jobs:
 
       - run: npm ci
 
+      # Every change to the extension bumps its version (user rule 2026-10-24).
+      - name: Extension version bump
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: ./scripts/check-extension-version.sh
+
       # Fails on a high or critical advisory in what ships (dev-only advisories are not gated here)
       # - a known-vulnerable runtime dependency should not reach a deploy unnoticed.
       - name: Audit production dependencies

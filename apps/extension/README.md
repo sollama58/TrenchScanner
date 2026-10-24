@@ -12,9 +12,18 @@ dropped (user decision 2026-10-23): nothing this extension ships, or a bad updat
 those pages. A link is the only thing that leads there.
 
 - `src/sw.ts` is the service worker: the only part that holds the key or talks to the network,
-  and only to `api.trenchscanner.app/ext/v1`. It answers the extension's own pages only.
+  and only to `api.trenchscanner.app/ext/v1`. It answers the extension's own pages, and
+  TrenchScanner's site (`externally_connectable`) for the one-click key hand-over.
 - `src/panel/` is the side panel: the alerts list (`card.ts`) and the settings, which are saved to
   the account. The toolbar icon or Alt+Shift+T opens it.
+
+## Version rule
+
+**Every change to `apps/extension` bumps its version** (user rule 2026-10-24): `version` in
+`static/manifest.json` and in `package.json`, the same in both. CI fails a pull request that changes
+the extension without a higher version (`scripts/check-extension-version.sh`), and the build fails
+when the two differ. Patch for fixes, minor for features. The Chrome Web Store also refuses an upload
+whose version isn't higher than the last.
 
 ## Try it
 
@@ -22,8 +31,23 @@ those pages. A link is the only thing that leads there.
 npm run build -w @trenchscanner/extension
 ```
 
-Then open `chrome://extensions`, turn on Developer mode, choose **Load unpacked** and pick
-`apps/extension/dist`. Connect with a key from Settings > Browser extension (admins only until
-the store listing).
+Open `chrome://extensions`, turn on Developer mode, choose **Load unpacked** and pick
+`apps/extension/dist`. The dev build carries `dev-key.pub`, so the unpacked extension's ID is always
+`jhdfdijmhnomcdijohdfibelodhfiigl`. TrenchScanner's Settings knows that ID
+(`apps/web/src/extensionBridge.ts`), so in the panel, **Connect with TrenchScanner** then
+**Connect this browser** connects it in one click. Pasting a key from **Show a key** also works.
+Keys need paid access. AI verdicts appear for admin wallets only, as on the site.
 
-Permissions are `storage` and `sidePanel`, plus the API host. Neither shows an install warning.
+## Release to the Chrome Web Store
+
+```sh
+npm run package -w @trenchscanner/extension   # release/trench-overlay-<version>.zip
+```
+
+The store build leaves out `dev-key.pub`, because the store assigns its own ID. After the first
+upload, add that ID to `STORE_IDS` in `apps/web/src/extensionBridge.ts` (or `VITE_EXTENSION_IDS` on
+the web service). Settings hands keys only to the IDs listed there. The listing's text, permission
+justifications and privacy answers are in `STORE.md`, and the privacy policy is
+`https://trenchscanner.app/extension-privacy.html` (`apps/web/public/extension-privacy.html`).
+
+Permissions are `storage` and `sidePanel`, plus the API host. None of them shows an install warning.

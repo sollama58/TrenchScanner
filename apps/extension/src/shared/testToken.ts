@@ -6,6 +6,7 @@ export function token(over: Partial<OverlayToken> = {}): OverlayToken {
     mint: "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN",
     symbol: "RING",
     name: "Ring Coin",
+    image: null,
     liveMcapUsd: 5_100,
     stats: {
       takenAt: new Date().toISOString(),
