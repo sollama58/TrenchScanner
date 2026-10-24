@@ -74,6 +74,12 @@ export interface CurveTapeConfig {
    * 1-second candles (CURVE_TAPE_ALERTED_MINUTES, user decision 2026-10-23). Defaults to maxAgeMinutes.
    */
   alertedMaxAgeMinutes?: number;
+  /**
+   * Age to which a watchlist coin still near the band is followed (CURVE_TAPE_NEAR_BAND_MINUTES,
+   * user report 2026-10-24: a coin that climbed into the feed after half an hour had no 1-second
+   * bars between then and its detection). Defaults to maxAgeMinutes.
+   */
+  nearBandMaxAgeMinutes?: number;
   maxMints: number;
   streamCreditsPerDay: number;
   pollSeconds: number;
@@ -101,6 +107,10 @@ interface Followed {
   bornAt: number;
   /** Followed until this moment (ms epoch): longer for a coin called or charted (followYoungCurves). */
   until: number;
+  /** When it was first followed (ms epoch). */
+  followedAt?: number;
+  /** Its path was saved for price pathing as it aged out, while it is followed on (drop). */
+  pathSaved?: boolean;
 }
 
 type PoolPart = "base" | "quote" | "account";
@@ -399,15 +409,20 @@ export interface AskedCoin extends TrackedCoin {
  * whatever their age (user report 2026-10-23: a coin called two hours after its launch, or
  * charted later still, was never followed, so its chart had nothing of ours). A coin whose curve
  * is done (graduated, or no curve) is followed on its PumpSwap pool instead when asked.
+ * `nearBand`: the watchlist's coins last seen near the band, followed to nearBandMaxAgeMinutes from
+ * launch while they stay there, so a coin detected after the young age has its 1-second bars from
+ * launch to its detection (user report 2026-10-24).
  */
 export function followYoungCurves(
   tracked: readonly TrackedCoin[],
   now = Date.now(),
   asked: readonly AskedCoin[] = [],
+  nearBand: ReadonlySet<string> = new Set(),
 ): void {
   if (!cfg) return;
   const maxAgeMs = cfg.maxAgeMinutes * 60_000;
   const askedForMs = Math.max(maxAgeMs, (cfg.alertedMaxAgeMinutes ?? 0) * 60_000);
+  const nearBandMs = Math.max(maxAgeMs, (cfg.nearBandMaxAgeMinutes ?? 0) * 60_000);
   const wanted = new Map<string, { rank: number; bornAt: number; until: number; asked: boolean }>();
   const askedPools = new Map<string, number>();
   // The asked coins first: they must not wait behind the watchlist for a seat under the cap.
@@ -421,7 +436,7 @@ export function followYoungCurves(
     const bornAt = (t.launchedAt ?? t.firstSeenAt).getTime();
     const askedAt = isAsked ? t.askedAt?.getTime() : undefined;
     const until = !isAsked
-      ? bornAt + maxAgeMs
+      ? bornAt + (nearBand.has(t.mintAddress) ? nearBandMs : maxAgeMs)
       : askedAt !== undefined
         ? Math.max(bornAt + maxAgeMs, askedAt + askedForMs)
         : bornAt + askedForMs;
@@ -438,11 +453,18 @@ export function followYoungCurves(
     if (!f) {
       const curve = pumpCurveAddressOf(mint);
       if (!curve) continue;
-      f = { curve, rank: w.rank, readAt: null, bornAt: w.bornAt, until: w.until };
+      f = { curve, rank: w.rank, readAt: null, bornAt: w.bornAt, until: w.until, followedAt: now };
       followed.set(mint, f);
     }
     f.rank = w.rank;
     f.until = Math.max(w.until, w.asked ? w.until : f.bornAt + maxAgeMs);
+    // Followed from young past the young age (near the band, called or charted): its young path is
+    // saved for price pathing as it ages, as it was when the coin was let go then (the tape keeps
+    // 31 minutes). A coin first followed when older is saved when let go, as before.
+    if (!f.pathSaved && now > f.bornAt + maxAgeMs && (f.followedAt ?? 0) <= f.bornAt + maxAgeMs) {
+      f.pathSaved = true;
+      recordPricePath(mint, tape.snapshot(mint), "aged");
+    }
     // Again every cycle: it keeps the subscription from being evicted as unwatched.
     if (!paused) stream?.watch(keyOf(mint), [f.curve], now, "account");
   }
@@ -473,6 +495,7 @@ function followNewLaunches(mints: readonly string[], now: number): void {
       readAt: null,
       bornAt: now,
       until: now + cfg.maxAgeMinutes * 60_000,
+      followedAt: now,
     });
     if (!paused) stream?.watch(keyOf(mint), [curve], now, "account");
   }
@@ -548,9 +571,11 @@ export function takeCurveTapeStats(now = Date.now()) {
 }
 
 function drop(mint: string, forGood: boolean): void {
+  const f = followed.get(mint);
   if (followed.delete(mint)) stream?.unwatch(keyOf(mint));
-  // The path the tape held is saved as training data for predictive price pathing (when it is on).
-  recordPricePath(mint, tape.snapshot(mint), forGood ? "graduated" : "aged");
+  // The path the tape held is saved as training data for predictive price pathing (when it is on),
+  // unless it was saved as the coin aged and it was followed on (followYoungCurves).
+  if (!f?.pathSaved) recordPricePath(mint, tape.snapshot(mint), forGood ? "graduated" : "aged");
   // And its last 1-second chart candles (curveCandles.ts).
   curveTapeDropped(mint, tape);
   tape.forget(mint);

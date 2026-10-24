@@ -7,6 +7,7 @@ import {
   minuteCoversBefore,
   oldestCandleCover,
   pruneCandleStore,
+  queueBackfillsForRecentCalls,
   readCandleChunks,
   requestCandleBackfill,
   saveCandleChunks,
@@ -33,6 +34,7 @@ describe.skipIf(!dbAvailable)("candle store", () => {
   afterAll(async () => {
     await clean();
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
   });
 
   it("saves chunks, reads them back decoded, and never thins a chunk with a partial reading", async () => {
@@ -128,6 +130,35 @@ describe.skipIf(!dbAvailable)("candle store", () => {
     // Asked for one width, that width alone.
     expect((await readCandleChunks(KEPT, NOW - 3_600_000, NOW, { res: 60 })).map((r) => r.res)).toEqual([60]);
     expect(await readCandleChunks(KEPT, NOW - 3_600_000, NOW, { res: 1 })).toEqual([]);
+  });
+
+  // User report 2026-10-24: a coin a filter put on the Live Feed had no history until opened.
+  it("sweeps a coin matched lately that has no backfill row yet into the queue", async () => {
+    const mint = `${TAG}-matched`;
+    const token = await prisma.token.create({ data: { mintAddress: mint } });
+    const user = await prisma.user.create({ data: { walletAddress: `${TAG}-user` } });
+    const filter = await prisma.userFilter.create({ data: { userId: user.id, name: "f" } });
+    const snapshot = await prisma.tokenSnapshot.create({
+      data: { tokenId: token.id, priceUsd: 0.00001, marketCapUsd: 10_000 },
+    });
+    const matchedAt = new Date(Date.now() - 5 * M);
+    await prisma.match.create({
+      data: {
+        userId: user.id,
+        filterId: filter.id,
+        tokenId: token.id,
+        snapshotId: snapshot.id,
+        score: 1,
+        matchedAt,
+      },
+    });
+    expect(await queueBackfillsForRecentCalls(60 * M)).toBeGreaterThanOrEqual(1);
+    const row = await prisma.candleBackfill.findUniqueOrThrow({ where: { mint } });
+    expect(row.reason).toBe("match");
+    expect(row.requestedAt.getTime()).toBe(matchedAt.getTime());
+    // Queued once: the next sweep leaves it be.
+    await queueBackfillsForRecentCalls(60 * M);
+    expect(await prisma.candleBackfill.count({ where: { mint } })).toBe(1);
   });
 
   it("queues a backfill once, moves a chart's ask ahead on a call, and redoes a long-finished one", async () => {

@@ -1309,13 +1309,19 @@ async function scanCycle(
 
   // 2. Re-check the active watchlist against live market data, and keep only the mints currently
   // sitting in (or near) the target band.
-  const { tracked, alive } = await selectWatchlist(env);
-  // The young Pump.fun coins in it have their curves followed change by change (curveTape.ts), and
-  // the coins alerted on, called or charted lately for longer from the ask, for their charts.
-  followYoungCurves(tracked, Date.now(), [
-    ...(await recentlyAlertedCoins(env.CURVE_TAPE_ALERTED_MINUTES)),
-    ...(await recentlyAskedCoins(env.CURVE_TAPE_ALERTED_MINUTES * 60_000).catch(() => [])),
-  ]);
+  const { tracked, alive, nearBand } = await selectWatchlist(env);
+  // The young Pump.fun coins in it have their curves followed change by change (curveTape.ts), the
+  // ones near the band for longer, and the coins alerted on, matched, called or charted lately for
+  // longer from the ask, for their charts.
+  followYoungCurves(
+    tracked,
+    Date.now(),
+    [
+      ...(await recentlyAlertedCoins(env.CURVE_TAPE_ALERTED_MINUTES)),
+      ...(await recentlyAskedCoins(env.CURVE_TAPE_ALERTED_MINUTES * 60_000).catch(() => [])),
+    ],
+    new Set(nearBand),
+  );
   lap("watchlist");
 
   if (tracked.length === 0) {
@@ -2634,6 +2640,8 @@ export async function selectWatchlist(env: Env): Promise<{
     launchpad: string | null;
   }[];
   alive: number;
+  /** The tracked mints of the near-band tier (last seen near the band), for the curve tape. */
+  nearBand: string[];
 }> {
   const now = Date.now();
   const ttlCutoff = new Date(now - env.WATCHLIST_TTL_HOURS * 3_600_000);
@@ -2721,7 +2729,11 @@ export async function selectWatchlist(env: Env): Promise<{
   const freshCutoff = now - FRESH_LAUNCH_MINUTES * 60_000;
   const fresh = probation.filter((t) => t.firstSeenAt.getTime() > freshCutoff);
   const older = probation.filter((t) => t.firstSeenAt.getTime() <= freshCutoff);
-  return { tracked: [...nearBand, ...fresh, ...rest, ...older], alive: alive.length };
+  return {
+    tracked: [...nearBand, ...fresh, ...rest, ...older],
+    alive: alive.length,
+    nearBand: nearBand.map((t) => t.mintAddress),
+  };
 }
 
 /** How young a never-priced launch is moved up the refresh order - see selectWatchlist. */
