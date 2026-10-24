@@ -8,6 +8,7 @@ import {
   type OnChainProfile,
 } from "@trenchscanner/core";
 import {
+  adoptLiveHolders,
   applyHolderBalances,
   cachedTopHolders,
   cexReadingOf,
@@ -502,6 +503,28 @@ describe("readTopHolders", () => {
       watchedReads: 0,
     });
     expect(helius.getTopHoldersBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts the next read down on the coin's cadence now, not the one it was read on", async () => {
+    const top = [{ owner: "h0", pct: 10 }];
+    const helius = {
+      getTopHoldersBatch: vi.fn(async (mints: string[]) => {
+        return new Map(mints.map((m) => [m, { status: "found" as const, holders: top }]));
+      }),
+    };
+    const groups: LinkedGroup[] = [{ mintAddress: "mS", holders: [] }];
+    const opts = { maxReads: 4, maxWatchedReads: 0, watchedRefreshMs: 60_000 };
+    // Read unwatched: the next read is ten minutes off.
+    await readTopHolders(groups, helius, { ...opts, nowMs: 0 });
+    expect(adoptLiveHolders(groups, 1).get("mS")?.nextReadAtMs).toBe(10 * 60_000);
+    // Its map opens: the minute's re-read is what comes (here with no watched budget left, so
+    // nothing is read), and the schedule says so.
+    await readTopHolders(groups, helius, { ...opts, watched: new Set(["mS"]), nowMs: 30_000 });
+    expect(adoptLiveHolders(groups, 30_001).get("mS")?.nextReadAtMs).toBe(60_000);
+    // Closed again: back to ten minutes.
+    await readTopHolders(groups, helius, { ...opts, nowMs: 40_000 });
+    expect(adoptLiveHolders(groups, 40_001).get("mS")?.nextReadAtMs).toBe(10 * 60_000);
+    expect(helius.getTopHoldersBatch).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a watched coin's list while the trade stream says it hasn't traded since", async () => {

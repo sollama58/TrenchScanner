@@ -547,6 +547,20 @@ export async function readTopHolders(
       ? opts.streamedRefreshMs
       : (opts.watchedRefreshMs ?? TOP_HOLDERS_REFRESH_MS);
   };
+  // The schedule a list carries (adoptLiveHolders' nextReadAtMs, the token view's "Next update")
+  // follows the coin's cadence now, not the one it had at its last read: a map opened on a coin
+  // read unwatched counted down the ten-minute cadence while the minute's re-read was what came,
+  // and one closed kept counting the minute while the next read was ten minutes off.
+  for (const g of groups) {
+    const entry = topHolderLists.get(g.mintAddress);
+    if (!entry) continue;
+    const every = watched.has(g.mintAddress)
+      ? watchedEvery(g)
+      : oldMints.has(g.mintAddress)
+        ? TOP_HOLDERS_OLD_REFRESH_MS
+        : TOP_HOLDERS_REFRESH_MS;
+    if (entry.readEveryMs !== every) topHolderLists.set(g.mintAddress, { ...entry, readEveryMs: every });
+  }
   const watchedDue: LinkedGroup[] = [];
   const watchedCap = Math.max(0, opts.maxWatchedReads ?? 0);
   for (const g of groups) {

@@ -183,16 +183,32 @@ export function fromAlertText(readAtMs: number, alertAtMs: number, what: string)
 
 /**
  * The coin's live top 50 to draw over `snapshot`, or null when it is too old for it: read more
- * than HOLDER_STALE_MS before the scan, and the scan has its own holder list to draw. The wider
- * read is saved only while the coin is scanned with funder lookups, so for a coin called days ago
- * it can be days older than the scan it would stand in for.
+ * than HOLDER_STALE_MS before the scan's own holder list was, and the scan has that list to draw.
+ * The wider read is saved only while the coin is scanned with funder lookups, so for a coin called
+ * days ago it can be days older than the list it would stand in for.
+ *
+ * Measured against the list's enumeration (holderShownAt), not the scan row's time: the top 50 and
+ * the top 25 come from the same chain read, and a coin with no trade since keeps both lists
+ * without a re-read (worker readTopHolders' quiet keep). Against takenAt, a quiet alerted coin's
+ * map fell from 50 bubbles to 25 twelve minutes after its read while both lists were still current.
  */
 export function liveWideFor(
-  snapshot: Pick<Snapshot, "takenAt" | "linkedClusters" | "linkedHolders"> | null | undefined,
+  snapshot:
+    | Pick<
+        Snapshot,
+        | "takenAt"
+        | "holdersAt"
+        | "holderBalancesAt"
+        | "holderChainReadAt"
+        | "linkedClusters"
+        | "linkedHolders"
+      >
+    | null
+    | undefined,
   wide: WideMap | null,
 ): WideMap | null {
   if (!wide || !snapshot || !hasHolderList(snapshot)) return wide;
-  return Date.parse(snapshot.takenAt) - Date.parse(wide.readAt) > HOLDER_STALE_MS ? null : wide;
+  return holderShownAt(snapshot) - Date.parse(wide.readAt) > HOLDER_STALE_MS ? null : wide;
 }
 
 /**
@@ -2549,15 +2565,11 @@ export function hasHolderList(s: Pick<Snapshot, "linkedClusters" | "linkedHolder
 }
 
 /**
- * The longest the worker goes between writes of a coin's holder list while someone has its token
- * view open: the list again every WATCHED_HOLDERS_REFRESH_SECONDS (60 s, worker watchedHolders.ts),
- * on the first scan cycle after that, changed or not. A list that changed is written on the next
- * cycle: the holder stream moves the top holders' balances as they trade (user ask 2026-10-19), so
- * the next update often comes before this.
- */
-/**
  * Chain re-enumeration while a bubble map is open and the holder stream is not covering the coin
- * (worker WATCHED_HOLDERS_REFRESH_SECONDS). A streamed watch uses HOLDER_STREAMED_READ_MS.
+ * (worker WATCHED_HOLDERS_REFRESH_SECONDS), and the longest the worker goes between writes of an
+ * open coin's holder list, changed or not. A list that changed is written on the next cycle: the
+ * holder stream moves the top holders' balances as they trade (user ask 2026-10-19). A streamed
+ * watch re-enumerates on HOLDER_STREAMED_READ_MS.
  */
 export const HOLDER_WRITE_MS = 60_000;
 /**
@@ -2653,6 +2665,33 @@ export function holderChainReadAt(
 ): number {
   const chain = s.holderChainReadAt ? Date.parse(s.holderChainReadAt) : NaN;
   return Number.isFinite(chain) ? chain : holderListAt(s);
+}
+
+/**
+ * The longest redraw interval (Customize) at which an open map still counts as "Live" while the
+ * coin's trades stream: a map held for minutes between redraws is not.
+ */
+export const MAP_LIVE_REDRAW_MS = 15_000;
+
+/**
+ * The bubble map badge's status, for the map on screen. The map is held for the reader's redraw
+ * interval (Customize, 5 s to 12 h), so the holder list's own status (`fresh`, Top holders') would
+ * say "4s ago · Next update in 0:56" over a map drawn from a reading an hour old. `drawnAt` is when
+ * the holders drawn were read (holderBadgeAt of the held reading). The next update is the list's
+ * next read or the next redraw, whichever is later, and "Live" only while the map redraws within
+ * MAP_LIVE_REDRAW_MS; past that a live coin counts down to its next redraw instead.
+ */
+export function mapBadgeFreshness(
+  fresh: { last: number; next: number | null; late?: boolean; live?: boolean },
+  drawnAt: number,
+  redraw: { shownAt: number; everyMs: number },
+): { last: number; next: number | null; late: boolean; live: boolean } {
+  const nextRedraw = redraw.shownAt + redraw.everyMs;
+  const live = !!fresh.live && fresh.next === null && redraw.everyMs <= MAP_LIVE_REDRAW_MS;
+  if (live) return { last: drawnAt, next: null, late: false, live: true };
+  if (fresh.live && fresh.next === null) return { last: drawnAt, next: nextRedraw, late: false, live: false };
+  if (fresh.next === null) return { last: drawnAt, next: null, late: false, live: false };
+  return { last: drawnAt, next: Math.max(fresh.next, nextRedraw), late: !!fresh.late, live: false };
 }
 
 /** The first of a view's reads, every `everyMs` from `nextRead`, at or after `at`. */

@@ -5,7 +5,7 @@ const logger = createLogger("watched-holders");
 /**
  * How long after its last stamp (Token.holdersViewedAt) a coin counts as having its bubble map
  * open. The token view re-reads its maps every 30 seconds while it is open and the page visible
- * (web BubbleMap.tsx BUBBLE_POLL_MS), and the API writes the stamps every few seconds, so this
+ * (web bubbleMap.ts HOLDER_POLL_MS), and the API writes the stamps every few seconds, so this
  * spans a few missed polls; closing the view stops the faster reads within it.
  */
 export const WATCHED_HOLDERS_WINDOW_MS = 2 * 60_000;

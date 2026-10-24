@@ -185,6 +185,43 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint?reading=1", () => {
     expect(await pickedIndex("pastFifty")).toBe(10);
   });
 
+  it("carries the coin's newest list onto the newest scan when none of the 50 has one", async () => {
+    const m = mint(`${TAG}-carried`);
+    mints.carried = m;
+    const token = await prisma.token.create({
+      data: { mintAddress: m, symbol: "RDG", discoverySource: "pumpportal" },
+    });
+    const now = Date.now();
+    const chainReadAt = new Date(now - 56 * 15_000);
+    await prisma.tokenSnapshot.createMany({
+      data: Array.from({ length: 55 }, (_, i) => ({
+        tokenId: token.id,
+        takenAt: new Date(now - (i + 1) * 15_000),
+        priceUsd: 1,
+        marketCapUsd: 10_000,
+        rugScreenPassed: true,
+        linkedWalletPct: 20,
+        // A quiet coin: its unchanged list was last written past the 50 newest rows.
+        ...(i === 54
+          ? {
+              linkedHolders: HOLDERS as object[],
+              linkedClusters: CLUSTERS as object[],
+              holderChainReadAt: chainReadAt,
+            }
+          : {}),
+      })),
+    });
+    const reading = (await get(`/tokens/${m}?reading=1`)).json() as {
+      snapshots: (Row & { holdersAt?: string; holderChainReadAt?: string })[];
+    };
+    expect(reading.snapshots).toHaveLength(1);
+    const [newest] = reading.snapshots;
+    expect(newest!.linkedHolders).toEqual(HOLDERS);
+    expect(newest!.linkedClusters).toEqual(CLUSTERS);
+    expect(newest!.holdersAt).toBe(chainReadAt.toISOString());
+    expect(newest!.holderChainReadAt).toBe(chainReadAt.toISOString());
+  });
+
   it("answers a mint not on Token with a 404", async () => {
     const admin = `${TAG}-admin`;
     const env = { ...loadEnv(), ADMIN_WALLET_ADDRESSES: admin };

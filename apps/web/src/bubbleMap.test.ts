@@ -43,6 +43,7 @@ import {
   positionsOf,
   pickReading,
   liveWideFor,
+  mapBadgeFreshness,
   withWideMap,
   alertWideMap,
   fromAlertText,
@@ -270,6 +271,17 @@ describe("live top 50 over a scan", () => {
 
   it("keeps an old top 50 when the scan has no list of its own to draw", () => {
     expect(liveWideFor(scan("2026-10-17T02:00:00Z", false), wide)).toBe(wide);
+  });
+
+  it("keeps the top 50 of a quiet coin whose top 25 is from the same chain read", () => {
+    // No trade since the read: the worker keeps both lists, and scans keep landing.
+    const quiet = { ...scan("2026-10-14T02:30:00Z"), holderChainReadAt: "2026-10-14T02:00:00Z" };
+    expect(liveWideFor(quiet, wide)).toBe(wide);
+  });
+
+  it("leaves off a top 50 the top 25 has been re-read past", () => {
+    const reread = { ...scan("2026-10-14T02:30:00Z"), holderChainReadAt: "2026-10-14T02:20:00Z" };
+    expect(liveWideFor(reread, wide)).toBeNull();
   });
 });
 
@@ -1345,5 +1357,36 @@ describe("link bundles", () => {
     const pairs = ties.map((t) => [t.from, t.to].sort().join("-")).sort();
     // h1-h2 share a cluster: no tie. h3 joins by h2 (nearest), h4 by h3.
     expect(pairs).toEqual(["h2-h3", "h3-h4"]);
+  });
+});
+
+describe("bubble map badge on a held map", () => {
+  const fresh = { last: 100_000, next: 160_000 };
+
+  it("dates the map drawn, not the newer reading behind it", () => {
+    // The map is held an hour between redraws: it was drawn at 0 from a list read at 0.
+    const b = mapBadgeFreshness(fresh, 0, { shownAt: 0, everyMs: 3_600_000 });
+    expect(b.last).toBe(0);
+    expect(b.next).toBe(3_600_000);
+  });
+
+  it("counts to the list's next read when the redraw comes sooner", () => {
+    expect(mapBadgeFreshness(fresh, 100_000, { shownAt: 101_000, everyMs: 5_000 }).next).toBe(160_000);
+  });
+
+  it("says Live only while the map redraws within seconds", () => {
+    const live = { last: 100_000, next: null, live: true };
+    expect(mapBadgeFreshness(live, 100_000, { shownAt: 101_000, everyMs: 5_000 })).toMatchObject({
+      live: true,
+      next: null,
+    });
+    expect(mapBadgeFreshness(live, 100_000, { shownAt: 101_000, everyMs: 300_000 })).toMatchObject({
+      live: false,
+      next: 401_000,
+    });
+  });
+
+  it("shows only the age once the coin is no longer scanned", () => {
+    expect(mapBadgeFreshness({ last: 1, next: null }, 1, { shownAt: 2, everyMs: 5_000 }).next).toBeNull();
   });
 });
