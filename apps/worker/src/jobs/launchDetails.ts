@@ -28,6 +28,11 @@ export interface LaunchDetailStats {
   missing: number;
   /** Not looked up: too many already in flight. */
   dropped: number;
+  /**
+   * Streamed launches left to the in-band read (fillBandMetadata) because this path has answered
+   * nothing for a while: Pump.fun refusing and the launch's metadata not yet on any public gateway.
+   */
+  deferred: number;
 }
 
 const emptyStats = (): LaunchDetailStats => ({
@@ -37,9 +42,35 @@ const emptyStats = (): LaunchDetailStats => ({
   fromDas: 0,
   missing: 0,
   dropped: 0,
+  deferred: 0,
 });
 let stats = emptyStats();
 let inFlight = 0;
+
+/**
+ * Consecutive streamed launches whose Pump.fun read and metadata read both failed (a launch with
+ * no metadata URI to read doesn't count). Past STREAM_MISS_STREAK the path is paused for
+ * STREAM_PAUSE_MS: with Pump.fun refusing this service (2026-10-22 on) and a launch's metadata
+ * JSON pinned seconds ago on Pump.fun's own gateway only (the public gateways serve it minutes
+ * later, by which time the in-band read gets it), production answered 0-3 of 43-48 asks a cycle
+ * (2026-10-24), each miss costing four gateway requests and up to 32 s of a lookup slot. While
+ * paused, launches are left to fillBandMetadata, which reads in-band coins whatever this path did.
+ * After the pause STREAM_PROBE launches go through: one hit ends the pause, STREAM_PROBE misses
+ * start the next. With the sources answering, nothing changes: the streak never gets there.
+ */
+export const STREAM_MISS_STREAK = 30;
+export const STREAM_PROBE = 5;
+export const STREAM_PAUSE_MS = 10 * 60_000;
+let missStreak = 0;
+let pausedUntil = 0;
+/** After a pause: only STREAM_PROBE launches go through until one of them answers. */
+let probing = false;
+let now: () => number = Date.now;
+
+/** Test hook: the clock the pause is kept on. */
+export function setLaunchDetailsClock(clock: () => number): void {
+  now = clock;
+}
 
 /** Each mint is read once: the stream repeats, and Jupiter's lists show a young coin minute after minute. */
 const asked = new Set<string>();
@@ -51,6 +82,10 @@ export function resetLaunchDetails(): void {
   askedOnChain.clear();
   inFlight = 0;
   stats = emptyStats();
+  missStreak = 0;
+  pausedUntil = 0;
+  probing = false;
+  now = Date.now;
 }
 
 /** The counts since the last call, for the scan's heartbeat. */
@@ -83,6 +118,17 @@ export async function fillLaunchDetails(
   for (const e of launches)
     if (e.kind === "create" && !asked.has(e.mintAddress)) byMint.set(e.mintAddress, e);
   let todo = [...byMint.values()];
+  if (todo.length === 0) return;
+  if (now() < pausedUntil) {
+    // Not marked asked: a launch the in-band read doesn't reach is read when the pause ends and
+    // it comes round again (Jupiter's young coins do, each cycle).
+    stats.deferred += todo.length;
+    return;
+  }
+  if (probing && todo.length > STREAM_PROBE) {
+    stats.deferred += todo.length - STREAM_PROBE;
+    todo = todo.slice(0, STREAM_PROBE);
+  }
   const room = Math.max(0, MAX_IN_FLIGHT - inFlight);
   if (todo.length > room) {
     stats.dropped += todo.length - room;
@@ -98,8 +144,14 @@ export async function fillLaunchDetails(
     await forEachWithConcurrency(todo, CONCURRENCY, async (launch) => {
       try {
         const coin = await lookUp(launch, pumpFun, fetchMetadata);
-        if (coin) found.push(coin);
-        else stats.missing += 1;
+        if (coin) {
+          found.push(coin);
+          missStreak = 0;
+          probing = false;
+        } else {
+          stats.missing += 1;
+          if (coin === null) noteMiss();
+        }
       } finally {
         inFlight -= 1;
       }
@@ -109,11 +161,27 @@ export async function fillLaunchDetails(
   }
 }
 
+/** A streamed launch both sources failed on: towards the pause (see STREAM_MISS_STREAK). */
+function noteMiss(): void {
+  missStreak += 1;
+  if (missStreak < (probing ? STREAM_PROBE : STREAM_MISS_STREAK)) return;
+  pausedUntil = now() + STREAM_PAUSE_MS;
+  probing = true;
+  missStreak = 0;
+  logger.info("launch details: neither source answering streamed launches, pausing the path", {
+    pauseMs: STREAM_PAUSE_MS,
+  });
+}
+
+/**
+ * The launch's details, or null when both sources failed, or undefined when there was nothing to
+ * read it from (no metadata URI, and Pump.fun refusing or not knowing the coin).
+ */
 async function lookUp(
   launch: StreamEvent,
   pumpFun: Pick<PumpFunClient, "coinDetails">,
   fetchMetadata: typeof fetchLaunchMetadata,
-): Promise<DiscoveredCoin | null> {
+): Promise<DiscoveredCoin | null | undefined> {
   try {
     const coin = await pumpFun.coinDetails(launch.mintAddress);
     if (coin) {
@@ -126,10 +194,10 @@ async function lookUp(
       error: String(err),
     });
   }
-  if (!launch.metadataUri) return null;
+  if (!launch.metadataUri) return undefined;
   try {
     const coin = await fetchMetadata(launch.mintAddress, launch.metadataUri);
-    if (!coin) return null;
+    if (!coin) return undefined;
     stats.fromMetadata += 1;
     // The stream's own ticker and name win: they are what every other source of this mint reports.
     return { ...coin, symbol: launch.symbol ?? coin.symbol, name: launch.name ?? coin.name };

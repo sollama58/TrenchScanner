@@ -5,6 +5,10 @@ import {
   fillBandMetadata,
   fillLaunchDetails,
   resetLaunchDetails,
+  setLaunchDetailsClock,
+  STREAM_MISS_STREAK,
+  STREAM_PAUSE_MS,
+  STREAM_PROBE,
   takeLaunchDetailStats,
 } from "./launchDetails.js";
 
@@ -63,6 +67,7 @@ describe("fillLaunchDetails", () => {
       fromDas: 0,
       missing: 1,
       dropped: 0,
+      deferred: 0,
     });
   });
 
@@ -78,6 +83,67 @@ describe("fillLaunchDetails", () => {
     const save = vi.fn(async () => {});
     await fillLaunchDetails([], { coinDetails: vi.fn() }, save);
     expect(save).not.toHaveBeenCalled();
+  });
+
+  describe("when neither source answers", () => {
+    const refusing = { coinDetails: vi.fn(async () => Promise.reject(new Error("HTTP 403"))) };
+    const unreachable = vi.fn(async () => Promise.reject(new Error("HTTP 429")));
+    const save = vi.fn(async () => {});
+    const withUri = (mint: string) => launch(mint, { metadataUri: `https://ipfs.io/ipfs/${mint}` });
+    const many = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => withUri(`${prefix}${i}`));
+    let clock = 1_000_000;
+    beforeEach(() => {
+      clock = 1_000_000;
+      setLaunchDetailsClock(() => clock);
+      unreachable.mockClear();
+    });
+
+    it("pauses the streamed path after a streak of misses, then lets a probe through", async () => {
+      await fillLaunchDetails(many("a", STREAM_MISS_STREAK), refusing, save, unreachable);
+      expect(unreachable).toHaveBeenCalledTimes(STREAM_MISS_STREAK);
+      expect(takeLaunchDetailStats().missing).toBe(STREAM_MISS_STREAK);
+
+      // Paused: nothing is asked, and the launches are not marked as asked.
+      await fillLaunchDetails(many("b", 10), refusing, save, unreachable);
+      expect(unreachable).toHaveBeenCalledTimes(STREAM_MISS_STREAK);
+      expect(takeLaunchDetailStats()).toMatchObject({ asked: 0, deferred: 10 });
+
+      // The pause over: only a probe's worth goes through, the rest is deferred.
+      clock += STREAM_PAUSE_MS;
+      await fillLaunchDetails(many("b", 10), refusing, save, unreachable);
+      expect(unreachable).toHaveBeenCalledTimes(STREAM_MISS_STREAK + STREAM_PROBE);
+      expect(takeLaunchDetailStats()).toMatchObject({ asked: STREAM_PROBE, deferred: 10 - STREAM_PROBE });
+
+      // Every probe missed: paused again at once.
+      await fillLaunchDetails(many("c", 3), refusing, save, unreachable);
+      expect(unreachable).toHaveBeenCalledTimes(STREAM_MISS_STREAK + STREAM_PROBE);
+      expect(takeLaunchDetailStats()).toMatchObject({ asked: 0, deferred: 3 });
+      expect(save).not.toHaveBeenCalled();
+    });
+
+    it("resumes in full once a probe answers", async () => {
+      await fillLaunchDetails(many("a", STREAM_MISS_STREAK), refusing, save, unreachable);
+      clock += STREAM_PAUSE_MS;
+      const answering = vi.fn(async (mint: string) => coin(mint, { description: "from ipfs" }));
+      await fillLaunchDetails(many("d", 10), refusing, save, answering);
+      expect(answering).toHaveBeenCalledTimes(STREAM_PROBE);
+      takeLaunchDetailStats();
+      // Back to normal: the whole batch is read.
+      await fillLaunchDetails(many("e", 10), refusing, save, answering);
+      expect(answering).toHaveBeenCalledTimes(STREAM_PROBE + 10);
+      expect(takeLaunchDetailStats()).toMatchObject({ asked: 10, fromMetadata: 10, deferred: 0 });
+    });
+
+    it("counts only launches that had metadata to read towards the streak", async () => {
+      // No metadata URI: nothing was asked of a gateway, so these never pause the path.
+      const bare = Array.from({ length: STREAM_MISS_STREAK * 2 }, (_, i) => launch(`n${i}`));
+      await fillLaunchDetails(bare, refusing, save, unreachable);
+      expect(unreachable).not.toHaveBeenCalled();
+      takeLaunchDetailStats();
+      await fillLaunchDetails(many("f", 2), refusing, save, unreachable);
+      expect(unreachable).toHaveBeenCalledTimes(2);
+      expect(takeLaunchDetailStats()).toMatchObject({ asked: 2, missing: 2, deferred: 0 });
+    });
   });
 });
 
