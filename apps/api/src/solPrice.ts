@@ -1,8 +1,9 @@
 import {
   createLogger,
   fetchJson,
-  keylessQuoteUsd,
-  type DexScreenerClient,
+  jupiterQuote,
+  QuotePrice as CoreQuotePrice,
+  type QuoteReader,
   type QuoteUsd as CoreQuoteUsd,
 } from "@trenchscanner/core";
 import { recordSolPriceFailure } from "./chartHealth.js";
@@ -167,102 +168,22 @@ export const sharedSolPrice = new SolPrice();
 /** A quote coin's USD price and decimals (QuotePrice.get). */
 export type QuoteUsd = CoreQuoteUsd;
 
-type QuoteReader = (mint: string) => Promise<QuoteUsd | null>;
-
-/** Jupiter's free price endpoint, which answers a coin's decimals with its price (core's, shared with the worker). */
-export const jupiterQuote: QuoteReader = keylessQuoteUsd;
-
 /**
- * DexScreener's USD price for a quote coin (its deepest pair with one, through the API's shared
- * DexScreener client and its rate gate), with the coin's decimals off its mint account, read once
- * per coin: QuotePrice's second source when Jupiter's lite API fails (user ask 2026-10-19, "can we
- * have multiple data sources"; charts audit item 13). Decimals are never guessed: a tokenized
- * stock has 8 where most coins have 6, and a wrong guess is a 100x wrong market cap.
+ * The quote coin price readers live in core now (datasources/quotePrice.ts), shared with the
+ * worker's curve candle writer: Jupiter's free endpoint, then DexScreener with the decimals off the
+ * mint. The API's QuotePrice counts a coin every reader failed for on its chart health.
  */
-export function dexScreenerQuote(
-  dex: Pick<DexScreenerClient, "getTokensByAddresses">,
-  decimalsOf: (mints: string[]) => Promise<Map<string, number>>,
-): QuoteReader {
-  const decimals = new Map<string, number>();
-  return async (mint) => {
-    const [tokens, known] = await Promise.all([
-      dex.getTokensByAddresses([mint], 1, { timeoutMs: 4_000, retries: 0 }),
-      decimals.has(mint) ? Promise.resolve(decimals) : decimalsOf([mint]),
-    ]);
-    const d = known.get(mint);
-    if (d === undefined || !Number.isInteger(d) || d < 0 || d > 18) return null;
-    if (decimals.size > 1_000) decimals.clear();
-    decimals.set(mint, d);
-    const usd = Number(tokens.find((t) => t.mintAddress === mint)?.priceUsd);
-    return Number.isFinite(usd) && usd > 0 ? { usd, decimals: d } : null;
-  };
-}
+export { dexScreenerQuote, jupiterQuote } from "@trenchscanner/core";
 
-/**
- * The USD price of what a coin-quoted curve or pool pairs with (USD1, a tokenized stock, another
- * coin: user ask 2026-10-18, such charts went delayed), for the live chart, like SolPrice: reused
- * for `ttlMs`, read single-flight per coin, each reader tried in turn until one answers (Jupiter,
- * then DexScreener: user ask 2026-10-19), the last good price kept through failed reads for up to
- * `maxAgeMs`.
- */
-export class QuotePrice {
-  private readonly values = new Map<string, { value: QuoteUsd; at: number }>();
-  private readonly inFlight = new Map<string, Promise<QuoteUsd | null>>();
-  private readonly nextTryAt = new Map<string, number>();
-  private readonly readers: readonly QuoteReader[];
-
+export class QuotePrice extends CoreQuotePrice {
   constructor(
     read: QuoteReader | readonly QuoteReader[] = jupiterQuote,
-    private readonly ttlMs = 30_000,
-    private readonly retryMs = 10_000,
-    private readonly now: () => number = Date.now,
-    private readonly maxCoins = 200,
-    private readonly maxAgeMs = MAX_PRICE_AGE_MS,
+    ttlMs = 30_000,
+    retryMs = 10_000,
+    now: () => number = Date.now,
+    maxCoins = 200,
+    maxAgeMs = MAX_PRICE_AGE_MS,
   ) {
-    this.readers = typeof read === "function" ? [read] : read;
-  }
-
-  /**
-   * The coin's price, or null before any read of it has answered (or once the last good one is
-   * older than maxAgeMs). A stale one is served while it refreshes.
-   */
-  async get(mint: string): Promise<QuoteUsd | null> {
-    const now = this.now();
-    const held = this.values.get(mint);
-    if (held && now - held.at < this.ttlMs) return held.value;
-    const kept = held && now - held.at <= this.maxAgeMs ? held.value : null;
-    if (now < (this.nextTryAt.get(mint) ?? 0)) return kept;
-    let flight = this.inFlight.get(mint);
-    if (!flight) {
-      flight = this.refresh(mint).finally(() => this.inFlight.delete(mint));
-      this.inFlight.set(mint, flight);
-    }
-    return kept ?? flight;
-  }
-
-  private async refresh(mint: string): Promise<QuoteUsd | null> {
-    for (const [i, read] of this.readers.entries()) {
-      try {
-        const value = await read(mint);
-        if (value) {
-          if (!this.values.has(mint) && this.values.size >= this.maxCoins) {
-            const oldest = this.values.keys().next().value;
-            if (oldest !== undefined) this.values.delete(oldest);
-          }
-          this.values.set(mint, { value, at: this.now() });
-          return value;
-        }
-      } catch (err) {
-        logger.debug("quote price read failed", { mint, reader: i, error: String(err) });
-      }
-    }
-    recordSolPriceFailure();
-    this.nextTryAt.set(mint, this.now() + this.retryMs);
-    const held = this.values.get(mint);
-    if (held && this.now() - held.at > this.maxAgeMs) {
-      logger.warn("quote price too old to serve; answering none", { mint, ageMs: this.now() - held.at });
-      return null;
-    }
-    return held?.value ?? null;
+    super(read, ttlMs, retryMs, now, maxCoins, maxAgeMs, () => recordSolPriceFailure());
   }
 }

@@ -6,6 +6,8 @@ import {
   curvePathOf,
   curvePriceOf,
   curveTapeView,
+  NULL_READ_GRACE_MS,
+  NULL_READ_MAX_MISSES,
   onCurveStreamUpdate,
   onPoolStreamUpdate,
   POOL_FOLLOW_MS,
@@ -48,10 +50,12 @@ function setup(
 ) {
   const reads: string[][] = [];
   const reader = {
-    getCurveStatesBatch: vi.fn(async (curves: string[]) => {
-      reads.push(curves);
-      return new Map(curves.map((c) => [c, state(1)] as const));
-    }),
+    getCurveStatesBatch: vi.fn(
+      async (curves: string[]): Promise<Map<string, CurveState | null | "failed">> => {
+        reads.push(curves);
+        return new Map(curves.map((c) => [c, state(1)] as const));
+      },
+    ),
   };
   const stream = {
     watch: vi.fn(),
@@ -188,6 +192,60 @@ describe("curve tape", () => {
     followYoungCurves([], NOW + 6_000);
     expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
     expect(curvePathOf(MINT, NOW + 6_000).curveCoveredSec).toBeNull();
+  });
+
+  // A read at `confirmed` a moment after a launch seen `processed` finds no curve account yet, and
+  // one such read used to drop the coin for good: no tape, no chart until opened by hand.
+  it("reads a brand-new coin's curve again when a read finds no account yet, and prices it once it does", async () => {
+    let pending = [MINT];
+    const s = setup(null, { newLaunches: () => pending });
+    stop = s.stop;
+    let found = false;
+    s.reader.getCurveStatesBatch.mockImplementation(async (curves: string[]) => {
+      s.reads.push(curves);
+      return new Map(curves.map((c) => [c, found ? state(1) : null] as const));
+    });
+    await round(NOW);
+    pending = [];
+    await round(NOW + 5_000);
+    expect(s.reads).toHaveLength(2);
+    expect(s.stream.unwatch).not.toHaveBeenCalled();
+    found = true;
+    await round(NOW + 10_000);
+    expect(curvePriceOf(MINT, NOW + 10_000)).toBe(1);
+    // Followed on: the account was confirmed, and a null read now would mean it is gone.
+    found = false;
+    await round(NOW + 15_000);
+    expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
+  });
+
+  it("lets a coin go for good once its curve is not found a few reads running, or when it is not new", async () => {
+    let pending = [MINT];
+    const s = setup(null, { newLaunches: () => pending });
+    stop = s.stop;
+    s.reader.getCurveStatesBatch.mockImplementation(async (curves: string[]) => {
+      s.reads.push(curves);
+      return new Map(curves.map((c) => [c, null] as const));
+    });
+    for (let i = 0; i < NULL_READ_MAX_MISSES; i += 1) await round(NOW + i * 5_000);
+    expect(s.reads).toHaveLength(NULL_READ_MAX_MISSES);
+    expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
+    // Done: the next watchlist does not follow it again.
+    pending = [];
+    followYoungCurves([young], NOW + 60_000);
+    await round(NOW + 60_000);
+    expect(s.reads).toHaveLength(NULL_READ_MAX_MISSES);
+    resetCurveTape();
+    // A coin launched past the grace whose account is not there is gone, not pending.
+    const old = setup(null);
+    stop = old.stop;
+    old.reader.getCurveStatesBatch.mockImplementation(async (curves: string[]) => {
+      old.reads.push(curves);
+      return new Map(curves.map((c) => [c, null] as const));
+    });
+    followYoungCurves([{ ...young, launchedAt: new Date(NOW - NULL_READ_GRACE_MS) }], NOW);
+    await round(NOW);
+    expect(old.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
   });
 
   it("follows coins past the features' age for the recorder, with their features still null", () => {

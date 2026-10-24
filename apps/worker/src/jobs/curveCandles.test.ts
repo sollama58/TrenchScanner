@@ -5,6 +5,7 @@ import {
   curveCandleRows,
   curveTapeDropped,
   flushCurveCandles,
+  QUIET_RUN_MAX_MS,
   quoteUsdRate,
   resetCurveCandles,
   startCurveCandles,
@@ -75,7 +76,8 @@ describe("curveCandleRows", () => {
 
   it("saves only the stretch the stream delivered, up to the close", () => {
     const out = curveCandleRows("M", tape().ticksAfter("M", -1), null, T0 + 60_000, SOL)!;
-    expect(out.flushedTo).toBe(T0 + 60_000);
+    // The next flush picks up at the chunk the bars end in: its cover may yet run on.
+    expect(out.flushedTo).toBe(T0);
     // The seed read is the starting state, not a trade: no bar of its own.
     expect(out.rows).toHaveLength(1);
     expect(out.rows[0]!.bars.map((b) => b.t)).toEqual([T0 + 1_000, T0 + 30_000]);
@@ -110,31 +112,69 @@ describe("curveCandleRows", () => {
       [-10_000, 120_000],
       [120_000, 180_000],
     ]);
-    expect(whole.flushedTo).toBe(T0 + 180_000);
-    // Minute by minute: the quiet minute's flush writes nothing and keeps its place, and the next
-    // bar's chunk vouches back over it.
+    expect(whole.flushedTo).toBe(T0 + 120_000);
+    // Minute by minute: the quiet minute's flush rebuilds the busy chunk with its cover run on over
+    // the quiet minute, and the next bar's chunk then takes over where that cover ends.
     const m1 = curveCandleRows("M", t.ticksAfter("M", -1), null, T0 + 60_000, SOL)!;
     expect(m1.rows.map((r) => [r.coverFrom - T0, r.coverTo - T0])).toEqual([[-10_000, 60_000]]);
-    expect(m1.flushedTo).toBe(T0 + 60_000);
-    const m2 = curveCandleRows("M", t.ticksAfter("M", T0 + 59_999), m1.flushedTo, T0 + 120_000, SOL)!;
-    expect(m2.rows).toEqual([]);
-    expect(m2.flushedTo).toBe(T0 + 60_000);
-    const m3 = curveCandleRows("M", t.ticksAfter("M", T0 + 59_999), m2.flushedTo, T0 + 180_000, SOL)!;
-    expect(m3.rows.map((r) => [r.startAt - T0, r.coverFrom - T0, r.coverTo - T0])).toEqual([
-      [120_000, 60_000, 180_000],
+    expect(m1.flushedTo).toBe(T0);
+    const m2 = curveCandleRows("M", t.ticksAfter("M", T0 - 1), m1.flushedTo, T0 + 120_000, SOL)!;
+    expect(m2.rows.map((r) => [r.startAt - T0, r.coverFrom - T0, r.coverTo - T0, r.bars.length])).toEqual([
+      [0, 0, 120_000, 1],
     ]);
-    // Quiet for longer than a cover may run: given up, the flush moves on.
-    const long = streamedTape([[T0 + 1_500, 2e-5, 2]], T0 + 40 * 60_000);
-    const first = curveCandleRows("M", long.ticksAfter("M", -1), null, T0 + 60_000, SOL)!;
+    expect(m2.flushedTo).toBe(T0);
+    const m3 = curveCandleRows("M", t.ticksAfter("M", T0 - 1), m2.flushedTo, T0 + 180_000, SOL)!;
+    expect(m3.rows.map((r) => [r.startAt - T0, r.coverFrom - T0, r.coverTo - T0, r.bars.length])).toEqual([
+      [0, 0, 120_000, 1],
+      [120_000, 120_000, 180_000, 1],
+    ]);
+    expect(m3.flushedTo).toBe(T0 + 120_000);
+  });
+
+  // A coin that went quiet drew "No data recorded" from its last trade on, until its next trade (or
+  // someone opening its chart) vouched for the stretch: 11 of the 30 latest called coins on
+  // 2026-10-24. The flush now writes the cover on its own, with no bar.
+  it("writes a bar-less row carrying the cover when a coin has had no change at all since the last flush", () => {
+    const t = streamedTape([[T0 + 1_500, 2e-5, 2]], T0 + 5 * 3_600_000);
+    const first = curveCandleRows("M", t.ticksAfter("M", -1), null, T0 + 60_000, SOL)!;
+    expect(first.flushedTo).toBe(T0);
+    // The tape has let its old ticks go: nothing but the state in force, and the stream's word that
+    // nothing changed. The chunk the last bar was in carries the cover, as a row with no bar.
     const quiet = curveCandleRows(
       "M",
-      long.ticksAfter("M", T0 + 59_999),
+      t.ticksAfter("M", T0 + 59_999),
       first.flushedTo,
       T0 + 30 * 60_000,
       SOL,
     )!;
-    expect(quiet.rows).toEqual([]);
-    expect(quiet.flushedTo).toBe(T0 + 30 * 60_000);
+    expect(quiet.rows.map((r) => [r.startAt - T0, r.coverFrom - T0, r.coverTo - T0, r.bars.length])).toEqual([
+      [0, 0, 30 * 60_000, 0],
+    ]);
+    expect(quiet.flushedTo).toBe(T0);
+    // Quiet for longer than a cover may run: the cover ends there, and the next flush anchors a new
+    // row where it ended, so the two touch and the store's read (five hours back) reaches both.
+    const long = curveCandleRows(
+      "M",
+      t.ticksAfter("M", T0 + 59_999),
+      quiet.flushedTo,
+      T0 + 5 * 3_600_000,
+      SOL,
+    )!;
+    expect(long.rows.map((r) => [r.startAt - T0, r.coverFrom - T0, r.coverTo - T0])).toEqual([
+      [0, 0, QUIET_RUN_MAX_MS],
+    ]);
+    expect(long.flushedTo).toBe(T0 + QUIET_RUN_MAX_MS);
+    const next = curveCandleRows(
+      "M",
+      t.ticksAfter("M", T0 + 59_999),
+      long.flushedTo,
+      T0 + 5 * 3_600_000,
+      SOL,
+    )!;
+    expect(next.rows.map((r) => [r.startAt - T0, r.coverFrom - T0, r.coverTo - T0])).toEqual([
+      [QUIET_RUN_MAX_MS, QUIET_RUN_MAX_MS, 5 * 3_600_000],
+    ]);
+    expect(next.flushedTo).toBe(T0 + QUIET_RUN_MAX_MS);
   });
 
   it("saves a graduated coin's pool tape under its own source", () => {

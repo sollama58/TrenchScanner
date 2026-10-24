@@ -15,6 +15,8 @@ import {
   poolsOf,
   stepBackfill,
   tick,
+  YOUNG_RETRY_UNTIL_MS,
+  YOUNG_RETRY_WAIT_MS,
   type BackfillDeps,
   type BackfillJob,
   type BackfillToken,
@@ -164,6 +166,24 @@ describe("stepBackfill", () => {
     const atLaunch = job({ cursor: new Date(pumpToken.launchedAt!.getTime() - 2 * M) });
     expect((await stepBackfill(atLaunch, pumpToken, d, NOW)).done).toBe(true);
     expect((await stepBackfill(job({ poolIndex: 3 }), pumpToken, d, NOW)).done).toBe(true);
+  });
+
+  // A call minutes after a launch found no pool on GeckoTerminal yet (its pool is indexed some
+  // minutes after the first trade) and marked the coin done with no pages: its chart stayed empty
+  // until the six-hour redo (chart audit 2026-10-24).
+  it("asks a coin launched minutes ago again when no pool had a page yet, instead of giving it up", async () => {
+    const { d } = deps({ geckoPage: vi.fn(async () => null) });
+    const young = { ...pumpToken, launchedAt: new Date(NOW - 5 * M) };
+    const pools = poolsOf(PUMP_MINT, young, NOW);
+    const retry = await stepBackfill(job({ poolIndex: pools.length }), young, d, NOW);
+    expect(retry.done).toBeUndefined();
+    expect(retry.poolIndex).toBe(0);
+    expect(retry.nextAt.getTime()).toBe(NOW + YOUNG_RETRY_WAIT_MS);
+    // Once it has a page, or past its first minutes, an exhausted pool list ends it as before.
+    expect((await stepBackfill(job({ poolIndex: pools.length, pages: 1 }), young, d, NOW)).done).toBe(true);
+    const later = NOW + YOUNG_RETRY_UNTIL_MS;
+    const olderPools = poolsOf(PUMP_MINT, young, later);
+    expect((await stepBackfill(job({ poolIndex: olderPools.length }), young, d, later)).done).toBe(true);
     expect((await stepBackfill(job({ pages: 60 }), pumpToken, d, NOW)).done).toBe(true);
     expect(d.geckoPage).not.toHaveBeenCalled();
   });

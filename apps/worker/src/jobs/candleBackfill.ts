@@ -57,6 +57,10 @@ const THROTTLED_WAIT_MS = 60_000;
 const DAY_BUDGET_WAIT_MS = 30 * 60_000;
 /** Failed steps a coin may take before it is given up. */
 const MAX_FAILURES = 5;
+/** A coin launched less than this long ago is asked again when no pool had a page yet. */
+export const YOUNG_RETRY_UNTIL_MS = 20 * 60_000;
+/** How long between those retries. */
+export const YOUNG_RETRY_WAIT_MS = 3 * 60_000;
 /** Stored covers this close are one unbroken stretch (a minute source omits quiet minutes). */
 const JOIN_GAP_MS = 60_000;
 const MINUTE_MS = 60_000;
@@ -123,6 +127,12 @@ export function coveredBack(cursor: number, covers: readonly { from: number; to:
   return at;
 }
 
+/** Whether the coin launched within YOUNG_RETRY_UNTIL_MS of `now` (a coin of unknown launch is not young). */
+function isYoung(token: BackfillToken, now: number): boolean {
+  const launchedAt = token.launchedAt?.getTime();
+  return launchedAt !== undefined && Number.isFinite(launchedAt) && now - launchedAt < YOUNG_RETRY_UNTIL_MS;
+}
+
 /**
  * Exported for tests. One step of a coin's backfill: at most one upstream call, its bars saved, and
  * what the row becomes.
@@ -177,6 +187,13 @@ export async function stepBackfill(
   const start = job.cursor?.getTime() ?? Math.floor(now / MINUTE_MS) * MINUTE_MS;
   const cursor = coveredBack(start, await deps.covers(job.mint, start));
   const pools = poolsOf(job.mint, token, now);
+  // Every pool asked and none had a page: a coin launched minutes ago is not on GeckoTerminal yet
+  // (its pool is indexed some minutes after the first trade), so it is asked again shortly instead
+  // of being given up with nothing. Until 2026-10-24 a call minutes after a launch marked the coin
+  // done with no pages, and its chart stayed empty until the six-hour redo (chart audit 2026-10-24).
+  if (job.poolIndex >= pools.length && job.pages === 0 && cursor > stopAt && isYoung(token, now)) {
+    return { cursor: at(cursor), poolIndex: 0, nextAt: at(now + YOUNG_RETRY_WAIT_MS), error: null };
+  }
   if (cursor <= stopAt || job.pages >= deps.maxPages || job.poolIndex >= pools.length)
     return { cursor: at(cursor), nextAt: at(now), done: true, error: null };
   if (!deps.budget.hasRoom()) return { cursor: at(cursor), nextAt: at(now + BUDGET_WAIT_MS) };
