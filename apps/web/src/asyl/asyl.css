@@ -1297,3 +1297,29 @@ body {
     height: 360px;
   }
 }
+
+/* Undo and redo, joined as one control. */
+.asyl-btn-group {
+  display: inline-flex;
+}
+.asyl-btn-group .asyl-btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.asyl-btn-group .asyl-btn:last-child {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  margin-left: -1px;
+}
+
+/* A line's time, written along it. */
+.asyl-edge-time text {
+  font-size: 10.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  paint-order: stroke;
+  stroke: #120c09;
+  stroke-width: 3.5px;
+  stroke-linejoin: round;
+}

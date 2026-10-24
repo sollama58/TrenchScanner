@@ -339,3 +339,42 @@ export function addressIn(text: string): string | null {
   for (const part of t.split(/[\s/?#=&]+/)) if (ADDRESS_RE.test(part)) return part;
   return null;
 }
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * When a link happened (a funding, a transfer, a deploy), written to fit along its line (user ask
+ * 2026-10-24): the longest of
+ * "12 Oct 2025 14:05", "12 Oct 14:05", "14:05" (funded today) or "12 Oct" that fits `room`
+ * characters, in the reader's own time. The year shows only when it isn't this year. Null when
+ * none fits, or the time isn't known.
+ */
+export function edgeTimeLabel(iso: string | null | undefined, room: number, now = new Date()): string | null {
+  if (!iso) return null;
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return null;
+  const day = `${t.getDate()} ${MONTHS[t.getMonth()]}`;
+  const time = `${pad2(t.getHours())}:${pad2(t.getMinutes())}`;
+  const today = t.toDateString() === now.toDateString();
+  const options = [
+    t.getFullYear() !== now.getFullYear() ? `${day} ${t.getFullYear()} ${time}` : null,
+    `${day} ${time}`,
+    today ? time : day,
+  ].filter((s): s is string => s !== null);
+  return options.find((s) => s.length <= room) ?? null;
+}
+
+/** The link kinds whose lines can carry their time, and whether each does unless switched. */
+export type TimedKind = "funded" | "transfer" | "created";
+export const TIMED_KINDS: readonly TimedKind[] = ["funded", "created", "transfer"];
+export type TimeLabels = Record<TimedKind, boolean>;
+export const DEFAULT_TIME_LABELS: TimeLabels = { funded: true, created: true, transfer: false };
+
+/** The full time, for a line's hover. */
+export function edgeTimeFull(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return null;
+  return `${t.getDate()} ${MONTHS[t.getMonth()]} ${t.getFullYear()}, ${pad2(t.getHours())}:${pad2(t.getMinutes())}`;
+}

@@ -9,7 +9,9 @@ import { GraphView, MapLegend, type GraphViewHandle } from "./GraphView";
 import {
   EDGE_KINDS,
   EDGE_LABEL,
+  DEFAULT_TIME_LABELS,
   NO_CUTOFFS,
+  TIMED_KINDS,
   addressIn,
   clearsCutoffs,
   edgeKey,
@@ -24,7 +26,9 @@ import {
   type AsylGraph,
   type AsylNode,
   type Cutoffs,
+  type TimeLabels,
 } from "./graph";
+import { History, HISTORY_MAX } from "./history";
 import { Inspector, type InspectorActions } from "./Inspector";
 import { LinkFilters } from "./LinkFilters";
 import { newLayout } from "./layout";
@@ -56,6 +60,8 @@ const LINKS_TOKENS = 200;
 /** Keyboard shortcuts (user ask 2026-10-24), as the help card lists them. */
 const KEYS: [string, string][] = [
   ["Del", "Take the selected wallet or coin off the map"],
+  ["Ctrl+Z", "Undo"],
+  ["Ctrl+Shift+Z / Ctrl+Y", "Redo"],
   ["Z", "Bring back the last one taken off"],
   ["H", "List what is taken off, to bring back"],
   ["N / Shift+N", "Select the next / previous one on the map"],
@@ -84,6 +90,31 @@ function storedCutoffs(): Cutoffs {
   }
 }
 
+/** The map as one undo step keeps it: what is on it, what is hidden, and where each bubble sits. */
+interface MapSnapshot {
+  graph: AsylGraph;
+  removed: ReadonlySet<string>;
+  cut: ReadonlySet<string>;
+  hiddenKinds: ReadonlySet<AsylEdgeKind>;
+  pos: Map<string, { x: number; y: number }>;
+  pinned: Set<string>;
+}
+
+/** Times along lines: also the reader's own, kept in this browser. */
+const TIMES_KEY = "asyl:line-times";
+
+function storedTimeLabels(): TimeLabels {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TIMES_KEY) ?? "null") as Partial<TimeLabels> | null;
+    const out = { ...DEFAULT_TIME_LABELS };
+    if (raw && typeof raw === "object")
+      for (const k of TIMED_KINDS) if (typeof raw[k] === "boolean") out[k] = raw[k];
+    return out;
+  } catch {
+    return DEFAULT_TIME_LABELS;
+  }
+}
+
 type RailTab = "map" | "links" | "maps" | "labels";
 const RAIL_TABS: { id: RailTab; label: string }[] = [
   { id: "map", label: "Map" },
@@ -105,6 +136,7 @@ export function AsylApp() {
   const [removed, setRemoved] = useState<Set<string>>(new Set());
   const [cut, setCut] = useState<Set<string>>(new Set());
   const [cutoffs, setCutoffsState] = useState<Cutoffs>(storedCutoffs);
+  const [timeLabels, setTimeLabelsState] = useState<TimeLabels>(storedTimeLabels);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [mapNote, setMapNote] = useState("");
   const [current, setCurrent] = useState<MapSummary | null>(null);
@@ -121,11 +153,25 @@ export function AsylApp() {
   const [keysOpen, setKeysOpen] = useState(false);
   const [unhidePick, setUnhidePick] = useState<Set<string>>(new Set());
   const view = useRef<GraphViewHandle>(null);
+  // Undo and redo (user ask 2026-10-24). Notes and the title keep their own text-box undo.
+  const history = useRef(new History<MapSnapshot>(HISTORY_MAX));
+  const [, setHistoryTick] = useState(0);
+  const latest = useRef({ graph, removed, cut, hiddenKinds });
+  latest.current = { graph, removed, cut, hiddenKinds };
   const searchBox = useRef<HTMLInputElement>(null);
   const started = useRef(false);
 
   const me = typeof session === "object" ? session : null;
   const solUsd = me?.solUsd ?? null;
+
+  const setTimeLabels = (t: TimeLabels) => {
+    setTimeLabelsState(t);
+    try {
+      localStorage.setItem(TIMES_KEY, JSON.stringify(t));
+    } catch {
+      // Storage blocked: the switches hold for this visit.
+    }
+  };
 
   const setCutoffs = useCallback((c: Cutoffs) => {
     setCutoffsState(c);
@@ -169,14 +215,57 @@ export function AsylApp() {
     if (me) refreshLists();
   }, [me?.wallet, refreshLists]);
 
+  const snapshot = useCallback((): MapSnapshot => {
+    const l = latest.current;
+    const pos = new Map<string, { x: number; y: number }>();
+    for (const [id, p] of layout.current.pos) pos.set(id, { x: p.x, y: p.y });
+    return { ...l, pos, pinned: new Set(layout.current.pinned) };
+  }, []);
+
+  /** Keeps the map as it is now, as the step an undo goes back to. Call just before a change. */
+  const record = useCallback(() => {
+    history.current.record(snapshot());
+    setHistoryTick((t) => t + 1);
+  }, [snapshot]);
+
+  const restore = (s: MapSnapshot) => {
+    setGraph(s.graph);
+    setRemoved(new Set(s.removed));
+    setCut(new Set(s.cut));
+    setHiddenKinds(new Set(s.hiddenKinds));
+    const lay = layout.current;
+    for (const [id, p] of s.pos) {
+      lay.pos.set(id, { x: p.x, y: p.y });
+      lay.vel.set(id, { x: 0, y: 0 });
+    }
+    lay.pinned = new Set(s.pinned);
+    if (selected && !s.graph.nodes.some((n) => n.id === selected)) setSelected(null);
+    setDirty(true);
+    setHistoryTick((t) => t + 1);
+    view.current?.redraw();
+  };
+
+  const undo = () => {
+    const s = history.current.undo(snapshot());
+    if (s) restore(s);
+  };
+  const redo = () => {
+    const s = history.current.redo(snapshot());
+    if (s) restore(s);
+  };
+
   /**
    * Adds an answer to the map. What the reader took off stays in it, out of view (`removed`), so
    * it can be brought back.
    */
-  const add = useCallback((next: AsylGraph) => {
-    setGraph((g) => withDeployLines(mergeGraph(g, next)));
-    setDirty(true);
-  }, []);
+  const add = useCallback(
+    (next: AsylGraph) => {
+      record();
+      setGraph((g) => withDeployLines(mergeGraph(g, next)));
+      setDirty(true);
+    },
+    [record],
+  );
 
   const run = useCallback(async (label: string, fn: () => Promise<string | void>) => {
     setBusy(label);
@@ -263,6 +352,8 @@ export function AsylApp() {
         setTitle(m.title);
         setCurrent(m);
         setDirty(false);
+        history.current.clear();
+        setHistoryTick((t) => t + 1);
         go({ kind: "map", id });
       }),
     [run, setCutoffs],
@@ -297,6 +388,8 @@ export function AsylApp() {
     setTitle("Untitled map");
     setDirty(false);
     setStatus(null);
+    history.current.clear();
+    setHistoryTick((t) => t + 1);
     go({ kind: "home" });
   };
 
@@ -443,6 +536,7 @@ export function AsylApp() {
         return afterChain(r, "Live holders read");
       }),
     hide: (id) => {
+      record();
       setRemoved((s) => {
         const n = new Set(s);
         n.delete(id);
@@ -467,6 +561,7 @@ export function AsylApp() {
           : `${shortAddr(r.deployer.wallet)} is the creator TrenchScanner was told, unconfirmed: a community takeover can move it.${session !== "loading" && typeof session === "object" && session.pro ? "" : " Pro Mode confirms it from the chain."}`;
       }),
     cutLink: (key) => {
+      record();
       setCut((s) => new Set(s).add(key));
       setDirty(true);
     },
@@ -522,6 +617,7 @@ export function AsylApp() {
   const unhide = (ids: Iterable<string>) => {
     const back = new Set(ids);
     if (back.size === 0) return;
+    record();
     setRemoved((s) => new Set([...s].filter((id) => !back.has(id))));
     setUnhidePick((s) => new Set([...s].filter((id) => !back.has(id))));
     setDirty(true);
@@ -540,10 +636,14 @@ export function AsylApp() {
       if (e.key === "Escape") (e.target as HTMLElement).blur();
       return;
     }
+    if (mod && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
+      e.preventDefault();
+      redo();
+      return;
+    }
     if (mod && e.key.toLowerCase() === "z") {
       e.preventDefault();
-      const last = [...removed].at(-1);
-      if (last) unhide([last]);
+      undo();
       return;
     }
     if (mod || e.altKey) return;
@@ -732,19 +832,23 @@ export function AsylApp() {
               <LinkFilters
                 graph={kept}
                 hiddenKinds={hiddenKinds}
-                onToggleKind={(k) =>
+                onToggleKind={(k) => {
+                  record();
                   setHiddenKinds((s) => {
                     const n = new Set(s);
                     if (n.has(k)) n.delete(k);
                     else n.add(k);
                     return n;
-                  })
-                }
+                  });
+                }}
                 cutoffs={cutoffs}
                 onCutoffs={setCutoffs}
                 solUsd={solUsd}
                 cut={cut}
+                timeLabels={timeLabels}
+                onTimeLabels={setTimeLabels}
                 onRestore={(keys) => {
+                  record();
                   setCut((s) => new Set([...s].filter((k) => !keys.includes(k))));
                   setDirty(true);
                 }}
@@ -930,6 +1034,24 @@ export function AsylApp() {
             <button className="asyl-btn ghost" onClick={newMap}>
               New
             </button>
+            <span className="asyl-btn-group" role="group" aria-label="Undo and redo">
+              <button
+                className="asyl-btn ghost"
+                disabled={!history.current.canUndo}
+                title={`Undo (Ctrl+Z)${history.current.canUndo ? ` · ${history.current.depth.back} step${history.current.depth.back === 1 ? "" : "s"} back` : ""}`}
+                onClick={undo}
+              >
+                ↶ Undo
+              </button>
+              <button
+                className="asyl-btn ghost"
+                disabled={!history.current.canRedo}
+                title="Redo (Ctrl+Shift+Z)"
+                onClick={redo}
+              >
+                Redo ↷
+              </button>
+            </span>
             <button
               className="asyl-btn ghost"
               disabled={graph.nodes.length === 0}
@@ -1014,6 +1136,8 @@ export function AsylApp() {
                 const n = graph.nodes.find((x) => x.id === id);
                 if (n) actions.expand(n);
               }}
+              onMoveStart={record}
+              timeLabels={timeLabels}
               onMoved={() => setDirty(true)}
               layoutKey={layoutKey}
               handle={view}
