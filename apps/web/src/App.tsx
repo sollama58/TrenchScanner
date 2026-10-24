@@ -871,13 +871,6 @@ function AccessGate({
             />
           )}
         </Suspense>
-        <p className="faint small">
-          You can also burn on the{" "}
-          <a href="https://holdex.live/trenches/" target="_blank" rel="noreferrer">
-            HolDEX Trenches page
-          </a>
-          ; it counts the same.
-        </p>
       </section>
     );
   }
