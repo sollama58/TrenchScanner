@@ -56,6 +56,7 @@ import {
   type PumpLaunchResult,
   type HeliusClient,
   type SolPriceLookup,
+  type StreamTapePage,
   type MintAuthorityResult,
   type OnChainProfile,
   type CexFundedReading,
@@ -311,6 +312,8 @@ export interface ScanDeps {
     tradeFlow?(mint: string): TradeFlowFeatures | undefined;
     /** Whether the mint has had no trade since then, as far as the stream can vouch (PumpPortalStream.quietSince). */
     quietSince?(mint: string, sinceMs: number): boolean;
+    /** The mint's newest trades, the live tape's page while it bonds (PumpPortalStream.recentTrades). */
+    recentTrades?(mint: string): StreamTapePage | null;
     /** A launch created since the last drain, still buffered: what a fast scan records it from. */
     pendingLaunch?(mint: string): StreamEvent | undefined;
   };
@@ -754,6 +757,8 @@ function startLiveTapeStage(
   quietSince?: (mint: string, sinceMs: number) => boolean,
   /** The cycle's, not a fast scan's - see startLaunchBuyerFreshness. */
   shared = true,
+  /** A bonding coin's page off the trade stream, in place of a Helius page (liveTape.ts). */
+  streamed?: (mint: string) => StreamTapePage | null,
 ): Promise<void> {
   if (env.LIVE_TAPE_PAGES_PER_CYCLE <= 0 || mints.length === 0) {
     return (shared && liveTapeInFlight) || Promise.resolve();
@@ -764,6 +769,7 @@ function startLiveTapeStage(
     refreshMs: env.LIVE_TAPE_REFRESH_SECONDS * 1000,
     solPrices,
     quietSince,
+    streamed,
   }).catch((err: unknown) => logger.warn("live tape reads failed", { error: String(err) }));
   if (!shared) return work;
   liveTapeInFlight = work;
@@ -818,6 +824,14 @@ function startLinkedWalletStage(
     .slice(waitedCount)
     .filter((g) => !watched.has(g.mintAddress))
     .map((g) => ({ ...g, holders: [...g.holders] }));
+  // New funder reads are for the coins someone is about to decide on or look at: the contenders
+  // and held alerts (waited), the coins whose bubble map is open (watchedNow), and the alerted
+  // coins whose cards still show the reading (wideMints). Every other band coin's reading comes
+  // from the funders already stored - a coin promoted to contender, or opened by a user, gets
+  // its reads on that cycle (user decision 2026-10-24: the largest Helius line, ~0.17 M
+  // credits a day, was mostly spent on coins no decision was near).
+  const restAlerted = rest.filter((g) => wideMints.has(g.mintAddress));
+  const restOthers = rest.filter((g) => !wideMints.has(g.mintAddress));
   let readsLeft = env.LINKED_HOLDER_READS_PER_CYCLE;
   let lookupsLeft = env.LINKED_WALLET_LOOKUPS_PER_CYCLE;
   // Contenders' own extra (LINKED_WALLET_CONTENDER_LOOKUPS_PER_CYCLE), spent before the shared
@@ -829,7 +843,7 @@ function startLinkedWalletStage(
   // 2026-10-20 (Helius audit)).
   let transferSignaturesLeft = env.HOLDER_TRANSFER_SIGNATURE_READS_PER_CYCLE;
   let transferTxLeft = env.HOLDER_TRANSFER_TX_READS_PER_CYCLE;
-  const pass = async (part: LinkedGroup[], contenders: boolean) => {
+  const pass = async (part: LinkedGroup[], contenders: boolean, newLookups = true) => {
     if (part.length === 0) return;
     const spent = await readTopHolders(part, helius, {
       maxReads: readsLeft,
@@ -864,7 +878,7 @@ function startLinkedWalletStage(
         : Promise.resolve();
     const extra = contenders ? contenderLeft : 0;
     const funders = resolveLinkedWallets(part, helius, {
-      maxNewLookups: lookupsLeft + extra,
+      maxNewLookups: newLookups ? lookupsLeft + extra : 0,
       onLookups: (n) => {
         const fromExtra = Math.min(n, contenders ? contenderLeft : 0);
         contenderLeft -= fromExtra;
@@ -876,7 +890,7 @@ function startLinkedWalletStage(
     await Promise.all([funders, transfers]);
   };
   const first = pass(waited, true).then(() => pass(watchedNow, false));
-  const work = first.then(() => pass(rest, false));
+  const work = first.then(() => pass(restAlerted, false)).then(() => pass(restOthers, false, false));
   if (!shared) return first;
   linkedStageInFlight = work;
   void work.finally(() => {
@@ -2099,6 +2113,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
     deps.dexScreener.solPricesOf ? (m) => deps.dexScreener.solPricesOf(m) : undefined,
     deps.stream?.quietSince ? (mint, sinceMs) => deps.stream!.quietSince!(mint, sinceMs) : undefined,
     cycle,
+    deps.stream?.recentTrades ? (mint) => deps.stream!.recentTrades!(mint) : undefined,
   );
 
   // A user filter with a wallet criterion holds a match until the figure is in, up to

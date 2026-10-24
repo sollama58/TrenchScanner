@@ -49,6 +49,34 @@ describe("parsePumpPortalMessage", () => {
     ).toBeUndefined();
   });
 
+  it("carries a trade's signature and venue into the flow book's page", () => {
+    const stream = new PumpPortalStream("ws://x", null);
+    stream.handleMessage(
+      JSON.stringify({ mint: MINT, txType: "create", traderPublicKey: MINT, pool: "pump" }),
+      1000,
+    );
+    expect(stream.recentTrades(MINT)).toBeNull();
+    stream.handleMessage(
+      JSON.stringify({
+        mint: MINT,
+        txType: "buy",
+        traderPublicKey: MINT,
+        solAmount: 1.5,
+        tokenAmount: 2_000,
+        pool: "pump",
+        signature: "sig-1",
+      }),
+      2000,
+    );
+    expect(stream.recentTrades(MINT)).toMatchObject({
+      complete: true,
+      bonding: true,
+      trades: [{ wallet: MINT, side: "buy", sol: 1.5, tokens: 2_000, atMs: 2000, tx: "sig-1" }],
+    });
+    stream.handleMessage(JSON.stringify({ mint: MINT, txType: "migrate" }), 3000);
+    expect(stream.recentTrades(MINT)!.bonding).toBe(false);
+  });
+
   it("ignores subscription acks, trades, malformed JSON and bad addresses", () => {
     expect(parsePumpPortalMessage(JSON.stringify({ message: "Successfully subscribed" }))).toBeNull();
     expect(parsePumpPortalMessage(JSON.stringify({ mint: MINT, txType: "buy" }))).toBeNull();

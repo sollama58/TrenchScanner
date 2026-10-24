@@ -10,6 +10,7 @@
  */
 
 import { FIRST_BUYER_SUPPLY_CUT } from "../datasources/launchBuyers.js";
+import type { TapeTrade } from "../wallets/tradeTape.js";
 
 /** Pump.fun mints are 1B tokens; PumpPortal reports token amounts in whole tokens. */
 export const PUMP_TOTAL_SUPPLY = 1_000_000_000;
@@ -31,6 +32,13 @@ const HOLDING_DUST_SHARE = 0.01;
 /** Trades kept per mint for the 5m window; a busier mint's figures cover the span kept - see features. */
 const MAX_WINDOW_TRADES = 1_000;
 const MAX_WALLETS_PER_MINT = 300;
+/**
+ * Newest trades kept per mint for the stream page (recentTrades): the size of one Helius
+ * getTransactionsForAddress page, which the live tape used to read for the same reading.
+ */
+export const STREAM_PAGE_TRADES = 100;
+/** PumpPortal's `pool` for a Pump.fun bonding curve; "pump-amm" is its graduation pool. */
+export const CURVE_VENUE = "pump";
 const MAX_EARLY_WALLETS = 100;
 
 export interface FlowTrade {
@@ -43,7 +51,27 @@ export interface FlowTrade {
   /** The trader's balance after the trade, in whole tokens (PumpPortal's newTokenBalance). */
   newTokenBalance?: number;
   marketCapSol?: number;
+  /** The trade's signature, when PumpPortal gave one. */
+  tx?: string;
+  /** PumpPortal's `pool`: "pump" on the bonding curve, "pump-amm" after graduation. */
+  venue?: string;
   at: number;
+}
+
+/**
+ * A coin's newest trades as the stream saw them (TradeFlowBook.recentTrades), in the live tape's
+ * shape (wallets/tradeTape.ts TapeTrade): the page the live tape reads for a bonding coin instead
+ * of paying Helius for one (user decision 2026-10-24).
+ */
+export interface StreamTapePage {
+  /** Oldest first, at most STREAM_PAGE_TRADES. */
+  trades: TapeTrade[];
+  /** Since when the stream has followed the coin without a gap: what the page covers. */
+  sinceMs: number;
+  /** The coin's whole history: its launch was seen, and no stream gap since. */
+  complete: boolean;
+  /** Still on the bonding curve: its last trade was on it, and no graduation has been seen. */
+  bonding: boolean;
 }
 
 export interface FlowLaunch {
@@ -171,6 +199,12 @@ class MintFlow {
   gapUntil: number | null = null;
   /** The stream dropped while this launch was tracked, so its bags may be missing sells. */
   bagsMissedTrades = false;
+  /** The newest STREAM_PAGE_TRADES trades, oldest first - see recentTrades. */
+  recent: TapeTrade[] = [];
+  /** PumpPortal's `pool` on the last trade, when it gave one. */
+  lastVenue: string | null = null;
+  /** When the stream saw the coin graduate (a migrate message), if it has. */
+  migratedAt: number | null = null;
 
   constructor(now: number) {
     this.observedSince = now;
@@ -332,6 +366,41 @@ export class TradeFlowBook {
       const dropped = flow.window.splice(0, flow.window.length - MAX_WINDOW_TRADES);
       flow.droppedThrough = dropped[dropped.length - 1]!.at;
     }
+    if (t.venue !== undefined) flow.lastVenue = t.venue;
+    flow.recent.push({
+      wallet: t.wallet,
+      side: t.side,
+      sol: t.sol,
+      tokens: t.tokenAmount ?? 0,
+      atMs: t.at,
+      // Without a signature the trade still needs a key of its own for de-duplication.
+      tx: t.tx ?? `stream:${t.mint}:${t.at}:${t.wallet}:${flow.recent.length}`,
+    });
+    if (flow.recent.length > STREAM_PAGE_TRADES)
+      flow.recent.splice(0, flow.recent.length - STREAM_PAGE_TRADES);
+  }
+
+  /** The coin graduated (PumpPortal's migrate message): its curve is done, its trades move to the pool. */
+  migrated(mint: string, at: number): void {
+    const flow = this.mints.get(mint);
+    if (flow) flow.migratedAt ??= at;
+  }
+
+  /**
+   * The coin's newest trades as this book saw them, for the live tape (user decision 2026-10-24:
+   * the tape reads the PumpPortal book while a coin bonds, Helius after). Null for a mint it
+   * doesn't follow or has no trade for. `sinceMs` is when the coverage starts: the later of when
+   * the coin was first followed and the last stream gap; `complete` when the launch itself was
+   * seen and no gap has cut the record since.
+   */
+  recentTrades(mint: string): StreamTapePage | null {
+    const flow = this.mints.get(mint);
+    if (!flow || flow.recent.length === 0) return null;
+    const gapped = flow.gapUntil !== null && flow.gapUntil > flow.observedSince;
+    const sinceMs = gapped ? flow.gapUntil! : flow.observedSince;
+    const complete = flow.launchAt !== null && flow.launchAt <= flow.observedSince && !gapped;
+    const bonding = flow.migratedAt === null && flow.lastVenue === CURVE_VENUE;
+    return { trades: flow.recent.filter((t) => t.atMs >= sinceMs), sinceMs, complete, bonding };
   }
 
   features(mint: string, now: number): TradeFlowFeatures {

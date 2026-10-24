@@ -256,6 +256,8 @@ const envSchema = z.object({
   // whose first one takes the 10-credit sorted lookup), plus one per new funder for the exchange
   // check. Every answer is cached for good, so the steady state pays only for wallets never seen
   // before. A candidate's top 25 and creator go together or wait a cycle. 0 turns the reading off.
+  // Spent on the contenders and held alerts, the coins whose bubble map is open and the alerted
+  // coins only (user decision 2026-10-24); every other band coin reads from the funders stored.
   LINKED_WALLET_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),
   // The same for contenders (the coins about to be decided on, read first), on top of the above
   // (user decision 2026-10-14, audit D1 "bigger budget"): a cold coin's top 25 needs about that
@@ -426,7 +428,9 @@ const envSchema = z.object({
   // for a wallet figure) has its newest page of trades read from Helius, 10 credits a page, so the
   // flagged wallets trading it are known at the decision. At most this many pages a cycle (the
   // credit ceiling), and a coin's page is read again once it is LIVE_TAPE_REFRESH_SECONDS old.
-  // 0 turns it off.
+  // A coin still on its bonding curve takes its page off the PumpPortal trade stream instead, for
+  // nothing (user decision 2026-10-24); these pages are for the coins past graduation. 0 turns
+  // it off.
   LIVE_TAPE_PAGES_PER_CYCLE: z.coerce.number().int().nonnegative().default(4),
   LIVE_TAPE_REFRESH_SECONDS: z.coerce.number().int().positive().default(180),
 
