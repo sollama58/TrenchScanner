@@ -119,7 +119,19 @@ interface Followed {
   followedAt?: number;
   /** Its path was saved for price pathing as it aged out, while it is followed on (drop). */
   pathSaved?: boolean;
+  /** Reads in a row that found no curve account (round): a brand-new coin's is given a moment to confirm. */
+  misses?: number;
 }
+
+/**
+ * How long after its launch a coin whose curve account a read did not find is kept and read again,
+ * and how many such reads in a row it is allowed. A read at `confirmed` commitment a moment after
+ * the launch can find no account yet (the launch was seen `processed`), and until 2026-10-24 that
+ * one null read dropped the coin for good: no 1-second tape, and no chart until it was opened by
+ * hand and the API's ask followed it again (chart audit 2026-10-24).
+ */
+export const NULL_READ_GRACE_MS = 3 * 60_000;
+export const NULL_READ_MAX_MISSES = 5;
 
 /**
  * Asked coins let go for trading no more (followYoungCurves), by the ask's time (ms epoch): not
@@ -727,6 +739,11 @@ export async function round(now = Date.now()): Promise<void> {
       const state = states.get(curves[i]!);
       if (!f || state === undefined || state === "failed") return;
       if (state === null) {
+        // No curve account (closed, or not yet confirmed): a brand-new coin's is read again next
+        // round for a few rounds before the coin is let go for good.
+        f.misses = (f.misses ?? 0) + 1;
+        if (f.readAt === null && now - f.bornAt < NULL_READ_GRACE_MS && f.misses < NULL_READ_MAX_MISSES)
+          return;
         drop(mint, true);
         return;
       }
@@ -734,6 +751,7 @@ export async function round(now = Date.now()): Promise<void> {
       // flight is newer, and the read doesn't overwrite it.
       tape.record(mint, now, state, "read");
       f.readAt = now;
+      f.misses = 0;
       if (state.complete) graduate(mint, state, now);
     });
   } catch (err) {

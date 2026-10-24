@@ -25,6 +25,7 @@ export * from "./dexInfo.js";
 export * from "./datasources/geckoterminal.js";
 export * from "./datasources/coingeckoBudget.js";
 export * from "./datasources/jupiter.js";
+export * from "./datasources/quotePrice.js";
 export * from "./datasources/rateGate.js";
 export * from "./datasources/pumpfun.js";
 export * from "./datasources/pumpfunGate.js";

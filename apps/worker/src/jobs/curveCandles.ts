@@ -96,21 +96,31 @@ export function curveBars(ticks: readonly Tick[], from: number, to: number, usdR
 }
 
 /**
- * A quiet stretch after a coin's last bar is vouched for by that bar's chunk, its cover run on over
- * it, for at most this long: the chunk is rebuilt from the tape each flush, which keeps half an hour.
+ * How far a chunk's cover may run on over a quiet stretch after it, past its own start: the store
+ * reads chunks starting up to five hours before the window it is asked for (core's
+ * readCandleChunks), so a cover running on longer would not be found. Past it, the quiet stretch
+ * goes on under a new row (curveCandleRows).
  */
-const QUIET_COVER_MS = 25 * 60_000;
+export const QUIET_RUN_MAX_MS = 4 * 3_600_000;
 
 /**
  * Exported for tests. A coin's chunk rows from what the tape holds after `flushedTo` (null: nothing
- * saved yet), up to `closeAt`, priced at `usdRate` (curveBars), and where the next flush picks up. The chunk `flushedTo` is in is
- * built again whole, so a minute saved in part is rewritten with all its bars (the store keeps the
- * fuller reading). Null when there is nothing to save.
+ * saved yet), up to `closeAt`, priced at `usdRate` (curveBars), and where the next flush picks up.
+ * The chunk `flushedTo` is in is built again whole, so a minute saved in part is rewritten with all
+ * its bars (the store keeps the fuller reading). Null when the tape is not on the stream (nothing
+ * to vouch for) or nothing is priced.
  *
- * Minutes with no change have no bars, so no chunk of their own: the last chunk's cover runs on to
- * the close instead (the store reads a chunk's cover past its own minute), and the next flush picks
- * up at that chunk, so a quiet minute reads as quiet, not as a stretch nobody read (the chart draws
- * those blank: GET /tokens/:mint/candles `holes`).
+ * Minutes with no change have no bars, so no chunk of their own: the chunk the saved bars end in
+ * vouches for them instead, its cover run on to the close (the store reads a chunk's cover past its
+ * own minute), and the next flush picks up at that chunk, so a quiet minute reads as quiet, not as
+ * a stretch nobody read (the chart draws those blank: GET /tokens/:mint/candles `holes`). A coin
+ * with no change at all since the last flush gets the same: a row with no bar and only the cover,
+ * which the store merges into the chunk's bars (core's saveCandleChunks). Until 2026-10-24 such a
+ * flush wrote nothing and left the vouching to the coin's next trade, so a coin that went quiet
+ * drew "No data recorded" from its last trade until someone opened its chart, and the browser's
+ * GeckoTerminal fill then painted minute candles over the stretch (chart audit 2026-10-24: 11 of
+ * the 30 latest called or matched coins). Past QUIET_RUN_MAX_MS of quiet the cover goes on under a
+ * new row, so the store's read reaches it.
  */
 export function curveCandleRows(
   mint: string,
@@ -131,20 +141,38 @@ export function curveCandleRows(
   const first = rows[0];
   const last = rows[rows.length - 1];
   if (!first || !last) {
-    // No change at all over [from, to): quiet, but with no chunk to hang the cover on. The next
-    // flush reads from the same place, and the first bar's chunk then vouches back to `from`
-    // (below); a stretch quiet for longer than the cover may run is given up (prod 2026-10-23: a
-    // minute with no change had no chunk, and the chart drew it blank between two busy ones).
-    return to - from > QUIET_COVER_MS ? { rows, flushedTo: to } : { rows, flushedTo: flushedTo ?? from };
+    // No change at all over [from, to), which the stream delivered whole: quiet. The cover hangs on
+    // the chunk the saved bars end in (or the stretch's own first chunk), as a row with no bar.
+    let anchor = chunkStartOf(flushedTo ?? from, 1);
+    let runTo = Math.min(to, anchor + QUIET_RUN_MAX_MS);
+    if (runTo <= from) {
+      // The anchor is too far back to reach this stretch: the stretch's own chunk carries it.
+      anchor = chunkStartOf(from, 1);
+      runTo = Math.min(to, anchor + QUIET_RUN_MAX_MS);
+    }
+    const quiet: CandleChunkRow = {
+      mint,
+      res: 1,
+      startAt: anchor,
+      source,
+      coverFrom: from,
+      coverTo: runTo,
+      bars: [],
+      coarse: false,
+    };
+    // The anchor stays while its cover may still run on; past the run, the next flush anchors at
+    // where this cover ends, so the two covers touch.
+    return { rows: [quiet], flushedTo: runTo < to ? runTo : Math.max(flushedTo ?? from, anchor) };
   }
   // The stream delivered every change since `from`: the stretch before the first bar, and each one
   // between two chunks, was quiet. A cover may start before its chunk and run on past it.
-  if (first.coverFrom > from && first.startAt - from <= QUIET_COVER_MS) first.coverFrom = from;
-  runCoversOn(rows.slice(0, -1), last.startAt, QUIET_COVER_MS);
-  if (last.coverTo >= to) return { rows, flushedTo: to };
-  if (to - last.startAt > QUIET_COVER_MS) return { rows, flushedTo: to };
-  last.coverTo = to;
-  return { rows, flushedTo: last.startAt };
+  if (first.coverFrom > from && first.startAt - from <= QUIET_RUN_MAX_MS) first.coverFrom = from;
+  runCoversOn(rows.slice(0, -1), last.startAt, QUIET_RUN_MAX_MS);
+  const runTo = Math.min(to, last.startAt + QUIET_RUN_MAX_MS);
+  last.coverTo = Math.max(last.coverTo, runTo);
+  // The next flush picks up at the last chunk, rebuilt whole with its cover run on further; or,
+  // past the run, where the cover ends.
+  return { rows, flushedTo: runTo < to ? runTo : last.startAt };
 }
 
 /** Where a coin's tape is read from: the start of the chunk its saved bars end in (all of it at first). */
@@ -176,14 +204,18 @@ let flushing: Promise<void> | null = null;
 const flushed = new Map<string, number>();
 /** Per followed coin, the last chunk written: rebuilt unchanged, it isn't written again. */
 const lastWritten = new Map<string, { startAt: number; coverFrom: number; coverTo: number; bars: number }>();
+/**
+ * Whether a rebuilt chunk says nothing the last write of it didn't: the same bars, its cover within
+ * the one written (a rebuild from the chunk's own start restates a cover that began before it).
+ */
 const sameRow = (
   a: CandleChunkRow,
   b: { startAt: number; coverFrom: number; coverTo: number; bars: number } | undefined,
 ) =>
   !!b &&
   a.startAt === b.startAt &&
-  a.coverFrom === b.coverFrom &&
-  a.coverTo === b.coverTo &&
+  a.coverFrom >= b.coverFrom &&
+  a.coverTo <= b.coverTo &&
   a.bars.length === b.bars;
 /** The last bars of coins the tape let go of, written with the next flush. */
 let dropped: CandleChunkRow[] = [];
@@ -197,7 +229,10 @@ function rateOf(tape: NonNullable<TapeTicks>, now: number): number | null {
   const q = tape.quoteMint ? lastQuoteRate.get(tape.quoteMint) : undefined;
   return q && now - q.at <= QUOTE_MAX_AGE_MS ? q.rate : null;
 }
-let stats = { coins: 0, rows: 0, failed: 0 };
+let stats = { coins: 0, rows: 0, failed: 0, unpriced: 0 };
+/** When coins left unpriced were last logged: once in UNPRICED_LOG_EVERY_MS, not every flush. */
+let unpricedLoggedAt = 0;
+const UNPRICED_LOG_EVERY_MS = 5 * 60_000;
 
 /**
  * Starts the minute flush; returns its stop, which writes what is left. The worker calls the stop
@@ -226,6 +261,7 @@ export function curveTapeDropped(
   source: TapeSource = "curve",
 ): void {
   const done = flushed.get(mint) ?? null;
+  const last = lastWritten.get(mint);
   flushed.delete(mint);
   lastWritten.delete(mint);
   if (!cfg) return;
@@ -235,7 +271,10 @@ export function curveTapeDropped(
   // Let go of now: what it held is known through now, when the tape was current lately.
   const known = held && now - held.confirmedAt <= CURVE_GAP_MS ? { ...held, confirmedAt: now } : held;
   const out = curveCandleRows(mint, known, done, now, rate, source);
-  if (out && dropped.length + out.rows.length <= MAX_DROPPED) dropped.push(...out.rows);
+  if (!out) return;
+  // The chunk picked up from, rebuilt as it was written: not written again.
+  const fresh = out.rows.filter((r) => !sameRow(r, last));
+  if (dropped.length + fresh.length <= MAX_DROPPED) dropped.push(...fresh);
 }
 
 /**
@@ -285,9 +324,21 @@ export function flushCurveCandles(now = Date.now(), all = false): Promise<void> 
     dropped = [];
     const next = new Map<string, number>();
     const newest = new Map<string, CandleChunkRow>();
+    // Coins followed on the tape but priced by nothing this flush: SOL's price missing, or their
+    // quote coin's. Counted on the heartbeat and logged with the quote coins, so a coin left
+    // unrecorded is seen (chart audit 2026-10-24: coins quoted in another pump coin were skipped
+    // here for hours without a trace).
+    let unpriced = 0;
+    const unpricedQuotes = new Set<string>();
     for (const { mint, done, source, tape } of tapes) {
       const rate = tape ? rateOf(tape, now) : null;
-      if (rate === null) continue;
+      if (rate === null) {
+        if (tape) {
+          unpriced += 1;
+          if (!tape.quoteIsSol) unpricedQuotes.add(tape.quoteMint ?? "unknown quote");
+        }
+        continue;
+      }
       const out = curveCandleRows(mint, tape, done, closeAt, rate, source);
       if (!out) continue;
       // The chunk picked up from, rebuilt as it was written: not written again.
@@ -296,6 +347,15 @@ export function flushCurveCandles(now = Date.now(), all = false): Promise<void> 
       next.set(mint, out.flushedTo);
       const last = out.rows[out.rows.length - 1];
       if (last) newest.set(mint, last);
+    }
+    stats.unpriced += unpriced;
+    if (unpriced > 0 && now - unpricedLoggedAt >= UNPRICED_LOG_EVERY_MS) {
+      unpricedLoggedAt = now;
+      logger.warn("curve candles: coins followed but priced by nothing, not recorded", {
+        coins: unpriced,
+        solUsd: lastSolUsd,
+        quoteMints: [...unpricedQuotes].slice(0, 10),
+      });
     }
     if (rows.length === 0) {
       for (const [mint, to] of next) flushed.set(mint, to);
@@ -328,7 +388,7 @@ export function flushCurveCandles(now = Date.now(), all = false): Promise<void> 
 export function takeCurveCandleStats() {
   if (!cfg) return null;
   const out = { ...stats, following: flushed.size };
-  stats = { coins: 0, rows: 0, failed: 0 };
+  stats = { coins: 0, rows: 0, failed: 0, unpriced: 0 };
   return out;
 }
 
@@ -343,5 +403,6 @@ export function resetCurveCandles(): void {
   dropped = [];
   lastSolUsd = null;
   lastQuoteRate.clear();
-  stats = { coins: 0, rows: 0, failed: 0 };
+  unpricedLoggedAt = 0;
+  stats = { coins: 0, rows: 0, failed: 0, unpriced: 0 };
 }
