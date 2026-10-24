@@ -1,12 +1,13 @@
 {
   "name": "@trenchscanner/extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "description": "Trench Overlay: a side panel of TrenchScanner alerts beside Axiom, Terminal and GMGN",
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit && node build.mjs",
+    "package": "tsc -p tsconfig.json --noEmit && node build.mjs --store",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },

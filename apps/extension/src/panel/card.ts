@@ -59,6 +59,90 @@ export function ago(iso: string, now: number): string {
   return `${Math.round(s / 3600)}h`;
 }
 
+/** The square sizes the two image CDNs resize to (as apps/web/src/format.ts, checked 2026-10-14/23). */
+const DEXSCREENER_SIZES = [64, 128, 160, 256, 800];
+const PUMP_SIZES = [32, 40, 48, 64, 86, 96, 128, 256, 300, 400];
+
+/**
+ * Where to load a token's image from, in order: DexScreener's small thumbnail, Pump.fun's CDN for
+ * a Pump.fun mint, then the launcher's own URL. https only; empty when there is nothing to show.
+ */
+export function imageSources(token: OverlayToken, size: number): string[] {
+  const out: string[] = [];
+  let url: URL | null;
+  try {
+    url = token.image ? new URL(token.image) : null;
+  } catch {
+    url = null;
+  }
+  if (
+    url &&
+    url.protocol === "https:" &&
+    url.hostname === "cdn.dexscreener.com" &&
+    url.searchParams.has("width")
+  ) {
+    const fit = DEXSCREENER_SIZES.find((s) => s >= size) ?? 800;
+    if (fit < Number(url.searchParams.get("width"))) {
+      const thumb = new URL(url);
+      thumb.searchParams.set("width", String(fit));
+      thumb.searchParams.set("height", String(fit));
+      thumb.searchParams.set("quality", "80");
+      out.push(thumb.toString());
+    }
+  }
+  if (isMintAddress(token.mint) && token.mint.endsWith("pump")) {
+    const fit = PUMP_SIZES.find((s) => s >= size) ?? 400;
+    out.push(`https://images.pump.fun/coin-image/${token.mint}?variant=${fit}x${fit}`);
+  }
+  if (url && url.protocol === "https:") out.push(url.toString());
+  return [...new Set(out)];
+}
+
+/** The token's image, moving to the next source on error, and its initials when none loads. */
+function avatar(token: OverlayToken): HTMLElement {
+  const box = el("span", "avatar", (token.symbol ?? "?").slice(0, 2).toUpperCase());
+  const sources = imageSources(token, 64);
+  if (sources.length === 0) return box;
+  const img = el("img");
+  img.alt = "";
+  img.referrerPolicy = "no-referrer";
+  img.decoding = "async";
+  let next = 0;
+  img.addEventListener("error", () => {
+    if (next < sources.length) img.src = sources[next++]!;
+    else img.remove();
+  });
+  img.addEventListener("load", () => box.classList.add("loaded"));
+  img.src = sources[next++]!;
+  box.append(img);
+  return box;
+}
+
+/** The address, shortened, that copies the whole address when clicked. */
+function copyButton(mint: string): HTMLButtonElement {
+  const short = `${mint.slice(0, 4)}…${mint.slice(-4)}`;
+  const button = el("button", "ca", short);
+  button.type = "button";
+  button.title = "Copy the contract address";
+  button.setAttribute("aria-label", `Copy contract address ${short}`);
+  let reset: number | undefined;
+  button.addEventListener("click", () => {
+    void navigator.clipboard.writeText(mint).then(
+      () => {
+        button.textContent = "Copied";
+        button.classList.add("done");
+        window.clearTimeout(reset);
+        reset = window.setTimeout(() => {
+          button.textContent = short;
+          button.classList.remove("done");
+        }, 1200);
+      },
+      () => (button.textContent = "Copy failed"),
+    );
+  });
+  return button;
+}
+
 /** When the token was last alerted for this reader. */
 export function alertedAt(token: OverlayToken): string | null {
   const times = [...token.modelCalls.map((c) => c.at), ...token.filterMatches.map((m) => m.at)];
@@ -76,10 +160,8 @@ export function tokenCard(
 
   const head = el("div", "top");
   const name = el("div", "name");
-  name.append(
-    el("b", "", token.symbol ?? "?"),
-    el("span", "mint", `${token.mint.slice(0, 4)}…${token.mint.slice(-4)}`),
-  );
+  name.append(avatar(token), el("b", "", token.symbol ?? "?"));
+  if (token.name && token.name !== token.symbol) name.append(el("span", "full", token.name));
   const when = alertedAt(token);
   head.append(name, el("span", "when", when ? ago(when, now) : ""));
   card.append(head);
@@ -98,11 +180,13 @@ export function tokenCard(
 
   const first = token.modelCalls[0]?.mcapUsd ?? token.filterMatches[0]?.mcapUsd ?? null;
   const nowMcap = token.liveMcapUsd ?? token.stats?.marketCapUsd ?? null;
-  const change =
-    first === null || nowMcap === null || first === 0
-      ? ""
-      : ` (${nowMcap >= first ? "+" : ""}${Math.round(((nowMcap - first) / first) * 100)}%)`;
-  card.append(line(first === null ? "Market cap" : `Alerted ${usd(first)}`, `now ${usd(nowMcap)}${change}`));
+  const moved = first === null || nowMcap === null || first === 0 ? null : (nowMcap - first) / first;
+  const change = moved === null ? "" : ` (${moved >= 0 ? "+" : ""}${Math.round(moved * 100)}%)`;
+  // Green since the alert when up, red when down.
+  const trend = moved === null ? "" : moved >= 0 ? "up" : "down";
+  card.append(
+    line(first === null ? "Market cap" : `Alerted ${usd(first)}`, `now ${usd(nowMcap)}${change}`, trend),
+  );
 
   if (verdict.flags.length > 0) {
     const flags = el("div", "flags");
@@ -117,6 +201,7 @@ export function tokenCard(
     card.append(why);
   }
 
+  const foot = el("div", "foot");
   const open = el("div", "open");
   if (valid) {
     for (const site of Object.keys(SITE_NAMES) as Site[]) {
@@ -126,6 +211,8 @@ export function tokenCard(
       link("TrenchScanner", `https://trenchscanner.app/?sage=${encodeURIComponent(token.mint)}`, "site ts"),
     );
   }
-  card.append(open);
+  foot.append(open);
+  if (valid) foot.append(copyButton(token.mint));
+  card.append(foot);
   return card;
 }

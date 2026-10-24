@@ -16,8 +16,10 @@ import { SITE_NAMES, tokenCard } from "./card";
  * nothing here is parsed as HTML.
  */
 const SETTINGS_URL = "https://trenchscanner.app/#settings";
+/** Settings opened to connect this browser: the page finds the extension and offers one click. */
+const CONNECT_URL = "https://trenchscanner.app/?connect=extension#settings";
 /** How often the open panel re-reads the list. Hidden panels don't poll. */
-const POLL_MS = 15_000;
+const POLL_MS = 5_000;
 
 const app = document.getElementById("app")!;
 const account = document.getElementById("account")!;
@@ -28,6 +30,8 @@ let feed: FeedAnswer | null = null;
 let pollTimer: number | undefined;
 /** Mints already shown, so a new alert can be marked as new. */
 let seen: Set<string> | null = null;
+/** Cards whose "Why the AI said so" is open: the list redraws every poll and keeps them open. */
+const openWhy = new Set<string>();
 
 function send<T>(request: PanelRequest): Promise<T> {
   return chrome.runtime.sendMessage(request) as Promise<T>;
@@ -68,10 +72,17 @@ function toggle(
 function renderDisconnected(error: string | null): void {
   account.textContent = "Not connected";
   account.className = "account";
+  const signIn = el("a", {
+    href: CONNECT_URL,
+    target: "_blank",
+    rel: "noopener noreferrer",
+    className: "button primary",
+    textContent: "Connect with TrenchScanner",
+  });
   const input = el("input", { type: "text", placeholder: "tsx_…", autocomplete: "off", spellcheck: false });
   input.setAttribute("aria-label", "Extension key");
   const message = el("p", { className: "error", textContent: error ?? "" });
-  const connect = el("button", { className: "primary", textContent: "Connect" });
+  const connect = el("button", { textContent: "Connect with this key" });
   connect.addEventListener("click", async () => {
     connect.disabled = true;
     const result = await send<{ ok: boolean; error?: string }>({ type: "connect", key: input.value });
@@ -91,13 +102,16 @@ function renderDisconnected(error: string | null): void {
     section(
       "Connect your account",
       el("p", {}, "Lists the tokens your filters and models alert on, with their flags, beside any page."),
+      signIn,
       el(
         "p",
         { className: "note" },
-        "In ",
-        link,
-        ", open Browser extension, press Connect a browser, and paste the key here. It can only read your alerts and stats.",
+        "Opens TrenchScanner Settings, where one click connects this browser. The key it gets can only read your alerts and stats.",
       ),
+    ),
+    section(
+      "Or paste a key",
+      el("p", { className: "note" }, "In ", link, ", open Browser extension and press Show a key."),
       input,
       connect,
       message,
@@ -118,7 +132,9 @@ function tabs(): HTMLElement {
   return el("nav", { className: "tabs" }, make("alerts", "Alerts"), make("settings", "Settings"));
 }
 
-function alertsView(settings: OverlaySettings): HTMLElement[] {
+function alertsView(saved: OverlaySettings): HTMLElement[] {
+  // Without the AI reviewer's verdicts (admins only) "only when the AI says buy" would hide every call.
+  const settings = status?.aiReviews ? saved : { ...saved, rings: { ...saved.rings, aiBuyOnly: false } };
   const parts: HTMLElement[] = [];
   if (status?.problem === "refused" || feed?.problem === "refused") {
     parts.push(
@@ -153,6 +169,11 @@ function alertsView(settings: OverlaySettings): HTMLElement[] {
   const list = el("div", { className: "list" });
   for (const { token, verdict } of shown) {
     const card = tokenCard(token, verdict, settings, now);
+    const why = card.querySelector("details");
+    if (why) {
+      why.open = openWhy.has(token.mint);
+      why.addEventListener("toggle", () => (why.open ? openWhy.add(token.mint) : openWhy.delete(token.mint)));
+    }
     if (seen && !seen.has(token.mint)) card.classList.add("new");
     if (verdict.risky && settings.rings.riskRing) card.classList.add("risky");
     list.append(card);
@@ -186,16 +207,20 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
         settings.rings.filterMatches = on;
         save();
       }),
-      toggle(
-        "Only when the AI says buy",
-        "For model alerts",
-        settings.rings.aiBuyOnly,
-        "var(--model)",
-        (on) => {
-          settings.rings.aiBuyOnly = on;
-          save();
-        },
-      ),
+      ...(status?.aiReviews
+        ? [
+            toggle(
+              "Only when the AI says buy",
+              "For model alerts",
+              settings.rings.aiBuyOnly,
+              "var(--model)",
+              (on) => {
+                settings.rings.aiBuyOnly = on;
+                save();
+              },
+            ),
+          ]
+        : []),
       toggle("Red edge past a flag's limit", null, settings.rings.riskRing, "var(--risk)", (on) => {
         settings.rings.riskRing = on;
         save();
@@ -281,7 +306,13 @@ function draw(): void {
 async function poll(): Promise<void> {
   window.clearTimeout(pollTimer);
   if (document.visibilityState === "visible" && status?.connected) {
-    feed = (await send<FeedAnswer>({ type: "feed" })) ?? feed;
+    // Status too: settings saved from another browser, or a key refused since the last poll.
+    const [nextStatus, nextFeed] = await Promise.all([
+      send<Status>({ type: "status" }),
+      send<FeedAnswer>({ type: "feed" }),
+    ]);
+    status = nextStatus ?? status;
+    feed = nextFeed ?? feed;
     // Settings edits redraw only when left, so an input in focus isn't replaced under the cursor.
     if (view === "alerts") draw();
   }
@@ -296,6 +327,17 @@ async function refresh(): Promise<void> {
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") void poll();
+});
+
+// TrenchScanner's Settings handed over a key while the panel was open.
+chrome.runtime.onMessage.addListener((message: unknown, sender) => {
+  if (sender.id !== chrome.runtime.id) return;
+  if ((message as { type?: unknown } | null)?.type === "connected") {
+    view = "alerts";
+    feed = null;
+    seen = null;
+    void refresh();
+  }
 });
 
 void refresh();

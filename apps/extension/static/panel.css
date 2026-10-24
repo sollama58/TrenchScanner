@@ -179,6 +179,14 @@ button {
   background: #1c1e26;
   color: var(--ink);
 }
+a.button {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  border-radius: 7px;
+  padding: 8px 12px;
+}
+a.button.primary,
 button.primary {
   background: var(--model);
   border-color: var(--model);
@@ -293,13 +301,48 @@ a {
 .top {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
 }
 .name {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+.avatar {
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: #1f2129;
+  color: var(--dim);
+  font:
+    600 10px ui-monospace,
+    Menlo,
+    monospace;
+}
+.avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+}
+.avatar.loaded img {
+  opacity: 1;
+}
+.full {
+  color: var(--dim);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   min-width: 0;
 }
 .name b {
@@ -308,7 +351,6 @@ a {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.mint,
 .when {
   font:
     500 11px ui-monospace,
@@ -376,6 +418,39 @@ a {
 .line .r {
   font-variant-numeric: tabular-nums;
 }
+.line .r.up {
+  color: #7ef0ae;
+}
+.line .r.down {
+  color: #ff8b9d;
+}
+.foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 8px;
+}
+.ca {
+  flex: none;
+  font:
+    500 11px ui-monospace,
+    Menlo,
+    monospace;
+  color: var(--dim);
+  background: none;
+  border: 1px dashed #2a2d38;
+  border-radius: 6px;
+  padding: 2px 7px;
+}
+.ca:hover {
+  color: var(--ink);
+  border-color: var(--filter);
+}
+.ca.done {
+  color: #7ef0ae;
+  border-style: solid;
+  border-color: #2c6b48;
+}
 .why summary {
   cursor: pointer;
   color: var(--dim);
@@ -386,11 +461,11 @@ a {
   font-size: 12px;
 }
 .site {
-  font-size: 11.5px;
+  font-size: 11px;
   text-decoration: none;
   border: 1px solid #2a2d38;
   border-radius: 6px;
-  padding: 2px 8px;
+  padding: 2px 6px;
   color: var(--soft);
 }
 .site:hover {

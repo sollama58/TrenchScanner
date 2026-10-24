@@ -2,13 +2,13 @@ import { createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from "
 import type { AccessState } from "@trenchscanner/core";
 
 /**
- * Keys for the browser extension overlay (Axiom, Terminal and GMGN).
+ * Keys for the Trench Overlay browser extension (a side panel of the reader's alerts).
  *
  * The same construction as Model Alert keys (modelAlertKey.ts): 32 random bytes behind a prefix,
  * shown once, stored as an HMAC peppered with the server secret. A different prefix and a
  * different pepper, so a key of one kind can never pass as the other. Who may hold one is
- * extensionKeyAccess: admins only until the extension is listed (user decision 2026-10-23, audit
- * CE-1). The feed carries the AI reviewer's verdict and reasoning, which the site shows admins only.
+ * extensionKeyAccess: paid access (user decision 2026-10-24). The feed leaves out the AI
+ * reviewer's verdict and reasoning for anyone but an admin, as the site does (audit CE-1).
  *
  * What a key can do is the /ext/v1 routes and nothing else: read the owner's alerts, token stats
  * and overlay settings, and save the overlay settings. It is never a session.
@@ -64,16 +64,20 @@ export function newExtensionKey(serverSecret: string): {
 }
 
 /**
- * Who may hold and use an extension key: admins, until the extension is listed (user decision
- * 2026-10-23). Checked when a key is made and on every request, so a key made before is cut off too.
+ * Who may hold and use an extension key: paid access, the Model Alert rule (an admin wallet, a
+ * whitelist entry or a subscription; user decision 2026-10-24). Checked when a key is made and on
+ * every request, so a key outlives no subscription.
  */
 export function extensionKeyAccess(access: AccessState): boolean {
-  return access.reason === "admin";
+  return access.reason === "admin" || access.reason === "whitelist" || access.reason === "subscription";
 }
 
 /** The 403 body for a wallet that may use the site but not the extension. */
-export function extensionKeyDeniedMessage(_reason: AccessState["reason"]): string {
-  return "The browser extension is open to admins only until it is listed.";
+export function extensionKeyDeniedMessage(reason: AccessState["reason"]): string {
+  if (reason === "free_access") {
+    return "Free access does not include the browser extension. A paid subscription, admin wallet, or whitelist entry is required.";
+  }
+  return "The browser extension needs a paid subscription, an admin wallet, or a whitelist entry.";
 }
 
 /** The advisory-lock key for issuing or revoking one user's extension keys, so the cap holds. */

@@ -30,7 +30,8 @@ async function call<T>(
 }
 
 export const api = {
-  me: (key: string) => call<{ wallet: string; settings: OverlaySettings }>(key, "GET", "/me"),
+  me: (key: string) =>
+    call<{ wallet: string; settings: OverlaySettings; aiReviews?: boolean }>(key, "GET", "/me"),
   saveSettings: (key: string, settings: OverlaySettings) =>
     call<OverlaySettings>(key, "PUT", "/settings", settings),
   feed: (key: string) => call<{ tokens: OverlayToken[] }>(key, "GET", "/feed"),

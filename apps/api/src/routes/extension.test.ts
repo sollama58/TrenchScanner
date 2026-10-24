@@ -75,8 +75,8 @@ const TAG = `ext-${Date.now()}`;
 
 describe.skipIf(!dbAvailable)("extension overlay api", () => {
   let app: FastifyInstance;
-  // Extension keys are admin-only until the extension is listed (user decision 2026-10-23).
-  const ADMINS = ["cap", "junk", "cookie", "feed", "other", "settings", "revoke", "origin", "signout"];
+  // Admin wallets: the feed carries the AI reviewer's verdicts to these only (audit CE-1).
+  const ADMINS = ["feed"];
   const env: Env = dbAvailable
     ? { ...loadEnv(), ADMIN_WALLET_ADDRESSES: ADMINS.map((s) => `${TAG}-${s}`).join(",") }
     : (undefined as never);
@@ -127,16 +127,11 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
   }, 30_000);
 
-  it("creates keys for admins only, up to the cap, and lists prefixes", async () => {
-    for (const [suffix, paid] of [
-      ["free", false],
-      ["paidonly", true],
-    ] as const) {
-      const user = await makeUser(suffix, paid);
-      const refused = await session(user.cookie, "POST", "/settings/extension-keys");
-      expect(refused.statusCode).toBe(403);
-      expect(refused.json().error).toMatch(/browser extension/);
-    }
+  it("creates keys for paid access only, up to the cap, and lists prefixes", async () => {
+    const free = await makeUser("free", false);
+    const refused = await session(free.cookie, "POST", "/settings/extension-keys");
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().error).toMatch(/browser extension/);
 
     const paid = await makeUser("cap", true);
     const secrets: string[] = [];
@@ -298,6 +293,10 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
       (x) => x.mint === trackedMint,
     );
     expect(seen!.filterMatches).toEqual([]);
+    // A paid reader who isn't an admin never gets the AI reviewer's verdict.
+    expect((seen as unknown as { ai: unknown }).ai).toBeNull();
+    expect((await ext(otherKey, "GET", "/ext/v1/me")).json().aiReviews).toBe(false);
+    expect((await ext(key, "GET", "/ext/v1/me")).json().aiReviews).toBe(true);
 
     // The old row lookup is gone: nothing takes addresses from a page.
     expect((await ext(key, "POST", "/ext/v1/lookup", { mints: [trackedMint] })).statusCode).toBe(404);
@@ -329,14 +328,13 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     );
     expect((await ext(created.secret, "GET", "/ext/v1/me")).statusCode).toBe(401);
 
-    // A key a paid non-admin made before keys went admin-only is cut off on its next request.
+    // A key whose owner's subscription ended is cut off on its next check.
     const paid = await makeUser("lapse", true);
-    const old = newExtensionKey(env.JWT_SECRET);
-    await prisma.extensionKey.create({
-      data: { userId: paid.id, prefix: old.prefix, secretHash: old.secretHash },
-    });
+    const lapsed = (await session(paid.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    expect((await ext(lapsed, "GET", "/ext/v1/me")).statusCode).toBe(200);
+    await prisma.subscription.deleteMany({ where: { userId: paid.id } });
     resetExtensionAuthState();
-    expect((await ext(old.secret, "GET", "/ext/v1/me")).statusCode).toBe(403);
+    expect((await ext(lapsed, "GET", "/ext/v1/me")).statusCode).toBe(403);
   });
 
   it("revokes the account's extension keys when it signs out everywhere", async () => {

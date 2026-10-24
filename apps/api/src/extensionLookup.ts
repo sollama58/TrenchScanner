@@ -76,6 +76,8 @@ export interface OverlayToken {
   mint: string;
   symbol: string | null;
   name: string | null;
+  /** The token's logo as DexScreener hosts it; null when it has none. */
+  image: string | null;
   liveMcapUsd: number | null;
   stats: OverlayStats | null;
   modelCalls: OverlayModelCall[];
@@ -112,6 +114,7 @@ interface TokenRow {
   mintAddress: string;
   symbol: string | null;
   name: string | null;
+  imageUrl: string | null;
   liveMarketCapUsd: number | null;
   takenAt: Date | null;
   marketCapUsd: number | null;
@@ -133,7 +136,7 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
   // One row per token with its latest snapshot. LATERAL rather than a nested Prisma `take: 1`,
   // which reads every snapshot of every token and slices them in memory.
   const rows = await prisma.$queryRaw<TokenRow[]>`
-    SELECT t."id", t."mintAddress", t."symbol", t."name", t."liveMarketCapUsd",
+    SELECT t."id", t."mintAddress", t."symbol", t."name", t."imageUrl", t."liveMarketCapUsd",
            s."takenAt", s."marketCapUsd", s."holderCount", s."bundledSupplyPct",
            s."sniperTopHolderCount", s."linkedWalletPct", s."devWalletPct", s."top10HolderPct",
            s."freshTop10WalletPct", s."cexFundedPct", s."kolRecentBuyers", s."mintAuthorityActive"
@@ -201,6 +204,7 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
         mint: r.mintAddress,
         symbol: r.symbol,
         name: r.name,
+        image: r.imageUrl,
         liveMcapUsd: r.liveMarketCapUsd,
         stats:
           r.takenAt === null || r.marketCapUsd === null
