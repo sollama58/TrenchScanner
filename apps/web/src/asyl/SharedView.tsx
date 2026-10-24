@@ -3,7 +3,7 @@ import { ShareImageDialog } from "../components/ShareImageDialog";
 import { asylApi, type MapDoc } from "./asylApi";
 import { renderMapCard } from "./asylCard";
 import { GraphView, MapLegend, type GraphViewHandle } from "./GraphView";
-import { TAG_LABEL, nodeName, shortAddr } from "./graph";
+import { DEFAULT_TIME_LABELS, TAG_LABEL, nodeName, shortAddr } from "./graph";
 import { newLayout } from "./layout";
 import { basePath, sharedLink } from "./route";
 
@@ -27,6 +27,7 @@ export function SharedView({ slug }: { slug: string }) {
           layout.current.pos.set(id, { x, y });
           layout.current.vel.set(id, { x: 0, y: 0 });
         }
+        layout.current.pinned = new Set((m.doc.pinned ?? []).filter((id) => id in m.doc.positions));
         setMap(m);
         document.title = `${m.title} · Asyl`;
       })
@@ -87,6 +88,8 @@ export function SharedView({ slug }: { slug: string }) {
             handle={view}
             readOnly
             drawings={map.doc.drawings}
+            grid={map.doc.grid ?? false}
+            timeLabels={map.doc.times ? { ...DEFAULT_TIME_LABELS, ...map.doc.times } : undefined}
           />
           <MapLegend graph={graph} />
           {map.doc.note && <p className="asyl-shared-note">{map.doc.note}</p>}
@@ -139,6 +142,7 @@ export function SharedView({ slug }: { slug: string }) {
               layout: layout.current,
               focus: map.doc.focus,
               drawings: map.doc.drawings,
+              timeLabels: map.doc.times ? { ...DEFAULT_TIME_LABELS, ...map.doc.times } : undefined,
             })
           }
           onClose={() => setSharing(false)}

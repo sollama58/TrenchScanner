@@ -18,7 +18,7 @@ import {
   type AsylGraph,
   type AsylNode,
 } from "./graph";
-import { bounds, placeNew, step, type LayoutState } from "./layout";
+import { bounds, gridCell, placeNew, snapToGrid, step, type Cell, type LayoutState } from "./layout";
 import { avatarUrl } from "./asylApi";
 import { tokenImageSources } from "../format";
 
@@ -290,6 +290,7 @@ export function GraphView({
   tool = null,
   drawingSelected = null,
   onDraw,
+  grid = false,
 }: {
   graph: AsylGraph;
   layout: LayoutState;
@@ -313,6 +314,8 @@ export function GraphView({
   tool?: DrawTool;
   drawingSelected?: string | null;
   onDraw?: DrawHandlers;
+  /** Grid mode: every bubble sits on its own cell, sized so names and line times all show. */
+  grid?: boolean;
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [, setFrame] = useState(0);
@@ -369,20 +372,45 @@ export function GraphView({
   // The simulation, a step per frame until it settles: after the map changes, and while a bubble
   // is dragged, so what is tied to it follows (user ask 2026-10-24).
   const sim = useRef<{ raf: number; alpha: number; ticks: number }>({ raf: 0, alpha: 0, ticks: 0 });
+  const simStarted = useRef(false);
   const graphRef = useRef(graph);
   graphRef.current = graph;
   const radiusRef = useRef(radius);
   radiusRef.current = radius;
   const fitRef = useRef(fit);
   fitRef.current = fit;
+  // Grid mode. Bubbles already on the grid hold still while the simulation places new ones, and
+  // everything goes onto a free cell once it settles.
+  const cell = useMemo(
+    () =>
+      gridCell(graph, radius, (id) => {
+        const n = byId.get(id);
+        return n ? nodeName(n) : "";
+      }),
+    [graph, radius, byId],
+  );
+  const gridRef = useRef(grid);
+  gridRef.current = grid;
+  const cellRef = useRef(cell);
+  cellRef.current = cell;
+  const held = useRef(new Set<string>());
+  const gridFitted = useRef(false);
+  const snap = useCallback(() => {
+    snapToGrid(layout, graphRef.current, cellRef.current);
+    held.current = new Set(layout.pos.keys());
+  }, [layout]);
   const runSim = useCallback(
     (alpha: number) => {
       const st = sim.current;
+      simStarted.current = true;
       st.alpha = Math.max(st.alpha, alpha);
       st.ticks = 0;
       if (st.raf) return;
       const tick = () => {
-        const moved = step(layout, graphRef.current, st.alpha, radiusRef.current);
+        const state = gridRef.current
+          ? { ...layout, pinned: new Set([...layout.pinned, ...held.current]) }
+          : layout;
+        const moved = step(state, graphRef.current, st.alpha, radiusRef.current);
         st.alpha = Math.max(0.02, st.alpha * 0.985);
         st.ticks += 1;
         setFrame((f) => f + 1);
@@ -392,10 +420,19 @@ export function GraphView({
         }
         const dragging = !!drag.current?.moved && !!drag.current.id;
         st.raf = dragging || (moved > 0.08 && st.ticks < 600) ? requestAnimationFrame(tick) : 0;
+        if (!st.raf && gridRef.current) {
+          snap();
+          setFrame((f) => f + 1);
+          // The first time the map lands on the grid, frame it there.
+          if (!gridFitted.current) {
+            gridFitted.current = true;
+            fitRef.current();
+          }
+        }
       };
       st.raf = requestAnimationFrame(tick);
     },
-    [layout],
+    [layout, snap],
   );
   useEffect(
     () => () => {
@@ -409,9 +446,18 @@ export function GraphView({
   const fittedOnce = useRef(false);
   useEffect(() => {
     const added = placeNew(layout, graph);
+    // A saved map opens just as it was left: nothing new, so nothing to settle.
+    if (added.length === 0 && !fittedOnce.current && !simStarted.current) {
+      if (gridRef.current) snap();
+      fittedOnce.current = true;
+      setFrame((f) => f + 1);
+      fit();
+      return;
+    }
     const alpha = added.length > 0 || !fittedOnce.current ? 1 : 0.3;
     if (reduceMotion) {
       for (let t = 0; t < 300; t++) if (step(layout, graph, 1 - t / 300, radius) < 0.05 && t > 20) break;
+      if (gridRef.current) snap();
       setFrame((f) => f + 1);
       if (!fittedOnce.current) {
         fittedOnce.current = true;
@@ -422,6 +468,26 @@ export function GraphView({
     runSim(alpha);
     // layoutKey stands for the graph's node set; fit and radius follow the graph.
   }, [layoutKey]);
+
+  // Turning grid mode on puts the map on the grid; a new cell size (a longer name, a bigger bubble)
+  // spreads the grid out or draws it in, keeping each bubble's place on it.
+  const prevCell = useRef<Cell | null>(null);
+  useEffect(() => {
+    if (!grid) {
+      held.current = new Set();
+      prevCell.current = null;
+      return;
+    }
+    const was = prevCell.current;
+    if (was && (was.w !== cell.w || was.h !== cell.h))
+      for (const [id, p] of layout.pos)
+        layout.pos.set(id, { x: (p.x * cell.w) / was.w, y: (p.y * cell.h) / was.h });
+    prevCell.current = cell;
+    // While the simulation runs, it snaps when it settles.
+    if (sim.current.raf) return;
+    snap();
+    setFrame((f) => f + 1);
+  }, [grid, cell.w, cell.h]);
 
   // Pointer handling: pan the background, drag a node, pinch to zoom.
   const pointers = useRef(new Map<number, { x: number; y: number }>());
@@ -567,7 +633,13 @@ export function GraphView({
     if (!d.moved) {
       onDraw?.select(null);
       onSelect(d.id);
-    } else if (d.id && !readOnly) onMoved?.();
+    } else if (d.id && !readOnly) {
+      if (grid && !sim.current.raf) {
+        snap();
+        setFrame((f) => f + 1);
+      }
+      onMoved?.();
+    }
   };
 
   const zoomAt = (px: number, py: number, k: number) => {
@@ -645,6 +717,23 @@ export function GraphView({
           </clipPath>
         </defs>
         <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
+          {grid && (
+            <>
+              <defs>
+                <pattern
+                  id="asyl-grid"
+                  width={cell.w}
+                  height={cell.h}
+                  x={-cell.w / 2}
+                  y={-cell.h / 2}
+                  patternUnits="userSpaceOnUse"
+                >
+                  <path d={`M ${cell.w} 0 L 0 0 0 ${cell.h}`} className="asyl-grid-line" />
+                </pattern>
+              </defs>
+              <rect x={-1e5} y={-1e5} width={2e5} height={2e5} fill="url(#asyl-grid)" pointerEvents="none" />
+            </>
+          )}
           <g className="asyl-edges">
             {graph.edges.map((e) => {
               const a = layout.pos.get(e.a);

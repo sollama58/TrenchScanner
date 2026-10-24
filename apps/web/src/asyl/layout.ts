@@ -199,3 +199,71 @@ export function bounds(state: LayoutState, ids: Iterable<string>, radius: (id: s
   if (!Number.isFinite(minX)) return { minX: -100, minY: -100, maxX: 100, maxY: 100 };
   return { minX, minY, maxX, maxY };
 }
+
+/** A grid cell: how far apart neighbouring bubbles sit in grid mode. */
+export type Cell = { w: number; h: number };
+
+/**
+ * Grid mode's cell (user ask 2026-10-24): wide enough for the biggest bubble or the longest name
+ * under one, with room between neighbours for a line's time or label; tall enough for a bubble, its
+ * name, and a time along a line running down to the next row.
+ */
+export function gridCell(g: AsylGraph, radius: (id: string) => number, name: (id: string) => string): Cell {
+  let r = 12;
+  let nameW = 0;
+  for (const n of g.nodes) {
+    r = Math.max(r, radius(n.id));
+    nameW = Math.max(nameW, Math.min(150, name(n.id).length * 7));
+  }
+  return { w: Math.round(Math.max(2 * r, nameW) + 84), h: Math.round(2 * r + 22 + 84) };
+}
+
+/**
+ * Puts every bubble on its own grid cell, the nearest one free. Bubbles already sitting on a cell
+ * keep it; the rest go in order of how many links they have, so hubs get the cells they're nearest.
+ */
+export function snapToGrid(state: LayoutState, g: AsylGraph, cell: Cell): void {
+  const degree = new Map<string, number>();
+  for (const e of g.edges) {
+    degree.set(e.a, (degree.get(e.a) ?? 0) + 1);
+    degree.set(e.b, (degree.get(e.b) ?? 0) + 1);
+  }
+  const onCell = (p: Point) =>
+    Math.abs(p.x / cell.w - Math.round(p.x / cell.w)) < 1e-6 &&
+    Math.abs(p.y / cell.h - Math.round(p.y / cell.h)) < 1e-6;
+  const ids = g.nodes
+    .map((n) => n.id)
+    .filter((id) => state.pos.has(id))
+    .sort(
+      (a, b) =>
+        Number(onCell(state.pos.get(b)!)) - Number(onCell(state.pos.get(a)!)) ||
+        (degree.get(b) ?? 0) - (degree.get(a) ?? 0) ||
+        (a < b ? -1 : 1),
+    );
+  const taken = new Set<string>();
+  for (const id of ids) {
+    const p = state.pos.get(id)!;
+    const fx = p.x / cell.w;
+    const fy = p.y / cell.h;
+    const ci = Math.round(fx);
+    const cj = Math.round(fy);
+    let best: [number, number] | null = null;
+    // Rings outward from the nearest cell; a ring can hold a nearer free cell than the one before.
+    for (let ring = 0; ring < 400 && !best; ring++) {
+      let bestD = Infinity;
+      for (let i = ci - ring; i <= ci + ring; i++)
+        for (let j = cj - ring; j <= cj + ring; j++) {
+          if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== ring || taken.has(`${i},${j}`)) continue;
+          const d = Math.hypot((i - fx) * cell.w, (j - fy) * cell.h);
+          if (d < bestD) {
+            bestD = d;
+            best = [i, j];
+          }
+        }
+    }
+    if (!best) continue;
+    taken.add(`${best[0]},${best[1]}`);
+    state.pos.set(id, { x: best[0] * cell.w, y: best[1] * cell.h });
+    state.vel.set(id, { x: 0, y: 0 });
+  }
+}

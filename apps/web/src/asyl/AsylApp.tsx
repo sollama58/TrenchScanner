@@ -102,6 +102,7 @@ interface MapSnapshot {
   cut: ReadonlySet<string>;
   hiddenKinds: ReadonlySet<AsylEdgeKind>;
   drawings: Drawings;
+  grid: boolean;
   pos: Map<string, { x: number; y: number }>;
   pinned: Set<string>;
 }
@@ -161,14 +162,18 @@ export function AsylApp() {
   // The reader's own lines and text boxes (user ask 2026-10-24), the tool in hand, and the one picked.
   const [drawings, setDrawings] = useState<Drawings>(NO_DRAWINGS);
   const [tool, setTool] = useState<DrawTool>(null);
+  // Grid mode (user ask 2026-10-24): on for every new map; a saved map keeps its own choice.
+  const [grid, setGrid] = useState(true);
+  // Bumped when a map is opened or started, so the view lays it out from scratch.
+  const [epoch, setEpoch] = useState(0);
   const [drawingSel, setDrawingSel] = useState<string | null>(null);
   const [cardNote, setCardNote] = useState<string | null>(null);
   const view = useRef<GraphViewHandle>(null);
   // Undo and redo (user ask 2026-10-24). Notes and the title keep their own text-box undo.
   const history = useRef(new History<MapSnapshot>(HISTORY_MAX));
   const [, setHistoryTick] = useState(0);
-  const latest = useRef({ graph, removed, cut, hiddenKinds, drawings });
-  latest.current = { graph, removed, cut, hiddenKinds, drawings };
+  const latest = useRef({ graph, removed, cut, hiddenKinds, drawings, grid });
+  latest.current = { graph, removed, cut, hiddenKinds, drawings, grid };
   const searchBox = useRef<HTMLInputElement>(null);
   const started = useRef(false);
 
@@ -245,6 +250,7 @@ export function AsylApp() {
     setCut(new Set(s.cut));
     setHiddenKinds(new Set(s.hiddenKinds));
     setDrawings(s.drawings);
+    setGrid(s.grid);
     if (
       drawingSel &&
       !s.drawings.lines.some((l) => l.id === drawingSel) &&
@@ -358,6 +364,11 @@ export function AsylApp() {
           layout.current.pos.set(nid, { x, y });
           layout.current.vel.set(nid, { x: 0, y: 0 });
         }
+        layout.current.pinned = new Set((m.doc.pinned ?? []).filter((nid) => nid in m.doc.positions));
+        // Maps saved before grid mode keep the layout they were saved with.
+        setGrid(m.doc.grid ?? false);
+        if (m.doc.times) setTimeLabelsState({ ...DEFAULT_TIME_LABELS, ...m.doc.times });
+        setEpoch((n) => n + 1);
         setGraph(withDeployLines({ nodes: m.doc.nodes, edges: m.doc.edges }));
         setNotes(m.doc.notes);
         setMapNote(m.doc.note);
@@ -397,6 +408,8 @@ export function AsylApp() {
     )
       return;
     layout.current = newLayout();
+    setGrid(true);
+    setEpoch((n) => n + 1);
     setGraph(EMPTY);
     setNotes({});
     setMapNote("");
@@ -471,6 +484,9 @@ export function AsylApp() {
       removed: [...removed].filter((id) => graph.nodes.some((n) => n.id === id)),
       cut: [...cut].filter((k) => graph.edges.some((e) => edgeKey(e) === k)),
       cutoffs,
+      pinned: [...layout.current.pinned].filter((id) => id in positions),
+      grid,
+      times: timeLabels,
       drawings: {
         lines: drawings.lines.filter(
           (l) => graph.nodes.some((n) => n.id === l.a) && graph.nodes.some((n) => n.id === l.b),
@@ -1157,6 +1173,22 @@ export function AsylApp() {
                 T Text
               </button>
             </span>
+            <button
+              className={`asyl-btn ghost${grid ? " on" : ""}`}
+              aria-pressed={grid}
+              title={
+                grid
+                  ? "Grid mode is on: each bubble has its own cell, with room for every name and line time. Click to place bubbles freely"
+                  : "Grid mode: put each bubble on its own cell, with room for every name and line time"
+              }
+              onClick={() => {
+                record();
+                setGrid((g) => !g);
+                setDirty(true);
+              }}
+            >
+              ▦ Grid
+            </button>
             <span className="asyl-btn-group" role="group" aria-label="Undo and redo">
               <button
                 className="asyl-btn ghost"
@@ -1250,6 +1282,8 @@ export function AsylApp() {
             </div>
           ) : (
             <GraphView
+              key={epoch}
+              grid={grid}
               graph={shown}
               layout={layout.current}
               selected={selected}
