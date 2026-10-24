@@ -110,6 +110,46 @@ describe("sendAlert", () => {
     expect(api.sent().map((m) => m.photo)).toEqual(["https://cdn.example/a.png", null]);
   });
 
+  it("falls back to text on any refusal of the photo itself, not on a blocked chat or a rate limit", async () => {
+    for (const [code, textSent] of [
+      [413, true],
+      [404, true],
+      [403, false],
+      [429, false],
+      [500, false],
+      [0, false],
+    ] as const) {
+      const api = new FakeTelegramApi(async () => image());
+      api.answers.set("sendPhoto", { ok: false, code, description: `code ${code}` });
+      const result = await api.sendAlert(5, { html: "x", imageUrl: "https://cdn.example/a.png" });
+      expect(result.ok, `code ${code}`).toBe(textSent);
+      expect(
+        api.calls.map((c) => c.method),
+        `code ${code}`,
+      ).toEqual(textSent ? ["sendPhoto", "sendMessage"] : ["sendPhoto"]);
+    }
+  });
+
+  it("reads the main URL and its fallbacks at once, so a dead gateway costs one timeout, not three", async () => {
+    let open = 0;
+    let mostOpen = 0;
+    const api = new FakeTelegramApi(async (url) => {
+      open += 1;
+      mostOpen = Math.max(mostOpen, open);
+      await new Promise((r) => setTimeout(r, 20));
+      open -= 1;
+      return String(url).endsWith("c.png") ? image() : image(429, "text/plain");
+    });
+    const result = await api.sendAlert(7, {
+      html: "x",
+      imageUrl: "https://a.example/a.png",
+      imageFallbacks: ["https://b.example/b.png", "https://c.example/c.png"],
+    });
+    expect(result.ok).toBe(true);
+    expect(mostOpen).toBe(3);
+    expect(api.sent()).toEqual([{ chatId: "7", text: "x", photo: "upload" }]);
+  });
+
   it("sends text alone without artwork or when the caption would be too long", async () => {
     const api = new FakeTelegramApi(async () => image());
     await api.sendAlert(5, { html: "x", imageUrl: null });
