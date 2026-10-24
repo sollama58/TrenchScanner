@@ -17,9 +17,13 @@ import { startVersionWatch } from "./version";
 import { installTouchTips } from "./touchTips";
 import { captureInstallPrompt } from "./installApp";
 import { warmLivePanels } from "./livePanels";
+import { captureReturnTo } from "./returnTo";
 import "./fonts.css";
 import "./styles.css";
 
+// A page that sent the visitor here to sign in (Asyl's ?return=): kept before Privy's sign-in or
+// anything else rewrites the address.
+captureReturnTo();
 // Before anything lazy loads: a chunk removed by a deploy since this page loaded reloads the tab.
 startVersionWatch();
 // Phones and tablets: a tap shows what a desktop shows on hover.
