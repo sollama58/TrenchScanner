@@ -475,3 +475,175 @@ a {
 .site.ts {
   color: var(--filter);
 }
+.card.clickable {
+  cursor: pointer;
+}
+.card.clickable .map-slot,
+.card.clickable .trade {
+  cursor: auto;
+}
+.card.buddy.held {
+  --a: var(--good);
+  --b: #8af1b8;
+}
+.card.buddy.closed {
+  --a: #4a4e5c;
+}
+.map-toggle {
+  font-size: 11.5px;
+  padding: 4px 0;
+  border-radius: 6px;
+  color: var(--soft);
+  background: #181a21;
+}
+.map-toggle.on {
+  border-color: var(--filter);
+  color: var(--ink);
+}
+.map-slot {
+  border-top: 1px solid #1f2129;
+  padding-top: 8px;
+}
+.bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bm-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.bm-when {
+  font:
+    500 10.5px ui-monospace,
+    Menlo,
+    monospace;
+  color: var(--dim);
+}
+.bm-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
+  gap: 5px;
+}
+.bm-tile {
+  background: #181a21;
+  border: 1px solid #23252e;
+  border-radius: 7px;
+  padding: 4px 7px;
+  min-width: 0;
+}
+.bm-l {
+  font:
+    500 9.5px ui-monospace,
+    Menlo,
+    monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bm-v {
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.bm-traits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.bm-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: #111218;
+  border-radius: 8px;
+}
+.bm-pct {
+  fill: #fff;
+  font-family: ui-monospace, Menlo, monospace;
+  font-weight: 600;
+  pointer-events: none;
+}
+.bm-mark {
+  fill: #0d0e13;
+  stroke: #c7cbd8;
+  stroke-width: 0.8;
+}
+.bm-mark-t {
+  fill: #eef0f6;
+  font:
+    700 6px ui-monospace,
+    Menlo,
+    monospace;
+  pointer-events: none;
+}
+.pnl {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.line .r.warn {
+  color: #f8d77a;
+}
+.trade {
+  border: 1px solid #23252e;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #121318;
+}
+.trade summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--soft);
+}
+.trade[open] summary {
+  margin-bottom: 6px;
+}
+.trade .note {
+  margin-top: 4px;
+}
+.presets {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+}
+.presets .l {
+  width: 30px;
+  color: var(--dim);
+  font-size: 11.5px;
+}
+.preset {
+  flex: 1;
+  text-align: center;
+  text-decoration: none;
+  font:
+    600 11px ui-monospace,
+    Menlo,
+    monospace;
+  border-radius: 6px;
+  padding: 4px 0;
+  border: 1px solid #2a2d38;
+}
+.preset.buy {
+  color: #7ef0ae;
+}
+.preset.buy:hover {
+  border-color: var(--good);
+}
+.preset.sell {
+  color: #ff8b9d;
+}
+.preset.sell:hover {
+  border-color: var(--risk);
+}
+.note.pad {
+  padding: 0 16px 14px;
+}

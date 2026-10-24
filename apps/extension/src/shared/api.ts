@@ -1,4 +1,4 @@
-import type { OverlaySettings, OverlayToken } from "./types";
+import type { BuddyAnswer, OverlayBubbleMap, OverlaySettings, OverlayToken } from "./types";
 
 /**
  * The only host the extension talks to (the manifest CSP's connect-src). There is no host
@@ -35,8 +35,15 @@ async function call<T>(
 
 export const api = {
   me: (key: string) =>
-    call<{ wallet: string; settings: OverlaySettings; aiReviews?: boolean }>(key, "GET", "/me"),
+    call<{ wallet: string; settings: OverlaySettings; aiReviews?: boolean; pro?: boolean }>(
+      key,
+      "GET",
+      "/me",
+    ),
   saveSettings: (key: string, settings: OverlaySettings) =>
     call<OverlaySettings>(key, "PUT", "/settings", settings),
   feed: (key: string) => call<{ tokens: OverlayToken[] }>(key, "GET", "/feed"),
+  bubble: (key: string, mint: string) =>
+    call<{ map: OverlayBubbleMap | null }>(key, "GET", `/bubble/${encodeURIComponent(mint)}`),
+  buddy: (key: string) => call<BuddyAnswer>(key, "GET", "/buddy"),
 };

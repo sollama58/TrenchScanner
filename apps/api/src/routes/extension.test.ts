@@ -302,6 +302,110 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     expect((await ext(key, "POST", "/ext/v1/lookup", { mints: [trackedMint] })).statusCode).toBe(404);
   });
 
+  it("reads a tracked coin's latest bubble map with its totals, and no untracked coin's", async () => {
+    const user = await makeUser("bubble", true);
+    const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    const tracked = mint();
+    const lookedUp = mint();
+    mints.push(tracked, lookedUp);
+    const token = await prisma.token.create({ data: { mintAddress: tracked, symbol: "MAP" } });
+    await prisma.tokenSnapshot.create({
+      data: {
+        tokenId: token.id,
+        priceUsd: 0.00001,
+        marketCapUsd: 9_000,
+        linkedWalletPct: 9,
+        linkedWalletCount: 2,
+        linkedWalletsChecked: 25,
+        kolBundledPct: 0,
+        cexFundedPct: 5,
+        cexFundedCount: 1,
+        cexFundedHolders: 20,
+        linkedHolders: [
+          { wallet: "w1", pct: 5, sniper: true },
+          { wallet: "w2", pct: 4 },
+          { wallet: "w3", pct: 2, cexFunder: "ex" },
+        ],
+        linkedClusters: [
+          {
+            funder: "f1",
+            wallets: [
+              { wallet: "w1", pct: 5 },
+              { wallet: "w2", pct: 4 },
+            ],
+            pct: 9,
+            creatorLinked: false,
+          },
+        ],
+      },
+    });
+    // Only looked up by someone else: the site gates it, and so does the panel.
+    await prisma.token.create({
+      data: { mintAddress: lookedUp, symbol: "PAID", discoverySource: "utility" },
+    });
+
+    const res = await ext(key, "GET", `/ext/v1/bubble/${tracked}`);
+    expect(res.statusCode).toBe(200);
+    const { map } = res.json() as {
+      map: { holders: { wallet: string; cluster: number | null }[]; totals: Record<string, unknown> };
+    };
+    expect(map.holders.map((h) => [h.wallet, h.cluster])).toEqual([
+      ["w1", 0],
+      ["w2", 0],
+      ["w3", null],
+    ]);
+    expect(map.totals).toMatchObject({
+      linkedPct: 9,
+      linkedCount: { count: 2, of: 25 },
+      cexFundedCount: { count: 1, of: 20 },
+    });
+    expect((await ext(key, "GET", `/ext/v1/bubble/${lookedUp}`)).statusCode).toBe(404);
+    expect((await ext(key, "GET", "/ext/v1/bubble/not-a-mint")).statusCode).toBe(400);
+  });
+
+  it("lists the wallet's own coins for Trade Buddy, with their PnL and card", async () => {
+    const user = await makeUser("buddy", true);
+    const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    const bought = mint();
+    mints.push(bought);
+    const token = await prisma.token.create({
+      data: { mintAddress: bought, symbol: "BUDDY", livePriceUsd: 0.002 },
+    });
+    await prisma.tokenSnapshot.create({
+      data: { tokenId: token.id, priceUsd: 0.002, marketCapUsd: 2_000_000 },
+    });
+    const wallet = `${TAG}-buddy`;
+    await prisma.proTrade.create({
+      data: {
+        wallet,
+        signature: `${TAG}-sig-buddy`,
+        mint: bought,
+        side: "buy",
+        lamports: -1_000_000_000n,
+        tokens: 1_000_000_000n,
+        decimals: 6,
+        at: new Date(Date.now() - 60_000),
+        entry: true,
+      },
+    });
+    try {
+      const res = await ext(key, "GET", "/ext/v1/buddy");
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as {
+        coins: { mint: string; held: number; closed: boolean; token: { symbol: string } | null }[];
+        pro: boolean;
+      };
+      const coin = body.coins.find((c) => c.mint === bought);
+      expect(coin).toMatchObject({ held: 1000, closed: false });
+      expect(coin!.token?.symbol).toBe("BUDDY");
+      expect(body.pro).toBe(false);
+      // A coin the wallet traded opens its map, as the TRADES panel's card opens it on the site.
+      expect((await ext(key, "GET", `/ext/v1/bubble/${bought}`)).statusCode).toBe(200);
+    } finally {
+      await prisma.proTrade.deleteMany({ where: { wallet } });
+    }
+  });
+
   it("saves and reads overlay settings, and refuses a bad shape", async () => {
     const user = await makeUser("settings", true);
     const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;

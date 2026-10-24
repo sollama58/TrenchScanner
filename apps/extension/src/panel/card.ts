@@ -154,6 +154,8 @@ export function tokenCard(
   verdict: RowVerdict,
   settings: OverlaySettings,
   now = Date.now(),
+  /** The market cap the move is measured from, in place of the first alert's (Trade Buddy's entry). */
+  anchor?: { label: string; mcapUsd: number | null; nowMcapUsd?: number | null; at?: string },
 ): HTMLElement {
   const card = el("article", `card ${verdict.ring ?? ""}`.trim());
   const valid = isMintAddress(token.mint);
@@ -162,7 +164,7 @@ export function tokenCard(
   const name = el("div", "name");
   name.append(avatar(token), el("b", "", token.symbol ?? "?"));
   if (token.name && token.name !== token.symbol) name.append(el("span", "full", token.name));
-  const when = alertedAt(token);
+  const when = anchor?.at ?? alertedAt(token);
   head.append(name, el("span", "when", when ? ago(when, now) : ""));
   card.append(head);
 
@@ -178,14 +180,20 @@ export function tokenCard(
   }
   card.append(tags);
 
-  const first = token.modelCalls[0]?.mcapUsd ?? token.filterMatches[0]?.mcapUsd ?? null;
-  const nowMcap = token.liveMcapUsd ?? token.stats?.marketCapUsd ?? null;
+  const first = anchor
+    ? anchor.mcapUsd
+    : (token.modelCalls[0]?.mcapUsd ?? token.filterMatches[0]?.mcapUsd ?? null);
+  const nowMcap = anchor?.nowMcapUsd ?? token.liveMcapUsd ?? token.stats?.marketCapUsd ?? null;
   const moved = first === null || nowMcap === null || first === 0 ? null : (nowMcap - first) / first;
   const change = moved === null ? "" : ` (${moved >= 0 ? "+" : ""}${Math.round(moved * 100)}%)`;
   // Green since the alert when up, red when down.
   const trend = moved === null ? "" : moved >= 0 ? "up" : "down";
   card.append(
-    line(first === null ? "Market cap" : `Alerted ${usd(first)}`, `now ${usd(nowMcap)}${change}`, trend),
+    line(
+      first === null ? "Market cap" : `${anchor?.label ?? "Alerted"} ${usd(first)}`,
+      `now ${usd(nowMcap)}${change}`,
+      trend,
+    ),
   );
 
   if (verdict.flags.length > 0) {

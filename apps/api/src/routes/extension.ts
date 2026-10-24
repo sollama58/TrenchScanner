@@ -1,5 +1,13 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { adminWalletSet, prisma, resolveAccess, resolveFeedCalls, type Env } from "@trenchscanner/core";
+import {
+  adminWalletSet,
+  openLookup,
+  prisma,
+  resolveAccess,
+  resolveFeedCalls,
+  type Env,
+  type FeedCalls,
+} from "@trenchscanner/core";
 import { clientIp, ipRateLimitKey } from "../clientIp.js";
 import { contestState, resolveFeedModels, SAVED_FEED_SELECT, toSavedFeed } from "../contest.js";
 import {
@@ -11,8 +19,21 @@ import {
   hashExtensionKey,
   isExtensionKeyShape,
 } from "../extensionKey.js";
-import { recentOverlay, type OverlayToken } from "../extensionLookup.js";
+import { isMintAddress, lookupOverlay, recentOverlay, type OverlayToken } from "../extensionLookup.js";
+import {
+  overlayBubbleMap,
+  pickBubbleScan,
+  type BubbleScan,
+  type OverlayBubbleMap,
+} from "../extensionBubble.js";
+import { buddyAnswer, buddyCoins, type BuddyAnswer } from "../extensionBuddy.js";
+import { freeLookupReason } from "../lookupGate.js";
 import { overlaySettingsSchema, parseOverlaySettings } from "../overlaySettings.js";
+import { cachedProStatus } from "../proMode.js";
+import { releaseHolderStamps, type ViewStampBuffer } from "../viewStamps.js";
+import { allowHolderWatch } from "./live.js";
+import type { ProTrades } from "./proTrades.js";
+import { readTokenReading } from "./tokens.js";
 
 /**
  * The browser extension's API (/ext/v1). The extension is a side panel with no access to any
@@ -22,7 +43,9 @@ import { overlaySettingsSchema, parseOverlaySettings } from "../overlaySettings.
  * chrome-extension:// origin, and a page elsewhere cannot make a browser attach this header).
  *
  * The key reads the owner's alerts, token stats and overlay settings, and saves the overlay
- * settings. Paid access only, the Model Alert rule (user decision 2026-10-23).
+ * settings. Paid access only, the Model Alert rule (user decision 2026-10-23). Since 2026-10-24
+ * it also reads a coin's latest bubble map and the owner's own trades (Trade Buddy). Nothing here
+ * trades: a Pro trade is signed by the owner's wallet on TrenchScanner itself.
  */
 
 /** How long a key's check is reused on this process. Revoking from Settings clears it here at once. */
@@ -41,6 +64,13 @@ const FEED_RATE_LIMIT = { max: 90, timeWindow: "1 minute" };
 const FEED_CACHE_MS = 4_000;
 const FEED_CACHE_MAX = 5_000;
 const SETTINGS_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
+/** Bubble map reads a minute: the panel re-reads each open map every 30 s, a handful at once. */
+const BUBBLE_RATE_LIMIT = { max: 60, timeWindow: "1 minute" };
+/** One coin's map is reused this long for every reader (the site's own read is cached 15 s). */
+const BUBBLE_CACHE_MS = 10_000;
+const BUBBLE_CACHE_MAX = 2_000;
+/** Trade Buddy reads a minute: the panel polls every 10 s, plus a second window. */
+const BUDDY_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 
 export interface ExtensionClient {
   keyId: string;
@@ -59,6 +89,7 @@ const authCache = new Map<string, CachedAuth>();
 const authFailures = new Map<string, number[]>();
 const lastUsedWritten = new Map<string, number>();
 const feedCache = new Map<string, { at: number; tokens: OverlayToken[] }>();
+const bubbleCache = new Map<string, { at: number; map: OverlayBubbleMap | null }>();
 
 /** Drops a key's cached check, so a revoke on this process takes effect on the next request. */
 export function forgetExtensionKey(keyId: string): void {
@@ -74,6 +105,7 @@ export function resetExtensionAuthState(): void {
   authCache.clear();
   authFailures.clear();
   feedCache.clear();
+  bubbleCache.clear();
   lastUsedWritten.clear();
 }
 
@@ -98,7 +130,30 @@ declare module "fastify" {
   }
 }
 
-export async function registerExtensionRoutes(app: FastifyInstance, opts: { env: Env }) {
+/** A coin's map for the panel: its picked scan, newest scan and top 50, as the token view reads them. */
+async function readOverlayBubble(mint: string): Promise<OverlayBubbleMap | null> {
+  const [reading, wide] = await Promise.all([
+    readTokenReading(mint),
+    prisma.bubbleMapHolders.findUnique({
+      where: { mintAddress: mint },
+      select: { readAt: true, holders: true, clusters: true, sameTimeClusters: true },
+    }),
+  ]);
+  if (!reading) return null;
+  const scans = reading.snapshots as unknown as BubbleScan[];
+  return overlayBubbleMap(mint, reading.symbol, pickBubbleScan(scans), scans[0] ?? null, wide);
+}
+
+export async function registerExtensionRoutes(
+  app: FastifyInstance,
+  opts: {
+    env: Env;
+    /** The wallet's own trades (routes/proTrades.ts), for Trade Buddy; without it Trade Buddy is empty. */
+    proTrades?: ProTrades;
+    /** Token.holdersViewedAt, stamped while a map is open in the panel, as the site's token view does. */
+    holderStamps?: ViewStampBuffer;
+  },
+) {
   const admins = adminWalletSet(opts.env);
   // A key's own bucket only once it has been proven (in authCache): rotating made-up keys would
   // otherwise get a fresh bucket per request and flush real keys' buckets (audit CE-2).
@@ -110,6 +165,18 @@ export async function registerExtensionRoutes(app: FastifyInstance, opts: { env:
       ? extensionRateLimitBucket(request.headers.authorization, ipRateLimitKey(request))
       : ipRateLimitKey(request);
   };
+
+  /** The reader's followed models, as their feed reads them. */
+  async function feedCallsOf(userId: string): Promise<FeedCalls> {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: SAVED_FEED_SELECT });
+    const state = await contestState(opts.env);
+    const saved = user ? toSavedFeed(user) : null;
+    return resolveFeedCalls(
+      state,
+      saved ? resolveFeedModels(state, saved).models : [...state.defaultModels],
+      false,
+    );
+  }
 
   app.addHook("preHandler", async (request, reply) => {
     const now = Date.now();
@@ -184,11 +251,15 @@ export async function registerExtensionRoutes(app: FastifyInstance, opts: { env:
     { config: { rateLimit: { ...SETTINGS_RATE_LIMIT, keyGenerator: bucket } } },
     async (request) => {
       const { userId, walletAddress, aiReviews } = request.extensionClient!;
-      const user = await prisma.user.findUnique({ where: { id: userId }, select: { overlaySettings: true } });
+      const [user, pro] = await Promise.all([
+        prisma.user.findUnique({ where: { id: userId }, select: { overlaySettings: true } }),
+        cachedProStatus(opts.env, walletAddress).catch(() => null),
+      ]);
       return {
         wallet: `${walletAddress.slice(0, 4)}…${walletAddress.slice(-4)}`,
         settings: parseOverlaySettings(user?.overlaySettings ?? null),
         aiReviews,
+        pro: pro?.pro === true,
       };
     },
   );
@@ -229,14 +300,7 @@ export async function registerExtensionRoutes(app: FastifyInstance, opts: { env:
       const now = Date.now();
       const hit = feedCache.get(userId);
       if (hit && now - hit.at < FEED_CACHE_MS) return { tokens: hit.tokens };
-      const user = await prisma.user.findUnique({ where: { id: userId }, select: SAVED_FEED_SELECT });
-      const state = await contestState(opts.env);
-      const saved = user ? toSavedFeed(user) : null;
-      const calls = resolveFeedCalls(
-        state,
-        saved ? resolveFeedModels(state, saved).models : [...state.defaultModels],
-        false,
-      );
+      const calls = await feedCallsOf(userId);
       const tokens = (await recentOverlay(userId, calls, now)).map((t) =>
         aiReviews ? t : { ...t, ai: null },
       );
@@ -247,6 +311,71 @@ export async function registerExtensionRoutes(app: FastifyInstance, opts: { env:
       feedCache.delete(userId);
       feedCache.set(userId, { at: now, tokens });
       return { tokens };
+    },
+  );
+
+  /**
+   * A coin's latest bubble map, with the site's category totals (extensionBubble.ts): the panel
+   * draws it when an alert or a Trade Buddy coin is opened. The same coins the site's token view
+   * opens free for this reader: one the scanner tracks, one they traded, or their open lookup.
+   * Each read keeps the coin's map watched, as the site's view does, so the worker keeps its top
+   * holders current while the panel shows them (one account's four newest maps, live.ts).
+   */
+  app.get(
+    "/bubble/:mint",
+    { config: { rateLimit: { ...BUBBLE_RATE_LIMIT, keyGenerator: bucket } } },
+    async (request, reply) => {
+      const { mint } = request.params as { mint: string };
+      if (!isMintAddress(mint)) return reply.code(400).send({ error: "not a valid mint" });
+      const { userId, walletAddress, aiReviews } = request.extensionClient!;
+      const admin = aiReviews;
+      const allowed =
+        admin ||
+        (await freeLookupReason(walletAddress, "token", mint)) !== null ||
+        (await openLookup(walletAddress, "token", mint)) !== null;
+      if (!allowed) return reply.code(404).send({ error: "not tracked" });
+      const now = Date.now();
+      const watch = allowHolderWatch(`ext:${userId}`, mint, now);
+      if (watch.stamp) opts.holderStamps?.record([mint], now);
+      void releaseHolderStamps(opts.holderStamps, watch.released);
+      const hit = bubbleCache.get(mint);
+      if (hit && now - hit.at < BUBBLE_CACHE_MS) return { map: hit.map };
+      const map = await readOverlayBubble(mint);
+      if (!bubbleCache.has(mint) && bubbleCache.size >= BUBBLE_CACHE_MAX) {
+        const oldest = bubbleCache.keys().next().value;
+        if (oldest !== undefined) bubbleCache.delete(oldest);
+      }
+      bubbleCache.delete(mint);
+      bubbleCache.set(mint, { at: now, map });
+      return { map };
+    },
+  );
+
+  /**
+   * Trade Buddy: the coins the key's own wallet bought, from any venue, each with its PnL and token
+   * card (extensionBuddy.ts). The wallet is followed while the panel reads this, as the site's
+   * TRADES panel follows it, and its held coins are kept on the scan.
+   */
+  app.get(
+    "/buddy",
+    { config: { rateLimit: { ...BUDDY_RATE_LIMIT, keyGenerator: bucket } } },
+    async (request): Promise<BuddyAnswer> => {
+      const { userId, walletAddress, aiReviews } = request.extensionClient!;
+      const now = Date.now();
+      const pro = (await cachedProStatus(opts.env, walletAddress).catch(() => null))?.pro === true;
+      if (!opts.proTrades)
+        return { coins: [], solUsd: null, pro, readAt: new Date(now).toISOString(), chainAt: null };
+      const view = await opts.proTrades.look(walletAddress, "full-open");
+      const mints = buddyCoins(view, now).map((c) => c.mint);
+      const { tokens } = mints.length
+        ? await lookupOverlay(userId, mints, await feedCallsOf(userId), now)
+        : { tokens: [] };
+      return buddyAnswer(
+        view,
+        tokens.map((t) => (aiReviews ? t : { ...t, ai: null })),
+        pro,
+        now,
+      );
     },
   );
 }

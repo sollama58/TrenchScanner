@@ -1,6 +1,15 @@
 import { SectionBoundary } from "./components/SectionBoundary";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
-import { ACCESS_ENDED_EVENT, ApiError, post, SESSION_ENDED_EVENT, type Subscription, type User } from "./api";
+import {
+  ACCESS_ENDED_EVENT,
+  api,
+  ApiError,
+  post,
+  SESSION_ENDED_EVENT,
+  type Card,
+  type Subscription,
+  type User,
+} from "./api";
 import { cachedGet, invalidate, peek, prefetch } from "./cache";
 import {
   GUEST_DELAY_MINUTES,
@@ -57,7 +66,8 @@ import { PageLoader } from "./components/PageLoader";
 import { beginWait, markNavigation } from "./loadTracker";
 import { unbindAppearance, useAppearance } from "./appearance";
 import { TokenModalHost } from "./components/TokenModalHost";
-import { closeTokenModal } from "./tokenModal";
+import { closeTokenModal, openTokenModal } from "./tokenModal";
+import { clearTradeLink, setTradeFill, tradeLinkFromUrl } from "./tradeLink";
 import { useExtensionReconnect } from "./extensionReconnect";
 import { onTradingSessionRefresh, setProState, proStateOf, tradeSettingsSync } from "./proTrade";
 import { setTrackedAccount } from "./trackedWallets";
@@ -427,6 +437,19 @@ export function App() {
   useEffect(() => setAdmin(isAdmin));
   // Pro Mode, for the token modal's Trade panel (null hides all of it).
   const pro = signedIn ? proStateOf(session.user) : null;
+  // A trade from the extension's Trade Buddy (tradeLink.ts): the coin's token view opens with its
+  // Trade panel filled in, once signed in. Without Pro Mode it opens the coin alone.
+  useEffect(() => {
+    if (!signedIn) return;
+    const fill = tradeLinkFromUrl();
+    if (!fill) return;
+    clearTradeLink();
+    setTradeFill(fill);
+    void api<Card>(`/tokens/${fill.mint}/card`).then(
+      (card) => openTokenModal(card, Date.now()),
+      () => setTradeFill(null),
+    );
+  }, [signedIn]);
   // Every render: setProState ignores a state equal to the one it has.
   useEffect(() => setProState(pro));
   // A 404 from build, send, or status means Pro or the public trading flag changed. Re-read

@@ -1,6 +1,10 @@
 import { api, ApiError } from "./shared/api";
+import { isMintAddress } from "./shared/mint";
 import { DEFAULT_SETTINGS } from "./shared/settings";
 import type {
+  BubbleAnswer,
+  BuddyAnswer,
+  BuddyRead,
   FeedAnswer,
   OverlaySettings,
   OverlayToken,
@@ -33,6 +37,7 @@ interface Stored {
   wallet?: string;
   settings?: OverlaySettings;
   aiReviews?: boolean;
+  pro?: boolean;
   /**
    * The API refused the key (revoked, signing out of TrenchScanner revokes every key, or the
    * subscription ended). Kept in storage, not only in memory, so the site's ping still says
@@ -44,12 +49,20 @@ interface Stored {
 let problem: Problem = null;
 let settingsReadAt = 0;
 let lastTokens: OverlayToken[] = [];
+let lastBuddy: BuddyAnswer | null = null;
 
 // The toolbar icon (and its shortcut) opens the panel beside the page.
 void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => undefined);
 
 async function stored(): Promise<Stored> {
-  return (await chrome.storage.local.get(["key", "wallet", "settings", "aiReviews", "refused"])) as Stored;
+  return (await chrome.storage.local.get([
+    "key",
+    "wallet",
+    "settings",
+    "aiReviews",
+    "pro",
+    "refused",
+  ])) as Stored;
 }
 
 async function currentSettings(): Promise<OverlaySettings> {
@@ -63,6 +76,7 @@ async function currentSettings(): Promise<OverlaySettings> {
           wallet: me.wallet,
           settings: me.settings,
           aiReviews: me.aiReviews === true,
+          pro: me.pro === true,
         }),
       )
       .catch((e: unknown) => noteFailure(e));
@@ -89,12 +103,41 @@ async function feed(): Promise<FeedAnswer> {
   return { tokens: lastTokens, problem };
 }
 
+/** A coin's latest bubble map. Only a valid mint is asked for, so nothing else reaches the URL. */
+async function bubble(mint: unknown): Promise<BubbleAnswer> {
+  const { key } = await stored();
+  if (!key) return { map: null, problem: "disconnected" };
+  if (typeof mint !== "string" || !isMintAddress(mint)) return { map: null, problem: "untracked" };
+  try {
+    const { map } = await api.bubble(key, mint);
+    return { map, problem: null };
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return { map: null, problem: "untracked" };
+    noteFailure(e);
+    return { map: null, problem };
+  }
+}
+
+/** Trade Buddy: the coins the account's wallet bought, with their PnL. */
+async function buddy(): Promise<BuddyRead> {
+  const { key } = await stored();
+  if (!key) return { buddy: null, problem: "disconnected" };
+  try {
+    lastBuddy = await api.buddy(key);
+    problem = null;
+  } catch (e) {
+    noteFailure(e);
+  }
+  return { buddy: lastBuddy, problem };
+}
+
 async function status(): Promise<Status> {
-  const { key, wallet, aiReviews, refused } = await stored();
+  const { key, wallet, aiReviews, pro, refused } = await stored();
   return {
     connected: Boolean(key),
     wallet: wallet ?? null,
     aiReviews: aiReviews === true,
+    pro: pro === true,
     settings: await currentSettings(),
     problem: !key ? "disconnected" : refused && problem === null ? "refused" : problem,
   };
@@ -112,11 +155,13 @@ async function connect(raw: unknown): Promise<{ ok: boolean; error?: string }> {
       wallet: me.wallet,
       settings: me.settings,
       aiReviews: me.aiReviews === true,
+      pro: me.pro === true,
     });
     await chrome.storage.local.remove("refused");
     settingsReadAt = Date.now();
     problem = null;
     lastTokens = [];
+    lastBuddy = null;
     // An open panel redraws connected.
     void chrome.runtime.sendMessage({ type: "connected" }).catch(() => undefined);
     return { ok: true };
@@ -135,9 +180,14 @@ async function handle(request: PanelRequest): Promise<unknown> {
       return status();
     case "feed":
       return feed();
+    case "bubble":
+      return bubble(request.mint);
+    case "buddy":
+      return buddy();
     case "disconnect":
-      await chrome.storage.local.remove(["key", "wallet", "aiReviews", "refused"]);
+      await chrome.storage.local.remove(["key", "wallet", "aiReviews", "pro", "refused"]);
       lastTokens = [];
+      lastBuddy = null;
       problem = "disconnected";
       return { ok: true };
     case "saveSettings": {

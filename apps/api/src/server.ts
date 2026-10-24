@@ -80,7 +80,7 @@ import { prismaIdentityStore, WalletIdentityReader } from "./walletIdentity.js";
 import { registerTradingRoutes } from "./routes/trading.js";
 import { registerProTradeRoutes } from "./routes/proTrade.js";
 import { registerPortfolioRoutes } from "./routes/portfolio.js";
-import { registerProTradesRoutes } from "./routes/proTrades.js";
+import { createProTrades, registerProTradesRoutes } from "./routes/proTrades.js";
 import { registerAdminProModeRoutes } from "./routes/adminProMode.js";
 import { MatchStream } from "./matchStream.js";
 import { ModelAlertHub } from "./modelAlertHub.js";
@@ -821,7 +821,11 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerModelAlertSocket, { hub: modelAlertHub, env });
   // The browser extension overlay: Settings mints and revokes its keys, /ext/v1 is what it reads.
   await app.register(registerExtensionKeyRoutes, { prefix: "/settings", env });
-  await app.register(registerExtensionRoutes, { prefix: "/ext/v1", env });
+  // A wallet's own trades, followed on the Helius stream (proTrades.ts): the TRADES panel's and
+  // the extension's Trade Buddy, one follower for both.
+  const proTrades = createProTrades({ env, dexScreener, viewStamps });
+  app.addHook("onClose", async () => proTrades.stop());
+  await app.register(registerExtensionRoutes, { prefix: "/ext/v1", env, proTrades, holderStamps });
   // Telegram alerts: link codes and chats for the signed-in account, and the bot's webhook.
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env, liveRefresher });
   // The trading bot (admin-only; nothing is registered without TRADING_BOT_ENABLED).
@@ -829,7 +833,13 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // Pro Mode trades from the token modal: the trader's own wallet signs; nothing custodial.
   await app.register(registerProTradeRoutes, { prefix: "/pro", env });
   // The TRADES panel: a Pro Mode wallet's own trades, followed on the Helius stream (proTrades.ts).
-  await app.register(registerProTradesRoutes, { prefix: "/pro/trades", env, dexScreener, viewStamps });
+  await app.register(registerProTradesRoutes, {
+    prefix: "/pro/trades",
+    env,
+    dexScreener,
+    viewStamps,
+    trades: proTrades,
+  });
   // The Portfolio tab: the signed-in wallet's own account, holdings, trades and alerts.
   await app.register(registerPortfolioRoutes, { prefix: "/portfolio", env });
   // Token-guarded (STATS_API_TOKEN), not session-guarded: read by scripts, not the dashboard.
