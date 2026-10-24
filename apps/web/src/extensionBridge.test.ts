@@ -23,6 +23,13 @@ const { findExtension, handOverKey } = await import("./extensionBridge");
 const STORE_ZIP = "abcdefghijklmnopabcdefghijklmnop";
 
 describe("finding the extension", () => {
+  it("knows the Chrome Web Store build without a link", async () => {
+    installed.add("pjacklmgcelhgfjnkbdpkhcbjcblijca");
+    expect((await findExtension(null))?.id).toBe("pjacklmgcelhgfjnkbdpkhcbjcblijca");
+    installed.clear();
+    store.clear();
+  });
+
   beforeEach(() => {
     installed.clear();
     sent.length = 0;
