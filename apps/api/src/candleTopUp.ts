@@ -94,16 +94,6 @@ async function read(mint: string, token: BackfillToken, deps: TopUpDeps, now: nu
   return false;
 }
 
-/**
- * When the coin's top-up could next bring its newest minutes, in ms from now: 0 while one is
- * reading or none ran yet; null once one ran and the next is held back (it found nothing new to
- * fill the hole with, or saved what there was).
- */
-export function topUpDueIn(mint: string): number | null {
-  if (inFlight.has(mint)) return 0;
-  return nextAt.has(mint) ? null : 0;
-}
-
 /** Tests: a clean slate. */
 export function resetCandleTopUp(): void {
   nextAt.clear();

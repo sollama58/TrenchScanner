@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   awaitsTopUp,
-  backfillShown,
-  etaLabel,
-  gapNote,
   nextPollMs,
   slotGaps,
   candlePollMs,
@@ -182,44 +179,24 @@ describe("the chart's backfill waits", () => {
   const NOW = 1_800_000_000_000;
   const M = 60_000;
 
-  it("reads again soon while the API's top-up may be landing, or just after the ETA", () => {
+  it("reads again soon while the API's top-up may be landing", () => {
     expect(awaitsTopUp([], [], NOW)).toBe(true);
     expect(awaitsTopUp([1], [[NOW - 10 * M, NOW]], NOW)).toBe(true);
     expect(awaitsTopUp([1], [[NOW - 30_000, NOW]], NOW)).toBe(false);
-    expect(nextPollMs(60_000, true, null)).toBe(3_000);
-    expect(nextPollMs(60_000, false, null)).toBe(30_000);
-    expect(nextPollMs(60_000, false, 8_000)).toBe(9_000);
-    expect(nextPollMs(60_000, false, 0)).toBe(3_000);
-    expect(nextPollMs(60_000, false, 600_000)).toBe(30_000);
+    expect(nextPollMs(60_000, true)).toBe(3_000);
+    expect(nextPollMs(60_000, false)).toBe(30_000);
   });
 
-  it("counts the ETA down and fills the bar from the backfill's progress or the wait", () => {
-    const b = { etaMs: 20_000, progress: null, at: NOW, since: NOW - 20_000 };
-    expect(backfillShown(b, NOW + 10_000)).toEqual({ leftMs: 10_000, fill: 0.75 });
-    expect(backfillShown({ ...b, progress: 0.9 }, NOW).fill).toBe(0.9);
-    expect(backfillShown(b, NOW + 60_000)).toEqual({ leftMs: 0, fill: 0.99 });
-    expect(backfillShown({ ...b, etaMs: null }, NOW)).toEqual({ leftMs: null, fill: 0 });
-  });
-
-  it("labels a gap as backfilling with its ETA, or as unrecorded once nothing will fill it", () => {
-    const b = { etaMs: 12_000, progress: 0.5, at: NOW, since: NOW };
-    expect(gapNote(b, NOW)).toEqual({ title: "Backfilling data…", sub: "~12s", fill: 0.5 });
-    expect(gapNote(null, NOW)).toEqual({ title: "No data recorded", sub: null, fill: null });
-    expect(etaLabel(500)).toBe("any moment");
-    expect(etaLabel(150_000)).toBe("~3m");
-    expect(etaLabel(2 * 3_600_000)).toBe("~2h");
-  });
-
-  it("finds the runs of unknown slots, by their edges", () => {
+  it("finds the runs of unknown slots by their edges, and the ones no source had", () => {
     const flat = { o: 1, h: 1, l: 1, c: 1, vol: 0, flat: true };
     const bars = [0, 1, 2, 3, 4].map((i) => ({
       t: i * M,
       ...flat,
       ...(i === 1 || i === 2 || i === 4 ? { unknown: true } : {}),
     }));
-    expect(slotGaps({ tfMs: M, start: 0, bars })).toEqual([
-      { t0: M, t1: 3 * M },
-      { t0: 4 * M, t1: 5 * M },
+    expect(slotGaps({ tfMs: M, start: 0, bars }, [[4 * M, 5 * M]])).toEqual([
+      { t0: M, t1: 3 * M, dead: false },
+      { t0: 4 * M, t1: 5 * M, dead: true },
     ]);
   });
 });

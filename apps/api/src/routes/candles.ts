@@ -3,9 +3,10 @@ import {
   baseSegments,
   chunkSourceSummary,
   createLogger,
-  candleBackfillPerMinute,
   GeckoTerminalClient,
   launchSupplyFactors,
+  poolsOf,
+  PUMP_SUPPLY_TOKENS,
   oldestCandleCover,
   prisma,
   PUMPFUN_LAUNCHPAD,
@@ -15,7 +16,6 @@ import {
   type Env,
   type SeriesInput,
 } from "@trenchscanner/core";
-import { backfillStatus } from "../backfillStatus.js";
 import { TOP_UP_WAIT_MS, topUpNow, wantsTopUp } from "../candleTopUp.js";
 import { allowLookupRead } from "../lookupGate.js";
 import {
@@ -178,17 +178,6 @@ export async function registerCandleRoutes(app: FastifyInstance, opts: { env?: E
             : { priorityPerMinute: 1, backgroundPerMinute: 10 },
         )
       : null;
-  // The worker backfill's pace, for the ETA a waiting chart is shown (backfillStatus.ts).
-  const backfillPace =
-    env && env.CANDLE_STORE
-      ? {
-          stepMs: Math.max(
-            env.COINGECKO_API_KEY ? 1_000 : 3_000,
-            60_000 / Math.max(1, candleBackfillPerMinute(env)),
-          ),
-          maxPages: env.CANDLE_BACKFILL_MAX_PAGES,
-        }
-      : null;
   app.addHook("preHandler", app.authenticateSubscriber);
 
   app.get("/:mintAddress/candles", async (request, reply): Promise<TokenCandlesAnswer | undefined> => {
@@ -247,13 +236,17 @@ export async function registerCandleRoutes(app: FastifyInstance, opts: { env?: E
         answer = await read();
       }
     }
-    // The holes still left: what will fill them, and about when (the chart's backfilling label).
-    if (backfillPace && q.before === null && (answer.bars.length === 0 || (answer.holes?.length ?? 0) > 0)) {
-      const status = await backfillStatus(mintAddress, known.token.launchedAt, {
-        ...backfillPace,
-        topUp: gecko !== null && wantsTopUp(answer),
-      }).catch(() => null);
-      if (status) answer = { ...answer, backfill: status };
+    // The holes left: where the reader's browser reads them itself (GeckoTerminal's free API on its
+    // own connection, the chart's fill: user ask 2026-10-24), with the scale the store keeps them at.
+    const launched = known.token.launchedAt?.getTime() ?? null;
+    const first = answer.bars[0]?.t;
+    const beforeFirst =
+      answer.next === null && launched !== null && first !== undefined && first - launched >= 2 * 60_000;
+    if (answer.bars.length === 0 || (answer.holes?.length ?? 0) > 0 || beforeFirst) {
+      const factor = (await deps.factor(mintAddress).catch(() => undefined)) ?? 1;
+      const pools = poolsOf(mintAddress, known.token);
+      if (pools.length > 0)
+        answer = { ...answer, fill: { pools, scale: PUMP_SUPPLY_TOKENS * (factor > 0 ? factor : 1) } };
     }
     // Chart health (/health charts.candles) counts this route's answers as the legacy /chart's:
     // no bars at all is a null answer; a page whose holes take a good part of its span is partial.

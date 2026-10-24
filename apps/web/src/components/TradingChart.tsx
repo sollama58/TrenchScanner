@@ -87,7 +87,8 @@ import {
   type OverlayState,
   type SlotCandleData,
 } from "./chartPlugins";
-import { gapNote, slotGaps, type Backfilling } from "./chartFeeds";
+import { slotGaps } from "./chartFeeds";
+import { fillLine, type FillState } from "../browserFill";
 import { KolAvatar } from "./KolAvatar";
 
 /** A moment marked on the chart: an alert, a model's call, a filter match, the screen pass, graduation. */
@@ -244,7 +245,7 @@ export function TradingChart({
   candlesMs,
   ticks,
   holes = NO_HOLES,
-  backfill = null,
+  fill = null,
   events,
   flow = [],
   marks: marksIn = NO_MARKS,
@@ -290,10 +291,10 @@ export function TradingChart({
    */
   holes?: readonly (readonly [number, number])[];
   /**
-   * While those stretches are being backfilled (the newest page's `backfill`): each is shaded and
-   * labelled with a bar and an ETA; null once nothing will fill them ("No data recorded").
+   * The browser's reading of those stretches (browserFill.ts): one progress bar top left while it
+   * reads, and the stretches it found nothing for (`dead`) labelled "No data recorded".
    */
-  backfill?: Backfilling | null;
+  fill?: FillState | null;
   events: ChartEvent[];
   /** The scans' 5-minute buy and sell counts: the readout gives the buy share where one covers. */
   flow?: ScanFlow[];
@@ -434,9 +435,8 @@ export function TradingChart({
   // audit 2026-10-22). Not once the slots stop short of the oldest candle (MAX_SLOTS): what came
   // before them couldn't be drawn.
   // The stretches with no data, as runs of unknown slots, for the overlay's shading and label.
-  const gaps = useMemo(() => (slots ? slotGaps(slots) : []), [slots]);
-  const backfillRef = useRef(backfill);
-  backfillRef.current = backfill;
+  const dead = fill?.dead;
+  const gaps = useMemo(() => (slots ? slotGaps(slots, dead) : []), [slots, dead]);
   const olderRef = useRef<{ ask?: () => void; whole: boolean }>({ whole: false });
   olderRef.current = {
     ask: onOlder,
@@ -1013,7 +1013,6 @@ export function TradingChart({
         const sc = barScale(chartRef.current);
         return sc ? sc.x0 + ((t - slots.start) / slots.tfMs - 0.5) * sc.dx : null;
       },
-      gapNote: () => gapNote(backfillRef.current),
       colors: {
         ...colors.overlay,
         eventLead:
@@ -1027,14 +1026,6 @@ export function TradingChart({
     };
     o.update();
   });
-
-  // The backfilling label's ETA counts down and its bar fills between reads.
-  const filling = gaps.length > 0 && backfill !== null;
-  useEffect(() => {
-    if (!filling) return;
-    const id = window.setInterval(() => overlayRef.current?.update(), 1_000);
-    return () => window.clearInterval(id);
-  }, [filling]);
 
   // The readout follows the crosshair; a click or tap places a drawing's point or selects one.
   useEffect(() => {
@@ -1540,6 +1531,7 @@ export function TradingChart({
 
         <div className={`tc-wrap${tool ? " drawing" : ""}`} style={{ height: plotH }}>
           <div className="tc-plot" ref={plotRef} role="img" aria-label={ariaLabel} />
+          {fill && <FillBar fill={fill} top={phone ? 38 : 22} />}
           {cur && (
             <div className="tc-legend num" aria-live="off">
               <span className="faint">
@@ -1547,7 +1539,11 @@ export function TradingChart({
                 {legendSpan ? `–${clock(curTo, fine, false)}` : ""}
               </span>
               {cur.unknown ? (
-                <span className="faint">{backfill ? "Backfilling data…" : "No data recorded"}</span>
+                <span className="faint">
+                  {fill?.dead.some(([a, b]) => a <= curFrom && curFrom < b) || !fill?.doneAt
+                    ? "No data recorded"
+                    : "Backfilling…"}
+                </span>
               ) : cur.flat ? (
                 <span className="faint">
                   No trades · <b>{axisUsd(cur.c)}</b>
@@ -1709,6 +1705,51 @@ function barScale(chart: IChartApi | null): { x0: number; dx: number } | null {
   return a == null || b == null || !(b > a) ? null : { x0: a, dx: b - a };
 }
 
+/**
+ * The chart's one progress bar for its missing minutes, top left (user ask 2026-10-24): the share
+ * of them the browser has read or found empty, and the time left at the pace its reads go out.
+ * Gone once nothing is left to read.
+ */
+function FillBar({ fill, top }: { fill: FillState; top: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  const active = fill.doneAt !== null && fill.totalMs > 0;
+  useEffect(() => {
+    if (!active) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(id);
+  }, [active]);
+  if (!active) return null;
+  const { done, total, leftMs } = fillLine(fill, now);
+  const share = Math.min(1, fill.doneMs / fill.totalMs);
+  return (
+    <div className="tc-fill" style={{ top }} role="status" aria-live="polite">
+      <div className="tc-fill-line">
+        <b>Backfilling missing data</b>
+        <span className="num">
+          {done.toLocaleString()} / {total.toLocaleString()} min
+          {leftMs !== null && ` · ${fillEta(leftMs)}`}
+        </span>
+      </div>
+      <div
+        className="tc-fill-track"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(share * 100)}
+      >
+        <div className="tc-fill-bar" style={{ width: `${Math.max(2, share * 100)}%` }} />
+      </div>
+    </div>
+  );
+}
+
+/** The time left as the bar shows it. */
+function fillEta(ms: number): string {
+  if (ms < 1_000) return "finishing";
+  if (ms < 60_000) return `${Math.ceil(ms / 1_000)}s left`;
+  return `${Math.floor(ms / 60_000)}m ${Math.ceil((ms % 60_000) / 1_000)}s left`;
+}
+
 /** A time (ms) to the plot's x (CSS px): between candles too, and past either end. */
 function toX(chart: IChartApi | null, slots: Slots, t: number, closeAtEnd = false): number | null {
   const s = barScale(chart);
@@ -1846,7 +1887,6 @@ function emptyOverlay(): OverlayState {
     colors: null,
     gaps: [],
     edgeX: () => null,
-    gapNote: () => ({ title: "", sub: null, fill: null }),
   };
 }
 
@@ -1911,7 +1951,8 @@ function readColors(el: HTMLElement) {
     dex: v("--series-3", "#199e70"),
     gap: hexA(v("--warn", "#fab219"), 0.08),
     gapEdge: hexA(v("--warn", "#fab219"), 0.55),
-    gapBar: v("--warn", "#fab219"),
+    gapDead: hexA(muted, 0.1),
+    gapDeadEdge: hexA(muted, 0.5),
     wk,
     draw: {
       trend: v("--series-1", "#3987e5"),

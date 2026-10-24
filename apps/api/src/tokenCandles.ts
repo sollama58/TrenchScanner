@@ -7,7 +7,6 @@ import {
   type SeriesInput,
   type StoredBar,
 } from "@trenchscanner/core";
-import type { BackfillStatus } from "./backfillStatus.js";
 
 /**
  * GET /tokens/:mint/candles (charts audit 2026-10-22 target design): one timeframe's bars for a
@@ -72,11 +71,11 @@ export interface TokenCandlesAnswer {
    */
   holes?: [number, number][];
   /**
-   * The newest page only, when it has holes something will still fill (backfillStatus.ts): about
-   * when, and how far the coin's backfill has got. Absent once nothing will: a hole left then is
-   * one no source had.
+   * With holes (or no bars): the coin's pools, in the backfill's order (core's poolsOf), and the
+   * market cap per USD of price the store keeps its bars at, for the reader's browser to read the
+   * holes' GeckoTerminal minutes itself (the chart's fill, apps/web browserFill.ts).
    */
-  backfill?: BackfillStatus;
+  fill?: { pools: string[]; scale: number };
 }
 
 /** A trailing hole shorter than this is the live edge between reads, not a stretch nobody read. */
