@@ -59,6 +59,41 @@ describe("flowsFromTransactions", () => {
     expect(flows.toMs).toBe(1_700_000_100_000);
   });
 
+  it("names the wallet behind a token account, never the account itself", () => {
+    // SOL sent as wrapped SOL into the friend's WSOL account ("acct"), which a check by address
+    // alone would take for a wallet; and rent for a new coin account ("rent") on the side.
+    const t = {
+      blockTime: 1_700_000_000,
+      meta: {
+        err: null,
+        fee: 5000,
+        preBalances: [5 * SOL, 0.00204 * SOL, 0],
+        postBalances: [(5 - 1 - 0.0204 - 0.000005) * SOL, 1.00204 * SOL, 0.0204 * SOL],
+        preTokenBalances: [
+          { accountIndex: 1, owner: "friend", mint: WSOL_MINT, uiTokenAmount: { amount: "0", decimals: 9 } },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 1,
+            owner: "friend",
+            mint: WSOL_MINT,
+            uiTokenAmount: { amount: String(SOL), decimals: 9 },
+          },
+          { accountIndex: 2, owner: "other", mint: COIN, uiTokenAmount: { amount: "0", decimals: 6 } },
+        ],
+      },
+      transaction: { message: { accountKeys: [ME, "acct", "rent"] } },
+    } as unknown as ChainTx;
+    const flows = flowsFromTransactions(ME, [t], isWallet);
+    const who = flows.transfers.map((f) => f.counterparty);
+    expect(who).not.toContain("acct");
+    expect(who).not.toContain("rent");
+    expect(flows.transfers).toEqual([
+      expect.objectContaining({ counterparty: "friend", dir: "out", mint: null, count: 1 }),
+    ]);
+    expect(flows.transfers[0]!.amount).toBeCloseTo(1, 6);
+  });
+
   it("reads a coin transfer, with rent paid for the new account", () => {
     const t = tx({
       keys: [ME, "fresh"],

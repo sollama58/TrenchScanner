@@ -101,6 +101,39 @@ function solDeltas(tx: ChainTx, keys: readonly string[]): Map<string, number> {
   return out;
 }
 
+/** The keys that are token accounts in this transaction: every account with a token balance. */
+function tokenAccounts(tx: ChainTx, keys: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (const list of [tx.meta?.preTokenBalances, tx.meta?.postTokenBalances]) {
+    for (const b of (list ?? []) as { accountIndex?: number }[]) {
+      const key = typeof b.accountIndex === "number" ? keys[b.accountIndex] : undefined;
+      if (key) out.add(key);
+    }
+  }
+  return out;
+}
+
+/**
+ * SOL moves by wallet, not by account (user ask 2026-10-24: wallets on the map, never token
+ * accounts): a token account's lamports are rent, or wrapped SOL that belongs to its owner. Token
+ * accounts are dropped, and every other owner's wrapped-SOL change is counted as that owner's SOL
+ * (the reading wallet's own is added where it is read, as mySol).
+ */
+function walletSol(
+  sol: Map<string, number>,
+  accounts: ReadonlySet<string>,
+  tokens: Map<string, Map<string, number>>,
+  wallet: string,
+): Map<string, number> {
+  const out = new Map([...sol].filter(([key]) => !accounts.has(key)));
+  for (const [owner, byMint] of tokens) {
+    const wsol = byMint.get(WSOL_MINT);
+    if (owner === wallet || !wsol) continue;
+    out.set(owner, (out.get(owner) ?? 0) + wsol);
+  }
+  return out;
+}
+
 /** The other side of a move: wallets whose balance went the opposite way, largest first. */
 function counterparties(
   deltas: Iterable<[string, number]>,
@@ -168,8 +201,8 @@ export function flowsFromTransactions(
       toMs = toMs === null ? at : Math.max(toMs, at);
     }
     const keys = keysOf(tx);
-    const sol = solDeltas(tx, keys);
     const tokens = tokenDeltas(tx);
+    const sol = walletSol(solDeltas(tx, keys), tokenAccounts(tx, keys), tokens, wallet);
     const mine = tokens.get(wallet) ?? new Map<string, number>();
     // Wrapped SOL is SOL: a swap through the wallet's WSOL account moves it there instead.
     const mySol = (sol.get(wallet) ?? 0) + (mine.get(WSOL_MINT) ?? 0);

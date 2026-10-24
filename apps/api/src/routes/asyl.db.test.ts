@@ -1,15 +1,24 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadEnv, prisma, type Env } from "@trenchscanner/core";
+import { isWalletAddress, loadEnv, prisma, type Env } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
 import { resetTrackedCache } from "../trackedWallets.js";
 
-/** A valid base58 address from a readable prefix (no 0, O, I or l). */
-const addr = (prefix: string) => prefix + "1".repeat(43 - prefix.length);
+/**
+ * A wallet address from a readable prefix (no 0, O, I or l): the first fill that lands on the
+ * curve, since the maps keep only addresses someone can hold a key for.
+ */
+const addr = (prefix: string) => {
+  for (const c of "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz") {
+    const a = prefix + c.repeat(43 - prefix.length);
+    if (isWalletAddress(a)) return a;
+  }
+  throw new Error(`no wallet address for ${prefix}`);
+};
 const ADMIN = addr("AsyAdmin");
 const PLAIN = addr("AsyGuest");
 const FUNDER = addr("AsyFunder");
