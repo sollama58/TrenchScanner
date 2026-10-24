@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { HttpError, prisma, type MinuteCandle } from "@trenchscanner/core";
 import {
   enrolPeakWatches,
+  PEAK_DUST_VOLUME_USD,
   PEAK_WATCH_PARKED_AT,
   resetPeakWatchEnrolment,
   runCandlePeaksJob,
@@ -437,12 +438,18 @@ describe.skipIf(!dbAvailable)("runCandlePeaksJob", () => {
 describe("tradedSince", () => {
   const reading = { mintAddress: "M", priceUsd: 1, marketCapUsd: 1 };
   it("judges the idle time on the smallest DexScreener window that covers it", () => {
-    const t = { ...reading, volume5mUsd: 0, volume1hUsd: 10, volume24hUsd: 100 };
+    const t = { ...reading, volume5mUsd: 0, volume1hUsd: 250, volume24hUsd: 1000 };
     expect(tradedSince(t, 4 * MIN)).toBe(false);
     expect(tradedSince(t, 30 * MIN)).toBe(true);
     expect(tradedSince({ ...t, volume1hUsd: 0 }, 30 * MIN)).toBe(false);
     expect(tradedSince({ ...t, volume24hUsd: 0 }, 13 * HOUR)).toBe(false);
     expect(tradedSince(t, 3 * 24 * HOUR)).toBe(true);
+  });
+
+  it("counts dust as quiet, from PEAK_DUST_VOLUME_USD up as traded", () => {
+    const t = { ...reading, volume1hUsd: PEAK_DUST_VOLUME_USD - 1 };
+    expect(tradedSince(t, 30 * MIN)).toBe(false);
+    expect(tradedSince({ ...t, volume1hUsd: PEAK_DUST_VOLUME_USD }, 30 * MIN)).toBe(true);
   });
 
   it("can't say without the window's figure, so the coin is read", () => {

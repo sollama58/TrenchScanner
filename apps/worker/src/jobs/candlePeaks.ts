@@ -155,11 +155,19 @@ export interface PeakTriage {
 }
 
 /**
+ * The volume, in dollars, below which a coin's trading since its last read counts as dust: a
+ * stray buy or two that can't have moved it to a new peak worth a paid candle read. Such a coin
+ * is deferred like a quiet one (X's call of 2026-10-24, over reading every coin with any volume,
+ * which left the backlog clearing at two coins a minute).
+ */
+export const PEAK_DUST_VOLUME_USD = 100;
+
+/**
  * Exported for tests. Whether a coin last read `idleMs` ago has traded since, by DexScreener's
  * reading of it: its volume over the smallest window that covers the idle time (5 minutes, an
- * hour, a day). Null when the reading has no such figure, so the coin is read as before. A coin
- * idle longer than a day is judged on its last day alone: a trade before that and none since is
- * missed, once (the catch-up of 2026-10-24).
+ * hour, a day), at least PEAK_DUST_VOLUME_USD of it. Null when the reading has no such figure,
+ * so the coin is read as before. A coin idle longer than a day is judged on its last day alone:
+ * a trade before that and none since is missed, once (the catch-up of 2026-10-24).
  */
 export function tradedSince(token: CandidateToken, idleMs: number): boolean | null {
   const volume =
@@ -169,7 +177,7 @@ export function tradedSince(token: CandidateToken, idleMs: number): boolean | nu
         ? token.volume1hUsd
         : token.volume24hUsd;
   if (volume === undefined || !Number.isFinite(volume)) return null;
-  return volume > 0;
+  return volume >= PEAK_DUST_VOLUME_USD;
 }
 
 const MINUTE_MS = 60_000;
