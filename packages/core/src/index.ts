@@ -49,6 +49,7 @@ export * from "./wallets/liveFlags.js";
 export * from "./wallets/walletScore.js";
 export * from "./wallets/winnerFollow.js";
 export * from "./wallets/walletFlows.js";
+export * from "./wallets/deployer.js";
 export * from "./datasources/tokensage.js";
 
 export * from "./discovery/refreshCandidates.js";

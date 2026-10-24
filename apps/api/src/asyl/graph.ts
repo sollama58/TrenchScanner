@@ -27,7 +27,7 @@ import type { AsylEdge, AsylGraph, AsylNode, AsylTag } from "./types.js";
  *   COTRADE_WINDOW_MS of this wallet's, on COTRADE_MIN_SHARED coins or more.
  * - side: KolWallet.mainWallet (Known Sides), KolPossibleSide, and the reader's own labels'
  *   sides (TrackedWalletSide).
- * - created / traded / holds: Token.creator, TokenWalletActivity, BubbleMapHolders and the scans'
+ * - created / traded / holds: each coin's deployer (loadDeployers),  TokenWalletActivity, BubbleMapHolders and the scans'
  *   holder lists.
  */
 
@@ -125,6 +125,7 @@ function fundedEdge(
     label: ["Funded", fmtSol(f.amountSol), fmtDay(f.fundedAt)].filter(Boolean).join(" · "),
     source: "stored",
     at: f.fundedAt?.toISOString() ?? null,
+    sol: f.amountSol,
   });
 }
 
@@ -143,6 +144,7 @@ function transferEdge(
     source: "stored",
     mint,
     at: t.last.toISOString(),
+    pct: t.pct,
   });
 }
 
@@ -238,7 +240,8 @@ export async function addCoins(g: GraphBuilder, wallet: string): Promise<number>
       take: COINS_MAX,
     }),
     prisma.token.findMany({
-      where: { creator: wallet },
+      // Its own launches: a known deployer wins over a creator a takeover may have moved.
+      where: { OR: [{ deployer: wallet }, { deployer: null, creator: wallet }] },
       select: { mintAddress: true, launchedAt: true, firstSeenAt: true },
       orderBy: { firstSeenAt: "desc" },
       take: COINS_MAX,
@@ -297,6 +300,7 @@ function tradedEdge(g: GraphBuilder, wallet: string, mint: string, t: TradeRow):
     source: "stored",
     mint,
     at: t.firstBuyAt?.toISOString() ?? null,
+    sol: Math.max(t.solIn, t.solOut),
   });
 }
 
@@ -487,6 +491,7 @@ export async function addHolders(
       label: `Holds ${fmtPct(h.pct)}`,
       source,
       mint,
+      pct: h.pct,
     });
   }
   const wallets = holders.map((h) => h.wallet);
@@ -515,6 +520,46 @@ export async function addHolders(
     for (const p of paid) fundedEdge(g, funder, p.wallet, p);
   }
   for (const t of transfers) transferEdge(g, t, mint);
+}
+
+export interface KnownDeployer {
+  wallet: string;
+  /** Read off the coin's create transaction (Token.deployer, or the trade tape's launch read). */
+  verified: boolean;
+  at: Date | null;
+}
+
+/**
+ * Each coin's deployer, as best the tables know it (user bug report 2026-10-24: Pump.fun's
+ * `creator` follows a community takeover's fee wallet). First the create transaction's signer
+ * (Token.deployer, from Asyl's chain read), then the trade tape's launch read, which is the same
+ * transaction; else `Token.creator`, unverified. Only wallets: never a token or program account.
+ */
+export async function loadDeployers(mints: readonly string[]): Promise<Map<string, KnownDeployer>> {
+  const out = new Map<string, KnownDeployer>();
+  if (mints.length === 0) return out;
+  const rows = await prisma.token.findMany({
+    where: { mintAddress: { in: [...mints] } },
+    select: {
+      mintAddress: true,
+      deployer: true,
+      creator: true,
+      launchedAt: true,
+      firstSeenAt: true,
+      tradeTape: { select: { creator: true } },
+    },
+  });
+  for (const r of rows) {
+    const at = r.launchedAt ?? r.firstSeenAt;
+    const tape = r.tradeTape?.creator;
+    if (r.deployer && isWalletAddress(r.deployer))
+      out.set(r.mintAddress, { wallet: r.deployer, verified: true, at });
+    else if (tape && tape !== r.mintAddress && isWalletAddress(tape))
+      out.set(r.mintAddress, { wallet: tape, verified: true, at });
+    else if (r.creator && isWalletAddress(r.creator))
+      out.set(r.mintAddress, { wallet: r.creator, verified: false, at });
+  }
+  return out;
 }
 
 /** Wallets and coins a "links among" read takes: a full map's worth. */
@@ -560,20 +605,21 @@ export async function addLinksAmong(
     tokens.length
       ? prisma.token.findMany({
           where: { mintAddress: { in: [...tokens] } },
-          select: { id: true, mintAddress: true, creator: true, launchedAt: true, firstSeenAt: true },
+          select: { id: true, mintAddress: true },
         })
       : Promise.resolve([]),
   ]);
+  const deployers = await loadDeployers(coins.map((c) => c.mintAddress));
   for (const f of funders) if (f.funder) fundedEdge(g, f.funder, f.wallet, f);
   for (const t of transfers) {
     g.node(t.mintAddress, "token");
     transferEdge(g, t, t.mintAddress);
   }
   const onMap = new Set(wallets);
-  for (const c of coins) {
-    if (!c.creator || !(onMap.has(c.creator) || opts.deployers)) continue;
-    g.node(c.creator, "wallet");
-    deployedEdge(g, c.creator, c.mintAddress, c.launchedAt ?? c.firstSeenAt);
+  for (const [mint, d] of deployers) {
+    if (!onMap.has(d.wallet) && !opts.deployers) continue;
+    g.node(d.wallet, "wallet");
+    deployedEdge(g, d.wallet, mint, d.at);
   }
   if (wallets.length === 0 || coins.length === 0) return;
   const trades = await prisma.tokenWalletActivity.findMany({
@@ -661,7 +707,6 @@ export async function decorate(g: GraphBuilder, tracked: readonly TrackedWallet[
             liveMarketCapUsd: true,
             lastMcapUsd: true,
             launchedAt: true,
-            creator: true,
             peakWatch: { select: { athMcapUsd: true } },
           },
         })
@@ -670,7 +715,8 @@ export async function decorate(g: GraphBuilder, tracked: readonly TrackedWallet[
   const named = withTrackedNames(names as Record<string, WalletName>, tracked, wallets);
   const riskOf = new Map(risks.map((r) => [r.wallet, r]));
   const devSet = new Set(devs.map((d) => d.wallet));
-  const creators = new Set(coins.flatMap((c) => (c.creator ? [c.creator] : [])));
+  const deployers = await loadDeployers(tokens);
+  const creators = new Set([...deployers.values()].map((d) => d.wallet));
   const botSet = new Set([...bots.map((b) => b.wallet), ...wallets.filter((w) => MARKED_BOT_WALLETS.has(w))]);
   const farmSet = new Set(farms.map((f) => f.funder));
   for (const w of wallets) {
@@ -704,7 +750,9 @@ export async function decorate(g: GraphBuilder, tracked: readonly TrackedWallet[
     n.mcapUsd = c.liveMarketCapUsd ?? c.lastMcapUsd;
     n.athUsd = c.peakWatch?.athMcapUsd ?? null;
     n.launchedAt = c.launchedAt?.toISOString() ?? null;
-    n.deployer = c.creator;
+    const d = deployers.get(c.mintAddress);
+    n.deployer = d?.wallet ?? null;
+    n.deployerVerified = d ? d.verified : null;
   }
   return g.graph();
 }

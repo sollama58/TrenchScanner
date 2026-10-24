@@ -11,7 +11,7 @@ import {
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
 import { oneAtATime, readAllowance, recordSpend, type Allowance } from "./credits.js";
-import { GraphBuilder } from "./graph.js";
+import { GraphBuilder, type KnownDeployer } from "./graph.js";
 
 /**
  * Asyl's chain reads, Pro Mode only (user decision 2026-10-24): what TrenchScanner's own tables
@@ -37,6 +37,8 @@ export const TOKEN_READ_TTL_MS = 10 * 60_000;
 export const FLOW_WORST = FLOW_PAGES * 10;
 export const FUNDER_WORST = 11;
 export const TOKEN_WORST = 10 + CHAIN_HOLDER_FUNDERS * 4;
+/** A deployer read: one page of the mint's oldest transactions. */
+export const DEPLOYER_WORST = 10;
 
 export type ChainRefusal =
   | { refused: "not-pro" }
@@ -233,6 +235,7 @@ export function addFlows(g: GraphBuilder, flows: WalletFlows): void {
       source: "chain",
       mint: t.mint,
       at: t.lastAt === null ? null : new Date(t.lastAt).toISOString(),
+      ...(t.mint ? { tokens: t.amount } : { sol: t.amount }),
     });
   }
   for (const t of flows.trades) {
@@ -250,6 +253,29 @@ export function addFlows(g: GraphBuilder, flows: WalletFlows): void {
       source: "chain",
       mint: t.mint,
       at: t.lastAt === null ? null : new Date(t.lastAt).toISOString(),
+      sol: Math.max(t.solIn, t.solOut),
     });
   }
+}
+
+/**
+ * A coin's deployer from the chain: the signer of its create transaction (core's
+ * deployerFromTransactions), kept in Token.deployer so every later look, by anyone, is free.
+ * Null value: the chain answered, and named no wallet.
+ */
+export function readDeployer(
+  env: Env,
+  helius: Pick<HeliusClient, "getMintDeployersBatch">,
+  userId: string,
+  mint: string,
+): Promise<Chained<KnownDeployer | null>> {
+  return metered(env, userId, DEPLOYER_WORST, async () => {
+    const r = (await helius.getMintDeployersBatch([mint])).get(mint);
+    if (!r || r.status === "failed" || r.status === "unsupported") return null;
+    if (r.status === "none") return { value: null, cached: false };
+    await prisma.token
+      .updateMany({ where: { mintAddress: mint }, data: { deployer: r.deployer } })
+      .catch(() => undefined);
+    return { value: { wallet: r.deployer, verified: true, at: r.at }, cached: false };
+  });
 }

@@ -5,11 +5,13 @@ import { ShareImageDialog } from "../components/ShareImageDialog";
 import { asylApi, type AsylMe, type ChainRead, type Label, type MapDoc, type MapSummary } from "./asylApi";
 import { renderMapCard } from "./asylCard";
 import { AsylSignIn } from "./AsylSignIn";
-import { GraphView, LinkSwatch, MapLegend, type GraphViewHandle } from "./GraphView";
+import { GraphView, MapLegend, type GraphViewHandle } from "./GraphView";
 import {
   EDGE_KINDS,
   EDGE_LABEL,
+  NO_CUTOFFS,
   addressIn,
+  clearsCutoffs,
   edgeKey,
   graphCsv,
   mergeGraph,
@@ -21,8 +23,10 @@ import {
   type AsylEdgeKind,
   type AsylGraph,
   type AsylNode,
+  type Cutoffs,
 } from "./graph";
 import { Inspector, type InspectorActions } from "./Inspector";
+import { LinkFilters } from "./LinkFilters";
 import { newLayout } from "./layout";
 import { basePath, parseRoute, routePath, sharedLink, type AsylRoute } from "./route";
 
@@ -66,6 +70,28 @@ const KEYS: [string, string][] = [
   ["?", "Show or hide these keys"],
 ];
 
+/** The amount sliders are the reader's own: kept in this browser between maps. */
+const CUTOFFS_KEY = "asyl:cutoffs";
+
+function storedCutoffs(): Cutoffs {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CUTOFFS_KEY) ?? "null") as Partial<Cutoffs> | null;
+    if (!raw || typeof raw !== "object") return NO_CUTOFFS;
+    const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
+    return { sol: n(raw.sol), usd: n(raw.usd), tokens: n(raw.tokens), pct: n(raw.pct) };
+  } catch {
+    return NO_CUTOFFS;
+  }
+}
+
+type RailTab = "map" | "links" | "maps" | "labels";
+const RAIL_TABS: { id: RailTab; label: string }[] = [
+  { id: "map", label: "Map" },
+  { id: "links", label: "Links" },
+  { id: "maps", label: "Saved" },
+  { id: "labels", label: "Labels" },
+];
+
 const typing = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
 
@@ -77,6 +103,8 @@ export function AsylApp() {
   const [focus, setFocus] = useState<string | null>(null);
   const [hiddenKinds, setHiddenKinds] = useState<Set<AsylEdgeKind>>(new Set());
   const [removed, setRemoved] = useState<Set<string>>(new Set());
+  const [cut, setCut] = useState<Set<string>>(new Set());
+  const [cutoffs, setCutoffsState] = useState<Cutoffs>(storedCutoffs);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [mapNote, setMapNote] = useState("");
   const [current, setCurrent] = useState<MapSummary | null>(null);
@@ -87,7 +115,7 @@ export function AsylApp() {
   const [query, setQuery] = useState("");
   const [labels, setLabels] = useState<Label[]>([]);
   const [maps, setMaps] = useState<MapSummary[]>([]);
-  const [rail, setRail] = useState<"maps" | "labels" | "legend">("legend");
+  const [rail, setRail] = useState<RailTab>("map");
   const [railOpen, setRailOpen] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [keysOpen, setKeysOpen] = useState(false);
@@ -97,6 +125,16 @@ export function AsylApp() {
   const started = useRef(false);
 
   const me = typeof session === "object" ? session : null;
+  const solUsd = me?.solUsd ?? null;
+
+  const setCutoffs = useCallback((c: Cutoffs) => {
+    setCutoffsState(c);
+    try {
+      localStorage.setItem(CUTOFFS_KEY, JSON.stringify(c));
+    } catch {
+      // Storage blocked: the sliders hold for this visit.
+    }
+  }, []);
 
   const loadMe = useCallback(() => {
     asylApi
@@ -217,6 +255,8 @@ export function AsylApp() {
         setNotes(m.doc.notes);
         setMapNote(m.doc.note);
         setRemoved(new Set(m.doc.removed ?? []));
+        setCut(new Set(m.doc.cut ?? []));
+        if (m.doc.cutoffs) setCutoffs(m.doc.cutoffs);
         setHiddenKinds(new Set(EDGE_KINDS.filter((k) => m.doc.hidden.includes(k))));
         setFocus(m.doc.focus);
         setSelected(null);
@@ -225,7 +265,7 @@ export function AsylApp() {
         setDirty(false);
         go({ kind: "map", id });
       }),
-    [run],
+    [run, setCutoffs],
   );
 
   // The address the page was opened on, once signed in.
@@ -250,6 +290,7 @@ export function AsylApp() {
     setNotes({});
     setMapNote("");
     setRemoved(new Set());
+    setCut(new Set());
     setFocus(null);
     setSelected(null);
     setCurrent(null);
@@ -276,9 +317,12 @@ export function AsylApp() {
       const fresh = r.graph.edges.filter((e) => !known.has(edgeKey(e)));
       add(r.graph);
       const off = [...new Set(fresh.map((e) => e.kind))].filter((k) => hiddenKinds.has(k));
-      const offNote = off.length
-        ? ` Some are ${off.map((k) => EDGE_LABEL[k]).join(", ")}, switched off in Links.`
-        : "";
+      const small = fresh.filter(
+        (e) => !hiddenKinds.has(e.kind) && !clearsCutoffs(e, cutoffs, solUsd),
+      ).length;
+      const offNote =
+        (off.length ? ` Some are ${off.map((k) => EDGE_LABEL[k]).join(", ")}, switched off in Links.` : "") +
+        (small ? ` ${small} under your amount cutoffs ${small === 1 ? "is" : "are"} hidden.` : "");
       if (deployers) {
         const devs = new Set(fresh.filter((e) => e.kind === "created").map((e) => e.a));
         return devs.size
@@ -309,6 +353,8 @@ export function AsylApp() {
       note: mapNote,
       hidden: [...hiddenKinds],
       removed: [...removed].filter((id) => graph.nodes.some((n) => n.id === id)),
+      cut: [...cut].filter((k) => graph.edges.some((e) => edgeKey(e) === k)),
+      cutoffs,
       focus,
     };
   };
@@ -405,7 +451,25 @@ export function AsylApp() {
       setSelected(null);
       setDirty(true);
     },
-    deployers: (mints) => void linksAmong(undefined, mints, true),
+    showDeployer: (mint) =>
+      void run("Finding who deployed it…", async () => {
+        const r = await asylApi.deployer(mint);
+        add(r.graph);
+        if (r.allowance) {
+          const allowance = r.allowance;
+          setSession((s) => (typeof s === "object" ? { ...s, chain: allowance } : s));
+        }
+        if (!r.deployer) return "Neither TrenchScanner nor the chain names a wallet that deployed it.";
+        setSelected(r.deployer.wallet);
+        const spent = r.credits ? ` Read from the chain: ${r.credits} credits.` : "";
+        return r.deployer.verified
+          ? `Deployed by ${shortAddr(r.deployer.wallet)}, the wallet that signed its create transaction.${spent}`
+          : `${shortAddr(r.deployer.wallet)} is the creator TrenchScanner was told, unconfirmed: a community takeover can move it.${session !== "loading" && typeof session === "object" && session.pro ? "" : " Pro Mode confirms it from the chain."}`;
+      }),
+    cutLink: (key) => {
+      setCut((s) => new Set(s).add(key));
+      setDirty(true);
+    },
     select: (id) => setSelected(id),
     saveLabel: async (wallet, name, kol) => {
       const r = await asylApi.saveLabel(wallet, name, kol);
@@ -438,16 +502,14 @@ export function AsylApp() {
   };
 
   const keep = useMemo(() => new Set([focus, selected].filter((x): x is string => !!x)), [focus, selected]);
-  const shown = useMemo(() => visibleGraph(kept, hiddenKinds, keep), [kept, hiddenKinds, keep]);
+  const shown = useMemo(
+    () => visibleGraph(kept, hiddenKinds, keep, { cut, cutoffs, solUsd }),
+    [kept, hiddenKinds, keep, cut, cutoffs, solUsd],
+  );
+  // The inspector lists the links drawn, so one hidden by a slider or by hand isn't listed.
+  const inspected = useMemo(() => ({ nodes: kept.nodes, edges: shown.edges }), [kept, shown]);
   const layoutKey = `${shown.nodes.length}:${shown.edges.length}:${shown.nodes.at(-1)?.id ?? ""}`;
   const selectedNode = selected ? (kept.nodes.find((n) => n.id === selected) ?? null) : null;
-  const unfunded = useMemo(() => {
-    const funded = new Set(kept.edges.filter((e) => e.kind === "funded").map((e) => e.b));
-    return kept.nodes
-      .filter((n) => n.kind === "wallet" && !funded.has(n.id) && !n.tags.includes("exchange"))
-      .map((n) => n.id)
-      .slice(0, 20);
-  }, [kept]);
   // Taken off the map, newest first, with what the map knows of each.
   const hiddenNodes = useMemo(() => {
     const byId = new Map(graph.nodes.map((n) => [n.id, n]));
@@ -515,7 +577,7 @@ export function AsylApp() {
         return;
       }
       case "h":
-        setRail("legend");
+        setRail("map");
         setRailOpen(true);
         return;
       case "n": {
@@ -650,74 +712,98 @@ export function AsylApp() {
       <div className="asyl-body">
         <nav className={`asyl-rail${railOpen ? " open" : ""}`} aria-label="Maps, labels and legend">
           <div className="asyl-rail-tabs" role="tablist">
-            {(["legend", "maps", "labels"] as const).map((t) => (
+            {RAIL_TABS.map((t) => (
               <button
-                key={t}
+                key={t.id}
                 role="tab"
-                aria-selected={rail === t}
-                className={rail === t ? "on" : ""}
-                onClick={() => setRail(t)}
+                aria-selected={rail === t.id}
+                className={rail === t.id ? "on" : ""}
+                onClick={() => setRail(t.id)}
               >
-                {t === "legend" ? "Map" : t === "maps" ? "Saved" : "Labels"}
+                {t.label}
+                {t.id === "links" && (cut.size > 0 || Object.values(cutoffs).some((v) => v > 0)) && (
+                  <span className="asyl-tab-dot" aria-label="filters on" />
+                )}
               </button>
             ))}
           </div>
-          {rail === "legend" && (
+          {rail === "links" && (
             <div className="asyl-rail-body">
-              <input
-                className="asyl-input asyl-title-input"
-                value={title}
-                maxLength={80}
-                onChange={(e) => {
-                  setTitle(e.target.value);
+              <LinkFilters
+                graph={kept}
+                hiddenKinds={hiddenKinds}
+                onToggleKind={(k) =>
+                  setHiddenKinds((s) => {
+                    const n = new Set(s);
+                    if (n.has(k)) n.delete(k);
+                    else n.add(k);
+                    return n;
+                  })
+                }
+                cutoffs={cutoffs}
+                onCutoffs={setCutoffs}
+                solUsd={solUsd}
+                cut={cut}
+                onRestore={(keys) => {
+                  setCut((s) => new Set([...s].filter((k) => !keys.includes(k))));
                   setDirty(true);
                 }}
-                aria-label="Map title"
               />
-              <textarea
-                className="asyl-input asyl-note"
-                rows={3}
-                maxLength={2000}
-                value={mapNote}
-                placeholder="Notes on this map"
-                onChange={(e) => {
-                  setMapNote(e.target.value);
-                  setDirty(true);
-                }}
-              />
-              <h3>Links</h3>
-              <ul className="asyl-legend">
-                {EDGE_KINDS.map((k) => {
-                  const count = graph.edges.filter((e) => e.kind === k).length;
-                  return (
-                    <li key={k}>
-                      <label className={hiddenKinds.has(k) ? "off" : ""}>
-                        <input
-                          type="checkbox"
-                          checked={!hiddenKinds.has(k)}
-                          onChange={() =>
-                            setHiddenKinds((s) => {
-                              const n = new Set(s);
-                              if (n.has(k)) n.delete(k);
-                              else n.add(k);
-                              return n;
-                            })
-                          }
-                        />
-                        <LinkSwatch kind={k} />
-                        {EDGE_LABEL[k]} <span className="asyl-muted">{count || ""}</span>
-                      </label>
-                    </li>
-                  );
-                })}
-              </ul>
-              <p className="asyl-muted asyl-small">
-                Lines with a ringed dot come from the chain; the rest from TrenchScanner&apos;s reads of the
-                last 30 days. Colours group wallets tied by funding or transfers. Rings: white your label,
-                gold KOL, red risky, green winner. A yellow D marks a deployer.
-              </p>
+            </div>
+          )}
+          {rail === "map" && (
+            <div className="asyl-rail-body">
+              <section className="asyl-rail-card">
+                <h3>This map</h3>
+                <input
+                  className="asyl-input asyl-title-input"
+                  value={title}
+                  maxLength={80}
+                  onChange={(e) => {
+                    setTitle(e.target.value);
+                    setDirty(true);
+                  }}
+                  aria-label="Map title"
+                />
+                <textarea
+                  className="asyl-input asyl-note"
+                  rows={3}
+                  maxLength={2000}
+                  value={mapNote}
+                  placeholder="Notes on this map"
+                  onChange={(e) => {
+                    setMapNote(e.target.value);
+                    setDirty(true);
+                  }}
+                />
+                <div className="asyl-stats">
+                  <span>
+                    <b>{shown.nodes.filter((n) => n.kind === "wallet").length}</b> wallets
+                  </span>
+                  <span>
+                    <b>{shown.nodes.filter((n) => n.kind === "token").length}</b> coins
+                  </span>
+                  <span>
+                    <b>{shown.edges.length}</b> links
+                  </span>
+                </div>
+                {kept.edges.length > shown.edges.length && (
+                  <button className="asyl-link asyl-small" onClick={() => setRail("links")}>
+                    {kept.edges.length - shown.edges.length} links filtered out · Links
+                  </button>
+                )}
+              </section>
+              <section className="asyl-rail-card">
+                <h3>Reading the map</h3>
+                <p className="asyl-muted asyl-small">
+                  Lines with a ringed dot come from the chain; the rest from TrenchScanner&apos;s reads of the
+                  last 30 days. Colours group wallets tied by funding or transfers. Rings: white your label,
+                  gold KOL, red risky, green winner. A gold D marks a deployer. Drag a bubble and the wallets
+                  hanging off it come along; hold Shift to move it alone.
+                </p>
+              </section>
               {hiddenNodes.length > 0 && (
-                <>
+                <section className="asyl-rail-card">
                   <h3>Taken off ({hiddenNodes.length})</h3>
                   <ul className="asyl-hidden-list">
                     {hiddenNodes.map((n) => (
@@ -753,7 +839,7 @@ export function AsylApp() {
                       Bring back all
                     </button>
                   </div>
-                </>
+                </section>
               )}
             </div>
           )}
@@ -904,16 +990,6 @@ export function AsylApp() {
             >
               ⌨
             </button>
-            {session.pro && unfunded.length > 0 && (
-              <button
-                className="asyl-btn ghost chain"
-                disabled={!!busy || (chain?.left ?? 0) <= 0}
-                title={`Looks up who funded up to ${unfunded.length} wallets on the map with no funder yet (up to ${unfunded.length * 11} credits).`}
-                onClick={() => actions.funders(unfunded)}
-              >
-                Find funders ({unfunded.length})
-              </button>
-            )}
           </div>
 
           {graph.nodes.length === 0 ? (
@@ -981,7 +1057,7 @@ export function AsylApp() {
         {selectedNode && (
           <Inspector
             node={selectedNode}
-            graph={kept}
+            graph={inspected}
             me={session}
             busy={busy}
             note={notes[selectedNode.id] ?? ""}

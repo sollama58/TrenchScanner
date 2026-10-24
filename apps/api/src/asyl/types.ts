@@ -48,6 +48,8 @@ export interface AsylNode {
   launchedAt?: string | null;
   /** Coins: the wallet that deployed it (Token.creator), when TrenchScanner knows it. */
   deployer?: string | null;
+  /** Whether `deployer` was read off the create transaction (else it is Pump.fun's or RugCheck's `creator`, which a takeover can move). */
+  deployerVerified?: boolean | null;
 }
 
 /**
@@ -72,6 +74,12 @@ export interface AsylEdge {
   /** A coin edge's coin, or a transfer's coin (null for SOL). */
   mint?: string | null;
   at?: string | null;
+  /** SOL paid, moved or traded, when the link is money; the map's amount sliders read these. */
+  sol?: number | null;
+  /** Coins moved, for a coin transfer read from the chain. */
+  tokens?: number | null;
+  /** % of the coin's supply held or moved. */
+  pct?: number | null;
 }
 
 export interface AsylGraph {

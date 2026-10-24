@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   addressIn,
+  NO_CUTOFFS,
+  clearsCutoffs,
   clusterOf,
+  edgeKey,
   graphCsv,
   mergeGraph,
   removeNodes,
@@ -63,6 +66,41 @@ describe("removeNodes and visibleGraph", () => {
     const v = visibleGraph(g, new Set(["cotrade"]), new Set(["c"]));
     expect(v.nodes.map((n) => n.id)).toEqual(["a", "b", "c"]);
     expect(visibleGraph(g, new Set(["cotrade"]), new Set()).nodes.map((n) => n.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("link filters", () => {
+  const g: AsylGraph = {
+    nodes: [W("a"), W("b"), W("c"), W("m")],
+    edges: [
+      { ...E("a", "b", "funded", 0.5), sol: 0.5 },
+      { ...E("b", "c", "transfer", 3), pct: 3 },
+      { ...E("a", "m", "transfer", 2), mint: "m", tokens: 5_000 },
+      E("c", "m", "holds", 9),
+      E("a", "c", "cotrade", 2),
+    ],
+  };
+  it("cuts money links under a slider, and never links that aren't money", () => {
+    const c = { ...NO_CUTOFFS, sol: 1 };
+    expect(clearsCutoffs(g.edges[0]!, c, null)).toBe(false);
+    expect(clearsCutoffs(g.edges[3]!, { ...NO_CUTOFFS, pct: 50 }, null)).toBe(true);
+    expect(clearsCutoffs(g.edges[4]!, c, null)).toBe(true);
+    expect(clearsCutoffs(g.edges[1]!, { ...NO_CUTOFFS, pct: 5 }, null)).toBe(false);
+    expect(clearsCutoffs(g.edges[2]!, { ...NO_CUTOFFS, tokens: 10_000 }, null)).toBe(false);
+  });
+  it("reads USD through SOL's price, and lets everything through without one", () => {
+    const c = { ...NO_CUTOFFS, usd: 50 };
+    expect(clearsCutoffs(g.edges[0]!, c, 200)).toBe(true);
+    expect(clearsCutoffs(g.edges[0]!, c, 50)).toBe(false);
+    expect(clearsCutoffs(g.edges[0]!, c, null)).toBe(true);
+  });
+  it("reads an older map's funding by its weight", () => {
+    expect(clearsCutoffs(E("a", "b", "funded", 0.2), { ...NO_CUTOFFS, sol: 1 }, null)).toBe(false);
+  });
+  it("drops links hidden one by one", () => {
+    const v = visibleGraph(g, new Set(), new Set(), { cut: new Set([edgeKey(g.edges[4]!)]) });
+    expect(v.edges.map((e) => e.kind)).not.toContain("cotrade");
+    expect(v.edges).toHaveLength(4);
   });
 });
 
@@ -147,5 +185,22 @@ describe("withDeployLines", () => {
   it("keeps a line the API already drew", () => {
     const g: AsylGraph = { nodes: [coin, W("dev", { tags: ["dev"] })], edges: [E("dev", "c", "created")] };
     expect(withDeployLines(g)).toBe(g);
+  });
+
+  it("drops a takeover wallet's line once the deployer is confirmed", () => {
+    const g: AsylGraph = {
+      nodes: [{ ...coin, deployerVerified: true }, W("dev"), W("cto")],
+      edges: [E("cto", "c", "created")],
+    };
+    expect(withDeployLines(g).edges.map((e) => e.a)).toEqual(["dev"]);
+  });
+
+  it("keeps a confirmed deployer when an unconfirmed answer comes later", () => {
+    const base: AsylGraph = { nodes: [{ ...coin, deployerVerified: true }], edges: [] };
+    const merged = mergeGraph(base, {
+      nodes: [{ ...coin, deployer: "cto", deployerVerified: false }],
+      edges: [],
+    });
+    expect(merged.nodes[0]).toMatchObject({ deployer: "dev", deployerVerified: true });
   });
 });

@@ -5,6 +5,7 @@ import { asylApi, avatarUrl, type AsylMe, type Dossier } from "./asylApi";
 import {
   EDGE_LABEL,
   TAG_LABEL,
+  edgeKey,
   neighbours,
   nodeName,
   shortAddr,
@@ -19,9 +20,11 @@ export interface InspectorActions {
   flows: (wallet: string) => void;
   funders: (wallets: string[]) => void;
   chainToken: (mint: string) => void;
-  /** Puts each coin's deployer on the map, with its Deployed line. */
-  deployers: (mints: string[]) => void;
+  /** Finds a coin's deployer (from the chain for Pro Mode when unknown) and puts it on the map. */
+  showDeployer: (mint: string) => void;
   hide: (id: string) => void;
+  /** Hides one link (by edgeKey), listed in the rail's Links tab to show again. */
+  cutLink: (key: string) => void;
   select: (id: string) => void;
   saveLabel: (wallet: string, name: string, kol: boolean) => Promise<void>;
   removeLabel: (wallet: string) => Promise<void>;
@@ -165,16 +168,16 @@ export function Inspector({
                     {nodeName(byId.get(node.deployer)!)}
                   </button>
                 ) : (
-                  <>
-                    {shortAddr(node.deployer)}{" "}
-                    <button
-                      className="asyl-link"
-                      disabled={!!busy}
-                      onClick={() => actions.deployers([node.id])}
-                    >
-                      · put on the map
-                    </button>
-                  </>
+                  shortAddr(node.deployer)
+                )}
+                {node.deployerVerified === false && (
+                  <span
+                    className="asyl-muted asyl-small"
+                    title="The creator TrenchScanner was told. A community takeover moves Pump.fun's creator to a new wallet; Show deployer reads the create transaction (Pro Mode) to be sure."
+                  >
+                    {" "}
+                    · unconfirmed
+                  </span>
                 )}
               </dd>
             </>
@@ -271,6 +274,22 @@ export function Inspector({
           {node.kind === "wallet" && (
             <button className="asyl-btn" disabled={!!busy} onClick={() => actions.similar(node.id)}>
               Wallets that trade like it
+            </button>
+          )}
+          {node.kind === "token" && (
+            <button
+              className="asyl-btn deploy"
+              disabled={!!busy}
+              title={
+                node.deployerVerified
+                  ? "The wallet that signed its create transaction (no credits)"
+                  : me.pro
+                    ? "Reads its create transaction from the chain when TrenchScanner hasn't (10 credits, once for everyone)"
+                    : "The creator TrenchScanner knows; Pro Mode confirms it from the chain"
+              }
+              onClick={() => actions.showDeployer(node.id)}
+            >
+              Show deployer
             </button>
           )}
         </div>
@@ -379,14 +398,24 @@ export function Inspector({
             const out = edge.a === node.id;
             return (
               <li key={i}>
-                <button className="asyl-link" onClick={() => actions.select(other)}>
-                  {o ? nodeName(o) : shortAddr(other)}
-                </button>
-                <span className="asyl-muted">
-                  {" "}
-                  {EDGE_LABEL[edge.kind]} {out ? "→" : "←"} {edge.label}
-                  {edge.source === "chain" ? " · chain" : ""}
+                <span className="asyl-link-text">
+                  <button className="asyl-link" onClick={() => actions.select(other)}>
+                    {o ? nodeName(o) : shortAddr(other)}
+                  </button>
+                  <span className="asyl-muted">
+                    {" "}
+                    {EDGE_LABEL[edge.kind]} {out ? "→" : "←"} {edge.label}
+                    {edge.source === "chain" ? " · chain" : ""}
+                  </span>
                 </span>
+                <button
+                  className="asyl-icon-btn"
+                  title="Hide this link (bring it back from Links)"
+                  aria-label={`Hide the ${EDGE_LABEL[edge.kind]} link`}
+                  onClick={() => actions.cutLink(edgeKey(edge))}
+                >
+                  ×
+                </button>
               </li>
             );
           })}

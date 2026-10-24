@@ -1,5 +1,5 @@
 import { api, del, post, put, API_URL } from "../api";
-import type { AsylGraph } from "./graph";
+import type { AsylGraph, Cutoffs } from "./graph";
 
 /** The calls Asyl makes (apps/api/src/routes/asyl.ts). */
 
@@ -17,6 +17,8 @@ export interface AsylMe {
   wallet: string;
   pro: boolean;
   chain: Allowance | null;
+  /** SOL's price in USD, for the USD slider; null when no source answered. */
+  solUsd?: number | null;
   labels: { cap: number; nameMax: number };
 }
 
@@ -78,6 +80,10 @@ export interface MapDoc {
   hidden: string[];
   /** Nodes taken off the map, kept so they can be brought back. */
   removed?: string[];
+  /** Links hidden one by one, by edgeKey. */
+  cut?: string[];
+  /** The amount sliders. */
+  cutoffs?: Cutoffs;
   focus: string | null;
 }
 
@@ -131,6 +137,15 @@ export const asylApi = {
   dossier: (wallet: string) => api<Dossier>(`/asyl/wallet/${enc(wallet)}/dossier`),
   similar: (wallet: string) => api<SimilarRead>(`/asyl/wallet/${enc(wallet)}/similar`),
   token: (mint: string) => api<GraphRead & { readAt: string | null }>(`/asyl/token/${enc(mint)}`),
+  deployer: (mint: string) =>
+    post<
+      GraphRead & {
+        deployer: { wallet: string; verified: boolean } | null;
+        credits?: number;
+        cached?: boolean;
+        allowance?: Allowance;
+      }
+    >(`/asyl/deployer/${enc(mint)}`),
   links: (wallets: string[], tokens: string[], deployers = false) =>
     post<GraphRead>("/asyl/links", { wallets, tokens, deployers }),
   labels: () => api<{ pro: boolean; cap: number; nameMax: number; wallets: Label[] }>("/asyl/labels"),

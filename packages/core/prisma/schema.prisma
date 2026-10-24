@@ -663,6 +663,11 @@ model Token {
   /// launch read (user bug report 2026-10-17: the token modal's Dev card read only the tape and
   /// TokenSage, so most coins showed no creator). Never overwritten once set. Null = unknown.
   creator                 String?
+  /// The wallet that signed the coin's create transaction, read from the chain (Asyl's deployer
+  /// read, user bug report 2026-10-24). Unlike `creator`, which can come from Pump.fun's coin
+  /// `creator` and so follow a community takeover's fee wallet, this is the deployer for good.
+  /// Null = not read yet.
+  deployer                String?
   /// The first scan that saw the mint inside the curated mcap band. Feeds the
   /// minutesSinceFirstInBand feature: a token that entered the band hours ago and is still
   /// there is a different bet from one arriving now.
