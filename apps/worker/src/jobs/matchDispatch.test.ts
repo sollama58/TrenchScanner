@@ -1,6 +1,6 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prisma, loadEnv, loadFilterTrackRecords, type ScoredToken } from "@trenchscanner/core";
 import type { Token, TokenSnapshot } from "@prisma/client";
 import {
@@ -77,6 +77,7 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
     if (!dbAvailable) return;
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
     await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
+    await prisma.candleBackfill.deleteMany({ where: { mint: { startsWith: TAG } } });
   });
 
   it("creates a match for every user whose filter the token matches", async () => {
@@ -423,6 +424,27 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
     expect(await createMatchesForCandidate({ ...args, scored: { ...unread, freshTop10WalletPct: 20 } })).toBe(
       1,
     );
+  });
+
+  // User report 2026-10-24: a matched coin's chart was blank until someone opened it.
+  it("asks for the matched coin's chart history, which also has the curve tape follow it", async () => {
+    const env = { ...loadEnv(), MATCH_ALERT_GUARD: "off" as const, CANDLE_STORE: true };
+    const { token, snapshot } = await seedToken("history");
+    const filters = [await seedUserWithFilter("h")];
+    expect(
+      await createMatchesForCandidate({
+        token,
+        snapshot,
+        scored: scoredFixture(token.mintAddress),
+        activeFilters: filters,
+        env,
+      }),
+    ).toBe(1);
+    // The ask is fire-and-forget, behind the match.
+    await vi.waitFor(async () => {
+      const row = await prisma.candleBackfill.findUnique({ where: { mint: token.mintAddress } });
+      expect(row?.reason).toBe("match");
+    });
   });
 
   it("anchors one graded outcome for every match of the token, and reports filter records", async () => {

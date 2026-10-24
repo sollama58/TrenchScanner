@@ -6,6 +6,7 @@ import {
   matchesFilter,
   alertGuardBlocks,
   notifyMatchesCreated,
+  requestCandleBackfill,
   type Env,
   type FilterCriteria,
   type MatchAlertGuardMode,
@@ -462,6 +463,14 @@ export async function createMatchesForTargets(opts: {
   await notifyMatchesCreated(
     alerted.map(({ match, filter }) => ({ userId: filter.userId, matchId: match.id })),
   );
+
+  // The matched coin's chart history back to its launch, saved now rather than when someone first
+  // opens the card (user report 2026-10-24: charts blank until opened). The ask also has the curve
+  // tape follow the coin for the chart's 1-second bars (recentlyAskedCoins). As a call's ask.
+  if (env?.CANDLE_STORE)
+    void requestCandleBackfill(token.mintAddress, "match").catch((err: unknown) =>
+      logger.warn("candle backfill not asked", { mint: token.mintAddress, error: String(err) }),
+    );
 
   if (env) {
     await anchorMatchOutcome(

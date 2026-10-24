@@ -322,6 +322,13 @@ const envSchema = z.object({
   // charts hold 1-second candles for the stretch people look at (user decision 2026-10-23: about
   // 600 alerts a day, a few dozen followed at once). After graduation their pool is followed to it too.
   CURVE_TAPE_ALERTED_MINUTES: z.coerce.number().positive().default(120),
+  // Watchlist coins last seen near the band (WATCHLIST_NEAR_BAND_MIN_MCAP_USD up) are followed to
+  // this age from launch while they stay there, instead of PRICE_PATH_FOLLOW_MINUTES, so a coin
+  // that climbs into the feed after its first half hour has 1-second bars from launch to its
+  // detection (user report 2026-10-24: charts blank before "Detected"). The stream bills by
+  // changes, so a quiet coin costs nothing; the stream's day cap above still bounds the spend.
+  // Set it to PRICE_PATH_FOLLOW_MINUTES (or lower) to turn it off.
+  CURVE_TAPE_NEAR_BAND_MINUTES: z.coerce.number().positive().default(120),
   // 500 was full on the first cycles live (2026-10-17) at ~6.6 stream credits a scan for the whole
   // socket: the cost follows how often curves change, not how many are followed.
   CURVE_TAPE_MAX_MINTS: z.coerce.number().int().positive().default(1_000),

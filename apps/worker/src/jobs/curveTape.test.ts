@@ -18,6 +18,9 @@ import {
   startCurveTape,
   takeCurveTapeStats,
 } from "./curveTape.js";
+import { recordPricePath } from "./pricePathRecorder.js";
+
+vi.mock("./pricePathRecorder.js", () => ({ recordPricePath: vi.fn() }));
 
 const MINT = "So11111111111111111111111111111111111111112";
 const NOW = Date.UTC(2026, 9, 17, 12, 0, 0);
@@ -36,6 +39,7 @@ function setup(
     maxAgeMinutes?: number;
     featureMaxAgeMinutes?: number;
     alertedMaxAgeMinutes?: number;
+    nearBandMaxAgeMinutes?: number;
     newLaunches?: () => string[];
     screenLaunches?: (mints: string[]) => Promise<string[]>;
   } = {},
@@ -68,6 +72,7 @@ describe("curve tape", () => {
   afterEach(() => {
     stop?.();
     resetCurveTape();
+    vi.mocked(recordPricePath).mockClear();
   });
 
   const young = {
@@ -206,6 +211,56 @@ describe("curve tape", () => {
     // Past the alerted age: let go.
     followYoungCurves([], NOW + 61 * 60_000, [hourOld]);
     expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
+  });
+
+  // User report 2026-10-24: a coin that climbed into the feed after its first half hour had no
+  // 1-second bars between then and its detection.
+  it("follows a watchlist coin near the band to its own longer age, while it stays near the band", () => {
+    const s = setup(NOW - 1_000, { maxAgeMinutes: 30, nearBandMaxAgeMinutes: 120 });
+    stop = s.stop;
+    const coin = { ...young, launchedAt: new Date(NOW - 20 * 60_000) };
+    followYoungCurves([coin], NOW, [], new Set([MINT]));
+    expect([...curveTapeView.mints()]).toEqual([MINT]);
+    // Forty minutes old and still near the band: followed on.
+    followYoungCurves([coin], NOW + 20 * 60_000, [], new Set([MINT]));
+    expect([...curveTapeView.mints()]).toEqual([MINT]);
+    expect(s.stream.unwatch).not.toHaveBeenCalled();
+    // Off the near-band tier, past the young age: let go.
+    followYoungCurves([coin], NOW + 21 * 60_000, [], new Set());
+    expect([...curveTapeView.mints()]).toEqual([]);
+    expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
+    // Back near the band, still under the longer age: followed again; past it, never.
+    followYoungCurves([coin], NOW + 30 * 60_000, [], new Set([MINT]));
+    expect([...curveTapeView.mints()]).toEqual([MINT]);
+    followYoungCurves([coin], NOW + 101 * 60_000, [], new Set([MINT]));
+    expect([...curveTapeView.mints()]).toEqual([]);
+  });
+
+  it("saves a coin's young path once as it ages, when it is followed on past the young age", () => {
+    const s = setup(NOW - 1_000, { maxAgeMinutes: 30, nearBandMaxAgeMinutes: 120 });
+    stop = s.stop;
+    const coin = { ...young, launchedAt: new Date(NOW - 20 * 60_000) };
+    followYoungCurves([coin], NOW, [], new Set([MINT]));
+    expect(recordPricePath).not.toHaveBeenCalled();
+    followYoungCurves([coin], NOW + 11 * 60_000, [], new Set([MINT]));
+    expect(recordPricePath).toHaveBeenCalledTimes(1);
+    expect(recordPricePath).toHaveBeenCalledWith(MINT, null, "aged");
+    followYoungCurves([coin], NOW + 12 * 60_000, [], new Set([MINT]));
+    // Let go later: not saved a second time.
+    followYoungCurves([], NOW + 13 * 60_000);
+    expect([...curveTapeView.mints()]).toEqual([]);
+    expect(recordPricePath).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves the path of a coin first followed when old only when it is let go, as before", () => {
+    const s = setup(NOW - 1_000, { maxAgeMinutes: 30, alertedMaxAgeMinutes: 120 });
+    stop = s.stop;
+    const old = { ...young, launchedAt: new Date(NOW - 3 * 3_600_000), askedAt: new Date(NOW) };
+    followYoungCurves([], NOW, [old]);
+    followYoungCurves([], NOW + 60_000, [old]);
+    expect(recordPricePath).not.toHaveBeenCalled();
+    followYoungCurves([], NOW + 121 * 60_000, [old]);
+    expect(recordPricePath).toHaveBeenCalledTimes(1);
   });
 
   // Audit 2026-10-23 (WC-2): grading only the asked coins on intra-minute wicks would tie the

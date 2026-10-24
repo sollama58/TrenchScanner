@@ -256,7 +256,7 @@ export interface AskedCoin {
 }
 
 /**
- * The coins a chart opened or a call queued within `sinceMs`, newest ask first, `limit` at most:
+ * The coins a chart opened, a call or a match queued within `sinceMs`, newest ask first, `limit` at most:
  * the worker's curve tape follows them for the chart's 1-second bars whatever their age
  * (curveTape.ts), as it follows alerted coins.
  */
@@ -284,25 +284,40 @@ export async function recentlyAskedCoins(
 }
 
 /**
- * Queues the backfill of every coin called within `sinceMs` that has no row yet (one statement):
- * the call's own ask (curatedAlerts.ts) is fire-and-forget, and a database busy at that moment
+ * Queues the backfill of every coin called, or put on a Live Feed by a filter match, within
+ * `sinceMs` that has no row yet (one statement each): the call's and the match's own asks
+ * (curatedAlerts.ts, matchDispatch.ts) are fire-and-forget, and a database busy at that moment
  * left the coin with no history on its chart (2TKD, 2026-10-23: called at 19:03, no row until a
  * second call at 19:13). Returns how many were queued.
  */
 export async function queueBackfillsForRecentCalls(sinceMs: number, now = Date.now()): Promise<number> {
   const at = new Date(now);
-  return prisma.$executeRaw`
+  const since = new Date(now - sinceMs);
+  const calls = await prisma.$executeRaw`
     INSERT INTO "CandleBackfill" ("mint", "reason", "requestedAt", "nextAt")
     SELECT DISTINCT ON (t."mintAddress") t."mintAddress", 'call', a."createdAt", ${at}
     FROM "CuratedAlert" a JOIN "Token" t ON t."id" = a."tokenId"
-    WHERE a."createdAt" >= ${new Date(now - sinceMs)}
+    WHERE a."createdAt" >= ${since}
       AND NOT EXISTS (SELECT 1 FROM "CandleBackfill" b WHERE b."mint" = t."mintAddress")
     ORDER BY t."mintAddress", a."createdAt" DESC
     ON CONFLICT ("mint") DO NOTHING`;
+  const matches = await prisma.$executeRaw`
+    INSERT INTO "CandleBackfill" ("mint", "reason", "requestedAt", "nextAt")
+    SELECT DISTINCT ON (t."mintAddress") t."mintAddress", 'match', m."matchedAt", ${at}
+    FROM "Match" m JOIN "Token" t ON t."id" = m."tokenId"
+    WHERE m."matchedAt" >= ${since}
+      AND NOT EXISTS (SELECT 1 FROM "CandleBackfill" b WHERE b."mint" = t."mintAddress")
+    ORDER BY t."mintAddress", m."matchedAt" DESC
+    ON CONFLICT ("mint") DO NOTHING`;
+  return calls + matches;
 }
 
-/** Why a backfill was asked for; a call goes ahead of a chart. */
-export type CandleBackfillReason = "chart" | "call";
+/**
+ * Why a backfill was asked for: a chart opened, a call, or a filter match putting the coin on a
+ * Live Feed (user report 2026-10-24: a matched coin's chart was blank until someone opened it). A
+ * call goes ahead of the others.
+ */
+export type CandleBackfillReason = "chart" | "call" | "match";
 
 /** A finished backfill is started again when asked this long after it ended (newer gaps to fill). */
 export const BACKFILL_REDO_AFTER_MS = 6 * 3_600_000;
