@@ -269,6 +269,8 @@ export function GraphView({
   };
 
   // Neighbours of the selected node stay bright; the rest dim.
+  // Bare addresses crowd a big map: past 25 nodes they show only up close, or around the selection.
+  const dense = graph.nodes.length / 25;
   const lit = useMemo(() => {
     if (!selected) return null;
     const s = new Set([selected]);
@@ -441,7 +443,7 @@ export function GraphView({
                       ★
                     </text>
                   )}
-                  {(view.k > 0.55 || isSel || isFocus || n.name) && (
+                  {(isSel || isFocus || (!dim && (n.name || lit || dense < 1 || view.k > 1.1 * dense))) && (
                     <text
                       className="asyl-node-label"
                       y={r + 13}

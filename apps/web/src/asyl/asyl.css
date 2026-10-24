@@ -675,13 +675,15 @@ body {
 
 /* ---- a shared map ---- */
 
+.asyl-shared-title {
+  background: rgba(20, 10, 6, 0.85);
+  padding: 6px 12px;
+  border-radius: 10px;
+}
 .asyl-shared-title h1 {
   margin: 0;
   font-size: 18px;
-  color: var(--asyl-ink);
-}
-.asyl-shared-title .asyl-muted {
-  color: #3a1a08;
+  color: var(--asyl-text);
 }
 .asyl-shared-legend {
   position: absolute;
@@ -756,7 +758,8 @@ body {
     right: 0;
     bottom: 0;
     width: auto;
-    max-height: 62vh;
+    max-height: 46vh;
+    background: #160e0a;
     border-radius: 14px 14px 0 0;
     padding-bottom: calc(14px + env(safe-area-inset-bottom));
   }
