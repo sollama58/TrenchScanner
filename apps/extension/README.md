@@ -63,3 +63,12 @@ justifications and privacy answers are in `STORE.md`, and the privacy policy is
 `https://trenchscanner.app/extension-privacy.html` (`apps/web/public/extension-privacy.html`).
 
 Permissions are `storage` and `sidePanel`, plus the API host. None of them shows an install warning.
+
+## Rings build (local only, never uploaded)
+
+The `local/rings` branch brings back the in-page rings dropped on 2026-10-23, for the owner's own
+browser (user ask 2026-10-24): a content script (`src/content/`) on Axiom, Terminal and GMGN rings
+the rows of tokens in the reader's alert feed, with the model or filter badge and a red dot past a
+flag's limit. It holds no key and sends no address anywhere: the service worker answers from the
+panel's own feed (`handleContent` in `sw.ts`), so tokens outside your alerts are never asked about.
+Its trade-off is the one that dropped it: code running in those sites' pages. Not for the store.

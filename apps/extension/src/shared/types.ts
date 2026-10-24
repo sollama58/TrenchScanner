@@ -182,3 +182,18 @@ export interface Status {
   settings: OverlaySettings;
   problem: Problem;
 }
+
+/**
+ * What a ring page (the local rings build's content script on Axiom, Terminal or GMGN) may ask
+ * the service worker. It holds no key: it asks about the addresses on screen and draws answers.
+ */
+export type ContentRequest =
+  | { type: "lookup"; mints: string[] }
+  | { type: "settings" }
+  | { type: "health"; site: Site; rows: number; mints: number; paused: boolean };
+
+export interface LookupAnswer {
+  /** The reader's alerted tokens among those asked, by mint. A mint absent here wasn't alerted. */
+  tokens: Record<string, OverlayToken>;
+  problem: Problem;
+}
