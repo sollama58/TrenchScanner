@@ -5,11 +5,13 @@ import {
   buildSlots,
   candleReadings,
   finestCoverMs,
+  fineSpan,
   slotCandle,
   slotIndex,
   closeTimeMs,
   slotOfTime,
   timeframeFits,
+  timeframeOffered,
 } from "./chartBars";
 
 const k = (t: number, o: number, c: number, w = 60_000, vol = 10) => ({
@@ -205,6 +207,32 @@ describe("autoTimeframe", () => {
   it("fits a timeframe three times or not at all", () => {
     expect(timeframeFits(60_000, 180_000)).toBe(true);
     expect(timeframeFits(60_000, 179_999)).toBe(false);
+  });
+});
+
+describe("timeframeOffered", () => {
+  const M = 60_000;
+  const minutes = Array.from({ length: 120 }, (_, i) => k(i * M, 1, 1));
+  it("finds the stretch the candles finer than a minute cover, live ticks aside", () => {
+    expect(fineSpan(minutes)).toBeNull();
+    const seconds = [k(100 * M, 1, 1, 1_000), k(110 * M + 30_000, 1, 1, 1_000)];
+    expect(fineSpan([...minutes, ...seconds])).toEqual({ from: 100 * M, to: 110 * M + 31_000 });
+    expect(fineSpan([{ ...k(0, 1, 1, 1_000), tick: true }])).toBeNull();
+  });
+  it("offers a minute or wider always, and a sub-minute size only where there is data that fine", () => {
+    // Only minute candles: nothing recorded this fine.
+    expect(timeframeOffered(1_000, M, null, 120 * M)).toBe(false);
+    expect(timeframeOffered(M, M, null, 120 * M)).toBe(true);
+    // Fine candles cover most of the view (as Auto reads it).
+    expect(timeframeOffered(1_000, 1_000, { from: 0, to: 120 * M }, 120 * M)).toBe(true);
+    expect(timeframeOffered(5_000, 15_000, { from: 0, to: 100 * M }, 120 * M)).toBe(false);
+    expect(timeframeOffered(15_000, 15_000, { from: 0, to: 120 * M }, 120 * M)).toBe(true);
+    // A two-hour-old coin followed for its last ten minutes: 1s offered while that reaches the
+    // live edge, and not once the coin was let go.
+    expect(timeframeOffered(1_000, M, { from: 110 * M, to: 120 * M - 30_000 }, 120 * M)).toBe(true);
+    expect(timeframeOffered(1_000, M, { from: 100 * M, to: 110 * M }, 120 * M)).toBe(false);
+    // Nothing drawn yet: everything offered.
+    expect(timeframeOffered(1_000, 0, null, 120 * M)).toBe(true);
   });
 });
 

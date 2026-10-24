@@ -54,6 +54,19 @@ describe.skipIf(!dbAvailable)("candle store", () => {
     expect(await minuteCoversBefore(KEPT, hour + 3_600_000)).toEqual([{ from: hour, to: hour + 3_600_000 }]);
   });
 
+  it("saves several coins' chunks in one batch, each coin locked once", async () => {
+    const hour = Math.floor(NOW / 3_600_000) * 3_600_000 - 3_600_000;
+    const rows = [GONE, KEPT, `${TAG}-third`].flatMap((mint) => [
+      ...chunkBars(mint, 60, "gecko", minutes(hour, 60), { from: hour, to: hour + 3_600_000 }),
+      ...chunkBars(mint, 1, "curve", [bar(hour, 5)], { from: hour, to: hour + 60_000 }),
+    ]);
+    expect(await saveCandleChunks(rows)).toBe(6);
+    for (const mint of [GONE, KEPT, `${TAG}-third`])
+      expect(
+        (await readCandleChunks(mint, hour, hour + 3_600_000)).map((r) => r.res).sort((a, b) => a - b),
+      ).toEqual([1, 60]);
+  });
+
   it("merges two pages of the same chunk: both halves' bars stay and their covers join", async () => {
     const hour = Math.floor(NOW / 3_600_000) * 3_600_000 - 3_600_000;
     // A backfill's two GeckoTerminal pages each hold half the hour (user report 2026-10-23: the

@@ -18,7 +18,7 @@ const logger = createLogger("curve-candles");
  * The chart's own 1-second candles (charts audit 2026-10-22 target design, user decision "Store
  * candles + backfill"): the curve tape (curveTape.ts) already follows every tracked Pump.fun coin
  * from about its launch on the Helius stream, so its changes are folded into 1-second OHLC bars and
- * saved to the candle store (CandleChunk) once a minute, one minute of a coin per row. No upstream
+ * saved to the candle store (CandleChunk) every FLUSH_MS, one minute of a coin per row. No upstream
  * call and no Helius credit: it reads only what the tape holds. Volume is the SOL that moved through
  * the curve between changes (its real SOL reserve, out or in), at SOL's price at the flush.
  *
@@ -33,7 +33,14 @@ const logger = createLogger("curve-candles");
 
 /** Pump.fun's curve price is lamports per raw token unit: times this, SOL per whole token x one billion. */
 const MCAP_SOL_PER_PRICE = 1e6;
-const FLUSH_MS = 60_000;
+/**
+ * How often the tapes are saved. 20 s since 2026-10-24 (was a minute): the store is what a chart
+ * reads for every second before its own live tail began, so what the worker holds and hasn't
+ * written yet is a blank stretch right before the live edge on a 1-second chart, about as long as
+ * this plus the write (chart audit 2026-10-24: 30-90 s on every freshly opened coin). The chunk a
+ * coin's bars end in is rebuilt whole each flush, so the forming minute is written as it grows.
+ */
+export const FLUSH_MS = 20_000;
 /** Rows a dropped coin's last bars may queue at most before the next flush writes them. */
 const MAX_DROPPED = 2_000;
 
@@ -229,7 +236,7 @@ function rateOf(tape: NonNullable<TapeTicks>, now: number): number | null {
   const q = tape.quoteMint ? lastQuoteRate.get(tape.quoteMint) : undefined;
   return q && now - q.at <= QUOTE_MAX_AGE_MS ? q.rate : null;
 }
-let stats = { coins: 0, rows: 0, failed: 0, unpriced: 0 };
+let stats = { coins: 0, rows: 0, failed: 0, unpriced: 0, writeMs: 0 };
 /** When coins left unpriced were last logged: once in UNPRICED_LOG_EVERY_MS, not every flush. */
 let unpricedLoggedAt = 0;
 const UNPRICED_LOG_EVERY_MS = 5 * 60_000;
@@ -361,8 +368,12 @@ export function flushCurveCandles(now = Date.now(), all = false): Promise<void> 
       for (const [mint, to] of next) flushed.set(mint, to);
       return;
     }
+    const writeStarted = Date.now();
     try {
       await (config.save ?? saveCandleChunks)(rows);
+      // The slowest write since the last heartbeat: the store's lag behind the live edge is this
+      // plus the flush interval.
+      stats.writeMs = Math.max(stats.writeMs, Date.now() - writeStarted);
       for (const [mint, to] of next) flushed.set(mint, to);
       for (const [mint, r] of newest)
         lastWritten.set(mint, {
@@ -388,7 +399,7 @@ export function flushCurveCandles(now = Date.now(), all = false): Promise<void> 
 export function takeCurveCandleStats() {
   if (!cfg) return null;
   const out = { ...stats, following: flushed.size };
-  stats = { coins: 0, rows: 0, failed: 0, unpriced: 0 };
+  stats = { coins: 0, rows: 0, failed: 0, unpriced: 0, writeMs: 0 };
   return out;
 }
 
@@ -404,5 +415,5 @@ export function resetCurveCandles(): void {
   lastSolUsd = null;
   lastQuoteRate.clear();
   unpricedLoggedAt = 0;
-  stats = { coins: 0, rows: 0, failed: 0, unpriced: 0 };
+  stats = { coins: 0, rows: 0, failed: 0, unpriced: 0, writeMs: 0 };
 }

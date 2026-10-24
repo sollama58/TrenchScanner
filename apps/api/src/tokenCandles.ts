@@ -80,6 +80,13 @@ export interface TokenCandlesAnswer {
 
 /** A trailing hole shorter than this is the live edge between reads, not a stretch nobody read. */
 export const HOLE_EDGE_MS = 15_000;
+/**
+ * How far the worker's tapes run behind the live edge at most: they are saved every 20 s
+ * (apps/worker curveCandles.ts FLUSH_MS) and a write lands within seconds. A hole on the newest
+ * page that begins where a stored 1-second source's cover ends, within this of now and no longer
+ * than it, is what the worker holds and hasn't written yet (pendingHole).
+ */
+export const WRITER_LAG_MS = 45_000;
 /** Holes reported per page at most (the newest kept). */
 const MAX_HOLES = 200;
 
@@ -94,6 +101,24 @@ export function uncovered(inputs: readonly SeriesInput[], from: number, to: numb
   const last = holes[holes.length - 1];
   if (last && last[1] >= to && last[1] - last[0] < HOLE_EDGE_MS) holes.pop();
   return holes.slice(-MAX_HOLES);
+}
+
+/**
+ * Exported for tests. Whether `hole` ([from, to) ms) is the stretch between a stored 1-second
+ * source's cover and the live edge that the worker's tape is about to write (WRITER_LAG_MS): left
+ * out of the newest page's holes, the chart draws it flat and the bars land on its next poll,
+ * rather than blank for a moment and then filled (chart audit 2026-10-24: every freshly opened
+ * coin had a blank stretch right before its live tail on the 1-second chart). A hole after a
+ * minute source's cover, or a longer or older one, is nobody's and stays.
+ */
+export function pendingHole(
+  hole: readonly [number, number],
+  inputs: readonly SeriesInput[],
+  now: number,
+): boolean {
+  const [from, to] = hole;
+  if (to - from > WRITER_LAG_MS || to < now - WRITER_LAG_MS) return false;
+  return inputs.some((i) => i.res === 1 && i.priority >= SOURCE_PRIORITY.curve && i.coverTo === from);
 }
 
 export interface CandleReadDeps {
@@ -160,8 +185,14 @@ export async function readTokenCandles(
   }
   bars = bars.slice(-limit);
   const first = bars[0]?.t;
-  // From the first bar to the page's end, or to now on the newest page (its last bar still forming).
-  const holes = first === undefined ? [] : uncovered(inputs, first, Math.min(end, now));
+  // From the first bar to the page's end, or to now on the newest page (its last bar still forming),
+  // less what the worker's tape is about to write.
+  const holes =
+    first === undefined
+      ? []
+      : uncovered(inputs, first, Math.min(end, now)).filter(
+          (h) => before !== null || !pendingHole(h, inputs, now),
+        );
   // Older bars are there to read when the store, or a page held, reaches before the first one.
   return {
     mint,

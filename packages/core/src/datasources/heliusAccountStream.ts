@@ -73,10 +73,20 @@ const MAX_LOGS_KEYS = 100;
  */
 const STALE_AT_CAP_MS = 5 * 60_000;
 /**
- * A refused subscription is asked for again after this long: it used to stay uncovered, its coin
- * polling, until its accounts changed or the socket reconnected.
+ * A refused subscription is asked for again after REFUSED_FIRST_RETRY_MS, then twice as long after
+ * each further refusal, up to REFUSED_RETRY_MS (refusedRetryMs). It used to wait the full five
+ * minutes from the first refusal: a few of each cycle's ~100 subscribes are turned away, and a
+ * called coin among them had its first five minutes polled, which records no 1-second bars (chart
+ * audit 2026-10-24: 3 of 30 charted coins). Before that it stayed uncovered until its accounts
+ * changed or the socket reconnected.
  */
 export const REFUSED_RETRY_MS = 5 * 60_000;
+export const REFUSED_FIRST_RETRY_MS = 10_000;
+
+/** How long after its `refusals`th refusal in a row a subscription is asked for again. */
+export function refusedRetryMs(refusals: number): number {
+  return Math.min(REFUSED_RETRY_MS, REFUSED_FIRST_RETRY_MS * 2 ** Math.max(0, refusals - 1));
+}
 
 const MAX_KEYS_OF: Record<StreamKind, number> = {
   tx: MAX_KEYS,
@@ -115,6 +125,8 @@ interface Subscription {
   retiring: Subscription | null;
   /** When Helius last refused it (ms epoch), until it is asked for again. */
   refusedAt: number | null;
+  /** Refusals in a row since it was last confirmed: each waits longer (refusedRetryMs). */
+  refusals: number;
 }
 
 export interface HeliusStreamStats {
@@ -297,7 +309,7 @@ export class HeliusAccountStream {
     const existing = this.subs.get(key);
     if (existing && existing.kind === kind && sameSet(existing.accounts, accounts)) {
       existing.wantedAt = now;
-      if (existing.refusedAt !== null && now - existing.refusedAt >= REFUSED_RETRY_MS) {
+      if (existing.refusedAt !== null && now - existing.refusedAt >= refusedRetryMs(existing.refusals)) {
         existing.refusedAt = null;
         this.subscribe(key, existing);
       }
@@ -317,6 +329,7 @@ export class HeliusAccountStream {
       carried: new Map(),
       retiring: null,
       refusedAt: null,
+      refusals: 0,
     };
     if (existing) {
       // Make before break: the live subscription keeps covering the accounts both follow until the
@@ -488,6 +501,7 @@ export class HeliusAccountStream {
         sub.subId = msg.result;
         sub.since = at;
         sub.refusedAt = null;
+        sub.refusals = 0;
         this.keyOfSub.set(msg.result, key);
         if (sub.retiring) {
           this.unsubscribe(key, sub.retiring);
@@ -495,9 +509,10 @@ export class HeliusAccountStream {
         }
       } else {
         // Kept, uncovered: asked again with the same accounts it is resent only after
-        // REFUSED_RETRY_MS (a refusal would come back every cycle), on the next connection, or when
+        // refusedRetryMs (a refusal would come back every cycle), on the next connection, or when
         // its accounts change.
         sub.refusedAt = at;
+        sub.refusals += 1;
         this.stats.refused += 1;
         logger.warn("subscription refused", { key, error: String(msg.error?.message ?? "unknown") });
       }
@@ -643,13 +658,15 @@ export class HeliusAccountStream {
       sub.carried.clear();
       sub.retiring = null;
       sub.refusedAt = null;
+      sub.refusals = 0;
     }
   }
 
   private subscribe(key: string, sub: Subscription): void {
     const socket = this.socket;
     if (!socket || socket.readyState !== 1) return;
-    // Standing down: kept uncovered and asked for again after REFUSED_RETRY_MS, as a refusal is.
+    // Standing down: kept uncovered and asked for again as a refusal is (refusedRetryMs; nothing
+    // is sent while the credits are out, so asking again soon costs nothing).
     if (heliusCreditsOut()) {
       sub.refusedAt = Date.now();
       return;

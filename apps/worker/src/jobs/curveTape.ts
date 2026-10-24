@@ -712,6 +712,8 @@ export async function round(now = Date.now()): Promise<void> {
     );
     await poolRound(now);
     const toRead: string[] = [];
+    /** The seeds' stream covers: confirmed as soon as the read lands, not a round later. */
+    const seeding = new Map<string, number>();
     let polls = 0;
     let seeds = 0;
     for (const [mint, f] of followed) {
@@ -720,6 +722,7 @@ export async function round(now = Date.now()): Promise<void> {
         // Streamed: read once after the subscription began, then the stream carries it.
         if (f.readAt === null || f.readAt < since) {
           toRead.push(mint);
+          seeding.set(mint, since);
           seeds += 1;
         } else tape.confirmStreamed(mint, since, now);
       } else if (f.rank < cfg.pollMaxMints) {
@@ -752,6 +755,11 @@ export async function round(now = Date.now()): Promise<void> {
       tape.record(mint, now, state, "read");
       f.readAt = now;
       f.misses = 0;
+      // A seed on a covered stream: the tape runs on the stream from this read, rather than from
+      // the next round's confirmation (the chart's 1-second bars began a round late: chart audit
+      // 2026-10-24).
+      const since = seeding.get(mint);
+      if (since !== undefined) tape.confirmStreamed(mint, since, now);
       if (state.complete) graduate(mint, state, now);
     });
   } catch (err) {
