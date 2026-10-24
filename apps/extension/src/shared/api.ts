@@ -1,6 +1,10 @@
 import type { OverlaySettings, OverlayToken } from "./types";
 
-/** The only host the extension talks to (manifest host_permissions). */
+/**
+ * The only host the extension talks to (the manifest CSP's connect-src). There is no host
+ * permission: the API answers /ext/v1 with CORS for extension origins (apps/api/src/server.ts),
+ * so these are ordinary cross-origin requests and the install asks for no site access.
+ */
 export const API_BASE = "https://api.trenchscanner.app";
 
 export class ApiError extends Error {

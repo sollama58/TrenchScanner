@@ -14,7 +14,7 @@ import type {
  * api.trenchscanner.app. Only the extension's own side panel is answered.
  *
  * The extension has no access to Axiom, Terminal, GMGN or any other site: no content scripts, no
- * host permissions beyond the API, no tabs, scripting or cookies. It never runs inside a trading
+ * host permissions at all (the API allows its calls by CORS), no tabs, scripting or cookies. It never runs inside a trading
  * site, so nothing it ships (or a bad update of it) can read a site's page or login. The panel
  * lists the reader's alerts and opens a token on a site as an ordinary link.
  *
