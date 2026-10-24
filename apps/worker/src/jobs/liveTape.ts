@@ -3,6 +3,7 @@ import {
   createLogger,
   liveFlags,
   liveTraders,
+  STREAM_PAGE_TRADES,
   tradesFromChainTransactionsPriced,
   walletScoreReading,
   winnerFollowReading,
@@ -11,6 +12,7 @@ import {
   type LiveTraderCounts,
   type ScoredWallet,
   type SolPriceLookup,
+  type StreamTapePage,
   type TapeTrade,
   type TradeFlowFeatures,
   type WalletScoreReading,
@@ -29,7 +31,18 @@ const logger = createLogger("live-tape");
  * page is read again once it is LIVE_TAPE_REFRESH_SECONDS old, unless the trade stream says the
  * coin has not traded since (user decision 2026-10-20 (Helius audit)), and at most
  * LIVE_TAPE_PAGES_PER_CYCLE pages go out a cycle: that cap is the credit ceiling.
+ *
+ * A coin still on its bonding curve takes its page from the PumpPortal trade stream instead
+ * (user decision 2026-10-24: "PumpPortal while bonding, Helius after"): the worker already
+ * follows every band coin's trades there, so the page costs nothing and is as fresh as the last
+ * block. The stream's page stands in for Helius's only where it says as much: the coin's whole
+ * history (its launch was seen, no stream gap since), a full page's worth of trades, or at least
+ * STREAM_COVERAGE_MS of following. Once the coin graduates, or the stream can't vouch for it,
+ * Helius is read as before.
  */
+
+/** A stream page short of a full page or the coin's whole history must cover at least this long. */
+export const STREAM_COVERAGE_MS = 15 * 60_000;
 
 /** A page older than this says nothing about now: the reading is unknown again. */
 const MAX_PAGE_AGE_MS = 15 * 60_000;
@@ -39,21 +52,43 @@ const MAX_ENTRIES = 2_000;
 const pages = new Map<string, { atMs: number; trades: TapeTrade[]; complete: boolean }>();
 let pagesRead = 0;
 let pagesFailed = 0;
+/** Coins whose page came off the trade stream since the last call: no Helius page for them. */
+let streamed = 0;
 
 /**
  * Pages read and failed since the last call, for the scan's heartbeat: 10 credits a page read.
  * A failed page costs nothing, as Helius bills no failed getTransactionsForAddress answer.
  */
-export function takeLiveTapeStats(): { pages: number; failed: number; credits: number; coins: number } {
+export function takeLiveTapeStats(): {
+  pages: number;
+  failed: number;
+  credits: number;
+  coins: number;
+  streamed: number;
+} {
   const out = {
     pages: pagesRead,
     failed: pagesFailed,
     credits: 10 * pagesRead,
     coins: pages.size,
+    streamed,
   };
   pagesRead = 0;
   pagesFailed = 0;
+  streamed = 0;
   return out;
+}
+
+/**
+ * Whether a stream page can stand in for a Helius page: the coin is still bonding (Helius after),
+ * and the page says as much as Helius's newest page would - the coin's whole history, a full
+ * page's worth, or at least STREAM_COVERAGE_MS of following.
+ */
+export function streamPageUsable(page: StreamTapePage, nowMs: number): boolean {
+  if (!page.bonding) return false;
+  return (
+    page.complete || page.trades.length >= STREAM_PAGE_TRADES || nowMs - page.sinceMs >= STREAM_COVERAGE_MS
+  );
 }
 
 /** Test hook. */
@@ -79,13 +114,26 @@ export async function readLiveTape(
     solPrices?: SolPriceLookup;
     /** Whether a mint has had no trade since then, as far as the trade stream can vouch. */
     quietSince?: (mint: string, sinceMs: number) => boolean;
+    /** A mint's newest trades off the trade stream (PumpPortalStream.recentTrades), when it can vouch for them. */
+    streamed?: (mint: string) => StreamTapePage | null | undefined;
   },
 ): Promise<void> {
-  if (!helius.gtfaUsable || opts.maxPages <= 0) return;
+  if (opts.maxPages <= 0) return;
   const now = opts.nowMs ?? Date.now();
   const missing: string[] = [];
   const stale: string[] = [];
   for (const m of mints) {
+    // A bonding coin's page comes off the stream, every cycle, for nothing: the stream's trades
+    // are the block's, so the page is never stale, and Helius is kept for after graduation. Read
+    // through a Helius stand-down too, as nothing is asked of Helius for it.
+    const fromStream = opts.streamed?.(m);
+    if (fromStream && streamPageUsable(fromStream, now)) {
+      pages.delete(m);
+      pages.set(m, { atMs: now, trades: fromStream.trades, complete: fromStream.complete });
+      streamed += 1;
+      continue;
+    }
+    if (!helius.gtfaUsable) continue;
     const page = pages.get(m);
     if (!page) missing.push(m);
     else if (now - page.atMs < opts.refreshMs) continue;
