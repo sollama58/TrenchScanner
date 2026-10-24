@@ -73,16 +73,20 @@ function toggle(
   return el("label", { className: "opt" }, text, input);
 }
 
-function renderDisconnected(): void {
-  account.textContent = "Not connected";
-  account.className = "account";
-  const signIn = el("a", {
+function connectButton(label = "Connect with TrenchScanner"): HTMLAnchorElement {
+  return el("a", {
     href: connectUrl(),
     target: "_blank",
     rel: "noopener noreferrer",
     className: "button primary",
-    textContent: "Connect with TrenchScanner",
+    textContent: label,
   });
+}
+
+function renderDisconnected(): void {
+  account.textContent = "Not connected";
+  account.className = "account";
+  const signIn = connectButton();
   app.replaceChildren(
     section(
       "Connect your account",
@@ -120,8 +124,10 @@ function alertsView(saved: OverlaySettings): HTMLElement[] {
         "Key refused",
         el("p", {
           className: "error",
-          textContent: "The key was revoked or your subscription ended. Connect again with a new key.",
+          textContent:
+            "TrenchScanner no longer takes this browser's key. Signing out of TrenchScanner disconnects the extension, and so does revoking its key or a subscription ending.",
         }),
+        connectButton("Connect again"),
       ),
     );
   } else if (feed?.problem === "offline") {
