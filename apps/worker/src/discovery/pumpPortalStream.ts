@@ -6,6 +6,7 @@ import {
   TradeFlowBook,
   type FlowLaunch,
   type FlowTrade,
+  type StreamTapePage,
   type TradeFlowFeatures,
 } from "@trenchscanner/core";
 
@@ -62,6 +63,8 @@ interface PumpPortalMessage {
   uri?: unknown;
   /** Which venue: "pump" for a Pump.fun curve, "pump-amm" for its graduation pool. */
   pool?: unknown;
+  /** The transaction's signature. */
+  signature?: unknown;
   /** PumpPortal's own notices (subscription acks and refusals). */
   message?: unknown;
 }
@@ -118,6 +121,8 @@ export function parseFlowMessage(
         tokenAmount: num(msg.tokenAmount),
         newTokenBalance: num(msg.newTokenBalance),
         marketCapSol: num(msg.marketCapSol),
+        tx: typeof msg.signature === "string" ? msg.signature : undefined,
+        venue: typeof msg.pool === "string" ? msg.pool : undefined,
         at,
       },
     };
@@ -224,6 +229,16 @@ export class PumpPortalStream {
     return this.book.quietSince(mint, sinceMs);
   }
 
+  /**
+   * A coin's newest trades as this stream saw them (TradeFlowBook.recentTrades), the live tape's
+   * page for a bonding coin; null whenever the stream can't vouch for them (trade flow off, trades
+   * not confirmed or refused), or the coin isn't followed.
+   */
+  recentTrades(mint: string): StreamTapePage | null {
+    if (!this.book || !this.tradesConfirmed || this.tradesRefused) return null;
+    return this.book.recentTrades(mint);
+  }
+
   /** Whether PumpPortal is refusing trade subscriptions on the current connection. */
   get tradeFlowRefused(): boolean {
     return this.tradesRefused;
@@ -313,6 +328,8 @@ export class PumpPortalStream {
     }
     const event = parsePumpPortalMessage(raw, new Date(at));
     if (!event) return;
+    // The book's live-tape page ends with the curve: from here the coin's trades are the pool's.
+    if (event.kind === "migrate") this.book?.migrated(event.mintAddress, at);
     // A graduation outranks a creation for the same mint - it's the newer, stronger signal.
     const existing = this.buffer.get(event.mintAddress);
     if (existing?.kind === "migrate" && event.kind === "create") return;

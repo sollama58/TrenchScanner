@@ -9,8 +9,11 @@ import {
   liveWindowFlowOf,
   readLiveTape,
   resetLiveTape,
+  STREAM_COVERAGE_MS,
+  streamPageUsable,
   takeLiveTapeStats,
 } from "./liveTape.js";
+import type { StreamTapePage, TapeTrade } from "@trenchscanner/core";
 
 const SOL = 1_000_000_000;
 const MINT = "Mint1111111111111111111111111111111111111111";
@@ -60,6 +63,80 @@ describe("live tape", () => {
     // Not due again yet: no call.
     await readLiveTape([MINT], helius, { maxPages: 2, refreshMs: 60_000, nowMs: 30_000 });
     expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(2);
+  });
+
+  it("takes a bonding coin's page off the trade stream, every cycle, and pays Helius only past graduation", async () => {
+    const helius = fakeHelius();
+    const streamTrade = (wallet: string, atMs: number): TapeTrade => ({
+      wallet,
+      side: "buy",
+      sol: 3,
+      tokens: 1_000,
+      atMs,
+      tx: `stream-${atMs}`,
+    });
+    const page: StreamTapePage = {
+      trades: [streamTrade(RISKY, 500)],
+      sinceMs: 0,
+      complete: true,
+      bonding: true,
+    };
+    const streamed = vi.fn((mint: string) => (mint === MINT ? page : null));
+    const opts = { maxPages: 2, refreshMs: 60_000, streamed };
+    await readLiveTape([MINT, "other"], helius, { ...opts, nowMs: 1000 });
+    // The bonding coin's page came off the stream; the other coin's from Helius.
+    expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(1);
+    expect(helius.getMintTransactionsPage).toHaveBeenCalledWith("other", { newest: true });
+    expect(liveFlagsOf(MINT, lookup, 2000)).toMatchObject({ flaggedBuyers: 1, flaggedBuySol: 3 });
+    expect(takeLiveTapeStats()).toMatchObject({ pages: 1, credits: 10, streamed: 1 });
+
+    // Not due by age, but the stream's page is free and the block's: taken again, with its new trade.
+    page.trades.push(streamTrade(OTHER, 1500));
+    await readLiveTape([MINT], helius, { ...opts, nowMs: 2000 });
+    expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(1);
+    expect(liveBuyersOf(MINT, 2500).sort()).toEqual([OTHER, RISKY].sort());
+
+    // Graduated: the stream's page is the pool's now, so the next due read is Helius's.
+    page.bonding = false;
+    await readLiveTape([MINT], helius, { ...opts, nowMs: 3000 });
+    expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(1);
+    await readLiveTape([MINT], helius, { ...opts, nowMs: 70_000 });
+    expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(2);
+    expect(helius.getMintTransactionsPage).toHaveBeenLastCalledWith(MINT, { newest: true });
+  });
+
+  it("stands a stream page in for Helius only when it says as much as a page would", () => {
+    const trades = (n: number): TapeTrade[] =>
+      Array.from({ length: n }, (_, i) => ({
+        wallet: `w${i}`,
+        side: "buy",
+        sol: 1,
+        tokens: 1,
+        atMs: i,
+        tx: `t${i}`,
+      }));
+    const now = 20 * 60_000;
+    // Its whole history, a full page's worth, or long enough followed.
+    expect(
+      streamPageUsable({ trades: trades(1), sinceMs: now - 1000, complete: true, bonding: true }, now),
+    ).toBe(true);
+    expect(
+      streamPageUsable({ trades: trades(100), sinceMs: now - 1000, complete: false, bonding: true }, now),
+    ).toBe(true);
+    expect(
+      streamPageUsable(
+        { trades: trades(5), sinceMs: now - STREAM_COVERAGE_MS, complete: false, bonding: true },
+        now,
+      ),
+    ).toBe(true);
+    // Joined late, thin and short: Helius's page says more.
+    expect(
+      streamPageUsable({ trades: trades(5), sinceMs: now - 60_000, complete: false, bonding: true }, now),
+    ).toBe(false);
+    // Past graduation: Helius, whatever the page holds.
+    expect(streamPageUsable({ trades: trades(100), sinceMs: 0, complete: true, bonding: false }, now)).toBe(
+      false,
+    );
   });
 
   it("counts a failed page, but no credits for it", async () => {

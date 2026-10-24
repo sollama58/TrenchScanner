@@ -178,6 +178,51 @@ describe("TradeFlowBook", () => {
     expect(later.devSoldShare).toBeNull();
   });
 
+  it("hands the live tape a bonding coin's newest trades, and says when they are its whole history", () => {
+    const book = new TradeFlowBook();
+    book.launch({ mint: MINT, creator: "dev", marketCapSol: 30, at: T0 });
+    book.trade(trade("a", "buy", 1, sec(1), { tx: "sig-1", venue: "pump" }));
+    book.trade(trade("b", "buy", 2, sec(2), { venue: "pump" }));
+    const page = book.recentTrades(MINT)!;
+    expect(page).toMatchObject({ sinceMs: T0, complete: true, bonding: true });
+    expect(page.trades.map((t) => [t.wallet, t.side, t.sol, t.tokens, t.atMs])).toEqual([
+      ["a", "buy", 1, 1_000_000, sec(1)],
+      ["b", "buy", 2, 2_000_000, sec(2)],
+    ]);
+    expect(page.trades[0]!.tx).toBe("sig-1");
+    // A trade without a signature still has a key of its own.
+    expect(page.trades[1]!.tx).not.toBe(page.trades[0]!.tx);
+    expect(book.recentTrades("other")).toBeNull();
+
+    // A stream gap cuts the record: no longer the whole history, covered from the gap on.
+    book.streamGap(sec(10));
+    book.trade(trade("c", "sell", 1, sec(11), { venue: "pump" }));
+    expect(book.recentTrades(MINT)).toMatchObject({ sinceMs: sec(10), complete: false, bonding: true });
+    expect(book.recentTrades(MINT)!.trades.map((t) => t.wallet)).toEqual(["c"]);
+
+    // Graduated: the page is no longer the curve's. Helius reads it from here.
+    book.migrated(MINT, sec(20));
+    expect(book.recentTrades(MINT)!.bonding).toBe(false);
+  });
+
+  it("reads a coin it joined late as bonding only on the curve's own trades, never complete", () => {
+    const book = new TradeFlowBook();
+    book.watch([MINT], sec(100));
+    expect(book.recentTrades(MINT)).toBeNull();
+    book.trade(trade("a", "buy", 1, sec(101)));
+    // No venue given: the stream can't say the trade was on the curve.
+    expect(book.recentTrades(MINT)).toMatchObject({ sinceMs: sec(100), complete: false, bonding: false });
+    book.trade(trade("a", "buy", 1, sec(102), { venue: "pump-amm" }));
+    expect(book.recentTrades(MINT)!.bonding).toBe(false);
+    book.trade(trade("a", "buy", 1, sec(103), { venue: "pump" }));
+    expect(book.recentTrades(MINT)!.bonding).toBe(true);
+    // Only the newest page's worth is kept.
+    for (let i = 0; i < 150; i++) book.trade(trade(`w${i}`, "buy", 1, sec(200 + i), { venue: "pump" }));
+    const page = book.recentTrades(MINT)!;
+    expect(page.trades).toHaveLength(100);
+    expect(page.trades[0]!.wallet).toBe("w50");
+  });
+
   it("drops idle mints and launches that never took off, but keeps what the scan watches", () => {
     const book = new TradeFlowBook({ idleMs: 15 * 60_000, launchGraceMs: 10 * 60_000, minMcapSol: 45 });
     book.launch({ mint: "dud", marketCapSol: 30, at: T0 });
