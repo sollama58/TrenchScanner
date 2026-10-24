@@ -293,6 +293,8 @@ describe.skipIf(!dbAvailable)("runCandlePeaksJob", () => {
     const traded = await seedCoin("traded", 30, { callPeak: 12_000 });
     const unlisted = await seedCoin("unlisted", 30, { callPeak: 12_000 });
     const fresh = await seedCoin("fresh", 1);
+    // Never read, alerted 30 hours ago, no trade in a day: its readings' peak stands, no read.
+    const freshQuiet = await seedCoin("freshquiet", 30, { callPeak: 11_000 });
     const readAt = new Date(Date.now() - 13 * HOUR);
     for (const { token } of [quiet, traded, unlisted]) {
       await prisma.peakWatch.upsert({
@@ -327,10 +329,18 @@ describe.skipIf(!dbAvailable)("runCandlePeaksJob", () => {
       asked.push(mints);
       const readings = [];
       for (const mint of mints) {
-        if (mint === quiet.token.mintAddress)
+        if (mint === quiet.token.mintAddress || mint === freshQuiet.token.mintAddress)
           readings.push({ mintAddress: mint, priceUsd: 1e-5, marketCapUsd: 10_000, volume24hUsd: 0 });
         else if (mint === traded.token.mintAddress)
           readings.push({ mintAddress: mint, priceUsd: 1.2e-5, marketCapUsd: 12_000, volume24hUsd: 500 });
+        else if (mint === fresh.token.mintAddress)
+          readings.push({
+            mintAddress: mint,
+            priceUsd: 1.2e-5,
+            marketCapUsd: 12_000,
+            volume1hUsd: 100,
+            volume24hUsd: 100,
+          });
         else if (mint === unlisted.token.mintAddress) continue;
         // Other tests' coins: not this test's to reschedule.
         else failed.add(mint);
@@ -345,14 +355,19 @@ describe.skipIf(!dbAvailable)("runCandlePeaksJob", () => {
       now: () => now,
       triage: { lookup },
     });
-    expect(meta).toMatchObject({ quiet: 1, traded: 1, unlisted: 1 });
-    expect(meta.triaged).toBeGreaterThanOrEqual(3);
-    // The never-read coin is read ahead of the triaged ones, and without being asked about.
+    expect(meta).toMatchObject({ quiet: 2, traded: 2, unlisted: 1 });
+    expect(meta.triaged).toBeGreaterThanOrEqual(5);
+    // The never-read coin that traded is read ahead of the one read before.
     expect(reads.indexOf(fresh.token.mintAddress)).toBeLessThan(reads.indexOf(traded.token.mintAddress));
-    expect(asked.flat()).not.toContain(fresh.token.mintAddress);
+    expect(asked.flat()).toContain(fresh.token.mintAddress);
     expect(reads).toContain(traded.token.mintAddress);
     expect(reads).not.toContain(quiet.token.mintAddress);
     expect(reads).not.toContain(unlisted.token.mintAddress);
+    expect(reads).not.toContain(freshQuiet.token.mintAddress);
+    expect((await callOf(freshQuiet.call.id)).peakMcapUsd).toBe(11_000);
+    const fq = await prisma.peakWatch.findUniqueOrThrow({ where: { tokenId: freshQuiet.token.id } });
+    expect(fq.lastCheckedAt).toBeNull();
+    expect(fq.nextCheckAt.getTime()).toBe(now + 12 * HOUR);
     expect((await callOf(traded.call.id)).peakMcapUsd).toBeCloseTo(15_000);
     expect((await callOf(quiet.call.id)).peakMcapUsd).toBe(12_000);
     // Last traded two days ago and not since: the quiet turn, 12 hours on, with no read spent.
