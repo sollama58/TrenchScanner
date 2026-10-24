@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ago, usd } from "../format";
+import { imageSources } from "./GraphView";
 import { asylApi, avatarUrl, type AsylMe, type Dossier } from "./asylApi";
 import {
   EDGE_LABEL,
@@ -29,6 +30,16 @@ const sol = (n: number | null | undefined) =>
   n === null || n === undefined
     ? "–"
     : `${n >= 0 ? "" : "−"}${Math.abs(n).toFixed(Math.abs(n) >= 100 ? 0 : 2)} SOL`;
+
+/** A coin's picture, trying each source in turn; nothing when none loads. */
+function TokenImage({ sources }: { sources: string[] }) {
+  const [n, setN] = useState(0);
+  const src = sources[n];
+  if (!src) return null;
+  return (
+    <img className="asyl-insp-img" src={src} alt="" width={40} height={40} onError={() => setN(n + 1)} />
+  );
+}
 
 /** The selected wallet or coin: what it is, what ties it to the map, and what to read next. */
 export function Inspector({
@@ -100,7 +111,7 @@ export function Inspector({
   return (
     <aside className="asyl-inspector" aria-label="Selected">
       <header className="asyl-insp-head">
-        {node.image && <img className="asyl-insp-img" src={node.image} alt="" width={40} height={40} />}
+        {node.kind === "token" && <TokenImage key={node.id} sources={imageSources(node)} />}
         {!node.image && node.avatar && (
           <img className="asyl-insp-img round" src={avatarUrl(node.avatar)} alt="" width={40} height={40} />
         )}

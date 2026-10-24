@@ -2,6 +2,7 @@ import {
   prisma,
   isHotFunder,
   isServiceWallet,
+  isWalletAddress,
   HOT_FUNDER_DENYLIST,
   KNOWN_EXCHANGE_WALLETS,
   MARKED_BOT_WALLETS,
@@ -453,6 +454,9 @@ export async function addHolders(
   source: "stored" | "chain",
 ): Promise<void> {
   g.node(mint, "token");
+  // Wallets only (user ask 2026-10-24): a holder that is off the curve is a token account, a pool
+  // or a bonding curve, never someone's wallet.
+  holders = holders.filter((h) => isWalletAddress(h.wallet));
   for (const h of holders) {
     g.node(h.wallet, "wallet");
     g.edge({
