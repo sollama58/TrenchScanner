@@ -96,7 +96,7 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
     g.nodes.map((n) => n.id),
     radius,
   );
-  const k = Math.min(box.w / Math.max(1, b.maxX - b.minX), box.h / Math.max(1, b.maxY - b.minY), 1.4);
+  const k = Math.min(box.w / Math.max(1, b.maxX - b.minX), box.h / Math.max(1, b.maxY - b.minY), 2.2);
   const ox = box.x + (box.w - (b.maxX - b.minX) * k) / 2 - b.minX * k;
   const oy = box.y + (box.h - (b.maxY - b.minY) * k) / 2 - b.minY * k;
   const at = (id: string) => {

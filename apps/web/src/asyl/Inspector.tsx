@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ago, usd } from "../format";
-import { asylApi, type AsylMe, type Dossier } from "./asylApi";
+import { asylApi, avatarUrl, type AsylMe, type Dossier } from "./asylApi";
 import {
   EDGE_LABEL,
   TAG_LABEL,
@@ -102,7 +102,7 @@ export function Inspector({
       <header className="asyl-insp-head">
         {node.image && <img className="asyl-insp-img" src={node.image} alt="" width={40} height={40} />}
         {!node.image && node.avatar && (
-          <img className="asyl-insp-img round" src={node.avatar} alt="" width={40} height={40} />
+          <img className="asyl-insp-img round" src={avatarUrl(node.avatar)} alt="" width={40} height={40} />
         )}
         <div className="asyl-insp-title">
           <h2>{nodeName(node)}</h2>

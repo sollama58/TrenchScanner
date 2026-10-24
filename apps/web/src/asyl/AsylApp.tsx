@@ -274,7 +274,8 @@ export function AsylApp() {
       const link = sharedLink(slug);
       await navigator.clipboard?.writeText(link).catch(() => undefined);
       refreshLists();
-      return `Link copied: ${link}. It shows the map as it is now; share again after changes to update it.`;
+      const ownLabels = graph.nodes.some((n) => n.tags.includes("mine"));
+      return `Link copied: ${link}. It shows the map as it is now${ownLabels ? ", your labels on it included" : ""}; share again after changes to update it.`;
     });
 
   const unshare = () =>

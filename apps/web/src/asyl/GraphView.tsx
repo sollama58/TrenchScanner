@@ -204,9 +204,8 @@ export function GraphView({
       drag.current = null;
       return;
     }
-    drag.current = { id: readOnly ? null : id, moved: false, startX: e.clientX, startY: e.clientY };
-    if (id && readOnly) drag.current.id = null;
-    if (id) drag.current = { ...drag.current, id };
+    // On a read-only map a node can still be picked; dragging it pans instead of moving it.
+    drag.current = { id, moved: false, startX: e.clientX, startY: e.clientY };
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -224,7 +223,7 @@ export function GraphView({
     if (!d) return;
     if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > 3) d.moved = true;
     if (!d.moved) return;
-    if (d.id) {
+    if (d.id && !readOnly) {
       const w = toWorld(e.clientX, e.clientY);
       layout.pos.set(d.id, w);
       layout.pinned.add(d.id);
@@ -242,7 +241,7 @@ export function GraphView({
     drag.current = null;
     if (!d) return;
     if (!d.moved) onSelect(d.id);
-    else if (d.id) onMoved?.();
+    else if (d.id && !readOnly) onMoved?.();
   };
 
   const zoomAt = (px: number, py: number, k: number) => {
