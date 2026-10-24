@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import {
   clusterOf,
+  DEFAULT_TIME_LABELS,
   EDGE_KINDS,
   EDGE_LABEL,
+  edgeTimeFull,
+  edgeTimeLabel,
   nodeName,
   TAG_LABEL,
+  TIMED_KINDS,
+  type TimeLabels,
+  type TimedKind,
   type AsylEdge,
   type AsylEdgeKind,
   type AsylGraph,
@@ -267,6 +273,7 @@ export function GraphView({
   layoutKey,
   handle,
   readOnly = false,
+  timeLabels = DEFAULT_TIME_LABELS,
 }: {
   graph: AsylGraph;
   layout: LayoutState;
@@ -282,6 +289,8 @@ export function GraphView({
   layoutKey: string;
   handle?: Ref<GraphViewHandle>;
   readOnly?: boolean;
+  /** Which kinds of line carry their time along them. */
+  timeLabels?: TimeLabels;
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [, setFrame] = useState(0);
@@ -573,6 +582,7 @@ export function GraphView({
               const label = [
                 `${nodeName(byId.get(e.a)!)} → ${nodeName(byId.get(e.b)!)}`,
                 e.label,
+                (TIMED_KINDS as readonly string[]).includes(e.kind) ? (edgeTimeFull(e.at) ?? "") : "",
                 e.source === "chain" ? "From a chain read" : "",
               ].filter(Boolean);
               const st = EDGE_STYLE[e.kind];
@@ -647,6 +657,52 @@ export function GraphView({
                       pointerEvents="none"
                     />
                   )}
+                </g>
+              );
+            })}
+          </g>
+          <g className="asyl-edge-times" pointerEvents="none">
+            {graph.edges.map((e) => {
+              // Times along the lines (user ask 2026-10-24): funding and deploys by default,
+              // transfers when switched on; as much of the date as the line has room for.
+              if (!(TIMED_KINDS as readonly string[]).includes(e.kind) || !timeLabels[e.kind as TimedKind])
+                return null;
+              const a = layout.pos.get(e.a);
+              const b = layout.pos.get(e.b);
+              if (!a || !b || !e.at) return null;
+              const dx = b.x - a.x;
+              const dy = b.y - a.y;
+              const d = Math.hypot(dx, dy) || 1;
+              const span = (d - radius(e.a) - radius(e.b)) * view.k;
+              // About 6px a character at 10.5px, and room left either side for the arrow.
+              const text = edgeTimeLabel(e.at, Math.floor((span - 28) / 6));
+              if (!text) return null;
+              const dim = lit && !(lit.has(e.a) && lit.has(e.b));
+              // The line's middle (its bow, as drawn above), and its angle kept upright.
+              const bow = e.kind === "funded" ? 0 : e.kind === "transfer" ? 0.12 : 0.06;
+              const ra = radius(e.a);
+              const rb = radius(e.b) + 2;
+              const sx = a.x + (dx / d) * ra;
+              const sy = a.y + (dy / d) * ra;
+              const ex = b.x - (dx / d) * rb;
+              const ey = b.y - (dy / d) * rb;
+              const mx = (sx + ex) / 2 - dy * bow;
+              const my = (sy + ey) / 2 + dx * bow;
+              const x = 0.25 * sx + 0.5 * mx + 0.25 * ex;
+              const y = 0.25 * sy + 0.5 * my + 0.25 * ey;
+              let angle = (Math.atan2(ey - sy, ex - sx) * 180) / Math.PI;
+              if (angle > 90) angle -= 180;
+              else if (angle < -90) angle += 180;
+              return (
+                <g
+                  key={`t|${e.kind}|${e.a}|${e.b}|${e.mint ?? ""}`}
+                  transform={`translate(${x} ${y}) rotate(${angle}) scale(${1 / view.k})`}
+                  opacity={dim ? 0.2 : 1}
+                  className="asyl-edge-time"
+                >
+                  <text y={e.kind === "created" ? -12 : -6} textAnchor="middle" fill={EDGE_COLOUR[e.kind]}>
+                    {text}
+                  </text>
                 </g>
               );
             })}

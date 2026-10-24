@@ -5,6 +5,7 @@ import {
   clearsCutoffs,
   clusterOf,
   edgeKey,
+  edgeTimeLabel,
   graphCsv,
   mergeGraph,
   removeNodes,
@@ -202,5 +203,22 @@ describe("withDeployLines", () => {
       edges: [],
     });
     expect(merged.nodes[0]).toMatchObject({ deployer: "dev", deployerVerified: true });
+  });
+});
+
+describe("edgeTimeLabel", () => {
+  const now = new Date(2026, 9, 24, 18, 0);
+  it("writes as much as the line has room for", () => {
+    const iso = new Date(2026, 9, 12, 9, 5).toISOString();
+    expect(edgeTimeLabel(iso, 40, now)).toBe("12 Oct 09:05");
+    expect(edgeTimeLabel(iso, 8, now)).toBe("12 Oct");
+    expect(edgeTimeLabel(iso, 4, now)).toBeNull();
+  });
+  it("shows the year only for another year, and just the time for today", () => {
+    expect(edgeTimeLabel(new Date(2025, 0, 3, 14, 30).toISOString(), 40, now)).toBe("3 Jan 2025 14:30");
+    expect(edgeTimeLabel(new Date(2026, 9, 24, 14, 30).toISOString(), 6, now)).toBe("14:30");
+  });
+  it("is null without a time", () => {
+    expect(edgeTimeLabel(null, 40, now)).toBeNull();
   });
 });

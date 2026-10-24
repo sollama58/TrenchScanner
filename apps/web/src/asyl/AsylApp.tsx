@@ -9,7 +9,9 @@ import { GraphView, MapLegend, type GraphViewHandle } from "./GraphView";
 import {
   EDGE_KINDS,
   EDGE_LABEL,
+  DEFAULT_TIME_LABELS,
   NO_CUTOFFS,
+  TIMED_KINDS,
   addressIn,
   clearsCutoffs,
   edgeKey,
@@ -24,6 +26,7 @@ import {
   type AsylGraph,
   type AsylNode,
   type Cutoffs,
+  type TimeLabels,
 } from "./graph";
 import { History, HISTORY_MAX } from "./history";
 import { Inspector, type InspectorActions } from "./Inspector";
@@ -97,6 +100,21 @@ interface MapSnapshot {
   pinned: Set<string>;
 }
 
+/** Times along lines: also the reader's own, kept in this browser. */
+const TIMES_KEY = "asyl:line-times";
+
+function storedTimeLabels(): TimeLabels {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TIMES_KEY) ?? "null") as Partial<TimeLabels> | null;
+    const out = { ...DEFAULT_TIME_LABELS };
+    if (raw && typeof raw === "object")
+      for (const k of TIMED_KINDS) if (typeof raw[k] === "boolean") out[k] = raw[k];
+    return out;
+  } catch {
+    return DEFAULT_TIME_LABELS;
+  }
+}
+
 type RailTab = "map" | "links" | "maps" | "labels";
 const RAIL_TABS: { id: RailTab; label: string }[] = [
   { id: "map", label: "Map" },
@@ -118,6 +136,7 @@ export function AsylApp() {
   const [removed, setRemoved] = useState<Set<string>>(new Set());
   const [cut, setCut] = useState<Set<string>>(new Set());
   const [cutoffs, setCutoffsState] = useState<Cutoffs>(storedCutoffs);
+  const [timeLabels, setTimeLabelsState] = useState<TimeLabels>(storedTimeLabels);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [mapNote, setMapNote] = useState("");
   const [current, setCurrent] = useState<MapSummary | null>(null);
@@ -144,6 +163,15 @@ export function AsylApp() {
 
   const me = typeof session === "object" ? session : null;
   const solUsd = me?.solUsd ?? null;
+
+  const setTimeLabels = (t: TimeLabels) => {
+    setTimeLabelsState(t);
+    try {
+      localStorage.setItem(TIMES_KEY, JSON.stringify(t));
+    } catch {
+      // Storage blocked: the switches hold for this visit.
+    }
+  };
 
   const setCutoffs = useCallback((c: Cutoffs) => {
     setCutoffsState(c);
@@ -817,6 +845,8 @@ export function AsylApp() {
                 onCutoffs={setCutoffs}
                 solUsd={solUsd}
                 cut={cut}
+                timeLabels={timeLabels}
+                onTimeLabels={setTimeLabels}
                 onRestore={(keys) => {
                   record();
                   setCut((s) => new Set([...s].filter((k) => !keys.includes(k))));
@@ -1107,6 +1137,7 @@ export function AsylApp() {
                 if (n) actions.expand(n);
               }}
               onMoveStart={record}
+              timeLabels={timeLabels}
               onMoved={() => setDirty(true)}
               layoutKey={layoutKey}
               handle={view}

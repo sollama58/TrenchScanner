@@ -4,6 +4,7 @@ import {
   EDGE_LABEL,
   MONEY_KINDS,
   NO_CUTOFFS,
+  TIMED_KINDS,
   clearsCutoffs,
   edgeKey,
   nodeName,
@@ -12,6 +13,7 @@ import {
   type AsylEdgeKind,
   type AsylGraph,
   type Cutoffs,
+  type TimeLabels,
 } from "./graph";
 
 /**
@@ -58,6 +60,8 @@ export function LinkFilters({
   solUsd,
   cut,
   onRestore,
+  timeLabels,
+  onTimeLabels,
 }: {
   /** Everything on the map, before any filter. */
   graph: AsylGraph;
@@ -69,6 +73,9 @@ export function LinkFilters({
   /** Links hidden one by one, by edgeKey. */
   cut: ReadonlySet<string>;
   onRestore: (keys: string[]) => void;
+  /** Which kinds of line carry their time. */
+  timeLabels: TimeLabels;
+  onTimeLabels: (t: TimeLabels) => void;
 }) {
   const names = new Map(graph.nodes.map((n) => [n.id, nodeName(n)]));
   const money = graph.edges.filter((e) => MONEY_KINDS.includes(e.kind));
@@ -107,6 +114,35 @@ export function LinkFilters({
             );
           })}
         </ul>
+      </section>
+
+      <section className="asyl-rail-card">
+        <h3>Times on lines</h3>
+        <ul className="asyl-legend">
+          {TIMED_KINDS.map((k) => {
+            const timed = graph.edges.filter((e) => e.kind === k && e.at).length;
+            return (
+              <li key={k}>
+                <label className={timeLabels[k] ? "" : "off"}>
+                  <input
+                    type="checkbox"
+                    className="asyl-switch"
+                    checked={timeLabels[k]}
+                    onChange={() => onTimeLabels({ ...timeLabels, [k]: !timeLabels[k] })}
+                  />
+                  <LinkSwatch kind={k} />
+                  <span className="asyl-legend-name">
+                    {k === "funded" ? "When funded" : k === "created" ? "When deployed" : "When sent"}
+                  </span>
+                  {timed > 0 && <span className="asyl-count">{timed}</span>}
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+        <p className="asyl-muted asyl-small">
+          In your own time, down to the minute; a short line shows just the day or the time.
+        </p>
       </section>
 
       <section className="asyl-rail-card">
