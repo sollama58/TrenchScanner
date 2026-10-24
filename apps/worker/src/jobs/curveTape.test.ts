@@ -50,10 +50,12 @@ function setup(
 ) {
   const reads: string[][] = [];
   const reader = {
-    getCurveStatesBatch: vi.fn(async (curves: string[]) => {
-      reads.push(curves);
-      return new Map(curves.map((c) => [c, state(1)] as const));
-    }),
+    getCurveStatesBatch: vi.fn(
+      async (curves: string[]): Promise<Map<string, CurveState | null | "failed">> => {
+        reads.push(curves);
+        return new Map(curves.map((c) => [c, state(1)] as const));
+      },
+    ),
   };
   const stream = {
     watch: vi.fn(),
