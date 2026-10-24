@@ -179,6 +179,7 @@ interface DueWatch {
   candlesTrusted: boolean | null;
   athMcapUsd: number | null;
   firstAlertAt: Date;
+  lastAlertAt: Date;
   lastCheckedAt: Date | null;
   lastTradeAt: Date | null;
   token: { mintAddress: string };
@@ -189,6 +190,7 @@ const DUE_SELECT = {
   candlesTrusted: true,
   athMcapUsd: true,
   firstAlertAt: true,
+  lastAlertAt: true,
   lastCheckedAt: true,
   lastTradeAt: true,
   token: { select: { mintAddress: true } },
@@ -196,11 +198,11 @@ const DUE_SELECT = {
 
 /** What the triage did with the due coins it looked at. */
 export interface TriageCounts {
-  /** Coins read before whose DexScreener reading was asked for. */
+  /** Due coins whose DexScreener reading was asked for. */
   triaged: number;
   /** No trade since the last read: wait the usual turn, no candle read. */
   quiet: number;
-  /** Traded since: read now (the busiest first), or next run. */
+  /** Traded since: read now (the never-read first, then the busiest), or next run. */
   traded: number;
   /** No pair on DexScreener at all: nothing trades, wait the quiet turn. */
   unlisted: number;
@@ -209,12 +211,17 @@ export interface TriageCounts {
 }
 
 /**
- * Exported for tests. The coins a run reads candles for, up to `coinsPerRun`: the coins never read
- * first (their peaks are the readings' until a read reaches back over their alerts), then, of the
- * due coins read before, the ones DexScreener shows a trade for since their last read, busiest
- * first. The quiet ones are given their next turn without a read (nextPeakCheckDelayMs on their
- * last trade), a coin with no pair at all the quiet turn, and one DexScreener couldn't answer is
- * left due. Without a triage every due coin is read, oldest due first, as before.
+ * Exported for tests. The coins a run reads candles for, up to `coinsPerRun`: of the due coins
+ * (oldest due first, TRIAGE_COINS_PER_RUN of them), the ones DexScreener shows a trade for since
+ * their last read, or since their latest alert when never read; the never-read ones first (their
+ * peaks are the readings' until a read reaches back over their alerts), then the busiest. The
+ * quiet ones are given their next turn without a read (nextPeakCheckDelayMs on their last trade),
+ * a coin with no pair at all the quiet turn, and one DexScreener couldn't answer is left due.
+ * Without a triage every due coin is read, oldest due first, as before.
+ *
+ * Never-read coins are triaged too: on 2026-10-24 the due reads were days behind, so thirty of
+ * them filled every run ahead of the triage, and the day's Peaks credits were spent before the
+ * first; a never-read coin that is quiet keeps its readings' peak until it trades.
  */
 export async function triagePeakReads(
   dueWhere: { nextCheckAt: { lte: Date }; lastAlertAt: { gt: Date }; noCandles: false },
@@ -223,43 +230,26 @@ export async function triagePeakReads(
   now: () => number,
 ): Promise<{ due: DueWatch[]; triage: TriageCounts }> {
   const counts: TriageCounts = { triaged: 0, quiet: 0, traded: 0, unlisted: 0, unanswered: 0 };
-  if (!triage) {
-    const due = await prisma.peakWatch.findMany({
-      where: dueWhere,
-      orderBy: { nextCheckAt: "asc" },
-      take: coinsPerRun,
-      select: DUE_SELECT,
-    });
-    return { due, triage: counts };
-  }
-  const unread = await prisma.peakWatch.findMany({
-    where: { ...dueWhere, lastCheckedAt: null },
+  const due = await prisma.peakWatch.findMany({
+    where: dueWhere,
     orderBy: { nextCheckAt: "asc" },
-    take: coinsPerRun,
+    take: triage ? (triage.coinsPerRun ?? TRIAGE_COINS_PER_RUN) : coinsPerRun,
     select: DUE_SELECT,
   });
-  const room = coinsPerRun - unread.length;
-  if (room <= 0) return { due: unread, triage: counts };
-  const read = await prisma.peakWatch.findMany({
-    where: { ...dueWhere, lastCheckedAt: { not: null } },
-    orderBy: { nextCheckAt: "asc" },
-    take: triage.coinsPerRun ?? TRIAGE_COINS_PER_RUN,
-    select: DUE_SELECT,
-  });
-  if (read.length === 0) return { due: unread, triage: counts };
-  counts.triaged = read.length;
+  if (!triage || due.length === 0) return { due, triage: counts };
+  counts.triaged = due.length;
   const failed = new Set<string>();
   let tokens: CandidateToken[];
   try {
     tokens = await triage.lookup(
-      read.map((w) => w.token.mintAddress),
+      due.map((w) => w.token.mintAddress),
       failed,
     );
   } catch (err) {
     // DexScreener down: the oldest due are read as before, so the Peaks don't wait on it.
     logger.warn("peak triage lookup failed; reading the oldest due coins", { error: String(err) });
-    counts.unanswered = read.length;
-    return { due: [...unread, ...read.slice(0, room)], triage: counts };
+    counts.unanswered = due.length;
+    return { due: due.slice(0, coinsPerRun), triage: counts };
   }
   const byMint = new Map(tokens.map((t) => [t.mintAddress, t]));
   const traded: { watch: DueWatch; volume: number }[] = [];
@@ -271,7 +261,7 @@ export async function triagePeakReads(
     ids.push(watch.tokenId);
     waits.set(at + delayMs, ids);
   };
-  for (const watch of read) {
+  for (const watch of due) {
     const mint = watch.token.mintAddress;
     const token = byMint.get(mint);
     if (!token) {
@@ -282,7 +272,8 @@ export async function triagePeakReads(
       }
       continue;
     }
-    const moved = tradedSince(token, at - (watch.lastCheckedAt?.getTime() ?? 0));
+    const since = watch.lastCheckedAt ?? watch.lastAlertAt;
+    const moved = tradedSince(token, at - since.getTime());
     if (moved === false) {
       counts.quiet += 1;
       wait(watch, nextPeakCheckDelayMs(watch.lastTradeAt, at));
@@ -291,14 +282,18 @@ export async function triagePeakReads(
     counts.traded += 1;
     traded.push({ watch, volume: token.volume24hUsd ?? Infinity });
   }
-  for (const [at, ids] of waits) {
+  for (const [when, ids] of waits) {
     await prisma.peakWatch.updateMany({
       where: { tokenId: { in: ids } },
-      data: { nextCheckAt: new Date(at) },
+      data: { nextCheckAt: new Date(when) },
     });
   }
-  traded.sort((a, b) => b.volume - a.volume);
-  return { due: [...unread, ...traded.slice(0, room).map((t) => t.watch)], triage: counts };
+  traded.sort((a, b) => {
+    const unreadA = a.watch.lastCheckedAt === null ? 0 : 1;
+    const unreadB = b.watch.lastCheckedAt === null ? 0 : 1;
+    return unreadA - unreadB || b.volume - a.volume;
+  });
+  return { due: traded.slice(0, coinsPerRun).map((t) => t.watch), triage: counts };
 }
 
 /** The Match columns derived from its peak (outcomeTrackingJob.ts keeps the same rule). */
