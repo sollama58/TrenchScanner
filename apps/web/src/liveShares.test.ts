@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { liveShareDeltas, wideShareDeltas, wideWithLiveShares, withLiveShares } from "./liveShares";
+import {
+  coversFrom,
+  listedShareDeltas,
+  wideWithLiveShares,
+  withLiveShares,
+  type ShareTrade,
+} from "./liveShares";
 import type { WideMap } from "./bubbleMap";
 
 const SUPPLY = 1_000_000_000;
@@ -17,11 +23,17 @@ const sell = (wallet: string, tokens: number, atMs = T + 1) => ({
   atMs,
 });
 
-describe("liveShareDeltas", () => {
-  it("nets each wallet's trades after the read as a share of supply", () => {
-    const d = liveShareDeltas(
-      [buy("a", 10_000_000), sell("a", 5_000_000), buy("b", 1_000_000, T), sell("c", 2_000_000)],
-      SUPPLY,
+const feed = (trades: ShareTrade[], wholeFrom = T, supply: number | null = SUPPLY) => ({
+  trades,
+  supply,
+  wholeFrom,
+});
+
+describe("listedShareDeltas", () => {
+  it("nets each listed wallet's trades after the list's time as a share of supply", () => {
+    const d = listedShareDeltas(
+      feed([buy("a", 10_000_000), sell("a", 5_000_000), buy("b", 1_000_000, T), sell("c", 2_000_000)]),
+      new Set(["a", "b", "c"]),
       T,
     );
     expect(d.get("a")).toBeCloseTo(0.5);
@@ -29,23 +41,41 @@ describe("liveShareDeltas", () => {
     expect(d.get("c")).toBeCloseTo(-0.2);
   });
 
+  it("never moves a wallet off the list: its holding before the feed is unknown", () => {
+    // A wallet ranked 30th that buys more, or a router that an aggregator trade names, would show
+    // at only the size of its trades.
+    const d = listedShareDeltas(
+      feed([buy("listed", 1_000_000), buy("router", 50_000_000)]),
+      new Set(["listed"]),
+      T,
+    );
+    expect([...d.keys()]).toEqual(["listed"]);
+  });
+
+  it("moves nothing when the feed doesn't hold every trade since the list's time", () => {
+    // The feed is whole only from T + 5: a trade between T and T + 5 may be missing.
+    const d = listedShareDeltas(feed([buy("a", 1_000_000, T + 10)], T + 5), new Set(["a"]), T);
+    expect(d.size).toBe(0);
+  });
+
   it("moves nothing without a supply", () => {
-    expect(liveShareDeltas([buy("a", 1)], null, T).size).toBe(0);
+    expect(listedShareDeltas(feed([buy("a", 1)], T, null), new Set(["a"]), T).size).toBe(0);
+  });
+
+  it("does not count again a trade the holder stream already folded into the shares", () => {
+    const trades = [buy("a", 10_000_000, T + 5), buy("a", 1_000_000, T + 20)];
+    const d = listedShareDeltas(feed(trades), new Set(["a"]), T + 10);
+    expect(d.get("a")).toBeCloseTo(0.1);
   });
 });
 
-describe("wideShareDeltas", () => {
-  it("moves wallets already on the list from the share time and everyone else from the enumeration", () => {
-    // Enumerated at T. The holder stream moved the listed wallet at T + 5, so its share is current
-    // at T + 10; that buy must not be applied again. The extra wallet was not on the list.
-    const trades = [
-      buy("listed", 10_000_000, T + 5),
-      buy("listed", 1_000_000, T + 20),
-      buy("extra", 2_000_000, T + 5),
-    ];
-    const d = wideShareDeltas(trades, SUPPLY, new Set(["listed"]), T + 10, T);
-    expect(d.get("listed")).toBeCloseTo(0.1);
-    expect(d.get("extra")).toBeCloseTo(0.2);
+describe("coversFrom", () => {
+  it("holds only with a supply and the feed whole at or before the time", () => {
+    expect(coversFrom(feed([]), T)).toBe(true);
+    expect(coversFrom(feed([], T + 1), T)).toBe(false);
+    expect(coversFrom(feed([], T, null), T)).toBe(false);
+    expect(coversFrom(null, T)).toBe(false);
+    expect(coversFrom(feed([]), NaN)).toBe(false);
   });
 });
 
@@ -79,13 +109,11 @@ describe("withLiveShares", () => {
       ["a", -1],
       ["c", -1],
       ["new", 2],
-      ["tiny", 0.1],
     ]);
     const live = withLiveShares(reading, d);
     expect(live.linkedHolders).toEqual([
       { wallet: "a", pct: 4, cexFunder: "ex" },
       { wallet: "b", pct: 3 },
-      { wallet: "new", pct: 2 },
     ]);
     expect(live.linkedClusters).toEqual([
       { funder: "f", wallets: [{ wallet: "b", pct: 3 }], pct: 3, creatorLinked: false },
@@ -106,21 +134,21 @@ describe("withLiveShares", () => {
     expect(live.linkedHolders?.[0]?.pct).toBe(100);
   });
 
-  it("replaces a holder who sold down with the buyer who now outranks them", () => {
+  it("re-ranks a holder who sold down and adds no one", () => {
     const live = withLiveShares(
       reading,
       new Map([
-        ["c", -0.8],
+        ["b", -2.5],
         ["new", 0.5],
       ]),
     );
-    expect(live.linkedHolders?.map((h) => h.wallet)).toEqual(["a", "b", "new"]);
-    expect(live.linkedHolders?.map((h) => h.pct)).toEqual([5, 3, 0.5]);
+    expect(live.linkedHolders?.map((h) => h.wallet)).toEqual(["a", "c", "b"]);
+    expect(live.linkedHolders?.map((h) => h.pct)).toEqual([5, 1, 0.5]);
   });
 });
 
 describe("wideWithLiveShares", () => {
-  it("moves the top 50 and adds a buyer that ranks in it", () => {
+  it("moves the top 50's own wallets and adds no one", () => {
     const wide: WideMap = {
       readAt: new Date(T).toISOString(),
       holdersRead: 2,
@@ -132,7 +160,16 @@ describe("wideWithLiveShares", () => {
       clusters: [],
       sameTimeClusters: [],
     };
-    const live = wideWithLiveShares(wide, new Map([["n", 1.5]]));
-    expect(live.holders.map((h) => h.wallet)).toEqual(["a", "n"]);
+    const live = wideWithLiveShares(
+      wide,
+      new Map([
+        ["n", 1.5],
+        ["b", 1.5],
+      ]),
+    );
+    expect(live.holders.map((h) => [h.wallet, h.pct])).toEqual([
+      ["b", 2.5],
+      ["a", 2],
+    ]);
   });
 });

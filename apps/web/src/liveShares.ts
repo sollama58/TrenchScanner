@@ -5,10 +5,13 @@ import type { WideMap } from "./bubbleMap";
  * Live holder shares between holder reads (user ask 2026-10-19): while the bubble map is open the
  * worker keeps its top holders' balances current from the holder stream and writes the list at
  * least once a minute, and until the next list arrives each trade the page's live trades feed
- * brings in moves its wallet's share by the tokens it bought or sold. No wallet is
- * looked up for it: a new wallet that buys into the top holders shows at once, unlinked, and gets
- * its funder, tags and cluster from the next read, which corrects any drift too (transfers aren't
- * trades, and a trade routed through an aggregator names the router).
+ * brings in moves the share of a wallet on the list by the tokens it bought or sold.
+ *
+ * Only wallets already on the list move (user ask 2026-10-24: never show wrong data). A wallet off
+ * the list may already hold tokens the trade feed never saw, and a trade routed through an
+ * aggregator names the router, so adding a buyer at the size of its trades showed wrong holders
+ * and wrong shares. A new top holder shows with the next read. And only when the page holds every
+ * trade since the list's time (LiveTrades.wholeFrom): with a gap the list is shown as read.
  */
 
 /** The fields of a live trade the shares use (liveTrades.ts LiveTokenTrade). */
@@ -23,49 +26,36 @@ export interface ShareTrade {
 export interface LiveTradeShares {
   trades: readonly ShareTrade[];
   supply: number | null;
-  /**
-   * Whether the feed follows the coin's trades now (its status "live"): only then do shares move
-   * with each trade. That is the holder status "Live", and only while no chain re-read is being
-   * counted down. A balance tick does not set this.
-   */
-  live?: boolean;
+  /** From when `trades` holds every trade of the coin (LiveTrades.wholeFrom). */
+  wholeFrom: number;
 }
 
-/** Each wallet's share of supply moved (in %) by the trades after `fromMs`; empty without a supply. */
-export function liveShareDeltas(
-  trades: readonly ShareTrade[],
-  supply: number | null,
+/** Whether `live` holds every trade after `fromMs`, so shares read then can be moved by them. */
+export function coversFrom(
+  live: LiveTradeShares | null | undefined,
   fromMs: number,
-): Map<string, number> {
-  const out = new Map<string, number>();
-  if (!supply || !(supply > 0) || !Number.isFinite(fromMs)) return out;
-  for (const t of trades) {
-    if (!(t.atMs > fromMs) || !(t.tokens > 0)) continue;
-    const pct = ((t.side === "buy" ? 1 : -1) * t.tokens * 100) / supply;
-    out.set(t.wallet, (out.get(t.wallet) ?? 0) + pct);
-  }
-  return out;
+): live is LiveTradeShares {
+  return !!live && !!live.supply && live.supply > 0 && Number.isFinite(fromMs) && live.wholeFrom <= fromMs;
 }
 
 /**
- * Deltas for a list whose shares are already current as of `balancesAtMs`, while the set of
- * wallets was last enumerated at `enumeratedAtMs`. Wallets on the list move from the share time,
- * so a trade the holder stream already folded in is not counted again. Everyone else moves from
- * the enumeration, so a wallet that bought in after that read still appears. One time for both
- * either counts the stream's trades twice or hides every buyer from before a later scan stamp.
+ * Each listed wallet's share of supply moved (in %) by the trades after `fromMs`, the time its
+ * share was current (holderListAt, or the top 50's balance time). Empty when the feed doesn't hold
+ * every trade since then, or has no supply. Wallets off the list don't move (see above).
  */
-export function wideShareDeltas(
-  trades: readonly ShareTrade[],
-  supply: number | null,
+export function listedShareDeltas(
+  live: LiveTradeShares | null | undefined,
   listed: ReadonlySet<string>,
-  listAtMs: number,
-  wideAtMs: number,
+  fromMs: number,
 ): Map<string, number> {
-  const fromList = liveShareDeltas(trades, supply, listAtMs);
   const out = new Map<string, number>();
-  for (const [wallet, d] of liveShareDeltas(trades, supply, wideAtMs))
-    if (!listed.has(wallet)) out.set(wallet, d);
-  for (const [wallet, d] of fromList) if (listed.has(wallet)) out.set(wallet, d);
+  if (!coversFrom(live, fromMs)) return out;
+  const supply = live.supply!;
+  for (const t of live.trades) {
+    if (!(t.atMs > fromMs) || !(t.tokens > 0) || !listed.has(t.wallet)) continue;
+    const pct = ((t.side === "buy" ? 1 : -1) * t.tokens * 100) / supply;
+    out.set(t.wallet, (out.get(t.wallet) ?? 0) + pct);
+  }
   return out;
 }
 
@@ -99,25 +89,12 @@ function movedGroups<G extends { wallets: { wallet: string; pct: number }[]; pct
   });
 }
 
-/**
- * The holder list with its shares moved, largest first, and the wallets that bought in since the
- * read added where they rank among it, kept to its length. The bar is the list after the moves:
- * a buyer who outranks a holder that sold down takes their place, and one who doesn't is left out.
- */
+/** The holder list with its shares moved, largest first; the ones sold out of it gone. */
 function movedHolders<H extends { wallet: string; pct: number }>(
   holders: readonly H[],
   deltas: ReadonlyMap<string, number>,
-  make: (wallet: string, pct: number) => H,
 ): H[] {
-  const list = movedWallets(holders, deltas);
-  const listed = new Set(holders.map((h) => h.wallet));
-  for (const [wallet, d] of deltas) {
-    if (listed.has(wallet) || !(d > 0)) continue;
-    const pct = round2(d);
-    if (!(pct > 0)) continue;
-    list.push(make(wallet, pct));
-  }
-  return list.sort((a, b) => b.pct - a.pct).slice(0, Math.max(holders.length, 1));
+  return movedWallets(holders, deltas).sort((a, b) => b.pct - a.pct);
 }
 
 /** The sum of the moves over `wallets`, each once. */
@@ -153,9 +130,7 @@ export function withLiveShares<
   const sameTimeWallets = (s.sameTimeClusters ?? []).flatMap((g) => g.wallets.map((w) => w.wallet));
   return {
     ...s,
-    linkedHolders: s.linkedHolders
-      ? movedHolders(holders, deltas, (wallet, pct) => ({ wallet, pct }))
-      : s.linkedHolders,
+    linkedHolders: s.linkedHolders ? movedHolders(holders, deltas) : s.linkedHolders,
     linkedClusters: movedGroups(s.linkedClusters, deltas),
     sameTimeClusters: movedGroups(s.sameTimeClusters, deltas),
     linkedWalletPct: movedFigure(s.linkedWalletPct, movedBy(clusterWallets, deltas)),
@@ -182,7 +157,7 @@ export function wideWithLiveShares(wide: WideMap, deltas: ReadonlyMap<string, nu
   if (deltas.size === 0) return wide;
   return {
     ...wide,
-    holders: movedHolders(wide.holders, deltas, (wallet, pct) => ({ wallet, pct })),
+    holders: movedHolders(wide.holders, deltas),
     clusters: movedGroups(wide.clusters, deltas) ?? [],
     ...(wide.clustersExTransfers
       ? { clustersExTransfers: movedGroups(wide.clustersExTransfers, deltas) ?? [] }

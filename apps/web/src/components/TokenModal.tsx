@@ -3,7 +3,7 @@ import {
   fromAlertText,
   hasHolderList,
   holderFreshness,
-  holderChainReadAt,
+  HOLDER_LIVE_GRACE_MS,
   holderListAt,
   holderShownAt,
   linkedCountText,
@@ -17,8 +17,8 @@ import {
 import { cachedGet } from "../cache";
 import { createPortal } from "react-dom";
 import { LiveTradesCard, useBatchedWallets } from "./LiveTrades";
-import { useLiveTrades, useLiveTradesIfFollowed } from "../liveTrades";
-import { wideShareDeltas, withLiveShares, type LiveTradeShares } from "../liveShares";
+import { MAX_HISTORY, useLiveTrades, useLiveTradesIfFollowed } from "../liveTrades";
+import { coversFrom, listedShareDeltas, withLiveShares, type LiveTradeShares } from "../liveShares";
 import { usePossibleSides } from "../possibleSides";
 import {
   createContext,
@@ -959,32 +959,40 @@ function TokenBody({
   const linked = useHolderReading(card, !!utility, scans.snapshots);
   const holders = useHoldersView(card, linked, alertAt, !!utility);
   const liveShares = useLiveShares(mint, holders.isKept);
-  // The top holders as the live trades since the reading moved them (liveShares.ts).
+  // The top holders as the live trades since the reading moved them (liveShares.ts): only the
+  // listed wallets, and only when the feed holds every trade since the list's balances.
+  const listAt = holders.listReading ? holderListAt(holders.listReading) : NaN;
+  const sharesMove = coversFrom(liveShares, listAt);
   const listReading = useMemo(
     () =>
-      liveShares && holders.listReading
+      sharesMove && holders.listReading
         ? withLiveShares(
             holders.listReading,
-            wideShareDeltas(
-              liveShares.trades,
-              liveShares.supply,
+            listedShareDeltas(
+              liveShares,
               new Set((holders.listReading.linkedHolders ?? []).map((h) => h.wallet)),
               holderListAt(holders.listReading),
-              holderChainReadAt(holders.listReading),
             ),
           )
         : holders.listReading,
-    [liveShares, holders.listReading],
+    [sharesMove, liveShares, holders.listReading],
   );
   // Each live section's age and next update, beside its count (user ask 2026-10-19): the holder
-  // list follows the scans; the labeled wallets, the chart read they come from.
+  // list follows the scans; the labeled wallets, the chart read they come from. The age always
+  // shows (user ask 2026-10-24): "Live" is added only while the shares move with every trade and
+  // the list is not past its next read (liveUntil), and drops back to the countdown after.
   const holdersFresh = (() => {
     if (holders.isKept || !holders.listReading || !hasHolderList(holders.listReading)) return undefined;
     const chain = holderFreshness(holders.listReading, now, reads);
-    // The trade feed's "live" is the stream pushing updates. A balance tick does not set it.
-    // While that stream is covering the coin there is no scheduled re-read to count down.
-    if (liveShares?.live) return { last: chain.last, next: null, late: false, live: true, gone: false };
-    return { last: chain.last, next: chain.due, late: false, live: false, gone: chain.due === null };
+    const liveUntil = sharesMove && chain.due !== null ? chain.due + HOLDER_LIVE_GRACE_MS : null;
+    return {
+      last: chain.last,
+      next: chain.due,
+      late: false,
+      live: liveUntil !== null,
+      liveUntil,
+      gone: chain.due === null,
+    };
   })();
   // The chart read's own beat, which the wallets come with.
   const walletsFresh = chart.at === null ? undefined : { last: chart.at, next: chart.schedule ?? null };
@@ -2284,13 +2292,26 @@ function HolderFreshness({
   fresh,
   moment,
 }: {
-  fresh: { last: number; next: number | null; late?: boolean; live?: boolean; gone?: boolean };
+  fresh: {
+    last: number;
+    next: number | null;
+    late?: boolean;
+    live?: boolean;
+    liveUntil?: number | null;
+    gone?: boolean;
+  };
   moment?: { label: string; title: string };
 }) {
   return (
     <p className="tm-holders-when">
       {moment && !fresh.live && <b title={moment.title}>{moment.label} · </b>}
-      <LiveStamp last={fresh.last} next={fresh.next} late={fresh.late} live={fresh.live} />
+      <LiveStamp
+        last={fresh.last}
+        next={fresh.next}
+        late={fresh.late}
+        live={fresh.live}
+        liveUntil={fresh.liveUntil}
+      />
       {fresh.gone && <> · No further updates: the coin is no longer being scanned</>}
     </p>
   );
@@ -2309,10 +2330,18 @@ function useLiveShares(mint: string, kept: boolean): LiveTradeShares | null {
   const feed = useLiveTrades(useTokenApi(mint), !kept);
   return useMemo(
     () =>
-      kept || feed.status !== "live" || feed.supply === null
+      kept || feed.status !== "live" || feed.supply === null || feed.wholeFrom === null
         ? null
-        : { trades: feed.history, supply: feed.supply, live: true },
-    [kept, feed.history, feed.supply, feed.status],
+        : {
+            trades: feed.history,
+            supply: feed.supply,
+            // The page's history keeps the newest MAX_HISTORY: with that many, it starts at its oldest.
+            wholeFrom:
+              feed.history.length >= MAX_HISTORY && feed.history[0]
+                ? Math.max(feed.wholeFrom, feed.history[0].atMs)
+                : feed.wholeFrom,
+          },
+    [kept, feed.history, feed.supply, feed.status, feed.wholeFrom],
   );
 }
 

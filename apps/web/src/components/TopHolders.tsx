@@ -52,11 +52,17 @@ export function TopHolders({
   /** Open from the start: the Scope terminal's Holders tab, where the list is the tab's point. */
   defaultOpen?: boolean;
   /**
-   * `last` is holderShownAt. `live` with no `next` is exactly "Live": the stream is pushing
-   * updates. A `next` is the chain-read countdown (holderNextReadAt) and is not called live.
+   * `last` is holderShownAt, and its age always shows. `live`: the shares move with each trade,
+   * "Live · 12s ago" until `liveUntil`; then the chain-read countdown (`next`, holderNextReadAt).
    * None for a list kept as it stood.
    */
-  freshness?: { last: number; next: number | null; late?: boolean; live?: boolean };
+  freshness?: {
+    last: number;
+    next: number | null;
+    late?: boolean;
+    live?: boolean;
+    liveUntil?: number | null;
+  };
   /** SOL's USD price already on the chart. Null when the API has none in hand. */
   solUsd?: number | null;
 }) {
@@ -126,6 +132,7 @@ export function TopHolders({
             next={freshness.next}
             late={freshness.late}
             live={freshness.live}
+            liveUntil={freshness.liveUntil}
           />
         )}
         {graph.top10Pct !== null && (
