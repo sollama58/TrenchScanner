@@ -8,6 +8,7 @@ import {
   type CandleChunkRow,
   type CandleStoreSource,
   type CurveTape,
+  type QuoteUsd,
   type StoredBar,
 } from "@trenchscanner/core";
 
@@ -22,9 +23,12 @@ const logger = createLogger("curve-candles");
  * the curve between changes (its real SOL reserve, out or in), at SOL's price at the flush.
  *
  * Only a stretch the stream delivered is saved: a tape read by RPC every few seconds would make
- * "1-second" bars of 5-second samples (charts audit CH-6). A curve quoted in another coin is left
- * out (its reserve is not SOL). After graduation the tape follows the coin's PumpSwap pool, whose
- * bars are saved the same way under "pool" (curveTape.ts).
+ * "1-second" bars of 5-second samples (charts audit CH-6). A curve quoted in another coin (DJT, ORE,
+ * USD1...) is priced with that coin's USD price at the flush (quoteUsd), as the API's live chart
+ * prices it: until 2026-10-24 it was left out, and such a coin had nothing of ours recorded but the
+ * minutes of a chart left open (prod: 2TKD, a $2.6M runner quoted in DJT). After graduation the
+ * tape follows the coin's PumpSwap pool, whose bars are saved the same way under "pool"
+ * (curveTape.ts).
  */
 
 /** Pump.fun's curve price is lamports per raw token unit: times this, SOL per whole token x one billion. */
@@ -48,14 +52,23 @@ export interface CurveTapeView {
 type TapeSource = Extract<CandleStoreSource, "curve" | "pool">;
 
 /**
+ * USD per unit of a curve's price and reserve, read as SOL's 9 decimals: SOL's price for a SOL
+ * curve, a quote coin's scaled from its own decimals (as the API's live chart, liveCurve.ts usdRate).
+ */
+export function quoteUsdRate(q: QuoteUsd): number {
+  return q.usd * 10 ** (9 - q.decimals);
+}
+
+/**
  * Exported for tests. 1-second market-cap bars (USD, on the launch billion) over [from, to) from a
  * curve's changes, oldest first. Each opens at the price in force when its second began (the last
  * change before it), so bars join up; a second with no change has no bar, as Pump.fun's candles
  * leave quiet intervals out, and the tape's first reading is where it starts, not a bar. Volume:
- * the SOL reserve's moves inside the second, in USD.
+ * the quote reserve's moves inside the second, in USD. `usdRate`: SOL's USD price for a SOL curve,
+ * else quoteUsdRate of its quote coin.
  */
-export function curveBars(ticks: readonly Tick[], from: number, to: number, solUsd: number): StoredBar[] {
-  const toMcap = (price: number) => price * MCAP_SOL_PER_PRICE * solUsd;
+export function curveBars(ticks: readonly Tick[], from: number, to: number, usdRate: number): StoredBar[] {
+  const toMcap = (price: number) => price * MCAP_SOL_PER_PRICE * usdRate;
   const out: StoredBar[] = [];
   let prev: Tick | null = null;
   for (const k of ticks) {
@@ -76,7 +89,7 @@ export function curveBars(ticks: readonly Tick[], from: number, to: number, solU
     bar.h = Math.max(bar.h, v);
     bar.l = Math.min(bar.l, v);
     bar.c = v;
-    bar.vol! += (Math.abs(k.realQuote - prev.realQuote) / 1e9) * solUsd;
+    bar.vol! += (Math.abs(k.realQuote - prev.realQuote) / 1e9) * usdRate;
     prev = k;
   }
   return out;
@@ -90,7 +103,7 @@ const QUIET_COVER_MS = 25 * 60_000;
 
 /**
  * Exported for tests. A coin's chunk rows from what the tape holds after `flushedTo` (null: nothing
- * saved yet), up to `closeAt`, and where the next flush picks up. The chunk `flushedTo` is in is
+ * saved yet), up to `closeAt`, priced at `usdRate` (curveBars), and where the next flush picks up. The chunk `flushedTo` is in is
  * built again whole, so a minute saved in part is rewritten with all its bars (the store keeps the
  * fuller reading). Null when there is nothing to save.
  *
@@ -104,16 +117,16 @@ export function curveCandleRows(
   tape: TapeTicks,
   flushedTo: number | null,
   closeAt: number,
-  solUsd: number,
+  usdRate: number,
   source: TapeSource = "curve",
 ): { rows: CandleChunkRow[]; flushedTo: number } | null {
-  if (!tape || !tape.quoteIsSol || tape.streamFrom === null) return null;
+  if (!tape || tape.streamFrom === null || !(usdRate > 0)) return null;
   const covered = Math.max(tape.coveredFrom, tape.streamFrom);
   const from = Math.max(covered, flushedTo === null ? covered : chunkStartOf(flushedTo, 1));
   const to = Math.floor(Math.min(closeAt, tape.confirmedAt) / 1_000) * 1_000;
   if (!(to > from)) return null;
   const ticks = tape.prior ? [tape.prior, ...tape.ticks] : tape.ticks;
-  const bars = curveBars(ticks, from, to, solUsd);
+  const bars = curveBars(ticks, from, to, usdRate);
   const rows = chunkBars(mint, 1, source, bars, { from, to });
   const first = rows[0];
   const last = rows[rows.length - 1];
@@ -143,8 +156,18 @@ interface WriterConfig {
   view: CurveTapeView;
   /** SOL's USD price; the flush waits for one (the tape keeps half an hour). */
   solUsd: () => Promise<number | null>;
+  /**
+   * A quote coin's USD price, for a curve quoted in another coin; absent, such a curve is left out.
+   * A coin with no price waits for one, as a SOL curve waits for SOL's.
+   */
+  quoteUsd?: (quoteMint: string) => Promise<QuoteUsd | null>;
   save?: (rows: CandleChunkRow[]) => Promise<unknown>;
 }
+
+/** A quote coin's last price is used for at most this long while new reads fail. */
+const QUOTE_MAX_AGE_MS = 10 * 60_000;
+/** Quote coins whose last price is held at most. */
+const MAX_QUOTES = 200;
 
 let cfg: WriterConfig | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -165,6 +188,15 @@ const sameRow = (
 /** The last bars of coins the tape let go of, written with the next flush. */
 let dropped: CandleChunkRow[] = [];
 let lastSolUsd: number | null = null;
+/** Each quote coin's last price as a rate (quoteUsdRate), and when it was read. */
+const lastQuoteRate = new Map<string, { rate: number; at: number }>();
+
+/** The USD rate a tape is priced at: SOL's, or its quote coin's held within QUOTE_MAX_AGE_MS; null with none. */
+function rateOf(tape: NonNullable<TapeTicks>, now: number): number | null {
+  if (tape.quoteIsSol) return lastSolUsd;
+  const q = tape.quoteMint ? lastQuoteRate.get(tape.quoteMint) : undefined;
+  return q && now - q.at <= QUOTE_MAX_AGE_MS ? q.rate : null;
+}
 let stats = { coins: 0, rows: 0, failed: 0 };
 
 /**
@@ -196,11 +228,13 @@ export function curveTapeDropped(
   const done = flushed.get(mint) ?? null;
   flushed.delete(mint);
   lastWritten.delete(mint);
-  if (!cfg || lastSolUsd === null) return;
+  if (!cfg) return;
   const held = tape.ticksAfter(mint, readAfter(done));
+  const rate = held ? rateOf(held, now) : null;
+  if (rate === null) return;
   // Let go of now: what it held is known through now, when the tape was current lately.
   const known = held && now - held.confirmedAt <= CURVE_GAP_MS ? { ...held, confirmedAt: now } : held;
-  const out = curveCandleRows(mint, known, done, now, lastSolUsd, source);
+  const out = curveCandleRows(mint, known, done, now, rate, source);
   if (out && dropped.length + out.rows.length <= MAX_DROPPED) dropped.push(...out.rows);
 }
 
@@ -228,14 +262,33 @@ export function flushCurveCandles(now = Date.now(), all = false): Promise<void> 
     if (before) await before;
     const sol = await config.solUsd().catch(() => null);
     if (sol !== null && sol > 0) lastSolUsd = sol;
-    if (lastSolUsd === null) return;
+    // Each quote coin of the coin-quoted curves followed, read once a flush.
+    const quoteMints = new Set<string>();
+    for (const { tape } of tapes)
+      if (tape && !tape.quoteIsSol && tape.quoteMint) quoteMints.add(tape.quoteMint);
+    if (config.quoteUsd && quoteMints.size > 0) {
+      const read = config.quoteUsd;
+      await Promise.all(
+        [...quoteMints].map(async (quoteMint) => {
+          const q = await read(quoteMint).catch(() => null);
+          if (!q || !(q.usd > 0) || !Number.isInteger(q.decimals) || q.decimals < 0 || q.decimals > 18)
+            return;
+          lastQuoteRate.delete(quoteMint);
+          lastQuoteRate.set(quoteMint, { rate: quoteUsdRate(q), at: now });
+          while (lastQuoteRate.size > MAX_QUOTES) lastQuoteRate.delete(lastQuoteRate.keys().next().value!);
+        }),
+      );
+    }
+    if (lastSolUsd === null && lastQuoteRate.size === 0) return;
     const closeAt = all ? Math.floor(now / 1_000) * 1_000 : Math.floor(now / FLUSH_MS) * FLUSH_MS;
     const rows: CandleChunkRow[] = dropped;
     dropped = [];
     const next = new Map<string, number>();
     const newest = new Map<string, CandleChunkRow>();
     for (const { mint, done, source, tape } of tapes) {
-      const out = curveCandleRows(mint, tape, done, closeAt, lastSolUsd, source);
+      const rate = tape ? rateOf(tape, now) : null;
+      if (rate === null) continue;
+      const out = curveCandleRows(mint, tape, done, closeAt, rate, source);
       if (!out) continue;
       // The chunk picked up from, rebuilt as it was written: not written again.
       const fresh = out.rows.filter((r) => !sameRow(r, lastWritten.get(mint)));
@@ -289,5 +342,6 @@ export function resetCurveCandles(): void {
   lastWritten.clear();
   dropped = [];
   lastSolUsd = null;
+  lastQuoteRate.clear();
   stats = { coins: 0, rows: 0, failed: 0 };
 }

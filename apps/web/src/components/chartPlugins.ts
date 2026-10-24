@@ -177,9 +177,26 @@ export interface OverlayColors {
   font: string;
   /** DexScreener token-info bubble. Distinct from a dev's mark. */
   dex: string;
+  /** A stretch with no data: its shading, its edges, and the backfilling label's bar. */
+  gap: string;
+  gapEdge: string;
+  gapBar: string;
   /** A wallet mark's colour and its text's, by kind (walletMarks.ts MarkKind). */
   wk: (kind: string) => { fill: string; ink: string };
   draw: DrawColors;
+}
+
+/** A stretch of slots with no data, by its edges' times (ms): the first slot's start, the last's end. */
+export interface OverlayGap {
+  t0: number;
+  t1: number;
+}
+
+/** The label over a gap: its line, a second one, and its bar's fill (0 to 1; null: no bar). */
+export interface GapNote {
+  title: string;
+  sub: string | null;
+  fill: number | null;
 }
 
 /** What the overlay draws, set by the chart on each render. */
@@ -235,6 +252,12 @@ export interface OverlayState {
   drawScale: DrawScale | null;
   label: (v: number) => string;
   colors: OverlayColors | null;
+  /** The stretches with no data, oldest first, shaded and labelled. */
+  gaps: OverlayGap[];
+  /** A slot edge's time (ms) to x (CSS px). */
+  edgeX: (t: number) => number | null;
+  /** The label each gap in view shows, read as it draws (its ETA counts down). */
+  gapNote: () => GapNote;
 }
 
 /**
@@ -277,6 +300,82 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
     this.requestUpdate?.();
   }
 
+  /**
+   * The stretches with no data: shaded top to bottom between dashed edges, each with a label
+   * centred on the part of it in view (so a reader who sees any of it sees the label): that its
+   * history is being backfilled, with a bar and an ETA, or that no source had it.
+   */
+  private drawGaps(
+    ctx: CanvasRenderingContext2D,
+    hr: number,
+    vr: number,
+    width: number,
+    height: number,
+    c: OverlayColors,
+  ): void {
+    const s = this.state;
+    if (s.gaps.length === 0) return;
+    let note: GapNote | null = null;
+    for (const g of s.gaps) {
+      const a = s.edgeX(g.t0);
+      const b = s.edgeX(g.t1);
+      if (a === null || b === null || b < 0 || a > width || !(b > a)) continue;
+      const left = Math.max(0, a);
+      const right = Math.min(width, b);
+      ctx.fillStyle = c.gap;
+      ctx.fillRect(left * hr, 0, (right - left) * hr, height * vr);
+      ctx.strokeStyle = c.gapEdge;
+      ctx.lineWidth = hr;
+      ctx.setLineDash([3 * hr, 3 * hr]);
+      for (const x of [a, b]) {
+        if (x < 0 || x > width) continue;
+        ctx.beginPath();
+        ctx.moveTo(Math.round(x * hr) + 0.5, 0);
+        ctx.lineTo(Math.round(x * hr) + 0.5, height * vr);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      note ??= s.gapNote();
+      // A narrow gap in view gets its label too: drawn over its middle, kept on the plot.
+      ctx.font = `700 ${Math.round(11 * vr)}px ${c.font}`;
+      const plain = note.fill === null && !note.sub;
+      const w = Math.min(plain ? ctx.measureText(note.title).width / hr + 20 : GAP_LABEL_W, width - 8);
+      const x = Math.min(width - w - 4, Math.max(4, (left + right) / 2 - w / 2));
+      const h = plain ? 26 : GAP_LABEL_H;
+      const y = Math.max(4, height / 2 - h / 2);
+      ctx.fillStyle = c.labelBg;
+      roundRect(ctx, x * hr, y * vr, w * hr, h * vr, 8 * hr);
+      ctx.fill();
+      ctx.strokeStyle = c.gapEdge;
+      ctx.lineWidth = hr;
+      ctx.stroke();
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "left";
+      ctx.fillStyle = c.eventText;
+      ctx.font = `700 ${Math.round(11 * vr)}px ${c.font}`;
+      ctx.fillText(clip(ctx, note.title, (w - 20) * hr), (x + 10) * hr, (y + 13) * vr);
+      if (note.sub) {
+        ctx.font = `500 ${Math.round(10 * vr)}px ${c.font}`;
+        ctx.globalAlpha = 0.75;
+        ctx.textAlign = "right";
+        ctx.fillText(note.sub, (x + w - 10) * hr, (y + 13) * vr);
+        ctx.textAlign = "left";
+        ctx.globalAlpha = 1;
+      }
+      if (note.fill !== null) {
+        const bx = x + 10;
+        const bw = w - 20;
+        const by = y + h - 15;
+        ctx.fillStyle = c.gap;
+        roundRect(ctx, bx * hr, by * vr, bw * hr, 6 * vr, 3 * hr);
+        ctx.fill();
+        ctx.fillStyle = c.gapBar;
+        roundRect(ctx, bx * hr, by * vr, Math.max(6, bw * note.fill) * hr, 6 * vr, 3 * hr);
+        ctx.fill();
+      }
+    }
+  }
+
   private draw(ctx: CanvasRenderingContext2D, hr: number, vr: number, width: number): void {
     const s = this.state;
     const c = s.colors;
@@ -284,6 +383,8 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
     const height = ctx.canvas.height / vr;
     ctx.save();
     ctx.textBaseline = "middle";
+
+    this.drawGaps(ctx, hr, vr, width, height, c);
 
     // The alert and model lines, dashed top to bottom, each flagged along the top; flags that
     // would touch move down a row. The same events the horizontal price lines use. Labels can
@@ -570,6 +671,18 @@ function markOutline(ctx: CanvasRenderingContext2D, shape: MarkShape, x: number,
     return;
   }
   ctx.arc(x, y, r, 0, Math.PI * 2);
+}
+
+/** The backfilling label's size (CSS px). */
+const GAP_LABEL_W = 176;
+const GAP_LABEL_H = 46;
+
+/** `text` cut with an ellipsis to fit `maxW` (bitmap px) in the context's font. */
+function clip(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(`${t}…`).width > maxW) t = t.slice(0, -1);
+  return `${t}…`;
 }
 
 function roundRect(

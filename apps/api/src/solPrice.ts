@@ -1,4 +1,10 @@
-import { createLogger, fetchJson, type DexScreenerClient } from "@trenchscanner/core";
+import {
+  createLogger,
+  fetchJson,
+  keylessQuoteUsd,
+  type DexScreenerClient,
+  type QuoteUsd as CoreQuoteUsd,
+} from "@trenchscanner/core";
 import { recordSolPriceFailure } from "./chartHealth.js";
 
 const logger = createLogger("sol-price");
@@ -159,25 +165,12 @@ export class SolPrice {
 export const sharedSolPrice = new SolPrice();
 
 /** A quote coin's USD price and decimals (QuotePrice.get). */
-export interface QuoteUsd {
-  usd: number;
-  decimals: number;
-}
+export type QuoteUsd = CoreQuoteUsd;
 
 type QuoteReader = (mint: string) => Promise<QuoteUsd | null>;
 
-/** Jupiter's free price endpoint, which answers a coin's decimals with its price. */
-export const jupiterQuote: QuoteReader = async (mint) => {
-  const body = await fetchJson<Record<string, { usdPrice?: unknown; decimals?: unknown }>>(
-    `https://lite-api.jup.ag/price/v3?ids=${mint}`,
-    { timeoutMs: 4_000, retries: 0 },
-  );
-  const usd = Number(body?.[mint]?.usdPrice);
-  const decimals = Number(body?.[mint]?.decimals);
-  return Number.isFinite(usd) && usd > 0 && Number.isInteger(decimals) && decimals >= 0 && decimals <= 18
-    ? { usd, decimals }
-    : null;
-};
+/** Jupiter's free price endpoint, which answers a coin's decimals with its price (core's, shared with the worker). */
+export const jupiterQuote: QuoteReader = keylessQuoteUsd;
 
 /**
  * DexScreener's USD price for a quote coin (its deepest pair with one, through the API's shared

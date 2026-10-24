@@ -110,6 +110,18 @@ describe("tapeCandleRows", () => {
     expect(rows[0]!.coverTo).toBe(T0 + 4 * 3_600_000);
   });
 
+  it("prices each trade at SOL's price when it happened, when given one by time", () => {
+    const trades = [trade(T0 + 1_000, 1, { curve: 1e-7 }), trade(T0 + 61_000, 1, { curve: 1e-7 })];
+    const rows = tapeCandleRows("m", trades, { from: T0, to: T0 + 120_000 }, (at) =>
+      at < T0 + 60_000 ? 100 : 200,
+    );
+    const bars = rows.flatMap((r) => r.bars);
+    expect(bars.map((b) => [b.c, b.vol])).toEqual([
+      [1e-7 * PUMP_SUPPLY_TOKENS * 100, 100],
+      [1e-7 * PUMP_SUPPLY_TOKENS * 200, 200],
+    ]);
+  });
+
   it("saves nothing without a SOL price, a cover or a marked trade", () => {
     const trades = [trade(T0 + 1_000, 1, { curve: 1e-7 })];
     expect(tapeCandleRows("m", trades, { from: T0, to: T0 + 60_000 }, 0)).toEqual([]);

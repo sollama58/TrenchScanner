@@ -8,10 +8,16 @@ import {
   type HeliusClient,
   type TapeTrade,
 } from "@trenchscanner/core";
+import type { SolUsdHistory } from "./solUsdHistory.js";
 
 /** Where chain-read trades are saved as candles: SOL's USD price, and the store's write. */
 export interface TapeCandleSink {
   solUsd: () => Promise<number | null>;
+  /**
+   * SOL's USD price minute by minute (solUsdHistory.ts): each trade is priced at SOL's price when
+   * it happened, `solUsd` standing in for a minute it doesn't hold. Absent: all at `solUsd`.
+   */
+  solHistory?: Pick<SolUsdHistory, "prepare" | "at">;
   save?: (rows: CandleChunkRow[]) => Promise<unknown>;
 }
 
@@ -46,7 +52,15 @@ export async function saveChainCandles(
     if (read && read !== "failed") virtualQuote = read.virtualQuote;
     else cover = { from: cover.from, to: Math.min(cover.to, Math.floor(firstPool.atMs / 1_000) * 1_000) };
   }
-  const rows = tapeCandleRows(mint, ordered, cover, solUsd, virtualQuote);
+  const history = sink.solHistory;
+  if (history) await history.prepare(cover.from, cover.to);
+  const rows = tapeCandleRows(
+    mint,
+    ordered,
+    cover,
+    history ? (atMs) => history.at(atMs) ?? solUsd : solUsd,
+    virtualQuote,
+  );
   if (rows.length > 0) await (sink.save ?? saveCandleChunks)(rows);
   return rows;
 }

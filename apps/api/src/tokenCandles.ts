@@ -7,6 +7,7 @@ import {
   type SeriesInput,
   type StoredBar,
 } from "@trenchscanner/core";
+import type { BackfillStatus } from "./backfillStatus.js";
 
 /**
  * GET /tokens/:mint/candles (charts audit 2026-10-22 target design): one timeframe's bars for a
@@ -70,6 +71,12 @@ export interface TokenCandlesAnswer {
    * across it (user report 2026-10-23: a graduated coin's 8 unrecorded minutes drawn flat).
    */
   holes?: [number, number][];
+  /**
+   * The newest page only, when it has holes something will still fill (backfillStatus.ts): about
+   * when, and how far the coin's backfill has got. Absent once nothing will: a hole left then is
+   * one no source had.
+   */
+  backfill?: BackfillStatus;
 }
 
 /** A trailing hole shorter than this is the live edge between reads, not a stretch nobody read. */

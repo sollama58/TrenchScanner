@@ -63,28 +63,33 @@ export function markPriceSol(mark: TradeMark, poolVirtualQuote = 0): number | nu
  * The candle store's rows for a tape: 1-second market-cap bars (USD, on the launch billion) over
  * `cover` ([from, to) ms, what the read covered) from the marked trades, in chain order. Each bar
  * opens at the price the trade before it left, so bars join up; a second with no marked trade has
- * no bar. Volume: every trade's SOL in that second, at `solUsd`. Each chunk's cover runs on to the
- * next one's start, so a quiet stretch the tape read through reads as quiet, not unread.
+ * no bar. Volume: every trade's SOL in that second. Both at `solUsd`: SOL's USD price, or SOL's
+ * price at each trade's time (a trade read hours later, at today's SOL price, stepped away from the
+ * bars beside it: audit 2026-10-23 CE-7). Each chunk's cover runs on to the next one's start, so a
+ * quiet stretch the tape read through reads as quiet, not unread.
  */
 export function tapeCandleRows(
   mint: string,
   trades: readonly TapeTrade[],
   cover: { from: number; to: number },
-  solUsd: number,
+  solUsd: number | ((atMs: number) => number),
   poolVirtualQuote = 0,
 ): CandleChunkRow[] {
-  if (!(solUsd > 0) || !(cover.to > cover.from)) return [];
+  const usdAt = typeof solUsd === "number" ? () => solUsd : solUsd;
+  if (!(cover.to > cover.from) || (typeof solUsd === "number" && !(solUsd > 0))) return [];
   const second = (atMs: number) => Math.floor(atMs / 1_000) * 1_000;
   const volume = new Map<number, number>();
   for (const t of trades) {
-    if (t.sol > 0) volume.set(second(t.atMs), (volume.get(second(t.atMs)) ?? 0) + t.sol * solUsd);
+    const usd = usdAt(t.atMs);
+    if (t.sol > 0 && usd > 0) volume.set(second(t.atMs), (volume.get(second(t.atMs)) ?? 0) + t.sol * usd);
   }
   const bars: StoredBar[] = [];
   let prev: number | null = null;
   for (const t of trades) {
     const price = t.mark ? markPriceSol(t.mark, poolVirtualQuote) : null;
-    if (price === null) continue;
-    const v = price * PUMP_SUPPLY_TOKENS * solUsd;
+    const usd = usdAt(t.atMs);
+    if (price === null || !(usd > 0)) continue;
+    const v = price * PUMP_SUPPLY_TOKENS * usd;
     const at = second(t.atMs);
     const open = prev ?? v;
     prev = v;

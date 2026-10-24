@@ -34,6 +34,7 @@ import { flowApartFromCandle } from "../marketClock";
 import { ClockIcon } from "./Icons";
 import {
   autoTimeframe,
+  drawTimeframe,
   buildSlots,
   closeTimeMs,
   finestCoverMs,
@@ -86,6 +87,7 @@ import {
   type OverlayState,
   type SlotCandleData,
 } from "./chartPlugins";
+import { gapNote, slotGaps, type Backfilling } from "./chartFeeds";
 import { KolAvatar } from "./KolAvatar";
 
 /** A moment marked on the chart: an alert, a model's call, a filter match, the screen pass, graduation. */
@@ -239,8 +241,10 @@ const MAX_TIP_MARKS = 6;
 export function TradingChart({
   mint,
   candles,
+  candlesMs,
   ticks,
   holes = NO_HOLES,
+  backfill = null,
   events,
   flow = [],
   marks: marksIn = NO_MARKS,
@@ -271,6 +275,11 @@ export function TradingChart({
    */
   candles: VolumeCandle[];
   /**
+   * The size `candles` were read at (GET /tokens/:mint/candles `tf`); absent for candles from
+   * elsewhere. Unlike the size wanted (onTimeframe), they are the last size's until its page lands.
+   */
+  candlesMs?: number;
+  /**
    * Readings from the newest candle's start on (the live curve's ticks, which move that forming
    * candle and run on past it), or all of them without candles.
    */
@@ -280,6 +289,11 @@ export function TradingChart({
    * `holes`): drawn blank, never flat across trades nobody recorded.
    */
   holes?: readonly (readonly [number, number])[];
+  /**
+   * While those stretches are being backfilled (the newest page's `backfill`): each is shaded and
+   * labelled with a bar and an ETA; null once nothing will fill them ("No data recorded").
+   */
+  backfill?: Backfilling | null;
   events: ChartEvent[];
   /** The scans' 5-minute buy and sell counts: the readout gives the buy share where one covers. */
   flow?: ScanFlow[];
@@ -397,22 +411,32 @@ export function TradingChart({
     [candles, extent.t0, extent.t1],
   );
   const autoMs = autoTimeframe(viewMs, plotW, 6, finestMs);
-  const tfMs = picked !== null && timeframeFits(picked, viewMs) ? picked : autoMs;
-  const slots = useMemo(
-    () => buildSlots(candles, ticks, tfMs, undefined, holes),
-    [candles, ticks, tfMs, holes],
-  );
+  // The size picked, or Auto's: what the picker shows.
+  const shownMs = picked !== null && timeframeFits(picked, viewMs) ? picked : autoMs;
   // The view reads its candles at the size the view alone would take, not only the one drawn: the
   // store answers each stretch at that size, or coarse where it holds only wider bars, so Auto
   // draws the finest size whose candles mostly aren't coarse (finestMs). Read at the size drawn,
   // a coin whose finer candles land later would stay on the wider size.
   const wantMs = picked !== null && timeframeFits(picked, viewMs) ? picked : autoTimeframe(viewMs, plotW);
+  // While a newly picked size's first page is on its way, the candles held stay at the size they
+  // were drawn at (drawTimeframe); the chart draws the size picked once it has its candles.
+  const drawnRef = useRef<number | null>(null);
+  const tfMs = drawTimeframe(shownMs, wantMs, candlesMs, drawnRef.current);
+  if (candlesMs === undefined || candlesMs === wantMs) drawnRef.current = tfMs;
+  const slots = useMemo(
+    () => buildSlots(candles, ticks, tfMs, undefined, holes),
+    [candles, ticks, tfMs, holes],
+  );
   useEffect(() => {
     onTimeframe?.(wantMs);
   }, [wantMs, onTimeframe]);
   // Scrolled back near the oldest candle: the page before it (full history at any timeframe, charts
   // audit 2026-10-22). Not once the slots stop short of the oldest candle (MAX_SLOTS): what came
   // before them couldn't be drawn.
+  // The stretches with no data, as runs of unknown slots, for the overlay's shading and label.
+  const gaps = useMemo(() => (slots ? slotGaps(slots) : []), [slots]);
+  const backfillRef = useRef(backfill);
+  backfillRef.current = backfill;
   const olderRef = useRef<{ ask?: () => void; whole: boolean }>({ whole: false });
   olderRef.current = {
     ask: onOlder,
@@ -984,6 +1008,12 @@ export function TradingChart({
       drawings: look.chartShowDrawings || drawings.tool || drawings.placing ? drawings : null,
       drawScale: dScale,
       label: axisUsd,
+      gaps,
+      edgeX: (t) => {
+        const sc = barScale(chartRef.current);
+        return sc ? sc.x0 + ((t - slots.start) / slots.tfMs - 0.5) * sc.dx : null;
+      },
+      gapNote: () => gapNote(backfillRef.current),
       colors: {
         ...colors.overlay,
         eventLead:
@@ -997,6 +1027,14 @@ export function TradingChart({
     };
     o.update();
   });
+
+  // The backfilling label's ETA counts down and its bar fills between reads.
+  const filling = gaps.length > 0 && backfill !== null;
+  useEffect(() => {
+    if (!filling) return;
+    const id = window.setInterval(() => overlayRef.current?.update(), 1_000);
+    return () => window.clearInterval(id);
+  }, [filling]);
 
   // The readout follows the crosshair; a click or tap places a drawing's point or selects one.
   useEffect(() => {
@@ -1315,7 +1353,7 @@ export function TradingChart({
             <label className="tc-select" title="Candle size">
               <span className="sr-only">Candle size</span>
               <select
-                value={picked === null || !timeframeFits(picked, viewMs) ? "auto" : String(tfMs)}
+                value={picked === null || !timeframeFits(picked, viewMs) ? "auto" : String(shownMs)}
                 onChange={(e) => pickTimeframe(e.target.value === "auto" ? null : Number(e.target.value))}
               >
                 <option value="auto">Auto · {timeframeLabel(autoMs)}</option>
@@ -1345,8 +1383,8 @@ export function TradingChart({
                   key={f.ms}
                   type="button"
                   role="radio"
-                  aria-checked={tfMs === f.ms && picked !== null}
-                  className={picked !== null && tfMs === f.ms ? "on" : ""}
+                  aria-checked={shownMs === f.ms && picked !== null}
+                  className={picked !== null && shownMs === f.ms ? "on" : ""}
                   disabled={!timeframeFits(f.ms, viewMs)}
                   title={timeframeFits(f.ms, viewMs) ? `${f.label} candles` : "Wider than this view allows"}
                   onClick={() => pickTimeframe(f.ms)}
@@ -1509,7 +1547,7 @@ export function TradingChart({
                 {legendSpan ? `–${clock(curTo, fine, false)}` : ""}
               </span>
               {cur.unknown ? (
-                <span className="faint">No data recorded</span>
+                <span className="faint">{backfill ? "Backfilling data…" : "No data recorded"}</span>
               ) : cur.flat ? (
                 <span className="faint">
                   No trades · <b>{axisUsd(cur.c)}</b>
@@ -1806,6 +1844,9 @@ function emptyOverlay(): OverlayState {
     drawScale: null,
     label: axisUsd,
     colors: null,
+    gaps: [],
+    edgeX: () => null,
+    gapNote: () => ({ title: "", sub: null, fill: null }),
   };
 }
 
@@ -1868,6 +1909,9 @@ function readColors(el: HTMLElement) {
     pathBand: hexA(v("--series-1", "#3987e5"), 0.14),
     font,
     dex: v("--series-3", "#199e70"),
+    gap: hexA(v("--warn", "#fab219"), 0.08),
+    gapEdge: hexA(v("--warn", "#fab219"), 0.55),
+    gapBar: v("--warn", "#fab219"),
     wk,
     draw: {
       trend: v("--series-1", "#3987e5"),

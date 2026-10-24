@@ -230,6 +230,24 @@ export function finestCoverMs(candles: readonly VolumeCandle[], t0: number, t1: 
 }
 
 /**
+ * Exported for tests. The candle size the chart draws: the one shown in the picker (`shownMs`),
+ * except while the candles held were read at another size than the one wanted (`candlesMs` vs
+ * `wantMs`: a newly picked size's first page is on its way). Then they stay at the size they were
+ * last drawn at (`lastDrawnMs`; with none, the wider of the two), rather than being cut into the
+ * new one: a page of 5m candles drawn as shaded 1m slots, or 1m candles summed into a few 5m ones,
+ * until the new page landed (chart audit 2026-10-24).
+ */
+export function drawTimeframe(
+  shownMs: number,
+  wantMs: number,
+  candlesMs: number | undefined,
+  lastDrawnMs: number | null,
+): number {
+  if (candlesMs === undefined || candlesMs === wantMs) return shownMs;
+  return lastDrawnMs ?? Math.max(shownMs, candlesMs);
+}
+
+/**
  * Exported for tests. Whether a timeframe fits a view `viewMs` long at least three times: a wider
  * one (as on a coin younger than it) is greyed out in the picker, and a saved one draws as Auto.
  */

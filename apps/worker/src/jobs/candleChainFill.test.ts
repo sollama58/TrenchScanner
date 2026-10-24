@@ -206,6 +206,25 @@ describe.skipIf(!dbAvailable)("chart chain fill", () => {
     expect(await oneSecondHoles(MINT, LAUNCH - 2 * MIN, LAUNCH + 128 * MIN)).toEqual([]);
   });
 
+  it("vouches for nothing over trades it can't price, and leaves that hole for the day", async () => {
+    // A coin quoted in another coin: the chain holds its trades, but no swap event the fill can
+    // price (no SOL in it).
+    const unpriced = { ...buy(LAUNCH + 5 * MIN, 30e9) };
+    unpriced.meta = { ...unpriced.meta!, logMessages: [] };
+    const { helius, asked } = stub([[unpriced]]);
+    await runCandleChainFill({ helius, sink: { solUsd: async () => 200 } }, opts);
+    expect(asked).toHaveLength(1);
+    expect(await prisma.candleChunk.count({ where: { mint: MINT, source: "tape" } })).toBe(0);
+    expect(await oneSecondHoles(MINT, LAUNCH, LAUNCH + 120 * MIN)).toEqual([
+      [LAUNCH + MIN, LAUNCH + 120 * MIN],
+    ]);
+    await runCandleChainFill(
+      { helius, sink: { solUsd: async () => 200 } },
+      { ...opts, now: () => NOW + 2 * MIN },
+    );
+    expect(asked).toHaveLength(1);
+  });
+
   it("carries the day's spend over from the scan heartbeat", async () => {
     const { helius, asked } = stub([[buy(LAUNCH + 2 * MIN, 30e9)]]);
     seedCandleChainFillSpend(995, new Date(NOW), NOW);
