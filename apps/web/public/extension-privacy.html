@@ -45,10 +45,21 @@
       a {
         color: #3fd7c9;
       }
+      nav.legal-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 16px;
+        white-space: nowrap;
+        margin: 0 0 24px;
+        font-size: 14px;
+      }
     </style>
   </head>
   <body>
     <main>
+      <nav class="legal-nav">
+        <a href="/">Home</a><a href="/legal.html">Legal</a><a href="/privacy.html">Privacy</a>
+      </nav>
       <h1>Trench Overlay privacy policy</h1>
       <p class="muted">Effective 24 October 2026</p>
       <p>
@@ -60,8 +71,8 @@
       <p>
         The extension never runs on any website. It has no access to the pages you visit, including Axiom,
         Terminal (Padre) and GMGN. It can't read their content, cookies, logins or wallets, and it doesn't
-        record your browsing history. Its only Chrome permissions are storage and the side panel, plus network
-        access to <code>api.trenchscanner.app</code>.
+        record your browsing history. Its only Chrome permissions are storage and the side panel. It has no
+        access to any website, and the only server it talks to is <code>api.trenchscanner.app</code>.
       </p>
 
       <h2>What it stores, on your computer only</h2>

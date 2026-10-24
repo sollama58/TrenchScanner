@@ -205,12 +205,24 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       logger.warn("slow request", { route, ms: Math.round(ms), status: reply.statusCode });
   });
 
-  await app.register(cors, {
-    origin: corsOriginList(env),
-    credentials: true,
-    // Lets browsers reuse a preflight for 2h (Chrome's cap) instead of their 5s default, so the
-    // dashboard's saves (feed settings, filters) don't each wait on an extra OPTIONS round trip.
+  const EXTENSION_ROUTE_PREFIX = "/ext/v1/";
+  // Lets browsers reuse a preflight for 2h (Chrome's cap) instead of their 5s default, so the
+  // dashboard's saves (feed settings, filters) don't each wait on an extra OPTIONS round trip.
+  const siteCors = { origin: corsOriginList(env), credentials: true, maxAge: 7200 };
+  // The extension overlay's routes take any extension's origin, without credentials: they read
+  // only an Authorization bearer key, never a cookie (routes/extension.ts), so a caller without a
+  // key gets nothing. This is what lets the extension work with no host permission (user ask
+  // 2026-10-24): its calls are ordinary cross-origin requests, and the 2h preflight cache keeps
+  // its 5 s poll from paying for one each time.
+  const extensionCors = {
+    origin: /^chrome-extension:\/\/[a-p]{32}$/,
+    credentials: false,
+    methods: ["GET", "PUT"],
     maxAge: 7200,
+  };
+  await app.register(cors, {
+    delegator: (request, callback) =>
+      callback(null, request.url.startsWith(EXTENSION_ROUTE_PREFIX) ? extensionCors : siteCors),
   });
   await app.register(cookie);
 
@@ -226,7 +238,6 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
    * Requests with no Origin (scripts, curl, server-to-server) are not browser CSRF and pass.
    */
   const allowedOrigins = new Set(corsOriginList(env));
-  const EXTENSION_ROUTE_PREFIX = "/ext/v1/";
   app.addHook("onRequest", async (request, reply) => {
     if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") return;
     // The extension overlay's routes authenticate by an Authorization bearer key alone and never

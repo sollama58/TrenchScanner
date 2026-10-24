@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Privacy policy · TrenchScanner</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- The site-wide privacy policy (linked from the site footer). No scripts: the site's CSP allows only hashed inline ones. Keep it in step with what the app stores (packages/core/prisma/schema.prisma) and with extension-privacy.html. -->
+    <style>
+      body {
+        margin: 0;
+        background: #101116;
+        color: #eef0f6;
+        font:
+          15px/1.6 system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+      }
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 40px 20px 64px;
+      }
+      h1 {
+        font-size: 26px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 17px;
+        margin: 28px 0 6px;
+      }
+      p,
+      li {
+        color: #c7cbd8;
+      }
+      .muted {
+        color: #7d8396;
+        font-size: 13px;
+      }
+      a {
+        color: #3fd7c9;
+      }
+      nav.legal-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 16px;
+        white-space: nowrap;
+        margin: 0 0 24px;
+        font-size: 14px;
+      }
+      .callout {
+        border: 1px solid #ff7a3566;
+        background: #ff7a3514;
+        border-radius: 10px;
+        padding: 12px 16px;
+        color: #eef0f6;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav class="legal-nav">
+        <a href="/">Home</a><a href="/legal.html">Legal</a><a href="/privacy.html">Privacy</a
+        ><a href="/extension-privacy.html">Extension privacy</a>
+      </nav>
+      <h1>Privacy policy</h1>
+      <p class="muted">Effective 24 October 2026</p>
+      <p>
+        This policy covers trenchscanner.app, its API, the TrenchScanner phone app, the Telegram bot and the
+        Trench Overlay browser extension (which also has its own
+        <a href="/extension-privacy.html">short policy</a>). "We" means the people who run TrenchScanner.
+      </p>
+      <p class="callout">
+        In short: your account is a Solana wallet address, which is public on the blockchain anyway. We don't
+        run ads, analytics or tracking, and we don't sell or share your data for marketing.
+      </p>
+
+      <h2>What we collect, and why</h2>
+      <ul>
+        <li>
+          <strong>Your wallet address.</strong> It is your account. Signing in proves you hold the wallet with
+          a signed message. We never see your own wallet's private key.
+        </li>
+        <li>
+          <strong>Email, Google or X sign-in.</strong> If you sign in this way,
+          <a href="https://www.privy.io/privacy-policy" target="_blank" rel="noopener noreferrer">Privy</a>
+          handles the sign-in and holds the wallet it makes for you, under its own terms and privacy policy.
+          We keep only Privy's user ID and that wallet's address.
+        </li>
+        <li>
+          <strong>Your settings and the things you make.</strong> Filters, alert and display preferences,
+          followed models, watchlist, hidden tokens, tracked wallets, linked Telegram chats, push notification
+          subscriptions and paper-trading strategies. We use them to run the features you set up.
+        </li>
+        <li>
+          <strong>Access and payments.</strong> Your subscription dates, and the on-chain burn transactions
+          that paid for access or credits. Those transactions are public on the blockchain.
+        </li>
+        <li>
+          <strong>Security.</strong> Two-factor settings and passkeys (public keys only), linked phones (with
+          the device description your phone reported), and keys you create for the API, Model Alerts and the
+          browser extension. We store keys only as one-way digests.
+        </li>
+        <li>
+          <strong>Trading records.</strong> If you trade through TrenchScanner, the orders, positions and
+          transaction signatures, so we can show your history. Trades you sign with your own wallet stay under
+          your control. If you use a trading wallet that TrenchScanner holds for you, where offered, its
+          private key is encrypted with a key managed in AWS Key Management Service, and withdrawals only go
+          to the wallet you signed in with.
+        </li>
+        <li>
+          <strong>Reports you send us.</strong> A bug report or suggestion holds your message, an optional
+          contact detail and an optional screenshot. We delete the screenshot a week after the report is dealt
+          with. Error reports from the site hold the page and the error, and are logged rather than stored.
+        </li>
+        <li>
+          <strong>Technical data.</strong> Your IP address and browser details reach our servers with every
+          request. We use them to limit abuse (rate limits, and a one-way digest of the IP for anonymous
+          reports) and they can appear in short-lived server logs at our hosting provider.
+        </li>
+      </ul>
+
+      <h2>Cookies and storage in your browser</h2>
+      <p>
+        We set one cookie: your sign-in session. It's needed for signing in, and it isn't used for tracking.
+        The site also keeps preferences and a cache of recent data in your browser's local storage so pages
+        load fast. No advertising or analytics cookies are used.
+      </p>
+
+      <h2>Who else handles data</h2>
+      <ul>
+        <li>
+          Render hosts the site, the API and the database. An S3-compatible cloud storage service holds
+          database backups.
+        </li>
+        <li>Privy, for email, Google and X sign-in.</li>
+        <li>AWS Key Management Service, for the keys of server-held trading wallets.</li>
+        <li>
+          Your browser's push service (for example Google, Apple or Mozilla) delivers push notifications, and
+          Telegram delivers alerts to chats you link.
+        </li>
+        <li>
+          Solana RPC providers (such as Helius) and market data services (such as DexScreener, Pump.fun,
+          RugCheck and CoinGecko) receive token and wallet addresses when we look up public on-chain data.
+          Trades are sent to the Solana network, where they are public.
+        </li>
+        <li>AI models review public token data. Your personal data isn't sent to them.</li>
+      </ul>
+      <p>
+        We share data with others only as listed here, when the law requires it, or to protect the service.
+      </p>
+
+      <h2>How long we keep it</h2>
+      <p>
+        We keep account data while your account is in use. Bug report screenshots go a week after the report
+        is dealt with, and server logs roll over at our host. Data written to the blockchain can't be deleted
+        by anyone.
+      </p>
+
+      <h2>Your choices and rights</h2>
+      <ul>
+        <li>You can change or delete your filters, settings, keys, linked chats and devices in the app.</li>
+        <li>Signing out signs you out everywhere and revokes linked phones and extension keys.</li>
+        <li>
+          You can ask for a copy of your data, a correction, or deletion of your account by writing to
+          <a href="mailto:admin@trenchscanner.app">admin@trenchscanner.app</a>. Depending on where you live,
+          you may have further rights under laws such as the GDPR or CCPA. We'll respond within the time those
+          laws set.
+        </li>
+      </ul>
+
+      <h2>Security</h2>
+      <p>
+        Connections are encrypted, keys are stored as digests, and server-held wallet keys are encrypted with
+        AWS KMS. No system is perfectly secure, so keep your own wallet's keys safe and never share them.
+      </p>
+
+      <h2>Children</h2>
+      <p>TrenchScanner is for adults. It isn't meant for anyone under 18.</p>
+
+      <h2>Changes</h2>
+      <p>
+        If we change what we collect or how we use it, we update this page first and change the date above.
+      </p>
+
+      <h2>Contact</h2>
+      <p>
+        Questions or requests: <a href="mailto:admin@trenchscanner.app">admin@trenchscanner.app</a>, or the
+        bug button on any screen of the site.
+      </p>
+    </main>
+  </body>
+</html>

@@ -355,4 +355,34 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toBe("origin_not_allowed");
   });
+
+  it("answers an extension's origin with CORS on /ext/v1 only, so it needs no host permission", async () => {
+    const origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+    const preflight = await app.inject({
+      method: "OPTIONS",
+      url: "/ext/v1/settings",
+      headers: {
+        origin,
+        "access-control-request-method": "PUT",
+        "access-control-request-headers": "authorization,content-type",
+      },
+    });
+    expect(preflight.statusCode).toBe(204);
+    expect(preflight.headers["access-control-allow-origin"]).toBe(origin);
+    expect(String(preflight.headers["access-control-allow-methods"])).toContain("PUT");
+    expect(preflight.headers["access-control-allow-credentials"]).toBeUndefined();
+    expect(preflight.headers["access-control-max-age"]).toBe("7200");
+    const refused = await ext(null, "GET", "/ext/v1/me");
+    expect(refused.statusCode).toBe(401);
+    expect(refused.headers["access-control-allow-origin"]).toBe(origin);
+    // The site's own routes still answer only the site's origins.
+    const other = await app.inject({ method: "GET", url: "/health", headers: { origin } });
+    expect(other.headers["access-control-allow-origin"]).toBeUndefined();
+    const notExtension = await app.inject({
+      method: "GET",
+      url: "/ext/v1/me",
+      headers: { origin: "https://evil.example" },
+    });
+    expect(notExtension.headers["access-control-allow-origin"]).toBeUndefined();
+  });
 });
