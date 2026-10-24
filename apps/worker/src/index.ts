@@ -858,6 +858,19 @@ async function main() {
         runCandlePeaksJob(peakCandles, {
           trackingDays: env.PEAK_TRACKING_DAYS,
           candleSources: () => peakCandles.takeStats(),
+          // Due coins read before are triaged on DexScreener first, and only the ones that traded
+          // since are read (candlePeaks.ts triagePeakReads): free batches of 30, outside the
+          // scan's priority slots, and no CoinGecko fallback for the coins it has no pair for.
+          triage: {
+            lookup: (mints, failed) =>
+              dexScreener.getTokensByAddresses(mints, 3, {
+                timeoutMs: 5_000,
+                retries: 1,
+                deadlineMs: 20_000,
+                failed,
+                mayBeUnindexed: true,
+              }),
+          },
         }),
       1,
       { deadlineMinutes: 10 },
