@@ -34,6 +34,7 @@ import {
   holderChainReadAt,
   holderListAt,
   liveWideFor,
+  mapBadgeFreshness,
   clusterHalos,
   HALO_PAD,
   graphBounds,
@@ -160,7 +161,7 @@ function subscribeMaps(listener: () => void) {
 
 /**
  * Re-reads a coin's maps in every open view now, not on the next poll: a moment was just kept
- * (a filter alert's catch). Dropping the cache alone left it to the next tick, a minute away, and
+ * (a filter alert's catch). Dropping the cache alone left it to the next poll, up to HOLDER_POLL_MS away, and
  * a read already in flight could put the answer from before it back.
  */
 export function reloadBubbleMaps(mint: string): void {
@@ -185,35 +186,41 @@ export function shouldHoldFrame(shownHasData: boolean, nextHasData: boolean, sam
  * `value`, taking each change at most once every `ms`: the newest when it comes due, so a run of
  * changes redraws once (user ask 2026-10-19). A value without data (`hasData` false), or the first
  * with it, shows at once. `coin` is the mint: a change drops the previous coin before paint.
+ * `at` is when the value shown was taken, so the badge can say when the next redraw can come.
  */
-function useEvery<T>(value: T, ms: number, hasData: (v: T) => boolean, coin: string): T {
-  const [frame, setFrame] = useState({ coin, value });
+function useEvery<T>(
+  value: T,
+  ms: number,
+  hasData: (v: T) => boolean,
+  coin: string,
+): { value: T; at: number } {
+  const [frame, setFrame] = useState(() => ({ coin, value, at: Date.now() }));
   const latest = useRef(value);
   latest.current = value;
-  const lastAt = useRef(Date.now());
+  const lastAt = useRef(frame.at);
   // Adjusting state during render (React's previous-props pattern): the render that sees a new
   // coin returns that coin's value, so the previous coin's map cannot paint for a frame.
   if (frame.coin !== coin) {
     lastAt.current = Date.now();
-    setFrame({ coin, value });
+    setFrame({ coin, value, at: lastAt.current });
   }
   useEffect(() => {
     if (frame.coin !== coin || value === frame.value) return;
     if (!shouldHoldFrame(hasData(frame.value), hasData(value), true)) {
       lastAt.current = Date.now();
-      setFrame({ coin, value });
+      setFrame({ coin, value, at: lastAt.current });
       return;
     }
     const t = window.setTimeout(
       () => {
         lastAt.current = Date.now();
-        setFrame({ coin, value: latest.current });
+        setFrame({ coin, value: latest.current, at: lastAt.current });
       },
       Math.max(0, lastAt.current + ms - Date.now()),
     );
     return () => window.clearTimeout(t);
   }, [value, frame, ms, hasData, coin]);
-  return frame.coin === coin ? frame.value : value;
+  return frame.coin === coin ? { value: frame.value, at: frame.at } : { value, at: lastAt.current };
 }
 
 /**
@@ -2383,7 +2390,8 @@ export function BubbleMapSection({
     () => ({ reading: snapshotIn, wide: chosenWide !== undefined ? chosenWide : liveWide, live }),
     [snapshotIn, chosenWide, liveWide, live],
   );
-  const held = useEvery(inputs, bubbleRefreshSeconds * 1000, hasReading, mint);
+  const redrawMs = bubbleRefreshSeconds * 1000;
+  const { value: held, at: heldAt } = useEvery(inputs, redrawMs, hasReading, mint);
   const { reading: heldReading, wide: wideIn, live: heldLive } = held;
   // Trades move shares from each reading's own read time: the scan's for its lists and figures,
   // the top 50's for its map.
@@ -2439,6 +2447,11 @@ export function BubbleMapSection({
           tradeAt = t.atMs;
     return { listAt, at, tradeAt };
   }, [heldReading, wideIn, heldLive]);
+  // The badge describes the map on screen, which is held for the redraw interval: its read time
+  // and the next update it will draw, not the newest reading behind it.
+  const badge = freshness
+    ? mapBadgeFreshness(freshness, drawn?.at ?? freshness.last, { shownAt: heldAt, everyMs: redrawMs })
+    : undefined;
   const { showTransfers, setTransfersOn } = useTransferToggle(snapshot);
   const { bubbleFunderLabels } = useAppearance();
   // Transfers hidden: Linked, its clusters and the bundles as they read without them (user ask
@@ -2512,13 +2525,8 @@ export function BubbleMapSection({
                 : undefined
             }
           >
-            {freshness ? (
-              <LiveStamp
-                last={freshness.last}
-                next={freshness.next}
-                late={freshness.late}
-                live={freshness.live}
-              />
+            {badge ? (
+              <LiveStamp last={badge.last} next={badge.next} late={badge.late} live={badge.live} />
             ) : moment && moment.at !== undefined && Number.isFinite(moment.at) ? (
               <SecondsAgo at={drawn ? drawn.at : moment.at} />
             ) : (

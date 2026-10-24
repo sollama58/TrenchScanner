@@ -30,7 +30,7 @@ import {
 } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
 import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
-import { charityNamesByMint } from "../curatedFeed.js";
+import { charityNamesByMint, withCarriedHolderList } from "../curatedFeed.js";
 import { donateConfigCharities, type DonateCharity } from "../donateGg.js";
 import { feeRecipientsFromAnalysis } from "../feeRecipients.js";
 import { otcDeskRosterFor } from "../otcDesk.js";
@@ -805,6 +805,15 @@ export async function readTokenReading(mintAddress: string) {
     const { flaggedTrades: _trades, ...s } = found;
     return [s];
   });
+  // No list in the 50 newest rows: a quiet coin's unchanged list is written every ten minutes
+  // (worker holderListWrites.ts), and 50 rows can span less. The newest scan then carries the
+  // coin's newest reading, as the feed's cards do; without it the token view's "Now" fell back to
+  // the alert's holders until the next write.
+  if (!scans.some((s) => s.hasList) && snapshots[0]) {
+    const carried = await withCarriedHolderList(snapshots[0]);
+    if (carried && Array.isArray(carried.linkedHolders) && carried.linkedHolders.length > 0)
+      snapshots[0] = carried;
+  }
   return {
     ...token,
     snapshots,
