@@ -11,6 +11,7 @@ import {
   type User,
 } from "./api";
 import { cachedGet, invalidate, peek, prefetch } from "./cache";
+import { hasReturnTo, takeReturnTo } from "./returnTo";
 import {
   GUEST_DELAY_MINUTES,
   isGuest,
@@ -26,6 +27,7 @@ import { LiveTab } from "./tabs/LiveTab";
 import { GuestLiveTab } from "./tabs/GuestLiveTab";
 import {
   BookIcon,
+  BubblesIcon,
   BrainIcon,
   FlameIcon,
   GearIcon,
@@ -309,6 +311,23 @@ export function App() {
     window.addEventListener(SESSION_ENDED_EVENT, onEnded);
     return () => window.removeEventListener(SESSION_ENDED_EVENT, onEnded);
   }, []);
+
+  // Signed in, with a page that sent the visitor here to sign in (Asyl, ?return=): back to it, once
+  // the API confirms the session. Not on the remembered session alone, which may have ended, or the
+  // two pages would send the visitor back and forth.
+  useEffect(() => {
+    if (session.state !== "signed-in" || !hasReturnTo()) return;
+    let live = true;
+    cachedGet<User>("/auth/me", -1)
+      .then(() => {
+        const url = live ? takeReturnTo() : null;
+        if (url) window.location.replace(url);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [session.state]);
 
   /** Phone side of pairing: the code from the desktop's QR becomes this phone's own session. */
   const redeem = (code: string | null) => {
@@ -768,6 +787,16 @@ export function App() {
         </span>
         {/* Links out, each opening in a new browser tab. */}
         <span className="foot-links">
+          <a
+            className="foot-link"
+            href="https://asyl.trenchscanner.app"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open Asyl, the wallet-link explorer, in a new tab"
+          >
+            <BubblesIcon size={13} />
+            <span>Asyl</span>
+          </a>
           <a
             className="foot-link"
             href="https://holdex.live"

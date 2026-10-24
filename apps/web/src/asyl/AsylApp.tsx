@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, SESSION_ENDED_EVENT, post, type User } from "../api";
+import { ApiError, SESSION_ENDED_EVENT, post } from "../api";
 import { ShareImageDialog } from "../components/ShareImageDialog";
 import { asylApi, type AsylMe, type ChainRead, type Label, type MapDoc, type MapSummary } from "./asylApi";
 import { renderMapCard } from "./asylCard";
@@ -33,7 +33,7 @@ import { basePath, parseRoute, routePath, sharedLink, type AsylRoute } from "./r
 const EMPTY: AsylGraph = { nodes: [], edges: [] };
 const BASE = typeof location === "undefined" ? "" : basePath(location.pathname);
 
-type Session = "loading" | "out" | AsylMe;
+type Session = "loading" | "out" | "down" | AsylMe;
 
 function go(r: AsylRoute) {
   const path = routePath(r, BASE);
@@ -73,9 +73,9 @@ export function AsylApp() {
       .me()
       .then(setSession)
       .catch((e) => {
-        // Signed out, or the API not answering: either way the sign-in screen, which says so on a retry.
-        if (!(e instanceof ApiError) || e.status !== 401) console.warn("asyl: /me", e);
-        setSession("out");
+        // Only a real "not signed in" sends the visitor to sign in; an API that isn't answering
+        // (a deploy, a network blip) says so and offers a retry.
+        setSession(e instanceof ApiError && e.status === 401 ? "out" : "down");
       });
   }, []);
 
@@ -383,15 +383,25 @@ export function AsylApp() {
 
   if (parseRoute(location.pathname).kind === "shared") return null;
   if (session === "loading") return <div className="asyl-loading">ASYL</div>;
-  if (session === "out")
+  if (session === "down")
     return (
-      <AsylSignIn
-        onSignedIn={(_u: User) => {
-          started.current = false;
-          loadMe();
-        }}
-      />
+      <div className="asyl-gate">
+        <div className="asyl-gate-card">
+          <h1 className="asyl-wordmark">ASYL</h1>
+          <p>TrenchScanner isn&apos;t answering right now. It&apos;s usually back within a minute.</p>
+          <button
+            className="asyl-btn asyl-wallet-btn"
+            onClick={() => {
+              setSession("loading");
+              loadMe();
+            }}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
     );
+  if (session === "out") return <AsylSignIn />;
 
   const chain = session.chain;
 
