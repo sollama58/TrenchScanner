@@ -17,7 +17,8 @@
  *   VITE_EXTENSION_IDS (comma-separated) on the web service, or in STORE_IDS once known.
  */
 const DEV_ID = "jhdfdijmhnomcdijohdfibelodhfiigl";
-const STORE_IDS: string[] = [];
+/** The Chrome Web Store item (created 2026-10-24). */
+const STORE_IDS: string[] = ["pjacklmgcelhgfjnkbdpkhcbjcblijca"];
 const EXTENSION_ID = /^[a-p]{32}$/;
 
 export const EXTENSION_IDS: readonly string[] = [
