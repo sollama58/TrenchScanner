@@ -68,7 +68,6 @@ export interface OverlayToken {
 export type PanelRequest =
   | { type: "status" }
   | { type: "feed" }
-  | { type: "connect"; key: string }
   | { type: "disconnect" }
   | { type: "saveSettings"; settings: OverlaySettings };
 

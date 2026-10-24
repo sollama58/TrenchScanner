@@ -15,9 +15,13 @@ import { SITE_NAMES, tokenCard } from "./card";
  * touches the sites: a link is the only thing that leads there. Built with DOM calls only;
  * nothing here is parsed as HTML.
  */
-const SETTINGS_URL = "https://trenchscanner.app/#settings";
-/** Settings opened to connect this browser: the page finds the extension and offers one click. */
-const CONNECT_URL = "https://trenchscanner.app/?connect=extension#settings";
+/**
+ * Settings opened to connect this browser: the page scrolls to Browser extension, finds this
+ * extension by the ID given here (apps/web/src/extensionBridge.ts) and offers one click.
+ */
+function connectUrl(): string {
+  return `https://trenchscanner.app/?connect=extension&ext=${encodeURIComponent(chrome.runtime.id)}#settings`;
+}
 /** How often the open panel re-reads the list. Hidden panels don't poll. */
 const POLL_MS = 5_000;
 
@@ -69,34 +73,15 @@ function toggle(
   return el("label", { className: "opt" }, text, input);
 }
 
-function renderDisconnected(error: string | null): void {
+function renderDisconnected(): void {
   account.textContent = "Not connected";
   account.className = "account";
   const signIn = el("a", {
-    href: CONNECT_URL,
+    href: connectUrl(),
     target: "_blank",
     rel: "noopener noreferrer",
     className: "button primary",
     textContent: "Connect with TrenchScanner",
-  });
-  const input = el("input", { type: "text", placeholder: "tsx_…", autocomplete: "off", spellcheck: false });
-  input.setAttribute("aria-label", "Extension key");
-  const message = el("p", { className: "error", textContent: error ?? "" });
-  const connect = el("button", { textContent: "Connect with this key" });
-  connect.addEventListener("click", async () => {
-    connect.disabled = true;
-    const result = await send<{ ok: boolean; error?: string }>({ type: "connect", key: input.value });
-    if (result?.ok) void refresh();
-    else {
-      message.textContent = result?.error ?? "Couldn't connect.";
-      connect.disabled = false;
-    }
-  });
-  const link = el("a", {
-    href: SETTINGS_URL,
-    target: "_blank",
-    rel: "noopener noreferrer",
-    textContent: "TrenchScanner Settings",
   });
   app.replaceChildren(
     section(
@@ -106,15 +91,8 @@ function renderDisconnected(error: string | null): void {
       el(
         "p",
         { className: "note" },
-        "Opens TrenchScanner Settings, where one click connects this browser. The key it gets can only read your alerts and stats.",
+        "Opens TrenchScanner Settings at Browser extension, where one click connects this browser. This panel updates by itself. The key it gets can only read your alerts and stats.",
       ),
-    ),
-    section(
-      "Or paste a key",
-      el("p", { className: "note" }, "In ", link, ", open Browser extension and press Show a key."),
-      input,
-      connect,
-      message,
     ),
   );
 }
@@ -293,7 +271,7 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
 
 function draw(): void {
   if (!status?.connected) {
-    renderDisconnected(null);
+    renderDisconnected();
     return;
   }
   account.textContent =

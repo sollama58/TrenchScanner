@@ -2,18 +2,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, del, post, type ExtensionKey, type ExtensionKeyCreated, type ExtensionKeyList } from "../api";
 import { useSettings } from "../alerts";
 import { findExtension, handOverKey, type InstalledExtension } from "../extensionBridge";
-import { CopyIcon, GlobeIcon } from "./Icons";
+import { GlobeIcon } from "./Icons";
 
 /**
- * Settings, at the bottom: keys for the Trench Overlay browser extension, a side panel listing
- * the reader's alerts with links to Axiom, Terminal and GMGN. A key reads alerts, token stats and
- * the overlay's settings and nothing else. Paid access, the Model Alert rule (user decision
+ * Settings, at the bottom: the Trench Overlay browser extension, a side panel listing the reader's
+ * alerts with links to Axiom, Terminal and GMGN. Paid access, the Model Alert rule (user decision
  * 2026-10-24).
  *
- * When this browser has the extension, "Connect this browser" makes a key and hands it straight to
- * the extension (extensionBridge.ts): the secret is never shown. "Show a key" is the fallback for
- * another browser, or when the hand-over fails. The extension's own "Connect with TrenchScanner"
- * opens this page with ?connect=extension, which scrolls here.
+ * Connecting is one click and the key is never shown (user ask 2026-10-24): the panel's "Connect
+ * with TrenchScanner" opens this page as ?connect=extension&ext=<its ID>#settings, the page scrolls
+ * here, finds the extension (extensionBridge.ts) and "Connect this browser" makes a key and hands it
+ * over. The list below revokes keys, including those of other browsers.
  */
 export function ExtensionKeysPanel() {
   const settings = useSettings();
@@ -22,27 +21,67 @@ export function ExtensionKeysPanel() {
   return <ExtensionKeysBody />;
 }
 
+/** What the extension's link asked for: to connect, and its own ID when it sent one. */
+function connectRequest(): { asked: boolean; ext: string | null } {
+  const params = new URLSearchParams(window.location.search);
+  return { asked: params.get("connect") === "extension", ext: params.get("ext") };
+}
+
+/**
+ * Keeps the panel in view while the Settings cards above it finish loading and push it down, until
+ * the reader scrolls or touches the page themselves, or a few seconds pass.
+ */
+function useScrollIntoViewWhileLoading(target: { current: HTMLElement | null }, active: boolean) {
+  useEffect(() => {
+    if (!active) return;
+    let stopped = false;
+    const place = () => {
+      if (!stopped) target.current?.scrollIntoView({ block: "center", behavior: "auto" });
+    };
+    const stop = () => {
+      stopped = true;
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(document.body);
+    const events = ["wheel", "touchstart", "keydown", "mousedown"] as const;
+    for (const e of events) window.addEventListener(e, stop, { passive: true, once: true });
+    const timer = window.setTimeout(stop, 4000);
+    return () => {
+      stop();
+      observer.disconnect();
+      window.clearTimeout(timer);
+      for (const e of events) window.removeEventListener(e, stop);
+    };
+  }, [target, active]);
+}
+
 function ExtensionKeysBody() {
+  const [request] = useState(connectRequest);
   const [keys, setKeys] = useState<ExtensionKey[] | null>(null);
   const [limit, setLimit] = useState(3);
-  const [secret, setSecret] = useState<ExtensionKeyCreated | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>("load");
-  const [copied, setCopied] = useState(false);
-  const [installed, setInstalled] = useState<InstalledExtension | null>(null);
+  // undefined while looking, null when this browser has no Trench Overlay.
+  const [installed, setInstalled] = useState<InstalledExtension | null | undefined>(undefined);
   const [handedOver, setHandedOver] = useState(false);
   const panel = useRef<HTMLElement>(null);
+  useScrollIntoViewWhileLoading(panel, request.asked);
 
   useEffect(() => {
     let live = true;
-    void findExtension().then((found) => live && setInstalled(found));
-    if (new URLSearchParams(window.location.search).get("connect") === "extension") {
-      panel.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    void findExtension(request.ext).then((found) => live && setInstalled(found));
+    if (request.asked) {
+      // A reload or a shared URL shouldn't scroll here again.
+      const url = new URL(window.location.href);
+      url.searchParams.delete("connect");
+      url.searchParams.delete("ext");
+      window.history.replaceState(window.history.state, "", url.toString());
     }
     return () => {
       live = false;
     };
-  }, []);
+  }, [request]);
 
   const load = useCallback(async () => {
     try {
@@ -62,11 +101,11 @@ function ExtensionKeysBody() {
   }, [load]);
 
   const atCap = (keys?.length ?? 0) >= limit;
-  /** Makes a key; hands it to this browser's extension when there is one, else shows it once. */
-  const connect = (handOver: boolean) => {
+  /** Makes a key and hands it straight to this browser's extension. */
+  const connect = () => {
+    if (!installed) return;
     setBusy("connect");
     setError(null);
-    setCopied(false);
     setHandedOver(false);
     post<ExtensionKeyCreated>("/settings/extension-keys")
       .then(async (created) => {
@@ -74,16 +113,16 @@ function ExtensionKeysBody() {
           ...(current ?? []),
           { id: created.id, prefix: created.prefix, createdAt: created.createdAt, lastUsedAt: null },
         ]);
-        if (handOver && installed) {
-          const result = await handOverKey(installed.id, created.secret);
-          if (result.ok) {
-            setHandedOver(true);
-            setInstalled({ ...installed, connected: true });
-            return;
-          }
-          setError(`${result.error ?? "The extension didn't take the key."} Paste the key below instead.`);
+        const result = await handOverKey(installed.id, created.secret, request.ext);
+        if (result.ok) {
+          setHandedOver(true);
+          setInstalled({ ...installed, connected: true });
+          return;
         }
-        setSecret(created);
+        // The key it couldn't take is no use to anyone: revoke it.
+        await del(`/settings/extension-keys/${created.id}`).catch(() => undefined);
+        setKeys((current) => current?.filter((key) => key.id !== created.id) ?? null);
+        setError(result.error ?? "The extension didn't take the key. Try again.");
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(null));
@@ -95,18 +134,9 @@ function ExtensionKeysBody() {
     del<{ id: string }>(`/settings/extension-keys/${id}`)
       .then(() => {
         setKeys((current) => current?.filter((key) => key.id !== id) ?? null);
-        setSecret((current) => (current?.id === id ? null : current));
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(null));
-  };
-
-  const copySecret = () => {
-    if (!secret) return;
-    void navigator.clipboard.writeText(secret.secret).then(
-      () => setCopied(true),
-      () => setError("Select the key and copy it."),
-    );
   };
 
   const day = (iso: string) =>
@@ -121,23 +151,14 @@ function ExtensionKeysBody() {
           </span>
           <h2>Browser extension</h2>
         </div>
-        {installed && !installed.connected ? (
+        {installed && !installed.connected && (
           <button
             type="button"
             className="primary"
             disabled={atCap || busy !== null || keys === null}
-            onClick={() => connect(true)}
+            onClick={connect}
           >
             Connect this browser
-          </button>
-        ) : (
-          <button
-            type="button"
-            className={installed ? "small" : "primary"}
-            disabled={atCap || busy !== null || keys === null}
-            onClick={() => connect(false)}
-          >
-            Show a key
           </button>
         )}
       </header>
@@ -147,24 +168,23 @@ function ExtensionKeysBody() {
         gets its own key, up to {limit}. A key can read your alerts, token stats and overlay settings. It
         cannot trade, see wallets, or change your filters. Revoke it here at any time.
       </p>
-      {installed?.connected && (
+      {installed === undefined ? (
+        <p className="small muted">Looking for the extension in this browser…</p>
+      ) : installed === null ? (
+        <p className="small">
+          To connect a browser, install Trench Overlay in it, open its panel and press Connect with
+          TrenchScanner. This page then connects it in one click.
+        </p>
+      ) : installed.connected ? (
         <p className="small">
           {handedOver
             ? "Connected. The panel in this browser is ready."
-            : "This browser's extension is connected."}{" "}
-          Use Show a key to connect another browser.
+            : "This browser's extension is connected."}
         </p>
-      )}
-      {secret && (
-        <div>
-          <p className="small">Paste this key into the extension. It is not shown again.</p>
-          <code className="mak-secret num">{secret.secret}</code>
-          <p>
-            <button type="button" className="small" onClick={copySecret}>
-              <CopyIcon size={13} /> {copied ? "Copied" : "Copy key"}
-            </button>
-          </p>
-        </div>
+      ) : (
+        <p className="small">
+          Trench Overlay is installed in this browser. Connect it with the button above.
+        </p>
       )}
       {keys === null ? (
         <p className="small muted">Loading browsers…</p>

@@ -3,8 +3,12 @@
  *
  * Chrome gives a page `chrome.runtime.sendMessage(extensionId, …)` only when an installed extension
  * lists the page's origin in its manifest's externally_connectable, as Trench Overlay lists this
- * site. A key is only ever sent to an extension ID below: an ID taken from a link or the page could
- * belong to any extension that lists this site, and would be handed the key.
+ * site. A key goes to one of the known IDs below, or to the ID the extension's own "Connect with
+ * TrenchScanner" link carries (?ext=), which covers a build whose ID isn't listed yet (a store item
+ * before its ID is added, a copy loaded unpacked from the store zip). Trusting the link's ID means a
+ * crafted link could steer a key to another installed extension that also lists this site; the
+ * reader still has to press Connect, and the key only reads their alerts and stats. Listing the
+ * store ID here makes the link's ID unnecessary for store installs.
  *
  * - The unpacked build (apps/extension, `npm run build`) carries dev-key.pub, so its ID is fixed.
  * - The Chrome Web Store assigns the listed item's ID at its first upload; it goes in
@@ -61,10 +65,16 @@ export interface InstalledExtension {
   version: string | null;
 }
 
-/** The installed Trench Overlay, if this browser has one of the known builds. */
-export async function findExtension(): Promise<InstalledExtension | null> {
+/** The IDs to try: the link's own first, then the known builds. */
+function candidates(hint: string | null | undefined): string[] {
+  const ids = hint && EXTENSION_ID.test(hint) ? [hint, ...EXTENSION_IDS] : [...EXTENSION_IDS];
+  return [...new Set(ids)];
+}
+
+/** The installed Trench Overlay, if this browser has one of the known builds or the link's. */
+export async function findExtension(hint?: string | null): Promise<InstalledExtension | null> {
   if (!runtime()) return null;
-  for (const id of EXTENSION_IDS) {
+  for (const id of candidates(hint)) {
     const reply = (await ask(id, { type: "ping" }, 1500)) as {
       ok?: unknown;
       connected?: unknown;
@@ -82,8 +92,12 @@ export async function findExtension(): Promise<InstalledExtension | null> {
 }
 
 /** Hands a key Settings just made to the extension, which checks it with the API and keeps it. */
-export async function handOverKey(id: string, key: string): Promise<{ ok: boolean; error?: string }> {
-  if (!EXTENSION_IDS.includes(id)) return { ok: false, error: "Unknown extension." };
+export async function handOverKey(
+  id: string,
+  key: string,
+  hint?: string | null,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!candidates(hint).includes(id)) return { ok: false, error: "Unknown extension." };
   const reply = (await ask(id, { type: "connect", key }, 15_000)) as { ok?: unknown; error?: unknown } | null;
   if (reply?.ok === true) return { ok: true };
   return {
