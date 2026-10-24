@@ -35,7 +35,8 @@ Open `chrome://extensions`, turn on Developer mode, choose **Load unpacked** and
 `apps/extension/dist`. The dev build carries `dev-key.pub`, so the unpacked extension's ID is always
 `jhdfdijmhnomcdijohdfibelodhfiigl`. TrenchScanner's Settings knows that ID
 (`apps/web/src/extensionBridge.ts`), so in the panel, **Connect with TrenchScanner** then
-**Connect this browser** connects it in one click. Pasting a key from **Show a key** also works.
+**Connect this browser** connects it in one click. The link carries the extension's own ID, so a
+build whose ID isn't listed there (the store zip loaded unpacked) connects too. There is no key to paste.
 Keys need paid access. AI verdicts appear for admin wallets only, as on the site.
 
 ## Release to the Chrome Web Store
@@ -46,7 +47,7 @@ npm run package -w @trenchscanner/extension   # release/trench-overlay-<version>
 
 The store build leaves out `dev-key.pub`, because the store assigns its own ID. After the first
 upload, add that ID to `STORE_IDS` in `apps/web/src/extensionBridge.ts` (or `VITE_EXTENSION_IDS` on
-the web service). Settings hands keys only to the IDs listed there. The listing's text, permission
+the web service). Until then, store installs connect through the ID their link carries. The listing's text, permission
 justifications and privacy answers are in `STORE.md`, and the privacy policy is
 `https://trenchscanner.app/extension-privacy.html` (`apps/web/public/extension-privacy.html`).
 

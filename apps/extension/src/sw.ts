@@ -91,7 +91,7 @@ async function status(): Promise<Status> {
   };
 }
 
-/** Checks a key with the API and keeps it: from the panel's paste box or from TrenchScanner's site. */
+/** Checks a key TrenchScanner's Settings handed over with the API, and keeps it. */
 async function connect(raw: unknown): Promise<{ ok: boolean; error?: string }> {
   const key = typeof raw === "string" ? raw.trim() : "";
   if (!KEY_SHAPE.test(key))
@@ -125,8 +125,6 @@ async function handle(request: PanelRequest): Promise<unknown> {
       return status();
     case "feed":
       return feed();
-    case "connect":
-      return connect(request.key);
     case "disconnect":
       await chrome.storage.local.remove(["key", "wallet", "aiReviews"]);
       lastTokens = [];
