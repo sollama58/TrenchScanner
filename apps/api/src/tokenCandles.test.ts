@@ -4,9 +4,11 @@ import {
   candlesQuery,
   pageCoverEnd,
   pageInput,
+  pendingHole,
   readTokenCandles,
   uncovered,
   HOLE_EDGE_MS,
+  WRITER_LAG_MS,
   type CandleReadDeps,
 } from "./tokenCandles.js";
 
@@ -59,6 +61,61 @@ describe("holes", () => {
     const out = await readTokenCandles("X", "1s", null, 1_500, d, now);
     // The two seconds before the pool's stream began are nobody's; the last few are the edge.
     expect(out.holes).toEqual([[grad, grad + 2_000]]);
+  });
+
+  // Every freshly opened coin, 2026-10-24: the worker's tape covered to its last flush (20-90 s
+  // back), the chart's own stream from the open, and the stretch between drew blank on the
+  // 1-second chart until the next flush landed.
+  it("leaves out the stretch the worker's tape is about to write, between its cover and the live edge", async () => {
+    const now = Date.UTC(2026, 9, 24, 20, 58, 20);
+    const flushed = now - 30_000;
+    const secs = Array.from({ length: 120 }, (_, i) => bar(flushed - 120_000 + i * 1_000, 50_000 + i));
+    const stored = chunkBars("X", 1, "curve", secs, { from: flushed - 120_000, to: flushed });
+    const stream: SeriesInput = {
+      res: 1,
+      coverFrom: now - 20_000,
+      coverTo: now,
+      bars: [bar(now - 20_000, 51_000), bar(now - 1_000, 51_500)],
+      priority: 1,
+    };
+    const { d } = deps(stored, [stream]);
+    const out = await readTokenCandles("X", "1s", null, 1_500, d, now);
+    expect(out.holes).toBeUndefined();
+    // Pending only on the newest page: an older page is history, and the chart may be asked for it later.
+    const older = await readTokenCandles("X", "1s", now, 1_500, d, now);
+    expect(older.holes).toEqual([[flushed, now - 20_000]]);
+    // A longer wait is the coin let go, not a flush in flight; a minute source's cover ending is
+    // nobody's either.
+    const late = chunkBars("X", 1, "curve", secs, { from: flushed - 120_000, to: flushed - 40_000 });
+    expect((await readTokenCandles("X", "1s", null, 1_500, deps(late, [stream]).d, now)).holes).toEqual([
+      [flushed - 40_000, now - 20_000],
+    ]);
+    const minuteStart = Math.floor((flushed - 120_000) / M) * M;
+    const minutes = chunkBars("X", 60, "gecko", [bar(minuteStart, 50_000)], {
+      from: minuteStart,
+      to: flushed,
+    });
+    expect((await readTokenCandles("X", "1s", null, 1_500, deps(minutes, [stream]).d, now)).holes).toEqual([
+      [flushed, now - 20_000],
+    ]);
+  });
+
+  it("tells a pending hole from one nobody will fill", () => {
+    const now = 1_000_000;
+    const fine = (priority: number, coverTo: number): SeriesInput => ({
+      res: 1,
+      coverFrom: 0,
+      coverTo,
+      bars: [],
+      priority: priority,
+    });
+    expect(pendingHole([now - 30_000, now - 5_000], [fine(3, now - 30_000)], now)).toBe(true);
+    expect(pendingHole([now - 30_000, now - 5_000], [fine(1, now - 30_000)], now)).toBe(false);
+    expect(pendingHole([now - 30_000, now - 5_000], [fine(3, now - 31_000)], now)).toBe(false);
+    expect(pendingHole([now - WRITER_LAG_MS - 1_000, now], [fine(3, now - WRITER_LAG_MS - 1_000)], now)).toBe(
+      false,
+    );
+    expect(pendingHole([now - 90_000, now - 60_000], [fine(3, now - 90_000)], now)).toBe(false);
   });
 
   it("leaves out a trailing hole shorter than the live edge, and keeps one inside", () => {

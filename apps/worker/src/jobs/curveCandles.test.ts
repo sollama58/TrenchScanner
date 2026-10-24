@@ -4,6 +4,7 @@ import {
   curveBars,
   curveCandleRows,
   curveTapeDropped,
+  FLUSH_MS,
   flushCurveCandles,
   QUIET_RUN_MAX_MS,
   quoteUsdRate,
@@ -198,8 +199,35 @@ describe("curveCandleRows", () => {
   });
 });
 
-describe("the minute flush", () => {
+describe("the flush", () => {
   afterEach(() => resetCurveCandles());
+
+  it("writes the forming minute every FLUSH_MS, rebuilt whole with its cover run on, so the store trails the live edge by seconds", async () => {
+    expect(FLUSH_MS).toBe(20_000);
+    const t = streamedTape(
+      [
+        [T0 + 1_500, 2e-5, 2],
+        [T0 + 25_000, 3e-5, 3],
+      ],
+      T0 + 85_000,
+    );
+    const writes: CandleChunkRow[][] = [];
+    startCurveCandles({
+      view: { mints: () => ["M"], ticksAfter: (m, a) => t.ticksAfter(m, a) },
+      solUsd: async () => SOL,
+      save: async (rows) => void writes.push(rows),
+    });
+    for (const at of [20_500, 40_500, 60_500, 80_500]) await flushCurveCandles(T0 + at);
+    // One row a flush, the same chunk each time: its bars so far, its cover to the flush.
+    expect(
+      writes.map((w) => w.map((r) => [r.startAt - T0, r.bars.map((b) => b.t - T0), r.coverTo - T0])),
+    ).toEqual([
+      [[0, [1_000], 20_000]],
+      [[0, [1_000, 25_000], 40_000]],
+      [[0, [1_000, 25_000], 60_000]],
+      [[0, [1_000, 25_000], 80_000]],
+    ]);
+  });
 
   it("writes each followed coin's closed minutes in one batch, then only what is new", async () => {
     const t = streamedTape(

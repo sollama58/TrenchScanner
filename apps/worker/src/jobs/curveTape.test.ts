@@ -168,6 +168,9 @@ describe("curve tape", () => {
     expect(s.stream.watch).toHaveBeenCalledWith(`curve:${MINT}`, [pumpCurveAddressOf(MINT)], NOW, "account");
     await round(NOW);
     expect(s.reads).toHaveLength(1);
+    // Seeded on a covered stream: the tape runs on the stream from the read itself, not from the
+    // next round's confirmation (its 1-second bars began a round late: chart audit 2026-10-24).
+    expect(curveTapeView.ticksAfter(MINT, -1)).toMatchObject({ streamFrom: NOW });
     await round(NOW + 5_000);
     expect(s.reads).toHaveLength(1);
     onCurveStreamUpdate(`curve:${MINT}`, Buffer.alloc(10).toString("base64"), 500, NOW + 6_000);

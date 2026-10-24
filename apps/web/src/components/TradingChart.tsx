@@ -38,10 +38,12 @@ import {
   buildSlots,
   closeTimeMs,
   finestCoverMs,
+  fineSpan,
   slotCandle,
   slotIndex,
   slotOfTime,
   timeframeFits,
+  timeframeOffered,
   type Slots,
 } from "../chartBars";
 import { Drawings, FIB_LEVELS, type DrawScale, type DrawTool } from "../chartDrawings";
@@ -218,6 +220,28 @@ function safeLocale(): string {
  */
 const FOLD_INDICATORS_PX = 900;
 const SELECT_TIMEFRAME_PX = 600;
+
+/**
+ * A candle size button's tooltip: why a greyed-out one is (wider than the view allows, or finer
+ * than the data recorded: the stretch with 1-second data is named when there is one).
+ */
+function timeframeTitle(
+  label: string,
+  ms: number,
+  viewMs: number,
+  offered: boolean,
+  fine: { from: number; to: number } | null,
+): string {
+  if (offered) return `${label} candles`;
+  if (!timeframeFits(ms, viewMs)) return "Wider than this view allows";
+  if (!fine) return "Nothing recorded this fine for this coin yet";
+  return `Recorded this fine only from ${clockLabel(fine.from)} to ${clockLabel(fine.to)}`;
+}
+
+/** Hour and minute of a moment, in the reader's clock. */
+function clockLabel(t: number): string {
+  return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
 const ICON_TOOLS_PX = 520;
 
 const NO_MARKS: WalletMark[] = [];
@@ -412,13 +436,20 @@ export function TradingChart({
     [candles, extent.t0, extent.t1],
   );
   const autoMs = autoTimeframe(viewMs, plotW, 6, finestMs);
+  // Where the candles finer than a minute reach: a sub-minute size is offered only where there is
+  // data that fine (timeframeOffered; user decision 2026-10-24).
+  const fineRecorded = useMemo(() => fineSpan(candles), [candles]);
+  const offered = (ms: number) =>
+    timeframeFits(ms, viewMs) && timeframeOffered(ms, finestMs, fineRecorded, Date.now());
+  // A picked size the view can't take (wider than it allows, or finer than its data) draws as Auto.
+  const pickedMs = picked !== null && offered(picked) ? picked : null;
   // The size picked, or Auto's: what the picker shows.
-  const shownMs = picked !== null && timeframeFits(picked, viewMs) ? picked : autoMs;
+  const shownMs = pickedMs ?? autoMs;
   // The view reads its candles at the size the view alone would take, not only the one drawn: the
   // store answers each stretch at that size, or coarse where it holds only wider bars, so Auto
   // draws the finest size whose candles mostly aren't coarse (finestMs). Read at the size drawn,
   // a coin whose finer candles land later would stay on the wider size.
-  const wantMs = picked !== null && timeframeFits(picked, viewMs) ? picked : autoTimeframe(viewMs, plotW);
+  const wantMs = pickedMs ?? autoTimeframe(viewMs, plotW);
   // While a newly picked size's first page is on its way, the candles held stay at the size they
   // were drawn at (drawTimeframe); the chart draws the size picked once it has its candles.
   const drawnRef = useRef<number | null>(null);
@@ -1344,12 +1375,12 @@ export function TradingChart({
             <label className="tc-select" title="Candle size">
               <span className="sr-only">Candle size</span>
               <select
-                value={picked === null || !timeframeFits(picked, viewMs) ? "auto" : String(shownMs)}
+                value={pickedMs === null ? "auto" : String(shownMs)}
                 onChange={(e) => pickTimeframe(e.target.value === "auto" ? null : Number(e.target.value))}
               >
                 <option value="auto">Auto · {timeframeLabel(autoMs)}</option>
                 {TIMEFRAMES.map((f) => (
-                  <option key={f.ms} value={f.ms} disabled={!timeframeFits(f.ms, viewMs)}>
+                  <option key={f.ms} value={f.ms} disabled={!offered(f.ms)}>
                     {f.label}
                   </option>
                 ))}
@@ -1361,23 +1392,21 @@ export function TradingChart({
                 type="button"
                 role="radio"
                 aria-checked={picked === null}
-                className={picked === null || !timeframeFits(picked, viewMs) ? "on" : ""}
+                className={pickedMs === null ? "on" : ""}
                 title="Auto: a candle size that fits the whole view"
                 onClick={() => pickTimeframe(null)}
               >
-                {picked === null || !timeframeFits(picked, viewMs)
-                  ? `Auto · ${timeframeLabel(autoMs)}`
-                  : "Auto"}
+                {pickedMs === null ? `Auto · ${timeframeLabel(autoMs)}` : "Auto"}
               </button>
               {TIMEFRAMES.map((f) => (
                 <button
                   key={f.ms}
                   type="button"
                   role="radio"
-                  aria-checked={shownMs === f.ms && picked !== null}
-                  className={picked !== null && shownMs === f.ms ? "on" : ""}
-                  disabled={!timeframeFits(f.ms, viewMs)}
-                  title={timeframeFits(f.ms, viewMs) ? `${f.label} candles` : "Wider than this view allows"}
+                  aria-checked={pickedMs === f.ms}
+                  className={pickedMs === f.ms ? "on" : ""}
+                  disabled={!offered(f.ms)}
+                  title={timeframeTitle(f.label, f.ms, viewMs, offered(f.ms), fineRecorded)}
                   onClick={() => pickTimeframe(f.ms)}
                 >
                   {f.label}

@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { keysOf } from "@trenchscanner/core";
 import {
   HeliusAccountStream,
+  REFUSED_FIRST_RETRY_MS,
   REFUSED_RETRY_MS,
+  refusedRetryMs,
   STREAM_SETTLE_MS,
   streamCredits,
   streamTx,
@@ -217,23 +219,44 @@ describe("HeliusAccountStream", () => {
     stream.stop();
   });
 
-  it("asks for a refused subscription again after REFUSED_RETRY_MS, and counts the refusal", () => {
+  it("asks for a refused subscription again soon, waiting longer after each refusal, and counts them", () => {
     const { stream, socket } = started();
     stream.watch("mint-1", ["acc-a"], 1_000);
     const id = subscribes(socket)[0]!.id;
     stream.handleMessage(JSON.stringify({ jsonrpc: "2.0", id, error: { message: "nope" } }), 2_000);
-    stream.watch("mint-1", ["acc-a"], 2_000 + REFUSED_RETRY_MS - 1);
+    // 10 s after the first refusal (it used to wait the full REFUSED_RETRY_MS: a called coin
+    // turned away once had its first five minutes polled, with no 1-second bars).
+    stream.watch("mint-1", ["acc-a"], 2_000 + REFUSED_FIRST_RETRY_MS - 1);
     expect(subscribes(socket)).toHaveLength(1);
-    stream.watch("mint-1", ["acc-a"], 2_000 + REFUSED_RETRY_MS);
+    stream.watch("mint-1", ["acc-a"], 2_000 + REFUSED_FIRST_RETRY_MS);
     expect(subscribes(socket)).toHaveLength(2);
-    const again = subscribes(socket)[1]!.id;
+    // Refused again: twice as long this time.
+    const second = subscribes(socket)[1]!.id;
+    stream.handleMessage(JSON.stringify({ jsonrpc: "2.0", id: second, error: { message: "nope" } }), 13_000);
+    stream.watch("mint-1", ["acc-a"], 13_000 + refusedRetryMs(2) - 1);
+    expect(subscribes(socket)).toHaveLength(2);
+    stream.watch("mint-1", ["acc-a"], 13_000 + refusedRetryMs(2));
+    expect(subscribes(socket)).toHaveLength(3);
+    const again = subscribes(socket)[2]!.id;
     stream.handleMessage(JSON.stringify({ jsonrpc: "2.0", id: again, result: 5 }), 400_000);
     expect(stream.coveredSince("mint-1", "acc-a", 400_000)).toBe(400_000);
     // Confirmed: not asked for again.
     stream.watch("mint-1", ["acc-a"], 2_000_000);
-    expect(subscribes(socket)).toHaveLength(2);
-    expect(stream.takeStats()).toMatchObject({ refused: 1, capped: 0 });
+    expect(subscribes(socket)).toHaveLength(3);
+    expect(stream.takeStats()).toMatchObject({ refused: 2, capped: 0 });
     stream.stop();
+  });
+
+  it("waits 10 s, then doubling, never longer than REFUSED_RETRY_MS", () => {
+    expect([1, 2, 3, 4, 5, 6, 7].map(refusedRetryMs)).toEqual([
+      10_000,
+      20_000,
+      40_000,
+      80_000,
+      160_000,
+      REFUSED_RETRY_MS,
+      REFUSED_RETRY_MS,
+    ]);
   });
 
   it("at the cap, gives a key nobody asked for in 5 minutes' place to a new one, else counts it turned away", () => {

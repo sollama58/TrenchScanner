@@ -255,6 +255,44 @@ export function timeframeFits(ms: number, viewMs: number): boolean {
   return ms * 3 <= viewMs;
 }
 
+/** A sub-minute size is offered while candles that fine end within this of now (the live edge). */
+export const FINE_LIVE_MS = 2 * 60_000;
+
+/**
+ * Exported for tests. The stretch the candles finer than a minute cover, first start to last end
+ * (ms), or null without any; live ticks don't count. The store holds 1-second bars only where the
+ * worker's tape followed the coin (from its launch, an alert, a call or a chart's open).
+ */
+export function fineSpan(candles: readonly VolumeCandle[]): { from: number; to: number } | null {
+  let from = Infinity;
+  let to = -Infinity;
+  for (const k of candles) {
+    const w = k.w ?? 60_000;
+    if (k.tick || w >= 60_000) continue;
+    from = Math.min(from, k.t);
+    to = Math.max(to, k.t + w);
+  }
+  return from === Infinity ? null : { from, to };
+}
+
+/**
+ * Exported for tests. Whether a candle size is offered in the picker (user decision 2026-10-24,
+ * "Grey out until 1s data exists"): a minute or wider always; a sub-minute one only where there
+ * is data that fine to draw, which is when candles no wider than it cover most of the view
+ * (`finestMs`, as Auto reads it) or when the fine candles reach the live edge (`fine`, fineSpan,
+ * within FINE_LIVE_MS of `now`). Otherwise a 1-second chart would be shaded minute candles 60
+ * slots wide, which Auto never draws either.
+ */
+export function timeframeOffered(
+  ms: number,
+  finestMs: number,
+  fine: { from: number; to: number } | null,
+  now: number,
+): boolean {
+  if (ms >= 60_000 || finestMs === 0 || finestMs <= ms) return true;
+  return fine !== null && now - fine.to <= FINE_LIVE_MS;
+}
+
 /**
  * Exported for tests. The line's readings from the candles: each candle's close at its end (the
  * forming one's, still open, at `now`), then the live ticks from the newest candle's start on,
