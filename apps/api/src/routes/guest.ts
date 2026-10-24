@@ -326,6 +326,7 @@ export async function registerGuestRoutes(
   if (marketBar) {
     app.get("/market/prices", { config: { rateLimit: GUEST_RATE_LIMIT } }, async () => marketBar.prices());
     app.get("/market/trench", { config: { rateLimit: GUEST_RATE_LIMIT } }, async () => marketBar.trench());
+    app.get("/market/trench/week", { config: { rateLimit: GUEST_RATE_LIMIT } }, async () => marketBar.week());
   }
 
   /** The Lighthouse's weather gauge, the same market-wide reading subscribers get. */

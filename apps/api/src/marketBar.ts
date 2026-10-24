@@ -105,6 +105,14 @@ export const TRENCH_WINDOW_HOURS = 2;
 export const TRENCH_COMPARE_HOURS_AGO = [2, 6, 24, 48] as const;
 /** Fewer graded calls (or screened tokens, or returns) than this and a rate reads as "–". */
 export const TRENCH_MIN_SAMPLE = 5;
+/**
+ * The Lighthouse's market weather reads the same two hours further back (user ask 2026-10-24): the
+ * bar's comparisons plus 72 hours and a week, and the week as back-to-back two-hour windows for
+ * its trend lines. LighthouseHour is kept for good and the runner moments for
+ * CANDIDATE_OUTCOME_RETENTION_DAYS, so a week back is already on hand.
+ */
+export const WEATHER_COMPARE_HOURS_AGO = [2, 6, 24, 48, 72, 168] as const;
+export const WEATHER_SERIES_HOURS = 168;
 /** Sums of rollup hours: they move once an hour, so five minutes is plenty. */
 const TRENCH_CACHE_MS = 5 * 60_000;
 const TRENCH_STALE_MS = 30 * 60_000;
@@ -241,6 +249,7 @@ export function buildTrenchStats(
   hours: readonly TrenchHour[],
   now: number,
   runnerMoments?: readonly RunnerMoment[],
+  compareHoursAgo: readonly number[] = TRENCH_COMPARE_HOURS_AGO,
 ) {
   const end = trenchWindowEnd(hours, now);
   const span = TRENCH_WINDOW_HOURS * HOUR_MS;
@@ -252,13 +261,38 @@ export function buildTrenchStats(
     windowHours: TRENCH_WINDOW_HOURS,
     minSample: TRENCH_MIN_SAMPLE,
     current: trenchWindow(hours, end - span, end, runnerMoments, graded),
-    compare: TRENCH_COMPARE_HOURS_AGO.map((hoursAgo) => {
+    compare: compareHoursAgo.map((hoursAgo) => {
       const to = end - hoursAgo * HOUR_MS;
       return { hoursAgo, ...trenchWindow(hours, to - span, to, runnerMoments, graded - hoursAgo * HOUR_MS) };
     }),
   };
 }
 export type TrenchStatsAnswer = ReturnType<typeof buildTrenchStats>;
+
+/**
+ * The Lighthouse's market weather: the bar's stats against 2 hours to a week earlier, and the week
+ * as back-to-back windows of the same two hours (oldest first: the week-ago window to the current one), each
+ * cut for grading the way its comparison window would be.
+ */
+export function buildTrenchWeek(
+  hours: readonly TrenchHour[],
+  now: number,
+  runnerMoments?: readonly RunnerMoment[],
+) {
+  const answer = buildTrenchStats(hours, now, runnerMoments, WEATHER_COMPARE_HOURS_AGO);
+  const end = new Date(answer.current.to).getTime();
+  const span = TRENCH_WINDOW_HOURS * HOUR_MS;
+  const graded = now - CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
+  // One more than the week holds, so the line starts on the week-ago comparison window.
+  const steps = WEATHER_SERIES_HOURS / TRENCH_WINDOW_HOURS + 1;
+  const series = Array.from({ length: steps }, (_, i) => {
+    const back = (steps - 1 - i) * span;
+    const w = trenchWindow(hours, end - back - span, end - back, runnerMoments, graded - back);
+    return { from: w.from, to: w.to, stats: w.stats, graded: w.samples.graded };
+  });
+  return { ...answer, seriesHours: WEATHER_SERIES_HOURS, series };
+}
+export type TrenchWeekAnswer = ReturnType<typeof buildTrenchWeek>;
 
 /**
  * The clean doubles since `since`: screened decision moments that hit 2x within their hour, under
@@ -276,9 +310,9 @@ export function loadRunnerMoments(since: Date): Promise<RunnerMoment[]> {
       AND ${walletSafetyCutsSql()}`;
 }
 
-/** The rollup hours the bar reads (about two days, by the primary key) and the runners in them. */
-export async function loadTrenchStats(now = new Date()): Promise<TrenchStatsAnswer> {
-  const back = Math.max(...TRENCH_COMPARE_HOURS_AGO) + TRENCH_WINDOW_HOURS + 2;
+/** The rollup hours `hoursBack` (and a little more) before now, by the primary key, and the runners in them. */
+async function loadTrenchHours(now: Date, hoursBack: number) {
+  const back = hoursBack + TRENCH_WINDOW_HOURS + 2;
   const since = new Date(Math.floor(now.getTime() / HOUR_MS) * HOUR_MS - back * HOUR_MS);
   const [hours, runnerMoments] = await Promise.all([
     prisma.lighthouseHour.findMany({
@@ -301,10 +335,25 @@ export async function loadTrenchStats(now = new Date()): Promise<TrenchStatsAnsw
     }),
     loadRunnerMoments(since),
   ]);
+  return { hours, runnerMoments };
+}
+
+/** The bar's answer: about two days of rollup hours. */
+export async function loadTrenchStats(now = new Date()): Promise<TrenchStatsAnswer> {
+  const { hours, runnerMoments } = await loadTrenchHours(now, Math.max(...TRENCH_COMPARE_HOURS_AGO));
   return buildTrenchStats(hours, now.getTime(), runnerMoments);
 }
 
-/** One price cache and one trench-stats cache per process, shared by the subscriber and guest routes. */
+/** The Lighthouse's answer: a week of rollup hours (about 170 rows) and the week's runners. */
+export async function loadTrenchWeek(now = new Date()): Promise<TrenchWeekAnswer> {
+  const { hours, runnerMoments } = await loadTrenchHours(
+    now,
+    Math.max(...WEATHER_COMPARE_HOURS_AGO, WEATHER_SERIES_HOURS),
+  );
+  return buildTrenchWeek(hours, now.getTime(), runnerMoments);
+}
+
+/** One price cache and one trench-stats cache (each window) per process, shared by the subscriber and guest routes. */
 export function createMarketBar(dex: Pick<DexScreenerClient, "getTokensByAddresses">) {
   const prices = new SharedCache<{ prices: MarketPrice[] }>(PRICE_CACHE_MS, {
     staleWhileRevalidateMs: PRICE_STALE_MS,
@@ -314,9 +363,14 @@ export function createMarketBar(dex: Pick<DexScreenerClient, "getTokensByAddress
     staleWhileRevalidateMs: TRENCH_STALE_MS,
     name: "market bar trench stats",
   });
+  const week = new SharedCache<TrenchWeekAnswer>(TRENCH_CACHE_MS, {
+    staleWhileRevalidateMs: TRENCH_STALE_MS,
+    name: "lighthouse trench week",
+  });
   return {
     prices: async () => withComputedAt(await prices.getStamped(() => loadMarketPrices(dex))),
     trench: async () => withComputedAt(await trench.getStamped(() => loadTrenchStats())),
+    week: async () => withComputedAt(await week.getStamped(() => loadTrenchWeek())),
   };
 }
 export type MarketBar = ReturnType<typeof createMarketBar>;

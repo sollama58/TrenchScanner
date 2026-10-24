@@ -6,6 +6,7 @@ import {
   BODY_BOTTOM,
   BODY_TOP,
   BRAND_A,
+  CARD_H,
   CARD_W,
   FONT,
   INK,
@@ -23,6 +24,15 @@ import {
   roundRect,
 } from "../shareCard";
 import { drawNarrativesPay } from "../tokensage/shareCards";
+import {
+  agoLabel,
+  deltaText,
+  sparkPath,
+  statDelta,
+  statText,
+  TRENCH_STATS,
+  type TrenchWeekAnswer,
+} from "../marketBar";
 import { changeSlots, drawPricingChange, type ChartChange } from "../pricingChange";
 import { prettyLabel } from "../tokensage/showcase";
 import {
@@ -337,6 +347,128 @@ export async function renderWeatherCard(w: MarketWeather): Promise<HTMLCanvasEle
   wrap(ctx, "25% or more above the week reads hot, 25% or more below reads cold.", right - x, 2).forEach(
     (line, i) => ctx.fillText(line, x, BODY_TOP + 262 + i * 26),
   );
+  return canvas;
+}
+
+// ---------- The trenches against the week ----------
+
+/** "13:00" in UTC: the image is seen in any timezone, and its footer is stamped in UTC too. */
+const utcHour = (iso: string) =>
+  new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
+
+/**
+ * Market weather's trench stats as one table: each stat now, its week as a trend line, and its
+ * move against the same two hours 2h, 6h, 24h, 48h, 72h and a week earlier, in the verdict colors
+ * with an arrow (TrenchWeek.tsx on the page). Drawn at twice the size, like the hour-of-day card,
+ * so the small marks stay sharp.
+ */
+export async function renderTrenchWeekCard(d: TrenchWeekAnswer): Promise<HTMLCanvasElement> {
+  const { canvas, ctx, icon } = await cardCanvas(2);
+  if (!ctx) return canvas;
+  const cur = d.current;
+  frame(
+    ctx,
+    icon,
+    "The trenches against the week",
+    `${utcHour(cur.from)}–${utcHour(cur.to)} UTC against the same ${d.windowHours} hours up to a week earlier`,
+    {
+      badge: windowBadge(`Last ${d.windowHours} hours`),
+      footer: `${n(cur.samples.graded)} graded calls · ${n(cur.samples.screened)} tokens screened`,
+      link: LINK,
+      time: true,
+    },
+  );
+
+  const labelX = PAD;
+  const nowRight = PAD + 270;
+  const sparkX = nowRight + 26;
+  const sparkW = 190;
+  const deltaX = sparkX + sparkW + 24;
+  const colW = (CARD_W - PAD - deltaX) / d.compare.length;
+  const headY = BODY_TOP + 12;
+  const top = headY + 16;
+  const rowH = (CARD_H - 92 - top) / TRENCH_STATS.length;
+
+  ctx.textBaseline = "middle";
+  ctx.font = `600 15px ${FONT}`;
+  ctx.fillStyle = MUTED;
+  ctx.textAlign = "right";
+  ctx.fillText("Now", nowRight, headY);
+  ctx.textAlign = "left";
+  ctx.fillText("Last 7 days", sparkX, headY);
+  ctx.textAlign = "center";
+  d.compare.forEach((c, i) =>
+    ctx.fillText(`vs ${agoLabel(c.hoursAgo)}`, deltaX + colW * i + colW / 2, headY),
+  );
+
+  TRENCH_STATS.forEach((spec, r) => {
+    const y = top + rowH * r;
+    const cy = y + rowH / 2;
+    if (r % 2 === 0) {
+      ctx.fillStyle = "rgba(255, 255, 255, 0.035)";
+      roundRect(ctx, PAD - 14, y + 2, CARD_W - PAD * 2 + 28, rowH - 4, 10);
+      ctx.fill();
+    }
+    const now = cur.stats[spec.key];
+    ctx.textAlign = "left";
+    ctx.fillStyle = INK2;
+    ctx.font = `600 21px ${FONT}`;
+    ctx.fillText(spec.label, labelX, cy);
+    ctx.textAlign = "right";
+    ctx.fillStyle = INK;
+    ctx.font = `750 27px ${FONT}`;
+    ctx.fillText(statText(spec, now), nowRight, cy + 1);
+
+    // The week's line, in the first series color, with the area under it fading to nothing.
+    const sh = Math.min(34, rowH - 12);
+    const values = d.series.map((w) => w.stats[spec.key]);
+    const line = sparkPath(values, sparkW, sh, spec.kind === "count");
+    ctx.save();
+    ctx.translate(sparkX, cy - sh / 2);
+    const grad = ctx.createLinearGradient(0, 0, 0, sh);
+    grad.addColorStop(0, "rgba(57, 135, 229, 0.32)");
+    grad.addColorStop(1, "rgba(57, 135, 229, 0)");
+    ctx.fillStyle = grad;
+    if (line.area) ctx.fill(new Path2D(line.area));
+    ctx.strokeStyle = SERIES[0]!;
+    ctx.lineWidth = 2.2;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    if (line.d) ctx.stroke(new Path2D(line.d));
+    const last = values.at(-1);
+    if (last !== null && last !== undefined) {
+      ctx.fillStyle = SERIES[0]!;
+      ctx.strokeStyle = "#0c0d12";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(line.x(values.length - 1), line.y(last), 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    d.compare.forEach((c, i) => {
+      const dl = statDelta(spec, now, c.stats[spec.key]);
+      const cx = deltaX + colW * i + colW / 2;
+      const pw = colW - 10;
+      const ph = Math.min(34, rowH - 12);
+      ctx.fillStyle =
+        dl.tone === "good"
+          ? "rgba(52, 211, 153, 0.13)"
+          : dl.tone === "bad"
+            ? "rgba(248, 113, 113, 0.13)"
+            : TRACK;
+      roundRect(ctx, cx - pw / 2, cy - ph / 2, pw, ph, 8);
+      ctx.fill();
+      ctx.textAlign = "center";
+      ctx.font = `700 18px ${FONT}`;
+      ctx.fillStyle = dl.tone === "good" ? UP : dl.tone === "bad" ? DOWN : MUTED;
+      const text =
+        dl.dir === null ? "–" : dl.dir === "flat" ? "≈" : `${dl.dir === "up" ? "▲" : "▼"} ${deltaText(dl)}`;
+      ctx.fillText(clip(ctx, text, pw - 8), cx, cy + 1);
+    });
+  });
+  ctx.textAlign = "left";
   return canvas;
 }
 

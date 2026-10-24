@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildTrenchStats,
+  buildTrenchWeek,
   loadMarketPrices,
   MARKET_TICKERS,
   marketPricesFrom,
@@ -172,5 +173,29 @@ describe("buildTrenchStats", () => {
     ]);
     expect(stats.compare[1]!.stats.hit2xPct).toBe(10);
     expect(stats.compare[0]!.stats.hit2xPct).toBe(30);
+  });
+});
+
+describe("buildTrenchWeek", () => {
+  it("adds 72 hours and a week to the comparisons, and the week as back-to-back two-hour windows", () => {
+    const hours = Array.from({ length: 180 }, (_, h) => hour(h, { screenedWon2x: h < 10 ? 1 : 3 }));
+    const now = at(180).getTime() + 15 * 60_000;
+    const week = buildTrenchWeek(hours, now, [
+      { token: "a", at: new Date(at(178).getTime() + 5 * 60_000) },
+      { token: "c", at: new Date(at(179).getTime() + 50 * 60_000) },
+      { token: "b", at: new Date(at(11).getTime() + 60_000) },
+    ]);
+    expect(week.compare.map((c) => c.hoursAgo)).toEqual([2, 6, 24, 48, 72, 168]);
+    const wk = week.compare.at(-1)!;
+    expect([wk.from, wk.to]).toEqual([at(10).toISOString(), at(12).toISOString()]);
+    expect(wk.stats.hit2xPct).toBe(30);
+    expect(wk.stats.runners).toBe(1);
+    expect(week.series).toHaveLength(85);
+    // Oldest first, from the week-ago window to the current one, each right after the last.
+    expect(week.series[0]).toMatchObject({ from: wk.from, to: wk.to, stats: wk.stats });
+    expect(week.series.at(-1)).toMatchObject({ from: week.current.from, to: week.current.to, graded: 20 });
+    for (let i = 1; i < week.series.length; i++) expect(week.series[i]!.from).toBe(week.series[i - 1]!.to);
+    // A runner counts once its moment is graded: the newest one is still grading.
+    expect(week.series.at(-1)!.stats.runners).toBe(1);
   });
 });

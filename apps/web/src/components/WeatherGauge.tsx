@@ -3,6 +3,7 @@ import { usePolling } from "../hooks";
 import { pct } from "../format";
 import { Skeleton } from "./Skeleton";
 import { ShareButton } from "./ShareImageDialog";
+import { TrenchWeek } from "./TrenchWeek";
 
 /**
  * Market weather as a needle gauge: how often launches are doubling within 15 minutes over the
@@ -85,12 +86,25 @@ export function GaugeDial({
   );
 }
 
-/** The Lighthouse's live weather gauge, read from `${base}/weather`. */
+/**
+ * The Lighthouse's market weather: the live gauge, read from `${base}/weather`, over the trenches'
+ * last two hours against up to a week earlier (TrenchWeek). Each reads its own endpoint and hides
+ * on its own when it can't be read.
+ */
 export function WeatherGauge({ base }: { base: string }) {
+  return (
+    <section className="lh-section lh-weather-panel">
+      <Gauge base={base} />
+      <TrenchWeek base={base} />
+    </section>
+  );
+}
+
+function Gauge({ base }: { base: string }) {
   const q = usePolling<MarketWeather>(`${base}/weather`, 300_000);
   const w = q.data;
   if (!w) {
-    // Informational: a failed reading hides the panel rather than showing an error.
+    // Informational: a failed reading hides the gauge rather than showing an error.
     if (q.error) return null;
     return <Skeleton lines={1} height={160} />;
   }
@@ -101,7 +115,7 @@ export function WeatherGauge({ base }: { base: string }) {
         ? `${pct(w.recentRatePct, 1)} of launch moments doubled within 15 minutes over the last ${w.recentHours} hours. Not enough history yet for the ${w.trailingDays}-day average.`
         : `${pct(w.recentRatePct, 1)} of launch moments doubled within 15 minutes over the last ${w.recentHours} hours, against ${pct(w.trailingRatePct, 1)} over the last ${w.trailingDays} days.`;
   return (
-    <section className={`lh-section lh-weather ${w.condition}`}>
+    <div className={`lh-weather ${w.condition}`}>
       <div className="lh-weather-dial">
         <GaugeDial
           ratio={w.condition === "unknown" ? null : (w.ratio ?? (w.condition === "hot" ? RATIO_MAX : 1))}
@@ -129,6 +143,6 @@ export function WeatherGauge({ base }: { base: string }) {
           never changes or holds back an alert.
         </p>
       </div>
-    </section>
+    </div>
   );
 }
