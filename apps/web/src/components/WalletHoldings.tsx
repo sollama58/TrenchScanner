@@ -1,5 +1,6 @@
 import { formatTokens } from "../burn";
-import { ago } from "../format";
+import { ago, usd } from "../format";
+import { useNow } from "../hooks";
 import type { WalletBalance } from "../walletBalance";
 
 function solText(lamports: string): string {
@@ -37,8 +38,18 @@ function Coin({
  * asks 2026-10-18), from one GET /subscription/balance. In Settings' Subscription section and its
  * Privy wallet section. The rank is the holder scan's (proHolders.ts), which Pro Mode also follows.
  */
-export function WalletHoldings({ funds, asdfNote }: { funds: WalletBalance; asdfNote?: string | null }) {
+export function WalletHoldings({
+  funds,
+  asdfNote,
+  solUsd,
+}: {
+  funds: WalletBalance;
+  asdfNote?: string | null;
+  /** The SOL price, for the SOL balance in dollars (Portfolio). */
+  solUsd?: number | null;
+}) {
   const { balance, error } = funds;
+  const now = useNow(15_000);
   if (error && !balance)
     return (
       <p className="error small sub-coins-error">
@@ -70,7 +81,13 @@ export function WalletHoldings({ funds, asdfNote }: { funds: WalletBalance; asdf
         <Coin
           name="SOL"
           value={balance ? (balance.solLamports != null ? solText(balance.solLamports) : "–") : null}
-          note={balance && balance.solLamports == null ? "couldn't read it" : null}
+          note={
+            balance && balance.solLamports == null
+              ? "couldn't read it"
+              : balance?.solLamports != null && solUsd
+                ? usd((Number(balance.solLamports) / 1e9) * solUsd)
+                : null
+          }
         />
         <Coin
           name="$ASDFASDFA"
@@ -84,13 +101,21 @@ export function WalletHoldings({ funds, asdfNote }: { funds: WalletBalance; asdf
           tone={holder?.rank != null ? "good" : undefined}
         />
       </div>
-      {old && (
+      {old ? (
         <p className="faint small">
-          Couldn&apos;t refresh, showing balances read {funds.at ? ago(new Date(funds.at)) : "earlier"}.{" "}
+          Couldn&apos;t refresh, showing balances read {funds.at ? ago(new Date(funds.at), now) : "earlier"}.{" "}
           <button type="button" className="link" onClick={funds.reload}>
             Try again
           </button>
         </p>
+      ) : (
+        balance &&
+        funds.at && (
+          // Read from the chain at most 10 s before (the API's cache), on every open and each minute.
+          <p className="faint small sub-coins-asof" title={new Date(funds.at).toLocaleString()}>
+            Balances from the chain, {ago(new Date(funds.at), now)}
+          </p>
+        )
       )}
     </>
   );

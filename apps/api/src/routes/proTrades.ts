@@ -22,6 +22,14 @@ import {
   liveUsdPrices,
 } from "../proTrades.js";
 import { sharedSolPrice } from "../solPrice.js";
+import { liveCurves, type CurveQuote } from "../liveCurve.js";
+import {
+  CHAIN_BALANCE_TTL_MS,
+  chainBalances,
+  chainDisagrees,
+  HEALS_PER_LOOK,
+  readMissingTrades,
+} from "../proTradesChain.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import {
   keepReading,
@@ -68,6 +76,12 @@ const STAMP_EVERY_MS = 5 * 60_000;
 const PORTFOLIO_OPEN_COINS = 40;
 const PORTFOLIO_CLOSED_COINS = 20;
 const PORTFOLIO_DAYS = 30;
+/** How long a held coin on its bonding curve waits on its first curve read (the feed's own wait). */
+const CURVE_WAIT_MS = 1_500;
+/** How long a look waits on the coins read back from their history before answering. */
+const HEAL_WAIT_MS = 3_000;
+/** A coin read back from its history is read again only after this, at the same balance. */
+const HEAL_AGAIN_MS = 30 * 60_000;
 
 export interface TradeCoin {
   mint: string;
@@ -87,6 +101,21 @@ export interface TradeCoin {
   /** The result so far in SOL (open coins at today's price); null when it can't be priced. */
   pnlSol: number | null;
   pnlPct: number | null;
+  /**
+   * When the price the open coin's Now and PnL use was known current, and where it came from:
+   * "curve" (its bonding curve, to the block), "market" (a live price read), "stored" (the last
+   * scan or viewer tick, which can be old; its time null when unknown). Null for a sold-out coin
+   * or one without a price.
+   */
+  priceAt: Date | null;
+  priceSource: "curve" | "market" | "stored" | null;
+  /**
+   * The coins the chain says the wallet holds (whole coins), when read; and whether it still
+   * disagrees with the recorded trades after they were read back (a trade too old to read, or
+   * coins sent in): then the PnL can't be told, and is null.
+   */
+  chainHeld: number | null;
+  mismatch: boolean;
   /** TrenchScanner's call on the coin before the entry, if it made one. */
   calledBefore: { at: Date; modelName: string | null; confidence: number } | null;
   /** The feed card the token modal opens on; null for a coin not on Token yet (no scan). */
@@ -162,11 +191,83 @@ export async function registerProTradesRoutes(
           ).metered("stream/pro-trades"),
         )
       : null;
-  const watcher: ProTradeWatcher = new ProTradeWatcher({ stream, rpc, onEntry: scanEntry });
+  const watcher: ProTradeWatcher = new ProTradeWatcher({
+    stream,
+    rpc,
+    onEntry: scanEntry,
+    // A new trade changes the positions: the next look answers afresh and reads the balances again.
+    onRecorded: (wallet) => {
+      for (const shape of ["brief", "portfolio", "full-open", "full"]) answers.delete(`${wallet}:${shape}`);
+      balances.delete(wallet);
+    },
+  });
   if (stream) app.addHook("onClose", async () => stream.stop());
 
   const answers = new Map<string, { at: number; body: unknown }>();
   const stamped = new Map<string, number>();
+  /** The coins' chain balances per wallet (proTradesChain.ts), kept CHAIN_BALANCE_TTL_MS. */
+  const balances = new Map<string, { at: number; mints: Set<string>; raw: Map<string, bigint> }>();
+  /** Coins read back from their history: the balance they were read at, and when. */
+  const healed = new Map<string, { raw: bigint; at: number }>();
+
+  /**
+   * The chain's balance of each coin in `positions` (cached per wallet, re-read when a coin isn't
+   * in the reading), and when it was read. Null off-chain (tests, a local run) or when it failed.
+   */
+  async function balancesOf(wallet: string, positions: readonly Position[]) {
+    if (!canRead || positions.length === 0) return null;
+    const mints = [...new Set(positions.map((p) => p.mint))];
+    const kept = balances.get(wallet);
+    if (kept && Date.now() - kept.at < CHAIN_BALANCE_TTL_MS && mints.every((m) => kept.mints.has(m)))
+      return kept;
+    const raw = await withApiFeature("pro-trades", () => chainBalances(rpc, wallet, mints)).catch(() => null);
+    if (!raw) return null;
+    const reading = { at: Date.now(), mints: new Set(mints), raw };
+    balances.set(wallet, reading);
+    if (balances.size > 2_000) balances.delete(balances.keys().next().value!);
+    return reading;
+  }
+
+  /**
+   * The wallet's rows, checked against the chain: each coin whose balance disagrees with its
+   * recorded latest trade is read back from its history (a few a look, each once per balance per
+   * HEAL_AGAIN_MS) and the trades missed are recorded, then the rows are read again. Waits up to
+   * HEAL_WAIT_MS on that, so a first look shows the corrected positions.
+   */
+  async function checkedRows(wallet: string) {
+    let rows = await readRows(wallet);
+    const positions = positionsOf(rows);
+    const chain = await balancesOf(wallet, positions);
+    if (!chain) return { rows, chain: null };
+    const now = Date.now();
+    const due = positions
+      .filter((p) => {
+        const raw = chain.raw.get(p.mint);
+        if (raw === undefined || !chainDisagrees(p, raw)) return false;
+        const last = healed.get(`${wallet}:${p.mint}`);
+        return !last || last.raw !== raw || now - last.at > HEAL_AGAIN_MS;
+      })
+      .slice(0, HEALS_PER_LOOK);
+    if (due.length === 0) return { rows, chain };
+    for (const p of due) healed.set(`${wallet}:${p.mint}`, { raw: chain.raw.get(p.mint)!, at: now });
+    if (healed.size > 10_000) healed.delete(healed.keys().next().value!);
+    const heal = Promise.all(
+      due.map(async (p) => {
+        const mine = rows.filter((r) => r.mint === p.mint);
+        const missing = await withApiFeature("pro-trades", () =>
+          readMissingTrades(rpc, wallet, p.mint, mine, p.decimals),
+        ).catch(() => null);
+        if (missing && missing.length > 0) await watcher.record(wallet, missing);
+        return missing?.length ?? 0;
+      }),
+    ).catch(() => [0]);
+    const added = await Promise.race([
+      heal,
+      new Promise<null>((r) => setTimeout(() => r(null), HEAL_WAIT_MS)),
+    ]);
+    if (added === null || added.some((n) => n > 0)) rows = await readRows(wallet);
+    return { rows, chain };
+  }
 
   app.addHook("preHandler", app.authenticate);
 
@@ -196,23 +297,54 @@ export async function registerProTradesRoutes(
     return body;
   });
 
+  /**
+   * The wallet's trades of the last PORTFOLIO_DAYS, and the older trades of the coins among them or
+   * still held by what is recorded: a position opened before the window and still running keeps
+   * its buys (its cost) instead of starting at its first sale, or dropping off while still held.
+   */
   async function readRows(wallet: string) {
-    return prisma.proTrade.findMany({
-      where: { wallet, at: { gt: new Date(Date.now() - 30 * 86_400_000) } },
+    const since = new Date(Date.now() - PORTFOLIO_DAYS * 86_400_000);
+    const select = {
+      signature: true,
+      mint: true,
+      side: true,
+      lamports: true,
+      tokens: true,
+      decimals: true,
+      at: true,
+      entry: true,
+    } as const;
+    const [recent, older] = await Promise.all([
+      prisma.proTrade.findMany({
+        where: { wallet, at: { gt: since } },
+        orderBy: { at: "desc" },
+        take: ROWS_MAX,
+        select,
+      }),
+      prisma.proTrade.groupBy({
+        by: ["mint"],
+        where: { wallet, at: { lte: since } },
+        _sum: { tokens: true },
+      }),
+    ]);
+    const recentMints = new Set(recent.map((r) => r.mint));
+    const olderMints = older
+      .filter((g) => recentMints.has(g.mint) || (g._sum.tokens ?? 0n) > 0n)
+      .map((g) => g.mint)
+      .slice(0, PORTFOLIO_OPEN_COINS * 2);
+    if (olderMints.length === 0) return recent;
+    const before = await prisma.proTrade.findMany({
+      where: { wallet, mint: { in: olderMints }, at: { lte: since } },
       orderBy: { at: "desc" },
       take: ROWS_MAX,
-      select: {
-        signature: true,
-        mint: true,
-        side: true,
-        lamports: true,
-        tokens: true,
-        decimals: true,
-        at: true,
-        entry: true,
-      },
+      select,
     });
+    return [...recent, ...before];
   }
+
+  /** Positions that ran in the window: sold-out trades from before it are history, not shown. */
+  const inWindow = (p: Position) =>
+    !p.closed || p.lastTradeAt.getTime() > Date.now() - PORTFOLIO_DAYS * 86_400_000;
 
   /** The handle's three pictures: the newest coins entered. */
   async function handleView(wallet: string) {
@@ -234,8 +366,8 @@ export async function registerProTradesRoutes(
   }
 
   async function fullView(wallet: string, panelOpen: boolean) {
-    const rows = await readRows(wallet);
-    const positions = positionsOf(rows);
+    const { rows, chain } = await checkedRows(wallet);
+    const positions = positionsOf(rows).filter(inWindow);
     const shown = positions.slice(0, PANEL_COINS);
     const since = new Date(Date.now() - STATS_HOURS * 3_600_000);
     const windowRows = rows.filter((r) => r.at > since);
@@ -244,6 +376,7 @@ export async function registerProTradesRoutes(
     const built = await coinsFor(
       shown,
       windowRows.filter((r) => r.entry).map((r) => r.mint),
+      chain?.raw ?? null,
     );
 
     // While the panel is open, its open coins stay on the scan (their Now and PnL move with it).
@@ -268,7 +401,15 @@ export async function registerProTradesRoutes(
       (mint, at) => built.callBefore(mint, at) !== null,
       STATS_HOURS,
     );
-    return { coins: built.coins, stats, solUsd: built.sol, solUsdAt: built.solAt, following: true };
+    return {
+      coins: built.coins,
+      stats,
+      solUsd: built.sol,
+      solUsdAt: built.solAt,
+      following: true,
+      readAt: new Date(),
+      chainAt: chain ? new Date(chain.at) : null,
+    };
   }
 
   /**
@@ -278,8 +419,8 @@ export async function registerProTradesRoutes(
    * here had no market to scan - and `untracked` counts the rest.
    */
   async function portfolioView(wallet: string) {
-    const rows = await readRows(wallet);
-    const positions = positionsOf(rows);
+    const { rows, chain } = await checkedRows(wallet);
+    const positions = positionsOf(rows).filter(inWindow);
     const onToken = new Set(
       (
         await prisma.token.findMany({
@@ -291,7 +432,7 @@ export async function registerProTradesRoutes(
     const listed = positions.filter((p) => onToken.has(p.mint));
     const open = listed.filter((p) => !p.closed).slice(0, PORTFOLIO_OPEN_COINS);
     const closed = listed.filter((p) => p.closed).slice(0, PORTFOLIO_CLOSED_COINS);
-    const built = await coinsFor([...open, ...closed], []);
+    const built = await coinsFor([...open, ...closed], [], chain?.raw ?? null);
     const trades = tradesOf(rows).filter((p) => onToken.has(p.mint));
     const statsOver = (hours: number) => {
       const since = new Date(Date.now() - hours * 3_600_000);
@@ -313,11 +454,13 @@ export async function registerProTradesRoutes(
       days: PORTFOLIO_DAYS,
       solUsd: built.sol,
       solUsdAt: built.solAt,
+      readAt: new Date(),
+      chainAt: chain ? new Date(chain.at) : null,
     };
   }
 
   /** The cards for `shown`, priced, with the calls before each entry (also asked for `alsoMints`). */
-  async function coinsFor(shown: Position[], alsoMints: string[]) {
+  async function coinsFor(shown: Position[], alsoMints: string[], chain: Map<string, bigint> | null) {
     const mints = [...new Set([...shown.map((p) => p.mint), ...alsoMints])];
     const [tokens, sol] = await Promise.all([
       prisma.token.findMany({
@@ -363,13 +506,32 @@ export async function registerProTradesRoutes(
     // the tick is written only while someone views the coin, so it freezes once nobody does while
     // the scans go on (as portfolio.ts and the feed already compare them).
     const held = shown.filter((p) => !p.closed && tokenByMint.has(p.mint)).map((p) => p.mint);
-    const [views, live, supplies] = await Promise.all([
+    // A held coin still on its bonding curve is priced from the curve, to the block, as the token
+    // page's chart is (liveCurve.ts, the feed cards' Now too); the rest from a live market read.
+    const [views, market, curve, supplies] = await Promise.all([
       Promise.all(shown.map((p) => (tokenByMint.has(p.mint) ? tokenView(p.mint, p.entryAt) : null))),
       livePricesFor(held),
+      held.length > 0
+        ? liveCurves()
+            .quotes(held, CURVE_WAIT_MS)
+            .catch(() => new Map<string, CurveQuote>())
+        : new Map<string, CurveQuote>(),
       mintSupplies()
         .get(shown.map((p) => p.mint))
         .catch(() => new Map<string, number>()),
     ]);
+    const readAt = new Date();
+    /** Each priced coin's price time and source (TradeCoin.priceAt). */
+    const priceMeta = new Map<string, { at: Date | null; source: "curve" | "market" | "stored" }>();
+    const live = new Map<string, number>();
+    for (const [mint, usd] of market) {
+      live.set(mint, usd);
+      priceMeta.set(mint, { at: readAt, source: "market" });
+    }
+    for (const [mint, q] of curve) {
+      live.set(mint, q.priceUsd);
+      priceMeta.set(mint, { at: new Date(q.at), source: "curve" });
+    }
     // The coin's supply, for turning a price into a market cap: its mint's supply now (after
     // burns, mintSupply.ts), else a scan's market cap over its price, else the live tick's.
     const supplyOf = (i: number): number | null => {
@@ -389,11 +551,19 @@ export async function registerProTradesRoutes(
       const snap = snapRow?.priceUsd && snapRow.priceUsd > 0 ? snapRow.priceUsd : null;
       const liveAt = token?.liveDataAt?.getTime() ?? 0;
       const snapAt = snapRow?.takenAt ? new Date(snapRow.takenAt).getTime() : 0;
-      const usd = live !== null && (snap === null || liveAt >= snapAt) ? live : snap;
-      if (usd !== null && !priceUsd.has(p.mint)) priceUsd.set(p.mint, usd);
+      const useLive = live !== null && (snap === null || liveAt >= snapAt);
+      const usd = useLive ? live : snap;
+      if (usd !== null && !priceUsd.has(p.mint)) {
+        priceUsd.set(p.mint, usd);
+        const at = useLive ? liveAt : snapAt;
+        priceMeta.set(p.mint, { at: at > 0 ? new Date(at) : null, source: "stored" });
+      }
     });
     for (const t of tokens)
-      if (!priceUsd.has(t.mintAddress) && t.livePriceUsd) priceUsd.set(t.mintAddress, t.livePriceUsd);
+      if (!priceUsd.has(t.mintAddress) && t.livePriceUsd) {
+        priceUsd.set(t.mintAddress, t.livePriceUsd);
+        priceMeta.set(t.mintAddress, { at: t.liveDataAt, source: "stored" });
+      }
     const priceSol = (mint: string) => {
       const usd = priceUsd.get(mint);
       return usd !== undefined && sol ? usd / sol : null;
@@ -406,7 +576,6 @@ export async function registerProTradesRoutes(
         return t ? [{ tokenId: t.id, mint: p.mint, at: p.entryAt }] : [];
       }),
     );
-    const readAt = new Date();
     shown.forEach((p, i) => {
       const supply = supplyOf(i);
       if (supply === null || !(supply > 0)) return;
@@ -418,14 +587,19 @@ export async function registerProTradesRoutes(
       const usd = live.get(p.mint);
       const card = views[i]?.card;
       if (usd !== undefined && card) {
-        card.currentMarketCapUsd = usd * supply;
-        card.currentMarketCapAt = readAt;
+        const q = curve.get(p.mint);
+        card.currentMarketCapUsd = q ? q.marketCapUsd : usd * supply;
+        card.currentMarketCapAt = priceMeta.get(p.mint)?.at ?? readAt;
       }
     });
 
     const coins: TradeCoin[] = shown.map((p: Position, i) => {
       const t = tokenByMint.get(p.mint);
-      const pnl = positionPnl(p, priceSol(p.mint));
+      const raw = chain?.get(p.mint);
+      // Still off after its history was read back: what is recorded isn't what the wallet holds.
+      const mismatch = raw !== undefined && chainDisagrees(p, raw);
+      const pnl = mismatch ? null : positionPnl(p, priceSol(p.mint));
+      const meta = p.closed ? undefined : priceMeta.get(p.mint);
       const call = callBefore(p.mint, p.entryAt);
       const view = views[i];
       return {
@@ -444,6 +618,10 @@ export async function registerProTradesRoutes(
         entryMcapUsd: entryMcaps.get(p.mint) ?? null,
         pnlSol: pnl?.sol ?? null,
         pnlPct: pnl?.pct ?? null,
+        priceAt: meta?.at ?? null,
+        priceSource: meta?.source ?? null,
+        chainHeld: raw === undefined ? null : Number(raw) / 10 ** p.decimals,
+        mismatch,
         calledBefore: call
           ? { at: call.createdAt, modelName: call.modelName, confidence: call.confidence }
           : null,

@@ -1,4 +1,5 @@
 import { formatTokens } from "../burn";
+import { ago } from "../format";
 import { useCanSignTrades, useProState } from "../proTrade";
 import {
   compactSol,
@@ -20,7 +21,7 @@ export function HeaderBalances() {
   const pro = useProState();
   const canSign = useCanSignTrades(pro?.wallet ?? null);
   const shown = spendBalancesShown(!!pro?.pro, canSign);
-  const { balance, error } = useWalletBalance(shown, false);
+  const { balance, error, at } = useWalletBalance(shown, false);
   if (!shown) return null;
   const sol = balance?.solLamports != null ? compactSol(balance.solLamports) : "–";
   const asdf = balance ? compactTokens(balance.totalRaw, balance.decimals) : "–";
@@ -31,7 +32,13 @@ export function HeaderBalances() {
   const asdfFull = balance
     ? `${formatTokens(BigInt(balance.totalRaw), balance.decimals)} $ASDFASDFA`
     : "Your $ASDFASDFA balance is loading";
-  const full = `${solFull} · ${asdfFull}${error ? " (last reading)" : ""}`;
+  // The time rides in the tooltip: a failed refresh names how old the dimmed figures are.
+  const when = at
+    ? error
+      ? ` (couldn't refresh, as of ${ago(new Date(at))})`
+      : `, read ${ago(new Date(at))}`
+    : "";
+  const full = `${solFull} · ${asdfFull}${when}`;
   return (
     <div className={`header-balances num${error ? " stale" : ""}`} title={full}>
       <span>
