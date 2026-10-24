@@ -8,7 +8,9 @@
  * before its ID is added, a copy loaded unpacked from the store zip). Trusting the link's ID means a
  * crafted link could steer a key to another installed extension that also lists this site; the
  * reader still has to press Connect, and the key only reads their alerts and stats. Listing the
- * store ID here makes the link's ID unnecessary for store installs.
+ * store ID here makes the link's ID unnecessary for store installs. A link's ID that answered is
+ * remembered in this browser, so Settings still finds that build when opened some other way (after
+ * signing in again, which revokes the extension's key).
  *
  * - The unpacked build (apps/extension, `npm run build`) carries dev-key.pub, so its ID is fixed.
  * - The Chrome Web Store assigns the listed item's ID at its first upload; it goes in
@@ -63,11 +65,39 @@ export interface InstalledExtension {
   id: string;
   connected: boolean;
   version: string | null;
+  /**
+   * When TrenchScanner refused the extension's key (signing out revokes every key): the account
+   * it was connected to, as the panel shows it ("7xQ1…k2Ab"). Null otherwise, and after the reader
+   * disconnected it themselves.
+   */
+  refusedAccount: string | null;
 }
 
-/** The IDs to try: the link's own first, then the known builds. */
+const REMEMBERED = "trench.extensionId";
+
+function remembered(): string | null {
+  try {
+    const id = window.localStorage.getItem(REMEMBERED);
+    return id && EXTENSION_ID.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+function remember(id: string): void {
+  if (EXTENSION_IDS.includes(id)) return;
+  try {
+    window.localStorage.setItem(REMEMBERED, id);
+  } catch {
+    // Private mode or blocked storage: the extension's link still carries the ID.
+  }
+}
+
+/** The IDs to try: the link's own first, then the one this browser remembers, then the known builds. */
 function candidates(hint: string | null | undefined): string[] {
-  const ids = hint && EXTENSION_ID.test(hint) ? [hint, ...EXTENSION_IDS] : [...EXTENSION_IDS];
+  const ids = [hint, remembered(), ...EXTENSION_IDS].filter(
+    (id): id is string => typeof id === "string" && EXTENSION_ID.test(id),
+  );
   return [...new Set(ids)];
 }
 
@@ -79,12 +109,15 @@ export async function findExtension(hint?: string | null): Promise<InstalledExte
       ok?: unknown;
       connected?: unknown;
       version?: unknown;
+      refusedAccount?: unknown;
     } | null;
     if (reply?.ok === true) {
+      remember(id);
       return {
         id,
         connected: reply.connected === true,
         version: typeof reply.version === "string" ? reply.version : null,
+        refusedAccount: typeof reply.refusedAccount === "string" ? reply.refusedAccount : null,
       };
     }
   }

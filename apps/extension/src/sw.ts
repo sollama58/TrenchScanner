@@ -33,6 +33,12 @@ interface Stored {
   wallet?: string;
   settings?: OverlaySettings;
   aiReviews?: boolean;
+  /**
+   * The API refused the key (revoked, signing out of TrenchScanner revokes every key, or the
+   * subscription ended). Kept in storage, not only in memory, so the site's ping still says
+   * "not connected" after the worker restarts and Settings offers to connect again.
+   */
+  refused?: boolean;
 }
 
 let problem: Problem = null;
@@ -43,7 +49,7 @@ let lastTokens: OverlayToken[] = [];
 void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => undefined);
 
 async function stored(): Promise<Stored> {
-  return (await chrome.storage.local.get(["key", "wallet", "settings", "aiReviews"])) as Stored;
+  return (await chrome.storage.local.get(["key", "wallet", "settings", "aiReviews", "refused"])) as Stored;
 }
 
 async function currentSettings(): Promise<OverlaySettings> {
@@ -65,7 +71,9 @@ async function currentSettings(): Promise<OverlaySettings> {
 }
 
 function noteFailure(e: unknown): void {
-  problem = e instanceof ApiError && (e.status === 401 || e.status === 403) ? "refused" : "offline";
+  const refused = e instanceof ApiError && (e.status === 401 || e.status === 403);
+  problem = refused ? "refused" : "offline";
+  if (refused) void chrome.storage.local.set({ refused: true });
 }
 
 async function feed(): Promise<FeedAnswer> {
@@ -74,6 +82,7 @@ async function feed(): Promise<FeedAnswer> {
   try {
     lastTokens = (await api.feed(key)).tokens;
     problem = null;
+    void chrome.storage.local.remove("refused");
   } catch (e) {
     noteFailure(e);
   }
@@ -81,13 +90,13 @@ async function feed(): Promise<FeedAnswer> {
 }
 
 async function status(): Promise<Status> {
-  const { key, wallet, aiReviews } = await stored();
+  const { key, wallet, aiReviews, refused } = await stored();
   return {
     connected: Boolean(key),
     wallet: wallet ?? null,
     aiReviews: aiReviews === true,
     settings: await currentSettings(),
-    problem: key ? problem : "disconnected",
+    problem: !key ? "disconnected" : refused && problem === null ? "refused" : problem,
   };
 }
 
@@ -104,6 +113,7 @@ async function connect(raw: unknown): Promise<{ ok: boolean; error?: string }> {
       settings: me.settings,
       aiReviews: me.aiReviews === true,
     });
+    await chrome.storage.local.remove("refused");
     settingsReadAt = Date.now();
     problem = null;
     lastTokens = [];
@@ -126,7 +136,7 @@ async function handle(request: PanelRequest): Promise<unknown> {
     case "feed":
       return feed();
     case "disconnect":
-      await chrome.storage.local.remove(["key", "wallet", "aiReviews"]);
+      await chrome.storage.local.remove(["key", "wallet", "aiReviews", "refused"]);
       lastTokens = [];
       problem = "disconnected";
       return { ok: true };
@@ -154,8 +164,11 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
 });
 
 /**
- * TrenchScanner's site: "ping" says the extension is here (and whether it is connected), so
- * Settings can offer one-click connect; "connect" hands over a key Settings just made for it.
+ * TrenchScanner's site: "ping" says the extension is here (and whether it has a key the API still
+ * takes), so Settings can offer one-click connect, also to replace a refused key. A refused key
+ * also names its account (the shortened wallet the panel shows), so the site, signed in again as
+ * that account, reconnects without a click (user ask 2026-10-24). Disconnecting in the panel
+ * forgets the account, so a browser disconnected on purpose stays disconnected; "connect" hands over a key Settings just made for it.
  */
 chrome.runtime.onMessageExternal.addListener((message: unknown, sender, sendResponse) => {
   if (typeof sender.origin !== "string" || !WEB_ORIGINS.has(sender.origin)) return false;
@@ -163,9 +176,10 @@ chrome.runtime.onMessageExternal.addListener((message: unknown, sender, sendResp
   const m = message as { type?: unknown; key?: unknown };
   const work =
     m.type === "ping"
-      ? stored().then(({ key }) => ({
+      ? stored().then(({ key, refused, wallet }) => ({
           ok: true,
-          connected: Boolean(key),
+          connected: Boolean(key) && !refused,
+          refusedAccount: key && refused ? (wallet ?? null) : null,
           version: chrome.runtime.getManifest().version,
         }))
       : m.type === "connect"
