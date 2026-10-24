@@ -452,7 +452,7 @@ function MapView({
   flags: FlagsRead;
   /** The scan's KOL Bundled % (TokenSnapshot.kolBundledPct); null while unknown. */
   scanKolBundled: number | null;
-  /** Laid out to fit a fixed column (Scope's desktop page): the lists and wallet types first, the map under them. */
+  /** Laid out to fit a fixed column (Scope's desktop page): the lists, figures and wallet types first, the map under them. */
   column?: boolean;
   /** How far sideways the map may spread (BubbleSvg). */
   spread?: number;
@@ -730,11 +730,12 @@ function MapView({
       <>
         {toggles && <MapLayers>{toggles}</MapLayers>}
         {groupPanel}
-        <dl className="bm-stats bm-col-traits">{traitsStat}</dl>
-        {map}
+        {/* The figures sit under the Clusters / Exchanges / Transfers lists (user ask 2026-10-24). */}
         <dl className="bm-stats bm-col-figs" style={{ "--bm-cols": cols } as React.CSSProperties}>
           {headline}
         </dl>
+        <dl className="bm-stats bm-col-traits">{traitsStat}</dl>
+        {map}
       </>
     );
   return (
@@ -2305,7 +2306,7 @@ export function BubbleMapPlaceholder({ children }: { children: ReactNode }) {
           <dt>Wallet types</dt>
           <dd>
             <ul className="bm-wt-list">
-              {[0, 1, 2, 3].map((i) => (
+              {[0, 1, 2, 3, 4].map((i) => (
                 <li key={i} className="bm-wt bm-wt-skel">
                   <span className="skeleton" />
                 </li>
