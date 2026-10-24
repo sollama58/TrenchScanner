@@ -5,12 +5,15 @@ import { ShareImageDialog } from "../components/ShareImageDialog";
 import { asylApi, type AsylMe, type ChainRead, type Label, type MapDoc, type MapSummary } from "./asylApi";
 import { renderMapCard } from "./asylCard";
 import { AsylSignIn } from "./AsylSignIn";
-import { GraphView, MapLegend, type GraphViewHandle } from "./GraphView";
+import { DrawEditor } from "./DrawEditor";
+import { GraphView, MapLegend, type DrawHandlers, type DrawTool, type GraphViewHandle } from "./GraphView";
 import {
   EDGE_KINDS,
   EDGE_LABEL,
   DEFAULT_TIME_LABELS,
+  DRAW_COLOURS,
   NO_CUTOFFS,
+  NO_DRAWINGS,
   TIMED_KINDS,
   addressIn,
   clearsCutoffs,
@@ -26,7 +29,9 @@ import {
   type AsylGraph,
   type AsylNode,
   type Cutoffs,
+  type Drawings,
   type TimeLabels,
+  newDrawingId,
 } from "./graph";
 import { History, HISTORY_MAX } from "./history";
 import { Inspector, type InspectorActions } from "./Inspector";
@@ -96,6 +101,7 @@ interface MapSnapshot {
   removed: ReadonlySet<string>;
   cut: ReadonlySet<string>;
   hiddenKinds: ReadonlySet<AsylEdgeKind>;
+  drawings: Drawings;
   pos: Map<string, { x: number; y: number }>;
   pinned: Set<string>;
 }
@@ -152,12 +158,17 @@ export function AsylApp() {
   const [sharing, setSharing] = useState(false);
   const [keysOpen, setKeysOpen] = useState(false);
   const [unhidePick, setUnhidePick] = useState<Set<string>>(new Set());
+  // The reader's own lines and text boxes (user ask 2026-10-24), the tool in hand, and the one picked.
+  const [drawings, setDrawings] = useState<Drawings>(NO_DRAWINGS);
+  const [tool, setTool] = useState<DrawTool>(null);
+  const [drawingSel, setDrawingSel] = useState<string | null>(null);
+  const [cardNote, setCardNote] = useState<string | null>(null);
   const view = useRef<GraphViewHandle>(null);
   // Undo and redo (user ask 2026-10-24). Notes and the title keep their own text-box undo.
   const history = useRef(new History<MapSnapshot>(HISTORY_MAX));
   const [, setHistoryTick] = useState(0);
-  const latest = useRef({ graph, removed, cut, hiddenKinds });
-  latest.current = { graph, removed, cut, hiddenKinds };
+  const latest = useRef({ graph, removed, cut, hiddenKinds, drawings });
+  latest.current = { graph, removed, cut, hiddenKinds, drawings };
   const searchBox = useRef<HTMLInputElement>(null);
   const started = useRef(false);
 
@@ -233,6 +244,13 @@ export function AsylApp() {
     setRemoved(new Set(s.removed));
     setCut(new Set(s.cut));
     setHiddenKinds(new Set(s.hiddenKinds));
+    setDrawings(s.drawings);
+    if (
+      drawingSel &&
+      !s.drawings.lines.some((l) => l.id === drawingSel) &&
+      !s.drawings.texts.some((t) => t.id === drawingSel)
+    )
+      setDrawingSel(null);
     const lay = layout.current;
     for (const [id, p] of s.pos) {
       lay.pos.set(id, { x: p.x, y: p.y });
@@ -345,6 +363,8 @@ export function AsylApp() {
         setMapNote(m.doc.note);
         setRemoved(new Set(m.doc.removed ?? []));
         setCut(new Set(m.doc.cut ?? []));
+        setDrawings(m.doc.drawings ?? NO_DRAWINGS);
+        setDrawingSel(null);
         if (m.doc.cutoffs) setCutoffs(m.doc.cutoffs);
         setHiddenKinds(new Set(EDGE_KINDS.filter((k) => m.doc.hidden.includes(k))));
         setFocus(m.doc.focus);
@@ -382,6 +402,9 @@ export function AsylApp() {
     setMapNote("");
     setRemoved(new Set());
     setCut(new Set());
+    setDrawings(NO_DRAWINGS);
+    setDrawingSel(null);
+    setTool(null);
     setFocus(null);
     setSelected(null);
     setCurrent(null);
@@ -448,6 +471,12 @@ export function AsylApp() {
       removed: [...removed].filter((id) => graph.nodes.some((n) => n.id === id)),
       cut: [...cut].filter((k) => graph.edges.some((e) => edgeKey(e) === k)),
       cutoffs,
+      drawings: {
+        lines: drawings.lines.filter(
+          (l) => graph.nodes.some((n) => n.id === l.a) && graph.nodes.some((n) => n.id === l.b),
+        ),
+        texts: drawings.texts,
+      },
       focus,
     };
   };
@@ -623,6 +652,73 @@ export function AsylApp() {
     setDirty(true);
   };
 
+  /** Drawing on the map: each change is an undo step. */
+  const drawColour = useRef<(typeof DRAW_COLOURS)[number]>(DRAW_COLOURS[0]);
+  const draw: DrawHandlers = {
+    addLine: (a, b) => {
+      record();
+      const id = newDrawingId();
+      setDrawings((d) => ({
+        ...d,
+        lines: [...d.lines, { id, a, b, label: "", colour: drawColour.current }],
+      }));
+      setDrawingSel(id);
+      setDirty(true);
+    },
+    addText: (x, y) => {
+      record();
+      const id = newDrawingId();
+      setDrawings((d) => ({ ...d, texts: [...d.texts, { id, x, y, text: "", colour: drawColour.current }] }));
+      setDrawingSel(id);
+      setTool(null);
+      setDirty(true);
+    },
+    select: (id) => {
+      setDrawingSel(id);
+      if (id) setSelected(null);
+    },
+    moveText: (id, x, y) =>
+      setDrawings((d) => ({ ...d, texts: d.texts.map((t) => (t.id === id ? { ...t, x, y } : t)) })),
+  };
+  const deleteDrawing = (id: string) => {
+    record();
+    setDrawings((d) => ({
+      lines: d.lines.filter((l) => l.id !== id),
+      texts: d.texts.filter((t) => t.id !== id),
+    }));
+    setDrawingSel(null);
+    setDirty(true);
+  };
+  const editDrawing = (
+    id: string,
+    patch: { label?: string; text?: string; colour?: (typeof DRAW_COLOURS)[number] },
+  ) => {
+    if (patch.colour) drawColour.current = patch.colour;
+    setDrawings((d) => ({
+      lines: d.lines.map((l) =>
+        l.id === id
+          ? {
+              ...l,
+              ...(patch.label !== undefined ? { label: patch.label } : {}),
+              ...(patch.colour ? { colour: patch.colour } : {}),
+            }
+          : l,
+      ),
+      texts: d.texts.map((t) =>
+        t.id === id
+          ? {
+              ...t,
+              ...(patch.text !== undefined ? { text: patch.text } : {}),
+              ...(patch.colour ? { colour: patch.colour } : {}),
+            }
+          : t,
+      ),
+    }));
+    setDirty(true);
+  };
+  const pickedLine = drawingSel ? drawings.lines.find((l) => l.id === drawingSel) : undefined;
+  const pickedText = drawingSel ? drawings.texts.find((t) => t.id === drawingSel) : undefined;
+
   // The latest state, for the one key listener.
   const onKey = useRef<(e: KeyboardEvent) => void>(() => undefined);
   onKey.current = (e: KeyboardEvent) => {
@@ -651,12 +747,19 @@ export function AsylApp() {
     switch (e.key) {
       case "Delete":
       case "Backspace":
+        if (drawingSel) {
+          e.preventDefault();
+          deleteDrawing(drawingSel);
+          return;
+        }
         if (!sel) return;
         e.preventDefault();
         actions.hide(sel.id);
         return;
       case "Escape":
         if (keysOpen) setKeysOpen(false);
+        else if (tool) setTool(null);
+        else if (drawingSel) setDrawingSel(null);
         else setSelected(null);
         return;
       case "Enter":
@@ -1034,6 +1137,26 @@ export function AsylApp() {
             <button className="asyl-btn ghost" onClick={newMap}>
               New
             </button>
+            <span className="asyl-btn-group" role="group" aria-label="Draw">
+              <button
+                className={`asyl-btn ghost${tool === "line" ? " on" : ""}`}
+                disabled={graph.nodes.length < 2}
+                aria-pressed={tool === "line"}
+                title="Draw a line: click one bubble, then another, then label it"
+                onClick={() => setTool((t) => (t === "line" ? null : "line"))}
+              >
+                ╱ Line
+              </button>
+              <button
+                className={`asyl-btn ghost${tool === "text" ? " on" : ""}`}
+                disabled={graph.nodes.length === 0}
+                aria-pressed={tool === "text"}
+                title="Add a text box: click where it goes"
+                onClick={() => setTool((t) => (t === "text" ? null : "text"))}
+              >
+                T Text
+              </button>
+            </span>
             <span className="asyl-btn-group" role="group" aria-label="Undo and redo">
               <button
                 className="asyl-btn ghost"
@@ -1137,6 +1260,10 @@ export function AsylApp() {
                 if (n) actions.expand(n);
               }}
               onMoveStart={record}
+              drawings={drawings}
+              tool={tool}
+              drawingSelected={drawingSel}
+              onDraw={draw}
               timeLabels={timeLabels}
               onMoved={() => setDirty(true)}
               layoutKey={layoutKey}
@@ -1145,6 +1272,29 @@ export function AsylApp() {
           )}
           {shown.edges.length > 0 && <MapLegend graph={shown} />}
 
+          {tool && !pickedLine && !pickedText && (
+            <div className="asyl-draw-hint" role="status">
+              {tool === "line"
+                ? "Click a bubble, then the one to join it to · Esc to stop"
+                : "Click where the text box goes · Esc to stop"}
+            </div>
+          )}
+          {(pickedLine || pickedText) && (
+            <DrawEditor
+              key={drawingSel}
+              kind={pickedLine ? "line" : "text"}
+              value={pickedLine ? pickedLine.label : (pickedText?.text ?? "")}
+              colour={(pickedLine ?? pickedText)!.colour}
+              onStartEdit={record}
+              onChange={(v) => editDrawing(drawingSel!, pickedLine ? { label: v } : { text: v })}
+              onColour={(c) => {
+                record();
+                editDrawing(drawingSel!, { colour: c });
+              }}
+              onDelete={() => deleteDrawing(drawingSel!)}
+              onDone={() => setDrawingSel(null)}
+            />
+          )}
           {keysOpen && (
             <div className="asyl-keys" role="dialog" aria-label="Keyboard shortcuts">
               <h3>
@@ -1208,9 +1358,21 @@ export function AsylApp() {
               graph: shown,
               layout: layout.current,
               focus,
+              drawings: {
+                lines: drawings.lines.filter(
+                  (l) => shown.nodes.some((n) => n.id === l.a) && shown.nodes.some((n) => n.id === l.b),
+                ),
+                texts: drawings.texts,
+              },
+              timeLabels,
+              onNote: setCardNote,
             })
           }
-          onClose={() => setSharing(false)}
+          controls={cardNote ? <p className="asyl-card-note">{cardNote}</p> : null}
+          onClose={() => {
+            setSharing(false);
+            setCardNote(null);
+          }}
         />
       )}
     </div>

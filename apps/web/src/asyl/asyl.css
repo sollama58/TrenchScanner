@@ -1323,3 +1323,103 @@ body {
   stroke-width: 3.5px;
   stroke-linejoin: round;
 }
+
+/* What the reader draws: their own labelled lines and text boxes. */
+.asyl-graph-svg.tool-line,
+.asyl-graph-svg.tool-line .asyl-node {
+  cursor: crosshair;
+}
+.asyl-graph-svg.tool-text {
+  cursor: text;
+}
+.asyl-drawn-hit,
+.asyl-drawn-label {
+  cursor: pointer;
+}
+.asyl-drawn-label text {
+  font-family: var(--asyl-marker);
+  font-size: 14px;
+}
+.asyl-drawn-text text {
+  font-family: var(--asyl-marker);
+  font-size: 14px;
+}
+.asyl-drawn-text.movable {
+  cursor: grab;
+}
+.asyl-drawn-text.movable:active {
+  cursor: grabbing;
+}
+/* The editor for the drawing picked: over the map's top edge. */
+.asyl-draw-editor {
+  position: absolute;
+  top: 62px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  width: min(520px, calc(100% - 24px));
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: var(--asyl-panel);
+  border: 1px solid var(--asyl-line);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+}
+.asyl-draw-editor .asyl-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--asyl-marker);
+}
+.asyl-draw-editor textarea.asyl-input {
+  resize: vertical;
+  min-height: 38px;
+}
+.asyl-swatches {
+  display: flex;
+  gap: 4px;
+  padding-top: 8px;
+}
+.asyl-swatches button {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+.asyl-swatches button.on {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.6);
+}
+.asyl-btn.on {
+  border-color: var(--asyl-orange);
+  background: rgba(255, 122, 47, 0.16);
+  color: var(--asyl-orange-hi);
+}
+.asyl-draw-hint {
+  position: absolute;
+  top: 62px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(18, 12, 9, 0.9);
+  border: 1px dashed var(--asyl-orange);
+  color: var(--asyl-orange-hi);
+  font-size: 13px;
+  white-space: nowrap;
+}
+/* What the share image changed to fit the map, under its preview. */
+.asyl-card-note {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 122, 47, 0.12);
+  border: 1px solid rgba(255, 122, 47, 0.35);
+  color: #ffd7a8;
+  font-size: 13px;
+}

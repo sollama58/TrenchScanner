@@ -1,5 +1,5 @@
 import { api, del, post, put, API_URL } from "../api";
-import type { AsylGraph, Cutoffs } from "./graph";
+import type { AsylGraph, Cutoffs, Drawings } from "./graph";
 
 /** The calls Asyl makes (apps/api/src/routes/asyl.ts). */
 
@@ -84,6 +84,8 @@ export interface MapDoc {
   cut?: string[];
   /** The amount sliders. */
   cutoffs?: Cutoffs;
+  /** The reader's own lines and text boxes. */
+  drawings?: Drawings;
   focus: string | null;
 }
 

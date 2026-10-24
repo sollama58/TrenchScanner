@@ -378,3 +378,46 @@ export function edgeTimeFull(iso: string | null | undefined): string | null {
   if (Number.isNaN(t.getTime())) return null;
   return `${t.getDate()} ${MONTHS[t.getMonth()]} ${t.getFullYear()}, ${pad2(t.getHours())}:${pad2(t.getMinutes())}`;
 }
+
+/**
+ * What the reader draws on a map (user ask 2026-10-24): their own lines between two bubbles, each
+ * with a label, and free text boxes. They are the reader's, not a read: kept with the map, drawn
+ * over it, and in its share image.
+ */
+export const DRAW_COLOURS = ["#fff3e6", "#ff7a2f", "#ffd34d", "#ff5a4a", "#6ee7f9"] as const;
+export type DrawColour = (typeof DRAW_COLOURS)[number];
+
+export interface DrawnLine {
+  id: string;
+  a: string;
+  b: string;
+  label: string;
+  colour: DrawColour;
+}
+
+export interface DrawnText {
+  id: string;
+  /** Where its top-left corner sits, in the map's own units (as bubbles are placed). */
+  x: number;
+  y: number;
+  text: string;
+  colour: DrawColour;
+}
+
+export interface Drawings {
+  lines: DrawnLine[];
+  texts: DrawnText[];
+}
+
+export const NO_DRAWINGS: Drawings = { lines: [], texts: [] };
+export const DRAWN_LABEL_MAX = 80;
+export const DRAWN_TEXT_MAX = 400;
+
+/** A text box's size in map units: 14-unit type, 20-unit lines, 12 units of padding. */
+export function textBoxSize(text: string): { w: number; h: number } {
+  const lines = (text || " ").split("\n");
+  const longest = Math.max(...lines.map((l) => l.length), 4);
+  return { w: Math.min(320, longest * 7.6) + 24, h: lines.length * 20 + 16 };
+}
+
+export const newDrawingId = () => Math.random().toString(36).slice(2, 10);
