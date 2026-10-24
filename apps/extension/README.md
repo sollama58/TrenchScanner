@@ -14,8 +14,19 @@ those pages. A link is the only thing that leads there.
 - `src/sw.ts` is the service worker: the only part that holds the key or talks to the network,
   and only to `api.trenchscanner.app/ext/v1`. It answers the extension's own pages, and
   TrenchScanner's site (`externally_connectable`) for the one-click key hand-over.
-- `src/panel/` is the side panel: the alerts list (`card.ts`) and the settings, which are saved to
-  the account. The toolbar icon or Alt+Shift+T opens it.
+- `src/panel/` is the side panel: the alerts list (`card.ts`), Trade Buddy (`buddy.ts`) and the
+  settings, which are saved to the account. The toolbar icon or Alt+Shift+T opens it.
+- **Bubble maps** (`bubble.ts`, 0.3.0): a click on an alert opens its latest bubble map, with the
+  site's category totals (Linked, KOL bundled, Bundled, Same minute, CEX-funded, Tied to dev,
+  Transferred, Top 10, and the wallet types). The API's `/ext/v1/bubble/:mint` serves the site's
+  reading (`apps/api/src/extensionBubble.ts`) and keeps the map watched while it is open, as the
+  site's token view does, so the worker keeps those holders current. Re-read every 30 s.
+- **Trade Buddy** (`buddy.ts`, 0.3.0): the coins the account's own wallet bought, from any venue,
+  followed as the site's TRADES panel follows them (`/ext/v1/buddy`, `apps/api/src/extensionBuddy.ts`),
+  each with its token card, bubble map (held coins open by default) and PnL. Pro Mode accounts get a
+  trade box per coin, collapsed by default. It holds no wallet and sends nothing: each button opens
+  `trenchscanner.app/?trade=<mint>&buy=<SOL>` (or `&sell=<percent>`), which opens the coin with its
+  Trade panel filled in (`apps/web/src/tradeLink.ts`), and the wallet signs there.
 
 ## Version rule
 

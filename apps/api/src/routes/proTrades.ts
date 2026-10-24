@@ -123,16 +123,73 @@ export interface TradeCoin {
   scan: "scanning" | "scanned" | "none";
 }
 
+export interface ProTradesOptions {
+  env: Env;
+  dexScreener: DexScreenerClient;
+  viewStamps: ViewStampBuffer;
+  /** Coins' live USD prices; the default asks Jupiter, then DexScreener for what it can't price. */
+  livePricesUsd?: (mints: string[]) => Promise<Map<string, number>>;
+}
+
+/** What a look at a wallet's trades answers: the handle, the panel (open or closed), or Portfolio. */
+export type TradesShape = "brief" | "portfolio" | "full-open" | "full";
+
+/** The wallet's followed trades, shared by the TRADES panel and the extension's Trade Buddy. */
+export interface ProTrades {
+  /**
+   * Follows the wallet, catches up when due (waiting up to CATCH_UP_WAIT_MS), and answers `shape`,
+   * reused ANSWER_TTL_MS per wallet and shape. Nothing here checks who may look: the caller does.
+   */
+  look(wallet: string, shape: "full" | "full-open"): Promise<FullTradesView>;
+  look(wallet: string, shape: TradesShape): Promise<unknown>;
+  /** Stops the Helius stream, when there is one. */
+  stop(): Promise<void>;
+}
+
+export interface FullTradesView {
+  coins: TradeCoin[];
+  stats: TradeStats;
+  solUsd: number | null;
+  solUsdAt: string | null;
+  following: true;
+  readAt: Date;
+  chainAt: Date | null;
+}
+
 export async function registerProTradesRoutes(
   app: FastifyInstance,
-  opts: {
-    env: Env;
-    dexScreener: DexScreenerClient;
-    viewStamps: ViewStampBuffer;
-    /** Coins' live USD prices; the default asks Jupiter, then DexScreener for what it can't price. */
-    livePricesUsd?: (mints: string[]) => Promise<Map<string, number>>;
+  opts: ProTradesOptions & {
+    /** The server's one follower (also the extension's); made here when not given. */
+    trades?: ProTrades;
   },
 ) {
+  const { env } = opts;
+  const trades = opts.trades ?? createProTrades(opts);
+  if (!opts.trades) app.addHook("onClose", async () => trades.stop());
+
+  app.addHook("preHandler", app.authenticate);
+
+  app.get("/", async (request, reply) => {
+    const wallet = request.user!.walletAddress;
+    if (!(await isProWallet(env, wallet))) return reply.code(404).send({ error: "not found" });
+    const query = request.query as { brief?: string; open?: string; view?: string };
+    const brief = query.brief === "1";
+    const portfolio = !brief && query.view === "portfolio";
+    // An open panel's read stamps its coins (fullView). Under the closed panel's key, a poll with
+    // the panel open could be answered from that cache and skip the stamps.
+    const shape: TradesShape = brief
+      ? "brief"
+      : portfolio
+        ? "portfolio"
+        : query.open === "1"
+          ? "full-open"
+          : "full";
+    reply.header("Cache-Control", "no-store");
+    return trades.look(wallet, shape);
+  });
+}
+
+export function createProTrades(opts: ProTradesOptions): ProTrades {
   const { env } = opts;
   const rpc = new TradingRpc({
     rpcUrl: env.SOLANA_RPC_URL || undefined,
@@ -201,7 +258,6 @@ export async function registerProTradesRoutes(
       balances.delete(wallet);
     },
   });
-  if (stream) app.addHook("onClose", async () => stream.stop());
 
   const answers = new Map<string, { at: number; body: unknown }>();
   const stamped = new Map<string, number>();
@@ -269,33 +325,23 @@ export async function registerProTradesRoutes(
     return { rows, chain };
   }
 
-  app.addHook("preHandler", app.authenticate);
-
-  app.get("/", async (request, reply) => {
-    const wallet = request.user!.walletAddress;
-    if (!(await isProWallet(env, wallet))) return reply.code(404).send({ error: "not found" });
-    const query = request.query as { brief?: string; open?: string; view?: string };
-    const brief = query.brief === "1";
-    const portfolio = !brief && query.view === "portfolio";
+  async function look(wallet: string, shape: TradesShape): Promise<unknown> {
     // Without a node of our own (tests, a local run) nothing is read: the public RPC would be asked.
     const due = canRead ? watcher.touch(wallet) : Promise.resolve();
-    const open = query.open === "1";
-    // An open panel's read stamps its coins (fullView). Under the closed panel's key, a poll with
-    // the panel open could be answered from that cache and skip the stamps.
-    const key = `${wallet}:${brief ? "brief" : portfolio ? "portfolio" : open ? "full-open" : "full"}`;
+    const key = `${wallet}:${shape}`;
     const cached = answers.get(key);
-    reply.header("Cache-Control", "no-store");
     if (cached && Date.now() - cached.at < ANSWER_TTL_MS) return cached.body;
     await Promise.race([due, new Promise((r) => setTimeout(r, CATCH_UP_WAIT_MS))]);
-    const body = brief
-      ? await handleView(wallet)
-      : portfolio
-        ? await portfolioView(wallet)
-        : await fullView(wallet, open);
+    const body =
+      shape === "brief"
+        ? await handleView(wallet)
+        : shape === "portfolio"
+          ? await portfolioView(wallet)
+          : await fullView(wallet, shape === "full-open");
     answers.set(key, { at: Date.now(), body });
     if (answers.size > 2_000) answers.delete(answers.keys().next().value!);
     return body;
-  });
+  }
 
   /**
    * The wallet's trades of the last PORTFOLIO_DAYS, and the older trades of the coins among them or
@@ -365,7 +411,7 @@ export async function registerProTradesRoutes(
     };
   }
 
-  async function fullView(wallet: string, panelOpen: boolean) {
+  async function fullView(wallet: string, panelOpen: boolean): Promise<FullTradesView> {
     const { rows, chain } = await checkedRows(wallet);
     const positions = positionsOf(rows).filter(inWindow);
     const shown = positions.slice(0, PANEL_COINS);
@@ -638,6 +684,11 @@ export async function registerProTradesRoutes(
       solAt: sol ? solPrice.readAt() : null,
     };
   }
+
+  return {
+    look: look as ProTrades["look"],
+    stop: async () => stream?.stop(),
+  };
 }
 
 /**

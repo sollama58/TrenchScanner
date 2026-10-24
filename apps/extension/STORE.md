@@ -22,6 +22,11 @@ extension does. The privacy policy (`apps/web/public/extension-privacy.html`) sa
   • Token image and name, which model or filter flagged it, and when
   • Market cap at alert and now, green when it's up and red when it's down
   • The holder flags you care about (bundled supply, snipers, linked wallets, dev holdings and more), graded against your own limits
+  • Click any alert for its latest bubble map: linked clusters, KOL bundled, same-minute, CEX-funded, dev-tied and transferred supply, snipers and fresh wallets, each with its share
+
+  TRADE BUDDY
+  • Every coin your connected wallet buys, on any site, shows up with its token card, bubble map and your PnL
+  • Pro accounts get a trade box on each coin, collapsed until you open it: it opens TrenchScanner's Trade panel filled in, and your wallet confirms there
 
   ONE CLICK TO ACT
   • Open any token on Axiom, Terminal, GMGN or TrenchScanner
@@ -29,7 +34,7 @@ extension does. The privacy policy (`apps/web/public/extension-privacy.html`) sa
   • Updates every 5 seconds while the panel is open
 
   BUILT TO STAY OUT OF YOUR TRADING
-  The extension never runs on any website. It can't see your exchange pages, logins or wallets, and it can't trade or move funds. It only talks to TrenchScanner, using a key you can revoke anytime from Settings.
+  The extension never runs on any website. It can't see your exchange pages, logins or wallet apps, and it can't trade or move funds. It only talks to TrenchScanner, using a key you can revoke anytime from Settings.
 
   GETTING STARTED
   Requires a paid TrenchScanner account. Install, open the panel, press Connect with TrenchScanner, and you're set. No keys to copy.
@@ -46,8 +51,8 @@ extension does. The privacy policy (`apps/web/public/extension-privacy.html`) sa
 ## Privacy practices
 
 - **Single purpose:** Shows the user's own TrenchScanner token alerts (filter matches and model
-  calls), with their holder stats and flags, in Chrome's side panel, and links to open each token on
-  the trading site the user picks.
+  calls) and the coins their own wallet trades, with holder stats, bubble maps, flags and PnL, in
+  Chrome's side panel, and links to open each token on the trading site the user picks.
 - **Permission justifications:**
   - `storage`: keeps the user's TrenchScanner extension key and display settings on this device.
   - `sidePanel`: the extension's only interface is a side panel.

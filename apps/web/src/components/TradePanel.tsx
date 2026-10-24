@@ -724,6 +724,7 @@ export function TradePanel({
   maxBuySol = null,
   delayed = false,
   fillBuy = null,
+  fillSell = null,
   expectNote,
   pairInTitle = false,
 }: {
@@ -757,6 +758,11 @@ export function TradePanel({
   delayed?: boolean;
   /** Fills the Buy amount (a credit pick in the Buy $ASDFASDFA popup); a new `at` fills it again. */
   fillBuy?: { sol: number; at: number } | null;
+  /**
+   * Picks a sell share (percent of the holding), as pressing that preset does: the extension's
+   * Trade Buddy asked for it (tradeLink.ts). A new `at` picks it again.
+   */
+  fillSell?: { pct: number; at: number } | null;
   /** What the expected tokens come to, after them (the Buy $ASDFASDFA popup: credits or access). */
   expectNote?: (tokens: number) => string | null;
   /**
@@ -793,6 +799,12 @@ export function TradePanel({
     setCustom(String(fillBuy.sol));
     setSide("buy");
   }, [fillBuy]);
+  // The amount follows the balance once the position is read (the preset effect below).
+  useEffect(() => {
+    if (!fillSell) return;
+    setSellPct(fillSell.pct);
+    setSide("sell");
+  }, [fillSell]);
   // A result belongs to the coin Buy or Sell was pressed on. Switching coins drops the amount and
   // the status, and an in-flight trade no longer paints its result here.
   const tradeGen = useRef(0);

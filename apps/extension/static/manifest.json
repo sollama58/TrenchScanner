@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Trench Overlay",
   "short_name": "Trench Overlay",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Your TrenchScanner alerts, with their flags, in a panel beside Axiom, Terminal and GMGN.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "sidePanel"],

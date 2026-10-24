@@ -108,6 +108,7 @@ import { DexInfoLabel, dexInfoChartMark } from "../dexInfoLabel";
 import { TradingChart, type ChartEvent, type ChartKind, type ChartTrade } from "./TradingChart";
 import { TokenPairBalances } from "./HeaderBalances";
 import { TradePanel, solText, tokensText } from "./TradePanel";
+import { useTradeFill } from "../tradeLink";
 import { PRO_MODE_PERKS } from "./ProModeCard";
 import { summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
 import { spendBalancesShown, useWalletBalance } from "../walletBalance";
@@ -2526,6 +2527,8 @@ export function ChartCard({
   const closeOnly = !!proState && !proState.pro;
   const graceEndsAt = proState?.pro ? proState.graceEndsAt : null;
   const mint = card.token.mintAddress;
+  // A trade the extension's Trade Buddy asked for fills the panel (tradeLink.ts).
+  const tradeFill = useTradeFill(mint);
   const holds = !!position.data && BigInt(position.data.balance) > 0n;
   // Trade is its own section, always open (user ask 2026-10-18), for Pro Mode wallets (admins
   // included). Never where no wallet here could sign a trade (a phone signed in by QR, say).
@@ -2849,6 +2852,8 @@ export function ChartCard({
         graceEndsAt={graceEndsAt}
         delayed={delayed}
         pairInTitle={inTerminal}
+        fillBuy={tradeFill?.side === "buy" ? { sol: tradeFill.amount, at: tradeFill.at } : null}
+        fillSell={tradeFill?.side === "sell" ? { pct: tradeFill.amount, at: tradeFill.at } : null}
       />
     ) : null;
   const locked = error && !served ? lockedText(error, "chart") : null;
