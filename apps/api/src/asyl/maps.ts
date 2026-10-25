@@ -12,12 +12,13 @@ import { prisma } from "@trenchscanner/core";
 
 /** Maps one account keeps. */
 export const MAPS_PER_USER = 100;
-export const MAP_NODES_MAX = 400;
-export const MAP_EDGES_MAX = 2_000;
+/** Room for a coin with all its historical holders and their links (user report 2026-10-25). */
+export const MAP_NODES_MAX = 1_500;
+export const MAP_EDGES_MAX = 6_000;
 export const MAP_TITLE_MAX = 80;
 export const MAP_NOTE_MAX = 2_000;
 /** The body a save may send: a full map with its layout. */
-export const MAP_BODY_LIMIT = 1_000_000;
+export const MAP_BODY_LIMIT = 4_000_000;
 
 const address = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
 const finite = z.number().finite();

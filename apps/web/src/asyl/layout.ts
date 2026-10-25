@@ -2,8 +2,8 @@ import type { AsylGraph } from "./graph";
 
 /**
  * The map's force layout: linked nodes pull together, every pair pushes apart, and a weak pull to
- * the centre keeps islands on screen. Plain O(n²) repulsion: a map holds a few hundred nodes at
- * most (MAP_NODES_MAX on the API). Positions are kept between runs, so a merge only moves what is
+ * the centre keeps islands on screen. Plain O(n²) repulsion: a map holds a few hundred nodes as a
+ * rule (MAP_NODES_MAX on the API caps it). Positions are kept between runs, so a merge only moves what is
  * new and its neighbours; a node the user dragged stays pinned where it was put.
  */
 
