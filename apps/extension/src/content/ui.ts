@@ -1,9 +1,18 @@
 import { DEFAULT_SETTINGS } from "../shared/settings";
-import { DEFAULT_TOOLTIP, MAP_LABELS, shownLines, type MapLine, type TipLine } from "../shared/tooltip";
+import {
+  colorVars,
+  DEFAULT_COLORS,
+  DEFAULT_TOOLTIP,
+  MAP_LABELS,
+  shownLines,
+  type ColorKey,
+  type MapLine,
+  type TipLine,
+} from "../shared/tooltip";
 import type { FlagId, OverlayBubbleTotals, RingStyle, OverlayToken } from "../shared/types";
 import type { PillSegment } from "../shared/pill";
 import { firstAlert, type RowVerdict } from "../shared/verdict";
-import { findSpot, obstaclesIn } from "./placement";
+import { findSpot, obstaclesIn, stillFits, type Box } from "./placement";
 
 /**
  * What the overlay draws: a ring and a badge inside each tracked row, and one shared tooltip.
@@ -17,10 +26,10 @@ import { findSpot, obstaclesIn } from "./placement";
 const RING_CSS = `
 :host { all: initial; position: absolute; inset: 0; pointer-events: none; z-index: 5; }
 .ring { position: absolute; inset: 0; border-radius: 6px; }
-.model { --a: #ff7a35; --b: #ffc35a; }
-.filter { --a: #3fd7c9; --b: #8af1e7; }
-.both { --a: #ff7a35; --b: #3fd7c9; }
-.risk { --a: #ff4d6a; --b: #ff9db0; }
+.model { --a: var(--c-model); --b: var(--c-model2); }
+.filter { --a: var(--c-filter); --b: var(--c-filter2); }
+.both { --a: var(--c-model); --b: var(--c-filter); }
+.risk { --a: var(--c-risk); --b: var(--c-risk2); }
 .halo::before { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.5px;
   background: conic-gradient(from var(--ang, 0deg), var(--a), var(--b), transparent 40%, transparent 60%, var(--a));
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
@@ -39,23 +48,37 @@ const RING_CSS = `
 @media (prefers-reduced-motion: reduce) { .halo::before { animation: none; } }
 .badge { position: absolute; top: 4px; right: 4px; pointer-events: auto; cursor: default; display: inline-flex; align-items: center; gap: 5px;
   font: 500 10.5px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; padding: 1px 7px 1px 5px; border-radius: 999px;
-  background: rgba(13, 14, 18, 0.92); border: 1px solid var(--a); color: #eef0f6; white-space: nowrap; max-width: 60%; overflow: hidden; text-overflow: ellipsis; }
+  background: color-mix(in srgb, var(--c-pillBg) 92%, transparent); border: 1px solid var(--a); color: var(--c-pillText); white-space: nowrap; max-width: 60%; overflow: hidden; text-overflow: ellipsis; }
 .badge i { width: 7px; height: 7px; border-radius: 50%; background: var(--a); box-shadow: 0 0 6px var(--a); flex: none; }
 .badge.dot { padding: 3px; gap: 0; }
 .badge.dot > span, .badge.dot b { display: none; }
-.badge b { width: 6px; height: 6px; border-radius: 50%; background: #ff4d6a; flex: none; }
-.badge .sep { color: #5d6272; }
-.badge .ok { color: #7ef0ae; } .badge .mid { color: #f8d77a; } .badge .hi { color: #ff8b9d; }
+.badge b { width: 6px; height: 6px; border-radius: 50%; background: var(--c-risk); flex: none; }
+.badge .sep { color: color-mix(in srgb, var(--c-pillText) 40%, var(--c-pillBg)); }
+.badge .ok { color: var(--c-ok); } .badge .mid { color: var(--c-mid); } .badge .hi { color: var(--c-hi); }
 .badge.more { border-style: dashed; }
 .badge.more i { display: none; }
 .badge.gone { display: none; }
 `;
+
+/** A shadow root's colours: its own style rule, rewritten only when they change. */
+class ColorRule {
+  readonly node = document.createElement("style");
+  private text = "";
+  constructor() {
+    this.set(DEFAULT_COLORS);
+  }
+  set(colors: Record<ColorKey, string>): void {
+    const text = `:host { ${colorVars(colors)} }`;
+    if (text !== this.text) this.node.textContent = this.text = text;
+  }
+}
 
 /** What a ring's pills say: the first pill, the second (null while off), and the risk dot. */
 export interface Pills {
   main: PillSegment[];
   more: PillSegment[] | null;
   riskDot: boolean;
+  colors: Record<ColorKey, string>;
 }
 
 /** A pill's text as spans, written with textContent only (a filter's name is the reader's text). */
@@ -96,7 +119,17 @@ export class Decoration {
   private readonly riskDot: HTMLElement;
   private readonly more: HTMLSpanElement;
   private readonly moreText: HTMLSpanElement;
+  private readonly colors = new ColorRule();
   private madeRelative = false;
+  /** What placing decided, kept apart from what each redraw paints, so a redraw can't undo it. */
+  private dotOnly = false;
+  private moreFits = false;
+  /** Where each pill sits now (row coordinates), kept while it still fits so it doesn't jump. */
+  private badgeAt: Box | null = null;
+  private moreAt: Box | null = null;
+  private kind = "";
+  private hasMain = false;
+  private hasMore = false;
   private placedFor = "";
   private placedAt = 0;
   private placeFrame = 0;
@@ -125,7 +158,7 @@ export class Decoration {
       pill.addEventListener("mouseenter", () => options.onHover(pill, true));
       pill.addEventListener("mouseleave", () => options.onHover(pill, false));
     }
-    root.append(style, this.ring, this.badge, this.more);
+    root.append(style, this.colors.node, this.ring, this.badge, this.more);
   }
 
   update(verdict: RowVerdict, style: RingStyle, calm: boolean, pills: Pills): void {
@@ -134,17 +167,26 @@ export class Decoration {
       return;
     }
     this.ring.className = `ring ${verdict.ring} ${style}${calm ? " calm" : ""}`;
-    this.badge.className = `badge ${verdict.ring}${pills.main.length === 0 ? " dot" : ""}`;
-    this.more.className = `badge more ${verdict.ring}${pills.more?.length ? "" : " gone"}`;
+    this.colors.set(pills.colors);
+    this.kind = verdict.ring;
+    this.hasMain = pills.main.length > 0;
+    this.hasMore = (pills.more?.length ?? 0) > 0;
     const before = `${this.badgeText.dataset.key}/${this.moreText.dataset.key}`;
     fill(this.badgeText, pills.main);
     fill(this.moreText, pills.more ?? []);
     const changed = before !== `${this.badgeText.dataset.key}/${this.moreText.dataset.key}`;
     if (pills.riskDot && verdict.risky && verdict.ring !== "risk") this.badge.append(this.riskDot);
     else this.riskDot.remove();
+    this.paint();
     this.attach();
     if (changed) this.placedFor = "";
     this.schedulePlace();
+  }
+
+  /** The pills' classes from the ring and what placing decided. */
+  private paint(): void {
+    this.badge.className = `badge ${this.kind}${!this.hasMain || this.dotOnly ? " dot" : ""}`;
+    this.more.className = `badge more ${this.kind}${this.hasMore && this.moreFits ? "" : " gone"}`;
   }
 
   /** Re-place after the next layout; cheap to call often (rows re-render all the time). */
@@ -172,37 +214,52 @@ export class Decoration {
 
     const obstacles = obstaclesIn(this.row, this.host);
     const row = { w: rect.width, h: rect.height };
-    const empty = this.badgeText.childElementCount === 0;
-    if (!empty) this.badge.classList.remove("dot");
-    let spot = findSpot(row, obstacles, this.badge.offsetWidth, this.badge.offsetHeight);
-    if (!spot && !empty) {
-      this.badge.classList.add("dot");
-      spot = findSpot(row, obstacles, this.badge.offsetWidth, this.badge.offsetHeight);
+    // Measured at full size, then the dot alone if the label fits nowhere.
+    this.dotOnly = false;
+    this.moreFits = this.hasMore;
+    this.paint();
+    let first = this.spotFor(this.badge, row, obstacles, this.badgeAt);
+    if (!first && this.hasMain) {
+      this.dotOnly = true;
+      this.paint();
+      first = this.spotFor(this.badge, row, obstacles, null);
     }
-    // The host sits inside the row's border; the boxes are measured from its outer edge.
-    const x = (spot?.x ?? rect.width - this.badge.offsetWidth - 4) - this.row.clientLeft;
-    const y = (spot?.y ?? 4) - this.row.clientTop;
-    this.badge.style.left = `${Math.round(x)}px`;
-    this.badge.style.top = `${Math.round(y)}px`;
-    this.badge.style.right = "auto";
+    this.badgeAt = first;
+    // The top-right corner when even the dot doesn't fit.
+    const badge = first ?? { x: rect.width - this.badge.offsetWidth - 4, y: 4, w: 0, h: 0 };
+    this.put(this.badge, badge);
 
     // The second pill takes the next free patch, clear of the first; left out when none fits.
-    if (this.moreText.childElementCount === 0) return;
-    this.more.classList.remove("gone");
-    const first = {
-      x: x + this.row.clientLeft,
-      y: y + this.row.clientTop,
-      w: this.badge.offsetWidth,
-      h: this.badge.offsetHeight,
-    };
-    const next = findSpot(row, [...obstacles, first], this.more.offsetWidth, this.more.offsetHeight);
-    if (!next) {
-      this.more.classList.add("gone");
-      return;
+    let next: Box | null = null;
+    if (this.hasMore) {
+      const taken = { x: badge.x, y: badge.y, w: this.badge.offsetWidth, h: this.badge.offsetHeight };
+      next = this.spotFor(this.more, row, [...obstacles, taken], this.moreAt);
     }
-    this.more.style.left = `${Math.round(next.x - this.row.clientLeft)}px`;
-    this.more.style.top = `${Math.round(next.y - this.row.clientTop)}px`;
-    this.more.style.right = "auto";
+    this.moreAt = next;
+    this.moreFits = next !== null;
+    this.paint();
+    if (next) this.put(this.more, next);
+  }
+
+  /** Where a pill goes: where it is, while that still fits, else the first free spot. */
+  private spotFor(
+    pill: HTMLElement,
+    row: { w: number; h: number },
+    obstacles: Box[],
+    at: Box | null,
+  ): Box | null {
+    const w = pill.offsetWidth;
+    const h = pill.offsetHeight;
+    if (at && stillFits(row, obstacles, { x: at.x, y: at.y, w, h })) return { x: at.x, y: at.y, w, h };
+    const spot = findSpot(row, obstacles, w, h);
+    return spot ? { ...spot, w, h } : null;
+  }
+
+  /** The host sits inside the row's border; spots are measured from its outer edge. */
+  private put(pill: HTMLElement, at: { x: number; y: number }): void {
+    pill.style.left = `${Math.round(at.x - this.row.clientLeft)}px`;
+    pill.style.top = `${Math.round(at.y - this.row.clientTop)}px`;
+    pill.style.right = "auto";
   }
 
   attach(): void {
@@ -233,23 +290,27 @@ export class Decoration {
 
 const TIP_CSS = `
 :host { all: initial; position: fixed; z-index: 2147483000; pointer-events: none; }
-.tip { width: 300px; background: #111218; border: 1px solid #2a2d38; border-radius: 12px; color: #eef0f6;
+.tip { --dim: color-mix(in srgb, var(--c-tipText) 50%, var(--c-tipBg)); --soft: color-mix(in srgb, var(--c-tipText) 80%, var(--c-tipBg));
+  --edge: color-mix(in srgb, var(--c-tipText) 14%, var(--c-tipBg));
+  width: 300px; background: var(--c-tipBg); border: 1px solid var(--edge); border-radius: 12px; color: var(--c-tipText);
   font: 12.5px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden;
-  box-shadow: 0 18px 50px -12px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,122,53,0.08); pointer-events: auto; }
-.head { display: flex; justify-content: space-between; gap: 8px; padding: 9px 12px; border-bottom: 1px solid #23252e; }
-.brand { font: 500 10px/1.6 ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: #7d8396; }
-.sym { font: 500 11px/1.5 ui-monospace, Menlo, monospace; color: #c7cbd8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sec { padding: 9px 12px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid #1f2129; }
+  box-shadow: 0 18px 50px -12px rgba(0,0,0,0.8), 0 0 0 1px color-mix(in srgb, var(--c-model) 8%, transparent); pointer-events: auto; }
+.head { display: flex; justify-content: space-between; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--edge); }
+.brand { font: 500 10px/1.6 ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+.sym { font: 500 11px/1.5 ui-monospace, Menlo, monospace; color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sec { padding: 9px 12px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid var(--edge); }
 .sec:last-child { border-bottom: 0; }
 .line { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
-.l { color: #7d8396; } .r { text-align: right; font-variant-numeric: tabular-nums; }
+.l { color: var(--dim); } .r { text-align: right; font-variant-numeric: tabular-nums; }
 .tag { font: 500 10px/1.5 ui-monospace, Menlo, monospace; padding: 1px 6px; border-radius: 4px; margin-right: 6px; }
-.tm { background: rgba(255,122,53,.16); color: #ffb084; } .tf { background: rgba(63,215,201,.15); color: #8af1e7; }
-.tb { background: rgba(61,220,132,.16); color: #7ef0ae; } .tn { background: rgba(255,77,106,.14); color: #ff8b9d; }
-.why { color: #c7cbd8; font-size: 11.5px; }
-.ok { color: #7ef0ae; } .mid { color: #f8d77a; } .hi { color: #ff8b9d; }
-.foot { display: flex; justify-content: space-between; color: #7d8396; font-size: 11px; }
-a { color: #4fd1e8; text-decoration: none; }
+.tm { background: color-mix(in srgb, var(--c-model) 16%, transparent); color: var(--c-model2); }
+.tf { background: color-mix(in srgb, var(--c-filter) 15%, transparent); color: var(--c-filter2); }
+.tb { background: color-mix(in srgb, var(--c-ok) 16%, transparent); color: var(--c-ok); }
+.tn { background: color-mix(in srgb, var(--c-hi) 14%, transparent); color: var(--c-hi); }
+.why { color: var(--soft); font-size: 11.5px; }
+.ok { color: var(--c-ok); } .mid { color: var(--c-mid); } .hi { color: var(--c-hi); }
+.foot { display: flex; justify-content: space-between; color: var(--dim); font-size: 11px; }
+a { color: var(--c-link); text-decoration: none; }
 `;
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -389,13 +450,14 @@ export class Tooltip {
   private readonly root: ShadowRoot;
   private hideTimer: number | undefined;
   private anchor: Element | null = null;
+  private readonly colors = new ColorRule();
 
   constructor() {
     this.host = document.createElement("trench-overlay-tip");
     this.root = this.host.attachShadow({ mode: "closed" });
     const style = document.createElement("style");
     style.textContent = TIP_CSS;
-    this.root.append(style);
+    this.root.append(style, this.colors.node);
     this.host.addEventListener("mouseenter", () => window.clearTimeout(this.hideTimer));
     this.host.addEventListener("mouseleave", () => this.hide());
   }
@@ -409,7 +471,8 @@ export class Tooltip {
     return this.anchor === anchor && this.host.isConnected;
   }
 
-  show(anchor: Element, body: HTMLElement): void {
+  show(anchor: Element, body: HTMLElement, colors: Record<ColorKey, string> = DEFAULT_COLORS): void {
+    this.colors.set(colors);
     window.clearTimeout(this.hideTimer);
     this.anchor = anchor;
     document.addEventListener("keydown", this.onKey);

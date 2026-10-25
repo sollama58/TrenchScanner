@@ -8,6 +8,9 @@
   --filter: #3fd7c9;
   --risk: #ff4d6a;
   --good: #3ddc84;
+  --ok: #7ef0ae;
+  --mid: #f8d77a;
+  --hi: #ff8b9d;
   color-scheme: dark;
 }
 * {
@@ -47,7 +50,7 @@ body {
   gap: 6px;
 }
 .account.on {
-  color: #7ef0ae;
+  color: var(--ok);
 }
 .account.on::before {
   content: "";
@@ -57,7 +60,7 @@ body {
   background: var(--good);
 }
 .account.warn {
-  color: #f8d77a;
+  color: var(--mid);
 }
 section {
   padding: 12px 16px;
@@ -150,6 +153,28 @@ select {
   font: inherit;
   width: 100%;
 }
+.colors {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+}
+.colorline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.colorline input[type="color"] {
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #2a2d38;
+  border-radius: 5px;
+  background: none;
+  flex: none;
+  cursor: pointer;
+}
 .tiplines {
   display: flex;
   flex-direction: column;
@@ -225,7 +250,7 @@ a {
   color: var(--filter);
 }
 .error {
-  color: #ff8b9d;
+  color: var(--hi);
   font-size: 12px;
 }
 .status {
@@ -236,7 +261,7 @@ a {
   padding: 12px 16px;
 }
 .status.warn {
-  color: #f8d77a;
+  color: var(--mid);
 }
 .head {
   position: sticky;
@@ -410,21 +435,21 @@ a {
 }
 .tb {
   background: rgba(61, 220, 132, 0.16);
-  color: #7ef0ae;
+  color: var(--ok);
 }
 .tn {
   background: rgba(255, 77, 106, 0.14);
-  color: #ff8b9d;
+  color: var(--hi);
 }
 .chip {
   background: #1b1d25;
   color: var(--soft);
 }
 .chip.mid {
-  color: #f8d77a;
+  color: var(--mid);
 }
 .chip.hi {
-  color: #ff8b9d;
+  color: var(--hi);
   background: rgba(255, 77, 106, 0.12);
 }
 .line {
@@ -440,10 +465,10 @@ a {
   font-variant-numeric: tabular-nums;
 }
 .line .r.up {
-  color: #7ef0ae;
+  color: var(--ok);
 }
 .line .r.down {
-  color: #ff8b9d;
+  color: var(--hi);
 }
 .foot {
   display: flex;
@@ -468,7 +493,7 @@ a {
   border-color: var(--filter);
 }
 .ca.done {
-  color: #7ef0ae;
+  color: var(--ok);
   border-style: solid;
   border-color: #2c6b48;
 }
@@ -610,7 +635,7 @@ a {
   gap: 3px;
 }
 .line .r.warn {
-  color: #f8d77a;
+  color: var(--mid);
 }
 .trade {
   border: 1px solid #23252e;
@@ -654,13 +679,13 @@ a {
   border: 1px solid #2a2d38;
 }
 .preset.buy {
-  color: #7ef0ae;
+  color: var(--ok);
 }
 .preset.buy:hover {
   border-color: var(--good);
 }
 .preset.sell {
-  color: #ff8b9d;
+  color: var(--hi);
 }
 .preset.sell:hover {
   border-color: var(--risk);

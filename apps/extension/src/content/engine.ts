@@ -2,6 +2,7 @@ import type { SiteAdapter } from "./adapters/adapter";
 import { Decoration, Tooltip, tooltipBody } from "./ui";
 import { pillSegments } from "../shared/pill";
 import {
+  colorsOf,
   DEFAULT_TOOLTIP,
   needsMap,
   pillParts,
@@ -124,6 +125,7 @@ export class OverlayEngine {
       this.tooltip.show(
         badge,
         tooltipBody(live, verdictFor(live, this.settings), lines, this.totals.get(mint)?.totals),
+        colorsOf(this.tipPrefs),
       );
     };
     draw();
@@ -242,6 +244,7 @@ export class OverlayEngine {
       main: pillSegments(main, token, verdict, this.settings, totals),
       more: more && pillSegments(more, token, verdict, this.settings, totals),
       riskDot: this.tipPrefs.riskDot,
+      colors: colorsOf(this.tipPrefs),
     });
   }
 }

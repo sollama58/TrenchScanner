@@ -45,7 +45,83 @@ export interface ListPrefs<T extends string> {
 export type PillPart =
   "signal" | "odds" | "change" | "mcap" | "age" | "holders" | `flag:${FlagId}` | `map:${MapLine}`;
 
+/**
+ * Every colour the overlay draws with (user ask 2026-10-25): the rings' two tones per kind, the
+ * pills, the flag levels, the tooltip, and the side panel's matching accents.
+ */
+export const COLOR_KEYS = [
+  "model",
+  "model2",
+  "filter",
+  "filter2",
+  "risk",
+  "risk2",
+  "pillBg",
+  "pillText",
+  "ok",
+  "mid",
+  "hi",
+  "tipBg",
+  "tipText",
+  "link",
+] as const;
+export type ColorKey = (typeof COLOR_KEYS)[number];
+
+export const DEFAULT_COLORS: Record<ColorKey, string> = {
+  model: "#ff7a35",
+  model2: "#ffc35a",
+  filter: "#3fd7c9",
+  filter2: "#8af1e7",
+  risk: "#ff4d6a",
+  risk2: "#ff9db0",
+  pillBg: "#0d0e12",
+  pillText: "#eef0f6",
+  ok: "#7ef0ae",
+  mid: "#f8d77a",
+  hi: "#ff8b9d",
+  tipBg: "#111218",
+  tipText: "#eef0f6",
+  link: "#4fd1e8",
+};
+
+export const COLOR_LABELS: Record<ColorKey, string> = {
+  model: "Model alert",
+  model2: "Model alert, second tone",
+  filter: "Filter match",
+  filter2: "Filter match, second tone",
+  risk: "Past a flag's limit",
+  risk2: "Past a flag's limit, second tone",
+  pillBg: "Pill background",
+  pillText: "Pill text",
+  ok: "Good",
+  mid: "Near a limit",
+  hi: "Past a limit",
+  tipBg: "Tooltip background",
+  tipText: "Tooltip text",
+  link: "Links",
+};
+
+/** Only a plain #rrggbb is taken, so nothing stored can reach a stylesheet as anything else. */
+const HEX = /^#[0-9a-f]{6}$/i;
+
+/** Every colour, the reader's where they picked one. */
+export function colorsOf(prefs: Pick<TooltipPrefs, "colors">): Record<ColorKey, string> {
+  const out = { ...DEFAULT_COLORS };
+  for (const key of COLOR_KEYS) {
+    const picked = prefs.colors[key];
+    if (picked && HEX.test(picked)) out[key] = picked;
+  }
+  return out;
+}
+
+/** The colours as CSS custom properties (--c-model and so on), for a style rule's body. */
+export function colorVars(colors: Record<ColorKey, string>): string {
+  return COLOR_KEYS.map((key) => `--c-${key}: ${colors[key]};`).join(" ");
+}
+
 export interface TooltipPrefs extends ListPrefs<TipLine> {
+  /** Colours the reader picked; the rest take DEFAULT_COLORS. */
+  colors: Partial<Record<ColorKey, string>>;
   pill: ListPrefs<PillPart>;
   /** The red dot on the pill when a flag is past its limit. */
   riskDot: boolean;
@@ -130,6 +206,7 @@ export const DEFAULT_TOOLTIP: TooltipPrefs = {
   pill: { order: PILL_PARTS, on: {} },
   riskDot: true,
   second: { order: PILL_PARTS, on: {}, enabled: false },
+  colors: {},
 };
 
 export function partOn(part: PillPart, prefs: ListPrefs<PillPart>, second: boolean): boolean {
@@ -203,6 +280,16 @@ function cleanList<T extends string>(raw: unknown, all: readonly T[]): ListPrefs
   return { order, on };
 }
 
+function cleanColors(raw: unknown): TooltipPrefs["colors"] {
+  const out: TooltipPrefs["colors"] = {};
+  if (typeof raw !== "object" || raw === null) return out;
+  for (const key of COLOR_KEYS) {
+    const value = (raw as Record<string, unknown>)[key];
+    if (typeof value === "string" && HEX.test(value)) out[key] = value.toLowerCase();
+  }
+  return out;
+}
+
 /** Stored prefs made whole, whatever was stored (or nothing). */
 export function cleanTooltip(raw: unknown): TooltipPrefs {
   const value = (typeof raw === "object" && raw !== null ? raw : {}) as Partial<TooltipPrefs>;
@@ -214,5 +301,6 @@ export function cleanTooltip(raw: unknown): TooltipPrefs {
     pill: cleanList(value.pill, PILL_PARTS),
     riskDot: typeof value.riskDot === "boolean" ? value.riskDot : true,
     second: { ...cleanList(second, PILL_PARTS), enabled: second.enabled === true },
+    colors: cleanColors(value.colors),
   };
 }

@@ -10,6 +10,10 @@ import {
 } from "../shared/types";
 import {
   cleanTooltip,
+  COLOR_KEYS,
+  COLOR_LABELS,
+  colorsOf,
+  DEFAULT_COLORS,
   DEFAULT_TOOLTIP,
   lineOn,
   partOn,
@@ -622,7 +626,57 @@ function ringDisplaySections(settings: OverlaySettings): HTMLElement[] {
     tip.list,
     reset("tooltip", () => (tipPrefs = { ...tipPrefs, order: DEFAULT_TOOLTIP.order, on: {} }), tip.fill),
   );
-  return [pillBox, secondBox, tipBox];
+  return [pillBox, secondBox, tipBox, colorSection()];
+}
+
+/** The panel's own accents follow the reader's colours: its cards wear the same rings and flags. */
+function applyColors(): void {
+  const colors = colorsOf(tipPrefs);
+  const root = document.documentElement.style;
+  root.setProperty("--model", colors.model);
+  root.setProperty("--filter", colors.filter);
+  root.setProperty("--risk", colors.risk);
+  root.setProperty("--ok", colors.ok);
+  root.setProperty("--mid", colors.mid);
+  root.setProperty("--hi", colors.hi);
+}
+
+/** Rings: every colour the overlay draws with, each a colour picker. */
+function colorSection(): HTMLElement {
+  const save = () => {
+    applyColors();
+    void send({ type: "saveTooltip", prefs: tipPrefs });
+  };
+  const inputs = COLOR_KEYS.map((key) => {
+    const input = el("input", { type: "color", value: colorsOf(tipPrefs)[key] });
+    input.setAttribute("aria-label", COLOR_LABELS[key]);
+    // The panel follows the picker as it moves; the pages get the colour once it is picked.
+    input.addEventListener("input", () => {
+      tipPrefs = { ...tipPrefs, colors: { ...tipPrefs.colors, [key]: input.value } };
+      applyColors();
+    });
+    input.addEventListener("change", save);
+    return {
+      key,
+      input,
+      row: el("label", { className: "colorline" }, input, el("span", { textContent: COLOR_LABELS[key] })),
+    };
+  });
+  const reset = el("button", { className: "link", textContent: "Reset colours" });
+  reset.addEventListener("click", () => {
+    tipPrefs = { ...tipPrefs, colors: {} };
+    for (const { key, input } of inputs) input.value = DEFAULT_COLORS[key];
+    save();
+  });
+  return section(
+    "Colours",
+    el("p", {
+      className: "note",
+      textContent: "For the rings, pills and tooltip on the boards, and the matching accents here.",
+    }),
+    el("div", { className: "colors" }, ...inputs.map((i) => i.row)),
+    reset,
+  );
 }
 
 function draw(): void {
@@ -680,6 +734,7 @@ async function refresh(): Promise<void> {
     });
   }
   tipPrefs = cleanTooltip(await send<TooltipPrefs>({ type: "tooltip" }));
+  applyColors();
   draw();
   if (status?.connected) await poll();
 }
