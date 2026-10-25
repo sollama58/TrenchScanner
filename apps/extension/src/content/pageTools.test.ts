@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { HolderMarks, holderNamed, holderTags } from "./holderMarks";
+import { holderTags } from "../shared/holders";
+import { HolderMarks, holderNamed } from "./holderMarks";
 import { Toasts } from "./toasts";
 import { findTabStrip, isTokenPage, pageMint } from "./tokenPage";
 import { DEFAULT_SETTINGS } from "../shared/settings";

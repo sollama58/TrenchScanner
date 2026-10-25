@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { alertNotice, panelAlerts } from "./alerts";
 import { base58Length, isMintAddress } from "./mint";
 import { DEFAULT_SETTINGS } from "./settings";
 import { token } from "./testToken";
@@ -107,5 +108,26 @@ describe("the alerting call", () => {
     expect(v.badge).toBe("First model 40%");
     expect(alertCall(t)).toBe(first);
     expect(firstAlert(t)?.mcapUsd).toBe(6_000);
+  });
+});
+
+describe("the panel's alerts (user ask 2026-10-25)", () => {
+  it("leaves out coins failing the safety screen only with the option on, and says why in a notice", () => {
+    const match = [{ filterId: "f", filterName: "Fresh", at: new Date().toISOString(), mcapUsd: 4_000 }];
+    const failing = token({
+      mint: "F".repeat(44),
+      filterMatches: match,
+      safety: { passed: false, reasons: ["mint authority active"], at: "" },
+    });
+    const passing = token({ filterMatches: match, safety: { passed: true, reasons: [], at: "" } });
+    const unalerted = token({ mint: "U".repeat(44) });
+    const mints = (hideUnsafe: boolean) =>
+      panelAlerts([failing, passing, unalerted], DEFAULT_SETTINGS, { hideUnsafe }).map((a) => a.token.mint);
+    expect(mints(false)).toEqual([failing.mint, passing.mint]);
+    expect(mints(true)).toEqual([passing.mint]);
+    expect(alertNotice(failing)).toEqual({
+      title: "RING · Fresh",
+      message: "Market cap $5.1K · fails the safety screen",
+    });
   });
 });

@@ -1,13 +1,16 @@
+import { alertNotice, panelAlerts } from "./shared/alerts";
 import { api, ApiError, type SavedLook } from "./shared/api";
 import { isMintAddress } from "./shared/mint";
 import { DEFAULT_SETTINGS } from "./shared/settings";
-import { cleanTooltip, type TooltipPrefs } from "./shared/tooltip";
+import { cleanTooltip, colorsOf, type TooltipPrefs } from "./shared/tooltip";
+import { trenchUrl } from "./panel/card";
 import type {
   ContentRequest,
   LookupAnswer,
   BubbleAnswer,
   BuddyAnswer,
   BuddyRead,
+  CoinAnswer,
   FeedAnswer,
   OverlaySettings,
   OverlayToken,
@@ -25,7 +28,8 @@ import type {
  *
  * No host permissions at all (the API allows its calls by CORS), no tabs, scripting or cookies.
  * Since 0.4.0 a content script rings alerts on Axiom, Terminal and GMGN (README "Rings"); it holds
- * no key and is answered from the panel's feed (handleContent). The panel lists the reader's alerts
+ * no key and is answered from the panel's feed (handleContent). The store build (`__STORE__`) has
+ * no content script and no in-page frame, and answers neither. The panel lists the reader's alerts
  * and opens a token on a site as an ordinary link.
  *
  * TrenchScanner's own site (and only it: manifest externally_connectable, checked again here) may
@@ -153,10 +157,117 @@ async function feed(): Promise<FeedAnswer> {
     feedReadAt = Date.now();
     problem = null;
     void chrome.storage.local.remove("refused");
+    void noteAlerts(lastTokens);
   } catch (e) {
     noteFailure(e);
   }
   return { tokens: lastTokens, problem };
+}
+
+/**
+ * New alerts while the panel is closed (user ask 2026-10-25): a Chrome notification for each, if
+ * the reader turned them on, and the count of alerts the panel hasn't shown on the toolbar icon.
+ * The feed is read once a minute for them (the "alerts" alarm), and only while one of them is on;
+ * an open panel's reads count too. The alerts are the ones the panel lists (shared/alerts.ts).
+ */
+const NOTIFIED_MAX = 300;
+/** At most this many notifications from one read; past it, one says how many came. */
+const NOTIFY_AT_ONCE = 3;
+let alertsWork: Promise<void> = Promise.resolve();
+
+function noteAlerts(tokens: readonly OverlayToken[], read: readonly string[] = []): Promise<void> {
+  alertsWork = alertsWork.then(() => checkAlerts(tokens, read)).catch(() => undefined);
+  return alertsWork;
+}
+
+async function checkAlerts(tokens: readonly OverlayToken[], newlyRead: readonly string[]): Promise<void> {
+  const prefs = await tooltipPrefs();
+  const { key, aiReviews } = await stored();
+  if (!key) return void chrome.action.setBadgeText({ text: "" });
+  // Nothing read yet since the worker started: an empty list here is not the reader's feed.
+  if (feedReadAt === 0) return;
+  const saved = await currentSettings();
+  // As the panel does: without the AI's verdicts, "only when the AI says buy" would hide every call.
+  const settings = aiReviews ? saved : { ...saved, rings: { ...saved.rings, aiBuyOnly: false } };
+  const shown = panelAlerts(tokens, settings, prefs.panel).map(({ token }) => token);
+  const { alertsNotified, alertsRead } = (await chrome.storage.local.get([
+    "alertsNotified",
+    "alertsRead",
+  ])) as {
+    alertsNotified?: string[];
+    alertsRead?: string[];
+  };
+  // The first read only marks what is already there.
+  const notified = new Set(alertsNotified ?? shown.map((t) => t.mint));
+  const read = new Set([...(alertsRead ?? shown.map((t) => t.mint)), ...newlyRead]);
+  const fresh = shown.filter((t) => !notified.has(t.mint));
+  if (prefs.panel.notify && fresh.length > 0) {
+    for (const token of fresh.slice(0, NOTIFY_AT_ONCE)) {
+      const { title, message } = alertNotice(token);
+      chrome.notifications.create(`alert:${token.mint}`, {
+        type: "basic",
+        iconUrl: "icons/icon-128.png",
+        title,
+        message,
+      });
+    }
+    if (fresh.length > NOTIFY_AT_ONCE)
+      chrome.notifications.create("alerts:more", {
+        type: "basic",
+        iconUrl: "icons/icon-128.png",
+        title: `${fresh.length - NOTIFY_AT_ONCE} more new alerts`,
+        message: "Open the panel to see them all.",
+      });
+  }
+  for (const t of fresh) notified.add(t.mint);
+  const unread = shown.filter((t) => !read.has(t.mint)).length;
+  await chrome.storage.local.set({
+    alertsNotified: [...notified].slice(-NOTIFIED_MAX),
+    alertsRead: [...read].slice(-NOTIFIED_MAX),
+  });
+  await chrome.action.setBadgeBackgroundColor({ color: colorsOf(prefs).model });
+  await chrome.action.setBadgeText({
+    text: prefs.panel.badge && unread > 0 ? String(Math.min(unread, 99)) : "",
+  });
+}
+
+chrome.alarms.create("alerts", { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== "alerts") return;
+  void (async () => {
+    const { panel } = await tooltipPrefs();
+    if (!panel.notify && !panel.badge) return;
+    // An open panel read the feed moments ago.
+    if (Date.now() - feedReadAt < 30_000) return;
+    await feed();
+  })();
+});
+
+// A notification opens its coin on TrenchScanner; the "more" one opens nothing (the panel can't
+// be opened from here without a click on the page).
+chrome.notifications.onClicked.addListener((id) => {
+  chrome.notifications.clear(id);
+  const mint = id.startsWith("alert:") ? id.slice("alert:".length) : null;
+  if (mint && isMintAddress(mint)) void chrome.tabs.create({ url: trenchUrl(mint) });
+});
+
+/** Any coin by its address, for the panel's lookup: its card and its bubble map's top holders. */
+async function coin(mint: unknown): Promise<CoinAnswer> {
+  const { key } = await stored();
+  if (!key) return { token: null, map: null, problem: "disconnected" };
+  if (typeof mint !== "string" || !isMintAddress(mint)) return { token: null, map: null, problem: null };
+  const [card, map] = await Promise.all([
+    api.token(key, mint).then(
+      ({ token }) => ({ token, failed: false }),
+      (e: unknown) => {
+        if (e instanceof ApiError && e.status === 401) noteFailure(e);
+        return { token: null, failed: true };
+      },
+    ),
+    bubble(mint),
+  ]);
+  const offline = card.failed && map.problem !== null && map.problem !== "untracked";
+  return { token: card.token, map: map.map, problem: offline ? "offline" : null };
 }
 
 /**
@@ -292,11 +403,13 @@ async function connect(raw: unknown): Promise<{ ok: boolean; error?: string }> {
       aiReviews: me.aiReviews === true,
       pro: me.pro === true,
     });
-    await chrome.storage.local.remove("refused");
+    // Another account's alerts were notified and read, not this one's.
+    await chrome.storage.local.remove(["refused", "alertsNotified", "alertsRead"]);
     await syncLook(key, me.look);
     settingsReadAt = Date.now();
     problem = null;
     lastTokens = [];
+    feedReadAt = 0;
     lastBuddy = null;
     void chrome.storage.session.remove("buddy").catch(() => undefined);
     // An open panel redraws connected.
@@ -321,9 +434,27 @@ async function handle(request: PanelRequest): Promise<unknown> {
       return site(request);
     case "buddy":
       return buddy(request.cached === true);
+    case "coin":
+      return coin(request.mint);
+    case "alertsSeen":
+      await noteAlerts(
+        lastTokens,
+        Array.isArray(request.mints) ? request.mints.filter((m) => typeof m === "string") : [],
+      );
+      return { ok: true };
     case "disconnect":
-      await chrome.storage.local.remove(["key", "wallet", "aiReviews", "pro", "refused"]);
+      await chrome.storage.local.remove([
+        "key",
+        "wallet",
+        "aiReviews",
+        "pro",
+        "refused",
+        "alertsNotified",
+        "alertsRead",
+      ]);
+      void chrome.action.setBadgeText({ text: "" });
       lastTokens = [];
+      feedReadAt = 0;
       lastBuddy = null;
       void chrome.storage.session.remove("buddy").catch(() => undefined);
       problem = "disconnected";
@@ -342,6 +473,8 @@ async function handle(request: PanelRequest): Promise<unknown> {
       const savedAt = Date.now();
       await chrome.storage.local.set({ tooltip: prefs, tooltipSavedAt: savedAt });
       tellRingTabs({ type: "tooltipChanged", prefs });
+      // The icon's count follows the options at once (its switch, the unsafe coins left out).
+      void noteAlerts(lastTokens);
       const { key, refused } = await stored();
       if (key && !refused) void api.saveLook(key, { savedAt, prefs }).catch(() => undefined);
       return { ok: true };
@@ -428,7 +561,7 @@ function fromPanel(sender: chrome.runtime.MessageSender): boolean {
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return false;
   if (typeof message !== "object" || message === null) return false;
-  if (fromRingPage(sender)) {
+  if (!__STORE__ && fromRingPage(sender)) {
     handleContent(message as ContentRequest, sender.tab?.id).then(sendResponse, () => sendResponse(null));
     return true;
   }
@@ -436,6 +569,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   // The bubble map tab's frame on a coin's page (content/mapTab.ts): its map's reads only, and
   // only while the reader keeps the tab on.
   if (inPageFrame(sender)) {
+    if (__STORE__) return false;
     const request = message as PanelRequest;
     if (request.type !== "site") return false;
     tooltipPrefs()

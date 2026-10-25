@@ -1,5 +1,6 @@
 import { mintsIn } from "../shared/mint";
 import { colorsOf, type TooltipPrefs } from "../shared/tooltip";
+import { holderTags, type HolderTag } from "../shared/holders";
 import type { OverlayBubbleHolder, OverlayBubbleMap, Site } from "../shared/types";
 import { isTokenPage, pageMint } from "./tokenPage";
 
@@ -23,18 +24,6 @@ const SCAN_MS = 600;
 const SHORT = /^([1-9A-HJ-NP-Za-km-z]{3,6})\s?(?:\.{2,3}|…)\s?([1-9A-HJ-NP-Za-km-z]{3,6})$/;
 const FULL = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
-/** Cluster colours, by cluster index: one per funder on the map. */
-const CLUSTER_COLORS = [
-  "#ff7a35",
-  "#3fd7c9",
-  "#b48cff",
-  "#ffd166",
-  "#ff5fa2",
-  "#5cc8ff",
-  "#8be36b",
-  "#ff9b6a",
-];
-
 const CHIP_CSS = `
 :host { all: initial; display: inline-flex; vertical-align: middle; margin-left: 4px; }
 button { all: unset; cursor: pointer; display: inline-flex; gap: 3px; align-items: center; }
@@ -42,42 +31,6 @@ b { font: 600 9.5px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; pad
   color: var(--t); background: color-mix(in srgb, var(--t) 16%, transparent); border: 1px solid color-mix(in srgb, var(--t) 45%, transparent); }
 button:focus-visible { outline: 2px solid var(--c-link); outline-offset: 1px; border-radius: 4px; }
 `;
-
-interface Tag {
-  text: string;
-  color: string;
-  why: string;
-}
-
-/** What the map says of one holder, as chips; none for a plain one. */
-export function holderTags(
-  holder: OverlayBubbleHolder,
-  map: OverlayBubbleMap,
-  colors: { risk: string; mid: string; link: string },
-): Tag[] {
-  const tags: Tag[] = [];
-  if (holder.cluster !== null) {
-    const c = map.clusters[holder.cluster];
-    tags.push({
-      text: `C${holder.cluster + 1}`,
-      color: CLUSTER_COLORS[holder.cluster % CLUSTER_COLORS.length]!,
-      why: c
-        ? `Cluster ${holder.cluster + 1}: ${c.count} wallets one funder paid for, ${c.pct.toFixed(1)}% of supply${c.creatorLinked ? ", linked to the creator" : ""}`
-        : `Cluster ${holder.cluster + 1}`,
-    });
-  }
-  if (holder.sameTime !== null)
-    tags.push({ text: "SAME", color: colors.mid, why: "Funded in the same minute as other top holders" });
-  if (holder.trait === "blockZero")
-    tags.push({ text: "B0", color: colors.risk, why: "Bought in the launch block" });
-  if (holder.trait === "sniper") tags.push({ text: "SNPR", color: colors.risk, why: "Sniper" });
-  if (holder.trait === "fresh") tags.push({ text: "FRESH", color: colors.mid, why: "Fresh wallet" });
-  if (holder.trait === "empty")
-    tags.push({ text: "EMPTY", color: colors.mid, why: "Wallet holding nothing else" });
-  if (holder.cex) tags.push({ text: "CEX", color: colors.link, why: "Funded from an exchange" });
-  if (holder.creatorTied) tags.push({ text: "DEV", color: colors.risk, why: "Tied to the dev" });
-  return tags;
-}
 
 /** The holder a piece of text names: its full address, or a short form only one holder fits. */
 export function holderNamed(text: string, holders: ReadonlyMap<string, OverlayBubbleHolder>): string | null {
@@ -229,7 +182,7 @@ export class HolderMarks {
     return found;
   }
 
-  private chip(el: Element, wallet: string, holder: OverlayBubbleHolder, tags: Tag[]): void {
+  private chip(el: Element, wallet: string, holder: OverlayBubbleHolder, tags: HolderTag[]): void {
     const key = `${wallet}|${tags.map((t) => `${t.text}${t.color}`).join(",")}|${holder.pct}`;
     let mark = this.marks.get(el);
     if (mark && mark.key === key && mark.host.previousSibling === el) return;

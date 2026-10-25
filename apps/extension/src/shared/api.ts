@@ -66,5 +66,8 @@ export const api = {
   /** The safety verdicts of up to 100 coins on a board. */
   safety: (key: string, mints: string[]) =>
     call<{ verdicts: Record<string, OverlaySafety> }>(key, "POST", "/safety", { mints }),
+  /** One coin's card for the panel's lookup: null when the scanner never stored it. */
+  token: (key: string, mint: string) =>
+    call<{ token: OverlayToken | null }>(key, "GET", `/token/${encodeURIComponent(mint)}`),
   buddy: (key: string) => call<BuddyAnswer>(key, "GET", "/buddy"),
 };

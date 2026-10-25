@@ -6,8 +6,12 @@
 //   node build.mjs           dist/ to load unpacked. The manifest gets the dev public key
 //                            (dev-key.pub), so the unpacked extension always has the same ID and
 //                            TrenchScanner's Settings can hand it a key (apps/web/src/extensionBridge.ts).
-//   node build.mjs --store   dist/ without the key (the store refuses one and assigns its own ID),
-//                            zipped to release/trench-overlay-<version>.zip for upload.
+//   node build.mjs --store   the store build (user ask 2026-10-25): nothing that runs in a website's
+//                            page. No content script (rings, pills, on-page alerts, safety screen,
+//                            coin-page tools), no map frame for those pages, and none of their
+//                            settings (`__STORE__` in the code). Without the key too (the store
+//                            refuses one and assigns its own ID), zipped to
+//                            release/trench-overlay-<version>.zip for upload.
 //
 // The manifest version must match package.json's, and every change to the extension bumps both
 // (scripts/check-extension-version.sh, run in CI).
@@ -18,6 +22,9 @@ import { join, relative } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
 
 const store = process.argv.includes("--store");
+/** The store build's summary (STORE.md), without the rings the dev manifest names. */
+const STORE_DESCRIPTION =
+  "Your TrenchScanner alerts, with their flags, in a panel beside Axiom, Terminal and GMGN.";
 const root = new URL("./", import.meta.url).pathname;
 const out = join(root, "dist/");
 await rm(out, { recursive: true, force: true });
@@ -25,6 +32,7 @@ await mkdir(out, { recursive: true });
 
 const common = {
   bundle: true,
+  define: { __STORE__: String(store) },
   minify: true,
   sourcemap: "linked",
   target: "chrome116",
@@ -38,6 +46,7 @@ const site = {
   conditions: ["trenchscanner-web"],
   alias: { "@site/tokenMapEmbed": join(web, "embed/tokenMapEmbed.tsx") },
   define: {
+    __STORE__: String(store),
     "import.meta.env.VITE_API_URL": JSON.stringify("https://api.trenchscanner.app"),
     "import.meta.env.VITE_EXTENSION_IDS": JSON.stringify(""),
     "process.env.NODE_ENV": JSON.stringify("production"),
@@ -52,10 +61,25 @@ await Promise.all([
     outfile: `${out}panel.js`,
     format: "iife",
   }),
-  // The bubble map tab's frame on a coin's page (content/mapTab.ts).
-  build({ ...common, ...site, entryPoints: ["src/map/page.ts"], outfile: `${out}map.js`, format: "iife" }),
-  // The rings build: the content script that rings alerted tokens on Axiom, Terminal and GMGN.
-  build({ ...common, entryPoints: ["src/content/main.ts"], outfile: `${out}content.js`, format: "iife" }),
+  // The bubble map tab's frame on a coin's page (content/mapTab.ts), and the content script that
+  // rings alerted tokens on Axiom, Terminal and GMGN: neither in the store build.
+  ...(store
+    ? []
+    : [
+        build({
+          ...common,
+          ...site,
+          entryPoints: ["src/map/page.ts"],
+          outfile: `${out}map.js`,
+          format: "iife",
+        }),
+        build({
+          ...common,
+          entryPoints: ["src/content/main.ts"],
+          outfile: `${out}content.js`,
+          format: "iife",
+        }),
+      ]),
   // The site's stylesheet and fonts, as the site bundles them.
   build({
     ...common,
@@ -70,6 +94,8 @@ await Promise.all([
 // html, body) name the shadow host instead, and its fonts are left to map-fonts.css on the page.
 await writeFile(join(out, "map-shadow.css"), shadowCss(await readFile(join(out, "map.css"), "utf8")));
 await cp(join(root, "static"), out, { recursive: true });
+// map.html and its stylesheet serve only the in-page frame; map-shadow.css serves the panel.
+if (store) await Promise.all(["map.html", "map.css"].map((f) => rm(join(out, f))));
 
 const manifest = JSON.parse(await readFile(join(out, "manifest.json"), "utf8"));
 const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
@@ -77,7 +103,12 @@ if (manifest.version !== pkg.version) {
   throw new Error(`manifest version ${manifest.version} differs from package.json ${pkg.version}`);
 }
 if (manifest.description.length > 132) throw new Error("the store allows a 132-character description");
-if (!store) manifest.key = (await readFile(join(root, "dev-key.pub"), "utf8")).trim();
+if (store) {
+  // Nothing runs on a website: no content script and no page a website can frame.
+  delete manifest.content_scripts;
+  delete manifest.web_accessible_resources;
+  manifest.description = STORE_DESCRIPTION;
+} else manifest.key = (await readFile(join(root, "dev-key.pub"), "utf8")).trim();
 await writeFile(join(out, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 
 if (store) {

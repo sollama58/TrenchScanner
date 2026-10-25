@@ -326,6 +326,37 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     expect((await ext(key, "POST", "/ext/v1/lookup", { mints: [trackedMint] })).statusCode).toBe(404);
   });
 
+  it("answers one coin's card for the panel's lookup, stored or not", async () => {
+    const user = await makeUser("coin", true);
+    const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    const [stored, unknown] = [mint(), mint()];
+    mints.push(stored, unknown);
+    const token = await prisma.token.create({ data: { mintAddress: stored, symbol: "LOOK" } });
+    await prisma.tokenSnapshot.create({
+      data: {
+        tokenId: token.id,
+        priceUsd: 0.00001,
+        marketCapUsd: 9_000,
+        rugScreenPassed: false,
+        rugScreenReasons: ["mint authority active"],
+        takenAt: new Date(),
+      },
+    });
+    const res = await ext(key, "GET", `/ext/v1/token/${stored}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().token).toMatchObject({
+      mint: stored,
+      symbol: "LOOK",
+      safety: { passed: false, reasons: ["mint authority active"] },
+      modelCalls: [],
+      filterMatches: [],
+      ai: null,
+    });
+    expect((await ext(key, "GET", `/ext/v1/token/${unknown}`)).json()).toEqual({ token: null });
+    expect((await ext(key, "GET", "/ext/v1/token/not-a-mint")).statusCode).toBe(400);
+    expect((await ext(null, "GET", `/ext/v1/token/${stored}`)).statusCode).toBe(401);
+  });
+
   it("answers the newest scan's safety verdict of the coins on a board, and nothing else", async () => {
     const user = await makeUser("safety", true);
     const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;

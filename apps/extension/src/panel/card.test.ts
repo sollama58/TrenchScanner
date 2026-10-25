@@ -90,3 +90,49 @@ describe("panel cards", () => {
     expect(card.textContent).toContain(evil);
   });
 });
+
+describe("the lookup and the card's safety line (user ask 2026-10-25)", () => {
+  it("reads a coin from an address or a link, and lists its tagged top holders", async () => {
+    const { mintFrom, holderList } = await import("./coin");
+    const mint = "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN";
+    expect(mintFrom(` ${mint} `)).toBe(mint);
+    expect(mintFrom(`https://axiom.trade/meme/${mint}?chain=sol`)).toBe(mint);
+    expect(mintFrom("not a coin")).toBeNull();
+    const map = {
+      mint,
+      holders: [
+        {
+          wallet: mint,
+          pct: 1.5,
+          cluster: null,
+          sameTime: null,
+          trait: null,
+          cex: false,
+          creatorTied: false,
+        },
+        {
+          wallet: mint,
+          pct: 4.2,
+          cluster: 0,
+          sameTime: null,
+          trait: "sniper",
+          cex: false,
+          creatorTied: true,
+        },
+      ],
+      clusters: [{ count: 3, pct: 9, creatorLinked: true }],
+    } as unknown as import("../shared/types").OverlayBubbleMap;
+    const rows = [...holderList(map, { risk: "#f00", mid: "#ff0", link: "#00f" }).children];
+    expect(rows.map((r) => r.textContent)).toEqual(["6p6x…GiPNC1SNPRDEV4.20%", "6p6x…GiPN1.50%"]);
+  });
+
+  it("says the safety verdict on the card, and why it fails", () => {
+    const failing = tokenCard(
+      token({ safety: { passed: false, reasons: ["top 10 holders own 52%"], at: "" } }),
+      verdictFor(token(), DEFAULT_SETTINGS),
+      DEFAULT_SETTINGS,
+    );
+    expect(failing.textContent).toContain("Safety screenFailed");
+    expect(failing.querySelector(".safety-why")?.textContent).toBe("Top 10 holders own 52%.");
+  });
+});

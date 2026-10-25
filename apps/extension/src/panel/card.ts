@@ -1,5 +1,5 @@
 import { isMintAddress } from "../shared/mint";
-import type { OverlaySettings, OverlayToken, Site } from "../shared/types";
+import type { OverlaySafety, OverlaySettings, OverlayToken, Site } from "../shared/types";
 import { firstAlert, type RowVerdict } from "../shared/verdict";
 
 /**
@@ -148,6 +148,16 @@ function copyButton(mint: string): HTMLButtonElement {
   return button;
 }
 
+/** The safety screen's verdict on the newest scan, and why it fails (user ask 2026-10-25). */
+export function safetyLine(safety: OverlaySafety): HTMLElement {
+  const row = line("Safety screen", safety.passed ? "Passed" : "Failed", safety.passed ? "up" : "down");
+  if (safety.passed || safety.reasons.length === 0) return row;
+  const box = el("div", "safety");
+  const why = safety.reasons.map((r) => r.charAt(0).toUpperCase() + r.slice(1)).join(". ");
+  box.append(row, el("p", "safety-why", `${why}.`));
+  return box;
+}
+
 /** When the token alerted this reader: its first call or match, as the card's "Alerted at" cap. */
 export function alertedAt(token: OverlayToken): string | null {
   return firstAlert(token)?.at ?? null;
@@ -197,6 +207,8 @@ export function tokenCard(
       trend,
     ),
   );
+
+  if (token.safety) card.append(safetyLine(token.safety));
 
   if (verdict.flags.length > 0) {
     const flags = el("div", "flags");

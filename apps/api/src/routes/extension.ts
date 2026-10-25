@@ -499,6 +499,25 @@ export async function registerExtensionRoutes(
   }
 
   /**
+   * One coin's card for the panel's lookup (user ask 2026-10-25): any coin the scanner stored,
+   * answered as the feed answers its tokens (the shared half, and the reader's own calls and
+   * matches of it). Database only, from the lookup's shared cache, so it starts no scan.
+   */
+  app.get(
+    "/token/:mint",
+    { config: { rateLimit: { ...BUBBLE_RATE_LIMIT, keyGenerator: bucket } } },
+    async (request, reply) => {
+      const { mint } = request.params as { mint: string };
+      if (!isMintAddress(mint)) return reply.code(400).send({ error: "not a valid mint" });
+      const { userId, aiReviews } = request.extensionClient!;
+      const { tokens } = await lookupOverlay(userId, [mint], await feedCallsOf(userId));
+      const token = tokens[0] ?? null;
+      reply.header("Cache-Control", "no-store");
+      return { token: token && !aiReviews ? { ...token, ai: null } : token };
+    },
+  );
+
+  /**
    * The safety screen's verdict on each coin a board shows (user ask 2026-10-25), for the option
    * that hides or marks the failing ones. Only the content script's addresses while that option is
    * on, and only the newest scan's verdict, the same for every reader: database only, from the

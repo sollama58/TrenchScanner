@@ -164,7 +164,19 @@ export type PanelRequest =
   | { type: "disconnect" }
   | { type: "saveSettings"; settings: OverlaySettings }
   | { type: "tooltip" }
-  | { type: "saveTooltip"; prefs: TooltipPrefs };
+  | { type: "saveTooltip"; prefs: TooltipPrefs }
+  /** Any coin by its address, for the panel's lookup: its card and its bubble map's top holders. */
+  | { type: "coin"; mint: string }
+  /** The alerts the panel has shown, so the toolbar icon's count of unread ones clears. */
+  | { type: "alertsSeen"; mints: string[] };
+
+export interface CoinAnswer {
+  /** Null when the scanner never stored the coin. */
+  token: OverlayToken | null;
+  /** Null when the coin has no map, or the reader can't open it. */
+  map: OverlayBubbleMap | null;
+  problem: Problem;
+}
 
 /** A bubble map read: the map (null when the coin has no scan yet), or why it couldn't be read. */
 export interface BubbleAnswer {

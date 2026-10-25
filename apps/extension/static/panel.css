@@ -663,3 +663,66 @@ a {
 .note.pad {
   padding: 0 16px 14px;
 }
+.safety-why {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--hi);
+}
+.lookup {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px 0;
+}
+.lookup input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid #2a2d38;
+  border-radius: 8px;
+  background: #14151b;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+.lookup input:focus-visible {
+  outline: 2px solid var(--filter);
+  outline-offset: 1px;
+}
+.holders {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.holder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+}
+.holder .pct {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+.holder a {
+  color: inherit;
+  text-decoration: none;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.holder a:hover {
+  text-decoration: underline;
+}
+.htag {
+  font:
+    600 9.5px/1.5 ui-monospace,
+    "SF Mono",
+    Menlo,
+    Consolas,
+    monospace;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--t);
+  background: color-mix(in srgb, var(--t) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--t) 45%, transparent);
+}
