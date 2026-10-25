@@ -185,6 +185,62 @@ describe("curve tape", () => {
     expect(takeCurveTapeStats(NOW + 7_000)!.streamCreditsToday).toBe(10);
   });
 
+  it("follows a Stonks coin on its LaunchLab pool, for the chart's candles only", async () => {
+    const reads: string[][] = [];
+    let graduated = false;
+    const reader = {
+      getCurveStatesBatch: vi.fn(async (curves: string[]) => {
+        reads.push(curves);
+        return new Map(
+          curves.map(
+            (c) =>
+              [
+                c,
+                graduated ? { ...state(0), virtualToken: 0, virtualQuote: 0, complete: true } : state(2),
+              ] as const,
+          ),
+        );
+      }),
+      findLaunchLabPool: vi.fn(async () => "ll-pool"),
+    };
+    const stream = { watch: vi.fn(), unwatch: vi.fn(), coveredSince: vi.fn(() => null) };
+    const onLaunchLabQuote = vi.fn();
+    stop = startCurveTape(reader, stream, {
+      maxAgeMinutes: 15,
+      maxMints: 500,
+      streamCreditsPerDay: 100_000,
+      pollSeconds: 3_600,
+      pollMaxMints: 100,
+      onLaunchLabQuote,
+    });
+    const stonks = { ...young, launchpad: "stonks" };
+    followYoungCurves([stonks], NOW);
+    // Its pool isn't known yet: nothing is watched until the round finds it.
+    expect(stream.watch).not.toHaveBeenCalled();
+    await round(NOW);
+    expect(reader.findLaunchLabPool).toHaveBeenCalledTimes(1);
+    expect(stream.watch).toHaveBeenCalledWith(`curve:${MINT}`, ["ll-pool"], NOW, "account");
+    expect(reads).toEqual([["ll-pool"]]);
+    expect(onLaunchLabQuote).toHaveBeenCalledWith(MINT, "So11111111111111111111111111111111111111112");
+    // The chart's candles get its ticks; the model, the labels and the entry watch don't.
+    expect(curveTapeView.ticksAfter(MINT, -1)?.ticks.length).toBeGreaterThan(0);
+    expect(curvePriceOf(MINT, NOW)).toBeNull();
+    expect(curvePathOf(MINT, NOW).curveCoveredSec).toBeNull();
+    expect(curveLabelPrices(MINT, NOW - 1, NOW + 60_000).changes).toEqual([]);
+    // Kept by the next cycle without another lookup; let go for good once it graduates.
+    followYoungCurves([stonks], NOW + 1_000);
+    await round(NOW + 2_000);
+    expect(reader.findLaunchLabPool).toHaveBeenCalledTimes(1);
+    expect(onLaunchLabQuote).toHaveBeenCalledTimes(1);
+    graduated = true;
+    await round(NOW + 3_000);
+    expect(curveTapeView.mints()).not.toContain(MINT);
+    followYoungCurves([stonks], NOW + 4_000);
+    await round(NOW + 5_000);
+    expect(curveTapeView.mints()).not.toContain(MINT);
+    expect(vi.mocked(recordPricePath)).not.toHaveBeenCalled();
+  });
+
   it("polls the curves the stream doesn't cover, and drops a coin that left the watchlist", async () => {
     const s = setup(null);
     stop = s.stop;

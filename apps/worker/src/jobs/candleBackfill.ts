@@ -333,7 +333,7 @@ export async function tick(deps: BackfillDeps, now = Date.now()): Promise<void> 
     if (!job) return;
     const token = await prisma.token.findUnique({
       where: { mintAddress: job.mint },
-      select: { launchpad: true, launchedAt: true, pairAddress: true },
+      select: { launchpad: true, launchedAt: true, pairAddress: true, quoteMint: true },
     });
     const patch: BackfillPatch = token
       ? await stepBackfill(job, token, deps, now)

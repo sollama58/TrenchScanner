@@ -743,6 +743,45 @@ describe("LiveCurves.quotes (the feed cards' Now)", () => {
     none.curves.stop();
   });
 
+  it("quotes a Stonks coin off its LaunchLab pool, and a chart opened after a card gets its tail", async () => {
+    const onPool: CurveState = { ...state(6e10), quoteIsSol: true };
+    let scans = 0;
+    const curves = new LiveCurves({
+      makeStream: null,
+      reader: {
+        getCurveStatesBatch: async (list: string[]) =>
+          new Map(list.map((c) => [c, c === "ll-pool" ? onPool : null])),
+        findLaunchLabPool: async () => {
+          scans += 1;
+          return "ll-pool";
+        },
+      },
+      solPrice: { get: async () => 100 },
+    });
+    // A feed card's ask, no chart: the pool is looked for all the same (it used to be "none").
+    const q = await curves.quotes([MINT], 2_500);
+    expect(q.get(MINT)?.marketCapUsd).toBeCloseTo(curveMcapSol(onPool) * 100);
+    expect(curves.onCurve(MINT)).toBe(true);
+    const a = await curves.read(MINT, 0);
+    expect(a).toMatchObject({ source: "rpc", complete: false });
+    expect(a.ticks.at(-1)![1]).toBeCloseTo(curveMcapSol(onPool) * 100);
+    expect(scans).toBe(1);
+    curves.stop();
+  });
+
+  it("quotes a graduated coin off its pool while a chart follows it", async () => {
+    const t = setup({ states: [state(0, true)], pool: { vaults: VAULTS, amounts: [2e14, 8e10] } });
+    await t.curves.read(MINT, 0);
+    await t.curves.round();
+    await t.curves.round();
+    const q = await t.curves.quotes([MINT], 2_500);
+    expect(q.get(MINT)?.marketCapUsd).toBeCloseTo(
+      curveMcapSol({ virtualQuote: 8e10, virtualToken: 2e14 }) * 100,
+    );
+    expect(t.curves.onCurve(MINT)).toBe(true);
+    t.curves.stop();
+  });
+
   it("stamps a streamed curve with its last delivery, not the ask", async () => {
     const t = setup({ stream: true });
     t.cover(t.at() - 1);

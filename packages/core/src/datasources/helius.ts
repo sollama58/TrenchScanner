@@ -1,6 +1,7 @@
 import { CURVE_READ_BYTES, decodeCurve, type CurveState } from "../curation/curveTape.js";
 import { fetchJson } from "./httpClient.js";
 import {
+  LAUNCHLAB_LIKELY_QUOTES,
   LAUNCHLAB_BASE_MINT_OFFSET,
   LAUNCHLAB_POOL_SIZE,
   LAUNCHLAB_PROGRAM,
@@ -16,6 +17,7 @@ import {
   cpmmVaultsFor,
   lockedLpShare,
   decodeLaunchLab,
+  launchLabPoolOf,
 } from "./launchLab.js";
 import {
   POOL_READ_BYTES,
@@ -2056,11 +2058,33 @@ export class HeliusClient {
   }
 
   /**
-   * A Stonks coin's Raydium LaunchLab pool (launchLab.ts): one program scan for the pool account
-   * whose base mint is `mint` (its address also depends on the quote the creator picked). The pool,
+   * A Stonks coin's Raydium LaunchLab pool (launchLab.ts). Its address depends on the quote the
+   * creator picked, so the pools on the likely quotes (LAUNCHLAB_LIKELY_QUOTES, then `quoteHints`)
+   * are read first, one getMultipleAccounts (1 credit); only when none exists is the program
+   * scanned for the pool whose base mint is `mint` (getProgramAccounts, ~10 credits). The pool,
    * null when there is none, or "failed".
    */
-  async findLaunchLabPool(mint: string): Promise<string | null | "failed"> {
+  async findLaunchLabPool(
+    mint: string,
+    quoteHints: readonly string[] = [],
+  ): Promise<string | null | "failed"> {
+    const guesses = [
+      ...new Set(
+        [...LAUNCHLAB_LIKELY_QUOTES, ...quoteHints]
+          .map((quote) => launchLabPoolOf(mint, quote))
+          .filter((p): p is string => !!p),
+      ),
+    ];
+    if (guesses.length > 0) {
+      const accounts = await this.getMultipleAccounts<{ owner?: unknown }>(guesses, {
+        encoding: "base64",
+        dataSlice: { offset: 0, length: 0 },
+      });
+      for (const pool of guesses) {
+        const account = accounts.get(pool);
+        if (account && account !== "failed" && account.value?.owner === LAUNCHLAB_PROGRAM) return pool;
+      }
+    }
     const responses = await this.sendBatched<{ pubkey?: unknown }[]>(
       [
         {

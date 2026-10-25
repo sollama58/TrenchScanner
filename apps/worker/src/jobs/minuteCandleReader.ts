@@ -315,6 +315,6 @@ function toCandles(closes: Map<number, number>, five: boolean): MinuteCandle[] {
 async function readToken(mint: string): Promise<BackfillToken | null> {
   return prisma.token.findUnique({
     where: { mintAddress: mint },
-    select: { launchpad: true, launchedAt: true, pairAddress: true },
+    select: { launchpad: true, launchedAt: true, pairAddress: true, quoteMint: true },
   });
 }

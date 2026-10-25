@@ -5,7 +5,13 @@ import { ed25519 } from "@noble/curves/ed25519";
 import bs58 from "bs58";
 import { mayhemStateAddress } from "../solana.js";
 import { STONKS_FEE_WALLET } from "../stonksFees.js";
-import { CPMM_LP_READ_BYTES, RAYDIUM_CPMM_LOCK_AUTHORITY, RAYDIUM_CPMM_PROGRAM } from "./launchLab.js";
+import {
+  CPMM_LP_READ_BYTES,
+  LAUNCHLAB_PROGRAM,
+  RAYDIUM_CPMM_LOCK_AUTHORITY,
+  RAYDIUM_CPMM_PROGRAM,
+  launchLabPoolOf,
+} from "./launchLab.js";
 
 const WALLET = bs58.encode(ed25519.getPublicKey(new Uint8Array(32).fill(7)));
 const CURVE = mayhemStateAddress(WALLET);
@@ -1581,5 +1587,47 @@ describe("HeliusClient retry on timeout, by method", () => {
     const sent = timesOutOnce((calls) => calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: null })));
     await new HeliusClient({ rpcUrl: "https://rpc.example/b" }).getTransactionsBatch(["sig"]);
     expect(sent()).toBe(1);
+  });
+});
+
+describe("HeliusClient.findLaunchLabPool", () => {
+  const FUMP = "BnSxLBu3ehevdDBzWdLeAApKT1i2pE3JhPaoNZdAvbij";
+
+  it("finds a pool on a likely quote by its address, with no program scan", async () => {
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) => {
+        const keys = (c.params[0] as string[]) ?? [];
+        return {
+          jsonrpc: "2.0",
+          id: c.id,
+          result: {
+            context: { slot: 1 },
+            value: keys.map((k) => (k === launchLabPoolOf(FUMP) ? { owner: LAUNCHLAB_PROGRAM } : null)),
+          },
+        };
+      }),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+    expect(await client.findLaunchLabPool(FUMP)).toBe("7mwjUjRrnotTkhD33cxW3bPjLjPkpTC14J1MA2K4Ncqm");
+    const methods = requests.flatMap((r) => (r.body as { method: string }[]).map((c) => c.method));
+    expect(methods).toEqual(["getMultipleAccounts"]);
+  });
+
+  it("scans the program when no likely quote has the pool", async () => {
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) =>
+        c.method === "getMultipleAccounts"
+          ? {
+              jsonrpc: "2.0",
+              id: c.id,
+              result: { context: { slot: 1 }, value: (c.params[0] as string[]).map(() => null) },
+            }
+          : { jsonrpc: "2.0", id: c.id, result: [{ pubkey: "ScannedPool" }] },
+      ),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+    expect(await client.findLaunchLabPool(FUMP)).toBe("ScannedPool");
+    const methods = requests.flatMap((r) => (r.body as { method: string }[]).map((c) => c.method));
+    expect(methods).toEqual(["getMultipleAccounts", "getProgramAccounts"]);
   });
 });

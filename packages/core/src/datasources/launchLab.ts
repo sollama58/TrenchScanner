@@ -13,6 +13,26 @@ import { findProgramAddress } from "../solana.js";
  */
 
 export const LAUNCHLAB_PROGRAM = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj";
+/**
+ * The quotes Stonks creators pick most (SOL, and stonk.fun's own STONK coin; seen 2026-10-25 on the
+ * day's calls, beside PEPE and WETH): a coin's pool on one of them is found by its address alone,
+ * one account read, before the program scan (findLaunchLabPool).
+ */
+export const STONK_MINT = "6GmAFSYs4gk3FDao5FzzySQpPZaWsa4rUJHacpMpUNgx";
+export const LAUNCHLAB_LIKELY_QUOTES: readonly string[] = [WRAPPED_SOL_MINT, STONK_MINT];
+
+/** The LaunchLab pool of `mint` against `quoteMint` (SOL by default), or undefined for a non-address. */
+export function launchLabPoolOf(mint: string, quoteMint: string = WRAPPED_SOL_MINT): string | undefined {
+  try {
+    const base = bs58.decode(mint);
+    const quote = bs58.decode(quoteMint);
+    if (base.length !== 32 || quote.length !== 32) return undefined;
+    return findProgramAddress([new TextEncoder().encode("pool"), base, quote], LAUNCHLAB_PROGRAM);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Anchor's discriminator for LaunchLab's PoolState: sha256("account:PoolState")[0..8]. */
 const POOL_STATE_DISCRIMINATOR = [247, 237, 227, 245, 215, 195, 222, 70];
 /** PoolState's size, for the program scan's dataSize filter. */

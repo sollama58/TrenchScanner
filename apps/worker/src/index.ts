@@ -24,6 +24,8 @@ import {
   HeliusClient,
   SolanaRpc,
   SUBSCRIPTION_MINT,
+  STONK_MINT,
+  WRAPPED_SOL_MINT,
   SolanaTrackerClient,
   lastHeartbeatAt,
   lastSuccessfulRunAt,
@@ -437,6 +439,23 @@ async function main() {
         pollMaxMints: env.CURVE_TAPE_POLL_MAX_MINTS,
         newLaunches,
         screenLaunches: async (mints) => (await screenOutMayhem(mints, deps.helius)).clear,
+        // A Stonks coin's quote, where nothing named it (DexScreener lists no LaunchLab curve), so
+        // the minute backfill asks the right pool. The ticker goes with it where it is known; the
+        // card's pill shows no quote without one (web quoteToken.ts).
+        onLaunchLabQuote: (mint, quoteMint) =>
+          void prisma.token
+            .updateMany({
+              where: { mintAddress: mint, quoteMint: null },
+              data: {
+                quoteMint,
+                ...(quoteMint === WRAPPED_SOL_MINT
+                  ? { quoteSymbol: "SOL" }
+                  : quoteMint === STONK_MINT
+                    ? { quoteSymbol: "STONK" }
+                    : {}),
+              },
+            })
+            .catch(() => undefined),
       })
     : undefined;
   // The day's stream spend so far, from the last scan heartbeat (any process's): the curve tape's

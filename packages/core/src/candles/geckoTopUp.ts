@@ -1,6 +1,8 @@
-import { PUMPFUN_LAUNCHPAD } from "../launchpads.js";
+import { PUMPFUN_LAUNCHPAD, STONKS_LAUNCHPAD } from "../launchpads.js";
+import { launchLabPoolOf } from "../datasources/launchLab.js";
 import { pumpCurveAddressOf } from "../datasources/pumpLaunch.js";
 import { pumpSwapPoolOf } from "../datasources/pumpSwapPool.js";
+import { WRAPPED_SOL_MINT } from "../venueAccounts.js";
 import { chunkBars, runCoversOn, type CandleChunkRow, type StoredBar } from "./candleChunk.js";
 
 /**
@@ -27,6 +29,8 @@ export interface BackfillToken {
   launchpad: string | null;
   launchedAt: Date | null;
   pairAddress: string | null;
+  /** What its pair is quoted in (Token.quoteMint): finds a Stonks coin's LaunchLab pool. Unset: SOL. */
+  quoteMint?: string | null;
 }
 
 /** A Pump.fun coin: its launchpad says so, or its address does. */
@@ -56,7 +60,14 @@ export function poolsOf(mint: string, token: BackfillToken, now = Date.now()): s
     if (token.pairAddress !== curve) out.push(token.pairAddress, pool);
     else if (!pairTrusted) out.push(pool);
     out.push(curve);
-  } else out.push(token.pairAddress);
+  } else {
+    out.push(token.pairAddress);
+    // A Stonks coin's LaunchLab curve: DexScreener lists none, so on its curve a Stonks coin has no
+    // pairAddress and had no minute history at all (user report 2026-10-25). After graduation it
+    // holds the coin's history before the Raydium pool, as a Pump.fun coin's curve does.
+    if (token.launchpad === STONKS_LAUNCHPAD)
+      out.push(launchLabPoolOf(mint, token.quoteMint ?? WRAPPED_SOL_MINT) ?? null);
+  }
   return [...new Set(out.filter((p): p is string => !!p))];
 }
 
