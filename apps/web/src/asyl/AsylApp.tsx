@@ -91,6 +91,8 @@ const KEYS: [string, string][] = [
   ["L", "Links between everything shown"],
   ["D", "Deployers of the coins shown"],
   ["F", "Fit the map to the screen"],
+  ["P", "Draw freehand with the pen"],
+  ["T", "Trades of the selected wallet and its closest co-trader"],
   ["/", "Search"],
   ["Ctrl+S", "Save the map"],
   ["Esc", "Clear the selection"],
@@ -975,6 +977,12 @@ export function AsylApp() {
   // The latest state, for the one key listener.
   const onKey = useRef<(e: KeyboardEvent) => void>(() => undefined);
   onKey.current = (e: KeyboardEvent) => {
+    // The trades panel keeps its own keys (Esc closes it), and leaves the map's alone.
+    if (pair) return;
+    if (ask && e.key === "Escape") {
+      setAsk(null);
+      return;
+    }
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === "s") {
       e.preventDefault();
@@ -1047,6 +1055,21 @@ export function AsylApp() {
       case "f":
         view.current?.fit();
         return;
+      case "p":
+        if (graph.nodes.length) {
+          setDrawingSel(null);
+          setTool((t) => (t === "pen" ? null : "pen"));
+        }
+        return;
+      case "t": {
+        // The bought-together link with the most coins in common, from or to the selected wallet.
+        if (sel?.kind !== "wallet") return;
+        const best = shown.edges
+          .filter((x) => x.kind === "cotrade" && (x.a === sel.id || x.b === sel.id))
+          .sort((x, y) => (y.shared ?? y.weight) - (x.shared ?? x.weight))[0];
+        if (best) setPair({ a: best.a, b: best.b });
+        return;
+      }
       case "s":
         if (sel?.kind === "wallet" && !busy) actions.similar(sel.id);
         return;
@@ -1695,6 +1718,8 @@ export function AsylApp() {
             return n ? nodeName(n) : shortAddr(id);
           }}
           onSelect={(id) => {
+            // Back to the map, on the wallet picked.
+            setPair(null);
             setSelected(id);
             view.current?.centre(id);
           }}
