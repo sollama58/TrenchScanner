@@ -1423,3 +1423,11 @@ body {
   color: #ffd7a8;
   font-size: 13px;
 }
+
+/* Grid mode's cells: faint, so the map stays the thing you see. */
+.asyl-grid-line {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.06);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}

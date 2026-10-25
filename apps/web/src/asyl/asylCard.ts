@@ -48,7 +48,18 @@ const SIDE = 40;
 /** Below this many card units per map unit, bubbles and text are too small to read. */
 const LEGIBLE = 0.62;
 /** Room for a name under its bubble: a full wallet label (up to 40 characters) fits whole. */
-const NAME_W = 300;
+const NAME_W = 380;
+/**
+ * Sizes in the image, set for reading on a phone (user ask 2026-10-24): names in 17px (14px on a
+ * map of more than 25), and bubbles never drawn smaller than 160% of their size on screen (90% on a
+ * big map), however far the map is scaled down to fit; whatever then touches is nudged apart.
+ */
+const namePx = (g: AsylGraph) => (g.nodes.length > 25 ? 14 : 17);
+const nameW = (g: AsylGraph, n: AsylGraph["nodes"][number]) =>
+  Math.min(NAME_W, nodeName(n).length * namePx(g) * 0.58);
+const bubbleK = (g: AsylGraph, fit: Fit) => Math.max(fit.size, g.nodes.length > 25 ? 0.9 : 1.6);
+/** Text boxes, likewise, keep at least 90% of their size. */
+const textK = (fit: Fit) => Math.max(fit.size, 0.9);
 /** The most a map is enlarged: a small map isn't blown up past this. */
 const MAX_SCALE = 2.2;
 /** How far the two axes may be scaled apart to fill the image's shape. */
@@ -330,16 +341,15 @@ async function loadPictures(g: AsylGraph): Promise<Map<string, HTMLImageElement>
  */
 export function crowding(g: AsylGraph, pos: Pos, fit: Fit, radius: (id: string) => number): number {
   const boxes: { x0: number; y0: number; x1: number; y1: number }[] = [];
-  const small = g.nodes.length > 25;
   for (const n of g.nodes) {
     const p = pos.get(n.id);
     if (!p) continue;
     const x = fit.ox + p.x * fit.sx;
     const y = fit.oy + p.y * fit.sy;
-    const r = Math.max(4, radius(n.id) * fit.size);
+    const r = Math.max(4, radius(n.id) * bubbleK(g, fit));
     boxes.push({ x0: x - r, y0: y - r, x1: x + r, y1: y + r });
-    const w = Math.min(NAME_W, nodeName(n).length * (small ? 6 : 7.2)) / 2;
-    boxes.push({ x0: x - w, y0: y + r + 4, x1: x + w, y1: y + r + (small ? 17 : 20) });
+    const w = nameW(g, n) / 2;
+    boxes.push({ x0: x - w, y0: y + r + 4, x1: x + w, y1: y + r + namePx(g) + 6 });
   }
   let n = 0;
   for (let i = 0; i < boxes.length; i++)
@@ -360,15 +370,14 @@ const overlap = (a: Rect, b: Rect) =>
 
 /** Where a bubble and the name under it sit in the image. */
 function nodeRects(g: AsylGraph, at: (id: string) => { x: number; y: number }, r: (id: string) => number) {
-  const small = g.nodes.length > 25;
   const out = new Map<string, { bubble: Rect; name: Rect }>();
   for (const n of g.nodes) {
     const p = at(n.id);
     const rr = r(n.id);
-    const w = Math.min(NAME_W, nodeName(n).length * (small ? 6 : 7.2)) / 2 + 2;
+    const w = nameW(g, n) / 2 + 2;
     out.set(n.id, {
       bubble: { x0: p.x - rr, y0: p.y - rr, x1: p.x + rr, y1: p.y + rr },
-      name: { x0: p.x - w, y0: p.y + rr + 3, x1: p.x + w, y1: p.y + rr + (small ? 17 : 20) },
+      name: { x0: p.x - w, y0: p.y + rr + 3, x1: p.x + w, y1: p.y + rr + namePx(g) + 6 },
     });
   }
   return out;
@@ -393,13 +402,20 @@ function declutter(
     ids.map((id) => [id, { x: fit.ox + pos.get(id)!.x * fit.sx, y: fit.oy + pos.get(id)!.y * fit.sy }]),
   );
   const start = new Map([...px].map(([id, p]) => [id, { ...p }]));
-  const r = (id: string) => Math.max(4, radius(id) * fit.size);
+  const r = (id: string) => Math.max(4, radius(id) * bubbleK(g, fit));
+  // Each bubble, its name included, stays inside the map's part of the card.
   const push = (id: string, dx: number, dy: number) => {
     const p = px.get(id)!;
     const rr = r(id);
-    p.x = Math.min(box.x + box.w - rr, Math.max(box.x + rr, p.x + dx));
-    p.y = Math.min(box.y + box.h - rr - LABEL_BELOW, Math.max(box.y + rr, p.y + dy));
+    const n = byId.get(id);
+    const half = n ? nameW(g, n) / 2 : rr;
+    const lo = Math.max(rr, half);
+    p.x = Math.min(CARD_W - EDGE - lo, Math.max(EDGE + lo, p.x + dx));
+    p.y = Math.min(MAP_BOTTOM - 8 - namePx(g) - 6 - rr, Math.max(box.y + rr, p.y + dy));
   };
+  const byId = new Map(g.nodes.map((n) => [n.id, n]));
+  for (const id of ids) push(id, 0, 0);
+
   // The way to slide two rectangles apart: along whichever axis needs less, split between them.
   const apart = (a: Rect, b: Rect) => {
     const ox = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
@@ -565,7 +581,7 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
       const { w, h } = textBoxSize(t.text);
       const x = fit.ox + t.x * fit.sx;
       const y = fit.oy + t.y * fit.sy;
-      return { x0: x - 4, y0: y - 4, x1: x + w * fit.size + 4, y1: y + h * fit.size + 4 };
+      return { x0: x - 4, y0: y - 4, x1: x + w * textK(fit) + 4, y1: y + h * textK(fit) + 4 };
     });
   const tidy = declutter(g, pos, fit, radius, textRects, box);
   pos = tidy.pos;
@@ -580,7 +596,7 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
     const p = pos.get(id)!;
     return { x: fit.ox + p.x * fit.sx, y: fit.oy + p.y * fit.sy };
   };
-  const rOf = (id: string) => Math.max(4, radius(id) * fit.size);
+  const rOf = (id: string) => Math.max(4, radius(id) * bubbleK(g, fit));
   const maxByKind = new Map<string, number>();
   for (const e of g.edges) maxByKind.set(e.kind, Math.max(maxByKind.get(e.kind) ?? 0, e.weight));
 
@@ -602,6 +618,7 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
     return { sx, sy, mx, my, ex, ey, d: d - ra - rb };
   };
   ctx.lineCap = "round";
+  const timeRects: Rect[] = [];
   for (const e of g.edges) {
     if (!pos.has(e.a) || !pos.has(e.b)) continue;
     const q = curve(e.a, e.b, bowOf(e.kind));
@@ -646,7 +663,7 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
     }
     // Its time along it, as on screen, when the reader has times on for its kind.
     if ((TIMED_KINDS as readonly string[]).includes(e.kind) && times[e.kind as TimedKind] && e.at) {
-      const text = edgeTimeLabel(e.at, Math.floor((q.d - 24) / 6));
+      const text = edgeTimeLabel(e.at, Math.floor((q.d - 24) / 7.5));
       if (text) {
         let a = Math.atan2(q.ey - q.sy, q.ex - q.sx);
         if (a > Math.PI / 2) a -= Math.PI;
@@ -656,13 +673,20 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
         ctx.setLineDash([]);
         ctx.translate(midX, midY);
         ctx.rotate(a);
-        ctx.font = `700 10.5px ${FONT}`;
+        ctx.font = `700 13px ${FONT}`;
+        {
+          // Where it lands, roughly, so a drawn line's label can keep off it.
+          const half = ctx.measureText(text).width / 2;
+          const ex = Math.abs(Math.cos(a)) * half + Math.abs(Math.sin(a)) * 9;
+          const ey = Math.abs(Math.sin(a)) * half + Math.abs(Math.cos(a)) * 9;
+          timeRects.push({ x0: midX - ex, y0: midY - ey, x1: midX + ex, y1: midY + ey });
+        }
         ctx.textAlign = "center";
         ctx.textBaseline = "alphabetic";
         ctx.lineWidth = 3.5;
         ctx.lineJoin = "round";
         ctx.strokeStyle = "#0c0d12";
-        const y = e.kind === "created" ? -9 : -5;
+        const y = e.kind === "created" ? -10 : -6;
         ctx.strokeText(text, 0, y);
         ctx.fillStyle = EDGE_COLOUR[e.kind];
         ctx.fillText(text, 0, y);
@@ -767,10 +791,10 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
       ctx.fillText("D", bx, by + 0.5);
     }
     if (labelled.has(n.id)) {
-      ctx.font = `600 ${g.nodes.length > 25 ? 11 : 13}px ${FONT}`;
+      ctx.font = `700 ${namePx(g)}px ${FONT}`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      ctx.lineWidth = 3;
+      ctx.lineWidth = 4;
       ctx.lineJoin = "round";
       ctx.strokeStyle = "rgba(12, 13, 18, 0.9)";
       const text = clip(ctx, nodeName(n), NAME_W);
@@ -781,9 +805,12 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
   }
 
   // Each label at the point along its line that covers the fewest bubbles, names and other labels.
-  const taken: Rect[] = [...nodeRects(g, at, rOf).values()].flatMap((n) => [n.bubble, n.name]);
+  const taken: Rect[] = [
+    ...[...nodeRects(g, at, rOf).values()].flatMap((n) => [n.bubble, n.name]),
+    ...timeRects,
+  ];
   for (const { q, label, colour } of lineLabels) {
-    ctx.font = `400 14px "Permanent Marker", ${FONT}`;
+    ctx.font = `400 17px "Permanent Marker", ${FONT}`;
     const text = clip(ctx, label, 260);
     const w = ctx.measureText(text).width + 20;
     let mx = 0;
@@ -793,12 +820,12 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
     const nx = -(q.ey - q.sy);
     const ny = q.ex - q.sx;
     const nl = Math.hypot(nx, ny) || 1;
-    search: for (const off of [0, 18, -18]) {
+    search: for (const off of [0, 22, -22, 36, -36]) {
       for (const t of [0.5, 0.4, 0.6, 0.3, 0.7, 0.22, 0.78]) {
         const u = 1 - t;
         const x = u * u * q.sx + 2 * u * t * q.mx + t * t * q.ex + (nx / nl) * off;
         const y = u * u * q.sy + 2 * u * t * q.my + t * t * q.ey + (ny / nl) * off;
-        const me = { x0: x - w / 2, y0: y - 12, x1: x + w / 2, y1: y + 12 };
+        const me = { x0: x - w / 2, y0: y - 14, x1: x + w / 2, y1: y + 14 };
         // An off-line spot counts one worse, so it wins only when it clears something.
         const n = taken.filter((o) => overlap(me, o)).length + (off ? 0.5 : 0);
         if (n < fewest) {
@@ -809,9 +836,9 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
         if (n === 0) break search;
       }
     }
-    taken.push({ x0: mx - w / 2, y0: my - 12, x1: mx + w / 2, y1: my + 12 });
+    taken.push({ x0: mx - w / 2, y0: my - 14, x1: mx + w / 2, y1: my + 14 });
     ctx.beginPath();
-    ctx.roundRect(mx - w / 2, my - 12, w, 24, 12);
+    ctx.roundRect(mx - w / 2, my - 14, w, 28, 14);
     ctx.fillStyle = "#120c09";
     ctx.fill();
     ctx.lineWidth = 1.2;
@@ -827,7 +854,7 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
   for (const t of drawings?.texts ?? []) {
     if (!t.text.trim()) continue;
     const { w, h } = textBoxSize(t.text);
-    const k = fit.size;
+    const k = textK(fit);
     const x = fit.ox + t.x * fit.sx;
     const y = fit.oy + t.y * fit.sy;
     ctx.beginPath();

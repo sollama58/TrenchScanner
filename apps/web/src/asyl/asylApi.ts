@@ -1,5 +1,5 @@
 import { api, del, post, put, API_URL } from "../api";
-import type { AsylGraph, Cutoffs, Drawings } from "./graph";
+import type { AsylGraph, Cutoffs, Drawings, TimeLabels } from "./graph";
 
 /** The calls Asyl makes (apps/api/src/routes/asyl.ts). */
 
@@ -86,6 +86,12 @@ export interface MapDoc {
   cutoffs?: Cutoffs;
   /** The reader's own lines and text boxes. */
   drawings?: Drawings;
+  /** Bubbles the user placed by hand, which the layout leaves where they are. */
+  pinned?: string[];
+  /** Grid mode; a map saved before it had none and opens without it. */
+  grid?: boolean;
+  /** Which kinds of line carry their time. */
+  times?: TimeLabels;
   focus: string | null;
 }
 

@@ -113,6 +113,12 @@ export const mapDocSchema = z.object({
   drawings: drawingsSchema.optional(),
   /** The amount sliders when it was saved. */
   cutoffs: cutoffsSchema.optional(),
+  /** Bubbles the user placed by hand, which the layout leaves where they are. */
+  pinned: z.array(address).max(MAP_NODES_MAX).optional(),
+  /** Grid mode: each bubble on its own cell. */
+  grid: z.boolean().optional(),
+  /** Which kinds of line carry their time. */
+  times: z.object({ funded: z.boolean(), created: z.boolean(), transfer: z.boolean() }).optional(),
   /** The node it was opened around. */
   focus: address.nullable().default(null),
 });
@@ -130,6 +136,7 @@ export function cleanDoc(doc: AsylMapDoc): AsylMapDoc {
     ...doc,
     edges: doc.edges.filter((e) => ids.has(e.a) && ids.has(e.b)),
     positions: Object.fromEntries(Object.entries(doc.positions).filter(([id]) => ids.has(id))),
+    ...(doc.pinned ? { pinned: doc.pinned.filter((id) => ids.has(id)) } : {}),
     notes: Object.fromEntries(Object.entries(doc.notes).filter(([id, note]) => ids.has(id) && note.trim())),
     ...(doc.drawings
       ? {
