@@ -509,11 +509,13 @@ export async function buildModelLineup(env: Env): Promise<ModelLineup> {
     const status: SeatExplain["status"] =
       spec.role === "rules"
         ? "calling"
-        : current === null
-          ? "untrained"
-          : current.threshold !== null && current.threshold < NEVER_EMIT_THRESHOLD
-            ? "calling"
-            : "silent";
+        : spec.trackingOnly === true
+          ? "silent"
+          : current === null
+            ? "untrained"
+            : current.threshold !== null && current.threshold < NEVER_EMIT_THRESHOLD
+              ? "calling"
+              : "silent";
     const exam = metrics.precisionCalibration;
     const seat: SeatExplain = {
       id: spec.id,

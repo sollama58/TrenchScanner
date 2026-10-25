@@ -208,9 +208,11 @@ export async function rechooseChampion(input: {
     return {
       id: spec.id,
       name: spec.name,
-      // A control seat is there to be compared against, never to become the default.
+      // A control seat is there to be compared against, never to become the default; a
+      // tracking-only seat files no calls.
       calling:
         spec.control !== true &&
+        spec.trackingOnly !== true &&
         (spec.role === "rules" ||
           (model !== undefined && model.threshold !== null && model.threshold < NEVER_EMIT_THRESHOLD)),
       graded: (live.get(spec.id) ?? emptyRecord()).graded,

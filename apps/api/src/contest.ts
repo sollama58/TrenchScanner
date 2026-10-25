@@ -325,7 +325,7 @@ export interface LeaderboardEntry {
   last24h: Last24h | null;
   /**
    * calling: it has a cutoff and can send. silent: trained, but its exam had nothing to set a
-   * cutoff from, so it sends nothing this generation. untrained: no training run has produced it
+   * cutoff from, or it is tracking only (ContestantSpec.trackingOnly), so it sends nothing. untrained: no training run has produced it
    * yet (the rules contestant is never untrained - it calls on its gate alone).
    */
   status: "calling" | "silent" | "untrained";
@@ -613,11 +613,13 @@ export async function buildLeaderboard(
     const status: LeaderboardEntry["status"] =
       spec.role === "rules"
         ? "calling"
-        : model === null
-          ? "untrained"
-          : model.threshold !== null && model.threshold < NEVER_EMIT_THRESHOLD
-            ? "calling"
-            : "silent";
+        : spec.trackingOnly === true
+          ? "silent"
+          : model === null
+            ? "untrained"
+            : model.threshold !== null && model.threshold < NEVER_EMIT_THRESHOLD
+              ? "calling"
+              : "silent";
     return {
       id: spec.id,
       name: spec.name,
