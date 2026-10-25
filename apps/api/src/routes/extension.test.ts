@@ -564,6 +564,24 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     expect((await ext(key, "PUT", "/ext/v1/settings", { ...next, extra: 1 })).statusCode).toBe(400);
   });
 
+  it("keeps the extension's display choices with the account, for a reinstall", async () => {
+    const user = await makeUser("look", true);
+    const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    expect((await ext(key, "GET", "/ext/v1/me")).json().look).toBeNull();
+    const look = {
+      savedAt: 1_761_400_000_000,
+      prefs: { colors: { model: "#112233" }, safety: { mode: "hide" } },
+    };
+    expect((await ext(key, "PUT", "/ext/v1/look", look)).statusCode).toBe(200);
+    // A new key (a reinstall connects afresh) reads them back.
+    const again = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    expect((await ext(again, "GET", "/ext/v1/me")).json().look).toEqual(look);
+    expect((await ext(key, "PUT", "/ext/v1/look", { savedAt: "x", prefs: {} })).statusCode).toBe(400);
+    expect((await ext(key, "PUT", "/ext/v1/look", { savedAt: 1, prefs: [] })).statusCode).toBe(400);
+    const huge = { savedAt: 1, prefs: { pad: "x".repeat(40_000) } };
+    expect((await ext(key, "PUT", "/ext/v1/look", huge)).statusCode).toBe(413);
+  });
+
   it("stops a revoked key at once, and a key its owner may no longer hold", async () => {
     const user = await makeUser("revoke", true);
     const created = (await session(user.cookie, "POST", "/settings/extension-keys")).json() as {

@@ -1035,6 +1035,14 @@ document.addEventListener("visibilitychange", () => {
 // TrenchScanner's Settings handed over a key while the panel was open.
 chrome.runtime.onMessage.addListener((message: unknown, sender) => {
   if (sender.id !== chrome.runtime.id) return;
+  // The account's saved choices arrived (another browser, or a reinstall): drawn unless being edited.
+  if ((message as { type?: unknown } | null)?.type === "lookChanged") {
+    void send<TooltipPrefs>({ type: "tooltip" }).then((prefs) => {
+      tipPrefs = cleanTooltip(prefs);
+      applyColors();
+      if (view !== "settings") draw();
+    });
+  }
   if ((message as { type?: unknown } | null)?.type === "connected") {
     view = "alerts";
     feed = null;
