@@ -5,11 +5,11 @@ Each alerted token shows its model calls, filter matches, the AI's verdict and t
 pick, with links that open it on those sites. The design is in the project's plan
 (notes/chrome-overlay-2026-10-23).
 
-**It never runs on a trading site.** No content scripts, no host access beyond
-`api.trenchscanner.app`, no `tabs`, `scripting`, `cookies` or `webRequest`. Code inside a site's
-page can read that site's logins, and Chrome has no draw-only sandbox, so the in-page rings were
-dropped (user decision 2026-10-23): nothing this extension ships, or a bad update of it, can see
-those pages. A link is the only thing that leads there.
+**Since 0.4.0 it runs on Axiom, Terminal and GMGN** to ring your alerts in their boards (Rings,
+below; user decision 2026-10-25, reversing the 2026-10-23 one for the owner's own use). The
+store listing (0.3.0) has no rings: before another store upload, take them out (Rings, below),
+because `STORE.md`'s answers say the extension never runs on a website. Otherwise there is no host
+access beyond `api.trenchscanner.app`, and no `tabs`, `scripting`, `cookies` or `webRequest`.
 
 - `src/sw.ts` is the service worker: the only part that holds the key or talks to the network,
   and only to `api.trenchscanner.app/ext/v1`. It answers the extension's own pages, and
@@ -63,3 +63,27 @@ justifications and privacy answers are in `STORE.md`, and the privacy policy is
 `https://trenchscanner.app/extension-privacy.html` (`apps/web/public/extension-privacy.html`).
 
 Permissions are `storage` and `sidePanel`, plus the API host. None of them shows an install warning.
+
+## Rings (0.4.0, not in the store)
+
+The in-page rings dropped on 2026-10-23 are back, for the owner's own browser (user asks
+2026-10-24 and 2026-10-25): a content script (`src/content/`) on Axiom, Terminal and GMGN rings
+the rows of tokens in the reader's alert feed, with the model or filter badge and a red dot past a
+flag's limit. It holds no key and sends no address anywhere: the service worker answers from the
+panel's own feed (`handleContent` in `sw.ts`), so tokens outside your alerts are never asked about.
+Its trade-off is the one that dropped it: code running in those sites' pages. It reads each row's
+address (Axiom's Pulse marks and Discover's pump.fun links, Terminal's Trenches marks and Trending
+copy buttons, GMGN's token links; `src/content/adapters/sites.ts`) and nothing else.
+
+For a store build, remove the manifest's `content_scripts` and the `content.js` entry in
+`build.mjs`, then put back the store wording in the panel and `sw.ts`.
+
+The ring tooltip is the reader's to set (Settings → Ring tooltip, user ask 2026-10-25): each line
+on or off and in any order, kept in this browser only (`src/shared/tooltip.ts`). The default is
+the original tooltip plus KOL bundled %. Map lines (KOL bundled and the other bubble map totals)
+are read on hover with the panel's `/bubble/:mint` call, and only for a coin already in the
+reader's alerts, so this still sends no address the panel wouldn't.
+
+The ring's pill is set the same way (Settings → Ring pill): which parts it shows and their order,
+and the red dot. Settings → Second pill adds a dashed pill beside it with more of the coin's
+numbers, off by default, placed in the next free patch of the row and left out when none fits.

@@ -8,6 +8,18 @@ import {
   type PanelRequest,
   type Status,
 } from "../shared/types";
+import {
+  cleanTooltip,
+  DEFAULT_TOOLTIP,
+  lineOn,
+  partOn,
+  pillLabel,
+  tipLabel,
+  type ListPrefs,
+  type PillPart,
+  type TipLine,
+  type TooltipPrefs,
+} from "../shared/tooltip";
 import { verdictFor } from "../shared/verdict";
 import { bubbleMapView } from "./bubble";
 import { buddyCard } from "./buddy";
@@ -28,8 +40,8 @@ function connectUrl(): string {
 }
 /** How often the open panel re-reads the list. Hidden panels don't poll. */
 const POLL_MS = 5_000;
-/** How often Trade Buddy's coins are re-read while it shows. */
-const BUDDY_POLL_MS = 10_000;
+/** How often Trade Buddy's coins are re-read while it shows (the API reuses an answer for 8 s). */
+const BUDDY_POLL_MS = 5_000;
 /** How often an open bubble map is re-read (the site's token view reads its maps every 30 s). */
 const MAP_POLL_MS = 30_000;
 
@@ -41,6 +53,8 @@ let status: Status | null = null;
 let feed: FeedAnswer | null = null;
 let buddy: BuddyRead | null = null;
 let buddyReadAt = 0;
+/** What the rings' tooltip shows, kept in this browser (shared/tooltip.ts). */
+let tipPrefs: TooltipPrefs = DEFAULT_TOOLTIP;
 let pollTimer: number | undefined;
 /** Mints already shown, so a new alert can be marked as new. */
 let seen: Set<string> | null = null;
@@ -195,7 +209,7 @@ function renderDisconnected(): void {
       el(
         "p",
         { className: "note" },
-        "Opens TrenchScanner Settings at Browser extension, where one click connects this browser. This panel updates by itself. The key it gets can only read your alerts and stats.",
+        "Opens TrenchScanner Settings at Browser extension, where one click connects this browser. This panel updates by itself. The key it gets reads your alerts and stats, coins' bubble maps, and your wallet's own trades for Trade Buddy. It can't trade or move funds.",
       ),
     ),
   );
@@ -208,8 +222,8 @@ function tabs(): HTMLElement {
     button.addEventListener("click", () => {
       view = id;
       draw();
-      // Trade Buddy reads at once rather than on the next tick.
-      if (id === "buddy") {
+      // Trade Buddy reads at once rather than on the next tick, unless a read just went out.
+      if (id === "buddy" && Date.now() - buddyReadAt >= 2_000) {
         buddyReadAt = 0;
         void poll();
       }
@@ -440,6 +454,7 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
     }),
   );
   parts.push(section("Open tokens on", sites));
+  parts.push(...ringDisplaySections(settings));
 
   const disconnect = el("button", { className: "link", textContent: "Disconnect this browser" });
   disconnect.addEventListener("click", async () => {
@@ -456,12 +471,158 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
       el("p", {
         className: "note",
         textContent:
-          "This extension never runs on Axiom, Terminal or GMGN and can't see those pages or your logins. The key reads your alerts and stats only.",
+          "This version reads the token addresses on Axiom, Terminal and GMGN boards to ring your alerts. It never reads your logins, and no address leaves the browser except an alerted coin's, for its map totals.",
       }),
       disconnect,
     ),
   );
   return parts;
+}
+
+/**
+ * An ordered list of switches with up and down buttons: the tooltip's lines and each pill's parts.
+ * `get` reads the current list from tipPrefs, `put` stores a changed one there.
+ */
+function orderedList<T extends string>(
+  get: () => ListPrefs<T>,
+  put: (list: ListPrefs<T>) => void,
+  isOn: (item: T) => boolean,
+  label: (item: T) => string,
+): { list: HTMLElement; fill: () => void } {
+  const list = el("div", { className: "tiplines" });
+  const save = () => void send({ type: "saveTooltip", prefs: tipPrefs });
+  const fill = () => {
+    const current = get();
+    list.replaceChildren(
+      ...current.order.map((item, i) => {
+        const name = label(item);
+        const on = el("input", { type: "checkbox", className: "switch", checked: isOn(item) });
+        on.setAttribute("aria-label", `Show ${name}`);
+        on.addEventListener("change", () => {
+          const now = get();
+          put({ ...now, on: { ...now.on, [item]: on.checked } });
+          save();
+        });
+        const move = (by: number, glyph: string, where: string) => {
+          const b = el("button", {
+            className: "move",
+            textContent: glyph,
+            disabled: i + by < 0 || i + by >= current.order.length,
+          });
+          b.setAttribute("aria-label", `Move ${name} ${where}`);
+          b.addEventListener("click", () => {
+            const now = get();
+            const order = [...now.order];
+            [order[i], order[i + by]] = [order[i + by]!, order[i]!];
+            put({ ...now, order });
+            save();
+            fill();
+            (
+              list.children[i + by]?.querySelectorAll("button.move")[by < 0 ? 0 : 1] as
+                HTMLElement | undefined
+            )?.focus();
+          });
+          return b;
+        };
+        return el(
+          "div",
+          { className: "tipline" },
+          on,
+          el("span", { textContent: name }),
+          move(-1, "↑", "up"),
+          move(1, "↓", "down"),
+        );
+      }),
+    );
+  };
+  fill();
+  return { list, fill };
+}
+
+/**
+ * Rings: what each ring's pill says, an optional second pill, and the tooltip's lines, each
+ * in the reader's order. Kept in this browser (shared/tooltip.ts).
+ */
+function ringDisplaySections(settings: OverlaySettings): HTMLElement[] {
+  const save = () => void send({ type: "saveTooltip", prefs: tipPrefs });
+  const reset = (what: string, apply: () => void, refill: () => void) => {
+    const b = el("button", { className: "link", textContent: `Reset ${what}` });
+    b.addEventListener("click", () => {
+      apply();
+      save();
+      refill();
+    });
+    return b;
+  };
+
+  const pill = orderedList<PillPart>(
+    () => tipPrefs.pill,
+    (list) => (tipPrefs = { ...tipPrefs, pill: list }),
+    (part) => partOn(part, tipPrefs.pill, false),
+    pillLabel,
+  );
+  const dot = toggle("Red dot past a flag's limit", null, tipPrefs.riskDot, "var(--risk)", (on) => {
+    tipPrefs = { ...tipPrefs, riskDot: on };
+    save();
+  });
+  const pillBox = section(
+    "Ring pill",
+    el("p", {
+      className: "note",
+      textContent: "What the pill on a ring says, left to right. With nothing on, it's just the dot.",
+    }),
+    dot,
+    pill.list,
+    reset(
+      "pill",
+      () => {
+        tipPrefs = { ...tipPrefs, pill: DEFAULT_TOOLTIP.pill, riskDot: true };
+        dot.querySelector("input")!.checked = true;
+      },
+      pill.fill,
+    ),
+  );
+
+  const second = orderedList<PillPart>(
+    () => tipPrefs.second,
+    (list) => (tipPrefs = { ...tipPrefs, second: { ...list, enabled: tipPrefs.second.enabled } }),
+    (part) => partOn(part, tipPrefs.second, true),
+    pillLabel,
+  );
+  second.list.hidden = !tipPrefs.second.enabled;
+  const secondBox = section(
+    "Second pill",
+    toggle(
+      "Show a second pill",
+      "More of the coin's numbers beside the first",
+      tipPrefs.second.enabled,
+      "var(--filter)",
+      (on) => {
+        tipPrefs = { ...tipPrefs, second: { ...tipPrefs.second, enabled: on } };
+        second.list.hidden = !on;
+        save();
+      },
+    ),
+    second.list,
+  );
+
+  const tip = orderedList<TipLine>(
+    () => tipPrefs,
+    (list) => (tipPrefs = { ...tipPrefs, ...list }),
+    (line) => lineOn(line, tipPrefs, settings),
+    tipLabel,
+  );
+  const tipBox = section(
+    "Ring tooltip",
+    el("p", {
+      className: "note",
+      textContent:
+        "Lines shown when you point at a ring's pill, top to bottom. Alerts, stats and the footer keep their own groups.",
+    }),
+    tip.list,
+    reset("tooltip", () => (tipPrefs = { ...tipPrefs, order: DEFAULT_TOOLTIP.order, on: {} }), tip.fill),
+  );
+  return [pillBox, secondBox, tipBox];
 }
 
 function draw(): void {
@@ -506,6 +667,19 @@ async function poll(): Promise<void> {
 
 async function refresh(): Promise<void> {
   status = await send<Status>({ type: "status" });
+  // Trade Buddy's last answer draws at once, and a fresh read starts now, so the tab is ready
+  // before it is opened.
+  if (status?.connected) {
+    buddy ??= await send<BuddyRead>({ type: "buddy", cached: true });
+    if (!buddy?.buddy) buddy = null;
+    buddyReadAt = Date.now();
+    void send<BuddyRead>({ type: "buddy" }).then((next) => {
+      if (!next) return;
+      buddy = next;
+      if (view === "buddy") draw();
+    });
+  }
+  tipPrefs = cleanTooltip(await send<TooltipPrefs>({ type: "tooltip" }));
   draw();
   if (status?.connected) await poll();
 }

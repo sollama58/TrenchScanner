@@ -32,6 +32,8 @@ const common = {
 await Promise.all([
   build({ ...common, entryPoints: ["src/sw.ts"], outfile: `${out}sw.js`, format: "esm" }),
   build({ ...common, entryPoints: ["src/panel/panel.ts"], outfile: `${out}panel.js`, format: "iife" }),
+  // The rings build: the content script that rings alerted tokens on Axiom, Terminal and GMGN.
+  build({ ...common, entryPoints: ["src/content/main.ts"], outfile: `${out}content.js`, format: "iife" }),
 ]);
 await cp(join(root, "static"), out, { recursive: true });
 

@@ -1,7 +1,10 @@
 import { api, ApiError } from "./shared/api";
 import { isMintAddress } from "./shared/mint";
 import { DEFAULT_SETTINGS } from "./shared/settings";
+import { cleanTooltip, type TooltipPrefs } from "./shared/tooltip";
 import type {
+  ContentRequest,
+  LookupAnswer,
   BubbleAnswer,
   BuddyAnswer,
   BuddyRead,
@@ -10,6 +13,7 @@ import type {
   OverlayToken,
   PanelRequest,
   Problem,
+  OverlayBubbleTotals,
   Status,
 } from "./shared/types";
 
@@ -17,10 +21,10 @@ import type {
  * The service worker: the only part that holds the key or touches the network, and only
  * api.trenchscanner.app. Only the extension's own side panel is answered.
  *
- * The extension has no access to Axiom, Terminal, GMGN or any other site: no content scripts, no
- * host permissions at all (the API allows its calls by CORS), no tabs, scripting or cookies. It never runs inside a trading
- * site, so nothing it ships (or a bad update of it) can read a site's page or login. The panel
- * lists the reader's alerts and opens a token on a site as an ordinary link.
+ * No host permissions at all (the API allows its calls by CORS), no tabs, scripting or cookies.
+ * Since 0.4.0 a content script rings alerts on Axiom, Terminal and GMGN (README "Rings"); it holds
+ * no key and is answered from the panel's feed (handleContent). The panel lists the reader's alerts
+ * and opens a token on a site as an ordinary link.
  *
  * TrenchScanner's own site (and only it: manifest externally_connectable, checked again here) may
  * ask whether the extension is installed and hand it a new key, so connecting needs no copy-paste.
@@ -50,6 +54,24 @@ let problem: Problem = null;
 let settingsReadAt = 0;
 let lastTokens: OverlayToken[] = [];
 let lastBuddy: BuddyAnswer | null = null;
+let feedReadAt = 0;
+/** The ring pages' tabs, told when the settings change. */
+const ringTabs = new Set<number>();
+/** How long a ring page's answers reuse the last feed read (the panel polls every 5 s). */
+const RING_FEED_MS = 10_000;
+/** A tooltip's map totals are reused this long (a scan lands every few minutes at most). */
+const TOTALS_MS = 60_000;
+const totalsCache = new Map<string, { at: number; totals: OverlayBubbleTotals | null }>();
+
+async function tooltipPrefs(): Promise<TooltipPrefs> {
+  const { tooltip } = await chrome.storage.local.get("tooltip");
+  return cleanTooltip(tooltip);
+}
+
+function tellRingTabs(message: object): void {
+  for (const tabId of ringTabs)
+    void chrome.tabs.sendMessage(tabId, message).catch(() => ringTabs.delete(tabId));
+}
 
 // The toolbar icon (and its shortcut) opens the panel beside the page.
 void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => undefined);
@@ -95,6 +117,7 @@ async function feed(): Promise<FeedAnswer> {
   if (!key) return { tokens: [], problem: "disconnected" };
   try {
     lastTokens = (await api.feed(key)).tokens;
+    feedReadAt = Date.now();
     problem = null;
     void chrome.storage.local.remove("refused");
   } catch (e) {
@@ -118,13 +141,25 @@ async function bubble(mint: unknown): Promise<BubbleAnswer> {
   }
 }
 
-/** Trade Buddy: the coins the account's wallet bought, with their PnL. */
-async function buddy(): Promise<BuddyRead> {
+/**
+ * Trade Buddy: the coins the account's wallet bought, with their PnL. The last answer is kept in
+ * session storage (cleared when the browser closes), so a reopened panel draws it at once while
+ * the fresh read runs; `cached` asks for that alone.
+ */
+async function buddy(cached = false): Promise<BuddyRead> {
   const { key } = await stored();
   if (!key) return { buddy: null, problem: "disconnected" };
+  if (!lastBuddy) {
+    const { buddy: kept } = (await chrome.storage.session.get("buddy").catch(() => ({}))) as {
+      buddy?: BuddyAnswer;
+    };
+    lastBuddy = kept ?? null;
+  }
+  if (cached) return { buddy: lastBuddy, problem };
   try {
     lastBuddy = await api.buddy(key);
     problem = null;
+    void chrome.storage.session.set({ buddy: lastBuddy }).catch(() => undefined);
   } catch (e) {
     noteFailure(e);
   }
@@ -162,6 +197,7 @@ async function connect(raw: unknown): Promise<{ ok: boolean; error?: string }> {
     problem = null;
     lastTokens = [];
     lastBuddy = null;
+    void chrome.storage.session.remove("buddy").catch(() => undefined);
     // An open panel redraws connected.
     void chrome.runtime.sendMessage({ type: "connected" }).catch(() => undefined);
     return { ok: true };
@@ -183,21 +219,82 @@ async function handle(request: PanelRequest): Promise<unknown> {
     case "bubble":
       return bubble(request.mint);
     case "buddy":
-      return buddy();
+      return buddy(request.cached === true);
     case "disconnect":
       await chrome.storage.local.remove(["key", "wallet", "aiReviews", "pro", "refused"]);
       lastTokens = [];
       lastBuddy = null;
+      void chrome.storage.session.remove("buddy").catch(() => undefined);
       problem = "disconnected";
       return { ok: true };
     case "saveSettings": {
       const { key } = await stored();
       await chrome.storage.local.set({ settings: request.settings });
+      tellRingTabs({ type: "settingsChanged", settings: request.settings });
       if (key) await api.saveSettings(key, request.settings).catch((e: unknown) => noteFailure(e));
+      return { ok: true };
+    }
+    case "tooltip":
+      return tooltipPrefs();
+    case "saveTooltip": {
+      const prefs = cleanTooltip(request.prefs);
+      await chrome.storage.local.set({ tooltip: prefs });
+      tellRingTabs({ type: "tooltipChanged", prefs });
       return { ok: true };
     }
     default:
       return null;
+  }
+}
+
+/**
+ * The rings (README "Rings"): the content script on Axiom, Terminal and GMGN asks
+ * which addresses on screen are the reader's alerts. It is answered from the panel's own feed
+ * (re-read when older than RING_FEED_MS), so no address from a page ever leaves the browser.
+ */
+async function handleContent(request: ContentRequest, tabId: number | undefined): Promise<unknown> {
+  if (tabId !== undefined) ringTabs.add(tabId);
+  switch (request.type) {
+    case "settings":
+      return currentSettings();
+    case "lookup": {
+      const answer = Date.now() - feedReadAt < RING_FEED_MS ? { tokens: lastTokens, problem } : await feed();
+      const byMint = new Map(answer.tokens.map((t) => [t.mint, t]));
+      const tokens: LookupAnswer["tokens"] = {};
+      for (const mint of Array.isArray(request.mints) ? request.mints.slice(0, 100) : []) {
+        const t = byMint.get(mint);
+        if (t) tokens[mint] = t;
+      }
+      return { tokens, problem: answer.problem } satisfies LookupAnswer;
+    }
+    case "tooltip":
+      return tooltipPrefs();
+    case "totals": {
+      // Only a coin already in the reader's alerts, so a page can't send other addresses out.
+      if (!lastTokens.some((t) => t.mint === request.mint)) return null;
+      const cached = totalsCache.get(request.mint);
+      if (cached && Date.now() - cached.at < TOTALS_MS) return cached.totals;
+      const { map, problem: failed } = await bubble(request.mint);
+      if (failed && failed !== "untracked") return null;
+      const totals = map?.totals ?? null;
+      if (totalsCache.size > 200) totalsCache.clear();
+      totalsCache.set(request.mint, { at: Date.now(), totals });
+      return totals;
+    }
+    default:
+      return null;
+  }
+}
+
+/** A ring page: a tab of one of the three sites the manifest's content script runs on. */
+const RING_HOSTS = /(^|\.)(axiom\.trade|padre\.gg|gmgn\.ai)$/;
+function fromRingPage(sender: chrome.runtime.MessageSender): boolean {
+  if (!sender.tab || typeof sender.url !== "string") return false;
+  try {
+    const url = new URL(sender.url);
+    return url.protocol === "https:" && RING_HOSTS.test(url.hostname);
+  } catch {
+    return false;
   }
 }
 
@@ -207,8 +304,13 @@ function fromPanel(sender: chrome.runtime.MessageSender): boolean {
 }
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
-  if (sender.id !== chrome.runtime.id || !fromPanel(sender)) return false;
+  if (sender.id !== chrome.runtime.id) return false;
   if (typeof message !== "object" || message === null) return false;
+  if (fromRingPage(sender)) {
+    handleContent(message as ContentRequest, sender.tab?.id).then(sendResponse, () => sendResponse(null));
+    return true;
+  }
+  if (!fromPanel(sender)) return false;
   handle(message as PanelRequest).then(sendResponse, () => sendResponse(null));
   return true;
 });

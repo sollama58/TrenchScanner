@@ -33,3 +33,15 @@ export function base58Length(value: string): number {
 export function isMintAddress(value: string): boolean {
   return value.length >= 32 && value.length <= 44 && base58Length(value) === 32;
 }
+
+const CANDIDATE = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
+
+/** Every valid address inside a string (a URL, an attribute), in order, without repeats. */
+export function mintsIn(text: string): string[] {
+  const out: string[] = [];
+  for (const match of text.matchAll(CANDIDATE)) {
+    const value = match[0];
+    if (isMintAddress(value) && !out.includes(value)) out.push(value);
+  }
+  return out;
+}

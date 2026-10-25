@@ -1,6 +1,6 @@
 import { isMintAddress } from "../shared/mint";
 import type { OverlaySettings, OverlayToken, Site } from "../shared/types";
-import type { RowVerdict } from "../shared/verdict";
+import { firstAlert, type RowVerdict } from "../shared/verdict";
 
 /**
  * One alerted token in the panel. Text from the token (names, filter names, the AI's reasoning)
@@ -143,10 +143,9 @@ function copyButton(mint: string): HTMLButtonElement {
   return button;
 }
 
-/** When the token was last alerted for this reader. */
+/** When the token alerted this reader: its first call or match, as the card's "Alerted at" cap. */
 export function alertedAt(token: OverlayToken): string | null {
-  const times = [...token.modelCalls.map((c) => c.at), ...token.filterMatches.map((m) => m.at)];
-  return times.sort().at(-1) ?? null;
+  return firstAlert(token)?.at ?? null;
 }
 
 export function tokenCard(
@@ -180,9 +179,7 @@ export function tokenCard(
   }
   card.append(tags);
 
-  const first = anchor
-    ? anchor.mcapUsd
-    : (token.modelCalls[0]?.mcapUsd ?? token.filterMatches[0]?.mcapUsd ?? null);
+  const first = anchor ? anchor.mcapUsd : (firstAlert(token)?.mcapUsd ?? null);
   const nowMcap = anchor?.nowMcapUsd ?? token.liveMcapUsd ?? token.stats?.marketCapUsd ?? null;
   const moved = first === null || nowMcap === null || first === 0 ? null : (nowMcap - first) / first;
   const change = moved === null ? "" : ` (${moved >= 0 ? "+" : ""}${Math.round(moved * 100)}%)`;
