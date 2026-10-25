@@ -36,6 +36,8 @@ const DIRS = [
 export interface InspectorActions {
   expand: (n: AsylNode) => void;
   similar: (wallet: string) => void;
+  /** Opens the trades behind a bought-together link. */
+  pair: (a: string, b: string) => void;
   flows: (wallet: string) => void;
   funders: (wallets: string[]) => void;
   trace: (wallet: string) => void;
@@ -58,7 +60,7 @@ const sol = (n: number | null | undefined) =>
     : `${n >= 0 ? "" : "−"}${Math.abs(n).toFixed(Math.abs(n) >= 100 ? 0 : 2)} SOL`;
 
 /** Seconds as the map says them: "42s", "2m 5s". */
-const gapText = (sec: number) => {
+export const gapText = (sec: number) => {
   const s = Math.max(0, Math.round(sec));
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${s % 60 ? ` ${s % 60}s` : ""}`;
 };
@@ -324,6 +326,7 @@ export function Inspector({
                 <th>Wallet</th>
                 <th title="Coins both bought within 3 minutes of each other">Coins in common</th>
                 <th title="The typical time between their first buys of those coins">Apart</th>
+                <th aria-label="Trades" />
               </tr>
             </thead>
             <tbody>
@@ -339,6 +342,15 @@ export function Inspector({
                     </td>
                     <td>{edge.of ? `${shared} of ${edge.of}` : shared}</td>
                     <td>{edge.gapSec !== undefined && edge.gapSec !== null ? gapText(edge.gapSec) : "–"}</td>
+                    <td>
+                      <button
+                        className="asyl-btn asyl-btn-xs"
+                        title="Their trades on each coin, side by side"
+                        onClick={() => actions.pair(edge.a, edge.b)}
+                      >
+                        Trades
+                      </button>
+                    </td>
                   </tr>
                 );
               })}

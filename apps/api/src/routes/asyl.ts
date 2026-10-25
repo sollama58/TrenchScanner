@@ -40,6 +40,8 @@ import {
   type PastHoldersRead,
 } from "../asyl/graph.js";
 import { labelsGraph, loadSimilarCoins } from "../asyl/similar.js";
+import { loadPair } from "../asyl/cotrade.js";
+import { searchAsyl } from "../asyl/search.js";
 import { readAllowance } from "../asyl/credits.js";
 import {
   addFlows,
@@ -80,6 +82,8 @@ import type { AsylCoverage } from "../asyl/types.js";
 const address = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "not a Solana address");
 const walletParams = z.object({ wallet: address });
 const mintParams = z.object({ mint: address });
+const pairParams = z.object({ a: address, b: address });
+const searchQuery = z.object({ q: z.string().trim().min(2).max(60) });
 const idParams = z.object({ id: z.string().min(1).max(40) });
 const slugParams = z.object({ slug: z.string().regex(/^[A-Za-z0-9]{8,24}$/) });
 const labelBody = z.object({
@@ -98,6 +102,8 @@ const linksBody = z.object({
 
 /** Each map read is a handful of indexed queries: well above what a person clicks. */
 const READ_LIMIT = { max: 60, timeWindow: "1 minute" };
+/** The search box asks as the reader types, a little behind each key. */
+const SEARCH_LIMIT = { max: 120, timeWindow: "1 minute" };
 /** Chain reads also wait on the allowance; this only stops a script. */
 const CHAIN_LIMIT = { max: 12, timeWindow: "1 minute" };
 const WRITE_LIMIT = { max: 30, timeWindow: "1 minute" };
@@ -268,6 +274,22 @@ export async function registerAsylRoutes(
       return withApiFeature("asyl", () =>
         loadWalletProfile(p.data.wallet, pro ? opts.live : null, null, tracked, request.user!.userId),
       );
+    });
+
+    /** The search box: tracked coins, roster KOLs and the reader's labels, by name (search.ts). */
+    priv.get("/search", { config: { rateLimit: SEARCH_LIMIT } }, async (request, reply) => {
+      const p = searchQuery.safeParse(request.query);
+      if (!p.success) return bad(reply, p.error);
+      reply.header("Cache-Control", "private, no-store");
+      return searchAsyl(p.data.q, await trackedOf(request));
+    });
+
+    /** The trades behind a "bought together" link: each coin both bought, side by side. */
+    priv.get("/pair/:a/:b", { config: { rateLimit: READ_LIMIT } }, async (request, reply) => {
+      const p = pairParams.safeParse(request.params);
+      if (!p.success) return bad(reply, p.error);
+      reply.header("Cache-Control", "private, no-store");
+      return loadPair(p.data.a, p.data.b);
     });
 
     /** Its co-traders, and the coins they bought that it didn't. */

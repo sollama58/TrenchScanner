@@ -6,6 +6,8 @@ import { asylApi, type AsylMe, type ChainRead, type Label, type MapDoc, type Map
 import { renderMapCard } from "./asylCard";
 import { AsylSignIn } from "./AsylSignIn";
 import { DrawEditor, PenBar } from "./DrawEditor";
+import { PairPanel } from "./PairPanel";
+import { SearchBox } from "./SearchBox";
 import {
   GraphView,
   MapLegend,
@@ -174,6 +176,8 @@ export function AsylApp() {
   } | null>(null);
   // How many co-traders each wallet has in all, for the panel's "Load all".
   const [coTraderTotals, setCoTraderTotals] = useState<Record<string, number>>({});
+  // The bought-together pair whose trades are open (user ask 2026-10-25).
+  const [pair, setPair] = useState<{ a: string; b: string } | null>(null);
   const [query, setQuery] = useState("");
   const [labels, setLabels] = useState<Label[]>([]);
   const [maps, setMaps] = useState<MapSummary[]>([]);
@@ -410,7 +414,7 @@ export function AsylApp() {
     const a = addressIn(text);
     if (!a) {
       setStatus({
-        text: "Paste a Solana wallet or coin address, or a Solscan, DexScreener or pump.fun link.",
+        text: "Pick a coin or wallet from the list, or paste a Solana address, or a Solscan, DexScreener or pump.fun link.",
         tone: "error",
       });
       return;
@@ -650,6 +654,7 @@ export function AsylApp() {
 
   const actions: InspectorActions = {
     expand: (n: AsylNode) => void (n.kind === "token" ? openToken(n.id) : openWallet(n.id)),
+    pair: (a, b) => setPair({ a, b }),
     similar: (wallet) =>
       void run("Finding wallets that trade like it…", async () => {
         const r = await asylApi.similar(wallet);
@@ -1097,39 +1102,18 @@ export function AsylApp() {
         <a className="asyl-wordmark small" href={`${BASE}/`} onClick={(e) => (e.preventDefault(), newMap())}>
           ASYL
         </a>
-        <form
-          className="asyl-search"
-          onSubmit={(e) => {
-            e.preventDefault();
-            search(query);
+        <SearchBox
+          query={query}
+          onQuery={setQuery}
+          busy={!!busy}
+          adding={graph.nodes.length > 0}
+          inputRef={searchBox}
+          onSubmit={search}
+          onPick={(p) => {
+            setQuery("");
+            void (p.kind === "token" ? openToken(p.address) : openWallet(p.address));
           }}
-        >
-          <input
-            ref={searchBox}
-            className="asyl-input"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onPaste={(e) => {
-              const text = e.clipboardData.getData("text");
-              if (addressIn(text)) {
-                e.preventDefault();
-                search(text);
-              }
-            }}
-            placeholder={
-              graph.nodes.length ? "Add a wallet or coin to this map" : "Paste a wallet, coin or link"
-            }
-            aria-label="Wallet or coin address"
-            spellCheck={false}
-          />
-          <button
-            className="asyl-btn primary"
-            disabled={!!busy}
-            title={graph.nodes.length ? "Adds it to the map you have open; New starts another" : undefined}
-          >
-            {graph.nodes.length ? "＋ Add to map" : "Map it"}
-          </button>
-        </form>
+        />
         <div className="asyl-me">
           <a className="asyl-btn ghost asyl-back" href={dashboardUrl()} title="Back to TrenchScanner">
             ← TrenchScanner
@@ -1702,6 +1686,21 @@ export function AsylApp() {
         )}
       </div>
 
+      {pair && (
+        <PairPanel
+          a={pair.a}
+          b={pair.b}
+          nameOf={(id) => {
+            const n = graph.nodes.find((x) => x.id === id);
+            return n ? nodeName(n) : shortAddr(id);
+          }}
+          onSelect={(id) => {
+            setSelected(id);
+            view.current?.centre(id);
+          }}
+          onClose={() => setPair(null)}
+        />
+      )}
       {sharing && (
         <ShareImageDialog
           title={title}
