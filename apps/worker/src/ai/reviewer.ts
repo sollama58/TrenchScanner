@@ -15,6 +15,7 @@ import {
   isPreFeeWalletStonksRow,
   DISQUALIFYING_DRAWDOWN_FRACTION,
   clampProbability,
+  applyBuyBar,
   firstReviewPerToken,
   judgeGateOpens,
   judgeLift,
@@ -114,15 +115,23 @@ async function withReviewSlot<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Turns a schema-valid model answer into the stored verdict: probabilities clamped, text capped. */
-export function verdictFromParsed(parsed: z.infer<typeof VerdictSchema>): AiReviewVerdict {
-  return {
+/**
+ * Turns a schema-valid model answer into the stored verdict: probabilities clamped, text capped,
+ * and the decision held to the buy bar (AI_REVIEW_BUY_MIN_PROBABILITY, core's applyBuyBar) when
+ * one is given.
+ */
+export function verdictFromParsed(
+  parsed: z.infer<typeof VerdictSchema>,
+  buyMinProbability?: number,
+): AiReviewVerdict {
+  const verdict: AiReviewVerdict = {
     decision: parsed.decision,
     probability2x: clampProbability(parsed.probability2x),
     probability4x: clampProbability(parsed.probability4x),
     reasoning: parsed.reasoning.slice(0, 1_000),
     risks: parsed.risks.slice(0, 8).map((r) => r.slice(0, 200)),
   };
+  return buyMinProbability === undefined ? verdict : applyBuyBar(verdict, buyMinProbability);
 }
 
 /** How many comparable past calls the brief summarizes - see formatComparables. */
@@ -416,7 +425,11 @@ async function callReviewer(
         // The system prompt (fixed instructions + playbook) is identical across calls until a
         // playbook is promoted - the stable prefix worth caching.
         system: [
-          { type: "text", text: aiReviewSystemPrompt(playbook?.text), cache_control: { type: "ephemeral" } },
+          {
+            type: "text",
+            text: aiReviewSystemPrompt(playbook?.text, env.AI_REVIEW_BUY_MIN_PROBABILITY),
+            cache_control: { type: "ephemeral" },
+          },
         ],
         messages: [{ role: "user", content: brief }],
         output_config: { effort: env.AI_REVIEW_EFFORT, format: betaZodOutputFormat(VerdictSchema) },
@@ -452,7 +465,12 @@ async function callReviewer(
         latencyMs,
       };
     }
-    return { ...usage, verdict: verdictFromParsed(parsed), error: null, latencyMs };
+    return {
+      ...usage,
+      verdict: verdictFromParsed(parsed, env.AI_REVIEW_BUY_MIN_PROBABILITY),
+      error: null,
+      latencyMs,
+    };
   } catch (err) {
     const latencyMs = Date.now() - startedAt;
     await settleAiSpend(reservation, failedCallCostUsd(err, reservation));

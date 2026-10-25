@@ -5,6 +5,10 @@ import {
   BRIEF_WALLET_FIELDS,
   MAX_PLAYBOOK_CHARS,
   aiReviewSystemPrompt,
+  aiReviewInstructions,
+  applyBuyBar,
+  buyBarPct,
+  DEFAULT_AI_REVIEW_BUY_MIN_PROBABILITY,
   buildAiReviewBrief,
   devLaunchLines,
   launcherTextInstructs,
@@ -119,6 +123,37 @@ describe("AI review brief", () => {
     expect(AI_REVIEW_SYSTEM_PROMPT).toContain("2x the alert price within 15 minutes");
     expect(AI_REVIEW_SYSTEM_PROMPT).toContain("at least 75%");
     expect(AI_REVIEW_SYSTEM_PROMPT).toContain("4x within 30 minutes");
+    // The buy bar is the default's, and a setting rewrites it (AI_REVIEW_BUY_MIN_PROBABILITY).
+    expect(AI_REVIEW_SYSTEM_PROMPT).toContain(
+      `chance of a win at ${buyBarPct(DEFAULT_AI_REVIEW_BUY_MIN_PROBABILITY)}% or higher`,
+    );
+    expect(aiReviewInstructions(0.7)).toContain("chance of a win at 70% or higher");
+    expect(aiReviewInstructions(0.7)).toContain("odds under 70% is wrong");
+    expect(aiReviewSystemPrompt("", 0.7)).toBe(aiReviewInstructions(0.7));
+    expect(aiReviewSystemPrompt("- a lesson", 0.7).startsWith(aiReviewInstructions(0.7))).toBe(true);
+  });
+
+  it("holds a buy to the buy bar, keeping the model's odds and reasoning", () => {
+    const buy = {
+      decision: "buy" as const,
+      probability2x: 0.35,
+      probability4x: 0.1,
+      reasoning: "r",
+      risks: ["a"],
+    };
+    const held = applyBuyBar(buy, 0.5);
+    expect(held.decision).toBe("no_buy");
+    expect(held.probability2x).toBe(0.35);
+    expect(held.reasoning).toBe("r");
+    expect(held.risks).toEqual(["a", "2x odds 35% under the 50% buy bar"]);
+    // At or above the bar, and every no_buy, pass through untouched.
+    expect(applyBuyBar({ ...buy, probability2x: 0.5 }, 0.5)).toEqual({ ...buy, probability2x: 0.5 });
+    expect(applyBuyBar({ ...buy, decision: "no_buy" }, 0.9)).toEqual({ ...buy, decision: "no_buy" });
+    // A bar of 0 is no bar.
+    expect(applyBuyBar({ ...buy, probability2x: 0 }, 0)).toEqual({ ...buy, probability2x: 0 });
+    // The risks list stays within its cap of eight.
+    const full = { ...buy, risks: ["1", "2", "3", "4", "5", "6", "7", "8"] };
+    expect(applyBuyBar(full, 0.5).risks).toHaveLength(8);
   });
 
   it("states the safety screen from the screen's own cuts", () => {

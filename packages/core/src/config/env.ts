@@ -1034,6 +1034,11 @@ const envSchema = z.object({
   AI_REVIEW_MODEL: z.string().default("claude-opus-5-5"),
   AI_REVIEW_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
   AI_REVIEW_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  // The 2x odds a "buy" needs, 0-1 (user ask 2026-10-25: as selective as it can be). Written into
+  // the prompt as the trader's bar, and enforced on the answer: a "buy" with probability2x under
+  // it is recorded as "no_buy" (curation/aiReview.ts applyBuyBar). The reviewed pool doubles about
+  // one time in five, so 0.5 asks for the clear exceptions; 0.65-0.75 is stricter still.
+  AI_REVIEW_BUY_MIN_PROBABILITY: z.coerce.number().min(0).max(1).default(0.5),
   AI_REVIEW_VETO_COOLDOWN_MINUTES: z.coerce.number().positive().default(30),
   // Gate mode has to be EARNED: until at least this many of the reviewer's "buy" calls under the
   // current playbook are graded (one per token) and they beat the pool it reviewed with a 95%

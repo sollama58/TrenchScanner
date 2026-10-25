@@ -326,6 +326,10 @@ export async function registerAdminOpsRoutes(
         apiKeySet: worker?.credentials.anthropicApiKey ?? env.ANTHROPIC_API_KEY.length > 0,
         apiKeyReportedBy: worker && "anthropicApiKey" in worker.credentials ? "worker" : "api",
         reviewModel: env.AI_REVIEW_MODEL,
+        reviewEffort: env.AI_REVIEW_EFFORT,
+        // The 2x odds a "buy" needs (AI_REVIEW_BUY_MIN_PROBABILITY), written into the prompt and
+        // enforced on the answer.
+        buyMinProbability: env.AI_REVIEW_BUY_MIN_PROBABILITY,
         textModel: env.AI_TEXT_MODEL,
         textFeatures: env.AI_TEXT_FEATURES,
         playbookEvolution: env.AI_PLAYBOOK_EVOLUTION,
