@@ -7,6 +7,8 @@ import {
   edgeTimeFull,
   edgeTimeLabel,
   nodeName,
+  pickInBox,
+  pickInLasso,
   TAG_LABEL,
   TIMED_KINDS,
   strokePath,
@@ -295,7 +297,11 @@ export interface DrawHandlers {
   moveText: (id: string, x: number, y: number) => void;
 }
 
-export type DrawTool = "line" | "text" | "pen" | null;
+/** A tool in hand: drawing ("line", "text", "pen"), or picking many bubbles ("box", "lasso"). */
+export type DrawTool = "line" | "text" | "pen" | "box" | "lasso" | null;
+
+/** How a drag-pick lands: as the whole pick, or added to what was already picked (Shift). */
+export type PickMode = "set" | "add";
 
 /** The pen in hand: its colour, and its thickness in screen pixels. */
 export interface Pen {
@@ -332,6 +338,8 @@ export function GraphView({
   onDraw,
   pen = { colour: "#fff3e6", width: 4 },
   grid = false,
+  picked,
+  onPick,
 }: {
   graph: AsylGraph;
   layout: LayoutState;
@@ -359,6 +367,9 @@ export function GraphView({
   pen?: Pen;
   /** Grid mode: every bubble sits on its own cell, sized so names and line times all show. */
   grid?: boolean;
+  /** Bubbles picked together by a box, a lasso or Ctrl-click, to hide or change at once. */
+  picked?: ReadonlySet<string>;
+  onPick?: (ids: string[], mode: PickMode) => void;
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [, setFrame] = useState(0);
@@ -372,6 +383,16 @@ export function GraphView({
   // The pen stroke being drawn, in map units.
   const ink = useRef<[number, number][] | null>(null);
   const [, setInkTick] = useState(0);
+  // A box or lasso being dragged out to pick bubbles, in map units.
+  const marquee = useRef<{
+    kind: "box" | "lasso";
+    points: [number, number][];
+    add: boolean;
+    /** The bubble it began on, which a click (no drag) picks. */
+    on: string | null;
+  } | null>(null);
+  const pickedRef = useRef(picked);
+  pickedRef.current = picked;
   useEffect(() => {
     if (tool !== "pen") ink.current = null;
   }, [tool]);
@@ -610,8 +631,9 @@ export function GraphView({
       const [a, b] = [...pointers.current.values()];
       pinch.current = { d: Math.hypot(a!.x - b!.x, a!.y - b!.y), k: viewRef.current.k };
       drag.current = null;
-      // A second finger zooms: the stroke it interrupted is dropped.
+      // A second finger zooms: the stroke or pick it interrupted is dropped.
       ink.current = null;
+      marquee.current = null;
       setInkTick((t) => t + 1);
       return;
     }
@@ -622,6 +644,34 @@ export function GraphView({
       ink.current = [[w.x, w.y]];
       drag.current = null;
       setInkTick((t) => t + 1);
+      return;
+    }
+    // Picking (user ask 2026-10-25): the box or lasso tool drags one out from anywhere but a bubble
+    // already picked, which drags the whole pick instead; with no tool, Shift drags a box from the
+    // background.
+    const boxing = tool === "box" || tool === "lasso" || (!tool && e.shiftKey && !id);
+    if (boxing && !readOnly && onPick && !(id && picked?.has(id))) {
+      e.preventDefault();
+      const w = toWorld(e.clientX, e.clientY);
+      marquee.current = {
+        kind: tool === "lasso" ? "lasso" : "box",
+        points: [[w.x, w.y]],
+        add: e.shiftKey,
+        on: id,
+      };
+      drag.current = null;
+      setInkTick((t) => t + 1);
+      return;
+    }
+    // Ctrl or Cmd and a click puts a bubble into the pick, or takes it out.
+    if (id && (e.ctrlKey || e.metaKey) && !readOnly && onPick) {
+      e.preventDefault();
+      if (picked?.has(id))
+        onPick(
+          [...picked].filter((x) => x !== id),
+          "set",
+        );
+      else onPick([id], "add");
       return;
     }
     if (tool === "line" && !readOnly && id) {
@@ -647,14 +697,19 @@ export function GraphView({
       startY: e.clientY,
       dx: at && w ? at.x - w.x : 0,
       dy: at && w ? at.y - w.y : 0,
-      // Shift drags the bubble alone.
-      carry: id && !e.shiftKey ? carriedBy(graph, id, layout.pinned) : new Map(),
+      // A picked bubble carries the rest of the pick with it, wholly; Shift drags a bubble alone.
+      carry:
+        id && picked?.has(id) && picked.size > 1
+          ? new Map([...picked].filter((x) => x !== id).map((x) => [x, 1]))
+          : id && !e.shiftKey
+            ? carriedBy(graph, id, layout.pinned)
+            : new Map(),
     };
   };
 
   /** A drawing grabbed: a text box can be dragged; either is picked by a click. */
   const onDrawnDown = (e: React.PointerEvent, id: string, text: boolean) => {
-    if (tool === "pen") return onPointerDown(e, null);
+    if (tool === "pen" || tool === "box" || tool === "lasso") return onPointerDown(e, null);
     e.stopPropagation();
     if (readOnly) return;
     (e.target as Element).setPointerCapture?.(e.pointerId);
@@ -678,6 +733,17 @@ export function GraphView({
     const prev = pointers.current.get(e.pointerId);
     if (!prev) return;
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (marquee.current && pointers.current.size === 1) {
+      const m = marquee.current;
+      const w = toWorld(e.clientX, e.clientY);
+      if (m.kind === "box") m.points = [m.points[0]!, [w.x, w.y]];
+      else {
+        const [lx, ly] = m.points[m.points.length - 1]!;
+        if (Math.hypot(w.x - lx, w.y - ly) * viewRef.current.k >= 4) m.points.push([w.x, w.y]);
+      }
+      setInkTick((t) => t + 1);
+      return;
+    }
     if (ink.current && pointers.current.size === 1) {
       // A point every few pixels: enough for a smooth line, few enough to keep.
       const w = toWorld(e.clientX, e.clientY);
@@ -713,9 +779,15 @@ export function GraphView({
       const w = toWorld(e.clientX, e.clientY);
       const from = layout.pos.get(d.id) ?? w;
       const to = { x: w.x + d.dx, y: w.y + d.dy };
+      const group = !!pickedRef.current?.has(d.id) && pickedRef.current.size > 1;
       for (const [id, share] of d.carry) {
         const p = layout.pos.get(id);
         if (p) layout.pos.set(id, { x: p.x + (to.x - from.x) * share, y: p.y + (to.y - from.y) * share });
+        // A pick moved as one stays where it is put, each bubble of it.
+        if (group) {
+          layout.pinned.add(id);
+          layout.vel.set(id, { x: 0, y: 0 });
+        }
       }
       layout.pos.set(d.id, to);
       layout.pinned.add(d.id);
@@ -730,6 +802,26 @@ export function GraphView({
   const onPointerUp = (e: React.PointerEvent) => {
     pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) pinch.current = null;
+    if (marquee.current) {
+      const m = marquee.current;
+      marquee.current = null;
+      setInkTick((t) => t + 1);
+      const ids = graph.nodes.map((n) => n.id);
+      const [a, b] = [m.points[0]!, m.points[m.points.length - 1]!];
+      // Barely moved: a click, which picks the bubble it was on, or on the background clears the
+      // pick (with Shift, leaves it as it is).
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) * viewRef.current.k < 4 && m.points.length < 3) {
+        if (m.on) onPick?.([m.on], m.add ? "add" : "set");
+        else if (!m.add) onPick?.([], "set");
+        return;
+      }
+      const got =
+        m.kind === "box"
+          ? pickInBox(layout.pos, ids, { x: a[0], y: a[1] }, { x: b[0], y: b[1] })
+          : pickInLasso(layout.pos, ids, m.points);
+      onPick?.(got, m.add ? "add" : "set");
+      return;
+    }
     if (ink.current) {
       const points = ink.current;
       ink.current = null;
@@ -753,6 +845,8 @@ export function GraphView({
     if (!d.moved) {
       onDraw?.select(null);
       onSelect(d.id);
+      // A plain click on the background lets the pick go.
+      if (!d.id && picked?.size) onPick?.([], "set");
     } else if (d.id && !readOnly) {
       if (grid && !sim.current.raf) {
         snap();
@@ -1084,6 +1178,7 @@ export function GraphView({
                     : "#3a2116";
               const ring = ringOf(n);
               const isSel = n.id === selected;
+              const isPicked = !!picked?.has(n.id);
               const isFocus = n.id === focus;
               const hoverText = [
                 nodeName(n),
@@ -1096,7 +1191,7 @@ export function GraphView({
               return (
                 <g
                   key={n.id}
-                  className={`asyl-node${isSel ? " selected" : ""}`}
+                  className={`asyl-node${isSel ? " selected" : ""}${isPicked ? " picked" : ""}`}
                   transform={`translate(${p.x} ${p.y})`}
                   opacity={dim ? 0.25 : 1}
                   onPointerDown={(e) => onPointerDown(e, n.id)}
@@ -1107,6 +1202,7 @@ export function GraphView({
                   onPointerEnter={(e) => showHover(e, hoverText)}
                   onPointerLeave={() => setHover(null)}
                 >
+                  {isPicked && <circle r={r + 5} className="asyl-pick-ring" />}
                   {(isSel || isFocus || n.id === pending) && (
                     <circle
                       r={r + 7}
@@ -1150,7 +1246,10 @@ export function GraphView({
                       </text>
                     </g>
                   )}
-                  {(isSel || isFocus || (!dim && (n.name || lit || dense < 1 || view.k > 1.1 * dense))) && (
+                  {(isSel ||
+                    isFocus ||
+                    isPicked ||
+                    (!dim && (n.name || lit || dense < 1 || view.k > 1.1 * dense))) && (
                     <text
                       className="asyl-node-label"
                       y={r + 13}
@@ -1218,6 +1317,26 @@ export function GraphView({
               pointerEvents="none"
             />
           )}
+          {marquee.current &&
+            marquee.current.points.length > 1 &&
+            (marquee.current.kind === "box" ? (
+              <rect
+                className="asyl-marquee"
+                x={Math.min(marquee.current.points[0]![0], marquee.current.points[1]![0])}
+                y={Math.min(marquee.current.points[0]![1], marquee.current.points[1]![1])}
+                width={Math.abs(marquee.current.points[1]![0] - marquee.current.points[0]![0])}
+                height={Math.abs(marquee.current.points[1]![1] - marquee.current.points[0]![1])}
+                strokeWidth={1.5 / view.k}
+                strokeDasharray={`${6 / view.k} ${4 / view.k}`}
+              />
+            ) : (
+              <path
+                className="asyl-marquee"
+                d={`${strokePath(marquee.current.points)} Z`}
+                strokeWidth={1.5 / view.k}
+                strokeDasharray={`${6 / view.k} ${4 / view.k}`}
+              />
+            ))}
           {drawings && drawings.lines.some((l) => l.label) && (
             <g className="asyl-drawn-labels">
               {drawings.lines.map((l) => {
