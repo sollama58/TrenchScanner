@@ -131,6 +131,12 @@ export interface ContestantSpec {
    */
   retired?: boolean;
   /**
+   * A tracking-only seat: it trains, sits its exam and scores every decision moment (the score is
+   * banked with the row), but files no calls and can't become the champion or a Top Model, so its
+   * ranking can still be judged and the flag lifted if it recovers.
+   */
+  trackingOnly?: boolean;
+  /**
    * A gated seat (learners only, standalone): the ModelGate id of the frozen filter a token must
    * pass before the seat considers it (curation/modelGate.ts). It trains and sits its exam on the
    * moments that pass and decides live only on those, so its rows don't line up with the shared
@@ -641,6 +647,9 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     role: "learner",
     recipe: { learner: "gbdt", goal: "safe" },
     standalone: true,
+    // Ranked coins worse than chance on every window (72h AUC 0.485, live 2x lift 0.93): tracking
+    // only, user decision 2026-10-25 (model scorecard 12-72h).
+    trackingOnly: true,
   },
   {
     id: FOUR_X_CONTESTANT,
@@ -694,6 +703,9 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
       cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
       goal: "return",
     },
+    // Ranked coins worse than chance on every window (72h AUC 0.452, 2x 4.8% on the last day
+    // against a 13% market): tracking only, user decision 2026-10-25 (model scorecard 12-72h).
+    trackingOnly: true,
     standalone: true,
   },
   {

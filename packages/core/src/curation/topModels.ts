@@ -221,7 +221,9 @@ export function loadTopModels(
 ): Promise<TopModels> {
   const { since, rankSince, until, slot } = topModelsWindow(now);
   const ids = roster.map((c) => c.id);
-  const calling = roster.filter((c) => c.control !== true && canCall(c.id)).map((c) => c.id);
+  const calling = roster
+    .filter((c) => c.control !== true && c.trackingOnly !== true && canCall(c.id))
+    .map((c) => c.id);
   const lanesKey = lanes.map((l) => `${l.slot}=${l.name}`).join(",");
   const key = `${slot}|${ids.join(",")}|${calling.join(",")}|${lanesKey}`;
   const hit = cache.get(key);

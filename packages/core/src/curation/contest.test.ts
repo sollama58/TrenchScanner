@@ -126,6 +126,17 @@ describe("contestant roster", () => {
   });
 });
 
+describe("tracking-only seats", () => {
+  it("keeps Safe and Profit scoring on the roster but out of the calling seats (2026-10-25)", () => {
+    const tracking = CONTESTANTS.filter((c) => c.trackingOnly).map((c) => c.id);
+    expect(tracking.sort()).toEqual(["return-regression", "safe"]);
+    for (const id of tracking) {
+      expect(ACTIVE_CONTESTANT_IDS).toContain(id);
+      expect(contestantSpec(id)?.retired).not.toBe(true);
+    }
+  });
+});
+
 describe("the high-precision seats", () => {
   it("anchors the cutoff at the top 8% of decision moments", () => {
     // 2026-10-21 user ask: narrower than the top 12%. The walk-forward in the constant's comment

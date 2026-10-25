@@ -567,7 +567,9 @@ function decideCurations(
       if (entry.spec.retired) continue;
       learners.set(entry.spec.id, entry.model);
       const own = usableLiveScores(live.scores, entry.spec.id);
-      const curate = probability >= seatLiveCutoff(entry.spec.id, params, live);
+      // A tracking-only seat scores and is recorded like any other, but never calls.
+      const curate =
+        entry.spec.trackingOnly !== true && probability >= seatLiveCutoff(entry.spec.id, params, live);
       decisions.set(entry.spec.id, {
         curate,
         confidence: probability * 100,
