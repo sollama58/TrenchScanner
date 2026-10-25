@@ -9,6 +9,7 @@ import {
   nodeName,
   TAG_LABEL,
   TIMED_KINDS,
+  strokePath,
   textBoxSize,
   type Drawings,
   type TimeLabels,
@@ -288,11 +289,19 @@ export interface View {
 export interface DrawHandlers {
   addLine: (a: string, b: string) => void;
   addText: (x: number, y: number) => void;
+  /** A pen stroke drawn, in map units, and how thick it was in map units. */
+  addStroke: (points: [number, number][], width: number) => void;
   select: (id: string | null) => void;
   moveText: (id: string, x: number, y: number) => void;
 }
 
-export type DrawTool = "line" | "text" | null;
+export type DrawTool = "line" | "text" | "pen" | null;
+
+/** The pen in hand: its colour, and its thickness in screen pixels. */
+export interface Pen {
+  colour: string;
+  width: number;
+}
 
 export interface GraphViewHandle {
   fit: () => void;
@@ -319,6 +328,7 @@ export function GraphView({
   tool = null,
   drawingSelected = null,
   onDraw,
+  pen = { colour: "#fff3e6", width: 4 },
   grid = false,
 }: {
   graph: AsylGraph;
@@ -343,6 +353,8 @@ export function GraphView({
   tool?: DrawTool;
   drawingSelected?: string | null;
   onDraw?: DrawHandlers;
+  /** The pen tool's colour and thickness. */
+  pen?: Pen;
   /** Grid mode: every bubble sits on its own cell, sized so names and line times all show. */
   grid?: boolean;
 }) {
@@ -355,6 +367,12 @@ export function GraphView({
   // The line tool's first bubble, and where the pointer is, for the line being drawn.
   const [pending, setPending] = useState<string | null>(null);
   const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null);
+  // The pen stroke being drawn, in map units.
+  const ink = useRef<[number, number][] | null>(null);
+  const [, setInkTick] = useState(0);
+  useEffect(() => {
+    if (tool !== "pen") ink.current = null;
+  }, [tool]);
   useEffect(() => {
     if (tool !== "line") {
       setPending(null);
@@ -579,6 +597,18 @@ export function GraphView({
       const [a, b] = [...pointers.current.values()];
       pinch.current = { d: Math.hypot(a!.x - b!.x, a!.y - b!.y), k: viewRef.current.k };
       drag.current = null;
+      // A second finger zooms: the stroke it interrupted is dropped.
+      ink.current = null;
+      setInkTick((t) => t + 1);
+      return;
+    }
+    if (tool === "pen" && !readOnly) {
+      // The pen draws wherever it goes down, over bubbles and drawings alike.
+      e.preventDefault();
+      const w = toWorld(e.clientX, e.clientY);
+      ink.current = [[w.x, w.y]];
+      drag.current = null;
+      setInkTick((t) => t + 1);
       return;
     }
     if (tool === "line" && !readOnly && id) {
@@ -611,6 +641,7 @@ export function GraphView({
 
   /** A drawing grabbed: a text box can be dragged; either is picked by a click. */
   const onDrawnDown = (e: React.PointerEvent, id: string, text: boolean) => {
+    if (tool === "pen") return onPointerDown(e, null);
     e.stopPropagation();
     if (readOnly) return;
     (e.target as Element).setPointerCapture?.(e.pointerId);
@@ -634,6 +665,16 @@ export function GraphView({
     const prev = pointers.current.get(e.pointerId);
     if (!prev) return;
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (ink.current && pointers.current.size === 1) {
+      // A point every few pixels: enough for a smooth line, few enough to keep.
+      const w = toWorld(e.clientX, e.clientY);
+      const [lx, ly] = ink.current[ink.current.length - 1]!;
+      if (Math.hypot(w.x - lx, w.y - ly) * viewRef.current.k >= 2.5) {
+        ink.current.push([w.x, w.y]);
+        setInkTick((t) => t + 1);
+      }
+      return;
+    }
     if (pinch.current && pointers.current.size === 2) {
       const [a, b] = [...pointers.current.values()];
       const d = Math.hypot(a!.x - b!.x, a!.y - b!.y);
@@ -676,6 +717,13 @@ export function GraphView({
   const onPointerUp = (e: React.PointerEvent) => {
     pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) pinch.current = null;
+    if (ink.current) {
+      const points = ink.current;
+      ink.current = null;
+      setInkTick((t) => t + 1);
+      onDraw?.addStroke(points, pen.width / viewRef.current.k);
+      return;
+    }
     const d = drag.current;
     drag.current = null;
     if (!d) return;
@@ -1103,6 +1151,60 @@ export function GraphView({
               );
             })}
           </g>
+          {drawings && drawings.strokes.length > 0 && (
+            <g className="asyl-drawn-strokes">
+              {drawings.strokes.map((st) => {
+                const path = strokePath(st.points);
+                const on = drawingSelected === st.id;
+                return (
+                  <g key={st.id} className={`asyl-drawn-stroke${on ? " on" : ""}`}>
+                    {on && (
+                      <path
+                        d={path}
+                        fill="none"
+                        stroke={st.colour}
+                        strokeOpacity={0.3}
+                        strokeWidth={st.width + 10 / view.k}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    )}
+                    <path
+                      d={path}
+                      fill="none"
+                      stroke={st.colour}
+                      strokeWidth={st.width}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      pointerEvents="none"
+                    />
+                    {!readOnly && (
+                      <path
+                        d={path}
+                        fill="none"
+                        stroke="transparent"
+                        strokeWidth={Math.max(st.width, 12 / view.k)}
+                        strokeLinecap="round"
+                        className="asyl-drawn-hit"
+                        onPointerDown={(ev) => onDrawnDown(ev, st.id, false)}
+                      />
+                    )}
+                  </g>
+                );
+              })}
+            </g>
+          )}
+          {ink.current && (
+            <path
+              d={strokePath(ink.current)}
+              fill="none"
+              stroke={pen.colour}
+              strokeWidth={pen.width / view.k}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              pointerEvents="none"
+            />
+          )}
           {drawings && drawings.lines.some((l) => l.label) && (
             <g className="asyl-drawn-labels">
               {drawings.lines.map((l) => {

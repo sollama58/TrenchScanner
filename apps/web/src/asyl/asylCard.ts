@@ -20,6 +20,7 @@ import {
   clusterOf,
   edgeTimeLabel,
   nodeName,
+  strokePath,
   textBoxSize,
   type AsylGraph,
   type Drawings,
@@ -68,15 +69,15 @@ const STRETCH = 1.7;
 const STRETCH_CROWDED = 2.6;
 
 /** Faint orange marker over the card's dark, as on the map itself. */
-function drawWall(ctx: CanvasRenderingContext2D) {
+function drawWall(ctx: CanvasRenderingContext2D, W = CARD_W, H = CARD_H) {
   const marks = wallMarks({ seed: 1985, density: 60, notes: false });
   const paths = marks.strokes.map((m) => ({ p: new Path2D(m.d), w: m.width }));
   ctx.save();
   ctx.strokeStyle = "rgba(255, 122, 47, 0.03)";
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  for (let ox = 0; ox < CARD_W; ox += TILE) {
-    for (let oy = 0; oy < CARD_H; oy += TILE) {
+  for (let ox = 0; ox < W; ox += TILE) {
+    for (let oy = 0; oy < H; oy += TILE) {
       ctx.save();
       ctx.translate(ox, oy);
       for (const { p, w } of paths) {
@@ -150,7 +151,15 @@ export interface MapCardInput {
   timeLabels?: TimeLabels;
   /** Told what the image changed to fit (a fresh layout), or null when it is the map as laid out. */
   onNote?: (note: string | null) => void;
+  /**
+   * The map as the reader sees it now (user ask 2026-10-25): the image is what is on screen, at
+   * the screen's size and zoom, with the legend and brand laid over its corners.
+   */
+  view?: { x: number; y: number; k: number; w: number; h: number };
 }
+
+/** A screen-sized image's pixels per screen pixel: sharp, within what browsers draw. */
+const shotScale = (w: number, h: number) => Math.max(1, Math.min(2, 4096 / Math.max(w, h)));
 
 export function mapCardSub(g: AsylGraph): string {
   const wallets = g.nodes.filter((n) => n.kind === "wallet").length;
@@ -479,7 +488,20 @@ function declutter(
 }
 
 export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElement> {
-  const { canvas, ctx, icon } = await cardCanvas(2);
+  const shot = input.view;
+  const W = shot ? Math.max(320, Math.round(shot.w)) : CARD_W;
+  const H = shot ? Math.max(240, Math.round(shot.h)) : CARD_H;
+  const card = await cardCanvas(2);
+  const { icon } = card;
+  let { canvas, ctx } = card;
+  if (shot) {
+    const sc = shotScale(W, H);
+    canvas = document.createElement("canvas");
+    canvas.width = Math.round(W * sc);
+    canvas.height = Math.round(H * sc);
+    ctx = canvas.getContext("2d");
+    ctx?.scale(sc, sc);
+  }
   if (!ctx) return canvas;
   await document.fonts?.load(`400 40px "Permanent Marker"`).catch(() => undefined);
   const g = input.graph;
@@ -493,61 +515,66 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
 
   // The card: dark, the brand's flame bar along the top, Asyl's marks faint over all of it.
   ctx.fillStyle = "#0c0d12";
-  ctx.fillRect(0, 0, CARD_W, CARD_H);
-  drawWall(ctx);
-  const glow = ctx.createRadialGradient(CARD_W / 2, CARD_H / 2, 80, CARD_W / 2, CARD_H / 2, CARD_W * 0.62);
+  ctx.fillRect(0, 0, W, H);
+  drawWall(ctx, W, H);
+  const glow = ctx.createRadialGradient(W / 2, H / 2, 80, W / 2, H / 2, W * 0.62);
   glow.addColorStop(0, "rgba(255, 122, 47, 0.07)");
   glow.addColorStop(1, "rgba(255, 122, 47, 0)");
   ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, CARD_W, CARD_H);
+  ctx.fillRect(0, 0, W, H);
   ctx.fillStyle = BRAND_A;
-  ctx.fillRect(0, 0, CARD_W, 5);
+  ctx.fillRect(0, 0, W, 4);
+  const drawnCount =
+    (input.drawings?.lines.length ?? 0) +
+    (input.drawings?.texts.length ?? 0) +
+    (input.drawings?.strokes?.length ?? 0);
 
   // Title row: icon, ASYL in marker, the map's title and what is on it; TrenchScanner on the right.
   const iconS = 38;
-  if (icon) {
+  if (!shot) {
+    if (icon) {
+      ctx.save();
+      roundRect(ctx, EDGE, 22, iconS, iconS, 10);
+      ctx.clip();
+      ctx.drawImage(icon, EDGE, 22, iconS, iconS);
+      ctx.restore();
+    }
     ctx.save();
-    roundRect(ctx, EDGE, 22, iconS, iconS, 10);
-    ctx.clip();
-    ctx.drawImage(icon, EDGE, 22, iconS, iconS);
+    ctx.font = `400 30px "Permanent Marker", ${FONT}`;
+    ctx.fillStyle = "#ff7a2f";
+    ctx.textBaseline = "middle";
+    ctx.translate(EDGE + iconS + 12, 42);
+    ctx.rotate(-0.05);
+    ctx.fillText("ASYL", 0, 0);
     ctx.restore();
+    const titleX = EDGE + iconS + 104;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
+    ctx.fillRect(titleX - 14, 26, 1.5, 32);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = INK;
+    ctx.font = `750 22px ${FONT}`;
+    ctx.fillText(clip(ctx, input.title, 560), titleX, 41);
+    ctx.fillStyle = INK2;
+    ctx.font = `500 14px ${FONT}`;
+    ctx.fillText(
+      clip(
+        ctx,
+        mapCardSub(g) + (drawnCount ? ` · ${drawnCount} drawn note${drawnCount === 1 ? "" : "s"}` : ""),
+        560,
+      ),
+      titleX,
+      61,
+    );
+    ctx.textAlign = "right";
+    ctx.fillStyle = INK;
+    ctx.font = `700 17px ${FONT}`;
+    ctx.fillText("TrenchScanner", CARD_W - EDGE, 40);
+    ctx.fillStyle = MUTED;
+    ctx.font = `500 13px ${FONT}`;
+    ctx.fillText("by ASDFASDFA", CARD_W - EDGE, 59);
+    ctx.textAlign = "left";
   }
-  ctx.save();
-  ctx.font = `400 30px "Permanent Marker", ${FONT}`;
-  ctx.fillStyle = "#ff7a2f";
-  ctx.textBaseline = "middle";
-  ctx.translate(EDGE + iconS + 12, 42);
-  ctx.rotate(-0.05);
-  ctx.fillText("ASYL", 0, 0);
-  ctx.restore();
-  const titleX = EDGE + iconS + 104;
-  ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
-  ctx.fillRect(titleX - 14, 26, 1.5, 32);
-  ctx.textAlign = "left";
-  ctx.textBaseline = "alphabetic";
-  ctx.fillStyle = INK;
-  ctx.font = `750 22px ${FONT}`;
-  ctx.fillText(clip(ctx, input.title, 560), titleX, 41);
-  const drawnCount = (input.drawings?.lines.length ?? 0) + (input.drawings?.texts.length ?? 0);
-  ctx.fillStyle = INK2;
-  ctx.font = `500 14px ${FONT}`;
-  ctx.fillText(
-    clip(
-      ctx,
-      mapCardSub(g) + (drawnCount ? ` · ${drawnCount} drawn note${drawnCount === 1 ? "" : "s"}` : ""),
-      560,
-    ),
-    titleX,
-    61,
-  );
-  ctx.textAlign = "right";
-  ctx.fillStyle = INK;
-  ctx.font = `700 17px ${FONT}`;
-  ctx.fillText("TrenchScanner", CARD_W - EDGE, 40);
-  ctx.fillStyle = MUTED;
-  ctx.font = `500 13px ${FONT}`;
-  ctx.fillText("by ASDFASDFA", CARD_W - EDGE, 59);
-  ctx.textAlign = "left";
 
   // Pictures for the bubbles, each from the first of its sources that loads readable.
   const pictures = await loadPictures(g);
@@ -562,10 +589,13 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
   const ids = g.nodes.map((n) => n.id);
   let pos: Pos = layout.pos;
   let drawings = input.drawings;
-  let fit = fitBox(extent(pos, ids, radius, drawings), box);
+  // A screenshot is the screen's own view: nothing refitted, laid out afresh or nudged.
+  let fit: Fit & { stretched?: boolean } = shot
+    ? { sx: shot.k, sy: shot.k, ox: shot.x, oy: shot.y, size: shot.k }
+    : fitBox(extent(pos, ids, radius, drawings), box);
   let note: string | null = fit.stretched ? "The map is stretched a little to fill the image's shape." : null;
-  const crowd = crowding(g, pos, fit, radius);
-  if ((fit.size < LEGIBLE || crowd > 0) && g.nodes.length > 2) {
+  const crowd = shot ? 0 : crowding(g, pos, fit, radius);
+  if (!shot && (fit.size < LEGIBLE || crowd > 0) && g.nodes.length > 2) {
     const compact = compactLayout(g, layout.pos, radius, drawings);
     const fit2 = fitBox(extent(compact.pos, ids, radius, compact.drawings), box);
     const crowd2 = crowding(g, compact.pos, fit2, radius);
@@ -580,10 +610,10 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
           : "Your map is too spread out to read at the image's size, so the image lays it out more compactly. Your map itself is unchanged.";
     }
   }
-  if (fit.size < LEGIBLE * 0.6 && !note?.startsWith("Your map"))
+  if (!shot && fit.size < LEGIBLE * 0.6 && !note?.startsWith("Your map"))
     note = "A big map: the image shows all of it, small. Take some bubbles off for a clearer image.";
   // A tall or narrow map that still piles up uses the image's width (or height) too.
-  const crowdNow = crowding(g, pos, fit, radius);
+  const crowdNow = shot ? 0 : crowding(g, pos, fit, radius);
   if (crowdNow > 0) {
     const wide = fitBox(extent(pos, ids, radius, drawings), box, true);
     const crowdWide = crowding(g, pos, wide, radius);
@@ -593,6 +623,10 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
     }
   }
 
+  // Sizes: on a screenshot exactly as on screen; on the card, kept readable (bubbleK, textK).
+  const tk = shot ? shot.k : textK(fit);
+  const bk = shot ? shot.k : bubbleK(g, fit);
+  const namePxNow = shot ? (11 * shot.k) / Math.min(1.4, Math.max(0.7, shot.k)) : namePx(g);
   // Text boxes as the image draws them, which bubbles keep clear of.
   const textRects = (drawings?.texts ?? [])
     .filter((t) => t.text.trim())
@@ -600,9 +634,9 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
       const { w, h } = textBoxSize(t.text);
       const x = fit.ox + t.x * fit.sx;
       const y = fit.oy + t.y * fit.sy;
-      return { x0: x - 4, y0: y - 4, x1: x + w * textK(fit) + 4, y1: y + h * textK(fit) + 4 };
+      return { x0: x - 4, y0: y - 4, x1: x + w * tk + 4, y1: y + h * tk + 4 };
     });
-  const tidy = declutter(g, pos, fit, radius, textRects, box);
+  const tidy = shot ? { pos, moved: 0 } : declutter(g, pos, fit, radius, textRects, box);
   pos = tidy.pos;
   if (tidy.moved > 0 && !note)
     note =
@@ -615,7 +649,7 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
     const p = pos.get(id)!;
     return { x: fit.ox + p.x * fit.sx, y: fit.oy + p.y * fit.sy };
   };
-  const rOf = (id: string) => Math.max(4, radius(id) * bubbleK(g, fit));
+  const rOf = (id: string) => Math.max(shot ? 1 : 4, radius(id) * bk);
   const maxByKind = new Map<string, number>();
   for (const e of g.edges) maxByKind.set(e.kind, Math.max(maxByKind.get(e.kind) ?? 0, e.weight));
 
@@ -742,12 +776,17 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
 
   const clusters = clusterOf(g);
   // Every bubble is named on a map of up to 40; past that, the named ones and the biggest.
+  // A screenshot names what the screen names: named bubbles, and the rest when the map is small or
+  // zoomed in enough (GraphView's own rule).
+  const dense = g.nodes.length / 25;
   const labelled = new Set(
-    (g.nodes.length <= 40
-      ? g.nodes
-      : [...g.nodes]
-          .sort((a, b) => Number(!!b.name) - Number(!!a.name) || radius(b.id) - radius(a.id))
-          .slice(0, 40)
+    (shot
+      ? g.nodes.filter((n) => n.name || n.id === input.focus || dense < 1 || shot.k > 1.1 * dense)
+      : g.nodes.length <= 40
+        ? g.nodes
+        : [...g.nodes]
+            .sort((a, b) => Number(!!b.name) - Number(!!a.name) || radius(b.id) - radius(a.id))
+            .slice(0, 40)
     ).map((n) => n.id),
   );
   for (const n of g.nodes) {
@@ -810,7 +849,7 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
       ctx.fillText("D", bx, by + 0.5);
     }
     if (labelled.has(n.id)) {
-      ctx.font = `700 ${namePx(g)}px ${FONT}`;
+      ctx.font = `700 ${namePxNow}px ${FONT}`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       ctx.lineWidth = 4;
@@ -869,11 +908,24 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
     ctx.fillText(text, mx, my + 1);
   }
 
+  // The reader's pen strokes, in the map's units like the bubbles they were drawn around.
+  for (const st of drawings?.strokes ?? []) {
+    ctx.save();
+    ctx.translate(fit.ox, fit.oy);
+    ctx.scale(fit.sx, fit.sy);
+    ctx.strokeStyle = st.colour;
+    ctx.lineWidth = st.width;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.stroke(new Path2D(strokePath(st.points)));
+    ctx.restore();
+  }
+
   // The reader's text boxes, over everything, scaled with the map.
   for (const t of drawings?.texts ?? []) {
     if (!t.text.trim()) continue;
     const { w, h } = textBoxSize(t.text);
-    const k = textK(fit);
+    const k = tk;
     const x = fit.ox + t.x * fit.sx;
     const y = fit.oy + t.y * fit.sy;
     ctx.beginPath();
@@ -890,6 +942,11 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
     t.text.split("\n").forEach((line, i) => ctx.fillText(line, x + 12 * k, y + (23 + i * 20) * k));
   }
   ctx.textAlign = "left";
+
+  if (shot) {
+    drawShotFrame(ctx, W, H, icon, input.title, g, drawnCount > 0);
+    return canvas;
+  }
 
   // Footer row: the legend (only the kinds this map has, and the reader's lines), the link and date.
   const fy = CARD_H - 30;
@@ -956,4 +1013,152 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
     fy + 14,
   );
   return canvas;
+}
+
+/**
+ * A screenshot's frame (user ask 2026-10-25): the brand and title in the top-left corner, the
+ * legend in the bottom-left, the link and date in the bottom-right, each on a dark plate so the map
+ * under it stays the picture.
+ */
+function drawShotFrame(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  H: number,
+  icon: HTMLImageElement | null,
+  title: string,
+  g: AsylGraph,
+  drawn: boolean,
+) {
+  const pad = 14;
+  const plate = (x: number, y: number, w: number, h: number) => {
+    ctx.save();
+    ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
+    ctx.shadowBlur = 18;
+    roundRect(ctx, x, y, w, h, 12);
+    ctx.fillStyle = "rgba(12, 13, 18, 0.88)";
+    ctx.fill();
+    ctx.restore();
+    roundRect(ctx, x, y, w, h, 12);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255, 122, 47, 0.35)";
+    ctx.stroke();
+  };
+
+  // Brand and title, top left.
+  const iconS = 30;
+  ctx.font = `750 15px ${FONT}`;
+  const titleText = clip(ctx, title, Math.min(420, W - 200));
+  ctx.font = `500 12px ${FONT}`;
+  const sub = clip(ctx, mapCardSub(g), Math.min(420, W - 200));
+  const subW = ctx.measureText(sub).width;
+  ctx.font = `750 15px ${FONT}`;
+  const textW = Math.max(ctx.measureText(titleText).width, subW);
+  const brandW = iconS + 10 + 62;
+  const topW = Math.min(W - pad * 2, brandW + 22 + textW + 24);
+  plate(pad, pad, topW, 52);
+  if (icon) {
+    ctx.save();
+    roundRect(ctx, pad + 11, pad + 11, iconS, iconS, 8);
+    ctx.clip();
+    ctx.drawImage(icon, pad + 11, pad + 11, iconS, iconS);
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.font = `400 22px "Permanent Marker", ${FONT}`;
+  ctx.fillStyle = "#ff7a2f";
+  ctx.textBaseline = "middle";
+  ctx.translate(pad + 11 + iconS + 9, pad + 27);
+  ctx.rotate(-0.05);
+  ctx.fillText("ASYL", 0, 0);
+  ctx.restore();
+  const tx = pad + 11 + brandW + 12;
+  ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
+  ctx.fillRect(tx - 11, pad + 12, 1, 28);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = INK;
+  ctx.font = `750 15px ${FONT}`;
+  ctx.fillText(titleText, tx, pad + 24);
+  ctx.fillStyle = INK2;
+  ctx.font = `500 12px ${FONT}`;
+  ctx.fillText(sub, tx, pad + 41);
+
+  // Link and date, bottom right.
+  ctx.font = `700 14px ${FONT}`;
+  const link = "asyl.trenchscanner.app";
+  const by = "TrenchScanner · by ASDFASDFA";
+  const linkW = ctx.measureText(link).width;
+  ctx.font = `500 11px ${FONT}`;
+  const byW = Math.max(ctx.measureText(by).width, ctx.measureText(stamp(new Date())).width);
+  const brW = Math.max(linkW, byW) + 24;
+  const brH = 60;
+  plate(W - pad - brW, H - pad - brH, brW, brH);
+  ctx.textAlign = "right";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = INK;
+  ctx.font = `700 14px ${FONT}`;
+  ctx.fillText(link, W - pad - 12, H - pad - brH + 22);
+  ctx.fillStyle = INK2;
+  ctx.font = `500 11px ${FONT}`;
+  ctx.fillText(by, W - pad - 12, H - pad - brH + 38);
+  ctx.fillStyle = MUTED;
+  ctx.fillText(stamp(new Date()), W - pad - 12, H - pad - brH + 52);
+  ctx.textAlign = "left";
+
+  // Legend, bottom left: the kinds of link on the map, one per row (two columns when many).
+  const kinds = EDGE_KINDS.filter((kd) => g.edges.some((e) => e.kind === kd));
+  const rows: { label: string; draw: (x: number, y: number) => void }[] = kinds.map((kd) => ({
+    label: EDGE_LABEL[kd],
+    draw: (x: number, y: number) => {
+      const st = EDGE_STYLE[kd];
+      ctx.strokeStyle = EDGE_COLOUR[kd];
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = kd === "cotrade" ? "round" : "butt";
+      ctx.setLineDash(dashOf(st.dash));
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + (st.head ? 16 : 22), y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (st.head) drawHead(ctx, st.head, x + 24, y, 0, EDGE_COLOUR[kd]);
+    },
+  }));
+  if (drawn)
+    rows.push({
+      label: "Drawn by the map's author",
+      draw: (x: number, y: number) => {
+        ctx.strokeStyle = "#fff3e6";
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(x + 2, y);
+        ctx.lineTo(x + 22, y);
+        ctx.stroke();
+      },
+    });
+  if (rows.length === 0) return;
+  ctx.font = `500 12px ${FONT}`;
+  const rowH = 20;
+  const room = W - pad * 3 - brW;
+  const colW = Math.max(...rows.map((r) => ctx.measureText(r.label).width)) + 40;
+  const perCol = Math.ceil(rows.length / (rows.length > 6 && colW * 2 + 24 <= room ? 2 : 1));
+  const cols = Math.ceil(rows.length / perCol);
+  const lw = Math.min(room, colW * cols + 20);
+  const lh = perCol * rowH + 34;
+  const lx = pad;
+  const ly = H - pad - lh;
+  plate(lx, ly, lw, lh);
+  ctx.fillStyle = MUTED;
+  ctx.font = `700 10px ${FONT}`;
+  ctx.textBaseline = "middle";
+  ctx.fillText("LINKS", lx + 12, ly + 14);
+  ctx.font = `500 12px ${FONT}`;
+  rows.forEach((r, i) => {
+    const x = lx + 12 + Math.floor(i / perCol) * colW;
+    const y = ly + 30 + (i % perCol) * rowH;
+    r.draw(x, y);
+    ctx.fillStyle = INK2;
+    ctx.textBaseline = "middle";
+    ctx.fillText(clip(ctx, r.label, colW - 36), x + 30, y);
+  });
 }

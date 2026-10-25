@@ -61,6 +61,7 @@ export function Inspector({
   me,
   busy,
   note,
+  coTraderTotal,
   actions,
   onClose,
 }: {
@@ -69,6 +70,8 @@ export function Inspector({
   me: AsylMe;
   busy: string | null;
   note: string;
+  /** How many wallets bought together with it in all, when a read said (the map shows up to 20). */
+  coTraderTotal?: number;
   actions: InspectorActions;
   onClose: () => void;
 }) {
@@ -316,6 +319,14 @@ export function Inspector({
             Coins both bought within 3 minutes of each other, out of the latest coins read; apart is the
             typical time between their first buys.
           </p>
+          {coTraderTotal !== undefined && coTraderTotal > together.length && (
+            <p className="asyl-small">
+              Showing {together.length} of {coTraderTotal}.{" "}
+              <button className="asyl-link" disabled={!!busy} onClick={() => actions.similar(node.id)}>
+                Load all {coTraderTotal}
+              </button>
+            </p>
+          )}
         </section>
       )}
 

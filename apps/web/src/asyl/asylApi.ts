@@ -52,6 +52,8 @@ export interface CoTrader {
 
 export interface SimilarRead extends GraphRead {
   coTraders: CoTrader[];
+  /** Every co-trader there is (up to 500); coTraders holds the first 20 unless all were asked. */
+  total?: number;
   coins: { mint: string; buyers: number; firstBuyAt: string | null }[];
 }
 
@@ -85,8 +87,8 @@ export interface MapDoc {
   cut?: string[];
   /** The amount sliders. */
   cutoffs?: Cutoffs;
-  /** The reader's own lines and text boxes. */
-  drawings?: Drawings;
+  /** The reader's own lines, text boxes and pen strokes (none in maps saved before the pen). */
+  drawings?: Partial<Drawings>;
   /** Bubbles the user placed by hand, which the layout leaves where they are. */
   pinned?: string[];
   /** Grid mode; a map saved before it had none and opens without it. */
@@ -142,9 +144,10 @@ export const asylApi = {
   me: () => api<AsylMe>("/asyl/me"),
   resolve: (address: string) =>
     api<{ kind: "wallet" | "token"; known: boolean; name?: string | null }>(`/asyl/resolve/${enc(address)}`),
-  wallet: (wallet: string) => api<GraphRead>(`/asyl/wallet/${enc(wallet)}`),
+  wallet: (wallet: string) => api<GraphRead & { coTradersTotal?: number }>(`/asyl/wallet/${enc(wallet)}`),
   dossier: (wallet: string) => api<Dossier>(`/asyl/wallet/${enc(wallet)}/dossier`),
-  similar: (wallet: string) => api<SimilarRead>(`/asyl/wallet/${enc(wallet)}/similar`),
+  similar: (wallet: string, all = false) =>
+    api<SimilarRead>(`/asyl/wallet/${enc(wallet)}/similar${all ? "?all=1" : ""}`),
   token: (mint: string) => api<GraphRead & { readAt: string | null }>(`/asyl/token/${enc(mint)}`),
   pastHolders: (mint: string) =>
     api<GraphRead & { total: number; shown: number; note: string }>(`/asyl/token/${enc(mint)}/past-holders`),

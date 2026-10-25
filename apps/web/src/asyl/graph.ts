@@ -431,7 +431,8 @@ export function edgeTimeFull(iso: string | null | undefined): string | null {
  * over it, and in its share image.
  */
 export const DRAW_COLOURS = ["#fff3e6", "#ff7a2f", "#ffd34d", "#ff5a4a", "#6ee7f9"] as const;
-export type DrawColour = (typeof DRAW_COLOURS)[number];
+/** A drawing's colour: one of the swatches, or any the reader picks (#rrggbb, lower case). */
+export type DrawColour = string;
 
 export interface DrawnLine {
   id: string;
@@ -450,12 +451,83 @@ export interface DrawnText {
   colour: DrawColour;
 }
 
+/** A freehand pen stroke (user ask 2026-10-25), in the map's own units, as bubbles are placed. */
+export interface DrawnStroke {
+  id: string;
+  points: [number, number][];
+  colour: DrawColour;
+  /** Its thickness in map units, so it zooms with the map as ink on the wall would. */
+  width: number;
+}
+
 export interface Drawings {
   lines: DrawnLine[];
   texts: DrawnText[];
+  strokes: DrawnStroke[];
 }
 
-export const NO_DRAWINGS: Drawings = { lines: [], texts: [] };
+export const NO_DRAWINGS: Drawings = { lines: [], texts: [], strokes: [] };
+/** Strokes a map keeps, and points per stroke: room for a lot of scribbling within a save. */
+export const STROKES_MAX = 200;
+export const STROKE_POINTS_MAX = 500;
+/** The pen's thicknesses, in screen pixels at the zoom it draws at. */
+export const PEN_WIDTHS = [2, 4, 8, 14] as const;
+
+/** Drawings as saved, whatever their age: maps saved before the pen have no strokes. */
+export function cleanDrawings(d: Partial<Drawings> | null | undefined): Drawings {
+  return { lines: d?.lines ?? [], texts: d?.texts ?? [], strokes: d?.strokes ?? [] };
+}
+
+/** A smooth path through a stroke's points: curves between their midpoints. A dot for one point. */
+export function strokePath(points: readonly (readonly [number, number])[]): string {
+  const f = (n: number) => Math.round(n * 10) / 10;
+  if (points.length === 0) return "";
+  const [x0, y0] = points[0]!;
+  if (points.length === 1) return `M${f(x0)} ${f(y0)} l0.01 0`;
+  let d = `M${f(x0)} ${f(y0)}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const [x, y] = points[i]!;
+    const [nx, ny] = points[i + 1]!;
+    d += ` Q${f(x)} ${f(y)} ${f((x + nx) / 2)} ${f((y + ny) / 2)}`;
+  }
+  const [xl, yl] = points[points.length - 1]!;
+  return d + ` L${f(xl)} ${f(yl)}`;
+}
+
+/** Fewer points, within `tolerance` of the line they drew: a long stroke fits what a map keeps. */
+export function thinStroke(points: [number, number][], max = STROKE_POINTS_MAX): [number, number][] {
+  let out = points;
+  for (let tol = 0.5; out.length > max && tol < 1e6; tol *= 2) out = simplify(points, tol);
+  return out.length > max ? out.filter((_, i) => i % Math.ceil(out.length / max) === 0) : out;
+}
+
+function simplify(pts: [number, number][], tol: number): [number, number][] {
+  if (pts.length < 3) return pts;
+  const keep = new Uint8Array(pts.length);
+  keep[0] = keep[pts.length - 1] = 1;
+  const stack: [number, number][] = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop()!;
+    const [ax, ay] = pts[a]!;
+    const [bx, by] = pts[b]!;
+    const len = Math.hypot(bx - ax, by - ay) || 1;
+    let far = -1;
+    let most = tol;
+    for (let i = a + 1; i < b; i++) {
+      const [x, y] = pts[i]!;
+      const d = Math.abs((bx - ax) * (ay - y) - (ax - x) * (by - ay)) / len;
+      if (d > most) {
+        most = d;
+        far = i;
+      }
+    }
+    if (far >= 0) {
+      keep[far] = 1;
+      stack.push([a, far], [far, b]);
+    }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
 export const DRAWN_LABEL_MAX = 80;
 export const DRAWN_TEXT_MAX = 400;
 

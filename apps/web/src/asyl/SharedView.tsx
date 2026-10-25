@@ -8,6 +8,7 @@ import {
   EDGE_KINDS,
   TAG_LABEL,
   cleanCutoffs,
+  cleanDrawings,
   nodeName,
   shortAddr,
   visibleGraph,
@@ -106,7 +107,7 @@ export function SharedView({ slug }: { slug: string }) {
             layoutKey={`${graph.nodes.length}`}
             handle={view}
             readOnly
-            drawings={map.doc.drawings}
+            drawings={cleanDrawings(map.doc.drawings)}
             grid={map.doc.grid ?? false}
             timeLabels={map.doc.times ? { ...DEFAULT_TIME_LABELS, ...map.doc.times } : undefined}
           />
@@ -160,7 +161,7 @@ export function SharedView({ slug }: { slug: string }) {
               graph,
               layout: layout.current,
               focus: map.doc.focus,
-              drawings: map.doc.drawings,
+              drawings: cleanDrawings(map.doc.drawings),
               timeLabels: map.doc.times ? { ...DEFAULT_TIME_LABELS, ...map.doc.times } : undefined,
             })
           }
