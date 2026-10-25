@@ -1,7 +1,6 @@
 import { FLAG_IDS, FLAG_LABELS } from "../shared/settings";
 import {
   SITES,
-  type BubbleAnswer,
   type BuddyRead,
   type FeedAnswer,
   type OverlaySettings,
@@ -27,8 +26,7 @@ import {
   type TooltipPrefs,
 } from "../shared/tooltip";
 import { verdictFor } from "../shared/verdict";
-import { followMap, type WaitAnswer } from "../shared/follow";
-import { bubbleMapView } from "./bubble";
+import { siteMapNode } from "../map/siteMap";
 import { buddyCard } from "./buddy";
 import { SITE_NAMES, tokenCard } from "./card";
 
@@ -49,11 +47,6 @@ function connectUrl(): string {
 const POLL_MS = 5_000;
 /** How often Trade Buddy's coins are re-read while it shows (the API reuses an answer for 8 s). */
 const BUDDY_POLL_MS = 5_000;
-/**
- * How often an open bubble map is re-read when no new reading was announced (the site's token view
- * reads its maps every 30 s). An announced one is read at once (followMap).
- */
-const MAP_POLL_MS = 30_000;
 
 const app = document.getElementById("app")!;
 const account = document.getElementById("account")!;
@@ -79,87 +72,25 @@ const openTrades = new Set<string>();
 
 /**
  * Each coin's map, kept across redraws: the lists are rebuilt every poll, and the same node is put
- * back in the new card, so a map doesn't flicker or lose its place while it is re-read.
+ * back in the new card, so a map doesn't flicker or lose its place. The map is the site's own
+ * (map/siteMap.ts), which follows the coin live by itself.
  */
-interface ShownMap {
-  node: HTMLElement;
-  readAt: number;
-  loading: boolean;
-  /** A new reading was announced while a read was in flight: read again once it lands. */
-  again: boolean;
-  /** Stops following the coin's readings (followMap). */
-  unfollow: () => void;
-}
-const maps = new Map<string, ShownMap>();
+const maps = new Map<string, { node: HTMLElement; stop: () => void }>();
 
 function mapSlot(mint: string): HTMLElement {
   let entry = maps.get(mint);
   if (!entry) {
-    const node = el(
-      "div",
-      { className: "map-slot" },
-      el("p", { className: "note", textContent: "Reading the bubble map…" }),
-    );
-    const shown: ShownMap = {
-      node,
-      readAt: 0,
-      loading: false,
-      again: false,
-      unfollow: () => undefined,
-    };
-    maps.set(mint, shown);
-    // While it shows, a new reading of the coin is read at once (user ask 2026-10-25).
-    shown.unfollow = followMap(
-      () => send<WaitAnswer>({ type: "bubbleWait", mint }),
-      () => {
-        shown.readAt = 0;
-        if (shown.loading) shown.again = true;
-        else void loadMap(mint);
-      },
-    );
-    entry = shown;
+    entry = siteMapNode(mint);
+    maps.set(mint, entry);
   }
-  void loadMap(mint);
   return entry.node;
 }
 
-/** Re-reads a shown map when it is due. */
-async function loadMap(mint: string): Promise<void> {
-  const entry = maps.get(mint);
-  if (!entry || entry.loading || Date.now() - entry.readAt < MAP_POLL_MS) return;
-  if (document.visibilityState !== "visible") return;
-  entry.loading = true;
-  try {
-    const answer = await send<BubbleAnswer>({ type: "bubble", mint });
-    entry.readAt = Date.now();
-    if (answer?.problem === "untracked") {
-      entry.node.replaceChildren(
-        el("p", { className: "note", textContent: "TrenchScanner doesn't track this coin's holders." }),
-      );
-    } else if (answer && answer.problem === null) {
-      entry.node.replaceChildren(bubbleMapView(answer.map));
-    } else if (!entry.node.querySelector(".bubble")) {
-      entry.node.replaceChildren(
-        el("p", { className: "note", textContent: "Couldn't read the bubble map. Retrying…" }),
-      );
-      entry.readAt = Date.now() - MAP_POLL_MS + POLL_MS;
-    }
-  } finally {
-    entry.loading = false;
-  }
-  // A reading announced while this read was in flight: read it too.
-  if (entry.again && maps.get(mint) === entry) {
-    entry.again = false;
-    entry.readAt = 0;
-    void loadMap(mint);
-  }
-}
-
-/** Drops the maps no longer shown, so a closed one is read fresh when opened again. */
+/** Drops the maps no longer shown, so a closed one stops reading and starts fresh when opened again. */
 function pruneMaps(shown: ReadonlySet<string>): void {
   for (const [mint, entry] of maps) {
     if (shown.has(mint)) continue;
-    entry.unfollow();
+    entry.stop();
     maps.delete(mint);
   }
 }
@@ -888,7 +819,6 @@ async function poll(): Promise<void> {
     buddy = nextBuddy ?? buddy;
     // Settings edits redraw only when left, so an input in focus isn't replaced under the cursor.
     if (view !== "settings") draw();
-    for (const mint of maps.keys()) void loadMap(mint);
   }
   pollTimer = window.setTimeout(() => void poll(), POLL_MS);
 }

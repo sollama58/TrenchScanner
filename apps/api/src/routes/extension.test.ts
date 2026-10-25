@@ -387,6 +387,42 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     expect((await ext(key, "GET", "/ext/v1/bubble/not-a-mint")).statusCode).toBe(400);
   });
 
+  it("replays the site map's reads as the key's owner, and refuses every other site route", async () => {
+    const user = await makeUser("site", true);
+    const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    const coin = mint();
+    mints.push(coin);
+    await prisma.token.create({ data: { mintAddress: coin, symbol: "SITE" } });
+    const site = (method: string, path: string, body: string | null = null) =>
+      ext(key, "POST", "/ext/v1/site", { method, path, body });
+
+    // The same answer the owner's signed-in token view gets.
+    const reading = await site("GET", `/tokens/${coin}?reading=1`);
+    expect(reading.statusCode).toBe(200);
+    const direct = await session(user.cookie, "GET", `/tokens/${coin}?reading=1`);
+    expect(reading.json().status).toBe(direct.statusCode);
+    expect(JSON.parse(reading.json().body as string)).toEqual(direct.json());
+    const names = await site("POST", "/wallets/names", JSON.stringify({ wallets: [] }));
+    expect(names.statusCode).toBe(200);
+    expect(names.json().status).toBeLessThan(500);
+
+    for (const [method, path] of [
+      ["GET", "/auth/me"],
+      ["GET", "/settings/extension-keys"],
+      ["POST", "/settings/extension-keys"],
+      ["GET", `/tokens/${coin}?reading=1&x=1`],
+      ["GET", `/tokens/${coin}/card/../../auth/me`],
+      ["DELETE", `/tokens/${coin}/card`],
+      ["POST", `/pro/trade/build`],
+    ] as const) {
+      expect((await site(method, path, method === "GET" ? null : "{}")).statusCode).toBe(403);
+    }
+    // A key is still needed.
+    expect(
+      (await ext(null, "POST", "/ext/v1/site", { method: "GET", path: `/tokens/${coin}/card` })).statusCode,
+    ).toBe(401);
+  });
+
   it("keeps an open map's coin viewed and answers its wait when a reading is written", async () => {
     const user = await makeUser("bubble-live", true);
     const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;

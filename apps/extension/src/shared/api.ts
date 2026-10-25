@@ -13,8 +13,8 @@ export class ApiError extends Error {
   }
 }
 
-/** A held wait answers within 20 s; past this it is given up and asked again. */
-const WAIT_TIMEOUT_MS = 30_000;
+/** The site map's held reads (its holder wait, its live trades) answer within 30 s; past this, given up. */
+const SITE_TIMEOUT_MS = 45_000;
 
 async function call<T>(
   key: string,
@@ -50,14 +50,8 @@ export const api = {
   feed: (key: string) => call<{ tokens: OverlayToken[] }>(key, "GET", "/feed"),
   bubble: (key: string, mint: string) =>
     call<{ map: OverlayBubbleMap | null }>(key, "GET", `/bubble/${encodeURIComponent(mint)}`),
-  /** Held until the coin's next holder reading is written, or 20 s (shared/follow.ts). */
-  bubbleWait: (key: string, mint: string) =>
-    call<{ changed: boolean; pushed: boolean }>(
-      key,
-      "GET",
-      `/bubble/${encodeURIComponent(mint)}/wait`,
-      undefined,
-      AbortSignal.timeout(WAIT_TIMEOUT_MS),
-    ),
+  /** One read of the site's bubble map, replayed by the API as the key's owner (map/siteMap.ts). */
+  site: (key: string, read: { method: string; path: string; body: string | null }) =>
+    call<{ status: number; body: string }>(key, "POST", "/site", read, AbortSignal.timeout(SITE_TIMEOUT_MS)),
   buddy: (key: string) => call<BuddyAnswer>(key, "GET", "/buddy"),
 };

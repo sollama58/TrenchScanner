@@ -1,22 +1,16 @@
-import panelCss from "../../static/panel.css";
-import { bubbleMapView } from "../panel/bubble";
-import { followMap, type WaitAnswer } from "../shared/follow";
+import { trenchUrl } from "../panel/card";
 import { colorsOf, type TooltipPrefs } from "../shared/tooltip";
-import type { BubbleAnswer, Site } from "../shared/types";
+import type { Site } from "../shared/types";
 import { findTabStrip, isTokenPage, pageMint } from "./tokenPage";
 
 /**
  * The bubble map as a tab on a coin's page (user ask 2026-10-25): a "Bubble map" tab at the end of
  * the site's own tab strip (Trades, Holders, Top Traders…) opens the coin's latest map over the
- * tab area, the same map the side panel draws. Without a strip it is a small button in the
- * corner. Everything sits in closed shadow roots and is written with DOM calls only.
+ * tab area. Without a strip it is a small button in the corner. The map is the site's own
+ * (map/page.ts), in a frame of the extension's map page, so none of its code or reads runs in the
+ * site's page: it reads the coin through the key, and only while this tab is on. The tab and the
+ * box sit in closed shadow roots and are written with DOM calls only.
  */
-
-/**
- * An open map is read again this often while the page shows, as the side panel re-reads one. A new
- * reading the scanner announces is read at once (followMap).
- */
-const REFRESH_MS = 30_000;
 
 const TAB_CSS = `
 :host { all: initial; display: inline-flex; align-items: center; flex: none; }
@@ -29,16 +23,19 @@ button:focus-visible { outline: 2px solid var(--c-filter); outline-offset: 1px; 
 i { width: 7px; height: 7px; border-radius: 50%; background: var(--c-filter); box-shadow: 0 0 6px var(--c-filter); }
 `;
 
-const MAP_CSS = `${panelCss.replace(/:root/g, ":host")}
+const MAP_CSS = `
 :host { all: initial; position: fixed; z-index: 2147482000; display: block; color-scheme: dark; }
-.shell { background: var(--bg); color: var(--ink); border: 1px solid #2a2d38; border-radius: 12px; overflow: auto;
-  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; box-shadow: 0 24px 60px -16px rgba(0,0,0,.85); padding: 10px 12px 12px;
-  display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; height: 100%; }
-.top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.title { font: 500 10.5px/1.6 ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
-.close { all: unset; cursor: pointer; color: var(--dim); font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 5px; }
-.close:hover { color: var(--ink); background: #1b1d25; }
-.bm-svg { max-height: 420px; }
+.shell { background: #0b0c10; color: #eef0f6; border: 1px solid #2a2d38; border-radius: 12px; overflow: hidden;
+  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; box-shadow: 0 24px 60px -16px rgba(0,0,0,.85);
+  display: flex; flex-direction: column; box-sizing: border-box; height: 100%; }
+.top { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-bottom: 1px solid #1d1f28; }
+.title { font: 500 10.5px/1.6 ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: #8a90a3; }
+.acts { display: flex; align-items: center; gap: 4px; }
+a { color: var(--c-filter); text-decoration: none; font-size: 12px; padding: 2px 6px; border-radius: 5px; }
+a:hover { background: #1b1d25; }
+.close { all: unset; cursor: pointer; color: #8a90a3; font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 5px; }
+.close:hover { color: #eef0f6; background: #1b1d25; }
+iframe { border: 0; width: 100%; flex: 1; min-height: 0; display: block; background: transparent; }
 `;
 
 export class MapTab {
@@ -48,24 +45,20 @@ export class MapTab {
   private readonly mapHost = document.createElement("trench-overlay-map");
   private readonly mapVars = document.createElement("style");
   private readonly shell = document.createElement("div");
-  private readonly body = document.createElement("div");
-  private readonly title = document.createElement("span");
+  private readonly frameEl = document.createElement("iframe");
+  private readonly siteLink = document.createElement("a");
   private observer: MutationObserver | null = null;
   private frame = 0;
   private urlTimer: number | undefined;
-  private refreshTimer: number | undefined;
-  private unfollow: (() => void) | null = null;
   private mint: string | null = null;
+  /** The coin the frame shows, so a redraw of the page doesn't reload it. */
+  private framed: string | null = null;
   private strip: Element | null = null;
   private open = false;
-  private readAt = 0;
 
   constructor(
     private readonly site: Site,
-    private readonly ask: (mint: string) => Promise<BubbleAnswer | null>,
     private prefs: TooltipPrefs,
-    /** Held until the coin has a new reading (shared/follow.ts). */
-    private readonly waitFor: (mint: string) => Promise<WaitAnswer> = async () => null,
   ) {
     const tabRoot = this.tabHost.attachShadow({ mode: "closed" });
     const tabStyle = document.createElement("style");
@@ -82,15 +75,24 @@ export class MapTab {
     this.shell.className = "shell";
     const top = document.createElement("div");
     top.className = "top";
-    this.title.className = "title";
+    const title = document.createElement("span");
+    title.className = "title";
+    title.textContent = "TrenchScanner · bubble map";
+    this.siteLink.target = "_blank";
+    this.siteLink.rel = "noopener noreferrer";
+    this.siteLink.textContent = "Open on TrenchScanner ↗";
+    this.frameEl.title = "TrenchScanner bubble map";
+    const acts = document.createElement("span");
+    acts.className = "acts";
     const close = document.createElement("button");
     close.className = "close";
     close.type = "button";
     close.textContent = "×";
     close.setAttribute("aria-label", "Close the bubble map");
     close.addEventListener("click", () => this.setOpen(false));
-    top.append(this.title, close);
-    this.shell.append(top, this.body);
+    acts.append(this.siteLink, close);
+    top.append(title, acts);
+    this.shell.append(top, this.frameEl);
     mapRoot.append(mapStyle, this.mapVars, this.shell);
     this.applyColors();
   }
@@ -120,7 +122,7 @@ export class MapTab {
   private applyColors(): void {
     const c = colorsOf(this.prefs);
     this.tabVars.textContent = `:host { --c-filter: ${c.filter}; }`;
-    this.mapVars.textContent = `:host { --model: ${c.model}; --filter: ${c.filter}; --risk: ${c.risk}; --ok: ${c.ok}; --mid: ${c.mid}; --hi: ${c.hi}; }`;
+    this.mapVars.textContent = `:host { --c-filter: ${c.filter}; }`;
   }
 
   private schedule(): void {
@@ -137,11 +139,7 @@ export class MapTab {
     const mint = onPage ? pageMint(document, this.site, location.pathname) : null;
     if (mint !== this.mint) {
       this.mint = mint;
-      this.readAt = 0;
-      if (this.open) {
-        void this.load();
-        this.follow();
-      }
+      if (this.open) this.load();
     }
     if (!mint) {
       this.setOpen(false);
@@ -167,11 +165,11 @@ export class MapTab {
   private setOpen(open: boolean): void {
     this.open = open;
     this.tabButton.classList.toggle("on", open);
-    window.clearInterval(this.refreshTimer);
-    this.unfollow?.();
-    this.unfollow = null;
     if (!open) {
       this.mapHost.remove();
+      // The closed map stops reading: its frame is emptied.
+      this.frameEl.removeAttribute("src");
+      this.framed = null;
       document.removeEventListener("keydown", this.onKey);
       window.removeEventListener("resize", this.onMove);
       window.removeEventListener("scroll", this.onMove, { capture: true });
@@ -182,25 +180,7 @@ export class MapTab {
     window.addEventListener("resize", this.onMove);
     window.addEventListener("scroll", this.onMove, { capture: true, passive: true });
     this.place();
-    void this.load();
-    this.refreshTimer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void this.load();
-    }, REFRESH_MS);
-    this.follow();
-  }
-
-  /** While the map is open, the open coin's next reading is read the moment it is written. */
-  private follow(): void {
-    this.unfollow?.();
-    const mint = this.mint;
-    this.unfollow = mint
-      ? followMap(
-          () => this.waitFor(mint),
-          () => {
-            if (mint === this.mint && this.open) void this.load();
-          },
-        )
-      : null;
+    this.load();
   }
 
   private readonly onKey = (e: KeyboardEvent) => {
@@ -224,38 +204,12 @@ export class MapTab {
     });
   }
 
-  private async load(): Promise<void> {
+  /** Points the frame at the open coin's map, unless it shows it already. */
+  private load(): void {
     const mint = this.mint;
-    if (!mint) return;
-    if (this.readAt === 0) {
-      this.title.textContent = "TrenchScanner · bubble map";
-      this.body.replaceChildren(note("Reading the map…"));
-    }
-    const answer = await this.ask(mint);
-    if (mint !== this.mint || !this.open) return;
-    this.readAt = Date.now();
-    if (!answer) {
-      if (!this.body.querySelector(".bubble"))
-        this.body.replaceChildren(note("Couldn't reach TrenchScanner. Retrying…"));
-      return;
-    }
-    if (answer.problem === "untracked") {
-      this.body.replaceChildren(note("TrenchScanner hasn't scanned this coin."));
-    } else if (answer.problem === "disconnected" || answer.problem === "refused") {
-      this.body.replaceChildren(note("Connect the extension in its side panel to see bubble maps."));
-    } else if (answer.problem !== null) {
-      if (!this.body.querySelector(".bubble"))
-        this.body.replaceChildren(note("Couldn't reach TrenchScanner. Retrying…"));
-    } else {
-      this.title.textContent = `TrenchScanner · ${answer.map?.symbol ?? "bubble map"}`;
-      this.body.replaceChildren(bubbleMapView(answer.map));
-    }
+    if (!mint || mint === this.framed) return;
+    this.framed = mint;
+    this.siteLink.href = trenchUrl(mint);
+    this.frameEl.src = chrome.runtime.getURL(`map.html?mint=${encodeURIComponent(mint)}&in=page`);
   }
-}
-
-function note(text: string): HTMLElement {
-  const p = document.createElement("p");
-  p.className = "note";
-  p.textContent = text;
-  return p;
 }

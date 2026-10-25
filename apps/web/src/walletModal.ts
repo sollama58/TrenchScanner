@@ -8,7 +8,9 @@ import { useEffect, useState } from "react";
 
 export const WALLET_PARAM = "wallet";
 const ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const EVENT = "wallet:change";
+/** Fired on `window` when the open wallet changes (openWallet, closeWallet). */
+export const WALLET_EVENT = "wallet:change";
+const EVENT = WALLET_EVENT;
 
 /** The wallet in the address bar, or null when none (or not an address). */
 export function walletFromUrl(search = window.location.search): string | null {
