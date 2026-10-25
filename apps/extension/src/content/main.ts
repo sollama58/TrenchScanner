@@ -2,11 +2,9 @@ import { adapterForHost } from "./adapters/sites";
 import { OverlayEngine } from "./engine";
 import { MapTab } from "./mapTab";
 import { Toasts } from "./toasts";
-import type { WaitAnswer } from "../shared/follow";
 import { DEFAULT_SETTINGS } from "../shared/settings";
 import { cleanTooltip, type TooltipPrefs } from "../shared/tooltip";
 import type {
-  BubbleAnswer,
   ContentRequest,
   FeedAnswer,
   LookupAnswer,
@@ -52,12 +50,7 @@ async function main(): Promise<void> {
   };
   sync();
 
-  const mapTab = new MapTab(
-    adapter.site,
-    (mint) => ask<BubbleAnswer>({ type: "map", mint }),
-    tooltip,
-    (mint) => ask<WaitAnswer>({ type: "mapWait", mint }),
-  );
+  const mapTab = new MapTab(adapter.site, tooltip);
   mapTab.start();
   const toasts = new Toasts(
     adapter.site,

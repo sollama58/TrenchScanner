@@ -1,5 +1,6 @@
-// Builds the extension into dist/: two bundles (service worker, side panel) with no runtime
-// dependencies, plus the static files. Minified but not obfuscated, with source maps beside them,
+// Builds the extension into dist/: the service worker, the side panel, the content script and the
+// map page, with no runtime dependencies, plus the static files. The panel and the map page carry
+// the site's own bubble map (apps/web/src/embed/tokenMapEmbed.tsx, with React) and its stylesheet. Minified but not obfuscated, with source maps beside them,
 // as the Chrome Web Store's review asks.
 //
 //   node build.mjs           dist/ to load unpacked. The manifest gets the dev public key
@@ -11,6 +12,7 @@
 // The manifest version must match package.json's, and every change to the extension bumps both
 // (scripts/check-extension-version.sh, run in CI).
 import { build } from "esbuild";
+import postcss from "postcss";
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
@@ -29,19 +31,44 @@ const common = {
   legalComments: "none",
   logLevel: "warning",
 };
+const web = join(root, "../web/src/");
+// The site's code as the site's own build reads it (apps/web/vite.config.ts, tsconfig.json).
+const site = {
+  jsx: "automatic",
+  conditions: ["trenchscanner-web"],
+  alias: { "@site/tokenMapEmbed": join(web, "embed/tokenMapEmbed.tsx") },
+  define: {
+    "import.meta.env.VITE_API_URL": JSON.stringify("https://api.trenchscanner.app"),
+    "import.meta.env.VITE_EXTENSION_IDS": JSON.stringify(""),
+    "process.env.NODE_ENV": JSON.stringify("production"),
+  },
+};
 await Promise.all([
   build({ ...common, entryPoints: ["src/sw.ts"], outfile: `${out}sw.js`, format: "esm" }),
-  build({ ...common, entryPoints: ["src/panel/panel.ts"], outfile: `${out}panel.js`, format: "iife" }),
-  // The rings build: the content script that rings alerted tokens on Axiom, Terminal and GMGN.
-  // The panel's stylesheet comes along as text, for the bubble map tab's shadow root.
   build({
     ...common,
-    entryPoints: ["src/content/main.ts"],
-    outfile: `${out}content.js`,
+    ...site,
+    entryPoints: ["src/panel/panel.ts"],
+    outfile: `${out}panel.js`,
     format: "iife",
-    loader: { ".css": "text" },
+  }),
+  // The bubble map tab's frame on a coin's page (content/mapTab.ts).
+  build({ ...common, ...site, entryPoints: ["src/map/page.ts"], outfile: `${out}map.js`, format: "iife" }),
+  // The rings build: the content script that rings alerted tokens on Axiom, Terminal and GMGN.
+  build({ ...common, entryPoints: ["src/content/main.ts"], outfile: `${out}content.js`, format: "iife" }),
+  // The site's stylesheet and fonts, as the site bundles them.
+  build({
+    ...common,
+    sourcemap: false,
+    entryPoints: { map: join(web, "styles.css"), "map-fonts": join(web, "fonts.css") },
+    outdir: out,
+    loader: { ".woff2": "file", ".woff": "file" },
+    assetNames: "fonts/[name]-[hash]",
   }),
 ]);
+// The same stylesheet for a shadow root (map/siteMap.ts): the site's page-level selectors (:root,
+// html, body) name the shadow host instead, and its fonts are left to map-fonts.css on the page.
+await writeFile(join(out, "map-shadow.css"), shadowCss(await readFile(join(out, "map.css"), "utf8")));
 await cp(join(root, "static"), out, { recursive: true });
 
 const manifest = JSON.parse(await readFile(join(out, "manifest.json"), "utf8"));
@@ -60,6 +87,20 @@ if (store) {
   console.log(`store package: ${zipPath}`);
 } else {
   console.log(`extension built to ${out} (load it unpacked)`);
+}
+
+/** `css` with :root, html and body read as the shadow host, and @font-face rules left out. */
+function shadowCss(css) {
+  const result = postcss.parse(css);
+  result.walkAtRules("font-face", (rule) => rule.remove());
+  result.walkRules((rule) => {
+    rule.selectors = rule.selectors.map((sel) =>
+      sel.replace(/^(?::root|html|body)((?:\[[^\]]*\]|:not\([^)]*\)|\.[\w-]+)*)(?:\s+body\b)?/, (_, quals) =>
+        quals ? `:host(${quals})` : ":host",
+      ),
+    );
+  });
+  return result.toString();
 }
 
 /** The files under `dir`, deflated into a zip archive (no dependency, and the same on Windows). */

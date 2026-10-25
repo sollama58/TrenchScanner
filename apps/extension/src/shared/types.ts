@@ -149,9 +149,8 @@ export interface BuddyAnswer {
 export type PanelRequest =
   | { type: "status" }
   | { type: "feed" }
-  | { type: "bubble"; mint: string }
-  /** Held until an open map's coin has a new reading (shared/follow.ts). */
-  | { type: "bubbleWait"; mint: string }
+  /** One API call of the site's own bubble map (map/siteMap.ts), answered through the key. */
+  | { type: "site"; method: string; path: string; body: string | null }
   | { type: "buddy"; cached?: boolean }
   | { type: "disconnect" }
   | { type: "saveSettings"; settings: OverlaySettings }
@@ -202,10 +201,6 @@ export type ContentRequest =
   | { type: "totals"; mint: string }
   /** The reader's feed, for the on-page alerts (only while they are on). */
   | { type: "alerts" }
-  /** The bubble map of the coin whose page is open (only while the map tab is on). */
-  | { type: "map"; mint: string }
-  /** Held until that coin has a new reading, while its map is open (shared/follow.ts). */
-  | { type: "mapWait"; mint: string }
   | { type: "health"; site: Site; rows: number; mints: number; paused: boolean };
 
 export interface LookupAnswer {

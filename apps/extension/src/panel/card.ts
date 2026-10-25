@@ -18,6 +18,11 @@ export function siteUrl(site: Site, mint: string): string {
   return `https://gmgn.ai/sol/token/${m}`;
 }
 
+/** The coin's token view on TrenchScanner, bubble map and all (the site's ?token= link). */
+export function trenchUrl(mint: string): string {
+  return `https://trenchscanner.app/?token=${encodeURIComponent(mint)}`;
+}
+
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -212,9 +217,7 @@ export function tokenCard(
     for (const site of Object.keys(SITE_NAMES) as Site[]) {
       if (settings.sites[site]) open.append(link(SITE_NAMES[site], siteUrl(site, token.mint), "site"));
     }
-    open.append(
-      link("TrenchScanner", `https://trenchscanner.app/?sage=${encodeURIComponent(token.mint)}`, "site ts"),
-    );
+    open.append(link("TrenchScanner", trenchUrl(token.mint), "site ts"));
   }
   foot.append(open);
   if (valid) foot.append(copyButton(token.mint));

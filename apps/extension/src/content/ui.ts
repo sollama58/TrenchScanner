@@ -1,3 +1,4 @@
+import { trenchUrl } from "../panel/card";
 import { DEFAULT_SETTINGS } from "../shared/settings";
 import {
   colorVars,
@@ -434,7 +435,7 @@ export function tooltipBody(
       );
     } else if (id === "link") {
       const link = el("a", "", "Open in TrenchScanner ↗");
-      link.href = `https://trenchscanner.app/?sage=${encodeURIComponent(token.mint)}`;
+      link.href = trenchUrl(token.mint);
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       foot.append(link);

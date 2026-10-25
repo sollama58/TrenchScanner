@@ -146,7 +146,7 @@ describe("tooltip", () => {
     expect(body.querySelector("img, script, iframe, b")).toBeNull();
     expect(body.textContent).toContain("<script>alert(1)</script>");
     const link = body.querySelector("a")!;
-    expect(link.href).toBe(`https://trenchscanner.app/?sage=${evil.mint}`);
+    expect(link.href).toBe(`https://trenchscanner.app/?token=${evil.mint}`);
     expect(link.rel).toContain("noopener");
   });
 });

@@ -44,10 +44,22 @@ export function tradeLinkFromUrl(search = window.location.search, now = Date.now
   return null;
 }
 
-/** Takes the trade parameters out of the address bar, so a reload doesn't fill the panel again. */
+/**
+ * A coin asked for from the browser extension (user ask 2026-10-25): `?token=<mint>` opens the
+ * coin's token view, bubble map and all. Its own param, so it never fills a trade.
+ */
+export const TOKEN_PARAM = "token";
+
+/** The coin the address bar asks to open, or null when none (or it isn't a mint). */
+export function tokenLinkFromUrl(search = window.location.search): string | null {
+  const mint = new URLSearchParams(search).get(TOKEN_PARAM);
+  return mint && MINT_RE.test(mint) ? mint : null;
+}
+
+/** Takes the trade and token parameters out of the address bar, so a reload doesn't act on them again. */
 export function clearTradeLink(): void {
   const url = new URL(window.location.href);
-  for (const key of [TRADE_PARAM, "buy", "sell"]) url.searchParams.delete(key);
+  for (const key of [TRADE_PARAM, TOKEN_PARAM, "buy", "sell"]) url.searchParams.delete(key);
   window.history.replaceState(window.history.state, "", url);
 }
 
