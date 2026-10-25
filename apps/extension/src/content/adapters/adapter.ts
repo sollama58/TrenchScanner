@@ -29,12 +29,27 @@ export interface AdapterSpec {
    * mark rows with data-index, which is tried after the site's own selectors.
    */
   rowSelectors: string[];
+  /** Rows the site marks with the address, tried before the links. */
+  marked?: Mark[];
   /**
-   * Rows the site marks with an attribute that holds the address (Terminal's
-   * `data-trenches-item="SOLANA:<mint>-NEW"`), tried before the links. `box` is the nearest
-   * ancestor to ring, when the marked element sits inside a sized row (a virtual list's slot).
+   * Links elsewhere that name a row's own coin (pump.fun's coin page), matched against the whole
+   * address; the first capture group is the mint. For boards whose rows don't link the site's own
+   * token page.
    */
-  marked?: { attr: string; box?: string };
+  coinLinks?: RegExp[];
+  /** Links inside these are another coin's (a pair's quote token, a dev's earlier coin), never the row's. */
+  ignoreLinksIn?: string;
+}
+
+/**
+ * A row the site marks with the address (Terminal's `data-trenches-item="SOLANA:<mint>-NEW"`).
+ * `selector` finds the marked element (by default any with `attr`); `box` is the nearest ancestor
+ * to ring, when the mark sits inside a sized row (a virtual list's slot).
+ */
+export interface Mark {
+  attr: string;
+  selector?: string;
+  box?: string;
 }
 
 /** Attributes read for an address after the links: image URLs and data attributes. */
@@ -52,7 +67,24 @@ export function mintInHref(href: string, tokenLink: RegExp): string | null {
   return mintsIn(match[1] ?? match[0])[0] ?? null;
 }
 
+/** The mint a full link names, by the first of `patterns` it matches. */
+function mintInUrl(href: string, patterns: readonly RegExp[]): string | null {
+  let url: string;
+  try {
+    url = new URL(href, "https://x.invalid").href;
+  } catch {
+    return null;
+  }
+  for (const pattern of patterns) {
+    const match = pattern.exec(url);
+    if (match) return mintsIn(match[1] ?? match[0])[0] ?? null;
+  }
+  return null;
+}
+
 export function adapterFrom(spec: AdapterSpec): SiteAdapter {
+  const marks = (spec.marked ?? []).map((m) => ({ ...m, selector: m.selector ?? `[${m.attr}]` }));
+  const anyMark = marks.map((m) => m.selector).join(", ");
   const rowOf = (link: Element): Element | null => {
     for (const selector of [...spec.rowSelectors, "[data-index]"]) {
       const row = link.closest(selector);
@@ -61,6 +93,18 @@ export function adapterFrom(spec: AdapterSpec): SiteAdapter {
     // A link that is itself the whole row (common on GMGN).
     return link;
   };
+  /** The mint a link names: the site's own token page, or one of the coin links. */
+  const linkMint = (link: Element): string | null => {
+    if (spec.ignoreLinksIn && link.closest(spec.ignoreLinksIn)) return null;
+    const href = link.getAttribute("href") ?? "";
+    return mintInHref(href, spec.tokenLink) ?? (spec.coinLinks ? mintInUrl(href, spec.coinLinks) : null);
+  };
+  /** The link sits in a marked row (or is around one): the mark speaks for the row. */
+  const inMarkedRow = (el: Element): boolean => {
+    if (!anyMark) return false;
+    if (el.closest(anyMark) || el.querySelector(anyMark)) return true;
+    return marks.some((m) => m.box && el.closest(m.box)?.querySelector(m.selector));
+  };
 
   return {
     site: spec.site,
@@ -68,40 +112,31 @@ export function adapterFrom(spec: AdapterSpec): SiteAdapter {
     findRows(root) {
       const rows: Element[] = [];
       const seen = new Set<Element>();
-      if (spec.marked) {
-        const { attr, box } = spec.marked;
-        for (const el of root.querySelectorAll(`[${attr}]`)) {
-          const row = (box ? el.closest(box) : null) ?? el;
-          if (!seen.has(row)) {
-            seen.add(row);
-            rows.push(row);
-          }
-        }
-      }
-      for (const link of root.querySelectorAll("a[href]")) {
-        if (mintInHref(link.getAttribute("href") ?? "", spec.tokenLink) === null) continue;
-        const row = rowOf(link);
-        // A marked row already stands for the links inside it, and a box around marked rows is a list.
-        if (
-          spec.marked &&
-          row &&
-          (row.closest(`[${spec.marked.attr}]`) || row.querySelector(`[${spec.marked.attr}]`))
-        )
-          continue;
-        if (row && !seen.has(row)) {
+      const add = (row: Element) => {
+        if (!seen.has(row)) {
           seen.add(row);
           rows.push(row);
         }
+      };
+      for (const mark of marks) {
+        for (const el of root.querySelectorAll(mark.selector)) {
+          add((mark.box ? el.closest(mark.box) : null) ?? el);
+        }
+      }
+      for (const link of root.querySelectorAll("a[href]")) {
+        if (linkMint(link) === null) continue;
+        const row = rowOf(link);
+        // A marked row already stands for the links inside it, and a box around marked rows is a list.
+        if (row && !inMarkedRow(row) && !inMarkedRow(link)) add(row);
       }
       return rows;
     },
     mintOf(row) {
-      if (spec.marked) {
-        const { attr } = spec.marked;
-        const el = row.matches(`[${attr}]`) ? row : row.querySelector(`[${attr}]`);
+      for (const mark of marks) {
+        const el = row.matches(mark.selector) ? row : row.querySelector(mark.selector);
         // A marked row is read from its mark alone: another chain's row (an 0x address) stays bare
         // rather than taking an address from its pictures.
-        if (el) return mintsIn(el.getAttribute(attr) ?? "")[0] ?? null;
+        if (el) return mintsIn(el.getAttribute(mark.attr) ?? "")[0] ?? null;
       }
       // Every distinct token link in the row must agree; two different mints mean this is a
       // container of rows, not a row, and nothing is drawn rather than the wrong thing.
@@ -110,7 +145,7 @@ export function adapterFrom(spec: AdapterSpec): SiteAdapter {
         ? [row, ...row.querySelectorAll("a[href]")]
         : [...row.querySelectorAll("a[href]")];
       for (const link of links) {
-        const mint = mintInHref(link.getAttribute("href") ?? "", spec.tokenLink);
+        const mint = linkMint(link);
         if (mint) found.add(mint);
       }
       if (found.size === 1) return [...found][0]!;

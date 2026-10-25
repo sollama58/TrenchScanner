@@ -56,6 +56,26 @@ describe("Axiom's Pulse", () => {
   });
 });
 
+describe("Trending boards", () => {
+  it("Terminal: reads the copy button's address and never rings the quote pill's coin", () => {
+    board(`<div style="position: absolute; top: 0px; height: 88px; width: 100%;">
+      <button id="button-copy-address-context-${A}">copy</button>
+      <a href="https://trade.padre.gg/trade/solana/${B}?tpo=quotePill">quote</a></div>`);
+    const rows = terminal.findRows(document);
+    expect(rows.map((r) => terminal.mintOf(r))).toEqual([A]);
+  });
+
+  it("Axiom Discover: reads the row's pump.fun link, not its quote token's chip", () => {
+    board(`<div data-index="0"><div data-discover-icon-row="true">
+      <span data-tooltip-trigger=""><a href="https://axiom.trade/t/${B}?chain=sol"><img alt="q"></a></span>
+      <div><a href="https://pump.fun/coin/${A}">pf</a></div></div></div>
+      <div data-index="1"><div data-discover-icon-row="true"><a href="https://otcdesks.cash/coin/${B}">otc</a></div></div>`);
+    const rows = axiom.findRows(document);
+    expect(rows.map((r) => axiom.mintOf(r))).toEqual([A, B]);
+    expect(rows.map((r) => r.getAttribute("data-index"))).toEqual(["0", "1"]);
+  });
+});
+
 describe("Terminal's Trenches board", () => {
   it("reads the address its rows are marked with, and rings the sized slot", () => {
     board(`<div style="position: absolute; left: 0px; top: 0px; height: 142px; width: 100%;">
