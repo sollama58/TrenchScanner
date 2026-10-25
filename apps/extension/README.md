@@ -72,3 +72,9 @@ the rows of tokens in the reader's alert feed, with the model or filter badge an
 flag's limit. It holds no key and sends no address anywhere: the service worker answers from the
 panel's own feed (`handleContent` in `sw.ts`), so tokens outside your alerts are never asked about.
 Its trade-off is the one that dropped it: code running in those sites' pages. Not for the store.
+
+The ring tooltip is the reader's to set (Settings → Ring tooltip, user ask 2026-10-25): each line
+on or off and in any order, kept in this browser only (`src/shared/tooltip.ts`). The default is
+the original tooltip plus KOL bundled %. Map lines (KOL bundled and the other bubble map totals)
+are read on hover with the panel's `/bubble/:mint` call, and only for a coin already in the
+reader's alerts, so this still sends no address the panel wouldn't.

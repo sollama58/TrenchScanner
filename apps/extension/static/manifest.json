@@ -56,5 +56,5 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; img-src 'self' https: data:; connect-src https://api.trenchscanner.app"
   },
-  "version_name": "0.3.0 rings (local) r3"
+  "version_name": "0.3.0 rings (local) r4"
 }

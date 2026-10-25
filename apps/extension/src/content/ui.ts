@@ -1,4 +1,6 @@
-import type { RingStyle, OverlayToken } from "../shared/types";
+import { DEFAULT_SETTINGS } from "../shared/settings";
+import { DEFAULT_TOOLTIP, MAP_LABELS, shownLines, type MapLine, type TipLine } from "../shared/tooltip";
+import type { FlagId, OverlayBubbleTotals, RingStyle, OverlayToken } from "../shared/types";
 import type { RowVerdict } from "../shared/verdict";
 import { findSpot, obstaclesIn } from "./placement";
 
@@ -217,8 +219,18 @@ function ago(iso: string, now: number): string {
   return `${Math.round(s / 3600)}h ago`;
 }
 
-/** The tooltip's content for one token. Exported for tests: it must never parse token text as HTML. */
-export function tooltipBody(token: OverlayToken, verdict: RowVerdict, now = Date.now()): HTMLElement {
+/**
+ * The tooltip's content for one token: the reader's chosen lines, in their order (shared/tooltip.ts).
+ * `totals` is the coin's bubble map totals: undefined while they're read, null when there are none.
+ * Exported for tests: it must never parse token text as HTML.
+ */
+export function tooltipBody(
+  token: OverlayToken,
+  verdict: RowVerdict,
+  lines: readonly TipLine[] = shownLines(DEFAULT_TOOLTIP, DEFAULT_SETTINGS),
+  totals?: OverlayBubbleTotals | null,
+  now = Date.now(),
+): HTMLElement {
   const tip = el("div", "tip");
   const head = el("div", "head");
   head.append(
@@ -227,61 +239,81 @@ export function tooltipBody(token: OverlayToken, verdict: RowVerdict, now = Date
   );
   tip.append(head);
 
+  // Alert lines group in one section, stat lines in the next, the foot last; each in the reader's order.
   const alerts = el("div", "sec");
-  for (const call of token.modelCalls) {
-    const label = el("span");
-    label.append(el("span", "tag tm", "MODEL"), call.name ?? call.model);
-    alerts.append(
-      line(
-        label,
-        call.calibratedPct === null
-          ? `${Math.round(call.confidence)}`
-          : `${Math.round(call.calibratedPct)}% to 2x`,
-      ),
-    );
-  }
-  for (const match of token.filterMatches) {
-    const label = el("span");
-    label.append(el("span", "tag tf", "FILTER"), match.filterName);
-    alerts.append(line(label, `matched ${ago(match.at, now)}`));
-  }
-  if (token.ai) {
-    const label = el("span");
-    const buy = token.ai.decision === "buy";
-    label.append(el("span", `tag ${buy ? "tb" : "tn"}`, `AI · ${token.ai.decision.toUpperCase()}`));
-    alerts.append(
-      line(
-        label,
-        token.ai.probability2x === null ? "" : `${Math.round(token.ai.probability2x * 100)}% to 2x`,
-      ),
-    );
-    if (token.ai.reasoning) alerts.append(el("p", "why", token.ai.reasoning));
-  }
-  if (alerts.childElementCount > 0) tip.append(alerts);
-
   const stats = el("div", "sec");
-  const first = token.modelCalls[0]?.mcapUsd ?? token.filterMatches[0]?.mcapUsd ?? null;
-  const nowMcap = token.liveMcapUsd ?? token.stats?.marketCapUsd ?? null;
-  if (first !== null) {
-    const change =
-      nowMcap === null
-        ? ""
-        : ` (${nowMcap >= first ? "+" : ""}${Math.round(((nowMcap - first) / first) * 100)}%)`;
-    stats.append(line("Alerted at", `${usd(first)} · now ${usd(nowMcap)}${change}`));
-  } else {
-    stats.append(line("Market cap", usd(nowMcap)));
-  }
-  for (const flag of verdict.flags) stats.append(line(flag.label, flag.text, flag.level));
-  tip.append(stats);
-
   const foot = el("div", "sec foot");
-  foot.append(el("span", "", token.stats ? `Stats as of ${ago(token.stats.takenAt, now)}` : "No stats yet"));
-  const link = el("a", "", "Open in TrenchScanner ↗");
-  link.href = `https://trenchscanner.app/?sage=${encodeURIComponent(token.mint)}`;
-  link.target = "_blank";
-  link.rel = "noopener noreferrer";
-  foot.append(link);
-  tip.append(foot);
+  const flags = new Map(verdict.flags.map((f) => [f.id, f]));
+  for (const id of lines) {
+    if (id === "models") {
+      for (const call of token.modelCalls) {
+        const label = el("span");
+        label.append(el("span", "tag tm", "MODEL"), call.name ?? call.model);
+        alerts.append(
+          line(
+            label,
+            call.calibratedPct === null
+              ? `${Math.round(call.confidence)}`
+              : `${Math.round(call.calibratedPct)}% to 2x`,
+          ),
+        );
+      }
+    } else if (id === "filters") {
+      for (const match of token.filterMatches) {
+        const label = el("span");
+        label.append(el("span", "tag tf", "FILTER"), match.filterName);
+        alerts.append(line(label, `matched ${ago(match.at, now)}`));
+      }
+    } else if (id === "ai") {
+      if (!token.ai) continue;
+      const label = el("span");
+      const buy = token.ai.decision === "buy";
+      label.append(el("span", `tag ${buy ? "tb" : "tn"}`, `AI · ${token.ai.decision.toUpperCase()}`));
+      alerts.append(
+        line(
+          label,
+          token.ai.probability2x === null ? "" : `${Math.round(token.ai.probability2x * 100)}% to 2x`,
+        ),
+      );
+    } else if (id === "aiReasoning") {
+      if (token.ai?.reasoning) alerts.append(el("p", "why", token.ai.reasoning));
+    } else if (id === "mcap") {
+      const first = token.modelCalls[0]?.mcapUsd ?? token.filterMatches[0]?.mcapUsd ?? null;
+      const nowMcap = token.liveMcapUsd ?? token.stats?.marketCapUsd ?? null;
+      if (first !== null) {
+        const change =
+          nowMcap === null
+            ? ""
+            : ` (${nowMcap >= first ? "+" : ""}${Math.round(((nowMcap - first) / first) * 100)}%)`;
+        stats.append(line("Alerted at", `${usd(first)} · now ${usd(nowMcap)}${change}`));
+      } else {
+        stats.append(line("Market cap", usd(nowMcap)));
+      }
+    } else if (id === "holders") {
+      const count = token.stats?.holderCount;
+      if (count !== null && count !== undefined) stats.append(line("Holders", String(count)));
+    } else if (id.startsWith("flag:")) {
+      const flag = flags.get(id.slice(5) as FlagId);
+      if (flag) stats.append(line(flag.label, flag.text, flag.level));
+    } else if (id.startsWith("map:")) {
+      const key = id.slice(4) as MapLine;
+      const value = totals === undefined ? undefined : (totals?.[key] ?? null);
+      // Hidden when the coin has no reading; "…" while it's read.
+      if (value === null) continue;
+      stats.append(line(MAP_LABELS[key].label, value === undefined ? "…" : `${Math.round(value)}%`));
+    } else if (id === "statsAge") {
+      foot.append(
+        el("span", "", token.stats ? `Stats as of ${ago(token.stats.takenAt, now)}` : "No stats yet"),
+      );
+    } else if (id === "link") {
+      const link = el("a", "", "Open in TrenchScanner ↗");
+      link.href = `https://trenchscanner.app/?sage=${encodeURIComponent(token.mint)}`;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      foot.append(link);
+    }
+  }
+  for (const sec of [alerts, stats, foot]) if (sec.childElementCount > 0) tip.append(sec);
   return tip;
 }
 
@@ -290,6 +322,7 @@ export class Tooltip {
   private readonly host: HTMLElement;
   private readonly root: ShadowRoot;
   private hideTimer: number | undefined;
+  private anchor: Element | null = null;
 
   constructor() {
     this.host = document.createElement("trench-overlay-tip");
@@ -303,8 +336,14 @@ export class Tooltip {
     window.addEventListener("scroll", () => this.hideNow(), { capture: true, passive: true });
   }
 
+  /** The tooltip is up beside this badge (a late read redraws it only then). */
+  showing(anchor: Element): boolean {
+    return this.anchor === anchor && this.host.isConnected;
+  }
+
   show(anchor: Element, body: HTMLElement): void {
     window.clearTimeout(this.hideTimer);
+    this.anchor = anchor;
     this.root.querySelector(".tip")?.remove();
     this.root.append(body);
     if (!this.host.isConnected) document.documentElement.append(this.host);
@@ -325,6 +364,7 @@ export class Tooltip {
 
   hideNow(): void {
     window.clearTimeout(this.hideTimer);
+    this.anchor = null;
     this.host.remove();
   }
 }

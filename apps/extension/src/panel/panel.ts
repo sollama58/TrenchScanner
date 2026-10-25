@@ -8,6 +8,7 @@ import {
   type PanelRequest,
   type Status,
 } from "../shared/types";
+import { cleanTooltip, DEFAULT_TOOLTIP, lineOn, tipLabel, type TooltipPrefs } from "../shared/tooltip";
 import { verdictFor } from "../shared/verdict";
 import { bubbleMapView } from "./bubble";
 import { buddyCard } from "./buddy";
@@ -41,6 +42,8 @@ let status: Status | null = null;
 let feed: FeedAnswer | null = null;
 let buddy: BuddyRead | null = null;
 let buddyReadAt = 0;
+/** What the rings' tooltip shows, kept in this browser (shared/tooltip.ts). */
+let tipPrefs: TooltipPrefs = DEFAULT_TOOLTIP;
 let pollTimer: number | undefined;
 /** Mints already shown, so a new alert can be marked as new. */
 let seen: Set<string> | null = null;
@@ -440,6 +443,7 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
     }),
   );
   parts.push(section("Open tokens on", sites));
+  parts.push(tooltipSection(settings));
 
   const disconnect = el("button", { className: "link", textContent: "Disconnect this browser" });
   disconnect.addEventListener("click", async () => {
@@ -456,12 +460,84 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
       el("p", {
         className: "note",
         textContent:
-          "This extension never runs on Axiom, Terminal or GMGN and can't see those pages or your logins. The key reads your alerts and stats only.",
+          "This rings build reads the token addresses on Axiom, Terminal and GMGN boards to ring your alerts. It never reads your logins, and no address leaves the browser except an alerted coin's, for its map totals.",
       }),
       disconnect,
     ),
   );
   return parts;
+}
+
+/**
+ * Rings build: which lines the tooltip on a ringed row shows, and their order. A flag's line
+ * follows its switch above until it is picked here.
+ */
+function tooltipSection(settings: OverlaySettings): HTMLElement {
+  const save = () => void send({ type: "saveTooltip", prefs: tipPrefs });
+  const box = section("Ring tooltip");
+  const list = el("div", { className: "tiplines" });
+  const fill = () => {
+    list.replaceChildren(
+      ...tipPrefs.order.map((line, i) => {
+        const label = tipLabel(line);
+        const on = el("input", {
+          type: "checkbox",
+          className: "switch",
+          checked: lineOn(line, tipPrefs, settings),
+        });
+        on.setAttribute("aria-label", `Show ${label}`);
+        on.addEventListener("change", () => {
+          tipPrefs = { ...tipPrefs, on: { ...tipPrefs.on, [line]: on.checked } };
+          save();
+        });
+        const move = (by: number, glyph: string, name: string) => {
+          const b = el("button", {
+            className: "move",
+            textContent: glyph,
+            disabled: i + by < 0 || i + by >= tipPrefs.order.length,
+          });
+          b.setAttribute("aria-label", `Move ${label} ${name}`);
+          b.addEventListener("click", () => {
+            const order = [...tipPrefs.order];
+            [order[i], order[i + by]] = [order[i + by]!, order[i]!];
+            tipPrefs = { ...tipPrefs, order };
+            save();
+            fill();
+            (
+              list.children[i + by]?.querySelectorAll("button.move")[by < 0 ? 0 : 1] as
+                HTMLElement | undefined
+            )?.focus();
+          });
+          return b;
+        };
+        return el(
+          "div",
+          { className: "tipline" },
+          on,
+          el("span", { textContent: label }),
+          move(-1, "↑", "up"),
+          move(1, "↓", "down"),
+        );
+      }),
+    );
+  };
+  fill();
+  const reset = el("button", { className: "link", textContent: "Reset to default" });
+  reset.addEventListener("click", () => {
+    tipPrefs = DEFAULT_TOOLTIP;
+    save();
+    fill();
+  });
+  box.append(
+    el("p", {
+      className: "note",
+      textContent:
+        "Lines shown when you point at a ring's badge, top to bottom. Alerts, stats and the footer keep their own groups.",
+    }),
+    list,
+    reset,
+  );
+  return box;
 }
 
 function draw(): void {
@@ -506,6 +582,7 @@ async function poll(): Promise<void> {
 
 async function refresh(): Promise<void> {
   status = await send<Status>({ type: "status" });
+  tipPrefs = cleanTooltip(await send<TooltipPrefs>({ type: "tooltip" }));
   draw();
   if (status?.connected) await poll();
 }

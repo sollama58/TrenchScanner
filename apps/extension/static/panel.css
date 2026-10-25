@@ -150,6 +150,27 @@ select {
   font: inherit;
   width: 100%;
 }
+.tiplines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tipline {
+  display: grid;
+  grid-template-columns: auto 1fr 24px 24px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.tipline .move {
+  padding: 0;
+  height: 22px;
+  line-height: 1;
+}
+.tipline .move:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
 .sites {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

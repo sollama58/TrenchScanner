@@ -1,6 +1,7 @@
 import type { SiteAdapter } from "./adapters/adapter";
 import { Decoration, Tooltip, tooltipBody } from "./ui";
-import type { LookupAnswer, OverlaySettings, OverlayToken } from "../shared/types";
+import { DEFAULT_TOOLTIP, needsMap, shownLines, type TooltipPrefs } from "../shared/tooltip";
+import type { LookupAnswer, OverlayBubbleTotals, OverlaySettings, OverlayToken } from "../shared/types";
 import { verdictFor } from "../shared/verdict";
 
 /** How long the rows on screen go before they are asked about again (new alerts land this way). */
@@ -9,10 +10,14 @@ const REFRESH_MS = 15_000;
 const BATCH_MS = 300;
 /** Rows found but no address read for this long: the adapter no longer fits the page. */
 const PAUSE_AFTER_MS = 10_000;
+/** A coin's map totals are asked for again after this long (the worker keeps them a minute too). */
+const TOTALS_MS = 60_000;
 
 export interface EngineDeps {
   lookup(mints: string[]): Promise<LookupAnswer>;
   report(health: { rows: number; mints: number; paused: boolean }): void;
+  /** A tracked coin's bubble map totals, for the tooltip; null when there are none or the read failed. */
+  totals?(mint: string): Promise<OverlayBubbleTotals | null>;
 }
 
 interface RowState {
@@ -29,6 +34,8 @@ export class OverlayEngine {
   private readonly visible = new Set<HTMLElement>();
   private readonly tokens = new Map<string, { at: number; token: OverlayToken | null }>();
   private readonly tooltip = new Tooltip();
+  private readonly totals = new Map<string, { at: number; totals: OverlayBubbleTotals | null }>();
+  private tipPrefs: TooltipPrefs = DEFAULT_TOOLTIP;
   private mutation: MutationObserver | null = null;
   private intersection: IntersectionObserver | null = null;
   private frame = 0;
@@ -78,6 +85,32 @@ export class OverlayEngine {
   applySettings(settings: OverlaySettings): void {
     this.settings = settings;
     for (const [row, state] of this.rows) this.draw(row, state);
+  }
+
+  applyTooltip(prefs: TooltipPrefs): void {
+    this.tipPrefs = prefs;
+  }
+
+  /** The tooltip for a hovered badge, redrawn once the coin's map totals arrive if it needs them. */
+  private showTip(badge: Element, mint: string): void {
+    const token = this.tokens.get(mint)?.token;
+    if (!token) return;
+    const draw = () => {
+      const live = this.tokens.get(mint)?.token ?? token;
+      const lines = shownLines(this.tipPrefs, this.settings);
+      this.tooltip.show(
+        badge,
+        tooltipBody(live, verdictFor(live, this.settings), lines, this.totals.get(mint)?.totals),
+      );
+    };
+    draw();
+    const cached = this.totals.get(mint);
+    if (!this.deps.totals || !needsMap(this.tipPrefs, this.settings)) return;
+    if (cached && Date.now() - cached.at < TOTALS_MS) return;
+    void this.deps.totals(mint).then((totals) => {
+      this.totals.set(mint, { at: Date.now(), totals });
+      if (this.tooltip.showing(badge)) draw();
+    });
   }
 
   /** One pass per frame however many mutations arrive. */
@@ -178,8 +211,7 @@ export class OverlayEngine {
       style: this.settings.style.ring,
       calm: this.settings.style.calmMotion,
       onHover: (badge, entering) => {
-        const live = state.mint ? this.tokens.get(state.mint)?.token : null;
-        if (entering && live) this.tooltip.show(badge, tooltipBody(live, verdictFor(live, this.settings)));
+        if (entering && state.mint) this.showTip(badge, state.mint);
         else this.tooltip.hide();
       },
     });

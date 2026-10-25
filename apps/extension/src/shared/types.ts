@@ -1,3 +1,4 @@
+import type { TooltipPrefs } from "./tooltip";
 /**
  * The API's shapes (apps/api/src/extensionLookup.ts and overlaySettings.ts), as the extension
  * reads them. `sites` picks which sites the panel offers to open a token on; `style` is kept for
@@ -91,21 +92,23 @@ export interface OverlayBubbleMap {
   holders: OverlayBubbleHolder[];
   clusters: { funder: string; pct: number; count: number; creatorLinked: boolean }[];
   sameTime: { pct: number; count: number }[];
-  totals: {
-    linkedPct: number | null;
-    linkedCount: OverlayCount | null;
-    kolBundledPct: number | null;
-    bundledPct: number | null;
-    sameMinutePct: number | null;
-    sameMinuteCount: OverlayCount | null;
-    cexFundedPct: number | null;
-    cexFundedCount: OverlayCount | null;
-    devTiedPct: number | null;
-    transferredPct: number | null;
-    transferredCount: OverlayCount | null;
-    top10Pct: number | null;
-    traits: { trait: OverlayTrait; count: number; pct: number }[];
-  };
+  totals: OverlayBubbleTotals;
+}
+
+export interface OverlayBubbleTotals {
+  linkedPct: number | null;
+  linkedCount: OverlayCount | null;
+  kolBundledPct: number | null;
+  bundledPct: number | null;
+  sameMinutePct: number | null;
+  sameMinuteCount: OverlayCount | null;
+  cexFundedPct: number | null;
+  cexFundedCount: OverlayCount | null;
+  devTiedPct: number | null;
+  transferredPct: number | null;
+  transferredCount: OverlayCount | null;
+  top10Pct: number | null;
+  traits: { trait: OverlayTrait; count: number; pct: number }[];
 }
 
 /** One coin the reader's wallet bought, with its PnL (apps/api/src/extensionBuddy.ts). */
@@ -149,7 +152,9 @@ export type PanelRequest =
   | { type: "bubble"; mint: string }
   | { type: "buddy" }
   | { type: "disconnect" }
-  | { type: "saveSettings"; settings: OverlaySettings };
+  | { type: "saveSettings"; settings: OverlaySettings }
+  | { type: "tooltip" }
+  | { type: "saveTooltip"; prefs: TooltipPrefs };
 
 /** A bubble map read: the map (null when the coin has no scan yet), or why it couldn't be read. */
 export interface BubbleAnswer {
@@ -190,6 +195,9 @@ export interface Status {
 export type ContentRequest =
   | { type: "lookup"; mints: string[] }
   | { type: "settings" }
+  | { type: "tooltip" }
+  /** A tracked coin's bubble map totals, for the tooltip's map lines. */
+  | { type: "totals"; mint: string }
   | { type: "health"; site: Site; rows: number; mints: number; paused: boolean };
 
 export interface LookupAnswer {

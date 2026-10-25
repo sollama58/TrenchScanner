@@ -1,6 +1,7 @@
 import { api, ApiError } from "./shared/api";
 import { isMintAddress } from "./shared/mint";
 import { DEFAULT_SETTINGS } from "./shared/settings";
+import { cleanTooltip, type TooltipPrefs } from "./shared/tooltip";
 import type {
   ContentRequest,
   LookupAnswer,
@@ -12,6 +13,7 @@ import type {
   OverlayToken,
   PanelRequest,
   Problem,
+  OverlayBubbleTotals,
   Status,
 } from "./shared/types";
 
@@ -57,6 +59,19 @@ let feedReadAt = 0;
 const ringTabs = new Set<number>();
 /** How long a ring page's answers reuse the last feed read (the panel polls every 5 s). */
 const RING_FEED_MS = 10_000;
+/** A tooltip's map totals are reused this long (a scan lands every few minutes at most). */
+const TOTALS_MS = 60_000;
+const totalsCache = new Map<string, { at: number; totals: OverlayBubbleTotals | null }>();
+
+async function tooltipPrefs(): Promise<TooltipPrefs> {
+  const { tooltip } = await chrome.storage.local.get("tooltip");
+  return cleanTooltip(tooltip);
+}
+
+function tellRingTabs(message: object): void {
+  for (const tabId of ringTabs)
+    void chrome.tabs.sendMessage(tabId, message).catch(() => ringTabs.delete(tabId));
+}
 
 // The toolbar icon (and its shortcut) opens the panel beside the page.
 void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => undefined);
@@ -201,11 +216,16 @@ async function handle(request: PanelRequest): Promise<unknown> {
     case "saveSettings": {
       const { key } = await stored();
       await chrome.storage.local.set({ settings: request.settings });
-      for (const tabId of ringTabs)
-        void chrome.tabs
-          .sendMessage(tabId, { type: "settingsChanged", settings: request.settings })
-          .catch(() => ringTabs.delete(tabId));
+      tellRingTabs({ type: "settingsChanged", settings: request.settings });
       if (key) await api.saveSettings(key, request.settings).catch((e: unknown) => noteFailure(e));
+      return { ok: true };
+    }
+    case "tooltip":
+      return tooltipPrefs();
+    case "saveTooltip": {
+      const prefs = cleanTooltip(request.prefs);
+      await chrome.storage.local.set({ tooltip: prefs });
+      tellRingTabs({ type: "tooltipChanged", prefs });
       return { ok: true };
     }
     default:
@@ -232,6 +252,20 @@ async function handleContent(request: ContentRequest, tabId: number | undefined)
         if (t) tokens[mint] = t;
       }
       return { tokens, problem: answer.problem } satisfies LookupAnswer;
+    }
+    case "tooltip":
+      return tooltipPrefs();
+    case "totals": {
+      // Only a coin already in the reader's alerts, so a page can't send other addresses out.
+      if (!lastTokens.some((t) => t.mint === request.mint)) return null;
+      const cached = totalsCache.get(request.mint);
+      if (cached && Date.now() - cached.at < TOTALS_MS) return cached.totals;
+      const { map, problem: failed } = await bubble(request.mint);
+      if (failed && failed !== "untracked") return null;
+      const totals = map?.totals ?? null;
+      if (totalsCache.size > 200) totalsCache.clear();
+      totalsCache.set(request.mint, { at: Date.now(), totals });
+      return totals;
     }
     default:
       return null;
