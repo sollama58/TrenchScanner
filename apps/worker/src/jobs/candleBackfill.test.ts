@@ -1,6 +1,8 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   prisma,
+  launchLabPoolOf,
+  STONK_MINT,
   pumpCurveAddressOf,
   pumpSwapPoolOf,
   HttpError,
@@ -80,6 +82,18 @@ describe("poolsOf", () => {
     ]);
     expect(poolsOf(OTHER_MINT, { launchpad: null, launchedAt: null, pairAddress: "POOL" })).toEqual(["POOL"]);
     expect(poolsOf(OTHER_MINT, { launchpad: null, launchedAt: null, pairAddress: null })).toEqual([]);
+  });
+
+  it("pages a Stonks coin's LaunchLab curve, on its quote, after its pair", () => {
+    const stonks = { launchpad: "stonks", launchedAt: null, pairAddress: null };
+    expect(poolsOf(OTHER_MINT, stonks)).toEqual([launchLabPoolOf(OTHER_MINT)]);
+    expect(poolsOf(OTHER_MINT, { ...stonks, quoteMint: STONK_MINT })).toEqual([
+      launchLabPoolOf(OTHER_MINT, STONK_MINT),
+    ]);
+    expect(poolsOf(OTHER_MINT, { ...stonks, pairAddress: "CPMM" })).toEqual([
+      "CPMM",
+      launchLabPoolOf(OTHER_MINT),
+    ]);
   });
 
   it("skips the PumpSwap pool of a young coin still priced on its curve: it has not graduated", () => {

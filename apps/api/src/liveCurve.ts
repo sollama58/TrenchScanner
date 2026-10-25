@@ -389,11 +389,12 @@ export class LiveCurves {
 
   /**
    * The feed cards' "Now" (GET /live/market): each mint's current market cap in USD and the moment
-   * it is known current, for the coins still on their Pump.fun curve, followed from now on as a
-   * chart's curve is. The curve's reserves are the price to the block, where DexScreener's figure
-   * runs 45-60 s behind the market. Graduated coins, coins with no curve and curves not read yet
-   * are left out: the caller keeps DexScreener's figure for those. New curves wait up to `waitMs`
-   * for their seed read.
+   * it is known current, for the coins still on their curve (Pump.fun's, or a Stonks coin's
+   * LaunchLab pool), followed from now on as a chart's curve is. The curve's reserves are the price
+   * to the block, where DexScreener's figure runs 45-60 s behind the market (and Stonks curves are
+   * not on DexScreener at all). A graduated coin is quoted from its pool while a chart follows it.
+   * Other graduated coins, coins with no curve and curves not read yet are left out: the caller
+   * keeps DexScreener's figure for those. New curves wait up to `waitMs` for their seed read.
    */
   async quotes(mints: readonly string[], waitMs: number): Promise<Map<string, CurveQuote>> {
     const now = this.now();
@@ -417,7 +418,8 @@ export class LiveCurves {
       this.deps.supplies,
     );
     for (const [mint, f] of asked) {
-      if (f.none || f.complete || f.readAt === null) continue;
+      // A graduated coin is quoted from its pool where a chart has it followed; else DexScreener's.
+      if (f.none || (f.complete && !poolOf(f)) || f.readAt === null) continue;
       const last = f.ticks[f.ticks.length - 1];
       if (!last) continue;
       const usd = await this.usdRate(f);
@@ -479,13 +481,19 @@ export class LiveCurves {
   }
 
   /**
-   * Whether `mint` is followed, its last read found it on its curve, and its price is current
-   * (within GAP_MS): the live tick then leaves it out of the DexScreener lookup, since the curve
+   * Whether `mint` is followed, its last read found it on its curve (or its followed pool), and its
+   * price is current (within GAP_MS): the live tick then leaves it out of the DexScreener lookup, since the curve
    * prices it.
    */
   onCurve(mint: string): boolean {
     const f = this.followed.get(mint);
-    return !!f && !f.none && !f.complete && f.confirmedAt !== null && this.now() - f.confirmedAt <= GAP_MS;
+    return (
+      !!f &&
+      !f.none &&
+      (!f.complete || poolOf(f) !== null) &&
+      f.confirmedAt !== null &&
+      this.now() - f.confirmedAt <= GAP_MS
+    );
   }
 
   /**
@@ -820,9 +828,11 @@ export class LiveCurves {
         const state = states.get(curves[k]!);
         if (!f || state === undefined || state === "failed") return;
         const quoteMint = state === null || state.quoteIsSol ? null : (state.quoteMint ?? null);
-        // No Pump.fun curve: a chart's coin may be on Raydium LaunchLab (Stonks), looked for in the
-        // discovery loop.
-        if (state === null && f.wantPool && !f.launchLab && reader.findLaunchLabPool) {
+        // No Pump.fun curve: the coin may be on Raydium LaunchLab (Stonks), looked for in the
+        // discovery loop. A feed card's ask too, not only a chart's (user report 2026-10-25: Stonks
+        // cards sat on the scan's minutes-old figure, and a chart opened on a coin a card had
+        // followed found it "none" and drew no live tail).
+        if (state === null && !f.launchLab && reader.findLaunchLabPool) {
           f.needsLaunchLab = true;
           this.stream?.unwatch(KEY_PREFIX + mint);
           return;

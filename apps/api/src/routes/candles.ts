@@ -197,7 +197,7 @@ export async function registerCandleRoutes(app: FastifyInstance, opts: { env?: E
       .get(mintAddress, async () => {
         const row = await prisma.token.findUnique({
           where: { mintAddress },
-          select: { launchpad: true, launchedAt: true, pairAddress: true },
+          select: { launchpad: true, launchedAt: true, pairAddress: true, quoteMint: true },
         });
         return row
           ? { pump: row.launchpad === PUMPFUN_LAUNCHPAD || mintAddress.endsWith("pump"), token: row }

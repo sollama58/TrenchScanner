@@ -237,9 +237,10 @@ export async function registerLiveRoutes(
     let rows = await read(true);
     const stampIds = rows.map((r) => r.id);
     opts.viewStamps.record(request.user ? allowViewStamps(request.user.userId, stampIds) : stampIds);
-    // Coins still on their Pump.fun curve are priced from it, to the block, where DexScreener runs
-    // 45-60 s behind the market; they stay out of the DexScreener lookup once a read has found them
-    // there. The rest (graduated, not Pump.fun, not read yet) take DexScreener's figure as before.
+    // Coins still on their curve (Pump.fun's, or a Stonks coin's LaunchLab pool, which DexScreener
+    // doesn't list) are priced from it, to the block, where DexScreener runs 45-60 s behind the
+    // market; so is a graduated coin whose pool a chart follows. They stay out of the DexScreener
+    // lookup once a read has found them there. The rest take DexScreener's figure as before.
     const curves = liveCurves();
     const [refreshed, quotes] = await Promise.all([
       opts.liveRefresher.refreshAndWait(

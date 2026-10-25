@@ -5,7 +5,9 @@ import {
   cpmmLpFor,
   cpmmVaultsFor,
   decodeLaunchLab,
+  launchLabPoolOf,
   lockedLpShare,
+  STONK_MINT,
 } from "./launchLab.js";
 
 /** A Stonks coin's LaunchLab pool, read off mainnet 2026-10-18 (8fmggHx…eAvx, KM / ELON). */
@@ -27,6 +29,19 @@ describe("decodeLaunchLab", () => {
     const done = Uint8Array.from(Buffer.from(POOL, "base64"));
     done[17] = 2;
     expect(decodeLaunchLab(done)).toMatchObject({ complete: true, virtualToken: 0 });
+  });
+});
+
+describe("launchLabPoolOf", () => {
+  it("finds a coin's pool on its quote by address, as mainnet holds it (2026-10-25)", () => {
+    // FUMP / SOL and ALUN / STONK, as GeckoTerminal lists their stonkfun pools.
+    expect(launchLabPoolOf("BnSxLBu3ehevdDBzWdLeAApKT1i2pE3JhPaoNZdAvbij")).toBe(
+      "7mwjUjRrnotTkhD33cxW3bPjLjPkpTC14J1MA2K4Ncqm",
+    );
+    expect(launchLabPoolOf("C8JgtU8pSJBVu4tBBHxCXmZDJ53ykBMAzCqfL2bncR8S", STONK_MINT)).toBe(
+      "CXoPjJhboHHu36T9hAzxG75N2C6ck1DjKQfeDRPJsVdT",
+    );
+    expect(launchLabPoolOf("not a mint")).toBeUndefined();
   });
 });
 

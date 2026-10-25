@@ -5,6 +5,7 @@ import {
   WRAPPED_SOL_MINT,
   createLogger,
   decodeCurve,
+  decodeLaunchLab,
   decodePoolVirtualQuote,
   decodeTokenAmount,
   pumpCurveAddressOf,
@@ -42,6 +43,14 @@ const logger = createLogger("curve-tape");
  * the stream doesn't reach), until the coin is past the tape's age or POOL_FOLLOW_MS after it
  * graduated, whichever is later. Its changes go on a tape of their own (the curve's features and
  * prices stay the curve's), which the chart's candle writer saves as "pool" bars (curveCandles.ts).
+ *
+ * Stonks coins are followed the same way, for the chart only (user report 2026-10-25: their
+ * charts and prices trailed Pump.fun's, with no 1-second bars stored at all). A Stonks coin's curve
+ * is its Raydium LaunchLab pool, found once per coin (findLaunchLabPool: its address on the likely
+ * quotes, else a program scan) and then streamed and read as a Pump.fun curve is. Its ticks feed
+ * the chart's candles alone: the scoring features, the labels, the entry watch and the price path
+ * recorder read Pump.fun curves only, as they were trained and graded. A graduated Stonks coin is
+ * let go (its Raydium pool is not followed here).
  */
 
 export const CURVE_STREAM_KEY_PREFIX = "curve:";
@@ -59,7 +68,7 @@ const PAIR_WAIT_MS = 400;
 type CurveStream = Pick<HeliusAccountStream, "watch" | "unwatch" | "coveredSince">;
 /** The pool reads are optional: without them, a graduated coin is let go as before. */
 type CurveReader = Pick<HeliusClient, "getCurveStatesBatch"> &
-  Partial<Pick<HeliusClient, "getPoolVaultsBatch" | "getTokenAmountsBatch">>;
+  Partial<Pick<HeliusClient, "getPoolVaultsBatch" | "getTokenAmountsBatch" | "findLaunchLabPool">>;
 
 export interface CurveTapeConfig {
   maxAgeMinutes: number;
@@ -103,6 +112,12 @@ export interface CurveTapeConfig {
    * or read). Unset, every new launch is followed.
    */
   screenLaunches?: (mints: string[]) => Promise<string[]>;
+  /**
+   * A Stonks coin's LaunchLab curve was read and is quoted in `quoteMint` (wrapped SOL for SOL):
+   * the worker records it on the Token where none is, so the minute backfill finds the curve's
+   * pool (core's poolsOf).
+   */
+  onLaunchLabQuote?: (mint: string, quoteMint: string) => void;
 }
 
 interface Followed {
@@ -121,6 +136,8 @@ interface Followed {
   pathSaved?: boolean;
   /** Reads in a row that found no curve account (round): a brand-new coin's is given a moment to confirm. */
   misses?: number;
+  /** `curve` is a Stonks coin's LaunchLab pool: followed for the chart's candles only. */
+  launchLab?: boolean;
 }
 
 /**
@@ -188,6 +205,19 @@ const done = new Set<string>();
 const MAX_DONE = 20_000;
 /** Mints whose PumpSwap pool was asked for POOL_MISS_LIMIT rounds and never appeared. */
 const noPool = new Set<string>();
+/** Each Stonks coin's LaunchLab pool once looked for (null: it has none), so a coin is sought once. */
+const launchLabPools = new Map<string, string | null>();
+/** Stonks coins let go as done (graduated, or their pool emptied): not followed again. */
+const launchLabDone = new Set<string>();
+/** The Stonks coins followYoungCurves wants whose pool is not known yet, sought in the next round. */
+let launchLabWanted = new Map<string, { rank: number; bornAt: number; until: number }>();
+/** Stonks coins whose quote was handed to onLaunchLabQuote. */
+const quoteNoted = new Set<string>();
+/** LaunchLab pool lookups a round makes at most (1 credit each, ~10 more when one needs the scan). */
+export const LAUNCHLAB_FINDS_PER_ROUND = 4;
+/** A failed lookup is tried again after this long. */
+const LAUNCHLAB_RETRY_MS = 60_000;
+const launchLabFailedAt = new Map<string, number>();
 
 let stream: CurveStream | null = null;
 let reader: CurveReader | null = null;
@@ -242,7 +272,7 @@ export function onCurveStreamUpdate(key: string, data: string, bytes: number, no
   stats.updates += 1;
   stats.bytes += bytes;
   dayStreamBytes += bytes;
-  const state = decodeCurve(data);
+  const state = decodeCurve(data) ?? (followed.get(mint)?.launchLab ? decodeLaunchLab(data) : null);
   if (!state) return;
   tape.record(mint, now, state, "stream");
   if (state.complete) graduate(mint, state, now);
@@ -343,6 +373,8 @@ function graduate(mint: string, state: CurveState, now: number): void {
   // The emptied curve may not say what it was quoted in any more: the tape held it.
   const quoteIsSol = tape.ticksAfter(mint, Infinity)?.quoteIsSol ?? state.quoteIsSol;
   drop(mint, true);
+  // A Stonks coin graduates into a Raydium CPMM pool, not PumpSwap: let go.
+  if (f?.launchLab) return;
   if (!f || !cfg || !quoteIsSol || !reader?.getPoolVaultsBatch || !reader.getTokenAmountsBatch) return;
   // The curve just completed: its pool is about to exist, whatever an earlier ask found.
   noPool.delete(mint);
@@ -478,7 +510,10 @@ export function followYoungCurves(
     idleDropped.set(mint, askedAt);
     return true;
   };
-  const wanted = new Map<string, { rank: number; bornAt: number; until: number; asked: boolean }>();
+  const wanted = new Map<
+    string,
+    { rank: number; bornAt: number; until: number; asked: boolean; launchLab: boolean }
+  >();
   const askedPools = new Map<string, number>();
   /** Pools asked about that went idle: let go now rather than at their horizon. */
   const idlePools = new Set<string>();
@@ -489,7 +524,10 @@ export function followYoungCurves(
   ];
   for (const { coin: t, isAsked } of all) {
     if (wanted.size >= cfg.maxMints) break;
-    if (wanted.has(t.mintAddress) || t.launchpad === STONKS_LAUNCHPAD) continue;
+    if (wanted.has(t.mintAddress)) continue;
+    const launchLab = t.launchpad === STONKS_LAUNCHPAD;
+    if (launchLab && (launchLabDone.has(t.mintAddress) || launchLabPools.get(t.mintAddress) === null))
+      continue;
     const bornAt = (t.launchedAt ?? t.firstSeenAt).getTime();
     const askedAt = isAsked ? t.askedAt?.getTime() : undefined;
     const until = !isAsked
@@ -505,19 +543,29 @@ export function followYoungCurves(
       if (done.has(t.mintAddress)) idlePools.add(t.mintAddress);
       continue;
     }
-    if (done.has(t.mintAddress)) {
+    if (!launchLab && done.has(t.mintAddress)) {
       if (isAsked) askedPools.set(t.mintAddress, Math.max(askedPools.get(t.mintAddress) ?? 0, until));
       continue;
     }
-    wanted.set(t.mintAddress, { rank: wanted.size, bornAt, until, asked: isAsked });
+    wanted.set(t.mintAddress, { rank: wanted.size, bornAt, until, asked: isAsked, launchLab });
   }
-  for (const mint of followed.keys()) if (!wanted.has(mint)) drop(mint, false);
+  for (const [mint, f] of followed) {
+    const w = wanted.get(mint);
+    // A Stonks coin first followed as a new launch's Pump.fun curve is followed on its pool instead.
+    if (!w || (w.launchLab && !f.launchLab)) drop(mint, false);
+  }
+  launchLabWanted = new Map();
   for (const [mint, w] of wanted) {
     let f = followed.get(mint);
     if (!f) {
-      const curve = pumpCurveAddressOf(mint);
+      const curve = w.launchLab ? launchLabPools.get(mint) : pumpCurveAddressOf(mint);
+      if (curve === undefined && w.launchLab) {
+        launchLabWanted.set(mint, { rank: w.rank, bornAt: w.bornAt, until: w.until });
+        continue;
+      }
       if (!curve) continue;
       f = { curve, rank: w.rank, readAt: null, bornAt: w.bornAt, until: w.until, followedAt: now };
+      if (w.launchLab) f.launchLab = true;
       followed.set(mint, f);
     }
     f.rank = w.rank;
@@ -525,7 +573,12 @@ export function followYoungCurves(
     // Followed from young past the young age (near the band, called or charted): its young path is
     // saved for price pathing as it ages, as it was when the coin was let go then (the tape keeps
     // 31 minutes). A coin first followed when older is saved when let go, as before.
-    if (!f.pathSaved && now > f.bornAt + maxAgeMs && (f.followedAt ?? 0) <= f.bornAt + maxAgeMs) {
+    if (
+      !f.pathSaved &&
+      !f.launchLab &&
+      now > f.bornAt + maxAgeMs &&
+      (f.followedAt ?? 0) <= f.bornAt + maxAgeMs
+    ) {
       f.pathSaved = true;
       recordPricePath(mint, tape.snapshot(mint), "aged");
     }
@@ -573,7 +626,7 @@ function followNewLaunches(mints: readonly string[], now: number): void {
 export function curvePathOf(mint: string, now = Date.now()): CurvePathFeatures {
   const f = followed.get(mint);
   const maxAgeMs = (cfg?.featureMaxAgeMinutes ?? cfg?.maxAgeMinutes ?? Infinity) * 60_000;
-  return f && now - f.bornAt <= maxAgeMs ? tape.features(mint, now) : { ...EMPTY_CURVE_PATH };
+  return f && !f.launchLab && now - f.bornAt <= maxAgeMs ? tape.features(mint, now) : { ...EMPTY_CURVE_PATH };
 }
 
 /**
@@ -581,7 +634,8 @@ export function curvePathOf(mint: string, now = Date.now()): CurvePathFeatures {
  * the coin isn't followed or its tape is not current. Read by the entry watch (entryWatch.ts).
  */
 export function curvePriceOf(mint: string, now = Date.now()): number | null {
-  return followed.has(mint) ? tape.priceNow(mint, now) : null;
+  const f = followed.get(mint);
+  return f && !f.launchLab ? tape.priceNow(mint, now) : null;
 }
 
 /**
@@ -595,6 +649,8 @@ export function curvePriceOf(mint: string, now = Date.now()): number | null {
  */
 export function curveLabelPrices(mint: string, afterMs: number, untilMs: number) {
   const f = followed.get(mint);
+  // Stonks curves are followed for the chart alone: the labels stay on what they were graded on.
+  if (f?.launchLab) return tape.labelPrices(mint, afterMs, afterMs);
   const until = f && cfg ? Math.min(untilMs, f.bornAt + cfg.maxAgeMinutes * 60_000) : untilMs;
   return tape.labelPrices(mint, afterMs, Math.max(afterMs, until));
 }
@@ -640,13 +696,52 @@ function drop(mint: string, forGood: boolean): void {
   if (followed.delete(mint)) stream?.unwatch(keyOf(mint));
   // The path the tape held is saved as training data for predictive price pathing (when it is on),
   // unless it was saved as the coin aged and it was followed on (followYoungCurves).
-  if (!f?.pathSaved) recordPricePath(mint, tape.snapshot(mint), forGood ? "graduated" : "aged");
+  if (!f?.pathSaved && !f?.launchLab)
+    recordPricePath(mint, tape.snapshot(mint), forGood ? "graduated" : "aged");
   // And its last 1-second chart candles (curveCandles.ts).
   curveTapeDropped(mint, tape);
   tape.forget(mint);
-  if (forGood) {
+  if (forGood && f?.launchLab) {
+    if (launchLabDone.size >= MAX_DONE) launchLabDone.clear();
+    launchLabDone.add(mint);
+  } else if (forGood) {
     if (done.size >= MAX_DONE) done.clear();
     done.add(mint);
+  }
+}
+
+/**
+ * Looks for the LaunchLab pools of the Stonks coins followYoungCurves wants (the nearest the band
+ * first, LAUNCHLAB_FINDS_PER_ROUND a round), and follows each one found from this round's reads.
+ */
+async function launchLabRound(now: number): Promise<void> {
+  const find = reader?.findLaunchLabPool?.bind(reader);
+  if (!find || !cfg || launchLabWanted.size === 0) return;
+  const due = [...launchLabWanted]
+    .filter(([mint]) => now - (launchLabFailedAt.get(mint) ?? -Infinity) >= LAUNCHLAB_RETRY_MS)
+    .sort((a, b) => a[1].rank - b[1].rank)
+    .slice(0, LAUNCHLAB_FINDS_PER_ROUND);
+  for (const [mint, w] of due) {
+    const pool = await find(mint);
+    if (pool === "failed") {
+      launchLabFailedAt.set(mint, now);
+      continue;
+    }
+    launchLabFailedAt.delete(mint);
+    launchLabWanted.delete(mint);
+    if (launchLabPools.size >= MAX_DONE) launchLabPools.clear();
+    launchLabPools.set(mint, pool);
+    if (pool === null || followed.has(mint) || followed.size >= cfg.maxMints) continue;
+    followed.set(mint, {
+      curve: pool,
+      rank: w.rank,
+      readAt: null,
+      bornAt: w.bornAt,
+      until: w.until,
+      followedAt: now,
+      launchLab: true,
+    });
+    if (!paused) stream?.watch(keyOf(mint), [pool], now, "account");
   }
 }
 
@@ -711,6 +806,7 @@ export async function round(now = Date.now()): Promise<void> {
       now,
     );
     await poolRound(now);
+    await launchLabRound(now);
     const toRead: string[] = [];
     /** The seeds' stream covers: confirmed as soon as the read lands, not a round later. */
     const seeding = new Map<string, number>();
@@ -755,6 +851,12 @@ export async function round(now = Date.now()): Promise<void> {
       tape.record(mint, now, state, "read");
       f.readAt = now;
       f.misses = 0;
+      const quote = state.quoteIsSol ? WRAPPED_SOL_MINT : state.quoteMint;
+      if (f.launchLab && quote && !quoteNoted.has(mint)) {
+        if (quoteNoted.size >= MAX_DONE) quoteNoted.clear();
+        quoteNoted.add(mint);
+        cfg?.onLaunchLabQuote?.(mint, quote);
+      }
       // A seed on a covered stream: the tape runs on the stream from this read, rather than from
       // the next round's confirmation (the chart's 1-second bars began a round late: chart audit
       // 2026-10-24).
@@ -855,6 +957,11 @@ export function resetCurveTape(): void {
   done.clear();
   noPool.clear();
   idleDropped.clear();
+  launchLabPools.clear();
+  launchLabDone.clear();
+  launchLabWanted = new Map();
+  quoteNoted.clear();
+  launchLabFailedAt.clear();
   paused = false;
   poolsPaused = false;
   day = "";
