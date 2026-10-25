@@ -39,6 +39,23 @@ function board(html: string) {
   document.body.innerHTML = html;
 }
 
+describe("Axiom's Pulse", () => {
+  it("reads the address its rows carry, and skips other chains' rows", () => {
+    board(`<div role="row"><div class="relative" data-pulse-token-address="${A}"><a href="https://pump.fun/coin/${A}">pf</a></div></div>
+      <div role="row"><div class="relative" data-pulse-token-address="0xf9777050d1f243bcf4acef2149ce685617017a50"></div></div>`);
+    const rows = axiom.findRows(document);
+    expect(rows.map((r) => axiom.mintOf(r))).toEqual([A, null]);
+  });
+
+  it("never reads an address out of a row's inline pictures, or makes a row of a list", () => {
+    const png = "data:image/png;base64,5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1";
+    board(`<div data-index="0"><a href="/t/${B}">t</a>
+      <div role="row"><div data-pulse-token-address="0xab318e9a95f243bcf4acef2149ce685617017a50"><img src="${png}"></div></div></div>`);
+    const rows = axiom.findRows(document);
+    expect(rows.map((r) => axiom.mintOf(r))).toEqual([null]);
+  });
+});
+
 describe("Terminal's Trenches board", () => {
   it("reads the address its rows are marked with, and rings the sized slot", () => {
     board(`<div style="position: absolute; left: 0px; top: 0px; height: 142px; width: 100%;">

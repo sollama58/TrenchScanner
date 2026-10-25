@@ -6,6 +6,9 @@ export const axiom = adapterFrom({
   hosts: /(^|\.)axiom\.trade$/,
   tokenLink: /^\/t\/([1-9A-HJ-NP-Za-km-z]{32,44})/,
   rowSelectors: ["[data-pair-address]", "[class*='pulse'] [class*='row']"],
+  // Pulse rows carry the token's address (a saved page, 2026-10-25); other chains' rows hold an
+  // 0x address, which never reads as a mint, so they're left alone.
+  marked: { attr: "data-pulse-token-address" },
 });
 
 /** Terminal (formerly Padre): the Trenches board. Token pages are /trade/solana/<mint>. */

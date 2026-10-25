@@ -81,6 +81,13 @@ export function adapterFrom(spec: AdapterSpec): SiteAdapter {
       for (const link of root.querySelectorAll("a[href]")) {
         if (mintInHref(link.getAttribute("href") ?? "", spec.tokenLink) === null) continue;
         const row = rowOf(link);
+        // A marked row already stands for the links inside it, and a box around marked rows is a list.
+        if (
+          spec.marked &&
+          row &&
+          (row.closest(`[${spec.marked.attr}]`) || row.querySelector(`[${spec.marked.attr}]`))
+        )
+          continue;
         if (row && !seen.has(row)) {
           seen.add(row);
           rows.push(row);
@@ -92,8 +99,9 @@ export function adapterFrom(spec: AdapterSpec): SiteAdapter {
       if (spec.marked) {
         const { attr } = spec.marked;
         const el = row.matches(`[${attr}]`) ? row : row.querySelector(`[${attr}]`);
-        const mint = el ? mintsIn(el.getAttribute(attr) ?? "")[0] : undefined;
-        if (mint) return mint;
+        // A marked row is read from its mark alone: another chain's row (an 0x address) stays bare
+        // rather than taking an address from its pictures.
+        if (el) return mintsIn(el.getAttribute(attr) ?? "")[0] ?? null;
       }
       // Every distinct token link in the row must agree; two different mints mean this is a
       // container of rows, not a row, and nothing is drawn rather than the wrong thing.
@@ -113,6 +121,8 @@ export function adapterFrom(spec: AdapterSpec): SiteAdapter {
       ]) {
         for (const name of SCANNED_ATTRIBUTES) {
           const value = el.getAttribute(name);
+          // An inline picture's bytes can spell a valid-looking address by chance.
+          if (value?.startsWith("data:")) continue;
           const mint = value ? mintsIn(value)[0] : undefined;
           if (mint) return mint;
         }
