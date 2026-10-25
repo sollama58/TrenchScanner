@@ -591,15 +591,18 @@ function listErrorText(err: unknown): string {
 /**
  * The launch's metadata JSON (the token's on-chain URI, which the PumpPortal stream carries as
  * `uri`): name, symbol, description, image and the launcher's socials, written once at launch.
- * The fallback when Pump.fun's own endpoints don't answer. Only IPFS-hosted metadata is read, by
- * its CID through fixed gateways (LAUNCH_METADATA_GATEWAYS): the URI is whatever the launcher
- * wrote, and the worker fetches nothing else a stranger names. Pump.fun's own Pinata gateway comes
- * first, but it serves only what Pump.fun pinned (other launchers' CIDs answer 403), and on
- * 2026-10-23, with the rest of Pump.fun refusing this service, it answered none of the worker's
- * reads: launches reached the models with no description or socials; the public gateways after it are slower or rate limited
- * (ipfs.io answers 429 to repeated reads; gateway.pinata.cloud took about 4 s a read on
- * 2026-10-23, so each gets 8 s) but answer for any CID. Null when the URI isn't an IPFS
- * one or the JSON has nothing usable; throws the last gateway's failure when none answered.
+ * The fallback when Pump.fun's own endpoints don't answer. The URI is whatever the launcher wrote,
+ * so the worker reads only two kinds: IPFS-hosted metadata, by its CID through fixed gateways
+ * (LAUNCH_METADATA_GATEWAYS), and https JSON on the launch tools' own hosts
+ * (LAUNCH_METADATA_HOSTS), with no redirect followed. Nothing else a stranger names is fetched.
+ *
+ * Gateways (checked 2026-10-25): ipfs.filebase.io answered any CID in under half a second;
+ * gateway.pinata.cloud answers too but took 4-5 s a read; Pump.fun's own Pinata gateway serves
+ * only what Pump.fun pinned (other launchers' CIDs answer 403); ipfs.io and dweb.link answer 429
+ * to repeated reads. About half of the launches sampled that day pointed at a launch tool's host,
+ * not IPFS, and none of those were read before: 26 of 28 launch-detail asks a cycle came back
+ * missing. Null when the URI is neither kind or the JSON has nothing usable; throws the last
+ * failure when nothing answered.
  */
 export async function fetchLaunchMetadata(
   mintAddress: string,
@@ -607,32 +610,70 @@ export async function fetchLaunchMetadata(
   timeoutMs = 8_000,
 ): Promise<DiscoveredCoin | null> {
   const cid = ipfsMetadataCid(uri);
-  if (!cid) return null;
-  let lastError: unknown;
-  for (const gateway of LAUNCH_METADATA_GATEWAYS) {
-    try {
-      const body = await fetchJson<unknown>(`${gateway}/ipfs/${cid}`, { timeoutMs, retries: 0 });
-      return parseLaunchMetadata(mintAddress, body);
-    } catch (err) {
-      lastError = err;
+  if (cid) {
+    let lastError: unknown;
+    for (const gateway of LAUNCH_METADATA_GATEWAYS) {
+      try {
+        const body = await fetchJson<unknown>(`${gateway}/ipfs/${cid}`, { timeoutMs, retries: 0 });
+        return parseLaunchMetadata(mintAddress, body);
+      } catch (err) {
+        lastError = err;
+      }
     }
+    throw lastError;
   }
-  throw lastError;
+  const direct = launchToolMetadataUrl(uri);
+  if (!direct) return null;
+  const body = await fetchJson<unknown>(direct, { timeoutMs, retries: 0, redirect: "error" });
+  return parseLaunchMetadata(mintAddress, body);
 }
 
 /** The IPFS gateways fetchLaunchMetadata tries, in order - see its note. Exported for tests. */
 export const LAUNCH_METADATA_GATEWAYS = [
-  "https://pump.mypinata.cloud",
+  "https://ipfs.filebase.io",
   "https://gateway.pinata.cloud",
+  "https://pump.mypinata.cloud",
   "https://ipfs.io",
   "https://dweb.link",
 ] as const;
 
-/** The IPFS CID an https metadata URI points at, or undefined for any other URI. Exported for tests. */
+/**
+ * Hosts that launch tools write a coin's metadata JSON to, read directly. From the URIs of 200
+ * coins that reached a decision on 2026-10-25: after IPFS (80), metadata.j7tracker.io (52),
+ * meta.uxento.io (20), md.sdfgsdfsdf.uk (19), m.rapidlaunch.io (10), then a few each.
+ */
+export const LAUNCH_METADATA_HOSTS: ReadonlySet<string> = new Set([
+  "metadata.j7tracker.io",
+  "meta.uxento.io",
+  "md.sdfgsdfsdf.uk",
+  "m.rapidlaunch.io",
+  "ipfs2.extraction.live",
+  "gg.sc",
+  "ipfs.launchblitz.ai",
+  "meta.notrandom.fun",
+  "fast-ipfs.com",
+  "storage.googleapis.com",
+  "firebasestorage.googleapis.com",
+]);
+
+/** The URI as a URL to read directly: https on a LAUNCH_METADATA_HOSTS host, default port, no credentials. */
+export function launchToolMetadataUrl(uri: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(uri);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "https:" || url.port !== "" || url.username || url.password) return undefined;
+  return LAUNCH_METADATA_HOSTS.has(url.hostname.toLowerCase()) ? url.toString() : undefined;
+}
+
+/** The IPFS CID an https or ipfs:// metadata URI points at, or undefined for any other URI. Exported for tests. */
 export function ipfsMetadataCid(uri: string): string | undefined {
   return (
     /^https:\/\/[^/]+\/ipfs\/([A-Za-z0-9]{46,})\/?$/.exec(uri)?.[1] ??
-    /^https:\/\/([A-Za-z0-9]{46,})\.ipfs\.[^/]+\/?$/.exec(uri)?.[1]
+    /^https:\/\/([A-Za-z0-9]{46,})\.ipfs\.[^/]+\/?$/.exec(uri)?.[1] ??
+    /^ipfs:\/\/(?:ipfs\/)?([A-Za-z0-9]{46,})\/?$/.exec(uri)?.[1]
   );
 }
 

@@ -6,6 +6,7 @@ import {
   ipfsMetadataCid,
   fetchLaunchMetadata,
   LAUNCH_METADATA_GATEWAYS,
+  launchToolMetadataUrl,
   LIST_BLOCK_BACKOFF_MS,
   parseLaunchMetadata,
   PumpFunClient,
@@ -415,6 +416,23 @@ describe("launch metadata", () => {
     expect(ipfsMetadataCid(`https://${cid}.ipfs.w3s.link`)).toBe(cid);
     expect(ipfsMetadataCid("https://meta.uxento.io/data/33304f82")).toBeUndefined();
     expect(ipfsMetadataCid(`http://ipfs.io/ipfs/${cid}`)).toBeUndefined();
+    expect(ipfsMetadataCid(`ipfs://${cid}`)).toBe(cid);
+    expect(ipfsMetadataCid(`ipfs://ipfs/${cid}`)).toBe(cid);
+  });
+
+  it("reads a launch tool's own host directly, and nothing else a launcher names", () => {
+    expect(launchToolMetadataUrl("https://metadata.j7tracker.io/metadata/2bb0a16bf4774571.json")).toBe(
+      "https://metadata.j7tracker.io/metadata/2bb0a16bf4774571.json",
+    );
+    expect(launchToolMetadataUrl("https://META.UXENTO.IO/data/33304f82")).toBe(
+      "https://meta.uxento.io/data/33304f82",
+    );
+    expect(launchToolMetadataUrl("http://meta.uxento.io/data/33304f82")).toBeUndefined();
+    expect(launchToolMetadataUrl("https://meta.uxento.io:8443/data/33304f82")).toBeUndefined();
+    expect(launchToolMetadataUrl("https://user:pw@meta.uxento.io/data/33304f82")).toBeUndefined();
+    expect(launchToolMetadataUrl("https://evil.example/meta.json")).toBeUndefined();
+    expect(launchToolMetadataUrl("https://127.0.0.1/meta.json")).toBeUndefined();
+    expect(launchToolMetadataUrl("not a url")).toBeUndefined();
   });
 
   it("maps the metadata JSON to a coin, an absent description as a known none", () => {
@@ -438,7 +456,7 @@ describe("launch metadata", () => {
     expect(parseLaunchMetadata("M", "nope")).toBeNull();
   });
 
-  it("tries the next gateway when Pump.fun's refuses the CID (2026-10-23)", async () => {
+  it("tries the next gateway when one refuses the CID", async () => {
     const asked: string[] = [];
     vi.stubGlobal("fetch", (url: string) => {
       asked.push(url);
@@ -460,7 +478,29 @@ describe("launch metadata", () => {
     }
   });
 
-  it("throws when no gateway answers, and reads nothing for a non-IPFS URI", async () => {
+  it("reads a launch tool's JSON directly, refusing redirects", async () => {
+    const asked: [string, RequestInit | undefined][] = [];
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      asked.push([url, init]);
+      return Promise.resolve(
+        new Response(JSON.stringify({ name: "Nut", description: "", twitter: "https://x.com/a/status/1" })),
+      );
+    });
+    try {
+      const coin = await fetchLaunchMetadata(
+        "M",
+        "https://metadata.j7tracker.io/metadata/2bb0a16bf4774571.json",
+      );
+      expect(coin).toMatchObject({ mintAddress: "M", description: "", hasTwitter: true });
+      expect(asked).toHaveLength(1);
+      expect(asked[0]?.[0]).toBe("https://metadata.j7tracker.io/metadata/2bb0a16bf4774571.json");
+      expect(asked[0]?.[1]?.redirect).toBe("error");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("throws when no gateway answers, and reads nothing for an unknown host", async () => {
     const asked: string[] = [];
     vi.stubGlobal("fetch", (url: string) => {
       asked.push(url);
@@ -470,7 +510,7 @@ describe("launch metadata", () => {
       await expect(fetchLaunchMetadata("M", `https://ipfs.io/ipfs/${cid}`)).rejects.toThrow();
       expect(asked).toHaveLength(LAUNCH_METADATA_GATEWAYS.length);
       asked.length = 0;
-      expect(await fetchLaunchMetadata("M", "https://meta.uxento.io/data/33304f82")).toBeNull();
+      expect(await fetchLaunchMetadata("M", "https://evil.example/data/33304f82")).toBeNull();
       expect(asked).toEqual([]);
     } finally {
       vi.unstubAllGlobals();
