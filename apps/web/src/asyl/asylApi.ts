@@ -57,6 +57,77 @@ export interface SimilarRead extends GraphRead {
   coins: { mint: string; buyers: number; firstBuyAt: string | null }[];
 }
 
+/** The search box's answer (apps/api/src/asyl/search.ts). */
+export interface SearchRead {
+  q: string;
+  tokens: {
+    mint: string;
+    symbol: string | null;
+    name: string | null;
+    image: string | null;
+    mcapUsd: number | null;
+    launchedAt: string | null;
+  }[];
+  wallets: {
+    wallet: string;
+    name: string;
+    kind: "kol" | "label";
+    twitter: string | null;
+    avatar: string | null;
+    winRate: number | null;
+    pnlUsd: number | null;
+  }[];
+}
+
+/** The trades behind a bought-together link (apps/api/src/asyl/cotrade.ts). */
+export type PairTrade = [number, 1 | -1, number, number];
+export interface PairSide {
+  firstBuyAt: string;
+  firstSellAt: string | null;
+  buys: number;
+  sells: number;
+  solIn: number;
+  solOut: number;
+  netSol: number;
+  boughtPct: number | null;
+  firstBuyerRank: number | null;
+  sniper: boolean;
+  fastExit: boolean;
+  trades: PairTrade[];
+}
+export interface PairCoin {
+  mint: string;
+  symbol: string | null;
+  name: string | null;
+  image: string | null;
+  launchedAt: string | null;
+  a: PairSide;
+  b: PairSide;
+  leadSec: number;
+  exitLeadSec: number | null;
+}
+export interface PairRead {
+  a: string;
+  b: string;
+  windowSec: number;
+  coins: PairCoin[];
+  summary: {
+    coins: number;
+    of: number;
+    medianGapSec: number | null;
+    aFirst: number;
+    bFirst: number;
+    sizeRatio: number | null;
+    solInA: number;
+    solInB: number;
+    netA: number;
+    netB: number;
+    bothUp: number;
+    bothSold: number;
+    medianExitGapSec: number | null;
+  };
+}
+
 export interface Label {
   wallet: string;
   name: string;
@@ -81,6 +152,10 @@ export interface MapDoc {
   note: string;
   /** Link kinds switched off. */
   hidden: string[];
+  /** Kinds of link off for one wallet only, by wallet. */
+  walletHidden?: Record<string, string[]>;
+  /** Bubbles no drawn link reaches leave the map. */
+  hideLoose?: boolean;
   /** Nodes taken off the map, kept so they can be brought back. */
   removed?: string[];
   /** Links hidden one by one, by edgeKey. */
@@ -146,6 +221,8 @@ export const asylApi = {
     api<{ kind: "wallet" | "token"; known: boolean; name?: string | null }>(`/asyl/resolve/${enc(address)}`),
   wallet: (wallet: string) => api<GraphRead & { coTradersTotal?: number }>(`/asyl/wallet/${enc(wallet)}`),
   dossier: (wallet: string) => api<Dossier>(`/asyl/wallet/${enc(wallet)}/dossier`),
+  search: (q: string) => api<SearchRead>(`/asyl/search?q=${encodeURIComponent(q)}`),
+  pair: (a: string, b: string) => api<PairRead>(`/asyl/pair/${enc(a)}/${enc(b)}`),
   similar: (wallet: string, all = false) =>
     api<SimilarRead>(`/asyl/wallet/${enc(wallet)}/similar${all ? "?all=1" : ""}`),
   token: (mint: string) => api<GraphRead & { readAt: string | null }>(`/asyl/token/${enc(mint)}`),

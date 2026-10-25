@@ -14,6 +14,8 @@ import {
   type AsylGraph,
   type Cutoffs,
   type TimeLabels,
+  type WalletSwitch,
+  SWITCH_LABEL,
 } from "./graph";
 
 /**
@@ -106,6 +108,10 @@ export function LinkFilters({
   onRestore,
   timeLabels,
   onTimeLabels,
+  hideLoose,
+  onHideLoose,
+  perWallet,
+  onClearWallet,
 }: {
   /** Everything on the map, before any filter. */
   graph: AsylGraph;
@@ -120,6 +126,13 @@ export function LinkFilters({
   /** Which kinds of line carry their time. */
   timeLabels: TimeLabels;
   onTimeLabels: (t: TimeLabels) => void;
+  /** Take off bubbles no drawn link reaches; off by default, so every bubble stays. */
+  hideLoose: boolean;
+  onHideLoose: (v: boolean) => void;
+  /** Kinds switched off for one wallet only, set in the wallet's panel. */
+  perWallet: ReadonlyMap<string, ReadonlySet<WalletSwitch>>;
+  /** Turns a wallet's own switches back on; null for every wallet. */
+  onClearWallet: (wallet: string | null) => void;
 }) {
   const names = new Map(graph.nodes.map((n) => [n.id, nodeName(n)]));
   const money = graph.edges.filter((e) => MONEY_KINDS.includes(e.kind));
@@ -202,6 +215,52 @@ export function LinkFilters({
             );
           })}
         </ul>
+      </section>
+
+      <section className="asyl-rail-card">
+        <h3>
+          Links for single wallets
+          {perWallet.size > 0 && (
+            <button className="asyl-link asyl-small" onClick={() => onClearWallet(null)}>
+              All on
+            </button>
+          )}
+        </h3>
+        {perWallet.size === 0 ? (
+          <p className="asyl-muted asyl-small">
+            Click a wallet, then switch its own kinds of link off in its panel. The switches above are for the
+            whole map.
+          </p>
+        ) : (
+          <ul className="asyl-cut-list">
+            {[...perWallet].map(([w, kinds]) => (
+              <li key={w}>
+                <span>
+                  <b>{names.get(w) ?? shortAddr(w)}</b>
+                  <span className="asyl-muted">
+                    {" "}
+                    · {[...kinds].map((k) => SWITCH_LABEL[k]).join(", ")} off
+                  </span>
+                </span>
+                <button className="asyl-link asyl-small" onClick={() => onClearWallet(w)}>
+                  On
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <label className={`asyl-loose${hideLoose ? "" : " off"}`}>
+          <input
+            type="checkbox"
+            className="asyl-switch"
+            checked={hideLoose}
+            onChange={() => onHideLoose(!hideLoose)}
+          />
+          <span>Hide bubbles left with no link shown</span>
+        </label>
+        <p className="asyl-muted asyl-small">
+          Off, every bubble stays on the map whatever links are switched off; only you take one off.
+        </p>
       </section>
 
       <section className="asyl-rail-card">

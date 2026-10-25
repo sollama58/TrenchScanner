@@ -6,6 +6,8 @@ import { asylApi, type AsylMe, type ChainRead, type Label, type MapDoc, type Map
 import { renderMapCard } from "./asylCard";
 import { AsylSignIn } from "./AsylSignIn";
 import { DrawEditor, PenBar } from "./DrawEditor";
+import { PairPanel } from "./PairPanel";
+import { SearchBox } from "./SearchBox";
 import {
   GraphView,
   MapLegend,
@@ -29,6 +31,7 @@ import {
   cleanCutoffs,
   cleanDrawings,
   edgeKey,
+  perWalletOf,
   graphCsv,
   mergeGraph,
   nodeName,
@@ -37,6 +40,7 @@ import {
   visibleGraph,
   withDeployLines,
   type AsylEdgeKind,
+  type WalletSwitch,
   type AsylGraph,
   type AsylNode,
   type Cutoffs,
@@ -87,6 +91,8 @@ const KEYS: [string, string][] = [
   ["L", "Links between everything shown"],
   ["D", "Deployers of the coins shown"],
   ["F", "Fit the map to the screen"],
+  ["P", "Draw freehand with the pen"],
+  ["T", "Trades of the selected wallet and its closest co-trader"],
   ["/", "Search"],
   ["Ctrl+S", "Save the map"],
   ["Esc", "Clear the selection"],
@@ -149,6 +155,11 @@ export function AsylApp() {
   const [selected, setSelected] = useState<string | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
   const [hiddenKinds, setHiddenKinds] = useState<Set<AsylEdgeKind>>(new Set());
+  // Kinds of link off for one wallet only, and whether bubbles no link reaches leave the map
+  // (user asks 2026-10-25: off by default, so a bubble leaves only when the reader takes it off).
+  const [walletHidden, setWalletHidden] = useState<Record<string, WalletSwitch[]>>({});
+  const [hideLoose, setHideLoose] = useState(false);
+  const perWallet = useMemo(() => perWalletOf(walletHidden), [walletHidden]);
   const [removed, setRemoved] = useState<Set<string>>(new Set());
   const [cut, setCut] = useState<Set<string>>(new Set());
   const [cutoffs, setCutoffsState] = useState<Cutoffs>(storedCutoffs);
@@ -167,6 +178,8 @@ export function AsylApp() {
   } | null>(null);
   // How many co-traders each wallet has in all, for the panel's "Load all".
   const [coTraderTotals, setCoTraderTotals] = useState<Record<string, number>>({});
+  // The bought-together pair whose trades are open (user ask 2026-10-25).
+  const [pair, setPair] = useState<{ a: string; b: string } | null>(null);
   const [query, setQuery] = useState("");
   const [labels, setLabels] = useState<Label[]>([]);
   const [maps, setMaps] = useState<MapSummary[]>([]);
@@ -331,16 +344,42 @@ export function AsylApp() {
       : `${what}: ${r.credits} credit${r.credits === 1 ? "" : "s"} used.`;
   };
 
+  /**
+   * After a read joins the map: the first read makes the map's focus and its address; later ones are
+   * added to the map as it is (user ask 2026-10-25: adding must not look like opening a new map),
+   * picked, and brought into view, with what they added said.
+   */
+  const placed = useCallback(
+    (id: string, kind: "wallet" | "token", read: AsylGraph, before: AsylGraph): string | null => {
+      setSelected(id);
+      if (before.nodes.length === 0) {
+        setFocus(id);
+        if (!current) go({ kind, address: id });
+        return null;
+      }
+      const had = new Set(before.nodes.map((n) => n.id));
+      const known = new Set(before.edges.map(edgeKey));
+      const bubbles = read.nodes.filter((n) => !had.has(n.id)).length;
+      const links = read.edges.filter((e) => !known.has(edgeKey(e))).length;
+      // Once the layout has placed it, bring it into view.
+      setTimeout(() => view.current?.centre(id), had.has(id) ? 50 : 900);
+      const name = nodeName(read.nodes.find((n) => n.id === id) ?? ({ id, name: null } as AsylNode));
+      return bubbles || links
+        ? `Added to this map: ${name}, with ${bubbles} new bubble${bubbles === 1 ? "" : "s"} and ${links} new link${links === 1 ? "" : "s"}.`
+        : `${name} is on this map already, with every link it has here.`;
+    },
+    [current],
+  );
+
   const openWallet = useCallback(
     (wallet: string) =>
       run("Mapping the wallet…", async () => {
+        const before = latest.current.graph;
         const r = await asylApi.wallet(wallet);
         add(r.graph);
         if (r.coTradersTotal !== undefined) setCoTraderTotals((t) => ({ ...t, [wallet]: r.coTradersTotal! }));
-        setFocus(wallet);
-        setSelected(wallet);
-        if (!current) go({ kind: "wallet", address: wallet });
-        const note = r.coverage?.note;
+        const addedNote = placed(wallet, "wallet", r.graph, before);
+        const note = [addedNote, r.coverage?.note].filter(Boolean).join(" ");
         // A wallet TrenchScanner never saw has nothing stored to draw: read it from the chain
         // instead, its transfers and its funder (user ask 2026-10-25), when Pro Mode allows.
         if (!r.coverage || r.coverage.seen > 0 || !r.coverage.chainAvailable) return note;
@@ -359,27 +398,25 @@ export function AsylApp() {
           return `${note} The chain read didn't work: ${errorText(e)}`;
         }
       }),
-    [add, run, current],
+    [add, run, placed],
   );
 
   const openToken = useCallback(
     (mint: string) =>
       run("Mapping the holders…", async () => {
+        const before = latest.current.graph;
         const r = await asylApi.token(mint);
         add(r.graph);
-        setFocus(mint);
-        setSelected(mint);
-        if (!current) go({ kind: "token", address: mint });
-        return r.coverage?.note;
+        return [placed(mint, "token", r.graph, before), r.coverage?.note].filter(Boolean).join(" ");
       }),
-    [add, run, current],
+    [add, run, placed],
   );
 
   const search = (text: string) => {
     const a = addressIn(text);
     if (!a) {
       setStatus({
-        text: "Paste a Solana wallet or coin address, or a Solscan, DexScreener or pump.fun link.",
+        text: "Pick a coin or wallet from the list, or paste a Solana address, or a Solscan, DexScreener or pump.fun link.",
         tone: "error",
       });
       return;
@@ -415,6 +452,10 @@ export function AsylApp() {
         setDrawingSel(null);
         if (m.doc.cutoffs) setCutoffs(cleanCutoffs(m.doc.cutoffs));
         setHiddenKinds(new Set(EDGE_KINDS.filter((k) => m.doc.hidden.includes(k))));
+        setWalletHidden(
+          Object.fromEntries([...perWalletOf(m.doc.walletHidden)].map(([w, k]) => [w, [...k]])),
+        );
+        setHideLoose(m.doc.hideLoose ?? false);
         setFocus(m.doc.focus);
         setSelected(null);
         setTitle(m.title);
@@ -470,6 +511,7 @@ export function AsylApp() {
     setMapNote("");
     setRemoved(new Set());
     setCut(new Set());
+    setWalletHidden({});
     setDrawings(NO_DRAWINGS);
     setDrawingSel(null);
     setTool(null);
@@ -536,6 +578,10 @@ export function AsylApp() {
       notes: kept,
       note: mapNote,
       hidden: [...hiddenKinds],
+      walletHidden: Object.fromEntries(
+        Object.entries(walletHidden).filter(([w, k]) => k.length && graph.nodes.some((n) => n.id === w)),
+      ),
+      hideLoose,
       removed: [...removed].filter((id) => graph.nodes.some((n) => n.id === id)),
       cut: [...cut].filter((k) => graph.edges.some((e) => edgeKey(e) === k)),
       cutoffs,
@@ -610,6 +656,7 @@ export function AsylApp() {
 
   const actions: InspectorActions = {
     expand: (n: AsylNode) => void (n.kind === "token" ? openToken(n.id) : openWallet(n.id)),
+    pair: (a, b) => setPair({ a, b }),
     similar: (wallet) =>
       void run("Finding wallets that trade like it…", async () => {
         const r = await asylApi.similar(wallet);
@@ -791,13 +838,26 @@ export function AsylApp() {
 
   const keep = useMemo(() => new Set([focus, selected].filter((x): x is string => !!x)), [focus, selected]);
   const shown = useMemo(
-    () => visibleGraph(kept, hiddenKinds, keep, { cut, cutoffs, solUsd }),
-    [kept, hiddenKinds, keep, cut, cutoffs, solUsd],
+    () => visibleGraph(kept, hiddenKinds, keep, { cut, cutoffs, solUsd, perWallet, hideLoose }),
+    [kept, hiddenKinds, keep, cut, cutoffs, solUsd, perWallet, hideLoose],
   );
   // The inspector lists the links drawn, so one hidden by a slider or by hand isn't listed.
   const inspected = useMemo(() => ({ nodes: kept.nodes, edges: shown.edges }), [kept, shown]);
   const layoutKey = `${shown.nodes.length}:${shown.edges.length}:${shown.nodes.at(-1)?.id ?? ""}`;
   const selectedNode = selected ? (kept.nodes.find((n) => n.id === selected) ?? null) : null;
+  // The selected bubble's own links on the map by kind, before any filter, for its own switches.
+  const ownLinks = useMemo(() => {
+    const m = new Map<WalletSwitch, number>();
+    const bump = (k: WalletSwitch) => m.set(k, (m.get(k) ?? 0) + 1);
+    if (selected)
+      for (const e of kept.edges) {
+        if (e.a !== selected && e.b !== selected) continue;
+        // Transfers count by direction, which its panel switches apart.
+        if (e.kind === "transfer") bump(e.a === selected ? "transfer:out" : "transfer:in");
+        else bump(e.kind);
+      }
+    return m;
+  }, [kept, selected]);
   // Taken off the map, newest first, with what the map knows of each.
   const hiddenNodes = useMemo(() => {
     const byId = new Map(graph.nodes.map((n) => [n.id, n]));
@@ -917,6 +977,12 @@ export function AsylApp() {
   // The latest state, for the one key listener.
   const onKey = useRef<(e: KeyboardEvent) => void>(() => undefined);
   onKey.current = (e: KeyboardEvent) => {
+    // The trades panel keeps its own keys (Esc closes it), and leaves the map's alone.
+    if (pair) return;
+    if (ask && e.key === "Escape") {
+      setAsk(null);
+      return;
+    }
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === "s") {
       e.preventDefault();
@@ -989,6 +1055,21 @@ export function AsylApp() {
       case "f":
         view.current?.fit();
         return;
+      case "p":
+        if (graph.nodes.length) {
+          setDrawingSel(null);
+          setTool((t) => (t === "pen" ? null : "pen"));
+        }
+        return;
+      case "t": {
+        // The bought-together link with the most coins in common, from or to the selected wallet.
+        if (sel?.kind !== "wallet") return;
+        const best = shown.edges
+          .filter((x) => x.kind === "cotrade" && (x.a === sel.id || x.b === sel.id))
+          .sort((x, y) => (y.shared ?? y.weight) - (x.shared ?? x.weight))[0];
+        if (best) setPair({ a: best.a, b: best.b });
+        return;
+      }
       case "s":
         if (sel?.kind === "wallet" && !busy) actions.similar(sel.id);
         return;
@@ -1044,33 +1125,18 @@ export function AsylApp() {
         <a className="asyl-wordmark small" href={`${BASE}/`} onClick={(e) => (e.preventDefault(), newMap())}>
           ASYL
         </a>
-        <form
-          className="asyl-search"
-          onSubmit={(e) => {
-            e.preventDefault();
-            search(query);
+        <SearchBox
+          query={query}
+          onQuery={setQuery}
+          busy={!!busy}
+          adding={graph.nodes.length > 0}
+          inputRef={searchBox}
+          onSubmit={search}
+          onPick={(p) => {
+            setQuery("");
+            void (p.kind === "token" ? openToken(p.address) : openWallet(p.address));
           }}
-        >
-          <input
-            ref={searchBox}
-            className="asyl-input"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onPaste={(e) => {
-              const text = e.clipboardData.getData("text");
-              if (addressIn(text)) {
-                e.preventDefault();
-                search(text);
-              }
-            }}
-            placeholder="Paste a wallet, coin or link"
-            aria-label="Wallet or coin address"
-            spellCheck={false}
-          />
-          <button className="asyl-btn primary" disabled={!!busy}>
-            Map it
-          </button>
-        </form>
+        />
         <div className="asyl-me">
           <a className="asyl-btn ghost asyl-back" href={dashboardUrl()} title="Back to TrenchScanner">
             ← TrenchScanner
@@ -1145,6 +1211,18 @@ export function AsylApp() {
                 cut={cut}
                 timeLabels={timeLabels}
                 onTimeLabels={setTimeLabels}
+                hideLoose={hideLoose}
+                onHideLoose={(v) => {
+                  setHideLoose(v);
+                  setDirty(true);
+                }}
+                perWallet={perWallet}
+                onClearWallet={(w) => {
+                  setWalletHidden((m) =>
+                    w ? Object.fromEntries(Object.entries(m).filter(([x]) => x !== w)) : {},
+                  );
+                  setDirty(true);
+                }}
                 onRestore={(keys) => {
                   record();
                   setCut((s) => new Set([...s].filter((k) => !keys.includes(k))));
@@ -1612,12 +1690,42 @@ export function AsylApp() {
             busy={busy}
             note={notes[selectedNode.id] ?? ""}
             coTraderTotal={coTraderTotals[selectedNode.id]}
+            ownLinks={ownLinks}
+            ownOff={perWallet.get(selectedNode.id)}
+            onOwnKind={(k) => {
+              const w = selectedNode.id;
+              setWalletHidden((m) => {
+                const was = m[w] ?? [];
+                const next = was.includes(k) ? was.filter((x) => x !== k) : [...was, k];
+                const out = { ...m, [w]: next };
+                if (!next.length) delete out[w];
+                return out;
+              });
+              setDirty(true);
+            }}
             actions={actions}
             onClose={() => setSelected(null)}
           />
         )}
       </div>
 
+      {pair && (
+        <PairPanel
+          a={pair.a}
+          b={pair.b}
+          nameOf={(id) => {
+            const n = graph.nodes.find((x) => x.id === id);
+            return n ? nodeName(n) : shortAddr(id);
+          }}
+          onSelect={(id) => {
+            // Back to the map, on the wallet picked.
+            setPair(null);
+            setSelected(id);
+            view.current?.centre(id);
+          }}
+          onClose={() => setPair(null)}
+        />
+      )}
       {sharing && (
         <ShareImageDialog
           title={title}

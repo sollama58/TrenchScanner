@@ -137,6 +137,10 @@ export const mapDocSchema = z.object({
   note: z.string().max(MAP_NOTE_MAX).default(""),
   /** Hidden edge kinds when it was saved. */
   hidden: z.array(z.string().max(16)).max(10).default([]),
+  /** Kinds of link switched off for one wallet only (user ask 2026-10-25), by wallet. */
+  walletHidden: z.record(address, z.array(z.string().max(16)).max(10)).optional(),
+  /** Bubbles no drawn link reaches leave the map; off, every bubble stays. */
+  hideLoose: z.boolean().optional(),
   /** Nodes the user took off the map: kept in it, so they can be brought back one by one. */
   removed: z.array(address).max(MAP_NODES_MAX).default([]),
   /** Single links the user hid, by "kind|a|b|mint" (the web's edgeKey). */

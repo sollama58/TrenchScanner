@@ -11,6 +11,7 @@ import {
   cleanDrawings,
   nodeName,
   shortAddr,
+  perWalletOf,
   visibleGraph,
 } from "./graph";
 import { newLayout } from "./layout";
@@ -52,6 +53,8 @@ export function SharedView({ slug }: { slug: string }) {
     return visibleGraph({ nodes: map.doc.nodes, edges: map.doc.edges }, hidden, keep, {
       cutoffs: map.doc.cutoffs ? cleanCutoffs(map.doc.cutoffs) : undefined,
       solUsd: null,
+      perWallet: perWalletOf(map.doc.walletHidden),
+      hideLoose: map.doc.hideLoose ?? false,
     });
   }, [map]);
   const node = selected ? graph.nodes.find((n) => n.id === selected) : undefined;
