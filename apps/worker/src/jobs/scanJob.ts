@@ -123,6 +123,7 @@ import {
   currentTopHolders,
   topHolderWalletsOf,
   readTopHolders,
+  topHolderListReadAt,
   storeWideMapReadings,
   wideMapMints,
   wideMapReadings,
@@ -1794,10 +1795,60 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   // The chain's top 25 where it was read recently (readTopHolders): the coin's current holders,
   // which RugCheck's list may not be (withChainHolders).
   const recentHolderLists = new Map<string, OnChainHolders>();
-  for (const c of candidates) {
-    const list = currentTopHolders(c.mintAddress);
+  const takeRecentHolderList = (mint: string) => {
+    const list = currentTopHolders(mint);
     const holders = list && holdersFromShares(list);
-    if (holders) recentHolderLists.set(c.mintAddress, holders);
+    if (holders) recentHolderLists.set(mint, holders);
+    else recentHolderLists.delete(mint);
+  };
+  for (const c of candidates) takeRecentHolderList(c.mintAddress);
+  // A top-25 list failing a holder cut is re-read on the holder-cut recheck's pace, not the
+  // ten-minute cadence: the top-25 read runs only for coins that pass the screen, so a list read in
+  // a coin's first seconds (every holder then a launch buyer) kept it failing on those buyers for
+  // up to 15 minutes after they sold, and stood in for the minute's chain re-read meanwhile (user
+  // report 2026-10-25, 2YwwGPPC...: a valid coin failing the top-holder cut on its first list).
+  const holderAgeOf = (c: CandidateToken) =>
+    candidateAgeMinutes({
+      launchedAt: storedLaunchByMint.get(c.mintAddress) ?? undefined,
+      pairCreatedAt: c.pairCreatedAt,
+      firstSeenAt: firstSeenByMint.get(c.mintAddress),
+    });
+  const ageByMint = new Map(candidates.map((c) => [c.mintAddress, holderAgeOf(c)] as const));
+  const staleLists = staleHolderListRereads(
+    candidates.filter((c) => recentHolderLists.has(c.mintAddress) && !settled.has(c.mintAddress)),
+    (c) => {
+      const profile = buildOnChainProfile(
+        c,
+        rugProfiles,
+        mintAuthorities,
+        recentHolderLists,
+        pumpLaunches,
+        stonksPoolLocks,
+      );
+      return passesLocalRugScreen(profile) && failsHolderConcentration(profile);
+    },
+    topHolderListReadAt,
+    holderCutRecheckTtlFor(holderTtl, (mint) => ageByMint.get(mint)),
+    deps.stream?.quietSince ? (mint, sinceMs) => deps.stream!.quietSince!(mint, sinceMs) : undefined,
+  );
+  if (staleLists.length > 0) {
+    const readBefore = new Map(staleLists.map((m) => [m, topHolderListReadAt(m)] as const));
+    await readTopHolders(
+      staleLists.map((mint) => ({
+        mintAddress: mint,
+        holders: [...(cachedTopHolders(mint) ?? [])],
+        creator: rugProfiles.get(mint)?.creator ?? null,
+      })),
+      deps.helius,
+      { maxReads: staleLists.length, force: new Set(staleLists) },
+    ).catch((err: unknown) => logger.warn("stale top-holder re-reads failed", { error: String(err) }));
+    for (const mint of staleLists) {
+      // A re-read that didn't land leaves the old list out of the screen: the holder-cut recheck
+      // below reads the coin's top holders from the chain instead.
+      if (topHolderListReadAt(mint) === readBefore.get(mint)) recentHolderLists.delete(mint);
+      else takeRecentHolderList(mint);
+    }
+    lap("staleHolderLists");
   }
   // The same mints' top-10 holders, read from the chain (see onChainHolders.ts), for the ones the
   // fallback profile can pass on: renounced authorities on a Pump.fun venue. Without a holder list
@@ -4257,6 +4308,37 @@ function failsHolderConcentration(profile: OnChainProfile | null): boolean {
     (typeof profile?.largestHolderPct === "number" &&
       profile.largestHolderPct > SAFETY_MAX_LARGEST_HOLDER_PCT)
   );
+}
+
+/** Most failing top-25 lists re-read ahead of their cadence in one cycle (staleHolderListRereads). */
+export const STALE_HOLDER_LIST_REREADS_PER_CYCLE = 10;
+
+/**
+ * The candidates whose chain top-25 list fails a holder cut (`failsCut`) and was enumerated at least
+ * the holder-cut recheck's TTL ago (`ttlMinutesOf`: a minute for a young coin failing, the RugCheck
+ * TTL otherwise, 15 minutes past its first hour), oldest list first, at most
+ * STALE_HOLDER_LIST_REREADS_PER_CYCLE. A coin the trade stream says has not traded since its list
+ * was read keeps it: no holder's balance moved. Exported for tests.
+ */
+export function staleHolderListRereads<C extends Pick<CandidateToken, "mintAddress">>(
+  candidates: readonly C[],
+  failsCut: (candidate: C) => boolean,
+  readAtOf: (mintAddress: string) => number | undefined,
+  ttlMinutesOf: (mintAddress: string) => number,
+  quietSince?: (mintAddress: string, sinceMs: number) => boolean,
+  now = Date.now(),
+  max = STALE_HOLDER_LIST_REREADS_PER_CYCLE,
+): string[] {
+  return candidates
+    .flatMap((c) => {
+      const readAt = readAtOf(c.mintAddress);
+      if (readAt === undefined || now - readAt < ttlMinutesOf(c.mintAddress) * 60_000) return [];
+      if (quietSince?.(c.mintAddress, readAt) || !failsCut(c)) return [];
+      return [{ mint: c.mintAddress, readAt }];
+    })
+    .sort((a, b) => a.readAt - b.readAt)
+    .slice(0, Math.max(0, max))
+    .map((c) => c.mint);
 }
 
 /** How long after graduating a coin over the concentration cut is re-read every minute. */

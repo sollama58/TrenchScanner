@@ -15,6 +15,7 @@ import {
   linkedHoldersOf,
   currentTopHolders,
   readTopHolders,
+  topHolderListReadAt,
   TOP_HOLDERS_OLD_REFRESH_MS,
   TOP_HOLDERS_REFRESH_MS,
   type LinkedGroup,
@@ -453,6 +454,28 @@ describe("readTopHolders", () => {
     expect(helius.getTopHoldersBatch).toHaveBeenLastCalledWith(["mB"], 26);
     await readTopHolders(groups, helius, { maxReads: 2, nowMs: TOP_HOLDERS_REFRESH_MS });
     expect(helius.getTopHoldersBatch).toHaveBeenLastCalledWith(["mA"], 26);
+  });
+
+  it("reads a forced mint again before its cadence, and moves its enumeration time", async () => {
+    const first = [{ owner: "sniper", pct: 40 }];
+    const later = [{ owner: "holder", pct: 3 }];
+    let answer = first;
+    const helius = {
+      getTopHoldersBatch: vi.fn(async (mints: string[]) => {
+        return new Map(mints.map((m) => [m, { status: "found" as const, holders: answer }]));
+      }),
+    };
+    const groups: LinkedGroup[] = [{ mintAddress: "mF", holders: [] }];
+    await readTopHolders(groups, helius, { maxReads: 1, nowMs: 0 });
+    expect(topHolderListReadAt("mF")).toBe(0);
+    answer = later;
+    // Not due on the cadence: no read.
+    await readTopHolders(groups, helius, { maxReads: 1, nowMs: 60_000 });
+    expect(helius.getTopHoldersBatch).toHaveBeenCalledTimes(1);
+    await readTopHolders(groups, helius, { maxReads: 1, nowMs: 60_000, force: new Set(["mF"]) });
+    expect(helius.getTopHoldersBatch).toHaveBeenCalledTimes(2);
+    expect(topHolderListReadAt("mF")).toBe(60_000);
+    expect(currentTopHolders("mF", 60_000)).toEqual(later);
   });
 
   it("reads an alerted coin's top 50 in the same call, keeping the readings on the top 25", async () => {
