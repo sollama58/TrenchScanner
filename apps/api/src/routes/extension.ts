@@ -19,7 +19,14 @@ import {
   hashExtensionKey,
   isExtensionKeyShape,
 } from "../extensionKey.js";
-import { isMintAddress, lookupOverlay, recentOverlay, type OverlayToken } from "../extensionLookup.js";
+import {
+  isMintAddress,
+  lookupOverlay,
+  MAX_LOOKUP_MINTS,
+  recentOverlay,
+  safetyOverlay,
+  type OverlayToken,
+} from "../extensionLookup.js";
 import {
   overlayBubbleMap,
   pickBubbleScan,
@@ -84,6 +91,11 @@ const SITE_RATE_LIMIT = { max: 600, timeWindow: "1 minute" };
 /** A key owner's inner session is signed again after this; it never leaves this process. */
 const SITE_SESSION_MS = 5 * 60_000;
 const SITE_SESSION_MAX = 5_000;
+/**
+ * The board's safety verdicts: the content script asks about the coins on screen every 15 seconds
+ * while the reader's hide-or-mark option is on, in batches of up to MAX_LOOKUP_MINTS, from a few tabs.
+ */
+const SAFETY_RATE_LIMIT = { max: 120, timeWindow: "1 minute" };
 /** Trade Buddy reads a minute: the panel polls every 5 s (every 10 s before 0.3.1), plus a second window. */
 const BUDDY_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 /** A Trade Buddy answer this fresh is served as is; an older one is served while a new one is read. */
@@ -447,6 +459,25 @@ export async function registerExtensionRoutes(
     siteSessions.set(userId, { at: now, token });
     return token;
   }
+
+  /**
+   * The safety screen's verdict on each coin a board shows (user ask 2026-10-25), for the option
+   * that hides or marks the failing ones. Only the content script's addresses while that option is
+   * on, and only the newest scan's verdict, the same for every reader: database only, from the
+   * lookup's shared cache, so it starts no scan.
+   */
+  app.post(
+    "/safety",
+    { bodyLimit: 8_192, config: { rateLimit: { ...SAFETY_RATE_LIMIT, keyGenerator: bucket } } },
+    async (request, reply) => {
+      const raw = (request.body as { mints?: unknown } | null)?.mints;
+      if (!Array.isArray(raw) || raw.length > MAX_LOOKUP_MINTS)
+        return reply.code(400).send({ error: "invalid mints" });
+      const mints = [...new Set(raw)].filter((m): m is string => typeof m === "string" && isMintAddress(m));
+      reply.header("Cache-Control", "no-store");
+      return { verdicts: mints.length ? await safetyOverlay(mints) : {} };
+    },
+  );
 
   /**
    * One read of the site's bubble map for the extension's copy of it (user ask 2026-10-25): the

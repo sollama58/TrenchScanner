@@ -158,6 +158,11 @@ export class MapTab {
     if (this.open) this.place();
   }
 
+  /** Opens the map, if this page has the tab (a holder marker's click). */
+  show(): void {
+    if (this.mint && !this.open) this.setOpen(true);
+  }
+
   private toggle(): void {
     this.setOpen(!this.open);
   }

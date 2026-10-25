@@ -1,5 +1,6 @@
 import { FLAG_IDS, FLAG_LABELS } from "./settings";
 import type { FlagId, OverlayBubbleTotals, OverlaySettings, Site } from "./types";
+import { BOARD_COLUMNS, type BoardColumn } from "../content/columns";
 
 /**
  * What the rings' tooltip shows, and in what order (user ask 2026-10-25): every line can be
@@ -154,9 +155,55 @@ export interface MapTabPrefs {
   enabled: boolean;
 }
 
+/**
+ * Coins on a board that fail TrenchScanner's safety screen on their newest scan (user ask
+ * 2026-10-25): left alone, hidden, or marked with an X. They show again once a scan passes them.
+ */
+export const SAFETY_MODES = ["off", "hide", "mark"] as const;
+export type SafetyMode = (typeof SAFETY_MODES)[number];
+
+export interface SafetyPrefs {
+  mode: SafetyMode;
+  /** The board columns it applies to (content/columns.ts); "other" is Trending, Discover and the rest. */
+  columns: Record<BoardColumn, boolean>;
+}
+
+/** Our wallet markers beside the holders on a coin's page (user ask 2026-10-25). */
+export interface HolderMarksPrefs {
+  enabled: boolean;
+}
+
+/** An extra effect on one model's or filter's rings (user ask 2026-10-25). */
+export const RING_EFFECTS = ["none", "pulse", "glow", "shimmer", "sparkle", "flash"] as const;
+export type RingEffect = (typeof RING_EFFECTS)[number];
+
+export const EFFECT_LABELS: Record<RingEffect, string> = {
+  none: "None",
+  pulse: "Pulse",
+  glow: "Strong glow",
+  shimmer: "Shimmer",
+  sparkle: "Sparkle",
+  flash: "Flash",
+};
+
+/** One model's or filter's own ring: its colour (in place of the kind's) and an effect. */
+export interface SignalStyle {
+  color?: string;
+  effect?: RingEffect;
+  /** Its name when picked, so Settings can list it while it has no alert in the feed. */
+  name?: string;
+}
+
+/** A model's key is `model:<id>`, a filter's `filter:<id>`. */
+export type SignalKey = `model:${string}` | `filter:${string}`;
+
 export interface TooltipPrefs extends ListPrefs<TipLine> {
   toast: ToastPrefs;
   mapTab: MapTabPrefs;
+  safety: SafetyPrefs;
+  holderMarks: HolderMarksPrefs;
+  /** Each model's and filter's own ring, where the reader picked one. */
+  signals: Partial<Record<SignalKey, SignalStyle>>;
   /** Colours the reader picked; the rest take DEFAULT_COLORS. */
   colors: Partial<Record<ColorKey, string>>;
   pill: ListPrefs<PillPart>;
@@ -267,6 +314,9 @@ export const DEFAULT_TOOLTIP: TooltipPrefs = {
   colors: {},
   toast: DEFAULT_TOAST,
   mapTab: { enabled: true },
+  safety: { mode: "off", columns: { new: true, soon: true, graduated: true, other: true } },
+  holderMarks: { enabled: true },
+  signals: {},
 };
 
 export function partOn(part: PillPart, prefs: ListPrefs<PillPart>, second: boolean): boolean {
@@ -371,6 +421,73 @@ function cleanToast(raw: unknown): ToastPrefs {
   };
 }
 
+/** Signals this many at most are kept, so storage can't grow without bound. */
+const MAX_SIGNALS = 100;
+const SIGNAL_KEY = /^(model|filter):[\w.:-]{1,80}$/;
+
+function cleanSignals(raw: unknown): TooltipPrefs["signals"] {
+  const out: TooltipPrefs["signals"] = {};
+  if (typeof raw !== "object" || raw === null) return out;
+  for (const [key, value] of Object.entries(raw).slice(0, MAX_SIGNALS)) {
+    if (!SIGNAL_KEY.test(key) || typeof value !== "object" || value === null) continue;
+    const v = value as Record<string, unknown>;
+    const style: SignalStyle = {};
+    if (typeof v.color === "string" && HEX.test(v.color)) style.color = v.color.toLowerCase();
+    if (RING_EFFECTS.includes(v.effect as RingEffect) && v.effect !== "none")
+      style.effect = v.effect as RingEffect;
+    if (!style.color && !style.effect) continue;
+    if (typeof v.name === "string" && v.name.length > 0) style.name = v.name.slice(0, 60);
+    out[key as SignalKey] = style;
+  }
+  return out;
+}
+
+/** A picked colour's second tone: the colour taken 45% of the way to white. */
+export function lighter(hex: string): string {
+  const n = Number.parseInt(hex.slice(1), 16);
+  const ch = (shift: number) => {
+    const v = (n >> shift) & 255;
+    return Math.round(v + (255 - v) * 0.45)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${ch(16)}${ch(8)}${ch(0)}`;
+}
+
+/** The ring's colours and effect for a row: the kind's, with its model's and filter's own on top. */
+export function signalLook(
+  prefs: Pick<TooltipPrefs, "colors" | "signals">,
+  modelId: string | null,
+  filterId: string | null,
+): { colors: Record<ColorKey, string>; effect: RingEffect } {
+  const colors = colorsOf(prefs);
+  const model = modelId === null ? undefined : prefs.signals[`model:${modelId}`];
+  const filter = filterId === null ? undefined : prefs.signals[`filter:${filterId}`];
+  if (model?.color) {
+    colors.model = model.color;
+    colors.model2 = lighter(model.color);
+  }
+  if (filter?.color) {
+    colors.filter = filter.color;
+    colors.filter2 = lighter(filter.color);
+  }
+  return { colors, effect: model?.effect ?? filter?.effect ?? "none" };
+}
+
+function cleanSafety(raw: unknown): SafetyPrefs {
+  const v = (typeof raw === "object" && raw !== null ? raw : {}) as Partial<SafetyPrefs>;
+  const columns = (typeof v.columns === "object" && v.columns !== null ? v.columns : {}) as Partial<
+    Record<BoardColumn, unknown>
+  >;
+  return {
+    mode: SAFETY_MODES.includes(v.mode as SafetyMode) ? (v.mode as SafetyMode) : "off",
+    columns: Object.fromEntries(BOARD_COLUMNS.map((c) => [c, columns[c] !== false])) as Record<
+      BoardColumn,
+      boolean
+    >,
+  };
+}
+
 function cleanColors(raw: unknown): TooltipPrefs["colors"] {
   const out: TooltipPrefs["colors"] = {};
   if (typeof raw !== "object" || raw === null) return out;
@@ -395,5 +512,10 @@ export function cleanTooltip(raw: unknown): TooltipPrefs {
     colors: cleanColors(value.colors),
     toast: cleanToast(value.toast),
     mapTab: { enabled: (value.mapTab as Partial<MapTabPrefs> | undefined)?.enabled !== false },
+    safety: cleanSafety(value.safety),
+    holderMarks: {
+      enabled: (value.holderMarks as Partial<HolderMarksPrefs> | undefined)?.enabled !== false,
+    },
+    signals: cleanSignals(value.signals),
   };
 }

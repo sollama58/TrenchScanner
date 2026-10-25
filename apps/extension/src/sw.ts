@@ -14,6 +14,8 @@ import type {
   PanelRequest,
   Problem,
   OverlayBubbleTotals,
+  OverlaySafety,
+  SafetyAnswer,
   Status,
 } from "./shared/types";
 
@@ -62,6 +64,9 @@ const RING_FEED_MS = 10_000;
 /** A tooltip's map totals are reused this long (a scan lands every few minutes at most). */
 const TOTALS_MS = 60_000;
 const totalsCache = new Map<string, { at: number; totals: OverlayBubbleTotals | null }>();
+/** A coin's safety verdict is reused this long across tabs (the API's own cache is 20 s). */
+const SAFETY_MS = 15_000;
+const safetyCache = new Map<string, { at: number; verdict: OverlaySafety | null }>();
 
 async function tooltipPrefs(): Promise<TooltipPrefs> {
   const { tooltip } = await chrome.storage.local.get("tooltip");
@@ -124,6 +129,46 @@ async function feed(): Promise<FeedAnswer> {
     noteFailure(e);
   }
   return { tokens: lastTokens, problem };
+}
+
+/**
+ * The safety verdicts of the coins on a board, for the option that hides or marks the failing ones
+ * (user ask 2026-10-25). Only while it is on: then, and only then, the board's addresses go to
+ * TrenchScanner, and nowhere else.
+ */
+async function safety(mints: unknown): Promise<SafetyAnswer | null> {
+  if ((await tooltipPrefs()).safety.mode === "off") return null;
+  const { key, refused } = await stored();
+  if (!key || refused) return { verdicts: {}, problem: "disconnected" };
+  const asked = [...new Set(Array.isArray(mints) ? mints : [])]
+    .filter((m): m is string => typeof m === "string" && isMintAddress(m))
+    .slice(0, 100);
+  const now = Date.now();
+  const verdicts: SafetyAnswer["verdicts"] = {};
+  const missing: string[] = [];
+  for (const mint of asked) {
+    const hit = safetyCache.get(mint);
+    if (hit && now - hit.at < SAFETY_MS) {
+      if (hit.verdict) verdicts[mint] = hit.verdict;
+    } else missing.push(mint);
+  }
+  if (missing.length > 0) {
+    try {
+      const answer = await api.safety(key, missing);
+      if (safetyCache.size > 5_000) safetyCache.clear();
+      for (const mint of missing) {
+        const verdict = answer.verdicts[mint] ?? null;
+        safetyCache.set(mint, { at: now, verdict });
+        if (verdict) verdicts[mint] = verdict;
+      }
+    } catch (e) {
+      // An older API without the route: nothing is hidden.
+      if (e instanceof ApiError && e.status === 404) return { verdicts, problem: null };
+      if (e instanceof ApiError && e.status === 401) noteFailure(e);
+      return { verdicts, problem: e instanceof ApiError && e.status === 401 ? "refused" : "offline" };
+    }
+  }
+  return { verdicts, problem: null };
 }
 
 /** The answer the site map gets when its read could not be made (map/siteMap.ts). */
@@ -277,7 +322,8 @@ async function handle(request: PanelRequest): Promise<unknown> {
 /**
  * The rings (README "Rings"): the content script on Axiom, Terminal and GMGN asks
  * which addresses on screen are the reader's alerts. It is answered from the panel's own feed
- * (re-read when older than RING_FEED_MS), so no address from a page ever leaves the browser.
+ * (re-read when older than RING_FEED_MS), so no ring sends an address from a page. The safety
+ * option (`safety`) and the coin-page tools (`holders`, the map tab) do, only while they are on.
  */
 async function handleContent(request: ContentRequest, tabId: number | undefined): Promise<unknown> {
   if (tabId !== undefined) ringTabs.add(tabId);
@@ -299,6 +345,14 @@ async function handleContent(request: ContentRequest, tabId: number | undefined)
     case "alerts": {
       if (!(await tooltipPrefs()).toast.enabled) return null;
       return Date.now() - feedReadAt < RING_FEED_MS ? { tokens: lastTokens, problem } : await feed();
+    }
+    case "safety":
+      return safety(request.mints);
+    case "holders": {
+      // Only the open coin's page, and only while the markers are on.
+      if (!(await tooltipPrefs()).holderMarks.enabled) return null;
+      const { map } = await bubble(request.mint);
+      return map;
     }
     case "totals": {
       // Only a coin already in the reader's alerts, so a page can't send other addresses out.

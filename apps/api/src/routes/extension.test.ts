@@ -326,6 +326,48 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     expect((await ext(key, "POST", "/ext/v1/lookup", { mints: [trackedMint] })).statusCode).toBe(404);
   });
 
+  it("answers the newest scan's safety verdict of the coins on a board, and nothing else", async () => {
+    const user = await makeUser("safety", true);
+    const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    const [failing, passing, repassed, unscanned, unknown] = [mint(), mint(), mint(), mint(), mint()];
+    mints.push(failing, passing, repassed, unscanned, unknown);
+    const scan = async (m: string, passed: boolean[], reasons: string[] = []) => {
+      const token = await prisma.token.create({ data: { mintAddress: m } });
+      for (const [i, ok] of passed.entries()) {
+        await prisma.tokenSnapshot.create({
+          data: {
+            tokenId: token.id,
+            priceUsd: 0.00001,
+            marketCapUsd: 9_000,
+            rugScreenPassed: ok,
+            rugScreenReasons: ok ? [] : reasons,
+            takenAt: new Date(Date.now() - (passed.length - i) * 60_000),
+          },
+        });
+      }
+    };
+    await scan(failing, [true, false], ["top 10 holders own 52%"]);
+    await scan(passing, [true]);
+    // A coin that failed and passed again shows again.
+    await scan(repassed, [false, true], ["mint authority active"]);
+    await scan(unscanned, []);
+
+    const res = await ext(key, "POST", "/ext/v1/safety", {
+      mints: [failing, passing, repassed, unscanned, unknown, "not-a-mint"],
+    });
+    expect(res.statusCode).toBe(200);
+    const verdicts = res.json().verdicts as Record<string, { passed: boolean; reasons: string[] }>;
+    expect(verdicts[failing]).toMatchObject({ passed: false, reasons: ["top 10 holders own 52%"] });
+    expect(verdicts[passing]).toMatchObject({ passed: true, reasons: [] });
+    expect(verdicts[repassed]).toMatchObject({ passed: true, reasons: [] });
+    expect(Object.keys(verdicts).sort()).toEqual([failing, passing, repassed].sort());
+
+    expect((await ext(key, "POST", "/ext/v1/safety", { mints: "x" })).statusCode).toBe(400);
+    const tooMany = Array.from({ length: 101 }, () => mint());
+    expect((await ext(key, "POST", "/ext/v1/safety", { mints: tooMany })).statusCode).toBe(400);
+    expect((await ext(null, "POST", "/ext/v1/safety", { mints: [failing] })).statusCode).toBe(401);
+  });
+
   it("reads a tracked coin's latest bubble map with its totals, and no untracked coin's", async () => {
     const user = await makeUser("bubble", true);
     const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;

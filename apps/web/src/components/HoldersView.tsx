@@ -4,7 +4,10 @@ import {
   alertWideMap,
   fromAlertText,
   hasHolderList,
+  holderBadgeAt,
+  holderListAt,
   holderShownAt,
+  liveWideFor,
   momentLabel,
   momentSnapshot,
   pickReading,
@@ -14,7 +17,7 @@ import {
 } from "../bubbleMap";
 import { cachedGet } from "../cache";
 import { MAX_HISTORY, useLiveTrades } from "../liveTrades";
-import type { LiveTradeShares } from "../liveShares";
+import { coversFrom, type LiveTradeShares } from "../liveShares";
 import { linkedReading } from "./AlertCard";
 import { reloadBubbleMaps, useBubbleMaps } from "./BubbleMap";
 import { LiveStamp } from "./Freshness";
@@ -199,7 +202,7 @@ export function holdersMoment(card: Card, reading: Snapshot | null | undefined) 
           "The reading at the alert, the same one The alert section shows. Counts are over the top holders it read (the /25 or /10).",
       }
     : {
-        label: "Now",
+        label: "Latest",
         // Headed with the reading's age, ticking (user ask 2026-10-19).
         at: holderShownAt(reading),
         title:
@@ -319,7 +322,7 @@ export function useHoldersView(
           }
         : canSwitch
           ? {
-              label: "Now",
+              label: "Latest",
               at: linked ? holderShownAt(linked) : undefined,
               title:
                 "The latest scan's reading. Switch to an earlier moment for the holders as they stood then.",
@@ -440,6 +443,35 @@ export function HolderFreshness({
       {fresh.gone && <> · No further updates: the coin is no longer being scanned</>}
     </p>
   );
+}
+
+/**
+ * When what the holders show last changed (user ask 2026-10-25: the time on the map is when its
+ * data was last updated): the holder set's read (the top 50's, when it is drawn over the scan's
+ * list, else the scan's chain read), or the newest live trade since that moved a listed wallet's
+ * share, whichever is later. Null for a kept moment or without a list.
+ */
+export function useHoldersUpdatedAt(
+  mint: string,
+  reading: Snapshot | null | undefined,
+  live: LiveTradeShares | null,
+  kept: boolean,
+): number | null {
+  const wide = liveWideFor(reading, useBubbleMaps(mint)?.map ?? null);
+  return useMemo(() => {
+    if (kept || !reading || !hasHolderList(reading)) return null;
+    let at = holderBadgeAt(reading, wide?.readAt);
+    const listAt = holderListAt(reading);
+    if (coversFrom(live, listAt)) {
+      const listed = new Set([
+        ...(reading.linkedHolders ?? []).flatMap((h) => (h ? [h.wallet] : [])),
+        ...(wide?.holders ?? []).map((h) => h.wallet),
+      ]);
+      for (const t of live.trades)
+        if (t.tokens > 0 && t.atMs > listAt && t.atMs > at && listed.has(t.wallet)) at = t.atMs;
+    }
+    return at;
+  }, [kept, reading, wide, live]);
 }
 
 /**

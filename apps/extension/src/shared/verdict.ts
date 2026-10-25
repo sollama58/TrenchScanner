@@ -22,6 +22,9 @@ export interface RowVerdict {
   flags: FlagReading[];
   /** Some enabled flag is past its threshold, whatever ring is shown. */
   risky: boolean;
+  /** The model call and filter match behind the ring, for their own colour and effect. */
+  modelId: string | null;
+  filterId: string | null;
 }
 
 export function readFlag(id: FlagId, token: OverlayToken, threshold: number | null): FlagReading | null {
@@ -99,5 +102,5 @@ export function verdictFor(token: OverlayToken, settings: OverlaySettings): RowV
     const worst = flags.find((f) => f.level === "hi")!;
     badge = `${worst.short} ${worst.text}`;
   }
-  return { ring, badge, flags, risky };
+  return { ring, badge, flags, risky, modelId: model?.model ?? null, filterId: filter?.filterId ?? null };
 }

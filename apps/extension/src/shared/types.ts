@@ -44,6 +44,13 @@ export interface OverlayStats {
   mintAuthorityActive: boolean | null;
 }
 
+/** The safety screen's verdict on the coin's newest scan (apps/api/src/extensionLookup.ts). */
+export interface OverlaySafety {
+  passed: boolean;
+  reasons: string[];
+  at: string;
+}
+
 export interface OverlayToken {
   mint: string;
   symbol: string | null;
@@ -52,6 +59,8 @@ export interface OverlayToken {
   image: string | null;
   liveMcapUsd: number | null;
   stats: OverlayStats | null;
+  /** Absent from answers before 0.7.0's API. */
+  safety?: OverlaySafety | null;
   modelCalls: {
     model: string;
     name: string | null;
@@ -201,7 +210,17 @@ export type ContentRequest =
   | { type: "totals"; mint: string }
   /** The reader's feed, for the on-page alerts (only while they are on). */
   | { type: "alerts" }
+  /** The safety verdicts of the coins on a board (only while the hide-or-mark option is on). */
+  | { type: "safety"; mints: string[] }
+  /** The open token page's coin's top holders, for the holder markers (only while they are on). */
+  | { type: "holders"; mint: string }
   | { type: "health"; site: Site; rows: number; mints: number; paused: boolean };
+
+export interface SafetyAnswer {
+  /** The verdict of each coin asked about that the scanner has screened, by mint. */
+  verdicts: Record<string, OverlaySafety>;
+  problem: Problem;
+}
 
 export interface LookupAnswer {
   /** The reader's alerted tokens among those asked, by mint. A mint absent here wasn't alerted. */

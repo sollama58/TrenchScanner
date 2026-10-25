@@ -1,4 +1,4 @@
-import type { BuddyAnswer, OverlayBubbleMap, OverlaySettings, OverlayToken } from "./types";
+import type { BuddyAnswer, OverlayBubbleMap, OverlaySafety, OverlaySettings, OverlayToken } from "./types";
 
 /**
  * The only host the extension talks to (the manifest CSP's connect-src). There is no host
@@ -53,5 +53,8 @@ export const api = {
   /** One read of the site's bubble map, replayed by the API as the key's owner (map/siteMap.ts). */
   site: (key: string, read: { method: string; path: string; body: string | null }) =>
     call<{ status: number; body: string }>(key, "POST", "/site", read, AbortSignal.timeout(SITE_TIMEOUT_MS)),
+  /** The safety verdicts of up to 100 coins on a board. */
+  safety: (key: string, mints: string[]) =>
+    call<{ verdicts: Record<string, OverlaySafety> }>(key, "POST", "/safety", { mints }),
   buddy: (key: string) => call<BuddyAnswer>(key, "GET", "/buddy"),
 };

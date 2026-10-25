@@ -561,9 +561,9 @@ describe("holderFreshness", () => {
     expect(holderShownAt(reading)).toBe(t);
     const fresh = holderFreshness(reading, now, reads(now + 4_000));
     const text = holderStatusText(now, fresh.last, fresh.due);
-    expect(text).toBe("4m 01s ago · Next update in 0:59");
+    expect(text).toBe("Updated 4m 01s ago · Next update in 0:59");
     expect(text.toLowerCase()).not.toContain("live");
-    expect(holderStatusText(now, fresh.last, null, { live: true })).toBe("Live · 4m 01s ago");
+    expect(holderStatusText(now, fresh.last, null, { live: true })).toBe("Live · updated 4m 01s ago");
   });
 });
 

@@ -34,9 +34,9 @@ describe("freshness text", () => {
   });
 
   it("says Live with the list's age, never Live alone (user ask 2026-10-24)", () => {
-    expect(holderStatusText(t, t - 42_000, null, { live: true })).toBe("Live · 42s ago");
-    expect(holderStatusText(t, t - 42_000, t + 48_000, { live: true })).toBe("Live · 42s ago");
-    expect(holderStatusText(t, t - 4 * 60_000, null, { live: true })).toBe("Live · 4m 00s ago");
+    expect(holderStatusText(t, t - 42_000, null, { live: true })).toBe("Live · updated 42s ago");
+    expect(holderStatusText(t, t - 42_000, t + 48_000, { live: true })).toBe("Live · updated 42s ago");
+    expect(holderStatusText(t, t - 4 * 60_000, null, { live: true })).toBe("Live · updated 4m 00s ago");
   });
 
   it("is live only until liveUntil", () => {
@@ -47,8 +47,8 @@ describe("freshness text", () => {
   });
 
   it("counts down from the chain read when it is not live, and does not say live", () => {
-    expect(holderStatusText(t, t - 42_000, t + 48_000)).toBe("42s ago · Next update in 0:48");
-    expect(holderStatusText(t, t - 42_000, t + 500)).toBe("42s ago · Updating…");
+    expect(holderStatusText(t, t - 42_000, t + 48_000)).toBe("Updated 42s ago · Next update in 0:48");
+    expect(holderStatusText(t, t - 42_000, t + 500)).toBe("Updated 42s ago · Updating…");
     expect(holderStatusText(t, t - 42_000, t + 48_000).toLowerCase()).not.toContain("live");
   });
 

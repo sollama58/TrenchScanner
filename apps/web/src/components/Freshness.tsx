@@ -115,10 +115,11 @@ export function holderStatusText(
   next: number | null,
   opts?: { live?: boolean; late?: boolean },
 ): string {
+  // "Updated": `last` is when what the section shows last changed (user ask 2026-10-25).
   const age = secondsAgo(last, now);
-  if (opts?.live) return `Live · ${age}`;
-  if (next === null) return age;
-  return `${age} · ${nextUpdateText(next, now, opts?.late ?? false)}`;
+  if (opts?.live) return `Live · updated ${age}`;
+  if (next === null) return `Updated ${age}`;
+  return `Updated ${age} · ${nextUpdateText(next, now, opts?.late ?? false)}`;
 }
 
 /**
@@ -161,7 +162,7 @@ export function LiveStamp({
       className="tm-live-stamp small muted num"
       title={
         streaming
-          ? `Holder list read ${hms(last)}; each trade since moves its holders' shares as it lands`
+          ? `Updated ${hms(last)}; each trade moves its holders' shares as it lands`
           : (title ?? `Updated ${hms(last)}${at === null ? "" : `; next read ${hms(at)}`}`)
       }
     >

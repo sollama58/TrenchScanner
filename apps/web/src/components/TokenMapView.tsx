@@ -21,6 +21,7 @@ import {
   useCoinScans,
   useHolderReading,
   useHoldersView,
+  useHoldersUpdatedAt,
   useLiveShares,
 } from "./HoldersView";
 import { ClockIcon } from "./Icons";
@@ -117,6 +118,7 @@ function CoinMap({ card: cardIn }: { card: Card }) {
   const linked = useHolderReading(card, false, scans.snapshots);
   const holders = useHoldersView(card, linked, alertAt, false);
   const liveShares = useLiveShares(base, holders.isKept);
+  const updatedAt = useHoldersUpdatedAt(mint, holders.listReading, liveShares, holders.isKept);
   const listAt = holders.listReading ? holderListAt(holders.listReading) : NaN;
   const sharesMove = coversFrom(liveShares, listAt);
   const holdersFresh = (() => {
@@ -124,7 +126,7 @@ function CoinMap({ card: cardIn }: { card: Card }) {
     const chain = holderFreshness(holders.listReading, now, reads);
     const liveUntil = sharesMove && chain.due !== null ? chain.due + HOLDER_LIVE_GRACE_MS : null;
     return {
-      last: chain.last,
+      last: Math.max(chain.last, updatedAt ?? 0),
       next: chain.due,
       late: false,
       live: liveUntil !== null,
@@ -132,13 +134,14 @@ function CoinMap({ card: cardIn }: { card: Card }) {
       gone: chain.due === null,
     };
   })();
+  const bar = holders.canSwitch || (holders.reading && hasHolderList(holders.reading));
   return (
     <div className="tm-holders tm-map-only">
-      {(holders.canSwitch || (holders.reading && hasHolderList(holders.reading))) && (
+      {bar && (
         <div className={`tm-holders-bar${holders.isKept ? " at-alert" : ""}`}>
           {holders.canSwitch && (
             <div className="segmented small tm-holders-switch" role="radiogroup" aria-label="Holders at">
-              {[...holders.options, { view: "now" as const, label: "Now", at: Infinity }].map((o) => (
+              {[...holders.options, { view: "now" as const, label: "Latest", at: Infinity }].map((o) => (
                 <button
                   key={o.view}
                   type="button"
@@ -182,6 +185,7 @@ function CoinMap({ card: cardIn }: { card: Card }) {
         flags={flags}
         live={liveShares}
         freshness={holdersFresh}
+        stamp={!bar}
       />
     </div>
   );

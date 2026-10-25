@@ -14,7 +14,13 @@ import {
   colorsOf,
   DEFAULT_COLORS,
   DEFAULT_TOOLTIP,
+  EFFECT_LABELS,
   lineOn,
+  RING_EFFECTS,
+  type RingEffect,
+  type SafetyMode,
+  type SignalKey,
+  type SignalStyle,
   partOn,
   pillLabel,
   tipLabel,
@@ -27,6 +33,7 @@ import {
 } from "../shared/tooltip";
 import { verdictFor } from "../shared/verdict";
 import { siteMapNode } from "../map/siteMap";
+import { BOARD_COLUMNS, type BoardColumn } from "../content/columns";
 import { buddyCard } from "./buddy";
 import { SITE_NAMES, tokenCard } from "./card";
 
@@ -447,7 +454,7 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
       el("p", {
         className: "note",
         textContent:
-          "This version reads the token addresses on Axiom, Terminal and GMGN boards to ring your alerts. It never reads your logins, and no address leaves the browser except an alerted coin's, for its map totals.",
+          "This version reads the token addresses on Axiom, Terminal and GMGN boards to ring your alerts. It never reads your logins. No address leaves the browser except an alerted coin's, for its map totals, the coin page you open, for its map and holder markers, and, only while the safety screen option is on, the coins on the board.",
       }),
       disconnect,
     ),
@@ -598,7 +605,16 @@ function ringDisplaySections(settings: OverlaySettings): HTMLElement[] {
     tip.list,
     reset("tooltip", () => (tipPrefs = { ...tipPrefs, order: DEFAULT_TOOLTIP.order, on: {} }), tip.fill),
   );
-  return [pillBox, secondBox, tipBox, toastSection(), mapTabSection(), colorSection()];
+  return [
+    pillBox,
+    secondBox,
+    tipBox,
+    toastSection(),
+    safetySection(),
+    mapTabSection(),
+    signalSection(),
+    colorSection(),
+  ];
 }
 
 /** Rings: the on-page alert, off by default, every part of it the reader's. */
@@ -714,12 +730,79 @@ function toastSection(): HTMLElement {
   );
 }
 
-/** Rings: the bubble map tab on a coin's page. */
+/** A labelled drop-down. */
+function pick<T extends string>(
+  label: string,
+  value: T,
+  options: readonly [T, string][],
+  apply: (v: T) => void,
+): HTMLElement {
+  const select = el(
+    "select",
+    {},
+    ...options.map(([v, text]) => el("option", { value: v, textContent: text, selected: v === value })),
+  );
+  select.setAttribute("aria-label", label);
+  select.addEventListener("change", () => apply(select.value as T));
+  return el("label", { className: "pick" }, el("span", { textContent: label }), select);
+}
+
+const COLUMN_NAMES: Record<BoardColumn, string> = {
+  new: "New",
+  soon: "About to graduate",
+  graduated: "Graduated",
+  other: "Trending and other lists",
+};
+
+/** Rings: coins failing the safety screen on the boards, off by default. */
+function safetySection(): HTMLElement {
+  const columns = el(
+    "div",
+    { className: "sites columns" },
+    ...BOARD_COLUMNS.map((column) => {
+      const box = el("input", { type: "checkbox", checked: tipPrefs.safety.columns[column] });
+      box.addEventListener("change", () => {
+        tipPrefs = {
+          ...tipPrefs,
+          safety: { ...tipPrefs.safety, columns: { ...tipPrefs.safety.columns, [column]: box.checked } },
+        };
+        void send({ type: "saveTooltip", prefs: tipPrefs });
+      });
+      return el("label", {}, box, COLUMN_NAMES[column]);
+    }),
+  );
+  columns.hidden = tipPrefs.safety.mode === "off";
+  return section(
+    "Safety screen on the boards",
+    pick<SafetyMode>(
+      "Coins failing it",
+      tipPrefs.safety.mode,
+      [
+        ["off", "Show as usual"],
+        ["hide", "Hide them"],
+        ["mark", "Mark them with an X"],
+      ],
+      (mode) => {
+        tipPrefs = { ...tipPrefs, safety: { ...tipPrefs.safety, mode } };
+        void send({ type: "saveTooltip", prefs: tipPrefs });
+        columns.hidden = mode === "off";
+      },
+    ),
+    columns,
+    el("p", {
+      className: "note",
+      textContent:
+        "On Pulse, Trenches, Discover and Trending: a coin whose newest TrenchScanner scan fails the safety screen is hidden or marked, and shows again once a scan passes it. Coins TrenchScanner hasn't scanned stay as they are. While this is on, the addresses on the board are sent to TrenchScanner to ask.",
+    }),
+  );
+}
+
+/** Rings: the bubble map tab and the holder markers on a coin's page. */
 function mapTabSection(): HTMLElement {
   return section(
-    "Bubble map tab",
+    "On a coin's page",
     toggle(
-      "On a coin's page",
+      "Bubble map tab",
       "Adds a Bubble map tab beside Top Traders. It asks TrenchScanner about the coin you open.",
       tipPrefs.mapTab.enabled,
       "var(--filter)",
@@ -728,6 +811,108 @@ function mapTabSection(): HTMLElement {
         void send({ type: "saveTooltip", prefs: tipPrefs });
       },
     ),
+    toggle(
+      "Holder markers",
+      "Marks the top holders the bubble map knows of (cluster, same-minute, sniper, fresh, CEX, dev-tied) wherever the page names them. A marker opens the map.",
+      tipPrefs.holderMarks.enabled,
+      "var(--filter)",
+      (on) => {
+        tipPrefs = { ...tipPrefs, holderMarks: { enabled: on } };
+        void send({ type: "saveTooltip", prefs: tipPrefs });
+      },
+    ),
+  );
+}
+
+/** The models and filters to style: those in the feed now, and those already given a look. */
+export function signalChoices(
+  tokens: readonly {
+    modelCalls: { model: string; name: string | null }[];
+    filterMatches: { filterId: string; filterName: string }[];
+  }[],
+  styled: Partial<Record<SignalKey, SignalStyle>>,
+): { key: SignalKey; name: string; kind: "model" | "filter" }[] {
+  const out = new Map<SignalKey, { key: SignalKey; name: string; kind: "model" | "filter" }>();
+  for (const t of tokens) {
+    for (const c of t.modelCalls)
+      out.set(`model:${c.model}`, { key: `model:${c.model}`, name: c.name ?? c.model, kind: "model" });
+    for (const m of t.filterMatches)
+      out.set(`filter:${m.filterId}`, { key: `filter:${m.filterId}`, name: m.filterName, kind: "filter" });
+  }
+  for (const [key, style] of Object.entries(styled) as [SignalKey, SignalStyle][]) {
+    if (out.has(key)) continue;
+    const kind = key.startsWith("model:") ? "model" : "filter";
+    out.set(key, { key, name: style.name ?? key.slice(kind.length + 1), kind });
+  }
+  return [...out.values()].sort((a, b) =>
+    a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "model" ? -1 : 1,
+  );
+}
+
+/** Rings: each model's and filter's own colour and effect. */
+function signalSection(): HTMLElement {
+  const choices = signalChoices(feed?.tokens ?? [], tipPrefs.signals);
+  const save = () => void send({ type: "saveTooltip", prefs: tipPrefs });
+  const put = (key: SignalKey, name: string, change: Partial<SignalStyle>) => {
+    const next: SignalStyle = { ...tipPrefs.signals[key], ...change, name };
+    if (next.effect === "none") delete next.effect;
+    const signals = { ...tipPrefs.signals };
+    if (next.color || next.effect) signals[key] = next;
+    else delete signals[key];
+    tipPrefs = { ...tipPrefs, signals };
+  };
+  const rows = choices.map(({ key, name, kind }) => {
+    const style = tipPrefs.signals[key] ?? {};
+    const base = colorsOf(tipPrefs)[kind];
+    const color = el("input", { type: "color", value: style.color ?? base });
+    color.setAttribute("aria-label", `${name}'s ring colour`);
+    color.addEventListener("change", () => {
+      put(key, name, { color: color.value });
+      save();
+    });
+    const effect = el(
+      "select",
+      {},
+      ...RING_EFFECTS.map((fx) =>
+        el("option", {
+          value: fx,
+          textContent: EFFECT_LABELS[fx],
+          selected: fx === (style.effect ?? "none"),
+        }),
+      ),
+    );
+    effect.setAttribute("aria-label", `${name}'s ring effect`);
+    effect.addEventListener("change", () => {
+      put(key, name, { effect: effect.value as RingEffect });
+      save();
+    });
+    const reset = el("button", { className: "link", textContent: "Reset" });
+    reset.addEventListener("click", () => {
+      const signals = { ...tipPrefs.signals };
+      delete signals[key];
+      tipPrefs = { ...tipPrefs, signals };
+      color.value = base;
+      effect.value = "none";
+      save();
+    });
+    return el(
+      "div",
+      { className: "signal" },
+      color,
+      el("span", { className: "name", textContent: `${kind === "model" ? "Model" : "Filter"} · ${name}` }),
+      effect,
+      reset,
+    );
+  });
+  return section(
+    "Each model and filter",
+    el("p", {
+      className: "note",
+      textContent: rows.length
+        ? "Its own ring colour and an extra effect, in place of the model or filter colour below. Models and filters show here once one is in your feed."
+        : "Models and filters show here once one of them is in your feed.",
+    }),
+    ...rows,
   );
 }
 

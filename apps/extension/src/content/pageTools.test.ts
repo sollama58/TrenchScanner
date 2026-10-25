@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
+import { HolderMarks, holderNamed, holderTags } from "./holderMarks";
 import { Toasts } from "./toasts";
 import { findTabStrip, isTokenPage, pageMint } from "./tokenPage";
 import { DEFAULT_SETTINGS } from "../shared/settings";
 import { token } from "../shared/testToken";
-import { cleanTooltip, colorsOf, DEFAULT_COLORS } from "../shared/tooltip";
+import { cleanTooltip, colorsOf, DEFAULT_COLORS, lighter, signalLook } from "../shared/tooltip";
 
 const A = "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN";
 const B = "So11111111111111111111111111111111111111112";
@@ -85,5 +86,93 @@ describe("colours", () => {
     const prefs = cleanTooltip({ colors: { model: "#123ABC", filter: "red;}body{x:y", risk: 5 } });
     expect(prefs.colors).toEqual({ model: "#123abc" });
     expect(colorsOf(prefs).filter).toBe(DEFAULT_COLORS.filter);
+  });
+});
+
+describe("holder markers", () => {
+  const W1 = "2Q3jYQWWzkfZotYMyxzAFwfpFT5RhhBvGS3mk8P7PryF";
+  const W2 = "bwamJzztZsepfkteWRChggmXuiiCQvpLqPietdNfSXa";
+  const map = {
+    mint: A,
+    symbol: "RING",
+    readAt: null,
+    scanAt: null,
+    top50: true,
+    holders: [
+      {
+        wallet: W1,
+        pct: 4.2,
+        cluster: 0,
+        sameTime: null,
+        trait: "sniper" as const,
+        cex: false,
+        creatorTied: true,
+      },
+      { wallet: W2, pct: 1.1, cluster: null, sameTime: null, trait: null, cex: false, creatorTied: false },
+    ],
+    clusters: [{ funder: B, pct: 6, count: 3, creatorLinked: true }],
+    sameTime: [],
+    totals: {} as never,
+  };
+
+  it("names a holder by its full address or a short form only it fits", () => {
+    const holders = new Map(map.holders.map((h) => [h.wallet, h]));
+    expect(holderNamed(W1, holders)).toBe(W1);
+    expect(holderNamed("2Q3j…PryF", holders)).toBe(W1);
+    expect(holderNamed("2Q3jY...7PryF", holders)).toBe(W1);
+    expect(holderNamed("zzzz…PryF", holders)).toBeNull();
+    expect(holderTags(map.holders[0]!, map, DEFAULT_COLORS).map((t) => t.text)).toEqual([
+      "C1",
+      "SNPR",
+      "DEV",
+    ]);
+    expect(holderTags(map.holders[1]!, map, DEFAULT_COLORS)).toEqual([]);
+  });
+
+  it("marks the page's holders the map knows of, opens the map from a marker, and goes when turned off", async () => {
+    vi.useFakeTimers();
+    history.pushState({}, "", `/sol/token/${A}`);
+    document.body.innerHTML = `<div class="holders">
+      <div class="row"><a id="w1" href="https://solscan.io/account/${W1}">2Q3j…PryF</a><span>4.2%</span></div>
+      <div class="row"><span id="w2">bwam…fSXa</span><span>1.1%</span></div></div>`;
+    const openMap = vi.fn();
+    const marks = new HolderMarks("gmgn", cleanTooltip({}), { holders: async () => map, openMap });
+    marks.start();
+    await vi.advanceTimersByTimeAsync(700);
+    const chip = document.getElementById("w1")!.nextElementSibling!;
+    expect(chip.tagName).toBe("TRENCH-OVERLAY-HOLDER");
+    // A plain holder gets nothing.
+    expect(document.getElementById("w2")!.nextElementSibling?.tagName).toBe("SPAN");
+    expect(document.querySelectorAll("trench-overlay-holder")).toHaveLength(1);
+    marks.applyPrefs(cleanTooltip({ holderMarks: { enabled: false } }));
+    await vi.advanceTimersByTimeAsync(700);
+    expect(document.querySelectorAll("trench-overlay-holder")).toHaveLength(0);
+    marks.stop();
+    expect(openMap).not.toHaveBeenCalled();
+    history.pushState({}, "", "/");
+    vi.useRealTimers();
+  });
+});
+
+describe("each model's and filter's own ring", () => {
+  it("takes the picked colour and effect over the kind's, the model's first", () => {
+    const prefs = cleanTooltip({
+      signals: {
+        "model:rules": { color: "#112233", effect: "pulse", name: "Rules" },
+        "filter:f1": { color: "#445566", effect: "sparkle" },
+        "filter:bad key!": { color: "#000000" },
+        "model:x": { effect: "explode" },
+      },
+    });
+    expect(Object.keys(prefs.signals).sort()).toEqual(["filter:f1", "model:rules"]);
+    const both = signalLook(prefs, "rules", "f1");
+    expect(both.colors.model).toBe("#112233");
+    expect(both.colors.filter).toBe("#445566");
+    expect(both.effect).toBe("pulse");
+    expect(signalLook(prefs, null, "f1").effect).toBe("sparkle");
+    const plain = signalLook(prefs, "other", null);
+    expect(plain.colors.model).toBe(DEFAULT_COLORS.model);
+    expect(plain.effect).toBe("none");
+    expect(lighter("#000000")).toBe("#737373");
   });
 });
