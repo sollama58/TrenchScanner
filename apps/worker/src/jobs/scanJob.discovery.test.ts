@@ -15,6 +15,7 @@ import {
   buildOnChainProfile,
   needsStonksPoolLockRead,
   freshGraduatesOverCut,
+  staleHolderListRereads,
   noteSnapshotWritten,
   persistSnapshot,
   reviveMovingMints,
@@ -231,6 +232,49 @@ describe("a fresh graduate's own pool in its RugCheck holders", () => {
       { mintAddress: "Curve", pairAddress: "p5" },
     ];
     expect(freshGraduatesOverCut(candidates, profiles, now)).toEqual(["Over", "Whale"]);
+  });
+});
+
+describe("a failing top-25 list re-read ahead of its cadence", () => {
+  const now = Date.parse("2026-10-25T20:33:00Z");
+  const readAt = new Map([
+    ["Young", now - 2 * 60_000],
+    ["JustRead", now - 30_000],
+    ["Passing", now - 9 * 60_000],
+    ["Quiet", now - 9 * 60_000],
+    ["Older", now - 8 * 60_000],
+  ]);
+  const failing = new Set(["Young", "JustRead", "Quiet", "Older", "NoList"]);
+  const candidates = ["Young", "JustRead", "Passing", "Quiet", "Older", "NoList"].map((m) => ({
+    mintAddress: m,
+  }));
+
+  it("picks failing lists older than their recheck TTL, oldest first, skipping quiet coins", () => {
+    expect(
+      staleHolderListRereads(
+        candidates,
+        (c) => failing.has(c.mintAddress),
+        (m) => readAt.get(m),
+        () => 1,
+        (m) => m === "Quiet",
+        now,
+      ),
+    ).toEqual(["Older", "Young"]);
+  });
+
+  it("waits out a longer TTL and keeps to the cap", () => {
+    const pick = (ttl: number, max?: number) =>
+      staleHolderListRereads(
+        candidates,
+        (c) => failing.has(c.mintAddress),
+        (m) => readAt.get(m),
+        () => ttl,
+        undefined,
+        now,
+        max,
+      );
+    expect(pick(5)).toEqual(["Quiet", "Older"]);
+    expect(pick(1, 1)).toEqual(["Quiet"]);
   });
 });
 

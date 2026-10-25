@@ -436,6 +436,11 @@ export function currentTopHolders(mintAddress: string, nowMs = Date.now()): Chai
   return entry && nowMs - entry.atMs < maxAgeMs ? entry.holders : undefined;
 }
 
+/** When the wallets on a mint's chain top-holder list were last enumerated, ms epoch; undefined without a list. */
+export function topHolderListReadAt(mintAddress: string): number | undefined {
+  return topHolderLists.get(mintAddress)?.readAtMs;
+}
+
 /**
  * The wallets of a mint's top 25 holders (pools and the creator aside), largest first, from the
  * chain's list while it is fresh enough to use: the holders Fresh is counted over ("N/25", user
@@ -516,6 +521,11 @@ export async function readTopHolders(
      * stream can't vouch for is read; the usual cadence reads every coin either way.
      */
     quietSince?: (mint: string, sinceMs: number) => boolean;
+    /**
+     * Mints read now whatever their list's age, on `maxReads`: a list failing a holder cut whose
+     * re-read is due sooner than the cadence (scanJob's staleHolderListRereads).
+     */
+    force?: ReadonlySet<string>;
   },
 ): Promise<{ reads: number; watchedReads: number }> {
   const now = opts.nowMs ?? Date.now();
@@ -533,6 +543,7 @@ export async function readTopHolders(
   const due = groups
     .filter((g) => {
       if (wide.has(g.mintAddress) && !wideHolderLists.has(g.mintAddress)) return true;
+      if (opts.force?.has(g.mintAddress)) return true;
       const every = oldMints.has(g.mintAddress) ? TOP_HOLDERS_OLD_REFRESH_MS : TOP_HOLDERS_REFRESH_MS;
       if (ageOf(g.mintAddress) < every) return false;
       if (!quiet(g.mintAddress)) return true;
