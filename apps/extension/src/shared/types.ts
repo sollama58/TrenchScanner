@@ -189,7 +189,7 @@ export interface Status {
 }
 
 /**
- * What a ring page (the local rings build's content script on Axiom, Terminal or GMGN) may ask
+ * What a ring page (the rings content script on Axiom, Terminal or GMGN) may ask
  * the service worker. It holds no key: it asks about the addresses on screen and draws answers.
  */
 export type ContentRequest =

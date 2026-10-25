@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Trench Overlay (rings)",
+  "name": "Trench Overlay",
   "short_name": "Trench Overlay",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Your TrenchScanner alerts in a side panel, with alerted tokens ringed on Axiom, Terminal and GMGN.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "sidePanel"],
@@ -55,6 +55,5 @@
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; img-src 'self' https: data:; connect-src https://api.trenchscanner.app"
-  },
-  "version_name": "0.3.0 rings (local) r8"
+  }
 }

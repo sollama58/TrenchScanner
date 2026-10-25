@@ -226,6 +226,17 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
         snapshotId: snapshot.id,
         score: 60,
         alertMcapUsd: 6_100,
+        matchedAt: new Date(Date.now() - 10 * 60_000),
+      },
+    });
+    await prisma.match.create({
+      data: {
+        userId: user.id,
+        filterId: filter.id,
+        tokenId: token.id,
+        snapshotId: snapshot.id,
+        score: 70,
+        alertMcapUsd: 30_000,
       },
     });
     const callBase = {
@@ -243,6 +254,19 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
         confidence: 74,
         tier: "high",
         calibratedPct: 41,
+        createdAt: new Date(Date.now() - 10 * 60_000),
+      },
+    });
+    // A later re-call at a higher cap doesn't stand in for the call that alerted the reader.
+    await prisma.curatedAlert.create({
+      data: {
+        ...callBase,
+        anchorMcapUsd: 30_000,
+        model: "rules",
+        modelName: "Rules",
+        confidence: 80,
+        tier: "high",
+        calibratedPct: 50,
       },
     });
     await prisma.curatedAlert.create({
@@ -271,16 +295,16 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
       tokens: {
         mint: string;
         stats: Record<string, unknown>;
-        modelCalls: { model: string; calibratedPct: number }[];
-        filterMatches: { filterName: string }[];
+        modelCalls: { model: string; calibratedPct: number; mcapUsd: number }[];
+        filterMatches: { filterName: string; mcapUsd: number }[];
         ai: { decision: string; reasoning: string };
       }[];
     };
     const t = body.tokens.find((x) => x.mint === trackedMint);
     expect(body.tokens.some((x) => x.mint === untrackedMint)).toBe(false);
     expect(t!.stats).toMatchObject({ marketCapUsd: 6_100, bundledSupplyPct: 2, linkedWalletPct: 14 });
-    expect(t!.filterMatches.map((m) => m.filterName)).toEqual(["Clean launch"]);
-    expect(t!.modelCalls.map((c) => c.model)).toEqual(["rules"]);
+    expect(t!.filterMatches.map((m) => [m.filterName, m.mcapUsd])).toEqual([["Clean launch", 6_100]]);
+    expect(t!.modelCalls.map((c) => [c.model, c.mcapUsd, c.calibratedPct])).toEqual([["rules", 6_100, 41]]);
     expect(t!.ai.decision).toBe("buy");
     expect(t!.ai.reasoning.length).toBe(280);
 

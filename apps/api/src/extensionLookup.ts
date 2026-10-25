@@ -277,7 +277,7 @@ export async function lookupOverlay(
             tokenId: { in: tracked.map((t) => t.tokenId) },
             matchedAt: { gte: new Date(now - LOOKUP_WINDOW_MS) },
           },
-          orderBy: { matchedAt: "desc" },
+          orderBy: { matchedAt: "asc" },
           select: {
             tokenId: true,
             matchedAt: true,
@@ -288,7 +288,7 @@ export async function lookupOverlay(
   const matchesByToken = new Map<string, OverlayFilterMatch[]>();
   for (const m of matches) {
     const list = matchesByToken.get(m.tokenId) ?? [];
-    // One entry per filter: its latest match.
+    // Oldest first, one entry per filter: its first match, the one that alerted the reader.
     if (list.some((x) => x.filterId === m.filter.id)) continue;
     list.push({
       filterId: m.filter.id,
@@ -303,8 +303,9 @@ export async function lookupOverlay(
     tokens: tracked.map((t) => {
       const seen = new Set<string>();
       const modelCalls: OverlayModelCall[] = [];
-      for (const c of t.calls) {
-        // One entry per model: its latest call, and only models this reader follows.
+      // Oldest first, one entry per model: its first call, the one that alerted the reader. A later
+      // call (another model's, or a re-call at a higher cap) must not stand in for the alert.
+      for (const c of [...t.calls].reverse()) {
         if (seen.has(c.model) || !isFeedCall(calls, { model: c.modelId, tier: c.tier })) continue;
         seen.add(c.model);
         const { modelId: _modelId, ...call } = c;

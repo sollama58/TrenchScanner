@@ -471,7 +471,7 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
       el("p", {
         className: "note",
         textContent:
-          "This rings build reads the token addresses on Axiom, Terminal and GMGN boards to ring your alerts. It never reads your logins, and no address leaves the browser except an alerted coin's, for its map totals.",
+          "This version reads the token addresses on Axiom, Terminal and GMGN boards to ring your alerts. It never reads your logins, and no address leaves the browser except an alerted coin's, for its map totals.",
       }),
       disconnect,
     ),
@@ -540,7 +540,7 @@ function orderedList<T extends string>(
 }
 
 /**
- * Rings build: what each ring's pill says, an optional second pill, and the tooltip's lines, each
+ * Rings: what each ring's pill says, an optional second pill, and the tooltip's lines, each
  * in the reader's order. Kept in this browser (shared/tooltip.ts).
  */
 function ringDisplaySections(settings: OverlaySettings): HTMLElement[] {

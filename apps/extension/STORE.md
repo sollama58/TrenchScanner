@@ -1,3 +1,5 @@
+> **0.4.0 and later carry the in-page rings (README "Rings") and must not be uploaded as is:** the answers below describe 0.3.0, which never runs on a website. Take the rings out first.
+
 # Chrome Web Store listing
 
 What to paste into the developer dashboard for Trench Overlay. Keep it in step with what the

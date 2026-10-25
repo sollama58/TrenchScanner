@@ -1,6 +1,6 @@
 import { MAP_LABELS, type MapLine, type PillPart } from "./tooltip";
 import type { FlagId, OverlayBubbleTotals, OverlaySettings, OverlayToken } from "./types";
-import { readFlag, type FlagLevel, type RowVerdict } from "./verdict";
+import { alertCall, alertMatch, firstAlert, readFlag, type FlagLevel, type RowVerdict } from "./verdict";
 
 /** One piece of a pill's text, coloured by its flag's level when it has one. */
 export interface PillSegment {
@@ -33,9 +33,10 @@ export function pillSegments(
   totals?: OverlayBubbleTotals | null,
   now = Date.now(),
 ): PillSegment[] {
-  const model = verdict.ring === "model" || verdict.ring === "both" ? token.modelCalls[0] : undefined;
-  const filter = verdict.ring === "filter" || verdict.ring === "both" ? token.filterMatches[0] : undefined;
-  const first = model ?? filter;
+  const model = verdict.ring === "model" || verdict.ring === "both" ? alertCall(token) : undefined;
+  const filter = verdict.ring === "filter" || verdict.ring === "both" ? alertMatch(token) : undefined;
+  // Change and age count from the reader's first alert, as the tooltip's "Alerted at" does.
+  const first = firstAlert(token);
   const nowMcap = token.liveMcapUsd ?? token.stats?.marketCapUsd ?? null;
   const out: PillSegment[] = [];
   for (const part of parts) {

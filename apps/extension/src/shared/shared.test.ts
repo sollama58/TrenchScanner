@@ -3,7 +3,7 @@ import { base58Length, isMintAddress } from "./mint";
 import { DEFAULT_SETTINGS } from "./settings";
 import { token } from "./testToken";
 import type { OverlaySettings } from "./types";
-import { verdictFor } from "./verdict";
+import { alertCall, firstAlert, verdictFor } from "./verdict";
 
 const MINT = "So11111111111111111111111111111111111111112";
 const PUMP = "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN";
@@ -78,5 +78,34 @@ describe("row verdicts", () => {
       rings: { ...DEFAULT_SETTINGS.rings, riskRing: false },
     };
     expect(verdictFor(risky, noRisk).ring).toBeNull();
+  });
+});
+
+describe("the alerting call", () => {
+  it("is the earliest, whatever order the API sends them in", () => {
+    const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+    const later = {
+      model: "b",
+      name: "Late model",
+      tier: "high",
+      confidence: 90,
+      calibratedPct: 60,
+      at: at(1),
+      mcapUsd: 30_000,
+    };
+    const first = {
+      model: "a",
+      name: "First model",
+      tier: "high",
+      confidence: 70,
+      calibratedPct: 40,
+      at: at(10),
+      mcapUsd: 6_000,
+    };
+    const t = token({ modelCalls: [later, first] });
+    const v = verdictFor(t, DEFAULT_SETTINGS);
+    expect(v.badge).toBe("First model 40%");
+    expect(alertCall(t)).toBe(first);
+    expect(firstAlert(t)?.mcapUsd).toBe(6_000);
   });
 });

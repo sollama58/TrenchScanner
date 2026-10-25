@@ -2,7 +2,7 @@ import { DEFAULT_SETTINGS } from "../shared/settings";
 import { DEFAULT_TOOLTIP, MAP_LABELS, shownLines, type MapLine, type TipLine } from "../shared/tooltip";
 import type { FlagId, OverlayBubbleTotals, RingStyle, OverlayToken } from "../shared/types";
 import type { PillSegment } from "../shared/pill";
-import type { RowVerdict } from "../shared/verdict";
+import { firstAlert, type RowVerdict } from "../shared/verdict";
 import { findSpot, obstaclesIn } from "./placement";
 
 /**
@@ -344,7 +344,7 @@ export function tooltipBody(
     } else if (id === "aiReasoning") {
       if (token.ai?.reasoning) alerts.append(el("p", "why", token.ai.reasoning));
     } else if (id === "mcap") {
-      const first = token.modelCalls[0]?.mcapUsd ?? token.filterMatches[0]?.mcapUsd ?? null;
+      const first = firstAlert(token)?.mcapUsd ?? null;
       const nowMcap = token.liveMcapUsd ?? token.stats?.marketCapUsd ?? null;
       if (first !== null) {
         const change =

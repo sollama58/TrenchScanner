@@ -46,6 +46,30 @@ export function readFlag(id: FlagId, token: OverlayToken, threshold: number | nu
   return { id, label: meta.label, short: meta.short, text, level };
 }
 
+/**
+ * The model call and filter match that alerted the reader: the earliest of each. The API lists them
+ * oldest first since 0.4.0; picked by time here too, so an older answer (newest first) can't put a
+ * later re-call, at a higher cap, in the alert's place.
+ */
+export function alertCall(token: OverlayToken): OverlayToken["modelCalls"][number] | undefined {
+  return earliest(token.modelCalls);
+}
+
+export function alertMatch(token: OverlayToken): OverlayToken["filterMatches"][number] | undefined {
+  return earliest(token.filterMatches);
+}
+
+/** The reader's first alert on the token, call or match: its time and the cap it alerted at. */
+export function firstAlert(token: OverlayToken): { at: string; mcapUsd: number | null } | undefined {
+  return earliest<{ at: string; mcapUsd: number | null }>([...token.modelCalls, ...token.filterMatches]);
+}
+
+function earliest<T extends { at: string }>(list: readonly T[]): T | undefined {
+  let first: T | undefined;
+  for (const item of list) if (!first || Date.parse(item.at) < Date.parse(first.at)) first = item;
+  return first;
+}
+
 export function verdictFor(token: OverlayToken, settings: OverlaySettings): RowVerdict {
   const flags = FLAG_IDS.flatMap((id) => {
     const pref = settings.flags[id];
@@ -56,8 +80,8 @@ export function verdictFor(token: OverlayToken, settings: OverlaySettings): RowV
   const risky = flags.some((f) => f.level === "hi");
 
   const aiOk = !settings.rings.aiBuyOnly || token.ai?.decision === "buy";
-  const model = settings.rings.modelAlerts && aiOk ? token.modelCalls[0] : undefined;
-  const filter = settings.rings.filterMatches ? token.filterMatches[0] : undefined;
+  const model = settings.rings.modelAlerts && aiOk ? alertCall(token) : undefined;
+  const filter = settings.rings.filterMatches ? alertMatch(token) : undefined;
 
   let ring: RingKind | null = null;
   let badge: string | null = null;

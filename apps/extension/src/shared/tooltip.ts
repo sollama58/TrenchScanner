@@ -2,7 +2,7 @@ import { FLAG_IDS, FLAG_LABELS } from "./settings";
 import type { FlagId, OverlayBubbleTotals, OverlaySettings } from "./types";
 
 /**
- * What the rings build's tooltip shows, and in what order (user ask 2026-10-25): every line can be
+ * What the rings' tooltip shows, and in what order (user ask 2026-10-25): every line can be
  * turned off or moved. Kept in this browser only (chrome.storage.local), not on the account, so the
  * store build's settings never see it.
  *

@@ -21,10 +21,10 @@ import type {
  * The service worker: the only part that holds the key or touches the network, and only
  * api.trenchscanner.app. Only the extension's own side panel is answered.
  *
- * The extension has no access to Axiom, Terminal, GMGN or any other site: no content scripts, no
- * host permissions at all (the API allows its calls by CORS), no tabs, scripting or cookies. It never runs inside a trading
- * site, so nothing it ships (or a bad update of it) can read a site's page or login. The panel
- * lists the reader's alerts and opens a token on a site as an ordinary link.
+ * No host permissions at all (the API allows its calls by CORS), no tabs, scripting or cookies.
+ * Since 0.4.0 a content script rings alerts on Axiom, Terminal and GMGN (README "Rings"); it holds
+ * no key and is answered from the panel's feed (handleContent). The panel lists the reader's alerts
+ * and opens a token on a site as an ordinary link.
  *
  * TrenchScanner's own site (and only it: manifest externally_connectable, checked again here) may
  * ask whether the extension is installed and hand it a new key, so connecting needs no copy-paste.
@@ -248,7 +248,7 @@ async function handle(request: PanelRequest): Promise<unknown> {
 }
 
 /**
- * The local rings build (README "Rings build"): the content script on Axiom, Terminal and GMGN asks
+ * The rings (README "Rings"): the content script on Axiom, Terminal and GMGN asks
  * which addresses on screen are the reader's alerts. It is answered from the panel's own feed
  * (re-read when older than RING_FEED_MS), so no address from a page ever leaves the browser.
  */
