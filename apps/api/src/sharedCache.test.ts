@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { cacheReport, SharedCache, SharedCacheMap, withComputedAt } from "./sharedCache.js";
+import { cacheReport, SharedBatchCache, SharedCache, SharedCacheMap, withComputedAt } from "./sharedCache.js";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -303,5 +303,96 @@ describe("SharedCacheMap", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("SharedBatchCache", () => {
+  const reader = () => {
+    const reads: string[][] = [];
+    let fail = false;
+    const read = async (keys: string[]) => {
+      const n = reads.push(keys);
+      await tick();
+      if (fail) throw new Error("db down");
+      // "gone" is a key the read finds nothing for. Each value says which read found it.
+      return new Map(keys.filter((k) => k !== "gone").map((k) => [k, `${k}:${n}`]));
+    };
+    return { reads, read, failNext: (v: boolean) => (fail = v) };
+  };
+
+  it("reads only the keys nobody read within the TTL, and shares reads in flight", async () => {
+    const r = reader();
+    const cache = new SharedBatchCache<string>(5_000, 100, r.read);
+    // A burst of tabs asking for overlapping pages at once: one read for the first page, one for
+    // the coins only the second page has.
+    const [a, b] = await Promise.all([cache.getMany(["x", "y", "x"]), cache.getMany(["y", "z", "gone"])]);
+    expect(r.reads).toEqual([
+      ["x", "y"],
+      ["z", "gone"],
+    ]);
+    expect(a).toEqual(
+      new Map([
+        ["x", "x:1"],
+        ["y", "y:1"],
+      ]),
+    );
+    expect(b).toEqual(
+      new Map([
+        ["y", "y:1"],
+        ["z", "z:2"],
+      ]),
+    );
+    // Inside the TTL: no read at all, and a key found absent stays absent.
+    expect(await cache.getMany(["x", "gone"])).toEqual(new Map([["x", "x:1"]]));
+    expect(r.reads).toHaveLength(2);
+  });
+
+  it("reads again past the TTL", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.parse("2026-10-25T03:00:00Z"));
+      const r = reader();
+      const cache = new SharedBatchCache<string>(5_000, 100, r.read);
+      await cache.getMany(["x"]);
+      vi.setSystemTime(Date.parse("2026-10-25T03:00:04Z"));
+      await cache.getMany(["x"]);
+      expect(r.reads).toHaveLength(1);
+      vi.setSystemTime(Date.parse("2026-10-25T03:00:05Z"));
+      expect(await cache.getMany(["x"])).toEqual(new Map([["x", "x:2"]]));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("passes a failed read on and keeps nothing from it", async () => {
+    const r = reader();
+    const cache = new SharedBatchCache<string>(5_000, 100, r.read);
+    r.failNext(true);
+    await expect(cache.getMany(["x"])).rejects.toThrow("db down");
+    expect(cache.size).toBe(0);
+    r.failNext(false);
+    expect(await cache.getMany(["x"])).toEqual(new Map([["x", "x:2"]]));
+  });
+
+  it("holds at most maxKeys, the oldest read going first", async () => {
+    const r = reader();
+    const cache = new SharedBatchCache<string>(5_000, 2, r.read);
+    await cache.getMany(["a"]);
+    await cache.getMany(["b"]);
+    await cache.getMany(["c"]);
+    expect(cache.size).toBe(2);
+    await cache.getMany(["b", "c"]);
+    expect(r.reads).toHaveLength(3);
+    await cache.getMany(["a"]);
+    expect(r.reads).toHaveLength(4);
+    // More keys in one call than the cache holds: every one still answered, the one evicted
+    // before it was collected by a read of its own.
+    expect(await cache.getMany(["p", "q", "s"])).toEqual(
+      new Map([
+        ["p", "p:6"],
+        ["q", "q:5"],
+        ["s", "s:5"],
+      ]),
+    );
   });
 });

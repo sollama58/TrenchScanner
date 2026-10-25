@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { Prisma } from "@prisma/client";
+import { Prisma, type TokenSnapshot } from "@prisma/client";
 import {
   prisma,
   corsOriginList,
@@ -16,7 +16,7 @@ import {
   attachAiReviewsForAdmin,
   curatedAlertInclude,
   withLatestSnapshots,
-  latestSnapshotsByToken,
+  sharedLatestSnapshotsByToken,
   TOKEN_CARD_SELECT,
   foldCuratedIntoPage,
   groupSameTokenCalls,
@@ -51,7 +51,7 @@ import {
   savedFeed,
   type SavedFeed,
 } from "../contest.js";
-import { SharedCacheMap } from "../sharedCache.js";
+import { SharedBatchCache, SharedCacheMap } from "../sharedCache.js";
 
 /** Fixed, not user-configurable - the dashboard's Live Feed always shows 12 cards per page. */
 const PAGE_SIZE = 12;
@@ -176,12 +176,35 @@ interface FeedReturnsResponse {
  * snapshot's own age either way.
  */
 const matchInclude = {
-  // The latest snapshot is attached by withLatestSnapshots, not a nested include - see there.
+  // The latest snapshot is attached by withLatestSnapshots, not a nested include - see there. The
+  // alert snapshot is attached from sharedAlertSnapshots (matches of one scan share it).
   token: { select: TOKEN_CARD_SELECT },
-  snapshot: true,
   // color and icon: the owner's style for this filter's cards (null keeps Customize's).
   filter: { select: { id: true, name: true, color: true, icon: true } },
 } satisfies Prisma.MatchInclude;
+
+/**
+ * How long one read of a page's model-call rows, or of an alert's snapshot, answers other
+ * readers. The same calls lead every follower's page, and one scan's snapshot is the alert
+ * snapshot of every reader's match on that coin, but each reader read them again: after a model
+ * call that was every open tab within seconds (capacity audit 2026-10-25). As the card data in
+ * curatedFeed.ts (CARD_DATA_SHARE_MS): five seconds covers the burst; a new call is a new id.
+ */
+const PAGE_ROW_SHARE_MS = 5_000;
+const PAGE_ROW_MAX_KEYS = 2_000;
+const sharedCallRows = new SharedBatchCache(PAGE_ROW_SHARE_MS, PAGE_ROW_MAX_KEYS, (ids) =>
+  prisma.curatedAlert
+    .findMany({ where: { id: { in: ids } }, include: curatedAlertInclude })
+    .then((rows) => new Map(rows.map((r) => [r.id, r]))),
+);
+const sharedAlertSnapshots = new SharedBatchCache<TokenSnapshot>(
+  PAGE_ROW_SHARE_MS,
+  PAGE_ROW_MAX_KEYS,
+  (ids) =>
+    prisma.tokenSnapshot
+      .findMany({ where: { id: { in: ids } } })
+      .then((rows) => new Map(rows.map((r) => [r.id, r]))),
+);
 
 /** What ordering and slicing the feed needs from a match - the page's own rows load in full. */
 const MATCH_ORDER_SELECT = { id: true, matchedAt: true, tokenId: true } satisfies Prisma.MatchSelect;
@@ -1296,7 +1319,7 @@ export async function registerMatchRoutes(
     // name each card's token, so the snapshot lookup (one statement for both halves) doesn't have
     // to wait for the rows it decorates.
     const pageMatchIds = pageItems.flatMap((i) => (i.kind === "match" ? [i.row.id] : []));
-    const latest = latestSnapshotsByToken([
+    const latest = sharedLatestSnapshotsByToken([
       ...pageItems.flatMap((i) => (i.kind === "match" ? [i.row.tokenId] : [])),
       ...pageGroups.map((g) => g.lead.tokenId),
     ]);
@@ -1307,7 +1330,13 @@ export async function registerMatchRoutes(
         ? Promise.resolve([])
         : prisma.match
             .findMany({ where: { id: { in: pageMatchIds } }, include: matchInclude })
-            .then(async (rows) => {
+            .then(async (bare) => {
+              const snapshots = await sharedAlertSnapshots.getMany(bare.map((m) => m.snapshotId));
+              // A snapshot gone between the reads (pruned with its match): nothing to show.
+              const rows = bare.flatMap((m) => {
+                const snapshot = snapshots.get(m.snapshotId);
+                return snapshot ? [{ ...m, snapshot }] : [];
+              });
               const [decorated, outcomeRows] = await Promise.all([
                 withLatestSnapshots(rows, latest),
                 openOutcomeRows(rows),
@@ -1316,12 +1345,9 @@ export async function registerMatchRoutes(
             }),
       pageGroups.length === 0
         ? Promise.resolve([])
-        : prisma.curatedAlert
-            .findMany({
-              where: { id: { in: pageGroups.map((g) => g.lead.id) } },
-              include: curatedAlertInclude,
-            })
-            .then((rows) => withLatestSnapshots(rows, latest)),
+        : sharedCallRows
+            .getMany(pageGroups.map((g) => g.lead.id))
+            .then((byId) => withLatestSnapshots([...byId.values()], latest)),
     ]);
     const matchById = new Map(pageMatches.map((m) => [m.id, m]));
     const curatedById = new Map(pageCurated.map((c) => [c.id, c]));
