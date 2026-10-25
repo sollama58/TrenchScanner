@@ -25,7 +25,8 @@ import type {
  *
  * No host permissions at all (the API allows its calls by CORS), no tabs, scripting or cookies.
  * Since 0.4.0 a content script rings alerts on Axiom, Terminal and GMGN (README "Rings"); it holds
- * no key and is answered from the panel's feed (handleContent). The panel lists the reader's alerts
+ * no key and is answered from the panel's feed (handleContent). The store build (`__STORE__`) has
+ * no content script and no in-page frame, and answers neither. The panel lists the reader's alerts
  * and opens a token on a site as an ordinary link.
  *
  * TrenchScanner's own site (and only it: manifest externally_connectable, checked again here) may
@@ -428,7 +429,7 @@ function fromPanel(sender: chrome.runtime.MessageSender): boolean {
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return false;
   if (typeof message !== "object" || message === null) return false;
-  if (fromRingPage(sender)) {
+  if (!__STORE__ && fromRingPage(sender)) {
     handleContent(message as ContentRequest, sender.tab?.id).then(sendResponse, () => sendResponse(null));
     return true;
   }
@@ -436,6 +437,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   // The bubble map tab's frame on a coin's page (content/mapTab.ts): its map's reads only, and
   // only while the reader keeps the tab on.
   if (inPageFrame(sender)) {
+    if (__STORE__) return false;
     const request = message as PanelRequest;
     if (request.type !== "site") return false;
     tooltipPrefs()

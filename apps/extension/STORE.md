@@ -1,4 +1,4 @@
-> **0.4.0 and later carry the in-page rings (README "Rings") and must not be uploaded as is:** the answers below describe 0.3.0, which never runs on a website. Take the rings out first.
+> **Upload only `npm run package` output** (README "Release to the Chrome Web Store"): it has no content script or in-page frame, so the answers below, which say the extension never runs on a website, hold. The dev build (`npm run build`) carries the rings and must never be uploaded.
 
 # Chrome Web Store listing
 

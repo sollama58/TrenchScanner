@@ -7,8 +7,8 @@ pick, with links that open it on those sites. The design is in the project's pla
 
 **Since 0.4.0 it runs on Axiom, Terminal and GMGN** to ring your alerts in their boards (Rings,
 below; user decision 2026-10-25, reversing the 2026-10-23 one for the owner's own use). The
-store listing (0.3.0) has no rings: before another store upload, take them out (Rings, below),
-because `STORE.md`'s answers say the extension never runs on a website. Otherwise there is no host
+store build has none of it: `npm run package` (`build.mjs --store`, below) leaves out everything
+that runs in a website's page, because `STORE.md`'s answers say the extension never does. Otherwise there is no host
 access beyond `api.trenchscanner.app`, and no `tabs`, `scripting`, `cookies` or `webRequest`.
 
 - `src/sw.ts` is the service worker: the only part that holds the key or talks to the network,
@@ -61,7 +61,15 @@ Keys need paid access. AI verdicts appear for admin wallets only, as on the site
 npm run package -w @trenchscanner/extension   # release/trench-overlay-<version>.zip
 ```
 
-The store build leaves out `dev-key.pub`, because the store assigns its own ID. After the first
+The store build (user ask 2026-10-25) has nothing that runs in a website's page: no content
+script (rings, pills, on-page alerts, the safety screen on the boards, the bubble map tab and the
+holder markers), no `web_accessible_resources` and no `map.html` for the map tab's frame, and the
+store summary as the manifest's description. The code reads `__STORE__` (true only there): the
+panel's Settings drops the ring, pill, tooltip, alert, safety, coin-page and per-model sections and
+keeps the panel's own colours, the Account note says it never runs on a website, and the worker
+answers no page. The dev build (`npm run build`) keeps all of it.
+
+The store build also leaves out `dev-key.pub`, because the store assigns its own ID. After the first
 upload, add that ID to `STORE_IDS` in `apps/web/src/extensionBridge.ts` (or `VITE_EXTENSION_IDS` on
 the web service). Until then, store installs connect through the ID their link carries. The listing's text, permission
 justifications and privacy answers are in `STORE.md`, and the privacy policy is
@@ -80,8 +88,7 @@ Its trade-off is the one that dropped it: code running in those sites' pages. It
 address (Axiom's Pulse marks and Discover's pump.fun links, Terminal's Trenches marks and Trending
 copy buttons, GMGN's token links; `src/content/adapters/sites.ts`) and nothing else.
 
-For a store build, remove the manifest's `content_scripts` and the `content.js` entry in
-`build.mjs`, then put back the store wording in the panel and `sw.ts`.
+The store build leaves all of this out (Release to the Chrome Web Store, above).
 
 The ring tooltip is the reader's to set (Settings → Ring tooltip, user ask 2026-10-25): each line
 on or off and in any order, kept in this browser only (`src/shared/tooltip.ts`). The default is
@@ -155,3 +162,6 @@ connects (user ask 2026-10-25). The newer save wins, this browser's or the accou
 - A hidden coin leaves no gap: on virtual-scrolling lists (rows placed by `top` or `translateY`)
   its slot is made invisible and the rows below it move up by its height (`closeGaps` in
   `engine.ts`); elsewhere the row is taken out with `display: none`.
+
+0.7.3: `npm run package` makes the store build with nothing on the sites' pages and none of their
+settings (Release to the Chrome Web Store, above; user ask 2026-10-25).

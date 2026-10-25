@@ -10,6 +10,7 @@ import {
 import {
   cleanTooltip,
   COLOR_KEYS,
+  type ColorKey,
   COLOR_LABELS,
   colorsOf,
   DEFAULT_COLORS,
@@ -437,7 +438,8 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
     }),
   );
   parts.push(section("Open tokens on", sites));
-  parts.push(...ringDisplaySections(settings));
+  // The store build has nothing on the sites' pages, so none of their settings (build.mjs --store).
+  parts.push(...(__STORE__ ? [colorSection()] : ringDisplaySections(settings)));
 
   const disconnect = el("button", { className: "link", textContent: "Disconnect this browser" });
   disconnect.addEventListener("click", async () => {
@@ -453,8 +455,9 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
       "Account",
       el("p", {
         className: "note",
-        textContent:
-          "This version reads the token addresses on Axiom, Terminal and GMGN boards to ring your alerts. It never reads your logins. No address leaves the browser except an alerted coin's, for its map totals, the coin page you open, for its map and holder markers, and, only while the safety screen option is on, the coins on the board.",
+        textContent: __STORE__
+          ? "This extension never runs on any website. It can't see your exchange pages, logins or wallet apps. It only talks to TrenchScanner, with a key you can revoke from TrenchScanner's Settings."
+          : "This version reads the token addresses on Axiom, Terminal and GMGN boards to ring your alerts. It never reads your logins. No address leaves the browser except an alerted coin's, for its map totals, the coin page you open, for its map and holder markers, and, only while the safety screen option is on, the coins on the board.",
       }),
       disconnect,
     ),
@@ -928,13 +931,25 @@ function applyColors(): void {
   root.setProperty("--hi", colors.hi);
 }
 
+/** The colours the panel itself draws with (applyColors). */
+const PANEL_COLOR_KEYS = [
+  "model",
+  "filter",
+  "risk",
+  "ok",
+  "mid",
+  "hi",
+] as const satisfies readonly ColorKey[];
+
 /** Rings: every colour the overlay draws with, each a colour picker. */
 function colorSection(): HTMLElement {
   const save = () => {
     applyColors();
     void send({ type: "saveTooltip", prefs: tipPrefs });
   };
-  const inputs = COLOR_KEYS.map((key) => {
+  // The store build draws only the panel, which uses the accents and none of the pills' or tooltip's.
+  const keys = __STORE__ ? PANEL_COLOR_KEYS : COLOR_KEYS;
+  const inputs = keys.map((key) => {
     const input = el("input", { type: "color", value: colorsOf(tipPrefs)[key] });
     input.setAttribute("aria-label", COLOR_LABELS[key]);
     // The panel follows the picker as it moves; the pages get the colour once it is picked.
@@ -959,7 +974,9 @@ function colorSection(): HTMLElement {
     "Colours",
     el("p", {
       className: "note",
-      textContent: "For the rings, pills and tooltip on the boards, and the matching accents here.",
+      textContent: __STORE__
+        ? "The panel's accents: model alerts, filter matches, flags and the up and down numbers."
+        : "For the rings, pills and tooltip on the boards, and the matching accents here.",
     }),
     el("div", { className: "colors" }, ...inputs.map((i) => i.row)),
     reset,
