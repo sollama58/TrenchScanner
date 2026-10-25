@@ -75,7 +75,8 @@ the web service). Until then, store installs connect through the ID their link c
 justifications and privacy answers are in `STORE.md`, and the privacy policy is
 `https://trenchscanner.app/extension-privacy.html` (`apps/web/public/extension-privacy.html`).
 
-Permissions are `storage` and `sidePanel`, plus the API host. None of them shows an install warning.
+Permissions are `storage`, `sidePanel`, `alarms` and `notifications`, plus the API host. Only
+`notifications` shows an install warning ("Display notifications").
 
 ## Rings (0.4.0 and later, not in the store)
 
@@ -165,3 +166,19 @@ connects (user ask 2026-10-25). The newer save wins, this browser's or the accou
 
 0.7.3: `npm run package` makes the store build with nothing on the sites' pages and none of their
 settings (Release to the Chrome Web Store, above; user ask 2026-10-25).
+
+0.8.0: the panel makes up for what the store build leaves out (user asks 2026-10-25), in both builds:
+
+- **Safety on each card:** the safety screen's verdict on the coin's newest scan, Passed or Failed
+  and why. Settings → Alerts can hide the failing ones (off by default); they come back once a
+  scan passes them.
+- **Look up:** a tab that takes any coin's address, or a link with one, and shows its card, the
+  site's bubble map and its top 20 holders tagged as the holder markers tag them
+  (`src/panel/coin.ts`, `src/shared/holders.ts`). The card comes from the new `GET
+/ext/v1/token/:mint` (database only, as the feed answers its tokens).
+- **Notifications and the icon's count** (Settings → Alerts): a Chrome notification for each new
+  alert (off by default; a click opens the coin on TrenchScanner), and the count of alerts the
+  panel hasn't shown on the toolbar icon (on by default). The worker reads the feed once a minute
+  for them, only while one is on (`noteAlerts` in `sw.ts`); the first read only marks what is there.
+- **Each model's and filter's colour** on its cards in the panel too; the store build's Settings
+  keeps that section, without the ring effects.

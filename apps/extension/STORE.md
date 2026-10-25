@@ -25,6 +25,15 @@ extension does. The privacy policy (`apps/web/public/extension-privacy.html`) sa
   • Market cap at alert and now, green when it's up and red when it's down
   • The holder flags you care about (bundled supply, snipers, linked wallets, dev holdings and more), graded against your own limits
   • Click any alert for its latest bubble map: linked clusters, KOL bundled, same-minute, CEX-funded, dev-tied and transferred supply, snipers and fresh wallets, each with its share
+  • TrenchScanner's safety screen on every alert, with why a coin fails, and an option to hide the ones that do
+  • Your own colour for each model and filter you follow
+
+  LOOK UP ANY COIN
+  • Paste an address or a link: the coin's card, safety screen, bubble map and top holders, tagged as clusters, snipers, fresh wallets, CEX-funded and dev-tied
+
+  NEVER MISS AN ALERT
+  • Optional Chrome notifications for new alerts, even with the panel closed
+  • An unread count on the toolbar icon
 
   TRADE BUDDY
   • Every coin your connected wallet buys, on any site, shows up with its token card, bubble map and your PnL
@@ -58,6 +67,10 @@ extension does. The privacy policy (`apps/web/public/extension-privacy.html`) sa
 - **Permission justifications:**
   - `storage`: keeps the user's TrenchScanner extension key and display settings on this device.
   - `sidePanel`: the extension's only interface is a side panel.
+  - `notifications`: tells the user of a new alert from their own filters and models, only if they
+    turn that on in Settings.
+  - `alarms`: checks the user's alerts once a minute for those notifications and the toolbar
+    icon's unread count, only while either is on.
   - No host permissions: the extension calls only the TrenchScanner API, which allows it by CORS,
     so it asks for no access to any site.
 - **Remote code:** No. All code ships in the package.

@@ -198,7 +198,19 @@ export interface SignalStyle {
 /** A model's key is `model:<id>`, a filter's `filter:<id>`. */
 export type SignalKey = `model:${string}` | `filter:${string}`;
 
+/**
+ * The panel's own options (user ask 2026-10-25), in both builds: alerts failing the safety screen
+ * left out, Chrome's notifications for new alerts (off by default), and the count of unread alerts
+ * on the toolbar icon.
+ */
+export interface PanelPrefs {
+  hideUnsafe: boolean;
+  notify: boolean;
+  badge: boolean;
+}
+
 export interface TooltipPrefs extends ListPrefs<TipLine> {
+  panel: PanelPrefs;
   toast: ToastPrefs;
   mapTab: MapTabPrefs;
   safety: SafetyPrefs;
@@ -315,6 +327,7 @@ export const DEFAULT_TOOLTIP: TooltipPrefs = {
   riskDot: true,
   second: { order: PILL_PARTS, on: {}, enabled: false },
   colors: {},
+  panel: { hideUnsafe: false, notify: false, badge: true },
   toast: DEFAULT_TOAST,
   mapTab: { enabled: true },
   safety: { mode: "off", columns: { new: true, soon: true, graduated: true, other: true } },
@@ -502,6 +515,11 @@ function cleanColors(raw: unknown): TooltipPrefs["colors"] {
   return out;
 }
 
+function cleanPanel(raw: unknown): PanelPrefs {
+  const v = (typeof raw === "object" && raw !== null ? raw : {}) as Partial<PanelPrefs>;
+  return { hideUnsafe: v.hideUnsafe === true, notify: v.notify === true, badge: v.badge !== false };
+}
+
 /** Stored prefs made whole, whatever was stored (or nothing). */
 export function cleanTooltip(raw: unknown): TooltipPrefs {
   const value = (typeof raw === "object" && raw !== null ? raw : {}) as Partial<TooltipPrefs>;
@@ -514,6 +532,7 @@ export function cleanTooltip(raw: unknown): TooltipPrefs {
     riskDot: typeof value.riskDot === "boolean" ? value.riskDot : true,
     second: { ...cleanList(second, PILL_PARTS), enabled: second.enabled === true },
     colors: cleanColors(value.colors),
+    panel: cleanPanel(value.panel),
     toast: cleanToast(value.toast),
     mapTab: { enabled: (value.mapTab as Partial<MapTabPrefs> | undefined)?.enabled !== false },
     safety: cleanSafety(value.safety),

@@ -2,6 +2,7 @@ import { FLAG_IDS, FLAG_LABELS } from "../shared/settings";
 import {
   SITES,
   type BuddyRead,
+  type CoinAnswer,
   type FeedAnswer,
   type OverlaySettings,
   type PanelRequest,
@@ -19,6 +20,7 @@ import {
   lineOn,
   RING_EFFECTS,
   type RingEffect,
+  signalLook,
   type SafetyMode,
   type SignalKey,
   type SignalStyle,
@@ -37,6 +39,8 @@ import { siteMapNode } from "../map/siteMap";
 import { BOARD_COLUMNS, type BoardColumn } from "../content/columns";
 import { buddyCard } from "./buddy";
 import { SITE_NAMES, tokenCard } from "./card";
+import { holderList, mintFrom } from "./coin";
+import { panelAlerts } from "../shared/alerts";
 
 /**
  * The side panel: your latest alerts, each with its flags and the AI's verdict, and links to open
@@ -59,7 +63,9 @@ const BUDDY_POLL_MS = 5_000;
 const app = document.getElementById("app")!;
 const account = document.getElementById("account")!;
 
-let view: "alerts" | "buddy" | "settings" = "alerts";
+let view: "alerts" | "buddy" | "coin" | "settings" = "alerts";
+/** The lookup's coin and its answer (null while it is read). */
+let coin: { mint: string; answer: CoinAnswer | null } | null = null;
 let status: Status | null = null;
 let feed: FeedAnswer | null = null;
 let buddy: BuddyRead | null = null;
@@ -219,6 +225,7 @@ function tabs(): HTMLElement {
     { className: "tabs" },
     make("alerts", "Alerts"),
     make("buddy", "Trade Buddy"),
+    make("coin", "Look up"),
     make("settings", "Settings"),
   );
 }
@@ -247,9 +254,7 @@ function alertsView(saved: OverlaySettings): HTMLElement[] {
     return parts;
   }
   const now = Date.now();
-  const shown = feed.tokens
-    .map((token) => ({ token, verdict: verdictFor(token, settings) }))
-    .filter(({ verdict }) => verdict.ring !== null && verdict.ring !== "risk");
+  const shown = panelAlerts(feed.tokens, settings, tipPrefs.panel);
   if (shown.length === 0) {
     parts.push(
       el("p", {
@@ -262,6 +267,7 @@ function alertsView(saved: OverlaySettings): HTMLElement[] {
   const list = el("div", { className: "list" });
   for (const { token, verdict } of shown) {
     const card = tokenCard(token, verdict, settings, now);
+    paintSignal(card, verdict);
     const why = card.querySelector("details");
     if (why) {
       why.open = openWhy.has(token.mint);
@@ -279,8 +285,96 @@ function alertsView(saved: OverlaySettings): HTMLElement[] {
   }
   pruneMaps(new Set(shown.map(({ token }) => token.mint).filter((m) => openMaps.has(m))));
   seen = new Set(feed.tokens.map((t) => t.mint));
+  // Shown means read: the toolbar icon's count of unread alerts clears.
+  if (document.visibilityState === "visible")
+    void send({ type: "alertsSeen", mints: shown.map(({ token }) => token.mint) });
   parts.push(list);
   return parts;
+}
+
+/** A card wears its model's or filter's own colour, where the reader picked one (Settings). */
+function paintSignal(card: HTMLElement, verdict: { modelId: string | null; filterId: string | null }): void {
+  const { colors } = signalLook(tipPrefs, verdict.modelId, verdict.filterId);
+  card.style.setProperty("--model", colors.model);
+  card.style.setProperty("--filter", colors.filter);
+}
+
+/**
+ * Look up (user ask 2026-10-25): any coin by its address or a link to it, with its card, bubble
+ * map and top holders tagged as the holder markers tag them. Redrawn only by its own reads, so
+ * the address box keeps its text and focus.
+ */
+function coinView(settings: OverlaySettings): HTMLElement[] {
+  const input = el("input", {
+    type: "text",
+    placeholder: "Paste a coin address or a link to one",
+    value: coin?.mint ?? "",
+    spellcheck: false,
+  });
+  input.setAttribute("aria-label", "Coin address");
+  const go = el("button", { type: "submit", className: "button primary", textContent: "Look up" });
+  const form = el("form", { className: "lookup" }, input, go);
+  const parts: HTMLElement[] = [form];
+  const problem = el("p", { className: "status warn" });
+  problem.hidden = true;
+  parts.push(problem);
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const mint = mintFrom(input.value);
+    if (!mint) {
+      problem.textContent = "That isn't a Solana coin address.";
+      problem.hidden = false;
+      return;
+    }
+    void lookUp(mint);
+  });
+  if (!coin) {
+    pruneMaps(new Set());
+    parts.push(
+      el("p", {
+        className: "status",
+        textContent:
+          "Any coin, alerted or not: its card, safety screen, bubble map and top holders, with TrenchScanner's cluster, sniper, fresh-wallet and dev tags.",
+      }),
+    );
+    return parts;
+  }
+  pruneMaps(new Set([coin.mint]));
+  const answer = coin.answer;
+  if (!answer) {
+    parts.push(el("p", { className: "status", textContent: "Reading the coin…" }));
+    return parts;
+  }
+  if (answer.problem === "offline")
+    parts.push(el("p", { className: "status warn", textContent: "Can't reach TrenchScanner. Try again." }));
+  const list = el("div", { className: "list" });
+  if (answer.token) {
+    const verdict = verdictFor(answer.token, settings);
+    const card = tokenCard(answer.token, verdict, settings);
+    paintSignal(card, verdict);
+    list.append(card);
+  } else {
+    list.append(
+      el("p", {
+        className: "note",
+        textContent: "TrenchScanner hasn't stored this coin yet. Its map below starts a scan.",
+      }),
+    );
+  }
+  list.append(mapSlot(coin.mint));
+  if (answer.map && answer.map.holders.length > 0)
+    list.append(section("Top holders", holderList(answer.map, colorsOf(tipPrefs))));
+  parts.push(list);
+  return parts;
+}
+
+async function lookUp(mint: string): Promise<void> {
+  coin = { mint, answer: null };
+  draw();
+  const answer = await send<CoinAnswer>({ type: "coin", mint });
+  if (coin?.mint !== mint) return;
+  coin = { mint, answer: answer ?? { token: null, map: null, problem: "offline" } };
+  if (view === "coin") draw();
 }
 
 function buddyView(settings: OverlaySettings): HTMLElement[] {
@@ -397,6 +491,8 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
     ),
   );
 
+  parts.push(panelSection());
+
   const flags = FLAG_IDS.map((id) => {
     const pref = settings.flags[id];
     const meta = FLAG_LABELS[id];
@@ -439,7 +535,7 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
   );
   parts.push(section("Open tokens on", sites));
   // The store build has nothing on the sites' pages, so none of their settings (build.mjs --store).
-  parts.push(...(__STORE__ ? [colorSection()] : ringDisplaySections(settings)));
+  parts.push(...(__STORE__ ? [signalSection(), colorSection()] : ringDisplaySections(settings)));
 
   const disconnect = el("button", { className: "link", textContent: "Disconnect this browser" });
   disconnect.addEventListener("click", async () => {
@@ -852,6 +948,38 @@ export function signalChoices(
   );
 }
 
+/** The panel's own options: unsafe alerts left out, notifications and the icon's count. */
+function panelSection(): HTMLElement {
+  const put = (change: Partial<TooltipPrefs["panel"]>) => {
+    tipPrefs = { ...tipPrefs, panel: { ...tipPrefs.panel, ...change } };
+    void send({ type: "saveTooltip", prefs: tipPrefs });
+  };
+  return section(
+    "Alerts",
+    toggle(
+      "Hide coins failing the safety screen",
+      "On their newest TrenchScanner scan. They come back once a scan passes them.",
+      tipPrefs.panel.hideUnsafe,
+      "var(--risk)",
+      (on) => put({ hideUnsafe: on }),
+    ),
+    toggle(
+      "Notify me of new alerts",
+      "A Chrome notification for each, even with the panel closed. A click opens the coin on TrenchScanner.",
+      tipPrefs.panel.notify,
+      "var(--model)",
+      (on) => put({ notify: on }),
+    ),
+    toggle(
+      "Unread count on the toolbar icon",
+      "Alerts you haven't seen in the panel yet",
+      tipPrefs.panel.badge,
+      "var(--filter)",
+      (on) => put({ badge: on }),
+    ),
+  );
+}
+
 /** Rings: each model's and filter's own colour and effect. */
 function signalSection(): HTMLElement {
   const choices = signalChoices(feed?.tokens ?? [], tipPrefs.signals);
@@ -903,7 +1031,8 @@ function signalSection(): HTMLElement {
       { className: "signal" },
       color,
       el("span", { className: "name", textContent: `${kind === "model" ? "Model" : "Filter"} · ${name}` }),
-      effect,
+      // The store build draws no rings, so it has no ring effects.
+      ...(__STORE__ ? [] : [effect]),
       reset,
     );
   });
@@ -912,7 +1041,9 @@ function signalSection(): HTMLElement {
     el("p", {
       className: "note",
       textContent: rows.length
-        ? "Its own ring colour and an extra effect, in place of the model or filter colour below. Models and filters show here once one is in your feed."
+        ? __STORE__
+          ? "Its own colour on its cards here, in place of the model or filter colour below. Models and filters show here once one is in your feed."
+          : "Its own ring colour and an extra effect, on the boards and on its cards here, in place of the model or filter colour below. Models and filters show here once one is in your feed."
         : "Models and filters show here once one of them is in your feed.",
     }),
     ...rows,
@@ -1001,7 +1132,9 @@ function draw(): void {
       ? alertsView(settings)
       : view === "buddy"
         ? buddyView(settings)
-        : settingsView(settings);
+        : view === "coin"
+          ? coinView(settings)
+          : settingsView(settings);
   app.replaceChildren(tabs(), ...body);
 }
 
@@ -1019,8 +1152,9 @@ async function poll(): Promise<void> {
     status = nextStatus ?? status;
     feed = nextFeed ?? feed;
     buddy = nextBuddy ?? buddy;
-    // Settings edits redraw only when left, so an input in focus isn't replaced under the cursor.
-    if (view !== "settings") draw();
+    // Settings edits redraw only when left, so an input in focus isn't replaced under the cursor;
+    // the lookup redraws on its own reads.
+    if (view !== "settings" && view !== "coin") draw();
   }
   pollTimer = window.setTimeout(() => void poll(), POLL_MS);
 }
@@ -1057,7 +1191,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender) => {
     void send<TooltipPrefs>({ type: "tooltip" }).then((prefs) => {
       tipPrefs = cleanTooltip(prefs);
       applyColors();
-      if (view !== "settings") draw();
+      if (view !== "settings" && view !== "coin") draw();
     });
   }
   if ((message as { type?: unknown } | null)?.type === "connected") {
