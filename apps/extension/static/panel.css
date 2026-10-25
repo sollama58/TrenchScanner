@@ -175,6 +175,25 @@ select {
   flex: none;
   cursor: pointer;
 }
+.toastopts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+.toastopts[hidden],
+.tiplines[hidden] {
+  display: none;
+}
+.pick {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+.pick select {
+  width: auto;
+}
 .tiplines {
   display: flex;
   flex-direction: column;

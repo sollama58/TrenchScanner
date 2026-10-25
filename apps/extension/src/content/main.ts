@@ -1,8 +1,17 @@
 import { adapterForHost } from "./adapters/sites";
 import { OverlayEngine } from "./engine";
+import { MapTab } from "./mapTab";
+import { Toasts } from "./toasts";
 import { DEFAULT_SETTINGS } from "../shared/settings";
 import { cleanTooltip, type TooltipPrefs } from "../shared/tooltip";
-import type { ContentRequest, LookupAnswer, OverlayBubbleTotals, OverlaySettings } from "../shared/types";
+import type {
+  BubbleAnswer,
+  ContentRequest,
+  FeedAnswer,
+  LookupAnswer,
+  OverlayBubbleTotals,
+  OverlaySettings,
+} from "../shared/types";
 
 /**
  * The content script, run in the extension's isolated world on Axiom, Terminal and GMGN only
@@ -42,6 +51,19 @@ async function main(): Promise<void> {
   };
   sync();
 
+  const mapTab = new MapTab(adapter.site, (mint) => ask<BubbleAnswer>({ type: "map", mint }), tooltip);
+  mapTab.start();
+  const toasts = new Toasts(
+    adapter.site,
+    {
+      alerts: () => ask<FeedAnswer>({ type: "alerts" }),
+      totals: (mint) => ask<OverlayBubbleTotals>({ type: "totals", mint }),
+    },
+    tooltip,
+    settings,
+  );
+  toasts.start();
+
   // The popup saved new settings: the worker broadcasts them to every tab it serves.
   chrome.runtime.onMessage.addListener((message: unknown, sender) => {
     if (sender.id !== chrome.runtime.id) return;
@@ -49,10 +71,13 @@ async function main(): Promise<void> {
     if (m.type === "settingsChanged" && m.settings) {
       settings = m.settings;
       sync();
+      toasts.apply(tooltip, settings);
     }
     if (m.type === "tooltipChanged") {
       tooltip = cleanTooltip(m.prefs);
       engine?.applyTooltip(tooltip);
+      mapTab.applyPrefs(tooltip);
+      toasts.apply(tooltip, settings);
     }
   });
 }

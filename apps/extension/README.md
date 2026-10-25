@@ -64,7 +64,7 @@ justifications and privacy answers are in `STORE.md`, and the privacy policy is
 
 Permissions are `storage` and `sidePanel`, plus the API host. None of them shows an install warning.
 
-## Rings (0.4.0, not in the store)
+## Rings (0.4.0 and later, not in the store)
 
 The in-page rings dropped on 2026-10-23 are back, for the owner's own browser (user asks
 2026-10-24 and 2026-10-25): a content script (`src/content/`) on Axiom, Terminal and GMGN rings
@@ -87,3 +87,24 @@ reader's alerts, so this still sends no address the panel wouldn't.
 The ring's pill is set the same way (Settings → Ring pill): which parts it shows and their order,
 and the red dot. Settings → Second pill adds a dashed pill beside it with more of the coin's
 numbers, off by default, placed in the next free patch of the row and left out when none fits.
+
+## On-page tools (0.5.0, not in the store)
+
+Colors are the reader's (Settings → Colours, user ask 2026-10-25): the ring, pill, risk, tooltip
+and panel colors, each a plain `#rrggbb`, kept in this browser only and applied as CSS variables
+in each shadow root. The second pill no longer flickers: where a pill was placed is kept apart
+from what it says, so a redraw does not move it, and it stays put while it still fits.
+
+Alert toasts (Settings → On-page alerts) put a small card on the page when a new alert lands in the
+reader's feed. They are off by default. Everything about them is the reader's: which models and
+filters, the lowest odds, AI buys only, the corner, how long a card stays (0 keeps it), how many
+show at once, a chime, what a click does (open the coin on the site, on TrenchScanner, or
+nothing), which sites show them, and what the card says. They read the panel's own feed through
+the worker (`{type: "alerts"}`), every 10s while the tab is visible, and the first read only marks
+what is already there.
+
+Bubble map tab (Settings → Bubble map tab, on by default): on a coin's own page (Axiom
+`/meme/…`, Terminal `/trade/solana/…`, GMGN `/sol/token/…`) a "Bubble map" tab is added beside
+the site's Top Traders tab and opens the panel's bubble map in a box on the page
+(`src/content/mapTab.ts`). Unlike the rings, this sends the viewed coin's address to TrenchScanner
+(`{type: "map"}`, cached 30s), alerted or not; turn it off to stop that.
