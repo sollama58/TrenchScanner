@@ -69,8 +69,12 @@ const BUBBLE_RATE_LIMIT = { max: 60, timeWindow: "1 minute" };
 /** One coin's map is reused this long for every reader (the site's own read is cached 15 s). */
 const BUBBLE_CACHE_MS = 10_000;
 const BUBBLE_CACHE_MAX = 2_000;
-/** Trade Buddy reads a minute: the panel polls every 10 s, plus a second window. */
+/** Trade Buddy reads a minute: the panel polls every 5 s (every 10 s before 0.3.1), plus a second window. */
 const BUDDY_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
+/** A Trade Buddy answer this fresh is served as is; an older one is served while a new one is read. */
+const BUDDY_FRESH_MS = 3_000;
+/** An answer this old is dropped rather than served: a reader back after a while waits for a fresh read. */
+const BUDDY_KEEP_MS = 60_000;
 
 export interface ExtensionClient {
   keyId: string;
@@ -86,6 +90,11 @@ interface CachedAuth {
 }
 
 const authCache = new Map<string, CachedAuth>();
+/** Each reader's last Trade Buddy answer, and the read running behind it (buddyFor). */
+const buddyAnswers = new Map<
+  string,
+  { at: number; body: BuddyAnswer | null; reading: Promise<BuddyAnswer> | null }
+>();
 const authFailures = new Map<string, number[]>();
 const lastUsedWritten = new Map<string, number>();
 const feedCache = new Map<string, { at: number; tokens: OverlayToken[] }>();
@@ -351,6 +360,62 @@ export async function registerExtensionRoutes(
     },
   );
 
+  /** One Trade Buddy read: the pro status, the wallet's trades and the reader's models, side by side. */
+  async function readBuddy(userId: string, walletAddress: string, aiReviews: boolean): Promise<BuddyAnswer> {
+    const now = Date.now();
+    const [status, view, calls] = await Promise.all([
+      cachedProStatus(opts.env, walletAddress).catch(() => null),
+      opts.proTrades ? opts.proTrades.look(walletAddress, "full-open") : null,
+      feedCallsOf(userId),
+    ]);
+    const pro = status?.pro === true;
+    if (!view) return { coins: [], solUsd: null, pro, readAt: new Date(now).toISOString(), chainAt: null };
+    const mints = buddyCoins(view, now).map((c) => c.mint);
+    const { tokens } = mints.length ? await lookupOverlay(userId, mints, calls, now) : { tokens: [] };
+    return buddyAnswer(
+      view,
+      tokens.map((t) => (aiReviews ? t : { ...t, ai: null })),
+      pro,
+      now,
+    );
+  }
+
+  /**
+   * Trade Buddy's answer without the wait (user ask 2026-10-25): a read can take seconds (the chain
+   * catch-up, trades read back from history, live prices), so once a reader has an answer, each poll
+   * gets the last one at once and a fresher one is read behind it for the next. Only the first read,
+   * or one after BUDDY_KEEP_MS without a poll, waits. A new trade shows one poll later than before.
+   */
+  async function buddyFor(userId: string, walletAddress: string, aiReviews: boolean): Promise<BuddyAnswer> {
+    const key = `${userId}:${walletAddress}:${aiReviews}`;
+    const now = Date.now();
+    let entry = buddyAnswers.get(key);
+    if (entry && !entry.reading && now - entry.at >= BUDDY_KEEP_MS) {
+      buddyAnswers.delete(key);
+      entry = undefined;
+    }
+    if (!entry) {
+      entry = { at: 0, body: null, reading: null };
+      buddyAnswers.set(key, entry);
+      if (buddyAnswers.size > 5_000) buddyAnswers.delete(buddyAnswers.keys().next().value!);
+    }
+    const current = entry;
+    if (!current.reading && now - current.at >= BUDDY_FRESH_MS) {
+      current.reading = readBuddy(userId, walletAddress, aiReviews)
+        .then((body) => {
+          current.body = body;
+          current.at = Date.now();
+          return body;
+        })
+        .finally(() => {
+          current.reading = null;
+        });
+      // A read behind a served answer that fails is tried again on the next poll.
+      current.reading.catch(() => undefined);
+    }
+    return current.body ?? current.reading!;
+  }
+
   /**
    * Trade Buddy: the coins the key's own wallet bought, from any venue, each with its PnL and token
    * card (extensionBuddy.ts). The wallet is followed while the panel reads this, as the site's
@@ -361,21 +426,7 @@ export async function registerExtensionRoutes(
     { config: { rateLimit: { ...BUDDY_RATE_LIMIT, keyGenerator: bucket } } },
     async (request): Promise<BuddyAnswer> => {
       const { userId, walletAddress, aiReviews } = request.extensionClient!;
-      const now = Date.now();
-      const pro = (await cachedProStatus(opts.env, walletAddress).catch(() => null))?.pro === true;
-      if (!opts.proTrades)
-        return { coins: [], solUsd: null, pro, readAt: new Date(now).toISOString(), chainAt: null };
-      const view = await opts.proTrades.look(walletAddress, "full-open");
-      const mints = buddyCoins(view, now).map((c) => c.mint);
-      const { tokens } = mints.length
-        ? await lookupOverlay(userId, mints, await feedCallsOf(userId), now)
-        : { tokens: [] };
-      return buddyAnswer(
-        view,
-        tokens.map((t) => (aiReviews ? t : { ...t, ai: null })),
-        pro,
-        now,
-      );
+      return buddyFor(userId, walletAddress, aiReviews);
     },
   );
 }

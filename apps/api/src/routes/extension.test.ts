@@ -399,6 +399,9 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
       expect(coin).toMatchObject({ held: 1000, closed: false });
       expect(coin!.token?.symbol).toBe("BUDDY");
       expect(body.pro).toBe(false);
+      // A poll right after is answered from the last read, not read again.
+      const again = (await ext(key, "GET", "/ext/v1/buddy")).json() as { readAt: string };
+      expect(again.readAt).toBe((body as unknown as { readAt: string }).readAt);
       // A coin the wallet traded opens its map, as the TRADES panel's card opens it on the site.
       expect((await ext(key, "GET", `/ext/v1/bubble/${bought}`)).statusCode).toBe(200);
     } finally {
