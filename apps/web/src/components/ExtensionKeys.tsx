@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, del, post, type ExtensionKey, type ExtensionKeyCreated, type ExtensionKeyList } from "../api";
 import { useSettings } from "../alerts";
-import { findExtension, handOverKey, type InstalledExtension } from "../extensionBridge";
+import { EXTENSION_IDS, findExtension, handOverKey, type InstalledExtension } from "../extensionBridge";
 import { GlobeIcon } from "./Icons";
 
 /**
@@ -13,6 +13,10 @@ import { GlobeIcon } from "./Icons";
  * with TrenchScanner" opens this page as ?connect=extension&ext=<its ID>#settings, the page scrolls
  * here, finds the extension (extensionBridge.ts) and "Connect this browser" makes a key and hands it
  * over. The list below revokes keys, including those of other browsers.
+ *
+ * The key goes to the extension the link named (or the one this browser remembers), so a build this
+ * site doesn't know is named by its ID before the reader connects it (extension audit 2026-10-25): a
+ * crafted link could otherwise steer a key to another installed extension that lists this site.
  */
 export function ExtensionKeysPanel() {
   const settings = useSettings();
@@ -165,8 +169,9 @@ function ExtensionKeysBody() {
       <p className="small muted">
         The extension lists the tokens your filters and models alert on in a side panel, with the stat flags
         you pick and links to open each on Axiom, Terminal or GMGN. It never runs on those sites. Each browser
-        gets its own key, up to {limit}. A key can read your alerts, token stats and overlay settings. It
-        cannot trade, see wallets, or change your filters. Revoke it here at any time.
+        gets its own key, up to {limit}. A key can read your alerts, token stats, bubble maps, your own
+        wallet's trades (Trade Buddy) and overlay settings. It cannot trade, move funds, or change your
+        filters. Revoke it here at any time.
       </p>
       {installed === undefined ? (
         <p className="small muted">Looking for the extension in this browser…</p>
@@ -181,9 +186,15 @@ function ExtensionKeysBody() {
             ? "Connected. The panel in this browser is ready."
             : "This browser's extension is connected."}
         </p>
-      ) : (
+      ) : EXTENSION_IDS.includes(installed.id) ? (
         <p className="small">
           Trench Overlay is installed in this browser. Connect it with the button above.
+        </p>
+      ) : (
+        <p className="small">
+          A Trench Overlay build this site doesn't know is installed in this browser (ID{" "}
+          <code className="num">{installed.id}</code>). Connect it with the button above only if you loaded
+          that build yourself: the key goes to that extension.
         </p>
       )}
       {keys === null ? (
