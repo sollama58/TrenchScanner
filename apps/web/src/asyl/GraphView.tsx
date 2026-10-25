@@ -126,6 +126,8 @@ export function MapLegend({ graph, startOpen }: { graph: AsylGraph; startOpen?: 
   // Open on a wide screen at first; after that, as the reader last left it.
   const [open, setOpenState] = useState(() => {
     if (startOpen !== undefined) return startOpen;
+    // A phone opens with it shut, whatever a wider screen left: open, it covers the map.
+    if (typeof window !== "undefined" && window.innerWidth <= 700) return false;
     try {
       const kept = localStorage.getItem(LEGEND_KEY);
       if (kept !== null) return kept === "1";
@@ -1246,20 +1248,33 @@ export function GraphView({
                       </text>
                     </g>
                   )}
-                  {(isSel ||
-                    isFocus ||
-                    isPicked ||
-                    (!dim && (n.name || lit || dense < 1 || view.k > 1.1 * dense))) && (
-                    <text
-                      className="asyl-node-label"
-                      y={r + 13}
-                      textAnchor="middle"
-                      fontSize={11 / Math.min(1.4, Math.max(0.7, view.k))}
-                    >
-                      {nodeName(n)}
-                    </text>
-                  )}
                 </g>
+              );
+            })}
+          </g>
+          <g className="asyl-node-labels">
+            {graph.nodes.map((n) => {
+              // Names over every bubble, so a bubble drawn later never covers one.
+              const p = layout.pos.get(n.id);
+              if (!p) return null;
+              const dim = lit && !lit.has(n.id);
+              const show =
+                n.id === selected ||
+                n.id === focus ||
+                !!picked?.has(n.id) ||
+                (!dim && (n.name || lit || dense < 1 || view.k > 1.1 * dense));
+              if (!show) return null;
+              return (
+                <text
+                  key={n.id}
+                  className="asyl-node-label"
+                  x={p.x}
+                  y={p.y + radius(n.id) + 13}
+                  textAnchor="middle"
+                  fontSize={11 / Math.min(1.4, Math.max(0.7, view.k))}
+                >
+                  {nodeName(n)}
+                </text>
               );
             })}
           </g>

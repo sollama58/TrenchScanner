@@ -129,8 +129,25 @@ export function SearchBox({
       onSubmit={(e) => {
         e.preventDefault();
         const r = rows[hi];
-        if (shown && r) pick(r);
-        else onSubmit(query);
+        if (shown && r) return pick(r);
+        // A name typed and sent before its results came back: ask now, and map the best match.
+        if (!pasted && q.length >= 2) {
+          setLoading(true);
+          setOpen(false);
+          asylApi
+            .search(q)
+            .then((got) => {
+              const t = got.tokens[0];
+              const w = got.wallets[0];
+              if (t) onPick({ kind: "token", address: t.mint });
+              else if (w) onPick({ kind: "wallet", address: w.wallet });
+              else onSubmit(query);
+            })
+            .catch(() => onSubmit(query))
+            .finally(() => setLoading(false));
+          return;
+        }
+        onSubmit(query);
       }}
     >
       <div className="asyl-search-field">

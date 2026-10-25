@@ -848,6 +848,12 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
       ctx.textBaseline = "middle";
       ctx.fillText("D", bx, by + 0.5);
     }
+  }
+  // Names over every bubble, so a bubble drawn later never covers one.
+  for (const n of g.nodes) {
+    if (!pos.has(n.id)) continue;
+    const p = at(n.id);
+    const r = rOf(n.id);
     if (labelled.has(n.id)) {
       ctx.font = `700 ${namePxNow}px ${FONT}`;
       ctx.textAlign = "center";

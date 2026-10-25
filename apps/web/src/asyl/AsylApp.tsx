@@ -452,7 +452,7 @@ export function AsylApp() {
         setGrid(m.doc.grid ?? false);
         if (m.doc.times) setTimeLabelsState({ ...DEFAULT_TIME_LABELS, ...m.doc.times });
         setEpoch((n) => n + 1);
-        setGraph(withDeployLines({ nodes: m.doc.nodes, edges: m.doc.edges }));
+        setGraph(withDeployLines(mergeGraph(EMPTY, { nodes: m.doc.nodes, edges: m.doc.edges })));
         setNotes(m.doc.notes);
         setMapNote(m.doc.note);
         setRemoved(new Set(m.doc.removed ?? []));
