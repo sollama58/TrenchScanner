@@ -122,6 +122,26 @@ function refusal(reply: FastifyReply, r: ChainRefusal) {
   }
 }
 
+/** A holder reading's age, in words: holders move, so an old list says so and how to refresh it. */
+export function holdersNote(count: number, readAt: Date | null, pro: boolean, now = Date.now()): string {
+  const fresher = pro
+    ? "Read live holders in the coin's panel for the current list."
+    : "Pro Mode can read the current list from the chain.";
+  if (count === 0) return `TrenchScanner has no holder reading of this coin. ${fresher}`;
+  if (!readAt) return `Top ${count} holders as TrenchScanner last read them. ${fresher}`;
+  const min = Math.max(0, Math.round((now - readAt.getTime()) / 60_000));
+  const age =
+    min < 1
+      ? "just now"
+      : min < 60
+        ? `${min} min ago`
+        : min < 48 * 60
+          ? `${Math.round(min / 60)} h ago`
+          : `${Math.round(min / 1440)} days ago`;
+  const at = `${readAt.toISOString().slice(11, 16)} UTC on ${readAt.toISOString().slice(0, 10)}`;
+  return `Top ${count} holders as TrenchScanner read them ${age} (${at}).${min >= 60 ? ` ${fresher}` : ""}`;
+}
+
 export async function registerAsylRoutes(
   app: FastifyInstance,
   opts: {
@@ -258,10 +278,7 @@ export async function registerAsylRoutes(
         seen: stored.holders.length,
         days: STORED_DAYS,
         chainAvailable: pro,
-        note:
-          stored.holders.length > 0
-            ? `Top ${stored.holders.length} holders as TrenchScanner read them${stored.readAt ? ` at ${stored.readAt.toISOString().slice(11, 16)} UTC on ${stored.readAt.toISOString().slice(0, 10)}` : ""}.`
-            : "TrenchScanner has no holder reading of this coin.",
+        note: holdersNote(stored.holders.length, stored.readAt, pro),
       };
       reply.header("Cache-Control", "private, no-store");
       return {

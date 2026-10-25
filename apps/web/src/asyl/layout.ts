@@ -204,18 +204,21 @@ export function bounds(state: LayoutState, ids: Iterable<string>, radius: (id: s
 export type Cell = { w: number; h: number };
 
 /**
- * Grid mode's cell (user ask 2026-10-24): wide enough for the biggest bubble or the longest name
+ * Grid mode's cell (user ask 2026-10-24): wide enough for the biggest bubble or nine names in ten
  * under one, with room between neighbours for a line's time or label; tall enough for a bubble, its
  * name, and a time along a line running down to the next row.
  */
 export function gridCell(g: AsylGraph, radius: (id: string) => number, name: (id: string) => string): Cell {
   let r = 12;
-  let nameW = 0;
+  const widths: number[] = [];
   for (const n of g.nodes) {
     r = Math.max(r, radius(n.id));
-    nameW = Math.max(nameW, Math.min(150, name(n.id).length * 7));
+    widths.push(Math.min(150, name(n.id).length * 7));
   }
-  return { w: Math.round(Math.max(2 * r, nameW) + 84), h: Math.round(2 * r + 22 + 84) };
+  // Sized for nine names in ten: one long label shouldn't spread the whole grid out.
+  widths.sort((a, b) => a - b);
+  const nameW = widths[Math.min(widths.length - 1, Math.floor(widths.length * 0.9))] ?? 0;
+  return { w: Math.round(Math.max(2 * r, nameW) + 72), h: Math.round(2 * r + 22 + 72) };
 }
 
 /**
@@ -266,4 +269,27 @@ export function snapToGrid(state: LayoutState, g: AsylGraph, cell: Cell): void {
     state.pos.set(id, { x: best[0] * cell.w, y: best[1] * cell.h });
     state.vel.set(id, { x: 0, y: 0 });
   }
+}
+
+/**
+ * Spreads a free layout out to the grid's spacing before it first goes onto the grid, so each bubble
+ * lands near where it was relative to the others instead of the crowd being pushed outwards: the
+ * typical gap between neighbours becomes one cell.
+ */
+export function spreadForGrid(state: LayoutState, g: AsylGraph, cell: Cell): void {
+  const pts = g.nodes.map((n) => state.pos.get(n.id)).filter((p): p is Point => !!p);
+  if (pts.length < 2) return;
+  const nearest = pts.map((p) => {
+    let best = Infinity;
+    for (const q of pts) if (q !== p) best = Math.min(best, Math.hypot(p.x - q.x, p.y - q.y));
+    return best;
+  });
+  nearest.sort((a, b) => a - b);
+  const typical = nearest[Math.floor(nearest.length / 2)]!;
+  if (!(typical > 0)) return;
+  const k = Math.min(cell.w, cell.h) / typical;
+  if (k <= 1) return;
+  const cx = pts.reduce((a, p) => a + p.x, 0) / pts.length;
+  const cy = pts.reduce((a, p) => a + p.y, 0) / pts.length;
+  for (const [id, p] of state.pos) state.pos.set(id, { x: cx + (p.x - cx) * k, y: cy + (p.y - cy) * k });
 }

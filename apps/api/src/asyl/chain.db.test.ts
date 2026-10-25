@@ -3,7 +3,7 @@ import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadEnv, prisma, type ChainTx, type Env } from "@trenchscanner/core";
 import { allowanceOf, recordSpend, utcDay } from "./credits.js";
-import { FLOW_WORST, readWalletFlows } from "./chain.js";
+import { FLOW_WORST, readWalletFlows, refreshFunders } from "./chain.js";
 
 const addr = (prefix: string) => prefix + "1".repeat(43 - prefix.length);
 const WALLET = addr("AsyFlowMe");
@@ -69,5 +69,60 @@ describe.skipIf(!dbAvailable)("readWalletFlows", () => {
     expect(calls).toBe(1);
     const row = await prisma.asylCreditUse.findUnique({ where: { userId_day: { userId, day: utcDay() } } });
     expect(row?.credits).toBe(100 - FLOW_WORST + 1);
+  });
+});
+
+describe.skipIf(!dbAvailable)("refreshFunders", () => {
+  const FRESH = addr("AsyFundFresh");
+  const STALE = addr("AsyFundStale");
+  const BUSY = addr("AsyFundBusy");
+  const NEW = addr("AsyFundNew");
+  const PAYER = addr("AsyFundPayer");
+  const now = Date.UTC(2026, 9, 25, 12, 0);
+  const ids = [FRESH, STALE, BUSY, NEW];
+  const cleanup = () => prisma.walletFunder.deleteMany({ where: { wallet: { in: ids } } });
+  beforeAll(async () => {
+    await cleanup();
+    const recent = new Date(now - 86_400_000);
+    const old = new Date(now - 30 * 86_400_000);
+    await prisma.walletFunder.createMany({
+      data: [
+        { wallet: FRESH, status: "found", funder: PAYER, amountSol: 1, lastActivityAt: recent },
+        { wallet: STALE, status: "found", funder: PAYER, amountSol: 1, lastActivityAt: old },
+        { wallet: BUSY, status: "busy" },
+      ],
+    });
+  });
+  afterAll(cleanup);
+
+  it("asks only for missing, busy and lapsed answers, hands back what it knew, and stores what comes", async () => {
+    const asked: string[][] = [];
+    const known: string[] = [];
+    const helius = {
+      async getFundersBatch(wallets: string[], opts?: { knownOf?: ReadonlyMap<string, unknown> }) {
+        asked.push([...wallets].sort());
+        known.push(...(opts?.knownOf?.keys() ?? []));
+        return new Map(
+          wallets.map((w) => [
+            w,
+            {
+              status: "found" as const,
+              funder: PAYER,
+              amountSol: 2,
+              fundedAt: null,
+              revived: w === STALE,
+              lastActivityAt: new Date(now),
+            },
+          ]),
+        );
+      },
+    };
+    const res = await refreshFunders(helius, ids, now);
+    expect(asked).toEqual([[STALE, BUSY, NEW].sort()]);
+    expect(known).toEqual([STALE]);
+    expect(res).toEqual({ asked: 3, found: 3 });
+    const stale = await prisma.walletFunder.findUnique({ where: { wallet: STALE } });
+    expect(stale).toMatchObject({ amountSol: 2, revived: true, lastActivityAt: new Date(now) });
+    expect(await refreshFunders(helius, ids, now)).toEqual({ asked: 0, found: 0 });
   });
 });

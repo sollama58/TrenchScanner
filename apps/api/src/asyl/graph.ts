@@ -51,12 +51,14 @@ export const HOLDERS_MAX = 50;
 /** How far back the stored tables reach, for the coverage line. */
 export const STORED_DAYS = 30;
 
+/** A small amount to two significant figures, without toPrecision's trailing zeros or exponents. */
+export function sig2(n: number): string {
+  if (n === 0) return "0";
+  if (Math.abs(n) < 0.0001) return "<0.0001";
+  return String(Number(n.toPrecision(2)));
+}
 const fmtSol = (sol: number | null | undefined) =>
-  sol === null || sol === undefined
-    ? null
-    : sol >= 100
-      ? `${sol.toFixed(0)} SOL`
-      : `${sol.toPrecision(2)} SOL`;
+  sol === null || sol === undefined ? null : sol >= 100 ? `${sol.toFixed(0)} SOL` : `${sig2(sol)} SOL`;
 const fmtDay = (d: Date | null | undefined) =>
   d ? d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" }) : null;
 const fmtPct = (pct: number) =>
@@ -111,7 +113,7 @@ export class GraphBuilder {
 }
 
 /** A "funded" edge: `funder` paid `wallet` its first SOL. */
-function fundedEdge(
+export function fundedEdge(
   g: GraphBuilder,
   funder: string,
   wallet: string,
@@ -130,7 +132,7 @@ function fundedEdge(
 }
 
 /** A "transfer" edge: holder transfers of `mint` from one wallet to another (HolderTransferEvent). */
-function transferEdge(
+export function transferEdge(
   g: GraphBuilder,
   t: { fromWallet: string; toWallet: string; n: number; pct: number; last: Date },
   mint: string,
@@ -705,7 +707,9 @@ export async function decorate(g: GraphBuilder, tracked: readonly TrackedWallet[
             name: true,
             imageUrl: true,
             liveMarketCapUsd: true,
+            liveDataAt: true,
             lastMcapUsd: true,
+            lastLiveAt: true,
             launchedAt: true,
             peakWatch: { select: { athMcapUsd: true } },
           },
@@ -716,7 +720,9 @@ export async function decorate(g: GraphBuilder, tracked: readonly TrackedWallet[
   const riskOf = new Map(risks.map((r) => [r.wallet, r]));
   const devSet = new Set(devs.map((d) => d.wallet));
   const deployers = await loadDeployers(tokens);
-  const creators = new Set([...deployers.values()].map((d) => d.wallet));
+  // Only a deployer read off the create transaction marks a wallet as a dev: Pump.fun's `creator`
+  // follows a community takeover's fee wallet, which deployed nothing.
+  const creators = new Set([...deployers.values()].filter((d) => d.verified).map((d) => d.wallet));
   const botSet = new Set([...bots.map((b) => b.wallet), ...wallets.filter((w) => MARKED_BOT_WALLETS.has(w))]);
   const farmSet = new Set(farms.map((f) => f.funder));
   for (const w of wallets) {
@@ -747,7 +753,14 @@ export async function decorate(g: GraphBuilder, tracked: readonly TrackedWallet[
     n.name = c.symbol ? `$${c.symbol}` : n.name;
     n.title = c.name;
     n.image = c.imageUrl;
-    n.mcapUsd = c.liveMarketCapUsd ?? c.lastMcapUsd;
+    // The fresher of the live price ping and the scan's last DexScreener read; a 0 is no reading.
+    const live = c.liveMarketCapUsd && c.liveMarketCapUsd > 0 ? c.liveMarketCapUsd : null;
+    const last = c.lastMcapUsd && c.lastMcapUsd > 0 ? c.lastMcapUsd : null;
+    const useLive =
+      live !== null && (last === null || (c.liveDataAt?.getTime() ?? 0) >= (c.lastLiveAt?.getTime() ?? 0));
+    n.mcapUsd = useLive ? live : last;
+    const at = useLive ? c.liveDataAt : last !== null ? c.lastLiveAt : null;
+    n.mcapAt = at?.toISOString() ?? null;
     n.athUsd = c.peakWatch?.athMcapUsd ?? null;
     n.launchedAt = c.launchedAt?.toISOString() ?? null;
     const d = deployers.get(c.mintAddress);

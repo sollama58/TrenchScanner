@@ -22,20 +22,27 @@ export const MAP_BODY_LIMIT = 1_000_000;
 const address = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
 const finite = z.number().finite();
 const tag = z.string().max(16);
+/**
+ * Text the map's reads wrote, cut to fit rather than refused: one long coin name must not stop a
+ * whole map from saving. A link too long to keep is dropped, as half a URL is no picture.
+ */
+const clipped = (max: number) => z.string().transform((v) => v.slice(0, max));
+const url = (max: number) => z.string().transform((v) => (v.length <= max ? v : null));
 
 const nodeSchema = z.object({
   id: address,
   kind: z.enum(["wallet", "token"]),
-  name: z.string().max(80).nullable(),
+  name: clipped(80).nullable(),
   tags: z.array(tag).max(12),
   risk: finite.nullable().optional(),
   win: finite.nullable().optional(),
   coins: finite.nullable().optional(),
   medianPnlSol: finite.nullable().optional(),
-  avatar: z.string().max(200).nullable().optional(),
-  title: z.string().max(120).nullable().optional(),
-  image: z.string().max(500).nullable().optional(),
+  avatar: url(200).nullable().optional(),
+  title: clipped(120).nullable().optional(),
+  image: url(1000).nullable().optional(),
   mcapUsd: finite.nullable().optional(),
+  mcapAt: z.string().max(40).nullable().optional(),
   athUsd: finite.nullable().optional(),
   launchedAt: z.string().max(40).nullable().optional(),
   deployer: address.nullable().optional(),
@@ -47,7 +54,7 @@ const edgeSchema = z.object({
   b: address,
   kind: z.enum(["funded", "transfer", "cotrade", "side", "created", "holds", "traded"]),
   weight: finite,
-  label: z.string().max(160),
+  label: clipped(160),
   source: z.enum(["stored", "chain"]),
   mint: address.nullable().optional(),
   at: z.string().max(40).nullable().optional(),

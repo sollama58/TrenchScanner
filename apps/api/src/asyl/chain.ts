@@ -6,12 +6,14 @@ import {
   tallyHeliusCredits,
   withApiFeature,
   type Env,
+  WALLET_DORMANT_GAP_MS,
   type HeliusClient,
+  type KnownFunder,
   type WalletFlows,
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
 import { oneAtATime, readAllowance, recordSpend, type Allowance } from "./credits.js";
-import { GraphBuilder, type KnownDeployer } from "./graph.js";
+import { GraphBuilder, sig2, type KnownDeployer } from "./graph.js";
 
 /**
  * Asyl's chain reads, Pro Mode only (user decision 2026-10-24): what TrenchScanner's own tables
@@ -117,7 +119,73 @@ export function readWalletFlows(
   });
 }
 
-/** Funders the tables don't have yet, read and written into WalletFunder for everyone. */
+/**
+ * Reads the funders of `wallets` whose stored answer doesn't hold, and writes them into WalletFunder
+ * for everyone, the way the worker's linked-wallets read does: an answer holds until the wallet's
+ * newest transaction at the read plus WALLET_DORMANT_GAP_MS, when it could sit idle and be paid
+ * again by someone new; a busy or failed read, or a row from before that was kept, holds not at all.
+ * A stored answer is handed back, so a wallet that hasn't revived costs only its one page. Returns
+ * how many were asked and how many named a funder.
+ */
+export async function refreshFunders(
+  helius: Pick<HeliusClient, "getFundersBatch">,
+  wallets: readonly string[],
+  now = Date.now(),
+  /** Reads at most this many, first in `wallets` order. */
+  max = Infinity,
+): Promise<{ asked: number; found: number }> {
+  const rows = await prisma.walletFunder.findMany({
+    where: { wallet: { in: [...wallets] } },
+    select: {
+      wallet: true,
+      status: true,
+      funder: true,
+      amountSol: true,
+      fundedAt: true,
+      lastActivityAt: true,
+    },
+  });
+  const settled = (r: (typeof rows)[number]) =>
+    (r.status === "found" || r.status === "none" || r.status === "empty") &&
+    (r.status === "empty" ||
+      (!!r.lastActivityAt && now < r.lastActivityAt.getTime() + WALLET_DORMANT_GAP_MS));
+  const byWallet = new Map(rows.map((r) => [r.wallet, r]));
+  const ask = wallets
+    .filter((w) => {
+      const r = byWallet.get(w);
+      return !r || !settled(r);
+    })
+    .slice(0, max);
+  if (ask.length === 0) return { asked: 0, found: 0 };
+  const knownOf = new Map<string, KnownFunder>();
+  for (const w of ask) {
+    const r = byWallet.get(w);
+    if (r && (r.status === "found" || r.status === "none"))
+      knownOf.set(w, { funder: r.funder, amountSol: r.amountSol, fundedAt: r.fundedAt });
+  }
+  const read = await helius.getFundersBatch(ask, { nowMs: now, knownOf });
+  let found = 0;
+  for (const [wallet, r] of read) {
+    // A failed read changes nothing; a busy one only stands in for a missing or busy row.
+    if (r.status === "failed") continue;
+    if (r.status === "busy" && byWallet.has(wallet) && byWallet.get(wallet)!.status !== "busy") continue;
+    const row = {
+      wallet,
+      status: r.status,
+      funder: r.status === "found" ? r.funder : null,
+      amountSol: r.status === "found" ? r.amountSol : null,
+      fundedAt: r.status === "found" ? r.fundedAt : null,
+      lastActivityAt: "lastActivityAt" in r ? (r.lastActivityAt ?? null) : null,
+      revived: "revived" in r ? (r.revived ?? null) : null,
+      checkedAt: new Date(now),
+    };
+    if (r.status === "found") found += 1;
+    await prisma.walletFunder.upsert({ where: { wallet }, create: row, update: row }).catch(() => undefined);
+  }
+  return { asked: ask.length, found };
+}
+
+/** Funders the tables don't have, or whose stored answer no longer holds, read for everyone. */
 export function readFunders(
   env: Env,
   helius: Pick<HeliusClient, "getFundersBatch">,
@@ -126,30 +194,8 @@ export function readFunders(
 ): Promise<Chained<number>> {
   const unique = [...new Set(wallets)].slice(0, FUNDERS_MAX);
   return metered(env, userId, FUNDER_WORST * Math.max(1, Math.min(unique.length, 5)), async () => {
-    const have = await prisma.walletFunder.findMany({
-      where: { wallet: { in: unique } },
-      select: { wallet: true },
-    });
-    const known = new Set(have.map((h) => h.wallet));
-    const ask = unique.filter((w) => !known.has(w));
-    if (ask.length === 0) return { value: 0, cached: true };
-    const read = await helius.getFundersBatch(ask);
-    let found = 0;
-    for (const [wallet, r] of read) {
-      if (r.status !== "found" && r.status !== "none" && r.status !== "empty") continue;
-      const row = {
-        wallet,
-        status: r.status,
-        funder: r.status === "found" ? r.funder : null,
-        amountSol: r.status === "found" ? r.amountSol : null,
-        fundedAt: r.status === "found" ? r.fundedAt : null,
-      };
-      if (r.status === "found") found += 1;
-      await prisma.walletFunder
-        .upsert({ where: { wallet }, create: row, update: { ...row, checkedAt: new Date() } })
-        .catch(() => undefined);
-    }
-    return { value: found, cached: false };
+    const { asked, found } = await refreshFunders(helius, unique);
+    return { value: found, cached: asked === 0 };
   });
 }
 
@@ -169,32 +215,13 @@ export function readTokenHolders(
     const res = (await helius.getTopHoldersBatch([mint], CHAIN_HOLDERS)).get(mint);
     if (!res || res.status !== "found") return null;
     const holders = res.holders.map((h) => ({ wallet: h.owner, pct: h.pct }));
-    // Their funders, so the map can tie them: only the ones the tables don't have.
-    const have = await prisma.walletFunder.findMany({
-      where: { wallet: { in: holders.map((h) => h.wallet) } },
-      select: { wallet: true },
-    });
-    const known = new Set(have.map((h) => h.wallet));
-    const ask = holders
-      .map((h) => h.wallet)
-      .filter((w) => !known.has(w))
-      .slice(0, CHAIN_HOLDER_FUNDERS);
-    if (ask.length > 0) {
-      const read = await helius.getFundersBatch(ask);
-      for (const [wallet, r] of read) {
-        if (r.status !== "found" && r.status !== "none" && r.status !== "empty") continue;
-        const row = {
-          wallet,
-          status: r.status,
-          funder: r.status === "found" ? r.funder : null,
-          amountSol: r.status === "found" ? r.amountSol : null,
-          fundedAt: r.status === "found" ? r.fundedAt : null,
-        };
-        await prisma.walletFunder
-          .upsert({ where: { wallet }, create: row, update: { ...row, checkedAt: new Date() } })
-          .catch(() => undefined);
-      }
-    }
+    // Their funders, so the map can tie them: only the ones the tables don't have, or have stale.
+    await refreshFunders(
+      helius,
+      holders.map((h) => h.wallet),
+      now,
+      CHAIN_HOLDER_FUNDERS,
+    ).catch(() => undefined);
     if (tokenReads.size > 500) tokenReads.clear();
     tokenReads.set(mint, { at: now, holders });
     return { value: holders, cached: false };
@@ -208,7 +235,7 @@ const fmtAmount = (n: number) =>
       ? `${(n / 1_000).toFixed(1)}K`
       : n >= 10
         ? n.toFixed(0)
-        : n.toPrecision(2);
+        : sig2(n);
 const fmtDay = (ms: number | null) =>
   ms === null
     ? null
