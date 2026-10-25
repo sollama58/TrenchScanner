@@ -8,7 +8,18 @@ import {
   type PanelRequest,
   type Status,
 } from "../shared/types";
-import { cleanTooltip, DEFAULT_TOOLTIP, lineOn, tipLabel, type TooltipPrefs } from "../shared/tooltip";
+import {
+  cleanTooltip,
+  DEFAULT_TOOLTIP,
+  lineOn,
+  partOn,
+  pillLabel,
+  tipLabel,
+  type ListPrefs,
+  type PillPart,
+  type TipLine,
+  type TooltipPrefs,
+} from "../shared/tooltip";
 import { verdictFor } from "../shared/verdict";
 import { bubbleMapView } from "./bubble";
 import { buddyCard } from "./buddy";
@@ -443,7 +454,7 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
     }),
   );
   parts.push(section("Open tokens on", sites));
-  parts.push(tooltipSection(settings));
+  parts.push(...ringDisplaySections(settings));
 
   const disconnect = el("button", { className: "link", textContent: "Disconnect this browser" });
   disconnect.addEventListener("click", async () => {
@@ -469,38 +480,41 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
 }
 
 /**
- * Rings build: which lines the tooltip on a ringed row shows, and their order. A flag's line
- * follows its switch above until it is picked here.
+ * An ordered list of switches with up and down buttons: the tooltip's lines and each pill's parts.
+ * `get` reads the current list from tipPrefs, `put` stores a changed one there.
  */
-function tooltipSection(settings: OverlaySettings): HTMLElement {
-  const save = () => void send({ type: "saveTooltip", prefs: tipPrefs });
-  const box = section("Ring tooltip");
+function orderedList<T extends string>(
+  get: () => ListPrefs<T>,
+  put: (list: ListPrefs<T>) => void,
+  isOn: (item: T) => boolean,
+  label: (item: T) => string,
+): { list: HTMLElement; fill: () => void } {
   const list = el("div", { className: "tiplines" });
+  const save = () => void send({ type: "saveTooltip", prefs: tipPrefs });
   const fill = () => {
+    const current = get();
     list.replaceChildren(
-      ...tipPrefs.order.map((line, i) => {
-        const label = tipLabel(line);
-        const on = el("input", {
-          type: "checkbox",
-          className: "switch",
-          checked: lineOn(line, tipPrefs, settings),
-        });
-        on.setAttribute("aria-label", `Show ${label}`);
+      ...current.order.map((item, i) => {
+        const name = label(item);
+        const on = el("input", { type: "checkbox", className: "switch", checked: isOn(item) });
+        on.setAttribute("aria-label", `Show ${name}`);
         on.addEventListener("change", () => {
-          tipPrefs = { ...tipPrefs, on: { ...tipPrefs.on, [line]: on.checked } };
+          const now = get();
+          put({ ...now, on: { ...now.on, [item]: on.checked } });
           save();
         });
-        const move = (by: number, glyph: string, name: string) => {
+        const move = (by: number, glyph: string, where: string) => {
           const b = el("button", {
             className: "move",
             textContent: glyph,
-            disabled: i + by < 0 || i + by >= tipPrefs.order.length,
+            disabled: i + by < 0 || i + by >= current.order.length,
           });
-          b.setAttribute("aria-label", `Move ${label} ${name}`);
+          b.setAttribute("aria-label", `Move ${name} ${where}`);
           b.addEventListener("click", () => {
-            const order = [...tipPrefs.order];
+            const now = get();
+            const order = [...now.order];
             [order[i], order[i + by]] = [order[i + by]!, order[i]!];
-            tipPrefs = { ...tipPrefs, order };
+            put({ ...now, order });
             save();
             fill();
             (
@@ -514,7 +528,7 @@ function tooltipSection(settings: OverlaySettings): HTMLElement {
           "div",
           { className: "tipline" },
           on,
-          el("span", { textContent: label }),
+          el("span", { textContent: name }),
           move(-1, "↑", "up"),
           move(1, "↓", "down"),
         );
@@ -522,22 +536,93 @@ function tooltipSection(settings: OverlaySettings): HTMLElement {
     );
   };
   fill();
-  const reset = el("button", { className: "link", textContent: "Reset to default" });
-  reset.addEventListener("click", () => {
-    tipPrefs = DEFAULT_TOOLTIP;
+  return { list, fill };
+}
+
+/**
+ * Rings build: what each ring's pill says, an optional second pill, and the tooltip's lines, each
+ * in the reader's order. Kept in this browser (shared/tooltip.ts).
+ */
+function ringDisplaySections(settings: OverlaySettings): HTMLElement[] {
+  const save = () => void send({ type: "saveTooltip", prefs: tipPrefs });
+  const reset = (what: string, apply: () => void, refill: () => void) => {
+    const b = el("button", { className: "link", textContent: `Reset ${what}` });
+    b.addEventListener("click", () => {
+      apply();
+      save();
+      refill();
+    });
+    return b;
+  };
+
+  const pill = orderedList<PillPart>(
+    () => tipPrefs.pill,
+    (list) => (tipPrefs = { ...tipPrefs, pill: list }),
+    (part) => partOn(part, tipPrefs.pill, false),
+    pillLabel,
+  );
+  const dot = toggle("Red dot past a flag's limit", null, tipPrefs.riskDot, "var(--risk)", (on) => {
+    tipPrefs = { ...tipPrefs, riskDot: on };
     save();
-    fill();
   });
-  box.append(
+  const pillBox = section(
+    "Ring pill",
+    el("p", {
+      className: "note",
+      textContent: "What the pill on a ring says, left to right. With nothing on, it's just the dot.",
+    }),
+    dot,
+    pill.list,
+    reset(
+      "pill",
+      () => {
+        tipPrefs = { ...tipPrefs, pill: DEFAULT_TOOLTIP.pill, riskDot: true };
+        dot.querySelector("input")!.checked = true;
+      },
+      pill.fill,
+    ),
+  );
+
+  const second = orderedList<PillPart>(
+    () => tipPrefs.second,
+    (list) => (tipPrefs = { ...tipPrefs, second: { ...list, enabled: tipPrefs.second.enabled } }),
+    (part) => partOn(part, tipPrefs.second, true),
+    pillLabel,
+  );
+  second.list.hidden = !tipPrefs.second.enabled;
+  const secondBox = section(
+    "Second pill",
+    toggle(
+      "Show a second pill",
+      "More of the coin's numbers beside the first",
+      tipPrefs.second.enabled,
+      "var(--filter)",
+      (on) => {
+        tipPrefs = { ...tipPrefs, second: { ...tipPrefs.second, enabled: on } };
+        second.list.hidden = !on;
+        save();
+      },
+    ),
+    second.list,
+  );
+
+  const tip = orderedList<TipLine>(
+    () => tipPrefs,
+    (list) => (tipPrefs = { ...tipPrefs, ...list }),
+    (line) => lineOn(line, tipPrefs, settings),
+    tipLabel,
+  );
+  const tipBox = section(
+    "Ring tooltip",
     el("p", {
       className: "note",
       textContent:
-        "Lines shown when you point at a ring's badge, top to bottom. Alerts, stats and the footer keep their own groups.",
+        "Lines shown when you point at a ring's pill, top to bottom. Alerts, stats and the footer keep their own groups.",
     }),
-    list,
-    reset,
+    tip.list,
+    reset("tooltip", () => (tipPrefs = { ...tipPrefs, order: DEFAULT_TOOLTIP.order, on: {} }), tip.fill),
   );
-  return box;
+  return [pillBox, secondBox, tipBox];
 }
 
 function draw(): void {

@@ -31,11 +31,25 @@ export type TipLine =
   | "statsAge"
   | "link";
 
-export interface TooltipPrefs {
-  /** Every line, in the order shown. */
-  order: TipLine[];
-  /** Lines the reader turned on or off; a line missing here takes its default. */
-  on: Partial<Record<TipLine, boolean>>;
+/** Every item of a list in the order shown, and the ones the reader turned on or off. */
+export interface ListPrefs<T extends string> {
+  order: T[];
+  /** Items the reader turned on or off; an item missing here takes its default. */
+  on: Partial<Record<T, boolean>>;
+}
+
+/**
+ * What a ring's pill says, part by part (user ask 2026-10-25). The second pill is an extra one beside
+ * the first with more of the coin's numbers, off until the reader turns it on.
+ */
+export type PillPart =
+  "signal" | "odds" | "change" | "mcap" | "age" | "holders" | `flag:${FlagId}` | `map:${MapLine}`;
+
+export interface TooltipPrefs extends ListPrefs<TipLine> {
+  pill: ListPrefs<PillPart>;
+  /** The red dot on the pill when a flag is past its limit. */
+  riskDot: boolean;
+  second: ListPrefs<PillPart> & { enabled: boolean };
 }
 
 export const MAP_LABELS: Record<MapLine, { label: string; short: string }> = {
@@ -76,7 +90,65 @@ export function tipLabel(line: TipLine): string {
   return FIXED_LABELS[line] ?? line;
 }
 
-export const DEFAULT_TOOLTIP: TooltipPrefs = { order: TIP_LINES, on: {} };
+export const PILL_PARTS: PillPart[] = [
+  "signal",
+  "odds",
+  "change",
+  "mcap",
+  "age",
+  "holders",
+  ...FLAG_IDS.map((id) => `flag:${id}` as const),
+  ...MAP_LINES.map((id) => `map:${id}` as const),
+];
+
+const PILL_LABELS: Record<string, string> = {
+  signal: "Model or filter name",
+  odds: "Model's odds to 2x",
+  change: "Change since the alert",
+  mcap: "Market cap now",
+  age: "Time since the alert",
+  holders: "Holders",
+};
+
+export function pillLabel(part: PillPart): string {
+  if (part.startsWith("flag:") || part.startsWith("map:")) return tipLabel(part as TipLine);
+  return PILL_LABELS[part] ?? part;
+}
+
+const PILL_ON = new Set<PillPart>(["signal", "odds"]);
+const SECOND_ON = new Set<PillPart>([
+  "change",
+  "holders",
+  "flag:bundledSupplyPct",
+  "flag:linkedWalletPct",
+  "map:kolBundledPct",
+]);
+
+export const DEFAULT_TOOLTIP: TooltipPrefs = {
+  order: TIP_LINES,
+  on: {},
+  pill: { order: PILL_PARTS, on: {} },
+  riskDot: true,
+  second: { order: PILL_PARTS, on: {}, enabled: false },
+};
+
+export function partOn(part: PillPart, prefs: ListPrefs<PillPart>, second: boolean): boolean {
+  return prefs.on[part] ?? (second ? SECOND_ON : PILL_ON).has(part);
+}
+
+/** The parts each pill shows, in order; the second pill's is null while it is off. */
+export function pillParts(prefs: TooltipPrefs): { main: PillPart[]; more: PillPart[] | null } {
+  return {
+    main: prefs.pill.order.filter((p) => partOn(p, prefs.pill, false)),
+    more: prefs.second.enabled ? prefs.second.order.filter((p) => partOn(p, prefs.second, true)) : null,
+  };
+}
+
+/** The pills need the coins' bubble map totals for some part. */
+export function pillsNeedMap(prefs: TooltipPrefs): boolean {
+  const { main, more } = pillParts(prefs);
+  return [...main, ...(more ?? [])].some((p) => p.startsWith("map:"));
+}
 
 /** Lines on unless the reader turned them off; flags follow Settings; the rest start off. */
 const ON_BY_DEFAULT = new Set<TipLine>([
@@ -107,25 +179,40 @@ export function needsMap(prefs: TooltipPrefs, settings: OverlaySettings): boolea
   return shownLines(prefs, settings).some((line) => line.startsWith("map:"));
 }
 
-/** Stored prefs made whole: unknown lines dropped, new lines added at their default place. */
-export function cleanTooltip(raw: unknown): TooltipPrefs {
-  const known = new Set<string>(TIP_LINES);
-  const value = (typeof raw === "object" && raw !== null ? raw : {}) as Partial<TooltipPrefs>;
+/** A stored list made whole: unknown items dropped, new items added at their default place. */
+function cleanList<T extends string>(raw: unknown, all: readonly T[]): ListPrefs<T> {
+  const known = new Set<string>(all);
+  const value = (typeof raw === "object" && raw !== null ? raw : {}) as Partial<ListPrefs<T>>;
   const order = (Array.isArray(value.order) ? value.order : []).filter(
-    (line, i, all): line is TipLine => typeof line === "string" && known.has(line) && all.indexOf(line) === i,
+    (item, i, list): item is T => typeof item === "string" && known.has(item) && list.indexOf(item) === i,
   );
-  for (const [i, line] of TIP_LINES.entries()) {
-    if (order.includes(line)) continue;
-    // After the line that comes before it by default, so a new line lands near its kin.
-    const before = TIP_LINES.slice(0, i)
+  for (const [i, item] of all.entries()) {
+    if (order.includes(item)) continue;
+    // After the item that comes before it by default, so a new one lands near its kin.
+    const before = all
+      .slice(0, i)
       .reverse()
       .find((l) => order.includes(l));
-    order.splice(before ? order.indexOf(before) + 1 : 0, 0, line);
+    order.splice(before ? order.indexOf(before) + 1 : 0, 0, item);
   }
-  const on: TooltipPrefs["on"] = {};
+  const on: ListPrefs<T>["on"] = {};
   if (typeof value.on === "object" && value.on !== null) {
-    for (const [line, v] of Object.entries(value.on))
-      if (known.has(line) && typeof v === "boolean") on[line as TipLine] = v;
+    for (const [item, v] of Object.entries(value.on))
+      if (known.has(item) && typeof v === "boolean") on[item as T] = v;
   }
   return { order, on };
+}
+
+/** Stored prefs made whole, whatever was stored (or nothing). */
+export function cleanTooltip(raw: unknown): TooltipPrefs {
+  const value = (typeof raw === "object" && raw !== null ? raw : {}) as Partial<TooltipPrefs>;
+  const second = (typeof value.second === "object" && value.second !== null ? value.second : {}) as Partial<
+    TooltipPrefs["second"]
+  >;
+  return {
+    ...cleanList(value, TIP_LINES),
+    pill: cleanList(value.pill, PILL_PARTS),
+    riskDot: typeof value.riskDot === "boolean" ? value.riskDot : true,
+    second: { ...cleanList(second, PILL_PARTS), enabled: second.enabled === true },
+  };
 }

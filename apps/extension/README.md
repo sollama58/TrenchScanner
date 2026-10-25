@@ -78,3 +78,7 @@ on or off and in any order, kept in this browser only (`src/shared/tooltip.ts`).
 the original tooltip plus KOL bundled %. Map lines (KOL bundled and the other bubble map totals)
 are read on hover with the panel's `/bubble/:mint` call, and only for a coin already in the
 reader's alerts, so this still sends no address the panel wouldn't.
+
+The ring's pill is set the same way (Settings → Ring pill): which parts it shows and their order,
+and the red dot. Settings → Second pill adds a dashed pill beside it with more of the coin's
+numbers, off by default, placed in the next free patch of the row and left out when none fits.

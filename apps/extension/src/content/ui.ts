@@ -1,6 +1,7 @@
 import { DEFAULT_SETTINGS } from "../shared/settings";
 import { DEFAULT_TOOLTIP, MAP_LABELS, shownLines, type MapLine, type TipLine } from "../shared/tooltip";
 import type { FlagId, OverlayBubbleTotals, RingStyle, OverlayToken } from "../shared/types";
+import type { PillSegment } from "../shared/pill";
 import type { RowVerdict } from "../shared/verdict";
 import { findSpot, obstaclesIn } from "./placement";
 
@@ -43,7 +44,42 @@ const RING_CSS = `
 .badge.dot { padding: 3px; gap: 0; }
 .badge.dot > span, .badge.dot b { display: none; }
 .badge b { width: 6px; height: 6px; border-radius: 50%; background: #ff4d6a; flex: none; }
+.badge .sep { color: #5d6272; }
+.badge .ok { color: #7ef0ae; } .badge .mid { color: #f8d77a; } .badge .hi { color: #ff8b9d; }
+.badge.more { border-style: dashed; }
+.badge.more i { display: none; }
+.badge.gone { display: none; }
 `;
+
+/** What a ring's pills say: the first pill, the second (null while off), and the risk dot. */
+export interface Pills {
+  main: PillSegment[];
+  more: PillSegment[] | null;
+  riskDot: boolean;
+}
+
+/** A pill's text as spans, written with textContent only (a filter's name is the reader's text). */
+function fill(target: HTMLElement, segments: readonly PillSegment[]): string {
+  const parts: Node[] = [];
+  for (const [i, seg] of segments.entries()) {
+    if (i > 0) {
+      const sep = document.createElement("span");
+      sep.className = "sep";
+      sep.textContent = " · ";
+      parts.push(sep);
+    }
+    const span = document.createElement("span");
+    if (seg.level) span.className = seg.level;
+    span.textContent = seg.text;
+    parts.push(span);
+  }
+  const key = segments.map((s) => `${s.level ?? ""}:${s.text}`).join("|");
+  if (target.dataset.key !== key) {
+    target.replaceChildren(...parts);
+    target.dataset.key = key;
+  }
+  return key;
+}
 
 export interface DecorationOptions {
   style: RingStyle;
@@ -58,6 +94,8 @@ export class Decoration {
   private readonly badge: HTMLSpanElement;
   private readonly badgeText: HTMLSpanElement;
   private readonly riskDot: HTMLElement;
+  private readonly more: HTMLSpanElement;
+  private readonly moreText: HTMLSpanElement;
   private madeRelative = false;
   private placedFor = "";
   private placedAt = 0;
@@ -78,22 +116,31 @@ export class Decoration {
     this.badgeText = document.createElement("span");
     this.riskDot = document.createElement("b");
     this.badge.append(this.badgeText);
-    this.badge.addEventListener("mouseenter", () => options.onHover(this.badge, true));
-    this.badge.addEventListener("mouseleave", () => options.onHover(this.badge, false));
-    root.append(style, this.ring, this.badge);
+    this.more = document.createElement("span");
+    this.more.className = "badge more gone";
+    this.more.append(document.createElement("i"));
+    this.moreText = document.createElement("span");
+    this.more.append(this.moreText);
+    for (const pill of [this.badge, this.more]) {
+      pill.addEventListener("mouseenter", () => options.onHover(pill, true));
+      pill.addEventListener("mouseleave", () => options.onHover(pill, false));
+    }
+    root.append(style, this.ring, this.badge, this.more);
   }
 
-  update(verdict: RowVerdict, style: RingStyle, calm: boolean): void {
+  update(verdict: RowVerdict, style: RingStyle, calm: boolean, pills: Pills): void {
     if (!verdict.ring) {
       this.remove();
       return;
     }
     this.ring.className = `ring ${verdict.ring} ${style}${calm ? " calm" : ""}`;
-    this.badge.className = `badge ${verdict.ring}`;
-    const text = verdict.badge ?? "";
-    const changed = this.badgeText.textContent !== text;
-    this.badgeText.textContent = text;
-    if (verdict.risky && verdict.ring !== "risk") this.badge.append(this.riskDot);
+    this.badge.className = `badge ${verdict.ring}${pills.main.length === 0 ? " dot" : ""}`;
+    this.more.className = `badge more ${verdict.ring}${pills.more?.length ? "" : " gone"}`;
+    const before = `${this.badgeText.dataset.key}/${this.moreText.dataset.key}`;
+    fill(this.badgeText, pills.main);
+    fill(this.moreText, pills.more ?? []);
+    const changed = before !== `${this.badgeText.dataset.key}/${this.moreText.dataset.key}`;
+    if (pills.riskDot && verdict.risky && verdict.ring !== "risk") this.badge.append(this.riskDot);
     else this.riskDot.remove();
     this.attach();
     if (changed) this.placedFor = "";
@@ -125,9 +172,10 @@ export class Decoration {
 
     const obstacles = obstaclesIn(this.row, this.host);
     const row = { w: rect.width, h: rect.height };
-    this.badge.classList.remove("dot");
+    const empty = this.badgeText.childElementCount === 0;
+    if (!empty) this.badge.classList.remove("dot");
     let spot = findSpot(row, obstacles, this.badge.offsetWidth, this.badge.offsetHeight);
-    if (!spot) {
+    if (!spot && !empty) {
       this.badge.classList.add("dot");
       spot = findSpot(row, obstacles, this.badge.offsetWidth, this.badge.offsetHeight);
     }
@@ -137,6 +185,24 @@ export class Decoration {
     this.badge.style.left = `${Math.round(x)}px`;
     this.badge.style.top = `${Math.round(y)}px`;
     this.badge.style.right = "auto";
+
+    // The second pill takes the next free patch, clear of the first; left out when none fits.
+    if (this.moreText.childElementCount === 0) return;
+    this.more.classList.remove("gone");
+    const first = {
+      x: x + this.row.clientLeft,
+      y: y + this.row.clientTop,
+      w: this.badge.offsetWidth,
+      h: this.badge.offsetHeight,
+    };
+    const next = findSpot(row, [...obstacles, first], this.more.offsetWidth, this.more.offsetHeight);
+    if (!next) {
+      this.more.classList.add("gone");
+      return;
+    }
+    this.more.style.left = `${Math.round(next.x - this.row.clientLeft)}px`;
+    this.more.style.top = `${Math.round(next.y - this.row.clientTop)}px`;
+    this.more.style.right = "auto";
   }
 
   attach(): void {

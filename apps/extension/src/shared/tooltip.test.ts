@@ -3,7 +3,16 @@ import { describe, expect, it } from "vitest";
 import { tooltipBody } from "../content/ui";
 import { DEFAULT_SETTINGS } from "./settings";
 import { token } from "./testToken";
-import { cleanTooltip, DEFAULT_TOOLTIP, needsMap, shownLines, TIP_LINES } from "./tooltip";
+import { pillSegments } from "./pill";
+import {
+  cleanTooltip,
+  DEFAULT_TOOLTIP,
+  needsMap,
+  pillParts,
+  pillsNeedMap,
+  shownLines,
+  TIP_LINES,
+} from "./tooltip";
 import type { OverlayBubbleTotals } from "./types";
 import { verdictFor } from "./verdict";
 
@@ -75,5 +84,23 @@ describe("tooltip lines", () => {
       "Tied to the dev",
       "Alerted at",
     ]);
+  });
+
+  it("builds the pills: the old one by default, and a second only when turned on", () => {
+    const t = token({ modelCalls: [call], liveMcapUsd: 6_000 });
+    const v = verdictFor(t, DEFAULT_SETTINGS);
+    const { main, more } = pillParts(DEFAULT_TOOLTIP);
+    expect(more).toBeNull();
+    expect(pillsNeedMap(DEFAULT_TOOLTIP)).toBe(false);
+    expect(pillSegments(main, t, v, DEFAULT_SETTINGS).map((s) => s.text)).toEqual(["Runner A", "41%"]);
+
+    const prefs = cleanTooltip({ second: { enabled: true }, pill: { on: { odds: false, change: true } } });
+    const parts = pillParts(prefs);
+    expect(pillSegments(parts.main, t, v, DEFAULT_SETTINGS).map((s) => s.text)).toEqual(["Runner A", "+50%"]);
+    expect(pillsNeedMap(prefs)).toBe(true);
+    const second = pillSegments(parts.more!, t, v, DEFAULT_SETTINGS, totals);
+    expect(second.map((s) => s.text)).toEqual(["+50%", "61h", "BNDL 2%", "LINK 14%", "KOLB 12%"]);
+    // Map parts wait for the totals rather than showing a blank.
+    expect(pillSegments(parts.more!, t, v, DEFAULT_SETTINGS).map((s) => s.text)).not.toContain("KOLB");
   });
 });

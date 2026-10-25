@@ -1,6 +1,14 @@
 import type { SiteAdapter } from "./adapters/adapter";
 import { Decoration, Tooltip, tooltipBody } from "./ui";
-import { DEFAULT_TOOLTIP, needsMap, shownLines, type TooltipPrefs } from "../shared/tooltip";
+import { pillSegments } from "../shared/pill";
+import {
+  DEFAULT_TOOLTIP,
+  needsMap,
+  pillParts,
+  pillsNeedMap,
+  shownLines,
+  type TooltipPrefs,
+} from "../shared/tooltip";
 import type { LookupAnswer, OverlayBubbleTotals, OverlaySettings, OverlayToken } from "../shared/types";
 import { verdictFor } from "../shared/verdict";
 
@@ -35,6 +43,7 @@ export class OverlayEngine {
   private readonly tokens = new Map<string, { at: number; token: OverlayToken | null }>();
   private readonly tooltip = new Tooltip();
   private readonly totals = new Map<string, { at: number; totals: OverlayBubbleTotals | null }>();
+  private readonly totalsAsked = new Set<string>();
   private tipPrefs: TooltipPrefs = DEFAULT_TOOLTIP;
   private mutation: MutationObserver | null = null;
   private intersection: IntersectionObserver | null = null;
@@ -89,6 +98,20 @@ export class OverlayEngine {
 
   applyTooltip(prefs: TooltipPrefs): void {
     this.tipPrefs = prefs;
+    for (const [row, state] of this.rows) this.draw(row, state);
+  }
+
+  /** A coin's map totals, read again once they're older than TOTALS_MS; its rows redraw on arrival. */
+  private loadTotals(mint: string): Promise<void> | null {
+    const cached = this.totals.get(mint);
+    if (!this.deps.totals || this.totalsAsked.has(mint)) return null;
+    if (cached && Date.now() - cached.at < TOTALS_MS) return null;
+    this.totalsAsked.add(mint);
+    return this.deps.totals(mint).then((totals) => {
+      this.totalsAsked.delete(mint);
+      this.totals.set(mint, { at: Date.now(), totals });
+      for (const [row, state] of this.rows) if (state.mint === mint) this.draw(row, state);
+    });
   }
 
   /** The tooltip for a hovered badge, redrawn once the coin's map totals arrive if it needs them. */
@@ -104,11 +127,8 @@ export class OverlayEngine {
       );
     };
     draw();
-    const cached = this.totals.get(mint);
-    if (!this.deps.totals || !needsMap(this.tipPrefs, this.settings)) return;
-    if (cached && Date.now() - cached.at < TOTALS_MS) return;
-    void this.deps.totals(mint).then((totals) => {
-      this.totals.set(mint, { at: Date.now(), totals });
+    if (!needsMap(this.tipPrefs, this.settings)) return;
+    void this.loadTotals(mint)?.then(() => {
       if (this.tooltip.showing(badge)) draw();
     });
   }
@@ -215,6 +235,13 @@ export class OverlayEngine {
         else this.tooltip.hide();
       },
     });
-    state.decoration.update(verdict, this.settings.style.ring, this.settings.style.calmMotion);
+    const { main, more } = pillParts(this.tipPrefs);
+    const totals = this.totals.get(state.mint!)?.totals;
+    if (pillsNeedMap(this.tipPrefs)) void this.loadTotals(state.mint!);
+    state.decoration.update(verdict, this.settings.style.ring, this.settings.style.calmMotion, {
+      main: pillSegments(main, token, verdict, this.settings, totals),
+      more: more && pillSegments(more, token, verdict, this.settings, totals),
+      riskDot: this.tipPrefs.riskDot,
+    });
   }
 }

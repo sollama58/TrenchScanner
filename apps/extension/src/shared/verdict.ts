@@ -24,7 +24,7 @@ export interface RowVerdict {
   risky: boolean;
 }
 
-function readFlag(id: FlagId, token: OverlayToken, threshold: number | null): FlagReading | null {
+export function readFlag(id: FlagId, token: OverlayToken, threshold: number | null): FlagReading | null {
   const value = token.stats?.[id];
   if (value === null || value === undefined) return null;
   const meta = FLAG_LABELS[id];
