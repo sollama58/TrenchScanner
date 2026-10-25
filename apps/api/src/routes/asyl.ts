@@ -31,7 +31,9 @@ import {
   LINKS_TOKENS_MAX,
   loadDeployers,
   LINKS_WALLETS_MAX,
-  loadCoTraders,
+  countCoTraders,
+  COTRADERS_ALL_MAX,
+  COTRADERS_MAX,
   loadStoredHolders,
   PAST_HOLDER_MIN_SOL,
   STORED_DAYS,
@@ -231,11 +233,11 @@ export async function registerAsylRoutes(
       const tracked = await trackedOf(request);
       const g = new GraphBuilder();
       g.node(wallet, "wallet");
-      const [, , seen, coTraders] = await Promise.all([
+      const [, , seen, { coTraders, total: coTradersTotal }] = await Promise.all([
         addFunding(g, wallet),
         addHolderTransfers(g, wallet),
         addCoins(g, wallet),
-        loadCoTraders(wallet),
+        countCoTraders(wallet),
         addSides(g, wallet, tracked),
       ]);
       addCoTraders(g, wallet, coTraders);
@@ -252,7 +254,7 @@ export async function registerAsylRoutes(
               : `Not seen in any coin TrenchScanner tracked in the last ${STORED_DAYS} days. Pro Mode reads a wallet like this from the chain.`,
       };
       reply.header("Cache-Control", "private, no-store");
-      return { focus: wallet, graph: await decorate(g, tracked), coverage };
+      return { focus: wallet, graph: await decorate(g, tracked), coverage, coTradersTotal };
     });
 
     /** The wallet modal's full read, for the side panel. Pro readers' reads of the chain are metered. */
@@ -273,15 +275,17 @@ export async function registerAsylRoutes(
       const p = walletParams.safeParse(request.params);
       if (!p.success) return bad(reply, p.error);
       const wallet = p.data.wallet;
+      // ?all=1: every co-trader up to COTRADERS_ALL_MAX, once the reader agreed to the count.
+      const all = (request.query as { all?: string } | undefined)?.all === "1";
       const tracked = await trackedOf(request);
-      const coTraders = await loadCoTraders(wallet);
+      const { coTraders, total } = await countCoTraders(wallet, all ? COTRADERS_ALL_MAX : COTRADERS_MAX);
       const coins = await loadSimilarCoins(wallet, coTraders);
       const g = new GraphBuilder();
       g.node(wallet, "wallet");
       addCoTraders(g, wallet, coTraders);
       for (const c of coins) g.node(c.mint, "token");
       const graph = await decorate(g, tracked);
-      return { focus: wallet, coTraders, coins, graph };
+      return { focus: wallet, coTraders, total, coins, graph };
     });
 
     /** A coin's holders as TrenchScanner last read them, and what ties them. */

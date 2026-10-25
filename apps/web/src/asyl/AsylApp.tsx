@@ -5,8 +5,15 @@ import { ShareImageDialog } from "../components/ShareImageDialog";
 import { asylApi, type AsylMe, type ChainRead, type Label, type MapDoc, type MapSummary } from "./asylApi";
 import { renderMapCard } from "./asylCard";
 import { AsylSignIn } from "./AsylSignIn";
-import { DrawEditor } from "./DrawEditor";
-import { GraphView, MapLegend, type DrawHandlers, type DrawTool, type GraphViewHandle } from "./GraphView";
+import { DrawEditor, PenBar } from "./DrawEditor";
+import {
+  GraphView,
+  MapLegend,
+  type DrawHandlers,
+  type DrawTool,
+  type GraphViewHandle,
+  type Pen,
+} from "./GraphView";
 import {
   EDGE_KINDS,
   EDGE_LABEL,
@@ -14,10 +21,13 @@ import {
   DRAW_COLOURS,
   NO_CUTOFFS,
   NO_DRAWINGS,
+  PEN_WIDTHS,
+  STROKES_MAX,
   TIMED_KINDS,
   addressIn,
   clearsCutoffs,
   cleanCutoffs,
+  cleanDrawings,
   edgeKey,
   graphCsv,
   mergeGraph,
@@ -33,6 +43,7 @@ import {
   type Drawings,
   type TimeLabels,
   newDrawingId,
+  thinStroke,
 } from "./graph";
 import { History, HISTORY_MAX } from "./history";
 import { Inspector, type InspectorActions } from "./Inspector";
@@ -149,6 +160,13 @@ export function AsylApp() {
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<{ text: string; tone: "info" | "error" } | null>(null);
+  // A question before a big read (user ask 2026-10-25: more than 20 co-traders loads on a yes).
+  const [ask, setAsk] = useState<{
+    text: string;
+    choices: { label: string; primary?: boolean; run: () => void }[];
+  } | null>(null);
+  // How many co-traders each wallet has in all, for the panel's "Load all".
+  const [coTraderTotals, setCoTraderTotals] = useState<Record<string, number>>({});
   const [query, setQuery] = useState("");
   const [labels, setLabels] = useState<Label[]>([]);
   const [maps, setMaps] = useState<MapSummary[]>([]);
@@ -160,8 +178,8 @@ export function AsylApp() {
   // The reader's own lines and text boxes (user ask 2026-10-24), the tool in hand, and the one picked.
   const [drawings, setDrawings] = useState<Drawings>(NO_DRAWINGS);
   const [tool, setTool] = useState<DrawTool>(null);
-  // Grid mode (user ask 2026-10-24): on for every new map; a saved map keeps its own choice.
-  const [grid, setGrid] = useState(true);
+  // Grid mode (user ask 2026-10-24): off for every new map (user ask 2026-10-25); a saved map keeps its own choice.
+  const [grid, setGrid] = useState(false);
   // Bumped when a map is opened or started, so the view lays it out from scratch.
   const [epoch, setEpoch] = useState(0);
   // Counts maps opened, so a slow refresh of one doesn't land on the next.
@@ -254,7 +272,8 @@ export function AsylApp() {
     if (
       drawingSel &&
       !s.drawings.lines.some((l) => l.id === drawingSel) &&
-      !s.drawings.texts.some((t) => t.id === drawingSel)
+      !s.drawings.texts.some((t) => t.id === drawingSel) &&
+      !s.drawings.strokes.some((t) => t.id === drawingSel)
     )
       setDrawingSel(null);
     const lay = layout.current;
@@ -317,6 +336,7 @@ export function AsylApp() {
       run("Mapping the wallet…", async () => {
         const r = await asylApi.wallet(wallet);
         add(r.graph);
+        if (r.coTradersTotal !== undefined) setCoTraderTotals((t) => ({ ...t, [wallet]: r.coTradersTotal! }));
         setFocus(wallet);
         setSelected(wallet);
         if (!current) go({ kind: "wallet", address: wallet });
@@ -391,7 +411,7 @@ export function AsylApp() {
         setMapNote(m.doc.note);
         setRemoved(new Set(m.doc.removed ?? []));
         setCut(new Set(m.doc.cut ?? []));
-        setDrawings(m.doc.drawings ?? NO_DRAWINGS);
+        setDrawings(cleanDrawings(m.doc.drawings));
         setDrawingSel(null);
         if (m.doc.cutoffs) setCutoffs(cleanCutoffs(m.doc.cutoffs));
         setHiddenKinds(new Set(EDGE_KINDS.filter((k) => m.doc.hidden.includes(k))));
@@ -443,7 +463,7 @@ export function AsylApp() {
       return;
     layout.current = newLayout();
     openSeq.current += 1;
-    setGrid(true);
+    setGrid(false);
     setEpoch((n) => n + 1);
     setGraph(EMPTY);
     setNotes({});
@@ -527,6 +547,7 @@ export function AsylApp() {
           (l) => graph.nodes.some((n) => n.id === l.a) && graph.nodes.some((n) => n.id === l.b),
         ),
         texts: drawings.texts,
+        strokes: drawings.strokes,
       },
       focus,
     };
@@ -592,14 +613,52 @@ export function AsylApp() {
     similar: (wallet) =>
       void run("Finding wallets that trade like it…", async () => {
         const r = await asylApi.similar(wallet);
-        add(r.graph);
-        const of = r.coTraders[0]?.of;
-        return r.coTraders.length
-          ? `${r.coTraders.length} wallet${r.coTraders.length === 1 ? "" : "s"} bought 5 or more of its ${of ?? ""} latest coins within 3 minutes of it.`.replace(
-              "  ",
-              " ",
-            )
-          : "No wallet bought 5 or more of its latest coins within 3 minutes of it.";
+        const total = r.total ?? r.coTraders.length;
+        setCoTraderTotals((t) => ({ ...t, [wallet]: total }));
+        const said = (read: typeof r) => {
+          const n = read.coTraders.length;
+          const of = read.coTraders[0]?.of;
+          return n
+            ? `${n} wallet${n === 1 ? "" : "s"} bought 5 or more of its ${of ?? ""} latest coins within 3 minutes of it.`.replace(
+                "  ",
+                " ",
+              )
+            : "No wallet bought 5 or more of its latest coins within 3 minutes of it.";
+        };
+        if (total <= r.coTraders.length) {
+          add(r.graph);
+          return said(r);
+        }
+        // More than the first 20: the reader says whether the map takes them all.
+        const onMap = new Set(graph.nodes.map((n) => n.id));
+        setAsk({
+          text: `${total} wallets bought together with this one. Loading all of them adds up to ${total} bubbles to the map${
+            onMap.size ? `, which has ${onMap.size} now` : ""
+          }. A map that big can be slow and hard to read.`,
+          choices: [
+            {
+              label: `Load all ${total}`,
+              primary: true,
+              run: () =>
+                void run(`Loading all ${total} wallets that trade like it…`, async () => {
+                  const all = await asylApi.similar(wallet, true);
+                  add(all.graph);
+                  return said(all);
+                }),
+            },
+            {
+              label: `Just the top ${r.coTraders.length}`,
+              run: () => {
+                add(r.graph);
+                setStatus({
+                  text: `${said(r)} These are the ${r.coTraders.length} with the most coins in common, of ${total}.`,
+                  tone: "info",
+                });
+              },
+            },
+            { label: "Cancel", run: () => undefined },
+          ],
+        });
       }),
     flows: (wallet) =>
       void run("Reading its transfers from the chain…", async () => {
@@ -758,7 +817,9 @@ export function AsylApp() {
   };
 
   /** Drawing on the map: each change is an undo step. */
-  const drawColour = useRef<(typeof DRAW_COLOURS)[number]>(DRAW_COLOURS[0]);
+  const drawColour = useRef<string>(DRAW_COLOURS[0]);
+  // The pen (user ask 2026-10-25): its colour and thickness, kept for the next stroke.
+  const [pen, setPen] = useState<Pen>({ colour: DRAW_COLOURS[1], width: PEN_WIDTHS[1] });
   const draw: DrawHandlers = {
     addLine: (a, b) => {
       record();
@@ -778,6 +839,23 @@ export function AsylApp() {
       setTool(null);
       setDirty(true);
     },
+    addStroke: (points, width) => {
+      if (drawings.strokes.length >= STROKES_MAX) {
+        setStatus({
+          tone: "info",
+          text: `A map keeps up to ${STROKES_MAX} pen strokes. Delete some to draw more.`,
+        });
+        return;
+      }
+      record();
+      const id = newDrawingId();
+      const kept = thinStroke(points.map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10]));
+      setDrawings((d) => ({
+        ...d,
+        strokes: [...d.strokes, { id, points: kept, colour: pen.colour, width }],
+      }));
+      setDirty(true);
+    },
     select: (id) => {
       setDrawingSel(id);
       if (id) setSelected(null);
@@ -790,16 +868,26 @@ export function AsylApp() {
     setDrawings((d) => ({
       lines: d.lines.filter((l) => l.id !== id),
       texts: d.texts.filter((t) => t.id !== id),
+      strokes: d.strokes.filter((t) => t.id !== id),
     }));
     setDrawingSel(null);
     setDirty(true);
   };
   const editDrawing = (
     id: string,
-    patch: { label?: string; text?: string; colour?: (typeof DRAW_COLOURS)[number] },
+    patch: { label?: string; text?: string; colour?: string; width?: number },
   ) => {
     if (patch.colour) drawColour.current = patch.colour;
     setDrawings((d) => ({
+      strokes: d.strokes.map((st) =>
+        st.id === id
+          ? {
+              ...st,
+              ...(patch.colour ? { colour: patch.colour } : {}),
+              ...(patch.width ? { width: patch.width } : {}),
+            }
+          : st,
+      ),
       lines: d.lines.map((l) =>
         l.id === id
           ? {
@@ -823,6 +911,8 @@ export function AsylApp() {
   };
   const pickedLine = drawingSel ? drawings.lines.find((l) => l.id === drawingSel) : undefined;
   const pickedText = drawingSel ? drawings.texts.find((t) => t.id === drawingSel) : undefined;
+  const pickedStroke = drawingSel ? drawings.strokes.find((t) => t.id === drawingSel) : undefined;
+  const viewK = () => view.current?.view().k ?? 1;
 
   // The latest state, for the one key listener.
   const onKey = useRef<(e: KeyboardEvent) => void>(() => undefined);
@@ -1261,6 +1351,18 @@ export function AsylApp() {
               >
                 T Text
               </button>
+              <button
+                className={`asyl-btn ghost${tool === "pen" ? " on" : ""}`}
+                disabled={graph.nodes.length === 0}
+                aria-pressed={tool === "pen"}
+                title="Draw freehand on the map, in the colour and thickness you pick"
+                onClick={() => {
+                  setDrawingSel(null);
+                  setTool((t) => (t === "pen" ? null : "pen"));
+                }}
+              >
+                ✎ Draw
+              </button>
             </span>
             <button
               className={`asyl-btn ghost${grid ? " on" : ""}`}
@@ -1325,6 +1427,7 @@ export function AsylApp() {
             <button
               className="asyl-btn ghost"
               disabled={graph.nodes.length === 0}
+              title="A picture of the map as you see it now, with the legend and Asyl's brand"
               onClick={() => setSharing(true)}
             >
               Image
@@ -1387,6 +1490,7 @@ export function AsylApp() {
               tool={tool}
               drawingSelected={drawingSel}
               onDraw={draw}
+              pen={pen}
               timeLabels={timeLabels}
               onMoved={() => setDirty(true)}
               layoutKey={layoutKey}
@@ -1395,12 +1499,42 @@ export function AsylApp() {
           )}
           {shown.edges.length > 0 && <MapLegend graph={shown} />}
 
-          {tool && !pickedLine && !pickedText && (
+          {tool === "pen" && (
+            <PenBar
+              colour={pen.colour}
+              width={pen.width}
+              onColour={(colour) => setPen((p) => ({ ...p, colour }))}
+              onWidth={(width) => setPen((p) => ({ ...p, width }))}
+              onDone={() => setTool(null)}
+            />
+          )}
+          {tool && tool !== "pen" && !pickedLine && !pickedText && (
             <div className="asyl-draw-hint" role="status">
               {tool === "line"
                 ? "Click a bubble, then the one to join it to · Esc to stop"
                 : "Click where the text box goes · Esc to stop"}
             </div>
+          )}
+          {pickedStroke && tool !== "pen" && (
+            <DrawEditor
+              key={drawingSel}
+              kind="stroke"
+              value=""
+              colour={pickedStroke.colour}
+              width={pickedStroke.width * viewK()}
+              onStartEdit={record}
+              onChange={() => undefined}
+              onColour={(c) => {
+                record();
+                editDrawing(pickedStroke.id, { colour: c });
+              }}
+              onWidth={(w) => {
+                record();
+                editDrawing(pickedStroke.id, { width: w / viewK() });
+              }}
+              onDelete={() => deleteDrawing(pickedStroke.id)}
+              onDone={() => setDrawingSel(null)}
+            />
           )}
           {(pickedLine || pickedText) && (
             <DrawEditor
@@ -1417,6 +1551,25 @@ export function AsylApp() {
               onDelete={() => deleteDrawing(drawingSel!)}
               onDone={() => setDrawingSel(null)}
             />
+          )}
+          {ask && (
+            <div className="asyl-ask" role="alertdialog" aria-label="Before loading">
+              <p>{ask.text}</p>
+              <div className="asyl-actions">
+                {ask.choices.map((c) => (
+                  <button
+                    key={c.label}
+                    className={`asyl-btn${c.primary ? " primary" : ""}`}
+                    onClick={() => {
+                      setAsk(null);
+                      c.run();
+                    }}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
           {keysOpen && (
             <div className="asyl-keys" role="dialog" aria-label="Keyboard shortcuts">
@@ -1458,6 +1611,7 @@ export function AsylApp() {
             me={session}
             busy={busy}
             note={notes[selectedNode.id] ?? ""}
+            coTraderTotal={coTraderTotals[selectedNode.id]}
             actions={actions}
             onClose={() => setSelected(null)}
           />
@@ -1486,8 +1640,11 @@ export function AsylApp() {
                   (l) => shown.nodes.some((n) => n.id === l.a) && shown.nodes.some((n) => n.id === l.b),
                 ),
                 texts: drawings.texts,
+                strokes: drawings.strokes,
               },
               timeLabels,
+              // What is on screen now (user ask 2026-10-25), as a screenshot of the map.
+              view: view.current ? { ...view.current.view(), ...view.current.size() } : undefined,
               onNote: setCardNote,
             })
           }

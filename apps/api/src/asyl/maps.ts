@@ -81,7 +81,7 @@ const cutoffsSchema = z.object({
   first: z.union([z.literal(0), z.literal(1), z.literal(2)]).default(0),
 });
 
-/** What the reader drew on the map: their own labelled lines between two bubbles, and text boxes. */
+/** What the reader drew on the map: labelled lines between two bubbles, text boxes, and pen strokes. */
 const drawColour = z.string().regex(/^#[0-9a-f]{6}$/);
 const drawingsSchema = z.object({
   lines: z
@@ -107,6 +107,21 @@ const drawingsSchema = z.object({
       }),
     )
     .max(100)
+    .default([]),
+  /** Freehand pen strokes (user ask 2026-10-25), in map units, as the web's thinStroke keeps them. */
+  strokes: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(16),
+        points: z
+          .array(z.tuple([finite, finite]))
+          .min(1)
+          .max(500),
+        colour: drawColour,
+        width: finite.min(0.05).max(400),
+      }),
+    )
+    .max(200)
     .default([]),
 });
 

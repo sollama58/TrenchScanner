@@ -13,6 +13,11 @@ import {
   visibleGraph,
   withDeployLines,
   type AsylGraph,
+  NO_DRAWINGS,
+  STROKE_POINTS_MAX,
+  cleanDrawings,
+  strokePath,
+  thinStroke,
 } from "./graph";
 import { bounds, newLayout, placeNew, settle } from "./layout";
 
@@ -234,5 +239,29 @@ describe("edgeTimeLabel", () => {
   });
   it("is null without a time", () => {
     expect(edgeTimeLabel(null, 40, now)).toBeNull();
+  });
+});
+
+describe("pen strokes", () => {
+  it("draws a smooth path, and a dot for one point", () => {
+    expect(strokePath([[0, 0]])).toBe("M0 0 l0.01 0");
+    expect(
+      strokePath([
+        [0, 0],
+        [10, 0],
+        [20, 10],
+      ]),
+    ).toBe("M0 0 Q10 0 15 5 L20 10");
+  });
+  it("thins a long stroke to what a map keeps, keeping its ends", () => {
+    const pts: [number, number][] = Array.from({ length: 2000 }, (_, i) => [i, Math.sin(i / 50) * 40]);
+    const kept = thinStroke(pts);
+    expect(kept.length).toBeLessThanOrEqual(STROKE_POINTS_MAX);
+    expect(kept[0]).toEqual(pts[0]);
+    expect(kept[kept.length - 1]).toEqual(pts[pts.length - 1]);
+  });
+  it("reads drawings saved before the pen", () => {
+    expect(cleanDrawings({ lines: [], texts: [] })).toEqual({ lines: [], texts: [], strokes: [] });
+    expect(cleanDrawings(undefined)).toEqual(NO_DRAWINGS);
   });
 });

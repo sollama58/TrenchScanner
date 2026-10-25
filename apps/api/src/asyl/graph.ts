@@ -45,6 +45,8 @@ export const COTRADE_WINDOW_MS = 3 * 60_000;
 /** Coins two wallets must have bought within the window of each other (user decision 2026-10-25). */
 export const COTRADE_MIN_SHARED = 5;
 export const COTRADERS_MAX = 20;
+/** The most "Load all" draws (user ask 2026-10-25: past 20 after the reader agrees). */
+export const COTRADERS_ALL_MAX = 500;
 /** Sides of a KOL or a labeled wallet, drawn at most. */
 export const SIDES_MAX = 24;
 /** Holders drawn on a coin's map: its top 50, as BubbleMapHolders keeps them. */
@@ -329,6 +331,14 @@ export interface CoTrader {
  * partial index on (tokenId, firstBuyAt) the side jobs use.
  */
 export async function loadCoTraders(wallet: string, limit = COTRADERS_MAX): Promise<CoTrader[]> {
+  return (await countCoTraders(wallet, limit)).coTraders;
+}
+
+/** The co-traders, up to `limit`, and how many there are in all (up to COTRADERS_ALL_MAX). */
+export async function countCoTraders(
+  wallet: string,
+  limit = COTRADERS_MAX,
+): Promise<{ coTraders: CoTrader[]; total: number }> {
   const windowSec = COTRADE_WINDOW_MS / 1000;
   const rows = await prisma.$queryRaw<
     { wallet: string; shared: number; of: number; lead: number; gap: number }[]
@@ -351,7 +361,7 @@ export async function loadCoTraders(wallet: string, limit = COTRADERS_MAX): Prom
      GROUP BY o."wallet"
     HAVING COUNT(DISTINCT o."tokenId") >= ${COTRADE_MIN_SHARED}
      ORDER BY shared DESC, o."wallet"
-     LIMIT ${limit * 2}`;
+     LIMIT ${Math.max(limit, COTRADERS_ALL_MAX) * 2}`;
   const bots = new Set(
     (
       await prisma.sideWalletBot.findMany({
@@ -360,16 +370,17 @@ export async function loadCoTraders(wallet: string, limit = COTRADERS_MAX): Prom
       })
     ).map((b) => b.wallet),
   );
-  return rows
+  const kept = rows
     .filter((r) => !bots.has(r.wallet) && !MARKED_BOT_WALLETS.has(r.wallet) && !isServiceWallet(r.wallet))
-    .slice(0, limit)
-    .map((r) => ({
-      wallet: r.wallet,
-      shared: r.shared,
-      of: r.of,
-      medianLeadSec: Math.round(r.lead),
-      medianGapSec: Math.round(r.gap),
-    }));
+    .slice(0, Math.max(limit, COTRADERS_ALL_MAX));
+  const coTraders = kept.slice(0, limit).map((r) => ({
+    wallet: r.wallet,
+    shared: r.shared,
+    of: r.of,
+    medianLeadSec: Math.round(r.lead),
+    medianGapSec: Math.round(r.gap),
+  }));
+  return { coTraders, total: kept.length };
 }
 
 /** Seconds as the map says them: "42s", "2m 5s". */
