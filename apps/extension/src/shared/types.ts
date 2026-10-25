@@ -150,6 +150,8 @@ export type PanelRequest =
   | { type: "status" }
   | { type: "feed" }
   | { type: "bubble"; mint: string }
+  /** Held until an open map's coin has a new reading (shared/follow.ts). */
+  | { type: "bubbleWait"; mint: string }
   | { type: "buddy"; cached?: boolean }
   | { type: "disconnect" }
   | { type: "saveSettings"; settings: OverlaySettings }
@@ -202,6 +204,8 @@ export type ContentRequest =
   | { type: "alerts" }
   /** The bubble map of the coin whose page is open (only while the map tab is on). */
   | { type: "map"; mint: string }
+  /** Held until that coin has a new reading, while its map is open (shared/follow.ts). */
+  | { type: "mapWait"; mint: string }
   | { type: "health"; site: Site; rows: number; mints: number; paused: boolean };
 
 export interface LookupAnswer {

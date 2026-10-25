@@ -1,5 +1,6 @@
 import panelCss from "../../static/panel.css";
 import { bubbleMapView } from "../panel/bubble";
+import { followMap, type WaitAnswer } from "../shared/follow";
 import { colorsOf, type TooltipPrefs } from "../shared/tooltip";
 import type { BubbleAnswer, Site } from "../shared/types";
 import { findTabStrip, isTokenPage, pageMint } from "./tokenPage";
@@ -11,7 +12,10 @@ import { findTabStrip, isTokenPage, pageMint } from "./tokenPage";
  * corner. Everything sits in closed shadow roots and is written with DOM calls only.
  */
 
-/** An open map is read again this often, as the side panel re-reads one. */
+/**
+ * An open map is read again this often while the page shows, as the side panel re-reads one. A new
+ * reading the scanner announces is read at once (followMap).
+ */
 const REFRESH_MS = 30_000;
 
 const TAB_CSS = `
@@ -50,6 +54,7 @@ export class MapTab {
   private frame = 0;
   private urlTimer: number | undefined;
   private refreshTimer: number | undefined;
+  private unfollow: (() => void) | null = null;
   private mint: string | null = null;
   private strip: Element | null = null;
   private open = false;
@@ -59,6 +64,8 @@ export class MapTab {
     private readonly site: Site,
     private readonly ask: (mint: string) => Promise<BubbleAnswer | null>,
     private prefs: TooltipPrefs,
+    /** Held until the coin has a new reading (shared/follow.ts). */
+    private readonly waitFor: (mint: string) => Promise<WaitAnswer> = async () => null,
   ) {
     const tabRoot = this.tabHost.attachShadow({ mode: "closed" });
     const tabStyle = document.createElement("style");
@@ -131,7 +138,10 @@ export class MapTab {
     if (mint !== this.mint) {
       this.mint = mint;
       this.readAt = 0;
-      if (this.open) void this.load();
+      if (this.open) {
+        void this.load();
+        this.follow();
+      }
     }
     if (!mint) {
       this.setOpen(false);
@@ -158,6 +168,8 @@ export class MapTab {
     this.open = open;
     this.tabButton.classList.toggle("on", open);
     window.clearInterval(this.refreshTimer);
+    this.unfollow?.();
+    this.unfollow = null;
     if (!open) {
       this.mapHost.remove();
       document.removeEventListener("keydown", this.onKey);
@@ -171,7 +183,24 @@ export class MapTab {
     window.addEventListener("scroll", this.onMove, { capture: true, passive: true });
     this.place();
     void this.load();
-    this.refreshTimer = window.setInterval(() => void this.load(), REFRESH_MS);
+    this.refreshTimer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void this.load();
+    }, REFRESH_MS);
+    this.follow();
+  }
+
+  /** While the map is open, the open coin's next reading is read the moment it is written. */
+  private follow(): void {
+    this.unfollow?.();
+    const mint = this.mint;
+    this.unfollow = mint
+      ? followMap(
+          () => this.waitFor(mint),
+          () => {
+            if (mint === this.mint && this.open) void this.load();
+          },
+        )
+      : null;
   }
 
   private readonly onKey = (e: KeyboardEvent) => {

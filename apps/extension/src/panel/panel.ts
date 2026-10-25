@@ -27,6 +27,7 @@ import {
   type TooltipPrefs,
 } from "../shared/tooltip";
 import { verdictFor } from "../shared/verdict";
+import { followMap, type WaitAnswer } from "../shared/follow";
 import { bubbleMapView } from "./bubble";
 import { buddyCard } from "./buddy";
 import { SITE_NAMES, tokenCard } from "./card";
@@ -48,7 +49,10 @@ function connectUrl(): string {
 const POLL_MS = 5_000;
 /** How often Trade Buddy's coins are re-read while it shows (the API reuses an answer for 8 s). */
 const BUDDY_POLL_MS = 5_000;
-/** How often an open bubble map is re-read (the site's token view reads its maps every 30 s). */
+/**
+ * How often an open bubble map is re-read when no new reading was announced (the site's token view
+ * reads its maps every 30 s). An announced one is read at once (followMap).
+ */
 const MAP_POLL_MS = 30_000;
 
 const app = document.getElementById("app")!;
@@ -77,7 +81,16 @@ const openTrades = new Set<string>();
  * Each coin's map, kept across redraws: the lists are rebuilt every poll, and the same node is put
  * back in the new card, so a map doesn't flicker or lose its place while it is re-read.
  */
-const maps = new Map<string, { node: HTMLElement; readAt: number; loading: boolean }>();
+interface ShownMap {
+  node: HTMLElement;
+  readAt: number;
+  loading: boolean;
+  /** A new reading was announced while a read was in flight: read again once it lands. */
+  again: boolean;
+  /** Stops following the coin's readings (followMap). */
+  unfollow: () => void;
+}
+const maps = new Map<string, ShownMap>();
 
 function mapSlot(mint: string): HTMLElement {
   let entry = maps.get(mint);
@@ -87,8 +100,24 @@ function mapSlot(mint: string): HTMLElement {
       { className: "map-slot" },
       el("p", { className: "note", textContent: "Reading the bubble map…" }),
     );
-    entry = { node, readAt: 0, loading: false };
-    maps.set(mint, entry);
+    const shown: ShownMap = {
+      node,
+      readAt: 0,
+      loading: false,
+      again: false,
+      unfollow: () => undefined,
+    };
+    maps.set(mint, shown);
+    // While it shows, a new reading of the coin is read at once (user ask 2026-10-25).
+    shown.unfollow = followMap(
+      () => send<WaitAnswer>({ type: "bubbleWait", mint }),
+      () => {
+        shown.readAt = 0;
+        if (shown.loading) shown.again = true;
+        else void loadMap(mint);
+      },
+    );
+    entry = shown;
   }
   void loadMap(mint);
   return entry.node;
@@ -118,11 +147,21 @@ async function loadMap(mint: string): Promise<void> {
   } finally {
     entry.loading = false;
   }
+  // A reading announced while this read was in flight: read it too.
+  if (entry.again && maps.get(mint) === entry) {
+    entry.again = false;
+    entry.readAt = 0;
+    void loadMap(mint);
+  }
 }
 
 /** Drops the maps no longer shown, so a closed one is read fresh when opened again. */
 function pruneMaps(shown: ReadonlySet<string>): void {
-  for (const mint of maps.keys()) if (!shown.has(mint)) maps.delete(mint);
+  for (const [mint, entry] of maps) {
+    if (shown.has(mint)) continue;
+    entry.unfollow();
+    maps.delete(mint);
+  }
 }
 
 /** The card's "Bubble map" switch, and the map under the card while it is open. */
@@ -468,7 +507,7 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
     feed = null;
     buddy = null;
     seen = null;
-    maps.clear();
+    pruneMaps(new Set());
     void refresh();
   });
   parts.push(
@@ -813,9 +852,12 @@ function colorSection(): HTMLElement {
 
 function draw(): void {
   if (!status?.connected) {
+    pruneMaps(new Set());
     renderDisconnected();
     return;
   }
+  // Settings shows no map: none stays followed behind it.
+  if (view === "settings") pruneMaps(new Set());
   // Either answer may be the first to see a refused key.
   const refused = status.problem === "refused" || feed?.problem === "refused";
   account.textContent = refused ? "Reconnect needed" : `Connected · ${status.wallet ?? ""}`;
@@ -883,7 +925,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender) => {
     feed = null;
     buddy = null;
     seen = null;
-    maps.clear();
+    pruneMaps(new Set());
     void refresh();
   }
 });

@@ -3,9 +3,9 @@ import "../bootstrap-env.js";
 import { createHash, randomBytes } from "node:crypto";
 import bs58 from "bs58";
 import { AccessSource } from "@prisma/client";
-import { loadEnv, prisma, type Env } from "@trenchscanner/core";
+import { loadEnv, notifyHolderReadingWritten, prisma, type Env } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
 import {
@@ -386,6 +386,45 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     expect((await ext(key, "GET", `/ext/v1/bubble/${lookedUp}`)).statusCode).toBe(404);
     expect((await ext(key, "GET", "/ext/v1/bubble/not-a-mint")).statusCode).toBe(400);
   });
+
+  it("keeps an open map's coin viewed and answers its wait when a reading is written", async () => {
+    const user = await makeUser("bubble-live", true);
+    const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    const open = mint();
+    mints.push(open);
+    const token = await prisma.token.create({ data: { mintAddress: open, symbol: "LIVE" } });
+    await prisma.tokenSnapshot.create({
+      data: { tokenId: token.id, priceUsd: 0.00001, marketCapUsd: 9_000 },
+    });
+
+    expect((await ext(key, "GET", `/ext/v1/bubble/${open}`)).statusCode).toBe(200);
+    // Stamped as viewed (written in the background), so the scan keeps reading it out of band.
+    await vi.waitFor(
+      async () => {
+        const row = await prisma.token.findUniqueOrThrow({ where: { id: token.id } });
+        expect(row.lastViewedAt).not.toBeNull();
+      },
+      { timeout: 12_000, interval: 250 },
+    );
+
+    expect((await ext(key, "GET", "/ext/v1/bubble/not-a-mint/wait")).statusCode).toBe(400);
+    let answered = false;
+    const waiting = ext(key, "GET", `/ext/v1/bubble/${open}/wait`).then((res) => {
+      answered = true;
+      return res;
+    });
+    // Announced until the API's LISTEN connection hears one.
+    await vi.waitFor(
+      async () => {
+        await notifyHolderReadingWritten(open);
+        expect(answered).toBe(true);
+      },
+      { timeout: 15_000, interval: 300 },
+    );
+    const res = await waiting;
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ changed: true, pushed: true });
+  }, 40_000);
 
   it("lists the wallet's own coins for Trade Buddy, with their PnL and card", async () => {
     const user = await makeUser("buddy", true);

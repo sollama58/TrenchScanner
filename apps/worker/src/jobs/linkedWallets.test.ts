@@ -392,8 +392,11 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
 
     // Called a minute before the read: kept as the map at the alert, once.
     const calledAt = new Map([[mint, reading!.readAt.getTime() - 60_000]]);
-    expect(await storeWideMapReadings([reading!], calledAt)).toBe(1);
-    expect(await storeWideMapReadings([reading!], calledAt)).toBe(0);
+    const written: string[] = [];
+    expect(await storeWideMapReadings([reading!], calledAt, (m) => written.push(m))).toBe(1);
+    // Unchanged: not written, so not announced.
+    expect(await storeWideMapReadings([reading!], calledAt, (m) => written.push(m))).toBe(0);
+    expect(written).toEqual([reading!.mintAddress]);
     const row = await prisma.bubbleMapHolders.findUnique({ where: { mintAddress: mint } });
     expect(row).toMatchObject({ holdersRead: 30, knownExtra: 1 });
     const kept = await prisma.bubbleMapAtAlert.findUnique({ where: { mintAddress: mint } });

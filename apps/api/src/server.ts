@@ -834,7 +834,14 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // the extension's Trade Buddy, one follower for both.
   const proTrades = createProTrades({ env, dexScreener, viewStamps });
   app.addHook("onClose", async () => proTrades.stop());
-  await app.register(registerExtensionRoutes, { prefix: "/ext/v1", env, proTrades, holderStamps });
+  await app.register(registerExtensionRoutes, {
+    prefix: "/ext/v1",
+    env,
+    proTrades,
+    holderStamps,
+    viewStamps,
+    holderWrites: matchStream,
+  });
   // Telegram alerts: link codes and chats for the signed-in account, and the bot's webhook.
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env, liveRefresher });
   // The trading bot (admin-only; nothing is registered without TRADING_BOT_ENABLED).

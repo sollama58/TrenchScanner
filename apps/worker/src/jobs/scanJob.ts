@@ -2330,7 +2330,13 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   if (linkedLookups && wideMints.size > 0) {
     const transfersOf = new Map([...transfersByMint].map(([mint, r]) => [mint, r?.transfers] as const));
     void wideMapReadings(linkedGroups, linkedLookups, wideMints, transfersOf)
-      .then(storeWideMapReadings)
+      // A watched coin's new top 50 is announced like its holder reading, so the open maps (the
+      // site's and the extension's) redraw it now instead of on their next poll.
+      .then((readings) =>
+        storeWideMapReadings(readings, undefined, (mint) => {
+          if (watchedHolderRewriteMs(mint) !== undefined) void notifyHolderReadingWritten(mint);
+        }),
+      )
       .catch((err: unknown) => logger.warn("bubble map top-50 reading failed", { error: String(err) }));
   }
   lap("linkedWallets");

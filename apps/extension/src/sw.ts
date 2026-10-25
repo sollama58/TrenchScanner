@@ -129,6 +129,25 @@ async function feed(): Promise<FeedAnswer> {
   return { tokens: lastTokens, problem };
 }
 
+/**
+ * Held until an open map's coin has a new reading (shared/follow.ts), or null when the ask failed.
+ * A new reading drops the coin's cached map and totals, so the read that follows gets it.
+ */
+async function bubbleWait(mint: unknown): Promise<{ changed: boolean; pushed: boolean } | null> {
+  const { key, refused } = await stored();
+  if (!key || refused || typeof mint !== "string" || !isMintAddress(mint)) return null;
+  try {
+    const answer = await api.bubbleWait(key, mint);
+    if (answer.changed) {
+      pageMaps.delete(mint);
+      totalsCache.delete(mint);
+    }
+    return answer;
+  } catch {
+    return null;
+  }
+}
+
 /** A coin's latest bubble map. Only a valid mint is asked for, so nothing else reaches the URL. */
 async function bubble(mint: unknown): Promise<BubbleAnswer> {
   const { key } = await stored();
@@ -221,6 +240,8 @@ async function handle(request: PanelRequest): Promise<unknown> {
       return feed();
     case "bubble":
       return bubble(request.mint);
+    case "bubbleWait":
+      return bubbleWait(request.mint);
     case "buddy":
       return buddy(request.cached === true);
     case "disconnect":
@@ -288,6 +309,10 @@ async function handleContent(request: ContentRequest, tabId: number | undefined)
       }
       return answer;
     }
+    case "mapWait":
+      // Only while the map tab is on, as "map" asks.
+      if (!(await tooltipPrefs()).mapTab.enabled) return null;
+      return bubbleWait(request.mint);
     case "totals": {
       // Only a coin already in the reader's alerts, so a page can't send other addresses out.
       if (!lastTokens.some((t) => t.mint === request.mint)) return null;

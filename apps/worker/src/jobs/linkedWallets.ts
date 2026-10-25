@@ -1168,11 +1168,13 @@ async function freezeAtAlert(r: WideMapReading, calledAtMs: number | undefined):
 /**
  * Saves the wider readings (BubbleMapHolders), one row a mint, skipping any unchanged since the
  * last save, and keeps each coin's first one near its call as its map at the alert (freezeAtAlert).
- * `calledAt`: each mint's first call (ms epoch), wideMapMints' by default.
+ * `calledAt`: each mint's first call (ms epoch), wideMapMints' by default. `onWritten` hears each
+ * mint whose row was written (the scan announces a watched coin's, so its open maps redraw).
  */
 export async function storeWideMapReadings(
   readings: readonly WideMapReading[],
   calledAt: ReadonlyMap<string, number> = alertedMints?.calledAt ?? new Map(),
+  onWritten?: (mint: string) => void,
 ): Promise<number> {
   let written = 0;
   for (const r of readings) {
@@ -1213,6 +1215,7 @@ export async function storeWideMapReadings(
       storedWide.delete(r.mintAddress);
       storedWide.set(r.mintAddress, key);
       written += 1;
+      onWritten?.(r.mintAddress);
     } catch (err) {
       logger.warn("failed to store a bubble map reading", { mint: r.mintAddress, error: String(err) });
     }
