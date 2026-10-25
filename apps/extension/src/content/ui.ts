@@ -398,9 +398,11 @@ export class Tooltip {
     this.root.append(style);
     this.host.addEventListener("mouseenter", () => window.clearTimeout(this.hideTimer));
     this.host.addEventListener("mouseleave", () => this.hide());
-    document.addEventListener("keydown", (e) => e.key === "Escape" && this.hideNow());
-    window.addEventListener("scroll", () => this.hideNow(), { capture: true, passive: true });
   }
+
+  // Listened for only while the tooltip shows (audit 2026-10-25): no key listener sits on the page otherwise.
+  private readonly onKey = (e: KeyboardEvent) => e.key === "Escape" && this.hideNow();
+  private readonly onScroll = () => this.hideNow();
 
   /** The tooltip is up beside this badge (a late read redraws it only then). */
   showing(anchor: Element): boolean {
@@ -410,6 +412,8 @@ export class Tooltip {
   show(anchor: Element, body: HTMLElement): void {
     window.clearTimeout(this.hideTimer);
     this.anchor = anchor;
+    document.addEventListener("keydown", this.onKey);
+    window.addEventListener("scroll", this.onScroll, { capture: true, passive: true });
     this.root.querySelector(".tip")?.remove();
     this.root.append(body);
     if (!this.host.isConnected) document.documentElement.append(this.host);
@@ -431,6 +435,8 @@ export class Tooltip {
   hideNow(): void {
     window.clearTimeout(this.hideTimer);
     this.anchor = null;
+    document.removeEventListener("keydown", this.onKey);
+    window.removeEventListener("scroll", this.onScroll, { capture: true });
     this.host.remove();
   }
 }

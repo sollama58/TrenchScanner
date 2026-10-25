@@ -209,7 +209,7 @@ function renderDisconnected(): void {
       el(
         "p",
         { className: "note" },
-        "Opens TrenchScanner Settings at Browser extension, where one click connects this browser. This panel updates by itself. The key it gets can only read your alerts and stats.",
+        "Opens TrenchScanner Settings at Browser extension, where one click connects this browser. This panel updates by itself. The key it gets reads your alerts and stats, coins' bubble maps, and your wallet's own trades for Trade Buddy. It can't trade or move funds.",
       ),
     ),
   );
