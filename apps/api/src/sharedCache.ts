@@ -306,3 +306,70 @@ export class SharedCacheMap<T> {
     return this.caches.size;
   }
 }
+
+/**
+ * Per-key values read in batches and shared for `ttlMs`: one feed page's cards ask for a dozen
+ * coins' rows at once, and every open tab asks for much the same coins. getMany reads only the
+ * keys nobody has read within the TTL (one batch per call), and a key whose read is still in
+ * flight is waited on rather than read again, so a burst of tabs asking for one page makes one
+ * read per coin. A key the read didn't return is held as absent for the same TTL.
+ *
+ * Values are shared between callers: they must treat them as read-only. A failed read is not
+ * kept, so the next caller reads again. Bounded like SharedCacheMap: past `maxKeys` the oldest
+ * reads go first.
+ */
+export class SharedBatchCache<V> {
+  private readonly entries = new Map<string, { at: number; value: Promise<V | undefined> }>();
+
+  constructor(
+    private readonly ttlMs: number,
+    private readonly maxKeys: number,
+    private readonly read: (keys: string[]) => Promise<ReadonlyMap<string, V>>,
+  ) {}
+
+  async getMany(keys: readonly string[]): Promise<Map<string, V>> {
+    const unique = [...new Set(keys)];
+    const now = Date.now();
+    const missing = unique.filter((key) => {
+      const entry = this.entries.get(key);
+      return !entry || now - entry.at >= this.ttlMs;
+    });
+    if (missing.length > 0) {
+      const batch = this.read(missing);
+      for (const key of missing) {
+        const value = batch.then((found) => found.get(key));
+        // Re-inserted, so the map's insertion order is read order for the eviction below.
+        this.entries.delete(key);
+        this.entries.set(key, { at: now, value });
+        value.catch(() => {
+          if (this.entries.get(key)?.value === value) this.entries.delete(key);
+        });
+      }
+      while (this.entries.size > this.maxKeys) {
+        const oldest = this.entries.keys().next().value;
+        if (oldest === undefined) break;
+        this.entries.delete(oldest);
+      }
+    }
+    const out = new Map<string, V>();
+    // Every key's entry was set above or was fresh; a key evicted meanwhile is read alone.
+    const values = await Promise.all(
+      unique.map((key) => this.entries.get(key)?.value ?? this.read([key]).then((found) => found.get(key))),
+    );
+    unique.forEach((key, i) => {
+      const value = values[i];
+      if (value !== undefined) out.set(key, value);
+    });
+    return out;
+  }
+
+  /** Forgets every key. */
+  clear(): void {
+    this.entries.clear();
+  }
+
+  /** Test seam: how many keys are held. */
+  get size(): number {
+    return this.entries.size;
+  }
+}

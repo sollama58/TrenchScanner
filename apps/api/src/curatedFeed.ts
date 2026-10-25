@@ -18,6 +18,7 @@ import { donateConfigCharities, expandCharityRecipients } from "./donateGg.js";
 import { feeWalletNames } from "./walletNames.js";
 import { stonkCardFee, stonkLaunchFees, type StonkLaunchFee } from "./stonkLaunch.js";
 import { enrichCreatorFeeDeskRewards } from "./deskRewardMeta.js";
+import { SharedBatchCache } from "./sharedCache.js";
 import { keptOtcDeskFeeForMint, otcDeskFeeForMint, otcDeskRoster, otcDeskRosterFor } from "./otcDesk.js";
 import {
   creatorFeeWalletAddresses,
@@ -80,9 +81,9 @@ export async function withLatestSnapshots<
   })[]
 > {
   const [byToken, fees, quoteImages] = await Promise.all([
-    latest ?? latestSnapshotsByToken(rows.map((r) => r.token.id)),
-    creatorFeesByMint(rows.map((r) => r.token.mintAddress)),
-    quoteImagesByMint(rows.map((r) => r.token.quoteMint)),
+    latest ?? sharedLatestSnapshotsByToken(rows.map((r) => r.token.id)),
+    sharedCreatorFees.getMany(presentKeys(rows.map((r) => r.token.mintAddress))),
+    sharedQuoteImages.getMany(presentKeys(rows.map((r) => r.token.quoteMint))),
   ]);
   return rows.map((r) => {
     const snapshot = byToken.get(r.token.id);
@@ -90,6 +91,44 @@ export async function withLatestSnapshots<
     const quoteImageUrl = (r.token.quoteMint && quoteImages.get(r.token.quoteMint)) || null;
     return { ...r, token: { ...r.token, snapshots: snapshot ? [snapshot] : [], creatorFee, quoteImageUrl } };
   });
+}
+
+/**
+ * How long one read of a coin's card data (its latest snapshot, creator fee and quote image)
+ * answers other readers. Every open tab's feed carries much the same coins, and a model call has
+ * them all refetch within seconds (the dashboard's nudge spread): each read those rows again,
+ * a newest snapshot alone ~7 KB of holder lists in production, so a burst of N tabs was N reads
+ * of the same coins and most of the API's CPU (capacity audit 2026-10-25). Five seconds covers
+ * that burst and stays far inside the scan's own cadence and the feed's 45 s poll; the live caps
+ * come from /live/market regardless.
+ */
+const CARD_DATA_SHARE_MS = 5_000;
+/** Coins held per cache: a few pages' worth for every reader online, ~10 KB each at most. */
+const CARD_DATA_MAX_KEYS = 2_000;
+
+const sharedLatestSnapshots = new SharedBatchCache<TokenSnapshot & CarriedHolderTime>(
+  CARD_DATA_SHARE_MS,
+  CARD_DATA_MAX_KEYS,
+  (ids) => latestSnapshotsByToken(ids),
+);
+const sharedCreatorFees = new SharedBatchCache<CardCreatorFee>(
+  CARD_DATA_SHARE_MS,
+  CARD_DATA_MAX_KEYS,
+  (mints) => creatorFeesByMint(mints),
+);
+const sharedQuoteImages = new SharedBatchCache<string>(CARD_DATA_SHARE_MS, CARD_DATA_MAX_KEYS, (mints) =>
+  quoteImagesByMint(mints),
+);
+
+/** latestSnapshotsByToken, shared across readers for CARD_DATA_SHARE_MS. Treat the rows as read-only. */
+export function sharedLatestSnapshotsByToken(
+  tokenIds: readonly string[],
+): Promise<Map<string, TokenSnapshot & CarriedHolderTime>> {
+  return sharedLatestSnapshots.getMany(tokenIds);
+}
+
+function presentKeys(keys: readonly (string | null | undefined)[]): string[] {
+  return keys.filter((k): k is string => typeof k === "string" && k !== "");
 }
 
 const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
