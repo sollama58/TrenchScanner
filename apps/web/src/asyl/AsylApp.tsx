@@ -219,6 +219,13 @@ export function AsylApp() {
 
   const me = typeof session === "object" ? session : null;
   const solUsd = me?.solUsd ?? null;
+  // What Show holders keeps (user ask 2026-10-25): the reader's own cutoffs from Links, the least
+  // share held for holders now, the least SOL (or its USD) for past ones, 0.1 SOL when none is set.
+  const holderRule = useMemo(() => {
+    const fromUsd = cutoffs.usd > 0 && solUsd ? cutoffs.usd / solUsd : 0;
+    const minSol = Math.max(cutoffs.sol, fromUsd);
+    return { minPct: cutoffs.pct, minSol: minSol > 0 ? Number(minSol.toPrecision(3)) : 0.1 };
+  }, [cutoffs, solUsd]);
 
   const setTimeLabels = (t: TimeLabels) => {
     setTimeLabelsState(t);
@@ -767,24 +774,81 @@ export function AsylApp() {
           : `${r.credits} credit${r.credits === 1 ? "" : "s"} used.`;
         return `${r.note} ${spent}`;
       }),
-    chainToken: (mint) =>
-      void run("Reading holders from the chain…", async () => {
-        const r = await asylApi.chainToken(mint);
-        // The live list replaces the stored one: a wallet that has sold since doesn't still hold.
-        const live = new Set(r.graph.edges.filter((e) => e.kind === "holds" && e.b === mint).map((e) => e.a));
-        const text = afterChain(r, `Live holders read (${live.size})`);
-        if (live.size > 0)
-          setGraph((g) => ({
-            ...g,
-            edges: g.edges.filter((e) => !(e.kind === "holds" && e.b === mint && !live.has(e.a))),
-          }));
-        return text;
-      }),
-    pastHolders: (mint) =>
-      void run("Adding its past holders…", async () => {
-        const r = await asylApi.pastHolders(mint);
-        if (r.shown > 0) add(r.graph);
-        return r.note;
+    holders: (mint, live) =>
+      void run(live ? "Reading its holders from the chain…" : "Reading its holders…", async () => {
+        const { minPct, minSol } = holderRule;
+        // Holders now (the stored list, or the chain's) and in the past, both as the cutoffs keep them.
+        const [now, past] = await Promise.allSettled([
+          live ? asylApi.chainToken(mint, { minPct }) : asylApi.token(mint, { minPct, all: true }),
+          asylApi.pastHolders(mint, { minSol }),
+        ]);
+        const said: string[] = [];
+        let read: AsylGraph = { nodes: [], edges: [] };
+        if (now.status === "fulfilled") {
+          const r = now.value;
+          read = mergeGraph(read, r.graph);
+          const held = r.graph.edges.filter((e) => e.kind === "holds" && e.b === mint).map((e) => e.a);
+          if ("credits" in r) {
+            const c = r as ChainRead;
+            setSession((s) => (typeof s === "object" ? { ...s, chain: c.allowance } : s));
+            said.push(
+              `${held.length} hold${held.length === 1 ? "s" : ""} it now${minPct > 0 ? ` with ${minPct}% or more` : ""}, read live: ${
+                c.cached
+                  ? "already read recently, no credits used"
+                  : `${c.credits} credit${c.credits === 1 ? "" : "s"} used`
+              }.`,
+            );
+            // The live list replaces the stored one: a wallet that has sold since doesn't still hold.
+            const live = new Set(held);
+            if (live.size > 0)
+              setGraph((g) => ({
+                ...g,
+                edges: g.edges.filter((e) => !(e.kind === "holds" && e.b === mint && !live.has(e.a))),
+              }));
+          } else if ("coverage" in r && r.coverage?.note) said.push(r.coverage.note);
+        } else said.push(`Its current holders didn't load: ${errorText(now.reason)}`);
+        const moreLater =
+          past.status === "fulfilled" && past.value.total > past.value.shown ? past.value : null;
+        if (past.status === "fulfilled") {
+          // With more than the map draws at once, the ask below says how many before any are added.
+          if (!moreLater) {
+            read = mergeGraph(read, past.value.graph);
+            said.push(past.value.note);
+          }
+        } else said.push(`Its past holders didn't load: ${errorText(past.reason)}`);
+        const before = latest.current.graph;
+        if (read.nodes.length) {
+          add(read);
+          placed(mint, "token", read, before);
+        }
+        if (moreLater) {
+          // More past holders than the map draws at once: the reader says whether it takes them all.
+          const total = moreLater.total;
+          setAsk({
+            text: `${total} wallets put ${minSol} SOL or more into this coin. Loading all of them adds up to ${total} bubbles to the map, which has ${graph.nodes.length} now. A map that big can be slow and hard to read.`,
+            choices: [
+              {
+                label: `Load all ${total}`,
+                primary: true,
+                run: () =>
+                  void run(`Loading all ${total} past holders…`, async () => {
+                    const all = await asylApi.pastHolders(mint, { minSol, all: true });
+                    add(all.graph);
+                    return all.note;
+                  }),
+              },
+              {
+                label: `Just the top ${moreLater.shown}`,
+                run: () => {
+                  add(moreLater.graph);
+                  setStatus({ text: moreLater.note, tone: "info" });
+                },
+              },
+              { label: "Cancel", run: () => undefined },
+            ],
+          });
+        }
+        return said.join(" ");
       }),
     hide: (id) => {
       record();
@@ -1877,6 +1941,11 @@ export function AsylApp() {
                 return out;
               });
               setDirty(true);
+            }}
+            holderRule={holderRule}
+            onEditRule={() => {
+              setRail("links");
+              setRailOpen(true);
             }}
             actions={actions}
             onClose={() => setSelected(null)}

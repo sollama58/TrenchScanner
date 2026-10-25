@@ -22,6 +22,6 @@ describe("holdersNote", () => {
     expect(holdersNote(50, new Date(now - 3 * 86_400_000), false, now)).toBe(
       "Top 50 holders as TrenchScanner read them 3 days ago (12:00 UTC on 2026-10-22). Pro Mode can read the current list from the chain.",
     );
-    expect(holdersNote(0, null, true, now)).toContain("Read live holders in the coin's panel");
+    expect(holdersNote(0, null, true, now)).toContain("Live from the chain under Show holders");
   });
 });

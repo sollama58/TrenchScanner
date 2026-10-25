@@ -34,8 +34,12 @@ import {
   countCoTraders,
   COTRADERS_ALL_MAX,
   COTRADERS_MAX,
+  HOLDERS_ALL_MAX,
+  HOLDERS_MAX,
   loadStoredHolders,
   PAST_HOLDER_MIN_SOL,
+  PAST_HOLDERS_ALL_MAX,
+  PAST_HOLDERS_MAX,
   STORED_DAYS,
   type PastHoldersRead,
 } from "../asyl/graph.js";
@@ -84,6 +88,19 @@ const walletParams = z.object({ wallet: address });
 const mintParams = z.object({ mint: address });
 const pairParams = z.object({ a: address, b: address });
 const searchQuery = z.object({ q: z.string().trim().min(2).max(60) });
+/**
+ * A coin's holders as the reader's own cutoffs keep them (user ask 2026-10-25: one Show holders,
+ * every holder that clears them): the least share held now, the least SOL a past holder put in,
+ * and `all` for every one of them rather than the first few.
+ */
+const holdersQuery = z.object({
+  minPct: z.coerce.number().min(0).max(100).optional(),
+  minSol: z.coerce.number().min(0).max(1_000_000).optional(),
+  all: z.enum(["0", "1"]).optional(),
+});
+/** Holders kept by a least share held; none below it. */
+const atLeast = <T extends { pct: number }>(holders: readonly T[], minPct = 0) =>
+  holders.filter((h) => h.pct >= minPct);
 const idParams = z.object({ id: z.string().min(1).max(40) });
 const slugParams = z.object({ slug: z.string().regex(/^[A-Za-z0-9]{8,24}$/) });
 const labelBody = z.object({
@@ -139,7 +156,7 @@ function refusal(reply: FastifyReply, r: ChainRefusal) {
 /** A holder reading's age, in words: holders move, so an old list says so and how to refresh it. */
 export function holdersNote(count: number, readAt: Date | null, pro: boolean, now = Date.now()): string {
   const fresher = pro
-    ? "Read live holders in the coin's panel for the current list."
+    ? "Tick Live from the chain under Show holders in the coin's panel for the current list."
     : "Pro Mode can read the current list from the chain.";
   if (count === 0) return `TrenchScanner has no holder reading of this coin. ${fresher}`;
   if (!readAt) return `Top ${count} holders as TrenchScanner last read them. ${fresher}`;
@@ -161,7 +178,7 @@ const dayOf = (d: Date) =>
 
 /** What a past-holders read covers: whose trades, up to when, and what it can't see. */
 export function pastHoldersNote(r: PastHoldersRead): string {
-  const min = `${PAST_HOLDER_MIN_SOL} SOL`;
+  const min = `${r.minSol} SOL`;
   if (!r.tape)
     return "TrenchScanner hasn't read this coin's trades, so it has no past holders to add. It reads the trades of coins it calls, samples or sees traded.";
   const upTo = `Buyers up to ${dayOf(r.tape.windowEnd)}, from TrenchScanner's read of its trades`;
@@ -314,12 +331,15 @@ export async function registerAsylRoutes(
     priv.get("/token/:mint", { config: { rateLimit: READ_LIMIT } }, async (request, reply) => {
       const p = mintParams.safeParse(request.params);
       if (!p.success) return bad(reply, p.error);
+      const q = holdersQuery.safeParse(request.query ?? {});
+      if (!q.success) return bad(reply, q.error);
       const mint = p.data.mint;
       const tracked = await trackedOf(request);
-      const stored = await loadStoredHolders(mint);
+      const stored = await loadStoredHolders(mint, q.data.all === "1" ? HOLDERS_ALL_MAX : HOLDERS_MAX);
+      const kept = atLeast(stored.holders, q.data.minPct);
       const g = new GraphBuilder();
       g.node(mint, "token");
-      await addHolders(g, mint, stored.holders, "stored");
+      await addHolders(g, mint, kept, "stored");
       const deployer = (await loadDeployers([mint])).get(mint);
       if (deployer) {
         g.node(deployer.wallet, "wallet");
@@ -327,10 +347,14 @@ export async function registerAsylRoutes(
       }
       const pro = await isPro(request);
       const coverage: AsylCoverage = {
-        seen: stored.holders.length,
+        seen: kept.length,
         days: STORED_DAYS,
         chainAvailable: pro,
-        note: holdersNote(stored.holders.length, stored.readAt, pro),
+        note:
+          holdersNote(stored.holders.length, stored.readAt, pro) +
+          (kept.length < stored.holders.length
+            ? ` ${kept.length} of them hold ${q.data.minPct}% or more, your cutoff.`
+            : ""),
       };
       reply.header("Cache-Control", "private, no-store");
       return {
@@ -345,8 +369,13 @@ export async function registerAsylRoutes(
     priv.get("/token/:mint/past-holders", { config: { rateLimit: READ_LIMIT } }, async (request, reply) => {
       const p = mintParams.safeParse(request.params);
       if (!p.success) return bad(reply, p.error);
+      const q = holdersQuery.safeParse(request.query ?? {});
+      if (!q.success) return bad(reply, q.error);
       const g = new GraphBuilder();
-      const read = await addPastHolders(g, p.data.mint);
+      const read = await addPastHolders(g, p.data.mint, {
+        minSol: q.data.minSol ?? PAST_HOLDER_MIN_SOL,
+        max: q.data.all === "1" ? PAST_HOLDERS_ALL_MAX : PAST_HOLDERS_MAX,
+      });
       reply.header("Cache-Control", "private, no-store");
       return {
         focus: p.data.mint,
@@ -534,11 +563,13 @@ export async function registerAsylRoutes(
     priv.post("/chain/token/:mint", { config: { rateLimit: CHAIN_LIMIT } }, async (request, reply) => {
       const p = mintParams.safeParse(request.params);
       if (!p.success) return bad(reply, p.error);
+      const q = holdersQuery.safeParse(request.query ?? {});
+      if (!q.success) return bad(reply, q.error);
       if (!(await chainGate(request, reply))) return reply;
       const res = await readTokenHolders(env, opts.helius!, request.user!.userId, p.data.mint);
       if ("refused" in res) return refusal(reply, res);
       const g = new GraphBuilder();
-      await addHolders(g, p.data.mint, res.value, "chain");
+      await addHolders(g, p.data.mint, atLeast(res.value, q.data.minPct), "chain");
       return {
         focus: p.data.mint,
         graph: await decorate(g, await trackedOf(request)),

@@ -41,8 +41,11 @@ export interface InspectorActions {
   flows: (wallet: string) => void;
   funders: (wallets: string[]) => void;
   trace: (wallet: string) => void;
-  chainToken: (mint: string) => void;
-  pastHolders: (mint: string) => void;
+  /**
+   * A coin's holders now and in the past, as the reader's cutoffs keep them (user ask 2026-10-25:
+   * one Show holders); `live` reads the current ones from the chain.
+   */
+  holders: (mint: string, live: boolean) => void;
   /** Finds a coin's deployer (from the chain for Pro Mode when unknown) and puts it on the map. */
   showDeployer: (mint: string) => void;
   hide: (id: string) => void;
@@ -86,6 +89,8 @@ export function Inspector({
   ownLinks,
   ownOff,
   onOwnKind,
+  holderRule,
+  onEditRule,
   actions,
   onClose,
 }: {
@@ -101,6 +106,10 @@ export function Inspector({
   /** The kinds switched off for this bubble only. */
   ownOff?: ReadonlySet<WalletSwitch>;
   onOwnKind?: (k: WalletSwitch) => void;
+  /** What Show holders keeps: the least share held now, the least SOL a past holder put in. */
+  holderRule?: { minPct: number; minSol: number };
+  /** Opens the cutoffs that set the holder rule. */
+  onEditRule?: () => void;
   actions: InspectorActions;
   onClose: () => void;
 }) {
@@ -112,6 +121,8 @@ export function Inspector({
   const [labelName, setLabelName] = useState("");
   const [labelKol, setLabelKol] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
+  // Show holders reads the current list live from the chain (Pro), as the reader last left it.
+  const [live, setLive] = useState(false);
   const mine = node.tags.includes("mine");
 
   useEffect(() => {
@@ -374,9 +385,11 @@ export function Inspector({
       <section className="asyl-insp-section">
         <h3>Read more</h3>
         <div className="asyl-actions">
-          <button className="asyl-btn" disabled={!!busy} onClick={() => actions.expand(node)}>
-            {node.kind === "wallet" ? "Expand its links" : "Map its holders"}
-          </button>
+          {node.kind === "wallet" && (
+            <button className="asyl-btn" disabled={!!busy} onClick={() => actions.expand(node)}>
+              Expand its links
+            </button>
+          )}
           {node.kind === "wallet" && (
             <button className="asyl-btn" disabled={!!busy} onClick={() => actions.similar(node.id)}>
               Wallets that trade like it
@@ -398,20 +411,49 @@ export function Inspector({
               Show deployer
             </button>
           )}
-          {node.kind === "token" && (
-            <button
-              className="asyl-btn"
-              disabled={!!busy}
-              title="Everyone who put 0.1 SOL or more into it, sold out or still holding, from TrenchScanner's read of its trades (no credits)"
-              onClick={() => actions.pastHolders(node.id)}
-            >
-              Include all historical holders (&gt;0.1 SOL)
-            </button>
-          )}
         </div>
-        <h3 className="asyl-chain-head">
-          From the chain <span className="asyl-pro-chip">Pro</span>
-        </h3>
+        {node.kind === "token" && (
+          <div className="asyl-holders">
+            <button
+              className="asyl-btn primary"
+              disabled={!!busy}
+              title="Everyone holding it now and everyone who held it before, as your cutoffs keep them"
+              onClick={() => actions.holders(node.id, live && !chainOff)}
+            >
+              Show holders
+            </button>
+            <label
+              className="asyl-check"
+              title={chainOff ?? "Reads who holds it right now from the chain, up to 130 credits"}
+            >
+              <input
+                type="checkbox"
+                checked={live && !chainOff}
+                disabled={!!chainOff}
+                onChange={(e) => setLive(e.target.checked)}
+              />{" "}
+              Live from the chain <span className="asyl-pro-chip">Pro</span>
+            </label>
+            <p className="asyl-muted asyl-small">
+              Everyone holding{" "}
+              {holderRule && holderRule.minPct > 0 ? `${holderRule.minPct}% or more` : "any share"} now, and
+              everyone who put {holderRule?.minSol ?? 0.1} SOL or more into it before, sold out or not.
+              {onEditRule && (
+                <>
+                  {" "}
+                  <button className="asyl-link" onClick={onEditRule}>
+                    Change in Links
+                  </button>
+                </>
+              )}
+            </p>
+          </div>
+        )}
+        {node.kind === "wallet" && (
+          <h3 className="asyl-chain-head">
+            From the chain <span className="asyl-pro-chip">Pro</span>
+          </h3>
+        )}
         <div className="asyl-actions">
           {node.kind === "wallet" && (
             <>
@@ -444,18 +486,8 @@ export function Inspector({
               </button>
             </>
           )}
-          {node.kind === "token" && (
-            <button
-              className="asyl-btn chain"
-              disabled={!!busy || !!chainOff}
-              title={chainOff ?? "Up to 130 credits"}
-              onClick={() => actions.chainToken(node.id)}
-            >
-              Read live holders and funders
-            </button>
-          )}
         </div>
-        {chainOff && <p className="asyl-muted asyl-small">{chainOff}.</p>}
+        {chainOff && node.kind === "wallet" && <p className="asyl-muted asyl-small">{chainOff}.</p>}
       </section>
 
       {node.kind === "wallet" && (

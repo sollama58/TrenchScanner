@@ -55,7 +55,12 @@ interface SliderSpec {
 }
 
 const SLIDERS: SliderSpec[] = [
-  { key: "sol", label: "SOL", show: (n) => `${n} SOL`, help: "Funding, SOL transfers and trades" },
+  {
+    key: "sol",
+    label: "SOL",
+    show: (n) => `${n} SOL`,
+    help: "Funding, SOL transfers and trades; a coin's past holders too",
+  },
   {
     key: "usd",
     label: "USD",
@@ -63,7 +68,12 @@ const SLIDERS: SliderSpec[] = [
     help: "The same, in dollars at today's SOL price",
   },
   { key: "tokens", label: "Coins", show: (n) => compact(n), help: "Coin transfers read from the chain" },
-  { key: "pct", label: "% supply", show: (n) => `${n}%`, help: "Holder transfers, as a share of supply" },
+  {
+    key: "pct",
+    label: "% supply",
+    show: (n) => `${n}%`,
+    help: "Holders and holder transfers, as a share of supply",
+  },
 ];
 
 /** The "bought together" sliders (user ask 2026-10-25). */
