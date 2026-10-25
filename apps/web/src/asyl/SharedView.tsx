@@ -3,7 +3,7 @@ import { ShareImageDialog } from "../components/ShareImageDialog";
 import { asylApi, type MapDoc } from "./asylApi";
 import { renderMapCard } from "./asylCard";
 import { GraphView, MapLegend, type GraphViewHandle } from "./GraphView";
-import { DEFAULT_TIME_LABELS, TAG_LABEL, nodeName, shortAddr } from "./graph";
+import { DEFAULT_TIME_LABELS, EDGE_KINDS, TAG_LABEL, nodeName, shortAddr, visibleGraph } from "./graph";
 import { newLayout } from "./layout";
 import { basePath, sharedLink } from "./route";
 
@@ -34,10 +34,17 @@ export function SharedView({ slug }: { slug: string }) {
       .catch((e: Error) => setError(e.message));
   }, [slug]);
 
-  const graph = useMemo(
-    () => (map ? { nodes: map.doc.nodes, edges: map.doc.edges } : { nodes: [], edges: [] }),
-    [map],
-  );
+  // As its owner saw it: the kinds of link they switched off and their amount cutoffs hold here too
+  // (the dollar one needs SOL's price, which a public page doesn't read, so it cuts nothing).
+  const graph = useMemo(() => {
+    if (!map) return { nodes: [], edges: [] };
+    const hidden = new Set(EDGE_KINDS.filter((k) => map.doc.hidden.includes(k)));
+    const keep = new Set(map.doc.focus ? [map.doc.focus] : []);
+    return visibleGraph({ nodes: map.doc.nodes, edges: map.doc.edges }, hidden, keep, {
+      cutoffs: map.doc.cutoffs,
+      solUsd: null,
+    });
+  }, [map]);
   const node = selected ? graph.nodes.find((n) => n.id === selected) : undefined;
   const base = basePath(location.pathname);
 
@@ -64,7 +71,11 @@ export function SharedView({ slug }: { slug: string }) {
         <div className="asyl-shared-title">
           <h1>{map.title}</h1>
           <span className="asyl-muted asyl-small">
-            Shared map{map.sharedAt ? ` · ${new Date(map.sharedAt).toLocaleDateString()}` : ""} · read-only
+            Shared map
+            {map.sharedAt
+              ? ` · ${new Date(map.sharedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`
+              : ""}{" "}
+            · read-only
           </span>
         </div>
         <div className="asyl-me">

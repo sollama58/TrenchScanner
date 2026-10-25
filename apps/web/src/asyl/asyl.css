@@ -961,6 +961,9 @@ body {
   background: rgba(255, 176, 103, 0.18);
   color: var(--asyl-orange-hi);
 }
+.asyl-tags + .asyl-facts {
+  margin-top: 8px;
+}
 .asyl-facts {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -1430,4 +1433,30 @@ body {
   stroke: rgba(255, 255, 255, 0.06);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
+}
+
+/* Phones: the map's tools in one row that scrolls sideways, so the map itself keeps the screen. */
+@media (max-width: 700px) {
+  .asyl-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    pointer-events: auto;
+    padding-bottom: 2px;
+  }
+  .asyl-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+  .asyl-toolbar > * {
+    flex: none;
+  }
+  .asyl-toolbar .asyl-btn {
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+  .asyl-me {
+    gap: 6px;
+    font-size: 13px;
+  }
 }

@@ -64,6 +64,8 @@ const textK = (fit: Fit) => Math.max(fit.size, 0.9);
 const MAX_SCALE = 2.2;
 /** How far the two axes may be scaled apart to fill the image's shape. */
 const STRETCH = 1.7;
+/** ...and how far for a map whose names would otherwise pile up: wide names need the width most. */
+const STRETCH_CROWDED = 2.6;
 
 /** Faint orange marker over the card's dark, as on the map itself. */
 function drawWall(ctx: CanvasRenderingContext2D) {
@@ -196,6 +198,8 @@ function extent(pos: Pos, ids: string[], radius: (id: string) => number, drawing
 export function fitBox(
   b: { minX: number; minY: number; maxX: number; maxY: number },
   box: Box,
+  /** Stretch even at a legible scale: for a map whose bubbles would otherwise pile up. */
+  spread = false,
 ): Fit & { stretched: boolean } {
   const bw = Math.max(1, b.maxX - b.minX);
   const bh = Math.max(1, b.maxY - b.minY);
@@ -205,15 +209,19 @@ export function fitBox(
   let sx = k;
   let sy = k;
   let stretched = false;
-  if (k < LEGIBLE) {
+  if (k < LEGIBLE || spread) {
     // Fill the box's other axis too, as far as STRETCH allows.
-    sx = Math.min(fx, MAX_SCALE, k * STRETCH);
-    sy = Math.min(fy, MAX_SCALE, k * STRETCH);
+    const most = k * (spread ? STRETCH_CROWDED : STRETCH);
+    // Spreading leaves bubbles their size, so it isn't held to the enlargement cap.
+    const cap = spread ? Infinity : MAX_SCALE;
+    sx = Math.min(fx, cap, most);
+    sy = Math.min(fy, cap, most);
     stretched = Math.abs(sx - sy) > 1e-6;
   }
   const ox = box.x + (box.w - bw * sx) / 2 - b.minX * sx;
   const oy = box.y + (box.h - bh * sy) / 2 - b.minY * sy;
-  return { sx, sy, ox, oy, size: Math.sqrt(sx * sy), stretched };
+  // Spread for room, bubbles and names keep the size they'd have unstretched: the room is the point.
+  return { sx, sy, ox, oy, size: spread ? k : Math.sqrt(sx * sy), stretched };
 }
 
 /**
@@ -426,7 +434,7 @@ function declutter(
       ? { dx: (ca >= 0 ? 1 : -1) * (ox + 2), dy: 0 }
       : { dx: 0, dy: (cb >= 0 ? 1 : -1) * (oy + 2) };
   };
-  for (let round = 0; round < 80; round++) {
+  for (let round = 0; round < 200; round++) {
     let any = false;
     const rects = nodeRects(g, (id) => px.get(id) ?? { x: 0, y: 0 }, r);
     for (let i = 0; i < ids.length; i++) {
@@ -574,6 +582,17 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
   }
   if (fit.size < LEGIBLE * 0.6 && !note?.startsWith("Your map"))
     note = "A big map: the image shows all of it, small. Take some bubbles off for a clearer image.";
+  // A tall or narrow map that still piles up uses the image's width (or height) too.
+  const crowdNow = crowding(g, pos, fit, radius);
+  if (crowdNow > 0) {
+    const wide = fitBox(extent(pos, ids, radius, drawings), box, true);
+    const crowdWide = crowding(g, pos, wide, radius);
+    if (wide.stretched && crowdWide <= crowdNow) {
+      fit = wide;
+      note ??= "The map is spread wider in the image so every name reads. Your map itself is unchanged.";
+    }
+  }
+
   // Text boxes as the image draws them, which bubbles keep clear of.
   const textRects = (drawings?.texts ?? [])
     .filter((t) => t.text.trim())

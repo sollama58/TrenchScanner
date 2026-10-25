@@ -18,7 +18,16 @@ import {
   type AsylGraph,
   type AsylNode,
 } from "./graph";
-import { bounds, gridCell, placeNew, snapToGrid, step, type Cell, type LayoutState } from "./layout";
+import {
+  bounds,
+  gridCell,
+  placeNew,
+  snapToGrid,
+  spreadForGrid,
+  step,
+  type Cell,
+  type LayoutState,
+} from "./layout";
 import { avatarUrl } from "./asylApi";
 import { tokenImageSources } from "../format";
 
@@ -107,11 +116,31 @@ export function LinkSwatch({ kind, chain = false }: { kind: AsylEdgeKind; chain?
   );
 }
 
+const LEGEND_KEY = "asyl:legend-open";
+
 /** The map's key, in its bottom corner: the links on it, and the marks on its wallets. */
 export function MapLegend({ graph, startOpen }: { graph: AsylGraph; startOpen?: boolean }) {
-  const [open, setOpen] = useState(
-    () => startOpen ?? (typeof window === "undefined" || window.innerWidth > 700),
-  );
+  // Open on a wide screen at first; after that, as the reader last left it.
+  const [open, setOpenState] = useState(() => {
+    if (startOpen !== undefined) return startOpen;
+    try {
+      const kept = localStorage.getItem(LEGEND_KEY);
+      if (kept !== null) return kept === "1";
+    } catch {
+      // Storage blocked: the screen's width decides.
+    }
+    return typeof window === "undefined" || window.innerWidth > 700;
+  });
+  const setOpen = (f: (o: boolean) => boolean) =>
+    setOpenState((o) => {
+      const next = f(o);
+      try {
+        localStorage.setItem(LEGEND_KEY, next ? "1" : "0");
+      } catch {
+        // Storage blocked: it holds for this visit.
+      }
+      return next;
+    });
   const kinds = EDGE_KINDS.filter((k) => graph.edges.some((e) => e.kind === k));
   const chain = graph.edges.some((e) => e.source === "chain");
   const devs = graph.nodes.some((n) => n.kind === "wallet" && n.tags.includes("dev"));
@@ -396,6 +425,8 @@ export function GraphView({
   const held = useRef(new Set<string>());
   const gridFitted = useRef(false);
   const snap = useCallback(() => {
+    // The first time onto the grid, the free layout is spread to the grid's spacing.
+    if (held.current.size === 0) spreadForGrid(layout, graphRef.current, cellRef.current);
     snapToGrid(layout, graphRef.current, cellRef.current);
     held.current = new Set(layout.pos.keys());
   }, [layout]);
@@ -454,7 +485,27 @@ export function GraphView({
       fit();
       return;
     }
+    // Nothing new to place (links added among what's there, a bubble taken off): everything stays
+    // where it is, so a saved or arranged map doesn't drift.
+    if (added.length === 0 && fittedOnce.current) {
+      setFrame((f) => f + 1);
+      return;
+    }
     const alpha = added.length > 0 || !fittedOnce.current ? 1 : 0.3;
+    // Grid mode settles new bubbles at once, out of sight, and puts them straight onto the grid:
+    // no floating about for seconds before they jump to their cells.
+    if (gridRef.current) {
+      const still = { ...layout, pinned: new Set([...layout.pinned, ...held.current]) };
+      for (let t = 0; t < 300; t++) if (step(still, graph, 1 - t / 300, radius) < 0.05 && t > 20) break;
+      snap();
+      setFrame((f) => f + 1);
+      if (!fittedOnce.current) {
+        fittedOnce.current = true;
+        gridFitted.current = true;
+        fit();
+      }
+      return;
+    }
     if (reduceMotion) {
       for (let t = 0; t < 300; t++) if (step(layout, graph, 1 - t / 300, radius) < 0.05 && t > 20) break;
       if (gridRef.current) snap();

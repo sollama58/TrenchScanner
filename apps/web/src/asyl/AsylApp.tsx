@@ -166,6 +166,8 @@ export function AsylApp() {
   const [grid, setGrid] = useState(true);
   // Bumped when a map is opened or started, so the view lays it out from scratch.
   const [epoch, setEpoch] = useState(0);
+  // Counts maps opened, so a slow refresh of one doesn't land on the next.
+  const openSeq = useRef(0);
   const [drawingSel, setDrawingSel] = useState<string | null>(null);
   const [cardNote, setCardNote] = useState<string | null>(null);
   const view = useRef<GraphViewHandle>(null);
@@ -308,7 +310,7 @@ export function AsylApp() {
     add(r.graph);
     setSession((s) => (typeof s === "object" ? { ...s, chain: r.allowance } : s));
     return r.cached
-      ? `${what}: read earlier today, no credits used.`
+      ? `${what}: already read recently, no credits used.`
       : `${what}: ${r.credits} credit${r.credits === 1 ? "" : "s"} used.`;
   };
 
@@ -386,6 +388,23 @@ export function AsylApp() {
         history.current.clear();
         setHistoryTick((t) => t + 1);
         go({ kind: "map", id });
+        // A saved map keeps its wallets and coins; what TrenchScanner knows of them moves on. So its
+        // names, tags and market caps, and the stored links among them, are read again as it opens
+        // (database only, no credits). Nothing new joins the map; a map opened since is left alone.
+        const seq = ++openSeq.current;
+        const ids = new Set(m.doc.nodes.map((n) => n.id));
+        const of = (kind: "wallet" | "token") => m.doc.nodes.filter((n) => n.kind === kind).map((n) => n.id);
+        void asylApi
+          .links(of("wallet").slice(0, LINKS_WALLETS), of("token").slice(0, LINKS_TOKENS))
+          .then((r) => {
+            if (seq !== openSeq.current) return;
+            const fresh = {
+              nodes: r.graph.nodes.filter((n) => ids.has(n.id)),
+              edges: r.graph.edges.filter((e) => ids.has(e.a) && ids.has(e.b)),
+            };
+            setGraph((g) => withDeployLines(mergeGraph(g, fresh)));
+          })
+          .catch(() => undefined);
       }),
     [run, setCutoffs],
   );
@@ -408,6 +427,7 @@ export function AsylApp() {
     )
       return;
     layout.current = newLayout();
+    openSeq.current += 1;
     setGrid(true);
     setEpoch((n) => n + 1);
     setGraph(EMPTY);
@@ -570,15 +590,30 @@ export function AsylApp() {
     funders: (wallets) =>
       void run("Finding funders on the chain…", async () => {
         const r = await asylApi.funders(wallets);
+        // Counted off the answer's lines, so a funder already known counts as found too.
+        const funded = new Set(r.graph.edges.filter((e) => e.kind === "funded").map((e) => e.b));
+        const found = wallets.filter((w) => funded.has(w)).length;
         return afterChain(
           r,
-          `${r.found} of ${wallets.length} funder${wallets.length === 1 ? "" : "s"} found`,
+          wallets.length === 1
+            ? found
+              ? "Funder found"
+              : "No funder found: nothing paid it in before its first transactions"
+            : `${found} of ${wallets.length} funders found`,
         );
       }),
     chainToken: (mint) =>
       void run("Reading holders from the chain…", async () => {
         const r = await asylApi.chainToken(mint);
-        return afterChain(r, "Live holders read");
+        // The live list replaces the stored one: a wallet that has sold since doesn't still hold.
+        const live = new Set(r.graph.edges.filter((e) => e.kind === "holds" && e.b === mint).map((e) => e.a));
+        const text = afterChain(r, `Live holders read (${live.size})`);
+        if (live.size > 0)
+          setGraph((g) => ({
+            ...g,
+            edges: g.edges.filter((e) => !(e.kind === "holds" && e.b === mint && !live.has(e.a))),
+          }));
+        return text;
       }),
     hide: (id) => {
       record();

@@ -150,7 +150,12 @@ export function Inspector({
             </>
           )}
           <dt>Market cap</dt>
-          <dd>{usd(node.mcapUsd ?? null)}</dd>
+          <dd>
+            {usd(node.mcapUsd ?? null)}
+            {node.mcapUsd != null && node.mcapAt && Date.now() - Date.parse(node.mcapAt) > 15 * 60_000 && (
+              <span className="asyl-muted asyl-small"> · read {ago(node.mcapAt)}</span>
+            )}
+          </dd>
           <dt>Peak</dt>
           <dd>{usd(node.athUsd ?? null)}</dd>
           {node.launchedAt && (

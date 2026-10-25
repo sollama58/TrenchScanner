@@ -44,6 +44,8 @@ export interface AsylNode {
   title?: string | null;
   image?: string | null;
   mcapUsd?: number | null;
+  /** When the market cap was read. */
+  mcapAt?: string | null;
   athUsd?: number | null;
   launchedAt?: string | null;
   /** Coins: the wallet that deployed it (Token.creator), when TrenchScanner knows it. */

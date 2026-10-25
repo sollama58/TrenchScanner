@@ -1,6 +1,6 @@
 import { prisma } from "@trenchscanner/core";
 import type { TrackedWallet } from "../trackedWallets.js";
-import { GraphBuilder, hotFunders, loadCoTraders, type CoTrader } from "./graph.js";
+import { fundedEdge, GraphBuilder, hotFunders, loadCoTraders, transferEdge, type CoTrader } from "./graph.js";
 
 /**
  * "Similar trades" (user ask 2026-10-24): the wallets that buy the same coins as this one within
@@ -58,11 +58,13 @@ export async function labelsGraph(g: GraphBuilder, tracked: readonly TrackedWall
       where: { wallet: { in: wallets }, status: "found" },
       select: { wallet: true, funder: true, amountSol: true, fundedAt: true },
     }),
-    prisma.$queryRaw<{ fromWallet: string; toWallet: string; n: number; pct: number; last: Date }[]>`
-      SELECT "fromWallet", "toWallet", COUNT(*)::int AS n, SUM("pct")::float AS pct, MAX("at") AS last
+    prisma.$queryRaw<
+      { fromWallet: string; toWallet: string; mintAddress: string; n: number; pct: number; last: Date }[]
+    >`
+      SELECT "fromWallet", "toWallet", "mintAddress", COUNT(*)::int AS n, SUM("pct")::float AS pct, MAX("at") AS last
         FROM "HolderTransferEvent"
        WHERE "fromWallet" = ANY(${wallets}) AND "toWallet" = ANY(${wallets})
-       GROUP BY 1, 2`,
+       GROUP BY 1, 2, 3`,
     prisma.trackedWalletSide.findMany({
       where: { trackedWallet: { in: wallets } },
       orderBy: [{ pct: "desc" }, { shared: "desc" }],
@@ -76,29 +78,10 @@ export async function labelsGraph(g: GraphBuilder, tracked: readonly TrackedWall
   for (const [funder, paid] of byFunder) {
     if (paid.length < 2 && !onMap.has(funder)) continue;
     g.node(funder, "wallet");
-    for (const p of paid)
-      g.edge({
-        a: funder,
-        b: p.wallet,
-        kind: "funded",
-        weight: p.amountSol ?? 0.01,
-        label: `Funded${p.amountSol ? ` ${p.amountSol.toPrecision(2)} SOL` : ""}`,
-        source: "stored",
-        at: p.fundedAt?.toISOString() ?? null,
-        sol: p.amountSol,
-      });
+    for (const p of paid) fundedEdge(g, funder, p.wallet, p);
   }
-  for (const t of transfers)
-    g.edge({
-      a: t.fromWallet,
-      b: t.toWallet,
-      kind: "transfer",
-      weight: t.pct,
-      label: `Sent coins ${t.n}×`,
-      source: "stored",
-      at: t.last.toISOString(),
-      pct: t.pct,
-    });
+  // The same lines as every other map draws: per coin, with its share of supply and date.
+  for (const t of transfers) transferEdge(g, t, t.mintAddress);
   const perLabel = new Map<string, number>();
   for (const s of sides) {
     const n = perLabel.get(s.trackedWallet) ?? 0;
