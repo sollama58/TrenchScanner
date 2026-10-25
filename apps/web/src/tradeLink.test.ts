@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tradeLinkFromUrl } from "./tradeLink";
+import { tokenLinkFromUrl, tradeLinkFromUrl } from "./tradeLink";
 
 const A = "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN";
 
@@ -22,5 +22,13 @@ describe("trade links from the extension", () => {
     expect(tradeLinkFromUrl(`?trade=${A}&sell=12.5`)).toBeNull();
     expect(tradeLinkFromUrl(`?trade=${A}&buy=1&sell=50`)).toBeNull();
     expect(tradeLinkFromUrl(`?trade=${A}`)).toBeNull();
+  });
+});
+
+describe("tokenLinkFromUrl", () => {
+  it("reads a mint, and nothing else", () => {
+    expect(tokenLinkFromUrl(`?token=${A}`)).toBe(A);
+    expect(tokenLinkFromUrl(`?token=nope`)).toBeNull();
+    expect(tokenLinkFromUrl(`?sage=${A}`)).toBeNull();
   });
 });

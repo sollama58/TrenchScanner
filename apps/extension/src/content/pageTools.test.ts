@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Toasts } from "./toasts";
 import { findTabStrip, isTokenPage, pageMint } from "./tokenPage";
 import { DEFAULT_SETTINGS } from "../shared/settings";
@@ -64,6 +64,19 @@ describe("on-page alerts", () => {
     t.receive([token({ mint: B, modelCalls: [call("strong", 60)] })]);
     await new Promise((r) => setTimeout(r, 0));
     expect(shown()).toBe(1);
+  });
+
+  it("toast a coin once, however many models and filters call it", () => {
+    const t = toasts();
+    const show = vi.spyOn(t as unknown as { show: () => Promise<void> }, "show").mockResolvedValue();
+    t.receive([token({ mint: A, modelCalls: [call("old", 50)] })]);
+    t.receive([
+      token({ mint: A, modelCalls: [call("old", 50), call("later", 70)] }),
+      token({ mint: B, modelCalls: [call("one", 40), call("two", 60)] }),
+    ]);
+    expect(show).toHaveBeenCalledTimes(1);
+    t.receive([token({ mint: B, modelCalls: [call("one", 40), call("two", 60), call("three", 80)] })]);
+    expect(show).toHaveBeenCalledTimes(1);
   });
 });
 

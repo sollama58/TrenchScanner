@@ -69,7 +69,7 @@ import { beginWait, markNavigation } from "./loadTracker";
 import { unbindAppearance, useAppearance } from "./appearance";
 import { TokenModalHost } from "./components/TokenModalHost";
 import { closeTokenModal, openTokenModal } from "./tokenModal";
-import { clearTradeLink, setTradeFill, tradeLinkFromUrl } from "./tradeLink";
+import { clearTradeLink, setTradeFill, tokenLinkFromUrl, tradeLinkFromUrl } from "./tradeLink";
 import { useExtensionReconnect } from "./extensionReconnect";
 import { onTradingSessionRefresh, setProState, proStateOf, tradeSettingsSync } from "./proTrade";
 import { setTrackedAccount } from "./trackedWallets";
@@ -479,10 +479,12 @@ export function App() {
   useEffect(() => {
     if (!signedIn) return;
     const fill = tradeLinkFromUrl();
-    if (!fill) return;
+    // Or a coin the extension links to (?token=), opened alone.
+    const mint = fill?.mint ?? tokenLinkFromUrl();
+    if (!mint) return;
     clearTradeLink();
     setTradeFill(fill);
-    void api<Card>(`/tokens/${fill.mint}/card`).then(
+    void api<Card>(`/tokens/${mint}/card`).then(
       (card) => openTokenModal(card, Date.now()),
       () => setTradeFill(null),
     );

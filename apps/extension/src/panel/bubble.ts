@@ -1,6 +1,6 @@
 import { isMintAddress } from "../shared/mint";
 import type { OverlayBubbleHolder, OverlayBubbleMap, OverlayCount, OverlayTrait } from "../shared/types";
-import { ago } from "./card";
+import { ago, trenchUrl } from "./card";
 
 /**
  * A coin's bubble map in the panel (user ask 2026-10-24): its latest top holders as bubbles sized
@@ -176,7 +176,7 @@ export function bubbleMapView(map: OverlayBubbleMap | null, now = Date.now()): H
   head.append(div("bm-when", `${when} · top ${map.top50 ? 50 : 25}`));
   if (isMintAddress(map.mint)) {
     const full = document.createElement("a");
-    full.href = `https://trenchscanner.app/?sage=${encodeURIComponent(map.mint)}`;
+    full.href = trenchUrl(map.mint);
     full.target = "_blank";
     full.rel = "noopener noreferrer";
     full.className = "site ts";
