@@ -320,7 +320,24 @@ export function AsylApp() {
         setFocus(wallet);
         setSelected(wallet);
         if (!current) go({ kind: "wallet", address: wallet });
-        return r.coverage?.note;
+        const note = r.coverage?.note;
+        // A wallet TrenchScanner never saw has nothing stored to draw: read it from the chain
+        // instead, its transfers and its funder (user ask 2026-10-25), when Pro Mode allows.
+        if (!r.coverage || r.coverage.seen > 0 || !r.coverage.chainAvailable) return note;
+        try {
+          const flows = await asylApi.flows(wallet);
+          add(flows.graph);
+          const funders = await asylApi.funders([wallet]).catch(() => null);
+          if (funders) add(funders.graph);
+          const last = funders ?? flows;
+          setSession((s) => (typeof s === "object" ? { ...s, chain: last.allowance } : s));
+          const credits = flows.credits + (funders?.credits ?? 0);
+          return `${note} ${flows.flows?.txs ?? 0} transactions read${
+            funders ? (funders.found ? ", funder found" : ", no funder found") : ""
+          }; ${credits ? `${credits} credit${credits === 1 ? "" : "s"} used` : "no credits used"}.`;
+        } catch (e) {
+          return `${note} The chain read didn't work: ${errorText(e)}`;
+        }
       }),
     [add, run, current],
   );
@@ -595,13 +612,30 @@ export function AsylApp() {
         // Counted off the answer's lines, so a funder already known counts as found too.
         const funded = new Set(r.graph.edges.filter((e) => e.kind === "funded").map((e) => e.b));
         const found = wallets.filter((w) => funded.has(w)).length;
+        const said = (w: string) => (funded.has(w) ? "found" : (r.results?.[w] ?? "none"));
+        const counts = wallets.map(said);
+        const failed = counts.filter((c) => c === "failed").length;
+        const busyN = counts.filter((c) => c === "busy").length;
+        if (wallets.length === 1) {
+          const one = counts[0];
+          return afterChain(
+            r,
+            one === "found"
+              ? "Funder found"
+              : one === "failed"
+                ? "The chain read didn't come back, so its funder isn't known yet. Try again in a moment"
+                : one === "busy"
+                  ? "Too many transactions to reach its first: most likely an exchange or service"
+                  : one === "empty"
+                    ? "No funder: it has no transactions yet"
+                    : "No funder found: nothing paid it SOL in its first transactions (it may have been funded by a swap or a program)",
+          );
+        }
         return afterChain(
           r,
-          wallets.length === 1
-            ? found
-              ? "Funder found"
-              : "No funder found: nothing paid it in before its first transactions"
-            : `${found} of ${wallets.length} funders found`,
+          `${found} of ${wallets.length} funders found` +
+            (failed ? `; ${failed} read${failed === 1 ? "" : "s"} failed, try again` : "") +
+            (busyN ? `; ${busyN} too busy to read` : ""),
         );
       }),
     trace: (wallet) =>

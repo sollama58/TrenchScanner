@@ -10,6 +10,7 @@ import {
   WALLET_DORMANT_GAP_MS,
   type HeliusClient,
   type KnownFunder,
+  FUNDER_TXS_WALKED_MAX,
   type WalletFlows,
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
@@ -38,7 +39,8 @@ export const TOKEN_READ_TTL_MS = 10 * 60_000;
 
 /** Worst cases, held against the allowance before a read starts. */
 export const FLOW_WORST = FLOW_PAGES * 10;
-export const FUNDER_WORST = 11;
+/** A funder read asked outright: its page, then up to FUNDER_TXS_WALKED_MAX oldest transactions. */
+export const FUNDER_WORST = 1 + FUNDER_TXS_WALKED_MAX;
 export const TOKEN_WORST = 10 + CHAIN_HOLDER_FUNDERS * 4;
 /** A deployer read: one page of the mint's oldest transactions. */
 export const DEPLOYER_WORST = 10;
@@ -127,7 +129,13 @@ export function readWalletFlows(
  * newest transaction at the read plus WALLET_DORMANT_GAP_MS, when it could sit idle and be paid
  * again by someone new; a busy or failed read, or a row from before that was kept, holds not at all.
  * A stored answer is handed back, so a wallet that hasn't revived costs only its one page. Returns
- * how many were asked and how many named a funder.
+ * how many were asked, how many named a funder, and each wallet's answer as it now stands.
+ *
+ * `outright`: the reader asked for these funders by name (Find its funder, a trace). A stored
+ * "none" is read again, walking up to FUNDER_TXS_WALKED_MAX of its oldest transactions: the scan's
+ * bulk read walks only FUNDER_TXS_WALKED, and a wallet whose first few transactions were token
+ * accounts opened for it or airdrops comes back "none" there though someone did pay it in (user
+ * bug report 2026-10-25).
  */
 export async function refreshFunders(
   helius: Pick<HeliusClient, "getFundersBatch">,
@@ -135,7 +143,8 @@ export async function refreshFunders(
   now = Date.now(),
   /** Reads at most this many, first in `wallets` order. */
   max = Infinity,
-): Promise<{ asked: number; found: number }> {
+  outright = false,
+): Promise<{ asked: number; found: number; status: Map<string, FunderStatus> }> {
   const rows = await prisma.walletFunder.findMany({
     where: { wallet: { in: [...wallets] } },
     select: {
@@ -148,7 +157,7 @@ export async function refreshFunders(
     },
   });
   const settled = (r: (typeof rows)[number]) =>
-    (r.status === "found" || r.status === "none" || r.status === "empty") &&
+    (r.status === "found" || (r.status === "none" && !outright) || r.status === "empty") &&
     (r.status === "empty" ||
       (!!r.lastActivityAt && now < r.lastActivityAt.getTime() + WALLET_DORMANT_GAP_MS));
   const byWallet = new Map(rows.map((r) => [r.wallet, r]));
@@ -158,19 +167,37 @@ export async function refreshFunders(
       return !r || !settled(r);
     })
     .slice(0, max);
-  if (ask.length === 0) return { asked: 0, found: 0 };
+  const status = new Map<string, FunderStatus>();
+  for (const w of wallets) {
+    const r = byWallet.get(w);
+    if (r) status.set(w, r.status as FunderStatus);
+  }
+  if (ask.length === 0) return { asked: 0, found: 0, status };
   const knownOf = new Map<string, KnownFunder>();
   for (const w of ask) {
     const r = byWallet.get(w);
-    if (r && (r.status === "found" || r.status === "none"))
+    // A stored "none" asked outright is walked again, deeper, rather than handed back.
+    if (r && (r.status === "found" || (r.status === "none" && !outright)))
       knownOf.set(w, { funder: r.funder, amountSol: r.amountSol, fundedAt: r.fundedAt });
   }
-  const read = await helius.getFundersBatch(ask, { nowMs: now, knownOf });
+  const read = await helius.getFundersBatch(ask, {
+    nowMs: now,
+    knownOf,
+    ...(outright ? { walk: FUNDER_TXS_WALKED_MAX } : {}),
+  });
   let found = 0;
   for (const [wallet, r] of read) {
-    // A failed read changes nothing; a busy one only stands in for a missing or busy row.
-    if (r.status === "failed") continue;
-    if (r.status === "busy" && byWallet.has(wallet) && byWallet.get(wallet)!.status !== "busy") continue;
+    // A failed read changes nothing; a busy one only stands in for a missing or busy row. Either
+    // way the reader hears what this read found, not an older answer it couldn't confirm.
+    if (r.status === "failed") {
+      if (!status.has(wallet) || outright) status.set(wallet, "failed");
+      continue;
+    }
+    if (r.status === "busy" && byWallet.has(wallet) && byWallet.get(wallet)!.status !== "busy") {
+      if (outright) status.set(wallet, "busy");
+      continue;
+    }
+    status.set(wallet, r.status);
     const row = {
       wallet,
       status: r.status,
@@ -184,8 +211,11 @@ export async function refreshFunders(
     if (r.status === "found") found += 1;
     await prisma.walletFunder.upsert({ where: { wallet }, create: row, update: row }).catch(() => undefined);
   }
-  return { asked: ask.length, found };
+  return { asked: ask.length, found, status };
 }
+
+/** A funder answer as the reader hears it. */
+export type FunderStatus = "found" | "none" | "empty" | "busy" | "failed";
 
 /** Funders the tables don't have, or whose stored answer no longer holds, read for everyone. */
 export function readFunders(
@@ -193,11 +223,14 @@ export function readFunders(
   helius: Pick<HeliusClient, "getFundersBatch">,
   userId: string,
   wallets: readonly string[],
-): Promise<Chained<number>> {
+): Promise<Chained<Record<string, FunderStatus>>> {
   const unique = [...new Set(wallets)].slice(0, FUNDERS_MAX);
   return metered(env, userId, FUNDER_WORST * Math.max(1, Math.min(unique.length, 5)), async () => {
-    const { asked, found } = await refreshFunders(helius, unique);
-    return { value: found, cached: asked === 0 };
+    const { asked, status } = await refreshFunders(helius, unique, Date.now(), Infinity, true);
+    return {
+      value: Object.fromEntries(unique.map((w) => [w, status.get(w) ?? "failed"])),
+      cached: asked === 0,
+    };
   });
 }
 
@@ -248,7 +281,7 @@ export function traceFunders(
       if (heliusCreditsOut()) return done("paused");
       // Each new read can take up to FUNDER_WORST: stop while what's left still covers it.
       if (before.left < (asked + 1) * FUNDER_WORST) return done("allowance");
-      const r = await refreshFunders(helius, [at], now).catch(() => null);
+      const r = await refreshFunders(helius, [at], now, Infinity, true).catch(() => null);
       if (!r) return done("unreadable");
       asked += r.asked;
       const row = await prisma.walletFunder.findUnique({

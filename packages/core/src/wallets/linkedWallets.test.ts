@@ -34,6 +34,28 @@ describe("funderFromFirstTransaction", () => {
     expect(funderFromFirstTransaction("wallet", tx)?.funder).toBe("sender");
   });
 
+  it("names the account that sent the SOL when the fee payer only paid the fee", () => {
+    const tx = {
+      meta: {
+        preBalances: [1 * SOL, 0, 10 * SOL],
+        postBalances: [1 * SOL - 5000, 2 * SOL, 8 * SOL],
+      },
+      transaction: { message: { accountKeys: ["relayer", "wallet", "treasury"] } },
+    };
+    expect(funderFromFirstTransaction("wallet", tx)?.funder).toBe("treasury");
+  });
+
+  it("keeps the fee payer when no one account sent what the wallet received", () => {
+    const tx = {
+      meta: {
+        preBalances: [1 * SOL, 0, 10 * SOL, 10 * SOL],
+        postBalances: [1 * SOL - 5000, 2 * SOL, 9 * SOL, 9 * SOL],
+      },
+      transaction: { message: { accountKeys: ["router", "wallet", "poolA", "poolB"] } },
+    };
+    expect(funderFromFirstTransaction("wallet", tx)?.funder).toBe("router");
+  });
+
   it("finds nobody when the wallet received no SOL", () => {
     const tx = {
       meta: { preBalances: [1 * SOL, 0], postBalances: [1 * SOL - 5000, 0] },
