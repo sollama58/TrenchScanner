@@ -1,17 +1,36 @@
 import { useEffect, useState } from "react";
 import { ago, usd } from "../format";
-import { imageSources } from "./GraphView";
+import { LinkSwatch, imageSources } from "./GraphView";
 import { asylApi, avatarUrl, type AsylMe, type Dossier } from "./asylApi";
 import {
   EDGE_LABEL,
+  WALLET_SWITCHES,
   TAG_LABEL,
   edgeKey,
   neighbours,
   nodeName,
   shortAddr,
+  type AsylEdgeKind,
   type AsylGraph,
   type AsylNode,
+  type WalletSwitch,
 } from "./graph";
+
+/** Its transfers one way, as its own switches name them (user ask 2026-10-25). */
+const SWITCH_CHIP: Partial<Record<WalletSwitch, string>> = {
+  "transfer:out": "Sent ↗",
+  "transfer:in": "Received ↙",
+};
+const OWN_WHAT: Partial<Record<WalletSwitch, string>> = {
+  "transfer:out": "transfers sent",
+  "transfer:in": "transfers received",
+};
+
+const DIRS = [
+  ["all", "All", "Both ways"],
+  ["out", "Out ↗", "What it sent, funded or bought"],
+  ["in", "In ↙", "What it received, or who funded it"],
+] as const;
 
 /** What the inspector's buttons ask of the page. */
 export interface InspectorActions {
@@ -62,6 +81,9 @@ export function Inspector({
   busy,
   note,
   coTraderTotal,
+  ownLinks,
+  ownOff,
+  onOwnKind,
   actions,
   onClose,
 }: {
@@ -72,12 +94,19 @@ export function Inspector({
   note: string;
   /** How many wallets bought together with it in all, when a read said (the map shows up to 20). */
   coTraderTotal?: number;
+  /** Its links on the map by kind, before any filter. */
+  ownLinks?: ReadonlyMap<WalletSwitch, number>;
+  /** The kinds switched off for this bubble only. */
+  ownOff?: ReadonlySet<WalletSwitch>;
+  onOwnKind?: (k: WalletSwitch) => void;
   actions: InspectorActions;
   onClose: () => void;
 }) {
   const [dossier, setDossier] = useState<Dossier | null>(null);
   const [dossierError, setDossierError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // The links list, one way or both (user ask 2026-10-25).
+  const [dir, setDir] = useState<"all" | "out" | "in">("all");
   const [labelName, setLabelName] = useState("");
   const [labelKol, setLabelKol] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
@@ -474,37 +503,84 @@ export function Inspector({
         />
       </section>
 
+      {ownLinks && ownLinks.size > 0 && onOwnKind && (
+        <section className="asyl-insp-section">
+          <h3>Its links</h3>
+          <div className="asyl-own-kinds" role="group" aria-label="This bubble's kinds of link">
+            {WALLET_SWITCHES.filter((k) => ownLinks.has(k)).map((k) => {
+              const on = !ownOff?.has(k);
+              const what = OWN_WHAT[k] ?? `${EDGE_LABEL[k as AsylEdgeKind]} links`;
+              return (
+                <button
+                  key={k}
+                  className={`asyl-chip${on ? " on" : ""}`}
+                  aria-pressed={on}
+                  title={on ? `Hide its ${what} only` : `Show its ${what} again`}
+                  onClick={() => onOwnKind(k)}
+                >
+                  <LinkSwatch kind={k.startsWith("transfer:") ? "transfer" : (k as AsylEdgeKind)} />
+                  {SWITCH_CHIP[k] ?? EDGE_LABEL[k as AsylEdgeKind]}
+                  <span className="asyl-count">{ownLinks.get(k)}</span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="asyl-muted asyl-small">
+            For this bubble only; Links in the side menu switches a kind for the whole map. It stays on the
+            map either way.
+          </p>
+        </section>
+      )}
+
       <section className="asyl-insp-section">
         <h3>
           Links on the map <span className="asyl-muted">({links.length})</span>
+          {links.some((l) => l.edge.kind === "transfer" || l.edge.kind === "funded") && (
+            <span className="asyl-seg asyl-seg-small" role="group" aria-label="Direction">
+              {DIRS.map(([v, label, help]) => (
+                <button
+                  key={v}
+                  className={dir === v ? "on" : ""}
+                  aria-pressed={dir === v}
+                  title={help}
+                  onClick={() => setDir(v)}
+                >
+                  {label}
+                </button>
+              ))}
+            </span>
+          )}
         </h3>
         <ul className="asyl-links">
-          {links.slice(0, 60).map(({ node: other, edge }, i) => {
-            const o = byId.get(other);
-            const out = edge.a === node.id;
-            return (
-              <li key={i}>
-                <span className="asyl-link-text">
-                  <button className="asyl-link" onClick={() => actions.select(other)}>
-                    {o ? nodeName(o) : shortAddr(other)}
-                  </button>
-                  <span className="asyl-muted">
-                    {" "}
-                    {EDGE_LABEL[edge.kind]} {out ? "→" : "←"} {edge.label}
-                    {edge.source === "chain" ? " · chain" : ""}
+          {links
+            .filter(({ edge }) => dir === "all" || (dir === "out" ? edge.a === node.id : edge.b === node.id))
+            .slice(0, 60)
+            .map(({ node: other, edge }, i) => {
+              const o = byId.get(other);
+              const out = edge.a === node.id;
+              return (
+                <li key={i}>
+                  <span className="asyl-link-text">
+                    <button className="asyl-link" onClick={() => actions.select(other)}>
+                      {o ? nodeName(o) : shortAddr(other)}
+                    </button>
+                    <span className="asyl-muted">
+                      {" "}
+                      {EDGE_LABEL[edge.kind]} {out ? "→" : "←"} {edge.label}
+                      {edge.source === "chain" ? " · chain" : ""}
+                    </span>
                   </span>
-                </span>
-                <button
-                  className="asyl-icon-btn"
-                  title="Hide this link (bring it back from Links)"
-                  aria-label={`Hide the ${EDGE_LABEL[edge.kind]} link`}
-                  onClick={() => actions.cutLink(edgeKey(edge))}
-                >
-                  ×
-                </button>
-              </li>
-            );
-          })}
+                  <button
+                    className="asyl-icon-btn"
+                    title="Hide this link (bring it back from Links)"
+                    aria-label={`Hide the ${EDGE_LABEL[edge.kind]} link`}
+                    onClick={() => actions.cutLink(edgeKey(edge))}
+                  >
+                    ×
+                  </button>
+                </li>
+              );
+            })}
         </ul>
       </section>
 

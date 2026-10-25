@@ -11,6 +11,7 @@ import {
   mergeGraph,
   removeNodes,
   visibleGraph,
+  perWalletOf,
   withDeployLines,
   type AsylGraph,
   NO_DRAWINGS,
@@ -69,10 +70,38 @@ describe("removeNodes and visibleGraph", () => {
   it("drops hanging edges", () => {
     expect(removeNodes(g, new Set(["b"])).edges).toEqual([]);
   });
-  it("hides nodes only hidden kinds tied, except the kept ones", () => {
-    const v = visibleGraph(g, new Set(["cotrade"]), new Set(["c"]));
+  it("keeps every bubble when a kind of link is switched off", () => {
+    const v = visibleGraph(g, new Set(["cotrade"]), new Set());
     expect(v.nodes.map((n) => n.id)).toEqual(["a", "b", "c"]);
-    expect(visibleGraph(g, new Set(["cotrade"]), new Set()).nodes.map((n) => n.id)).toEqual(["a", "b"]);
+    expect(v.edges.map((e) => e.kind)).toEqual(["funded"]);
+  });
+  it("hides the bubbles no link reaches only when asked, except the kept ones", () => {
+    const loose = { hideLoose: true };
+    expect(visibleGraph(g, new Set(["cotrade"]), new Set(["c"]), loose).nodes.map((n) => n.id)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+    expect(visibleGraph(g, new Set(["cotrade"]), new Set(), loose).nodes.map((n) => n.id)).toEqual([
+      "a",
+      "b",
+    ]);
+  });
+  it("switches a kind off for one wallet only", () => {
+    const perWallet = perWalletOf({ c: ["cotrade"], a: ["holds"] });
+    const v = visibleGraph(g, new Set(), new Set(), { perWallet });
+    expect(v.edges.map((e) => e.kind)).toEqual(["funded"]);
+    expect(perWalletOf({ a: ["nope"] }).size).toBe(0);
+  });
+  it("switches one wallet's transfers off one way only", () => {
+    const t: AsylGraph = {
+      nodes: [W("a"), W("b")],
+      edges: [E("a", "b", "transfer"), E("b", "a", "transfer")],
+    };
+    const sent = visibleGraph(t, new Set(), new Set(), { perWallet: perWalletOf({ a: ["transfer:out"] }) });
+    expect(sent.edges.map((e) => e.a)).toEqual(["b"]);
+    const got = visibleGraph(t, new Set(), new Set(), { perWallet: perWalletOf({ a: ["transfer:in"] }) });
+    expect(got.edges.map((e) => e.a)).toEqual(["a"]);
   });
 });
 

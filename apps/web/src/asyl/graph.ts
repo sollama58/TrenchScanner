@@ -209,12 +209,18 @@ export function visibleGraph(
   keep: ReadonlySet<string>,
   filter: LinkFilter = {},
 ): AsylGraph {
+  const per = filter.perWallet;
   const edges = g.edges.filter(
     (e) =>
       !hidden.has(e.kind) &&
       !filter.cut?.has(edgeKey(e)) &&
+      !offFor(per?.get(e.a), e, true) &&
+      !offFor(per?.get(e.b), e, false) &&
       (!filter.cutoffs || clearsCutoffs(e, filter.cutoffs, filter.solUsd ?? null)),
   );
+  // Every bubble stays unless the reader took it off (user report 2026-10-25: bubbles vanished as
+  // link kinds were switched), or asked for the ones no drawn link reaches to go.
+  if (!filter.hideLoose) return { nodes: g.nodes, edges };
   const touched = new Set(edges.flatMap((e) => [e.a, e.b]));
   return { nodes: g.nodes.filter((n) => touched.has(n.id) || keep.has(n.id)), edges };
 }
@@ -263,6 +269,39 @@ export interface LinkFilter {
   cutoffs?: Cutoffs;
   /** SOL's price, for the USD slider; without one the USD slider cuts nothing. */
   solUsd?: number | null;
+  /** Kinds of link switched off for one wallet only (user ask 2026-10-25), by wallet. */
+  perWallet?: ReadonlyMap<string, ReadonlySet<WalletSwitch>>;
+  /** Take off bubbles no drawn link reaches (the selection and focus stay). Off: every bubble stays. */
+  hideLoose?: boolean;
+}
+
+/**
+ * What one wallet's own switches can turn off: a kind of link, or its transfers one way only
+ * (user ask 2026-10-25: show and filter by transfer direction).
+ */
+export type WalletSwitch = AsylEdgeKind | "transfer:out" | "transfer:in";
+export const WALLET_SWITCHES: readonly WalletSwitch[] = [...EDGE_KINDS, "transfer:out", "transfer:in"];
+export const SWITCH_LABEL: Record<WalletSwitch, string> = {
+  ...EDGE_LABEL,
+  "transfer:out": "Sent",
+  "transfer:in": "Received",
+};
+
+/** Whether a wallet's switches hide this link; `near` when the wallet is the link's sending end. */
+function offFor(off: ReadonlySet<WalletSwitch> | undefined, e: AsylEdge, near: boolean): boolean {
+  if (!off) return false;
+  if (off.has(e.kind)) return true;
+  return e.kind === "transfer" && off.has(near ? "transfer:out" : "transfer:in");
+}
+
+/** Per-wallet switches as saved ({wallet: kinds}), read back as the filter takes them. */
+export function perWalletOf(raw: Record<string, readonly string[]> | null | undefined) {
+  const m = new Map<string, Set<WalletSwitch>>();
+  for (const [w, kinds] of Object.entries(raw ?? {})) {
+    const set = new Set(WALLET_SWITCHES.filter((k) => kinds.includes(k)));
+    if (set.size) m.set(w, set);
+  }
+  return m;
 }
 
 /** The link kinds that carry money, which the sliders cut. */

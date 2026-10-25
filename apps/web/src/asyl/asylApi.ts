@@ -81,6 +81,10 @@ export interface MapDoc {
   note: string;
   /** Link kinds switched off. */
   hidden: string[];
+  /** Kinds of link off for one wallet only, by wallet. */
+  walletHidden?: Record<string, string[]>;
+  /** Bubbles no drawn link reaches leave the map. */
+  hideLoose?: boolean;
   /** Nodes taken off the map, kept so they can be brought back. */
   removed?: string[];
   /** Links hidden one by one, by edgeKey. */

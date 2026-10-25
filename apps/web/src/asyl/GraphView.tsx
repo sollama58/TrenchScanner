@@ -309,6 +309,8 @@ export interface GraphViewHandle {
   size: () => { w: number; h: number };
   /** Draws again, after the page changed the layout's positions itself (an undo). */
   redraw: () => void;
+  /** Pans so a bubble sits in the middle of the view, at the zoom it is at. */
+  centre: (id: string) => void;
 }
 
 export function GraphView({
@@ -420,8 +422,19 @@ export function GraphView({
 
   useImperativeHandle(
     handle,
-    () => ({ fit, view: () => viewRef.current, size: sizeOf, redraw: () => setFrame((f) => f + 1) }),
-    [fit],
+    () => ({
+      fit,
+      view: () => viewRef.current,
+      size: sizeOf,
+      redraw: () => setFrame((f) => f + 1),
+      centre: (id: string) => {
+        const p = layout.pos.get(id);
+        if (!p) return;
+        const { w, h } = sizeOf();
+        setView((v) => ({ ...v, x: w / 2 - p.x * v.k, y: h / 2 - p.y * v.k }));
+      },
+    }),
+    [fit, layout],
   );
 
   // The simulation, a step per frame until it settles: after the map changes, and while a bubble

@@ -1589,3 +1589,61 @@ body {
     font-size: 13px;
   }
 }
+
+/* A bubble's own link switches, in its panel (user ask 2026-10-25). */
+.asyl-own-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.asyl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--asyl-line);
+  background: transparent;
+  color: var(--asyl-muted, #a89a90);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.6;
+  transition:
+    opacity 0.15s,
+    border-color 0.15s,
+    background 0.15s;
+}
+.asyl-chip.on {
+  opacity: 1;
+  color: inherit;
+  border-color: rgba(255, 122, 47, 0.55);
+  background: rgba(255, 122, 47, 0.1);
+}
+.asyl-chip:hover {
+  opacity: 1;
+}
+.asyl-loose {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.asyl-loose.off {
+  color: var(--asyl-muted, #a89a90);
+}
+
+.asyl-seg-small {
+  display: inline-flex;
+  float: right;
+  margin-top: -3px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.asyl-seg-small button {
+  flex: none;
+  padding: 2px 8px;
+  font-size: 11px;
+}
