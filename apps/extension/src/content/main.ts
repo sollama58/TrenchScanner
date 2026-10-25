@@ -1,5 +1,6 @@
 import { adapterForHost } from "./adapters/sites";
 import { OverlayEngine } from "./engine";
+import { HolderMarks } from "./holderMarks";
 import { MapTab } from "./mapTab";
 import { Toasts } from "./toasts";
 import { DEFAULT_SETTINGS } from "../shared/settings";
@@ -8,8 +9,10 @@ import type {
   ContentRequest,
   FeedAnswer,
   LookupAnswer,
+  OverlayBubbleMap,
   OverlayBubbleTotals,
   OverlaySettings,
+  SafetyAnswer,
 } from "../shared/types";
 
 /**
@@ -38,6 +41,8 @@ async function main(): Promise<void> {
             .sendMessage({ type: "health", site: adapter.site, ...health })
             .catch(() => undefined),
         totals: async (mint) => await ask<OverlayBubbleTotals>({ type: "totals", mint }),
+        safety: async (mints) =>
+          (await ask<SafetyAnswer>({ type: "safety", mints })) ?? { verdicts: {}, problem: "offline" },
       });
       engine.applyTooltip(tooltip);
       engine.start();
@@ -52,6 +57,11 @@ async function main(): Promise<void> {
 
   const mapTab = new MapTab(adapter.site, tooltip);
   mapTab.start();
+  const holderMarks = new HolderMarks(adapter.site, tooltip, {
+    holders: (mint) => ask<OverlayBubbleMap>({ type: "holders", mint }),
+    openMap: () => mapTab.show(),
+  });
+  holderMarks.start();
   const toasts = new Toasts(
     adapter.site,
     {
@@ -76,6 +86,7 @@ async function main(): Promise<void> {
       tooltip = cleanTooltip(m.prefs);
       engine?.applyTooltip(tooltip);
       mapTab.applyPrefs(tooltip);
+      holderMarks.applyPrefs(tooltip);
       toasts.apply(tooltip, settings);
     }
   });

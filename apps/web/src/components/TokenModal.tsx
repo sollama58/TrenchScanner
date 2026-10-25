@@ -138,6 +138,7 @@ import {
   useFilterCatchKept,
   useHolderReading,
   useHoldersView,
+  useHoldersUpdatedAt,
   useLiveShares,
 } from "./HoldersView";
 import { TopHolders } from "./TopHolders";
@@ -854,12 +855,14 @@ function TokenBody({
   // list follows the scans; the labeled wallets, the chart read they come from. The age always
   // shows (user ask 2026-10-24): "Live" is added only while the shares move with every trade and
   // the list is not past its next read (liveUntil), and drops back to the countdown after.
+  const updatedAt = useHoldersUpdatedAt(mint, holders.listReading, liveShares, holders.isKept);
   const holdersFresh = (() => {
     if (holders.isKept || !holders.listReading || !hasHolderList(holders.listReading)) return undefined;
     const chain = holderFreshness(holders.listReading, now, reads);
     const liveUntil = sharesMove && chain.due !== null ? chain.due + HOLDER_LIVE_GRACE_MS : null;
     return {
-      last: chain.last,
+      // When the holders on screen last changed, the list's read or a trade since (user ask 2026-10-25).
+      last: Math.max(chain.last, updatedAt ?? 0),
       next: chain.due,
       late: false,
       live: liveUntil !== null,
@@ -1212,7 +1215,7 @@ function TokenBody({
     <div className={`tm-holders-bar${holders.isKept ? " at-alert" : ""}`}>
       {holders.canSwitch && (
         <div className="segmented small tm-holders-switch" role="radiogroup" aria-label="Holders at">
-          {[...holders.options, { view: "now" as const, label: "Now", at: Infinity }].map((o) => (
+          {[...holders.options, { view: "now" as const, label: "Latest", at: Infinity }].map((o) => (
             <button
               key={o.view}
               type="button"
@@ -1263,6 +1266,8 @@ function TokenBody({
       spread={terminal && !column ? 2.6 : undefined}
       live={liveShares}
       freshness={holdersFresh}
+      // The holders bar above says the time for the map (and the list beside it), once.
+      stamp={!holdersBar}
     />
   );
   const bubbleMap = bubbleMapIn(false);
@@ -1549,7 +1554,7 @@ function TokenBody({
             flagged={flagged}
             entries={entries}
             pending={scanning}
-            freshness={holdersFresh}
+            freshness={holdersBar ? undefined : holdersFresh}
             solUsd={chartShown.data?.solUsd ?? null}
           />
         </div>

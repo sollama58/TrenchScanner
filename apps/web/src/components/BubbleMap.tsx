@@ -2344,6 +2344,7 @@ export function BubbleMapSection({
   spread,
   live = null,
   freshness,
+  stamp = true,
 }: {
   token: Token;
   /** The reading to draw; undefined while it loads. */
@@ -2386,6 +2387,11 @@ export function BubbleMapSection({
     live?: boolean;
     liveUntil?: number | null;
   };
+  /**
+   * The time on the map's heading. Off where the holders bar above says it for the map and the
+   * list together (user ask 2026-10-25: the time in one place only).
+   */
+  stamp?: boolean;
 }) {
   const mint = token.mintAddress;
   const liveWide = liveWideFor(snapshotIn, useWideMap(mint));
@@ -2510,7 +2516,7 @@ export function BubbleMapSection({
     <section className={`sage-card bm-section${column ? " bm-col" : ""}`}>
       <h4>
         <BubblesIcon size={14} /> Bubble map
-        {(moment || freshness) && (
+        {stamp && (moment || freshness) && (
           <span
             className="sage-tag"
             title={

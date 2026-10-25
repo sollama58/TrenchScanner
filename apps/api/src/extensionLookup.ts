@@ -21,6 +21,8 @@ const SHARED_TTL_MS = 20_000;
 const SHARED_CACHE_MAX = 5_000;
 /** The AI reviewer's reasoning is cut to this for a tooltip. */
 const REASONING_MAX = 280;
+/** A failed verdict's reasons, at most this many, for a tooltip. */
+const REASONS_MAX = 6;
 
 /** A Solana address: base58 that decodes to exactly 32 bytes. */
 export function isMintAddress(value: string): boolean {
@@ -72,6 +74,17 @@ export interface OverlayAiReview {
   at: string;
 }
 
+/**
+ * The safety screen's verdict on the newest scan (user ask 2026-10-25), as the site's token view
+ * pill reads it (web safetyScreen.ts): a coin that passed at its alert can fail later, and back.
+ */
+export interface OverlaySafety {
+  passed: boolean;
+  /** Why it failed, in the screen's words; empty when it passed. */
+  reasons: string[];
+  at: string;
+}
+
 export interface OverlayToken {
   mint: string;
   symbol: string | null;
@@ -80,6 +93,8 @@ export interface OverlayToken {
   image: string | null;
   liveMcapUsd: number | null;
   stats: OverlayStats | null;
+  /** Null until the scanner has a snapshot of the coin. */
+  safety: OverlaySafety | null;
   modelCalls: OverlayModelCall[];
   filterMatches: OverlayFilterMatch[];
   ai: OverlayAiReview | null;
@@ -128,6 +143,8 @@ interface TokenRow {
   cexFundedPct: number | null;
   kolRecentBuyers: number | null;
   mintAuthorityActive: boolean | null;
+  rugScreenPassed: boolean | null;
+  rugScreenReasons: string[] | null;
 }
 
 async function loadShared(mints: string[], now: number): Promise<Map<string, SharedToken>> {
@@ -139,7 +156,8 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
     SELECT t."id", t."mintAddress", t."symbol", t."name", t."imageUrl", t."liveMarketCapUsd",
            s."takenAt", s."marketCapUsd", s."holderCount", s."bundledSupplyPct",
            s."sniperTopHolderCount", s."linkedWalletPct", s."devWalletPct", s."top10HolderPct",
-           s."freshTop10WalletPct", s."cexFundedPct", s."kolRecentBuyers", s."mintAuthorityActive"
+           s."freshTop10WalletPct", s."cexFundedPct", s."kolRecentBuyers", s."mintAuthorityActive",
+           s."rugScreenPassed", s."rugScreenReasons"
     FROM "Token" t
     LEFT JOIN LATERAL (
       SELECT * FROM "TokenSnapshot" ts WHERE ts."tokenId" = t."id" ORDER BY ts."takenAt" DESC LIMIT 1
@@ -223,6 +241,14 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
                 kolRecentBuyers: r.kolRecentBuyers,
                 mintAuthorityActive: r.mintAuthorityActive,
               },
+        safety:
+          r.takenAt === null || r.rugScreenPassed === null
+            ? null
+            : {
+                passed: r.rugScreenPassed,
+                reasons: r.rugScreenPassed ? [] : (r.rugScreenReasons ?? []).slice(0, REASONS_MAX),
+                at: r.takenAt.toISOString(),
+              },
         ai: reviewByToken.get(r.id) ?? null,
       },
       calls: callsByToken.get(r.id) ?? [],
@@ -240,16 +266,8 @@ function remember(mint: string, value: SharedToken | null, now: number): void {
   sharedCache.set(mint, { at: now, value });
 }
 
-/**
- * The overlay's answer for one reader. `mints` must already be valid and unique. `calls` is the
- * reader's feed calls (their followed models); the filter matches are read for them alone.
- */
-export async function lookupOverlay(
-  userId: string,
-  mints: readonly string[],
-  calls: FeedCalls,
-  now = Date.now(),
-): Promise<OverlayLookup> {
+/** Each mint's shared half, from the cache where it is fresh enough; null for an untracked mint. */
+async function sharedFor(mints: readonly string[], now: number): Promise<Map<string, SharedToken | null>> {
   const shared = new Map<string, SharedToken | null>();
   const missing: string[] = [];
   for (const mint of mints) {
@@ -263,7 +281,35 @@ export async function lookupOverlay(
     remember(mint, value, now);
     shared.set(mint, value);
   }
+  return shared;
+}
 
+/**
+ * The safety verdicts of the coins on a board, for the extension's option that hides or marks the
+ * ones failing the screen (user ask 2026-10-25). The same for every reader, so it reads only the
+ * shared half; a coin the scanner never stored, or never screened, is left out.
+ */
+export async function safetyOverlay(
+  mints: readonly string[],
+  now = Date.now(),
+): Promise<Record<string, OverlaySafety>> {
+  const shared = await sharedFor(mints, now);
+  const out: Record<string, OverlaySafety> = {};
+  for (const [mint, value] of shared) if (value?.token.safety) out[mint] = value.token.safety;
+  return out;
+}
+
+/**
+ * The overlay's answer for one reader. `mints` must already be valid and unique. `calls` is the
+ * reader's feed calls (their followed models); the filter matches are read for them alone.
+ */
+export async function lookupOverlay(
+  userId: string,
+  mints: readonly string[],
+  calls: FeedCalls,
+  now = Date.now(),
+): Promise<OverlayLookup> {
+  const shared = await sharedFor(mints, now);
   const tracked = mints.flatMap((m) => {
     const value = shared.get(m);
     return value ? [value] : [];

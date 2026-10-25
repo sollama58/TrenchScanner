@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { axiom, gmgn, terminal } from "./adapters/sites";
+import { columnOf, findColumns } from "./columns";
 import { OverlayEngine } from "./engine";
 import { tooltipBody } from "./ui";
 import { DEFAULT_SETTINGS } from "../shared/settings";
+import { cleanTooltip } from "../shared/tooltip";
 import { token } from "../shared/testToken";
 import { verdictFor } from "../shared/verdict";
 
@@ -208,5 +210,85 @@ describe("overlay engine", () => {
     e.scan(11_000);
     expect(reports.at(-1)).toEqual({ rows: 1, mints: 1, paused: false });
     e.stop();
+  });
+});
+
+describe("safety screen on the boards", () => {
+  const failed = { passed: false, reasons: ["top 10 holders own 52%"], at: new Date().toISOString() };
+  const passed = { passed: true, reasons: [], at: new Date().toISOString() };
+  function pulse() {
+    board(`<section><header><span>New Pairs</span></header>
+        <div id="a" data-pulse-token-address="${A}"></div></section>
+      <section><header><span>Migrated</span></header>
+        <div id="b" data-pulse-token-address="${B}"></div></section>`);
+    const asked: string[][] = [];
+    const e = new OverlayEngine(axiom, DEFAULT_SETTINGS, {
+      lookup: async () => ({ tokens: {}, problem: null }),
+      report: () => undefined,
+      safety: async (mints) => {
+        asked.push(mints);
+        return { verdicts: {}, problem: null };
+      },
+    });
+    return { e, asked, a: document.getElementById("a")!, b: document.getElementById("b")! };
+  }
+  const prefs = (mode: "off" | "hide" | "mark", columns: Partial<Record<string, boolean>> = {}) =>
+    cleanTooltip({ safety: { mode, columns } });
+
+  it("asks nothing and changes nothing while it is off", () => {
+    const { e, a } = pulse();
+    e.start();
+    e.scan();
+    e.receiveSafety([A], { verdicts: { [A]: failed }, problem: null });
+    expect(a.style.display).toBe("");
+    expect(a.querySelector("trench-overlay-x")).toBeNull();
+    e.stop();
+  });
+
+  it("hides a failing coin and shows it again once a scan passes it", () => {
+    const { e, a, b } = pulse();
+    e.applyTooltip(prefs("hide"));
+    e.start();
+    e.scan();
+    e.receiveSafety([A, B], { verdicts: { [A]: failed, [B]: passed }, problem: null });
+    expect(a.style.display).toBe("none");
+    expect(b.style.display).toBe("");
+    e.receiveSafety([A], { verdicts: { [A]: passed }, problem: null });
+    expect(a.style.display).toBe("");
+    // A coin TrenchScanner never screened stays.
+    e.receiveSafety([A], { verdicts: {}, problem: null });
+    expect(a.style.display).toBe("");
+    e.stop();
+  });
+
+  it("marks a failing coin with an X instead, and only in the columns picked", () => {
+    const { e, a, b } = pulse();
+    e.applyTooltip(prefs("mark", { graduated: false }));
+    e.start();
+    e.scan();
+    e.receiveSafety([A, B], { verdicts: { [A]: failed, [B]: failed }, problem: null });
+    expect(a.querySelector("trench-overlay-x")).not.toBeNull();
+    expect(a.style.display).toBe("");
+    // B sits in Migrated, which the reader left out.
+    expect(b.querySelector("trench-overlay-x")).toBeNull();
+    e.applyTooltip(prefs("off"));
+    expect(a.querySelector("trench-overlay-x")).toBeNull();
+    e.stop();
+  });
+
+  it("puts each row in its column: Terminal's marks, else the headings around it", () => {
+    board(
+      `<div data-trenches-item="SOLANA:${A}-NEW"></div><div data-trenches-item="SOLANA:${B}-MIGRATED"></div>`,
+    );
+    const rows = terminal.findRows(document);
+    expect(rows.map((r) => columnOf(r, findColumns(document, rows)))).toEqual(["new", "graduated"]);
+    const { a, b } = pulse();
+    const pulseRows = axiom.findRows(document);
+    const boxes = findColumns(document, pulseRows);
+    expect([columnOf(a, boxes), columnOf(b, boxes)]).toEqual(["new", "graduated"]);
+    // A lone "New" (a tab on a Trending list) makes no column.
+    board(`<button>New</button><div id="c" data-pulse-token-address="${A}"></div>`);
+    const lone = axiom.findRows(document);
+    expect(columnOf(lone[0]!, findColumns(document, lone))).toBe("other");
   });
 });

@@ -8,6 +8,7 @@ import {
   shownLines,
   type ColorKey,
   type MapLine,
+  type RingEffect,
   type TipLine,
 } from "../shared/tooltip";
 import type { FlagId, OverlayBubbleTotals, RingStyle, OverlayToken } from "../shared/types";
@@ -59,6 +60,28 @@ const RING_CSS = `
 .badge.more { border-style: dashed; }
 .badge.more i { display: none; }
 .badge.gone { display: none; }
+.fx { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; }
+.fx.pulse { animation: fx-pulse 1.6s ease-in-out infinite; }
+.fx.glow { box-shadow: inset 0 0 0 2px var(--a), inset 0 0 36px -6px var(--a); }
+.fx.shimmer::before { content: ""; position: absolute; inset: 0;
+  background: linear-gradient(110deg, transparent 35%, color-mix(in srgb, var(--b) 38%, transparent) 50%, transparent 65%);
+  background-size: 250% 100%; animation: fx-shimmer 2.4s linear infinite; }
+.fx.sparkle::before, .fx.sparkle::after { content: ""; position: absolute; inset: 0; animation: fx-twinkle 1.8s ease-in-out infinite; }
+.fx.sparkle::before { background:
+  radial-gradient(circle at 12% 28%, var(--b) 0 1.5px, transparent 2.5px),
+  radial-gradient(circle at 46% 78%, var(--a) 0 1.5px, transparent 2.5px),
+  radial-gradient(circle at 83% 22%, var(--b) 0 2px, transparent 3px); }
+.fx.sparkle::after { animation-delay: .9s; background:
+  radial-gradient(circle at 28% 70%, var(--a) 0 2px, transparent 3px),
+  radial-gradient(circle at 64% 18%, var(--b) 0 1.5px, transparent 2.5px),
+  radial-gradient(circle at 92% 74%, var(--a) 0 1.5px, transparent 2.5px); }
+.fx.flash { animation: fx-flash 2.6s ease-out infinite; }
+@keyframes fx-pulse { 0%, 100% { box-shadow: inset 0 0 0 1px var(--a), inset 0 0 6px -2px var(--a); }
+  50% { box-shadow: inset 0 0 0 2px var(--a), inset 0 0 30px -4px var(--a); } }
+@keyframes fx-shimmer { from { background-position: 150% 0; } to { background-position: -100% 0; } }
+@keyframes fx-twinkle { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+@keyframes fx-flash { 0% { background: color-mix(in srgb, var(--a) 28%, transparent); } 18%, 100% { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .fx { animation: none !important; } .fx::before, .fx::after { animation: none !important; } }
 `;
 
 /** A shadow root's colours: its own style rule, rewritten only when they change. */
@@ -80,6 +103,8 @@ export interface Pills {
   more: PillSegment[] | null;
   riskDot: boolean;
   colors: Record<ColorKey, string>;
+  /** The ring's model's or filter's own effect. */
+  effect?: RingEffect;
 }
 
 /** A pill's text as spans, written with textContent only (a filter's name is the reader's text). */
@@ -115,6 +140,7 @@ export interface DecorationOptions {
 export class Decoration {
   readonly host: HTMLElement;
   private readonly ring: HTMLDivElement;
+  private readonly fx = document.createElement("div");
   private readonly badge: HTMLSpanElement;
   private readonly badgeText: HTMLSpanElement;
   private readonly riskDot: HTMLElement;
@@ -144,6 +170,7 @@ export class Decoration {
     const style = document.createElement("style");
     style.textContent = RING_CSS;
     this.ring = document.createElement("div");
+    this.ring.append(this.fx);
     this.badge = document.createElement("span");
     this.badge.className = "badge";
     this.badge.append(document.createElement("i"));
@@ -168,6 +195,8 @@ export class Decoration {
       return;
     }
     this.ring.className = `ring ${verdict.ring} ${style}${calm ? " calm" : ""}`;
+    const effect = pills.effect && pills.effect !== "none" ? pills.effect : "";
+    if (this.fx.className !== `fx ${effect}`) this.fx.className = `fx ${effect}`;
     this.colors.set(pills.colors);
     this.kind = verdict.ring;
     this.hasMain = pills.main.length > 0;
@@ -278,7 +307,7 @@ export class Decoration {
     this.placeFrame = 0;
     this.placedFor = "";
     this.host.remove();
-    if (this.madeRelative) {
+    if (this.madeRelative && !this.row.querySelector(":scope > trench-overlay-x")) {
       this.row.style.position = "";
       this.madeRelative = false;
     }
@@ -286,6 +315,79 @@ export class Decoration {
 
   get attached(): boolean {
     return this.host.isConnected;
+  }
+}
+
+const MARK_CSS = `
+:host { all: initial; position: absolute; inset: 0; pointer-events: none; z-index: 6; }
+.dim { position: absolute; inset: 0; border-radius: 6px; background: color-mix(in srgb, var(--c-pillBg) 45%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-risk) 55%, transparent); }
+svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+line { stroke: var(--c-risk); stroke-width: 2.5; stroke-linecap: round; opacity: .8; vector-effect: non-scaling-stroke; }
+.tag { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: auto; cursor: default;
+  font: 600 10.5px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+  background: var(--c-pillBg); color: var(--c-hi); border: 1px solid var(--c-risk); }
+`;
+
+/**
+ * The X over a coin failing TrenchScanner's safety screen (user ask 2026-10-25): two strokes
+ * across the row, dimmed, with the screen's reasons on hover. Clicks still reach the site, but
+ * on the tag.
+ */
+export class SafetyMark {
+  private readonly host = document.createElement("trench-overlay-x");
+  private readonly tag = document.createElement("span");
+  private readonly colors = new ColorRule();
+  private madeRelative = false;
+
+  constructor(private readonly row: HTMLElement) {
+    const root = this.host.attachShadow({ mode: "closed" });
+    const style = document.createElement("style");
+    style.textContent = MARK_CSS;
+    const dim = document.createElement("div");
+    dim.className = "dim";
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", "0 0 100 100");
+    svg.setAttribute("preserveAspectRatio", "none");
+    for (const [x1, y1, x2, y2] of [
+      [3, 6, 97, 94],
+      [97, 6, 3, 94],
+    ]) {
+      const stroke = document.createElementNS(NS, "line");
+      stroke.setAttribute("x1", String(x1));
+      stroke.setAttribute("y1", String(y1));
+      stroke.setAttribute("x2", String(x2));
+      stroke.setAttribute("y2", String(y2));
+      svg.append(stroke);
+    }
+    this.tag.className = "tag";
+    this.tag.textContent = "✕ Failed safety";
+    root.append(style, this.colors.node, dim, svg, this.tag);
+  }
+
+  update(reasons: readonly string[], colors: Record<ColorKey, string>): void {
+    this.colors.set(colors);
+    const title = reasons.length
+      ? `Fails TrenchScanner's safety screen on its newest scan: ${reasons.join("; ")}`
+      : "Fails TrenchScanner's safety screen on its newest scan";
+    if (this.tag.title !== title) this.tag.title = title;
+    if (this.host.parentElement === this.row) return;
+    const position = getComputedStyle(this.row).position;
+    if (position === "" || position === "static") {
+      this.row.style.position = "relative";
+      this.madeRelative = true;
+    }
+    this.row.append(this.host);
+  }
+
+  remove(): void {
+    this.host.remove();
+    // The ring may still be drawn in the row, positioned by this.
+    if (this.madeRelative && !this.row.querySelector(":scope > trench-overlay")) {
+      this.row.style.position = "";
+      this.madeRelative = false;
+    }
   }
 }
 

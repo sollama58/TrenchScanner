@@ -119,3 +119,24 @@ the viewed coin's address to TrenchScanner, alerted or not; turn it off to stop 
 0.5.2: links back to TrenchScanner open the coin's token view (`?token=<mint>`, read by the site's
 `tradeLink.ts`) rather than TokenSage, and an on-page alert shows once per coin, whichever models
 or filters call it later.
+
+0.7.0 (user asks 2026-10-25):
+
+- **Safety screen on the boards** (Settings → Safety screen on the boards, off by default): a coin
+  whose newest TrenchScanner scan fails the safety screen is hidden, or marked with an X and the
+  screen's reasons on hover, and shows again once a scan passes it. The reader picks the columns it
+  applies to: New, About to graduate, Graduated, and Trending and other lists
+  (`src/content/columns.ts`: Terminal's row marks, else the column headings). Coins TrenchScanner
+  never scanned stay as they are. Unlike the rings, this sends the board's addresses to
+  TrenchScanner (`POST /ext/v1/safety`, database only, the verdict the same for every reader), and
+  only while it is on. It is not used on a coin's own page.
+- **Holder markers** (Settings → On a coin's page, on by default): on a coin's page, each wallet the
+  page names that is among the coin's top holders on the bubble map gets a chip (its cluster,
+  same-minute funding, sniper, fresh, block zero or empty wallet, CEX funding, dev ties); a chip
+  opens the Bubble map tab (`src/content/holderMarks.ts`). Wallets are found by links naming them in
+  full or by text that is the address or a short form only one holder fits, so it marks them in the
+  holders list and anywhere else on the page. It reads the viewed coin's map, as the tab does.
+- **Each model and filter** (Settings → Each model and filter): its own ring colour and an extra
+  effect (pulse, strong glow, shimmer, sparkle, flash), for the models and filters in the feed.
+- The map's time: one "Updated …" stamp, in the holders bar, counting the live trades that move the
+  shares, and "Now" reads "Latest".

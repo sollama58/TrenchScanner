@@ -175,6 +175,31 @@ select {
   flex: none;
   cursor: pointer;
 }
+.signal {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin-top: 6px;
+}
+.signal .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.signal select {
+  width: auto;
+}
+.signal input[type="color"] {
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #2a2d38;
+  border-radius: 5px;
+  background: none;
+  cursor: pointer;
+}
 .toastopts {
   display: flex;
   flex-direction: column;
@@ -182,7 +207,8 @@ select {
   margin-top: 6px;
 }
 .toastopts[hidden],
-.tiplines[hidden] {
+.tiplines[hidden],
+.sites.columns[hidden] {
   display: none;
 }
 .pick {
@@ -230,6 +256,10 @@ select {
   padding: 6px 0;
   cursor: pointer;
   font-size: 12px;
+}
+.sites.columns {
+  grid-template-columns: 1fr 1fr;
+  margin-top: 6px;
 }
 .sites input {
   accent-color: var(--filter);

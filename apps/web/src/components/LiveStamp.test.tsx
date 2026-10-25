@@ -17,13 +17,13 @@ describe("LiveStamp", () => {
     const html = renderToStaticMarkup(
       <LiveStamp last={last} next={next} live liveUntil={Date.now() + 60_000} />,
     );
-    expect(html).toMatch(/>Live · 1\ds ago</);
+    expect(html).toMatch(/>Live · updated 1\ds ago</);
     expect(html).not.toMatch(/Next update|Updating|Checking again/);
   });
 
   it("drops Live and counts down once the list is past its next read", () => {
     const html = renderToStaticMarkup(<LiveStamp last={last} next={next} live liveUntil={last} />);
-    expect(html).toMatch(/>1\ds ago · Next update in /);
+    expect(html).toMatch(/>Updated 1\ds ago · Next update in /);
     expect(html).not.toMatch(/>Live/);
   });
 });
