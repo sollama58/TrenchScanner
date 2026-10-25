@@ -602,6 +602,18 @@ export function AsylApp() {
             : `${found} of ${wallets.length} funders found`,
         );
       }),
+    trace: (wallet) =>
+      void run("Tracing its funders back…", async () => {
+        const r = await asylApi.trace(wallet);
+        add(r.graph);
+        setSession((s) => (typeof s === "object" ? { ...s, chain: r.allowance } : s));
+        const end = r.trace.path[r.trace.path.length - 1];
+        if (end && end !== wallet) setSelected(end);
+        const spent = r.cached
+          ? "No credits used."
+          : `${r.credits} credit${r.credits === 1 ? "" : "s"} used.`;
+        return `${r.note} ${spent}`;
+      }),
     chainToken: (mint) =>
       void run("Reading holders from the chain…", async () => {
         const r = await asylApi.chainToken(mint);

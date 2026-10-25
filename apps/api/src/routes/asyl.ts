@@ -45,6 +45,9 @@ import {
   readFunders,
   readTokenHolders,
   readWalletFlows,
+  traceFunders,
+  addTrace,
+  traceNote,
   type ChainRefusal,
 } from "../asyl/chain.js";
 import {
@@ -449,6 +452,28 @@ export async function registerAsylRoutes(
         focus: p.data.wallet,
         graph,
         flows: { txs: res.value.txs, fromMs: res.value.fromMs, toMs: res.value.toMs },
+        credits: res.credits,
+        cached: res.cached,
+        allowance: res.allowance,
+      };
+    });
+
+    /** A wallet's funder, its funder's funder, and on, to an exchange or a wallet the chain can't name a funder for. */
+    priv.post("/chain/trace/:wallet", { config: { rateLimit: CHAIN_LIMIT } }, async (request, reply) => {
+      const p = walletParams.safeParse(request.params);
+      if (!p.success) return bad(reply, p.error);
+      if (!(await chainGate(request, reply))) return reply;
+      const res = await traceFunders(env, opts.helius!, request.user!.userId, p.data.wallet);
+      if ("refused" in res) return refusal(reply, res);
+      const g = new GraphBuilder();
+      await addTrace(g, res.value);
+      const graph = await decorate(g, await trackedOf(request));
+      const end = res.value.path[res.value.path.length - 1]!;
+      return {
+        focus: p.data.wallet,
+        graph,
+        trace: res.value,
+        note: traceNote(res.value, graph.nodes.find((n) => n.id === end)?.name ?? null),
         credits: res.credits,
         cached: res.cached,
         allowance: res.allowance,
