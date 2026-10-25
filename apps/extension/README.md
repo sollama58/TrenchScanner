@@ -16,15 +16,16 @@ access beyond `api.trenchscanner.app`, and no `tabs`, `scripting`, `cookies` or 
   TrenchScanner's site (`externally_connectable`) for the one-click key hand-over.
 - `src/panel/` is the side panel: the alerts list (`card.ts`), Trade Buddy (`buddy.ts`) and the
   settings, which are saved to the account. The toolbar icon or Alt+Shift+T opens it.
-- **Bubble maps** (`bubble.ts`, 0.3.0): a click on an alert opens its latest bubble map, with the
-  site's category totals (Linked, KOL bundled, Bundled, Same minute, CEX-funded, Tied to dev,
-  Transferred, Top 10, and the wallet types). The API's `/ext/v1/bubble/:mint` serves the site's
-  reading (`apps/api/src/extensionBubble.ts`) and keeps the map watched while it is open, as the
-  site's token view does, so the worker keeps those holders current, and keeps the coin scanned
-  outside the market cap band. Live while open (0.5.1, `shared/follow.ts`): a held
-  `/ext/v1/bubble/:mint/wait` answers the moment the scanner writes the coin's next holder reading
-  or top 50, and the map is read again at once; otherwise re-read every 30 s. Nothing is held or
-  polled while the panel or page is hidden.
+- **Bubble maps** (0.6.0, user ask 2026-10-25): the site's own map, so it looks and acts the same
+  (clusters, KOLs, transfers, CEX links, risky rings, wallet names, zoom, the Holders switch and
+  its moments). The site's code is bundled in (`apps/web/src/components/TokenMapView.tsx` through
+  `apps/web/src/embed/tokenMapEmbed.tsx`, with React; `src/map/siteMap.ts`), in a shadow root of
+  its own in the panel. Every API call it makes goes to the worker, which sends it to
+  `POST /ext/v1/site`: the API replays it as the key's owner only if it is one of the map's own
+  reads for a coin (`apps/api/src/extensionSite.ts`), so the key reaches nothing else on the site.
+  It follows the coin live as the token view does (the holder wait, the top 50, the live trades),
+  and keeps the coin watched and scanned while open. A wallet it opens opens on TrenchScanner.
+  `/ext/v1/bubble/:mint` (`apps/api/src/extensionBubble.ts`) still serves the tooltip's map lines.
 - **Trade Buddy** (`buddy.ts`, 0.3.0): the coins the account's own wallet bought, from any venue,
   followed as the site's TRADES panel follows them (`/ext/v1/buddy`, `apps/api/src/extensionBuddy.ts`),
   each with its token card, bubble map (held coins open by default) and PnL. Pro Mode accounts get a
@@ -109,10 +110,11 @@ what is already there.
 
 Bubble map tab (Settings → Bubble map tab, on by default): on a coin's own page (Axiom
 `/meme/…`, Terminal `/trade/solana/…`, GMGN `/sol/token/…`) a "Bubble map" tab is added beside
-the site's Top Traders tab and opens the panel's bubble map in a box on the page
-(`src/content/mapTab.ts`). Unlike the rings, this sends the viewed coin's address to TrenchScanner
-(`{type: "map"}`, cached 30s, and `{type: "mapWait"}` while the box is open, so it redraws when
-the coin's next reading is written), alerted or not; turn it off to stop that.
+the site's Top Traders tab and opens the site's map in a box on the page (`src/content/mapTab.ts`).
+The map runs in a frame of the extension's own page (`map.html`, `src/map/page.ts`, a web
+accessible resource with a per-session URL), so none of its code or reads runs in the site's page,
+and the worker answers that frame's reads only while the tab is on. Unlike the rings, this sends
+the viewed coin's address to TrenchScanner, alerted or not; turn it off to stop that.
 
 0.5.2: links back to TrenchScanner open the coin's token view (`?token=<mint>`, read by the site's
 `tradeLink.ts`) rather than TokenSage, and an on-page alert shows once per coin, whichever models

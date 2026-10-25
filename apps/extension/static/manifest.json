@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Trench Overlay",
   "short_name": "Trench Overlay",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Your TrenchScanner alerts in a side panel, with alerted tokens ringed on Axiom, Terminal and GMGN.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "sidePanel"],
@@ -25,6 +25,19 @@
       "js": ["content.js"],
       "run_at": "document_idle",
       "world": "ISOLATED"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["map.html", "map.js", "map.css", "map-fonts.css", "fonts/*"],
+      "matches": [
+        "https://axiom.trade/*",
+        "https://*.axiom.trade/*",
+        "https://*.padre.gg/*",
+        "https://gmgn.ai/*",
+        "https://*.gmgn.ai/*"
+      ],
+      "use_dynamic_url": true
     }
   ],
   "externally_connectable": {

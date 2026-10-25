@@ -62,9 +62,6 @@ const RING_FEED_MS = 10_000;
 /** A tooltip's map totals are reused this long (a scan lands every few minutes at most). */
 const TOTALS_MS = 60_000;
 const totalsCache = new Map<string, { at: number; totals: OverlayBubbleTotals | null }>();
-/** A coin page's map is reused this long (the panel re-reads an open map every 30 s). */
-const PAGE_MAP_MS = 30_000;
-const pageMaps = new Map<string, { at: number; answer: BubbleAnswer }>();
 
 async function tooltipPrefs(): Promise<TooltipPrefs> {
   const { tooltip } = await chrome.storage.local.get("tooltip");
@@ -129,22 +126,30 @@ async function feed(): Promise<FeedAnswer> {
   return { tokens: lastTokens, problem };
 }
 
+/** The answer the site map gets when its read could not be made (map/siteMap.ts). */
+const NO_SITE = (status: number, error: string) => ({ status, body: JSON.stringify({ error }) });
+
 /**
- * Held until an open map's coin has a new reading (shared/follow.ts), or null when the ask failed.
- * A new reading drops the coin's cached map and totals, so the read that follows gets it.
+ * One API call of the site's own bubble map (map/siteMap.ts), made through the key: the API
+ * replays it as the key's owner if it is one of the map's reads, and refuses anything else
+ * (apps/api/src/extensionSite.ts). Status and body come back as the API sent them.
  */
-async function bubbleWait(mint: unknown): Promise<{ changed: boolean; pushed: boolean } | null> {
+async function site(
+  request: Extract<PanelRequest, { type: "site" }>,
+): Promise<{ status: number; body: string }> {
   const { key, refused } = await stored();
-  if (!key || refused || typeof mint !== "string" || !isMintAddress(mint)) return null;
+  if (!key || refused) return NO_SITE(401, "disconnected");
+  const { method, path, body } = request;
+  if (typeof method !== "string" || typeof path !== "string" || !path.startsWith("/"))
+    return NO_SITE(400, "bad_call");
+  if (body !== null && typeof body !== "string") return NO_SITE(400, "bad_call");
   try {
-    const answer = await api.bubbleWait(key, mint);
-    if (answer.changed) {
-      pageMaps.delete(mint);
-      totalsCache.delete(mint);
-    }
-    return answer;
-  } catch {
-    return null;
+    return await api.site(key, { method, path, body });
+  } catch (e) {
+    if (!(e instanceof ApiError)) return NO_SITE(503, "offline");
+    // A refused key is the panel's problem too; a refused call is only this map's.
+    if (e.status === 401) noteFailure(e);
+    return NO_SITE(e.status, e.message);
   }
 }
 
@@ -238,10 +243,8 @@ async function handle(request: PanelRequest): Promise<unknown> {
       return status();
     case "feed":
       return feed();
-    case "bubble":
-      return bubble(request.mint);
-    case "bubbleWait":
-      return bubbleWait(request.mint);
+    case "site":
+      return site(request);
     case "buddy":
       return buddy(request.cached === true);
     case "disconnect":
@@ -297,22 +300,6 @@ async function handleContent(request: ContentRequest, tabId: number | undefined)
       if (!(await tooltipPrefs()).toast.enabled) return null;
       return Date.now() - feedReadAt < RING_FEED_MS ? { tokens: lastTokens, problem } : await feed();
     }
-    case "map": {
-      // The coin the reader opened on the site: asked about only while they keep the map tab on.
-      if (!(await tooltipPrefs()).mapTab.enabled || !isMintAddress(request.mint)) return null;
-      const cached = pageMaps.get(request.mint);
-      if (cached && Date.now() - cached.at < PAGE_MAP_MS) return cached.answer;
-      const answer = await bubble(request.mint);
-      if (answer.problem === null || answer.problem === "untracked") {
-        if (pageMaps.size > 100) pageMaps.clear();
-        pageMaps.set(request.mint, { at: Date.now(), answer });
-      }
-      return answer;
-    }
-    case "mapWait":
-      // Only while the map tab is on, as "map" asks.
-      if (!(await tooltipPrefs()).mapTab.enabled) return null;
-      return bubbleWait(request.mint);
     case "totals": {
       // Only a coin already in the reader's alerts, so a page can't send other addresses out.
       if (!lastTokens.some((t) => t.mint === request.mint)) return null;
@@ -342,6 +329,11 @@ function fromRingPage(sender: chrome.runtime.MessageSender): boolean {
   }
 }
 
+/** One of the extension's pages framed inside a site's page: the map tab's frame. */
+function inPageFrame(sender: chrome.runtime.MessageSender): boolean {
+  return (sender.frameId ?? 0) !== 0 && !(sender.tab?.url ?? "").startsWith(chrome.runtime.getURL(""));
+}
+
 /** The extension's own pages: the side panel, or the panel opened in a tab. */
 function fromPanel(sender: chrome.runtime.MessageSender): boolean {
   return typeof sender.url === "string" && sender.url.startsWith(chrome.runtime.getURL(""));
@@ -355,6 +347,16 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     return true;
   }
   if (!fromPanel(sender)) return false;
+  // The bubble map tab's frame on a coin's page (content/mapTab.ts): its map's reads only, and
+  // only while the reader keeps the tab on.
+  if (inPageFrame(sender)) {
+    const request = message as PanelRequest;
+    if (request.type !== "site") return false;
+    tooltipPrefs()
+      .then((prefs) => (prefs.mapTab.enabled ? site(request) : NO_SITE(403, "map_tab_off")))
+      .then(sendResponse, () => sendResponse(null));
+    return true;
+  }
   handle(message as PanelRequest).then(sendResponse, () => sendResponse(null));
   return true;
 });

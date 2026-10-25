@@ -27,6 +27,7 @@ import {
   type OverlayBubbleMap,
 } from "../extensionBubble.js";
 import { buddyAnswer, buddyCoins, type BuddyAnswer } from "../extensionBuddy.js";
+import { allowedSiteCall, SITE_CALL_MAX_BODY } from "../extensionSite.js";
 import { freeLookupReason } from "../lookupGate.js";
 import { overlaySettingsSchema, parseOverlaySettings } from "../overlaySettings.js";
 import { cachedProStatus } from "../proMode.js";
@@ -75,6 +76,14 @@ const BUBBLE_CACHE_MAX = 2_000;
  * last one answers (every 20 s while nothing is written), so a dozen open maps fit.
  */
 const BUBBLE_WAIT_RATE_LIMIT = { max: 60, timeWindow: "1 minute" };
+/**
+ * Site map reads a minute (POST /site): one open map polls its scans, chart and top 50 and holds
+ * its live trades and holder wait, and the panel can show several maps at once.
+ */
+const SITE_RATE_LIMIT = { max: 600, timeWindow: "1 minute" };
+/** A key owner's inner session is signed again after this; it never leaves this process. */
+const SITE_SESSION_MS = 5 * 60_000;
+const SITE_SESSION_MAX = 5_000;
 /** Trade Buddy reads a minute: the panel polls every 5 s (every 10 s before 0.3.1), plus a second window. */
 const BUDDY_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 /** A Trade Buddy answer this fresh is served as is; an older one is served while a new one is read. */
@@ -414,6 +423,63 @@ export async function registerExtensionRoutes(
       reply.header("Cache-Control", "no-store");
       if (!opts.holderWrites) return { changed: false, pushed: false };
       return bubbleWaits.wait(mint, HOLDER_WAIT_MS, closedSignal(reply));
+    },
+  );
+
+  /** Each key owner's inner session for /site, signed under their current sessionVersion. */
+  const siteSessions = new Map<string, { at: number; token: string }>();
+  async function siteSession(userId: string, walletAddress: string): Promise<string | null> {
+    const now = Date.now();
+    const kept = siteSessions.get(userId);
+    if (kept && now - kept.at < SITE_SESSION_MS) return kept.token;
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { sessionVersion: true } });
+    if (!user) return null;
+    const token = await app.sessionSigner.sign({
+      userId,
+      walletAddress,
+      sessionVersion: user.sessionVersion,
+      issuedAtMs: now,
+    });
+    if (!siteSessions.has(userId) && siteSessions.size >= SITE_SESSION_MAX) {
+      const oldest = siteSessions.keys().next().value;
+      if (oldest !== undefined) siteSessions.delete(oldest);
+    }
+    siteSessions.set(userId, { at: now, token });
+    return token;
+  }
+
+  /**
+   * One read of the site's bubble map for the extension's copy of it (user ask 2026-10-25): the
+   * call, if extensionSite.ts lists it, replayed in this process as the key's owner, and its
+   * status and body handed back. So the map in the extension reads what the owner's token view
+   * reads, and nothing else on the site is reachable with a key.
+   */
+  app.post(
+    "/site",
+    {
+      bodyLimit: SITE_CALL_MAX_BODY * 2,
+      config: { rateLimit: { ...SITE_RATE_LIMIT, keyGenerator: bucket } },
+    },
+    async (request, reply) => {
+      const call = allowedSiteCall(request.body);
+      if (!call) return reply.code(403).send({ error: "not_a_map_read" });
+      const { userId, walletAddress } = request.extensionClient!;
+      const token = await siteSession(userId, walletAddress);
+      if (!token) return reply.code(403).send({ error: "no_account" });
+      const cf = request.headers["cf-connecting-ip"];
+      const res = await app.inject({
+        method: call.method,
+        url: call.path,
+        remoteAddress: request.ip,
+        headers: {
+          authorization: `Bearer ${token}`,
+          ...(typeof cf === "string" ? { "cf-connecting-ip": cf } : {}),
+          ...(call.body !== null ? { "content-type": "application/json" } : {}),
+        },
+        ...(call.body !== null ? { payload: call.body } : {}),
+      });
+      reply.header("Cache-Control", "no-store");
+      return { status: res.statusCode, body: res.body };
     },
   );
 
