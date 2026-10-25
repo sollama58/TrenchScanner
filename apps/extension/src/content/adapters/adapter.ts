@@ -29,6 +29,12 @@ export interface AdapterSpec {
    * mark rows with data-index, which is tried after the site's own selectors.
    */
   rowSelectors: string[];
+  /**
+   * Rows the site marks with an attribute that holds the address (Terminal's
+   * `data-trenches-item="SOLANA:<mint>-NEW"`), tried before the links. `box` is the nearest
+   * ancestor to ring, when the marked element sits inside a sized row (a virtual list's slot).
+   */
+  marked?: { attr: string; box?: string };
 }
 
 /** Attributes read for an address after the links: image URLs and data attributes. */
@@ -62,6 +68,16 @@ export function adapterFrom(spec: AdapterSpec): SiteAdapter {
     findRows(root) {
       const rows: Element[] = [];
       const seen = new Set<Element>();
+      if (spec.marked) {
+        const { attr, box } = spec.marked;
+        for (const el of root.querySelectorAll(`[${attr}]`)) {
+          const row = (box ? el.closest(box) : null) ?? el;
+          if (!seen.has(row)) {
+            seen.add(row);
+            rows.push(row);
+          }
+        }
+      }
       for (const link of root.querySelectorAll("a[href]")) {
         if (mintInHref(link.getAttribute("href") ?? "", spec.tokenLink) === null) continue;
         const row = rowOf(link);
@@ -73,6 +89,12 @@ export function adapterFrom(spec: AdapterSpec): SiteAdapter {
       return rows;
     },
     mintOf(row) {
+      if (spec.marked) {
+        const { attr } = spec.marked;
+        const el = row.matches(`[${attr}]`) ? row : row.querySelector(`[${attr}]`);
+        const mint = el ? mintsIn(el.getAttribute(attr) ?? "")[0] : undefined;
+        if (mint) return mint;
+      }
       // Every distinct token link in the row must agree; two different mints mean this is a
       // container of rows, not a row, and nothing is drawn rather than the wrong thing.
       const found = new Set<string>();

@@ -14,6 +14,9 @@ export const terminal = adapterFrom({
   hosts: /(^|\.)padre\.gg$/,
   tokenLink: /^\/trade\/solana\/([1-9A-HJ-NP-Za-km-z]{32,44})/,
   rowSelectors: ["[class*='TokenRow']", "[class*='token-row']"],
+  // The Trenches board marks each row, and its virtual list sizes the slot around it (a saved
+  // page, 2026-10-25): no row links to the token's page.
+  marked: { attr: "data-trenches-item", box: "div[style*='position: absolute']" },
 });
 
 /** GMGN: trenches and trending lists. Token pages are /sol/token/<mint>, sometimes as <ref>_<mint>. */

@@ -39,6 +39,19 @@ function board(html: string) {
   document.body.innerHTML = html;
 }
 
+describe("Terminal's Trenches board", () => {
+  it("reads the address its rows are marked with, and rings the sized slot", () => {
+    board(`<div style="position: absolute; left: 0px; top: 0px; height: 142px; width: 100%;">
+      <span data-trenches-item="SOLANA:${A}-NEW"><a href="https://pump.fun/coin/${A}">pf</a></span></div>
+      <div style="position: absolute; left: 0px; top: 142px; height: 142px; width: 100%;">
+      <span data-trenches-item="SOLANA:${B}-NEW"></span></div>`);
+    const rows = terminal.findRows(document);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.tagName).toBe("DIV");
+    expect(rows.map((r) => terminal.mintOf(r))).toEqual([A, B]);
+  });
+});
+
 describe("site adapters", () => {
   it("reads GMGN rows, with or without a referral prefix", () => {
     board(
