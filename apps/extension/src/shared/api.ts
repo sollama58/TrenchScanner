@@ -13,13 +13,18 @@ export class ApiError extends Error {
   }
 }
 
+/** A held wait answers within 20 s; past this it is given up and asked again. */
+const WAIT_TIMEOUT_MS = 30_000;
+
 async function call<T>(
   key: string,
   method: "GET" | "POST" | "PUT",
   path: string,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
   const res = await fetch(`${API_BASE}/ext/v1${path}`, {
+    signal,
     method,
     headers: {
       authorization: `Bearer ${key}`,
@@ -45,5 +50,14 @@ export const api = {
   feed: (key: string) => call<{ tokens: OverlayToken[] }>(key, "GET", "/feed"),
   bubble: (key: string, mint: string) =>
     call<{ map: OverlayBubbleMap | null }>(key, "GET", `/bubble/${encodeURIComponent(mint)}`),
+  /** Held until the coin's next holder reading is written, or 20 s (shared/follow.ts). */
+  bubbleWait: (key: string, mint: string) =>
+    call<{ changed: boolean; pushed: boolean }>(
+      key,
+      "GET",
+      `/bubble/${encodeURIComponent(mint)}/wait`,
+      undefined,
+      AbortSignal.timeout(WAIT_TIMEOUT_MS),
+    ),
   buddy: (key: string) => call<BuddyAnswer>(key, "GET", "/buddy"),
 };

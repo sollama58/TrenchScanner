@@ -30,10 +30,11 @@ import { buddyAnswer, buddyCoins, type BuddyAnswer } from "../extensionBuddy.js"
 import { freeLookupReason } from "../lookupGate.js";
 import { overlaySettingsSchema, parseOverlaySettings } from "../overlaySettings.js";
 import { cachedProStatus } from "../proMode.js";
+import { HOLDER_WAIT_MS, HolderWaits, MAX_HOLDER_WAITS } from "../holderWaits.js";
 import { releaseHolderStamps, type ViewStampBuffer } from "../viewStamps.js";
-import { allowHolderWatch } from "./live.js";
+import { allowHolderWatch, allowViewStamps } from "./live.js";
 import type { ProTrades } from "./proTrades.js";
-import { readTokenReading } from "./tokens.js";
+import { closedSignal, readTokenReading } from "./tokens.js";
 
 /**
  * The browser extension's API (/ext/v1). The extension is a side panel with no access to any
@@ -69,6 +70,11 @@ const BUBBLE_RATE_LIMIT = { max: 60, timeWindow: "1 minute" };
 /** One coin's map is reused this long for every reader (the site's own read is cached 15 s). */
 const BUBBLE_CACHE_MS = 10_000;
 const BUBBLE_CACHE_MAX = 2_000;
+/**
+ * Held asks for an open map's next reading, a minute per key: each open map asks again as the
+ * last one answers (every 20 s while nothing is written), so a dozen open maps fit.
+ */
+const BUBBLE_WAIT_RATE_LIMIT = { max: 60, timeWindow: "1 minute" };
 /** Trade Buddy reads a minute: the panel polls every 5 s (every 10 s before 0.3.1), plus a second window. */
 const BUDDY_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 /** A Trade Buddy answer this fresh is served as is; an older one is served while a new one is read. */
@@ -98,7 +104,7 @@ const buddyAnswers = new Map<
 const authFailures = new Map<string, number[]>();
 const lastUsedWritten = new Map<string, number>();
 const feedCache = new Map<string, { at: number; tokens: OverlayToken[] }>();
-const bubbleCache = new Map<string, { at: number; map: OverlayBubbleMap | null }>();
+const bubbleCache = new Map<string, { at: number; map: OverlayBubbleMap | null; tokenId: string | null }>();
 
 /** Drops a key's cached check, so a revoke on this process takes effect on the next request. */
 export function forgetExtensionKey(keyId: string): void {
@@ -139,8 +145,13 @@ declare module "fastify" {
   }
 }
 
-/** A coin's map for the panel: its picked scan, newest scan and top 50, as the token view reads them. */
-async function readOverlayBubble(mint: string): Promise<OverlayBubbleMap | null> {
+/**
+ * A coin's map for the panel: its picked scan, newest scan and top 50, as the token view reads
+ * them, and the coin's row id (null for a coin the scanner has no row for).
+ */
+async function readOverlayBubble(
+  mint: string,
+): Promise<{ map: OverlayBubbleMap | null; tokenId: string | null }> {
   const [reading, wide] = await Promise.all([
     readTokenReading(mint),
     prisma.bubbleMapHolders.findUnique({
@@ -148,9 +159,12 @@ async function readOverlayBubble(mint: string): Promise<OverlayBubbleMap | null>
       select: { readAt: true, holders: true, clusters: true, sameTimeClusters: true },
     }),
   ]);
-  if (!reading) return null;
+  if (!reading) return { map: null, tokenId: null };
   const scans = reading.snapshots as unknown as BubbleScan[];
-  return overlayBubbleMap(mint, reading.symbol, pickBubbleScan(scans), scans[0] ?? null, wide);
+  return {
+    map: overlayBubbleMap(mint, reading.symbol, pickBubbleScan(scans), scans[0] ?? null, wide),
+    tokenId: reading.id,
+  };
 }
 
 export async function registerExtensionRoutes(
@@ -161,8 +175,24 @@ export async function registerExtensionRoutes(
     proTrades?: ProTrades;
     /** Token.holdersViewedAt, stamped while a map is open in the panel, as the site's token view does. */
     holderStamps?: ViewStampBuffer;
+    /** Token.lastViewedAt, stamped by the same reads, as the site's open token view's live tick does. */
+    viewStamps?: ViewStampBuffer;
+    /** The scanner's holder-reading announcements (MatchStream.onHolders), for /bubble/:mint/wait. */
+    holderWrites?: { onHolders(listener: (mint: string | null) => void): () => void };
   },
 ) {
+  // An open map's held ask for its coin's next reading (user ask 2026-10-25: an open map keeps
+  // updating). A written reading drops the coin's shared map first, so the read the wake starts
+  // gets the new one rather than one cached up to BUBBLE_CACHE_MS before it. Its own pool, a
+  // quarter of the token views' size: the panel's maps are fewer.
+  const bubbleWaits = new HolderWaits(Math.ceil(MAX_HOLDER_WAITS / 4));
+  const stopHolderWrites = opts.holderWrites?.onHolders((mint) => {
+    if (mint === null) bubbleCache.clear();
+    else bubbleCache.delete(mint);
+    bubbleWaits.wake(mint);
+  });
+  if (stopHolderWrites) app.addHook("onClose", async () => stopHolderWrites());
+
   const admins = adminWalletSet(opts.env);
   // A key's own bucket only once it has been proven (in authCache): rotating made-up keys would
   // otherwise get a fresh bucket per request and flush real keys' buckets (audit CE-2).
@@ -328,7 +358,9 @@ export async function registerExtensionRoutes(
    * draws it when an alert or a Trade Buddy coin is opened. The same coins the site's token view
    * opens free for this reader: one the scanner tracks, one they traded, or their open lookup.
    * Each read keeps the coin's map watched, as the site's view does, so the worker keeps its top
-   * holders current while the panel shows them (one account's four newest maps, live.ts).
+   * holders current while the panel shows them (one account's four newest maps, live.ts), and
+   * keeps the coin viewed (Token.lastViewedAt), so the scan keeps reading it outside the market cap
+   * band while the map is open, as it does for a token view open on the site.
    */
   app.get(
     "/bubble/:mint",
@@ -347,16 +379,41 @@ export async function registerExtensionRoutes(
       const watch = allowHolderWatch(`ext:${userId}`, mint, now);
       if (watch.stamp) opts.holderStamps?.record([mint], now);
       void releaseHolderStamps(opts.holderStamps, watch.released);
+      const stampViewed = (tokenId: string | null) => {
+        if (tokenId) opts.viewStamps?.record(allowViewStamps(`ext:${userId}`, [tokenId], now));
+      };
       const hit = bubbleCache.get(mint);
-      if (hit && now - hit.at < BUBBLE_CACHE_MS) return { map: hit.map };
-      const map = await readOverlayBubble(mint);
+      if (hit && now - hit.at < BUBBLE_CACHE_MS) {
+        stampViewed(hit.tokenId);
+        return { map: hit.map };
+      }
+      const { map, tokenId } = await readOverlayBubble(mint);
+      stampViewed(tokenId);
       if (!bubbleCache.has(mint) && bubbleCache.size >= BUBBLE_CACHE_MAX) {
         const oldest = bubbleCache.keys().next().value;
         if (oldest !== undefined) bubbleCache.delete(oldest);
       }
       bubbleCache.delete(mint);
-      bubbleCache.set(mint, { at: now, map });
+      bubbleCache.set(mint, { at: now, map, tokenId });
       return { map };
+    },
+  );
+
+  /**
+   * Held until the scanner writes the coin's next holder reading or top 50, or HOLDER_WAIT_MS: an
+   * open map then reads /bubble/:mint at once instead of on its next poll (user ask 2026-10-25).
+   * Only coins whose map is open are announced, and /bubble/:mint is what marks one open. Answers
+   * nothing about the coin but that, so it asks no lookup gate of its own.
+   */
+  app.get(
+    "/bubble/:mint/wait",
+    { config: { rateLimit: { ...BUBBLE_WAIT_RATE_LIMIT, keyGenerator: bucket } } },
+    async (request, reply) => {
+      const { mint } = request.params as { mint: string };
+      if (!isMintAddress(mint)) return reply.code(400).send({ error: "not a valid mint" });
+      reply.header("Cache-Control", "no-store");
+      if (!opts.holderWrites) return { changed: false, pushed: false };
+      return bubbleWaits.wait(mint, HOLDER_WAIT_MS, closedSignal(reply));
     },
   );
 

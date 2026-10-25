@@ -20,7 +20,11 @@ access beyond `api.trenchscanner.app`, and no `tabs`, `scripting`, `cookies` or 
   site's category totals (Linked, KOL bundled, Bundled, Same minute, CEX-funded, Tied to dev,
   Transferred, Top 10, and the wallet types). The API's `/ext/v1/bubble/:mint` serves the site's
   reading (`apps/api/src/extensionBubble.ts`) and keeps the map watched while it is open, as the
-  site's token view does, so the worker keeps those holders current. Re-read every 30 s.
+  site's token view does, so the worker keeps those holders current, and keeps the coin scanned
+  outside the market cap band. Live while open (0.5.1, `shared/follow.ts`): a held
+  `/ext/v1/bubble/:mint/wait` answers the moment the scanner writes the coin's next holder reading
+  or top 50, and the map is read again at once; otherwise re-read every 30 s. Nothing is held or
+  polled while the panel or page is hidden.
 - **Trade Buddy** (`buddy.ts`, 0.3.0): the coins the account's own wallet bought, from any venue,
   followed as the site's TRADES panel follows them (`/ext/v1/buddy`, `apps/api/src/extensionBuddy.ts`),
   each with its token card, bubble map (held coins open by default) and PnL. Pro Mode accounts get a
@@ -107,4 +111,5 @@ Bubble map tab (Settings → Bubble map tab, on by default): on a coin's own pag
 `/meme/…`, Terminal `/trade/solana/…`, GMGN `/sol/token/…`) a "Bubble map" tab is added beside
 the site's Top Traders tab and opens the panel's bubble map in a box on the page
 (`src/content/mapTab.ts`). Unlike the rings, this sends the viewed coin's address to TrenchScanner
-(`{type: "map"}`, cached 30s), alerted or not; turn it off to stop that.
+(`{type: "map"}`, cached 30s, and `{type: "mapWait"}` while the box is open, so it redraws when
+the coin's next reading is written), alerted or not; turn it off to stop that.

@@ -728,7 +728,11 @@ function useCoinScans(mint: string, follow: boolean): CoinScans {
         );
         if (!live) return;
         failures = 0;
-        if (a.changed) tick(true);
+        // The top-50 picture too: a watched coin's new one is announced the same way.
+        if (a.changed) {
+          tick(true);
+          reloadBubbleMaps(mint);
+        }
         // No wait could be held (the API at capacity, or an older build): the poll covers it.
         waitNext(a.pushed ? 0 : HOLDER_WAIT_IDLE_MS);
       } catch {

@@ -1038,8 +1038,10 @@ export async function registerTokenRoutes(
       if (watch.stamp) opts.holderStamps?.record([mintAddress], now);
       void releaseHolderStamps(opts.holderStamps, watch.released);
     }
-    // Shorter than the view's 30-second poll, so each poll reaches here (and stamps the coin).
-    reply.header("Cache-Control", "private, max-age=15");
+    // Revalidated on every read (an unchanged map is a 304 off its ETag): each poll reaches here
+    // and stamps the coin, and the re-read a new top 50's announcement starts (the view's holder
+    // wait) gets it rather than the browser's copy from before it.
+    reply.header("Cache-Control", "private, no-cache");
     const [row, frozen, moments] = await Promise.all([
       prisma.bubbleMapHolders.findUnique({ where: { mintAddress } }),
       prisma.bubbleMapAtAlert.findUnique({ where: { mintAddress } }),
