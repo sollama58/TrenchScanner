@@ -24,6 +24,7 @@ import {
   newCuratedCycle,
   resetCuratorModelCache,
   resetDeferredContenders,
+  resetLiveScaleCache,
   takeContenderRetry,
 } from "./curatedAlerts.js";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
@@ -594,23 +595,26 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
       highConvictionThreshold: 0.9999,
     });
     const history = await prisma.token.create({ data: { mintAddress: `${TAG}-line-history` } });
-    // A day of live scores far below it: the seat's top half-percent sits near 0.25.
-    await prisma.candidateOutcome.createMany({
-      data: Array.from({ length: 250 }, (_, i) => ({
-        tokenId: history.id,
-        sampleKind: "event",
-        anchorAt: new Date(Date.now() - 3_600_000 - i * 60_000),
-        anchorPriceUsd: 0.0001,
-        anchorMcapUsd: 100_000,
-        features: scoringAt(i / 1000),
-        nextCheckAt: new Date(),
-        peak1hPriceUsd: 0.0001,
-        low1hPriceUsd: 0.0001,
-        lowBefore2xPriceUsd: 0.0001,
-        peak24hPriceUsd: 0.0001,
-        seatScores: { linear: i / 1000 },
-      })),
+    // A day of live scores far below it: the seat's top half-percent sits near 0.25. Graded, with
+    // its top 2% all doubling against one in five below, so the seat has earned the tier live.
+    const n = 2_500;
+    const graded = (i: number) => ({
+      tokenId: history.id,
+      sampleKind: "event",
+      anchorAt: new Date(Date.now() - 3_600_000 - (i % 1_400) * 60_000),
+      anchorPriceUsd: 0.0001,
+      anchorMcapUsd: 100_000,
+      features: scoringAt(i / 10_000),
+      nextCheckAt: new Date(),
+      peak1hPriceUsd: 0.0001,
+      low1hPriceUsd: 0.0001,
+      lowBefore2xPriceUsd: 0.0001,
+      peak24hPriceUsd: 0.0001,
+      seatScores: { linear: i / 10_000 },
+      hit2xIn1h: i >= n * 0.98 || i % 5 === 0,
+      disqualified: false,
     });
+    await prisma.candidateOutcome.createMany({ data: Array.from({ length: n }, (_, i) => graded(i)) });
 
     const token = await prisma.token.create({ data: { mintAddress: `${TAG}-line-live` } });
     const scored = curatableFixture(token.mintAddress);
@@ -628,6 +632,20 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
       where: { tokenId: token.id, model: "linear" },
     });
     expect(alert.tier).toBe("high");
+
+    // The same call from a seat whose top band hasn't out-won its standard calls goes out standard.
+    await prisma.candidateOutcome.updateMany({ where: { tokenId: history.id }, data: { hit2xIn1h: false } });
+    resetLiveScaleCache();
+    const flat = await prisma.token.create({ data: { mintAddress: `${TAG}-line-flat` } });
+    const flatScored = curatableFixture(flat.mintAddress);
+    const flatSample = await recordCandidateSample(flat.id, flatScored, env);
+    const again = newCuratedCycle();
+    await collectCuratedContender(again, flat, flatScored, flatSample, env);
+    await emitCuratedCycle(again, env);
+    const standard = await prisma.curatedAlert.findFirstOrThrow({
+      where: { tokenId: flat.id, model: "linear" },
+    });
+    expect(standard.tier).toBe("standard");
   });
 
   it("scores TokenSage's X-reuse count as missing while it is lost, and banks what the read said", async () => {
