@@ -38,7 +38,8 @@ import {
   TOP_SLICE_MODEL_KIND,
   calibratedWinRate,
   calibratedWinRateAtRank,
-  cappedCalibratedRate,
+  recalibratedRate,
+  liveTierEarned,
   convictionTier,
   EMPTY_LIVE_SCALES,
   loadLiveScales,
@@ -718,15 +719,17 @@ function servedFields(
 ): Pick<CurationDecision, "tier" | "calibratedPct"> {
   const out: Pick<CurationDecision, "tier" | "calibratedPct"> = {};
   const tier = convictionTier(probability, params.highConvictionThreshold, live.lines.get(seat));
-  if (tier !== undefined) out.tier = tier;
+  // "high" only for a seat whose top band has clearly out-won its standard calls live.
+  if (tier !== undefined)
+    out.tier = tier === "high" && !liveTierEarned(live.rankRates?.get(seat)) ? "standard" : tier;
   let rate =
     liveScores === undefined
       ? calibratedWinRate(params.calibration, probability)
       : calibratedWinRateAtRank(params.calibration, rankAmong(liveScores, probability));
-  // Never above what the seat's live moments at this rank did (curation/liveRankRates.ts).
+  // What the seat's live moments at this rank did, where enough are graded (curation/liveRankRates.ts).
   const ranked = liveScores ?? usableLiveScores(live.scores, seat);
   if (ranked !== undefined) {
-    rate = cappedCalibratedRate(rate, live.rankRates?.get(seat), rankAmong(ranked, probability));
+    rate = recalibratedRate(rate, live.rankRates?.get(seat), rankAmong(ranked, probability));
   }
   if (rate !== null) out.calibratedPct = Math.round(rate * 1000) / 10;
   return out;
