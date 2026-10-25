@@ -3,7 +3,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { axiom, gmgn, terminal } from "./adapters/sites";
 import { columnOf, findColumns } from "./columns";
 import { OverlayEngine } from "./engine";
-import { tooltipBody } from "./ui";
+import { safetyBody, tooltipBody } from "./ui";
 import { DEFAULT_SETTINGS } from "../shared/settings";
 import { cleanTooltip } from "../shared/tooltip";
 import { token } from "../shared/testToken";
@@ -269,10 +269,54 @@ describe("safety screen on the boards", () => {
     e.receiveSafety([A, B], { verdicts: { [A]: failed, [B]: failed }, problem: null });
     expect(a.querySelector("trench-overlay-x")).not.toBeNull();
     expect(a.style.display).toBe("");
+    // Small: a corner tag and an edge, no cover over the row; its hover gives the reasons.
+    const mark = a.querySelector("trench-overlay-x") as HTMLElement;
+    expect(mark).not.toBeNull();
+    expect(safetyBody(A, failed).textContent).toContain("Top 10 holders own 52%.");
     // B sits in Migrated, which the reader left out.
     expect(b.querySelector("trench-overlay-x")).toBeNull();
     e.applyTooltip(prefs("off"));
     expect(a.querySelector("trench-overlay-x")).toBeNull();
+    e.stop();
+  });
+
+  it("says the safety verdict and why it fails in the ring's tooltip", () => {
+    const failing = token({ mint: A, modelCalls: [call], safety: failed });
+    const body = tooltipBody(failing, verdictFor(failing, DEFAULT_SETTINGS));
+    expect(body.textContent).toContain("Safety screen");
+    expect(body.textContent).toContain("Failed");
+    expect(body.textContent).toContain("Top 10 holders own 52%.");
+    const fine = token({ mint: A, modelCalls: [call], safety: passed });
+    expect(tooltipBody(fine, verdictFor(fine, DEFAULT_SETTINGS)).textContent).toContain("Passed");
+    const unscreened = token({ mint: A, modelCalls: [call] });
+    expect(tooltipBody(unscreened, verdictFor(unscreened, DEFAULT_SETTINGS)).textContent).not.toContain(
+      "Safety screen",
+    );
+  });
+
+  it("closes the gap a hidden coin leaves in a virtual list, and opens it again when it passes", () => {
+    const C = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin";
+    board(`<section><header><span>New Pairs</span></header><div style="height: 300px">
+        <div id="s0" style="position: absolute; top: 0px; height: 100px"><div data-pulse-token-address="${A}"></div></div>
+        <div id="s1" style="position: absolute; top: 100px; height: 100px"><div data-pulse-token-address="${B}"></div></div>
+        <div id="s2" style="position: absolute; top: 200px; height: 100px"><div data-pulse-token-address="${C}"></div></div>
+      </div></section><section><header><span>Migrated</span></header></section>`);
+    const e = new OverlayEngine(axiom, DEFAULT_SETTINGS, {
+      lookup: async () => ({ tokens: {}, problem: null }),
+      report: () => undefined,
+      safety: async () => ({ verdicts: {}, problem: null }),
+    });
+    e.applyTooltip(prefs("hide"));
+    e.start();
+    e.scan();
+    e.receiveSafety([A, B, C], { verdicts: { [A]: failed, [B]: passed }, problem: null });
+    const slot = (id: string) => document.getElementById(id)!;
+    expect(slot("s0").style.visibility).toBe("hidden");
+    expect(slot("s1").style.translate).toBe("0 -100px");
+    expect(slot("s2").style.translate).toBe("0 -100px");
+    e.receiveSafety([A], { verdicts: { [A]: passed }, problem: null });
+    expect(slot("s0").style.visibility).toBe("");
+    expect(slot("s1").style.translate).toBe("");
     e.stop();
   });
 

@@ -27,6 +27,7 @@ export type TipLine =
   | "aiReasoning"
   | "mcap"
   | "holders"
+  | "safety"
   | `flag:${FlagId}`
   | `map:${MapLine}`
   | "statsAge"
@@ -227,6 +228,7 @@ export const TIP_LINES: TipLine[] = [
   "aiReasoning",
   "mcap",
   "holders",
+  "safety",
   ...FLAG_IDS.map((id) => `flag:${id}` as const),
   ...MAP_LINES.map((id) => `map:${id}` as const),
   "statsAge",
@@ -240,6 +242,7 @@ const FIXED_LABELS: Record<string, string> = {
   aiReasoning: "AI reasoning",
   mcap: "Market cap since the alert",
   holders: "Holders",
+  safety: "Safety screen, with why it fails",
   statsAge: "Stats' age",
   link: "Open in TrenchScanner link",
 };
@@ -344,6 +347,7 @@ const ON_BY_DEFAULT = new Set<TipLine>([
   "ai",
   "aiReasoning",
   "mcap",
+  "safety",
   "map:kolBundledPct",
   "statsAge",
   "link",
