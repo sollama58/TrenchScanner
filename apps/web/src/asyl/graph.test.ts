@@ -3,6 +3,7 @@ import {
   addressIn,
   NO_CUTOFFS,
   clearsCutoffs,
+  cleanCutoffs,
   clusterOf,
   edgeKey,
   edgeTimeLabel,
@@ -94,6 +95,19 @@ describe("link filters", () => {
     expect(clearsCutoffs(g.edges[0]!, c, 200)).toBe(true);
     expect(clearsCutoffs(g.edges[0]!, c, 50)).toBe(false);
     expect(clearsCutoffs(g.edges[0]!, c, null)).toBe(true);
+  });
+  it("holds bought-together links to coins in common, seconds apart and who buys first", () => {
+    const led = { ...E("a", "b", "cotrade", 7), shared: 7, of: 60, gapSec: 40, leadSec: -40 };
+    const old = E("a", "c", "cotrade", 5);
+    expect(clearsCutoffs(led, { ...NO_CUTOFFS, shared: 8 }, null)).toBe(false);
+    expect(clearsCutoffs(led, { ...NO_CUTOFFS, shared: 7, gap: 45 }, null)).toBe(true);
+    expect(clearsCutoffs(led, { ...NO_CUTOFFS, gap: 30 }, null)).toBe(false);
+    expect(clearsCutoffs(led, { ...NO_CUTOFFS, first: 1 }, null)).toBe(true);
+    expect(clearsCutoffs(led, { ...NO_CUTOFFS, first: 2 }, null)).toBe(false);
+    // An older map's link: coins by its weight; no time or order to hold it to.
+    expect(clearsCutoffs(old, { ...NO_CUTOFFS, shared: 6 }, null)).toBe(false);
+    expect(clearsCutoffs(old, { ...NO_CUTOFFS, gap: 5, first: 2 }, null)).toBe(true);
+    expect(cleanCutoffs({ sol: 1, first: 3, gap: -1 })).toEqual({ ...NO_CUTOFFS, sol: 1 });
   });
   it("reads an older map's funding by its weight", () => {
     expect(clearsCutoffs(E("a", "b", "funded", 0.2), { ...NO_CUTOFFS, sol: 1 }, null)).toBe(false);

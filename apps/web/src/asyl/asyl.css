@@ -961,6 +961,52 @@ body {
   background: rgba(255, 176, 103, 0.18);
   color: var(--asyl-orange-hi);
 }
+.asyl-seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.asyl-seg button {
+  flex: 1;
+  padding: 5px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--asyl-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.asyl-seg button.on {
+  background: var(--asyl-orange, #ff7a2f);
+  color: #1b0a02;
+}
+.asyl-together {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.asyl-together th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--asyl-muted);
+  padding: 0 6px 4px 0;
+}
+.asyl-together td {
+  padding: 3px 6px 3px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-variant-numeric: tabular-nums;
+}
+.asyl-together td:first-child {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .asyl-tags + .asyl-facts {
   margin-top: 8px;
 }

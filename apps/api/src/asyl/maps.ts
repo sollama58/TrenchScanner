@@ -62,6 +62,10 @@ const edgeSchema = z.object({
   sol: finite.nullable().optional(),
   tokens: finite.nullable().optional(),
   pct: finite.nullable().optional(),
+  shared: finite.nullable().optional(),
+  of: finite.nullable().optional(),
+  gapSec: finite.nullable().optional(),
+  leadSec: finite.nullable().optional(),
 });
 
 /** The least a money link must carry to be drawn; 0 draws them all. */
@@ -70,6 +74,11 @@ const cutoffsSchema = z.object({
   usd: finite.min(0).default(0),
   tokens: finite.min(0).default(0),
   pct: finite.min(0).default(0),
+  /** "Bought together" links: the fewest coins in common, and the most median seconds apart. */
+  shared: finite.min(0).default(0),
+  gap: finite.min(0).default(0),
+  /** Who buys first on those links: 0 either, 1 the co-trader, 2 the wallet it was found from. */
+  first: z.union([z.literal(0), z.literal(1), z.literal(2)]).default(0),
 });
 
 /** What the reader drew on the map: their own labelled lines between two bubbles, and text boxes. */

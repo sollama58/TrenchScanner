@@ -17,6 +17,7 @@ import {
   TIMED_KINDS,
   addressIn,
   clearsCutoffs,
+  cleanCutoffs,
   edgeKey,
   graphCsv,
   mergeGraph,
@@ -86,10 +87,7 @@ const CUTOFFS_KEY = "asyl:cutoffs";
 
 function storedCutoffs(): Cutoffs {
   try {
-    const raw = JSON.parse(localStorage.getItem(CUTOFFS_KEY) ?? "null") as Partial<Cutoffs> | null;
-    if (!raw || typeof raw !== "object") return NO_CUTOFFS;
-    const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
-    return { sol: n(raw.sol), usd: n(raw.usd), tokens: n(raw.tokens), pct: n(raw.pct) };
+    return cleanCutoffs(JSON.parse(localStorage.getItem(CUTOFFS_KEY) ?? "null"));
   } catch {
     return NO_CUTOFFS;
   }
@@ -378,7 +376,7 @@ export function AsylApp() {
         setCut(new Set(m.doc.cut ?? []));
         setDrawings(m.doc.drawings ?? NO_DRAWINGS);
         setDrawingSel(null);
-        if (m.doc.cutoffs) setCutoffs(m.doc.cutoffs);
+        if (m.doc.cutoffs) setCutoffs(cleanCutoffs(m.doc.cutoffs));
         setHiddenKinds(new Set(EDGE_KINDS.filter((k) => m.doc.hidden.includes(k))));
         setFocus(m.doc.focus);
         setSelected(null);
@@ -471,7 +469,7 @@ export function AsylApp() {
       ).length;
       const offNote =
         (off.length ? ` Some are ${off.map((k) => EDGE_LABEL[k]).join(", ")}, switched off in Links.` : "") +
-        (small ? ` ${small} under your amount cutoffs ${small === 1 ? "is" : "are"} hidden.` : "");
+        (small ? ` ${small} under your cutoffs in Links ${small === 1 ? "is" : "are"} hidden.` : "");
       if (deployers) {
         const devs = new Set(fresh.filter((e) => e.kind === "created").map((e) => e.a));
         return devs.size
@@ -578,9 +576,13 @@ export function AsylApp() {
       void run("Finding wallets that trade like it…", async () => {
         const r = await asylApi.similar(wallet);
         add(r.graph);
+        const of = r.coTraders[0]?.of;
         return r.coTraders.length
-          ? `${r.coTraders.length} wallet${r.coTraders.length === 1 ? "" : "s"} bought the same coins within minutes of it.`
-          : "No wallet bought its coins alongside it often enough to link.";
+          ? `${r.coTraders.length} wallet${r.coTraders.length === 1 ? "" : "s"} bought 5 or more of its ${of ?? ""} latest coins within 3 minutes of it.`.replace(
+              "  ",
+              " ",
+            )
+          : "No wallet bought 5 or more of its latest coins within 3 minutes of it.";
       }),
     flows: (wallet) =>
       void run("Reading its transfers from the chain…", async () => {

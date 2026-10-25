@@ -28,6 +28,8 @@ const C = addr("AsyWaC");
 const DEV = addr("AsyDev");
 const MINT1 = addr("AsyMntUnopump");
 const MINT2 = addr("AsyMntTwopump");
+/** Three more coins both bought, so the pair clears the co-trader minimum of five. */
+const MORE = ["AsyMntThrpump", "AsyMntFoupump", "AsyMntFivpump"].map(addr);
 const WALLETS = [ADMIN, PLAIN, FUNDER, A, B, C, DEV];
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -43,7 +45,7 @@ describe.skipIf(!dbAvailable)("asyl routes", () => {
     app.inject({ method, url, payload, cookies: who ? { [SESSION_COOKIE_NAME]: cookies[who]! } : {} });
 
   const cleanup = async () => {
-    await prisma.token.deleteMany({ where: { mintAddress: { in: [MINT1, MINT2] } } });
+    await prisma.token.deleteMany({ where: { mintAddress: { in: [MINT1, MINT2, ...MORE] } } });
     await prisma.walletFunder.deleteMany({ where: { wallet: { in: WALLETS } } });
     await prisma.holderTransferEvent.deleteMany({ where: { fromWallet: { in: WALLETS } } });
     await prisma.userTrackedWallet.deleteMany({ where: { wallet: { in: WALLETS } } });
@@ -84,6 +86,15 @@ describe.skipIf(!dbAvailable)("asyl routes", () => {
         { tokenId: t2.id, wallet: B, buys: 1, solIn: 1, firstBuyAt: later },
       ],
     });
+    for (const [i, mint] of MORE.entries()) {
+      const t = await prisma.token.create({ data: { mintAddress: mint, symbol: `M${i}` } });
+      await prisma.tokenWalletActivity.createMany({
+        data: [
+          { tokenId: t.id, wallet: A, buys: 1, solIn: 1, firstBuyAt: at },
+          { tokenId: t.id, wallet: B, buys: 1, solIn: 1, firstBuyAt: later },
+        ],
+      });
+    }
     await prisma.holderTransferEvent.create({
       data: { signature: "asyl-sig-1", fromWallet: A, toWallet: B, mintAddress: MINT1, pct: 1.2, at },
     });
@@ -141,10 +152,13 @@ describe.skipIf(!dbAvailable)("asyl routes", () => {
     expect(has(A, C, "funded")).toBe(true);
     expect(has(A, B, "transfer")).toBe(true);
     expect(has(A, MINT1, "traded")).toBe(true);
-    expect(
-      graph.edges.some((e) => e.kind === "cotrade" && [e.a, e.b].includes(A) && [e.a, e.b].includes(B)),
-    ).toBe(true);
-    expect(coverage.seen).toBe(2);
+    expect(graph.edges.find((e) => e.kind === "cotrade" && e.a === A && e.b === B)).toMatchObject({
+      shared: 5,
+      of: 5,
+      gapSec: 60,
+      leadSec: 60,
+    });
+    expect(coverage.seen).toBe(5);
     // Someone else's label never shows.
     expect(graph.nodes.find((n) => n.id === A)?.name).toBeNull();
   });
