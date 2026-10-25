@@ -320,6 +320,34 @@ describe.skipIf(!dbAvailable)("resolveMayhemMode", () => {
     const row = await prisma.mayhemModeCache.findUnique({ where: { mintAddress: answered } });
     expect(row?.isMayhemMode).toBe(false);
   });
+
+  it("still asks the backup for a mint backed off on Helius (credits out: every mint is)", async () => {
+    const mint = `${TAG}-backed-off`;
+    const { client, asked } = stubHelius({
+      getMayhemModeBatch: async (mints: string[]) => {
+        asked.mints.push(mints);
+        return new Map(mints.map((m) => [m, { status: "failed" as const }]));
+      },
+    });
+    // Helius fails and the backup is down too: the mint is backed off and unverified.
+    expect(
+      (await resolveMayhemMode([mint], client, { backup: { mayhem: async () => new Map() } })).get(mint),
+    ).toEqual({ status: "failed" });
+    const askedBackup: string[][] = [];
+    const backup = {
+      mayhem: async (mints: readonly string[]) => {
+        askedBackup.push([...mints]);
+        return new Map(mints.map((m) => [m, false] as const));
+      },
+    };
+    const result = await resolveMayhemMode([mint], client, { backup });
+    expect(asked.mints).toEqual([[mint]]); // Helius not asked again while backed off
+    expect(askedBackup).toEqual([[mint]]);
+    expect(result.get(mint)).toEqual({ status: "found", isMayhemMode: false });
+    expect((await prisma.mayhemModeCache.findUnique({ where: { mintAddress: mint } }))?.isMayhemMode).toBe(
+      false,
+    );
+  });
 });
 
 describe.skipIf(!dbAvailable)("ignoreMayhemMints", () => {

@@ -71,7 +71,7 @@ export async function resolveMayhemMode(
     backup,
   }: {
     backOffFailures?: boolean;
-    /** Asked for the mints Helius gave no answer for (screenBackup.ts); the scan's own lookup only. */
+    /** Asked for the mints Helius gave no answer for, or is backed off on (screenBackup.ts). */
     backup?: Pick<ScreenBackup, "mayhem">;
   } = {},
 ): Promise<Map<string, MayhemModeResult>> {
@@ -86,34 +86,34 @@ export async function resolveMayhemMode(
     result.set(mint, { status: "found", isMayhemMode });
   }
 
-  // A backed-off mint reports "failed" without a call - the same answer it would have produced,
-  // at no cost. The rug screen rejects it either way until the backoff lapses.
-  let backedOff = 0;
-  for (const mint of unique) {
-    if (!result.has(mint) && failureBackoff.blocked(mint, now)) {
-      result.set(mint, { status: "failed" });
-      backedOff += 1;
-    }
-  }
-
-  const uncached = unique.filter((mint) => !result.has(mint));
-  if (uncached.length === 0) {
+  // A backed-off mint isn't asked of Helius again yet, but it is asked of the backup, whose pacing
+  // is its own: with Helius out of credits every mint is backed off, and leaving them out of the
+  // backup too rejected every coin "Mayhem unverified" (2026-10-25).
+  const backedOffMints = unique.filter((mint) => !result.has(mint) && failureBackoff.blocked(mint, now));
+  const backedOffSet = new Set(backedOffMints);
+  const uncached = unique.filter((mint) => !result.has(mint) && !backedOffSet.has(mint));
+  if (uncached.length === 0 && (backedOffMints.length === 0 || !backup)) {
+    for (const mint of backedOffMints) result.set(mint, { status: "failed" });
     logger.info("resolved mayhem mode", {
       requested: unique.length,
-      cached: unique.length - backedOff,
+      cached: unique.length - backedOffMints.length,
       fetched: 0,
-      backedOff,
+      backedOff: backedOffMints.length,
     });
     return result;
   }
 
-  const fetched = await helius.getMayhemModeBatch(uncached);
-  // Helius gave no answer (a 429, credits out, a timeout): the same read on another provider. A mint
-  // the RPC doesn't see yet isn't asked: the backup lags the same way.
-  const unanswered = uncached.filter((mint) => {
-    const r = fetched.get(mint);
-    return r?.status !== "found" && !(r?.status === "failed" && r.mintPending);
-  });
+  const fetched =
+    uncached.length > 0 ? await helius.getMayhemModeBatch(uncached) : new Map<string, MayhemModeResult>();
+  // Helius gave no answer (a 429, credits out, a timeout): the same read on other providers. A mint
+  // the RPC doesn't see yet isn't asked: the backups lag the same way.
+  const unanswered = [
+    ...backedOffMints,
+    ...uncached.filter((mint) => {
+      const r = fetched.get(mint);
+      return r?.status !== "found" && !(r?.status === "failed" && r.mintPending);
+    }),
+  ];
   let fromBackup = 0;
   if (backup && unanswered.length > 0) {
     for (const [mint, isMayhemMode] of await backup.mayhem(unanswered)) {
@@ -124,12 +124,16 @@ export async function resolveMayhemMode(
 
   const toCache: { mintAddress: string; isMayhemMode: boolean }[] = [];
   let failed = 0;
-  for (const mint of uncached) {
+  let backedOff = 0;
+  for (const mint of [...backedOffMints, ...uncached]) {
     const outcome = fetched.get(mint) ?? { status: "failed" as const };
     result.set(mint, outcome);
     if (outcome.status === "found") {
       toCache.push({ mintAddress: mint, isMayhemMode: outcome.isMayhemMode });
       failureBackoff.succeed(mint);
+    } else if (backedOffSet.has(mint)) {
+      // Still waiting out its Helius backoff: not struck again.
+      backedOff += 1;
     } else {
       if (backOffFailures) {
         failureBackoff.fail(mint, now, outcome.mintPending ? MINT_PENDING_BACKOFF_MINUTES : undefined);
@@ -150,7 +154,7 @@ export async function resolveMayhemMode(
 
   logger.info("resolved mayhem mode", {
     requested: unique.length,
-    cached: unique.length - uncached.length - backedOff,
+    cached: unique.length - uncached.length - backedOffMints.length,
     fetched: uncached.length,
     backedOff,
     mayhemFound: toCache.filter((r) => r.isMayhemMode).length,
@@ -172,8 +176,12 @@ export async function resolveMayhemMode(
  * and a backoff would make the scan's own lookup report it unverified (a screen reject) for its
  * first minute. The scan asks again as before.
  */
-export async function setAsideMayhemLaunches(mintAddresses: string[], helius: HeliusClient): Promise<number> {
-  return (await screenOutMayhem(mintAddresses, helius)).setAside;
+export async function setAsideMayhemLaunches(
+  mintAddresses: string[],
+  helius: HeliusClient,
+  backup?: Pick<ScreenBackup, "mayhem">,
+): Promise<number> {
+  return (await screenOutMayhem(mintAddresses, helius, backup)).setAside;
 }
 
 /**
@@ -184,10 +192,12 @@ export async function setAsideMayhemLaunches(mintAddresses: string[], helius: He
 export async function screenOutMayhem(
   mintAddresses: string[],
   helius: HeliusClient,
+  /** Asked for the launches Helius gave no answer for, as the scan's lookup asks it (screenBackup.ts). */
+  backup?: Pick<ScreenBackup, "mayhem">,
 ): Promise<{ clear: string[]; setAside: number }> {
   if (mintAddresses.length === 0) return { clear: [], setAside: 0 };
   try {
-    const found = await resolveMayhemMode(mintAddresses, helius, { backOffFailures: false });
+    const found = await resolveMayhemMode(mintAddresses, helius, { backOffFailures: false, backup });
     const setAside = await ignoreMayhemMints(
       [...found].filter(([, m]) => m.status === "found" && m.isMayhemMode).map(([mint]) => mint),
     );

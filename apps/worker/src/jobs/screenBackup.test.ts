@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { HeliusClient, MayhemModeResult } from "@trenchscanner/core";
-import { chainBackupUrl, REST_MS, ScreenBackup } from "./screenBackup.js";
+import { chainBackupUrl, chainBackupUrls, REST_MS, ScreenBackup } from "./screenBackup.js";
 
 function reader(answer: (mint: string) => MayhemModeResult) {
   let inFlight = 0;
@@ -43,6 +43,44 @@ describe("ScreenBackup", () => {
     await backup.mayhem(["y"]);
     expect(r.getMayhemModeBatch).toHaveBeenCalledTimes(2);
     expect(backup.takeStats()).toEqual({ asked: 21, found: 0, rested: 2 });
+  });
+
+  it("asks the next endpoint for what the one before it couldn't answer, resting the one that answered nothing", async () => {
+    const now = 0;
+    const down = reader(() => ({ status: "failed" }));
+    const up = reader(() => ({ status: "found", isMayhemMode: true }));
+    const backup = new ScreenBackup([down.client, up.client], () => now);
+    expect([...(await backup.mayhem(["a", "b"]))]).toEqual([
+      ["a", true],
+      ["b", true],
+    ]);
+    await backup.mayhem(["c"]);
+    expect(down.getMayhemModeBatch).toHaveBeenCalledTimes(1);
+    expect(up.getMayhemModeBatch.mock.calls.map(([c]) => c)).toEqual([["a", "b"], ["c"]]);
+    expect(backup.takeStats()).toEqual({ asked: 3, found: 3, rested: 1 });
+  });
+
+  it("doesn't rest an endpoint that answered a mint isn't on-chain yet", async () => {
+    const now = 0;
+    const r = reader(() => ({ status: "failed", mintPending: true }));
+    const backup = new ScreenBackup(r.client, () => now);
+    expect((await backup.mayhem(["fresh"])).size).toBe(0);
+    await backup.mayhem(["fresh"]);
+    expect(r.getMayhemModeBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("lists every configured endpoint, then the public nodes, without Helius", () => {
+    expect(
+      chainBackupUrls({
+        CHAIN_BACKUP_RPC_URLS: "https://paid.example/k, https://mainnet.helius-rpc.com/?api-key=x",
+        SOLANA_RPC_URL: "https://mainnet.helius-rpc.com/?api-key=x",
+        TRADING_BACKUP_RPC_URL: "https://paid.example/k",
+      }),
+    ).toEqual([
+      "https://paid.example/k",
+      "https://solana-rpc.publicnode.com",
+      "https://api.mainnet-beta.solana.com",
+    ]);
   });
 
   it("uses the first paid backup URL, else the public node", () => {

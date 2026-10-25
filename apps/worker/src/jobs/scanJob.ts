@@ -1305,6 +1305,7 @@ async function scanCycle(
       .filter((c) => (c.launchpad ?? PUMPFUN_LAUNCHPAD) === PUMPFUN_LAUNCHPAD)
       .map((c) => c.mintAddress),
     deps.helius,
+    deps.screenBackup,
   );
   // Pump.fun's launch times, for the safety screen's pre-bond cut (see launchTimes.ts).
   rememberLaunchTimes([...newMints, ...active, ...(koth ? [koth] : [])]);

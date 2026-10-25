@@ -62,7 +62,7 @@ import { EntryFastPath } from "./jobs/entryFastPath.js";
 import { scanScheduleOptions } from "./scanSchedule.js";
 import { runEntryScan, runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
 import { pumpLaunchBackups } from "./jobs/pumpLaunch.js";
-import { chainBackupUrl, ScreenBackup } from "./jobs/screenBackup.js";
+import { chainBackupUrl, chainBackupUrls, ScreenBackup } from "./jobs/screenBackup.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
 import { runOutcomeTrackingJob, repairOutcomeBookkeeping } from "./jobs/outcomeTrackingJob.js";
 import { createMatchPeaksRunner } from "./jobs/matchPeaks.js";
@@ -400,7 +400,7 @@ async function main() {
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
     // The screen's Mayhem and holder reads when Helius gives no answer, so it doesn't reject every
     // new coin through a Helius outage (screenBackup.ts).
-    screenBackup: new ScreenBackup(new HeliusClient({ rpcUrl: chainBackupUrl(env) })),
+    screenBackup: new ScreenBackup(chainBackupUrls(env).map((rpcUrl) => new HeliusClient({ rpcUrl }))),
     pumpLaunchBackups: pumpLaunchBackups(env),
     stream,
     launchPoller,
