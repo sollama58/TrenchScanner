@@ -19,6 +19,7 @@ export interface InspectorActions {
   similar: (wallet: string) => void;
   flows: (wallet: string) => void;
   funders: (wallets: string[]) => void;
+  trace: (wallet: string) => void;
   chainToken: (mint: string) => void;
   pastHolders: (mint: string) => void;
   /** Finds a coin's deployer (from the chain for Pro Mode when unknown) and puts it on the map. */
@@ -330,6 +331,17 @@ export function Inspector({
                 onClick={() => actions.funders([node.id])}
               >
                 Find its funder
+              </button>
+              <button
+                className="asyl-btn chain"
+                disabled={!!busy || !!chainOff}
+                title={
+                  chainOff ??
+                  "Follows funder after funder until an exchange, or a wallet the chain can't name a funder for. Up to 10 hops, up to 11 credits each; answers already read are free"
+                }
+                onClick={() => actions.trace(node.id)}
+              >
+                Trace to terminal funder
               </button>
             </>
           )}

@@ -166,6 +166,10 @@ export const asylApi = {
   flows: (wallet: string) => post<ChainRead>(`/asyl/chain/flows/${enc(wallet)}`),
   funders: (wallets: string[]) => post<ChainRead & { found: number }>("/asyl/chain/funders", { wallets }),
   chainToken: (mint: string) => post<ChainRead>(`/asyl/chain/token/${enc(mint)}`),
+  trace: (wallet: string) =>
+    post<ChainRead & { trace: { path: string[]; stop: string; asked: number }; note: string }>(
+      `/asyl/chain/trace/${enc(wallet)}`,
+    ),
   maps: () => api<{ maps: MapSummary[]; cap: number }>("/asyl/maps"),
   map: (id: string) => api<MapSummary & { doc: MapDoc }>(`/asyl/maps/${enc(id)}`),
   createMap: (title: string, doc: MapDoc) => post<{ map: MapSummary }>("/asyl/maps", { title, doc }),

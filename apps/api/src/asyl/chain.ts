@@ -1,6 +1,7 @@
 import {
   prisma,
   CreditTally,
+  isWalletAddress,
   flowsFromTransactions,
   heliusCreditsOut,
   tallyHeliusCredits,
@@ -13,7 +14,7 @@ import {
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
 import { oneAtATime, readAllowance, recordSpend, type Allowance } from "./credits.js";
-import { GraphBuilder, sig2, type KnownDeployer } from "./graph.js";
+import { fundedEdge, GraphBuilder, hotFunders, sig2, type KnownDeployer } from "./graph.js";
 
 /**
  * Asyl's chain reads, Pro Mode only (user decision 2026-10-24): what TrenchScanner's own tables
@@ -64,14 +65,15 @@ async function metered<T>(
   env: Env,
   userId: string,
   worst: number,
-  read: () => Promise<{ value: T; cached: boolean } | null>,
+  /** Given the allowance as it stood before the read, for a read that goes on while it lasts. */
+  read: (before: Allowance) => Promise<{ value: T; cached: boolean } | null>,
 ): Promise<Chained<T>> {
   if (heliusCreditsOut()) return { refused: "credits-out" };
   const before = await readAllowance(env, userId);
   if (!before.enabled || before.left < worst) return { refused: "allowance", allowance: before };
   const out = await oneAtATime(userId, async () => {
     const tally = new CreditTally();
-    const got = await withApiFeature("asyl", () => tallyHeliusCredits(tally, read));
+    const got = await withApiFeature("asyl", () => tallyHeliusCredits(tally, () => read(before)));
     const credits = tally.take();
     if (credits > 0) await recordSpend(userId, credits);
     return got ? { ...got, credits } : null;
@@ -197,6 +199,122 @@ export function readFunders(
     const { asked, found } = await refreshFunders(helius, unique);
     return { value: found, cached: asked === 0 };
   });
+}
+
+/**
+ * Hops a funder trace follows at most (user ask 2026-10-25): past this it is a chain of throwaway
+ * wallets, and the next hop is rarely worth its credits. Bounds a trace at TRACE_HOPS * FUNDER_WORST.
+ */
+export const TRACE_HOPS = 10;
+
+/**
+ * Why a trace stopped. "exchange": an exchange or other service wallet, where the money's trail
+ * goes into the crowd. "origin": nothing paid the last wallet SOL before its first moves (it was
+ * funded some other way, or by a mint). "busy": too many transactions to find its first, which is a
+ * service's mark too. "unreadable": the read failed, or the funder is a program account. "loop":
+ * the trail came back on itself. "limit": TRACE_HOPS hops. "allowance": the day's credits ran short
+ * of the next hop. "paused": Helius's credits are out for now.
+ */
+export type TraceStop =
+  "exchange" | "origin" | "busy" | "unreadable" | "loop" | "limit" | "allowance" | "paused";
+
+export interface FunderTrace {
+  /** The wallet, then its funder, then that funder's funder, as far as the trace went. */
+  path: string[];
+  stop: TraceStop;
+  /** Funder reads that went to the chain (the rest were stored answers that still hold). */
+  asked: number;
+}
+
+/**
+ * Follows a wallet's funder, and the funder's funder, until an exchange or service, a wallet the
+ * chain can't name a funder for, a read that fails, or TRACE_HOPS hops. Stored answers that still
+ * hold are free; each new read is written to WalletFunder for everyone, as Find its funder does.
+ */
+export function traceFunders(
+  env: Env,
+  helius: Pick<HeliusClient, "getFundersBatch">,
+  userId: string,
+  wallet: string,
+  now = Date.now(),
+): Promise<Chained<FunderTrace>> {
+  return metered(env, userId, FUNDER_WORST, async (before) => {
+    const path = [wallet];
+    let asked = 0;
+    const done = (stop: TraceStop) => ({ value: { path, stop, asked }, cached: asked === 0 });
+    for (let at = wallet; ;) {
+      if ((await hotFunders([at])).has(at)) return done("exchange");
+      if (path.length > TRACE_HOPS) return done("limit");
+      if (heliusCreditsOut()) return done("paused");
+      // Each new read can take up to FUNDER_WORST: stop while what's left still covers it.
+      if (before.left < (asked + 1) * FUNDER_WORST) return done("allowance");
+      const r = await refreshFunders(helius, [at], now).catch(() => null);
+      if (!r) return done("unreadable");
+      asked += r.asked;
+      const row = await prisma.walletFunder.findUnique({
+        where: { wallet: at },
+        select: { status: true, funder: true },
+      });
+      if (!row || row.status === "failed") return done("unreadable");
+      if (row.status === "busy") return done("busy");
+      if (row.status !== "found" || !row.funder) return done("origin");
+      if (path.includes(row.funder)) return done("loop");
+      path.push(row.funder);
+      if (!isWalletAddress(row.funder)) return done("unreadable");
+      at = row.funder;
+    }
+  });
+}
+
+/** A trace drawn on the map: each wallet funded by the next, the last tagged when it's an exchange. */
+export async function addTrace(g: GraphBuilder, trace: FunderTrace): Promise<void> {
+  const rows = await prisma.walletFunder.findMany({
+    where: { wallet: { in: trace.path } },
+    select: { wallet: true, funder: true, amountSol: true, fundedAt: true },
+  });
+  const byWallet = new Map(rows.map((r) => [r.wallet, r]));
+  const last = trace.path[trace.path.length - 1]!;
+  for (const w of trace.path)
+    g.node(w, "wallet", w === last && trace.stop === "exchange" ? { tags: ["exchange"] } : {});
+  for (let i = 0; i + 1 < trace.path.length; i++) {
+    const r = byWallet.get(trace.path[i]!);
+    fundedEdge(g, trace.path[i + 1]!, trace.path[i]!, {
+      amountSol: r?.amountSol ?? null,
+      fundedAt: r?.fundedAt ?? null,
+    });
+  }
+}
+
+const short = (w: string) => `${w.slice(0, 4)}…${w.slice(-4)}`;
+
+/** What a trace found, in a line: how far it went and why it stopped there. */
+export function traceNote(trace: FunderTrace, name: string | null = null): string {
+  const hops = trace.path.length - 1;
+  const last = trace.path[trace.path.length - 1]!;
+  const who = name ?? short(last);
+  const went = hops === 0 ? "" : `Traced ${hops} funder${hops === 1 ? "" : "s"} back. `;
+  switch (trace.stop) {
+    case "exchange":
+      return hops === 0
+        ? `${who} is an exchange or service wallet: its money comes from the crowd, so there's no one funder to trace.`
+        : `${went}The trail ends at ${who}, an exchange or service wallet that pays thousands of strangers.`;
+    case "origin":
+      return hops === 0
+        ? "No funder found: nothing paid it SOL before its first transactions."
+        : `${went}${who} is where it starts: nothing paid it SOL before its first transactions.`;
+    case "busy":
+      return `${went}${who} has too many transactions to find its first: most likely an exchange or service.`;
+    case "unreadable":
+      return `${went}The chain couldn't name ${who}'s funder, so the trace stops there. Try again later.`;
+    case "loop":
+      return `${went}The trail loops back on itself at ${who}.`;
+    case "limit":
+      return `${went}Stopped after ${TRACE_HOPS} hops at ${who}. Trace again from there to go further.`;
+    case "allowance":
+      return `${went}Today's chain-read allowance ran short at ${who}. It resets at midnight UTC.`;
+    case "paused":
+      return `${went}Chain reads paused at ${who}. Try again in a few minutes.`;
+  }
 }
 
 const tokenReads = new Map<string, { at: number; holders: { wallet: string; pct: number }[] }>();
