@@ -34,13 +34,14 @@ const totals = {
 } as unknown as OverlayBubbleTotals;
 
 describe("tooltip lines", () => {
-  it("defaults to the old tooltip plus KOL bundled", () => {
+  it("defaults to the old tooltip plus KOL bundled and the safety screen", () => {
     expect(shownLines(DEFAULT_TOOLTIP, DEFAULT_SETTINGS)).toEqual([
       "models",
       "filters",
       "ai",
       "aiReasoning",
       "mcap",
+      "safety",
       "flag:bundledSupplyPct",
       "flag:sniperTopHolderCount",
       "flag:linkedWalletPct",

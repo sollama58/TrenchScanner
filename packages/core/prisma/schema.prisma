@@ -111,6 +111,11 @@ model User {
   /// What the browser extension overlay shows on Axiom, Terminal and GMGN (rings, stat flags,
   /// sites, style) - see overlaySettings.ts in apps/api for the shape. Null = the defaults.
   overlaySettings Json?
+  /// The browser extension's own display choices (tooltip lines, pills, colours, toasts, safety
+  /// screen, holder markers, each model's ring), kept so a reinstall gets them back (user ask
+  /// 2026-10-25): `{ savedAt, prefs }`, stored as the extension sent it and cleaned by the
+  /// extension when read (its shared/tooltip.ts cleanTooltip). Null = none saved yet.
+  overlayLook     Json?
   /// Set for an account made by signing in with Privy (email or Google/X): its Privy DID. The
   /// account's walletAddress is then the Privy wallet Privy made for it. Privy accounts and wallet
   /// accounts stay separate (user decision 2026-10-18), and Privy accounts can't pair a phone.

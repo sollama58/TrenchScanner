@@ -140,3 +140,18 @@ or filters call it later.
   effect (pulse, strong glow, shimmer, sparkle, flash), for the models and filters in the feed.
 - The map's time: one "Updated …" stamp, in the holders bar, counting the live trades that move the
   shares, and "Now" reads "Latest".
+
+0.7.1: the display choices (Settings' tooltip, pills, colours, on-page alerts, safety screen,
+coin-page tools, each model's and filter's ring) are kept with the account too (`PUT
+/ext/v1/look`, read back in `/me`), so a reinstall or another browser gets them back once it
+connects (user ask 2026-10-25). The newer save wins, this browser's or the account's
+(`syncLook` in `sw.ts`); the account's settings (rings, flags, sites, style) already were.
+
+0.7.2 (user ask 2026-10-25):
+
+- The failing-safety mark is minimal: a thin red edge and a small "✕ Unsafe" tag in the row's
+  corner, with no dimming. Hovering the tag shows why it fails, and the ring's tooltip has a
+  "Safety screen" line (on by default) saying Passed or Failed and why.
+- A hidden coin leaves no gap: on virtual-scrolling lists (rows placed by `top` or `translateY`)
+  its slot is made invisible and the rows below it move up by its height (`closeGaps` in
+  `engine.ts`); elsewhere the row is taken out with `display: none`.

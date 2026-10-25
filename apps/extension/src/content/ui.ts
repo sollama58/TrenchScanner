@@ -11,7 +11,7 @@ import {
   type RingEffect,
   type TipLine,
 } from "../shared/tooltip";
-import type { FlagId, OverlayBubbleTotals, RingStyle, OverlayToken } from "../shared/types";
+import type { FlagId, OverlayBubbleTotals, OverlaySafety, RingStyle, OverlayToken } from "../shared/types";
 import type { PillSegment } from "../shared/pill";
 import { firstAlert, type RowVerdict } from "../shared/verdict";
 import { findSpot, obstaclesIn, stillFits, type Box } from "./placement";
@@ -320,19 +320,17 @@ export class Decoration {
 
 const MARK_CSS = `
 :host { all: initial; position: absolute; inset: 0; pointer-events: none; z-index: 6; }
-.dim { position: absolute; inset: 0; border-radius: 6px; background: color-mix(in srgb, var(--c-pillBg) 45%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-risk) 55%, transparent); }
-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
-line { stroke: var(--c-risk); stroke-width: 2.5; stroke-linecap: round; opacity: .8; vector-effect: non-scaling-stroke; }
-.tag { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: auto; cursor: default;
-  font: 600 10.5px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; padding: 2px 8px; border-radius: 999px; white-space: nowrap;
-  background: var(--c-pillBg); color: var(--c-hi); border: 1px solid var(--c-risk); }
+.edge { position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px; border-radius: 0 2px 2px 0; background: var(--c-risk); opacity: .9; }
+.tag { position: absolute; left: 4px; bottom: 4px; pointer-events: auto; cursor: default; display: inline-flex; align-items: center; gap: 3px;
+  font: 600 9.5px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; padding: 0 5px 0 4px; border-radius: 999px; white-space: nowrap;
+  background: color-mix(in srgb, var(--c-pillBg) 88%, transparent); color: var(--c-hi); border: 1px solid color-mix(in srgb, var(--c-risk) 70%, transparent); }
 `;
 
 /**
- * The X over a coin failing TrenchScanner's safety screen (user ask 2026-10-25): two strokes
- * across the row, dimmed, with the screen's reasons on hover. Clicks still reach the site, but
- * on the tag.
+ * A coin failing TrenchScanner's safety screen, marked (user asks 2026-10-25): a thin red edge and
+ * a small "✕ Unsafe" tag in the row's corner; hovering it shows the screen's reasons in the overlay's
+ * tooltip (safetyBody). Minimal on
+ * purpose: the row stays readable and every click but the tag's reaches the site.
  */
 export class SafetyMark {
   private readonly host = document.createElement("trench-overlay-x");
@@ -340,38 +338,24 @@ export class SafetyMark {
   private readonly colors = new ColorRule();
   private madeRelative = false;
 
-  constructor(private readonly row: HTMLElement) {
+  constructor(
+    private readonly row: HTMLElement,
+    onHover: (tag: Element, entering: boolean) => void,
+  ) {
     const root = this.host.attachShadow({ mode: "closed" });
     const style = document.createElement("style");
     style.textContent = MARK_CSS;
-    const dim = document.createElement("div");
-    dim.className = "dim";
-    const NS = "http://www.w3.org/2000/svg";
-    const svg = document.createElementNS(NS, "svg");
-    svg.setAttribute("viewBox", "0 0 100 100");
-    svg.setAttribute("preserveAspectRatio", "none");
-    for (const [x1, y1, x2, y2] of [
-      [3, 6, 97, 94],
-      [97, 6, 3, 94],
-    ]) {
-      const stroke = document.createElementNS(NS, "line");
-      stroke.setAttribute("x1", String(x1));
-      stroke.setAttribute("y1", String(y1));
-      stroke.setAttribute("x2", String(x2));
-      stroke.setAttribute("y2", String(y2));
-      svg.append(stroke);
-    }
+    this.tag.addEventListener("mouseenter", () => onHover(this.tag, true));
+    this.tag.addEventListener("mouseleave", () => onHover(this.tag, false));
+    const edge = document.createElement("div");
+    edge.className = "edge";
     this.tag.className = "tag";
-    this.tag.textContent = "✕ Failed safety";
-    root.append(style, this.colors.node, dim, svg, this.tag);
+    this.tag.textContent = "✕ Unsafe";
+    root.append(style, this.colors.node, edge, this.tag);
   }
 
-  update(reasons: readonly string[], colors: Record<ColorKey, string>): void {
+  update(colors: Record<ColorKey, string>): void {
     this.colors.set(colors);
-    const title = reasons.length
-      ? `Fails TrenchScanner's safety screen on its newest scan: ${reasons.join("; ")}`
-      : "Fails TrenchScanner's safety screen on its newest scan";
-    if (this.tag.title !== title) this.tag.title = title;
     if (this.host.parentElement === this.row) return;
     const position = getComputedStyle(this.row).position;
     if (position === "" || position === "static") {
@@ -522,6 +506,13 @@ export function tooltipBody(
     } else if (id === "holders") {
       const count = token.stats?.holderCount;
       if (count !== null && count !== undefined) stats.append(line("Holders", String(count)));
+    } else if (id === "safety") {
+      // The newest scan's verdict, and why it fails (user ask 2026-10-25).
+      const safety = token.safety;
+      if (!safety) continue;
+      stats.append(line("Safety screen", safety.passed ? "Passed" : "Failed", safety.passed ? "ok" : "hi"));
+      if (!safety.passed && safety.reasons.length > 0)
+        stats.append(el("p", "why", reasonsText(safety.reasons)));
     } else if (id.startsWith("flag:")) {
       const flag = flags.get(id.slice(5) as FlagId);
       if (flag) stats.append(line(flag.label, flag.text, flag.level));
@@ -544,6 +535,33 @@ export function tooltipBody(
     }
   }
   for (const sec of [alerts, stats, foot]) if (sec.childElementCount > 0) tip.append(sec);
+  return tip;
+}
+
+/** The screen's reasons as one sentence, each with a capital first letter, as the site writes them. */
+function reasonsText(reasons: readonly string[]): string {
+  return reasons.map((r) => r.charAt(0).toUpperCase() + r.slice(1)).join(". ") + ".";
+}
+
+/** What the safety mark's hover says: that the coin fails the screen, why, and how old the scan is. */
+export function safetyBody(mint: string, safety: OverlaySafety, now = Date.now()): HTMLElement {
+  const tip = el("div", "tip");
+  const head = el("div", "head");
+  head.append(
+    el("span", "brand", "TrenchScanner"),
+    el("span", "sym", `${mint.slice(0, 4)}…${mint.slice(-4)}`),
+  );
+  const sec = el("div", "sec");
+  sec.append(line("Safety screen", "Failed", "hi"));
+  for (const reason of safety.reasons) sec.append(el("p", "why", reasonsText([reason])));
+  const foot = el("div", "sec foot");
+  foot.append(el("span", "", `Newest scan ${ago(safety.at, now)}`));
+  const link = el("a", "", "Open in TrenchScanner ↗");
+  link.href = trenchUrl(mint);
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  foot.append(link);
+  tip.append(head, sec, foot);
   return tip;
 }
 

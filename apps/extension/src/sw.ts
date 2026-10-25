@@ -1,4 +1,4 @@
-import { api, ApiError } from "./shared/api";
+import { api, ApiError, type SavedLook } from "./shared/api";
 import { isMintAddress } from "./shared/mint";
 import { DEFAULT_SETTINGS } from "./shared/settings";
 import { cleanTooltip, type TooltipPrefs } from "./shared/tooltip";
@@ -68,6 +68,33 @@ const totalsCache = new Map<string, { at: number; totals: OverlayBubbleTotals | 
 const SAFETY_MS = 15_000;
 const safetyCache = new Map<string, { at: number; verdict: OverlaySafety | null }>();
 
+/**
+ * The display choices (tooltip, pills, colours, toasts, safety screen, holder markers, each
+ * model's ring) are kept with the account too, so a reinstall or another browser gets them back
+ * (user ask 2026-10-25). The newer of this browser's and the account's wins, by when each was
+ * saved: a fresh install has none of its own, so it takes the account's; an account with none yet
+ * gets this browser's.
+ */
+async function syncLook(key: string, remote: SavedLook | null | undefined): Promise<void> {
+  const { tooltip, tooltipSavedAt } = (await chrome.storage.local.get(["tooltip", "tooltipSavedAt"])) as {
+    tooltip?: unknown;
+    tooltipSavedAt?: number;
+  };
+  const local = typeof tooltipSavedAt === "number" ? tooltipSavedAt : 0;
+  const theirs = remote && typeof remote.savedAt === "number" ? remote.savedAt : 0;
+  if (remote && theirs > local) {
+    const prefs = cleanTooltip(remote.prefs);
+    await chrome.storage.local.set({ tooltip: prefs, tooltipSavedAt: theirs });
+    tellRingTabs({ type: "tooltipChanged", prefs });
+    void chrome.runtime.sendMessage({ type: "lookChanged" }).catch(() => undefined);
+  } else if (tooltip !== undefined && (local > theirs || !remote)) {
+    // Choices made before 0.7.1 carry no time: they are saved as of now.
+    const savedAt = local || Date.now();
+    if (!local) await chrome.storage.local.set({ tooltipSavedAt: savedAt });
+    await api.saveLook(key, { savedAt, prefs: cleanTooltip(tooltip) }).catch(() => undefined);
+  }
+}
+
 async function tooltipPrefs(): Promise<TooltipPrefs> {
   const { tooltip } = await chrome.storage.local.get("tooltip");
   return cleanTooltip(tooltip);
@@ -98,14 +125,15 @@ async function currentSettings(): Promise<OverlaySettings> {
     settingsReadAt = Date.now();
     void api
       .me(key)
-      .then((me) =>
-        chrome.storage.local.set({
+      .then(async (me) => {
+        await chrome.storage.local.set({
           wallet: me.wallet,
           settings: me.settings,
           aiReviews: me.aiReviews === true,
           pro: me.pro === true,
-        }),
-      )
+        });
+        await syncLook(key, me.look);
+      })
       .catch((e: unknown) => noteFailure(e));
   }
   return settings ?? DEFAULT_SETTINGS;
@@ -265,6 +293,7 @@ async function connect(raw: unknown): Promise<{ ok: boolean; error?: string }> {
       pro: me.pro === true,
     });
     await chrome.storage.local.remove("refused");
+    await syncLook(key, me.look);
     settingsReadAt = Date.now();
     problem = null;
     lastTokens = [];
@@ -310,8 +339,11 @@ async function handle(request: PanelRequest): Promise<unknown> {
       return tooltipPrefs();
     case "saveTooltip": {
       const prefs = cleanTooltip(request.prefs);
-      await chrome.storage.local.set({ tooltip: prefs });
+      const savedAt = Date.now();
+      await chrome.storage.local.set({ tooltip: prefs, tooltipSavedAt: savedAt });
       tellRingTabs({ type: "tooltipChanged", prefs });
+      const { key, refused } = await stored();
+      if (key && !refused) void api.saveLook(key, { savedAt, prefs }).catch(() => undefined);
       return { ok: true };
     }
     default:

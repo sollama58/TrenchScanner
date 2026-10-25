@@ -7,6 +7,12 @@ import type { BuddyAnswer, OverlayBubbleMap, OverlaySafety, OverlaySettings, Ove
  */
 export const API_BASE = "https://api.trenchscanner.app";
 
+/** The extension's display choices as kept with the account: when they were saved, and them. */
+export interface SavedLook {
+  savedAt: number;
+  prefs: unknown;
+}
+
 export class ApiError extends Error {
   constructor(readonly status: number) {
     super(`api ${status}`);
@@ -40,11 +46,15 @@ async function call<T>(
 
 export const api = {
   me: (key: string) =>
-    call<{ wallet: string; settings: OverlaySettings; aiReviews?: boolean; pro?: boolean }>(
-      key,
-      "GET",
-      "/me",
-    ),
+    call<{
+      wallet: string;
+      settings: OverlaySettings;
+      /** The display choices saved with the account (sw.ts syncLook); absent before 0.7.1's API. */
+      look?: SavedLook | null;
+      aiReviews?: boolean;
+      pro?: boolean;
+    }>(key, "GET", "/me"),
+  saveLook: (key: string, look: SavedLook) => call<{ ok: boolean }>(key, "PUT", "/look", look),
   saveSettings: (key: string, settings: OverlaySettings) =>
     call<OverlaySettings>(key, "PUT", "/settings", settings),
   feed: (key: string) => call<{ tokens: OverlayToken[] }>(key, "GET", "/feed"),

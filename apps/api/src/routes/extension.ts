@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import {
   adminWalletSet,
@@ -73,6 +74,8 @@ const FEED_RATE_LIMIT = { max: 90, timeWindow: "1 minute" };
 const FEED_CACHE_MS = 4_000;
 const FEED_CACHE_MAX = 5_000;
 const SETTINGS_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
+/** The extension's saved display choices, at most: a full set is a few kilobytes. */
+const OVERLAY_LOOK_MAX_BYTES = 32_768;
 /** Bubble map reads a minute: the panel re-reads each open map every 30 s, a handful at once. */
 const BUBBLE_RATE_LIMIT = { max: 60, timeWindow: "1 minute" };
 /** One coin's map is reused this long for every reader (the site's own read is cached 15 s). */
@@ -312,12 +315,16 @@ export async function registerExtensionRoutes(
     async (request) => {
       const { userId, walletAddress, aiReviews } = request.extensionClient!;
       const [user, pro] = await Promise.all([
-        prisma.user.findUnique({ where: { id: userId }, select: { overlaySettings: true } }),
+        prisma.user.findUnique({
+          where: { id: userId },
+          select: { overlaySettings: true, overlayLook: true },
+        }),
         cachedProStatus(opts.env, walletAddress).catch(() => null),
       ]);
       return {
         wallet: `${walletAddress.slice(0, 4)}…${walletAddress.slice(-4)}`,
         settings: parseOverlaySettings(user?.overlaySettings ?? null),
+        look: user?.overlayLook ?? null,
         aiReviews,
         pro: pro?.pro === true,
       };
@@ -348,6 +355,37 @@ export async function registerExtensionRoutes(
         data: { overlaySettings: parsed.data },
       });
       return parsed.data;
+    },
+  );
+
+  /**
+   * The extension's own display choices, saved with the account so a reinstall gets them back
+   * (user ask 2026-10-25). Kept as sent, within OVERLAY_LOOK_MAX_BYTES: only the key's owner reads
+   * them back, and the extension cleans them on reading (/me's `look`).
+   */
+  app.put(
+    "/look",
+    {
+      bodyLimit: OVERLAY_LOOK_MAX_BYTES,
+      config: { rateLimit: { ...SETTINGS_RATE_LIMIT, keyGenerator: bucket } },
+    },
+    async (request, reply) => {
+      const body = request.body as { savedAt?: unknown; prefs?: unknown } | null;
+      const savedAt = body?.savedAt;
+      const prefs = body?.prefs;
+      if (
+        typeof savedAt !== "number" ||
+        !Number.isFinite(savedAt) ||
+        typeof prefs !== "object" ||
+        prefs === null ||
+        Array.isArray(prefs)
+      )
+        return reply.code(400).send({ error: "invalid look" });
+      await prisma.user.update({
+        where: { id: request.extensionClient!.userId },
+        data: { overlayLook: { savedAt, prefs } as Prisma.InputJsonObject },
+      });
+      return { ok: true };
     },
   );
 

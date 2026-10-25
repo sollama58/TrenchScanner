@@ -1,5 +1,5 @@
 import type { SiteAdapter } from "./adapters/adapter";
-import { Decoration, SafetyMark, Tooltip, tooltipBody } from "./ui";
+import { Decoration, SafetyMark, safetyBody, Tooltip, tooltipBody } from "./ui";
 import { isTokenPage } from "./tokenPage";
 import { columnOf, findColumns, type BoardColumn } from "./columns";
 import { pillSegments } from "../shared/pill";
@@ -34,6 +34,32 @@ const COLUMNS_MS = 2_000;
 /** A coin's map totals are asked for again after this long (the worker keeps them a minute too). */
 const TOTALS_MS = 60_000;
 
+/**
+ * The slot a virtual list places a row in: the nearest box (the row itself, or up to four levels
+ * above it) placed by an inline `top` or `translateY`, as Axiom's, Terminal's and GMGN's lists do.
+ */
+export function slotOf(row: HTMLElement): HTMLElement | null {
+  let el: HTMLElement | null = row;
+  for (let i = 0; el && i < 5; el = el.parentElement, i++) {
+    if (el.style.position === "absolute" && el.style.top !== "") return el;
+    if (/translateY\(/.test(el.style.transform)) return el;
+  }
+  return null;
+}
+
+/** Where the list put a slot, from its own inline style (our `translate` is not part of it). */
+function slotY(slot: HTMLElement): number {
+  const top = Number.parseFloat(slot.style.top);
+  if (Number.isFinite(top)) return top;
+  const y = /translateY\((-?[\d.]+)px\)/.exec(slot.style.transform);
+  return y ? Number(y[1]) : slot.offsetTop;
+}
+
+function slotHeight(slot: HTMLElement): number {
+  const h = Number.parseFloat(slot.style.height);
+  return Number.isFinite(h) ? h : slot.offsetHeight;
+}
+
 export interface EngineDeps {
   lookup(mints: string[]): Promise<LookupAnswer>;
   report(health: { rows: number; mints: number; paused: boolean }): void;
@@ -50,6 +76,8 @@ interface RowState {
   mark: SafetyMark | null;
   /** The row is hidden for failing it, in "hide" mode. */
   hidden: boolean;
+  /** The virtual list's slot it was hidden in, when it sits in one (slotOf). */
+  slot: HTMLElement | null;
 }
 
 /**
@@ -110,6 +138,7 @@ export class OverlayEngine {
       state.decoration?.remove();
       this.clearSafety(row, state);
     }
+    this.closeGaps();
     this.rows.clear();
     this.visible.clear();
     this.tooltip.hideNow();
@@ -124,6 +153,7 @@ export class OverlayEngine {
     const asked = prefs.safety.mode !== "off" && this.tipPrefs.safety.mode === "off";
     this.tipPrefs = prefs;
     for (const [row, state] of this.rows) this.draw(row, state);
+    this.closeGaps();
     if (asked) this.queueLookup(true);
   }
 
@@ -193,7 +223,7 @@ export class OverlayEngine {
       if (mint) withMint++;
       let state = this.rows.get(row);
       if (!state) {
-        state = { mint: null, decoration: null, mark: null, hidden: false };
+        state = { mint: null, decoration: null, mark: null, hidden: false, slot: null };
         this.rows.set(row, state);
         this.intersection?.observe(row);
       }
@@ -206,6 +236,7 @@ export class OverlayEngine {
       this.draw(row, state);
     }
     this.checkHealth(found.length, withMint, now);
+    this.closeGaps();
     this.queueLookup();
   }
 
@@ -272,6 +303,11 @@ export class OverlayEngine {
 
   /** Exposed for tests. A coin left out of the answer was never screened, so it is shown. */
   receiveSafety(asked: string[], answer: SafetyAnswer, now = Date.now()): void {
+    this.applySafety(asked, answer, now);
+    this.closeGaps();
+  }
+
+  private applySafety(asked: string[], answer: SafetyAnswer, now: number): void {
     for (const mint of asked) this.safety.set(mint, { at: now, verdict: answer.verdicts[mint] ?? null });
     if (this.safety.size > 5_000) {
       for (const [mint, v] of this.safety) if (now - v.at > 10 * REFRESH_MS) this.safety.delete(mint);
@@ -289,16 +325,25 @@ export class OverlayEngine {
     if (failed && mode === "hide") {
       state.mark?.remove();
       state.mark = null;
-      // Set again on each draw: the site's renderer may rewrite the row's style.
-      if (row.style.getPropertyValue("display") !== "none")
-        row.style.setProperty("display", "none", "important");
+      // In a virtual list the slot keeps its place, so it is hidden and the slots below move up
+      // into it (closeGaps); elsewhere the row is taken out of the flow. Set again on each draw:
+      // the site's renderer may rewrite the style.
+      state.slot ??= slotOf(row);
+      const target = state.slot ?? row;
+      const [prop, value] = state.slot ? ["visibility", "hidden"] : ["display", "none"];
+      if (target.style.getPropertyValue(prop) !== value) target.style.setProperty(prop, value, "important");
       state.hidden = true;
       return;
     }
     this.showRow(row, state);
     if (failed && mode === "mark") {
-      state.mark ??= new SafetyMark(row);
-      state.mark.update(verdict.reasons, colorsOf(this.tipPrefs));
+      state.mark ??= new SafetyMark(row, (tag, entering) => {
+        const shown = state.mint ? this.safety.get(state.mint)?.verdict : null;
+        if (entering && state.mint && shown)
+          this.tooltip.show(tag, safetyBody(state.mint, shown), colorsOf(this.tipPrefs));
+        else this.tooltip.hide();
+      });
+      state.mark.update(colorsOf(this.tipPrefs));
     } else {
       state.mark?.remove();
       state.mark = null;
@@ -307,8 +352,50 @@ export class OverlayEngine {
 
   private showRow(row: HTMLElement, state: RowState): void {
     if (!state.hidden) return;
-    if (row.style.getPropertyPriority("display") === "important") row.style.removeProperty("display");
+    if (state.slot) {
+      if (state.slot.style.getPropertyPriority("visibility") === "important")
+        state.slot.style.removeProperty("visibility");
+    } else if (row.style.getPropertyPriority("display") === "important") row.style.removeProperty("display");
     state.hidden = false;
+    state.slot = null;
+  }
+
+  /** Slots this moved up, so it can put them back. */
+  private readonly shifted = new Set<HTMLElement>();
+
+  /**
+   * Closes the gaps hidden rows leave in a virtual list (user ask 2026-10-25): each slot below a
+   * hidden one moves up by the hidden slots' heights, with the CSS `translate` property, which
+   * adds to the site's own `top` or `transform` rather than replacing it. Only the slots the list
+   * has rendered count: one scrolled far out of it no longer pulls the rest up.
+   */
+  private closeGaps(): void {
+    const hidden = new Set<HTMLElement>();
+    const lists = new Set<HTMLElement>();
+    for (const state of this.rows.values()) {
+      if (state.hidden && state.slot?.parentElement) {
+        hidden.add(state.slot);
+        lists.add(state.slot.parentElement);
+      }
+    }
+    const moved = new Set<HTMLElement>();
+    for (const list of lists) {
+      const slots = [...list.children].filter((c): c is HTMLElement => c instanceof HTMLElement);
+      slots.sort((a, b) => slotY(a) - slotY(b));
+      let shift = 0;
+      for (const slot of slots) {
+        if (hidden.has(slot)) {
+          shift += slotHeight(slot);
+          continue;
+        }
+        if (shift === 0) continue;
+        slot.style.setProperty("translate", `0 -${shift}px`);
+        moved.add(slot);
+      }
+    }
+    for (const slot of this.shifted) if (!moved.has(slot)) slot.style.removeProperty("translate");
+    this.shifted.clear();
+    for (const slot of moved) this.shifted.add(slot);
   }
 
   private clearSafety(row: HTMLElement, state: RowState): void {
