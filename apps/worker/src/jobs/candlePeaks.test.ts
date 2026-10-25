@@ -8,8 +8,8 @@ import {
   PEAK_WATCH_PARKED_AT,
   resetPeakWatchEnrolment,
   runCandlePeaksJob,
-  TRADED_WAIT_MS,
   tradedSince,
+  tradeWindowMs,
 } from "./candlePeaks.js";
 import { COINGECKO_DAY_SPENT } from "./minuteCandleReader.js";
 import { recordCuratedPeaks } from "./curatedPeaks.js";
@@ -358,7 +358,9 @@ describe.skipIf(!dbAvailable)("runCandlePeaksJob", () => {
       now: () => now,
       triage: { lookup },
     });
-    expect(meta).toMatchObject({ quiet: 2, traded: 2, unlisted: 1 });
+    // The readings raise what they stand above: the never-read coin's call and match (12,000 over
+    // the 10,000 alert) and the traded coin's match; its call already stands at 12,000.
+    expect(meta).toMatchObject({ quiet: 2, traded: 2, unlisted: 1, fromReadings: 3 });
     expect(meta.triaged).toBeGreaterThanOrEqual(5);
     // The never-read coin that traded is read ahead of the one read before.
     expect(reads.indexOf(fresh.token.mintAddress)).toBeLessThan(reads.indexOf(traded.token.mintAddress));
@@ -368,15 +370,16 @@ describe.skipIf(!dbAvailable)("runCandlePeaksJob", () => {
     expect(reads).not.toContain(unlisted.token.mintAddress);
     expect(reads).not.toContain(freshQuiet.token.mintAddress);
     expect((await callOf(freshQuiet.call.id)).peakMcapUsd).toBe(11_000);
+    // Checked by its reading, not read.
     const fq = await prisma.peakWatch.findUniqueOrThrow({ where: { tokenId: freshQuiet.token.id } });
-    expect(fq.lastCheckedAt).toBeNull();
+    expect(fq.lastCheckedAt).toEqual(new Date(now));
     expect(fq.nextCheckAt.getTime()).toBe(now + 12 * HOUR);
     expect((await callOf(traded.call.id)).peakMcapUsd).toBeCloseTo(15_000);
     expect((await callOf(quiet.call.id)).peakMcapUsd).toBe(12_000);
     // Last traded two days ago and not since: the quiet turn, 12 hours on, with no read spent.
     const q = await prisma.peakWatch.findUniqueOrThrow({ where: { tokenId: quiet.token.id } });
     expect(q.nextCheckAt.getTime()).toBe(now + 12 * HOUR);
-    expect(q.lastCheckedAt).toEqual(readAt);
+    expect(q.lastCheckedAt).toEqual(new Date(now));
     const u = await prisma.peakWatch.findUniqueOrThrow({ where: { tokenId: unlisted.token.id } });
     expect(u.nextCheckAt.getTime()).toBe(now + 12 * HOUR);
 
@@ -398,87 +401,83 @@ describe.skipIf(!dbAvailable)("runCandlePeaksJob", () => {
     expect(reads).toContain(quiet.token.mintAddress);
   });
 
-  // 265 of the 300 coins triaged a run on 2026-10-24 evening were the same unread traded coins,
-  // kept at the head of the queue while the day's credits were spent; the backlog stood still.
-  it("gives the traded coins a run has no read for their next turn later, not next run", async () => {
-    const heavy = await seedCoin("unread-heavy", 30, { callPeak: 12_000 });
-    const mid = await seedCoin("unread-mid", 30, { callPeak: 12_000 });
-    const light = await seedCoin("unread-light", 30, { callPeak: 12_000 });
-    const coins = [heavy, mid, light];
-    const readAt = new Date(Date.now() - 13 * HOUR);
-    for (const { token } of coins) {
+  // The paid reads (600 credits a day, on a GeckoTerminal slot the job rarely got) left thousands
+  // of Peaks at the readings they had when the alert fired: by 2026-10-25 the triage found ~50
+  // traded coins a run and read none.
+  it("raises alert peaks from the DexScreener reading, with no read, and checks the coin by it", async () => {
+    const hot = await seedCoin("reading-hot", 2, { callPeak: 12_000, matchPeak: 12_000 });
+    const high = await seedCoin("reading-high", 2, { callPeak: 30_000, matchPeak: 30_000 });
+    const now = Date.now();
+    for (const { token, at } of [hot, high]) {
       await prisma.peakWatch.upsert({
         where: { tokenId: token.id },
         create: {
           tokenId: token.id,
-          firstAlertAt: readAt,
-          lastAlertAt: readAt,
+          firstAlertAt: at,
+          lastAlertAt: at,
           nextCheckAt: new Date(0),
-          lastCheckedAt: readAt,
+          lastCheckedAt: new Date(now - 4 * MIN),
         },
-        update: { nextCheckAt: new Date(0), lastCheckedAt: readAt },
+        update: { nextCheckAt: new Date(0), lastCheckedAt: new Date(now - 4 * MIN) },
       });
     }
-    const volumes = new Map(coins.map(({ token }, i) => [token.mintAddress, [3000, 2000, 1000][i]]));
-    const lookup = async (mints: string[], failed: Set<string>) => {
+    const mints = new Set([hot.token.mintAddress, high.token.mintAddress]);
+    const lookup = async (asked: string[], failed: Set<string>) => {
       const readings = [];
-      for (const mint of mints) {
-        const volume24hUsd = volumes.get(mint);
-        if (volume24hUsd === undefined) failed.add(mint);
-        else readings.push({ mintAddress: mint, priceUsd: 1.2e-5, marketCapUsd: 12_000, volume24hUsd });
+      for (const mint of asked) {
+        if (mints.has(mint))
+          readings.push({ mintAddress: mint, priceUsd: 2e-5, marketCapUsd: 20_000, volume5mUsd: 500 });
+        else failed.add(mint);
       }
       return readings;
     };
-    const reads: string[] = [];
-    const reading = {
-      minuteCandles: async (mint: string) => {
-        reads.push(mint);
-        return minutes(Date.now() - MIN, [1e-5, 1.5e-5]);
-      },
-    };
-    const now = Date.now();
-    const meta = await runCandlePeaksJob(reading, {
-      trackingDays: 14,
-      coinsPerRun: 1,
-      spacingMs: 0,
-      now: () => now,
-      triage: { lookup },
-    });
-    expect(meta).toMatchObject({ traded: 3, coins: 1 });
-    expect(reads).toEqual([heavy.token.mintAddress]);
-    for (const { token } of coins.slice(1)) {
-      const watch = await prisma.peakWatch.findUniqueOrThrow({ where: { tokenId: token.id } });
-      expect(watch.nextCheckAt.getTime()).toBe(now + TRADED_WAIT_MS);
-      expect(watch.lastCheckedAt).toEqual(readAt);
-    }
-
-    // The day's CoinGecko credits spent at the first read: the coins it had no read for wait too.
-    for (const { token } of coins) {
-      await prisma.peakWatch.update({ where: { tokenId: token.id }, data: { nextCheckAt: new Date(0) } });
-    }
+    // The day's CoinGecko credits are spent: no read refines what the readings set.
     const spent = {
       minuteCandles: async (): Promise<MinuteCandle[] | null> => {
         throw new HttpError(429, COINGECKO_DAY_SPENT, "CoinGecko daily budget for peaks spent");
       },
     };
-    const later = now + MIN;
-    const skipped = await runCandlePeaksJob(spent, {
+    const meta = await runCandlePeaksJob(spent, {
       trackingDays: 14,
       coinsPerRun: 500,
       spacingMs: 0,
-      now: () => later,
+      now: () => now,
       triage: { lookup },
     });
-    expect(skipped).toMatchObject({
-      traded: 3,
+    expect(meta).toMatchObject({
+      traded: 2,
+      fromReadings: 2,
       coins: 0,
-      calls: 1,
       skipped: "CoinGecko daily budget for Peaks spent",
     });
-    for (const { token } of coins) {
+
+    // 20,000 over a 12,000 peak: raised, dated to the reading, and the row stays the readings'.
+    const hotCall = await callOf(hot.call.id);
+    expect(hotCall.peakMcapUsd).toBe(20_000);
+    expect(hotCall.peakMcapAt).toEqual(new Date(now));
+    expect(hotCall.peakCheckedAt).toBeNull();
+    const hotMatch = await matchOf(hot.match.id);
+    expect(hotMatch.peakMcapUsd).toBe(20_000);
+    expect(hotMatch.peakReturnPct).toBeCloseTo(100);
+    expect(hotMatch.hitHundredPctAt).toEqual(new Date(now));
+    // 20,000 under a 30,000 peak: left alone.
+    expect((await callOf(high.call.id)).peakMcapUsd).toBe(30_000);
+    expect((await matchOf(high.match.id)).peakMcapUsd).toBe(30_000);
+
+    // Both are checked by the reading: a trade in the last five minutes, so the next check is
+    // ten minutes on; the ATH follows the peak the reading raised.
+    for (const { token } of [hot, high]) {
       const watch = await prisma.peakWatch.findUniqueOrThrow({ where: { tokenId: token.id } });
-      expect(watch.nextCheckAt.getTime()).toBe(later + TRADED_WAIT_MS);
+      expect(watch.lastCheckedAt).toEqual(new Date(now));
+      expect(watch.lastTradeAt).toEqual(new Date(now - 5 * MIN));
+      expect(watch.nextCheckAt.getTime()).toBe(now + 10 * MIN);
     }
+    expect((await prisma.peakWatch.findUniqueOrThrow({ where: { tokenId: hot.token.id } })).athMcapUsd).toBe(
+      20_000,
+    );
+    expect(
+      (await prisma.peakWatch.findUniqueOrThrow({ where: { tokenId: high.token.id } })).athMcapUsd,
+    ).toBeNull();
   });
 
   it("parks a coin past its tracking window, so the due reads stop walking it", async () => {
@@ -529,6 +528,12 @@ describe("tradedSince", () => {
     expect(tradedSince({ ...t, volume1hUsd: 0 }, 30 * MIN)).toBe(false);
     expect(tradedSince({ ...t, volume24hUsd: 0 }, 13 * HOUR)).toBe(false);
     expect(tradedSince(t, 3 * 24 * HOUR)).toBe(true);
+  });
+
+  it("judges on the smallest window that covers the idle time", () => {
+    expect(tradeWindowMs(4 * MIN)).toBe(5 * MIN);
+    expect(tradeWindowMs(30 * MIN)).toBe(HOUR);
+    expect(tradeWindowMs(13 * HOUR)).toBe(24 * HOUR);
   });
 
   it("counts dust as quiet, from PEAK_DUST_VOLUME_USD up as traded", () => {
