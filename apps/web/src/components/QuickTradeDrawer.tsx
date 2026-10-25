@@ -1,5 +1,13 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import type { Card } from "../api";
+import {
+  api,
+  type Card,
+  type ExternalSearchAnswer,
+  type TokenSearchAnswer,
+  type TokenSearchHit,
+} from "../api";
+import { parseSearch } from "../caSearch";
+import type { SearchMarketPatch } from "../cardSearch";
 import { useLiveMarketCaps, useMediaQuery, useNow, usePolling } from "../hooks";
 import { change, pct, shortAddress, signedPct, usd } from "../format";
 import { summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
@@ -7,13 +15,15 @@ import { openTokenModal } from "../tokenModal";
 import { TokenImage } from "./TokenImage";
 import { TradePanel } from "./TradePanel";
 import { sol, updatedText, type TradeCoin } from "./TradesDrawer";
-import { BoltIcon, CheckIcon, ChevronDownIcon, CloseIcon, CopyIcon, ExternalIcon } from "./Icons";
+import { BoltIcon, CheckIcon, ChevronDownIcon, CloseIcon, CopyIcon, ExternalIcon, LinkIcon } from "./Icons";
 
 /** Desktop only, as the Trades and Utility panels are. */
 const DESKTOP_QUERY = "(min-width: 900px)";
 /** The holdings list while the panel is out, and while it is shut after a first look. */
 const OPEN_POLL_MS = 20_000;
 const SHUT_POLL_MS = 300_000;
+/** A pasted coin's market, read again while it is shown (the server reuses a minute-old reading). */
+const PASTED_POLL_MS = 20_000;
 
 /** GET /pro/trades?view=portfolio: the part the picker reads (PortfolioTab has the rest). */
 interface Holdings {
@@ -59,6 +69,31 @@ export function coinPriceText(v: number | null | undefined): string {
 
 const tone = (n: number | null | undefined) =>
   n === null || n === undefined || n === 0 ? "" : n > 0 ? " up" : " down";
+
+/**
+ * The coin the panel trades: a holding, or one pasted by its CA. A tracked coin has its feed card
+ * (a live market cap and the Full view); any other has the market a search read for it.
+ */
+interface Subject {
+  mint: string;
+  symbol: string | null;
+  name: string | null;
+  imageUrl: string | null;
+  card: Card | null;
+  market: Pick<SearchMarketPatch, "marketCapUsd" | "marketCapAt" | "liquidityUsd" | "volume24hUsd"> | null;
+  entryMcapUsd: number | null;
+  pnlPct: number | null;
+}
+
+function holdingSubject(c: TradeCoin): Subject {
+  return { ...c, market: null };
+}
+
+/** The address in what was pasted or typed (a bare CA, or a link to a token page), else null. */
+export function pastedMint(text: string): string | null {
+  const q = parseSearch(text);
+  return q.kind === "mint" ? q.mint : null;
+}
 
 /**
  * The QUICK TRADE panel (user ask 2026-10-25): for a Pro Mode wallet, a handle on the right edge
@@ -144,8 +179,16 @@ function PanelBody({ open, onClose }: { open: boolean; onClose: () => void }) {
   const now = useNow(20_000);
   const coins = useMemo(() => (data ? heldCoins(data.open) : []), [data]);
   const [picked, setPicked] = useState<string | null>(null);
+  const [caText, setCaText] = useState("");
+  // A whole CA in the box loads that coin; one the wallet holds is picked from the holdings instead.
+  const pasted = pastedMint(caText);
+  const pastedHolding = pasted ? (coins.find((c) => c.mint === pasted) ?? null) : null;
   // The coin picked, while it is still held; else the newest holding.
-  const coin = coins.find((c) => c.mint === picked) ?? coins[0] ?? null;
+  const coin = pastedHolding ?? coins.find((c) => c.mint === picked) ?? coins[0] ?? null;
+  const pick = (mint: string) => {
+    setPicked(mint);
+    setCaText("");
+  };
 
   return (
     <>
@@ -154,7 +197,7 @@ function PanelBody({ open, onClose }: { open: boolean; onClose: () => void }) {
           <span className="eyebrow">
             <BoltIcon size={13} /> Quick Trade
           </span>
-          <h2>Trade what you hold</h2>
+          <h2>Trade any coin, fast</h2>
         </div>
         <div className="drawer-actions">
           {data && (
@@ -171,7 +214,10 @@ function PanelBody({ open, onClose }: { open: boolean; onClose: () => void }) {
         </div>
       </header>
       <div className="qt-drawer-body">
-        {error && !data ? (
+        <CaBox text={caText} onText={setCaText} loaded={pasted !== null} />
+        {pasted && !pastedHolding ? (
+          <PastedCoin key={pasted} mint={pasted} now={now} />
+        ) : error && !data ? (
           <p className="error small" role="alert">
             Couldn&apos;t load your holdings: {error.message}
           </p>
@@ -188,14 +234,14 @@ function PanelBody({ open, onClose }: { open: boolean; onClose: () => void }) {
             </span>
             <strong>Nothing held right now</strong>
             <p className="faint small">
-              Buy a coin with this wallet, here or anywhere else, and it shows up here within seconds, ready
-              to sell or add to.
+              Paste a CA above to buy a coin. Anything this wallet buys, here or anywhere else, shows up in
+              your holdings within seconds, ready to sell or add to.
             </p>
           </div>
         ) : (
           <>
-            <HoldingPicker coins={coins} value={coin!.mint} onPick={setPicked} />
-            <CoinTrade key={coin!.mint} coin={coin!} now={now} />
+            <HoldingPicker coins={coins} value={coin!.mint} onPick={pick} />
+            <CoinTrade key={coin!.mint} coin={holdingSubject(coin!)} now={now} />
           </>
         )}
       </div>
@@ -203,8 +249,177 @@ function PanelBody({ open, onClose }: { open: boolean; onClose: () => void }) {
   );
 }
 
-/** One holding's picture, or its first letters. */
-function CoinImage({ coin, px, className }: { coin: TradeCoin; px: number; className: string }) {
+/** The CA box: paste or type a contract address (or a token page's link) and the coin loads. */
+function CaBox({ text, onText, loaded }: { text: string; onText: (t: string) => void; loaded: boolean }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const typed = text.trim() !== "";
+  const paste = async () => {
+    setNote(null);
+    try {
+      const clip = (await navigator.clipboard.readText()).trim();
+      if (!clip) return setNote("Your clipboard is empty.");
+      onText(clip);
+      if (!pastedMint(clip)) setNote("That isn't a contract address.");
+    } catch {
+      // The browser wouldn't share the clipboard: the reader pastes into the box instead.
+      setNote("Your browser blocked reading the clipboard: paste into the box instead.");
+      input.current?.focus();
+    }
+  };
+  return (
+    <div className={`qt-ca${loaded ? " loaded" : ""}`}>
+      <label className="qt-picker-label" htmlFor="qt-ca-input">
+        Trade by CA
+      </label>
+      <div className="qt-ca-row">
+        <span className="qt-ca-field">
+          <LinkIcon size={14} className="qt-ca-icon" />
+          <input
+            ref={input}
+            id="qt-ca-input"
+            type="text"
+            inputMode="text"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            placeholder="Paste a contract address"
+            value={text}
+            onChange={(e) => {
+              setNote(null);
+              onText(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && typed) {
+                e.preventDefault();
+                onText("");
+              }
+            }}
+          />
+          {typed && (
+            <button
+              type="button"
+              className="ghost icon-btn qt-ca-clear"
+              onClick={() => {
+                setNote(null);
+                onText("");
+                input.current?.focus();
+              }}
+              aria-label="Clear the CA"
+              title="Back to your holdings"
+            >
+              <CloseIcon size={13} />
+            </button>
+          )}
+        </span>
+        <button type="button" className="qt-ca-paste" onClick={() => void paste()}>
+          Paste
+        </button>
+      </div>
+      {note ? (
+        <p className="faint small qt-ca-note">{note}</p>
+      ) : (
+        typed && !loaded && <p className="faint small qt-ca-note">Keep going: a whole CA loads the coin.</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A coin pasted by its CA: what TrenchScanner tracks of it (its feed card, for a live market cap
+ * and the Full view), else DexScreener's market from the search window's outside search. A coin
+ * neither knows can still be bought: the trade is refused when built if it isn't a token.
+ */
+function PastedCoin({ mint, now }: { mint: string; now: number }) {
+  const [found, setFound] = useState<
+    | { state: "loading" }
+    | { state: "done"; hit: TokenSearchHit | null; card: Card | null; tracked: boolean }
+    | { state: "error"; message: string }
+  >({ state: "loading" });
+  const [market, setMarket] = useState<SearchMarketPatch | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    const q = `mint=${encodeURIComponent(mint)}`;
+    void (async () => {
+      try {
+        const tracked = (await api<TokenSearchAnswer>(`/tokens/search?${q}`)).hits.find(
+          (h) => h.mint === mint,
+        );
+        const card = tracked ? await api<Card>(`/tokens/${mint}/card`).catch(() => null) : null;
+        const hit =
+          tracked ??
+          (await api<ExternalSearchAnswer>(`/utilities/search?${q}`)
+            .then((a) => a.hits.find((h) => h.mint === mint) ?? null)
+            .catch(() => null));
+        if (live) setFound({ state: "done", hit, card, tracked: !!tracked });
+      } catch (e) {
+        if (live) setFound({ state: "error", message: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [mint]);
+
+  // An untracked coin's market, kept current while it is shown (a tracked one ticks live).
+  const poll = found.state === "done" && !found.card;
+  useEffect(() => {
+    if (!poll) return;
+    const read = () => {
+      if (document.visibilityState !== "visible") return;
+      api<{ hits: SearchMarketPatch[] }>(`/tokens/search/markets?mints=${encodeURIComponent(mint)}`)
+        .then((a) => setMarket(a.hits.find((h) => h.mint === mint) ?? null))
+        .catch(() => undefined);
+    };
+    const id = window.setInterval(read, PASTED_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [poll, mint]);
+
+  if (found.state === "loading")
+    return (
+      <div className="qt-loading" aria-label="Loading the coin">
+        <span className="skeleton qt-skel-figs" />
+        <span className="skeleton qt-skel-trade" />
+      </div>
+    );
+  if (found.state === "error")
+    return (
+      <p className="error small" role="alert">
+        Couldn&apos;t look up {shortAddress(mint)}: {found.message}
+      </p>
+    );
+  const { hit, card } = found;
+  const read = market ?? hit;
+  const subject: Subject = {
+    mint,
+    symbol: card?.token.symbol ?? hit?.symbol ?? null,
+    name: card?.token.name ?? hit?.name ?? null,
+    imageUrl: card?.token.imageUrl ?? (hit?.imageUrl?.startsWith("https://") ? hit.imageUrl : null),
+    card,
+    market: read,
+    entryMcapUsd: null,
+    pnlPct: null,
+  };
+  return (
+    <>
+      {!found.tracked && (
+        <p className="faint small qt-pasted-note">
+          {hit
+            ? "Not tracked by TrenchScanner: no alerts or model calls on it. Its market is DexScreener's."
+            : "DexScreener has no market for this address yet. A coin minutes old can still be bought; anything that isn't a token is refused when the trade is built."}
+        </p>
+      )}
+      <CoinTrade coin={subject} now={now} />
+    </>
+  );
+}
+
+type CoinFace = Pick<Subject, "mint" | "symbol" | "imageUrl">;
+
+/** A coin's picture, or its first letters. */
+function CoinImage({ coin, px, className }: { coin: CoinFace; px: number; className: string }) {
   return (
     <TokenImage
       url={coin.imageUrl}
@@ -218,7 +433,7 @@ function CoinImage({ coin, px, className }: { coin: TradeCoin; px: number; class
   );
 }
 
-const coinLabel = (c: TradeCoin) => (c.symbol ? `$${c.symbol}` : shortAddress(c.mint));
+const coinLabel = (c: Pick<Subject, "mint" | "symbol">) => (c.symbol ? `$${c.symbol}` : shortAddress(c.mint));
 
 /** The holdings dropdown: each coin with its picture, what it is worth and its PnL. */
 function HoldingPicker({
@@ -355,7 +570,7 @@ function PnlChip({ coin }: { coin: TradeCoin }) {
 }
 
 /** The picked coin: its figures, then the Trade panel with the position, buy, sell and slippage. */
-function CoinTrade({ coin, now }: { coin: TradeCoin; now: number }) {
+function CoinTrade({ coin, now }: { coin: Subject; now: number }) {
   const pro = useProState();
   const owner = pro?.wallet ?? null;
   const canSign = useCanSignTrades(owner);
@@ -364,8 +579,9 @@ function CoinTrade({ coin, now }: { coin: TradeCoin; now: number }) {
   const cards = useMemo(() => (coin.card ? [coin.card] : undefined), [coin.card]);
   const live = useLiveMarketCaps(cards)?.[0] ?? null;
   const card: Card | null = live ?? coin.card;
-  const mcap = card?.currentMarketCapUsd ?? null;
-  const mcapAt = card?.currentMarketCapAt ? Date.parse(card.currentMarketCapAt) : null;
+  const mcap = card?.currentMarketCapUsd ?? coin.market?.marketCapUsd ?? null;
+  const mcapIso = card ? card.currentMarketCapAt : coin.market?.marketCapAt;
+  const mcapAt = mcapIso ? Date.parse(mcapIso) : null;
   const summary = useMemo(
     () => (position.data ? summarizePosition(position.data, mcap) : null),
     [position.data, mcap],
@@ -438,11 +654,11 @@ function CoinTrade({ coin, now }: { coin: TradeCoin; now: number }) {
         </div>
         <div>
           <dt>Liquidity</dt>
-          <dd className="num">{usd(snap?.liquidityUsd ?? null)}</dd>
+          <dd className="num">{usd(snap?.liquidityUsd ?? coin.market?.liquidityUsd ?? null)}</dd>
         </div>
         <div>
           <dt>Vol 24h</dt>
-          <dd className="num">{usd(snap?.volume24hUsd ?? null)}</dd>
+          <dd className="num">{usd(snap?.volume24hUsd ?? coin.market?.volume24hUsd ?? null)}</dd>
         </div>
       </dl>
 

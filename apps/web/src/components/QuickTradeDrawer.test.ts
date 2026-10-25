@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coinPriceText, heldCoins } from "./QuickTradeDrawer";
+import { coinPriceText, heldCoins, pastedMint } from "./QuickTradeDrawer";
 import type { TradeCoin } from "./TradesDrawer";
 
 describe("coinPriceText", () => {
@@ -37,5 +37,18 @@ describe("heldCoins", () => {
       coin("odd", "2026-10-25T11:00:00Z", { mismatch: true, chainHeld: 5 }),
     ]);
     expect(list.map((c) => c.mint)).toEqual(["b", "odd", "a"]);
+  });
+});
+
+describe("pastedMint", () => {
+  const ca = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
+  it("reads a whole CA, or the one in a token page's link", () => {
+    expect(pastedMint(`  ${ca} `)).toBe(ca);
+    expect(pastedMint(`https://pump.fun/coin/${ca}`)).toBe(ca);
+  });
+  it("waits for the rest of a CA, and ignores anything else", () => {
+    expect(pastedMint(ca.slice(0, 20))).toBeNull();
+    expect(pastedMint("$PEPE")).toBeNull();
+    expect(pastedMint("")).toBeNull();
   });
 });
