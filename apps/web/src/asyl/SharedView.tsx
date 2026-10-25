@@ -9,6 +9,7 @@ import {
   TAG_LABEL,
   cleanCutoffs,
   cleanDrawings,
+  mergeGraph,
   nodeName,
   shortAddr,
   perWalletOf,
@@ -50,7 +51,9 @@ export function SharedView({ slug }: { slug: string }) {
     if (!map) return { nodes: [], edges: [] };
     const hidden = new Set(EDGE_KINDS.filter((k) => map.doc.hidden.includes(k)));
     const keep = new Set(map.doc.focus ? [map.doc.focus] : []);
-    return visibleGraph({ nodes: map.doc.nodes, edges: map.doc.edges }, hidden, keep, {
+    // Merged into nothing: a doc holding one link twice draws it once.
+    const doc = mergeGraph({ nodes: [], edges: [] }, { nodes: map.doc.nodes, edges: map.doc.edges });
+    return visibleGraph(doc, hidden, keep, {
       cutoffs: map.doc.cutoffs ? cleanCutoffs(map.doc.cutoffs) : undefined,
       solUsd: null,
       perWallet: perWalletOf(map.doc.walletHidden),

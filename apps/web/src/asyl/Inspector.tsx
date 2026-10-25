@@ -324,7 +324,7 @@ export function Inspector({
             <thead>
               <tr>
                 <th>Wallet</th>
-                <th title="Coins both bought within 3 minutes of each other">Coins in common</th>
+                <th title="Coins both bought within 3 minutes of each other">In common</th>
                 <th title="The typical time between their first buys of those coins">Apart</th>
                 <th aria-label="Trades" />
               </tr>
