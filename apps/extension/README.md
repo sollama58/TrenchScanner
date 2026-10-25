@@ -140,3 +140,9 @@ or filters call it later.
   effect (pulse, strong glow, shimmer, sparkle, flash), for the models and filters in the feed.
 - The map's time: one "Updated …" stamp, in the holders bar, counting the live trades that move the
   shares, and "Now" reads "Latest".
+
+0.7.1: the display choices (Settings' tooltip, pills, colours, on-page alerts, safety screen,
+coin-page tools, each model's and filter's ring) are kept with the account too (`PUT
+/ext/v1/look`, read back in `/me`), so a reinstall or another browser gets them back once it
+connects (user ask 2026-10-25). The newer save wins, this browser's or the account's
+(`syncLook` in `sw.ts`); the account's settings (rings, flags, sites, style) already were.
