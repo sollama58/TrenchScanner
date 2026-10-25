@@ -107,6 +107,9 @@ const WalletModalHost = lazy(() =>
 const TradesDrawer = lazy(() =>
   import("./components/TradesDrawer").then((m) => ({ default: m.TradesDrawer })),
 );
+const QuickTradeDrawer = lazy(() =>
+  import("./components/QuickTradeDrawer").then((m) => ({ default: m.QuickTradeDrawer })),
+);
 const UtilityDrawer = lazy(() =>
   import("./components/UtilityDrawer").then((m) => ({ default: m.UtilityDrawer })),
 );
@@ -762,6 +765,13 @@ export function App() {
               <Suspense fallback={null}>
                 <SectionBoundary label="The trades panel" resetKey={pro.wallet}>
                   <TradesDrawer key={pro.wallet} />
+                </SectionBoundary>
+              </Suspense>
+            )}
+            {pro?.pro && (
+              <Suspense fallback={null}>
+                <SectionBoundary label="Quick Trade" resetKey={pro.wallet}>
+                  <QuickTradeDrawer key={pro.wallet} />
                 </SectionBoundary>
               </Suspense>
             )}

@@ -4955,6 +4955,496 @@ body.trades-open .util-drawer > * {
   border-radius: 8px;
 }
 
+/* ---------- Quick Trade panel (components/QuickTradeDrawer.tsx) ----------
+   Pro Mode's QUICK TRADE handle, on the right edge just above the Trades one (whose height
+   TradesDrawer publishes as --trades-handle-h); its panel slides out with a dropdown of the coins
+   the wallet holds and the picked one's figures and Trade panel, no chart. Desktop only. */
+.qt-drawer {
+  --qt-w: min(460px, calc(100vw - 96px));
+  position: fixed;
+  z-index: 37;
+  right: 0;
+  bottom: 24px;
+  display: flex;
+  align-items: flex-end;
+  transform: translateX(var(--qt-w));
+  transition: transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+  pointer-events: none;
+}
+.qt-drawer.open {
+  transform: none;
+}
+.qt-drawer > * {
+  pointer-events: auto;
+}
+@media (max-width: 899px) {
+  .qt-drawer {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .qt-drawer {
+    transition: none;
+  }
+}
+/* One pullout at a time, as with Trades and Utility. */
+body.qt-open .trades-drawer,
+body.qt-open .util-drawer,
+body.trades-open .qt-drawer,
+body.util-open .qt-drawer {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 0.2s,
+    visibility 0s 0.2s;
+}
+body.qt-open .trades-drawer > *,
+body.qt-open .util-drawer > *,
+body.trades-open .qt-drawer > *,
+body.util-open .qt-drawer > * {
+  pointer-events: none;
+}
+.qt-drawer-handle {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 10px 11px;
+  margin-right: -1px;
+  margin-bottom: calc(
+    min(460px, calc(100dvh - 120px)) / 2 + var(--util-handle-half, 84px) + 10px +
+      var(--trades-handle-h, 150px) + 10px
+  );
+  color: var(--ink);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border-strong));
+  border-right: none;
+  border-radius: 15px 0 0 15px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--warn) 12%, transparent), transparent 70%),
+    var(--surface-solid);
+  box-shadow: -10px 0 28px -14px rgba(0, 0, 0, 0.55);
+  transition:
+    padding 0.15s,
+    border-color 0.15s;
+}
+.qt-drawer-handle:hover:not(:disabled) {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--warn) 18%, transparent), transparent 70%),
+    var(--surface-solid);
+  border-color: var(--warn);
+  padding-left: 14px;
+}
+.qt-drawer-handle:active:not(:disabled) {
+  transform: none;
+}
+.qt-drawer-handle:focus-visible {
+  outline: 2px solid var(--brand-ink);
+  outline-offset: 2px;
+}
+.qt-drawer-bolt {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: #1a1206;
+  background: linear-gradient(145deg, #ffd25e, var(--warn));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 20%, transparent);
+}
+.qt-drawer-bolt .icon {
+  fill: currentColor;
+}
+.qt-drawer-handle-text {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.qt-drawer-chev {
+  transform: rotate(90deg);
+  transition: transform 0.25s;
+  opacity: 0.7;
+}
+.qt-drawer.open .qt-drawer-chev {
+  transform: rotate(-90deg);
+}
+/* A short window has no room above the Trades handle for the words: the bolt alone. */
+@media (max-height: 849px) {
+  .qt-drawer-handle-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+}
+.qt-drawer-panel {
+  width: var(--qt-w);
+  height: min(760px, calc(100dvh - 104px));
+  display: flex;
+  flex-direction: column;
+  color: var(--ink);
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  border-right: none;
+  border-radius: var(--radius) 0 0 var(--radius);
+  box-shadow: -28px 0 64px -28px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.qt-drawer:not(.open) .qt-drawer-panel {
+  box-shadow: none;
+}
+.qt-drawer-head {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--warn) 10%, transparent),
+    color-mix(in srgb, var(--brand-b) 4%, transparent) 60%,
+    transparent
+  );
+}
+.qt-drawer-head .eyebrow .icon {
+  color: var(--warn-ink);
+}
+.qt-updated {
+  white-space: nowrap;
+}
+.qt-drawer-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px 18px;
+}
+.qt-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.qt-skel-picker {
+  height: 58px;
+  border-radius: 12px;
+}
+.qt-skel-figs {
+  height: 64px;
+  border-radius: 12px;
+}
+.qt-skel-trade {
+  height: 280px;
+  border-radius: 12px;
+}
+.qt-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: auto 0;
+  padding: 24px 18px;
+  text-align: center;
+}
+.qt-empty p {
+  max-width: 300px;
+  margin: 0;
+}
+.qt-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  margin-bottom: 4px;
+  border-radius: 50%;
+  color: var(--warn-ink);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
+/* The holdings dropdown. */
+.qt-picker {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.qt-picker-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.qt-picker-count {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  letter-spacing: 0;
+  color: var(--ink-2);
+  background: var(--surface-3);
+}
+.qt-picker-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px 9px 10px;
+  color: var(--ink);
+  text-align: left;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-2);
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.qt-picker-button:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--border-strong));
+}
+.qt-picker-button:active:not(:disabled) {
+  transform: none;
+}
+.qt-picker.open .qt-picker-button {
+  border-color: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 16%, transparent);
+}
+.qt-picker-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.qt-picker-main strong {
+  font-size: 14.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qt-picker-main .faint {
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qt-picker-chev {
+  flex: none;
+  color: var(--muted);
+  transition: transform 0.2s;
+}
+.qt-picker.open .qt-picker-chev {
+  transform: rotate(180deg);
+}
+.qt-coin-img {
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface-3);
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+.qt-coin-img.placeholder {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.qt-picker-list {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: min(340px, 52dvh);
+  margin: 0;
+  padding: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-solid);
+  box-shadow: 0 22px 48px -18px rgba(0, 0, 0, 0.6);
+  outline: none;
+  animation: qt-pop 0.14s ease-out;
+}
+@keyframes qt-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .qt-picker-list {
+    animation: none;
+  }
+}
+.qt-picker-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.qt-picker-opt.active {
+  background: var(--surface-3);
+}
+.qt-picker-list:focus-visible .qt-picker-opt.active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 60%, transparent);
+}
+.qt-picker-opt.chosen strong {
+  color: var(--warn-ink);
+}
+.qt-picker-opt .qt-picker-main strong {
+  font-size: 13.5px;
+}
+.qt-picker-opt .qt-picker-main .faint {
+  font-size: 11.5px;
+}
+.qt-picker-tick {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  color: var(--warn-ink);
+}
+.qt-pnl-chip {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-2);
+  background: var(--surface-3);
+}
+.qt-pnl-chip.up {
+  color: var(--good-ink);
+  background: var(--good-wash);
+}
+.qt-pnl-chip.down {
+  color: var(--bad-ink);
+  background: var(--bad-wash);
+}
+
+/* The picked coin. */
+.qt-coin {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.qt-coin-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.qt-coin-avatar {
+  width: 42px;
+  height: 42px;
+}
+.qt-coin-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.qt-coin-title h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: 100%;
+  margin: 0;
+  font-size: 18px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.qt-coin-title h3 .faint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 500;
+}
+.qt-coin-ca {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  color: var(--muted);
+}
+.qt-coin-full {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.qt-figs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.qt-figs > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 11px 10px;
+  border-left: 1px solid var(--border);
+}
+.qt-figs > div:first-child {
+  border-left: none;
+}
+.qt-figs dt {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.qt-figs dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+  margin: 0;
+  font-size: 14.5px;
+  font-weight: 700;
+}
+.qt-trade.tm-term-rail {
+  padding: 0;
+  overflow: visible;
+}
+.qt-trade.tm-term-rail .tm-trade {
+  margin-top: 0;
+}
+.qt-move {
+  font-size: 11px;
+  font-weight: 650;
+}
+.qt-move.up {
+  color: var(--good-ink);
+}
+.qt-move.down {
+  color: var(--bad-ink);
+}
 /* ---------- Guest mode ---------- */
 .guest-entry {
   display: flex;
