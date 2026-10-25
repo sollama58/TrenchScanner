@@ -133,6 +133,21 @@ function Drawer() {
   const handle = usePolling<HandleView>("/pro/trades?brief=1", HANDLE_POLL_MS);
   const coins = handle.data?.coins ?? [];
 
+  // The Quick Trade handle sits just above this one, whose height moves with the coins on it.
+  useEffect(() => {
+    const el = ref.current?.querySelector<HTMLElement>(".trades-drawer-handle");
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const root = document.documentElement;
+    const sync = () => root.style.setProperty("--trades-handle-h", `${el.offsetHeight}px`);
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      root.style.removeProperty("--trades-handle-h");
+    };
+  }, []);
+
   // The Utility handle steps aside while this panel is out, so it never sits over it (styles.css).
   useEffect(() => {
     if (!open) return;
