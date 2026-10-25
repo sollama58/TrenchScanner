@@ -20,6 +20,7 @@ export interface InspectorActions {
   flows: (wallet: string) => void;
   funders: (wallets: string[]) => void;
   chainToken: (mint: string) => void;
+  pastHolders: (mint: string) => void;
   /** Finds a coin's deployer (from the chain for Pro Mode when unknown) and puts it on the map. */
   showDeployer: (mint: string) => void;
   hide: (id: string) => void;
@@ -295,6 +296,16 @@ export function Inspector({
               onClick={() => actions.showDeployer(node.id)}
             >
               Show deployer
+            </button>
+          )}
+          {node.kind === "token" && (
+            <button
+              className="asyl-btn"
+              disabled={!!busy}
+              title="Everyone who put 0.1 SOL or more into it, sold out or still holding, from TrenchScanner's read of its trades (no credits)"
+              onClick={() => actions.pastHolders(node.id)}
+            >
+              Include all historical holders (&gt;0.1 SOL)
             </button>
           )}
         </div>

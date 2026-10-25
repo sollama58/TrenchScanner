@@ -615,6 +615,12 @@ export function AsylApp() {
           }));
         return text;
       }),
+    pastHolders: (mint) =>
+      void run("Adding its past holders…", async () => {
+        const r = await asylApi.pastHolders(mint);
+        if (r.shown > 0) add(r.graph);
+        return r.note;
+      }),
     hide: (id) => {
       record();
       setRemoved((s) => {

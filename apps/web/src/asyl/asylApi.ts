@@ -145,6 +145,8 @@ export const asylApi = {
   dossier: (wallet: string) => api<Dossier>(`/asyl/wallet/${enc(wallet)}/dossier`),
   similar: (wallet: string) => api<SimilarRead>(`/asyl/wallet/${enc(wallet)}/similar`),
   token: (mint: string) => api<GraphRead & { readAt: string | null }>(`/asyl/token/${enc(mint)}`),
+  pastHolders: (mint: string) =>
+    api<GraphRead & { total: number; shown: number; note: string }>(`/asyl/token/${enc(mint)}/past-holders`),
   deployer: (mint: string) =>
     post<
       GraphRead & {

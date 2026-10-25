@@ -388,8 +388,16 @@ export function GraphView({
     );
     const bw = Math.max(1, b.maxX - b.minX);
     const bh = Math.max(1, b.maxY - b.minY);
-    const k = Math.min(2.2, Math.max(0.15, Math.min((w - 80) / bw, (h - 80) / bh)));
-    setView({ k, x: w / 2 - ((b.minX + b.maxX) / 2) * k, y: h / 2 - ((b.minY + b.maxY) / 2) * k });
+    // The toolbar floats over the map's top: fit below it, so no bubble lands under a button.
+    const svg = svgRef.current?.getBoundingClientRect();
+    const bar = svgRef.current
+      ?.closest(".asyl-stage")
+      ?.querySelector(".asyl-toolbar")
+      ?.getBoundingClientRect();
+    const top = svg && bar ? Math.min(h / 2, Math.max(40, bar.bottom - svg.top + 16)) : 40;
+    const room = h - top - 40;
+    const k = Math.min(2.2, Math.max(0.15, Math.min((w - 80) / bw, room / bh)));
+    setView({ k, x: w / 2 - ((b.minX + b.maxX) / 2) * k, y: top + room / 2 - ((b.minY + b.maxY) / 2) * k });
   }, [graph, layout, radius]);
 
   useImperativeHandle(

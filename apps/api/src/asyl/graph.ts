@@ -48,6 +48,10 @@ export const COTRADERS_MAX = 20;
 export const SIDES_MAX = 24;
 /** Holders drawn on a coin's map: its top 50, as BubbleMapHolders keeps them. */
 export const HOLDERS_MAX = 50;
+/** Past holders drawn on a coin's map, the ones that put in most first (user ask 2026-10-25). */
+export const PAST_HOLDERS_MAX = 150;
+/** What a past holder put in, at least: SOL rather than tokens, so it means the same on every coin. */
+export const PAST_HOLDER_MIN_SOL = 0.1;
 /** How far back the stored tables reach, for the coverage line. */
 export const STORED_DAYS = 30;
 
@@ -496,7 +500,15 @@ export async function addHolders(
       pct: h.pct,
     });
   }
-  const wallets = holders.map((h) => h.wallet);
+  await linkHolders(
+    g,
+    mint,
+    holders.map((h) => h.wallet),
+  );
+}
+
+/** Every funding and transfer that ties a coin's holders, past or present, to one another. */
+async function linkHolders(g: GraphBuilder, mint: string, wallets: string[]): Promise<void> {
   if (wallets.length === 0) return;
   const [funders, transfers] = await Promise.all([
     prisma.walletFunder.findMany({
@@ -522,6 +534,60 @@ export async function addHolders(
     for (const p of paid) fundedEdge(g, funder, p.wallet, p);
   }
   for (const t of transfers) transferEdge(g, t, mint);
+}
+
+export interface PastHoldersRead {
+  /** Wallets that put in at least PAST_HOLDER_MIN_SOL, and how many of them are drawn. */
+  total: number;
+  shown: number;
+  /** The trade read they come from; null when TrenchScanner hasn't read the coin's trades. */
+  tape: { status: string; launchAt: Date | null; windowEnd: Date; closedThrough: Date | null } | null;
+}
+
+/**
+ * Everyone who ever bought a coin with at least PAST_HOLDER_MIN_SOL, sold out or not, from its
+ * stored trade read (TokenWalletActivity), with what they put in and took out, and what ties them.
+ */
+export async function addPastHolders(g: GraphBuilder, mint: string): Promise<PastHoldersRead> {
+  g.node(mint, "token");
+  const token = await prisma.token.findUnique({
+    where: { mintAddress: mint },
+    select: {
+      id: true,
+      tradeTape: { select: { status: true, launchAt: true, windowEnd: true, closedThrough: true } },
+    },
+  });
+  const tape = token?.tradeTape && token.tradeTape.status !== "failed" ? token.tradeTape : null;
+  if (!token || !tape) return { total: 0, shown: 0, tape: null };
+  const where = { tokenId: token.id, buys: { gt: 0 }, solIn: { gte: PAST_HOLDER_MIN_SOL } };
+  const [rows, total] = await Promise.all([
+    prisma.tokenWalletActivity.findMany({
+      where,
+      select: {
+        wallet: true,
+        buys: true,
+        sells: true,
+        solIn: true,
+        solOut: true,
+        firstBuyAt: true,
+        launchSniper: true,
+      },
+      orderBy: [{ solIn: "desc" }, { wallet: "asc" }],
+      take: PAST_HOLDERS_MAX,
+    }),
+    prisma.tokenWalletActivity.count({ where }),
+  ]);
+  const shown = rows.filter((r) => isWalletAddress(r.wallet));
+  for (const r of shown) {
+    g.node(r.wallet, "wallet");
+    tradedEdge(g, r.wallet, mint, r);
+  }
+  await linkHolders(
+    g,
+    mint,
+    shown.map((r) => r.wallet),
+  );
+  return { total, shown: shown.length, tape };
 }
 
 export interface KnownDeployer {
@@ -599,7 +665,7 @@ export async function addLinksAmong(
         >`
           SELECT "fromWallet", "toWallet", "mintAddress", COUNT(*)::int AS n, SUM("pct")::float AS pct, MAX("at") AS last
             FROM "HolderTransferEvent"
-           WHERE "fromWallet" = ANY(${[...wallets]}) AND "toWallet" = ANY(${[...wallets]})
+           WHERE "fromWallet" = ANY(${wallets}) AND "toWallet" = ANY(${wallets})
            GROUP BY 1, 2, 3
            ORDER BY n DESC, pct DESC
            LIMIT ${LINKS_ROWS_MAX}`
