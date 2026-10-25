@@ -455,6 +455,20 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     expect((await handleTelegramUpdate(api, press(data, false), opts)).action).toBe("refreshed");
     expect(String(api.calls.find((c) => c.method === "editMessageText")!.params.text)).toContain("📈 Now");
 
+    // An admin's chat gets the AI reviewer's verdict under the refreshed card; others never do.
+    t += 20_000;
+    const aiVerdict = async () => ({ decision: "buy" as const, probability2x: 0.62 });
+    const adminOpts = { ...opts, admins: new Set([`${TAG}-wallet-main`]), aiVerdict };
+    expect((await handleTelegramUpdate(api, press(data, false), adminOpts)).action).toBe("refreshed");
+    expect(String(api.calls.at(-2)!.params.text)).toContain(
+      "🤖 AI reviewer: <b>BUY</b> · 62% to 2x <i>(admins only)</i>",
+    );
+    t += 20_000;
+    expect((await handleTelegramUpdate(api, press(data, false), { ...opts, aiVerdict })).action).toBe(
+      "refreshed",
+    );
+    expect(String(api.calls.at(-2)!.params.text)).not.toContain("AI reviewer");
+
     // A send this chat never got, a forged key, or a send with no card: nothing is read.
     t += 20_000;
     const other = refreshCallbackData(`${TAG}-not-sent`, sentAt)!;
@@ -465,7 +479,8 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     await prisma.telegramAlertSent.updateMany({ where: { chatId: row.id }, data: { card: Prisma.DbNull } });
     t += 20_000;
     expect((await handleTelegramUpdate(api, press(data), opts)).action).toBe("ignored");
-    expect(asked).toHaveLength(2);
+    // The four refreshes above read fresh numbers; none of the refused presses did.
+    expect(asked).toHaveLength(4);
 
     // Telegram no longer has the message: said plainly.
     await prisma.telegramAlertSent.updateMany({

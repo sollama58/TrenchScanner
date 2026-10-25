@@ -6,7 +6,7 @@ import {
   type Env,
   type ScoredToken,
 } from "@trenchscanner/core";
-import { parseVerdictText, reviewPick } from "./reviewer.js";
+import { parseVerdictText, reviewPick, verdictFromParsed } from "./reviewer.js";
 
 const decision = {
   curate: true,
@@ -56,5 +56,27 @@ describe("parseVerdictText", () => {
     expect(parseVerdictText([{ type: "text", text: '{"decision":"maybe"}' }])).toBeNull();
     expect(parseVerdictText([{ type: "thinking" }])).toBeNull();
     expect(parseVerdictText([])).toBeNull();
+  });
+});
+
+describe("verdictFromParsed", () => {
+  const parsed = {
+    decision: "buy" as const,
+    probability2x: 0.4,
+    probability4x: 0.1,
+    reasoning: "ok",
+    risks: [],
+  };
+
+  it("keeps the model's decision when no buy bar is given", () => {
+    expect(verdictFromParsed(parsed).decision).toBe("buy");
+  });
+
+  it("holds a buy under the bar to no_buy and names the bar", () => {
+    const held = verdictFromParsed(parsed, 0.5);
+    expect(held.decision).toBe("no_buy");
+    expect(held.probability2x).toBe(0.4);
+    expect(held.risks).toEqual(["2x odds 40% under the 50% buy bar"]);
+    expect(verdictFromParsed({ ...parsed, probability2x: 0.6 }, 0.5).decision).toBe("buy");
   });
 });

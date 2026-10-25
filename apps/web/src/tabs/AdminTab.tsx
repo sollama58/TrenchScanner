@@ -1474,6 +1474,8 @@ interface AiReport {
     apiKeySet: boolean;
     apiKeyReportedBy?: "worker" | "api";
     reviewModel: string;
+    reviewEffort?: string;
+    buyMinProbability?: number;
     textModel: string;
     textFeatures: unknown;
     playbookEvolution: unknown;
@@ -1636,7 +1638,11 @@ function Ai() {
           )}
           <Panel
             title="AI reviewer"
-            note={`Mode ${a.config.mode} · model ${a.config.reviewModel} · text model ${a.config.textModel}`}
+            note={`Mode ${a.config.mode} · model ${a.config.reviewModel}${a.config.reviewEffort ? ` at ${a.config.reviewEffort} effort` : ""}${
+              typeof a.config.buyMinProbability === "number"
+                ? ` · a buy needs ${Math.round(a.config.buyMinProbability * 100)}%+ odds of 2x`
+                : ""
+            } · text model ${a.config.textModel}`}
           >
             <Table
               head={[

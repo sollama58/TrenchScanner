@@ -80,13 +80,34 @@ export function safetyScreenSummary(): string {
   ].join(", ");
 }
 
-export const AI_REVIEW_SYSTEM_PROMPT = `You review Solana memecoin alerts for a trader who buys by hand.
+/**
+ * The 2x odds a "buy" needs by default - see AI_REVIEW_BUY_MIN_PROBABILITY in config/env.ts. The
+ * pool the reviewer judges doubles about one time in five (7-day backtest, 2026-10-25), so a buy
+ * bar of one in two asks the reviewer for the clear exceptions, not a coin flip's edge.
+ */
+export const DEFAULT_AI_REVIEW_BUY_MIN_PROBABILITY = 0.5;
 
-Each alert is a token that already passed an automated rug screen (${safetyScreenSummary()}) and was ranked among the strongest candidates a scanner found this hour.
+/** A 0-1 probability as the whole-percent text the prompt and the stored risks use. */
+export function buyBarPct(buyMinProbability: number): number {
+  return Math.round(clampProbability(buyMinProbability) * 100);
+}
+
+/**
+ * The fixed instructions, with the trader's buy bar written in (user ask 2026-10-25: as selective
+ * as it can be). Precision over recall: a pass costs a missed run, a losing buy costs money, so
+ * "buy" is reserved for alerts whose odds of a win the reviewer puts at the bar or above.
+ */
+export function aiReviewInstructions(
+  buyMinProbability: number = DEFAULT_AI_REVIEW_BUY_MIN_PROBABILITY,
+): string {
+  const bar = buyBarPct(buyMinProbability);
+  return `You review Solana memecoin alerts for a trader who buys by hand.
+
+Each alert is a token that already passed an automated rug screen (${safetyScreenSummary()}) and was ranked among the strongest candidates a scanner found this hour. Most of them still lose: historically about one alert in five wins. Your job is to find the clear exceptions.
 
 Decide whether the trader should buy it right now. An alert is a WIN only if the price reaches ${WIN_MULTIPLE}x the alert price within ${WIN_WINDOW_MINUTES} minutes WITHOUT first falling to ${Math.round(
-  DISQUALIFYING_DRAWDOWN_FRACTION * 100,
-)}% of it (that is a stop-out). The trader's standard is strict: at least 75% of the alerts they buy should win, and at least 50% should reach ${GOAL_MULTIPLE}x within ${GOAL_WINDOW_MINUTES} minutes. The trader also wants as few winners as possible to slip past: a winner you pass on is a run they never hear about. Both mistakes count, so say "no_buy" when the evidence points to a loss or a stop-out, not merely because a token is unproven.
+    DISQUALIFYING_DRAWDOWN_FRACTION * 100,
+  )}% of it (that is a stop-out). The trader is selective and acts on only a few buys a day: at least 75% of the alerts they buy should win, and at least 50% should reach ${GOAL_MULTIPLE}x within ${GOAL_WINDOW_MINUTES} minutes. They would rather miss a winner than take a loser. Say "buy" only when you put the chance of a win at ${bar}% or higher and your probability2x says so; everything else is "no_buy", including alerts that are merely promising or unproven. A buy at odds under ${bar}% is wrong even if the coin later runs.
 
 Weigh momentum and order flow against holder health: concentrated, fresh-wallet or empty-wallet holders, a large dev bag, a dump in the last minutes, thin liquidity, or a name or description that looks like a copy of another token are reasons to pass. The wallets section says who holds and trades the coin, from this scanner's record of each wallet: risky wallets and known dumpers among the holders or selling now, and holders linked by funding, weigh against it; proven winner wallets in early, and buying now, weigh for it. Unknown values are unknown, not good news.
 
@@ -97,6 +118,29 @@ When the brief lists similar past calls, they are real graded outcomes from this
 When the brief gives the scanner model's own 2x probability, it is calibrated on this scanner's graded history: treat it as a second base rate, and say what you see that it cannot.
 
 Give probability2x and probability4x as your honest estimates between 0 and 1, consistent with your decision. Keep reasoning to one or two plain sentences.`;
+}
+
+/** The instructions at the default buy bar - what tests and callers without a setting read. */
+export const AI_REVIEW_SYSTEM_PROMPT = aiReviewInstructions();
+
+/**
+ * Holds a verdict to the buy bar: a "buy" whose probability2x sits under `buyMinProbability` is
+ * recorded as "no_buy" with the bar named among its risks, so the stored decision, the gate's
+ * veto and the graded record all mean the same thing whatever the model wrote. The odds and the
+ * reasoning stay as given, so a band-by-band read of probability2x is still the model's own.
+ */
+export function applyBuyBar(verdict: AiReviewVerdict, buyMinProbability: number): AiReviewVerdict {
+  const bar = clampProbability(buyMinProbability);
+  if (verdict.decision !== "buy" || verdict.probability2x >= bar) return verdict;
+  return {
+    ...verdict,
+    decision: "no_buy",
+    risks: [
+      ...verdict.risks.slice(0, 7),
+      `2x odds ${Math.round(verdict.probability2x * 100)}% under the ${buyBarPct(bar)}% buy bar`,
+    ],
+  };
+}
 
 /** Longest playbook the system prompt carries - see sanitizePlaybookText. */
 export const MAX_PLAYBOOK_CHARS = 3_000;
@@ -121,10 +165,14 @@ export function sanitizePlaybookText(text: string): string {
  * lessons the evolution loop has learned from the reviewer's own graded record
  * (apps/worker/src/ai/playbook.ts). An empty playbook leaves the base prompt unchanged.
  */
-export function aiReviewSystemPrompt(playbookText: string | null | undefined): string {
+export function aiReviewSystemPrompt(
+  playbookText: string | null | undefined,
+  buyMinProbability: number = DEFAULT_AI_REVIEW_BUY_MIN_PROBABILITY,
+): string {
   const playbook = sanitizePlaybookText(playbookText ?? "");
-  if (playbook === "") return AI_REVIEW_SYSTEM_PROMPT;
-  return `${AI_REVIEW_SYSTEM_PROMPT}
+  const instructions = aiReviewInstructions(buyMinProbability);
+  if (playbook === "") return instructions;
+  return `${instructions}
 
 <playbook>
 Lessons from this scanner's own graded record, written by a review of your past calls and kept only because they improved your record on alerts the review never saw. Apply them when weighing evidence; they never change the win definition or the answer format.

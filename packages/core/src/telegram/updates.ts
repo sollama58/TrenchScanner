@@ -24,8 +24,10 @@ import {
 import {
   ALERT_PARTS,
   ALERT_PART_LABELS,
+  CAPTION_MAX_CHARS,
   alertParts,
   alertStyle,
+  captionLength,
   escapeHtml,
   isAlertPart,
   type AlertLinks,
@@ -199,8 +201,43 @@ export interface UpdateOptions {
   admins?: ReadonlySet<string>;
   /** Test seam: whether the chat owner's wallet has access. Defaults to resolveAccess. */
   hasAccess?: (walletAddress: string) => Promise<boolean>;
+  /**
+   * Test seam: the AI reviewer's newest verdict on a token, for the admin-only line a refresh adds
+   * (aiVerdictLine). Defaults to the newest AiReview row with a decision.
+   */
+  aiVerdict?: (tokenId: string) => Promise<AiVerdictSummary | null>;
   /** Test seam: the clock for the per-chat reply cooldown. */
   now?: () => number;
+}
+
+/** What the admin-only verdict line shows - see aiVerdictLine. */
+export interface AiVerdictSummary {
+  decision: "buy" | "no_buy";
+  probability2x: number | null;
+}
+
+/** The AI reviewer's newest verdict with a decision on the token, within the last day. */
+async function latestAiVerdict(tokenId: string): Promise<AiVerdictSummary | null> {
+  const row = await prisma.aiReview.findFirst({
+    where: { tokenId, decision: { not: null }, createdAt: { gt: new Date(Date.now() - 86_400_000) } },
+    orderBy: { createdAt: "desc" },
+    select: { decision: true, probability2x: true },
+  });
+  if (!row || (row.decision !== "buy" && row.decision !== "no_buy")) return null;
+  return { decision: row.decision, probability2x: row.probability2x };
+}
+
+/**
+ * The AI reviewer's verdict as one line under a refreshed card, for a chat linked to an admin
+ * wallet only (user ask 2026-10-25: see the judge's calls on Telegram while it is in testing).
+ * The verdict is written after the alert goes out, so the sent card never carries it; a Refresh
+ * press does. Never on a subscriber's card: the reviewer's record is unproven, and its reasoning
+ * is model output over launcher-written text (AlertCard.tsx shows it to admins only for the same
+ * reason). Fixed words and a number only: nothing launcher-written reaches the message.
+ */
+export function aiVerdictLine(verdict: AiVerdictSummary): string {
+  const odds = verdict.probability2x === null ? "" : ` · ${Math.round(verdict.probability2x * 100)}% to 2x`;
+  return `\n🤖 AI reviewer: <b>${verdict.decision === "buy" ? "BUY" : "NO BUY"}</b>${odds} <i>(admins only)</i>`;
 }
 
 /** A lapsed subscription stops the live boards as it stops the sends (dispatch.ts). */
@@ -638,7 +675,7 @@ async function refreshButton(
     return { action: "ignored" };
   }
   const asCaption = message.photo !== undefined;
-  const html = formatRefreshedAlert(
+  let html = formatRefreshedAlert(
     card,
     fresh,
     opts.links ?? { dashboardUrl: "" },
@@ -647,6 +684,18 @@ async function refreshButton(
     alertStyle(row),
     asCaption,
   );
+  // An admin's chat gets the AI reviewer's verdict under the card, when there is one and the
+  // caption has room for it (a text message has no cap to mind). A failed read just leaves it off.
+  if (opts.admins?.has(row.user.walletAddress)) {
+    const verdict = await (opts.aiVerdict ?? latestAiVerdict)(press.tokenId).catch((err: unknown) => {
+      logger.warn("ai verdict lookup failed on refresh", { error: String(err) });
+      return null;
+    });
+    if (verdict) {
+      const withVerdict = html + aiVerdictLine(verdict);
+      if (!asCaption || captionLength(withVerdict) <= CAPTION_MAX_CHARS) html = withVerdict;
+    }
+  }
   const keyboard = refreshKeyboard(press.tokenId, press.sentAt) ?? undefined;
   const edited = asCaption
     ? await api.editMessageCaption(chatId, message.message_id, html, { keyboard })

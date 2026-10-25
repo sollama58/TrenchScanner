@@ -297,7 +297,7 @@ export async function submitReplay(
   }
   const { type, schema } = zodOutputFormat(VerdictSchema);
   const requests = opts.playbooks.flatMap((playbook, p) => {
-    const system = aiReviewSystemPrompt(playbook.text);
+    const system = aiReviewSystemPrompt(playbook.text, env.AI_REVIEW_BUY_MIN_PROBABILITY);
     return items.map((item) => ({
       custom_id: customId(p, item.candidateOutcomeId),
       params: {
@@ -355,6 +355,8 @@ export function replayVerdictRow(
   runId: string,
   playbookIds: string[],
   result: MessageBatchIndividualResponse,
+  /** The buy bar the live reviewer is held to (AI_REVIEW_BUY_MIN_PROBABILITY); none when omitted. */
+  buyMinProbability?: number,
 ): {
   runId: string;
   playbookId: string;
@@ -393,7 +395,7 @@ export function replayVerdictRow(
     return { ...base, ...usage, error: "unparsable verdict" };
   }
   if (!parsed.success) return { ...base, ...usage, error: "unparsable verdict" };
-  const verdict = verdictFromParsed(parsed.data);
+  const verdict = verdictFromParsed(parsed.data, buyMinProbability);
   return {
     ...base,
     ...usage,
@@ -450,7 +452,7 @@ export async function pollReplayRuns(env: Env, signal?: AbortSignal): Promise<Sc
           const message = result.result.message;
           costUsd += usageCostUsd([run.model, message.model], message.usage, { batch: true });
         }
-        const row = replayVerdictRow(run.id, run.playbookIds, result);
+        const row = replayVerdictRow(run.id, run.playbookIds, result, env.AI_REVIEW_BUY_MIN_PROBABILITY);
         if (row) buffer.push(row);
         if (buffer.length >= 500) {
           if (signal?.aborted) return scored;
