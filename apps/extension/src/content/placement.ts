@@ -41,6 +41,13 @@ export function findSpot(
   return null;
 }
 
+/** The box is still inside the row and clear of every obstacle: a placed badge can stay put. */
+export function stillFits(row: { w: number; h: number }, obstacles: readonly Box[], box: Box): boolean {
+  if (box.x < EDGE || box.y < EDGE || box.x + box.w > row.w - EDGE || box.y + box.h > row.h - EDGE)
+    return false;
+  return !obstacles.some((o) => overlaps(box, o));
+}
+
 /** Elements that are content in their own right even with no text inside. */
 const SOLID = "img, svg, canvas, video, button, input, select, textarea, [role='button'], [role='img']";
 

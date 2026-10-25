@@ -10,6 +10,10 @@ import {
 } from "../shared/types";
 import {
   cleanTooltip,
+  COLOR_KEYS,
+  COLOR_LABELS,
+  colorsOf,
+  DEFAULT_COLORS,
   DEFAULT_TOOLTIP,
   lineOn,
   partOn,
@@ -17,7 +21,9 @@ import {
   tipLabel,
   type ListPrefs,
   type PillPart,
+  toastPartOn,
   type TipLine,
+  type ToastPrefs,
   type TooltipPrefs,
 } from "../shared/tooltip";
 import { verdictFor } from "../shared/verdict";
@@ -622,7 +628,187 @@ function ringDisplaySections(settings: OverlaySettings): HTMLElement[] {
     tip.list,
     reset("tooltip", () => (tipPrefs = { ...tipPrefs, order: DEFAULT_TOOLTIP.order, on: {} }), tip.fill),
   );
-  return [pillBox, secondBox, tipBox];
+  return [pillBox, secondBox, tipBox, toastSection(), mapTabSection(), colorSection()];
+}
+
+/** Rings: the on-page alert, off by default, every part of it the reader's. */
+function toastSection(): HTMLElement {
+  const save = () => void send({ type: "saveTooltip", prefs: tipPrefs });
+  const set = (change: Partial<ToastPrefs>) => {
+    tipPrefs = { ...tipPrefs, toast: { ...tipPrefs.toast, ...change } };
+    save();
+  };
+  const t = () => tipPrefs.toast;
+  const number = (label: string, value: number, min: number, max: number, apply: (n: number) => void) => {
+    const input = el("input", {
+      type: "number",
+      min: String(min),
+      max: String(max),
+      step: "1",
+      value: String(value),
+    });
+    input.setAttribute("aria-label", label);
+    input.addEventListener("change", () => {
+      const n = Number(input.value);
+      if (Number.isFinite(n) && n >= min && n <= max) apply(Math.round(n));
+      else input.value = String(value);
+    });
+    return el("label", { className: "flag" }, el("span"), el("span", { textContent: label }), input);
+  };
+  const choice = <T extends string>(
+    label: string,
+    value: T,
+    options: readonly [T, string][],
+    apply: (v: T) => void,
+  ) => {
+    const select = el(
+      "select",
+      {},
+      ...options.map(([v, text]) => el("option", { value: v, textContent: text, selected: v === value })),
+    );
+    select.setAttribute("aria-label", label);
+    select.addEventListener("change", () => apply(select.value as T));
+    return el("label", { className: "pick" }, el("span", { textContent: label }), select);
+  };
+  const sites = el(
+    "div",
+    { className: "sites" },
+    ...SITES.map((site) => {
+      const box = el("input", { type: "checkbox", checked: t().sites[site] });
+      box.addEventListener("change", () => set({ sites: { ...t().sites, [site]: box.checked } }));
+      return el("label", {}, box, SITE_NAMES[site]);
+    }),
+  );
+  const parts = orderedList<PillPart>(
+    () => t().parts,
+    (list) => (tipPrefs = { ...tipPrefs, toast: { ...t(), parts: list } }),
+    (part) => toastPartOn(part, t().parts),
+    pillLabel,
+  );
+  const details = el(
+    "div",
+    { className: "toastopts" },
+    toggle("Model alerts", null, t().models, "var(--model)", (on) => set({ models: on })),
+    toggle("Filter matches", null, t().filters, "var(--filter)", (on) => set({ filters: on })),
+    ...(status?.aiReviews
+      ? [
+          toggle("Only when the AI says buy", "For model alerts", t().aiBuyOnly, "var(--model)", (on) =>
+            set({ aiBuyOnly: on }),
+          ),
+        ]
+      : []),
+    number("Model odds to 2x at least (%)", t().minOdds, 0, 100, (n) => set({ minOdds: n })),
+    choice(
+      "Where",
+      t().position,
+      [
+        ["top-right", "Top right"],
+        ["top-left", "Top left"],
+        ["bottom-right", "Bottom right"],
+        ["bottom-left", "Bottom left"],
+      ],
+      (v) => set({ position: v }),
+    ),
+    number("Seconds on screen (0 keeps it)", t().seconds, 0, 600, (n) => set({ seconds: n })),
+    number("At most on screen", t().maxShown, 1, 10, (n) => set({ maxShown: n })),
+    toggle("Sound", null, t().sound, "var(--filter)", (on) => set({ sound: on })),
+    choice(
+      "A click",
+      t().click,
+      [
+        ["site", "Opens the coin on that site"],
+        ["trenchscanner", "Opens it on TrenchScanner"],
+        ["none", "Does nothing"],
+      ],
+      (v) => set({ click: v }),
+    ),
+    el("div", { className: "sub", textContent: "On" }),
+    sites,
+    el("div", { className: "sub", textContent: "What it says" }),
+    parts.list,
+  );
+  details.hidden = !t().enabled;
+  return section(
+    "On-page alerts",
+    toggle(
+      "Show a toast on the board",
+      "When a new alert lands in your feed",
+      t().enabled,
+      "var(--model)",
+      (on) => {
+        set({ enabled: on });
+        details.hidden = !on;
+      },
+    ),
+    details,
+  );
+}
+
+/** Rings: the bubble map tab on a coin's page. */
+function mapTabSection(): HTMLElement {
+  return section(
+    "Bubble map tab",
+    toggle(
+      "On a coin's page",
+      "Adds a Bubble map tab beside Top Traders. It asks TrenchScanner about the coin you open.",
+      tipPrefs.mapTab.enabled,
+      "var(--filter)",
+      (on) => {
+        tipPrefs = { ...tipPrefs, mapTab: { enabled: on } };
+        void send({ type: "saveTooltip", prefs: tipPrefs });
+      },
+    ),
+  );
+}
+
+/** The panel's own accents follow the reader's colours: its cards wear the same rings and flags. */
+function applyColors(): void {
+  const colors = colorsOf(tipPrefs);
+  const root = document.documentElement.style;
+  root.setProperty("--model", colors.model);
+  root.setProperty("--filter", colors.filter);
+  root.setProperty("--risk", colors.risk);
+  root.setProperty("--ok", colors.ok);
+  root.setProperty("--mid", colors.mid);
+  root.setProperty("--hi", colors.hi);
+}
+
+/** Rings: every colour the overlay draws with, each a colour picker. */
+function colorSection(): HTMLElement {
+  const save = () => {
+    applyColors();
+    void send({ type: "saveTooltip", prefs: tipPrefs });
+  };
+  const inputs = COLOR_KEYS.map((key) => {
+    const input = el("input", { type: "color", value: colorsOf(tipPrefs)[key] });
+    input.setAttribute("aria-label", COLOR_LABELS[key]);
+    // The panel follows the picker as it moves; the pages get the colour once it is picked.
+    input.addEventListener("input", () => {
+      tipPrefs = { ...tipPrefs, colors: { ...tipPrefs.colors, [key]: input.value } };
+      applyColors();
+    });
+    input.addEventListener("change", save);
+    return {
+      key,
+      input,
+      row: el("label", { className: "colorline" }, input, el("span", { textContent: COLOR_LABELS[key] })),
+    };
+  });
+  const reset = el("button", { className: "link", textContent: "Reset colours" });
+  reset.addEventListener("click", () => {
+    tipPrefs = { ...tipPrefs, colors: {} };
+    for (const { key, input } of inputs) input.value = DEFAULT_COLORS[key];
+    save();
+  });
+  return section(
+    "Colours",
+    el("p", {
+      className: "note",
+      textContent: "For the rings, pills and tooltip on the boards, and the matching accents here.",
+    }),
+    el("div", { className: "colors" }, ...inputs.map((i) => i.row)),
+    reset,
+  );
 }
 
 function draw(): void {
@@ -680,6 +866,7 @@ async function refresh(): Promise<void> {
     });
   }
   tipPrefs = cleanTooltip(await send<TooltipPrefs>({ type: "tooltip" }));
+  applyColors();
   draw();
   if (status?.connected) await poll();
 }

@@ -198,6 +198,10 @@ export type ContentRequest =
   | { type: "tooltip" }
   /** A tracked coin's bubble map totals, for the tooltip's map lines. */
   | { type: "totals"; mint: string }
+  /** The reader's feed, for the on-page alerts (only while they are on). */
+  | { type: "alerts" }
+  /** The bubble map of the coin whose page is open (only while the map tab is on). */
+  | { type: "map"; mint: string }
   | { type: "health"; site: Site; rows: number; mints: number; paused: boolean };
 
 export interface LookupAnswer {

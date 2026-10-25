@@ -62,6 +62,9 @@ const RING_FEED_MS = 10_000;
 /** A tooltip's map totals are reused this long (a scan lands every few minutes at most). */
 const TOTALS_MS = 60_000;
 const totalsCache = new Map<string, { at: number; totals: OverlayBubbleTotals | null }>();
+/** A coin page's map is reused this long (the panel re-reads an open map every 30 s). */
+const PAGE_MAP_MS = 30_000;
+const pageMaps = new Map<string, { at: number; answer: BubbleAnswer }>();
 
 async function tooltipPrefs(): Promise<TooltipPrefs> {
   const { tooltip } = await chrome.storage.local.get("tooltip");
@@ -269,6 +272,22 @@ async function handleContent(request: ContentRequest, tabId: number | undefined)
     }
     case "tooltip":
       return tooltipPrefs();
+    case "alerts": {
+      if (!(await tooltipPrefs()).toast.enabled) return null;
+      return Date.now() - feedReadAt < RING_FEED_MS ? { tokens: lastTokens, problem } : await feed();
+    }
+    case "map": {
+      // The coin the reader opened on the site: asked about only while they keep the map tab on.
+      if (!(await tooltipPrefs()).mapTab.enabled || !isMintAddress(request.mint)) return null;
+      const cached = pageMaps.get(request.mint);
+      if (cached && Date.now() - cached.at < PAGE_MAP_MS) return cached.answer;
+      const answer = await bubble(request.mint);
+      if (answer.problem === null || answer.problem === "untracked") {
+        if (pageMaps.size > 100) pageMaps.clear();
+        pageMaps.set(request.mint, { at: Date.now(), answer });
+      }
+      return answer;
+    }
     case "totals": {
       // Only a coin already in the reader's alerts, so a page can't send other addresses out.
       if (!lastTokens.some((t) => t.mint === request.mint)) return null;
