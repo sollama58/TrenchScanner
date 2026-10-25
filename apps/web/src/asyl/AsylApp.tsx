@@ -7,6 +7,7 @@ import { renderMapCard } from "./asylCard";
 import { AsylSignIn } from "./AsylSignIn";
 import { DrawEditor, PenBar } from "./DrawEditor";
 import { PairPanel } from "./PairPanel";
+import { PickBar, type PickSwitch, type Share } from "./PickBar";
 import { SearchBox } from "./SearchBox";
 import {
   GraphView,
@@ -15,6 +16,7 @@ import {
   type DrawTool,
   type GraphViewHandle,
   type Pen,
+  type PickMode,
 } from "./GraphView";
 import {
   EDGE_KINDS,
@@ -80,7 +82,12 @@ const LINKS_TOKENS = 200;
 
 /** Keyboard shortcuts (user ask 2026-10-24), as the help card lists them. */
 const KEYS: [string, string][] = [
-  ["Del", "Take the selected wallet or coin off the map"],
+  ["Del", "Take the selected or picked bubbles off the map"],
+  ["B", "Pick bubbles with a box"],
+  ["O", "Pick bubbles with a lasso"],
+  ["Shift+drag", "Box-pick from the background; Shift adds to the pick"],
+  ["Ctrl+click", "Add a bubble to the pick, or take it out"],
+  ["Ctrl+A", "Pick everything shown"],
   ["Ctrl+Z", "Undo"],
   ["Ctrl+Shift+Z / Ctrl+Y", "Redo"],
   ["Z", "Bring back the last one taken off"],
@@ -95,7 +102,7 @@ const KEYS: [string, string][] = [
   ["T", "Trades of the selected wallet and its closest co-trader"],
   ["/", "Search"],
   ["Ctrl+S", "Save the map"],
-  ["Esc", "Clear the selection"],
+  ["Esc", "Let the pick go, then clear the selection"],
   ["?", "Show or hide these keys"],
 ];
 
@@ -188,6 +195,8 @@ export function AsylApp() {
   const [sharing, setSharing] = useState(false);
   const [keysOpen, setKeysOpen] = useState(false);
   const [unhidePick, setUnhidePick] = useState<Set<string>>(new Set());
+  // Bubbles picked together by a box, a lasso or Ctrl-click (user ask 2026-10-25).
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   // The reader's own lines and text boxes (user ask 2026-10-24), the tool in hand, and the one picked.
   const [drawings, setDrawings] = useState<Drawings>(NO_DRAWINGS);
   const [tool, setTool] = useState<DrawTool>(null);
@@ -447,6 +456,7 @@ export function AsylApp() {
         setNotes(m.doc.notes);
         setMapNote(m.doc.note);
         setRemoved(new Set(m.doc.removed ?? []));
+        setPicked(new Set());
         setCut(new Set(m.doc.cut ?? []));
         setDrawings(cleanDrawings(m.doc.drawings));
         setDrawingSel(null);
@@ -510,6 +520,7 @@ export function AsylApp() {
     setNotes({});
     setMapNote("");
     setRemoved(new Set());
+    setPicked(new Set());
     setCut(new Set());
     setWalletHidden({});
     setDrawings(NO_DRAWINGS);
@@ -867,6 +878,103 @@ export function AsylApp() {
       .filter((n): n is AsylNode => !!n);
   }, [graph, removed]);
 
+  // The pick, as far as it is on the map now: a bubble taken off or filtered away drops out of it.
+  const pickedShown = useMemo(() => {
+    const on = new Set(shown.nodes.map((n) => n.id));
+    return new Set([...picked].filter((id) => on.has(id)));
+  }, [picked, shown]);
+  const onPick = (ids: string[], mode: PickMode) => {
+    setPicked((p) => (mode === "add" ? new Set([...p, ...ids]) : new Set(ids)));
+    // The pick bar takes over from the one bubble's panel, which on a phone would cover it.
+    if (ids.length) {
+      setDrawingSel(null);
+      setSelected(null);
+    }
+  };
+  /** Takes these bubbles off the map, as one undo step. */
+  const hideMany = (ids: readonly string[], what: string) => {
+    if (ids.length === 0) return;
+    record();
+    setRemoved((s) => {
+      const n = new Set([...s].filter((id) => !ids.includes(id)));
+      for (const id of ids) n.add(id);
+      return n;
+    });
+    if (selected && ids.includes(selected)) setSelected(null);
+    setDirty(true);
+    setStatus({ tone: "info", text: `${what} Undo brings them back.` });
+  };
+  // What the pick bar shows: how many of each, their own link switches, and whether they hold.
+  const pickInfo = useMemo(() => {
+    const ids = [...pickedShown];
+    const kindOf = new Map(kept.nodes.map((n) => [n.id, n.kind]));
+    const wallets = ids.filter((id) => kindOf.get(id) === "wallet");
+    const count = new Map<WalletSwitch, number>();
+    const has = new Map<WalletSwitch, Set<string>>();
+    const mine = new Set(wallets);
+    for (const e of kept.edges)
+      for (const w of [e.a, e.b]) {
+        if (!mine.has(w)) continue;
+        const k: WalletSwitch = e.kind === "transfer" ? (e.a === w ? "transfer:out" : "transfer:in") : e.kind;
+        count.set(k, (count.get(k) ?? 0) + 1);
+        if (!has.has(k)) has.set(k, new Set());
+        has.get(k)!.add(w);
+      }
+    const share = (n: number, of: number): Share => (n === 0 ? "none" : n === of ? "all" : "some");
+    const switches: PickSwitch[] = [...count].map(([kind, c]) => {
+      const ws = [...has.get(kind)!];
+      return { kind, count: c, off: share(ws.filter((w) => perWallet.get(w)?.has(kind)).length, ws.length) };
+    });
+    return { ids, wallets, tokens: ids.filter((id) => kindOf.get(id) === "token"), switches, has };
+  }, [pickedShown, kept, perWallet]);
+  const pickPinned: Share = (() => {
+    const n = pickInfo.ids.filter((id) => layout.current.pinned.has(id)).length;
+    return n === 0 ? "none" : n === pickInfo.ids.length ? "all" : "some";
+  })();
+  const pickActions = {
+    hide: () => {
+      const n = pickInfo.ids.length;
+      hideMany(pickInfo.ids, `Took ${n} off the map.`);
+      setPicked(new Set());
+    },
+    keepOnly: () => {
+      const others = shown.nodes.map((n) => n.id).filter((id) => !pickedShown.has(id));
+      hideMany(others, `Took off the ${others.length} not picked.`);
+    },
+    pin: (hold: boolean) => {
+      record();
+      for (const id of pickInfo.ids) {
+        if (hold) layout.current.pinned.add(id);
+        else layout.current.pinned.delete(id);
+      }
+      setDirty(true);
+      view.current?.redraw();
+    },
+    linksAmong: () => void linksAmong(pickInfo.wallets, pickInfo.tokens),
+    grow: () => {
+      const more = new Set(pickedShown);
+      for (const e of shown.edges) {
+        if (pickedShown.has(e.a)) more.add(e.b);
+        if (pickedShown.has(e.b)) more.add(e.a);
+      }
+      setPicked(more);
+    },
+    switchKind: (k: WalletSwitch, on: boolean) => {
+      const ws = pickInfo.has.get(k) ?? new Set<string>();
+      setWalletHidden((m) => {
+        const out = { ...m };
+        for (const w of ws) {
+          const was = out[w] ?? [];
+          const next = on ? was.filter((x) => x !== k) : was.includes(k) ? was : [...was, k];
+          if (next.length) out[w] = next;
+          else delete out[w];
+        }
+        return out;
+      });
+      setDirty(true);
+    },
+  };
+
   const unhide = (ids: Iterable<string>) => {
     const back = new Set(ids);
     if (back.size === 0) return;
@@ -1003,6 +1111,11 @@ export function AsylApp() {
       undo();
       return;
     }
+    if (mod && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      setPicked(new Set(shown.nodes.map((n) => n.id)));
+      return;
+    }
     if (mod || e.altKey) return;
     const sel = selectedNode;
     switch (e.key) {
@@ -1013,6 +1126,11 @@ export function AsylApp() {
           deleteDrawing(drawingSel);
           return;
         }
+        if (pickedShown.size) {
+          e.preventDefault();
+          pickActions.hide();
+          return;
+        }
         if (!sel) return;
         e.preventDefault();
         actions.hide(sel.id);
@@ -1021,6 +1139,7 @@ export function AsylApp() {
         if (keysOpen) setKeysOpen(false);
         else if (tool) setTool(null);
         else if (drawingSel) setDrawingSel(null);
+        else if (pickedShown.size) setPicked(new Set());
         else setSelected(null);
         return;
       case "Enter":
@@ -1054,6 +1173,14 @@ export function AsylApp() {
       }
       case "f":
         view.current?.fit();
+        return;
+      case "b":
+      case "o":
+        if (graph.nodes.length) {
+          const t = e.key.toLowerCase() === "b" ? "box" : "lasso";
+          setDrawingSel(null);
+          setTool((x) => (x === t ? null : t));
+        }
         return;
       case "p":
         if (graph.nodes.length) {
@@ -1410,6 +1537,32 @@ export function AsylApp() {
             <button className="asyl-btn ghost" onClick={newMap}>
               New
             </button>
+            <span className="asyl-btn-group" role="group" aria-label="Pick bubbles">
+              <button
+                className={`asyl-btn ghost${tool === "box" ? " on" : ""}`}
+                disabled={graph.nodes.length === 0}
+                aria-pressed={tool === "box"}
+                title="Pick bubbles with a box (B), to hide or change them together. Shift and a drag on the background does it too"
+                onClick={() => {
+                  setDrawingSel(null);
+                  setTool((t) => (t === "box" ? null : "box"));
+                }}
+              >
+                ⬚ Box
+              </button>
+              <button
+                className={`asyl-btn ghost${tool === "lasso" ? " on" : ""}`}
+                disabled={graph.nodes.length === 0}
+                aria-pressed={tool === "lasso"}
+                title="Pick bubbles by drawing a loop round them (O)"
+                onClick={() => {
+                  setDrawingSel(null);
+                  setTool((t) => (t === "lasso" ? null : "lasso"));
+                }}
+              >
+                ◌ Lasso
+              </button>
+            </span>
             <span className="asyl-btn-group" role="group" aria-label="Draw">
               <button
                 className={`asyl-btn ghost${tool === "line" ? " on" : ""}`}
@@ -1569,6 +1722,8 @@ export function AsylApp() {
               drawingSelected={drawingSel}
               onDraw={draw}
               pen={pen}
+              picked={pickedShown}
+              onPick={onPick}
               timeLabels={timeLabels}
               onMoved={() => setDirty(true)}
               layoutKey={layoutKey}
@@ -1590,7 +1745,11 @@ export function AsylApp() {
             <div className="asyl-draw-hint" role="status">
               {tool === "line"
                 ? "Click a bubble, then the one to join it to · Esc to stop"
-                : "Click where the text box goes · Esc to stop"}
+                : tool === "box"
+                  ? "Drag a box round bubbles · Shift adds to the pick · drag a picked one to move them all · Esc to stop"
+                  : tool === "lasso"
+                    ? "Draw a loop round bubbles · Shift adds to the pick · Esc to stop"
+                    : "Click where the text box goes · Esc to stop"}
             </div>
           )}
           {pickedStroke && tool !== "pen" && (
@@ -1628,6 +1787,22 @@ export function AsylApp() {
               }}
               onDelete={() => deleteDrawing(drawingSel!)}
               onDone={() => setDrawingSel(null)}
+            />
+          )}
+          {pickedShown.size > 0 && tool !== "pen" && (
+            <PickBar
+              wallets={pickInfo.wallets.length}
+              tokens={pickInfo.tokens.length}
+              switches={pickInfo.switches}
+              pinned={pickPinned}
+              busy={!!busy}
+              onHide={pickActions.hide}
+              onKeepOnly={pickActions.keepOnly}
+              onPin={pickActions.pin}
+              onLinksAmong={pickActions.linksAmong}
+              onGrow={pickActions.grow}
+              onSwitch={pickActions.switchKind}
+              onClear={() => setPicked(new Set())}
             />
           )}
           {ask && (

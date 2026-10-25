@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   addressIn,
+  pickInBox,
+  pickInLasso,
   NO_CUTOFFS,
   clearsCutoffs,
   cleanCutoffs,
@@ -292,5 +294,32 @@ describe("pen strokes", () => {
   it("reads drawings saved before the pen", () => {
     expect(cleanDrawings({ lines: [], texts: [] })).toEqual({ lines: [], texts: [], strokes: [] });
     expect(cleanDrawings(undefined)).toEqual(NO_DRAWINGS);
+  });
+});
+
+describe("picking bubbles", () => {
+  const pos = new Map([
+    ["a", { x: 0, y: 0 }],
+    ["b", { x: 50, y: 50 }],
+    ["c", { x: 200, y: 10 }],
+  ]);
+  it("takes those inside a box dragged either way", () => {
+    expect(pickInBox(pos, pos.keys(), { x: 60, y: 60 }, { x: -10, y: -10 })).toEqual(["a", "b"]);
+    expect(pickInBox(pos, ["a", "c"], { x: -10, y: -10 }, { x: 300, y: 300 })).toEqual(["a", "c"]);
+  });
+  it("takes those inside a lasso, and none for a loop too short to close", () => {
+    // A triangle around a and b, leaving c out.
+    const loop: [number, number][] = [
+      [-20, -20],
+      [160, -20],
+      [-20, 160],
+    ];
+    expect(pickInLasso(pos, pos.keys(), loop)).toEqual(["a", "b"]);
+    expect(
+      pickInLasso(pos, pos.keys(), [
+        [0, 0],
+        [10, 10],
+      ]),
+    ).toEqual([]);
   });
 });

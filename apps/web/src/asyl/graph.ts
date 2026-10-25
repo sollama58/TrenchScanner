@@ -578,3 +578,50 @@ export function textBoxSize(text: string): { w: number; h: number } {
 }
 
 export const newDrawingId = () => Math.random().toString(36).slice(2, 10);
+
+type Point = { x: number; y: number };
+
+/**
+ * Picking many bubbles at once (user ask 2026-10-25): those whose middles fall inside a box
+ * dragged between two corners, in map units.
+ */
+export function pickInBox(
+  pos: ReadonlyMap<string, Point>,
+  ids: Iterable<string>,
+  a: Point,
+  b: Point,
+): string[] {
+  const [x0, x1] = a.x < b.x ? [a.x, b.x] : [b.x, a.x];
+  const [y0, y1] = a.y < b.y ? [a.y, b.y] : [b.y, a.y];
+  const out: string[] = [];
+  for (const id of ids) {
+    const p = pos.get(id);
+    if (p && p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1) out.push(id);
+  }
+  return out;
+}
+
+/** Those whose middles fall inside a lasso drawn freehand: a closed loop through its points. */
+export function pickInLasso(
+  pos: ReadonlyMap<string, Point>,
+  ids: Iterable<string>,
+  loop: readonly (readonly [number, number])[],
+): string[] {
+  if (loop.length < 3) return [];
+  const inside = (x: number, y: number) => {
+    // Even-odd: a ray to the right crosses the loop's edges an odd number of times from inside.
+    let odd = false;
+    for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+      const [xi, yi] = loop[i]!;
+      const [xj, yj] = loop[j]!;
+      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) odd = !odd;
+    }
+    return odd;
+  };
+  const out: string[] = [];
+  for (const id of ids) {
+    const p = pos.get(id);
+    if (p && inside(p.x, p.y)) out.push(id);
+  }
+  return out;
+}

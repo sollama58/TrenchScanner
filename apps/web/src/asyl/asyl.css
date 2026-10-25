@@ -2492,3 +2492,96 @@ body {
   float: none;
   margin-top: 0;
 }
+
+/* Picking many bubbles (user ask 2026-10-25): the box or lasso being dragged, the picked rings, and
+   the bar of what can be done to them all. */
+.asyl-graph-svg.tool-box,
+.asyl-graph-svg.tool-lasso,
+.asyl-graph-svg.tool-box .asyl-node:not(.picked),
+.asyl-graph-svg.tool-lasso .asyl-node:not(.picked) {
+  cursor: crosshair;
+  touch-action: none;
+}
+.asyl-marquee {
+  fill: rgba(110, 231, 249, 0.08);
+  stroke: #6ee7f9;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.asyl-pick-ring {
+  fill: rgba(110, 231, 249, 0.12);
+  stroke: #6ee7f9;
+  stroke-width: 2.5;
+  stroke-dasharray: 5 3;
+  pointer-events: none;
+  animation: asyl-pick-march 1.2s linear infinite;
+}
+@keyframes asyl-pick-march {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .asyl-pick-ring {
+    animation: none;
+  }
+}
+.asyl-node.picked {
+  cursor: move;
+}
+.asyl-pick-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 64px;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: var(--asyl-glass);
+  border: 1px solid rgba(110, 231, 249, 0.45);
+  backdrop-filter: blur(12px);
+  box-shadow:
+    0 14px 34px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(110, 231, 249, 0.08) inset;
+  animation: asyl-toast 0.2s var(--asyl-ease);
+}
+.asyl-pick-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.asyl-pick-head b {
+  color: #6ee7f9;
+}
+.asyl-pick-head .asyl-icon-btn {
+  margin-left: auto;
+}
+.asyl-pick-actions,
+.asyl-pick-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.asyl-pick-kinds .asyl-chip.some {
+  opacity: 0.85;
+  border-style: dashed;
+}
+@media (max-width: 700px) {
+  .asyl-pick-bar {
+    bottom: 58px;
+    width: calc(100% - 16px);
+    padding: 8px 10px;
+  }
+  .asyl-pick-actions .asyl-btn {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+}
