@@ -42,7 +42,8 @@ export const COINS_MAX = 24;
 /** Its first buys a co-trader search reads, newest first. */
 export const COTRADE_COINS = 60;
 export const COTRADE_WINDOW_MS = 3 * 60_000;
-export const COTRADE_MIN_SHARED = 2;
+/** Coins two wallets must have bought within the window of each other (user decision 2026-10-25). */
+export const COTRADE_MIN_SHARED = 5;
 export const COTRADERS_MAX = 20;
 /** Sides of a KOL or a labeled wallet, drawn at most. */
 export const SIDES_MAX = 24;
@@ -318,6 +319,8 @@ export interface CoTrader {
   of: number;
   /** Median seconds between the two first buys, signed: negative when the co-trader bought first. */
   medianLeadSec: number;
+  /** Median seconds between the two first buys, either way round. */
+  medianGapSec: number;
 }
 
 /**
@@ -327,7 +330,9 @@ export interface CoTrader {
  */
 export async function loadCoTraders(wallet: string, limit = COTRADERS_MAX): Promise<CoTrader[]> {
   const windowSec = COTRADE_WINDOW_MS / 1000;
-  const rows = await prisma.$queryRaw<{ wallet: string; shared: number; of: number; lead: number }[]>`
+  const rows = await prisma.$queryRaw<
+    { wallet: string; shared: number; of: number; lead: number; gap: number }[]
+  >`
     WITH mine AS (
       SELECT "tokenId", "firstBuyAt" FROM "TokenWalletActivity"
        WHERE "wallet" = ${wallet} AND "buys" > 0 AND "firstBuyAt" IS NOT NULL
@@ -336,7 +341,8 @@ export async function loadCoTraders(wallet: string, limit = COTRADERS_MAX): Prom
     SELECT o."wallet",
            COUNT(DISTINCT o."tokenId")::int AS shared,
            (SELECT COUNT(*)::int FROM mine) AS of,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (o."firstBuyAt" - m."firstBuyAt")))::float AS lead
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (o."firstBuyAt" - m."firstBuyAt")))::float AS lead,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY ABS(EXTRACT(EPOCH FROM (o."firstBuyAt" - m."firstBuyAt"))))::float AS gap
       FROM mine m
       JOIN "TokenWalletActivity" o
         ON o."tokenId" = m."tokenId" AND o."buys" > 0 AND o."wallet" <> ${wallet}
@@ -357,7 +363,24 @@ export async function loadCoTraders(wallet: string, limit = COTRADERS_MAX): Prom
   return rows
     .filter((r) => !bots.has(r.wallet) && !MARKED_BOT_WALLETS.has(r.wallet) && !isServiceWallet(r.wallet))
     .slice(0, limit)
-    .map((r) => ({ wallet: r.wallet, shared: r.shared, of: r.of, medianLeadSec: Math.round(r.lead) }));
+    .map((r) => ({
+      wallet: r.wallet,
+      shared: r.shared,
+      of: r.of,
+      medianLeadSec: Math.round(r.lead),
+      medianGapSec: Math.round(r.gap),
+    }));
+}
+
+/** Seconds as the map says them: "42s", "2m 5s". */
+export function fmtGap(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${s % 60 ? ` ${s % 60}s` : ""}`;
+}
+
+/** A co-trader link in words: how many of the wallet's coins, and how close together. */
+export function cotradeLabel(c: Pick<CoTrader, "shared" | "of" | "medianGapSec">): string {
+  return `Bought within ${COTRADE_WINDOW_MS / 60_000} min of each other on ${c.shared} of ${c.of} coins · typically ${fmtGap(c.medianGapSec)} apart`;
 }
 
 export function addCoTraders(g: GraphBuilder, wallet: string, coTraders: readonly CoTrader[]): void {
@@ -368,8 +391,12 @@ export function addCoTraders(g: GraphBuilder, wallet: string, coTraders: readonl
       b: c.wallet,
       kind: "cotrade",
       weight: c.shared,
-      label: `Bought ${c.shared} of the same coins within ${COTRADE_WINDOW_MS / 60_000} min`,
+      label: cotradeLabel(c),
       source: "stored",
+      shared: c.shared,
+      of: c.of,
+      gapSec: c.medianGapSec,
+      leadSec: c.medianLeadSec,
     });
   }
 }

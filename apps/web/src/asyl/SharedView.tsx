@@ -3,7 +3,15 @@ import { ShareImageDialog } from "../components/ShareImageDialog";
 import { asylApi, type MapDoc } from "./asylApi";
 import { renderMapCard } from "./asylCard";
 import { GraphView, MapLegend, type GraphViewHandle } from "./GraphView";
-import { DEFAULT_TIME_LABELS, EDGE_KINDS, TAG_LABEL, nodeName, shortAddr, visibleGraph } from "./graph";
+import {
+  DEFAULT_TIME_LABELS,
+  EDGE_KINDS,
+  TAG_LABEL,
+  cleanCutoffs,
+  nodeName,
+  shortAddr,
+  visibleGraph,
+} from "./graph";
 import { newLayout } from "./layout";
 import { basePath, sharedLink } from "./route";
 
@@ -41,7 +49,7 @@ export function SharedView({ slug }: { slug: string }) {
     const hidden = new Set(EDGE_KINDS.filter((k) => map.doc.hidden.includes(k)));
     const keep = new Set(map.doc.focus ? [map.doc.focus] : []);
     return visibleGraph({ nodes: map.doc.nodes, edges: map.doc.edges }, hidden, keep, {
-      cutoffs: map.doc.cutoffs,
+      cutoffs: map.doc.cutoffs ? cleanCutoffs(map.doc.cutoffs) : undefined,
       solUsd: null,
     });
   }, [map]);

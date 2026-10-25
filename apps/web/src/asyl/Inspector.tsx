@@ -38,6 +38,12 @@ const sol = (n: number | null | undefined) =>
     ? "–"
     : `${n >= 0 ? "" : "−"}${Math.abs(n).toFixed(Math.abs(n) >= 100 ? 0 : 2)} SOL`;
 
+/** Seconds as the map says them: "42s", "2m 5s". */
+const gapText = (sec: number) => {
+  const s = Math.max(0, Math.round(sec));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${s % 60 ? ` ${s % 60}s` : ""}`;
+};
+
 /** A coin's picture, trying each source in turn; nothing when none loads. */
 function TokenImage({ sources }: { sources: string[] }) {
   const [n, setN] = useState(0);
@@ -94,6 +100,9 @@ export function Inspector({
   }, [node.id]);
 
   const links = neighbours(graph, node.id);
+  const together = links
+    .filter((l) => l.edge.kind === "cotrade")
+    .sort((x, y) => (y.edge.shared ?? y.edge.weight) - (x.edge.shared ?? x.edge.weight));
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
   const chain = me.chain;
   const chainOff = !me.pro
@@ -270,6 +279,44 @@ export function Inspector({
             </>
           )}
         </div>
+      )}
+
+      {together.length > 0 && (
+        <section className="asyl-insp-section">
+          <h3>
+            Bought together <span className="asyl-muted">({together.length})</span>
+          </h3>
+          <table className="asyl-together">
+            <thead>
+              <tr>
+                <th>Wallet</th>
+                <th title="Coins both bought within 3 minutes of each other">Coins in common</th>
+                <th title="The typical time between their first buys of those coins">Apart</th>
+              </tr>
+            </thead>
+            <tbody>
+              {together.map(({ node: other, edge }) => {
+                const o = byId.get(other);
+                const shared = edge.shared ?? edge.weight;
+                return (
+                  <tr key={other}>
+                    <td>
+                      <button className="asyl-link" onClick={() => actions.select(other)}>
+                        {o ? nodeName(o) : shortAddr(other)}
+                      </button>
+                    </td>
+                    <td>{edge.of ? `${shared} of ${edge.of}` : shared}</td>
+                    <td>{edge.gapSec !== undefined && edge.gapSec !== null ? gapText(edge.gapSec) : "–"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p className="asyl-muted asyl-small">
+            Coins both bought within 3 minutes of each other, out of the latest coins read; apart is the
+            typical time between their first buys.
+          </p>
+        </section>
       )}
 
       <section className="asyl-insp-section">

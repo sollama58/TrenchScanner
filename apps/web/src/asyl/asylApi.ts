@@ -47,6 +47,7 @@ export interface CoTrader {
   shared: number;
   of: number;
   medianLeadSec: number;
+  medianGapSec: number;
 }
 
 export interface SimilarRead extends GraphRead {

@@ -82,6 +82,12 @@ export interface AsylEdge {
   tokens?: number | null;
   /** % of the coin's supply held or moved. */
   pct?: number | null;
+  /** A "bought together" link: coins both bought within minutes, of the coins read, and the median seconds apart. */
+  shared?: number | null;
+  of?: number | null;
+  gapSec?: number | null;
+  /** ...and who usually bought first: median seconds from `a`'s first buy to `b`'s, negative when `b` led. */
+  leadSec?: number | null;
 }
 
 export interface AsylGraph {

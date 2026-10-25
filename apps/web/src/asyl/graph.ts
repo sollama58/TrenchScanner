@@ -57,6 +57,12 @@ export interface AsylEdge {
   tokens?: number | null;
   /** % of the coin's supply held or moved. */
   pct?: number | null;
+  /** A "bought together" link: coins both bought within minutes, of the coins read, and the median seconds apart. */
+  shared?: number | null;
+  of?: number | null;
+  gapSec?: number | null;
+  /** ...and who usually bought first: median seconds from `a`'s first buy to `b`'s, negative when `b` led. */
+  leadSec?: number | null;
 }
 
 export interface AsylGraph {
@@ -222,9 +228,34 @@ export interface Cutoffs {
   usd: number;
   tokens: number;
   pct: number;
+  /** "Bought together" links (user ask 2026-10-25): the fewest coins in common, 0 for any. */
+  shared: number;
+  /** ...and the most median seconds between their first buys, 0 for any. */
+  gap: number;
+  /**
+   * ...and who usually buys first: 0 either, 1 the co-trader (the line's far end), 2 the wallet it
+   * was found from (the line's near end).
+   */
+  first: number;
 }
 
-export const NO_CUTOFFS: Cutoffs = { sol: 0, usd: 0, tokens: 0, pct: 0 };
+export const NO_CUTOFFS: Cutoffs = { sol: 0, usd: 0, tokens: 0, pct: 0, shared: 0, gap: 0, first: 0 };
+
+/** Cutoffs as read back from storage or a saved map: anything missing or odd draws everything. */
+export function cleanCutoffs(raw: unknown): Cutoffs {
+  if (!raw || typeof raw !== "object") return NO_CUTOFFS;
+  const r = raw as Partial<Record<keyof Cutoffs, unknown>>;
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
+  return {
+    sol: n(r.sol),
+    usd: n(r.usd),
+    tokens: n(r.tokens),
+    pct: n(r.pct),
+    shared: n(r.shared),
+    gap: n(r.gap),
+    first: r.first === 1 || r.first === 2 ? r.first : 0,
+  };
+}
 
 /** What else keeps a link off the map: links hidden one by one (by edgeKey), and the sliders. */
 export interface LinkFilter {
@@ -244,8 +275,21 @@ export function edgeSol(e: AsylEdge): number | null {
   return null;
 }
 
-/** Whether a link clears the sliders. A link that isn't money, or carries no amount, always does. */
+/**
+ * Whether a link clears the sliders. A "bought together" link is held to its own two; any other
+ * link that isn't money, or carries no amount, always clears them.
+ */
 export function clearsCutoffs(e: AsylEdge, c: Cutoffs, solUsd: number | null): boolean {
+  if (e.kind === "cotrade") {
+    // Coins in common: its own count, or, on maps saved before links carried it, its weight.
+    if (c.shared > 0 && (e.shared ?? e.weight) < c.shared) return false;
+    if (c.gap > 0 && e.gapSec !== undefined && e.gapSec !== null && e.gapSec > c.gap) return false;
+    if (c.first > 0 && e.leadSec !== undefined && e.leadSec !== null) {
+      if (c.first === 1 && e.leadSec >= 0) return false;
+      if (c.first === 2 && e.leadSec <= 0) return false;
+    }
+    return true;
+  }
   if (!MONEY_KINDS.includes(e.kind)) return true;
   const s = edgeSol(e);
   if (s !== null) {
