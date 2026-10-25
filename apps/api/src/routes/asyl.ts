@@ -23,6 +23,7 @@ import {
   addHolders,
   addHolderTransfers,
   addLinksAmong,
+  addPastHolders,
   addSides,
   decorate,
   deployedEdge,
@@ -32,7 +33,9 @@ import {
   LINKS_WALLETS_MAX,
   loadCoTraders,
   loadStoredHolders,
+  PAST_HOLDER_MIN_SOL,
   STORED_DAYS,
+  type PastHoldersRead,
 } from "../asyl/graph.js";
 import { labelsGraph, loadSimilarCoins } from "../asyl/similar.js";
 import { readAllowance } from "../asyl/credits.js";
@@ -140,6 +143,24 @@ export function holdersNote(count: number, readAt: Date | null, pro: boolean, no
           : `${Math.round(min / 1440)} days ago`;
   const at = `${readAt.toISOString().slice(11, 16)} UTC on ${readAt.toISOString().slice(0, 10)}`;
   return `Top ${count} holders as TrenchScanner read them ${age} (${at}).${min >= 60 ? ` ${fresher}` : ""}`;
+}
+
+const dayOf = (d: Date) =>
+  d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+
+/** What a past-holders read covers: whose trades, up to when, and what it can't see. */
+export function pastHoldersNote(r: PastHoldersRead): string {
+  const min = `${PAST_HOLDER_MIN_SOL} SOL`;
+  if (!r.tape)
+    return "TrenchScanner hasn't read this coin's trades, so it has no past holders to add. It reads the trades of coins it calls, samples or sees traded.";
+  const upTo = `Buyers up to ${dayOf(r.tape.windowEnd)}, from TrenchScanner's read of its trades`;
+  const partial =
+    r.tape.status === "partial"
+      ? " The read didn't reach back to its launch, so its earliest buyers may be missing."
+      : "";
+  if (r.total === 0) return `No wallet put ${min} or more into it. ${upTo}.${partial}`;
+  const drawn = r.shown < r.total ? `; the ${r.shown} that put in most are drawn` : "";
+  return `${r.total} wallet${r.total === 1 ? "" : "s"} put ${min} or more into it, sold out or still holding${drawn}. ${upTo}.${partial}`;
 }
 
 export async function registerAsylRoutes(
@@ -286,6 +307,22 @@ export async function registerAsylRoutes(
         graph: await decorate(g, tracked),
         coverage,
         readAt: stored.readAt?.toISOString() ?? null,
+      };
+    });
+
+    /** Everyone who bought a coin with PAST_HOLDER_MIN_SOL or more, from its stored trade read. */
+    priv.get("/token/:mint/past-holders", { config: { rateLimit: READ_LIMIT } }, async (request, reply) => {
+      const p = mintParams.safeParse(request.params);
+      if (!p.success) return bad(reply, p.error);
+      const g = new GraphBuilder();
+      const read = await addPastHolders(g, p.data.mint);
+      reply.header("Cache-Control", "private, no-store");
+      return {
+        focus: p.data.mint,
+        graph: await decorate(g, await trackedOf(request)),
+        total: read.total,
+        shown: read.shown,
+        note: pastHoldersNote(read),
       };
     });
 
