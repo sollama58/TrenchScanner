@@ -120,9 +120,56 @@ describe.skipIf(!dbAvailable)("refreshFunders", () => {
     const res = await refreshFunders(helius, ids, now);
     expect(asked).toEqual([[STALE, BUSY, NEW].sort()]);
     expect(known).toEqual([STALE]);
-    expect(res).toEqual({ asked: 3, found: 3 });
+    expect(res).toMatchObject({ asked: 3, found: 3 });
+    expect(res.status.get(FRESH)).toBe("found");
     const stale = await prisma.walletFunder.findUnique({ where: { wallet: STALE } });
     expect(stale).toMatchObject({ amountSol: 2, revived: true, lastActivityAt: new Date(now) });
-    expect(await refreshFunders(helius, ids, now)).toEqual({ asked: 0, found: 0 });
+    expect(await refreshFunders(helius, ids, now)).toMatchObject({ asked: 0, found: 0 });
+  });
+
+  it("asked outright, walks a stored none again deeper, and says when the read failed", async () => {
+    const NONE = addr("AsyFundNone");
+    await prisma.walletFunder.deleteMany({ where: { wallet: NONE } });
+    await prisma.walletFunder.create({
+      data: { wallet: NONE, status: "none", lastActivityAt: new Date(now - 86_400_000) },
+    });
+    const calls: { wallets: string[]; walk?: number; known: string[] }[] = [];
+    let answer: "found" | "failed" = "failed";
+    const helius = {
+      async getFundersBatch(
+        wallets: string[],
+        opts?: { walk?: number; knownOf?: ReadonlyMap<string, unknown> },
+      ) {
+        calls.push({ wallets, walk: opts?.walk, known: [...(opts?.knownOf?.keys() ?? [])] });
+        return new Map(
+          wallets.map((w) => [
+            w,
+            answer === "found"
+              ? {
+                  status: "found" as const,
+                  funder: PAYER,
+                  amountSol: 1,
+                  fundedAt: null,
+                  lastActivityAt: new Date(now),
+                }
+              : { status: "failed" as const },
+          ]),
+        );
+      },
+    };
+    // The scan's bulk read leaves a "none" alone...
+    expect(await refreshFunders(helius, [NONE], now)).toMatchObject({ asked: 0 });
+    // ...a reader asking for it reads it again, deeper, and hears that the read failed.
+    const failed = await refreshFunders(helius, [NONE], now, Infinity, true);
+    expect(failed.status.get(NONE)).toBe("failed");
+    expect(calls).toEqual([{ wallets: [NONE], walk: 12, known: [] }]);
+    answer = "found";
+    const found = await refreshFunders(helius, [NONE], now, Infinity, true);
+    expect(found).toMatchObject({ asked: 1, found: 1 });
+    expect(found.status.get(NONE)).toBe("found");
+    expect(await prisma.walletFunder.findUnique({ where: { wallet: NONE } })).toMatchObject({
+      funder: PAYER,
+    });
+    await prisma.walletFunder.deleteMany({ where: { wallet: NONE } });
   });
 });

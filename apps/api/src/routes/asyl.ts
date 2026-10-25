@@ -247,7 +247,9 @@ export async function registerAsylRoutes(
         note:
           seen > 0
             ? `Seen in ${seen} coin${seen === 1 ? "" : "s"} TrenchScanner tracked in the last ${STORED_DAYS} days.`
-            : `Not seen in any coin TrenchScanner tracked in the last ${STORED_DAYS} days.`,
+            : pro
+              ? `Not seen in any coin TrenchScanner tracked in the last ${STORED_DAYS} days, so Asyl reads it from the chain.`
+              : `Not seen in any coin TrenchScanner tracked in the last ${STORED_DAYS} days. Pro Mode reads a wallet like this from the chain.`,
       };
       reply.header("Cache-Control", "private, no-store");
       return { focus: wallet, graph: await decorate(g, tracked), coverage };
@@ -493,7 +495,9 @@ export async function registerAsylRoutes(
       return {
         focus: null,
         graph: await decorate(g, await trackedOf(request)),
-        found: res.value,
+        found: Object.values(res.value).filter((v) => v === "found").length,
+        /** Each wallet's answer: found, none, empty, busy or failed. */
+        results: res.value,
         credits: res.credits,
         cached: res.cached,
         allowance: res.allowance,

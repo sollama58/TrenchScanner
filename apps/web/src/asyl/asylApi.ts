@@ -165,7 +165,13 @@ export const asylApi = {
     put<{ wallet: Label }>(`/asyl/labels/${enc(wallet)}`, { name, kol }),
   removeLabel: (wallet: string) => del<{ removed: boolean }>(`/asyl/labels/${enc(wallet)}`),
   flows: (wallet: string) => post<ChainRead>(`/asyl/chain/flows/${enc(wallet)}`),
-  funders: (wallets: string[]) => post<ChainRead & { found: number }>("/asyl/chain/funders", { wallets }),
+  funders: (wallets: string[]) =>
+    post<
+      ChainRead & {
+        found: number;
+        results?: Record<string, "found" | "none" | "empty" | "busy" | "failed">;
+      }
+    >("/asyl/chain/funders", { wallets }),
   chainToken: (mint: string) => post<ChainRead>(`/asyl/chain/token/${enc(mint)}`),
   trace: (wallet: string) =>
     post<ChainRead & { trace: { path: string[]; stop: string; asked: number }; note: string }>(

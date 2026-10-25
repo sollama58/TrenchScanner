@@ -64,8 +64,9 @@ export const MIN_FUNDING_SOL = 0.001;
 
 /**
  * The funder in one transaction: whoever's SOL paid the wallet in it. The fee payer, when that is
- * someone else (a plain transfer, or a program call a bot signs); else the account whose balance
- * fell the most while the wallet's rose. Null when the wallet gained less than MIN_FUNDING_SOL, or
+ * someone else (a plain transfer, or a program call a bot signs), unless it paid only the fee and
+ * another account's SOL fell by what the wallet received; else the account whose balance fell the
+ * most while the wallet's rose. Null when the wallet gained less than MIN_FUNDING_SOL, or
  * nobody else paid in (a transaction the provider gave without balances, say).
  */
 export function funderFromFirstTransaction(
@@ -83,8 +84,21 @@ export function funderFromFirstTransaction(
   const received = ((post[self] ?? 0) - (pre[self] ?? 0)) / LAMPORTS_PER_SOL;
   if (received < MIN_FUNDING_SOL) return null;
   const payer = keys[0];
-  if (payer && payer !== wallet) return { funder: payer, amountSol: received, atMs };
   const best = biggestSender(keys, pre, post, self);
+  if (payer && payer !== wallet) {
+    // A relayer that only paid the fee while someone else's SOL came in (a sponsored transfer, a
+    // payout a bot signs from a treasury): the account whose SOL fell by what the wallet received
+    // is who paid it, not the fee payer (user bug report 2026-10-25).
+    const payerDrop = ((pre[0] ?? 0) - (post[0] ?? 0)) / LAMPORTS_PER_SOL;
+    if (
+      best &&
+      best.key !== payer &&
+      payerDrop < received / 2 &&
+      Math.abs(best.drop - received) <= Math.max(0.01 * received, 0.003)
+    )
+      return { funder: best.key, amountSol: received, atMs };
+    return { funder: payer, amountSol: received, atMs };
+  }
   return best ? { funder: best.key, amountSol: received, atMs } : null;
 }
 
@@ -106,6 +120,8 @@ function biggestSender(
 
 /** How many of a wallet's oldest transactions the funder read walks before giving up. */
 export const FUNDER_TXS_WALKED = 4;
+/** The most a reader may ask walked (getFundersBatch's `walk`): one credit each, past the page. */
+export const FUNDER_TXS_WALKED_MAX = 12;
 
 /**
  * A wallet's funder from its oldest transactions, oldest first: the first one that paid SOL into

@@ -40,7 +40,11 @@ import { parseLaunchBuyers, type LaunchBuyersReading, type RawLaunchTx } from ".
 import { rememberLaunchTapeSeed } from "./launchTapeSeed.js";
 import type { ChainTx } from "../wallets/tradeTape.js";
 import { deployerFromTransactions } from "../wallets/deployer.js";
-import { funderFromEarliestTransactions, FUNDER_TXS_WALKED } from "../wallets/linkedWallets.js";
+import {
+  funderFromEarliestTransactions,
+  FUNDER_TXS_WALKED,
+  FUNDER_TXS_WALKED_MAX,
+} from "../wallets/linkedWallets.js";
 import {
   holdersFromLargestAccounts,
   topWalletsFromAccounts,
@@ -1603,6 +1607,12 @@ export class HeliusClient {
       knownOf?: ReadonlyMap<string, KnownFunder>;
       /** Pages already read (getWalletOverview's `signatures`): not read again, saving the credit. */
       pagesOf?: ReadonlyMap<string, WalletSignaturesPage>;
+      /**
+       * Oldest transactions walked before giving up (default FUNDER_TXS_WALKED): a reader asking
+       * for one wallet's funder outright (Asyl) can afford to walk past more token-account opens
+       * and airdrops than the scan's bulk read does.
+       */
+      walk?: number;
     } = {},
   ): Promise<Map<string, FunderResult>> {
     const unique = [...new Set(wallets)];
@@ -1612,7 +1622,9 @@ export class HeliusClient {
       unique,
       // A page handed in is the caller's own (read at "confirmed"): that wallet is read alone.
       (wallet) =>
-        opts.pagesOf?.has(wallet) ? null : `${wallet}|${knownFunderKey(opts.knownOf?.get(wallet))}`,
+        opts.pagesOf?.has(wallet)
+          ? null
+          : `${wallet}|${knownFunderKey(opts.knownOf?.get(wallet))}|${opts.walk ?? FUNDER_TXS_WALKED}`,
       (own) => this.readFunders(own, opts),
     );
   }
@@ -1623,9 +1635,11 @@ export class HeliusClient {
       nowMs?: number;
       knownOf?: ReadonlyMap<string, KnownFunder>;
       pagesOf?: ReadonlyMap<string, WalletSignaturesPage>;
+      walk?: number;
     },
   ): Promise<Map<string, FunderResult>> {
     const nowMs = opts.nowMs ?? Date.now();
+    const walkMax = Math.max(1, Math.min(opts.walk ?? FUNDER_TXS_WALKED, FUNDER_TXS_WALKED_MAX));
     const knownOf = opts.knownOf ?? new Map<string, KnownFunder>();
     const out = new Map<string, FunderResult>();
     const toRead = unique.filter((address) => !opts.pagesOf?.has(address));
@@ -1692,14 +1706,14 @@ export class HeliusClient {
       if (start >= 0) revived.add(wallet);
       const ok = walk
         .filter((s) => s.err == null)
-        .slice(-FUNDER_TXS_WALKED)
+        .slice(-walkMax)
         .reverse()
         .map((s) => s.signature);
       if (ok.length === 0)
         out.set(wallet, { status: "none", reads: 0, ...this.stretchOf(wallet, revived, lastActivity) });
       else oldest.set(wallet, ok);
     }
-    for (const [wallet, result] of await this.fundersOfBusyWallets(busy)) {
+    for (const [wallet, result] of await this.fundersOfBusyWallets(busy, walkMax)) {
       out.set(
         wallet,
         result.status === "failed" ? result : { ...result, ...this.stretchOf(wallet, revived, lastActivity) },
@@ -1768,7 +1782,10 @@ export class HeliusClient {
    * that method (another provider, or Helius standing it down), so the caller can read it again
    * later.
    */
-  private async fundersOfBusyWallets(wallets: string[]): Promise<Map<string, FunderResult>> {
+  private async fundersOfBusyWallets(
+    wallets: string[],
+    walk = FUNDER_TXS_WALKED,
+  ): Promise<Map<string, FunderResult>> {
     const out = new Map<string, FunderResult>();
     if (wallets.length === 0) return out;
     if (!this.gtfaUsable) {
@@ -1784,7 +1801,7 @@ export class HeliusClient {
           {
             transactionDetails: "full",
             sortOrder: "asc",
-            limit: FUNDER_TXS_WALKED,
+            limit: walk,
             encoding: "json",
             maxSupportedTransactionVersion: MAX_TRANSACTION_VERSION,
             filters: { status: "succeeded" },
