@@ -2213,3 +2213,282 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ==== The makeover (user ask 2026-10-25): glass over the lit wall, one floating dock for the map's
+   tools, softer panels with a warm rim, and motion kept small. Later rules here win. ==== */
+
+:root {
+  --asyl-glass: rgba(16, 10, 7, 0.78);
+  --asyl-rim: rgba(255, 176, 103, 0.22);
+  --asyl-rim-hi: rgba(255, 176, 103, 0.42);
+  --asyl-shadow: 0 20px 50px rgba(25, 6, 0, 0.5);
+  --asyl-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* The top bar: one glass strip across the wall. */
+.asyl-top {
+  margin: 10px 16px 12px;
+  padding: 8px 10px 8px 16px;
+  border-radius: 16px;
+  background: var(--asyl-glass);
+  border: 1px solid var(--asyl-rim);
+  box-shadow:
+    var(--asyl-shadow),
+    inset 0 1px 0 rgba(255, 220, 180, 0.07);
+  backdrop-filter: blur(14px) saturate(1.2);
+}
+.asyl-top .asyl-wordmark.small {
+  color: var(--asyl-orange);
+  text-shadow: 0 0 18px rgba(255, 122, 47, 0.35);
+}
+.asyl-me {
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 176, 103, 0.12);
+}
+.asyl-search .asyl-input {
+  border-radius: 11px;
+  padding-top: 9px;
+  padding-bottom: 9px;
+  background: rgba(0, 0, 0, 0.38);
+}
+
+/* Buttons: a little lift, a warm rim, the primary one lit. */
+.asyl-btn {
+  border-radius: 10px;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    box-shadow 0.15s,
+    transform 0.12s var(--asyl-ease);
+}
+.asyl-btn:hover:not(:disabled) {
+  background: rgba(255, 176, 103, 0.08);
+  border-color: var(--asyl-rim-hi);
+}
+.asyl-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.asyl-btn.primary {
+  background: linear-gradient(180deg, #ff9550, #ff6a1f);
+  border-color: #ff7a2f;
+  box-shadow:
+    0 6px 18px rgba(255, 106, 31, 0.35),
+    inset 0 1px 0 rgba(255, 230, 200, 0.45);
+}
+.asyl-btn.primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #ffa366, #ff7a2f);
+  border-color: #ffb067;
+}
+
+/* The map: the dark wall, a vignette, and a faint dot grid to read distance by. */
+.asyl-stage {
+  border-radius: 16px;
+  border: 1px solid rgba(255, 176, 103, 0.14);
+  box-shadow:
+    var(--asyl-shadow),
+    inset 0 0 120px rgba(0, 0, 0, 0.65);
+}
+.asyl-stage::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(rgba(255, 190, 140, 0.07) 1px, transparent 1.4px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse at center, #000 40%, transparent 85%);
+}
+
+/* The map's tools: one floating dock instead of loose buttons. */
+.asyl-toolbar {
+  right: auto;
+  max-width: calc(100% - 20px);
+  gap: 2px;
+  padding: 5px;
+  border-radius: 14px;
+  background: var(--asyl-glass);
+  border: 1px solid var(--asyl-rim);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(12px) saturate(1.2);
+  pointer-events: auto;
+}
+.asyl-toolbar > * {
+  background: transparent;
+}
+.asyl-toolbar .asyl-btn {
+  padding: 6px 10px;
+  border-color: transparent;
+  font-size: 12.5px;
+}
+.asyl-toolbar .asyl-btn:hover:not(:disabled) {
+  background: rgba(255, 176, 103, 0.1);
+  border-color: transparent;
+}
+.asyl-toolbar .asyl-btn.on {
+  background: rgba(255, 122, 47, 0.2);
+  border-color: rgba(255, 122, 47, 0.55);
+  color: var(--asyl-orange-hi);
+}
+.asyl-toolbar .asyl-btn-group {
+  padding: 0 3px;
+  margin: 0 2px;
+  border-left: 1px solid rgba(255, 176, 103, 0.14);
+  border-right: 1px solid rgba(255, 176, 103, 0.14);
+  gap: 2px;
+}
+.asyl-toolbar .asyl-btn-group .asyl-btn {
+  border-radius: 10px;
+  margin-left: 0;
+}
+
+/* Panels: glass with a warm rim. */
+.asyl-rail,
+.asyl-inspector {
+  border-radius: 16px;
+  border-color: var(--asyl-rim);
+  background: linear-gradient(180deg, rgba(255, 122, 47, 0.08), transparent 160px), var(--asyl-glass);
+  backdrop-filter: blur(14px) saturate(1.15);
+  box-shadow:
+    var(--asyl-shadow),
+    inset 0 1px 0 rgba(255, 220, 180, 0.07);
+}
+.asyl-inspector {
+  padding: 16px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 176, 103, 0.3) transparent;
+  animation: asyl-panel-in 0.18s var(--asyl-ease);
+}
+@keyframes asyl-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+}
+.asyl-rail-card {
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 176, 103, 0.12);
+  transition: border-color 0.15s;
+}
+.asyl-rail-card:hover {
+  border-color: rgba(255, 176, 103, 0.22);
+}
+.asyl-rail-body h3,
+.asyl-insp-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.asyl-rail-body h3::before,
+.asyl-insp-section h3::before {
+  content: "";
+  width: 3px;
+  height: 11px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #ffb067, #ff6a1f);
+  flex: none;
+}
+.asyl-insp-section {
+  border-top-color: rgba(255, 176, 103, 0.12);
+  padding-top: 12px;
+}
+.asyl-insp-title h2 {
+  font-size: 19px;
+  letter-spacing: -0.01em;
+}
+.asyl-stats span {
+  border: 1px solid rgba(255, 176, 103, 0.1);
+  background: rgba(0, 0, 0, 0.32);
+}
+.asyl-stats b {
+  font-size: 18px;
+}
+
+/* Over the map: legend and status as glass. */
+.asyl-map-legend,
+.asyl-status,
+.asyl-draw-editor,
+.asyl-ask,
+.asyl-keys {
+  background: var(--asyl-glass);
+  border-color: var(--asyl-rim);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
+}
+.asyl-map-legend {
+  border-radius: 12px;
+}
+.asyl-status {
+  border-radius: 12px;
+  padding-left: 16px;
+  border-left: 3px solid var(--asyl-orange);
+  animation: asyl-toast 0.2s var(--asyl-ease);
+}
+.asyl-status.error {
+  border-left-color: var(--asyl-bad);
+}
+@keyframes asyl-toast {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+}
+.asyl-draw-editor,
+.asyl-ask {
+  top: 72px;
+}
+.asyl-draw-hint {
+  top: 72px;
+  backdrop-filter: blur(8px);
+}
+
+/* Scrollbars in the panels, thin and warm. */
+.asyl-app ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.asyl-app ::-webkit-scrollbar-thumb {
+  background: rgba(255, 176, 103, 0.25);
+  border-radius: 8px;
+}
+.asyl-app ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .asyl-inspector,
+  .asyl-status,
+  .asyl-pair,
+  .asyl-pair-scrim,
+  .asyl-sr {
+    animation: none;
+  }
+}
+@media (max-width: 900px) {
+  .asyl-top {
+    margin: 6px 8px 8px;
+    padding: 8px 10px;
+  }
+  .asyl-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .asyl-inspector {
+    background: #160e0a;
+    border-radius: 16px 16px 0 0;
+    animation: none;
+  }
+}
+/* Headings read from the left, with whatever action they carry on the right. */
+.asyl-rail-card h3 {
+  justify-content: flex-start;
+}
+.asyl-rail-card h3 > .asyl-link,
+.asyl-rail-card h3 > button:last-child,
+.asyl-insp-section h3 > .asyl-seg-small {
+  margin-left: auto;
+}
+.asyl-insp-section h3 > .asyl-seg-small {
+  float: none;
+  margin-top: 0;
+}
