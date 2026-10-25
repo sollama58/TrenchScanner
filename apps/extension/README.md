@@ -113,3 +113,7 @@ the site's Top Traders tab and opens the panel's bubble map in a box on the page
 (`src/content/mapTab.ts`). Unlike the rings, this sends the viewed coin's address to TrenchScanner
 (`{type: "map"}`, cached 30s, and `{type: "mapWait"}` while the box is open, so it redraws when
 the coin's next reading is written), alerted or not; turn it off to stop that.
+
+0.5.2: links back to TrenchScanner open the coin's token view (`?token=<mint>`, read by the site's
+`tradeLink.ts`) rather than TokenSage, and an on-page alert shows once per coin, whichever models
+or filters call it later.

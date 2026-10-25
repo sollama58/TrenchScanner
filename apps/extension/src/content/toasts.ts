@@ -1,4 +1,4 @@
-import { siteUrl } from "../panel/card";
+import { siteUrl, trenchUrl } from "../panel/card";
 import { pillSegments, type PillSegment } from "../shared/pill";
 import { colorsOf, colorVars, toastPartOn, type TooltipPrefs } from "../shared/tooltip";
 import type { FeedAnswer, OverlayBubbleTotals, OverlaySettings, OverlayToken, Site } from "../shared/types";
@@ -57,6 +57,8 @@ export class Toasts {
   private readonly root: ShadowRoot;
   private readonly vars = document.createElement("style");
   private readonly seen = new Set<string>();
+  /** Coins already toasted (or in the feed when toasts started): each is toasted once. */
+  private readonly toasted = new Set<string>();
   private readonly shown: Shown[] = [];
   private primed = false;
   private timer: number | undefined;
@@ -93,6 +95,7 @@ export class Toasts {
     if (!wasOn && this.on) {
       this.primed = false;
       this.seen.clear();
+      this.toasted.clear();
     }
     if (!this.on) for (const s of [...this.shown]) this.dismiss(s);
     else void this.poll();
@@ -115,23 +118,32 @@ export class Toasts {
     }
   }
 
-  /** Exposed for tests: each new call or match not seen before, toasted when it passes. */
+  /**
+   * Exposed for tests: each new call or match not seen before, toasted when it passes. A coin is
+   * toasted once (user ask 2026-10-25): its first passing call or match, and no later one, whichever
+   * models or filters call it after. Coins already in the feed when toasts start count as toasted.
+   */
   receive(tokens: readonly OverlayToken[]): void {
     const fresh: { token: OverlayToken; kind: "model" | "filter"; label: string }[] = [];
     for (const token of tokens) {
+      let pick: (typeof fresh)[number] | null = null;
       for (const call of token.modelCalls) {
         const key = `m:${token.mint}:${call.model}`;
         if (this.seen.has(key)) continue;
         this.seen.add(key);
-        if (this.primed && this.passes(token, call.calibratedPct))
-          fresh.push({ token, kind: "model", label: call.name ?? call.model });
+        if (!pick && this.passes(token, call.calibratedPct))
+          pick = { token, kind: "model", label: call.name ?? call.model };
       }
       for (const match of token.filterMatches) {
         const key = `f:${token.mint}:${match.filterId}`;
         if (this.seen.has(key)) continue;
         this.seen.add(key);
-        if (this.primed && this.prefs.toast.filters)
-          fresh.push({ token, kind: "filter", label: match.filterName });
+        if (!pick && this.prefs.toast.filters) pick = { token, kind: "filter", label: match.filterName };
+      }
+      if (!this.primed) this.toasted.add(token.mint);
+      else if (pick && !this.toasted.has(token.mint)) {
+        this.toasted.add(token.mint);
+        fresh.push(pick);
       }
     }
     this.primed = true;
@@ -189,12 +201,7 @@ export class Toasts {
       node.addEventListener("click", () => {
         this.dismiss(entry);
         if (t.click === "site") location.assign(siteUrl(this.site, token.mint));
-        else
-          window.open(
-            `https://trenchscanner.app/?sage=${encodeURIComponent(token.mint)}`,
-            "_blank",
-            "noopener",
-          );
+        else window.open(trenchUrl(token.mint), "_blank", "noopener");
       });
     }
     if (t.seconds > 0) entry.timer = window.setTimeout(() => this.dismiss(entry), t.seconds * 1000);

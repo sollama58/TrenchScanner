@@ -69,7 +69,7 @@ describe("the panel's bubble map", () => {
     const view = bubbleMapView(map);
     expect(view.querySelectorAll("circle").length).toBeGreaterThanOrEqual(4);
     expect(view.textContent).toContain("Sniper 1 · 6.0%");
-    expect(view.querySelector("a")!.getAttribute("href")).toBe(`https://trenchscanner.app/?sage=${A}`);
+    expect(view.querySelector("a")!.getAttribute("href")).toBe(`https://trenchscanner.app/?token=${A}`);
     expect(bubbleMapView(null).textContent).toMatch(/No holder reading/);
   });
 });

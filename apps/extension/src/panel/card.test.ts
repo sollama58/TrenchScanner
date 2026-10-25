@@ -30,7 +30,7 @@ describe("panel cards", () => {
     expect(hrefs).toEqual([
       `https://axiom.trade/t/${A}`,
       `https://trade.padre.gg/trade/solana/${A}`,
-      `https://trenchscanner.app/?sage=${A}`,
+      `https://trenchscanner.app/?token=${A}`,
     ]);
     for (const a of card.querySelectorAll("a")) expect(a.rel).toBe("noopener noreferrer");
     expect(card.className).toBe("card model");
