@@ -5165,6 +5165,91 @@ body.util-open .qt-drawer > * {
   background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 
+/* The CA box: paste a contract address and the coin loads. */
+.qt-ca {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.qt-ca-row {
+  display: flex;
+  gap: 8px;
+}
+.qt-ca-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.qt-ca-icon {
+  position: absolute;
+  left: 11px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.qt-ca-field input {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  padding: 0 34px 0 33px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--ink);
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  background: var(--surface-2);
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.qt-ca-field input::placeholder {
+  font-family: var(--font);
+  color: var(--muted);
+}
+.qt-ca-field input:focus {
+  outline: none;
+  border-color: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 16%, transparent);
+}
+.qt-ca.loaded .qt-ca-field input {
+  border-color: color-mix(in srgb, var(--good-ink) 55%, var(--border-strong));
+}
+.qt-ca.loaded .qt-ca-icon {
+  color: var(--good-ink);
+}
+.qt-ca-clear {
+  position: absolute;
+  right: 4px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+.qt-ca-paste {
+  flex: none;
+  height: 40px;
+  padding: 0 16px;
+  font-weight: 750;
+  color: #1a1206;
+  border: none;
+  border-radius: 11px;
+  background: linear-gradient(145deg, #ffd25e, var(--warn));
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.35) inset;
+}
+.qt-ca-paste:hover:not(:disabled) {
+  color: #1a1206;
+  background: linear-gradient(145deg, #ffdc7a, var(--warn));
+  filter: brightness(1.04);
+}
+.qt-ca-paste:focus-visible {
+  outline: 2px solid var(--brand-ink);
+  outline-offset: 2px;
+}
+.qt-ca-note,
+.qt-pasted-note {
+  margin: 0;
+}
+
 /* The holdings dropdown. */
 .qt-picker {
   position: relative;
