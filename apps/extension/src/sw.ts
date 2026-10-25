@@ -141,13 +141,25 @@ async function bubble(mint: unknown): Promise<BubbleAnswer> {
   }
 }
 
-/** Trade Buddy: the coins the account's wallet bought, with their PnL. */
-async function buddy(): Promise<BuddyRead> {
+/**
+ * Trade Buddy: the coins the account's wallet bought, with their PnL. The last answer is kept in
+ * session storage (cleared when the browser closes), so a reopened panel draws it at once while
+ * the fresh read runs; `cached` asks for that alone.
+ */
+async function buddy(cached = false): Promise<BuddyRead> {
   const { key } = await stored();
   if (!key) return { buddy: null, problem: "disconnected" };
+  if (!lastBuddy) {
+    const { buddy: kept } = (await chrome.storage.session.get("buddy").catch(() => ({}))) as {
+      buddy?: BuddyAnswer;
+    };
+    lastBuddy = kept ?? null;
+  }
+  if (cached) return { buddy: lastBuddy, problem };
   try {
     lastBuddy = await api.buddy(key);
     problem = null;
+    void chrome.storage.session.set({ buddy: lastBuddy }).catch(() => undefined);
   } catch (e) {
     noteFailure(e);
   }
@@ -185,6 +197,7 @@ async function connect(raw: unknown): Promise<{ ok: boolean; error?: string }> {
     problem = null;
     lastTokens = [];
     lastBuddy = null;
+    void chrome.storage.session.remove("buddy").catch(() => undefined);
     // An open panel redraws connected.
     void chrome.runtime.sendMessage({ type: "connected" }).catch(() => undefined);
     return { ok: true };
@@ -206,11 +219,12 @@ async function handle(request: PanelRequest): Promise<unknown> {
     case "bubble":
       return bubble(request.mint);
     case "buddy":
-      return buddy();
+      return buddy(request.cached === true);
     case "disconnect":
       await chrome.storage.local.remove(["key", "wallet", "aiReviews", "pro", "refused"]);
       lastTokens = [];
       lastBuddy = null;
+      void chrome.storage.session.remove("buddy").catch(() => undefined);
       problem = "disconnected";
       return { ok: true };
     case "saveSettings": {

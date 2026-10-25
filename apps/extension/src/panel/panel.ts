@@ -40,8 +40,8 @@ function connectUrl(): string {
 }
 /** How often the open panel re-reads the list. Hidden panels don't poll. */
 const POLL_MS = 5_000;
-/** How often Trade Buddy's coins are re-read while it shows. */
-const BUDDY_POLL_MS = 10_000;
+/** How often Trade Buddy's coins are re-read while it shows (the API reuses an answer for 8 s). */
+const BUDDY_POLL_MS = 5_000;
 /** How often an open bubble map is re-read (the site's token view reads its maps every 30 s). */
 const MAP_POLL_MS = 30_000;
 
@@ -222,8 +222,8 @@ function tabs(): HTMLElement {
     button.addEventListener("click", () => {
       view = id;
       draw();
-      // Trade Buddy reads at once rather than on the next tick.
-      if (id === "buddy") {
+      // Trade Buddy reads at once rather than on the next tick, unless a read just went out.
+      if (id === "buddy" && Date.now() - buddyReadAt >= 2_000) {
         buddyReadAt = 0;
         void poll();
       }
@@ -667,6 +667,18 @@ async function poll(): Promise<void> {
 
 async function refresh(): Promise<void> {
   status = await send<Status>({ type: "status" });
+  // Trade Buddy's last answer draws at once, and a fresh read starts now, so the tab is ready
+  // before it is opened.
+  if (status?.connected) {
+    buddy ??= await send<BuddyRead>({ type: "buddy", cached: true });
+    if (!buddy?.buddy) buddy = null;
+    buddyReadAt = Date.now();
+    void send<BuddyRead>({ type: "buddy" }).then((next) => {
+      if (!next) return;
+      buddy = next;
+      if (view === "buddy") draw();
+    });
+  }
   tipPrefs = cleanTooltip(await send<TooltipPrefs>({ type: "tooltip" }));
   draw();
   if (status?.connected) await poll();

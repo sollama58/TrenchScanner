@@ -150,7 +150,7 @@ export type PanelRequest =
   | { type: "status" }
   | { type: "feed" }
   | { type: "bubble"; mint: string }
-  | { type: "buddy" }
+  | { type: "buddy"; cached?: boolean }
   | { type: "disconnect" }
   | { type: "saveSettings"; settings: OverlaySettings }
   | { type: "tooltip" }
