@@ -52,9 +52,17 @@ describe.skipIf(!dbAvailable)("addPastHolders", () => {
     );
   });
 
+  it("keeps to the reader's own least SOL, and to a cap with the full count beside it", async () => {
+    const big = await addPastHolders(new GraphBuilder(), MINT, { minSol: 1 });
+    expect(big).toMatchObject({ total: 1, shown: 1, minSol: 1 });
+    expect(pastHoldersNote(big)).toMatch(/^1 wallet put 1 SOL or more into it/);
+    const capped = await addPastHolders(new GraphBuilder(), MINT, { minSol: 0, max: 1 });
+    expect(capped).toMatchObject({ total: 3, shown: 1 });
+  });
+
   it("says so when the coin's trades were never read", async () => {
     const read = await addPastHolders(new GraphBuilder(), BARE);
-    expect(read).toEqual({ total: 0, shown: 0, tape: null });
+    expect(read).toEqual({ total: 0, shown: 0, minSol: 0.1, tape: null });
     expect(pastHoldersNote(read)).toMatch(/hasn't read this coin's trades/);
   });
 });

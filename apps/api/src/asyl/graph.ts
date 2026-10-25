@@ -51,8 +51,12 @@ export const COTRADERS_ALL_MAX = 500;
 export const SIDES_MAX = 24;
 /** Holders drawn on a coin's map: its top 50, as BubbleMapHolders keeps them. */
 export const HOLDERS_MAX = 50;
+/** ...and when the reader asks for every holder that clears their cutoff (user ask 2026-10-25). */
+export const HOLDERS_ALL_MAX = 200;
 /** Past holders drawn on a coin's map, the ones that put in most first (user ask 2026-10-25). */
 export const PAST_HOLDERS_MAX = 150;
+/** ...and once the reader agreed to the count, every one of them up to this. */
+export const PAST_HOLDERS_ALL_MAX = 1000;
 /** What a past holder put in, at least: SOL rather than tokens, so it means the same on every coin. */
 export const PAST_HOLDER_MIN_SOL = 0.1;
 /** How far back the stored tables reach, for the coverage line. */
@@ -479,7 +483,10 @@ export async function addSides(
 }
 
 /** The holders of a coin as TrenchScanner last read them: its bubble map, else the newest scan's list. */
-export async function loadStoredHolders(mint: string): Promise<{
+export async function loadStoredHolders(
+  mint: string,
+  limit = HOLDERS_MAX,
+): Promise<{
   holders: { wallet: string; pct: number }[];
   readAt: Date | null;
   source: "map" | "scan" | null;
@@ -490,7 +497,7 @@ export async function loadStoredHolders(mint: string): Promise<{
   });
   if (map && Array.isArray(map.holders)) {
     return {
-      holders: (map.holders as { wallet: string; pct: number }[]).slice(0, HOLDERS_MAX),
+      holders: (map.holders as { wallet: string; pct: number }[]).slice(0, limit),
       readAt: map.readAt,
       source: "map",
     };
@@ -508,7 +515,7 @@ export async function loadStoredHolders(mint: string): Promise<{
     .map((h) => ({ wallet: String(h.wallet ?? ""), pct: Number(h.pct ?? 0) }))
     .filter((h) => h.wallet.length > 0 && Number.isFinite(h.pct));
   return {
-    holders: holders.slice(0, HOLDERS_MAX),
+    holders: holders.slice(0, limit),
     readAt: snap?.takenAt ?? null,
     source: holders.length ? "scan" : null,
   };
@@ -578,6 +585,8 @@ export interface PastHoldersRead {
   /** Wallets that put in at least PAST_HOLDER_MIN_SOL, and how many of them are drawn. */
   total: number;
   shown: number;
+  /** The least SOL put in that counts. */
+  minSol: number;
   /** The trade read they come from; null when TrenchScanner hasn't read the coin's trades. */
   tape: { status: string; launchAt: Date | null; windowEnd: Date; closedThrough: Date | null } | null;
 }
@@ -586,7 +595,12 @@ export interface PastHoldersRead {
  * Everyone who ever bought a coin with at least PAST_HOLDER_MIN_SOL, sold out or not, from its
  * stored trade read (TokenWalletActivity), with what they put in and took out, and what ties them.
  */
-export async function addPastHolders(g: GraphBuilder, mint: string): Promise<PastHoldersRead> {
+export async function addPastHolders(
+  g: GraphBuilder,
+  mint: string,
+  opts: { minSol?: number; max?: number } = {},
+): Promise<PastHoldersRead> {
+  const minSol = opts.minSol ?? PAST_HOLDER_MIN_SOL;
   g.node(mint, "token");
   const token = await prisma.token.findUnique({
     where: { mintAddress: mint },
@@ -596,8 +610,8 @@ export async function addPastHolders(g: GraphBuilder, mint: string): Promise<Pas
     },
   });
   const tape = token?.tradeTape && token.tradeTape.status !== "failed" ? token.tradeTape : null;
-  if (!token || !tape) return { total: 0, shown: 0, tape: null };
-  const where = { tokenId: token.id, buys: { gt: 0 }, solIn: { gte: PAST_HOLDER_MIN_SOL } };
+  if (!token || !tape) return { total: 0, shown: 0, minSol, tape: null };
+  const where = { tokenId: token.id, buys: { gt: 0 }, solIn: { gte: minSol } };
   const [rows, total] = await Promise.all([
     prisma.tokenWalletActivity.findMany({
       where,
@@ -611,7 +625,7 @@ export async function addPastHolders(g: GraphBuilder, mint: string): Promise<Pas
         launchSniper: true,
       },
       orderBy: [{ solIn: "desc" }, { wallet: "asc" }],
-      take: PAST_HOLDERS_MAX,
+      take: opts.max ?? PAST_HOLDERS_MAX,
     }),
     prisma.tokenWalletActivity.count({ where }),
   ]);
@@ -625,7 +639,7 @@ export async function addPastHolders(g: GraphBuilder, mint: string): Promise<Pas
     mint,
     shown.map((r) => r.wallet),
   );
-  return { total, shown: shown.length, tape };
+  return { total, shown: shown.length, minSol, tape };
 }
 
 export interface KnownDeployer {

@@ -215,6 +215,21 @@ export interface Dossier {
 
 const enc = encodeURIComponent;
 
+/** What a holder read keeps: the least share held now, the least SOL put in, and every one of them. */
+export interface HolderQuery {
+  minPct?: number;
+  minSol?: number;
+  all?: boolean;
+}
+const holderQuery = (q?: HolderQuery) => {
+  const p = new URLSearchParams();
+  if (q?.minPct) p.set("minPct", String(q.minPct));
+  if (q?.minSol !== undefined) p.set("minSol", String(q.minSol));
+  if (q?.all) p.set("all", "1");
+  const s = p.toString();
+  return s ? `?${s}` : "";
+};
+
 export const asylApi = {
   me: () => api<AsylMe>("/asyl/me"),
   resolve: (address: string) =>
@@ -225,9 +240,12 @@ export const asylApi = {
   pair: (a: string, b: string) => api<PairRead>(`/asyl/pair/${enc(a)}/${enc(b)}`),
   similar: (wallet: string, all = false) =>
     api<SimilarRead>(`/asyl/wallet/${enc(wallet)}/similar${all ? "?all=1" : ""}`),
-  token: (mint: string) => api<GraphRead & { readAt: string | null }>(`/asyl/token/${enc(mint)}`),
-  pastHolders: (mint: string) =>
-    api<GraphRead & { total: number; shown: number; note: string }>(`/asyl/token/${enc(mint)}/past-holders`),
+  token: (mint: string, q?: HolderQuery) =>
+    api<GraphRead & { readAt: string | null }>(`/asyl/token/${enc(mint)}${holderQuery(q)}`),
+  pastHolders: (mint: string, q?: HolderQuery) =>
+    api<GraphRead & { total: number; shown: number; note: string }>(
+      `/asyl/token/${enc(mint)}/past-holders${holderQuery(q)}`,
+    ),
   deployer: (mint: string) =>
     post<
       GraphRead & {
@@ -252,7 +270,8 @@ export const asylApi = {
         results?: Record<string, "found" | "none" | "empty" | "busy" | "failed">;
       }
     >("/asyl/chain/funders", { wallets }),
-  chainToken: (mint: string) => post<ChainRead>(`/asyl/chain/token/${enc(mint)}`),
+  chainToken: (mint: string, q?: HolderQuery) =>
+    post<ChainRead>(`/asyl/chain/token/${enc(mint)}${holderQuery(q)}`),
   trace: (wallet: string) =>
     post<ChainRead & { trace: { path: string[]; stop: string; asked: number }; note: string }>(
       `/asyl/chain/trace/${enc(wallet)}`,
