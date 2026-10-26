@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ShareImageDialog } from "../components/ShareImageDialog";
 import { asylApi, type MapDoc } from "./asylApi";
 import { renderMapCard } from "./asylCard";
+import { renderAnalystCard } from "./analystCard";
+import { AnalystLegend } from "./AnalystLayer";
 import { GraphView, MapLegend, type GraphViewHandle } from "./GraphView";
 import {
   DEFAULT_TIME_LABELS,
@@ -115,9 +117,14 @@ export function SharedView({ slug }: { slug: string }) {
             readOnly
             drawings={cleanDrawings(map.doc.drawings)}
             grid={map.doc.grid ?? false}
+            analyst={map.doc.analyst ?? false}
             timeLabels={map.doc.times ? { ...DEFAULT_TIME_LABELS, ...map.doc.times } : undefined}
           />
-          <MapLegend graph={graph} />
+          {map.doc.analyst ? (
+            <AnalystLegend graph={graph} focus={map.doc.focus} />
+          ) : (
+            <MapLegend graph={graph} />
+          )}
           {map.doc.note && <p className="asyl-shared-note">{map.doc.note}</p>}
         </main>
         {node && (
@@ -162,7 +169,7 @@ export function SharedView({ slug }: { slug: string }) {
           link={sharedLink(slug)}
           wide
           render={() =>
-            renderMapCard({
+            (map.doc.analyst ? renderAnalystCard : renderMapCard)({
               title: map.title,
               graph,
               layout: layout.current,

@@ -32,6 +32,8 @@ import {
   type LayoutState,
 } from "./layout";
 import { avatarUrl } from "./asylApi";
+import { analystLayout, analystScene, analystView, boxesOf, sceneBounds } from "./analyst";
+import { AnalystDefs, AnalystLinks, AnalystNodes } from "./AnalystLayer";
 import { tokenImageSources } from "../format";
 
 /**
@@ -283,6 +285,9 @@ function NodeImage({ sources, r, tile }: { sources: string[]; r: number; tile: b
   );
 }
 
+/** Analyst Mode's smallest framing scale: below it, the boxes' text is too small to read. */
+const ANALYST_READABLE = 0.55;
+
 export interface View {
   x: number;
   y: number;
@@ -342,6 +347,8 @@ export function GraphView({
   grid = false,
   picked,
   onPick,
+  analyst = false,
+  solUsd = null,
 }: {
   graph: AsylGraph;
   layout: LayoutState;
@@ -372,6 +379,10 @@ export function GraphView({
   /** Bubbles picked together by a box, a lasso or Ctrl-click, to hide or change at once. */
   picked?: ReadonlySet<string>;
   onPick?: (ids: string[], mode: PickMode) => void;
+  /** Analyst Mode: the map as a flowchart of boxes and right-angled lines (analyst.ts). */
+  analyst?: boolean;
+  /** SOL's price, for Analyst Mode's amounts in dollars. */
+  solUsd?: number | null;
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [, setFrame] = useState(0);
@@ -412,6 +423,13 @@ export function GraphView({
     return m;
   }, [graph]);
   const byId = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph]);
+  // Analyst Mode: the flowchart's own view of the map (coin traders folded in) and its boxes.
+  const av = useMemo(() => (analyst ? analystView(graph, focus) : null), [analyst, graph, focus]);
+  const aBoxes = useMemo(() => (av ? boxesOf(av, focus) : null), [av, focus]);
+  const analystRef = useRef(analyst);
+  analystRef.current = analyst;
+  /** Boxes the reader dragged in Analyst Mode, which its layout leaves where they were put. */
+  const aHeld = useRef(new Map<string, { x: number; y: number }>());
   const reduceMotion = useMemo(
     () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches,
     [],
@@ -424,11 +442,14 @@ export function GraphView({
 
   const fit = useCallback(() => {
     const { w, h } = sizeOf();
-    const b = bounds(
-      layout,
-      graph.nodes.map((n) => n.id),
-      radius,
-    );
+    const b =
+      av && aBoxes
+        ? sceneBounds(analystScene(av, aBoxes, layout.pos, null), layout.pos)
+        : bounds(
+            layout,
+            graph.nodes.map((n) => n.id),
+            radius,
+          );
     const bw = Math.max(1, b.maxX - b.minX);
     const bh = Math.max(1, b.maxY - b.minY);
     // The toolbar floats over the map's top: fit below it, so no bubble lands under a button.
@@ -439,9 +460,16 @@ export function GraphView({
       ?.getBoundingClientRect();
     const top = svg && bar ? Math.min(h / 2, Math.max(40, bar.bottom - svg.top + 16)) : 40;
     const room = h - top - 40;
-    const k = Math.min(2.2, Math.max(0.15, Math.min((w - 80) / bw, room / bh)));
+    const fitK = Math.min((w - 80) / bw, room / bh);
+    if (av && fitK < ANALYST_READABLE) {
+      // A flowchart too big to read whole: at the smallest size its text reads, from its top.
+      const k = ANALYST_READABLE;
+      setView({ k, x: w / 2 - ((b.minX + b.maxX) / 2) * k, y: top + 10 - b.minY * k });
+      return;
+    }
+    const k = Math.min(2.2, Math.max(0.15, fitK));
     setView({ k, x: w / 2 - ((b.minX + b.maxX) / 2) * k, y: top + room / 2 - ((b.minY + b.maxY) / 2) * k });
-  }, [graph, layout, radius]);
+  }, [graph, layout, radius, av, aBoxes]);
 
   useImperativeHandle(
     handle,
@@ -538,6 +566,8 @@ export function GraphView({
   // Lay out new nodes, then let the simulation settle them.
   const fittedOnce = useRef(false);
   useEffect(() => {
+    // Analyst Mode lays the map out itself, below.
+    if (analystRef.current) return;
     const added = placeNew(layout, graph);
     // A saved map opens just as it was left: nothing new, so nothing to settle.
     if (added.length === 0 && !fittedOnce.current && !simStarted.current) {
@@ -582,6 +612,50 @@ export function GraphView({
     // layoutKey stands for the graph's node set; fit and radius follow the graph.
   }, [layoutKey]);
 
+  // Analyst Mode: laid out as a flowchart whenever what it shows changes, and framed on the way in.
+  // On the way out, the free layout takes over from where the boxes were.
+  const avKey = av ? av.graph.nodes.map((n) => n.id).join(",") : "";
+  const wasAnalyst = useRef(false);
+  const syncMembers = () => {
+    // A folded wallet sits on its coin's box, so a box or lasso round the box picks it too.
+    for (const [m, c] of av?.memberOf ?? []) {
+      const p = layout.pos.get(c);
+      if (p) layout.pos.set(m, { ...p });
+    }
+  };
+  useEffect(() => {
+    if (analyst && av && aBoxes) {
+      cancelAnimationFrame(sim.current.raf);
+      sim.current.raf = 0;
+      const first = !wasAnalyst.current;
+      wasAnalyst.current = true;
+      placeNew(layout, graph);
+      for (const [id, p] of analystLayout(av.graph, aBoxes, aHeld.current)) {
+        layout.pos.set(id, p);
+        layout.vel.set(id, { x: 0, y: 0 });
+      }
+      syncMembers();
+      setFrame((f) => f + 1);
+      if (first || !fittedOnce.current) {
+        fittedOnce.current = true;
+        fit();
+      }
+      return;
+    }
+    if (!wasAnalyst.current) return;
+    wasAnalyst.current = false;
+    aHeld.current = new Map();
+    fittedOnce.current = false;
+    placeNew(layout, graph);
+    if (reduceMotion) {
+      for (let t = 0; t < 300; t++) if (step(layout, graph, 1 - t / 300, radius) < 0.05 && t > 20) break;
+      if (gridRef.current) snap();
+      fittedOnce.current = true;
+      setFrame((f) => f + 1);
+      fit();
+    } else runSim(1);
+  }, [analyst, avKey]);
+
   // Turning grid mode on puts the map on the grid; a new cell size (a longer name, a bigger bubble)
   // spreads the grid out or draws it in, keeping each bubble's place on it.
   const prevCell = useRef<Cell | null>(null);
@@ -596,8 +670,8 @@ export function GraphView({
       for (const [id, p] of layout.pos)
         layout.pos.set(id, { x: (p.x * cell.w) / was.w, y: (p.y * cell.h) / was.h });
     prevCell.current = cell;
-    // While the simulation runs, it snaps when it settles.
-    if (sim.current.raf) return;
+    // While the simulation runs, it snaps when it settles; Analyst Mode keeps its own layout.
+    if (sim.current.raf || analystRef.current) return;
     snap();
     setFrame((f) => f + 1);
   }, [grid, cell.w, cell.h]);
@@ -703,7 +777,7 @@ export function GraphView({
       carry:
         id && picked?.has(id) && picked.size > 1
           ? new Map([...picked].filter((x) => x !== id).map((x) => [x, 1]))
-          : id && !e.shiftKey
+          : id && !e.shiftKey && !analyst
             ? carriedBy(graph, id, layout.pinned)
             : new Map(),
     };
@@ -786,15 +860,22 @@ export function GraphView({
         const p = layout.pos.get(id);
         if (p) layout.pos.set(id, { x: p.x + (to.x - from.x) * share, y: p.y + (to.y - from.y) * share });
         // A pick moved as one stays where it is put, each bubble of it.
-        if (group) {
+        if (group && analyst) aHeld.current.set(id, layout.pos.get(id)!);
+        else if (group) {
           layout.pinned.add(id);
           layout.vel.set(id, { x: 0, y: 0 });
         }
       }
       layout.pos.set(d.id, to);
-      layout.pinned.add(d.id);
-      layout.vel.set(d.id, { x: 0, y: 0 });
-      if (!reduceMotion) runSim(0.25);
+      if (analyst) {
+        // A box dragged in Analyst Mode keeps its place there; the free layout's pins are its own.
+        aHeld.current.set(d.id, to);
+        syncMembers();
+      } else {
+        layout.pinned.add(d.id);
+        layout.vel.set(d.id, { x: 0, y: 0 });
+        if (!reduceMotion) runSim(0.25);
+      }
       setFrame((f) => f + 1);
     } else {
       setView((v) => ({ ...v, x: v.x + e.clientX - prev.x, y: v.y + e.clientY - prev.y }));
@@ -850,7 +931,7 @@ export function GraphView({
       // A plain click on the background lets the pick go.
       if (!d.id && picked?.size) onPick?.([], "set");
     } else if (d.id && !readOnly) {
-      if (grid && !sim.current.raf) {
+      if (grid && !analyst && !sim.current.raf) {
         snap();
         setFrame((f) => f + 1);
       }
@@ -896,12 +977,13 @@ export function GraphView({
   }, [graph, selected]);
 
   const markerKinds = EDGE_KINDS.filter((k) => EDGE_STYLE[k].head);
+  const scene = av && aBoxes ? analystScene(av, aBoxes, layout.pos, solUsd) : null;
 
   return (
     <div className="asyl-graph">
       <svg
         ref={svgRef}
-        className={`asyl-graph-svg${tool && !readOnly ? ` tool-${tool}` : ""}`}
+        className={`asyl-graph-svg${tool && !readOnly ? ` tool-${tool}` : ""}${scene ? " analyst" : ""}`}
         role="img"
         aria-label={`Map of ${graph.nodes.length} wallets and coins with ${graph.edges.length} links`}
         onPointerDown={(e) => onPointerDown(e, null)}
@@ -931,9 +1013,10 @@ export function GraphView({
           <clipPath id="asyl-clip-tile" clipPathUnits="objectBoundingBox">
             <rect x="0" y="0" width="1" height="1" rx="0.22" />
           </clipPath>
+          {scene && <AnalystDefs />}
         </defs>
         <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
-          {grid && (
+          {grid && !scene && (
             <>
               <defs>
                 <pattern
@@ -950,154 +1033,161 @@ export function GraphView({
               <rect x={-1e5} y={-1e5} width={2e5} height={2e5} fill="url(#asyl-grid)" pointerEvents="none" />
             </>
           )}
-          <g className="asyl-edges">
-            {graph.edges.map((e) => {
-              const a = layout.pos.get(e.a);
-              const b = layout.pos.get(e.b);
-              if (!a || !b) return null;
-              const ra = radius(e.a);
-              const rb = radius(e.b);
-              const dx = b.x - a.x;
-              const dy = b.y - a.y;
-              const d = Math.hypot(dx, dy) || 1;
-              // From rim to rim, and bowed a little so two kinds between one pair don't overlap.
-              const sx = a.x + (dx / d) * ra;
-              const sy = a.y + (dy / d) * ra;
-              const ex = b.x - (dx / d) * (rb + 2);
-              const ey = b.y - (dy / d) * (rb + 2);
-              const bow =
-                e.kind === "funded" ? 0 : e.kind === "transfer" ? 0.12 : e.kind === "side" ? -0.12 : 0.06;
-              const mx = (sx + ex) / 2 - (dy / d) * d * bow;
-              const my = (sy + ey) / 2 + (dx / d) * d * bow;
-              const dim = lit && !(lit.has(e.a) && lit.has(e.b));
-              const label = [
-                `${nodeName(byId.get(e.a)!)} → ${nodeName(byId.get(e.b)!)}`,
-                e.label,
-                (TIMED_KINDS as readonly string[]).includes(e.kind) ? (edgeTimeFull(e.at) ?? "") : "",
-                e.source === "chain" ? "From a chain read" : "",
-              ].filter(Boolean);
-              const st = EDGE_STYLE[e.kind];
-              const key = `${e.kind}|${e.a}|${e.b}|${e.mint ?? ""}`;
-              const path = (
-                <path
-                  key={key}
-                  d={`M${sx} ${sy} Q${mx} ${my} ${ex} ${ey}`}
-                  fill="none"
-                  stroke={EDGE_COLOUR[e.kind]}
-                  strokeWidth={widthOf(e, maxByKind) / Math.sqrt(view.k)}
-                  strokeOpacity={dim ? 0.12 : e.kind === "holds" ? 0.5 : 0.88}
-                  strokeDasharray={st.dash}
-                  strokeLinecap={e.kind === "cotrade" ? "round" : undefined}
-                  markerEnd={st.head ? `url(#asyl-head-${e.kind})` : undefined}
-                  className="asyl-edge"
-                  onPointerEnter={(ev) => showHover(ev, label)}
-                  onPointerLeave={() => setHover(null)}
-                />
-              );
-              const mid = { x: 0.25 * sx + 0.5 * mx + 0.25 * ex, y: 0.25 * sy + 0.5 * my + 0.25 * ey };
-              const z = 1 / Math.sqrt(view.k);
-              const deploy = e.kind === "created";
-              if (!deploy && e.source !== "chain") return path;
-              return (
-                <g key={key} opacity={dim ? (deploy ? 0.25 : 0.2) : 1}>
-                  {deploy && (
-                    // The Deployed line (user ask 2026-10-24: much more its own): a gold glow under
-                    // a marching line, and the deployer's D halfway along.
-                    <path
-                      d={`M${sx} ${sy} Q${mx} ${my} ${ex} ${ey}`}
-                      className="asyl-edge-glow"
-                      fill="none"
-                      stroke={EDGE_COLOUR.created}
-                      strokeWidth={9 * z}
-                      strokeLinecap="round"
-                      pointerEvents="none"
-                    />
-                  )}
-                  {deploy ? (
-                    <path
-                      d={`M${sx} ${sy} Q${mx} ${my} ${ex} ${ey}`}
-                      fill="none"
-                      stroke={EDGE_COLOUR.created}
-                      strokeWidth={3 * z}
-                      strokeDasharray={`${10 * z} ${4 * z}`}
-                      markerEnd={`url(#asyl-head-created)`}
-                      className="asyl-edge asyl-edge-deploy"
-                      onPointerEnter={(ev) => showHover(ev, label)}
-                      onPointerLeave={() => setHover(null)}
-                    />
-                  ) : (
-                    path
-                  )}
-                  {deploy ? (
-                    <g transform={`translate(${mid.x} ${mid.y}) scale(${z})`} className="asyl-dev-mark">
-                      <circle r={7} />
-                      <text y={3.4} textAnchor="middle">
-                        D
-                      </text>
-                    </g>
-                  ) : null}
-                  {e.source === "chain" && (
-                    // A chain read: a ringed dot halfway along, whatever the kind's own pattern.
-                    <circle
-                      cx={mid.x}
-                      cy={mid.y}
-                      r={3.4 * z}
-                      fill="#120c09"
-                      stroke="#fff"
-                      strokeWidth={1.5 * z}
-                      pointerEvents="none"
-                    />
-                  )}
-                </g>
-              );
-            })}
-          </g>
-          <g className="asyl-edge-times" pointerEvents="none">
-            {graph.edges.map((e) => {
-              // Times along the lines (user ask 2026-10-24): funding and deploys by default,
-              // transfers when switched on; as much of the date as the line has room for.
-              if (!(TIMED_KINDS as readonly string[]).includes(e.kind) || !timeLabels[e.kind as TimedKind])
-                return null;
-              const a = layout.pos.get(e.a);
-              const b = layout.pos.get(e.b);
-              if (!a || !b || !e.at) return null;
-              const dx = b.x - a.x;
-              const dy = b.y - a.y;
-              const d = Math.hypot(dx, dy) || 1;
-              const span = (d - radius(e.a) - radius(e.b)) * view.k;
-              // About 6px a character at 10.5px, and room left either side for the arrow.
-              const text = edgeTimeLabel(e.at, Math.floor((span - 28) / 6));
-              if (!text) return null;
-              const dim = lit && !(lit.has(e.a) && lit.has(e.b));
-              // The line's middle (its bow, as drawn above), and its angle kept upright.
-              const bow = e.kind === "funded" ? 0 : e.kind === "transfer" ? 0.12 : 0.06;
-              const ra = radius(e.a);
-              const rb = radius(e.b) + 2;
-              const sx = a.x + (dx / d) * ra;
-              const sy = a.y + (dy / d) * ra;
-              const ex = b.x - (dx / d) * rb;
-              const ey = b.y - (dy / d) * rb;
-              const mx = (sx + ex) / 2 - dy * bow;
-              const my = (sy + ey) / 2 + dx * bow;
-              const x = 0.25 * sx + 0.5 * mx + 0.25 * ex;
-              const y = 0.25 * sy + 0.5 * my + 0.25 * ey;
-              let angle = (Math.atan2(ey - sy, ex - sx) * 180) / Math.PI;
-              if (angle > 90) angle -= 180;
-              else if (angle < -90) angle += 180;
-              return (
-                <g
-                  key={`t|${e.kind}|${e.a}|${e.b}|${e.mint ?? ""}`}
-                  transform={`translate(${x} ${y}) rotate(${angle}) scale(${1 / view.k})`}
-                  opacity={dim ? 0.2 : 1}
-                  className="asyl-edge-time"
-                >
-                  <text y={e.kind === "created" ? -12 : -6} textAnchor="middle" fill={EDGE_COLOUR[e.kind]}>
-                    {text}
-                  </text>
-                </g>
-              );
-            })}
-          </g>
+          {scene && (
+            <AnalystLinks scene={scene} lit={lit} onHover={showHover} onLeave={() => setHover(null)} />
+          )}
+          {!scene && (
+            <g className="asyl-edges">
+              {graph.edges.map((e) => {
+                const a = layout.pos.get(e.a);
+                const b = layout.pos.get(e.b);
+                if (!a || !b) return null;
+                const ra = radius(e.a);
+                const rb = radius(e.b);
+                const dx = b.x - a.x;
+                const dy = b.y - a.y;
+                const d = Math.hypot(dx, dy) || 1;
+                // From rim to rim, and bowed a little so two kinds between one pair don't overlap.
+                const sx = a.x + (dx / d) * ra;
+                const sy = a.y + (dy / d) * ra;
+                const ex = b.x - (dx / d) * (rb + 2);
+                const ey = b.y - (dy / d) * (rb + 2);
+                const bow =
+                  e.kind === "funded" ? 0 : e.kind === "transfer" ? 0.12 : e.kind === "side" ? -0.12 : 0.06;
+                const mx = (sx + ex) / 2 - (dy / d) * d * bow;
+                const my = (sy + ey) / 2 + (dx / d) * d * bow;
+                const dim = lit && !(lit.has(e.a) && lit.has(e.b));
+                const label = [
+                  `${nodeName(byId.get(e.a)!)} → ${nodeName(byId.get(e.b)!)}`,
+                  e.label,
+                  (TIMED_KINDS as readonly string[]).includes(e.kind) ? (edgeTimeFull(e.at) ?? "") : "",
+                  e.source === "chain" ? "From a chain read" : "",
+                ].filter(Boolean);
+                const st = EDGE_STYLE[e.kind];
+                const key = `${e.kind}|${e.a}|${e.b}|${e.mint ?? ""}`;
+                const path = (
+                  <path
+                    key={key}
+                    d={`M${sx} ${sy} Q${mx} ${my} ${ex} ${ey}`}
+                    fill="none"
+                    stroke={EDGE_COLOUR[e.kind]}
+                    strokeWidth={widthOf(e, maxByKind) / Math.sqrt(view.k)}
+                    strokeOpacity={dim ? 0.12 : e.kind === "holds" ? 0.5 : 0.88}
+                    strokeDasharray={st.dash}
+                    strokeLinecap={e.kind === "cotrade" ? "round" : undefined}
+                    markerEnd={st.head ? `url(#asyl-head-${e.kind})` : undefined}
+                    className="asyl-edge"
+                    onPointerEnter={(ev) => showHover(ev, label)}
+                    onPointerLeave={() => setHover(null)}
+                  />
+                );
+                const mid = { x: 0.25 * sx + 0.5 * mx + 0.25 * ex, y: 0.25 * sy + 0.5 * my + 0.25 * ey };
+                const z = 1 / Math.sqrt(view.k);
+                const deploy = e.kind === "created";
+                if (!deploy && e.source !== "chain") return path;
+                return (
+                  <g key={key} opacity={dim ? (deploy ? 0.25 : 0.2) : 1}>
+                    {deploy && (
+                      // The Deployed line (user ask 2026-10-24: much more its own): a gold glow under
+                      // a marching line, and the deployer's D halfway along.
+                      <path
+                        d={`M${sx} ${sy} Q${mx} ${my} ${ex} ${ey}`}
+                        className="asyl-edge-glow"
+                        fill="none"
+                        stroke={EDGE_COLOUR.created}
+                        strokeWidth={9 * z}
+                        strokeLinecap="round"
+                        pointerEvents="none"
+                      />
+                    )}
+                    {deploy ? (
+                      <path
+                        d={`M${sx} ${sy} Q${mx} ${my} ${ex} ${ey}`}
+                        fill="none"
+                        stroke={EDGE_COLOUR.created}
+                        strokeWidth={3 * z}
+                        strokeDasharray={`${10 * z} ${4 * z}`}
+                        markerEnd={`url(#asyl-head-created)`}
+                        className="asyl-edge asyl-edge-deploy"
+                        onPointerEnter={(ev) => showHover(ev, label)}
+                        onPointerLeave={() => setHover(null)}
+                      />
+                    ) : (
+                      path
+                    )}
+                    {deploy ? (
+                      <g transform={`translate(${mid.x} ${mid.y}) scale(${z})`} className="asyl-dev-mark">
+                        <circle r={7} />
+                        <text y={3.4} textAnchor="middle">
+                          D
+                        </text>
+                      </g>
+                    ) : null}
+                    {e.source === "chain" && (
+                      // A chain read: a ringed dot halfway along, whatever the kind's own pattern.
+                      <circle
+                        cx={mid.x}
+                        cy={mid.y}
+                        r={3.4 * z}
+                        fill="#120c09"
+                        stroke="#fff"
+                        strokeWidth={1.5 * z}
+                        pointerEvents="none"
+                      />
+                    )}
+                  </g>
+                );
+              })}
+            </g>
+          )}
+          {!scene && (
+            <g className="asyl-edge-times" pointerEvents="none">
+              {graph.edges.map((e) => {
+                // Times along the lines (user ask 2026-10-24): funding and deploys by default,
+                // transfers when switched on; as much of the date as the line has room for.
+                if (!(TIMED_KINDS as readonly string[]).includes(e.kind) || !timeLabels[e.kind as TimedKind])
+                  return null;
+                const a = layout.pos.get(e.a);
+                const b = layout.pos.get(e.b);
+                if (!a || !b || !e.at) return null;
+                const dx = b.x - a.x;
+                const dy = b.y - a.y;
+                const d = Math.hypot(dx, dy) || 1;
+                const span = (d - radius(e.a) - radius(e.b)) * view.k;
+                // About 6px a character at 10.5px, and room left either side for the arrow.
+                const text = edgeTimeLabel(e.at, Math.floor((span - 28) / 6));
+                if (!text) return null;
+                const dim = lit && !(lit.has(e.a) && lit.has(e.b));
+                // The line's middle (its bow, as drawn above), and its angle kept upright.
+                const bow = e.kind === "funded" ? 0 : e.kind === "transfer" ? 0.12 : 0.06;
+                const ra = radius(e.a);
+                const rb = radius(e.b) + 2;
+                const sx = a.x + (dx / d) * ra;
+                const sy = a.y + (dy / d) * ra;
+                const ex = b.x - (dx / d) * rb;
+                const ey = b.y - (dy / d) * rb;
+                const mx = (sx + ex) / 2 - dy * bow;
+                const my = (sy + ey) / 2 + dx * bow;
+                const x = 0.25 * sx + 0.5 * mx + 0.25 * ex;
+                const y = 0.25 * sy + 0.5 * my + 0.25 * ey;
+                let angle = (Math.atan2(ey - sy, ex - sx) * 180) / Math.PI;
+                if (angle > 90) angle -= 180;
+                else if (angle < -90) angle += 180;
+                return (
+                  <g
+                    key={`t|${e.kind}|${e.a}|${e.b}|${e.mint ?? ""}`}
+                    transform={`translate(${x} ${y}) rotate(${angle}) scale(${1 / view.k})`}
+                    opacity={dim ? 0.2 : 1}
+                    className="asyl-edge-time"
+                  >
+                    <text y={e.kind === "created" ? -12 : -6} textAnchor="middle" fill={EDGE_COLOUR[e.kind]}>
+                      {text}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+          )}
           {drawings && drawings.lines.length > 0 && (
             <g className="asyl-drawn-lines">
               {drawings.lines.map((l) => {
@@ -1165,119 +1255,139 @@ export function GraphView({
               pointerEvents="none"
             />
           )}
-          <g className="asyl-nodes">
-            {graph.nodes.map((n) => {
-              const p = layout.pos.get(n.id);
-              if (!p) return null;
-              const r = radius(n.id);
-              const dim = lit && !lit.has(n.id);
-              const cluster = clusters.get(n.id) ?? -1;
-              const fill =
-                n.kind === "token"
-                  ? "#1a0d08"
-                  : cluster >= 0
-                    ? CLUSTER_COLOUR[cluster % CLUSTER_COLOUR.length]!
-                    : "#3a2116";
-              const ring = ringOf(n);
-              const isSel = n.id === selected;
-              const isPicked = !!picked?.has(n.id);
-              const isFocus = n.id === focus;
-              const hoverText = [
-                nodeName(n),
-                n.kind === "token"
-                  ? (n.title ?? "Coin")
-                  : n.tags.map((t) => TAG_LABEL[t]).join(" · ") || "Wallet",
-                n.risk != null ? `Risk ${n.risk} · Win ${n.win ?? 0}` : "",
-              ].filter(Boolean);
-              const imgs = imageSources(n);
-              return (
-                <g
-                  key={n.id}
-                  className={`asyl-node${isSel ? " selected" : ""}${isPicked ? " picked" : ""}`}
-                  transform={`translate(${p.x} ${p.y})`}
-                  opacity={dim ? 0.25 : 1}
-                  onPointerDown={(e) => onPointerDown(e, n.id)}
-                  onDoubleClick={(e) => {
-                    e.stopPropagation();
-                    onOpen?.(n.id);
-                  }}
-                  onPointerEnter={(e) => showHover(e, hoverText)}
-                  onPointerLeave={() => setHover(null)}
-                >
-                  {isPicked && <circle r={r + 5} className="asyl-pick-ring" />}
-                  {(isSel || isFocus || n.id === pending) && (
-                    <circle
-                      r={r + 7}
-                      fill="none"
-                      stroke="#ffd7a8"
-                      strokeWidth={isSel ? 2.5 : 1.5}
-                      strokeDasharray={isSel ? undefined : "3 3"}
-                    />
-                  )}
-                  {n.kind === "token" ? (
-                    <rect
-                      x={-r}
-                      y={-r}
-                      width={r * 2}
-                      height={r * 2}
-                      rx={r * 0.44}
-                      fill={fill}
-                      stroke="#ffb547"
-                      strokeWidth={2}
-                    />
-                  ) : (
-                    <circle
-                      r={r}
-                      fill={fill}
-                      fillOpacity={0.9}
-                      stroke={ring ?? "#120402"}
-                      strokeWidth={ring ? 3 : 1.5}
-                    />
-                  )}
-                  {imgs.length > 0 && <NodeImage sources={imgs} r={r} tile={n.kind === "token"} />}
-                  {n.tags.includes("mine") && (
-                    <text className="asyl-node-star" y={-r - 4} textAnchor="middle">
-                      ★
-                    </text>
-                  )}
-                  {n.kind === "wallet" && n.tags.includes("dev") && (
-                    <g className="asyl-dev-mark" transform={`translate(${r * 0.74} ${-r * 0.74})`}>
-                      <circle r={6.5} />
-                      <text y={3.2} textAnchor="middle">
-                        D
+          {scene && (
+            <AnalystNodes
+              scene={scene}
+              pos={layout.pos}
+              byId={byId}
+              selected={selected}
+              picked={picked}
+              pending={pending}
+              lit={lit}
+              images={imageSources}
+              onDown={onPointerDown}
+              onOpen={onOpen}
+              onHover={showHover}
+              onLeave={() => setHover(null)}
+            />
+          )}
+          {!scene && (
+            <g className="asyl-nodes">
+              {graph.nodes.map((n) => {
+                const p = layout.pos.get(n.id);
+                if (!p) return null;
+                const r = radius(n.id);
+                const dim = lit && !lit.has(n.id);
+                const cluster = clusters.get(n.id) ?? -1;
+                const fill =
+                  n.kind === "token"
+                    ? "#1a0d08"
+                    : cluster >= 0
+                      ? CLUSTER_COLOUR[cluster % CLUSTER_COLOUR.length]!
+                      : "#3a2116";
+                const ring = ringOf(n);
+                const isSel = n.id === selected;
+                const isPicked = !!picked?.has(n.id);
+                const isFocus = n.id === focus;
+                const hoverText = [
+                  nodeName(n),
+                  n.kind === "token"
+                    ? (n.title ?? "Coin")
+                    : n.tags.map((t) => TAG_LABEL[t]).join(" · ") || "Wallet",
+                  n.risk != null ? `Risk ${n.risk} · Win ${n.win ?? 0}` : "",
+                ].filter(Boolean);
+                const imgs = imageSources(n);
+                return (
+                  <g
+                    key={n.id}
+                    className={`asyl-node${isSel ? " selected" : ""}${isPicked ? " picked" : ""}`}
+                    transform={`translate(${p.x} ${p.y})`}
+                    opacity={dim ? 0.25 : 1}
+                    onPointerDown={(e) => onPointerDown(e, n.id)}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      onOpen?.(n.id);
+                    }}
+                    onPointerEnter={(e) => showHover(e, hoverText)}
+                    onPointerLeave={() => setHover(null)}
+                  >
+                    {isPicked && <circle r={r + 5} className="asyl-pick-ring" />}
+                    {(isSel || isFocus || n.id === pending) && (
+                      <circle
+                        r={r + 7}
+                        fill="none"
+                        stroke="#ffd7a8"
+                        strokeWidth={isSel ? 2.5 : 1.5}
+                        strokeDasharray={isSel ? undefined : "3 3"}
+                      />
+                    )}
+                    {n.kind === "token" ? (
+                      <rect
+                        x={-r}
+                        y={-r}
+                        width={r * 2}
+                        height={r * 2}
+                        rx={r * 0.44}
+                        fill={fill}
+                        stroke="#ffb547"
+                        strokeWidth={2}
+                      />
+                    ) : (
+                      <circle
+                        r={r}
+                        fill={fill}
+                        fillOpacity={0.9}
+                        stroke={ring ?? "#120402"}
+                        strokeWidth={ring ? 3 : 1.5}
+                      />
+                    )}
+                    {imgs.length > 0 && <NodeImage sources={imgs} r={r} tile={n.kind === "token"} />}
+                    {n.tags.includes("mine") && (
+                      <text className="asyl-node-star" y={-r - 4} textAnchor="middle">
+                        ★
                       </text>
-                    </g>
-                  )}
-                </g>
-              );
-            })}
-          </g>
-          <g className="asyl-node-labels">
-            {graph.nodes.map((n) => {
-              // Names over every bubble, so a bubble drawn later never covers one.
-              const p = layout.pos.get(n.id);
-              if (!p) return null;
-              const dim = lit && !lit.has(n.id);
-              const show =
-                n.id === selected ||
-                n.id === focus ||
-                !!picked?.has(n.id) ||
-                (!dim && (n.name || lit || dense < 1 || view.k > 1.1 * dense));
-              if (!show) return null;
-              return (
-                <text
-                  key={n.id}
-                  className="asyl-node-label"
-                  x={p.x}
-                  y={p.y + radius(n.id) + 13}
-                  textAnchor="middle"
-                  fontSize={11 / Math.min(1.4, Math.max(0.7, view.k))}
-                >
-                  {nodeName(n)}
-                </text>
-              );
-            })}
-          </g>
+                    )}
+                    {n.kind === "wallet" && n.tags.includes("dev") && (
+                      <g className="asyl-dev-mark" transform={`translate(${r * 0.74} ${-r * 0.74})`}>
+                        <circle r={6.5} />
+                        <text y={3.2} textAnchor="middle">
+                          D
+                        </text>
+                      </g>
+                    )}
+                  </g>
+                );
+              })}
+            </g>
+          )}
+          {!scene && (
+            <g className="asyl-node-labels">
+              {graph.nodes.map((n) => {
+                // Names over every bubble, so a bubble drawn later never covers one.
+                const p = layout.pos.get(n.id);
+                if (!p) return null;
+                const dim = lit && !lit.has(n.id);
+                const show =
+                  n.id === selected ||
+                  n.id === focus ||
+                  !!picked?.has(n.id) ||
+                  (!dim && (n.name || lit || dense < 1 || view.k > 1.1 * dense));
+                if (!show) return null;
+                return (
+                  <text
+                    key={n.id}
+                    className="asyl-node-label"
+                    x={p.x}
+                    y={p.y + radius(n.id) + 13}
+                    textAnchor="middle"
+                    fontSize={11 / Math.min(1.4, Math.max(0.7, view.k))}
+                  >
+                    {nodeName(n)}
+                  </text>
+                );
+              })}
+            </g>
+          )}
           {drawings && drawings.strokes.length > 0 && (
             <g className="asyl-drawn-strokes">
               {drawings.strokes.map((st) => {

@@ -153,6 +153,8 @@ export const mapDocSchema = z.object({
   pinned: z.array(address).max(MAP_NODES_MAX).optional(),
   /** Grid mode: each bubble on its own cell. */
   grid: z.boolean().optional(),
+  /** Analyst Mode: drawn as a flowchart of boxes and right-angled lines. */
+  analyst: z.boolean().optional(),
   /** Which kinds of line carry their time. */
   times: z.object({ funded: z.boolean(), created: z.boolean(), transfer: z.boolean() }).optional(),
   /** The node it was opened around. */
