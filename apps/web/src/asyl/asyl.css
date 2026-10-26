@@ -2697,6 +2697,85 @@ body {
   justify-content: space-between;
   gap: 8px;
 }
+.asyl-conc {
+  margin: 0;
+}
+.asyl-conc svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  background: rgba(255, 176, 103, 0.05);
+}
+.asyl-conc-grid {
+  stroke: var(--asyl-line);
+  stroke-dasharray: 2 3;
+}
+.asyl-conc-axis {
+  fill: var(--asyl-muted);
+  font-size: 8px;
+}
+.asyl-conc figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.asyl-conc figcaption i {
+  display: inline-block;
+  width: 10px;
+  height: 3px;
+  margin-right: 2px;
+  vertical-align: middle;
+  border-radius: 2px;
+}
+.asyl-flow {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.asyl-flow-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.asyl-flow-head .good {
+  color: var(--asyl-good);
+}
+.asyl-flow-head .bad {
+  color: var(--asyl-bad);
+}
+.asyl-flow-bar {
+  position: relative;
+  height: 14px;
+  margin-top: 2px;
+  border-radius: 4px;
+  background: rgba(255, 176, 103, 0.06);
+  overflow: hidden;
+}
+.asyl-flow-bar i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 4px;
+}
+.asyl-flow-bar.in i {
+  background: rgba(255, 122, 47, 0.45);
+}
+.asyl-flow-bar.out i {
+  background: rgba(62, 224, 143, 0.4);
+}
+.asyl-flow-bar span {
+  position: relative;
+  padding-left: 6px;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--asyl-text);
+}
 .asyl-pnl {
   list-style: none;
   margin: 0;
@@ -2827,4 +2906,17 @@ body {
 }
 .asyl-watch-events li > span:first-child {
   margin-right: auto;
+}
+.asyl-copy {
+  white-space: nowrap;
+  font-size: 11px;
+}
+.asyl-copy.follows {
+  color: var(--asyl-orange-hi);
+}
+.asyl-copy.leads {
+  color: var(--asyl-muted);
+}
+.asyl-copy.same {
+  color: var(--asyl-bad);
 }

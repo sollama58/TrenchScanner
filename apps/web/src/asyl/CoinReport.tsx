@@ -12,6 +12,130 @@ const gapText = (from: string, to: string) => {
 };
 const of = (n: number | null, d: number | null) => (n === null ? "–" : d ? `${n}/${d}` : String(n));
 
+/** The holders-over-time lines, drawn and keyed in this order. */
+const LINES = [
+  { key: "top10", label: "Top 10", color: "var(--asyl-orange)" },
+  { key: "largest", label: "Largest", color: "var(--asyl-orange-hi)" },
+  { key: "bundled", label: "Linked", color: "var(--asyl-bad)" },
+] as const;
+
+/** Holder concentration at each scan: one line per reading, time across, % of supply up. */
+function ConcentrationChart({ points }: { points: CoinReport["concentration"] }) {
+  const W = 260;
+  const H = 84;
+  const t0 = Date.parse(points[0]!.at);
+  const span = Math.max(1, Date.parse(points[points.length - 1]!.at) - t0);
+  const top = Math.max(
+    20,
+    Math.ceil(Math.max(...points.flatMap((p) => LINES.map((l) => p[l.key] ?? 0))) / 10) * 10,
+  );
+  const x = (at: string) => ((Date.parse(at) - t0) / span) * (W - 4) + 2;
+  const y = (v: number) => H - 2 - (v / top) * (H - 4);
+  const last = points[points.length - 1]!;
+  const firstHolders = points.find((p) => p.holders !== null)?.holders ?? null;
+  return (
+    <figure className="asyl-conc">
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Holder concentration over time">
+        {[0.5, 1].map((f) => (
+          <line key={f} x1={0} x2={W} y1={y(top * f)} y2={y(top * f)} className="asyl-conc-grid" />
+        ))}
+        <text x={W - 2} y={y(top) + 9} textAnchor="end" className="asyl-conc-axis">
+          {top}%
+        </text>
+        {LINES.map((l) => {
+          const pts = points.filter((p) => p[l.key] !== null);
+          if (pts.length === 0) return null;
+          return pts.length === 1 ? (
+            <circle key={l.key} cx={x(pts[0]!.at)} cy={y(pts[0]![l.key]!)} r={2.5} fill={l.color} />
+          ) : (
+            <polyline
+              key={l.key}
+              fill="none"
+              stroke={l.color}
+              strokeWidth={1.6}
+              strokeLinejoin="round"
+              points={pts.map((p) => `${x(p.at).toFixed(1)},${y(p[l.key]!).toFixed(1)}`).join(" ")}
+            />
+          );
+        })}
+      </svg>
+      <figcaption>
+        {LINES.filter((l) => points.some((p) => p[l.key] !== null)).map((l) => {
+          const now = [...points].reverse().find((p) => p[l.key] !== null)![l.key];
+          return (
+            <span key={l.key}>
+              <i style={{ background: l.color }} /> {l.label} {pct(now)}
+            </span>
+          );
+        })}
+        {last.holders !== null && (
+          <span className="asyl-muted">
+            {last.holders.toLocaleString()} holders
+            {firstHolders !== null && firstHolders !== last.holders
+              ? ` (from ${firstHolders.toLocaleString()})`
+              : ""}
+          </span>
+        )}
+      </figcaption>
+      <p className="asyl-muted asyl-small">
+        {points.length} scans, {ago(points[0]!.at)} to {ago(last.at)}.
+      </p>
+    </figure>
+  );
+}
+
+const FLOW_LABEL: Record<CoinReport["flow"][number]["group"], string> = {
+  dev: "Dev",
+  sniper: "Snipers (first 5s)",
+  early: "Other first 25",
+  top: "Top 10 holders",
+  rest: "Everyone else",
+};
+
+/** SOL in and out of the coin by wallet group: two bars each, on one scale, and what they made. */
+function MoneyFlow({ rows }: { rows: CoinReport["flow"] }) {
+  const most = Math.max(...rows.flatMap((r) => [r.solIn, r.solOut]), 0.0001);
+  const w = (n: number) => `${Math.max(n > 0 ? 2 : 0, (n / most) * 100)}%`;
+  return (
+    <>
+      <ul className="asyl-flow">
+        {rows.map((r) => {
+          const net = r.solOut - r.solIn;
+          return (
+            <li key={r.group}>
+              <div className="asyl-flow-head">
+                <span>
+                  {FLOW_LABEL[r.group]}
+                  <span className="asyl-muted">
+                    {" "}
+                    · {r.wallets} wallet{r.wallets === 1 ? "" : "s"}
+                  </span>
+                </span>
+                <span className={net > 0 ? "good" : net < 0 ? "bad" : "asyl-muted"}>
+                  {net > 0 ? "+" : net < 0 ? "−" : ""}
+                  {sol(Math.abs(net))}
+                </span>
+              </div>
+              <div className="asyl-flow-bar in" title={`Put in ${sol(r.solIn)}`}>
+                <i style={{ width: w(r.solIn) }} />
+                <span>in {sol(r.solIn)}</span>
+              </div>
+              <div className="asyl-flow-bar out" title={`Took out ${sol(r.solOut)}`}>
+                <i style={{ width: w(r.solOut) }} />
+                <span>out {sol(r.solOut)}</span>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="asyl-muted asyl-small">
+        From the coin&apos;s trade tape; each wallet counts once, in its first group. Out includes only what
+        was sold, not what is still held.
+      </p>
+    </>
+  );
+}
+
 const TONE: Record<CoinReport["verdict"]["level"], string> = {
   high: "bad",
   some: "warn",
@@ -145,6 +269,20 @@ export function CoinReportCard({
           </button>
         )}
       </section>
+
+      {report.flow.length > 0 && (
+        <section className="asyl-insp-section asyl-report">
+          <h3>Money in and out</h3>
+          <MoneyFlow rows={report.flow} />
+        </section>
+      )}
+
+      {report.concentration.length > 0 && (
+        <section className="asyl-insp-section asyl-report">
+          <h3>Holders over time</h3>
+          <ConcentrationChart points={report.concentration} />
+        </section>
+      )}
 
       {report.waves.length > 0 && (
         <section className="asyl-insp-section asyl-report">

@@ -254,6 +254,19 @@ export interface CoinReport {
   } | null;
   verdict: { level: "high" | "some" | "low" | "unknown"; text: string };
   waves: { from: string; to: string; wallets: string[]; sol: number }[];
+  concentration: {
+    at: string;
+    top10: number | null;
+    largest: number | null;
+    bundled: number | null;
+    holders: number | null;
+  }[];
+  flow: {
+    group: "dev" | "sniper" | "early" | "top" | "rest";
+    wallets: number;
+    solIn: number;
+    solOut: number;
+  }[];
   dev: {
     wallet: string;
     risk: number | null;

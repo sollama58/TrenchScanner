@@ -11,6 +11,7 @@ import {
   neighbours,
   nodeName,
   shortAddr,
+  type AsylEdge,
   type AsylEdgeKind,
   type AsylGraph,
   type AsylNode,
@@ -68,6 +69,8 @@ export interface InspectorActions {
   setNote: (id: string, text: string) => void;
 }
 
+/** Typical gaps this short read as one bot, or one person, not one wallet copying another. */
+const SAME_TIME_SEC = 2;
 const sol = (n: number | null | undefined) =>
   n === null || n === undefined
     ? "–"
@@ -162,6 +165,12 @@ export function Inspector({
   const together = links
     .filter((l) => l.edge.kind === "cotrade")
     .sort((x, y) => (y.edge.shared ?? y.edge.weight) - (x.edge.shared ?? x.edge.weight));
+  // Copy-trading: the co-trader's typical first buy less this wallet's, from this wallet's side.
+  // leadSec runs from a to b, so it turns round when this wallet is b.
+  const leadOf = (e: AsylEdge) =>
+    e.leadSec === undefined || e.leadSec === null ? null : e.a === node.id ? e.leadSec : -e.leadSec;
+  const followers = together.filter((l) => (leadOf(l.edge) ?? 0) > SAME_TIME_SEC).length;
+  const leaders = together.filter((l) => (leadOf(l.edge) ?? 0) < -SAME_TIME_SEC).length;
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
   // A coin's realised profit and loss, per wallet on the map that sold it, best first.
   const pnl =
@@ -392,8 +401,11 @@ export function Inspector({
             <thead>
               <tr>
                 <th>Wallet</th>
-                <th title="Coins both bought within 3 minutes of each other">In common</th>
-                <th title="The typical time between their first buys of those coins">Apart</th>
+                <th title="Coins both bought within 3 minutes of each other">Shared</th>
+                <th title="The typical time between their first buys of those coins">Gap</th>
+                <th title="Who usually buys first: a wallet that buys after this one on most coins may be copying it">
+                  Order
+                </th>
                 <th aria-label="Trades" />
               </tr>
             </thead>
@@ -408,8 +420,38 @@ export function Inspector({
                         {o ? nodeName(o) : shortAddr(other)}
                       </button>
                     </td>
-                    <td>{edge.of ? `${shared} of ${edge.of}` : shared}</td>
+                    <td>{edge.of ? `${shared}/${edge.of}` : shared}</td>
                     <td>{edge.gapSec !== undefined && edge.gapSec !== null ? gapText(edge.gapSec) : "–"}</td>
+                    <td>
+                      {(() => {
+                        const lead = leadOf(edge);
+                        if (lead === null) return "–";
+                        if (Math.abs(lead) <= SAME_TIME_SEC)
+                          return (
+                            <span
+                              className="asyl-copy same"
+                              title="Usually the same second or two: one bot, or one person"
+                            >
+                              Same time
+                            </span>
+                          );
+                        return lead > 0 ? (
+                          <span
+                            className="asyl-copy follows"
+                            title={`Usually buys ${gapText(lead)} after this wallet`}
+                          >
+                            Copies it
+                          </span>
+                        ) : (
+                          <span
+                            className="asyl-copy leads"
+                            title={`Usually buys ${gapText(-lead)} before this wallet`}
+                          >
+                            It copies
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td>
                       <button
                         className="asyl-btn asyl-btn-xs"
@@ -425,9 +467,22 @@ export function Inspector({
             </tbody>
           </table>
           <p className="asyl-muted asyl-small">
-            Coins both bought within 3 minutes of each other, out of the latest coins read; apart is the
-            typical time between their first buys.
+            Coins both bought within 3 minutes of each other, out of the latest coins read; gap is the typical
+            time between their first buys.
           </p>
+          {(followers > 0 || leaders > 0) && (
+            <p className="asyl-small">
+              {[
+                followers > 0 &&
+                  `${followers} wallet${followers === 1 ? " usually buys" : "s usually buy"} after this one, likely copying it`,
+                leaders > 0 && `it usually buys after ${leaders} other${leaders === 1 ? "" : "s"}`,
+              ]
+                .filter(Boolean)
+                .join("; ")
+                .replace(/^./, (c) => c.toUpperCase())}
+              .
+            </p>
+          )}
           {coTraderTotal !== undefined && coTraderTotal > together.length && (
             <p className="asyl-small">
               Showing {together.length} of {coTraderTotal}.{" "}
