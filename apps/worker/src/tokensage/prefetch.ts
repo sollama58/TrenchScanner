@@ -313,6 +313,31 @@ export function noteNarrativeWanted(
 }
 
 /**
+ * Whether TokenSage has answered for this mint, one way or the other: a read stored at some depth
+ * (settle), or a failure cached as not found. The entry fast path's hold (entryFastPath.ts) waits
+ * on this: once it is true nothing more is coming for the quick read, so the decision can go.
+ * Only this process's own stores count (the scanner's prefetcher is the one writer).
+ */
+export function narrativeSettled(mintAddress: string, now = Date.now()): boolean {
+  if (settled.has(mintAddress)) return true;
+  const cooling = notFoundUntil.get(mintAddress);
+  return cooling !== undefined && now < cooling;
+}
+
+/**
+ * Asks for a mint's quick read now: noted at the normal tier and flushed at once rather than on
+ * the next poll, so the request is in TokenSage's queue within the second. The entry watch calls
+ * this the moment a launch first reads at or over the floor (entryWatch.ts onCrossing), a few
+ * seconds before the fast path decides on it, so the read is most of the way back by then. A
+ * flush already running makes the kick a no-op; the poller re-sends the note on its next tick.
+ */
+export function requestNarrativeRead(mintAddress: string, env: Env, client?: TokenSageClient): void {
+  if (!tokenSageEnabled(env)) return;
+  noteNarrativeWanted(mintAddress, "basic", env);
+  if (wanted.has(mintAddress)) void flushNarrativeRequests(env, client);
+}
+
+/**
  * Re-sends what is queued every TOKENSAGE_POLL_SECONDS between scan cycles, so a finished read is
  * stored within seconds instead of at the next scan. Same flush as the scan's (a flush already
  * running makes it a no-op), so it adds requests only while something is waiting. Runs in the

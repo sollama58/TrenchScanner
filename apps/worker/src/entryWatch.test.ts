@@ -138,19 +138,49 @@ describe("EntryWatch on the curve tape", () => {
   const curveWatch = (curve: Map<string, number | null>, newLaunches: () => string[] = () => []) => {
     const jupiter = quiet();
     const entered: string[] = [];
+    const crossed: string[] = [];
     const watch = new EntryWatch(
       jupiter,
       7_000,
       newLaunches,
       (mint) => curve.get(mint) ?? null,
       (mint) => entered.push(mint),
+      (mint) => crossed.push(mint),
     );
     watch.note(
       [reading("near", 6_300), reading("a", 20_000), reading("b", 30_000), reading("c", 40_000)],
       t0,
     );
-    return { watch, jupiter, entered };
+    return { watch, jupiter, entered, crossed };
   };
+
+  it("tells the worker at the crossing, before the dwell, and again only after a dip", async () => {
+    const curve = new Map<string, number | null>([
+      ["near", 6.3],
+      ["a", 20],
+      ["b", 30],
+      ["c", 40],
+    ]);
+    const { watch, entered, crossed } = curveWatch(curve);
+    expect(await watch.check(t0 + 500)).toEqual([]);
+    expect(crossed).toEqual([]);
+    curve.set("near", 7.05);
+    expect(await watch.check(t0 + 1_000)).toEqual([]);
+    expect(crossed).toEqual(["near"]);
+    expect(entered).toEqual([]);
+    // Holding the floor: no second word until the hand-off.
+    expect(await watch.check(t0 + 1_500)).toEqual([]);
+    expect(crossed).toEqual(["near"]);
+    // A dip and a re-crossing is a new crossing.
+    curve.set("near", 6.9);
+    expect(await watch.check(t0 + 2_000)).toEqual([]);
+    curve.set("near", 7.3);
+    expect(await watch.check(t0 + 2_500)).toEqual([]);
+    expect(crossed).toEqual(["near", "near"]);
+    expect(await watch.check(t0 + 2_500 + ENTRY_DWELL_MS)).toEqual(["near"]);
+    expect(entered).toEqual(["near"]);
+    expect(crossed).toEqual(["near", "near"]);
+  });
 
   it("hands a launch over once its curve has held the floor for the dwell, with no Jupiter call", async () => {
     const curve = new Map<string, number | null>([

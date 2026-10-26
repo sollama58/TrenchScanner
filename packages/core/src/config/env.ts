@@ -169,6 +169,14 @@ const envSchema = z.object({
   // about two Jupiter calls (the band refresh and the fresh quote) on the shared 50-a-minute gate,
   // and the Helius reads a contender's first cycle would have made.
   ENTRY_FAST_PATH_MAX_PER_MINUTE: z.coerce.number().int().nonnegative().default(30),
+  // How long a fast scan waits for TokenSage's quick read before deciding (user decision
+  // 2026-10-26, notes/model-audit-2026-10-26 section 7). The read is asked for the moment the
+  // launch first reads over the floor (entryWatch.ts onCrossing) and lands a median 8 s after a
+  // fast-path decision made without it: with no hold 18% of fast-path decisions had it, a 20 s
+  // cap puts it on about two thirds, at a median 1.02x on the entry price. The hold ends as soon
+  // as the read (or TokenSage's failure) is in; the scan then runs on the coin as it is now, so
+  // the collapse check is fresh. 0 turns the hold off. Nothing waits while TokenSage is off.
+  ENTRY_READ_HOLD_SECONDS: z.coerce.number().min(0).max(120).default(20),
   // How long a RugCheck report is reused before being re-fetched (see the worker's
   // rugCheckProfiles.ts). Short, because everything RugCheck reports is mutable - holder
   // distribution, dev wallet %, risk score - unlike mint authority revocation or Mayhem Mode,
