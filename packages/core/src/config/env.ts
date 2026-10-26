@@ -879,6 +879,14 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+  // The fast path's decision rows ("entry", banked since 2026-10-26, user decision) join the
+  // training set as fit rows (not graded: the exam stays on event rows). Off (the default) until
+  // the fast-path record on those rows has been read for a few days: the seats were never fitted
+  // to the inputs a two-second-old coin has, and the first days say whether they should be.
+  CURATOR_TRAIN_ON_ENTRY_ROWS: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   // A Meteora DBC or Raydium LaunchLab curve keeps its created time, and a trading one is the
   // pair ahead of a deeper side pool. Off (the default): those venues are not a clock, which is
   // what shipped on 2026-10-21. On changes the price and the pair age of those coins, so which

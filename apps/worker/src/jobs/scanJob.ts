@@ -4078,23 +4078,38 @@ async function processCandidate(
     const preGate = passesEventPreGate(scored, band);
     if (pass === "entry") {
       // The entry fast path's first scan (entryFastPath.ts) decides on the coin as a decision
-      // moment would, held to the same pre-gate and the same inputs, but banks nothing: no event
-      // row, no seat scores, no hourly sample, no second look. The coin's decision moments stay the
-      // cycle's, on the schedule they had before the fast path: its first event is banked by the
-      // first cycle to find it ready, and every seat decides there again on whatever has landed by
-      // then (TokenSage's read, the curve tape). Spent here, the event would have closed the coin's
-      // window for CANDIDATE_EVENT_SPACING_MINUTES (an hour) on a moment two seconds into the band,
-      // where TokenSage has read under a tenth of coins and the curve tape has nothing yet
-      // (notes/model-inputs-audit-2026-10-22) - every later input would land on no decision, and
+      // moment would, held to the same pre-gate and the same inputs, and banks the moment as its
+      // own kind of row ("entry", user decision 2026-10-26): every seat's score goes onto it, and
+      // a seat that calls is graded from it. It spends no event window: the coin's decision moments
+      // stay the cycle's, on the schedule they had before the fast path - its first event is
+      // banked by the first cycle to find it ready, and every seat decides there again on whatever
+      // has landed by then (TokenSage's read, the curve tape). Spent here, the event would have
+      // closed the coin's window for CANDIDATE_EVENT_SPACING_MINUTES (an hour) on a moment seconds
+      // into the band, where TokenSage has read a quarter of coins and the curve tape has nothing
+      // yet (notes/model-inputs-audit-2026-10-22); every later input would land on no decision, and
       // the seats would train on the youngest moment of each coin instead of the one they decide
-      // on live. A seat that calls here is graded from its own alert anchor (an "emission" row,
-      // as for any call sent without a fresh event) and is on its cooldown when the cycle decides,
-      // so a coin gets no second card from it; a seat that said no here can still call there. The
-      // deep read is asked for now, so it has the cycle's minute to land on the coin's event.
-      // Holds are not counted: the cycle counts its own, once per moment.
+      // on live. Until 2026-10-26 the fast path banked nothing, so half the feed's calls were in no
+      // exam, cutoff window, alarm or conviction line (notes/model-audit-2026-10-26, section 3);
+      // the entry rows are that population: the seats' fast-path cutoffs and lines are drawn on
+      // them (liveScaleStore.ts), the share alarm counts them, and they join training only under
+      // CURATOR_TRAIN_ON_ENTRY_ROWS. No hourly sample and no second look here. A seat that calls
+      // is on its cooldown when the cycle decides, so a coin gets no second card from it; a seat
+      // that said no here can still call there. The deep read is asked for now, so it has the
+      // cycle's minute to land on the coin's event. Holds are not counted: the cycle counts its
+      // own, once per moment.
       if (preGate && inputsReady("decision").ready) {
         noteNarrativeWanted(token.mintAddress, "full", env, narrativeHints);
-        await collectCuratedContender(curatedCycle, token, scored, null, env, snapshot.id);
+        const entry = await recordCandidateSample(token.id, scored, env, { kind: "entry" });
+        await collectCuratedContender(
+          curatedCycle,
+          token,
+          scored,
+          entry,
+          env,
+          snapshot.id,
+          undefined,
+          "entry",
+        );
       }
       return matchCount;
     }

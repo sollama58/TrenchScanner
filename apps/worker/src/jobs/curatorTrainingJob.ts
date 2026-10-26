@@ -157,6 +157,7 @@ async function trainCurators(
     {
       excludeFineTickLabels: env.CURATOR_EXCLUDE_FINE_TICK_LABELS,
       tokenSageXReuseRestoredAt: env.TOKENSAGE_XREUSE_RESTORED_AT,
+      trainOnEntryRows: env.CURATOR_TRAIN_ON_ENTRY_ROWS,
     },
   );
   if (trainingRows.length < MIN_ROWS_TO_TRAIN) {
@@ -511,35 +512,73 @@ async function loadIncumbentExams() {
 
 /** The window the live-share alarm counts calls over. */
 const LIVE_SHARE_WINDOW_HOURS = 6;
+/** The window the fast-path record is read over: the seats' graded calls on entry rows. */
+export const FAST_PATH_RECORD_WINDOW_HOURS = 72;
+
+/** The two populations the seats decide on live, each with its own rows and its own share. */
+const SHARE_POPULATIONS = [
+  { kind: "event", label: "" },
+  { kind: "entry", label: "fast path: " },
+] as const;
 
 /**
  * Each seat's live calls over the last few hours against the decision moments in them (alarm
  * only, runGuard.ts liveShareAlarms): a seat calling far more than its cutoff share, or most seats
- * gone quiet. Runs with the hourly champion refresh.
+ * gone quiet. Counted on the cycle's decision moments (event rows) and again on the fast path's
+ * (entry rows, since 2026-10-26), each against its own moments: the fast path's cutoffs are read
+ * on its own rows, so its share is judged there. Runs with the hourly champion refresh, which also
+ * reads the seats' fast-path record (fastPathRecord).
  */
-export async function seatLiveShareAlarms(env: Env, now = new Date()): Promise<{ shareAlarms?: string }> {
+export async function seatLiveShareAlarms(
+  env: Env,
+  now = new Date(),
+): Promise<{ shareAlarms?: string; fastPath?: Record<string, string | number> }> {
+  let out: { shareAlarms?: string; fastPath?: Record<string, string | number> } = {};
   try {
-    return await countSeatShares(env, now);
+    const alarms: string[] = [];
+    for (const population of SHARE_POPULATIONS) {
+      alarms.push(...(await countSeatShares(env, now, population.kind, population.label)));
+    }
+    if (alarms.length > 0) {
+      logger.warn("seat live-share alarms", { alarms, windowHours: LIVE_SHARE_WINDOW_HOURS });
+      out = { shareAlarms: alarms.join("; ") };
+    }
   } catch (err) {
     // An alarm's own failure never fails the champion refresh it rides on.
     logger.warn("seat live-share check failed", { error: String(err) });
-    return {};
   }
+  try {
+    const fastPath = await fastPathRecord(now);
+    if (fastPath !== null) {
+      logger.info("fast-path record", { ...fastPath });
+      out = { ...out, fastPath: fastPathMeta(fastPath) };
+    }
+  } catch (err) {
+    logger.warn("fast-path record failed", { error: String(err) });
+  }
+  return out;
 }
 
-async function countSeatShares(env: Env, now: Date): Promise<{ shareAlarms?: string }> {
+async function countSeatShares(
+  env: Env,
+  now: Date,
+  kind: "event" | "entry",
+  label: string,
+): Promise<string[]> {
   const since = new Date(now.getTime() - LIVE_SHARE_WINDOW_HOURS * 3_600_000);
   const dayBefore = new Date(since.getTime() - 86_400_000);
   const [decisions, calls, before] = await Promise.all([
-    prisma.candidateOutcome.count({ where: { sampleKind: "event", anchorAt: { gte: since, lt: now } } }),
+    prisma.candidateOutcome.count({ where: { sampleKind: kind, anchorAt: { gte: since, lt: now } } }),
     prisma.$queryRaw<{ model: string; calls: bigint }[]>`
       SELECT a."model", count(DISTINCT a."candidateOutcomeId") AS calls
       FROM "CuratedAlert" a
-      JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId" AND co."sampleKind" = 'event'
+      JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId" AND co."sampleKind" = ${kind}
       WHERE a."createdAt" >= ${since} AND a."createdAt" < ${now}
       GROUP BY a."model"`,
     prisma.$queryRaw<{ model: string }[]>`
-      SELECT DISTINCT "model" FROM "CuratedAlert" WHERE "createdAt" >= ${dayBefore} AND "createdAt" < ${since}`,
+      SELECT DISTINCT a."model" FROM "CuratedAlert" a
+      JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId" AND co."sampleKind" = ${kind}
+      WHERE a."createdAt" >= ${dayBefore} AND a."createdAt" < ${since}`,
   ]);
   const called = new Map(calls.map((c) => [c.model, Number(c.calls)]));
   const earlier = new Set(before.map((b) => b.model));
@@ -548,10 +587,69 @@ async function countSeatShares(env: Env, now: Date): Promise<{ shareAlarms?: str
     calls: called.get(contestant) ?? 0,
     calledBefore: earlier.has(contestant),
   }));
-  const alarms = liveShareAlarms(seats, decisions, env.CURATED_CUTOFF_TARGET_SHARE);
-  if (alarms.length > 0)
-    logger.warn("seat live-share alarms", { alarms, windowHours: LIVE_SHARE_WINDOW_HOURS });
-  return alarms.length > 0 ? { shareAlarms: alarms.join("; ") } : {};
+  return liveShareAlarms(seats, decisions, env.CURATED_CUTOFF_TARGET_SHARE).map((a) => `${label}${a}`);
+}
+
+/**
+ * The seats' record on the fast path's own decision moments (entry rows) over the last
+ * FAST_PATH_RECORD_WINDOW_HOURS: the moments, how many are graded and doubled (the base every
+ * fast-path call has to beat), and per seat its distinct calls there, graded and clean 2x wins.
+ * The exam cannot see these moments (it grades event rows), so this is the fast path's exam,
+ * read on the live record and written to the champion refresh's heartbeat.
+ */
+export interface FastPathRecord {
+  windowHours: number;
+  moments: number;
+  graded: number;
+  won2x: number;
+  seats: { contestant: string; calls: number; graded: number; won2x: number }[];
+}
+
+/** The record as the heartbeat stores it: the moments' figures, and each seat's on one line. */
+export function fastPathMeta(record: FastPathRecord): Record<string, string | number> {
+  return {
+    windowHours: record.windowHours,
+    moments: record.moments,
+    graded: record.graded,
+    won2x: record.won2x,
+    seats: record.seats.map((s) => `${s.contestant} ${s.won2x}/${s.graded} of ${s.calls}`).join("; "),
+  };
+}
+
+export async function fastPathRecord(now = new Date()): Promise<FastPathRecord | null> {
+  const since = new Date(now.getTime() - FAST_PATH_RECORD_WINDOW_HOURS * 3_600_000);
+  const [moments, seats] = await Promise.all([
+    prisma.$queryRaw<{ moments: bigint; graded: bigint; won: bigint }[]>`
+      SELECT count(*) AS moments,
+             count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS graded,
+             count(*) FILTER (WHERE "hit2xIn1h" AND NOT COALESCE("disqualified", false)) AS won
+      FROM "CandidateOutcome"
+      WHERE "sampleKind" = 'entry' AND "anchorAt" >= ${since} AND "anchorAt" < ${now}`,
+    prisma.$queryRaw<{ model: string; calls: bigint; graded: bigint; won: bigint }[]>`
+      SELECT a."model",
+             count(DISTINCT a."candidateOutcomeId") AS calls,
+             count(DISTINCT a."candidateOutcomeId") FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
+             count(DISTINCT a."candidateOutcomeId")
+               FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won
+      FROM "CuratedAlert" a
+      JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId" AND co."sampleKind" = 'entry'
+      WHERE a."createdAt" >= ${since} AND a."createdAt" < ${now}
+      GROUP BY a."model" ORDER BY a."model"`,
+  ]);
+  const total = moments[0];
+  if (total === undefined || Number(total.moments) === 0) return null;
+  return {
+    windowHours: FAST_PATH_RECORD_WINDOW_HOURS,
+    moments: Number(total.moments),
+    graded: Number(total.graded),
+    won2x: Number(total.won),
+    seats: seats.map((s) => ({
+      contestant: s.model,
+      calls: Number(s.calls),
+      graded: Number(s.graded),
+      won2x: Number(s.won),
+    })),
+  };
 }
 
 async function loadIncumbents() {
@@ -965,8 +1063,21 @@ export async function loadTrainingRows(
     loadRowsOfKind("event", windowStart, maxRows, pageRows, undefined, opts),
     alertedEventAnchors(windowStart),
   ]);
+  // The fast path's rows, when asked for: banked seconds into the band, before any hourly row of
+  // the coin, so they are no twin of one.
+  const entries =
+    opts?.trainOnEntryRows === true
+      ? await loadRowsOfKind("entry", windowStart, Math.max(0, maxRows - events.length), pageRows, band, opts)
+      : [];
   const hourly = withoutEventTwins(
-    await loadRowsOfKind("hourly", windowStart, maxRows - events.length, pageRows, band, opts),
+    await loadRowsOfKind(
+      "hourly",
+      windowStart,
+      maxRows - events.length - entries.length,
+      pageRows,
+      band,
+      opts,
+    ),
     events.map((e) => ({
       tokenId: e.tokenId,
       anchorAt: e.anchorAt,
@@ -975,7 +1086,7 @@ export async function loadTrainingRows(
     })),
   );
   // Newest first, as a single newest-first query would have returned them; ties keep events first.
-  return [...events, ...hourly].sort((a, b) => b.anchorAt.getTime() - a.anchorAt.getTime());
+  return [...events, ...entries, ...hourly].sort((a, b) => b.anchorAt.getTime() - a.anchorAt.getTime());
 }
 
 /** An hourly row this close to one of its token's event rows was banked from the same scan. */
@@ -1396,10 +1507,16 @@ const launchedAtSql = Prisma.sql`SELECT t."launchedAt" FROM "Token" t WHERE t."i
 interface LoadRowsOptions {
   excludeFineTickLabels?: boolean;
   tokenSageXReuseRestoredAt?: Date | null;
+  /**
+   * Load the fast path's decision rows ("entry") too (CURATOR_TRAIN_ON_ENTRY_ROWS). They join the
+   * fit as rows the exam does not grade (isDecisionRow knows "event" and "hourly"), the way
+   * background rows do: the seats then see the inputs a seconds-old coin has.
+   */
+  trainOnEntryRows?: boolean;
 }
 
 async function loadRowsOfKind(
-  sampleKind: "hourly" | "event" | "second",
+  sampleKind: "hourly" | "event" | "second" | "entry",
   windowStart: Date,
   maxRows: number,
   pageRows: number,

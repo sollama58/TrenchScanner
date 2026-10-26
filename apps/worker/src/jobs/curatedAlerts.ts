@@ -468,9 +468,18 @@ const BACKING_RANK = 0.9;
  * Which moment a candidate is being decided at. "event" is the decision moment every seat
  * decides on; "second" is the second look the scan takes when TokenSage's deep read lands after
  * the token's last decision (CandidateOutcome.sampleKind "second"), where only the Narrative seat
- * decides. The Narrative seat decides on either, but never without the deep read.
+ * decides. The Narrative seat decides on either, but never without the deep read. "entry" is the
+ * entry fast path's first scan of a coin that crossed the floor (CandidateOutcome.sampleKind
+ * "entry"): every seat decides as at an event, but its cutoff, member ranks and conviction line
+ * are read on the fast path's own rows (LiveScales.entry), since the seats score those seconds-old
+ * moments on another scale than the cycle's (model audit 2026-10-26).
  */
-export type DecisionPopulation = "event" | "second";
+export type DecisionPopulation = "event" | "second" | "entry";
+
+/** The moments every seat stores its score on: the two populations the live scales are read from. */
+export function banksSeatScores(population: DecisionPopulation): boolean {
+  return population === "event" || population === "entry";
+}
 
 /**
  * Every contestant's decision on this candidate, keyed by contestant id. A model decision's
@@ -858,10 +867,14 @@ export async function collectCuratedContender(
 
   const roster = await curatorRoster(env);
   const memberScores = new Map<string, number>();
-  const decisions = decideCurations(scored, roster, env, population, await liveScales(env), memberScores);
+  // The fast path decides on its own population's scales (none yet: the shipped cutoffs, as a
+  // seat with too few live scores anywhere does).
+  const scales = await liveScales(env);
+  const live = population === "entry" ? (scales.entry ?? EMPTY_LIVE_SCALES) : scales;
+  const decisions = decideCurations(scored, roster, env, population, live, memberScores);
   // A new decision moment banks every seat's score: the next cutoffs and lines are drawn on them.
   // A retry or a moment the spacing window folded into an earlier row is not a new moment.
-  if (population === "event" && retry === undefined && cycleSample?.created) {
+  if (banksSeatScores(population) && retry === undefined && cycleSample?.created) {
     await recordSeatScores(cycleSample.id, decisions, memberScores);
   }
   const cooldownCutoff = new Date(Date.now() - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000);
