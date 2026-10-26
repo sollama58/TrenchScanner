@@ -145,6 +145,7 @@ model User {
   watchlist         WatchlistItem[]
   /// Asyl's saved maps (asyl.trenchscanner.app, apps/api/src/asyl/maps.ts).
   asylMaps          AsylMap[]
+  asylWatches       AsylWatch[]
 }
 
 /// Optional two-factor (user ask 2026-10-18): an authenticator app, passkeys, or both, and which
@@ -3919,6 +3920,21 @@ model AsylMap {
   updatedAt DateTime  @updatedAt
 
   @@index([userId, updatedAt])
+}
+
+/// Wallets an Asyl user watches (user ask 2026-10-26: watchlists and alerts). What each did since
+/// `seenAt` (funded a wallet, bought a coin, deployed one) is read from the stored tables when the
+/// watchlist opens (apps/api/src/asyl/watch.ts), so no job runs for it. Private to the user.
+model AsylWatch {
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet    String
+  name      String?
+  /// The newest activity the user has seen; later activity counts as new.
+  seenAt    DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  @@id([userId, wallet])
 }
 
 /// Helius credits each user's Asyl chain reads took, per UTC day (apps/api/src/asyl/credits.ts):

@@ -2716,3 +2716,115 @@ body {
 .asyl-pnl .bad {
   color: var(--asyl-bad);
 }
+
+/* The export menu. */
+.asyl-menu {
+  position: relative;
+  display: inline-flex;
+}
+.asyl-menu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  min-width: 260px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--asyl-panel);
+  border: 1px solid var(--asyl-rim, var(--asyl-line));
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+}
+.asyl-menu-list button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--asyl-text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.asyl-menu-list button:hover,
+.asyl-menu-list button:focus-visible {
+  background: rgba(255, 176, 103, 0.12);
+}
+.asyl-menu-list b {
+  font-size: 13px;
+}
+.asyl-menu-list span {
+  font-size: 11.5px;
+  color: var(--asyl-muted);
+}
+
+/* The watchlist (WatchList.tsx). */
+.asyl-watch {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.asyl-watch-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.asyl-watch-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.asyl-watch-list > li {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--asyl-line);
+  background: rgba(0, 0, 0, 0.22);
+}
+.asyl-watch-list > li.fresh {
+  border-color: rgba(255, 176, 103, 0.5);
+}
+.asyl-watch-wallet {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.asyl-watch-wallet .asyl-link {
+  font-weight: 700;
+  margin-right: auto;
+}
+.asyl-watch-events {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+}
+.asyl-watch-events li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.asyl-watch-events li::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin: 6px -2px 0 0;
+  border-radius: 50%;
+  background: transparent;
+}
+.asyl-watch-events li.new::before {
+  background: var(--asyl-orange);
+}
+.asyl-watch-events li > span:first-child {
+  margin-right: auto;
+}

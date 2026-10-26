@@ -53,6 +53,8 @@ export interface InspectorActions {
   earlyBuyers: (mint: string) => void;
   /** Every coin a wallet deployed that TrenchScanner knows of. */
   launches: (wallet: string) => void;
+  /** Starts or stops watching a wallet (the Watch tab). */
+  watch: (wallet: string, on: boolean) => void;
   /** Puts wallets that sold a coin together on the map, with what ties them. */
   wave: (wallets: string[], mint: string) => void;
   /** Finds a coin's deployer (from the chain for Pro Mode when unknown) and puts it on the map. */
@@ -100,6 +102,7 @@ export function Inspector({
   onOwnKind,
   holderRule,
   onEditRule,
+  watched,
   actions,
   onClose,
 }: {
@@ -119,6 +122,8 @@ export function Inspector({
   holderRule?: { minPct: number; minSol: number };
   /** Opens the cutoffs that set the holder rule. */
   onEditRule?: () => void;
+  /** Whether the reader watches this wallet. */
+  watched?: boolean;
   actions: InspectorActions;
   onClose: () => void;
 }) {
@@ -445,6 +450,21 @@ export function Inspector({
           {node.kind === "wallet" && (
             <button className="asyl-btn" disabled={!!busy} onClick={() => actions.similar(node.id)}>
               Wallets that trade like it
+            </button>
+          )}
+          {node.kind === "wallet" && (
+            <button
+              className={`asyl-btn${watched ? " on" : ""}`}
+              disabled={!!busy}
+              aria-pressed={!!watched}
+              title={
+                watched
+                  ? "You watch it: the Watch tab lists what it does. Click to stop"
+                  : "Watch it: the Watch tab shows when it funds a wallet, buys a coin or deploys one (free)"
+              }
+              onClick={() => actions.watch(node.id, !watched)}
+            >
+              {watched ? "👁 Watching" : "👁 Watch"}
             </button>
           )}
           {node.kind === "wallet" && node.tags.includes("dev") && (
