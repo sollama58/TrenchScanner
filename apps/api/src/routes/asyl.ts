@@ -77,6 +77,7 @@ import {
 import type { AsylCoverage } from "../asyl/types.js";
 import { addEarlyBuyers, addLaunches, loadCoinReport } from "../asyl/report.js";
 import { COMMON_FUNDER_WALLETS, commonFunderNote, findCommonFunder } from "../asyl/funders.js";
+import { WATCH_MAX, addWatch, listWatches, markSeen, removeWatch } from "../asyl/watch.js";
 
 /**
  * Asyl (asyl.trenchscanner.app, user decisions 2026-10-24): maps of how wallets are linked, for
@@ -91,6 +92,8 @@ import { COMMON_FUNDER_WALLETS, commonFunderNote, findCommonFunder } from "../as
 const address = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "not a Solana address");
 const walletParams = z.object({ wallet: address });
 const mintParams = z.object({ mint: address });
+const watchBody = z.object({ name: z.string().max(64).nullable().optional() });
+const seenBody = z.object({ wallet: address.nullable().optional() });
 const commonFunderBody = z.object({ wallets: z.array(address).min(2).max(COMMON_FUNDER_WALLETS) });
 const pairParams = z.object({ a: address, b: address });
 const searchQuery = z.object({ q: z.string().trim().min(2).max(60) });
@@ -460,6 +463,42 @@ export async function registerAsylRoutes(
       await addLinksAmong(g, b.data.wallets, b.data.tokens, { deployers: b.data.deployers });
       reply.header("Cache-Control", "private, no-store");
       return { focus: null, graph: await decorate(g, await trackedOf(request)) };
+    });
+
+    // ---------- the watchlist (asyl/watch.ts) ----------
+
+    /** Watched wallets and what each did lately, read from the tables. */
+    priv.get("/watch", { config: { rateLimit: READ_LIMIT } }, async (request, reply) => {
+      reply.header("Cache-Control", "private, no-store");
+      return { cap: WATCH_MAX, wallets: await listWatches(request.user!.userId) };
+    });
+
+    priv.put("/watch/:wallet", { config: { rateLimit: READ_LIMIT } }, async (request, reply) => {
+      const p = walletParams.safeParse(request.params);
+      if (!p.success) return bad(reply, p.error);
+      const b = watchBody.safeParse(request.body ?? {});
+      if (!b.success) return bad(reply, b.error);
+      const name = b.data.name ? cleanTrackedName(b.data.name) : null;
+      const r = await addWatch(request.user!.userId, p.data.wallet, name);
+      if (!r.ok)
+        return reply.code(409).send({
+          error: `You watch ${WATCH_MAX} wallets, the most there is room for. Stop watching one first.`,
+        });
+      return { ok: true };
+    });
+
+    priv.delete("/watch/:wallet", async (request, reply) => {
+      const p = walletParams.safeParse(request.params);
+      if (!p.success) return bad(reply, p.error);
+      return { removed: await removeWatch(request.user!.userId, p.data.wallet) };
+    });
+
+    /** Marks one watched wallet's activity, or all of it, as seen. */
+    priv.post("/watch/seen", async (request, reply) => {
+      const b = seenBody.safeParse(request.body ?? {});
+      if (!b.success) return bad(reply, b.error);
+      await markSeen(request.user!.userId, b.data.wallet ?? null);
+      return { ok: true };
     });
 
     // ---------- the reader's own labels (Pro Mode) ----------
