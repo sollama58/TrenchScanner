@@ -168,6 +168,8 @@ export interface MapDoc {
   pinned?: string[];
   /** Grid mode; a map saved before it had none and opens without it. */
   grid?: boolean;
+  /** Analyst Mode: the map drawn as a flowchart. */
+  analyst?: boolean;
   /** Which kinds of line carry their time. */
   times?: TimeLabels;
   focus: string | null;

@@ -222,13 +222,16 @@ export async function registerAsylRoutes(
     const trackedOf = (request: FastifyRequest): Promise<TrackedWallet[]> => activeTracked(env, request.user);
 
     priv.get("/me", async (request) => {
-      const pro = await isPro(request);
+      const [pro, solUsd] = await Promise.all([
+        isPro(request),
+        // For the USD slider: SOL amounts on the map shown in dollars.
+        sharedSolPrice.get().catch(() => null),
+      ]);
       return {
         wallet: request.user!.walletAddress,
         pro,
         chain: pro ? await readAllowance(env, request.user!.userId) : null,
-        // For the USD slider: SOL amounts on the map shown in dollars.
-        solUsd: await sharedSolPrice.get().catch(() => null),
+        solUsd,
         labels: { cap: TRACKED_WALLET_CAP, nameMax: TRACKED_NAME_MAX },
       };
     });
@@ -256,15 +259,15 @@ export async function registerAsylRoutes(
       const tracked = await trackedOf(request);
       const g = new GraphBuilder();
       g.node(wallet, "wallet");
-      const [, , seen, { coTraders, total: coTradersTotal }] = await Promise.all([
+      const [, , seen, { coTraders, total: coTradersTotal }, , pro] = await Promise.all([
         addFunding(g, wallet),
         addHolderTransfers(g, wallet),
         addCoins(g, wallet),
         countCoTraders(wallet),
         addSides(g, wallet, tracked),
+        isPro(request),
       ]);
       addCoTraders(g, wallet, coTraders);
-      const pro = await isPro(request);
       const coverage: AsylCoverage = {
         seen,
         days: STORED_DAYS,
@@ -334,18 +337,22 @@ export async function registerAsylRoutes(
       const q = holdersQuery.safeParse(request.query ?? {});
       if (!q.success) return bad(reply, q.error);
       const mint = p.data.mint;
-      const tracked = await trackedOf(request);
-      const stored = await loadStoredHolders(mint, q.data.all === "1" ? HOLDERS_ALL_MAX : HOLDERS_MAX);
+      // The reads that don't wait on one another, at once.
+      const [tracked, stored, deployers, pro] = await Promise.all([
+        trackedOf(request),
+        loadStoredHolders(mint, q.data.all === "1" ? HOLDERS_ALL_MAX : HOLDERS_MAX),
+        loadDeployers([mint]),
+        isPro(request),
+      ]);
       const kept = atLeast(stored.holders, q.data.minPct);
       const g = new GraphBuilder();
       g.node(mint, "token");
       await addHolders(g, mint, kept, "stored");
-      const deployer = (await loadDeployers([mint])).get(mint);
+      const deployer = deployers.get(mint);
       if (deployer) {
         g.node(deployer.wallet, "wallet");
         deployedEdge(g, deployer.wallet, mint, deployer.at);
       }
-      const pro = await isPro(request);
       const coverage: AsylCoverage = {
         seen: kept.length,
         days: STORED_DAYS,

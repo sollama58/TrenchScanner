@@ -323,3 +323,27 @@ describe("picking bubbles", () => {
     ).toEqual([]);
   });
 });
+
+describe("who buys first, on a bought-together line stored either way round", () => {
+  const first = (c: 1 | 2) => ({ ...NO_CUTOFFS, first: c });
+  it("reads the co-trader from the line's own `from`", () => {
+    // Searched from b; a is the co-trader and bought 30s before b: leadSec (a to b) is +30.
+    const e = {
+      a: "a",
+      b: "b",
+      kind: "cotrade" as const,
+      weight: 5,
+      label: "",
+      source: "stored" as const,
+      shared: 5,
+      leadSec: 30,
+      from: "b",
+    };
+    expect(clearsCutoffs(e, first(1), null)).toBe(true);
+    expect(clearsCutoffs(e, first(2), null)).toBe(false);
+    // Saved before lines carried `from`: the far end is taken as the co-trader.
+    const old = { ...e, from: undefined };
+    expect(clearsCutoffs(old, first(1), null)).toBe(false);
+    expect(clearsCutoffs(old, first(2), null)).toBe(true);
+  });
+});

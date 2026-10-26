@@ -66,6 +66,7 @@ const edgeSchema = z.object({
   of: finite.nullable().optional(),
   gapSec: finite.nullable().optional(),
   leadSec: finite.nullable().optional(),
+  from: address.nullable().optional(),
 });
 
 /** The least a money link must carry to be drawn; 0 draws them all. */
@@ -153,6 +154,8 @@ export const mapDocSchema = z.object({
   pinned: z.array(address).max(MAP_NODES_MAX).optional(),
   /** Grid mode: each bubble on its own cell. */
   grid: z.boolean().optional(),
+  /** Analyst Mode: drawn as a flowchart of boxes and right-angled lines. */
+  analyst: z.boolean().optional(),
   /** Which kinds of line carry their time. */
   times: z.object({ funded: z.boolean(), created: z.boolean(), transfer: z.boolean() }).optional(),
   /** The node it was opened around. */
@@ -227,14 +230,36 @@ const summary = (row: {
   updatedAt: row.updatedAt.toISOString(),
 });
 
+/**
+ * The reader's maps, newest first. Each one's size is counted in the database: a list of up to
+ * MAPS_PER_USER maps never reads their whole documents (up to MAP_BODY_LIMIT each) to count them.
+ */
 export async function listMaps(userId: string): Promise<MapSummary[]> {
-  const rows = await prisma.asylMap.findMany({
-    where: { userId },
-    orderBy: { updatedAt: "desc" },
-    take: MAPS_PER_USER,
-    select: { id: true, title: true, doc: true, shareSlug: true, sharedAt: true, updatedAt: true },
-  });
-  return rows.map(summary);
+  const rows = await prisma.$queryRaw<
+    {
+      id: string;
+      title: string;
+      nodes: number;
+      shareSlug: string | null;
+      sharedAt: Date | null;
+      updatedAt: Date;
+    }[]
+  >`
+    SELECT "id", "title",
+           CASE WHEN jsonb_typeof("doc"->'nodes') = 'array' THEN jsonb_array_length("doc"->'nodes') ELSE 0 END::int AS nodes,
+           "shareSlug", "sharedAt", "updatedAt"
+      FROM "AsylMap"
+     WHERE "userId" = ${userId}
+     ORDER BY "updatedAt" DESC
+     LIMIT ${MAPS_PER_USER}`;
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title,
+    nodes: r.nodes,
+    shareSlug: r.shareSlug,
+    sharedAt: r.sharedAt?.toISOString() ?? null,
+    updatedAt: r.updatedAt.toISOString(),
+  }));
 }
 
 export async function readMap(userId: string, id: string) {
