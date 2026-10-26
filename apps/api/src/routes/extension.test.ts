@@ -331,7 +331,10 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
     const [stored, unknown] = [mint(), mint()];
     mints.push(stored, unknown);
-    const token = await prisma.token.create({ data: { mintAddress: stored, symbol: "LOOK" } });
+    // The newest scan's empty-wallet lookups didn't all land: the last known share stands in.
+    const token = await prisma.token.create({
+      data: { mintAddress: stored, symbol: "LOOK", lastEmptyTop10WalletPct: 30 },
+    });
     await prisma.tokenSnapshot.create({
       data: {
         tokenId: token.id,
@@ -348,6 +351,7 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
       mint: stored,
       symbol: "LOOK",
       safety: { passed: false, reasons: ["mint authority active"] },
+      stats: { emptyTop10WalletCount: 3 },
       modelCalls: [],
       filterMatches: [],
       ai: null,

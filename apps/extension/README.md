@@ -182,3 +182,11 @@ settings (Release to the Chrome Web Store, above; user ask 2026-10-25).
   for them, only while one is on (`noteAlerts` in `sw.ts`); the first read only marks what is there.
 - **Each model's and filter's colour** on its cards in the panel too; the store build's Settings
   keeps that section, without the ring effects.
+
+0.8.1 (user asks 2026-10-26):
+
+- **Empty wallets in top 10** is a flag (off by default, limit 3), so the pill, the tooltip and the
+  panel can show it: how many of the top 10 holders hold nothing else worth $25. The scan
+  re-measures it each cycle against the current top 10; the API answers the newest reading, or the
+  last known one (`Token.lastEmptyTop10WalletPct`) when the newest scan's lookups didn't all land.
+- The unsafe mark tints the failing coin's row red, and its "✕ Unsafe" tag is a size larger.

@@ -20,6 +20,7 @@ export const OVERLAY_FLAGS = {
   devWalletPct: { on: false, threshold: 5 },
   top10HolderPct: { on: false, threshold: 30 },
   freshTop10WalletPct: { on: false, threshold: 40 },
+  emptyTop10WalletCount: { on: false, threshold: 3 },
   cexFundedPct: { on: false, threshold: 40 },
   kolRecentBuyers: { on: false, threshold: null },
   mintAuthorityActive: { on: false, threshold: null },
