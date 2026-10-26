@@ -433,6 +433,11 @@ services:
         value: "true"
       - key: ENTRY_FAST_PATH_MAX_PER_MINUTE
         value: "30"
+      # A fast scan waits up to this long for TokenSage's quick read (asked for at the crossing)
+      # before deciding, then scans the coin as it is now (user decision 2026-10-26). "0" turns
+      # the hold off.
+      - key: ENTRY_READ_HOLD_SECONDS
+        value: "20"
       # Per-CYCLE Helius budgets. Curated contenders' wallets are looked up first, the rest
       # behind the cycle on what is left. Freshness is back at its one-minute value, 50 (the env
       # default), with the cycle back at a minute (user decision 2026-10-22): it was halved to 25

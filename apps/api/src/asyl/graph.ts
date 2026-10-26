@@ -302,7 +302,7 @@ interface TradeRow {
 }
 
 /** A "traded" edge: what `wallet` bought and sold of `mint`. */
-function tradedEdge(g: GraphBuilder, wallet: string, mint: string, t: TradeRow): void {
+export function tradedEdge(g: GraphBuilder, wallet: string, mint: string, t: TradeRow): void {
   const net = t.solOut - t.solIn;
   g.edge({
     a: wallet,

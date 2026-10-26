@@ -12,7 +12,9 @@ import {
 } from "@trenchscanner/core";
 import {
   flushNarrativeRequests,
+  narrativeSettled,
   noteNarrativeWanted,
+  requestNarrativeRead,
   resetTokenSage,
   setFlushDeadlineForTest,
   startNarrativePolling,
@@ -80,6 +82,32 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     expect(batch).toHaveBeenCalledTimes(2);
     expect(cas(batch.mock.calls[1]!)).toContain(b);
     expect(await prisma.tokenNarrative.count({ where: { mintAddress: b } })).toBe(1);
+  });
+
+  it("asks for a quick read at once at the crossing, and says when TokenSage has answered", async () => {
+    const { client, batch } = fakeClient();
+    const a = `${TAG}-cross-a`;
+    const b = `${TAG}-cross-b`;
+    batch.mockResolvedValueOnce(
+      ok([
+        { ca: a, status: "complete", analysis: analysis(a, "basic") },
+        { ca: b, status: "pending", job_id: 9 },
+      ]),
+    );
+    expect(narrativeSettled(a)).toBe(false);
+    requestNarrativeRead(a, env, client);
+    requestNarrativeRead(b, env, client);
+    // The first request kicked a flush on its own; the second rode on it or waits for the poller.
+    await vi.waitFor(() => expect(batch).toHaveBeenCalled());
+    await flushNarrativeRequests(env, client);
+    expect(batch.mock.calls[0]![1]).toBe("basic");
+    expect(batch.mock.calls.flatMap((call) => cas(call))).toContain(a);
+    await vi.waitFor(() => expect(narrativeSettled(a)).toBe(true));
+    // Still queued on TokenSage's side: not answered.
+    expect(narrativeSettled(b)).toBe(false);
+    // Switched off, it asks nothing.
+    requestNarrativeRead(`${TAG}-off`, { ...env, TOKENSAGE_ENABLED: false }, client);
+    expect(narrativeSettled(`${TAG}-off`)).toBe(false);
   });
 
   it("sends hints, stores cached answers, and re-sends queued ones instead of polling", async () => {

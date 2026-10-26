@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ago, usd } from "../format";
 import { LinkSwatch, imageSources } from "./GraphView";
 import { asylApi, avatarUrl, type AsylMe, type Dossier } from "./asylApi";
+import { CoinReportCard } from "./CoinReport";
 import {
   EDGE_LABEL,
   WALLET_SWITCHES,
@@ -41,11 +42,17 @@ export interface InspectorActions {
   flows: (wallet: string) => void;
   funders: (wallets: string[]) => void;
   trace: (wallet: string) => void;
+  /** Follows the money out of a wallet, hop by hop, to an exchange or where it stopped. */
+  exits: (wallet: string) => void;
   /**
    * A coin's holders now and in the past, as the reader's cutoffs keep them (user ask 2026-10-25:
    * one Show holders); `live` reads the current ones from the chain.
    */
   holders: (mint: string, live: boolean) => void;
+  /** A coin's first buyers on its trade tape, with who funded them. */
+  earlyBuyers: (mint: string) => void;
+  /** Every coin a wallet deployed that TrenchScanner knows of. */
+  launches: (wallet: string) => void;
   /** Finds a coin's deployer (from the chain for Pro Mode when unknown) and puts it on the map. */
   showDeployer: (mint: string) => void;
   hide: (id: string) => void;
@@ -246,6 +253,17 @@ export function Inspector({
         </dl>
       )}
 
+      {node.kind === "token" && (
+        <CoinReportCard
+          mint={node.id}
+          busy={!!busy}
+          nameOf={(id) => (byId.has(id) ? nodeName(byId.get(id)!) : null)}
+          onEarlyBuyers={actions.earlyBuyers}
+          onLaunches={actions.launches}
+          onSelect={actions.select}
+        />
+      )}
+
       {node.kind === "wallet" && (
         <div className="asyl-dossier">
           {!dossier && !dossierError && <p className="asyl-muted">Reading the wallet…</p>}
@@ -395,6 +413,11 @@ export function Inspector({
               Wallets that trade like it
             </button>
           )}
+          {node.kind === "wallet" && node.tags.includes("dev") && (
+            <button className="asyl-btn" disabled={!!busy} onClick={() => actions.launches(node.id)}>
+              Coins it deployed
+            </button>
+          )}
           {node.kind === "token" && (
             <button
               className="asyl-btn deploy"
@@ -483,6 +506,17 @@ export function Inspector({
                 onClick={() => actions.trace(node.id)}
               >
                 Trace to terminal funder
+              </button>
+              <button
+                className="asyl-btn chain"
+                disabled={!!busy || !!chainOff}
+                title={
+                  chainOff ??
+                  "Follows the biggest SOL it sent on, hop by hop, until an exchange or a wallet that sent nothing on. Up to 6 hops, up to 30 credits each; wallets read today are free"
+                }
+                onClick={() => actions.exits(node.id)}
+              >
+                Where did the money go
               </button>
             </>
           )}

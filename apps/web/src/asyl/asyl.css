@@ -2605,3 +2605,44 @@ body {
     font-size: 12px;
   }
 }
+
+/* A coin's report: bundle check and dev history (CoinReport.tsx). */
+.asyl-verdict {
+  margin: 0;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--asyl-line);
+  background: rgba(0, 0, 0, 0.25);
+  font-weight: 600;
+}
+.asyl-verdict.bad {
+  color: var(--asyl-bad);
+  border-color: rgba(255, 90, 74, 0.45);
+}
+.asyl-verdict.warn {
+  color: #ffc857;
+  border-color: rgba(255, 200, 87, 0.4);
+}
+.asyl-verdict.good {
+  color: var(--asyl-good);
+  border-color: rgba(62, 224, 143, 0.35);
+}
+.asyl-report-coins {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+}
+.asyl-report-coins li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+}
+.asyl-report-coins .good {
+  color: var(--asyl-good);
+}
+.asyl-report-coins .bad {
+  color: var(--asyl-bad);
+}

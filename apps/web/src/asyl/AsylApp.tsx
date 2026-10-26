@@ -80,6 +80,8 @@ function go(r: AsylRoute) {
 const PICK_COINS_MAX = 25;
 /** ...and the most it reads live from the chain (12 chain reads a minute, ~130 credits each). */
 const PICK_LIVE_MAX = 10;
+/** Wallets a common funder search takes at once (the API's COMMON_FUNDER_WALLETS). */
+const PICK_FUNDER_MAX = 50;
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -846,6 +848,22 @@ export function AsylApp() {
     go();
   };
 
+  /** The nearest wallet that paid for two or more of the picked wallets (stored funding only). */
+  const commonFunder = (wallets: string[]) => {
+    if (wallets.length < 2) return;
+    if (wallets.length > PICK_FUNDER_MAX)
+      return setStatus({
+        tone: "error",
+        text: `Pick ${PICK_FUNDER_MAX} wallets or fewer to find a funder they share; ${wallets.length} are picked.`,
+      });
+    void run("Looking up their funders…", async () => {
+      const r = await asylApi.commonFunder(wallets);
+      add(r.graph);
+      if (r.best) setSelected(r.best.funder);
+      return r.note;
+    });
+  };
+
   /** Each picked coin's deployer, one after another, as Show deployer finds one. */
   const showDeployers = (mints: string[]) => {
     if (mints.length === 0) return;
@@ -890,6 +908,23 @@ export function AsylApp() {
 
   const actions: InspectorActions = {
     expand: (n: AsylNode) => void (n.kind === "token" ? openToken(n.id) : openWallet(n.id)),
+    earlyBuyers: (mint) =>
+      void run("Reading its first buyers…", async () => {
+        const r = await asylApi.earlyBuyers(mint);
+        add(r.graph);
+        if (!r.shown)
+          return "TrenchScanner hasn't read this coin's launch, so it doesn't know its first buyers.";
+        const funders = new Set(r.graph.edges.filter((e) => e.kind === "funded").map((e) => e.a)).size;
+        return `${r.shown} first buyer${r.shown === 1 ? "" : "s"}, and ${funders} wallet${funders === 1 ? "" : "s"} that funded them.`;
+      }),
+    launches: (wallet) =>
+      void run("Finding the coins it deployed…", async () => {
+        const r = await asylApi.launches(wallet);
+        add(r.graph);
+        return r.shown
+          ? `${r.shown} coin${r.shown === 1 ? "" : "s"} it deployed that TrenchScanner knows of.`
+          : "TrenchScanner doesn't know any coin this wallet deployed.";
+      }),
     pair: (a, b) => setPair({ a, b }),
     similar: (wallet) =>
       void run("Finding wallets that trade like it…", async () => {
@@ -984,6 +1019,18 @@ export function AsylApp() {
         add(r.graph);
         setSession((s) => (typeof s === "object" ? { ...s, chain: r.allowance } : s));
         const end = r.trace.path[r.trace.path.length - 1];
+        if (end && end !== wallet) setSelected(end);
+        const spent = r.cached
+          ? "No credits used."
+          : `${r.credits} credit${r.credits === 1 ? "" : "s"} used.`;
+        return `${r.note} ${spent}`;
+      }),
+    exits: (wallet) =>
+      void run("Following the money out…", async () => {
+        const r = await asylApi.exits(wallet);
+        add(r.graph);
+        setSession((s) => (typeof s === "object" ? { ...s, chain: r.allowance } : s));
+        const end = r.exits.path[r.exits.path.length - 1];
         if (end && end !== wallet) setSelected(end);
         const spent = r.cached
           ? "No credits used."
@@ -2043,6 +2090,7 @@ export function AsylApp() {
               }
               onShowHolders={(live) => showHolders(pickInfo.tokens, live)}
               onShowDeployers={() => showDeployers(pickInfo.tokens)}
+              onCommonFunder={() => commonFunder(pickInfo.wallets)}
             />
           )}
           {ask && (
