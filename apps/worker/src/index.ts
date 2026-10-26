@@ -58,7 +58,7 @@ import {
   MintSupplies,
 } from "@trenchscanner/core";
 import { EntryWatch } from "./entryWatch.js";
-import { EntryFastPath } from "./jobs/entryFastPath.js";
+import { ENTRY_READ_HOLD_POLL_MS, EntryFastPath } from "./jobs/entryFastPath.js";
 import { scanScheduleOptions } from "./scanSchedule.js";
 import { runEntryScan, runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
 import { pumpLaunchBackups } from "./jobs/pumpLaunch.js";
@@ -132,7 +132,13 @@ import { startCandleBackfill } from "./jobs/candleBackfill.js";
 import { onHolderStreamTx, setHolderTransferStream } from "./jobs/holderTransfers.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
 import { knownMayhem, knownNotMayhem, screenOutMayhem } from "./jobs/mayhemMode.js";
-import { startNarrativePolling } from "./tokensage/prefetch.js";
+import {
+  flushNarrativeRequests,
+  narrativeSettled,
+  requestNarrativeRead,
+  startNarrativePolling,
+  tokenSageEnabled,
+} from "./tokensage/prefetch.js";
 
 const logger = createLogger("worker");
 /** SOL's USD price minute by minute, shared by the chain-read candles (chainCandles.ts). */
@@ -393,6 +399,9 @@ async function main() {
             // The curve tape's live prices: a crossing is seen within half a second of the trade.
             curveTapeOn ? (mint: string, now: number) => curvePriceOf(mint, now) : undefined,
             (mint, crossedAt) => void entryFastPath?.offer(mint, crossedAt),
+            // TokenSage's quick read, asked for the moment the launch first reads over the floor,
+            // so it is most of the way back when the fast path decides (user decision 2026-10-26).
+            (mint) => requestNarrativeRead(mint, env),
           )
         : undefined,
     entryFastPath: undefined as EntryFastPath | undefined,
@@ -415,6 +424,17 @@ async function main() {
         maxPerMinute: env.ENTRY_FAST_PATH_MAX_PER_MINUTE,
         eligible: knownNotMayhem,
         scan: (mint) => runEntryScan(deps, env, mint),
+        // The wait for that read before the scan (ENTRY_READ_HOLD_SECONDS); each check flushes the
+        // prefetcher, which stores a finished read. Nothing waits while TokenSage is off.
+        readHold:
+          tokenSageEnabled(env) && env.ENTRY_READ_HOLD_SECONDS > 0
+            ? {
+                maxMs: env.ENTRY_READ_HOLD_SECONDS * 1000,
+                pollMs: ENTRY_READ_HOLD_POLL_MS,
+                settled: (mint) => narrativeSettled(mint),
+                poll: () => flushNarrativeRequests(env),
+              }
+            : undefined,
       })
     : undefined;
   deps.entryFastPath = entryFastPath;

@@ -123,6 +123,13 @@ export class EntryWatch {
     private readonly curvePrice: (mint: string, now: number) => number | null = () => null,
     /** A launch has held the floor for the dwell: `crossedAt` is its first reading at or over it. */
     private readonly onEntry: (mint: string, crossedAt: number) => void = () => {},
+    /**
+     * A launch has just read at or over the floor for the first time in its current run over it:
+     * the dwell starts now. The worker asks TokenSage for the coin's quick read here
+     * (prefetch.ts requestNarrativeRead), so the read is on its way before the fast path decides.
+     * Called again only after a dip under the floor (a new crossing).
+     */
+    private readonly onCrossing: (mint: string) => void = () => {},
   ) {}
 
   /**
@@ -241,6 +248,7 @@ export class EntryWatch {
         this.stats.crossings += 1;
         if (fresh.has(mint)) this.stats.newLaunchCrossings += 1;
         if (curve) this.stats.curveCrossings += 1;
+        this.onCrossing(mint);
         continue;
       }
       // A launch Jupiter alone prices is read every ENTRY_QUOTE_MS, so its dwell is that long.

@@ -20,8 +20,27 @@ export interface EntryFastPathOptions {
   eligible: (mint: string) => boolean;
   /** The scan itself (scanJob.ts's runEntryScan). */
   scan: (mint: string) => Promise<EntryScanResult>;
+  /**
+   * The hold for TokenSage's quick read (user decision 2026-10-26): before its scan, a coin waits
+   * until `settled` says TokenSage has answered for it, or `maxMs` has passed, checking every
+   * `pollMs` and calling `poll` between checks (the prefetcher's flush, which stores a finished
+   * read). Absent, or with maxMs 0, no coin waits. A coin whose read is already in never waits.
+   */
+  readHold?: EntryReadHold;
   now?: () => number;
+  /** The wait between hold checks; real time by default, a fake in tests. */
+  sleep?: (ms: number) => Promise<void>;
 }
+
+export interface EntryReadHold {
+  maxMs: number;
+  pollMs: number;
+  settled: (mint: string) => boolean;
+  poll?: () => void | Promise<void>;
+}
+
+/** How often a held coin checks for its read when the hold names no cadence. */
+export const ENTRY_READ_HOLD_POLL_MS = 2_000;
 
 export interface EntryFastPathStats {
   /** Coins handed over by the entry watch. */
@@ -45,6 +64,12 @@ export interface EntryFastPathStats {
   crossToDecisionMsMax?: number;
   /** The same, for the coins a model called. */
   crossToCallMsMedian?: number;
+  /** Coins that waited for TokenSage's read, and how each wait ended: the read came, or the cap ran out. */
+  held: number;
+  holdReadArrived: number;
+  holdTimedOut: number;
+  /** How long the held coins waited. */
+  holdMsMedian?: number;
 }
 
 const emptyStats = (): EntryFastPathStats => ({
@@ -59,7 +84,12 @@ const emptyStats = (): EntryFastPathStats => ({
   cycleWaitTimedOut: 0,
   noRow: 0,
   failed: 0,
+  held: 0,
+  holdReadArrived: 0,
+  holdTimedOut: 0,
 });
+
+const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 function median(values: number[]): number | undefined {
   if (values.length === 0) return undefined;
@@ -79,6 +109,13 @@ function median(values: number[]): number | undefined {
  * in scanJob.ts): the coin's moments stay the cycle's, on their old schedule, so the inputs that
  * land in its first minute (TokenSage's read, the curve tape) still reach a decision.
  *
+ * Before its scan a coin waits for TokenSage's quick read, up to ENTRY_READ_HOLD_SECONDS (user
+ * decision 2026-10-26; EntryReadHold): the read is asked for at the crossing (entryWatch.ts
+ * onCrossing) and lands a median 8 s after a decision made without it, so with no hold 18% of
+ * fast-path decisions carried it and with a 20 s cap about two thirds do, at a median 1.02x on
+ * the entry price (notes/model-audit-2026-10-26, section 7). The scan runs on the coin as it is
+ * after the wait, so a launch that collapsed meanwhile fails the pre-gate.
+ *
  * Each coin gets one: the watch never hands a coin over twice, and the cycle owns it after. One
  * scan per coin at a time, and never one alongside a cycle deciding on the same coin
  * (scanClaims.ts). At most maxPerMinute start in any minute; a coin over the cap waits for the
@@ -91,11 +128,14 @@ export class EntryFastPath {
   private stats = emptyStats();
   private decisionMs: number[] = [];
   private callMs: number[] = [];
+  private holdMs: number[] = [];
   private readonly running = new Set<Promise<void>>();
   private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(private readonly options: EntryFastPathOptions) {
     this.now = options.now ?? Date.now;
+    this.sleep = options.sleep ?? realSleep;
   }
 
   /** A coin has held the floor since `crossedAt`: its first scan now, if it may have one. Never rejects. */
@@ -123,6 +163,14 @@ export class EntryFastPath {
     }
     // Counted when it starts, waiting on a cycle included: the cap bounds the scans asked for.
     this.started.push(now);
+    // The hold comes before the claim, so a cycle that reaches the coin meanwhile is not kept
+    // waiting on a scan that has not started. The scan after the hold reads the coin as it is
+    // then, so a launch that collapsed during the wait fails the pre-gate it would have passed.
+    await this.holdForRead(mint);
+    if (!this.options.eligible(mint)) {
+      this.stats.skippedMayhem += 1;
+      return;
+    }
     let claim = claimForFastScan(mint);
     if (claim === "cycle") {
       this.stats.waitedOnCycle += 1;
@@ -162,6 +210,37 @@ export class EntryFastPath {
     }
   }
 
+  /**
+   * Waits for TokenSage's quick read on the coin, up to the hold's cap - see EntryReadHold. A coin
+   * whose read is already in (or that TokenSage has given up on) goes straight on.
+   */
+  private async holdForRead(mint: string): Promise<void> {
+    const hold = this.options.readHold;
+    if (hold === undefined || !(hold.maxMs > 0) || hold.settled(mint)) return;
+    const startedAt = this.now();
+    this.stats.held += 1;
+    const pollMs = hold.pollMs > 0 ? hold.pollMs : ENTRY_READ_HOLD_POLL_MS;
+    for (;;) {
+      const waited = this.now() - startedAt;
+      if (waited >= hold.maxMs) {
+        this.stats.holdTimedOut += 1;
+        this.holdMs.push(waited);
+        return;
+      }
+      await this.sleep(Math.min(pollMs, hold.maxMs - waited));
+      try {
+        await hold.poll?.();
+      } catch (err) {
+        logger.warn("entry read hold: poll failed", { mint, error: String(err) });
+      }
+      if (hold.settled(mint)) {
+        this.stats.holdReadArrived += 1;
+        this.holdMs.push(this.now() - startedAt);
+        return;
+      }
+    }
+  }
+
   /** Waits for the scans in flight, up to `ms`. For shutdown and tests. */
   async settle(ms = Infinity): Promise<void> {
     if (this.running.size === 0) return;
@@ -183,9 +262,12 @@ export class EntryFastPath {
     }
     const call = median(this.callMs);
     if (call !== undefined) stats.crossToCallMsMedian = call;
+    const hold = median(this.holdMs);
+    if (hold !== undefined) stats.holdMsMedian = hold;
     this.stats = emptyStats();
     this.decisionMs = [];
     this.callMs = [];
+    this.holdMs = [];
     return stats;
   }
 }
