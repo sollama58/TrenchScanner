@@ -253,6 +253,7 @@ export interface CoinReport {
     devHolding: boolean | null;
   } | null;
   verdict: { level: "high" | "some" | "low" | "unknown"; text: string };
+  waves: { from: string; to: string; wallets: string[]; sol: number }[];
   dev: {
     wallet: string;
     risk: number | null;
@@ -274,6 +275,21 @@ export interface CoinReport {
     }[];
     thisCoin: { solIn: number; solOut: number; sold: boolean; firstSellAt: string | null } | null;
   } | null;
+}
+
+/** A watched wallet and what it did lately (the API's asyl/watch.ts). */
+export interface WatchRow {
+  wallet: string;
+  name: string | null;
+  seenAt: string;
+  events: {
+    kind: "funded" | "bought" | "deployed";
+    target: string;
+    symbol: string | null;
+    sol: number | null;
+    at: string;
+  }[];
+  fresh: number;
 }
 
 const enc = encodeURIComponent;
@@ -361,6 +377,10 @@ export const asylApi = {
         note: string;
       }
     >("/asyl/common-funder", { wallets }),
+  watches: () => api<{ cap: number; wallets: WatchRow[] }>("/asyl/watch"),
+  watch: (wallet: string, name: string | null) => put<{ ok: true }>(`/asyl/watch/${enc(wallet)}`, { name }),
+  unwatch: (wallet: string) => del<{ removed: boolean }>(`/asyl/watch/${enc(wallet)}`),
+  watchSeen: (wallet: string | null) => post<{ ok: true }>("/asyl/watch/seen", { wallet }),
   maps: () => api<{ maps: MapSummary[]; cap: number }>("/asyl/maps"),
   map: (id: string) => api<MapSummary & { doc: MapDoc }>(`/asyl/maps/${enc(id)}`),
   createMap: (title: string, doc: MapDoc) => post<{ map: MapSummary }>("/asyl/maps", { title, doc }),

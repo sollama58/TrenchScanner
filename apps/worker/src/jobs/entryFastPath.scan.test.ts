@@ -160,7 +160,7 @@ describe.skipIf(!dbAvailable)("the entry fast path's first scan", () => {
     await prisma.token.deleteMany({ where: { mintAddress: { in: created } } });
   });
 
-  it("screens, scores and decides a coin as the cycle does, and leaves its decision moments to the cycle", async () => {
+  it("screens, scores and decides a coin as the cycle does, banks it as an entry row, and leaves the event to the cycle", async () => {
     const env: Env = {
       ...loadEnv(),
       // The decision moment is banked on the market reading and the report alone: the wallet
@@ -206,29 +206,35 @@ describe.skipIf(!dbAvailable)("the entry fast path's first scan", () => {
     expect(fastSnapshot.rugScreenPassed).toBe(true);
 
     // Both went before the curators on the same model inputs: the cycle's coin on the event row it
-    // banked, the fast scan's on none.
+    // banked, the fast scan's on the entry row it banked (its own kind, user decision 2026-10-26).
     const cycleDecision = decided.find((d) => d.mint === cycleMint);
     const fastDecision = decided.find((d) => d.mint === fastMint);
     expect(cycleDecision?.moment?.created).toBe(true);
     expect(fastDecision).toBeDefined();
-    expect(fastDecision!.moment).toBeNull();
+    expect(fastDecision!.moment?.created).toBe(true);
     expectSameReadings(featuresOf(fastDecision!.scored), featuresOf(cycleDecision!.scored));
 
     const samples = (mint: string) =>
       prisma.candidateOutcome.findMany({
         where: { token: { mintAddress: mint } },
-        select: { id: true, sampleKind: true, anchorMcapUsd: true, features: true },
+        select: { id: true, sampleKind: true, anchorMcapUsd: true, features: true, seatScores: true },
         orderBy: { sampleKind: "asc" },
       });
-    // The fast scan banked no row: the coin's decision moment is still the cycle's to take.
-    expect(await samples(fastMint)).toEqual([]);
+    // The fast scan banked the entry row alone, with every seat's score on it; the coin's decision
+    // moment (its event) is still the cycle's to take.
+    const entryRows = await samples(fastMint);
+    expect(entryRows.map((s) => s.sampleKind)).toEqual(["entry"]);
+    expect(entryRows[0]!.id).toBe(fastDecision!.moment!.id);
+    // (Only Rules sits here, and it stores no probability; curatedAlerts.test.ts covers a seat's
+    // score landing on the entry row.)
 
     // The next cycle reaches the coin on schedule and banks its decision moment (and its hourly
     // training sample) as it would have without the fast scan, and every seat decides there again.
     await runScanCycle(deps, env);
-    const [cycleSamples, fastSamples] = await Promise.all([samples(cycleMint), samples(fastMint)]);
-    expect(fastSamples.map((s) => s.sampleKind)).toEqual(["event", "hourly"]);
+    const [cycleSamples, fastAll] = await Promise.all([samples(cycleMint), samples(fastMint)]);
+    expect(fastAll.map((s) => s.sampleKind)).toEqual(["entry", "event", "hourly"]);
     expect(cycleSamples.map((s) => s.sampleKind)).toEqual(["event", "hourly"]);
+    const fastSamples = fastAll.filter((s) => s.sampleKind !== "entry");
     // On the coin's own readings, as the first coin's were; the market context (mkt*) counts both
     // coins in the band now, where the first cycle had one.
     const ownReadings = (features: unknown) =>

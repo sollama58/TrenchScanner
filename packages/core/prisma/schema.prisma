@@ -145,6 +145,7 @@ model User {
   watchlist         WatchlistItem[]
   /// Asyl's saved maps (asyl.trenchscanner.app, apps/api/src/asyl/maps.ts).
   asylMaps          AsylMap[]
+  asylWatches       AsylWatch[]
 }
 
 /// Optional two-factor (user ask 2026-10-18): an authenticator app, passkeys, or both, and which
@@ -1144,6 +1145,12 @@ model CandidateOutcome {
   ///  - "second": a second look the scan takes when TokenSage's deep read lands after the
   ///    token's last decision moment (same pre-gate, same spacing). Only the Narrative seat
   ///    decides here, and only it trains on these rows (curation/contestants.ts).
+  ///  - "entry": the entry fast path's decision (entryFastPath.ts, scanJob's "entry" pass): the
+  ///    first scan of a coin that crossed the floor, seconds into the band, where every seat
+  ///    decides and stores its score as at an event. Its own kind (user decision 2026-10-26): it
+  ///    spends no event window, and the seats' fast-path cutoffs, conviction lines and share
+  ///    alarms are read on these rows alone (liveScaleStore.ts). Trained on only when
+  ///    CURATOR_TRAIN_ON_ENTRY_ROWS is set; the exam does not grade them.
   ///  - "emission": a fresh anchor made for an alert or shadow pick. Chosen by a curator, so
   ///    kept out of training (a model learning from its own picks feeds back on itself).
   ///  - "match": the anchor a user-filter alert (Match.candidateOutcomeId) is graded from, shared
@@ -3919,6 +3926,21 @@ model AsylMap {
   updatedAt DateTime  @updatedAt
 
   @@index([userId, updatedAt])
+}
+
+/// Wallets an Asyl user watches (user ask 2026-10-26: watchlists and alerts). What each did since
+/// `seenAt` (funded a wallet, bought a coin, deployed one) is read from the stored tables when the
+/// watchlist opens (apps/api/src/asyl/watch.ts), so no job runs for it. Private to the user.
+model AsylWatch {
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet    String
+  name      String?
+  /// The newest activity the user has seen; later activity counts as new.
+  seenAt    DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  @@id([userId, wallet])
 }
 
 /// Helius credits each user's Asyl chain reads took, per UTC day (apps/api/src/asyl/credits.ts):

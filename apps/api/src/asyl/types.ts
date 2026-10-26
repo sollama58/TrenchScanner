@@ -10,7 +10,8 @@ export type AsylNodeKind = "wallet" | "token";
 /**
  * A short label on a node. "mine": the reader's own label (Pro Mode, trackedWallets.ts); the rest
  * are TrenchScanner's: the KOL roster and its sides, exchanges and launchpads, a creator, the
- * hourly wallet scores' dumper / winner / sniper, a bot, a fresh-per-launch dev farm's funder.
+ * hourly wallet scores' dumper / winner / sniper, a bot, a fresh-per-launch dev farm's funder, and a
+ * fresh wallet: funded within a day of its first trade, with few coins behind it.
  */
 export type AsylTag =
   | "mine"
@@ -23,7 +24,8 @@ export type AsylTag =
   | "sniper"
   | "risky"
   | "bot"
-  | "farm";
+  | "farm"
+  | "fresh";
 
 export interface AsylNode {
   id: string;
@@ -90,6 +92,8 @@ export interface AsylEdge {
   leadSec?: number | null;
   /** A "bought together" link: the wallet the co-trader search started from (the other end is the co-trader). */
   from?: string | null;
+  /** A "traded" link that sold: SOL out minus SOL in, its realised profit (negative a loss). */
+  net?: number | null;
 }
 
 export interface AsylGraph {

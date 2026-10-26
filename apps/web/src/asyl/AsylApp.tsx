@@ -2,9 +2,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, SESSION_ENDED_EVENT, post } from "../api";
 import { dashboardUrl } from "../returnTo";
 import { ShareImageDialog } from "../components/ShareImageDialog";
-import { asylApi, type AsylMe, type ChainRead, type Label, type MapDoc, type MapSummary } from "./asylApi";
+import {
+  asylApi,
+  type AsylMe,
+  type ChainRead,
+  type Label,
+  type MapDoc,
+  type MapSummary,
+  type WatchRow,
+} from "./asylApi";
 import { renderMapCard } from "./asylCard";
 import { renderAnalystCard } from "./analystCard";
+import { Timeline } from "./Timeline";
+import { diffGraphs, diffNote, graphJson, writeUp } from "./writeup";
+import { WatchList } from "./WatchList";
 import { AnalystLegend } from "./AnalystLayer";
 import { AsylSignIn } from "./AsylSignIn";
 import { DrawEditor, PenBar } from "./DrawEditor";
@@ -41,6 +52,7 @@ import {
   nodeName,
   removeNodes,
   shortAddr,
+  timelineSteps,
   visibleGraph,
   withDeployLines,
   type AsylEdgeKind,
@@ -82,6 +94,8 @@ const PICK_COINS_MAX = 25;
 const PICK_LIVE_MAX = 10;
 /** Wallets a common funder search takes at once (the API's COMMON_FUNDER_WALLETS). */
 const PICK_FUNDER_MAX = 50;
+/** How often the watchlist is read again while the page is open. */
+const WATCH_POLL_MS = 3 * 60_000;
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -108,6 +122,7 @@ const KEYS: [string, string][] = [
   ["D", "Deployers of the coins shown"],
   ["F", "Fit the map to the screen"],
   ["A", "Analyst Mode: the map as a flowchart of boxes, amounts and right-angled lines"],
+  ["R", "Timeline: replay the map in the order things happened"],
   ["P", "Draw freehand with the pen"],
   ["T", "Trades of the selected wallet and its closest co-trader"],
   ["/", "Search"],
@@ -156,11 +171,12 @@ function storedTimeLabels(): TimeLabels {
   }
 }
 
-type RailTab = "map" | "links" | "maps" | "labels";
+type RailTab = "map" | "links" | "maps" | "watch" | "labels";
 const RAIL_TABS: { id: RailTab; label: string }[] = [
   { id: "map", label: "Map" },
   { id: "links", label: "Links" },
   { id: "maps", label: "Saved" },
+  { id: "watch", label: "Watch" },
   { id: "labels", label: "Labels" },
 ];
 
@@ -203,6 +219,9 @@ export function AsylApp() {
   const [labels, setLabels] = useState<Label[]>([]);
   const [maps, setMaps] = useState<MapSummary[]>([]);
   const [rail, setRail] = useState<RailTab>("map");
+  // The watchlist (WatchList.tsx), read again every few minutes while the page is open.
+  const [watches, setWatches] = useState<WatchRow[]>([]);
+  const [watchCap, setWatchCap] = useState(50);
   const [railOpen, setRailOpen] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [keysOpen, setKeysOpen] = useState(false);
@@ -216,6 +235,18 @@ export function AsylApp() {
   const [grid, setGrid] = useState(false);
   // Analyst Mode (user ask 2026-10-26): the map as an investigator's flowchart. The reader's own
   // choice, kept in this browser; a saved map opens the way it was saved.
+  // The timeline (user ask 2026-10-26): links dated after this moment aren't drawn. Null: off.
+  const [until, setUntil] = useState<number | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  // The export menu closes on any click outside it.
+  useEffect(() => {
+    if (!exportOpen) return;
+    const close = (e: MouseEvent) => {
+      if (!(e.target as Element | null)?.closest?.(".asyl-menu")) setExportOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [exportOpen]);
   const [analyst, setAnalystState] = useState(() => {
     try {
       return localStorage.getItem(ANALYST_KEY) === "1";
@@ -306,6 +337,24 @@ export function AsylApp() {
   useEffect(() => {
     if (me) refreshLists();
   }, [me?.wallet, refreshLists]);
+
+  const refreshWatches = useCallback(() => {
+    asylApi.watches().then(
+      (r) => {
+        setWatches(r.wallets);
+        setWatchCap(r.cap);
+      },
+      () => undefined,
+    );
+  }, []);
+  useEffect(() => {
+    if (!me) return;
+    refreshWatches();
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") refreshWatches();
+    }, WATCH_POLL_MS);
+    return () => clearInterval(id);
+  }, [me?.wallet, refreshWatches]);
 
   const snapshot = useCallback((): MapSnapshot => {
     const l = latest.current;
@@ -686,17 +735,61 @@ export function AsylApp() {
       return "The link no longer opens the map.";
     });
 
-  const exportCsv = () => {
-    const blob = new Blob([graphCsv(kept)], { type: "text/csv" });
+  /** Saves text as a file the browser downloads. */
+  const download = (ext: string, text: string, type: string) => {
+    const blob = new Blob([text], { type });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `asyl-${(title.trim() || "map").replace(/[^\w-]+/g, "-").toLowerCase()}.csv`;
+    a.download = `asyl-${(title.trim() || "map").replace(/[^\w-]+/g, "-").toLowerCase()}.${ext}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   };
+  const exportAs = (what: "csv" | "json" | "md") => {
+    setExportOpen(false);
+    const t = title.trim() || "Untitled map";
+    if (what === "csv") return download("csv", graphCsv(kept), "text/csv");
+    if (what === "json")
+      return download("json", graphJson(kept, { title: t, note: mapNote, notes }), "application/json");
+    const md = writeUp(kept, { title: t, note: mapNote, notes, focus });
+    download("md", md, "text/markdown");
+    void navigator.clipboard?.writeText(md).catch(() => undefined);
+    setStatus({
+      tone: "info",
+      text: "Write-up saved as a Markdown file and copied, ready to paste into a post or a doc.",
+    });
+  };
+
+  /** What changed against a saved map (user ask 2026-10-26): the new bubbles are picked, the gone ones offered back. */
+  const compareWith = (id: string, mapTitle: string) =>
+    void run(`Comparing with "${mapTitle}"…`, async () => {
+      const m = await asylApi.map(id);
+      const then = { nodes: m.doc.nodes, edges: m.doc.edges };
+      const d = diffGraphs(kept, then);
+      setPicked(new Set(d.newNodes.map((n) => n.id)));
+      if (d.goneNodes.length || d.goneEdges.length) {
+        const ends = new Set(d.goneEdges.flatMap((e) => [e.a, e.b]));
+        const back = {
+          nodes: m.doc.nodes.filter((n) => ends.has(n.id) || d.goneNodes.some((g) => g.id === n.id)),
+          edges: d.goneEdges,
+        };
+        setAsk({
+          text: `${diffNote(d, mapTitle)}${d.newNodes.length ? " The new bubbles are picked." : ""}`,
+          choices: [
+            {
+              label: `Bring back what's gone (${d.goneNodes.length} bubbles, ${d.goneEdges.length} links)`,
+              primary: true,
+              run: () => add(back),
+            },
+            { label: "Leave it", run: () => undefined },
+          ],
+        });
+        return;
+      }
+      return `${diffNote(d, mapTitle)}${d.newNodes.length ? " The new bubbles are picked." : ""}`;
+    });
 
   const signOut = async () => {
     await post("/auth/logout").catch(() => undefined);
@@ -917,6 +1010,15 @@ export function AsylApp() {
         const funders = new Set(r.graph.edges.filter((e) => e.kind === "funded").map((e) => e.a)).size;
         return `${r.shown} first buyer${r.shown === 1 ? "" : "s"}, and ${funders} wallet${funders === 1 ? "" : "s"} that funded them.`;
       }),
+    wave: (wallets, mint) =>
+      void run("Showing the wallets that sold together…", async () => {
+        const r = await asylApi.links(wallets.slice(0, LINKS_WALLETS), [mint]);
+        add(r.graph);
+        const funded = r.graph.edges.filter((e) => e.kind === "funded").length;
+        return `${wallets.length} wallets that sold together${
+          funded ? `, and ${funded} funding link${funded === 1 ? "" : "s"} between them` : ""
+        }.`;
+      }),
     launches: (wallet) =>
       void run("Finding the coins it deployed…", async () => {
         const r = await asylApi.launches(wallet);
@@ -1037,6 +1139,17 @@ export function AsylApp() {
           : `${r.credits} credit${r.credits === 1 ? "" : "s"} used.`;
         return `${r.note} ${spent}`;
       }),
+    watch: (wallet, on) =>
+      void run(on ? "Watching it…" : "Stopping…", async () => {
+        if (on) {
+          const n = graph.nodes.find((x) => x.id === wallet);
+          await asylApi.watch(wallet, n?.name ?? null);
+        } else await asylApi.unwatch(wallet);
+        refreshWatches();
+        return on
+          ? "Watching it: the Watch tab shows when it funds a wallet, buys a coin or deploys one."
+          : "No longer watching it.";
+      }),
     holders: (mint, live) => showHolders([mint], live),
     hide: (id) => {
       record();
@@ -1101,8 +1214,8 @@ export function AsylApp() {
 
   const keep = useMemo(() => new Set([focus, selected].filter((x): x is string => !!x)), [focus, selected]);
   const shown = useMemo(
-    () => visibleGraph(kept, hiddenKinds, keep, { cut, cutoffs, solUsd, perWallet, hideLoose }),
-    [kept, hiddenKinds, keep, cut, cutoffs, solUsd, perWallet, hideLoose],
+    () => visibleGraph(kept, hiddenKinds, keep, { cut, cutoffs, solUsd, perWallet, hideLoose, until }),
+    [kept, hiddenKinds, keep, cut, cutoffs, solUsd, perWallet, hideLoose, until],
   );
   // The inspector lists the links drawn, so one hidden by a slider or by hand isn't listed.
   const inspected = useMemo(() => ({ nodes: kept.nodes, edges: shown.edges }), [kept, shown]);
@@ -1426,6 +1539,10 @@ export function AsylApp() {
       case "f":
         view.current?.fit();
         return;
+      case "r":
+        if (graph.nodes.length)
+          setUntil((u) => (u === null ? (timelineSteps(kept).at(-1) ?? Date.now()) : null));
+        return;
       case "a":
         if (graph.nodes.length) {
           setAnalyst(!analyst);
@@ -1573,6 +1690,9 @@ export function AsylApp() {
                 {t.id === "links" && (cut.size > 0 || Object.values(cutoffs).some((v) => v > 0)) && (
                   <span className="asyl-tab-dot" aria-label="filters on" />
                 )}
+                {t.id === "watch" && watches.some((w) => w.fresh > 0) && (
+                  <span className="asyl-tab-dot" aria-label="new activity" />
+                )}
               </button>
             ))}
           </div>
@@ -1652,11 +1772,17 @@ export function AsylApp() {
                     <b>{shown.edges.length}</b> links
                   </span>
                 </div>
-                {kept.edges.length > shown.edges.length && (
-                  <button className="asyl-link asyl-small" onClick={() => setRail("links")}>
-                    {kept.edges.length - shown.edges.length} links filtered out · Links
-                  </button>
-                )}
+                {kept.edges.length > shown.edges.length &&
+                  (until !== null ? (
+                    <button className="asyl-link asyl-small" onClick={() => setUntil(null)}>
+                      {kept.edges.length - shown.edges.length} links not shown at this point in the timeline ·
+                      Show all
+                    </button>
+                  ) : (
+                    <button className="asyl-link asyl-small" onClick={() => setRail("links")}>
+                      {kept.edges.length - shown.edges.length} links filtered out · Links
+                    </button>
+                  ))}
               </section>
               <section className="asyl-rail-card">
                 <h3>Reading the map</h3>
@@ -1720,6 +1846,16 @@ export function AsylApp() {
                     <span className="asyl-muted asyl-small">
                       {m.nodes} on it{m.shareSlug ? " · shared" : ""}
                     </span>
+                    {current?.id !== m.id && kept.nodes.length > 0 && (
+                      <button
+                        className="asyl-link asyl-small"
+                        disabled={!!busy}
+                        title="What the map on screen has that this saved map didn't, and what's gone since"
+                        onClick={() => compareWith(m.id, m.title)}
+                      >
+                        Compare
+                      </button>
+                    )}
                     <button
                       className="asyl-icon-btn"
                       aria-label={`Delete ${m.title}`}
@@ -1742,6 +1878,23 @@ export function AsylApp() {
                   </li>
                 ))}
               </ul>
+            </div>
+          )}
+          {rail === "watch" && (
+            <div className="asyl-rail-body">
+              <WatchList
+                rows={watches}
+                cap={watchCap}
+                busy={!!busy}
+                onOpenWallet={(w) => void openWallet(w)}
+                onOpenToken={(m) => void openToken(m)}
+                onRemove={(w) =>
+                  void asylApi
+                    .unwatch(w)
+                    .then(refreshWatches, (e: unknown) => setStatus({ tone: "error", text: errorText(e) }))
+                }
+                onSeen={(w) => void asylApi.watchSeen(w).then(refreshWatches, () => undefined)}
+              />
             </div>
           )}
           {rail === "labels" && (
@@ -1870,6 +2023,17 @@ export function AsylApp() {
               ⧉ Analyst
             </button>
             <button
+              className={`asyl-btn ghost${until !== null ? " on" : ""}`}
+              aria-pressed={until !== null}
+              disabled={graph.nodes.length === 0}
+              title="Replay the map in the order things happened: who funded whom, who bought, who sold (R)"
+              onClick={() =>
+                setUntil((u) => (u === null ? (timelineSteps(kept).at(-1) ?? Date.now()) : null))
+              }
+            >
+              ⏱ Timeline
+            </button>
+            <button
               className={`asyl-btn ghost${grid ? " on" : ""}`}
               disabled={analyst}
               aria-pressed={grid}
@@ -1938,9 +2102,34 @@ export function AsylApp() {
             >
               Image
             </button>
-            <button className="asyl-btn ghost" disabled={kept.edges.length === 0} onClick={exportCsv}>
-              CSV
-            </button>
+            <span className="asyl-menu">
+              <button
+                className={`asyl-btn ghost${exportOpen ? " on" : ""}`}
+                disabled={kept.nodes.length === 0}
+                aria-expanded={exportOpen}
+                aria-haspopup="menu"
+                title="Download the map as a spreadsheet, as data, or as a written report"
+                onClick={() => setExportOpen((o) => !o)}
+              >
+                Export ▾
+              </button>
+              {exportOpen && (
+                <span className="asyl-menu-list" role="menu">
+                  <button role="menuitem" onClick={() => exportAs("md")}>
+                    <b>Write-up</b>
+                    <span>A report to post or file: who, the coins, the money, every address</span>
+                  </button>
+                  <button role="menuitem" onClick={() => exportAs("csv")}>
+                    <b>CSV</b>
+                    <span>Every link, for a spreadsheet</span>
+                  </button>
+                  <button role="menuitem" onClick={() => exportAs("json")}>
+                    <b>JSON</b>
+                    <span>Every wallet, coin and link, for your own tools</span>
+                  </button>
+                </span>
+              )}
+            </span>
             <button
               className="asyl-btn ghost"
               disabled={!!busy || !shown.nodes.some((n) => n.kind === "wallet")}
@@ -1965,6 +2154,9 @@ export function AsylApp() {
             >
               ⌨
             </button>
+            {until !== null && (
+              <Timeline graph={kept} until={until} onUntil={setUntil} onClose={() => setUntil(null)} />
+            )}
           </div>
 
           {graph.nodes.length === 0 ? (
@@ -2171,6 +2363,7 @@ export function AsylApp() {
               setRail("links");
               setRailOpen(true);
             }}
+            watched={watches.some((w) => w.wallet === selectedNode.id)}
             actions={actions}
             onClose={() => setSelected(null)}
           />

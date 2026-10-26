@@ -179,6 +179,14 @@ export interface LiveScales {
    * calibrated rate a card shows. Absent when it couldn't be read: the run's rate stands.
    */
   rankRates?: ReadonlyMap<string, readonly RankRateBand[]>;
+  /**
+   * The same scales read on the fast path's own decision rows (CandidateOutcome.sampleKind
+   * "entry"): the seats decide there on moments seconds into the band, which they score lower and
+   * win less often on than cycle moments (model audit 2026-10-26), so a cutoff rank travels to
+   * that population's scores, not the cycle's. Absent when no entry rows were read; a seat with
+   * too few of them keeps its shipped cutoff there (usableLiveScores), as on the cycle.
+   */
+  entry?: LiveScales;
 }
 
 export const EMPTY_LIVE_SCALES: LiveScales = { scores: new Map(), tables: new Map(), lines: new Map() };

@@ -3,7 +3,7 @@ import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
 import { GraphBuilder } from "./graph.js";
-import { addEarlyBuyers, addLaunches, bundleVerdict, loadCoinReport } from "./report.js";
+import { addEarlyBuyers, addLaunches, bundleVerdict, loadCoinReport, sellWaves } from "./report.js";
 
 const MINT = "AsyRptMint" + "1".repeat(33);
 const OLD = "AsyRptOldd" + "1".repeat(33);
@@ -38,6 +38,22 @@ describe("bundleVerdict", () => {
   });
   it("says when there is nothing to go by", () => {
     expect(bundleVerdict(null, null).level).toBe("unknown");
+  });
+});
+
+describe("sellWaves", () => {
+  const t0 = Date.UTC(2026, 9, 26, 12);
+  const s = (wallet: string, sec: number, solOut = 1) => ({ wallet, at: new Date(t0 + sec * 1000), solOut });
+  it("groups first sells that came within a minute of the one before, three or more", () => {
+    const waves = sellWaves([s("a", 0), s("b", 40), s("c", 95, 2), s("d", 400), s("e", 430), s("f", 2000)]);
+    expect(waves).toEqual([
+      {
+        from: new Date(t0).toISOString(),
+        to: new Date(t0 + 95_000).toISOString(),
+        wallets: ["a", "b", "c"],
+        sol: 4,
+      },
+    ]);
   });
 });
 

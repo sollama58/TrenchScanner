@@ -603,6 +603,7 @@ export function addFlows(g: GraphBuilder, flows: WalletFlows): void {
       mint: t.mint,
       at: t.lastAt === null ? null : new Date(t.lastAt).toISOString(),
       sol: Math.max(t.solIn, t.solOut),
+      net: t.sells > 0 ? net : null,
     });
   }
 }

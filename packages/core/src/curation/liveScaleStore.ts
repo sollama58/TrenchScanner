@@ -22,6 +22,9 @@ export function resetLiveRescoreCache(): void {
   paramsCache = new Map();
 }
 
+/** The decision moments a live scale is read on: the cycle's (event rows) and the fast path's (entry rows). */
+type ScalePopulation = "event" | "entry";
+
 /**
  * The seats' live scales as of now (curation/liveScale.ts): the last LIVE_SCORE_WINDOW_HOURS of
  * decision moments, each scored by the model each seat calls on now (curation/liveRescore.ts),
@@ -29,33 +32,41 @@ export function resetLiveRescoreCache(): void {
  * explains its cutoffs with the same read. A model with no stored score on a moment scores it with
  * TokenSage's X-reuse and wave counts read as missing inside their lost window (`xReuseRestoredAt`
  * is TOKENSAGE_XREUSE_RESTORED_AT), as the live decision read them.
+ *
+ * Two populations come back from the one read: the cycle's decision moments (event rows) as the
+ * scales themselves, and the fast path's (entry rows, since 2026-10-26) under `entry`, each seat's
+ * scores there drawn from those rows alone. The rescorer's cache holds both sets of rows, so neither
+ * read evicts the other's scores.
  */
 export async function loadLiveScales(
   highConvictionRank: number,
   xReuseRestoredAt: Date | null,
   now = new Date(),
 ): Promise<LiveScales> {
-  const [rows, lanes] = await Promise.all([
+  const windowStart = new Date(now.getTime() - LIVE_SCORE_WINDOW_HOURS * 3_600_000);
+  const [allRows, lanes] = await Promise.all([
     prisma.candidateOutcome.findMany({
       where: {
-        sampleKind: "event",
-        anchorAt: { gt: new Date(now.getTime() - LIVE_SCORE_WINDOW_HOURS * 3_600_000) },
+        sampleKind: { in: ["event", "entry"] satisfies ScalePopulation[] },
+        anchorAt: { gt: windowStart },
         seatScores: { not: Prisma.DbNull },
       },
-      select: { id: true, anchorAt: true, seatScores: true },
+      select: { id: true, anchorAt: true, seatScores: true, sampleKind: true },
     }),
     loadCurrentLanes(),
   ]);
+  const rows = allRows.filter((r) => r.sampleKind === "event");
+  const entryRows = allRows.filter((r) => r.sampleKind === "entry");
   const since = new Map(lanes.map((l) => [l.slot, l.bornAt]));
   // Only the seats that score live (every one of them stores its score on each moment).
   const seats = new Set<string>();
-  for (const row of rows) {
+  for (const row of allRows) {
     const s = row.seatScores;
     if (s === null || typeof s !== "object" || Array.isArray(s)) continue;
     for (const k of Object.keys(s)) seats.add(k);
   }
   const models = await loadSeatModels(seats);
-  const missing = rescorer.missingRows(rows, models);
+  const missing = rescorer.missingRows(allRows, models);
   // The gated seats' frozen filters (Gems), read only while one of them needs rows scored.
   const gated = new Set(CONTESTANTS.filter((c) => c.gate !== undefined).map((c) => c.id));
   const gates =
@@ -82,10 +93,14 @@ export async function loadLiveScales(
       );
     }
   }
-  rescorer.prune(rows, models);
+  rescorer.prune(allRows, models);
   const scales = rescorer.build(rows, models, since, highConvictionRank, LIVE_CONVICTION_MIN_SAMPLES);
-  const rankRates = await loadRankRates(now).catch(() => undefined);
-  return rankRates ? { ...scales, rankRates } : scales;
+  const rankRates = await loadRankRates(now, "event").catch(() => undefined);
+  const out: LiveScales = rankRates ? { ...scales, rankRates } : scales;
+  if (entryRows.length === 0) return out;
+  const entry = rescorer.build(entryRows, models, since, highConvictionRank, LIVE_CONVICTION_MIN_SAMPLES);
+  const entryRankRates = await loadRankRates(now, "entry").catch(() => undefined);
+  return { ...out, entry: entryRankRates ? { ...entry, rankRates: entryRankRates } : entry };
 }
 
 /**
@@ -93,10 +108,10 @@ export async function loadLiveScales(
  * RANK_RATE_WINDOW_HOURS (curation/liveRankRates.ts), from the scores stored on each moment. A
  * clean 2x is hit2xIn1h on a row that wasn't disqualified, as the live records count it.
  */
-async function loadRankRates(now: Date): Promise<Map<string, RankRateBand[]>> {
+async function loadRankRates(now: Date, population: ScalePopulation): Promise<Map<string, RankRateBand[]>> {
   const rows = await prisma.candidateOutcome.findMany({
     where: {
-      sampleKind: "event",
+      sampleKind: population,
       anchorAt: { gt: new Date(now.getTime() - RANK_RATE_WINDOW_HOURS * 3_600_000) },
       hit2xIn1h: { not: null },
       seatScores: { not: Prisma.DbNull },

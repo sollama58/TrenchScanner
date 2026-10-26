@@ -53,6 +53,10 @@ export interface InspectorActions {
   earlyBuyers: (mint: string) => void;
   /** Every coin a wallet deployed that TrenchScanner knows of. */
   launches: (wallet: string) => void;
+  /** Starts or stops watching a wallet (the Watch tab). */
+  watch: (wallet: string, on: boolean) => void;
+  /** Puts wallets that sold a coin together on the map, with what ties them. */
+  wave: (wallets: string[], mint: string) => void;
   /** Finds a coin's deployer (from the chain for Pro Mode when unknown) and puts it on the map. */
   showDeployer: (mint: string) => void;
   hide: (id: string) => void;
@@ -98,6 +102,7 @@ export function Inspector({
   onOwnKind,
   holderRule,
   onEditRule,
+  watched,
   actions,
   onClose,
 }: {
@@ -117,6 +122,8 @@ export function Inspector({
   holderRule?: { minPct: number; minSol: number };
   /** Opens the cutoffs that set the holder rule. */
   onEditRule?: () => void;
+  /** Whether the reader watches this wallet. */
+  watched?: boolean;
   actions: InspectorActions;
   onClose: () => void;
 }) {
@@ -156,6 +163,14 @@ export function Inspector({
     .filter((l) => l.edge.kind === "cotrade")
     .sort((x, y) => (y.edge.shared ?? y.edge.weight) - (x.edge.shared ?? x.edge.weight));
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  // A coin's realised profit and loss, per wallet on the map that sold it, best first.
+  const pnl =
+    node.kind === "token"
+      ? graph.edges
+          .filter((e) => e.kind === "traded" && e.b === node.id && typeof e.net === "number")
+          .map((e) => ({ wallet: e.a, net: e.net! }))
+          .sort((x, y) => y.net - x.net)
+      : [];
   const chain = me.chain;
   const chainOff = !me.pro
     ? "Chain reads need Pro Mode"
@@ -260,8 +275,32 @@ export function Inspector({
           nameOf={(id) => (byId.has(id) ? nodeName(byId.get(id)!) : null)}
           onEarlyBuyers={actions.earlyBuyers}
           onLaunches={actions.launches}
+          onWave={actions.wave}
           onSelect={actions.select}
         />
+      )}
+
+      {pnl.length > 0 && (
+        <section className="asyl-insp-section">
+          <h3>Profit on the map</h3>
+          <p className="asyl-muted asyl-small">
+            Wallets on the map that sold it: SOL out minus SOL in. {pnl.filter((p) => p.net > 0).length} of{" "}
+            {pnl.length} made money.
+          </p>
+          <ul className="asyl-pnl">
+            {[...pnl.slice(0, 3), ...pnl.slice(Math.max(3, pnl.length - 3))].map((p) => (
+              <li key={p.wallet}>
+                <button className="asyl-link" onClick={() => actions.select(p.wallet)}>
+                  {byId.has(p.wallet) ? nodeName(byId.get(p.wallet)!) : shortAddr(p.wallet)}
+                </button>
+                <span className={p.net >= 0 ? "good" : "bad"}>
+                  {p.net >= 0 ? "+" : "−"}
+                  {Math.abs(p.net).toFixed(2)} SOL
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {node.kind === "wallet" && (
@@ -411,6 +450,21 @@ export function Inspector({
           {node.kind === "wallet" && (
             <button className="asyl-btn" disabled={!!busy} onClick={() => actions.similar(node.id)}>
               Wallets that trade like it
+            </button>
+          )}
+          {node.kind === "wallet" && (
+            <button
+              className={`asyl-btn${watched ? " on" : ""}`}
+              disabled={!!busy}
+              aria-pressed={!!watched}
+              title={
+                watched
+                  ? "You watch it: the Watch tab lists what it does. Click to stop"
+                  : "Watch it: the Watch tab shows when it funds a wallet, buys a coin or deploys one (free)"
+              }
+              onClick={() => actions.watch(node.id, !watched)}
+            >
+              {watched ? "👁 Watching" : "👁 Watch"}
             </button>
           )}
           {node.kind === "wallet" && node.tags.includes("dev") && (

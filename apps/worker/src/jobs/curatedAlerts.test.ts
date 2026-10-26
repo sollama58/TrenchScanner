@@ -557,6 +557,29 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     expect(new Set(alerts.map((a) => a.candidateOutcomeId))).toEqual(new Set([sample!.id]));
   });
 
+  it("a fast-path decision banks every seat's score on its entry row and is graded from it", async () => {
+    await activeModel("linear", CURATOR_MODEL_KIND, alwaysYesParams());
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-entry-row` } });
+    const scored = curatableFixture(token.mintAddress);
+    // The fast path's own row kind: it spends no event window, so the cycle's event row can
+    // still be banked a moment later.
+    const entry = await recordCandidateSample(token.id, scored, env, { kind: "entry" });
+    expect(entry).toMatchObject({ created: true });
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, scored, entry, env, undefined, undefined, "entry");
+    expect(await emitCuratedCycle(cycle, env)).toBe(2);
+
+    const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: entry!.id } });
+    expect(row.sampleKind).toBe("entry");
+    expect(row.seatScores).toMatchObject({ linear: expect.any(Number) });
+    const alerts = await prisma.curatedAlert.findMany({ where: { tokenId: token.id } });
+    expect(new Set(alerts.map((a) => a.candidateOutcomeId))).toEqual(new Set([entry!.id]));
+
+    const event = await recordCandidateSample(token.id, scored, env, { kind: "event" });
+    expect(event).toMatchObject({ created: true });
+    expect(event!.id).not.toBe(entry!.id);
+  });
+
   it("Gems considers only tokens that pass its frozen gate, and calls nothing without one", async () => {
     await activeModel(GEMS_CONTESTANT, CURATOR_MODEL_KIND, alwaysYesParams());
     const token = await prisma.token.create({ data: { mintAddress: `${TAG}-gems` } });

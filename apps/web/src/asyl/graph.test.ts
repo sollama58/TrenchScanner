@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  timelineSteps,
   addressIn,
   pickInBox,
   pickInLasso,
@@ -15,7 +16,9 @@ import {
   visibleGraph,
   perWalletOf,
   withDeployLines,
+  type AsylEdge,
   type AsylGraph,
+  type AsylNode,
   NO_DRAWINGS,
   STROKE_POINTS_MAX,
   cleanDrawings,
@@ -345,5 +348,31 @@ describe("who buys first, on a bought-together line stored either way round", ()
     const old = { ...e, from: undefined };
     expect(clearsCutoffs(old, first(1), null)).toBe(false);
     expect(clearsCutoffs(old, first(2), null)).toBe(true);
+  });
+});
+
+describe("the timeline", () => {
+  const n = (id: string): AsylNode => ({ id, kind: "wallet", name: null, tags: [] });
+  const e = (a: string, b: string, at?: string): AsylEdge => ({
+    a,
+    b,
+    kind: "funded",
+    weight: 1,
+    label: "",
+    source: "stored",
+    at: at ?? null,
+  });
+  const g: AsylGraph = {
+    nodes: [n("a"), n("b"), n("c"), n("d"), n("x")],
+    edges: [e("a", "b", "2026-10-01T00:00:00Z"), e("b", "c", "2026-10-03T00:00:00Z"), e("a", "d")],
+  };
+  it("steps through each link's date, and draws only what happened by then", () => {
+    const steps = timelineSteps(g);
+    expect(steps).toEqual([Date.parse("2026-10-01T00:00:00Z"), Date.parse("2026-10-03T00:00:00Z")]);
+    const v = visibleGraph(g, new Set(), new Set(["x"]), { until: steps[0] });
+    // Undated links stay; a wallet whose first link is later isn't there yet; the focus stays.
+    expect(v.edges.map((x) => `${x.a}>${x.b}`)).toEqual(["a>b", "a>d"]);
+    expect(v.nodes.map((x) => x.id).sort()).toEqual(["a", "b", "d", "x"]);
+    expect(visibleGraph(g, new Set(), new Set(), { until: null }).nodes).toHaveLength(5);
   });
 });
