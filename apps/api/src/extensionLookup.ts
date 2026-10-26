@@ -45,6 +45,12 @@ export interface OverlayStats {
   devWalletPct: number | null;
   top10HolderPct: number | null;
   freshTop10WalletPct: number | null;
+  /**
+   * How many of the top 10 holders hold nothing else worth $25 (the scan's empty-wallet check,
+   * re-measured each cycle against the current top 10): the newest reading, or the last known
+   * one when the newest scan's lookups didn't all land. Absent before 0.8.1's API.
+   */
+  emptyTop10WalletCount: number | null;
   cexFundedPct: number | null;
   kolRecentBuyers: number | null;
   mintAuthorityActive: boolean | null;
@@ -140,6 +146,8 @@ interface TokenRow {
   devWalletPct: number | null;
   top10HolderPct: number | null;
   freshTop10WalletPct: number | null;
+  emptyTop10WalletPct: number | null;
+  top10WalletsChecked: number | null;
   cexFundedPct: number | null;
   kolRecentBuyers: number | null;
   mintAuthorityActive: boolean | null;
@@ -157,6 +165,8 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
            s."takenAt", s."marketCapUsd", s."holderCount", s."bundledSupplyPct",
            s."sniperTopHolderCount", s."linkedWalletPct", s."devWalletPct", s."top10HolderPct",
            s."freshTop10WalletPct", s."cexFundedPct", s."kolRecentBuyers", s."mintAuthorityActive",
+           COALESCE(s."emptyTop10WalletPct", t."lastEmptyTop10WalletPct") AS "emptyTop10WalletPct",
+           s."top10WalletsChecked",
            s."rugScreenPassed", s."rugScreenReasons"
     FROM "Token" t
     LEFT JOIN LATERAL (
@@ -237,6 +247,10 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
                 devWalletPct: r.devWalletPct,
                 top10HolderPct: r.top10HolderPct,
                 freshTop10WalletPct: r.freshTop10WalletPct,
+                emptyTop10WalletCount:
+                  r.emptyTop10WalletPct === null
+                    ? null
+                    : Math.round((r.emptyTop10WalletPct / 100) * (r.top10WalletsChecked ?? 10)),
                 cexFundedPct: r.cexFundedPct,
                 kolRecentBuyers: r.kolRecentBuyers,
                 mintAuthorityActive: r.mintAuthorityActive,

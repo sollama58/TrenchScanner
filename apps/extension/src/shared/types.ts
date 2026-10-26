@@ -16,6 +16,7 @@ export const FLAG_IDS = [
   "devWalletPct",
   "top10HolderPct",
   "freshTop10WalletPct",
+  "emptyTop10WalletCount",
   "cexFundedPct",
   "kolRecentBuyers",
   "mintAuthorityActive",
@@ -39,6 +40,8 @@ export interface OverlayStats {
   devWalletPct: number | null;
   top10HolderPct: number | null;
   freshTop10WalletPct: number | null;
+  /** Top-10 holders holding nothing else (re-measured each scan); absent before 0.8.1's API. */
+  emptyTop10WalletCount?: number | null;
   cexFundedPct: number | null;
   kolRecentBuyers: number | null;
   mintAuthorityActive: boolean | null;

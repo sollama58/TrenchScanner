@@ -320,15 +320,16 @@ export class Decoration {
 
 const MARK_CSS = `
 :host { all: initial; position: absolute; inset: 0; pointer-events: none; z-index: 6; }
-.edge { position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px; border-radius: 0 2px 2px 0; background: var(--c-risk); opacity: .9; }
-.tag { position: absolute; left: 4px; bottom: 4px; pointer-events: auto; cursor: default; display: inline-flex; align-items: center; gap: 3px;
-  font: 600 9.5px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; padding: 0 5px 0 4px; border-radius: 999px; white-space: nowrap;
-  background: color-mix(in srgb, var(--c-pillBg) 88%, transparent); color: var(--c-hi); border: 1px solid color-mix(in srgb, var(--c-risk) 70%, transparent); }
+.tint { position: absolute; inset: 0; border-radius: inherit; background: color-mix(in srgb, var(--c-risk) 13%, transparent); }
+.edge { position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 0 2px 2px 0; background: var(--c-risk); opacity: .9; }
+.tag { position: absolute; left: 5px; bottom: 5px; pointer-events: auto; cursor: default; display: inline-flex; align-items: center; gap: 3px;
+  font: 700 11px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; padding: 1px 7px 1px 6px; border-radius: 999px; white-space: nowrap;
+  background: color-mix(in srgb, var(--c-pillBg) 88%, transparent); color: var(--c-hi); border: 1px solid color-mix(in srgb, var(--c-risk) 75%, transparent); }
 `;
 
 /**
- * A coin failing TrenchScanner's safety screen, marked (user asks 2026-10-25): a thin red edge and
- * a small "✕ Unsafe" tag in the row's corner; hovering it shows the screen's reasons in the overlay's
+ * A coin failing TrenchScanner's safety screen, marked (user asks 2026-10-25 and 2026-10-26): the
+ * row tinted red, a thin red edge and an "✕ Unsafe" tag in its corner; hovering it shows the screen's reasons in the overlay's
  * tooltip (safetyBody). Minimal on
  * purpose: the row stays readable and every click but the tag's reaches the site.
  */
@@ -347,11 +348,13 @@ export class SafetyMark {
     style.textContent = MARK_CSS;
     this.tag.addEventListener("mouseenter", () => onHover(this.tag, true));
     this.tag.addEventListener("mouseleave", () => onHover(this.tag, false));
+    const tint = document.createElement("div");
+    tint.className = "tint";
     const edge = document.createElement("div");
     edge.className = "edge";
     this.tag.className = "tag";
     this.tag.textContent = "✕ Unsafe";
-    root.append(style, this.colors.node, edge, this.tag);
+    root.append(style, this.colors.node, tint, edge, this.tag);
   }
 
   update(colors: Record<ColorKey, string>): void {
