@@ -11,6 +11,8 @@ import {
   type MapDoc,
   type MapSummary,
   type WatchRow,
+  type BridgeMove,
+  type BurnSpend,
 } from "./asylApi";
 import { renderMapCard } from "./asylCard";
 import { renderAnalystCard } from "./analystCard";
@@ -97,6 +99,12 @@ const PICK_LIVE_MAX = 10;
 const PICK_FUNDER_MAX = 50;
 /** How often the watchlist is read again while the page is open. */
 const WATCH_POLL_MS = 3 * 60_000;
+
+/** What a paid tool took, in a sentence. */
+const burnSaid = (b: BurnSpend) =>
+  b.reopened || b.cost === 0
+    ? "Already paid within the hour: no Burn Credits used."
+    : `${b.cost} Burn Credit${b.cost === 1 ? "" : "s"} used${b.free ? ` (${b.free} from today's free ones)` : ""}; ${b.balance} left.`;
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -207,6 +215,8 @@ export function AsylApp() {
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<{ text: string; tone: "info" | "error" } | null>(null);
+  // Each wallet's bridge moves from a Bridges read, listed in its panel with Solscan links.
+  const [bridgeMoves, setBridgeMoves] = useState<Record<string, BridgeMove[]>>({});
   // A question before a big read (user ask 2026-10-25: more than 20 co-traders loads on a yes).
   const [ask, setAsk] = useState<{
     text: string;
@@ -440,6 +450,17 @@ export function AsylApp() {
       setBusy(null);
     }
   }, []);
+
+  /** The Burn Credits a paid tool left, into the header and the panel. */
+  const afterBurn = (b: BurnSpend) =>
+    setSession((s) =>
+      typeof s === "object" && s.burn
+        ? {
+            ...s,
+            burn: { ...s.burn, balance: b.balance, freeLeft: s.burn.freeLeft === null ? null : b.freeLeft },
+          }
+        : s,
+    );
 
   const afterChain = (r: ChainRead, what: string) => {
     add(r.graph);
@@ -1149,6 +1170,24 @@ export function AsylApp() {
           ? "No credits used."
           : `${r.credits} credit${r.credits === 1 ? "" : "s"} used.`;
         return `${r.note} ${spent}`;
+      }),
+    deposits: (wallet) =>
+      void run("Looking for shared exchange deposit addresses…", async () => {
+        const r = await asylApi.deposits(wallet);
+        add(r.graph);
+        afterBurn(r.burn);
+        const first = r.deposits.deposits[0];
+        if (first) setSelected(first.address);
+        return `${r.note} ${burnSaid(r.burn)}`;
+      }),
+    bridges: (wallet) =>
+      void run("Reading its bridge moves…", async () => {
+        const r = await asylApi.bridges(wallet);
+        add(r.graph);
+        afterBurn(r.burn);
+        setBridgeMoves((m) => ({ ...m, [wallet]: r.bridges }));
+        setSelected(wallet);
+        return `${r.note} ${burnSaid(r.burn)}`;
       }),
     watch: (wallet, on) =>
       void run(on ? "Watching it…" : "Stopping…", async () => {
@@ -2390,6 +2429,7 @@ export function AsylApp() {
               setRailOpen(true);
             }}
             watched={watches.some((w) => w.wallet === selectedNode.id)}
+            bridgeMoves={bridgeMoves[selectedNode.id]}
             actions={actions}
             onClose={() => setSelected(null)}
           />

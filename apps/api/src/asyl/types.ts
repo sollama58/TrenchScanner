@@ -11,7 +11,8 @@ export type AsylNodeKind = "wallet" | "token";
  * A short label on a node. "mine": the reader's own label (Pro Mode, trackedWallets.ts); the rest
  * are TrenchScanner's: the KOL roster and its sides, exchanges and launchpads, a creator, the
  * hourly wallet scores' dumper / winner / sniper, a bot, a fresh-per-launch dev farm's funder, and a
- * fresh wallet: funded within a day of its first trade, with few coins behind it.
+ * fresh wallet: funded within a day of its first trade, with few coins behind it. "deposit": an
+ * exchange deposit address (asyl/paid.ts); "bridge": a bridge's program, money to another chain.
  */
 export type AsylTag =
   | "mine"
@@ -25,7 +26,9 @@ export type AsylTag =
   | "risky"
   | "bot"
   | "farm"
-  | "fresh";
+  | "fresh"
+  | "deposit"
+  | "bridge";
 
 export interface AsylNode {
   id: string;

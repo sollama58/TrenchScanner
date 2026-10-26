@@ -16,7 +16,9 @@ export type AsylTag =
   | "risky"
   | "bot"
   | "farm"
-  | "fresh";
+  | "fresh"
+  | "deposit"
+  | "bridge";
 
 export interface AsylNode {
   id: string;
@@ -111,6 +113,8 @@ export const TAG_LABEL: Record<AsylTag, string> = {
   bot: "Bot",
   farm: "Dev farm",
   fresh: "Fresh wallet",
+  deposit: "Exchange deposit",
+  bridge: "Bridge",
 };
 
 export const edgeKey = (e: Pick<AsylEdge, "kind" | "a" | "b" | "mint">) =>

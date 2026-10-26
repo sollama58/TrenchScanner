@@ -1,4 +1,5 @@
 import {
+  BRIDGE_PROGRAMS,
   prisma,
   isHotFunder,
   isServiceWallet,
@@ -907,7 +908,11 @@ export async function decorate(g: GraphBuilder, tracked: readonly TrackedWallet[
     const n = g.get(w)!;
     const name = named[w] ?? null;
     const r = riskOf.get(w);
-    n.name = name?.name ?? PLATFORM_WALLETS.get(w) ?? KNOWN_EXCHANGE_WALLETS.get(w) ?? null;
+    n.name =
+      name?.name ??
+      PLATFORM_WALLETS.get(w) ??
+      KNOWN_EXCHANGE_WALLETS.get(w) ??
+      (BRIDGE_PROGRAMS.has(w) ? `${BRIDGE_PROGRAMS.get(w)} bridge` : null);
     const tags = walletTags({
       name,
       risk: r ?? null,

@@ -60,10 +60,10 @@ export interface ChainResult<T> {
   cached: boolean;
 }
 
-type Chained<T> = ChainResult<T> | ChainRefusal;
+export type Chained<T> = ChainResult<T> | ChainRefusal;
 
-const short = (w: string) => `${w.slice(0, 4)}…${w.slice(-4)}`;
-const fmtAmount = (n: number) =>
+export const short = (w: string) => `${w.slice(0, 4)}…${w.slice(-4)}`;
+export const fmtAmount = (n: number) =>
   n >= 1_000_000
     ? `${(n / 1_000_000).toFixed(1)}M`
     : n >= 1_000
@@ -71,7 +71,7 @@ const fmtAmount = (n: number) =>
       : n >= 10
         ? n.toFixed(0)
         : sig2(n);
-const fmtDay = (ms: number | null) =>
+export const fmtDay = (ms: number | null) =>
   ms === null
     ? null
     : new Date(ms).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
@@ -81,7 +81,7 @@ const fmtDay = (ms: number | null) =>
  * cache first: free, so it is handed back even with the day's allowance short of a fresh read's
  * worst case, or while Helius's credits are out (the reader was told such a read costs nothing).
  */
-async function metered<T>(
+export async function metered<T>(
   env: Env,
   userId: string,
   worst: number,
@@ -110,14 +110,19 @@ async function metered<T>(
   return { value: out.value, credits: out.credits, allowance, cached: out.cached };
 }
 
-/** A wallet's flows kept within the day, else null. */
+/**
+ * A wallet's flows kept within the day, else null. A read kept from before bridges were read
+ * (no `bridges`) is read again, so Bridges never answers "none" for a wallet it never looked at.
+ */
 async function keptFlows(wallet: string, now: number): Promise<WalletFlows | null> {
   const row = await prisma.asylFlowRead.findUnique({ where: { wallet } });
-  return row && now - row.readAt.getTime() < ASYL_FLOW_TTL_MS ? (row.flows as unknown as WalletFlows) : null;
+  const flows =
+    row && now - row.readAt.getTime() < ASYL_FLOW_TTL_MS ? (row.flows as unknown as WalletFlows) : null;
+  return flows?.bridges ? flows : null;
 }
 
 /** A wallet's flows: kept for a day, else read from its newest FLOW_PAGES pages and kept. */
-async function loadFlows(
+export async function loadFlows(
   helius: Pick<HeliusClient, "getWalletTransactionsPage">,
   wallet: string,
   now: number,

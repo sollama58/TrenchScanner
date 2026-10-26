@@ -52,6 +52,38 @@ export interface WalletFlowTrade {
   lastAt: number | null;
 }
 
+/**
+ * Bridge programs on Solana mainnet (user ask 2026-10-26, "follow money through bridges"): a
+ * transaction that calls one of these moved the wallet's money to or from another chain. Each
+ * address checked against the bridge's own docs; Allbridge left out until its program is confirmed.
+ */
+export const BRIDGE_PROGRAMS: ReadonlyMap<string, string> = new Map([
+  ["worm2ZoG2kUd4vFXhvjh93UUH596ayRfgQ2MgjNMTth", "Wormhole"],
+  ["wormDTUJ6AWPNvk59vGQbDvGJmqbDTdgWgAqcLBCgUb", "Wormhole"],
+  ["src5qyZHqTqecJV4aY6Cb6zDZLMDzrDKKezs22MPHr4", "deBridge"],
+  ["dst5MGcFPoBeREFAA5E3tU5ij8m5uVYwkzkSAbsLbNo", "deBridge"],
+  ["mayan34VedncxdK2XobtvWFDXQASUTBXhUVzt2kKgny", "Mayan"],
+  ["BLZRi6frs4X4DNLw56V4EXai1b6QVESN1BhHBTYM9VcY", "Mayan"],
+  ["CCTPiPYPc6AsJuwueEnWgSgucamXDZwBd53dQ11YiKX3", "Circle CCTP"],
+  ["CCTPV2vPZJS2u2BBsUoscuikbYjnpFmbFsvVuJdgUMQe", "Circle CCTP"],
+]);
+/** Bridge moves kept per read, newest first. */
+export const FLOW_MAX_BRIDGES = 40;
+
+export interface WalletFlowBridge {
+  /** The bridge's name, and the program the transaction called. */
+  bridge: string;
+  program: string;
+  /** "out": the wallet's money left Solana through it; "in": arrived. */
+  dir: "in" | "out";
+  /** Null for SOL. */
+  mint: string | null;
+  /** SOL moved, or whole coins moved. */
+  amount: number;
+  at: number | null;
+  signature: string | null;
+}
+
 export interface WalletFlows {
   wallet: string;
   /** Transactions read. */
@@ -61,6 +93,8 @@ export interface WalletFlows {
   toMs: number | null;
   transfers: WalletFlowTransfer[];
   trades: WalletFlowTrade[];
+  /** Moves through a bridge. Absent on reads kept from before bridges were read. */
+  bridges?: WalletFlowBridge[];
 }
 
 type Balance = NonNullable<NonNullable<ChainTx["meta"]>["preTokenBalances"]>[number] & {
@@ -162,6 +196,7 @@ export function flowsFromTransactions(
   };
   const transfers = new Map<string, WalletFlowTransfer>();
   const trades = new Map<string, WalletFlowTrade>();
+  const bridges: WalletFlowBridge[] = [];
   let fromMs: number | null = null;
   let toMs: number | null = null;
   let read = 0;
@@ -207,6 +242,25 @@ export function flowsFromTransactions(
     // Wrapped SOL is SOL: a swap through the wallet's WSOL account moves it there instead.
     const mySol = (sol.get(wallet) ?? 0) + (mine.get(WSOL_MINT) ?? 0);
     const coins = [...mine].filter(([mint, d]) => mint !== WSOL_MINT && d !== 0);
+
+    // A bridge call is the money leaving or reaching Solana, not a trade or a transfer here.
+    const program = keys.find((k) => BRIDGE_PROGRAMS.has(k));
+    if (program) {
+      const coin = [...coins].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0];
+      if (coin || Math.abs(mySol) >= FLOW_MIN_SOL) {
+        const d = coin ? coin[1] : mySol;
+        bridges.push({
+          bridge: BRIDGE_PROGRAMS.get(program)!,
+          program,
+          dir: d < 0 ? "out" : "in",
+          mint: coin ? coin[0] : null,
+          amount: Math.abs(d),
+          at,
+          signature: tx.transaction?.signatures?.[0] ?? null,
+        });
+      }
+      continue;
+    }
 
     if (coins.length > 0 && Math.abs(mySol) >= FLOW_MIN_SOL) {
       for (const [mint, d] of coins) {
@@ -274,5 +328,6 @@ export function flowsFromTransactions(
     trades: [...trades.values()]
       .sort((a, b) => b.solIn + b.solOut - (a.solIn + a.solOut))
       .slice(0, FLOW_MAX_TRADES),
+    bridges: bridges.sort((a, b) => (b.at ?? 0) - (a.at ?? 0)).slice(0, FLOW_MAX_BRIDGES),
   };
 }

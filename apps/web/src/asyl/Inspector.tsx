@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { ago, usd } from "../format";
 import { LinkSwatch, imageSources } from "./GraphView";
-import { asylApi, avatarUrl, type AsylMe, type Dossier } from "./asylApi";
+import { asylApi, avatarUrl, type AsylMe, type BridgeMove, type Dossier } from "./asylApi";
+import { dashboardUrl } from "../returnTo";
 import { CoinReportCard } from "./CoinReport";
 import {
   EDGE_LABEL,
@@ -45,6 +46,9 @@ export interface InspectorActions {
   trace: (wallet: string) => void;
   /** Follows the money out of a wallet, hop by hop, to an exchange or where it stopped. */
   exits: (wallet: string) => void;
+  /** Paid in Burn Credits: wallets sharing its exchange deposit addresses, and its bridge moves. */
+  deposits: (wallet: string) => void;
+  bridges: (wallet: string) => void;
   /**
    * A coin's holders now and in the past, as the reader's cutoffs keep them (user ask 2026-10-25:
    * one Show holders); `live` reads the current ones from the chain.
@@ -68,6 +72,16 @@ export interface InspectorActions {
   removeLabel: (wallet: string) => Promise<void>;
   setNote: (id: string, text: string) => void;
 }
+
+const burnCost = (n: number) => `${n} credit${n === 1 ? "" : "s"}`;
+const fmtBridged = (n: number) =>
+  n >= 1_000_000
+    ? `${(n / 1_000_000).toFixed(1)}M`
+    : n >= 1_000
+      ? `${(n / 1_000).toFixed(1)}K`
+      : n >= 10
+        ? n.toFixed(0)
+        : String(Number(n.toPrecision(2)));
 
 /** Typical gaps this short read as one bot, or one person, not one wallet copying another. */
 const SAME_TIME_SEC = 2;
@@ -106,6 +120,7 @@ export function Inspector({
   holderRule,
   onEditRule,
   watched,
+  bridgeMoves,
   actions,
   onClose,
 }: {
@@ -127,6 +142,8 @@ export function Inspector({
   onEditRule?: () => void;
   /** Whether the reader watches this wallet. */
   watched?: boolean;
+  /** Its moves through bridges, when a Bridges read asked. */
+  bridgeMoves?: readonly BridgeMove[];
   actions: InspectorActions;
   onClose: () => void;
 }) {
@@ -181,6 +198,7 @@ export function Inspector({
           .sort((x, y) => y.net - x.net)
       : [];
   const chain = me.chain;
+  const burn = me.burn ?? null;
   const chainOff = !me.pro
     ? "Chain reads need Pro Mode"
     : chain && chain.left <= 0
@@ -631,6 +649,68 @@ export function Inspector({
           )}
         </div>
         {chainOff && node.kind === "wallet" && <p className="asyl-muted asyl-small">{chainOff}.</p>}
+        {node.kind === "wallet" && !node.tags.includes("bridge") && (
+          <>
+            <h3 className="asyl-chain-head">
+              Deeper chain tools <span className="asyl-burn-chip">Burn Credits</span>
+            </h3>
+            <div className="asyl-actions">
+              <button
+                className="asyl-btn chain"
+                disabled={!!busy || !burn}
+                title="Finds the exchange deposit addresses it pays, and the other wallets paying the same ones: most likely the same person's exchange account. Running it again within the hour is free"
+                onClick={() => actions.deposits(node.id)}
+              >
+                Shared exchange deposits · {burnCost(burn?.cost.deposits ?? 3)}
+              </button>
+              <button
+                className="asyl-btn chain"
+                disabled={!!busy || !burn}
+                title="Its moves through Wormhole, deBridge, Mayan and Circle CCTP: money sent to or arriving from another chain. Running it again within the hour is free"
+                onClick={() => actions.bridges(node.id)}
+              >
+                Bridges · {burnCost(burn?.cost.bridges ?? 1)}
+              </button>
+            </div>
+            <p className="asyl-muted asyl-small">
+              {burn
+                ? `You have ${burn.balance} Burn Credit${burn.balance === 1 ? "" : "s"}${burn.freeLeft ? ` plus ${burn.freeLeft} free today` : ""}. `
+                : "Your Burn Credits couldn't be read. "}
+              Any account can use these, Pro Mode or not.{" "}
+              <a className="asyl-link" href={`${dashboardUrl()}#utilities`} target="_blank" rel="noreferrer">
+                Get credits
+              </a>
+            </p>
+          </>
+        )}
+        {bridgeMoves && bridgeMoves.length > 0 && (
+          <>
+            <h3 className="asyl-chain-head">Bridge moves</h3>
+            <ul className="asyl-bridge-list">
+              {bridgeMoves.map((m, i) => (
+                <li key={`${m.signature ?? i}`}>
+                  <span className={`asyl-bridge-dir ${m.dir}`}>{m.dir === "out" ? "Out ↗" : "In ↙"}</span>
+                  <span>
+                    {m.mint ? `${fmtBridged(m.amount)} coins` : `${fmtBridged(m.amount)} SOL`} via {m.bridge}
+                    {m.at
+                      ? ` · ${new Date(m.at).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`
+                      : ""}
+                  </span>
+                  {m.signature && (
+                    <a
+                      className="asyl-link"
+                      href={`https://solscan.io/tx/${m.signature}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Solscan ↗
+                    </a>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </section>
 
       {node.kind === "wallet" && (

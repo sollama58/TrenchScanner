@@ -75,9 +75,22 @@ import {
   updateMap,
 } from "../asyl/maps.js";
 import type { AsylCoverage } from "../asyl/types.js";
-import { addEarlyBuyers, addLaunches, loadCoinReport } from "../asyl/report.js";
+import { addEarlyBuyers, addLaunches, loadCoinReport, type CoinReport } from "../asyl/report.js";
+import { SharedCacheMap } from "../sharedCache.js";
 import { COMMON_FUNDER_WALLETS, commonFunderNote, findCommonFunder } from "../asyl/funders.js";
 import { WATCH_MAX, addWatch, listWatches, markSeen, removeWatch } from "../asyl/watch.js";
+import {
+  addBridges,
+  addDeposits,
+  bridgeNote,
+  burnCheck,
+  burnStanding,
+  chargeFor,
+  depositNote,
+  findSharedDeposits,
+  readBridges,
+  type PaidTool,
+} from "../asyl/paid.js";
 
 /**
  * Asyl (asyl.trenchscanner.app, user decisions 2026-10-24): maps of how wallets are linked, for
@@ -126,6 +139,14 @@ const linksBody = z.object({
   deployers: z.boolean().default(false),
 });
 
+/**
+ * A coin's report is the same for every reader and changes with the next scan, so it is shared for
+ * a minute (user ask 2026-10-26): clicking back and forth between coins doesn't run its six reads
+ * again each time.
+ */
+export const COIN_REPORT_TTL_MS = 60_000;
+const coinReports = new SharedCacheMap<CoinReport | null>(COIN_REPORT_TTL_MS, 500);
+
 /** Each map read is a handful of indexed queries: well above what a person clicks. */
 const READ_LIMIT = { max: 60, timeWindow: "1 minute" };
 /** The search box asks as the reader types, a little behind each key. */
@@ -138,6 +159,18 @@ const SHARED_LIMIT = { max: 60, timeWindow: "1 minute" };
 
 function bad(reply: FastifyReply, err: z.ZodError) {
   return reply.code(400).send({ error: err.issues[0]?.message ?? "invalid request" });
+}
+
+/** A paid tool the reader can't afford, as the Utilities lookups answer it. */
+function notEnoughCredits(reply: FastifyReply, balance: number, cost: number, freeLeft: number) {
+  const have = freeLeft > 0 ? `${balance} plus ${freeLeft} free today` : `${balance}`;
+  return reply.code(402).send({
+    error: `This costs ${cost} Burn Credit${cost === 1 ? "" : "s"} and you have ${have}. Burn $ASDFASDFA in TrenchScanner's Utilities to get more.`,
+    code: "not_enough_credits",
+    balance,
+    cost,
+    freeLeft,
+  });
 }
 
 /** A refused chain read, as the web app shows it. */
@@ -240,6 +273,7 @@ export async function registerAsylRoutes(
         wallet: request.user!.walletAddress,
         pro,
         chain: pro ? await readAllowance(env, request.user!.userId) : null,
+        burn: await burnStanding(env, request.user!.walletAddress).catch(() => null),
         solUsd,
         labels: { cap: TRACKED_WALLET_CAP, nameMax: TRACKED_NAME_MAX },
       };
@@ -406,7 +440,8 @@ export async function registerAsylRoutes(
     priv.get("/token/:mint/report", { config: { rateLimit: READ_LIMIT } }, async (request, reply) => {
       const p = mintParams.safeParse(request.params);
       if (!p.success) return bad(reply, p.error);
-      const report = await loadCoinReport(p.data.mint);
+      const mint = p.data.mint;
+      const report = await coinReports.for(mint).get(() => loadCoinReport(mint));
       if (!report) return reply.code(404).send({ error: "TrenchScanner hasn't tracked this coin." });
       reply.header("Cache-Control", "private, no-store");
       return report;
@@ -703,6 +738,88 @@ export async function registerAsylRoutes(
         credits: res.credits,
         cached: res.cached,
         allowance: res.allowance,
+      };
+    });
+
+    // ---------- chain tools paid in Burn Credits (asyl/paid.ts) ----------
+
+    /** Whether the reader can run `tool` on `subject`: the chain set up, and the credits (or paid within the hour). */
+    const burnGate = async (
+      request: FastifyRequest,
+      reply: FastifyReply,
+      tool: PaidTool,
+      subject: string,
+    ) => {
+      if (!opts.helius) {
+        reply.code(503).send({ error: "Chain reads aren't set up on this server.", code: "unconfigured" });
+        return null;
+      }
+      const c = await burnCheck(env, request.user!.walletAddress, tool, subject);
+      if (!c.ok) {
+        notEnoughCredits(reply, c.balance, c.cost, c.freeLeft);
+        return null;
+      }
+      return c;
+    };
+    /** Takes the credits for a read that worked; null after replying 402 when a race left too few. */
+    const charge = async (
+      request: FastifyRequest,
+      reply: FastifyReply,
+      tool: PaidTool,
+      subject: string,
+      dailyFree: boolean,
+    ) => {
+      const s = await chargeFor(request.user!.walletAddress, tool, subject, dailyFree);
+      if (s.status === "insufficient") {
+        notEnoughCredits(reply, s.balance, s.cost, s.freeLeft);
+        return null;
+      }
+      return s.status === "charged"
+        ? { cost: s.cost, free: s.free, balance: s.balance, freeLeft: s.freeLeft, reopened: false }
+        : { cost: 0, free: 0, balance: s.balance, freeLeft: s.freeLeft, reopened: true };
+    };
+
+    /** Wallets that pay into the same exchange deposit address: most likely one person. */
+    priv.post("/chain/deposits/:wallet", { config: { rateLimit: CHAIN_LIMIT } }, async (request, reply) => {
+      const p = walletParams.safeParse(request.params);
+      if (!p.success) return bad(reply, p.error);
+      const gate = await burnGate(request, reply, "asyl-deposits", p.data.wallet);
+      if (!gate) return reply;
+      const res = await findSharedDeposits(env, opts.helius!, request.user!.userId, p.data.wallet);
+      if ("refused" in res) return refusal(reply, res);
+      const burn = await charge(request, reply, "asyl-deposits", p.data.wallet, gate.dailyFree);
+      if (!burn) return reply;
+      const g = new GraphBuilder();
+      addDeposits(g, res.value);
+      const graph = await decorate(g, await trackedOf(request));
+      return {
+        focus: p.data.wallet,
+        graph,
+        deposits: res.value,
+        note: depositNote(res.value, new Map(graph.nodes.map((n) => [n.id, n.name]))),
+        burn,
+      };
+    });
+
+    /** A wallet's moves through Wormhole, deBridge, Mayan and Circle CCTP: money to or from other chains. */
+    priv.post("/chain/bridges/:wallet", { config: { rateLimit: CHAIN_LIMIT } }, async (request, reply) => {
+      const p = walletParams.safeParse(request.params);
+      if (!p.success) return bad(reply, p.error);
+      const gate = await burnGate(request, reply, "asyl-bridges", p.data.wallet);
+      if (!gate) return reply;
+      const res = await readBridges(env, opts.helius!, request.user!.userId, p.data.wallet);
+      if ("refused" in res) return refusal(reply, res);
+      const burn = await charge(request, reply, "asyl-bridges", p.data.wallet, gate.dailyFree);
+      if (!burn) return reply;
+      const moves = res.value.bridges ?? [];
+      const g = new GraphBuilder();
+      addBridges(g, p.data.wallet, moves);
+      return {
+        focus: p.data.wallet,
+        graph: await decorate(g, await trackedOf(request)),
+        bridges: moves,
+        note: bridgeNote(res.value),
+        burn,
       };
     });
 

@@ -219,7 +219,12 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     // Whether looking each one up again would be free (a coin or wallet the dashboard tracks).
     const subjects = [
       ...new Map(
-        spends.flatMap((s) => (s.utility && s.subject ? [[`${s.utility}:${s.subject}`, s] as const] : [])),
+        // Asyl's paid chain tools (asyl/paid.ts) are listed, but are never free to run again.
+        spends.flatMap((s) =>
+          (s.utility === "token" || s.utility === "wallet") && s.subject
+            ? [[`${s.utility}:${s.subject}`, s] as const]
+            : [],
+        ),
       ).values(),
     ];
     const freeBy = new Map(
