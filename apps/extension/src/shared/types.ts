@@ -227,9 +227,17 @@ export type ContentRequest =
   | { type: "alerts" }
   /** The safety verdicts of the coins on a board (only while the hide-or-mark option is on). */
   | { type: "safety"; mints: string[] }
+  /** The stats of the coins on a board (only while the pill-on-every-coin option is on). */
+  | { type: "stats"; mints: string[] }
   /** The open token page's coin's top holders, for the holder markers (only while they are on). */
   | { type: "holders"; mint: string }
   | { type: "health"; site: Site; rows: number; mints: number; paused: boolean };
+
+export interface StatsAnswer {
+  /** Each coin asked about that TrenchScanner has numbers for, by mint; no calls, matches or AI. */
+  tokens: Record<string, OverlayToken>;
+  problem: Problem;
+}
 
 export interface SafetyAnswer {
   /** The verdict of each coin asked about that the scanner has screened, by mint. */

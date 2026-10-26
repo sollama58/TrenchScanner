@@ -336,3 +336,41 @@ describe("safety screen on the boards", () => {
     expect(columnOf(lone[0]!, findColumns(document, lone))).toBe("other");
   });
 });
+
+describe("the pill on every coin (user ask 2026-10-26)", () => {
+  function pulse() {
+    board(
+      `<div id="a" data-pulse-token-address="${A}"></div><div id="b" data-pulse-token-address="${B}"></div>`,
+    );
+    const e = new OverlayEngine(axiom, DEFAULT_SETTINGS, {
+      lookup: async () => ({ tokens: {}, problem: null }),
+      report: () => undefined,
+      stats: async () => ({ tokens: {}, problem: null }),
+    });
+    return { e, a: document.getElementById("a")!, b: document.getElementById("b")! };
+  }
+  const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const numbers = (minutes: number) =>
+    token({ mint: B, stats: { ...token().stats!, takenAt: ago(minutes) } });
+
+  it("puts a pill on a coin that isn't an alert, only with the option on and fresh numbers", () => {
+    const { e, a, b } = pulse();
+    e.start();
+    e.scan();
+    e.receive([A, B], { tokens: { [A]: token({ modelCalls: [call] }) }, problem: null });
+    e.receiveStats([B], { tokens: { [B]: numbers(5) }, problem: null });
+    // Off by default: the alert keeps its ring, the other coin stays bare.
+    expect(a.querySelector("trench-overlay")).not.toBeNull();
+    expect(b.querySelector("trench-overlay")).toBeNull();
+
+    e.applyTooltip(cleanTooltip({ boardStats: { enabled: true, maxAgeMinutes: 30 } }));
+    expect(b.querySelector("trench-overlay")).not.toBeNull();
+    // Numbers older than the reader allows: no pill.
+    e.receiveStats([B], { tokens: { [B]: numbers(45) }, problem: null });
+    expect(b.querySelector("trench-overlay")).toBeNull();
+    // None at all: none either.
+    e.receiveStats([B], { tokens: {}, problem: null });
+    expect(b.querySelector("trench-overlay")).toBeNull();
+    e.stop();
+  });
+});

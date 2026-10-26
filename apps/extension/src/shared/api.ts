@@ -69,5 +69,13 @@ export const api = {
   /** One coin's card for the panel's lookup: null when the scanner never stored it. */
   token: (key: string, mint: string) =>
     call<{ token: OverlayToken | null }>(key, "GET", `/token/${encodeURIComponent(mint)}`),
+  /** The stats of up to 100 coins on a board (no calls, matches or AI review). */
+  stats: (key: string, mints: string[]) =>
+    call<{ tokens: Record<string, Omit<OverlayToken, "modelCalls" | "filterMatches" | "ai">> }>(
+      key,
+      "POST",
+      "/stats",
+      { mints },
+    ),
   buddy: (key: string) => call<BuddyAnswer>(key, "GET", "/buddy"),
 };

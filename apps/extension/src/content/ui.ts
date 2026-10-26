@@ -32,6 +32,8 @@ const RING_CSS = `
 .filter { --a: var(--c-filter); --b: var(--c-filter2); }
 .both { --a: var(--c-model); --b: var(--c-filter); }
 .risk { --a: var(--c-risk); --b: var(--c-risk2); }
+.plain { --a: color-mix(in srgb, var(--c-pillText) 45%, transparent); --b: var(--a); }
+.ring.plain { display: none; }
 .halo::before { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.5px;
   background: conic-gradient(from var(--ang, 0deg), var(--a), var(--b), transparent 40%, transparent 60%, var(--a));
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
@@ -105,6 +107,8 @@ export interface Pills {
   colors: Record<ColorKey, string>;
   /** The ring's model's or filter's own effect. */
   effect?: RingEffect;
+  /** A coin that isn't one of the reader's alerts: its pill alone, with no ring (user ask 2026-10-26). */
+  plain?: boolean;
 }
 
 /** A pill's text as spans, written with textContent only (a filter's name is the reader's text). */
@@ -190,15 +194,16 @@ export class Decoration {
   }
 
   update(verdict: RowVerdict, style: RingStyle, calm: boolean, pills: Pills): void {
-    if (!verdict.ring) {
+    const kind = pills.plain ? "plain" : verdict.ring;
+    if (!kind) {
       this.remove();
       return;
     }
-    this.ring.className = `ring ${verdict.ring} ${style}${calm ? " calm" : ""}`;
+    this.ring.className = `ring ${kind} ${style}${calm ? " calm" : ""}`;
     const effect = pills.effect && pills.effect !== "none" ? pills.effect : "";
     if (this.fx.className !== `fx ${effect}`) this.fx.className = `fx ${effect}`;
     this.colors.set(pills.colors);
-    this.kind = verdict.ring;
+    this.kind = kind;
     this.hasMain = pills.main.length > 0;
     this.hasMore = (pills.more?.length ?? 0) > 0;
     const before = `${this.badgeText.dataset.key}/${this.moreText.dataset.key}`;

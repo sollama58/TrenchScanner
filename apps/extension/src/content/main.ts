@@ -13,6 +13,7 @@ import type {
   OverlayBubbleTotals,
   OverlaySettings,
   SafetyAnswer,
+  StatsAnswer,
 } from "../shared/types";
 
 /**
@@ -43,6 +44,8 @@ async function main(): Promise<void> {
         totals: async (mint) => await ask<OverlayBubbleTotals>({ type: "totals", mint }),
         safety: async (mints) =>
           (await ask<SafetyAnswer>({ type: "safety", mints })) ?? { verdicts: {}, problem: "offline" },
+        stats: async (mints) =>
+          (await ask<StatsAnswer>({ type: "stats", mints })) ?? { tokens: {}, problem: "offline" },
       });
       engine.applyTooltip(tooltip);
       engine.start();

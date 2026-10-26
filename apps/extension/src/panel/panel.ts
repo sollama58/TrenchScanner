@@ -553,7 +553,7 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
         className: "note",
         textContent: __STORE__
           ? "This extension never runs on any website. It can't see your exchange pages, logins or wallet apps. It only talks to TrenchScanner, with a key you can revoke from TrenchScanner's Settings."
-          : "This version reads the token addresses on Axiom, Terminal and GMGN boards to ring your alerts. It never reads your logins. No address leaves the browser except an alerted coin's, for its map totals, the coin page you open, for its map and holder markers, and, only while the safety screen option is on, the coins on the board.",
+          : "This version reads the token addresses on Axiom, Terminal and GMGN boards to ring your alerts. It never reads your logins. No address leaves the browser except an alerted coin's, for its map totals, the coin page you open, for its map and holder markers, and, only while the safety screen or the pill on every coin is on, the coins on the board.",
       }),
       disconnect,
     ),
@@ -704,9 +704,41 @@ function ringDisplaySections(settings: OverlaySettings): HTMLElement[] {
     tip.list,
     reset("tooltip", () => (tipPrefs = { ...tipPrefs, order: DEFAULT_TOOLTIP.order, on: {} }), tip.fill),
   );
+  const boardAge = el("input", {
+    type: "number",
+    min: "1",
+    max: "1440",
+    step: "1",
+    value: String(tipPrefs.boardStats.maxAgeMinutes),
+  });
+  boardAge.setAttribute("aria-label", "Only numbers this many minutes old or newer");
+  boardAge.addEventListener("change", () => {
+    const n = Math.round(Number(boardAge.value));
+    if (!Number.isFinite(n) || n < 1 || n > 1440) {
+      boardAge.value = String(tipPrefs.boardStats.maxAgeMinutes);
+      return;
+    }
+    tipPrefs = { ...tipPrefs, boardStats: { ...tipPrefs.boardStats, maxAgeMinutes: n } };
+    save();
+  });
+  const boardBox = section(
+    "Pill on every coin",
+    toggle(
+      "Show the pill on coins that aren't alerts",
+      "The same parts as the ring pill, in grey with no ring, on every coin TrenchScanner has fresh numbers for. Sends the board's addresses to TrenchScanner while on.",
+      tipPrefs.boardStats.enabled,
+      "var(--filter)",
+      (on) => {
+        tipPrefs = { ...tipPrefs, boardStats: { ...tipPrefs.boardStats, enabled: on } };
+        save();
+      },
+    ),
+    el("label", { className: "opt" }, el("div", {}, "Only numbers at most this many minutes old"), boardAge),
+  );
   return [
     pillBox,
     secondBox,
+    boardBox,
     tipBox,
     toastSection(),
     safetySection(),

@@ -20,6 +20,7 @@ import type {
   OverlaySettings,
   OverlayToken,
   SafetyAnswer,
+  StatsAnswer,
 } from "../shared/types";
 import { verdictFor } from "../shared/verdict";
 
@@ -37,6 +38,8 @@ const LOOKUP_EVERY_MS = 120;
  * this often, and a coin already asked about isn't asked again until that answer lands.
  */
 const SAFETY_EVERY_MS = 600;
+/** A board coin's numbers are asked for again after this long (the scan lands every few minutes). */
+const BOARD_STATS_MS = 30_000;
 /** At most this many coins per ask, the ones on screen first (the worker takes 100). */
 const LOOKUP_MAX = 100;
 /** Rows found but no address read for this long: the adapter no longer fits the page. */
@@ -79,6 +82,8 @@ export interface EngineDeps {
   totals?(mint: string): Promise<OverlayBubbleTotals | null>;
   /** The safety verdicts of coins on screen, while the hide-or-mark option is on. */
   safety?(mints: string[]): Promise<SafetyAnswer>;
+  /** The stats of coins on screen, while the pill-on-every-coin option is on. */
+  stats?(mints: string[]): Promise<StatsAnswer>;
 }
 
 interface RowState {
@@ -104,6 +109,10 @@ export class OverlayEngine {
   private readonly totals = new Map<string, { at: number; totals: OverlayBubbleTotals | null }>();
   private readonly totalsAsked = new Set<string>();
   private readonly safety = new Map<string, { at: number; verdict: OverlaySafety | null }>();
+  /** Coins that aren't the reader's alerts, with TrenchScanner's numbers, for the board pills. */
+  private readonly board = new Map<string, { at: number; token: OverlayToken | null }>();
+  private lastStats = 0;
+  private readonly statsAsked = new Set<string>();
   private columns: { at: number; boxes: [Element, BoardColumn][] } = { at: 0, boxes: [] };
   private tipPrefs: TooltipPrefs = DEFAULT_TOOLTIP;
   private mutation: MutationObserver | null = null;
@@ -167,7 +176,9 @@ export class OverlayEngine {
   }
 
   applyTooltip(prefs: TooltipPrefs): void {
-    const asked = prefs.safety.mode !== "off" && this.tipPrefs.safety.mode === "off";
+    const asked =
+      (prefs.safety.mode !== "off" && this.tipPrefs.safety.mode === "off") ||
+      (prefs.boardStats.enabled && !this.tipPrefs.boardStats.enabled);
     this.tipPrefs = prefs;
     for (const [row, state] of this.rows) this.draw(row, state);
     this.closeGaps();
@@ -189,10 +200,12 @@ export class OverlayEngine {
 
   /** The tooltip for a hovered badge, redrawn once the coin's map totals arrive if it needs them. */
   private showTip(badge: Element, mint: string): void {
-    const token = this.tokens.get(mint)?.token;
+    // A board coin's pill has the same tooltip, from its numbers alone.
+    const current = () => this.tokens.get(mint)?.token ?? this.boardToken(mint);
+    const token = current();
     if (!token) return;
     const draw = () => {
-      const live = this.tokens.get(mint)?.token ?? token;
+      const live = current() ?? token;
       const lines = shownLines(this.tipPrefs, this.settings);
       this.tooltip.show(
         badge,
@@ -311,6 +324,22 @@ export class OverlayEngine {
       if (screening && !this.safetyAsked.has(mint) && (force || !verdict || now - verdict.at >= REFRESH_MS))
         unsafe.add(mint);
     }
+    // The board pills: coins the lookup says aren't alerts. Asked as the safety screen is.
+    const stats = new Set<string>();
+    if (this.boardStatsOn()) {
+      for (const [, state] of rows) {
+        const mint = state.mint;
+        if (!mint || this.statsAsked.has(mint)) continue;
+        const known = this.tokens.get(mint);
+        if (!known || known.token) continue;
+        const had = this.board.get(mint);
+        if (force || !had || now - had.at >= BOARD_STATS_MS) stats.add(mint);
+      }
+      if (stats.size > 0 && now - this.lastStats < SAFETY_EVERY_MS) {
+        window.setTimeout(() => this.queueLookup(force), this.lastStats + SAFETY_EVERY_MS - now);
+        stats.clear();
+      }
+    }
     // Too soon for another safety ask: the next lookup after the wait carries it.
     const safetyDue = now - this.lastSafety >= SAFETY_EVERY_MS;
     if (unsafe.size > 0 && !safetyDue) {
@@ -323,6 +352,7 @@ export class OverlayEngine {
           if (!answer.problem) this.receive([...wanted].slice(0, LOOKUP_MAX), answer, now);
         }),
       unsafe.size > 0 && this.deps.safety && this.readSafety([...unsafe].slice(0, LOOKUP_MAX), now),
+      stats.size > 0 && this.readStats([...stats].slice(0, LOOKUP_MAX), now),
     ]);
   }
 
@@ -333,6 +363,30 @@ export class OverlayEngine {
       !!this.deps.safety &&
       !isTokenPage(this.adapter.site, location.pathname)
     );
+  }
+
+  /** The board pills apply: the option is on and the worker can answer. */
+  private boardStatsOn(): boolean {
+    return this.tipPrefs.boardStats.enabled && !!this.deps.stats;
+  }
+
+  private async readStats(mints: string[], now: number): Promise<void> {
+    this.lastStats = now;
+    for (const mint of mints) this.statsAsked.add(mint);
+    const answer = await this.deps.stats!(mints).finally(() => {
+      for (const mint of mints) this.statsAsked.delete(mint);
+    });
+    if (answer.problem) return;
+    this.receiveStats(mints, answer, now);
+  }
+
+  /** Exposed for tests. A coin left out of the answer has no numbers, so it gets no pill. */
+  receiveStats(asked: string[], answer: StatsAnswer, now = Date.now()): void {
+    for (const mint of asked) this.board.set(mint, { at: now, token: answer.tokens[mint] ?? null });
+    if (this.board.size > 5_000) {
+      for (const [mint, v] of this.board) if (now - v.at > 10 * BOARD_STATS_MS) this.board.delete(mint);
+    }
+    for (const [row, state] of this.rows) if (state.mint && asked.includes(state.mint)) this.draw(row, state);
   }
 
   private async readSafety(mints: string[], now: number): Promise<void> {
@@ -357,6 +411,15 @@ export class OverlayEngine {
       for (const [mint, v] of this.safety) if (now - v.at > 10 * REFRESH_MS) this.safety.delete(mint);
     }
     for (const [row, state] of this.rows) if (state.mint && asked.includes(state.mint)) this.draw(row, state);
+  }
+
+  /** A board coin's token, when the option is on and its numbers are no older than the reader allows. */
+  private boardToken(mint: string): OverlayToken | null {
+    if (!this.boardStatsOn()) return null;
+    const token = this.board.get(mint)?.token;
+    const at = token?.stats ? Date.parse(token.stats.takenAt) : NaN;
+    if (!token || !Number.isFinite(at)) return null;
+    return Date.now() - at <= this.tipPrefs.boardStats.maxAgeMinutes * 60_000 ? token : null;
   }
 
   /** Hides the row, marks it, or leaves it, by its coin's newest verdict and the reader's choice. */
@@ -456,13 +519,18 @@ export class OverlayEngine {
 
   private draw(row: HTMLElement, state: RowState): void {
     this.drawSafety(row, state);
-    const token = state.mint ? this.tokens.get(state.mint)?.token : null;
+    const alerted = state.mint ? this.tokens.get(state.mint)?.token : null;
+    // Not an alert: the board pill, while its option is on and its numbers are fresh enough.
+    const token = alerted ?? (state.mint ? this.boardToken(state.mint) : null);
     if (!token || this.paused) {
       state.decoration?.remove();
       return;
     }
-    const verdict = verdictFor(token, this.settings);
-    if (!verdict.ring) {
+    const found = verdictFor(token, this.settings);
+    // A board coin gets no ring of its own, whatever its flags say: the plain pill only.
+    const plain = !alerted;
+    const verdict = plain ? { ...found, ring: null } : found;
+    if (!verdict.ring && !plain) {
       state.decoration?.remove();
       return;
     }
@@ -479,6 +547,7 @@ export class OverlayEngine {
     const totals = this.totals.get(state.mint!)?.totals;
     if (pillsNeedMap(this.tipPrefs)) void this.loadTotals(state.mint!);
     state.decoration.update(verdict, this.settings.style.ring, this.settings.style.calmMotion, {
+      plain,
       main: pillSegments(main, token, verdict, this.settings, totals),
       more: more && pillSegments(more, token, verdict, this.settings, totals),
       riskDot: this.tipPrefs.riskDot,
