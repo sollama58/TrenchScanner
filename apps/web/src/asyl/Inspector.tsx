@@ -42,6 +42,8 @@ export interface InspectorActions {
   flows: (wallet: string) => void;
   funders: (wallets: string[]) => void;
   trace: (wallet: string) => void;
+  /** Follows the money out of a wallet, hop by hop, to an exchange or where it stopped. */
+  exits: (wallet: string) => void;
   /**
    * A coin's holders now and in the past, as the reader's cutoffs keep them (user ask 2026-10-25:
    * one Show holders); `live` reads the current ones from the chain.
@@ -504,6 +506,17 @@ export function Inspector({
                 onClick={() => actions.trace(node.id)}
               >
                 Trace to terminal funder
+              </button>
+              <button
+                className="asyl-btn chain"
+                disabled={!!busy || !!chainOff}
+                title={
+                  chainOff ??
+                  "Follows the biggest SOL it sent on, hop by hop, until an exchange or a wallet that sent nothing on. Up to 6 hops, up to 30 credits each; wallets read today are free"
+                }
+                onClick={() => actions.exits(node.id)}
+              >
+                Where did the money go
               </button>
             </>
           )}

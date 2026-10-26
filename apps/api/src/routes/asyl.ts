@@ -56,6 +56,9 @@ import {
   traceFunders,
   addTrace,
   traceNote,
+  traceExits,
+  addExitTrace,
+  exitNote,
   type ChainRefusal,
 } from "../asyl/chain.js";
 import {
@@ -73,6 +76,7 @@ import {
 } from "../asyl/maps.js";
 import type { AsylCoverage } from "../asyl/types.js";
 import { addEarlyBuyers, addLaunches, loadCoinReport } from "../asyl/report.js";
+import { COMMON_FUNDER_WALLETS, commonFunderNote, findCommonFunder } from "../asyl/funders.js";
 
 /**
  * Asyl (asyl.trenchscanner.app, user decisions 2026-10-24): maps of how wallets are linked, for
@@ -87,6 +91,7 @@ import { addEarlyBuyers, addLaunches, loadCoinReport } from "../asyl/report.js";
 const address = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "not a Solana address");
 const walletParams = z.object({ wallet: address });
 const mintParams = z.object({ mint: address });
+const commonFunderBody = z.object({ wallets: z.array(address).min(2).max(COMMON_FUNDER_WALLETS) });
 const pairParams = z.object({ a: address, b: address });
 const searchQuery = z.object({ q: z.string().trim().min(2).max(60) });
 /**
@@ -424,6 +429,29 @@ export async function registerAsylRoutes(
       return { focus: p.data.wallet, graph: await decorate(g, await trackedOf(request)), shown };
     });
 
+    /** The nearest wallet that paid for two or more of these, up their stored funding chains. */
+    priv.post("/common-funder", { config: { rateLimit: READ_LIMIT } }, async (request, reply) => {
+      const b = commonFunderBody.safeParse(request.body);
+      if (!b.success) return bad(reply, b.error);
+      const wallets = [...new Set(b.data.wallets)];
+      const g = new GraphBuilder();
+      const read = await findCommonFunder(g, wallets);
+      const graph = await decorate(g, await trackedOf(request));
+      const names = new Map(graph.nodes.map((n) => [n.id, n.name]));
+      reply.header("Cache-Control", "private, no-store");
+      return {
+        focus: read.best?.funder ?? null,
+        graph,
+        best: read.best,
+        shared: read.shared,
+        note: commonFunderNote(
+          read,
+          wallets.length,
+          (w) => names.get(w) ?? `${w.slice(0, 4)}…${w.slice(-4)}`,
+        ),
+      };
+    });
+
     /** Stored links among what is on the map already, and with `deployers` each coin's deployer. */
     priv.post("/links", { config: { rateLimit: READ_LIMIT } }, async (request, reply) => {
       const b = linksBody.safeParse(request.body);
@@ -569,6 +597,28 @@ export async function registerAsylRoutes(
         graph,
         trace: res.value,
         note: traceNote(res.value, graph.nodes.find((n) => n.id === end)?.name ?? null),
+        credits: res.credits,
+        cached: res.cached,
+        allowance: res.allowance,
+      };
+    });
+
+    /** Where a wallet's money went: the biggest SOL it sent, hop by hop, to an exchange or a dead end. */
+    priv.post("/chain/exits/:wallet", { config: { rateLimit: CHAIN_LIMIT } }, async (request, reply) => {
+      const p = walletParams.safeParse(request.params);
+      if (!p.success) return bad(reply, p.error);
+      if (!(await chainGate(request, reply))) return reply;
+      const res = await traceExits(env, opts.helius!, request.user!.userId, p.data.wallet);
+      if ("refused" in res) return refusal(reply, res);
+      const g = new GraphBuilder();
+      addExitTrace(g, res.value);
+      const graph = await decorate(g, await trackedOf(request));
+      const end = res.value.path[res.value.path.length - 1]!;
+      return {
+        focus: p.data.wallet,
+        graph,
+        exits: res.value,
+        note: exitNote(res.value, graph.nodes.find((n) => n.id === end)?.name ?? null),
         credits: res.credits,
         cached: res.cached,
         allowance: res.allowance,

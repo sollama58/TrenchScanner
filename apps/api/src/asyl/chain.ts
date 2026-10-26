@@ -62,6 +62,20 @@ export interface ChainResult<T> {
 
 type Chained<T> = ChainResult<T> | ChainRefusal;
 
+const short = (w: string) => `${w.slice(0, 4)}…${w.slice(-4)}`;
+const fmtAmount = (n: number) =>
+  n >= 1_000_000
+    ? `${(n / 1_000_000).toFixed(1)}M`
+    : n >= 1_000
+      ? `${(n / 1_000).toFixed(1)}K`
+      : n >= 10
+        ? n.toFixed(0)
+        : sig2(n);
+const fmtDay = (ms: number | null) =>
+  ms === null
+    ? null
+    : new Date(ms).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+
 /**
  * Runs one metered read for `userId`: checks, tallies, records. `cached` answers from a shared
  * cache first: free, so it is handed back even with the day's allowance short of a fresh read's
@@ -96,6 +110,44 @@ async function metered<T>(
   return { value: out.value, credits: out.credits, allowance, cached: out.cached };
 }
 
+/** A wallet's flows kept within the day, else null. */
+async function keptFlows(wallet: string, now: number): Promise<WalletFlows | null> {
+  const row = await prisma.asylFlowRead.findUnique({ where: { wallet } });
+  return row && now - row.readAt.getTime() < ASYL_FLOW_TTL_MS ? (row.flows as unknown as WalletFlows) : null;
+}
+
+/** A wallet's flows: kept for a day, else read from its newest FLOW_PAGES pages and kept. */
+async function loadFlows(
+  helius: Pick<HeliusClient, "getWalletTransactionsPage">,
+  wallet: string,
+  now: number,
+): Promise<{ value: WalletFlows; cached: boolean } | null> {
+  const hit = await keptFlows(wallet, now);
+  if (hit) return { value: hit, cached: true };
+  const txs = [];
+  let token: string | undefined;
+  for (let page = 0; page < FLOW_PAGES; page++) {
+    const res = await helius.getWalletTransactionsPage(wallet, token ? { paginationToken: token } : {});
+    if (res.status !== "ok") {
+      if (page === 0) return null;
+      break;
+    }
+    txs.push(...res.txs);
+    if (!res.paginationToken) break;
+    token = res.paginationToken;
+  }
+  const flows = flowsFromTransactions(wallet, txs);
+  const row = {
+    readAt: new Date(now),
+    flows: flows as unknown as Prisma.InputJsonValue,
+    txs: flows.txs,
+  };
+  await prisma.asylFlowRead
+    .upsert({ where: { wallet }, create: { wallet, ...row }, update: row })
+    .catch(() => undefined);
+  return { value: flows, cached: false };
+}
+
 /** A wallet's recent flows: kept for a day, else read from its newest FLOW_PAGES pages. */
 export function readWalletFlows(
   env: Env,
@@ -104,44 +156,146 @@ export function readWalletFlows(
   wallet: string,
   now = Date.now(),
 ): Promise<Chained<WalletFlows>> {
-  const kept = async () => {
-    const row = await prisma.asylFlowRead.findUnique({ where: { wallet } });
-    return row && now - row.readAt.getTime() < ASYL_FLOW_TTL_MS
-      ? (row.flows as unknown as WalletFlows)
-      : null;
-  };
   return metered(
     env,
     userId,
     FLOW_WORST,
-    async () => {
-      const hit = await kept();
-      if (hit) return { value: hit, cached: true };
-      const txs = [];
-      let token: string | undefined;
-      for (let page = 0; page < FLOW_PAGES; page++) {
-        const res = await helius.getWalletTransactionsPage(wallet, token ? { paginationToken: token } : {});
-        if (res.status !== "ok") {
-          if (page === 0) return null;
-          break;
-        }
-        txs.push(...res.txs);
-        if (!res.paginationToken) break;
-        token = res.paginationToken;
-      }
-      const flows = flowsFromTransactions(wallet, txs);
-      const row = {
-        readAt: new Date(now),
-        flows: flows as unknown as Prisma.InputJsonValue,
-        txs: flows.txs,
-      };
-      await prisma.asylFlowRead
-        .upsert({ where: { wallet }, create: { wallet, ...row }, update: row })
-        .catch(() => undefined);
-      return { value: flows, cached: false };
-    },
-    kept,
+    () => loadFlows(helius, wallet, now),
+    () => keptFlows(wallet, now),
   );
+}
+
+/**
+ * Hops an exit trace follows at most (user ask 2026-10-26, "where did the money go"): each hop is
+ * a flow read of up to FLOW_WORST credits, so a trace costs at most EXIT_HOPS * FLOW_WORST.
+ */
+export const EXIT_HOPS = 6;
+/** SOL a hop must send on to count: dust and rent refunds aren't where the money went. */
+export const EXIT_MIN_SOL = 0.1;
+
+/**
+ * Why an exit trace stopped. "exchange": the money reached an exchange or service wallet.
+ * "cold": the last wallet sent no SOL on that the read saw (it still holds it, or spent it on
+ * coins). The rest as for a funder trace.
+ */
+export type ExitStop = "exchange" | "cold" | "loop" | "limit" | "allowance" | "paused" | "unreadable";
+
+export interface ExitHop {
+  from: string;
+  to: string;
+  sol: number;
+  count: number;
+  lastAt: number | null;
+}
+
+export interface ExitTrace {
+  /** The wallet, then where it sent most SOL, then where that one sent most, as far as it went. */
+  path: string[];
+  hops: ExitHop[];
+  stop: ExitStop;
+  /** Flow reads that went to the chain (the rest were kept reads). */
+  asked: number;
+}
+
+/** The SOL a flow read saw leave for each wallet, most first, as hops. */
+export function biggestOut(flows: WalletFlows, skip: ReadonlySet<string>): ExitHop | null {
+  const outs = flows.transfers
+    .filter(
+      (t) =>
+        t.dir === "out" &&
+        t.mint === null &&
+        t.amount >= EXIT_MIN_SOL &&
+        !skip.has(t.counterparty) &&
+        isWalletAddress(t.counterparty),
+    )
+    .sort((a, b) => b.amount - a.amount);
+  const t = outs[0];
+  return t
+    ? { from: flows.wallet, to: t.counterparty, sol: t.amount, count: t.count, lastAt: t.lastAt }
+    : null;
+}
+
+/**
+ * Follows the money out of a wallet (user ask 2026-10-26): at each hop, the wallet it sent the most
+ * SOL to, until an exchange or service, a wallet that sent nothing on, a loop, or EXIT_HOPS hops.
+ * Each hop's flow read is kept for a day for everyone, as Read its transfers does.
+ */
+export function traceExits(
+  env: Env,
+  helius: Pick<HeliusClient, "getWalletTransactionsPage">,
+  userId: string,
+  wallet: string,
+  now = Date.now(),
+): Promise<Chained<ExitTrace>> {
+  return metered(env, userId, FLOW_WORST, async (before) => {
+    const path = [wallet];
+    const hops: ExitHop[] = [];
+    let asked = 0;
+    const done = (stop: ExitStop) => ({ value: { path, hops, stop, asked }, cached: asked === 0 });
+    for (let at = wallet; ;) {
+      if (at !== wallet && (await hotFunders([at])).has(at)) return done("exchange");
+      if (hops.length >= EXIT_HOPS) return done("limit");
+      if (heliusCreditsOut()) return done("paused");
+      if (before.left < (asked + 1) * FLOW_WORST) return done("allowance");
+      const r = await loadFlows(helius, at, now).catch(() => null);
+      if (!r) return done("unreadable");
+      if (!r.cached) asked += 1;
+      const hop = biggestOut(r.value, new Set([at]));
+      if (!hop) return done("cold");
+      hops.push(hop);
+      if (path.includes(hop.to)) return done("loop");
+      path.push(hop.to);
+      at = hop.to;
+    }
+  });
+}
+
+/** An exit trace drawn on the map: each hop a SOL transfer, the last tagged when it's an exchange. */
+export function addExitTrace(g: GraphBuilder, trace: ExitTrace): void {
+  const last = trace.path[trace.path.length - 1]!;
+  for (const w of trace.path)
+    g.node(w, "wallet", w === last && trace.stop === "exchange" ? { tags: ["exchange"] } : {});
+  for (const h of trace.hops)
+    g.edge({
+      a: h.from,
+      b: h.to,
+      kind: "transfer",
+      weight: h.sol,
+      label: [`Sent ${fmtAmount(h.sol)} SOL`, h.count > 1 ? `${h.count}×` : null, fmtDay(h.lastAt)]
+        .filter(Boolean)
+        .join(" · "),
+      source: "chain",
+      mint: null,
+      at: h.lastAt === null ? null : new Date(h.lastAt).toISOString(),
+      sol: h.sol,
+    });
+}
+
+/** What an exit trace found, in a line. */
+export function exitNote(trace: ExitTrace, name: string | null = null): string {
+  const n = trace.hops.length;
+  const last = trace.path[trace.path.length - 1]!;
+  const who = name ?? short(last);
+  const total = trace.hops[0]?.sol;
+  const went = n === 0 ? "" : `Followed the money ${n} hop${n === 1 ? "" : "s"}. `;
+  switch (trace.stop) {
+    case "exchange":
+      return `${went}It ends at ${who}, an exchange or service wallet${total ? `, ${fmtAmount(total)} SOL sent from the start` : ""}.`;
+    case "cold":
+      return n === 0
+        ? "It sent no SOL on in its recent transactions: the money is still there, or went into coins."
+        : `${went}${who} sent nothing on in its recent transactions: the money is still there, or went into coins.`;
+    case "loop":
+      return `${went}The money came back round to ${who}.`;
+    case "limit":
+      return `${went}Stopped after ${EXIT_HOPS} hops at ${who}. Trace again from there to go further.`;
+    case "allowance":
+      return `${went}Today's chain-read allowance ran short at ${who}. It resets at midnight UTC.`;
+    case "paused":
+      return `${went}Chain reads paused at ${who}. Try again in a few minutes.`;
+    case "unreadable":
+      return `${went}The chain couldn't read ${who}'s transfers, so the trace stops there. Try again later.`;
+  }
 }
 
 /**
@@ -339,8 +493,6 @@ export async function addTrace(g: GraphBuilder, trace: FunderTrace): Promise<voi
   }
 }
 
-const short = (w: string) => `${w.slice(0, 4)}…${w.slice(-4)}`;
-
 /** What a trace found, in a line: how far it went and why it stopped there. */
 export function traceNote(trace: FunderTrace, name: string | null = null): string {
   const hops = trace.path.length - 1;
@@ -410,19 +562,6 @@ export function readTokenHolders(
     recent,
   );
 }
-
-const fmtAmount = (n: number) =>
-  n >= 1_000_000
-    ? `${(n / 1_000_000).toFixed(1)}M`
-    : n >= 1_000
-      ? `${(n / 1_000).toFixed(1)}K`
-      : n >= 10
-        ? n.toFixed(0)
-        : sig2(n);
-const fmtDay = (ms: number | null) =>
-  ms === null
-    ? null
-    : new Date(ms).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
 
 /** A flow read drawn on the map: transfers as edges to counterparties, trades as coin edges. */
 export function addFlows(g: GraphBuilder, flows: WalletFlows): void {

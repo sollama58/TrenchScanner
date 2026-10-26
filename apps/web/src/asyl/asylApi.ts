@@ -342,6 +342,25 @@ export const asylApi = {
     post<ChainRead & { trace: { path: string[]; stop: string; asked: number }; note: string }>(
       `/asyl/chain/trace/${enc(wallet)}`,
     ),
+  exits: (wallet: string) =>
+    post<
+      ChainRead & {
+        exits: {
+          path: string[];
+          stop: string;
+          asked: number;
+          hops: { from: string; to: string; sol: number }[];
+        };
+        note: string;
+      }
+    >(`/asyl/chain/exits/${enc(wallet)}`),
+  commonFunder: (wallets: string[]) =>
+    post<
+      GraphRead & {
+        best: { funder: string; wallets: { wallet: string; hops: number }[] } | null;
+        note: string;
+      }
+    >("/asyl/common-funder", { wallets }),
   maps: () => api<{ maps: MapSummary[]; cap: number }>("/asyl/maps"),
   map: (id: string) => api<MapSummary & { doc: MapDoc }>(`/asyl/maps/${enc(id)}`),
   createMap: (title: string, doc: MapDoc) => post<{ map: MapSummary }>("/asyl/maps", { title, doc }),
