@@ -547,15 +547,15 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
   });
 
-  it("records Transferred % and the transfer count, read by the learners, null while unread", () => {
+  it("records Transferred % and the transfer count, recorded only, null while unread", () => {
     const f = buildCandidateFeatures(scored({ transferredSupplyPct: 3, transferWalletCount: 5 }));
     expect(f.transferredSupplyPct).toBe(3);
     expect(f.transferWalletCount).toBe(5);
     expect(buildCandidateFeatures(scored()).transferredSupplyPct).toBeNull();
-    expect(RETIRED_LEARNER_INPUTS.has("transferredSupplyPct")).toBe(false);
-    expect(RETIRED_LEARNER_INPUTS.has("transferWalletCount")).toBe(false);
-    expect(LEARNER_FEATURE_NAMES).toContain("transferredSupplyPct");
-    expect(LEARNER_FEATURE_NAMES).toContain("transferWalletCount");
+    expect(RETIRED_LEARNER_INPUTS.has("transferredSupplyPct")).toBe(true);
+    expect(RETIRED_LEARNER_INPUTS.has("transferWalletCount")).toBe(true);
+    expect(LEARNER_FEATURE_NAMES).not.toContain("transferredSupplyPct");
+    expect(LEARNER_FEATURE_NAMES).not.toContain("transferWalletCount");
   });
 
   it("records the launch facts, read by the learners, null while unread", () => {
