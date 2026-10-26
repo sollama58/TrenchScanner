@@ -4,6 +4,8 @@ import { dashboardUrl } from "../returnTo";
 import { ShareImageDialog } from "../components/ShareImageDialog";
 import { asylApi, type AsylMe, type ChainRead, type Label, type MapDoc, type MapSummary } from "./asylApi";
 import { renderMapCard } from "./asylCard";
+import { renderAnalystCard } from "./analystCard";
+import { AnalystLegend } from "./AnalystLayer";
 import { AsylSignIn } from "./AsylSignIn";
 import { DrawEditor, PenBar } from "./DrawEditor";
 import { PairPanel } from "./PairPanel";
@@ -103,6 +105,7 @@ const KEYS: [string, string][] = [
   ["L", "Links between everything shown"],
   ["D", "Deployers of the coins shown"],
   ["F", "Fit the map to the screen"],
+  ["A", "Analyst Mode: the map as a flowchart of boxes, amounts and right-angled lines"],
   ["P", "Draw freehand with the pen"],
   ["T", "Trades of the selected wallet and its closest co-trader"],
   ["/", "Search"],
@@ -110,6 +113,8 @@ const KEYS: [string, string][] = [
   ["Esc", "Let the pick go, then clear the selection"],
   ["?", "Show or hide these keys"],
 ];
+
+const ANALYST_KEY = "asyl:analyst";
 
 /** The amount sliders are the reader's own: kept in this browser between maps. */
 const CUTOFFS_KEY = "asyl:cutoffs";
@@ -207,6 +212,23 @@ export function AsylApp() {
   const [tool, setTool] = useState<DrawTool>(null);
   // Grid mode (user ask 2026-10-24): off for every new map (user ask 2026-10-25); a saved map keeps its own choice.
   const [grid, setGrid] = useState(false);
+  // Analyst Mode (user ask 2026-10-26): the map as an investigator's flowchart. The reader's own
+  // choice, kept in this browser; a saved map opens the way it was saved.
+  const [analyst, setAnalystState] = useState(() => {
+    try {
+      return localStorage.getItem(ANALYST_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const setAnalyst = (on: boolean) => {
+    setAnalystState(on);
+    try {
+      localStorage.setItem(ANALYST_KEY, on ? "1" : "0");
+    } catch {
+      // Storage blocked: it holds for this visit.
+    }
+  };
   // Bumped when a map is opened or started, so the view lays it out from scratch.
   const [epoch, setEpoch] = useState(0);
   // Counts maps opened, so a slow refresh of one doesn't land on the next.
@@ -462,6 +484,7 @@ export function AsylApp() {
         layout.current.pinned = new Set((m.doc.pinned ?? []).filter((nid) => nid in m.doc.positions));
         // Maps saved before grid mode keep the layout they were saved with.
         setGrid(m.doc.grid ?? false);
+        if (m.doc.analyst !== undefined) setAnalyst(m.doc.analyst);
         if (m.doc.times) setTimeLabelsState({ ...DEFAULT_TIME_LABELS, ...m.doc.times });
         setEpoch((n) => n + 1);
         setGraph(withDeployLines(mergeGraph(EMPTY, { nodes: m.doc.nodes, edges: m.doc.edges })));
@@ -610,6 +633,7 @@ export function AsylApp() {
       cutoffs,
       pinned: [...layout.current.pinned].filter((id) => id in positions),
       grid,
+      analyst,
       times: timeLabels,
       drawings: {
         lines: drawings.lines.filter(
@@ -1355,6 +1379,12 @@ export function AsylApp() {
       case "f":
         view.current?.fit();
         return;
+      case "a":
+        if (graph.nodes.length) {
+          setAnalyst(!analyst);
+          setDirty(true);
+        }
+        return;
       case "b":
       case "o":
         if (graph.nodes.length) {
@@ -1777,7 +1807,24 @@ export function AsylApp() {
               </button>
             </span>
             <button
+              className={`asyl-btn ghost${analyst ? " on" : ""}`}
+              aria-pressed={analyst}
+              disabled={graph.nodes.length === 0}
+              title={
+                analyst
+                  ? "Analyst Mode is on: wallets as boxes, money along right-angled lines, traders folded into their coin. Click for the bubble map (A)"
+                  : "Analyst Mode: the map as an investigator's flowchart, wallets as boxes with the money on each line (A)"
+              }
+              onClick={() => {
+                setAnalyst(!analyst);
+                setDirty(true);
+              }}
+            >
+              ⧉ Analyst
+            </button>
+            <button
               className={`asyl-btn ghost${grid ? " on" : ""}`}
+              disabled={analyst}
               aria-pressed={grid}
               title={
                 grid
@@ -1888,6 +1935,8 @@ export function AsylApp() {
             <GraphView
               key={epoch}
               grid={grid}
+              analyst={analyst}
+              solUsd={solUsd}
               graph={shown}
               layout={layout.current}
               selected={selected}
@@ -1911,7 +1960,8 @@ export function AsylApp() {
               handle={view}
             />
           )}
-          {shown.edges.length > 0 && <MapLegend graph={shown} />}
+          {shown.edges.length > 0 &&
+            (analyst ? <AnalystLegend graph={shown} focus={focus} /> : <MapLegend graph={shown} />)}
 
           {tool === "pen" && (
             <PenBar
@@ -2104,7 +2154,8 @@ export function AsylApp() {
           link={current?.shareSlug ? sharedLink(current.shareSlug) : "asyl.trenchscanner.app"}
           wide
           render={() =>
-            renderMapCard({
+            (analyst ? renderAnalystCard : renderMapCard)({
+              solUsd,
               title:
                 title.trim() ||
                 (focus
