@@ -119,10 +119,18 @@ export interface CandidateSampleRef {
 
 /**
  * How a row was sampled - see CandidateOutcome.sampleKind. "emission" rows are always fresh
- * (they bypass spacing); "event", "hourly" and "match" rows each dedup against their own kind, so
- * an hourly sample never stops the token's looks-ready moment from being banked, or vice versa.
+ * (they bypass spacing); "event", "entry", "hourly" and "match" rows each dedup against their own
+ * kind, so an hourly sample never stops the token's looks-ready moment from being banked, or vice
+ * versa, and the fast path's "entry" row never spends the cycle's event window.
  */
-export type CandidateSampleKind = "hourly" | "event" | "second" | "emission" | "match";
+export type CandidateSampleKind = "hourly" | "event" | "second" | "entry" | "emission" | "match";
+
+/** The decision moments: rows every seat decides on and stores its score on (seatScores). */
+export const DECISION_SAMPLE_KINDS = [
+  "event",
+  "second",
+  "entry",
+] as const satisfies readonly CandidateSampleKind[];
 
 /**
  * How long one "match" anchor is shared. Several users' filters catching the same token a minute
@@ -170,7 +178,7 @@ export async function recordCandidateSample(
   const sample = async (db: Prisma.TransactionClient | typeof prisma): Promise<CandidateSampleRef> => {
     if (!opts.bypassSpacing) {
       const spacingMinutes =
-        kind === "event" || kind === "second"
+        kind === "event" || kind === "second" || kind === "entry"
           ? env.CANDIDATE_EVENT_SPACING_MINUTES
           : kind === "match"
             ? MATCH_SAMPLE_SPACING_MINUTES
@@ -226,7 +234,8 @@ export async function recordCandidateSample(
   // during a deploy the old and new scanner run side by side, and both banked the same decision
   // 0-1.1 s apart (5 pairs in 7 days, audit 2026-10-14 L2 L1); they take the same lock, per kind.
   // Hourly rows need none: a twin there is one more sample an hour, not a doubled decision.
-  const locked = kind === "match" || ((kind === "event" || kind === "second") && !opts.db);
+  const locked =
+    kind === "match" || ((kind === "event" || kind === "second" || kind === "entry") && !opts.db);
   if (locked && !opts.bypassSpacing) {
     const lockKey = kind === "match" ? `match-anchor:${tokenId}` : `${kind}-anchor:${tokenId}`;
     return prisma.$transaction(

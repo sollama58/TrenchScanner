@@ -26,7 +26,7 @@ export const DEV_LAUNCH_WINDOW_DAYS = 14;
 /** A launch counts once it is this old: young enough coins haven't had their chance at the band. */
 export const DEV_LAUNCH_SETTLE_MS = 60 * 60_000;
 /** The outcome rows a launch's grade is read from: the scan's own samples, not users' filters. */
-export const DEV_LAUNCH_GRADE_KINDS = ["event", "hourly", "second", "emission"] as const;
+export const DEV_LAUNCH_GRADE_KINDS = ["event", "hourly", "second", "entry", "emission"] as const;
 /**
  * A funder that paid for more creators than this in the window is a service the hot-funder rules
  * missed (an exchange not on the denylist, a payout bot), not a farm: its family is left out.
