@@ -314,6 +314,26 @@ export async function safetyOverlay(
 }
 
 /**
+ * The stats of the coins on a board, for the extension's option that puts the ring's pill on every
+ * coin TrenchScanner has numbers for (user ask 2026-10-26): the shared half only (no reader's calls
+ * or matches, no AI review), the same for every reader. A coin the scanner never stored, or never
+ * snapshotted, is left out.
+ */
+export async function statsOverlay(
+  mints: readonly string[],
+  now = Date.now(),
+): Promise<Record<string, Omit<OverlayToken, "modelCalls" | "filterMatches" | "ai">>> {
+  const shared = await sharedFor(mints, now);
+  const out: Record<string, Omit<OverlayToken, "modelCalls" | "filterMatches" | "ai">> = {};
+  for (const [mint, value] of shared) {
+    if (!value?.token.stats) continue;
+    const { ai: _ai, ...token } = value.token;
+    out[mint] = token;
+  }
+  return out;
+}
+
+/**
  * The overlay's answer for one reader. `mints` must already be valid and unique. `calls` is the
  * reader's feed calls (their followed models); the filter matches are read for them alone.
  */

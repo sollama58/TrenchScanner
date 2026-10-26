@@ -198,3 +198,10 @@ the page has rendered, those on screen first, so a virtual list's rows past the 
 before they scroll in; the worker answers from its last feed read (up to two minutes old) at once
 while a fresh read runs behind it. The safety screen's asks, which reach TrenchScanner, go out at
 most every 600 ms and never twice for a coin already being asked about.
+
+0.8.3 (user ask 2026-10-26): **Pill on every coin** (Settings → Pill on every coin, off by
+default). Coins that aren't the reader's alerts get the ring pill's parts too, as a grey pill with
+no ring and the same tooltip, wherever TrenchScanner has numbers no older than the reader's limit
+(30 minutes by default, 1 to 1440). Their numbers come from `POST /ext/v1/stats` (the lookup's
+shared half: no one's calls, matches or AI review), asked only while the option is on and at most
+every 600 ms, so like the safety screen it sends the board's addresses to TrenchScanner.

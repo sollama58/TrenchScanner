@@ -209,8 +209,19 @@ export interface PanelPrefs {
   badge: boolean;
 }
 
+/**
+ * The ring's pill on every coin TrenchScanner has numbers for, not only the reader's alerts (user
+ * ask 2026-10-26), off by default: a plain pill with no ring, only for numbers no older than
+ * `maxAgeMinutes`. It sends the board's addresses to TrenchScanner while it is on.
+ */
+export interface BoardStatsPrefs {
+  enabled: boolean;
+  maxAgeMinutes: number;
+}
+
 export interface TooltipPrefs extends ListPrefs<TipLine> {
   panel: PanelPrefs;
+  boardStats: BoardStatsPrefs;
   toast: ToastPrefs;
   mapTab: MapTabPrefs;
   safety: SafetyPrefs;
@@ -328,6 +339,7 @@ export const DEFAULT_TOOLTIP: TooltipPrefs = {
   second: { order: PILL_PARTS, on: {}, enabled: false },
   colors: {},
   panel: { hideUnsafe: false, notify: false, badge: true },
+  boardStats: { enabled: false, maxAgeMinutes: 30 },
   toast: DEFAULT_TOAST,
   mapTab: { enabled: true },
   safety: { mode: "off", columns: { new: true, soon: true, graduated: true, other: true } },
@@ -515,6 +527,12 @@ function cleanColors(raw: unknown): TooltipPrefs["colors"] {
   return out;
 }
 
+function cleanBoardStats(raw: unknown): BoardStatsPrefs {
+  const v = (typeof raw === "object" && raw !== null ? raw : {}) as Partial<BoardStatsPrefs>;
+  const age = typeof v.maxAgeMinutes === "number" && Number.isFinite(v.maxAgeMinutes) ? v.maxAgeMinutes : 30;
+  return { enabled: v.enabled === true, maxAgeMinutes: Math.min(1440, Math.max(1, Math.round(age))) };
+}
+
 function cleanPanel(raw: unknown): PanelPrefs {
   const v = (typeof raw === "object" && raw !== null ? raw : {}) as Partial<PanelPrefs>;
   return { hideUnsafe: v.hideUnsafe === true, notify: v.notify === true, badge: v.badge !== false };
@@ -533,6 +551,7 @@ export function cleanTooltip(raw: unknown): TooltipPrefs {
     second: { ...cleanList(second, PILL_PARTS), enabled: second.enabled === true },
     colors: cleanColors(value.colors),
     panel: cleanPanel(value.panel),
+    boardStats: cleanBoardStats(value.boardStats),
     toast: cleanToast(value.toast),
     mapTab: { enabled: (value.mapTab as Partial<MapTabPrefs> | undefined)?.enabled !== false },
     safety: cleanSafety(value.safety),

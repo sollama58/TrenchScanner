@@ -19,6 +19,7 @@ import type {
   OverlayBubbleTotals,
   OverlaySafety,
   SafetyAnswer,
+  StatsAnswer,
   Status,
 } from "./shared/types";
 
@@ -285,6 +286,53 @@ async function coin(mint: unknown): Promise<CoinAnswer> {
   return { token: card.token, map: map.map, problem: offline ? "offline" : null };
 }
 
+/** A coin's board stats are reused this long across tabs (the API's own cache is 20 s). */
+const STATS_MS = 20_000;
+const statsCache = new Map<string, { at: number; token: OverlayToken | null }>();
+
+/**
+ * The stats of the coins on a board, for the option that puts the ring's pill on every coin
+ * TrenchScanner has numbers for (user ask 2026-10-26). Only while it is on: then, and only then,
+ * the board's addresses go to TrenchScanner, and nowhere else.
+ */
+async function boardStats(mints: unknown): Promise<StatsAnswer | null> {
+  if (!(await tooltipPrefs()).boardStats.enabled) return null;
+  const { key, refused } = await stored();
+  if (!key || refused) return { tokens: {}, problem: "disconnected" };
+  const asked = [...new Set(Array.isArray(mints) ? mints : [])]
+    .filter((m): m is string => typeof m === "string" && isMintAddress(m))
+    .slice(0, 100);
+  const now = Date.now();
+  const tokens: StatsAnswer["tokens"] = {};
+  const missing: string[] = [];
+  for (const mint of asked) {
+    const hit = statsCache.get(mint);
+    if (hit && now - hit.at < STATS_MS) {
+      if (hit.token) tokens[mint] = hit.token;
+    } else missing.push(mint);
+  }
+  if (missing.length > 0) {
+    try {
+      const answer = await api.stats(key, missing);
+      if (statsCache.size > 5_000) statsCache.clear();
+      for (const mint of missing) {
+        const got = answer.tokens[mint];
+        const token: OverlayToken | null = got
+          ? { ...got, modelCalls: [], filterMatches: [], ai: null }
+          : null;
+        statsCache.set(mint, { at: now, token });
+        if (token) tokens[mint] = token;
+      }
+    } catch (e) {
+      // An older API without the route: no pills.
+      if (e instanceof ApiError && e.status === 404) return { tokens, problem: null };
+      if (e instanceof ApiError && e.status === 401) noteFailure(e);
+      return { tokens, problem: e instanceof ApiError && e.status === 401 ? "refused" : "offline" };
+    }
+  }
+  return { tokens, problem: null };
+}
+
 /**
  * The safety verdicts of the coins on a board, for the option that hides or marks the failing ones
  * (user ask 2026-10-25). Only while it is on: then, and only then, the board's addresses go to
@@ -528,6 +576,8 @@ async function handleContent(request: ContentRequest, tabId: number | undefined)
     }
     case "safety":
       return safety(request.mints);
+    case "stats":
+      return boardStats(request.mints);
     case "holders": {
       // Only the open coin's page, and only while the markers are on.
       if (!(await tooltipPrefs()).holderMarks.enabled) return null;

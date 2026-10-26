@@ -361,6 +361,39 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     expect((await ext(null, "GET", `/ext/v1/token/${stored}`)).statusCode).toBe(401);
   });
 
+  it("answers the stats of the coins on a board, without anyone's calls or reviews", async () => {
+    const user = await makeUser("stats", true);
+    const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    const [scanned, bare, unknown] = [mint(), mint(), mint()];
+    mints.push(scanned, bare, unknown);
+    const token = await prisma.token.create({ data: { mintAddress: scanned, symbol: "STAT" } });
+    await prisma.tokenSnapshot.create({
+      data: {
+        tokenId: token.id,
+        priceUsd: 0.00001,
+        marketCapUsd: 12_000,
+        holderCount: 140,
+        bundledSupplyPct: 31,
+        takenAt: new Date(),
+      },
+    });
+    // Stored but never snapshotted: no numbers to show.
+    await prisma.token.create({ data: { mintAddress: bare } });
+
+    const res = await ext(key, "POST", "/ext/v1/stats", { mints: [scanned, bare, unknown, "not-a-mint"] });
+    expect(res.statusCode).toBe(200);
+    const tokens = res.json().tokens as Record<string, Record<string, unknown>>;
+    expect(Object.keys(tokens)).toEqual([scanned]);
+    expect(tokens[scanned]).toMatchObject({
+      symbol: "STAT",
+      stats: { marketCapUsd: 12_000, holderCount: 140, bundledSupplyPct: 31 },
+    });
+    expect(tokens[scanned]).not.toHaveProperty("modelCalls");
+    expect(tokens[scanned]).not.toHaveProperty("ai");
+    expect((await ext(key, "POST", "/ext/v1/stats", { mints: "x" })).statusCode).toBe(400);
+    expect((await ext(null, "POST", "/ext/v1/stats", { mints: [scanned] })).statusCode).toBe(401);
+  });
+
   it("answers the newest scan's safety verdict of the coins on a board, and nothing else", async () => {
     const user = await makeUser("safety", true);
     const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;

@@ -26,6 +26,7 @@ import {
   MAX_LOOKUP_MINTS,
   recentOverlay,
   safetyOverlay,
+  statsOverlay,
   type OverlayToken,
 } from "../extensionLookup.js";
 import {
@@ -533,6 +534,24 @@ export async function registerExtensionRoutes(
       const mints = [...new Set(raw)].filter((m): m is string => typeof m === "string" && isMintAddress(m));
       reply.header("Cache-Control", "no-store");
       return { verdicts: mints.length ? await safetyOverlay(mints) : {} };
+    },
+  );
+
+  /**
+   * The stats of each coin a board shows (user ask 2026-10-26), for the option that puts the ring's
+   * pill on every coin TrenchScanner has numbers for. Only the content script's addresses while
+   * that option is on, the same for every reader: database only, from the lookup's shared cache.
+   */
+  app.post(
+    "/stats",
+    { bodyLimit: 8_192, config: { rateLimit: { ...SAFETY_RATE_LIMIT, keyGenerator: bucket } } },
+    async (request, reply) => {
+      const raw = (request.body as { mints?: unknown } | null)?.mints;
+      if (!Array.isArray(raw) || raw.length > MAX_LOOKUP_MINTS)
+        return reply.code(400).send({ error: "invalid mints" });
+      const mints = [...new Set(raw)].filter((m): m is string => typeof m === "string" && isMintAddress(m));
+      reply.header("Cache-Control", "no-store");
+      return { tokens: mints.length ? await statsOverlay(mints) : {} };
     },
   );
 
