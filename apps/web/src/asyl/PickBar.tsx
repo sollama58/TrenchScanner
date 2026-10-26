@@ -36,6 +36,7 @@ export function PickBar({
   chainOff,
   onShowHolders,
   onShowDeployers,
+  onCommonFunder,
 }: {
   wallets: number;
   tokens: number;
@@ -53,6 +54,8 @@ export function PickBar({
   chainOff?: string | null;
   onShowHolders?: (live: boolean) => void;
   onShowDeployers?: () => void;
+  /** The nearest wallet that paid for two or more of the picked wallets. */
+  onCommonFunder?: () => void;
 }) {
   // Show holders reads the current lists live from the chain (Pro), as the reader last left it.
   const [live, setLive] = useState(false);
@@ -103,6 +106,16 @@ export function PickBar({
         >
           Links among them
         </button>
+        {onCommonFunder && (
+          <button
+            className="asyl-btn ghost"
+            onClick={onCommonFunder}
+            disabled={busy || wallets < 2}
+            title="The nearest wallet that paid for two or more of the picked wallets, up their stored funding, free of credits"
+          >
+            Common funder
+          </button>
+        )}
         <button
           className="asyl-btn ghost"
           onClick={onGrow}

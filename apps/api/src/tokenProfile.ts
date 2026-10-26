@@ -4,7 +4,7 @@ import { prisma, DEV_LAUNCH_GRADE_KINDS, type TokenSageAnalysis } from "@trenchs
  * GET /tokens/:mint/profile: the token modal's Dev, Socials and Order flow cards (user ask
  * 2026-10-16).
  *
- * - Dev: the creator wallet (the coin's trade tape, else Token.creator as discovery, RugCheck or
+ * - Dev: the creator wallet (the create transaction's signer, else the coin's trade tape, else Token.creator as discovery, RugCheck or
  *   the tape named it, else TokenSage's market.creator when it names a wallet), its two scores - the
  *   wallet risk score (how it trades) and the dev launch score (how its launches went, user ask
  *   2026-10-17, with its funder's family) - and its other coins, with how each did: every token
@@ -123,6 +123,7 @@ export async function readTokenProfile(mintAddress: string): Promise<TokenProfil
       telegramUrl: true,
       websiteUrl: true,
       creator: true,
+      deployer: true,
     },
   });
   if (!token) return null;
@@ -154,8 +155,12 @@ export async function readTokenProfile(mintAddress: string): Promise<TokenProfil
     market?.creator && (market.creator_kind == null || market.creator_kind === "wallet")
       ? market.creator
       : null;
+  // The create transaction's signer first (Asyl's deployer read): Pump.fun's `creator` follows a
+  // community takeover's fee wallet, which launched nothing.
   const creator =
-    [tape?.creator, token.creator, sageCreator].find((w): w is string => !!w && WALLET_RE.test(w)) ?? null;
+    [token.deployer, tape?.creator, token.creator, sageCreator].find(
+      (w): w is string => !!w && WALLET_RE.test(w),
+    ) ?? null;
 
   const coinSelect = {
     mintAddress: true,
@@ -182,7 +187,7 @@ export async function readTokenProfile(mintAddress: string): Promise<TokenProfil
       : null,
     creator
       ? prisma.token.findMany({
-          where: { creator, id: { not: token.id } },
+          where: { OR: [{ creator }, { deployer: creator }], id: { not: token.id } },
           orderBy: { firstSeenAt: "desc" },
           take: MAX_DEV_COINS,
           select: { id: true, ...coinSelect },
