@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ago, usd } from "../format";
 import { LinkSwatch, imageSources } from "./GraphView";
 import { asylApi, avatarUrl, type AsylMe, type Dossier } from "./asylApi";
+import { CoinReportCard } from "./CoinReport";
 import {
   EDGE_LABEL,
   WALLET_SWITCHES,
@@ -46,6 +47,10 @@ export interface InspectorActions {
    * one Show holders); `live` reads the current ones from the chain.
    */
   holders: (mint: string, live: boolean) => void;
+  /** A coin's first buyers on its trade tape, with who funded them. */
+  earlyBuyers: (mint: string) => void;
+  /** Every coin a wallet deployed that TrenchScanner knows of. */
+  launches: (wallet: string) => void;
   /** Finds a coin's deployer (from the chain for Pro Mode when unknown) and puts it on the map. */
   showDeployer: (mint: string) => void;
   hide: (id: string) => void;
@@ -246,6 +251,17 @@ export function Inspector({
         </dl>
       )}
 
+      {node.kind === "token" && (
+        <CoinReportCard
+          mint={node.id}
+          busy={!!busy}
+          nameOf={(id) => (byId.has(id) ? nodeName(byId.get(id)!) : null)}
+          onEarlyBuyers={actions.earlyBuyers}
+          onLaunches={actions.launches}
+          onSelect={actions.select}
+        />
+      )}
+
       {node.kind === "wallet" && (
         <div className="asyl-dossier">
           {!dossier && !dossierError && <p className="asyl-muted">Reading the wallet…</p>}
@@ -393,6 +409,11 @@ export function Inspector({
           {node.kind === "wallet" && (
             <button className="asyl-btn" disabled={!!busy} onClick={() => actions.similar(node.id)}>
               Wallets that trade like it
+            </button>
+          )}
+          {node.kind === "wallet" && node.tags.includes("dev") && (
+            <button className="asyl-btn" disabled={!!busy} onClick={() => actions.launches(node.id)}>
+              Coins it deployed
             </button>
           )}
           {node.kind === "token" && (

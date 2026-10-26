@@ -215,6 +215,67 @@ export interface Dossier {
   totals: { coins: number; wins: number; solIn: number; solOut: number; netSol: number; profitable: number };
 }
 
+/** A coin's bundle and sniper check and its dev's history (the API's asyl/report.ts). */
+export interface CoinReport {
+  mint: string;
+  launch: {
+    buyers: {
+      wallet: string;
+      rank: number;
+      sniper: boolean;
+      solIn: number;
+      solOut: number;
+      boughtPct: number | null;
+      heldPct: number | null;
+      sold: boolean;
+      funder: string | null;
+    }[];
+    snipers: number;
+    boughtPct: number;
+    heldPct: number;
+    soldCount: number;
+    groups: { funder: string; wallets: string[]; heldPct: number }[];
+    fundersRead: number;
+  } | null;
+  scan: {
+    at: string;
+    bundledPct: number | null;
+    bundledCount: number | null;
+    holdersChecked: number | null;
+    blockZeroBuyers: number | null;
+    blockZeroHeldPct: number | null;
+    blockZeroBoughtPct: number | null;
+    snipersInTop: number | null;
+    topChecked: number | null;
+    freshInTop: number | null;
+    freshChecked: number | null;
+    cexFundedPct: number | null;
+    devHolding: boolean | null;
+  } | null;
+  verdict: { level: "high" | "some" | "low" | "unknown"; text: string };
+  dev: {
+    wallet: string;
+    risk: number | null;
+    launch: {
+      score: number;
+      launches: number;
+      inBand: number;
+      graded: number;
+      wins: number;
+      stops: number;
+    } | null;
+    family: { creators: number; score: number; launches: number; wins: number; stops: number } | null;
+    coins: {
+      mint: string;
+      symbol: string | null;
+      at: string;
+      outcome: "win" | "stop" | "fizzle" | null;
+      peakPct: number | null;
+    }[];
+    thisCoin: { solIn: number; solOut: number; sold: boolean; firstSellAt: string | null } | null;
+  } | null;
+}
+
 const enc = encodeURIComponent;
 
 /** What a holder read keeps: the least share held now, the least SOL put in, and every one of them. */
@@ -244,6 +305,9 @@ export const asylApi = {
     api<SimilarRead>(`/asyl/wallet/${enc(wallet)}/similar${all ? "?all=1" : ""}`),
   token: (mint: string, q?: HolderQuery) =>
     api<GraphRead & { readAt: string | null }>(`/asyl/token/${enc(mint)}${holderQuery(q)}`),
+  report: (mint: string) => api<CoinReport>(`/asyl/token/${enc(mint)}/report`),
+  earlyBuyers: (mint: string) => api<GraphRead & { shown: number }>(`/asyl/token/${enc(mint)}/early`),
+  launches: (wallet: string) => api<GraphRead & { shown: number }>(`/asyl/wallet/${enc(wallet)}/launches`),
   pastHolders: (mint: string, q?: HolderQuery) =>
     api<GraphRead & { total: number; shown: number; note: string }>(
       `/asyl/token/${enc(mint)}/past-holders${holderQuery(q)}`,

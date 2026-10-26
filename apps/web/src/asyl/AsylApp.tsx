@@ -890,6 +890,23 @@ export function AsylApp() {
 
   const actions: InspectorActions = {
     expand: (n: AsylNode) => void (n.kind === "token" ? openToken(n.id) : openWallet(n.id)),
+    earlyBuyers: (mint) =>
+      void run("Reading its first buyers…", async () => {
+        const r = await asylApi.earlyBuyers(mint);
+        add(r.graph);
+        if (!r.shown)
+          return "TrenchScanner hasn't read this coin's launch, so it doesn't know its first buyers.";
+        const funders = new Set(r.graph.edges.filter((e) => e.kind === "funded").map((e) => e.a)).size;
+        return `${r.shown} first buyer${r.shown === 1 ? "" : "s"}, and ${funders} wallet${funders === 1 ? "" : "s"} that funded them.`;
+      }),
+    launches: (wallet) =>
+      void run("Finding the coins it deployed…", async () => {
+        const r = await asylApi.launches(wallet);
+        add(r.graph);
+        return r.shown
+          ? `${r.shown} coin${r.shown === 1 ? "" : "s"} it deployed that TrenchScanner knows of.`
+          : "TrenchScanner doesn't know any coin this wallet deployed.";
+      }),
     pair: (a, b) => setPair({ a, b }),
     similar: (wallet) =>
       void run("Finding wallets that trade like it…", async () => {
