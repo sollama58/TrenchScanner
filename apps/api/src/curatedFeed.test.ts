@@ -6,6 +6,7 @@ import {
   foldedCallPeakPct,
   groupSameTokenCalls,
   matchPeakPct,
+  planFeedFolds,
   resolveOutcome,
   serializeCuratedAlert,
 } from "./curatedFeed.js";
@@ -144,6 +145,45 @@ describe("foldCuratedIntoPage", () => {
   it("preserves order and leaves an all-match page untouched", () => {
     const page = [matchCard("tokenA", 0), matchCard("tokenB", -5), matchCard("tokenC", -10)];
     expect(foldCuratedIntoPage(page, WINDOW)).toEqual(page);
+  });
+});
+
+describe("planFeedFolds", () => {
+  const call = (tokenId: string, minutes: number, model = "rules") => ({
+    id: `c-${tokenId}-${minutes}-${model}`,
+    tokenId,
+    createdAt: at(minutes),
+    model,
+    modelName: null,
+    confidence: 70,
+  });
+  const group = (...calls: ReturnType<typeof call>[]) => groupSameTokenCalls(calls, WINDOW);
+  const match = (tokenId: string, minutes: number) => ({
+    id: `m-${tokenId}-${minutes}`,
+    tokenId,
+    matchedAt: at(minutes),
+  });
+
+  it("folds a call into the filter alert just before it, whatever page either sits on", () => {
+    const plan = planFeedFolds([match("A", 0)], group(call("A", 1)), WINDOW);
+    expect([...plan.absorbed]).toEqual(["c-A-1-rules"]);
+    expect([...plan.wornBy]).toEqual([["m-A-0", "c-A-1-rules"]]);
+  });
+
+  it("gives each filter alert one call, the newest first, as the page fold does", () => {
+    const plan = planFeedFolds(
+      [match("A", 0)],
+      [...group(call("A", 60 * 5)), ...group(call("A", 1))],
+      WINDOW,
+    );
+    expect([...plan.wornBy]).toEqual([["m-A-0", "c-A-300-rules"]]);
+    expect([...plan.absorbed]).toEqual(["c-A-300-rules"]);
+  });
+
+  it("folds nothing for a call with no filter alert on its token", () => {
+    const plan = planFeedFolds([match("A", 0)], group(call("B", 1)), WINDOW);
+    expect(plan.absorbed.size).toBe(0);
+    expect(plan.wornBy.size).toBe(0);
   });
 });
 

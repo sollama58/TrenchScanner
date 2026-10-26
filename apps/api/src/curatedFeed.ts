@@ -1295,10 +1295,9 @@ export function serializeCuratedAlert(
  * twice - their filter caught it and the curator picked it - so the page shows one card wearing
  * both facts rather than two cards for one token.
  *
- * Deliberately page-local: it runs on the cards already sliced for this page, so a card's badge
- * never depends on how deep the feed was fetched to build it. Linking against the whole fetched
- * window instead made the same card show its curated flag on one page and not on another, purely
- * because the two pages fetch different amounts of history.
+ * It folds the cards it is given. The Live feed gives it every filter alert and call group around
+ * a page's tokens (planFeedFolds) rather than the page alone, so a fold doesn't change when its two
+ * cards land on different pages; the stats and returns give it their whole window.
  *
  * Each match absorbs at most one alert, so a token alerted twice still yields two cards.
  */
@@ -1346,6 +1345,71 @@ export function foldCuratedIntoPage<
       const meta = folded.get(c.id);
       return meta && c.kind === "match" ? { ...c, curated: meta } : c;
     });
+}
+
+/** Which model calls fold into which of the reader's filter alerts, by the cards' ids. */
+export interface FeedFolds {
+  /** Lead call ids whose cards fold into a filter alert, wherever that alert sits in the feed. */
+  absorbed: Set<string>;
+  /** Filter alert id to the lead call id it wears. */
+  wornBy: Map<string, string>;
+}
+
+/**
+ * The feed's folds for the cards on one page, decided over every filter alert and call group on
+ * the page's tokens around it rather than over the page alone (user report 2026-10-25).
+ *
+ * Folding only within a page made a call's card depend on where the page ended. A model call a
+ * minute after the reader's filter alert on the same coin folded into that alert while both were
+ * on page 1. A dozen newer alerts later the filter alert slid onto page 2, the fold no longer held,
+ * and the call came back as a card of its own near the bottom of page 1, already "8m ago": to the
+ * reader, a model alert that arrived minutes late. Deciding over the token's neighbourhood keeps
+ * each fold the same on every page and every refetch.
+ *
+ * The rule is foldCuratedIntoPage's, run over the merged feed order (a match at its matchedAt, a
+ * group at its newest call; matches first on a tie, as the route sorts). `matches` and `groups` are
+ * every one on the page's tokens from at least two fold windows before the page's oldest card
+ * (matches) and three (calls, so the groups are whole): a fold is greedy newest first, so nothing
+ * older than that can change one on the page.
+ */
+export function planFeedFolds(
+  matches: readonly { id: string; tokenId: string; matchedAt: Date }[],
+  groups: readonly CallGroup<{ id: string; tokenId: string; createdAt: Date }>[],
+  windowMs: number,
+): FeedFolds {
+  type Card = {
+    id: string;
+    kind: "match" | "curated";
+    tokenId: string;
+    matchedAt: Date;
+    curated: { alertId: string } | null;
+  };
+  const run: Card[] = [
+    ...matches.map((m) => ({
+      at: m.matchedAt.getTime(),
+      card: { id: m.id, kind: "match" as const, tokenId: m.tokenId, matchedAt: m.matchedAt, curated: null },
+    })),
+    ...groups.map((g) => ({
+      at: g.newest.createdAt.getTime(),
+      card: {
+        id: g.lead.id,
+        kind: "curated" as const,
+        tokenId: g.lead.tokenId,
+        matchedAt: g.lead.createdAt,
+        curated: { alertId: g.lead.id },
+      },
+    })),
+  ]
+    .sort((a, b) => b.at - a.at)
+    .map((r) => r.card);
+  const folded = foldCuratedIntoPage(run, windowMs);
+  const absorbed = new Set(groups.map((g) => g.lead.id));
+  const wornBy = new Map<string, string>();
+  for (const card of folded) {
+    if (card.kind === "curated") absorbed.delete(card.id);
+    else if (card.curated) wornBy.set(card.id, card.curated.alertId);
+  }
+  return { absorbed, wornBy };
 }
 
 /** One model's call on a token, as listed on a card several models called. */

@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
+import { clearReaderCaches } from "./matches.js";
 
 /**
  * The dashboard's combined feed: the user's own matches with the model calls they follow mixed
@@ -172,6 +173,72 @@ describe.skipIf(!dbAvailable)("combined feed", () => {
     expect(body.matches[0]!.curated!.calledBy.map((c) => c.model)).toEqual(["rules", "trees"]);
     // No token twice.
     expect(new Set(body.matches.map((c) => c.tokenId)).size).toBe(12);
+  });
+
+  it("folds a call into the filter alert before it even once that alert is on the next page", async () => {
+    // User report 2026-10-25: a model call a minute after the reader's filter alert on the same
+    // coin folded into it while both were on page 1. Once newer alerts pushed the filter alert onto
+    // page 2, the call came back as a card of its own near the bottom of page 1, already minutes
+    // old - a model alert that seemed to arrive late.
+    await call("PUT", "/curated/feed", { models: ["rules"], showModelAlerts: true });
+    const filter = await prisma.userFilter.create({
+      data: { userId, name: `${TAG}-fold`, mcapMin: 1, mcapMax: 1e9 },
+    });
+    // Newer than anything else this file or the others date, so these are the first two pages.
+    const at = (minutes: number) => new Date(Date.now() + 400 * 86_400_000 + minutes * 60_000);
+    const match = async (tokenId: string, minutes: number) => {
+      const snapshot = await prisma.tokenSnapshot.create({
+        data: { tokenId, priceUsd: 0.001, marketCapUsd: 100_000, score: 60 },
+      });
+      return prisma.match.create({
+        data: {
+          userId,
+          filterId: filter.id,
+          tokenId,
+          snapshotId: snapshot.id,
+          matchedAt: at(minutes),
+          score: 60,
+        },
+      });
+    };
+    const coin = (await prisma.token.create({ data: { mintAddress: `${TAG}-fold` } })).id;
+    const twin = await match(coin, 0);
+    await prisma.curatedAlert.create({
+      data: {
+        source: "test",
+        confidence: 70,
+        anchorPriceUsd: 0.0001,
+        anchorMcapUsd: 50_000,
+        tokenId: coin,
+        model: "rules",
+        modelName: "Rules",
+        createdAt: at(1),
+      },
+    });
+    announceCalls();
+    // At first both are on page 1, one card: the filter alert wearing the call.
+    const first = async (page: number) => {
+      const res = await call("GET", `/matches?page=${page}&includeCurated=saved`);
+      expect(res.statusCode).toBe(200);
+      return (
+        res.json() as {
+          matches: { id: string; kind: string; tokenId: string; curated: { model: string } | null }[];
+        }
+      ).matches.filter((c) => c.tokenId === coin);
+    };
+    expect((await first(1)).map((c) => [c.id, c.curated?.model])).toEqual([[twin.id, "rules"]]);
+
+    // Eleven newer filter alerts: the call is now the twelfth card and its filter alert the
+    // thirteenth, on page 2.
+    for (let i = 0; i < 11; i++) {
+      const tokenId = (await prisma.token.create({ data: { mintAddress: `${TAG}-fold-${i}` } })).id;
+      await match(tokenId, 2 + i);
+    }
+    clearReaderCaches(userId);
+    expect(await first(1)).toEqual([]);
+    expect((await first(2)).map((c) => [c.id, c.kind, c.curated?.model])).toEqual([
+      [twin.id, "match", "rules"],
+    ]);
   });
 
   it("reaches every match past the merge depth, none skipped and none twice", async () => {

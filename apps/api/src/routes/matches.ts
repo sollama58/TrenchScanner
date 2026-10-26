@@ -20,6 +20,7 @@ import {
   TOKEN_CARD_SELECT,
   foldCuratedIntoPage,
   groupSameTokenCalls,
+  planFeedFolds,
   serializeCuratedAlert,
   cardSnapshot,
   resolveOutcome,
@@ -1314,6 +1315,49 @@ export async function registerMatchRoutes(
       pageGroups = [...new Map([...bothGroupOf.values()].map((g) => [g.newest.id, g])).values()];
     }
     const groupByNewest = new Map(pageGroups.map((g) => [g.newest.id, g]));
+    /**
+     * The reader's matches and the followed calls on the page's tokens, far enough back that every
+     * fold on the page is decided (planFeedFolds), and the plan they make.
+     */
+    const readFolds = async (calls: FeedCalls) => {
+      const tokenIds = [
+        ...new Set(pageItems.map((i) => (i.kind === "match" ? i.row.tokenId : i.group.lead.tokenId))),
+      ];
+      const oldest = Math.min(
+        ...pageItems.map((i) => (i.kind === "match" ? i.row.matchedAt : i.group.lead.createdAt).getTime()),
+        ...pageGroups.map((g) => g.lead.createdAt.getTime()),
+      );
+      const [nearMatches, nearCalls] = await Promise.all([
+        prisma.match.findMany({
+          where: {
+            ...where,
+            tokenId: { in: tokenIds },
+            matchedAt: { gte: new Date(oldest - 2 * CURATED_MATCH_LINK_WINDOW_MS) },
+          },
+          orderBy: { matchedAt: "desc" },
+          select: MATCH_ORDER_SELECT,
+        }),
+        prisma.curatedAlert.findMany({
+          where: {
+            ...callsWhere(calls),
+            tokenId: { in: tokenIds },
+            createdAt: { gte: new Date(oldest - 3 * CURATED_MATCH_LINK_WINDOW_MS) },
+          },
+          orderBy: { createdAt: "desc" },
+          select: CALL_SELECT,
+        }),
+      ]);
+      const groups = groupSameTokenCalls(nearCalls, CURATED_MATCH_LINK_WINDOW_MS);
+      return {
+        plan: planFeedFolds(nearMatches, groups, CURATED_MATCH_LINK_WINDOW_MS),
+        groupByLead: new Map(groups.map((g) => [g.lead.id, g])),
+      };
+    };
+    // Which calls fold into which filter alerts, decided around the page's tokens rather than on
+    // the page alone (see planFeedFolds): read alongside the page's rows.
+    const folds = interleave && curated && pageItems.length > 0 ? readFolds(curated.calls) : null;
+    // Awaited below; this only stops a failure from going unhandled if the row loads fail first.
+    folds?.catch(() => {});
 
     // The page's full rows and every card's latest snapshot, all at once: the bare rows already
     // name each card's token, so the snapshot lookup (one statement for both halves) doesn't have
@@ -1377,8 +1421,41 @@ export async function registerMatchRoutes(
       return { ...card, curated: { ...card.curated, calledBy: group.calls } as CuratedCardMeta | null };
     };
 
+    /**
+     * The page's cards with the plan's folds: a call folded into a filter alert is off the page
+     * (its alert wears it, here or on another page), and a filter alert wears its call even when
+     * the call's own card would sit on another page.
+     */
+    type PageCard = ReturnType<typeof toMatchCard> | ReturnType<typeof toCuratedCard>;
+    const applyFolds = async (
+      page: PageCard[],
+      { plan, groupByLead }: Awaited<ReturnType<typeof readFolds>>,
+    ): Promise<PageCard[]> => {
+      const pageGroupByLead = new Map(pageGroups.map((g) => [g.lead.id, g]));
+      const offPage = [
+        ...new Set(page.flatMap((c) => (c.kind === "match" ? [plan.wornBy.get(c.id)] : []))),
+      ].filter((id): id is string => id !== undefined && !curatedById.has(id));
+      const worn =
+        offPage.length === 0
+          ? new Map<string, (typeof pageCurated)[number]>()
+          : await sharedCallRows
+              .getMany(offPage)
+              .then((byId) => withLatestSnapshots([...byId.values()], latest))
+              .then((rows) => new Map(rows.map((r) => [r.id, r])));
+      return page.flatMap((card): PageCard[] => {
+        if (card.kind === "curated")
+          return card.curated && plan.absorbed.has(card.curated.alertId) ? [] : [card];
+        const leadId = plan.wornBy.get(card.id);
+        if (leadId === undefined) return [card];
+        const alert = curatedById.get(leadId) ?? worn.get(leadId);
+        const group = pageGroupByLead.get(leadId) ?? groupByLead.get(leadId);
+        // Gone between the reads: the alert shows as it is.
+        return [alert && group ? { ...card, curated: toCuratedCard(alert, group).curated } : card];
+      });
+    };
+
     // In feed order: a card sits at its newest call, so this is not matchedAt order.
-    const ordered: (ReturnType<typeof toMatchCard> | ReturnType<typeof toCuratedCard>)[] = [];
+    const ordered: PageCard[] = [];
     for (const item of pageItems) {
       if (item.kind === "match") {
         const match = matchById.get(item.row.id);
@@ -1396,9 +1473,9 @@ export async function registerMatchRoutes(
       // Gone between the two reads (its token was pruned): nothing to show.
       if (alert) ordered.push(toCuratedCard(alert, group));
     }
-    // Folded after slicing, so a card's curated badge depends only on the page it is on - see
-    // foldCuratedIntoPage.
-    const cards = foldCuratedIntoPage(ordered, CURATED_MATCH_LINK_WINDOW_MS);
+    // A page with model calls folds them by the plan made around its tokens, so a call's card
+    // doesn't depend on where the page ends (planFeedFolds); one without has nothing to fold.
+    const cards = folds ? await applyFolds(ordered, await folds) : ordered;
 
     // Only meaningful for the legacy flag (an upper bound there: folded cards leave it a little
     // high). The dashboard pages on hasMore, which can't promise a page that turns out empty.
