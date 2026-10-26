@@ -25,8 +25,20 @@ import { verdictFor } from "../shared/verdict";
 
 /** How long the rows on screen go before they are asked about again (new alerts land this way). */
 const REFRESH_MS = 15_000;
-/** Visible rows are batched for this long before a lookup goes out. */
-const BATCH_MS = 300;
+/**
+ * A lookup goes out this soon after rows change, so one burst of mutations makes one ask, and
+ * while they keep changing (a scroll) at least this often, rather than only once they stop
+ * (user ask 2026-10-26: rings were slow to follow a scroll).
+ */
+const LOOKUP_SOON_MS = 30;
+const LOOKUP_EVERY_MS = 120;
+/**
+ * The safety screen's asks go to TrenchScanner (120 a minute per account), so they go out at most
+ * this often, and a coin already asked about isn't asked again until that answer lands.
+ */
+const SAFETY_EVERY_MS = 600;
+/** At most this many coins per ask, the ones on screen first (the worker takes 100). */
+const LOOKUP_MAX = 100;
 /** Rows found but no address read for this long: the adapter no longer fits the page. */
 const PAUSE_AFTER_MS = 10_000;
 /** The board's column boxes are looked for again after this long, while the safety option is on. */
@@ -98,6 +110,10 @@ export class OverlayEngine {
   private intersection: IntersectionObserver | null = null;
   private frame = 0;
   private batchTimer: number | undefined;
+  private lookupForce = false;
+  private lastLookup = 0;
+  private lastSafety = 0;
+  private readonly safetyAsked = new Set<string>();
   private refreshTimer: number | undefined;
   private noMintSince: number | null = null;
   private paused = false;
@@ -133,6 +149,7 @@ export class OverlayEngine {
     this.intersection?.disconnect();
     window.clearInterval(this.refreshTimer);
     window.clearTimeout(this.batchTimer);
+    this.batchTimer = undefined;
     cancelAnimationFrame(this.frame);
     for (const [row, state] of this.rows) {
       state.decoration?.remove();
@@ -257,32 +274,55 @@ export class OverlayEngine {
     this.deps.report({ rows, mints, paused: this.paused });
   }
 
+  /** Throttled, not debounced: rows changing again doesn't push the pending ask back. */
   private queueLookup(force = false): void {
-    window.clearTimeout(this.batchTimer);
-    this.batchTimer = window.setTimeout(() => void this.lookupVisible(force), BATCH_MS);
+    if (force) this.lookupForce = true;
+    if (this.batchTimer !== undefined) return;
+    const wait = Math.max(LOOKUP_SOON_MS, this.lastLookup + LOOKUP_EVERY_MS - Date.now());
+    this.batchTimer = window.setTimeout(() => {
+      this.batchTimer = undefined;
+      this.lastLookup = Date.now();
+      const forced = this.lookupForce;
+      this.lookupForce = false;
+      void this.lookupVisible(forced);
+    }, wait);
   }
 
+  /**
+   * Asks about the rows the page has rendered, those on screen first: a virtual list renders a
+   * few rows past each edge of its column, so the rows a scroll brings in are usually answered
+   * before they arrive. The ring lookup is answered from the worker's copy of the feed; the
+   * safety screen, only while it is on, sends these addresses to TrenchScanner.
+   */
   private async lookupVisible(force: boolean): Promise<void> {
     if (this.paused) return;
     const now = Date.now();
     const wanted = new Set<string>();
     const unsafe = new Set<string>();
     const screening = this.screening();
-    for (const [row, state] of this.rows) {
+    const rows = [...this.rows].sort(([a], [b]) => Number(this.visible.has(b)) - Number(this.visible.has(a)));
+    for (const [, state] of rows) {
       const mint = state.mint;
-      // A hidden row is never on screen, so it is asked about while hidden, to show it once it passes.
-      if (!mint || !(this.visible.has(row) || state.hidden)) continue;
+      if (!mint) continue;
       const known = this.tokens.get(mint);
-      if (this.visible.has(row) && (force || !known || now - known.at >= REFRESH_MS)) wanted.add(mint);
+      if (force || !known || now - known.at >= REFRESH_MS) wanted.add(mint);
+      // A hidden row is never on screen, so it is asked about while hidden, to show it once it passes.
       const verdict = this.safety.get(mint);
-      if (screening && (force || !verdict || now - verdict.at >= REFRESH_MS)) unsafe.add(mint);
+      if (screening && !this.safetyAsked.has(mint) && (force || !verdict || now - verdict.at >= REFRESH_MS))
+        unsafe.add(mint);
+    }
+    // Too soon for another safety ask: the next lookup after the wait carries it.
+    const safetyDue = now - this.lastSafety >= SAFETY_EVERY_MS;
+    if (unsafe.size > 0 && !safetyDue) {
+      window.setTimeout(() => this.queueLookup(force), this.lastSafety + SAFETY_EVERY_MS - now);
+      unsafe.clear();
     }
     await Promise.all([
       wanted.size > 0 &&
-        this.deps.lookup([...wanted].slice(0, 100)).then((answer) => {
-          if (!answer.problem) this.receive([...wanted], answer, now);
+        this.deps.lookup([...wanted].slice(0, LOOKUP_MAX)).then((answer) => {
+          if (!answer.problem) this.receive([...wanted].slice(0, LOOKUP_MAX), answer, now);
         }),
-      unsafe.size > 0 && this.deps.safety && this.readSafety([...unsafe].slice(0, 100), now),
+      unsafe.size > 0 && this.deps.safety && this.readSafety([...unsafe].slice(0, LOOKUP_MAX), now),
     ]);
   }
 
@@ -296,7 +336,11 @@ export class OverlayEngine {
   }
 
   private async readSafety(mints: string[], now: number): Promise<void> {
-    const answer = await this.deps.safety!(mints);
+    this.lastSafety = now;
+    for (const mint of mints) this.safetyAsked.add(mint);
+    const answer = await this.deps.safety!(mints).finally(() => {
+      for (const mint of mints) this.safetyAsked.delete(mint);
+    });
     if (answer.problem) return;
     this.receiveSafety(mints, answer, now);
   }

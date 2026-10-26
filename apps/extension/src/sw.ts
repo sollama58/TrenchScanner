@@ -65,6 +65,21 @@ let feedReadAt = 0;
 const ringTabs = new Set<number>();
 /** How long a ring page's answers reuse the last feed read (the panel polls every 5 s). */
 const RING_FEED_MS = 10_000;
+/**
+ * Up to this old, a ring page is answered from the last feed read at once while a fresh read runs
+ * behind it, so a scroll never waits on the network (user ask 2026-10-26); the next ask gets it.
+ */
+const RING_STALE_MS = 120_000;
+let feedInFlight: Promise<FeedAnswer> | null = null;
+
+/** The feed for a ring page: the last read while fresh, or stale with a read started behind it. */
+async function ringFeed(): Promise<FeedAnswer> {
+  const age = Date.now() - feedReadAt;
+  if (age < RING_FEED_MS) return { tokens: lastTokens, problem };
+  feedInFlight ??= feed().finally(() => (feedInFlight = null));
+  if (feedReadAt > 0 && age < RING_STALE_MS) return { tokens: lastTokens, problem };
+  return feedInFlight;
+}
 /** A tooltip's map totals are reused this long (a scan lands every few minutes at most). */
 const TOTALS_MS = 60_000;
 const totalsCache = new Map<string, { at: number; totals: OverlayBubbleTotals | null }>();
@@ -496,7 +511,7 @@ async function handleContent(request: ContentRequest, tabId: number | undefined)
     case "settings":
       return currentSettings();
     case "lookup": {
-      const answer = Date.now() - feedReadAt < RING_FEED_MS ? { tokens: lastTokens, problem } : await feed();
+      const answer = await ringFeed();
       const byMint = new Map(answer.tokens.map((t) => [t.mint, t]));
       const tokens: LookupAnswer["tokens"] = {};
       for (const mint of Array.isArray(request.mints) ? request.mints.slice(0, 100) : []) {
@@ -509,7 +524,7 @@ async function handleContent(request: ContentRequest, tabId: number | undefined)
       return tooltipPrefs();
     case "alerts": {
       if (!(await tooltipPrefs()).toast.enabled) return null;
-      return Date.now() - feedReadAt < RING_FEED_MS ? { tokens: lastTokens, problem } : await feed();
+      return ringFeed();
     }
     case "safety":
       return safety(request.mints);

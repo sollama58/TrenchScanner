@@ -190,3 +190,11 @@ settings (Release to the Chrome Web Store, above; user ask 2026-10-25).
   re-measures it each cycle against the current top 10; the API answers the newest reading, or the
   last known one (`Token.lastEmptyTop10WalletPct`) when the newest scan's lookups didn't all land.
 - The unsafe mark tints the failing coin's row red, and its "✕ Unsafe" tag is a size larger.
+
+0.8.2 (user ask 2026-10-26): rings and safety marks follow a scroll. A lookup goes out within
+30 ms of rows changing and every 120 ms while they keep changing, where it waited for the page to
+settle for 300 ms before (so a long scroll got nothing until it stopped). It asks about every row
+the page has rendered, those on screen first, so a virtual list's rows past the edge are answered
+before they scroll in; the worker answers from its last feed read (up to two minutes old) at once
+while a fresh read runs behind it. The safety screen's asks, which reach TrenchScanner, go out at
+most every 600 ms and never twice for a coin already being asked about.
