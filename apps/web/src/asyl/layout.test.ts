@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gridCell, newLayout, snapToGrid, spreadForGrid } from "./layout";
+import { gridCell, newLayout, settle, snapToGrid, spreadForGrid } from "./layout";
 import type { AsylGraph } from "./graph";
 
 const g = (ids: string[], edges: [string, string][] = []): AsylGraph => ({
@@ -64,5 +64,36 @@ describe("grid mode", () => {
     spreadForGrid(s, g(["a", "b", "c"]), { w: 200, h: 150 });
     expect(s.pos.get("a")).toEqual({ x: -100, y: 0 });
     expect(s.pos.get("c")).toEqual({ x: 200, y: 0 });
+  });
+});
+
+describe("a big map", () => {
+  it("settles with every bubble clear of the others", () => {
+    const g = {
+      nodes: Array.from({ length: 450 }, (_, i) => ({
+        id: `n${i}`,
+        kind: "wallet" as const,
+        name: null,
+        tags: [],
+      })),
+      edges: Array.from({ length: 449 }, (_, i) => ({
+        a: `n${Math.floor(i / 7)}`,
+        b: `n${i + 1}`,
+        kind: "funded" as const,
+        weight: 1,
+        label: "",
+        source: "stored" as const,
+      })),
+    };
+    const s = newLayout();
+    settle(s, g, () => 12, 300);
+    const pts = [...s.pos.values()];
+    expect(pts.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))).toBe(true);
+    // Nothing sits on another bubble.
+    let close = 0;
+    for (let i = 0; i < pts.length; i++)
+      for (let j = i + 1; j < pts.length; j++)
+        if (Math.hypot(pts[i]!.x - pts[j]!.x, pts[i]!.y - pts[j]!.y) < 8) close++;
+    expect(close).toBe(0);
   });
 });

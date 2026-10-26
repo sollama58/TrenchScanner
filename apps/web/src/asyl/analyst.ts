@@ -12,6 +12,13 @@ import { edgeSol, type AsylEdge, type AsylGraph, type AsylNode } from "./graph";
  * (renderAnalystCard) draw the same picture.
  */
 
+/** Adds to a list in a map, making the list on first use. */
+function push<K, V>(m: Map<K, V[]>, k: K, v: V): void {
+  const l = m.get(k);
+  if (l) l.push(v);
+  else m.set(k, [v]);
+}
+
 export type Role = "wallet" | "dev" | "group" | "coin" | "service";
 
 /** What the map shows in Analyst Mode: the graph with coin traders folded into their coin. */
@@ -48,7 +55,7 @@ export function analystView(g: AsylGraph, focus: string | null): AnalystView {
     if (coins.size !== 1) continue;
     const coin = [...coins][0]!;
     if (byId.get(coin)?.kind !== "token") continue;
-    candidates.set(coin, [...(candidates.get(coin) ?? []), n.id]);
+    push(candidates, coin, n.id);
   }
   const groups = new Map<string, string[]>();
   const memberOf = new Map<string, string>();
@@ -111,7 +118,7 @@ export function boxesOf(v: AnalystView, focus: string | null): Map<string, ABox>
   const deployed = new Map<string, string[]>();
   for (const e of v.graph.edges)
     if (e.kind === "created" && byId.get(e.b)?.kind === "token")
-      deployed.set(e.a, [...(deployed.get(e.a) ?? []), coinName(byId.get(e.b)!)]);
+      push(deployed, e.a, coinName(byId.get(e.b)!));
   const out = new Map<string, ABox>();
   for (const n of v.graph.nodes) {
     const isFocus = n.id === focus;
@@ -284,7 +291,7 @@ export function analystLayout(
     walk(id);
   for (const id of walked) {
     const l = layer.get(id) ?? 0;
-    rows.set(l, [...(rows.get(l) ?? []), id]);
+    push(rows, l, id);
   }
   const levels = [...rows.keys()].sort((a, b) => a - b);
   const width = (id: string) => boxes.get(id)?.w ?? BOX_W;
@@ -409,7 +416,7 @@ export function familiesOf(g: AsylGraph): Map<string, string[]> {
   const out = new Map<string, string[]>();
   for (const id of parent.keys()) {
     const r = find(id);
-    out.set(r, [...(out.get(r) ?? []), id]);
+    push(out, r, id);
   }
   for (const [r, m] of out) if (m.length < 2) out.delete(r);
   return out;
@@ -531,8 +538,8 @@ export function routesOf(
     const horiz = p.sa === "left" || p.sa === "right";
     const ka = `${p.e.a}|${p.sa}`;
     const kb = `${p.e.b}|${p.sb}`;
-    ports.set(ka, [...(ports.get(ka) ?? []), { plan: p, end: "a", toward: horiz ? p.b.y : p.b.x }]);
-    ports.set(kb, [...(ports.get(kb) ?? []), { plan: p, end: "b", toward: horiz ? p.a.y : p.a.x }]);
+    push(ports, ka, { plan: p, end: "a", toward: horiz ? p.b.y : p.b.x });
+    push(ports, kb, { plan: p, end: "b", toward: horiz ? p.a.y : p.a.x });
   }
   type Port = { off: number; i: number; n: number };
   const offset = new Map<Plan, { a: Port; b: Port }>();

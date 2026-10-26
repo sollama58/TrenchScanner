@@ -84,7 +84,9 @@ export class GraphBuilder {
     const have = this.nodes.get(id);
     if (have) {
       for (const [k, v] of Object.entries(extra)) {
-        if (v !== undefined && v !== null && (have as unknown as Record<string, unknown>)[k] == null)
+        // Tags add up: a node first met as a transfer's far end is still tagged an exchange later.
+        if (k === "tags") have.tags = [...new Set([...have.tags, ...(v as AsylTag[])])];
+        else if (v !== undefined && v !== null && (have as unknown as Record<string, unknown>)[k] == null)
           (have as unknown as Record<string, unknown>)[k] = v;
       }
       return;
@@ -96,10 +98,14 @@ export class GraphBuilder {
     if (e.a === e.b) return;
     // Undirected kinds are keyed in address order, so a pair is one edge whichever end asked.
     const undirected = e.kind === "cotrade";
-    const [a, b] = undirected && e.a > e.b ? [e.b, e.a] : [e.a, e.b];
+    const swap = undirected && e.a > e.b;
+    const [a, b] = swap ? [e.b, e.a] : [e.a, e.b];
     const key = `${e.kind}|${a}|${b}|${e.mint ?? ""}`;
     const have = this.edges.get(key);
-    if (!have || e.weight > have.weight) this.edges.set(key, { ...e, a, b });
+    // leadSec is b's first buy minus a's: turned round with the ends, it changes sign.
+    const lead = swap && e.leadSec !== undefined && e.leadSec !== null ? -e.leadSec : e.leadSec;
+    if (!have || e.weight > have.weight)
+      this.edges.set(key, { ...e, a, b, ...(lead !== undefined ? { leadSec: lead } : {}) });
   }
 
   has(id: string): boolean {
@@ -412,6 +418,9 @@ export function addCoTraders(g: GraphBuilder, wallet: string, coTraders: readonl
       of: c.of,
       gapSec: c.medianGapSec,
       leadSec: c.medianLeadSec,
+      // Which end the search started from, so "who buys first" knows the co-trader whichever way
+      // round the line is stored.
+      from: wallet,
     });
   }
 }
@@ -497,7 +506,11 @@ export async function loadStoredHolders(
   });
   if (map && Array.isArray(map.holders)) {
     return {
-      holders: (map.holders as { wallet: string; pct: number }[]).slice(0, limit),
+      // Wallets only, before the limit: a pool or a bonding curve in the list isn't a holder to draw,
+      // and shouldn't take one of the places.
+      holders: (map.holders as { wallet: string; pct: number }[])
+        .filter((h) => typeof h?.wallet === "string" && isWalletAddress(h.wallet))
+        .slice(0, limit),
       readAt: map.readAt,
       source: "map",
     };
@@ -513,7 +526,7 @@ export async function loadStoredHolders(
   const holders = list
     .map((h) => h as { wallet?: unknown; pct?: unknown })
     .map((h) => ({ wallet: String(h.wallet ?? ""), pct: Number(h.pct ?? 0) }))
-    .filter((h) => h.wallet.length > 0 && Number.isFinite(h.pct));
+    .filter((h) => isWalletAddress(h.wallet) && Number.isFinite(h.pct));
   return {
     holders: holders.slice(0, limit),
     readAt: snap?.takenAt ?? null,
@@ -639,7 +652,14 @@ export async function addPastHolders(
     mint,
     shown.map((r) => r.wallet),
   );
-  return { total, shown: shown.length, minSol, tape };
+  // The count leaves out what was read and isn't a wallet (a pool, a program), so a read that drew
+  // every one of them says so, and "load all" isn't offered for rows that would never be drawn.
+  return {
+    total: Math.max(shown.length, total - (rows.length - shown.length)),
+    shown: shown.length,
+    minSol,
+    tape,
+  };
 }
 
 export interface KnownDeployer {
@@ -790,7 +810,7 @@ export function walletTags(input: {
 export async function decorate(g: GraphBuilder, tracked: readonly TrackedWallet[]): Promise<AsylGraph> {
   const wallets = g.wallets();
   const tokens = g.tokens();
-  const [names, risks, devs, bots, farms, coins] = await Promise.all([
+  const [names, risks, devs, bots, farms, coins, deployers] = await Promise.all([
     wallets.length ? loadWalletNames(wallets, null).then((r) => r.names) : Promise.resolve({}),
     wallets.length
       ? prisma.walletRisk.findMany({
@@ -833,11 +853,11 @@ export async function decorate(g: GraphBuilder, tracked: readonly TrackedWallet[
           },
         })
       : Promise.resolve([]),
+    loadDeployers(tokens),
   ]);
   const named = withTrackedNames(names as Record<string, WalletName>, tracked, wallets);
   const riskOf = new Map(risks.map((r) => [r.wallet, r]));
   const devSet = new Set(devs.map((d) => d.wallet));
-  const deployers = await loadDeployers(tokens);
   // Only a deployer read off the create transaction marks a wallet as a dev: Pump.fun's `creator`
   // follows a community takeover's fee wallet, which deployed nothing.
   const creators = new Set([...deployers.values()].filter((d) => d.verified).map((d) => d.wallet));

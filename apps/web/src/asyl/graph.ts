@@ -63,6 +63,8 @@ export interface AsylEdge {
   gapSec?: number | null;
   /** ...and who usually bought first: median seconds from `a`'s first buy to `b`'s, negative when `b` led. */
   leadSec?: number | null;
+  /** A "bought together" link: the wallet the search started from; the other end is the co-trader. */
+  from?: string | null;
 }
 
 export interface AsylGraph {
@@ -324,8 +326,11 @@ export function clearsCutoffs(e: AsylEdge, c: Cutoffs, solUsd: number | null): b
     if (c.shared > 0 && (e.shared ?? e.weight) < c.shared) return false;
     if (c.gap > 0 && e.gapSec !== undefined && e.gapSec !== null && e.gapSec > c.gap) return false;
     if (c.first > 0 && e.leadSec !== undefined && e.leadSec !== null) {
-      if (c.first === 1 && e.leadSec >= 0) return false;
-      if (c.first === 2 && e.leadSec <= 0) return false;
+      // The co-trader's first buy less the searched wallet's: leadSec runs from a to b, so it turns
+      // round when the search started from b. A link saved before it said takes b as the co-trader.
+      const lead = e.from && e.from === e.b ? -e.leadSec : e.leadSec;
+      if (c.first === 1 && lead >= 0) return false;
+      if (c.first === 2 && lead <= 0) return false;
     }
     return true;
   }

@@ -62,14 +62,24 @@ export interface ChainResult<T> {
 
 type Chained<T> = ChainResult<T> | ChainRefusal;
 
-/** Runs one metered read for `userId`: checks, tallies, records. */
+/**
+ * Runs one metered read for `userId`: checks, tallies, records. `cached` answers from a shared
+ * cache first: free, so it is handed back even with the day's allowance short of a fresh read's
+ * worst case, or while Helius's credits are out (the reader was told such a read costs nothing).
+ */
 async function metered<T>(
   env: Env,
   userId: string,
   worst: number,
   /** Given the allowance as it stood before the read, for a read that goes on while it lasts. */
   read: (before: Allowance) => Promise<{ value: T; cached: boolean } | null>,
+  cached?: () => Promise<T | null>,
 ): Promise<Chained<T>> {
+  if (cached) {
+    const hit = await cached().catch(() => null);
+    if (hit !== null)
+      return { value: hit, credits: 0, allowance: await readAllowance(env, userId), cached: true };
+  }
   if (heliusCreditsOut()) return { refused: "credits-out" };
   const before = await readAllowance(env, userId);
   if (!before.enabled || before.left < worst) return { refused: "allowance", allowance: before };
@@ -94,33 +104,44 @@ export function readWalletFlows(
   wallet: string,
   now = Date.now(),
 ): Promise<Chained<WalletFlows>> {
-  return metered(env, userId, FLOW_WORST, async () => {
-    const kept = await prisma.asylFlowRead.findUnique({ where: { wallet } });
-    if (kept && now - kept.readAt.getTime() < ASYL_FLOW_TTL_MS)
-      return { value: kept.flows as unknown as WalletFlows, cached: true };
-    const txs = [];
-    let token: string | undefined;
-    for (let page = 0; page < FLOW_PAGES; page++) {
-      const res = await helius.getWalletTransactionsPage(wallet, token ? { paginationToken: token } : {});
-      if (res.status !== "ok") {
-        if (page === 0) return null;
-        break;
+  const kept = async () => {
+    const row = await prisma.asylFlowRead.findUnique({ where: { wallet } });
+    return row && now - row.readAt.getTime() < ASYL_FLOW_TTL_MS
+      ? (row.flows as unknown as WalletFlows)
+      : null;
+  };
+  return metered(
+    env,
+    userId,
+    FLOW_WORST,
+    async () => {
+      const hit = await kept();
+      if (hit) return { value: hit, cached: true };
+      const txs = [];
+      let token: string | undefined;
+      for (let page = 0; page < FLOW_PAGES; page++) {
+        const res = await helius.getWalletTransactionsPage(wallet, token ? { paginationToken: token } : {});
+        if (res.status !== "ok") {
+          if (page === 0) return null;
+          break;
+        }
+        txs.push(...res.txs);
+        if (!res.paginationToken) break;
+        token = res.paginationToken;
       }
-      txs.push(...res.txs);
-      if (!res.paginationToken) break;
-      token = res.paginationToken;
-    }
-    const flows = flowsFromTransactions(wallet, txs);
-    const row = {
-      readAt: new Date(now),
-      flows: flows as unknown as Prisma.InputJsonValue,
-      txs: flows.txs,
-    };
-    await prisma.asylFlowRead
-      .upsert({ where: { wallet }, create: { wallet, ...row }, update: row })
-      .catch(() => undefined);
-    return { value: flows, cached: false };
-  });
+      const flows = flowsFromTransactions(wallet, txs);
+      const row = {
+        readAt: new Date(now),
+        flows: flows as unknown as Prisma.InputJsonValue,
+        txs: flows.txs,
+      };
+      await prisma.asylFlowRead
+        .upsert({ where: { wallet }, create: { wallet, ...row }, update: row })
+        .catch(() => undefined);
+      return { value: flows, cached: false };
+    },
+    kept,
+  );
 }
 
 /**
@@ -360,23 +381,34 @@ export function readTokenHolders(
   mint: string,
   now = Date.now(),
 ): Promise<Chained<{ wallet: string; pct: number }[]>> {
-  return metered(env, userId, TOKEN_WORST, async () => {
+  const recent = async () => {
     const hit = tokenReads.get(mint);
-    if (hit && now - hit.at < TOKEN_READ_TTL_MS) return { value: hit.holders, cached: true };
-    const res = (await helius.getTopHoldersBatch([mint], CHAIN_HOLDERS)).get(mint);
-    if (!res || res.status !== "found") return null;
-    const holders = res.holders.map((h) => ({ wallet: h.owner, pct: h.pct }));
-    // Their funders, so the map can tie them: only the ones the tables don't have, or have stale.
-    await refreshFunders(
-      helius,
-      holders.map((h) => h.wallet),
-      now,
-      CHAIN_HOLDER_FUNDERS,
-    ).catch(() => undefined);
-    if (tokenReads.size > 500) tokenReads.clear();
-    tokenReads.set(mint, { at: now, holders });
-    return { value: holders, cached: false };
-  });
+    return hit && now - hit.at < TOKEN_READ_TTL_MS ? hit.holders : null;
+  };
+  return metered(
+    env,
+    userId,
+    TOKEN_WORST,
+    async () => {
+      const hit = await recent();
+      if (hit) return { value: hit, cached: true };
+      const res = (await helius.getTopHoldersBatch([mint], CHAIN_HOLDERS)).get(mint);
+      if (!res || res.status !== "found") return null;
+      const holders = res.holders.map((h) => ({ wallet: h.owner, pct: h.pct }));
+      // Their funders, so the map can tie them: only the ones the tables don't have, or have stale,
+      // and only wallets: a pool or a bonding curve among the top holders has no funder to spend on.
+      await refreshFunders(
+        helius,
+        holders.map((h) => h.wallet).filter((w) => isWalletAddress(w)),
+        now,
+        CHAIN_HOLDER_FUNDERS,
+      ).catch(() => undefined);
+      if (tokenReads.size > 500) tokenReads.clear();
+      tokenReads.set(mint, { at: now, holders });
+      return { value: holders, cached: false };
+    },
+    recent,
+  );
 }
 
 const fmtAmount = (n: number) =>
