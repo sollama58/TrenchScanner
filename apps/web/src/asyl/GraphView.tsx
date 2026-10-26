@@ -151,6 +151,7 @@ export function MapLegend({ graph, startOpen }: { graph: AsylGraph; startOpen?: 
   const kinds = EDGE_KINDS.filter((k) => graph.edges.some((e) => e.kind === k));
   const chain = graph.edges.some((e) => e.source === "chain");
   const devs = graph.nodes.some((n) => n.kind === "wallet" && n.tags.includes("dev"));
+  const fresh = graph.nodes.some((n) => n.kind === "wallet" && n.tags.includes("fresh"));
   if (kinds.length === 0) return null;
   return (
     <div className={`asyl-map-legend${open ? " open" : ""}`}>
@@ -180,6 +181,13 @@ export function MapLegend({ graph, startOpen }: { graph: AsylGraph; startOpen?: 
               </span>
               <b>Deployer</b>
               <span>A wallet that deployed a coin</span>
+            </li>
+          )}
+          {fresh && (
+            <li>
+              <span className="asyl-legend-ring fresh" aria-hidden="true" />
+              <b>Fresh wallet</b>
+              <span>Paid under a day before its first trade</span>
             </li>
           )}
         </ul>
@@ -252,6 +260,7 @@ function ringOf(n: AsylNode): string | null {
   if (n.tags.includes("winner")) return "#3ee08f";
   if (n.tags.includes("exchange") || n.tags.includes("bot")) return "#9b948f";
   if (n.tags.includes("dev")) return "#ffe066";
+  if (n.tags.includes("fresh")) return "#6ee7f9";
   return null;
 }
 

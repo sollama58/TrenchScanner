@@ -15,7 +15,8 @@ export type AsylTag =
   | "sniper"
   | "risky"
   | "bot"
-  | "farm";
+  | "farm"
+  | "fresh";
 
 export interface AsylNode {
   id: string;
@@ -65,6 +66,8 @@ export interface AsylEdge {
   leadSec?: number | null;
   /** A "bought together" link: the wallet the search started from; the other end is the co-trader. */
   from?: string | null;
+  /** A "traded" link that sold: SOL out minus SOL in, its realised profit (negative a loss). */
+  net?: number | null;
 }
 
 export interface AsylGraph {
@@ -107,6 +110,7 @@ export const TAG_LABEL: Record<AsylTag, string> = {
   risky: "Risky",
   bot: "Bot",
   farm: "Dev farm",
+  fresh: "Fresh wallet",
 };
 
 export const edgeKey = (e: Pick<AsylEdge, "kind" | "a" | "b" | "mint">) =>
@@ -218,11 +222,14 @@ export function visibleGraph(
       !filter.cut?.has(edgeKey(e)) &&
       !offFor(per?.get(e.a), e, true) &&
       !offFor(per?.get(e.b), e, false) &&
-      (!filter.cutoffs || clearsCutoffs(e, filter.cutoffs, filter.solUsd ?? null)),
+      (!filter.cutoffs || clearsCutoffs(e, filter.cutoffs, filter.solUsd ?? null)) &&
+      !after(e, filter.until),
   );
   // Every bubble stays unless the reader took it off (user report 2026-10-25: bubbles vanished as
-  // link kinds were switched), or asked for the ones no drawn link reaches to go.
-  if (!filter.hideLoose) return { nodes: g.nodes, edges };
+  // link kinds were switched), or asked for the ones no drawn link reaches to go. The timeline
+  // always lets them go: a wallet whose first link comes later isn't there yet.
+  if (!filter.hideLoose && (filter.until === null || filter.until === undefined))
+    return { nodes: g.nodes, edges };
   const touched = new Set(edges.flatMap((e) => [e.a, e.b]));
   return { nodes: g.nodes.filter((n) => touched.has(n.id) || keep.has(n.id)), edges };
 }
@@ -275,6 +282,25 @@ export interface LinkFilter {
   perWallet?: ReadonlyMap<string, ReadonlySet<WalletSwitch>>;
   /** Take off bubbles no drawn link reaches (the selection and focus stay). Off: every bubble stays. */
   hideLoose?: boolean;
+  /** The timeline (user ask 2026-10-26): links dated after this (ms) aren't drawn yet. Null: all. */
+  until?: number | null;
+}
+
+/** Whether a link happened after the timeline's moment. A link without a date is always drawn. */
+function after(e: AsylEdge, until: number | null | undefined): boolean {
+  if (until === null || until === undefined || !e.at) return false;
+  const t = Date.parse(e.at);
+  return Number.isFinite(t) && t > until;
+}
+
+/** The moments the timeline steps through: every distinct link date on the map, oldest first. */
+export function timelineSteps(g: AsylGraph): number[] {
+  const ts = new Set<number>();
+  for (const e of g.edges) {
+    const t = e.at ? Date.parse(e.at) : NaN;
+    if (Number.isFinite(t)) ts.add(t);
+  }
+  return [...ts].sort((a, b) => a - b);
 }
 
 /**
