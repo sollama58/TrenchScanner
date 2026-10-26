@@ -220,7 +220,9 @@ export class Decoration {
 
   /** The pills' classes from the ring and what placing decided. */
   private paint(): void {
-    this.badge.className = `badge ${this.kind}${!this.hasMain || this.dotOnly ? " dot" : ""}`;
+    // A plain pill has no ring for a dot to stand for, so where its label fits nowhere it's left out.
+    const dot = !this.hasMain || this.dotOnly;
+    this.badge.className = `badge ${this.kind}${dot ? (this.kind === "plain" ? " gone" : " dot") : ""}`;
     this.more.className = `badge more ${this.kind}${this.hasMore && this.moreFits ? "" : " gone"}`;
   }
 
@@ -254,6 +256,13 @@ export class Decoration {
     this.moreFits = this.hasMore;
     this.paint();
     let first = this.spotFor(this.badge, row, obstacles, this.badgeAt);
+    if (!first && this.hasMain && this.kind === "plain") {
+      this.dotOnly = true;
+      this.badgeAt = null;
+      this.moreFits = false;
+      this.paint();
+      return;
+    }
     if (!first && this.hasMain) {
       this.dotOnly = true;
       this.paint();

@@ -11,6 +11,7 @@ import {
   pillsNeedMap,
   shownLines,
   signalLook,
+  type PillPart,
   type TooltipPrefs,
 } from "../shared/tooltip";
 import type {
@@ -40,6 +41,8 @@ const LOOKUP_EVERY_MS = 120;
 const SAFETY_EVERY_MS = 600;
 /** A board coin's numbers are asked for again after this long (the scan lands every few minutes). */
 const BOARD_STATS_MS = 30_000;
+/** A board pill's parts when none of the reader's own pill parts has a number for the coin. */
+const BOARD_FALLBACK: PillPart[] = ["mcap", "holders"];
 /** At most this many coins per ask, the ones on screen first (the worker takes 100). */
 const LOOKUP_MAX = 100;
 /** Rows found but no address read for this long: the adapter no longer fits the page. */
@@ -546,10 +549,24 @@ export class OverlayEngine {
     const look = signalLook(this.tipPrefs, verdict.modelId, verdict.filterId);
     const totals = this.totals.get(state.mint!)?.totals;
     if (pillsNeedMap(this.tipPrefs)) void this.loadTotals(state.mint!);
+    let first = pillSegments(main, token, verdict, this.settings, totals);
+    let second = more ? pillSegments(more, token, verdict, this.settings, totals) : null;
+    if (plain) {
+      // A board coin has no call or alert, so the name, odds, change and age parts come out empty.
+      // Its pill is whatever numbers both pills have, in one, or market cap and holders failing
+      // that; with nothing to say it gets no pill, never a bare dot.
+      first = [...first, ...(second ?? [])];
+      second = null;
+      if (first.length === 0) first = pillSegments(BOARD_FALLBACK, token, verdict, this.settings, totals);
+      if (first.length === 0) {
+        state.decoration.remove();
+        return;
+      }
+    }
     state.decoration.update(verdict, this.settings.style.ring, this.settings.style.calmMotion, {
       plain,
-      main: pillSegments(main, token, verdict, this.settings, totals),
-      more: more && pillSegments(more, token, verdict, this.settings, totals),
+      main: first,
+      more: second,
       riskDot: this.tipPrefs.riskDot,
       colors: look.colors,
       effect: look.effect,

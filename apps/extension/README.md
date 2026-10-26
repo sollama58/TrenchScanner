@@ -205,3 +205,9 @@ no ring and the same tooltip, wherever TrenchScanner has numbers no older than t
 (30 minutes by default, 1 to 1440). Their numbers come from `POST /ext/v1/stats` (the lookup's
 shared half: no one's calls, matches or AI review), asked only while the option is on and at most
 every 600 ms, so like the safety screen it sends the board's addresses to TrenchScanner.
+
+0.8.4: a board pill no longer shows as a bare dot. The pill's default parts (model or filter
+name, odds) and the change and age parts only exist for an alert, so a board coin came out empty
+and drew the dot alone. A board coin's pill now holds whatever numbers the reader's two pills
+have, in one pill, or market cap and holders when none of them does; with nothing to say, or no
+room for its label, it gets no pill.
