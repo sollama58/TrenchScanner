@@ -40,16 +40,23 @@ function AsylIntro() {
         <li>
           <span className="eyebrow">Wallets</span>
           <p>
-            Who funded it, who it pays, its side wallets, and the wallets that buy the same coins with it.
+            Who funded it, who it pays, where its money went, its side wallets, and the wallets that buy the
+            same coins with it, or copy it.
           </p>
         </li>
         <li>
           <span className="eyebrow">Coins</span>
-          <p>Its deployer and top holders, and the funding and transfers that tie them together.</p>
+          <p>
+            Is it bundled: its first buyers and their funders, the dev&apos;s other coins, who sold together,
+            and who put money in and took it out.
+          </p>
         </li>
         <li>
           <span className="eyebrow">Maps</span>
-          <p>Label wallets, save maps, and share them as a link or an image.</p>
+          <p>
+            Label and watch wallets, replay a map through time, save and compare maps, and share them as a
+            link, an image or a written report.
+          </p>
         </li>
       </ul>
       <p className="faint small">

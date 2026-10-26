@@ -273,13 +273,43 @@ export function imageSources(n: AsylNode): string[] {
   return n.avatar ? [avatarUrl(n.avatar)] : [];
 }
 
-/** A node's picture, moving to the next source when one fails, and drawing nothing when none loads. */
-function NodeImage({ sources, r, tile }: { sources: string[]; r: number; tile: boolean }) {
+/** A coin's stand-in when no picture loads: its ticker's first letters. */
+export function monogram(n: AsylNode): string | null {
+  if (n.kind !== "token") return null;
+  const t = (n.name ?? "").replace(/^\$/, "").replace(/[^\p{L}\p{N}]/gu, "");
+  return t ? t.slice(0, t.length <= 3 ? 3 : 2).toUpperCase() : null;
+}
+
+/**
+ * A node's picture, moving to the next source when one fails. When none loads, a coin shows its
+ * ticker's first letters, so it never reads as an empty box; a wallet shows nothing.
+ */
+function NodeImage({
+  sources,
+  r,
+  tile,
+  fallback,
+}: {
+  sources: string[];
+  r: number;
+  tile: boolean;
+  fallback: string | null;
+}) {
   const key = sources.join("|");
   const [failed, setFailed] = useState<{ key: string; n: number }>({ key, n: 0 });
   const n = failed.key === key ? failed.n : 0;
   const href = sources[n];
-  if (!href) return null;
+  if (!href)
+    return fallback ? (
+      <text
+        className="asyl-node-mono"
+        y={r * 0.22}
+        textAnchor="middle"
+        fontSize={fallback.length > 2 ? r * 0.56 : r * 0.7}
+      >
+        {fallback}
+      </text>
+    ) : null;
   return (
     <image
       href={href}
@@ -1350,7 +1380,7 @@ export function GraphView({
                         strokeWidth={ring ? 3 : 1.5}
                       />
                     )}
-                    {imgs.length > 0 && <NodeImage sources={imgs} r={r} tile={n.kind === "token"} />}
+                    <NodeImage sources={imgs} r={r} tile={n.kind === "token"} fallback={monogram(n)} />
                     {n.tags.includes("mine") && (
                       <text className="asyl-node-star" y={-r - 4} textAnchor="middle">
                         ★
