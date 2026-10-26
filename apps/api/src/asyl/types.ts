@@ -88,6 +88,8 @@ export interface AsylEdge {
   gapSec?: number | null;
   /** ...and who usually bought first: median seconds from `a`'s first buy to `b`'s, negative when `b` led. */
   leadSec?: number | null;
+  /** A "bought together" link: the wallet the co-trader search started from (the other end is the co-trader). */
+  from?: string | null;
 }
 
 export interface AsylGraph {

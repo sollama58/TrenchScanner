@@ -43,9 +43,14 @@ function hash(id: string): number {
 export function placeNew(state: LayoutState, g: AsylGraph): string[] {
   const added: string[] = [];
   const adj = new Map<string, string[]>();
+  const link = (a: string, b: string) => {
+    const l = adj.get(a);
+    if (l) l.push(b);
+    else adj.set(a, [b]);
+  };
   for (const e of g.edges) {
-    adj.set(e.a, [...(adj.get(e.a) ?? []), e.b]);
-    adj.set(e.b, [...(adj.get(e.b) ?? []), e.a]);
+    link(e.a, e.b);
+    link(e.b, e.a);
   }
   const ringCount = new Map<string, number>();
   // Twice over: a new node whose only neighbour is also new is placed on the second pass.
@@ -107,31 +112,45 @@ export function step(
 ): number {
   const ids = g.nodes.map((n) => n.id).filter((id) => state.pos.has(id));
   const force = new Map<string, Point>(ids.map((id) => [id, { x: 0, y: 0 }]));
-  for (let i = 0; i < ids.length; i++) {
-    const a = state.pos.get(ids[i]!)!;
-    const fa = force.get(ids[i]!)!;
-    for (let j = i + 1; j < ids.length; j++) {
-      const b = state.pos.get(ids[j]!)!;
-      let dx = a.x - b.x;
-      let dy = a.y - b.y;
-      let d2 = dx * dx + dy * dy;
-      if (d2 < 0.01) {
-        dx = (i - j) * 0.1;
-        dy = 0.1;
-        d2 = dx * dx + dy * dy;
-      }
-      const minD = radius(ids[i]!) + radius(ids[j]!) + 6;
-      const push = forces.repel / d2 + (d2 < minD * minD ? (minD - Math.sqrt(d2)) * 0.5 : 0);
-      const d = Math.sqrt(d2);
-      const fx = (dx / d) * push;
-      const fy = (dy / d) * push;
-      fa.x += fx;
-      fa.y += fy;
-      const fb = force.get(ids[j]!)!;
-      fb.x -= fx;
-      fb.y -= fy;
+  // The pairwise push over flat arrays, not map lookups: a frame of a big map does a million pairs
+  // or more, and this halves its time.
+  const n = ids.length;
+  const xs = new Float64Array(n);
+  const ys = new Float64Array(n);
+  const rs = new Float64Array(n);
+  const fxs = new Float64Array(n);
+  const fys = new Float64Array(n);
+  ids.forEach((id, i) => {
+    const p = state.pos.get(id)!;
+    xs[i] = p.x;
+    ys[i] = p.y;
+    rs[i] = radius(id);
+  });
+  const pair = (i: number, j: number) => {
+    let dx = xs[i]! - xs[j]!;
+    let dy = ys[i]! - ys[j]!;
+    let d2 = dx * dx + dy * dy;
+    if (d2 < 0.01) {
+      dx = (i - j) * 0.1;
+      dy = 0.1;
+      d2 = dx * dx + dy * dy;
     }
-  }
+    const minD = rs[i]! + rs[j]! + 6;
+    const push = forces.repel / d2 + (d2 < minD * minD ? (minD - Math.sqrt(d2)) * 0.5 : 0);
+    const d = Math.sqrt(d2);
+    const fx = (dx / d) * push;
+    const fy = (dy / d) * push;
+    fxs[i] = fxs[i]! + fx;
+    fys[i] = fys[i]! + fy;
+    fxs[j] = fxs[j]! - fx;
+    fys[j] = fys[j]! - fy;
+  };
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) pair(i, j);
+  ids.forEach((id, i) => {
+    const f = force.get(id)!;
+    f.x += fxs[i]!;
+    f.y += fys[i]!;
+  });
   for (const e of g.edges) {
     const a = state.pos.get(e.a);
     const b = state.pos.get(e.b);
