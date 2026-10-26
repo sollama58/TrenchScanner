@@ -1,10 +1,12 @@
+import { useState } from "react";
 import { LinkSwatch } from "./GraphView";
 import { SWITCH_LABEL, WALLET_SWITCHES, type AsylEdgeKind, type WalletSwitch } from "./graph";
 
 /**
  * What can be done to many bubbles at once, once a box, a lasso or Ctrl-clicks picked them (user
  * ask 2026-10-25): take them off, keep only them, hold them in place, find the links among them,
- * and switch their own kinds of link, all together.
+ * and switch their own kinds of link, all together. With coins in the pick, the coin actions run
+ * on every picked coin at once (user ask 2026-10-26): Show holders, live or not, and Show deployers.
  */
 
 /** How much of the pick something holds for: all of it, some of it, or none. */
@@ -31,6 +33,9 @@ export function PickBar({
   onGrow,
   onSwitch,
   onClear,
+  chainOff,
+  onShowHolders,
+  onShowDeployers,
 }: {
   wallets: number;
   tokens: number;
@@ -44,7 +49,14 @@ export function PickBar({
   onGrow: () => void;
   onSwitch: (kind: WalletSwitch, on: boolean) => void;
   onClear: () => void;
+  /** Why live chain reads can't run now (no Pro Mode, credits used up), or null when they can. */
+  chainOff?: string | null;
+  onShowHolders?: (live: boolean) => void;
+  onShowDeployers?: () => void;
 }) {
+  // Show holders reads the current lists live from the chain (Pro), as the reader last left it.
+  const [live, setLive] = useState(false);
+  const canLive = !chainOff;
   const count = wallets + tokens;
   const parts = [
     wallets ? `${wallets} wallet${wallets === 1 ? "" : "s"}` : "",
@@ -99,6 +111,45 @@ export function PickBar({
           ＋ Linked
         </button>
       </div>
+      {tokens > 0 && (onShowHolders || onShowDeployers) && (
+        <div className="asyl-pick-actions" role="group" aria-label="The picked coins">
+          <span className="asyl-muted asyl-small">{tokens === 1 ? "The coin" : `The ${tokens} coins`}</span>
+          {onShowHolders && (
+            <>
+              <button
+                className="asyl-btn ghost"
+                disabled={busy}
+                title="Everyone holding them now and everyone who held them before, as your cutoffs keep them"
+                onClick={() => onShowHolders(live && canLive)}
+              >
+                Show holders
+              </button>
+              <label
+                className="asyl-check"
+                title={chainOff ?? "Reads who holds each right now from the chain, up to 130 credits a coin"}
+              >
+                <input
+                  type="checkbox"
+                  checked={live && canLive}
+                  disabled={!canLive}
+                  onChange={(e) => setLive(e.target.checked)}
+                />{" "}
+                Live <span className="asyl-pro-chip">Pro</span>
+              </label>
+            </>
+          )}
+          {onShowDeployers && (
+            <button
+              className="asyl-btn ghost"
+              disabled={busy}
+              title="Who deployed each picked coin, with a link from deployer to coin"
+              onClick={onShowDeployers}
+            >
+              Show deployers
+            </button>
+          )}
+        </div>
+      )}
       {order.length > 0 && (
         <div className="asyl-pick-kinds" role="group" aria-label="The picked wallets' kinds of link">
           <span className="asyl-muted asyl-small">Their links</span>
