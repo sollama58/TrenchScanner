@@ -74,6 +74,11 @@ function go(r: AsylRoute) {
   if (location.pathname !== path) history.replaceState(null, "", path);
 }
 
+/** The most coins the pick bar reads at once (two reads each, inside the API's 60 a minute)... */
+const PICK_COINS_MAX = 25;
+/** ...and the most it reads live from the chain (12 chain reads a minute, ~130 credits each). */
+const PICK_LIVE_MAX = 10;
+
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** What the links read takes from the map: as many wallets and coins as the API allows. */
@@ -672,6 +677,193 @@ export function AsylApp() {
     setSession("out");
   };
 
+  /**
+   * Holders now and before, as the cutoffs keep them, for one coin or for every coin picked (user
+   * ask 2026-10-26: the coin actions on many coins at once). Coins are read one after another, so
+   * a long pick keeps inside the API's rate limits, and the map takes them all as one undo step.
+   */
+  const coinName = (id: string) => {
+    const n = graph.nodes.find((x) => x.id === id);
+    return n ? nodeName(n) : shortAddr(id);
+  };
+
+  const showHolders = (mints: string[], live: boolean) => {
+    if (mints.length === 0) return;
+    if (mints.length > PICK_COINS_MAX)
+      return setStatus({
+        tone: "error",
+        text: `Pick ${PICK_COINS_MAX} coins or fewer to show their holders together; ${mints.length} are picked.`,
+      });
+    if (live && mints.length > PICK_LIVE_MAX)
+      return setStatus({
+        tone: "error",
+        text: `Live reads go up to ${PICK_LIVE_MAX} coins at once; ${mints.length} are picked. Untick Live from the chain for TrenchScanner's own lists, or pick fewer.`,
+      });
+    const go = () =>
+      void run(
+        mints.length > 1
+          ? `Reading the holders of ${mints.length} coins…`
+          : live
+            ? "Reading its holders from the chain…"
+            : "Reading its holders…",
+        async () => {
+          const { minPct, minSol } = holderRule;
+          const one = mints.length === 1;
+          const said: string[] = [];
+          let read: AsylGraph = { nodes: [], edges: [] };
+          const more: { mint: string; r: Awaited<ReturnType<typeof asylApi.pastHolders>> }[] = [];
+          let heldNow = 0;
+          let pastDrawn = 0;
+          let credits = 0;
+          const failed: string[] = [];
+          for (const mint of mints) {
+            // Holders now (the stored list, or the chain's) and in the past, both as the cutoffs keep them.
+            const [now, past] = await Promise.allSettled([
+              live ? asylApi.chainToken(mint, { minPct }) : asylApi.token(mint, { minPct, all: true }),
+              asylApi.pastHolders(mint, { minSol }),
+            ]);
+            if (now.status === "fulfilled") {
+              const r = now.value;
+              read = mergeGraph(read, r.graph);
+              const held = r.graph.edges.filter((e) => e.kind === "holds" && e.b === mint).map((e) => e.a);
+              heldNow += held.length;
+              if ("credits" in r) {
+                const c = r as ChainRead;
+                setSession((s) => (typeof s === "object" ? { ...s, chain: c.allowance } : s));
+                if (!c.cached) credits += c.credits;
+                if (one)
+                  said.push(
+                    `${held.length} hold${held.length === 1 ? "s" : ""} it now${minPct > 0 ? ` with ${minPct}% or more` : ""}, read live.`,
+                  );
+                // The live list replaces the stored one: a wallet that has sold since doesn't still hold.
+                const liveSet = new Set(held);
+                if (liveSet.size > 0)
+                  setGraph((g) => ({
+                    ...g,
+                    edges: g.edges.filter((e) => !(e.kind === "holds" && e.b === mint && !liveSet.has(e.a))),
+                  }));
+              } else if (one && "coverage" in r && r.coverage?.note) said.push(r.coverage.note);
+            } else failed.push(`${coinName(mint)} now: ${errorText(now.reason)}`);
+            if (past.status === "fulfilled") {
+              // With more than the map draws at once, the ask below says how many before any are added.
+              if (past.value.total > past.value.shown) more.push({ mint, r: past.value });
+              else {
+                read = mergeGraph(read, past.value.graph);
+                pastDrawn += past.value.shown;
+                if (one) said.push(past.value.note);
+              }
+            } else failed.push(`${coinName(mint)} before: ${errorText(past.reason)}`);
+          }
+          if (!one)
+            said.push(
+              `Holders of ${mints.length} coins: ${heldNow} holding now${minPct > 0 ? ` with ${minPct}% or more` : ""}, and ${pastDrawn} past holders who put in ${minSol} SOL or more.`,
+            );
+          if (live)
+            said.push(credits ? `${credits} credits used.` : "Already read recently, no credits used.");
+          if (failed.length) said.push(`Didn't load: ${failed.join("; ")}.`);
+          const before = latest.current.graph;
+          if (read.nodes.length) {
+            add(read);
+            if (one) placed(mints[0]!, "token", read, before);
+          }
+          if (more.length) {
+            // More past holders than the map draws at once: the reader says whether it takes them all.
+            const total = more.reduce((n, m) => n + m.r.total, 0);
+            const shown = more.reduce((n, m) => n + m.r.shown, 0);
+            setAsk({
+              text: `${total} wallets put ${minSol} SOL or more into ${one ? "this coin" : `${more.length} of these coins`}. Loading all of them adds up to ${total} bubbles to the map, which has ${graph.nodes.length} now. A map that big can be slow and hard to read.`,
+              choices: [
+                {
+                  label: `Load all ${total}`,
+                  primary: true,
+                  run: () =>
+                    void run(`Loading all ${total} past holders…`, async () => {
+                      let g: AsylGraph = { nodes: [], edges: [] };
+                      const notes: string[] = [];
+                      for (const m of more) {
+                        const all = await asylApi.pastHolders(m.mint, { minSol, all: true });
+                        g = mergeGraph(g, all.graph);
+                        notes.push(all.note);
+                      }
+                      add(g);
+                      return one ? notes[0] : `Added all ${total} past holders of ${more.length} coins.`;
+                    }),
+                },
+                {
+                  label: one ? `Just the top ${shown}` : `Just the top of each (${shown})`,
+                  run: () => {
+                    add(
+                      more.reduce((g, m) => mergeGraph(g, m.r.graph), { nodes: [], edges: [] } as AsylGraph),
+                    );
+                    setStatus({
+                      text: one
+                        ? more[0]!.r.note
+                        : `Added the ${shown} past holders who put in most, of ${total}.`,
+                      tone: "info",
+                    });
+                  },
+                },
+                { label: "Cancel", run: () => undefined },
+              ],
+            });
+          }
+          return said.join(" ");
+        },
+      );
+    // Live reads of many coins cost credits each: the reader says yes first.
+    if (live && mints.length > 1)
+      return setAsk({
+        text: `Reading ${mints.length} coins' holders live from the chain costs up to ${mints.length * 130} credits (coins read in the last few minutes are free).`,
+        choices: [
+          { label: "Read them live", primary: true, run: go },
+          { label: "Cancel", run: () => undefined },
+        ],
+      });
+    go();
+  };
+
+  /** Each picked coin's deployer, one after another, as Show deployer finds one. */
+  const showDeployers = (mints: string[]) => {
+    if (mints.length === 0) return;
+    if (mints.length > PICK_COINS_MAX)
+      return setStatus({
+        tone: "error",
+        text: `Pick ${PICK_COINS_MAX} coins or fewer to find their deployers together; ${mints.length} are picked.`,
+      });
+    void run(`Finding who deployed ${mints.length} coins…`, async () => {
+      let g: AsylGraph = { nodes: [], edges: [] };
+      let found = 0;
+      let verified = 0;
+      let credits = 0;
+      const failed: string[] = [];
+      for (const mint of mints) {
+        try {
+          const r = await asylApi.deployer(mint);
+          g = mergeGraph(g, r.graph);
+          if (r.allowance) {
+            const allowance = r.allowance;
+            setSession((s) => (typeof s === "object" ? { ...s, chain: allowance } : s));
+          }
+          credits += r.credits ?? 0;
+          if (r.deployer) {
+            found += 1;
+            if (r.deployer.verified) verified += 1;
+          }
+        } catch (e) {
+          failed.push(`${coinName(mint)}: ${errorText(e)}`);
+        }
+      }
+      if (g.nodes.length) add(g);
+      return [
+        `Found who deployed ${found} of ${mints.length} coins${found ? `, ${verified} confirmed by their create transaction` : ""}.`,
+        credits ? `Read from the chain: ${credits} credits.` : "",
+        failed.length ? `Didn't load: ${failed.join("; ")}.` : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+    });
+  };
+
   const actions: InspectorActions = {
     expand: (n: AsylNode) => void (n.kind === "token" ? openToken(n.id) : openWallet(n.id)),
     pair: (a, b) => setPair({ a, b }),
@@ -774,82 +966,7 @@ export function AsylApp() {
           : `${r.credits} credit${r.credits === 1 ? "" : "s"} used.`;
         return `${r.note} ${spent}`;
       }),
-    holders: (mint, live) =>
-      void run(live ? "Reading its holders from the chain…" : "Reading its holders…", async () => {
-        const { minPct, minSol } = holderRule;
-        // Holders now (the stored list, or the chain's) and in the past, both as the cutoffs keep them.
-        const [now, past] = await Promise.allSettled([
-          live ? asylApi.chainToken(mint, { minPct }) : asylApi.token(mint, { minPct, all: true }),
-          asylApi.pastHolders(mint, { minSol }),
-        ]);
-        const said: string[] = [];
-        let read: AsylGraph = { nodes: [], edges: [] };
-        if (now.status === "fulfilled") {
-          const r = now.value;
-          read = mergeGraph(read, r.graph);
-          const held = r.graph.edges.filter((e) => e.kind === "holds" && e.b === mint).map((e) => e.a);
-          if ("credits" in r) {
-            const c = r as ChainRead;
-            setSession((s) => (typeof s === "object" ? { ...s, chain: c.allowance } : s));
-            said.push(
-              `${held.length} hold${held.length === 1 ? "s" : ""} it now${minPct > 0 ? ` with ${minPct}% or more` : ""}, read live: ${
-                c.cached
-                  ? "already read recently, no credits used"
-                  : `${c.credits} credit${c.credits === 1 ? "" : "s"} used`
-              }.`,
-            );
-            // The live list replaces the stored one: a wallet that has sold since doesn't still hold.
-            const live = new Set(held);
-            if (live.size > 0)
-              setGraph((g) => ({
-                ...g,
-                edges: g.edges.filter((e) => !(e.kind === "holds" && e.b === mint && !live.has(e.a))),
-              }));
-          } else if ("coverage" in r && r.coverage?.note) said.push(r.coverage.note);
-        } else said.push(`Its current holders didn't load: ${errorText(now.reason)}`);
-        const moreLater =
-          past.status === "fulfilled" && past.value.total > past.value.shown ? past.value : null;
-        if (past.status === "fulfilled") {
-          // With more than the map draws at once, the ask below says how many before any are added.
-          if (!moreLater) {
-            read = mergeGraph(read, past.value.graph);
-            said.push(past.value.note);
-          }
-        } else said.push(`Its past holders didn't load: ${errorText(past.reason)}`);
-        const before = latest.current.graph;
-        if (read.nodes.length) {
-          add(read);
-          placed(mint, "token", read, before);
-        }
-        if (moreLater) {
-          // More past holders than the map draws at once: the reader says whether it takes them all.
-          const total = moreLater.total;
-          setAsk({
-            text: `${total} wallets put ${minSol} SOL or more into this coin. Loading all of them adds up to ${total} bubbles to the map, which has ${graph.nodes.length} now. A map that big can be slow and hard to read.`,
-            choices: [
-              {
-                label: `Load all ${total}`,
-                primary: true,
-                run: () =>
-                  void run(`Loading all ${total} past holders…`, async () => {
-                    const all = await asylApi.pastHolders(mint, { minSol, all: true });
-                    add(all.graph);
-                    return all.note;
-                  }),
-              },
-              {
-                label: `Just the top ${moreLater.shown}`,
-                run: () => {
-                  add(moreLater.graph);
-                  setStatus({ text: moreLater.note, tone: "info" });
-                },
-              },
-              { label: "Cancel", run: () => undefined },
-            ],
-          });
-        }
-        return said.join(" ");
-      }),
+    holders: (mint, live) => showHolders([mint], live),
     hide: (id) => {
       record();
       setRemoved((s) => {
@@ -1867,6 +1984,15 @@ export function AsylApp() {
               onGrow={pickActions.grow}
               onSwitch={pickActions.switchKind}
               onClear={() => setPicked(new Set())}
+              chainOff={
+                typeof session !== "object" || !session.pro
+                  ? "Chain reads need Pro Mode"
+                  : session.chain && session.chain.left <= 0
+                    ? "Today's chain reads are used up"
+                    : null
+              }
+              onShowHolders={(live) => showHolders(pickInfo.tokens, live)}
+              onShowDeployers={() => showDeployers(pickInfo.tokens)}
             />
           )}
           {ask && (
