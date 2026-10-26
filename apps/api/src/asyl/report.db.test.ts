@@ -3,7 +3,7 @@ import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
 import { GraphBuilder } from "./graph.js";
-import { addEarlyBuyers, addLaunches, bundleVerdict, loadCoinReport, sellWaves } from "./report.js";
+import { addEarlyBuyers, addLaunches, bundleVerdict, loadCoinReport, sellWaves, spread } from "./report.js";
 
 const MINT = "AsyRptMint" + "1".repeat(33);
 const OLD = "AsyRptOldd" + "1".repeat(33);
@@ -57,6 +57,13 @@ describe("sellWaves", () => {
   });
 });
 
+describe("spread", () => {
+  it("keeps the first and last and spaces the rest evenly", () => {
+    expect(spread([0, 1, 2, 3, 4, 5, 6, 7, 8], 3)).toEqual([0, 4, 8]);
+    expect(spread([1, 2], 5)).toEqual([1, 2]);
+  });
+});
+
 describe.skipIf(!dbAvailable)("coin report", () => {
   const wallets = [B1, B2, B3, DEV];
   const cleanup = async () => {
@@ -83,6 +90,18 @@ describe.skipIf(!dbAvailable)("coin report", () => {
         { tokenId: t.id, wallet: B3, firstBuyerRank: 3, buys: 1, sells: 1, solIn: 1, solOut: 2 },
       ],
     });
+    await prisma.tokenSnapshot.createMany({
+      data: [
+        {
+          tokenId: t.id,
+          priceUsd: 1,
+          marketCapUsd: 1,
+          takenAt: new Date(Date.now() - 60_000),
+          top10HolderPct: 40,
+        },
+        { tokenId: t.id, priceUsd: 1, marketCapUsd: 1, top10HolderPct: 55, holderCount: 90 },
+      ],
+    });
     await prisma.walletFunder.createMany({
       data: [
         { wallet: B1, status: "found", funder: FUNDER, amountSol: 3 },
@@ -100,6 +119,13 @@ describe.skipIf(!dbAvailable)("coin report", () => {
     expect(r.dev?.wallet).toBe(DEV);
     expect(r.dev?.thisCoin).toMatchObject({ solIn: 1, solOut: 4, sold: true });
     expect(r.dev?.coins.map((c) => c.mint)).toEqual([OLD]);
+    expect(r.concentration.map((p) => p.top10)).toEqual([40, 55]);
+    expect(r.concentration[1]!.holders).toBe(90);
+    expect(r.flow).toEqual([
+      { group: "dev", wallets: 1, solIn: 1, solOut: 4 },
+      { group: "sniper", wallets: 1, solIn: 2, solOut: 0 },
+      { group: "early", wallets: 2, solIn: 2, solOut: 2 },
+    ]);
     expect(await loadCoinReport("AsyRptNone" + "1".repeat(33))).toBeNull();
   });
 

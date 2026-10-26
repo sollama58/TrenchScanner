@@ -851,7 +851,13 @@ body {
   gap: 6px;
   pointer-events: none;
 }
-.asyl-toolbar > * {
+/* One row of tools: part of the toolbar's own wrap on a wide screen, its own sideways scroller on
+   a phone, so what sits under it (the timeline) stays in view. */
+.asyl-toolbar-row {
+  display: contents;
+}
+.asyl-toolbar > *,
+.asyl-toolbar-row > * {
   pointer-events: auto;
   background: rgba(18, 12, 9, 0.85);
 }
@@ -1754,17 +1760,10 @@ body {
 /* Phones: the map's tools in one row that scrolls sideways, so the map itself keeps the screen. */
 @media (max-width: 700px) {
   .asyl-toolbar {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scrollbar-width: none;
     pointer-events: auto;
     padding-bottom: 2px;
   }
-  .asyl-toolbar::-webkit-scrollbar {
-    display: none;
-  }
-  .asyl-toolbar > * {
+  .asyl-toolbar-row > * {
     flex: none;
   }
   .asyl-toolbar .asyl-btn {
@@ -2331,7 +2330,8 @@ body {
   backdrop-filter: blur(12px) saturate(1.2);
   pointer-events: auto;
 }
-.asyl-toolbar > * {
+.asyl-toolbar > *,
+.asyl-toolbar-row > * {
   background: transparent;
 }
 .asyl-toolbar .asyl-btn {
@@ -2452,6 +2452,23 @@ body {
     transform: translate(-50%, 8px);
   }
 }
+/* On a wide screen the legend holds the map's bottom-left corner: the status keeps to the right of
+   it instead of covering it. */
+@media (min-width: 901px) {
+  .asyl-status {
+    left: auto;
+    right: 14px;
+    transform: none;
+    max-width: max(280px, min(520px, calc(100% - 380px)));
+    animation-name: asyl-toast-right;
+  }
+}
+@keyframes asyl-toast-right {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
 .asyl-draw-editor,
 .asyl-ask {
   top: 72px;
@@ -2489,9 +2506,24 @@ body {
     padding: 8px 10px;
   }
   .asyl-toolbar {
+    flex-direction: column;
     flex-wrap: nowrap;
+  }
+  .asyl-toolbar-row {
+    display: flex;
+    gap: 2px;
     overflow-x: auto;
+    overscroll-behavior-x: contain;
     scrollbar-width: none;
+  }
+  .asyl-toolbar-row::-webkit-scrollbar {
+    display: none;
+  }
+  .asyl-toolbar-row > * {
+    flex: none;
+  }
+  .asyl-toolbar .asyl-timeline {
+    flex-basis: auto;
   }
   .asyl-inspector {
     background: #160e0a;
@@ -2697,6 +2729,85 @@ body {
   justify-content: space-between;
   gap: 8px;
 }
+.asyl-conc {
+  margin: 0;
+}
+.asyl-conc svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  background: rgba(255, 176, 103, 0.05);
+}
+.asyl-conc-grid {
+  stroke: var(--asyl-line);
+  stroke-dasharray: 2 3;
+}
+.asyl-conc-axis {
+  fill: var(--asyl-muted);
+  font-size: 8px;
+}
+.asyl-conc figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.asyl-conc figcaption i {
+  display: inline-block;
+  width: 10px;
+  height: 3px;
+  margin-right: 2px;
+  vertical-align: middle;
+  border-radius: 2px;
+}
+.asyl-flow {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.asyl-flow-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.asyl-flow-head .good {
+  color: var(--asyl-good);
+}
+.asyl-flow-head .bad {
+  color: var(--asyl-bad);
+}
+.asyl-flow-bar {
+  position: relative;
+  height: 14px;
+  margin-top: 2px;
+  border-radius: 4px;
+  background: rgba(255, 176, 103, 0.06);
+  overflow: hidden;
+}
+.asyl-flow-bar i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 4px;
+}
+.asyl-flow-bar.in i {
+  background: rgba(255, 122, 47, 0.45);
+}
+.asyl-flow-bar.out i {
+  background: rgba(62, 224, 143, 0.4);
+}
+.asyl-flow-bar span {
+  position: relative;
+  padding-left: 6px;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--asyl-text);
+}
 .asyl-pnl {
   list-style: none;
   margin: 0;
@@ -2723,10 +2834,9 @@ body {
   display: inline-flex;
 }
 .asyl-menu-list {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 8;
+  position: fixed;
+  z-index: 30;
+  width: min(280px, calc(100vw - 16px));
   display: flex;
   flex-direction: column;
   min-width: 260px;
@@ -2827,4 +2937,27 @@ body {
 }
 .asyl-watch-events li > span:first-child {
   margin-right: auto;
+}
+.asyl-copy {
+  white-space: nowrap;
+  font-size: 11px;
+}
+.asyl-copy.follows {
+  color: var(--asyl-orange-hi);
+}
+.asyl-copy.leads {
+  color: var(--asyl-muted);
+}
+.asyl-copy.same {
+  color: var(--asyl-bad);
+}
+.asyl-node-mono {
+  fill: #ffcf9a;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+/* While bubbles are picked, the pick bar holds the map's foot: the legend folds to its button. */
+.asyl-stage:has(.asyl-pick-bar) .asyl-map-legend > :not(.asyl-map-legend-toggle) {
+  display: none;
 }

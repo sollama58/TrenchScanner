@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ApiError, SESSION_ENDED_EVENT, post } from "../api";
 import { dashboardUrl } from "../returnTo";
 import { ShareImageDialog } from "../components/ShareImageDialog";
@@ -237,15 +238,25 @@ export function AsylApp() {
   // choice, kept in this browser; a saved map opens the way it was saved.
   // The timeline (user ask 2026-10-26): links dated after this moment aren't drawn. Null: off.
   const [until, setUntil] = useState<number | null>(null);
-  const [exportOpen, setExportOpen] = useState(false);
-  // The export menu closes on any click outside it.
+  // The export menu, where it opens: fixed to the page, so the toolbar's sideways scroll on a phone
+  // never clips it. Null: closed.
+  const [exportAt, setExportAt] = useState<{ top: number; left: number } | null>(null);
+  const exportOpen = exportAt !== null;
+  // The export menu closes on any click outside it, and when the page scrolls or resizes under it.
   useEffect(() => {
     if (!exportOpen) return;
     const close = (e: MouseEvent) => {
-      if (!(e.target as Element | null)?.closest?.(".asyl-menu")) setExportOpen(false);
+      if (!(e.target as Element | null)?.closest?.(".asyl-menu")) setExportAt(null);
     };
+    const drop = () => setExportAt(null);
     document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
+    window.addEventListener("resize", drop);
+    document.addEventListener("scroll", drop, true);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      window.removeEventListener("resize", drop);
+      document.removeEventListener("scroll", drop, true);
+    };
   }, [exportOpen]);
   const [analyst, setAnalystState] = useState(() => {
     try {
@@ -748,7 +759,7 @@ export function AsylApp() {
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   };
   const exportAs = (what: "csv" | "json" | "md") => {
-    setExportOpen(false);
+    setExportAt(null);
     const t = title.trim() || "Untitled map";
     if (what === "csv") return download("csv", graphCsv(kept), "text/csv");
     if (what === "json")
@@ -1938,222 +1949,235 @@ export function AsylApp() {
 
         <main className="asyl-stage">
           <div className="asyl-toolbar">
-            <button
-              className="asyl-btn ghost asyl-rail-toggle"
-              onClick={() => setRailOpen((o) => !o)}
-              aria-expanded={railOpen}
-            >
-              ☰
-            </button>
-            <button className="asyl-btn ghost" onClick={newMap}>
-              New
-            </button>
-            <span className="asyl-btn-group" role="group" aria-label="Pick bubbles">
+            <div className="asyl-toolbar-row">
               <button
-                className={`asyl-btn ghost${tool === "box" ? " on" : ""}`}
+                className="asyl-btn ghost asyl-rail-toggle"
+                onClick={() => setRailOpen((o) => !o)}
+                aria-expanded={railOpen}
+              >
+                ☰
+              </button>
+              <button className="asyl-btn ghost" onClick={newMap}>
+                New
+              </button>
+              <span className="asyl-btn-group" role="group" aria-label="Pick bubbles">
+                <button
+                  className={`asyl-btn ghost${tool === "box" ? " on" : ""}`}
+                  disabled={graph.nodes.length === 0}
+                  aria-pressed={tool === "box"}
+                  title="Pick bubbles with a box (B), to hide or change them together. Shift and a drag on the background does it too"
+                  onClick={() => {
+                    setDrawingSel(null);
+                    setTool((t) => (t === "box" ? null : "box"));
+                  }}
+                >
+                  ⬚ Box
+                </button>
+                <button
+                  className={`asyl-btn ghost${tool === "lasso" ? " on" : ""}`}
+                  disabled={graph.nodes.length === 0}
+                  aria-pressed={tool === "lasso"}
+                  title="Pick bubbles by drawing a loop round them (O)"
+                  onClick={() => {
+                    setDrawingSel(null);
+                    setTool((t) => (t === "lasso" ? null : "lasso"));
+                  }}
+                >
+                  ◌ Lasso
+                </button>
+              </span>
+              <span className="asyl-btn-group" role="group" aria-label="Draw">
+                <button
+                  className={`asyl-btn ghost${tool === "line" ? " on" : ""}`}
+                  disabled={graph.nodes.length < 2}
+                  aria-pressed={tool === "line"}
+                  title="Draw a line: click one bubble, then another, then label it"
+                  onClick={() => setTool((t) => (t === "line" ? null : "line"))}
+                >
+                  ╱ Line
+                </button>
+                <button
+                  className={`asyl-btn ghost${tool === "text" ? " on" : ""}`}
+                  disabled={graph.nodes.length === 0}
+                  aria-pressed={tool === "text"}
+                  title="Add a text box: click where it goes"
+                  onClick={() => setTool((t) => (t === "text" ? null : "text"))}
+                >
+                  T Text
+                </button>
+                <button
+                  className={`asyl-btn ghost${tool === "pen" ? " on" : ""}`}
+                  disabled={graph.nodes.length === 0}
+                  aria-pressed={tool === "pen"}
+                  title="Draw freehand on the map, in the colour and thickness you pick"
+                  onClick={() => {
+                    setDrawingSel(null);
+                    setTool((t) => (t === "pen" ? null : "pen"));
+                  }}
+                >
+                  ✎ Draw
+                </button>
+              </span>
+              <button
+                className={`asyl-btn ghost${analyst ? " on" : ""}`}
+                aria-pressed={analyst}
                 disabled={graph.nodes.length === 0}
-                aria-pressed={tool === "box"}
-                title="Pick bubbles with a box (B), to hide or change them together. Shift and a drag on the background does it too"
+                title={
+                  analyst
+                    ? "Analyst Mode is on: wallets as boxes, money along right-angled lines, traders folded into their coin. Click for the bubble map (A)"
+                    : "Analyst Mode: the map as an investigator's flowchart, wallets as boxes with the money on each line (A)"
+                }
                 onClick={() => {
-                  setDrawingSel(null);
-                  setTool((t) => (t === "box" ? null : "box"));
+                  setAnalyst(!analyst);
+                  setDirty(true);
                 }}
               >
-                ⬚ Box
+                ⧉ Analyst
               </button>
               <button
-                className={`asyl-btn ghost${tool === "lasso" ? " on" : ""}`}
+                className={`asyl-btn ghost${until !== null ? " on" : ""}`}
+                aria-pressed={until !== null}
                 disabled={graph.nodes.length === 0}
-                aria-pressed={tool === "lasso"}
-                title="Pick bubbles by drawing a loop round them (O)"
+                title="Replay the map in the order things happened: who funded whom, who bought, who sold (R)"
+                onClick={() =>
+                  setUntil((u) => (u === null ? (timelineSteps(kept).at(-1) ?? Date.now()) : null))
+                }
+              >
+                ⏱ Timeline
+              </button>
+              <button
+                className={`asyl-btn ghost${grid ? " on" : ""}`}
+                disabled={analyst}
+                aria-pressed={grid}
+                title={
+                  grid
+                    ? "Grid mode is on: each bubble has its own cell, with room for every name and line time. Click to place bubbles freely"
+                    : "Grid mode: put each bubble on its own cell, with room for every name and line time"
+                }
                 onClick={() => {
-                  setDrawingSel(null);
-                  setTool((t) => (t === "lasso" ? null : "lasso"));
+                  record();
+                  setGrid((g) => !g);
+                  setDirty(true);
                 }}
               >
-                ◌ Lasso
+                ▦ Grid
               </button>
-            </span>
-            <span className="asyl-btn-group" role="group" aria-label="Draw">
-              <button
-                className={`asyl-btn ghost${tool === "line" ? " on" : ""}`}
-                disabled={graph.nodes.length < 2}
-                aria-pressed={tool === "line"}
-                title="Draw a line: click one bubble, then another, then label it"
-                onClick={() => setTool((t) => (t === "line" ? null : "line"))}
-              >
-                ╱ Line
-              </button>
-              <button
-                className={`asyl-btn ghost${tool === "text" ? " on" : ""}`}
-                disabled={graph.nodes.length === 0}
-                aria-pressed={tool === "text"}
-                title="Add a text box: click where it goes"
-                onClick={() => setTool((t) => (t === "text" ? null : "text"))}
-              >
-                T Text
-              </button>
-              <button
-                className={`asyl-btn ghost${tool === "pen" ? " on" : ""}`}
-                disabled={graph.nodes.length === 0}
-                aria-pressed={tool === "pen"}
-                title="Draw freehand on the map, in the colour and thickness you pick"
-                onClick={() => {
-                  setDrawingSel(null);
-                  setTool((t) => (t === "pen" ? null : "pen"));
-                }}
-              >
-                ✎ Draw
-              </button>
-            </span>
-            <button
-              className={`asyl-btn ghost${analyst ? " on" : ""}`}
-              aria-pressed={analyst}
-              disabled={graph.nodes.length === 0}
-              title={
-                analyst
-                  ? "Analyst Mode is on: wallets as boxes, money along right-angled lines, traders folded into their coin. Click for the bubble map (A)"
-                  : "Analyst Mode: the map as an investigator's flowchart, wallets as boxes with the money on each line (A)"
-              }
-              onClick={() => {
-                setAnalyst(!analyst);
-                setDirty(true);
-              }}
-            >
-              ⧉ Analyst
-            </button>
-            <button
-              className={`asyl-btn ghost${until !== null ? " on" : ""}`}
-              aria-pressed={until !== null}
-              disabled={graph.nodes.length === 0}
-              title="Replay the map in the order things happened: who funded whom, who bought, who sold (R)"
-              onClick={() =>
-                setUntil((u) => (u === null ? (timelineSteps(kept).at(-1) ?? Date.now()) : null))
-              }
-            >
-              ⏱ Timeline
-            </button>
-            <button
-              className={`asyl-btn ghost${grid ? " on" : ""}`}
-              disabled={analyst}
-              aria-pressed={grid}
-              title={
-                grid
-                  ? "Grid mode is on: each bubble has its own cell, with room for every name and line time. Click to place bubbles freely"
-                  : "Grid mode: put each bubble on its own cell, with room for every name and line time"
-              }
-              onClick={() => {
-                record();
-                setGrid((g) => !g);
-                setDirty(true);
-              }}
-            >
-              ▦ Grid
-            </button>
-            <span className="asyl-btn-group" role="group" aria-label="Undo and redo">
+              <span className="asyl-btn-group" role="group" aria-label="Undo and redo">
+                <button
+                  className="asyl-btn ghost"
+                  disabled={!history.current.canUndo}
+                  title={`Undo (Ctrl+Z)${history.current.canUndo ? ` · ${history.current.depth.back} step${history.current.depth.back === 1 ? "" : "s"} back` : ""}`}
+                  onClick={undo}
+                >
+                  ↶ Undo
+                </button>
+                <button
+                  className="asyl-btn ghost"
+                  disabled={!history.current.canRedo}
+                  title="Redo (Ctrl+Shift+Z)"
+                  onClick={redo}
+                >
+                  Redo ↷
+                </button>
+              </span>
               <button
                 className="asyl-btn ghost"
-                disabled={!history.current.canUndo}
-                title={`Undo (Ctrl+Z)${history.current.canUndo ? ` · ${history.current.depth.back} step${history.current.depth.back === 1 ? "" : "s"} back` : ""}`}
-                onClick={undo}
+                disabled={graph.nodes.length === 0}
+                onClick={() => view.current?.fit()}
               >
-                ↶ Undo
+                Fit
               </button>
               <button
                 className="asyl-btn ghost"
-                disabled={!history.current.canRedo}
-                title="Redo (Ctrl+Shift+Z)"
-                onClick={redo}
+                disabled={graph.nodes.length === 0 || !!busy}
+                onClick={() => void run("Saving…", async () => (await save(), "Saved."))}
               >
-                Redo ↷
+                {current ? (dirty ? "Save*" : "Saved") : "Save"}
               </button>
-            </span>
-            <button
-              className="asyl-btn ghost"
-              disabled={graph.nodes.length === 0}
-              onClick={() => view.current?.fit()}
-            >
-              Fit
-            </button>
-            <button
-              className="asyl-btn ghost"
-              disabled={graph.nodes.length === 0 || !!busy}
-              onClick={() => void run("Saving…", async () => (await save(), "Saved."))}
-            >
-              {current ? (dirty ? "Save*" : "Saved") : "Save"}
-            </button>
-            <button
-              className="asyl-btn ghost"
-              disabled={graph.nodes.length === 0 || !!busy}
-              onClick={() => void shareLink()}
-            >
-              {current?.shareSlug ? "Update link" : "Share link"}
-            </button>
-            {current?.shareSlug && (
-              <button className="asyl-btn ghost" disabled={!!busy} onClick={() => void unshare()}>
-                Unshare
-              </button>
-            )}
-            <button
-              className="asyl-btn ghost"
-              disabled={graph.nodes.length === 0}
-              title="A picture of the map as you see it now, with the legend and Asyl's brand"
-              onClick={() => setSharing(true)}
-            >
-              Image
-            </button>
-            <span className="asyl-menu">
               <button
-                className={`asyl-btn ghost${exportOpen ? " on" : ""}`}
-                disabled={kept.nodes.length === 0}
-                aria-expanded={exportOpen}
-                aria-haspopup="menu"
-                title="Download the map as a spreadsheet, as data, or as a written report"
-                onClick={() => setExportOpen((o) => !o)}
+                className="asyl-btn ghost"
+                disabled={graph.nodes.length === 0 || !!busy}
+                onClick={() => void shareLink()}
               >
-                Export ▾
+                {current?.shareSlug ? "Update link" : "Share link"}
               </button>
-              {exportOpen && (
-                <span className="asyl-menu-list" role="menu">
-                  <button role="menuitem" onClick={() => exportAs("md")}>
-                    <b>Write-up</b>
-                    <span>A report to post or file: who, the coins, the money, every address</span>
-                  </button>
-                  <button role="menuitem" onClick={() => exportAs("csv")}>
-                    <b>CSV</b>
-                    <span>Every link, for a spreadsheet</span>
-                  </button>
-                  <button role="menuitem" onClick={() => exportAs("json")}>
-                    <b>JSON</b>
-                    <span>Every wallet, coin and link, for your own tools</span>
-                  </button>
-                </span>
+              {current?.shareSlug && (
+                <button className="asyl-btn ghost" disabled={!!busy} onClick={() => void unshare()}>
+                  Unshare
+                </button>
               )}
-            </span>
-            <button
-              className="asyl-btn ghost"
-              disabled={!!busy || !shown.nodes.some((n) => n.kind === "wallet")}
-              title="Funding, transfers, deploys and trades between the wallets and coins shown, from TrenchScanner's reads (no credits). Key: L"
-              onClick={() => void linksAmong()}
-            >
-              Links between shown
-            </button>
-            <button
-              className="asyl-btn ghost"
-              disabled={!!busy || !shown.nodes.some((n) => n.kind === "token")}
-              title="Adds the wallet that deployed each coin shown, with its Deployed line (no credits). Key: D"
-              onClick={() => void linksAmong(undefined, undefined, true)}
-            >
-              Deployers
-            </button>
-            <button
-              className="asyl-btn ghost"
-              aria-expanded={keysOpen}
-              title="Keyboard shortcuts (?)"
-              onClick={() => setKeysOpen((o) => !o)}
-            >
-              ⌨
-            </button>
+              <button
+                className="asyl-btn ghost"
+                disabled={graph.nodes.length === 0}
+                title="A picture of the map as you see it now, with the legend and Asyl's brand"
+                onClick={() => setSharing(true)}
+              >
+                Image
+              </button>
+              <span className="asyl-menu">
+                <button
+                  className={`asyl-btn ghost${exportOpen ? " on" : ""}`}
+                  disabled={kept.nodes.length === 0}
+                  aria-expanded={exportOpen}
+                  aria-haspopup="menu"
+                  title="Download the map as a spreadsheet, as data, or as a written report"
+                  onClick={(e) => {
+                    if (exportAt) return setExportAt(null);
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setExportAt({
+                      top: r.bottom + 6,
+                      left: Math.max(8, Math.min(r.left, window.innerWidth - 288)),
+                    });
+                  }}
+                >
+                  Export ▾
+                </button>
+                {exportAt &&
+                  // In the page, not the toolbar: the toolbar's blur makes it the frame a fixed
+                  // menu sits in, and its sideways scroll on a phone would clip it.
+                  createPortal(
+                    <span className="asyl-menu asyl-menu-list" role="menu" style={exportAt}>
+                      <button role="menuitem" onClick={() => exportAs("md")}>
+                        <b>Write-up</b>
+                        <span>A report to post or file: who, the coins, the money, every address</span>
+                      </button>
+                      <button role="menuitem" onClick={() => exportAs("csv")}>
+                        <b>CSV</b>
+                        <span>Every link, for a spreadsheet</span>
+                      </button>
+                      <button role="menuitem" onClick={() => exportAs("json")}>
+                        <b>JSON</b>
+                        <span>Every wallet, coin and link, for your own tools</span>
+                      </button>
+                    </span>,
+                    document.querySelector(".asyl-app") ?? document.body,
+                  )}
+              </span>
+              <button
+                className="asyl-btn ghost"
+                disabled={!!busy || !shown.nodes.some((n) => n.kind === "wallet")}
+                title="Funding, transfers, deploys and trades between the wallets and coins shown, from TrenchScanner's reads (no credits). Key: L"
+                onClick={() => void linksAmong()}
+              >
+                Links between shown
+              </button>
+              <button
+                className="asyl-btn ghost"
+                disabled={!!busy || !shown.nodes.some((n) => n.kind === "token")}
+                title="Adds the wallet that deployed each coin shown, with its Deployed line (no credits). Key: D"
+                onClick={() => void linksAmong(undefined, undefined, true)}
+              >
+                Deployers
+              </button>
+              <button
+                className="asyl-btn ghost"
+                aria-expanded={keysOpen}
+                title="Keyboard shortcuts (?)"
+                onClick={() => setKeysOpen((o) => !o)}
+              >
+                ⌨
+              </button>
+            </div>
             {until !== null && (
               <Timeline graph={kept} until={until} onUntil={setUntil} onClose={() => setUntil(null)} />
             )}

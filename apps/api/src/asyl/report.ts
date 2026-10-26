@@ -81,6 +81,43 @@ export function sellWaves(sells: readonly { wallet: string; at: Date; solOut: nu
     .slice(0, SELL_WAVES_MAX);
 }
 
+/** Points in the holders-over-time chart, at most, spread evenly over the scans read. */
+export const CONCENTRATION_POINTS = 48;
+/** Scans the chart reads, newest first. */
+const CONCENTRATION_READ = 600;
+
+export interface ConcentrationPoint {
+  at: string;
+  /** Supply the ten largest holders held, pools aside. */
+  top10: number | null;
+  /** Supply the single largest holder held. */
+  largest: number | null;
+  /** Supply in linked top holders (Bundled %). */
+  bundled: number | null;
+  holders: number | null;
+}
+
+/** Spreads `n` picks evenly over a list, keeping its first and last. */
+export function spread<T>(xs: readonly T[], n: number): T[] {
+  if (xs.length <= n) return [...xs];
+  const out: T[] = [];
+  for (let i = 0; i < n; i++) out.push(xs[Math.round((i * (xs.length - 1)) / (n - 1))]!);
+  return out;
+}
+
+/**
+ * Who put SOL into a coin and who took it out, by wallet group (user ask 2026-10-26, "token
+ * flow"). Each wallet counts in its first group: the dev, launch snipers (first 5 seconds), the
+ * rest of the first 25 buyers, the top ten holders at the tape's anchor, and everyone else.
+ */
+export type FlowGroup = "dev" | "sniper" | "early" | "top" | "rest";
+export interface FlowRow {
+  group: FlowGroup;
+  wallets: number;
+  solIn: number;
+  solOut: number;
+}
+
 export interface BundleVerdict {
   level: "high" | "some" | "low" | "unknown";
   text: string;
@@ -116,6 +153,10 @@ export interface CoinReport {
   verdict: BundleVerdict;
   /** Groups that sold together, biggest first. */
   waves: SellWave[];
+  /** Holder concentration at each scan, oldest first. */
+  concentration: ConcentrationPoint[];
+  /** SOL in and out by wallet group, from the coin's trade tape; empty when it wasn't read. */
+  flow: FlowRow[];
   dev:
     | (NonNullable<TokenProfile["dev"]> & {
         /** What the dev did with this coin on its trade tape; null when the tape didn't see it trade. */
@@ -281,10 +322,60 @@ async function launchReading(tokenId: string): Promise<CoinReport["launch"]> {
   };
 }
 
+async function concentrationSeries(tokenId: string): Promise<ConcentrationPoint[]> {
+  const rows = await prisma.tokenSnapshot.findMany({
+    where: {
+      tokenId,
+      OR: [
+        { top10HolderPct: { not: null } },
+        { largestHolderPct: { not: null } },
+        { bundledSupplyPct: { not: null } },
+      ],
+    },
+    orderBy: { takenAt: "desc" },
+    take: CONCENTRATION_READ,
+    select: {
+      takenAt: true,
+      top10HolderPct: true,
+      largestHolderPct: true,
+      bundledSupplyPct: true,
+      holderCount: true,
+    },
+  });
+  return spread(rows.reverse(), CONCENTRATION_POINTS).map((r) => ({
+    at: r.takenAt.toISOString(),
+    top10: r.top10HolderPct,
+    largest: r.largestHolderPct,
+    bundled: r.bundledSupplyPct,
+    holders: r.holderCount,
+  }));
+}
+
+const FLOW_ORDER: readonly FlowGroup[] = ["dev", "sniper", "early", "top", "rest"];
+
+async function moneyFlow(tokenId: string): Promise<FlowRow[]> {
+  const rows = await prisma.$queryRaw<{ grp: FlowGroup; wallets: number; sol_in: number; sol_out: number }[]>`
+    SELECT CASE WHEN "isCreator" THEN 'dev'
+                WHEN "launchSniper" THEN 'sniper'
+                WHEN "firstBuyerRank" IS NOT NULL THEN 'early'
+                WHEN "top10AtAnchor" THEN 'top'
+                ELSE 'rest' END AS grp,
+           COUNT(*)::int AS wallets,
+           COALESCE(SUM("solIn"), 0)::float AS sol_in,
+           COALESCE(SUM("solOut"), 0)::float AS sol_out
+      FROM "TokenWalletActivity"
+     WHERE "tokenId" = ${tokenId}
+     GROUP BY 1`;
+  return rows
+    .map((r) => ({ group: r.grp, wallets: r.wallets, solIn: r.sol_in, solOut: r.sol_out }))
+    .filter((r) => r.solIn > 0 || r.solOut > 0)
+    .sort((a, b) => FLOW_ORDER.indexOf(a.group) - FLOW_ORDER.indexOf(b.group));
+}
+
 export async function loadCoinReport(mint: string): Promise<CoinReport | null> {
   const token = await prisma.token.findUnique({ where: { mintAddress: mint }, select: { id: true } });
   if (!token) return null;
-  const [launch, scan, profile, sellers] = await Promise.all([
+  const [launch, scan, profile, sellers, concentration, flow] = await Promise.all([
     launchReading(token.id),
     scanReadings(token.id),
     readTokenProfile(mint),
@@ -294,6 +385,8 @@ export async function loadCoinReport(mint: string): Promise<CoinReport | null> {
       take: SELLERS_READ,
       select: { wallet: true, firstSellAt: true, solOut: true },
     }),
+    concentrationSeries(token.id),
+    moneyFlow(token.id),
   ]);
   const dev = profile?.dev ?? null;
   const own = dev
@@ -308,6 +401,8 @@ export async function loadCoinReport(mint: string): Promise<CoinReport | null> {
     scan,
     verdict: bundleVerdict(scan, launch),
     waves: sellWaves(sellers.map((r) => ({ wallet: r.wallet, at: r.firstSellAt!, solOut: r.solOut }))),
+    concentration,
+    flow,
     dev: dev
       ? {
           ...dev,
