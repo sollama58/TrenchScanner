@@ -1652,7 +1652,7 @@ export function AsylApp() {
         />
         <div className="asyl-me">
           <a className="asyl-btn ghost asyl-back" href={dashboardUrl()} title="Back to TrenchScanner">
-            ← TrenchScanner
+            ← <span className="asyl-wide">TrenchScanner</span>
           </a>
           {session.pro ? (
             <span className="asyl-pro-chip" title="Pro Mode: chain reads and your own labels">
@@ -1677,11 +1677,13 @@ export function AsylApp() {
                 className="asyl-meter-bar"
                 style={{ width: `${Math.min(100, (chain.used / Math.max(1, chain.cap)) * 100)}%` }}
               />
-              <span>{Math.max(0, chain.left)} credits left</span>
+              <span>
+                {Math.max(0, chain.left)} <span className="asyl-wide">credits </span>left
+              </span>
             </div>
           )}
           <button className="asyl-link" onClick={() => void signOut()} title={session.wallet}>
-            {shortAddr(session.wallet)} · Sign out
+            <span className="asyl-wide">{shortAddr(session.wallet)} · </span>Sign out
           </button>
         </div>
       </header>

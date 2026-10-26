@@ -460,7 +460,7 @@ body {
   inset: 0 auto 0 0;
   background: rgba(255, 122, 47, 0.55);
 }
-.asyl-meter span {
+.asyl-meter > span {
   position: relative;
   display: block;
   text-align: center;
@@ -2960,4 +2960,19 @@ body {
 /* While bubbles are picked, the pick bar holds the map's foot: the legend folds to its button. */
 .asyl-stage:has(.asyl-pick-bar) .asyl-map-legend > :not(.asyl-map-legend-toggle) {
   display: none;
+}
+/* Phones: the account row on one line, so the map keeps the screen. The words it drops are in
+   each control's title. */
+@media (max-width: 700px) {
+  .asyl-wide {
+    display: none;
+  }
+  .asyl-me {
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    padding: 4px 8px;
+  }
+  .asyl-me .asyl-btn {
+    padding: 4px 10px;
+  }
 }
