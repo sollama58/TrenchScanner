@@ -251,9 +251,8 @@ export const LAUNCHPAD_FEATURES = ["launchpadStonks"] as const;
  * and how many of them sent or got one: the "3.0% transferred holder to holder (5/25)" line on the
  * bubble map. Null until the top 25's transfer reads are in, and on every row banked before.
  *
- * READ BY THE LEARNERS (user ask 2026-10-21), so they are not in RETIRED_LEARNER_INPUTS. The onset
- * guard (featureOnset.ts) keeps them out of a run until they cover enough of the exam's span,
- * including inside age buckets.
+ * Read by the learners from 2026-10-21 (user ask) to 2026-10-26, then recorded only
+ * (RETIRED_LEARNER_INPUTS): since #946 the reading mostly lands after the decision.
  */
 export const TRANSFER_FEATURES = ["transferredSupplyPct", "transferWalletCount"] as const;
 
@@ -908,6 +907,13 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "sells24h",
   "pathRet15mPct",
   "pathRet30mPct",
+  // Holder-to-holder transfers (model drift audit 2026-10-26, notes/model-drift-2026-10-26, user
+  // decision): since #946 (2026-10-22 22:28 UTC) a new contender's first holder-account read waits
+  // for the Helius stream to settle, so the reading lands after the decision and fill on decision
+  // rows fell from 75-88% to 15-27%. Trained across that, the learners would read "present" as
+  // "banked before 10-22". Still recorded and shown; can come back once it fills at decision time.
+  "transferredSupplyPct",
+  "transferWalletCount",
   // minutesSinceFirstInBand stays a learner input. A synthetic refit barely used it, but a label
   // that actually depends on time in the band put 42% of the logistic weight and 51% of the tree
   // splits on it (bandClockReliance.test.ts). bandDwellShare did not replace that. It is not
