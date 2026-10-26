@@ -5,6 +5,7 @@ import { ShareImageDialog } from "../components/ShareImageDialog";
 import { asylApi, type AsylMe, type ChainRead, type Label, type MapDoc, type MapSummary } from "./asylApi";
 import { renderMapCard } from "./asylCard";
 import { renderAnalystCard } from "./analystCard";
+import { Timeline } from "./Timeline";
 import { AnalystLegend } from "./AnalystLayer";
 import { AsylSignIn } from "./AsylSignIn";
 import { DrawEditor, PenBar } from "./DrawEditor";
@@ -41,6 +42,7 @@ import {
   nodeName,
   removeNodes,
   shortAddr,
+  timelineSteps,
   visibleGraph,
   withDeployLines,
   type AsylEdgeKind,
@@ -108,6 +110,7 @@ const KEYS: [string, string][] = [
   ["D", "Deployers of the coins shown"],
   ["F", "Fit the map to the screen"],
   ["A", "Analyst Mode: the map as a flowchart of boxes, amounts and right-angled lines"],
+  ["R", "Timeline: replay the map in the order things happened"],
   ["P", "Draw freehand with the pen"],
   ["T", "Trades of the selected wallet and its closest co-trader"],
   ["/", "Search"],
@@ -216,6 +219,8 @@ export function AsylApp() {
   const [grid, setGrid] = useState(false);
   // Analyst Mode (user ask 2026-10-26): the map as an investigator's flowchart. The reader's own
   // choice, kept in this browser; a saved map opens the way it was saved.
+  // The timeline (user ask 2026-10-26): links dated after this moment aren't drawn. Null: off.
+  const [until, setUntil] = useState<number | null>(null);
   const [analyst, setAnalystState] = useState(() => {
     try {
       return localStorage.getItem(ANALYST_KEY) === "1";
@@ -917,6 +922,15 @@ export function AsylApp() {
         const funders = new Set(r.graph.edges.filter((e) => e.kind === "funded").map((e) => e.a)).size;
         return `${r.shown} first buyer${r.shown === 1 ? "" : "s"}, and ${funders} wallet${funders === 1 ? "" : "s"} that funded them.`;
       }),
+    wave: (wallets, mint) =>
+      void run("Showing the wallets that sold together…", async () => {
+        const r = await asylApi.links(wallets.slice(0, LINKS_WALLETS), [mint]);
+        add(r.graph);
+        const funded = r.graph.edges.filter((e) => e.kind === "funded").length;
+        return `${wallets.length} wallets that sold together${
+          funded ? `, and ${funded} funding link${funded === 1 ? "" : "s"} between them` : ""
+        }.`;
+      }),
     launches: (wallet) =>
       void run("Finding the coins it deployed…", async () => {
         const r = await asylApi.launches(wallet);
@@ -1101,8 +1115,8 @@ export function AsylApp() {
 
   const keep = useMemo(() => new Set([focus, selected].filter((x): x is string => !!x)), [focus, selected]);
   const shown = useMemo(
-    () => visibleGraph(kept, hiddenKinds, keep, { cut, cutoffs, solUsd, perWallet, hideLoose }),
-    [kept, hiddenKinds, keep, cut, cutoffs, solUsd, perWallet, hideLoose],
+    () => visibleGraph(kept, hiddenKinds, keep, { cut, cutoffs, solUsd, perWallet, hideLoose, until }),
+    [kept, hiddenKinds, keep, cut, cutoffs, solUsd, perWallet, hideLoose, until],
   );
   // The inspector lists the links drawn, so one hidden by a slider or by hand isn't listed.
   const inspected = useMemo(() => ({ nodes: kept.nodes, edges: shown.edges }), [kept, shown]);
@@ -1426,6 +1440,10 @@ export function AsylApp() {
       case "f":
         view.current?.fit();
         return;
+      case "r":
+        if (graph.nodes.length)
+          setUntil((u) => (u === null ? (timelineSteps(kept).at(-1) ?? Date.now()) : null));
+        return;
       case "a":
         if (graph.nodes.length) {
           setAnalyst(!analyst);
@@ -1652,11 +1670,17 @@ export function AsylApp() {
                     <b>{shown.edges.length}</b> links
                   </span>
                 </div>
-                {kept.edges.length > shown.edges.length && (
-                  <button className="asyl-link asyl-small" onClick={() => setRail("links")}>
-                    {kept.edges.length - shown.edges.length} links filtered out · Links
-                  </button>
-                )}
+                {kept.edges.length > shown.edges.length &&
+                  (until !== null ? (
+                    <button className="asyl-link asyl-small" onClick={() => setUntil(null)}>
+                      {kept.edges.length - shown.edges.length} links not shown at this point in the timeline ·
+                      Show all
+                    </button>
+                  ) : (
+                    <button className="asyl-link asyl-small" onClick={() => setRail("links")}>
+                      {kept.edges.length - shown.edges.length} links filtered out · Links
+                    </button>
+                  ))}
               </section>
               <section className="asyl-rail-card">
                 <h3>Reading the map</h3>
@@ -1870,6 +1894,17 @@ export function AsylApp() {
               ⧉ Analyst
             </button>
             <button
+              className={`asyl-btn ghost${until !== null ? " on" : ""}`}
+              aria-pressed={until !== null}
+              disabled={graph.nodes.length === 0}
+              title="Replay the map in the order things happened: who funded whom, who bought, who sold (R)"
+              onClick={() =>
+                setUntil((u) => (u === null ? (timelineSteps(kept).at(-1) ?? Date.now()) : null))
+              }
+            >
+              ⏱ Timeline
+            </button>
+            <button
               className={`asyl-btn ghost${grid ? " on" : ""}`}
               disabled={analyst}
               aria-pressed={grid}
@@ -1965,6 +2000,9 @@ export function AsylApp() {
             >
               ⌨
             </button>
+            {until !== null && (
+              <Timeline graph={kept} until={until} onUntil={setUntil} onClose={() => setUntil(null)} />
+            )}
           </div>
 
           {graph.nodes.length === 0 ? (

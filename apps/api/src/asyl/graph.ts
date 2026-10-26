@@ -320,6 +320,7 @@ export function tradedEdge(g: GraphBuilder, wallet: string, mint: string, t: Tra
     mint,
     at: t.firstBuyAt?.toISOString() ?? null,
     sol: Math.max(t.solIn, t.solOut),
+    net: t.sells > 0 ? net : null,
   });
 }
 
@@ -787,6 +788,7 @@ export function walletTags(input: {
   bot?: boolean;
   farm?: boolean;
   exchange?: boolean;
+  fresh?: boolean;
 }): AsylTag[] {
   const tags = new Set<AsylTag>();
   if (input.name?.mine) tags.add("mine");
@@ -799,8 +801,45 @@ export function walletTags(input: {
   if (input.risk?.sniper) tags.add("sniper");
   if (input.risk && input.risk.score >= RISKY_WALLET_SCORE && !input.risk.dumper) tags.add("risky");
   if (input.bot) tags.add("bot");
+  if (input.fresh && !tags.has("exchange")) tags.add("fresh");
   if (input.farm) tags.add("farm");
   return [...tags];
+}
+
+/** How soon after its funding a wallet's first trade marks it fresh. */
+export const FRESH_WITHIN_MS = 24 * 3_600_000;
+/** ...and the most tracked coins it may have bought and still count as fresh. */
+export const FRESH_MAX_COINS = 3;
+
+/**
+ * Fresh wallets (user ask 2026-10-26): first paid less than a day before their first trade on a read
+ * tape, with FRESH_MAX_COINS coins or fewer behind them. A wallet made for one coin is the classic
+ * insider or bundle buyer. Two grouped reads, whatever the map's size.
+ */
+export async function freshWallets(wallets: readonly string[]): Promise<Set<string>> {
+  if (wallets.length === 0) return new Set();
+  const [funded, firsts] = await Promise.all([
+    prisma.walletFunder.findMany({
+      where: { wallet: { in: [...wallets] }, status: "found", fundedAt: { not: null } },
+      select: { wallet: true, fundedAt: true },
+    }),
+    prisma.tokenWalletActivity.groupBy({
+      by: ["wallet"],
+      where: { wallet: { in: [...wallets] }, firstBuyAt: { not: null } },
+      _min: { firstBuyAt: true },
+      _count: { _all: true },
+    }),
+  ]);
+  const first = new Map(firsts.map((f) => [f.wallet, f]));
+  const out = new Set<string>();
+  for (const f of funded) {
+    const a = first.get(f.wallet);
+    const buy = a?._min.firstBuyAt?.getTime();
+    if (!a || buy === undefined || a._count._all > FRESH_MAX_COINS) continue;
+    const gap = buy - f.fundedAt!.getTime();
+    if (gap >= 0 && gap <= FRESH_WITHIN_MS) out.add(f.wallet);
+  }
+  return out;
 }
 
 /**
@@ -810,7 +849,7 @@ export function walletTags(input: {
 export async function decorate(g: GraphBuilder, tracked: readonly TrackedWallet[]): Promise<AsylGraph> {
   const wallets = g.wallets();
   const tokens = g.tokens();
-  const [names, risks, devs, bots, farms, coins, deployers] = await Promise.all([
+  const [names, risks, devs, bots, farms, coins, deployers, fresh] = await Promise.all([
     wallets.length ? loadWalletNames(wallets, null).then((r) => r.names) : Promise.resolve({}),
     wallets.length
       ? prisma.walletRisk.findMany({
@@ -854,6 +893,7 @@ export async function decorate(g: GraphBuilder, tracked: readonly TrackedWallet[
         })
       : Promise.resolve([]),
     loadDeployers(tokens),
+    freshWallets(wallets),
   ]);
   const named = withTrackedNames(names as Record<string, WalletName>, tracked, wallets);
   const riskOf = new Map(risks.map((r) => [r.wallet, r]));
@@ -875,6 +915,7 @@ export async function decorate(g: GraphBuilder, tracked: readonly TrackedWallet[
       bot: botSet.has(w),
       farm: farmSet.has(w),
       exchange: KNOWN_EXCHANGE_WALLETS.has(w),
+      fresh: fresh.has(w),
     });
     n.tags = [...new Set([...n.tags, ...tags])];
     if (name?.avatar) n.avatar = name.avatar;

@@ -53,6 +53,8 @@ export interface InspectorActions {
   earlyBuyers: (mint: string) => void;
   /** Every coin a wallet deployed that TrenchScanner knows of. */
   launches: (wallet: string) => void;
+  /** Puts wallets that sold a coin together on the map, with what ties them. */
+  wave: (wallets: string[], mint: string) => void;
   /** Finds a coin's deployer (from the chain for Pro Mode when unknown) and puts it on the map. */
   showDeployer: (mint: string) => void;
   hide: (id: string) => void;
@@ -156,6 +158,14 @@ export function Inspector({
     .filter((l) => l.edge.kind === "cotrade")
     .sort((x, y) => (y.edge.shared ?? y.edge.weight) - (x.edge.shared ?? x.edge.weight));
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  // A coin's realised profit and loss, per wallet on the map that sold it, best first.
+  const pnl =
+    node.kind === "token"
+      ? graph.edges
+          .filter((e) => e.kind === "traded" && e.b === node.id && typeof e.net === "number")
+          .map((e) => ({ wallet: e.a, net: e.net! }))
+          .sort((x, y) => y.net - x.net)
+      : [];
   const chain = me.chain;
   const chainOff = !me.pro
     ? "Chain reads need Pro Mode"
@@ -260,8 +270,32 @@ export function Inspector({
           nameOf={(id) => (byId.has(id) ? nodeName(byId.get(id)!) : null)}
           onEarlyBuyers={actions.earlyBuyers}
           onLaunches={actions.launches}
+          onWave={actions.wave}
           onSelect={actions.select}
         />
+      )}
+
+      {pnl.length > 0 && (
+        <section className="asyl-insp-section">
+          <h3>Profit on the map</h3>
+          <p className="asyl-muted asyl-small">
+            Wallets on the map that sold it: SOL out minus SOL in. {pnl.filter((p) => p.net > 0).length} of{" "}
+            {pnl.length} made money.
+          </p>
+          <ul className="asyl-pnl">
+            {[...pnl.slice(0, 3), ...pnl.slice(Math.max(3, pnl.length - 3))].map((p) => (
+              <li key={p.wallet}>
+                <button className="asyl-link" onClick={() => actions.select(p.wallet)}>
+                  {byId.has(p.wallet) ? nodeName(byId.get(p.wallet)!) : shortAddr(p.wallet)}
+                </button>
+                <span className={p.net >= 0 ? "good" : "bad"}>
+                  {p.net >= 0 ? "+" : "−"}
+                  {Math.abs(p.net).toFixed(2)} SOL
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {node.kind === "wallet" && (

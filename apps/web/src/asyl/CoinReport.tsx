@@ -6,6 +6,10 @@ import { shortAddr } from "./graph";
 const pct = (n: number | null | undefined) =>
   n === null || n === undefined ? "–" : `${n >= 10 ? n.toFixed(0) : n.toFixed(1)}%`;
 const sol = (n: number) => `${n >= 100 ? n.toFixed(0) : n.toFixed(2)} SOL`;
+const gapText = (from: string, to: string) => {
+  const s = Math.round((Date.parse(to) - Date.parse(from)) / 1000);
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+};
 const of = (n: number | null, d: number | null) => (n === null ? "–" : d ? `${n}/${d}` : String(n));
 
 const TONE: Record<CoinReport["verdict"]["level"], string> = {
@@ -25,6 +29,7 @@ export function CoinReportCard({
   nameOf,
   onEarlyBuyers,
   onLaunches,
+  onWave,
   onSelect,
 }: {
   mint: string;
@@ -32,6 +37,7 @@ export function CoinReportCard({
   nameOf: (id: string) => string | null;
   onEarlyBuyers: (mint: string) => void;
   onLaunches: (wallet: string) => void;
+  onWave: (wallets: string[], mint: string) => void;
   onSelect: (id: string) => void;
 }) {
   const [report, setReport] = useState<CoinReport | null>(null);
@@ -139,6 +145,32 @@ export function CoinReportCard({
           </button>
         )}
       </section>
+
+      {report.waves.length > 0 && (
+        <section className="asyl-insp-section asyl-report">
+          <h3>Sold together</h3>
+          <p className="asyl-muted asyl-small">
+            Wallets whose first sells came within a minute of each other.
+          </p>
+          <ul className="asyl-report-waves">
+            {report.waves.map((w) => (
+              <li key={w.from}>
+                <span>
+                  <b>{w.wallets.length} wallets</b> in {gapText(w.from, w.to)} · {sol(w.sol)} out
+                  <span className="asyl-muted"> · {ago(w.from)}</span>
+                </span>
+                <button
+                  className="asyl-btn ghost small"
+                  disabled={busy}
+                  onClick={() => onWave(w.wallets, mint)}
+                >
+                  Show
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {dev && (
         <section className="asyl-insp-section asyl-report">

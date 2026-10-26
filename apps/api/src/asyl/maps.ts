@@ -67,6 +67,7 @@ const edgeSchema = z.object({
   gapSec: finite.nullable().optional(),
   leadSec: finite.nullable().optional(),
   from: address.nullable().optional(),
+  net: finite.nullable().optional(),
 });
 
 /** The least a money link must carry to be drawn; 0 draws them all. */

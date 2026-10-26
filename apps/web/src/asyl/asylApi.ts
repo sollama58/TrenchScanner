@@ -253,6 +253,7 @@ export interface CoinReport {
     devHolding: boolean | null;
   } | null;
   verdict: { level: "high" | "some" | "low" | "unknown"; text: string };
+  waves: { from: string; to: string; wallets: string[]; sol: number }[];
   dev: {
     wallet: string;
     risk: number | null;

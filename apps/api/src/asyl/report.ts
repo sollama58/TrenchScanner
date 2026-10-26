@@ -38,6 +38,49 @@ export interface FunderGroup {
   heldPct: number;
 }
 
+/** Sells this close together count as one wave (user ask 2026-10-26: coordinated sells). */
+export const SELL_WAVE_GAP_MS = 60_000;
+/** Wallets a wave needs. */
+export const SELL_WAVE_MIN = 3;
+/** Waves listed, biggest first. */
+export const SELL_WAVES_MAX = 5;
+/** Sellers read, at most. */
+const SELLERS_READ = 3_000;
+
+export interface SellWave {
+  /** The first and last first-sell in it (ISO). */
+  from: string;
+  to: string;
+  wallets: string[];
+  /** SOL they took out of the coin in all (every sell, not only the wave's). */
+  sol: number;
+}
+
+/**
+ * Wallets that first sold the coin within SELL_WAVE_GAP_MS of the one before, in runs of
+ * SELL_WAVE_MIN or more: a group dumping together, the sell-side twin of "bought together".
+ */
+export function sellWaves(sells: readonly { wallet: string; at: Date; solOut: number }[]): SellWave[] {
+  const sorted = [...sells].sort((a, b) => a.at.getTime() - b.at.getTime());
+  const waves: (typeof sorted)[] = [];
+  for (const s of sorted) {
+    const run = waves[waves.length - 1];
+    const last = run?.[run.length - 1];
+    if (run && last && s.at.getTime() - last.at.getTime() <= SELL_WAVE_GAP_MS) run.push(s);
+    else waves.push([s]);
+  }
+  return waves
+    .filter((w) => w.length >= SELL_WAVE_MIN)
+    .map((w) => ({
+      from: w[0]!.at.toISOString(),
+      to: w[w.length - 1]!.at.toISOString(),
+      wallets: w.map((x) => x.wallet),
+      sol: sum(w.map((x) => x.solOut)),
+    }))
+    .sort((a, b) => b.wallets.length - a.wallets.length || b.sol - a.sol)
+    .slice(0, SELL_WAVES_MAX);
+}
+
 export interface BundleVerdict {
   level: "high" | "some" | "low" | "unknown";
   text: string;
@@ -71,6 +114,8 @@ export interface CoinReport {
     devHolding: boolean | null;
   } | null;
   verdict: BundleVerdict;
+  /** Groups that sold together, biggest first. */
+  waves: SellWave[];
   dev:
     | (NonNullable<TokenProfile["dev"]> & {
         /** What the dev did with this coin on its trade tape; null when the tape didn't see it trade. */
@@ -239,10 +284,16 @@ async function launchReading(tokenId: string): Promise<CoinReport["launch"]> {
 export async function loadCoinReport(mint: string): Promise<CoinReport | null> {
   const token = await prisma.token.findUnique({ where: { mintAddress: mint }, select: { id: true } });
   if (!token) return null;
-  const [launch, scan, profile] = await Promise.all([
+  const [launch, scan, profile, sellers] = await Promise.all([
     launchReading(token.id),
     scanReadings(token.id),
     readTokenProfile(mint),
+    prisma.tokenWalletActivity.findMany({
+      where: { tokenId: token.id, firstSellAt: { not: null } },
+      orderBy: { firstSellAt: "asc" },
+      take: SELLERS_READ,
+      select: { wallet: true, firstSellAt: true, solOut: true },
+    }),
   ]);
   const dev = profile?.dev ?? null;
   const own = dev
@@ -256,6 +307,7 @@ export async function loadCoinReport(mint: string): Promise<CoinReport | null> {
     launch,
     scan,
     verdict: bundleVerdict(scan, launch),
+    waves: sellWaves(sellers.map((r) => ({ wallet: r.wallet, at: r.firstSellAt!, solOut: r.solOut }))),
     dev: dev
       ? {
           ...dev,
