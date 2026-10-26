@@ -95,13 +95,23 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
       ]),
     );
     expect(narrativeSettled(a)).toBe(false);
-    requestNarrativeRead(a, env, client);
+    // The coin's first scan noted it at the low tier; the crossing raises it to high, with hints.
+    noteNarrativeWanted(a, "basic", env, undefined, { firstScan: true });
+    requestNarrativeRead(a, env, client, { name: "Cross", symbol: "X" });
     requestNarrativeRead(b, env, client);
     // The first request kicked a flush on its own; the second rode on it or waits for the poller.
     await vi.waitFor(() => expect(batch).toHaveBeenCalled());
     await flushNarrativeRequests(env, client);
     expect(batch.mock.calls[0]![1]).toBe("basic");
     expect(batch.mock.calls.flatMap((call) => cas(call))).toContain(a);
+    const sent = batch.mock.calls.flatMap(
+      (call) => call[0] as { ca: string; priority?: string; hints?: object }[],
+    );
+    expect(sent.find((e) => e.ca === a)).toMatchObject({
+      priority: "high",
+      hints: { name: "Cross", symbol: "X" },
+    });
+    expect(sent.find((e) => e.ca === b)).toMatchObject({ priority: "high" });
     await vi.waitFor(() => expect(narrativeSettled(a)).toBe(true));
     // Still queued on TokenSage's side: not answered.
     expect(narrativeSettled(b)).toBe(false);
