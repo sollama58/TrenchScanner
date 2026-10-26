@@ -94,7 +94,8 @@ export interface UtilitiesOverview {
   /** A subscriber's free daily credits, used before the balance; null without a subscription. */
   daily: { allowance: number; left: number; nextAt: string | null } | null;
   lookups: {
-    utility: "token" | "wallet" | null;
+    /** A Utilities lookup, or one of Asyl's chain tools paid in credits. */
+    utility: "token" | "wallet" | "asyl-deposits" | "asyl-bridges" | null;
     subject: string | null;
     cost: number;
     /** How much of `cost` the free daily credits paid. */
@@ -870,6 +871,17 @@ function CostPill({
 
 type Lookup = UtilitiesOverview["lookups"][number];
 
+/** What a spend in the list paid for. */
+const USED_FOR: Record<NonNullable<Lookup["utility"]>, string> = {
+  token: "Token",
+  wallet: "Wallet",
+  "asyl-deposits": "Asyl exchange deposits",
+  "asyl-bridges": "Asyl bridges",
+};
+
+/** A Utilities lookup, which its row can open or run again; Asyl's tools are run from Asyl. */
+const isLookup = (u: Lookup["utility"]): u is "token" | "wallet" => u === "token" || u === "wallet";
+
 /**
  * One lookup in a list: the coin's picture (or the address's first letters) and what it was.
  * `detail` replaces the default second line (kind · address · when).
@@ -895,7 +907,7 @@ export function LookupWhat({ lookup: l, detail }: { lookup: Lookup; detail?: Rea
         <span className="faint small num">
           {detail ?? (
             <>
-              {l.utility === "wallet" ? "Wallet" : "Token"} · {shortAddress(subject)} · {ago(new Date(l.at))}
+              {USED_FOR[l.utility ?? "token"]} · {shortAddress(subject)} · {ago(new Date(l.at))}
             </>
           )}
         </span>
@@ -945,16 +957,13 @@ function RecentLookups({
       <ul className="util-list">
         {lookups.map((l, i) => {
           const subject = l.subject ?? "";
+          const u = l.utility;
           return (
             <li key={`${subject}-${l.at}-${i}`}>
               <LookupWhat lookup={l} />
-              {l.utility !== null &&
+              {isLookup(u) &&
                 (l.open ? (
-                  <button
-                    type="button"
-                    className="ghost small-btn"
-                    onClick={() => onOpen(l.utility!, subject)}
-                  >
+                  <button type="button" className="ghost small-btn" onClick={() => onOpen(u, subject)}>
                     Open
                   </button>
                 ) : (
@@ -962,13 +971,13 @@ function RecentLookups({
                     type="button"
                     className="ghost small-btn"
                     disabled={busy !== null}
-                    onClick={() => void again(l.utility!, subject)}
+                    onClick={() => void again(u, subject)}
                   >
                     {busy === subject
                       ? "Looking up…"
                       : l.free
                         ? `Look up again (${freeLabel(l.free)})`
-                        : `Look up again (${plural(data.prices.cost[l.utility], "credit")})`}
+                        : `Look up again (${plural(data.prices.cost[u], "credit")})`}
                   </button>
                 ))}
             </li>

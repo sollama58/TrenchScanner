@@ -258,7 +258,8 @@ function ringOf(n: AsylNode): string | null {
   if (n.tags.includes("kol") || n.tags.includes("kol-side")) return "#ffd34d";
   if (n.tags.includes("dumper") || n.tags.includes("risky") || n.tags.includes("farm")) return "#ff3b30";
   if (n.tags.includes("winner")) return "#3ee08f";
-  if (n.tags.includes("exchange") || n.tags.includes("bot")) return "#9b948f";
+  if (n.tags.includes("bridge")) return "#b48cff";
+  if (n.tags.includes("exchange") || n.tags.includes("deposit") || n.tags.includes("bot")) return "#9b948f";
   if (n.tags.includes("dev")) return "#ffe066";
   if (n.tags.includes("fresh")) return "#6ee7f9";
   return null;

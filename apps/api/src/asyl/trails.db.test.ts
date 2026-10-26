@@ -33,6 +33,7 @@ const flows = (wallet: string, outs: [string, number][]): WalletFlows => ({
     lastAt: Date.UTC(2026, 9, 20),
   })),
   trades: [],
+  bridges: [],
 });
 
 describe("exit trace", () => {

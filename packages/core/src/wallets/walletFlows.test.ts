@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { flowsFromTransactions } from "./walletFlows.js";
+import { BRIDGE_PROGRAMS, flowsFromTransactions } from "./walletFlows.js";
 
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 import type { ChainTx } from "./tradeTape.js";
@@ -176,5 +176,36 @@ describe("flowsFromTransactions", () => {
     const [row] = flowsFromTransactions(ME, [one, two], isWallet).transfers;
     expect(row).toMatchObject({ counterparty: "friend", dir: "out", count: 2, firstAt: 1000, lastAt: 2000 });
     expect(row!.amount).toBeCloseTo(1.5, 6);
+  });
+
+  it("reads a bridge call as a bridge move, not a transfer or a trade", () => {
+    const WORMHOLE = [...BRIDGE_PROGRAMS].find(([, n]) => n === "Wormhole")![0];
+    const MAYAN = [...BRIDGE_PROGRAMS].find(([, n]) => n === "Mayan")![0];
+    const solOut = tx({ keys: [ME, "custody", WORMHOLE], pre: [10, 0, 1], post: [7 - 0.000005, 3, 1] });
+    (solOut.transaction as { signatures?: string[] }).signatures = ["sig1"];
+    const coinIn = tx({
+      keys: ["relayer", ME, MAYAN],
+      pre: [5, 1, 1],
+      post: [5 - 0.000005, 1, 1],
+      tokensPre: [[ME, 0, "usdc"]],
+      tokensPost: [[ME, 250, "usdc"]],
+      at: 1_700_000_500,
+    });
+    const flows = flowsFromTransactions(ME, [solOut, coinIn], isWallet);
+    expect(flows.transfers).toEqual([]);
+    expect(flows.trades).toEqual([]);
+    expect(flows.bridges).toEqual([
+      {
+        bridge: "Mayan",
+        program: MAYAN,
+        dir: "in",
+        mint: "usdc",
+        amount: 250,
+        at: 1_700_000_500_000,
+        signature: null,
+      },
+      expect.objectContaining({ bridge: "Wormhole", dir: "out", mint: null, signature: "sig1" }),
+    ]);
+    expect(flows.bridges![1]!.amount).toBeCloseTo(3, 6);
   });
 });

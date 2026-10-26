@@ -33,7 +33,7 @@ export interface AnalystView {
 }
 
 /** Wallets that mark a map and stay their own box, even when all they did was trade one coin. */
-const KEEP_TAGS = new Set(["mine", "kol", "kol-side", "dev", "exchange"]);
+const KEEP_TAGS = new Set(["mine", "kol", "kol-side", "dev", "exchange", "deposit", "bridge"]);
 /** A coin folds its traders once it has this many. */
 const FOLD_MIN = 2;
 

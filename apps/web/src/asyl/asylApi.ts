@@ -17,6 +17,11 @@ export interface AsylMe {
   wallet: string;
   pro: boolean;
   chain: Allowance | null;
+  /**
+   * The reader's Burn Credits (null when they couldn't be read): what the paid chain tools take.
+   * `freeLeft` is a subscriber's free credits left today, null without a subscription.
+   */
+  burn?: { balance: number; freeLeft: number | null; cost: { deposits: number; bridges: number } } | null;
   /** SOL's price in USD, for the USD slider; null when no source answered. */
   solUsd?: number | null;
   labels: { cap: number; nameMax: number };
@@ -40,6 +45,30 @@ export interface ChainRead extends GraphRead {
   cached: boolean;
   allowance: Allowance;
   flows?: { txs: number; fromMs: number | null; toMs: number | null };
+}
+
+/** What a paid chain tool took: `cost` Burn Credits (0 when re-opened within the hour), `free` of them from today's. */
+export interface BurnSpend {
+  cost: number;
+  free: number;
+  balance: number;
+  freeLeft: number;
+  reopened: boolean;
+}
+
+export interface DepositAddress {
+  address: string;
+  exchange: string;
+  depositors: { wallet: string }[];
+}
+
+export interface BridgeMove {
+  bridge: string;
+  dir: "in" | "out";
+  mint: string | null;
+  amount: number;
+  at: number | null;
+  signature: string | null;
 }
 
 export interface CoTrader {
@@ -383,6 +412,18 @@ export const asylApi = {
         note: string;
       }
     >(`/asyl/chain/exits/${enc(wallet)}`),
+  deposits: (wallet: string) =>
+    post<
+      GraphRead & {
+        deposits: { checked: number; deposits: DepositAddress[]; stop: string };
+        note: string;
+        burn: BurnSpend;
+      }
+    >(`/asyl/chain/deposits/${enc(wallet)}`),
+  bridges: (wallet: string) =>
+    post<GraphRead & { bridges: BridgeMove[]; note: string; burn: BurnSpend }>(
+      `/asyl/chain/bridges/${enc(wallet)}`,
+    ),
   commonFunder: (wallets: string[]) =>
     post<
       GraphRead & {

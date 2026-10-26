@@ -25,6 +25,11 @@ import { carriesCreditMemo, largestBurn, type BurnRejection, type ParsedTransact
  */
 
 export type UtilityKind = "token" | "wallet";
+/**
+ * What a spend paid for: a Utilities lookup, or one of Asyl's chain tools priced in credits (user
+ * ask 2026-10-26: shared exchange deposits, bridges; apps/api/src/asyl/paid.ts).
+ */
+export type SpendUtility = UtilityKind | "asyl-deposits" | "asyl-bridges";
 
 export interface BurnCreditPrices {
   /** Whole $ASDFASDFA per credit. */
@@ -259,7 +264,7 @@ export const LOOKUP_REOPEN_MS = 60 * 60_000;
 /** The wallet's paid lookup of `subject` still inside the free re-open window, if any. */
 export async function openLookup(
   wallet: string,
-  utility: UtilityKind,
+  utility: SpendUtility,
   subject: string,
   now: Date = new Date(),
 ): Promise<{ paidAt: Date } | null> {
@@ -308,7 +313,7 @@ export const FREE_LOOKUP_NOTE = "free:tracked";
  */
 export async function spendCredits(
   wallet: string,
-  utility: UtilityKind,
+  utility: SpendUtility,
   subject: string,
   cost: number,
   dailyFree = false,
