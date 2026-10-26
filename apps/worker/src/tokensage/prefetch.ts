@@ -253,18 +253,26 @@ function higher(a: TokenSagePriority, b: TokenSagePriority | undefined): TokenSa
  * for minutes (X, OCR): on 2026-10-16 from 01:10 UTC the deep reads filled every slot and quick
  * reads stopped completing altogether (250+ queued, none stored). At one tier they share the
  * slots oldest first, as before priorities existed, and only the first-scan reads yield.
+ *
+ * The one read in "high" is the quick read asked at a band crossing (requestNarrativeRead): the
+ * fast path holds that coin's decision for it (entryFastPath.ts), so it goes ahead of the deep
+ * reads and the refreshes nothing waits on. It is a basic read, seconds of a slot, and there are
+ * tens an hour, so it cannot starve the normal tier the way the deep reads did.
  */
 export function narrativePriority(_depth: TokenSageDepth, firstScan = false): TokenSagePriority {
   return firstScan ? "low" : "normal";
 }
 
-/** Notes that the scan wants this mint's narrative at `depth`. Cheap; does no IO. */
+/**
+ * Notes that the scan wants this mint's narrative at `depth`. Cheap; does no IO. `priority`
+ * names the tier outright (the crossing read); otherwise narrativePriority decides.
+ */
 export function noteNarrativeWanted(
   mintAddress: string,
   depth: TokenSageDepth,
   env: Env,
   hints?: TokenSageHints,
-  opts: { early?: boolean; firstScan?: boolean } = {},
+  opts: { early?: boolean; firstScan?: boolean; priority?: TokenSagePriority } = {},
 ): void {
   if (!tokenSageEnabled(env)) return;
   const now = Date.now();
@@ -275,13 +283,14 @@ export function noteNarrativeWanted(
     notFoundUntil.delete(mintAddress);
   }
   const have = wanted.get(mintAddress);
+  const tier = opts.priority ?? narrativePriority(depth, opts.firstScan);
   const early = depth === "full" && opts.early === true;
   // A queued deep read is never downgraded: a decision-row full read outranks an early one (it
   // isn't held to the early budget). A basic note can still raise the basic read riding along
   // with that full one, and refresh its drop window: the scan asked for it again.
   if (have?.depth === "full" && (depth === "basic" || !have.early || early)) {
     if (depth === "basic" && have.alsoBasic) {
-      have.basicPriority = higher(narrativePriority("basic", opts.firstScan), have.basicPriority);
+      have.basicPriority = higher(tier, have.basicPriority);
       have.basicNotedAt = now;
       if (hints) have.hints = hints;
     }
@@ -295,10 +304,7 @@ export function noteNarrativeWanted(
   wanted.set(mintAddress, {
     depth,
     // A coin noted at its first scan and again on a screen pass keeps the pass's tier.
-    priority: higher(
-      narrativePriority(depth, opts.firstScan),
-      have?.depth === depth ? have.priority : undefined,
-    ),
+    priority: higher(tier, have?.depth === depth ? have.priority : undefined),
     hints: hints ?? have?.hints,
     ...(early ? { early } : {}),
     ...(keepBasic
@@ -325,15 +331,22 @@ export function narrativeSettled(mintAddress: string, now = Date.now()): boolean
 }
 
 /**
- * Asks for a mint's quick read now: noted at the normal tier and flushed at once rather than on
- * the next poll, so the request is in TokenSage's queue within the second. The entry watch calls
- * this the moment a launch first reads at or over the floor (entryWatch.ts onCrossing), a few
- * seconds before the fast path decides on it, so the read is most of the way back by then. A
- * flush already running makes the kick a no-op; the poller re-sends the note on its next tick.
+ * Asks for a mint's quick read now: noted at the high tier and flushed at once rather than on the
+ * next poll, so the request is at the front of TokenSage's queue within the second. The entry
+ * watch calls this the moment a launch first reads at or over the floor (entryWatch.ts
+ * onCrossing), a few seconds before the fast path holds its decision for the read
+ * (entryFastPath.ts), so the read is most of the way back by then. `hints` is what discovery
+ * already knows about the coin (tokenSageHints), which spares TokenSage its own metadata fetch.
+ * A flush already running makes the kick a no-op; the poller re-sends the note on its next tick.
  */
-export function requestNarrativeRead(mintAddress: string, env: Env, client?: TokenSageClient): void {
+export function requestNarrativeRead(
+  mintAddress: string,
+  env: Env,
+  client?: TokenSageClient,
+  hints?: TokenSageHints,
+): void {
   if (!tokenSageEnabled(env)) return;
-  noteNarrativeWanted(mintAddress, "basic", env);
+  noteNarrativeWanted(mintAddress, "basic", env, hints, { priority: "high" });
   if (wanted.has(mintAddress)) void flushNarrativeRequests(env, client);
 }
 

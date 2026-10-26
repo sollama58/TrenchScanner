@@ -56,6 +56,9 @@ import {
   TradingRpc,
   configureMintSupplies,
   MintSupplies,
+  tokenSageHints,
+  type Env,
+  type TokenSageHints,
 } from "@trenchscanner/core";
 import { EntryWatch } from "./entryWatch.js";
 import { ENTRY_READ_HOLD_POLL_MS, EntryFastPath } from "./jobs/entryFastPath.js";
@@ -141,6 +144,39 @@ import {
 } from "./tokensage/prefetch.js";
 
 const logger = createLogger("worker");
+
+/**
+ * The quick read for a launch that just crossed the band's floor (entryWatch.ts onCrossing),
+ * sent with what discovery has stored on the coin as hints, so TokenSage can skip its own
+ * metadata fetch; with no Token row yet (a launch only the stream has seen), without them. The
+ * row read is one indexed lookup, a few milliseconds before a request the fast path then waits
+ * up to ENTRY_READ_HOLD_SECONDS for.
+ */
+async function requestCrossingRead(mint: string, env: Env): Promise<void> {
+  let hints: TokenSageHints | undefined;
+  try {
+    const token = await prisma.token.findUnique({
+      where: { mintAddress: mint },
+      select: {
+        name: true,
+        symbol: true,
+        description: true,
+        imageUrl: true,
+        twitterUrl: true,
+        telegramUrl: true,
+        websiteUrl: true,
+        launchedAt: true,
+      },
+    });
+    if (token) hints = tokenSageHints(token);
+  } catch (err) {
+    logger.warn("crossing read: could not load the coin's hints; asking without them", {
+      mint,
+      error: String(err),
+    });
+  }
+  requestNarrativeRead(mint, env, undefined, hints);
+}
 /** SOL's USD price minute by minute, shared by the chain-read candles (chainCandles.ts). */
 const solUsdHistory = new SolUsdHistory();
 
@@ -401,7 +437,7 @@ async function main() {
             (mint, crossedAt) => void entryFastPath?.offer(mint, crossedAt),
             // TokenSage's quick read, asked for the moment the launch first reads over the floor,
             // so it is most of the way back when the fast path decides (user decision 2026-10-26).
-            (mint) => requestNarrativeRead(mint, env),
+            (mint) => void requestCrossingRead(mint, env),
           )
         : undefined,
     entryFastPath: undefined as EntryFastPath | undefined,
