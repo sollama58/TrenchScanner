@@ -371,7 +371,7 @@ export function AnalystLegend({ graph, focus }: { graph: AsylGraph; focus: strin
             x={17}
             y={12.5}
             textAnchor="middle"
-            fontSize={10}
+            fontSize={11}
             fill={ANALYST.ink}
             fontFamily={ANALYST.font}
           >

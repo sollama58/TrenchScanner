@@ -111,9 +111,17 @@ function MoneyFlow({ rows }: { rows: CoinReport["flow"] }) {
                     · {r.wallets} wallet{r.wallets === 1 ? "" : "s"}
                   </span>
                 </span>
-                <span className={net > 0 ? "good" : net < 0 ? "bad" : "asyl-muted"}>
+                <span
+                  className={net > 0 ? "good" : net < 0 ? "bad" : "asyl-muted"}
+                  title={
+                    net < 0
+                      ? "Taken out less than put in so far. What they still hold isn't counted, so this is not yet a loss."
+                      : "Taken out more than put in"
+                  }
+                >
                   {net > 0 ? "+" : net < 0 ? "−" : ""}
                   {sol(Math.abs(net))}
+                  {net < 0 && <span className="asyl-muted"> so far</span>}
                 </span>
               </div>
               <div className="asyl-flow-bar in" title={`Put in ${sol(r.solIn)}`}>

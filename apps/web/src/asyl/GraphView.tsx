@@ -325,7 +325,7 @@ function NodeImage({
 }
 
 /** Analyst Mode's smallest framing scale: below it, the boxes' text is too small to read. */
-const ANALYST_READABLE = 0.55;
+const ANALYST_READABLE = 0.85;
 
 export interface View {
   x: number;

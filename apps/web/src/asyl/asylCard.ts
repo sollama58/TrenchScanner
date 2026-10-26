@@ -27,7 +27,15 @@ import {
   type TimeLabels,
   type TimedKind,
 } from "./graph";
-import { EDGE_COLOUR, EDGE_STYLE, CLUSTER_COLOUR, imageSources, radiusOf, type EdgeHead } from "./GraphView";
+import {
+  EDGE_COLOUR,
+  EDGE_STYLE,
+  CLUSTER_COLOUR,
+  imageSources,
+  monogram,
+  radiusOf,
+  type EdgeHead,
+} from "./GraphView";
 import { newLayout, settle, type LayoutState } from "./layout";
 import { TILE, wallMarks } from "./scrawl";
 
@@ -818,6 +826,19 @@ export async function renderMapCard(input: MapCardInput): Promise<HTMLCanvasElem
       ctx.beginPath();
       if (n.kind === "token") ctx.roundRect(p.x - r, p.y - r, r * 2, r * 2, r * 0.44);
       else ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    } else if (r >= 9) {
+      // A coin with no picture shows its ticker's first letters, as on the map. Text leaves the
+      // bubble's path as it was, for the outline below.
+      const m = monogram(n);
+      if (m) {
+        ctx.save();
+        ctx.fillStyle = "#ffcf9a";
+        ctx.font = `800 ${Math.round(m.length > 2 ? r * 0.56 : r * 0.7)}px ${FONT}`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(m, p.x, p.y + 1);
+        ctx.restore();
+      }
     }
     ctx.lineWidth = n.id === input.focus ? 3 : n.kind === "token" ? 2 : 1.5;
     ctx.strokeStyle =
