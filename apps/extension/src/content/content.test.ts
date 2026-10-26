@@ -373,4 +373,25 @@ describe("the pill on every coin (user ask 2026-10-26)", () => {
     expect(b.querySelector("trench-overlay")).toBeNull();
     e.stop();
   });
+
+  it("fills a board pill with numbers, never a bare dot, when the reader's pill is the alert's name and odds", () => {
+    const attach = Element.prototype.attachShadow;
+    Element.prototype.attachShadow = function (init) {
+      return attach.call(this, { ...init, mode: "open" });
+    };
+    try {
+      const { e, b } = pulse();
+      e.start();
+      e.scan();
+      e.receive([A, B], { tokens: {}, problem: null });
+      e.applyTooltip(cleanTooltip({ boardStats: { enabled: true, maxAgeMinutes: 30 } }));
+      e.receiveStats([B], { tokens: { [B]: numbers(5) }, problem: null });
+      const badge = b.querySelector("trench-overlay")!.shadowRoot!.querySelector(".badge")!;
+      expect(badge.className).not.toContain("dot");
+      expect(badge.textContent).toMatch(/h$/);
+      e.stop();
+    } finally {
+      Element.prototype.attachShadow = attach;
+    }
+  });
 });
