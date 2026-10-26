@@ -111,6 +111,28 @@ export interface Pills {
   plain?: boolean;
 }
 
+function keyOf(segments: readonly PillSegment[]): string {
+  return segments.map((s) => `${s.level ?? ""}:${s.text}`).join("|");
+}
+
+/**
+ * Which part of the row, left to right in its own coordinates, isn't cut off by a clipping
+ * ancestor (a column narrower than its cards).
+ */
+function visibleSpan(row: HTMLElement, rect: DOMRect): { left: number; right: number } {
+  let left = rect.left;
+  let right = rect.right;
+  for (let el = row.parentElement; el && el !== document.body; el = el.parentElement) {
+    const overflow = getComputedStyle(el).overflowX;
+    if (overflow === "visible") continue;
+    const box = el.getBoundingClientRect();
+    left = Math.max(left, box.left);
+    right = Math.min(right, box.right);
+  }
+  if (right - left < 40) return { left: 0, right: rect.width };
+  return { left: left - rect.left, right: right - rect.left };
+}
+
 /** A pill's text as spans, written with textContent only (a filter's name is the reader's text). */
 function fill(target: HTMLElement, segments: readonly PillSegment[]): string {
   const parts: Node[] = [];
@@ -126,7 +148,7 @@ function fill(target: HTMLElement, segments: readonly PillSegment[]): string {
     span.textContent = seg.text;
     parts.push(span);
   }
-  const key = segments.map((s) => `${s.level ?? ""}:${s.text}`).join("|");
+  const key = keyOf(segments);
   if (target.dataset.key !== key) {
     target.replaceChildren(...parts);
     target.dataset.key = key;
@@ -153,8 +175,10 @@ export class Decoration {
   private readonly colors = new ColorRule();
   private madeRelative = false;
   /** What placing decided, kept apart from what each redraw paints, so a redraw can't undo it. */
-  private dotOnly = false;
+  private shown = Infinity;
   private moreFits = false;
+  private mainSegs: readonly PillSegment[] = [];
+  private pillsKey = "";
   /** Where each pill sits now (row coordinates), kept while it still fits so it doesn't jump. */
   private badgeAt: Box | null = null;
   private moreAt: Box | null = null;
@@ -206,10 +230,12 @@ export class Decoration {
     this.kind = kind;
     this.hasMain = pills.main.length > 0;
     this.hasMore = (pills.more?.length ?? 0) > 0;
-    const before = `${this.badgeText.dataset.key}/${this.moreText.dataset.key}`;
-    fill(this.badgeText, pills.main);
+    const key = `${keyOf(pills.main)}/${keyOf(pills.more ?? [])}`;
+    const changed = key !== this.pillsKey;
+    this.pillsKey = key;
+    this.mainSegs = pills.main;
+    fill(this.badgeText, pills.main.slice(0, this.shown));
     fill(this.moreText, pills.more ?? []);
-    const changed = before !== `${this.badgeText.dataset.key}/${this.moreText.dataset.key}`;
     if (pills.riskDot && verdict.risky && verdict.ring !== "risk") this.badge.append(this.riskDot);
     else this.riskDot.remove();
     this.paint();
@@ -220,9 +246,7 @@ export class Decoration {
 
   /** The pills' classes from the ring and what placing decided. */
   private paint(): void {
-    // A plain pill has no ring for a dot to stand for, so where its label fits nowhere it's left out.
-    const dot = !this.hasMain || this.dotOnly;
-    this.badge.className = `badge ${this.kind}${dot ? (this.kind === "plain" ? " gone" : " dot") : ""}`;
+    this.badge.className = `badge ${this.kind}${this.hasMain ? "" : " dot"}`;
     this.more.className = `badge more ${this.kind}${this.hasMore && this.moreFits ? "" : " gone"}`;
   }
 
@@ -236,9 +260,11 @@ export class Decoration {
   }
 
   /**
-   * Moves the badge into the row's first empty space; falls back to the dot alone when the
-   * label fits nowhere, and to the top-right corner when even the dot doesn't. Re-measured when
-   * the row's size changes, and at most once a second otherwise.
+   * Moves the badge into the row's first empty space; when the whole label fits nowhere, it
+   * drops parts from the end until it does, and when even the first part fits nowhere it goes in
+   * the row's visible top-right corner, over the row's content: never shrunk to a dot, which said
+   * nothing and read as a pill cut off (user ask 2026-10-26). Re-measured when the row's size
+   * changes, and at most once a second otherwise.
    */
   private place(): void {
     if (!this.attached) return;
@@ -250,27 +276,31 @@ export class Decoration {
     this.placedAt = now;
 
     const obstacles = obstaclesIn(this.row, this.host);
+    // A row wider than the column showing it: the part cut off is no place for a pill.
+    const seen = visibleSpan(this.row, rect);
+    if (seen.left > 0) obstacles.push({ x: -4, y: 0, w: seen.left + 4, h: rect.height });
+    if (seen.right < rect.width)
+      obstacles.push({ x: seen.right, y: 0, w: rect.width - seen.right + 4, h: rect.height });
     const row = { w: rect.width, h: rect.height };
-    // Measured at full size, then the dot alone if the label fits nowhere.
-    this.dotOnly = false;
+    // Measured whole, then with fewer parts, the first ones kept, if it fits nowhere whole.
+    this.shown = Infinity;
+    fill(this.badgeText, this.mainSegs);
     this.moreFits = this.hasMore;
     this.paint();
     let first = this.spotFor(this.badge, row, obstacles, this.badgeAt);
-    if (!first && this.hasMain && this.kind === "plain") {
-      this.dotOnly = true;
-      this.badgeAt = null;
-      this.moreFits = false;
-      this.paint();
-      return;
-    }
-    if (!first && this.hasMain) {
-      this.dotOnly = true;
-      this.paint();
+    for (let n = this.mainSegs.length - 1; !first && n >= 1; n--) {
+      this.shown = n;
+      fill(this.badgeText, this.mainSegs.slice(0, n));
       first = this.spotFor(this.badge, row, obstacles, null);
     }
     this.badgeAt = first;
-    // The top-right corner when even the dot doesn't fit.
-    const badge = first ?? { x: rect.width - this.badge.offsetWidth - 4, y: 4, w: 0, h: 0 };
+    // The visible top-right corner, over the content, when even the first part fits nowhere.
+    const badge = first ?? {
+      x: Math.max(seen.left + 4, seen.right - this.badge.offsetWidth - 4),
+      y: 4,
+      w: 0,
+      h: 0,
+    };
     this.put(this.badge, badge);
 
     // The second pill takes the next free patch, clear of the first; left out when none fits.

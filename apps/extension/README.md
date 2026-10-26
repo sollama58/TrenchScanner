@@ -211,3 +211,9 @@ name, odds) and the change and age parts only exist for an alert, so a board coi
 and drew the dot alone. A board coin's pill now holds whatever numbers the reader's two pills
 have, in one pill, or market cap and holders when none of them does; with nothing to say, or no
 room for its label, it gets no pill.
+
+0.8.5 (user ask 2026-10-26): a pill no longer shrinks to its dot. Where the whole label fits in
+no free space on the card, it drops parts from the end until it does (the first ones, the model's
+name and odds by default, are kept); where even the first part fits nowhere, it goes in the card's
+visible top-right corner over the content. A card wider than the column showing it no longer has
+its pill placed in the part the column cuts off, which left only the dot in view.
