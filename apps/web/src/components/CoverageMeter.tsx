@@ -1,4 +1,4 @@
-import type { Leaderboard, MixCoverage } from "../api";
+import type { FeedMixRecord, Leaderboard, MixCoverage } from "../api";
 import { pct, signedPct } from "../format";
 import { CheckIcon, TargetIcon } from "./Icons";
 
@@ -97,6 +97,114 @@ export function bestCost(b: Best): string {
   return parts.join(" · ");
 }
 
+/** The 10x rate's goal when an older API build doesn't send one (as the chart). */
+const DEFAULT_TEN_X_GOAL_PCT = 25;
+
+/** The average return the profit row's track spans either side of break-even, in percent. */
+export const PROFIT_SPAN_PCT = 50;
+
+export interface MixRate {
+  id: "2x" | "4x" | "10x" | "profit";
+  label: string;
+  /** The rate (or, for profit, the average return per call), in percent; null with nothing graded. */
+  value: number | null;
+  /** The goal line: the target rate, or break-even (0) for profit. */
+  goal: number;
+  /** Where the fill ends and the goal sits on the track, 0-100. */
+  fill: number;
+  mark: number;
+  onGoal: boolean;
+}
+
+/**
+ * The combined record under the meter: the models' 2x, 4x and 10x rates and average return,
+ * pooled as one feed (each coin once, at its earliest alert). Null when the board doesn't send one.
+ */
+export function mixRates(board: Leaderboard): { mix: FeedMixRecord; rates: MixRate[] } | null {
+  const mix = board.mix;
+  if (!mix || mix.models.length === 0) return null;
+  const clamp = (n: number) => Math.min(100, Math.max(0, n));
+  const rate = (id: MixRate["id"], label: string, value: number | null, goal: number): MixRate => ({
+    id,
+    label,
+    value,
+    goal,
+    fill: clamp(value ?? 0),
+    mark: clamp(goal),
+    onGoal: value !== null && value >= goal,
+  });
+  const ret = mix.avgReturnPct;
+  // Profit is centred on break-even: the fill grows right for a gain and left for a loss.
+  const profitAt = (n: number) => clamp(50 + (n / PROFIT_SPAN_PCT) * 50);
+  return {
+    mix,
+    rates: [
+      rate("2x", "2x", mix.hitRate2xPct, board.targets.hitRate2xPct),
+      rate("4x", "4x", mix.hitRate4xPct, board.targets.hitRate4xPct),
+      rate("10x", "10x", mix.hitRate10xPct, board.scoring.tenXTargetPct ?? DEFAULT_TEN_X_GOAL_PCT),
+      {
+        id: "profit",
+        label: "Profit",
+        value: ret,
+        goal: 0,
+        fill: ret === null ? 50 : profitAt(ret),
+        mark: 50,
+        onGoal: ret !== null && ret > 0,
+      },
+    ],
+  };
+}
+
+/** The combined 2x / 4x / 10x rates and average return of the meter's models, one row each. */
+function MixRates({ board }: { board: Leaderboard }) {
+  const m = mixRates(board);
+  if (!m) return null;
+  const { mix, rates } = m;
+  const early = mix.graded < MIN_RUNNERS_FOR_COVERAGE;
+  return (
+    <div className="cov-mix">
+      {rates.map((r) => {
+        const profit = r.id === "profit";
+        const text = profit ? signedPct(r.value, 1) : pct(r.value, 1);
+        const left = profit ? Math.min(r.fill, 50) : 0;
+        const width = profit ? Math.abs(r.fill - 50) : r.fill;
+        return (
+          <div className="cov-mix-row" key={r.id}>
+            <span className="cov-mix-label muted small">{r.label}</span>
+            <span className="cov-track sm" aria-hidden>
+              <span
+                className={`cov-fill${early ? " early" : ""}${r.onGoal ? " on-goal" : ""}${
+                  profit && r.value !== null && r.value < 0 ? " loss" : ""
+                }`}
+                style={{ left: `${left}%`, width: `${width}%` }}
+              />
+              <span className="cov-mark goal" style={{ left: `${r.mark}%` }} />
+            </span>
+            <span
+              className={`cov-mix-value num small${early ? " early" : ""}`}
+              role="meter"
+              aria-label={profit ? "Combined average return per alert" : `Combined ${r.label} hit rate`}
+              aria-valuemin={profit ? -PROFIT_SPAN_PCT : 0}
+              aria-valuemax={profit ? PROFIT_SPAN_PCT : 100}
+              aria-valuenow={r.value ?? 0}
+              aria-valuetext={r.value === null ? "nothing graded yet" : text}
+            >
+              {text}
+            </span>
+            <span className="cov-mix-goal faint small num">{profit ? "break-even" : `goal ${r.goal}%`}</span>
+          </div>
+        );
+      })}
+      <p className="cov-note faint small">
+        {mix.models.length === 1 ? "This model's" : `These ${mix.models.length} models'`} alerts as one feed:
+        each coin counts once, at the first alert any of them sent on it ({mix.graded.toLocaleString()} graded
+        {early && mix.graded > 0 ? ", still early" : ""}). Profit is the average return per alert under the
+        exit plan.
+      </p>
+    </div>
+  );
+}
+
 function Track({ v }: { v: CoverageView }) {
   return (
     <span className="cov-track" aria-hidden>
@@ -162,6 +270,7 @@ export function CoverageMeter({ board, guest = false }: { board: Leaderboard; gu
           " The dot is every model together, the most any mix could catch."}
         {` The line is the ${v.goal}% goal.`}
       </p>
+      <MixRates board={board} />
     </div>
   );
 }

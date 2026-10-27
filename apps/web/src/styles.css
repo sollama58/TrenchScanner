@@ -8452,6 +8452,40 @@ html:has(dialog.about-modal[open]) {
 .cov-note {
   margin: 0;
 }
+/* The combined 2x / 4x / 10x / profit rows under the meter. */
+.cov-mix {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.cov-mix-row {
+  display: grid;
+  grid-template-columns: 3.4rem minmax(60px, 1fr) 4.2rem 5.6rem;
+  align-items: center;
+  gap: 10px;
+}
+.cov-mix-label {
+  font-weight: 600;
+}
+.cov-mix-value {
+  text-align: right;
+  font-weight: 700;
+}
+.cov-mix-value.early {
+  color: var(--ink-2);
+}
+.cov-mix-goal {
+  white-space: nowrap;
+}
+.cov-track.sm {
+  height: 6px;
+}
+.cov-fill.loss {
+  background: var(--bad);
+}
 @media (prefers-reduced-motion: reduce) {
   .cov-fill {
     transition: none;

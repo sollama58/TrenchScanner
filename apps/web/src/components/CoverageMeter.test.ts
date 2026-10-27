@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Leaderboard, MixCoverage } from "../api";
-import { bestCost, coverageSentence, coverageView } from "./CoverageMeter";
+import { bestCost, coverageSentence, coverageView, mixRates } from "./CoverageMeter";
 
 const board = (coverage: MixCoverage | undefined, field = 80): Leaderboard =>
   ({
@@ -87,5 +87,45 @@ describe("coverageSentence", () => {
     expect(coverageSentence(coverageView(board(mix({ runners: 0, caught: 0, pct: null })))!, 1)).toBe(
       "No runners in the last 1 day yet.",
     );
+  });
+});
+
+describe("mixRates", () => {
+  const withMix = (mixRecord: Leaderboard["mix"]): Leaderboard =>
+    ({
+      ...board(mix()),
+      targets: { hitRate2xPct: 75, hitRate4xPct: 40 },
+      scoring: { catchTargetPct: 75, tenXTargetPct: 20 },
+      mix: mixRecord,
+    }) as unknown as Leaderboard;
+  const record = {
+    models: ["trees", "linear"],
+    calls: 40,
+    graded: 36,
+    hitRate2xPct: 80,
+    hitRate4xPct: 30.5,
+    hitRate10xPct: 8.3,
+    avgReturnPct: -12.5,
+    avgRunDoublings: 1.4,
+    catch: { runners: 50, caught: 30, pct: 60 },
+  };
+
+  it("reads each pooled rate against its goal, profit centred on break-even", () => {
+    const { rates } = mixRates(withMix(record))!;
+    expect(rates.map((r) => [r.id, r.value, r.goal, r.onGoal])).toEqual([
+      ["2x", 80, 75, true],
+      ["4x", 30.5, 40, false],
+      ["10x", 8.3, 20, false],
+      ["profit", -12.5, 0, false],
+    ]);
+    const profit = rates[3]!;
+    expect(profit.mark).toBe(50);
+    expect(profit.fill).toBe(37.5);
+    expect(mixRates(withMix({ ...record, avgReturnPct: 400 }))!.rates[3]!.fill).toBe(100);
+  });
+
+  it("shows nothing without a record or with no models", () => {
+    expect(mixRates(withMix(undefined))).toBeNull();
+    expect(mixRates(withMix({ ...record, models: [] }))).toBeNull();
   });
 });
