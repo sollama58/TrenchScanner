@@ -26,6 +26,13 @@ const logger = createLogger("tokensage-now");
  * too); the next flush picks them up. Free on TokenSage's side. Nothing in the scan waits on it,
  * and the ns* inputs built from it (narrativeFeatures.ts NARRATIVE_FEATURES_V8) are null when the
  * refresh is older than NOW_FEATURE_MAX_AGE_MIN at the decision.
+ *
+ * The first block does not come from here: a full read carries its own (TokenSage rules 0.37.0,
+ * nowFieldsFromAnalysis), stored with the read by prefetch.ts storeAnalysis and stamped
+ * analyzed_at, so the first decision after the read sees it. Before that the refresh was asked only
+ * once the read had landed and arrived a cycle or more later, which left the ns* now inputs null at
+ * the first decision on nearly every coin (model audit 2026-10-26, §16). This flush takes over
+ * NOW_REFRESH_MS after that stamp.
  */
 
 /**

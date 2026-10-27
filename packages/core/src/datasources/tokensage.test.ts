@@ -7,6 +7,7 @@ import {
   narrativeDepthCovers,
   narrativeFieldsFromAnalysis,
   readCreatorFeeBps,
+  nowFieldsFromAnalysis,
   nowFieldsFromItem,
   tokenSageReadIsStale,
   tokenSageReferent,
@@ -1234,5 +1235,59 @@ describe("logo labels and pump.fun pairs (rules 0.25.0, 0.27.0)", () => {
     expect(
       nowFieldsFromItem({ ca: "MINT", status: "unavailable", error: "no_full_read" }, "MINT"),
     ).toBeNull();
+  });
+});
+
+describe("nowFieldsFromAnalysis (rules 0.37.0: the read carries its now block)", () => {
+  const heat = {
+    story: "Moo Deng",
+    story_kind: "referent",
+    status: "ok",
+    as_of: "2026-10-27T11:57:00Z",
+    coins: 2,
+    leader: { mint: "LEADER", mcap_usd: 9e7, volume_1h_usd: 1.2e6, peak_minutes_ago: 30 },
+    wave_volume_1h_usd: 1e6,
+  };
+  const read = {
+    mint: "MINT",
+    depth: "full",
+    analyzed_at: "2026-10-27T12:00:00Z",
+    trend: { matched: true, score: 0.4, novelty: 0.9, terms: [] },
+    story_heat: heat,
+  };
+
+  it("maps a full read's trend and heat exactly as a refresh, stamped analyzed_at", () => {
+    const f = nowFieldsFromAnalysis(read, "MINT");
+    expect(f).toEqual(
+      nowFieldsFromItem(
+        { ca: "MINT", status: "complete", as_of: read.analyzed_at, trend: read.trend, story_heat: heat },
+        "MINT",
+      ),
+    );
+    expect(f).toMatchObject({
+      nowTrendMatched: true,
+      heatCoins: 2,
+      heatLeaderMcapUsd: 9e7,
+      heatIsLeader: false,
+    });
+    expect(f?.nowAt?.toISOString()).toBe("2026-10-27T12:00:00.000Z");
+    expect(nowFieldsFromAnalysis(read, "LEADER")?.heatIsLeader).toBe(true);
+  });
+
+  it("fills the trend columns when the read's heat lookup gave up, and nothing on a basic read", () => {
+    // TokenSage leaves story_heat null and says so in a caveat; an older TokenSage has no field.
+    const noHeat = nowFieldsFromAnalysis({ ...read, story_heat: null }, "MINT");
+    expect(noHeat).toMatchObject({
+      nowTrendMatched: true,
+      nowTrendScore: 0.4,
+      heatCoins: null,
+      heatIsLeader: null,
+    });
+    const { story_heat: _dropped, ...older } = read;
+    expect(nowFieldsFromAnalysis(older, "MINT")?.nowTrendNovelty).toBe(0.9);
+    expect(nowFieldsFromAnalysis({ ...read, depth: "basic" }, "MINT")).toBeNull();
+    expect(nowFieldsFromAnalysis({ ...read, trend: null }, "MINT")).toBeNull();
+    expect(nowFieldsFromAnalysis({ ...read, analyzed_at: undefined }, "MINT")).toBeNull();
+    expect(nowFieldsFromAnalysis(null, "MINT")).toBeNull();
   });
 });
