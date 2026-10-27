@@ -37,7 +37,9 @@ import type { CuratorLearner, SeatGoal } from "./trainer.js";
  *  - "blend": the learners' confidence ranks averaged, nothing fitted (curation/blend.ts) - the
  *    consensus's unlearned rival.
  *  - "agreement": how many learners call the token at their own cutoff, nothing fitted
- *    (curation/agreement.ts) - the tokens the room agrees on, most agreed first.
+ *    (curation/agreement.ts) - the tokens the room agrees on, most agreed first. Sharp Agreement
+ *    (model audit 2026-10-26, §15) holds the role too, over a fixed member set: the three Sharp
+ *    seats (ContestantSpec.members), tracking only until its live record earns it a calling seat.
  *    Two learner seats are "standalone" (Sharp Trees, Sharp Survivor): a tree recipe whose
  *    cutoff passes only its top 8% or so of decision moments, outside the combiners and
  *    evolution (see ContestantSpec.standalone). Sharp Survivor took over from Sharp Deep Trees
@@ -151,6 +153,13 @@ export interface ContestantSpec {
    * stacks it.
    */
   requires?: CandidateFeatureName;
+  /**
+   * A combiner's fixed member set (agreement seats only): the contestant ids it counts, in place
+   * of the voting members combinerMembers.ts picks each run. Taken from Trader's exam maps, so
+   * standalone seats may sit in it; a member without an exam this run is left out, and the seat
+   * needs two or more (trainAgreementCurator). Sharp Agreement (model audit 2026-10-26, §15).
+   */
+  members?: readonly string[];
 }
 
 /** A seat deciding on a population of its own: a frozen filter (gate) or a reading it needs (requires). */
@@ -165,6 +174,8 @@ export const TRADER_CONTESTANT = "trader";
 export const RULES_CONTESTANT = "rules";
 export const BLEND_CONTESTANT = "blend";
 export const AGREEMENT_CONTESTANT = "agreement";
+/** The Sharp seats' agreement, tracking only - see the "agreement" role above and SHARP_AGREEMENT_MEMBERS. */
+export const SHARP_AGREEMENT_CONTESTANT = "sharp-agreement";
 export const TOP_SLICE_CONTESTANT = "top-slice";
 export const NARRATIVE_CONTESTANT = "narrative";
 /** The two-step narrative seat - see the "narrative" role above and NarrativeBlendCuratorParams. */
@@ -191,6 +202,18 @@ export const CATCHER_CONTESTANT = "catcher";
 export const RETURN_REGRESSION_CONTESTANT = "return-regression";
 /** Boosted trees on made-money-or-not, each call weighted by what it made (the "payoff" objective). */
 export const PROFIT_FACTOR_CONTESTANT = "profit-factor";
+/**
+ * Sharp Agreement's members (model audit 2026-10-26, §15): the three standalone seats at the
+ * high-precision cutoff. Over seven live days the rule "the sharp seats agree first, then the
+ * room" doubled 25.5% (2x) and 31.8% (24 h) against Trader's 24.8% / 31.0% at the same volume,
+ * and the room's Agreement about 25% on 7+ of 10 agreeing. Counted at their own cutoffs, like
+ * any agreement member; the agreement floor (AGREEMENT_MIN_SHARE) applies as usual.
+ */
+export const SHARP_AGREEMENT_MEMBERS: readonly string[] = [
+  SHARP_TREES_CONTESTANT,
+  SHARP_SURVIVOR_CONTESTANT,
+  PROFIT_FACTOR_CONTESTANT,
+];
 /** Catcher's cutoff anchor: a wider slice than the field's 20%, for the runners outside it. */
 export const CATCHER_CUTOFF_SHARE = 0.35;
 
@@ -446,6 +469,21 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     summary:
       "Counts how many of the other models would alert on a token, and alerts on the ones most of them agree on.",
     role: "agreement",
+  },
+  {
+    // Model audit 2026-10-26, §15: the Sharp seats agreeing beat Trader and the room's Agreement
+    // over seven live days (SHARP_AGREEMENT_MEMBERS). A seat on the leaderboard so the exam and
+    // the live record can judge the rule on its own ledger before anyone follows it: tracking
+    // only (scores every moment, files no call) until its record earns the flag lifted.
+    id: SHARP_AGREEMENT_CONTESTANT,
+    name: "Sharp Agreement",
+    description:
+      "Alerts on the tokens the most Sharp seats (Sharp, Sharp Survivor, Profit Factor) alert on at their own cutoffs, most agreed first - nothing fitted; tracking only, it sends nothing yet",
+    summary:
+      "Counts how many of the three Sharp models would alert on a token, and ranks the ones most of them agree on. Scored on every coin, but sends nothing yet.",
+    role: "agreement",
+    members: SHARP_AGREEMENT_MEMBERS,
+    trackingOnly: true,
   },
   {
     id: TOP_SLICE_CONTESTANT,

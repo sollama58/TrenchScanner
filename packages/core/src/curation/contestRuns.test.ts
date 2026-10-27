@@ -4,14 +4,20 @@ import { describe, expect, it } from "vitest";
 import {
   HIGH_PRECISION_CUTOFF_SHARE,
   ORDER_FLOW_FEATURES,
+  PROFIT_FACTOR_CONTESTANT,
+  SHARP_AGREEMENT_CONTESTANT,
+  SHARP_AGREEMENT_MEMBERS,
+  SHARP_SURVIVOR_CONTESTANT,
   SHARP_TREES_CONTESTANT,
   TREES_NO_TOKENSAGE_CONTESTANT,
   contestantSpec,
   enabledContestants,
+  type ContestantSpec,
 } from "./contestants.js";
-import { runContestTraining } from "./trainingRun.js";
+import { NEVER_EMIT_THRESHOLD, runContestTraining } from "./trainingRun.js";
 import { syntheticMarket } from "./syntheticMarket.js";
 import type { StackedCuratorParams } from "./stacking.js";
+import { AGREEMENT_MODEL_KIND, agreementFloor, type AgreementCuratorParams } from "./agreement.js";
 
 describe("runContestTraining", () => {
   it("ships one model per contestant and stacks the consensus on the learners", async () => {
@@ -115,4 +121,102 @@ describe("a high-precision seat in the contest", () => {
     const consensus = results.find((r) => r.contestant === "consensus")!.params as StackedCuratorParams;
     expect(consensus.members.map((m) => m.contestant)).toEqual(["linear", "trees"]);
   }, 60_000);
+});
+
+describe("the Sharp Agreement seat (model audit 2026-10-26, §15)", () => {
+  const cfg = {
+    targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
+    targetPerHour: 6,
+    heuristicMinScore: 55,
+    minRowsToPromote: 1500,
+    recencyHalfLifeDays: 14,
+    cooldownHours: 24,
+    heuristicPrecisionGate: true,
+  };
+  // The Sharp seats on a light recipe each: the test is about who the seat counts, not the trees.
+  const light = (c: ContestantSpec): ContestantSpec =>
+    SHARP_AGREEMENT_MEMBERS.includes(c.id)
+      ? { ...c, recipe: { learner: "gbdt" as const, cutoffShare: HIGH_PRECISION_CUTOFF_SHARE } }
+      : c;
+
+  it("counts the three Sharp seats from Trader's maps, tracking only, beside the room's Agreement", async () => {
+    const rows = syntheticMarket({ tokens: 2000, days: 30, truth: "interactions", seed: 17 });
+    const results = await runContestTraining(rows, {
+      ...cfg,
+      contestants: enabledContestants([
+        "consensus",
+        "agreement",
+        SHARP_AGREEMENT_CONTESTANT,
+        "linear",
+        "trees",
+        ...SHARP_AGREEMENT_MEMBERS,
+      ]).map(light),
+    });
+    const byId = new Map(results.map((r) => [r.contestant, r]));
+    // Roster order, the combiners first; the seat ships like any agreement seat.
+    expect(results.map((r) => r.contestant).slice(0, 3)).toEqual([
+      "consensus",
+      "agreement",
+      SHARP_AGREEMENT_CONTESTANT,
+    ]);
+    const sharp = byId.get(SHARP_AGREEMENT_CONTESTANT)!;
+    const params = sharp.params as AgreementCuratorParams;
+    expect(params.kind).toBe(AGREEMENT_MODEL_KIND);
+    expect(params.members.map((m) => m.contestant)).toEqual([
+      SHARP_TREES_CONTESTANT,
+      SHARP_SURVIVOR_CONTESTANT,
+      PROFIT_FACTOR_CONTESTANT,
+    ]);
+    // Each member counts at the cutoff its own exam set.
+    for (const m of params.members) {
+      expect(m.callRank).toBe(byId.get(m.contestant)!.metrics.precisionCalibration.threshold ?? undefined);
+      expect(m.quantiles.length).toBeGreaterThan(0);
+    }
+    // The agreement floor applies as usual: with three members, all three must call.
+    if (params.threshold < NEVER_EMIT_THRESHOLD)
+      expect(params.threshold).toBeGreaterThanOrEqual(agreementFloor(3));
+    expect(sharp.metrics.exam).toBeDefined();
+    expect(sharp.metrics.agreementCurve!.map((p) => p.agreeing)).toEqual([0, 1, 2, 3]);
+    expect(sharp.metrics.verdict.reason).toContain(`Sharp Agreement: 3 models' alerts counted`);
+    expect(sharp.metrics.verdict.reason).toContain(
+      `members ${SHARP_TREES_CONTESTANT}, ${SHARP_SURVIVOR_CONTESTANT}, ${PROFIT_FACTOR_CONTESTANT}`,
+    );
+    expect(sharp.metrics.verdict.reason).not.toContain("without");
+    // The room's Agreement keeps its own, chosen members; the seat is tracking only on the roster.
+    const room = byId.get("agreement")!.params as AgreementCuratorParams;
+    expect(room.members.map((m) => m.contestant)).not.toEqual(params.members.map((m) => m.contestant));
+    expect(contestantSpec(SHARP_AGREEMENT_CONTESTANT)!.trackingOnly).toBe(true);
+  }, 180_000);
+
+  it("ships on two Sharp seats, naming the one without an exam, and not on one", async () => {
+    const rows = syntheticMarket({ tokens: 2000, days: 30, truth: "interactions", seed: 17 });
+    const two = await runContestTraining(rows, {
+      ...cfg,
+      // Two member learners keep the combiners on the roster (enabledContestants).
+      contestants: enabledContestants([
+        SHARP_AGREEMENT_CONTESTANT,
+        "linear",
+        "trees",
+        SHARP_TREES_CONTESTANT,
+        PROFIT_FACTOR_CONTESTANT,
+      ]).map(light),
+    });
+    const sharp = two.find((r) => r.contestant === SHARP_AGREEMENT_CONTESTANT)!;
+    expect((sharp.params as AgreementCuratorParams).members.map((m) => m.contestant)).toEqual([
+      SHARP_TREES_CONTESTANT,
+      PROFIT_FACTOR_CONTESTANT,
+    ]);
+    expect(sharp.metrics.verdict.reason).toContain(`without ${SHARP_SURVIVOR_CONTESTANT} (no exam this run)`);
+
+    const one = await runContestTraining(rows, {
+      ...cfg,
+      contestants: enabledContestants([
+        SHARP_AGREEMENT_CONTESTANT,
+        "linear",
+        "trees",
+        SHARP_TREES_CONTESTANT,
+      ]).map(light),
+    });
+    expect(one.map((r) => r.contestant)).toEqual(["rules", "linear", "trees", SHARP_TREES_CONTESTANT]);
+  }, 180_000);
 });

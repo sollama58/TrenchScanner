@@ -5,6 +5,7 @@ import {
   TRADER_CONTESTANT,
   TRADER_CUTOFF_SHARE,
   TREES_NO_TOKENSAGE_FEATURES,
+  contestantSpec,
   type ContestantSpec,
 } from "./contestants.js";
 import type { SeatGoal } from "./trainer.js";
@@ -98,7 +99,10 @@ export function modelProfile(spec: ContestantSpec, baseHalfLifeDays: number): Mo
         ...base,
         goal: "team",
         goalText: "Alerts the team backs",
-        reads: "The other models' alerts",
+        // A fixed member set (Sharp Agreement) names its members; the room's Agreement, the field.
+        reads: spec.members
+          ? `${spec.members.map((id) => contestantSpec(id)?.name ?? id).join(", ")}'s alerts`
+          : "The other models' alerts",
         decides: "Counts how many agree",
         method: "team",
       };
