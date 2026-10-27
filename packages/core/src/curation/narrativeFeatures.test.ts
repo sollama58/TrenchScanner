@@ -235,6 +235,31 @@ describe("narrativeFeatureValues", () => {
     });
   });
 
+  // Model audit 2026-10-26, section 16: the full read that opens the post is asked at the first
+  // decision, so a coin without a link had nsXRead null at every first decision, where "no link"
+  // is a known 0. A coin with a link, or one whose links are not known, waits for the full read.
+  it("reads no post, as a known 0, on a coin with no X link before its full read is in", () => {
+    const basic = narrativeReadFromRow(row());
+    expect(narrativeFeatureValues(basic, new Date(), false)).toMatchObject({
+      nsDepthFull: 0,
+      nsXRead: 0,
+      nsXVerdictAbout: null,
+      nsXFit: null,
+    });
+    expect(narrativeFeatureValues(basic, new Date(), true).nsXRead).toBeNull();
+    expect(narrativeFeatureValues(basic, new Date(), null).nsXRead).toBeNull();
+    expect(narrativeFeatureValues(basic).nsXRead).toBeNull();
+    // Before any read: still "no read", with the one fact the coin's links give.
+    const none = narrativeFeatureValues(undefined, new Date(), false);
+    expect(none).toMatchObject({ nsRead: 0, nsXRead: 0, nsDepthFull: null, nsXFit: null });
+    expect(narrativeFeatureValues(undefined, new Date(), true).nsXRead).toBeNull();
+    // A full read says for itself whether it opened the post, the link's presence aside.
+    expect(narrativeFeatureValues(narrativeReadFromRow(fullRow()), new Date(), false).nsXRead).toBe(1);
+    expect(
+      narrativeFeatureValues(narrativeReadFromRow(row({ depth: "full" })), new Date(), true).nsXRead,
+    ).toBe(0);
+  });
+
   it("a copycat flag counts without copiesRecent, and copiesRecent counts without the flag", () => {
     expect(narrativeFeatureValues(narrativeReadFromRow(row({ flags: ["copycat"] }))).nsCopycat).toBe(1);
     expect(narrativeFeatureValues(narrativeReadFromRow(row({ copiesRecent: true }))).nsCopycat).toBe(1);

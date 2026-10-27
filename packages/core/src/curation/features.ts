@@ -2211,7 +2211,9 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     buys5m,
     sells5m,
     buyRatio5m,
-    ...narrativeFeatureValues(scored.narrative, now),
+    // hasTwitter rides along so a coin with no X link reads nsXRead = 0 before its full read
+    // (narrativeFeatures.ts noXLinkRead, model audit 2026-10-26, section 16).
+    ...narrativeFeatureValues(scored.narrative, now, scored.hasTwitter),
     livestreamLive: scored.livestream === undefined ? null : scored.livestream.live ? 1 : 0,
     // Nobody watches a stream that isn't on; a live stream whose count the feed left out is unknown.
     livestreamViewers:
