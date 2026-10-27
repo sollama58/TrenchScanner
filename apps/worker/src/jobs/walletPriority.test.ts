@@ -6,6 +6,8 @@ import {
   clearFilterWalletWait,
   filterWalletWaitOver,
   noteAlertWallets,
+  noteRecentAlert,
+  recentlyAlerted,
   resetAlertWallets,
 } from "./walletPriority.js";
 
@@ -66,5 +68,20 @@ describe("coins whose linked reading was left for later", () => {
     expect(linkedPendingFor("a")).toBe(false);
     expect(linkedPendingFor("c")).toBe(true);
     holdForLinked([]);
+  });
+});
+
+describe("tokens in the alert feeds", () => {
+  beforeEach(() => resetAlertWallets());
+
+  it("marks a token alerted on, with or without a reading, for six hours", () => {
+    const t0 = Date.now();
+    noteAlertWallets("a", true, true, t0);
+    noteRecentAlert("b", t0);
+    noteAlertWallets("c", false, false, t0);
+    expect(recentlyAlerted("a", t0 + 60_000)).toBe(true);
+    expect(recentlyAlerted("b", t0 + 5 * 3_600_000)).toBe(true);
+    expect(recentlyAlerted("c", t0)).toBe(false);
+    expect(recentlyAlerted("a", t0 + 6 * 3_600_000 + 1)).toBe(false);
   });
 });

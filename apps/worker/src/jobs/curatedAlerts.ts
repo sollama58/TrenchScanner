@@ -84,6 +84,7 @@ import {
   requestCandleBackfill,
 } from "@trenchscanner/core";
 import { carryHolderReadingOntoAlertRow } from "./holderListWrites.js";
+import { noteRecentAlert } from "./walletPriority.js";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
 import {
   aiGateQualified,
@@ -1433,6 +1434,8 @@ async function emitCuratedAlert(
   // After the create, never before - same contract as notifyMatchCreated: the row must exist by
   // the time a connected dashboard reacts to the nudge. Failure is its own logged non-event.
   await notifyCuratedAlert({ alertId: alert.id, model });
+  // Its wallets' readings are kept fresh while it sits in the alert feeds (walletPriority.ts).
+  noteRecentAlert(token.mintAddress);
   // The called coin's chart history back to its launch, saved once (candleBackfill.ts).
   if (env.CANDLE_STORE)
     void requestCandleBackfill(token.mintAddress, "call").catch((err: unknown) =>

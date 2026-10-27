@@ -151,7 +151,7 @@ import {
   type WalletHoldingsOptions,
 } from "./walletHoldings.js";
 import { seedQuotes } from "./walletValuation.js";
-import { alertAwaitingWallets, holdForLinked, noteAlertWallets } from "./walletPriority.js";
+import { alertAwaitingWallets, holdForLinked, noteAlertWallets, recentlyAlerted } from "./walletPriority.js";
 import {
   holderTransfersOf,
   recordTransferEvents,
@@ -386,6 +386,8 @@ export function oldCoinMints(
     mintAddress: string;
     contender: boolean;
     alerted: boolean;
+    /** In the alert feeds (recentlyAlerted): its readings are kept fresh, never backed off. */
+    recent?: boolean;
     watched: boolean;
     ageMinutes: number | undefined;
   }[],
@@ -397,6 +399,7 @@ export function oldCoinMints(
         (g) =>
           !g.contender &&
           !g.alerted &&
+          !g.recent &&
           !g.watched &&
           !called.has(g.mintAddress) &&
           (g.ageMinutes ?? 0) >= OLD_COIN_MINUTES,
@@ -2066,6 +2069,9 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
       // for a wallet figure (see resolveAlertTargets): next in line after the contenders, so the
       // reading lands within a cycle or two.
       alerted: alertAwaitingWallets(c.mintAddress),
+      // In the alert feeds (alerted on in the last 6 hours): its readings are kept no older than
+      // the 10-minute holdings TTL ahead of coins nobody was alerted to (user decision 2026-10-27).
+      recent: recentlyAlerted(c.mintAddress),
       // Someone has its bubble map open: its new holders' funders, fresh and empty checks are read
       // next, so the map's clusters and the holder list's tags follow its holders (user ask 2026-10-19).
       watched: watchedHolders.has(c.mintAddress),
@@ -2082,6 +2088,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
       (a, b) =>
         Number(b.contender) - Number(a.contender) ||
         Number(b.alerted) - Number(a.alerted) ||
+        Number(b.recent) - Number(a.recent) ||
         Number(b.watched) - Number(a.watched) ||
         b.churn - a.churn,
     );

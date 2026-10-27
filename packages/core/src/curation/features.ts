@@ -1300,6 +1300,13 @@ export const EMPTY_WALLETS_UNPRICED_NULL_SINCE = new Date("2026-10-16T19:30:00Z"
 export const EMPTY_WALLETS_TTL_6H_SINCE = new Date("2026-10-23T18:00:00Z");
 
 /**
+ * From when that reading is at most 10 minutes old (WALLET_HOLDINGS_CACHE_TTL_MINUTES 360 -> 10,
+ * user decision 2026-10-27). Provenance only, as above: fewer rows carry the share from here on,
+ * and the ones that do are fresher.
+ */
+export const EMPTY_WALLETS_TTL_10M_SINCE = new Date("2026-10-27T18:00:00Z");
+
+/**
  * Rows anchored in this window stored a RugCheck holder reading of 0 where the report was not
  * indexed yet (data-correctness audit 2026-10-16). From 2026-10-14 13:00 UTC a cached "not found"
  * (#599) stood in for a young coin: holder count, risk and the growth built on RugCheck's count
