@@ -4,12 +4,21 @@
 # refuses an upload whose version isn't higher than the last, and a bump per change keeps each
 # build traceable to its commit.
 #
-# Compares against BASE_REF (default main): run on a pull request's merge commit, or locally on a
-# branch. Without a base to compare (a push to main), only the two versions' agreement is checked.
+# What it compares against:
+# - BASE_SHA when set: the commit a push to main moved from (github.event.before), so the push is
+#   checked against what it actually changed. Comparing with the current main instead failed a
+#   merge that landed just after another extension bump (run 40549020208), and on main itself
+#   compared main with main and proved nothing (full audit 2026-10-27, CH-7).
+# - otherwise BASE_REF (default main): a pull request's base, or main when run locally on a branch.
+# Without a base to compare (none fetchable, or a new branch's all-zero "before"), only the two
+# versions' agreement is checked.
 set -euo pipefail
 
 EXT=apps/extension
 BASE_REF=${BASE_REF:-main}
+BASE_SHA=${BASE_SHA:-}
+if [[ "$BASE_SHA" =~ ^0+$ ]]; then BASE_SHA=""; fi
+BASE=${BASE_SHA:-$BASE_REF}
 
 manifest_version=$(node -p "require('./$EXT/static/manifest.json').version")
 package_version=$(node -p "require('./$EXT/package.json').version")
@@ -18,12 +27,12 @@ if [[ "$manifest_version" != "$package_version" ]]; then
   exit 1
 fi
 
-if ! git fetch --quiet --depth=1 origin "$BASE_REF" 2>/dev/null; then
-  echo "no $BASE_REF to compare with; versions agree at $manifest_version"
+if ! git fetch --quiet --depth=1 origin "$BASE" 2>/dev/null; then
+  echo "no $BASE to compare with; versions agree at $manifest_version"
   exit 0
 fi
 if git diff --quiet FETCH_HEAD HEAD -- "$EXT"; then
-  echo "$EXT unchanged"
+  echo "$EXT unchanged since $BASE"
   exit 0
 fi
 base_version=$(git show "FETCH_HEAD:$EXT/static/manifest.json" 2>/dev/null | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version" || echo "0.0.0")
@@ -36,7 +45,7 @@ if ! node -e '
   }
   process.exit(1);
 ' "$manifest_version" "$base_version"; then
-  echo "::error::$EXT changed but its version did not go up ($base_version on $BASE_REF, $manifest_version here). Bump static/manifest.json and package.json."
+  echo "::error::$EXT changed but its version did not go up ($base_version on $BASE, $manifest_version here). Bump static/manifest.json and package.json."
   exit 1
 fi
 echo "$EXT version $base_version -> $manifest_version"

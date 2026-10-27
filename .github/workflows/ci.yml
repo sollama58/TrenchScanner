@@ -25,11 +25,9 @@ jobs:
     timeout-minutes: 30
 
     # A real Postgres, not a mock - prisma:deploy actually applies every migration against it,
-    # which catches migration-file drift/corruption that a schema-only check would miss. It is the
-    # runner image's own PostgreSQL 16 (installed, service off by default), started below: a
-    # postgres:16 service container pulls from Docker Hub, whose anonymous pull quota the shared
-    # runner IPs exhaust from time to time, and then CI fails before its first step
-    # (2026-10-09, PRs #309 and #330).
+    # which catches migration-file drift/corruption that a schema-only check would miss. It is
+    # PostgreSQL 18, production's major, from the PostgreSQL apt repository (not Docker Hub): see
+    # scripts/ci-postgres.sh.
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/trenchscanner
       # Not a real secret - CI never talks to production anything. apps/api's own startup check
@@ -39,11 +37,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Start PostgreSQL
-        run: |
-          sudo systemctl start postgresql.service
-          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER postgres PASSWORD 'postgres';" -c "CREATE DATABASE trenchscanner;"
-          pg_isready -h localhost -p 5432 -U postgres
+      - name: Start PostgreSQL 18
+        run: ./scripts/ci-postgres.sh
 
       - uses: actions/setup-node@v4
         with:
@@ -52,10 +47,12 @@ jobs:
 
       - run: npm ci
 
-      # Every change to the extension bumps its version (user rule 2026-10-24).
+      # Every change to the extension bumps its version (user rule 2026-10-24). A pull request
+      # compares with its base branch; a push to main with the commit it moved main from.
       - name: Extension version bump
         env:
           BASE_REF: ${{ github.base_ref || 'main' }}
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
         run: ./scripts/check-extension-version.sh
 
       # Fails on a high or critical advisory in what ships (dev-only advisories are not gated here)
@@ -95,9 +92,8 @@ jobs:
       - name: Check formatting
         run: npm run format:check
 
-      - name: Typecheck
-        run: npm run typecheck
-
+      # Also the typecheck: every workspace's build runs tsc over the same tsconfig its typecheck
+      # script does, so a separate Typecheck step only repeated it (42 s; full audit 2026-10-27, CH-8).
       - name: Build all workspaces
         run: npm run build
 
@@ -130,8 +126,12 @@ jobs:
             workspaces: -w @trenchscanner/core -- --shard=1/2
           - name: core 2/2
             workspaces: -w @trenchscanner/core -- --shard=2/2
-          - name: api
-            workspaces: -w @trenchscanner/api
+          # api's files run one at a time (its vitest config), which made it the slowest job at
+          # 4.5 minutes of tests (full audit 2026-10-27, CH-8): two runners, half the files each.
+          - name: api 1/2
+            workspaces: -w @trenchscanner/api -- --shard=1/2
+          - name: api 2/2
+            workspaces: -w @trenchscanner/api -- --shard=2/2
           # web's and the extension's tests take seconds and need no database; they ride with worker's.
           - name: worker and web
             workspaces: -w @trenchscanner/worker -w @trenchscanner/web -w @trenchscanner/extension
@@ -139,16 +139,16 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/trenchscanner
       JWT_SECRET: ci-test-secret-not-used-anywhere-real-00000000
+      # A database suite that can't reach Postgres fails the run instead of passing as skipped
+      # (vitest.requireDb.ts; full audit 2026-10-27, CH-11).
+      REQUIRE_TEST_DB: "1"
 
     steps:
       - uses: actions/checkout@v4
 
-      # The runner image's own PostgreSQL, as in the checks job (no Docker Hub pull).
-      - name: Start PostgreSQL
-        run: |
-          sudo systemctl start postgresql.service
-          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER postgres PASSWORD 'postgres';" -c "CREATE DATABASE trenchscanner;"
-          pg_isready -h localhost -p 5432 -U postgres
+      # PostgreSQL 18 from the PostgreSQL apt repository, as in the checks job (no Docker Hub pull).
+      - name: Start PostgreSQL 18
+        run: ./scripts/ci-postgres.sh
 
       - uses: actions/setup-node@v4
         with:
@@ -168,13 +168,46 @@ jobs:
 
   # The one check that says the whole run passed, under the job name the single-job workflow had,
   # so anything waiting on a "ci" check (branch protection, the batch threads) still finds one.
+  # What Render builds, built the way Render builds it (full audit 2026-10-27, CH-10). The jobs
+  # above build packages/core first, so a web import that needs core's build output passed CI and
+  # failed the static sites' deploy; and the backup cron's image was never built at all.
+  deploy-builds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # render.yaml's trenchscanner-web and trenchscanner-asyl buildCommands, from a clean checkout
+      # (core not built). Kept in step with render.yaml by hand.
+      - name: Build the web and Asyl sites as Render does
+        run: |
+          npm ci --include=dev
+          npm run build -w @trenchscanner/web
+          rm -rf apps/web/dist-asyl && cp -r apps/web/dist apps/web/dist-asyl
+          cp apps/web/dist/asyl/index.html apps/web/dist-asyl/index.html
+          rm -rf apps/web/dist-asyl/tokensage apps/web/dist-asyl/sw.js
+
+      # trenchscanner-db-backup's image. Its base comes from Google's Docker Hub mirror and is
+      # tagged locally, so the build itself pulls nothing from Docker Hub (see the checks job).
+      - name: Build the database backup image
+        run: |
+          docker pull -q mirror.gcr.io/library/postgres:18-alpine
+          docker tag mirror.gcr.io/library/postgres:18-alpine postgres:18-alpine
+          docker build -q -t trenchscanner-db-backup scripts/db-backup
+          docker run --rm trenchscanner-db-backup bash -c 'for f in /app/*.sh; do bash -n "$f"; done && pg_dump --version && aws --version'
+
   ci:
     if: always()
-    needs: [checks, test]
+    needs: [checks, test, deploy-builds]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Every job passed
         run: |
-          echo 'checks: ${{ needs.checks.result }}, test: ${{ needs.test.result }}'
-          test '${{ needs.checks.result }}' = success && test '${{ needs.test.result }}' = success
+          echo 'checks: ${{ needs.checks.result }}, test: ${{ needs.test.result }}, deploy-builds: ${{ needs.deploy-builds.result }}'
+          test '${{ needs.checks.result }}' = success && test '${{ needs.test.result }}' = success && test '${{ needs.deploy-builds.result }}' = success
