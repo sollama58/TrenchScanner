@@ -71,7 +71,7 @@ export function saveOtherNetwork(on: boolean) {
 
 /**
  * The platforms with the gas and priority fee toggle applied (user ask 2026-10-24): on, each one's
- * fee and saving carry its 0.002 SOL gas and 0.003 SOL priority fee per trade. An older API that
+ * fee and saving carry its 0.001 SOL gas and 0.01 SOL priority fee per trade. An older API that
  * sends no such figures keeps the platform-fee-only ones.
  */
 export function withOtherNetwork<P extends FeesPlatform>(platforms: readonly P[], on: boolean): P[] {
