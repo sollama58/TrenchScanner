@@ -36,8 +36,22 @@ describe("runContestTraining", () => {
     };
     expect(orderFlow.featureNames).toEqual([...ORDER_FLOW_FEATURES]);
     const consensus = results.find((r) => r.contestant === "consensus")!.params as StackedCuratorParams;
-    expect(consensus.members.map((m) => m.contestant)).toEqual(["linear", "order-flow", "trees"]);
+    // The voting combiners count one seat per recipe family, none whose exam barely beats the
+    // rows' own 2x rate (combinerMembers.ts): on this market Order Flow's exam falls under that
+    // floor, and the verdict says so.
+    expect(consensus.members.map((m) => m.contestant)).toEqual(["linear", "trees"]);
     expect(consensus.members.every((m) => m.quantiles.length > 0)).toBe(true);
+    const consensusVerdict = results.find((r) => r.contestant === "consensus")!.metrics.verdict.reason;
+    expect(consensusVerdict).toContain("members linear, trees; left out order-flow (exam 2x ");
+    expect(consensusVerdict).toContain("is under 1.2x the rows'");
+    // Trader keeps stacking every learner.
+    const trader = results.find((r) => r.contestant === "trader");
+    if (trader)
+      expect((trader.params as StackedCuratorParams).members.map((m) => m.contestant)).toEqual([
+        "linear",
+        "order-flow",
+        "trees",
+      ]);
   }, 60_000);
 
   it("ships a control seat on its own ledger without stacking it into the combiners", async () => {

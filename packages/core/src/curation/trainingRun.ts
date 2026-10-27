@@ -58,6 +58,7 @@ import { quantileTable, trainStackedCurator, type StackedCuratorParams } from ".
 import { trainBlendCurator, type BlendCuratorParams } from "./blend.js";
 import { trainAgreementCurator, type AgreementCuratorParams, type AgreementCurvePoint } from "./agreement.js";
 import { trainTopSliceCurator, type TopSliceCuratorParams } from "./topSlice.js";
+import { chooseCombinerMembers, memberCandidate, type MemberCandidate } from "./combinerMembers.js";
 import { buildCalibration } from "./calibration.js";
 import { runDoublings } from "./labels.js";
 import { featureHealthReport, type FeatureReport } from "./featureReport.js";
@@ -1203,6 +1204,24 @@ export async function runEvolvingContest(
       traderCallRanks.delete(slot);
     }
   };
+  // The seats the voting combiners may count (combinerMembers.ts): every lane and standalone seat
+  // on the shared exam rows, with its exam this run; chosen once the lineup is final.
+  const memberCandidates = new Map<string, MemberCandidate>();
+  const offerToVote = (spec: ContestantSpec, recipe: CuratorRecipe, exam: LearnerExam) => {
+    if (!exam.foldRanks || !exam.shipped || spec.trackingOnly === true) {
+      memberCandidates.delete(spec.id);
+      return;
+    }
+    const record = exam.result.metrics.exam;
+    memberCandidates.set(
+      spec.id,
+      memberCandidate(spec, recipe, {
+        examScore: exam.examScore,
+        wins: record?.wins ?? 0,
+        graded: record?.graded ?? 0,
+      }),
+    );
+  };
   const keep = (slot: string, exam: LearnerExam) => {
     if (exam.foldRanks && exam.shipped) {
       foldRanks.set(slot, exam.foldRanks);
@@ -1268,11 +1287,15 @@ export async function runEvolvingContest(
     // rules seat or evolution (contestants.ts, ContestantSpec.control and .standalone) - except
     // Trader, which stacks every learner seat.
     if (spec.control || spec.standalone) {
-      if (isTraderMember(spec)) keepForTrader(spec.id, exam);
+      if (isTraderMember(spec)) {
+        keepForTrader(spec.id, exam);
+        offerToVote(spec, spec.recipe, exam);
+      }
       continue;
     }
     laneExamScores.set(spec.id, exam.examScore);
     keep(spec.id, exam);
+    offerToVote(spec, spec.recipe, exam);
   }
 
   // The narrative seats sit their own exam, graded on the rows with the deep read: a seat on a
@@ -1422,7 +1445,10 @@ export async function runEvolvingContest(
         },
       };
       keep(slot, exam);
-      replacement = { ...decided, bred: plan!.challengers[decided.challenger]!, examScore: exam.examScore };
+      const bred = plan!.challengers[decided.challenger]!;
+      const slotSpec = cfg.contestants.find((c) => c.id === slot);
+      if (slotSpec) offerToVote(slotSpec, bred.recipe, exam);
+      replacement = { ...decided, bred, examScore: exam.examScore };
     }
   }
 
@@ -1440,13 +1466,40 @@ export async function runEvolvingContest(
     );
   }
 
+  // The voting combiners' members (combinerMembers.ts): one seat per recipe family, none that
+  // barely beats the rows' own 2x rate. Lanes and standalone seats alike sit in Trader's maps.
+  const referenceWinRate =
+    reference !== null && reference.length > 0
+      ? reference.filter((r) => r.labelValue > 0).length / reference.length
+      : 0;
+  const voting = chooseCombinerMembers(
+    [...memberCandidates.values()].filter((c) => traderFoldRanks.has(c.contestant)),
+    referenceWinRate,
+  );
+  const votingFoldRanks = new Map<string, Float64Array>();
+  const votingShipped = new Map<string, Float64Array>();
+  const votingCallRanks = new Map<string, number | null>();
+  for (const id of voting.members) {
+    const fold = traderFoldRanks.get(id);
+    const shipped = traderShipped.get(id);
+    if (!fold || !shipped) continue;
+    votingFoldRanks.set(id, fold);
+    votingShipped.set(id, shipped);
+    votingCallRanks.set(id, traderCallRanks.get(id) ?? null);
+  }
+  const votingText =
+    `members ${voting.members.join(", ")}` +
+    (voting.leftOut.length > 0
+      ? `; left out ${voting.leftOut.map((l) => `${l.contestant} (${l.reason})`).join("; ")}`
+      : "");
+
   // Consensus and Trader: the same stacking, Trader over every learner seat with no Rules inputs,
   // no member-backing gate and its own cutoff anchor (TRADER_CUTOFF_SHARE, as the Sharp seats').
   for (const stackedSpec of cfg.contestants.filter((c) => c.role === "stacked")) {
     const trader = stackedSpec.id === TRADER_CONTESTANT;
     const members = trader
       ? { fold: traderFoldRanks, shipped: traderShipped, callRanks: traderCallRanks }
-      : { fold: foldRanks, shipped: shippedProbabilities, callRanks };
+      : { fold: votingFoldRanks, shipped: votingShipped, callRanks: votingCallRanks };
     if (reference === null || members.fold.size < 2) continue;
     const stacked = await trainStackedCurator(
       {
@@ -1491,7 +1544,9 @@ export async function runEvolvingContest(
           folds: [],
           verdict: {
             promote: false,
-            reason: `${stackedSpec.name}: stacked on ${stacked.params.members.length} models, judged on ${stacked.examChunks} later chunk(s) of their out-of-sample alerts`,
+            reason:
+              `${stackedSpec.name}: stacked on ${stacked.params.members.length} models, judged on ${stacked.examChunks} later chunk(s) of their out-of-sample alerts` +
+              (trader ? "" : `; ${votingText}`),
           },
           targets: cfg.targets,
           precisionCalibration: stacked.precisionCalibration,
@@ -1504,12 +1559,12 @@ export async function runEvolvingContest(
   }
 
   const blendSpec = cfg.contestants.find((c) => c.role === "blend");
-  if (blendSpec && reference !== null && foldRanks.size >= 2) {
+  if (blendSpec && reference !== null && votingFoldRanks.size >= 2) {
     const blend = trainBlendCurator(
       {
         reference,
-        memberFoldRanks: foldRanks,
-        memberShippedProbabilities: shippedProbabilities,
+        memberFoldRanks: votingFoldRanks,
+        memberShippedProbabilities: votingShipped,
         targets: cfg.targets,
         cooldownHours: cfg.cooldownHours,
         targetPerHour: cfg.targetPerHour,
@@ -1541,7 +1596,7 @@ export async function runEvolvingContest(
           folds: [],
           verdict: {
             promote: false,
-            reason: `${blendSpec.name}: ${blend.params.members.length} models' ranks averaged, judged on ${blend.examChunks} chunk(s) of their out-of-sample alerts`,
+            reason: `${blendSpec.name}: ${blend.params.members.length} models' ranks averaged, judged on ${blend.examChunks} chunk(s) of their out-of-sample alerts; ${votingText}`,
           },
           targets: cfg.targets,
           precisionCalibration: blend.precisionCalibration,
@@ -1556,13 +1611,13 @@ export async function runEvolvingContest(
   }
 
   const agreementSpec = cfg.contestants.find((c) => c.role === "agreement");
-  if (agreementSpec && reference !== null && foldRanks.size >= 2) {
+  if (agreementSpec && reference !== null && votingFoldRanks.size >= 2) {
     const agreement = trainAgreementCurator(
       {
         reference,
-        memberFoldRanks: foldRanks,
-        memberShippedProbabilities: shippedProbabilities,
-        memberCallRanks: callRanks,
+        memberFoldRanks: votingFoldRanks,
+        memberShippedProbabilities: votingShipped,
+        memberCallRanks: votingCallRanks,
         targets: cfg.targets,
         cooldownHours: cfg.cooldownHours,
         targetPerHour: cfg.targetPerHour,
@@ -1598,7 +1653,7 @@ export async function runEvolvingContest(
           folds: [],
           verdict: {
             promote: false,
-            reason: `${agreementSpec.name}: ${agreement.params.members.length} models' alerts counted, judged on ${agreement.examChunks} chunk(s) of their out-of-sample alerts; wins by models agreeing - ${curveText}`,
+            reason: `${agreementSpec.name}: ${agreement.params.members.length} models' alerts counted, judged on ${agreement.examChunks} chunk(s) of their out-of-sample alerts; wins by models agreeing - ${curveText}; ${votingText}`,
           },
           targets: cfg.targets,
           precisionCalibration: agreement.precisionCalibration,
