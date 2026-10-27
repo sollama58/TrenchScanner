@@ -560,8 +560,10 @@ const MCAP_TRADES = 9;
 
 /**
  * The 5m order-flow fields read from a page of a coin's newest chain trades (the worker's live
- * tape), for a coin the PumpPortal stream doesn't carry: a Stonks coin, on Raydium's LaunchLab
- * and its CPMM pool. Each trade's SOL is already what was paid in whatever quote coin. Read as the
+ * tape), for a coin the PumpPortal stream doesn't carry trades for: a Stonks coin, on Raydium's
+ * LaunchLab and its CPMM pool - and, on PumpPortal's free tier, every coin (the free stream
+ * delivers launches and graduations only, so the stream's window is never watched; model audit
+ * 2026-10-26, §16). Each trade's SOL is already what was paid in whatever quote coin. Read as the
  * stream's book reads its window, at `now` (when the page was read):
  *
  * - The window is whole when the page reaches back past it, or holds the coin's whole history
@@ -570,7 +572,8 @@ const MCAP_TRADES = 9;
  * - The market cap is the median SOL-per-token of the newest trades on a 1B supply, as
  *   PumpPortal's marketCapSol is (Pump.fun and Stonks mints are both 1B).
  *
- * The early-buyer and dev fields stay null: a page of the newest trades says nothing about them.
+ * The early-buyer and dev fields stay null: a page of the newest trades says nothing about them
+ * unless it is the coin's whole history - chainLaunchBags reads them then.
  */
 export function chainWindowFlow(
   trades: readonly ChainFlowTrade[],
@@ -644,5 +647,99 @@ export function withWindowFlow(
 ): TradeFlowFeatures {
   const out: TradeFlowFeatures = { ...(flow ?? EMPTY_TRADE_FLOW) };
   for (const field of WINDOW_FLOW_FIELDS) out[field] = window?.[field] ?? null;
+  return out;
+}
+
+/** The launch-bag fields a coin's whole chain history gives; see chainLaunchBags. */
+export const LAUNCH_BAG_FIELDS = [
+  "earlyBuyerCount",
+  "earlyBuyerHoldPct",
+  "earlyBuyerSoldShare",
+  "devSoldShare",
+] as const satisfies readonly (keyof TradeFlowFeatures)[];
+
+export type LaunchBags = Pick<TradeFlowFeatures, (typeof LAUNCH_BAG_FIELDS)[number]>;
+
+/**
+ * The launch's bags read from a coin's whole chain trade history: a live-tape page that is
+ * `complete` (no older page behind it), for a coin whose launch the PumpPortal stream never saw
+ * trades of (its free tier delivers launches and graduations only, so these inputs were null on
+ * every decision row; model audit 2026-10-26, §16). Read as the stream's book keeps its bags:
+ *
+ * - The launch is the oldest trade - the dev's create buy when there was one, else the first
+ *   buy. Early buyers are the wallets other than the dev whose first trade is a buy within
+ *   EARLY_WINDOW_MS of it, the first MAX_EARLY_WALLETS of them; every later trade of theirs goes
+ *   on their bag. What they hold is what they bought less what they sold (the chain gives no
+ *   running balance here), as % of the supply; their sold share is sold over bought.
+ * - The dev is `creator` (the coin's creator wallet off the on-chain profile): its sold share is
+ *   sold over bought across the whole history, null when the dev never bought or is unknown.
+ *
+ * Null for a page that isn't the whole history: a page of the newest trades says nothing about
+ * the launch. A whole history with no trade at all is a launch nobody bought: no early buyers.
+ */
+export function chainLaunchBags(
+  trades: readonly ChainFlowTrade[],
+  creator: string | null | undefined,
+  complete: boolean,
+): LaunchBags | null {
+  if (!complete) return null;
+  const sorted = [...trades].sort((a, b) => a.atMs - b.atMs);
+  const launchAt = sorted[0]?.atMs ?? null;
+  const early = new Map<string, Bag>();
+  const dev: Bag = { bought: 0, sold: 0, balance: null };
+  for (const t of sorted) {
+    const trade: FlowTrade = {
+      mint: "",
+      wallet: t.wallet,
+      side: t.side,
+      sol: t.sol,
+      tokenAmount: t.tokens,
+      at: t.atMs,
+    };
+    if (creator && t.wallet === creator) {
+      addToBag(dev, trade);
+      continue;
+    }
+    let bag = early.get(t.wallet);
+    if (!bag) {
+      const earlyBuy =
+        t.side === "buy" &&
+        launchAt !== null &&
+        t.atMs - launchAt <= EARLY_WINDOW_MS &&
+        early.size < MAX_EARLY_WALLETS;
+      if (!earlyBuy) continue;
+      bag = { bought: 0, sold: 0, balance: null };
+      early.set(t.wallet, bag);
+    }
+    addToBag(bag, trade);
+  }
+  let held = 0;
+  let bought = 0;
+  let sold = 0;
+  for (const bag of early.values()) {
+    held += bagBalance(bag);
+    bought += bag.bought;
+    sold += bag.sold;
+  }
+  return {
+    earlyBuyerCount: early.size,
+    earlyBuyerHoldPct: (held / PUMP_TOTAL_SUPPLY) * 100,
+    earlyBuyerSoldShare: soldShare({ bought, sold }),
+    devSoldShare: creator ? soldShare(dev) : null,
+  };
+}
+
+/**
+ * A coin's trade flow with the launch-bag fields it lacks filled from `bags` (chainLaunchBags).
+ * Only the unknown ones: a bag the stream kept from the launch itself, with the dev's balance off
+ * each trade, is the exact figure; the chain read stands in where the stream has none.
+ */
+export function withLaunchBags(
+  flow: TradeFlowFeatures | undefined,
+  bags: LaunchBags | null,
+): TradeFlowFeatures | undefined {
+  if (!bags) return flow;
+  const out: TradeFlowFeatures = { ...(flow ?? EMPTY_TRADE_FLOW) };
+  for (const field of LAUNCH_BAG_FIELDS) out[field] ??= bags[field];
   return out;
 }

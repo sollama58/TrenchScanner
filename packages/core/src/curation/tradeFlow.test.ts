@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { buildCandidateFeatures, CANDIDATE_FEATURE_NAMES, TRADE_FLOW_FEATURES } from "./features.js";
 import {
+  chainLaunchBags,
   chainWindowFlow,
   EMPTY_TRADE_FLOW,
   resolveDevHolding,
   TradeFlowBook,
+  withLaunchBags,
   withWindowFlow,
   type FlowTrade,
 } from "./tradeFlow.js";
@@ -352,5 +354,88 @@ describe("withWindowFlow", () => {
       tradesPerMin5m: null,
       firstBuyersHolding: 7,
     });
+  });
+});
+
+describe("chainLaunchBags (model audit 2026-10-26, §16)", () => {
+  const launch = 1_000_000;
+  const t = (wallet: string, side: "buy" | "sell", tokens: number, secondsAfterLaunch: number) => ({
+    wallet,
+    side,
+    sol: tokens / 1e6,
+    tokens,
+    atMs: launch + secondsAfterLaunch * 1000,
+  });
+  // The dev's create buy, two snipers inside 30s, a late buyer, then the bags move.
+  const history = [
+    t("dev", "buy", 50_000_000, 0),
+    t("s1", "buy", 20_000_000, 5),
+    t("s2", "buy", 10_000_000, 29),
+    t("late", "buy", 30_000_000, 31),
+    t("s1", "sell", 15_000_000, 120),
+    t("dev", "sell", 25_000_000, 200),
+    t("s2", "buy", 10_000_000, 300),
+  ];
+
+  it("reads the early buyers' and the dev's bags off a whole history, as the stream's book keeps them", () => {
+    const bags = chainLaunchBags(history, "dev", true);
+    expect(bags).not.toBeNull();
+    // s1 and s2 bought within 30s of the launch; "late" at 31s and the dev don't count.
+    expect(bags!.earlyBuyerCount).toBe(2);
+    // s1 holds 5M, s2 holds 20M: 25M of 1B.
+    expect(bags!.earlyBuyerHoldPct).toBeCloseTo(2.5);
+    // Sold 15M of the 40M they bought.
+    expect(bags!.earlyBuyerSoldShare).toBeCloseTo(15 / 40);
+    expect(bags!.devSoldShare).toBeCloseTo(0.5);
+  });
+
+  it("reads the same bags from a newest-first page: the launch is the oldest trade", () => {
+    expect(chainLaunchBags([...history].reverse(), "dev", true)).toEqual(
+      chainLaunchBags(history, "dev", true),
+    );
+  });
+
+  it("leaves the dev unknown without a creator, and reads a creator who never bought as no bag", () => {
+    const bags = chainLaunchBags(history, null, true);
+    expect(bags!.devSoldShare).toBeNull();
+    // Without a creator the dev's buy is the launch's first buy: an early buyer like the others.
+    expect(bags!.earlyBuyerCount).toBe(3);
+    expect(chainLaunchBags(history, "someoneElse", true)!.devSoldShare).toBeNull();
+  });
+
+  it("says nothing about a page that isn't the whole history, and reads an unbought launch as no early buyers", () => {
+    expect(chainLaunchBags(history, "dev", false)).toBeNull();
+    expect(chainLaunchBags([], "dev", true)).toEqual({
+      earlyBuyerCount: 0,
+      earlyBuyerHoldPct: 0,
+      earlyBuyerSoldShare: null,
+      devSoldShare: null,
+    });
+  });
+
+  it("never reads a sold bag below empty, and a sell before any buy opens no bag", () => {
+    const bags = chainLaunchBags(
+      [t("a", "buy", 1_000, 0), t("a", "sell", 5_000, 10), t("b", "sell", 10, 1)],
+      null,
+      true,
+    );
+    expect(bags).toMatchObject({ earlyBuyerCount: 1, earlyBuyerHoldPct: 0, earlyBuyerSoldShare: 1 });
+  });
+});
+
+describe("withLaunchBags", () => {
+  it("fills only the launch-bag fields the flow lacks, and leaves the flow alone without bags", () => {
+    const bags = { earlyBuyerCount: 2, earlyBuyerHoldPct: 2.5, earlyBuyerSoldShare: 0.4, devSoldShare: 0.5 };
+    const stream = { ...EMPTY_TRADE_FLOW, earlyBuyerCount: 7, uniqueBuyers5m: 3 };
+    expect(withLaunchBags(stream, bags)).toMatchObject({
+      earlyBuyerCount: 7,
+      earlyBuyerHoldPct: 2.5,
+      earlyBuyerSoldShare: 0.4,
+      devSoldShare: 0.5,
+      uniqueBuyers5m: 3,
+    });
+    expect(withLaunchBags(undefined, bags)).toMatchObject({ ...EMPTY_TRADE_FLOW, ...bags });
+    expect(withLaunchBags(stream, null)).toBe(stream);
+    expect(withLaunchBags(undefined, null)).toBeUndefined();
   });
 });

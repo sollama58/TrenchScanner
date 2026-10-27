@@ -441,6 +441,18 @@ const envSchema = z.object({
   // it off.
   LIVE_TAPE_PAGES_PER_CYCLE: z.coerce.number().int().nonnegative().default(4),
   LIVE_TAPE_REFRESH_SECONDS: z.coerce.number().int().positive().default(180),
+  // Which coins queue for a live-tape page: by default only those close to a call (a contender
+  // past the event pre-gate, or an alert held for a wallet figure), the rest of the scored coins
+  // never. On PumpPortal's free tier the tape is also where every coin's 5m order flow and launch
+  // bags come from (model audit 2026-10-26, §16), so "true" queues every coin that passed the
+  // safety screen, contenders first, then by churn - still within LIVE_TAPE_PAGES_PER_CYCLE, so
+  // the credit ceiling is unchanged; a wider queue only means a page is read sooner for a coin
+  // that would otherwise wait to become a contender. Off by default: which coins get a 10-credit
+  // page is a Helius-credit decision.
+  LIVE_TAPE_ALL_SCORED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
 
   // The empty-top-10-wallet signal (apps/worker/src/jobs/walletHoldings.ts): how much a top-10
   // holder must hold in tokens that are neither cash (USDC/USDT) nor gas (SOL) before it counts

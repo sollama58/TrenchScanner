@@ -1,4 +1,5 @@
 import {
+  chainLaunchBags,
   chainWindowFlow,
   createLogger,
   liveFlags,
@@ -8,6 +9,7 @@ import {
   walletScoreReading,
   winnerFollowReading,
   type HeliusClient,
+  type LaunchBags,
   type LiveFlagsReading,
   type LiveTraderCounts,
   type ScoredWallet,
@@ -274,11 +276,29 @@ const MAX_WINDOW_PAGE_AGE_MS = 5 * 60_000;
 
 /**
  * The 5m order flow read from a coin's recent page (core's chainWindowFlow), for a coin the
- * PumpPortal stream doesn't carry (a Stonks coin); null without a page read in the last five
- * minutes. Read as of when the page was read.
+ * PumpPortal stream doesn't carry trades for: a Stonks coin, and on the stream's free tier
+ * (launches and graduations only) every coin - model audit 2026-10-26, §16. Null without a page
+ * read in the last five minutes. Read as of when the page was read.
  */
 export function liveWindowFlowOf(mint: string, nowMs = Date.now()): TradeFlowFeatures | null {
   const page = pages.get(mint);
   if (!page || nowMs - page.atMs > MAX_WINDOW_PAGE_AGE_MS) return null;
   return chainWindowFlow(page.trades, page.atMs, page.complete);
+}
+
+/**
+ * The launch's bags (early buyers, dev) read from a coin's recent page when it is the coin's whole
+ * history (core's chainLaunchBags), for a coin whose launch the PumpPortal stream saw no trades of
+ * (its free tier; model audit 2026-10-26, §16). `creator` is the coin's creator wallet off the
+ * on-chain profile, unknown without which the dev's bag stays null. Null without a recent page
+ * (livePageOf) or on a page with an older page behind it.
+ */
+export function liveLaunchBagsOf(
+  mint: string,
+  creator: string | null | undefined,
+  nowMs = Date.now(),
+): LaunchBags | null {
+  const page = livePageOf(mint, nowMs);
+  if (!page) return null;
+  return chainLaunchBags(page.trades, creator, page.complete);
 }
