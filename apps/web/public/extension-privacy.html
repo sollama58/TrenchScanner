@@ -61,43 +61,75 @@
         <a href="/">Home</a><a href="/legal.html">Legal</a><a href="/privacy.html">Privacy</a>
       </nav>
       <h1>Trench Overlay privacy policy</h1>
-      <p class="muted">Effective 24 October 2026 (Trade Buddy and bubble maps added the same day)</p>
+      <p class="muted">
+        Effective 28 October 2026, for version 0.9.1 (permissions, synced display choices, Trade Buddy's other
+        wallets and Look up added)
+      </p>
       <p>
         Trench Overlay is TrenchScanner's Chrome extension. It shows your own TrenchScanner alerts in a side
-        panel, each coin's bubble map, and in Trade Buddy the coins your connected wallet buys with your
-        profit or loss. This page explains what it handles and why.
+        panel, each coin's bubble map, any coin you look up, and in Trade Buddy the coins your wallets buy
+        with their profit or loss. This page explains what it handles and why.
       </p>
 
       <h2>What it can't see</h2>
       <p>
         The extension never runs on any website. It has no access to the pages you visit, including Axiom,
         Terminal (Padre) and GMGN. It can't read their content, cookies, logins or wallets, and it doesn't
-        record your browsing history. Its only Chrome permissions are storage and the side panel. It has no
-        access to any website, and the only server it talks to is <code>api.trenchscanner.app</code>.
+        record your browsing history. Its Chrome permissions are storage, the side panel, notifications and
+        alarms: notifications to tell you of a new alert or a run if you turn that on, and alarms to check
+        your alerts once a minute for those notifications and the toolbar icon's unread count, only while
+        either is on. It has no access to any website, and the only server it talks to is
+        <code>api.trenchscanner.app</code>.
       </p>
 
-      <h2>What it stores, on your computer only</h2>
+      <h2>What it stores in Chrome</h2>
       <ul>
         <li>
           Your extension key, which TrenchScanner Settings creates for this browser. It is used as an
           authentication token.
         </li>
         <li>A shortened form of your wallet address, shown in the panel's header.</li>
-        <li>Your overlay settings: which alerts and flags to show, and which sites to link to.</li>
+        <li>
+          Your overlay settings and display choices: which alerts and flags to show, colours, limits, which
+          sites to link to, the coins you snoozed, and the other wallets you asked Trade Buddy to follow.
+        </li>
+        <li>Which alerts you were already notified of or have read, so they aren't counted twice.</li>
       </ul>
       <p>
-        These stay in Chrome's extension storage on your device. Disconnecting in the panel or uninstalling
-        the extension removes them.
+        These are kept in Chrome's extension storage on your device. Disconnecting in the panel or
+        uninstalling the extension removes them there.
+      </p>
+
+      <h2>What it keeps with your TrenchScanner account</h2>
+      <p>
+        Your overlay settings and display choices, including the coins you snoozed and the other wallets Trade
+        Buddy follows, are also saved with your TrenchScanner account, so a reinstall or another browser gets
+        them back. They stay there after you disconnect or uninstall; clear them in the panel (remove the
+        wallets, reset the choices) while connected.
       </p>
 
       <h2>What it sends, and to whom</h2>
       <ul>
         <li>
-          To TrenchScanner (<code>api.trenchscanner.app</code>): your key, to read your recent alerts, token
-          stats, bubble maps, your own wallet's trades (Trade Buddy) and overlay settings, and to save those
-          settings when you change them. TrenchScanner reads your connected wallet's trades from the public
-          Solana chain, as its TRADES panel does, while Trade Buddy is open. TrenchScanner records when each
-          key was last used, so you can see it in Settings.
+          To TrenchScanner (<code>api.trenchscanner.app</code>), with your key: requests to read your recent
+          alerts, token stats, safety screens, bubble maps, Trade Buddy and your overlay settings, and to save
+          those settings and display choices when you change them. TrenchScanner records when each key was
+          last used, so you can see it in Settings.
+        </li>
+        <li>
+          Look up: the coin address you paste (a pasted link is reduced to its coin address in the panel
+          first), to read that coin's card, safety screen, bubble map and top holders.
+        </li>
+        <li>
+          Bubble maps: the panel's map makes the same reads TrenchScanner's site makes for a bubble map (its
+          holders, links between wallets, chart), sent as you with your key, including the wallet addresses
+          shown on the map.
+        </li>
+        <li>
+          Trade Buddy: the other wallet addresses you add (up to three, for example the wallets Axiom or
+          Terminal made for you). TrenchScanner reads their trades, and your connected wallet's, from the
+          public Solana chain, as its TRADES panel does, while Trade Buddy is open, and looks up the coins
+          they buy. Those wallets don't need to be linked to your account, so add only your own.
         </li>
         <li>
           Token images load from where the token's launcher or DexScreener hosts them, for example
@@ -107,16 +139,18 @@
       </ul>
       <p>
         The extension sends nothing else to anyone. It has no analytics, no tracking and no ads. Your data is
-        not sold or shared, and it is not used for anything except showing you your own alerts.
+        not sold or shared, and it is not used for anything except showing you your own alerts, the coins you
+        look up and your wallets' trades.
       </p>
 
       <h2>Your key</h2>
       <p>
-        A key can read only your alerts, token stats, bubble maps, your own wallet's trades and overlay
-        settings, and save the overlay settings. It can't trade, move funds or change your account. Trade
-        Buddy's trade buttons only open TrenchScanner's Trade panel filled in; your wallet confirms every
-        trade there. You can revoke any key at any time in TrenchScanner Settings, under Browser extension.
-        Signing out everywhere revokes them all.
+        A key can read your alerts, token stats and safety screens, bubble maps (with the site's map reads
+        made as you), any coin you look up, Trade Buddy for your wallet and the others you add, and your
+        overlay settings, and save the overlay settings and display choices. It can't trade, move funds or
+        change your account otherwise. Trade Buddy's trade buttons only open TrenchScanner's Trade panel
+        filled in; your wallet confirms every trade there. You can revoke any key at any time in TrenchScanner
+        Settings, under Browser extension. Signing out everywhere revokes them all.
       </p>
 
       <h2>Changes</h2>

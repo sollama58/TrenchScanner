@@ -26,7 +26,11 @@ export interface SiteAnswer {
   body: string;
 }
 
-export type SiteRequest = (call: SiteCall) => Promise<SiteAnswer>;
+/**
+ * Answers one SiteCall. `signal` is the map's own abort (a held read the map gave up on, or the map
+ * unmounting): the extension passes it on so the read stops at the API too (audit EX-10).
+ */
+export type SiteRequest = (call: SiteCall, signal?: AbortSignal) => Promise<SiteAnswer>;
 
 /** Puts the map for `mint` in `root`, its API calls answered by `request`. Returns its unmount. */
 export function mountTokenMap(root: HTMLElement, mint: string, request: SiteRequest): () => void {
@@ -66,11 +70,14 @@ function routeFetch(request: SiteRequest): void {
     const signal = init?.signal;
     if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
     const body = typeof init?.body === "string" ? init.body : null;
-    const answer = request({
-      method: (init?.method ?? "GET").toUpperCase(),
-      path: url.slice(API_URL.length),
-      body,
-    });
+    const answer = request(
+      {
+        method: (init?.method ?? "GET").toUpperCase(),
+        path: url.slice(API_URL.length),
+        body,
+      },
+      signal ?? undefined,
+    );
     const aborted = new Promise<never>((_, reject) =>
       signal?.addEventListener(
         "abort",

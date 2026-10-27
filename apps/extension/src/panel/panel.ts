@@ -1089,7 +1089,7 @@ function runsSection(): HTMLElement {
     "Run alerts",
     toggle(
       "Notify me when an alert runs",
-      "A Chrome notification when one of your alerts reaches these multiples of its alert's market cap, each once.",
+      "A Chrome notification when one of your alerts peaks at these multiples of its alert's market cap, each once. A peak isn't a win: the leaderboard counts 2x within 15 minutes of the alert, before a 50% drop.",
       tipPrefs.runs.enabled,
       "var(--ok)",
       (on) => put({ enabled: on }),
