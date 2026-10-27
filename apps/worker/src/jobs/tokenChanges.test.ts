@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Token } from "@prisma/client";
-import { knownSocial, tokenChanges } from "./scanJob.js";
+import { knownSocial, storedSocial, tokenChanges } from "./scanJob.js";
 
 const existing = {
   symbol: "DOG",
@@ -118,6 +118,31 @@ describe("knownSocial", () => {
     expect(knownSocial(undefined, false)).toBe(false);
     expect(knownSocial(undefined, null)).toBeUndefined();
     expect(knownSocial(undefined, undefined)).toBeUndefined();
+  });
+});
+
+describe("storedSocial", () => {
+  it("reads a stored link as a link whatever the bit says", () => {
+    expect(storedSocial(false, "https://t.me/x")).toBe(true);
+    expect(storedSocial(null, "https://x.com/y")).toBe(true);
+    expect(storedSocial(undefined, "https://example.org")).toBe(true);
+  });
+
+  it("falls back to the bit, null read as unknown", () => {
+    expect(storedSocial(true, null)).toBe(true);
+    expect(storedSocial(false, null)).toBe(false);
+    expect(storedSocial(null, null)).toBeUndefined();
+    expect(storedSocial(undefined, undefined)).toBeUndefined();
+  });
+
+  it("hasTelegram: the NOT NULL column's false is unread, so only its link or a true counts", () => {
+    // How scanJob resolves it (model audit 2026-10-26, §16): the bit is passed as `bit || undefined`.
+    const resolve = (bit: boolean, url: string | null) =>
+      knownSocial(undefined, storedSocial(bit || undefined, url));
+    expect(resolve(false, "https://t.me/x")).toBe(true);
+    expect(resolve(true, null)).toBe(true);
+    // A stored false with no link is "none or never read" - never a known none.
+    expect(resolve(false, null)).toBeUndefined();
   });
 });
 
