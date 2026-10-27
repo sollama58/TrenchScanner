@@ -1275,9 +1275,18 @@ export function AsylApp() {
     () => visibleGraph(kept, hiddenKinds, keep, { cut, cutoffs, solUsd, perWallet, hideLoose, until }),
     [kept, hiddenKinds, keep, cut, cutoffs, solUsd, perWallet, hideLoose, until],
   );
+  // The timeline lays the map out by everything it will show (user ask 2026-10-27: a replay fills
+  // in links and wallets as they happen, and never moves the bubbles), and draws what has happened.
+  const laidOut = useMemo(
+    () =>
+      until === null
+        ? shown
+        : visibleGraph(kept, hiddenKinds, keep, { cut, cutoffs, solUsd, perWallet, hideLoose }),
+    [shown, until, kept, hiddenKinds, keep, cut, cutoffs, solUsd, perWallet, hideLoose],
+  );
   // The inspector lists the links drawn, so one hidden by a slider or by hand isn't listed.
   const inspected = useMemo(() => ({ nodes: kept.nodes, edges: shown.edges }), [kept, shown]);
-  const layoutKey = `${shown.nodes.length}:${shown.edges.length}:${shown.nodes.at(-1)?.id ?? ""}`;
+  const layoutKey = `${laidOut.nodes.length}:${laidOut.edges.length}:${laidOut.nodes.at(-1)?.id ?? ""}`;
   const selectedNode = selected ? (kept.nodes.find((n) => n.id === selected) ?? null) : null;
   // The selected bubble's own links on the map by kind, before any filter, for its own switches.
   const ownLinks = useMemo(() => {
@@ -1996,7 +2005,7 @@ export function AsylApp() {
           )}
         </nav>
 
-        <main className="asyl-stage">
+        <main className={`asyl-stage${until !== null ? " asyl-replay" : ""}`}>
           <div className="asyl-toolbar">
             <div className="asyl-toolbar-row">
               <button
@@ -2250,6 +2259,7 @@ export function AsylApp() {
               analyst={analyst}
               solUsd={solUsd}
               graph={shown}
+              layoutGraph={laidOut}
               layout={layout.current}
               selected={selected}
               focus={focus}

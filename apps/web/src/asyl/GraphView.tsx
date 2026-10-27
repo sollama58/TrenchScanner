@@ -389,8 +389,15 @@ export function GraphView({
   onPick,
   analyst = false,
   solUsd = null,
+  layoutGraph,
 }: {
   graph: AsylGraph;
+  /**
+   * What the bubbles are laid out by, when it is more than what is drawn: the timeline (user ask
+   * 2026-10-27) draws links and wallets as they happen, while every bubble keeps the place it has
+   * on the whole map, so a replay never moves the layout.
+   */
+  layoutGraph?: AsylGraph;
   layout: LayoutState;
   selected: string | null;
   focus: string | null;
@@ -455,7 +462,8 @@ export function GraphView({
       setGhost(null);
     }
   }, [tool]);
-  const radius = useMemo(() => radiusOf(graph), [graph]);
+  const laid = layoutGraph ?? graph;
+  const radius = useMemo(() => radiusOf(laid), [laid]);
   const clusters = useMemo(() => clusterOf(graph), [graph]);
   const maxByKind = useMemo(() => {
     const m = new Map<AsylEdgeKind, number>();
@@ -532,8 +540,8 @@ export function GraphView({
   // is dragged, so what is tied to it follows (user ask 2026-10-24).
   const sim = useRef<{ raf: number; alpha: number; ticks: number }>({ raf: 0, alpha: 0, ticks: 0 });
   const simStarted = useRef(false);
-  const graphRef = useRef(graph);
-  graphRef.current = graph;
+  const graphRef = useRef(laid);
+  graphRef.current = laid;
   const radiusRef = useRef(radius);
   radiusRef.current = radius;
   const fitRef = useRef(fit);
@@ -542,11 +550,11 @@ export function GraphView({
   // everything goes onto a free cell once it settles.
   const cell = useMemo(
     () =>
-      gridCell(graph, radius, (id) => {
-        const n = byId.get(id);
+      gridCell(laid, radius, (id) => {
+        const n = byId.get(id) ?? laid.nodes.find((x) => x.id === id);
         return n ? nodeName(n) : "";
       }),
-    [graph, radius, byId],
+    [laid, radius, byId],
   );
   const gridRef = useRef(grid);
   gridRef.current = grid;
@@ -608,7 +616,7 @@ export function GraphView({
   useEffect(() => {
     // Analyst Mode lays the map out itself, below.
     if (analystRef.current) return;
-    const added = placeNew(layout, graph);
+    const added = placeNew(layout, laid);
     // A saved map opens just as it was left: nothing new, so nothing to settle.
     if (added.length === 0 && !fittedOnce.current && !simStarted.current) {
       if (gridRef.current) snap();
@@ -628,7 +636,7 @@ export function GraphView({
     // no floating about for seconds before they jump to their cells.
     if (gridRef.current) {
       const still = { ...layout, pinned: new Set([...layout.pinned, ...held.current]) };
-      for (let t = 0; t < 300; t++) if (step(still, graph, 1 - t / 300, radius) < 0.05 && t > 20) break;
+      for (let t = 0; t < 300; t++) if (step(still, laid, 1 - t / 300, radius) < 0.05 && t > 20) break;
       snap();
       setFrame((f) => f + 1);
       if (!fittedOnce.current) {
@@ -639,7 +647,7 @@ export function GraphView({
       return;
     }
     if (reduceMotion) {
-      for (let t = 0; t < 300; t++) if (step(layout, graph, 1 - t / 300, radius) < 0.05 && t > 20) break;
+      for (let t = 0; t < 300; t++) if (step(layout, laid, 1 - t / 300, radius) < 0.05 && t > 20) break;
       if (gridRef.current) snap();
       setFrame((f) => f + 1);
       if (!fittedOnce.current) {
@@ -669,7 +677,7 @@ export function GraphView({
       sim.current.raf = 0;
       const first = !wasAnalyst.current;
       wasAnalyst.current = true;
-      placeNew(layout, graph);
+      placeNew(layout, laid);
       for (const [id, p] of analystLayout(av.graph, aBoxes, aHeld.current)) {
         layout.pos.set(id, p);
         layout.vel.set(id, { x: 0, y: 0 });
@@ -686,9 +694,9 @@ export function GraphView({
     wasAnalyst.current = false;
     aHeld.current = new Map();
     fittedOnce.current = false;
-    placeNew(layout, graph);
+    placeNew(layout, laid);
     if (reduceMotion) {
-      for (let t = 0; t < 300; t++) if (step(layout, graph, 1 - t / 300, radius) < 0.05 && t > 20) break;
+      for (let t = 0; t < 300; t++) if (step(layout, laid, 1 - t / 300, radius) < 0.05 && t > 20) break;
       if (gridRef.current) snap();
       fittedOnce.current = true;
       setFrame((f) => f + 1);
@@ -1340,6 +1348,7 @@ export function GraphView({
                 return (
                   <g
                     key={n.id}
+                    data-id={n.id}
                     className={`asyl-node${isSel ? " selected" : ""}${isPicked ? " picked" : ""}`}
                     transform={`translate(${p.x} ${p.y})`}
                     opacity={dim ? 0.25 : 1}
