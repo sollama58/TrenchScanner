@@ -1223,11 +1223,13 @@ async function main() {
         }),
       env.CURATOR_TRAINING_INTERVAL_HOURS * 60,
       {
-        // A run took 82 minutes on 2026-10-22, nearly all of it exams, and grows with seats and
-        // rows; the deadline exits the process, so it sits well above that. One that hangs (a dead
-        // connection, a training thread that never answers) would otherwise stop training for good
-        // and block "Retrain now".
-        deadlineMinutes: 150,
+        // A run took 82 minutes on 2026-10-22 and 130 on 2026-10-27, nearly all of it exams, and
+        // grows with seats and rows; the deadline exits the process, so it sits well above that (a
+        // run cut at 150 would be redone and cut again). One that hangs (a dead connection, a
+        // training thread that never answers) would otherwise stop training for good and block
+        // "Retrain now". /health/worker calls a run hung well before this, once its exams stop
+        // moving (TRAINING_DEADLINE_MS in apps/api/src/routes/health.ts).
+        deadlineMinutes: 240,
         // The admin panel's "Retrain now" (POST /admin/curator/retrain) leaves a request row.
         runEarly: { everyMs: 60_000, due: retrainRequested },
         // "Stop and retrain": the same row, left while a run is going (each run marks the requests
