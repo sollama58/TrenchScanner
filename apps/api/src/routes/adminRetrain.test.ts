@@ -86,13 +86,14 @@ describe.skipIf(!dbAvailable)("admin retrain now", () => {
 
   it("stops a run in flight on request, once, and shows where the run had got to", async () => {
     await prisma.curatorRetrainRequest.deleteMany({});
-    const since = new Date(Date.now() - 50 * 60_000);
+    // Hung: its step has not moved for 50 minutes.
+    const since = new Date(Date.now() - 60 * 60_000);
     const meta = {
       intervalMs: 6 * 3_600_000,
       runningSince: since.toISOString(),
       runningStagesMs: { "load rows": 40_000 },
       runningStep: "exams: examining Trees (5 of up to 24)",
-      runningStepAt: new Date(Date.now() - 40 * 60_000).toISOString(),
+      runningStepAt: new Date(Date.now() - 50 * 60_000).toISOString(),
     };
     await prisma.systemHeartbeat.upsert({
       where: { job: "curator-training" },

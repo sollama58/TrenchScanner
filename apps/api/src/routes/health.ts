@@ -105,11 +105,19 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   "kol-wallets": 26 * 3_600_000,
 };
 const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
+/** The worker's deadline on a training run (curator-training's deadlineMinutes in apps/worker/src/index.ts). */
+const TRAINING_DEADLINE_MS = 240 * 60_000;
 /**
  * A run in flight is hung after its job's stale threshold - unless the job's runs are far shorter
- * than that. Training's threshold is a whole interval and more (it runs every twelve hours by default), but a run
- * takes about fifteen minutes and the worker gives up on one at 90: going by the threshold, a stuck
- * run read "running" on the admin panel until the worker restarted under it.
+ * than that. Training's threshold is a whole interval and more (it runs every twelve hours by
+ * default): going by the threshold, a stuck run read "running" on the admin panel until the worker
+ * restarted under it.
+ *
+ * Training reports each exam as it starts (runningStep), so for it this is how long the run may go
+ * without a new step, not how long it may run: its runs took 82 minutes on 2026-10-22 and 130 on
+ * 2026-10-27, nearly all exams of a few minutes each, and a 45-minute cap on the whole run read a
+ * run on its 21st exam of 26 as hung (user report 2026-10-27). One past TRAINING_DEADLINE_MS is
+ * hung however it moves.
  */
 const HUNG_AFTER_MS: Record<string, number> = {
   "curator-training": 45 * 60_000,
@@ -429,9 +437,7 @@ export function summarizeHeartbeat(
     failing: isFailing(h.lastSuccessAt, threshold, now),
     staleAfterMs: threshold,
     runningForMs,
-    hung:
-      orphaned ||
-      (runningForMs !== null && runningForMs > Math.min(threshold, HUNG_AFTER_MS[h.job] ?? threshold)),
+    hung: orphaned || isHungRun(h.job, h.meta, runningSince, threshold, now),
     // The run in flight was lost with its process (see above), not still going.
     orphaned,
     // How long the last run took, and for the scan cycle where that time went - timings
@@ -443,6 +449,28 @@ export function summarizeHeartbeat(
     // to 24)") - a step that has sat unchanged for a long while is where a stuck run is stuck.
     runningStep: runningSince ? runningStep(h.meta) : null,
   };
+}
+
+/**
+ * Whether the run in flight is hung (see HUNG_AFTER_MS): past its job's limit since it started, or,
+ * for a run that reports its steps, since its latest step began.
+ */
+function isHungRun(
+  job: string,
+  meta: unknown,
+  runningSince: Date | null,
+  threshold: number,
+  now: number,
+): boolean {
+  if (!runningSince) return false;
+  const runningForMs = now - runningSince.getTime();
+  const limit = Math.min(threshold, HUNG_AFTER_MS[job] ?? threshold);
+  if (job !== "curator-training") return runningForMs > limit;
+  if (runningForMs > TRAINING_DEADLINE_MS) return true;
+  // A step stamped before this run began is the last run's, not progress.
+  const stepAt = Date.parse(runningStep(meta)?.since ?? "");
+  const movedAt = Number.isFinite(stepAt) ? Math.max(stepAt, runningSince.getTime()) : runningSince.getTime();
+  return now - movedAt > limit;
 }
 
 /** The timing and call-count fields of a heartbeat's meta, and nothing else it might carry. */

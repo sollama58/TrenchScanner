@@ -128,6 +128,8 @@ describe("public worker health: stale threshold", () => {
 });
 
 describe("public worker health: a training run in flight", () => {
+  /** Past the longest run below, so every runningSince falls after the last run (lastRunAt 0). */
+  const NOW = 5 * 3_600_000;
   const row = (runningMin: number) => ({
     job: "curator-training",
     lastRunAt: new Date(0),
@@ -135,14 +137,14 @@ describe("public worker health: a training run in flight", () => {
     lastError: null,
     meta: {
       intervalMs: 6 * 3_600_000,
-      runningSince: new Date(3_600_000 - runningMin * 60_000).toISOString(),
+      runningSince: new Date(NOW - runningMin * 60_000).toISOString(),
       runningStagesMs: { "load rows": 40_000, plan: 2_000 },
       runningStep: "exams: examining Trees (5 of up to 24)",
-      runningStepAt: new Date(3_600_000 - 60_000).toISOString(),
+      runningStepAt: new Date(NOW - 60_000).toISOString(),
     },
   });
   const at = (runningMin: number) =>
-    summarizeHeartbeat(row(runningMin) as unknown as Parameters<typeof summarizeHeartbeat>[0], 3_600_000);
+    summarizeHeartbeat(row(runningMin) as unknown as Parameters<typeof summarizeHeartbeat>[0], NOW);
 
   it("reports the stages done and the step under way", () => {
     const s = at(12);
@@ -150,14 +152,43 @@ describe("public worker health: a training run in flight", () => {
     expect(s.runningStagesMs).toEqual({ "load rows": 40_000, plan: 2_000 });
     expect(s.runningStep).toEqual({
       step: "exams: examining Trees (5 of up to 24)",
-      since: new Date(3_600_000 - 60_000).toISOString(),
+      since: new Date(NOW - 60_000).toISOString(),
     });
   });
 
-  it("is hung after 45 minutes, long before its 18-hour stale threshold", () => {
-    expect(at(44).hung).toBe(false);
-    expect(at(46).hung).toBe(true);
-    expect(at(46).staleAfterMs).toBe(18 * 3_600_000);
+  it("is not hung while its exams move, however long it runs", () => {
+    // The step began a minute ago.
+    expect(at(46).hung).toBe(false);
+    expect(at(130).hung).toBe(false);
+    expect(at(130).staleAfterMs).toBe(18 * 3_600_000);
+  });
+
+  it("is hung once no new step has begun for 45 minutes", () => {
+    const stuck = (stepMinAgo: number) =>
+      summarizeHeartbeat(
+        {
+          ...row(100),
+          meta: { ...row(100).meta, runningStepAt: new Date(NOW - stepMinAgo * 60_000).toISOString() },
+        } as unknown as Parameters<typeof summarizeHeartbeat>[0],
+        NOW,
+      );
+    expect(stuck(44).hung).toBe(false);
+    expect(stuck(46).hung).toBe(true);
+  });
+
+  it("counts from the run's start while it has no step of its own yet", () => {
+    const noStep = (runningMin: number) => {
+      const r = row(runningMin);
+      const { runningStep: _step, runningStepAt: _at, ...meta } = r.meta;
+      return summarizeHeartbeat({ ...r, meta } as unknown as Parameters<typeof summarizeHeartbeat>[0], NOW);
+    };
+    expect(noStep(44).hung).toBe(false);
+    expect(noStep(46).hung).toBe(true);
+  });
+
+  it("is hung past the worker's four-hour deadline even while its steps move", () => {
+    expect(at(239).hung).toBe(false);
+    expect(at(241).hung).toBe(true);
   });
 });
 
