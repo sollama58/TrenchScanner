@@ -1042,6 +1042,14 @@ export function AsylApp() {
         const funders = new Set(r.graph.edges.filter((e) => e.kind === "funded").map((e) => e.a)).size;
         return `${r.shown} first buyer${r.shown === 1 ? "" : "s"}, and ${funders} wallet${funders === 1 ? "" : "s"} that funded them.`;
       }),
+    topTraders: (mint) =>
+      void run("Finding its most profitable wallets…", async () => {
+        const r = await asylApi.topTraders(mint);
+        const before = latest.current.graph;
+        add(r.graph);
+        placed(mint, "token", r.graph, before);
+        return r.note;
+      }),
     wave: (wallets, mint) =>
       void run("Showing the wallets that sold together…", async () => {
         const r = await asylApi.links(wallets.slice(0, LINKS_WALLETS), [mint]);

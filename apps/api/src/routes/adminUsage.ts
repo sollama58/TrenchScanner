@@ -82,15 +82,42 @@ export interface ApiUsageReport {
   buckets: number[];
   callsByProvider: { provider: string; values: number[] }[];
   heliusCreditsByFeature: { feature: string; values: number[] }[];
+  /** Asyl's share (user ask 2026-10-27): every /asyl route's outside calls, and today's chain-read meter. */
+  asyl: AsylUsage;
 }
 
+export interface AsylUsage {
+  heliusCredits: number;
+  calls: number;
+  /** Its routes, costliest first (the same rows as `features`). */
+  routes: ({ feature: string; heliusCredits: number; byProvider: Record<string, number> } & Totals)[];
+  /**
+   * Today's (UTC) metered chain reads from AsylCreditUse: Pro allowances and reads paid in Burn
+   * Credits apart, against the site's daily cap (null when not given).
+   */
+  today: { proCredits: number; burnCredits: number; readers: number; cap: number | null };
+}
+
+/** Whether a feature is Asyl's: its API routes (and anything they started), or a read filed as "asyl". */
+export function isAsylFeature(feature: string): boolean {
+  return feature.startsWith("api /asyl") || feature === "asyl" || feature.startsWith("asyl/");
+}
+
+/** The chart's band for a feature: Asyl's routes are one band, so its spend reads at a glance. */
+const chartFeature = (feature: string) => (isAsylFeature(feature) ? "asyl" : feature);
+
 /** The whole report for one window, from ApiUsage (see core's apiUsage.ts). */
-export async function buildApiUsageReport(window: UsageWindow, now = Date.now()): Promise<ApiUsageReport> {
+export async function buildApiUsageReport(
+  window: UsageWindow,
+  now = Date.now(),
+  /** The site's daily Asyl chain-read cap (ASYL_DAILY_CREDITS), for the Asyl panel. */
+  asylCap: number | null = null,
+): Promise<ApiUsageReport> {
   const { spanMs, stepMs } = USAGE_WINDOWS[window];
   // From the start of the first bar, so the chart's first bar and the tables cover the same calls.
   const since = new Date(Math.floor((now - spanMs) / stepMs) * stepMs);
   const stepSec = stepMs / 1000;
-  const [providerRows, endpointRows, featureRows, processRows, seriesRows, heliusRows, oldest] =
+  const [providerRows, endpointRows, featureRows, processRows, seriesRows, heliusRows, oldest, asylToday] =
     await Promise.all([
       prisma.$queryRaw<({ provider: string } & RawTotals)[]>`
       SELECT "provider", ${SUMS} FROM "ApiUsage" WHERE "bucket" >= ${since}
@@ -116,6 +143,10 @@ export async function buildApiUsageReport(window: UsageWindow, now = Date.now())
         SUM("credits") AS "last7d"
       FROM "ApiUsage" WHERE "provider" = 'helius' AND "bucket" >= ${new Date(now - 7 * DAY_MS)}`,
       prisma.$queryRaw<{ oldest: Date | null }[]>`SELECT MIN("bucket") AS "oldest" FROM "ApiUsage"`,
+      prisma.asylCreditUse.findMany({
+        where: { day: new Date(now).toISOString().slice(0, 10) },
+        select: { userId: true, credits: true },
+      }),
     ]);
 
   const providers = providerRows.map((r) => ({ provider: r.provider, ...totals(r) }));
@@ -162,10 +193,17 @@ export async function buildApiUsageReport(window: UsageWindow, now = Date.now())
   const slot = (tSec: bigint | number) => Math.round((Number(tSec) * 1000 - first) / stepMs);
   const callsByProvider = providers.map((p) => ({ provider: p.provider, values: buckets.map(() => 0) }));
   const providerIndex = new Map(callsByProvider.map((s, i) => [s.provider, i]));
-  const topFeatures = features
-    .filter((f) => f.heliusCredits > 0)
+  const chartCredits = new Map<string, number>();
+  for (const f of features)
+    chartCredits.set(
+      chartFeature(f.feature),
+      (chartCredits.get(chartFeature(f.feature)) ?? 0) + f.heliusCredits,
+    );
+  const topFeatures = [...chartCredits]
+    .filter(([, c]) => c > 0)
+    .sort((a, b) => b[1] - a[1])
     .slice(0, CHART_FEATURES)
-    .map((f) => f.feature);
+    .map(([f]) => f);
   const heliusCreditsByFeature = [...topFeatures, "other"].map((feature) => ({
     feature,
     values: buckets.map(() => 0),
@@ -176,10 +214,24 @@ export async function buildApiUsageReport(window: UsageWindow, now = Date.now())
     const p = providerIndex.get(r.provider);
     if (p !== undefined) callsByProvider[p]!.values[i]! += num(r.calls);
     if (r.provider === "helius") {
-      const fi = topFeatures.indexOf(r.feature);
+      const fi = topFeatures.indexOf(chartFeature(r.feature));
       heliusCreditsByFeature[fi === -1 ? topFeatures.length : fi]!.values[i]! += num(r.credits);
     }
   }
+
+  const asylRoutes = features.filter((f) => isAsylFeature(f.feature));
+  const burnRows = asylToday.filter((u) => u.userId.startsWith("burn:"));
+  const asyl: AsylUsage = {
+    heliusCredits: asylRoutes.reduce((a, f) => a + f.heliusCredits, 0),
+    calls: asylRoutes.reduce((a, f) => a + f.calls, 0),
+    routes: asylRoutes,
+    today: {
+      proCredits: asylToday.reduce((a, u) => a + u.credits, 0) - burnRows.reduce((a, u) => a + u.credits, 0),
+      burnCredits: burnRows.reduce((a, u) => a + u.credits, 0),
+      readers: new Set(asylToday.map((u) => u.userId.replace(/^burn:/, ""))).size,
+      cap: asylCap,
+    },
+  };
 
   const h = heliusRows[0];
   const last24h = num(h?.last24h);
@@ -197,6 +249,7 @@ export async function buildApiUsageReport(window: UsageWindow, now = Date.now())
     buckets,
     callsByProvider,
     heliusCreditsByFeature: heliusCreditsByFeature.filter((s) => s.values.some((v) => v > 0)),
+    asyl,
   };
 }
 
@@ -307,7 +360,9 @@ export async function registerAdminUsageRoutes(app: FastifyInstance, opts: { env
     const parsed = querySchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_query" });
     const { window } = parsed.data;
-    return reports.for(window).get(() => buildApiUsageReport(window));
+    return reports
+      .for(window)
+      .get(() => buildApiUsageReport(window, Date.now(), opts.env.ASYL_DAILY_CREDITS));
   });
 
   /**

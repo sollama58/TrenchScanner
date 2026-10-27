@@ -365,6 +365,10 @@ export const asylApi = {
     api<GraphRead & { readAt: string | null }>(`/asyl/token/${enc(mint)}${holderQuery(q)}`),
   report: (mint: string) => api<CoinReport>(`/asyl/token/${enc(mint)}/report`),
   earlyBuyers: (mint: string) => api<GraphRead & { shown: number }>(`/asyl/token/${enc(mint)}/early`),
+  topTraders: (mint: string) =>
+    api<GraphRead & { shown: number; total: number | null; note: string }>(
+      `/asyl/token/${enc(mint)}/top-traders`,
+    ),
   launches: (wallet: string) => api<GraphRead & { shown: number }>(`/asyl/wallet/${enc(wallet)}/launches`),
   pastHolders: (mint: string, q?: HolderQuery) =>
     api<GraphRead & { total: number; shown: number; note: string }>(

@@ -568,7 +568,7 @@ export async function addHolders(
 }
 
 /** Every funding and transfer that ties a coin's holders, past or present, to one another. */
-async function linkHolders(g: GraphBuilder, mint: string, wallets: string[]): Promise<void> {
+export async function linkHolders(g: GraphBuilder, mint: string, wallets: string[]): Promise<void> {
   if (wallets.length === 0) return;
   const [funders, transfers] = await Promise.all([
     prisma.walletFunder.findMany({

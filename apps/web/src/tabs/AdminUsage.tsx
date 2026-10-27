@@ -37,6 +37,13 @@ interface ApiUsageReport {
   buckets: number[];
   callsByProvider: { provider: string; values: number[] }[];
   heliusCreditsByFeature: { feature: string; values: number[] }[];
+  /** Asyl's share: its routes' outside calls, and today's metered chain reads. */
+  asyl?: {
+    heliusCredits: number;
+    calls: number;
+    routes: ({ feature: string; heliusCredits: number; byProvider: Record<string, number> } & Totals)[];
+    today: { proCredits: number; burnCredits: number; readers: number; cap: number | null };
+  };
 }
 
 interface TokenSageUsage {
@@ -76,7 +83,8 @@ const PROVIDER_LABEL: Record<string, string> = {
 };
 const providerName = (p: string) => PROVIDER_LABEL[p] ?? p;
 /** "scan/linkedWallets" -> "scan › linkedWallets"; an API route ("api /tokens/:mint") stays as it is. */
-const featureName = (f: string) => (f.startsWith("api ") ? f : f.split("/").join(" › "));
+const featureName = (f: string) =>
+  f === "asyl" ? "Asyl (all routes)" : f.startsWith("api ") ? f : f.split("/").join(" › ");
 
 /** A compact count: 1,234 / 12.3k / 1.2M. */
 function compact(v: number): string {
@@ -207,6 +215,47 @@ export function UsageAdmin() {
                   tone={r.total.calls > 0 && r.total.errors / r.total.calls >= 0.05 ? "warn" : undefined}
                 />
               </div>
+              {r.asyl && (
+                <Panel
+                  title="Asyl"
+                  note="Every call Asyl's routes made in this window (all its chain tools, Pro and Burn Credit ones alike), and today's metered chain reads against the site's daily cap. Asyl is one band in the chart above."
+                >
+                  <div className="kpis">
+                    <Kpi
+                      label="Asyl Helius credits"
+                      value={compact(r.asyl.heliusCredits)}
+                      sub={`${helius?.credits ? pct((100 * r.asyl.heliusCredits) / helius.credits, 1) : "–"} of Helius in this window · ${n(r.asyl.calls)} calls`}
+                    />
+                    <Kpi
+                      label="Asyl chain reads today"
+                      value={compact(r.asyl.today.proCredits + r.asyl.today.burnCredits)}
+                      sub={`${r.asyl.today.cap ? `of ${compact(r.asyl.today.cap)} cap · ` : ""}Pro ${compact(r.asyl.today.proCredits)} · Burn Credits ${compact(r.asyl.today.burnCredits)} · ${n(r.asyl.today.readers)} reader${r.asyl.today.readers === 1 ? "" : "s"}`}
+                      tone={
+                        r.asyl.today.cap &&
+                        r.asyl.today.proCredits + r.asyl.today.burnCredits >= r.asyl.today.cap * 0.8
+                          ? "warn"
+                          : undefined
+                      }
+                    />
+                  </div>
+                  <Table
+                    head={["Route", "Helius credits", "Calls", "Failed", "Calls by provider"]}
+                    rows={r.asyl.routes.map((f) => [
+                      <code>{featureName(f.feature)}</code>,
+                      f.heliusCredits > 0 ? <b>{n(f.heliusCredits)}</b> : <span className="faint">–</span>,
+                      n(f.calls),
+                      errorCell(f),
+                      <span className="small muted">
+                        {Object.entries(f.byProvider)
+                          .sort((a, b) => b[1] - a[1])
+                          .map(([p, c]) => `${providerName(p)} ${compact(c)}`)
+                          .join(" · ")}
+                      </span>,
+                    ])}
+                    empty="Asyl made no outside calls in this window."
+                  />
+                </Panel>
+              )}
               <Panel
                 title={chart === "credits" ? "Helius credits by feature" : "Calls by provider"}
                 note="Stacked per bar; the last bar is still filling. Hover or tap a bar for its numbers."

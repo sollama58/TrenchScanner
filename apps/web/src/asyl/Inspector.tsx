@@ -56,6 +56,8 @@ export interface InspectorActions {
   holders: (mint: string, live: boolean) => void;
   /** A coin's first buyers on its trade tape, with who funded them. */
   earlyBuyers: (mint: string) => void;
+  /** A coin's 100 most profitable wallets of all time (Solana Tracker), free. */
+  topTraders: (mint: string) => void;
   /** Every coin a wallet deployed that TrenchScanner knows of. */
   launches: (wallet: string) => void;
   /** Starts or stops watching a wallet (the Watch tab). */
@@ -572,6 +574,14 @@ export function Inspector({
             >
               Show holders
             </button>
+            <button
+              className="asyl-btn"
+              disabled={!!busy}
+              title="The 100 wallets that made the most on it, of everyone who ever traded it, with what they made and who funded them. From Solana Tracker; free"
+              onClick={() => actions.topTraders(node.id)}
+            >
+              Top 100 profitable wallets
+            </button>
             <label
               className="asyl-check"
               title={chainOff ?? "Reads who holds it right now from the chain, up to 130 credits"}
@@ -582,12 +592,15 @@ export function Inspector({
                 disabled={!!chainOff}
                 onChange={(e) => setLive(e.target.checked)}
               />{" "}
-              Live from the chain <span className="asyl-pro-chip">Pro</span>
+              Read holders now live (top 50), not the last saved list{" "}
+              <span className="asyl-pro-chip">Pro</span>
             </label>
             <p className="asyl-muted asyl-small">
-              Everyone holding{" "}
-              {holderRule && holderRule.minPct > 0 ? `${holderRule.minPct}% or more` : "any share"} now, and
-              everyone who put {holderRule?.minSol ?? 0.1} SOL or more into it before, sold out or not.
+              Holders now with{" "}
+              {holderRule && holderRule.minPct > 0 ? `${holderRule.minPct}% or more` : "any share"}
+              {live && !chainOff ? ", read live from the chain" : ", as TrenchScanner last saved them"}. Plus
+              past holders: wallets that put {holderRule?.minSol ?? 0.1} SOL or more in between launch and 30
+              minutes after TrenchScanner called it. For buyers of all time, use Top 100 profitable wallets.
               {onEditRule && (
                 <>
                   {" "}
