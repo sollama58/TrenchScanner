@@ -226,7 +226,9 @@ its pill placed in the part the column cuts off, which left only the dot in view
 - **Run alerts** (Settings → Run alerts, off by default). A Chrome notification when one of the
   reader's alerts reaches 2x, 5x or 10x (3x optional) its alert's market cap, peaks between reads
   included, each level once per coin; and, when set, once when it falls a share below it. What an
-  alert already did when the option is turned on is only marked.
+  alert already did when the option is turned on is only marked. Worded as a peak ("peaked 2x
+  after its alert"), and one more than 15 minutes after the alert says it isn't a leaderboard win
+  (audit EX-8): the leaderboard counts 2x within 15 minutes, before a -50% stop.
 - **Tooltip actions** (a tooltip line, on by default): Copy CA, open on the other sites, Look up
   (the side panel opens on the coin), Snooze 1h.
 - **Your limits on the boards** (Ring display → Your limits on the boards, off by default). A coin
@@ -249,3 +251,19 @@ its pill placed in the part the column cuts off, which left only the dot in view
   dropped off. A 24-hour summary sits on top (result, sold, still held, win rate, best trade). And
   Settings → Trade Buddy wallets follows up to three more wallets of the reader's, for trades made
   from Axiom's, Terminal's or a bot's wallet, which the account's wallet alone never saw.
+
+0.9.1 (full audit 2026-10-27, lane 12):
+
+- **Run alerts are worded as peaks** (EX-8, user decision 2026-10-27): "peaked 2x after its alert",
+  and one more than 15 minutes after the alert adds that it isn't a leaderboard win.
+- **The site's map cancels its held reads** (EX-10): a read the map gives up (a coin flipped past,
+  the map closing) is cancelled in the service worker (`siteCancel`), so its `POST /ext/v1/site`
+  request closes instead of waiting out the API's 30-second hold.
+- **The rings' answer map is pruned** (EX-9, CE-6): past 5,000 coins, answers older than 150 s
+  for coins no longer on a row go, as the board pills' and safety screen's caches do.
+- **The store listing checks itself** (EX-2): `npm run package` refuses a manifest permission that
+  `STORE.md` or the privacy policy doesn't justify (`storePolicy.mjs`, `store.test.mjs`), and the
+  policy and data form now describe 0.9.x.
+- **Service worker tests** (EX-11, `src/sw.test.ts`): the sender gates (another extension, a ring
+  page, the store build, the map frame, the site's origin), `connect`, and the alert and run
+  notifications.
