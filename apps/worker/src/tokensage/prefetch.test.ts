@@ -162,6 +162,101 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     expect(batch).toHaveBeenCalledTimes(2);
   });
 
+  it("stores the now block a full read carries, so the first decision sees it without a refresh", async () => {
+    // Model audit 2026-10-26, §16: the now inputs were null at the first decision because the
+    // refresh was asked only after the read had landed. Rules 0.37.0 puts the block in the read.
+    const { client, batch } = fakeClient();
+    const d = `${TAG}-d`;
+    const at = "2026-10-27T12:00:00.000Z";
+    const heat = {
+      story: "Moo Deng",
+      story_kind: "referent",
+      status: "ok",
+      as_of: "2026-10-27T11:58:00.000Z",
+      coins: 2,
+      leader: {
+        mint: "LEADER",
+        mcap_usd: 9e7,
+        change_1h_pct: -4,
+        volume_1h_usd: 1.2e6,
+        peak_minutes_ago: 30,
+      },
+      wave_volume_1h_usd: 1e6,
+    };
+    const read = {
+      ...analysis(d, "full"),
+      analyzed_at: at,
+      trend: { matched: true, score: 0.4, novelty: 0.9, terms: [] },
+      story_heat: heat,
+    };
+    // Partial (a source timed out): still stored, and asked for again once TokenSage would
+    // re-analyse it, which is the one path that stores a full read over a full row.
+    batch.mockResolvedValueOnce(ok([{ ca: d, status: "partial", analysis: read }]));
+    noteNarrativeWanted(d, "full", env);
+    await flushNarrativeRequests(env, client);
+    const row = await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: d } });
+    expect(row).toMatchObject({
+      depth: "full",
+      status: "partial",
+      nowTrendMatched: true,
+      nowTrendScore: 0.4,
+      nowTrendNovelty: 0.9,
+      heatCoins: 2,
+      heatLeaderMcapUsd: 9e7,
+      heatLeaderVolume1hUsd: 1.2e6,
+      heatPeakMinutesAgo: 30,
+      heatIsLeader: false,
+    });
+    expect(row.nowAt?.toISOString()).toBe(at);
+    // The same stored shape as a refresh (nowReads.ts), so the views and the export read one thing.
+    expect(row.nowRead).toEqual({ trend: read.trend, story_heat: heat });
+
+    // A refresh that landed meanwhile (nowReads.ts) is newer than the complete read that follows
+    // the partial one: the read is stored, its older now block is not.
+    const later = new Date("2026-10-27T12:03:00.000Z");
+    await prisma.tokenNarrative.update({ where: { mintAddress: d }, data: { nowAt: later, heatCoins: 7 } });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.now() + 91_000);
+      batch.mockResolvedValueOnce(
+        ok([{ ca: d, status: "complete", analysis: { ...read, analyzed_at: "2026-10-27T12:01:00.000Z" } }]),
+      );
+      noteNarrativeWanted(d, "full", env);
+      await flushNarrativeRequests(env, client);
+    } finally {
+      vi.useRealTimers();
+    }
+    const kept = await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: d } });
+    expect(kept.status).toBe("complete");
+    expect(kept.analyzedAt?.toISOString()).toBe("2026-10-27T12:01:00.000Z");
+    expect(kept.nowAt?.toISOString()).toBe(later.toISOString());
+    expect(kept.heatCoins).toBe(7);
+  });
+
+  it("leaves the now columns null on a basic read, which has no trend match or heat", async () => {
+    const { client, batch } = fakeClient();
+    const e = `${TAG}-e`;
+    batch.mockResolvedValueOnce(
+      ok([
+        {
+          ca: e,
+          status: "complete",
+          analysis: { ...analysis(e, "basic"), trend: { matched: false }, story_heat: null },
+        },
+      ]),
+    );
+    noteNarrativeWanted(e, "basic", env);
+    await flushNarrativeRequests(env, client);
+    const row = await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: e } });
+    expect(row).toMatchObject({
+      depth: "basic",
+      nowAt: null,
+      nowTrendMatched: null,
+      heatCoins: null,
+      nowRead: null,
+    });
+  });
+
   it("upgrades to full depth, keeps the X match, and never lets a basic answer overwrite it", async () => {
     const { client, batch } = fakeClient();
     const c = `${TAG}-c`;

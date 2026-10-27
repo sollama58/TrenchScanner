@@ -494,6 +494,12 @@ export interface TokenSageAnalysis {
       history_days?: number | null;
     }[];
   } | null;
+  /**
+   * Rules 0.37.0+, full reads: how the coin's story traded at the read, the block POST
+   * /v1/tokens:now refreshes (model audit 2026-10-26, §16). Null at basic depth, for a coin with
+   * no story to search, and when TokenSage's lookup gave up (a "story heat:" caveat says so).
+   */
+  story_heat?: TokenSageStoryHeat | null;
   flags?: TokenSageFlag[];
   summary?: string;
   evidence?: {
@@ -1245,6 +1251,31 @@ export function nowFieldsFromItem(item: TokenSageNowItem, mint: string): TokenNa
     heatFromPeakPct: num(leader?.from_peak_pct),
     heatIsLeader: leader ? leader.mint === mint : ok ? false : null,
   };
+}
+
+/**
+ * The now columns a full read itself fills (TokenSage rules 0.37.0+), in the shape a refresh
+ * stores, so the first decision on a coin sees them with the read instead of a refresh cycle
+ * later (model audit 2026-10-26, §16: the now inputs were null on 80-97% of decisions and 99% of
+ * entries, although the read was there on 55-70%, because the refresh was asked only after the
+ * read had landed). The read's trend block is the match of its moment and its story_heat the
+ * lookup it made, stamped analyzed_at. Null for a basic read (no trend match, no heat) and for a
+ * document without analyzed_at or a trend block; a read whose heat lookup gave up still fills the
+ * trend columns, and the heat columns stay null exactly as a failed refresh leaves them.
+ */
+export function nowFieldsFromAnalysis(analysis: unknown, mint: string): TokenNarrativeNowFields | null {
+  const doc = asRecord(analysis);
+  if (!doc || doc.depth !== "full" || asRecord(doc.trend) === null) return null;
+  return nowFieldsFromItem(
+    {
+      ca: mint,
+      status: "complete",
+      as_of: typeof doc.analyzed_at === "string" ? doc.analyzed_at : null,
+      trend: doc.trend as TokenSageAnalysis["trend"],
+      story_heat: (asRecord(doc.story_heat) as TokenSageStoryHeat | null) ?? null,
+    },
+    mint,
+  );
 }
 
 /** Fee destinations where the creator wallet gets none of the fee and no split is involved. */

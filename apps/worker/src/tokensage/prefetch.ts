@@ -7,6 +7,7 @@ import {
   basicXRetryable,
   narrativeDepthCovers,
   narrativeFieldsFromAnalysis,
+  nowFieldsFromAnalysis,
   storableAnalysis,
   tokenSageEnabled,
   tokenSageImageUrl,
@@ -476,7 +477,7 @@ async function storeAnalysis(
   const fields = narrativeFieldsFromAnalysis(analysis, status);
   const existing = await prisma.tokenNarrative.findUnique({
     where: { mintAddress: mint },
-    select: { depth: true, status: true, analyzedAt: true },
+    select: { depth: true, status: true, analyzedAt: true, nowAt: true },
   });
   // A shallower answer that lands after a deeper one must not overwrite it, and neither may a
   // partial answer overwrite a complete one at the same depth. An older analysis at the same
@@ -500,8 +501,30 @@ async function storeAnalysis(
   // only the derived columns of those are ever read. If the coin enters the band later, the full
   // read asked then brings its document.
   const keepDocument = fields.depth === "full" || (await tokenInBand(mint));
+  // A full read carries its own now block (TokenSage rules 0.37.0+: the trend match of its
+  // moment and the story's heat), stored here in the refresh's columns so the first decision
+  // after the read sees the ns* now inputs with the rest of the read. Until then they were
+  // null at that decision on nearly every coin: the refresh was asked only once the read had
+  // landed, and arrived a cycle or more later (model audit 2026-10-26, §16). flushNowReads
+  // (nowReads.ts) keeps the columns current from NOW_REFRESH_MS after this stamp on. A refresh
+  // newer than the read (one that landed while this read was queued) is kept.
+  const nowFields = nowFieldsFromAnalysis(analysis, mint);
+  const priorNowAt = existing?.nowAt ?? null;
+  const nowData =
+    nowFields !== null &&
+    nowFields.nowAt !== null &&
+    (priorNowAt === null || nowFields.nowAt.getTime() > priorNowAt.getTime())
+      ? {
+          ...nowFields,
+          nowRead: {
+            trend: analysis.trend ?? null,
+            story_heat: analysis.story_heat ?? null,
+          } as Prisma.InputJsonValue,
+        }
+      : {};
   const data = {
     ...fields,
+    ...nowData,
     categories: fields.categories as unknown as Prisma.InputJsonValue,
     failReason: null,
     analysis: keepDocument ? ((storableAnalysis(analysis) ?? {}) as Prisma.InputJsonValue) : Prisma.DbNull,

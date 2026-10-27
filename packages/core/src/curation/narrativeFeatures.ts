@@ -244,7 +244,10 @@ export const NARRATIVE_FEATURES_V7 = [
  * GeckoTerminal (market cap, 5 min / 1 h price change, 1 h volume, minutes since its 24 h peak and
  * its price against that peak), how many coins are on the story and their summed 1 h volume, and
  * whether this coin is the leader. nsNowAgeMin is how old the refresh is at the decision. Null
- * without a refresh, or one older than NOW_FEATURE_MAX_AGE_MIN.
+ * without a refresh, or one older than NOW_FEATURE_MAX_AGE_MIN. Since TokenSage rules 0.37.0 the
+ * full read itself carries the first block (its trend match and the story's heat at the read,
+ * stored by tokensage/prefetch.ts in the same columns), so they are filled from the first
+ * decision after the read instead of a refresh cycle later (model audit 2026-10-26, §16).
  *
  * READ BY THE LEARNERS (user ask 2026-10-21), narrative seats and market seats both
  * (features.ts MARKET_TOKENSAGE_INPUTS). The onset guard (features.ts featureOnset) keeps them
