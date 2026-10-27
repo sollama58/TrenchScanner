@@ -105,6 +105,9 @@ describe.skipIf(!dbAvailable)("resolveWalletHoldings cache coverage", () => {
       async getMintDecimals(mints: string[]) {
         return new Map(mints.map((m) => [m, 6]));
       },
+      async getLamportsBatch(addresses: string[]) {
+        return new Map(addresses.map((a) => [a, 1_000_000_000n]));
+      },
     } as unknown as HeliusClient;
     const dexScreener = {
       async getTokensByAddresses(mints: string[], _c: number, o: { failed?: Set<string> }) {
@@ -149,5 +152,100 @@ describe.skipIf(!dbAvailable)("resolveWalletHoldings cache coverage", () => {
     );
     expect(balanceCalls).toBe(1);
     expect(result.has(busy)).toBe(false);
+  });
+
+  it("re-prices a due wallet whose SOL barely moved, and reads one whose SOL moved past the buffer", async () => {
+    resetValuationCaches();
+    const [quiet, dusted, traded, old] = [wallet("quiet"), wallet("dusted"), wallet("traded"), wallet("old")];
+    const sol = new Map<string, bigint>([
+      [quiet, 2_000_000_000n],
+      [dusted, 2_000_000_000n],
+      [traded, 2_000_000_000n],
+      [old, 2_000_000_000n],
+    ]);
+    const read: string[] = [];
+    const lamportReads: string[][] = [];
+    const helius = {
+      holdingsLookupAvailable: true,
+      async getTokenBalancesBatch(addresses: string[]) {
+        read.push(...addresses);
+        return new Map(
+          addresses.map((a) => [
+            a,
+            { status: "found" as const, balances: new Map([[NEW_LAUNCH, 1_000_000n]]) },
+          ]),
+        );
+      },
+      async getMintDecimals(mints: string[]) {
+        return new Map(mints.map((m) => [m, 6]));
+      },
+      async getLamportsBatch(addresses: string[]) {
+        lamportReads.push([...addresses]);
+        return new Map(addresses.map((a) => [a, sol.get(a)!]));
+      },
+    } as unknown as HeliusClient;
+    let price = 2;
+    const dexScreener = {
+      async getTokensByAddresses(mints: string[]) {
+        return mints.includes(NEW_LAUNCH)
+          ? [
+              {
+                mintAddress: NEW_LAUNCH,
+                priceUsd: price,
+                liquidityUsd: 10_000,
+                marketCapUsd: 50_000,
+                volume24hUsd: 900,
+              },
+            ]
+          : [];
+      },
+    } as never;
+    const balancesEnv = { ...env, WALLET_HOLDINGS_SOURCE: "balances" as const };
+    const groups = [{ mintAddress: NEW_LAUNCH, addresses: [quiet, dusted, traded, old] }];
+
+    // The first read is in full, and keeps each wallet's balances and SOL.
+    await resolveWalletHoldings(groups, helius, balancesEnv, { valuation: { dexScreener } });
+    expect(read.sort()).toEqual([dusted, old, quiet, traded].sort());
+    const kept = await prisma.walletHoldingsCache.findUnique({ where: { address: quiet } });
+    expect(kept?.balances).toEqual({ [NEW_LAUNCH]: "1000000" });
+    expect(kept?.lamports).toBe(2_000_000_000n);
+
+    // Eleven minutes on: past the TTL. One read an hour and a half ago is due a full read whatever.
+    const due = new Date(Date.now() - 11 * 60_000);
+    await prisma.walletHoldingsCache.updateMany({
+      where: { address: { in: [quiet, dusted, traded] } },
+      data: { checkedAt: due, balancesReadAt: due },
+    });
+    const longAgo = new Date(Date.now() - 90 * 60_000);
+    await prisma.walletHoldingsCache.update({
+      where: { address: old },
+      data: { checkedAt: due, balancesReadAt: longAgo },
+    });
+    sol.set(dusted, 2_000_000_000n + 5_000n); // dust: under the 0.01 SOL buffer
+    sol.set(traded, 1_700_000_000n); // spent 0.3 SOL
+    read.length = 0;
+    lamportReads.length = 0;
+    resetValuationCaches();
+    price = 3;
+
+    // A budget of two: the two re-priced wallets cost none of it, so the group still fits.
+    const result = await resolveWalletHoldings(groups, helius, balancesEnv, {
+      valuation: { dexScreener },
+      maxNewLookups: 2,
+    });
+    expect(read.sort()).toEqual([old, traded].sort());
+    // Re-priced at today's price from the stored balances.
+    expect(result.get(quiet)).toEqual({ otherHoldingsUsd: 3, perMintUsd: { [NEW_LAUNCH]: 3 } });
+    expect(result.get(dusted)?.otherHoldingsUsd).toBe(3);
+    // The SOL check covered the three with a recent read; the old one's SOL was read with its read.
+    expect(lamportReads[0]!.sort()).toEqual([dusted, quiet, traded].sort());
+    expect(lamportReads[1]).toEqual([old]);
+    // A re-pricing leaves the read it came from, so SOL is still compared against that.
+    const after = await prisma.walletHoldingsCache.findUnique({ where: { address: dusted } });
+    expect(after?.lamports).toBe(2_000_000_000n);
+    expect(after?.balancesReadAt?.getTime()).toBe(due.getTime());
+    expect(after!.checkedAt.getTime()).toBeGreaterThan(due.getTime());
+    const reread = await prisma.walletHoldingsCache.findUnique({ where: { address: traded } });
+    expect(reread?.lamports).toBe(1_700_000_000n);
   });
 });

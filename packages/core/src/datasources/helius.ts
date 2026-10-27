@@ -2897,6 +2897,29 @@ export class HeliusClient {
   }
 
   /**
+   * Each wallet's SOL in lamports, 100 wallets a 1-credit getMultipleAccounts with no data - the
+   * empty-wallet change check (apps/worker/src/jobs/walletHoldings.ts). A wallet with no account
+   * holds 0; one missing from the result was not read (a failed chunk).
+   */
+  async getLamportsBatch(addresses: string[]): Promise<Map<string, bigint>> {
+    const unique = [...new Set(addresses)];
+    const out = new Map<string, bigint>();
+    if (unique.length === 0) return out;
+    const accounts = await this.getMultipleAccounts<{ lamports?: unknown }>(unique, {
+      encoding: "base64",
+      dataSlice: { offset: 0, length: 0 },
+    });
+    for (const [address, account] of accounts) {
+      if (account === "failed") continue;
+      const lamports = account.value?.lamports;
+      if (account.value === null) out.set(address, 0n);
+      else if (typeof lamports === "number" && Number.isSafeInteger(lamports) && lamports >= 0)
+        out.set(address, BigInt(lamports));
+    }
+    return out;
+  }
+
+  /**
    * Each mint's ticker and name from its token metadata (DAS getAssetBatch), for the cards' quote
    * pill: a coin can trade against any mint, and DexScreener's pair names it only when the reading
    * came from DexScreener. A mint with no metadata is in the map with neither; "failed" when the

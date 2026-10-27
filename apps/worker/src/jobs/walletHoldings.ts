@@ -1,6 +1,19 @@
-import { prisma, createLogger, type Env, type HeliusClient } from "@trenchscanner/core";
+import {
+  prisma,
+  Prisma,
+  createLogger,
+  tallyHeliusCredits,
+  type Env,
+  type HeliusClient,
+} from "@trenchscanner/core";
 import { FailureBackoff } from "./failureBackoff.js";
-import { valueWalletsFromBalances, type ValuationDeps, type ValuationResult } from "./walletValuation.js";
+import { heliusStageCredits } from "./heliusStageCredits.js";
+import {
+  valueWalletsFromBalances,
+  type StoredBalances,
+  type ValuationDeps,
+  type ValuationResult,
+} from "./walletValuation.js";
 
 const logger = createLogger("wallet-holdings");
 
@@ -117,9 +130,30 @@ export async function resolveWalletHoldings(
   if (unique.length === 0) return result;
 
   const freshCutoff = new Date(now - env.WALLET_HOLDINGS_CACHE_TTL_MINUTES * 60_000);
-  const cached = await prisma.walletHoldingsCache.findMany({
-    where: { address: { in: unique }, checkedAt: { gt: freshCutoff } },
+  const source = holdingsSource(env, opts);
+  const changeCheck = source === "balances" && env.WALLET_HOLDINGS_FULL_READ_MINUTES > 0;
+  const fullReadCutoff = new Date(now - env.WALLET_HOLDINGS_FULL_READ_MINUTES * 60_000);
+  const rows = await prisma.walletHoldingsCache.findMany({
+    where: {
+      address: { in: unique },
+      OR: [
+        { checkedAt: { gt: freshCutoff } },
+        ...(changeCheck ? [{ balancesReadAt: { gt: fullReadCutoff } }] : []),
+      ],
+    },
   });
+  const cached = rows.filter((row) => row.checkedAt > freshCutoff);
+  // Past the TTL but read in full within the hour, with what that read held and its SOL then:
+  // the change check below may re-price these instead of reading them again.
+  const stored = new Map<string, { balances: StoredBalances; lamports: bigint }>();
+  if (changeCheck) {
+    for (const row of rows) {
+      if (row.checkedAt > freshCutoff || row.lamports === null) continue;
+      if (!row.balancesReadAt || row.balancesReadAt <= fullReadCutoff) continue;
+      const balances = parseStoredBalances(row.balances);
+      if (balances) stored.set(row.address, { balances, lamports: row.lamports });
+    }
+  }
   const ownMints = mintsByWallet(groups);
   for (const row of cached) {
     const perMintUsd = asPerMintUsd(row.perMintUsd);
@@ -148,13 +182,37 @@ export async function resolveWalletHoldings(
   // share unknown for the whole stand-down, cached wallets included, and with
   // CURATED_REQUIRE_WALLET_CHECKS on that held up every curated decision for ten minutes.
   // The balances route is standard RPC plus DexScreener, so a DAS stand-down doesn't touch it.
-  const source = holdingsSource(env, opts);
   const available = source === "balances" || helius.holdingsLookupAvailable;
   const budget = available ? (opts.maxNewLookups ?? Number.POSITIVE_INFINITY) : 0;
+  const lookupGroups = opts.lookupGroups ?? Number.POSITIVE_INFINITY;
+
+  // The change check (user decision 2026-10-27): the SOL of every due wallet that has a stored
+  // read, in one batch. One whose SOL moved less than the buffer since that read has done nothing
+  // that changes what it holds, so its stored balances are re-priced (free) instead of read
+  // again, and it takes none of the budget.
+  const lamportsNow = new Map<string, bigint>();
+  const unchanged = new Map<string, StoredBalances>();
+  if (changeCheck && available && budget > 0) {
+    const due = [
+      ...new Set(groups.slice(0, lookupGroups).flatMap((g) => g.addresses.filter((a) => stored.has(a)))),
+    ]
+      .filter((a) => !result.has(a))
+      .slice(0, MAX_SOL_CHECKS);
+    if (due.length > 0) {
+      const read = await tallyHeliusCredits(heliusStageCredits.balances, () => helius.getLamportsBatch(due));
+      for (const [address, lamports] of read) {
+        lamportsNow.set(address, lamports);
+        const row = stored.get(address)!;
+        const moved = lamports > row.lamports ? lamports - row.lamports : row.lamports - lamports;
+        if (moved < BigInt(env.WALLET_HOLDINGS_SOL_CHANGE_LAMPORTS)) unchanged.set(address, row.balances);
+      }
+    }
+  }
+
   const toFetch: string[] = [];
   const queued = new Set<string>();
+  let reads = 0;
   let skippedGroups = 0;
-  const lookupGroups = opts.lookupGroups ?? Number.POSITIVE_INFINITY;
   for (const [index, group] of groups.entries()) {
     if (index >= lookupGroups) break;
     const needed = [...new Set(group.addresses)].filter((a) => !result.has(a) && !queued.has(a));
@@ -162,10 +220,12 @@ export async function resolveWalletHoldings(
       skippedGroups += 1;
       continue;
     }
-    if (toFetch.length + needed.length > budget) {
+    const cost = needed.filter((a) => !unchanged.has(a)).length;
+    if (reads + cost > budget) {
       skippedGroups += 1;
       continue;
     }
+    reads += cost;
     for (const address of needed) {
       toFetch.push(address);
       queued.add(address);
@@ -184,6 +244,19 @@ export async function resolveWalletHoldings(
     return result;
   }
 
+  // The SOL of the wallets about to be read in full and not checked above, kept with their read
+  // for the next change check. Read before the balances: a trade in between shows as a change.
+  const readings = new Map<string, StoredBalances>();
+  if (changeCheck) {
+    const unread = toFetch.filter((a) => !lamportsNow.has(a) && !unchanged.has(a));
+    if (unread.length > 0) {
+      const read = await tallyHeliusCredits(heliusStageCredits.balances, () =>
+        helius.getLamportsBatch(unread),
+      );
+      for (const [address, lamports] of read) lamportsNow.set(address, lamports);
+    }
+  }
+  const known = new Map([...unchanged].filter(([a]) => queued.has(a)));
   const fetched: Map<string, ValuationResult> =
     source === "balances" && opts.valuation
       ? await valueWalletsFromBalances(
@@ -191,6 +264,7 @@ export async function resolveWalletHoldings(
           mintsOfInterest,
           { helius, dexScreener: opts.valuation.dexScreener },
           env.WALLET_HOLDINGS_MIN_USD,
+          { known, readings },
         )
       : await helius.getOtherHoldingsUsdBatch(toFetch, mintsOfInterest);
 
@@ -202,6 +276,8 @@ export async function resolveWalletHoldings(
     perMintUsd: Record<string, number>;
     breakdownComplete: boolean;
     unpriced: boolean;
+    /** A full read's balances and SOL, for the next change check; absent on a re-pricing. */
+    read?: { balances: Record<string, string> | null; lamports: bigint | null };
   }[] = [];
   let failedCount = 0;
   let unsupported = 0;
@@ -217,12 +293,21 @@ export async function resolveWalletHoldings(
         perMintUsd,
         ...(unpriced ? { unpriced } : {}),
       });
+      const reading = readings.get(address);
       resolved.push({
         address,
         otherHoldingsUsd: outcome.otherHoldingsUsd,
         perMintUsd,
         breakdownComplete: outcome.complete,
         unpriced,
+        ...(known.has(address)
+          ? {}
+          : {
+              read: {
+                balances: reading ? storableBalances(reading) : null,
+                lamports: reading ? (lamportsNow.get(address) ?? null) : null,
+              },
+            }),
       });
     } else if (outcome.status === "unsupported") {
       unsupported += 1;
@@ -241,26 +326,31 @@ export async function resolveWalletHoldings(
       // an existing row is stale by definition and must be overwritten with the new reading.
       const checkedAt = new Date(now);
       await prisma.$transaction(
-        resolved.map((row) =>
-          prisma.walletHoldingsCache.upsert({
+        resolved.map((row) => {
+          // A full read keeps its balances and SOL for the next change check (none when the wallet
+          // holds too much to keep, which only means it is read in full next time); a re-pricing
+          // leaves the read it came from in place, so SOL keeps being compared against that.
+          const read = row.read
+            ? {
+                balances: row.read.balances ?? Prisma.DbNull,
+                lamports: row.read.balances ? row.read.lamports : null,
+                balancesReadAt: row.read.balances && row.read.lamports !== null ? checkedAt : null,
+              }
+            : {};
+          const reading = {
+            otherHoldingsUsd: row.otherHoldingsUsd,
+            perMintUsd: row.perMintUsd,
+            breakdownComplete: row.breakdownComplete,
+            unpriced: row.unpriced,
+            checkedAt,
+            ...read,
+          };
+          return prisma.walletHoldingsCache.upsert({
             where: { address: row.address },
-            create: {
-              address: row.address,
-              otherHoldingsUsd: row.otherHoldingsUsd,
-              perMintUsd: row.perMintUsd,
-              breakdownComplete: row.breakdownComplete,
-              unpriced: row.unpriced,
-              checkedAt,
-            },
-            update: {
-              otherHoldingsUsd: row.otherHoldingsUsd,
-              perMintUsd: row.perMintUsd,
-              breakdownComplete: row.breakdownComplete,
-              unpriced: row.unpriced,
-              checkedAt,
-            },
-          }),
-        ),
+            create: { address: row.address, ...reading },
+            update: reading,
+          });
+        }),
       );
     } catch (err) {
       // Caching is a pure optimization - failing to persist only costs a re-fetch next cycle.
@@ -275,6 +365,9 @@ export async function resolveWalletHoldings(
     requested: unique.length,
     cached: cacheHits,
     fetched: toFetch.length,
+    // The change check: due wallets whose SOL was read, and those re-priced without a read.
+    solChecked: lamportsNow.size,
+    repriced: known.size,
     newlyCached: resolved.length,
     failedWillRetryLater: failedCount,
     unsupported,
@@ -284,6 +377,30 @@ export async function resolveWalletHoldings(
   });
 
   return result;
+}
+
+/** Due wallets whose SOL is read per call at most: 1 credit per 100, so 20 credits. */
+const MAX_SOL_CHECKS = 2_000;
+/** Most mints a stored read keeps; a wallet holding more is read in full each time it is due. */
+export const MAX_STORED_MINTS = 300;
+
+/** A read's balances as the cache keeps them ({ mint: raw amount }), or null when too many. */
+export function storableBalances(reading: StoredBalances): Record<string, string> | null {
+  if (reading.truncated || reading.balances.size > MAX_STORED_MINTS) return null;
+  const out: Record<string, string> = {};
+  for (const [mint, amount] of reading.balances) out[mint] = amount.toString();
+  return out;
+}
+
+/** A stored read back as balances, or null for anything that isn't one. */
+export function parseStoredBalances(value: unknown): StoredBalances | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const balances = new Map<string, bigint>();
+  for (const [mint, amount] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof amount !== "string" || !/^\d{1,40}$/.test(amount)) return null;
+    balances.set(mint, BigInt(amount));
+  }
+  return { balances };
 }
 
 /** Prisma hands a Json column back as unknown; narrow it without trusting its contents. */
