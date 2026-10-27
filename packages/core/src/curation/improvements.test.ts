@@ -952,11 +952,16 @@ describe("the agreement seat", () => {
       calibration?: { calls: number };
     };
     expect(params.kind).toBe("agreement-v1");
-    expect(params.members.map((m) => m.contestant)).toEqual(learners);
+    // The voting combiners count one seat per recipe family and none whose exam barely beats the
+    // rows' own 2x rate (combinerMembers.ts): on this market Momentum's exam falls under that
+    // floor, and the verdict names it.
+    const members = params.members.map((m) => m.contestant);
+    expect(members).toEqual(["linear", "trees"]);
+    expect(agreement.metrics.verdict.reason).toContain("left out momentum (exam 2x ");
     // Each member calls at the cutoff its own exam set; one that set none never counts.
     for (const m of params.members) expect(m.callRank).toBe(cutoffs.get(m.contestant) ?? undefined);
     const curve = agreement.metrics.agreementCurve!;
-    expect(curve.map((p) => p.agreeing)).toEqual([0, 1, 2, 3]);
+    expect(curve.map((p) => p.agreeing)).toEqual([0, 1, 2]);
     expect(curve.reduce((n, p) => n + p.rows, 0)).toBeGreaterThan(0);
     expect(agreement.metrics.exam).toBeDefined();
     expect(params.calibration?.calls ?? 0).toBeGreaterThan(0);

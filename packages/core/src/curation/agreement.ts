@@ -1,5 +1,6 @@
 import {
   calibrateThresholdForPrecision,
+  meetsTargets,
   precisionCurve,
   type PrecisionCalibration,
   type PrecisionCurvePoint,
@@ -36,6 +37,21 @@ import { GOAL_LABEL, type CallRecord } from "./leaderboard.js";
  */
 
 export const AGREEMENT_MODEL_KIND = "agreement-v1";
+
+/**
+ * The fewest members that must call, as a share of the members, for Agreement to call (rounded
+ * up): a floor under the calibrated cutoff. Calibrated to the field's targets alone the cutoff
+ * landed at 4 of 10 and sent a single seat's volume; live over 2026-10-20..27 its 5- and 6-of-10
+ * calls (36% of its volume) doubled 19.6% against 25.0% for 7 or more (model audit 2026-10-26,
+ * §14). The seat exists to call what the room agrees on, so the room has to mostly agree.
+ */
+export const AGREEMENT_MIN_SHARE = 0.7;
+
+/** The lowest agreement score at which at least AGREEMENT_MIN_SHARE of `members` call. */
+export function agreementFloor(members: number): number {
+  if (members === 0) return 0;
+  return Math.ceil(members * AGREEMENT_MIN_SHARE - 1e-9) / (members + 1);
+}
 
 export interface AgreementCuratorParams extends ServedCuratorExtras {
   kind: typeof AGREEMENT_MODEL_KIND;
@@ -141,7 +157,12 @@ export function trainAgreementCurator(
     anchorAt: row.anchorAt,
   }));
   const cooldownMs = input.cooldownHours * 3_600_000;
-  const precisionCalibration = calibrateThresholdForPrecision(outOfSample, input.targets, { cooldownMs });
+  const precisionCalibration = withAgreementFloor(
+    calibrateThresholdForPrecision(outOfSample, input.targets, { cooldownMs }),
+    outOfSample,
+    members.length,
+    input.targets,
+  );
   // Graded per chunk with the members' cutoffs set without that chunk: the stored ones were
   // chosen on every reference row's label, this chunk's included. A member whose exam set no
   // cutoff never calls live, so it doesn't in the exam either.
@@ -193,6 +214,39 @@ export function trainAgreementCurator(
     exam,
     examChunks,
     curve,
+  };
+}
+
+/**
+ * The calibration with its cutoff raised to agreementFloor(members) when it sits below: the
+ * floor's own record (support, win and goal rates over the rows at or above it) replaces the
+ * calibrated one so the stored evidence describes the cutoff that serves. A calibration that set
+ * no cutoff stays as it is.
+ */
+export function withAgreementFloor(
+  calibration: PrecisionCalibration,
+  outOfSample: readonly ScoredOutcome[],
+  members: number,
+  targets: PrecisionTargets,
+): PrecisionCalibration {
+  const floor = agreementFloor(members);
+  if (calibration.threshold === null || calibration.threshold >= floor) return calibration;
+  let n = 0;
+  let wins = 0;
+  let goals = 0;
+  for (const c of outOfSample) {
+    if (c.probability < floor) continue;
+    n += 1;
+    if (c.labelValue > 0) wins += 1;
+    if (c.labelValue >= GOAL_LABEL) goals += 1;
+  }
+  return {
+    ...calibration,
+    threshold: floor,
+    meetsTargets: n >= targets.minSupport && meetsTargets(wins, goals, n, targets),
+    support: n,
+    winRatePct: n > 0 ? (wins / n) * 100 : null,
+    goalRatePct: n > 0 ? (goals / n) * 100 : null,
   };
 }
 

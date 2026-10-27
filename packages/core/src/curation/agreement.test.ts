@@ -152,3 +152,35 @@ describe("trainAgreementCurator", () => {
     expect(exam(0.99)).toEqual(exam(0.6));
   });
 });
+
+describe("agreement floor", () => {
+  it("is the score at which at least 70% of the members call, rounded up", async () => {
+    const { agreementFloor, withAgreementFloor } = await import("./agreement.js");
+    expect(agreementFloor(10)).toBeCloseTo(7 / 11);
+    expect(agreementFloor(5)).toBeCloseTo(4 / 6);
+    expect(agreementFloor(3)).toBeCloseTo(3 / 4);
+    expect(agreementFloor(0)).toBe(0);
+    // Scores at the floor count as calling, and the mean rank never lifts a count over the floor.
+    expect(agreementScore(7, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 10)).toBeGreaterThanOrEqual(agreementFloor(10));
+    expect(agreementScore(6, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 10)).toBeLessThan(agreementFloor(10));
+
+    const targets = { winRate: 0.75, goalRate: 0.5, minSupport: 2 };
+    const outOfSample = [
+      { probability: agreementScore(8, [0.9], 10), labelValue: 1 },
+      { probability: agreementScore(7, [0.9], 10), labelValue: 0 },
+      { probability: agreementScore(5, [0.9], 10), labelValue: 1 },
+      { probability: agreementScore(4, [0.9], 10), labelValue: 0 },
+    ];
+    const low = { threshold: agreementScore(4, [0.9], 10), support: 4, winRatePct: 50, goalRatePct: 0 };
+    const raised = withAgreementFloor(low, outOfSample, 10, targets);
+    expect(raised.threshold).toBeCloseTo(7 / 11);
+    expect(raised.support).toBe(2);
+    expect(raised.winRatePct).toBe(50);
+    expect(raised.meetsTargets).toBe(false);
+    // A cutoff already above the floor, or no cutoff at all, is left alone.
+    const high = { ...low, threshold: agreementScore(9, [0.9], 10) };
+    expect(withAgreementFloor(high, outOfSample, 10, targets)).toBe(high);
+    const none = { ...low, threshold: null };
+    expect(withAgreementFloor(none, outOfSample, 10, targets)).toBe(none);
+  });
+});
