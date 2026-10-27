@@ -544,6 +544,17 @@ const envSchema = z.object({
   // contenders, the alerts waiting on a first reading, then the coins in the alert feeds
   // (walletPriority.ts recentlyAlerted), before the rest.
   WALLET_HOLDINGS_CACHE_TTL_MINUTES: z.coerce.number().positive().default(10),
+  // The change check before a due wallet is read again (user decision 2026-10-27,
+  // walletHoldings.ts): every due wallet's SOL is read in one batch (getMultipleAccounts, 1 credit
+  // per 100), and one whose SOL moved less than this since its last full read is re-priced from
+  // the balances stored then (free) instead of read again (2 credits). Holdings only change in a
+  // transaction the wallet pays for, and a trade with a SOL leg big enough to cross the $25 bar
+  // moves far more than this. 0.01 SOL is the buffer against noise: dust sent to the wallet, and
+  // the fee of a transfer that doesn't change what it holds.
+  WALLET_HOLDINGS_SOL_CHANGE_LAMPORTS: z.coerce.number().int().nonnegative().default(10_000_000),
+  // A full read at least this often whatever the SOL says: tokens sent to a wallet, a swap with no
+  // SOL leg, or one a relayer paid for don't move its SOL. 0 turns the change check off.
+  WALLET_HOLDINGS_FULL_READ_MINUTES: z.coerce.number().nonnegative().default(60),
   // How long the cleanup job keeps a WalletHoldingsCache row. A row past the TTL above is never
   // read again, so this only needs slack over it. 12 hours is twice the 6-hour TTL. 0 keeps rows
   // the 90 days the other RPC caches get. Owner-approved 2026-10-04.

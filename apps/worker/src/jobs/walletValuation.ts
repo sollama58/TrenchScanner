@@ -86,6 +86,12 @@ const decimalsCache = new Map<string, number>();
 
 type BalanceReading =
   Awaited<ReturnType<HeliusClient["getTokenBalancesBatch"]>> extends Map<string, infer R> ? R : never;
+
+/** A wallet's token balances as read: raw amounts by mint, and whether the read was cut short. */
+export interface StoredBalances {
+  balances: Map<string, bigint>;
+  truncated?: boolean;
+}
 /**
  * The balances of wallets that came back deferred, kept for the retry: when pricing is throttled
  * or past its deadline every such wallet is retried next cycle, and reading its balances again
@@ -162,6 +168,15 @@ export async function valueWalletsFromBalances(
   mintsOfInterest: Iterable<string>,
   deps: ValuationDeps,
   minUsd: number,
+  opts: {
+    /**
+     * Balances known to be current (the change check, walletHoldings.ts): priced as they are,
+     * with no Helius read.
+     */
+    known?: ReadonlyMap<string, StoredBalances>;
+    /** Filled with each balances reading this call took from Helius, for the cache to keep. */
+    readings?: Map<string, StoredBalances>;
+  } = {},
 ): Promise<Map<string, ValuationResult>> {
   const now = Date.now();
   const interesting = new Set(mintsOfInterest);
@@ -173,13 +188,25 @@ export async function valueWalletsFromBalances(
   for (const address of unique) {
     const hit = deferredBalances.get(address);
     deferredBalances.delete(address);
-    if (hit && now - hit.at <= DEFERRED_BALANCES_TTL_MS) kept.set(address, hit.reading);
+    const known = opts.known?.get(address);
+    if (known) kept.set(address, { status: "found", ...known });
+    else if (hit && now - hit.at <= DEFERRED_BALANCES_TTL_MS) kept.set(address, hit.reading);
   }
   const toRead = unique.filter((address) => !kept.has(address));
   const balances =
     toRead.length > 0
       ? await tallyHeliusCredits(heliusStageCredits.balances, () => deps.helius.getTokenBalancesBatch(toRead))
       : new Map();
+  if (opts.readings) {
+    for (const address of toRead) {
+      const reading = balances.get(address);
+      if (reading?.status === "found")
+        opts.readings.set(address, {
+          balances: reading.balances,
+          ...(reading.truncated ? { truncated: true } : {}),
+        });
+    }
+  }
   for (const [address, reading] of kept) balances.set(address, reading);
   const readAt = new Map(unique.map((a) => [a, kept.has(a) ? null : now]));
   const plans: WalletPlan[] = [];

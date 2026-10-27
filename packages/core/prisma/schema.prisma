@@ -1812,6 +1812,16 @@ model WalletHoldingsCache {
   /// empty. False on rows written before 2026-10-16, which counted such holdings as $0.
   unpriced Boolean @default(false)
 
+  /// The change check (user decision 2026-10-27, walletHoldings.ts): the wallet's non-cash token
+  /// balances as of its last full read ({ mint: raw amount as a decimal string }), its SOL in
+  /// lamports then, and when that read was. A due wallet whose SOL moved less than
+  /// WALLET_HOLDINGS_SOL_CHANGE_LAMPORTS since is re-priced from these instead of read again,
+  /// until WALLET_HOLDINGS_FULL_READ_MINUTES after the read. Null on rows from before, on DAS
+  /// readings and on wallets holding too many mints to keep.
+  balances       Json?
+  lamports       BigInt?
+  balancesReadAt DateTime?
+
   checkedAt DateTime @default(now())
 
   /// Serves both the TTL sweep and the cleanup job's retention sweep.
