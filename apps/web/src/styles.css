@@ -7571,6 +7571,21 @@ html:has(dialog.about-modal[open]) {
   margin: 3px 0 0;
   font-size: 13px;
 }
+/* The Models explorer's window and seat pickers (AdminModelsExplorer.tsx). */
+.explorer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+.explorer-range {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
 .admin-split {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
