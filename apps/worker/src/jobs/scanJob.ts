@@ -214,6 +214,7 @@ import {
 
 import type { EntryWatch } from "../entryWatch.js";
 import type { EntryFastPath } from "./entryFastPath.js";
+import type { LaunchScreen } from "./launchScreen.js";
 import { cycleClaim, type CycleClaim } from "./scanClaims.js";
 
 const logger = createLogger("scan-job");
@@ -297,6 +298,8 @@ export interface ScanDeps {
   entryWatch?: Pick<EntryWatch, "note" | "takeStats">;
   /** The entry fast path's counters, for the cycle's heartbeat (entryFastPath.ts). Optional. */
   entryFastPath?: Pick<EntryFastPath, "takeStats">;
+  /** The new launches' Mayhem screening between cycles, for the heartbeat (launchScreen.ts). Optional. */
+  launchScreen?: Pick<LaunchScreen, "takeStats">;
   rugCheck: RugCheckClient;
   helius: HeliusClient;
   /**
@@ -1438,6 +1441,8 @@ async function scanCycle(
       : undefined;
   // Jupiter's newest-launch reads between cycles, and the launches they turned up.
   const launchPoller = deps.launchPoller?.takeStats?.();
+  // The new launches' Mayhem verdicts between cycles: asked, cleared, set aside, how fast.
+  const launchScreen = deps.launchScreen?.takeStats();
   const holds = takeDecisionHolds();
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,
@@ -1470,6 +1475,7 @@ async function scanCycle(
     ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),
     ...(liveLaunchQuotes ? { liveLaunchQuotes: { ...liveLaunchQuotes } } : {}),
     ...(entryFastPath ? { entryFastPath } : {}),
+    ...(launchScreen ? { launchScreen } : {}),
     ...(launchPoller ? { launchPoller: { ...launchPoller } } : {}),
     tracked: tracked.length,
     inBand: candidates.length,

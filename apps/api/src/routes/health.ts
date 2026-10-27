@@ -472,7 +472,8 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   // The scan's market-data calls since the last cycle (requests, 429 pauses, time queued, gave
   // up): whether DexScreener is throttling the shared budget, and how much Jupiter took off it.
   // Who priced the newest launches (liveLaunchQuotes), and the entry fast path's crossings, first
-  // scans, calls, skips and crossing-to-decision times (entryFastPath). The cycle's RugCheck reports: cached, and
+  // scans, calls, skips and crossing-to-decision times (entryFastPath); the new launches' Mayhem
+  // verdicts between cycles and how fast they landed (launchScreen). The cycle's RugCheck reports: cached, and
   // looked up while it waited (rugCheckLookups). The linked-wallet funder reads and their credits
   // (linkedWalletCalls), and the holder-transfer reads (holderTransferCalls) with the Helius stream that spares them (heliusStream). The young coins' curve tape and its spend (curveTape). The live tape's pages before a call (liveTape). The Helius credits of the freshness, balance and on-chain holder stages (heliusStageCredits). Jupiter's newest-launch
   // reads between cycles and the launches they found (launchPoller). The chart's candle store: the
@@ -483,6 +484,7 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
     "jupiterCalls",
     "liveLaunchQuotes",
     "entryFastPath",
+    "launchScreen",
     "rugCheckLookups",
     "linkedWalletCalls",
     "holderTransferCalls",

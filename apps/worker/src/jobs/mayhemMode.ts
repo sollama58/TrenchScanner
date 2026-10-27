@@ -195,19 +195,43 @@ export async function screenOutMayhem(
   /** Asked for the launches Helius gave no answer for, as the scan's lookup asks it (screenBackup.ts). */
   backup?: Pick<ScreenBackup, "mayhem">,
 ): Promise<{ clear: string[]; setAside: number }> {
-  if (mintAddresses.length === 0) return { clear: [], setAside: 0 };
+  const verdicts = await screenLaunchVerdicts(mintAddresses, helius, backup);
+  return {
+    clear: [...verdicts].filter(([, v]) => v === "clear").map(([mint]) => mint),
+    setAside: [...verdicts.values()].filter((v) => v === "mayhem").length,
+  };
+}
+
+/**
+ * Each launch's Mayhem verdict from one batched lookup: "clear" (not Mayhem), "mayhem" (set aside
+ * for good, as ignoreMayhemMints does), or "pending" (no answer yet: a mint the RPC does not see,
+ * a refused call; asked again later). Failures are not backed off: a launch seconds old is often
+ * not visible to the RPC yet, and the next ask is a second or a round away (launchScreen.ts,
+ * curveTape.ts). A lookup that throws leaves every mint pending.
+ */
+export async function screenLaunchVerdicts(
+  mintAddresses: string[],
+  helius: HeliusClient,
+  backup?: Pick<ScreenBackup, "mayhem">,
+): Promise<Map<string, "clear" | "mayhem" | "pending">> {
+  const verdicts = new Map<string, "clear" | "mayhem" | "pending">();
+  const unique = [...new Set(mintAddresses)];
+  if (unique.length === 0) return verdicts;
+  for (const mint of unique) verdicts.set(mint, "pending");
   try {
-    const found = await resolveMayhemMode(mintAddresses, helius, { backOffFailures: false, backup });
-    const setAside = await ignoreMayhemMints(
-      [...found].filter(([, m]) => m.status === "found" && m.isMayhemMode).map(([mint]) => mint),
-    );
-    const clear = [...found].filter(([, m]) => m.status === "found" && !m.isMayhemMode).map(([mint]) => mint);
-    return { clear, setAside };
+    const found = await resolveMayhemMode(unique, helius, { backOffFailures: false, backup });
+    const mayhem = [...found].filter(([, m]) => m.status === "found" && m.isMayhemMode).map(([mint]) => mint);
+    // Set aside whether or not the rows could be written: the in-memory answer is what the entry
+    // watch and the tape read, and ignoreMayhemMints retries the rows with the next sighting.
+    await ignoreMayhemMints(mayhem);
+    for (const [mint, m] of found) {
+      if (m.status === "found") verdicts.set(mint, m.isMayhemMode ? "mayhem" : "clear");
+    }
   } catch (err) {
     // The scan's own lookup still catches them, as before this existed.
-    logger.warn("mayhem check at discovery failed", { count: mintAddresses.length, error: String(err) });
-    return { clear: [], setAside: 0 };
+    logger.warn("mayhem check at discovery failed", { count: unique.length, error: String(err) });
   }
+  return verdicts;
 }
 
 /** Whether `mintAddress` is known, in this process, to be a Mayhem Mode coin. */

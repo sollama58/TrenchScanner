@@ -121,6 +121,7 @@ import {
   CURVE_STREAM_KEY_PREFIX,
   curvePriceOf,
   curveTapeView,
+  followClearedLaunches,
   onCurveStreamUpdate,
   onPoolStreamUpdate,
   POOL_STREAM_KEY_PREFIX,
@@ -134,7 +135,14 @@ import { SolUsdHistory } from "./jobs/solUsdHistory.js";
 import { startCandleBackfill } from "./jobs/candleBackfill.js";
 import { onHolderStreamTx, setHolderTransferStream } from "./jobs/holderTransfers.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
-import { knownMayhem, knownNotMayhem, screenOutMayhem } from "./jobs/mayhemMode.js";
+import { LaunchScreen } from "./jobs/launchScreen.js";
+import {
+  knownMayhem,
+  knownNotMayhem,
+  screenLaunchVerdicts,
+  screenOutMayhem,
+  settledMayhem,
+} from "./jobs/mayhemMode.js";
 import {
   flushNarrativeRequests,
   narrativeSettled,
@@ -441,6 +449,7 @@ async function main() {
           )
         : undefined,
     entryFastPath: undefined as EntryFastPath | undefined,
+    launchScreen: undefined as LaunchScreen | undefined,
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
     // The screen's Mayhem and holder reads when Helius gives no answer, so it doesn't reject every
@@ -475,6 +484,19 @@ async function main() {
     : undefined;
   deps.entryFastPath = entryFastPath;
   deps.entryWatch?.start();
+  // Each new launch's Mayhem verdict within a second or two of its creation, so the entry watch
+  // and the curve tape can take it before it crosses the floor, rather than at the tape's next
+  // 5-second round (launchScreen.ts; user ask 2026-10-27). Only where the fast path runs.
+  const launchScreen = deps.entryWatch
+    ? new LaunchScreen({
+        newLaunches,
+        settled: (mint) => settledMayhem.take([mint]).has(mint),
+        screen: (mints) => screenLaunchVerdicts(mints, deps.helius, deps.screenBackup),
+        onCleared: curveTapeOn ? (mints, now) => followClearedLaunches(mints, now) : undefined,
+      })
+    : undefined;
+  deps.launchScreen = launchScreen;
+  launchScreen?.start();
   // Every market cap read on Pump.fun's launch billion is put on the coin's supply now (mintSupply.ts).
   configureMintSupplies(new MintSupplies(deps.helius));
   const stopCurveTape = curveTapeOn
@@ -1329,6 +1351,7 @@ async function main() {
     for (const { job } of jobs) job.stop();
     stream?.stop();
     deps.entryWatch?.stop();
+    deps.launchScreen?.stop();
     // Before the tape stops: the final flush reads what it still holds.
     const curveCandlesWritten = stopCurveCandles?.().catch((err: unknown) =>
       logger.warn("curve candles not written", { error: String(err) }),
