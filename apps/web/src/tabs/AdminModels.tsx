@@ -14,6 +14,7 @@ import {
   type ModelsDesk,
 } from "./AdminModelsTraining";
 import { resolveSelection, type ExplainSeatRef } from "./adminModelsView";
+import { ModelsExplorer } from "./AdminModelsExplorer";
 import { niceScale, scaleTicks } from "../chartScale";
 import { pickHandlers, pointerX, useChartWidth } from "../components/useChartWidth";
 
@@ -213,6 +214,7 @@ export function ModelsAdmin() {
             ["models-roster", "Lineup"],
             ["models-seat", "This model"],
             ["models-performance", "Over time"],
+            ["models-explorer", "Explorer"],
             ["models-runs", "Runs"],
           ] as const
         ).map(([id, label]) => (
@@ -267,6 +269,9 @@ export function ModelsAdmin() {
           modelId={selected}
           modelName={seat?.name ?? rosterSeat?.name ?? null}
         />
+      </div>
+      <div id="models-explorer">
+        <ModelsExplorer seats={explainSeats} />
       </div>
       <div className="stack" id="models-runs">
         {desk.data && <p className="muted small">{desk.data.runHistoryNote}</p>}
