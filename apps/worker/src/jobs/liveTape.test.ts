@@ -153,8 +153,8 @@ describe("live tape", () => {
     // MINT is due for a re-read and first in priority, but "fresh" has no page yet.
     await readLiveTape([MINT, "fresh"], helius, { maxPages: 1, refreshMs: 60_000, nowMs: 61_000 });
     expect(helius.getMintTransactionsPage).toHaveBeenLastCalledWith("fresh", { newest: true });
-    // With room for both, both are read.
-    await readLiveTape([MINT, "third"], helius, { maxPages: 2, refreshMs: 60_000, nowMs: 62_000 });
+    // With room for both (and a minute's budget back), both are read.
+    await readLiveTape([MINT, "third"], helius, { maxPages: 2, refreshMs: 60_000, nowMs: 122_000 });
     expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(4);
   });
 
@@ -213,13 +213,38 @@ describe("live tape", () => {
       txs: [buyTx(OTHER, 1, 1_700_000_200)],
       paginationToken: null,
     });
-    await readLiveTape([MINT], later, { maxPages: 1, refreshMs: 0, nowMs: 2 });
-    expect(liveBuyersOf(MINT, 3)).toEqual([OTHER]);
+    await readLiveTape([MINT], later, { maxPages: 1, refreshMs: 0, nowMs: 60_002 });
+    expect(liveBuyersOf(MINT, 60_003)).toEqual([OTHER]);
     expect(liveWalletScoreOn(page, scored, ownTape)).toEqual({
       walletScoreRecentBuyersMean: null,
       walletScoreRecentBuyersScored: 0,
     });
-    expect(livePageOf(MINT, 16 * 60_000)).toBeUndefined();
+    expect(livePageOf(MINT, 17 * 60_000)).toBeUndefined();
+  });
+
+  it("holds the cycle and the fast scans to one budget of maxPages a minute (audit 2026-10-27, DA-8)", async () => {
+    const helius = fakeHelius();
+    const opts = { maxPages: 15, refreshMs: 60_000 };
+    const coins = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i}`);
+    // The cycle takes the minute's 15; two fast scans 10 s and 20 s later get only what has refilled.
+    await readLiveTape(coins("cycle", 40), helius, { ...opts, nowMs: 0 });
+    await readLiveTape(["fastA"], helius, { ...opts, nowMs: 10_000 });
+    await readLiveTape(["fastB"], helius, { ...opts, nowMs: 20_000 });
+    expect(takeLiveTapeStats().pages).toBe(17);
+    // The next cycle gets the rest of the minute, not another 15 on top of the fast scans'.
+    await readLiveTape(coins("next", 40), helius, { ...opts, nowMs: 60_000 });
+    expect(takeLiveTapeStats().pages).toBe(13);
+    // Over the two minutes: 30 pages, 15 a minute.
+    expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(30);
+  });
+
+  it("gives back a page Helius did not bill", async () => {
+    const helius = fakeHelius();
+    helius.getMintTransactionsPage.mockResolvedValueOnce({ status: "failed" } as never);
+    await readLiveTape(["a", "b"], helius, { maxPages: 2, refreshMs: 60_000, nowMs: 0 });
+    // One billed, one failed and given back: one page left in the minute.
+    await readLiveTape(["c", "d"], helius, { maxPages: 2, refreshMs: 60_000, nowMs: 1 });
+    expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(3);
   });
 
   it("reads a coin's 5m order flow off its page, as of when it was read, until it is five minutes old", async () => {
@@ -259,8 +284,9 @@ describe("live tape", () => {
         paginationToken: "more" as string | null,
       })),
     };
-    await readLiveTape([MINT], partial, { maxPages: 1, refreshMs: 0, nowMs: readAt + 1 });
-    expect(liveLaunchBagsOf(MINT, RISKY, readAt + 2)).toBeNull();
+    // A minute on, so the page budget has room again.
+    await readLiveTape([MINT], partial, { maxPages: 1, refreshMs: 0, nowMs: readAt + 60_000 });
+    expect(liveLaunchBagsOf(MINT, RISKY, readAt + 60_001)).toBeNull();
     expect(liveLaunchBagsOf("other", RISKY, readAt)).toBeNull();
   });
 });

@@ -798,6 +798,39 @@ describe("getTokensByAddresses rate limiting", () => {
     expect(client.takeCallStats()).toMatchObject({ requests: 4, throttled: 1 });
   });
 
+  it("lets a reservedSlots lookup take the reserve an ordinary one must leave (DS-2)", async () => {
+    vi.stubGlobal("fetch", (url: string) => {
+      const chunk = url.split("/").pop()!.split(",");
+      const pairs = chunk.map((mint) => ({
+        chainId: "solana",
+        dexId: "raydium",
+        baseToken: { address: mint },
+        marketCap: 50_000,
+      }));
+      return Promise.resolve(new Response(JSON.stringify(pairs)));
+    });
+    const client = new DexScreenerClient();
+    // A band refresh of 25 batches leaves 5 slots in the bucket, all inside the reserve.
+    const band = Array.from({ length: 750 }, (_, i) => `band${i}`);
+    await client.getTokensByAddresses(band, 5, { retries: 0, priority: true });
+    const viewed = ["viewed0", "viewed1"];
+    const ordinaryFailed = new Set<string>();
+    const ordinary = await client.getTokensByAddresses(viewed, 5, {
+      retries: 0,
+      deadlineMs: 500,
+      failed: ordinaryFailed,
+    });
+    // An ordinary lookup waits for the bucket to refill past the reserve: not inside its deadline.
+    expect(ordinary).toHaveLength(0);
+    expect([...ordinaryFailed].sort()).toEqual(viewed);
+    const reserved = await client.getTokensByAddresses(viewed, 5, {
+      retries: 0,
+      deadlineMs: 500,
+      reservedSlots: true,
+    });
+    expect(reserved.map((t) => t.mintAddress).sort()).toEqual(viewed);
+  });
+
   it("counts a batch still queued behind the budget at its deadline as failed", async () => {
     const mints = Array.from({ length: 60 }, (_, i) => `mint${i}`);
     let first = true;

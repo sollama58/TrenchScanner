@@ -2,7 +2,7 @@
 import "../bootstrap-env.js";
 import { describe, expect, it } from "vitest";
 import { EMPTY_TRADE_FLOW } from "@trenchscanner/core";
-import { withTapeWindow } from "./scanJob.js";
+import { BOOT_TAPE_WARMUP_SECONDS, hourlySampleWaitsForTape, withTapeWindow } from "./scanJob.js";
 
 describe("withTapeWindow (model audit 2026-10-26, §16)", () => {
   const tape = { ...EMPTY_TRADE_FLOW, uniqueBuyers5m: 12, tradesPerMin5m: 3, netFlow5mToMcap: 0.02 };
@@ -49,5 +49,14 @@ describe("withTapeWindow (model audit 2026-10-26, §16)", () => {
       tradesPerMin5m: null,
       firstBuyersHolding: 2,
     });
+  });
+});
+
+describe("hourlySampleWaitsForTape (audit 2026-10-27, DS-8)", () => {
+  it("holds an hourly sample for its coin's live-tape page only in the first minutes after a boot", () => {
+    expect(hourlySampleWaitsForTape(30, false)).toBe(true);
+    expect(hourlySampleWaitsForTape(30, true)).toBe(false);
+    expect(hourlySampleWaitsForTape(BOOT_TAPE_WARMUP_SECONDS, false)).toBe(false);
+    expect(hourlySampleWaitsForTape(3_600, false)).toBe(false);
   });
 });

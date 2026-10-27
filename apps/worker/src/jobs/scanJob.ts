@@ -187,7 +187,7 @@ import { fillMissingSocials, recordSocialLinks, takeSocialsFillStats } from "./s
 import {
   launchSnipersFromCache,
   resolveLaunchSnipers,
-  sniperShareUnobtainable,
+  blockZeroUnobtainable,
   sniperWalletsFromCache,
   blockZeroWalletsFromCache,
   takeSniperReadStats,
@@ -518,7 +518,7 @@ function sniperReadsOn(env: Env): boolean {
  */
 export type WaitLane = "decision" | "hourly";
 
-/** When each token waiting on its top-10 snipers share started waiting - see sniperShareReady. */
+/** When each token waiting on its launch read (Block 0) started waiting - see launchReadReady. */
 const sniperWaitSince = new Map<string, number>();
 /** A wait older than this belongs to a token that left the band or the watchlist. */
 const SNIPER_WAIT_FORGET_MS = 60 * 60_000;
@@ -570,6 +570,41 @@ function pruneSniperWaits(now: number): void {
   }
 }
 
+/**
+ * How long after a boot an hourly sample waits for its coin's live-tape page. The tape's pages are
+ * kept in memory, so a restart starts with none and the page budget takes a few cycles to read the
+ * band again: in a process's first 2 minutes the tape inputs (flaggedBuyers, the buyers' Wallet
+ * Score, winnerRecentBuyers) filled 55% of banked rows against 95-97% after (audit 2026-10-27,
+ * DS-8). An hourly row held here is banked by a later cycle, inside the same spacing window, so
+ * nothing is lost but the wait; decision rows never wait on it (they carry bootAgeSeconds instead).
+ */
+export const BOOT_TAPE_WARMUP_SECONDS = 120;
+
+/** Whether an hourly sample should wait for its coin's live-tape page (BOOT_TAPE_WARMUP_SECONDS). Exported for tests. */
+export function hourlySampleWaitsForTape(uptimeSeconds: number, hasPage: boolean): boolean {
+  return !hasPage && uptimeSeconds < BOOT_TAPE_WARMUP_SECONDS;
+}
+
+/**
+ * The longest a cycle waits on its lookup of the viewed coins outside the watchlist. Those coins
+ * are scanned for their live cards; none can be curated (that needs the band), yet every decision
+ * of the cycle waited on the lookup. Sent alongside the band refresh as an ordinary request, it
+ * queued behind the refresh's burst for the bucket to refill past the reserved slots: p50 7.5 s a
+ * cycle (audit 2026-10-27, DS-2). Now it goes once the refresh has answered, on the slots the
+ * refresh reserves and no longer needs, so it is a batch or two at the sustained pace. Past this
+ * the batches not yet answered are left for the live-price job (its own lookup, 20 s on), and
+ * their coins for the next cycle; the most recently viewed go first.
+ */
+export const VIEWED_LOOKUP_DEADLINE_MS = 2_000;
+
+/** This process's uptime in seconds, for BOOT_TAPE_WARMUP_SECONDS; replaced in tests (setUptimeSource). */
+let uptimeSeconds: () => number = () => process.uptime();
+
+/** Test hook: a test process is always seconds old, which would hold every hourly sample. */
+export function setUptimeSource(source: () => number = () => process.uptime()): void {
+  uptimeSeconds = source;
+}
+
 /** Test hook. */
 export function resetSniperWaits(): void {
   sniperWaitSince.clear();
@@ -582,7 +617,7 @@ export function resetSniperWaits(): void {
  * CEX-funded counts to be read over the chain's top 25 (user ask 2026-10-13: the counts are N/25,
  * and a reading over RugCheck's 20 accounts read N/19 and could barely meet the 20-of-25 cut).
  * Goes ahead once the chain's list is in and the reading over it landed, when the reads are off,
- * for a coin younger than minAgeMinutes (as for the snipers share, its ready moment is too short
+ * for a coin younger than minAgeMinutes (as for the launch read, its ready moment is too short
  * to spend waiting), or after maxMs - then on whatever reading there is, which the screen cuts at
  * the same share of the holders it read (rugScreen's countCutFor). The first call starts the wait,
  * on the lane's own clock (WaitLane; the decision's without one). Exported for tests.
@@ -604,20 +639,23 @@ export function linkedListReady(
 }
 
 /**
- * Whether a curated decision on this token should go ahead rather than wait for its top-10
- * snipers share: the share is in, or it can't come - the chain read is off or the endpoint isn't
- * serving it right now, or the launch's history has no curve launch to read buyers from - or the
- * token has already waited maxWaitMs. The bound matters: the read is metered and sometimes slow
- * or failing, and an unbounded wait held almost every decision back (2026-10-08). Past it the row
- * is banked with the share unknown, which the models already handle. A coin younger than
- * minAgeMinutes doesn't wait at all: its ready moment is short and its read the least likely to
- * land in time, so a wait cost almost every young coin its decision (2026-10-08). An unknown age
- * waits. Call it only for a token that is otherwise ready to be decided on (or, on the hourly
- * lane, due its sample): the first call starts its wait, on the lane's own clock (WaitLane; the
- * decision's without one). Exported for tests.
+ * Whether a curated decision on this token should go ahead rather than wait for its launch read:
+ * the Block 0 figure (blockZeroHeldPct, what the safety screen's Block 0 cut reads) is in, or it
+ * can't come - the chain read is off or the endpoint isn't serving it right now, or the launch
+ * gives no block to go by (blockZeroUnobtainable) - or the token has already waited maxWaitMs.
+ * It waited on the top-10 snipers share until 2026-10-27, the input of the cut Block 0 replaced
+ * (user decision 2026-10-22); both come from the same read, so the two mostly landed together,
+ * but 3% of decision rows passed the Block 0 cut unread (audit 2026-10-27, SW-4). The bound
+ * matters: the read is metered and sometimes slow or failing, and an unbounded wait held almost
+ * every decision back (2026-10-08). Past it the row is banked with Block 0 unknown, which the
+ * models already handle. A coin younger than minAgeMinutes doesn't wait at all: its ready moment
+ * is short and its read the least likely to land in time, so a wait cost almost every young coin
+ * its decision (2026-10-08). An unknown age waits. Call it only for a token that is otherwise
+ * ready to be decided on (or, on the hourly lane, due its sample): the first call starts its
+ * wait, on the lane's own clock (WaitLane; the decision's without one). Exported for tests.
  */
-export function sniperShareReady(
-  scored: Pick<ScoredToken, "mintAddress" | "sniperTop10WalletPct" | "ageMinutes">,
+export function launchReadReady(
+  scored: Pick<ScoredToken, "mintAddress" | "blockZeroHeldPct" | "ageMinutes">,
   chainReadAvailable: boolean,
   wait: { maxMs: number; minAgeMinutes: number; lane?: WaitLane },
   now = Date.now(),
@@ -625,12 +663,7 @@ export function sniperShareReady(
   const mint = scored.mintAddress;
   const key = waitKey(mint, wait.lane);
   const young = scored.ageMinutes !== undefined && scored.ageMinutes < wait.minAgeMinutes;
-  if (
-    scored.sniperTop10WalletPct !== undefined ||
-    !chainReadAvailable ||
-    young ||
-    sniperShareUnobtainable(mint)
-  ) {
+  if (scored.blockZeroHeldPct !== undefined || !chainReadAvailable || young || blockZeroUnobtainable(mint)) {
     sniperWaitSince.delete(key);
     return true;
   }
@@ -640,7 +673,7 @@ export function sniperShareReady(
 /**
  * Whether the inputs a curated decision waits for are in, so a row banked now carries what a
  * decision would see: the top-10 wallet checks (walletChecksKnown; with CURATED_REQUIRE_WALLET_CHECKS
- * off nothing waits), then the top-10 snipers share (sniperShareReady) and the Linked and
+ * off nothing waits), then the launch read's Block 0 figure (launchReadReady) and the Linked and
  * CEX-funded counts over the chain's top 25 (linkedListReady), each for its bounded wait and not
  * for young coins. The decision lane waits for the wallet checks however long it takes - a
  * contender's lookups lead the cycle, and a decision without them would skip the curator's wallet
@@ -658,7 +691,7 @@ export function decisionInputsReady(
     | "ageMinutes"
     | "freshTop10WalletPct"
     | "emptyTop10WalletPct"
-    | "sniperTop10WalletPct"
+    | "blockZeroHeldPct"
     | "linkedWalletCount"
     | "cexFundedCount"
   >,
@@ -687,7 +720,7 @@ export function decisionInputsReady(
     held.push("walletChecks");
     if (lane === "decision") return { ready: false, held };
   }
-  const snipersIn = sniperShareReady(
+  const snipersIn = launchReadReady(
     scored,
     reads.sniperChainAvailable,
     {
@@ -708,7 +741,7 @@ export function decisionInputsReady(
     },
     now,
   );
-  if (!snipersIn) held.push("sniperWait");
+  if (!snipersIn) held.push("launchReadWait");
   if (!linkedIn) held.push("linkedWait");
   return { ready: walletsIn && snipersIn && linkedIn, held };
 }
@@ -1577,13 +1610,20 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   const viewedOffWatchlist = activelyViewed.filter((t) => !trackedMints.has(t.mintAddress));
   // When each reading below was taken, so the live figures written from them carry that time.
   const readingSeenAt = new Map<string, Date>();
-  const viewedLookup =
+  // Looked up once the band refresh has answered, on the slots it reserves (see VIEWED_LOOKUP_DEADLINE_MS).
+  const lookUpViewed = (): Promise<CandidateToken[]> =>
     viewedOffWatchlist.length > 0
       ? deps.dexScreener
           .getTokensByAddresses(
             viewedOffWatchlist.map((t) => t.mintAddress),
             5,
-            { timeoutMs: 5000, retries: 1, deadlineMs: 10_000, seenAt: readingSeenAt },
+            {
+              timeoutMs: VIEWED_LOOKUP_DEADLINE_MS,
+              retries: 0,
+              deadlineMs: VIEWED_LOOKUP_DEADLINE_MS,
+              seenAt: readingSeenAt,
+              reservedSlots: true,
+            },
           )
           .catch((err: unknown) => {
             logger.warn("failed to refresh actively-viewed out-of-band tokens", { error: String(err) });
@@ -1668,7 +1708,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   }
 
   const alreadyCovered = new Set(candidates.map((c) => c.mintAddress));
-  const viewedLookedUp = await viewedLookup;
+  const viewedLookedUp = await lookUpViewed();
   // Every viewed token was just priced, here or by the refresh: that IS the dashboard's live
   // figure, so it is written now instead of the live-price job asking DexScreener again 20s later
   // (it skips tokens read this recently - see LIVE_PRICE_FRESH_MS).
@@ -2484,7 +2524,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
     candidates.map((c) => ({ mint: c.mintAddress, tokenId: priors.get(c.mintAddress)?.token?.id })),
   );
 
-  // Read once for the cycle: whether a curated decision should wait for the top-10 snipers share.
+  // Read once for the cycle: whether a curated decision should wait for the launch read (Block 0).
   const sniperChainAvailable = sniperReadsOn(env) && deps.helius.gtfaUsable;
   pruneSniperWaits(Date.now());
   const freshQuotes = await freshQuotesWork;
@@ -4116,8 +4156,8 @@ async function processCandidate(
     // What a decision waits for, on either lane's clock - see decisionInputsReady. The wallet
     // checks when they're required: deciding without them would skip the curator's wallet caps,
     // and an event spent now can't be reopened until the spacing window passes. The contender-first
-    // wallet ordering above resolves them quickly. The top-10 snipers share too, while it can still
-    // come, for SNIPER_SHARE_MAX_WAIT_SECONDS at most and not for young coins (sniperShareReady):
+    // wallet ordering above resolves them quickly. The launch read's Block 0 figure too, while it can
+    // still come, for SNIPER_SHARE_MAX_WAIT_SECONDS at most and not for young coins (launchReadReady):
     // the safety cut reads it, and a row banked without it would teach the models its absence.
     // And the Linked and CEX-funded counts over the chain's top 25, on the same terms
     // (linkedListReady). Both waits are asked each time, so they run side by side.
@@ -4132,7 +4172,13 @@ async function processCandidate(
     // learned "missing" from background rows alone (notes/data-audit-2026-10-16, skew.md section
     // 4). Held this cycle, it is asked again next cycle: the spacing check stays open until it
     // is banked. No lookup is made for it that the cycle wouldn't make anyway.
-    if (pass === "cycle" && !prior.recentHourlySample && inScanBand && inputsReady("hourly").ready) {
+    if (
+      pass === "cycle" &&
+      !prior.recentHourlySample &&
+      inScanBand &&
+      !hourlySampleWaitsForTape(uptimeSeconds(), livePageOf(candidate.mintAddress) !== undefined) &&
+      inputsReady("hourly").ready
+    ) {
       await recordCandidateSample(token.id, scored, env);
     }
     const preGate = passesEventPreGate(scored, band);
