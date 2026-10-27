@@ -251,7 +251,7 @@ export async function fillBandMetadata(
   const uris = await deps.helius.getMetadataUris(todo.map((t) => t.mintAddress));
   const found: DiscoveredCoin[] = [];
   await forEachWithConcurrency(todo, CONCURRENCY, async (token) => {
-    const uri = uris.get(token.mintAddress) ?? "failed";
+    const uri = uris.has(token.mintAddress) ? uris.get(token.mintAddress)! : "failed";
     if (uri === "failed") {
       // Nothing answered: ask again another cycle.
       askedOnChain.delete(token.mintAddress);
