@@ -6,6 +6,7 @@ import { issueTelegramLinkCode } from "./link.js";
 import {
   CHAT_REPLY_COOLDOWN_MS,
   handleTelegramUpdate,
+  latestAiVerdict,
   parseCommand,
   BOT_REPLIES_PER_SECOND,
   replyCooldownSize,
@@ -468,6 +469,12 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
       "refreshed",
     );
     expect(String(api.calls.at(-2)!.params.text)).not.toContain("AI reviewer");
+    // Not even an admin's group: the edit is shown to every member, and any member can press it.
+    await prisma.telegramChat.update({ where: { id: row.id }, data: { kind: "supergroup" } });
+    t += 20_000;
+    expect((await handleTelegramUpdate(api, press(data, false), adminOpts)).action).toBe("refreshed");
+    expect(String(api.calls.at(-2)!.params.text)).not.toContain("AI reviewer");
+    await prisma.telegramChat.update({ where: { id: row.id }, data: { kind: "private" } });
 
     // A send this chat never got, a forged key, or a send with no card: nothing is read.
     t += 20_000;
@@ -479,8 +486,8 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     await prisma.telegramAlertSent.updateMany({ where: { chatId: row.id }, data: { card: Prisma.DbNull } });
     t += 20_000;
     expect((await handleTelegramUpdate(api, press(data), opts)).action).toBe("ignored");
-    // The four refreshes above read fresh numbers; none of the refused presses did.
-    expect(asked).toHaveLength(4);
+    // The five refreshes above read fresh numbers; none of the refused presses did.
+    expect(asked).toHaveLength(5);
 
     // Telegram no longer has the message: said plainly.
     await prisma.telegramAlertSent.updateMany({
@@ -727,5 +734,31 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     ).toBe("refused");
     const row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
     expect(row).toMatchObject({ layout: "full", alertsMinMcapUsd: 5000 });
+  });
+});
+
+describe.skipIf(!dbAvailable)("latestAiVerdict", () => {
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+  });
+
+  it("reads live (gate) reviews only, never a shadow one", async () => {
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-ai-mint`, symbol: "AI" } });
+    const review = { tokenId: token.id, model: "m", latencyMs: 1, anchorPriceUsd: 1, anchorMcapUsd: 1 };
+    await prisma.aiReview.create({
+      data: { ...review, mode: "shadow", decision: "buy", probability2x: 0.9 },
+    });
+    expect(await latestAiVerdict(token.id)).toBeNull();
+    await prisma.aiReview.create({
+      data: {
+        ...review,
+        mode: "gate",
+        decision: "no_buy",
+        probability2x: 0.2,
+        createdAt: new Date(Date.now() - 60_000),
+      },
+    });
+    expect(await latestAiVerdict(token.id)).toEqual({ decision: "no_buy", probability2x: 0.2 });
   });
 });

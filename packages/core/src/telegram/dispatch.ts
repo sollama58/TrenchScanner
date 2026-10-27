@@ -80,10 +80,25 @@ const GLOBAL_GAP_MS = 50;
 const MAX_IN_FLIGHT = 8;
 /** Access lookups run this many at a time, so a pass doesn't take the whole worker pool. */
 const ACCESS_CHECK_BATCH = 8;
-/** The most a 429 is honoured in one pass; a longer wait is left for the next pass. */
-const MAX_RETRY_AFTER_MS = 20_000;
-/** Consecutive failed passes before a chat is switched off rather than retried forever. */
+/**
+ * The longest a 429's retry_after is taken at its word. A wait that runs past the pass is carried
+ * to the next ones (holdUntil): resending before it is up is what made Telegram's flood wait grow,
+ * and a supergroup that kept being asked again went silent for up to 54 minutes in its busiest
+ * hours (full audit 2026-10-27, WB-11/WB-20).
+ */
+const MAX_RETRY_AFTER_MS = 3_600_000;
+/** Failed passes before a chat is switched off rather than retried forever... */
 const MAX_FAILURES = 100;
+/**
+ * ...and only once nothing has reached it for this long, too. Passes run every few seconds while
+ * alerts flow, so 100 failed passes alone could be a few minutes of one bad hour.
+ */
+export const FAILING_FOR_MS = 24 * 3_600_000;
+/**
+ * How far back an alert that aged out of MAX_ALERT_AGE_MS is still counted (agedOut). A cursor can
+ * be days old after the worker was down; counting that far back would read days of alerts.
+ */
+const AGED_OUT_LOOKBACK_MS = 60 * 60_000;
 /**
  * Failed sends of the same alert to the same chat before the chat steps over it. A send that
  * fails the same way every pass (Telegram refusing it with a code the dispatcher doesn't know,
@@ -157,15 +172,31 @@ const NO_ARTWORK_RETRY_MS = 30 * 60_000;
 const NO_ARTWORK_MAX = 2_000;
 
 /**
- * Chat row id -> the alert (its `through` stamp) whose send failed last pass, and how many passes
- * running it has: a send failing STUCK_SEND_ATTEMPTS times is stepped over (see send).
+ * Chat row id -> the send that failed last pass and how many passes running it has: a send failing
+ * STUCK_SEND_ATTEMPTS times is stepped over (see send). Keyed on the oldest alert the message
+ * carries, not its newest: a backlog digest takes in each pass's new alerts, and keyed on its
+ * newest stamp the count restarted every pass in a busy hour and never reached the step-over
+ * (WB-11). `through` is how far the message reached when it first failed, which is what a step-over
+ * skips; anything newer goes out on the next pass.
  */
-const stuckSends = new Map<string, { through: number; failures: number }>();
+const stuckSends = new Map<string, { oldest: string; through: number; failures: number }>();
+
+/**
+ * Chat row id -> the earliest the next send to it may go out: its spacing after the last send, or
+ * the end of a 429's retry_after. Kept across passes, since a pass starts right after the last one
+ * when alerts flow and used to send at once (WB-20).
+ */
+const holdUntil = new Map<string, number>();
+
+/** Alerts aged out unsent since this process started (DispatchSummary.agedOutSinceBoot). */
+let agedOutSinceBoot = 0;
 
 /** For tests. */
 export function resetArtworkMisses(): void {
   noArtworkUntil.clear();
   stuckSends.clear();
+  holdUntil.clear();
+  agedOutSinceBoot = 0;
 }
 
 /**
@@ -231,6 +262,18 @@ export interface DispatchSummary {
   duplicates: number;
   /** Alerts a chat stepped over after STUCK_SEND_ATTEMPTS failed sends (counted in chatErrors too). */
   stepped: number;
+  /**
+   * Alerts a chat should have had that were older than MAX_ALERT_AGE_MS before they could go out
+   * (its sends failing or rate limited), so the cursor stepped over them unsent. Any is a chat
+   * losing alerts: these were dropped without a count before (WB-12).
+   */
+  agedOut: number;
+  /** agedOut summed over every pass since this process started. */
+  agedOutSinceBoot: number;
+  /** Chats left with alerts pending because Telegram's retry_after hadn't run out by the pass's end. */
+  held: number;
+  /** Chats switched off in this pass after failing for FAILING_FOR_MS with nothing getting through. */
+  disabled: number;
   /** What Telegram said to the last send left for the next pass, for the heartbeat. */
   failure?: string;
   /**
@@ -258,6 +301,7 @@ function loadChats() {
       sentThrough: true,
       lastSentAt: true,
       failures: true,
+      createdAt: true,
       picksFallbackNoticedAt: true,
       user: {
         select: {
@@ -494,6 +538,10 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
     unconfirmed: 0,
     duplicates: 0,
     stepped: 0,
+    agedOut: 0,
+    agedOutSinceBoot,
+    held: 0,
+    disabled: 0,
   };
   if (!telegramConfigured(env.TELEGRAM_BOT_TOKEN)) return summary;
   // A deploy runs the old scanner and the new one side by side, and two passes reading the same
@@ -539,9 +587,25 @@ async function dispatchPass(
   );
   summary.horizon = horizon;
   const oldest = new Date(startedAt - MAX_ALERT_AGE_MS);
-  // A chat whose cursor fell behind the window (the worker was down) skips the stale backlog.
-  for (const chat of chats) if (chat.sentThrough < oldest) chat.sentThrough = oldest;
-  const since = new Date(Math.min(...chats.map((c) => c.sentThrough.getTime())));
+  // A chat whose cursor fell behind the window (the worker was down, or its sends kept failing)
+  // skips the stale backlog. What it skips is still read, as far back as AGED_OUT_LOOKBACK_MS, to
+  // count it (agedOut), and the cursor is moved up for good, so the next pass doesn't count it again.
+  const agedFrom = new Map<string, Date>();
+  for (const chat of chats) {
+    if (chat.sentThrough >= oldest) continue;
+    agedFrom.set(
+      chat.id,
+      new Date(Math.max(chat.sentThrough.getTime(), oldest.getTime() - AGED_OUT_LOOKBACK_MS)),
+    );
+    chat.sentThrough = oldest;
+  }
+  if (agedFrom.size > 0) {
+    await prisma.telegramChat.updateMany({
+      where: { id: { in: [...agedFrom.keys()] }, revokedAt: null, sentThrough: { lt: oldest } },
+      data: { sentThrough: oldest },
+    });
+  }
+  const since = new Date(Math.min(...chats.map((c) => (agedFrom.get(c.id) ?? c.sentThrough).getTime())));
 
   const matchUsers = [...new Set(chats.filter((c) => c.filterMatches).map((c) => c.user.id))];
   const wantsCalls = chats.some(takesCalls);
@@ -702,6 +766,23 @@ async function dispatchPass(
         : theirs.map((c) => ({ ...c, narrativeVerdict: null })),
       horizon,
     ).filter((p) => !alreadySent.has(`${chat.id}:${p.tokenIds[0]}`));
+    const agedSince = agedFrom.get(chat.id);
+    if (agedSince) {
+      const aged = buildPending(
+        { ...chat, modelCalls: callsOn, sentThrough: agedSince },
+        mine,
+        theirs,
+        oldest,
+      ).filter((p) => !alreadySent.has(`${chat.id}:${p.tokenIds[0]}`)).length;
+      if (aged > 0) {
+        summary.agedOut += aged;
+        logger.warn("telegram alerts aged out unsent, stepping over them", {
+          chat: chat.id,
+          kind: chat.kind,
+          alerts: aged,
+        });
+      }
+    }
     if (pending.length === 0) {
       caughtUp.push(chat.id);
       continue;
@@ -718,10 +799,10 @@ async function dispatchPass(
             through,
           },
         ],
-        nextAt: 0,
+        nextAt: holdUntil.get(chat.id) ?? 0,
       });
     } else {
-      queues.push({ chat, pending, nextAt: 0 });
+      queues.push({ chat, pending, nextAt: holdUntil.get(chat.id) ?? 0 });
     }
   }
 
@@ -830,6 +911,7 @@ async function dispatchPass(
     if (result.ok) {
       q.pending.shift();
       q.nextAt = now() + spacing;
+      holdUntil.set(q.chat.id, q.nextAt);
       stuckSends.delete(q.chat.id);
       if (isDigest(item.card)) summary.digests += 1;
       else summary.sent += 1;
@@ -901,10 +983,19 @@ async function dispatchPass(
       rateLimited.add(q.chat.id);
       logger.warn("telegram rate limited", { chat: q.chat.id, wait, chats: rateLimited.size });
       q.nextAt = now() + wait;
+      // Not before Telegram said, in this pass or a later one (the pass ends before a long wait).
+      holdUntil.set(q.chat.id, q.nextAt);
+      summary.failure = what;
       // One chat limited is usually that chat's own limit (a group's twenty a minute, which its
       // commands and previews share), so only it waits. A second chat limited in the same pass
       // means the bot-wide limit, and then every chat waits.
       if (rateLimited.size >= 2) for (const other of queues) other.nextAt = Math.max(other.nextAt, q.nextAt);
+      // What Telegram said, for the chat's owner and the admin panel; a rate limit is not the
+      // chat's failure, so it doesn't count towards switching it off.
+      await prisma.telegramChat.updateMany({
+        where: { id: q.chat.id, revokedAt: null },
+        data: { lastError: `${what} (retry after ${Math.round(wait / 1_000)} s)` },
+      });
       return;
     }
     if (result.code === 400) {
@@ -923,10 +1014,14 @@ async function dispatchPass(
     // Telegram unreachable, a 5xx or a 401: leave the cursor, try again next pass - but not
     // forever. The same alert failing STUCK_SEND_ATTEMPTS passes running is stepped over, so
     // one send Telegram won't take doesn't hold the chat's every later alert behind it.
-    const through = item.through.getTime();
+    const oldestSend = stuckIdentity(item);
     const stuck = stuckSends.get(q.chat.id);
-    const attempts = stuck && stuck.through === through ? stuck.failures + 1 : 1;
+    const again = stuck !== undefined && stuck.oldest === oldestSend;
+    const attempts = again ? stuck.failures + 1 : 1;
+    const through = again ? stuck.through : item.through.getTime();
     if (attempts >= STUCK_SEND_ATTEMPTS) {
+      // What the message held when it first failed is skipped; whatever came in since goes out on
+      // the next pass, as a message of its own.
       logger.warn("telegram send failed again, stepping over the alert", {
         chat: q.chat.id,
         tokens: item.tokenIds,
@@ -939,12 +1034,16 @@ async function dispatchPass(
       q.pending.shift();
       q.nextAt = now() + spacing;
       await prisma.telegramChat.updateMany({
+        where: { id: q.chat.id, revokedAt: null, sentThrough: { lt: new Date(through) } },
+        data: { sentThrough: new Date(through) },
+      });
+      await prisma.telegramChat.updateMany({
         where: { id: q.chat.id, revokedAt: null },
-        data: { sentThrough: item.through, lastError: `skipped after ${attempts} failed sends: ${what}` },
+        data: { lastError: `skipped after ${attempts} failed sends: ${what}` },
       });
       return;
     }
-    stuckSends.set(q.chat.id, { through, failures: attempts });
+    stuckSends.set(q.chat.id, { oldest: oldestSend, through, failures: attempts });
     logger.warn("telegram send failed", { chat: q.chat.id, attempts, what });
     summary.failure = what;
     failed.push({ chat: q.chat, what });
@@ -966,23 +1065,27 @@ async function dispatchPass(
     inFlight.add(p);
   };
 
-  while (queues.some((q) => q.pending.length > 0) || inFlight.size > 0) {
+  // A chat held past the pass's budget (a long retry_after) waits for a later pass, rather than
+  // the pass sleeping it out with the lock held.
+  const budgetEnd = startedAt + PASS_BUDGET_MS;
+  const due = (q: Queue) => q.pending.length > 0 && q.nextAt <= budgetEnd;
+  while (queues.some(due) || inFlight.size > 0) {
     const t = now();
-    const overBudget = t - startedAt > PASS_BUDGET_MS;
+    const overBudget = t > budgetEnd;
     const ready =
       overBudget || inFlight.size >= MAX_IN_FLIGHT
         ? []
-        : queues.filter((q) => q.pending.length > 0 && q.nextAt <= t && !busy.has(q));
+        : queues.filter((q) => due(q) && q.nextAt <= t && !busy.has(q));
     if (ready.length === 0) {
       if (inFlight.size > 0) {
         // Whichever comes first: a send finishing, or the next chat coming off its spacing.
-        const waiting = overBudget ? [] : queues.filter((q) => q.pending.length > 0 && !busy.has(q));
+        const waiting = overBudget ? [] : queues.filter((q) => due(q) && !busy.has(q));
         const next = waiting.length === 0 ? null : Math.min(...waiting.map((q) => q.nextAt));
         await Promise.race([...inFlight, ...(next === null ? [] : [sleep(Math.max(1, next - t))])]);
         continue;
       }
       if (overBudget) break;
-      const next = Math.min(...queues.filter((q) => q.pending.length > 0).map((q) => q.nextAt));
+      const next = Math.min(...queues.filter(due).map((q) => q.nextAt));
       await sleep(Math.max(1, next - t));
       continue;
     }
@@ -1012,17 +1115,27 @@ async function dispatchPass(
   // A failure counts against a chat only if Telegram took some other message in this pass: an
   // outage or a revoked token fails every chat at once, and switching them all off for it would
   // leave them paused once Telegram is back.
+  // A chat is switched off only once it has also had nothing through for FAILING_FOR_MS: counted in
+  // passes alone, a bad hour switched a busy chat off (WB-21).
   const reachable = summary.sent + summary.digests > 0;
+  const end = now();
   for (const { chat, what } of failed) {
     const failures = reachable ? chat.failures + 1 : chat.failures;
+    const lastThrough = (chat.lastSentAt ?? chat.createdAt).getTime();
+    const off = failures >= MAX_FAILURES && end - lastThrough >= FAILING_FOR_MS;
+    if (off) {
+      summary.disabled += 1;
+      logger.warn("telegram chat failing for a day, switching it off", { chat: chat.id, failures, what });
+    }
     await prisma.telegramChat.updateMany({
       where: { id: chat.id, revokedAt: null },
-      data:
-        failures >= MAX_FAILURES
-          ? { lastError: what, failures, enabled: false }
-          : { lastError: what, failures },
+      data: off ? { lastError: what, failures, enabled: false } : { lastError: what, failures },
     });
   }
+  summary.held = queues.filter((q) => q.pending.length > 0 && q.nextAt > end).length;
+  for (const [id, until] of holdUntil) if (until <= end) holdUntil.delete(id);
+  agedOutSinceBoot += summary.agedOut;
+  summary.agedOutSinceBoot = agedOutSinceBoot;
   return summary;
 }
 
@@ -1030,6 +1143,16 @@ async function dispatchPass(
 export const PICKS_FALLBACK_TEXT =
   "ℹ️ The models this account picked for Telegram are no longer running, so this chat now gets the " +
   "<b>top models'</b> alerts instead. Pick again under <b>Filters → Telegram alerts</b>.";
+
+/**
+ * Which alert a message is stuck on, for the step-over count: its oldest token's. That stays the
+ * same while a backlog digest grows around it, where the message's newest stamp moves every pass.
+ */
+function stuckIdentity(item: Pending): string {
+  const first = item.sends[0];
+  if (!first) return "";
+  return `${first.tokenId}:${first.curatedAlertId ?? first.matchId ?? ""}`;
+}
 
 type DigestCard = AlertCard & { digest: AlertCard[] };
 function isDigest(card: AlertCard): card is DigestCard {
