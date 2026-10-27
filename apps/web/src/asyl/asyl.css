@@ -3017,3 +3017,25 @@ body {
     padding: 4px 10px;
   }
 }
+
+/* The timeline: a wallet or a link fades in as it happens, in the place it has on the whole map. */
+@keyframes asyl-appear {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.asyl-replay .asyl-nodes > g,
+.asyl-replay .asyl-edges > * {
+  animation: asyl-appear 0.45s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .asyl-replay .asyl-nodes > g,
+  .asyl-replay .asyl-edges > * {
+    animation: none;
+  }
+}
