@@ -500,13 +500,22 @@ export class DexScreenerClient {
     const answered = new Set<string>();
     // Collected here, not straight into the caller's set: a mint the fallback prices didn't fail.
     const dexFailed = new Set<string>();
-    let results = await this.lookup(unique, concurrency, { ...options, failed: dexFailed }, answered);
+    // Mints our own DexScreener budget held back past the deadline: DexScreener never refused them.
+    const heldBack = new Set<string>();
+    let results = await this.lookup(
+      unique,
+      concurrency,
+      { ...options, failed: dexFailed },
+      answered,
+      heldBack,
+    );
     if (dexFailed.size > 0 && !options.mayBeUnindexed) {
       results = await this.answerFailedFromFallback(
         fallback,
         results,
         dexFailed,
         answered,
+        heldBack,
         options,
         remaining(),
       );
@@ -539,21 +548,29 @@ export class DexScreenerClient {
    * out of the band (audit 2026-10-14, L6-4). When no batch answered at all, DexScreener is
    * routed around for DOWN_HOLD_MS like a blank one, so the next lookups don't each wait out its
    * timeouts first. Mints the fallback answers leave `failed`; the rest stay in it. Never throws.
+   *
+   * Mints in `heldBack` were never sent: our own DexScreener budget couldn't fit them before the
+   * deadline (RateGateDeadlineError gives up as soon as the queue runs past it, often with seconds
+   * left). DexScreener didn't fail them, so they neither count towards "down" nor go to the paid
+   * fallback; they stay failed and the caller asks again next pass. Sending them made a busy
+   * DexScreener queue spend CoinGecko credits on every scan cycle, and a cycle whose every batch
+   * queued routed every lookup onto CoinGecko for DOWN_HOLD_MS (user ask 2026-10-27).
    */
   private async answerFailedFromFallback(
     fallback: GeckoTerminalClient,
     results: CandidateToken[],
     failed: Set<string>,
     answered: Set<string>,
+    heldBack: Set<string>,
     options: TokenLookupOptions,
     remainingMs: number | undefined,
   ): Promise<CandidateToken[]> {
-    if (answered.size === 0 && failed.size >= Math.min(BLANK_MIN_MINTS, BATCH_SIZE)) {
+    const ask = [...failed].filter((mint) => !heldBack.has(mint));
+    if (answered.size === 0 && ask.length >= Math.min(BLANK_MIN_MINTS, BATCH_SIZE)) {
       this.blankUntil = Date.now() + DOWN_HOLD_MS;
-      logger.warn("dexscreener lookups are failing - using geckoterminal", { failed: failed.size });
+      logger.warn("dexscreener lookups are failing - using geckoterminal", { failed: ask.length });
     }
-    if (remainingMs !== undefined && remainingMs <= 0) return results;
-    const ask = [...failed];
+    if (ask.length === 0 || (remainingMs !== undefined && remainingMs <= 0)) return results;
     const geckoFailed = new Set<string>();
     const gecko = await fallback
       .getTokensByAddresses(ask, {
@@ -914,12 +931,16 @@ export class DexScreenerClient {
     return (pairs ?? []).filter((p) => p.chainId === SOLANA_CHAIN_ID && p.baseToken?.address === mintAddress);
   }
 
-  /** One DexScreener lookup; `answeredOut` collects the mints whose batch came back. */
+  /**
+   * One DexScreener lookup; `answeredOut` collects the mints whose batch came back, `heldOut` the
+   * ones our own budget never sent before the deadline.
+   */
   private async lookup(
     unique: string[],
     concurrency: number,
     options: TokenLookupOptions,
     answeredOut?: Set<string>,
+    heldOut?: Set<string>,
   ): Promise<CandidateToken[]> {
     const {
       deadlineMs,
@@ -975,6 +996,7 @@ export class DexScreenerClient {
       if (Date.now() >= deadline) {
         skipped += chunk.length;
         for (const mint of chunk) failed?.add(mint);
+        for (const mint of chunk) heldOut?.add(mint);
         return;
       }
       try {
@@ -1002,6 +1024,7 @@ export class DexScreenerClient {
         // Queued behind the budget past the deadline: the same as reaching the deadline unsent.
         if (err instanceof RateGateDeadlineError) {
           skipped += chunk.length;
+          for (const mint of chunk) heldOut?.add(mint);
           return;
         }
         logger.warn("failed to fetch token batch", { chunkSize: chunk.length, error: String(err) });
