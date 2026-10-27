@@ -395,8 +395,9 @@ export async function registerStatsRoutes(
    * What the database is busy with right now, and how big the hot tables are - the half of the
    * worker's performance that /health/worker's stage timings can't explain on their own (a stage
    * that is slow because its query is slow, or because the database is saturated by something
-   * else). Same token guard as the report above. Statement text is Prisma's parameterized SQL, so
-   * it carries placeholders, never bound values.
+   * else), plus any INVALID index and the statements that took the most time (pg_stat_statements).
+   * Same token guard as the report above. Statement text is Prisma's parameterized SQL or Postgres's
+   * normalized form, so it carries placeholders, never bound values.
    */
   app.get("/db", { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard }, async (_request, reply) => {
     reply.header("cache-control", "no-store");
@@ -1102,12 +1103,76 @@ export async function buildHitRateReport(
   };
 }
 
-/** Tables the worker reads and writes on every cycle. */
-const HOT_TABLES = ["Token", "TokenSnapshot", "Match", "CandidateOutcome", "RugCheckCache", "UserFilter"];
+/**
+ * Tables the worker reads and writes on every cycle, and the big ones the hourly and nightly batch
+ * reads walk (TokenWalletActivity is the second-largest table; full audit 2026-10-27, DB-9).
+ */
+const HOT_TABLES = [
+  "Token",
+  "TokenSnapshot",
+  "Match",
+  "CandidateOutcome",
+  "RugCheckCache",
+  "UserFilter",
+  "TokenWalletActivity",
+  "CandleChunk",
+  "TokenNarrative",
+  "WalletRisk",
+];
+
+/** How many statements the report lists from pg_stat_statements, by total time. */
+const TOP_STATEMENTS = 20;
+
+/**
+ * The statements that took the most time since the server's statistics were last reset, from
+ * pg_stat_statements: what a slow job or a table's sequential scans come from (DB-9, DB-19), which
+ * nothing else names. The extension is created by a migration where the server allows it; where it
+ * is not there (or not preloaded, which makes the view refuse) the report says why instead.
+ * Statement text is normalized by Postgres, constants replaced with $n, so it carries no values.
+ */
+export async function readTopStatements(limit = TOP_STATEMENTS) {
+  const [ext] = await prisma.$queryRaw<{ installed: boolean }[]>`
+    SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements') AS installed`;
+  if (!ext?.installed) return { available: false as const, reason: "pg_stat_statements is not installed" };
+  try {
+    const rows = await prisma.$queryRawUnsafe<
+      {
+        calls: bigint;
+        total_ms: number;
+        mean_ms: number;
+        rows: bigint;
+        shared_read_blocks: bigint;
+        query: string;
+      }[]
+    >(
+      `SELECT s.calls, s.total_exec_time AS total_ms, s.mean_exec_time AS mean_ms, s.rows,
+              s.shared_blks_read AS shared_read_blocks, LEFT(s.query, 400) AS query
+       FROM pg_stat_statements s
+       WHERE s.dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+       ORDER BY s.total_exec_time DESC
+       LIMIT $1`,
+      limit,
+    );
+    return {
+      available: true as const,
+      statements: rows.map((r) => ({
+        calls: Number(r.calls),
+        totalMs: Math.round(r.total_ms),
+        meanMs: Math.round(r.mean_ms * 10) / 10,
+        rows: Number(r.rows),
+        sharedReadBlocks: Number(r.shared_read_blocks),
+        query: r.query,
+      })),
+    };
+  } catch (err) {
+    // Installed but not in shared_preload_libraries: the view exists and refuses every read.
+    return { available: false as const, reason: String(err).slice(0, 200) };
+  }
+}
 
 /** Exported for the route test. Read-only catalog queries - cheap whatever the table sizes. */
 export async function buildDbReport() {
-  const [activity, tables, indexes, locks, connections] = await Promise.all([
+  const [activity, tables, indexes, locks, connections, invalidIndexes, statements] = await Promise.all([
     prisma.$queryRaw<
       {
         pid: number;
@@ -1176,6 +1241,19 @@ export async function buildDbReport() {
              current_setting('superuser_reserved_connections')::int AS reserved
       FROM pg_stat_activity
       WHERE backend_type = 'client backend'`,
+    // Every table's, not only the hot ones': a failed CONCURRENTLY build leaves its index INVALID,
+    // unused by queries, written on every insert, and skipped by a migration's re-run (DB-9). The
+    // nightly cleanup fails a stage on one; this shows it between nights.
+    prisma.$queryRaw<{ table: string; index: string; bytes: bigint; building: boolean }[]>`
+      SELECT t.relname AS table, i.relname AS index, pg_relation_size(i.oid) AS bytes,
+             EXISTS (SELECT 1 FROM pg_stat_progress_create_index p WHERE p.relid = x.indrelid) AS building
+      FROM pg_index x
+      JOIN pg_class i ON i.oid = x.indexrelid
+      JOIN pg_class t ON t.oid = x.indrelid
+      JOIN pg_namespace n ON n.oid = t.relnamespace
+      WHERE n.nspname = current_schema() AND NOT x.indisvalid
+      ORDER BY t.relname, i.relname`,
+    readTopStatements(),
   ]);
   const c = connections[0];
   return {
@@ -1195,6 +1273,14 @@ export async function buildDbReport() {
       bytes: undefined,
       scans: Number(i.scans),
     })),
+    invalidIndexes: invalidIndexes.map((i) => ({
+      table: i.table,
+      index: i.index,
+      mb: Math.round(Number(i.bytes) / 1_048_576),
+      // A build in progress on that table: its index is invalid until the build finishes.
+      building: i.building,
+    })),
+    statements,
     locksWaiting: Number(locks[0]?.waiting ?? 0),
     connections: {
       total: Number(c?.total ?? 0),

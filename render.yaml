@@ -737,6 +737,13 @@ services:
     dockerfilePath: ./scripts/db-backup/Dockerfile
     dockerContext: ./scripts/db-backup
     autoDeployTrigger: checksPass
+    # The image holds only scripts/db-backup, so no other merge rebuilds it (it rebuilt on every
+    # merge, about 29 a day: full audit 2026-10-27, DB-11). This file is listed as the Node
+    # services list it.
+    buildFilter:
+      paths:
+        - scripts/db-backup/**
+        - render.yaml
     envVars:
       - key: DATABASE_URL
         fromDatabase:
