@@ -30,7 +30,7 @@ import { RateGate } from "./rateGate.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import bs58 from "bs58";
-import { mayhemStateAddress } from "../solana.js";
+import { decodeMetaplexUri, mayhemStateAddress, metaplexMetadataAddress } from "../solana.js";
 import { FEE_HOLDERS, withheldFeeAuthorityOf } from "../stonksFees.js";
 import {
   pumpCurveAddressOf,
@@ -2990,18 +2990,56 @@ export class HeliusClient {
   }
 
   /**
-   * A token's on-chain metadata URI (its Metaplex `uri`, the launch's IPFS JSON) through the DAS
-   * getAsset method, 10 credits. For launches found through Jupiter's lists, which carry no URI,
-   * while Pump.fun's own endpoints refuse (user decision 2026-10-23: in-band coins only; see the
-   * worker's launchDetails.ts). Null when the asset has no URI; "failed" when nothing answered or
-   * this endpoint doesn't serve DAS.
+   * Each mint's metadata URI (the launch's IPFS JSON) read straight off the chain: the Metaplex
+   * Token Metadata account (a PDA of the mint) for a classic SPL mint, the mint's own tokenMetadata
+   * extension for a Token-2022 launch. Both accounts of every mint go in one getMultipleAccounts,
+   * 1 credit per GMA_MAX_KEYS addresses, where DAS getAsset billed 10 a mint for the same URI (full
+   * audit 2026-10-27, DA-4: ~98k credits a day). For launches found through Jupiter's lists, which
+   * carry no URI, while Pump.fun's own endpoints refuse (user decision 2026-10-23: in-band coins
+   * only; see the worker's launchDetails.ts).
+   *
+   * Per mint: the URI; null when the mint exists and neither account names one; "failed" when the
+   * read got no answer or the mint isn't there yet at "confirmed" (asked again another cycle).
    */
-  async getAssetMetadataUri(mint: string): Promise<string | null | "failed"> {
-    if (!this.holdingsLookupAvailable) return "failed";
-    const res = await this.sendSingle<{ content?: { json_uri?: unknown } }>("getAsset", { id: mint }, 10_000);
-    if (!res || res.error) return "failed";
-    const uri = res.result?.content?.json_uri;
-    return typeof uri === "string" && uri.length > 0 ? uri : null;
+  async getMetadataUris(mints: readonly string[]): Promise<Map<string, string | null | "failed">> {
+    const unique = [...new Set(mints)];
+    const out = new Map<string, string | null | "failed">();
+    if (unique.length === 0) return out;
+    const pdaOf = new Map<string, string>();
+    for (const mint of unique) {
+      try {
+        pdaOf.set(mint, metaplexMetadataAddress(mint));
+      } catch {
+        out.set(mint, null);
+      }
+    }
+    const asked = [...pdaOf.keys()];
+    if (asked.length === 0) return out;
+    // jsonParsed: the mints come back parsed (extensions included); the metadata accounts, owned
+    // by a program the RPC doesn't parse, come back as base64.
+    const accounts = await this.getMultipleAccounts<MetadataAccountValue>(
+      [...asked, ...asked.map((m) => pdaOf.get(m)!)],
+      { encoding: "jsonParsed" },
+    );
+    for (const mint of asked) {
+      const mintAccount = accounts.get(mint);
+      const metadataAccount = accounts.get(pdaOf.get(mint)!);
+      if (!mintAccount || mintAccount === "failed" || !mintAccount.value) {
+        out.set(mint, "failed");
+        continue;
+      }
+      const fromExtension = tokenMetadataExtensionUri(mintAccount.value);
+      if (fromExtension) {
+        out.set(mint, fromExtension);
+        continue;
+      }
+      if (!metadataAccount || metadataAccount === "failed") {
+        out.set(mint, "failed");
+        continue;
+      }
+      out.set(mint, metadataAccount.value ? metaplexUriOf(metadataAccount.value) : null);
+    }
+    return out;
   }
 
   /**
@@ -3184,4 +3222,34 @@ function funderResultOf(
         ...how,
       }
     : { status: "none", ...how };
+}
+
+/** An account as getMultipleAccounts' jsonParsed answers it: parsed when the RPC knows the owner. */
+interface MetadataAccountValue {
+  data?: unknown;
+}
+
+/** A Token-2022 mint's own tokenMetadata extension URI, from its jsonParsed account. */
+export function tokenMetadataExtensionUri(account: MetadataAccountValue): string | null {
+  const data = account.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const info = (data as { parsed?: { info?: { extensions?: unknown } } }).parsed?.info;
+  if (!Array.isArray(info?.extensions)) return null;
+  for (const ext of info.extensions as { extension?: unknown; state?: { uri?: unknown } }[]) {
+    if (ext?.extension !== "tokenMetadata") continue;
+    const uri = ext.state?.uri;
+    if (typeof uri === "string" && uri.trim()) return uri.trim();
+  }
+  return null;
+}
+
+/** The URI in a Metaplex metadata account answered as `[base64, "base64"]`. */
+function metaplexUriOf(account: MetadataAccountValue): string | null {
+  const data = account.data;
+  if (!Array.isArray(data) || typeof data[0] !== "string" || data[1] !== "base64") return null;
+  try {
+    return decodeMetaplexUri(Buffer.from(data[0], "base64"));
+  } catch {
+    return null;
+  }
 }

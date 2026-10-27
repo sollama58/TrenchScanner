@@ -120,7 +120,25 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(url, { ...init, signal: controller.signal });
+      let res: Response;
+      try {
+        res = await fetch(url, { ...init, signal: controller.signal });
+      } catch (err) {
+        // A connection that failed before any answer (a reset, a refused socket, a DNS miss) was
+        // rethrown untried, so one reset failed a whole batched read (audit 2026-10-27, DA-13).
+        // Retried like a timeout: one that never reached the provider costs nothing again; one
+        // cut mid-request may have been served and billed, so retryOnTimeout governs it too.
+        const kind = networkFailure(err);
+        if (kind && attempt < retries && (kind === "unsent" || retryOnTimeout)) {
+          const delay = backoffDelay(retryDelayMs, attempt, null);
+          logger.warn("retrying after a network error", { url: safeUrl, attempt, delay, kind });
+          await sleep(delay);
+          attempt += 1;
+          onRetry?.();
+          continue;
+        }
+        throw err;
+      }
 
       // The timer stays armed through the body read: clearing it once headers arrived left
       // res.json() with no deadline, so a provider stalling mid-body hung the calling job forever
@@ -197,6 +215,36 @@ async function readCappedText(res: Response, safeUrl: string): Promise<string> {
     chunks.push(value);
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+/** Socket errors raised before the request left this host: the provider never saw it. */
+const UNSENT_CODES = new Set([
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+/** Socket errors that cut a request already on its way: it may have been served. */
+const CUT_CODES = new Set(["ECONNRESET", "EPIPE", "ETIMEDOUT", "UND_ERR_SOCKET", "UND_ERR_CLOSED"]);
+
+/**
+ * Whether `err`, thrown by fetch() itself, is a transport failure worth one more try, and which
+ * kind: "unsent" (never reached the provider) or "cut" (dropped mid-request). Null for anything
+ * else - an abort, a bad URL, a refused redirect - which a retry can't fix.
+ */
+export function networkFailure(err: unknown): "unsent" | "cut" | null {
+  if (!(err instanceof Error) || err.name === "AbortError") return null;
+  // Node's fetch (undici) throws TypeError("fetch failed") with the socket error as its cause.
+  const cause = (err as { cause?: unknown }).cause;
+  const code =
+    (cause && typeof cause === "object" && (cause as { code?: unknown }).code) ||
+    (err as { code?: unknown }).code;
+  if (typeof code !== "string") return null;
+  if (UNSENT_CODES.has(code)) return "unsent";
+  if (CUT_CODES.has(code)) return "cut";
+  return null;
 }
 
 /** Longest Retry-After we'll sit out inside one call; beyond this the caller is better off failing. */

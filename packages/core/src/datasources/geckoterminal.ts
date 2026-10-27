@@ -100,10 +100,12 @@ export interface GeckoTerminalClientOptions {
 const FREE_BASE_URL = "https://api.geckoterminal.com/api/v2";
 /**
  * The chart backfill's calls a minute on the free API, which it reads before spending a paid
- * credit (a keyed client sends nothing else there, so the IP's free limit is all its own; kept
- * under it so a 429 is rare).
+ * credit. The IP's ~30 a minute is not all its own: TokenSage's story-heat lookups use the same
+ * free API from the same Render region (inferred shared egress), and from 2026-10-26 22:00 UTC 40%
+ * of them were 429s (full audit 2026-10-27, DA-5). 15 leaves TokenSage its 10 with room for a
+ * burst; past it the backfill spends a paid credit within the day's budget, as it did when busy.
  */
-export const GECKOTERMINAL_FREE_PER_MINUTE = 20;
+export const GECKOTERMINAL_FREE_PER_MINUTE = 15;
 
 export class GeckoTerminalClient {
   private readonly baseUrl: string;

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { activityStretch, HeliusClient, resetRpcPauses, WALLET_DORMANT_GAP_MS } from "./helius.js";
 import { ed25519 } from "@noble/curves/ed25519";
 import bs58 from "bs58";
-import { mayhemStateAddress } from "../solana.js";
+import { mayhemStateAddress, metaplexMetadataAddress } from "../solana.js";
 import { STONKS_FEE_WALLET } from "../stonksFees.js";
 import {
   CPMM_LP_READ_BYTES,
@@ -522,6 +522,72 @@ describe("HeliusClient.getNativeSolLamports", () => {
       commitment: "confirmed",
       dataSlice: { offset: 0, length: 0 },
     });
+  });
+});
+
+describe("HeliusClient.getMetadataUris", () => {
+  const key = (n: number) => bs58.encode(Uint8Array.from({ length: 32 }, (_, i) => (i * 7 + n) % 256));
+  const classic = key(1);
+  const token2022 = key(2);
+  const bare = key(3);
+  const gone = key(4);
+  const uri = "https://ipfs.io/ipfs/" + "Q".repeat(46);
+
+  /** A MetadataV1 account: key, update authority, mint, then name, symbol, uri padded with NULs. */
+  function metaplexAccount(u: string): { data: [string, "base64"] } {
+    const str = (text: string, pad: number) => {
+      const bytes = Buffer.alloc(pad);
+      bytes.write(text);
+      const len = Buffer.alloc(4);
+      len.writeUInt32LE(pad);
+      return Buffer.concat([len, bytes]);
+    };
+    const body = Buffer.concat([
+      Buffer.from([4]),
+      Buffer.alloc(64),
+      str("Coin", 32),
+      str("C", 10),
+      str(u, 200),
+    ]);
+    return { data: [body.toString("base64"), "base64"] };
+  }
+  const parsedMint = (extensions?: unknown[]) => ({
+    data: {
+      parsed: { type: "mint", info: { supply: "1", decimals: 6, ...(extensions ? { extensions } : {}) } },
+    },
+  });
+
+  it("reads classic and Token-2022 URIs off the chain in one 1-credit call (audit 2026-10-27, DA-4)", async () => {
+    const { url, requests } = await gmaServer((address) => {
+      if (address === classic || address === bare) return parsedMint();
+      if (address === token2022)
+        return parsedMint([{ extension: "tokenMetadata", state: { name: "T", uri: ` ${uri} ` } }]);
+      if (address === metaplexMetadataAddress(classic)) return metaplexAccount(uri);
+      return null;
+    });
+    const client = new HeliusClient({ rpcUrl: url });
+    const got = await client.getMetadataUris([classic, token2022, bare, gone, classic]);
+    expect(got.get(classic)).toBe(uri);
+    expect(got.get(token2022)).toBe(uri);
+    // The mint is there and nothing names a URI: a settled "none".
+    expect(got.get(bare)).toBeNull();
+    // Not at "confirmed" yet: asked again later.
+    expect(got.get(gone)).toBe("failed");
+    expect(requests).toHaveLength(1);
+    expect(client.takeCallStats()).toEqual({ getMultipleAccounts: 1 });
+    const call = (requests[0]!.body as { method: string; params: [string[], { encoding: string }] }[])[0]!;
+    expect(call.params[0]).toHaveLength(8);
+    expect(call.params[1].encoding).toBe("jsonParsed");
+  });
+
+  it("is failed for every mint when the read got no answer", async () => {
+    const { url } = await startServer(() => ({
+      jsonrpc: "2.0",
+      id: "x",
+      error: { code: -32000, message: "no" },
+    }));
+    const got = await new HeliusClient({ rpcUrl: url }).getMetadataUris([classic, token2022]);
+    expect([...got.values()]).toEqual(["failed", "failed"]);
   });
 });
 

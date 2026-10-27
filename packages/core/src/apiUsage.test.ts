@@ -283,6 +283,30 @@ describe("feature attribution", () => {
     const row = apiUsageMeter.take().find((r) => r.provider === "helius")!;
     expect(row.counter).toMatchObject({ calls: 4, errors: 3, rateLimited: 1, credits: 1 });
   });
+
+  it("charges a Helius call we stopped waiting for, which Helius bills anyway (DA-15)", async () => {
+    apiUsageMeter.take();
+    const abort = () => Object.assign(new Error("This operation was aborted"), { name: "AbortError" });
+    const timedOut = meteredFetch((async () => {
+      throw abort();
+    }) as typeof fetch);
+    const tally = new CreditTally();
+    await tallyHeliusCredits(tally, async () => {
+      await expect(
+        timedOut(helius, { method: "POST", body: rpcBody("getTransactionsForAddress") }),
+      ).rejects.toThrow();
+      // Another provider's timeout is not a Helius credit.
+      await expect(timedOut("https://api.rugcheck.xyz/v1/tokens/x/report")).rejects.toThrow();
+    });
+    expect(tally.take()).toBe(10);
+    const rows = apiUsageMeter.take();
+    expect(rows.find((r) => r.provider === "helius")!.counter).toMatchObject({
+      calls: 1,
+      errors: 1,
+      credits: 10,
+    });
+    expect(rows.find((r) => r.provider === "rugcheck")!.counter).toMatchObject({ errors: 1, credits: 0 });
+  });
 });
 
 describe("Helius out of credits", () => {

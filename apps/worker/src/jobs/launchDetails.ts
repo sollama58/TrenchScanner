@@ -22,7 +22,10 @@ export interface LaunchDetailStats {
   fromPumpFun: number;
   /** Pump.fun's single-coin read failed or had no such coin; the launch's metadata JSON answered. */
   fromMetadata: number;
-  /** In-band coins whose URI came off the chain (DAS getAsset) and whose metadata JSON answered. */
+  /**
+   * In-band coins whose URI came off the chain and whose metadata JSON answered. Named for the DAS
+   * read it first used (getMetadataUris since 2026-10-27); kept so the heartbeat's key stays put.
+   */
   fromDas: number;
   /** Neither answered. */
   missing: number;
@@ -210,7 +213,7 @@ async function lookUp(
 const askedOnChain = new Set<string>();
 
 export interface BandMetadataDeps {
-  helius: Pick<HeliusClient, "getAssetMetadataUri">;
+  helius: Pick<HeliusClient, "getMetadataUris">;
   /** Of `mints`, the coins whose description was never recorded (the Token row's is null). */
   pending?: (
     mints: readonly string[],
@@ -220,11 +223,14 @@ export interface BandMetadataDeps {
 
 /**
  * The description, socials and creator of in-band coins that have none recorded, through their
- * on-chain metadata URI (Helius DAS getAsset, 10 credits) and the launch JSON on the IPFS gateways.
- * Launches found through Jupiter's lists carry no URI, so with Pump.fun refusing (2026-10-22 on)
- * they reached the models with none of this (41 of 43 launch-detail asks a cycle "missing"). In-band
- * coins only, `perCycle` at most, each mint once (user decision 2026-10-23). Not awaited by the
- * scan: the rows are filled in when the answers land (addNewMintsToWatchlist's detail backfill).
+ * on-chain metadata URI and the launch JSON on the IPFS gateways. The URIs come off the chain in one
+ * getMultipleAccounts a cycle (1 credit), not a DAS getAsset per coin (10 each: full audit
+ * 2026-10-27, DA-4). Launches found through Jupiter's lists carry no URI, so with Pump.fun refusing
+ * (2026-10-22 on) they reached the models with none of this (41 of 43 launch-detail asks a cycle
+ * "missing"). In-band coins only, `perCycle` at most, each mint once (user decision 2026-10-23).
+ * Not awaited by the scan: the rows are filled in when the answers land (addNewMintsToWatchlist's
+ * detail backfill). A launch JSON with no description is recorded as "" there, so it isn't asked
+ * again after a restart.
  */
 export async function fillBandMetadata(
   mints: readonly string[],
@@ -242,9 +248,10 @@ export async function fillBandMetadata(
   for (const t of todo) askedOnChain.add(t.mintAddress);
   stats.asked += todo.length;
   const fetchMetadata = deps.fetchMetadata ?? fetchLaunchMetadata;
+  const uris = await deps.helius.getMetadataUris(todo.map((t) => t.mintAddress));
   const found: DiscoveredCoin[] = [];
   await forEachWithConcurrency(todo, CONCURRENCY, async (token) => {
-    const uri = await deps.helius.getAssetMetadataUri(token.mintAddress);
+    const uri = uris.get(token.mintAddress) ?? "failed";
     if (uri === "failed") {
       // Nothing answered: ask again another cycle.
       askedOnChain.delete(token.mintAddress);

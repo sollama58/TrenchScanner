@@ -53,7 +53,12 @@ describe("withBackupRoute", () => {
     expect(out.get("c1")).toEqual(state);
     expect(out.get("c2")).toEqual(state);
     expect(out.get("c3")).toBe("failed");
-    expect(health.snapshot().rpc).toEqual({ heliusFailures: 2, backupReads: 2, backupFailures: 1 });
+    expect(health.snapshot().rpc).toEqual({
+      heliusFailures: 2,
+      heliusFailuresByMethod: { getCurveStatesBatch: 2 },
+      backupReads: 2,
+      backupFailures: 1,
+    });
   });
 
   it("leaves the backup alone when Helius answered everything, and works without one", async () => {
@@ -67,9 +72,15 @@ describe("withBackupRoute", () => {
   });
 
   it("retries a failed pool scan once on the backup", async () => {
-    const r = withBackupRoute(reader(new Set(["m1"]), []), reader(new Set(), []), new ChartHealth());
+    const health = new ChartHealth(Date.now, () => ({}));
+    const r = withBackupRoute(reader(new Set(["m1"]), []), reader(new Set(), []), health);
     expect(await r.findLaunchLabPool("m1")).toBe("pool-m1");
     expect(await r.findCpmmPoolVaults("m1", "q")).toBeNull();
+    // Which read failed, so a steady failure can be traced (audit 2026-10-27, DA-7).
+    expect(health.snapshot().rpc.heliusFailuresByMethod).toEqual({
+      findLaunchLabPool: 1,
+      findCpmmPoolVaults: 1,
+    });
   });
 
   it("treats a reader that throws as a failed read", async () => {
