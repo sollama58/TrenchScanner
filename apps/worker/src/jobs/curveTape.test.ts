@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pumpCurveAddressOf, pumpSwapPoolOf, type CurveState } from "@trenchscanner/core";
 import {
+  followClearedLaunches,
   followYoungCurves,
   curveLabelPrices,
   curvePathOf,
   curvePriceOf,
   curveTapeView,
+  LAUNCH_HOLD_RESERVE,
   NULL_READ_GRACE_MS,
   NULL_READ_MAX_MISSES,
   onCurveStreamUpdate,
@@ -44,6 +46,8 @@ function setup(
     alertedAlwaysMinutes?: number;
     alertedIdleMinutes?: number;
     nearBandMaxAgeMinutes?: number;
+    maxMints?: number;
+    pollMaxMints?: number;
     newLaunches?: () => string[];
     screenLaunches?: (mints: string[]) => Promise<string[]>;
   } = {},
@@ -241,16 +245,83 @@ describe("curve tape", () => {
     expect(vi.mocked(recordPricePath)).not.toHaveBeenCalled();
   });
 
-  it("polls the curves the stream doesn't cover, and drops a coin that left the watchlist", async () => {
+  it("polls the curves the stream doesn't cover, holds a young coin that left the watchlist, and drops it at the features' age", async () => {
     const s = setup(null);
     stop = s.stop;
     followYoungCurves([young], NOW);
     await round(NOW);
     await round(NOW + 5_000);
     expect(s.reads).toHaveLength(2);
+    // Off the watchlist while young: held on (model audit 2026-10-26, section 16), still polled.
     followYoungCurves([], NOW + 6_000);
+    expect(s.stream.unwatch).not.toHaveBeenCalled();
+    await round(NOW + 6_000);
+    expect(s.reads).toHaveLength(3);
+    expect(curvePathOf(MINT, NOW + 6_000).curveCoveredSec).toBe(6);
+    // Past the features' age (launched NOW - 60 s), unlisted: let go.
+    followYoungCurves([], NOW + 14 * 60_000 + 1);
     expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
-    expect(curvePathOf(MINT, NOW + 6_000).curveCoveredSec).toBeNull();
+    expect(curvePathOf(MINT, NOW + 14 * 60_000 + 1).curveCoveredSec).toBeNull();
+  });
+
+  // Model audit 2026-10-26, section 16: a launch followed from its birth was let go when it left
+  // the watchlist (the probation tier holds the newest ~315), and the cycle that first scored it
+  // followed it again from nothing, so its first decision read the curve inputs as null.
+  it("keeps a launch's tape running from its birth to its first decision after it left the watchlist", async () => {
+    const s = setup(NOW - 1_000, { maxAgeMinutes: 30, featureMaxAgeMinutes: 15 });
+    stop = s.stop;
+    followClearedLaunches([MINT], NOW);
+    await round(NOW);
+    expect(curvePriceOf(MINT, NOW)).toBe(1);
+    // The next cycle's watchlist does not list it: watched again all the same.
+    s.stream.watch.mockClear();
+    followYoungCurves([], NOW + 5_000);
+    expect(s.stream.unwatch).not.toHaveBeenCalled();
+    expect(s.stream.watch).toHaveBeenCalledWith(
+      `curve:${MINT}`,
+      [pumpCurveAddressOf(MINT)],
+      NOW + 5_000,
+      "account",
+    );
+    await round(NOW + 5_000);
+    expect(s.reads).toHaveLength(1);
+    // The rounds between keep the stream's cover confirmed, as every 5 s does live.
+    for (let at = NOW + 20_000; at <= NOW + 50_000; at += 15_000) await round(at);
+    // Listed again a minute on, scored in that cycle: the tape reaches back to the launch.
+    followYoungCurves([{ ...young, launchedAt: new Date(NOW) }], NOW + 61_000);
+    await round(NOW + 61_000);
+    expect(curvePathOf(MINT, NOW + 61_000).curveCoveredSec).toBe(61);
+    expect(curvePathOf(MINT, NOW + 61_000).curveRet1mPct).toBe(0);
+    // Held only to the features' age, though the recorder's follow (maxAgeMinutes) is longer.
+    followYoungCurves([], NOW + 15 * 60_000 + 1);
+    expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
+  });
+
+  it("gives the watchlist's coins, nearest the band first, the seats and the polls ahead of the launches it holds", async () => {
+    const A = "Aaa1111111111111111111111111111111111111111";
+    const B = "Bbb1111111111111111111111111111111111111111";
+    const C = "Ccc1111111111111111111111111111111111111111";
+    const N = "Nnn1111111111111111111111111111111111111111";
+    const P = "Ppp1111111111111111111111111111111111111111";
+    const s = setup(null, { maxMints: LAUNCH_HOLD_RESERVE + 2, pollMaxMints: 1 });
+    stop = s.stop;
+    followClearedLaunches([A], NOW - 3_000);
+    followClearedLaunches([B], NOW - 2_000);
+    followClearedLaunches([C], NOW - 1_000);
+    // Two seats past the reserve, no watchlist: the two youngest are held, the oldest let go.
+    followYoungCurves([], NOW);
+    expect(s.stream.unwatch).toHaveBeenCalledTimes(1);
+    expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${A}`);
+    // A watchlist coin takes a seat first; the near-band one is ranked ahead of the probation one.
+    const coin = (mintAddress: string) => ({ ...young, mintAddress });
+    followYoungCurves([coin(P), coin(N)], NOW + 1_000, [], new Set([N]));
+    expect(s.stream.unwatch).toHaveBeenCalledTimes(3);
+    expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${B}`);
+    expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${C}`);
+    expect(curvePriceOf(N, NOW + 1_000)).toBeNull();
+    // One poll a round, with no stream cover: the near-band coin's.
+    await round(NOW + 1_000);
+    expect(s.reads).toEqual([[pumpCurveAddressOf(N)]]);
   });
 
   // A read at `confirmed` a moment after a launch seen `processed` finds no curve account yet, and

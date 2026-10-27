@@ -289,6 +289,9 @@ export const NARRATIVE_FEATURES_V9 = ["nsRead", "nsRulesVersion"] as const;
  * existing input means (a new input needs no bump: older rows read it as null). Changelog:
  * - 1 (2026-10-16): the marker starts. The X-derived inputs of a full read whose post was not
  *   read (the fetch failed, was skipped, or there was no link) are null, where they were 0 before.
+ * - no bump, 2026-10-27 (model audit 2026-10-26, section 16): nsXRead is 0 as well on a coin with
+ *   no X link while its read is basic or not in yet (noXLinkRead). 0 kept its meaning (no post
+ *   was read) and null its own (unknown), so the rows written before still read true.
  */
 export const NS_RULES_VERSION = 1;
 
@@ -1037,12 +1040,33 @@ export function narrativeXRead(read: NarrativeRead): boolean {
 const bit = (v: boolean) => (v ? 1 : 0);
 
 /**
+ * nsXRead before a full read is in: 0 when discovery found no X link on the coin, else null.
+ *
+ * Only a full read opens the linked post, and the full read is asked when a coin gets its first
+ * decision row (or early, for a young coin WITH a link: scanJob.ts earlyDeep), so at its first
+ * decision a coin without a link had, at most, its basic read: nsXRead was null on 55-70% of
+ * event rows and 25-30% of entry rows at decision time, much of it "no link, so no post to read"
+ * rather than a read still on its way (model audit 2026-10-26, section 16). No post can be read
+ * where there is no link, whatever TokenSage has answered so far, so that is a known 0; a coin
+ * with a link, or one whose links are not known, stays unknown until the full read. The X-derived
+ * inputs (nsXFit and the rest) stay null either way, as on a full read whose post was not read.
+ * hasTwitter on the row still says whether a link existed: 0 beside hasTwitter = 1 and
+ * nsDepthFull = 1 is a fetch that broke, null beside hasTwitter = 1 a full read not yet in.
+ */
+const noXLinkRead = (hasXLink: boolean | null | undefined): number | null => (hasXLink === false ? 0 : null);
+
+/**
  * The ns* feature values for a read. Without one every input is null but the two markers:
- * nsRead = 0 and the writer's version, so a row says "no read" and under which rules.
+ * nsRead = 0 and the writer's version, so a row says "no read" and under which rules (and
+ * nsXRead = 0 when the coin has no X link, see noXLinkRead).
+ *
+ * `hasXLink`: whether discovery found an X link on the coin (the scored token's hasTwitter;
+ * undefined or null when it does not know). Only nsXRead reads it.
  */
 export function narrativeFeatureValues(
   read: NarrativeRead | undefined,
   now: Date = new Date(),
+  hasXLink: boolean | null | undefined = undefined,
 ): Record<NarrativeFeatureName, number | null> {
   if (!read) {
     return {
@@ -1050,6 +1074,7 @@ export function narrativeFeatureValues(
         NarrativeFeatureName,
         number | null
       >),
+      nsXRead: noXLinkRead(hasXLink),
       nsRead: 0,
       nsRulesVersion: NS_RULES_VERSION,
     };
@@ -1086,7 +1111,7 @@ export function narrativeFeatureValues(
     // fetch broke" trained as "nothing about this coin on X" (round2-code.md, section 5).
     // hasTwitter still says whether a link existed.
     nsTrendMatched: full ? bit(read.trendMatched === true) : null,
-    nsXRead: full ? bit(xRead) : null,
+    nsXRead: full ? bit(xRead) : noXLinkRead(hasXLink),
     nsXVerdictAbout: xRead ? bit(read.xVerdict === "about_this_coin") : null,
     nsXVerdictUnrelated: xRead ? bit(read.xVerdict === "unrelated") : null,
     nsXFit: xRead ? read.xFit : null,
