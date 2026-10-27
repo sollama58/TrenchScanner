@@ -32,6 +32,7 @@ import { emptyRecord, noteRunners } from "./leaderboard.js";
 import { EXIT_PLAN } from "./profitSim.js";
 import {
   BOOSTED_MODEL_KIND,
+  DEFAULT_BOOSTING_OPTIONS,
   boostedContributions,
   scoreBoosted,
   trainBoostedCurator,
@@ -1888,6 +1889,27 @@ function sideMetrics(emittedRows: TrainingRow[], spanHours: number, graded: Trai
 }
 
 /**
+ * Most forests a walk-forward FOLD model bags (BoostingOptions.bagSeeds); the shipped fit keeps
+ * the recipe's own count (DEFAULT_BOOSTING_OPTIONS.bagSeeds, 3). Model audit 2026-10-26, §17: the
+ * last training run took 7,751 s, 7,686 s of them in the exams (3 folds x every seat x 3 bags).
+ * A fold's job is ranking the seats against each other on the same test rows, where a second bag
+ * already averages out most of one seed's luck; the third mainly smooths the picks of the model
+ * that ships, which no fold does. A recipe that bags fewer than this (the crash model's 1) keeps
+ * its own count: examFoldBoosting takes the smaller of the two.
+ */
+export const EXAM_FOLD_BAG_SEEDS = 2;
+
+/**
+ * The boosted hyperparameters a fold model trains with: the recipe's, bagging at most
+ * EXAM_FOLD_BAG_SEEDS forests. Pure; harmless on recipes of another family (trainSingleStage
+ * reads `boosting` for the boosted family alone). Exported for tests.
+ */
+export function examFoldBoosting(boosting: BoostingOptions | undefined): BoostingOptions {
+  const configured = boosting?.bagSeeds ?? DEFAULT_BOOSTING_OPTIONS.bagSeeds;
+  return { ...boosting, bagSeeds: Math.min(configured, EXAM_FOLD_BAG_SEEDS) };
+}
+
+/**
  * Time-ordered evaluation: for each of the last `folds` slices of history, train on everything
  * strictly before the slice, then compare model vs heuristic on the slice itself. Never a random
  * split - these are time series, and a random split lets the model peek at the future's price
@@ -2026,7 +2048,8 @@ export async function walkForwardEvaluate(
         recencyHalfLifeDays: opts.recencyHalfLifeDays,
         learner: opts.learner,
         featureNames: opts.featureNames,
-        boosting: opts.boosting,
+        // A fold bags fewer forests than the shipped fit - see EXAM_FOLD_BAG_SEEDS.
+        boosting: examFoldBoosting(opts.boosting),
         forest: opts.forest,
         twoStage: opts.twoStage,
         narrativeBlend: opts.narrativeBlend,

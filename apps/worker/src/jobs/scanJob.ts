@@ -3522,8 +3522,12 @@ export function knownSocial(
 /**
  * What the Token row knows about one social link: a recorded URL is a link whatever the bit says
  * (the URL columns were filled on rows the bit predates); otherwise the bit, null read as unknown.
+ * Exported for tests.
  */
-function storedSocial(bit: boolean | null | undefined, url: string | null | undefined): boolean | undefined {
+export function storedSocial(
+  bit: boolean | null | undefined,
+  url: string | null | undefined,
+): boolean | undefined {
   if (url) return true;
   return bit ?? undefined;
 }
@@ -3812,9 +3816,17 @@ async function processCandidate(
         candidate.hasTwitter,
         storedSocial(existingToken?.hasTwitter, existingToken?.twitterUrl),
       ),
-      // hasTelegram keeps the old column shape (retired learner input): a stored false there
-      // still means "none or never read", so only a stored true counts.
-      hasTelegram: knownSocial(candidate.hasTelegram, existingToken?.hasTelegram || undefined),
+      // hasTelegram keeps the old column shape (NOT NULL, default false, and discovery writes
+      // `?? false`): a stored false there still means "none or never read", so the bit counts
+      // only when true - a false is never read as a known none, where Twitter's nullable bit
+      // is. The stored link (telegramUrl, kept by tokenChanges from any reading that carried
+      // one) is a link whatever the bit says, as for Twitter and the website. Before 2026-10-27
+      // the link was ignored and the input was null on 88% of event rows (model audit
+      // 2026-10-26, §16).
+      hasTelegram: knownSocial(
+        candidate.hasTelegram,
+        storedSocial(existingToken?.hasTelegram || undefined, existingToken?.telegramUrl),
+      ),
       hasWebsite: knownSocial(
         candidate.hasWebsite,
         storedSocial(existingToken?.hasWebsite, existingToken?.websiteUrl),
