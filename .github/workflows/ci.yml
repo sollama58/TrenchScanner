@@ -47,13 +47,23 @@ jobs:
 
       - run: npm ci
 
-      # Every change to the extension bumps its version (user rule 2026-10-24). A pull request
-      # compares with its base branch; a push to main with the commit it moved main from.
+      # Every change to the extension bumps its version (user rule 2026-10-24). Each run compares
+      # with a fixed commit, never with whatever main is by the time the step runs: a push to main
+      # with the commit it moved main from, a pull request with the first parent of its merge
+      # commit (the base it was merged onto; read from the commit itself, as the checkout is
+      # shallow). Comparing with the live main failed runs when another extension bump landed
+      # in between (run 40549020208; and this PR's own first run).
       - name: Extension version bump
         env:
           BASE_REF: ${{ github.base_ref || 'main' }}
-          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
-        run: ./scripts/check-extension-version.sh
+          BEFORE: ${{ github.event_name == 'push' && github.event.before || '' }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          BASE_SHA=$BEFORE
+          if [ "$EVENT" = pull_request ]; then
+            BASE_SHA=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')
+          fi
+          BASE_SHA=$BASE_SHA ./scripts/check-extension-version.sh
 
       # Fails on a high or critical advisory in what ships (dev-only advisories are not gated here)
       # - a known-vulnerable runtime dependency should not reach a deploy unnoticed.

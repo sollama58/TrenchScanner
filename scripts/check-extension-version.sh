@@ -5,10 +5,11 @@
 # build traceable to its commit.
 #
 # What it compares against:
-# - BASE_SHA when set: the commit a push to main moved from (github.event.before), so the push is
-#   checked against what it actually changed. Comparing with the current main instead failed a
-#   merge that landed just after another extension bump (run 40549020208), and on main itself
-#   compared main with main and proved nothing (full audit 2026-10-27, CH-7).
+# - BASE_SHA when set: a fixed commit CI picks (ci.yml): on a push to main the commit main moved
+#   from, on a pull request the base its merge commit was made on. So a run is checked against
+#   what it actually changed. Comparing with the current main instead failed a merge that landed
+#   just after another extension bump (run 40549020208), and on main itself compared main with
+#   main and proved nothing (full audit 2026-10-27, CH-7).
 # - otherwise BASE_REF (default main): a pull request's base, or main when run locally on a branch.
 # Without a base to compare (none fetchable, or a new branch's all-zero "before"), only the two
 # versions' agreement is checked.
