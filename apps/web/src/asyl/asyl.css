@@ -2734,6 +2734,19 @@ body {
   min-width: 80px;
   accent-color: var(--asyl-orange);
 }
+.asyl-timeline-speed {
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--asyl-line);
+  border-radius: 6px;
+  padding: 2px 4px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.asyl-timeline-speed option {
+  background: var(--asyl-dark);
+  color: var(--asyl-text);
+}
 .asyl-timeline-when {
   display: flex;
   flex-direction: column;

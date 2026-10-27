@@ -1,8 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { timelineSteps, type AsylGraph } from "./graph";
-
-/** How long the replay holds each step. */
-const STEP_MS = 280;
+import { replaySpeeds, replayTick, timelineSteps, type AsylGraph } from "./graph";
 
 const when = (ms: number) =>
   new Date(ms).toLocaleString("en-GB", {
@@ -30,6 +27,10 @@ export function Timeline({
 }) {
   const steps = useMemo(() => timelineSteps(graph), [graph]);
   const [playing, setPlaying] = useState(false);
+  const speeds = useMemo(() => replaySpeeds(steps.length), [steps.length]);
+  const [wanted, setSpeed] = useState(1);
+  // The nearest speed this map offers, should it offer fewer than the one picked.
+  const speed = speeds.reduce((a, b) => (Math.abs(b - wanted) < Math.abs(a - wanted) ? b : a), 1);
   const at = useRef(until);
   at.current = until;
   // Where the slider sits: the last step at or before the moment.
@@ -39,13 +40,14 @@ export function Timeline({
 
   useEffect(() => {
     if (!playing) return;
+    const { ms, stride } = replayTick(speed);
     const id = setInterval(() => {
-      const next = steps.find((t) => t > at.current);
-      if (next === undefined) setPlaying(false);
-      else onUntil(next);
-    }, STEP_MS);
+      const i = steps.findIndex((t) => t > at.current);
+      if (i < 0) setPlaying(false);
+      else onUntil(steps[Math.min(i + stride - 1, steps.length - 1)]!);
+    }, ms);
     return () => clearInterval(id);
-  }, [playing, steps, onUntil]);
+  }, [playing, steps, onUntil, speed]);
 
   if (steps.length === 0)
     return (
@@ -77,6 +79,19 @@ export function Timeline({
           onUntil(steps[Number(e.target.value)]!);
         }}
       />
+      <select
+        className="asyl-timeline-speed"
+        value={speed}
+        aria-label="Replay speed"
+        title="Replay speed"
+        onChange={(e) => setSpeed(Number(e.target.value))}
+      >
+        {speeds.map((s) => (
+          <option key={s} value={s}>
+            {s === 0.25 ? "¼" : s === 0.5 ? "½" : s}×
+          </option>
+        ))}
+      </select>
       <span className="asyl-timeline-when">
         <b>{when(steps[index]!)}</b>
         <span className="asyl-muted asyl-small">
