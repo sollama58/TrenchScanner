@@ -39,6 +39,8 @@ vi.mock("./burn", () => ({
 const {
   runTrade,
   TradeError,
+  MintRiskDeclined,
+  mintRiskOf,
   privyUnreachable,
   BUILD_TIMEOUT_MS,
   SIGN_FRESH_MS,
@@ -116,6 +118,46 @@ describe("runTrade", () => {
     expect(h.post).toHaveBeenCalledTimes(1);
     const sent = Buffer.from((h.post.mock.calls[0]![1] as { transaction: string }).transaction, "base64");
     expect(sent[1]).toBe(2);
+  });
+
+  it("asks before buying a coin the API held for its risks, and builds it again marked as seen", async () => {
+    h.signTransaction.mockImplementation(async () => [{ signedTransaction: signed(1) }]);
+    const risks = ["Its issuer can still freeze your tokens."];
+    const bodies: { acceptMintRisk?: boolean }[] = [];
+    h.api.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path !== "/pro/trade/build") return { state: "confirmed" };
+      const body = JSON.parse(String(init?.body)) as { acceptMintRisk?: boolean };
+      bodies.push(body);
+      if (body.acceptMintRisk) return built;
+      throw new ApiError(409, "This coin can trap a buyer.", { code: "mint_risk", risks, notSent: true });
+    });
+    const confirmMintRisk = vi.fn(() => true);
+    await expect(runTrade({ ...input, confirmMintRisk }, () => {})).resolves.toBe("sig");
+    expect(confirmMintRisk).toHaveBeenCalledWith(risks);
+    expect(bodies.map((b) => b.acceptMintRisk)).toEqual([undefined, true]);
+
+    // Said no: nothing is built again, signed or sent.
+    h.now += 2_000;
+    h.post.mockClear();
+    h.signTransaction.mockClear();
+    bodies.length = 0;
+    const declined = runTrade({ ...input, confirmMintRisk: () => false }, () => {});
+    await expect(declined).rejects.toBeInstanceOf(MintRiskDeclined);
+    await expect(declined).rejects.toThrow(/Nothing was sent/);
+    expect(bodies).toHaveLength(1);
+    expect(h.signTransaction).not.toHaveBeenCalled();
+    expect(h.post).not.toHaveBeenCalled();
+  });
+
+  it("reads the mint risks only from the API's own hold", () => {
+    expect(mintRiskOf(new ApiError(409, "x", { code: "mint_risk", risks: ["a", 3, "b"] }))).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(mintRiskOf(new ApiError(409, "x", { code: "mint_risk", risks: [] }))).toBeNull();
+    expect(mintRiskOf(new ApiError(409, "x", { notSent: true }))).toBeNull();
+    expect(mintRiskOf(new ApiError(422, "x", { code: "mint_risk", risks: ["a"] }))).toBeNull();
+    expect(mintRiskOf(new Error("x"))).toBeNull();
   });
 
   it("sends nothing when the second signature is slow too", async () => {
