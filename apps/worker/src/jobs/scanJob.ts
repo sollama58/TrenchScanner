@@ -43,6 +43,7 @@ import {
   launchpadFromVenue,
   PUMPFUN_LAUNCHPAD,
   STONKS_LAUNCHPAD,
+  withLaunchBags,
   withWindowFlow,
   forEachWithConcurrency,
   looksLikeSolanaAddress,
@@ -134,6 +135,7 @@ import {
 import {
   liveBuyersOn,
   liveFlagsOn,
+  liveLaunchBagsOf,
   livePageOf,
   liveTradersOn,
   liveWalletScoreOn,
@@ -901,6 +903,30 @@ function startLinkedWalletStage(
     if (linkedStageInFlight === work) linkedStageInFlight = null;
   });
   return first;
+}
+
+/**
+ * A coin's trade flow with its 5m order-flow fields taken from the live tape's chain read
+ * (`window`, liveTape.ts liveWindowFlowOf) wherever the trade stream has no window of its own.
+ * The stream has one only when it watched the coin's trades for five minutes; on PumpPortal's
+ * free tier it never does (the free stream delivers launches and graduations only), which left
+ * uniqueBuyers5m, tradesPerMin5m, netFlow5mToMcap and the rest null on ~93% of decision rows -
+ * three of the strongest inputs when filled (model audit 2026-10-26, §16). A stream window that
+ * was watched is the live figure and stands; a tape read up to five minutes old stands in for
+ * one that wasn't, and without either the fields stay unknown (null, never 0).
+ *
+ * A coin the stream never carries (`streamless`: a Stonks coin, on Raydium's LaunchLab and CPMM
+ * pool) reads from the tape alone - its stream window, if the book was ever asked, would read an
+ * empty five minutes as a dead coin.
+ */
+export function withTapeWindow(
+  flow: TradeFlowFeatures | undefined,
+  window: TradeFlowFeatures | null,
+  streamless: boolean,
+): TradeFlowFeatures | undefined {
+  if (streamless) return withWindowFlow(flow, window);
+  if (window && (flow?.uniqueBuyers5m ?? null) === null) return withWindowFlow(flow, window);
+  return flow;
 }
 
 /**
@@ -2162,9 +2188,13 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
     cycle,
   );
   // The live tape: the newest trades of each coin close to a call (contenders, then alerts held
-  // for a wallet figure), for the flagged wallets trading it - on the same wait.
+  // for a wallet figure), for the flagged wallets trading it - on the same wait. With
+  // LIVE_TAPE_ALL_SCORED every screened coin queues, in the same order, for its 5m order flow
+  // and launch bags (model audit 2026-10-26, §16); the page budget caps either queue.
   const liveTapeWork = startLiveTapeStage(
-    sniperGroups.filter((g) => g.contender || g.alerted).map((g) => g.mintAddress),
+    (env.LIVE_TAPE_ALL_SCORED ? sniperGroups : sniperGroups.filter((g) => g.contender || g.alerted)).map(
+      (g) => g.mintAddress,
+    ),
     deps.helius,
     env,
     // Test doubles may stub the client without it.
@@ -3832,12 +3862,15 @@ async function processCandidate(
       firstInBandAt,
     },
   );
-  // A Stonks coin's trades never come through PumpPortal, so its 5m flow is read off the live
-  // tape's chain trades instead; the stream's empty window would read as a dead coin.
-  const flow =
-    scored.launchpad === STONKS_LAUNCHPAD
-      ? withWindowFlow(tradeFlow, liveWindowFlowOf(candidate.mintAddress))
-      : tradeFlow;
+  // The 5m order flow and the launch's bags off the live tape's chain trades wherever the stream
+  // has none (withTapeWindow): on PumpPortal's free tier that is every coin, as the free stream
+  // delivers launches and graduations only (model audit 2026-10-26, §16). A Stonks coin's trades
+  // never come through PumpPortal at all. The bags need the coin's whole history on the page and
+  // the creator wallet off the on-chain profile for the dev's; they fill only what is unknown.
+  const flow = withLaunchBags(
+    withTapeWindow(tradeFlow, liveWindowFlowOf(candidate.mintAddress), scored.launchpad === STONKS_LAUNCHPAD),
+    liveLaunchBagsOf(candidate.mintAddress, (onChainProfile as { creator?: string } | null)?.creator),
+  );
   if (flow) scored.tradeFlow = flow;
   // TokenSage's read, as stored when this cycle began: the ns* model inputs, the narrative
   // filter criteria and the score's narrative part all read it from here. Never looked up

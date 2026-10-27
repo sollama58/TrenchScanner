@@ -3,6 +3,7 @@ import {
   liveBuyersOf,
   liveBuyersOn,
   liveFlagsOf,
+  liveLaunchBagsOf,
   livePageOf,
   liveWalletScoreOf,
   liveWalletScoreOn,
@@ -233,5 +234,33 @@ describe("live tape", () => {
     });
     expect(liveWindowFlowOf(MINT, readAt + 6 * 60_000)).toBeNull();
     expect(liveWindowFlowOf("other", readAt)).toBeNull();
+  });
+
+  it("reads the launch's bags off a page that is the coin's whole history, with the dev off the profile", async () => {
+    const readAt = 1_700_000_160_000;
+    await readLiveTape([MINT], fakeHelius(), { maxPages: 1, refreshMs: 60_000, nowMs: readAt });
+    // The whole history is one buy by RISKY: the dev when the profile says so, else an early buyer.
+    expect(liveLaunchBagsOf(MINT, RISKY, readAt)).toEqual({
+      earlyBuyerCount: 0,
+      earlyBuyerHoldPct: 0,
+      earlyBuyerSoldShare: null,
+      devSoldShare: 0,
+    });
+    const noDev = liveLaunchBagsOf(MINT, undefined, readAt);
+    expect(noDev).toMatchObject({ earlyBuyerCount: 1, earlyBuyerSoldShare: 0, devSoldShare: null });
+    // 1,000 whole tokens of the 1B supply.
+    expect(noDev!.earlyBuyerHoldPct).toBeCloseTo(1e-4, 8);
+    // A page with an older page behind it says nothing about the launch; nor does a stale one.
+    const partial = {
+      gtfaUsable: true,
+      getMintTransactionsPage: vi.fn(async () => ({
+        status: "ok" as const,
+        txs: [buyTx(OTHER, 1, 1_700_000_200)],
+        paginationToken: "more" as string | null,
+      })),
+    };
+    await readLiveTape([MINT], partial, { maxPages: 1, refreshMs: 0, nowMs: readAt + 1 });
+    expect(liveLaunchBagsOf(MINT, RISKY, readAt + 2)).toBeNull();
+    expect(liveLaunchBagsOf("other", RISKY, readAt)).toBeNull();
   });
 });
