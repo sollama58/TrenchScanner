@@ -218,7 +218,9 @@ export type PanelRequest =
   | { type: "status" }
   | { type: "feed" }
   /** One API call of the site's own bubble map (map/siteMap.ts), answered through the key. */
-  | { type: "site"; method: string; path: string; body: string | null }
+  | { type: "site"; method: string; path: string; body: string | null; id?: string }
+  /** The map gave up the read with this id (siteMap.ts): stop it at the API too. */
+  | { type: "siteCancel"; id: string }
   | { type: "buddy"; cached?: boolean }
   | { type: "disconnect" }
   | { type: "saveSettings"; settings: OverlaySettings }

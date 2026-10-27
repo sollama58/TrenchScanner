@@ -10,7 +10,8 @@ import { shortAddress } from "./format";
  * account now signed in, a new key goes straight to it. Nothing happens for another account, or
  * after the reader disconnected it in the panel (the extension then forgets the account). The key
  * only ever goes to the extension in the browser that just signed in, which a click in Settings
- * would do anyway.
+ * would do anyway, and only to a known build (the store or dev ID): an ID a link carried needs the
+ * reader's click in Settings (audit EX-3).
  */
 export async function reconnectExtension(
   walletAddress: string,
@@ -22,10 +23,10 @@ export async function reconnectExtension(
     revoke: (id) => del(`/settings/extension-keys/${id}`),
   },
 ): Promise<boolean> {
-  const found = await findExtension();
+  const found = await findExtension(null, { knownOnly: true });
   if (!found || found.connected || found.refusedAccount !== shortAddress(walletAddress)) return false;
   const created = await deps.create();
-  const result = await handOverKey(found.id, created.secret);
+  const result = await handOverKey(found.id, created.secret, null, { knownOnly: true });
   if (!result.ok) await deps.revoke(created.id).catch(() => undefined);
   return result.ok;
 }

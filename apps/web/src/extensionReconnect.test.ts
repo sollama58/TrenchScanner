@@ -2,13 +2,28 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The dev build's ID (extensionBridge.ts), answering like the extension's service worker.
 const DEV_ID = "jhdfdijmhnomcdijohdfibelodhfiigl";
+// An extension a crafted ?ext= link named, answering as if its key were refused for this account.
+const OTHER_ID = "abcdefghijklmnopabcdefghijklmnop";
 let ping: Record<string, unknown> | undefined;
+let otherPinged = false;
 let takes = true;
 const handed: string[] = [];
+const store = new Map<string, string>();
 (globalThis as { window?: unknown }).window = globalThis;
+(globalThis as { localStorage?: unknown }).localStorage = {
+  getItem: (k: string) => store.get(k) ?? null,
+  setItem: (k: string, v: string) => void store.set(k, v),
+};
 (globalThis as { chrome?: unknown }).chrome = {
   runtime: {
     sendMessage(id: string, message: { type?: string; key?: string }, callback: (r: unknown) => void) {
+      if (id === OTHER_ID) {
+        otherPinged = true;
+        if (message.type === "ping")
+          return callback({ ok: true, connected: false, version: "0.9.0", refusedAccount: "7xQ1…k2Ab" });
+        handed.push(`other:${message.key ?? ""}`);
+        return callback({ ok: true });
+      }
       if (id !== DEV_ID) return callback(undefined);
       if (message.type === "ping") return callback(ping);
       handed.push(message.key ?? "");
@@ -63,5 +78,16 @@ describe("reconnecting the extension after signing in again", () => {
     takes = false;
     expect(await reconnectExtension(WALLET, { create, revoke })).toBe(false);
     expect(revoke).toHaveBeenCalledWith("k1");
+  });
+
+  it("never hands a key to a remembered ID outside the known builds (audit EX-3)", async () => {
+    store.set("trench.extensionId", OTHER_ID);
+    otherPinged = false;
+    ping = undefined;
+    expect(await reconnectExtension(WALLET, { create, revoke })).toBe(false);
+    expect(otherPinged).toBe(false);
+    expect(create).not.toHaveBeenCalled();
+    expect(handed).toEqual([]);
+    store.clear();
   });
 });
