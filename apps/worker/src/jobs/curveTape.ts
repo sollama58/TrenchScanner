@@ -465,7 +465,8 @@ export interface AskedCoin extends TrackedCoin {
 
 /**
  * The scan's watchlist this cycle, in its order: the young Pump.fun coins in it are followed (up
- * to CURVE_TAPE_MAX_MINTS), and the ones that left it or aged out are dropped. `asked`: coins a
+ * to CURVE_TAPE_MAX_MINTS), the ones that aged out are dropped, and the young ones that left it
+ * are held on to while there is room (holdLaunches, model audit 2026-10-26). `asked`: coins a
  * seat alerted on, a call queued or a chart opened lately (curatedAlerts, the candle store's
  * backfill asks), followed for alertedMaxAgeMinutes from the ask, on the watchlist or not and
  * whatever their age (user report 2026-10-23: a coin called two hours after its launch, or
@@ -517,10 +518,16 @@ export function followYoungCurves(
   const askedPools = new Map<string, number>();
   /** Pools asked about that went idle: let go now rather than at their horizon. */
   const idlePools = new Set<string>();
-  // The asked coins first: they must not wait behind the watchlist for a seat under the cap.
+  // The asked coins first: they must not wait behind the watchlist for a seat under the cap. Then
+  // the watchlist's coins near the band, then the rest of it: the rank orders the polls when the
+  // stream doesn't cover a curve (round), and the watchlist lists its probation tier (the newest
+  // launches, most of them never priced) ahead of the near-band tier, so the polls went to the
+  // newest launches and the coins being decided on, which need the features, waited behind them
+  // (model audit 2026-10-26, section 16; the env's doc always said "nearest the band first").
   const all: { coin: AskedCoin; isAsked: boolean }[] = [
     ...asked.map((coin) => ({ coin, isAsked: true })),
-    ...tracked.map((coin) => ({ coin, isAsked: false })),
+    ...tracked.filter((coin) => nearBand.has(coin.mintAddress)).map((coin) => ({ coin, isAsked: false })),
+    ...tracked.filter((coin) => !nearBand.has(coin.mintAddress)).map((coin) => ({ coin, isAsked: false })),
   ];
   for (const { coin: t, isAsked } of all) {
     if (wanted.size >= cfg.maxMints) break;
@@ -549,7 +556,9 @@ export function followYoungCurves(
     }
     wanted.set(t.mintAddress, { rank: wanted.size, bornAt, until, asked: isAsked, launchLab });
   }
+  const held = holdLaunches(wanted, now);
   for (const [mint, f] of followed) {
+    if (held.has(mint)) continue;
     const w = wanted.get(mint);
     // A Stonks coin first followed as a new launch's Pump.fun curve is followed on its pool instead.
     if (!w || (w.launchLab && !f.launchLab)) drop(mint, false);
@@ -596,6 +605,57 @@ export function followYoungCurves(
 }
 
 /**
+ * Seats under maxMints that held-on launches (holdLaunches) leave free: for the launches that
+ * arrive between cycles (followNewLaunches, ~45 a minute at most) and for the coins a cycle adds
+ * to its watchlist, so a coin the scan wants is never turned away at the stream's account-key cap
+ * (MAX_ACCOUNT_KEYS, the same 1,000 as CURVE_TAPE_MAX_MINTS) by a launch nobody lists.
+ */
+export const LAUNCH_HOLD_RESERVE = 100;
+/** Account keys a graduated coin's pool takes on the same socket (watchPool: two vaults and the pool). */
+const POOL_KEYS = 3;
+
+/**
+ * Of the followed Pump.fun curves this cycle's watchlist does not list, the young ones kept on
+ * (held) to the features' age, youngest first, as far as the cap allows: a set of their mints,
+ * each ranked behind the wanted so the polls still go to the watchlist first, and watched again
+ * on the stream.
+ *
+ * Until 2026-10-27 a coin followed from its launch (followNewLaunches, a round or less after
+ * PumpPortal announced it) was let go the moment it left the watchlist: the probation tier holds
+ * the newest ~315 launches, so a coin ~7 minutes old that DexScreener had not priced yet lost its
+ * seat, and when it climbed into the band a few minutes later the cycle that first scored it
+ * followed it again from nothing - its seed read came a round later and its first decision read
+ * curveRet10s/30s/1m as null, or from a tape seconds old (model audit 2026-10-26, section 16:
+ * 26-31% of the 10 s inputs, 34-57% of the 30 s and 50-75% of the 1 m null on event rows at
+ * decision time). Kept on, the coin's tape runs from its launch to its first decision. Only to
+ * featureMaxAgeMinutes (the scoring horizon, 15 min; the recorder's longer follow is the
+ * watchlist's), and only in the seats the wanted coins, the new launches' reserve and the pools'
+ * keys leave: at ~45 launches a minute that is ~675 young curves at most, most of them quiet,
+ * and the stream bills by changes, not by keys. Every launch followed was screened clear of
+ * Mayhem first (followClearedLaunches, the round's screenLaunches), so none held here is one.
+ */
+function holdLaunches(wanted: ReadonlyMap<string, { launchLab: boolean }>, now: number): Set<string> {
+  const held = new Set<string>();
+  if (!cfg) return held;
+  const featureMaxAgeMs = (cfg.featureMaxAgeMinutes ?? cfg.maxAgeMinutes) * 60_000;
+  const room = cfg.maxMints - LAUNCH_HOLD_RESERVE - POOL_KEYS * pools.size - wanted.size;
+  if (room <= 0) return held;
+  const young: { mint: string; f: Followed }[] = [];
+  for (const [mint, f] of followed) {
+    if (wanted.has(mint) || f.launchLab || now - f.bornAt > featureMaxAgeMs || now > f.until) continue;
+    young.push({ mint, f });
+  }
+  young.sort((a, b) => b.f.bornAt - a.f.bornAt);
+  for (const { mint, f } of young.slice(0, room)) {
+    held.add(mint);
+    f.rank = wanted.size + held.size - 1;
+    // Again every cycle, as for the wanted: it keeps the subscription from being evicted.
+    if (!paused) stream?.watch(keyOf(mint), [f.curve], now, "account");
+  }
+  return held;
+}
+
+/**
  * Launches just confirmed not Mayhem (launchScreen.ts): followed now rather than at the next
  * round, so the entry watch prices them off the curve from here. Nothing before the tape starts.
  */
@@ -606,8 +666,9 @@ export function followClearedLaunches(mints: readonly string[], now = Date.now()
 
 /**
  * Follows launches the scan hasn't listed yet, ahead of the curves it has (rank 0: polled first
- * while the stream is off). The next cycle's followYoungCurves keeps them, or drops the ones that
- * did not make its watchlist (a Mayhem coin, set aside at discovery).
+ * while the stream is off). The next cycle's followYoungCurves keeps the ones on its watchlist,
+ * and holds on to the rest while they are young and there is room (holdLaunches); a Mayhem coin
+ * never gets here (the callers screen first).
  */
 function followNewLaunches(mints: readonly string[], now: number): void {
   if (!cfg) return;
