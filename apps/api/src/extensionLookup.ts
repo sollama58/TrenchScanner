@@ -279,7 +279,7 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
            s."takenAt", s."marketCapUsd", s."holderCount", s."bundledSupplyPct",
            s."sniperTopHolderCount", s."linkedWalletPct", s."devWalletPct", s."top10HolderPct",
            s."freshTop10WalletPct", s."cexFundedPct", s."kolRecentBuyers", s."mintAuthorityActive",
-           COALESCE(s."emptyTop10WalletPct", t."lastEmptyTop10WalletPct") AS "emptyTop10WalletPct",
+           s."emptyTop10WalletPct",
            s."top10WalletsChecked",
            s."rugScreenPassed", s."rugScreenReasons",
            e."takenAt" AS "eTakenAt", e."holderCount" AS "eHolderCount",

@@ -19,6 +19,7 @@ export function noteAlertWallets(
   emptyKnown: boolean,
   now: number = Date.now(),
 ): void {
+  if (alerted) noteRecentAlert(mint, now);
   if (emptyKnown) {
     awaiting.delete(mint);
     return;
@@ -85,10 +86,40 @@ export function alertAwaitingWallets(mint: string, now: number = Date.now()): bo
   return true;
 }
 
+/**
+ * Tokens alerted on (a user match or a curated call) in the last RECENT_ALERT_MS: the extension's
+ * and the site's alert feeds show them, so their wallets are re-read as soon as their readings
+ * pass the 10-minute holdings TTL, after the contenders and the alerts still waiting on a first
+ * reading (user decision 2026-10-27). Their cached wallets cost nothing, so they only take budget
+ * when a reading is due. Process-local, as above.
+ */
+const RECENT_ALERT_MS = 6 * 3_600_000;
+const recentAlerts = new Map<string, number>();
+
+export function noteRecentAlert(mint: string, now: number = Date.now()): void {
+  recentAlerts.delete(mint);
+  recentAlerts.set(mint, now + RECENT_ALERT_MS);
+  for (const key of recentAlerts.keys()) {
+    if (recentAlerts.size <= MAX_AWAITING) break;
+    recentAlerts.delete(key);
+  }
+}
+
+export function recentlyAlerted(mint: string, now: number = Date.now()): boolean {
+  const until = recentAlerts.get(mint);
+  if (until === undefined) return false;
+  if (until <= now) {
+    recentAlerts.delete(mint);
+    return false;
+  }
+  return true;
+}
+
 /** Test hook. */
 export function resetAlertWallets(): void {
   awaiting.clear();
   filterWaitSince.clear();
+  recentAlerts.clear();
 }
 
 /**

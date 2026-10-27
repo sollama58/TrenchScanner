@@ -483,9 +483,10 @@ const envSchema = z.object({
   // ever got an empty-wallet reading.
   WALLET_HOLDINGS_SOURCE: z.enum(["balances", "das"]).default("balances"),
   // Uncached wallets priced per scan cycle on the balances route (WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE
-  // is the DAS route's). About 2 credits a wallet plus a little for mint decimals: 40 a cycle is
-  // ~80 credits, under the ~100 the 10-wallet DAS budget spent, for four times the wallets.
-  WALLET_BALANCE_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(40),
+  // is the DAS route's). About 2 credits a wallet plus a little for mint decimals. 80 a cycle
+  // (~160 credits, ~230k a day; was 40, user decision 2026-10-27) with the 10-minute holdings TTL
+  // below, so about twice as many coins keep a fresh empty-wallet reading.
+  WALLET_BALANCE_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(80),
   // The snipers figure (first 25 buyers still holding), read from the chain - see the worker's
   // launchSnipers.ts. Who the first buyers were costs one 10-credit getTransactionsForAddress per
   // token, read once and cached; this many new tokens are read per scan cycle, contenders first.
@@ -537,12 +538,12 @@ const envSchema = z.object({
   SNIPER_MAX_REFRESH_ACCOUNTS_PER_CYCLE: z.coerce.number().int().positive().default(500),
   // How long a holdings reading stays usable. Unlike wallet earliest-activity, this answer
   // decays - a portfolio changes with every trade - so it carries a TTL instead of being cached
-  // forever. 6 hours (was 3 from 2026-10-22, 1 before; user decision 2026-10-23, API audit): the
-  // 40-wallet cap below binds every cycle, so the longer TTL buys coverage, not credits: freed
-  // slots go to the next group, more coins get known wallet checks and more event moments open.
-  // A wallet that dumped its other bags can count as funded up to 6 hours on; the input is at
-  // chance for the learners (AUC 0.51), and the 70% empty-wallet gate moves a point or two.
-  WALLET_HOLDINGS_CACHE_TTL_MINUTES: z.coerce.number().positive().default(360),
+  // forever. 10 minutes (user decision 2026-10-27: no empty-wallet reading older than that; was 6
+  // hours from 2026-10-23, 3 from 2026-10-22, 1 before). The per-cycle cap binds, so this costs
+  // coverage, not credits: fewer coins have a reading at any moment, and the slots go to the
+  // contenders, the alerts waiting on a first reading, then the coins in the alert feeds
+  // (walletPriority.ts recentlyAlerted), before the rest.
+  WALLET_HOLDINGS_CACHE_TTL_MINUTES: z.coerce.number().positive().default(10),
   // How long the cleanup job keeps a WalletHoldingsCache row. A row past the TTL above is never
   // read again, so this only needs slack over it. 12 hours is twice the 6-hour TTL. 0 keeps rows
   // the 90 days the other RPC caches get. Owner-approved 2026-10-04.
