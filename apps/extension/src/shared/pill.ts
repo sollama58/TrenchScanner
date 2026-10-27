@@ -1,6 +1,14 @@
 import { MAP_LABELS, type MapLine, type PillPart } from "./tooltip";
 import type { FlagId, OverlayBubbleTotals, OverlaySettings, OverlayToken } from "./types";
-import { alertCall, alertMatch, firstAlert, readFlag, type FlagLevel, type RowVerdict } from "./verdict";
+import {
+  alertCall,
+  alertMatch,
+  devReading,
+  firstAlert,
+  readFlag,
+  type FlagLevel,
+  type RowVerdict,
+} from "./verdict";
 
 /** One piece of a pill's text, coloured by its flag's level when it has one. */
 export interface PillSegment {
@@ -63,6 +71,9 @@ export function pillSegments(
     } else if (part === "holders") {
       const count = token.stats?.holderCount;
       if (count !== null && count !== undefined) out.push({ text: `${count}h` });
+    } else if (part === "dev") {
+      const dev = devReading(token);
+      if (dev?.text && token.dev?.record) out.push({ text: dev.short, level: dev.level });
     } else if (part.startsWith("flag:")) {
       const id = part.slice(5) as FlagId;
       const flag = readFlag(id, token, settings.flags[id].threshold);

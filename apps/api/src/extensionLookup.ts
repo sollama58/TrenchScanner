@@ -54,6 +54,48 @@ export interface OverlayStats {
   cexFundedPct: number | null;
   kolRecentBuyers: number | null;
   mintAuthorityActive: boolean | null;
+  /**
+   * The same numbers from the newest snapshot at least EARLIER_MS before this one, so the overlay
+   * can show which way each moved (user ask 2026-10-27: a bundle forming shows as EMPTY 3↑). Null
+   * when the coin has no snapshot that old; a field is null when that snapshot didn't measure it.
+   */
+  earlier: OverlayEarlier | null;
+}
+
+/** A coin's flag numbers some minutes back (OverlayStats.earlier). */
+export interface OverlayEarlier {
+  takenAt: string;
+  holderCount: number | null;
+  bundledSupplyPct: number | null;
+  sniperTopHolderCount: number | null;
+  linkedWalletPct: number | null;
+  devWalletPct: number | null;
+  top10HolderPct: number | null;
+  freshTop10WalletPct: number | null;
+  emptyTop10WalletCount: number | null;
+  cexFundedPct: number | null;
+  kolRecentBuyers: number | null;
+}
+
+/**
+ * The coin's creator and how its other launches went (user ask 2026-10-27), from the hourly
+ * DevLaunchRisk rebuild (the token modal's Dev card reads the same rows, tokenProfile.ts). `record`
+ * is null when the creator has no row: fewer than two launches in 14 days and none in the band.
+ * `family` pools every creator the same funder paid for, when there are two or more.
+ */
+export interface OverlayDev {
+  wallet: string;
+  record: OverlayLaunchRecord | null;
+  family: (OverlayLaunchRecord & { creators: number }) | null;
+}
+
+export interface OverlayLaunchRecord {
+  /** Dev launch score, 0-100, higher is riskier. */
+  score: number;
+  launches: number;
+  inBand: number;
+  wins: number;
+  stops: number;
 }
 
 export interface OverlayModelCall {
@@ -64,6 +106,8 @@ export interface OverlayModelCall {
   calibratedPct: number | null;
   at: string;
   mcapUsd: number;
+  /** The highest market cap seen since the call (the track record's peak); null before one. */
+  peakMcapUsd: number | null;
 }
 
 export interface OverlayFilterMatch {
@@ -71,6 +115,8 @@ export interface OverlayFilterMatch {
   filterName: string;
   at: string;
   mcapUsd: number | null;
+  /** The highest market cap seen since the match; null before one. */
+  peakMcapUsd: number | null;
 }
 
 export interface OverlayAiReview {
@@ -101,6 +147,8 @@ export interface OverlayToken {
   stats: OverlayStats | null;
   /** Null until the scanner has a snapshot of the coin. */
   safety: OverlaySafety | null;
+  /** Null when the scanner doesn't know who created the coin. */
+  dev: OverlayDev | null;
   modelCalls: OverlayModelCall[];
   filterMatches: OverlayFilterMatch[];
   ai: OverlayAiReview | null;
@@ -130,6 +178,12 @@ export function resetOverlayLookupCache(): void {
   sharedCache.clear();
 }
 
+/** Drops the coins' shared halves (a new snapshot was written), or all of them with null. */
+export function forgetOverlayTokens(mints: readonly string[] | null): void {
+  if (mints === null) sharedCache.clear();
+  else for (const mint of mints) sharedCache.delete(mint);
+}
+
 interface TokenRow {
   id: string;
   mintAddress: string;
@@ -153,6 +207,66 @@ interface TokenRow {
   mintAuthorityActive: boolean | null;
   rugScreenPassed: boolean | null;
   rugScreenReasons: string[] | null;
+  eTakenAt: Date | null;
+  eHolderCount: number | null;
+  eBundledSupplyPct: number | null;
+  eSniperTopHolderCount: number | null;
+  eLinkedWalletPct: number | null;
+  eDevWalletPct: number | null;
+  eTop10HolderPct: number | null;
+  eFreshTop10WalletPct: number | null;
+  eEmptyTop10WalletPct: number | null;
+  eTop10WalletsChecked: number | null;
+  eCexFundedPct: number | null;
+  eKolRecentBuyers: number | null;
+  devWallet: string | null;
+  dScore: number | null;
+  dLaunches: number | null;
+  dInBand: number | null;
+  dWins: number | null;
+  dStops: number | null;
+  fCreators: number | null;
+  fScore: number | null;
+  fLaunches: number | null;
+  fInBand: number | null;
+  fWins: number | null;
+  fStops: number | null;
+}
+
+/** How far back the trend compares (OverlayStats.earlier): a few scans, so one noisy read can't flip it. */
+export const EARLIER_MS = 5 * 60_000;
+
+/** An empty-wallet share as a count of the top 10 checked (what the overlay shows). */
+function emptyCount(pct: number | null, checked: number | null): number | null {
+  return pct === null ? null : Math.round((pct / 100) * (checked ?? 10));
+}
+
+function devOf(r: TokenRow): OverlayDev | null {
+  if (!r.devWallet) return null;
+  return {
+    wallet: r.devWallet,
+    record:
+      r.dScore === null
+        ? null
+        : {
+            score: r.dScore,
+            launches: r.dLaunches ?? 0,
+            inBand: r.dInBand ?? 0,
+            wins: r.dWins ?? 0,
+            stops: r.dStops ?? 0,
+          },
+    family:
+      r.fScore === null
+        ? null
+        : {
+            creators: r.fCreators ?? 0,
+            score: r.fScore,
+            launches: r.fLaunches ?? 0,
+            inBand: r.fInBand ?? 0,
+            wins: r.fWins ?? 0,
+            stops: r.fStops ?? 0,
+          },
+  };
 }
 
 async function loadShared(mints: string[], now: number): Promise<Map<string, SharedToken>> {
@@ -167,11 +281,29 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
            s."freshTop10WalletPct", s."cexFundedPct", s."kolRecentBuyers", s."mintAuthorityActive",
            COALESCE(s."emptyTop10WalletPct", t."lastEmptyTop10WalletPct") AS "emptyTop10WalletPct",
            s."top10WalletsChecked",
-           s."rugScreenPassed", s."rugScreenReasons"
+           s."rugScreenPassed", s."rugScreenReasons",
+           e."takenAt" AS "eTakenAt", e."holderCount" AS "eHolderCount",
+           e."bundledSupplyPct" AS "eBundledSupplyPct", e."sniperTopHolderCount" AS "eSniperTopHolderCount",
+           e."linkedWalletPct" AS "eLinkedWalletPct", e."devWalletPct" AS "eDevWalletPct",
+           e."top10HolderPct" AS "eTop10HolderPct", e."freshTop10WalletPct" AS "eFreshTop10WalletPct",
+           e."emptyTop10WalletPct" AS "eEmptyTop10WalletPct", e."top10WalletsChecked" AS "eTop10WalletsChecked",
+           e."cexFundedPct" AS "eCexFundedPct", e."kolRecentBuyers" AS "eKolRecentBuyers",
+           COALESCE(t."deployer", t."creator") AS "devWallet",
+           d."score" AS "dScore", d."launches" AS "dLaunches", d."inBand" AS "dInBand",
+           d."wins" AS "dWins", d."stops" AS "dStops",
+           f."creators" AS "fCreators", f."score" AS "fScore", f."launches" AS "fLaunches",
+           f."inBand" AS "fInBand", f."wins" AS "fWins", f."stops" AS "fStops"
     FROM "Token" t
     LEFT JOIN LATERAL (
       SELECT * FROM "TokenSnapshot" ts WHERE ts."tokenId" = t."id" ORDER BY ts."takenAt" DESC LIMIT 1
     ) s ON true
+    LEFT JOIN LATERAL (
+      SELECT * FROM "TokenSnapshot" es
+      WHERE es."tokenId" = t."id" AND es."takenAt" <= s."takenAt" - ${EARLIER_MS} * interval '1 millisecond'
+      ORDER BY es."takenAt" DESC LIMIT 1
+    ) e ON true
+    LEFT JOIN "DevLaunchRisk" d ON d."wallet" = COALESCE(t."deployer", t."creator")
+    LEFT JOIN "DevFunderRisk" f ON f."funder" = d."funder"
     WHERE t."mintAddress" IN (${Prisma.join(mints)})`;
   if (rows.length === 0) return out;
 
@@ -190,6 +322,7 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
         calibratedPct: true,
         createdAt: true,
         anchorMcapUsd: true,
+        peakMcapUsd: true,
       },
     }),
     prisma.aiReview.findMany({
@@ -211,6 +344,7 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
       calibratedPct: c.calibratedPct,
       at: c.createdAt.toISOString(),
       mcapUsd: c.anchorMcapUsd,
+      peakMcapUsd: c.peakMcapUsd,
     });
     callsByToken.set(c.tokenId, list);
   }
@@ -247,13 +381,26 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
                 devWalletPct: r.devWalletPct,
                 top10HolderPct: r.top10HolderPct,
                 freshTop10WalletPct: r.freshTop10WalletPct,
-                emptyTop10WalletCount:
-                  r.emptyTop10WalletPct === null
-                    ? null
-                    : Math.round((r.emptyTop10WalletPct / 100) * (r.top10WalletsChecked ?? 10)),
+                emptyTop10WalletCount: emptyCount(r.emptyTop10WalletPct, r.top10WalletsChecked),
                 cexFundedPct: r.cexFundedPct,
                 kolRecentBuyers: r.kolRecentBuyers,
                 mintAuthorityActive: r.mintAuthorityActive,
+                earlier:
+                  r.eTakenAt === null
+                    ? null
+                    : {
+                        takenAt: r.eTakenAt.toISOString(),
+                        holderCount: r.eHolderCount,
+                        bundledSupplyPct: r.eBundledSupplyPct,
+                        sniperTopHolderCount: r.eSniperTopHolderCount,
+                        linkedWalletPct: r.eLinkedWalletPct,
+                        devWalletPct: r.eDevWalletPct,
+                        top10HolderPct: r.eTop10HolderPct,
+                        freshTop10WalletPct: r.eFreshTop10WalletPct,
+                        emptyTop10WalletCount: emptyCount(r.eEmptyTop10WalletPct, r.eTop10WalletsChecked),
+                        cexFundedPct: r.eCexFundedPct,
+                        kolRecentBuyers: r.eKolRecentBuyers,
+                      },
               },
         safety:
           r.takenAt === null || r.rugScreenPassed === null
@@ -263,6 +410,7 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
                 reasons: r.rugScreenPassed ? [] : (r.rugScreenReasons ?? []).slice(0, REASONS_MAX),
                 at: r.takenAt.toISOString(),
               },
+        dev: devOf(r),
         ai: reviewByToken.get(r.id) ?? null,
       },
       calls: callsByToken.get(r.id) ?? [],
@@ -362,6 +510,7 @@ export async function lookupOverlay(
             tokenId: true,
             matchedAt: true,
             alertMcapUsd: true,
+            peakMcapUsd: true,
             filter: { select: { id: true, name: true } },
           },
         });
@@ -375,6 +524,7 @@ export async function lookupOverlay(
       filterName: m.filter.name,
       at: m.matchedAt.toISOString(),
       mcapUsd: m.alertMcapUsd,
+      peakMcapUsd: m.peakMcapUsd,
     });
     matchesByToken.set(m.tokenId, list);
   }

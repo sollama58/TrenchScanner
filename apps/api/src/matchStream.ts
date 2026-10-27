@@ -4,6 +4,8 @@ import {
   MATCH_CHANNEL,
   CURATED_CHANNEL,
   HOLDERS_CHANNEL,
+  SNAPSHOTS_CHANNEL,
+  type SnapshotsNotification,
   type HoldersNotification,
   type MatchNotification,
   type CuratedAlertNotification,
@@ -124,6 +126,8 @@ export class MatchStream {
   private readonly matchListeners = new Set<(userId: string) => void>();
   /** Work to run when a coin's holder reading is written (onHolders); null: any coin (reconnect). */
   private readonly holderListeners = new Set<(mint: string | null) => void>();
+  /** Work to run when snapshots are written (onSnapshots); null: any coin (reconnect). */
+  private readonly snapshotListeners = new Set<(mints: string[] | null) => void>();
   private client: Client | undefined;
   private heartbeat: NodeJS.Timeout | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
@@ -188,6 +192,7 @@ export class MatchStream {
       if (msg.channel === MATCH_CHANNEL) this.dispatch(msg.payload);
       else if (msg.channel === CURATED_CHANNEL) this.dispatchCurated(msg.payload);
       else if (msg.channel === HOLDERS_CHANNEL) this.dispatchHolders(msg.payload);
+      else if (msg.channel === SNAPSHOTS_CHANNEL) this.dispatchSnapshots(msg.payload);
     });
     // A dropped LISTEN connection is silent by nature - no request fails, clients just stop
     // receiving - so it has to be actively noticed and rebuilt.
@@ -202,6 +207,7 @@ export class MatchStream {
       await client.query(`LISTEN ${MATCH_CHANNEL}`);
       await client.query(`LISTEN ${CURATED_CHANNEL}`);
       await client.query(`LISTEN ${HOLDERS_CHANNEL}`);
+      await client.query(`LISTEN ${SNAPSHOTS_CHANNEL}`);
       // stop() may have run while those awaits were outstanding - a window seconds wide when the
       // database is slow or briefly unreachable at boot, which is exactly when a shutdown is
       // likely. Without this the process ends up stopped with a fully open, LISTENing connection
@@ -214,7 +220,7 @@ export class MatchStream {
       this.client = client;
       this.reconnectDelay = RECONNECT_BASE_MS;
       logger.info("listening for match + curated notifications", {
-        channels: [MATCH_CHANNEL, CURATED_CHANNEL, HOLDERS_CHANNEL],
+        channels: [MATCH_CHANNEL, CURATED_CHANNEL, HOLDERS_CHANNEL, SNAPSHOTS_CHANNEL],
       });
       if (this.hasListened) this.catchUp();
       this.hasListened = true;
@@ -237,6 +243,7 @@ export class MatchStream {
   catchUp(): void {
     this.runCuratedListeners();
     this.runHolderListeners(null);
+    this.runSnapshotListeners(null);
     const users = new Set<string>();
     for (const subscriber of this.subscribers) if (subscriber.kind === "match") users.add(subscriber.userId);
     for (const userId of users) {
@@ -376,6 +383,40 @@ export class MatchStream {
   onHolders(listener: (mint: string | null) => void): () => void {
     this.holderListeners.add(listener);
     return () => this.holderListeners.delete(listener);
+  }
+
+  /** Fans one snapshot NOTIFY (core's noteSnapshotForBoards) out to onSnapshots' listeners. */
+  dispatchSnapshots(payload: string): void {
+    let notification: SnapshotsNotification;
+    try {
+      notification = JSON.parse(payload) as SnapshotsNotification;
+    } catch {
+      logger.warn("ignoring unparseable snapshot notification");
+      return;
+    }
+    const mints = Array.isArray(notification?.mints)
+      ? notification.mints.filter((m): m is string => typeof m === "string" && m.length > 0)
+      : [];
+    if (mints.length > 0) this.runSnapshotListeners(mints);
+  }
+
+  /**
+   * Runs `listener` with the coins whose snapshots the scanner just wrote (the extension's live
+   * board pills); with null after a LISTEN reconnect, when any coin may have changed.
+   */
+  onSnapshots(listener: (mints: string[] | null) => void): () => void {
+    this.snapshotListeners.add(listener);
+    return () => this.snapshotListeners.delete(listener);
+  }
+
+  private runSnapshotListeners(mints: string[] | null): void {
+    for (const listener of this.snapshotListeners) {
+      try {
+        listener(mints);
+      } catch (err) {
+        logger.warn("snapshot listener failed", { error: String(err) });
+      }
+    }
   }
 
   /**

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS } from "../shared/settings";
 import { token } from "../shared/testToken";
 import { verdictFor } from "../shared/verdict";
-import { imageSources, siteUrl, tokenCard } from "./card";
+import { imageSources, scorecard, siteUrl, tokenCard } from "./card";
 
 const A = "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN";
 const call = {
@@ -37,7 +37,7 @@ describe("panel cards", () => {
     expect(card.textContent).toContain("Sniper v4 41%");
     // The name sits up top; the address is a copy button at the bottom right.
     expect(card.querySelector(".top .full")?.textContent).toBe("Ring Coin");
-    expect(card.querySelector(".foot > .ca")?.textContent).toBe("6p6x…GiPN");
+    expect(card.querySelector(".foot .end > .ca")?.textContent).toBe("6p6x…GiPN");
     // Alerted at $4K, now $5.1K: green.
     expect(card.querySelector(".line .r")?.className).toBe("r up");
   });
@@ -134,5 +134,20 @@ describe("the lookup and the card's safety line (user ask 2026-10-25)", () => {
     );
     expect(failing.textContent).toContain("Safety screenFailed");
     expect(failing.querySelector(".safety-why")?.textContent).toBe("Top 10 holders own 52%.");
+  });
+});
+
+describe("the alerts' scorecard", () => {
+  it("counts the alerts, the ones that reached 2x at their peak, the best and the median", () => {
+    const at = (mcapUsd: number, peakMcapUsd: number | undefined, live: number) =>
+      token({ symbol: `X${mcapUsd}`, liveMcapUsd: live, modelCalls: [{ ...call, mcapUsd, peakMcapUsd }] });
+    const box = scorecard([
+      at(4_000, 12_000, 5_000),
+      at(10_000, 15_000, 9_000),
+      at(8_000, undefined, 4_000),
+    ])!;
+    const cells = [...box.querySelectorAll(".stat")].map((c) => c.textContent);
+    expect(cells).toEqual(["3alerts, 6h", "1reached 2x", "3.0xbest, X4000", "1.5xmedian peak"]);
+    expect(scorecard([token()])).toBeNull();
   });
 });

@@ -1,3 +1,4 @@
+import { isMintAddress } from "./mint";
 import { FLAG_IDS, FLAG_LABELS } from "./settings";
 import type { FlagId, OverlayBubbleTotals, OverlaySettings, Site } from "./types";
 import { BOARD_COLUMNS, type BoardColumn } from "../content/columns";
@@ -28,9 +29,11 @@ export type TipLine =
   | "mcap"
   | "holders"
   | "safety"
+  | "dev"
   | `flag:${FlagId}`
   | `map:${MapLine}`
   | "statsAge"
+  | "actions"
   | "link";
 
 /** Every item of a list in the order shown, and the ones the reader turned on or off. */
@@ -45,7 +48,7 @@ export interface ListPrefs<T extends string> {
  * the first with more of the coin's numbers, off until the reader turns it on.
  */
 export type PillPart =
-  "signal" | "odds" | "change" | "mcap" | "age" | "holders" | `flag:${FlagId}` | `map:${MapLine}`;
+  "signal" | "odds" | "change" | "mcap" | "age" | "holders" | "dev" | `flag:${FlagId}` | `map:${MapLine}`;
 
 /**
  * Every colour the overlay draws with (user ask 2026-10-25): the rings' two tones per kind, the
@@ -219,8 +222,52 @@ export interface BoardStatsPrefs {
   maxAgeMinutes: number;
 }
 
+/**
+ * Run alerts (user ask 2026-10-27): a Chrome notification when one of the reader's alerts reaches
+ * a multiple of its alert's market cap, each level once, and when it falls a set share below it.
+ */
+export const RUN_LEVELS = [2, 3, 5, 10] as const;
+export type RunLevel = (typeof RUN_LEVELS)[number];
+
+export interface RunPrefs {
+  enabled: boolean;
+  levels: Record<RunLevel, boolean>;
+  /** A notification when the coin falls this many percent below its alert cap; 0 for none. */
+  dropPct: number;
+}
+
+/**
+ * The reader's own limits on a board (user ask 2026-10-27): a coin past any of them is dimmed or
+ * hidden, as the safety screen hides. Needs the board's numbers, so it sends the board's
+ * addresses to TrenchScanner while on, as the pill on every coin does.
+ */
+export const LIMIT_MODES = ["off", "dim", "hide"] as const;
+export type LimitMode = (typeof LIMIT_MODES)[number];
+export const LIMIT_IDS = [
+  "bundledSupplyPct",
+  "linkedWalletPct",
+  "emptyTop10WalletCount",
+  "sniperTopHolderCount",
+  "top10HolderPct",
+  "devWalletPct",
+  "freshTop10WalletPct",
+] as const satisfies readonly FlagId[];
+export type LimitId = (typeof LIMIT_IDS)[number];
+
+export interface LimitPrefs {
+  mode: LimitMode;
+  /** A limit per number; a missing one isn't checked. */
+  values: Partial<Record<LimitId, number>>;
+}
+
 export interface TooltipPrefs extends ListPrefs<TipLine> {
   panel: PanelPrefs;
+  runs: RunPrefs;
+  limits: LimitPrefs;
+  /** Coins the reader snoozed, each with when it wakes (ms since 1970). */
+  snoozed: Record<string, number>;
+  /** The reader's other wallets Trade Buddy follows too (Axiom's, Terminal's...). */
+  buddyWallets: string[];
   boardStats: BoardStatsPrefs;
   toast: ToastPrefs;
   mapTab: MapTabPrefs;
@@ -252,9 +299,11 @@ export const TIP_LINES: TipLine[] = [
   "mcap",
   "holders",
   "safety",
+  "dev",
   ...FLAG_IDS.map((id) => `flag:${id}` as const),
   ...MAP_LINES.map((id) => `map:${id}` as const),
   "statsAge",
+  "actions",
   "link",
 ];
 
@@ -266,7 +315,9 @@ const FIXED_LABELS: Record<string, string> = {
   mcap: "Market cap since the alert",
   holders: "Holders",
   safety: "Safety screen, with why it fails",
+  dev: "Dev's other launches",
   statsAge: "Stats' age",
+  actions: "Buttons: copy, open on a site, look up, snooze",
   link: "Open in TrenchScanner link",
 };
 
@@ -283,6 +334,7 @@ export const PILL_PARTS: PillPart[] = [
   "mcap",
   "age",
   "holders",
+  "dev",
   ...FLAG_IDS.map((id) => `flag:${id}` as const),
   ...MAP_LINES.map((id) => `map:${id}` as const),
 ];
@@ -294,6 +346,7 @@ const PILL_LABELS: Record<string, string> = {
   mcap: "Market cap now",
   age: "Time since the alert",
   holders: "Holders",
+  dev: "Dev's launches and wins",
 };
 
 export function pillLabel(part: PillPart): string {
@@ -339,6 +392,10 @@ export const DEFAULT_TOOLTIP: TooltipPrefs = {
   second: { order: PILL_PARTS, on: {}, enabled: false },
   colors: {},
   panel: { hideUnsafe: false, notify: false, badge: true },
+  runs: { enabled: false, levels: { 2: true, 3: false, 5: true, 10: true }, dropPct: 0 },
+  limits: { mode: "off", values: {} },
+  snoozed: {},
+  buddyWallets: [],
   boardStats: { enabled: false, maxAgeMinutes: 30 },
   toast: DEFAULT_TOAST,
   mapTab: { enabled: true },
@@ -373,8 +430,10 @@ const ON_BY_DEFAULT = new Set<TipLine>([
   "aiReasoning",
   "mcap",
   "safety",
+  "dev",
   "map:kolBundledPct",
   "statsAge",
+  "actions",
   "link",
 ]);
 
@@ -533,6 +592,82 @@ function cleanBoardStats(raw: unknown): BoardStatsPrefs {
   return { enabled: v.enabled === true, maxAgeMinutes: Math.min(1440, Math.max(1, Math.round(age))) };
 }
 
+function cleanRuns(raw: unknown): RunPrefs {
+  const v = (typeof raw === "object" && raw !== null ? raw : {}) as Partial<RunPrefs>;
+  const d = DEFAULT_TOOLTIP.runs;
+  const levels = (typeof v.levels === "object" && v.levels !== null ? v.levels : {}) as Partial<
+    Record<string, unknown>
+  >;
+  const drop = typeof v.dropPct === "number" && Number.isFinite(v.dropPct) ? Math.round(v.dropPct) : 0;
+  return {
+    enabled: v.enabled === true,
+    levels: Object.fromEntries(
+      RUN_LEVELS.map((l) => [l, typeof levels[l] === "boolean" ? levels[l] : d.levels[l]]),
+    ) as Record<RunLevel, boolean>,
+    dropPct: Math.min(95, Math.max(0, drop)),
+  };
+}
+
+function cleanLimits(raw: unknown): LimitPrefs {
+  const v = (typeof raw === "object" && raw !== null ? raw : {}) as Partial<LimitPrefs>;
+  const values: LimitPrefs["values"] = {};
+  const given = (typeof v.values === "object" && v.values !== null ? v.values : {}) as Record<
+    string,
+    unknown
+  >;
+  for (const id of LIMIT_IDS) {
+    const n = given[id];
+    if (typeof n === "number" && Number.isFinite(n) && n >= 0) values[id] = Math.min(1_000, n);
+  }
+  return { mode: LIMIT_MODES.includes(v.mode as LimitMode) ? (v.mode as LimitMode) : "off", values };
+}
+
+/** Snoozed coins kept at most, the latest to wake first kept; past ones are dropped. */
+const MAX_SNOOZED = 200;
+/** The longest snooze: a week. */
+export const MAX_SNOOZE_MS = 7 * 24 * 3_600_000;
+
+function cleanSnoozed(raw: unknown, now = Date.now()): Record<string, number> {
+  if (typeof raw !== "object" || raw === null) return {};
+  const kept = Object.entries(raw as Record<string, unknown>)
+    .filter(
+      (e): e is [string, number] =>
+        isMintAddress(e[0]) && typeof e[1] === "number" && e[1] > now && e[1] <= now + MAX_SNOOZE_MS,
+    )
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, MAX_SNOOZED);
+  return Object.fromEntries(kept);
+}
+
+/** The reader's other wallets Trade Buddy follows, at most (the API takes three). */
+export const MAX_BUDDY_WALLETS = 3;
+
+function cleanWallets(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.filter((w): w is string => typeof w === "string" && isMintAddress(w)))].slice(
+    0,
+    MAX_BUDDY_WALLETS,
+  );
+}
+
+/** The coin is snoozed now. */
+export function snoozed(prefs: Pick<TooltipPrefs, "snoozed">, mint: string, now = Date.now()): boolean {
+  return (prefs.snoozed[mint] ?? 0) > now;
+}
+
+/** The limits a coin is past, by their flag's label; empty when none (or the limits are off). */
+export function pastLimits(
+  prefs: Pick<TooltipPrefs, "limits">,
+  stats: Partial<Record<FlagId, number | boolean | null | undefined | object | string>> | null | undefined,
+): LimitId[] {
+  if (prefs.limits.mode === "off" || !stats) return [];
+  return LIMIT_IDS.filter((id) => {
+    const limit = prefs.limits.values[id];
+    const value = stats[id];
+    return limit !== undefined && typeof value === "number" && value > limit;
+  });
+}
+
 function cleanPanel(raw: unknown): PanelPrefs {
   const v = (typeof raw === "object" && raw !== null ? raw : {}) as Partial<PanelPrefs>;
   return { hideUnsafe: v.hideUnsafe === true, notify: v.notify === true, badge: v.badge !== false };
@@ -551,6 +686,10 @@ export function cleanTooltip(raw: unknown): TooltipPrefs {
     second: { ...cleanList(second, PILL_PARTS), enabled: second.enabled === true },
     colors: cleanColors(value.colors),
     panel: cleanPanel(value.panel),
+    runs: cleanRuns(value.runs),
+    limits: cleanLimits(value.limits),
+    snoozed: cleanSnoozed(value.snoozed),
+    buddyWallets: cleanWallets(value.buddyWallets),
     boardStats: cleanBoardStats(value.boardStats),
     toast: cleanToast(value.toast),
     mapTab: { enabled: (value.mapTab as Partial<MapTabPrefs> | undefined)?.enabled !== false },

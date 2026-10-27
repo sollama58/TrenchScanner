@@ -841,6 +841,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     holderStamps,
     viewStamps,
     holderWrites: matchStream,
+    snapshotWrites: matchStream,
   });
   // Telegram alerts: link codes and chats for the signed-in account, and the bot's webhook.
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env, liveRefresher });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { overlayBubbleMap, pickBubbleScan, type BubbleScan } from "./extensionBubble.js";
 import { buddyAnswer, BUDDY_CLOSED_MS } from "./extensionBuddy.js";
 import type { TradeCoin } from "./routes/proTrades.js";
+import type { TradeStats } from "./proTrades.js";
 
 const base: BubbleScan = {
   takenAt: new Date("2026-10-24T12:00:00Z"),
@@ -172,16 +173,19 @@ describe("Trade Buddy", () => {
 
   it("lists held coins and those sold out within a day, with their PnL", () => {
     const answer = buddyAnswer(
-      {
-        coins: [
-          coin("held", false, 60_000),
-          coin("sold", true, 3_600_000),
-          coin("old", true, BUDDY_CLOSED_MS + 1),
-        ],
-        solUsd: 180,
-        readAt: new Date(now),
-        chainAt: null,
-      },
+      [
+        {
+          wallet: "W1",
+          coins: [
+            coin("held", false, 60_000),
+            coin("sold", true, 3_600_000),
+            coin("old", true, BUDDY_CLOSED_MS + 1),
+          ],
+          solUsd: 180,
+          readAt: new Date(now),
+          chainAt: null,
+        },
+      ],
       [],
       true,
       now,
@@ -189,5 +193,69 @@ describe("Trade Buddy", () => {
     expect(answer.coins.map((c) => c.mint)).toEqual(["held", "sold"]);
     expect(answer.coins[0]).toMatchObject({ nowMcapUsd: 15_000, pnlSol: 0.5, pnlPct: 50, token: null });
     expect(answer.pro).toBe(true);
+    expect(answer.coins[0]!.wallet).toBe("W1");
+  });
+
+  it("follows the reader's other wallets too, newest trade first, with the day added up", () => {
+    const stats = (over: Partial<TradeStats>): TradeStats => ({
+      hours: 24,
+      trades: 4,
+      buys: 2,
+      sells: 2,
+      coins: 2,
+      volumeSol: 1,
+      closed: 2,
+      open: 0,
+      winRatePct: 50,
+      realizedSol: 0.2,
+      unrealizedSol: 0,
+      bestMultiple: 1.5,
+      medianHoldMinutes: 10,
+      calledFirst: 1,
+      entries: 2,
+      ...over,
+    });
+    const answer = buddyAnswer(
+      [
+        {
+          wallet: "W1",
+          coins: [coin("a", false, 600_000)],
+          solUsd: 180,
+          readAt: new Date(now),
+          chainAt: null,
+          stats: stats({}),
+        },
+        {
+          wallet: "W2",
+          coins: [coin("b", false, 60_000)],
+          solUsd: null,
+          readAt: new Date(now),
+          chainAt: null,
+          stats: stats({
+            closed: 2,
+            winRatePct: 100,
+            realizedSol: 0.5,
+            bestMultiple: 3,
+            unrealizedSol: null,
+          }),
+        },
+      ],
+      [],
+      false,
+      now,
+    );
+    expect(answer.wallets).toEqual(["W1", "W2"]);
+    expect(answer.coins.map((c) => [c.mint, c.wallet])).toEqual([
+      ["b", "W2"],
+      ["a", "W1"],
+    ]);
+    expect(answer.summary).toMatchObject({
+      trades: 8,
+      closed: 4,
+      winRatePct: 75,
+      realizedSol: 0.7,
+      bestMultiple: 3,
+      unrealizedSol: null,
+    });
   });
 });

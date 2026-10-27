@@ -21,6 +21,7 @@ import {
   isExtensionKeyShape,
 } from "../extensionKey.js";
 import {
+  forgetOverlayTokens,
   isMintAddress,
   lookupOverlay,
   MAX_LOOKUP_MINTS,
@@ -35,12 +36,13 @@ import {
   type BubbleScan,
   type OverlayBubbleMap,
 } from "../extensionBubble.js";
-import { buddyAnswer, buddyCoins, type BuddyAnswer } from "../extensionBuddy.js";
+import { BUDDY_EXTRA_WALLETS, buddyAnswer, buddyCoins, type BuddyAnswer } from "../extensionBuddy.js";
 import { allowedSiteCall, SITE_CALL_MAX_BODY } from "../extensionSite.js";
 import { freeLookupReason } from "../lookupGate.js";
 import { overlaySettingsSchema, parseOverlaySettings } from "../overlaySettings.js";
 import { cachedProStatus } from "../proMode.js";
 import { HOLDER_WAIT_MS, HolderWaits, MAX_HOLDER_WAITS } from "../holderWaits.js";
+import { BOARD_WAIT_MS, BoardWaits } from "../boardWaits.js";
 import { releaseHolderStamps, type ViewStampBuffer } from "../viewStamps.js";
 import { allowHolderWatch, allowViewStamps } from "./live.js";
 import type { ProTrades } from "./proTrades.js";
@@ -100,6 +102,10 @@ const SITE_SESSION_MAX = 5_000;
  * while the reader's hide-or-mark option is on, in batches of up to MAX_LOOKUP_MINTS, from a few tabs.
  */
 const SAFETY_RATE_LIMIT = { max: 120, timeWindow: "1 minute" };
+/** Held board asks: one at a time per browser, re-asked as each answers (3 s apart at least). */
+const BOARD_WAIT_RATE_LIMIT = { max: 60, timeWindow: "1 minute" };
+/** Coins one held board ask may name: the coins of a few columns. */
+const MAX_BOARD_WAIT_MINTS = 300;
 /** Trade Buddy reads a minute: the panel polls every 5 s (every 10 s before 0.3.1), plus a second window. */
 const BUDDY_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 /** A Trade Buddy answer this fresh is served as is; an older one is served while a new one is read. */
@@ -204,6 +210,8 @@ export async function registerExtensionRoutes(
     viewStamps?: ViewStampBuffer;
     /** The scanner's holder-reading announcements (MatchStream.onHolders), for /bubble/:mint/wait. */
     holderWrites?: { onHolders(listener: (mint: string | null) => void): () => void };
+    /** The scanner's snapshot announcements (MatchStream.onSnapshots), for /stats/wait. */
+    snapshotWrites?: { onSnapshots(listener: (mints: string[] | null) => void): () => void };
   },
 ) {
   // An open map's held ask for its coin's next reading (user ask 2026-10-25: an open map keeps
@@ -217,6 +225,14 @@ export async function registerExtensionRoutes(
     bubbleWaits.wake(mint);
   });
   if (stopHolderWrites) app.addHook("onClose", async () => stopHolderWrites());
+  // The boards' held asks for their coins' next numbers (user ask 2026-10-27: live board pills). A
+  // written snapshot drops the coin's shared half first, so the read the wake answers with is new.
+  const boardWaits = new BoardWaits();
+  const stopSnapshotWrites = opts.snapshotWrites?.onSnapshots((mints) => {
+    forgetOverlayTokens(mints);
+    boardWaits.wake(mints);
+  });
+  if (stopSnapshotWrites) app.addHook("onClose", async () => stopSnapshotWrites());
 
   const admins = adminWalletSet(opts.env);
   // A key's own bucket only once it has been proven (in authCache): rotating made-up keys would
@@ -556,6 +572,26 @@ export async function registerExtensionRoutes(
   );
 
   /**
+   * Live board pills (user ask 2026-10-27): held until one of the coins asked about gets a new
+   * snapshot (BOARD_WAIT_MS at most), then answered with the new numbers of the coins that did, as
+   * /stats answers them. `pushed: false` says no wait could be held: the board keeps its own re-ask.
+   */
+  app.post(
+    "/stats/wait",
+    { bodyLimit: 16_384, config: { rateLimit: { ...BOARD_WAIT_RATE_LIMIT, keyGenerator: bucket } } },
+    async (request, reply) => {
+      const raw = (request.body as { mints?: unknown } | null)?.mints;
+      if (!Array.isArray(raw) || raw.length > MAX_BOARD_WAIT_MINTS)
+        return reply.code(400).send({ error: "invalid mints" });
+      const mints = [...new Set(raw)].filter((m): m is string => typeof m === "string" && isMintAddress(m));
+      reply.header("Cache-Control", "no-store");
+      if (!opts.snapshotWrites) return { tokens: {}, pushed: false };
+      const { changed, pushed } = await boardWaits.wait(mints, BOARD_WAIT_MS, closedSignal(reply));
+      return { tokens: changed.length ? await statsOverlay(changed) : {}, pushed };
+    },
+  );
+
+  /**
    * One read of the site's bubble map for the extension's copy of it (user ask 2026-10-25): the
    * call, if extensionSite.ts lists it, replayed in this process as the key's owner, and its
    * status and body handed back. So the map in the extension reads what the owner's token view
@@ -591,19 +627,46 @@ export async function registerExtensionRoutes(
   );
 
   /** One Trade Buddy read: the pro status, the wallet's trades and the reader's models, side by side. */
-  async function readBuddy(userId: string, walletAddress: string, aiReviews: boolean): Promise<BuddyAnswer> {
+  async function readBuddy(
+    userId: string,
+    walletAddress: string,
+    aiReviews: boolean,
+    extra: readonly string[],
+  ): Promise<BuddyAnswer> {
     const now = Date.now();
-    const [status, view, calls] = await Promise.all([
+    const wallets = [walletAddress, ...extra];
+    const trades = opts.proTrades;
+    const [status, looked, calls] = await Promise.all([
       cachedProStatus(opts.env, walletAddress).catch(() => null),
-      opts.proTrades ? opts.proTrades.look(walletAddress, "full-open") : null,
+      trades
+        ? Promise.all(
+            wallets.map((wallet) =>
+              trades.look(wallet, "buddy").then(
+                (view) => ({ ...view, wallet }),
+                // One wallet that can't be read leaves the others' coins on the list.
+                () => null,
+              ),
+            ),
+          )
+        : [],
       feedCallsOf(userId),
     ]);
     const pro = status?.pro === true;
-    if (!view) return { coins: [], solUsd: null, pro, readAt: new Date(now).toISOString(), chainAt: null };
-    const mints = buddyCoins(view, now).map((c) => c.mint);
+    const views = looked.flatMap((v) => (v === null ? [] : [v]));
+    if (views.length === 0)
+      return {
+        coins: [],
+        wallets,
+        summary: null,
+        solUsd: null,
+        pro,
+        readAt: new Date(now).toISOString(),
+        chainAt: null,
+      };
+    const mints = [...new Set(views.flatMap((view) => buddyCoins(view, now).map((c) => c.mint)))];
     const { tokens } = mints.length ? await lookupOverlay(userId, mints, calls, now) : { tokens: [] };
     return buddyAnswer(
-      view,
+      views,
       tokens.map((t) => (aiReviews ? t : { ...t, ai: null })),
       pro,
       now,
@@ -616,8 +679,13 @@ export async function registerExtensionRoutes(
    * gets the last one at once and a fresher one is read behind it for the next. Only the first read,
    * or one after BUDDY_KEEP_MS without a poll, waits. A new trade shows one poll later than before.
    */
-  async function buddyFor(userId: string, walletAddress: string, aiReviews: boolean): Promise<BuddyAnswer> {
-    const key = `${userId}:${walletAddress}:${aiReviews}`;
+  async function buddyFor(
+    userId: string,
+    walletAddress: string,
+    aiReviews: boolean,
+    extra: readonly string[] = [],
+  ): Promise<BuddyAnswer> {
+    const key = `${userId}:${walletAddress}:${aiReviews}:${extra.join(",")}`;
     const now = Date.now();
     let entry = buddyAnswers.get(key);
     if (entry && !entry.reading && now - entry.at >= BUDDY_KEEP_MS) {
@@ -631,7 +699,7 @@ export async function registerExtensionRoutes(
     }
     const current = entry;
     if (!current.reading && now - current.at >= BUDDY_FRESH_MS) {
-      current.reading = readBuddy(userId, walletAddress, aiReviews)
+      current.reading = readBuddy(userId, walletAddress, aiReviews, extra)
         .then((body) => {
           current.body = body;
           current.at = Date.now();
@@ -654,9 +722,16 @@ export async function registerExtensionRoutes(
   app.get(
     "/buddy",
     { config: { rateLimit: { ...BUDDY_RATE_LIMIT, keyGenerator: bucket } } },
-    async (request): Promise<BuddyAnswer> => {
+    async (request, reply) => {
       const { userId, walletAddress, aiReviews } = request.extensionClient!;
-      return buddyFor(userId, walletAddress, aiReviews);
+      // The reader's other wallets (Axiom's, Terminal's...), so trades made there are followed too
+      // (user ask 2026-10-27). Public addresses only; a few at most, as each is followed on chain.
+      const raw = (request.query as { wallets?: unknown }).wallets;
+      const listed = typeof raw === "string" && raw.length > 0 ? raw.split(",") : [];
+      if (listed.length > BUDDY_EXTRA_WALLETS || listed.some((w) => !isMintAddress(w)))
+        return reply.code(400).send({ error: "invalid wallets" });
+      const extra = [...new Set(listed)].filter((w) => w !== walletAddress).sort();
+      return buddyFor(userId, walletAddress, aiReviews, extra) satisfies Promise<BuddyAnswer>;
     },
   );
 }

@@ -7,13 +7,16 @@ import {
   colorsOf,
   DEFAULT_TOOLTIP,
   needsMap,
+  pastLimits,
   pillParts,
   pillsNeedMap,
   shownLines,
   signalLook,
+  snoozed,
   type PillPart,
   type TooltipPrefs,
 } from "../shared/tooltip";
+import { SITES } from "../shared/types";
 import type {
   LookupAnswer,
   OverlayBubbleTotals,
@@ -85,8 +88,12 @@ export interface EngineDeps {
   totals?(mint: string): Promise<OverlayBubbleTotals | null>;
   /** The safety verdicts of coins on screen, while the hide-or-mark option is on. */
   safety?(mints: string[]): Promise<SafetyAnswer>;
-  /** The stats of coins on screen, while the pill-on-every-coin option is on. */
+  /** The stats of coins on screen, while the pill-on-every-coin option or the limits are on. */
   stats?(mints: string[]): Promise<StatsAnswer>;
+  /** The tooltip's Snooze: the worker saves it, and every tab redraws without the coin. */
+  snooze?(mint: string, minutes: number): void;
+  /** The tooltip's Look up: the side panel opens on the coin. */
+  openCoin?(mint: string): void;
 }
 
 interface RowState {
@@ -96,6 +103,8 @@ interface RowState {
   mark: SafetyMark | null;
   /** The row is hidden for failing it, in "hide" mode. */
   hidden: boolean;
+  /** The row is dimmed for being past the reader's limits. */
+  dimmed: boolean;
   /** The virtual list's slot it was hidden in, when it sits in one (slotOf). */
   slot: HTMLElement | null;
 }
@@ -181,7 +190,8 @@ export class OverlayEngine {
   applyTooltip(prefs: TooltipPrefs): void {
     const asked =
       (prefs.safety.mode !== "off" && this.tipPrefs.safety.mode === "off") ||
-      (prefs.boardStats.enabled && !this.tipPrefs.boardStats.enabled);
+      (prefs.boardStats.enabled && !this.tipPrefs.boardStats.enabled) ||
+      (prefs.limits.mode !== "off" && this.tipPrefs.limits.mode === "off");
     this.tipPrefs = prefs;
     for (const [row, state] of this.rows) this.draw(row, state);
     this.closeGaps();
@@ -212,7 +222,14 @@ export class OverlayEngine {
       const lines = shownLines(this.tipPrefs, this.settings);
       this.tooltip.show(
         badge,
-        tooltipBody(live, verdictFor(live, this.settings), lines, this.totals.get(mint)?.totals),
+        tooltipBody(live, verdictFor(live, this.settings), lines, this.totals.get(mint)?.totals, Date.now(), {
+          sites: SITES.filter((site) => this.settings.sites[site] && site !== this.adapter.site),
+          lookUp: (m) => this.deps.openCoin?.(m),
+          snooze: (m, minutes) => {
+            this.deps.snooze?.(m, minutes);
+            this.tooltip.hideNow();
+          },
+        }),
         colorsOf(this.tipPrefs),
       );
     };
@@ -256,7 +273,7 @@ export class OverlayEngine {
       if (mint) withMint++;
       let state = this.rows.get(row);
       if (!state) {
-        state = { mint: null, decoration: null, mark: null, hidden: false, slot: null };
+        state = { mint: null, decoration: null, mark: null, hidden: false, dimmed: false, slot: null };
         this.rows.set(row, state);
         this.intersection?.observe(row);
       }
@@ -329,7 +346,7 @@ export class OverlayEngine {
     }
     // The board pills: coins the lookup says aren't alerts. Asked as the safety screen is.
     const stats = new Set<string>();
-    if (this.boardStatsOn()) {
+    if (this.boardNumbersOn()) {
       for (const [, state] of rows) {
         const mint = state.mint;
         if (!mint || this.statsAsked.has(mint)) continue;
@@ -373,6 +390,15 @@ export class OverlayEngine {
     return this.tipPrefs.boardStats.enabled && !!this.deps.stats;
   }
 
+  /** The board's numbers are wanted: for its pills, or for the reader's limits on a board. */
+  private boardNumbersOn(): boolean {
+    return (
+      !!this.deps.stats &&
+      (this.tipPrefs.boardStats.enabled ||
+        (this.tipPrefs.limits.mode !== "off" && !isTokenPage(this.adapter.site, location.pathname)))
+    );
+  }
+
   private async readStats(mints: string[], now: number): Promise<void> {
     this.lastStats = now;
     for (const mint of mints) this.statsAsked.add(mint);
@@ -390,6 +416,8 @@ export class OverlayEngine {
       for (const [mint, v] of this.board) if (now - v.at > 10 * BOARD_STATS_MS) this.board.delete(mint);
     }
     for (const [row, state] of this.rows) if (state.mint && asked.includes(state.mint)) this.draw(row, state);
+    // Coins hidden past the reader's limits leave a gap in a virtual list otherwise.
+    if (this.tipPrefs.limits.mode === "hide") this.closeGaps();
   }
 
   private async readSafety(mints: string[], now: number): Promise<void> {
@@ -418,7 +446,11 @@ export class OverlayEngine {
 
   /** A board coin's token, when the option is on and its numbers are no older than the reader allows. */
   private boardToken(mint: string): OverlayToken | null {
-    if (!this.boardStatsOn()) return null;
+    return this.boardStatsOn() ? this.freshBoardToken(mint) : null;
+  }
+
+  /** A board coin's numbers, when they are no older than the reader allows. */
+  private freshBoardToken(mint: string): OverlayToken | null {
     const token = this.board.get(mint)?.token;
     const at = token?.stats ? Date.parse(token.stats.takenAt) : NaN;
     if (!token || !Number.isFinite(at)) return null;
@@ -432,7 +464,19 @@ export class OverlayEngine {
     const failed =
       verdict?.passed === false && this.tipPrefs.safety.columns[columnOf(row, this.columns.boxes)];
     const mode = this.tipPrefs.safety.mode;
-    if (failed && mode === "hide") {
+    // The reader's own limits (user ask 2026-10-27), on the numbers the coin's alert or the board's
+    // read brought; a coin's own page is never dimmed or hidden.
+    const numbers =
+      state.mint &&
+      !this.paused &&
+      this.tipPrefs.limits.mode !== "off" &&
+      !isTokenPage(this.adapter.site, location.pathname)
+        ? (this.tokens.get(state.mint)?.token ?? this.freshBoardToken(state.mint))
+        : null;
+    const past = numbers ? pastLimits(this.tipPrefs, numbers.stats).length > 0 : false;
+    const limitMode = this.tipPrefs.limits.mode;
+    this.dim(row, state, past && limitMode === "dim");
+    if ((failed && mode === "hide") || (past && limitMode === "hide")) {
       state.mark?.remove();
       state.mark = null;
       // In a virtual list the slot keeps its place, so it is hidden and the slots below move up
@@ -457,6 +501,19 @@ export class OverlayEngine {
     } else {
       state.mark?.remove();
       state.mark = null;
+    }
+  }
+
+  /** Dims the row past the reader's limits, or undoes it. */
+  private dim(row: HTMLElement, state: RowState, on: boolean): void {
+    if (!on && !state.dimmed) return;
+    if (on) {
+      if (row.style.getPropertyValue("opacity") !== "0.35")
+        row.style.setProperty("opacity", "0.35", "important");
+      state.dimmed = true;
+    } else {
+      if (row.style.getPropertyPriority("opacity") === "important") row.style.removeProperty("opacity");
+      state.dimmed = false;
     }
   }
 
@@ -510,6 +567,7 @@ export class OverlayEngine {
 
   private clearSafety(row: HTMLElement, state: RowState): void {
     this.showRow(row, state);
+    this.dim(row, state, false);
     state.mark?.remove();
     state.mark = null;
   }
@@ -525,7 +583,8 @@ export class OverlayEngine {
     const alerted = state.mint ? this.tokens.get(state.mint)?.token : null;
     // Not an alert: the board pill, while its option is on and its numbers are fresh enough.
     const token = alerted ?? (state.mint ? this.boardToken(state.mint) : null);
-    if (!token || this.paused) {
+    // A snoozed coin keeps no ring or pill until it wakes (user ask 2026-10-27).
+    if (!token || this.paused || snoozed(this.tipPrefs, state.mint!)) {
       state.decoration?.remove();
       return;
     }

@@ -77,5 +77,20 @@ export const api = {
       "/stats",
       { mints },
     ),
-  buddy: (key: string) => call<BuddyAnswer>(key, "GET", "/buddy"),
+  /** Trade Buddy, with the reader's other wallets followed too (up to three). */
+  buddy: (key: string, wallets: readonly string[] = []) =>
+    call<BuddyAnswer>(
+      key,
+      "GET",
+      wallets.length ? `/buddy?wallets=${wallets.map(encodeURIComponent).join(",")}` : "/buddy",
+    ),
+  /**
+   * Held until one of the coins gets a new snapshot (25 s at most), then their new numbers
+   * (live board pills); `pushed: false` when the API couldn't hold the ask.
+   */
+  statsWait: (key: string, mints: string[]) =>
+    call<{
+      tokens: Record<string, Omit<OverlayToken, "modelCalls" | "filterMatches" | "ai">>;
+      pushed: boolean;
+    }>(key, "POST", "/stats/wait", { mints }, AbortSignal.timeout(40_000)),
 };

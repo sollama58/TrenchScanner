@@ -1,5 +1,5 @@
 import { isMintAddress } from "../shared/mint";
-import type { BuddyCoin, OverlaySettings, OverlayToken } from "../shared/types";
+import type { BuddyCoin, BuddySummary, OverlaySettings, OverlayToken } from "../shared/types";
 import { verdictFor } from "../shared/verdict";
 import { ago, tokenCard } from "./card";
 
@@ -133,11 +133,46 @@ export function tradeBox(coin: BuddyCoin, symbol: string): HTMLDetailsElement {
 }
 
 /** One Trade Buddy coin: its token card with the entry as its anchor, the PnL, and the trade box. */
+/**
+ * The last 24 hours across the wallets followed (user ask 2026-10-27): the result, sold and still
+ * held, the win rate, the best trade, and how much went in.
+ */
+export function summaryBlock(summary: BuddySummary): HTMLElement {
+  const box = el("div", "summary");
+  const stat = (value: string, label: string, cls = "") => {
+    const cell = el("div", `stat ${cls}`.trim());
+    cell.append(el("b", "", value), el("span", "", label));
+    return cell;
+  };
+  const signed = (v: number | null) => (v === null ? "–" : `${v >= 0 ? "+" : ""}${sol(v)}`);
+  const tone = (v: number | null) => (v === null || v === 0 ? "" : v > 0 ? "up" : "down");
+  const total = summary.unrealizedSol === null ? null : summary.realizedSol + summary.unrealizedSol;
+  box.append(
+    stat(signed(total), "result, 24h", tone(total)),
+    stat(signed(summary.realizedSol), "sold", tone(summary.realizedSol)),
+    stat(signed(summary.unrealizedSol), "still held", tone(summary.unrealizedSol)),
+    stat(
+      summary.winRatePct === null ? "–" : `${Math.round(summary.winRatePct)}%`,
+      `won, of ${summary.closed} closed`,
+    ),
+    stat(summary.bestMultiple === null ? "–" : `${summary.bestMultiple.toFixed(1)}x`, "best trade"),
+    stat(sol(summary.volumeSol), `in, ${summary.buys} buys`),
+  );
+  return box;
+}
+
+/** A wallet, shortened, as the cards and Settings name it. */
+export function shortWallet(wallet: string): string {
+  return `${wallet.slice(0, 4)}…${wallet.slice(-4)}`;
+}
+
 export function buddyCard(
   coin: BuddyCoin,
   settings: OverlaySettings,
   pro: boolean,
   now = Date.now(),
+  /** The wallets followed: with more than one, each card says which traded it. */
+  wallets: readonly string[] = [],
 ): HTMLElement {
   const token = coin.token ?? bareToken(coin);
   const card = tokenCard(token, verdictFor(token, settings), settings, now, {
@@ -155,7 +190,13 @@ export function buddyCard(
   const pnl = pnlBlock(coin);
   if (foot) card.insertBefore(pnl, foot);
   else card.append(pnl);
-  if (pro && isMintAddress(coin.mint)) card.append(tradeBox(coin, token.symbol ?? "it"));
+  if (wallets.length > 1 && coin.wallet) {
+    const own = coin.wallet === wallets[0];
+    pnl.append(el("p", "wallet-tag", `${own ? "Account wallet" : "Wallet"} ${shortWallet(coin.wallet)}`));
+  }
+  // The trade box signs with the account's wallet, so only its own coins get one.
+  if (pro && isMintAddress(coin.mint) && (!coin.wallet || coin.wallet === wallets[0] || wallets.length === 0))
+    card.append(tradeBox(coin, token.symbol ?? "it"));
   if (coin.priceSource === "stored" && coin.priceAt && !coin.closed) {
     pnl.append(el("p", "note", `Priced at the last stored price, ${ago(coin.priceAt, now)} ago.`));
   }

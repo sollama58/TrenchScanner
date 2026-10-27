@@ -134,3 +134,53 @@ export async function notifyHolderReadingWritten(mint: string): Promise<void> {
     logger.warn("failed to publish holder reading notification", { error: String(err) });
   }
 }
+
+/**
+ * Channel the scanner announces newly written snapshots on, for the extension's live board pills
+ * (user ask 2026-10-27): the API wakes the boards waiting on those coins, which read their new
+ * numbers at once instead of on their next 30-second ask. Batched (SNAPSHOT_NOTICE_MS), since
+ * the scan writes many snapshots a second; same contract as the others: mints only, best effort,
+ * and the boards' own re-ask covers a missed one.
+ */
+export const SNAPSHOTS_CHANNEL = "trenchscanner_snapshots";
+
+export interface SnapshotsNotification {
+  mints: string[];
+}
+
+/** How long snapshot notices are gathered before one NOTIFY goes out. */
+export const SNAPSHOT_NOTICE_MS = 2_000;
+/** Mints per NOTIFY: a payload must stay under Postgres's 8000 bytes (44 characters a mint). */
+const SNAPSHOT_NOTICE_MINTS = 150;
+/** Mints gathered at most between flushes; past it the rest wait for the boards' own re-ask. */
+const SNAPSHOT_NOTICE_MAX = 5_000;
+const snapshotNotices = new Set<string>();
+let snapshotTimer: NodeJS.Timeout | undefined;
+
+/** Notes a snapshot written for `mint`; announced with the others within SNAPSHOT_NOTICE_MS. Never throws. */
+export function noteSnapshotForBoards(mint: string): void {
+  if (snapshotNotices.size >= SNAPSHOT_NOTICE_MAX) return;
+  snapshotNotices.add(mint);
+  if (snapshotTimer) return;
+  snapshotTimer = setTimeout(() => void flushSnapshotNotices(), SNAPSHOT_NOTICE_MS);
+  snapshotTimer.unref?.();
+}
+
+/** Sends the gathered snapshot notices now. Exported for tests. */
+export async function flushSnapshotNotices(): Promise<void> {
+  clearTimeout(snapshotTimer);
+  snapshotTimer = undefined;
+  const mints = [...snapshotNotices];
+  snapshotNotices.clear();
+  if (mints.length === 0) return;
+  const payloads: string[] = [];
+  for (let i = 0; i < mints.length; i += SNAPSHOT_NOTICE_MINTS)
+    payloads.push(
+      JSON.stringify({ mints: mints.slice(i, i + SNAPSHOT_NOTICE_MINTS) } satisfies SnapshotsNotification),
+    );
+  try {
+    await prisma.$executeRaw`SELECT pg_notify(${SNAPSHOTS_CHANNEL}, p) FROM unnest(${payloads}::text[]) AS p`;
+  } catch (err) {
+    logger.warn("failed to publish snapshot notifications", { error: String(err), count: mints.length });
+  }
+}

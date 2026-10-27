@@ -4,7 +4,7 @@ import { base58Length, isMintAddress } from "./mint";
 import { DEFAULT_SETTINGS } from "./settings";
 import { token } from "./testToken";
 import type { OverlaySettings } from "./types";
-import { alertCall, firstAlert, verdictFor } from "./verdict";
+import { alertCall, devReading, firstAlert, trendOf, verdictFor } from "./verdict";
 
 const MINT = "So11111111111111111111111111111111111111112";
 const PUMP = "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN";
@@ -128,6 +128,54 @@ describe("the panel's alerts (user ask 2026-10-25)", () => {
     expect(alertNotice(failing)).toEqual({
       title: "RING · Fresh",
       message: "Market cap $5.1K · fails the safety screen",
+    });
+  });
+});
+
+describe("five-minute trends and the dev's record", () => {
+  it("arrows a flag that moved by two points (or one wallet) since the earlier scan", () => {
+    const t = (bundled: number, snipers: number) =>
+      token({
+        stats: {
+          ...token().stats!,
+          bundledSupplyPct: 9,
+          sniperTopHolderCount: 3,
+          earlier: {
+            takenAt: new Date().toISOString(),
+            bundledSupplyPct: bundled,
+            sniperTopHolderCount: snipers,
+          },
+        },
+      });
+    expect(trendOf("bundledSupplyPct", t(5, 3))).toBe("↑");
+    expect(trendOf("bundledSupplyPct", t(8, 3))).toBe("");
+    expect(trendOf("bundledSupplyPct", t(12, 3))).toBe("↓");
+    expect(trendOf("sniperTopHolderCount", t(9, 2))).toBe("↑");
+    // No earlier scan (or an older API): no arrow.
+    expect(trendOf("bundledSupplyPct", token())).toBe("");
+  });
+
+  it("reads the creator's launches, its level from the launch score, and its funder's family", () => {
+    expect(devReading(token())).toBeNull();
+    expect(devReading(token({ dev: { wallet: MINT, record: null, family: null } }))).toMatchObject({
+      short: "DEV new",
+      level: "ok",
+      family: null,
+    });
+    const risky = devReading(
+      token({
+        dev: {
+          wallet: MINT,
+          record: { score: 82, launches: 6, inBand: 2, wins: 0, stops: 4 },
+          family: { creators: 5, score: 75, launches: 19, inBand: 4, wins: 1, stops: 9 },
+        },
+      }),
+    );
+    expect(risky).toEqual({
+      short: "DEV 6L 0W",
+      text: "6 launches, 0 won, 4 stopped out",
+      level: "hi",
+      family: "Funder paid for 5 creators: 19 launches, 1 won",
     });
   });
 });

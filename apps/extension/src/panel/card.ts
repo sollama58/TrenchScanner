@@ -1,6 +1,6 @@
 import { isMintAddress } from "../shared/mint";
 import type { OverlaySafety, OverlaySettings, OverlayToken, Site } from "../shared/types";
-import { firstAlert, type RowVerdict } from "../shared/verdict";
+import { devReading, firstAlert, type RowVerdict } from "../shared/verdict";
 
 /**
  * One alerted token in the panel. Text from the token (names, filter names, the AI's reasoning)
@@ -170,6 +170,8 @@ export function tokenCard(
   now = Date.now(),
   /** The market cap the move is measured from, in place of the first alert's (Trade Buddy's entry). */
   anchor?: { label: string; mcapUsd: number | null; nowMcapUsd?: number | null; at?: string },
+  /** The card's Snooze button; none without it. */
+  snooze?: (mint: string, minutes: number) => void,
 ): HTMLElement {
   const card = el("article", `card ${verdict.ring ?? ""}`.trim());
   const valid = isMintAddress(token.mint);
@@ -210,6 +212,13 @@ export function tokenCard(
 
   if (token.safety) card.append(safetyLine(token.safety));
 
+  // The creator's other launches (user ask 2026-10-27).
+  const dev = devReading(token);
+  if (dev) {
+    card.append(line("Dev", dev.text, dev.level === "hi" ? "down" : dev.level === "mid" ? "warn" : ""));
+    if (dev.family) card.append(el("p", "note", `${dev.family}.`));
+  }
+
   if (verdict.flags.length > 0) {
     const flags = el("div", "flags");
     for (const flag of verdict.flags)
@@ -232,7 +241,51 @@ export function tokenCard(
     open.append(link("TrenchScanner", trenchUrl(token.mint), "site ts"));
   }
   foot.append(open);
-  if (valid) foot.append(copyButton(token.mint));
+  if (valid) {
+    const end = el("div", "end");
+    if (snooze) {
+      const z = el("button", "ca snooze", "Snooze 1h");
+      z.type = "button";
+      z.title = "Hide this coin's card, ring, pill and alerts for an hour";
+      z.addEventListener("click", () => snooze(token.mint, 60));
+      end.append(z);
+    }
+    end.append(copyButton(token.mint));
+    foot.append(end);
+  }
   card.append(foot);
   return card;
+}
+
+/**
+ * The alerts' last hours at a glance (user ask 2026-10-27): how many, how many reached 2x since
+ * their alert (their recorded peak, or the cap now), the best of them, and the median peak.
+ */
+export function scorecard(tokens: readonly OverlayToken[]): HTMLElement | null {
+  const runs = tokens.flatMap((token) => {
+    const at = firstAlert(token)?.mcapUsd ?? null;
+    if (at === null || at <= 0) return [];
+    const now = token.liveMcapUsd ?? token.stats?.marketCapUsd ?? 0;
+    const peaks = [...token.modelCalls, ...token.filterMatches].map((a) => a.peakMcapUsd ?? 0);
+    return [{ token, x: Math.max(now, ...peaks) / at }];
+  });
+  if (runs.length === 0) return null;
+  const sorted = runs.map((r) => r.x).sort((a, b) => a - b);
+  const mid = sorted.length / 2;
+  const median = sorted.length % 2 ? sorted[Math.floor(mid)]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+  const best = runs.reduce((a, b) => (b.x > a.x ? b : a));
+  const doubled = runs.filter((r) => r.x >= 2).length;
+  const box = el("div", "score");
+  const stat = (value: string, label: string, cls = "") => {
+    const cell = el("div", `stat ${cls}`.trim());
+    cell.append(el("b", "", value), el("span", "", label));
+    return cell;
+  };
+  box.append(
+    stat(String(runs.length), "alerts, 6h"),
+    stat(String(doubled), "reached 2x", doubled > 0 ? "up" : ""),
+    stat(`${best.x.toFixed(1)}x`, `best, ${best.token.symbol ?? "?"}`, best.x >= 2 ? "up" : ""),
+    stat(`${median.toFixed(1)}x`, "median peak"),
+  );
+  return box;
 }

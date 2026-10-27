@@ -56,6 +56,10 @@ import {
 
 /** The coins the panel lists, and the ones its handle shows. */
 const PANEL_COINS = 10;
+/** The extension's Trade Buddy: coins held, and coins sold out within BUDDY_CLOSED_WINDOW_MS. */
+const BUDDY_OPEN_COINS = 40;
+const BUDDY_CLOSED_COINS = 20;
+const BUDDY_CLOSED_WINDOW_MS = 24 * 3_600_000;
 const HANDLE_COINS = 3;
 /** The statistics' window, and how far back trades are read for them. */
 const STATS_HOURS = 24;
@@ -132,7 +136,7 @@ export interface ProTradesOptions {
 }
 
 /** What a look at a wallet's trades answers: the handle, the panel (open or closed), or Portfolio. */
-export type TradesShape = "brief" | "portfolio" | "full-open" | "full";
+export type TradesShape = "brief" | "portfolio" | "full-open" | "full" | "buddy";
 
 /** The wallet's followed trades, shared by the TRADES panel and the extension's Trade Buddy. */
 export interface ProTrades {
@@ -140,7 +144,7 @@ export interface ProTrades {
    * Follows the wallet, catches up when due (waiting up to CATCH_UP_WAIT_MS), and answers `shape`,
    * reused ANSWER_TTL_MS per wallet and shape. Nothing here checks who may look: the caller does.
    */
-  look(wallet: string, shape: "full" | "full-open"): Promise<FullTradesView>;
+  look(wallet: string, shape: "full" | "full-open" | "buddy"): Promise<FullTradesView>;
   look(wallet: string, shape: TradesShape): Promise<unknown>;
   /** Stops the Helius stream, when there is one. */
   stop(): Promise<void>;
@@ -254,7 +258,8 @@ export function createProTrades(opts: ProTradesOptions): ProTrades {
     onEntry: scanEntry,
     // A new trade changes the positions: the next look answers afresh and reads the balances again.
     onRecorded: (wallet) => {
-      for (const shape of ["brief", "portfolio", "full-open", "full"]) answers.delete(`${wallet}:${shape}`);
+      for (const shape of ["brief", "portfolio", "full-open", "full", "buddy"])
+        answers.delete(`${wallet}:${shape}`);
       balances.delete(wallet);
     },
   });
@@ -337,7 +342,7 @@ export function createProTrades(opts: ProTradesOptions): ProTrades {
         ? await handleView(wallet)
         : shape === "portfolio"
           ? await portfolioView(wallet)
-          : await fullView(wallet, shape === "full-open");
+          : await fullView(wallet, shape !== "full", shape === "buddy");
     answers.set(key, { at: Date.now(), body });
     if (answers.size > 2_000) answers.delete(answers.keys().next().value!);
     return body;
@@ -411,10 +416,19 @@ export function createProTrades(opts: ProTradesOptions): ProTrades {
     };
   }
 
-  async function fullView(wallet: string, panelOpen: boolean): Promise<FullTradesView> {
+  async function fullView(wallet: string, panelOpen: boolean, buddy = false): Promise<FullTradesView> {
     const { rows, chain } = await checkedRows(wallet);
     const positions = positionsOf(rows).filter(inWindow);
-    const shown = positions.slice(0, PANEL_COINS);
+    // The panel's newest ten; the extension's Trade Buddy every coin still held, and the ones sold
+    // out in the last day (user ask 2026-10-27: a coin held from before ten newer trades fell off).
+    const shown = buddy
+      ? [
+          ...positions.filter((p) => !p.closed).slice(0, BUDDY_OPEN_COINS),
+          ...positions
+            .filter((p) => p.closed && p.lastTradeAt.getTime() > Date.now() - BUDDY_CLOSED_WINDOW_MS)
+            .slice(0, BUDDY_CLOSED_COINS),
+        ].sort((a, b) => b.lastTradeAt.getTime() - a.lastTradeAt.getTime())
+      : positions.slice(0, PANEL_COINS);
     const since = new Date(Date.now() - STATS_HOURS * 3_600_000);
     const windowRows = rows.filter((r) => r.at > since);
     // Every trade that ran in the window, a coin's earlier round trips included.

@@ -33,12 +33,18 @@ import {
   type TipLine,
   type ToastPrefs,
   type TooltipPrefs,
+  LIMIT_IDS,
+  type LimitMode,
+  MAX_BUDDY_WALLETS,
+  RUN_LEVELS,
+  snoozed,
 } from "../shared/tooltip";
+import { isMintAddress } from "../shared/mint";
 import { verdictFor } from "../shared/verdict";
 import { siteMapNode } from "../map/siteMap";
 import { BOARD_COLUMNS, type BoardColumn } from "../content/columns";
-import { buddyCard } from "./buddy";
-import { SITE_NAMES, tokenCard } from "./card";
+import { buddyCard, shortWallet, summaryBlock } from "./buddy";
+import { scorecard, SITE_NAMES, tokenCard } from "./card";
 import { holderList, mintFrom } from "./coin";
 import { panelAlerts } from "../shared/alerts";
 
@@ -254,7 +260,11 @@ function alertsView(saved: OverlaySettings): HTMLElement[] {
     return parts;
   }
   const now = Date.now();
-  const shown = panelAlerts(feed.tokens, settings, tipPrefs.panel);
+  const listed = panelAlerts(feed.tokens, settings, tipPrefs.panel);
+  // Snoozed coins sit out until they wake (user ask 2026-10-27); Settings can wake them early.
+  const shown = listed.filter(({ token }) => !snoozed(tipPrefs, token.mint, now));
+  const score = scorecard(listed.map(({ token }) => token));
+  if (score) parts.push(score);
   if (shown.length === 0) {
     parts.push(
       el("p", {
@@ -266,7 +276,7 @@ function alertsView(saved: OverlaySettings): HTMLElement[] {
   }
   const list = el("div", { className: "list" });
   for (const { token, verdict } of shown) {
-    const card = tokenCard(token, verdict, settings, now);
+    const card = tokenCard(token, verdict, settings, now, undefined, snoozeCoin);
     paintSignal(card, verdict);
     const why = card.querySelector("details");
     if (why) {
@@ -290,6 +300,14 @@ function alertsView(saved: OverlaySettings): HTMLElement[] {
     void send({ type: "alertsSeen", mints: shown.map(({ token }) => token.mint) });
   parts.push(list);
   return parts;
+}
+
+/** Snoozes a coin from its card: the worker saves it, and every page and this panel redraw. */
+function snoozeCoin(mint: string, minutes: number): void {
+  const until = Date.now() + minutes * 60_000;
+  tipPrefs = { ...tipPrefs, snoozed: { ...tipPrefs.snoozed, [mint]: until } };
+  draw();
+  void send({ type: "snooze", mint, minutes });
 }
 
 /** A card wears its model's or filter's own colour, where the reader picked one (Settings). */
@@ -398,17 +416,18 @@ function buddyView(settings: OverlaySettings): HTMLElement[] {
         el("p", {
           className: "note",
           textContent:
-            "Held coins stay listed; sold ones for a day. Trades are read from the chain, usually within seconds.",
+            "Held coins stay listed; sold ones for a day. Trades are read from the chain, usually within seconds. Trading from Axiom's, Terminal's or another wallet? Add it in Settings → Trade Buddy wallets.",
         }),
       ),
     );
     return parts;
   }
   const now = Date.now();
+  if (answer.summary && answer.summary.trades > 0) parts.push(summaryBlock(answer.summary));
   const list = el("div", { className: "list" });
   const shownMaps = new Set<string>();
   for (const coin of answer.coins) {
-    const card = buddyCard(coin, settings, answer.pro, now);
+    const card = buddyCard(coin, settings, answer.pro, now, answer.wallets ?? []);
     const why = card.querySelector("details.why") as HTMLDetailsElement | null;
     if (why) {
       why.open = openWhy.has(coin.mint);
@@ -491,7 +510,7 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
     ),
   );
 
-  parts.push(panelSection());
+  parts.push(panelSection(), runsSection(), buddyWalletsSection());
 
   const flags = FLAG_IDS.map((id) => {
     const pref = settings.flags[id];
@@ -739,6 +758,7 @@ function ringDisplaySections(settings: OverlaySettings): HTMLElement[] {
     pillBox,
     secondBox,
     boardBox,
+    limitsSection(),
     tipBox,
     toastSection(),
     safetySection(),
@@ -1009,6 +1029,196 @@ function panelSection(): HTMLElement {
       "var(--filter)",
       (on) => put({ badge: on }),
     ),
+    ...snoozedRow(),
+  );
+}
+
+/** How many coins are snoozed, and a button that wakes them all. */
+function snoozedRow(): HTMLElement[] {
+  const count = Object.keys(tipPrefs.snoozed).filter((m) => snoozed(tipPrefs, m)).length;
+  if (count === 0) return [];
+  const wake = el("button", { className: "link", textContent: "Wake them all" });
+  wake.addEventListener("click", () => {
+    tipPrefs = { ...tipPrefs, snoozed: {} };
+    void send({ type: "saveTooltip", prefs: tipPrefs });
+    wake.disabled = true;
+    wake.textContent = "Woken";
+  });
+  return [
+    el("p", { className: "note", textContent: `${count} coin${count === 1 ? "" : "s"} snoozed. ` }, wake),
+  ];
+}
+
+/**
+ * Run alerts (user ask 2026-10-27): a notification when an alert reaches 2x, 3x, 5x or 10x its
+ * alert's market cap, and when it falls a set share below it. In both builds.
+ */
+function runsSection(): HTMLElement {
+  const put = (change: Partial<TooltipPrefs["runs"]>) => {
+    tipPrefs = { ...tipPrefs, runs: { ...tipPrefs.runs, ...change } };
+    void send({ type: "saveTooltip", prefs: tipPrefs });
+  };
+  const levels = el(
+    "div",
+    { className: "sites" },
+    ...RUN_LEVELS.map((level) => {
+      const box = el("input", { type: "checkbox", checked: tipPrefs.runs.levels[level] });
+      box.addEventListener("change", () =>
+        put({ levels: { ...tipPrefs.runs.levels, [level]: box.checked } }),
+      );
+      return el("label", {}, box, `${level}x`);
+    }),
+  );
+  const drop = el("input", {
+    type: "number",
+    min: "0",
+    max: "95",
+    step: "5",
+    value: String(tipPrefs.runs.dropPct),
+  });
+  drop.setAttribute("aria-label", "Notify when down this many percent from the alert; 0 for never");
+  drop.addEventListener("change", () => {
+    const n = Math.round(Number(drop.value));
+    if (!Number.isFinite(n) || n < 0 || n > 95) {
+      drop.value = String(tipPrefs.runs.dropPct);
+      return;
+    }
+    put({ dropPct: n });
+  });
+  return section(
+    "Run alerts",
+    toggle(
+      "Notify me when an alert runs",
+      "A Chrome notification when one of your alerts reaches these multiples of its alert's market cap, each once.",
+      tipPrefs.runs.enabled,
+      "var(--ok)",
+      (on) => put({ enabled: on }),
+    ),
+    levels,
+    el(
+      "label",
+      { className: "opt" },
+      el("div", {}, "Also when it's down this many % from its alert (0 for never)"),
+      drop,
+    ),
+  );
+}
+
+/**
+ * The reader's other wallets for Trade Buddy (user ask 2026-10-27): trades made from Axiom's,
+ * Terminal's or any other wallet of theirs show up too. Public addresses only, three at most.
+ */
+function buddyWalletsSection(): HTMLElement {
+  const save = () => {
+    void send({ type: "saveTooltip", prefs: tipPrefs });
+    buddyReadAt = 0;
+  };
+  const list = el("div", { className: "wallets" });
+  const fill = () => {
+    list.replaceChildren(
+      ...tipPrefs.buddyWallets.map((wallet) => {
+        const remove = el("button", { className: "link", textContent: "Remove" });
+        remove.addEventListener("click", () => {
+          tipPrefs = { ...tipPrefs, buddyWallets: tipPrefs.buddyWallets.filter((w) => w !== wallet) };
+          save();
+          fill();
+        });
+        const code = el("code", { textContent: shortWallet(wallet), title: wallet });
+        return el("div", { className: "row" }, code, remove);
+      }),
+    );
+    form.hidden = tipPrefs.buddyWallets.length >= MAX_BUDDY_WALLETS;
+  };
+  const input = el("input", { type: "text", placeholder: "Wallet address", spellcheck: false });
+  input.setAttribute("aria-label", "Another wallet of yours");
+  const add = el("button", { type: "submit", className: "button", textContent: "Add" });
+  const problem = el("p", { className: "status warn" });
+  problem.hidden = true;
+  const form = el("form", { className: "lookup" }, input, add);
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const wallet = input.value.trim();
+    problem.hidden = true;
+    if (!isMintAddress(wallet)) {
+      problem.textContent = "That isn't a Solana wallet address.";
+      problem.hidden = false;
+      return;
+    }
+    if (tipPrefs.buddyWallets.includes(wallet)) {
+      input.value = "";
+      return;
+    }
+    tipPrefs = { ...tipPrefs, buddyWallets: [...tipPrefs.buddyWallets, wallet] };
+    input.value = "";
+    save();
+    fill();
+  });
+  fill();
+  return section(
+    "Trade Buddy wallets",
+    el("p", {
+      className: "note",
+      textContent: `Your account's wallet is always followed. Add up to ${MAX_BUDDY_WALLETS} more you trade from (Axiom's, Terminal's, a bot's), so those trades and their PnL show too. Their public addresses only: nothing here can trade.`,
+    }),
+    list,
+    form,
+    problem,
+  );
+}
+
+/** Rings: the reader's own limits, dimming or hiding board coins past them (user ask 2026-10-27). */
+function limitsSection(): HTMLElement {
+  const save = () => void send({ type: "saveTooltip", prefs: tipPrefs });
+  const mode = pick<LimitMode>(
+    "Coins past a limit",
+    tipPrefs.limits.mode,
+    [
+      ["off", "Leave them"],
+      ["dim", "Dim them"],
+      ["hide", "Hide them"],
+    ],
+    (m) => {
+      tipPrefs = { ...tipPrefs, limits: { ...tipPrefs.limits, mode: m } };
+      save();
+    },
+  );
+  const rows = LIMIT_IDS.map((id) => {
+    const meta = FLAG_LABELS[id];
+    const current = tipPrefs.limits.values[id];
+    const input = el("input", {
+      type: "number",
+      min: "0",
+      step: "1",
+      value: current === undefined ? "" : String(current),
+      placeholder: "off",
+    });
+    input.setAttribute("aria-label", `${meta.label} limit`);
+    input.addEventListener("change", () => {
+      const values = { ...tipPrefs.limits.values };
+      const n = Number(input.value);
+      if (input.value.trim() === "" || !Number.isFinite(n) || n < 0) {
+        delete values[id];
+        input.value = "";
+      } else values[id] = n;
+      tipPrefs = { ...tipPrefs, limits: { ...tipPrefs.limits, values } };
+      save();
+    });
+    return el(
+      "label",
+      { className: "opt" },
+      el("div", {}, `${meta.label}${meta.unit === "%" ? " %" : ""} above`),
+      input,
+    );
+  });
+  return section(
+    "Your limits on the boards",
+    el("p", {
+      className: "note",
+      textContent:
+        "A coin past any limit you fill in is dimmed or hidden on Axiom, Terminal and GMGN boards, alerts included. Uses TrenchScanner's newest numbers, so while on it sends the board's addresses to TrenchScanner.",
+    }),
+    mode,
+    ...rows,
   );
 }
 
@@ -1207,6 +1417,12 @@ async function refresh(): Promise<void> {
   }
   tipPrefs = cleanTooltip(await send<TooltipPrefs>({ type: "tooltip" }));
   applyColors();
+  // A page's Look up opened the panel: it opens on that coin.
+  const pending = status?.connected ? await send<string | null>({ type: "pendingCoin" }) : null;
+  if (pending && isMintAddress(pending)) {
+    view = "coin";
+    void lookUp(pending);
+  }
   draw();
   if (status?.connected) await poll();
 }
@@ -1225,6 +1441,13 @@ chrome.runtime.onMessage.addListener((message: unknown, sender) => {
       applyColors();
       if (view !== "settings" && view !== "coin") draw();
     });
+  }
+  // A page's Look up while the panel is open.
+  const m = message as { type?: unknown; mint?: unknown } | null;
+  if (m?.type === "openCoin" && typeof m.mint === "string" && isMintAddress(m.mint) && status?.connected) {
+    void send({ type: "pendingCoin" });
+    view = "coin";
+    void lookUp(m.mint);
   }
   if ((message as { type?: unknown } | null)?.type === "connected") {
     view = "alerts";
