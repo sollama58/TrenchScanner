@@ -1677,6 +1677,11 @@ export interface Leaderboard {
   selectedModel: string;
   /** Every model whose calls this user's combined feed shows, in roster order. */
   selectedModels: string[];
+  /**
+   * selectedModels pooled as one feed over the board's window: each coin once, at the first alert
+   * any of them sent on it. The Coverage Meter's combined hit rates (absent from older API builds).
+   */
+  mix?: FeedMixRecord;
   /** True when the user hasn't picked any (their feed follows the default). */
   followsDefault: boolean;
   /** Whether model calls are mixed into the combined feed at all. */

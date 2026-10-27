@@ -190,9 +190,10 @@ const LEADERBOARD_CACHE_TTL_MS = 3 * 60_000;
 
 /**
  * The feed comparison's records, one per mix of models: the top models' mix is the same for every
- * reader, and a reader's own picks rarely change, so a few hundred mixes cover everyone.
+ * reader, and a reader's own picks rarely change, so a few hundred mixes (per window: the Models
+ * tab reads its own mix over 1, 3 and 7 days) cover everyone.
  */
-const FEED_COMPARE_MAX_MIXES = 200;
+const FEED_COMPARE_MAX_MIXES = 500;
 
 const chooseModelSchema = z.object({
   /** A contestant id, or null to follow the default. */
@@ -488,7 +489,7 @@ export async function registerCuratedRoutes(
    * one query.
    */
   const pageCache = new Map<string, SharedCache<CuratedPage>>();
-  /** The feed comparison's pooled records, by mix (see /models/compare). */
+  /** Mixes' pooled records, by window and mix (/models/compare, and /models' `mix`). */
   const mixRecords = new SharedCacheMap<FeedMixRecord>(LEADERBOARD_CACHE_TTL_MS, FEED_COMPARE_MAX_MIXES);
 
   /**
@@ -630,8 +631,15 @@ export async function registerCuratedRoutes(
       savedFeed(request),
     ]);
     const feed = resolveFeedModels(state, saved);
-    // Informational: a failed read leaves the feed's catch off rather than failing the board.
-    const filters = await filterWins(request.user!.userId, board.window.since).catch(() => null);
+    // Informational: a failed read leaves the feed's catch, or the mix's record, off rather than
+    // failing the board.
+    const [filters, mix] = await Promise.all([
+      filterWins(request.user!.userId, board.window.since).catch(() => null),
+      mixRecords
+        .for(`${days}:${mixKey(feed.models)}`)
+        .get(() => mixFeedRecord(feed.models, board.window.since, state.lanes, board.catchLedger))
+        .catch(() => null),
+    ]);
     return {
       ...readerBoard(
         board,
@@ -649,6 +657,9 @@ export async function registerCuratedRoutes(
       // Every model whose calls the combined feed shows; the Live tab's checkboxes and the
       // Models tab's both read and write this one list.
       selectedModels: feed.models,
+      // The Coverage Meter's models pooled as one feed (each token once, at its first call): the
+      // combined hit rates and return under the meter.
+      ...(mix ? { mix } : {}),
       followsDefault: feed.followsDefault,
       showModelAlerts: saved.showModelAlerts,
       followBest: saved.followBest,
@@ -670,7 +681,9 @@ export async function registerCuratedRoutes(
     const mine = resolveFeedModels(state, saved).models;
     const since = board.window.since;
     const record = (models: readonly string[]) =>
-      mixRecords.for(mixKey(models)).get(() => mixFeedRecord(models, since, state.lanes, board.catchLedger));
+      mixRecords
+        .for(`${FEED_COMPARE_DAYS}:${mixKey(models)}`)
+        .get(() => mixFeedRecord(models, since, state.lanes, board.catchLedger));
     const [bestRecord, mineRecord] = await Promise.all([record(best), record(mine)]);
     return {
       days: FEED_COMPARE_DAYS,
