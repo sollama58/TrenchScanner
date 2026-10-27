@@ -1001,6 +1001,38 @@ describe("getTokensByAddresses fallback when DexScreener fails", () => {
     expect(client.usingFallback).toBe(true);
   });
 
+  it("keeps mints our own budget held back off the paid fallback, and DexScreener not down", async () => {
+    const geckoAsked = stub(() => false);
+    const client = new DexScreenerClient({
+      // A slot a minute: past the burst of 30 every batch waits far beyond the deadline.
+      requestsPerMinute: 1,
+      fallback: new GeckoTerminalClient({ priorityPerMinute: 6000, backgroundPerMinute: 6000 }),
+    });
+    // 40 batches of 30: 30 go out, 10 are held back.
+    const mints = Array.from({ length: 1_200 }, (_, i) => `mint${i}`);
+    const failed = new Set<string>();
+    const out = await client.getTokensByAddresses(mints, 5, {
+      retries: 0,
+      deadlineMs: 5_000,
+      failed,
+      priority: true,
+    });
+    expect(out).toHaveLength(900);
+    expect(failed.size).toBe(300);
+    // A lookup whose every batch our budget holds back is not an outage either.
+    const again = new Set<string>();
+    expect(
+      await client.getTokensByAddresses(
+        mints.slice(0, 300).map((m) => `${m}b`),
+        5,
+        { retries: 0, deadlineMs: 5_000, failed: again, priority: true },
+      ),
+    ).toEqual([]);
+    expect(again.size).toBe(300);
+    expect(geckoAsked).toEqual([]);
+    expect(client.usingFallback).toBe(false);
+  });
+
   it("does not send mints that may be unindexed to the fallback", async () => {
     const geckoAsked = stub(() => true);
     const client = new DexScreenerClient({
