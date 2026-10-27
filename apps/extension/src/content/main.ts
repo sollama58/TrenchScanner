@@ -46,6 +46,8 @@ async function main(): Promise<void> {
           (await ask<SafetyAnswer>({ type: "safety", mints })) ?? { verdicts: {}, problem: "offline" },
         stats: async (mints) =>
           (await ask<StatsAnswer>({ type: "stats", mints })) ?? { tokens: {}, problem: "offline" },
+        snooze: (mint, minutes) => void ask({ type: "snooze", mint, minutes }),
+        openCoin: (mint) => void ask({ type: "openCoin", mint }),
       });
       engine.applyTooltip(tooltip);
       engine.start();
@@ -79,7 +81,16 @@ async function main(): Promise<void> {
   // The popup saved new settings: the worker broadcasts them to every tab it serves.
   chrome.runtime.onMessage.addListener((message: unknown, sender) => {
     if (sender.id !== chrome.runtime.id) return;
-    const m = message as { type?: string; settings?: OverlaySettings; prefs?: unknown };
+    const m = message as {
+      type?: string;
+      settings?: OverlaySettings;
+      prefs?: unknown;
+      tokens?: StatsAnswer["tokens"];
+    };
+    // Live board pills (user ask 2026-10-27): new numbers the worker was told of, pushed to the tab.
+    if (m.type === "boardStats" && m.tokens && typeof m.tokens === "object") {
+      engine?.receiveStats(Object.keys(m.tokens), { tokens: m.tokens, problem: null });
+    }
     if (m.type === "settingsChanged" && m.settings) {
       settings = m.settings;
       sync();

@@ -40,13 +40,53 @@ export function readFlag(id: FlagId, token: OverlayToken, threshold: number | nu
       level: value ? "hi" : "ok",
     };
   }
-  const text = meta.unit === "%" ? `${Math.round(value)}%` : String(value);
+  const text = `${meta.unit === "%" ? `${Math.round(value)}%` : String(value)}${trendOf(id, token)}`;
   let level: FlagLevel = "ok";
   if (threshold !== null) {
     if (value > threshold) level = "hi";
     else if (value > threshold * 0.6) level = "mid";
   }
   return { id, label: meta.label, short: meta.short, text, level };
+}
+
+/**
+ * Which way a number moved since about five minutes back (the API's stats.earlier, user ask
+ * 2026-10-27: a bundle forming shows as EMPTY 3↑): "↑", "↓", or "" when it held, or when there is
+ * nothing to compare. A share must move two points and a count one, so a rounding wobble shows
+ * nothing.
+ */
+export function trendOf(id: FlagId, token: OverlayToken): string {
+  const now = token.stats?.[id];
+  const then = token.stats?.earlier?.[id];
+  if (typeof now !== "number" || typeof then !== "number") return "";
+  const step = FLAG_LABELS[id].unit === "%" ? 2 : 1;
+  if (now - then >= step) return "↑";
+  if (then - now >= step) return "↓";
+  return "";
+}
+
+/**
+ * The coin's creator in a few words (user ask 2026-10-27): how many coins it launched in 14 days,
+ * how many won and how many were stopped out, with its dev launch score as the level (higher is
+ * riskier). Null when the scanner doesn't know the creator.
+ */
+export function devReading(
+  token: OverlayToken,
+): { short: string; text: string; level: FlagLevel; family: string | null } | null {
+  const dev = token.dev;
+  if (!dev) return null;
+  const family = dev.family
+    ? `Funder paid for ${dev.family.creators} creators: ${dev.family.launches} launches, ${dev.family.wins} won`
+    : null;
+  const r = dev.record;
+  if (!r) return { short: "DEV new", text: "No other launches on record in 14 days", level: "ok", family };
+  const level: FlagLevel = r.score >= 70 ? "hi" : r.score >= 40 ? "mid" : "ok";
+  return {
+    short: `DEV ${r.launches}L ${r.wins}W`,
+    text: `${r.launches} ${r.launches === 1 ? "launch" : "launches"}, ${r.wins} won, ${r.stops} stopped out`,
+    level,
+    family,
+  };
 }
 
 /**

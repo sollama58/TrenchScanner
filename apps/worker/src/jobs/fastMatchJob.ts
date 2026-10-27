@@ -8,6 +8,7 @@ import {
   refreshScoreWeights,
   forEachWithConcurrency,
   EMPTY_TRADE_FLOW,
+  noteSnapshotForBoards,
   type Env,
   type DexScreenerClient,
   type OnChainProfile,
@@ -470,6 +471,7 @@ async function alertForToken(
   const snapshot = await prisma.tokenSnapshot.create({
     data: snapshotDataFor(token.id, scored, "fast"),
   });
+  noteSnapshotForBoards(token.mintAddress);
   noteFreshMarketData([token.id]);
   const created = await createMatchesForTargets({ token: fullToken, snapshot, scored, toAlert, env });
   noteAlertWallets(token.mintAddress, created > 0, scored.emptyTop10WalletPct !== undefined);

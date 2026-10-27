@@ -217,3 +217,35 @@ no free space on the card, it drops parts from the end until it does (the first 
 name and odds by default, are kept); where even the first part fits nowhere, it goes in the card's
 visible top-right corner over the content. A card wider than the column showing it no longer has
 its pill placed in the part the column cuts off, which left only the dot in view.
+
+0.9.0 (user ask 2026-10-27):
+
+- **Trend arrows.** A flag's number in the tooltip and pill carries ↑ or ↓ when it moved since the
+  coin's scan five minutes before (2 points for a share, 1 for a count), from the lookup's new
+  `stats.earlier`.
+- **Run alerts** (Settings → Run alerts, off by default). A Chrome notification when one of the
+  reader's alerts reaches 2x, 5x or 10x (3x optional) its alert's market cap, peaks between reads
+  included, each level once per coin; and, when set, once when it falls a share below it. What an
+  alert already did when the option is turned on is only marked.
+- **Tooltip actions** (a tooltip line, on by default): Copy CA, open on the other sites, Look up
+  (the side panel opens on the coin), Snooze 1h.
+- **Your limits on the boards** (Ring display → Your limits on the boards, off by default). A coin
+  past any limit the reader fills in (bundled, linked, empty top 10 and the others) is dimmed or
+  hidden on the boards, alerts included; never on a coin's own page. Like the board pills it reads
+  the board's numbers from `POST /ext/v1/stats`.
+- **Scorecard** above the alerts: how many in the last 6 hours, how many reached 2x at their peak,
+  the best and the median peak.
+- **Snooze**: a coin's ring, pill, panel card, toast and notifications sit out for an hour (from
+  the tooltip or its card); Settings → Panel wakes them all. A snoozed coin's alert doesn't
+  arrive as new when it wakes.
+- **Live board pills.** The worker announces the snapshots it writes (`trenchscanner_snapshots`,
+  batched every 2 s), and the extension holds one `POST /ext/v1/stats/wait` for the coins its
+  boards showed lately; a coin's new numbers reach its tab within seconds instead of on the
+  board's next 30-second ask, which stays as the fallback.
+- **Dev history.** The tooltip, panel cards and (optionally) the pill show the creator's launches
+  in 14 days, wins and stop-outs, coloured by its dev launch score, and its funder's family.
+- **Trade Buddy.** It lists every coin still held (up to 40) and those sold out in the last day,
+  where it showed the newest ten trades' coins before, so a coin held from before ten newer trades
+  dropped off. A 24-hour summary sits on top (result, sold, still held, win rate, best trade). And
+  Settings → Trade Buddy wallets follows up to three more wallets of the reader's, for trades made
+  from Axiom's, Terminal's or a bot's wallet, which the account's wallet alone never saw.

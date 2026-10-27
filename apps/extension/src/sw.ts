@@ -2,7 +2,15 @@ import { alertNotice, panelAlerts } from "./shared/alerts";
 import { api, ApiError, type SavedLook } from "./shared/api";
 import { isMintAddress } from "./shared/mint";
 import { DEFAULT_SETTINGS } from "./shared/settings";
-import { cleanTooltip, colorsOf, type TooltipPrefs } from "./shared/tooltip";
+import {
+  cleanTooltip,
+  colorsOf,
+  MAX_SNOOZE_MS,
+  RUN_LEVELS,
+  snoozed,
+  type TooltipPrefs,
+} from "./shared/tooltip";
+import { firstAlert } from "./shared/verdict";
 import { trenchUrl } from "./panel/card";
 import type {
   ContentRequest,
@@ -115,6 +123,34 @@ async function syncLook(key: string, remote: SavedLook | null | undefined): Prom
   }
 }
 
+/** Saves the display choices here and with the account, and tells every tab and the panel. */
+async function saveTooltip(raw: unknown): Promise<TooltipPrefs> {
+  const prefs = cleanTooltip(raw);
+  const savedAt = Date.now();
+  await chrome.storage.local.set({ tooltip: prefs, tooltipSavedAt: savedAt });
+  tellRingTabs({ type: "tooltipChanged", prefs });
+  // The icon's count follows the options at once (its switch, the unsafe coins left out).
+  void noteAlerts(lastTokens);
+  const { key, refused } = await stored();
+  if (key && !refused) void api.saveLook(key, { savedAt, prefs }).catch(() => undefined);
+  return prefs;
+}
+
+/**
+ * Snoozes a coin (user ask 2026-10-27): no ring, pill, card, toast or notification for it until it
+ * wakes; 0 minutes wakes it now. From a tooltip's button or a panel card.
+ */
+async function snooze(mint: unknown, minutes: unknown): Promise<void> {
+  if (typeof mint !== "string" || !isMintAddress(mint)) return;
+  const ms = typeof minutes === "number" && Number.isFinite(minutes) ? minutes * 60_000 : 0;
+  const prefs = await tooltipPrefs();
+  const next = { ...prefs.snoozed };
+  if (ms > 0) next[mint] = Date.now() + Math.min(ms, MAX_SNOOZE_MS);
+  else delete next[mint];
+  await saveTooltip({ ...prefs, snoozed: next });
+  void chrome.runtime.sendMessage({ type: "lookChanged" }).catch(() => undefined);
+}
+
 async function tooltipPrefs(): Promise<TooltipPrefs> {
   const { tooltip } = await chrome.storage.local.get("tooltip");
   return cleanTooltip(tooltip);
@@ -205,7 +241,9 @@ async function checkAlerts(tokens: readonly OverlayToken[], newlyRead: readonly 
   const saved = await currentSettings();
   // As the panel does: without the AI's verdicts, "only when the AI says buy" would hide every call.
   const settings = aiReviews ? saved : { ...saved, rings: { ...saved.rings, aiBuyOnly: false } };
-  const shown = panelAlerts(tokens, settings, prefs.panel).map(({ token }) => token);
+  const listed = panelAlerts(tokens, settings, prefs.panel).map(({ token }) => token);
+  const shown = listed.filter((t) => !snoozed(prefs, t.mint));
+  await checkRuns(shown, prefs);
   const { alertsNotified, alertsRead } = (await chrome.storage.local.get([
     "alertsNotified",
     "alertsRead",
@@ -235,7 +273,8 @@ async function checkAlerts(tokens: readonly OverlayToken[], newlyRead: readonly 
         message: "Open the panel to see them all.",
       });
   }
-  for (const t of fresh) notified.add(t.mint);
+  // A snoozed coin's alert is marked too, so it doesn't arrive as new when the snooze ends.
+  for (const t of listed) notified.add(t.mint);
   const unread = shown.filter((t) => !read.has(t.mint)).length;
   await chrome.storage.local.set({
     alertsNotified: [...notified].slice(-NOTIFIED_MAX),
@@ -247,12 +286,78 @@ async function checkAlerts(tokens: readonly OverlayToken[], newlyRead: readonly 
   });
 }
 
+/**
+ * Run alerts (user ask 2026-10-27): a notification when one of the reader's alerts reaches a
+ * multiple of its alert's market cap (its peak counts, so a spike between reads isn't missed),
+ * each level once per coin, and when it falls the reader's share below it, once. What is already
+ * past a level when the option is turned on, or when the worker first sees the coin with it on,
+ * is only marked.
+ */
+const RUNS_MAX = 300;
+
+async function checkRuns(tokens: readonly OverlayToken[], prefs: TooltipPrefs): Promise<void> {
+  const { runsNotified } = (await chrome.storage.local.get("runsNotified")) as {
+    runsNotified?: Record<string, { level: number; dropped: boolean }>;
+  };
+  if (!prefs.runs.enabled) {
+    if (runsNotified) await chrome.storage.local.remove("runsNotified");
+    return;
+  }
+  const first = runsNotified === undefined;
+  const marks = { ...(runsNotified ?? {}) };
+  const levels = RUN_LEVELS.filter((l) => prefs.runs.levels[l]);
+  for (const token of tokens) {
+    const at = firstAlert(token)?.mcapUsd ?? null;
+    const now = token.liveMcapUsd ?? token.stats?.marketCapUsd ?? null;
+    if (at === null || at <= 0 || now === null) continue;
+    const peaks = [...token.modelCalls, ...token.filterMatches].map((a) => a.peakMcapUsd ?? 0);
+    const best = Math.max(now, ...peaks) / at;
+    const reached = levels.filter((l) => best >= l).pop() ?? 0;
+    const dropped = prefs.runs.dropPct > 0 && now <= at * (1 - prefs.runs.dropPct / 100);
+    const mark = marks[token.mint];
+    if (!mark) {
+      // New to the list: what it already did is marked; a fresh alert sits near 1x anyway.
+      marks[token.mint] = { level: reached, dropped };
+      if (first) continue;
+      if (reached === 0 && !dropped) continue;
+    } else if (reached <= mark.level && (!dropped || mark.dropped)) continue;
+    const coin = token.symbol ?? `${token.mint.slice(0, 4)}…${token.mint.slice(-4)}`;
+    if (reached > (mark?.level ?? 0)) {
+      chrome.notifications.create(`alert:${token.mint}:run${reached}`, {
+        type: "basic",
+        iconUrl: "icons/icon-128.png",
+        title: `${coin} hit ${reached}x since its alert`,
+        message: `Alerted at ${usdShort(at)}, ${now >= at * reached ? "now" : "peaked past"} ${usdShort(
+          Math.max(now, at * reached),
+        )}.`,
+      });
+    }
+    if (dropped && !mark?.dropped) {
+      chrome.notifications.create(`alert:${token.mint}:drop`, {
+        type: "basic",
+        iconUrl: "icons/icon-128.png",
+        title: `${coin} is down ${Math.round((1 - now / at) * 100)}% from its alert`,
+        message: `Alerted at ${usdShort(at)}, now ${usdShort(now)}.`,
+      });
+    }
+    marks[token.mint] = { level: Math.max(reached, mark?.level ?? 0), dropped: dropped || !!mark?.dropped };
+  }
+  const kept = Object.entries(marks).slice(-RUNS_MAX);
+  await chrome.storage.local.set({ runsNotified: Object.fromEntries(kept) });
+}
+
+function usdShort(value: number): string {
+  if (value >= 1e6) return `$${(value / 1e6).toFixed(1)}M`;
+  if (value >= 1e3) return `$${(value / 1e3).toFixed(1)}K`;
+  return `$${Math.round(value)}`;
+}
+
 chrome.alarms.create("alerts", { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== "alerts") return;
   void (async () => {
-    const { panel } = await tooltipPrefs();
-    if (!panel.notify && !panel.badge) return;
+    const { panel, runs } = await tooltipPrefs();
+    if (!panel.notify && !panel.badge && !runs.enabled) return;
     // An open panel read the feed moments ago.
     if (Date.now() - feedReadAt < 30_000) return;
     await feed();
@@ -263,7 +368,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // be opened from here without a click on the page).
 chrome.notifications.onClicked.addListener((id) => {
   chrome.notifications.clear(id);
-  const mint = id.startsWith("alert:") ? id.slice("alert:".length) : null;
+  // A run alert's id carries its level after the mint.
+  const mint = id.startsWith("alert:") ? id.slice("alert:".length).split(":")[0]! : null;
   if (mint && isMintAddress(mint)) void chrome.tabs.create({ url: trenchUrl(mint) });
 });
 
@@ -291,18 +397,89 @@ const STATS_MS = 20_000;
 const statsCache = new Map<string, { at: number; token: OverlayToken | null }>();
 
 /**
+ * Live board pills (user ask 2026-10-27): the coins the boards asked about lately, and the tab
+ * that showed each. One held ask (POST /stats/wait) at a time names them; when the scanner writes
+ * one's new snapshot the API answers at once, and its new numbers go straight to its tab. The
+ * boards' own 30-second re-ask stays as the fallback.
+ */
+const BOARD_LIVE_MS = 90_000;
+const BOARD_LIVE_MAX = 300;
+const BOARD_LIVE_GAP_MS = 3_000;
+const boardMints = new Map<string, { at: number; tabId: number | undefined }>();
+let boardLive = false;
+
+function startBoardLive(): void {
+  if (boardLive) return;
+  boardLive = true;
+  void runBoardLive().finally(() => (boardLive = false));
+}
+
+async function runBoardLive(): Promise<void> {
+  let failures = 0;
+  for (;;) {
+    const now = Date.now();
+    for (const [mint, v] of boardMints) if (now - v.at > BOARD_LIVE_MS) boardMints.delete(mint);
+    const prefs = await tooltipPrefs();
+    const { key, refused } = await stored();
+    if (
+      boardMints.size === 0 ||
+      !key ||
+      refused ||
+      (!prefs.boardStats.enabled && prefs.limits.mode === "off")
+    )
+      return;
+    const mints = [...boardMints]
+      .sort((a, b) => b[1].at - a[1].at)
+      .slice(0, BOARD_LIVE_MAX)
+      .map(([m]) => m);
+    const asked = Date.now();
+    try {
+      const answer = await api.statsWait(key, mints);
+      failures = 0;
+      const tokens: StatsAnswer["tokens"] = {};
+      const at = Date.now();
+      for (const [mint, got] of Object.entries(answer.tokens)) {
+        const token: OverlayToken = { ...got, modelCalls: [], filterMatches: [], ai: null };
+        statsCache.set(mint, { at, token });
+        tokens[mint] = token;
+      }
+      const byTab = new Map<number, StatsAnswer["tokens"]>();
+      for (const [mint, token] of Object.entries(tokens)) {
+        const tabId = boardMints.get(mint)?.tabId;
+        if (tabId === undefined) continue;
+        byTab.set(tabId, { ...byTab.get(tabId), [mint]: token });
+      }
+      for (const [tabId, part] of byTab)
+        void chrome.tabs.sendMessage(tabId, { type: "boardStats", tokens: part }).catch(() => undefined);
+      // No wait could be held there: the boards' own re-ask carries on, and this tries later.
+      if (!answer.pushed) await new Promise((r) => setTimeout(r, 30_000));
+      // A busy board's coins change every moment: asks go 3 s apart at least.
+      else await new Promise((r) => setTimeout(r, Math.max(0, BOARD_LIVE_GAP_MS - (Date.now() - asked))));
+    } catch (e) {
+      // An API without the route: the boards' own re-ask is all there is.
+      if (e instanceof ApiError && (e.status === 404 || e.status === 401 || e.status === 403)) return;
+      failures += 1;
+      await new Promise((r) => setTimeout(r, Math.min(60_000, 2_000 * 2 ** failures)));
+    }
+  }
+}
+
+/**
  * The stats of the coins on a board, for the option that puts the ring's pill on every coin
  * TrenchScanner has numbers for (user ask 2026-10-26). Only while it is on: then, and only then,
  * the board's addresses go to TrenchScanner, and nowhere else.
  */
-async function boardStats(mints: unknown): Promise<StatsAnswer | null> {
-  if (!(await tooltipPrefs()).boardStats.enabled) return null;
+async function boardStats(mints: unknown, tabId?: number): Promise<StatsAnswer | null> {
+  const prefs = await tooltipPrefs();
+  if (!prefs.boardStats.enabled && prefs.limits.mode === "off") return null;
   const { key, refused } = await stored();
   if (!key || refused) return { tokens: {}, problem: "disconnected" };
   const asked = [...new Set(Array.isArray(mints) ? mints : [])]
     .filter((m): m is string => typeof m === "string" && isMintAddress(m))
     .slice(0, 100);
   const now = Date.now();
+  for (const mint of asked) boardMints.set(mint, { at: now, tabId });
+  startBoardLive();
   const tokens: StatsAnswer["tokens"] = {};
   const missing: string[] = [];
   for (const mint of asked) {
@@ -431,7 +608,7 @@ async function buddy(cached = false): Promise<BuddyRead> {
   }
   if (cached) return { buddy: lastBuddy, problem };
   try {
-    lastBuddy = await api.buddy(key);
+    lastBuddy = await api.buddy(key, (await tooltipPrefs()).buddyWallets);
     problem = null;
     void chrome.storage.session.set({ buddy: lastBuddy }).catch(() => undefined);
   } catch (e) {
@@ -531,16 +708,19 @@ async function handle(request: PanelRequest): Promise<unknown> {
     }
     case "tooltip":
       return tooltipPrefs();
-    case "saveTooltip": {
-      const prefs = cleanTooltip(request.prefs);
-      const savedAt = Date.now();
-      await chrome.storage.local.set({ tooltip: prefs, tooltipSavedAt: savedAt });
-      tellRingTabs({ type: "tooltipChanged", prefs });
-      // The icon's count follows the options at once (its switch, the unsafe coins left out).
-      void noteAlerts(lastTokens);
-      const { key, refused } = await stored();
-      if (key && !refused) void api.saveLook(key, { savedAt, prefs }).catch(() => undefined);
+    case "saveTooltip":
+      await saveTooltip(request.prefs);
       return { ok: true };
+    case "snooze":
+      await snooze(request.mint, request.minutes);
+      return { ok: true };
+    case "pendingCoin": {
+      const { pendingCoin } = (await chrome.storage.session.get("pendingCoin").catch(() => ({}))) as {
+        pendingCoin?: { mint: string; at: number };
+      };
+      await chrome.storage.session.remove("pendingCoin").catch(() => undefined);
+      // A Look up asked for long ago was never opened: it isn't shown out of the blue later.
+      return pendingCoin && Date.now() - pendingCoin.at < 60_000 ? pendingCoin.mint : null;
     }
     default:
       return null;
@@ -577,7 +757,17 @@ async function handleContent(request: ContentRequest, tabId: number | undefined)
     case "safety":
       return safety(request.mints);
     case "stats":
-      return boardStats(request.mints);
+      return boardStats(request.mints, tabId);
+    case "snooze":
+      await snooze(request.mint, request.minutes);
+      return { ok: true };
+    case "openCoin": {
+      if (typeof request.mint !== "string" || !isMintAddress(request.mint)) return null;
+      await chrome.storage.session.set({ pendingCoin: { mint: request.mint, at: Date.now() } });
+      // An open panel turns to it now; a closed one takes it as it opens.
+      void chrome.runtime.sendMessage({ type: "openCoin", mint: request.mint }).catch(() => undefined);
+      return { ok: true };
+    }
     case "holders": {
       // Only the open coin's page, and only while the markers are on.
       if (!(await tooltipPrefs()).holderMarks.enabled) return null;
@@ -627,6 +817,9 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   if (sender.id !== chrome.runtime.id) return false;
   if (typeof message !== "object" || message === null) return false;
   if (!__STORE__ && fromRingPage(sender)) {
+    // Opened here, before anything is awaited, while the click that asked still counts as one.
+    if ((message as { type?: unknown }).type === "openCoin" && sender.tab?.id !== undefined)
+      void chrome.sidePanel.open({ tabId: sender.tab.id }).catch(() => undefined);
     handleContent(message as ContentRequest, sender.tab?.id).then(sendResponse, () => sendResponse(null));
     return true;
   }

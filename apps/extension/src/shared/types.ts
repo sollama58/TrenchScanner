@@ -45,6 +45,29 @@ export interface OverlayStats {
   cexFundedPct: number | null;
   kolRecentBuyers: number | null;
   mintAuthorityActive: boolean | null;
+  /** The same numbers about five minutes back, for the trend arrows; absent before 0.9.0's API. */
+  earlier?: OverlayEarlier | null;
+}
+
+/** A coin's flag numbers some minutes back (the API's OverlayStats.earlier). */
+export type OverlayEarlier = { takenAt: string } & Partial<Record<FlagId, number | boolean | null>>;
+
+/** A creator's launches in the last 14 days and how they went (the API's DevLaunchRisk row). */
+export interface OverlayLaunchRecord {
+  /** Dev launch score, 0-100, higher is riskier. */
+  score: number;
+  launches: number;
+  inBand: number;
+  wins: number;
+  stops: number;
+}
+
+export interface OverlayDev {
+  wallet: string;
+  /** Null when the creator has fewer than two launches in 14 days and none reached the band. */
+  record: OverlayLaunchRecord | null;
+  /** Every creator the same funder paid for, pooled, when there are two or more. */
+  family: (OverlayLaunchRecord & { creators: number }) | null;
 }
 
 /** The safety screen's verdict on the coin's newest scan (apps/api/src/extensionLookup.ts). */
@@ -64,6 +87,8 @@ export interface OverlayToken {
   stats: OverlayStats | null;
   /** Absent from answers before 0.7.0's API. */
   safety?: OverlaySafety | null;
+  /** The coin's creator and its launch record; absent before 0.9.0's API, null when unknown. */
+  dev?: OverlayDev | null;
   modelCalls: {
     model: string;
     name: string | null;
@@ -72,8 +97,16 @@ export interface OverlayToken {
     calibratedPct: number | null;
     at: string;
     mcapUsd: number;
+    /** The highest market cap since the call; absent before 0.9.0's API. */
+    peakMcapUsd?: number | null;
   }[];
-  filterMatches: { filterId: string; filterName: string; at: string; mcapUsd: number | null }[];
+  filterMatches: {
+    filterId: string;
+    filterName: string;
+    at: string;
+    mcapUsd: number | null;
+    peakMcapUsd?: number | null;
+  }[];
   ai: { decision: string; probability2x: number | null; reasoning: string | null; at: string } | null;
 }
 
@@ -126,6 +159,8 @@ export interface OverlayBubbleTotals {
 /** One coin the reader's wallet bought, with its PnL (apps/api/src/extensionBuddy.ts). */
 export interface BuddyCoin {
   mint: string;
+  /** The wallet that traded it; absent before 0.9.0's API (then the account's). */
+  wallet?: string;
   entryAt: string;
   lastTradeAt: string;
   buys: number;
@@ -148,8 +183,29 @@ export interface BuddyCoin {
   image: string | null;
 }
 
+/** The last 24 hours of trading across the wallets followed (the API's BuddySummary). */
+export interface BuddySummary {
+  hours: number;
+  trades: number;
+  buys: number;
+  sells: number;
+  coins: number;
+  volumeSol: number;
+  closed: number;
+  open: number;
+  winRatePct: number | null;
+  realizedSol: number;
+  unrealizedSol: number | null;
+  bestMultiple: number | null;
+  calledFirst: number;
+  entries: number;
+}
+
 export interface BuddyAnswer {
   coins: BuddyCoin[];
+  /** The wallets followed, the account's first; absent before 0.9.0's API. */
+  wallets?: string[];
+  summary?: BuddySummary | null;
   solUsd: number | null;
   /** The account has Pro Mode: each coin gets its trade box. */
   pro: boolean;
@@ -171,7 +227,11 @@ export type PanelRequest =
   /** Any coin by its address, for the panel's lookup: its card and its bubble map's top holders. */
   | { type: "coin"; mint: string }
   /** The alerts the panel has shown, so the toolbar icon's count of unread ones clears. */
-  | { type: "alertsSeen"; mints: string[] };
+  | { type: "alertsSeen"; mints: string[] }
+  /** Hides a coin's ring, pill, card and alerts for a while (0 minutes wakes it). */
+  | { type: "snooze"; mint: string; minutes: number }
+  /** The coin a page's "Look up" asked the panel to show, taken once. */
+  | { type: "pendingCoin" };
 
 export interface CoinAnswer {
   /** Null when the scanner never stored the coin. */
@@ -231,7 +291,11 @@ export type ContentRequest =
   | { type: "stats"; mints: string[] }
   /** The open token page's coin's top holders, for the holder markers (only while they are on). */
   | { type: "holders"; mint: string }
-  | { type: "health"; site: Site; rows: number; mints: number; paused: boolean };
+  | { type: "health"; site: Site; rows: number; mints: number; paused: boolean }
+  /** The tooltip's Snooze: hides the coin's ring, pill and alerts for a while. */
+  | { type: "snooze"; mint: string; minutes: number }
+  /** The tooltip's Look up: opens the side panel on the coin. */
+  | { type: "openCoin"; mint: string };
 
 export interface StatsAnswer {
   /** Each coin asked about that TrenchScanner has numbers for, by mint; no calls, matches or AI. */

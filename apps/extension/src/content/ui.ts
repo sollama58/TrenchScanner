@@ -1,4 +1,4 @@
-import { trenchUrl } from "../panel/card";
+import { SITE_NAMES, siteUrl, trenchUrl } from "../panel/card";
 import { DEFAULT_SETTINGS } from "../shared/settings";
 import {
   colorVars,
@@ -11,9 +11,17 @@ import {
   type RingEffect,
   type TipLine,
 } from "../shared/tooltip";
-import type { FlagId, OverlayBubbleTotals, OverlaySafety, RingStyle, OverlayToken } from "../shared/types";
+import type {
+  FlagId,
+  OverlayBubbleTotals,
+  OverlaySafety,
+  RingStyle,
+  OverlayToken,
+  Site,
+} from "../shared/types";
 import type { PillSegment } from "../shared/pill";
-import { firstAlert, type RowVerdict } from "../shared/verdict";
+import { isMintAddress } from "../shared/mint";
+import { devReading, firstAlert, type RowVerdict } from "../shared/verdict";
 import { findSpot, obstaclesIn, stillFits, type Box } from "./placement";
 
 /**
@@ -445,6 +453,10 @@ const TIP_CSS = `
 .ok { color: var(--c-ok); } .mid { color: var(--c-mid); } .hi { color: var(--c-hi); }
 .foot { display: flex; justify-content: space-between; color: var(--dim); font-size: 11px; }
 a { color: var(--c-link); text-decoration: none; }
+.acts { flex-direction: row; flex-wrap: wrap; gap: 5px; }
+.act { all: unset; cursor: pointer; font: 500 10.5px/1.6 ui-monospace, Menlo, monospace; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--edge); color: var(--soft); }
+.act:hover { color: var(--c-tipText); border-color: var(--c-link); }
 `;
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -491,6 +503,7 @@ export function tooltipBody(
   lines: readonly TipLine[] = shownLines(DEFAULT_TOOLTIP, DEFAULT_SETTINGS),
   totals?: OverlayBubbleTotals | null,
   now = Date.now(),
+  actions?: TipActions,
 ): HTMLElement {
   const tip = el("div", "tip");
   const head = el("div", "head");
@@ -505,6 +518,7 @@ export function tooltipBody(
   const stats = el("div", "sec");
   const foot = el("div", "sec foot");
   const flags = new Map(verdict.flags.map((f) => [f.id, f]));
+  let wantActions = false;
   for (const id of lines) {
     if (id === "models") {
       for (const call of token.modelCalls) {
@@ -560,6 +574,13 @@ export function tooltipBody(
       stats.append(line("Safety screen", safety.passed ? "Passed" : "Failed", safety.passed ? "ok" : "hi"));
       if (!safety.passed && safety.reasons.length > 0)
         stats.append(el("p", "why", reasonsText(safety.reasons)));
+    } else if (id === "dev") {
+      const dev = devReading(token);
+      if (!dev) continue;
+      stats.append(line("Dev", dev.text, dev.level));
+      if (dev.family) stats.append(el("p", "why", `${dev.family}.`));
+    } else if (id === "actions") {
+      wantActions = true;
     } else if (id.startsWith("flag:")) {
       const flag = flags.get(id.slice(5) as FlagId);
       if (flag) stats.append(line(flag.label, flag.text, flag.level));
@@ -581,8 +602,57 @@ export function tooltipBody(
       foot.append(link);
     }
   }
-  for (const sec of [alerts, stats, foot]) if (sec.childElementCount > 0) tip.append(sec);
+  // The buttons sit just above the foot, wherever their line is in the reader's order.
+  const acts = wantActions && actions && isMintAddress(token.mint) ? actionRow(token.mint, actions) : null;
+  for (const sec of [alerts, stats, acts, foot]) if (sec && sec.childElementCount > 0) tip.append(sec);
   return tip;
+}
+
+/** What the tooltip's buttons do (user ask 2026-10-27); the sites listed get an Open link. */
+export interface TipActions {
+  sites: readonly Site[];
+  lookUp(mint: string): void;
+  snooze(mint: string, minutes: number): void;
+}
+
+/** Copy, open on each site, look up in the panel, snooze: the tooltip's button row. */
+function actionRow(mint: string, actions: TipActions): HTMLElement {
+  const row = el("div", "sec acts");
+  const button = (label: string, title: string, run: (b: HTMLButtonElement) => void) => {
+    const b = el("button", "act", label);
+    b.type = "button";
+    b.title = title;
+    b.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      run(b);
+    });
+    return b;
+  };
+  row.append(
+    button("Copy CA", "Copy the contract address", (b) => {
+      void navigator.clipboard.writeText(mint).then(
+        () => (b.textContent = "Copied"),
+        () => (b.textContent = "Copy failed"),
+      );
+    }),
+  );
+  for (const site of actions.sites) {
+    const a = el("a", "act", SITE_NAMES[site]);
+    a.href = siteUrl(site, mint);
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.title = `Open on ${SITE_NAMES[site]}`;
+    row.append(a);
+  }
+  row.append(
+    button("Look up", "Open this coin in the side panel", () => actions.lookUp(mint)),
+    button("Snooze 1h", "Hide this coin's ring, pill and alerts for an hour", (b) => {
+      actions.snooze(mint, 60);
+      b.textContent = "Snoozed";
+    }),
+  );
+  return row;
 }
 
 /** The screen's reasons as one sentence, each with a capital first letter, as the site writes them. */

@@ -6,6 +6,7 @@ import { takeCandleChainFillStats } from "./candleChainFill.js";
 import {
   tokenSageHints,
   notifyHolderReadingWritten,
+  noteSnapshotForBoards,
   recordRunProgress,
   withApiStages,
   floatArrayParam,
@@ -3979,6 +3980,7 @@ async function processCandidate(
       void notifyHolderReadingWritten(token.mintAddress);
   }
   noteSnapshotWritten(token.id, snapshot.takenAt.getTime());
+  noteSnapshotForBoards(token.mintAddress);
   noteFreshMarketData([token.id]);
   // Passing or failing - the fast-match lane goes by the newest verdict. See vettedTokens.ts.
   recordScanVerdict({

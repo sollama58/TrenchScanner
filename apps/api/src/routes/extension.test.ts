@@ -3,7 +3,14 @@ import "../bootstrap-env.js";
 import { createHash, randomBytes } from "node:crypto";
 import bs58 from "bs58";
 import { AccessSource } from "@prisma/client";
-import { loadEnv, notifyHolderReadingWritten, prisma, type Env } from "@trenchscanner/core";
+import {
+  flushSnapshotNotices,
+  loadEnv,
+  noteSnapshotForBoards,
+  notifyHolderReadingWritten,
+  prisma,
+  type Env,
+} from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
@@ -392,6 +399,100 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     expect(tokens[scanned]).not.toHaveProperty("ai");
     expect((await ext(key, "POST", "/ext/v1/stats", { mints: "x" })).statusCode).toBe(400);
     expect((await ext(null, "POST", "/ext/v1/stats", { mints: [scanned] })).statusCode).toBe(401);
+  });
+
+  it("says how the board's numbers moved over five minutes, and how the coin's creator's launches went", async () => {
+    const user = await makeUser("trend", true);
+    const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    const [coin, plain] = [mint(), mint()];
+    const dev = mint();
+    mints.push(coin, plain);
+    const token = await prisma.token.create({ data: { mintAddress: coin, symbol: "TRND", deployer: dev } });
+    const snap = (minutesAgo: number, emptyPct: number, bundled: number) =>
+      prisma.tokenSnapshot.create({
+        data: {
+          tokenId: token.id,
+          priceUsd: 0.00001,
+          marketCapUsd: 20_000,
+          bundledSupplyPct: bundled,
+          emptyTop10WalletPct: emptyPct,
+          top10WalletsChecked: 10,
+          takenAt: new Date(Date.now() - minutesAgo * 60_000),
+        },
+      });
+    await snap(9, 10, 12);
+    // Newer than five minutes before the latest: not the one compared against.
+    await snap(2, 20, 18);
+    await snap(0, 40, 26);
+    await prisma.devLaunchRisk.upsert({
+      where: { wallet: dev },
+      create: {
+        wallet: dev,
+        score: 82,
+        launches: 7,
+        inBand: 3,
+        graded: 5,
+        wins: 1,
+        stops: 4,
+        lastLaunchAt: new Date(),
+        computedAt: new Date(),
+      },
+      update: {},
+    });
+    const other = await prisma.token.create({ data: { mintAddress: plain } });
+    await prisma.tokenSnapshot.create({
+      data: { tokenId: other.id, priceUsd: 0.00001, marketCapUsd: 5_000 },
+    });
+
+    const tokens = (await ext(key, "POST", "/ext/v1/stats", { mints: [coin, plain] })).json()
+      .tokens as Record<string, { stats: Record<string, unknown>; dev: unknown }>;
+    expect(tokens[coin]!.stats).toMatchObject({
+      emptyTop10WalletCount: 4,
+      bundledSupplyPct: 26,
+      earlier: { emptyTop10WalletCount: 1, bundledSupplyPct: 12 },
+    });
+    expect(tokens[coin]!.dev).toEqual({
+      wallet: dev,
+      record: { score: 82, launches: 7, inBand: 3, wins: 1, stops: 4 },
+      family: null,
+    });
+    // One snapshot and no creator: nothing to compare, nobody to look up.
+    expect(tokens[plain]!.stats.earlier).toBeNull();
+    expect(tokens[plain]!.dev).toBeNull();
+    await prisma.devLaunchRisk.delete({ where: { wallet: dev } });
+  });
+
+  it("holds a board's ask until one of its coins gets a new snapshot, then answers its new numbers", async () => {
+    const user = await makeUser("boardwait", true);
+    const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    const [coin, quiet] = [mint(), mint()];
+    mints.push(coin, quiet);
+    const token = await prisma.token.create({ data: { mintAddress: coin, symbol: "LIVE" } });
+    await prisma.tokenSnapshot.create({
+      data: { tokenId: token.id, priceUsd: 0.00001, marketCapUsd: 8_000, holderCount: 50 },
+    });
+    // Read once, so the shared half is cached: the wake must drop it.
+    await ext(key, "POST", "/ext/v1/stats", { mints: [coin] });
+
+    const started = Date.now();
+    const waiting = ext(key, "POST", "/ext/v1/stats/wait", { mints: [coin, quiet] });
+    await new Promise((r) => setTimeout(r, 300));
+    await prisma.tokenSnapshot.create({
+      data: { tokenId: token.id, priceUsd: 0.00002, marketCapUsd: 16_000, holderCount: 90 },
+    });
+    noteSnapshotForBoards(coin);
+    await flushSnapshotNotices();
+    const res = await waiting;
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      tokens: Record<string, { stats: { holderCount: number } }>;
+      pushed: boolean;
+    };
+    expect(body.pushed).toBe(true);
+    expect(Object.keys(body.tokens)).toEqual([coin]);
+    expect(body.tokens[coin]!.stats.holderCount).toBe(90);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect((await ext(key, "POST", "/ext/v1/stats/wait", { mints: "x" })).statusCode).toBe(400);
   });
 
   it("answers the newest scan's safety verdict of the coins on a board, and nothing else", async () => {

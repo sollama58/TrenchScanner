@@ -1,6 +1,6 @@
 import { siteUrl, trenchUrl } from "../panel/card";
 import { pillSegments, type PillSegment } from "../shared/pill";
-import { colorsOf, colorVars, toastPartOn, type TooltipPrefs } from "../shared/tooltip";
+import { colorsOf, colorVars, snoozed, toastPartOn, type TooltipPrefs } from "../shared/tooltip";
 import type { FeedAnswer, OverlayBubbleTotals, OverlaySettings, OverlayToken, Site } from "../shared/types";
 import { verdictFor } from "../shared/verdict";
 
@@ -141,6 +141,8 @@ export class Toasts {
         if (!pick && this.prefs.toast.filters) pick = { token, kind: "filter", label: match.filterName };
       }
       if (!this.primed) this.toasted.add(token.mint);
+      // A snoozed coin's alert is taken as toasted: it doesn't pop up when the snooze ends.
+      else if (pick && snoozed(this.prefs, token.mint)) this.toasted.add(token.mint);
       else if (pick && !this.toasted.has(token.mint)) {
         this.toasted.add(token.mint);
         fresh.push(pick);

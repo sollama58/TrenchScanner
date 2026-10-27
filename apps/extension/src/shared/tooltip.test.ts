@@ -8,9 +8,11 @@ import {
   cleanTooltip,
   DEFAULT_TOOLTIP,
   needsMap,
+  pastLimits,
   pillParts,
   pillsNeedMap,
   shownLines,
+  snoozed,
   TIP_LINES,
 } from "./tooltip";
 import type { OverlayBubbleTotals } from "./types";
@@ -42,11 +44,13 @@ describe("tooltip lines", () => {
       "aiReasoning",
       "mcap",
       "safety",
+      "dev",
       "flag:bundledSupplyPct",
       "flag:sniperTopHolderCount",
       "flag:linkedWalletPct",
       "map:kolBundledPct",
       "statsAge",
+      "actions",
       "link",
     ]);
     expect(needsMap(DEFAULT_TOOLTIP, DEFAULT_SETTINGS)).toBe(true);
@@ -103,5 +107,46 @@ describe("tooltip lines", () => {
     expect(second.map((s) => s.text)).toEqual(["+50%", "61h", "BNDL 2%", "LINK 14%", "KOLB 12%"]);
     // Map parts wait for the totals rather than showing a blank.
     expect(pillSegments(parts.more!, t, v, DEFAULT_SETTINGS).map((s) => s.text)).not.toContain("KOLB");
+  });
+});
+
+describe("runs, limits, snoozes and other wallets", () => {
+  const W = "So11111111111111111111111111111111111111112";
+
+  it("repairs what was stored", () => {
+    const now = Date.now();
+    const prefs = cleanTooltip({
+      runs: { enabled: true, levels: { 3: true, 10: "yes" }, dropPct: 140 },
+      limits: { mode: "dim", values: { bundledSupplyPct: 20, linkedWalletPct: -1, nonsense: 4 } },
+      snoozed: { [W]: now + 3_600_000, [token().mint]: now - 1, "not-a-mint": now + 60_000 },
+      buddyWallets: [W, W, "nope", token().mint, 7],
+    });
+    expect(prefs.runs).toEqual({
+      enabled: true,
+      levels: { 2: true, 3: true, 5: true, 10: true },
+      dropPct: 95,
+    });
+    expect(prefs.limits).toEqual({ mode: "dim", values: { bundledSupplyPct: 20 } });
+    expect(Object.keys(prefs.snoozed)).toEqual([W]);
+    expect(prefs.buddyWallets).toEqual([W, token().mint]);
+    // Nothing stored: all off.
+    const empty = cleanTooltip(undefined);
+    expect(empty.runs.enabled).toBe(false);
+    expect(empty.limits.mode).toBe("off");
+    expect(empty.snoozed).toEqual({});
+    // A snooze past a week out is dropped as junk.
+    expect(cleanTooltip({ snoozed: { [W]: now + 30 * 86_400_000 } }).snoozed).toEqual({});
+  });
+
+  it("knows a snoozed coin and the limits a coin is past", () => {
+    const now = Date.now();
+    expect(snoozed({ snoozed: { [W]: now + 1000 } }, W, now)).toBe(true);
+    expect(snoozed({ snoozed: { [W]: now - 1000 } }, W, now)).toBe(false);
+    const limits = { mode: "hide" as const, values: { bundledSupplyPct: 10, linkedWalletPct: 20 } };
+    const stats = { ...token().stats!, bundledSupplyPct: 14, linkedWalletPct: 20 };
+    // At the limit is fine; past it isn't.
+    expect(pastLimits({ limits }, stats)).toEqual(["bundledSupplyPct"]);
+    expect(pastLimits({ limits: { ...limits, mode: "off" } }, stats)).toEqual([]);
+    expect(pastLimits({ limits }, null)).toEqual([]);
   });
 });

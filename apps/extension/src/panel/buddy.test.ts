@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS } from "../shared/settings";
 import { token } from "../shared/testToken";
 import type { BuddyCoin } from "../shared/types";
-import { buddyCard, tradeUrl } from "./buddy";
+import { buddyCard, shortWallet, summaryBlock, tradeUrl } from "./buddy";
 
 const A = "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN";
 
@@ -54,5 +54,32 @@ describe("Trade Buddy cards", () => {
     const sold = buddyCard({ ...coin, closed: true, held: 0, chainHeld: 0 }, DEFAULT_SETTINGS, true);
     expect(sold.querySelector("a.preset.sell")).toBeNull();
     expect(tradeUrl("not-a-mint", "buy", 1)).toBeNull();
+  });
+});
+
+describe("Trade Buddy's summary", () => {
+  it("shows the day's result, sold and held apart, and dashes what isn't known", () => {
+    const box = summaryBlock({
+      hours: 24,
+      trades: 9,
+      buys: 6,
+      sells: 3,
+      coins: 4,
+      volumeSol: 3.2,
+      closed: 2,
+      open: 2,
+      winRatePct: 50,
+      realizedSol: 0.4,
+      unrealizedSol: -0.1,
+      bestMultiple: 2.4,
+      calledFirst: 1,
+      entries: 4,
+    });
+    const cells = [...box.querySelectorAll(".stat")];
+    expect(cells[0]?.className).toBe("stat up");
+    expect(cells[2]?.className).toBe("stat down");
+    expect(cells[3]?.textContent).toBe("50%won, of 2 closed");
+    expect(cells[4]?.textContent).toBe("2.4xbest trade");
+    expect(shortWallet(A)).toBe("6p6x…GiPN");
   });
 });
