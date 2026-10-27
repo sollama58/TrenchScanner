@@ -308,6 +308,37 @@ export function timelineSteps(g: AsylGraph): number[] {
 }
 
 /**
+ * Replay speeds (user ask 2026-10-27: twice as fast by default, with speed controls that stay
+ * sensible for how many moments the map has). 1× holds each moment REPLAY_STEP_MS.
+ */
+export const REPLAY_STEP_MS = 140;
+export const REPLAY_SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16] as const;
+/** The map redraws no oftener than this; faster speeds step past several moments a tick instead. */
+const REPLAY_MIN_TICK_MS = 35;
+/** A whole replay no quicker than this, nor slower than REPLAY_LONGEST_MS. */
+const REPLAY_SHORTEST_MS = 3_000;
+const REPLAY_LONGEST_MS = 4 * 60_000;
+
+/** How often the replay ticks at `speed`, and how many moments each tick moves on. */
+export function replayTick(speed: number): { ms: number; stride: number } {
+  const ms = REPLAY_STEP_MS / speed;
+  if (ms >= REPLAY_MIN_TICK_MS) return { ms, stride: 1 };
+  const stride = Math.round(REPLAY_MIN_TICK_MS / ms);
+  return { ms: ms * stride, stride };
+}
+
+/**
+ * The speeds offered for a replay of `steps` moments: 1× always, a faster one only while the
+ * whole replay still lasts a few seconds, a slower one only while it ends within a few minutes.
+ */
+export function replaySpeeds(steps: number): number[] {
+  return REPLAY_SPEEDS.filter((s) => {
+    const whole = (steps * REPLAY_STEP_MS) / s;
+    return s === 1 || (s > 1 ? whole >= REPLAY_SHORTEST_MS : whole <= REPLAY_LONGEST_MS);
+  });
+}
+
+/**
  * What one wallet's own switches can turn off: a kind of link, or its transfers one way only
  * (user ask 2026-10-25: show and filter by transfer direction).
  */

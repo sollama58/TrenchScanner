@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   timelineSteps,
+  replaySpeeds,
+  replayTick,
   addressIn,
   pickInBox,
   pickInLasso,
@@ -374,5 +376,20 @@ describe("the timeline", () => {
     expect(v.edges.map((x) => `${x.a}>${x.b}`)).toEqual(["a>b", "a>d"]);
     expect(v.nodes.map((x) => x.id).sort()).toEqual(["a", "b", "d", "x"]);
     expect(visibleGraph(g, new Set(), new Set(), { until: null }).nodes).toHaveLength(5);
+  });
+});
+
+describe("replay speed", () => {
+  it("offers speeds that keep the whole replay between a few seconds and a few minutes", () => {
+    expect(replayTick(1)).toEqual({ ms: 140, stride: 1 });
+    expect(replayTick(4)).toEqual({ ms: 35, stride: 1 });
+    // Past that it redraws no faster, moving on several moments a tick.
+    expect(replayTick(16)).toEqual({ ms: 35, stride: 4 });
+    // A handful of moments: nothing faster than 1×, so it isn't over in a blink.
+    expect(replaySpeeds(10)).toEqual([0.25, 0.5, 1]);
+    expect(replaySpeeds(100)).toEqual([0.25, 0.5, 1, 2, 4]);
+    // Thousands of moments: nothing slower than 1×, so it ends this side of a few minutes.
+    expect(replaySpeeds(2000)).toEqual([1, 2, 4, 8, 16]);
+    expect(replaySpeeds(0)).toEqual([0.25, 0.5, 1]);
   });
 });
