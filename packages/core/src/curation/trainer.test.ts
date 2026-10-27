@@ -17,6 +17,9 @@ import {
   transformFeature,
   rowWeight,
   trainingWeightByAge,
+  trainCuratorModel,
+  examFoldBoosting,
+  EXAM_FOLD_BAG_SEEDS,
   type TrainingRow,
   type EvalFold,
 } from "./trainer.js";
@@ -371,6 +374,43 @@ describe("walkForwardEvaluate", () => {
       // should be sharply better than the base rate, not merely above it.
       expect(fold.model.precisionPct ?? 0).toBeGreaterThan(fold.baseWinRatePct);
     }
+  });
+
+  it("bags at most EXAM_FOLD_BAG_SEEDS forests per fold while the shipped fit keeps the recipe's count", async () => {
+    // Model audit 2026-10-26, §17: the exams were 99% of the run's time, one forest per bag.
+    expect(EXAM_FOLD_BAG_SEEDS).toBe(2);
+    expect(examFoldBoosting(undefined)).toEqual({ bagSeeds: 2 });
+    expect(examFoldBoosting({ bagSeeds: 3, maxDepth: 4 })).toEqual({ bagSeeds: 2, maxDepth: 4 });
+    // A recipe that already bags fewer (the crash model's 1) keeps its own count.
+    expect(examFoldBoosting({ bagSeeds: 1 })).toEqual({ bagSeeds: 1 });
+
+    const rows = syntheticRows(1_500);
+    const exam = (bagSeeds: number) =>
+      walkForwardEvaluate(rows, {
+        targetPerHour: 5,
+        heuristicMinScore: 55,
+        minRowsToPromote: 500,
+        learner: "gbdt",
+        featureNames: SYNTHETIC_FEATURES,
+        boosting: { bagSeeds, maxTrees: 30 },
+      });
+    // The cap makes a 3-bag recipe's exam the 2-bag exam, bit for bit (deterministic seeds).
+    const three = await exam(3);
+    expect(three.folds.length).toBeGreaterThanOrEqual(2);
+    expect(await exam(2)).toEqual(three);
+    // ...while fewer bags than the cap still change it - the cap is a cap, not a fixed count.
+    expect(await exam(1)).not.toEqual(three);
+
+    // The shipped fit (trainCuratorModel, as trainingRun's shipRecipe calls it) is not capped.
+    const ship = (bagSeeds: number) =>
+      trainCuratorModel(rows, {
+        learner: "gbdt",
+        featureNames: SYNTHETIC_FEATURES,
+        boosting: { bagSeeds, maxTrees: 30 },
+      });
+    const shippedThree = await ship(3);
+    expect(shippedThree).not.toEqual(await ship(2));
+    expect(await ship(3)).toEqual(shippedThree);
   });
 
   it("refuses to judge on too little history", async () => {
