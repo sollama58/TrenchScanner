@@ -9,12 +9,21 @@ import { mountTokenMap, type SiteAnswer, type SiteCall } from "@site/tokenMapEmb
  * trades), so nothing here polls.
  */
 
-/** A map read, answered by the service worker. */
-export function siteRequest(call: SiteCall): Promise<SiteAnswer> {
-  return (chrome.runtime.sendMessage({ type: "site", ...call }) as Promise<SiteAnswer | null>).then(
-    (a) => a ?? { status: 503, body: JSON.stringify({ error: "offline" }) },
-    () => ({ status: 503, body: JSON.stringify({ error: "offline" }) }),
-  );
+/**
+ * A map read, answered by the service worker. When the map gives the read up (a held wait for a
+ * coin the reader flipped past, or the map closing), the worker is told to cancel it, so the API's
+ * held wait ends too instead of lingering up to 30 s (audit EX-10).
+ */
+export function siteRequest(call: SiteCall, signal?: AbortSignal): Promise<SiteAnswer> {
+  const id = crypto.randomUUID();
+  const cancel = () => void chrome.runtime.sendMessage({ type: "siteCancel", id }).catch(() => undefined);
+  signal?.addEventListener("abort", cancel, { once: true });
+  return (chrome.runtime.sendMessage({ type: "site", ...call, id }) as Promise<SiteAnswer | null>)
+    .then(
+      (a) => a ?? { status: 503, body: JSON.stringify({ error: "offline" }) },
+      () => ({ status: 503, body: JSON.stringify({ error: "offline" }) }),
+    )
+    .finally(() => signal?.removeEventListener("abort", cancel));
 }
 
 let sheet: Promise<CSSStyleSheet> | null = null;

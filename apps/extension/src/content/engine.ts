@@ -30,6 +30,8 @@ import { verdictFor } from "../shared/verdict";
 
 /** How long the rows on screen go before they are asked about again (new alerts land this way). */
 const REFRESH_MS = 15_000;
+/** Lookup answers kept before old ones are pruned, as the board's and safety's caches are. */
+const MAX_ANSWERS = 5_000;
 /**
  * A lookup goes out this soon after rows change, so one burst of mutations makes one ask, and
  * while they keep changing (a scroll) at least this often, rather than only once they stop
@@ -572,9 +574,22 @@ export class OverlayEngine {
     state.mark = null;
   }
 
+  /** Exposed for tests: how many coins' lookup answers are kept. */
+  get answerCount(): number {
+    return this.tokens.size;
+  }
+
   /** Exposed for tests. */
   receive(asked: string[], answer: LookupAnswer, now = Date.now()): void {
     for (const mint of asked) this.tokens.set(mint, { at: now, token: answer.tokens[mint] ?? null });
+    // A long-open board sees thousands of coins scroll past: old answers go, as the board's and the
+    // safety screen's do, except for coins still on a row (audit CE-6, EX-9).
+    if (this.tokens.size > MAX_ANSWERS) {
+      const onRows = new Set([...this.rows.values()].map((state) => state.mint));
+      for (const [mint, v] of this.tokens) {
+        if (now - v.at > 10 * REFRESH_MS && !onRows.has(mint)) this.tokens.delete(mint);
+      }
+    }
     for (const [row, state] of this.rows) if (state.mint && asked.includes(state.mint)) this.draw(row, state);
   }
 
