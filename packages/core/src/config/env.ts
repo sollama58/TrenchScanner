@@ -471,9 +471,10 @@ const envSchema = z.object({
   // ever got an empty-wallet reading.
   WALLET_HOLDINGS_SOURCE: z.enum(["balances", "das"]).default("balances"),
   // Uncached wallets priced per scan cycle on the balances route (WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE
-  // is the DAS route's). About 2 credits a wallet plus a little for mint decimals: 40 a cycle is
-  // ~80 credits, under the ~100 the 10-wallet DAS budget spent, for four times the wallets.
-  WALLET_BALANCE_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(40),
+  // is the DAS route's). About 2 credits a wallet plus a little for mint decimals. 80 a cycle
+  // (~160 credits, ~230k a day; was 40, user decision 2026-10-27) with the 10-minute holdings TTL
+  // below, so about twice as many coins keep a fresh empty-wallet reading.
+  WALLET_BALANCE_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(80),
   // The snipers figure (first 25 buyers still holding), read from the chain - see the worker's
   // launchSnipers.ts. Who the first buyers were costs one 10-credit getTransactionsForAddress per
   // token, read once and cached; this many new tokens are read per scan cycle, contenders first.
