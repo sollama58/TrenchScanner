@@ -1,6 +1,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { prisma, withApiFeature, type Env, type HeliusClient } from "@trenchscanner/core";
+import {
+  prisma,
+  SolanaTrackerClient,
+  withApiFeature,
+  type Env,
+  type HeliusClient,
+} from "@trenchscanner/core";
+import { addTopTraders, loadTopTraders, topTradersNote } from "../asyl/topTraders.js";
 import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
 import { sharedSolPrice } from "../solPrice.js";
 import type { WalletIdentityReader } from "../walletIdentity.js";
@@ -243,6 +250,7 @@ export async function registerAsylRoutes(
   },
 ) {
   const { env } = opts;
+  const tracker = env.SOLANA_TRACKER_API_KEY ? new SolanaTrackerClient(env.SOLANA_TRACKER_API_KEY) : null;
 
   // The one public read: a shared map's frozen copy.
   await app.register(async (pub) => {
@@ -455,6 +463,34 @@ export async function registerAsylRoutes(
       const shown = await addEarlyBuyers(g, p.data.mint);
       reply.header("Cache-Control", "private, no-store");
       return { focus: p.data.mint, graph: await decorate(g, await trackedOf(request)), shown };
+    });
+
+    /** A coin's most profitable wallets of all time, from Solana Tracker; free (asyl/topTraders.ts). */
+    priv.get("/token/:mint/top-traders", { config: { rateLimit: READ_LIMIT } }, async (request, reply) => {
+      const p = mintParams.safeParse(request.params);
+      if (!p.success) return bad(reply, p.error);
+      if (!tracker)
+        return reply
+          .code(503)
+          .send({ error: "Top traders aren't set up on this server.", code: "unconfigured" });
+      let read;
+      try {
+        read = await loadTopTraders(tracker, p.data.mint);
+      } catch {
+        return reply
+          .code(502)
+          .send({ error: "Solana Tracker didn't answer. Try again in a minute.", code: "unavailable" });
+      }
+      const g = new GraphBuilder();
+      await addTopTraders(g, p.data.mint, read.traders, await sharedSolPrice.get().catch(() => null));
+      reply.header("Cache-Control", "private, no-store");
+      return {
+        focus: p.data.mint,
+        graph: await decorate(g, await trackedOf(request)),
+        shown: read.traders.length,
+        total: read.total,
+        note: topTradersNote(read),
+      };
     });
 
     /** Every coin a wallet deployed that TrenchScanner knows of. */
