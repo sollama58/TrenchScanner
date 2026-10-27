@@ -596,6 +596,15 @@ export function followYoungCurves(
 }
 
 /**
+ * Launches just confirmed not Mayhem (launchScreen.ts): followed now rather than at the next
+ * round, so the entry watch prices them off the curve from here. Nothing before the tape starts.
+ */
+export function followClearedLaunches(mints: readonly string[], now = Date.now()): void {
+  if (!cfg) return;
+  followNewLaunches(mints, now);
+}
+
+/**
  * Follows launches the scan hasn't listed yet, ahead of the curves it has (rank 0: polled first
  * while the stream is off). The next cycle's followYoungCurves keeps them, or drops the ones that
  * did not make its watchlist (a Mayhem coin, set aside at discovery).
