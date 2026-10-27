@@ -453,9 +453,13 @@ services:
       # The live tape (worker's liveTape.ts): newest-trade pages of the coins close to a call, the
       # source of every winner-wallet and flagged-wallet input. The cap is per cycle, so the one-minute
       # cycle (#953) cut it from 8 pages a minute to 4. User decision 2026-10-23 (thread "Winners model
-      # signal"): back to 8 a minute, about 58k more Helius credits a day than 4.
+      # signal"): back to 8 a minute, about 58k more Helius credits a day than 4. User decision
+      # 2026-10-27 (model audit, §18): 15. Since #1118 the page is also every coin's 5m order flow
+      # and launch bags (the PumpPortal free tier carries no trades), and at 8 the queue was about
+      # saturated: ~40 coins held a page, re-read every 3 minutes, against 9-14 pages read a cycle
+      # (the entry fast path reads under the same cap). 15 is at most ~150k more credits a day.
       - key: LIVE_TAPE_PAGES_PER_CYCLE
-        value: "8"
+        value: "15"
       - key: RUGCHECK_CACHE_TTL_MINUTES
         value: "5"
       # Wall-clock span holderGrowthPct is measured over, deliberately independent of the scan
