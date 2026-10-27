@@ -596,7 +596,7 @@ function decideCurations(
       const { id } = entry.model;
       const params = onLiveMembers(entry.model.params, live);
       const probability = scoreTopSlice(params, probabilities);
-      const curate = probability >= params.threshold;
+      const curate = entry.spec.trackingOnly !== true && probability >= params.threshold;
       let reasons: string[] = [];
       if (curate) {
         const callers = topSliceCallers(params, probabilities);
@@ -617,7 +617,8 @@ function decideCurations(
       const { id } = entry.model;
       const params = onLiveMembers(entry.model.params, live);
       const probability = scoreAgreement(params, probabilities);
-      const curate = probability >= params.threshold;
+      // A tracking-only combiner (Sharp Agreement) scores and is banked like any other, but never calls.
+      const curate = entry.spec.trackingOnly !== true && probability >= params.threshold;
       let reasons: string[] = [];
       if (curate) {
         const callers = params.members
@@ -650,7 +651,7 @@ function decideCurations(
       const { id } = entry.model;
       const params = onLiveMembers(entry.model.params, live);
       const probability = scoreBlend(params, probabilities);
-      const curate = probability >= params.threshold;
+      const curate = entry.spec.trackingOnly !== true && probability >= params.threshold;
       let reasons: string[] = [];
       if (curate) {
         const ranked = params.members
@@ -682,7 +683,7 @@ function decideCurations(
     const probability = scoreStacked(params, probabilities, rulesSignal(scored, params.rules.minScore));
     // The member-backing gate (user decision 2026-10-14): at least CONSENSUS_MIN_BACKERS members
     // must call this moment at their own cutoffs, so Rules' inputs can't carry a call alone.
-    const curate = stackedCalls(params, probability, probabilities);
+    const curate = entry.spec.trackingOnly !== true && stackedCalls(params, probability, probabilities);
     let reasons: string[] = [];
     if (curate) {
       // Who is behind the call, then what the most convinced of them sees.

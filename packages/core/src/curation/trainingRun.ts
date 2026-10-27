@@ -1610,14 +1610,29 @@ export async function runEvolvingContest(
     }
   }
 
-  const agreementSpec = cfg.contestants.find((c) => c.role === "agreement");
-  if (agreementSpec && reference !== null && votingFoldRanks.size >= 2) {
+  // Agreement counts the voting members; a seat with a fixed member set (Sharp Agreement,
+  // ContestantSpec.members, model audit 2026-10-26, §15) counts those of its members with an exam
+  // this run, read from Trader's maps - the standalone seats sit there and not in the voting
+  // combiners'. Either way the seat needs two members, and the agreement floor applies as usual.
+  for (const agreementSpec of cfg.contestants.filter((c) => c.role === "agreement")) {
+    if (reference === null) continue;
+    const fixed = agreementSpec.members;
+    const members = fixed
+      ? fixedMembers(fixed, { fold: traderFoldRanks, shipped: traderShipped, callRanks: traderCallRanks })
+      : { fold: votingFoldRanks, shipped: votingShipped, callRanks: votingCallRanks };
+    if (members.fold.size < 2) continue;
+    const membersText = fixed
+      ? `members ${[...members.fold.keys()].join(", ")}` +
+        (members.fold.size < fixed.length
+          ? `; without ${fixed.filter((id) => !members.fold.has(id)).join(", ")} (no exam this run)`
+          : "")
+      : votingText;
     const agreement = trainAgreementCurator(
       {
         reference,
-        memberFoldRanks: votingFoldRanks,
-        memberShippedProbabilities: votingShipped,
-        memberCallRanks: votingCallRanks,
+        memberFoldRanks: members.fold,
+        memberShippedProbabilities: members.shipped,
+        memberCallRanks: members.callRanks,
         targets: cfg.targets,
         cooldownHours: cfg.cooldownHours,
         targetPerHour: cfg.targetPerHour,
@@ -1653,7 +1668,7 @@ export async function runEvolvingContest(
           folds: [],
           verdict: {
             promote: false,
-            reason: `${agreementSpec.name}: ${agreement.params.members.length} models' alerts counted, judged on ${agreement.examChunks} chunk(s) of their out-of-sample alerts; wins by models agreeing - ${curveText}; ${votingText}`,
+            reason: `${agreementSpec.name}: ${agreement.params.members.length} models' alerts counted, judged on ${agreement.examChunks} chunk(s) of their out-of-sample alerts; wins by models agreeing - ${curveText}; ${membersText}`,
           },
           targets: cfg.targets,
           precisionCalibration: agreement.precisionCalibration,
@@ -1708,6 +1723,30 @@ export async function runEvolvingContest(
   const order = new Map(cfg.contestants.map((c, i) => [c.id, i]));
   results.sort((a, b) => order.get(a.contestant)! - order.get(b.contestant)!);
   return { results, challengerScores, replacement, probation, dropped, skipped };
+}
+
+/** A combiner's exam inputs, per member seat. */
+interface MemberExamMaps {
+  fold: Map<string, Float64Array>;
+  shipped: Map<string, Float64Array>;
+  callRanks: Map<string, number | null>;
+}
+
+/**
+ * The members of a fixed-member combiner (ContestantSpec.members) that sat an exam this run, in
+ * the spec's order: a seat with no fold ranks or shipped probabilities is left out, not an error.
+ */
+function fixedMembers(ids: readonly string[], from: MemberExamMaps): MemberExamMaps {
+  const picked: MemberExamMaps = { fold: new Map(), shipped: new Map(), callRanks: new Map() };
+  for (const id of ids) {
+    const fold = from.fold.get(id);
+    const shipped = from.shipped.get(id);
+    if (!fold || !shipped) continue;
+    picked.fold.set(id, fold);
+    picked.shipped.set(id, shipped);
+    picked.callRanks.set(id, from.callRanks.get(id) ?? null);
+  }
+  return picked;
 }
 
 /** The learners' exam evidence the Rules seat can learn from (see rulesSeatResult). */

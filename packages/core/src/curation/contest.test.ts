@@ -14,6 +14,9 @@ import {
   SHARP_DEEP_TREES_CONTESTANT,
   SHARP_SURVIVOR_CONTESTANT,
   SHARP_TREES_CONTESTANT,
+  SHARP_AGREEMENT_CONTESTANT,
+  SHARP_AGREEMENT_MEMBERS,
+  PROFIT_FACTOR_CONTESTANT,
   TREES_RECENT_HALF_LIFE_DAYS,
   enabledContestants,
   isMemberLearner,
@@ -127,13 +130,47 @@ describe("contestant roster", () => {
 });
 
 describe("tracking-only seats", () => {
-  it("keeps Safe and Profit scoring on the roster but out of the calling seats (2026-10-25)", () => {
+  it("keeps Safe, Profit and Sharp Agreement scoring on the roster but out of the calling seats", () => {
+    // Safe and Profit: user decision 2026-10-25; Sharp Agreement: model audit 2026-10-26, §15.
     const tracking = CONTESTANTS.filter((c) => c.trackingOnly).map((c) => c.id);
-    expect(tracking.sort()).toEqual(["return-regression", "safe"]);
+    expect(tracking.sort()).toEqual(["return-regression", "safe", SHARP_AGREEMENT_CONTESTANT]);
     for (const id of tracking) {
       expect(ACTIVE_CONTESTANT_IDS).toContain(id);
       expect(contestantSpec(id)?.retired).not.toBe(true);
     }
+  });
+
+  it("Sharp Agreement counts the three Sharp seats, tracking only (model audit 2026-10-26, §15)", () => {
+    const spec = contestantSpec(SHARP_AGREEMENT_CONTESTANT)!;
+    expect(spec.role).toBe("agreement");
+    expect(spec.trackingOnly).toBe(true);
+    expect(spec.name).toBe("Sharp Agreement");
+    expect(spec.members).toEqual([
+      SHARP_TREES_CONTESTANT,
+      SHARP_SURVIVOR_CONTESTANT,
+      PROFIT_FACTOR_CONTESTANT,
+    ]);
+    expect(spec.members).toBe(SHARP_AGREEMENT_MEMBERS);
+    // Its members are standalone seats on the shared exam: in Trader's maps, where the run reads them.
+    for (const id of SHARP_AGREEMENT_MEMBERS) {
+      const member = contestantSpec(id)!;
+      expect(member.standalone).toBe(true);
+      expect(member.retired).not.toBe(true);
+      expect(isTraderMember(member)).toBe(true);
+    }
+    // The room's Agreement keeps choosing its members each run.
+    expect(contestantSpec("agreement")!.members).toBeUndefined();
+    // On the roster like any combiner: in when two learners are, out when they are not.
+    expect(enabledContestants([SHARP_AGREEMENT_CONTESTANT, "linear", "trees"]).map((c) => c.id)).toEqual([
+      SHARP_AGREEMENT_CONTESTANT,
+      "rules",
+      "linear",
+      "trees",
+    ]);
+    expect(enabledContestants([SHARP_AGREEMENT_CONTESTANT, "linear"]).map((c) => c.id)).toEqual([
+      "rules",
+      "linear",
+    ]);
   });
 });
 

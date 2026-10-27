@@ -5,6 +5,8 @@ import {
   prisma,
   Prisma,
   loadEnv,
+  AGREEMENT_MODEL_KIND,
+  SHARP_AGREEMENT_CONTESTANT,
   GEMS_CONTESTANT,
   GEMERALD_GATE,
   CANDIDATE_FEATURE_NAMES,
@@ -921,6 +923,40 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     });
     return { linearId, treesId };
   }
+
+  it("a tracking-only combiner (Sharp Agreement) scores and banks, but never calls", async () => {
+    // Model audit 2026-10-26, §15. Two always-yes members both at their cutoff: the room's
+    // Agreement on the same model would call; the tracking-only seat scores the moment, banks the
+    // score for its live record, and files nothing.
+    const linearId = await activeModel("linear", CURATOR_MODEL_KIND, alwaysYesParams());
+    const treesId = await activeModel("trees", CURATOR_MODEL_KIND, alwaysYesParams());
+    const member = (contestant: string, modelId: string) => ({
+      contestant,
+      modelId,
+      quantiles: [0.2, 0.5, 0.8],
+      callRank: 0.5,
+    });
+    await activeModel(SHARP_AGREEMENT_CONTESTANT, AGREEMENT_MODEL_KIND, {
+      kind: AGREEMENT_MODEL_KIND,
+      members: [member("linear", linearId), member("trees", treesId)],
+      threshold: 0.5,
+    });
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-sharp-agreement` } });
+    const scored = curatableFixture(token.mintAddress);
+    const sample = await recordCandidateSample(token.id, scored, env);
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, scored, sample, env);
+    expect(cycle.byModel.has("linear")).toBe(true);
+    expect(cycle.byModel.has(SHARP_AGREEMENT_CONTESTANT)).toBe(false);
+    await emitCuratedCycle(cycle, env);
+    expect(
+      await prisma.curatedAlert.count({ where: { tokenId: token.id, model: SHARP_AGREEMENT_CONTESTANT } }),
+    ).toBe(0);
+    const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: sample!.id } });
+    const banked = row.seatScores as Record<string, number>;
+    // Both members call: the agreement score sits at 2 of 2 and above.
+    expect(banked[SHARP_AGREEMENT_CONTESTANT]).toBeGreaterThanOrEqual(2 / 3);
+  });
 
   it("the consensus calls on its own ledger, naming the members behind the call", async () => {
     await seedConsensus();
