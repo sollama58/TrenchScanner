@@ -8,9 +8,11 @@
  * before its ID is added, a copy loaded unpacked from the store zip). Trusting the link's ID means a
  * crafted link could steer a key to another installed extension that also lists this site; the
  * reader still has to press Connect, and the key only reads their alerts and stats. Listing the
- * store ID here makes the link's ID unnecessary for store installs. A link's ID that answered is
- * remembered in this browser, so Settings still finds that build when opened some other way (after
- * signing in again, which revokes the extension's key).
+ * store ID here makes the link's ID unnecessary for store installs. A link's ID is remembered in this
+ * browser only once the reader pressed Connect and the extension took the key, so Settings still
+ * finds that build when opened some other way (after signing in again, which revokes the
+ * extension's key). Merely opening a crafted link remembers nothing (audit EX-3), and the
+ * no-click reconnect after sign-in only ever talks to the known IDs (`knownOnly`).
  *
  * - The unpacked build (apps/extension, `npm run build`) carries dev-key.pub, so its ID is fixed.
  * - The Chrome Web Store assigns the listed item's ID at its first upload; it goes in
@@ -95,17 +97,24 @@ function remember(id: string): void {
 }
 
 /** The IDs to try: the link's own first, then the one this browser remembers, then the known builds. */
-function candidates(hint: string | null | undefined): string[] {
-  const ids = [hint, remembered(), ...EXTENSION_IDS].filter(
+function candidates(hint: string | null | undefined, knownOnly = false): string[] {
+  const ids = (knownOnly ? [...EXTENSION_IDS] : [hint, remembered(), ...EXTENSION_IDS]).filter(
     (id): id is string => typeof id === "string" && EXTENSION_ID.test(id),
   );
   return [...new Set(ids)];
 }
 
-/** The installed Trench Overlay, if this browser has one of the known builds or the link's. */
-export async function findExtension(hint?: string | null): Promise<InstalledExtension | null> {
+/**
+ * The installed Trench Overlay, if this browser has one of the known builds, the link's, or one the
+ * reader connected before. `knownOnly` skips the link's and the remembered ID, for callers that hand
+ * over a key without a click.
+ */
+export async function findExtension(
+  hint?: string | null,
+  opts: { knownOnly?: boolean } = {},
+): Promise<InstalledExtension | null> {
   if (!runtime()) return null;
-  for (const id of candidates(hint)) {
+  for (const id of candidates(hint, opts.knownOnly)) {
     const reply = (await ask(id, { type: "ping" }, 1500)) as {
       ok?: unknown;
       connected?: unknown;
@@ -113,7 +122,6 @@ export async function findExtension(hint?: string | null): Promise<InstalledExte
       refusedAccount?: unknown;
     } | null;
     if (reply?.ok === true) {
-      remember(id);
       return {
         id,
         connected: reply.connected === true,
@@ -125,15 +133,23 @@ export async function findExtension(hint?: string | null): Promise<InstalledExte
   return null;
 }
 
-/** Hands a key Settings just made to the extension, which checks it with the API and keeps it. */
+/**
+ * Hands a key Settings just made to the extension, which checks it with the API and keeps it. An ID
+ * outside the known builds is remembered only here, once it took the key. `knownOnly` refuses any
+ * other ID, as findExtension does.
+ */
 export async function handOverKey(
   id: string,
   key: string,
   hint?: string | null,
+  opts: { knownOnly?: boolean } = {},
 ): Promise<{ ok: boolean; error?: string }> {
-  if (!candidates(hint).includes(id)) return { ok: false, error: "Unknown extension." };
+  if (!candidates(hint, opts.knownOnly).includes(id)) return { ok: false, error: "Unknown extension." };
   const reply = (await ask(id, { type: "connect", key }, 15_000)) as { ok?: unknown; error?: unknown } | null;
-  if (reply?.ok === true) return { ok: true };
+  if (reply?.ok === true) {
+    if (!opts.knownOnly) remember(id);
+    return { ok: true };
+  }
   return {
     ok: false,
     error: typeof reply?.error === "string" ? reply.error : "The extension didn't answer.",
