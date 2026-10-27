@@ -13,17 +13,17 @@ describe("feeSummary", () => {
   it("adds other platforms' gas and priority fee per buy and sale to the savings with the toggle on", () => {
     const s = feeSummary([trade("buy", 2n), trade("sell", 4n)]);
     expect(s.otherNetwork).toEqual({
-      gasSol: 0.002,
-      priorityFeeSol: 0.003,
-      perTradeSol: 0.005,
-      totalSol: 0.01,
+      gasSol: 0.001,
+      priorityFeeSol: 0.01,
+      perTradeSol: 0.011,
+      totalSol: 0.022,
     });
     const fomo = s.platforms.find((p) => p.id === "fomo")!;
     expect(fomo).toMatchObject({
       feeSol: 0.03,
       savedSol: 0.03,
-      feeWithNetworkSol: 0.04,
-      savedWithNetworkSol: 0.04,
+      feeWithNetworkSol: 0.052,
+      savedWithNetworkSol: 0.052,
     });
   });
 

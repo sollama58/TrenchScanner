@@ -333,11 +333,11 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
       const total = (await as(ADMIN, "GET", "/admin/pro-mode/fees-saved")).json();
       expect(total.trades - before.trades).toBe(2);
       expect(total.wallets - before.wallets).toBe(1);
-      expect(total.otherNetwork.totalSol - before.otherNetwork.totalSol).toBeCloseTo(0.01);
+      expect(total.otherNetwork.totalSol - before.otherNetwork.totalSol).toBeCloseTo(0.022);
       const axiom = (r: { platforms: { id: string; savedSol: number; savedWithNetworkSol: number }[] }) =>
         r.platforms.find((p) => p.id === "axiom")!;
       expect(axiom(total).savedSol - axiom(before).savedSol).toBeCloseTo(0.057);
-      expect(axiom(total).savedWithNetworkSol - axiom(before).savedWithNetworkSol).toBeCloseTo(0.067);
+      expect(axiom(total).savedWithNetworkSol - axiom(before).savedWithNetworkSol).toBeCloseTo(0.079);
     } finally {
       await prisma.platformTrade.deleteMany({ where: { wallet: ADMIN } });
     }

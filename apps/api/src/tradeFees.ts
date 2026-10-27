@@ -17,8 +17,9 @@
  * reported as it is, never clamped to zero.
  *
  * Gas and priority fee (user ask 2026-10-24): the Portfolio page and the admin total can also
- * count what another platform's trade pays the network at its usual settings, 0.002 SOL gas and
- * 0.003 SOL priority fee on every buy and every sale. It is a flat amount per trade, so it covers
+ * count what another platform's trade pays the network at its usual settings, 0.001 SOL gas and
+ * 0.01 SOL priority fee on every buy and every sale (baseline changed from 0.002 and 0.003 on
+ * 2026-10-27, user ask). It is a flat amount per trade, so it covers
  * every trade already recorded as well as new ones: each platform carries the saving both without
  * it (savedSol) and with it (savedWithNetworkSol), and the page's toggle picks one.
  */
@@ -64,8 +65,8 @@ export const OTHER_PLATFORMS: readonly PlatformFeeRate[] = [
 ];
 
 /** What another platform's trade pays the network at its usual settings, per buy and per sale. */
-export const OTHER_GAS_LAMPORTS = 2_000_000n;
-export const OTHER_PRIORITY_FEE_LAMPORTS = 3_000_000n;
+export const OTHER_GAS_LAMPORTS = 1_000_000n;
+export const OTHER_PRIORITY_FEE_LAMPORTS = 10_000_000n;
 
 export interface FeeTrade {
   side: string;
