@@ -34,12 +34,7 @@ import { creatorFeesByMint, TOKEN_CARD_SELECT, withCarriedHolderList } from "../
 import { ExternalSearchUnavailable, searchUntrackedTokens, type ExternalSearchHit } from "../tokenSearch.js";
 import { fillSearchMarketHits } from "../searchMarket.js";
 import { readKolRows } from "../kolRoster.js";
-import {
-  loadBwamDevSideExport,
-  loadKolLabelCounts,
-  loadKolSideLabels,
-  loadLabeledSides,
-} from "../possibleSides.js";
+import { loadKolLabelCounts, loadKolSideLabels, loadSideLabelExport } from "../possibleSides.js";
 import {
   loadPairTransfers,
   loadTransferCounts,
@@ -557,9 +552,8 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
    * 2026-10-14). A read of what is stored: no outside calls.
    */
   app.get("/side-labels", async (_request, reply) => {
-    const wallets = await loadLabeledSides();
-    const exported = new Set(wallets.map((w) => w.wallet));
-    const bwamDevWallets = await loadBwamDevSideExport(exported);
+    // bwam_dev's sides go only in bwamDevSide, which the checker's toggle adds (loadSideLabelExport).
+    const { wallets, bwamDevSide: bwamDevWallets } = await loadSideLabelExport();
     reply.header("Cache-Control", "private, max-age=300");
     return {
       count: wallets.length,

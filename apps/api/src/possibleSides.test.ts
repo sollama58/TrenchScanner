@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "./bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
-import { MARKED_BOT_WALLETS, prisma } from "@trenchscanner/core";
+import { BWAM_DEV_KOL_WALLET, MARKED_BOT_WALLETS, prisma } from "@trenchscanner/core";
 import {
   countKolLabels,
   kolSideLabels,
@@ -10,7 +10,22 @@ import {
   loadPossibleSides,
   numberLabeledSides,
   possibleSideText,
+  splitBwamDevSides,
 } from "./possibleSides.js";
+
+describe("splitBwamDevSides", () => {
+  it("moves every side labeled for bwam_dev out of the export and keeps the rest in order", () => {
+    const side = (wallet: string, kolWallet: string) => ({ wallet, kolWallet });
+    const { wallets, bwamDevLabeled } = splitBwamDevSides([
+      side("a", "Cupsey"),
+      side("b", BWAM_DEV_KOL_WALLET),
+      side("c", "Ansem"),
+      side("d", BWAM_DEV_KOL_WALLET),
+    ]);
+    expect(wallets.map((w) => w.wallet)).toEqual(["a", "c"]);
+    expect(bwamDevLabeled.map((w) => w.wallet)).toEqual(["b", "d"]);
+  });
+});
 
 describe("possibleSideText", () => {
   it("names a funded wallet without the possible", () => {
