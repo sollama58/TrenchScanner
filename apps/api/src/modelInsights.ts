@@ -453,7 +453,8 @@ export async function fullModelInsights(env: Env, days: number, market?: MarketR
     curator: {
       active: active?.id ?? HEURISTIC_CURATOR_SOURCE,
       phase: active ? "model-live" : "heuristic-live",
-      aiReviewMode: env.AI_REVIEW_MODE,
+      // The scanner's setting where its heartbeat reports it: the reviewer runs there, not here.
+      aiReviewMode: report.aiReviewer.configuredMode,
       aiReviewMinGradedBuys: env.AI_REVIEW_MIN_GRADED_BUYS,
       targetPerHour: env.CURATED_TARGET_PER_HOUR,
     },
@@ -560,6 +561,10 @@ async function aiJudgeState() {
       ? {
           createdAt: blend.createdAt,
           usable: (blend.params as unknown as AiBlendParams).usable,
+          // The playbook whose reviews it was fitted on (worker ai/blend.ts); null before that was
+          // recorded, or for a playbook outside the history shown. It gates only under that one.
+          playbookVersion:
+            versionOf.get((blend.params as unknown as { playbookId?: string }).playbookId ?? "") ?? null,
           metrics: blend.metrics as unknown as AiBlendMetrics,
         }
       : null,

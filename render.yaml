@@ -346,10 +346,10 @@ services:
     # that fails typecheck or a test never reaches production. 2026-10-16 database audit.
     autoDeployTrigger: checksPass
     # Seconds from SIGTERM to SIGKILL. Render's default is 30s; a shadow AI review in flight is given its whole
-    # AI_REVIEW_TIMEOUT_MS (60s) plus the heartbeat writes before the process ends (worker
+    # AI_REVIEW_SHADOW_TIMEOUT_MS (120s) plus the heartbeat writes before the process ends (worker
     # index.ts, REVIEW_DRAIN_SLACK_MS), so a deploy no longer cuts one off. Raise this with that
     # timeout. A shutdown with no review in flight still ends as soon as its runs settle.
-    maxShutdownDelaySeconds: 75
+    maxShutdownDelaySeconds: 135
     envVars:
       - fromGroup: trenchscanner-shared
       - key: DATABASE_URL
@@ -633,10 +633,10 @@ services:
     # that fails typecheck or a test never reaches production. 2026-10-16 database audit.
     autoDeployTrigger: checksPass
     # Seconds from SIGTERM to SIGKILL. Render's default is 30s; a shadow AI review in flight is given its whole
-    # AI_REVIEW_TIMEOUT_MS (60s) plus the heartbeat writes before the process ends (worker
+    # AI_REVIEW_SHADOW_TIMEOUT_MS (120s) plus the heartbeat writes before the process ends (worker
     # index.ts, REVIEW_DRAIN_SLACK_MS), so a deploy no longer cuts one off. Raise this with that
     # timeout. A shutdown with no review in flight still ends as soon as its runs settle.
-    maxShutdownDelaySeconds: 75
+    maxShutdownDelaySeconds: 135
     envVars:
       - fromGroup: trenchscanner-shared
       - key: DATABASE_URL

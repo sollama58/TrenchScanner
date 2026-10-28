@@ -17,6 +17,7 @@ import {
   notRetiredModelSql,
   judgeLiftFromCounts,
   readAiReviewerSwitch,
+  readWorkerConfig,
   type AiReviewerState,
   type Env,
   type MarketRow,
@@ -650,6 +651,37 @@ export function effectiveAiReviewMode(
   return mode;
 }
 
+/**
+ * How the reviewer runs, from the scanner's heartbeat (core's config/workerConfig.ts): the reviewer
+ * runs on the worker, and the documented setup keeps ANTHROPIC_API_KEY off this API service, so the
+ * API's own env said "off" for a judge that was running. The API's env is the fallback only when
+ * the heartbeat carries no config (an older worker, or no scan yet), as Admin › AI does.
+ */
+export function aiReviewerRunMode(
+  state: AiReviewerState,
+  worker: ReturnType<typeof readWorkerConfig>,
+  env: Pick<Env, "AI_REVIEW_MODE" | "ANTHROPIC_API_KEY">,
+): {
+  mode: Env["AI_REVIEW_MODE"];
+  configuredMode: Env["AI_REVIEW_MODE"];
+  keySet: boolean;
+  reportedBy: "worker" | "api";
+} {
+  const workerMode = worker?.settings.aiReviewMode;
+  const configuredMode =
+    workerMode === "off" || workerMode === "shadow" || workerMode === "gate"
+      ? workerMode
+      : env.AI_REVIEW_MODE;
+  const workerKey = worker?.credentials.anthropicApiKey;
+  const keySet = workerKey ?? env.ANTHROPIC_API_KEY.length > 0;
+  return {
+    mode: keySet ? effectiveAiReviewMode(state, configuredMode) : "off",
+    configuredMode,
+    keySet,
+    reportedBy: workerKey === undefined ? "api" : "worker",
+  };
+}
+
 /** Exported for the route test; the route above is the only caller in production. */
 export async function buildHitRateReport(
   since: Date,
@@ -965,6 +997,7 @@ export async function buildHitRateReport(
     [curatedTotal],
     [shadowTotal],
     aiSwitch,
+    workerConfig,
   ] = await Promise.all([
     curatedRows,
     modelRows,
@@ -984,7 +1017,13 @@ export async function buildHitRateReport(
     readAiReviewerSwitch()
       .then((s) => s.state)
       .catch((): AiReviewerState => "off"),
+    // The settings the scanner runs with (aiReviewerRunMode); unreadable reads as none published.
+    prisma.systemHeartbeat
+      .findUnique({ where: { job: "scan" }, select: { meta: true } })
+      .then((b) => readWorkerConfig(b?.meta))
+      .catch(() => null),
   ]);
+  const aiRun = aiReviewerRunMode(aiSwitch, workerConfig, env);
 
   const rated = (c: GradedCounts, min?: number) => withRates(c, targets, min);
 
@@ -1061,10 +1100,13 @@ export async function buildHitRateReport(
     curatorConfidenceBands: confidence.map((r) => ({ side: r.side, band: r.band, ...rated(toCounts(r)) })),
     aiReviewer: {
       // What the reviewer actually runs as: the Admin switch over AI_REVIEW_MODE ("off" when the
-      // switch is off or there is no key, gate held to shadow while it is in testing).
-      // configuredMode is the env setting alone, which `mode` reported before the switch existed.
-      mode: env.ANTHROPIC_API_KEY ? effectiveAiReviewMode(aiSwitch, env.AI_REVIEW_MODE) : "off",
-      configuredMode: env.AI_REVIEW_MODE,
+      // switch is off or there is no key, gate held to shadow while it is in testing), both read
+      // from the scanner's heartbeat (aiReviewerRunMode). configuredMode is the env setting alone,
+      // which `mode` reported before the switch existed.
+      mode: aiRun.mode,
+      configuredMode: aiRun.configuredMode,
+      apiKeySet: aiRun.keySet,
+      apiKeyReportedBy: aiRun.reportedBy,
       switch: aiSwitch,
       // Gate mode needs AI_REVIEW_MIN_GRADED_BUYS graded buys under the current playbook, with
       // the lift's lower bound above 0.

@@ -80,7 +80,7 @@ import {
 import { runScoreWeightsJob } from "./jobs/scoreWeightsJob.js";
 import { runModelBackupJob } from "./jobs/modelBackupJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
-import { aiReviewEnabled } from "./ai/reviewer.js";
+import { aiReviewEnabled, reviewTimeoutMs } from "./ai/reviewer.js";
 import { drainShadowReviews } from "./jobs/curatedAlerts.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { BurnStreamWake, reconcileBurns } from "./jobs/burnReconciler.js";
@@ -275,10 +275,11 @@ const LIGHTHOUSE_ROLLUP_MINUTES = 60;
  */
 const SHUTDOWN_GRACE_MS = 20_000;
 /**
- * What a shutdown gives a detached shadow AI review beyond its own timeout (AI_REVIEW_TIMEOUT_MS,
- * 60s by default): a review cut off is paid for and never recorded, so reviews get their whole
- * timeout rather than the jobs' grace. render.yaml's maxShutdownDelaySeconds on the worker and
- * trainer covers this plus SHUTDOWN_WRITES_MS. With no review in flight the drain returns at once.
+ * What a shutdown gives a detached shadow AI review beyond its own timeout
+ * (AI_REVIEW_SHADOW_TIMEOUT_MS, 120s by default; reviewTimeoutMs): a review cut off is paid for
+ * and never recorded, so reviews get their whole timeout rather than the jobs' grace.
+ * render.yaml's maxShutdownDelaySeconds on the worker and trainer covers this plus
+ * SHUTDOWN_WRITES_MS. With no review in flight the drain returns at once.
  */
 const REVIEW_DRAIN_SLACK_MS = 2_000;
 /** What a shutdown allows the interrupted-run heartbeats and the disconnect after the grace. */
@@ -1346,7 +1347,7 @@ async function main() {
     // The runs' settle is bounded by the grace, but the writes after it are not: the restarts
     // that come through here are mostly for a dead connection, and a heartbeat write or the
     // disconnect on one can wait out the 180s socket timeout. The process ends regardless.
-    const reviewGraceMs = Math.max(SHUTDOWN_GRACE_MS, env.AI_REVIEW_TIMEOUT_MS + REVIEW_DRAIN_SLACK_MS);
+    const reviewGraceMs = Math.max(SHUTDOWN_GRACE_MS, reviewTimeoutMs(env, false) + REVIEW_DRAIN_SLACK_MS);
     const hardExit = setTimeout(() => process.exit(code), reviewGraceMs + SHUTDOWN_WRITES_MS);
     void hardExit;
     logger.info("shutting down", { signal, graceMs: SHUTDOWN_GRACE_MS, exitCode: code });
