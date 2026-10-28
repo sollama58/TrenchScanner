@@ -32,7 +32,10 @@ const logger = createLogger("live-tape");
  * Contenders and alerts held for a wallet figure come first, as in the wallet stage. A coin's
  * page is read again once it is LIVE_TAPE_REFRESH_SECONDS old, unless the trade stream says the
  * coin has not traded since (user decision 2026-10-20 (Helius audit)), and at most
- * LIVE_TAPE_PAGES_PER_CYCLE pages go out a cycle: that cap is the credit ceiling.
+ * LIVE_TAPE_PAGES_PER_CYCLE pages go out a minute: that cap is the credit ceiling. The cycle and
+ * the entry fast path's scans draw on one page budget (pageBudget) refilled at that many a minute,
+ * so 15 means 15 however many fast scans run; read per call, each fast scan's pages came on top of
+ * the cycle's (audit 2026-10-27, DA-8: 18 pages in one heartbeat under a cap of 15).
  *
  * A coin still on its bonding curve takes its page from the PumpPortal trade stream instead
  * (user decision 2026-10-24: "PumpPortal while bonding, Helius after"): the worker already
@@ -53,6 +56,32 @@ const MAX_ENTRIES = 2_000;
 /** A coin's newest page: its trades, and whether they are its whole history (no older page). */
 const pages = new Map<string, { atMs: number; trades: TapeTrade[]; complete: boolean }>();
 let pagesRead = 0;
+/**
+ * The page budget the cycle and the fast scans share: a bucket holding at most a minute's pages,
+ * refilled continuously at that rate, so a fast scan between two cycles takes its page out of the
+ * next cycle's share rather than adding one. A page that goes unbilled (not served, or failed)
+ * goes back in.
+ */
+const pageBudget = { tokens: Number.NaN, atMs: 0 };
+
+/** Takes up to `want` pages from the shared budget of `perMinute` a minute; returns how many it got. */
+function takePages(want: number, perMinute: number, nowMs: number): number {
+  if (Number.isNaN(pageBudget.tokens)) {
+    pageBudget.tokens = perMinute;
+    pageBudget.atMs = nowMs;
+  }
+  const elapsed = Math.max(0, nowMs - pageBudget.atMs);
+  pageBudget.tokens = Math.min(perMinute, pageBudget.tokens + (elapsed * perMinute) / 60_000);
+  pageBudget.atMs = Math.max(pageBudget.atMs, nowMs);
+  const got = Math.max(0, Math.min(want, Math.floor(pageBudget.tokens)));
+  pageBudget.tokens -= got;
+  return got;
+}
+
+/** A page taken from the budget that Helius did not bill. */
+function returnPage(perMinute: number): void {
+  pageBudget.tokens = Math.min(perMinute, pageBudget.tokens + 1);
+}
 let pagesFailed = 0;
 /** Coins whose page came off the trade stream since the last call: no Helius page for them. */
 let streamed = 0;
@@ -96,12 +125,14 @@ export function streamPageUsable(page: StreamTapePage, nowMs: number): boolean {
 /** Test hook. */
 export function resetLiveTape(): void {
   pages.clear();
+  pageBudget.tokens = Number.NaN;
   takeLiveTapeStats();
 }
 
 /**
- * Reads the newest page for the first `maxPages` of `mints` (priority order) whose page is
- * missing or older than `refreshMs`, the missing ones first. A page due whose coin `quietSince` says has had no trade since
+ * Reads the newest page for the first of `mints` (priority order) whose page is missing or older
+ * than `refreshMs`, the missing ones first, as many as the shared budget of `maxPages` a minute has
+ * left (pageBudget). A page due whose coin `quietSince` says has had no trade since
  * it was read is still the coin's newest: it is kept, as of now, so it doesn't age out of
  * livePageOf while the coin stays quiet. Never rejects.
  */
@@ -145,16 +176,20 @@ export async function readLiveTape(
   // A coin with no page yet goes before a re-read: without one its decision has no winner or
   // flagged-wallet reading at all (and the Winners seat skips it), where a re-read only makes a
   // reading fresher. Most decisions are a coin's first (2026-10-23 thread "Winners model signal").
-  const due = [...missing, ...stale].slice(0, opts.maxPages);
+  const queued = [...missing, ...stale];
+  const due = queued.slice(0, takePages(queued.length, opts.maxPages, now));
   await Promise.all(
     due.map(async (mint) => {
+      let billed = false;
       try {
         const page = await helius.getMintTransactionsPage(mint, { newest: true });
         if (page.status !== "ok") {
           if (page.status === "failed") pagesFailed += 1;
+          returnPage(opts.maxPages);
           return;
         }
         pagesRead += 1;
+        billed = true;
         pages.delete(mint);
         const { trades } = await tradesFromChainTransactionsPriced(mint, page.txs, opts.solPrices);
         pages.set(mint, { atMs: now, trades, complete: page.paginationToken === null });
@@ -164,6 +199,7 @@ export async function readLiveTape(
         }
       } catch (err) {
         pagesFailed += 1;
+        if (!billed) returnPage(opts.maxPages);
         logger.warn("live tape page failed", { mint, error: String(err) });
       }
     }),

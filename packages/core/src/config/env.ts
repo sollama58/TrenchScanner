@@ -435,8 +435,9 @@ const envSchema = z.object({
   LINKED_LIST_MAX_WAIT_SECONDS: z.coerce.number().nonnegative().default(60),
   // The live tape (worker's liveTape.ts): each coin close to a call (a contender, or an alert held
   // for a wallet figure) has its newest page of trades read from Helius, 10 credits a page, so the
-  // flagged wallets trading it are known at the decision. At most this many pages a cycle (the
-  // credit ceiling), and a coin's page is read again once it is LIVE_TAPE_REFRESH_SECONDS old.
+  // flagged wallets trading it are known at the decision. At most this many pages a minute (the
+  // credit ceiling), shared by the cycle and the entry fast path's scans, and a coin's page is read
+  // again once it is LIVE_TAPE_REFRESH_SECONDS old.
   // A coin still on its bonding curve takes its page off the PumpPortal trade stream instead, for
   // nothing (user decision 2026-10-24); these pages are for the coins past graduation. 0 turns
   // it off.
@@ -494,18 +495,19 @@ const envSchema = z.object({
   // 0 turns the chain read off (the figure then only comes from the trade stream, when it runs).
   SNIPER_LAUNCH_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(5),
   // The same for contenders (tokens about to be decided on), on top of the above: with
-  // CURATED_REQUIRE_WALLET_CHECKS on, a curated decision waits for the top-10 snipers share, which
-  // needs the first buyers. Contenders are a handful a cycle; this caps a burst.
+  // CURATED_REQUIRE_WALLET_CHECKS on, a curated decision waits for this read's Block 0 figure (the
+  // safety screen's Block 0 cut). Contenders are a handful a cycle; this caps a burst.
   SNIPER_CONTENDER_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(15),
-  // The longest a curated decision waits for that share once the token looks ready and its other
-  // wallet checks are in. Past it the token is decided with the share unknown: a read that is slow
+  // The longest a curated decision waits for that Block 0 figure once the token looks ready and its
+  // other wallet checks are in (the key keeps its name from when the wait was on the top-10 snipers
+  // share, retired 2026-10-22). Past it the token is decided with Block 0 unknown: a read that is slow
   // or keeps failing must not hold decisions back (on 2026-10-08 an unbounded wait cut decisions
   // from about ten every ten minutes to one). 0 = don't wait at all.
   SNIPER_SHARE_MAX_WAIT_SECONDS: z.coerce.number().nonnegative().default(90),
-  // Coins younger than this don't wait for the share at all. A young coin looks ready for a minute
+  // Coins younger than this don't wait for the launch read at all. A young coin looks ready for a minute
   // or two at most and its launch is often too new for the read to land: with the 90 s wait, first
   // decisions on coins under 3 minutes old fell from ~15 an hour to ~1 (2026-10-08), and young
-  // coins are where most wins are. They're decided with the share if it's in, unknown if not.
+  // coins are where most wins are. They're decided with Block 0 if it's in, unknown if not.
   SNIPER_SHARE_WAIT_MIN_AGE_MINUTES: z.coerce.number().nonnegative().default(10),
   // The trade tape of called coins (the trainer's tradeTapeJob.ts): every trade from launch to 30
   // minutes past the call, for the wallet risk score and the stop causes. Helius pages

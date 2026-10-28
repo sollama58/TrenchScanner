@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { EntryFastPath, type EntryFastPathOptions, type EntryReadHold } from "./entryFastPath.js";
 import { claimForFastScan, cycleClaim, releaseFastClaim, resetScanClaims } from "./scanClaims.js";
 import type { EntryScanResult } from "./scanJob.js";
@@ -324,6 +324,81 @@ describe("EntryFastPath", () => {
       // The next coin holds (and times out), but one miss is not a stand-down.
       await path.offer("h", 0);
       expect(path.takeStats()).toMatchObject({ held: 1, holdTimedOut: 1, holdStandingDown: 0 });
+    });
+
+    it("stands down on a miss rate, so a TokenSage answering one hold in two still stands down (DS-7)", async () => {
+      const time = fakeTime();
+      const settled = new Set<string>();
+      let lands: string | null = null;
+      const path = fastPath(
+        {
+          scan: async () => decided,
+          // The read lands at the first check for every other coin.
+          readHold: {
+            maxMs: 4_000,
+            pollMs: 2_000,
+            settled: (mint) => settled.has(mint),
+            poll: () => {
+              if (lands) settled.add(lands);
+            },
+          },
+          sleep: time.sleep,
+        },
+        time.now,
+      );
+      for (let i = 0; i < 9; i++) {
+        const mint = `c${i}`;
+        lands = i % 2 === 1 ? mint : null;
+        await path.offer(mint, 0);
+        time.advance(1_000);
+      }
+      // Five of the last nine holds got no read: the default five of ten.
+      expect(path.takeStats()).toMatchObject({
+        held: 9,
+        holdReadArrived: 4,
+        holdTimedOut: 5,
+        holdStandingDown: 1,
+      });
+      await path.offer("next", 0);
+      expect(path.takeStats()).toMatchObject({ held: 0, holdStoodDown: 1 });
+    });
+
+    it("waits on a slow poll only for what is left of the cap (DS-7)", async () => {
+      vi.useFakeTimers();
+      try {
+        let clock = 0;
+        const scannedAt: number[] = [];
+        const path = fastPath(
+          {
+            scan: async () => {
+              scannedAt.push(clock);
+              return decided;
+            },
+            readHold: {
+              maxMs: 5_000,
+              pollMs: 2_000,
+              settled: () => false,
+              // A flush stuck behind a TokenSage backlog: its own deadline is two minutes.
+              poll: () => new Promise<void>(() => {}),
+            },
+            sleep: async (ms) => {
+              clock += ms;
+            },
+          },
+          () => clock,
+        );
+        const offered = path.offer("a", 0);
+        // The first check comes 2 s in and polls; the poll is given the 3 s left, not its own two minutes.
+        await vi.advanceTimersByTimeAsync(2_999);
+        expect(scannedAt).toEqual([]);
+        clock += 3_000;
+        await vi.advanceTimersByTimeAsync(1);
+        await offered;
+        expect(scannedAt).toEqual([5_000]);
+        expect(path.takeStats()).toMatchObject({ held: 1, holdTimedOut: 1, fastScans: 1 });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("never stands down with standDownAfter 0", async () => {

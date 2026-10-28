@@ -38,12 +38,14 @@ export interface EntryReadHold {
   settled: (mint: string) => boolean;
   poll?: () => void | Promise<void>;
   /**
-   * Stand down once this many holds in a row ended with no read (default
-   * ENTRY_READ_HOLD_STAND_DOWN_AFTER): TokenSage is not answering, so holding every coin would
-   * only cost each one 20 s for nothing (2026-10-26: with nine of twelve analyzer slots dead, a
-   * quick read took minutes). While stood down, coins scan at once, except one probe every
-   * `probeMs` (default ENTRY_READ_HOLD_PROBE_MS) that is held as usual; a probe whose read
-   * arrives ends the stand-down. 0 never stands down.
+   * Stand down once this many of the last ENTRY_READ_HOLD_WINDOW holds ended with no read
+   * (default ENTRY_READ_HOLD_STAND_DOWN_AFTER): TokenSage is not answering, so holding every coin
+   * would only cost each one 20 s for nothing (2026-10-26: with nine of twelve analyzer slots
+   * dead, a quick read took minutes). A rate, not a run: counted in a row, a TokenSage answering
+   * one hold in two never stood down, and each miss cost its coin the whole cap (audit 2026-10-27,
+   * DS-7). While stood down, coins scan at once, except one probe every `probeMs` (default
+   * ENTRY_READ_HOLD_PROBE_MS) that is held as usual; a probe whose read arrives ends the
+   * stand-down. 0 never stands down.
    */
   standDownAfter?: number;
   probeMs?: number;
@@ -51,8 +53,10 @@ export interface EntryReadHold {
 
 /** How often a held coin checks for its read when the hold names no cadence. */
 export const ENTRY_READ_HOLD_POLL_MS = 2_000;
-/** Holds that ended with no read, in a row, before the hold stands down (EntryReadHold). */
-export const ENTRY_READ_HOLD_STAND_DOWN_AFTER = 10;
+/** Of the last ENTRY_READ_HOLD_WINDOW holds, how many ended with no read before the hold stands down. */
+export const ENTRY_READ_HOLD_STAND_DOWN_AFTER = 5;
+/** The holds the stand-down's miss rate is counted over (EntryReadHold standDownAfter). */
+export const ENTRY_READ_HOLD_WINDOW = 10;
 /** While stood down, how often one coin is held anyway to see whether TokenSage answers again. */
 export const ENTRY_READ_HOLD_PROBE_MS = 60_000;
 
@@ -113,6 +117,19 @@ const emptyStats = (): EntryFastPathStats => ({
 
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** Waits for `work` to settle, or `ms` to pass, whichever is first. */
+async function settleWithin(work: Promise<void>, ms: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const cap = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+  });
+  try {
+    await Promise.race([work, cap]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function median(values: number[]): number | undefined {
   if (values.length === 0) return undefined;
   const sorted = [...values].sort((a, b) => a - b);
@@ -137,7 +154,7 @@ function median(values: number[]): number | undefined {
  * fast-path decisions carried it and with a 20 s cap about two thirds do, at a median 1.02x on
  * the entry price (notes/model-audit-2026-10-26, section 7). The scan runs on the coin as it is
  * after the wait, so a launch that collapsed meanwhile fails the pre-gate. The hold stands down
- * while TokenSage is not answering (ten holds in a row with no read) and probes once a minute, so
+ * while TokenSage is not answering (five of the last ten holds with no read) and probes once a minute, so
  * a TokenSage outage costs the fast path nothing but the read (EntryReadHold).
  *
  * Each coin gets one: the watch never hands a coin over twice, and the cycle owns it after. One
@@ -153,8 +170,10 @@ export class EntryFastPath {
   private decisionMs: number[] = [];
   private callMs: number[] = [];
   private holdMs: number[] = [];
-  /** Holds in a row that ended with no read; reset by one that got its read. */
-  private holdMisses = 0;
+  /** How the last ENTRY_READ_HOLD_WINDOW holds ended (true: no read), oldest first; cleared when a probe gets its read. */
+  private holdOutcomes: boolean[] = [];
+  /** The poll running now, if any: one at a time, however many coins are held. */
+  private pollInFlight: Promise<void> | null = null;
   /** The last coin held while stood down (the probe), so one goes every probeMs. */
   private probedAt = -Infinity;
   /**
@@ -269,35 +288,50 @@ export class EntryFastPath {
       const waited = this.now() - startedAt;
       if (waited >= hold.maxMs) {
         this.stats.holdTimedOut += 1;
-        this.holdMisses += 1;
         this.holdMs.push(waited);
-        if (this.holdMisses === this.standDownAfter()) {
+        const wasStandingDown = this.standingDown();
+        this.noteHold(true);
+        if (!wasStandingDown && this.standingDown()) {
           // From now coins go straight to their scan; the first probe is a probeMs away.
           this.probedAt = this.now();
-          logger.warn("entry read hold: no read arrived for the last holds; standing down", {
-            misses: this.holdMisses,
+          logger.warn("entry read hold: most recent holds got no read; standing down", {
+            misses: this.misses(),
+            of: this.holdOutcomes.length,
             probeEveryMs: hold.probeMs ?? ENTRY_READ_HOLD_PROBE_MS,
           });
         }
         return;
       }
       await this.sleep(Math.min(pollMs, hold.maxMs - waited));
-      if (hold.poll && this.now() - this.lastPollAt >= pollMs) {
+      if (hold.poll && !this.pollInFlight && this.now() - this.lastPollAt >= pollMs) {
         this.lastPollAt = this.now();
-        try {
-          await hold.poll();
-        } catch (err) {
-          logger.warn("entry read hold: poll failed", { mint, error: String(err) });
-        }
+        const polling = (async () => {
+          try {
+            await hold.poll!();
+          } catch (err) {
+            logger.warn("entry read hold: poll failed", { mint, error: String(err) });
+          }
+        })();
+        this.pollInFlight = polling;
+        void polling.finally(() => {
+          if (this.pollInFlight === polling) this.pollInFlight = null;
+        });
+        // The poll (a prefetcher flush, whose own deadline is two minutes) is waited on only for
+        // what is left of the cap: awaited whole, a slow TokenSage held the coin past it (DS-7).
+        const left = hold.maxMs - (this.now() - startedAt);
+        if (left > 0) await settleWithin(polling, left);
       }
       if (hold.settled(mint)) {
         this.stats.holdReadArrived += 1;
-        if (this.holdMisses >= this.standDownAfter()) {
+        if (this.standingDown()) {
+          // A probe got its read: TokenSage answers again.
           logger.info("entry read hold: TokenSage answers again; holding every coin", {
-            missesBefore: this.holdMisses,
+            missesBefore: this.misses(),
           });
+          this.holdOutcomes = [];
+        } else {
+          this.noteHold(false);
         }
-        this.holdMisses = 0;
         this.holdMs.push(this.now() - startedAt);
         return;
       }
@@ -308,10 +342,21 @@ export class EntryFastPath {
     return this.options.readHold?.standDownAfter ?? ENTRY_READ_HOLD_STAND_DOWN_AFTER;
   }
 
-  /** Whether the last standDownAfter holds all ended with no read. */
+  /** Records how a hold ended, keeping the last ENTRY_READ_HOLD_WINDOW. */
+  private noteHold(missed: boolean): void {
+    this.holdOutcomes.push(missed);
+    const keep = Math.max(ENTRY_READ_HOLD_WINDOW, this.standDownAfter());
+    if (this.holdOutcomes.length > keep) this.holdOutcomes.splice(0, this.holdOutcomes.length - keep);
+  }
+
+  private misses(): number {
+    return this.holdOutcomes.filter(Boolean).length;
+  }
+
+  /** Whether standDownAfter of the last ENTRY_READ_HOLD_WINDOW holds ended with no read. */
   private standingDown(): boolean {
     const after = this.standDownAfter();
-    return after > 0 && this.holdMisses >= after;
+    return after > 0 && this.misses() >= after;
   }
 
   /** Waits for the scans in flight, up to `ms`. For shutdown and tests. */

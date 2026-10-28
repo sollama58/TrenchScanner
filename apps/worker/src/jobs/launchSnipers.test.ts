@@ -6,6 +6,7 @@ import {
   type LaunchBuyersResult,
 } from "@trenchscanner/core";
 import {
+  blockZeroUnobtainable,
   blockZeroWalletsFromCache,
   launchBuyersFromCache,
   type LaunchReadStore,
@@ -20,9 +21,9 @@ import {
 import {
   decisionInputsReady,
   HOURLY_WALLET_CHECKS_MAX_WAIT_MS,
+  launchReadReady,
   linkedListReady,
   resetSniperWaits,
-  sniperShareReady,
   withChainDevHolding,
   withLaunchSnipers,
   withWalletSignals,
@@ -488,48 +489,73 @@ describe("snipers in the top 10", () => {
     // Fewer buyers than asked so far is a read to repeat, not a launch without snipers.
     expect(sniperShareUnobtainable("B")).toBe(false);
   });
+
+  it("calls Block 0 unobtainable for a read with no block to go by, never before a read lands (SW-4)", async () => {
+    // These fixture reads carry no slots: block zero can't be told.
+    const f = fakeHelius({ found: { A: 25 } });
+    expect(blockZeroUnobtainable("A")).toBe(false);
+    await resolveLaunchSnipers(
+      [
+        { mintAddress: "A", contender: true },
+        { mintAddress: "failed", contender: true },
+      ],
+      f.helius,
+      { ...opts, now: 0 },
+    );
+    expect(blockZeroUnobtainable("A")).toBe(true);
+    // A failed read is one to repeat.
+    expect(blockZeroUnobtainable("failed")).toBe(false);
+    // So a decision on A doesn't wait for a figure that can't come; one on the failed read does.
+    const W = { maxMs: 90_000, minAgeMinutes: 10 };
+    expect(
+      launchReadReady({ mintAddress: "A", blockZeroHeldPct: undefined, ageMinutes: 30 }, true, W, 0),
+    ).toBe(true);
+    expect(
+      launchReadReady({ mintAddress: "failed", blockZeroHeldPct: undefined, ageMinutes: 30 }, true, W, 0),
+    ).toBe(false);
+  });
 });
 
-describe("sniperShareReady", () => {
+describe("launchReadReady", () => {
   beforeEach(() => {
     resetLaunchSnipersCache();
     resetSniperWaits();
   });
-  const unknown = { mintAddress: "A", sniperTop10WalletPct: undefined, ageMinutes: 30 };
+  const unknown = { mintAddress: "A", blockZeroHeldPct: undefined, ageMinutes: 30 };
   const W = { maxMs: 90_000, minAgeMinutes: 10 };
 
-  it("holds a decision until the share is in, unless it can't come", () => {
-    expect(sniperShareReady(unknown, true, W, 0)).toBe(false);
-    expect(sniperShareReady({ ...unknown, sniperTop10WalletPct: 0 }, true, W, 1_000)).toBe(true);
+  it("holds a decision until Block 0 is in, unless it can't come", () => {
+    expect(launchReadReady(unknown, true, W, 0)).toBe(false);
+    expect(launchReadReady({ ...unknown, blockZeroHeldPct: 0 }, true, W, 1_000)).toBe(true);
     // The chain read is off or the endpoint is standing down: nothing to wait for.
-    expect(sniperShareReady(unknown, false, W, 2_000)).toBe(true);
+    expect(launchReadReady(unknown, false, W, 2_000)).toBe(true);
   });
 
   it("stops waiting once the token has waited the longest allowed", () => {
-    expect(sniperShareReady(unknown, true, W, 0)).toBe(false);
-    expect(sniperShareReady(unknown, true, W, 60_000)).toBe(false);
-    expect(sniperShareReady(unknown, true, W, 90_000)).toBe(true);
+    expect(launchReadReady(unknown, true, W, 0)).toBe(false);
+    expect(launchReadReady(unknown, true, W, 60_000)).toBe(false);
+    expect(launchReadReady(unknown, true, W, 90_000)).toBe(true);
     // And stays out of the way, rather than starting over on the next ask.
-    expect(sniperShareReady(unknown, true, W, 91_000)).toBe(true);
+    expect(launchReadReady(unknown, true, W, 91_000)).toBe(true);
     // Another token's wait is its own.
-    expect(sniperShareReady({ ...unknown, mintAddress: "B" }, true, W, 90_000)).toBe(false);
+    expect(launchReadReady({ ...unknown, mintAddress: "B" }, true, W, 90_000)).toBe(false);
   });
 
   it("doesn't make a young coin wait; an unknown age waits", () => {
-    expect(sniperShareReady({ ...unknown, ageMinutes: 2 }, true, W, 0)).toBe(true);
-    expect(sniperShareReady({ ...unknown, ageMinutes: undefined }, true, W, 0)).toBe(false);
+    expect(launchReadReady({ ...unknown, ageMinutes: 2 }, true, W, 0)).toBe(true);
+    expect(launchReadReady({ ...unknown, ageMinutes: undefined }, true, W, 0)).toBe(false);
   });
 
   it("doesn't wait at all with the bound at 0", () => {
-    expect(sniperShareReady(unknown, true, { ...W, maxMs: 0 }, 0)).toBe(true);
+    expect(launchReadReady(unknown, true, { ...W, maxMs: 0 }, 0)).toBe(true);
   });
 
   it("keeps the hourly lane's wait apart from the decision's", () => {
-    expect(sniperShareReady(unknown, true, { ...W, lane: "hourly" }, 0)).toBe(false);
+    expect(launchReadReady(unknown, true, { ...W, lane: "hourly" }, 0)).toBe(false);
     // The decision's wait starts only now, however long the hourly sample has waited.
-    expect(sniperShareReady(unknown, true, W, 90_000)).toBe(false);
-    expect(sniperShareReady(unknown, true, { ...W, lane: "hourly" }, 90_000)).toBe(true);
-    expect(sniperShareReady(unknown, true, W, 100_000)).toBe(false);
+    expect(launchReadReady(unknown, true, W, 90_000)).toBe(false);
+    expect(launchReadReady(unknown, true, { ...W, lane: "hourly" }, 90_000)).toBe(true);
+    expect(launchReadReady(unknown, true, W, 100_000)).toBe(false);
   });
 });
 
@@ -549,7 +575,7 @@ describe("decisionInputsReady", () => {
   const reads = (lane: "decision" | "hourly") => ({ lane, listRead: false, sniperChainAvailable: true });
   const unread = { mintAddress: "D1", ageMinutes: 30 };
   const walletsIn = { ...unread, freshTop10WalletPct: 10, emptyTop10WalletPct: 0 };
-  const allIn = { ...walletsIn, sniperTop10WalletPct: 20, linkedWalletCount: 2, cexFundedCount: 1 };
+  const allIn = { ...walletsIn, blockZeroHeldPct: 4, linkedWalletCount: 2, cexFundedCount: 1 };
 
   it("goes ahead on either lane once everything a decision reads is in", () => {
     expect(decisionInputsReady(allIn, { ...reads("decision"), listRead: true }, ENV, 0)).toEqual({
@@ -570,11 +596,11 @@ describe("decisionInputsReady", () => {
     // The checks landed late: the other two waits start now, not at the first call.
     expect(decisionInputsReady(walletsIn, reads("decision"), ENV, 100_000)).toEqual({
       ready: false,
-      held: ["sniperWait", "linkedWait"],
+      held: ["launchReadWait", "linkedWait"],
     });
     expect(decisionInputsReady(walletsIn, reads("decision"), ENV, 100_000 + 60_000)).toEqual({
       ready: false,
-      held: ["sniperWait"],
+      held: ["launchReadWait"],
     });
     expect(decisionInputsReady(walletsIn, reads("decision"), ENV, 100_000 + 90_000)).toEqual({
       ready: true,
@@ -585,14 +611,14 @@ describe("decisionInputsReady", () => {
   it("runs the hourly sample's three waits side by side, on its own clock", () => {
     expect(decisionInputsReady(unread, reads("hourly"), ENV, 0)).toEqual({
       ready: false,
-      held: ["walletChecks", "sniperWait", "linkedWait"],
+      held: ["walletChecks", "launchReadWait", "linkedWait"],
     });
     // The checks landed at 100 s: the sniper and Linked waits have already run their course.
     expect(decisionInputsReady(walletsIn, reads("hourly"), ENV, 100_000)).toEqual({ ready: true, held: [] });
     // The decision's own waits are untouched by the sample's.
     expect(decisionInputsReady(walletsIn, reads("decision"), ENV, 100_000)).toEqual({
       ready: false,
-      held: ["sniperWait", "linkedWait"],
+      held: ["launchReadWait", "linkedWait"],
     });
   });
 

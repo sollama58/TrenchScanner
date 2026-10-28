@@ -202,6 +202,14 @@ export interface TokenLookupOptions {
    */
   priority?: boolean;
   /**
+   * May take the rate budget's reserved slots (DEXSCREENER_PRIORITY_RESERVE) without `priority`'s
+   * other claims on the fallback's budget. For a lookup made just after the band refresh, when that
+   * refresh no longer needs the reserve: the scan's viewed-coin lookup, which as an ordinary request
+   * waited for the bucket to refill past the reserve behind every refresh, ~5-7 s a cycle that every
+   * decision sat behind (audit 2026-10-27, DS-2).
+   */
+  reservedSlots?: boolean;
+  /**
    * Mints to ask the fallback (GeckoTerminal) about when DexScreener answers with no pair for them:
    * the scan's newest launches. DexScreener lists a new Pump.fun launch a median ~43 s after it, and
    * GeckoTerminal ~22 s (both measured 2026-10-12), while most launch runs that double do it in the
@@ -947,6 +955,7 @@ export class DexScreenerClient {
       seenAt,
       failed,
       priority,
+      reservedSlots,
       fresh,
       fallbackIfUnlisted: _fallbackIfUnlisted,
       freshSources: _freshSources,
@@ -989,7 +998,7 @@ export class DexScreenerClient {
     const deadline = deadlineMs === undefined ? Infinity : Date.now() + deadlineMs;
     let skipped = 0;
     const gate = {
-      acquire: () => this.gate.acquire(deadline, priority === true),
+      acquire: () => this.gate.acquire(deadline, priority === true || reservedSlots === true),
       throttled: (delayMs: number) => this.gate.throttled(delayMs),
     };
     const work = forEachWithConcurrency(chunks, concurrency, async (chunk) => {
