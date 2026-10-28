@@ -15,4 +15,9 @@ describe("bwamDevSideExportWallets", () => {
       { wallet: "c", name: "bwam_dev_2" },
     ]);
   });
+
+  it("continues the numbers after bwam_dev's labeled sides", () => {
+    const out = bwamDevSideExportWallets([{ wallet: "b", pct: 95 }], new Set(), new Set(), "bwam_dev", 4);
+    expect(out).toEqual([{ wallet: "b", name: "bwam_dev_4" }]);
+  });
 });

@@ -228,11 +228,41 @@ type StoredSideList = Partial<Record<SideWindow, { wallet: string; pct: number }
 };
 
 /**
+ * The labeled export split for the checker's "Include BWAM sides?" toggle (user asks 2026-10-22,
+ * 2026-10-28): every side linked to bwam_dev (its labeled sides, then its listed 30d sides not
+ * labeled for anyone) moves out of `wallets` into `bwamDevSide`, so the toggle off leaves them all
+ * out. Before 2026-10-28 its labeled sides stayed in `wallets` and the toggle only added the rest.
+ */
+export function splitBwamDevSides<T extends { wallet: string; kolWallet: string }>(
+  labeled: readonly T[],
+): { wallets: T[]; bwamDevLabeled: T[] } {
+  return {
+    wallets: labeled.filter((s) => s.kolWallet !== BWAM_DEV_KOL_WALLET),
+    bwamDevLabeled: labeled.filter((s) => s.kolWallet === BWAM_DEV_KOL_WALLET),
+  };
+}
+
+/** GET /utilities/side-labels: the labeled sides without bwam_dev's, and every side of bwam_dev's. */
+export async function loadSideLabelExport(): Promise<{
+  wallets: LabeledSide[];
+  bwamDevSide: { wallet: string; name: string }[];
+}> {
+  const labeled = await loadLabeledSides();
+  const { wallets, bwamDevLabeled } = splitBwamDevSides(labeled);
+  const listed = await loadBwamDevSideExport(
+    new Set(labeled.map((w) => w.wallet)),
+    bwamDevLabeled.length + 1,
+  );
+  return { wallets, bwamDevSide: [...bwamDevLabeled, ...listed] };
+}
+
+/**
  * bwam_dev's 30d listed side wallets that are not already in the labeled export (user ask
- * 2026-10-22). The count and the toggle's export use this same set.
+ * 2026-10-22), numbered from `firstNumber`.
  */
 export async function loadBwamDevSideExport(
   alreadyExported: ReadonlySet<string>,
+  firstNumber = 1,
 ): Promise<{ wallet: string; name: string }[]> {
   const row = await prisma.kolSideWallets.findUnique({ where: { wallet: BWAM_DEV_KOL_WALLET } });
   if (!row) return [];
@@ -240,7 +270,7 @@ export async function loadBwamDevSideExport(
   const listed = stored["30d"] ?? [];
   const likelyBots = new Set(stored.likelyBots ?? []);
   const kolName = (await readKolRows([BWAM_DEV_KOL_WALLET])).get(BWAM_DEV_KOL_WALLET)?.name ?? "bwam_dev";
-  return bwamDevSideExportWallets(listed, likelyBots, alreadyExported, kolName);
+  return bwamDevSideExportWallets(listed, likelyBots, alreadyExported, kolName, firstNumber);
 }
 
 /**

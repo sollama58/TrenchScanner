@@ -29,11 +29,14 @@ export const SIDE_WINDOWS = ["24h", "7d", "30d"] as const;
 export interface SideLabels {
   count: number;
   wallets: { wallet: string; name: string }[];
-  /** bwam_dev's listed 30d side wallets not already in `wallets` (absent from older API builds). */
+  /**
+   * Every side of bwam_dev's (its labeled sides, then its listed 30d sides), none of them in
+   * `wallets`, so the toggle off leaves them all out (absent from older API builds).
+   */
   bwamDevSide?: { count: number; wallets: { wallet: string; name: string }[] };
 }
 
-/** The wallets the export copies: labeled sides, and optionally bwam_dev's listed sides. */
+/** The wallets the export copies: labeled sides, and optionally every side of bwam_dev's. */
 export function sideLabelsForExport(labels: SideLabels, includeBwamDev: boolean): SideLabels {
   if (!includeBwamDev || !labels.bwamDevSide?.wallets.length) return labels;
   const extra = labels.bwamDevSide.wallets;
