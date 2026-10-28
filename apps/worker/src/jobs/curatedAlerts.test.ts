@@ -27,6 +27,7 @@ import {
   resetCuratorModelCache,
   resetDeferredContenders,
   resetLiveScaleCache,
+  rulesTableDecision,
   takeContenderRetry,
 } from "./curatedAlerts.js";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
@@ -138,6 +139,43 @@ async function freeGovernorBudget(): Promise<void> {
     data: { createdAt: shifted },
   });
 }
+
+// The Rules seat's call line (full audit 2026-10-27, CH-4): a points table sends at its cutoff
+// and not below it. Before this, a cutoff read at half its value passed every worker test.
+describe("the Rules seat's points-table cutoff", () => {
+  const table = {
+    conditions: [
+      { feature: "buyRatio24h" as const, op: "gte" as const, value: 0.6, points: 60 },
+      { feature: "freshTop10WalletPct" as const, op: "lte" as const, value: 30, points: 40 },
+    ],
+    teacher: { contestant: "trees", name: "Trees" },
+    derivedAt: "2026-10-27T00:00:00.000Z",
+    agreementPct: null,
+  };
+  // 60 points from the buy check, plus the composite's 50 as a tie-break fraction: 60.05.
+  const features = { buyRatio24h: 0.7, freshTop10WalletPct: 55, scoreTotal: 50 };
+
+  it("calls at exactly the cutoff and not a hair under it", () => {
+    const at = rulesTableDecision(table, features, 60.05);
+    expect(at.curate).toBe(true);
+    expect(at.confidence).toBeCloseTo(60.05, 10);
+    expect(at.reasons.length).toBeGreaterThan(0);
+    expect(at.source).toBe(HEURISTIC_CURATOR_SOURCE);
+    const under = rulesTableDecision(table, features, 60.06);
+    expect(under.curate).toBe(false);
+    expect(under.reasons).toEqual([]);
+  });
+
+  it("does not call a token at well under its cutoff", () => {
+    expect(rulesTableDecision(table, features, 100).curate).toBe(false);
+    expect(rulesTableDecision(table, { ...features, freshTop10WalletPct: 10 }, 100).curate).toBe(true);
+  });
+
+  it("sends nothing without a cutoff, and never on zero points", () => {
+    expect(rulesTableDecision(table, features, undefined).curate).toBe(false);
+    expect(rulesTableDecision(table, { buyRatio24h: 0.1, freshTop10WalletPct: 90 }, 0).curate).toBe(false);
+  });
+});
 
 describe.skipIf(!dbAvailable)("curated alert emission", () => {
   // Lazy: vitest runs a describe callback during collection even when skipIf will skip every

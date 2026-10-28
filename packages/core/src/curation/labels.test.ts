@@ -255,6 +255,42 @@ describe("candidate outcome labels", () => {
     expect(labels.disqualified).toBe(false);
   });
 
+  // The two lines every graded hit rate rests on (full audit 2026-10-27, CH-4): a near miss on
+  // either side of the 2x bar and of the -50% stop, with literal prices, so a change to
+  // WIN_MULTIPLE or DISQUALIFYING_DRAWDOWN_FRACTION fails here rather than passing every label test.
+  it("does not count a peak just under 2x as a win, and counts exactly 2x", () => {
+    const miss = computeOutcomeLabels(replay(1, [[1.99, 5]]));
+    expect(miss.hit2xIn15m).toBe(false);
+    expect(miss.hit2xIn1h).toBe(false);
+    expect(miss.labelValue).toBe(0);
+    const near = computeOutcomeLabels(replay(1, [[1.8, 5]]));
+    expect(near.hit2xIn15m).toBe(false);
+    const hit = computeOutcomeLabels(replay(1, [[2, 5]]));
+    expect(hit.hit2xIn15m).toBe(true);
+    expect(hit.labelValue).toBeCloseTo(1);
+  });
+
+  it("stops a row that trades at exactly -50% before its 2x, and not one that holds just above", () => {
+    const held = computeOutcomeLabels(
+      replay(1, [
+        [0.51, 3],
+        [2, 8],
+      ]),
+    );
+    expect(held.hit2xIn15m).toBe(true);
+    expect(held.disqualified).toBe(false);
+    expect(held.labelValue).toBeCloseTo(1);
+    const stopped = computeOutcomeLabels(
+      replay(1, [
+        [0.5, 3],
+        [2, 8],
+      ]),
+    );
+    expect(stopped.hit2xIn15m).toBe(true);
+    expect(stopped.disqualified).toBe(true);
+    expect(stopped.labelValue).toBe(0);
+  });
+
   it("treats the exact win-window boundary as inside the window", () => {
     const labels = computeOutcomeLabels(replay(1, [[2.0, 15]]));
     expect(labels.hit2xIn1h).toBe(true);

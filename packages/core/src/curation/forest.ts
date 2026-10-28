@@ -6,6 +6,7 @@ import {
   growTree,
   prng,
   recencyWeights,
+  rowMajorBins,
   type BoostedCuratorParams,
   type BoostedTree,
   type BoostingRow,
@@ -157,6 +158,9 @@ export async function trainForestCurator(
     return (logit(Math.min(1 - 1e-4, Math.max(1e-4, rate))) - baseScore) * share;
   };
 
+  const binColumns = binned.map((b) => b.bins);
+  const binEdges = binned.map((b) => b.edges);
+  const rowBins = rowMajorBins(binColumns, rows.length);
   const rand = prng(opts.seed);
   const allFeatures = featureNames.map((_, j) => j);
   const trees: BoostedTree[] = [];
@@ -167,8 +171,9 @@ export async function trainForestCurator(
     const features = allFeatures.filter(() => rand() < opts.featureSample);
     trees.push(
       growTree(Uint32Array.from(sampled), {
-        bins: binned.map((b) => b.bins),
-        edges: binned.map((b) => b.edges),
+        bins: binColumns,
+        edges: binEdges,
+        rowBins,
         grad,
         hess,
         opts: growOpts,
