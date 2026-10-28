@@ -616,7 +616,11 @@ input[type="checkbox"] {
   height: 7px;
   border-radius: 50%;
   background: currentColor;
-  animation: pulse 2s infinite;
+  /* Two beats each time the scan heartbeat comes back (ScanStatus restarts it), then a steady dot.
+     Any running animation, even this 7px one on the compositor, makes the browser draw a fresh
+     frame of the whole page 60 times a second: left beating forever it kept the Live tab at ~7% CPU
+     (13% under the coin window) doing nothing (2026-10-28). */
+  animation: pulse 2s 2;
 }
 /* Held still: a steady dot, not a heartbeat. */
 .pulse.still {
@@ -903,15 +907,18 @@ input[type="checkbox"] {
   border-radius: 6px;
   background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%) 0 0 /
     200% 100%;
-  animation: shimmer 1.4s linear infinite;
+  animation: shimmer 1.4s ease-in-out infinite;
 }
 .skeleton.round {
   border-radius: 50%;
   flex: none;
 }
+/* A fade, not a sweep: opacity runs on the compositor, while a sliding background-position
+   repainted every placeholder on the main thread on every frame (the coin window waiting on its
+   holders spent ~14% CPU on its placeholders alone, 2026-10-28). */
 @keyframes shimmer {
-  to {
-    background-position: -200% 0;
+  50% {
+    opacity: 0.55;
   }
 }
 /* About a real feed card's height with the default look (~360px), so the cards replace the
@@ -13750,7 +13757,7 @@ img.tm-avatar {
   border-radius: var(--radius-s);
   background: linear-gradient(90deg, var(--surface-3), var(--surface-2), var(--surface-3));
   background-size: 200% 100%;
-  animation: shimmer 1.4s linear infinite;
+  animation: shimmer 1.4s ease-in-out infinite;
 }
 .tm-chart-empty {
   padding: 28px 0;
@@ -15796,7 +15803,14 @@ button.bm-same {
 .bm-xfer-flow {
   stroke: var(--bm-xfer-spark);
   stroke-dasharray: 1.2 7;
-  animation: bm-xfer-flow 1.4s linear infinite;
+  /* A few runs to show which way each transfer went, then still. Marching dashes repaint the whole
+     map, every bubble, on every frame for as long as it is open (2026-10-28); the picked or hovered
+     wallet's transfers keep flowing. */
+  animation: bm-xfer-flow 1.4s linear 3;
+}
+.bm-xfer.on .bm-xfer-flow,
+.bm-xfer:hover .bm-xfer-flow {
+  animation-iteration-count: infinite;
 }
 .bm-xfer-head {
   fill: var(--bm-xfer);
@@ -17000,7 +17014,9 @@ button.bm-same {
   height: 6px;
   border-radius: 50%;
   background: currentColor;
-  animation: pulse 1.6s infinite;
+  /* A few beats when the chart goes live, then steady: a beat that never stops redraws the page
+     every frame (see .pulse). */
+  animation: pulse 1.6s 3;
 }
 .tm-chart-src .tm-live {
   margin: 0 4px 0 0;
@@ -17598,8 +17614,14 @@ dialog.search-modal::backdrop {
   height: 58px;
   background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%) 0 0 /
     200% 100%;
-  animation: shimmer 1.4s linear infinite;
+  animation: skeleton-row-fade 1.4s ease-in-out infinite;
   opacity: 0.5;
+}
+/* The shimmer's fade from this row's own half opacity. */
+@keyframes skeleton-row-fade {
+  50% {
+    opacity: 0.25;
+  }
 }
 @media (max-width: 640px) {
   dialog.search-modal {
@@ -18758,7 +18780,8 @@ body:has(.util-toast) .bug-fab {
   fill: none;
   stroke-width: 2.5;
   stroke-dasharray: 3 4;
-  animation: ww-spin 24s linear infinite;
+  /* One turn, then still: a halo turning forever repainted the map every frame (see .bm-xfer-flow). */
+  animation: ww-spin 24s linear 1;
   transform-box: fill-box;
   transform-origin: center;
 }
@@ -23827,7 +23850,8 @@ dialog.tm-modal.tm-terminal::backdrop {
   background: var(--good-wash);
 }
 .lt-state.live::before {
-  animation: lt-pulse 1.6s ease-in-out infinite;
+  /* A few beats when the tape goes live, then steady (see .pulse). */
+  animation: lt-pulse 1.6s ease-in-out 3;
 }
 .lt-filter {
   margin-left: auto;

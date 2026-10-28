@@ -88,7 +88,7 @@ export function ScanStatus({
     return (
       <span className="status-wrap" aria-hidden style={{ visibility: "hidden" }}>
         <span className="status-pill">
-          <span className="pulse" />
+          <span className="pulse still" />
           Scanning<span className="faint"> · 10s ago</span>
         </span>
       </span>
@@ -160,7 +160,8 @@ export function ScanStatus({
           }
         }}
       >
-        <span className={paused ? "pulse still" : "pulse"} />
+        {/* Keyed on the scan's last success, so each fresh heartbeat beats the dot again (styles.css .pulse). */}
+        <span key={scan?.lastSuccessAt ?? ""} className={paused ? "pulse still" : "pulse"} />
         {label}
         {scan && <span className="faint"> · {ago(scan.lastSuccessAt, now)}</span>}
       </span>
