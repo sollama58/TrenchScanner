@@ -15,8 +15,12 @@ const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() =
 /** 32 bytes of 8: the swap events name the coin by its key. */
 const MINT = "YMN9Qj5jPNp7j14VPcML1B6xGgcPWVZUGLFU3Mnyfaf";
 const MIN = 60_000;
+const DAY = 24 * 60 * MIN;
 // Now-relative, so the test's ask is the newest of any a database holds (a run reads the newest 50).
-const NOW = Math.floor(Date.now() / MIN) * MIN;
+// Held an hour clear of UTC midnight: the fill forgets its day's state at midnight, so a run at
+// NOW + 31 minutes crossing it read the quiet and unpriced coins again, and the tests that check
+// they are left alone failed when CI ran between 23:29 and 00:00 UTC (2026-10-27).
+const NOW = Math.min(Math.floor(Date.now() / MIN) * MIN, Math.floor(Date.now() / DAY) * DAY + DAY - 60 * MIN);
 const LAUNCH = NOW - 3 * 60 * MIN;
 const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const BUYER = "4WPT9wLwQWYS5zyX36ZgoY3ESxxLgDmE12upKXDAyYbL";

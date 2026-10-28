@@ -1,6 +1,6 @@
 # TrenchScanner — Planning Document
 
-> **Note (2026-10-03):** Telegram alerts and the daily digest described below were removed from the product. The dashboard feed is now the only alert surface; this document is kept as the original plan.
+> **Historical document (status 2026-10-27).** This is the original plan of 2026-08-15, kept as written so the reasoning behind early decisions stays readable. It no longer describes the product, so do not work from it. Among what has changed: Telegram alerts are live again (the scanner's `telegram-dispatch` job; README › Telegram alerts), after a removal noted here on 2026-10-03; the dashboard (`trenchscanner-web`) and the Asyl site (`trenchscanner-asyl`) deploy from this repo's `render.yaml`; the api, scanner and trainer run on Render `standard` with Postgres `basic-4gb` (30 GB), not the Starter/`basic-256mb` stack of §3; the scanner cycles every minute with a 15-second fast match and an entry fast path, not every 5-10 minutes; and the curated feed, its trained models and the AI judge (README › Curated Alerts) did not exist when this was written. For how things work now, read `README.md` and `CLAUDE.md`.
 
 _Last updated: 2026-08-15_
 
