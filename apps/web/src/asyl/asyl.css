@@ -938,7 +938,12 @@ body {
 }
 .asyl-edge.asyl-edge-deploy {
   opacity: 1;
-  animation: asyl-march 1.6s linear infinite;
+  /* A few marches to show the direction, then still: dashes marching forever repaint the whole graph
+     on every frame (2026-10-28). The edge under the pointer keeps marching. */
+  animation: asyl-march 1.6s linear 3;
+}
+.asyl-edge-g.hot .asyl-edge.asyl-edge-deploy {
+  animation-iteration-count: infinite;
 }
 @keyframes asyl-march {
   to {
@@ -2623,7 +2628,9 @@ body {
   stroke-width: 2.5;
   stroke-dasharray: 5 3;
   pointer-events: none;
-  animation: asyl-pick-march 1.2s linear infinite;
+  /* A few marches when picked, then a still dashed ring: marching forever repainted the graph on
+     every frame for as long as anything stayed picked (2026-10-28). */
+  animation: asyl-pick-march 1.2s linear 3;
 }
 @keyframes asyl-pick-march {
   to {
