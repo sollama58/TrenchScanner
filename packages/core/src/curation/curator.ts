@@ -376,6 +376,29 @@ export const PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES = 10;
 export const PRE_GATE_OLD_COIN_MIN_AGE_MINUTES = 60;
 export const PRE_GATE_OLD_COIN_MIN_5M_PCT = 25;
 
+/**
+ * No seat calls a coin this old, or this long past its first entry into the band (isPastCalling).
+ * Such moments still bank, so the record on them keeps building. On 14 days of graded calls
+ * (2026-10-13..27), the calls on these coins won 7.7% [6.6-8.9] (n=2,002) against 21.3% for the
+ * rest; cutting them raised the all-calls rate on 13 of 15 days and left 10-27 level, for 3.1% of
+ * the calls (full audit 2026-10-27 DS-5, notes/full-audit-2026-10-27/fix-t15). User decision
+ * 2026-10-27 (Card 5): stop them, not tracking-only.
+ */
+export const NO_CALL_MIN_AGE_MINUTES = 60;
+export const NO_CALL_MIN_BAND_MINUTES = 30;
+
+/**
+ * Whether the coin is too old, or has sat in the band too long, for any seat to call it
+ * (NO_CALL_MIN_AGE_MINUTES, NO_CALL_MIN_BAND_MINUTES). An unknown reading doesn't count.
+ */
+export function isPastCalling(scored: Pick<ScoredToken, "ageMinutes" | "minutesSinceFirstInBand">): boolean {
+  return (
+    (scored.ageMinutes !== undefined && scored.ageMinutes >= NO_CALL_MIN_AGE_MINUTES) ||
+    (scored.minutesSinceFirstInBand !== undefined &&
+      scored.minutesSinceFirstInBand >= NO_CALL_MIN_BAND_MINUTES)
+  );
+}
+
 /** Down more than this within the last minute: a collapse (isCollapsing). */
 export const COLLAPSE_1M_PCT = -65;
 /** Down more than this over the last five minutes: a collapse (isCollapsing). */
