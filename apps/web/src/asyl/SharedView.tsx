@@ -22,13 +22,17 @@ import { basePath, sharedLink } from "./route";
 
 /**
  * A shared map (/s/<slug>): read-only, open to anyone with the link, signed in or not. It shows the
- * map as its owner froze it when they shared it (apps/api/src/asyl/maps.ts shareMap).
+ * map as its owner froze it when they shared it (apps/api/src/asyl/maps.ts shareMap). Its names,
+ * tags and notes are the owner's, and the page says so (user decision 2026-10-27, full audit TR-2):
+ * they are not TrenchScanner's findings. An admin can take the link down from here.
  */
 export function SharedView({ slug }: { slug: string }) {
   const [map, setMap] = useState<{ title: string; sharedAt: string | null; doc: MapDoc } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
+  const [admin, setAdmin] = useState(false);
+  const [takenDown, setTakenDown] = useState(false);
   const layout = useRef(newLayout());
   const view = useRef<GraphViewHandle>(null);
 
@@ -46,6 +50,23 @@ export function SharedView({ slug }: { slug: string }) {
       })
       .catch((e: Error) => setError(e.message));
   }, [slug]);
+
+  // Only to offer an admin the takedown: a viewer who isn't signed in just doesn't see it.
+  useEffect(() => {
+    asylApi
+      .me()
+      .then((me) => setAdmin(me.admin === true))
+      .catch(() => undefined);
+  }, []);
+
+  const takeDown = () => {
+    if (!confirm("Take this map's link down? It stops answering, and its owner can't share it again."))
+      return;
+    asylApi
+      .takeDown(slug)
+      .then(() => setTakenDown(true))
+      .catch((e: Error) => alert(e.message));
+  };
 
   // As its owner saw it: the kinds of link they switched off and their amount cutoffs hold here too
   // (the dollar one needs SOL's price, which a public page doesn't read, so it cuts nothing).
@@ -94,8 +115,16 @@ export function SharedView({ slug }: { slug: string }) {
               : ""}{" "}
             · read-only
           </span>
+          <span className="asyl-muted asyl-small asyl-shared-author">
+            Made by an Asyl user. The names, tags and notes on it are theirs, not TrenchScanner&apos;s.
+          </span>
         </div>
         <div className="asyl-me">
+          {admin && (
+            <button className="asyl-btn ghost" onClick={takeDown} disabled={takenDown}>
+              {takenDown ? "Taken down" : "Take down"}
+            </button>
+          )}
           <button className="asyl-btn ghost" onClick={() => setSharing(true)}>
             Image
           </button>
@@ -139,7 +168,7 @@ export function SharedView({ slug }: { slug: string }) {
               </button>
             </header>
             {node.tags.length > 0 && (
-              <div className="asyl-tags">
+              <div className="asyl-tags" title="Tags as the map's author saved them">
                 {node.tags.map((t) => (
                   <span key={t} className={`asyl-tag tag-${t}`}>
                     {TAG_LABEL[t]}
@@ -147,7 +176,11 @@ export function SharedView({ slug }: { slug: string }) {
                 ))}
               </div>
             )}
-            {map.doc.notes[node.id] && <p className="asyl-shared-note">{map.doc.notes[node.id]}</p>}
+            {map.doc.notes[node.id] && (
+              <p className="asyl-shared-note" title="The map's author's note">
+                {map.doc.notes[node.id]}
+              </p>
+            )}
             <footer className="asyl-insp-foot">
               <a
                 href={`https://solscan.io/${node.kind === "token" ? "token" : "account"}/${node.id}`}

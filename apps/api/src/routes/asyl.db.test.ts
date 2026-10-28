@@ -7,6 +7,7 @@ import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
 import { resetTrackedCache } from "../trackedWallets.js";
+import { MAP_BYTES_FREE } from "../asyl/maps.js";
 
 /**
  * A wallet address from a readable prefix (no 0, O, I or l): the first fill that lands on the
@@ -289,10 +290,73 @@ describe.skipIf(!dbAvailable)("asyl routes", () => {
     await as(PLAIN, "PUT", `/asyl/maps/${id}`, { title: "Case one, edited", doc: { ...doc, notes: {} } });
     const shared = await as(null, "GET", `/asyl/shared/${slug}`);
     expect(shared.statusCode).toBe(200);
+    // Never kept by a shared cache: an unshared map must stop answering at once.
+    expect(shared.headers["cache-control"]).toBe("private, max-age=60");
     expect(shared.json()).toMatchObject({ doc: { notes: { [A]: "the hub" } } });
 
     expect((await as(PLAIN, "DELETE", `/asyl/maps/${id}/share`)).json()).toEqual({ unshared: true });
     expect((await as(null, "GET", `/asyl/shared/${slug}`)).statusCode).toBe(404);
     expect((await as(PLAIN, "DELETE", `/asyl/maps/${id}`)).json()).toEqual({ removed: true });
+  });
+
+  const tiny = {
+    v: 1,
+    nodes: [{ id: A, kind: "wallet", name: "Binance hot wallet", tags: ["dumper"] }],
+    edges: [],
+    positions: { [A]: [0, 0] },
+  };
+
+  it("lets an admin take a shared map's link down, for good", async () => {
+    expect((await as(ADMIN, "GET", "/asyl/me")).json()).toMatchObject({ admin: true });
+    expect((await as(PLAIN, "GET", "/asyl/me")).json()).toMatchObject({ admin: false });
+    const id = (
+      (await as(PLAIN, "POST", "/asyl/maps", { title: "Claims", doc: tiny })).json() as {
+        map: { id: string };
+      }
+    ).map.id;
+    const { slug } = (await as(PLAIN, "POST", `/asyl/maps/${id}/share`)).json() as { slug: string };
+
+    expect((await as(PLAIN, "GET", "/asyl/admin/shared")).statusCode).toBe(403);
+    expect((await as(PLAIN, "POST", `/asyl/admin/shared/${slug}/takedown`)).statusCode).toBe(403);
+    const list = (await as(ADMIN, "GET", "/asyl/admin/shared")).json() as {
+      maps: { slug: string; owner: string }[];
+    };
+    expect(list.maps).toContainEqual(expect.objectContaining({ slug, owner: PLAIN, title: "Claims" }));
+
+    expect((await as(ADMIN, "POST", `/asyl/admin/shared/${slug}/takedown`)).json()).toEqual({
+      takenDown: true,
+    });
+    expect((await as(null, "GET", `/asyl/shared/${slug}`)).statusCode).toBe(404);
+    const again = await as(PLAIN, "POST", `/asyl/maps/${id}/share`);
+    expect(again.statusCode).toBe(403);
+    expect(again.json()).toMatchObject({ code: "taken-down" });
+    // The owner keeps the map itself.
+    expect((await as(PLAIN, "GET", `/asyl/maps/${id}`)).statusCode).toBe(200);
+    expect((await as(ADMIN, "POST", `/asyl/admin/shared/${slug}/takedown`)).statusCode).toBe(404);
+    await as(PLAIN, "DELETE", `/asyl/maps/${id}`);
+  });
+
+  it("holds a free account's maps, shared copies included, to its byte cap", async () => {
+    const id = (
+      (await as(PLAIN, "POST", "/asyl/maps", { title: "Big", doc: tiny })).json() as {
+        map: { id: string };
+      }
+    ).map.id;
+    const stored = await prisma.asylMap.findUniqueOrThrow({ where: { id } });
+    expect(stored.docBytes).toBeGreaterThan(0);
+    // As though this one were nearly the whole allowance.
+    await prisma.asylMap.update({ where: { id }, data: { docBytes: MAP_BYTES_FREE - 50 } });
+    const refused = await as(PLAIN, "POST", "/asyl/maps", { title: "One more", doc: tiny });
+    expect(refused.statusCode).toBe(413);
+    expect(refused.json()).toMatchObject({ code: "map-bytes" });
+    expect((await as(PLAIN, "POST", `/asyl/maps/${id}/share`)).statusCode).toBe(413);
+    // Saving over the big one replaces its bytes rather than adding to them.
+    expect((await as(PLAIN, "PUT", `/asyl/maps/${id}`, { title: "Big", doc: tiny })).statusCode).toBe(200);
+    expect((await as(PLAIN, "POST", `/asyl/maps/${id}/share`)).statusCode).toBe(200);
+    const shared = await prisma.asylMap.findUniqueOrThrow({ where: { id } });
+    expect(shared.sharedBytes).toBeGreaterThan(0);
+    expect((await as(PLAIN, "DELETE", `/asyl/maps/${id}/share`)).json()).toEqual({ unshared: true });
+    expect((await prisma.asylMap.findUniqueOrThrow({ where: { id } })).sharedBytes).toBe(0);
+    await as(PLAIN, "DELETE", `/asyl/maps/${id}`);
   });
 });
