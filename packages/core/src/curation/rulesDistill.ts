@@ -1,5 +1,5 @@
 import { paceBudget } from "./governor.js";
-import { runDoublings } from "./labels.js";
+import { runDoublings, isWin } from "./labels.js";
 import { FRIENDLY_FEATURE_LABELS, type CandidateFeatureName } from "./features.js";
 import { NARRATIVE_BIT_FEATURES, NARRATIVE_SHARE_FEATURES } from "./narrativeFeatures.js";
 import { emptyRecord, noteRunners, type CallRecord } from "./leaderboard.js";
@@ -421,7 +421,7 @@ export function examineRuleScores(
     for (const { row } of sent) {
       record.calls += 1;
       record.graded += 1;
-      if (row.labelValue > 0) record.wins += 1;
+      if (isWin(row)) record.wins += 1;
       if (row.labelValue >= 2) record.goals += 1;
       if (row.hit10x === true) record.tenX! += 1;
       if (row.labelValue <= 0 || row.hit10x !== undefined) record.tenXGraded! += 1;

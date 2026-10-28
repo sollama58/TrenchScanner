@@ -1,5 +1,5 @@
 import { MARKET_LEARNER_FEATURE_NAMES } from "./features.js";
-import { isCurrentLabelRule, runDoublings, runWeight, TEN_X_MULTIPLE } from "./labels.js";
+import { isCurrentLabelRule, runDoublings, runWeight, TEN_X_MULTIPLE, isWin } from "./labels.js";
 import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
 
 /**
@@ -553,7 +553,7 @@ export function recencyWeights(
  * (notes/runner-old-tokens-2026-10-14.md).
  */
 function runSizeTarget(row: BoostingRow): number {
-  return row.labelValue > 0 ? runDoublings(row) : 0;
+  return isWin(row) ? runDoublings(row) : 0;
 }
 
 /**
@@ -575,7 +575,7 @@ export function returnTarget(row: BoostingRow): number {
   const r =
     row.returnPct !== undefined && Number.isFinite(row.returnPct)
       ? row.returnPct
-      : row.labelValue > 0
+      : isWin(row)
         ? 100
         : (row.crashed ?? (row.survived === undefined ? false : !row.survived))
           ? -50
@@ -618,7 +618,7 @@ const TEN_X_LABEL = Math.log2(TEN_X_MULTIPLE);
 
 /** A row's relevance tier under "lambdarank": 0 a miss, 1 a 2x, 2 a 4x, 3 a 10x. */
 function relevanceTier(row: BoostingRow): number {
-  if (!(row.labelValue > 0)) return 0;
+  if (!isWin(row)) return 0;
   if (row.hit10x === true || row.labelValue >= TEN_X_LABEL) return 3;
   return row.labelValue >= 2 ? 2 : 1;
 }
@@ -745,7 +745,7 @@ async function boost(
   const binColumns = binned.map((b) => b.bins);
   const binEdges = binned.map((b) => b.edges);
   const payoff = objective === "payoff";
-  const labelOf = (r: BoostingRow) => (payoff ? payoffLabel(r) : r.labelValue > 0 ? 1 : 0);
+  const labelOf = (r: BoostingRow) => (payoff ? payoffLabel(r) : isWin(r) ? 1 : 0);
   const ys = Float64Array.from(fit, labelOf);
   // The ranking, return and payoff objectives already pay for how far each row ran; the run
   // weight would count that twice.
@@ -1016,7 +1016,7 @@ export async function trainBoostedCurator(
   const valid = sorted.slice(cut);
   const validTokens = new Set(valid.flatMap((r) => (r.tokenId === undefined ? [] : [r.tokenId])));
   const fit = sorted.slice(0, cut).filter((r) => r.tokenId === undefined || !validTokens.has(r.tokenId));
-  const validWins = valid.filter((r) => r.labelValue > 0).length;
+  const validWins = valid.filter((r) => isWin(r)).length;
   // Every bag bins the same two row sets the same way (only the seed differs), so each is binned
   // once and shared: a third of a 3-bag fit's input reading and binning, with identical bins.
   let fitBins: PreparedBins | undefined;
@@ -1084,7 +1084,7 @@ export async function trainBoostedCurator(
     for (const tree of trees) {
       for (let i = 0; i < sorted.length; i++) raw[i] = raw[i]! + tree.value[leafOfBinned(tree, binned, i)]!;
     }
-    const labels = Float64Array.from(sorted, (r) => (r.labelValue > 0 ? 1 : 0));
+    const labels = Float64Array.from(sorted, (r) => (isWin(r) ? 1 : 0));
     const weights = recencyWeights(sorted, options.recencyHalfLifeDays, options.legacyLabelWeight, 0);
     const { slope, intercept } = plattScale(raw, labels, weights);
     trees = trees.map((t) => ({ ...t, value: t.value.map((v) => v * slope) }));

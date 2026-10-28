@@ -1,3 +1,4 @@
+import { isWin } from "./labels.js";
 import { GOAL_LABEL } from "./leaderboard.js";
 import { wilsonLowerBound, type PrecisionTargets } from "./trainer.js";
 import { judgeLift, JUDGE_INTERVAL_Z } from "./aiJudge.js";
@@ -99,7 +100,7 @@ function fitLogistic(
   const xs = rows.map((r) =>
     useAi ? [1, logit(r.curatorProbability), logit(r.aiProbability)] : [1, logit(r.curatorProbability)],
   );
-  const ys = rows.map((r) => (r.labelValue > 0 ? 1 : 0));
+  const ys = rows.map((r) => (isWin(r) ? 1 : 0));
   const w = useAi ? [0, 1, 0] : [0, 1];
   for (let iter = 0; iter < 50; iter++) {
     const g = w.map((wi, a) => (a === 0 ? 0 : ridge * wi));
@@ -147,7 +148,7 @@ function solve(a: number[][], b: number[]): number[] | null {
 const brier = (preds: number[], rows: AiBlendRow[]) =>
   preds.length === 0
     ? null
-    : preds.reduce((s, p, i) => s + (p - (rows[i]!.labelValue > 0 ? 1 : 0)) ** 2, 0) / preds.length;
+    : preds.reduce((s, p, i) => s + (p - (isWin(rows[i]!) ? 1 : 0)) ** 2, 0) / preds.length;
 
 export interface AiBlendOptions {
   /** Graded reviews needed before a blend is fitted at all. */
@@ -175,7 +176,7 @@ function pickCutoff(
   const halfPool = Math.ceil(n / 2);
   for (let j = 0; j < order.length; j++) {
     const row = rows[order[j]!.i]!;
-    if (row.labelValue > 0) wins++;
+    if (isWin(row)) wins++;
     if (row.labelValue >= GOAL_LABEL) goals++;
     const kept = j + 1;
     // Only cut between distinct probabilities.
@@ -277,7 +278,7 @@ export function fitAiBlend(
       tail.map((r) => clampP(r.aiProbability)),
       tail,
     ),
-    baseWinRatePct: (tail.filter((r) => r.labelValue > 0).length / tail.length) * 100,
+    baseWinRatePct: (tail.filter((r) => isWin(r)).length / tail.length) * 100,
   };
 
   const chosen = pickCutoff(wfBlend, wfRows, targets);
@@ -294,7 +295,7 @@ export function fitAiBlend(
   const kept = {
     keptRows: keptTail.length,
     keptWinRatePct:
-      keptTail.length > 0 ? (keptTail.filter((r) => r.labelValue > 0).length / keptTail.length) * 100 : null,
+      keptTail.length > 0 ? (keptTail.filter((r) => isWin(r)).length / keptTail.length) * 100 : null,
     keptGoalRatePct:
       keptTail.length > 0
         ? (keptTail.filter((r) => r.labelValue >= GOAL_LABEL).length / keptTail.length) * 100

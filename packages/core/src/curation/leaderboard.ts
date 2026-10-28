@@ -1,4 +1,4 @@
-import { GOAL_MULTIPLE } from "./labels.js";
+import { GOAL_MULTIPLE, isWin } from "./labels.js";
 import type { PrecisionTargets } from "./trainer.js";
 
 /**
@@ -175,7 +175,7 @@ export function tracksCatch(record: CallRecord): boolean {
 /** The distinct runners among rows: tokens with a clean 2x (rows without a token count alone). */
 function runnerKeys(rows: Iterable<{ labelValue: number; tokenId?: string }>): Set<unknown> {
   const keys = new Set<unknown>();
-  for (const r of rows) if (r.labelValue > 0) keys.add(r.tokenId ?? r);
+  for (const r of rows) if (isWin(r)) keys.add(r.tokenId ?? r);
   return keys;
 }
 

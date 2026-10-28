@@ -11,6 +11,8 @@
  *  - Fast exits (sold within 3 minutes of its own buy) and launch snipes (bought in the launch's
  *    first 5 seconds) each add up to their weight, by the share of its coins they happened on.
  */
+
+import { wilsonLowerBound } from "../wilson.js";
 export const WALLET_RISK_WEIGHTS = {
   priorDumps: 1,
   priorAppearances: 5,
@@ -77,14 +79,7 @@ export const MIN_BUY_SOL_PER_TOKEN = 1e-8;
 export const WINNER = { minWins: 3, lowerBoundVsMarket: 2, z: 1.645, minMarketRate: 0.01 } as const;
 
 /** The Wilson score interval's lower bound for k successes in n: a rate the record supports. */
-export function wilsonLower(k: number, n: number, z: number): number {
-  if (n <= 0) return 0;
-  const p = k / n;
-  const d = 1 + (z * z) / n;
-  const centre = p + (z * z) / (2 * n);
-  const spread = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n));
-  return Math.max(0, (centre - spread) / d);
-}
+export const wilsonLower = wilsonLowerBound;
 
 /** Launch sniper: 3+ coins bought in their first 5 seconds, and at least half of its coins. */
 export const LAUNCH_SNIPER = { minSnipes: 3, minRate: 0.5 } as const;

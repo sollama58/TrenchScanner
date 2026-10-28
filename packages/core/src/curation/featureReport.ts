@@ -1,3 +1,4 @@
+import { isWin } from "./labels.js";
 import { CANDIDATE_FEATURE_NAMES, FRIENDLY_FEATURE_LABELS, RETIRED_LEARNER_INPUTS } from "./features.js";
 
 /**
@@ -68,14 +69,13 @@ export function featureHealthReport(
     }).length;
     return Math.round((missing / set.length) * 1000) / 10;
   };
-  const baseWins = rows.filter((r) => r.labelValue > 0).length;
+  const baseWins = rows.filter((r) => isWin(r)).length;
   const baseRate = n > 0 ? baseWins / n : 0;
   const features: FeatureHealth[] = featureNames.map((feature) => {
     const present: { value: number; won: boolean }[] = [];
     for (const r of rows) {
       const v = r.features[feature];
-      if (v !== null && v !== undefined && Number.isFinite(v))
-        present.push({ value: v, won: r.labelValue > 0 });
+      if (v !== null && v !== undefined && Number.isFinite(v)) present.push({ value: v, won: isWin(r) });
     }
     let topDecileLift: number | null = null;
     let bottomDecileLift: number | null = null;

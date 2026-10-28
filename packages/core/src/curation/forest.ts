@@ -1,3 +1,4 @@
+import { isWin } from "./labels.js";
 import {
   binColumn,
   BOOSTED_MODEL_KIND,
@@ -100,7 +101,7 @@ export async function trainForestCurator(
   const transform = CURRENT_FEATURE_TRANSFORM;
   const cols = featureColumns(rows, featureNames, transform);
   const binned = cols.map((c) => binColumn(c, opts.maxBins));
-  const ys = Float64Array.from(rows, (r) => (r.labelValue > 0 ? 1 : 0));
+  const ys = Float64Array.from(rows, (r) => (isWin(r) ? 1 : 0));
   const weights = recencyWeights(
     rows,
     options.recencyHalfLifeDays,

@@ -4,6 +4,8 @@
  * headline, and the one sentence naming the grading rule behind them.
  */
 
+import { wilsonBounds } from "@trenchscanner/core/wilson";
+
 /** Graded calls a rate needs before it is coloured against a goal or ranked as "best". */
 export const MIN_GRADED_FOR_RATE = 30;
 
@@ -46,16 +48,8 @@ export interface Interval {
 /** The Wilson score interval of `wins` out of `n`, in percent (90% by default); null with nothing graded. */
 export function wilson(wins: number, n: number, z: number = Z90): Interval | null {
   if (!(n > 0) || !Number.isFinite(wins)) return null;
-  const w = Math.min(Math.max(wins, 0), n);
-  const p = w / n;
-  const z2 = z * z;
-  const centre = p + z2 / (2 * n);
-  const margin = z * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n));
-  const denom = 1 + z2 / n;
-  return {
-    lowPct: Math.max(0, ((centre - margin) / denom) * 100),
-    highPct: Math.min(100, ((centre + margin) / denom) * 100),
-  };
+  const { lower, upper } = wilsonBounds(Math.min(Math.max(wins, 0), n), n, z);
+  return { lowPct: Math.max(0, lower * 100), highPct: Math.min(100, upper * 100) };
 }
 
 /** The same from a rate in percent and its graded count (wins rounded back from the rate). */

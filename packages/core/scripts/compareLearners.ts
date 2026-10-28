@@ -11,6 +11,7 @@
  * configuration: ranking quality on the history's out-of-sample calls (AUC), and what the
  * future feed actually did - alerts sent and the share that reached 2x and 4x.
  */
+import { isWin } from "../src/curation/labels.js";
 import { runCuratorTraining, type CuratorTrainingConfig } from "../src/curation/trainingRun.js";
 import {
   scoreCandidateWithModel,
@@ -31,7 +32,7 @@ function auc(calls: ScoredOutcome[]): number {
   let rankSum = 0;
   let pos = 0;
   for (let i = 0; i < sorted.length; i++) {
-    if (sorted[i]!.labelValue > 0) {
+    if (isWin(sorted[i]!)) {
       rankSum += i + 1;
       pos += 1;
     }
@@ -56,7 +57,7 @@ function replay(
     if (last !== undefined && t - last < 24 * 3_600_000) continue;
     lastSent.set(row.tokenId!, t);
     sent += 1;
-    if (row.labelValue > 0) wins += 1;
+    if (isWin(row)) wins += 1;
     if (row.labelValue >= GOAL_LABEL) goals += 1;
   }
   return { sent, wins, goals };

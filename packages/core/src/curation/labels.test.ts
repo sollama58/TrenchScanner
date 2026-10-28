@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyPriceTick,
+  isWin,
   computeOutcomeLabels,
   CURRENT_LABEL_RULE,
   DEXSCREENER_ANCHOR_LABEL_RULE,
@@ -783,5 +784,14 @@ describe("5-second smoothing of curve prints (rule 6)", () => {
     expect(trainsOnLabelRule(6, true)).toBe(false);
     expect(trainsOnLabelRule(5, true)).toBe(false);
     expect(trainsOnLabelRule(4, true)).toBe(true);
+  });
+});
+
+describe("isWin", () => {
+  it("counts a clean 2x or better as a win and a 0 label as a loss", () => {
+    expect(isWin({ labelValue: 1 })).toBe(true);
+    expect(isWin({ labelValue: Math.log2(1.01) })).toBe(true);
+    expect(isWin({ labelValue: 0 })).toBe(false);
+    expect(isWin({ labelValue: Number.NaN })).toBe(false);
   });
 });

@@ -4,7 +4,7 @@ import { FIRST_BUYERS, FRESH_LAUNCH_BUYERS, resolveDevHolding } from "./tradeFlo
 import { CREATOR_UNKNOWN_FLAG } from "../datasources/rugcheck.js";
 import { TOKENSAGE_LOGO_MIN_SCORE } from "../datasources/tokensage.js";
 import { buildCandidateFeatures } from "./features.js";
-import { decisionAnchor, FRESH_ANCHOR_LABEL_RULE } from "./labels.js";
+import { decisionAnchor, FRESH_ANCHOR_LABEL_RULE, isWin } from "./labels.js";
 import { LINEAGE_KIND, narrativeIsCopycat, narrativeXRead, type NarrativeRead } from "./narrativeFeatures.js";
 import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
@@ -801,18 +801,17 @@ const LISTED_COMPARABLES = 8;
 export function formatComparables(comparables: ComparableOutcome[]): string {
   if (comparables.length === 0) return "similar past calls: none graded yet";
   const n = comparables.length;
-  const wins = comparables.filter((c) => c.labelValue > 0).length;
+  const wins = comparables.filter((c) => isWin(c)).length;
   const goals = comparables.filter((c) => c.labelValue >= Math.log2(GOAL_MULTIPLE)).length;
   const stops = comparables.filter((c) => c.disqualified).length;
   const pct = (x: number) => `${Math.round((x / n) * 100)}%`;
   const fmt = (v: number | null, f: (x: number) => string) => (v === null ? "?" : f(v));
   const lines = comparables.slice(0, LISTED_COMPARABLES).map((c) => {
-    const outcome =
-      c.labelValue > 0
-        ? `WON (peak ${fmt(c.peak1hReturnPct, (x) => `+${Math.round(x)}%`)})`
-        : c.disqualified
-          ? "STOPPED OUT before doubling"
-          : `missed (peak ${fmt(c.peak1hReturnPct, (x) => `${x >= 0 ? "+" : ""}${Math.round(x)}%`)})`;
+    const outcome = isWin(c)
+      ? `WON (peak ${fmt(c.peak1hReturnPct, (x) => `+${Math.round(x)}%`)})`
+      : c.disqualified
+        ? "STOPPED OUT before doubling"
+        : `missed (peak ${fmt(c.peak1hReturnPct, (x) => `${x >= 0 ? "+" : ""}${Math.round(x)}%`)})`;
     return `- mcap ${fmt(c.mcapUsd, (x) => `$${Math.round(x).toLocaleString("en-US")}`)}, age ${fmt(c.ageMinutes, (x) => `${Math.round(x)}m`)}, 5m ${fmt(c.priceChange5mPct, (x) => `${x.toFixed(0)}%`)}, 1h ${fmt(c.priceChange1hPct, (x) => `${x.toFixed(0)}%`)}, 5m buys ${fmt(c.buyRatio5m, (x) => `${Math.round(x * 100)}%`)}, top-10 ${fmt(c.top10HolderPct, (x) => `${x.toFixed(0)}%`)}: ${outcome}`;
   });
   return [

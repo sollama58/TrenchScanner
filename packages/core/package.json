@@ -20,6 +20,12 @@
       "import": "./dist/screenCuts.js",
       "default": "./dist/screenCuts.js"
     },
+    "./wilson": {
+      "trenchscanner-web": "./src/wilson.ts",
+      "types": "./dist/wilson.d.ts",
+      "import": "./dist/wilson.js",
+      "default": "./dist/wilson.js"
+    },
     "./prisma": "./generated/prisma/index.js"
   },
   "scripts": {

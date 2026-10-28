@@ -265,6 +265,15 @@ export const TEN_X_MULTIPLE = 10;
 export const TEN_X_WINDOW_MINUTES = 60;
 /** Trading at or below this fraction of the anchor before the first 2x disqualifies the win. */
 export const DISQUALIFYING_DRAWDOWN_FRACTION = 0.5;
+
+/**
+ * Whether a graded row won: a clean 2x inside the win window before the stop, which the label
+ * stores as a positive labelValue (log2 of the clean peak); a loss stores 0. The one test every
+ * count of wins reads, so a change to what a win is lands everywhere (full audit 2026-10-27, CH-14).
+ */
+export function isWin(row: { labelValue: number }): boolean {
+  return row.labelValue > 0;
+}
 /**
  * labelValue ceiling, expressed as the multiple it corresponds to rather than the raw doublings
  * count - a 100x is the single biggest run this pipeline lets outweigh the rest of the training
@@ -296,7 +305,7 @@ export function runDoublings(row: {
 }): number {
   const run =
     row.runPeakMultiple !== undefined && row.runPeakMultiple > 1 ? Math.log2(row.runPeakMultiple) : 0;
-  if (row.labelValue > 0) return Math.min(Math.max(row.labelValue, run), LABEL_LOG2_CAP);
+  if (isWin(row)) return Math.min(Math.max(row.labelValue, run), LABEL_LOG2_CAP);
   if (row.survived === true && run >= 1) return Math.min(run, LABEL_LOG2_CAP);
   return 0;
 }
@@ -314,7 +323,7 @@ export function runWeight(
   row: { labelValue: number; runPeakMultiple?: number },
   perDoubling: number = RUN_WEIGHT_PER_DOUBLING,
 ): number {
-  if (!(perDoubling > 0) || !(row.labelValue > 0)) return 1;
+  if (!(perDoubling > 0) || !isWin(row)) return 1;
   return (
     1 +
     perDoubling *

@@ -1,3 +1,4 @@
+import { isWin } from "./labels.js";
 import {
   calibrateThresholdForPrecision,
   meetsTargets,
@@ -192,7 +193,7 @@ export function trainAgreementCurator(
   input.reference.forEach((row, i) => {
     const point = curve[agreeingFromScore(heldOutScores[i]!, members.length)]!;
     point.rows += 1;
-    if (row.labelValue > 0) point.wins += 1;
+    if (isWin(row)) point.wins += 1;
     if (row.labelValue >= GOAL_LABEL) point.goals += 1;
   });
 
@@ -237,7 +238,7 @@ export function withAgreementFloor(
   for (const c of outOfSample) {
     if (c.probability < floor) continue;
     n += 1;
-    if (c.labelValue > 0) wins += 1;
+    if (isWin(c)) wins += 1;
     if (c.labelValue >= GOAL_LABEL) goals += 1;
   }
   return {

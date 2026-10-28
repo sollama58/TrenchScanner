@@ -1,6 +1,6 @@
 import { inMcapBand, type McapBand } from "./curator.js";
 import { equalShareCalls, pairedBootstrapConfidence, type Rng } from "./evolution.js";
-import { GOAL_MULTIPLE, isCurrentLabelRule, runDoublings } from "./labels.js";
+import { GOAL_MULTIPLE, isCurrentLabelRule, runDoublings, isWin } from "./labels.js";
 import type { CallRecord } from "./leaderboard.js";
 import {
   applyCooldown,
@@ -112,7 +112,7 @@ function maskRecord(rows: TrainingRow[], mask: Uint8Array): CallRecord {
     const row = rows[i]!;
     record.calls += 1;
     record.graded += 1;
-    if (row.labelValue > 0) record.wins += 1;
+    if (isWin(row)) record.wins += 1;
     if (row.labelValue >= GOAL_LABEL) record.goals += 1;
     record.sumLabel += row.labelValue;
     record.sumRun! += runDoublings(row);

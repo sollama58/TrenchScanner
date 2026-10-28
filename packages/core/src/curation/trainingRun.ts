@@ -60,7 +60,7 @@ import { trainAgreementCurator, type AgreementCuratorParams, type AgreementCurve
 import { trainTopSliceCurator, type TopSliceCuratorParams } from "./topSlice.js";
 import { chooseCombinerMembers, memberCandidate, type MemberCandidate } from "./combinerMembers.js";
 import { buildCalibration } from "./calibration.js";
-import { runDoublings } from "./labels.js";
+import { runDoublings, isWin } from "./labels.js";
 import { featureHealthReport, type FeatureReport } from "./featureReport.js";
 import { featureOnset, type HeldFeature } from "./featureOnset.js";
 import {
@@ -296,7 +296,7 @@ function recordAbove(calls: ScoredOutcome[], rankCutoff: number, cooldownMs: num
     }
     record.calls += 1;
     record.graded += 1;
-    if (c.labelValue > 0) record.wins += 1;
+    if (isWin(c)) record.wins += 1;
     if (c.labelValue >= Math.log2(4)) record.goals += 1;
     if (c.hit10x === true) record.tenX! += 1;
     if (c.labelValue <= 0 || c.hit10x !== undefined) record.tenXGraded! += 1;
@@ -1470,7 +1470,7 @@ export async function runEvolvingContest(
   // barely beats the rows' own 2x rate. Lanes and standalone seats alike sit in Trader's maps.
   const referenceWinRate =
     reference !== null && reference.length > 0
-      ? reference.filter((r) => r.labelValue > 0).length / reference.length
+      ? reference.filter((r) => isWin(r)).length / reference.length
       : 0;
   const voting = chooseCombinerMembers(
     [...memberCandidates.values()].filter((c) => traderFoldRanks.has(c.contestant)),
