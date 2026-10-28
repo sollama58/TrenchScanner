@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  findZeroEras,
+  zeroEraAlarms,
+  ZERO_ERA_MAX_ALARMS,
   assessTrainingRun,
   examRegressionAlarms,
   fillRateAlarms,
@@ -255,5 +258,84 @@ describe("run alarms", () => {
       "holderCount went dead at age under 5 min: 6% of the newest 120 rows against 99%",
       "liveInput went dead: 10% of the newest rows against 95%",
     ]);
+  });
+});
+
+describe("findZeroEras", () => {
+  const T0 = Date.parse("2026-10-13T00:00:00Z");
+  const HOUR = 3_600_000;
+  // Ten days of decision moments, 10 an hour; `value` sets an input per row.
+  const rows = (value: (hour: number, i: number) => number | null, kind = "event") =>
+    Array.from({ length: 240 * 10 }, (_, i) => {
+      const hour = Math.floor(i / 10);
+      return {
+        anchorAt: new Date(T0 + hour * HOUR + (i % 10) * 60_000),
+        sampleKind: kind,
+        features: { x: value(hour, i) },
+      };
+    });
+
+  it("flags a six-hour block where an input read 0 on every row", () => {
+    // Usually 0 on one row in ten; all zeros from hour 96 to 102 (one block).
+    const eras = findZeroEras(
+      rows((h, i) => (h >= 96 && h < 102 ? 0 : i % 10 === 0 ? 0 : 5)),
+      ["x"],
+    );
+    expect(eras).toHaveLength(1);
+    expect(eras[0]).toMatchObject({
+      feature: "x",
+      from: new Date(T0 + 96 * HOUR),
+      until: new Date(T0 + 102 * HOUR),
+    });
+    expect(eras[0]!.usualZeroShare).toBeCloseTo(0.1);
+    expect(zeroEraAlarms(eras)[0]).toMatch(
+      /^x read 0 on \d+% of \d+ decision moments 2026-10-17 00:00-2026-10-17 06:00 UTC/,
+    );
+  });
+
+  it("flags a mostly-zero input that stops reading anything else for days", () => {
+    // Usually 15% non-zero (85% zero, so no 40-point step can happen); none at all for two days.
+    const eras = findZeroEras(
+      rows((h, i) => (h >= 96 && h < 144 ? 0 : i % 20 < 3 ? 3 : 0)),
+      ["x"],
+    );
+    expect(eras).toHaveLength(1);
+    expect(eras[0]!.zeroShare).toBe(1);
+  });
+
+  it("does not flag one thin block of a rare input that happened to read all zeros", () => {
+    // 15% non-zero; one six-hour block with none, as chance gives a rare input now and then.
+    const eras = findZeroEras(
+      rows((h, i) => (h >= 96 && h < 102 ? 0 : i % 20 < 3 ? 1 : 0)),
+      ["x"],
+    );
+    expect(eras).toEqual([]);
+  });
+
+  it("ignores masked (missing) readings, rows that are not decision moments and the calendar inputs", () => {
+    const masked = rows((h, i) => (h >= 96 && h < 102 ? null : i % 10 === 0 ? 0 : 5));
+    expect(findZeroEras(masked, ["x"])).toEqual([]);
+    const hourly = rows((h) => (h >= 96 && h < 102 ? 0 : 5), "hourly");
+    expect(findZeroEras(hourly, ["x"])).toEqual([]);
+    const weekend = rows((h) => (Math.floor(h / 24) % 7 >= 5 ? 1 : 0)).map((r) => ({
+      ...r,
+      features: { ctxWeekend: r.features.x },
+    }));
+    expect(findZeroEras(weekend, ["ctxWeekend"])).toEqual([]);
+  });
+
+  it("names each input once and caps the list", () => {
+    const eras = Array.from({ length: ZERO_ERA_MAX_ALARMS + 3 }, (_, k) => ({
+      feature: `in${k}`,
+      from: new Date(T0),
+      until: new Date(T0 + 6 * HOUR),
+      zeroShare: 1,
+      usualZeroShare: 0.1,
+      filledRows: 100 + k,
+    }));
+    const lines = zeroEraAlarms([...eras, { ...eras[0]!, filledRows: 50 }]);
+    expect(lines).toHaveLength(ZERO_ERA_MAX_ALARMS + 1);
+    expect(lines.at(-1)).toBe("3 more inputs with a zero era");
+    expect(lines.filter((l) => l.startsWith("in0 "))).toEqual([]);
   });
 });

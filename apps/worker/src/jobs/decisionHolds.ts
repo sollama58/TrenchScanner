@@ -9,7 +9,8 @@
  *   five minutes. The key keeps its old name.
  * - `walletChecks`: the wallet checks the curator needs are not all known yet (walletChecksKnown,
  *   which has no time bound).
- * - `sniperWait`: waiting on the top-10 snipers share (sniperShareReady).
+ * - `launchReadWait`: waiting on the launch read's Block 0 figure (launchReadReady). Named `sniperWait`
+ *   until 2026-10-27, when the wait keyed on the retired top-10 snipers share (audit, SW-4).
  * - `linkedWait`: waiting on the Linked and CEX-funded counts (linkedListReady).
  *
  * A coin counts once per reason per cycle it is held, so a coin held for three cycles counts
@@ -18,7 +19,7 @@
  * CANDIDATE_EVENT_SPACING_MINUTES is held all the same); read the counts against the cycle's
  * banked event rows (samplesBanked) for scale.
  */
-export const DECISION_HOLD_REASONS = ["preGate5m", "walletChecks", "sniperWait", "linkedWait"] as const;
+export const DECISION_HOLD_REASONS = ["preGate5m", "walletChecks", "launchReadWait", "linkedWait"] as const;
 export type DecisionHoldReason = (typeof DECISION_HOLD_REASONS)[number];
 
 function zeroes(): Record<DecisionHoldReason, number> {

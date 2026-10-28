@@ -52,6 +52,7 @@ type Batch<K, V> = Map<K, V | "failed">;
 
 /** Reads `keys` on `primary`, then whatever failed there on `backup`, once. */
 async function both<V>(
+  method: keyof ChartReader,
   keys: string[],
   read: (r: ChartReader, keys: string[]) => Promise<Batch<string, V>>,
   primary: ChartReader,
@@ -64,7 +65,7 @@ async function both<V>(
   });
   const failed = keys.filter((k) => (out.get(k) ?? "failed") === "failed");
   if (failed.length === 0) return out;
-  health.recordHeliusReadFailures(failed.length);
+  health.recordHeliusReadFailures(failed.length, method);
   if (!backup) return out;
   const again = await read(backup, failed).catch((err) => {
     logger.warn("chart read failed on the backup rpc", { error: String(err) });
@@ -86,10 +87,13 @@ export function withBackupRoute(
   backup: ChartReader | null,
   health: ChartHealth = chartHealth(),
 ): ChartReader {
-  const one = async <V>(read: (r: ChartReader) => Promise<V | "failed">): Promise<V | "failed"> => {
+  const one = async <V>(
+    method: keyof ChartReader,
+    read: (r: ChartReader) => Promise<V | "failed">,
+  ): Promise<V | "failed"> => {
     const first = await read(primary).catch(() => "failed" as const);
     if (first !== "failed") return first;
-    health.recordHeliusReadFailures(1);
+    health.recordHeliusReadFailures(1, method);
     if (!backup) return first;
     const again = await read(backup).catch(() => "failed" as const);
     health.recordBackupRead(again === "failed" ? 1 : 0, 1);
@@ -97,18 +101,34 @@ export function withBackupRoute(
   };
   return {
     getCurveStatesBatch: (curves) =>
-      both([...new Set(curves)], (r, keys) => r.getCurveStatesBatch(keys), primary, backup, health),
+      both(
+        "getCurveStatesBatch",
+        [...new Set(curves)],
+        (r, keys) => r.getCurveStatesBatch(keys),
+        primary,
+        backup,
+        health,
+      ),
     getTokenAmountsBatch: (accounts) =>
-      both([...new Set(accounts)], (r, keys) => r.getTokenAmountsBatch(keys), primary, backup, health),
+      both(
+        "getTokenAmountsBatch",
+        [...new Set(accounts)],
+        (r, keys) => r.getTokenAmountsBatch(keys),
+        primary,
+        backup,
+        health,
+      ),
     getPoolVaultsBatch: (pools) =>
       both<PoolVaults | null>(
+        "getPoolVaultsBatch",
         [...pools.keys()],
         (r, keys) => r.getPoolVaultsBatch(new Map(keys.map((k) => [k, pools.get(k)!]))),
         primary,
         backup,
         health,
       ),
-    findLaunchLabPool: (mint) => one((r) => r.findLaunchLabPool(mint)),
-    findCpmmPoolVaults: (mint, quoteMint) => one((r) => r.findCpmmPoolVaults(mint, quoteMint)),
+    findLaunchLabPool: (mint) => one("findLaunchLabPool", (r) => r.findLaunchLabPool(mint)),
+    findCpmmPoolVaults: (mint, quoteMint) =>
+      one("findCpmmPoolVaults", (r) => r.findCpmmPoolVaults(mint, quoteMint)),
   };
 }

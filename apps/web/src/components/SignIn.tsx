@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { type Card, type User } from "../api";
 import { cachedGet } from "../cache";
 import { GUEST_DELAY_MINUTES } from "../session";
+import { signedPct } from "../format";
 import {
   describeSignInError,
   onWalletsChanged,
@@ -410,7 +411,11 @@ export function SignInPanel({
   );
 }
 
-type ShowcaseBest = { match: Card | null; windowHours: number };
+type ShowcaseBest = {
+  /** planReturnPct: the call's exit-plan return beside its Peak (absent from older API builds). */
+  match: (Card & { planReturnPct?: number | null; planOpen?: boolean }) | null;
+  windowHours: number;
+};
 type ShowcaseLatest = { matches: readonly Card[]; delayMinutes?: number };
 
 /**
@@ -444,6 +449,13 @@ export function LandingShowcase({
                 <>
                   <TrophyIcon size={13} /> Best model alert of the last {best.data?.windowHours ?? 24} hours,
                   with its stats at the alert
+                  {best.data?.match?.planReturnPct != null && (
+                    <>
+                      . Peak is its highest; the exit plan returned{" "}
+                      <span className="num">{signedPct(best.data.match.planReturnPct, 0)}</span>
+                      {best.data.match.planOpen ? " so far" : ""}
+                    </>
+                  )}
                 </>
               ) : (
                 <>

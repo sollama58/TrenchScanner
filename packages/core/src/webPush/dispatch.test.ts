@@ -7,6 +7,7 @@ import {
   describeCard,
   isPushEndpoint,
   MAX_NOTIFICATIONS,
+  payloadSends,
   pushPayloads,
   pushPrefs,
   runWebPushDispatch,
@@ -86,6 +87,24 @@ describe("describeCard", () => {
   });
 });
 
+describe("payloadSends", () => {
+  it("lines each notification up with the alerts it carries", () => {
+    const one = (tokenId: string) => ({
+      sends: [{ tokenId, curatedAlertId: `c-${tokenId}`, matchId: null }],
+    });
+    expect(payloadSends([one("a"), one("b")])).toEqual([one("a").sends, one("b").sends]);
+    // Past MAX_NOTIFICATIONS, one summary carries them all, as pushPayloads sends it.
+    const many = ["a", "b", "c", "d"].map(one);
+    expect(payloadSends(many)).toEqual([many.flatMap((p) => p.sends)]);
+    expect(
+      pushPayloads(
+        many.map(() => card({})),
+        "u",
+      ),
+    ).toHaveLength(payloadSends(many).length);
+  });
+});
+
 describe("pushPayloads", () => {
   it("sends one per alert, tagged by coin, and a summary past the limit", () => {
     const one = pushPayloads([card({ calls: [call("Rules")] })], "https://trenchscanner.app/");
@@ -150,6 +169,7 @@ describe.skipIf(!dbAvailable)("runWebPushDispatch", () => {
     ).id;
   });
   afterAll(async () => {
+    await prisma.webPushAlertSent.deleteMany({ where: { tokenId } });
     await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
   });
@@ -208,9 +228,19 @@ describe.skipIf(!dbAvailable)("runWebPushDispatch", () => {
     const row = await prisma.webPushSubscription.findUniqueOrThrow({ where: { endpoint } });
     expect(row.lastSentAt).not.toBeNull();
     expect(row.sentTokens).toHaveProperty(tokenId);
+    // The send is on record with the call and the match it carried, for the push-sent export.
+    const call = await prisma.curatedAlert.findFirstOrThrow({ where: { tokenId, model: "wp-rules" } });
+    const match = await prisma.match.findFirstOrThrow({ where: { userId, tokenId } });
+    expect(
+      await prisma.webPushAlertSent.findMany({
+        where: { subscriptionId: row.id },
+        select: { tokenId: true, curatedAlertId: true, matchId: true, batched: true },
+      }),
+    ).toEqual([{ tokenId, curatedAlertId: call.id, matchId: match.id, batched: false }]);
 
     // The cursor moved: nothing again.
     expect((await run()).sent).toHaveLength(0);
+    expect(await prisma.webPushAlertSent.count({ where: { subscriptionId: row.id } })).toBe(1);
   });
 
   it("sends nothing while browser notifications are off, or without access", async () => {

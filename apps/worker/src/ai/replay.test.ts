@@ -5,7 +5,9 @@ import { prisma, loadEnv, WALLET_RISK_PERCENTILE_SINCE, type ScoredToken } from 
 import type { MessageBatchIndividualResponse } from "@anthropic-ai/sdk/resources/messages/batches";
 
 /** The batch results the mocked client streams, and a hook run as the stream ends. */
-const batch: { results: MessageBatchIndividualResponse[]; onEnd?: () => void } = { results: [] };
+const batch: { results: MessageBatchIndividualResponse[]; onEnd?: () => void | Promise<void> } = {
+  results: [],
+};
 vi.mock("./client.js", async (importActual) => ({
   ...(await importActual<typeof import("./client.js")>()),
   anthropicClient: () => ({
@@ -15,7 +17,7 @@ vi.mock("./client.js", async (importActual) => ({
         results: async () =>
           (async function* () {
             yield* batch.results;
-            batch.onEnd?.();
+            await batch.onEnd?.();
           })(),
       },
     },
@@ -287,5 +289,40 @@ describe.skipIf(!dbAvailable)("pollReplayRuns", () => {
     expect(await prisma.aiReplayRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({
       status: "submitted",
     });
+  });
+
+  it("keeps one verdict per playbook and alert when another process wrote the same batch first", async () => {
+    const run = await prisma.aiReplayRun.create({
+      data: {
+        purpose: "baseline",
+        status: "submitted",
+        batchId: `${TAG}-dupe`,
+        model: "claude-sonnet-4-5",
+        playbookIds: ["pbA"],
+        windowStart: new Date(0),
+        windowEnd: new Date(0),
+        requestCount: 1,
+      },
+    });
+    const verdict = JSON.stringify({ decision: "buy", probability2x: 0.5, reasoning: "", risks: [] });
+    batch.results = [succeeded("p0-co_1", verdict)];
+    // The other process's re-ingest lands in the gap before this one's final flush.
+    batch.onEnd = async () => {
+      await prisma.aiReplayVerdict.create({
+        data: {
+          runId: run.id,
+          playbookId: "pbA",
+          candidateOutcomeId: "co_1",
+          decision: "buy",
+          probability2x: 0.5,
+        },
+      });
+    };
+    try {
+      await pollReplayRuns(loadEnv());
+    } finally {
+      batch.onEnd = undefined;
+    }
+    expect(await prisma.aiReplayVerdict.count({ where: { runId: run.id } })).toBe(1);
   });
 });

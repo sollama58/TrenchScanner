@@ -93,7 +93,7 @@ describe("telegram alert text", () => {
       "🟢 <b>$DOGE</b>  ·  Doge &lt;b&gt;Coin&lt;/b&gt;\n<i>Forest flagged it</i>\n━━━━━━━━━━━━━━\n💰 MC",
     );
     expect(text).toContain(
-      "🤖 <b>Forest</b>  ▰▰▰▰▰▰▰▱▱▱  <b>72%</b> conviction  🔥 high\n" +
+      "🤖 <b>Forest</b>  ▰▰▰▰▰▰▰▱▱▱  Score <b>72</b>  🔥 high\n" +
         "     41% of alerts like it 2x'd\n" +
         "     ⚠️ Narrative warns\n" +
         "<blockquote>▸ r1\n▸ r2\n▸ r3</blockquote>",
@@ -128,7 +128,7 @@ describe("telegram alert text", () => {
     );
     expect(text.startsWith("⚡ <b>2 new alerts</b>  ·  strongest first\n━━━━━━━━━━━━━━")).toBe(true);
     // The model call outranks the filter-only match, so it is line 1.
-    expect(text).toContain("<b>1.</b> 🟢 <b>$DOGE</b> · Rules 50% · $45.2k");
+    expect(text).toContain("<b>1.</b> 🟢 <b>$DOGE</b> · Rules score 50 · $45.2k");
     expect(text).toContain("<b>2.</b> 🎯 <b>$DOGE</b> · “A” score 1 · $45.2k");
     expect(text).toContain('<a href="https://trade.padre.gg/trade/solana/');
   });
@@ -226,7 +226,7 @@ describe("telegram alert text", () => {
       filters: true,
     });
     const text = formatAlert(full, links, Date.now(), parts);
-    expect(text).toContain("🤖 <b>Forest</b>  ▰▰▰▰▰▰▰▱▱▱  <b>72%</b> conviction");
+    expect(text).toContain("🤖 <b>Forest</b>  ▰▰▰▰▰▰▰▱▱▱  Score <b>72</b>");
     expect(text).toContain("🎯 <b>“Mine”</b>  ·  score <b>70</b>");
     expect(text).not.toContain("blockquote");
     expect(text).not.toContain("mcap");
@@ -236,7 +236,7 @@ describe("telegram alert text", () => {
     // Reasons without the conviction line: just the quote.
     const quoteOnly = formatAlert(full, links, Date.now(), alertParts(["conviction"]));
     expect(quoteOnly).toContain("<blockquote>▸ r1</blockquote>");
-    expect(quoteOnly).not.toContain("conviction");
+    expect(quoteOnly).not.toContain("Score");
     const digest = formatDigest([full], links, alertParts(["links", "stats", "sage"]));
     expect(digest).not.toContain("trade ↗</a>");
     expect(digest).toContain(`<code>${token.mintAddress}</code>`);

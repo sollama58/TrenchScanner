@@ -216,10 +216,18 @@ export interface AiVerdictSummary {
   probability2x: number | null;
 }
 
-/** The AI reviewer's newest verdict with a decision on the token, within the last day. */
-async function latestAiVerdict(tokenId: string): Promise<AiVerdictSummary | null> {
+/**
+ * The AI reviewer's newest live verdict with a decision on the token, within the last day. A
+ * shadow review is the reviewer being tried out on picks it doesn't act on, and is never shown.
+ */
+export async function latestAiVerdict(tokenId: string): Promise<AiVerdictSummary | null> {
   const row = await prisma.aiReview.findFirst({
-    where: { tokenId, decision: { not: null }, createdAt: { gt: new Date(Date.now() - 86_400_000) } },
+    where: {
+      tokenId,
+      mode: "gate",
+      decision: { not: null },
+      createdAt: { gt: new Date(Date.now() - 86_400_000) },
+    },
     orderBy: { createdAt: "desc" },
     select: { decision: true, probability2x: true },
   });
@@ -632,7 +640,7 @@ async function refreshButton(
   }
   const row = await prisma.telegramChat.findFirst({
     where: { chatId, revokedAt: null },
-    select: { id: true, ...SETTINGS_SELECT, user: { select: { walletAddress: true } } },
+    select: { id: true, kind: true, ...SETTINGS_SELECT, user: { select: { walletAddress: true } } },
   });
   if (!row) {
     await api.answerCallbackQuery(query.id, "This chat isn't linked any more.");
@@ -684,9 +692,10 @@ async function refreshButton(
     alertStyle(row),
     asCaption,
   );
-  // An admin's chat gets the AI reviewer's verdict under the card, when there is one and the
-  // caption has room for it (a text message has no cap to mind). A failed read just leaves it off.
-  if (opts.admins?.has(row.user.walletAddress)) {
+  // An admin's private chat gets the AI reviewer's verdict under the card, when there is one and
+  // the caption has room for it (a text message has no cap to mind). A failed read just leaves it
+  // off. Never a group's: the edit is shown to every member, and any member can press Refresh.
+  if (row.kind === "private" && opts.admins?.has(row.user.walletAddress)) {
     const verdict = await (opts.aiVerdict ?? latestAiVerdict)(press.tokenId).catch((err: unknown) => {
       logger.warn("ai verdict lookup failed on refresh", { error: String(err) });
       return null;

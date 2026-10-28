@@ -51,6 +51,8 @@ export interface BoardStats {
   graded: number;
   /** Clean 2x inside the window ("won"); a stopped-out 2x is a loss, as on the dashboard. */
   won: number;
+  /** Of won: coins that had already doubled when the message reached the chat (it landed late). */
+  lateWins: number;
   lost: number;
   /** Still inside their window. */
   pending: number;
@@ -275,6 +277,10 @@ export function formatTrenchboard(stats: BoardStats, now = Date.now()): string {
     lines.push(`🔔 Alerts  <b>${stats.alerts}</b>`);
     const hit = stats.graded > 0 ? `<b>${Math.round((stats.won / stats.graded) * 100)}%</b>` : "<b>–</b>";
     lines.push(`🎯 2x hit rate  ${hit}  (${stats.won} W · ${stats.lost} L)`);
+    if (stats.lateWins > 0)
+      lines.push(
+        `⏰ ${stats.lateWins} of the wins had already doubled when the alert landed here (sent late)`,
+      );
     lines.push(
       stats.avgReturnPct !== null
         ? `💵 Avg return  <b>${signedPct(stats.avgReturnPct)}</b>  over ${stats.settled} settled`

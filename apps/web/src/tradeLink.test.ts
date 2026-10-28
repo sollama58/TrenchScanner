@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tokenLinkFromUrl, tradeLinkFromUrl } from "./tradeLink";
+import { tokenFromWorkerMessage, tokenLinkFromUrl, tokenLinkPath, tradeLinkFromUrl } from "./tradeLink";
 
 const A = "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN";
 
@@ -30,5 +30,19 @@ describe("tokenLinkFromUrl", () => {
     expect(tokenLinkFromUrl(`?token=${A}`)).toBe(A);
     expect(tokenLinkFromUrl(`?token=nope`)).toBeNull();
     expect(tokenLinkFromUrl(`?sage=${A}`)).toBeNull();
+  });
+});
+
+describe("notification clicks", () => {
+  it("reads the service worker's open-token message and nothing else", () => {
+    expect(tokenFromWorkerMessage({ type: "ts-open-token", mint: A })).toBe(A);
+    expect(tokenFromWorkerMessage({ type: "ts-open-token", mint: "not a mint" })).toBeNull();
+    expect(tokenFromWorkerMessage({ type: "other", mint: A })).toBeNull();
+    expect(tokenFromWorkerMessage("ts-open-token")).toBeNull();
+    expect(tokenFromWorkerMessage(null)).toBeNull();
+  });
+
+  it("links a notification to the coin's ?token= view", () => {
+    expect(tokenLinkFromUrl(tokenLinkPath(A).slice(1))).toBe(A);
   });
 });

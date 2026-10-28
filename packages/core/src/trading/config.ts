@@ -65,8 +65,13 @@ export const tradingBotConfigSchema = z.object({
        * for its review while it is fresh (maxSignalAgeSeconds); one with a "no_buy", or with no
        * review by then, is skipped. The judge reviews high-conviction picks, so a source it never
        * reviews (most filter matches) never buys with this on.
+       *
+       * Off by default until the judge has a record (user decision 2026-10-27, audit card 10):
+       * with no reviews a bot following it bought nothing. A new bot or strategy is offered it on
+       * once the judge has AI_REVIEW_MIN_GRADED_BUYS graded buys (withAiJudgeDefault); a saved
+       * setting is the owner's and is kept either way.
        */
-      requireAiBuy: z.boolean().default(true),
+      requireAiBuy: z.boolean().default(false),
       /** With requireAiBuy: also skip a "buy" whose own 2x estimate is under this (0-1; 0 = any). */
       minAiProbability2x: z.number().min(0).max(1).default(0),
     })
@@ -110,6 +115,14 @@ export const tradingBotConfigSchema = z.object({
 export type TradingBotConfig = z.infer<typeof tradingBotConfigSchema>;
 
 export const DEFAULT_TRADING_BOT_CONFIG: TradingBotConfig = tradingBotConfigSchema.parse({});
+
+/**
+ * The defaults a new bot or paper strategy starts from: the schema's, with the AI judge filter on
+ * once the judge has a graded record (aiJudgeHasRecord) and off until then.
+ */
+export function withAiJudgeDefault<T extends TradingBotConfig>(defaults: T, judgeHasRecord: boolean): T {
+  return { ...defaults, sources: { ...defaults.sources, requireAiBuy: judgeHasRecord } };
+}
 
 /** Parses a stored config; anything unreadable falls back to the defaults with the bot's sources cleared. */
 export function readTradingBotConfig(raw: unknown): TradingBotConfig {

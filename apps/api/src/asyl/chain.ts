@@ -10,11 +10,12 @@ import {
   WALLET_DORMANT_GAP_MS,
   type HeliusClient,
   type KnownFunder,
+  FUNDER_TXS_WALKED,
   FUNDER_TXS_WALKED_MAX,
   type WalletFlows,
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
-import { oneAtATime, readAllowance, recordSpend, type Allowance } from "./credits.js";
+import { holdingSite, oneAtATime, readAllowance, recordSpend, siteHeld, type Allowance } from "./credits.js";
 import { fundedEdge, GraphBuilder, hotFunders, sig2, type KnownDeployer } from "./graph.js";
 
 /**
@@ -44,6 +45,11 @@ export const FUNDER_WORST = 1 + FUNDER_TXS_WALKED_MAX;
 export const TOKEN_WORST = 10 + CHAIN_HOLDER_FUNDERS * 4;
 /** A deployer read: one page of the mint's oldest transactions. */
 export const DEPLOYER_WORST = 10;
+/**
+ * A Pro dossier's live read (walletProfile.ts): the wallet's balance and newest page, then its
+ * funder when no job read it (a page and up to FUNDER_TXS_WALKED oldest transactions).
+ */
+export const DOSSIER_WORST = 2 + 1 + FUNDER_TXS_WALKED;
 
 export type ChainRefusal =
   | { refused: "not-pro" }
@@ -76,6 +82,11 @@ export const fmtDay = (ms: number | null) =>
     ? null
     : new Date(ms).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
 
+/** What a reader may still spend with `held` credits already held by reads running elsewhere. */
+export function roomLeft(a: Allowance, held: number): number {
+  return Math.max(0, Math.min(a.left, a.globalCap - a.globalUsed - held));
+}
+
 /**
  * Runs one metered read for `userId`: checks, tallies, records. `cached` answers from a shared
  * cache first: free, so it is handed back even with the day's allowance short of a fresh read's
@@ -84,7 +95,12 @@ export const fmtDay = (ms: number | null) =>
 export async function metered<T>(
   env: Env,
   userId: string,
-  worst: number,
+  /**
+   * Credits the read needs at the least to start, and at the most it may take (held against the
+   * site's cap while it runs). A plain number is a least: the read may go on while the allowance
+   * lasts, so all of it is held.
+   */
+  worst: number | { min: number; max: number },
   /** Given the allowance as it stood before the read, for a read that goes on while it lasts. */
   read: (before: Allowance) => Promise<{ value: T; cached: boolean } | null>,
   cached?: () => Promise<T | null>,
@@ -95,18 +111,25 @@ export async function metered<T>(
       return { value: hit, credits: 0, allowance: await readAllowance(env, userId), cached: true };
   }
   if (heliusCreditsOut()) return { refused: "credits-out" };
-  const before = await readAllowance(env, userId);
-  if (!before.enabled || before.left < worst) return { refused: "allowance", allowance: before };
-  const out = await oneAtATime(userId, async () => {
-    const tally = new CreditTally();
-    const got = await withApiFeature("asyl", () => tallyHeliusCredits(tally, () => read(before)));
-    const credits = tally.take();
-    if (credits > 0) await recordSpend(userId, credits);
-    return got ? { ...got, credits } : null;
-  });
+  const stood = await readAllowance(env, userId);
+  const { min, max } = typeof worst === "number" ? { min: worst, max: Infinity } : worst;
+  // The room less what reads already running here may still take (credits.ts heldSite), up to
+  // what this read may take: the read is told that much is left, and that much is held.
+  const before = { ...stood, left: Math.min(roomLeft(stood, siteHeld()), max) };
+  if (!before.enabled || before.left < min) return { refused: "allowance", allowance: stood };
+  // No await between the check above and the hold: oneAtATime runs its callback at once.
+  const out = await oneAtATime(userId, () =>
+    holdingSite(before.left, async () => {
+      const tally = new CreditTally();
+      const got = await withApiFeature("asyl", () => tallyHeliusCredits(tally, () => read(before)));
+      const credits = tally.take();
+      if (credits > 0) await recordSpend(userId, credits);
+      return got ? { ...got, credits } : null;
+    }),
+  );
   if (out === "busy") return { refused: "busy" };
   if (!out) return { refused: "unavailable" };
-  const allowance = out.credits > 0 ? await readAllowance(env, userId) : before;
+  const allowance = out.credits > 0 ? await readAllowance(env, userId) : stood;
   return { value: out.value, credits: out.credits, allowance, cached: out.cached };
 }
 
@@ -164,7 +187,7 @@ export function readWalletFlows(
   return metered(
     env,
     userId,
-    FLOW_WORST,
+    { min: FLOW_WORST, max: FLOW_WORST },
     () => loadFlows(helius, wallet, now),
     () => keptFlows(wallet, now),
   );
@@ -232,7 +255,7 @@ export function traceExits(
   wallet: string,
   now = Date.now(),
 ): Promise<Chained<ExitTrace>> {
-  return metered(env, userId, FLOW_WORST, async (before) => {
+  return metered(env, userId, { min: FLOW_WORST, max: EXIT_HOPS * FLOW_WORST }, async (before) => {
     const path = [wallet];
     const hops: ExitHop[] = [];
     let asked = 0;
@@ -405,8 +428,12 @@ export function readFunders(
   wallets: readonly string[],
 ): Promise<Chained<Record<string, FunderStatus>>> {
   const unique = [...new Set(wallets)].slice(0, FUNDERS_MAX);
-  return metered(env, userId, FUNDER_WORST * Math.max(1, Math.min(unique.length, 5)), async () => {
-    const { asked, status } = await refreshFunders(helius, unique, Date.now(), Infinity, true);
+  // Holds the worst case for the first 5, then reads as many as the allowance covers at their
+  // worst, so a read of 20 never runs past what the reader has left (full audit 2026-10-27, TR-6).
+  const least = FUNDER_WORST * Math.max(1, Math.min(unique.length, 5));
+  return metered(env, userId, { min: least, max: FUNDER_WORST * unique.length }, async (before) => {
+    const max = Math.max(1, Math.floor(before.left / FUNDER_WORST));
+    const { asked, status } = await refreshFunders(helius, unique, Date.now(), max, true);
     return {
       value: Object.fromEntries(unique.map((w) => [w, status.get(w) ?? "failed"])),
       cached: asked === 0,
@@ -451,7 +478,7 @@ export function traceFunders(
   wallet: string,
   now = Date.now(),
 ): Promise<Chained<FunderTrace>> {
-  return metered(env, userId, FUNDER_WORST, async (before) => {
+  return metered(env, userId, { min: FUNDER_WORST, max: TRACE_HOPS * FUNDER_WORST }, async (before) => {
     const path = [wallet];
     let asked = 0;
     const done = (stop: TraceStop) => ({ value: { path, stop, asked }, cached: asked === 0 });
@@ -545,7 +572,7 @@ export function readTokenHolders(
   return metered(
     env,
     userId,
-    TOKEN_WORST,
+    { min: TOKEN_WORST, max: TOKEN_WORST },
     async () => {
       const hit = await recent();
       if (hit) return { value: hit, cached: true };
@@ -624,7 +651,7 @@ export function readDeployer(
   userId: string,
   mint: string,
 ): Promise<Chained<KnownDeployer | null>> {
-  return metered(env, userId, DEPLOYER_WORST, async () => {
+  return metered(env, userId, { min: DEPLOYER_WORST, max: DEPLOYER_WORST }, async () => {
     const r = (await helius.getMintDeployersBatch([mint])).get(mint);
     if (!r || r.status === "failed" || r.status === "unsupported") return null;
     if (r.status === "none") return { value: null, cached: false };

@@ -111,7 +111,7 @@ export const ALERT_PART_LABELS: Record<AlertPart, string> = {
   holders: "the holder count",
   volume: "the last hour's volume",
   age: "how old the token is",
-  conviction: "each model's conviction line",
+  conviction: "each model's score line",
   calibrated: "how often alerts like it 2x'd",
   reasons: "the strongest alert's reasons",
   filters: "which filter caught it, with the score",
@@ -410,11 +410,16 @@ function factsLines(
   return lines.join("\n");
 }
 
+/**
+ * A call's confidence is its model's 0-100 rank score, not a probability: printed as "87%
+ * conviction" it read as a chance of winning beside the calibrated rate on the next line (full
+ * audit 2026-10-27 WB-13; the web says "Score" for the same reason).
+ */
 function callLines(call: AlertCall, withReasons: boolean, parts: AlertParts, compact: boolean): string[] {
-  const pct = Math.round(call.confidence);
+  const score = Math.round(call.confidence);
   if (compact) {
     const bits = [
-      `🤖 <b>${escapeHtml(call.modelName)}</b> <b>${pct}%</b>${call.tier === "high" ? " 🔥" : ""}`,
+      `🤖 <b>${escapeHtml(call.modelName)}</b> score <b>${score}</b>${call.tier === "high" ? " 🔥" : ""}`,
     ];
     if (parts.calibrated && call.calibratedPct !== null)
       bits.push(`${Math.round(call.calibratedPct)}% like it 2x'd`);
@@ -422,7 +427,7 @@ function callLines(call: AlertCall, withReasons: boolean, parts: AlertParts, com
     if (call.narrativeVerdict === "warns") bits.push("⚠️ warns");
     return [bits.join("  ·  ")];
   }
-  let head = `🤖 <b>${escapeHtml(call.modelName)}</b>  ${convictionBar(pct)}  <b>${pct}%</b> conviction`;
+  let head = `🤖 <b>${escapeHtml(call.modelName)}</b>  ${convictionBar(score)}  Score <b>${score}</b>`;
   if (call.tier === "high") head += "  🔥 high";
   const lines = [head];
   if (parts.calibrated && call.calibratedPct !== null)
@@ -528,8 +533,8 @@ function digestWho(card: AlertCard): string {
     const calls = [...card.calls].sort((a, b) => b.confidence - a.confidence);
     const best = calls[0]!;
     const names = calls.map((k) => k.modelName).join(" + ");
-    const pct = `${Math.round(best.confidence)}%${best.tier === "high" ? " 🔥" : ""}`;
-    return card.filters.length > 0 ? `${names} ${pct} + your filter` : `${names} ${pct}`;
+    const score = `score ${Math.round(best.confidence)}${best.tier === "high" ? " 🔥" : ""}`;
+    return card.filters.length > 0 ? `${names} ${score} + your filter` : `${names} ${score}`;
   }
   const top = [...card.filters].sort((a, b) => b.score - a.score)[0];
   return top ? `“${top.name}” score ${Math.round(top.score)}` : "caught by your filters";

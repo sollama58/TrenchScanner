@@ -50,6 +50,7 @@ import {
   effectiveExitPlan,
   readTradingBotConfig,
   tradingBotConfigSchema,
+  withAiJudgeDefault,
 } from "./config.js";
 import {
   mintRisk,
@@ -341,6 +342,20 @@ describe("bot config", () => {
   it("defaults to the project's exit plan", () => {
     expect(DEFAULT_TRADING_BOT_CONFIG.exitPlan).toBeNull();
     expect(effectiveExitPlan(DEFAULT_TRADING_BOT_CONFIG)).toBe(EXIT_PLAN);
+  });
+
+  it("leaves the AI judge filter off until the judge has a record (user decision 2026-10-27)", () => {
+    expect(DEFAULT_TRADING_BOT_CONFIG.sources.requireAiBuy).toBe(false);
+    // A stored config from before the key existed reads as off too.
+    expect(readTradingBotConfig({ sources: { models: ["rules"] } }).sources.requireAiBuy).toBe(false);
+    expect(withAiJudgeDefault(DEFAULT_TRADING_BOT_CONFIG, false).sources.requireAiBuy).toBe(false);
+    const earned = withAiJudgeDefault(DEFAULT_TRADING_BOT_CONFIG, true);
+    expect(earned.sources.requireAiBuy).toBe(true);
+    // The rest of the defaults, and the shared default object, are untouched.
+    expect(earned.sources.models).toEqual([]);
+    expect(DEFAULT_TRADING_BOT_CONFIG.sources.requireAiBuy).toBe(false);
+    // An owner's saved choice is theirs: parsing keeps an explicit on.
+    expect(readTradingBotConfig({ sources: { requireAiBuy: true } }).sources.requireAiBuy).toBe(true);
   });
 
   it("rejects a ladder that sells more than the position", () => {

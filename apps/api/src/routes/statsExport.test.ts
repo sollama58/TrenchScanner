@@ -242,6 +242,20 @@ const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() =
 // A window nothing else in the database can fall into, so the export is exactly the fixture.
 const BASE = new Date("2001-03-04T00:00:00Z");
 const at = (minutes: number) => new Date(BASE.getTime() + minutes * 60_000);
+const PUSH_SUB = `export-test-sub-${Date.now()}`;
+
+/** What the screen export's checks carry for each wallet cut (statsExport.ts screenPages). */
+const SCREEN_READINGS = {
+  blockZeroHeldPct: 12.5,
+  largestHolderPct: 8.25,
+  freshTopHolderCount: 6,
+  freshTopHoldersChecked: 25,
+  linkedWalletCount: 4,
+  linkedWalletsChecked: 19,
+  cexFundedCount: 3,
+  cexFundedHolders: 24,
+  cexFundedPct: 12.5,
+};
 const WINDOW = `since=${at(-1).toISOString()}&until=${at(600).toISOString()}`;
 
 describe.skipIf(!dbAvailable)("GET /stats/export", () => {
@@ -313,7 +327,14 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
       [150, 4], // past the default 120 minutes
     ] as const) {
       await prisma.tokenSnapshot.create({
-        data: { tokenId, takenAt: at(minute), priceUsd: price, marketCapUsd: price * 50_000 },
+        data: {
+          tokenId,
+          takenAt: at(minute),
+          priceUsd: price,
+          marketCapUsd: price * 50_000,
+          // The wallet cuts' inputs, the same on every snapshot.
+          ...SCREEN_READINGS,
+        },
       });
     }
     alertId = (
@@ -366,9 +387,17 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
         data: { chatId: chat.id, tokenId, sentAt: at(minute), curatedAlertId: i === 2 ? alertId : null },
       });
     }
+    // Two Web Push sends at one time (a tie on sentAt), one of them inside a summary notification.
+    await prisma.webPushAlertSent.createMany({
+      data: [
+        { subscriptionId: `${PUSH_SUB}-a`, tokenId, curatedAlertId: alertId, sentAt: at(2) },
+        { subscriptionId: `${PUSH_SUB}-b`, tokenId, matchId: "m-1", batched: true, sentAt: at(2) },
+      ],
+    });
   });
 
   afterAll(async () => {
+    await prisma.webPushAlertSent.deleteMany({ where: { subscriptionId: { startsWith: PUSH_SUB } } });
     // Chats and their sent rows cascade with the user.
     await prisma.user.delete({ where: { id: userId } });
     await prisma.topModelsPick.deleteMany({ where: { slotStart: { gte: at(-1), lt: at(600) } } });
@@ -454,8 +483,10 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
       [60, 1.4, 70_000, false],
       [1800, 2.5, 125_000, false],
     ]);
-    // Nothing the screen reads changed between snapshots: one check entry.
+    // Nothing the screen reads changed between snapshots: one check entry, with every wallet
+    // cut's input and the holders each count covered.
     expect(rows[0].checks).toHaveLength(1);
+    expect(rows[0].checks[0]).toMatchObject({ tSec: -300, ...SCREEN_READINGS });
     // The rejected coin's hour after its first rejection rides on the token's record.
     expect(rows[0]).toMatchObject({
       screenRejectedAt: at(2).toISOString(),
@@ -513,6 +544,47 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
       `${at(0).toISOString()},rules|trees,${at(1).toISOString()}`,
       `${at(360).toISOString()},blend,${at(361).toISOString()}`,
     ]);
+  });
+
+  it("exports what Web Push sent with the alert behind it, and nothing about the subscriber", async () => {
+    // Through the encoder, not the route: the route's 12 a minute are the rest of this suite's.
+    const read = async (format: "jsonl" | "csv", pageSize?: number) => {
+      let text = "";
+      const q = exportQuerySchema.parse({ dataset: "push-sent", format });
+      for await (const chunk of exportChunks(q, at(-1), at(600), pageSize)) text += chunk;
+      return text.trim().split("\n");
+    };
+    const rows = (await read("jsonl")).map((l) => JSON.parse(l));
+    expect(rows).toHaveLength(2);
+    for (const r of rows) expect(Object.keys(r).sort()).toEqual([...csvColumns("push-sent")].sort());
+    expect(rows).toContainEqual({
+      sentAt: at(2).toISOString(),
+      tokenId,
+      mintAddress: expect.stringMatching(/^export-test-/),
+      symbol: "EXP",
+      alertKind: "model",
+      curatedAlertId: alertId,
+      model: "rules",
+      modelName: "Rules",
+      matchId: null,
+      batched: false,
+    });
+    expect(rows).toContainEqual(
+      expect.objectContaining({ alertKind: "filter", curatedAlertId: null, matchId: "m-1", batched: true }),
+    );
+    expect(JSON.stringify(rows)).not.toContain(PUSH_SUB);
+
+    // The tie pages on the row id without skipping or repeating a send.
+    expect(await read("jsonl", 1)).toHaveLength(2);
+    const [header, ...lines] = await read("csv");
+    expect(header).toBe(csvColumns("push-sent").join(","));
+    expect(lines).toHaveLength(2);
+    expect(lines).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(",rules,Rules,,false"),
+        expect.stringContaining(",m-1,true"),
+      ]),
+    );
   });
 
   it("exports what Telegram sent with the alert behind it, by token and chat row id only", async () => {

@@ -80,11 +80,11 @@ import {
 import { runScoreWeightsJob } from "./jobs/scoreWeightsJob.js";
 import { runModelBackupJob } from "./jobs/modelBackupJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
-import { aiReviewEnabled } from "./ai/reviewer.js";
+import { aiReviewEnabled, reviewTimeoutMs } from "./ai/reviewer.js";
 import { drainShadowReviews } from "./jobs/curatedAlerts.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { BurnStreamWake, reconcileBurns } from "./jobs/burnReconciler.js";
-import { runPipelineWatch } from "./jobs/pipelineWatchJob.js";
+import { runPipelineWatch, TRAINING_DEADLINE_MINUTES } from "./jobs/pipelineWatchJob.js";
 import { canaryFailureMeta, runTradeCanary } from "./jobs/tradeCanaryJob.js";
 import { createTradingBotRunner } from "./jobs/tradingBotJob.js";
 import { createPaperTradingRunner } from "./jobs/paperTradingJob.js";
@@ -92,6 +92,7 @@ import {
   scheduleInterval,
   scheduleDailyAt,
   JobFailure,
+  PartialJobFailure,
   SHUTDOWN_INTERRUPTED_ERROR,
   runningJobsNow,
   type JobRunMeta,
@@ -191,8 +192,11 @@ const solUsdHistory = new SolUsdHistory();
 /** A day plus slack: a daily job whose last run is older than this missed its slot. */
 const DAILY_CATCH_UP_AFTER_HOURS = 26;
 /**
- * The nightly sweeps' deadline (cleanup, outcome-tracking): a run takes 3-16 minutes, 30 at the
- * worst seen, so one still going at two hours is hung, and the restart's catch-up re-runs it.
+ * The nightly sweeps' deadline (cleanup, outcome-tracking). On 2026-10-27 cleanup took about 8
+ * minutes and outcome-tracking 40 (2,427 s, 2,298 of them its live-price reads for ~51k mints,
+ * up from 36 on 10-23: full audit 2026-10-27, DB-13), so one still going at two hours is hung, and
+ * the restart's catch-up re-runs it. outcome-tracking's runtime trends up with the mints it
+ * prices: past about 90 minutes this deadline is the next thing to move.
  */
 const DAILY_SWEEP_DEADLINE_MINUTES = 120;
 /** The KOL roster read's: a few calls and an avatar pass. */
@@ -275,10 +279,11 @@ const LIGHTHOUSE_ROLLUP_MINUTES = 60;
  */
 const SHUTDOWN_GRACE_MS = 20_000;
 /**
- * What a shutdown gives a detached shadow AI review beyond its own timeout (AI_REVIEW_TIMEOUT_MS,
- * 60s by default): a review cut off is paid for and never recorded, so reviews get their whole
- * timeout rather than the jobs' grace. render.yaml's maxShutdownDelaySeconds on the worker and
- * trainer covers this plus SHUTDOWN_WRITES_MS. With no review in flight the drain returns at once.
+ * What a shutdown gives a detached shadow AI review beyond its own timeout
+ * (AI_REVIEW_SHADOW_TIMEOUT_MS, 120s by default; reviewTimeoutMs): a review cut off is paid for
+ * and never recorded, so reviews get their whole timeout rather than the jobs' grace.
+ * render.yaml's maxShutdownDelaySeconds on the worker and trainer covers this plus
+ * SHUTDOWN_WRITES_MS. With no review in flight the drain returns at once.
  */
 const REVIEW_DRAIN_SLACK_MS = 2_000;
 /** What a shutdown allows the interrupted-run heartbeats and the disconnect after the grace. */
@@ -1108,10 +1113,17 @@ async function main() {
             logger.warn("KOL Known Sides not sorted", { error: String(err) });
             return null;
           });
-          const meta = await runKolSideWalletsJob();
-          return knownSides
-            ? { ...meta, knownSides: knownSides.join(","), knownSideCount: knownSides.length }
-            : meta;
+          const withKnownSides = (meta: JobRunMeta): JobRunMeta =>
+            knownSides
+              ? { ...meta, knownSides: knownSides.join(","), knownSideCount: knownSides.length }
+              : meta;
+          // A run near its reads' bound is kept with a warning (PartialJobFailure), Known Sides and all.
+          const meta = await runKolSideWalletsJob().catch((err: unknown) => {
+            if (err instanceof PartialJobFailure)
+              throw new PartialJobFailure(err.message, withKnownSides(err.meta));
+            throw err;
+          });
+          return withKnownSides(meta);
         }),
       ),
       60,
@@ -1228,8 +1240,9 @@ async function main() {
         // run cut at 150 would be redone and cut again). One that hangs (a dead connection, a
         // training thread that never answers) would otherwise stop training for good and block
         // "Retrain now". /health/worker calls a run hung well before this, once its exams stop
-        // moving (TRAINING_DEADLINE_MS in apps/api/src/routes/health.ts).
-        deadlineMinutes: 240,
+        // moving (TRAINING_DEADLINE_MS in apps/api/src/routes/health.ts), and pipeline-watch tells
+        // the admins once runs take three quarters of it.
+        deadlineMinutes: TRAINING_DEADLINE_MINUTES,
         // The admin panel's "Retrain now" (POST /admin/curator/retrain) leaves a request row.
         runEarly: { everyMs: 60_000, due: retrainRequested },
         // "Stop and retrain": the same row, left while a run is going (each run marks the requests
@@ -1346,7 +1359,7 @@ async function main() {
     // The runs' settle is bounded by the grace, but the writes after it are not: the restarts
     // that come through here are mostly for a dead connection, and a heartbeat write or the
     // disconnect on one can wait out the 180s socket timeout. The process ends regardless.
-    const reviewGraceMs = Math.max(SHUTDOWN_GRACE_MS, env.AI_REVIEW_TIMEOUT_MS + REVIEW_DRAIN_SLACK_MS);
+    const reviewGraceMs = Math.max(SHUTDOWN_GRACE_MS, reviewTimeoutMs(env, false) + REVIEW_DRAIN_SLACK_MS);
     const hardExit = setTimeout(() => process.exit(code), reviewGraceMs + SHUTDOWN_WRITES_MS);
     void hardExit;
     logger.info("shutting down", { signal, graceMs: SHUTDOWN_GRACE_MS, exitCode: code });

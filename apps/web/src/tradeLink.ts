@@ -56,6 +56,48 @@ export function tokenLinkFromUrl(search = window.location.search): string | null
   return mint && MINT_RE.test(mint) ? mint : null;
 }
 
+/**
+ * The coin a notification click asks an open tab to show (public/sw.js posts
+ * `{ type: "ts-open-token", mint }`), or null for any other message.
+ */
+export function tokenFromWorkerMessage(data: unknown): string | null {
+  if (typeof data !== "object" || data === null) return null;
+  const { type, mint } = data as { type?: unknown; mint?: unknown };
+  return type === OPEN_TOKEN_MESSAGE && typeof mint === "string" && MINT_RE.test(mint) ? mint : null;
+}
+
+export const OPEN_TOKEN_MESSAGE = "ts-open-token";
+
+const OPEN_EVENT = "token-link:open";
+
+/**
+ * Asks the page to open a coin's token view: a notification click on the page's own
+ * `new Notification` fallback, or a click relayed by the service worker (`onOpenToken` hears both).
+ */
+export function openTokenLink(mint: string): void {
+  if (MINT_RE.test(mint)) window.dispatchEvent(new CustomEvent<string>(OPEN_EVENT, { detail: mint }));
+}
+
+/** Calls `open` with each coin a notification click asks for; returns the unsubscribe. */
+export function onOpenToken(open: (mint: string) => void): () => void {
+  const onEvent = (e: Event) => open((e as CustomEvent<string>).detail);
+  const onWorker = (e: MessageEvent) => {
+    const mint = tokenFromWorkerMessage(e.data);
+    if (mint) open(mint);
+  };
+  const worker =
+    typeof navigator !== "undefined" && "serviceWorker" in navigator ? navigator.serviceWorker : null;
+  window.addEventListener(OPEN_EVENT, onEvent);
+  worker?.addEventListener("message", onWorker);
+  return () => {
+    window.removeEventListener(OPEN_EVENT, onEvent);
+    worker?.removeEventListener("message", onWorker);
+  };
+}
+
+/** The link a notification for this coin carries, so a click opens its token view. */
+export const tokenLinkPath = (mint: string) => `/?${TOKEN_PARAM}=${encodeURIComponent(mint)}`;
+
 /** Takes the trade and token parameters out of the address bar, so a reload doesn't act on them again. */
 export function clearTradeLink(): void {
   const url = new URL(window.location.href);

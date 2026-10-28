@@ -35,6 +35,17 @@ export function pollMountMaxAge(path: string, forced: boolean): number {
   return FRESH_ON_MOUNT_MS;
 }
 
+/**
+ * How old a cached answer a timed poll tick may reuse: half its interval, so several views polling
+ * one path on their own timers (the Models board under six components, audit 10-27 WB-24) send at
+ * most two reads an interval between them, not one each. Chart paths always read: a fresh tail can
+ * hide older candles.
+ */
+export function pollTickMaxAge(path: string, intervalMs: number): number {
+  if (isChartPollPath(path)) return 0;
+  return Math.floor(intervalMs / 2);
+}
+
 /** Whether a tab coming back should poll this path (chart always; others when the cache has aged). */
 export function shouldPollOnVisible(path: string, cachedAt: number | null, intervalMs: number): boolean {
   if (isChartPollPath(path)) return true;
@@ -196,10 +207,11 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
     if (busy.current) again.current = true;
     else run(-1);
   }, [run]);
-  // The timed poll: a new request unless one is in flight, which the browser's HTTP cache may
-  // answer (reload() is for "something changed", and goes past it).
+  // The timed poll: a new request unless one is in flight or another view read the path within
+  // half an interval (pollTickMaxAge); the browser's HTTP cache may answer it (reload() is for
+  // "something changed", and goes past both).
   const poll = useCallback(() => {
-    if (!busy.current) run(0);
+    if (!busy.current) run(pollTickMaxAge(pathRef.current, intervalRef.current));
   }, [run]);
 
   const firstKey = useRef(key);

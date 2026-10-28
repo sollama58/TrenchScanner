@@ -3,6 +3,7 @@ import bs58 from "bs58";
 import { z } from "zod";
 import {
   buildManualTrade,
+  buyMintWarnings,
   estimateManualFees,
   estimateSwapCosts,
   estimateSaleProceeds,
@@ -115,6 +116,11 @@ const buildSchema = z.object({
    * old; 100 is the whole balance (closing), the same as `all`.
    */
   percent: z.number().int().min(1).max(100).optional(),
+  /**
+   * The trader saw the mint's risks (buyMintWarnings: freeze authority, a permanent delegate) and
+   * chose to buy anyway. Without it such a buy answers 409 with the warnings, built for nobody.
+   */
+  acceptMintRisk: z.boolean().optional(),
   /** The trader's own priority fee and Sender tip, lamports; left out, the going rate and the minimum. */
   priorityFeeLamports: z
     .string()
@@ -229,6 +235,37 @@ export class TradeCooldown {
 
 /** One person clicking: generous for a scalper, tight for anything scripted. */
 const BUILD_RATE_LIMIT = { max: 40, timeWindow: "1 minute" };
+/**
+ * Builds a wallet without Pro Mode may ask for a minute: the access-token buy only, a buy or two
+ * with a retry, never a scalper's pace. Each build reads the chain and asks Jupiter for a quote,
+ * so the shared 40 let a free account spend about 80 Helius credits a minute (audit AP-8, 2026-10-27).
+ */
+export const ACCESS_BUILDS_PER_MINUTE = 6;
+
+/** At most `max` uses per key in each fixed window; a use past it is refused, not queued. */
+export class WindowAllowance {
+  private readonly windows = new Map<string, { start: number; used: number }>();
+  constructor(
+    private readonly max: number,
+    private readonly ms: number,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /** 0 and counted when the key may go now; otherwise the ms until its window starts over. */
+  take(key: string): number {
+    const at = this.now();
+    if (this.windows.size > 5_000)
+      for (const [k, w] of this.windows) if (at - w.start >= this.ms) this.windows.delete(k);
+    let w = this.windows.get(key);
+    if (!w || at - w.start >= this.ms) {
+      w = { start: at, used: 0 };
+      this.windows.set(key, w);
+    }
+    if (w.used >= this.max) return w.start + this.ms - at;
+    w.used++;
+    return 0;
+  }
+}
 const SEND_RATE_LIMIT = { max: 40, timeWindow: "1 minute" };
 const READ_RATE_LIMIT = { max: 120, timeWindow: "1 minute" };
 
@@ -484,6 +521,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   >();
 
   const cooldown = new TradeCooldown();
+  const accessBuilds = new WindowAllowance(ACCESS_BUILDS_PER_MINUTE, 60_000);
   function tooSoon(reply: FastifyReply, leftMs: number) {
     const seconds = Math.max(1, Math.ceil(leftMs / 1_000));
     return reply.code(429).send({
@@ -566,6 +604,15 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const asked = (request.body ?? {}) as { side?: unknown; mint?: unknown };
     const accessBuy = asked.side === "buy" && asked.mint === SUBSCRIPTION_MINT && accessSwapOpen();
     if (!who.pro && !accessBuy) return reply.code(404).send({ error: TRADING_OFF, notSent: true });
+    if (!who.pro) {
+      const wait = accessBuilds.take(wallet);
+      if (wait > 0)
+        return reply.code(429).send({
+          error: `Too many buys started in a minute: try again in ${Math.max(1, Math.ceil(wait / 1_000))}s. Nothing was sent.`,
+          retryAfterMs: wait,
+          notSent: true,
+        });
+    }
     const parsed = buildSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
     const body = parsed.data;
@@ -579,6 +626,20 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       if (left > 0) return tooSoon(reply, left);
       if (body.side === "buy" && BigInt(body.amount) < MIN_TRADE_LAMPORTS)
         return reply.code(422).send({ error: tooSmall("buy") });
+    }
+    // A mint whose issuer can freeze or take the coins: said before anything else is asked (the
+    // two-factor prompt included), and built only once the trader confirms (user decision
+    // 2026-10-27, audit TR-4). Our own access token is known; an unread mint is the build's to report.
+    if (body.side === "buy" && body.mint !== SUBSCRIPTION_MINT && body.acceptMintRisk !== true) {
+      const info = await rpc.getMintInfo(body.mint).catch(() => null);
+      const risks = info ? buyMintWarnings(info) : [];
+      if (risks.length > 0)
+        return reply.code(409).send({
+          error: `This coin can trap a buyer. ${risks.join(" ")} Nothing was sent.`,
+          code: "mint_risk",
+          risks,
+          notSent: true,
+        });
     }
     // The account's own two-factor choices: every buy, buys over a size, or sales.
     if (

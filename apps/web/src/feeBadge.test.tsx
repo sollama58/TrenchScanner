@@ -4,6 +4,11 @@ import { creatorFeeLine, FeeBadge, feeBadge } from "./components/AlertCard";
 import { creatorRewardFigure } from "./creatorReward";
 
 describe("feeBadge", () => {
+  it("is read out by its label: a labelled span needs a role (audit 10-27 WB-19)", () => {
+    const html = renderToStaticMarkup(<FeeBadge fee={{ destination: "github", summary: null }} word />);
+    expect(html).toMatch(/class="fee-badge[^"]*"[^>]*role="img"[^>]*aria-label="[^"]+"/);
+  });
+
   it("names where the creator fee goes, one kind per destination", () => {
     const kind = (destination: string) => feeBadge({ destination, summary: null })?.kind ?? null;
     expect(kind("charity")).toBe("charity");

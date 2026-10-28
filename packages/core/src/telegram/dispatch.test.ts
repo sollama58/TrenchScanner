@@ -11,6 +11,7 @@ import {
   REALERT_AFTER_MS,
   dashboardUrl,
   dispatchFailure,
+  FAILING_FOR_MS,
   oldestOpenTransaction,
   PICKS_FALLBACK_TEXT,
   resetArtworkMisses,
@@ -65,6 +66,10 @@ describe("dispatchFailure", () => {
     unconfirmed: 0,
     duplicates: 0,
     stepped: 0,
+    agedOut: 0,
+    agedOutSinceBoot: 0,
+    held: 0,
+    disabled: 0,
     ...over,
   });
   it("fails a pass whose every send failed, and no other", () => {
@@ -203,11 +208,15 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
 
   /** How many times a pass read the feed model state. */
   let stateLoads = 0;
+  // The clock stands still except when the pass sleeps: a chat's spacing is kept from pass to
+  // pass, and a pass waiting it out on a clock that never moved would wait forever.
   const run = (api: FakeTelegramApi, hasAccess = true, now = Date.now(), openSince: Date | null = null) =>
     runTelegramDispatch(env, {
       api,
       now: () => now,
-      sleep: noSleep,
+      sleep: async (ms) => {
+        now += ms;
+      },
       hasAccess: async () => hasAccess,
       oldestOpenTransaction: async () => openSince,
       feedModelState: async () => {
@@ -230,6 +239,10 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       unconfirmed: 0,
       duplicates: 0,
       stepped: 0,
+      agedOut: 0,
+      agedOutSinceBoot: 0,
+      held: 0,
+      disabled: 0,
     });
     expect(api.calls).toHaveLength(0);
   });
@@ -266,7 +279,9 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     });
     stateLoads = 0;
     const summary = await run(api);
-    expect(summary).toMatchObject({ chats: 1, sent: 1, digests: 0, failed: 0 });
+    // Other test files' chats can be in the same pass (linked, with nothing to send).
+    expect(summary.chats).toBeGreaterThanOrEqual(1);
+    expect(summary).toMatchObject({ sent: 1, digests: 0, failed: 0 });
     expect(stateLoads).toBe(1);
     const sent = api.sent();
     expect(sent).toHaveLength(1);
@@ -1027,6 +1042,10 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       unconfirmed: 0,
       duplicates: 0,
       stepped: 0,
+      agedOut: 0,
+      agedOutSinceBoot: 0,
+      held: 0,
+      disabled: 0,
     });
     expect(api.calls).toHaveLength(0);
   });
@@ -1102,6 +1121,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch fan-out", () => {
 
   /** A pass on a clock that only moves when the pass sleeps, recording when each chat was sent to. */
   const limitedPass = async (limitedChats: Set<string>) => {
+    resetArtworkMisses();
     await prisma.telegramChat.updateMany({
       where: { chatId: { in: chatIds } },
       data: { sentThrough: new Date(Date.now() - 60_000), lastSentAt: new Date() },
@@ -1197,5 +1217,242 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch fan-out", () => {
     const waited = chatIds.map(String).filter((id) => !limited.has(id) && sentAt.get(id)! >= 10_000);
     expect(waited.length).toBeGreaterThan(0);
     expect(chatIds.every((id) => sentAt.has(String(id)))).toBe(true);
+  });
+});
+
+describe.skipIf(!dbAvailable)("runTelegramDispatch: a chat that can't be sent to", () => {
+  const STALL_TAG = `${TAG}-stall`;
+  let userId = "";
+  let filterId = "";
+  let snapshotId = "";
+  let chatRowId = "";
+  const chatId = BigInt(nextChat--);
+  let tokens = 0;
+
+  beforeAll(async () => {
+    userId = (await prisma.user.create({ data: { walletAddress: `${STALL_TAG}-wallet` } })).id;
+    filterId = (await prisma.userFilter.create({ data: { userId, name: "Mine", mcapMin: 1, mcapMax: 1e9 } }))
+      .id;
+    const token = await prisma.token.create({ data: { mintAddress: `${STALL_TAG}-snap`, symbol: "SNAP" } });
+    snapshotId = (
+      await prisma.tokenSnapshot.create({
+        data: { tokenId: token.id, priceUsd: 0.001, marketCapUsd: 50_000, score: 60 },
+      })
+    ).id;
+    chatRowId = (
+      await prisma.telegramChat.create({
+        data: { chatId, kind: "supergroup", userId, sentThrough: new Date(Date.now() - 60_000) },
+      })
+    ).id;
+  });
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await prisma.user.deleteMany({ where: { walletAddress: { startsWith: STALL_TAG } } });
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: STALL_TAG } } });
+  });
+  beforeEach(async () => {
+    resetArtworkMisses();
+    await prisma.match.deleteMany({ where: { userId } });
+    await prisma.telegramAlertSent.deleteMany({ where: { chatId: chatRowId } });
+    await prisma.telegramChat.update({
+      where: { id: chatRowId },
+      data: {
+        sentThrough: new Date(Date.now() - 60_000),
+        lastSentAt: new Date(),
+        failures: 0,
+        lastError: null,
+        enabled: true,
+      },
+    });
+  });
+
+  /** A filter match on a coin of its own, so every one is a card. */
+  const alert = async (at: Date) => {
+    const n = tokens++;
+    const token = await prisma.token.create({ data: { mintAddress: `${STALL_TAG}-${n}`, symbol: `S${n}` } });
+    await prisma.match.create({
+      data: { userId, filterId, tokenId: token.id, snapshotId, matchedAt: at, score: 50 },
+    });
+    return `$S${n}`;
+  };
+  const mine = (api: FakeTelegramApi) => api.sent().filter((s) => s.chatId === String(chatId));
+  /** Every send to this chat answered with `answer`; every other chat's goes through. */
+  const failMine = (api: FakeTelegramApi, answer: TelegramResult<unknown> | null) => {
+    const fn = (params: Record<string, unknown>) =>
+      answer && params.chat_id === String(chatId) ? answer : { ok: true as const, result: {} };
+    api.answers.set("sendPhoto", fn);
+    api.answers.set("sendMessage", fn);
+  };
+  const run = (api: FakeTelegramApi, start = Date.now()) => {
+    let t = start;
+    return runTelegramDispatch(env, {
+      api,
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+      },
+      hasAccess: async () => true,
+      oldestOpenTransaction: async () => null,
+      feedModelState: async () => state,
+    });
+  };
+  const chat = () => prisma.telegramChat.findUniqueOrThrow({ where: { id: chatRowId } });
+
+  it("steps over a backlog digest that keeps failing, though new alerts join it every pass", async () => {
+    const api = new FakeTelegramApi();
+    failMine(api, { ok: false, code: 413, description: "Request Entity Too Large" });
+    const base = Date.now() - 40_000;
+    const first: string[] = [];
+    for (let i = 0; i <= DIGEST_THRESHOLD; i++) first.push(await alert(new Date(base + i * 100)));
+    const firstThrough = base + DIGEST_THRESHOLD * 100;
+    // Each failed pass, a new alert lands before the next: the digest's newest stamp moves every
+    // time, and the count of failed sends used to restart with it (WB-11).
+    expect((await run(api)).stepped).toBe(0);
+    const later = [await alert(new Date(base + 10_000))];
+    expect((await run(api)).stepped).toBe(0);
+    later.push(await alert(new Date(base + 11_000)));
+    expect((await run(api)).stepped).toBe(1);
+    const row = await chat();
+    // What the digest held when it first failed is skipped; what came since is not.
+    expect(row.sentThrough.getTime()).toBe(firstThrough);
+    expect(row.lastError).toBe("skipped after 3 failed sends: 413: Request Entity Too Large");
+
+    failMine(api, null);
+    api.calls.length = 0;
+    await run(api);
+    const text = mine(api)
+      .map((s) => s.text)
+      .join("\n");
+    for (const symbol of later) expect(text).toContain(`<b>${symbol}</b>`);
+    for (const symbol of first) expect(text).not.toContain(`<b>${symbol}</b>`);
+  });
+
+  it("waits out a 429's retry_after across passes, and doesn't count it against the chat", async () => {
+    const api = new FakeTelegramApi();
+    failMine(api, { ok: false, code: 429, description: "Too Many Requests: retry after 60", retryAfter: 60 });
+    await alert(new Date(Date.now() - 20_000));
+    const start = Date.now();
+    const limited = await run(api, start);
+    expect(limited).toMatchObject({ failed: 1, failure: "429: Too Many Requests: retry after 60" });
+    expect(limited.held).toBeGreaterThanOrEqual(1);
+    let row = await chat();
+    expect(row.lastError).toBe("429: Too Many Requests: retry after 60 (retry after 60 s)");
+    expect(row.failures).toBe(0);
+
+    // The next passes, inside the minute, don't ask Telegram again.
+    failMine(api, null);
+    api.calls.length = 0;
+    for (const at of [start + 2_000, start + 30_000]) {
+      expect((await run(api, at)).held).toBeGreaterThanOrEqual(1);
+      expect(mine(api)).toHaveLength(0);
+    }
+    // Past it, the alert goes out.
+    await run(api, start + 61_000);
+    expect(mine(api)).toHaveLength(1);
+    row = await chat();
+    expect(row.lastError).toBeNull();
+  });
+
+  it("keeps a group's spacing from one pass to the next", async () => {
+    const api = new FakeTelegramApi();
+    await alert(new Date(Date.now() - 20_000));
+    const start = Date.now();
+    await run(api, start);
+    expect(mine(api)).toHaveLength(1);
+    const next = await alert(new Date(Date.now() - 10_000));
+    api.calls.length = 0;
+    // A pass a moment later waits out the 3.1 s a group gets between messages, then sends.
+    const sentAt: number[] = [];
+    let t = start + 500;
+    const clocked = new (class extends FakeTelegramApi {
+      override async call<T>(method: string, params: Record<string, unknown> = {}) {
+        if ((method === "sendMessage" || method === "sendPhoto") && params.chat_id === String(chatId)) {
+          sentAt.push(t);
+        }
+        return super.call<T>(method, params);
+      }
+    })();
+    await runTelegramDispatch(env, {
+      api: clocked,
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+      },
+      hasAccess: async () => true,
+      oldestOpenTransaction: async () => null,
+      feedModelState: async () => state,
+    });
+    expect(sentAt).toHaveLength(1);
+    expect(sentAt[0]! - start).toBeGreaterThanOrEqual(3_100);
+    expect(clocked.sent().find((s) => s.chatId === String(chatId))!.text).toContain(`<b>${next}</b>`);
+  });
+
+  it("counts the alerts a chat lost to the age limit, once, and moves its cursor past them", async () => {
+    const api = new FakeTelegramApi();
+    await prisma.telegramChat.update({
+      where: { id: chatRowId },
+      data: { sentThrough: new Date(Date.now() - 30 * 60_000) },
+    });
+    await alert(new Date(Date.now() - 20 * 60_000));
+    await alert(new Date(Date.now() - 18 * 60_000));
+    const fresh = await alert(new Date(Date.now() - 20_000));
+    const before = (await run(api, Date.now())).agedOutSinceBoot;
+    // Other test files' chats can be in the same pass, so only this chat's own share is certain.
+    expect(before).toBeGreaterThanOrEqual(2);
+    expect(
+      mine(api)
+        .map((s) => s.text)
+        .join("\n"),
+    ).toContain(`<b>${fresh}</b>`);
+    const row = await chat();
+    expect(row.sentThrough.getTime()).toBeGreaterThan(Date.now() - 60_000);
+    // Not counted again on the next pass.
+    await prisma.telegramChat.update({
+      where: { id: chatRowId },
+      data: { sentThrough: new Date(Date.now() - 16 * 60_000) },
+    });
+    await prisma.match.deleteMany({ where: { userId } });
+    const again = await run(api, Date.now());
+    expect(again.agedOutSinceBoot - before).toBe(again.agedOut);
+  });
+
+  it("switches a failing chat off only once nothing has reached it for a day", async () => {
+    const api = new FakeTelegramApi();
+    failMine(api, { ok: false, code: 0, description: "fetch failed", undelivered: true });
+    // Another chat's send must get through for a failure to count: the stall test's own chat
+    // isn't enough on its own, so a second, healthy one is linked for this test.
+    const other = await prisma.telegramChat.create({
+      data: {
+        chatId: BigInt(nextChat--),
+        kind: "private",
+        userId,
+        sentThrough: new Date(Date.now() - 60_000),
+      },
+    });
+    try {
+      await alert(new Date(Date.now() - 20_000));
+      await prisma.telegramChat.update({ where: { id: chatRowId }, data: { failures: 150 } });
+      await run(api);
+      let row = await chat();
+      // 150 failed passes in an hour that still sent this morning: kept on.
+      expect(row).toMatchObject({ enabled: true, failures: 151 });
+
+      resetArtworkMisses();
+      await prisma.telegramAlertSent.deleteMany({ where: { chatId: { in: [chatRowId, other.id] } } });
+      await prisma.telegramChat.updateMany({
+        where: { id: { in: [chatRowId, other.id] } },
+        data: { sentThrough: new Date(Date.now() - 60_000) },
+      });
+      await prisma.telegramChat.update({
+        where: { id: chatRowId },
+        data: { lastSentAt: new Date(Date.now() - FAILING_FOR_MS - 60_000) },
+      });
+      const summary = await run(api);
+      expect(summary.disabled).toBeGreaterThanOrEqual(1);
+      row = await chat();
+      expect(row.enabled).toBe(false);
+    } finally {
+      await prisma.telegramChat.delete({ where: { id: other.id } });
+    }
   });
 });

@@ -328,6 +328,38 @@ describe("summarizeTape and stopCauseOf", () => {
     expect(by.get("late")!.firstBuyerRank).toBe(4);
   });
 
+  it("counts only priced trades as buys and sells: a transfer moves the holding alone", () => {
+    const sent = orderTrades([
+      ...trades,
+      // The sniper hands 10M to a fresh wallet just after launch, and it passes them on into the stop.
+      trade("sniper", "sell", 0, 10_000_000, T0 + 3 * S),
+      trade("fresh", "buy", 0, 10_000_000, T0 + 3 * S),
+      trade("fresh", "sell", 0, 10_000_000, anchor + 30 * S),
+      trade("side", "buy", 0, 10_000_000, anchor + 30 * S),
+    ]);
+    const by = new Map(summarizeTape(sent, ctx).map((w) => [w.wallet, w]));
+    expect(by.get("fresh")).toMatchObject({
+      buys: 0,
+      sells: 0,
+      firstBuyAtMs: null,
+      firstBuyerRank: null,
+      tokensBought: 0,
+      dumpedIntoStop: false,
+      heldAtAnchor: 10_000_000,
+    });
+    // The first buyers are the same four; the transfer out is no sell of the sniper's.
+    expect(by.get("late")!.firstBuyerRank).toBe(4);
+    expect(by.get("sniper")).toMatchObject({
+      sells: 1,
+      tokensSold: 60_000_000,
+      heldPctAtAnchor: 5,
+      dumpSol: 3,
+    });
+    expect(by.get("side")).toMatchObject({ buys: 0, firstBuyAtMs: null });
+    const cause = stopCauseOf(sent, by, { anchorAtMs: anchor, stoppedAtMs: stop, complete: true });
+    expect(cause).toMatchObject({ sellers: 2, soldSol: 4 });
+  });
+
   it("leaves launch roles unknown on a partial tape", () => {
     const by = new Map(summarizeTape(trades, { ...ctx, complete: false }).map((w) => [w.wallet, w]));
     expect(by.get("sniper")).toMatchObject({ firstBuyerRank: null, launchSniper: false, heldAtAnchor: null });

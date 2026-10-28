@@ -14,6 +14,7 @@ import {
   proHolderStanding,
   resetProHolderCacheForTests,
   SUBSCRIPTION_MINT,
+  TradingRpc,
   type Env,
 } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
@@ -36,6 +37,8 @@ import {
   RENT_SHORT,
   TRADE_COOLDOWN_MS,
   TradeCooldown,
+  ACCESS_BUILDS_PER_MINUTE,
+  WindowAllowance,
 } from "./proTrade.js";
 
 // The fee route pings Sender in the background: answered here, so no test reaches the network.
@@ -174,6 +177,21 @@ describe("TradeCooldown", () => {
   });
 });
 
+describe("WindowAllowance", () => {
+  it("allows a key its uses per window, then says how long until the window starts over", () => {
+    let now = 1_000_000;
+    const allowance = new WindowAllowance(2, 60_000, () => now);
+    expect(allowance.take("a")).toBe(0);
+    expect(allowance.take("a")).toBe(0);
+    now += 10_000;
+    expect(allowance.take("a")).toBe(50_000);
+    // Another key has its own.
+    expect(allowance.take("b")).toBe(0);
+    now += 50_000;
+    expect(allowance.take("a")).toBe(0);
+  });
+});
+
 const ADMIN = "ProModeAdmin1111111111111111111111111111111";
 const walletKey = () =>
   bs58.encode(generateKeyPairSync("ed25519").publicKey.export({ format: "der", type: "spki" }).subarray(-32));
@@ -251,6 +269,56 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
     expect((await app.inject({ method: "GET", url: "/pro/trade/credit-picks" })).statusCode).toBe(401);
     if (!env.PRO_TRADING_ENABLED)
       expect((await as(TRADER, "GET", "/pro/trade/credit-picks")).statusCode).toBe(404);
+  });
+
+  it("gives a wallet without Pro Mode a few access-token builds a minute, not the scalper's 40", async () => {
+    const open = await buildServer({ ...env, PRO_TRADING_ENABLED: true });
+    try {
+      const build = (who: string) =>
+        open.inject({
+          method: "POST",
+          url: "/pro/trade/build",
+          // Malformed on purpose: refused after the allowance is counted, before anything is read.
+          payload: { mint: SUBSCRIPTION_MINT, side: "buy" },
+          cookies: { [SESSION_COOKIE_NAME]: cookies[who]! },
+        });
+      for (let i = 0; i < ACCESS_BUILDS_PER_MINUTE; i++) expect((await build(TRADER)).statusCode).toBe(400);
+      const held = await build(TRADER);
+      expect(held.statusCode).toBe(429);
+      expect(held.json()).toMatchObject({ notSent: true, error: expect.stringMatching(/Too many buys/) });
+      // Pro Mode keeps the route's own limit.
+      for (let i = 0; i <= ACCESS_BUILDS_PER_MINUTE; i++) expect((await build(ADMIN)).statusCode).toBe(400);
+    } finally {
+      await open.close();
+    }
+  });
+
+  it("holds a buy of a coin that can trap its buyer until the trader confirms it", async () => {
+    const mintInfo = vi.spyOn(TradingRpc.prototype, "getMintInfo").mockResolvedValue({
+      program: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      mintAuthority: null,
+      freezeAuthority: "Freeze1111111111111111111111111111111111111",
+      extensions: ["tokenMetadata", "permanentDelegate"],
+    });
+    try {
+      const res = await as(ADMIN, "POST", "/pro/trade/build", {
+        mint: MINT,
+        side: "buy",
+        amount: "20000000",
+        slippageBps: 100,
+        speed: "eco",
+      });
+      expect(res.statusCode).toBe(409);
+      const body = res.json() as { code: string; risks: string[]; notSent: boolean; error: string };
+      expect(body).toMatchObject({ code: "mint_risk", notSent: true });
+      expect(body.risks).toHaveLength(2);
+      expect(body.risks[0]).toMatch(/freeze/);
+      expect(body.risks[1]).toMatch(/permanent delegate/);
+      expect(body.error).toMatch(/Nothing was sent/);
+      expect(mintInfo).toHaveBeenCalledWith(MINT);
+    } finally {
+      mintInfo.mockRestore();
+    }
   });
 
   it("quotes the network fee, with no platform fee while the Sacrifice is off, to Pro wallets only", async () => {

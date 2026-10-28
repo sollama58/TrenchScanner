@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { readMarketRows } from "../marketRows.js";
 import {
+  aiReviewerRunMode,
   baselineRates,
   bearerMatches,
   buildDbReport,
@@ -25,6 +26,46 @@ describe("bearerMatches", () => {
     expect(bearerMatches(TOKEN, TOKEN)).toBe(false);
     expect(bearerMatches(undefined, TOKEN)).toBe(false);
     expect(bearerMatches(`Bearer ${TOKEN}`, "")).toBe(false);
+  });
+});
+
+describe("aiReviewerRunMode", () => {
+  const apiEnv = { AI_REVIEW_MODE: "shadow" as const, ANTHROPIC_API_KEY: "" };
+  const worker = (mode: string, key?: boolean) => ({
+    settings: { aiReviewMode: mode },
+    credentials: (key === undefined ? {} : { anthropicApiKey: key }) as Record<string, boolean>,
+  });
+
+  it("reads the key and mode off the worker, not the API's env", () => {
+    // The documented setup: the key is on the worker and trainer only.
+    expect(aiReviewerRunMode("live", worker("gate", true), apiEnv)).toEqual({
+      mode: "gate",
+      configuredMode: "gate",
+      keySet: true,
+      reportedBy: "worker",
+    });
+    expect(aiReviewerRunMode("admins", worker("gate", true), apiEnv).mode).toBe("shadow");
+    expect(aiReviewerRunMode("off", worker("gate", true), apiEnv).mode).toBe("off");
+  });
+
+  it("is off when the worker reports no key, whatever the API has", () => {
+    const r = aiReviewerRunMode("live", worker("shadow", false), { ...apiEnv, ANTHROPIC_API_KEY: "sk-test" });
+    expect(r).toMatchObject({ mode: "off", keySet: false, reportedBy: "worker" });
+  });
+
+  it("falls back to the API's env when no heartbeat config is published", () => {
+    expect(aiReviewerRunMode("live", null, apiEnv)).toMatchObject({ mode: "off", reportedBy: "api" });
+    expect(aiReviewerRunMode("live", null, { ...apiEnv, ANTHROPIC_API_KEY: "sk-test" })).toMatchObject({
+      mode: "shadow",
+      configuredMode: "shadow",
+      keySet: true,
+      reportedBy: "api",
+    });
+    // A heartbeat with settings but no credential block (an older worker) keeps the API's key read.
+    expect(aiReviewerRunMode("live", worker("bogus"), apiEnv)).toMatchObject({
+      configuredMode: "shadow",
+      reportedBy: "api",
+    });
   });
 });
 
@@ -504,6 +545,12 @@ describe.skipIf(!dbAvailable)("buildDbReport", () => {
     expect(Array.isArray(report.activity)).toBe(true);
     expect(report.tables.map((t) => t.table)).toContain("TokenSnapshot");
     expect(report.indexes.some((i) => i.index === "Token_firstSeenAt_idx" && i.valid)).toBe(true);
+    // The batch reads' big tables too, not only the scan's.
+    expect(report.tables.map((t) => t.table)).toContain("TokenWalletActivity");
+    expect(Array.isArray(report.invalidIndexes)).toBe(true);
+    // pg_stat_statements answers only where the server preloads it; otherwise the report says why.
+    if (report.statements.available) expect(Array.isArray(report.statements.statements)).toBe(true);
+    else expect(report.statements.reason.length).toBeGreaterThan(0);
     expect(typeof report.locksWaiting).toBe("number");
     // This connection at least, against the server's ceiling.
     expect(report.connections.total).toBeGreaterThanOrEqual(1);
@@ -542,7 +589,7 @@ describe.skipIf(!dbAvailable)("GET /stats/live", () => {
       expect(res.json()).toMatchObject({
         viewedLast2Min: expect.any(Number),
         readingAgeSeconds: expect.any(Object),
-        refresher: { lookups: 0, overBudget: 0, callsPerMinuteBudget: 120 },
+        refresher: { lookups: 0, overBudget: 0, callsPerMinuteBudget: 90 },
       });
     } finally {
       await app.close();

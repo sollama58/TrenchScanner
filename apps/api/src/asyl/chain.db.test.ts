@@ -2,8 +2,16 @@
 import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadEnv, prisma, type ChainTx, type Env } from "@trenchscanner/core";
-import { allowanceOf, recordSpend, utcDay } from "./credits.js";
-import { FLOW_WORST, readWalletFlows, refreshFunders } from "./chain.js";
+import { allowanceOf, recordSpend, siteHeld, utcDay } from "./credits.js";
+import {
+  FLOW_WORST,
+  FUNDER_WORST,
+  readDeployer,
+  readFunders,
+  readWalletFlows,
+  refreshFunders,
+  roomLeft,
+} from "./chain.js";
 
 const addr = (prefix: string) => prefix + "1".repeat(43 - prefix.length);
 const WALLET = addr("AsyFlowMe");
@@ -23,6 +31,74 @@ describe("allowanceOf", () => {
     expect(allowanceOf({ user: 3000, global: 150_000 }, 0, 149_500, now).left).toBe(500);
     expect(allowanceOf({ user: 3000, global: 150_000 }, 3500, 0, now).left).toBe(0);
     expect(allowanceOf({ user: 0, global: 150_000 }, 0, 0, now)).toMatchObject({ enabled: false, left: 0 });
+  });
+});
+
+describe("roomLeft", () => {
+  it("takes what reads in flight hold off the site's room, never the reader's own", () => {
+    const a = allowanceOf({ user: 3000, global: 150_000 }, 0, 149_000);
+    expect(roomLeft(a, 0)).toBe(1000);
+    expect(roomLeft(a, 400)).toBe(600);
+    expect(roomLeft(a, 2000)).toBe(0);
+    expect(roomLeft(allowanceOf({ user: 3000, global: 150_000 }, 2900, 0), 400)).toBe(100);
+  });
+});
+
+describe.skipIf(!dbAvailable)("the site's cap under reads at once", () => {
+  const env: Env = dbAvailable
+    ? { ...loadEnv(), ASYL_USER_DAILY_CREDITS: 1000, ASYL_DAILY_CREDITS: 15 }
+    : (undefined as never);
+  const users = ["asyl-held-one", "asyl-held-two"];
+  const MINT = addr("AsyHeldMint");
+  const cleanup = () => prisma.asylCreditUse.deleteMany({ where: { userId: { in: users } } });
+  beforeAll(cleanup);
+  afterAll(cleanup);
+
+  it("holds a running read's worst case, so a second reader can't take the same room", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const helius = {
+      async getMintDeployersBatch(mints: string[]) {
+        await gate;
+        return new Map(mints.map((m) => [m, { status: "none" as const }]));
+      },
+    } as unknown as Parameters<typeof readDeployer>[1];
+    const first = readDeployer(env, helius, users[0]!, MINT);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(siteHeld()).toBe(10);
+    // 15 for the site, 10 held: 5 left, short of a deployer read's 10.
+    expect(await readDeployer(env, helius, users[1]!, MINT)).toMatchObject({ refused: "allowance" });
+    release();
+    expect(await first).toMatchObject({ value: null });
+    expect(siteHeld()).toBe(0);
+  });
+});
+
+describe.skipIf(!dbAvailable)("readFunders", () => {
+  const env: Env = dbAvailable
+    ? { ...loadEnv(), ASYL_USER_DAILY_CREDITS: 100, ASYL_DAILY_CREDITS: 150_000 }
+    : (undefined as never);
+  const userId = "asyl-funders-cap-user";
+  const wallets = Array.from({ length: 20 }, (_, i) => addr(`AsyFndCap${String.fromCharCode(65 + i)}`));
+  const cleanup = async () => {
+    await prisma.walletFunder.deleteMany({ where: { wallet: { in: wallets } } });
+    await prisma.asylCreditUse.deleteMany({ where: { userId } });
+  };
+  beforeAll(cleanup);
+  afterAll(cleanup);
+
+  it("reads only as many as the allowance covers at their worst", async () => {
+    const asked: string[] = [];
+    const helius = {
+      async getFundersBatch(ws: string[]) {
+        asked.push(...ws);
+        return new Map(ws.map((w) => [w, { status: "empty" as const }]));
+      },
+    } as unknown as Parameters<typeof readFunders>[1];
+    const res = await readFunders(env, helius, userId, wallets);
+    expect("refused" in res).toBe(false);
+    // 100 left, 13 each at worst: 7 read, not 20 (which could take 260).
+    expect(asked).toHaveLength(Math.floor(100 / FUNDER_WORST));
   });
 });
 

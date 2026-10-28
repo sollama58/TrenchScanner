@@ -47,6 +47,9 @@ import {
   rankAmong,
   seatLiveCutoff,
   usableLiveScores,
+  provenOnEntry,
+  isPastCalling,
+  type EntryProof,
   type LiveScales,
   type SeatScores,
   CONSENSUS_CONTESTANT,
@@ -444,9 +447,9 @@ function heuristicGate(scored: ScoredToken, rankCutoff: number | undefined, env:
 /**
  * The Rules seat on a points table learned from the best model: the token's points against the
  * cutoff the table's exam earned. A table always ships with a cutoff (one that can't set one
- * never takes the seat); a missing one sends nothing rather than everything.
+ * never takes the seat); a missing one sends nothing rather than everything. Exported for tests.
  */
-function rulesTableDecision(
+export function rulesTableDecision(
   set: DerivedRuleSet,
   features: Record<string, number | null | undefined>,
   cutoff: number | undefined,
@@ -536,6 +539,8 @@ function decideCurations(
   // A retired seat still scoring for a combiner isn't named on its cards.
   const names = new Map(roster.entries.filter((e) => !e.spec.retired).map((e) => [e.spec.id, e.spec.name]));
   const deepRead = scored.narrative?.depth === "full";
+  // Each scoring seat's cutoff on the scale its stored score is on, for the fast path's proof.
+  const cutoffs = new Map<string, number>();
 
   for (const entry of roster.entries) {
     if (entry.role === "narrative") {
@@ -544,7 +549,9 @@ function decideCurations(
       const probability = safeScore(entry.spec.id, id, () => scoreCandidateWithModel(params, features));
       if (probability === null) continue;
       const own = usableLiveScores(live.scores, entry.spec.id);
-      const curate = probability >= seatLiveCutoff(entry.spec.id, params, live);
+      const cutoff = seatLiveCutoff(entry.spec.id, params, live);
+      cutoffs.set(entry.spec.id, cutoff);
+      const curate = probability >= cutoff;
       decisions.set(entry.spec.id, {
         curate,
         confidence: probability * 100,
@@ -579,8 +586,9 @@ function decideCurations(
       learners.set(entry.spec.id, entry.model);
       const own = usableLiveScores(live.scores, entry.spec.id);
       // A tracking-only seat scores and is recorded like any other, but never calls.
-      const curate =
-        entry.spec.trackingOnly !== true && probability >= seatLiveCutoff(entry.spec.id, params, live);
+      const cutoff = seatLiveCutoff(entry.spec.id, params, live);
+      cutoffs.set(entry.spec.id, cutoff);
+      const curate = entry.spec.trackingOnly !== true && probability >= cutoff;
       decisions.set(entry.spec.id, {
         curate,
         confidence: probability * 100,
@@ -596,6 +604,7 @@ function decideCurations(
     if (entry.role === "topslice") {
       const { id } = entry.model;
       const params = onLiveMembers(entry.model.params, live);
+      cutoffs.set(entry.spec.id, params.threshold);
       const probability = scoreTopSlice(params, probabilities);
       const curate = entry.spec.trackingOnly !== true && probability >= params.threshold;
       let reasons: string[] = [];
@@ -617,6 +626,7 @@ function decideCurations(
     if (entry.role === "agreement") {
       const { id } = entry.model;
       const params = onLiveMembers(entry.model.params, live);
+      cutoffs.set(entry.spec.id, params.threshold);
       const probability = scoreAgreement(params, probabilities);
       // A tracking-only combiner (Sharp Agreement) scores and is banked like any other, but never calls.
       const curate = entry.spec.trackingOnly !== true && probability >= params.threshold;
@@ -651,6 +661,7 @@ function decideCurations(
     if (entry.role === "blend") {
       const { id } = entry.model;
       const params = onLiveMembers(entry.model.params, live);
+      cutoffs.set(entry.spec.id, params.threshold);
       const probability = scoreBlend(params, probabilities);
       const curate = entry.spec.trackingOnly !== true && probability >= params.threshold;
       let reasons: string[] = [];
@@ -681,6 +692,7 @@ function decideCurations(
     if (entry.role !== "stacked") continue;
     const { id } = entry.model;
     const params = onLiveMembers(entry.model.params, live);
+    cutoffs.set(entry.spec.id, params.threshold);
     const probability = scoreStacked(params, probabilities, rulesSignal(scored, params.rules.minScore));
     // The member-backing gate (user decision 2026-10-14): at least CONSENSUS_MIN_BACKERS members
     // must call this moment at their own cutoffs, so Rules' inputs can't carry a call alone.
@@ -712,7 +724,25 @@ function decideCurations(
       ...servedFields(params, probability, entry.spec.id, live),
     });
   }
+  if (population === "entry" && env.CURATOR_ENTRY_PROOF)
+    holdUnprovenFastCalls(decisions, cutoffs, live.proof);
   return decisions;
+}
+
+/**
+ * On the fast path, a seat calls only while its entry-row lift lower bound clears 1 at the cutoff
+ * it calls at (curation/entryProof.ts, user decision 2026-10-27). A held call keeps its score, so
+ * the moment banks as any other; Rules, which stores no score, has no record and never calls there.
+ */
+function holdUnprovenFastCalls(
+  decisions: Map<string, CurationDecision>,
+  cutoffs: ReadonlyMap<string, number>,
+  proof: EntryProof | undefined,
+): void {
+  for (const [seat, decision] of decisions) {
+    if (!decision.curate || provenOnEntry(proof, seat, cutoffs.get(seat))) continue;
+    decisions.set(seat, { ...decision, curate: false, reasons: [] });
+  }
 }
 
 /**
@@ -894,6 +924,9 @@ export async function collectCuratedContender(
     // as a note, so it files no call of its own (a second card on one coin was decided against).
     decisions.delete(NARRATIVE_CONTESTANT);
   }
+  // No seat calls a coin too old or too long in the band (user decision 2026-10-27); the moment
+  // has banked above, and the Narrative seat's note on cards already out stands.
+  if (env.CURATOR_SKIP_PAST_CALLING && isPastCalling(scored)) return;
   const calling = [...decisions.entries()].filter(
     ([model, d]) => d.curate && (retry === undefined || retry.models.includes(model)),
   );

@@ -11,7 +11,7 @@ import {
   type ScoredToken,
 } from "@trenchscanner/core";
 import type { CandidateSampleRef } from "./candidateOutcomeJob.js";
-import { runEntryScan, runScanCycle, type ScanDeps } from "./scanJob.js";
+import { runEntryScan, runScanCycle, setOwnReadsCheck, setUptimeSource, type ScanDeps } from "./scanJob.js";
 
 /** Every coin put before the curators, with the decision moment it was put there on. */
 const decided = vi.hoisted(
@@ -155,7 +155,10 @@ function expectSameReadings(actual: Record<string, unknown>, expected: Record<st
 
 describe.skipIf(!dbAvailable)("the entry fast path's first scan", () => {
   const created: string[] = [];
+  // Long past a boot: the hourly samples below don't wait for a live-tape page (BOOT_TAPE_WARMUP_SECONDS).
+  setUptimeSource(() => 3_600);
   afterAll(async () => {
+    setUptimeSource();
     if (!dbAvailable) return;
     await prisma.token.deleteMany({ where: { mintAddress: { in: created } } });
   });
@@ -250,6 +253,41 @@ describe.skipIf(!dbAvailable)("the entry fast path's first scan", () => {
     expect(later).toHaveLength(2);
     expect(later[1]!.moment).toEqual<CandidateSampleRef>({ id: event.id, created: true });
   }, 90_000);
+
+  it("decides a contender whose own reads are in before the wallet block's barrier, once (DS-3)", async () => {
+    const env: Env = {
+      ...loadEnv(),
+      CURATED_REQUIRE_WALLET_CHECKS: false,
+      TOKENSAGE_ENABLED: false,
+      // The Linked readings, which these fakes can't give, are not asked for.
+      LINKED_HOLDER_READS_PER_CYCLE: 0,
+    };
+    const mint = address("pump");
+    created.push(mint);
+    const symbol = `E${mint.slice(0, 5)}`;
+    const market = new Map([[mint, reading(mint, symbol)]]);
+    const deps = fakeDeps(market, new Map([[mint, Array.from({ length: 10 }, () => address())]]));
+    const at = new Date(Date.now() - 2 * 60_000);
+    await prisma.token.create({
+      data: { mintAddress: mint, symbol, firstSeenAt: at, launchedAt: at, launchpad: "pumpfun" },
+    });
+    // The fakes fill none of the caches the check reads: every read counts as in.
+    setOwnReadsCheck(() => true);
+    try {
+      const meta = await runScanCycle(deps, env);
+      expect(meta.earlyDecisions).toMatchObject({ coins: 1, waves: 1 });
+    } finally {
+      setOwnReadsCheck();
+    }
+    // Decided once, on its event row: the barrier left it alone.
+    const decisions = decided.filter((d) => d.mint === mint);
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]!.moment?.created).toBe(true);
+    const rows = await prisma.candidateOutcome.findMany({
+      where: { token: { mintAddress: mint }, sampleKind: "event" },
+    });
+    expect(rows).toHaveLength(1);
+  }, 60_000);
 
   it("records a launch still buffered on the stream before scanning it", async () => {
     const env: Env = { ...loadEnv(), TOKENSAGE_ENABLED: false };

@@ -102,7 +102,9 @@ describe("runEvolvingContest's challengers", () => {
   // Challengers sit only the exam; the winner's model is fitted after the contest. A challenger
   // bred as an exact copy of a seat must still ship exactly the model that seat ships.
   it("ship the winner's model exactly as a seat examined in full would", async () => {
-    const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 12 });
+    // 1,200 tokens: enough for the seat to promote and the challenger to score, and three contest
+    // runs well inside the cap on a 4-core machine (2,500 took 75 s there; full audit 10-27 BL-1).
+    const rows = syntheticMarket({ tokens: 1200, days: 30, truth: "interactions", seed: 12 });
     const cfg = {
       targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
       targetPerHour: 6,

@@ -7,16 +7,24 @@ import { narrativeIsLateCopy, narrativeReferentNamed } from "../curation/narrati
  * (CURATED_MIN_SCORE, curationRankScore) and is quoted in the AI reviewer's brief. The models
  * don't read it.
  *
- * Rebuilt 2026-10-06 from graded outcomes (notes/token-score-review-2026-10-06.md). The first
- * version ranked tokens backwards: it marked launches under 10 minutes lowest (they double most),
- * read 24-hour windows for a 15-minute question and rewarded a low top-10 share, which on a
- * pre-bond launch is a red flag. This one reads the 5-minute window, favors fresh launches and
- * flags thin pre-bond holder books. Each part's breakpoints are fixed; only the weights between
- * the parts adapt, a step at a time (below), and each change is rescaled (ScoreAnchor) so a saved
- * minimum keeps letting through about the same share of tokens.
+ * Refit for ranking 2026-10-27 (user decision on audit finding SW-1,
+ * notes/full-audit-2026-10-27/t16-score-refit.md). The 10-06 rebuild (notes/token-score-review-
+ * 2026-10-06.md) separated junk but did not rank above it: its bottom fifth doubled 9%, the other
+ * four fifths 17-19% alike, so a minimum above about 65 dropped winners as often as losers. Above
+ * that floor every DexScreener and holder-book input was flat; what still ranked was Jupiter's
+ * seconds-old read (ScoredToken.freshQuote: the 5-minute price move and the holder count), the
+ * 5-minute volume against market cap on coins past their first minutes, and how long the coin has
+ * been around (its age and how long it has sat in the market-cap band). Those are the parts now.
+ * Walk-forward on 10-20..26: the top fifth of decision moments doubles 22.3% against 18.9% for the
+ * old score, the top tenth 22.8% against 17.8%; on filter matches the top tenth 21.0% against 18.1%.
  *
- * The parts keep their old field names (ScoreBreakdown is stored on snapshots): `age` is the
- * freshness part, `holderHealth` the holder-quality part.
+ * Each part's breakpoints are fixed knots read off the graded win rates; only the weights between
+ * the parts adapt, a step at a time (below), and each change is rescaled (ScoreAnchor) so a saved
+ * minimum keeps letting through about the same share of tokens. SCORE_PARTS_VERSION marks the
+ * formula: an adopted weight set stored for another version is never loaded.
+ *
+ * The parts keep their old field names (ScoreBreakdown is stored on snapshots): `momentum` is the
+ * live-flow part, `age` the freshness part, `holderHealth` the holder-quality part.
  *
  * The parts' WEIGHTS adapt (user ask 2026-10-06): every few hours the trainer refits them on the
  * newest graded outcomes (scoring/scoreWeights.ts) and stores an adopted set in ScoreWeights;
@@ -32,13 +40,21 @@ export interface ScoreWeights {
 }
 
 /**
- * The hand-set starting weights (notes/token-score-review-2026-10-06.md), with the narrative part's
- * 0.15 spread over the others since its weight went to 0 (scoreWeights.ts NARRATIVE_WEIGHT). Sum to 1.
+ * Which formula the parts are: 3 since the 2026-10-27 refit (2 was the 10-06 rebuild). A weight
+ * set and rescale fitted on one version's parts mean nothing on another's, so the store loads only
+ * runs saved under this version (scoreWeightsStore.ts).
+ */
+export const SCORE_PARTS_VERSION = 3;
+
+/**
+ * The starting weights: the search the score-weights job runs, on the 7 days of graded decision
+ * moments to 2026-10-27 (notes/full-audit-2026-10-27/scripts/t16/s7_defaults.out). Narrative stays
+ * at 0 (scoreWeights.ts NARRATIVE_WEIGHT). Sum to 1.
  */
 export const DEFAULT_SCORE_WEIGHTS: Readonly<ScoreWeights> = Object.freeze({
-  momentum: 0.53,
-  freshness: 0.35,
-  holderQuality: 0.12,
+  momentum: 0.5,
+  freshness: 0.45,
+  holderQuality: 0.05,
   narrative: 0,
 });
 
@@ -79,7 +95,17 @@ export interface ScoreAnchor {
 /** No rescale: the weighted sum as is (every run before re-anchoring, and the defaults). */
 export const IDENTITY_SCORE_ANCHOR: Readonly<ScoreAnchor> = Object.freeze({ scale: 1, offset: 0 });
 
-let activeAnchor: ScoreAnchor = { ...IDENTITY_SCORE_ANCHOR };
+/**
+ * The rescale that goes with DEFAULT_SCORE_WEIGHTS: it puts the refit score's 10th and 90th
+ * percentiles on 10-20..26's filter matches (50.9 and 79.6) where the old score had them, the rule
+ * every adoption follows (anchorForWeights), so a saved minimum lets through about the same share
+ * at the ends of the range (s7_defaults.out). In the middle the refit spreads tokens out that the
+ * old score bunched at 70-80, so a saved minimum of 70 or more lets fewer through, and the ones it
+ * keeps double more often.
+ */
+export const DEFAULT_SCORE_ANCHOR: Readonly<ScoreAnchor> = Object.freeze({ scale: 0.7333, offset: 14.78 });
+
+let activeAnchor: ScoreAnchor = { ...DEFAULT_SCORE_ANCHOR };
 
 /** The rescale scoreToken applies when none is passed: the one stored with the adopted weights. */
 export function getScoreAnchor(): ScoreAnchor {
@@ -211,75 +237,125 @@ export function scoreToken(
   return { ...parts, total: clamp(total) };
 }
 
+/** Piecewise-linear through the knots (x ascending), flat beyond the first and last. */
+export function throughKnots(x: number, knots: ReadonlyArray<readonly [number, number]>): number {
+  const first = knots[0]!;
+  if (x <= first[0]) return first[1];
+  for (let i = 1; i < knots.length; i += 1) {
+    const [x0, y0] = knots[i - 1]!;
+    const [x1, y1] = knots[i]!;
+    if (x <= x1) return y0 + ((y1 - y0) * (x - x0)) / (x1 - x0);
+  }
+  return knots[knots.length - 1]![1];
+}
+
 /**
- * The last five minutes: price move (-10% = 0, +40% or more = 100), volume against market cap
- * (1x = 100), buy share (5m, else 1h; 45% = 0, 75% = 100) and 10-minute holder growth (+50% =
- * 100). Each piece abstains when unknown and the rest are reweighted; nothing known reads 50.
+ * The knots, read off the win rates of graded decision moments on 10-13..19 and checked on
+ * 10-20..26 (notes/full-audit-2026-10-27/scripts/t16/s5_bins.out). Under a 25% 5-minute move a
+ * coin doubled 8-14% of the time, at 200%+ 21-25%.
  */
-function scoreMomentum(token: EnrichedToken): number {
-  const parts: Array<[number | undefined, number]> = [];
+export const PRICE_5M_KNOTS = [
+  [25, 0],
+  [200, 100],
+] as const;
+/** Under 30 holders 8-10%; 45 to about 130 the best, 17-20%; past 200 back to 10-12% (older coins). */
+export const HOLDER_COUNT_KNOTS = [
+  [25, 0],
+  [45, 100],
+  [130, 100],
+  [220, 0],
+] as const;
+/** Under 5 minutes old 18-20%; 20-30 minutes 10-14%; 30-60 minutes 7-8%; past an hour 4-5%. */
+export const AGE_KNOTS = [
+  [5, 100],
+  [20, 60],
+  [60, 15],
+  [120, 0],
+] as const;
+/** Minutes in the market-cap band: under 3 about 18%, 5-20 about 10-17%, past 40 3-5%. */
+export const IN_BAND_KNOTS = [
+  [3, 100],
+  [8, 65],
+  [20, 40],
+  [40, 0],
+] as const;
+/**
+ * 5-minute volume against market cap: under 0.15x is a coin nobody is trading (7% on the fit
+ * window); inside the Rules seat's age range (5 minutes to 2 days) it ranks all the way up, 2% in
+ * the bottom fifth to 16% in the top (s9_older.out).
+ */
+export const VOLUME_5M_KNOTS = [
+  [0.15, 0],
+  [0.9, 100],
+] as const;
+/** The launch's first 25 buyers still holding: 0-1 doubled about 13%, 10+ about 19%. */
+export const FIRST_BUYERS_KNOTS = [
+  [1, 0],
+  [10, 100],
+] as const;
 
-  parts.push([
-    token.priceChange5mPct === undefined ? undefined : clamp(((token.priceChange5mPct + 10) / 50) * 100),
-    0.35,
-  ]);
-  parts.push([
-    token.volume5mUsd !== undefined && token.marketCapUsd > 0
-      ? clamp((token.volume5mUsd / token.marketCapUsd) * 100)
-      : undefined,
-    0.35,
-  ]);
-  const buyRatio = ratio(token.buys5m, token.sells5m) ?? ratio(token.buys1h, token.sells1h);
-  parts.push([buyRatio === undefined ? undefined : clamp(((buyRatio - 0.45) / 0.3) * 100), 0.15]);
-  parts.push([
-    token.holderGrowth10mPct === undefined ? undefined : clamp((token.holderGrowth10mPct / 50) * 100),
-    0.15,
-  ]);
-
+/** Weighted mean of the known pieces; undefined when none is known. */
+function blend(pieces: Array<[number | undefined, number]>): number | undefined {
   let sum = 0;
   let weight = 0;
-  for (const [value, w] of parts) {
+  for (const [value, w] of pieces) {
     if (value === undefined) continue;
     sum += value * w;
     weight += w;
   }
-  return weight === 0 ? 50 : clamp(sum / weight);
+  return weight === 0 ? undefined : sum / weight;
 }
 
 /**
- * Younger is better: 57% of fast doubles are launches under 5 minutes old, and tokens past 6 hours
- * almost never double inside 15 minutes.
+ * The live flow: Jupiter's seconds-old 5-minute price move (0.4) and holder count (0.3), from the
+ * fresh quote, and DexScreener's 5-minute volume against market cap (0.3). The move falls back to
+ * DexScreener's 5-minute change when there is no quote (the fast-match pass reads none); the holder
+ * count abstains. Each piece abstains when unknown; nothing known reads 50. The buy share and the
+ * 10-minute holder growth the 10-06 part read carried no ranking above the junk floor and are not
+ * read.
+ */
+function scoreMomentum(token: EnrichedToken): number {
+  const move = token.freshQuote?.stats5m?.priceChangePct ?? token.priceChange5mPct;
+  const holders = token.freshQuote?.holderCount;
+  const volume =
+    token.volume5mUsd !== undefined && token.marketCapUsd > 0
+      ? token.volume5mUsd / token.marketCapUsd
+      : undefined;
+  const part = blend([
+    [move === undefined ? undefined : throughKnots(move, PRICE_5M_KNOTS), 0.4],
+    [holders === undefined ? undefined : throughKnots(holders, HOLDER_COUNT_KNOTS), 0.3],
+    [volume === undefined ? undefined : throughKnots(volume, VOLUME_5M_KNOTS), 0.3],
+  ]);
+  return part === undefined ? 50 : clamp(part);
+}
+
+/**
+ * Younger is better: the coin's age (5/8) and how long it has sat in the market-cap band (3/8),
+ * each abstaining when unknown; nothing known reads 30.
  */
 function scoreFreshness(token: EnrichedToken): number {
-  const minutes = token.ageMinutes;
-  if (minutes === undefined) return 30;
-  if (minutes < 5) return 100;
-  if (minutes < 10) return 90;
-  if (minutes < 20) return 55;
-  if (minutes < 60) return 30;
-  if (minutes < 360) return 20;
-  if (minutes < 1440) return 5;
-  return 0;
+  const part = blend([
+    [token.ageMinutes === undefined ? undefined : throughKnots(token.ageMinutes, AGE_KNOTS), 0.5],
+    [
+      token.minutesSinceFirstInBand === undefined
+        ? undefined
+        : throughKnots(token.minutesSinceFirstInBand, IN_BAND_KNOTS),
+      0.3,
+    ],
+  ]);
+  return part === undefined ? 30 : clamp(part);
 }
 
 /**
- * Few empty wallets in the top 10 (0% = 100, 70% or more = 0) and the launch's first 25 buyers
- * still holding (25 = 100), each 50 when unknown. A pre-bond launch whose top 10 hold 15% or less
- * scores 0: those doubled 2% of the time against 12-20% for every other bracket - supply spread
- * over throwaway wallets, not a healthy book.
+ * A pre-bond launch whose top 10 hold 15% or less scores 0 (supply spread over throwaway wallets:
+ * 11-14% against 16-17% for every other bracket). Otherwise the launch's first 25 buyers still
+ * holding (FIRST_BUYERS_KNOTS), 50 when unknown. The empty-wallet share the 10-06 part read was
+ * flat and is not read.
  */
 function scoreHolderQuality(token: EnrichedToken): number {
   if (token.graduated === false && token.top10HolderPct !== undefined && token.top10HolderPct <= 15) return 0;
-  const empty =
-    token.emptyTop10WalletPct === undefined ? 50 : clamp(100 - (token.emptyTop10WalletPct / 70) * 100);
   const held = token.tradeFlow?.firstBuyersHolding;
-  const firstBuyers = held === null || held === undefined ? 50 : clamp((held / 25) * 100);
-  return clamp(empty * 0.5 + firstBuyers * 0.5);
-}
-
-function ratio(buys: number | undefined, sells: number | undefined): number | undefined {
-  const total = (buys ?? 0) + (sells ?? 0);
-  return total > 0 ? (buys ?? 0) / total : undefined;
+  return held === null || held === undefined ? 50 : clamp(throughKnots(held, FIRST_BUYERS_KNOTS));
 }
 
 /**

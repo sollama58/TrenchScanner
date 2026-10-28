@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { backoffDelay, fetchJson, MAX_RESPONSE_BYTES, redactUrl } from "./httpClient.js";
+import { describe, expect, it, vi } from "vitest";
+import { backoffDelay, fetchJson, MAX_RESPONSE_BYTES, networkFailure, redactUrl } from "./httpClient.js";
 
 describe("redactUrl", () => {
   it("redacts Helius's own api-key query param", () => {
@@ -107,6 +107,66 @@ describe("fetchJson timeouts", () => {
     } finally {
       server.closeAllConnections();
       server.close();
+    }
+  });
+});
+
+describe("fetchJson network errors", () => {
+  const socketError = (code: string) => Object.assign(new TypeError("fetch failed"), { cause: { code } });
+
+  it("sorts socket errors into never-sent, cut mid-request, and not worth a retry", () => {
+    expect(networkFailure(socketError("ECONNREFUSED"))).toBe("unsent");
+    expect(networkFailure(socketError("ENOTFOUND"))).toBe("unsent");
+    expect(networkFailure(socketError("ECONNRESET"))).toBe("cut");
+    expect(networkFailure(socketError("UND_ERR_SOCKET"))).toBe("cut");
+    expect(networkFailure(Object.assign(new Error("x"), { name: "AbortError" }))).toBeNull();
+    expect(networkFailure(new TypeError("Invalid URL"))).toBeNull();
+    expect(networkFailure("nope")).toBeNull();
+  });
+
+  it("retries a reset once instead of failing the whole read (audit 2026-10-27, DA-13)", async () => {
+    let calls = 0;
+    let retried = 0;
+    vi.stubGlobal("fetch", async () => {
+      calls += 1;
+      if (calls === 1) throw socketError("ECONNRESET");
+      return new Response('{"ok":true}');
+    });
+    try {
+      const body = await fetchJson("https://example.com/x", {
+        retries: 1,
+        retryDelayMs: 1,
+        onRetry: () => (retried += 1),
+      });
+      expect(body).toEqual({ ok: true });
+      expect([calls, retried]).toEqual([2, 1]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("doesn't resend a cut request that may have been billed when timeouts aren't retried", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", async () => {
+      calls += 1;
+      throw socketError(calls === 1 ? "ECONNRESET" : "ECONNREFUSED");
+    });
+    try {
+      await expect(
+        fetchJson("https://example.com/x", { retries: 2, retryDelayMs: 1, retryOnTimeout: false }),
+      ).rejects.toThrow("fetch failed");
+      expect(calls).toBe(1);
+      // One that never left is retried either way, up to `retries`.
+      calls = 1;
+      await expect(
+        fetchJson("https://example.com/x", { retries: 2, retryDelayMs: 1, retryOnTimeout: false }),
+      ).rejects.toThrow("fetch failed");
+      expect(calls).toBe(4);
+      calls = 1;
+      await expect(fetchJson("https://example.com/x", { retries: 0 })).rejects.toThrow("fetch failed");
+      expect(calls).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 });

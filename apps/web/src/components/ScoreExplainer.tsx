@@ -5,7 +5,7 @@ import { useScoreWeights } from "../scoreWeights";
 
 /** The composite score in one line, for hover titles. */
 export const SCORE_SUMMARY =
-  "0-100: how much a token looks like the launches that double fast, from its last 5 minutes, its age and its holders.";
+  "0-100: how much a token looks like the launches that double fast, from its live price move, holders and volume, and how new it is.";
 
 /**
  * A small info button that opens a plain-words explanation of the token composite score (the
@@ -74,15 +74,20 @@ function ScoreExplainerModal({ open, onClose }: { open: boolean; onClose: () => 
         <dl className="about-terms">
           <dt>Momentum · {pct(w.momentum)}</dt>
           <dd>
-            The last 5 minutes: how far the price moved, trading volume against market cap, the share of
-            trades that are buys, and holder growth over 10 minutes.
+            The live flow: how far the price moved in the last 5 minutes and how many holders the coin has,
+            both read seconds before the decision, and the last 5 minutes&apos; trading volume against market
+            cap. A coin with 45 to about 130 holders scores best: fewer is a launch nobody found yet, many
+            more a coin past its run.
           </dd>
           <dt>Freshness · {pct(w.freshness)}</dt>
-          <dd>Younger scores higher. Most fast doubles happen in a launch&apos;s first 10 minutes.</dd>
+          <dd>
+            Younger scores higher, and so does a coin that only just reached the market-cap band. Most fast
+            doubles happen in a launch&apos;s first 5 minutes; past an hour almost none do.
+          </dd>
           <dt>Holders · {pct(w.holderQuality)}</dt>
           <dd>
-            Few empty wallets in the top 10, and the first buyers still holding. A launch still on the bonding
-            curve whose top 10 hold 15% or less scores 0 here: those rarely double.
+            The launch&apos;s first buyers still holding. A launch still on the bonding curve whose top 10
+            hold 15% or less scores 0 here: those rarely double.
           </dd>
           <dt>Narrative · {pct(w.narrative)}</dt>
           <dd>
