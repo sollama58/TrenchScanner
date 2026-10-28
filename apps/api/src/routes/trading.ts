@@ -19,6 +19,8 @@ import {
   prisma,
   readExitPlan,
   readTradingBotConfig,
+  withAiJudgeDefault,
+  aiJudgeHasRecord,
   RENT_EXEMPT_MIN_LAMPORTS,
   serverWithdrawTo,
   TradingRpc,
@@ -157,7 +159,11 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
   // Read-only, and the one route that exists while the bot is off.
   app.get("/status", async (request, reply) => {
     if (!admins.has(request.user!.walletAddress)) return reply.code(403).send({ error: "forbidden" });
-    return status;
+    // A new bot's AI judge filter follows the judge's record (withAiJudgeDefault): off until it has one.
+    return {
+      ...status,
+      defaults: withAiJudgeDefault(status.defaults, await aiJudgeHasRecord(env.AI_REVIEW_MIN_GRADED_BUYS)),
+    };
   });
   // What the models would have bought lately, with and without the AI gate: read-only, so it is
   // there while the bot is off too. Cached a few minutes; the outcomes behind it settle slowly.
@@ -290,7 +296,10 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
       followableFilters(owner, request),
     ]);
     const balance = owner.wallet ? await rpc.getBalance(owner.wallet.publicKey) : null;
-    const config = readTradingBotConfig(bot?.config);
+    // No saved bot yet: the form starts from the defaults a new bot gets (GET /status).
+    const config = bot
+      ? readTradingBotConfig(bot.config)
+      : withAiJudgeDefault(DEFAULT_TRADING_BOT_CONFIG, await aiJudgeHasRecord(env.AI_REVIEW_MIN_GRADED_BUYS));
     const custodyReady = scope === "server" ? serverAddress !== null : keys.provider !== null;
     const custodyProblem =
       scope === "server"

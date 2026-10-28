@@ -6,7 +6,8 @@ import { CONTESTANTS } from "./contestants.js";
 import { gatesById, loadModelGates } from "./modelGateStore.js";
 import { LIVE_SCORE_WINDOW_HOURS, type LiveScales } from "./liveScale.js";
 import { maskTokenSageXReuseLoss } from "./features.js";
-import { buildRankRates, RANK_RATE_WINDOW_HOURS, type RankRateBand } from "./liveRankRates.js";
+import { buildRankRates, RANK_RATE_WINDOW_HOURS, type RankRateRow } from "./liveRankRates.js";
+import { buildEntryProof } from "./entryProof.js";
 
 /** Rows read per feature query: a retrain re-reads the whole window's feature vectors once. */
 const FEATURE_BATCH = 500;
@@ -95,20 +96,28 @@ export async function loadLiveScales(
   }
   rescorer.prune(allRows, models);
   const scales = rescorer.build(rows, models, since, highConvictionRank, LIVE_CONVICTION_MIN_SAMPLES);
-  const rankRates = await loadRankRates(now, "event").catch(() => undefined);
-  const out: LiveScales = rankRates ? { ...scales, rankRates } : scales;
+  const graded = await loadGradedRows(now, "event").catch(() => undefined);
+  const out: LiveScales = graded ? { ...scales, rankRates: buildRankRates(graded) } : scales;
   if (entryRows.length === 0) return out;
   const entry = rescorer.build(entryRows, models, since, highConvictionRank, LIVE_CONVICTION_MIN_SAMPLES);
-  const entryRankRates = await loadRankRates(now, "entry").catch(() => undefined);
-  return { ...out, entry: entryRankRates ? { ...entry, rankRates: entryRankRates } : entry };
+  // The same graded entry rows give the entry rank rates and the record a seat must clear to call
+  // on the fast path at all (curation/entryProof.ts).
+  const entryGraded = await loadGradedRows(now, "entry").catch(() => undefined);
+  return {
+    ...out,
+    entry: entryGraded
+      ? { ...entry, rankRates: buildRankRates(entryGraded), proof: buildEntryProof(entryGraded) }
+      : entry,
+  };
 }
 
 /**
- * Each seat's measured 2x rate by live rank band over the graded decision moments of the last
- * RANK_RATE_WINDOW_HOURS (curation/liveRankRates.ts), from the scores stored on each moment. A
- * clean 2x is hit2xIn1h on a row that wasn't disqualified, as the live records count it.
+ * The graded decision moments of the last RANK_RATE_WINDOW_HOURS with the scores stored on each,
+ * which each seat's measured 2x rate by live rank band (curation/liveRankRates.ts) and, on entry
+ * rows, its fast-path record (curation/entryProof.ts) are drawn from. A clean 2x is hit2xIn1h on a
+ * row that wasn't disqualified, as the live records count it.
  */
-async function loadRankRates(now: Date, population: ScalePopulation): Promise<Map<string, RankRateBand[]>> {
+async function loadGradedRows(now: Date, population: ScalePopulation): Promise<RankRateRow[]> {
   const rows = await prisma.candidateOutcome.findMany({
     where: {
       sampleKind: population,
@@ -118,9 +127,10 @@ async function loadRankRates(now: Date, population: ScalePopulation): Promise<Ma
     },
     select: { seatScores: true, hit2xIn1h: true, disqualified: true },
   });
-  return buildRankRates(
-    rows.map((r) => ({ seatScores: r.seatScores, won: r.hit2xIn1h === true && r.disqualified !== true })),
-  );
+  return rows.map((r) => ({
+    seatScores: r.seatScores,
+    won: r.hit2xIn1h === true && r.disqualified !== true,
+  }));
 }
 
 /** Each seat's newest active model - the one the worker's roster scores it with. */

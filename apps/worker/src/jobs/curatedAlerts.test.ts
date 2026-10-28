@@ -48,7 +48,8 @@ function curatableFixture(mintAddress: string, overrides: Partial<ScoredToken> =
     sells24h: 300,
     holderGrowthPct: 15,
     top10HolderPct: 20,
-    ageMinutes: 90,
+    // Young enough for a seat to call (isPastCalling).
+    ageMinutes: 20,
     graduated: true,
     narrativeTags: [],
     rugScreen: { passed: true, reasons: [] },
@@ -568,8 +569,10 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     const entry = await recordCandidateSample(token.id, scored, env, { kind: "entry" });
     expect(entry).toMatchObject({ created: true });
     const cycle = newCuratedCycle();
-    await collectCuratedContender(cycle, token, scored, entry, env, undefined, undefined, "entry");
-    expect(await emitCuratedCycle(cycle, env)).toBe(2);
+    // The entry-row proof off: this asks how a call there is banked and graded, not who may call.
+    const unproven = { ...env, CURATOR_ENTRY_PROOF: false };
+    await collectCuratedContender(cycle, token, scored, entry, unproven, undefined, undefined, "entry");
+    expect(await emitCuratedCycle(cycle, unproven)).toBe(2);
 
     const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: entry!.id } });
     expect(row.sampleKind).toBe("entry");
@@ -580,6 +583,43 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     const event = await recordCandidateSample(token.id, scored, env, { kind: "event" });
     expect(event).toMatchObject({ created: true });
     expect(event!.id).not.toBe(entry!.id);
+  });
+
+  it("on the fast path, a seat with no entry-row record calls nothing but still banks its score", async () => {
+    await activeModel("linear", CURATOR_MODEL_KIND, alwaysYesParams());
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-entry-unproven` } });
+    const scored = curatableFixture(token.mintAddress);
+    const entry = await recordCandidateSample(token.id, scored, env, { kind: "entry" });
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, scored, entry, env, undefined, undefined, "entry");
+    expect(cycle.byModel.size).toBe(0);
+    const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: entry!.id } });
+    expect(row.seatScores).toMatchObject({ linear: expect.any(Number) });
+  });
+
+  it("no seat calls a coin an hour old or half an hour into the band, and the moment still banks", async () => {
+    await activeModel("linear", CURATOR_MODEL_KIND, alwaysYesParams());
+    for (const [name, past] of [
+      ["old", { ageMinutes: 75 }],
+      ["dwell", { minutesSinceFirstInBand: 35 }],
+    ] as const) {
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-past-${name}` } });
+      const scored = { ...curatableFixture(token.mintAddress), ...past };
+      const sample = await recordCandidateSample(token.id, scored, env);
+      const cycle = newCuratedCycle();
+      await collectCuratedContender(cycle, token, scored, sample, env);
+      expect(cycle.byModel.size).toBe(0);
+      if (sample?.created) {
+        const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: sample.id } });
+        expect(row.seatScores).toMatchObject({ linear: expect.any(Number) });
+      }
+      const restored = newCuratedCycle();
+      await collectCuratedContender(restored, token, scored, null, {
+        ...env,
+        CURATOR_SKIP_PAST_CALLING: false,
+      });
+      expect(restored.byModel.get("linear")?.length).toBe(1);
+    }
   });
 
   it("Gems considers only tokens that pass its frozen gate, and calls nothing without one", async () => {

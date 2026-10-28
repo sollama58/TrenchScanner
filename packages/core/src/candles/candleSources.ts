@@ -1,5 +1,5 @@
 import { fetchJson, HttpError } from "../datasources/httpClient.js";
-import { pumpFunSwapGate } from "../datasources/pumpfunGate.js";
+import { PUMPFUN_REQUEST_HEADERS, pumpFunSwapGate } from "../datasources/pumpfunGate.js";
 import { PUMP_SUPPLY_TOKENS } from "../wallets/tradeTape.js";
 import type { StoredBar } from "./candleChunk.js";
 
@@ -82,7 +82,7 @@ export async function fetchPumpCandles(
   try {
     const body = await fetchJson<unknown>(
       `${baseUrl}/v1/coins/${encodeURIComponent(mint)}/candles?interval=${interval}&limit=${PUMP_CANDLE_PAGE}&currency=USD`,
-      { timeoutMs: 8_000, retries: 0, gate: pumpFunSwapGate },
+      { timeoutMs: 8_000, retries: 0, gate: pumpFunSwapGate, headers: PUMPFUN_REQUEST_HEADERS },
     );
     return parsePumpCandles(body);
   } catch (err) {

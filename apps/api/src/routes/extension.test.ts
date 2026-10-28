@@ -1,6 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { createHash, randomBytes } from "node:crypto";
+import http from "node:http";
 import bs58 from "bs58";
 import { AccessSource } from "@prisma/client";
 import {
@@ -26,7 +27,12 @@ import { isMintAddress, resetOverlayLookupCache } from "../extensionLookup.js";
 import { hashModelAlertKey } from "../modelAlertKey.js";
 import { DEFAULT_OVERLAY_SETTINGS, parseOverlaySettings } from "../overlaySettings.js";
 import { buildServer } from "../server.js";
-import { resetExtensionAuthState } from "./extension.js";
+import { HolderWaits } from "../holderWaits.js";
+import {
+  BOARD_WAITS_PER_ACCOUNT,
+  EXTENSION_AUTH_FAILURES_PER_MINUTE,
+  resetExtensionAuthState,
+} from "./extension.js";
 
 const mint = () => bs58.encode(randomBytes(32));
 
@@ -186,6 +192,32 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
       expect(codes.slice(19).every((c) => c === 429)).toBe(true);
       // The key proven before the junk has its own bucket and still works.
       expect((await from(real)).statusCode).toBe(200);
+    } finally {
+      resetExtensionAuthState();
+    }
+  });
+
+  it("turns an address past the failure cap away before reading its key (AP-5)", async () => {
+    const user = await makeUser("capped", true);
+    const real = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    resetExtensionAuthState();
+    const from = (key: string) =>
+      app.inject({
+        method: "GET",
+        url: "/ext/v1/feed",
+        headers: {
+          origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+          authorization: `Bearer ${key}`,
+          "cf-connecting-ip": "203.0.113.31",
+        },
+      });
+    try {
+      for (let i = 0; i < EXTENSION_AUTH_FAILURES_PER_MINUTE; i++)
+        expect((await from(newExtensionKey(String(i).padStart(32, "f")).secret)).statusCode).toBe(401);
+      // Past the cap the address is refused before any key is read: even a real key not proven
+      // on this process waits out the minute (it was read, and let in, when the cap came after).
+      expect((await from(newExtensionKey("z".repeat(32)).secret)).statusCode).toBe(429);
+      expect((await from(real)).statusCode).toBe(429);
     } finally {
       resetExtensionAuthState();
     }
@@ -496,6 +528,26 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
     expect((await ext(key, "POST", "/ext/v1/stats/wait", { mints: "x" })).statusCode).toBe(400);
   });
 
+  it("holds a few board asks per account and answers the rest at once (AP-9)", async () => {
+    const user = await makeUser("boardcap", true);
+    const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    const coin = mint();
+    mints.push(coin);
+    await prisma.token.create({ data: { mintAddress: coin, symbol: "HELD" } });
+    const held = Array.from({ length: BOARD_WAITS_PER_ACCOUNT }, () =>
+      ext(key, "POST", "/ext/v1/stats/wait", { mints: [coin] }),
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    const started = Date.now();
+    const past = await ext(key, "POST", "/ext/v1/stats/wait", { mints: [coin] });
+    expect(past.json()).toEqual({ tokens: {}, pushed: false });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    // The held ones answer as usual once their coin moves.
+    noteSnapshotForBoards(coin);
+    await flushSnapshotNotices();
+    for (const res of await Promise.all(held)) expect(res.json().pushed).toBe(true);
+  }, 40_000);
+
   it("answers the newest scan's safety verdict of the coins on a board, and nothing else", async () => {
     const user = await makeUser("safety", true);
     const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
@@ -634,6 +686,50 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
       (await ext(null, "POST", "/ext/v1/site", { method: "GET", path: `/tokens/${coin}/card` })).statusCode,
     ).toBe(401);
   });
+
+  it("lets go of a replayed held read when the panel's request ends (EX-10)", async () => {
+    const user = await makeUser("site-left", true);
+    const key = (await session(user.cookie, "POST", "/settings/extension-keys")).json().secret as string;
+    const coin = mint();
+    mints.push(coin);
+    await prisma.token.create({ data: { mintAddress: coin, symbol: "LEFT" } });
+    const waits: Promise<unknown>[] = [];
+    const wait = HolderWaits.prototype.wait;
+    const spy = vi.spyOn(HolderWaits.prototype, "wait").mockImplementation(function (
+      this: HolderWaits,
+      ...args: Parameters<HolderWaits["wait"]>
+    ) {
+      const run = wait.apply(this, args);
+      waits.push(run);
+      return run;
+    });
+    // A real socket, as the panel's: an injected request's body is read before the handler runs,
+    // so aborting one can't stand for a reader who closed the connection.
+    const address = await app.listen({ port: 0, host: "127.0.0.1" });
+    try {
+      const url = new URL("/ext/v1/site", address);
+      const body = JSON.stringify({ method: "GET", path: `/tokens/${coin}/holders/wait`, body: null });
+      const asked = http.request(url, {
+        method: "POST",
+        headers: {
+          origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+          authorization: `Bearer ${key}`,
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body),
+        },
+      });
+      asked.on("error", () => undefined);
+      asked.end(body);
+      await vi.waitFor(() => expect(waits).toHaveLength(1), { timeout: 5_000, interval: 50 });
+      const started = Date.now();
+      asked.destroy();
+      // Released at once, not after the wait's 20 s.
+      await expect(waits[0]).resolves.toEqual({ changed: false, pushed: true });
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      spy.mockRestore();
+    }
+  }, 30_000);
 
   it("keeps an open map's coin viewed and answers its wait when a reading is written", async () => {
     const user = await makeUser("bubble-live", true);

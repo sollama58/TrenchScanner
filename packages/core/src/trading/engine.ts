@@ -1848,6 +1848,45 @@ export async function loadSignals(
   };
 }
 
+/** How long aiJudgeHasRecord reuses its count. */
+const JUDGE_RECORD_CACHE_MS = 10 * 60_000;
+let judgeRecordCache: { at: number; minBuys: number; has: boolean } | null = null;
+
+/** Test hook. */
+export function resetAiJudgeRecordCache(): void {
+  judgeRecordCache = null;
+}
+
+/**
+ * Whether the AI judge has a record to follow: at least `minBuys` (AI_REVIEW_MIN_GRADED_BUYS) coins
+ * it called "buy" whose outcome is graded, each coin once. Until then a new bot or strategy starts
+ * with requireAiBuy off (withAiJudgeDefault, user decision 2026-10-27). A failed read counts as no
+ * record, which keeps the default off.
+ */
+export async function aiJudgeHasRecord(minBuys: number, now = Date.now()): Promise<boolean> {
+  if (
+    judgeRecordCache &&
+    judgeRecordCache.minBuys === minBuys &&
+    now - judgeRecordCache.at < JUDGE_RECORD_CACHE_MS
+  ) {
+    return judgeRecordCache.has;
+  }
+  let has = false;
+  try {
+    const coins = await prisma.aiReview.groupBy({
+      by: ["tokenId"],
+      where: { decision: "buy", candidateOutcome: { is: { finalizedAt: { not: null } } } },
+      orderBy: { tokenId: "asc" },
+      take: minBuys,
+    });
+    has = coins.length >= minBuys;
+  } catch (err) {
+    logger.warn("could not read the AI judge's record", { error: String(err) });
+  }
+  judgeRecordCache = { at: now, minBuys, has };
+  return has;
+}
+
 /** An AI review this long before its signal still counts for it (the judge can run first, in gate mode). */
 const AI_REVIEW_LOOKBACK_MS = 10 * 60_000;
 /**
@@ -1871,8 +1910,11 @@ export type AiGateOutcome =
  *
  * `live`: a real-money bot. It reads verdicts only while the Admin panel's AI reviewer switch is
  * "live"; in the "admins" testing state (and off) it is as if there were none - every signal is
- * skipped, as before the reviewer ran - so a test can't move money. Paper strategies always read
- * them: that is how a bot that follows the judge is tried out.
+ * skipped, as before the reviewer ran - so a test can't move money. And only gate-mode verdicts
+ * (AiReview.mode "gate"): the in-cycle review made before the alert, under a judge that earned
+ * the gate. A shadow review runs detached after the alert, on a judge with no proven record, and
+ * a real bot must not trade on it (audit 2026-10-27 TR-11). Paper strategies read both: that is
+ * how a bot that follows the judge is tried out.
  */
 export async function gateOnAiVerdicts(
   owner: string,
@@ -1901,6 +1943,7 @@ export async function gateOnAiVerdicts(
       token: { mintAddress: { in: [...new Set(signals.map((s) => s.mint))] } },
       createdAt: { gte: new Date(earliest - AI_REVIEW_LOOKBACK_MS) },
       decision: { not: null },
+      ...(opts.live ? { mode: "gate" } : {}),
     },
     select: {
       createdAt: true,

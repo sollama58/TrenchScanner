@@ -20,6 +20,7 @@
  * cutoff and tables. Live scores don't depend on any cutoff, so there is no feedback loop: the
  * cutoff only follows the market's own flow of moments, as the exam's share did.
  */
+import type { EntryProof } from "./entryProof.js";
 import type { RankRateBand } from "./liveRankRates.js";
 import type { IsotonicCalibration } from "./calibration.js";
 import { quantileTable, rankFromQuantiles } from "./stacking.js";
@@ -187,6 +188,12 @@ export interface LiveScales {
    * too few of them keeps its shipped cutoff there (usableLiveScores), as on the cycle.
    */
   entry?: LiveScales;
+  /**
+   * On the fast path's scales only: each seat's graded entry record (curation/entryProof.ts), which
+   * decides whether the seat may call there at all. Absent when it couldn't be read: no seat is
+   * proven, so the fast path calls nothing and the cycle decides the coin.
+   */
+  proof?: EntryProof;
 }
 
 export const EMPTY_LIVE_SCALES: LiveScales = { scores: new Map(), tables: new Map(), lines: new Map() };

@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
 import { runCleanupJob } from "./cleanupJob.js";
+import { PartialJobFailure } from "../scheduler.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -1444,5 +1445,50 @@ describe.skipIf(!dbAvailable)("runCleanupJob: resuming a cut-off run", () => {
 
     expect(meta.resumedSkippedStages).toBeUndefined();
     expect(await resumeState()).toBeNull();
+  });
+});
+
+describe.skipIf(!dbAvailable)("runCleanupJob: index maintenance", () => {
+  const env = {
+    SNAPSHOT_RETENTION_DAYS: 3650,
+    PRICE_PATH_RETENTION_DAYS: 21,
+    CANDLE_FINE_RETENTION_DAYS: 30,
+    CANDLE_RETENTION_DAYS: 90,
+    CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
+    STALE_TOKEN_RETENTION_DAYS: 3650,
+  } as never;
+  const TABLE = "CleanupIndexTest";
+
+  beforeEach(async () => {
+    await prisma.systemHeartbeat.deleteMany({ where: { job: "cleanup" } });
+    await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "${TABLE}"`);
+  });
+  afterAll(async () => {
+    await prisma.systemHeartbeat.deleteMany({ where: { job: "cleanup" } });
+    await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "${TABLE}"`);
+  });
+
+  it("names an invalid index in the run's error, and still runs every sweep", async () => {
+    await prisma.$executeRawUnsafe(`CREATE TABLE "${TABLE}" (dup int)`);
+    await prisma.$executeRawUnsafe(`INSERT INTO "${TABLE}" VALUES (1), (1)`);
+    // A unique build over duplicates fails and leaves its index INVALID, as a timed-out migration does.
+    await prisma
+      .$executeRawUnsafe(`CREATE UNIQUE INDEX CONCURRENTLY "${TABLE}_dup_key" ON "${TABLE}" (dup)`)
+      .catch(() => undefined);
+
+    const err = await runCleanupJob(env, { reindex: false }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(PartialJobFailure);
+    expect((err as PartialJobFailure).message).toBe("cleanup: 1 stage(s) failed: invalidIndexes");
+    expect((err as PartialJobFailure).meta.failedStages).toContain(`${TABLE}.${TABLE}_dup_key`);
+    expect((err as PartialJobFailure).meta).toHaveProperty("deletedSnapshots");
+  });
+
+  it("reports the weekly rebuild, and rebuilds nothing with the disk line off", async () => {
+    const meta = (await runCleanupJob(env, { reindex: true })) as Record<string, unknown>;
+    expect(meta.reindexed).toBe("");
+    expect(meta.reindexSkipped).toContain("TokenSnapshot_pkey (DB_DISK_ALERT_MB is off)");
+    const quiet = (await runCleanupJob(env, { reindex: false })) as Record<string, unknown>;
+    expect(quiet).not.toHaveProperty("reindexSkipped");
   });
 });
