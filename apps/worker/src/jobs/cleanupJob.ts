@@ -65,6 +65,9 @@ const REVOKED_DEVICE_RETENTION_DAYS = 30;
 /** How long a chat's "already alerted about this token" row is kept. */
 const TELEGRAM_ALERT_SENT_RETENTION_DAYS = 7;
 
+/** How long a Web Push send record is kept: a month, past the 14-day windows the audits export. */
+const WEB_PUSH_ALERT_SENT_RETENTION_DAYS = 30;
+
 /** How long an admin audit row is kept. The panel reads recent actions; 90 days covers that. */
 const ADMIN_ACTION_RETENTION_DAYS = 90;
 
@@ -947,6 +950,12 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     stage("telegramAlertsSent", none, () =>
       prisma.telegramAlertSent.deleteMany({
         where: { sentAt: { lt: new Date(startedAt - TELEGRAM_ALERT_SENT_RETENTION_DAYS * DAY_MS) } },
+      }),
+    ),
+    // Which alerts each Web Push notification carried (webPush/dispatch.ts), for the push-sent export.
+    stage("webPushAlertsSent", none, () =>
+      prisma.webPushAlertSent.deleteMany({
+        where: { sentAt: { lt: new Date(startedAt - WEB_PUSH_ALERT_SENT_RETENTION_DAYS * DAY_MS) } },
       }),
     ),
     // Alerted coins' top-50 bubble maps: one row a coin, kept as long as its snapshots.

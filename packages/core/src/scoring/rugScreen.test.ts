@@ -1,10 +1,22 @@
 import { describe, expect, it } from "vitest";
+import { Prisma } from "@prisma/client";
+import { prisma } from "../db.js";
 import {
   countCutFor,
   freshWalletShare,
   passesLocalRugScreen,
   passesWalletSafetyCuts,
   runRugScreen,
+  SAFETY_COUNT_CUT_HOLDERS,
+  SAFETY_MAX_FRESH_WALLET_PCT,
+  SAFETY_MAX_LARGEST_HOLDER_PCT,
+  SAFETY_REJECT_BLOCK_ZERO_HELD_PCT,
+  SAFETY_REJECT_CEX_FUNDED_COUNT,
+  SAFETY_REJECT_CEX_FUNDED_PCT,
+  SAFETY_REJECT_EMPTY_WALLET_PCT,
+  SAFETY_REJECT_LINKED_COUNT,
+  SAFETY_REJECT_TOP10_HOLDER_PCT,
+  walletSafetyCutsSql,
 } from "./rugScreen.js";
 import type { OnChainProfile } from "../types.js";
 
@@ -339,5 +351,99 @@ describe("passesWalletSafetyCuts", () => {
     expect(passesWalletSafetyCuts({})).toBe(true);
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: null, freshTop10WalletPct: null })).toBe(true);
     expect(passesWalletSafetyCuts({ top10HolderPct: null })).toBe(true);
+  });
+});
+
+/** CI provisions Postgres; this skips rather than fails on a machine without a database. */
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
+
+type Features = Record<string, number | null>;
+
+/**
+ * Feature rows on every side of every wallet cut: just under, on and just over each share cut,
+ * each count cut on 1 to 26 holders read (and unread), null and absent readings, and a seeded mix
+ * of all of them at once.
+ */
+function parityRows(): Features[] {
+  const rows: Features[] = [{}];
+  const around = (cut: number) => [cut - 0.1, cut - 1e-9, cut, cut + 1e-9, cut + 0.1, 0, 100];
+  const shares: [string, number][] = [
+    ["emptyTop10WalletPct", SAFETY_REJECT_EMPTY_WALLET_PCT],
+    ["freshTop10WalletPct", SAFETY_MAX_FRESH_WALLET_PCT],
+    ["blockZeroHeldPct", SAFETY_REJECT_BLOCK_ZERO_HELD_PCT],
+    ["top10HolderPct", SAFETY_REJECT_TOP10_HOLDER_PCT],
+    ["cexFundedPct", SAFETY_REJECT_CEX_FUNDED_PCT],
+    ["largestHolderPct", SAFETY_MAX_LARGEST_HOLDER_PCT],
+  ];
+  for (const [name, cut] of shares) {
+    rows.push({ [name]: null });
+    for (const v of around(cut)) rows.push({ [name]: v });
+  }
+  // The count cuts, on the share of the holders read (countCutFor), and the fresh count over 25.
+  const counts: [string, string, number][] = [
+    ["linkedWalletCount", "linkedWalletsChecked", SAFETY_REJECT_LINKED_COUNT],
+    ["cexFundedCount", "cexFundedHolders", SAFETY_REJECT_CEX_FUNDED_COUNT],
+    ["freshTopHolderCount", "freshTopHoldersChecked", Math.floor((SAFETY_MAX_FRESH_WALLET_PCT * 25) / 100)],
+  ];
+  for (const [count, checked, cut] of counts) {
+    for (const of of [null, -1, 0, 1, 2, 10, 19, 20, 24, SAFETY_COUNT_CUT_HOLDERS, 26]) {
+      const at = countCutFor(cut, of);
+      for (const n of [0, at - 1, at, at + 1]) rows.push({ [count]: n, [checked]: of });
+    }
+    rows.push({ [count]: null, [checked]: 25 });
+  }
+  // The exchange-funded count over its share, and the fresh count over the top-10 share.
+  rows.push(
+    { cexFundedCount: 20, cexFundedHolders: 25, cexFundedPct: 90 },
+    { cexFundedCount: 21, cexFundedHolders: 25, cexFundedPct: 10 },
+    { cexFundedCount: null, cexFundedHolders: 25, cexFundedPct: 90 },
+    { freshTopHolderCount: 17, freshTopHoldersChecked: 25, freshTop10WalletPct: 90 },
+    { freshTopHolderCount: 18, freshTopHoldersChecked: 25, freshTop10WalletPct: 0 },
+    { freshTopHolderCount: 18, freshTopHoldersChecked: 0, freshTop10WalletPct: 60 },
+    { freshTopHolderCount: 18, freshTopHoldersChecked: 0, freshTop10WalletPct: 80 },
+  );
+  // Every field at once, seeded so a failure reproduces.
+  let seed = 7;
+  const rand = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+  const fields = [
+    ...shares.map(([name, cut]) => [name, () => cut + (rand() - 0.5) * 20] as const),
+    ...counts.flatMap(([count, checked]) => [
+      [count, () => Math.floor(rand() * 26)] as const,
+      [checked, () => Math.floor(rand() * 28) - 1] as const,
+    ]),
+  ];
+  for (let i = 0; i < 400; i++) {
+    const row: Features = {};
+    for (const [name, value] of fields) if (rand() < 0.7) row[name] = rand() < 0.1 ? null : value();
+    rows.push(row);
+  }
+  return rows;
+}
+
+// The reports' "passed the pre-checks" (Lighthouse, market bar, learning curve, market rows) read
+// walletSafetyCutsSql, and training reads passesWalletSafetyCuts: a cut moved in one alone would
+// leave the reports describing another screen (audit 2026-10-27, CH-2).
+describe.skipIf(!dbAvailable)("walletSafetyCutsSql", () => {
+  it("passes exactly the rows passesWalletSafetyCuts passes", async () => {
+    const rows = parityRows();
+    const sql = await prisma.$queryRaw<{ i: bigint; passed: boolean }[]>`
+      SELECT t.i, (${walletSafetyCutsSql()}) AS passed
+      FROM jsonb_array_elements(${JSON.stringify(rows)}::jsonb) WITH ORDINALITY AS t("features", i)
+      ORDER BY t.i`;
+    expect(sql).toHaveLength(rows.length);
+    const differ = rows.flatMap((row, k) =>
+      sql[k]!.passed === passesWalletSafetyCuts(row) ? [] : [{ row, sql: sql[k]!.passed }],
+    );
+    expect(differ).toEqual([]);
+    // The grid reaches both verdicts on every cut.
+    expect(sql.filter((r) => r.passed).length).toBeGreaterThan(50);
+    expect(sql.filter((r) => !r.passed).length).toBeGreaterThan(50);
+  });
+
+  it("reads an aliased features column", async () => {
+    const [row] = await prisma.$queryRaw<{ passed: boolean }[]>`
+      SELECT (${walletSafetyCutsSql(Prisma.raw('co."f"'))}) AS passed
+      FROM (SELECT '{"top10HolderPct": 40}'::jsonb AS "f") co`;
+    expect(row?.passed).toBe(false);
   });
 });

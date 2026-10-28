@@ -46,6 +46,7 @@ export const EXPORT_DATASETS = [
   "wallet-activity",
   "top-models",
   "telegram-sent",
+  "push-sent",
 ] as const;
 export type ExportDataset = (typeof EXPORT_DATASETS)[number];
 
@@ -282,6 +283,15 @@ type ScreenTick = {
   empty_pct: number | null;
   sniper_pct: number | null;
   top10_pct: number | null;
+  block_zero_pct: number | null;
+  largest_pct: number | null;
+  fresh_count: number | null;
+  fresh_checked: number | null;
+  linked_count: number | null;
+  linked_checked: number | null;
+  cex_count: number | null;
+  cex_holders: number | null;
+  cex_pct: number | null;
   risk_score: number | null;
   risk_flags: string[];
   is_mayhem: boolean | null;
@@ -308,7 +318,10 @@ type ScreenTick = {
  * last two days or so reach back. Tokens with no snapshot at all (never in band) are left out.
  *
  * `ticks`: [seconds after first sight, price, market cap, passed, snapshot source, reasons].
- * `checks`: the screen's inputs, one entry each time they change.
+ * `checks`: the screen's inputs, one entry each time they change: every figure a wallet cut reads
+ * (rugScreen.ts: fresh, empty, block zero, top ten, largest holder, linked and exchange-funded,
+ * with how many holders each count covered), so a cut can be replayed at another threshold.
+ * sniperTop10WalletPct is the retired first-buyers cut's input, kept for older rows' audits.
  */
 async function* screenPages(q: ExportQuery, since: Date, until: Date, pageSize = SCREEN_PAGE_SIZE) {
   let last: { at: Date; id: string } | null = null;
@@ -338,7 +351,12 @@ async function* screenPages(q: ExportQuery, since: Date, until: Date, pageSize =
              s."rugScreenPassed" AS passed, s."rugScreenReasons" AS reasons,
              s."freshTop10WalletPct" AS fresh_pct, s."emptyTop10WalletPct" AS empty_pct,
              s."sniperTop10WalletPct" AS sniper_pct,
-             s."top10HolderPct" AS top10_pct, s."riskScore" AS risk_score, s."riskFlags" AS risk_flags,
+             s."top10HolderPct" AS top10_pct, s."blockZeroHeldPct" AS block_zero_pct,
+             s."largestHolderPct" AS largest_pct,
+             s."freshTopHolderCount" AS fresh_count, s."freshTopHoldersChecked" AS fresh_checked,
+             s."linkedWalletCount" AS linked_count, s."linkedWalletsChecked" AS linked_checked,
+             s."cexFundedCount" AS cex_count, s."cexFundedHolders" AS cex_holders,
+             s."cexFundedPct" AS cex_pct, s."riskScore" AS risk_score, s."riskFlags" AS risk_flags,
              s."isMayhemMode" AS is_mayhem, s."graduated" AS graduated, s."lpBurned" AS lp_burned,
              s."mintAuthorityActive" AS mint_authority, s."freezeAuthorityActive" AS freeze_authority,
              s."ageMinutes" AS age_minutes, s."buys1h" AS buys_1h, s."sells1h" AS sells_1h,
@@ -366,6 +384,15 @@ async function* screenPages(q: ExportQuery, since: Date, until: Date, pageSize =
           emptyTop10WalletPct: r.empty_pct,
           sniperTop10WalletPct: r.sniper_pct,
           top10HolderPct: r.top10_pct,
+          blockZeroHeldPct: r.block_zero_pct,
+          largestHolderPct: r.largest_pct,
+          freshTopHolderCount: r.fresh_count,
+          freshTopHoldersChecked: r.fresh_checked,
+          linkedWalletCount: r.linked_count,
+          linkedWalletsChecked: r.linked_checked,
+          cexFundedCount: r.cex_count,
+          cexFundedHolders: r.cex_holders,
+          cexFundedPct: r.cex_pct,
           riskScore: r.risk_score,
           riskFlags: r.risk_flags,
           isMayhemMode: r.is_mayhem,
@@ -1008,6 +1035,73 @@ async function* telegramSentPages(since: Date, until: Date, pageSize = EXPORT_PA
   }
 }
 
+const PUSH_SENT_COLUMNS = [
+  "sentAt",
+  "tokenId",
+  "mintAddress",
+  "symbol",
+  "alertKind",
+  "curatedAlertId",
+  "model",
+  "modelName",
+  "matchId",
+  "batched",
+] as const;
+
+/**
+ * Every alert a Web Push notification carried (WebPushAlertSent, kept 30 days), the push side of
+ * the funnel's last stage as telegram-sent is Telegram's (audit 2026-10-27 GF-10). No subscriber
+ * data: not the subscription, the account or the endpoint. The extension pulls the feed itself, so
+ * no send of its own is recorded anywhere.
+ */
+async function* pushSentPages(since: Date, until: Date, pageSize = EXPORT_PAGE_SIZE) {
+  let last: { at: Date; id: string } | null = null;
+  for (;;) {
+    const rows = await prisma.webPushAlertSent.findMany({
+      where: { AND: [{ sentAt: { gte: since, lt: until } }, after("sentAt", last)] },
+      orderBy: [{ sentAt: "asc" }, { id: "asc" }],
+      take: pageSize,
+      select: { id: true, sentAt: true, tokenId: true, curatedAlertId: true, matchId: true, batched: true },
+    });
+    if (rows.length === 0) return;
+    // No relations (a swept token or call keeps its sends), so both are looked up.
+    const tokenIds = [...new Set(rows.map((r) => r.tokenId))];
+    const callIds = [...new Set(rows.flatMap((r) => (r.curatedAlertId ? [r.curatedAlertId] : [])))];
+    const [tokens, calls] = await Promise.all([
+      prisma.token.findMany({
+        where: { id: { in: tokenIds } },
+        select: { id: true, mintAddress: true, symbol: true },
+      }),
+      callIds.length === 0
+        ? []
+        : prisma.curatedAlert.findMany({
+            where: { id: { in: callIds } },
+            select: { id: true, model: true, modelName: true },
+          }),
+    ]);
+    const tokenById = new Map(tokens.map((t) => [t.id, t]));
+    const callById = new Map(calls.map((c) => [c.id, c]));
+    yield rows.map((r) => {
+      const call = r.curatedAlertId ? callById.get(r.curatedAlertId) : undefined;
+      return {
+        sentAt: r.sentAt,
+        tokenId: r.tokenId,
+        mintAddress: tokenById.get(r.tokenId)?.mintAddress ?? null,
+        symbol: tokenById.get(r.tokenId)?.symbol ?? null,
+        alertKind: r.curatedAlertId ? "model" : r.matchId ? "filter" : null,
+        curatedAlertId: r.curatedAlertId,
+        model: call?.model ?? null,
+        modelName: call?.modelName ?? null,
+        matchId: r.matchId,
+        batched: r.batched,
+      };
+    });
+    const tail = rows[rows.length - 1]!;
+    last = { at: tail.sentAt, id: tail.id };
+    if (rows.length < pageSize) return;
+  }
+}
+
 function pagesFor(q: ExportQuery, since: Date, until: Date, pageSize?: number): AsyncGenerator<Rec[]> {
   switch (q.dataset) {
     case "outcomes":
@@ -1026,6 +1120,8 @@ function pagesFor(q: ExportQuery, since: Date, until: Date, pageSize?: number): 
       return topModelsPages(since, until, pageSize);
     case "telegram-sent":
       return telegramSentPages(since, until, pageSize);
+    case "push-sent":
+      return pushSentPages(since, until, pageSize);
     case "alerts":
       return createdAtPages(
         async (where, take) =>
@@ -1114,6 +1210,8 @@ export function csvColumns(dataset: ExportDataset): string[] {
       return [...TOP_MODELS_COLUMNS];
     case "telegram-sent":
       return [...TELEGRAM_SENT_COLUMNS];
+    case "push-sent":
+      return [...PUSH_SENT_COLUMNS];
   }
 }
 
