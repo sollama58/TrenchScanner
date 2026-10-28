@@ -47,6 +47,7 @@ const launchesStored = new Set<string>();
 /** Test hook. */
 export function resetLaunchTimes(): void {
   launches.clear();
+  preBondInFlight.clear();
   graduations.clear();
   launchBackoff.clear();
   graduationBackoff.clear();
@@ -111,20 +112,63 @@ function looksBoughtOut(c: PreBondCandidate): boolean {
  * Seconds on the curve for each graduated candidate whose two ends are known (after this cycle's
  * lookups). A mint missing from the result is unknown - or already known to clear the floor - and
  * passes the cut. `knownSince` is the earliest time the scanner knew of each mint (its watchlist
- * first-seen time), an upper bound on its launch.
+ * first-seen time), an upper bound on its launch. Waits for the lookups; the scan cycle starts
+ * them with startPreBondLookups instead and goes on without them.
  */
 export async function resolvePreBondSeconds(
   candidates: ReadonlyArray<PreBondCandidate>,
   knownSince: ReadonlyMap<string, Date | undefined>,
-  clients: {
-    pumpFun: Pick<PumpFunClient, "launchTime">;
-    dexScreener: Pick<DexScreenerClient, "pumpSwapGraduation">;
-  },
+  clients: PreBondClients,
   env: Pick<Env, "SAFETY_MIN_PREBOND_SECONDS" | "PREBOND_LOOKUPS_MAX_PER_CYCLE">,
   now = Date.now(),
 ): Promise<Map<string, number>> {
+  const { pending } = startPreBondLookups(candidates, knownSince, clients, env, now);
+  await pending;
+  return env.SAFETY_MIN_PREBOND_SECONDS * 1000 > 0 ? knownPreBondSeconds(candidates) : new Map();
+}
+
+export interface PreBondClients {
+  pumpFun: Pick<PumpFunClient, "launchTime">;
+  dexScreener: Pick<DexScreenerClient, "pumpSwapGraduation">;
+}
+
+/** Mints whose pre-bond lookups (graduation, then launch) are running now, possibly past a cycle. */
+const preBondInFlight = new Set<string>();
+
+/**
+ * Whether a mint's pre-bond lookups are still running: the cut can't read it yet, so the scan
+ * holds the coin's decision (and its training rows) until they land rather than decide without
+ * the cut (scanJob.ts processCandidate, the `preBondWait` hold).
+ */
+export function preBondLookupPending(mintAddress: string): boolean {
+  return preBondInFlight.has(mintAddress);
+}
+
+/**
+ * The pre-bond cut's lookups for this cycle, started BEHIND the cycle: `known` is what this
+ * process can already answer (knownPreBondSeconds), and the lookups' answers land in memory for the
+ * next cycle to read. Until then preBondLookupPending holds just those coins.
+ *
+ * Awaited inside the cycle until 2026-10-28, ahead of every decision: DexScreener's per-token pairs
+ * lookup queues behind its shared rate budget (about 6-8 s a request at the time), so a cycle with
+ * one bought-out curve to ask about spent a median 14 s, up to 22 s, in this stage, and every
+ * contender waited for one or two coins' answer (preBond on the scan heartbeat, 40% of cycles).
+ *
+ * Per mint: a curve that looks bought out with no graduation known asks DexScreener for its pool
+ * (looksBoughtOut), then Pump.fun for its launch if the cut still needs it; a graduated mint whose
+ * launch is unknown and not known to clear the floor asks Pump.fun. Up to
+ * PREBOND_LOOKUPS_MAX_PER_CYCLE lookups start a cycle, and a mint already being asked isn't asked
+ * again.
+ */
+export function startPreBondLookups(
+  candidates: ReadonlyArray<PreBondCandidate>,
+  knownSince: ReadonlyMap<string, Date | undefined>,
+  clients: PreBondClients,
+  env: Pick<Env, "SAFETY_MIN_PREBOND_SECONDS" | "PREBOND_LOOKUPS_MAX_PER_CYCLE">,
+  now = Date.now(),
+): { known: Map<string, number>; pending: Promise<void> } {
   const floorMs = env.SAFETY_MIN_PREBOND_SECONDS * 1000;
-  if (floorMs <= 0) return new Map();
+  if (floorMs <= 0) return { known: new Map(), pending: Promise.resolve() };
   let budget = env.PREBOND_LOOKUPS_MAX_PER_CYCLE;
 
   // A curve pair is created with the coin: its creation time is the launch.
@@ -135,45 +179,34 @@ export async function resolvePreBondSeconds(
     }
   }
 
+  // Whether the cut still needs a launch time asked of Pump.fun for this mint (graduation known).
+  const needsLaunch = (c: PreBondCandidate, grad: number | undefined): boolean => {
+    if (grad === undefined || launches.has(c.mintAddress)) return false;
+    const known = validMs(knownSince.get(c.mintAddress));
+    if (known !== undefined && grad - known >= floorMs) return false;
+    // One already being asked by resolveLaunchTimes is answered there: asking twice spent Pump.fun calls.
+    return !launchLookupsInFlight.has(c.mintAddress) && !launchBackoff.blocked(c.mintAddress, now);
+  };
+
   const poolLookups = candidates
     .filter(
       (c) =>
-        graduatedAt(c) === undefined && looksBoughtOut(c) && !graduationBackoff.blocked(c.mintAddress, now),
+        !preBondInFlight.has(c.mintAddress) &&
+        graduatedAt(c) === undefined &&
+        looksBoughtOut(c) &&
+        !graduationBackoff.blocked(c.mintAddress, now),
     )
-    .slice(0, budget)
-    .map((c) => c.mintAddress);
+    .slice(0, budget);
   budget -= poolLookups.length;
-  let failed = 0;
-  await forEachWithConcurrency(poolLookups, LOOKUP_CONCURRENCY, async (mint) => {
-    try {
-      const at = await clients.dexScreener.pumpSwapGraduation(mint);
-      if (at) {
-        remember(graduations, mint, at.getTime());
-        graduationBackoff.succeed(mint);
-      } else {
-        // No pool listed: still on its curve, or a pool DexScreener hasn't indexed yet. Asked
-        // again in a few minutes rather than settled for good.
-        graduationBackoff.fail(mint, now, POOL_RECHECK_MINUTES);
-      }
-    } catch {
-      failed += 1;
-      graduationBackoff.fail(mint, now);
-    }
-  });
-
-  const launchLookups: string[] = [];
+  const launchLookups: PreBondCandidate[] = [];
   for (const c of candidates) {
-    const grad = graduatedAt(c);
-    if (grad === undefined || launches.has(c.mintAddress)) continue;
-    const known = validMs(knownSince.get(c.mintAddress));
-    if (known !== undefined && grad - known >= floorMs) continue;
-    // One already being asked by resolveLaunchTimes is answered there: asking twice spent Pump.fun calls.
-    if (launchLookupsInFlight.has(c.mintAddress)) continue;
-    if (launchBackoff.blocked(c.mintAddress, now) || launchLookups.length >= budget) continue;
-    launchLookups.push(c.mintAddress);
+    if (launchLookups.length >= budget) break;
+    if (!preBondInFlight.has(c.mintAddress) && needsLaunch(c, graduatedAt(c))) launchLookups.push(c);
   }
-  for (const mint of launchLookups) launchLookupsInFlight.add(mint);
-  await forEachWithConcurrency(launchLookups, LOOKUP_CONCURRENCY, async (mint) => {
+
+  let failed = 0;
+  const askLaunch = async (mint: string): Promise<void> => {
+    launchLookupsInFlight.add(mint);
     try {
       const launched = await clients.pumpFun.launchTime(mint);
       remember(launches, mint, launched ? launched.getTime() : null);
@@ -184,17 +217,44 @@ export async function resolvePreBondSeconds(
     } finally {
       launchLookupsInFlight.delete(mint);
     }
-  });
-  launchBackoff.prune(now);
-  graduationBackoff.prune(now);
-  if (failed > 0) {
-    logger.info("pre-bond lookups without an answer", {
-      failed,
-      asked: poolLookups.length + launchLookups.length,
-    });
-  }
+  };
+  const askPool = async (c: PreBondCandidate): Promise<void> => {
+    try {
+      const at = await clients.dexScreener.pumpSwapGraduation(c.mintAddress);
+      if (at) {
+        remember(graduations, c.mintAddress, at.getTime());
+        graduationBackoff.succeed(c.mintAddress);
+      } else {
+        // No pool listed: still on its curve, or a pool DexScreener hasn't indexed yet. Asked
+        // again in a few minutes rather than settled for good.
+        graduationBackoff.fail(c.mintAddress, now, POOL_RECHECK_MINUTES);
+      }
+    } catch {
+      failed += 1;
+      graduationBackoff.fail(c.mintAddress, now);
+    }
+    // The pool's answer can leave the cut needing the launch end too: asked now, so the coin is
+    // held for one round of lookups, not two cycles.
+    if (needsLaunch(c, graduatedAt(c))) await askLaunch(c.mintAddress);
+  };
 
-  return knownPreBondSeconds(candidates);
+  const work: Array<() => Promise<void>> = [
+    ...poolLookups.map((c) => () => askPool(c)),
+    ...launchLookups.map((c) => () => askLaunch(c.mintAddress)),
+  ];
+  const asked = [...poolLookups, ...launchLookups].map((c) => c.mintAddress);
+  for (const mint of asked) preBondInFlight.add(mint);
+  const known = knownPreBondSeconds(candidates);
+  if (work.length === 0) return { known, pending: Promise.resolve() };
+  const pending = forEachWithConcurrency(work, LOOKUP_CONCURRENCY, (run) => run())
+    .catch((err: unknown) => logger.warn("pre-bond lookups failed", { error: String(err) }))
+    .finally(() => {
+      for (const mint of asked) preBondInFlight.delete(mint);
+      launchBackoff.prune(now);
+      graduationBackoff.prune(now);
+      if (failed > 0) logger.info("pre-bond lookups without an answer", { failed, asked: asked.length });
+    });
+  return { known, pending };
 }
 
 const graduatedAt = (c: PreBondCandidate): number | undefined =>

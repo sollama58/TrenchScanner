@@ -151,10 +151,11 @@ import { resolveStonksPoolLocks } from "./stonksPoolLock.js";
 import { resolveOnChainHolders } from "./onChainHolders.js";
 import type { ScreenBackup } from "./screenBackup.js";
 import {
+  preBondLookupPending,
   rememberGraduations,
   rememberLaunchTimes,
   resolveLaunchTimes,
-  resolvePreBondSeconds,
+  startPreBondLookups,
 } from "./launchTimes.js";
 import {
   ignoreMayhemMints,
@@ -2156,7 +2157,10 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   // Seconds on the bonding curve for graduated candidates, for the screen's pre-bond cut. Only
   // asked about candidates still passing the local screen and not Mayhem: the rest are rejected
   // anyway, and Mayhem's answer is one batched RPC call where this is a Pump.fun call per coin.
-  const preBondByMint = await resolvePreBondSeconds(
+  // What isn't known yet is asked behind the cycle (a DexScreener pool lookup queued behind its
+  // shared budget held every contender a median 14 s, 2026-10-28), and only the coins being asked
+  // about wait for it: processCandidate holds them (preBondWait) until the answer lands.
+  const { known: preBondByMint } = startPreBondLookups(
     candidates.filter((c) => {
       const mayhem = mayhemByMint.get(c.mintAddress);
       const isMayhem = mayhem?.status === "found" && mayhem.isMayhemMode;
@@ -3785,12 +3789,18 @@ async function processCandidate(
     // the safety cut reads it, and a row banked without it would teach the models its absence.
     // And the Linked and CEX-funded counts over the chain's top 25, on the same terms
     // (linkedListReady). Both waits are asked each time, so they run side by side.
-    const inputsReady = (lane: WaitLane) =>
-      decisionInputsReady(
+    // And the pre-bond cut's lookups, still running behind the cycle for a coin they started for
+    // (startPreBondLookups): deciding now would skip the cut and bank its input as missing.
+    const inputsReady = (lane: WaitLane) => {
+      const out = decisionInputsReady(
         scored,
         { lane, listRead: cachedTopHolders(scored.mintAddress) !== undefined, sniperChainAvailable },
         env,
       );
+      return preBondLookupPending(scored.mintAddress)
+        ? { ready: false, held: [...out.held, "preBondWait" as const] }
+        : out;
+    };
     // The hourly sample waits for the same inputs a decision does, so the two kinds of training
     // row mean the same: banked at the coin's first scan it carried none of them, and the models
     // learned "missing" from background rows alone (notes/data-audit-2026-10-16, skew.md section
