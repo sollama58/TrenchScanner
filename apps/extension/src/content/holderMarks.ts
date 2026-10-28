@@ -47,6 +47,13 @@ export function holderNamed(text: string, holders: ReadonlyMap<string, OverlayBu
   return found;
 }
 
+/** The element sits in (or is) a link already marked: looked up the element's own ancestors. */
+function inMarkedLink(el: Element, found: ReadonlyMap<Element, string>): boolean {
+  for (let a = el.closest("a[href]"); a; a = a.parentElement?.closest("a[href]") ?? null)
+    if (found.has(a)) return true;
+  return false;
+}
+
 export class HolderMarks {
   private observer: MutationObserver | null = null;
   private timer: number | undefined;
@@ -80,14 +87,30 @@ export class HolderMarks {
         return;
       this.schedule();
     });
-    this.observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-    // Single-page sites change coin without a reload.
-    this.urlTimer = window.setInterval(() => this.schedule(), 1_000);
-    this.schedule();
+    // Single-page sites change coin without a reload: the page is watched only while it is a
+    // coin's own page with the option on, so a board's ticking numbers cost nothing here.
+    this.urlTimer = window.setInterval(() => this.watch(), 1_000);
+    this.watch();
+  }
+
+  /** Watches the page while the markers apply to it, and stops watching (and clears them) when not. */
+  private watching = false;
+  private watch(): void {
+    const on = this.prefs.holderMarks.enabled && isTokenPage(this.site, location.pathname);
+    if (on && !this.watching) {
+      this.observer?.observe(document.body, { childList: true, subtree: true, characterData: true });
+      this.watching = true;
+    } else if (!on && this.watching) {
+      this.observer?.disconnect();
+      this.watching = false;
+    }
+    // Off a coin's page this clears what was marked and does nothing more.
+    if (on || this.mint !== null) this.schedule();
   }
 
   stop(): void {
     this.observer?.disconnect();
+    this.watching = false;
     window.clearInterval(this.urlTimer);
     window.clearTimeout(this.timer);
     this.clear();
@@ -96,7 +119,7 @@ export class HolderMarks {
   applyPrefs(prefs: TooltipPrefs): void {
     this.prefs = prefs;
     for (const mark of this.marks.values()) mark.key = "";
-    this.schedule();
+    this.watch();
   }
 
   private schedule(): void {
@@ -125,7 +148,9 @@ export class HolderMarks {
       this.clear();
     }
     if (!mint) return;
-    if (!this.reading && Date.now() - this.mapAt >= MAP_MS) void this.load(mint);
+    // A tab in the background doesn't read the map again; it does once it's shown.
+    if (!this.reading && document.visibilityState === "visible" && Date.now() - this.mapAt >= MAP_MS)
+      void this.load(mint);
     this.mark();
   }
 
@@ -176,7 +201,7 @@ export class HolderMarks {
       const el = node.parentElement;
       if (!wallet || !el || wallet === this.mint) continue;
       // Inside a link already marked, the link speaks for it.
-      if ([...found.keys()].some((l) => l.contains(el))) continue;
+      if (inMarkedLink(el, found)) continue;
       found.set(el, wallet);
     }
     return found;

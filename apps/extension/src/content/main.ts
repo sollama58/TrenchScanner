@@ -37,10 +37,6 @@ async function main(): Promise<void> {
       engine = new OverlayEngine(adapter, settings, {
         lookup: async (mints) =>
           (await ask<LookupAnswer>({ type: "lookup", mints })) ?? { tokens: {}, problem: "offline" },
-        report: (health) =>
-          void chrome.runtime
-            .sendMessage({ type: "health", site: adapter.site, ...health })
-            .catch(() => undefined),
         totals: async (mint) => await ask<OverlayBubbleTotals>({ type: "totals", mint }),
         safety: async (mints) =>
           (await ask<SafetyAnswer>({ type: "safety", mints })) ?? { verdicts: {}, problem: "offline" },

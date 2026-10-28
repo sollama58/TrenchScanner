@@ -3,7 +3,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { axiom, gmgn, terminal } from "./adapters/sites";
 import { columnOf, findColumns } from "./columns";
 import { Scoper } from "./scope";
-import { OverlayEngine } from "./engine";
+import { OverlayEngine, structural } from "./engine";
 import { safetyBody, tooltipBody } from "./ui";
 import { DEFAULT_SETTINGS } from "../shared/settings";
 import { cleanTooltip } from "../shared/tooltip";
@@ -213,6 +213,50 @@ describe("overlay engine", () => {
     e.receive([A], { tokens: { [A]: token({ mint: A }) }, problem: null });
     expect(overlayIn(document.getElementById("r")!)).toBeNull();
     e.stop();
+  });
+
+  it("draws a ring again when the site's renderer takes it away, and scans on rows, not on ticking text", () => {
+    board(`<div id="r" data-index="0"><a href="/sol/token/${A}">A</a><span id="mc">$5K</span></div>`);
+    const { e } = engine();
+    e.start();
+    e.scan();
+    const row = document.getElementById("r")!;
+    e.receive([A], { tokens: { [A]: token({ mint: A, modelCalls: [call] }) }, problem: null });
+    overlayIn(row)!.remove();
+    e.scan();
+    expect(overlayIn(row)).not.toBeNull();
+    e.stop();
+
+    const records = (target: Node, mutate: () => void) => {
+      const seen: MutationRecord[] = [];
+      const watch = new MutationObserver((r) => seen.push(...r));
+      watch.observe(target, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: gmgn.watchedAttributes,
+      });
+      mutate();
+      seen.push(...watch.takeRecords());
+      watch.disconnect();
+      return seen;
+    };
+    const mc = document.getElementById("mc")!;
+    // A price ticking over, either way a renderer writes it: no scan.
+    expect(structural(records(mc, () => (mc.textContent = "$6K")))).toBe(false);
+    expect(structural(records(mc, () => ((mc.firstChild as Text).data = "$7K")))).toBe(false);
+    // Our own ring coming and going: no scan.
+    expect(structural(records(row, () => row.append(document.createElement("trench-overlay"))))).toBe(false);
+    // The row recycled for another coin, or a new row: a scan.
+    expect(
+      structural(records(row, () => row.querySelector("a")!.setAttribute("href", `/sol/token/${B}`))),
+    ).toBe(true);
+    expect(
+      structural(records(document.body, () => document.body.append(document.createElement("div")))),
+    ).toBe(true);
+    expect(axiom.watchedAttributes).toContain("data-pulse-token-address");
+    expect(terminal.watchedAttributes).toContain("data-trenches-item");
   });
 
   it("pauses when rows show up but no address can be read for 10 seconds, and resumes", () => {

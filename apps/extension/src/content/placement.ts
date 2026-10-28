@@ -56,8 +56,7 @@ const SOLID = "img, svg, canvas, video, button, input, select, textarea, [role='
  * the row, as boxes in the row's coordinates. Anything the size of most of the row is a background
  * and is left out. `skip` is the overlay's own element.
  */
-export function obstaclesIn(row: HTMLElement, skip: Element): Box[] {
-  const origin = row.getBoundingClientRect();
+export function obstaclesIn(row: HTMLElement, skip: Element, origin = row.getBoundingClientRect()): Box[] {
   const area = origin.width * origin.height;
   const boxes: Box[] = [];
   const add = (r: DOMRect) => {
