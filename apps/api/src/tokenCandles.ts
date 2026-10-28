@@ -175,9 +175,21 @@ export async function readTokenCandles(
   let span = limit * tfMs;
   let bars: SeriesBar[] = [];
   let inputs: SeriesInput[] = [];
+  // Each widening reads only the stretch it adds, [from, the last window's start): the chunks
+  // already read stay, so the window is never re-read and re-decoded (audit 10-27 WB-29). A chunk
+  // that spans the seam comes back from both reads and is kept once, by its key.
+  const held = new Map<string, CandleChunkRow>();
+  let readTo = end;
   for (let i = 0; i <= WIDENINGS; i++) {
     const from = Math.floor((end - span) / tfMs) * tfMs;
-    const chunks = oldest !== null && oldest < end ? await deps.readChunks(mint, from, end) : [];
+    if (oldest !== null && oldest < end && from < readTo) {
+      for (const c of await deps.readChunks(mint, from, readTo)) {
+        const key = `${c.res}:${c.source}:${c.startAt}`;
+        if (!held.has(key)) held.set(key, c);
+      }
+      readTo = from;
+    }
+    const chunks = [...held.values()].sort((a, b) => a.startAt - b.startAt);
     inputs = [...chunkInputs(chunks, factor), ...live];
     bars = candleSeries(inputs, tfSec, from, end);
     if (bars.length >= limit || !(floor < from)) break;

@@ -8,7 +8,11 @@ interface AlertSocket {
   readyState: number;
   send(data: string): void;
   close(code?: number, reason?: string): void;
-  on(event: "close" | "error", listener: () => void): void;
+  on(event: "close" | "error" | "pong", listener: () => void): void;
+  /** A protocol ping; the client's pong comes back as a "pong" event (ws answers it on its own). */
+  ping?(): void;
+  /** Drops the connection without a closing handshake, for a peer that no longer answers. */
+  terminate?(): void;
 }
 
 const SOCKET_OPEN = 1;
@@ -17,6 +21,19 @@ const logger = createLogger("model-alert-socket");
 
 /** How often an open socket re-checks that the key is still live and the user still has paid access. */
 const ACCESS_RECHECK_MS = 60_000;
+
+/**
+ * How often each socket is pinged. One that has not answered the previous ping by the next is
+ * dropped: a half-open connection, or one an edge cut while idle, is otherwise never noticed and
+ * its alerts go nowhere (audit 10-27 WB-23). Under the usual 60-100 s proxy idle cut.
+ */
+const PING_MS = 30_000;
+
+/**
+ * When the key or access read itself fails, a socket that passed both within this long still gets
+ * the alert, instead of the alert going to nobody. Past it, the failed read sends nothing, as before.
+ */
+const CHECK_GRACE_MS = 90_000;
 
 export interface ModelAlertClient {
   userId: string;
@@ -29,6 +46,16 @@ export interface ModelAlertClient {
 interface Client extends ModelAlertClient {
   socket: AlertSocket;
   closed: boolean;
+  /** When the key and access checks last passed for it (ms, `now()`); authentication counts. */
+  checkedAt: number;
+  /** Whether it answered the last ping. */
+  alive: boolean;
+}
+
+export interface ModelAlertHubTiming {
+  recheckMs?: number;
+  pingMs?: number;
+  now?: () => number;
 }
 
 /** Why connect() refused a socket. The route closes it; the hub does not keep it. */
@@ -50,6 +77,8 @@ export class ModelAlertHub {
   private readonly clients = new Set<Client>();
   private readonly stopListening: () => void;
   private readonly timer: NodeJS.Timeout;
+  private readonly pinger: NodeJS.Timeout;
+  private readonly now: () => number;
 
   constructor(
     matchStream: Pick<MatchStream, "onCuratedAlertId">,
@@ -57,15 +86,18 @@ export class ModelAlertHub {
     private readonly allowed: (walletAddress: string) => Promise<boolean>,
     /** Ids in this set are still unrevoked. A throw sends nothing and closes nothing. */
     private readonly activeKeys: (keyIds: readonly string[]) => Promise<ReadonlySet<string>>,
-    intervalMs = ACCESS_RECHECK_MS,
+    { recheckMs = ACCESS_RECHECK_MS, pingMs = PING_MS, now = Date.now }: ModelAlertHubTiming = {},
   ) {
+    this.now = now;
     this.stopListening = matchStream.onCuratedAlertId((alertId) => {
       void this.publish(alertId);
     });
     this.timer = setInterval(() => {
       void this.recheck();
-    }, intervalMs);
+    }, recheckMs);
     this.timer.unref?.();
+    this.pinger = setInterval(() => this.pingAll(), pingMs);
+    this.pinger.unref?.();
   }
 
   /**
@@ -83,7 +115,7 @@ export class ModelAlertHub {
     if (byKey >= MAX_SOCKETS_PER_KEY) return "key_cap";
     if (byUser >= MAX_SOCKETS_PER_USER) return "user_cap";
 
-    const row: Client = { socket, ...client, closed: false };
+    const row: Client = { socket, ...client, closed: false, checkedAt: this.now(), alive: true };
     this.clients.add(row);
     const drop = () => {
       row.closed = true;
@@ -91,7 +123,40 @@ export class ModelAlertHub {
     };
     socket.on("close", drop);
     socket.on("error", drop);
+    socket.on("pong", () => {
+      row.alive = true;
+    });
     return "ok";
+  }
+
+  /** Pings every socket, and drops each that never answered the last one. */
+  private pingAll(): void {
+    for (const client of [...this.clients]) {
+      if (client.closed) continue;
+      if (!client.alive) {
+        this.drop(client);
+        continue;
+      }
+      client.alive = false;
+      try {
+        client.socket.ping?.();
+      } catch {
+        this.drop(client);
+      }
+    }
+  }
+
+  /** A peer that stopped answering: no closing handshake to wait on. */
+  private drop(client: Client): void {
+    if (client.closed) return;
+    if (!client.socket.terminate) return this.close(client, 1001, "ping_timeout");
+    client.closed = true;
+    this.clients.delete(client);
+    try {
+      client.socket.terminate();
+    } catch {
+      // Already gone.
+    }
   }
 
   /** Closes every socket on this process that authenticated with this key. */
@@ -106,6 +171,7 @@ export class ModelAlertHub {
   stop(): void {
     this.stopListening();
     clearInterval(this.timer);
+    clearInterval(this.pinger);
     for (const client of [...this.clients]) this.close(client, 1001, "going_away");
     this.clients.clear();
   }
@@ -165,20 +231,24 @@ export class ModelAlertHub {
 
   /**
    * Drops revoked keys and lapsed subscriptions from `clients` and returns who may still
-   * receive. A failed read sends nothing and closes nothing: the next alert, or the timer,
-   * tries again. Revocation is checked first, so a revoked key closes even when the
-   * subscription is still live.
+   * receive. A failed read closes nothing, and sends only to the clients that passed both checks
+   * within CHECK_GRACE_MS (so one failed read no longer drops an alert for everyone); the next
+   * alert, or the timer, tries again. Revocation is checked first, so a revoked key closes even
+   * when the subscription is still live.
    */
   private async enforce(clients: Client[]): Promise<Client[]> {
     const open = clients.filter((client) => !client.closed && this.clients.has(client));
     if (open.length === 0) return [];
+    const startedAt = this.now();
+    const recent = (group: Client[]) =>
+      group.filter((client) => !client.closed && startedAt - client.checkedAt <= CHECK_GRACE_MS);
 
     let live: ReadonlySet<string>;
     try {
       live = await this.activeKeys([...new Set(open.map((client) => client.keyId))]);
     } catch (err) {
       logger.warn("model alert key check failed", { error: String(err) });
-      return [];
+      return recent(open);
     }
 
     const keyed: Client[] = [];
@@ -198,10 +268,14 @@ export class ModelAlertHub {
     const groups = await Promise.all(
       [...byWallet.entries()].map(async ([wallet, group]) => {
         try {
-          if (await this.allowed(wallet)) return group.filter((client) => !client.closed);
+          if (await this.allowed(wallet)) {
+            const passed = group.filter((client) => !client.closed);
+            for (const client of passed) client.checkedAt = startedAt;
+            return passed;
+          }
         } catch (err) {
           logger.warn("model alert access check failed", { error: String(err) });
-          return [];
+          return recent(group);
         }
         for (const client of group) this.close(client, 4403, "access_ended");
         return [];

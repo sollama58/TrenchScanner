@@ -147,7 +147,7 @@ function ipfsCid(url: string): string | undefined {
 /**
  * Where to load a token's image from, in order, for an `<img>` that moves to the next on error
  * or when it stalls (TokenImage), and shows the initials when none loads. First the small
- * thumbnail (tokenThumb); then, for a Pump.fun mint, Pump.fun's own image CDN (it has every coin
+ * thumbnail (tokenThumb) when it could resize the URL; then, for a Pump.fun mint, Pump.fun's own image CDN (it has every coin
  * it launched, small and cached, even when we never got the launcher's URL); for an IPFS image,
  * then Filebase's gateway, which has the CIDs Pump.fun's Pinata gateway refuses (403, "not
  * pinned") in ~0.4 s; then the launcher's own URL; then a second public gateway. ipfs.io and
@@ -158,7 +158,10 @@ export function tokenImageSources(url: string | null | undefined, size = 96, min
   const safe = url?.trim() ?? "";
   const pump = pumpCdnImage(mint, size);
   if (!/^https:\/\/\S+$/.test(safe)) return pump ? [pump] : [];
-  const out = [tokenThumb(safe, size)];
+  // A URL tokenThumb can't resize (the launcher's own host) is the full-size original, a
+  // megabyte for a 40px avatar at worst (audit 10-27 WB-16): Pump.fun's small copy goes first.
+  const thumb = tokenThumb(safe, size);
+  const out = thumb === safe ? [] : [thumb];
   if (pump) out.push(pump);
   const cid = ipfsCid(safe);
   if (cid) out.push(`https://ipfs.filebase.io/ipfs/${cid}`);

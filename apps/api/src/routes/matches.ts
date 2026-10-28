@@ -1027,7 +1027,14 @@ export async function registerMatchRoutes(
       return name ? { kind: "filter" as const, name } : null;
     };
     const named = (
-      list: readonly { tokenId: string; at: Date; peakPct: number; source: ReturnFeedCard["source"] }[],
+      list: readonly {
+        tokenId: string;
+        at: Date;
+        peakPct: number;
+        returnPct: number | null;
+        open?: boolean;
+        source: ReturnFeedCard["source"];
+      }[],
     ) =>
       list.flatMap((b) => {
         const t = tokenById.get(b.tokenId);
@@ -1040,6 +1047,10 @@ export async function registerMatchRoutes(
                 mintAddress: t.mintAddress,
                 at: b.at.toISOString(),
                 peakPct: b.peakPct,
+                // The exit plan's return beside the run's peak: what a holder on the plan got, not
+                // the 24h high (audit 10-27 GF-7).
+                returnPct: b.returnPct,
+                ...(b.open ? { open: true } : {}),
                 source: sourceOf(b.source),
               },
             ]

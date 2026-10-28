@@ -141,8 +141,21 @@ export async function loadGuestBest(models: readonly string[], now = Date.now())
   // the winner is then loaded in full for its card.
   const calls = await prisma.curatedAlert.findMany({
     where: { model: { in: [...models] }, createdAt: { gt: since, lte: cutoff } },
-    include: { candidateOutcome: curatedAlertInclude.candidateOutcome },
+    include: {
+      candidateOutcome: {
+        select: { ...curatedAlertInclude.candidateOutcome.select, simReturnPct: true, openReturnPct: true },
+      },
+    },
   });
+  // The exit plan's return beside the Peak: the run's high is not what a holder on the plan got
+  // (audit 10-27 GF-7). Settled, or the still-held share at its latest reading (`open`).
+  const planOf = new Map(
+    calls.map((c) => {
+      const settled = c.simReturnPct ?? c.candidateOutcome?.simReturnPct ?? null;
+      const open = settled === null && c.candidateOutcome?.openReturnPct != null;
+      return [c.id, { planReturnPct: settled ?? c.candidateOutcome?.openReturnPct ?? null, planOpen: open }];
+    }),
+  );
   const ranked = topReturns(
     calls.map((c) => {
       const outcome = resolveOutcome(c);
@@ -165,7 +178,14 @@ export async function loadGuestBest(models: readonly string[], now = Date.now())
   const byId = new Map((await withLatestSnapshots(alerts)).map((a) => [a.id, a]));
   const cards = ranked.flatMap((r) => {
     const full = byId.get(r.id);
-    return full ? [serializeCuratedAlert(full, currentMarketCap)] : [];
+    return full
+      ? [
+          {
+            ...serializeCuratedAlert(full, currentMarketCap),
+            ...(planOf.get(r.id) ?? { planReturnPct: null, planOpen: false }),
+          },
+        ]
+      : [];
   });
   return cards.find((c) => !belowAlert(c)) ?? cards[0] ?? null;
 }

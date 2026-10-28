@@ -619,6 +619,31 @@ describe("resolveOutcome", () => {
     expect(early.minutesLeft).toBeNull();
   });
 
+  it("settles a call past the stop with no 2x as missed at once, not watching", () => {
+    // $SYNTHESIS 8 min after its alert at -77%, still "watching" (audit 10-27 WB-17).
+    const stopped = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({
+          anchorAt: minutesAgo(8),
+          lowBefore2xPriceUsd: 0.23,
+          peak1hPriceUsd: 1.3,
+        }),
+      }),
+    );
+    expect(stopped.status).toBe("missed");
+    expect(stopped.hit2x).toBe(false);
+    expect(stopped.hitGoal).toBe(false);
+    expect(stopped.minutesLeft).toBeNull();
+
+    // Down, but above the stop: still in play.
+    const down = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({ anchorAt: minutesAgo(8), lowBefore2xPriceUsd: 0.6, peak1hPriceUsd: 1.3 }),
+      }),
+    );
+    expect(down.status).toBe("watching");
+  });
+
   it("falls back to the copied columns after the training row is pruned", () => {
     const view = resolveOutcome(
       alert({

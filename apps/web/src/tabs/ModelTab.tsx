@@ -56,7 +56,7 @@ import {
   recordSince,
   shortDate,
 } from "./modelShared";
-import { MIN_GRADED_FOR_RATE, RULE_NOTE, intervalText, isEarly, wilsonOfRate } from "../rates";
+import { FOLLOWER_NOTE, MIN_GRADED_FOR_RATE, RULE_NOTE, intervalText, isEarly, wilsonOfRate } from "../rates";
 import { ModelDetailModal } from "./ModelDetail";
 import { renderWeekCard, type WeekCardData } from "./weekCard";
 import { DAY_MS, changePoints, dayStarts } from "../pricingChange";
@@ -134,7 +134,11 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
               {lb.scoring.catchTargetPct ?? 75}% of all the tokens that double.{" "}
               {guest ? "As a guest you see alerts from" : "Your feed shows alerts from"}{" "}
               <strong>{following.map((e) => e.name).join(", ") || "–"}</strong>
-              {lb.followBest ? " (whichever model is doing best; it switches automatically)" : ""}
+              {lb.followBest || lb.followsDefault
+                ? lb.defaultRule
+                  ? ` (the default: the top ${lb.defaultRule.count} by leaderboard score over ${lb.defaultRule.rankWindowHours ?? lb.defaultRule.windowHours}h, picked again every ${Math.round(lb.defaultRule.refreshMinutes / 60)} hours)`
+                  : " (the default: the model with the best leaderboard score; it switches automatically)"
+                : ""}
               {guest
                 ? `, ${GUEST_DELAY_MINUTES} minutes after each alert. Connect a wallet to pick models`
                 : ""}
@@ -248,7 +252,7 @@ function BaselinePanel(props: BaselineProps) {
 }
 
 /** The Score measure's figures: the best seasoned score, how many models are seasoned, and the line. */
-function ScoreFigs({ board }: { board: Leaderboard }) {
+export function ScoreFigs({ board }: { board: Leaderboard }) {
   const seasoned = board.entries.filter((e) => e.composite.score !== null && e.composite.warmingUp !== true);
   const top = seasoned.reduce<number | null>((m, e) => Math.max(m ?? 0, e.composite.score ?? 0), null);
   return (
@@ -264,7 +268,7 @@ function ScoreFigs({ board }: { board: Leaderboard }) {
         </span>
       </div>
       <div>
-        <label>On target</label>
+        <label>On target from</label>
         <span className="num">{SCORE_ON_TARGET}</span>
       </div>
     </div>
@@ -441,7 +445,9 @@ function BaselineChart({
               <>
                 Of the tokens that doubled cleanly, the share each model flagged at a winning moment: the
                 runners it didn&apos;t let slip. The line is every model together; the goal is {goal}% of the
-                runners.
+                runners. A runner is a token that doubled from a market moment or from a model&apos;s call, so
+                a coin only a model&apos;s call graded (a fast-path call) always counts as caught: this reads
+                a few points above the share of the market&apos;s own runners.
               </>
             ) : (
               <>
@@ -1187,7 +1193,7 @@ function LeaderboardPanel({
               than the average coin in the same hours, so models that started on different days compare
               fairly. The score runs from 0 to 100: 100 means a model&apos;s alerts have reliably hit the
               goal. Profit is the simulated return from taking every alert with one fixed{" "}
-              <ExitPlanInfo text="exit plan" />. {RULE_NOTE}{" "}
+              <ExitPlanInfo text="exit plan" />. {RULE_NOTE} {FOLLOWER_NOTE}{" "}
               {guest ? (
                 <>
                   Connect a wallet to pick which models&apos; alerts you get with <strong>In feed</strong>.
