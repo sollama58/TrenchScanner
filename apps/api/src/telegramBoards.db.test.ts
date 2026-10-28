@@ -2,11 +2,20 @@
 import "./bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
-import { createTelegramBoards } from "./telegramBoards.js";
+import { createTelegramBoards, doubledBeforeSend } from "./telegramBoards.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
 const TAG = `tgboards-test-${Date.now()}`;
+
+describe("doubledBeforeSend", () => {
+  it("marks a win whose 2x came before the message reached the chat", () => {
+    const sentAt = new Date("2026-10-26T16:55:36Z");
+    expect(doubledBeforeSend({ sentAt, hit2xAt: new Date(sentAt.getTime() - 60_000) })).toBe(true);
+    expect(doubledBeforeSend({ sentAt, hit2xAt: new Date(sentAt.getTime() + 60_000) })).toBe(false);
+    expect(doubledBeforeSend({ sentAt, hit2xAt: null })).toBe(false);
+  });
+});
 
 describe.skipIf(!dbAvailable)("Telegram boards", () => {
   let chatRowId = "";
