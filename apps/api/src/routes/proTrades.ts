@@ -569,7 +569,9 @@ export function createProTrades(opts: ProTradesOptions): ProTrades {
     // A held coin still on its bonding curve is priced from the curve, to the block, as the token
     // page's chart is (liveCurve.ts, the feed cards' Now too); the rest from a live market read.
     const [views, market, curve, supplies] = await Promise.all([
-      Promise.all(shown.map((p) => (tokenByMint.has(p.mint) ? tokenView(p.mint, p.entryAt) : null))),
+      Promise.all(
+        shown.map((p) => (tokenByMint.has(p.mint) ? tokenView(p.mint, p.entryAt) : Promise.resolve(null))),
+      ),
       livePricesFor(held),
       held.length > 0
         ? liveCurves()

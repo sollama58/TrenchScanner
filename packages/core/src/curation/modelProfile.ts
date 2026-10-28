@@ -115,6 +115,10 @@ export function modelProfile(spec: ContestantSpec, baseHalfLifeDays: number): Mo
         decides: "Keeps an alert one of them is most sure of",
         method: "team",
       };
+    case "learner":
+    case "narrative":
+      // Trained seats: described from their recipe below.
+      break;
   }
 
   const goal: SeatGoal = r?.goal ?? "2x";

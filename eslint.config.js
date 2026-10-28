@@ -44,6 +44,17 @@ export default tseslint.config(
     },
     rules: {
       "@typescript-eslint/no-floating-promises": "error",
+      // Awaiting something that is not a promise is a mistake about what a call returns.
+      "@typescript-eslint/await-thenable": "error",
+      // A switch over a union with no `default` must name every member, so a new member (a model
+      // kind, a step, a status) is a lint error where it is not handled instead of a silent
+      // no-op. A `default` counts as handling the rest: the switches this rule found without that
+      // allowance end in a deliberate fallback, bar modelProfile's seat-role switch, which now
+      // names its trained roles (full audit 2026-10-27, CH-12).
+      "@typescript-eslint/switch-exhaustiveness-check": [
+        "error",
+        { considerDefaultExhaustiveForUnions: true, requireDefaultForNonUnion: false },
+      ],
     },
   },
   {
