@@ -1,3 +1,4 @@
+import { wilsonBounds } from "../wilson.js";
 import { rankAmong } from "./liveScale.js";
 
 /**
@@ -104,12 +105,7 @@ const TIER_Z = 1.645;
 
 /** The lower end of the Wilson interval on wins / graded. */
 function wilsonLower(wins: number, graded: number, z = TIER_Z): number {
-  if (graded <= 0) return 0;
-  const p = wins / graded;
-  const z2 = z * z;
-  const centre = p + z2 / (2 * graded);
-  const half = z * Math.sqrt((p * (1 - p)) / graded + z2 / (4 * graded * graded));
-  return (centre - half) / (1 + z2 / graded);
+  return graded <= 0 ? 0 : wilsonBounds(wins, graded, z).lower;
 }
 
 /**

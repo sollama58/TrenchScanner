@@ -1,3 +1,4 @@
+import { wilsonBounds } from "../wilson.js";
 import { NARRATIVE_CONTESTANT } from "./contestants.js";
 import { liveCallRecords, liveMarketLift, loadCurrentLanes } from "./laneStore.js";
 import { emptyRecord, type CallRecord, type MarketLift } from "./leaderboard.js";
@@ -41,12 +42,8 @@ export function narrativeNoteInterval(
   z: number,
 ): { lower: number; upper: number } | null {
   if (n <= 0) return null;
-  const p = Math.min(Math.max(wins / n, 0), 1);
-  const z2 = z * z;
-  const centre = p + z2 / (2 * n);
-  const margin = z * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n));
-  const denom = 1 + z2 / n;
-  return { lower: Math.max(0, (centre - margin) / denom), upper: Math.min(1, (centre + margin) / denom) };
+  const { lower, upper } = wilsonBounds(Math.min(Math.max(wins, 0), n), n, z);
+  return { lower: Math.max(0, lower), upper: Math.min(1, upper) };
 }
 
 /**

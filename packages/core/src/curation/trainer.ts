@@ -1,3 +1,4 @@
+import { wilsonLowerBound } from "../wilson.js";
 import { paceBudget } from "./governor.js";
 import { EMPTY_CURVE_PATH } from "./curveTape.js";
 import { EMPTY_PRICE_PATH } from "./pricePath.js";
@@ -19,6 +20,7 @@ import {
 } from "./curator.js";
 import type { IsotonicCalibration } from "./calibration.js";
 import {
+  isWin,
   CANDIDATE_EXTENDED_WATCH_HOURS,
   CANDIDATE_WATCH_WINDOW_MINUTES,
   GOAL_MULTIPLE,
@@ -535,9 +537,7 @@ export function returnWinFloor(
 
 /** The rows with every miss of `won` (a 2x that fell short of the goal included) as a loss. */
 function relabel(rows: readonly TrainingRow[], won: (r: TrainingRow) => boolean): TrainingRow[] {
-  return rows.map((r) =>
-    r.labelValue > 0 && !won(r) ? { ...r, labelValue: 0, runPeakMultiple: undefined } : r,
-  );
+  return rows.map((r) => (isWin(r) && !won(r) ? { ...r, labelValue: 0, runPeakMultiple: undefined } : r));
 }
 
 /** Whether a row carries a real return under the exit plan (TrainingRow.returnPct). */
@@ -548,7 +548,7 @@ export function hasReturn(row: TrainingRow): boolean {
 /** A row's return under the exit plan, or the default payoff of its kind when it carries none. */
 export function rowReturnPct(row: TrainingRow): number {
   if (row.returnPct !== undefined && Number.isFinite(row.returnPct)) return row.returnPct;
-  if (row.labelValue > 0) return DEFAULT_RETURN_PAYOFFS.winPct;
+  if (isWin(row)) return DEFAULT_RETURN_PAYOFFS.winPct;
   return rowCrashed(row) === true ? DEFAULT_RETURN_PAYOFFS.crashPct : DEFAULT_RETURN_PAYOFFS.flatPct;
 }
 
@@ -573,7 +573,7 @@ export function goalValue(row: TrainingRow, goal: SeatGoal): number {
       return r < 0 ? SAFE_LOSS_AVERSION * r : r;
     }
     default:
-      return row.labelValue > 0 ? 1 : 0;
+      return isWin(row) ? 1 : 0;
   }
 }
 
@@ -589,7 +589,7 @@ const MIN_PAYOFF_ROWS = 20;
  */
 export function rowCrashed(row: TrainingRow): boolean | undefined {
   if (row.crashed !== undefined) return row.crashed;
-  if (row.labelValue > 0) return false;
+  if (isWin(row)) return false;
   return row.survived === undefined ? undefined : !row.survived;
 }
 
@@ -601,7 +601,7 @@ export function measurePayoffs(rows: readonly TrainingRow[], lossAversion = 1): 
   const sums = { win: { sum: 0, n: 0 }, crash: { sum: 0, n: 0 }, flat: { sum: 0, n: 0 } };
   for (const r of rows) {
     if (r.returnPct === undefined || !Number.isFinite(r.returnPct) || !isCurrentLabelRule(r)) continue;
-    const kind = r.labelValue > 0 ? "win" : rowCrashed(r) === true ? "crash" : "flat";
+    const kind = isWin(r) ? "win" : rowCrashed(r) === true ? "crash" : "flat";
     sums[kind].sum += r.returnPct;
     sums[kind].n += 1;
   }
@@ -632,7 +632,7 @@ async function trainReturnRisk(
     if (crashed === undefined) continue;
     crashRows.push({ ...r, labelValue: crashed ? 1 : 0, runPeakMultiple: undefined });
   }
-  const positives = crashRows.filter((r) => r.labelValue > 0).length;
+  const positives = crashRows.filter((r) => isWin(r)).length;
   if (
     crashRows.length < MIN_CRASH_ROWS ||
     positives < MIN_CRASH_POSITIVES ||
@@ -708,12 +708,12 @@ export async function trainTwoStageCurator(
   // A clean win survived by definition: it doubled before any stop. The stored `survived` reads
   // the whole hour's low, which a win that dumps after doubling breaches - without this it would
   // teach stage one that a winner was a stop-out and drop it from stage two.
-  const survivedRow = (r: TrainingRow) => r.labelValue > 0 || r.survived === true;
-  const known = rows.filter((r) => r.survived !== undefined || r.labelValue > 0);
+  const survivedRow = (r: TrainingRow) => isWin(r) || r.survived === true;
+  const known = rows.filter((r) => r.survived !== undefined || isWin(r));
   const survivalRows = known.map((r) => ({ ...r, labelValue: survivedRow(r) ? 1 : 0 }));
   const survivors = known.filter(survivedRow);
-  const survivalPositives = survivalRows.filter((r) => r.labelValue > 0).length;
-  const winPositives = survivors.filter((r) => r.labelValue > 0).length;
+  const survivalPositives = survivalRows.filter((r) => isWin(r)).length;
+  const winPositives = survivors.filter((r) => isWin(r)).length;
   if (
     survivalRows.length < MIN_STAGE_ROWS ||
     survivalPositives < MIN_STAGE_POSITIVES ||
@@ -782,7 +782,7 @@ export async function trainNarrativeBlendCurator(
   };
   const market = await trainSingleStage(rows, marketOpts);
   const deep = rows.filter((r) => r.features.nsDepthFull === 1);
-  const deepWins = deep.filter((r) => r.labelValue > 0).length;
+  const deepWins = deep.filter((r) => isWin(r)).length;
   if (deep.length < MIN_STAGE_ROWS || deepWins < MIN_STAGE_POSITIVES) return market;
 
   const half = new Map<string, number>();
@@ -981,7 +981,7 @@ export async function trainCurator(
   }
 
   const xs = rows.map((r) => vectorize(r.features, featureNames, means, stdevs, transform));
-  const ys = rows.map((r) => (r.labelValue > 0 ? 1 : 0));
+  const ys = rows.map((r) => (isWin(r) ? 1 : 0));
   const newestMs = maxAnchorMs(rows);
   let sampleWeights = rows.map((r) => rowWeight(r, newestMs, opts));
   let totalWeight = sampleWeights.reduce((s, w) => s + w, 0);
@@ -1135,7 +1135,7 @@ export function calibrateThreshold(
   // compress downward - but 0.08 rather than the 0.04 it briefly sat at: the feed is a curated promise, and a call
   // the model itself gives a one-in-twelve chance is not one. The RELATIVE floor is still the
   // main guard ("at least twice as likely as random"); this one catches a degenerate market.
-  const baseRate = rows.filter((r) => r.labelValue > 0).length / rows.length;
+  const baseRate = rows.filter((r) => isWin(r)).length / rows.length;
   const floor = Math.max(0.08, Math.min(0.95, 2 * baseRate));
   return Math.max(byRate, floor);
 }
@@ -1227,16 +1227,9 @@ export interface PrecisionTargets {
 /**
  * Wilson score lower bound for a hit rate of `hits` out of `n` at normal z-score `z`. Unlike
  * hits/n minus a fixed margin, it stays inside [0, 1] and is honest at small n and rates near 1.
+ * It lives in ../wilson.ts with the interval itself; re-exported here for its callers.
  */
-export function wilsonLowerBound(hits: number, n: number, z: number): number {
-  if (n === 0) return 0;
-  const p = hits / n;
-  if (z <= 0) return p;
-  const z2 = z * z;
-  const centre = p + z2 / (2 * n);
-  const margin = z * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n));
-  return Math.max(0, (centre - margin) / (1 + z2 / n));
-}
+export { wilsonLowerBound };
 
 /** Whether a cutoff's record (wins and goals of n alerts) meets the targets - see confidenceZ. */
 export function meetsTargets(wins: number, goals: number, n: number, targets: PrecisionTargets): boolean {
@@ -1388,7 +1381,7 @@ export function calibrateThresholdForPrecision(
     let goals = 0;
     for (let i = 0; i < sorted.length; i++) {
       const call = sorted[i]!;
-      if (call.labelValue > 0) wins += 1;
+      if (isWin(call)) wins += 1;
       if (call.labelValue >= GOAL_LABEL) goals += 1;
       // Only judge at a boundary between distinct probabilities - a cutoff can't split a tie.
       const next = sorted[i + 1];
@@ -1462,7 +1455,7 @@ function cooldownRecords(calls: ScoredOutcome[], cooldownMs: number): CutoffReco
       if (last !== undefined && t - last < cooldownMs) continue;
       lastSent.set(call.tokenId!, t);
       n += 1;
-      if (call.labelValue > 0) wins += 1;
+      if (isWin(call)) wins += 1;
       if (call.labelValue >= GOAL_LABEL) goals += 1;
     }
     records.push({ cutoff, share: above / byTime.length, n, wins, goals });
@@ -1494,7 +1487,7 @@ export function precisionCurve(calls: ScoredOutcome[]): PrecisionCurvePoint[] {
     points.push({
       minProbability: top[n - 1]!.probability,
       alerts: n,
-      winRatePct: (top.filter((c) => c.labelValue > 0).length / n) * 100,
+      winRatePct: (top.filter((c) => isWin(c)).length / n) * 100,
       goalRatePct: (top.filter((c) => c.labelValue >= GOAL_LABEL).length / n) * 100,
     });
   }
@@ -1868,7 +1861,7 @@ function sideMetrics(emittedRows: TrainingRow[], spanHours: number, graded: Trai
   const emitted = emittedRows.length;
   const runners = emptyRecord();
   noteRunners(runners, graded, emittedRows);
-  const wins = emittedRows.filter((r) => r.labelValue > 0).length;
+  const wins = emittedRows.filter((r) => isWin(r)).length;
   const goals = emittedRows.filter((r) => r.labelValue >= GOAL_LABEL).length;
   // Only calls with a real return: a made-up payoff would score the return part on no evidence.
   const priced = emittedRows.filter((r) => hasReturn(r));
@@ -1944,7 +1937,7 @@ export async function walkForwardEvaluate(
   // while they can't. Rows with no sampleKind (tests, offline scripts) count as events.
   const examShare = Math.min(0.9, Math.max(0.1, opts.examShare ?? 0.5));
   const winsNewestHalf = (list: TrainingRow[]) =>
-    list.slice(Math.floor(list.length * (1 - examShare))).filter((r) => r.labelValue > 0).length;
+    list.slice(Math.floor(list.length * (1 - examShare))).filter((r) => isWin(r)).length;
   const withPseudo = sorted.filter(inBand);
   const eventsOnly = withPseudo.filter((r) => r.sampleKind !== "hourly");
   const eventWinsNewestHalf = winsNewestHalf(eventsOnly);
@@ -2016,9 +2009,7 @@ export async function walkForwardEvaluate(
             (r.tokenId === undefined || !testTokens.has(r.tokenId)),
         )
         .map((r) =>
-          r.labelValue > 0 &&
-          r.runPeakMultiple !== undefined &&
-          r.anchorAt.getTime() + extendedWatchMs > testStartMs
+          isWin(r) && r.runPeakMultiple !== undefined && r.anchorAt.getTime() + extendedWatchMs > testStartMs
             ? { ...r, runPeakMultiple: undefined }
             : r,
         )
@@ -2040,7 +2031,7 @@ export async function walkForwardEvaluate(
       if (
         opts.minTestWins !== undefined &&
         opts.minTestWins > 0 &&
-        test.filter((r) => r.labelValue > 0).length < opts.minTestWins
+        test.filter((r) => isWin(r)).length < opts.minTestWins
       )
         continue;
 
@@ -2158,10 +2149,10 @@ export async function walkForwardEvaluate(
       trainRows: fold.trainRows,
       testRows: test.length,
       decisionRows: testEmittable.length,
-      decisionWins: testEmittable.filter((r) => r.labelValue > 0).length,
+      decisionWins: testEmittable.filter((r) => isWin(r)).length,
       baseWinRatePct:
         testEmittable.length > 0
-          ? (testEmittable.filter((r) => r.labelValue > 0).length / testEmittable.length) * 100
+          ? (testEmittable.filter((r) => isWin(r)).length / testEmittable.length) * 100
           : 0,
       meanLabelPerRow:
         testEmittable.length > 0

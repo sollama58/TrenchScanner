@@ -1,3 +1,4 @@
+import { wilsonBounds } from "../wilson.js";
 import type { HeldFeature } from "./featureOnset.js";
 import { NEVER_EMIT_THRESHOLD, RULES_MODEL_KIND } from "./trainingRun.js";
 
@@ -166,12 +167,10 @@ export const EXAM_DROP_POINTS = 5;
 /** Fewest graded exam calls, on both sides, before a drop is judged. */
 const MIN_EXAM_GRADED = 50;
 
-function wilsonBounds(k: number, n: number, z = 1.96): [number, number] {
-  const p = k / n;
-  const d = 1 + (z * z) / n;
-  const c = (p + (z * z) / (2 * n)) / d;
-  const h = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / d;
-  return [c - h, c + h];
+/** The 95% interval the exam-drop and run checks read. */
+function examBounds(k: number, n: number): [number, number] {
+  const { lower, upper } = wilsonBounds(k, n, 1.96);
+  return [lower, upper];
 }
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
@@ -188,7 +187,7 @@ export function examRegressionAlarms(
     if (!was || was.graded < MIN_EXAM_GRADED || now.graded < MIN_EXAM_GRADED) continue;
     const oldRate = was.wins / was.graded;
     const newRate = now.wins / now.graded;
-    if (oldRate - newRate >= EXAM_DROP_POINTS / 100 && wilsonBounds(now.wins, now.graded)[1] < oldRate) {
+    if (oldRate - newRate >= EXAM_DROP_POINTS / 100 && examBounds(now.wins, now.graded)[1] < oldRate) {
       out.push(
         `${now.contestant}: exam 2x ${pct(newRate)} (${now.wins}/${now.graded}) against ${pct(oldRate)} for the model it replaces`,
       );
@@ -223,7 +222,7 @@ export function liveShareAlarms(
   if (decisions < MIN_WINDOW_DECISIONS || !(targetShare > 0)) return [];
   const out: string[] = [];
   for (const s of seats) {
-    const [lo] = wilsonBounds(Math.min(s.calls, decisions), decisions);
+    const [lo] = examBounds(Math.min(s.calls, decisions), decisions);
     if (lo > targetShare * LIVE_SHARE_ALARM_RATIO) {
       out.push(
         `${s.contestant}: alerted on ${pct(s.calls / decisions)} of ${decisions} decision moments against a ${pct(targetShare)} share`,

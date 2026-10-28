@@ -10,6 +10,8 @@
  * probabilities don't). Pure: points in, a step table out.
  */
 
+import { isWin } from "./labels.js";
+
 export interface CalibrationPoint {
   /** Confidence rank in [0, 1) - see confidenceRanks. */
   rank: number;
@@ -139,7 +141,7 @@ export function buildCalibration(
   const recent = calls.filter((c) => !c.anchorAt || c.anchorAt.getTime() >= from);
   if (recent.length === 0) return undefined;
   const knots = fitIsotonicRanks(
-    recent.map((c) => ({ rank: c.probability, won: c.labelValue > 0 ? 1 : 0 }) as CalibrationPoint),
+    recent.map((c) => ({ rank: c.probability, won: isWin(c) ? 1 : 0 }) as CalibrationPoint),
   );
   return {
     kind: "isotonic-rank-v1",

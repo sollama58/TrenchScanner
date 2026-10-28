@@ -1,7 +1,7 @@
 import { paceBudget } from "./governor.js";
 import { scoredFromFeatures } from "./features.js";
 import { curationRankScore, evaluateCandidateHeuristic } from "./curator.js";
-import { CANDIDATE_WATCH_WINDOW_MINUTES, runDoublings } from "./labels.js";
+import { CANDIDATE_WATCH_WINDOW_MINUTES, runDoublings, isWin } from "./labels.js";
 import type { ScoredToken } from "../types.js";
 import {
   applyCooldown,
@@ -409,7 +409,7 @@ export async function trainStackedCurator(
       trainIndexes.push(i);
     }
     if (trainIndexes.length < MIN_META_TRAIN_ROWS) continue;
-    if (trainIndexes.filter((i) => metaRows[i]!.labelValue > 0).length < MIN_META_TRAIN_WINS) continue;
+    if (trainIndexes.filter((i) => isWin(metaRows[i]!)).length < MIN_META_TRAIN_WINS) continue;
     const cutoffs = memberCallRanksFrom(input.reference, callingMembers, trainIndexes, input);
     const chunkRows = metaRowsWith((c) => cutoffs.get(c) ?? null);
     const meta = await train(trainIndexes.map((i) => chunkRows[i]!));
@@ -513,7 +513,7 @@ export function addCall(
 ): void {
   record.calls += 1;
   record.graded += 1;
-  if (row.labelValue > 0) record.wins += 1;
+  if (isWin(row)) record.wins += 1;
   if (row.labelValue >= GOAL_LABEL) record.goals += 1;
   if (row.hit10x === true) record.tenX! += 1;
   if (row.labelValue <= 0 || row.hit10x !== undefined) record.tenXGraded! += 1;

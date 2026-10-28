@@ -1,3 +1,4 @@
+import { wilsonBounds } from "../wilson.js";
 import type { RankRateRow } from "./liveRankRates.js";
 
 /**
@@ -65,12 +66,7 @@ export function buildEntryProof(rows: readonly RankRateRow[]): EntryProof {
 }
 
 function wilsonLower(wins: number, n: number, z = ENTRY_PROOF_Z): number {
-  if (n <= 0) return 0;
-  const p = wins / n;
-  const z2 = z * z;
-  const centre = p + z2 / (2 * n);
-  const half = z * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n));
-  return (centre - half) / (1 + z2 / n);
+  return n <= 0 ? 0 : wilsonBounds(wins, n, z).lower;
 }
 
 /** How many of the seat's graded entry moments scored at or above `cutoff` (scores descending). */

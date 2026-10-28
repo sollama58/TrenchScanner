@@ -1,6 +1,7 @@
+import { wilsonBounds } from "../wilson.js";
 import { GOAL_LABEL, recordScore } from "./leaderboard.js";
 import type { PrecisionTargets } from "./trainer.js";
-import { GOAL_MULTIPLE, GOAL_WINDOW_MINUTES, WIN_MULTIPLE, WIN_WINDOW_MINUTES } from "./labels.js";
+import { GOAL_MULTIPLE, GOAL_WINDOW_MINUTES, WIN_MULTIPLE, WIN_WINDOW_MINUTES, isWin } from "./labels.js";
 import { MAX_PLAYBOOK_CHARS } from "./aiReview.js";
 
 /**
@@ -61,7 +62,7 @@ function brierOf(pairs: { p: number; won: boolean }[]): number | null {
 export function summarizeJudgeRecord(calls: JudgedCall[], targets: PrecisionTargets): JudgeRecordSummary {
   const reviewed = calls.filter((c) => c.decision !== null);
   const buys = reviewed.filter((c) => c.decision === "buy");
-  const won = (c: JudgedCall) => c.labelValue > 0;
+  const won = (c: JudgedCall) => isWin(c);
   const goal = (c: JudgedCall) => c.labelValue >= GOAL_LABEL;
   const buyWins = buys.filter(won).length;
   const buyGoals = buys.filter(goal).length;
@@ -107,12 +108,8 @@ export const JUDGE_INTERVAL_Z = 1.96;
 /** Wilson score interval for hits of n, as shares 0-1; [0, 1] for n = 0. */
 export function wilsonInterval(hits: number, n: number, z = JUDGE_INTERVAL_Z): { low: number; high: number } {
   if (n <= 0) return { low: 0, high: 1 };
-  const p = hits / n;
-  const z2 = z * z;
-  const centre = p + z2 / (2 * n);
-  const margin = z * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n));
-  const denom = 1 + z2 / n;
-  return { low: Math.max(0, (centre - margin) / denom), high: Math.min(1, (centre + margin) / denom) };
+  const { lower, upper } = wilsonBounds(hits, n, z);
+  return { low: Math.max(0, lower), high: Math.min(1, upper) };
 }
 
 /** The judge's lift over the pool it filters, with its interval - see judgeLift. */
@@ -147,9 +144,9 @@ export function judgeLift(
   return judgeLiftFromCounts(
     {
       buys: buys.length,
-      buyWins: buys.filter((c) => c.labelValue > 0).length,
+      buyWins: buys.filter((c) => isWin(c)).length,
       passes: passes.length,
-      passWins: passes.filter((c) => c.labelValue > 0).length,
+      passWins: passes.filter((c) => isWin(c)).length,
     },
     z,
   );
@@ -353,12 +350,12 @@ const fmtCell = (v: number | null | undefined, fmt: (v: number) => string) =>
  */
 export function buildReflectionBrief(currentPlaybook: string, calls: ReflectionCall[]): string {
   const rank = (c: ReflectionCall) =>
-    c.decision === "buy" && c.labelValue <= 0 ? 0 : c.decision === "no_buy" && c.labelValue > 0 ? 1 : 2;
+    c.decision === "buy" && c.labelValue <= 0 ? 0 : c.decision === "no_buy" && isWin(c) ? 1 : 2;
   const listed = [...calls].sort((a, b) => rank(a) - rank(b)).slice(0, MAX_REFLECTION_CALLS);
   const buys = calls.filter((c) => c.decision === "buy");
   const passes = calls.filter((c) => c.decision === "no_buy");
   const winRate = (cs: ReflectionCall[]) =>
-    cs.length === 0 ? "n/a" : `${Math.round((cs.filter((c) => c.labelValue > 0).length / cs.length) * 100)}%`;
+    cs.length === 0 ? "n/a" : `${Math.round((cs.filter((c) => isWin(c)).length / cs.length) * 100)}%`;
   const goalRate = (cs: ReflectionCall[]) =>
     cs.length === 0
       ? "n/a"
@@ -372,12 +369,11 @@ export function buildReflectionBrief(currentPlaybook: string, calls: ReflectionC
     "outcome",
   ].join(" | ");
   const rows = listed.map((c) => {
-    const outcome =
-      c.labelValue > 0
-        ? `WON peak ${fmtCell(c.peak1hReturnPct, (x) => `+${Math.round(x)}%`)}`
-        : c.stoppedOut
-          ? "STOPPED OUT"
-          : `missed peak ${fmtCell(c.peak1hReturnPct, (x) => `${x >= 0 ? "+" : ""}${Math.round(x)}%`)}`;
+    const outcome = isWin(c)
+      ? `WON peak ${fmtCell(c.peak1hReturnPct, (x) => `+${Math.round(x)}%`)}`
+      : c.stoppedOut
+        ? "STOPPED OUT"
+        : `missed peak ${fmtCell(c.peak1hReturnPct, (x) => `${x >= 0 ? "+" : ""}${Math.round(x)}%`)}`;
     return [
       c.decision,
       fmtCell(c.probability2x, (x) => (x * 100).toFixed(0)),

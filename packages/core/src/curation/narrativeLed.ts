@@ -1,3 +1,4 @@
+import { isWin } from "./labels.js";
 import {
   BOOSTED_MODEL_KIND,
   averageBoosted,
@@ -131,7 +132,7 @@ export async function trainNarrativeLedCurator<R extends BoostingRow & { sampleK
   opts: NarrativeLedTrainOptions,
 ): Promise<Omit<NarrativeLedCuratorParams, "threshold"> | null> {
   const { story: storyNames, safety: safetyNames } = narrativeLedInputs(opts.featureNames);
-  const wins = rows.filter((r) => r.labelValue > 0).length;
+  const wins = rows.filter((r) => isWin(r)).length;
   if (storyNames.length === 0 || safetyNames.length === 0) return null;
   if (rows.length < MIN_STAGE_ROWS || wins < MIN_STAGE_WINS) return null;
   const fit = (subset: R[], featureNames: string[]) =>
@@ -167,7 +168,7 @@ export async function trainNarrativeLedCurator<R extends BoostingRow & { sampleK
     });
     const train = rows.filter((r) => r.tokenId === undefined || !held.has(r.tokenId));
     if (train.length < MIN_STAGE_ROWS || train.length === rows.length) break;
-    if (train.filter((r) => r.labelValue > 0).length < MIN_STAGE_WINS) break;
+    if (train.filter((r) => isWin(r)).length < MIN_STAGE_WINS) break;
     const s = await fit(train, storyNames);
     const f = await fit(train, safetyNames);
     storyFolds.push(s);
