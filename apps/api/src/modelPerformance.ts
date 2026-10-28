@@ -42,7 +42,7 @@ export interface PerfCoverage {
   full: boolean | null;
   /** The read included the X account/post. */
   xRead: boolean | null;
-  /** The curve tape had the coin's last minute of trades. */
+  /** The coin's bonding curve was on the worker's curve tape at the decision (curveCoveredSec). */
   tape: boolean | null;
 }
 
@@ -565,14 +565,20 @@ export function foldModelPerformance(
 
 // ---------- The reads ----------
 
-/** The coverage flags of a features column, as SQL columns (null when the row is gone). */
+/**
+ * The coverage flags of a features column, as SQL columns (null when the row is gone). The tape flag
+ * reads curveCoveredSec, set whenever the curve tape is current for the coin. It used to read
+ * pathRet1mPct, the scan's own one-minute return, which is null on any coin under a minute old
+ * however well its curve is followed: on 10-27/28 it showed 46% of cycle and 18% of fast-path
+ * decisions "on the tape" while the curve tape covered 75% and 82% (thread 2026-10-28).
+ */
 function coverageCols(f: Prisma.Sql): Prisma.Sql {
   return Prisma.sql`
     CASE WHEN ${f} IS NULL THEN NULL
          ELSE COALESCE((${f}->>'nsRead')::float8 = 1, ${f}->>'nsDepthFull' IS NOT NULL) END AS ns_read,
     CASE WHEN ${f} IS NULL THEN NULL ELSE COALESCE((${f}->>'nsDepthFull')::float8 = 1, false) END AS ns_full,
     CASE WHEN ${f} IS NULL THEN NULL ELSE COALESCE((${f}->>'nsXRead')::float8 = 1, false) END AS ns_x,
-    CASE WHEN ${f} IS NULL THEN NULL ELSE ${f}->>'pathRet1mPct' IS NOT NULL END AS tape`;
+    CASE WHEN ${f} IS NULL THEN NULL ELSE ${f}->>'curveCoveredSec' IS NOT NULL END AS tape`;
 }
 
 interface RawCoverage {
