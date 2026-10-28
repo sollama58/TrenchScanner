@@ -9,12 +9,9 @@ import {
   noteSnapshotForBoards,
   recordRunProgress,
   withApiStages,
-  floatArrayParam,
   prisma,
   Prisma,
-  dexInfoMintsToAsk,
   DEX_INFO_RECHECK_MS,
-  nextDexPayment,
   createLogger,
   refreshAndFilterToBand,
   type LaunchQuoteSource,
@@ -26,40 +23,28 @@ import {
   scoreToken,
   refreshScoreWeights,
   runRugScreen,
-  withoutVenueHolder,
-  withChainHolders,
   holdersFromShares,
-  SAFETY_REJECT_TOP10_HOLDER_PCT,
-  SAFETY_MAX_LARGEST_HOLDER_PCT,
-  sniperShareOfTop10,
-  coinWalletRisk,
-  coinWalletWins,
   isWinnerWallet,
   passesLocalRugScreen,
   passesEventPreGate,
   FRESH_ANCHOR_MAX_RATIO,
   type FreshQuote,
   walletChecksKnown,
-  isCurveVenue,
   launchpadFromVenue,
   PUMPFUN_LAUNCHPAD,
   STONKS_LAUNCHPAD,
   withLaunchBags,
   withWindowFlow,
   forEachWithConcurrency,
-  looksLikeSolanaAddress,
   type Env,
   type DexScreenerClient,
   type JupiterClient,
   type PumpFunClient,
   type LiveStream,
   type RugCheckClient,
-  type RugCheckProfile,
-  type PumpLaunchResult,
   type HeliusClient,
   type SolPriceLookup,
   type StreamTapePage,
-  type MintAuthorityResult,
   type OnChainProfile,
   type CexFundedReading,
   type HolderTransfersReading,
@@ -80,7 +65,6 @@ import {
   type PricePathBook,
   parseTextScores,
   EMPTY_TRADE_FLOW,
-  LINKED_TOP_N,
   type NarrativeRead,
   takePumpFunGateStats,
   withApiFeature,
@@ -109,14 +93,13 @@ import { noteHolderReadingWritten, shouldWriteHolderReading } from "./holderList
 import { refreshWatchedHolders, watchedHolderRewriteMs } from "./watchedHolders.js";
 import { recentLookupMints, splitLowCap } from "./lowCap.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
-import { resolveEarliestActivity, computeFreshPct, FRESH_WITHIN_HOURS } from "./walletFreshness.js";
+import { resolveEarliestActivity } from "./walletFreshness.js";
 import { launchBuyerFreshnessFromCache, resolveLaunchBuyerFreshness } from "./launchBuyerFreshness.js";
 import { ownTapesOf, refreshWalletRiskBook, walletRiskLookup, walletRiskScale } from "./walletRiskBook.js";
 import { devLaunchReadings, refreshDevLaunchBook } from "./devLaunchBook.js";
 import { kolLookup, refreshKolWalletBook } from "./kolWalletBook.js";
 import { kolBundledByMint, type KolBundledReading } from "./kolBundled.js";
 import {
-  cachedHolderSolLamports,
   cexReadingOf,
   linkedHoldersOf,
   linkedReadingOf,
@@ -147,7 +130,6 @@ import {
 } from "./liveTape.js";
 import {
   resolveWalletHoldings,
-  computeEmptyPct,
   holdingsLookupBudget,
   type WalletHoldings,
   type WalletHoldingsOptions,
@@ -183,13 +165,12 @@ import {
 } from "./mayhemMode.js";
 import { resolveRelaunchSiblings } from "./relaunchFarms.js";
 import { fillBandMetadata, fillLaunchDetails, takeLaunchDetailStats } from "./launchDetails.js";
-import { fillMissingSocials, recordSocialLinks, takeSocialsFillStats } from "./socialsFill.js";
+import { fillMissingSocials, takeSocialsFillStats } from "./socialsFill.js";
 import {
   launchSnipersFromCache,
   resolveLaunchSnipers,
   blockZeroUnobtainable,
   sniperWalletsFromCache,
-  blockZeroWalletsFromCache,
   takeSniperReadStats,
   type LaunchSnipers,
   type SniperGroup,
@@ -219,6 +200,81 @@ import type { EntryWatch } from "../entryWatch.js";
 import type { EntryFastPath } from "./entryFastPath.js";
 import type { LaunchScreen } from "./launchScreen.js";
 import { cycleClaim, type CycleClaim } from "./scanClaims.js";
+import {
+  secondLookDue,
+  buildOnChainProfile,
+  needsStonksPoolLockRead,
+  provenPumpLaunch,
+  failsHolderConcentration,
+  staleHolderListRereads,
+  FRESH_GRADUATE_RECHECK_MAX,
+  FRESH_GRADUATE_RECHECK_DEADLINE_MS,
+  freshGraduatesOverCut,
+  pumpVenue,
+  withWalletSignals,
+  freshnessGroupsOf,
+  withFreshTopHolders,
+  withHolderTransfers,
+  exTransfersOf,
+  withExTransfers,
+  sameLinked,
+  withLinkedWallets,
+  withHolderKinds,
+  withLiveFlags,
+  type ExTransfersReading,
+} from "./scanSignals.js";
+import {
+  selectWatchlist,
+  newestLaunches,
+  liveLaunchSource,
+  discoverWithin,
+  viewedOutOfBand,
+  movingCoins,
+  saveMovingLaunches,
+  recordCreators,
+  toWatchlistCandidate,
+  stampLiveMarketCaps,
+  reviveMovingMints,
+  recordDexInfoOrders,
+  addNewMintsToWatchlist,
+} from "./scanWatchlist.js";
+// Moved to scanWatchlist.ts; re-exported so importers of this module keep working.
+export {
+  selectWatchlist,
+  newestLaunches,
+  LIVE_LAUNCH_MINUTES,
+  LIVE_LAUNCH_MAX,
+  liveLaunchSource,
+  viewedOutOfBand,
+  saveMovingLaunches,
+  recordCreators,
+  stampLiveMarketCaps,
+  reviveMovingMints,
+  recordDexInfoOrders,
+  addNewMintsToWatchlist,
+} from "./scanWatchlist.js";
+
+// Moved to scanSignals.ts; re-exported so importers of this module keep working.
+export {
+  secondLookDue,
+  buildOnChainProfile,
+  needsStonksPoolLockRead,
+  STALE_HOLDER_LIST_REREADS_PER_CYCLE,
+  staleHolderListRereads,
+  FRESH_GRADUATE_RECHECK_MINUTES,
+  freshGraduatesOverCut,
+  withWalletSignals,
+  freshnessGroupsOf,
+  withFreshTopHolders,
+  kolSignals,
+  withHolderTransfers,
+  exTransfersOf,
+  withExTransfers,
+  withLinkedWallets,
+  withHolderKinds,
+  withLiveFlags,
+  type ExTransfersReading,
+} from "./scanSignals.js";
 
 const logger = createLogger("scan-job");
 
@@ -494,7 +550,7 @@ function startLaunchBuyerFreshness(
 /** How long the cycle waits on the possible-side read behind KOL Bundled %; past it the figure is unknown. */
 const KOL_BUNDLED_BUDGET_MS = 3_000;
 
-async function withinBudget<T>(work: Promise<T>, ms: number): Promise<T | null> {
+export async function withinBudget<T>(work: Promise<T>, ms: number): Promise<T | null> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<null>((resolve) => {
     timer = setTimeout(() => resolve(null), ms);
@@ -1417,7 +1473,7 @@ async function scanCycle(
 
   if (tracked.length === 0) {
     logger.info("scan cycle complete (empty watchlist)", { durationMs: Date.now() - startedAt });
-    scheduleDexInfo(deps.dexScreener);
+    void scheduleDexInfo(deps.dexScreener);
     return { stagesMs, ...earlyExitMeta(env, deps.pumpFun) };
   }
 
@@ -1748,7 +1804,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
     logger.error(`dexscreener refresh failed, aborting ${cycle ? "cycle" : "fast scan"}`, {
       error: String(err),
     });
-    if (cycle) scheduleDexInfo(deps.dexScreener);
+    if (cycle) void scheduleDexInfo(deps.dexScreener);
     return { stopped: "refreshFailed", lowCapHeld: 0 };
   }
   lap("marketRefresh");
@@ -1814,7 +1870,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
 
   if (candidates.length === 0) {
     if (cycle) {
-      scheduleDexInfo(deps.dexScreener);
+      void scheduleDexInfo(deps.dexScreener);
       logger.info("scan cycle complete (nothing in band or actively viewed)", {
         durationMs: Date.now() - startedAt,
         lowCapHeld,
@@ -2936,7 +2992,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
     return { candidates, matchCount, curatedEmitted, settled, rugCheckLookups, lowCapHeld };
   }
   // In-band tokens with DexScreener info, plus this cycle's profile feed. Capped inside.
-  scheduleDexInfo(deps.dexScreener);
+  void scheduleDexInfo(deps.dexScreener);
   markScanVerdictsPopulated();
   // Every in-band token has now been evaluated against these filters: a filter armed before
   // this cycle loaded them has its backlog baselined and alerts from here on. Unless the refresh
@@ -3012,691 +3068,6 @@ function discoveryMeta(pumpFun: Partial<Pick<PumpFunClient, "takeListStats">>): 
  */
 export function scanFailureMeta(): JobRunMeta {
   return lastScreenPassAt > 0 ? { lastScreenPassAt } : {};
-}
-
-/**
- * The mints this cycle will refresh, liveness-prioritized rather than newest-first: Pump.fun
- * launches mints far faster than WATCHLIST_MAX_TRACKED can hold a day of, so a purely
- * newest-first cap spans well under an hour of launches at busy times - which silently evicted
- * exactly the tokens this watchlist exists for, the ones still climbing toward the band an hour
- * or two after launch. Mints that have shown life (DexScreener returned market data for them -
- * see Token.lastLiveAt) keep their full WATCHLIST_TTL_HOURS; never-live mints only get
- * WATCHLIST_PROBATION_MINUTES before they stop costing refresh capacity, since the
- * dead-on-arrival majority never trades at all. The same probation window doubles as the
- * liveness staleness horizon: a mint whose market data stopped coming back that long ago is
- * dead, not climbing.
- */
-/**
- * How long this worker was NOT scanning, beyond one ordinary interval.
- *
- * Read from the scan job's own heartbeat, which the scheduler advances on every run: the gap
- * between the last recorded run and now, minus the interval that gap is supposed to contain.
- * Zero on a first-ever run (no heartbeat yet) and zero whenever the loop is keeping up, so the
- * horizon it widens is unchanged in normal operation.
- */
-async function scanDowntimeMs(env: Env, now: number): Promise<number> {
-  try {
-    const heartbeat = await prisma.systemHeartbeat.findUnique({ where: { job: "scan" } });
-    if (!heartbeat) return 0;
-    const expectedMs = env.SCAN_INTERVAL_MINUTES * 60_000;
-    return Math.max(0, now - heartbeat.lastRunAt.getTime() - expectedMs);
-  } catch (err) {
-    // The horizon is a heuristic, not a correctness boundary - a failed read just means the
-    // ordinary cutoff applies this cycle.
-    logger.warn("could not read scan heartbeat for liveness horizon", { error: String(err) });
-    return 0;
-  }
-}
-
-export async function selectWatchlist(env: Env): Promise<{
-  tracked: {
-    id: string;
-    mintAddress: string;
-    firstSeenAt: Date;
-    launchedAt: Date | null;
-    launchpad: string | null;
-  }[];
-  alive: number;
-  /** The tracked mints of the near-band tier (last seen near the band), for the curve tape. */
-  nearBand: string[];
-}> {
-  const now = Date.now();
-  const ttlCutoff = new Date(now - env.WATCHLIST_TTL_HOURS * 3_600_000);
-  // The liveness horizon is measured in observations, not bare wall-clock.
-  //
-  // `lastLiveAt` is only ever stamped by this cycle, and only for tokens this cycle selected -
-  // so a stale one means "we have not looked recently", which is not the same claim as "it
-  // stopped trading", though the query cannot tell them apart. Any gap longer than
-  // WATCHLIST_PROBATION_MINUTES therefore used to evict the entire established watchlist
-  // PERMANENTLY: after a two-hour outage every previously-alive token matched neither query -
-  // not `alive` (its stamp had aged out) and not `probation` (its stamp is non-null) - and since
-  // only selected tokens are ever refreshed, nothing could ever stamp it again. A token still
-  // trading in-band became unmonitorable forever, and the feed saw only mints discovered after
-  // the restart.
-  //
-  // Extending the cutoff by however long we were actually away costs one cycle of re-probing
-  // and settles by itself: a token still trading gets re-stamped on this pass and rejoins the
-  // normal horizon, one that genuinely died ages out on the next.
-  const downtimeMs = await scanDowntimeMs(env, now);
-  const probationCutoff = new Date(now - env.WATCHLIST_PROBATION_MINUTES * 60_000 - downtimeMs);
-
-  // Probation is selected FIRST, against a reserved share of the cap - see
-  // WATCHLIST_PROBATION_RESERVE_PCT for why giving it only the leftovers starves new launches
-  // outright. Whatever the reserve doesn't use flows back to the alive set, so the cap is never
-  // wasted on slots nothing is waiting for.
-  const probationReserve = Math.floor(
-    (env.WATCHLIST_MAX_TRACKED * env.WATCHLIST_PROBATION_RESERVE_PCT) / 100,
-  );
-  // Only the columns the cycle reads: these are up to WATCHLIST_MAX_TRACKED rows a minute, and a
-  // whole Token row carries the description and every sticky flag.
-  const select = {
-    id: true,
-    mintAddress: true,
-    firstSeenAt: true,
-    launchedAt: true,
-    launchpad: true,
-  } as const;
-  const bandCeiling = scanBand(env.MCAP_FILTER_MIN, env.MCAP_FILTER_MAX).max;
-  // Mayhem coins are set aside for good (Token.ignoredAt; see ignoreMayhemMints).
-  const aliveWhere = { firstSeenAt: { gt: ttlCutoff }, lastLiveAt: { gt: probationCutoff }, ignoredAt: null };
-  // Probation and the near-band tier side by side: near-band's share depends on how many probation
-  // takes, so it is fetched at the full cap and trimmed - a few hundred narrow rows at most.
-  const [probation, nearBandAll] = await Promise.all([
-    prisma.token.findMany({
-      where: { firstSeenAt: { gt: probationCutoff }, lastLiveAt: null, ignoredAt: null },
-      orderBy: { firstSeenAt: "desc" },
-      take: probationReserve,
-      select,
-    }),
-    // The alive set in two tiers. Near-band first: mints last seen between
-    // WATCHLIST_NEAR_BAND_MIN_MCAP_USD and the padded band ceiling are the ones that can become a
-    // match or a curated pick, so they keep their slot for the whole TTL whatever their age. The
-    // launch-level rest fill what's left newest-first, which is how a mint gets its first chance
-    // to climb (and how one whose market cap was never recorded gets stamped).
-    prisma.token.findMany({
-      where: { ...aliveWhere, lastMcapUsd: { gte: env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD, lte: bandCeiling } },
-      orderBy: { firstSeenAt: "desc" },
-      take: env.WATCHLIST_MAX_TRACKED,
-      select,
-    }),
-  ]);
-  const aliveSlots = Math.max(0, env.WATCHLIST_MAX_TRACKED - probation.length);
-  const nearBand = nearBandAll.slice(0, aliveSlots);
-  const rest =
-    aliveSlots > nearBand.length
-      ? await prisma.token.findMany({
-          where: {
-            ...aliveWhere,
-            OR: [
-              { lastMcapUsd: null },
-              { lastMcapUsd: { lt: env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD } },
-              { lastMcapUsd: { gt: bandCeiling } },
-            ],
-          },
-          orderBy: { firstSeenAt: "desc" },
-          take: aliveSlots - nearBand.length,
-          select,
-        })
-      : [];
-  const alive = [...nearBand, ...rest];
-  // The refresh prices mints in this order and drops the tail at its deadline. Launches of the last
-  // few minutes go right after the near-band tier rather than last: most launch runs that double do
-  // it in the first two minutes (2026-10-12: 94 of 135 young runners), and at the back of a full
-  // watchlist they were the batches cut.
-  const freshCutoff = now - FRESH_LAUNCH_MINUTES * 60_000;
-  const fresh = probation.filter((t) => t.firstSeenAt.getTime() > freshCutoff);
-  const older = probation.filter((t) => t.firstSeenAt.getTime() <= freshCutoff);
-  return {
-    tracked: [...nearBand, ...fresh, ...rest, ...older],
-    alive: alive.length,
-    nearBand: nearBand.map((t) => t.mintAddress),
-  };
-}
-
-/** How young a never-priced launch is moved up the refresh order - see selectWatchlist. */
-const FRESH_LAUNCH_MINUTES = 3;
-
-/**
- * The launches of the last FRESH_LAUNCH_MINUTES among the selection, newest first: those
- * DexScreener has not listed yet are asked of GeckoTerminal (see fallbackIfUnlisted, which keeps one
- * batch of them). Exported for tests.
- */
-export function newestLaunches(
-  tracked: { mintAddress: string; firstSeenAt: Date }[],
-  now = Date.now(),
-): string[] {
-  const cutoff = now - FRESH_LAUNCH_MINUTES * 60_000;
-  return tracked
-    .filter((t) => t.firstSeenAt.getTime() > cutoff)
-    .sort((a, b) => b.firstSeenAt.getTime() - a.firstSeenAt.getTime())
-    .map((t) => t.mintAddress);
-}
-
-/** How young a launch is priced live rather than from DexScreener - see liveLaunchSource. */
-export const LIVE_LAUNCH_MINUTES = 10;
-/** The most launches priced live a cycle: four of Jupiter's 100-mint calls. */
-export const LIVE_LAUNCH_MAX = 400;
-
-/**
- * The launches of the last LIVE_LAUNCH_MINUTES among the selection, newest first and at most
- * LIVE_LAUNCH_MAX, with the live source to price them (see refreshAndFilterToBand's liveLaunches):
- * the band refresh reads them at Jupiter's seconds-old price, CoinGecko's where Jupiter can't
- * answer, instead of DexScreener's, which trails a new launch by 30-50 s. Undefined without a
- * live source (no Jupiter key). Exported for tests.
- */
-export function liveLaunchSource(
-  source: LaunchQuoteSource | undefined,
-  tracked: { mintAddress: string; firstSeenAt: Date; launchpad?: string | null }[],
-  now = Date.now(),
-): { source: LaunchQuoteSource; mints: string[] } | undefined {
-  if (!source) return undefined;
-  const cutoff = now - LIVE_LAUNCH_MINUTES * 60_000;
-  const mints = tracked
-    // A Stonks coin at any age: DexScreener never lists its LaunchLab curve, so on the curve only
-    // the live read prices it (sorted after the young launches, by first-seen time like them).
-    .filter((t) => t.firstSeenAt.getTime() > cutoff || t.launchpad === STONKS_LAUNCHPAD)
-    .sort((a, b) => b.firstSeenAt.getTime() - a.firstSeenAt.getTime())
-    .slice(0, LIVE_LAUNCH_MAX)
-    .map((t) => t.mintAddress);
-  return mints.length > 0 ? { source, mints } : undefined;
-}
-
-/** How long a cycle waits on any one discovery source - see discoverWithin. */
-const DISCOVERY_BUDGET_MS = 4_000;
-
-/**
- * `work`'s result if it lands within DISCOVERY_BUDGET_MS, else `fallback` - and `late` is handed
- * the result whenever it does land, to record it for the next cycle. `work` must not reject.
- */
-async function discoverWithin<T>(
-  source: string,
-  work: Promise<T>,
-  fallback: T,
-  late: (value: T) => Promise<unknown>,
-): Promise<T> {
-  const result = await withinBudget(
-    work.then((value) => ({ value })),
-    DISCOVERY_BUDGET_MS,
-  );
-  if (result) return result.value;
-  logger.warn("discovery source over budget - its mints join the watchlist when it answers", { source });
-  void work
-    .then(late)
-    .catch((err: unknown) =>
-      logger.warn("late discovery results failed to save", { source, error: String(err) }),
-    );
-  return fallback;
-}
-
-/**
- * The actively-viewed tokens' market data the cycle scans on top of the band: each one from the
- * watchlist refresh's answer when the refresh priced it, else from the separate viewed lookup,
- * in the order they were viewed, minus the mints already in band. Exported for tests.
- */
-export function viewedOutOfBand(
-  activelyViewed: { mintAddress: string }[],
-  refreshed: CandidateToken[],
-  lookedUp: CandidateToken[],
-  alreadyCovered: Set<string>,
-): CandidateToken[] {
-  const byMint = new Map<string, CandidateToken>();
-  for (const c of lookedUp) byMint.set(c.mintAddress, c);
-  for (const c of refreshed) byMint.set(c.mintAddress, c);
-  return activelyViewed.flatMap((t) => {
-    const c = byMint.get(t.mintAddress);
-    return c && !alreadyCovered.has(t.mintAddress) ? [c] : [];
-  });
-}
-
-/** The coins Pump.fun gave a market cap for, as reviveMovingMints takes them. */
-function movingCoins(coins: DiscoveredCoin[]): { mintAddress: string; marketCapUsd: number }[] {
-  return coins.flatMap((c) =>
-    c.marketCapUsd !== undefined ? [{ mintAddress: c.mintAddress, marketCapUsd: c.marketCapUsd }] : [],
-  );
-}
-
-/** Launches younger than this found on Jupiter's lists get the one-coin details read (launchDetails). */
-const JUPITER_DETAILS_MAX_AGE_MS = 60 * 60_000;
-
-/**
- * Jupiter's moving Pump.fun coins (JupiterClient.discoverMovingLaunches) onto the watchlist and
- * back in front of the scan. Jupiter's lists carry no description or socials, so the row records
- * neither (unknown, not "none"); a young launch has them read one coin at a time behind the cycle,
- * as a streamed launch does.
- */
-export async function saveMovingLaunches(
-  coins: DiscoveredCoin[],
-  pumpFun: Pick<PumpFunClient, "coinDetails">,
-  env: Env,
-): Promise<void> {
-  if (coins.length === 0) return;
-  await addNewMintsToWatchlist(
-    coins.map((c) => ({
-      mintAddress: c.mintAddress,
-      symbol: c.symbol,
-      name: c.name,
-      imageUrl: c.imageUrl,
-      createdAt: c.createdAt,
-      discoverySource: "jupiter",
-      launchpad: c.launchpad,
-    })),
-  );
-  rememberLaunchTimes(coins);
-  await reviveMovingMints(movingCoins(coins), env);
-  const youngSince = Date.now() - JUPITER_DETAILS_MAX_AGE_MS;
-  // Pump.fun's details answer for its own coins alone.
-  const young = coins.filter(
-    (c) =>
-      c.createdAt &&
-      c.createdAt.getTime() >= youngSince &&
-      (c.launchpad ?? PUMPFUN_LAUNCHPAD) === PUMPFUN_LAUNCHPAD,
-  );
-  if (young.length > 0) {
-    void fillLaunchDetails(
-      young.map((c) => ({
-        kind: "create" as const,
-        mintAddress: c.mintAddress,
-        symbol: c.symbol,
-        name: c.name,
-        at: c.createdAt!,
-      })),
-      pumpFun,
-      async (found) => {
-        await addNewMintsToWatchlist(found.map((c) => toWatchlistCandidate(c, "jupiter")));
-        await ignoreMayhemMints(found.filter((c) => c.mayhemMode).map((c) => c.mintAddress));
-      },
-    ).catch((err: unknown) => logger.warn("launch details failed to save", { error: String(err) }));
-  }
-}
-
-/**
- * Token.creator for the mints given that have none yet: one read for the rows still without one,
- * a write per hit, so it settles to zero writes once every such mint has one. Never overwrites:
- * the first source to name the launcher wins, and they all name the same wallet.
- */
-export async function recordCreators(
-  pairs: Iterable<readonly [mint: string, creator: string]>,
-): Promise<void> {
-  const byMint = new Map<string, string>();
-  for (const [mint, creator] of pairs) if (looksLikeSolanaAddress(creator)) byMint.set(mint, creator);
-  if (byMint.size === 0) return;
-  await prisma.token
-    .findMany({
-      where: { mintAddress: { in: [...byMint.keys()] }, creator: null },
-      select: { mintAddress: true },
-    })
-    .then((rows) =>
-      Promise.all(
-        rows.map((row) =>
-          prisma.token.updateMany({
-            where: { mintAddress: row.mintAddress, creator: null },
-            data: { creator: byMint.get(row.mintAddress) },
-          }),
-        ),
-      ),
-    )
-    .catch((err) => logger.warn("failed to record creators", { error: String(err) }));
-}
-
-function toWatchlistCandidate(coin: DiscoveredCoin, discoverySource: string): WatchlistCandidate {
-  return {
-    mintAddress: coin.mintAddress,
-    symbol: coin.symbol,
-    name: coin.name,
-    imageUrl: coin.imageUrl,
-    createdAt: coin.createdAt,
-    hasTwitter: coin.hasTwitter,
-    hasTelegram: coin.hasTelegram,
-    hasWebsite: coin.hasWebsite,
-    twitterUrl: coin.twitterUrl,
-    telegramUrl: coin.telegramUrl,
-    websiteUrl: coin.websiteUrl,
-    // Kept even when empty: on a Pump.fun launch an empty description is a known "none", which
-    // the hasDescription feature distinguishes from "this source never had one".
-    description: coin.description ?? "",
-    discoverySource,
-    // Pump.fun's own lists and PumpPortal carry Pump.fun coins alone.
-    launchpad: coin.launchpad ?? PUMPFUN_LAUNCHPAD,
-    creator: coin.creator,
-  };
-}
-
-/** How often a live mint's lastLiveAt/lastMcapUsd is rewritten - see liveStampDue. */
-const LIVE_STAMP_THROTTLE_SECONDS = 120;
-
-/**
- * Whether a live mint's stamp is worth rewriting: the WHERE condition stampLiveMarketCaps and
- * reviveMovingMints share, for an `UPDATE "Token" AS t ... FROM ... AS v(mint, mcap)`.
- *
- * One stamp every couple of minutes is plenty for the liveness horizon (two hours) and the
- * near-band tier; stamping every live mint every cycle rewrote ~900 Token rows a cycle, and twice
- * that at a 30-second cadence. A mint whose cap crossed in or out of the near-band tier is stamped
- * at once, since tier membership is what selection uses. The throttle is held under half the
- * probation window - the alive cutoff selectWatchlist reads lastLiveAt against - so a stamp
- * skipped here can never be the one that lets a live mint age out of selection.
- */
-function liveStampDue(env: Env): Prisma.Sql {
-  // The near-band tier selectWatchlist ranks on.
-  const tierMin = env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD;
-  const tierMax = scanBand(env.MCAP_FILTER_MIN, env.MCAP_FILTER_MAX).max;
-  const throttleSeconds = Math.min(LIVE_STAMP_THROTTLE_SECONDS, (env.WATCHLIST_PROBATION_MINUTES * 60) / 2);
-  return Prisma.sql`(
-        t."lastLiveAt" IS NULL
-        OR t."lastLiveAt" < now() - ${throttleSeconds}::float8 * interval '1 second'
-        OR (t."lastMcapUsd" BETWEEN ${tierMin}::float8 AND ${tierMax}::float8)
-          IS DISTINCT FROM (v.mcap BETWEEN ${tierMin}::float8 AND ${tierMax}::float8)
-      )`;
-}
-
-/**
- * Stamps lastLiveAt and lastMcapUsd - what the liveness-prioritized selection in selectWatchlist
- * runs on - for the mints the refresh found market data for. One statement for the whole batch;
- * the values differ per row, so updateMany can't. Never worth failing a cycle over: a missed
- * stamp just costs a mint one cycle of priority. Exported for tests.
- */
-export async function stampLiveMarketCaps(
-  liveMarketCaps: { mintAddress: string; marketCapUsd: number }[],
-  env: Env,
-): Promise<void> {
-  if (liveMarketCaps.length === 0) return;
-  const mints = liveMarketCaps.map((m) => m.mintAddress);
-  const mcaps = floatArrayParam(liveMarketCaps.map((m) => m.marketCapUsd));
-  await prisma.$executeRaw`
-    UPDATE "Token" AS t
-    SET "lastLiveAt" = now(), "lastMcapUsd" = v.mcap
-    FROM unnest(${mints}::text[], ${mcaps}::text::float8[]) AS v(mint, mcap)
-    WHERE t."mintAddress" = v.mint
-      AND ${liveStampDue(env)}`.catch((err) =>
-    logger.warn("failed to stamp lastLiveAt", { error: String(err) }),
-  );
-}
-
-/**
- * Puts mints that are moving right now back at the front of the watchlist, whatever their age:
- * stamps lastLiveAt (so they count as alive) and lastMcapUsd (what the near-band tier of
- * selectWatchlist ranks on) for those already known. Only mints at or above the near-band floor
- * are worth a slot - below it they'd be stamped into the launch-level tier and change nothing.
- * Mints not yet in the table are left to addNewMintsToWatchlist, and ones stamped moments ago
- * are left alone (see liveStampDue). Returns how many rows changed.
- */
-export async function reviveMovingMints(
-  moving: { mintAddress: string; marketCapUsd: number }[],
-  env: Env,
-): Promise<number> {
-  const byMint = new Map<string, number>();
-  for (const m of moving) {
-    if (!Number.isFinite(m.marketCapUsd) || m.marketCapUsd < env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD) continue;
-    byMint.set(m.mintAddress, Math.max(byMint.get(m.mintAddress) ?? 0, m.marketCapUsd));
-  }
-  if (byMint.size === 0) return 0;
-  const mints = [...byMint.keys()];
-  const mcaps = floatArrayParam([...byMint.values()]);
-  return prisma.$executeRaw`
-    UPDATE "Token" AS t
-    SET "lastLiveAt" = now(), "lastMcapUsd" = v.mcap
-    FROM unnest(${mints}::text[], ${mcaps}::text::float8[]) AS v(mint, mcap)
-    WHERE t."mintAddress" = v.mint
-      -- The same throttle as the refresh's stamp: the ~110 recently-traded coins were rewritten
-      -- every cycle whether or not anything selection reads had changed. A row stamped within the
-      -- window is already alive for selectWatchlist, and a cap that moved it into the near-band
-      -- tier is still written at once - which is the whole of what a revival is for.
-      AND ${liveStampDue(env)}`.catch((err) => {
-    logger.warn("failed to revive moving mints", { error: String(err) });
-    return 0;
-  });
-}
-
-/**
- * Ask DexScreener's orders endpoint for token-info payments (user ask 2026-10-21) and store the
- * time it returns. Only mints on this cycle's token-profile feed or the community-takeover feed,
- * and only ones already on the watchlist. A failed lookup is left unchecked so the next cycle
- * retries it. An answer with no token-info payment is checked, and does not invent a time.
- * A pair info block with no orders time still shows the label, without a chart bubble.
- */
-export async function recordDexInfoOrders(
-  dex: Pick<DexScreenerClient, "readTokenInfoOrders"> &
-    Partial<Pick<DexScreenerClient, "communityTakeoverMints">>,
-  profileMints: readonly string[],
-): Promise<number> {
-  const takeovers = dex.communityTakeoverMints ? await dex.communityTakeoverMints().catch(() => []) : [];
-  const priority = [...new Set([...profileMints, ...takeovers])].slice(0, 200);
-  if (priority.length === 0) return 0;
-  // Only mints already on the watchlist. No table-wide scan: a token whose pair has an info
-  // block but which is not on these feeds still shows the label, without a payment time.
-  const known = await prisma.token.findMany({
-    where: { mintAddress: { in: priority } },
-    select: { mintAddress: true, dexInfoCheckedAt: true },
-  });
-  const have = new Set(known.map((row) => row.mintAddress));
-  // Cap after dropping mints that are not on the watchlist, so a few unknown addresses
-  // cannot crowd out the ones we can store.
-  const ask = dexInfoMintsToAsk(
-    priority.filter((mint) => have.has(mint)),
-    known,
-    [],
-    Date.now(),
-  );
-  if (ask.length === 0) return 0;
-  const reads = await dex.readTokenInfoOrders(ask);
-  const byRead = new Map(reads.map((row) => [row.mint, row]));
-  const rows = await prisma.token.findMany({
-    where: { mintAddress: { in: ask } },
-    select: { mintAddress: true, dexInfoPaidAt: true, dexInfoUpdated: true },
-  });
-  const now = new Date();
-  let wrote = 0;
-  for (const row of rows) {
-    const read = byRead.get(row.mintAddress);
-    if (!read) continue;
-    // A mint the orders call did not answer is not in `reads`. A missing update is not a newer
-    // payment. An answer replaces the stored time, including when the newest order was cancelled
-    // and an older payment (or none) is what still counts.
-    const next = nextDexPayment(read.payment);
-    if (!next) continue;
-    await prisma.token.update({
-      where: { mintAddress: row.mintAddress },
-      data: {
-        dexInfoCheckedAt: now,
-        ...(next.paidAtMs == null
-          ? { dexInfoPaidAt: null, dexInfoUpdated: false }
-          : {
-              dexInfo: true,
-              dexInfoPaidAt: new Date(next.paidAtMs),
-              dexInfoUpdated: next.updated,
-            }),
-      },
-    });
-    wrote += 1;
-  }
-  return wrote;
-}
-
-/**
- * Bulk-inserts any not-yet-seen mints as bare watchlist entries. Existing rows are left
- * untouched. Deduped by mint first (rather than relying solely on skipDuplicates against the DB)
- * since the same mint can legitimately show up from both discovery sources in the same cycle.
- *
- * Also the one place every discovered mint address is validated before it ever enters our
- * pipeline - Pump.fun's unofficial API and DexScreener's discovery endpoints are the least
- * trusted inputs in the system, and everything downstream (RugCheck/Helius/DexScreener lookups,
- * Token.mintAddress) assumes it's dealing with a real address from here on.
- */
-export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): Promise<void> {
-  if (discovered.length === 0) return;
-  // The first source to report a mint is the one recorded (sources are listed newest-launch
-  // first in runScanCycle); a boost flag from any of them sticks.
-  const uniqueByMint = new Map<string, WatchlistCandidate>();
-  for (const c of discovered) {
-    const first = uniqueByMint.get(c.mintAddress);
-    uniqueByMint.set(
-      c.mintAddress,
-      first
-        ? {
-            ...first,
-            boosted: first.boosted || c.boosted,
-            launchpad: first.launchpad ?? c.launchpad,
-            creator: first.creator ?? c.creator,
-          }
-        : c,
-    );
-  }
-
-  const valid: WatchlistCandidate[] = [];
-  let dropped = 0;
-  for (const coin of uniqueByMint.values()) {
-    if (looksLikeSolanaAddress(coin.mintAddress)) {
-      valid.push(coin);
-    } else {
-      dropped += 1;
-    }
-  }
-  if (dropped > 0) {
-    logger.warn("dropped malformed mint addresses from discovery feeds", { count: dropped });
-  }
-  if (valid.length === 0) return;
-
-  await prisma.token.createMany({
-    data: valid.map((coin) => ({
-      mintAddress: coin.mintAddress,
-      symbol: coin.symbol,
-      name: coin.name,
-      imageUrl: coin.imageUrl,
-      firstSeenAt: coin.createdAt ?? new Date(),
-      launchedAt: coin.createdAt,
-      // Null until a source that carries the socials has read them; a stream, Jupiter or
-      // DexScreener-list row stored false here until 2026-10-16 (data audit, user decision).
-      hasTwitter: coin.hasTwitter,
-      hasTelegram: coin.hasTelegram ?? false,
-      hasWebsite: coin.hasWebsite,
-      twitterUrl: coin.twitterUrl,
-      telegramUrl: coin.telegramUrl,
-      websiteUrl: coin.websiteUrl,
-      description: coin.description?.slice(0, 2_000),
-      discoverySource: coin.discoverySource,
-      dexBoosted: coin.boosted ?? false,
-      dexInfo: coin.dexInfo ?? false,
-      launchpad: coin.launchpad,
-      creator: coin.creator,
-    })),
-    skipDuplicates: true,
-  });
-
-  // The creator for mints already on the table that a source names now (a coin first found on
-  // DexScreener's feeds or Jupiter, or a row from before the column).
-  await recordCreators(valid.flatMap((c) => (c.creator ? [[c.mintAddress, c.creator] as const] : [])));
-
-  // The launchpad for mints already on the table that a source names now (a coin first found on
-  // DexScreener's feeds, which never say). Settles to zero rows once every such mint has one.
-  const byLaunchpad = new Map<string, string[]>();
-  for (const c of valid) {
-    if (c.launchpad) byLaunchpad.set(c.launchpad, [...(byLaunchpad.get(c.launchpad) ?? []), c.mintAddress]);
-  }
-  for (const [launchpad, mints] of byLaunchpad) {
-    await prisma.token
-      .updateMany({ where: { mintAddress: { in: mints }, launchpad: null }, data: { launchpad } })
-      .catch((err) => logger.warn("failed to record launchpads", { error: String(err) }));
-  }
-
-  // The launch time for mints already on the table that a launch source names now (a coin first
-  // found on DexScreener's feeds, or a row from before the column): one read for the rows still
-  // without one, a write per hit. Settles to zero rows once every such mint has one.
-  const launchedByMint = new Map(
-    valid.flatMap((c) =>
-      c.createdAt && !Number.isNaN(c.createdAt.getTime()) ? [[c.mintAddress, c.createdAt] as const] : [],
-    ),
-  );
-  if (launchedByMint.size > 0) {
-    await prisma.token
-      .findMany({
-        where: { mintAddress: { in: [...launchedByMint.keys()] }, launchedAt: null },
-        select: { mintAddress: true },
-      })
-      .then((rows) =>
-        Promise.all(
-          rows.map((row) =>
-            prisma.token.updateMany({
-              where: { mintAddress: row.mintAddress, launchedAt: null },
-              data: { launchedAt: launchedByMint.get(row.mintAddress) },
-            }),
-          ),
-        ),
-      )
-      .catch((err) => logger.warn("failed to record launch times", { error: String(err) }));
-  }
-
-  // Sticky token-info flag for mints already on the table. A profile paid after discovery is
-  // still token info. Settles to zero rows once every such mint is marked.
-  const withInfo = valid.filter((c) => c.dexInfo).map((c) => c.mintAddress);
-  if (withInfo.length > 0) {
-    await prisma.token
-      .updateMany({ where: { mintAddress: { in: withInfo }, dexInfo: false }, data: { dexInfo: true } })
-      .catch((err) => logger.warn("failed to mark dexscreener token info", { error: String(err) }));
-  }
-
-  // Sticky boost flag for mints already on the table - a paid boost bought after discovery is
-  // still a boost. Settles to zero rows once every boosted mint is marked.
-  const boosted = valid.filter((c) => c.boosted).map((c) => c.mintAddress);
-  if (boosted.length > 0) {
-    await prisma.token
-      .updateMany({ where: { mintAddress: { in: boosted }, dexBoosted: false }, data: { dexBoosted: true } })
-      .catch((err) => logger.warn("failed to mark boosted mints", { error: String(err) }));
-  }
-
-  // createMany with skipDuplicates leaves existing rows alone, so every token discovered before
-  // images existed would keep a null one forever. Backfilling here costs nothing - the URL is
-  // already in hand from a response we just fetched - and touches only the rows still missing it,
-  // so it settles to zero writes rather than rewriting the watchlist every cycle.
-  const backfill = valid.filter((coin) => coin.imageUrl);
-  if (backfill.length > 0) {
-    const missing = await prisma.token.findMany({
-      where: { mintAddress: { in: backfill.map((c) => c.mintAddress) }, imageUrl: null },
-      select: { id: true, mintAddress: true },
-    });
-    const urlByMint = new Map(backfill.map((c) => [c.mintAddress, c.imageUrl!]));
-    await forEachWithConcurrency(missing, 4, async (token) => {
-      await prisma.token
-        .update({ where: { id: token.id }, data: { imageUrl: urlByMint.get(token.mintAddress) } })
-        .catch(() => undefined);
-    });
-    if (missing.length > 0) logger.info("backfilled token images", { count: missing.length });
-  }
-
-  // A launch the stream reported first has a row with no description or socials; when a source
-  // that has them reports it (the coin list a cycle later, or launchDetails' one-coin read), they
-  // are filled in. Touches only rows whose description was never recorded, so it settles to zero.
-  const detailBackfill = valid.filter((coin) => coin.description !== undefined);
-  if (detailBackfill.length > 0) {
-    const bare = await prisma.token.findMany({
-      where: { mintAddress: { in: detailBackfill.map((c) => c.mintAddress) }, description: null },
-      select: { id: true, mintAddress: true, hasTwitter: true, hasTelegram: true, hasWebsite: true },
-    });
-    const byMint = new Map(detailBackfill.map((c) => [c.mintAddress, c]));
-    await forEachWithConcurrency(bare, 4, async (token) => {
-      const coin = byMint.get(token.mintAddress);
-      if (!coin) return;
-      await prisma.token
-        .update({
-          where: { id: token.id },
-          data: {
-            description: (coin.description ?? "").slice(0, 2_000),
-            // A link already recorded stays; otherwise the detail source's own reading, which may
-            // be a known "none" (false) on a row that was null, or nothing (left as it was).
-            hasTwitter: token.hasTwitter || coin.hasTwitter,
-            hasTelegram: token.hasTelegram || (coin.hasTelegram ?? false),
-            hasWebsite: token.hasWebsite || coin.hasWebsite,
-            // The links and image are filled by the backfills below, on rows still missing them.
-          },
-        })
-        .catch(() => undefined);
-    });
-    if (bare.length > 0) logger.info("filled in launch details", { count: bare.length });
-  }
-
-  // The links themselves, on rows still missing each one: a mint discovered bare, or before the
-  // columns, picks them up the next time a source reports them (socialsFill.ts).
-  await recordSocialLinks(valid).catch((err: unknown) =>
-    logger.warn("failed to record social links", { error: String(err) }),
-  );
 }
 
 /**
@@ -4524,682 +3895,6 @@ async function processCandidate(
   }
 
   return matchCount;
-}
-
-/**
- * Whether a token that looks ready but has no fresh decision moment is due the Narrative seat's
- * second look: TokenSage's deep read is stored and newer than the token's last decision row (so
- * that row was decided without it, or there was none), and the read is dated.
- *
- * "Newer" is by our own clock on both sides: the moment we stored the read (checkedAt) against
- * the moment we anchored the decision. TokenSage's analyzedAt is its clock, not ours - a read it
- * finished a minute before our decision but delivered a minute after would never look newer,
- * and a skewed clock there would make every read look newer. It is only the fallback for a read
- * carried without its store time.
- */
-export function secondLookDue(
-  scored: Pick<ScoredToken, "narrative">,
-  prior: Pick<CandidatePrior, "lastDecisionAt">,
-): boolean {
-  const read = scored.narrative;
-  if (!read || read.depth !== "full" || !read.analyzedAt) return false;
-  const storedAt = read.checkedAt ?? read.analyzedAt;
-  return prior.lastDecisionAt === undefined || storedAt > prior.lastDecisionAt;
-}
-
-/**
- * Prefers RugCheck's full risk profile. Falls back to what the chain answers when RugCheck has
- * no report (not indexed yet, or RugCheck down): mint/freeze authority and, when it was read, the
- * top-10 holders (onChainHolders.ts). A failed authority lookup yields null rather than a
- * fabricated profile - "we couldn't check" must not read as "nothing is active".
- *
- * What the fallback says about liquidity depends on the venue. A mint still on its Pump.fun
- * bonding curve (DexScreener dexId "pumpfun") has no pool to pull: the curve is a program
- * account nobody holds LP for. A mint that graduated to PumpSwap ("pumpswap") trades in the pool
- * Pump.fun's migration created, whose liquidity is locked by the protocol - the same market
- * RugCheck's LP check reads for a Pump.fun token (rugcheck.ts, PUMP_MARKET_TYPES). Any other pool
- * is a real rug vector, so its LP stays unverified (lpBurned: false, failing closed) until RugCheck
- * reports it. With the holder list in, the concentration cut and the wallet checks run as on a
- * RugCheck profile, so curated calls (CURATED_REQUIRE_WALLET_CHECKS) no longer wait for RugCheck;
- * the creator, holder count and risk score stay unknown.
- *
- * A coin proven on chain to be a Pump.fun launch (pumpLaunches, see core's pumpLaunch.ts) has its
- * LP locked and its authorities revoked whatever either source says: its venue is its curve and
- * the PumpSwap pool its migration created, and the proof read both authorities gone. That pool is
- * also no holder - RugCheck can miss it, as it did for a curve quoted in another Pump.fun coin.
- *
- * A chain reading in `onChainHolders` for a coin RugCheck has a report for replaces the report's
- * holder figures (core's withChainHolders): the screen's holder cuts read who holds the coin now.
- *
- * A Stonks coin in `stonksPoolLocks` had its Raydium pool's LP read burned or locked on chain
- * (stonksPoolLock.ts), the reading RugCheck has none of for a pool it doesn't list.
- */
-export function buildOnChainProfile(
-  candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress" | "launchpad">,
-  rugProfiles: Map<string, RugCheckProfile>,
-  mintAuthorities: Map<string, MintAuthorityResult>,
-  onChainHolders: Map<string, OnChainHolders> = new Map(),
-  pumpLaunches: Map<string, PumpLaunchResult> = new Map(),
-  stonksPoolLocks: ReadonlySet<string> = new Set(),
-): OnChainProfile | null {
-  const launch = provenPumpLaunch(pumpLaunches, candidate.mintAddress);
-  const sourced = profileFromSources(
-    candidate,
-    rugProfiles,
-    mintAuthorities,
-    onChainHolders,
-    launch !== null,
-  );
-  const profile =
-    sourced && stonksPoolLocks.has(candidate.mintAddress) ? { ...sourced, lpBurned: true } : sourced;
-  if (!profile || !launch) return profile;
-  const withoutPool =
-    "topHolderShares" in profile ? withoutVenueHolder(profile as RugCheckProfile, launch.pool) : profile;
-  return { ...withoutPool, lpBurned: true, mintAuthorityActive: false, freezeAuthorityActive: false };
-}
-
-/**
- * Whether a candidate's pool LP is read from the chain (stonksPoolLock.ts): a Stonks coin
- * graduated onto Raydium whose RugCheck report lists none of its LaunchLab markets, or that has no
- * report. With a LaunchLab market listed, RugCheck's reading of it stands. Exported for tests.
- */
-export function needsStonksPoolLockRead(
-  candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress" | "launchpad">,
-  rugProfiles: Map<string, RugCheckProfile>,
-): boolean {
-  if (candidate.launchpad !== STONKS_LAUNCHPAD || candidate.dexId !== "raydium" || !candidate.pairAddress)
-    return false;
-  const report = rugProfiles.get(candidate.mintAddress);
-  return !report || (report.launchLabLpBurned === undefined && !report.lpBurned);
-}
-
-/** The proven Pump.fun launch behind `mintAddress`, or null when there is no proof. */
-function provenPumpLaunch(pumpLaunches: Map<string, PumpLaunchResult>, mintAddress: string) {
-  const result = pumpLaunches.get(mintAddress);
-  return result?.status === "found" ? result.launch : null;
-}
-
-function profileFromSources(
-  candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress" | "launchpad">,
-  rugProfiles: Map<string, RugCheckProfile>,
-  mintAuthorities: Map<string, MintAuthorityResult>,
-  onChainHolders: Map<string, OnChainHolders>,
-  provenPump: boolean,
-): OnChainProfile | null {
-  // isMayhemMode is deliberately left unset here and filled in later for the candidates that
-  // earn a lookup (see the two-pass assembly in runScanCycle). Unset means unverified, which the
-  // rug screen rejects - so a candidate that never gets checked is never accidentally admitted.
-  const { mintAddress } = candidate;
-  const rugProfile = rugProfiles.get(mintAddress);
-  if (rugProfile) {
-    // The chain's holders over RugCheck's list where they were read: RugCheck can serve a list
-    // for hours after its holders sold (withChainHolders). Else the coin's own pool out of the
-    // holder list, for a report written before RugCheck listed it.
-    const venueless = withoutVenueHolder(
-      withChainHolders(rugProfile, onChainHolders.get(mintAddress)),
-      candidate.pairAddress,
-    );
-    // A Stonks coin's LP is judged on its LaunchLab markets alone, as a Pump.fun coin's is on its
-    // own (rugcheck.ts launchLabLpBurned): side pools others open aren't its holders' exit.
-    const profile =
-      candidate.launchpad === STONKS_LAUNCHPAD && rugProfile.launchLabLpBurned !== undefined
-        ? { ...venueless, lpBurned: rugProfile.launchLabLpBurned }
-        : venueless;
-    // A report listing no market at all hasn't read the LP: a Pump.fun venue's is locked by the
-    // protocol, the same answer the chain fallback gives below. It used to read "LP not burned",
-    // so the coin also never earned its Mayhem and pre-bond reads (audit 2026-10-14, L2 H2).
-    return rugProfile.marketsListed === false && pumpVenue(candidate.dexId)
-      ? { ...profile, lpBurned: true }
-      : profile;
-  }
-
-  // A proven launch's proof read the authorities itself (buildOnChainProfile applies it), so it
-  // doesn't need this lookup to have answered.
-  const authorities = mintAuthorities.get(mintAddress);
-  const read = authorities?.status === "found" ? authorities : undefined;
-  if (!read && !provenPump) return null;
-
-  const holders = onChainHolders.get(mintAddress);
-  return {
-    mintAddress,
-    mintAuthorityActive: read?.mintAuthorityActive ?? false,
-    freezeAuthorityActive: read?.freezeAuthorityActive ?? false,
-    lpBurned: pumpVenue(candidate.dexId),
-    ...(holders
-      ? {
-          top10HolderPct: holders.top10HolderPct,
-          largestHolderPct: holders.largestHolderPct,
-          top10HolderAddresses: holders.top10HolderAddresses,
-        }
-      : {}),
-  };
-}
-
-/** Whether the profile's holder figures fail the screen's top-10 or largest-holder cut. */
-function failsHolderConcentration(profile: OnChainProfile | null): boolean {
-  return (
-    (typeof profile?.top10HolderPct === "number" &&
-      profile.top10HolderPct >= SAFETY_REJECT_TOP10_HOLDER_PCT) ||
-    (typeof profile?.largestHolderPct === "number" &&
-      profile.largestHolderPct > SAFETY_MAX_LARGEST_HOLDER_PCT)
-  );
-}
-
-/** Most failing top-25 lists re-read ahead of their cadence in one cycle (staleHolderListRereads). */
-export const STALE_HOLDER_LIST_REREADS_PER_CYCLE = 10;
-
-/**
- * The candidates whose chain top-25 list fails a holder cut (`failsCut`) and was enumerated at least
- * the holder-cut recheck's TTL ago (`ttlMinutesOf`: a minute for a young coin failing, the RugCheck
- * TTL otherwise, 15 minutes past its first hour), oldest list first, at most
- * STALE_HOLDER_LIST_REREADS_PER_CYCLE. A coin the trade stream says has not traded since its list
- * was read keeps it: no holder's balance moved. Exported for tests.
- */
-export function staleHolderListRereads<C extends Pick<CandidateToken, "mintAddress">>(
-  candidates: readonly C[],
-  failsCut: (candidate: C) => boolean,
-  readAtOf: (mintAddress: string) => number | undefined,
-  ttlMinutesOf: (mintAddress: string) => number,
-  quietSince?: (mintAddress: string, sinceMs: number) => boolean,
-  now = Date.now(),
-  max = STALE_HOLDER_LIST_REREADS_PER_CYCLE,
-): string[] {
-  return candidates
-    .flatMap((c) => {
-      const readAt = readAtOf(c.mintAddress);
-      if (readAt === undefined || now - readAt < ttlMinutesOf(c.mintAddress) * 60_000) return [];
-      if (quietSince?.(c.mintAddress, readAt) || !failsCut(c)) return [];
-      return [{ mint: c.mintAddress, readAt }];
-    })
-    .sort((a, b) => a.readAt - b.readAt)
-    .slice(0, Math.max(0, max))
-    .map((c) => c.mint);
-}
-
-/** How long after graduating a coin over the concentration cut is re-read every minute. */
-export const FRESH_GRADUATE_RECHECK_MINUTES = 5;
-/** Most such re-reads per cycle, and how long the cycle waits on them. */
-const FRESH_GRADUATE_RECHECK_MAX = 20;
-const FRESH_GRADUATE_RECHECK_DEADLINE_MS = 5_000;
-
-/**
- * Graduated in the last FRESH_GRADUATE_RECHECK_MINUTES, with a RugCheck report (its own pool left
- * out) whose top ten, or largest holder, are over the safety screen's concentration cuts. Exported for tests.
- */
-export function freshGraduatesOverCut(
-  candidates: Pick<CandidateToken, "mintAddress" | "pairAddress" | "graduatedAt">[],
-  rugProfiles: Map<string, RugCheckProfile>,
-  now = Date.now(),
-): string[] {
-  return candidates
-    .filter((c) => {
-      if (!c.graduatedAt || now - c.graduatedAt.getTime() > FRESH_GRADUATE_RECHECK_MINUTES * 60_000)
-        return false;
-      const profile = rugProfiles.get(c.mintAddress);
-      if (!profile) return false;
-      const { top10HolderPct: top10, largestHolderPct: largest } = withoutVenueHolder(profile, c.pairAddress);
-      return (
-        (typeof top10 === "number" && top10 >= SAFETY_REJECT_TOP10_HOLDER_PCT) ||
-        (typeof largest === "number" && largest > SAFETY_MAX_LARGEST_HOLDER_PCT)
-      );
-    })
-    .map((c) => c.mintAddress);
-}
-
-/**
- * A launchpad's bonding curve (Pump.fun's, or Stonks' LaunchLab curve) or the PumpSwap pool a
- * Pump.fun coin graduates into: liquidity nobody can pull. A Stonks coin's Raydium pool is not
- * assumed locked: its LP is RugCheck's to report, or the chain's (stonksPoolLock.ts).
- */
-function pumpVenue(dexId: string | undefined): boolean {
-  return isCurveVenue(dexId) || dexId === "pumpswap";
-}
-
-/**
- * Fills in the two top-10 wallet signals from the cycle's already-resolved maps (see
- * resolveEarliestActivity in walletFreshness.ts and resolveWalletHoldings in walletHoldings.ts)
- * whenever the profile actually has a holder list to check. Purely synchronous lookups and
- * percentage math - no RPC call happens here.
- *
- * The two are independent: a holder the per-cycle budget deferred on one side can still be
- * resolved on the other, and each compute* returns null (unknown) rather than a percentage of a
- * part-checked list, recorded as undefined. They answer complementary questions - freshness asks
- * how OLD the wallets are, emptiness asks whether they hold anything BESIDES this launch - so a
- * sniper farm that ages its wallets is still caught by the second, and vice versa.
- *
- * The third, the share of the list that were the launch's first 25 buyers, needs no lookup of its
- * own: it compares the list against the first buyers launchSnipers.ts already read. Unknown until
- * that read has landed. Exported for tests.
- */
-export function withWalletSignals(
-  onChain: OnChainProfile | null,
-  earliestActivityByAddress: Map<string, Date | null>,
-  holdingsByAddress: Map<string, WalletHoldings>,
-  env: Pick<Env, "WALLET_HOLDINGS_MIN_USD">,
-  sniperWallets?: ReadonlySet<string>,
-  // The coin's own tape rows (ownTapesOf): undefined when it has none, null when the read failed.
-  ownTape?: ReadonlyMap<string, OwnTapeRow> | null,
-): OnChainProfile | null {
-  if (!onChain?.top10HolderAddresses?.length) return onChain;
-  const freshTop10WalletPct = computeFreshPct(onChain.top10HolderAddresses, earliestActivityByAddress);
-  const emptyTop10WalletPct = computeEmptyPct(
-    onChain.top10HolderAddresses,
-    holdingsByAddress,
-    env.WALLET_HOLDINGS_MIN_USD,
-    onChain.mintAddress,
-  );
-  return {
-    ...onChain,
-    freshTop10WalletPct: freshTop10WalletPct ?? undefined,
-    emptyTop10WalletPct: emptyTop10WalletPct ?? undefined,
-    sniperTop10WalletPct: sniperWallets
-      ? (sniperShareOfTop10(onChain.top10HolderAddresses, sniperWallets) ?? undefined)
-      : undefined,
-    // Recorded even when both percentages came back unknown: it describes the list that was
-    // available, which is what a card needs to say "4 of 9" rather than assuming ten.
-    top10WalletsChecked: onChain.top10HolderAddresses.length,
-    ...walletRiskSignals(onChain, sniperWallets, ownTape),
-    ...kolSignals(onChain, sniperWallets),
-  };
-}
-
-/**
- * The wallet-freshness lookups' groups: each coin's top 10 as before, and its top 25 where the
- * chain's list is in (Fresh as "N/25", user decision 2026-10-14). The waited coins' top 10s go
- * first, then their top 25s, then everyone else's in the same order, so a top-25 group can't push
- * a waited coin's top 10 out of the budget (a group is read whole or not at all). Answers the
- * groups and how many of them lead as the waited part. Exported for tests.
- */
-export function freshnessGroupsOf(
-  walletGroups: readonly { mintAddress: string; addresses: string[] }[],
-  waited: number,
-  top25Of: (mintAddress: string) => string[] | undefined,
-): { groups: string[][]; waited: number } {
-  const top25 = (list: readonly { mintAddress: string }[]) =>
-    list.map((g) => top25Of(g.mintAddress)).filter((w): w is string[] => !!w && w.length > 0);
-  const head = walletGroups.slice(0, waited);
-  const tail = walletGroups.slice(waited);
-  const headTop25 = top25(head);
-  return {
-    groups: [...head.map((g) => g.addresses), ...headTop25, ...tail.map((g) => g.addresses), ...top25(tail)],
-    waited: head.length + headTop25.length,
-  };
-}
-
-/**
- * Fresh over the top 25 holders (pools and the creator aside) on the profile, as a count and how
- * many holders it read: only once every one of those wallets is resolved, so a part-read list never
- * reads low. Left off otherwise, and freshTop10WalletPct stands in (freshWalletShare). Exported
- * for tests.
- */
-export function withFreshTopHolders(
-  onChain: OnChainProfile | null,
-  wallets: string[] | undefined,
-  earliestActivityByAddress: Map<string, Date | null>,
-): OnChainProfile | null {
-  if (!onChain || !wallets?.length) return onChain;
-  const pct = computeFreshPct(wallets, earliestActivityByAddress);
-  if (pct === null) return onChain;
-  return {
-    ...onChain,
-    freshTopHolderCount: Math.round((pct * wallets.length) / 100),
-    freshTopHoldersChecked: wallets.length,
-  };
-}
-
-/**
- * The KOL counts (recorded model inputs and snapshot columns): known KOL wallets among the top
- * holders the scan read (up to CEX_FUNDED_TOP_N) and their share of supply, and among the
- * launch's first buyers. Nothing while the roster isn't loaded. Exported for tests.
- */
-export function kolSignals(
-  onChain: Pick<OnChainProfile, "top10HolderAddresses">,
-  sniperWallets: ReadonlySet<string> | undefined,
-  isKol: ((wallet: string) => boolean) | undefined = kolLookup(),
-): Partial<OnChainProfile> {
-  if (!isKol) return {};
-  const holders = linkedHoldersOf(onChain as { topHolderShares?: { owner: string; pct: number }[] });
-  const list =
-    holders.length > 0 ? holders : (onChain.top10HolderAddresses ?? []).map((owner) => ({ owner, pct: 0 }));
-  const kolHolders = list.filter((h) => isKol(h.owner));
-  return {
-    kolTopHolders: list.length > 0 ? kolHolders.length : undefined,
-    kolTopHolderPct:
-      holders.length > 0 ? Math.round(kolHolders.reduce((s, h) => s + h.pct, 0) * 100) / 100 : undefined,
-    kolFirstBuyers: sniperWallets ? [...sniperWallets].filter(isKol).length : undefined,
-  };
-}
-
-/**
- * The holder-to-holder transfer reading on the profile (user ask 2026-10-16): Transferred Supply %,
- * how many holders sent or got one, over how many, and the pairs for the bubble map. Unknown (left
- * off) without one. Exported for tests.
- */
-export function withHolderTransfers(
-  onChain: OnChainProfile | null,
-  transfers: HolderTransfersReading | null,
-): OnChainProfile | null {
-  if (!onChain || !transfers) return onChain;
-  return {
-    ...onChain,
-    transferredSupplyPct: transfers.transferredSupplyPct,
-    transferWalletCount: transfers.transferWalletCount,
-    transferHoldersChecked: transfers.holdersChecked,
-    holderTransfers: transfers.transfers.map((t) => ({
-      from: t.from,
-      to: t.to,
-      pct: Math.round(t.pct * 100) / 100,
-      count: t.count,
-      ...(t.lastAtMs !== null ? { lastAtMs: t.lastAtMs } : {}),
-    })),
-  };
-}
-
-/**
- * Linked, KOL Bundled and Bundled without holder-to-holder transfers (user ask 2026-10-16): the
- * funding-only figures, recorded beside the counted ones; the clusters only when transfers changed
- * them. Null without a linked reading.
- */
-export interface ExTransfersReading {
-  linkedWalletPct: number;
-  linkedWalletCount: number;
-  linkedCreatorPct: number;
-  kolBundled?: KolBundledReading;
-  /** The clusters without transfers, when transfers changed them. */
-  clusters?: LinkedWalletsReading["clusters"];
-}
-
-/** The figures without transfers for one coin, from its readings with and without. Exported for tests. */
-export function exTransfersOf(
-  base: LinkedWalletsReading | null,
-  counted: LinkedWalletsReading | null,
-  kolBundled: KolBundledReading | undefined,
-  kolBundledBase: KolBundledReading | undefined,
-): ExTransfersReading | null {
-  if (!base) return null;
-  const changed = counted !== null && counted !== base;
-  return {
-    linkedWalletPct: base.linkedWalletPct,
-    linkedWalletCount: base.linkedWalletCount,
-    // The direct ties alone: the models' definition until the retrain (linkedCreatorDirectPct).
-    linkedCreatorPct: base.linkedCreatorDirectPct,
-    // Without transfers' own figures where they were read (a KOL's sends carry its bundle on
-    // even when the clusters stand), else the counted ones, which then read the same.
-    kolBundled: changed ? kolBundledBase : (kolBundledBase ?? kolBundled),
-    ...(changed ? { clusters: base.clusters } : {}),
-  };
-}
-
-/** The figures without transfers on the profile. Exported for tests. */
-export function withExTransfers(
-  onChain: OnChainProfile | null,
-  ex: ExTransfersReading | null,
-): OnChainProfile | null {
-  if (!onChain || !ex || onChain.linkedWalletPct === undefined) return onChain;
-  return {
-    ...onChain,
-    linkedWalletPctExTransfers: ex.linkedWalletPct,
-    linkedWalletCountExTransfers: ex.linkedWalletCount,
-    linkedCreatorPctExTransfers: ex.linkedCreatorPct,
-    ...(ex.kolBundled
-      ? {
-          kolBundledPctExTransfers: ex.kolBundled.kolBundledPct,
-          bundledSupplyPctExTransfers: ex.kolBundled.bundledSupplyPct,
-          bundledSupplyCountExTransfers: ex.kolBundled.bundledSupplyCount,
-        }
-      : {}),
-    ...(ex.clusters ? { linkedClustersExTransfers: ex.clusters } : {}),
-  };
-}
-
-/** Whether two linked readings hold the same holders in the same clusters (transfers changed nothing). */
-function sameLinked(a: LinkedWalletsReading, b: LinkedWalletsReading | null): boolean {
-  if (!b || a.linkedWalletCount !== b.linkedWalletCount || a.clusters.length !== b.clusters.length)
-    return false;
-  const key = (r: LinkedWalletsReading) =>
-    r.clusters.map((c) => c.wallets.map((w) => w.wallet).join(",")).join("|");
-  return key(a) === key(b);
-}
-
-/** The linked-wallets reading on the profile; unknown (left off) without one. Exported for tests. */
-export function withLinkedWallets(
-  onChain: OnChainProfile | null,
-  linked:
-    | (LinkedWalletsReading & {
-        holderBalancesAt?: Date;
-        holderChainReadAt?: Date;
-        holderNextReadAt?: Date;
-      })
-    | null,
-  cex: CexFundedReading | null = null,
-  sniperWallets?: ReadonlySet<string>,
-): OnChainProfile | null {
-  if (!onChain) return onChain;
-  // The top holders the scan read, kept whether or not their funders were (user ask 2026-10-13):
-  // the bubble map and the holder-list evaluation want the list on every scan that has one.
-  const holders = linkedHoldersOf(onChain as { topHolderShares?: { owner: string; pct: number }[] })
-    .map((h) => ({ wallet: h.owner, pct: Math.round(h.pct * 100) / 100 }))
-    .sort((a, b) => b.pct - a.pct);
-  const withHolders: OnChainProfile = holders.length > 0 ? { ...onChain, linkedHolders: holders } : onChain;
-  const withCex = cex
-    ? {
-        ...withHolders,
-        cexFundedPct: cex.cexFundedPct,
-        cexFundedCount: cex.cexFundedCount,
-        cexFundedHolders: cex.cexFundedHolders,
-      }
-    : withHolders;
-  // Which exchange paid for each holder, on the holder list: the bubble map can tie together
-  // wallets the same exchange funded (drawn only; it changes no reading).
-  const cexOf = new Map((cex?.cexFunders ?? []).map((c) => [c.wallet, c.funder]));
-  const tagCex = (list: { wallet: string; pct: number }[]) =>
-    cexOf.size === 0
-      ? list
-      : list.map((h) => (cexOf.has(h.wallet) ? { ...h, cexFunder: cexOf.get(h.wallet)! } : h));
-  const tagged = withCex.linkedHolders
-    ? { ...withCex, linkedHolders: tagCex(withCex.linkedHolders) }
-    : withCex;
-  const read = linked ? withLinkedReading(tagged, linked, tagCex) : tagged;
-  const timed =
-    read && linked?.holderBalancesAt
-      ? {
-          ...read,
-          holderBalancesAt: linked.holderBalancesAt,
-          holderChainReadAt: linked.holderChainReadAt,
-          ...(linked.holderNextReadAt ? { holderNextReadAt: linked.holderNextReadAt } : {}),
-        }
-      : read;
-  // Launch snipers among the same top holders (user ask 2026-10-13, "N/25"): the linked reading's
-  // list when it has one (the chain's top 25, pools and the creator aside), else the list read.
-  const list = (linked?.holders ?? timed?.linkedHolders?.map((h) => ({ wallet: h.wallet })) ?? []).slice(
-    0,
-    LINKED_TOP_N,
-  );
-  if (!sniperWallets || list.length === 0) return withHolderSol(timed);
-  return withHolderSol({
-    ...timed,
-    sniperTopHolderCount: list.filter((h) => sniperWallets.has(h.wallet)).length,
-    sniperTopHoldersChecked: list.length,
-  });
-}
-
-/**
- * The chain read's native SOL on each holder (rememberNativeSol). A wallet the batch missed, or a
- * list that is not the chain's, is left without it. A streamed balance update does not read it again.
- */
-function withHolderSol(profile: OnChainProfile | null): OnChainProfile | null {
-  if (!profile?.linkedHolders?.length || !profile.mintAddress) return profile;
-  let changed = false;
-  const linkedHolders = profile.linkedHolders.map((h) => {
-    const solLamports = cachedHolderSolLamports(profile.mintAddress, h.wallet);
-    if (solLamports === undefined) return h;
-    changed = true;
-    return { ...h, solLamports };
-  });
-  return changed ? { ...profile, linkedHolders } : profile;
-}
-
-/**
- * Each holder on the list marked with what the cycle read of its wallet (user ask 2026-10-15), for
- * the bubble map's icons: `sniper` (among the launch's first 25 buyers), `blockZero` (bought in the
- * create transaction's slot: the "0" label, read from the launch read's cache unless passed), `fresh` (first active
- * within FRESH_WITHIN_HOURS) and `empty` (under WALLET_HOLDINGS_MIN_USD of anything besides this
- * coin). A wallet the cycle didn't read is left unmarked. Drawn only: no reading changes. Exported
- * for tests.
- */
-export function withHolderKinds(
-  onChain: OnChainProfile | null,
-  earliestActivityByAddress: Map<string, Date | null>,
-  holdingsByAddress: Map<string, WalletHoldings>,
-  env: Pick<Env, "WALLET_HOLDINGS_MIN_USD">,
-  sniperWallets?: ReadonlySet<string>,
-  nowMs = Date.now(),
-  blockZeroWallets: ReadonlySet<string> | undefined = onChain?.mintAddress
-    ? blockZeroWalletsFromCache(onChain.mintAddress)
-    : undefined,
-): OnChainProfile | null {
-  if (!onChain?.linkedHolders?.length) return onChain;
-  const freshCutoff = nowMs - FRESH_WITHIN_HOURS * 3_600_000;
-  return {
-    ...onChain,
-    linkedHolders: onChain.linkedHolders.map((h) => {
-      const earliest = earliestActivityByAddress.get(h.wallet);
-      const holdings = holdingsByAddress.get(h.wallet);
-      const here = holdings?.perMintUsd[onChain.mintAddress];
-      const sniper = !!sniperWallets?.has(h.wallet);
-      const blockZero = !!blockZeroWallets?.has(h.wallet);
-      const fresh = !!earliest && earliest.getTime() >= freshCutoff;
-      const empty =
-        !!holdings && here !== undefined && holdings.otherHoldingsUsd - here < env.WALLET_HOLDINGS_MIN_USD;
-      // The priced portfolio already computed for the empty-wallet check. An unpriced wallet's
-      // floor is not that figure, and a wallet the check never reached has none. Zero is kept
-      // when the check priced the wallet at zero; it is not written in place of a miss.
-      const portfolio =
-        holdings && holdings.unpriced !== true && Number.isFinite(holdings.otherHoldingsUsd)
-          ? holdings.otherHoldingsUsd
-          : undefined;
-      return {
-        ...h,
-        ...(sniper ? { sniper: true } : {}),
-        ...(blockZero ? { blockZero: true } : {}),
-        ...(fresh ? { fresh: true } : {}),
-        ...(empty ? { empty: true } : {}),
-        ...(portfolio !== undefined ? { portfolioUsd: portfolio } : {}),
-      };
-    }),
-  };
-}
-
-function withLinkedReading(
-  tagged: OnChainProfile,
-  linked: LinkedWalletsReading,
-  tagCex: (list: { wallet: string; pct: number }[]) => { wallet: string; pct: number; cexFunder?: string }[],
-): OnChainProfile {
-  return {
-    ...tagged,
-    linkedWalletPct: linked.linkedWalletPct,
-    linkedClusterCount: linked.linkedClusterCount,
-    linkedWalletCount: linked.linkedWalletCount,
-    linkedWalletsChecked: linked.linkedWalletsChecked,
-    linkedLargestClusterPct: linked.linkedLargestClusterPct,
-    linkedCreatorPct: linked.linkedCreatorPct,
-    linkedClusters: linked.clusters,
-    linkedHolders: tagCex(linked.holders),
-    sameTimeFundedPct: linked.sameTimeFundedPct,
-    sameTimeClusterCount: linked.sameTimeClusterCount,
-    sameTimeFundedCount: linked.sameTimeFundedCount,
-    bundledWalletCount: linked.bundledWalletCount,
-    sameTimeClusters: linked.sameTimeClusters,
-  };
-}
-
-/** The live flagged-wallet reading on the profile; unknown (left off) without one. Exported for tests. */
-export function withLiveFlags(
-  onChain: OnChainProfile | null,
-  flags: LiveFlagsReading | null,
-  kolTraders: LiveTraderCounts | null = null,
-  winnerTraders: LiveTraderCounts | null = null,
-  walletScores: WalletScoreReading | null = null,
-  winnerFollow: WinnerFollowReading | null = null,
-): OnChainProfile | null {
-  if (!onChain) return onChain;
-  const withTraders = {
-    ...onChain,
-    ...(winnerFollow
-      ? {
-          cleanWinnerRecentBuyers: winnerFollow.cleanWinnerRecentBuyers,
-          cleanWinnerRecentShare: winnerFollow.cleanWinnerRecentShare ?? undefined,
-          cleanWinnerBuySolShare: winnerFollow.cleanWinnerBuySolShare ?? undefined,
-          recentBuyersOwn2xMean: winnerFollow.recentBuyersOwn2xMean ?? undefined,
-          recentBuyersRead: winnerFollow.recentBuyersRead,
-          cleanWinnerConvictionMax: winnerFollow.cleanWinnerConvictionMax ?? undefined,
-          cleanWinnerNetShare: winnerFollow.cleanWinnerNetShare ?? undefined,
-          cleanWinnerSellerShare: winnerFollow.cleanWinnerSellerShare ?? undefined,
-        }
-      : {}),
-    ...(walletScores
-      ? {
-          walletScoreRecentBuyersMean: walletScores.walletScoreRecentBuyersMean ?? undefined,
-          walletScoreRecentBuyersScored: walletScores.walletScoreRecentBuyersScored,
-        }
-      : {}),
-    ...(kolTraders ? { kolRecentBuyers: kolTraders.buyers, kolRecentSellers: kolTraders.sellers } : {}),
-    ...(winnerTraders
-      ? { winnerRecentBuyers: winnerTraders.buyers, winnerRecentSellers: winnerTraders.sellers }
-      : {}),
-  };
-  if (!flags) return withTraders;
-  return {
-    ...withTraders,
-    flaggedBuyers: flags.flaggedBuyers,
-    flaggedSellers: flags.flaggedSellers,
-    flaggedBuySol: flags.flaggedBuySol,
-    flaggedSellSol: flags.flaggedSellSol,
-    flaggedTrades: flags.flaggedTrades,
-  };
-}
-
-/**
- * The wallet risk readings (coinWalletRisk in core; the learners read walletRiskTop10Max): who the
- * top holders and first buyers are, from the hourly scores. Nothing while the scores aren't
- * loaded, or when the coin's own tape rows couldn't be read (2026-10-16, data-correctness
- * audit): those are taken back out of the scores (the coin's own earlier result), and the max is
- * placed among the wallets scored at the time (walletRiskScale).
- */
-function walletRiskSignals(
-  onChain: OnChainProfile,
-  sniperWallets: ReadonlySet<string> | undefined,
-  ownTape: ReadonlyMap<string, OwnTapeRow> | null | undefined,
-): Partial<OnChainProfile> {
-  const lookup = walletRiskLookup();
-  const scale = walletRiskScale();
-  if (!lookup || !scale || ownTape === null) return {};
-  const shares = (onChain as { topHolderShares?: { owner: string; pct: number }[] }).topHolderShares;
-  const r = coinWalletRisk(
-    lookup,
-    {
-      top10Holders: onChain.top10HolderAddresses,
-      topHolderShares: shares,
-      firstBuyers: sniperWallets,
-    },
-    { ownTape, marketDumpRate: scale.marketDumpRate, rank: scale.rank },
-  );
-  const w = coinWalletWins(lookup, {
-    top10Holders: onChain.top10HolderAddresses,
-    topHolderShares: shares,
-    firstBuyers: sniperWallets,
-  });
-  return {
-    walletRiskTop10Max: r.walletRiskTop10Max ?? undefined,
-    walletRiskScoredTop10: r.walletRiskScoredTop10 ?? undefined,
-    walletRiskFirstBuyersMean: r.walletRiskFirstBuyersMean ?? undefined,
-    walletRiskHighSupplyPct: r.walletRiskHighSupplyPct ?? undefined,
-    knownDumperFirstBuyers: r.knownDumperFirstBuyers ?? undefined,
-    walletWinTop10Max: w.walletWinTop10Max ?? undefined,
-    walletWinFirstBuyersMean: w.walletWinFirstBuyersMean ?? undefined,
-    walletWinHighSupplyPct: w.walletWinHighSupplyPct ?? undefined,
-    knownWinnerFirstBuyers: w.knownWinnerFirstBuyers ?? undefined,
-  };
 }
 
 /**
