@@ -204,6 +204,19 @@ describe("Trade Buddy", () => {
   });
 });
 
+describe("the store build (user ask 2026-10-28)", () => {
+  it("has no Trade Buddy and no Look up: neither reads anything", async () => {
+    setStore(true);
+    local.set("key", KEY);
+    expect(await send(onMessage, { type: "buddy" }, panel)).toBeNull();
+    expect(await send(onMessage, { type: "coin", mint: A }, panel)).toBeNull();
+    expect(await send(onMessage, { type: "pendingCoin" }, panel)).toBeNull();
+    expect(api.buddy).not.toHaveBeenCalled();
+    expect(api.token).not.toHaveBeenCalled();
+    expect(api.bubble).not.toHaveBeenCalled();
+  });
+});
+
 describe("TrenchScanner's site", () => {
   it("is the only origin that may ping or hand over a key", async () => {
     const other = { origin: "https://trenchscanner.app.evil.example" } as chrome.runtime.MessageSender;

@@ -278,3 +278,8 @@ its pill placed in the part the column cuts off, which left only the dot in view
 - **Look up** says when a coin has no card because it opens only with a lookup on the site (EX-5),
   and the board pill on every coin is worded for feed coins, which are all `/stats` answers now.
 - **Key refused** names the 7-day life of an admin's key (AP-6).
+- **The store build has no Trade Buddy and no Look up** (user ask 2026-10-28). Its panel shows
+  Alerts and Settings only, Settings has no Trade Buddy wallets section, and the service worker
+  answers `buddy`, `coin` and `pendingCoin` with nothing, so no wallet's trades are read and no
+  typed address is sent. The dev build keeps both. The privacy policy and `STORE.md` describe the
+  store build (data form: authentication information only).

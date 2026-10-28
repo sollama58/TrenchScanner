@@ -206,7 +206,9 @@ function renderDisconnected(): void {
       el(
         "p",
         { className: "note" },
-        "Opens TrenchScanner Settings at Browser extension, where one click connects this browser. This panel updates by itself. The key it gets reads your alerts and stats, coins' bubble maps, and your wallet's own trades for Trade Buddy. It can't trade or move funds.",
+        __STORE__
+          ? "Opens TrenchScanner Settings at Browser extension, where one click connects this browser. This panel updates by itself. The key it gets reads your alerts, their stats and bubble maps. It can't trade or move funds."
+          : "Opens TrenchScanner Settings at Browser extension, where one click connects this browser. This panel updates by itself. The key it gets reads your alerts and stats, coins' bubble maps, and your wallet's own trades for Trade Buddy. It can't trade or move funds.",
       ),
     ),
   );
@@ -231,8 +233,9 @@ function tabs(): HTMLElement {
     "nav",
     { className: "tabs" },
     make("alerts", "Alerts"),
-    make("buddy", "Trade Buddy"),
-    make("coin", "Look up"),
+    // The store build has no Trade Buddy and no Look up (user ask 2026-10-28): the reader's alerts
+    // and Settings only.
+    ...(__STORE__ ? [] : [make("buddy", "Trade Buddy"), make("coin", "Look up")]),
     make("settings", "Settings"),
   );
 }
@@ -516,7 +519,7 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
     ),
   );
 
-  parts.push(panelSection(), runsSection(), buddyWalletsSection());
+  parts.push(panelSection(), runsSection(), ...(__STORE__ ? [] : [buddyWalletsSection()]));
 
   const flags = FLAG_IDS.map((id) => {
     const pref = settings.flags[id];
@@ -1403,6 +1406,7 @@ function draw(): void {
   account.textContent = refused ? "Reconnect needed" : `Connected · ${status.wallet ?? ""}`;
   account.className = refused ? "account warn" : "account on";
   const settings = status.settings;
+  if (__STORE__ && (view === "buddy" || view === "coin")) view = "alerts";
   const body =
     view === "alerts"
       ? alertsView(settings)
@@ -1439,7 +1443,7 @@ async function refresh(): Promise<void> {
   status = await send<Status>({ type: "status" });
   // Trade Buddy's last answer draws at once, and a fresh read starts now, so the tab is ready
   // before it is opened.
-  if (status?.connected) {
+  if (status?.connected && !__STORE__) {
     buddy ??= await send<BuddyRead>({ type: "buddy", cached: true });
     if (!buddy?.buddy) buddy = null;
     buddyReadAt = Date.now();
@@ -1452,7 +1456,7 @@ async function refresh(): Promise<void> {
   tipPrefs = cleanTooltip(await send<TooltipPrefs>({ type: "tooltip" }));
   applyColors();
   // A page's Look up opened the panel: it opens on that coin.
-  const pending = status?.connected ? await send<string | null>({ type: "pendingCoin" }) : null;
+  const pending = status?.connected && !__STORE__ ? await send<string | null>({ type: "pendingCoin" }) : null;
   if (pending && isMintAddress(pending)) {
     view = "coin";
     void lookUp(pending);
@@ -1478,7 +1482,13 @@ chrome.runtime.onMessage.addListener((message: unknown, sender) => {
   }
   // A page's Look up while the panel is open.
   const m = message as { type?: unknown; mint?: unknown } | null;
-  if (m?.type === "openCoin" && typeof m.mint === "string" && isMintAddress(m.mint) && status?.connected) {
+  if (
+    !__STORE__ &&
+    m?.type === "openCoin" &&
+    typeof m.mint === "string" &&
+    isMintAddress(m.mint) &&
+    status?.connected
+  ) {
     void send({ type: "pendingCoin" });
     view = "coin";
     void lookUp(m.mint);

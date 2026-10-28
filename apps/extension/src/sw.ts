@@ -705,10 +705,12 @@ async function handle(request: PanelRequest): Promise<unknown> {
       return site(request);
     case "siteCancel":
       return cancelSite(request.id);
+    // The store build has no Trade Buddy and no Look up (user ask 2026-10-28): nothing reads a
+    // wallet's trades or an address the reader pasted.
     case "buddy":
-      return buddy(request.cached === true);
+      return __STORE__ ? null : buddy(request.cached === true);
     case "coin":
-      return coin(request.mint);
+      return __STORE__ ? null : coin(request.mint);
     case "alertsSeen":
       await noteAlerts(
         lastTokens,
@@ -748,6 +750,7 @@ async function handle(request: PanelRequest): Promise<unknown> {
       await snooze(request.mint, request.minutes);
       return { ok: true };
     case "pendingCoin": {
+      if (__STORE__) return null;
       const { pendingCoin } = (await chrome.storage.session.get("pendingCoin").catch(() => ({}))) as {
         pendingCoin?: { mint: string; at: number };
       };

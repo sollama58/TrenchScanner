@@ -30,16 +30,9 @@ justify.
   • TrenchScanner's safety screen on every alert, with why a coin fails, and an option to hide the ones that do
   • Your own colour for each model and filter you follow
 
-  LOOK UP ANY COIN
-  • Paste an address or a link: the coin's card, safety screen, bubble map and top holders, tagged as clusters, snipers, fresh wallets, CEX-funded and dev-tied
-
   NEVER MISS AN ALERT
   • Optional Chrome notifications for new alerts, even with the panel closed
   • An unread count on the toolbar icon
-
-  TRADE BUDDY
-  • Every coin your connected wallet buys, on any site, shows up with its token card, bubble map and your PnL
-  • Pro accounts get a trade box on each coin, collapsed until you open it: it opens TrenchScanner's Trade panel filled in, and your wallet confirms there
 
   ONE CLICK TO ACT
   • Open any token on Axiom, Terminal, GMGN or TrenchScanner
@@ -64,8 +57,9 @@ justify.
 ## Privacy practices
 
 - **Single purpose:** Shows the user's own TrenchScanner token alerts (filter matches and model
-  calls) and the coins their own wallet trades, with holder stats, bubble maps, flags and PnL, in
-  Chrome's side panel, and links to open each token on the trading site the user picks.
+  calls), with holder stats, bubble maps and flags, in Chrome's side panel, and links to open each
+  token on the trading site the user picks. The store build has no Trade Buddy and no Look up (user
+  decision 2026-10-28; `__STORE__` in the code): they stay in the dev build only.
 - **Permission justifications:**
   - `storage`: keeps the user's TrenchScanner extension key, display settings and which alerts were
     already notified or read on this device.
@@ -79,14 +73,12 @@ justify.
 - **Remote code:** No. All code ships in the package.
 - **Data usage**, the boxes to tick (re-checked for 0.9.2, audit EX-2):
   - **Authentication information**: the extension key.
-  - **Financial and payment information**: Trade Buddy shows the trades and PnL of the user's wallet
-    and the other wallets they linked on TrenchScanner (up to three, each by signing with it); the
-    display choices synced to the account include wallets added in the panel before 0.9.2.
-  - Not ticked: personally identifiable information, health, personal communications, location, web
-    history, user activity, website content. Look up sends only the coin address the user pastes,
-    and the extension never runs on a website.
-    The privacy policy also names what is kept with the account (display choices, snoozed coins, Trade
-    Buddy's wallets) and the bubble map's site reads made with the key. Certify all three: not sold to third parties; not used or transferred for purposes unrelated to
+  - Not ticked: personally identifiable information, health, financial and payment information,
+    personal communications, location, web history, user activity, website content. The store build
+    reads no wallet's trades (no Trade Buddy), sends no typed address (no Look up), and never runs
+    on a website.
+    The privacy policy also names what is kept with the account (display choices, snoozed coins) and
+    the bubble map's site reads made with the key. Certify all three: not sold to third parties; not used or transferred for purposes unrelated to
     the single purpose; not used for creditworthiness or lending.
 
 ## Distribution
