@@ -4,6 +4,8 @@
 
 What to paste into the developer dashboard for Trench Overlay. Keep it in step with what the
 extension does. The privacy policy (`apps/web/public/extension-privacy.html`) says the same.
+`src/store.test.ts` fails when the manifest asks for a permission this file or the policy doesn't
+justify.
 
 ## Store listing
 
@@ -65,7 +67,8 @@ extension does. The privacy policy (`apps/web/public/extension-privacy.html`) sa
   calls) and the coins their own wallet trades, with holder stats, bubble maps, flags and PnL, in
   Chrome's side panel, and links to open each token on the trading site the user picks.
 - **Permission justifications:**
-  - `storage`: keeps the user's TrenchScanner extension key and display settings on this device.
+  - `storage`: keeps the user's TrenchScanner extension key, display settings and which alerts were
+    already notified or read on this device.
   - `sidePanel`: the extension's only interface is a side panel.
   - `notifications`: tells the user of a new alert from their own filters and models, only if they
     turn that on in Settings.
@@ -74,9 +77,17 @@ extension does. The privacy policy (`apps/web/public/extension-privacy.html`) sa
   - No host permissions: the extension calls only the TrenchScanner API, which allows it by CORS,
     so it asks for no access to any site.
 - **Remote code:** No. All code ships in the package.
-- **Data usage**, the boxes to tick: **Authentication information** (the extension key) only.
-  Certify all three: not sold to third parties; not used or transferred for purposes unrelated to
-  the single purpose; not used for creditworthiness or lending.
+- **Data usage**, the boxes to tick (re-checked for 0.9.1, audit EX-2):
+  - **Authentication information**: the extension key.
+  - **Financial and payment information**: Trade Buddy sends the user's other wallet addresses (up to
+    three) and shows their trades and PnL; the display choices synced to the account include those
+    wallets.
+  - Not ticked: personally identifiable information, health, personal communications, location, web
+    history, user activity, website content. Look up sends only the coin address the user pastes,
+    and the extension never runs on a website.
+    The privacy policy also names what is kept with the account (display choices, snoozed coins, Trade
+    Buddy's wallets) and the bubble map's site reads made with the key. Certify all three: not sold to third parties; not used or transferred for purposes unrelated to
+    the single purpose; not used for creditworthiness or lending.
 
 ## Distribution
 

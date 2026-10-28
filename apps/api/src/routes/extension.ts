@@ -91,9 +91,12 @@ const BUBBLE_CACHE_MAX = 2_000;
 const BUBBLE_WAIT_RATE_LIMIT = { max: 60, timeWindow: "1 minute" };
 /**
  * Site map reads a minute (POST /site): one open map polls its scans, chart and top 50 and holds
- * its live trades and holder wait, and the panel can show several maps at once.
+ * its live trades and holder wait, and the panel can show several maps at once. Each replayed read
+ * also counts against the owner's own site bucket (server.ts, 300 a minute, shared with their
+ * tabs), on purpose: a key adds no site budget to its account. So no key may ask for more than
+ * that bucket holds; this used to say 600, which never could be reached (audit 2026-10-27, AP-10).
  */
-const SITE_RATE_LIMIT = { max: 600, timeWindow: "1 minute" };
+const SITE_RATE_LIMIT = { max: 300, timeWindow: "1 minute" };
 /** A key owner's inner session is signed again after this; it never leaves this process. */
 const SITE_SESSION_MS = 5 * 60_000;
 const SITE_SESSION_MAX = 5_000;
@@ -106,6 +109,13 @@ const SAFETY_RATE_LIMIT = { max: 120, timeWindow: "1 minute" };
 const BOARD_WAIT_RATE_LIMIT = { max: 60, timeWindow: "1 minute" };
 /** Coins one held board ask may name: the coins of a few columns. */
 const MAX_BOARD_WAIT_MINTS = 300;
+/**
+ * Held asks one account may have open at once, per pool: a dozen open maps, and a board's one ask
+ * from each of a few browsers. Without these a handful of accounts filled the pools (500 map
+ * waits, 2,000 board waits) and every other reader fell back to polling (audit 2026-10-27, AP-9).
+ */
+export const BUBBLE_WAITS_PER_ACCOUNT = 12;
+export const BOARD_WAITS_PER_ACCOUNT = 4;
 /** Trade Buddy reads a minute: the panel polls every 5 s (every 10 s before 0.3.1), plus a second window. */
 const BUDDY_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 /** A Trade Buddy answer this fresh is served as is; an older one is served while a new one is read. */
@@ -234,6 +244,28 @@ export async function registerExtensionRoutes(
   });
   if (stopSnapshotWrites) app.addHook("onClose", async () => stopSnapshotWrites());
 
+  // Each account's held asks in each pool, so one account can't hold a pool's every place (AP-9).
+  const heldBubble = new Map<string, number>();
+  const heldBoard = new Map<string, number>();
+  /** Runs `hold` unless the account already holds `max` asks in `held`; null when it does. */
+  async function heldWithin<T>(
+    held: Map<string, number>,
+    userId: string,
+    max: number,
+    hold: () => Promise<T>,
+  ): Promise<T | null> {
+    const count = held.get(userId) ?? 0;
+    if (count >= max) return null;
+    held.set(userId, count + 1);
+    try {
+      return await hold();
+    } finally {
+      const left = (held.get(userId) ?? 1) - 1;
+      if (left > 0) held.set(userId, left);
+      else held.delete(userId);
+    }
+  }
+
   const admins = adminWalletSet(opts.env);
   // A key's own bucket only once it has been proven (in authCache): rotating made-up keys would
   // otherwise get a fresh bucket per request and flush real keys' buckets (audit CE-2).
@@ -278,8 +310,11 @@ export async function registerExtensionRoutes(
       return;
     }
     // An address past the failure cap is turned away before the key read, not after it, so junk
-    // keys cost no DB read (audit CE-2). A key proven within AUTH_CACHE_MS (above) stays exempt;
-    // an unproven one from that address waits out the minute like the junk.
+    // keys cost no DB read (audit CE-2, AP-5). A key proven within AUTH_CACHE_MS (above) stays
+    // exempt; an unproven one from that address waits out the minute like the junk.
+    if (recentFailures(address, now).length >= EXTENSION_AUTH_FAILURES_PER_MINUTE) {
+      return reply.code(429).send({ error: "too_many_attempts" });
+    }
     const row = await prisma.extensionKey.findUnique({
       where: { secretHash: hash },
       select: {
@@ -293,9 +328,6 @@ export async function registerExtensionRoutes(
     // Unknown and revoked are the same answer.
     if (!row || !matches || row.revokedAt) {
       authCache.delete(hash);
-      if (recentFailures(address, now).length >= EXTENSION_AUTH_FAILURES_PER_MINUTE) {
-        return reply.code(429).send({ error: "too_many_attempts" });
-      }
       recordFailure(address, now);
       return reply.code(401).send({ error: "invalid_api_key" });
     }
@@ -489,7 +521,11 @@ export async function registerExtensionRoutes(
       if (!isMintAddress(mint)) return reply.code(400).send({ error: "not a valid mint" });
       reply.header("Cache-Control", "no-store");
       if (!opts.holderWrites) return { changed: false, pushed: false };
-      return bubbleWaits.wait(mint, HOLDER_WAIT_MS, closedSignal(reply));
+      const { userId } = request.extensionClient!;
+      const held = await heldWithin(heldBubble, userId, BUBBLE_WAITS_PER_ACCOUNT, () =>
+        bubbleWaits.wait(mint, HOLDER_WAIT_MS, closedSignal(reply)),
+      );
+      return held ?? { changed: false, pushed: false };
     },
   );
 
@@ -586,7 +622,12 @@ export async function registerExtensionRoutes(
       const mints = [...new Set(raw)].filter((m): m is string => typeof m === "string" && isMintAddress(m));
       reply.header("Cache-Control", "no-store");
       if (!opts.snapshotWrites) return { tokens: {}, pushed: false };
-      const { changed, pushed } = await boardWaits.wait(mints, BOARD_WAIT_MS, closedSignal(reply));
+      const { userId } = request.extensionClient!;
+      const held = await heldWithin(heldBoard, userId, BOARD_WAITS_PER_ACCOUNT, () =>
+        boardWaits.wait(mints, BOARD_WAIT_MS, closedSignal(reply)),
+      );
+      if (!held) return { tokens: {}, pushed: false };
+      const { changed, pushed } = held;
       return { tokens: changed.length ? await statsOverlay(changed) : {}, pushed };
     },
   );
@@ -610,17 +651,29 @@ export async function registerExtensionRoutes(
       const token = await siteSession(userId, walletAddress);
       if (!token) return reply.code(403).send({ error: "no_account" });
       const cf = request.headers["cf-connecting-ip"];
-      const res = await app.inject({
-        method: call.method,
-        url: call.path,
-        remoteAddress: request.ip,
-        headers: {
-          authorization: `Bearer ${token}`,
-          ...(typeof cf === "string" ? { "cf-connecting-ip": cf } : {}),
-          ...(call.body !== null ? { "content-type": "application/json" } : {}),
-        },
-        ...(call.body !== null ? { payload: call.body } : {}),
-      });
+      // The replayed read ends when the panel's request does: a held one (live trades, the holder
+      // wait) otherwise kept its place in the site's wait pools for up to 30 s after a map was
+      // closed or its coin flipped (audit 2026-10-27, EX-10).
+      const left = closedSignal(reply);
+      let res: Awaited<ReturnType<typeof app.inject>>;
+      try {
+        res = await app.inject({
+          signal: left,
+          method: call.method,
+          url: call.path,
+          remoteAddress: request.ip,
+          headers: {
+            authorization: `Bearer ${token}`,
+            ...(typeof cf === "string" ? { "cf-connecting-ip": cf } : {}),
+            ...(call.body !== null ? { "content-type": "application/json" } : {}),
+          },
+          ...(call.body !== null ? { payload: call.body } : {}),
+        });
+      } catch (err) {
+        // The panel left: nobody reads this answer.
+        if (left.aborted) return { status: 499, body: "" };
+        throw err;
+      }
       reply.header("Cache-Control", "no-store");
       return { status: res.statusCode, body: res.body };
     },
