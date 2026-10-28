@@ -19,6 +19,11 @@ export interface SiteAdapter {
   mintOf(row: Element): string | null;
   /** The row is marked as a board column's (Axiom's Pulse, Terminal's Trenches), wherever it sits. */
   inColumn(row: Element): boolean;
+  /**
+   * The attributes an address is read from: a virtual list that recycles a row for another coin
+   * changes one of these, so a change to one calls for a scan, where a text change doesn't.
+   */
+  watchedAttributes: string[];
 }
 
 export interface AdapterSpec {
@@ -175,5 +180,6 @@ export function adapterFrom(spec: AdapterSpec): SiteAdapter {
     inColumn(row) {
       return !!columnMark && (row.matches(columnMark) || !!row.querySelector(columnMark));
     },
+    watchedAttributes: [...new Set(["href", ...SCANNED_ATTRIBUTES, ...marks.map((m) => m.attr)])],
   };
 }

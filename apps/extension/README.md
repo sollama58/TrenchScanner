@@ -294,3 +294,26 @@ its pill placed in the part the column cuts off, which left only the dot in view
   On a coin's own page only board column rows (Axiom's Pulse, Terminal's Trenches marks) and a
   search menu's rows are ringed, not its trade lists or its dev's other coins.
 - `STORE.md`'s `notifications` and `alarms` justifications name run alerts.
+
+0.9.4 (user ask 2026-10-28: the extension was heavy on busy boards):
+
+- **The board is scanned when rows change, not when numbers tick.** The content script's watcher
+  ignores text-only changes (prices, ages, counts), and scans when an element comes or goes or an
+  address-bearing attribute changes (`watchedAttributes`: links, pictures, the sites' address
+  marks). A scan draws only new or recycled rows, or rows whose ring the site's renderer took away;
+  answers arriving still redraw the rows they concern. A row's layer (`scope.ts`) is kept 5 s.
+- **The halo's sweep runs on the compositor**: a rotating square under the ring's mask, where
+  animating the gradient's angle restyled every ring on every frame.
+- **Pills are placed together, once per frame**: every ring due reads its row, then all write,
+  then all measure, instead of a layout per ring. A shared `ResizeObserver` re-places a pill when
+  its row changes size, and pills on screen are re-checked every 2 s.
+- **No message per scan**: the tab sent the service worker a `health` message on every scan, which
+  nothing read and which kept the worker awake. It is gone.
+- **Hidden tabs ask nothing**: no lookups, safety or board-stats asks, or holder map reads while
+  the tab is in the background; it asks at once when shown again.
+- **Coin-page tools watch coin pages only**: the bubble map tab and the holder markers stop
+  watching the page off a coin's page, the tab looks the page over at most every 600 ms, and the
+  holder markers no longer compare every text node against every marked link.
+
+Measured on a synthetic busy Pulse board (90 rows, 40 price ticks every 50 ms, a new coin every
+700 ms) in headless Chromium: see the PR for the numbers.

@@ -12,6 +12,9 @@ import { findTabStrip, isTokenPage, pageMint } from "./tokenPage";
  * box sit in closed shadow roots and are written with DOM calls only.
  */
 
+/** The page is looked over at most this often for the tab's place (holderMarks.ts waits as long). */
+const SYNC_MS = 600;
+
 const TAB_CSS = `
 :host { all: initial; display: inline-flex; align-items: center; flex: none; }
 :host(.floating) { position: fixed; right: 16px; bottom: 16px; z-index: 2147482000; }
@@ -49,6 +52,8 @@ export class MapTab {
   private readonly siteLink = document.createElement("a");
   private observer: MutationObserver | null = null;
   private frame = 0;
+  private timer: number | undefined;
+  private lastSync = 0;
   private urlTimer: number | undefined;
   private mint: string | null = null;
   /** The coin the frame shows, so a redraw of the page doesn't reload it. */
@@ -99,14 +104,29 @@ export class MapTab {
 
   start(): void {
     this.observer = new MutationObserver(() => this.schedule());
-    this.observer.observe(document.body, { childList: true, subtree: true });
-    // Single-page sites change coin without a reload.
-    this.urlTimer = window.setInterval(() => this.schedule(), 1_000);
-    this.schedule();
+    // Single-page sites change coin without a reload: the page is watched only while it is a
+    // coin's own page with the tab on, so a board's re-renders cost nothing here.
+    this.urlTimer = window.setInterval(() => this.watch(), 1_000);
+    this.watch();
+  }
+
+  private watching = false;
+  private watch(): void {
+    const on = this.prefs.mapTab.enabled && isTokenPage(this.site, location.pathname);
+    if (on && !this.watching) {
+      this.observer?.observe(document.body, { childList: true, subtree: true });
+      this.watching = true;
+    } else if (!on && this.watching) {
+      this.observer?.disconnect();
+      this.watching = false;
+    }
+    if (on || this.mint !== null) this.schedule();
   }
 
   stop(): void {
     this.observer?.disconnect();
+    this.watching = false;
+    window.clearTimeout(this.timer);
     window.clearInterval(this.urlTimer);
     cancelAnimationFrame(this.frame);
     this.setOpen(false);
@@ -116,7 +136,7 @@ export class MapTab {
   applyPrefs(prefs: TooltipPrefs): void {
     this.prefs = prefs;
     this.applyColors();
-    this.schedule();
+    this.watch();
   }
 
   private applyColors(): void {
@@ -125,10 +145,23 @@ export class MapTab {
     this.mapVars.textContent = `:host { --c-filter: ${c.filter}; }`;
   }
 
+  /**
+   * At most once every SYNC_MS, however often the page re-renders: a coin's page with a live
+   * trades list re-renders many times a second, and each look reads the whole page's text.
+   */
   private schedule(): void {
-    if (this.frame) return;
+    if (this.frame || this.timer !== undefined) return;
+    const wait = this.lastSync + SYNC_MS - Date.now();
+    if (wait > 0) {
+      this.timer = window.setTimeout(() => {
+        this.timer = undefined;
+        this.schedule();
+      }, wait);
+      return;
+    }
     this.frame = requestAnimationFrame(() => {
       this.frame = 0;
+      this.lastSync = Date.now();
       this.sync();
     });
   }
@@ -146,7 +179,9 @@ export class MapTab {
       this.tabHost.remove();
       return;
     }
-    this.strip = findTabStrip(document);
+    // The strip found last time is kept while it is still on the page and still holds the tab.
+    if (!this.strip?.isConnected || (this.tabHost.parentElement && this.tabHost.parentElement !== this.strip))
+      this.strip = findTabStrip(document);
     if (this.strip) {
       this.tabHost.classList.remove("floating");
       if (this.tabHost.parentElement !== this.strip) this.strip.append(this.tabHost);

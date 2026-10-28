@@ -298,7 +298,6 @@ export type ContentRequest =
   | { type: "stats"; mints: string[] }
   /** The open token page's coin's top holders, for the holder markers (only while they are on). */
   | { type: "holders"; mint: string }
-  | { type: "health"; site: Site; rows: number; mints: number; paused: boolean }
   /** The tooltip's Snooze: hides the coin's ring, pill and alerts for a while. */
   | { type: "snooze"; mint: string; minutes: number }
   /** The tooltip's Look up: opens the side panel on the coin. */

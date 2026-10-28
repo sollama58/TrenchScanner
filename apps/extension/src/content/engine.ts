@@ -2,7 +2,7 @@ import type { SiteAdapter } from "./adapters/adapter";
 import { Decoration, SafetyMark, safetyBody, Tooltip, tooltipBody } from "./ui";
 import { isTokenPage } from "./tokenPage";
 import { columnOf, findColumns, type BoardColumn } from "./columns";
-import { Scoper } from "./scope";
+import { Scoper, type Scope } from "./scope";
 import { pillSegments } from "../shared/pill";
 import {
   colorsOf,
@@ -57,6 +57,35 @@ const PAUSE_AFTER_MS = 10_000;
 const COLUMNS_MS = 2_000;
 /** A coin's map totals are asked for again after this long (the worker keeps them a minute too). */
 const TOTALS_MS = 60_000;
+/**
+ * A row's place among the page's layers (scope.ts) is worked out again after this long. Working it
+ * out reads the layout of every box around the row, so it isn't done on every scan.
+ */
+const SCOPE_MS = 5_000;
+/** Pills on screen are re-placed this often, as the site's numbers beside them grow and shrink. */
+const PLACE_MS = 2_000;
+/** Our own elements, which never call for a scan. */
+const OURS = /^TRENCH-OVERLAY/;
+
+/**
+ * A change that can add, remove or recycle a row: an element in or out, or a watched attribute
+ * (a link, a picture, an address mark). A price, age or count ticking over replaces text only, and
+ * a busy board does that dozens of times a second (2026-10-28: scanning on each tick took most of
+ * the overlay's CPU).
+ */
+export function structural(records: readonly MutationRecord[]): boolean {
+  for (const r of records) {
+    if (r.type === "attributes") return true;
+    if (r.type !== "childList") continue;
+    for (const list of [r.addedNodes, r.removedNodes]) {
+      for (let i = 0; i < list.length; i++) {
+        const node = list[i]!;
+        if (node.nodeType === Node.ELEMENT_NODE && !OURS.test(node.nodeName)) return true;
+      }
+    }
+  }
+  return false;
+}
 
 /**
  * The slot a virtual list places a row in: the nearest box (the row itself, or up to four levels
@@ -86,7 +115,8 @@ function slotHeight(slot: HTMLElement): number {
 
 export interface EngineDeps {
   lookup(mints: string[]): Promise<LookupAnswer>;
-  report(health: { rows: number; mints: number; paused: boolean }): void;
+  /** The rows found and the addresses read, when they change (tests read it; the tab sends nothing). */
+  report?(health: { rows: number; mints: number; paused: boolean }): void;
   /** A tracked coin's bubble map totals, for the tooltip; null when there are none or the read failed. */
   totals?(mint: string): Promise<OverlayBubbleTotals | null>;
   /** The safety verdicts of coins on screen, while the hide-or-mark option is on. */
@@ -139,8 +169,15 @@ export class OverlayEngine {
   private lastSafety = 0;
   private readonly safetyAsked = new Set<string>();
   private refreshTimer: number | undefined;
+  private placeTimer: number | undefined;
+  /** One wait for the safety screen's or the board's next ask, however many lookups found it too soon. */
+  private retryTimer: number | undefined;
   private noMintSince: number | null = null;
   private paused = false;
+  private lastReport = "";
+  /** Each row's scope, kept SCOPE_MS on the page it was read on. */
+  private scopes = new WeakMap<HTMLElement, { at: number; scope: Scope }>();
+  private scopePath = "";
 
   constructor(
     private readonly adapter: SiteAdapter,
@@ -157,23 +194,42 @@ export class OverlayEngine {
       }
       this.queueLookup();
     });
-    this.mutation = new MutationObserver(() => this.schedule());
+    this.mutation = new MutationObserver((records) => {
+      if (structural(records)) this.schedule();
+    });
     this.mutation.observe(document.body, {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["href", "src"],
+      attributeFilter: this.adapter.watchedAttributes,
     });
     this.refreshTimer = window.setInterval(() => this.queueLookup(true), REFRESH_MS);
+    this.placeTimer = window.setInterval(() => this.replace(), PLACE_MS);
+    document.addEventListener("visibilitychange", this.onVisibility);
     this.schedule();
+  }
+
+  /** A tab brought back asks about its rows at once; a hidden one asks nothing (lookupVisible). */
+  private readonly onVisibility = () => {
+    if (document.visibilityState === "visible") this.queueLookup(true);
+  };
+
+  /** The pills on screen, re-placed if the row's text moved under them (at most once a second each). */
+  private replace(): void {
+    if (document.visibilityState !== "visible") return;
+    for (const row of this.visible) this.rows.get(row)?.decoration?.schedulePlace();
   }
 
   stop(): void {
     this.mutation?.disconnect();
     this.intersection?.disconnect();
     window.clearInterval(this.refreshTimer);
+    window.clearInterval(this.placeTimer);
     window.clearTimeout(this.batchTimer);
+    window.clearTimeout(this.retryTimer);
+    document.removeEventListener("visibilitychange", this.onVisibility);
     this.batchTimer = undefined;
+    this.retryTimer = undefined;
     cancelAnimationFrame(this.frame);
     for (const [row, state] of this.rows) {
       state.decoration?.remove();
@@ -265,12 +321,17 @@ export class OverlayEngine {
         this.rows.delete(row);
       }
     }
+    // Rows can change column when the boxes are found again: every row is drawn again then.
+    let redrawAll = false;
     if (
       this.screening() &&
       (now - this.columns.at >= COLUMNS_MS || this.columns.boxes.some(([b]) => !b.isConnected))
-    )
+    ) {
       this.columns = { at: now, boxes: findColumns(document, found) };
+      redrawAll = true;
+    }
     let withMint = 0;
+    const fresh = new Set<HTMLElement>();
     for (const row of found) {
       const mint = this.adapter.mintOf(row);
       if (mint) withMint++;
@@ -279,18 +340,39 @@ export class OverlayEngine {
         state = { mint: null, decoration: null, mark: null, hidden: false, dimmed: false, slot: null };
         this.rows.set(row, state);
         this.intersection?.observe(row);
+        fresh.add(row);
       }
       // A recycled row now shows another token: drop what was drawn for the last one.
       if (state.mint !== mint) {
         state.decoration?.remove();
         this.clearSafety(row, state);
         state.mint = mint;
+        fresh.add(row);
       }
-      this.draw(row, state);
     }
-    this.checkHealth(found.length, withMint, now);
+    if (this.checkHealth(found.length, withMint, now)) redrawAll = true;
+    // A row drawn already is drawn again only when its answers change (receive and the rest draw
+    // it then) or the site's renderer undid what was drawn; on its own a scan reads, not writes.
+    for (const row of found) {
+      const state = this.rows.get(row)!;
+      if (redrawAll || fresh.has(row) || this.undone(row, state)) this.draw(row, state);
+      else state.decoration?.schedulePlace();
+    }
     this.closeGaps();
     this.queueLookup();
+  }
+
+  /** The site's renderer took away what was drawn on the row: the ring, the X, or a hidden or dimmed style. */
+  private undone(row: HTMLElement, state: RowState): boolean {
+    if (state.decoration && !state.decoration.attached) return true;
+    if (state.mark && !state.mark.attached) return true;
+    if (state.dimmed && row.style.getPropertyPriority("opacity") !== "important") return true;
+    if (state.hidden) {
+      const target = state.slot ?? row;
+      const prop = state.slot ? "visibility" : "display";
+      if (target.style.getPropertyPriority(prop) !== "important") return true;
+    }
+    return false;
   }
 
   /**
@@ -300,14 +382,26 @@ export class OverlayEngine {
   private inScope(rows: HTMLElement[]): HTMLElement[] {
     const scoper = new Scoper();
     const tokenPage = isTokenPage(this.adapter.site, location.pathname);
+    const now = Date.now();
+    if (location.pathname !== this.scopePath) {
+      this.scopePath = location.pathname;
+      this.scopes = new WeakMap();
+    }
     return rows.filter((row) => {
-      const scope = scoper.of(row);
+      let known = this.scopes.get(row);
+      if (!known || now - known.at >= SCOPE_MS) {
+        known = { at: now, scope: scoper.of(row) };
+        this.scopes.set(row, known);
+      }
+      const scope = known.scope;
       if (scope === "search") return true;
       return scope === "page" && (!tokenPage || this.adapter.inColumn(row));
     });
   }
 
-  private checkHealth(rows: number, mints: number, now: number): void {
+  /** Pauses when the adapter no longer fits the page; true when it resumes, so every row is drawn again. */
+  private checkHealth(rows: number, mints: number, now: number): boolean {
+    let resumed = false;
     if (rows > 0 && mints === 0) {
       this.noMintSince ??= now;
       if (!this.paused && now - this.noMintSince >= PAUSE_AFTER_MS) {
@@ -319,9 +413,15 @@ export class OverlayEngine {
       }
     } else {
       this.noMintSince = null;
+      resumed = this.paused;
       this.paused = false;
     }
-    this.deps.report({ rows, mints, paused: this.paused });
+    const report = `${rows}/${mints}/${this.paused}`;
+    if (report !== this.lastReport) {
+      this.lastReport = report;
+      this.deps.report?.({ rows, mints, paused: this.paused });
+    }
+    return resumed;
   }
 
   /** Throttled, not debounced: rows changing again doesn't push the pending ask back. */
@@ -345,7 +445,8 @@ export class OverlayEngine {
    * safety screen, only while it is on, sends these addresses to TrenchScanner.
    */
   private async lookupVisible(force: boolean): Promise<void> {
-    if (this.paused) return;
+    // A tab in the background asks nothing: it asks again the moment it is shown (onVisibility).
+    if (this.paused || document.visibilityState === "hidden") return;
     const now = Date.now();
     const wanted = new Set<string>();
     const unsafe = new Set<string>();
@@ -373,14 +474,14 @@ export class OverlayEngine {
         if (force || !had || now - had.at >= BOARD_STATS_MS) stats.add(mint);
       }
       if (stats.size > 0 && now - this.lastStats < SAFETY_EVERY_MS) {
-        window.setTimeout(() => this.queueLookup(force), this.lastStats + SAFETY_EVERY_MS - now);
+        this.retry(force, this.lastStats + SAFETY_EVERY_MS - now);
         stats.clear();
       }
     }
     // Too soon for another safety ask: the next lookup after the wait carries it.
     const safetyDue = now - this.lastSafety >= SAFETY_EVERY_MS;
     if (unsafe.size > 0 && !safetyDue) {
-      window.setTimeout(() => this.queueLookup(force), this.lastSafety + SAFETY_EVERY_MS - now);
+      this.retry(force, this.lastSafety + SAFETY_EVERY_MS - now);
       unsafe.clear();
     }
     await Promise.all([
@@ -391,6 +492,16 @@ export class OverlayEngine {
       unsafe.size > 0 && this.deps.safety && this.readSafety([...unsafe].slice(0, LOOKUP_MAX), now),
       stats.size > 0 && this.readStats([...stats].slice(0, LOOKUP_MAX), now),
     ]);
+  }
+
+  /** Looks again once the wait is over; a wait already set carries this one (one timer, not one per lookup). */
+  private retry(force: boolean, wait: number): void {
+    if (force) this.lookupForce = true;
+    if (this.retryTimer !== undefined) return;
+    this.retryTimer = window.setTimeout(() => {
+      this.retryTimer = undefined;
+      this.queueLookup();
+    }, wait);
   }
 
   /** The hide-or-mark option applies here: it is on, and this is a board, not a coin's page. */
@@ -432,7 +543,7 @@ export class OverlayEngine {
     if (this.board.size > 5_000) {
       for (const [mint, v] of this.board) if (now - v.at > 10 * BOARD_STATS_MS) this.board.delete(mint);
     }
-    for (const [row, state] of this.rows) if (state.mint && asked.includes(state.mint)) this.draw(row, state);
+    this.drawFor(asked);
     // Coins hidden past the reader's limits leave a gap in a virtual list otherwise.
     if (this.tipPrefs.limits.mode === "hide") this.closeGaps();
   }
@@ -458,7 +569,7 @@ export class OverlayEngine {
     if (this.safety.size > 5_000) {
       for (const [mint, v] of this.safety) if (now - v.at > 10 * REFRESH_MS) this.safety.delete(mint);
     }
-    for (const [row, state] of this.rows) if (state.mint && asked.includes(state.mint)) this.draw(row, state);
+    this.drawFor(asked);
   }
 
   /** A board coin's token, when the option is on and its numbers are no older than the reader allows. */
@@ -589,6 +700,12 @@ export class OverlayEngine {
     state.mark = null;
   }
 
+  /** Draws again the rows showing these coins. */
+  private drawFor(mints: readonly string[]): void {
+    const asked = new Set(mints);
+    for (const [row, state] of this.rows) if (state.mint && asked.has(state.mint)) this.draw(row, state);
+  }
+
   /** Exposed for tests: how many coins' lookup answers are kept. */
   get answerCount(): number {
     return this.tokens.size;
@@ -605,7 +722,7 @@ export class OverlayEngine {
         if (now - v.at > 10 * REFRESH_MS && !onRows.has(mint)) this.tokens.delete(mint);
       }
     }
-    for (const [row, state] of this.rows) if (state.mint && asked.includes(state.mint)) this.draw(row, state);
+    this.drawFor(asked);
   }
 
   private draw(row: HTMLElement, state: RowState): void {

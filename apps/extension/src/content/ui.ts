@@ -42,22 +42,23 @@ const RING_CSS = `
 .risk { --a: var(--c-risk); --b: var(--c-risk2); }
 .plain { --a: color-mix(in srgb, var(--c-pillText) 45%, transparent); --b: var(--a); }
 .ring.plain { display: none; }
-.halo::before { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.5px;
-  background: conic-gradient(from var(--ang, 0deg), var(--a), var(--b), transparent 40%, transparent 60%, var(--a));
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
-  animation: sweep 6s linear infinite; }
+.sweep { display: none; }
+.halo > .sweep { display: block; position: absolute; inset: 0; border-radius: inherit; padding: 1.5px; overflow: hidden; container-type: size;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+.sweep > i { position: absolute; left: 50%; top: 50%; width: 145cqmax; height: 145cqmax; translate: -50% -50%;
+  background: conic-gradient(var(--a), var(--b), transparent 40%, transparent 60%, var(--a));
+  animation: sweep 6s linear infinite; will-change: transform; }
+.calm > .sweep > i { animation: none; }
 .halo::after { content: ""; position: absolute; inset: 0; border-radius: inherit;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--a) 35%, transparent), inset 0 0 22px -8px var(--a); }
-.calm.halo::before { animation: none; }
 .brackets::before, .brackets::after { content: ""; position: absolute; width: 18px; height: 18px; border: 2px solid var(--a); }
 .brackets::before { top: 3px; left: 3px; border-right: 0; border-bottom: 0; border-radius: 6px 0 0 0; }
 .brackets::after { bottom: 3px; right: 3px; border-left: 0; border-top: 0; border-radius: 0 0 6px 0; border-color: var(--b); }
 .rail::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0;
   background: linear-gradient(var(--a), var(--b)); box-shadow: 0 0 10px var(--a); }
 .rail::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, color-mix(in srgb, var(--a) 10%, transparent), transparent 45%); }
-@property --ang { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
-@keyframes sweep { to { --ang: 360deg; } }
-@media (prefers-reduced-motion: reduce) { .halo::before { animation: none; } }
+@keyframes sweep { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .sweep > i { animation: none; } }
 .badge { position: absolute; top: 4px; right: 4px; pointer-events: auto; cursor: default; display: inline-flex; align-items: center; gap: 5px;
   font: 500 10.5px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; padding: 1px 7px 1px 5px; border-radius: 999px;
   background: color-mix(in srgb, var(--c-pillBg) 92%, transparent); border: 1px solid var(--a); color: var(--c-pillText); white-space: nowrap; max-width: 60%; overflow: hidden; text-overflow: ellipsis; }
@@ -143,6 +144,8 @@ function visibleSpan(row: HTMLElement, rect: DOMRect): { left: number; right: nu
 
 /** A pill's text as spans, written with textContent only (a filter's name is the reader's text). */
 function fill(target: HTMLElement, segments: readonly PillSegment[]): string {
+  const key = keyOf(segments);
+  if (target.dataset.key === key) return key;
   const parts: Node[] = [];
   for (const [i, seg] of segments.entries()) {
     if (i > 0) {
@@ -156,11 +159,8 @@ function fill(target: HTMLElement, segments: readonly PillSegment[]): string {
     span.textContent = seg.text;
     parts.push(span);
   }
-  const key = keyOf(segments);
-  if (target.dataset.key !== key) {
-    target.replaceChildren(...parts);
-    target.dataset.key = key;
-  }
+  target.replaceChildren(...parts);
+  target.dataset.key = key;
   return key;
 }
 
@@ -168,6 +168,67 @@ export interface DecorationOptions {
   style: RingStyle;
   calm: boolean;
   onHover(badge: Element, entering: boolean): void;
+}
+
+/**
+ * Rows the site lays out static, which a ring makes relative to sit in. Read once per row: a
+ * virtual list recycles its rows for coin after coin, and reading the style forces the page's
+ * styles to be worked out there and then.
+ */
+const staticRows = new WeakMap<HTMLElement, boolean>();
+function staticRow(row: HTMLElement): boolean {
+  let known = staticRows.get(row);
+  if (known === undefined) {
+    const position = getComputedStyle(row).position;
+    known = position === "" || position === "static";
+    staticRows.set(row, known);
+  }
+  return known;
+}
+
+/** What step 1 of placing a ring's pills read, for step 3. */
+interface Placing {
+  row: { w: number; h: number };
+  obstacles: Box[];
+  seen: { left: number; right: number };
+  /** The pills' sizes, whole (step 3). */
+  badge?: { w: number; h: number };
+  more?: { w: number; h: number };
+}
+
+/** The rings whose pills are placed on the next frame, all together (Decoration.measure). */
+const placing = new Set<Decoration>();
+let placeFrame = 0;
+
+function placeAll(): void {
+  placeFrame = 0;
+  const due = [...placing];
+  placing.clear();
+  const now = performance.now();
+  const measured: [Decoration, Placing][] = [];
+  for (const d of due) {
+    const m = d.measure(now);
+    if (m) measured.push([d, m]);
+  }
+  for (const [d] of measured) d.prepare();
+  for (const [d, m] of measured) d.sizes(m);
+  for (const [d, m] of measured) d.place(m);
+}
+
+/** The decorated rows, for the one size watcher they share. */
+const decorations = new WeakMap<Element, Decoration>();
+let sizeWatch: ResizeObserver | null = null;
+
+/** One ResizeObserver for every ring: a row that changes size has its pills placed again. */
+function sizes(): ResizeObserver | null {
+  if (typeof ResizeObserver === "undefined") return null;
+  sizeWatch ??= new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const box = entry.borderBoxSize[0];
+      if (box) decorations.get(entry.target)?.resized(box.inlineSize, box.blockSize);
+    }
+  });
+  return sizeWatch;
 }
 
 /** One row's ring and badge. Re-attached if the site's renderer removes it. */
@@ -195,7 +256,6 @@ export class Decoration {
   private hasMore = false;
   private placedFor = "";
   private placedAt = 0;
-  private placeFrame = 0;
 
   constructor(
     private readonly row: HTMLElement,
@@ -206,7 +266,13 @@ export class Decoration {
     const style = document.createElement("style");
     style.textContent = RING_CSS;
     this.ring = document.createElement("div");
-    this.ring.append(this.fx);
+    // The halo's sweep turns a square larger than the ring under the ring's mask: a transform the
+    // compositor runs, where animating the gradient's angle restyled every ring on every frame
+    // (2026-10-28: a third of the overlay's cost on a busy board).
+    const sweep = document.createElement("div");
+    sweep.className = "sweep";
+    sweep.append(document.createElement("i"));
+    this.ring.append(sweep, this.fx);
     this.badge = document.createElement("span");
     this.badge.className = "badge";
     this.badge.append(document.createElement("i"));
@@ -231,7 +297,8 @@ export class Decoration {
       this.remove();
       return;
     }
-    this.ring.className = `ring ${kind} ${style}${calm ? " calm" : ""}`;
+    const ringClass = `ring ${kind} ${style}${calm ? " calm" : ""}`;
+    if (this.ring.className !== ringClass) this.ring.className = ringClass;
     const effect = pills.effect && pills.effect !== "none" ? pills.effect : "";
     if (this.fx.className !== `fx ${effect}`) this.fx.className = `fx ${effect}`;
     this.colors.set(pills.colors);
@@ -258,13 +325,16 @@ export class Decoration {
     this.more.className = `badge more ${this.kind}${this.hasMore && this.moreFits ? "" : " gone"}`;
   }
 
-  /** Re-place after the next layout; cheap to call often (rows re-render all the time). */
+  /**
+   * Re-place after the next layout; cheap to call often (rows re-render all the time): a pill
+   * placed under a second ago, in a row that hasn't changed size since (resized), waits, without
+   * measuring anything.
+   */
   schedulePlace(): void {
-    if (this.placeFrame) return;
-    this.placeFrame = requestAnimationFrame(() => {
-      this.placeFrame = 0;
-      this.place();
-    });
+    if (placing.has(this)) return;
+    if (this.placedFor && performance.now() - this.placedAt < 1000) return;
+    placing.add(this);
+    placeFrame ||= requestAnimationFrame(placeAll);
   }
 
   /**
@@ -273,50 +343,72 @@ export class Decoration {
    * the row's visible top-right corner, over the row's content: never shrunk to a dot, which said
    * nothing and read as a pill cut off (user ask 2026-10-26). Re-measured when the row's size
    * changes, and at most once a second otherwise.
+   *
+   * Every ring due is placed in one frame (placeAll), in steps: all of them read the rows, then
+   * all write their pills' full text, then all read the pills' sizes and place them. Placed one
+   * by one, each ring's write made the next one's read lay the whole page out again
+   * (2026-10-28: a column of new coins cost a layout per row).
    */
-  private place(): void {
-    if (!this.attached) return;
+  /** Step 1, reads only: the row's box and what its pills must avoid; null when nothing is due. */
+  measure(now: number): Placing | null {
+    if (!this.attached) return null;
     const rect = this.row.getBoundingClientRect();
     const key = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
-    const now = performance.now();
-    if (key === this.placedFor && now - this.placedAt < 1000) return;
+    if (key === this.placedFor && now - this.placedAt < 1000) return null;
     this.placedFor = key;
     this.placedAt = now;
-
-    const obstacles = obstaclesIn(this.row, this.host);
+    const obstacles = obstaclesIn(this.row, this.host, rect);
     // A row wider than the column showing it: the part cut off is no place for a pill.
     const seen = visibleSpan(this.row, rect);
     if (seen.left > 0) obstacles.push({ x: -4, y: 0, w: seen.left + 4, h: rect.height });
     if (seen.right < rect.width)
       obstacles.push({ x: seen.right, y: 0, w: rect.width - seen.right + 4, h: rect.height });
-    const row = { w: rect.width, h: rect.height };
-    // Measured whole, then with fewer parts, the first ones kept, if it fits nowhere whole.
+    return { row: { w: rect.width, h: rect.height }, obstacles, seen };
+  }
+
+  /** Step 2, writes only: the pills whole, to be measured. */
+  prepare(): void {
     this.shown = Infinity;
     fill(this.badgeText, this.mainSegs);
     this.moreFits = this.hasMore;
     this.paint();
-    let first = this.spotFor(this.badge, row, obstacles, this.badgeAt);
+  }
+
+  /** Step 3, reads only: the pills' sizes, whole. */
+  sizes(m: Placing): void {
+    m.badge = { w: this.badge.offsetWidth, h: this.badge.offsetHeight };
+    m.more = { w: this.more.offsetWidth, h: this.more.offsetHeight };
+  }
+
+  /** Step 4: where the pills go, decided and written. */
+  place({ row, obstacles, seen, badge: whole, more }: Placing): void {
+    // Measured whole, then with fewer parts, the first ones kept, if it fits nowhere whole.
+    let first = this.spotFor(whole!, row, obstacles, this.badgeAt);
+    let size = whole!;
     for (let n = this.mainSegs.length - 1; !first && n >= 1; n--) {
       this.shown = n;
       fill(this.badgeText, this.mainSegs.slice(0, n));
-      first = this.spotFor(this.badge, row, obstacles, null);
+      size = { w: this.badge.offsetWidth, h: this.badge.offsetHeight };
+      first = this.spotFor(size, row, obstacles, null);
     }
     this.badgeAt = first;
     // The visible top-right corner, over the content, when even the first part fits nowhere.
+    const badgeW = size.w;
+    const badgeH = size.h;
     const badge = first ?? {
-      x: Math.max(seen.left + 4, seen.right - this.badge.offsetWidth - 4),
+      x: Math.max(seen.left + 4, seen.right - badgeW - 4),
       y: 4,
       w: 0,
       h: 0,
     };
-    this.put(this.badge, badge);
 
     // The second pill takes the next free patch, clear of the first; left out when none fits.
     let next: Box | null = null;
     if (this.hasMore) {
-      const taken = { x: badge.x, y: badge.y, w: this.badge.offsetWidth, h: this.badge.offsetHeight };
-      next = this.spotFor(this.more, row, [...obstacles, taken], this.moreAt);
+      const taken = { x: badge.x, y: badge.y, w: badgeW, h: badgeH };
+      next = this.spotFor(more!, row, [...obstacles, taken], this.moreAt);
     }
+    this.put(this.badge, badge);
     this.moreAt = next;
     this.moreFits = next !== null;
     this.paint();
@@ -325,13 +417,11 @@ export class Decoration {
 
   /** Where a pill goes: where it is, while that still fits, else the first free spot. */
   private spotFor(
-    pill: HTMLElement,
+    { w, h }: { w: number; h: number },
     row: { w: number; h: number },
     obstacles: Box[],
     at: Box | null,
   ): Box | null {
-    const w = pill.offsetWidth;
-    const h = pill.offsetHeight;
     if (at && stillFits(row, obstacles, { x: at.x, y: at.y, w, h })) return { x: at.x, y: at.y, w, h };
     const spot = findSpot(row, obstacles, w, h);
     return spot ? { ...spot, w, h } : null;
@@ -344,19 +434,28 @@ export class Decoration {
     pill.style.right = "auto";
   }
 
+  /** The row's size now: placed again on the next frame if it changed, however recently it was placed. */
+  resized(width: number, height: number): void {
+    if (`${Math.round(width)}x${Math.round(height)}` === this.placedFor) return;
+    this.placedFor = "";
+    this.schedulePlace();
+  }
+
   attach(): void {
     if (this.host.parentElement === this.row) return;
-    const position = getComputedStyle(this.row).position;
-    if (position === "" || position === "static") {
+    if (staticRow(this.row)) {
       this.row.style.position = "relative";
       this.madeRelative = true;
     }
     this.row.append(this.host);
+    sizes()?.observe(this.row);
+    decorations.set(this.row, this);
   }
 
   remove(): void {
-    cancelAnimationFrame(this.placeFrame);
-    this.placeFrame = 0;
+    sizes()?.unobserve(this.row);
+    decorations.delete(this.row);
+    placing.delete(this);
     this.placedFor = "";
     this.host.remove();
     if (this.madeRelative && !this.row.querySelector(":scope > trench-overlay-x")) {
@@ -412,12 +511,15 @@ export class SafetyMark {
   update(colors: Record<ColorKey, string>): void {
     this.colors.set(colors);
     if (this.host.parentElement === this.row) return;
-    const position = getComputedStyle(this.row).position;
-    if (position === "" || position === "static") {
+    if (staticRow(this.row)) {
       this.row.style.position = "relative";
       this.madeRelative = true;
     }
     this.row.append(this.host);
+  }
+
+  get attached(): boolean {
+    return this.host.parentElement === this.row;
   }
 
   remove(): void {
