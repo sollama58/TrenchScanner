@@ -109,6 +109,45 @@ async function readMintOnFeed(mint: string): Promise<boolean> {
   return call !== null || match !== null;
 }
 
+/** Which of `mints` the scanner tracks on its own (mintOnFeed's rule), in a few queries for all of them. */
+export async function mintsOnFeed(mints: readonly string[], now = Date.now()): Promise<Set<string>> {
+  const out = new Set<string>();
+  const unknown: string[] = [];
+  for (const mint of new Set(mints)) {
+    const seen = onFeedAt.get(mint);
+    if (seen !== undefined && now - seen < ON_FEED_MS) out.add(mint);
+    else unknown.push(mint);
+  }
+  if (unknown.length === 0) return out;
+  const tokens = await prisma.token.findMany({
+    where: { mintAddress: { in: unknown } },
+    select: { id: true, mintAddress: true, discoverySource: true },
+  });
+  const lookedUp = tokens.filter((t) => t.discoverySource === "utility").map((t) => t.id);
+  const [calls, matches] = lookedUp.length
+    ? await Promise.all([
+        prisma.curatedAlert.findMany({
+          where: { tokenId: { in: lookedUp } },
+          distinct: ["tokenId"],
+          select: { tokenId: true },
+        }),
+        prisma.match.findMany({
+          where: { tokenId: { in: lookedUp } },
+          distinct: ["tokenId"],
+          select: { tokenId: true },
+        }),
+      ])
+    : [[], []];
+  const alerted = new Set([...calls, ...matches].map((r) => r.tokenId));
+  for (const t of tokens) {
+    if (t.discoverySource === "utility" && !alerted.has(t.id)) continue;
+    out.add(t.mintAddress);
+    if (onFeedAt.size >= ON_FEED_MAX) onFeedAt.clear();
+    onFeedAt.set(t.mintAddress, now);
+  }
+  return out;
+}
+
 /** Whether TrenchScanner knows the wallet: a KOL on the roster, or one a scan or tape has seen. */
 export async function walletOnFeed(wallet: string): Promise<boolean> {
   const kol = await prisma.kolWallet.findUnique({ where: { wallet }, select: { wallet: true } });

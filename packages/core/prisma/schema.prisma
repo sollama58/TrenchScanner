@@ -135,6 +135,7 @@ model User {
   apiKeys           UserApiKey[]
   /// Read-only keys for the browser extension overlay. The secret is shown once and stored only as a hash.
   extensionKeys     ExtensionKey[]
+  buddyWallets      BuddyWallet[]
   tradingWallet     TradingWallet?
   tradingBot        TradingBot?
   paperStrategies   PaperStrategy[]
@@ -2239,6 +2240,20 @@ model ExtensionKey {
   revokedAt  DateTime?
 
   @@index([userId, revokedAt])
+}
+
+/// A wallet of the reader's own besides the account's (Axiom's, Terminal's...), linked by signing
+/// a message with it (user decision 2026-10-27, Card 11): Trade Buddy follows only these. Linking
+/// proves the reader holds the key, so one key can no longer make the server follow strangers'
+/// wallets on our Helius key (audit 2026-10-27, AP-1 = EX-1).
+model BuddyWallet {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet    String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, wallet])
 }
 
 /// One on-chain burn of the subscription token, whether or not we have a user for it yet.
