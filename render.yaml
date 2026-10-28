@@ -656,12 +656,14 @@ services:
         value: "660"
       - key: WORKER_ROLE
         value: trainer
-      # Its own DexScreener budget, out of the per-IP 300 a minute the scanner (180) and the api
-      # (120) already take between them. At the default 180 the daily outcome pass could push the
-      # three past the limit together (inferred from 429s in the API usage panel, 2026-10-20). It reads
-      # one batch at a time, so 60 a minute still finishes thousands of mints in minutes.
+      # Its own DexScreener budget, out of the per-IP 300 a minute: the scanner 180, the api 90
+      # (LIVE_REFRESH_CALLS_PER_MINUTE), this 30, which add up to the 300 (full audit 2026-10-27,
+      # DA-12: 180 + 120 + 60 went 60 past it). At the default 180 the daily outcome pass pushed the
+      # three past the limit together (inferred from 429s in the API usage panel, 2026-10-20). It
+      # reads one batch of up to 30 mints at a time, so 30 a minute still finishes thousands of
+      # mints in minutes.
       - key: DEXSCREENER_REQUESTS_PER_MINUTE
-        value: "60"
+        value: "30"
       - key: ANTHROPIC_API_KEY
         sync: false
       # Empty until TokenSage's X-reuse and wave counts are whole again (TokenSage #85 with

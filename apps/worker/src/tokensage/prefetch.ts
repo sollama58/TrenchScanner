@@ -12,6 +12,7 @@ import {
   tokenSageEnabled,
   tokenSageImageUrl,
   tokenSageReadIsStale,
+  tokenSageDescription,
   tokenSageSocials,
   type Env,
   type TokenSageAnalysis,
@@ -558,10 +559,26 @@ async function storeAnalysis(
     logger.info("TokenSage basic X caveat", { mint, caveats });
   }
   await backfillTokenImage(mint, analysis);
+  await backfillTokenDescription(mint, analysis);
   // The links TokenSage's own metadata read found, on a row still missing them (socialsFill.ts).
   await recordSocialLinks([{ mintAddress: mint, ...tokenSageSocials(analysis) }]).catch((err: unknown) =>
     logger.warn("token socials backfill failed", { mint, error: String(err) }),
   );
+}
+
+/**
+ * A coin whose description was never recorded takes the one TokenSage read from the same launch
+ * JSON, instead of the in-band metadata read buying it again off the chain and the IPFS gateways
+ * (full audit 2026-10-27, DA-11). Only rows still null are touched, so nothing recorded is replaced.
+ */
+async function backfillTokenDescription(mintAddress: string, analysis: TokenSageAnalysis): Promise<void> {
+  const description = tokenSageDescription(analysis);
+  if (!description) return;
+  await prisma.token
+    .updateMany({ where: { mintAddress, description: null }, data: { description } })
+    .catch((err) =>
+      logger.warn("token description backfill failed", { mint: mintAddress, error: String(err) }),
+    );
 }
 
 /**

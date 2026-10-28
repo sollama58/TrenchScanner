@@ -180,6 +180,20 @@ const PROBE_MS = 15_000;
 const PAUSE_MS = 30_000;
 
 /**
+ * Headers every request to a Pump.fun host carries, the way the site's own pages and TokenSage ask
+ * (tokensage/resolve/resolver.py). From 2026-10-22 Pump.fun refused this service's bare requests
+ * (no Origin, Node's default User-Agent) with a 403 on every probe, while TokenSage, from the same
+ * Render region, sent `Origin: https://pump.fun` and a named User-Agent and was answered 5,677
+ * times of 5,687 in a day (full audit 2026-10-27, DA-1). Whether the header is the whole cause is
+ * shown by the gates' refusal counts after a deploy.
+ */
+export const PUMPFUN_REQUEST_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  accept: "application/json",
+  origin: "https://pump.fun",
+  "user-agent": "TrenchScanner/1.0 (+https://github.com/sollama58/TrenchScanner)",
+});
+
+/**
  * The process's gates, one per host. frontend-api: the scan's discovery (about 14 a cycle at
  * once), launch lookups (up to 60 a cycle) and live market caps. swap-api: the trade tape, the
  * trainer's candle jobs (up to about 180 a minute) and the API's charts.
