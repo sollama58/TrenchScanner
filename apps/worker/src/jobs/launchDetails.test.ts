@@ -150,11 +150,21 @@ describe("fillLaunchDetails", () => {
 describe("fillBandMetadata", () => {
   beforeEach(() => resetLaunchDetails());
 
-  it("reads in-band coins' URIs off the chain once, then their metadata, and saves what it found", async () => {
-    const getAssetMetadataUri = vi.fn(async (mint: string) => {
+  /** A chain read answering per mint as `answer` says, recording each batch it was asked. */
+  const chainReader = (answer: (mint: string) => string | null | "failed") => {
+    const batches: string[][] = [];
+    const getMetadataUris = vi.fn(async (mints: readonly string[]) => {
+      batches.push([...mints]);
+      return new Map(mints.map((m) => [m, answer(m)]));
+    });
+    return { batches, getMetadataUris };
+  };
+
+  it("reads in-band coins' URIs off the chain once, in one batch, then their metadata, and saves what it found", async () => {
+    const { batches, getMetadataUris } = chainReader((mint) => {
       if (mint === "a") return "https://ipfs.io/ipfs/" + "Q".repeat(46);
       if (mint === "b") return null;
-      return "failed" as const;
+      return "failed";
     });
     const fetchMetadata = vi.fn(async (mint: string) =>
       coin(mint, { description: "from chain", symbol: "X" }),
@@ -168,11 +178,12 @@ describe("fillBandMetadata", () => {
     await fillBandMetadata(
       ["a", "b", "c", "has"],
       20,
-      { helius: { getAssetMetadataUri }, pending, fetchMetadata },
+      { helius: { getMetadataUris }, pending, fetchMetadata },
       save,
     );
-    // "has" already has a description; a, b and c are read; only a has a URI and answers.
-    expect(getAssetMetadataUri.mock.calls.map((c) => c[0]).sort()).toEqual(["a", "b", "c"]);
+    // "has" already has a description; a, b and c are read in one chain read (one billed call,
+    // not a 10-credit DAS read each: audit 2026-10-27, DA-4); only a has a URI and answers.
+    expect(batches.map((b) => [...b].sort())).toEqual([["a", "b", "c"]]);
     expect(fetchMetadata).toHaveBeenCalledTimes(1);
     const saved = (save.mock.calls[0] as unknown as [DiscoveredCoin[]])[0];
     expect(saved.map((c) => [c.mintAddress, c.description, c.symbol])).toEqual([["a", "from chain", "A"]]);
@@ -181,21 +192,21 @@ describe("fillBandMetadata", () => {
     await fillBandMetadata(
       ["a", "b", "c"],
       20,
-      { helius: { getAssetMetadataUri }, pending, fetchMetadata },
+      { helius: { getMetadataUris }, pending, fetchMetadata },
       save,
     );
-    expect(getAssetMetadataUri.mock.calls.map((c) => c[0])).toEqual(["a", "b", "c", "c"]);
+    expect(batches.slice(1)).toEqual([["c"]]);
   });
 
   it("reads at most perCycle coins a cycle, and none when off", async () => {
-    const getAssetMetadataUri = vi.fn(async () => null);
+    const { batches, getMetadataUris } = chainReader(() => null);
     const pending = async (mints: readonly string[]) =>
       mints.map((m) => ({ mintAddress: m, symbol: null, name: null }));
     const save = vi.fn(async () => {});
-    await fillBandMetadata(["a", "b", "c"], 2, { helius: { getAssetMetadataUri }, pending }, save);
-    expect(getAssetMetadataUri).toHaveBeenCalledTimes(2);
-    await fillBandMetadata(["d"], 0, { helius: { getAssetMetadataUri }, pending }, save);
-    expect(getAssetMetadataUri).toHaveBeenCalledTimes(2);
+    await fillBandMetadata(["a", "b", "c"], 2, { helius: { getMetadataUris }, pending }, save);
+    expect(batches).toEqual([["a", "b"]]);
+    await fillBandMetadata(["d"], 0, { helius: { getMetadataUris }, pending }, save);
+    expect(getMetadataUris).toHaveBeenCalledTimes(1);
     expect(save).not.toHaveBeenCalled();
   });
 });

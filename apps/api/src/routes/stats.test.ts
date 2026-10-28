@@ -504,6 +504,12 @@ describe.skipIf(!dbAvailable)("buildDbReport", () => {
     expect(Array.isArray(report.activity)).toBe(true);
     expect(report.tables.map((t) => t.table)).toContain("TokenSnapshot");
     expect(report.indexes.some((i) => i.index === "Token_firstSeenAt_idx" && i.valid)).toBe(true);
+    // The batch reads' big tables too, not only the scan's.
+    expect(report.tables.map((t) => t.table)).toContain("TokenWalletActivity");
+    expect(Array.isArray(report.invalidIndexes)).toBe(true);
+    // pg_stat_statements answers only where the server preloads it; otherwise the report says why.
+    if (report.statements.available) expect(Array.isArray(report.statements.statements)).toBe(true);
+    else expect(report.statements.reason.length).toBeGreaterThan(0);
     expect(typeof report.locksWaiting).toBe("number");
     // This connection at least, against the server's ceiling.
     expect(report.connections.total).toBeGreaterThanOrEqual(1);
@@ -542,7 +548,7 @@ describe.skipIf(!dbAvailable)("GET /stats/live", () => {
       expect(res.json()).toMatchObject({
         viewedLast2Min: expect.any(Number),
         readingAgeSeconds: expect.any(Object),
-        refresher: { lookups: 0, overBudget: 0, callsPerMinuteBudget: 120 },
+        refresher: { lookups: 0, overBudget: 0, callsPerMinuteBudget: 90 },
       });
     } finally {
       await app.close();

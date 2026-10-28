@@ -13,6 +13,8 @@
 #  3. Code in apps/*/src and packages/*/src (tests excluded) may read `process.env.NAME` only for a
 #     schema key or a key in DIRECT_READS. Anything else is a setting the schema, this check and
 #     .env.example never hear of.
+#  4. Every key .env.example sets must be a schema key (or one of the lists below): it documented
+#     CURATOR_MODEL_FAMILIES long after the schema stopped reading it (full audit 2026-10-27, CH-16).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -169,5 +171,19 @@ if [ "${#stray[@]}" -gt 0 ]; then
   failed=1
 fi
 
-[ "$failed" -eq 0 ] && echo "check-env-keys: render.yaml, the env schema and direct process.env reads agree ($(wc -l <<<"$render_keys" | tr -d ' ') render.yaml keys, ${#REQUIRED[@]} required declarations, $(wc -w <<<"$direct" | tr -d ' ') direct reads)"
+# 4. .env.example -> schema.
+example_keys=$(grep -oE '^[A-Z][A-Z0-9_]*=' .env.example | tr -d '=' | sort -u)
+dead=()
+for key in $example_keys; do
+  if printf '%s\n' "${IGNORE[@]}" | grep -qx "$key"; then continue; fi
+  if ! grep -qx "$key" <<<"$known_keys"; then dead+=("$key"); fi
+done
+if [ "${#dead[@]}" -gt 0 ]; then
+  echo "check-env-keys: .env.example sets keys that $ENV_TS does not read:" >&2
+  printf '  %s\n' "${dead[@]}" >&2
+  echo "Remove them from .env.example, or add them to envSchema." >&2
+  failed=1
+fi
+
+[ "$failed" -eq 0 ] && echo "check-env-keys: render.yaml, .env.example, the env schema and direct process.env reads agree ($(wc -l <<<"$render_keys" | tr -d ' ') render.yaml keys, ${#REQUIRED[@]} required declarations, $(wc -w <<<"$direct" | tr -d ' ') direct reads)"
 exit "$failed"

@@ -1,5 +1,7 @@
 # TrenchScanner code review
 
+> **Status (2026-10-27, full audit, Lane 13):** this is a dated review of `c8cb13f0`, kept as written. Eight of its nine findings have since shipped (the Status column below says where); only TS-009 is open. The "Fix first" list is history, not a to-do list. Current findings live in the project's audit notes.
+
 Reviewed `main` at `c8cb13f0` (2026-10-20). Review only: no source edits, no migrations, no signed transactions, no paid API calls. Tests were not run: this environment has no Postgres and `DATABASE_URL` is unset.
 
 ## Summary
@@ -30,17 +32,17 @@ Checks:
 
 ## Findings
 
-| ID     | Severity | Area         | Title                                                                   | Location                                     |
-| ------ | -------- | ------------ | ----------------------------------------------------------------------- | -------------------------------------------- |
-| TS-001 | Medium   | Worker       | A lost job lock does not stop the run                                   | `apps/worker/src/jobLock.ts:98`              |
-| TS-002 | Medium   | Trading      | A failed trade insert still broadcasts, and the build can be sent again | `apps/api/src/routes/proTrade.ts:905`        |
-| TS-003 | Medium   | Models       | Text and playbook calls retry; the budget records one charge            | `apps/worker/src/ai/client.ts:16`            |
-| TS-004 | Medium   | Trading      | The 5-second Pro limit is per process                                   | `apps/api/src/routes/proTrade.ts:179`        |
-| TS-005 | Info     | Models       | Recommendation: gated seats train on rows live would reject             | `packages/core/src/curation/modelGate.ts:68` |
-| TS-006 | Info     | Models       | Recommendation: a late shadow review sees comparables replay would hide | `apps/worker/src/ai/reviewer.ts:200`         |
-| TS-007 | Low      | Database     | `AdminAction` is never deleted                                          | `packages/core/prisma/schema.prisma:2899`    |
-| TS-008 | Low      | Worker       | `curator-training` has no cross-process lock                            | `apps/worker/src/index.ts:969`               |
-| TS-009 | Low      | Dependencies | Moderate advisories in the Privy wallet stack                           | `package-lock.json` (`@privy-io/react-auth`) |
+| ID     | Severity | Area         | Title                                                                   | Location                                     | Status (2026-10-27)                        |
+| ------ | -------- | ------------ | ----------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------ |
+| TS-001 | Medium   | Worker       | A lost job lock does not stop the run                                   | `apps/worker/src/jobLock.ts:98`              | Fixed: `jobLock.ts` `stopWhenLockLost`     |
+| TS-002 | Medium   | Trading      | A failed trade insert still broadcasts, and the build can be sent again | `apps/api/src/routes/proTrade.ts:905`        | Fixed: `proTrade.ts` answers 503 `notSent` |
+| TS-003 | Medium   | Models       | Text and playbook calls retry; the budget records one charge            | `apps/worker/src/ai/client.ts:16`            | Fixed: `ai/client.ts` `maxRetries: 0`      |
+| TS-004 | Medium   | Trading      | The 5-second Pro limit is per process                                   | `apps/api/src/routes/proTrade.ts:179`        | Fixed: DB pace check; limit now 1 s        |
+| TS-005 | Info     | Models       | Recommendation: gated seats train on rows live would reject             | `packages/core/src/curation/modelGate.ts:68` | Mostly fixed: `modelGate.ts`               |
+| TS-006 | Info     | Models       | Recommendation: a late shadow review sees comparables replay would hide | `apps/worker/src/ai/reviewer.ts:200`         | Fixed: `reviewer.ts` `decisionAt`          |
+| TS-007 | Low      | Database     | `AdminAction` is never deleted                                          | `packages/core/prisma/schema.prisma:2899`    | Fixed: `cleanupJob.ts`                     |
+| TS-008 | Low      | Worker       | `curator-training` has no cross-process lock                            | `apps/worker/src/index.ts:969`               | Fixed: `index.ts`, `heartbeat.ts`          |
+| TS-009 | Low      | Dependencies | Moderate advisories in the Privy wallet stack                           | `package-lock.json` (`@privy-io/react-auth`) | Open                                       |
 
 ## Finding details
 

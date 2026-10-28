@@ -254,6 +254,12 @@ interface Outcome {
   ok: boolean;
   rateLimited: boolean;
   ms: number;
+  /**
+   * Billed although not answered: a Helius request we stopped waiting for. Helius bills a call it
+   * received whether or not the answer arrives (helius.ts, sendBatched), so a timeout's credits
+   * count while the call still counts as an error (audit 2026-10-27, DA-15).
+   */
+  billed?: boolean;
 }
 
 const featureStore = new AsyncLocalStorage<FeatureContext>();
@@ -360,7 +366,7 @@ export class ApiUsageMeter {
   /** Counts one HTTP request's lines (the request, its latency, on the first line only). */
   record(lines: ApiCallLine[], outcome: Outcome, at = Date.now()): void {
     const ctx = featureStore.getStore();
-    if (ctx?.tallies && outcome.ok) {
+    if (ctx?.tallies && (outcome.ok || outcome.billed)) {
       for (const line of lines) {
         if (line.provider !== "helius") continue;
         for (const tally of ctx.tallies) tally.add(line.credits);
@@ -389,8 +395,9 @@ export class ApiUsageMeter {
     c.rateLimited += o.rateLimited ? line.calls : 0;
     // Only answered calls are billed: an error or a 429 charged its credits too, so the cost panel
     // over-read during exactly the incidents it should explain (audit 2026-10-14, L6-9). The
-    // calls, errors and rate-limited columns still count every attempt.
-    c.credits += o.ok ? line.credits : 0;
+    // calls, errors and rate-limited columns still count every attempt. A Helius timeout is the
+    // exception the other way: billed, though it answered nothing (Outcome.billed).
+    c.credits += o.ok || o.billed ? line.credits : 0;
     c.msTotal += Math.round(o.ms);
     this.rows.set(k, c);
   }
@@ -733,6 +740,8 @@ export function meteredFetch(inner: typeof fetch): typeof fetch {
           ok: false,
           rateLimited: false,
           ms: Date.now() - startedAt,
+          // Our own deadline cut it: Helius had the request and bills it all the same.
+          billed: billedHelius && err instanceof Error && err.name === "AbortError",
         });
       }
       throw err;

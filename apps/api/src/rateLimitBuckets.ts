@@ -14,13 +14,13 @@ export const RATE_LIMIT_BUCKETS = 100_000;
  * the plugin's: without it each route-level limit (sign-in, 2FA, the paid lookups) sat in a
  * 5,000-entry LRU that rotating callers flush (audit 2026-10-23, CE-9). Call it before registering
  * @fastify/rate-limit, so this onRoute hook runs before the plugin's reads the config. The
- * extension routes (/ext/v1 and its keys) are on hold and keep theirs as they are.
+ * extension routes (/ext/v1 and its keys) are sized too: left at 5,000, a key holder rotating
+ * addresses flushed their own key's bucket and every Trade Buddy limit with it (audit 2026-10-27, AP-3).
  */
 export function sizeRouteRateLimits(app: FastifyInstance): void {
   app.addHook("onRoute", (route) => {
     const limit = route.config?.rateLimit;
     if (typeof limit !== "object" || limit === null || "cache" in limit) return;
-    if (route.url.startsWith("/ext/v1") || route.url.startsWith("/settings/extension-keys")) return;
     route.config = { ...route.config, rateLimit: { ...limit, cache: RATE_LIMIT_BUCKETS } };
   });
 }

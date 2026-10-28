@@ -42,13 +42,33 @@ describe("finding the extension", () => {
     expect((await findExtension(STORE_ZIP))?.id).toBe(STORE_ZIP);
   });
 
-  it("remembers that ID, so Settings opened without the link (after signing in again) finds it", async () => {
+  it("remembers that ID once it took a key, so Settings opened without the link (after signing in again) finds it", async () => {
     installed.add(STORE_ZIP);
     await findExtension(STORE_ZIP);
+    expect((await handOverKey(STORE_ZIP, "tsx_x", STORE_ZIP)).ok).toBe(true);
     sent.length = 0;
     expect((await findExtension(null))?.id).toBe(STORE_ZIP);
     expect(sent[0]).toEqual({ id: STORE_ZIP, type: "ping" });
     expect((await handOverKey(STORE_ZIP, "tsx_x", null)).ok).toBe(true);
+  });
+
+  it("remembers nothing when a link's ID only answered the ping (audit EX-3)", async () => {
+    installed.add(STORE_ZIP);
+    expect((await findExtension(STORE_ZIP))?.id).toBe(STORE_ZIP);
+    expect(store.size).toBe(0);
+    expect(await findExtension(null)).toBeNull();
+    expect(await handOverKey(STORE_ZIP, "tsx_x", null)).toEqual({ ok: false, error: "Unknown extension." });
+  });
+
+  it("with knownOnly, skips the link's and the remembered ID", async () => {
+    installed.add(STORE_ZIP);
+    store.set("trench.extensionId", STORE_ZIP);
+    expect(await findExtension(STORE_ZIP, { knownOnly: true })).toBeNull();
+    expect(sent.some((m) => m.id === STORE_ZIP)).toBe(false);
+    expect(await handOverKey(STORE_ZIP, "tsx_x", STORE_ZIP, { knownOnly: true })).toEqual({
+      ok: false,
+      error: "Unknown extension.",
+    });
   });
 
   it("doesn't remember an ID that didn't answer, and refuses to hand a key to an unknown one", async () => {
