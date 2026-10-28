@@ -2,6 +2,7 @@
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { axiom, gmgn, terminal } from "./adapters/sites";
 import { columnOf, findColumns } from "./columns";
+import { Scoper } from "./scope";
 import { OverlayEngine } from "./engine";
 import { safetyBody, tooltipBody } from "./ui";
 import { DEFAULT_SETTINGS } from "../shared/settings";
@@ -410,5 +411,69 @@ describe("the pill on every coin (user ask 2026-10-26)", () => {
     } finally {
       Element.prototype.attachShadow = attach;
     }
+  });
+});
+
+describe("where rings go (user ask 2026-10-28)", () => {
+  /** jsdom lays nothing out: give a box its size on screen. */
+  function size(el: Element, width: number, height: number) {
+    el.getBoundingClientRect = () => ({ width, height }) as DOMRect;
+  }
+  const rowsOf = (html: string) => {
+    board(html);
+    return new Scoper();
+  };
+
+  it("keeps the page's own lists and leaves tooltips, menus and popovers bare", () => {
+    const s = rowsOf(`<div data-index="0" id="board"><a href="/t/${A}">A</a></div>
+      <div role="tooltip"><div id="tip"><a href="/t/${B}">B</a></div></div>
+      <div data-radix-popper-content-wrapper=""><div role="dialog"><input type="text"><div id="hover"></div></div></div>
+      <ul role="listbox"><li id="option"></li></ul>`);
+    expect(s.of(document.getElementById("board"))).toBe("page");
+    expect(s.of(document.getElementById("tip"))).toBe("off");
+    expect(s.of(document.getElementById("hover"))).toBe("off");
+    expect(s.of(document.getElementById("option"))).toBe("off");
+  });
+
+  it("rings a full search menu, not a quick search dropdown under the header's box", () => {
+    const s = rowsOf(`<header id="header" style="position: fixed; top: 0px;"><input type="search">
+        <div style="position: absolute;"><div id="quick"></div></div></header>
+      <div id="modal" role="dialog"><input placeholder="Search by name or CA">
+        <div role="listbox"><div id="result"></div></div>
+        <div role="tooltip"><div id="tipInModal"></div></div></div>`);
+    size(document.getElementById("header")!, 1024, 56);
+    size(document.getElementById("modal")!, 640, 560);
+    expect(s.of(document.getElementById("quick"))).toBe("off");
+    expect(s.of(document.getElementById("result"))).toBe("search");
+    expect(s.of(document.getElementById("tipInModal"))).toBe("off");
+  });
+
+  it("treats a fixed shell holding the board as the page, and a small fixed box as a popover", () => {
+    const s = rowsOf(`<div id="shell" style="position: fixed; inset: 0px;"><div id="row"></div></div>
+      <div id="pop" style="position: fixed; top: 80px;"><div id="popRow"></div></div>`);
+    size(document.getElementById("shell")!, window.innerWidth, window.innerHeight);
+    size(document.getElementById("pop")!, 320, 240);
+    expect(s.of(document.getElementById("row"))).toBe("page");
+    expect(s.of(document.getElementById("popRow"))).toBe("off");
+  });
+
+  it("the engine finds no row in a popover, and only column rows on a coin's own page", () => {
+    const health: number[] = [];
+    const e = new OverlayEngine(axiom, DEFAULT_SETTINGS, {
+      lookup: async () => ({ tokens: {}, problem: null }),
+      report: (h) => health.push(h.rows),
+    });
+    board(`<div role="row"><div data-pulse-token-address="${A}"></div></div>
+      <div data-index="0"><a href="/t/${B}">B</a></div>
+      <div role="tooltip"><div data-index="1"><a href="/t/${B}">B</a></div></div>`);
+    e.scan();
+    history.pushState(null, "", `/meme/${B}`);
+    try {
+      e.scan();
+    } finally {
+      history.pushState(null, "", "/");
+    }
+    expect(health).toEqual([2, 1]);
+    e.stop();
   });
 });

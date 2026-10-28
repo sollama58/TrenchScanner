@@ -283,3 +283,14 @@ its pill placed in the part the column cuts off, which left only the dot in view
   answers `buddy`, `coin` and `pendingCoin` with nothing, so no wallet's trades are read and no
   typed address is sent. The dev build keeps both. The privacy policy and `STORE.md` describe the
   store build (data form: authentication information only).
+
+0.9.3 (user ask 2026-10-28):
+
+- **Rings and pills only on the boards' columns, the Trending lists and full search menus.** A coin
+  row in a quick search dropdown, a tooltip, a hover card, a menu or any other popover is left bare
+  (`src/content/scope.ts`): rows inside a floating layer (a tooltip, menu, listbox or dialog by role
+  or by its UI library's wrapper, or a fixed or portalled box smaller than half the screen) are
+  skipped, unless the layer holds its own search box and is panel-sized, as a full search menu is.
+  On a coin's own page only board column rows (Axiom's Pulse, Terminal's Trenches marks) and a
+  search menu's rows are ringed, not its trade lists or its dev's other coins.
+- `STORE.md`'s `notifications` and `alarms` justifications name run alerts.

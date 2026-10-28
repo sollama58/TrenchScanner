@@ -2,6 +2,7 @@ import type { SiteAdapter } from "./adapters/adapter";
 import { Decoration, SafetyMark, safetyBody, Tooltip, tooltipBody } from "./ui";
 import { isTokenPage } from "./tokenPage";
 import { columnOf, findColumns, type BoardColumn } from "./columns";
+import { Scoper } from "./scope";
 import { pillSegments } from "../shared/pill";
 import {
   colorsOf,
@@ -253,7 +254,7 @@ export class OverlayEngine {
 
   /** Exposed for tests, which have no animation frames. */
   scan(now = Date.now()): void {
-    const found = this.adapter.findRows(document) as HTMLElement[];
+    const found = this.inScope(this.adapter.findRows(document) as HTMLElement[]);
     const current = new Set(found);
     for (const [row, state] of this.rows) {
       if (!current.has(row) || !row.isConnected) {
@@ -290,6 +291,20 @@ export class OverlayEngine {
     this.checkHealth(found.length, withMint, now);
     this.closeGaps();
     this.queueLookup();
+  }
+
+  /**
+   * The rows rings may go on (scope.ts): in the page's own lists or a full search menu, never a
+   * quick search, tooltip or popover; on a coin's own page, only a board column's or a search menu's.
+   */
+  private inScope(rows: HTMLElement[]): HTMLElement[] {
+    const scoper = new Scoper();
+    const tokenPage = isTokenPage(this.adapter.site, location.pathname);
+    return rows.filter((row) => {
+      const scope = scoper.of(row);
+      if (scope === "search") return true;
+      return scope === "page" && (!tokenPage || this.adapter.inColumn(row));
+    });
   }
 
   private checkHealth(rows: number, mints: number, now: number): void {
