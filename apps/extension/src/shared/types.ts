@@ -205,6 +205,11 @@ export interface BuddyAnswer {
   coins: BuddyCoin[];
   /** The wallets followed, the account's first; absent before 0.9.0's API. */
   wallets?: string[];
+  /**
+   * Wallets the panel asked for that aren't linked to the account on Settings, so aren't
+   * followed (Card 11); absent before that API, and when every one asked for is linked.
+   */
+  notLinked?: string[];
   summary?: BuddySummary | null;
   solUsd: number | null;
   /** The account has Pro Mode: each coin gets its trade box. */

@@ -636,7 +636,10 @@ async function buddy(cached = false): Promise<BuddyRead> {
   }
   if (cached) return { buddy: lastBuddy, problem };
   try {
-    lastBuddy = await api.buddy(key, (await tooltipPrefs()).buddyWallets);
+    // No list: the API follows every wallet linked on Settings (Card 11), and a list would follow
+    // only the linked ones in it. The panel names the wallets it kept from before 0.9.2 that the
+    // answer doesn't follow (panel.ts notLinked).
+    lastBuddy = await api.buddy(key);
     problem = null;
     void chrome.storage.session.set({ buddy: lastBuddy }).catch(() => undefined);
   } catch (e) {
@@ -702,10 +705,12 @@ async function handle(request: PanelRequest): Promise<unknown> {
       return site(request);
     case "siteCancel":
       return cancelSite(request.id);
+    // The store build has no Trade Buddy and no Look up (user ask 2026-10-28): nothing reads a
+    // wallet's trades or an address the reader pasted.
     case "buddy":
-      return buddy(request.cached === true);
+      return __STORE__ ? null : buddy(request.cached === true);
     case "coin":
-      return coin(request.mint);
+      return __STORE__ ? null : coin(request.mint);
     case "alertsSeen":
       await noteAlerts(
         lastTokens,
@@ -745,6 +750,7 @@ async function handle(request: PanelRequest): Promise<unknown> {
       await snooze(request.mint, request.minutes);
       return { ok: true };
     case "pendingCoin": {
+      if (__STORE__) return null;
       const { pendingCoin } = (await chrome.storage.session.get("pendingCoin").catch(() => ({}))) as {
         pendingCoin?: { mint: string; at: number };
       };

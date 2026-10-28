@@ -4,6 +4,7 @@ import {
   type BuddyRead,
   type CoinAnswer,
   type FeedAnswer,
+  type BuddyAnswer,
   type OverlaySettings,
   type PanelRequest,
   type Status,
@@ -205,7 +206,9 @@ function renderDisconnected(): void {
       el(
         "p",
         { className: "note" },
-        "Opens TrenchScanner Settings at Browser extension, where one click connects this browser. This panel updates by itself. The key it gets reads your alerts and stats, coins' bubble maps, and your wallet's own trades for Trade Buddy. It can't trade or move funds.",
+        __STORE__
+          ? "Opens TrenchScanner Settings at Browser extension, where one click connects this browser. This panel updates by itself. The key it gets reads your alerts, their stats and bubble maps. It can't trade or move funds."
+          : "Opens TrenchScanner Settings at Browser extension, where one click connects this browser. This panel updates by itself. The key it gets reads your alerts and stats, coins' bubble maps, and your wallet's own trades for Trade Buddy. It can't trade or move funds.",
       ),
     ),
   );
@@ -230,8 +233,9 @@ function tabs(): HTMLElement {
     "nav",
     { className: "tabs" },
     make("alerts", "Alerts"),
-    make("buddy", "Trade Buddy"),
-    make("coin", "Look up"),
+    // The store build has no Trade Buddy and no Look up (user ask 2026-10-28): the reader's alerts
+    // and Settings only.
+    ...(__STORE__ ? [] : [make("buddy", "Trade Buddy"), make("coin", "Look up")]),
     make("settings", "Settings"),
   );
 }
@@ -247,7 +251,7 @@ function alertsView(saved: OverlaySettings): HTMLElement[] {
         el("p", {
           className: "error",
           textContent:
-            "TrenchScanner no longer takes this browser's key. Signing out of TrenchScanner disconnects the extension, and so does revoking its key or a subscription ending.",
+            "TrenchScanner no longer takes this browser's key. Signing out of TrenchScanner disconnects the extension, and so does revoking its key or a subscription ending. An admin account's key also lasts only 7 days.",
         }),
         connectButton("Connect again"),
       ),
@@ -375,7 +379,10 @@ function coinView(settings: OverlaySettings): HTMLElement[] {
     list.append(
       el("p", {
         className: "note",
-        textContent: "TrenchScanner hasn't stored this coin yet. Its map below starts a scan.",
+        // The API answers no card for a coin the reader doesn't open free (audit 2026-10-27, EX-5):
+        // one the scanner doesn't track, that they never traded or looked up on the site.
+        textContent:
+          "No card for this coin: TrenchScanner hasn't stored it yet, or it isn't on the feed and opens only with a lookup on TrenchScanner.",
       }),
     );
   }
@@ -405,6 +412,8 @@ function buddyView(settings: OverlaySettings): HTMLElement[] {
     parts.push(el("p", { className: "status", textContent: "Reading your wallet's trades…" }));
     return parts;
   }
+  const unlinked = notLinked(answer);
+  if (unlinked.length > 0) parts.push(notLinkedNote(unlinked));
   if (answer.coins.length === 0) {
     parts.push(
       section(
@@ -416,7 +425,7 @@ function buddyView(settings: OverlaySettings): HTMLElement[] {
         el("p", {
           className: "note",
           textContent:
-            "Held coins stay listed; sold ones for a day. Trades are read from the chain, usually within seconds. Trading from Axiom's, Terminal's or another wallet? Add it in Settings → Trade Buddy wallets.",
+            "Held coins stay listed; sold ones for a day. Trades are read from the chain, usually within seconds. Trading from Axiom's, Terminal's or another wallet? Link it on TrenchScanner's Settings → Trade Buddy wallets.",
         }),
       ),
     );
@@ -510,7 +519,7 @@ function settingsView(current: OverlaySettings): HTMLElement[] {
     ),
   );
 
-  parts.push(panelSection(), runsSection(), buddyWalletsSection());
+  parts.push(panelSection(), runsSection(), ...(__STORE__ ? [] : [buddyWalletsSection()]));
 
   const flags = FLAG_IDS.map((id) => {
     const pref = settings.flags[id];
@@ -744,7 +753,7 @@ function ringDisplaySections(settings: OverlaySettings): HTMLElement[] {
     "Pill on every coin",
     toggle(
       "Show the pill on coins that aren't alerts",
-      "The same parts as the ring pill, in grey with no ring, on every coin TrenchScanner has fresh numbers for. Sends the board's addresses to TrenchScanner while on.",
+      "The same parts as the ring pill, in grey with no ring, on every coin on TrenchScanner's feed with fresh numbers. Sends the board's addresses to TrenchScanner while on.",
       tipPrefs.boardStats.enabled,
       "var(--filter)",
       (on) => {
@@ -1104,65 +1113,93 @@ function runsSection(): HTMLElement {
   );
 }
 
+/** TrenchScanner's Settings, where the reader links (and unlinks) Trade Buddy's wallets. */
+const LINK_WALLETS_URL = "https://trenchscanner.app/#settings";
+
+function linkWalletsButton(label = "Link a wallet on TrenchScanner"): HTMLAnchorElement {
+  return el("a", {
+    href: LINK_WALLETS_URL,
+    target: "_blank",
+    rel: "noopener noreferrer",
+    className: "button",
+    textContent: label,
+  });
+}
+
+/**
+ * Wallets added in this panel before 0.9.2 that aren't linked to the account, so Trade Buddy no
+ * longer follows them (user decision 2026-10-27, Card 11): the API's `notLinked`, and any the panel
+ * kept that the answer doesn't follow.
+ */
+function notLinked(answer: BuddyAnswer | null): string[] {
+  const followed = new Set(answer?.wallets ?? []);
+  const kept = answer ? tipPrefs.buddyWallets.filter((w) => !followed.has(w)) : [];
+  return [...new Set([...(answer?.notLinked ?? []), ...kept])];
+}
+
+function notLinkedNote(wallets: string[]): HTMLElement {
+  const which = wallets.map(shortWallet).join(", ");
+  return el(
+    "div",
+    { className: "status warn" },
+    el("p", {
+      textContent: `${wallets.length === 1 ? `${which} isn't` : `${which} aren't`} linked to your account, so Trade Buddy doesn't follow ${wallets.length === 1 ? "it" : "them"}. Link each on TrenchScanner's Settings → Trade Buddy wallets by signing with it.`,
+    }),
+    linkWalletsButton("Link on TrenchScanner"),
+  );
+}
+
 /**
  * The reader's other wallets for Trade Buddy (user ask 2026-10-27): trades made from Axiom's,
- * Terminal's or any other wallet of theirs show up too. Public addresses only, three at most.
+ * Terminal's or any other wallet of theirs show up too. Since 0.9.2 they are linked on
+ * TrenchScanner's Settings by signing with each (user decision 2026-10-27, Card 11), and the API
+ * follows every linked one, three at most. This lists them from the last Trade Buddy answer, and
+ * the wallets added here before that still wait to be linked.
  */
 function buddyWalletsSection(): HTMLElement {
-  const save = () => {
-    void send({ type: "saveTooltip", prefs: tipPrefs });
-    buddyReadAt = 0;
-  };
+  const answer = buddy?.buddy ?? null;
+  const linked = (answer?.wallets ?? []).slice(1);
+  const waiting = notLinked(answer);
   const list = el("div", { className: "wallets" });
   const fill = () => {
-    list.replaceChildren(
-      ...tipPrefs.buddyWallets.map((wallet) => {
+    const rows = [
+      ...linked.map((wallet) =>
+        el(
+          "div",
+          { className: "row" },
+          el("code", { textContent: shortWallet(wallet), title: wallet }),
+          el("span", { className: "note", textContent: "Linked" }),
+        ),
+      ),
+      ...(answer ? waiting : tipPrefs.buddyWallets).map((wallet) => {
         const remove = el("button", { className: "link", textContent: "Remove" });
         remove.addEventListener("click", () => {
           tipPrefs = { ...tipPrefs, buddyWallets: tipPrefs.buddyWallets.filter((w) => w !== wallet) };
-          save();
-          fill();
+          void send({ type: "saveTooltip", prefs: tipPrefs });
+          rows.splice(rows.indexOf(row), 1);
+          list.replaceChildren(...rows);
         });
-        const code = el("code", { textContent: shortWallet(wallet), title: wallet });
-        return el("div", { className: "row" }, code, remove);
+        const row = el(
+          "div",
+          { className: "row" },
+          el("code", { textContent: shortWallet(wallet), title: wallet }),
+          el("span", { className: "note", textContent: answer ? "Not linked" : "" }),
+          remove,
+        );
+        return row;
       }),
-    );
-    form.hidden = tipPrefs.buddyWallets.length >= MAX_BUDDY_WALLETS;
+    ];
+    list.replaceChildren(...rows);
   };
-  const input = el("input", { type: "text", placeholder: "Wallet address", spellcheck: false });
-  input.setAttribute("aria-label", "Another wallet of yours");
-  const add = el("button", { type: "submit", className: "button", textContent: "Add" });
-  const problem = el("p", { className: "status warn" });
-  problem.hidden = true;
-  const form = el("form", { className: "lookup" }, input, add);
-  form.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const wallet = input.value.trim();
-    problem.hidden = true;
-    if (!isMintAddress(wallet)) {
-      problem.textContent = "That isn't a Solana wallet address.";
-      problem.hidden = false;
-      return;
-    }
-    if (tipPrefs.buddyWallets.includes(wallet)) {
-      input.value = "";
-      return;
-    }
-    tipPrefs = { ...tipPrefs, buddyWallets: [...tipPrefs.buddyWallets, wallet] };
-    input.value = "";
-    save();
-    fill();
-  });
   fill();
   return section(
     "Trade Buddy wallets",
     el("p", {
       className: "note",
-      textContent: `Your account's wallet is always followed. Add up to ${MAX_BUDDY_WALLETS} more you trade from (Axiom's, Terminal's, a bot's), so those trades and their PnL show too. Their public addresses only: nothing here can trade.`,
+      textContent: `Your account's wallet is always followed. Link up to ${MAX_BUDDY_WALLETS} more you trade from (Axiom's, Terminal's, a bot's) on TrenchScanner's Settings, by signing with each, so those trades and their PnL show too. Unlink them there.${answer ? "" : " Open Trade Buddy to see which are linked."}`,
     }),
     list,
-    form,
-    problem,
+    linkWalletsButton(),
   );
 }
 
@@ -1369,6 +1406,7 @@ function draw(): void {
   account.textContent = refused ? "Reconnect needed" : `Connected · ${status.wallet ?? ""}`;
   account.className = refused ? "account warn" : "account on";
   const settings = status.settings;
+  if (__STORE__ && (view === "buddy" || view === "coin")) view = "alerts";
   const body =
     view === "alerts"
       ? alertsView(settings)
@@ -1405,7 +1443,7 @@ async function refresh(): Promise<void> {
   status = await send<Status>({ type: "status" });
   // Trade Buddy's last answer draws at once, and a fresh read starts now, so the tab is ready
   // before it is opened.
-  if (status?.connected) {
+  if (status?.connected && !__STORE__) {
     buddy ??= await send<BuddyRead>({ type: "buddy", cached: true });
     if (!buddy?.buddy) buddy = null;
     buddyReadAt = Date.now();
@@ -1418,7 +1456,7 @@ async function refresh(): Promise<void> {
   tipPrefs = cleanTooltip(await send<TooltipPrefs>({ type: "tooltip" }));
   applyColors();
   // A page's Look up opened the panel: it opens on that coin.
-  const pending = status?.connected ? await send<string | null>({ type: "pendingCoin" }) : null;
+  const pending = status?.connected && !__STORE__ ? await send<string | null>({ type: "pendingCoin" }) : null;
   if (pending && isMintAddress(pending)) {
     view = "coin";
     void lookUp(pending);
@@ -1444,7 +1482,13 @@ chrome.runtime.onMessage.addListener((message: unknown, sender) => {
   }
   // A page's Look up while the panel is open.
   const m = message as { type?: unknown; mint?: unknown } | null;
-  if (m?.type === "openCoin" && typeof m.mint === "string" && isMintAddress(m.mint) && status?.connected) {
+  if (
+    !__STORE__ &&
+    m?.type === "openCoin" &&
+    typeof m.mint === "string" &&
+    isMintAddress(m.mint) &&
+    status?.connected
+  ) {
     void send({ type: "pendingCoin" });
     view = "coin";
     void lookUp(m.mint);
