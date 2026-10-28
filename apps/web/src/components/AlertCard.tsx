@@ -589,6 +589,7 @@ export function AlertCard({
               failsAbove={SAFETY_MAX_FRESH_WALLET_PCT}
               atAlert={freshAtAlert !== null}
               tiles={tiles}
+              tag={freshAtAlert === null ? agedTag : null}
               later={freshFromScan ? laterWith(pctOr(alertFresh), pctOr(freshPct)) : LATER_SCAN}
               explain="top-holder wallets first used, or used again after a week or more idle, in the last 24h"
             />
@@ -601,6 +602,7 @@ export function AlertCard({
               failsAt={SAFETY_REJECT_EMPTY_WALLET_PCT}
               atAlert={emptyAtAlert !== null}
               tiles={tiles}
+              tag={emptyAtAlert === null ? agedTag : null}
               later={emptyFromScan ? laterWith(pctOr(a.emptyTop10WalletPct), pctOr(emptyPct)) : LATER_SCAN}
               explain="top-10 holder wallets with under $25 of other tokens"
             />
@@ -818,7 +820,7 @@ export function AlertCard({
           <SocialLinks links={socials} className="card-socials" />
           {fees && <FeeBadge fee={card.token.creatorFee} word />}
           {links && (show("links") || trade.length > 0) && (
-            <nav className="card-links">
+            <nav className="card-links" aria-label={`${tokenLabel(card.token)} links`}>
               {trade.map((l) => (
                 <a key={l.id} className="trade" href={l.href(mint)} target="_blank" rel="noreferrer">
                   {l.label}
@@ -1255,6 +1257,7 @@ export function FeeBadge({
     <span
       className={`fee-badge fee-${fees.kind}${fees.tax ? " has-tax" : ""}${fees.deskRewards ? " has-desk-rewards" : fees.caption ? " has-caption" : ""}${className ? ` ${className}` : ""}`}
       title={fees.title}
+      role="img"
       aria-label={aria}
     >
       {word && <span className="fee-word">FEES</span>}
@@ -1548,6 +1551,7 @@ export function WalletStat({
   failsAt,
   tiles = "off",
   later = LATER_SCAN,
+  tag = null,
 }: {
   label: string;
   value: number | null;
@@ -1563,6 +1567,11 @@ export function WalletStat({
   tiles?: TileMode;
   /** How a reading from after the alert is described (see laterScanText). */
   later?: string;
+  /**
+   * The scan's age beside the label, as the card's other tiles show it: a later scan's "3/25" next to
+   * the token view's at-the-alert "1/10" otherwise read as two answers for one moment (audit 10-27 WB-27).
+   */
+  tag?: React.ReactNode;
 }) {
   const risky =
     value !== null &&
@@ -1573,7 +1582,10 @@ export function WalletStat({
       : `${label}: ${walletCountText(value, of)} ${explain} (${pct(value)}), ${atAlert ? "at alert time" : later}. The safety screen rejects ${failsAbove !== undefined ? `over ${failsAbove}%` : `${failsAt ?? 0}% or more`}.`;
   return (
     <div {...tileLook(tiles, tileTone(value, failsAbove ?? failsAt ?? 0), risky)} title={title}>
-      <dt>{label}</dt>
+      <dt>
+        {label}
+        {tag}
+      </dt>
       <dd className={value === null ? "muted" : "num"}>
         {value === null ? "Not checked" : walletCountText(value, of)}
       </dd>

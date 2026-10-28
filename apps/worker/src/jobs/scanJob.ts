@@ -187,7 +187,7 @@ import { fillMissingSocials, recordSocialLinks, takeSocialsFillStats } from "./s
 import {
   launchSnipersFromCache,
   resolveLaunchSnipers,
-  sniperShareUnobtainable,
+  blockZeroUnobtainable,
   sniperWalletsFromCache,
   blockZeroWalletsFromCache,
   takeSniperReadStats,
@@ -518,7 +518,7 @@ function sniperReadsOn(env: Env): boolean {
  */
 export type WaitLane = "decision" | "hourly";
 
-/** When each token waiting on its top-10 snipers share started waiting - see sniperShareReady. */
+/** When each token waiting on its launch read (Block 0) started waiting - see launchReadReady. */
 const sniperWaitSince = new Map<string, number>();
 /** A wait older than this belongs to a token that left the band or the watchlist. */
 const SNIPER_WAIT_FORGET_MS = 60 * 60_000;
@@ -570,6 +570,41 @@ function pruneSniperWaits(now: number): void {
   }
 }
 
+/**
+ * How long after a boot an hourly sample waits for its coin's live-tape page. The tape's pages are
+ * kept in memory, so a restart starts with none and the page budget takes a few cycles to read the
+ * band again: in a process's first 2 minutes the tape inputs (flaggedBuyers, the buyers' Wallet
+ * Score, winnerRecentBuyers) filled 55% of banked rows against 95-97% after (audit 2026-10-27,
+ * DS-8). An hourly row held here is banked by a later cycle, inside the same spacing window, so
+ * nothing is lost but the wait; decision rows never wait on it (they carry bootAgeSeconds instead).
+ */
+export const BOOT_TAPE_WARMUP_SECONDS = 120;
+
+/** Whether an hourly sample should wait for its coin's live-tape page (BOOT_TAPE_WARMUP_SECONDS). Exported for tests. */
+export function hourlySampleWaitsForTape(uptimeSeconds: number, hasPage: boolean): boolean {
+  return !hasPage && uptimeSeconds < BOOT_TAPE_WARMUP_SECONDS;
+}
+
+/**
+ * The longest a cycle waits on its lookup of the viewed coins outside the watchlist. Those coins
+ * are scanned for their live cards; none can be curated (that needs the band), yet every decision
+ * of the cycle waited on the lookup. Sent alongside the band refresh as an ordinary request, it
+ * queued behind the refresh's burst for the bucket to refill past the reserved slots: p50 7.5 s a
+ * cycle (audit 2026-10-27, DS-2). Now it goes once the refresh has answered, on the slots the
+ * refresh reserves and no longer needs, so it is a batch or two at the sustained pace. Past this
+ * the batches not yet answered are left for the live-price job (its own lookup, 20 s on), and
+ * their coins for the next cycle; the most recently viewed go first.
+ */
+export const VIEWED_LOOKUP_DEADLINE_MS = 2_000;
+
+/** This process's uptime in seconds, for BOOT_TAPE_WARMUP_SECONDS; replaced in tests (setUptimeSource). */
+let uptimeSeconds: () => number = () => process.uptime();
+
+/** Test hook: a test process is always seconds old, which would hold every hourly sample. */
+export function setUptimeSource(source: () => number = () => process.uptime()): void {
+  uptimeSeconds = source;
+}
+
 /** Test hook. */
 export function resetSniperWaits(): void {
   sniperWaitSince.clear();
@@ -582,7 +617,7 @@ export function resetSniperWaits(): void {
  * CEX-funded counts to be read over the chain's top 25 (user ask 2026-10-13: the counts are N/25,
  * and a reading over RugCheck's 20 accounts read N/19 and could barely meet the 20-of-25 cut).
  * Goes ahead once the chain's list is in and the reading over it landed, when the reads are off,
- * for a coin younger than minAgeMinutes (as for the snipers share, its ready moment is too short
+ * for a coin younger than minAgeMinutes (as for the launch read, its ready moment is too short
  * to spend waiting), or after maxMs - then on whatever reading there is, which the screen cuts at
  * the same share of the holders it read (rugScreen's countCutFor). The first call starts the wait,
  * on the lane's own clock (WaitLane; the decision's without one). Exported for tests.
@@ -604,20 +639,23 @@ export function linkedListReady(
 }
 
 /**
- * Whether a curated decision on this token should go ahead rather than wait for its top-10
- * snipers share: the share is in, or it can't come - the chain read is off or the endpoint isn't
- * serving it right now, or the launch's history has no curve launch to read buyers from - or the
- * token has already waited maxWaitMs. The bound matters: the read is metered and sometimes slow
- * or failing, and an unbounded wait held almost every decision back (2026-10-08). Past it the row
- * is banked with the share unknown, which the models already handle. A coin younger than
- * minAgeMinutes doesn't wait at all: its ready moment is short and its read the least likely to
- * land in time, so a wait cost almost every young coin its decision (2026-10-08). An unknown age
- * waits. Call it only for a token that is otherwise ready to be decided on (or, on the hourly
- * lane, due its sample): the first call starts its wait, on the lane's own clock (WaitLane; the
- * decision's without one). Exported for tests.
+ * Whether a curated decision on this token should go ahead rather than wait for its launch read:
+ * the Block 0 figure (blockZeroHeldPct, what the safety screen's Block 0 cut reads) is in, or it
+ * can't come - the chain read is off or the endpoint isn't serving it right now, or the launch
+ * gives no block to go by (blockZeroUnobtainable) - or the token has already waited maxWaitMs.
+ * It waited on the top-10 snipers share until 2026-10-27, the input of the cut Block 0 replaced
+ * (user decision 2026-10-22); both come from the same read, so the two mostly landed together,
+ * but 3% of decision rows passed the Block 0 cut unread (audit 2026-10-27, SW-4). The bound
+ * matters: the read is metered and sometimes slow or failing, and an unbounded wait held almost
+ * every decision back (2026-10-08). Past it the row is banked with Block 0 unknown, which the
+ * models already handle. A coin younger than minAgeMinutes doesn't wait at all: its ready moment
+ * is short and its read the least likely to land in time, so a wait cost almost every young coin
+ * its decision (2026-10-08). An unknown age waits. Call it only for a token that is otherwise
+ * ready to be decided on (or, on the hourly lane, due its sample): the first call starts its
+ * wait, on the lane's own clock (WaitLane; the decision's without one). Exported for tests.
  */
-export function sniperShareReady(
-  scored: Pick<ScoredToken, "mintAddress" | "sniperTop10WalletPct" | "ageMinutes">,
+export function launchReadReady(
+  scored: Pick<ScoredToken, "mintAddress" | "blockZeroHeldPct" | "ageMinutes">,
   chainReadAvailable: boolean,
   wait: { maxMs: number; minAgeMinutes: number; lane?: WaitLane },
   now = Date.now(),
@@ -625,12 +663,7 @@ export function sniperShareReady(
   const mint = scored.mintAddress;
   const key = waitKey(mint, wait.lane);
   const young = scored.ageMinutes !== undefined && scored.ageMinutes < wait.minAgeMinutes;
-  if (
-    scored.sniperTop10WalletPct !== undefined ||
-    !chainReadAvailable ||
-    young ||
-    sniperShareUnobtainable(mint)
-  ) {
+  if (scored.blockZeroHeldPct !== undefined || !chainReadAvailable || young || blockZeroUnobtainable(mint)) {
     sniperWaitSince.delete(key);
     return true;
   }
@@ -640,7 +673,7 @@ export function sniperShareReady(
 /**
  * Whether the inputs a curated decision waits for are in, so a row banked now carries what a
  * decision would see: the top-10 wallet checks (walletChecksKnown; with CURATED_REQUIRE_WALLET_CHECKS
- * off nothing waits), then the top-10 snipers share (sniperShareReady) and the Linked and
+ * off nothing waits), then the launch read's Block 0 figure (launchReadReady) and the Linked and
  * CEX-funded counts over the chain's top 25 (linkedListReady), each for its bounded wait and not
  * for young coins. The decision lane waits for the wallet checks however long it takes - a
  * contender's lookups lead the cycle, and a decision without them would skip the curator's wallet
@@ -658,7 +691,7 @@ export function decisionInputsReady(
     | "ageMinutes"
     | "freshTop10WalletPct"
     | "emptyTop10WalletPct"
-    | "sniperTop10WalletPct"
+    | "blockZeroHeldPct"
     | "linkedWalletCount"
     | "cexFundedCount"
   >,
@@ -687,7 +720,7 @@ export function decisionInputsReady(
     held.push("walletChecks");
     if (lane === "decision") return { ready: false, held };
   }
-  const snipersIn = sniperShareReady(
+  const snipersIn = launchReadReady(
     scored,
     reads.sniperChainAvailable,
     {
@@ -708,7 +741,7 @@ export function decisionInputsReady(
     },
     now,
   );
-  if (!snipersIn) held.push("sniperWait");
+  if (!snipersIn) held.push("launchReadWait");
   if (!linkedIn) held.push("linkedWait");
   return { ready: walletsIn && snipersIn && linkedIn, held };
 }
@@ -1458,6 +1491,8 @@ async function scanCycle(
   const pumpfunGate = takePumpFunGateStats();
   // The live tape's pages (10 credits each) since the last cycle, and the coins it holds a page for.
   const liveTape = takeLiveTapeStats();
+  // The contenders decided before the wallet block's barrier, as their own reads came in (decideEarly).
+  const earlyDecisions = lastEarlyDecisions;
   // The Helius credits of the stages with no counter of their own: freshness, balances, holders.
   const heliusStageCredits = takeHeliusStageCredits();
   // Who priced the newest launches since the last cycle: Jupiter, its CoinGecko backup, or neither.
@@ -1500,6 +1535,7 @@ async function scanCycle(
     ...(candleChainFill ? { candleChainFill } : {}),
     pumpfunGate,
     liveTape,
+    earlyDecisions: { ...earlyDecisions },
     heliusStageCredits,
     ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
     ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),
@@ -1540,6 +1576,56 @@ async function scanCycle(
  * entry watch's list, the filter settling pass, the counters on its heartbeat) is marked where it
  * happens. Returns what the cycle's heartbeat reports, or why the pass stopped early.
  */
+/**
+ * Whether a contender's own reads from the wallet block are all in, so the block has nothing more
+ * coming for it and it can be decided before the barrier (decideEarly in scanTracked): its top-10
+ * wallet checks (walletChecksKnown), the launch read's Block 0 figure (or none can come), a
+ * live-tape page, the launch buyers' fresh share, and its Linked and CEX-funded readings over the
+ * chain's list. Exported for tests.
+ */
+export function ownReadsIn(reads: {
+  profile: Pick<ScoredToken, "freshTop10WalletPct" | "emptyTop10WalletPct" | "blockZeroHeldPct"> | null;
+  blockZeroUnobtainable: boolean;
+  tapePage: boolean;
+  launchBuyersShare: boolean;
+  linked: boolean;
+}): boolean {
+  const { profile } = reads;
+  return (
+    profile !== null &&
+    walletChecksKnown(profile) &&
+    (profile.blockZeroHeldPct !== undefined || reads.blockZeroUnobtainable) &&
+    reads.tapePage &&
+    reads.launchBuyersShare &&
+    reads.linked
+  );
+}
+
+/** ownReadsIn, or a test's stand-in (setOwnReadsCheck): fakes can't fill every cache it reads. */
+let ownReadsCheck: typeof ownReadsIn = ownReadsIn;
+
+/** Test hook. */
+export function setOwnReadsCheck(check: typeof ownReadsIn = ownReadsIn): void {
+  ownReadsCheck = check;
+}
+
+/**
+ * A cycle's contenders decided before the wallet block's barrier (decideEarly in scanTracked): how
+ * many, in how many waves, and how long after the cycle started the first went. On the heartbeat.
+ */
+interface EarlyDecisions {
+  coins: number;
+  waves: number;
+  firstAtMs?: number;
+}
+let lastEarlyDecisions: EarlyDecisions = { coins: 0, waves: 0 };
+
+/** What every decision of a pass reads besides its own coin's readings (scanTracked). */
+interface SharedReadings {
+  priors: Map<string, CandidatePrior>;
+  marketContext: MarketContextFeatures;
+}
+
 async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<ScanPassResult> {
   const { tracked, stagesMs, lap, startedAt } = pass;
   const cycle = pass.kind === "cycle";
@@ -1577,13 +1663,20 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   const viewedOffWatchlist = activelyViewed.filter((t) => !trackedMints.has(t.mintAddress));
   // When each reading below was taken, so the live figures written from them carry that time.
   const readingSeenAt = new Map<string, Date>();
-  const viewedLookup =
+  // Looked up once the band refresh has answered, on the slots it reserves (see VIEWED_LOOKUP_DEADLINE_MS).
+  const lookUpViewed = (): Promise<CandidateToken[]> =>
     viewedOffWatchlist.length > 0
       ? deps.dexScreener
           .getTokensByAddresses(
             viewedOffWatchlist.map((t) => t.mintAddress),
             5,
-            { timeoutMs: 5000, retries: 1, deadlineMs: 10_000, seenAt: readingSeenAt },
+            {
+              timeoutMs: VIEWED_LOOKUP_DEADLINE_MS,
+              retries: 0,
+              deadlineMs: VIEWED_LOOKUP_DEADLINE_MS,
+              seenAt: readingSeenAt,
+              reservedSlots: true,
+            },
           )
           .catch((err: unknown) => {
             logger.warn("failed to refresh actively-viewed out-of-band tokens", { error: String(err) });
@@ -1668,7 +1761,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   }
 
   const alreadyCovered = new Set(candidates.map((c) => c.mintAddress));
-  const viewedLookedUp = await viewedLookup;
+  const viewedLookedUp = await lookUpViewed();
   // Every viewed token was just priced, here or by the refresh: that IS the dashboard's live
   // figure, so it is written now instead of the live-price job asking DexScreener again 20s later
   // (it skips tokens read this recently - see LIVE_PRICE_FRESH_MS).
@@ -2264,6 +2357,416 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
       resolveEarliestActivity(freshness.groups, deps.helius, { lookupGroups: 0 }),
       resolveWalletHoldings(walletGroups, deps.helius, env, { lookupGroups: 0 }),
     ]);
+  // Read once for the cycle: whether a curated decision should wait for the launch read (Block 0).
+  const sniperChainAvailable = sniperReadsOn(env) && deps.helius.gtfaUsable;
+  pruneSniperWaits(Date.now());
+  // Every candidate's trades get followed from here on (a no-op for ones already tracked) - the
+  // order-flow features need a few minutes of watching before they say anything.
+  // Stonks coins' trades never come through PumpPortal (their flow is read off the live tape).
+  deps.stream?.watch?.(candidates.filter((c) => c.launchpad !== STONKS_LAUNCHPAD).map((c) => c.mintAddress));
+  // What every decision reads besides its own coin's readings, loaded once for the pass: the
+  // priors, and one reading of the market for the whole cycle - the same context on every sample.
+  // A fast scan takes the last cycle's band count, not its own one coin, so its row reads the
+  // market the cycle around it would have.
+  const shared: Promise<SharedReadings> = (async () => {
+    const loaded = await priorsPromise;
+    if ("error" in loaded) throw loaded.error;
+    const { priors } = loaded;
+    if (cycle) lastCycleInBand = candidates.length;
+    const marketContext = await loadMarketContext(
+      env,
+      cycle ? candidates.length : (lastCycleInBand ?? candidates.length),
+    );
+    deps.pricePath?.prune(new Date(Date.now() - 2 * 3_600_000));
+    deps.pricePathSeeder?.seed(
+      candidates.map((c) => ({ mint: c.mintAddress, tokenId: priors.get(c.mintAddress)?.token?.id })),
+    );
+    return { priors, marketContext };
+  })();
+  // Awaited where it is used, and a failure there fails the pass as before.
+  shared.catch(() => undefined);
+  // The linked, CEX-funded, transfer and KOL-bundle readings of `groups`, from the caches the
+  // linked stage fills. Recording the transfers, and the holds and wider maps behind them, are the
+  // pass's own, once (below).
+  const linkedReadingsOf = async (groups: LinkedGroup[]) => {
+    const linkedLookups =
+      env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0
+        ? await resolveLinkedWallets(groups, deps.helius, { maxNewLookups: 0 }).catch(() => null)
+        : null;
+    // Holder-to-holder transfers among the top 25, from the caches the stage above filled: every coin
+    // whose holders' reads stand gets them, not only the ones read this cycle.
+    const transfersByMint = new Map(groups.map((g) => [g.mintAddress, holderTransfersOf(g)] as const));
+    // Linked without transfers, kept recorded (user ask 2026-10-16), and Linked with them: a transfer
+    // past dust and clear of exchanges links its two holders (user decision 2026-10-16). Only a coin
+    // whose transfer reading is complete gets them; the rest read on funding alone.
+    // The holder stream has been moving the chain lists since the groups were built. The reading
+    // takes those lists, and the times the shares and the wallet set were current, together.
+    const holderClocks = adoptLiveHolders(groups);
+    const linkedBaseByMint = new Map(
+      linkedLookups ? groups.map((g) => [g.mintAddress, linkedReadingOf(g, linkedLookups!)] as const) : [],
+    );
+    const linkedByMint = new Map(
+      linkedLookups
+        ? groups.map((g) => {
+            const base = linkedBaseByMint.get(g.mintAddress) ?? null;
+            const transfers = transfersByMint.get(g.mintAddress)?.transfers;
+            const counted = base && transfers?.length ? linkedReadingOf(g, linkedLookups!, transfers) : base;
+            const chosen = counted && sameLinked(counted, base) ? base : counted;
+            const clock = holderClocks.get(g.mintAddress);
+            return [
+              g.mintAddress,
+              chosen && clock
+                ? {
+                    ...chosen,
+                    holderBalancesAt: new Date(clock.balancesAtMs),
+                    holderChainReadAt: new Date(clock.readAtMs),
+                    holderNextReadAt: new Date(clock.nextReadAtMs),
+                  }
+                : chosen,
+            ] as const;
+          })
+        : [],
+    );
+    const cexByMint = new Map(
+      linkedLookups ? groups.map((g) => [g.mintAddress, cexReadingOf(g, linkedLookups!)] as const) : [],
+    );
+    // KOL Bundled % and Bundled % from the same readings, the roster and one read of the possible
+    // side wallets; for the coins with transfers (they change the clusters, or carry a KOL's bundle
+    // on to whoever it sent the coin to), the same without them too, in the same read (keyed
+    // "ex:<mint>") so both land or neither does.
+    const EX = "ex:";
+    const changedByTransfers = [...linkedBaseByMint].filter(
+      ([mint, base]) =>
+        base && (linkedByMint.get(mint) !== base || (transfersByMint.get(mint)?.transfers.length ?? 0) > 0),
+    );
+    const kolBundledAll =
+      (linkedLookups
+        ? await withinBudget(
+            kolBundledByMint(
+              new Map([
+                ...[...linkedByMint].map(
+                  ([mint, r]) =>
+                    [
+                      mint,
+                      r && {
+                        ...r,
+                        transfers: transfersByMint.get(mint)?.transfers,
+                        // A send into a KOL's bundle doesn't pull the sender in (user decision 2026-10-16).
+                        kolClusters: linkedBaseByMint.get(mint)?.clusters,
+                      },
+                    ] as const,
+                ),
+                ...changedByTransfers.map(([mint, base]) => [EX + mint, base] as const),
+              ]),
+              linkedLookups.funderOf,
+              kolLookup(),
+            ),
+            KOL_BUNDLED_BUDGET_MS,
+          )
+        : null) ?? new Map<string, KolBundledReading>();
+    const kolBundledOf = new Map([...kolBundledAll].filter(([key]) => !key.startsWith(EX)));
+    const kolBundledBaseOf = new Map(
+      [...kolBundledAll].flatMap(([key, r]) =>
+        key.startsWith(EX) ? [[key.slice(EX.length), r] as const] : [],
+      ),
+    );
+    return {
+      linkedLookups,
+      transfersByMint,
+      linkedBaseByMint,
+      linkedByMint,
+      cexByMint,
+      kolBundledOf,
+      kolBundledBaseOf,
+    };
+  };
+  // The readings off the live tape and the wallet books, each coin's own-tape rows and its dev
+  // launch reading, for `coins`. `onLap` times the last two on the pass's clock.
+  const tapeAndBooksOf = async (
+    coins: readonly CandidateToken[],
+    priors: SharedReadings["priors"],
+    onLap?: (stage: string) => void,
+  ) => {
+    const riskLookup = walletRiskLookup();
+    const kolIs = kolLookup();
+    const winnerIs = riskLookup ? (wallet: string) => isWinnerWallet(riskLookup(wallet)) : undefined;
+    // Each coin's rows on its own trade tape, for the wallets its risk readings look at (2026-10-16,
+    // data-correctness audit): a coin decided on before, whose first call's tape the hourly scores
+    // now count. Two queries; nothing to read while the scores aren't loaded.
+    const riskScale = walletRiskScale();
+    // Each candidate's live-tape page, taken once: the page readLiveTape left running past its budget
+    // can land between two reads, and the Wallet Score must read the page whose buyers the own-tape
+    // read excluded, or a new page's buyers could carry this coin's own result into it.
+    const livePages = new Map(coins.map((c) => [c.mintAddress, livePageOf(c.mintAddress)] as const));
+    const ownTapes = riskScale
+      ? await ownTapesOf(
+          coins.map((c) => ({
+            mintAddress: c.mintAddress,
+            tokenId: priors.get(c.mintAddress)?.token?.id,
+            wallets: [
+              ...(onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? []),
+              ...(sniperWalletsFromCache(c.mintAddress) ?? []),
+              // The newest trades' buyers, for the Wallet Score reading (liveWalletScoreOn).
+              ...liveBuyersOn(livePages.get(c.mintAddress)),
+            ],
+          })),
+          riskScale.builtAt,
+        )
+      : new Map<string, ReadonlyMap<string, OwnTapeRow>>();
+    onLap?.("ownTapes");
+    // How each coin's creator's other launches went, and its funder's other creators' (the dev
+    // launch score): two queries, nothing while the scores aren't loaded.
+    const devLaunchByMint = await devLaunchReadings(
+      coins.map((c) => ({
+        mintAddress: c.mintAddress,
+        token: priors.get(c.mintAddress)?.token ?? null,
+        creator: (onChainByMint.get(c.mintAddress) as { creator?: string } | undefined)?.creator,
+      })),
+    );
+    onLap?.("devLaunch");
+    return { riskLookup, kolIs, winnerIs, livePages, ownTapes, devLaunchByMint };
+  };
+  type CoinReadings = {
+    earliestActivityByAddress: Map<string, Date | null>;
+    holdingsByAddress: Map<string, WalletHoldings>;
+    sniperByMint: Map<string, LaunchSnipers>;
+    freshLaunchBuyers: Map<string, number>;
+    freshQuotes: Awaited<ReturnType<typeof readFreshQuotes>>;
+  } & Awaited<ReturnType<typeof linkedReadingsOf>> &
+    Awaited<ReturnType<typeof tapeAndBooksOf>>;
+  // Summed after the fact rather than accumulated with `matchCount += await ...`: that reads the
+  // counter BEFORE the await and writes it after, so two candidates finishing close together can
+  // each add to the same stale base and lose an increment. Only a log line was ever wrong, but a
+  // counter that undercounts under exactly the concurrency it was built for is not worth keeping.
+  const perCandidateMatches: number[] = [];
+  const processOne =
+    (r: CoinReadings, { priors, marketContext }: SharedReadings, curatedCycle: CuratedCycle) =>
+    async (candidate: CandidateToken) => {
+      const {
+        earliestActivityByAddress,
+        holdingsByAddress,
+        sniperByMint,
+        freshLaunchBuyers,
+        freshQuotes,
+        linkedByMint,
+        linkedBaseByMint,
+        cexByMint,
+        transfersByMint,
+        kolBundledOf,
+        kolBundledBaseOf,
+        livePages,
+        riskLookup,
+        kolIs,
+        winnerIs,
+        ownTapes,
+        devLaunchByMint,
+      } = r;
+      try {
+        perCandidateMatches.push(
+          await processCandidate(
+            candidate,
+            priors.get(candidate.mintAddress) ?? NO_PRIORS,
+            firstSeenByMint.get(candidate.mintAddress),
+            launchedAtByMint.get(candidate.mintAddress),
+            withBlockZero(
+              withChainDevHolding(
+                onChainByMint.get(candidate.mintAddress) ?? null,
+                sniperByMint.get(candidate.mintAddress),
+              ),
+              sniperByMint.get(candidate.mintAddress),
+            ),
+            activeFilters,
+            earliestActivityByAddress,
+            holdingsByAddress,
+            curatedCycle,
+            env,
+            withLaunchSnipers(
+              deps.stream?.tradeFlow?.(candidate.mintAddress),
+              sniperByMint.get(candidate.mintAddress),
+              freshLaunchBuyers.get(candidate.mintAddress),
+            ),
+            deps.pricePath,
+            marketContext,
+            pass.liveStreams,
+            sniperWalletsFromCache(candidate.mintAddress),
+            sniperChainAvailable,
+            freshQuotes.get(candidate.mintAddress),
+            linkedByMint.get(candidate.mintAddress) ?? null,
+            liveFlagsOn(livePages.get(candidate.mintAddress), riskLookup),
+            cexByMint.get(candidate.mintAddress) ?? null,
+            liveTradersOn(livePages.get(candidate.mintAddress), kolIs),
+            liveTradersOn(livePages.get(candidate.mintAddress), winnerIs),
+            kolBundledOf.get(candidate.mintAddress),
+            transfersByMint.get(candidate.mintAddress) ?? null,
+            exTransfersOf(
+              linkedBaseByMint.get(candidate.mintAddress) ?? null,
+              linkedByMint.get(candidate.mintAddress) ?? null,
+              kolBundledOf.get(candidate.mintAddress),
+              kolBundledBaseOf.get(candidate.mintAddress),
+            ),
+            ownTapes === null ? null : ownTapes.get(candidate.mintAddress),
+            // Left off when the own-tape read failed: the buyers' scores could carry this coin's result.
+            ownTapes === null
+              ? null
+              : liveWalletScoreOn(
+                  livePages.get(candidate.mintAddress),
+                  riskLookup,
+                  ownTapes.get(candidate.mintAddress),
+                ),
+            // The same for the clean winners' reading (learner inputs; Winners still requires the tape).
+            ownTapes === null
+              ? null
+              : liveWinnerFollowOn(
+                  livePages.get(candidate.mintAddress),
+                  riskLookup,
+                  ownTapes.get(candidate.mintAddress),
+                ),
+            devLaunchByMint.get(candidate.mintAddress) ?? null,
+            pass.kind,
+          ),
+        );
+      } catch (err) {
+        logger.error("failed to process candidate", { mint: candidate.mintAddress, error: String(err) });
+        // Whatever this cycle would have said is unknown, so the fast lane must not keep matching
+        // on the token's previous (possibly passing) verdict.
+        const tokenId = priors.get(candidate.mintAddress)?.token?.id;
+        if (tokenId) dropScanVerdict(tokenId);
+      }
+    };
+  // The cycle's governor pass: of everything the curators would emit, the strongest contenders
+  // within the feed's paced budget actually go out - see emitCuratedCycle. Never fails the cycle.
+  const emitCurated = async (curatedCycle: CuratedCycle): Promise<number> => {
+    try {
+      return await oneGovernorPassAtATime(() =>
+        emitCuratedCycle(curatedCycle, env, (mint) => deps.pumpFun.liveMarketCap(mint)),
+      );
+    } catch (err) {
+      logger.error("curated emission pass failed", { error: String(err) });
+      return 0;
+    }
+  };
+  // Each contender is decided as soon as its own reads are in, instead of every one waiting at the
+  // wallet block's barrier for the slowest read of any coin (user decision 2026-10-27, Card 7 of
+  // the full audit; DS-3: the block ran to its 15 s budget on every cycle at or above the median).
+  // At the start of the block, and again each time one of its stages settles, the contenders still
+  // waiting are checked against the caches those stages fill: one whose top-10 wallet checks, launch
+  // read (Block 0), Linked and CEX-funded counts, live-tape page and launch buyers' fresh share are
+  // all in has nothing more coming from the block, so it is decided now, its calls go out in a
+  // governor pass of their own, and the barrier below decides the rest as before. A coin decided
+  // early carries every input it would have had at the barrier, so the rows banked are unchanged;
+  // only the moment moves up (notes/full-audit-2026-10-27/t5-scan-cycle). The cycle's only: a fast
+  // scan reads its one coin, whose reads are the whole block.
+  const earlyDecided = new Set<string>();
+  const earlyDecisions: EarlyDecisions = { coins: 0, waves: 0 };
+  const earlyEmissions: Promise<number>[] = [];
+  let markWalletStageSettled: () => void = () => undefined;
+  const walletStageSettled = new Promise<void>((resolve) => (markWalletStageSettled = resolve));
+  const linkedReadsOn = env.LINKED_HOLDER_READS_PER_CYCLE > 0 && env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0;
+  /** Of `waiting`, the contenders whose reads are all in the caches now, with what they read. */
+  const readyFromCaches = async (waiting: CandidateToken[]) => {
+    const mints = new Set(waiting.map((c) => c.mintAddress));
+    const groups = walletGroups.filter((g) => mints.has(g.mintAddress));
+    const fresh = freshnessGroupsOf(groups, groups.length, (mint) =>
+      topHolderWalletsOf(mint, (onChainByMint.get(mint) as { creator?: string } | undefined)?.creator),
+    );
+    const [earliest, holdings] = await Promise.all([
+      resolveEarliestActivity(fresh.groups, deps.helius, { lookupGroups: 0 }),
+      resolveWalletHoldings(groups, deps.helius, env, { lookupGroups: 0 }),
+    ]);
+    const snipers = launchSnipersFromCache([...mints]);
+    const launchBuyers = launchBuyerFreshnessFromCache([...mints]);
+    const readsIn = (c: CandidateToken) => {
+      const mint = c.mintAddress;
+      const s = snipers.get(mint);
+      const profile = withWalletSignals(
+        withBlockZero(withChainDevHolding(onChainByMint.get(mint) ?? null, s), s),
+        earliest,
+        holdings,
+        env,
+        sniperWalletsFromCache(mint),
+      );
+      return ownReadsCheck({
+        profile,
+        blockZeroUnobtainable: blockZeroUnobtainable(mint) || !sniperChainAvailable,
+        tapePage: livePageOf(mint) !== undefined,
+        launchBuyersShare: launchBuyers.has(mint) || env.LAUNCH_BUYER_FRESHNESS_LOOKUPS_PER_CYCLE <= 0,
+        // The Linked and CEX-funded readings themselves are asked for after (they cost a read).
+        linked: !linkedReadsOn || cachedTopHolders(mint) !== undefined,
+      });
+    };
+    const first = waiting.filter(readsIn);
+    if (first.length === 0) return null;
+    const firstMints = new Set(first.map((c) => c.mintAddress));
+    const linkedOf = await linkedReadingsOf(linkedGroups.filter((g) => firstMints.has(g.mintAddress)));
+    const ready = linkedReadsOn
+      ? first.filter((c) => linkedOf.linkedByMint.get(c.mintAddress) && linkedOf.cexByMint.get(c.mintAddress))
+      : first;
+    return ready.length === 0 ? null : { ready, earliest, holdings, snipers, launchBuyers, linked: linkedOf };
+  };
+  const decideEarly = async (): Promise<void> => {
+    const deadline = sniperStageStartedAt + WALLET_STAGE_BUDGET_MS;
+    const unsettled = new Set<Promise<unknown>>(
+      [walletStageSettled, sniperWork, linkedWork, liveTapeWork].map((p) =>
+        p.then(
+          () => undefined,
+          () => undefined,
+        ),
+      ),
+    );
+    for (const p of unsettled) void p.then(() => unsettled.delete(p));
+    for (let first = true; ; first = false) {
+      if (!first) {
+        if (unsettled.size === 0 || Date.now() >= deadline) return;
+        let timer: NodeJS.Timeout | undefined;
+        await Promise.race([
+          ...unsettled,
+          new Promise<void>((resolve) => (timer = setTimeout(resolve, Math.max(0, deadline - Date.now())))),
+        ]);
+        clearTimeout(timer);
+        // Past the budget, or with the last stage in: the barrier decides whoever is left.
+        if (unsettled.size === 0 || Date.now() >= deadline) return;
+      }
+      const waiting = candidates.filter(
+        (c) =>
+          !earlyDecided.has(c.mintAddress) &&
+          contender(c) &&
+          runRugScreen(onChainByMint.get(c.mintAddress)).passed,
+      );
+      if (waiting.length === 0) return;
+      const found = await readyFromCaches(waiting);
+      if (!found) continue;
+      const sharedReadings = await shared;
+      const freshQuotes = await readFreshQuotes(
+        deps.jupiter,
+        found.ready.map((c) => c.mintAddress),
+      );
+      const waveReadings: CoinReadings = {
+        earliestActivityByAddress: found.earliest,
+        holdingsByAddress: found.holdings,
+        sniperByMint: found.snipers,
+        freshLaunchBuyers: found.launchBuyers,
+        freshQuotes,
+        ...found.linked,
+        ...(await tapeAndBooksOf(found.ready, sharedReadings.priors)),
+      };
+      for (const c of found.ready) earlyDecided.add(c.mintAddress);
+      earlyDecisions.waves += 1;
+      earlyDecisions.coins += found.ready.length;
+      earlyDecisions.firstAtMs ??= Date.now() - startedAt;
+      const waveCycle = newCuratedCycle();
+      await forEachWithConcurrency(
+        found.ready,
+        CANDIDATE_CONCURRENCY,
+        processOne(waveReadings, sharedReadings, waveCycle),
+      );
+      earlyEmissions.push(emitCurated(waveCycle));
+    }
+  };
+  const earlyWaves = cycle
+    ? decideEarly().catch((err: unknown) =>
+        logger.warn("early decisions failed - the rest wait for the wallet block", { error: String(err) }),
+      )
+    : Promise.resolve();
   if (cycle && walletStageInFlight) {
     logger.warn("previous wallet lookups still running - this cycle reads wallet signals from cache");
     walletResults = await fromCacheOnly();
@@ -2321,6 +2824,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
     }
   }
   const [earliestActivityByAddress, holdingsByAddress] = walletResults ?? [new Map(), new Map()];
+  markWalletStageSettled();
   lap("wallets");
   const sniperByMint =
     (await withinBudget(
@@ -2329,91 +2833,10 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
     )) ?? launchSnipersFromCache(sniperGroups.map((g) => g.mintAddress));
   lap("snipers");
   await withinBudget(linkedWork, Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)));
-  const linkedLookups =
-    env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0
-      ? await resolveLinkedWallets(linkedGroups, deps.helius, { maxNewLookups: 0 }).catch(() => null)
-      : null;
-  // Holder-to-holder transfers among the top 25, from the caches the stage above filled: every coin
-  // whose holders' reads stand gets them, not only the ones read this cycle.
-  const transfersByMint = new Map(linkedGroups.map((g) => [g.mintAddress, holderTransfersOf(g)] as const));
-  // Linked without transfers, kept recorded (user ask 2026-10-16), and Linked with them: a transfer
-  // past dust and clear of exchanges links its two holders (user decision 2026-10-16). Only a coin
-  // whose transfer reading is complete gets them; the rest read on funding alone.
-  // The holder stream has been moving the chain lists since the groups were built. The reading
-  // takes those lists, and the times the shares and the wallet set were current, together.
-  const holderClocks = adoptLiveHolders(linkedGroups);
-  const linkedBaseByMint = new Map(
-    linkedLookups
-      ? linkedGroups.map((g) => [g.mintAddress, linkedReadingOf(g, linkedLookups!)] as const)
-      : [],
-  );
-  const linkedByMint = new Map(
-    linkedLookups
-      ? linkedGroups.map((g) => {
-          const base = linkedBaseByMint.get(g.mintAddress) ?? null;
-          const transfers = transfersByMint.get(g.mintAddress)?.transfers;
-          const counted = base && transfers?.length ? linkedReadingOf(g, linkedLookups!, transfers) : base;
-          const chosen = counted && sameLinked(counted, base) ? base : counted;
-          const clock = holderClocks.get(g.mintAddress);
-          return [
-            g.mintAddress,
-            chosen && clock
-              ? {
-                  ...chosen,
-                  holderBalancesAt: new Date(clock.balancesAtMs),
-                  holderChainReadAt: new Date(clock.readAtMs),
-                  holderNextReadAt: new Date(clock.nextReadAtMs),
-                }
-              : chosen,
-          ] as const;
-        })
-      : [],
-  );
+  const linked = await linkedReadingsOf(linkedGroups);
+  const { linkedLookups, transfersByMint, linkedBaseByMint, linkedByMint, cexByMint } = linked;
   // Each linking transfer kept for the flags read across coins (KOL Possible Side, Multi-Wallet-Bundle).
   if (linkedLookups) recordTransferEvents(transfersByMint, linkedBaseByMint, linkedLookups.hot);
-  const cexByMint = new Map(
-    linkedLookups ? linkedGroups.map((g) => [g.mintAddress, cexReadingOf(g, linkedLookups!)] as const) : [],
-  );
-  // KOL Bundled % and Bundled % from the same readings, the roster and one read of the possible
-  // side wallets; for the coins with transfers (they change the clusters, or carry a KOL's bundle
-  // on to whoever it sent the coin to), the same without them too, in the same read (keyed
-  // "ex:<mint>") so both land or neither does.
-  const EX = "ex:";
-  const changedByTransfers = [...linkedBaseByMint].filter(
-    ([mint, base]) =>
-      base && (linkedByMint.get(mint) !== base || (transfersByMint.get(mint)?.transfers.length ?? 0) > 0),
-  );
-  const kolBundledAll =
-    (linkedLookups
-      ? await withinBudget(
-          kolBundledByMint(
-            new Map([
-              ...[...linkedByMint].map(
-                ([mint, r]) =>
-                  [
-                    mint,
-                    r && {
-                      ...r,
-                      transfers: transfersByMint.get(mint)?.transfers,
-                      // A send into a KOL's bundle doesn't pull the sender in (user decision 2026-10-16).
-                      kolClusters: linkedBaseByMint.get(mint)?.clusters,
-                    },
-                  ] as const,
-              ),
-              ...changedByTransfers.map(([mint, base]) => [EX + mint, base] as const),
-            ]),
-            linkedLookups.funderOf,
-            kolLookup(),
-          ),
-          KOL_BUNDLED_BUDGET_MS,
-        )
-      : null) ?? new Map<string, KolBundledReading>();
-  const kolBundledOf = new Map([...kolBundledAll].filter(([key]) => !key.startsWith(EX)));
-  const kolBundledBaseOf = new Map(
-    [...kolBundledAll].flatMap(([key, r]) =>
-      key.startsWith(EX) ? [[key.slice(EX.length), r] as const] : [],
-    ),
-  );
   // The coins whose reading was left for behind the cycle and has not landed: their filter
   // matches wait for it (see holdForLinked), which also puts them in next cycle's waited set.
   holdForLinked(
@@ -2437,23 +2860,13 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   }
   lap("linkedWallets");
   await withinBudget(liveTapeWork, Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)));
-  const riskLookup = walletRiskLookup();
-  const kolIs = kolLookup();
-  const winnerIs = riskLookup ? (wallet: string) => isWinnerWallet(riskLookup(wallet)) : undefined;
   lap("liveTape");
+  // The contenders decided as their own reads came in (decideEarly) are done with.
+  await earlyWaves;
   // The launch buyers' fresh-wallet share, from the buyers the sniper stage just read: started
-  // now so it overlaps the quotes and priors below, and waited on briefly before the decisions.
+  // now so it overlaps the quotes below, and waited on briefly before the decisions.
   const launchBuyerMints = sniperGroups.map((g) => g.mintAddress);
   const launchBuyerWork = startLaunchBuyerFreshness(launchBuyerMints, deps.helius, env, cycle);
-
-  // Summed after the fact rather than accumulated with `matchCount += await ...`: that reads the
-  // counter BEFORE the await and writes it after, so two candidates finishing close together can
-  // each add to the same stale base and lose an increment. Only a log line was ever wrong, but a
-  // counter that undercounts under exactly the concurrency it was built for is not worth keeping.
-  // Every candidate's trades get followed from here on (a no-op for ones already tracked) - the
-  // order-flow features need a few minutes of watching before they say anything.
-  // Stonks coins' trades never come through PumpPortal (their flow is read off the live tape).
-  deps.stream?.watch?.(candidates.filter((c) => c.launchpad !== STONKS_LAUNCHPAD).map((c) => c.mintAddress));
 
   // Seconds-old prices for the coins about to be decided on (ScoredToken.freshQuote), read now
   // rather than with the refresh: DexScreener's figures were already 45-60 s behind the market,
@@ -2462,155 +2875,26 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   const freshQuotesWork = readFreshQuotes(
     deps.jupiter,
     candidates
-      .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
+      .filter(
+        (c) => !earlyDecided.has(c.mintAddress) && runRugScreen(onChainByMint.get(c.mintAddress)).passed,
+      )
       .sort((a, b) => Number(contender(b)) - Number(contender(a)))
       .map((c) => c.mintAddress),
   );
-
-  const loaded = await priorsPromise;
-  if ("error" in loaded) throw loaded.error;
-  const { priors } = loaded;
-
-  // One reading of the market for the whole cycle - the same context on every sample. A fast scan
-  // takes the last cycle's band count, not its own one coin, so its row reads the market the cycle
-  // around it would have.
-  if (cycle) lastCycleInBand = candidates.length;
-  const marketContext = await loadMarketContext(
-    env,
-    cycle ? candidates.length : (lastCycleInBand ?? candidates.length),
-  );
-  deps.pricePath?.prune(new Date(Date.now() - 2 * 3_600_000));
-  deps.pricePathSeeder?.seed(
-    candidates.map((c) => ({ mint: c.mintAddress, tokenId: priors.get(c.mintAddress)?.token?.id })),
-  );
-
-  // Read once for the cycle: whether a curated decision should wait for the top-10 snipers share.
-  const sniperChainAvailable = sniperReadsOn(env) && deps.helius.gtfaUsable;
-  pruneSniperWaits(Date.now());
+  const sharedReadings = await shared;
   const freshQuotes = await freshQuotesWork;
   lap("freshQuotes");
   const freshLaunchBuyers =
     (await withinBudget(launchBuyerWork, LAUNCH_BUYER_FRESHNESS_BUDGET_MS)) ??
     launchBuyerFreshnessFromCache(launchBuyerMints);
-  // Each coin's rows on its own trade tape, for the wallets its risk readings look at (2026-10-16,
-  // data-correctness audit): a coin decided on before, whose first call's tape the hourly scores
-  // now count. Two queries for the cycle; nothing to read while the scores aren't loaded.
-  const riskScale = walletRiskScale();
-  // Each candidate's live-tape page, taken once: the page readLiveTape left running past its budget
-  // can land between two reads, and the Wallet Score must read the page whose buyers the own-tape
-  // read excluded, or a new page's buyers could carry this coin's own result into it.
-  const livePages = new Map(candidates.map((c) => [c.mintAddress, livePageOf(c.mintAddress)] as const));
-  const ownTapes = riskScale
-    ? await ownTapesOf(
-        candidates.map((c) => ({
-          mintAddress: c.mintAddress,
-          tokenId: priors.get(c.mintAddress)?.token?.id,
-          wallets: [
-            ...(onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? []),
-            ...(sniperWalletsFromCache(c.mintAddress) ?? []),
-            // The newest trades' buyers, for the Wallet Score reading (liveWalletScoreOn).
-            ...liveBuyersOn(livePages.get(c.mintAddress)),
-          ],
-        })),
-        riskScale.builtAt,
-      )
-    : new Map<string, ReadonlyMap<string, OwnTapeRow>>();
-  lap("ownTapes");
-  // How each coin's creator's other launches went, and its funder's other creators' (the dev
-  // launch score): two queries for the cycle, nothing while the scores aren't loaded.
-  const devLaunchByMint = await devLaunchReadings(
-    candidates.map((c) => ({
-      mintAddress: c.mintAddress,
-      token: priors.get(c.mintAddress)?.token ?? null,
-      creator: (onChainByMint.get(c.mintAddress) as { creator?: string } | undefined)?.creator,
-    })),
-  );
-  lap("devLaunch");
-  const perCandidateMatches: number[] = [];
-  const processOne = (curatedCycle: CuratedCycle) => async (candidate: CandidateToken) => {
-    try {
-      perCandidateMatches.push(
-        await processCandidate(
-          candidate,
-          priors.get(candidate.mintAddress) ?? NO_PRIORS,
-          firstSeenByMint.get(candidate.mintAddress),
-          launchedAtByMint.get(candidate.mintAddress),
-          withBlockZero(
-            withChainDevHolding(
-              onChainByMint.get(candidate.mintAddress) ?? null,
-              sniperByMint.get(candidate.mintAddress),
-            ),
-            sniperByMint.get(candidate.mintAddress),
-          ),
-          activeFilters,
-          earliestActivityByAddress,
-          holdingsByAddress,
-          curatedCycle,
-          env,
-          withLaunchSnipers(
-            deps.stream?.tradeFlow?.(candidate.mintAddress),
-            sniperByMint.get(candidate.mintAddress),
-            freshLaunchBuyers.get(candidate.mintAddress),
-          ),
-          deps.pricePath,
-          marketContext,
-          pass.liveStreams,
-          sniperWalletsFromCache(candidate.mintAddress),
-          sniperChainAvailable,
-          freshQuotes.get(candidate.mintAddress),
-          linkedByMint.get(candidate.mintAddress) ?? null,
-          liveFlagsOn(livePages.get(candidate.mintAddress), riskLookup),
-          cexByMint.get(candidate.mintAddress) ?? null,
-          liveTradersOn(livePages.get(candidate.mintAddress), kolIs),
-          liveTradersOn(livePages.get(candidate.mintAddress), winnerIs),
-          kolBundledOf.get(candidate.mintAddress),
-          transfersByMint.get(candidate.mintAddress) ?? null,
-          exTransfersOf(
-            linkedBaseByMint.get(candidate.mintAddress) ?? null,
-            linkedByMint.get(candidate.mintAddress) ?? null,
-            kolBundledOf.get(candidate.mintAddress),
-            kolBundledBaseOf.get(candidate.mintAddress),
-          ),
-          ownTapes === null ? null : ownTapes.get(candidate.mintAddress),
-          // Left off when the own-tape read failed: the buyers' scores could carry this coin's result.
-          ownTapes === null
-            ? null
-            : liveWalletScoreOn(
-                livePages.get(candidate.mintAddress),
-                riskLookup,
-                ownTapes.get(candidate.mintAddress),
-              ),
-          // The same for the clean winners' reading (learner inputs; Winners still requires the tape).
-          ownTapes === null
-            ? null
-            : liveWinnerFollowOn(
-                livePages.get(candidate.mintAddress),
-                riskLookup,
-                ownTapes.get(candidate.mintAddress),
-              ),
-          devLaunchByMint.get(candidate.mintAddress) ?? null,
-          pass.kind,
-        ),
-      );
-    } catch (err) {
-      logger.error("failed to process candidate", { mint: candidate.mintAddress, error: String(err) });
-      // Whatever this cycle would have said is unknown, so the fast lane must not keep matching
-      // on the token's previous (possibly passing) verdict.
-      const tokenId = priors.get(candidate.mintAddress)?.token?.id;
-      if (tokenId) dropScanVerdict(tokenId);
-    }
-  };
-  // The cycle's governor pass: of everything the curators would emit, the strongest contenders
-  // within the feed's paced budget actually go out - see emitCuratedCycle. Never fails the cycle.
-  const emitCurated = async (curatedCycle: CuratedCycle): Promise<number> => {
-    try {
-      return await oneGovernorPassAtATime(() =>
-        emitCuratedCycle(curatedCycle, env, (mint) => deps.pumpFun.liveMarketCap(mint)),
-      );
-    } catch (err) {
-      logger.error("curated emission pass failed", { error: String(err) });
-      return 0;
-    }
+  const readings: CoinReadings = {
+    earliestActivityByAddress,
+    holdingsByAddress,
+    sniperByMint,
+    freshLaunchBuyers,
+    freshQuotes,
+    ...linked,
+    ...(await tapeAndBooksOf(candidates, sharedReadings.priors, lap)),
   };
   // Only a token past the event pre-gate can be curated (processCandidate), so those are decided
   // first and their calls go out while the rest of the band is still being processed. The calls
@@ -2620,19 +2904,26 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   // The pre-gate is read here on DexScreener's figures and in processCandidate on the scored
   // token; one that passes only the latter is still decided, with the rest, and anything it files
   // goes out in a pass of its own after them.
-  const contenders = candidates.filter((c) => contender(c));
+  // Less the ones decided early, as their own reads came in (decideEarly).
+  const contenders = candidates.filter((c) => contender(c) && !earlyDecided.has(c.mintAddress));
   const others = candidates.filter((c) => !contender(c));
   const contenderCycle = newCuratedCycle();
-  await forEachWithConcurrency(contenders, CANDIDATE_CONCURRENCY, processOne(contenderCycle));
+  await forEachWithConcurrency(
+    contenders,
+    CANDIDATE_CONCURRENCY,
+    processOne(readings, sharedReadings, contenderCycle),
+  );
   lap("contenders");
   const lateCycle = newCuratedCycle();
   const emissionStartedAt = Date.now();
   const [contenderEmitted] = await Promise.all([
     // Its own clock, not a lap: it runs alongside the rest of the band ("candidates").
     emitCurated(contenderCycle).finally(() => (stagesMs.curated = Date.now() - emissionStartedAt)),
-    forEachWithConcurrency(others, CANDIDATE_CONCURRENCY, processOne(lateCycle)),
+    forEachWithConcurrency(others, CANDIDATE_CONCURRENCY, processOne(readings, sharedReadings, lateCycle)),
   ]);
-  const curatedEmitted = contenderEmitted + (await emitCurated(lateCycle));
+  const earlyEmitted = (await Promise.all(earlyEmissions)).reduce((sum, n) => sum + n, 0);
+  if (cycle) lastEarlyDecisions = earlyDecisions;
+  const curatedEmitted = earlyEmitted + contenderEmitted + (await emitCurated(lateCycle));
   const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);
   // This cycle's first safety-screen rejections, which the next refreshes fold prices into.
   void flushScreenRejects();
@@ -3896,9 +4187,12 @@ async function processCandidate(
   // filter criteria and the score's narrative part all read it from here. Never looked up
   // later for a row that was recorded without it.
   if (prior.narrative) scored.narrative = prior.narrative;
+  // Jupiter's seconds-old quote, read just before the decision: the score's live-flow part reads
+  // its 5-minute move and holder count (scorer.ts, refit 2026-10-27), so it goes on first.
+  if (freshQuote && plausibleFreshQuote(freshQuote, scored.priceUsd)) scored.freshQuote = freshQuote;
   // The score's holder-quality part reads the first buyers, which arrive with the trade flow,
-  // and its narrative part the read.
-  if (flow || prior.narrative) scored.score = scoreToken(scored);
+  // its live-flow part the quote and its narrative part the read.
+  if (flow || prior.narrative || scored.freshQuote) scored.score = scoreToken(scored);
   // The price tape: this cycle's observation goes on first, then the path features read back
   // over the last hour of it.
   if (pricePath) {
@@ -3914,7 +4208,6 @@ async function processCandidate(
   scored.curvePath = curvePathOf(candidate.mintAddress);
   if (devLaunch) scored.devLaunch = devLaunch;
   if (marketContext) scored.marketContext = marketContext;
-  if (freshQuote && plausibleFreshQuote(freshQuote, scored.priceUsd)) scored.freshQuote = freshQuote;
   if (liveStreams) {
     const stream = liveStreams.get(candidate.mintAddress);
     scored.livestream = { live: stream !== undefined, viewers: stream?.viewers ?? null };
@@ -4116,8 +4409,8 @@ async function processCandidate(
     // What a decision waits for, on either lane's clock - see decisionInputsReady. The wallet
     // checks when they're required: deciding without them would skip the curator's wallet caps,
     // and an event spent now can't be reopened until the spacing window passes. The contender-first
-    // wallet ordering above resolves them quickly. The top-10 snipers share too, while it can still
-    // come, for SNIPER_SHARE_MAX_WAIT_SECONDS at most and not for young coins (sniperShareReady):
+    // wallet ordering above resolves them quickly. The launch read's Block 0 figure too, while it can
+    // still come, for SNIPER_SHARE_MAX_WAIT_SECONDS at most and not for young coins (launchReadReady):
     // the safety cut reads it, and a row banked without it would teach the models its absence.
     // And the Linked and CEX-funded counts over the chain's top 25, on the same terms
     // (linkedListReady). Both waits are asked each time, so they run side by side.
@@ -4132,7 +4425,13 @@ async function processCandidate(
     // learned "missing" from background rows alone (notes/data-audit-2026-10-16, skew.md section
     // 4). Held this cycle, it is asked again next cycle: the spacing check stays open until it
     // is banked. No lookup is made for it that the cycle wouldn't make anyway.
-    if (pass === "cycle" && !prior.recentHourlySample && inScanBand && inputsReady("hourly").ready) {
+    if (
+      pass === "cycle" &&
+      !prior.recentHourlySample &&
+      inScanBand &&
+      !hourlySampleWaitsForTape(uptimeSeconds(), livePageOf(candidate.mintAddress) !== undefined) &&
+      inputsReady("hourly").ready
+    ) {
       await recordCandidateSample(token.id, scored, env);
     }
     const preGate = passesEventPreGate(scored, band);

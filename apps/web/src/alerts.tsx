@@ -11,6 +11,7 @@ import { tradeSettingsSync } from "./proTrade";
 import { layoutPrefsSync } from "./layoutPrefs";
 import { openChaosTabs, thisBrowserIsDesktop } from "./chaosMode";
 import { belowMcapLine } from "./components/AlertCard";
+import { openTokenLink, tokenLinkPath } from "./tradeLink";
 
 /**
  * Alert delivery in the dashboard: the user's alert settings (shared by the Settings tab and the
@@ -329,13 +330,21 @@ export async function showNotification(
   body: string,
   icon: string | undefined,
   tag: string,
+  /** The coin a click opens (its token view); none opens the dashboard. */
+  mint?: string,
 ): Promise<NotifyResult> {
   const state = notificationState();
   if (state === "unsupported")
     return { ok: false, reason: "This browser can't show notifications from a page." };
   if (state !== "granted") return { ok: false, reason: "Notifications aren't allowed for this site yet." };
   // renotify: a notification with a tag already on screen replaces it silently otherwise.
-  const options: NotificationOptions & { renotify?: boolean } = { body, icon, tag, renotify: true };
+  const options: NotificationOptions & { renotify?: boolean } = {
+    body,
+    icon,
+    tag,
+    renotify: true,
+    data: { url: mint ? tokenLinkPath(mint) : "/" },
+  };
   let workerError: unknown = null;
   try {
     const registration = await notificationWorker();
@@ -357,6 +366,7 @@ export async function showNotification(
     n.onclick = () => {
       window.focus();
       if (window.location.hash !== "") window.location.hash = "";
+      if (mint) openTokenLink(mint);
       n.close();
     };
     return { ok: true };
@@ -625,7 +635,7 @@ function announce(p: AlertPrefs, toAnnounce: Card[]): void {
         const d = describe(c);
         // The same gate as the card's avatar: https only, and the thumbnail, not the original.
         const icon = c.token.imageUrl?.startsWith("https://") ? tokenThumb(c.token.imageUrl, 128) : undefined;
-        void showNotification(d.title, d.body, icon, cardKey(c));
+        void showNotification(d.title, d.body, icon, cardKey(c), c.token.mintAddress);
       }
     }
   }

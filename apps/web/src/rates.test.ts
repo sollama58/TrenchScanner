@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   calibratedRateLabel,
@@ -7,6 +9,8 @@ import {
   lastDayWindowEnd,
   median,
   MIN_GRADED_FOR_RATE,
+  RULE_NOTE_UNFILTERED,
+  RULE_RANGE_SHORT,
   utcClock,
   wilson,
   wilsonOfRate,
@@ -82,5 +86,20 @@ describe("the 24h window's end", () => {
     const end = lastDayWindowEnd(now, 360);
     expect(end.toISOString()).toBe("2026-10-14T11:15:00.000Z");
     expect(utcClock(end)).toBe("11:15 UTC");
+  });
+});
+
+describe("rule notes", () => {
+  it("name every label rule core grades under, up to the newest", () => {
+    // The notes once said "rules 3 and 4" while rows graded under 5 and 6 (audit 10-27 GF-5).
+    const labels = readFileSync(
+      resolve(import.meta.dirname, "../../../packages/core/src/curation/labels.ts"),
+      "utf8",
+    );
+    const rules = [...labels.matchAll(/export const \w+_LABEL_RULE = (\d+);/g)].map((m) => Number(m[1]));
+    const newest = Math.max(...rules);
+    expect(newest).toBeGreaterThanOrEqual(6);
+    expect(RULE_RANGE_SHORT).toBe(`rules 3-${newest}`);
+    expect(RULE_NOTE_UNFILTERED).toContain(`rules 3-${newest}`);
   });
 });

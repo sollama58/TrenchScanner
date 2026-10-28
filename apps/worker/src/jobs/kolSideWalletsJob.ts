@@ -25,8 +25,8 @@ import {
   type SideWallet,
   type SideWindow,
 } from "@trenchscanner/core";
-import type { JobRunMeta } from "../scheduler.js";
-import { withLongReads } from "./longReads.js";
+import { PartialJobFailure, type JobRunMeta } from "../scheduler.js";
+import { WALLET_BOOK_READ_TIMEOUT_MS, withLongReads } from "./longReads.js";
 import { replaceRows, type ReplaceRowsSpec } from "./replaceRows.js";
 import { rebuildTrackedSides, type TrackedSidesMeta } from "./trackedSidesJob.js";
 
@@ -82,6 +82,15 @@ const KOL_SIDE_WALLETS_TABLE: ReplaceRowsSpec = {
   ],
   stampColumns: ["computedAt"],
 };
+/**
+ * A run whose slowest whole-tape read took this long or more still writes its lists, but is kept
+ * with an error (PartialJobFailure) that GET /health/worker and the admin panel show: 70% of the
+ * reads' statement bound. Past the bound the reads fail every hour and KolPossibleSide, the
+ * tracked sides and kolBundledPct (a model input) freeze silently at their last rebuild; the pair
+ * read took 323 s of the 600 at 4.9 M activity rows and the table is still growing toward its
+ * 30-day plateau (audit 2026-10-27, DB-12 and SW-2).
+ */
+export const KOL_SIDE_READ_WARN_MS = Math.round(WALLET_BOOK_READ_TIMEOUT_MS * 0.7);
 /** Wallet pairs per delete when refreshing the labels that qualify again. */
 const POSSIBLE_SIDE_DELETE_CHUNK = 500;
 
@@ -124,8 +133,13 @@ function kolBuys(since: Date): Prisma.Sql {
     GROUP BY a."tokenId", COALESCE(k."mainWallet", a."wallet")`;
 }
 
-export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): Promise<JobRunMeta> {
+export async function runKolSideWalletsJob(
+  opts: { now?: () => number; warnAtMs?: number } = {},
+): Promise<JobRunMeta> {
   const now = new Date((opts.now ?? Date.now)());
+  // How long each whole-tape read took, for the heartbeat and the near-the-bound warning.
+  let readStarted = Date.now();
+  const readMs = { kols: 0, pairs: 0, sides: 0 };
   const since = Object.fromEntries(
     SIDE_WINDOWS.map((w) => [w, new Date(now.getTime() - WINDOW_MS[w])]),
   ) as Record<SideWindow, Date>;
@@ -150,6 +164,8 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     FROM kol
     GROUP BY kol."wallet"`,
   );
+  readMs.kols = Date.now() - readStarted;
+  readStarted = Date.now();
 
   // Every (KOL, wallet) pair that bought the same coins within the gap, counted per window. The
   // pairs that can reach a list are picked on counts alone first, and only theirs are sorted for
@@ -204,9 +220,11 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     JOIN pair p ON p.kol = l.kol AND p.side = l.side
     GROUP BY l.kol, l.side, l.s24, l.s48, l.s72, l.s7, l.s30`,
   );
+  readMs.pairs = Date.now() - readStarted;
 
   // The listed wallets' own coin counts, and every tracked coin's, for the bot rule and the lists.
   const sides = [...new Set(pairs.map((p) => p.side))];
+  readStarted = Date.now();
   const [sideRows, [totals]] = await withLongReads((tx) =>
     Promise.all([
       sides.length
@@ -227,6 +245,7 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
       WHERE a."buys" > 0 AND a."firstBuyAt" >= ${since["30d"]}`,
     ]),
   );
+  readMs.sides = Date.now() - readStarted;
   const totalCoins = Number(totals?.c30 ?? 0);
   const sideCoins: Record<SideWindow, Map<string, number>> = {
     "24h": new Map(),
@@ -475,8 +494,21 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     removedLabels,
     withheldLabels: withheld.length,
     totalCoins,
+    kolsReadMs: readMs.kols,
+    pairsReadMs: readMs.pairs,
+    sidesReadMs: readMs.sides,
   };
   logger.info("kol side wallets rebuilt", meta);
+  const slowest = Math.max(readMs.kols, readMs.pairs, readMs.sides);
+  const warnAt = opts.warnAtMs ?? KOL_SIDE_READ_WARN_MS;
+  if (slowest >= warnAt) {
+    throw new PartialJobFailure(
+      `rebuilt, but its slowest read took ${Math.round(slowest / 1000)}s of the ` +
+        `${WALLET_BOOK_READ_TIMEOUT_MS / 1000}s bound (warns from ${Math.round(warnAt / 1000)}s): ` +
+        "past the bound the side lists and labels stop updating",
+      meta,
+    );
+  }
   return meta;
 }
 

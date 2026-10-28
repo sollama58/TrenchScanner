@@ -1,6 +1,6 @@
 import { PUMPFUN_LAUNCHPAD, STONKS_LAUNCHPAD } from "../launchpads.js";
 import { marketSourceCode, marketSourceFromCode } from "../marketSource.js";
-import type { ScoredToken } from "../types.js";
+import type { FreshQuote, ScoredToken } from "../types.js";
 import { scoreNarrative, scoreToken, scoreTokenLegacy } from "../scoring/scorer.js";
 import { EMPTY_TRADE_FLOW, resolveDevHolding, type TradeFlowFeatures } from "./tradeFlow.js";
 import { decisionAnchor, freshQuoteMcapUsd } from "./labels.js";
@@ -744,16 +744,12 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // 2-4% of rows that carry it, its presence says "decided within minutes of launch", not what
   // the dev bought.
   "devInitialBuySol",
-  // The trade-by-trade order flow (user decision 2026-10-08): dead since 2026-10-04, as PumpPortal
-  // only streams trades to a funded API key and none is set. Still recorded, so they come back by
-  // removing them here once a key is funded.
-  "uniqueBuyers5m",
-  "buysPerBuyer5m",
-  "avgBuySol5m",
-  "topBuyerShare5m",
-  "newBuyerShare5m",
-  "netFlow5mToMcap",
-  "tradesPerMin5m",
+  // The trade-by-trade order flow (user decision 2026-10-08) was dead from 2026-10-04, as
+  // PumpPortal only streams trades to a funded API key and none is set. Its seven 5-minute
+  // inputs came back to the learners on 2026-10-28 (full audit MT-17, card 16): #1118 fills them
+  // from Helius pages (uniqueBuyers5m on about 21% of decision moments), and the onset guard holds
+  // them out of a run until that fill covers the exam's span. The early-buyer and dev-sale
+  // inputs below still have no source.
   "earlyBuyerCount",
   "earlyBuyerHoldPct",
   "earlyBuyerSoldShare",
@@ -951,12 +947,28 @@ export function isTokenSageInput(name: string): boolean {
 }
 
 /**
+ * TokenSage inputs in MARKET_TOKENSAGE_INPUTS that the market seats do not read (full audit
+ * 2026-10-27, MT-7, card 16): how old the X post counts and the trend refresh were at the decision.
+ * They encode TokenSage's read latency, not the coin: nsXEngagementAgeMin's daily median was
+ * 5.2-9.9 min in the 10-20..22 backlog and 1.3-1.8 min since, and its single-input AUC of 0.393 is
+ * partly "the read was slow". On three walk-forward folds (10-21..26, the Trees recipe) dropping
+ * both put the top 5% at 25.3% (98 of 388) against 23.2% (90), AUC 0.621 against 0.619, the top
+ * 10-20% within half a point; masking only the backlog era did no better than keeping them
+ * (notes/full-audit-2026-10-27/t4-replays.md). The Narrative and Narrative Blend seats keep them.
+ */
+export const MARKET_LATENCY_INPUTS: ReadonlySet<CandidateFeatureName> = new Set<CandidateFeatureName>([
+  "nsXEngagementAgeMin",
+  "nsNowAgeMin",
+]);
+
+/**
  * The inputs a market seat (every learner but the Narrative and Narrative Blend seats) reads unless
  * its recipe names its own: every learner input, with TokenSage's narrowed to MARKET_TOKENSAGE_INPUTS
- * (the fee group, the logo score, the X counts and the story heat).
+ * (the fee group, the logo score, the X counts and the story heat) less MARKET_LATENCY_INPUTS.
  */
 export const MARKET_LEARNER_FEATURE_NAMES: readonly CandidateFeatureName[] = LEARNER_FEATURE_NAMES.filter(
-  (name) => !isTokenSageInput(name) || MARKET_TOKENSAGE_INPUTS.includes(name),
+  (name) =>
+    (!isTokenSageInput(name) || MARKET_TOKENSAGE_INPUTS.includes(name)) && !MARKET_LATENCY_INPUTS.has(name),
 );
 
 /** A recipe's feature list with the retired inputs taken out. */
@@ -1307,6 +1319,25 @@ export const EMPTY_WALLETS_TTL_6H_SINCE = new Date("2026-10-23T18:00:00Z");
 export const EMPTY_WALLETS_TTL_10M_SINCE = new Date("2026-10-27T18:00:00Z");
 
 /**
+ * Two TokenSage inputs that read a false 0 on nearly every decision moment for a stretch (full
+ * audit 2026-10-27, MT-5, found by scanning 6-hour blocks of the 10-13..26 export). Logo reuse in
+ * 24 h: usually 0 on 78-92% of filled rows, 98-100% from about 10-20 15:00 (TokenSage #81 merged
+ * 16:38) until 10-23 20:00. The X read flag: usually 0 on 3-16%, 89-100% from 10-22 20:00 to
+ * 10-23 20:00. Those zeros read as missing; a non-zero reading in the window was a real one and
+ * stays. Narrative-seat inputs only (the market seats drop the ns* inputs). Replayed on three
+ * walk-forward folds (10-21..26) for Story and Story + Market before shipping: AUC and top-slice
+ * hit rates unchanged within a row or two (notes/full-audit-2026-10-27/t4-replays.md).
+ */
+export const NS_LOGO_REUSE_FALSE_ZEROS = {
+  from: new Date("2026-10-20T15:00:00Z"),
+  until: new Date("2026-10-23T20:00:00Z"),
+} as const;
+export const NS_X_READ_FALSE_ZEROS = {
+  from: new Date("2026-10-22T20:00:00Z"),
+  until: new Date("2026-10-23T20:00:00Z"),
+} as const;
+
+/**
  * Rows anchored in this window stored a RugCheck holder reading of 0 where the report was not
  * indexed yet (data-correctness audit 2026-10-16). From 2026-10-14 13:00 UTC a cached "not found"
  * (#599) stood in for a young coin: holder count, risk and the growth built on RugCheck's count
@@ -1428,6 +1459,8 @@ export function withoutPreCanonicalPairAge<T extends Record<string, number | nul
  * to what an ns* input means bumps NS_RULES_VERSION, and the rows written under the old meaning
  * can be masked by version rather than by date (`nsRulesVersion !== NS_RULES_VERSION`); not
  * applied yet, version 1 is the first.
+ * A 0 in nsLogoReuse24h through NS_LOGO_REUSE_FALSE_ZEROS and in nsXRead through
+ * NS_X_READ_FALSE_ZEROS.
  * Returns the same object when nothing applies.
  */
 export function maskKnownBadInputs<T extends Record<string, number | null | undefined>>(
@@ -1451,7 +1484,12 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
   const rawWalletRisk = isRawWalletRiskRow(anchorAt, features);
   const unreadSocials = at < SOCIALS_UNREAD_NULL_SINCE.getTime();
   const unpricedEmpty = at < EMPTY_WALLETS_UNPRICED_NULL_SINCE.getTime();
+  const logoReuseZeros =
+    at >= NS_LOGO_REUSE_FALSE_ZEROS.from.getTime() && at < NS_LOGO_REUSE_FALSE_ZEROS.until.getTime();
+  const xReadZeros = at >= NS_X_READ_FALSE_ZEROS.from.getTime() && at < NS_X_READ_FALSE_ZEROS.until.getTime();
   if (
+    !logoReuseZeros &&
+    !xReadZeros &&
     at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime() &&
     !unwaitedHourly &&
     !rebuiltBundled &&
@@ -1481,6 +1519,8 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
   if (rawWalletRisk) clear("walletRiskTop10Max");
   if (unreadSocials) for (const name of SOCIALS_UNREAD_FEATURES) if (features[name] === 0) clear(name);
   if (unpricedEmpty) clear("emptyTop10WalletPct");
+  if (logoReuseZeros && features.nsLogoReuse24h === 0) clear("nsLogoReuse24h");
+  if (xReadZeros && features.nsXRead === 0) clear("nsXRead");
   if (at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime()) return done();
   // The tape held less than `windowMinutes` of the coin's life (the pre-refill rule's test, with
   // its slack for the rounding of pathObservedMinutes and the reference tick's own).
@@ -1956,8 +1996,32 @@ export function scoredFromFeatures(
     // composite's, and the replayed rules must gate on today's score.
     score: { momentum: 0, holderHealth: 0, age: 0, narrative: 0, total: 0 },
   };
-  replayed.score = scoreToken(replayed);
+  // The score's live-flow part reads Jupiter's quote, which the vector carries as the jup*
+  // inputs. It is handed to the scorer only: decisionAnchor and the rest of the replay keep
+  // reading the row's own anchor, as they always have.
+  replayed.score = scoreToken({
+    ...replayed,
+    freshQuote: freshQuoteForScore(features, anchorPriceUsd, anchorMcapUsd),
+  });
   return replayed;
+}
+
+/** The part of a fresh quote the composite score reads, rebuilt from a feature vector; undefined without one. */
+function freshQuoteForScore(
+  features: Record<string, number | null | undefined>,
+  anchorPriceUsd: number,
+  anchorMcapUsd: number,
+): FreshQuote | undefined {
+  const move = features.jup5mPriceChangePct;
+  const holders = features.jupHolderCount;
+  if ((move === null || move === undefined) && (holders === null || holders === undefined)) return undefined;
+  return {
+    priceUsd: anchorPriceUsd,
+    marketCapUsd: anchorMcapUsd,
+    fetchedAt: new Date(0),
+    ...(move !== null && move !== undefined ? { stats5m: { priceChangePct: move } } : {}),
+    ...(holders !== null && holders !== undefined ? { holderCount: holders } : {}),
+  };
 }
 
 /** The text read carried in a feature vector, or undefined when the vector has none. */

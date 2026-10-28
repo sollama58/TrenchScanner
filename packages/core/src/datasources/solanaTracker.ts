@@ -117,11 +117,25 @@ export function parseTokenTraders(body: unknown): TokenTradersPage {
   return { traders, nextCursor: cursor, total: num(b.pagination?.total) };
 }
 
+/** Solana Tracker allows 3 requests a second: each client's calls are spaced at least this far apart. */
+export const SOLANA_TRACKER_GAP_MS = 350;
+
 export class SolanaTrackerClient {
+  private nextAt = 0;
+
   constructor(
     private readonly apiKey: string,
     private readonly baseUrl = "https://data.solanatracker.io",
+    private readonly gapMs = SOLANA_TRACKER_GAP_MS,
   ) {}
+
+  /** Waits for this call's turn under the plan's rate (per process: the API and worker each keep their own). */
+  private async turn(): Promise<void> {
+    const now = Date.now();
+    const at = Math.max(now, this.nextAt);
+    this.nextAt = at + this.gapMs;
+    if (at > now) await new Promise((r) => setTimeout(r, at - now));
+  }
 
   /** One page of the KOL roster, most realised profit first. */
   async kolPage(cursor: string | null, limit = 100): Promise<KolPage> {
@@ -129,6 +143,7 @@ export class SolanaTrackerClient {
     url.searchParams.set("sort", "realized");
     url.searchParams.set("limit", String(limit));
     if (cursor) url.searchParams.set("cursor", cursor);
+    await this.turn();
     const body = await fetchJson<unknown>(url.toString(), {
       headers: { "x-api-key": this.apiKey },
       timeoutMs: 15_000,
@@ -145,11 +160,13 @@ export class SolanaTrackerClient {
     url.searchParams.set("direction", "desc");
     url.searchParams.set("limit", String(limit));
     if (cursor) url.searchParams.set("cursor", cursor);
+    await this.turn();
+    // No retry: each call is one of Asyl's capped calls (apps/api/src/asyl/topTraders.ts), and
+    // the reader can ask again.
     const body = await fetchJson<unknown>(url.toString(), {
       headers: { "x-api-key": this.apiKey },
       timeoutMs: 15_000,
-      retries: 1,
-      retryDelayMs: 1_000,
+      retries: 0,
     });
     return parseTokenTraders(body);
   }

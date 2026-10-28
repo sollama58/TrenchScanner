@@ -1,5 +1,6 @@
 import { prisma, createLogger, Prisma, pruneCandleStore, type Env } from "@trenchscanner/core";
 import { PartialJobFailure, type JobRunMeta } from "../scheduler.js";
+import { findInvalidIndexes, reindexBloated } from "./dbMaintenance.js";
 
 const logger = createLogger("cleanup-job");
 const DAY_MS = 86_400_000;
@@ -65,6 +66,9 @@ const REVOKED_DEVICE_RETENTION_DAYS = 30;
 /** How long a chat's "already alerted about this token" row is kept. */
 const TELEGRAM_ALERT_SENT_RETENTION_DAYS = 7;
 
+/** How long a Web Push send record is kept: a month, past the 14-day windows the audits export. */
+const WEB_PUSH_ALERT_SENT_RETENTION_DAYS = 30;
+
 /** How long an admin audit row is kept. The panel reads recent actions; 90 days covers that. */
 const ADMIN_ACTION_RETENTION_DAYS = 90;
 
@@ -86,9 +90,11 @@ export interface CleanupOptions {
   pauseMs?: number;
   /** Walk every old token for snapshots, not only ones that can own them. Default: on Sundays. */
   fullSnapshotWalk?: boolean;
+  /** Rebuild the bloated indexes once the sweeps are done (dbMaintenance.ts). Default: on Sundays. */
+  reindex?: boolean;
 }
 
-const DEFAULT_BATCH: Required<Omit<CleanupOptions, "fullSnapshotWalk">> = {
+const DEFAULT_BATCH: Required<Omit<CleanupOptions, "fullSnapshotWalk" | "reindex">> = {
   rowsPerBatch: 5_000,
   tokensPerBatch: 200,
   pauseMs: 50,
@@ -949,6 +955,12 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
         where: { sentAt: { lt: new Date(startedAt - TELEGRAM_ALERT_SENT_RETENTION_DAYS * DAY_MS) } },
       }),
     ),
+    // Which alerts each Web Push notification carried (webPush/dispatch.ts), for the push-sent export.
+    stage("webPushAlertsSent", none, () =>
+      prisma.webPushAlertSent.deleteMany({
+        where: { sentAt: { lt: new Date(startedAt - WEB_PUSH_ALERT_SENT_RETENTION_DAYS * DAY_MS) } },
+      }),
+    ),
     // Alerted coins' top-50 bubble maps: one row a coin, kept as long as its snapshots.
     stage("bubbleMapHolders", none, () =>
       prisma.bubbleMapHolders.deleteMany({ where: { computedAt: { lt: snapshotCutoff } } }),
@@ -1094,6 +1106,25 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   `,
   );
 
+  // Weekly, after the week's biggest deletes (the full snapshot walk): TokenSnapshot's and Token's
+  // indexes back to size. They regrow about 60 MB a day between rebuilds (dbMaintenance.ts).
+  const reindexDue = opts.reindex ?? new Date(startedAt).getUTCDay() === FULL_SNAPSHOT_WALK_WEEKDAY;
+  const reindexed = reindexDue
+    ? await stage("reindex", null, () => reindexBloated({ diskAlertMb: env.DB_DISK_ALERT_MB ?? 0 }))
+    : null;
+  // Last, nightly: any index a failed CONCURRENTLY build left INVALID (written on every insert, used
+  // by no query, and skipped by a migration's re-run) fails this stage, so the run's lastError names
+  // it and pipeline-watch tells the admins the same morning.
+  await stage("invalidIndexes", null, async () => {
+    const invalid = await findInvalidIndexes();
+    if (invalid.length > 0)
+      throw new Error(
+        `${invalid.length} invalid index(es): ${invalid.map((i) => `${i.table}.${i.index}`).join(", ")} - ` +
+          "rebuild with REINDEX INDEX CONCURRENTLY, or drop with DROP INDEX CONCURRENTLY and redeploy",
+      );
+    return null;
+  });
+
   // Also the run's heartbeat meta, so GET /health/worker shows what the last sweep deleted - the
   // one view of it that needs no log access.
   const counts = {
@@ -1141,6 +1172,13 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     strippedNarrativeDocs,
     strippedUntrackedNarrativeDocs,
   };
+  if (reindexed)
+    Object.assign(counts, {
+      reindexFreedMb: reindexed.freedMb,
+      reindexed: reindexed.rebuilt.join(", "),
+      reindexSkipped: reindexed.skipped.join(", "),
+      reindexDroppedLeftovers: reindexed.droppedLeftovers.join(", "),
+    });
   // The run reached its end: tomorrow's starts from the first stage again.
   await writeResumeState(null).catch(() => {});
   if (skippedStages.length > 0) Object.assign(counts, { resumedSkippedStages: skippedStages.join(", ") });

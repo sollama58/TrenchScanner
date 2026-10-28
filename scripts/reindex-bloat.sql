@@ -1,7 +1,10 @@
 -- One-time reclaim of index bloat left by the September/October backlog deletes
--- (notes/db-size-audit-2026-10-14/report.md, R4). REINDEX ... CONCURRENTLY takes no table lock:
+-- (notes/db-size-audit-2026-10-14/report.md, R4). Since the full audit of 2026-10-27 (DB-3) the
+-- trainer's Sunday cleanup rebuilds the same four indexes itself (apps/worker/src/jobs/
+-- dbMaintenance.ts, REINDEX_TARGETS: keep the two lists in step), so this is for a rebuild
+-- between Sundays. REINDEX ... CONCURRENTLY takes no table lock:
 -- readers and writers continue, each statement needs free disk equal to the index it rebuilds
--- (the largest is ~575 MB), and it cannot run inside a transaction, so run this with psql's
+-- (the largest was ~780 MB on 2026-10-27), and it cannot run inside a transaction, so run this with psql's
 -- autocommit on (the default), one statement at a time, during a quiet hour:
 --
 --   psql "$DATABASE_URL" -f scripts/reindex-bloat.sql

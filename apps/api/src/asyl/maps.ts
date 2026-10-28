@@ -19,6 +19,45 @@ export const MAP_TITLE_MAX = 80;
 export const MAP_NOTE_MAX = 2_000;
 /** The body a save may send: a full map with its layout. */
 export const MAP_BODY_LIMIT = 4_000_000;
+/**
+ * Bytes one account's maps may hold, their shared copies included (user decision 2026-10-27, full
+ * audit TR-3): about 20 MB for a free account, so one sign-in can't fill the database with 100
+ * maps of 8 MB each. Pro Mode keeps more.
+ */
+export const MAP_BYTES_FREE = 20_000_000;
+export const MAP_BYTES_PRO = 200_000_000;
+
+/** A doc's size as stored, near enough: its JSON's bytes. */
+export const docBytes = (doc: unknown) => Buffer.byteLength(JSON.stringify(doc));
+
+type Tx = Prisma.TransactionClient;
+
+/**
+ * Runs `fn` with the account's maps locked against its other saves (a transaction-scoped advisory
+ * lock on the user), handing it what the account's maps hold now leaving out `leaveOut`'s doc or
+ * shared copy, the part the write replaces.
+ */
+async function withBytes<T>(
+  userId: string,
+  leaveOut: { id: string; part: "doc" | "shared" } | null,
+  fn: (tx: Tx, held: number) => Promise<T>,
+): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`asyl-maps:${userId}`}))`;
+    const rows = await tx.asylMap.findMany({
+      where: { userId },
+      select: { id: true, docBytes: true, sharedBytes: true },
+    });
+    const held = rows.reduce(
+      (a, r) =>
+        a +
+        (leaveOut?.id === r.id && leaveOut.part === "doc" ? 0 : r.docBytes) +
+        (leaveOut?.id === r.id && leaveOut.part === "shared" ? 0 : r.sharedBytes),
+      0,
+    );
+    return fn(tx, held);
+  });
+}
 
 const address = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
 const finite = z.number().finite();
@@ -269,21 +308,41 @@ export async function readMap(userId: string, id: string) {
   return { ...summary(row), doc: row.doc as unknown as AsylMapDoc };
 }
 
-export async function createMap(userId: string, title: string, doc: AsylMapDoc) {
-  const count = await prisma.asylMap.count({ where: { userId } });
-  if (count >= MAPS_PER_USER) return { error: "cap" as const };
-  const row = await prisma.asylMap.create({
-    data: { userId, title, doc: cleanDoc(doc) as unknown as Prisma.InputJsonValue },
+export async function createMap(userId: string, title: string, doc: AsylMapDoc, byteCap = MAP_BYTES_FREE) {
+  const clean = cleanDoc(doc);
+  const bytes = docBytes(clean);
+  return withBytes(userId, null, async (tx, held) => {
+    const count = await tx.asylMap.count({ where: { userId } });
+    if (count >= MAPS_PER_USER) return { error: "cap" as const };
+    if (held + bytes > byteCap) return { error: "bytes" as const, held };
+    const row = await tx.asylMap.create({
+      data: { userId, title, doc: clean as unknown as Prisma.InputJsonValue, docBytes: bytes },
+    });
+    return { map: summary(row) };
   });
-  return { map: summary(row) };
 }
 
-export async function updateMap(userId: string, id: string, title: string, doc: AsylMapDoc) {
-  const res = await prisma.asylMap.updateMany({
-    where: { id, userId },
-    data: { title, doc: cleanDoc(doc) as unknown as Prisma.InputJsonValue },
+/** Saves over a map: "ok", "missing" when it isn't the reader's, "bytes" past the account's cap. */
+export async function updateMap(
+  userId: string,
+  id: string,
+  title: string,
+  doc: AsylMapDoc,
+  byteCap = MAP_BYTES_FREE,
+): Promise<"ok" | "missing" | "bytes"> {
+  const clean = cleanDoc(doc);
+  const bytes = docBytes(clean);
+  return withBytes(userId, { id, part: "doc" }, async (tx, held) => {
+    if (held + bytes > byteCap) {
+      const mine = await tx.asylMap.count({ where: { id, userId } });
+      return mine > 0 ? "bytes" : "missing";
+    }
+    const res = await tx.asylMap.updateMany({
+      where: { id, userId },
+      data: { title, doc: clean as unknown as Prisma.InputJsonValue, docBytes: bytes },
+    });
+    return res.count > 0 ? "ok" : "missing";
   });
-  return res.count > 0;
 }
 
 export async function deleteMap(userId: string, id: string): Promise<boolean> {
@@ -298,29 +357,100 @@ export function newSlug(): string {
   return [...bytes].map((b) => alphabet[b % alphabet.length]).join("");
 }
 
-/** Freezes the map as it stands now behind its link (the same link when it had one). */
-export async function shareMap(userId: string, id: string): Promise<{ slug: string } | null> {
-  const row = await prisma.asylMap.findFirst({
-    where: { id, userId },
-    select: { doc: true, shareSlug: true },
+/**
+ * Freezes the map as it stands now behind its link (the same link when it had one). Refused when
+ * an admin took its link down, or when the copy would take the account past its byte cap.
+ */
+export async function shareMap(
+  userId: string,
+  id: string,
+  byteCap = MAP_BYTES_FREE,
+): Promise<{ slug: string } | { error: "taken-down" } | { error: "bytes"; held: number } | null> {
+  return withBytes(userId, { id, part: "shared" }, async (tx, held) => {
+    const row = await tx.asylMap.findFirst({
+      where: { id, userId },
+      select: { doc: true, shareSlug: true, takenDownAt: true },
+    });
+    if (!row) return null;
+    if (row.takenDownAt) return { error: "taken-down" as const };
+    const shared = publicDoc(row.doc as unknown as AsylMapDoc);
+    const bytes = docBytes(shared);
+    if (held + bytes > byteCap) return { error: "bytes" as const, held };
+    const slug = row.shareSlug ?? newSlug();
+    await tx.asylMap.update({
+      where: { id },
+      data: {
+        shareSlug: slug,
+        sharedDoc: shared as unknown as Prisma.InputJsonValue,
+        sharedBytes: bytes,
+        sharedAt: new Date(),
+      },
+    });
+    return { slug };
   });
-  if (!row) return null;
-  const slug = row.shareSlug ?? newSlug();
-  await prisma.asylMap.update({
-    where: { id },
-    data: {
-      shareSlug: slug,
-      sharedDoc: publicDoc(row.doc as unknown as AsylMapDoc) as unknown as Prisma.InputJsonValue,
-      sharedAt: new Date(),
-    },
-  });
-  return { slug };
 }
 
 export async function unshareMap(userId: string, id: string): Promise<boolean> {
   const res = await prisma.asylMap.updateMany({
     where: { id, userId },
-    data: { shareSlug: null, sharedDoc: Prisma.DbNull, sharedAt: null },
+    data: { shareSlug: null, sharedDoc: Prisma.DbNull, sharedAt: null, sharedBytes: 0 },
+  });
+  return res.count > 0;
+}
+
+/** A shared map as an admin's list shows it. */
+export interface SharedMapRow {
+  slug: string | null;
+  title: string;
+  owner: string;
+  nodes: number;
+  sharedAt: string | null;
+  takenDownAt: string | null;
+}
+
+/** Shared maps, newest first, and the ones taken down, for an admin (full audit 2026-10-27, TR-2). */
+export async function listSharedMaps(limit = 200): Promise<SharedMapRow[]> {
+  const rows = await prisma.$queryRaw<
+    {
+      shareSlug: string | null;
+      title: string;
+      owner: string;
+      nodes: number;
+      sharedAt: Date | null;
+      takenDownAt: Date | null;
+    }[]
+  >`
+    SELECT m."shareSlug", m."title", u."walletAddress" AS owner,
+           CASE WHEN jsonb_typeof(m."sharedDoc"->'nodes') = 'array' THEN jsonb_array_length(m."sharedDoc"->'nodes') ELSE 0 END::int AS nodes,
+           m."sharedAt", m."takenDownAt"
+      FROM "AsylMap" m JOIN "User" u ON u."id" = m."userId"
+     WHERE m."shareSlug" IS NOT NULL OR m."takenDownAt" IS NOT NULL
+     ORDER BY COALESCE(m."sharedAt", m."takenDownAt") DESC
+     LIMIT ${limit}`;
+  return rows.map((r) => ({
+    slug: r.shareSlug,
+    title: r.title,
+    owner: r.owner,
+    nodes: r.nodes,
+    sharedAt: r.sharedAt?.toISOString() ?? null,
+    takenDownAt: r.takenDownAt?.toISOString() ?? null,
+  }));
+}
+
+/**
+ * An admin takes a shared map's link down: the link stops answering, the frozen copy goes, and the
+ * owner can't share it again. The owner keeps the map itself. False when no map has that link.
+ */
+export async function takeDownShared(slug: string): Promise<boolean> {
+  const res = await prisma.asylMap.updateMany({
+    where: { shareSlug: slug },
+    data: {
+      shareSlug: null,
+      sharedDoc: Prisma.DbNull,
+      sharedAt: null,
+      sharedBytes: 0,
+      takenDownAt: new Date(),
+    },
   });
   return res.count > 0;
 }

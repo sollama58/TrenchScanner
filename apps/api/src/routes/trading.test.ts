@@ -120,7 +120,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(body.enabled).toBe(false);
     // No ceilings unless the server sets them.
     expect(body.limits.maxBuySol).toBeNull();
-    expect(body.defaults.sources).toMatchObject({ filterIds: [], models: [], requireAiBuy: true });
+    expect(body.defaults.sources).toMatchObject({ filterIds: [], models: [], requireAiBuy: false });
     expect(body.checks.find((c: { id: string }) => c.id === "server-wallet").ok).toBe(true);
     expect(res.body).not.toContain(env.TRADING_LOCAL_MASTER_KEY);
     const backtest = await inj(off, { method: "GET", url: "/trading/backtest?days=3", ...as("admin") });

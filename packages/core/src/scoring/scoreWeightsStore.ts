@@ -1,8 +1,9 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import {
+  DEFAULT_SCORE_ANCHOR,
   DEFAULT_SCORE_WEIGHTS,
-  IDENTITY_SCORE_ANCHOR,
+  SCORE_PARTS_VERSION,
   setScoreAnchor,
   setScoreWeights,
   type ScoreAnchor,
@@ -15,8 +16,17 @@ const REFRESH_MS = 5 * 60_000;
 let loadedAt = 0;
 
 /**
- * The newest adopted weight set and its rescale, or the hand-set defaults (no rescale) before any
- * run has adopted one.
+ * Runs fitted on today's parts: each run stores the parts version in its metrics, and a set fitted
+ * on another formula's parts (every run before the 2026-10-27 refit, which stored none) is never
+ * loaded or shown.
+ */
+const CURRENT_PARTS: Prisma.ScoreWeightRunWhereInput = {
+  metrics: { path: ["partsVersion"], equals: SCORE_PARTS_VERSION },
+};
+
+/**
+ * The newest adopted weight set and its rescale for today's parts, or the defaults and their
+ * rescale before any run on them has adopted one.
  */
 export async function loadAdoptedScoreWeights(): Promise<{
   weights: ScoreWeights;
@@ -24,11 +34,11 @@ export async function loadAdoptedScoreWeights(): Promise<{
   adoptedAt: Date | null;
 }> {
   const row = await prisma.scoreWeightRun.findFirst({
-    where: { adopted: true },
+    where: { adopted: true, ...CURRENT_PARTS },
     orderBy: { createdAt: "desc" },
   });
   if (!row)
-    return { weights: { ...DEFAULT_SCORE_WEIGHTS }, anchor: { ...IDENTITY_SCORE_ANCHOR }, adoptedAt: null };
+    return { weights: { ...DEFAULT_SCORE_WEIGHTS }, anchor: { ...DEFAULT_SCORE_ANCHOR }, adoptedAt: null };
   return {
     weights: {
       momentum: row.momentum,
@@ -69,6 +79,7 @@ export async function saveScoreWeightsRun(result: ScoreFitResult): Promise<void>
       adopted: result.adopted,
       reason: result.reason,
       metrics: {
+        partsVersion: SCORE_PARTS_VERSION,
         fitted: result.fitted,
         holdoutCurrent: result.holdoutCurrent,
         holdoutProposed: result.holdoutProposed,
@@ -81,7 +92,7 @@ export async function saveScoreWeightsRun(result: ScoreFitResult): Promise<void>
 /** The recent adopted sets, newest first, for the explainer's "how the weights moved". */
 export async function scoreWeightsHistory(limit = 10) {
   return prisma.scoreWeightRun.findMany({
-    where: { adopted: true },
+    where: { adopted: true, ...CURRENT_PARTS },
     orderBy: { createdAt: "desc" },
     take: limit,
     select: {

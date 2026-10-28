@@ -102,6 +102,7 @@ export * from "./curation/feedModels.js";
 export * from "./curation/convictionLine.js";
 export * from "./curation/liveScale.js";
 export * from "./curation/liveRankRates.js";
+export * from "./curation/entryProof.js";
 export * from "./curation/liveScaleStore.js";
 export * from "./curation/topModels.js";
 export * from "./curation/tradeFlow.js";

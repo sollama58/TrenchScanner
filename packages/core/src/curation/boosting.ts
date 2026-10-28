@@ -320,54 +320,111 @@ export interface GrowContext {
    * the node's own smoothed win rate here instead.
    */
   nodeValue?: (g: number, h: number, rows: Uint32Array) => number;
+  /** `bins` as one row-major block (rowMajorBins); built per tree when omitted. */
+  rowBins?: Uint8Array;
 }
 
 function leafValue(g: number, h: number, ctx: GrowContext): number {
   return (-g / (h + ctx.opts.l2)) * ctx.opts.learningRate;
 }
 
-function bestSplit(rows: Uint32Array, gSum: number, hSum: number, ctx: GrowContext): Split | null {
+/**
+ * Every row's bins in one row-major block (row i's bin for feature f at i * featureCount + f):
+ * the split search's layout. Built once per fit; see bestSplit.
+ */
+export function rowMajorBins(bins: readonly Uint8Array[], rowCount: number): Uint8Array {
+  const featureCount = bins.length;
+  const out = new Uint8Array(rowCount * featureCount);
+  for (let f = 0; f < featureCount; f++) {
+    const col = bins[f]!;
+    for (let i = 0; i < rowCount; i++) out[i * featureCount + f] = col[i]!;
+  }
+  return out;
+}
+
+/**
+ * One histogram slot per (sampled feature, bin), reused by every node of a tree: the slot's
+ * gradient sum, hessian sum and row count side by side (a count is a whole number, exact in a
+ * double), so one row's update touches one cache line.
+ */
+interface SplitScratch {
+  stride: number;
+  hist: Float64Array;
+  /** Each sampled feature's column in the row-major block. */
+  columns: Int32Array;
+}
+
+/**
+ * The best split of a node. Its histograms are built in one pass over the node's rows, every
+ * sampled feature at once, reading each row's bins from the row-major block: model audit
+ * 2026-10-27 (DB-2, MT-10) measured the split search at 77% of a fit when it walked the rows once
+ * per feature through three fresh histograms. Each (feature, bin) slot still adds its rows in row
+ * order, so every sum - and with it every split, threshold and leaf value - is unchanged to the
+ * bit (boosting.test.ts pins a trained model's hash).
+ */
+function bestSplit(
+  rows: Uint32Array,
+  gSum: number,
+  hSum: number,
+  ctx: GrowContext,
+  rowBins: Uint8Array,
+  scratch: SplitScratch,
+): Split | null {
   const { l2, minLeafRows, minLeafHessian } = ctx.opts;
   const parentScore = (gSum * gSum) / (hSum + l2);
-  let best: Split | null = null;
-  for (const f of ctx.features) {
-    const nb = ctx.edges[f]!.length + 2; // missing bin + edges.length + 1 value bins
-    if (nb <= 2) continue; // a constant (or all-missing) column cannot split
-    const G = new Float64Array(nb);
-    const H = new Float64Array(nb);
-    const C = new Uint32Array(nb);
-    const bins = ctx.bins[f]!;
-    for (let k = 0; k < rows.length; k++) {
-      const i = rows[k]!;
-      const b = bins[i]!;
-      G[b] = G[b]! + ctx.grad[i]!;
-      H[b] = H[b]! + ctx.hess[i]!;
-      C[b] = C[b]! + 1;
+  const n = rows.length;
+  const { stride, hist, columns } = scratch;
+  const nf = columns.length;
+  // Every cut leaves one side under minLeafRows: no split, and no histogram needed to say so.
+  if (n < 2 * minLeafRows || nf === 0) return null;
+  const featureCount = ctx.bins.length;
+  const grad = ctx.grad;
+  const hess = ctx.hess;
+  const width = 3 * stride;
+  hist.fill(0);
+  for (let k = 0; k < n; k++) {
+    const i = rows[k]!;
+    const gi = grad[i]!;
+    const hi = hess[i]!;
+    const base = i * featureCount;
+    for (let j = 0, o = 0; j < nf; j++, o += width) {
+      const slot = o + 3 * rowBins[base + columns[j]!]!;
+      hist[slot] = hist[slot]! + gi;
+      hist[slot + 1] = hist[slot + 1]! + hi;
+      hist[slot + 2] = hist[slot + 2]! + 1;
     }
-    const gMiss = G[0]!;
-    const hMiss = H[0]!;
-    const cMiss = C[0]!;
+  }
+  let best: Split | null = null;
+  for (let j = 0; j < nf; j++) {
+    const f = columns[j]!;
+    const nb = ctx.edges[f]!.length + 2; // missing bin + edges.length + 1 value bins
+    const o = j * width;
+    const gMiss = hist[o]!;
+    const hMiss = hist[o + 1]!;
+    const cMiss = hist[o + 2]!;
     let gl = 0;
     let hl = 0;
     let cl = 0;
     // Cut after bin k: value bins 1..k left, k+1..nb-1 right, missing on whichever side is better.
     for (let k = 1; k < nb - 1; k++) {
-      gl += G[k]!;
-      hl += H[k]!;
-      cl += C[k]!;
-      for (const missLeft of [false, true]) {
+      gl += hist[o + 3 * k]!;
+      hl += hist[o + 3 * k + 1]!;
+      cl += hist[o + 3 * k + 2]!;
+      for (let side = 0; side < 2; side++) {
+        const missLeft = side === 1;
         const gL = missLeft ? gl + gMiss : gl;
         const hL = missLeft ? hl + hMiss : hl;
         const cL = missLeft ? cl + cMiss : cl;
         const gR = gSum - gL;
         const hR = hSum - hL;
-        const cR = rows.length - cL;
-        if (cL < minLeafRows || cR < minLeafRows || hL < minLeafHessian || hR < minLeafHessian) continue;
-        const gain = (gL * gL) / (hL + l2) + (gR * gR) / (hR + l2) - parentScore;
-        if (gain > 1e-9 && (best === null || gain > best.gain)) {
-          // No training row was missing here, so the gain can't say; a value missing live then
-          // follows the heavier child rather than always reading as above the cut.
-          best = { gain, feature: f, binCut: k, missingLeft: cMiss === 0 ? hL >= hR : missLeft };
+        const cR = n - cL;
+        if (!(cL < minLeafRows || cR < minLeafRows || hL < minLeafHessian || hR < minLeafHessian)) {
+          const gain = (gL * gL) / (hL + l2) + (gR * gR) / (hR + l2) - parentScore;
+          if (gain > 1e-9 && (best === null || gain > best.gain)) {
+            // No training row was missing here, so the gain can't say; a value missing live then
+            // follows the heavier child rather than always reading as above the cut.
+            best = { gain, feature: f, binCut: k, missingLeft: cMiss === 0 ? hL >= hR : missLeft };
+          }
         }
         if (cMiss === 0) break; // both directions are the same split
       }
@@ -378,6 +435,16 @@ function bestSplit(rows: Uint32Array, gSum: number, hSum: number, ctx: GrowConte
 
 export function growTree(rows: Uint32Array, ctx: GrowContext): BoostedTree {
   const tree: BoostedTree = { feature: [], threshold: [], missingLeft: [], left: [], right: [], value: [] };
+  // A constant (or all-missing) column cannot split, so it is left out of the histograms.
+  const splittable = ctx.features.filter((f) => ctx.edges[f]!.length > 0);
+  let stride = 2;
+  for (const f of splittable) stride = Math.max(stride, ctx.edges[f]!.length + 2);
+  const scratch: SplitScratch = {
+    stride,
+    hist: new Float64Array(3 * stride * splittable.length),
+    columns: Int32Array.from(splittable),
+  };
+  const rowBins = ctx.rowBins ?? rowMajorBins(ctx.bins, ctx.grad.length);
   const grow = (nodeRows: Uint32Array, depth: number): number => {
     let g = 0;
     let h = 0;
@@ -393,21 +460,28 @@ export function growTree(rows: Uint32Array, ctx: GrowContext): BoostedTree {
     tree.right.push(-1);
     tree.value.push(ctx.nodeValue ? ctx.nodeValue(g, h, nodeRows) : leafValue(g, h, ctx));
     if (depth >= ctx.opts.maxDepth) return id;
-    const split = bestSplit(nodeRows, g, h, ctx);
+    const split = bestSplit(nodeRows, g, h, ctx, rowBins, scratch);
     if (split === null) return id;
     const bins = ctx.bins[split.feature]!;
-    const leftRows: number[] = [];
-    const rightRows: number[] = [];
+    let leftCount = 0;
     for (const i of nodeRows) {
       const b = bins[i]!;
-      const goLeft = b === 0 ? split.missingLeft : b <= split.binCut;
-      (goLeft ? leftRows : rightRows).push(i);
+      if (b === 0 ? split.missingLeft : b <= split.binCut) leftCount++;
+    }
+    const leftRows = new Uint32Array(leftCount);
+    const rightRows = new Uint32Array(nodeRows.length - leftCount);
+    let l = 0;
+    let r = 0;
+    for (const i of nodeRows) {
+      const b = bins[i]!;
+      if (b === 0 ? split.missingLeft : b <= split.binCut) leftRows[l++] = i;
+      else rightRows[r++] = i;
     }
     tree.feature[id] = split.feature;
     tree.threshold[id] = ctx.edges[split.feature]![split.binCut - 1]!;
     tree.missingLeft[id] = split.missingLeft ? 1 : 0;
-    tree.left[id] = grow(Uint32Array.from(leftRows), depth + 1);
-    tree.right[id] = grow(Uint32Array.from(rightRows), depth + 1);
+    tree.left[id] = grow(leftRows, depth + 1);
+    tree.right[id] = grow(rightRows, depth + 1);
     return id;
   };
   grow(rows, 0);
@@ -618,6 +692,32 @@ function lambdaRankGroup(
   return dcg / idcg;
 }
 
+/** A fit's binned inputs: per-feature bins and edges, and the same bins row-major. */
+interface PreparedBins {
+  binned: { edges: number[]; bins: Uint8Array }[];
+  rowBins: Uint8Array;
+  /** The validation rows' transformed inputs, one vector per row, when the fit has them. */
+  validX?: number[][];
+}
+
+function prepareBins(rows: BoostingRow[], featureNames: string[], maxBins: number): PreparedBins {
+  const binned = featureColumns(rows, featureNames, CURRENT_FEATURE_TRANSFORM).map((c) =>
+    binColumn(c, maxBins),
+  );
+  return {
+    binned,
+    rowBins: rowMajorBins(
+      binned.map((b) => b.bins),
+      rows.length,
+    ),
+  };
+}
+
+function validVectors(valid: BoostingRow[], featureNames: string[]): number[][] {
+  const cols = valid.length > 0 ? featureColumns(valid, featureNames, CURRENT_FEATURE_TRANSFORM) : [];
+  return valid.map((_, i) => cols.map((c) => c[i]!));
+}
+
 /**
  * Grows the forest on `fit` rows, tracking the objective's own loss on `valid` rows after each
  * tree (weighted log loss, squared error, or one minus the mean hourly NDCG). Returns the trees
@@ -633,16 +733,17 @@ async function boost(
   runWeightPerDoubling: number | undefined,
   featureNames: string[],
   offsetInput: string | undefined,
+  prepared?: PreparedBins,
 ): Promise<{
   baseScore: number;
   trees: BoostedTree[];
   bestTrees: number;
   binned: { edges: number[]; bins: Uint8Array }[];
 }> {
-  const transform = CURRENT_FEATURE_TRANSFORM;
   const objective = opts.objective;
-  const cols = featureColumns(fit, featureNames, transform);
-  const binned = cols.map((c) => binColumn(c, opts.maxBins));
+  const { binned, rowBins } = prepared ?? prepareBins(fit, featureNames, opts.maxBins);
+  const binColumns = binned.map((b) => b.bins);
+  const binEdges = binned.map((b) => b.edges);
   const payoff = objective === "payoff";
   const labelOf = (r: BoostingRow) => (payoff ? payoffLabel(r) : r.labelValue > 0 ? 1 : 0);
   const ys = Float64Array.from(fit, labelOf);
@@ -701,8 +802,7 @@ async function boost(
   const grad = new Float64Array(fit.length);
   const hess = new Float64Array(fit.length);
 
-  const validCols = valid.length > 0 ? featureColumns(valid, featureNames, transform) : [];
-  const validX = valid.map((_, i) => validCols.map((c) => c[i]!));
+  const validX = prepared?.validX ?? validVectors(valid, featureNames);
   const validY = valid.map(labelOf);
   const validW = weightsOf(valid);
   const validTargets = target ? Float64Array.from(valid, target) : null;
@@ -748,8 +848,9 @@ async function boost(
     for (let i = 0; i < fit.length; i++) if (rand() < opts.rowSample) sampled.push(i);
     const features = allFeatures.filter(() => rand() < opts.featureSample);
     const tree = growTree(Uint32Array.from(sampled), {
-      bins: binned.map((b) => b.bins),
-      edges: binned.map((b) => b.edges),
+      bins: binColumns,
+      edges: binEdges,
+      rowBins,
       grad,
       hess,
       opts,
@@ -916,6 +1017,10 @@ export async function trainBoostedCurator(
   const validTokens = new Set(valid.flatMap((r) => (r.tokenId === undefined ? [] : [r.tokenId])));
   const fit = sorted.slice(0, cut).filter((r) => r.tokenId === undefined || !validTokens.has(r.tokenId));
   const validWins = valid.filter((r) => r.labelValue > 0).length;
+  // Every bag bins the same two row sets the same way (only the seed differs), so each is binned
+  // once and shared: a third of a 3-bag fit's input reading and binning, with identical bins.
+  let fitBins: PreparedBins | undefined;
+  let allBins: PreparedBins | undefined;
 
   const grow = async (seedOpts: ResolvedBoostingOptions) => {
     // On a given log-odds, too little data to hold out means no evidence the trees improve on it.
@@ -925,6 +1030,10 @@ export async function trainBoostedCurator(
       validWins >= MIN_VALIDATION_WINS &&
       fit.length >= MIN_VALIDATION_ROWS
     ) {
+      fitBins ??= {
+        ...prepareBins(fit, featureNames, opts.maxBins),
+        validX: validVectors(valid, featureNames),
+      };
       const probe = await boost(
         fit,
         valid,
@@ -935,11 +1044,13 @@ export async function trainBoostedCurator(
         options.runWeightPerDoubling,
         featureNames,
         offsetInput,
+        fitBins,
       );
       // At least a handful: a forest that "stops" at 1-2 trees is barely more than the base rate.
       // On a given log-odds that start is the point, so as few as none are kept.
       treeCount = offsetInput !== undefined ? probe.bestTrees : Math.max(10, probe.bestTrees);
     }
+    allBins ??= prepareBins(sorted, featureNames, opts.maxBins);
     const final = await boost(
       sorted,
       [],
@@ -950,6 +1061,7 @@ export async function trainBoostedCurator(
       options.runWeightPerDoubling,
       featureNames,
       offsetInput,
+      allBins,
     );
     return final;
   };

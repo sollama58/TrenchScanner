@@ -95,7 +95,8 @@ const envSchema = z.object({
   DEXSCREENER_BASE_URL: z.string().default("https://api.dexscreener.com"),
   // The worker's DexScreener token lookups a minute, shared by every job in the process (scan,
   // fast match, candidate watch, live prices, the empty-wallet check's pricing). DexScreener allows
-  // 300 a minute; the default leaves the API's live refreshes room. See DexScreenerClient.
+  // 300 a minute per IP: this 180, the API's live refreshes (90) and the trainer's (30, render.yaml)
+  // share it. See DexScreenerClient.
   DEXSCREENER_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(180),
   // A CoinGecko paid-plan key. Market data falls back to GeckoTerminal whenever DexScreener answers
   // lookups blank (datasources/geckoterminal.ts); with this key it uses CoinGecko's on-chain API
@@ -434,8 +435,9 @@ const envSchema = z.object({
   LINKED_LIST_MAX_WAIT_SECONDS: z.coerce.number().nonnegative().default(60),
   // The live tape (worker's liveTape.ts): each coin close to a call (a contender, or an alert held
   // for a wallet figure) has its newest page of trades read from Helius, 10 credits a page, so the
-  // flagged wallets trading it are known at the decision. At most this many pages a cycle (the
-  // credit ceiling), and a coin's page is read again once it is LIVE_TAPE_REFRESH_SECONDS old.
+  // flagged wallets trading it are known at the decision. At most this many pages a minute (the
+  // credit ceiling), shared by the cycle and the entry fast path's scans, and a coin's page is read
+  // again once it is LIVE_TAPE_REFRESH_SECONDS old.
   // A coin still on its bonding curve takes its page off the PumpPortal trade stream instead, for
   // nothing (user decision 2026-10-24); these pages are for the coins past graduation. 0 turns
   // it off.
@@ -493,18 +495,19 @@ const envSchema = z.object({
   // 0 turns the chain read off (the figure then only comes from the trade stream, when it runs).
   SNIPER_LAUNCH_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(5),
   // The same for contenders (tokens about to be decided on), on top of the above: with
-  // CURATED_REQUIRE_WALLET_CHECKS on, a curated decision waits for the top-10 snipers share, which
-  // needs the first buyers. Contenders are a handful a cycle; this caps a burst.
+  // CURATED_REQUIRE_WALLET_CHECKS on, a curated decision waits for this read's Block 0 figure (the
+  // safety screen's Block 0 cut). Contenders are a handful a cycle; this caps a burst.
   SNIPER_CONTENDER_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(15),
-  // The longest a curated decision waits for that share once the token looks ready and its other
-  // wallet checks are in. Past it the token is decided with the share unknown: a read that is slow
+  // The longest a curated decision waits for that Block 0 figure once the token looks ready and its
+  // other wallet checks are in (the key keeps its name from when the wait was on the top-10 snipers
+  // share, retired 2026-10-22). Past it the token is decided with Block 0 unknown: a read that is slow
   // or keeps failing must not hold decisions back (on 2026-10-08 an unbounded wait cut decisions
   // from about ten every ten minutes to one). 0 = don't wait at all.
   SNIPER_SHARE_MAX_WAIT_SECONDS: z.coerce.number().nonnegative().default(90),
-  // Coins younger than this don't wait for the share at all. A young coin looks ready for a minute
+  // Coins younger than this don't wait for the launch read at all. A young coin looks ready for a minute
   // or two at most and its launch is often too new for the read to land: with the 90 s wait, first
   // decisions on coins under 3 minutes old fell from ~15 an hour to ~1 (2026-10-08), and young
-  // coins are where most wins are. They're decided with the share if it's in, unknown if not.
+  // coins are where most wins are. They're decided with Block 0 if it's in, unknown if not.
   SNIPER_SHARE_WAIT_MIN_AGE_MINUTES: z.coerce.number().nonnegative().default(10),
   // The trade tape of called coins (the trainer's tradeTapeJob.ts): every trade from launch to 30
   // minutes past the call, for the wallet risk score and the stop causes. Helius pages
@@ -728,7 +731,11 @@ const envSchema = z.object({
   // Kept at 55 when the score was rebuilt (2026-10-06): inside this gate's 5-minute-to-48-hour age
   // window it passes about a third of decision moments at ~13% doubles (the old score's 55 passed
   // half at ~4%).
-  CURATED_MIN_SCORE: z.coerce.number().min(0).max(100).default(55),
+  // 62 since the score's refit for ranking (2026-10-27, full audit T16): on the refit scale it lets
+  // the Rules seat through about as many calls as 55 did on the old one (386 against 379 decision
+  // moments on 10-20..26) and they double at least as often (17.6% against 17.2%,
+  // notes/full-audit-2026-10-27/scripts/t16/s11_rules_sweep.out).
+  CURATED_MIN_SCORE: z.coerce.number().min(0).max(100).default(62),
   CURATED_ALERT_COOLDOWN_HOURS: z.coerce.number().positive().default(24),
   // The lowest market cap a model call may go out at, read at the price the call is made at: the
   // fresh quote it is anchored and shown on (decisionAnchor) and Pump.fun's live figure when the
@@ -919,6 +926,21 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+  // A seat calls on the fast path only while its entry-row lift lower bound clears 1
+  // (curation/entryProof.ts, user decision 2026-10-27). On (the default) holds back the fast-path
+  // calls of seats with no proven edge there; the cycle still decides the coin. Off restores every
+  // seat's fast-path calls, the rollback if the cycle's later anchors cost more than they save.
+  CURATOR_ENTRY_PROOF: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  // No seat calls a coin 60+ minutes old or 30+ minutes past its first band entry
+  // (curation/curator.ts isPastCalling, user decision 2026-10-27). On (the default); off restores
+  // those calls. The moments bank either way.
+  CURATOR_SKIP_PAST_CALLING: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   // A Meteora DBC or Raydium LaunchLab curve keeps its created time, and a trading one is the
   // pair ahead of a deeper side pool. Off (the default): those venues are not a clock, which is
   // what shipped on 2026-10-21. On changes the price and the pair age of those coins, so which
@@ -1074,6 +1096,12 @@ const envSchema = z.object({
   AI_REVIEW_MODEL: z.string().default("claude-opus-5-5"),
   AI_REVIEW_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
   AI_REVIEW_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  // A shadow review's timeout (worker ai/reviewer.ts). It runs detached after the alert, so nothing
+  // waits on it, and a timeout bills the full estimate and stores nothing (audit 2026-10-27 AJ-13):
+  // it gets longer than the in-cycle gate review's AI_REVIEW_TIMEOUT_MS. A shutdown drains it in
+  // full (worker index.ts), so render.yaml's maxShutdownDelaySeconds on the worker and trainer
+  // covers it plus 10s - raise them together.
+  AI_REVIEW_SHADOW_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
   // The 2x odds a "buy" needs, 0-1 (user ask 2026-10-25: as selective as it can be). Written into
   // the prompt as the trader's bar, and enforced on the answer: a "buy" with probability2x under
   // it is recorded as "no_buy" (curation/aiReview.ts applyBuyBar). The reviewed pool doubles about

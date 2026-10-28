@@ -88,6 +88,18 @@ interface GradedAlert {
    * from its first minute don't count as "now".
    */
   calledAt: Date | null;
+  /** When it first reached 2x of its anchor, if it has (the grading row's hit2xAt). */
+  hit2xAt: Date | null;
+}
+
+/**
+ * Whether a win had already doubled when the message reached the chat: a send that landed late
+ * (a stalled chat, a backlog digest) on a coin that ran before it. Still a win on the board, by
+ * the same grade as the Live tab and the leaderboard, and counted as late beside it (full audit
+ * 2026-10-27 WB-22: 30 of 1,099 wins, 19 of the 20 among sends over 5 minutes late).
+ */
+export function doubledBeforeSend(a: { sentAt: Date; hit2xAt: Date | null }): boolean {
+  return a.hit2xAt !== null && a.hit2xAt.getTime() <= a.sentAt.getTime();
 }
 
 /** The earliest of `rows` raised for a send at `sentAt`. */
@@ -191,6 +203,7 @@ async function gradedAlerts(chatRowId: string, since: Date, only?: { tokenId: st
         returnPct: call.simReturnPct ?? call.candidateOutcome?.simReturnPct ?? null,
         tracking: call.candidateOutcome !== null && call.candidateOutcome.finalized24hAt === null,
         calledAt: call.createdAt,
+        hit2xAt: call.candidateOutcome?.hit2xAt ?? null,
       });
       continue;
     }
@@ -212,6 +225,7 @@ async function gradedAlerts(chatRowId: string, since: Date, only?: { tokenId: st
         tracking: row !== null && row.finalized24hAt === null,
         // Priced from a fresh quote: its readings from the first minute lag behind it, as a call's.
         calledAt: match.alertMcapUsd !== null ? match.matchedAt : null,
+        hit2xAt: row?.hit2xAt ?? null,
       });
       continue;
     }
@@ -238,6 +252,7 @@ async function gradedAlerts(chatRowId: string, since: Date, only?: { tokenId: st
       returnPct: null,
       tracking: false,
       calledAt: null,
+      hit2xAt: null,
     });
   }
   return { chat, alerts };
@@ -421,6 +436,7 @@ export function createTelegramBoards(
         alerts: s.alerts,
         graded: s.graded,
         won: s.hit2x,
+        lateWins: alerts.filter((a) => a.outcome.status === "won" && doubledBeforeSend(a)).length,
         lost: s.graded - s.hit2x,
         pending: s.pending,
         settled: settled.length,

@@ -4,7 +4,10 @@ import {
   recordScore,
   walletSafetyCutsSql,
   firstCallOnRowSql,
+  laneCallName,
+  loadCurrentLanes,
   notRetiredModelSql,
+  type Lane,
   REPORTED_LABEL_RULE,
   type PrecisionTargets,
   marketRowWon,
@@ -568,6 +571,27 @@ function marketDayWinners(rows: readonly MarketRow[], timeZone: string): DayWinn
   return rows.filter(marketRowWon).map((r) => ({ day: dayIn(r.at, timeZone), token: r.token }));
 }
 
+/**
+ * A model's calls under its current lane only, as the leaderboard counts them (laneStore.ts
+ * liveCallRecords): from the lane's birth and under its name. After a takeover the week line of a
+ * seat otherwise blended the retired recipe's calls with the new one's, and disagreed with the board
+ * (audit 10-14 W4, 10-27 WB-34). A model with no lane (no seat roster row) keeps every call.
+ * Exported for tests. ('-' = no lane: a null in a bound array trips Prisma's binary encoding.)
+ */
+export function currentLaneCallsSql(lanes: readonly Lane[]): Prisma.Sql {
+  if (lanes.length === 0) return Prisma.sql`TRUE`;
+  return Prisma.sql`NOT EXISTS (
+      SELECT 1 FROM unnest(
+        ${lanes.map((l) => l.slot)}::text[],
+        ${lanes.map((l) => l.bornAt.toISOString())}::timestamp(3)[],
+        ${lanes.map((l) => l.name)}::text[],
+        ${lanes.map((l) => laneCallName(l))}::text[]
+      ) AS seat(model, since, lane, shown)
+      WHERE seat.model = a."model"
+        AND (a."createdAt" < seat.since
+             OR (a."modelName" IS NOT NULL AND a."modelName" NOT IN (seat.lane, seat.shown))))`;
+}
+
 export async function buildLearningCurve(
   since: Date,
   until: Date,
@@ -677,12 +701,17 @@ export async function buildLearningCurve(
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${trendSince} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}
       AND (co."labelRule" IS NULL OR co."labelRule" >= ${REPORTED_LABEL_RULE})`;
-  const modelRows = prisma.$queryRaw<RawModelDay[]>`
+  // Each model's line: its current lane's calls (the feed below pools every call, as the feed did).
+  const currentLane = loadCurrentLanes().then(currentLaneCallsSql);
+  const modelRows = currentLane.then(
+    (lane) => prisma.$queryRaw<RawModelDay[]>`
     SELECT ${createdDay} AS day,
            a."model" AS model,
            max(a."modelName") AS model_name, ${callCols}
     ${callsFrom}
-    GROUP BY 1, 2`;
+      AND ${lane}
+    GROUP BY 1, 2`,
+  );
   // The feed: every model's calls pooled, each token once (several models calling one token share
   // its grading row; counting it once per model would read high - firstCallOnRowSql).
   const feedRows = prisma.$queryRaw<RawDay[]>`
@@ -691,15 +720,25 @@ export async function buildLearningCurve(
       AND ${firstCallOnRowSql()}
     GROUP BY 1`;
   // Each model's clean doubles by day, one row per token: the runners it caught.
-  const callWinners = prisma.$queryRaw<DayWinner[]>`
-    SELECT DISTINCT ${createdDay} AS day,
-           a."tokenId" AS token, a."model" AS model
+  // The feed's catch and the day's runners count every call; each model's line, its current lane's.
+  const winnersWhere = Prisma.sql`
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}
       AND (co."labelRule" IS NULL OR co."labelRule" >= ${REPORTED_LABEL_RULE})
       AND COALESCE(a."hit2xIn1h", co."hit2xIn1h")
       AND NOT COALESCE(a."disqualified", co."disqualified", false)`;
+  const callWinners = prisma.$queryRaw<DayWinner[]>`
+    SELECT DISTINCT ${createdDay} AS day,
+           a."tokenId" AS token, a."model" AS model
+    ${winnersWhere}`;
+  const modelWinners = currentLane.then(
+    (lane) => prisma.$queryRaw<DayWinner[]>`
+    SELECT DISTINCT ${createdDay} AS day,
+           a."tokenId" AS token, a."model" AS model
+    ${winnersWhere}
+      AND ${lane}`,
+  );
   // Which runs to show: every run of a short window, the last run of each UTC day of a longer one
   // (a 90-day window at twelve runs a day would be a thousand rows nobody reads). Columns are
   // timestamp(3) without a zone, stored in UTC, so date_trunc groups by UTC day.
@@ -738,13 +777,14 @@ export async function buildLearningCurve(
     WHERE m."trainingTo" = ANY(${chosen.map((d) => d.toISOString())}::timestamp(3)[])
       AND m."contestant" IS NOT NULL
     ORDER BY m."trainingTo" DESC`;
-  const [market, perModel, feed, runs, mWins, cWins] = await Promise.all([
+  const [market, perModel, feed, runs, mWins, cWins, seatWins] = await Promise.all([
     marketRows,
     modelRows,
     feedRows,
     runRows,
     marketWinners,
     callWinners,
+    modelWinners,
   ]);
   const dayseries = buildLearningDays(market, feed);
   const runners = runnersByDay(mWins, cWins);
@@ -769,7 +809,7 @@ export async function buildLearningCurve(
     })),
     models: buildLearningModels(market, perModel)
       .map((m) => {
-        const caught = caughtByDay(cWins, m.model);
+        const caught = caughtByDay(seatWins, m.model);
         return {
           ...m,
           days: inWindow(m.days).map((d) => ({ ...d, rates: catchOf(d.rates, d.day, caught) })),

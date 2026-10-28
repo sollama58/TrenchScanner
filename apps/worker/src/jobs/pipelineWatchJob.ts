@@ -9,13 +9,21 @@ import {
   JOB_LOCKED_JOBS,
   lockLostDuringRun,
   runningSinceFrom,
+  TELEGRAM_MAX_FAILURES,
   TelegramApi,
   type Env,
   type HeartbeatJob,
 } from "@trenchscanner/core";
 import { JobFailure, SHUTDOWN_INTERRUPTED_ERROR, STOPPED_ERROR, type JobRunMeta } from "../scheduler.js";
 import { exitForRestart } from "../processExit.js";
-import { checkHeliusPlan, readPlanState, type HeliusPlanState } from "./heliusBudget.js";
+import {
+  checkHeliusBurn,
+  checkHeliusPlan,
+  readBurnState,
+  readPlanState,
+  type HeliusBurnState,
+  type HeliusPlanState,
+} from "./heliusBudget.js";
 
 const logger = createLogger("pipeline-watch");
 
@@ -54,6 +62,12 @@ const logger = createLogger("pipeline-watch");
  * in a row (findCanaryProblems - tradeCanaryJob.ts builds a trade every 15 minutes, never signing)
  * and the share of recent Pro trades that failed or expired (findTradeOutcomeProblems). Both only
  * notify: a restart mends neither Jupiter nor the chain, and alerts still flow meanwhile.
+ *
+ * And, before they run out rather than after (full audit 2026-10-27, T3): Helius spend against the
+ * usual day with no plan size needed (heliusBudget.ts checkHeliusBurn), alerts Telegram dropped
+ * unsent for being too old (findAgedOutProblems), the scan cycle's time to its decisions
+ * (findScanLatencyProblems), and training's run time against its deadline and the hours since a
+ * run last completed (findTrainingRunProblems, findTrainerProblems). All notify only.
  */
 
 export interface FlowCheck {
@@ -152,6 +166,9 @@ export interface TrainerJobCheck {
    * still stamped running with its lock free (heldJobLocks). Nothing else records such a run.
    */
   lostRunSince?: Date | null;
+  /** The last run's durationMs (scheduler meta), and the run in flight's start. */
+  durationMs?: number | null;
+  runningSince?: Date | null;
 }
 
 const HOUR_MS = 3_600_000;
@@ -163,7 +180,7 @@ const HOUR_MS = 3_600_000;
 const TRAINER_DAILY_OVERDUE_MS = 27 * HOUR_MS;
 /**
  * An interval job is overdue after two of its intervals plus this: room for one missed slot and
- * a long run (training's deadline is 90 minutes), so a deploy never reads as a stopped trainer.
+ * a long run, so a deploy never reads as a stopped trainer.
  */
 const TRAINER_INTERVAL_SLACK_MS = 2 * HOUR_MS;
 /** Errors that say a person or a deploy cut the run, not that the job is failing. */
@@ -212,6 +229,22 @@ export function findTrainerProblems(jobs: TrainerJobCheck[], now: number): Probl
       });
     }
     const error = j.lastError;
+    // Runs cut by a deploy or the deadline are benign one at a time, but a job whose every run is
+    // cut never completes: curator-training's runs grow toward their deadline (audit 2026-10-27,
+    // DB-2), and a cut run is redone and can be cut again, freezing the models. Told once the
+    // job has gone as long without a completed run as it may go without any run.
+    if (
+      error !== null &&
+      BENIGN_TRAINER_ERRORS.some((e) => error.startsWith(e)) &&
+      j.lastSuccessAt !== null &&
+      now - j.lastSuccessAt.getTime() > trainerOverdueAfterMs(j)
+    ) {
+      out.push({
+        key: `completed:${j.job}`,
+        text: `Trainer job ${j.job}: no run has completed for ${formatAge(now - j.lastSuccessAt.getTime())} - each one was cut (${(error.split("\n")[0] ?? "").slice(0, 80)})`,
+        trainer: true,
+      });
+    }
     if (error === null || BENIGN_TRAINER_ERRORS.some((e) => error.startsWith(e))) continue;
     // A job that runs every few minutes (candle-peaks, label-regrade) is told about once its runs
     // have failed for a while, not on each failed run: one Pump.fun 429 was a notice and its
@@ -255,9 +288,12 @@ export function clearedKeys(before: Set<string>, now: Set<string>): string[] {
 
 /**
  * Telegram delivery is behind when a linked chat's cursor (TelegramChat.sentThrough, which the
- * dispatcher moves to "now" on every pass, sent or not) is this old.
+ * dispatcher moves to "now" on every pass, sent or not) is this old. Well under the dispatcher's
+ * MAX_ALERT_AGE_MS (15 minutes), past which a chat's older alerts are skipped: at 15 minutes this
+ * fired only once alerts were already being dropped, and a stalled chat that still got a digest
+ * every 10-40 minutes never showed a cursor that old at all (audit 2026-10-27, WB-12).
  */
-const TELEGRAM_LAG_MS = 15 * 60_000;
+export const TELEGRAM_LAG_MS = 5 * 60_000;
 
 /** Pure: which flows and jobs are stalled. `oldestChatCursor`: the furthest-behind enabled chat. */
 export function findProblems(
@@ -494,6 +530,211 @@ export function findTradeOutcomeProblems(t: TradeOutcomeCheck): Problem[] {
   ];
 }
 
+/**
+ * Alerts the Telegram dispatcher skipped because they were past MAX_ALERT_AGE_MS when their chat
+ * came up (audit 2026-10-27, WB-12): until then nothing counted them, so a stalled chat lost
+ * alerts unseen. The dispatcher's heartbeat carries `agedOutSinceBoot`; this keeps what it last
+ * saw, and an episode open while new ones keep coming.
+ */
+export type AgedOutState = {
+  /** agedOutSinceBoot as last read; a lower reading is a fresh process. */
+  seen: number;
+  /** The episode in progress: when it began, how many so far, and the last rise. */
+  since: string | null;
+  count: number;
+  lastAt: string | null;
+};
+
+/** An episode ends after this long with none dropped: one notice for a stall, not one a minute. */
+export const AGED_OUT_QUIET_MS = 30 * 60_000;
+
+/** Pure: the state after reading `sinceBoot` (null: the heartbeat doesn't carry it), and its problem. */
+export function findAgedOutProblems(
+  prev: AgedOutState | null,
+  sinceBoot: number | null,
+  now: number,
+): { state: AgedOutState | null; problems: Problem[] } {
+  if (sinceBoot === null) return { state: prev, problems: [] };
+  // The first reading is a baseline: what came before it is not known to be new.
+  const added = prev === null ? 0 : sinceBoot < prev.seen ? sinceBoot : sinceBoot - prev.seen;
+  const prevLast = prev?.lastAt ? Date.parse(prev.lastAt) : null;
+  const episode =
+    prev !== null && prev.since !== null && prevLast !== null && now - prevLast <= AGED_OUT_QUIET_MS
+      ? prev
+      : null;
+  let state: AgedOutState;
+  if (added > 0) {
+    state = {
+      seen: sinceBoot,
+      since: episode?.since ?? new Date(now).toISOString(),
+      count: (episode?.count ?? 0) + added,
+      lastAt: new Date(now).toISOString(),
+    };
+  } else if (episode) {
+    state = { ...episode, seen: sinceBoot };
+  } else {
+    state = { seen: sinceBoot, since: null, count: 0, lastAt: prev?.lastAt ?? null };
+  }
+  const { since, count } = state;
+  if (since === null) return { state, problems: [] };
+  return {
+    state,
+    problems: [
+      {
+        key: "telegram-aged-out",
+        text: `Telegram alerts: ${count} dropped unsent since ${since.slice(11, 16)} UTC (over 15 min old when their chat came up)`,
+        side: true,
+      },
+    ],
+  };
+}
+
+/**
+ * Linked chats the dispatcher switched off after a day of failed sends with nothing getting
+ * through (TELEGRAM_MAX_FAILURES, dispatch.ts). Their owner hears nothing more and nothing else
+ * said so, so one notice while any are off; it clears once each is switched back on (which resets
+ * its failures) or unlinked. Read from the table, not the dispatcher's per-pass `disabled`, which
+ * a once-a-minute watcher would mostly miss.
+ */
+export function findDisabledChatProblems(disabledChats: number): Problem[] {
+  if (disabledChats <= 0) return [];
+  return [
+    {
+      key: "telegram-disabled",
+      text:
+        `Telegram alerts: ${disabledChats} linked chat${disabledChats === 1 ? "" : "s"} switched off after a day ` +
+        "of failed sends - the owner gets nothing until it is switched back on",
+      side: true,
+    },
+  ];
+}
+
+/**
+ * The scan cycle's time from its start to the contenders' decisions (audit 2026-10-27, DS-11): the
+ * cycle went from about 6 s to a 28 s median between 2026-10-14 and 2026-10-27 with nothing saying
+ * so, since every flow kept producing. The median of the last SCAN_LATENCY_SAMPLES completed cycles
+ * past SCAN_LATENCY_ALERT_MS is told about, and clears once back under SCAN_LATENCY_CLEAR_MS, so a
+ * median sitting on the line doesn't notify every few minutes. The line sits above 2026-10-27's
+ * median (27.6 s, p75 34.9 s) so it catches the next regression rather than this one; lower it as
+ * the cycle gets faster.
+ */
+export const SCAN_LATENCY_SAMPLES = 10;
+export const SCAN_LATENCY_ALERT_MS = 35_000;
+export const SCAN_LATENCY_CLEAR_MS = 30_000;
+
+export type ScanLatencyState = {
+  /** The newest cycles' start-to-decided times, oldest first. */
+  samples: number[];
+  /** The scan run the newest sample came from (its lastRunAt), so a cycle is counted once. */
+  lastRunAt: string | null;
+};
+
+/**
+ * A completed cycle's start-to-contenders-decided time from its stage laps (scanJob.ts): every lap
+ * up to and including "contenders"; the emission and the rest of the band run after it. Null when
+ * the cycle never reached its contenders.
+ */
+export function decidedMs(stagesMs: unknown): number | null {
+  if (typeof stagesMs !== "object" || stagesMs === null || Array.isArray(stagesMs)) return null;
+  const laps = stagesMs as Record<string, unknown>;
+  if (typeof laps.contenders !== "number") return null;
+  let total = 0;
+  for (const [stage, ms] of Object.entries(laps)) {
+    if (stage !== "curated" && stage !== "candidates" && typeof ms === "number") total += ms;
+  }
+  return total;
+}
+
+function middle(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+/** Pure: the samples after one more completed cycle (or none new), and the problem, if any. */
+export function findScanLatencyProblems(
+  prev: ScanLatencyState | null,
+  cycle: { runAt: Date; ms: number } | null,
+  wasFlagged: boolean,
+): { state: ScanLatencyState; problems: Problem[] } {
+  let state = prev ?? { samples: [], lastRunAt: null };
+  if (cycle !== null && cycle.runAt.toISOString() !== state.lastRunAt) {
+    state = {
+      samples: [...state.samples, cycle.ms].slice(-SCAN_LATENCY_SAMPLES),
+      lastRunAt: cycle.runAt.toISOString(),
+    };
+  }
+  if (state.samples.length < SCAN_LATENCY_SAMPLES) return { state, problems: [] };
+  const p50 = middle(state.samples);
+  if (p50 <= (wasFlagged ? SCAN_LATENCY_CLEAR_MS : SCAN_LATENCY_ALERT_MS)) return { state, problems: [] };
+  return {
+    state,
+    problems: [
+      {
+        key: "scan-latency",
+        text:
+          `Scan cycle: ${(p50 / 1000).toFixed(1)} s from start to contenders decided at the median of the last ` +
+          `${SCAN_LATENCY_SAMPLES} cycles (warns past ${SCAN_LATENCY_ALERT_MS / 1000} s) - see the scan's stagesMs on /health/worker`,
+        side: true,
+      },
+    ],
+  };
+}
+
+/**
+ * curator-training's deadline (deadlineMinutes in apps/worker/src/index.ts): a run still going then
+ * exits the trainer, and the cut run is redone and can be cut again.
+ */
+export const TRAINING_DEADLINE_MINUTES = 240;
+/** A run that takes this share of the deadline is told about while there is still time to act. */
+export const TRAINING_DEADLINE_WARN_SHARE = 0.75;
+
+/** The newest completed training run, kept here because a cut run's heartbeat replaces its meta. */
+export type TrainingRunState = {
+  lastCompletedAt: string | null;
+  lastCompletedMs: number | null;
+};
+
+/**
+ * Pure: training's run time against its deadline (audit 2026-10-27, DB-2: 129 minutes on
+ * 2026-10-27 and growing about 530 s a day, so its runs reach the 240-minute deadline around
+ * 2026-11-09). One key for both a completed run that took TRAINING_DEADLINE_WARN_SHARE of it and a
+ * run in flight that has, so the admins hear once while runs stay long.
+ */
+export function findTrainingRunProblems(
+  prev: TrainingRunState | null,
+  check: {
+    lastSuccessAt: Date | null;
+    lastRunAt: Date | null;
+    durationMs: number | null;
+    runningSince: Date | null;
+  },
+  now: number,
+): { state: TrainingRunState; problems: Problem[] } {
+  let state = prev ?? { lastCompletedAt: null, lastCompletedMs: null };
+  const completed =
+    check.lastSuccessAt !== null &&
+    check.lastRunAt !== null &&
+    check.lastSuccessAt.getTime() >= check.lastRunAt.getTime() &&
+    check.durationMs !== null &&
+    check.runningSince === null;
+  if (completed) {
+    state = { lastCompletedAt: check.lastSuccessAt!.toISOString(), lastCompletedMs: check.durationMs };
+  }
+  const deadlineMs = TRAINING_DEADLINE_MINUTES * 60_000;
+  const warnMs = deadlineMs * TRAINING_DEADLINE_WARN_SHARE;
+  const runningMs = check.runningSince === null ? null : now - check.runningSince.getTime();
+  const mins = (ms: number) => Math.round(ms / 60_000);
+  const pct = (ms: number) => Math.round((ms / deadlineMs) * 100);
+  let text: string | null = null;
+  if (runningMs !== null && runningMs >= warnMs) {
+    text = `Trainer job curator-training: a run has been going ${mins(runningMs)} min, ${pct(runningMs)}% of its ${TRAINING_DEADLINE_MINUTES}-min deadline`;
+  } else if (state.lastCompletedMs !== null && state.lastCompletedMs >= warnMs) {
+    text = `Trainer job curator-training: the last completed run took ${mins(state.lastCompletedMs)} min, ${pct(state.lastCompletedMs)}% of its ${TRAINING_DEADLINE_MINUTES}-min deadline - a run past it is cut and redone`;
+  }
+  return { state, problems: text === null ? [] : [{ key: "slow:curator-training", text, trainer: true }] };
+}
+
 /** pg_database_size, in bytes; null when the read fails (the other checks still run). */
 async function databaseBytes(): Promise<number | null> {
   try {
@@ -573,6 +814,8 @@ async function readTrainerJobs(now: number): Promise<TrainerJobCheck[]> {
       !lockLostDuringRun(row?.meta, since);
     return {
       lostRunSince: lost ? since : null,
+      durationMs: num("durationMs"),
+      runningSince: since,
       job,
       lastRunAt: row?.lastRunAt ?? null,
       lastSuccessAt: row?.lastSuccessAt ?? null,
@@ -607,6 +850,29 @@ async function countTradeOutcomes(now: number): Promise<TradeOutcomeCheck> {
   return { total: rows.reduce((n, r) => n + r._count._all, 0), failed: of("failed"), expired: of("expired") };
 }
 
+/** The scan's newest completed cycle's start-to-decided time (decidedMs), or null. */
+async function readScanCycle(): Promise<{ runAt: Date; ms: number } | null> {
+  const row = await prisma.systemHeartbeat.findUnique({ where: { job: "scan" } });
+  // A failed cycle's laps stop where it failed.
+  if (!row || !row.lastSuccessAt || row.lastSuccessAt.getTime() < row.lastRunAt.getTime()) return null;
+  const ms = decidedMs((row.meta as Record<string, unknown> | null)?.stagesMs);
+  return ms === null ? null : { runAt: row.lastRunAt, ms };
+}
+
+/** The Telegram dispatcher's count of alerts it skipped as too old since its process booted, or null. */
+async function readAgedOutSinceBoot(): Promise<number | null> {
+  const row = await prisma.systemHeartbeat.findUnique({ where: { job: "telegram-dispatch" } });
+  const n = (row?.meta as Record<string, unknown> | null)?.agedOutSinceBoot;
+  return typeof n === "number" && Number.isFinite(n) ? n : null;
+}
+
+/** Linked chats the dispatcher switched off for failing (see findDisabledChatProblems). */
+function countDisabledChats(): Promise<number> {
+  return prisma.telegramChat.count({
+    where: { enabled: false, revokedAt: null, failures: { gte: TELEGRAM_MAX_FAILURES } },
+  });
+}
+
 async function oldestChatCursor(): Promise<Date | null> {
   const row = await prisma.telegramChat.findFirst({
     where: { enabled: true, revokedAt: null },
@@ -626,6 +892,49 @@ interface WatchState {
   lastRestartAt: number | null;
   /** The Helius plan's cycle so far (heliusBudget.ts); null with the alarm off. */
   heliusPlan: HeliusPlanState | null;
+  /** Helius spend against the usual day (heliusBudget.ts checkHeliusBurn); null before its first read. */
+  heliusBurn: HeliusBurnState | null;
+  /** What the alarms below carry from run to run; null before their first read. */
+  agedOut: AgedOutState | null;
+  scanLatency: ScanLatencyState | null;
+  training: TrainingRunState | null;
+}
+
+/** A field of the stored meta if it is an object, for the read* helpers to check. */
+function objectField(meta: Record<string, unknown> | null, key: string): Record<string, unknown> | null {
+  const v = meta?.[key];
+  return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+function readAgedOutState(m: Record<string, unknown> | null): AgedOutState | null {
+  if (!m || typeof m.seen !== "number") return null;
+  return {
+    seen: m.seen,
+    since: typeof m.since === "string" ? m.since : null,
+    count: typeof m.count === "number" ? m.count : 0,
+    lastAt: typeof m.lastAt === "string" ? m.lastAt : null,
+  };
+}
+
+function readScanLatencyState(m: Record<string, unknown> | null): ScanLatencyState | null {
+  if (!m || typeof m.samples !== "string") return null;
+  return {
+    samples: m.samples
+      .split(",")
+      .filter(Boolean)
+      .map(Number)
+      .filter((n) => Number.isFinite(n))
+      .slice(-SCAN_LATENCY_SAMPLES),
+    lastRunAt: typeof m.lastRunAt === "string" ? m.lastRunAt : null,
+  };
+}
+
+function readTrainingRunState(m: Record<string, unknown> | null): TrainingRunState | null {
+  if (!m) return null;
+  return {
+    lastCompletedAt: typeof m.lastCompletedAt === "string" ? m.lastCompletedAt : null,
+    lastCompletedMs: typeof m.lastCompletedMs === "number" ? m.lastCompletedMs : null,
+  };
 }
 
 async function previousState(): Promise<WatchState> {
@@ -642,6 +951,10 @@ async function previousState(): Promise<WatchState> {
     warned: meta && typeof meta.warned === "number" ? meta.warned : 0,
     lastRestartAt: time("lastRestartAt"),
     heliusPlan: readPlanState(meta?.heliusPlan),
+    heliusBurn: readBurnState(meta?.heliusBurn),
+    agedOut: readAgedOutState(objectField(meta, "telegramAgedOut")),
+    scanLatency: readScanLatencyState(objectField(meta, "scanLatency")),
+    training: readTrainingRunState(objectField(meta, "training")),
   };
 }
 
@@ -805,7 +1118,24 @@ function stateMeta(state: WatchState): JobRunMeta {
     stalledSince: state.stalledSince === null ? null : new Date(state.stalledSince).toISOString(),
     warned: state.warned,
     lastRestartAt: state.lastRestartAt === null ? null : new Date(state.lastRestartAt).toISOString(),
+    ...carriedMeta(state),
+  };
+}
+
+/** The alarms' carried state as the heartbeat stores it (and /health/worker reads it). */
+function carriedMeta(
+  state: Pick<WatchState, "heliusPlan" | "heliusBurn" | "agedOut" | "scanLatency" | "training">,
+) {
+  return {
     heliusPlan: state.heliusPlan,
+    heliusBurn: state.heliusBurn,
+    telegramAgedOut: state.agedOut,
+    // Heartbeat meta holds no arrays: the samples go as comma-separated milliseconds.
+    scanLatency:
+      state.scanLatency === null
+        ? null
+        : { samples: state.scanLatency.samples.join(","), lastRunAt: state.scanLatency.lastRunAt },
+    training: state.training,
   };
 }
 
@@ -846,10 +1176,34 @@ async function watchOnce(
   } catch (err) {
     logger.warn("Helius plan not read", { error: String(err) });
   }
+  // Helius spend against the usual day, plan or no plan (DA-2): read about once an hour too.
+  let heliusBurn = before.heliusBurn;
+  let burnNotices: string[] = [];
+  try {
+    ({ state: heliusBurn, notices: burnNotices } = await checkHeliusBurn(
+      before.heliusBurn,
+      now,
+      Boolean(env.HELIUS_MONTHLY_CREDITS),
+    ));
+  } catch (err) {
+    logger.warn("Helius spend not read", { error: String(err) });
+  }
   // Still out for a short while past the stand-down's end: it lifts at a fixed time and is only set
   // again by the next billed call refused, so a run in that gap read "flowing again" every cycle.
   const creditsOut = heliusCreditsOut(now - CREDITS_OUT_CLEAR_GRACE_MS);
-  const [flows, jobs, sideJobs, trainerJobs, cursor, dbBytes, canary, trades] = await Promise.all([
+  const [
+    flows,
+    jobs,
+    sideJobs,
+    trainerJobs,
+    cursor,
+    dbBytes,
+    canary,
+    trades,
+    scanCycle,
+    agedOutSinceBoot,
+    disabledChats,
+  ] = await Promise.all([
     countFlows(now),
     readJobs(WATCHED_JOBS),
     readJobs(SIDE_JOBS),
@@ -859,7 +1213,32 @@ async function watchOnce(
     // A canary switched off leaves its last row behind; it is not judged then.
     env.TRADE_CANARY_ENABLED ? readCanary() : Promise.resolve(null),
     countTradeOutcomes(now),
+    readScanCycle(),
+    readAgedOutSinceBoot(),
+    countDisabledChats(),
   ]);
+  const agedOut = findAgedOutProblems(before.agedOut, agedOutSinceBoot, now);
+  const scanLatency = findScanLatencyProblems(before.scanLatency, scanCycle, before.keys.has("scan-latency"));
+  const trainingJob = trainerJobs.find((j) => j.job === "curator-training");
+  const training = trainingJob
+    ? findTrainingRunProblems(
+        before.training,
+        {
+          lastSuccessAt: trainingJob.lastSuccessAt,
+          lastRunAt: trainingJob.lastRunAt,
+          durationMs: trainingJob.durationMs ?? null,
+          runningSince: trainingJob.runningSince ?? null,
+        },
+        now,
+      )
+    : { state: before.training, problems: [] };
+  const carried = {
+    heliusPlan,
+    heliusBurn,
+    agedOut: agedOut.state,
+    scanLatency: scanLatency.state,
+    training: training.state,
+  };
   const problems = [
     ...creditsOutFlows(findProblems(flows, jobs, now, cursor), (t) => heliusCreditsOut(t) !== null, now),
     ...findSideJobProblems(sideJobs, now),
@@ -868,6 +1247,10 @@ async function watchOnce(
     ...findCreditProblems(creditsOut),
     ...findCanaryProblems(canary, now, env.TRADE_CANARY_INTERVAL_MINUTES),
     ...findTradeOutcomeProblems(trades),
+    ...agedOut.problems,
+    ...findDisabledChatProblems(disabledChats),
+    ...scanLatency.problems,
+    ...training.problems,
   ];
   // Only the alert path's own problems are a stall: they alone start the clock towards the
   // visitors' banner and the scanner restart, neither of which a trainer job's problem or a
@@ -880,7 +1263,7 @@ async function watchOnce(
   let warned = stalls.length === 0 ? 0 : before.warned;
   let lastRestartAt = before.lastRestartAt;
 
-  const notices: string[] = [...planNotices];
+  const notices: string[] = [...planNotices, ...burnNotices];
   if (started.length > 0 || cleared.length > 0) notices.push(notificationText(started, cleared, problems));
   if (stalls.length === 0 && before.stalledSince !== null) await endBanners(now);
   await creditsOutBanner(
@@ -890,7 +1273,7 @@ async function watchOnce(
 
   // From here on a failure keeps this run's warning level and any restart it scheduled. The
   // stalled keys stay the previous run's until the notices go out, so a failed send is retried.
-  remember({ keys: before.keys, stalledSince, warned, lastRestartAt, heliusPlan });
+  remember({ keys: before.keys, stalledSince, warned, lastRestartAt, ...carried });
   const step = restartStep(stalledSince === null ? null : now - stalledSince, warned, lastRestartAt, now);
   if (step === "warn5" || step === "warn1") {
     warned = step === "warn5" ? 1 : 2;
@@ -899,11 +1282,11 @@ async function watchOnce(
       notices.push("<b>🔄 Restarting the scanner in about a minute</b> to clear the stall.");
       (deps.restart ?? restartForStall)();
     }
-    remember({ keys: before.keys, stalledSince, warned, lastRestartAt, heliusPlan });
+    remember({ keys: before.keys, stalledSince, warned, lastRestartAt, ...carried });
     await postBanner(BANNER[step], now);
   } else if (step === "capped") {
     warned = -1;
-    remember({ keys: before.keys, stalledSince, warned, lastRestartAt, heliusPlan });
+    remember({ keys: before.keys, stalledSince, warned, lastRestartAt, ...carried });
     notices.push(
       "<b>Not restarting:</b> the scanner already restarted in the last hour, so this stall needs a look.",
     );
@@ -928,7 +1311,7 @@ async function watchOnce(
     lastRestartAt: lastRestartAt === null ? null : new Date(lastRestartAt).toISOString(),
     databaseMb: dbBytes === null ? null : Math.round(dbBytes / 1_048_576),
     heliusCreditsOutUntil: creditsOut ? creditsOut.until.toISOString() : null,
-    heliusPlan,
+    ...carriedMeta(carried),
     flows: Object.fromEntries(flows.map((f) => [f.key, f.recent])),
     tradeOutcomes: { ...trades },
   };

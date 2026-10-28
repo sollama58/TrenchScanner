@@ -1,13 +1,20 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
+  adminWalletSet,
   prisma,
   SolanaTrackerClient,
   withApiFeature,
   type Env,
   type HeliusClient,
 } from "@trenchscanner/core";
-import { addTopTraders, loadTopTraders, topTradersNote } from "../asyl/topTraders.js";
+import {
+  addTopTraders,
+  loadTopTraders,
+  TOP_TRADERS_USER_DAILY,
+  TopTradersCapError,
+  topTradersNote,
+} from "../asyl/topTraders.js";
 import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
 import { sharedSolPrice } from "../solPrice.js";
 import type { WalletIdentityReader } from "../walletIdentity.js";
@@ -56,6 +63,8 @@ import { searchAsyl } from "../asyl/search.js";
 import { readAllowance } from "../asyl/credits.js";
 import {
   addFlows,
+  DOSSIER_WORST,
+  metered,
   readDeployer,
   readFunders,
   readTokenHolders,
@@ -72,12 +81,16 @@ import {
   createMap,
   deleteMap,
   listMaps,
+  listSharedMaps,
   MAP_BODY_LIMIT,
+  MAP_BYTES_FREE,
+  MAP_BYTES_PRO,
   MAPS_PER_USER,
   readMap,
   readShared,
   saveSchema,
   shareMap,
+  takeDownShared,
   unshareMap,
   updateMap,
 } from "../asyl/maps.js";
@@ -153,6 +166,15 @@ const linksBody = z.object({
  */
 export const COIN_REPORT_TTL_MS = 60_000;
 const coinReports = new SharedCacheMap<CoinReport | null>(COIN_REPORT_TTL_MS, 500);
+/**
+ * A wallet's co-traders, shared by every reader for a minute (full audit 2026-10-27, AP-4): the
+ * self-join over TokenWalletActivity is the heaviest free read, and a map, its Similar panel and a
+ * second reader all ask for the same wallet within seconds.
+ */
+export const COTRADERS_TTL_MS = 60_000;
+const coTraderReads = new SharedCacheMap<Awaited<ReturnType<typeof countCoTraders>>>(COTRADERS_TTL_MS, 500);
+const sharedCoTraders = (wallet: string, limit = COTRADERS_MAX) =>
+  coTraderReads.for(`${wallet}:${limit}`).get(() => countCoTraders(wallet, limit));
 
 /** Each map read is a handful of indexed queries: well above what a person clicks. */
 const READ_LIMIT = { max: 60, timeWindow: "1 minute" };
@@ -251,6 +273,7 @@ export async function registerAsylRoutes(
 ) {
   const { env } = opts;
   const tracker = env.SOLANA_TRACKER_API_KEY ? new SolanaTrackerClient(env.SOLANA_TRACKER_API_KEY) : null;
+  const admins = adminWalletSet(env);
 
   // The one public read: a shared map's frozen copy.
   await app.register(async (pub) => {
@@ -259,14 +282,41 @@ export async function registerAsylRoutes(
       if (!p.success) return reply.code(404).send({ error: "No such map" });
       const map = await readShared(p.data.slug);
       if (!map) return reply.code(404).send({ error: "This map isn't shared any more." });
-      reply.header("Cache-Control", "public, max-age=60");
+      // Private: a map unshared since must not be served on by a shared cache (TR-9).
+      reply.header("Cache-Control", "private, max-age=60");
       return map;
     });
+  });
+
+  // Admins: every shared map, and a takedown for one (user decision 2026-10-27, full audit TR-2).
+  // A shared map is the author's own words under Asyl's name; only its author could unshare it.
+  await app.register(async (adm) => {
+    adm.addHook("preHandler", adm.authenticateAdmin);
+    adm.get("/admin/shared", async (_request, reply) => {
+      reply.header("Cache-Control", "private, no-store");
+      return { maps: await listSharedMaps() };
+    });
+    adm.post(
+      "/admin/shared/:slug/takedown",
+      { config: { rateLimit: WRITE_LIMIT } },
+      async (request, reply) => {
+        const p = slugParams.safeParse(request.params);
+        if (!p.success) return reply.code(404).send({ error: "No such map" });
+        if (!(await takeDownShared(p.data.slug))) return reply.code(404).send({ error: "No such map" });
+        return { takenDown: true };
+      },
+    );
   });
 
   await app.register(async (priv) => {
     priv.addHook("preHandler", priv.authenticate);
 
+    const mapBytesOf = (pro: boolean) => (pro ? MAP_BYTES_PRO : MAP_BYTES_FREE);
+    const tooManyBytes = (reply: FastifyReply, pro: boolean) =>
+      reply.code(413).send({
+        error: `Your saved maps, shared copies included, would pass ${Math.round(mapBytesOf(pro) / 1_000_000)} MB, the most one account keeps${pro ? "" : ` (${Math.round(MAP_BYTES_PRO / 1_000_000)} MB with Pro Mode)`}. Delete or unshare a map to save this one.`,
+        code: "map-bytes",
+      });
     const isPro = async (request: FastifyRequest) =>
       !!request.user && (await proStatus(env, request.user.walletAddress).catch(() => null))?.pro === true;
     const trackedOf = (request: FastifyRequest): Promise<TrackedWallet[]> => activeTracked(env, request.user);
@@ -280,6 +330,8 @@ export async function registerAsylRoutes(
       return {
         wallet: request.user!.walletAddress,
         pro,
+        // Shows the takedown on shared maps (GET /asyl/admin/shared).
+        admin: admins.has(request.user!.walletAddress),
         chain: pro ? await readAllowance(env, request.user!.userId) : null,
         burn: await burnStanding(env, request.user!.walletAddress).catch(() => null),
         solUsd,
@@ -314,7 +366,7 @@ export async function registerAsylRoutes(
         addFunding(g, wallet),
         addHolderTransfers(g, wallet),
         addCoins(g, wallet),
-        countCoTraders(wallet),
+        sharedCoTraders(wallet),
         addSides(g, wallet, tracked),
         isPro(request),
       ]);
@@ -340,11 +392,20 @@ export async function registerAsylRoutes(
       if (!p.success) return bad(reply, p.error);
       const pro = await isPro(request);
       const tracked = await trackedOf(request);
+      const userId = request.user!.userId;
       reply.header("Cache-Control", "private, no-store");
-      // Pro: its balance and newest page (1-2 credits, the wallet modal's own cached read).
-      return withApiFeature("asyl", () =>
-        loadWalletProfile(p.data.wallet, pro ? opts.live : null, null, tracked, request.user!.userId),
-      );
+      const fromTables = () =>
+        withApiFeature("asyl", () => loadWalletProfile(p.data.wallet, null, null, tracked, userId));
+      const live = opts.live;
+      if (!pro || !live) return fromTables();
+      // Pro: its balance and newest page, and its funder when no job read it (the wallet modal's
+      // own cached reads), counted against the reader's Asyl allowance like any chain read (full
+      // audit 2026-10-27, AP-7). Short of it, or with a chain read running, the tables alone.
+      const read = await metered(env, userId, { min: DOSSIER_WORST, max: DOSSIER_WORST }, async () => ({
+        value: await loadWalletProfile(p.data.wallet, live, null, tracked, userId),
+        cached: false,
+      }));
+      return "refused" in read ? fromTables() : read.value;
     });
 
     /** The search box: tracked coins, roster KOLs and the reader's labels, by name (search.ts). */
@@ -371,7 +432,7 @@ export async function registerAsylRoutes(
       // ?all=1: every co-trader up to COTRADERS_ALL_MAX, once the reader agreed to the count.
       const all = (request.query as { all?: string } | undefined)?.all === "1";
       const tracked = await trackedOf(request);
-      const { coTraders, total } = await countCoTraders(wallet, all ? COTRADERS_ALL_MAX : COTRADERS_MAX);
+      const { coTraders, total } = await sharedCoTraders(wallet, all ? COTRADERS_ALL_MAX : COTRADERS_MAX);
       const coins = await loadSimilarCoins(wallet, coTraders);
       const g = new GraphBuilder();
       g.node(wallet, "wallet");
@@ -465,7 +526,7 @@ export async function registerAsylRoutes(
       return { focus: p.data.mint, graph: await decorate(g, await trackedOf(request)), shown };
     });
 
-    /** A coin's most profitable wallets of all time, from Solana Tracker; free (asyl/topTraders.ts). */
+    /** A coin's most profitable wallets of all time, from Solana Tracker; free, under daily caps (asyl/topTraders.ts). */
     priv.get("/token/:mint/top-traders", { config: { rateLimit: READ_LIMIT } }, async (request, reply) => {
       const p = mintParams.safeParse(request.params);
       if (!p.success) return bad(reply, p.error);
@@ -475,8 +536,16 @@ export async function registerAsylRoutes(
           .send({ error: "Top traders aren't set up on this server.", code: "unconfigured" });
       let read;
       try {
-        read = await loadTopTraders(tracker, p.data.mint);
-      } catch {
+        read = await loadTopTraders(tracker, p.data.mint, request.user!.userId);
+      } catch (err) {
+        if (err instanceof TopTradersCapError)
+          return reply.code(429).send({
+            error:
+              err.scope === "user"
+                ? `You've opened top traders on ${TOP_TRADERS_USER_DAILY} new coins today, the most for one account. Coins read in the last few hours still open. More at 00:00 UTC.`
+                : "Top traders have used today's reads for the whole site. Coins read in the last few hours still open. More at 00:00 UTC.",
+            code: "daily-cap",
+          });
         return reply
           .code(502)
           .send({ error: "Solana Tracker didn't answer. Try again in a minute.", code: "unavailable" });
@@ -880,11 +949,14 @@ export async function registerAsylRoutes(
       async (request, reply) => {
         const b = saveSchema.safeParse(request.body);
         if (!b.success) return bad(reply, b.error);
-        const res = await createMap(request.user!.userId, b.data.title, b.data.doc);
+        const pro = await isPro(request);
+        const res = await createMap(request.user!.userId, b.data.title, b.data.doc, mapBytesOf(pro));
         if ("error" in res)
-          return reply
-            .code(409)
-            .send({ error: `You can keep up to ${MAPS_PER_USER} maps. Delete one to save another.` });
+          return res.error === "bytes"
+            ? tooManyBytes(reply, pro)
+            : reply
+                .code(409)
+                .send({ error: `You can keep up to ${MAPS_PER_USER} maps. Delete one to save another.` });
         return res;
       },
     );
@@ -897,8 +969,16 @@ export async function registerAsylRoutes(
         const b = saveSchema.safeParse(request.body);
         if (!p.success) return bad(reply, p.error);
         if (!b.success) return bad(reply, b.error);
-        if (!(await updateMap(request.user!.userId, p.data.id, b.data.title, b.data.doc)))
-          return reply.code(404).send({ error: "No such map" });
+        const pro = await isPro(request);
+        const res = await updateMap(
+          request.user!.userId,
+          p.data.id,
+          b.data.title,
+          b.data.doc,
+          mapBytesOf(pro),
+        );
+        if (res === "missing") return reply.code(404).send({ error: "No such map" });
+        if (res === "bytes") return tooManyBytes(reply, pro);
         return { ok: true };
       },
     );
@@ -913,8 +993,16 @@ export async function registerAsylRoutes(
     priv.post("/maps/:id/share", { config: { rateLimit: WRITE_LIMIT } }, async (request, reply) => {
       const p = idParams.safeParse(request.params);
       if (!p.success) return bad(reply, p.error);
-      const res = await shareMap(request.user!.userId, p.data.id);
+      const pro = await isPro(request);
+      const res = await shareMap(request.user!.userId, p.data.id, mapBytesOf(pro));
       if (!res) return reply.code(404).send({ error: "No such map" });
+      if ("error" in res)
+        return res.error === "bytes"
+          ? tooManyBytes(reply, pro)
+          : reply.code(403).send({
+              error: "TrenchScanner took this map's link down, so it can't be shared again.",
+              code: "taken-down",
+            });
       return res;
     });
 

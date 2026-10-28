@@ -114,7 +114,7 @@ describe("alert style", () => {
     expect(html.split("\n").slice(0, 4)).toEqual([
       "🟢 <b>$DOGE</b>  ·  <i>Atlas flagged it and your filter caught it</i>",
       "💰 MC <b>$45.2k</b>  ·  👥 <b>130</b> holders  ·  📊 Vol 1h <b>$22.0k</b>  ·  ⏱ 9m old",
-      "🤖 <b>Atlas</b> <b>72%</b> 🔥  ·  58% like it 2x'd",
+      "🤖 <b>Atlas</b> score <b>72</b> 🔥  ·  58% like it 2x'd",
       "🎯 “Mine” <b>74</b>",
     ]);
     expect(html).not.toContain("blockquote");

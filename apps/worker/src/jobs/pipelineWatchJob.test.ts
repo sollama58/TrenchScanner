@@ -4,8 +4,16 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearHeliusCreditsOut, meteredFetch, prisma, loadEnv, type Env } from "@trenchscanner/core";
 import { JobFailure, SHUTDOWN_INTERRUPTED_ERROR } from "../scheduler.js";
 import {
+  AGED_OUT_QUIET_MS,
   clearedKeys,
   CREDITS_OUT_BANNER,
+  decidedMs,
+  findAgedOutProblems,
+  findDisabledChatProblems,
+  findScanLatencyProblems,
+  findTrainingRunProblems,
+  SCAN_LATENCY_SAMPLES,
+  TELEGRAM_LAG_MS,
   creditsOutFlows,
   canaryQuietMs,
   findCanaryProblems,
@@ -449,6 +457,156 @@ describe("pipeline watch: the trainer's jobs", () => {
   });
 });
 
+describe("pipeline watch: warning before a run-out (audit 2026-10-27, T3)", () => {
+  it("flags a chat 5 minutes behind, well before its alerts age out at 15 (WB-12)", () => {
+    expect(TELEGRAM_LAG_MS).toBe(5 * MIN);
+    expect(findProblems([], [], NOW, new Date(NOW - 4 * MIN))).toEqual([]);
+    expect(findProblems([], [], NOW, new Date(NOW - 6 * MIN))).toEqual([
+      { key: "telegram", text: "Telegram alerts: a linked chat is 6 min behind" },
+    ]);
+  });
+
+  it("tells alerts dropped unsent once per episode, and clears after a quiet half hour (WB-12)", () => {
+    // Without the dispatcher's count: nothing judged, nothing kept.
+    expect(findAgedOutProblems(null, null, NOW)).toEqual({ state: null, problems: [] });
+    // The first reading is a baseline.
+    const base = findAgedOutProblems(null, 40, NOW);
+    expect(base.problems).toEqual([]);
+    const first = findAgedOutProblems(base.state, 43, NOW + MIN);
+    expect(first.problems).toEqual([
+      {
+        key: "telegram-aged-out",
+        text: "Telegram alerts: 3 dropped unsent since 13:31 UTC (over 15 min old when their chat came up)",
+        side: true,
+      },
+    ]);
+    // More in the same episode: the same key, the count grows, the start stays.
+    const more = findAgedOutProblems(first.state, 50, NOW + 10 * MIN);
+    expect(more.problems[0]!.text).toContain("10 dropped unsent since 13:31 UTC");
+    // None new, still within the quiet window: the episode holds.
+    expect(findAgedOutProblems(more.state, 50, NOW + 30 * MIN).problems).toHaveLength(1);
+    // A quiet half hour: it clears.
+    const quiet = findAgedOutProblems(more.state, 50, NOW + 10 * MIN + AGED_OUT_QUIET_MS + MIN);
+    expect(quiet.problems).toEqual([]);
+    expect(quiet.state).toMatchObject({ seen: 50, since: null, count: 0 });
+    // A restarted dispatcher counts from zero: its count is all new.
+    const restarted = findAgedOutProblems(quiet.state, 2, NOW + 2 * HOUR);
+    expect(restarted.problems[0]!.text).toContain("2 dropped unsent");
+  });
+
+  it("tells the admins while any linked chat is switched off for failing", () => {
+    expect(findDisabledChatProblems(0)).toEqual([]);
+    expect(findDisabledChatProblems(1)).toEqual([
+      {
+        key: "telegram-disabled",
+        text: "Telegram alerts: 1 linked chat switched off after a day of failed sends - the owner gets nothing until it is switched back on",
+        side: true,
+      },
+    ]);
+    expect(findDisabledChatProblems(3)[0]!.text).toContain("3 linked chats switched off");
+  });
+
+  it("times a cycle from its start to the contenders' decisions (DS-11)", () => {
+    expect(decidedMs(null)).toBeNull();
+    expect(decidedMs({ discovery: 1_000, watchlist: 500 })).toBeNull();
+    expect(
+      decidedMs({ discovery: 1_000, wallets: 15_000, contenders: 200, curated: 900, candidates: 3_000 }),
+    ).toBe(16_200);
+  });
+
+  it("flags the cycle's median time to its decisions past 35 s over 10 cycles, clearing under 30 s (DS-11)", () => {
+    let state = null as Parameters<typeof findScanLatencyProblems>[0];
+    const feed = (ms: number[], start: number, flagged = false) => {
+      let problems: ReturnType<typeof findScanLatencyProblems>["problems"] = [];
+      ms.forEach((m, i) => {
+        ({ state, problems } = findScanLatencyProblems(
+          state,
+          { runAt: new Date(start + i * MIN), ms: m },
+          flagged,
+        ));
+      });
+      return problems;
+    };
+    // Fewer than 10 cycles: not judged.
+    expect(feed(Array(SCAN_LATENCY_SAMPLES - 1).fill(50_000), NOW)).toEqual([]);
+    const slow = feed([50_000], NOW + 20 * MIN);
+    expect(slow).toHaveLength(1);
+    expect(slow[0]).toMatchObject({ key: "scan-latency", side: true });
+    expect(slow[0]!.text).toContain("50.0 s from start to contenders decided");
+    // The same cycle read again is not a new sample.
+    expect(findScanLatencyProblems(state, { runAt: new Date(NOW + 20 * MIN), ms: 1 }, true).state).toEqual(
+      state,
+    );
+    // Down to 32 s: still flagged while it was, not flagged when it wasn't.
+    expect(feed(Array(SCAN_LATENCY_SAMPLES).fill(32_000), NOW + HOUR, true)).toHaveLength(1);
+    expect(findScanLatencyProblems(state, null, false).problems).toEqual([]);
+    expect(feed(Array(SCAN_LATENCY_SAMPLES).fill(28_000), NOW + 2 * HOUR, true)).toEqual([]);
+  });
+
+  it("flags training runs at three quarters of their deadline, finished or in flight (DB-2)", () => {
+    const done = (minutes: number) => ({
+      lastSuccessAt: new Date(NOW - HOUR),
+      lastRunAt: new Date(NOW - HOUR),
+      durationMs: minutes * MIN,
+      runningSince: null,
+    });
+    expect(findTrainingRunProblems(null, done(129), NOW)).toEqual({
+      state: { lastCompletedAt: new Date(NOW - HOUR).toISOString(), lastCompletedMs: 129 * MIN },
+      problems: [],
+    });
+    const slow = findTrainingRunProblems(null, done(185), NOW);
+    expect(slow.problems).toEqual([
+      {
+        key: "slow:curator-training",
+        text: "Trainer job curator-training: the last completed run took 185 min, 77% of its 240-min deadline - a run past it is cut and redone",
+        trainer: true,
+      },
+    ]);
+    // A cut run replaces the heartbeat's meta: the completed run's time is kept here.
+    const cut = findTrainingRunProblems(
+      slow.state,
+      {
+        lastSuccessAt: new Date(NOW - 5 * HOUR),
+        lastRunAt: new Date(NOW - MIN),
+        durationMs: 30 * MIN,
+        runningSince: null,
+      },
+      NOW,
+    );
+    expect(cut.state).toEqual(slow.state);
+    expect(cut.problems).toHaveLength(1);
+    // A run in flight past three quarters of the deadline.
+    const running = findTrainingRunProblems(
+      null,
+      { lastSuccessAt: null, lastRunAt: null, durationMs: null, runningSince: new Date(NOW - 190 * MIN) },
+      NOW,
+    );
+    expect(running.problems[0]!.text).toBe(
+      "Trainer job curator-training: a run has been going 190 min, 79% of its 240-min deadline",
+    );
+  });
+
+  it("flags a trainer job whose every run is cut once it has gone that long without completing one (DB-2)", () => {
+    const cut = (sinceSuccess: number) =>
+      trainer(
+        "curator-training",
+        10 * MIN,
+        { intervalMs: 12 * HOUR },
+        {
+          lastSuccessAt: new Date(NOW - sinceSuccess),
+          lastError: `${SHUTDOWN_INTERRUPTED_ERROR} after 120 min`,
+        },
+      );
+    expect(findTrainerProblems([cut(20 * HOUR)], NOW)).toEqual([]);
+    const problems = findTrainerProblems([cut(30 * HOUR)], NOW);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({ key: "completed:curator-training", trainer: true });
+    expect(problems[0]!.text).toContain(
+      "Trainer job curator-training: no run has completed for 30 h - each one was cut",
+    );
+  });
+});
+
 describe("pipeline watch: restarting on a long stall", () => {
   it("warns at 5 minutes, warns again and restarts at 9, then holds off", () => {
     expect(restartStep(null, 0, null, NOW)).toBe("none");
@@ -720,6 +878,11 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
       expect(String(sendMessage.mock.calls[0]![1])).toContain("Trainer job cleanup: no run for 30 h");
       // Minutes on, still overdue: no second message, and never a banner or a restart.
       await jobsRanAt(now + 10 * MIN);
+      // The dispatcher kept the chat's cursor current meanwhile.
+      await prisma.telegramChat.updateMany({
+        where: { userId: user.id },
+        data: { sentThrough: new Date(now + 10 * MIN) },
+      });
       await run(now + 10 * MIN);
       expect(sendMessage).toHaveBeenCalledTimes(1);
       expect(restart).not.toHaveBeenCalled();
@@ -871,5 +1034,54 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
       await prisma.systemHeartbeat.deleteMany({ where: { job: "trade-canary" } });
       await prisma.user.delete({ where: { id: user.id } });
     }
+  });
+});
+
+describe.skipIf(!dbAvailable)("pipeline watch: the run-out warnings carry over between runs", () => {
+  const env: Env = dbAvailable ? { ...loadEnv(), ADMIN_WALLET_ADDRESSES: "" } : (undefined as never);
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await prisma.systemHeartbeat.deleteMany({
+      where: { job: { in: ["pipeline-watch", "scan", "telegram-dispatch"] } },
+    });
+  });
+
+  it("keeps the cycle samples and the dispatcher's count on its heartbeat, and reads them back", async () => {
+    await prisma.systemHeartbeat.deleteMany({
+      where: { job: { in: [...TRAINER_JOBS, ...SIDE_JOBS, "pipeline-watch", "trade-canary"] } },
+    });
+    const now = Date.now();
+    const run = async (at: number, agedOutSinceBoot: number) => {
+      for (const job of WATCHED_JOBS) {
+        const meta =
+          job === "scan"
+            ? { stagesMs: { discovery: 2_000, wallets: 15_000, contenders: 300, candidates: 4_000 } }
+            : job === "telegram-dispatch"
+              ? { agedOutSinceBoot }
+              : {};
+        await prisma.systemHeartbeat.upsert({
+          where: { job },
+          create: { job, lastRunAt: new Date(at), lastSuccessAt: new Date(at), meta },
+          update: { lastRunAt: new Date(at), lastSuccessAt: new Date(at), meta },
+        });
+      }
+      const out = await runPipelineWatch(env, { now: at, telegram: { sendMessage: vi.fn() } }).catch(
+        (e: unknown) => (e instanceof JobFailure ? e.meta : Promise.reject(e)),
+      );
+      // The scheduler stores a run's meta on the job's heartbeat; the next run reads it back.
+      await prisma.systemHeartbeat.upsert({
+        where: { job: "pipeline-watch" },
+        create: { job: "pipeline-watch", lastRunAt: new Date(at), meta: out as object },
+        update: { lastRunAt: new Date(at), meta: out as object },
+      });
+      return out as Record<string, unknown>;
+    };
+    const first = await run(now - MIN, 7);
+    expect(first.scanLatency).toEqual({ samples: "17300", lastRunAt: new Date(now - MIN).toISOString() });
+    expect(first.telegramAgedOut).toMatchObject({ seen: 7, since: null, count: 0 });
+    const second = await run(now, 9);
+    expect(second.scanLatency).toEqual({ samples: "17300,17300", lastRunAt: new Date(now).toISOString() });
+    expect(second.telegramAgedOut).toMatchObject({ seen: 9, count: 2 });
+    expect(String(second.stalledKeys)).toContain("telegram-aged-out");
   });
 });

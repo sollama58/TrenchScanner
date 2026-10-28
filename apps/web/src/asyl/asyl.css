@@ -1343,6 +1343,11 @@ body {
   font-size: 18px;
   color: var(--asyl-text);
 }
+/* Whose words the map carries: its author's, not TrenchScanner's. */
+.asyl-shared-author {
+  display: block;
+  max-width: 420px;
+}
 /* The map's key, bottom left of the map. */
 .asyl-map-legend {
   position: absolute;

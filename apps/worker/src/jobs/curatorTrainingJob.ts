@@ -25,6 +25,8 @@ import {
   assessTrainingRun,
   examRegressionAlarms,
   fillRateAlarms,
+  findZeroEras,
+  zeroEraAlarms,
   inputFills,
   liveShareAlarms,
   LEARNER_FEATURE_NAMES,
@@ -328,6 +330,9 @@ async function trainCurators(
       new Set<string>(LEARNER_FEATURE_NAMES),
       RETIRED_LEARNER_INPUTS as ReadonlySet<string>,
     ),
+    // A learner input that read 0 far more (or less) often than usual for a stretch of the
+    // window, on rows with every known mask applied: a false-zero era no mask covers yet.
+    ...zeroEraAlarms(findZeroEras(trainingRows, LEARNER_FEATURE_NAMES)),
   ];
   if (alarms.length > 0) logger.warn("training run alarms", { alarms });
   const alarmMeta = alarms.length > 0 ? { alarms: alarms.join("; ") } : {};

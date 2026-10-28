@@ -27,6 +27,7 @@ import {
   resetCuratorModelCache,
   resetDeferredContenders,
   resetLiveScaleCache,
+  rulesTableDecision,
   takeContenderRetry,
 } from "./curatedAlerts.js";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
@@ -48,7 +49,8 @@ function curatableFixture(mintAddress: string, overrides: Partial<ScoredToken> =
     sells24h: 300,
     holderGrowthPct: 15,
     top10HolderPct: 20,
-    ageMinutes: 90,
+    // Young enough for a seat to call (isPastCalling).
+    ageMinutes: 20,
     graduated: true,
     narrativeTags: [],
     rugScreen: { passed: true, reasons: [] },
@@ -138,6 +140,43 @@ async function freeGovernorBudget(): Promise<void> {
     data: { createdAt: shifted },
   });
 }
+
+// The Rules seat's call line (full audit 2026-10-27, CH-4): a points table sends at its cutoff
+// and not below it. Before this, a cutoff read at half its value passed every worker test.
+describe("the Rules seat's points-table cutoff", () => {
+  const table = {
+    conditions: [
+      { feature: "buyRatio24h" as const, op: "gte" as const, value: 0.6, points: 60 },
+      { feature: "freshTop10WalletPct" as const, op: "lte" as const, value: 30, points: 40 },
+    ],
+    teacher: { contestant: "trees", name: "Trees" },
+    derivedAt: "2026-10-27T00:00:00.000Z",
+    agreementPct: null,
+  };
+  // 60 points from the buy check, plus the composite's 50 as a tie-break fraction: 60.05.
+  const features = { buyRatio24h: 0.7, freshTop10WalletPct: 55, scoreTotal: 50 };
+
+  it("calls at exactly the cutoff and not a hair under it", () => {
+    const at = rulesTableDecision(table, features, 60.05);
+    expect(at.curate).toBe(true);
+    expect(at.confidence).toBeCloseTo(60.05, 10);
+    expect(at.reasons.length).toBeGreaterThan(0);
+    expect(at.source).toBe(HEURISTIC_CURATOR_SOURCE);
+    const under = rulesTableDecision(table, features, 60.06);
+    expect(under.curate).toBe(false);
+    expect(under.reasons).toEqual([]);
+  });
+
+  it("does not call a token at well under its cutoff", () => {
+    expect(rulesTableDecision(table, features, 100).curate).toBe(false);
+    expect(rulesTableDecision(table, { ...features, freshTop10WalletPct: 10 }, 100).curate).toBe(true);
+  });
+
+  it("sends nothing without a cutoff, and never on zero points", () => {
+    expect(rulesTableDecision(table, features, undefined).curate).toBe(false);
+    expect(rulesTableDecision(table, { buyRatio24h: 0.1, freshTop10WalletPct: 90 }, 0).curate).toBe(false);
+  });
+});
 
 describe.skipIf(!dbAvailable)("curated alert emission", () => {
   // Lazy: vitest runs a describe callback during collection even when skipIf will skip every
@@ -568,8 +607,10 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     const entry = await recordCandidateSample(token.id, scored, env, { kind: "entry" });
     expect(entry).toMatchObject({ created: true });
     const cycle = newCuratedCycle();
-    await collectCuratedContender(cycle, token, scored, entry, env, undefined, undefined, "entry");
-    expect(await emitCuratedCycle(cycle, env)).toBe(2);
+    // The entry-row proof off: this asks how a call there is banked and graded, not who may call.
+    const unproven = { ...env, CURATOR_ENTRY_PROOF: false };
+    await collectCuratedContender(cycle, token, scored, entry, unproven, undefined, undefined, "entry");
+    expect(await emitCuratedCycle(cycle, unproven)).toBe(2);
 
     const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: entry!.id } });
     expect(row.sampleKind).toBe("entry");
@@ -580,6 +621,43 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     const event = await recordCandidateSample(token.id, scored, env, { kind: "event" });
     expect(event).toMatchObject({ created: true });
     expect(event!.id).not.toBe(entry!.id);
+  });
+
+  it("on the fast path, a seat with no entry-row record calls nothing but still banks its score", async () => {
+    await activeModel("linear", CURATOR_MODEL_KIND, alwaysYesParams());
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-entry-unproven` } });
+    const scored = curatableFixture(token.mintAddress);
+    const entry = await recordCandidateSample(token.id, scored, env, { kind: "entry" });
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, scored, entry, env, undefined, undefined, "entry");
+    expect(cycle.byModel.size).toBe(0);
+    const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: entry!.id } });
+    expect(row.seatScores).toMatchObject({ linear: expect.any(Number) });
+  });
+
+  it("no seat calls a coin an hour old or half an hour into the band, and the moment still banks", async () => {
+    await activeModel("linear", CURATOR_MODEL_KIND, alwaysYesParams());
+    for (const [name, past] of [
+      ["old", { ageMinutes: 75 }],
+      ["dwell", { minutesSinceFirstInBand: 35 }],
+    ] as const) {
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-past-${name}` } });
+      const scored = { ...curatableFixture(token.mintAddress), ...past };
+      const sample = await recordCandidateSample(token.id, scored, env);
+      const cycle = newCuratedCycle();
+      await collectCuratedContender(cycle, token, scored, sample, env);
+      expect(cycle.byModel.size).toBe(0);
+      if (sample?.created) {
+        const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: sample.id } });
+        expect(row.seatScores).toMatchObject({ linear: expect.any(Number) });
+      }
+      const restored = newCuratedCycle();
+      await collectCuratedContender(restored, token, scored, null, {
+        ...env,
+        CURATOR_SKIP_PAST_CALLING: false,
+      });
+      expect(restored.byModel.get("linear")?.length).toBe(1);
+    }
   });
 
   it("Gems considers only tokens that pass its frozen gate, and calls nothing without one", async () => {

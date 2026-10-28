@@ -91,7 +91,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         min: 0,
         max: 100,
         label: MIN_SCORE_LABEL,
-        hint: "0-100, how much a token looks like the launches that double fast; most fresh launches score 60-88",
+        hint: "0-100, how much a token looks like the launches that double fast; most filter matches score 50-80, and a higher minimum keeps the coins that double more often",
         explainScore: true,
       },
     ],

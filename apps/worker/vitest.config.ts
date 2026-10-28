@@ -7,5 +7,7 @@ export default defineConfig({
     // Parallel files racing over that is a flake generator, not a speedup - the whole suite is
     // sub-second per file either way.
     fileParallelism: false,
+    // REQUIRE_TEST_DB=1 turns "no database, so the database suites skipped" into a failure.
+    globalSetup: ["../../vitest.requireDb.ts"],
   },
 });
