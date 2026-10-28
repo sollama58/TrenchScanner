@@ -277,3 +277,136 @@ export function fillRateAlarms(
   }
   return out;
 }
+
+/** The span the zero-era scan compares: six hours of decision moments. */
+export const ZERO_ERA_BLOCK_MS = 6 * 3_600_000;
+/** A block judges an input only on at least this many rows that carry it. */
+export const ZERO_ERA_MIN_FILLED = 20;
+/** A block whose zero share sits this far from the input's usual share (in share points) is an era. */
+export const ZERO_ERA_STEP = 0.4;
+/**
+ * For a mostly-zero input, where a 40-point step can't happen: blocks whose non-zero share fell
+ * under this fraction of the usual one, each on enough rows that the usual share expects at least
+ * ZERO_ERA_MIN_EXPECTED non-zero readings in it, and together at least ZERO_ERA_MIN_RUN_EXPECTED.
+ * One thin block of a rare input reads all zeros by chance often enough (on the 10-13..26 export,
+ * a 6-hour block at 6% non-zero did so for one input in ten) that a lone one is not an era.
+ */
+export const ZERO_ERA_NONZERO_RATIO = 0.2;
+export const ZERO_ERA_MIN_EXPECTED = 8;
+export const ZERO_ERA_MIN_RUN_EXPECTED = 30;
+/** Calendar inputs: their value follows the clock by design (ctxWeekend is 0 all week). */
+const ZERO_ERA_EXEMPT: ReadonlySet<string> = new Set(["ctxHourSin", "ctxHourCos", "ctxWeekend"]);
+
+/** One run of consecutive blocks where an input's zero share left its usual level. */
+export interface ZeroEra {
+  feature: string;
+  from: Date;
+  until: Date;
+  /** Zero share among the era's filled rows, and the input's usual (median block) share, 0-1. */
+  zeroShare: number;
+  usualZeroShare: number;
+  filledRows: number;
+}
+
+/**
+ * Stretches where a learner input read 0 far more (or far less) often than it usually does, on
+ * the decision moments of the training window (full audit 2026-10-27, MT-5/MT-6). A source that
+ * breaks often reports 0 rather than nothing: TokenSage's logo reuse read 0 on every row from
+ * 10-20 to 10-23 and its X read flag from 10-22 20:00 to 10-23 20:00, and both trained as an era
+ * until someone scanned for them. The rows have their known masks applied already
+ * (maskKnownBadInputs turns a masked 0 into a missing value), so an era found here is one no mask
+ * covers yet. Fill gaps are not judged: a missing value is honest, and fillRateAlarms covers an
+ * input going dead. Pure; the caller passes the rows it trains on.
+ */
+export function findZeroEras(
+  rows: readonly {
+    anchorAt: Date;
+    features: Record<string, number | null | undefined>;
+    sampleKind?: string;
+  }[],
+  features: readonly string[],
+): ZeroEra[] {
+  const blocks = new Map<number, Map<string, [filled: number, zeros: number]>>();
+  for (const r of rows) {
+    if (r.sampleKind !== undefined && r.sampleKind !== "event") continue;
+    const b = Math.floor(r.anchorAt.getTime() / ZERO_ERA_BLOCK_MS);
+    let m = blocks.get(b);
+    if (!m) blocks.set(b, (m = new Map()));
+    for (const name of features) {
+      const v = r.features[name];
+      if (v === null || v === undefined || !Number.isFinite(v)) continue;
+      let c = m.get(name);
+      if (!c) m.set(name, (c = [0, 0]));
+      c[0]++;
+      if (v === 0) c[1]++;
+    }
+  }
+  const keys = [...blocks.keys()].sort((a, b) => a - b);
+  const out: ZeroEra[] = [];
+  for (const name of features) {
+    if (ZERO_ERA_EXEMPT.has(name)) continue;
+    const judged = keys.flatMap((k) => {
+      const c = blocks.get(k)!.get(name);
+      return c && c[0] >= ZERO_ERA_MIN_FILLED ? [{ block: k, filled: c[0], zeros: c[1] }] : [];
+    });
+    if (judged.length < 4) continue;
+    const shares = judged.map((j) => j.zeros / j.filled).sort((a, b) => a - b);
+    const usual = shares[Math.floor(shares.length / 2)]!;
+    const usualNonzero = 1 - usual;
+    const stepped = (j: { filled: number; zeros: number }) =>
+      Math.abs(j.zeros / j.filled - usual) >= ZERO_ERA_STEP;
+    const collapsed = (j: { filled: number; zeros: number }) =>
+      usualNonzero * j.filled >= ZERO_ERA_MIN_EXPECTED &&
+      1 - j.zeros / j.filled < usualNonzero * ZERO_ERA_NONZERO_RATIO;
+    let run: (typeof judged)[number][] = [];
+    const close = () => {
+      if (run.length === 0) return;
+      const filled = run.reduce((s, j) => s + j.filled, 0);
+      if (!run.some(stepped) && usualNonzero * filled < ZERO_ERA_MIN_RUN_EXPECTED) {
+        run = [];
+        return;
+      }
+      out.push({
+        feature: name,
+        from: new Date(run[0]!.block * ZERO_ERA_BLOCK_MS),
+        until: new Date((run[run.length - 1]!.block + 1) * ZERO_ERA_BLOCK_MS),
+        zeroShare: run.reduce((s, j) => s + j.zeros, 0) / filled,
+        usualZeroShare: usual,
+        filledRows: filled,
+      });
+      run = [];
+    };
+    for (const j of judged) {
+      // A judged block in between that looks usual ends the run; a block too thin to judge doesn't.
+      if (stepped(j) || collapsed(j)) run.push(j);
+      else close();
+    }
+    close();
+  }
+  return out;
+}
+
+/** Most inputs the zero-era alarm names; the rest are counted. */
+export const ZERO_ERA_MAX_ALARMS = 10;
+
+/** The alarm lines for findZeroEras' eras, one per input (its longest era): alarm only. */
+export function zeroEraAlarms(eras: readonly ZeroEra[]): string[] {
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  const at = (d: Date) => d.toISOString().slice(0, 16).replace("T", " ");
+  const byInput = new Map<string, ZeroEra[]>();
+  for (const e of eras) byInput.set(e.feature, [...(byInput.get(e.feature) ?? []), e]);
+  const lines = [...byInput.values()]
+    .map((list) => {
+      const e = list.reduce((a, b) => (b.filledRows > a.filledRows ? b : a));
+      const more = list.length > 1 ? ` (and ${list.length - 1} more)` : "";
+      return {
+        rows: e.filledRows,
+        line: `${e.feature} read 0 on ${pct(e.zeroShare)} of ${e.filledRows} decision moments ${at(e.from)}-${at(e.until)} UTC against a usual ${pct(e.usualZeroShare)}${more}: a false-zero era for maskKnownBadInputs?`,
+      };
+    })
+    .sort((a, b) => b.rows - a.rows);
+  const out = lines.slice(0, ZERO_ERA_MAX_ALARMS).map((l) => l.line);
+  if (lines.length > ZERO_ERA_MAX_ALARMS)
+    out.push(`${lines.length - ZERO_ERA_MAX_ALARMS} more inputs with a zero era`);
+  return out;
+}
