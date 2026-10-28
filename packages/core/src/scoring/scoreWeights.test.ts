@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { anchorForWeights, fitScoreWeights, rankAuc, rankQuality, type ScoreFitRow } from "./scoreWeights.js";
 import {
+  DEFAULT_SCORE_ANCHOR,
   DEFAULT_SCORE_WEIGHTS,
   getScoreAnchor,
   getScoreWeights,
@@ -157,12 +158,13 @@ describe("score rescale on adoption", () => {
 
   it("is applied by scoreToken, and an unusable rescale is ignored", () => {
     const token = { mintAddress: "m", priceUsd: 1, marketCapUsd: 10_000, narrativeTags: [], ageMinutes: 2 };
+    setScoreAnchor(IDENTITY_SCORE_ANCHOR);
     const raw = scoreToken(token).total;
     setScoreAnchor({ scale: 0.5, offset: 10 });
     expect(scoreToken(token).total).toBeCloseTo(raw * 0.5 + 10, 6);
     setScoreAnchor({ scale: 0, offset: 0 });
     expect(getScoreAnchor()).toEqual({ scale: 0.5, offset: 10 });
-    setScoreAnchor(IDENTITY_SCORE_ANCHOR);
+    setScoreAnchor(DEFAULT_SCORE_ANCHOR);
   });
 });
 

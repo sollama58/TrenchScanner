@@ -3896,9 +3896,12 @@ async function processCandidate(
   // filter criteria and the score's narrative part all read it from here. Never looked up
   // later for a row that was recorded without it.
   if (prior.narrative) scored.narrative = prior.narrative;
+  // Jupiter's seconds-old quote, read just before the decision: the score's live-flow part reads
+  // its 5-minute move and holder count (scorer.ts, refit 2026-10-27), so it goes on first.
+  if (freshQuote && plausibleFreshQuote(freshQuote, scored.priceUsd)) scored.freshQuote = freshQuote;
   // The score's holder-quality part reads the first buyers, which arrive with the trade flow,
-  // and its narrative part the read.
-  if (flow || prior.narrative) scored.score = scoreToken(scored);
+  // its live-flow part the quote and its narrative part the read.
+  if (flow || prior.narrative || scored.freshQuote) scored.score = scoreToken(scored);
   // The price tape: this cycle's observation goes on first, then the path features read back
   // over the last hour of it.
   if (pricePath) {
@@ -3914,7 +3917,6 @@ async function processCandidate(
   scored.curvePath = curvePathOf(candidate.mintAddress);
   if (devLaunch) scored.devLaunch = devLaunch;
   if (marketContext) scored.marketContext = marketContext;
-  if (freshQuote && plausibleFreshQuote(freshQuote, scored.priceUsd)) scored.freshQuote = freshQuote;
   if (liveStreams) {
     const stream = liveStreams.get(candidate.mintAddress);
     scored.livestream = { live: stream !== undefined, viewers: stream?.viewers ?? null };

@@ -1,6 +1,6 @@
 import { PUMPFUN_LAUNCHPAD, STONKS_LAUNCHPAD } from "../launchpads.js";
 import { marketSourceCode, marketSourceFromCode } from "../marketSource.js";
-import type { ScoredToken } from "../types.js";
+import type { FreshQuote, ScoredToken } from "../types.js";
 import { scoreNarrative, scoreToken, scoreTokenLegacy } from "../scoring/scorer.js";
 import { EMPTY_TRADE_FLOW, resolveDevHolding, type TradeFlowFeatures } from "./tradeFlow.js";
 import { decisionAnchor, freshQuoteMcapUsd } from "./labels.js";
@@ -1956,8 +1956,32 @@ export function scoredFromFeatures(
     // composite's, and the replayed rules must gate on today's score.
     score: { momentum: 0, holderHealth: 0, age: 0, narrative: 0, total: 0 },
   };
-  replayed.score = scoreToken(replayed);
+  // The score's live-flow part reads Jupiter's quote, which the vector carries as the jup*
+  // inputs. It is handed to the scorer only: decisionAnchor and the rest of the replay keep
+  // reading the row's own anchor, as they always have.
+  replayed.score = scoreToken({
+    ...replayed,
+    freshQuote: freshQuoteForScore(features, anchorPriceUsd, anchorMcapUsd),
+  });
   return replayed;
+}
+
+/** The part of a fresh quote the composite score reads, rebuilt from a feature vector; undefined without one. */
+function freshQuoteForScore(
+  features: Record<string, number | null | undefined>,
+  anchorPriceUsd: number,
+  anchorMcapUsd: number,
+): FreshQuote | undefined {
+  const move = features.jup5mPriceChangePct;
+  const holders = features.jupHolderCount;
+  if ((move === null || move === undefined) && (holders === null || holders === undefined)) return undefined;
+  return {
+    priceUsd: anchorPriceUsd,
+    marketCapUsd: anchorMcapUsd,
+    fetchedAt: new Date(0),
+    ...(move !== null && move !== undefined ? { stats5m: { priceChangePct: move } } : {}),
+    ...(holders !== null && holders !== undefined ? { holderCount: holders } : {}),
+  };
 }
 
 /** The text read carried in a feature vector, or undefined when the vector has none. */

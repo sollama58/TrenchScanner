@@ -728,7 +728,11 @@ const envSchema = z.object({
   // Kept at 55 when the score was rebuilt (2026-10-06): inside this gate's 5-minute-to-48-hour age
   // window it passes about a third of decision moments at ~13% doubles (the old score's 55 passed
   // half at ~4%).
-  CURATED_MIN_SCORE: z.coerce.number().min(0).max(100).default(55),
+  // 62 since the score's refit for ranking (2026-10-27, full audit T16): on the refit scale it lets
+  // the Rules seat through about as many calls as 55 did on the old one (386 against 379 decision
+  // moments on 10-20..26) and they double at least as often (17.6% against 17.2%,
+  // notes/full-audit-2026-10-27/scripts/t16/s11_rules_sweep.out).
+  CURATED_MIN_SCORE: z.coerce.number().min(0).max(100).default(62),
   CURATED_ALERT_COOLDOWN_HOURS: z.coerce.number().positive().default(24),
   // The lowest market cap a model call may go out at, read at the price the call is made at: the
   // fresh quote it is anchored and shown on (decisionAnchor) and Pump.fun's live figure when the

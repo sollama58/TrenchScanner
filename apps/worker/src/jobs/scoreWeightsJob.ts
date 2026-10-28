@@ -89,7 +89,7 @@ async function loadFitRows(population: "event" | "match", since: Date): Promise<
         anchorPriceUsd: true,
         signalPriceUsd: true,
         anchorMcapUsd: true,
-        hit2xIn1h: true,
+        hit2xIn15m: true,
         hit4xIn1h: true,
         hit10xIn1h: true,
         disqualified: true,
@@ -112,8 +112,10 @@ async function loadFitRows(population: "event" | "match", since: Date): Promise<
         freshness: parts.age,
         holderQuality: parts.holderHealth,
         narrative: parts.narrative,
-        // The product's win: a 2x reached after the 0.5x stop is a stop-out, as on every board.
-        win: r.hit2xIn1h === true && r.disqualified !== true,
+        // The product's win, the leaderboard's grade: a 2x inside 15 minutes, and one reached
+        // after the 0.5x stop is a stop-out. Until 2026-10-27 this read the hour's 2x, not the
+        // goal's question the fit says it asks (full audit 2026-10-27, T16).
+        win: r.hit2xIn15m === true && r.disqualified !== true,
         goal: r.hit4xIn1h === true,
         ...(r.hit10xIn1h !== null ? { tenX: r.hit10xIn1h } : {}),
       };
